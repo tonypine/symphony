@@ -20,6 +20,13 @@ final class SettingsViewModel: ObservableObject {
     @Published private(set) var loginItemError: String?
     @Published private(set) var issues: [SettingsIssue] = []
     @Published private(set) var keychainError: String?
+    /// `agent.concurrency.max_total` in the configured symphony.yml. Saved to that file, not UserDefaults.
+    @Published var maxConcurrentAgents = MaxConcurrentAgents.symphonyDefault
+    @Published private(set) var configFileError: String?
+
+    /// The value read from symphony.yml, or nil when it couldn't be read. The file is written only when the
+    /// stepper moved away from it, so an untouched form never edits symphony.yml.
+    private var loadedMaxConcurrentAgents: Int?
 
     /// Extra variable names known to be in the Keychain. Only these can be removed on save, so a failed
     /// load never turns into deletions.
@@ -49,6 +56,22 @@ final class SettingsViewModel: ObservableObject {
             storedNames = Set(secrets.extraEnvironment.map(\.name))
         } catch {
             keychainError = "Could not read the Keychain: \(error)"
+        }
+        loadMaxConcurrentAgents()
+    }
+
+    /// The stepper is off until a symphony.yml has been read.
+    var canEditMaxConcurrentAgents: Bool { loadedMaxConcurrentAgents != nil }
+
+    private func loadMaxConcurrentAgents() {
+        let path = settings.trimmed().configPath
+        guard !path.isEmpty else { return }
+        do {
+            let value = try SymphonyConfigFile(path: path).readMaxConcurrentAgents() ?? MaxConcurrentAgents.symphonyDefault
+            maxConcurrentAgents = value
+            loadedMaxConcurrentAgents = value
+        } catch {
+            configFileError = "Could not read max_total from symphony.yml: \(error.localizedDescription)"
         }
     }
 
@@ -80,7 +103,21 @@ final class SettingsViewModel: ObservableObject {
         storedNames = Set(secrets.extraEnvironment.map(\.name))
         keychainError = nil
         store.saveSettings(settings)
-        return saveLaunchAtLogin()
+        return saveMaxConcurrentAgents(to: settings.configPath) && saveLaunchAtLogin()
+    }
+
+    /// Writes `max_total` to symphony.yml when the stepper changed it.
+    private func saveMaxConcurrentAgents(to path: String) -> Bool {
+        guard let loaded = loadedMaxConcurrentAgents, maxConcurrentAgents != loaded else { return true }
+        do {
+            try SymphonyConfigFile(path: path).writeMaxConcurrentAgents(maxConcurrentAgents)
+        } catch {
+            configFileError = "Could not save max_total to symphony.yml: \(error.localizedDescription)"
+            return false
+        }
+        configFileError = nil
+        loadedMaxConcurrentAgents = maxConcurrentAgents
+        return true
     }
 
     /// Registers or unregisters the login item. When macOS wants the user to allow it, opens Login Items.
