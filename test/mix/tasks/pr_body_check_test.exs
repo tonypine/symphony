@@ -12,15 +12,15 @@ defmodule Mix.Tasks.PrBody.CheckTest do
 
   ## This PR
 
-  - <!-- What changed and why -->
+  <!-- Behaviour in plain words -->
 
-  ## Important facts
+  ### Important facts
 
-  - <!-- Optional: risks and follow-ups -->
+  - <!-- Optional: flags, migrations, dependencies, env vars -->
 
   ## Stack
 
-  - <!-- Optional: stacked PRs -->
+  <!-- Optional: what the stack delivers together -->
   """
 
   @valid_body """
@@ -34,13 +34,13 @@ defmodule Mix.Tasks.PrBody.CheckTest do
 
   - First change.
 
-  ## Important facts
+  ### Important facts
 
-  - A follow-up is tracked in TP-2.
+  - New environment variable `FOO`, unset by default.
 
   ## Stack
 
-  - Builds on #1.
+  Agents can merge their own PRs once a human approves.
   """
 
   @minimal_body """
@@ -50,7 +50,7 @@ defmodule Mix.Tasks.PrBody.CheckTest do
 
   ## This PR
 
-  - First change.
+  Nothing changes on screen.
 
   Generated footer.
   """
@@ -188,11 +188,11 @@ defmodule Mix.Tasks.PrBody.CheckTest do
 
       ## Stack
 
-      - Builds on #1.
+      Agents can merge their own PRs.
 
-      ## Important facts
+      ### Important facts
 
-      - A follow-up is tracked in TP-2.
+      - New environment variable `FOO`, unset by default.
       """)
 
       assert lint_errors() =~ "Required headings are out of order."
@@ -224,7 +224,7 @@ defmodule Mix.Tasks.PrBody.CheckTest do
 
       ## Stack
 
-      - Builds on #1.
+      Agents can merge their own PRs.
       """)
 
       assert lint_errors() =~ "Section cannot be empty: ## This PR"
@@ -254,15 +254,20 @@ defmodule Mix.Tasks.PrBody.CheckTest do
 
       Not a bullet.
 
-      ## Important facts
+      ### Important facts
 
       Also not a bullet.
+
+      ## Stack
+
+      Not a bullet either.
       """)
 
       error_output = lint_errors()
       assert error_output =~ "Section must include at least one bullet item: ## References"
-      assert error_output =~ "Section must include at least one bullet item: ## This PR"
-      assert error_output =~ "Section must include at least one bullet item: ## Important facts"
+      assert error_output =~ "Section must include at least one bullet item: ### Important facts"
+      refute error_output =~ "bullet item: ## This PR"
+      refute error_output =~ "bullet item: ## Stack"
     end)
   end
 
@@ -326,6 +331,49 @@ defmodule Mix.Tasks.PrBody.CheckTest do
       File.write!("body.md", @minimal_body)
 
       assert capture_io(fn -> Check.run(["lint", "--file", "body.md"]) end) =~ "PR body format OK"
+    end)
+  end
+
+  test "repository template accepts a full body with Important facts and Stack" do
+    template = File.read!(".github/pull_request_template.md")
+
+    in_temp_repo(fn ->
+      write_template!(template)
+      File.write!("body.md", @valid_body)
+
+      assert capture_io(fn -> Check.run(["lint", "--file", "body.md"]) end) =~ "PR body format OK"
+    end)
+  end
+
+  test "repository template requires bullets in References and Important facts only" do
+    template = File.read!(".github/pull_request_template.md")
+
+    in_temp_repo(fn ->
+      write_template!(template)
+
+      File.write!("body.md", """
+      ## References
+
+      Ticket TP-1.
+
+      ## This PR
+
+      Prose only.
+
+      ### Important facts
+
+      Prose only.
+
+      ## Stack
+
+      Prose only.
+      """)
+
+      error_output = lint_errors()
+      assert error_output =~ "Section must include at least one bullet item: ## References"
+      assert error_output =~ "Section must include at least one bullet item: ### Important facts"
+      refute error_output =~ "bullet item: ## This PR"
+      refute error_output =~ "bullet item: ## Stack"
     end)
   end
 
