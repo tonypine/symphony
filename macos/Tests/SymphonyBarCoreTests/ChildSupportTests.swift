@@ -129,25 +129,23 @@ final class ProcessTreeTests: XCTestCase {
 }
 
 final class SymphonyStateTests: XCTestCase {
-    func testReadsTheRunningCount() {
-        let json = #"{"counts": {"running": 2, "retrying": 1}, "running": []}"#
-
-        XCTAssertEqual(SymphonyState.runningCount(fromStateJSON: Data(json.utf8)), 2)
-        XCTAssertEqual(SymphonyState.runningCount(fromStateJSON: Data(#"{"counts": {"running": 0}}"#.utf8)), 0)
-    }
-
-    func testOtherBodiesHaveNoCount() {
-        for body in ["", "[]", "{}", #"{"counts": {}}"#, #"{"error": {"code": "snapshot_timeout"}}"#, "<html>"] {
-            XCTAssertNil(SymphonyState.runningCount(fromStateJSON: Data(body.utf8)), body)
-        }
-    }
-
     func testBaseURLComesFromTheControlURLFileWithADefault() {
         XCTAssertEqual(SymphonyState.baseURL(controlURLContents: "http://127.0.0.1:4010\n").absoluteString, "http://127.0.0.1:4010")
         XCTAssertEqual(SymphonyState.baseURL(controlURLContents: nil), SymphonyState.defaultBaseURL)
         XCTAssertEqual(SymphonyState.baseURL(controlURLContents: "  "), SymphonyState.defaultBaseURL)
         XCTAssertEqual(SymphonyState.baseURL(controlURLContents: "/tmp/x"), SymphonyState.defaultBaseURL)
         XCTAssertEqual(SymphonyState.defaultBaseURL.absoluteString, "http://127.0.0.1:4000")
+    }
+
+    func testBaseURLReadsTheControlURLFile() throws {
+        let directory = uniqueTemporaryDirectory("control-url")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("control_url")
+
+        XCTAssertEqual(SymphonyState.baseURL(controlURLFile: file), SymphonyState.defaultBaseURL)
+        try "http://127.0.0.1:4010\n".write(to: file, atomically: false, encoding: .utf8)
+        XCTAssertEqual(SymphonyState.baseURL(controlURLFile: file).absoluteString, "http://127.0.0.1:4010")
     }
 
     func testStateURLAndControlURLFile() {

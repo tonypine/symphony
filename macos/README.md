@@ -1,6 +1,7 @@
 # Symphony menu bar app
 
-A macOS menu bar app for Symphony. Its menu has Start Symphony, Stop Symphony, Settings… and Quit.
+A macOS menu bar app for Symphony. Its menu shows Symphony's status, and has Start Symphony, Stop Symphony,
+Open Dashboard, Open Logs, Settings… and Quit.
 
 Requires macOS 13+ and Xcode or the Command Line Tools.
 
@@ -54,5 +55,25 @@ The login shell loads your zsh profile, so a Finder-launched app still finds `mi
 - If Symphony exits without being asked to, the app posts a notification (or shows an alert when
   notifications are off).
 - "Start Symphony when the app opens" starts it at launch.
+
+## Status
+
+The app polls `GET /api/v1/state` on the URL in `~/Library/Application Support/symphony/control_url`
+(`http://127.0.0.1:4000` when that file is missing) every 5 seconds, and every second while Symphony starts.
+It keeps App Nap off so the poll keeps that pace in the background.
+
+| Icon | Status |
+| --- | --- |
+| `stop.circle` | stopped: nothing answers |
+| `hourglass` | starting: the app started Symphony and it hasn't answered yet |
+| `music.note.list` | running |
+| `pause.circle` | paused, for example from the dashboard |
+| `exclamationmark.triangle` | error: Symphony exited unexpectedly, stopped answering, or answered with an error |
+
+While Symphony answers, the menu shows `N running · M retrying`, and while dispatch is paused, the pause
+reason and since when. If a Symphony the app didn't start (for example one started from the CLI) answers,
+the app attaches to it as "running (external)": Start and Stop stay disabled, so the app neither starts a
+second Symphony nor stops one it doesn't own. Open Dashboard opens the control URL in the browser; Open Logs
+opens `menubar-child.log`.
 
 `SymphonyBarCore` holds pure logic that is unit tested without AppKit; `SymphonyBar` is the AppKit app.

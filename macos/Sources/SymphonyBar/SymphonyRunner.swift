@@ -5,8 +5,8 @@ import UserNotifications
 /// Owns the Symphony child process: starts it from the saved settings, stops it, and reports unexpected exits.
 @MainActor
 final class SymphonyRunner {
-    /// Called after Symphony starts, begins stopping, or exits.
-    var onChange: (() -> Void)?
+    /// Called after Symphony starts or exits.
+    var onEvent: ((StatusMachine.Event) -> Void)?
 
     private let store: SettingsStore
     private let logDirectory = ChildLog.defaultDirectory()
@@ -20,8 +20,11 @@ final class SymphonyRunner {
     var isRunning: Bool { child != nil }
     var isStopping: Bool { child?.stopRequested == true }
 
+    /// Symphony's output log.
+    var logURL: URL { logDirectory.appendingPathComponent(ChildLog.fileName) }
+
     private var logPath: String {
-        (logDirectory.appendingPathComponent(ChildLog.fileName).path as NSString).abbreviatingWithTildeInPath
+        (logURL.path as NSString).abbreviatingWithTildeInPath
     }
 
     /// Starts Symphony. Throws a `LaunchProblem` when the settings aren't ready, or a Keychain, log or spawn error.
@@ -39,7 +42,7 @@ final class SymphonyRunner {
         child = try ChildProcess.spawn(launch, logURL: log, queue: .main) { [weak self] exit, requested in
             MainActor.assumeIsolated { self?.childExited(exit, requested: requested) }
         }
-        onChange?()
+        onEvent?(.started)
     }
 
     /// Stops Symphony, calling `completion` once it has exited (straight away if it isn't running).
@@ -53,19 +56,12 @@ final class SymphonyRunner {
         let range = AppSettings.stopTimeoutRange
         let timeout = min(max(store.loadSettings().stopTimeoutSeconds, range.lowerBound), range.upperBound)
         child.stop(timeout: TimeInterval(timeout))
-        onChange?()
     }
 
     /// How many agent runs Symphony reports, or nil when its state can't be read.
     func activeRunCount() async -> Int? {
-        let contents = try? String(contentsOf: SymphonyState.controlURLFile(), encoding: .utf8)
-        let url = SymphonyState.stateURL(base: SymphonyState.baseURL(controlURLContents: contents))
-        let request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 2)
-
-        guard let (data, response) = try? await URLSession.shared.data(for: request),
-            (response as? HTTPURLResponse)?.statusCode == 200
-        else { return nil }
-        return SymphonyState.runningCount(fromStateJSON: data)
+        guard case let .state(snapshot) = await StatusPoller.fetch() else { return nil }
+        return snapshot.running
     }
 
     private func childExited(_ exit: ChildExit, requested: Bool) {
@@ -76,7 +72,7 @@ final class SymphonyRunner {
         let waiters = stopWaiters
         stopWaiters = []
         waiters.forEach { $0() }
-        onChange?()
+        onEvent?(.exited(exit, requested: requested))
     }
 
     /// Notes the start time and command at the top of the log. The command line never holds a secret.
