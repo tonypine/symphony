@@ -55,12 +55,12 @@ description:
    - For branch updates, explicitly reconsider whether current PR title still
      matches the latest scope; update it if it no longer does.
 6. Write/update PR body explicitly using `.github/pull_request_template.md`:
-   - Fill every section with concrete content for this change.
-   - If referencing a Linear issue, use only the human-readable Linear
-     identifier (for example, `WOOA7S-929`); do not include the full Linear URL
-     in the PR description.
+   - Fill the required sections (`## References`, `## This PR`) with concrete
+     content for this change. Keep the optional `### Important facts` and
+     `## Stack` only when they apply (see `AGENTS.md`); delete them otherwise.
+   - In `## References`, link the Linear issue as `Ticket: [ID](url)`.
    - Replace all placeholder comments (`<!-- ... -->`).
-   - Keep bullets/checkboxes where template expects them.
+   - Keep bullets where the template expects them (References, Important facts).
    - If PR already exists, refresh body content so it reflects the total PR
      scope (all intended work on the branch), not just the newest commits,
      including newly added work, removed work, or changed approach.
