@@ -1,0 +1,46 @@
+name: macos
+
+on:
+  pull_request:
+    paths:
+      - "macos/**"
+      - ".github/workflows/macos.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "macos/**"
+      - ".github/workflows/macos.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  macos:
+    name: macos
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      - name: Build app
+        working-directory: macos
+        run: time make
+
+      - name: Run tests
+        working-directory: macos
+        run: time swift test
