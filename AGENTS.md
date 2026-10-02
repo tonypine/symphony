@@ -63,7 +63,21 @@ mix specs.check
 
 ## PR Requirements
 
-- PR body must follow `.github/pull_request_template.md` exactly.
+- PR body must follow `.github/pull_request_template.md`. There is no test plan
+  section; validation evidence lives in the Linear workpad.
+- `## References` (required, bullets): only links that exist: Ticket, design
+  decision thread, design review, Loom. Drop a line rather than write "n/a".
+- `## This PR` (required): short, behaviour in plain words. Open with
+  `Nothing changes on screen.` when nothing user-visible changes. Use a list only
+  when the PR adds more than one distinct piece.
+- `### Important facts` (optional subsection of `## This PR`, bullets) is a closed
+  list. Use it only for: a new feature flag and its default; another flag or
+  setting that must also be on; a migration or backfill; a new dependency; a new
+  environment variable. Risks, caveats, design rationale and follow-ups do not go
+  there.
+- `## Stack` (optional): what all the parts of a stack deliver together, written
+  once and repeated verbatim on every PR in the stack. Omit it when the PR stands
+  alone. It is not a list of PRs; don't describe or number the parts.
 - Validate PR body locally when needed:
 
 ```bash
