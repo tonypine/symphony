@@ -1,0 +1,237 @@
+import Foundation
+
+/// Why `agent.concurrency.max_total` can't be changed by editing one line.
+public enum MaxConcurrentAgentsError: LocalizedError, Equatable {
+    /// The key holds an inline value (for example `concurrency: {max_total: 2}`) instead of an indented block.
+    case notABlock(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .notABlock(let key):
+            return "`\(key):` in symphony.yml is not an indented block. Change max_total by hand."
+        }
+    }
+}
+
+/// Reads and changes `agent.concurrency.max_total` in the text of a `symphony.yml`. Only that one line is
+/// rewritten, or inserted when missing, so comments, ordering and indentation stay as they are.
+public enum MaxConcurrentAgents {
+    /// Values offered in Settings.
+    public static let range = 1...10
+
+    /// What Symphony uses when the key is missing.
+    public static let symphonyDefault = 10
+
+    /// Indent added for a new nested key when the file gives no example to follow.
+    static let defaultIndentStep = 2
+
+    /// The `max_total` value, or nil when the key is missing or not a whole number.
+    public static func value(in yaml: String) -> Int? {
+        let document = Document(yaml)
+        guard let agent = document.child("agent", in: document.all),
+              let agentBlock = try? document.block(of: agent),
+              let concurrency = document.child("concurrency", in: agentBlock),
+              let concurrencyBlock = try? document.block(of: concurrency),
+              let maxTotal = document.child("max_total", in: concurrencyBlock)
+        else { return nil }
+        return Int(ValueLine(maxTotal.rest).value)
+    }
+
+    /// The same text with `max_total` set to `value`. Inserts the key, and `concurrency:` or `agent:` when
+    /// they are missing too.
+    public static func setting(_ value: Int, in yaml: String) throws -> String {
+        var document = Document(yaml)
+
+        guard let agent = document.child("agent", in: document.all) else {
+            let step = defaultIndentStep
+            document.append([
+                "agent:",
+                String(repeating: " ", count: step) + "concurrency:",
+                String(repeating: " ", count: step * 2) + "max_total: \(value)",
+            ])
+            return document.text
+        }
+        let agentBlock = try document.block(of: agent)
+        let agentChildIndent = document.childIndent(in: agentBlock) ?? agent.indent + defaultIndentStep
+
+        guard let concurrency = document.child("concurrency", in: agentBlock) else {
+            let step = agentChildIndent - agent.indent
+            document.insert(
+                [
+                    String(repeating: " ", count: agentChildIndent) + "concurrency:",
+                    String(repeating: " ", count: agentChildIndent + step) + "max_total: \(value)",
+                ],
+                after: agent.index
+            )
+            return document.text
+        }
+        let concurrencyBlock = try document.block(of: concurrency)
+
+        guard let maxTotal = document.child("max_total", in: concurrencyBlock) else {
+            let indent = document.childIndent(in: concurrencyBlock)
+                ?? concurrency.indent + (agentChildIndent - agent.indent)
+            document.insert([String(repeating: " ", count: indent) + "max_total: \(value)"], after: concurrency.index)
+            return document.text
+        }
+
+        let prefix = String(repeating: " ", count: maxTotal.indent) + "max_total:"
+        document.lines[maxTotal.index] = prefix + ValueLine(maxTotal.rest).replacingValue(with: String(value))
+        return document.text
+    }
+}
+
+/// Reads and writes `max_total` in a `symphony.yml` on disk.
+public struct SymphonyConfigFile {
+    public let path: String
+
+    public init(path: String) {
+        self.path = path
+    }
+
+    public func readMaxConcurrentAgents() throws -> Int? {
+        MaxConcurrentAgents.value(in: try String(contentsOf: url, encoding: .utf8))
+    }
+
+    /// Sets `max_total`. Leaves the file untouched when it already has that value. A symlinked file is
+    /// written through the link, and the file keeps its permissions.
+    public func writeMaxConcurrentAgents(_ value: Int) throws {
+        let url = url
+        let text = try String(contentsOf: url, encoding: .utf8)
+        let updated = try MaxConcurrentAgents.setting(value, in: text)
+        guard updated != text else { return }
+
+        // Write a sibling file and rename it over the original, so Symphony's config watcher never reads a
+        // half-written file.
+        let files = FileManager.default
+        let permissions = try files.attributesOfItem(atPath: url.path)[.posixPermissions]
+        let temporary = url.deletingLastPathComponent().appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString)")
+        try Data(updated.utf8).write(to: temporary)
+        do {
+            if let permissions {
+                try files.setAttributes([.posixPermissions: permissions], ofItemAtPath: temporary.path)
+            }
+            guard rename(temporary.path, url.path) == 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+        } catch {
+            try? files.removeItem(at: temporary)
+            throw error
+        }
+    }
+
+    private var url: URL {
+        URL(fileURLWithPath: path).resolvingSymlinksInPath()
+    }
+}
+
+/// Block-style YAML lines, enough to find one nested key by indentation.
+private struct Document {
+    /// A `key:` line.
+    struct Key {
+        let name: String
+        let index: Int
+        let indent: Int
+        /// Text after the colon.
+        let rest: String
+    }
+
+    var lines: [String]
+    let newline: String
+
+    init(_ text: String) {
+        newline = text.contains("\r\n") ? "\r\n" : "\n"
+        lines = text.components(separatedBy: newline)
+    }
+
+    var text: String { lines.joined(separator: newline) }
+
+    var all: Range<Int> { 0..<lines.count }
+
+    /// Indent of a line holding YAML structure, or nil for blank and comment-only lines.
+    func indent(at index: Int) -> Int? {
+        let line = lines[index]
+        let indent = line.prefix { $0 == " " }.count
+        let content = line.dropFirst(indent)
+        if content.allSatisfy(\.isWhitespace) || content.hasPrefix("#") { return nil }
+        return indent
+    }
+
+    /// Indent of the first structural line in the range: the indent of the block's direct children.
+    func childIndent(in range: Range<Int>) -> Int? {
+        range.lazy.compactMap { indent(at: $0) }.first
+    }
+
+    /// The direct child `key:` line in the range.
+    func child(_ key: String, in range: Range<Int>) -> Key? {
+        guard let childIndent = childIndent(in: range) else { return nil }
+        let marker = key + ":"
+        for index in range where indent(at: index) == childIndent {
+            let content = lines[index].dropFirst(childIndent)
+            guard content.hasPrefix(marker) else { continue }
+            let rest = content.dropFirst(marker.count)
+            if let next = rest.first, !next.isWhitespace { continue }
+            return Key(name: key, index: index, indent: childIndent, rest: String(rest))
+        }
+        return nil
+    }
+
+    /// Lines nested under the key: up to the next structural line at the key's indent or less.
+    func block(of key: Key) throws -> Range<Int> {
+        guard ValueLine(key.rest).value.isEmpty else {
+            throw MaxConcurrentAgentsError.notABlock(key.name)
+        }
+        let start = key.index + 1
+        let end = (start..<lines.count).first { index in
+            indent(at: index).map { $0 <= key.indent } ?? false
+        } ?? lines.count
+        return start..<end
+    }
+
+    mutating func insert(_ newLines: [String], after index: Int) {
+        lines.insert(contentsOf: newLines, at: index + 1)
+    }
+
+    /// Adds lines at the end, before the final newline when there is one.
+    mutating func append(_ newLines: [String]) {
+        if lines.last == "" {
+            lines.insert(contentsOf: newLines, at: lines.count - 1)
+        } else {
+            lines.append(contentsOf: newLines)
+        }
+    }
+}
+
+/// The text after `key:`, split into spacing, value and an optional `# comment`.
+private struct ValueLine {
+    let leadingSpace: Substring
+    let value: String
+    /// Spacing between the value and the comment, then the comment itself.
+    let tail: String
+
+    init(_ rest: String) {
+        let rest = Substring(rest)
+        leadingSpace = rest.prefix { $0 == " " || $0 == "\t" }
+        let afterSpace = rest.dropFirst(leadingSpace.count)
+
+        // A comment starts at a `#` that begins the value or follows whitespace.
+        var commentStart = afterSpace.endIndex
+        var previous: Character = " "
+        for index in afterSpace.indices {
+            if afterSpace[index] == "#" && previous.isWhitespace {
+                commentStart = index
+                break
+            }
+            previous = afterSpace[index]
+        }
+        let valuePart = afterSpace[..<commentStart]
+        value = String(valuePart).trimmingWhitespace()
+        tail = String(valuePart.dropFirst(value.count) + afterSpace[commentStart...])
+    }
+
+    func replacingValue(with newValue: String) -> String {
+        if value.isEmpty {
+            return " " + newValue + (tail.isEmpty ? "" : " " + tail.trimmingWhitespace())
+        }
+        return String(leadingSpace) + newValue + tail
+    }
+}

@@ -43,6 +43,31 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    LabeledContent("Max concurrent agents") {
+                        HStack {
+                            Text("\(model.maxConcurrentAgents)")
+                                .monospacedDigit()
+                            Stepper(
+                                "Max concurrent agents",
+                                value: $model.maxConcurrentAgents,
+                                in: MaxConcurrentAgents.range
+                            )
+                            .labelsHidden()
+                        }
+                    }
+                    .disabled(!model.canEditMaxConcurrentAgents)
+                } header: {
+                    Text("Agents (saved in symphony.yml)")
+                } footer: {
+                    Text(
+                        "More agents use the Linear and GitHub API budgets faster. 2–3 is a safe range on a "
+                            + "personal Linear key. Applies within a minute, no restart needed."
+                    )
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                }
+
+                Section {
                     SecureField(SecretSettings.linearAPIKeyName, text: $model.linearAPIKey, prompt: Text("lin_api_…"))
                     ForEach($model.extraRows) { $row in
                         HStack {
@@ -66,7 +91,7 @@ struct SettingsView: View {
             }
             .formStyle(.grouped)
             // A grouped Form is scroll-backed with no height of its own (ideal height 0), so without this it collapses.
-            .frame(minHeight: 460, idealHeight: 560, maxHeight: 900)
+            .frame(minHeight: 460, idealHeight: 640, maxHeight: 900)
 
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(model.issues.map(\.message), id: \.self) { message in
@@ -74,6 +99,9 @@ struct SettingsView: View {
                 }
                 if let keychainError = model.keychainError {
                     Text(keychainError).foregroundStyle(.red)
+                }
+                if let configFileError = model.configFileError {
+                    Text(configFileError).foregroundStyle(.red)
                 }
                 if let loginItemError = model.loginItemError {
                     Text(loginItemError).foregroundStyle(.red)

@@ -78,6 +78,11 @@ Settings… (⌘,) opens the Settings window. It also opens on first launch, whi
 
 - Checkout folder, `symphony.yml` path, command prefix (`mise exec --` until you change it), stop timeout
   and "Start Symphony when the app opens" are stored in UserDefaults (`defaults read com.tonypine.symphony.bar`).
+- Max concurrent agents (1–10) is `agent.concurrency.max_total` in the `symphony.yml` itself. The window
+  reads it from the file each time it opens (10, Symphony's default, when the key is missing). Save changes
+  only that line and keeps comments and indentation, adding the key when it is missing. Symphony
+  reloads `symphony.yml` while it runs, so the new limit applies within a minute without a restart. More
+  agents use the Linear and GitHub API budgets faster; 2–3 is a safe range on a personal Linear key.
 - `LINEAR_API_KEY` and any extra environment variables are stored only in the login Keychain, as generic
   passwords under service `symphony` with the variable name as the account:
 
