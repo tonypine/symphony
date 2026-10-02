@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let poller = StatusPoller()
     private var machine = StatusMachine()
     private let statusTitleItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    private let sourceItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private var detailItems: [NSMenuItem] = []
     private var startWhenStopped = false
     /// The Pause or Resume request under way, if any.
@@ -24,6 +25,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let menu = NSMenu()
         statusTitleItem.isEnabled = false
         menu.addItem(statusTitleItem)
+        sourceItem.isEnabled = false
+        menu.addItem(sourceItem)
         menu.addItem(.separator())
         menu.addItem(menuItem(StatusMenu.startTitle, action: #selector(startSymphony(_:))))
         menu.addItem(menuItem(StatusMenu.stopTitle, action: #selector(stopSymphony(_:))))
@@ -65,8 +68,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
 
         // First run: nothing to start yet, so ask for settings. Reads only UserDefaults, not the Keychain.
-        let settings = SettingsStore().loadSettings()
-        if settings.checkoutPath.isEmpty {
+        let store = SettingsStore()
+        store.migrateDevelopmentMode(embeddedSymphonyAvailable: SymphonyRunner.hasEmbeddedSymphony)
+        let settings = store.loadSettings()
+        if settings.needsSetup {
             settingsWindow.show()
         } else if settings.startOnLaunch {
             // Wait for the first poll, so a Symphony already running from the CLI is attached to, not started twice.
@@ -212,6 +217,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
 
         statusTitleItem.title = StatusMenu.statusTitle(status)
+        sourceItem.title = runner.sourceLine
         guard let menu = statusTitleItem.menu else { return }
         detailItems.forEach(menu.removeItem)
         detailItems = StatusMenu.detailLines(status, controlError: controlError).map { line in

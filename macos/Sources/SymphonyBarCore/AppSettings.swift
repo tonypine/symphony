@@ -24,18 +24,30 @@ public struct AppSettings: Equatable {
     /// Start Symphony when the app opens.
     public var startOnLaunch: Bool
 
+    /// Run `bin/symphony` from the checkout instead of the Symphony embedded in the app.
+    public var developmentMode: Bool
+
     public init(
         checkoutPath: String = "",
         configPath: String = "",
         commandPrefix: String = AppSettings.defaultCommandPrefix,
         stopTimeoutSeconds: Int = AppSettings.defaultStopTimeoutSeconds,
-        startOnLaunch: Bool = false
+        startOnLaunch: Bool = false,
+        developmentMode: Bool = false
     ) {
         self.checkoutPath = checkoutPath
         self.configPath = configPath
         self.commandPrefix = commandPrefix
         self.stopTimeoutSeconds = stopTimeoutSeconds
         self.startOnLaunch = startOnLaunch
+        self.developmentMode = developmentMode
+    }
+
+    /// True while a path Start needs is still unset, so the app opens Settings at launch.
+    /// The checkout folder is needed only in Development mode.
+    public var needsSetup: Bool {
+        let settings = trimmed()
+        return settings.configPath.isEmpty || (settings.developmentMode && settings.checkoutPath.isEmpty)
     }
 
     /// The same settings with surrounding whitespace removed from the text fields.
@@ -45,7 +57,8 @@ public struct AppSettings: Equatable {
             configPath: configPath.trimmingWhitespace(),
             commandPrefix: commandPrefix.trimmingWhitespace(),
             stopTimeoutSeconds: stopTimeoutSeconds,
-            startOnLaunch: startOnLaunch
+            startOnLaunch: startOnLaunch,
+            developmentMode: developmentMode
         )
     }
 }
