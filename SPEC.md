@@ -1646,6 +1646,13 @@ Algorithm summary:
    - Fetch `origin` in that primary clone when `fetch_before_dispatch == true`.
    - Ensure the workspace is a registered git worktree for branch `auto/<issue.identifier>`,
      creating it with `git worktree add` when absent.
+   - When the issue's attached PR is open, same-repo, and its head branch differs from
+     `auto/<issue.identifier>` (for example after a Linear team-key rename changed the
+     identifier), use that PR head branch instead and sync the worktree to `origin/<head>`, so the
+     existing PR stays reachable from the workspace's current branch.
+   - If that branch is still checked out in a sibling workspace under the same repo workspace
+     directory (the issue's pre-rename workspace) with no uncommitted or unpushed work, detach the
+     sibling's HEAD to release the branch; otherwise refuse with a branch-collision error.
 6. Mark `created_now=true` only if the directory or worktree was created during this call; otherwise
    `created_now=false`.
 7. If `created_now=true`, run `hooks.after_create` if configured.
