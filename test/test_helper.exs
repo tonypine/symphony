@@ -31,7 +31,10 @@ mcp_test_socket_root =
 
 Application.put_env(:symphony_elixir, :mcp_socket_root, mcp_test_socket_root)
 
-ExUnit.after_suite(fn _results ->
+# Clean up at VM exit, not in `ExUnit.after_suite/1`: with
+# `mix test --repeat-until-failure` the after-suite callbacks run after every
+# repetition, and deleting the run store under a live Mnesia breaks the next one.
+System.at_exit(fn _status ->
   File.rm_rf(audit_dir)
   File.rm_rf(state_root)
   File.rm_rf(logs_root)

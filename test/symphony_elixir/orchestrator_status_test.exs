@@ -4727,16 +4727,22 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     on_exit(fn ->
       if pid = Process.whereis(Orchestrator) do
-        :sys.replace_state(pid, fn state ->
-          %{
-            state
-            | quality_gate_cache: previous_state.quality_gate_cache,
-              quality_gate_comment_keys: previous_state.quality_gate_comment_keys,
-              quality_gate_skipped_errors: previous_state.quality_gate_skipped_errors
-          }
-        end)
+        # An unsupervised orchestrator is linked to the test process and can
+        # exit after the whereis; then there is no state left to restore.
+        try do
+          :sys.replace_state(pid, fn state ->
+            %{
+              state
+              | quality_gate_cache: previous_state.quality_gate_cache,
+                quality_gate_comment_keys: previous_state.quality_gate_comment_keys,
+                quality_gate_skipped_errors: previous_state.quality_gate_skipped_errors
+            }
+          end)
 
-        send(pid, :publish_snapshot)
+          send(pid, :publish_snapshot)
+        catch
+          :exit, _reason -> :ok
+        end
       end
     end)
 
