@@ -7,7 +7,7 @@ final class StatusPoller {
     /// Called with each result; returns how long to wait before the next poll.
     var onPoll: ((StatusPoll) -> TimeInterval)?
     /// Symphony's state directory, looked up before each poll since Symphony rewrites its control URL on start.
-    var stateRoot: () -> URL = { StateRoot.locate() }
+    var stateRoot: () -> URL = { StateRoot.locate(environment: AppStores.current.environment) }
 
     private var timer: Timer?
     private var inFlight = false
