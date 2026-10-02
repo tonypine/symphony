@@ -1274,6 +1274,45 @@ defmodule SymphonyElixir.McpServerTest do
     McpServer.stop_session(second_session, server: server)
   end
 
+  test "a connection that starts after its session stopped does not take down other live sessions" do
+    # Regression (TP-275): a connection claims its token, its session is stopped
+    # (e.g. the review agent's `stop_session`), then `connection_started` arrives.
+    # The server used to crash on the missing session, and the restart deleted the
+    # coding session's socket, so the next continuation turn had no Symphony MCP.
+    server = unique_server()
+    start_supervised!({McpServer, name: server})
+    server_pid = Process.whereis(server)
+
+    coding_session = start_transport_session!(%{workspace: System.tmp_dir!()}, server)
+    review_session = start_transport_session!(%{workspace: System.tmp_dir!()}, server)
+
+    late_connection = spawn(fn -> Process.sleep(:infinity) end)
+    late_connection_ref = Process.monitor(late_connection)
+
+    try do
+      assert :ok = McpServer.stop_session(review_session, server: server)
+      GenServer.cast(server, {:connection_started, review_session.id, late_connection})
+
+      assert_receive {:DOWN, ^late_connection_ref, :process, ^late_connection, :shutdown}
+      assert Process.whereis(server) == server_pid
+      refute Map.has_key?(:sys.get_state(server).sessions, review_session.id)
+
+      if coding_session.transport == :unix do
+        assert File.exists?(coding_session.socket_path)
+      end
+
+      socket = connect_session!(coding_session)
+
+      try do
+        assert request!(socket, 1, "initialize")["result"]["serverInfo"]["name"] == "symphony"
+      after
+        close_socket(socket)
+      end
+    after
+      McpServer.stop_session(coding_session, server: server)
+    end
+  end
+
   test "shim forwards multi-byte UTF-8 payloads without crashing" do
     # Regression: the shim's stdin pump raised {:no_translation, :unicode, :latin1}
     # on any multi-byte UTF-8 character (em dash, curly quotes), killing the

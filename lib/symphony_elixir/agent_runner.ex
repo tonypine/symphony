@@ -358,20 +358,10 @@ defmodule SymphonyElixir.AgentRunner do
 
     seed_ids = AgentTools.Linear.recover_comment_registry_seeds(issue, settings.tracker.kind)
 
-    with {:ok, agent_module} <- agent_module(),
+    with {:ok, agent_module} <- agent_module(opts),
          {:ok, linear_comment_registry} <- ensure_comment_registry(opts, seed_ids),
          {:ok, session} <-
-           agent_module.start_session(workspace,
-             worker_host: worker_host,
-             settings: settings,
-             issue: issue,
-             run_id: Keyword.get(opts, :run_id),
-             repo_key: Keyword.get(opts, :repo_key),
-             linear_comment_registry: linear_comment_registry,
-             dependency_audit_module: dependency_audit_module(opts),
-             dependency_audit_base_ref: Keyword.get(opts, :dependency_audit_base_ref),
-             dependency_audit_command_runner: Keyword.get(opts, :dependency_audit_command_runner)
-           ) do
+           start_agent_session(agent_module, workspace, worker_host, issue, Keyword.put(opts, :linear_comment_registry, linear_comment_registry)) do
       send_agent_session_info(codex_update_recipient, issue, agent_module, session)
 
       # Capture pending rework context (reviewer comments, CI failure, PR
@@ -394,7 +384,8 @@ defmodule SymphonyElixir.AgentRunner do
         issue_state_fetcher: issue_state_fetcher,
         worker_host: worker_host,
         review_agent: initial_review_agent_state(),
-        next_prompt: nil
+        next_prompt: nil,
+        session_rebuilt: false
       }
 
       try do
@@ -409,7 +400,6 @@ defmodule SymphonyElixir.AgentRunner do
     %{
       workspace: workspace,
       issue: issue,
-      codex_update_recipient: codex_update_recipient,
       opts: opts,
       issue_state_fetcher: issue_state_fetcher
     } = run_context
@@ -418,41 +408,99 @@ defmodule SymphonyElixir.AgentRunner do
     run_context = %{run_context | next_prompt: nil}
     audit_prompt_sent(issue, Keyword.get(opts, :run_id), prompt, turn_number, max_turns, agent_module, opts)
 
-    with {:ok, turn_session} <-
-           agent_module.run_turn(
-             app_session,
-             prompt,
-             issue,
-             on_message: codex_message_handler(codex_update_recipient, issue),
-             settings: Keyword.fetch!(opts, :settings),
-             repo_key: Keyword.get(opts, :repo_key),
-             run_id: Keyword.get(opts, :run_id),
-             linear_comment_registry: Keyword.get(opts, :linear_comment_registry),
-             dependency_audit_module: dependency_audit_module(opts),
-             dependency_audit_base_ref: Keyword.get(opts, :dependency_audit_base_ref),
-             dependency_audit_command_runner: Keyword.get(opts, :dependency_audit_command_runner)
-           ) do
-      Logger.info("Completed agent run for #{issue_context(issue)} session_id=#{turn_session[:session_id]} workspace=#{workspace} turn=#{turn_number}/#{max_turns}")
+    case run_agent_turn(agent_module, app_session, prompt, run_context) do
+      {:ok, turn_session} ->
+        Logger.info("Completed agent run for #{issue_context(issue)} session_id=#{turn_session[:session_id]} workspace=#{workspace} turn=#{turn_number}/#{max_turns}")
 
-      case maybe_hold_for_dependency_approval(workspace, issue, turn_session, run_context) do
-        :ok ->
-          continue_after_completed_turn(
-            issue,
-            issue_state_fetcher,
-            opts,
-            run_context,
-            agent_module,
-            app_session,
-            turn_number,
-            max_turns
-          )
+        case maybe_hold_for_dependency_approval(workspace, issue, turn_session, run_context) do
+          :ok ->
+            continue_after_completed_turn(
+              issue,
+              issue_state_fetcher,
+              opts,
+              run_context,
+              agent_module,
+              app_session,
+              turn_number,
+              max_turns
+            )
 
-        {:hold, _items} ->
-          :ok
+          {:hold, _items} ->
+            :ok
 
-        {:error, reason} ->
-          {:error, reason}
-      end
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      {:error, reason} = error ->
+        if retry_in_fresh_session?(reason, run_context, turn_number) do
+          retry_turn_in_fresh_session(reason, agent_module, prompt, run_context, turn_number, max_turns)
+        else
+          error
+        end
+    end
+  end
+
+  defp start_agent_session(agent_module, workspace, worker_host, issue, opts) do
+    agent_module.start_session(workspace,
+      worker_host: worker_host,
+      settings: Keyword.fetch!(opts, :settings),
+      issue: issue,
+      run_id: Keyword.get(opts, :run_id),
+      repo_key: Keyword.get(opts, :repo_key),
+      linear_comment_registry: Keyword.get(opts, :linear_comment_registry),
+      dependency_audit_module: dependency_audit_module(opts),
+      dependency_audit_base_ref: Keyword.get(opts, :dependency_audit_base_ref),
+      dependency_audit_command_runner: Keyword.get(opts, :dependency_audit_command_runner)
+    )
+  end
+
+  defp run_agent_turn(agent_module, app_session, prompt, run_context) do
+    %{issue: issue, codex_update_recipient: codex_update_recipient, opts: opts} = run_context
+
+    agent_module.run_turn(
+      app_session,
+      prompt,
+      issue,
+      on_message: codex_message_handler(codex_update_recipient, issue),
+      settings: Keyword.fetch!(opts, :settings),
+      repo_key: Keyword.get(opts, :repo_key),
+      run_id: Keyword.get(opts, :run_id),
+      linear_comment_registry: Keyword.get(opts, :linear_comment_registry),
+      dependency_audit_module: dependency_audit_module(opts),
+      dependency_audit_base_ref: Keyword.get(opts, :dependency_audit_base_ref),
+      dependency_audit_command_runner: Keyword.get(opts, :dependency_audit_command_runner)
+    )
+  end
+
+  # A continuation turn that starts without the Symphony MCP server gets one retry in a
+  # fresh session (new MCP session, socket, settings and `--mcp-config` files). Turn 1
+  # setup errors stay terminal: no earlier turn has shown the setup can work.
+  defp retry_in_fresh_session?(reason, run_context, turn_number) do
+    turn_number > 1 and not run_context.session_rebuilt and terminal_agent_setup_error?(reason)
+  end
+
+  # The broken session is left for `run_codex_turns/5` to stop, so each session is
+  # stopped exactly once.
+  defp retry_turn_in_fresh_session(reason, agent_module, prompt, run_context, turn_number, max_turns) do
+    %{workspace: workspace, worker_host: worker_host, issue: issue, opts: opts} = run_context
+
+    Logger.warning("Continuation turn started without the Symphony MCP server for #{issue_context(issue)}; retrying once in a fresh session turn=#{turn_number}/#{max_turns} reason=#{inspect(reason)}")
+
+    case start_agent_session(agent_module, workspace, worker_host, issue, opts) do
+      {:ok, fresh_session} ->
+        send_agent_session_info(run_context.codex_update_recipient, issue, agent_module, fresh_session)
+        retry_context = %{run_context | next_prompt: prompt, session_rebuilt: true}
+
+        try do
+          do_run_codex_turns(agent_module, fresh_session, retry_context, turn_number, max_turns)
+        after
+          agent_module.stop_session(fresh_session)
+        end
+
+      {:error, restart_reason} ->
+        Logger.warning("Could not start a fresh session for #{issue_context(issue)} reason=#{inspect(restart_reason)}")
+        {:error, reason}
     end
   end
 
@@ -907,7 +955,14 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp agent_module do
+  defp agent_module(opts) do
+    case Keyword.get(opts, :agent_module) do
+      nil -> agent_module_for_kind()
+      module -> {:ok, module}
+    end
+  end
+
+  defp agent_module_for_kind do
     case Config.settings!().agent.kind do
       "codex" -> {:ok, SymphonyElixir.Codex.AppServer}
       "claude" -> {:ok, SymphonyElixir.ClaudeCode.AppServer}

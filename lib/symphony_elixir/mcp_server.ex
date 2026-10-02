@@ -141,15 +141,20 @@ defmodule SymphonyElixir.McpServer do
 
   @impl true
   def handle_cast({:connection_started, id, pid}, state) when is_binary(id) and is_pid(pid) do
-    Process.monitor(pid)
+    case Map.fetch(state.sessions, id) do
+      {:ok, session} ->
+        Process.monitor(pid)
+        session = %{session | connections: MapSet.put(session.connections, pid)}
+        {:noreply, %{state | sessions: Map.put(state.sessions, id, session)}}
 
-    sessions =
-      update_in(state.sessions, [id, :connections], fn
-        nil -> MapSet.new([pid])
-        connections -> MapSet.put(connections, pid)
-      end)
-
-    {:noreply, %{state | sessions: sessions}}
+      # The session was stopped between this connection's claim and this cast
+      # (e.g. a review agent's session stopping while its shim reconnects).
+      # Crashing here would restart the server and drop every other live
+      # session's socket, so close the stale connection instead.
+      :error ->
+        Process.exit(pid, :shutdown)
+        {:noreply, state}
+    end
   end
 
   @impl true
