@@ -675,10 +675,13 @@ Fields:
     automated, non-actionable status (e.g. `github-actions[bot]`, `jp-launch-control[bot]`).
     Do not list review bots such as `copilot-pull-request-reviewer[bot]`, whose comments
     are actionable reviews.
-  - The effective ignored set in `polling` mode is the union of the configured
-    `ignored_reviewers`, the auto-detected current `gh` user (when `gh api user` succeeds),
-    and the PR author returned by `gh pr view`. Operators do not need to configure their
-    own identity here.
+  - The PR author returned by `gh pr view` and the auto-detected current `gh` user (when
+    `gh api user` succeeds) are Symphony's own account, which on a solo setup is also the
+    human reviewer. Their comments count as reviewer feedback unless they are blank or
+    Symphony posted them. Every PR comment and reply Symphony posts ends with the hidden
+    marker `<!-- symphony:agent -->`; comments opening with `Symphony AI` or `Automated note
+    from Symphony AI` (replies from before the marker) are also treated as Symphony's.
+    Do not list your own account here, or your review comments stop triggering rework.
 - `review_comments.reply_after_addressing` (boolean)
   - Polling-mode default: `false`.
   - When enabled, the rework agent may mark clearly non-actionable bot comments (author
@@ -1301,8 +1304,8 @@ not require recognizing or validating extension fields unless that extension is 
 - `pull_requests.poll_interval_ms`: positive integer or null; falls back to `issues.poll_interval_ms`
 - `pull_requests.review_comments.rework_delay_minutes`: polling-mode integer, default `10`
 - `pull_requests.review_comments.stale_after_days`: polling-mode integer, default `7`
-- `pull_requests.review_comments.ignored_reviewers`: polling-mode list of strings, default `[]`; combined with
-  the auto-detected current `gh` user and PR author
+- `pull_requests.review_comments.ignored_reviewers`: polling-mode list of strings, default `[]`; comments from
+  the auto-detected current `gh` user and PR author are skipped only when Symphony posted them
 - `pull_requests.review_comments.reply_after_addressing`: polling-mode boolean, default `false`
 - `pull_requests.review_comments.request_review_after_push`: polling-mode boolean, default `false`
 - `pull_requests.checks.enabled`: boolean, default `false`

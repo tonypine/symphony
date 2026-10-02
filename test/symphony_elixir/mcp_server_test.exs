@@ -696,7 +696,7 @@ defmodule SymphonyElixir.McpServerTest do
 
       ["api", "repos/acme/symphony/pulls/3051/comments/123/replies", "-f", "body=" <> body], opts ->
         assert opts[:cd] == workspace
-        assert body == reply_body
+        assert body == reply_body <> "\n\n<!-- symphony:agent -->"
         {Jason.encode!(%{"id" => 4242, "html_url" => "#{pr_url}#discussion_r4242"}), 0}
     end
 
