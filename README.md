@@ -137,7 +137,9 @@ Symphony reads two files:
 - **`symphony.yml`** — operator config: issue source, workspaces, agents, pollers, gates,
   notifications, and the `repositories:` list. Plain YAML.
 - **`WORKFLOW.md`** — repo-local prompt and per-repo hooks. YAML front matter, then the prompt
-  template. Each repo under `repositories:` has its own.
+  template. Each repo under `repositories:` has its own. Symphony reads the version committed on
+  the repo's fetched base branch (`origin/<base_branch>`), so edit it by pushing. Set
+  `workflow_source: local` on the repo to read the file on disk while you develop a workflow.
 
 Minimal `symphony.yml`:
 

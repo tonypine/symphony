@@ -182,7 +182,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     import Ecto.Changeset
 
     @primary_key false
-    @fields [:name, :path, :workflow, :base_branch, :team, :labels, :projects, :assignee, :default]
+    @fields [:name, :path, :workflow, :workflow_source, :base_branch, :team, :labels, :projects, :assignee, :default]
 
     defmodule Workspace do
       @moduledoc false
@@ -213,6 +213,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
       field(:name, :string)
       field(:path, :string)
       field(:workflow, :string, default: "WORKFLOW.md")
+      field(:workflow_source, :string, default: "ref")
       field(:base_branch, :string)
       field(:team, :string)
       field(:labels, {:array, :string}, default: [])
@@ -233,6 +234,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
       |> validate_string(:name)
       |> validate_optional_string(:path)
       |> validate_string(:workflow)
+      |> validate_inclusion(:workflow_source, ["ref", "local"])
       |> validate_optional_string(:base_branch)
       |> validate_string(:team)
       |> normalize_string_list(:labels)
@@ -517,7 +519,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     path = "repositories[#{index}]"
 
     with {:ok, repo} <- section_map(repo, path),
-         :ok <- reject_unknown_section_keys(repo, ~w(key workflow base_branch route workspace default), path),
+         :ok <- reject_unknown_section_keys(repo, ~w(key workflow workflow_source base_branch route workspace default), path),
          {:ok, route} <- section_map(Map.get(repo, "route", %{}), path <> ".route"),
          :ok <- reject_unknown_section_keys(route, ~w(team projects labels assignee), path <> ".route"),
          {:ok, workspace} <- optional_section_map(Map.get(repo, "workspace"), path <> ".workspace"),
@@ -526,6 +528,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
         %{}
         |> maybe_put("name", Map.get(repo, "key"))
         |> maybe_put("workflow", Map.get(repo, "workflow"))
+        |> maybe_put("workflow_source", Map.get(repo, "workflow_source"))
         |> maybe_put("base_branch", Map.get(repo, "base_branch"))
         |> maybe_put("default", Map.get(repo, "default"))
         |> maybe_put("team", Map.get(route, "team"))
