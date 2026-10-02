@@ -59,19 +59,24 @@ is optional too:
   `Info.plist` as `SymphonyUpdatePublicKey`, and the menu bar app verifies
   updates against it. Without it the app's **Update to vX** item is off. The app
   also refuses releases without a `.minisig`, and, while the app is signed ad
-  hoc, every update.
+  hoc, every update. The release notes quote it in their `minisign` command.
 
 The app is not notarized by Apple, so Gatekeeper warns on first launch of a
-downloaded copy. The release notes tell users to clear the quarantine flag with
-`xattr -dr com.apple.quarantine Symphony.app`.
+downloaded copy. The release notes point users at
+[`scripts/install-macos.sh`](../scripts/install-macos.sh), which verifies the
+zip and clears the quarantine flag, and show the manual steps
+(`xattr -dr com.apple.quarantine`, or Open Anyway in System Settings → Privacy &
+Security). The install script carries the public key too, as its default
+`SYMPHONY_MINISIGN_PUBLIC_KEY`, so update it there if you rotate the key. See
+[Install](../macos/README.md#install).
 
 ## Verify a release
 
 ```bash
 shasum -a 256 -c Symphony-<version>.zip.sha256
-minisign -Vm Symphony-<version>.zip -P <Symphony minisign public key>   # when published
+minisign -Vm Symphony-<version>.zip -P RWThT600NSBP4TROh1cvUt5N37/c3BctbnE3Qe+VO0A81t6IikB2BPMp
 ditto -x -k Symphony-<version>.zip .
-codesign --verify --strict Symphony.app
+codesign --verify --strict Symphony.app    # CSSMERR_TP_NOT_TRUSTED where the Symphony certificate isn't trusted
 codesign --verify --strict Symphony.app/Contents/Resources/symphony
 codesign -dvv Symphony.app    # Authority=… once the certificate is configured
 ./Symphony.app/Contents/Resources/symphony check

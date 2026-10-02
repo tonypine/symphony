@@ -4,12 +4,14 @@ on:
   pull_request:
     paths:
       - "macos/**"
+      - "scripts/install-macos.sh"
       - ".github/workflows/macos.yml"
   push:
     branches:
       - main
     paths:
       - "macos/**"
+      - "scripts/install-macos.sh"
       - ".github/workflows/macos.yml"
 
 permissions:
@@ -48,3 +50,55 @@ jobs:
       - name: Test the update helper
         working-directory: macos
         run: time sh Tests/update-helper-test.sh
+
+  install-script:
+    name: install script
+    runs-on: macos-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install shellcheck and minisign
+        run: brew install shellcheck minisign
+
+      - name: Shellcheck
+        run: shellcheck scripts/install-macos.sh
+
+      - name: Install the latest release
+        env:
+          INSTALL_DIR: ${{ runner.temp }}/Applications
+          SYMPHONY_NO_OPEN: "1"
+        run: |
+          bash scripts/install-macos.sh
+          # A second run finds it installed and changes nothing.
+          bash scripts/install-macos.sh
+
+      - name: Check the installed app's signature
+        env:
+          APP: ${{ runner.temp }}/Applications/Symphony.app
+        run: |
+          details="$(codesign -dvv "$APP" 2>&1)"
+          echo "$details" | grep -E '^(Identifier|Authority|Signature|TeamIdentifier)=' || true
+          case "$details" in
+            *"Identifier=com.tonypine.symphony.bar"*) ;;
+            *) echo "::error::$APP is not com.tonypine.symphony.bar"; exit 1 ;;
+          esac
+          # The runner doesn't trust the Symphony certificate, so codesign may stop
+          # at the trust check; any other failure is a broken signature.
+          for target in "$APP" "$APP/Contents/Resources/symphony"; do
+            if ! output="$(codesign --verify --strict "$target" 2>&1)"; then
+              echo "$output"
+              case "$output" in
+                *CSSMERR_TP_NOT_TRUSTED*) echo "$target: signed with a certificate this runner doesn't trust" ;;
+                *) echo "::error::$target has an invalid code signature"; exit 1 ;;
+              esac
+            fi
+          done
+          if [ -n "$(find "$APP" -xattrname com.apple.quarantine -print -quit)" ]; then
+            echo "::error::$APP still has the quarantine flag"
+            exit 1
+          fi
