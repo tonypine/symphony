@@ -1547,6 +1547,45 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       end
     end
 
+    test "approved handoff ignores system events that arrive before init" do
+      test_root =
+        Path.join(
+          System.tmp_dir!(),
+          "symphony-elixir-claude-code-handoff-pre-init-#{System.unique_integer([:positive])}"
+        )
+
+      try do
+        workspace_root = Path.join(test_root, "workspaces")
+        workspace = Path.join(workspace_root, "ACME-HANDOFF-PRE-INIT")
+        fake_claude = Path.join(test_root, "fake-claude")
+        File.mkdir_p!(workspace)
+
+        File.write!(fake_claude, """
+        #!/bin/sh
+        printf '%s\\n' '{"type":"system","subtype":"hook_started","session_id":"sess-handoff-pre-init"}'
+        printf '%s\\n' '{"type":"system","subtype":"init","session_id":"sess-handoff-pre-init","cwd":"/tmp","tools":[],"mcp_servers":[{"name":"symphony","status":"connected"}],"model":"claude-opus-4-5","permissionMode":"default","apiKeySource":"env"}'
+        printf '%s\\n' '{"type":"result","subtype":"success","duration_ms":500,"duration_api_ms":400,"is_error":false,"num_turns":1,"result":"Done.","session_id":"sess-handoff-pre-init","total_cost_usd":0.001,"usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"server_tool_use":{"web_search_requests":0}}}'
+        exit 0
+        """)
+
+        File.chmod!(fake_claude, 0o755)
+
+        write_workflow_file!(Workflow.workflow_file_path(),
+          workspace_root: workspace_root,
+          agent_kind: "claude",
+          agent_command: fake_claude
+        )
+
+        session = local_session(workspace, test_root)
+        prompt = "Reviewer agent approved the committed diff.\n\nContinue the PR handoff."
+
+        assert {:ok, result} = AppServer.run_turn(session, prompt, %{}, [])
+        assert result.output_tokens == 5
+      after
+        File.rm_rf(test_root)
+      end
+    end
+
     test "strips provider, tracker, GitHub, and SSH agent secrets from the Claude subprocess env" do
       test_root =
         Path.join(
