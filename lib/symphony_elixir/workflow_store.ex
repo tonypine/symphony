@@ -13,7 +13,7 @@ defmodule SymphonyElixir.WorkflowStore do
   defmodule State do
     @moduledoc false
 
-    defstruct [:path, :stamp, :workflow, :last_error, :follow_app_env?]
+    defstruct [:path, :stamp, :workflow, :last_error, :follow_app_env?, :path_resolver]
   end
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -49,18 +49,19 @@ defmodule SymphonyElixir.WorkflowStore do
 
   @impl true
   def init(opts) do
-    follow_app_env? = not Keyword.has_key?(opts, :path)
-    path = Keyword.get(opts, :path, Workflow.workflow_file_path())
+    path_resolver = Keyword.get(opts, :path_resolver)
+    follow_app_env? = not Keyword.has_key?(opts, :path) and is_nil(path_resolver)
+    path = if path_resolver, do: path_resolver.(), else: Keyword.get(opts, :path, Workflow.workflow_file_path())
     allow_invalid? = Keyword.get(opts, :allow_invalid?, false)
 
     case load_state(path) do
       {:ok, state} ->
         schedule_poll()
-        {:ok, %{state | follow_app_env?: follow_app_env?}}
+        {:ok, %{state | follow_app_env?: follow_app_env?, path_resolver: path_resolver}}
 
       {:error, reason} when allow_invalid? ->
         schedule_poll()
-        {:ok, %State{path: path, last_error: reason, follow_app_env?: follow_app_env?}}
+        {:ok, %State{path: path, last_error: reason, follow_app_env?: follow_app_env?, path_resolver: path_resolver}}
 
       {:error, reason} ->
         {:stop, reason}
@@ -106,7 +107,7 @@ defmodule SymphonyElixir.WorkflowStore do
   end
 
   defp reload_state(%State{} = state) do
-    path = if state.follow_app_env?, do: Workflow.workflow_file_path(), else: state.path
+    path = current_path(state)
 
     if path != state.path do
       reload_path(path, state)
@@ -115,10 +116,14 @@ defmodule SymphonyElixir.WorkflowStore do
     end
   end
 
+  defp current_path(%State{follow_app_env?: true}), do: Workflow.workflow_file_path()
+  defp current_path(%State{path_resolver: resolver}) when is_function(resolver, 0), do: resolver.()
+  defp current_path(%State{path: path}), do: path
+
   defp reload_path(path, state) do
     case load_state(path) do
       {:ok, new_state} ->
-        {:ok, %{new_state | follow_app_env?: state.follow_app_env?}}
+        {:ok, %{new_state | follow_app_env?: state.follow_app_env?, path_resolver: state.path_resolver}}
 
       {:error, reason} ->
         log_reload_error(path, reason)

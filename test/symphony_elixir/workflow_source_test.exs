@@ -6,6 +6,7 @@ defmodule SymphonyElixir.WorkflowSourceTest do
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.{Cache, SystemSchema}
   alias SymphonyElixir.{Paths, Workflow, WorkflowSource, Workspace}
+  alias SymphonyElixir.Repo.Supervisor, as: RepoSupervisor
 
   @git_env [
     {"GIT_AUTHOR_NAME", "Symphony Test"},
@@ -20,6 +21,8 @@ defmodule SymphonyElixir.WorkflowSourceTest do
     original_symphony_path = Application.get_env(:symphony_elixir, :symphony_file_path)
     original_state_root = Application.get_env(:symphony_elixir, :state_root_override)
     original_watch = Application.get_env(:symphony_elixir, :config_cache_watch)
+    original_workflow_path = Application.get_env(:symphony_elixir, :workflow_file_path)
+    original_primary_repo = Application.get_env(:symphony_elixir, :primary_repo_name)
 
     root = Path.join(System.tmp_dir!(), "symphony-workflow-source-#{System.unique_integer([:positive])}")
     File.mkdir_p!(root)
@@ -32,6 +35,8 @@ defmodule SymphonyElixir.WorkflowSourceTest do
       restore_app_env(:symphony_file_path, original_symphony_path)
       restore_app_env(:state_root_override, original_state_root)
       restore_app_env(:config_cache_watch, original_watch)
+      restore_app_env(:workflow_file_path, original_workflow_path)
+      restore_app_env(:primary_repo_name, original_primary_repo)
       File.rm_rf(root)
     end)
 
@@ -68,12 +73,7 @@ defmodule SymphonyElixir.WorkflowSourceTest do
     end
 
     test "reads the local file with a warning in a checkout with no origin", %{root: root} do
-      checkout = Path.join(root, "local-only")
-      File.mkdir_p!(checkout)
-      git!(checkout, ["init", "-q", "-b", "main"])
-      File.write!(Path.join(checkout, "WORKFLOW.md"), "Local prompt\n")
-      git!(checkout, ["add", "WORKFLOW.md"])
-      git!(checkout, ["commit", "-q", "-m", "workflow"])
+      checkout = local_only_checkout!(root, "Local prompt")
       write_symphony!(root, checkout)
       {:ok, repo} = Config.repo("app")
 
@@ -86,6 +86,52 @@ defmodule SymphonyElixir.WorkflowSourceTest do
       assert WorkflowSource.read_path(repo) == Path.join(checkout, "WORKFLOW.md")
       assert {:ok, %{prompt: "Local prompt"}} = Config.workflow_for_repo("app")
       assert :ok = Config.validate_repo_workflows()
+    end
+  end
+
+  describe "once the ref resolves after boot" do
+    setup %{root: root} do
+      checkout = local_only_checkout!(root, "Local prompt")
+      origin = Path.join(root, "origin.git")
+      git!(root, ["init", "-q", "--bare", "-b", "main", origin])
+      write_symphony!(root, checkout)
+      {:ok, repo} = Config.repo("app")
+      capture_log(fn -> WorkflowSource.refresh(repo) end)
+
+      add_origin = fn ->
+        git!(checkout, ["remote", "add", "origin", origin])
+        File.write!(Path.join(checkout, "WORKFLOW.md"), "Committed prompt\n")
+        git!(checkout, ["commit", "-q", "-am", "commit prompt"])
+        git!(checkout, ["push", "-q", "-u", "origin", "main"])
+        git!(checkout, ["remote", "set-head", "origin", "main"])
+        File.write!(Path.join(checkout, "WORKFLOW.md"), "Uncommitted prompt\n")
+      end
+
+      {:ok, repo: repo, checkout: checkout, add_origin: add_origin}
+    end
+
+    test "the primary workflow store switches to the snapshot", %{repo: repo, checkout: checkout, add_origin: add_origin} do
+      Application.put_env(:symphony_elixir, :primary_repo_name, "app")
+      Workflow.set_workflow_file_path(WorkflowSource.read_path(repo))
+      assert Workflow.workflow_file_path() == Path.join(checkout, "WORKFLOW.md")
+
+      add_origin.()
+
+      assert WorkflowSource.refresh(repo) == :ok
+      assert Workflow.workflow_file_path() == WorkflowSource.read_path(repo)
+      assert {:ok, %{prompt: "Committed prompt"}} = Workflow.load(Workflow.workflow_file_path())
+    end
+
+    test "a repo workflow store switches to the snapshot", %{repo: repo, add_origin: add_origin} do
+      Application.put_env(:symphony_elixir, :primary_repo_name, "other")
+      ensure_repo_registry_started!()
+      start_supervised!({RepoSupervisor, repo})
+      assert {:ok, %{prompt: "Local prompt"}} = RepoSupervisor.current_workflow("app")
+
+      add_origin.()
+
+      assert WorkflowSource.refresh(repo) == :ok
+      assert {:ok, %{prompt: "Committed prompt"}} = RepoSupervisor.current_workflow("app")
     end
   end
 
@@ -225,6 +271,24 @@ defmodule SymphonyElixir.WorkflowSourceTest do
     git!(root, ["clone", "-q", origin, other])
 
     %{checkout: checkout, other: other}
+  end
+
+  defp local_only_checkout!(root, prompt) do
+    checkout = Path.join(root, "local-only")
+    File.mkdir_p!(checkout)
+    git!(checkout, ["init", "-q", "-b", "main"])
+    File.write!(Path.join(checkout, "WORKFLOW.md"), prompt <> "\n")
+    git!(checkout, ["add", "WORKFLOW.md"])
+    git!(checkout, ["commit", "-q", "-m", "workflow"])
+    checkout
+  end
+
+  defp ensure_repo_registry_started! do
+    unless Process.whereis(SymphonyElixir.Repo.Registry) do
+      start_supervised!({Registry, keys: :unique, name: SymphonyElixir.Repo.Registry})
+    end
+
+    :ok
   end
 
   defp push_workflow!(clone, content) do

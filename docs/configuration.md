@@ -132,8 +132,9 @@ repositories:
     missing or invalid on the ref, Symphony logs an error and keeps the last good workflow.
     Until the ref has been read once (for example a local-only checkout with no `origin`
     remote, or an `origin` whose default branch is not `HEAD`, `main` or `master` while
-    `base_branch` is unset), Symphony logs a warning and reads `workflow` from disk instead. Set
-    `base_branch`, or `workflow_source: local`, to settle it.
+    `base_branch` is unset), Symphony logs a warning and reads `workflow` from disk instead, then
+    switches to the ref without a restart once it resolves. Set `base_branch`, or
+    `workflow_source: local`, to settle it.
   - `local` reads `workflow` from disk and reloads it when it changes. Use it while developing
     a workflow. A `workflow` path outside any git checkout is always read this way.
 - `default`: at most one repo can be the fallback route.

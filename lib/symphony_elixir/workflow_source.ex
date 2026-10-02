@@ -14,7 +14,9 @@ defmodule SymphonyElixir.WorkflowSource do
   With `workflow_source: local`, or when the workflow file is not inside a git
   checkout, the configured file is read directly. The configured file is also read
   directly, with a warning, while no snapshot has been written yet, for example in
-  a checkout with no `origin` remote or no resolvable base branch ref.
+  a checkout with no `origin` remote or no resolvable base branch ref. Once the ref
+  resolves and the first snapshot is written, the repo's workflow store switches to
+  the snapshot without a restart.
   """
 
   require Logger
@@ -120,11 +122,23 @@ defmodule SymphonyElixir.WorkflowSource do
     with {:ok, ref} <- base_ref(repo, checkout),
          {:ok, content} <- git(checkout, ["show", "#{ref}:#{workflow_in_repo}"]),
          {:ok, _workflow} <- Workflow.parse_repo_workflow(content) do
-      write_snapshot(snapshot, content)
+      first_snapshot? = not File.regular?(snapshot)
+      result = write_snapshot(snapshot, content)
+      if first_snapshot?, do: switch_primary_store_to_snapshot(repo, snapshot)
+      result
     else
       {:error, reason} ->
         log_refresh_error(repo, checkout, workflow_in_repo, snapshot, reason)
         {:error, reason}
+    end
+  end
+
+  # The primary workflow store follows the configured workflow path, which points at
+  # the local file when no snapshot existed at boot. Other repos' stores resolve
+  # `read_path/1` on every reload.
+  defp switch_primary_store_to_snapshot(%SystemSchema.Repo{name: name}, snapshot) do
+    if name == Application.get_env(:symphony_elixir, :primary_repo_name) do
+      Workflow.set_workflow_file_path(snapshot)
     end
   end
 

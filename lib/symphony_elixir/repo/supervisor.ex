@@ -98,12 +98,13 @@ defmodule SymphonyElixir.Repo.Supervisor do
     if repo_name(repo) == Application.get_env(:symphony_elixir, :primary_repo_name) do
       opts
     else
-      Keyword.put(opts, :path, workflow_read_path(repo))
+      put_workflow_path(opts, repo)
     end
   end
 
-  defp workflow_read_path(%SystemSchema.Repo{} = repo), do: WorkflowSource.read_path(repo)
-  defp workflow_read_path(repo), do: SystemSchema.repo_workflow_path(repo)
+  # Resolved on every reload so the store moves to the ref snapshot once it is written.
+  defp put_workflow_path(opts, %SystemSchema.Repo{} = repo), do: Keyword.put(opts, :path_resolver, fn -> WorkflowSource.read_path(repo) end)
+  defp put_workflow_path(opts, repo), do: Keyword.put(opts, :path, SystemSchema.repo_workflow_path(repo))
 
   defp workflow_store_child_id(repo_name), do: {WorkflowStore, repo_name}
 

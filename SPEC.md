@@ -1174,7 +1174,8 @@ Dynamic reload behavior:
 - For `workflow_source: ref`, the workflow is re-read from the remote base branch at startup and
   on every dispatch after the pre-dispatch fetch, so a change pushed to the base branch applies to
   the next dispatch without restart. A missing or invalid workflow on the ref is logged and the
-  last known good workflow is kept.
+  last known good workflow is kept. Until the ref has been read once, the local file is read
+  with a warning, and readers switch to the ref without restart once it resolves.
 - `symphony.yml` is re-read through the config layer during runtime operations such as dispatch,
   watchdog handling, and snapshots.
 - Changes to `symphony.yml` values that affect OTP child topology, including the `repositories:` list,
