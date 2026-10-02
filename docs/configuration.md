@@ -519,6 +519,10 @@ issue_gate:
 
 The gate is disabled by default. `pass_threshold` replaces the old `min_score` spelling.
 
+The model scores clarity, scope, ambiguity, and sandbox dependency. A user-facing issue without a
+`## User walkthrough` section (numbered steps, each with the expected visible result) scores lower; see
+[Writing tickets](../README.md#writing-tickets).
+
 ### `dashboard`
 
 Live dashboard and status snapshot settings.

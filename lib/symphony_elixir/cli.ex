@@ -3,7 +3,7 @@ defmodule SymphonyElixir.CLI do
   Escript entrypoint for running Symphony with an operator `symphony.yml`.
   """
 
-  alias SymphonyElixir.Paths
+  alias SymphonyElixir.{Config, Paths}
 
   # Retained so existing scripts (Docker, ops runbooks) that still pass the long
   # flag keep parsing — its value is ignored.
@@ -25,6 +25,7 @@ defmodule SymphonyElixir.CLI do
     state_root: :string,
     timeout: :string
   ]
+  @check_switches [config: :string]
   @default_symphony_file "symphony.yml"
 
   @type ensure_started_result :: {:ok, [atom()]} | {:error, term()}
@@ -35,6 +36,7 @@ defmodule SymphonyElixir.CLI do
           | {:timeout, term()}
 
   @type deps :: %{
+          check_config: (-> :ok | {:error, term()}),
           file_regular?: (String.t() -> boolean()),
           init: ([String.t()] -> SymphonyElixir.Init.result()),
           set_symphony_file_path: (String.t() -> :ok | {:error, term()}),
@@ -51,26 +53,29 @@ defmodule SymphonyElixir.CLI do
   @spec main([String.t()]) :: no_return()
   def main(args) do
     case evaluate(args) do
-      :ok ->
-        wait_for_shutdown()
-
-      {:halt, code} ->
-        System.halt(code)
-
-      {:error, message, code} ->
-        IO.puts(:stderr, message)
-        System.halt(code)
-
-      {:error, message} ->
-        IO.puts(:stderr, message)
-        System.halt(1)
+      :ok -> wait_for_shutdown()
+      result -> halt(result)
     end
   end
+
+  @spec halt({:halt, non_neg_integer()} | {:error, String.t()} | {:error, String.t(), non_neg_integer()}) ::
+          no_return()
+  defp halt({:halt, code}), do: System.halt(code)
+
+  defp halt({:error, message, code}) do
+    IO.puts(:stderr, message)
+    System.halt(code)
+  end
+
+  defp halt({:error, message}), do: halt({:error, message, 1})
 
   @spec evaluate([String.t()], deps()) ::
           :ok | {:halt, non_neg_integer()} | {:error, String.t()} | {:error, String.t(), non_neg_integer()}
   def evaluate(args, deps \\ runtime_deps()) do
     case args do
+      ["check" | check_args] ->
+        evaluate_check(check_args, deps)
+
       ["init" | init_args] ->
         evaluate_init(init_args, deps)
 
@@ -101,6 +106,31 @@ defmodule SymphonyElixir.CLI do
 
       {:error, message} ->
         {:error, message}
+    end
+  end
+
+  # Loads symphony.yml and every repo WORKFLOW.md through the same validation the
+  # application runs at boot, without starting the supervisor or touching the network.
+  defp evaluate_check(args, deps) do
+    case OptionParser.parse(args, strict: @check_switches) do
+      {opts, [], []} ->
+        with :ok <- set_symphony_config(opts, deps) do
+          check_config(symphony_config_path(opts), deps)
+        end
+
+      _ ->
+        {:error, check_usage_message()}
+    end
+  end
+
+  defp check_config(path, deps) do
+    case deps.check_config.() do
+      :ok ->
+        IO.puts("Config OK: #{path}")
+        {:halt, 0}
+
+      {:error, reason} ->
+        {:error, "Config error in #{path}: #{Config.format_error(reason)}"}
     end
   end
 
@@ -167,6 +197,9 @@ defmodule SymphonyElixir.CLI do
     case burrito_args() do
       :not_in_burrito ->
         :ok
+
+      ["check" | _check_args] = args ->
+        args |> evaluate() |> halt()
 
       args ->
         case configure(args) do
@@ -301,10 +334,15 @@ defmodule SymphonyElixir.CLI do
   @spec usage_message() :: String.t()
   defp usage_message do
     "Usage: symphony init [--force]\n" <>
+      "       symphony check [--config <path-to-symphony.yml>]\n" <>
       "       symphony [--config <path-to-symphony.yml>] [--state-root <path>] [--logs-root <path>] [--host <host>] [--port <port>]\n" <>
       "       symphony pr <url-or-number> [--intent \"address review comments\"]\n" <>
       "       symphony run <issue-identifier> [--config <path-to-symphony.yml>] [--timeout <duration>] [--no-retry] [--state-root <path>] [--logs-root <path>]\n" <>
       "       symphony workflow preview [--file WORKFLOW.md] [--agent codex|claude]"
+  end
+
+  defp check_usage_message do
+    "Usage: symphony check [--config <path-to-symphony.yml>]"
   end
 
   @spec run_usage_message() :: String.t()
@@ -315,6 +353,7 @@ defmodule SymphonyElixir.CLI do
   @spec runtime_deps() :: deps()
   defp runtime_deps do
     %{
+      check_config: &Config.validate_repo_workflows/0,
       file_regular?: &File.regular?/1,
       init: &SymphonyElixir.Init.run/1,
       set_symphony_file_path: &SymphonyElixir.Workflow.set_symphony_file_path/1,
@@ -330,14 +369,18 @@ defmodule SymphonyElixir.CLI do
   end
 
   defp set_symphony_config(opts, deps) do
-    raw = opts |> Keyword.get_values(:config) |> List.last() || @default_symphony_file
-    path = Path.expand(raw)
+    path = symphony_config_path(opts)
 
     if deps.file_regular?.(path) do
       :ok = deps.set_symphony_file_path.(path)
     else
       {:error, "Symphony config file not found: #{path}"}
     end
+  end
+
+  defp symphony_config_path(opts) do
+    raw = opts |> Keyword.get_values(:config) |> List.last() || @default_symphony_file
+    Path.expand(raw)
   end
 
   defp maybe_set_state_root(opts, deps),

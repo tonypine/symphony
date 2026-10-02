@@ -11,6 +11,7 @@ defmodule SymphonyElixir.QualityGate.PromptTest do
       assert instructions =~ "1 (poor candidate) to 10"
       assert instructions =~ "Clarity"
       assert instructions =~ "Sandbox dependency"
+      assert instructions =~ "## User walkthrough"
       assert instructions =~ ~s({"score":)
       assert instructions =~ ~s("questions")
       assert instructions =~ "same JSON object"
