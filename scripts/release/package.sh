@@ -14,6 +14,7 @@
 # Optional environment:
 #   MINISIGN_SECRET_KEY   minisign secret key file contents; never printed
 #   MINISIGN_PASSWORD     its password, when the key has one
+#   MINISIGN_PUBLIC_KEY   the matching public key, quoted in the release notes
 set -eu
 
 usage() {
@@ -89,6 +90,29 @@ shown=200
     echo "- …and $((changes - shown)) more"
   fi
   echo
+  echo "## Install"
+  echo
+  echo "Symphony.app runs on Apple silicon Macs with macOS 13 or later. Install or reinstall it with:"
+  echo
+  echo '```bash'
+  echo "curl -fsSL https://raw.githubusercontent.com/tonypine/symphony/main/scripts/install-macos.sh | bash"
+  echo '```'
+  echo
+  echo "The script downloads the latest release, verifies it, installs Symphony.app to \`~/Applications\` and opens it."
+  echo "If Symphony.app is already installed, choose **Update to v$version** from its menu instead."
+  echo
+  echo "To install by hand, download $zip_name and $zip_name.sha256, verify them as below, then:"
+  echo
+  echo '```bash'
+  echo "mkdir -p ~/Applications"
+  echo "ditto -x -k $zip_name ~/Applications"
+  echo "xattr -dr com.apple.quarantine ~/Applications/Symphony.app"
+  echo "open ~/Applications/Symphony.app"
+  echo '```'
+  echo
+  echo "Symphony.app is not notarized by Apple. If macOS still says it can't be opened, click Open Anyway in"
+  echo "System Settings → Privacy & Security."
+  echo
   echo "## Verifying"
   echo
   if [ "$signed" = true ]; then
@@ -100,20 +124,13 @@ shown=200
   echo '```bash'
   echo "shasum -a 256 -c $zip_name.sha256"
   if [ -n "$minisig_name" ]; then
-    echo "minisign -Vm $zip_name -P <Symphony minisign public key>"
+    echo "minisign -Vm $zip_name -P ${MINISIGN_PUBLIC_KEY:-<Symphony minisign public key>}"
   fi
   echo '```'
   if [ -z "$minisig_name" ]; then
     echo
     echo "No minisign signature: no minisign key is configured yet."
   fi
-  echo
-  echo "The app is not notarized by Apple. After unzipping, clear the quarantine flag before opening it:"
-  echo
-  echo '```bash'
-  echo "ditto -x -k $zip_name ."
-  echo "xattr -dr com.apple.quarantine Symphony.app"
-  echo '```'
 } > "$out/release_notes.md"
 
 jq -n \

@@ -1,73 +1,119 @@
 # Symphony menu bar app
 
-A macOS menu bar app for Symphony. Its menu shows Symphony's status, and has Start Symphony, Stop Symphony,
-Restart Symphony, Pause Dispatch, Resume Dispatch, Open Dashboard, Open Logs, Settings… and Quit.
+Symphony for macOS is a menu bar app, `Symphony.app`. Its menu shows Symphony's status, and has Start
+Symphony, Stop Symphony, Restart Symphony, Pause Dispatch, Resume Dispatch, Open Dashboard, Open Logs,
+Check for Updates…, Settings… and Quit.
 
-The app runs Symphony with your `symphony.yml`, the same as running it from a terminal. Release builds
-carry a self-contained Symphony binary at `Contents/Resources/symphony` (see [Releasing](../docs/releasing.md))
-and run it by default, so they need no checkout, `mise` or Elixir. Turn on **Development mode** in Settings
-to run the `bin/symphony` in a checkout instead, for working on Symphony itself.
+The app runs Symphony with your `symphony.yml`, the same as running it from a terminal. A release carries a
+self-contained Symphony binary at `Contents/Resources/symphony` (see [Releasing](../docs/releasing.md)), so
+you need no checkout, `mise` or Elixir: download the app, choose a `symphony.yml`, paste a Linear API key,
+and start it. To work on Symphony itself, build the app from source and run a checkout instead; see
+[Development mode](#development-mode).
 
-## Prerequisites
+- [Install](#install)
+- [First run](#first-run)
+- [Restart](#restart)
+- [Update](#update)
+- [Rollback](#rollback)
+- [Development mode](#development-mode)
+- [Troubleshooting](#troubleshooting)
 
-- macOS 13 or later.
-- Xcode, or the Command Line Tools (`xcode-select --install`). `swift --version` should work.
-- A `symphony.yml`. A release build needs nothing else; a local `make` build has no embedded Symphony, so
-  it also needs Development mode and a Symphony checkout with `bin/symphony` built, as in the
-  [Quickstart](../README.md#quickstart) steps 2–4:
+## Install
 
-  ```bash
-  mise trust && mise install
-  mise exec -- mix setup
-  mise exec -- mix build              # writes bin/symphony
-  mise exec -- ./bin/symphony init    # writes symphony.yml in the current folder
-  ```
+Symphony.app needs a Mac with Apple silicon and macOS 13 or later. Install it with the install script or by
+hand. Both put it at `~/Applications/Symphony.app`, which is where the app updates itself and where Launch
+at Login expects it.
 
-- A Linear personal API key. You enter it in the app, so you don't need to export `LINEAR_API_KEY`.
-
-## Build and install
-
-From the checkout:
+### With the install script
 
 ```bash
-cd macos
-make          # builds an ad-hoc-signed build/Symphony.app
-make install  # builds it and copies it to ~/Applications (set INSTALL_DIR to change)
-make run      # builds and opens build/Symphony.app
-make test     # runs swift test
-make clean    # removes build/ and .build/
-make bundle SYMPHONY_BIN=../burrito_out/symphony-macos-arm64   # embeds a Symphony binary, as releases do
+curl -fsSL https://raw.githubusercontent.com/tonypine/symphony/main/scripts/install-macos.sh | bash
 ```
 
-`make` and `make bundle` sign ad hoc. Pass `SIGNING_IDENTITY="<certificate name>"` to sign with a
-certificate, and `SHORT_VERSION=` / `BUILD_NUMBER=` to set the versions in `Info.plist`.
+[`scripts/install-macos.sh`](../scripts/install-macos.sh) prints each step as it:
 
-Use `make install` and open the installed copy if you want Launch at Login:
+1. finds the latest release and downloads its zip;
+2. checks the zip's SHA-256 against the published `.sha256`;
+3. checks its minisign signature against the Symphony release key, when `minisign` is installed
+   (`brew install minisign`). Without `minisign` it says so and relies on the SHA-256 only;
+4. unzips it and checks the app's code signature;
+5. moves it to `~/Applications/Symphony.app`, keeping an older installed version as
+   `Symphony (previous).app` (see [Rollback](#rollback));
+6. clears the quarantine flag (`xattr -dr com.apple.quarantine`) so Gatekeeper doesn't block it, and opens
+   it.
+
+Running it again when the latest release is already installed changes nothing and just opens the app. It
+refuses to replace an app that is running: choose Quit from the menu first. If any check fails, nothing is
+installed. Optional environment variables:
+
+| Variable | Effect |
+| --- | --- |
+| `INSTALL_DIR` | install somewhere other than `~/Applications` |
+| `SYMPHONY_RELEASE_TAG` | install that release instead of the latest, for example `v0.0.1.81` |
+| `SYMPHONY_MINISIGN_PUBLIC_KEY` | verify with this minisign public key instead of the Symphony release key |
+| `SYMPHONY_NO_OPEN=1` | don't open the app at the end |
+
+For example, to pin a version:
 
 ```bash
-open ~/Applications/Symphony.app
+curl -fsSL https://raw.githubusercontent.com/tonypine/symphony/main/scripts/install-macos.sh | SYMPHONY_RELEASE_TAG=v0.0.1.81 bash
 ```
+
+### By hand
+
+1. Download `Symphony-<version>.zip` and `Symphony-<version>.zip.sha256` from the
+   [latest release](https://github.com/tonypine/symphony/releases/latest).
+2. Verify the download, in the folder that holds both files:
+
+   ```bash
+   shasum -a 256 -c Symphony-<version>.zip.sha256
+   ```
+
+   To also check the minisign signature, download the `.zip.minisig` too and run the `minisign` command from
+   the release notes.
+3. Unzip it into `~/Applications` and open it:
+
+   ```bash
+   mkdir -p ~/Applications
+   ditto -x -k Symphony-<version>.zip ~/Applications
+   open ~/Applications/Symphony.app
+   ```
+
+4. The app is not notarized by Apple, so macOS blocks a downloaded copy the first time: it says the app
+   can't be opened or can't be checked for malicious software. Click Done, open System Settings → Privacy &
+   Security, scroll to Security, click **Open Anyway** next to "Symphony.app was blocked", and confirm with
+   your password. macOS remembers the choice for this copy. To skip the prompt, clear the quarantine flag
+   before opening it instead:
+
+   ```bash
+   xattr -dr com.apple.quarantine ~/Applications/Symphony.app
+   ```
 
 The app has no Dock icon or window of its own; look for its icon in the menu bar.
 
 ## First run
 
+A release app needs only two things: a `symphony.yml` and a Linear personal API key. You don't need to
+export `LINEAR_API_KEY`; the app keeps it in the login Keychain.
+
 1. Open the app. The Settings window opens because no `symphony.yml` is set yet.
-2. **symphony.yml:** choose the operator config to run with.
-3. **Development mode:** leave it off to run the Symphony embedded in the app. Turn it on for a local `make`
-   build, or to run a checkout, then set:
-   - **Checkout folder:** the Symphony checkout, the folder that contains `bin/symphony`.
-   - **Command prefix:** leave `mise exec --` so Symphony runs with the checkout's `mise` toolchain. Clear
-     it if `bin/symphony` runs without `mise`.
-4. **LINEAR_API_KEY:** paste your Linear API key. Add any other variables your `symphony.yml` or agents
-   need (for example a GitHub token) with Add Variable.
-5. Click **Save**. The app checks that the paths exist (and, with Development mode off, that the app has an
-   embedded Symphony) and that the key is set, then stores the key in the
-   login Keychain. macOS may ask to allow Keychain access; choose Always Allow.
+2. **symphony.yml:** choose the operator config to run with. To make one, see the
+   [Quickstart](../README.md#quickstart); `~/Applications/Symphony.app/Contents/Resources/symphony init` writes a starter
+   `symphony.yml` in the current folder.
+3. **LINEAR_API_KEY:** paste your Linear API key (Linear → Settings → Security & access → Personal API keys).
+   Add any other variables your `symphony.yml` or agents need (for example a GitHub token) with Add
+   Variable.
+4. Leave **Development mode** off, so the app runs the Symphony embedded in it.
+5. Click **Save**. The app checks that `symphony.yml` exists, that the app has an embedded Symphony and that
+   the key is set, then stores the key in the login Keychain. macOS asks once to allow Keychain access;
+   enter your login password and choose **Always Allow**. Updates are signed with the same certificate, so
+   they don't ask again.
 6. Choose **Start Symphony** from the menu. The icon shows `hourglass` while Symphony starts, then
    `music.note.list` once it answers. Choose **Open Dashboard** to see it at `http://127.0.0.1:4000`.
 
 If the icon turns to a warning triangle instead, choose **Open Logs** and see [Troubleshooting](#troubleshooting).
+To have Symphony running after login with no clicks, turn on Launch at Login and "Start Symphony when the
+app opens" in Settings (see [Launch at Login](#launch-at-login)).
 
 ## Menu commands
 
@@ -118,8 +164,9 @@ set (or, in Development mode, no checkout folder).
   security find-generic-password -s symphony -a LINEAR_API_KEY
   ```
 
-Because the app is ad-hoc signed, its signature changes on every rebuild, so macOS may ask again for
-Keychain access after a rebuild. Choose Always Allow to stop the prompt for that build.
+macOS asks for Keychain access once after the first install; choose Always Allow. Updates are signed with
+the same certificate, so the Keychain keeps trusting them. A local `make` build is ad-hoc signed and asks
+again after each rebuild (see [Development mode](#development-mode)).
 
 ## Running Symphony
 
@@ -128,7 +175,7 @@ With Development mode off it runs the embedded binary directly, without a shell,
 `symphony.yml`:
 
 ```bash
-/Applications/Symphony.app/Contents/Resources/symphony --config /path/to/symphony.yml
+~/Applications/Symphony.app/Contents/Resources/symphony --config /path/to/symphony.yml
 ```
 
 In Development mode it runs this in the checkout folder:
@@ -167,12 +214,8 @@ what macOS reports, so turning the app off in System Settings turns the toggle o
 to allow it, Save opens Login Items, and Settings shows a note until you do. With "Start Symphony when the
 app opens" also on, Symphony is running after login with no clicks.
 
-macOS opens the copy that was registered, so install the app first and turn the toggle on from that copy:
-
-```bash
-make install
-open ~/Applications/Symphony.app
-```
+macOS opens the copy that was registered, so [install](#install) the app to `~/Applications` first and turn
+the toggle on from that copy. Updates keep the same path, so the login item keeps working after an update.
 
 ## Status
 
@@ -233,7 +276,12 @@ If Symphony doesn't come back (Start fails, it exits, or it doesn't answer withi
 menu say why and name the log. A pause the restart made is then kept; choose Resume Dispatch once Symphony
 runs.
 
-## Updates
+## Update
+
+When a newer release is out, the menu shows **Update available: vX (N changes)**. Choose **Update to vX**:
+the app downloads and verifies it, lets agent runs finish, swaps itself for the new version and relaunches,
+with Symphony running again. The steps are under [Install an update](#install-an-update). You can also
+update by running the [install script](#with-the-install-script) again after quitting the app.
 
 The app checks the latest release at
 `https://api.github.com/repos/tonypine/symphony/releases/latest` at launch, every 6 hours, and when you
@@ -288,15 +336,19 @@ Update is disabled, with the reason under it, when:
   translocated copy. Move `Symphony.app` to `~/Applications` and open it from there.
 
 An app signed ad hoc refuses updates: there is no certificate to compare the new app's with. Install the
-release by hand, as on first install.
+release with the [install script](#with-the-install-script) instead; it keeps the old app as
+`Symphony (previous).app` too.
 
-### Roll back an update
+To undo an update, see [Rollback](#rollback).
 
-The replaced version stays next to the app, for example `~/Applications/Symphony (previous).app`. To go
-back to it:
+## Rollback
 
-1. Quit Symphony from the menu (this stops Symphony).
-2. In Finder, or a terminal, swap the two apps:
+Each update, and each install over an older version, keeps the version it replaced next to the app as
+`Symphony (previous).app`, for example `~/Applications/Symphony (previous).app`. Only one previous version is
+kept. To go back to it:
+
+1. Choose **Quit** from the menu (this stops Symphony).
+2. Swap the two apps, in Finder or a terminal:
 
    ```bash
    cd ~/Applications
@@ -304,17 +356,90 @@ back to it:
    mv "Symphony (previous).app" Symphony.app
    ```
 
-3. Open `Symphony.app` and start Symphony. Delete `Symphony (rolled back).app` once you no longer need it.
+3. Open `Symphony.app` and start Symphony. Your settings and Keychain variables carry over. Delete
+   `Symphony (rolled back).app` once you no longer need it.
+
+The app then offers the newer release again as an update. To install an older release than the previous
+one, quit the app and run the install script with `SYMPHONY_RELEASE_TAG` set to that release's tag (see
+[With the install script](#with-the-install-script)).
+
+## Development mode
+
+Development mode is for working on Symphony itself: the app runs `bin/symphony` from a checkout, through
+`mise`, instead of its embedded Symphony.
+
+### Prerequisites
+
+- Xcode, or the Command Line Tools (`xcode-select --install`). `swift --version` should work.
+- A Symphony checkout with `bin/symphony` built, as in the [Quickstart](../README.md#quickstart):
+
+  ```bash
+  mise trust && mise install
+  mise exec -- mix setup
+  mise exec -- mix build              # writes bin/symphony
+  mise exec -- ./bin/symphony init    # writes symphony.yml in the current folder
+  ```
+
+### Build the app from source
+
+From the checkout:
+
+```bash
+cd macos
+make          # builds an ad-hoc-signed build/Symphony.app
+make install  # builds it and copies it to ~/Applications (set INSTALL_DIR to change)
+make run      # builds and opens build/Symphony.app
+make test     # runs swift test
+make clean    # removes build/ and .build/
+make bundle SYMPHONY_BIN=../burrito_out/symphony-macos-arm64   # embeds a Symphony binary, as releases do
+```
+
+`make` and `make bundle` sign ad hoc. Pass `SIGNING_IDENTITY="<certificate name>"` to sign with a
+certificate, `SHORT_VERSION=` / `BUILD_NUMBER=` to set the versions in `Info.plist`, and
+`MINISIGN_PUBLIC_KEY=` to embed the update key. `make install` replaces `~/Applications/Symphony.app`, so it
+replaces an installed release too; reinstall the release with the install script afterwards.
+
+A plain `make` build has no embedded Symphony, so it runs only in Development mode, and it can't update
+itself. Because it is ad-hoc signed, its signature changes on every rebuild, and macOS asks again for Keychain
+access after each rebuild.
+
+### Run a checkout
+
+1. Open Settings… and turn on **Development mode**. The first time a version opens, it turns this on itself
+   if a checkout folder is already set and the app has no embedded Symphony.
+2. **Checkout folder:** the Symphony checkout, the folder that contains `bin/symphony`.
+3. **Command prefix:** leave `mise exec --` so Symphony runs with the checkout's `mise` toolchain. Clear it
+   if `bin/symphony` runs without `mise`.
+4. Click **Save**, then **Restart Symphony** (or Start). The line under the status shows
+   `Development: ~/path/to/checkout`.
+
+After changing Symphony, run `mise exec -- mix build` in the checkout and choose Restart Symphony. Turn
+Development mode off to go back to the embedded Symphony. You can also run a checkout from a terminal
+instead of the app; see [Running](../README.md#running).
 
 ## Troubleshooting
 
-- **macOS says the app can't be opened or is from an unidentified developer.** The app is ad-hoc signed,
-  not notarized. A copy built on this Mac normally opens directly; a copy that was downloaded or copied
-  from elsewhere may be blocked. Right-click the app and choose Open, or on macOS 15 and later open System
-  Settings → Privacy & Security and click Open Anyway.
-- **macOS asks for Keychain access again after a rebuild.** Each build has a new ad-hoc signature, so the
-  Keychain treats it as a new app. Enter your login password and choose Always Allow; the prompt stops
-  until the next rebuild.
+- **The install script says the SHA-256 or minisign signature doesn't match.** The download isn't what was
+  published (a broken download, a proxy, or a release still being uploaded), and nothing was installed. Run
+  the script again in a few minutes. If it keeps failing, don't install that file; open an issue. A minisign
+  key mismatch ("the key id in the public key is …") means `SYMPHONY_MINISIGN_PUBLIC_KEY` isn't the Symphony
+  release key: unset it.
+- **The install script says Symphony is running.** It doesn't replace an app that is running. Choose Quit
+  from the menu, then run it again.
+- **The install script says the app's code signature is invalid.** The unzipped app fails
+  `codesign --verify --strict` for a reason other than an untrusted certificate, and nothing was installed.
+  "signed with the Symphony certificate, which this Mac doesn't trust" is not an error: the release is
+  signed with Symphony's own certificate rather than an Apple Developer ID, so the SHA-256 and minisign
+  checks vouch for it.
+- **macOS says the app can't be opened or is from an unidentified developer.** The app is not notarized by
+  Apple, so macOS blocks a downloaded copy that still has the quarantine flag. Open System Settings →
+  Privacy & Security and click Open Anyway, or clear the flag with
+  `xattr -dr com.apple.quarantine ~/Applications/Symphony.app`. The install script clears it for you.
+- **macOS asks for Keychain access.** It asks once after the first install, because the Keychain items are
+  new to this app: enter your login password and choose Always Allow. Updates are signed with the same
+  certificate, so they don't ask again. It asks again after installing a release over a local `make` build,
+  or after each rebuild of a `make` build, because those are ad-hoc signed and the Keychain treats each as a
+  new app.
 - **Start Symphony shows a message instead of starting.** The app checks the settings before it starts
   Symphony. "Linear API key not set" and the path messages are fixed in Settings. "This build has no
   embedded Symphony" means a local `make` build: turn on Development mode and set the checkout folder.
@@ -323,7 +448,7 @@ back to it:
   `~/Library/Logs/symphony/menubar-child.log` (the run before is in `menubar-child.log.1`). Common causes:
   - `mise: command not found`: install `mise`, or clear the command prefix if you don't use it.
   - Symphony rejected `symphony.yml`: run the same command from a terminal to see the error, for example
-    `Symphony.app/Contents/Resources/symphony --config <symphony.yml>`, or in Development mode
+    `~/Applications/Symphony.app/Contents/Resources/symphony --config <symphony.yml>`, or in Development mode
     `cd <checkout> && mise exec -- ./bin/symphony --config <symphony.yml>`.
 - **The menu shows "running (external)" and Start is disabled.** A Symphony started elsewhere (for example
   from a terminal) is answering on the control URL. Stop that one first, then Start from the menu.
@@ -331,10 +456,11 @@ back to it:
   the download doesn't match what was published: check again later, or download the release by hand and
   verify it as in [docs/releasing.md](../docs/releasing.md). "the update's signer can't be checked" or "isn't
   signed with the same certificate" means this copy and the release are signed differently: install the
-  release by hand. A `symphony.yml` error comes from the new version's check; Symphony keeps running.
+  release with the [install script](#with-the-install-script). A `symphony.yml` error comes from the new
+  version's check; Symphony keeps running.
 - **Restart Symphony says "Symphony wasn't restarted".** The `symphony.yml` check (or the pause) failed, and
   the old Symphony is still running. Fix what the message names, then check it from a terminal with
-  `Symphony.app/Contents/Resources/symphony check --config <symphony.yml>`, or in Development mode
+  `~/Applications/Symphony.app/Contents/Resources/symphony check --config <symphony.yml>`, or in Development mode
   `cd <checkout> && mise exec -- ./bin/symphony check --config <symphony.yml>`, and restart again.
 - **Restart Symphony stays on "Waiting for N agent runs…".** Agent runs are still active. Wait, choose Restart
   Now Anyway once the restart timeout has passed (lower it in Settings), or Cancel Restart.

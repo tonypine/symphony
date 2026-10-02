@@ -86,7 +86,7 @@ branch instead of opening a second one. If a claimed issue moves to a terminal s
 - **Executor + reviewer runs** — an optional read-only reviewer agent gates the executor's push.
 - **Docker runner** — host Symphony with mounted repos, state, logs, and agent credentials.
 - **macOS menu bar app** — start, stop, pause, and resume Symphony from the menu bar, with its status in
-  the icon, the Linear key in the Keychain, and optional launch at login. See
+  the icon, the Linear key in the Keychain, optional launch at login, and updates from the menu. See
   [macos/README.md](macos/README.md).
 
 ![Symphony Web dashboard screenshot](.github/media/elixir-screenshot-web.png)
@@ -96,6 +96,35 @@ branch instead of opening a second one. If a claimed issue moves to a terminal s
 Symphony works best in codebases that have adopted
 [harness engineering](https://openai.com/index/harness-engineering/): scripts, tests, docs, and
 workflow prompts that let coding agents work safely.
+
+### On macOS: the menu bar app
+
+On a Mac with Apple silicon, Symphony is an app you download: `Symphony.app` carries a self-contained
+Symphony, so you need no checkout, `mise` or Elixir.
+
+1. **Install the app** to `~/Applications` and open it:
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/tonypine/symphony/main/scripts/install-macos.sh | bash
+   ```
+
+   The script verifies the release before installing it. To download it by hand instead, see
+   [Install](macos/README.md#install).
+2. **Scaffold operator config.** From your operator repo, run
+   `~/Applications/Symphony.app/Contents/Resources/symphony init` to create `symphony.yml`, then edit the
+   issue scope, agent command, workspace root, and `repositories:`.
+3. **Write a workflow per repo.** Invoke the `symphony-init-workflow` skill from Codex or Claude in
+   each target repo; the agent inspects the repo and writes a tailored `WORKFLOW.md`.
+4. **Start Symphony.** In the app's Settings window, choose your `symphony.yml` and paste a Linear
+   personal API key (Settings → Security & access → Personal API keys); the app keeps it in the login
+   Keychain. Click Save, then choose **Start Symphony** from the menu.
+
+The app updates itself from the menu and keeps the version it replaced for rollback. See
+[macos/README.md](macos/README.md) for first run, Restart, Update, Rollback, and Development mode.
+
+### From a checkout (development and Linux)
+
+Run Symphony from a checkout to work on Symphony itself, or on a platform without the app.
 
 1. **Get a Linear token** from Settings → Security & access → Personal API keys, and export it as
    `LINEAR_API_KEY`. Symphony reads all secrets from the environment — to avoid plaintext `.env`
@@ -114,17 +143,15 @@ workflow prompts that let coding agents work safely.
 3. **Scaffold operator config.** Run `mise exec -- ./bin/symphony init` from your operator repo to
    create `symphony.yml`, then edit the issue scope, agent command, workspace root, and
    `repositories:`.
-4. **Write a workflow per repo.** Invoke the `symphony-init-workflow` skill from Codex or Claude in
-   each target repo; the agent inspects the repo and writes a tailored `WORKFLOW.md`.
+4. **Write a workflow per repo**, as above.
 5. **Start Symphony:**
 
    ```bash
    mise exec -- ./bin/symphony
    ```
 
-   On macOS you can instead start it from the menu bar app: `cd macos && make install`, open
-   `~/Applications/Symphony.app`, and set the checkout folder, `symphony.yml`, and `LINEAR_API_KEY` in its
-   Settings window. See [macos/README.md](macos/README.md) for prerequisites and first-run setup.
+   The menu bar app can run a checkout too: turn on Development mode in its Settings. See
+   [Development mode](macos/README.md#development-mode).
 
 The LiveView dashboard runs at `http://127.0.0.1:4000` by default. It has no built-in authentication
 and binds to loopback only — to expose it remotely, front it with a reverse proxy that handles auth
@@ -284,8 +311,8 @@ implementation detail. Tickets with no user-facing change can leave the section 
 - [docs/security.md](docs/security.md) — threat model, built-in protections, and best practices.
 - [docs/development.md](docs/development.md) — toolchain, testing, packaging, and fork notes.
 - [docs/releasing.md](docs/releasing.md) — how to version and publish a release.
-- [macos/README.md](macos/README.md) — the macOS menu bar app: build, first run, controls, and
-  troubleshooting.
+- [macos/README.md](macos/README.md) — the macOS menu bar app: install, first run, controls, update,
+  rollback, development mode, and troubleshooting.
 - [docs/logging.md](docs/logging.md),
   [docs/quality_gate_security.md](docs/quality_gate_security.md), and
   [docs/token_accounting.md](docs/token_accounting.md) — operational deep-dives.
