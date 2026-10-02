@@ -4,6 +4,7 @@ repositories:
   - key: runtime-test
     default: true
     workflow: WORKFLOW.md
+    workflow_source: local
 workspaces:
   root: /tmp/symphony-elixir-runtime-test-workspaces
 agent:

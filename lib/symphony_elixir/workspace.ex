@@ -4,7 +4,7 @@ defmodule SymphonyElixir.Workspace do
   """
 
   require Logger
-  alias SymphonyElixir.{Config, PathSafety, SSH}
+  alias SymphonyElixir.{Config, PathSafety, SSH, WorkflowSource}
   alias SymphonyElixir.GitHub.Repo, as: GitHubRepo
 
   @remote_workspace_marker "__SYMPHONY_WORKSPACE__"
@@ -88,6 +88,7 @@ defmodule SymphonyElixir.Workspace do
       with {:ok, workspace} <- workspace_path_for_issue(safe_repo_key, safe_id, worker_host),
            :ok <- validate_workspace_path(workspace, worker_host),
            {:ok, workspace, created?} <- ensure_workspace(workspace, issue_context, worker_host),
+           :ok <- refresh_repo_workflow(issue_context, worker_host),
            :ok <- maybe_run_after_create_hook(workspace, issue_context, created?, worker_host) do
         {:ok, workspace}
       end
@@ -109,6 +110,25 @@ defmodule SymphonyElixir.Workspace do
   def validate(workspace, _worker_host) do
     {:error, {:workspace_path_unreadable, workspace, :invalid}}
   end
+
+  # Runs after the workspace prepare so a local worktree fetch is already done and
+  # the run (and its hooks) sees the `WORKFLOW.md` committed on the fetched ref.
+  defp refresh_repo_workflow(issue_context, worker_host) do
+    with {:ok, repo} <- Config.repo(issue_context.repo_key) do
+      settings = settings_for_issue_context(issue_context)
+
+      _result =
+        WorkflowSource.refresh(repo,
+          fetch: settings.workspace.fetch_before_dispatch,
+          fetched_repo: locally_fetched_repo(settings, worker_host)
+        )
+    end
+
+    :ok
+  end
+
+  defp locally_fetched_repo(%{workspace: %{strategy: "worktree", fetch_before_dispatch: true, repo: repo}}, nil), do: repo
+  defp locally_fetched_repo(_settings, _worker_host), do: nil
 
   defp ensure_workspace(workspace, issue_context, worker_host) do
     settings = settings_for_issue_context(issue_context)

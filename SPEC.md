@@ -397,6 +397,11 @@ Loader behavior:
 - If a repo workflow cannot be read, return `missing_workflow_file`.
 - `repositories[].workflow` defaults to `WORKFLOW.md`. Absolute workflow paths are used directly.
   Relative workflow paths are resolved relative to the directory containing `symphony.yml`.
+- `repositories[].workflow_source` selects what is read at that path. With `ref` (the default) and
+  a workflow path inside a git checkout, the workflow is the file committed at that path on
+  `origin/<base_branch>` (`origin/HEAD`, `origin/main`, then `origin/master` when no base branch
+  is set), not the checkout's working tree. With `local`, or a path outside any git checkout, the
+  file is read from disk.
 - The application selects a primary repo as the one marked `default: true`, otherwise the first
   repo in `repositories:`.
 
@@ -483,6 +488,10 @@ Fields:
 - `workflow` (path string)
   - Default: `WORKFLOW.md`.
   - Resolved relative to the directory containing `symphony.yml`, unless absolute.
+- `workflow_source` (string)
+  - Default: `ref`. Allowed: `ref`, `local`.
+  - `ref` reads the committed workflow from the fetched remote base branch; `local` reads the
+    file from disk (workflow development override). See Section 5.1.
 - `workspace` (object)
   - OPTIONAL per-repo workspace population settings.
   - `strategy` MAY be `clone` or `worktree`.
@@ -1134,7 +1143,7 @@ Configuration is resolved in this order:
 4. Select the repo for this settings lookup:
    - explicit `repo_key` for routed issue work;
    - primary repo (`default: true`, otherwise first repo) for no-repo fallback.
-5. Load the selected repo's `WORKFLOW.md`.
+5. Load the selected repo's `WORKFLOW.md` from its workflow source (Section 5.1).
 6. Parse repo workflow front matter into a repo-local config map and prompt template.
 7. Merge system config with the selected repo-local config.
 8. Apply built-in defaults for missing OPTIONAL fields.
@@ -1160,6 +1169,10 @@ Dynamic reload behavior:
 
 - The Elixir implementation polls repo `WORKFLOW.md` files and keeps each `WorkflowStore` on the
   last known good workflow when reload fails.
+- For `workflow_source: ref`, the workflow is re-read from the remote base branch at startup and
+  on every dispatch after the pre-dispatch fetch, so a change pushed to the base branch applies to
+  the next dispatch without restart. A missing or invalid workflow on the ref is logged and the
+  last known good workflow is kept.
 - `symphony.yml` is re-read through the config layer during runtime operations such as dispatch,
   watchdog handling, and snapshots.
 - Changes to `symphony.yml` values that affect OTP child topology, including the `repositories:` list,
@@ -1225,6 +1238,7 @@ not require recognizing or validating extension fields unless that extension is 
 - `repositories`: non-empty list of repo route entries, REQUIRED
 - `repositories[].key`: unique string, REQUIRED
 - `repositories[].workflow`: path string, default `WORKFLOW.md`
+- `repositories[].workflow_source`: optional `ref` (default) or `local`
 - `repositories[].workspace.strategy`: optional `clone` or `worktree`
 - `repositories[].workspace.repo`: optional path string, required when the effective strategy is
   `worktree`
@@ -2808,7 +2822,9 @@ After restart:
 Operators can control behavior by:
 
 - Editing `symphony.yml` (operator/runtime settings).
-- Editing `WORKFLOW.md` (repo prompt and repo-local front matter).
+- Editing `WORKFLOW.md` (repo prompt and repo-local front matter). With the default
+  `workflow_source: ref`, edits take effect once pushed to the repo's base branch; with
+  `workflow_source: local`, local edits apply directly.
 - `WORKFLOW.md` changes are detected by repo workflow stores and re-applied automatically without
   restart according to Section 6.2.
 - Changing issue states in the tracker:

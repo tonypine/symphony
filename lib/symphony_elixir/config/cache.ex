@@ -79,6 +79,19 @@ defmodule SymphonyElixir.Config.Cache do
     end)
   end
 
+  @doc """
+  Drops the cached workflow for `path` so the next read loads it from disk, even
+  when the rewrite kept the same mtime and size.
+  """
+  @spec invalidate(Path.t()) :: :ok
+  def invalidate(path) when is_binary(path) do
+    key = cache_key(:workflow, Path.expand(path))
+    :persistent_term.erase(key)
+    keys = :persistent_term.get(@index_key, MapSet.new())
+    :persistent_term.put(@index_key, MapSet.delete(keys, key))
+    :ok
+  end
+
   @spec clear() :: :ok
   def clear do
     case GenServer.whereis(__MODULE__) do

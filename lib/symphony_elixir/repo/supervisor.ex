@@ -6,6 +6,7 @@ defmodule SymphonyElixir.Repo.Supervisor do
   use Supervisor
 
   alias SymphonyElixir.Config.SystemSchema
+  alias SymphonyElixir.WorkflowSource
   alias SymphonyElixir.WorkflowStore
 
   @registry SymphonyElixir.Repo.Registry
@@ -97,9 +98,12 @@ defmodule SymphonyElixir.Repo.Supervisor do
     if repo_name(repo) == Application.get_env(:symphony_elixir, :primary_repo_name) do
       opts
     else
-      Keyword.put(opts, :path, SystemSchema.repo_workflow_path(repo))
+      Keyword.put(opts, :path, workflow_read_path(repo))
     end
   end
+
+  defp workflow_read_path(%SystemSchema.Repo{} = repo), do: WorkflowSource.read_path(repo)
+  defp workflow_read_path(repo), do: SystemSchema.repo_workflow_path(repo)
 
   defp workflow_store_child_id(repo_name), do: {WorkflowStore, repo_name}
 

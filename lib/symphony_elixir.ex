@@ -62,9 +62,10 @@ defmodule SymphonyElixir.Application do
 
     try do
       validate_runtime_modules!()
+      SymphonyElixir.WorkflowSource.refresh_all(system_config)
       validate_runtime_config!()
       Application.put_env(:symphony_elixir, :primary_repo_name, primary_repo.name)
-      SymphonyElixir.Workflow.set_workflow_file_path(SystemSchema.repo_workflow_path(primary_repo))
+      SymphonyElixir.Workflow.set_workflow_file_path(SymphonyElixir.WorkflowSource.read_path(primary_repo))
 
       core_children =
         [

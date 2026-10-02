@@ -121,6 +121,17 @@ repositories:
 - `key`: unique repo key used in dashboards, run records, and prompt context. Keys must also remain
   unique after workspace path sanitization.
 - `workflow`: path to that repo's `WORKFLOW.md`; defaults to `WORKFLOW.md`.
+- `workflow_source`: where the workflow is read from; `ref` (default) or `local`.
+  - `ref` reads the file committed on the fetched remote base branch of the git checkout that
+    contains `workflow` (`origin/<base_branch>`, or `origin/HEAD` then `origin/main` then
+    `origin/master` when `base_branch` is unset). Uncommitted or unpulled edits in that checkout
+    never reach a run. Symphony reads the ref at startup and again on every dispatch, after the
+    pre-dispatch `git fetch origin` (it fetches the checkout itself when
+    `fetch_before_dispatch` is on and the checkout is not the worktree source it already
+    fetched). The committed file is copied to `<state root>/workflows/<key>/`. If the file is
+    missing or invalid on the ref, Symphony logs an error and keeps the last good workflow.
+  - `local` reads `workflow` from disk and reloads it when it changes. Use it while developing
+    a workflow. A `workflow` path outside any git checkout is always read this way.
 - `default`: at most one repo can be the fallback route.
 - `base_branch`: optional branch used for review-agent diff context and as the base a
   new worktree branches off (preferring `origin/<base_branch>`); when unset, a new
