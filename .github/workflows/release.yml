@@ -21,7 +21,8 @@ name: release
 # Optional repository variable:
 #   MINISIGN_PUBLIC_KEY
 #     the key line of the matching minisign.pub, embedded in the app so it can
-#     verify updates; without it the app's Update item is off.
+#     verify updates and quoted in the release notes; without it the app's Update
+#     item is off.
 
 on:
   push:
@@ -165,6 +166,8 @@ jobs:
         env:
           MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
           MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+          # Quoted in the release notes' minisign command.
+          MINISIGN_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
           VERSION: ${{ steps.version.outputs.version }}
           BUILD_NUMBER: ${{ steps.version.outputs.build }}
           TAG: ${{ steps.version.outputs.tag }}

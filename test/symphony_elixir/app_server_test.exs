@@ -5410,6 +5410,35 @@ defmodule SymphonyElixir.AppServerTest do
     end
   end
 
+  test "stdout pump relays output and exit status of a process that exited before it connected" do
+    # Regression: a fast-exiting process closed the port before Port.connect/2,
+    # which raised and surfaced {:stdout_pump_connect_failed, "argument error"}.
+    port =
+      Port.open(
+        {:spawn_executable, System.find_executable("sh")},
+        [:binary, :exit_status, line: 1_024, args: ["-c", "printf 'early line\\n'; exit 1"]]
+      )
+
+    monitor_ref = :erlang.monitor(:port, port)
+    assert_receive {:DOWN, ^monitor_ref, :port, ^port, _reason}, 5_000
+
+    assert {:ok, %{ref: pump_ref}} = AppServer.start_stdout_pump(port)
+    assert_receive {:codex_stdout_line, ^port, ^pump_ref, "early line"}, 1_000
+    assert_receive {:codex_stdout_exit, ^port, ^pump_ref, 1}, 1_000
+  end
+
+  test "stdout pump reports a connect failure for a port closed without an exit status" do
+    port = Port.open({:spawn_executable, System.find_executable("sh")}, [:binary, args: ["-c", "exec cat"]])
+    Port.close(port)
+
+    log =
+      capture_log(fn ->
+        assert {:error, {:stdout_pump_connect_failed, "argument error"}} = AppServer.start_stdout_pump(port)
+      end)
+
+    assert log =~ "Failed to start Codex stdout pump"
+  end
+
   test "app server does not block remote launch exits on stalled stderr tail fetch" do
     test_root =
       Path.join(
