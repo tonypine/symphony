@@ -134,7 +134,7 @@ defmodule SymphonyElixir.Paths do
     if running_as_release?(), do: Path.join(base, @release_subdir), else: base
   end
 
-  # Burrito releases run under a node name (`-name symphony@127.0.0.1`) while
+  # The release service runs as `symphony@127.0.0.1` (`SymphonyElixir.ReleaseNode`) while
   # `mix run` / escript runs default to `nonode@nohost`. Mnesia tags every
   # disc_copies replica with `node()`, so a single state dir can't be shared
   # across the two. Route the release to its own subdirectory so the two modes
