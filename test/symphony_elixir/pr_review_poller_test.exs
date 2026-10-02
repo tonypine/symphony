@@ -869,7 +869,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     refute Map.has_key?(record, :pending_last_addressed_comment_id)
   end
 
-  test "PR author comments do not trigger comment rework" do
+  test "PR author comments posted by Symphony or without text do not trigger comment rework" do
     now = ~U[2026-05-01 09:00:00Z]
     latest_comment_at = DateTime.add(now, -31, :minute)
 
@@ -889,7 +889,10 @@ defmodule SymphonyElixir.PrReviewPollerTest do
       open_activity(latest_comment_at,
         pr_author: "pr-author",
         comments: [
-          %{id: "author-comment", kind: "comment", author: "pr-author", body: "Self follow-up.", created_at: latest_comment_at}
+          %{id: "marked-comment", kind: "inline_comment", author: "pr-author", body: "Fixed in abc123.\n\n<!-- symphony:agent -->", created_at: latest_comment_at},
+          %{id: "legacy-reply", kind: "comment", author: "pr-author", body: "Symphony AI handled this in abc123.", created_at: latest_comment_at},
+          %{id: "legacy-note", kind: "comment", author: "PR-Author", body: "Automated note from Symphony AI: done.", created_at: latest_comment_at},
+          %{id: "reply-review", kind: "review", state: "COMMENTED", author: "pr-author", body: "", created_at: latest_comment_at}
         ]
       )
     )
@@ -903,11 +906,66 @@ defmodule SymphonyElixir.PrReviewPollerTest do
              )
 
     refute_receive {:issue_state_update, _, _}
-    assert [%{status: "watching"} = record] = RunStore.list_pr_reviews()
+    assert [%{status: "watching", review_self_users: ["pr-author"]} = record] = RunStore.list_pr_reviews()
     refute Map.has_key?(record, :pending_last_addressed_comment_id)
   end
 
-  test "current gh user comments do not trigger comment rework when detected" do
+  test "operator inline review comments on their own agent PR trigger rework on the same PR" do
+    now = ~U[2026-05-01 09:00:00Z]
+    latest_comment_at = DateTime.add(now, -31, :minute)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      pr_review_mode: "polling",
+      pr_review_cooldown_minutes: 30,
+      pr_review_stale_days: 7
+    )
+
+    Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now)])
+    :ok = put_review(now)
+
+    Application.put_env(
+      :symphony_elixir,
+      :pr_review_test_activity,
+      open_activity(latest_comment_at,
+        pr_author: "symphony-operator",
+        comments: [
+          %{
+            id: "agent-reply",
+            kind: "inline_comment",
+            author: "symphony-operator",
+            body: "Done.\n\n<!-- symphony:agent -->",
+            created_at: DateTime.add(latest_comment_at, -5, :minute)
+          },
+          %{
+            id: "operator-inline",
+            kind: "inline_comment",
+            author: "Symphony-Operator",
+            body: "Rename this helper.",
+            path: "lib/example.ex",
+            line: 7,
+            created_at: latest_comment_at,
+            updated_at: latest_comment_at
+          }
+        ]
+      )
+    )
+
+    assert {:ok, %{actions: [{:state_transitioned, "issue-1780", :rework, "In Progress"}]}} =
+             PrReviewPoller.poll_once(
+               tracker: FakeTracker,
+               github: FakeGitHub,
+               current_gh_user: "symphony-operator",
+               now: now
+             )
+
+    assert_receive {:issue_state_update, "issue-1780", "In Progress"}
+
+    assert [%{pending_reviewer_comments: [%{id: "operator-inline", path: "lib/example.ex"}], review_self_users: ["symphony-operator"]}] =
+             RunStore.list_pr_reviews()
+  end
+
+  test "Symphony-marked current gh user comments do not trigger comment rework when detected" do
     now = ~U[2026-05-01 09:00:00Z]
     latest_comment_at = DateTime.add(now, -31, :minute)
 
@@ -927,7 +985,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
       open_activity(latest_comment_at,
         pr_author: "someone-else",
         comments: [
-          %{id: "self-comment", kind: "comment", author: "symphony-operator", body: "Self follow-up.", created_at: latest_comment_at}
+          %{id: "self-comment", kind: "comment", author: "symphony-operator", body: "Self follow-up.\n\n<!-- symphony:agent -->", created_at: latest_comment_at}
         ]
       )
     )
@@ -965,7 +1023,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
       open_activity(latest_comment_at,
         pr_author: "pr-author",
         comments: [
-          %{id: "author-comment", kind: "comment", author: "pr-author", body: "Self follow-up.", created_at: latest_comment_at},
+          %{id: "author-comment", kind: "comment", author: "pr-author", body: "Symphony AI handled this.", created_at: latest_comment_at},
           %{id: "bot-comment", kind: "comment", author: "symphony-bot", body: "Automated status.", created_at: latest_comment_at},
           %{
             id: "reviewer-comment",
@@ -1693,14 +1751,18 @@ defmodule SymphonyElixir.PrReviewPollerTest do
         status: "rework_requested",
         workspace_path: workspace_path,
         reviewed_commit_sha: reviewed_sha,
+        review_self_users: ["symphony-operator"],
         pending_last_addressed_comment_id: "comment-2",
         pending_reviewer_comments: [
           %{id: "comment-1", kind: "inline_comment", author: "human-reviewer", body: "Please split this.", path: "lib/example.ex", line: 42},
+          %{id: "comment-0", kind: "inline_comment", author: "Symphony-Operator", body: "Rename this.", path: "lib/example.ex", line: 7},
           %{id: "comment-2", kind: "comment", author: "maintainer", body: "Also update docs."}
         ]
       })
 
     assert :ok = PrReviewPoller.complete_pending_reviewer_comments("issue-1780", github: ActionGitHub, now: now)
+
+    assert_receive {:github_reply, "https://github.com/example/repo/pull/1780", %{id: "comment-0"}, _operator_reply_body}
 
     assert_receive {:github_reply, "https://github.com/example/repo/pull/1780", %{id: "comment-1"}, reply_body}
 
@@ -2549,7 +2611,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
            ] = RunStore.list_pr_reviews()
   end
 
-  test "ignored author comments after a handled changes-requested review do not redispatch rework" do
+  test "Symphony-marked author comments after a handled changes-requested review do not redispatch rework" do
     now = ~U[2026-05-01 09:00:00Z]
     reviewer_activity_at = DateTime.add(now, -120, :minute)
     last_action_at = DateTime.add(now, -50, :minute)
@@ -2589,7 +2651,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
             id: "author-followup",
             kind: "comment",
             author: "pr-author",
-            body: "Pinging for review.",
+            body: "Pinging for review.\n\n<!-- symphony:agent -->",
             created_at: author_comment_at,
             updated_at: author_comment_at
           }
@@ -2616,7 +2678,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
            ] = RunStore.list_pr_reviews()
   end
 
-  test "CHANGES_REQUESTED reviews from ignored or current gh users do not redispatch rework after cooldown" do
+  test "CHANGES_REQUESTED reviews from ignored users or marked by Symphony do not redispatch rework after cooldown" do
     now = ~U[2026-05-01 09:00:00Z]
     latest_review_at = DateTime.add(now, -31, :minute)
 
@@ -2644,7 +2706,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
             kind: "review",
             state: "CHANGES_REQUESTED",
             author: "symphony-operator",
-            body: "Nudging this back to draft.",
+            body: "Nudging this back to draft.\n\n<!-- symphony:agent -->",
             url: "https://github.com/example/repo/pull/1780#pullrequestreview-1",
             created_at: latest_review_at,
             updated_at: latest_review_at

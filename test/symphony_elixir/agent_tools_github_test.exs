@@ -517,7 +517,7 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
         send(test_pid, :updated_remote_pr)
         {"", 0}
 
-      ["pr", "comment", ^pr_url, "--body", "Validation passed"], opts ->
+      ["pr", "comment", ^pr_url, "--body", "Validation passed\n\n<!-- symphony:agent -->"], opts ->
         refute Keyword.has_key?(opts, :cd)
         send(test_pid, :commented_remote_pr)
         {"", 0}
@@ -965,7 +965,7 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
              "baseRefName" => "main"
            }), 0}
 
-        ["api", "repos/acme/symphony/pulls/3051/comments/123/replies", "-f", "body=Addressed."], opts ->
+        ["api", "repos/acme/symphony/pulls/3051/comments/123/replies", "-f", "body=Addressed.\n\n<!-- symphony:agent -->"], opts ->
           assert opts[:cd] == workspace
 
           {Jason.encode!(%{
@@ -1004,7 +1004,7 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
         ["pr", "view", "auto/ACME-3051", "--repo", "acme/symphony", "--json", _fields], _opts ->
           {Jason.encode!(%{"number" => 3051, "url" => pr_url}), 0}
 
-        ["api", "repos/acme/symphony/pulls/3051/comments/9876543210/replies", "-f", "body=Addressed."], _opts ->
+        ["api", "repos/acme/symphony/pulls/3051/comments/9876543210/replies", "-f", "body=Addressed.\n\n<!-- symphony:agent -->"], _opts ->
           {Jason.encode!(%{"id" => 11, "html_url" => "#{pr_url}#discussion_r11"}), 0}
       end
 
@@ -1064,11 +1064,11 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
         ["pr", "view", "auto/ACME-3051", "--repo", "acme/symphony", "--json", _fields], _opts ->
           {Jason.encode!(%{"number" => 3051, "url" => pr_url}), 0}
 
-        ["api", "repos/acme/symphony/pulls/3051/comments/999/replies", "-f", "body=Hi"], _opts ->
+        ["api", "repos/acme/symphony/pulls/3051/comments/999/replies", "-f", "body=Hi\n\n<!-- symphony:agent -->"], _opts ->
           {"not found\n", 1}
       end
 
-      assert {:error, {:gh_failed, ["api", "repos/acme/symphony/pulls/3051/comments/999/replies", "-f", "body=Hi"], 1, "not found\n"}} =
+      assert {:error, {:gh_failed, ["api", "repos/acme/symphony/pulls/3051/comments/999/replies", "-f", "body=Hi\n\n<!-- symphony:agent -->"], 1, "not found\n"}} =
                GitHub.reply_to_review_comment(scoped_context(workspace), 999, "Hi",
                  git_runner: branch_runner(workspace),
                  gh_runner: gh_runner
@@ -1088,7 +1088,7 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
         ["pr", "view", "auto/ACME-3051", "--repo", "acme/symphony", "--json", _fields], _opts ->
           {Jason.encode!(%{"number" => 3051, "url" => pr_url}), 0}
 
-        ["api", "repos/acme/symphony/pulls/3051/comments/123/replies", "-f", "body=Hi"], _opts ->
+        ["api", "repos/acme/symphony/pulls/3051/comments/123/replies", "-f", "body=Hi\n\n<!-- symphony:agent -->"], _opts ->
           {"not json", 0}
       end
 
@@ -1131,7 +1131,7 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
            "baseRefName" => "main"
          }), 0}
 
-      ["api", "repos/acme/symphony/pulls/3187/comments/42/replies", "-f", "body=Acked."], opts ->
+      ["api", "repos/acme/symphony/pulls/3187/comments/42/replies", "-f", "body=Acked.\n\n<!-- symphony:agent -->"], opts ->
         refute Keyword.has_key?(opts, :cd)
         {Jason.encode!(%{"id" => 7, "html_url" => "#{pr_url}#discussion_r7"}), 0}
     end

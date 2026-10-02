@@ -337,7 +337,7 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
     pr_url = "https://github.example.com/org/repo/pull/42"
 
     runner = fn
-      ["api", "--hostname", "github.example.com", "repos/org/repo/pulls/42/comments/123/replies", "-f", "body=Addressed."], opts ->
+      ["api", "--hostname", "github.example.com", "repos/org/repo/pulls/42/comments/123/replies", "-f", "body=Addressed.\n\n<!-- symphony:agent -->"], opts ->
         assert opts[:stderr_to_stdout]
         {"{}", 0}
 
@@ -366,7 +366,7 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
     pr_url = "https://github.example.com/org/repo/pull/42"
 
     runner = fn
-      ["api", "--hostname", "github.example.com", "repos/org/repo/pulls/42/comments/PRRC_kwDO/replies", "-f", "body=Addressed."], opts ->
+      ["api", "--hostname", "github.example.com", "repos/org/repo/pulls/42/comments/PRRC_kwDO/replies", "-f", "body=Addressed.\n\n<!-- symphony:agent -->"], opts ->
         assert opts[:stderr_to_stdout]
         {"{}", 0}
     end

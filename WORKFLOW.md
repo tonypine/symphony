@@ -222,16 +222,16 @@ You are working on a Linear ticket `{{ issue.identifier }}`
 
 1. When the issue is in `In Review`, do not code or change ticket content.
 2. Poll for updates as needed, including GitHub PR review comments from humans and bots.
-3. If review feedback requires changes, move the issue to `Rework` and follow the rework flow.
+3. Review comments on the PR (including the operator's own, when Symphony posts with the same GitHub account) are handled by Symphony: it moves the issue back to `In Progress` and re-activates you with the comments. Address them on the same PR and branch with the PR feedback sweep protocol, push, and return to `In Review`. Do not close the PR or reset the branch for review comments.
 4. If approved, human moves the issue to `Merging`.
 5. When the issue is in `Merging`, open and follow `.ai/skills/land/SKILL.md`, then run the `land` skill in a loop until the PR is merged. Do not call `gh pr merge` directly; merge with the scoped `github_merge_pull_request` tool.
 6. After merge is complete, move the issue to `Done`.
 
 ## Step 4: Rework handling
 
-1. Treat `Rework` as a full approach reset, not incremental patching.
+1. Treat `Rework` as a full approach reset, not incremental patching. A human moves the issue to `Rework` when the approach itself is wrong; ordinary review comments come back as `In Progress` on the same PR (see Step 3).
 2. Re-read the full issue body and all human comments; explicitly identify what will be done differently this attempt.
-3. Close the existing PR tied to the issue.
+3. Close the existing PR tied to the issue. There is no scoped tool to close a PR; if you cannot close it, note it in the workpad so the human closes it.
 4. Preserve the existing workpad as the audit trail — do not delete it. In the single workpad comment (`{{ agent.workpad_heading }}`, or a legacy `## Codex Workpad` / `## Claude Workpad` header you should rewrite to `{{ agent.workpad_heading }}`), move the prior `Plan`, `Acceptance Criteria`, and `Validation` content under a `### Superseded — attempt <n>` heading so the record of what was already tried stays on the issue.
 5. Create a fresh branch from `origin/main`.
 6. Start over from the normal kickoff flow:
