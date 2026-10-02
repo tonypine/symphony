@@ -201,6 +201,11 @@ defmodule SymphonyElixir.TestSupport do
     ensure_named_supervised_child_started!(Phoenix.PubSub.Supervisor, SymphonyElixir.PubSub)
   end
 
+  def ensure_config_cache_started! do
+    ensure_application_started()
+    ensure_named_supervised_child_started!(Cache, Cache)
+  end
+
   def clear_run_store! do
     case SymphonyElixir.RunStore.clear() do
       :ok ->

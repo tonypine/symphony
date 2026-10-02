@@ -2043,6 +2043,11 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
           assert snapshot.workspace_lifecycle.quota_reason =~ "workspace free space below threshold"
           assert snapshot.workspace_lifecycle.min_free_bytes == 9_000_000_000_000_000
+
+          # The startup lifecycle check can mark the quota paused before the poll
+          # cycle logs the pause, so wait for the logged flag before reading the log.
+          wait_for_orchestrator_state(pid, & &1.workspace_quota_logged, 5_000)
+
           assert RunStore.list_runs() == []
         after
           if Process.alive?(pid), do: GenServer.stop(pid)
@@ -4722,16 +4727,22 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     on_exit(fn ->
       if pid = Process.whereis(Orchestrator) do
-        :sys.replace_state(pid, fn state ->
-          %{
-            state
-            | quality_gate_cache: previous_state.quality_gate_cache,
-              quality_gate_comment_keys: previous_state.quality_gate_comment_keys,
-              quality_gate_skipped_errors: previous_state.quality_gate_skipped_errors
-          }
-        end)
+        # An unsupervised orchestrator is linked to the test process and can
+        # exit after the whereis; then there is no state left to restore.
+        try do
+          :sys.replace_state(pid, fn state ->
+            %{
+              state
+              | quality_gate_cache: previous_state.quality_gate_cache,
+                quality_gate_comment_keys: previous_state.quality_gate_comment_keys,
+                quality_gate_skipped_errors: previous_state.quality_gate_skipped_errors
+            }
+          end)
 
-        send(pid, :publish_snapshot)
+          send(pid, :publish_snapshot)
+        catch
+          :exit, _reason -> :ok
+        end
       end
     end)
 
