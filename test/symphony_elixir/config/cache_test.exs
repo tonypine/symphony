@@ -19,6 +19,9 @@ defmodule SymphonyElixir.Config.CacheTest do
     File.mkdir_p!(root)
     # Enable watch so file_event tests exercise the real GenServer plumbing.
     Application.put_env(:symphony_elixir, :config_cache_watch, true)
+    # An earlier test in the shard may have stopped the app; these tests talk to
+    # the supervised Cache process directly.
+    SymphonyElixir.TestSupport.ensure_config_cache_started!()
     Cache.clear()
 
     on_exit(fn ->

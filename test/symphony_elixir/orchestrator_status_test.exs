@@ -2043,6 +2043,11 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
           assert snapshot.workspace_lifecycle.quota_reason =~ "workspace free space below threshold"
           assert snapshot.workspace_lifecycle.min_free_bytes == 9_000_000_000_000_000
+
+          # The startup lifecycle check can mark the quota paused before the poll
+          # cycle logs the pause, so wait for the logged flag before reading the log.
+          wait_for_orchestrator_state(pid, & &1.workspace_quota_logged, 5_000)
+
           assert RunStore.list_runs() == []
         after
           if Process.alive?(pid), do: GenServer.stop(pid)
