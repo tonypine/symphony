@@ -12,7 +12,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             let view = SettingsView(model: model) { [weak self] in self?.window?.close() }
             let window = NSWindow(contentViewController: NSHostingController(rootView: view))
             window.title = "Symphony Settings"
-            window.styleMask = [.titled, .closable]
+            window.styleMask = [.titled, .closable, .resizable]
             window.isReleasedWhenClosed = false
             window.delegate = self
             window.center()
