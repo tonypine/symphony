@@ -321,6 +321,25 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       assert %{"error" => %{"code" => "tool_scope_rejected"}} = Jason.decode!(response["output"])
     end
 
+    test "the QA scope reads and attaches evidence but cannot write anything else" do
+      qa_tools = Enum.map(DynamicTool.tool_specs(:qa), & &1["name"])
+
+      assert "linear_attach_file" in qa_tools
+      assert "linear_get_parent_issue" in qa_tools
+      assert "github_get_pr_checks" in qa_tools
+      refute Enum.any?(~w(linear_update_state linear_add_comment linear_update_comment linear_create_subissue github_push_branch github_create_pull_request), &(&1 in qa_tools))
+
+      response =
+        DynamicTool.execute("linear_update_state", %{"state_name_or_id" => "In Review"},
+          issue: %Issue{id: "issue-current"},
+          tool_scope: :qa,
+          linear_client: fn _query, _variables, _opts -> flunk("QA scope must not move the issue") end
+        )
+
+      assert %{"error" => %{"code" => "tool_scope_rejected", "scope" => "qa", "message" => message}} = Jason.decode!(response["output"])
+      assert message =~ "JSON verdict"
+    end
+
     test "rejects smuggled team, project, parent, assignee, state and issue id arguments" do
       {:ok, registry} = CommentRegistry.start_link()
 

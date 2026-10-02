@@ -566,9 +566,34 @@ defmodule SymphonyElixir.ReviewAgent do
 
   defp collect_message(_collector, _message), do: :ok
 
+  @doc false
+  # Agent text candidates for a finished turn, most specific first: the turn result,
+  # the streamed agent messages, then both joined. Shared with `QaAgent`.
+  @spec response_candidates(term(), [term()]) :: [String.t()]
+  def response_candidates(result, messages) when is_list(messages) do
+    %{primary: primary, messages: message_output, combined: combined} = response_texts(result, messages)
+
+    [primary, message_output, combined]
+    |> Enum.uniq()
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  @doc false
+  # Balanced `{...}` substrings of `text`, after dropping Markdown code fences. Shared with `QaAgent`.
+  @spec json_object_candidates(String.t()) :: [String.t()]
+  def json_object_candidates(text) when is_binary(text) do
+    text
+    |> String.replace(~r/```(?:json)?\s*/i, "")
+    |> String.replace("```", "")
+    |> extract_objects()
+  end
+
   defp response_payload(result, collector) do
+    response_texts(result, drain_collected_messages(collector, []))
+  end
+
+  defp response_texts(result, messages) do
     primary = result |> response_text() |> String.trim()
-    messages = drain_collected_messages(collector, [])
     message_output = messages |> Enum.map_join("", &message_text/1) |> String.trim()
 
     combined =

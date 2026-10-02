@@ -328,6 +328,10 @@ defmodule SymphonyElixir.Codex.DynamicTool do
                      "github_get_failed_run_log"
                    ])
 
+  # The QA agent reads like the reviewer and may attach evidence files; it never
+  # moves the issue, comments, or writes to GitHub.
+  @qa_tools MapSet.put(@read_only_tools, "linear_attach_file")
+
   @spec execute(String.t() | nil, term(), keyword()) :: map()
   def execute(tool, arguments, opts \\ []) do
     context = tool_context(opts)
@@ -345,8 +349,9 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   @spec tool_specs() :: [map()]
   def tool_specs, do: @tool_schemas
 
-  @spec tool_specs(:default | :read_only | nil) :: [map()]
+  @spec tool_specs(:default | :read_only | :qa | nil) :: [map()]
   def tool_specs(:read_only), do: Enum.filter(@tool_schemas, &(Map.get(&1, "name") in @read_only_tools))
+  def tool_specs(:qa), do: Enum.filter(@tool_schemas, &(Map.get(&1, "name") in @qa_tools))
   def tool_specs(_scope), do: tool_specs()
 
   defp tool_context(opts) do
@@ -384,6 +389,9 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     case Keyword.get(opts, :tool_scope) do
       :read_only ->
         if MapSet.member?(@read_only_tools, tool), do: :ok, else: {:error, {:tool_scope_rejected, :read_only, tool}}
+
+      :qa ->
+        if MapSet.member?(@qa_tools, tool), do: :ok, else: {:error, {:tool_scope_rejected, :qa, tool}}
 
       _scope ->
         :ok
@@ -693,6 +701,17 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         "message" => "The reviewer tool scope is read-only; #{tool} is not available in this phase.",
         "tool" => tool,
         "scope" => "read_only"
+      }
+    }
+  end
+
+  defp tool_error_payload({:tool_scope_rejected, :qa, tool}) do
+    %{
+      "error" => %{
+        "code" => "tool_scope_rejected",
+        "message" => "The QA tool scope reads the issue and PR and attaches evidence files; #{tool} is not available. Report findings in your JSON verdict instead.",
+        "tool" => tool,
+        "scope" => "qa"
       }
     }
   end

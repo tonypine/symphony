@@ -373,6 +373,7 @@ defmodule SymphonyElixir.AgentRunner do
         |> Keyword.put(:linear_comment_registry, linear_comment_registry)
         |> put_reviewer_comments(issue)
         |> put_ci_failure(issue)
+        |> put_qa_failure(issue)
         |> put_pr_conflict(issue)
 
       run_context = %{
@@ -983,6 +984,7 @@ defmodule SymphonyElixir.AgentRunner do
       opts
       |> put_reviewer_comments(issue)
       |> put_ci_failure(issue)
+      |> put_qa_failure(issue)
       |> put_pr_conflict(issue)
 
     prompt = PromptBuilder.build_prompt(issue, prompt_opts)
@@ -1123,6 +1125,20 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp pending_ci_failure(_issue, _opts), do: nil
 
+  defp put_qa_failure(opts, issue) when is_list(opts) do
+    if Keyword.has_key?(opts, :qa_failure) do
+      opts
+    else
+      Keyword.put(opts, :qa_failure, pending_qa_failure(issue, opts))
+    end
+  end
+
+  defp pending_qa_failure(%Issue{id: issue_id} = issue, opts) when is_binary(issue_id) do
+    CiPoller.pending_qa_failure(issue_id, pending_lookup_opts(issue, opts))
+  end
+
+  defp pending_qa_failure(_issue, _opts), do: nil
+
   defp put_pr_conflict(opts, issue) when is_list(opts) do
     if Keyword.has_key?(opts, :pr_conflict) do
       opts
@@ -1181,6 +1197,7 @@ defmodule SymphonyElixir.AgentRunner do
         !rework_state?(refreshed_issue.state) and
         pending_reviewer_comments(refreshed_issue, opts) == [] and
         is_nil(pending_ci_failure(refreshed_issue, opts)) and
+        is_nil(pending_qa_failure(refreshed_issue, opts)) and
         is_nil(pending_pr_conflict(refreshed_issue, opts))
     else
       false

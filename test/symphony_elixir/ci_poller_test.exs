@@ -164,6 +164,18 @@ defmodule SymphonyElixir.CiPollerTest do
     end
   end
 
+  defmodule FakeQaRunner do
+    def request(job, _opts) do
+      send(Application.fetch_env!(:symphony_elixir, :ci_test_recipient), {:qa_request, job})
+      :started
+    end
+  end
+
+  defmodule QaFailureStore do
+    def list_ci_checks(_repo_key), do: [Application.fetch_env!(:symphony_elixir, :ci_test_ci_record)]
+    def update_ci_check(_repo_key, _issue_id, _attrs), do: {:error, :store_down}
+  end
+
   defmodule FailingAutoReviewTracker do
     def fetch_issues_by_states(states), do: FakeTracker.fetch_issues_by_states(states)
 
@@ -263,18 +275,19 @@ defmodule SymphonyElixir.CiPollerTest do
       :ok
     end
 
-    test "green CI moves an Auto Review issue to In Review" do
+    test "green CI asks the QA runner for a pass on the PR head" do
       now = ~U[2026-05-06 09:00:00Z]
       issue = %{in_review_issue() | state: "Auto Review"}
       Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
       Application.put_env(:symphony_elixir, :ci_test_status, green_status())
       put_run(issue, now)
 
-      assert {:ok, %{discovered: 1, processed: 1, actions: [{:auto_review_passed, "issue-2401", "In Review"}]}} =
-               CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+      assert {:ok, %{discovered: 1, processed: 1, actions: [{:qa_started, "issue-2401", "abc123"}]}} =
+               CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, qa_runner: FakeQaRunner, now: now)
 
       assert_receive {:fetch_issues_by_states, ["In Review", "Auto Review"]}
-      assert_receive {:issue_state_update, "issue-2401", "In Review"}
+      assert_receive {:qa_request, %{issue: %Issue{id: "issue-2401"}, sha: "abc123", record: %{workspace_path: "/tmp/workspaces/ACME-2401"}}}
+      refute_receive {:issue_state_update, _, _}
       assert [%{status: "green"}] = RunStore.list_ci_checks()
     end
 
@@ -308,20 +321,65 @@ defmodule SymphonyElixir.CiPollerTest do
       refute_receive {:issue_state_update, _, _}
     end
 
-    test "a failed move to In Review is reported and retried on the next poll" do
+    test "a stored QA verdict for the head is applied again until the move succeeds" do
       now = ~U[2026-05-06 09:00:00Z]
       issue = %{in_review_issue() | state: "auto review"}
       Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
       Application.put_env(:symphony_elixir, :ci_test_status, green_status())
       put_run(issue, now)
 
+      assert {:ok, %{actions: [{:qa_started, "issue-2401", "abc123"}]}} =
+               CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, qa_runner: FakeQaRunner, now: now)
+
+      :ok =
+        RunStore.update_ci_check(@repo_key, "issue-2401", %{
+          qa_sha: "abc123",
+          qa_verdict: "pass",
+          qa_target_state: "In Review",
+          qa_applied: false
+        })
+
       assert {:ok, %{actions: [{:state_transition_error, "issue-2401", :auto_review, :linear_unavailable}]}} =
-               CiPoller.poll_once(tracker: FailingAutoReviewTracker, github: FakeGitHub, now: now)
+               CiPoller.poll_once(tracker: FailingAutoReviewTracker, github: FakeGitHub, qa_runner: FakeQaRunner, now: DateTime.add(now, 1, :minute))
 
       assert_receive {:issue_state_update, "issue-2401", "In Review"}
 
-      assert {:ok, %{actions: [{:auto_review_passed, "issue-2401", "In Review"}]}} =
-               CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: DateTime.add(now, 1, :minute))
+      assert {:ok, %{actions: [{:auto_review_qa, "issue-2401", :pass, "In Review"}]}} =
+               CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, qa_runner: FakeQaRunner, now: DateTime.add(now, 2, :minute))
+
+      assert [%{qa_applied: true}] = RunStore.list_ci_checks()
+    end
+
+    test "pending QA failures are read and cleared per issue" do
+      now = ~U[2026-05-06 09:00:00Z]
+      issue = %{in_review_issue() | state: "Auto Review"}
+      Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+      Application.put_env(:symphony_elixir, :ci_test_status, green_status())
+      put_run(issue, now)
+
+      assert {:ok, _summary} =
+               CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, qa_runner: FakeQaRunner, now: now)
+
+      assert CiPoller.pending_qa_failure("issue-2401") == nil
+      assert CiPoller.pending_qa_failure(nil) == nil
+      assert :ok = CiPoller.complete_pending_qa_failure("issue-2401")
+
+      qa_failure = %{commit_sha: "abc123", summary: "broken", findings: ["`symphony check` exits 0 on a bad config"]}
+      :ok = RunStore.update_ci_check(@repo_key, "issue-2401", %{qa_failure: qa_failure})
+
+      assert CiPoller.pending_qa_failure("issue-2401") == qa_failure
+      assert CiPoller.pending_qa_failure("issue-2401", repo_key: @repo_key) == qa_failure
+      assert CiPoller.pending_qa_failure("other-issue") == nil
+      assert :ok = CiPoller.complete_pending_qa_failure("issue-2401", repo_key: @repo_key)
+      assert CiPoller.pending_qa_failure("issue-2401") == nil
+    end
+
+    test "clearing a QA failure reports a store error" do
+      record = %{repo_key: @repo_key, issue_id: "issue-2401", qa_failure: %{findings: ["x"]}}
+      Application.put_env(:symphony_elixir, :ci_test_ci_record, record)
+
+      assert {:error, :store_down} =
+               CiPoller.complete_pending_qa_failure("issue-2401", repo_key: @repo_key, run_store: QaFailureStore)
     end
 
     test "an issue with no state is not treated as in Auto Review" do

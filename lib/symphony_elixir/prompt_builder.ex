@@ -15,6 +15,7 @@ defmodule SymphonyElixir.PromptBuilder do
   # limit that forced the compact prompt in the first place. Keep only the tail
   # (failures land at the end of CI logs) so the compact prompt stays compact.
   @compact_ci_log_excerpt_bytes 4_000
+  @qa_findings_limit 10_000
   @compact_ci_log_truncation_marker "[Symphony truncated earlier CI log lines to fit the compact prompt]"
   @codex_transport_output_guard """
   Codex transport output guard:
@@ -90,6 +91,7 @@ defmodule SymphonyElixir.PromptBuilder do
     |> append_extra_prompt(Keyword.get(opts, :extra_prompt) || Keyword.get(opts, :prompt_context))
     |> append_reviewer_comments(reviewer_comments)
     |> append_ci_failure(ci_failure)
+    |> append_qa_failure(Keyword.get(opts, :qa_failure))
     |> append_pr_conflict(pr_conflict)
     |> append_review_agent_instructions(Keyword.get(opts, :settings), opts)
     |> append_feedback_protocol(Keyword.get(opts, :settings))
@@ -150,6 +152,7 @@ defmodule SymphonyElixir.PromptBuilder do
     |> append_extra_prompt(Keyword.get(opts, :extra_prompt) || Keyword.get(opts, :prompt_context))
     |> append_reviewer_comments(reviewer_comments)
     |> append_ci_failure(ci_failure)
+    |> append_qa_failure(Keyword.get(opts, :qa_failure))
     |> append_pr_conflict(pr_conflict)
     |> append_review_agent_instructions(Keyword.get(opts, :settings), opts)
     |> append_feedback_protocol(Keyword.get(opts, :settings))
@@ -528,6 +531,12 @@ defmodule SymphonyElixir.PromptBuilder do
     prompt <> "\n\n" <> ci_failure_section(ci_failure)
   end
 
+  defp append_qa_failure(prompt, %{} = qa_failure) do
+    prompt <> "\n\n" <> qa_failure_section(qa_failure)
+  end
+
+  defp append_qa_failure(prompt, _qa_failure), do: prompt
+
   defp append_pr_conflict(prompt, nil), do: prompt
 
   defp append_pr_conflict(prompt, pr_conflict) when is_map(pr_conflict) do
@@ -623,6 +632,32 @@ defmodule SymphonyElixir.PromptBuilder do
       "END UNTRUSTED CI LOG"
     ]
     |> Enum.join("\n")
+  end
+
+  # QA findings come from an agent that ran the PR's code, so they are fenced as data.
+  defp qa_failure_section(qa_failure) do
+    findings =
+      qa_failure
+      |> get_field(:findings)
+      |> List.wrap()
+      |> Enum.filter(&is_binary/1)
+      |> Enum.map_join("\n", &("- " <> &1))
+
+    [
+      "Auto Review QA failure:",
+      "",
+      "The QA agent tested commit #{blank_fallback(string_field(qa_failure, :commit_sha), "unknown")} and found the behaviour below.",
+      "Fix it on the same branch and PR, then push. Symphony runs QA again once CI is green.",
+      "",
+      "BEGIN UNTRUSTED QA FINDINGS",
+      PromptSafety.linear_block(qa_findings_text(findings, qa_failure), "qa_findings", @qa_findings_limit),
+      "END UNTRUSTED QA FINDINGS"
+    ]
+    |> Enum.join("\n")
+  end
+
+  defp qa_findings_text(findings, qa_failure) do
+    blank_fallback(findings, blank_fallback(string_field(qa_failure, :summary), "No findings were recorded."))
   end
 
   defp pr_conflict_section(pr_conflict) do

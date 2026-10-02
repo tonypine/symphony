@@ -50,7 +50,7 @@ defmodule SymphonyElixir.AutoReviewTest do
                timeout_ms: 1_800_000,
                max_concurrent: 1,
                max_fix_attempts: 2,
-               run_on: "always",
+               run_on: "every_push",
                skip_globs: [],
                playbooks: %{}
              } = auto_review
@@ -70,7 +70,7 @@ defmodule SymphonyElixir.AutoReviewTest do
           timeout_ms: 60_000,
           max_concurrent: 2,
           max_fix_attempts: 0,
-          run_on: "first_push",
+          run_on: "first_pass",
           skip_globs: ["docs/**"],
           playbooks: %{web: %{paths: ["assets/**"]}}
         }
@@ -87,7 +87,7 @@ defmodule SymphonyElixir.AutoReviewTest do
                timeout_ms: 60_000,
                max_concurrent: 2,
                max_fix_attempts: 0,
-               run_on: "first_push",
+               run_on: "first_pass",
                skip_globs: ["docs/**"],
                playbooks: %{"web" => %{"paths" => ["assets/**"]}}
              } = auto_review

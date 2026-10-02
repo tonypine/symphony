@@ -90,6 +90,7 @@ defmodule SymphonyElixir.Application do
            [
              SymphonyElixir.Orchestrator,
              pr_review_child_spec(system_config),
+             qa_runner_child_spec(system_config),
              ci_child_spec(system_config),
              SymphonyElixir.HttpServer,
              SymphonyElixir.StatusDashboard
@@ -162,6 +163,12 @@ defmodule SymphonyElixir.Application do
   defp ci_child_spec(%SystemSchema{repos: repos}) do
     if Enum.any?(repos, &ci_enabled_for_repo?/1) do
       SymphonyElixir.CiPoller
+    end
+  end
+
+  defp qa_runner_child_spec(%SystemSchema{repos: repos}) do
+    if Enum.any?(repos, &(ci_enabled_for_repo?(&1) and Config.settings_for_repo!(&1.name).auto_review.enabled)) do
+      SymphonyElixir.QaRunner
     end
   end
 

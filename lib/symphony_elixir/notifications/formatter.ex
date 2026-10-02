@@ -12,7 +12,9 @@ defmodule SymphonyElixir.Notifications.Formatter do
     "reviewer_commented",
     "rework_pushed",
     "ci_failed",
-    "ci_escalated"
+    "ci_escalated",
+    "qa_passed",
+    "qa_failed"
   ]
 
   @spec webhook_payload(Event.t(), keyword()) :: map()
@@ -169,6 +171,8 @@ defmodule SymphonyElixir.Notifications.Formatter do
   defp event_title("budget_exceeded"), do: "Budget exceeded"
   defp event_title("ci_failed"), do: "CI failed"
   defp event_title("ci_escalated"), do: "CI escalated"
+  defp event_title("qa_passed"), do: "QA passed"
+  defp event_title("qa_failed"), do: "QA failed"
   defp event_title("reviewer_commented"), do: "Reviewer commented"
   defp event_title("rework_pushed"), do: "Rework pushed"
   defp event_title(event), do: event
@@ -177,6 +181,8 @@ defmodule SymphonyElixir.Notifications.Formatter do
   defp event_color("run_stuck"), do: "danger"
   defp event_color("ci_failed"), do: "danger"
   defp event_color("ci_escalated"), do: "warning"
+  defp event_color("qa_passed"), do: "good"
+  defp event_color("qa_failed"), do: "danger"
   defp event_color("budget_exceeded"), do: "warning"
   defp event_color("dependency_pending_approval"), do: "warning"
   defp event_color("issue_completed"), do: "good"

@@ -494,6 +494,7 @@ defmodule SymphonyElixir.Orchestrator do
 
       false ->
         complete_pr_review_comment_cursor(issue_id, running_entry_repo_key(running_entry))
+        complete_pending_qa_failure(issue_id, running_entry_repo_key(running_entry))
         Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; scheduling active-state continuation check")
 
         state
@@ -4567,6 +4568,21 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp complete_pr_review_comment_cursor(_issue_id, _repo_key), do: :ok
 
+  # The fix run for a failed Auto Review QA pass has finished; the next QA pass on
+  # the new head decides whether the finding is fixed.
+  defp complete_pending_qa_failure(issue_id, repo_key) when is_binary(issue_id) do
+    case CiPoller.complete_pending_qa_failure(issue_id, repo_key_opt(repo_key)) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Failed to clear the pending QA failure issue_id=#{issue_id}: #{inspect(reason)}")
+        :ok
+    end
+  end
+
+  defp complete_pending_qa_failure(_issue_id, _repo_key), do: :ok
+
   defp persist_quality_eval_async(%{run_id: run_id} = running_entry, status, error)
        when is_binary(run_id) and is_binary(status) do
     start_quality_eval_task(running_entry, status, error)
@@ -6096,7 +6112,8 @@ defmodule SymphonyElixir.Orchestrator do
   defp pending_rework_signal?(%Issue{} = issue, completed_metadata) do
     issue_updated_after_last_run?(issue, completed_metadata) or
       pending_reviewer_comments?(issue.id, repo_key_from(completed_metadata)) or
-      pending_ci_failure?(issue.id, repo_key_from(completed_metadata))
+      pending_ci_failure?(issue.id, repo_key_from(completed_metadata)) or
+      pending_qa_failure?(issue.id, repo_key_from(completed_metadata))
   end
 
   defp issue_updated_after_last_run?(%Issue{updated_at: %DateTime{} = updated_at}, %{last_ran_at: %DateTime{} = last_ran_at}) do
@@ -6116,6 +6133,12 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp pending_ci_failure?(_issue_id, _repo_key), do: false
+
+  defp pending_qa_failure?(issue_id, repo_key) when is_binary(issue_id) do
+    not is_nil(CiPoller.pending_qa_failure(issue_id, repo_key_opt(repo_key)))
+  end
+
+  defp pending_qa_failure?(_issue_id, _repo_key), do: false
 
   defp repo_key_opt(repo_key) when is_binary(repo_key) and repo_key != "", do: [repo_key: repo_key]
   defp repo_key_opt(_repo_key), do: []
