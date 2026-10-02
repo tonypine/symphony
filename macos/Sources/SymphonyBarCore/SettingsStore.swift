@@ -60,17 +60,19 @@ public final class SettingsStore {
         )
     }
 
-    /// Writes the secrets and removes extra variables that are no longer listed.
-    public func saveSecrets(_ settings: SecretSettings) throws {
+    /// Writes the secrets, then removes the named extra variables. Only names in `removing` are ever
+    /// deleted, so a list that failed to load or is stale can't wipe stored variables. Names still listed
+    /// and the Linear API key are never removed.
+    public func saveSecrets(_ settings: SecretSettings, removing removed: Set<String> = []) throws {
         let keyName = SecretSettings.linearAPIKeyName
         try secrets.setValue(settings.linearAPIKey, forAccount: keyName)
 
-        let kept = Set(settings.extraEnvironment.map(\.name))
-        for account in try secrets.accounts() where account != keyName && !kept.contains(account) {
-            try secrets.removeValue(forAccount: account)
-        }
         for variable in settings.extraEnvironment {
             try secrets.setValue(variable.value, forAccount: variable.name)
+        }
+        let kept = Set(settings.extraEnvironment.map(\.name))
+        for account in removed.subtracting(kept).subtracting([keyName]).sorted() {
+            try secrets.removeValue(forAccount: account)
         }
     }
 }

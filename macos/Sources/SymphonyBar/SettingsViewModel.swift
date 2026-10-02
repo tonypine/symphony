@@ -17,6 +17,10 @@ final class SettingsViewModel: ObservableObject {
     @Published private(set) var issues: [SettingsIssue] = []
     @Published private(set) var keychainError: String?
 
+    /// Extra variable names known to be in the Keychain. Only these can be removed on save, so a failed
+    /// load never turns into deletions.
+    private var storedNames: Set<String> = []
+
     private let store: SettingsStore
     private let validator: SettingsValidator
 
@@ -29,6 +33,7 @@ final class SettingsViewModel: ObservableObject {
             let secrets = try store.loadSecrets()
             linearAPIKey = secrets.linearAPIKey
             extraRows = secrets.extraEnvironment.map { EnvironmentRow(name: $0.name, value: $0.value) }
+            storedNames = Set(secrets.extraEnvironment.map(\.name))
         } catch {
             keychainError = "Could not read the Keychain: \(error)"
         }
@@ -54,11 +59,12 @@ final class SettingsViewModel: ObservableObject {
         guard issues.isEmpty else { return false }
 
         do {
-            try store.saveSecrets(secrets)
+            try store.saveSecrets(secrets, removing: storedNames)
         } catch {
             keychainError = "Could not save to the Keychain: \(error)"
             return false
         }
+        storedNames = Set(secrets.extraEnvironment.map(\.name))
         keychainError = nil
         store.saveSettings(settings)
         return true

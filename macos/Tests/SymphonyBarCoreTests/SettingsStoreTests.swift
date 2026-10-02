@@ -50,7 +50,7 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(keychain.values[SecretSettings.linearAPIKeyName], "lin_api_secret")
     }
 
-    func testSavingSecretsRemovesExtraVariablesNoLongerListed() throws {
+    func testSavingSecretsRemovesOnlyTheNamedVariables() throws {
         let keychain = MemorySecretStore()
         let store = SettingsStore(defaults: MemoryKeyValueStore(), secrets: keychain)
         try store.saveSecrets(
@@ -59,15 +59,39 @@ final class SettingsStoreTests: XCTestCase {
                 extraEnvironment: [
                     EnvironmentVariable(name: "KEEP", value: "1"),
                     EnvironmentVariable(name: "DROP", value: "2"),
+                    EnvironmentVariable(name: "UNLISTED", value: "4"),
                 ]
             )
         )
 
         try store.saveSecrets(
-            SecretSettings(linearAPIKey: "two", extraEnvironment: [EnvironmentVariable(name: "KEEP", value: "3")])
+            SecretSettings(linearAPIKey: "two", extraEnvironment: [EnvironmentVariable(name: "KEEP", value: "3")]),
+            removing: ["DROP"]
         )
 
-        XCTAssertEqual(keychain.values, [SecretSettings.linearAPIKeyName: "two", "KEEP": "3"])
+        XCTAssertEqual(keychain.values, [SecretSettings.linearAPIKeyName: "two", "KEEP": "3", "UNLISTED": "4"])
+    }
+
+    func testSavingAnEmptyListRemovesNothingByDefault() throws {
+        let keychain = MemorySecretStore()
+        keychain.values = [SecretSettings.linearAPIKeyName: "one", "GITHUB_TOKEN": "ghp-a"]
+        let store = SettingsStore(defaults: MemoryKeyValueStore(), secrets: keychain)
+
+        try store.saveSecrets(SecretSettings(linearAPIKey: "two"))
+
+        XCTAssertEqual(keychain.values, [SecretSettings.linearAPIKeyName: "two", "GITHUB_TOKEN": "ghp-a"])
+    }
+
+    func testSavingNeverRemovesTheLinearKeyOrAListedName() throws {
+        let keychain = MemorySecretStore()
+        let store = SettingsStore(defaults: MemoryKeyValueStore(), secrets: keychain)
+
+        try store.saveSecrets(
+            SecretSettings(linearAPIKey: "one", extraEnvironment: [EnvironmentVariable(name: "KEEP", value: "1")]),
+            removing: [SecretSettings.linearAPIKeyName, "KEEP"]
+        )
+
+        XCTAssertEqual(keychain.values, [SecretSettings.linearAPIKeyName: "one", "KEEP": "1"])
     }
 
     func testSecretsAreNeverWrittenToDefaults() throws {
