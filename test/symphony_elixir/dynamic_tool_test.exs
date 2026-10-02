@@ -277,6 +277,71 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     assert_received {:linear_client_called, _query, %{stateId: "state-review"}}
   end
 
+  test "update_state allows Waiting on sub-tickets only for a breakdown parent" do
+    SymphonyElixir.SubIssueWait.reset_for_test("Waiting on sub-tickets")
+
+    states = [
+      %{"id" => "state-waiting", "name" => "Waiting on sub-tickets", "type" => "started"},
+      %{"id" => "state-progress", "name" => "In Progress", "type" => "started"}
+    ]
+
+    for labels <- [nil, [%{"name" => "feature"}, %{}]] do
+      response =
+        DynamicTool.execute(
+          "linear_update_state",
+          %{"state_name_or_id" => "waiting on sub-tickets"},
+          issue: %Issue{id: "issue-current"},
+          linear_client: update_state_client(self(), states, labels)
+        )
+
+      assert response["success"] == false
+
+      assert %{"error" => %{"code" => "waiting_on_sub_issues_state_for_breakdown_only", "message" => message}} =
+               Jason.decode!(response["output"])
+
+      assert message =~ "only a `breakdown` parent"
+      refute_received {:linear_client_called, _query, %{stateId: _state_id}}
+    end
+
+    response =
+      DynamicTool.execute(
+        "linear_update_state",
+        %{"state_name_or_id" => "Waiting on sub-tickets"},
+        issue: %Issue{id: "issue-current"},
+        linear_client: update_state_client(self(), states, [%{"name" => "Breakdown"}])
+      )
+
+    assert response["success"] == true
+    assert_received {:linear_client_called, _query, %{stateId: "state-waiting"}}
+  end
+
+  test "update_state refuses Waiting on sub-tickets when the startup check turned it off" do
+    on_exit(fn -> SymphonyElixir.SubIssueWait.reset_for_test("Waiting on sub-tickets") end)
+    Application.put_env(:symphony_elixir, :memory_tracker_workflow_states, ["In Progress"])
+    on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_workflow_states) end)
+
+    ExUnit.CaptureLog.capture_log(fn ->
+      tracker = SymphonyElixir.Tracker.Memory
+      assert :disabled = SymphonyElixir.SubIssueWait.check_tracker_state(Config.settings!(), [], tracker: tracker)
+    end)
+
+    response =
+      DynamicTool.execute(
+        "linear_update_state",
+        %{"state_name_or_id" => "Waiting on sub-tickets"},
+        issue: %Issue{id: "issue-current"},
+        linear_client:
+          update_state_client(self(), [%{"id" => "state-waiting", "name" => "Waiting on sub-tickets", "type" => "started"}], [
+            %{"name" => "breakdown"}
+          ])
+      )
+
+    assert response["success"] == false
+    assert %{"error" => %{"code" => "waiting_on_sub_issues_state_disabled", "message" => message}} = Jason.decode!(response["output"])
+    assert message =~ "leave the parent In Progress"
+    refute_received {:linear_client_called, _query, %{stateId: _state_id}}
+  end
+
   test "add_comment surfaces commentCreate success=false from Linear as a failure" do
     {:ok, registry} = CommentRegistry.start_link()
 
@@ -1886,12 +1951,15 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     }
   end
 
-  defp update_state_client(test_pid, states) do
+  defp team_states_issue(states, nil), do: %{"team" => %{"states" => %{"nodes" => states}}}
+  defp team_states_issue(states, labels), do: Map.put(team_states_issue(states, nil), "labels", %{"nodes" => labels})
+
+  defp update_state_client(test_pid, states, labels \\ nil) do
     fn query, variables, _opts ->
       send(test_pid, {:linear_client_called, query, variables})
 
       if query =~ "SymphonyAgentIssueTeamStates" do
-        {:ok, %{"data" => %{"issue" => %{"team" => %{"states" => %{"nodes" => states}}}}}}
+        {:ok, %{"data" => %{"issue" => team_states_issue(states, labels)}}}
       else
         {:ok,
          %{

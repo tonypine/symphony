@@ -18,6 +18,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.PathSafety
   alias SymphonyElixir.PromptSafety
   alias SymphonyElixir.SensitivePath
+  alias SymphonyElixir.SubIssueWait
 
   @comment_limit_default 50
   @comment_limit_max 100
@@ -134,6 +135,11 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @team_states_query """
   query SymphonyAgentIssueTeamStates($id: String!) {
     issue(id: $id) {
+      labels {
+        nodes {
+          name
+        }
+      }
       team {
         states {
           nodes {
@@ -631,9 +637,12 @@ defmodule SymphonyElixir.AgentTools.Linear do
     if normalized == "" do
       {:error, :invalid_state}
     else
-      with {:ok, state} <- lookup_team_state(issue_id, normalized, opts),
-           {:ok, state_id} <- refuse_human_only_state(state) do
-        refuse_auto_review_handoff_state(state, state_id, opts)
+      settings = Keyword.get_lazy(opts, :settings, &Config.settings!/0)
+
+      with {:ok, state, labels} <- lookup_team_state(issue_id, normalized, opts),
+           {:ok, state_id} <- refuse_human_only_state(state),
+           {:ok, state_id} <- refuse_auto_review_handoff_state(state, state_id, settings) do
+        refuse_waiting_on_sub_issues_state(state, state_id, labels, settings)
       end
     end
   end
@@ -650,7 +659,8 @@ defmodule SymphonyElixir.AgentTools.Linear do
          {:ok, states} <- fetch_path(body, ["data", "issue", "team", "states", "nodes"], []) do
       case Enum.find(states, matches?) do
         %{"id" => _} = state ->
-          {:ok, state}
+          labels = body |> get_in(["data", "issue", "labels", "nodes"]) |> List.wrap() |> Enum.map(&label_name/1)
+          {:ok, state, labels}
 
         _ ->
           available = states |> Enum.map(& &1["name"]) |> Enum.reject(&is_nil/1)
@@ -667,13 +677,34 @@ defmodule SymphonyElixir.AgentTools.Linear do
 
   # With Auto Review on, Symphony moves the issue on from the PR being open, so an
   # agent asking for `In Review` is refused rather than silently redirected.
-  defp refuse_auto_review_handoff_state(state, state_id, opts) do
-    settings = Keyword.get_lazy(opts, :settings, &Config.settings!/0)
-
+  defp refuse_auto_review_handoff_state(state, state_id, settings) do
     if AutoReview.enabled?(settings) and state_name_matches?(state, AutoReview.review_state()),
       do: {:error, {:in_review_set_by_auto_review, state["name"], AutoReview.state(settings)}},
       else: {:ok, state_id}
   end
+
+  # Only a `breakdown` parent parks in the waiting state, and only while that state is on; otherwise
+  # Symphony would hold the issue there with nothing to bring it back.
+  defp refuse_waiting_on_sub_issues_state(state, state_id, labels, settings) do
+    waiting_state = SubIssueWait.state(settings)
+
+    cond do
+      is_nil(waiting_state) or not state_name_matches?(state, waiting_state) ->
+        {:ok, state_id}
+
+      not SubIssueWait.enabled?(settings) ->
+        {:error, {:waiting_on_sub_issues_state_disabled, state["name"]}}
+
+      Enum.any?(labels, &Issue.breakdown_label?/1) ->
+        {:ok, state_id}
+
+      true ->
+        {:error, {:waiting_on_sub_issues_state_for_breakdown_only, state["name"]}}
+    end
+  end
+
+  defp label_name(%{"name" => name}), do: name
+  defp label_name(_label), do: nil
 
   defp state_id_matches?(state, state_id) do
     String.downcase(to_string(state["id"])) == String.downcase(state_id)

@@ -80,6 +80,7 @@ issues:
   states:
     active: [Todo, In Progress]
     terminal: [Closed, Cancelled, Canceled, Duplicate, Done]
+    waiting_on_sub_issues: Waiting on sub-tickets
 ```
 
 - `provider`: `linear` or `memory`.
@@ -94,6 +95,15 @@ issues:
 - `linear.scope`: default Linear scope. Repo routes can narrow or replace this per repo.
 - `states.active`: issue states eligible for dispatch.
 - `states.terminal`: states that stop active runs and allow cleanup.
+- `states.waiting_on_sub_issues`: the state a `breakdown` parent waits in while its sub-tickets are
+  worked, default `Waiting on sub-tickets`; `null` turns it off. It counts as active without being
+  listed in `states.active`, but an issue in it is dispatched only for the close-out run, once it is
+  a `breakdown` parent whose sub-tickets are all terminal. The breakdown run ends by moving the
+  parent there (`linear_update_state` allows the state only for `breakdown` issues), and on every
+  poll Symphony moves a `breakdown` parent it finds `In Progress` with open sub-tickets there, so
+  `In Progress` only holds issues an agent is working. Create it in Linear as a started state just
+  after In Progress. At startup Symphony checks the configured teams have it; when it is missing,
+  Symphony logs a warning and parents keep waiting `In Progress` until restart.
 
 For Linear, configure at least one global scope under `issues.linear.scope` or repo-level route
 selector under `repositories[].route`.

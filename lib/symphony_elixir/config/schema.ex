@@ -103,19 +103,46 @@ defmodule SymphonyElixir.Config.Schema do
       field(:assignee, :string)
       field(:active_states, {:array, :string}, default: ["Todo", "In Progress"])
       field(:terminal_states, {:array, :string}, default: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"])
+      field(:waiting_on_sub_issues_state, :string, default: "Waiting on sub-tickets")
     end
+
+    @fields [
+      :kind,
+      :endpoint,
+      :api_key,
+      :project_slug,
+      :team,
+      :labels,
+      :assignee,
+      :active_states,
+      :terminal_states,
+      :waiting_on_sub_issues_state
+    ]
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
       schema
-      |> cast(
-        attrs,
-        [:kind, :endpoint, :api_key, :project_slug, :team, :labels, :assignee, :active_states, :terminal_states],
-        empty_values: []
-      )
+      |> cast(attrs, @fields, empty_values: [])
       |> normalize_optional_string(:project_slug)
       |> normalize_optional_string(:team)
       |> normalize_string_list(:labels)
+      |> normalize_optional_string(:waiting_on_sub_issues_state)
+      |> put_waiting_on_sub_issues_state_active()
+    end
+
+    # Breakdown parents wait in this state and are dispatched from it for close-out, so it is active.
+    defp put_waiting_on_sub_issues_state_active(changeset) do
+      active_states = get_field(changeset, :active_states) || []
+
+      case get_field(changeset, :waiting_on_sub_issues_state) do
+        state when is_binary(state) ->
+          if Enum.any?(active_states, &(is_binary(&1) and String.downcase(String.trim(&1)) == String.downcase(state))),
+            do: changeset,
+            else: put_change(changeset, :active_states, active_states ++ [state])
+
+        nil ->
+          changeset
+      end
     end
 
     defp normalize_optional_string(changeset, field) do
@@ -2087,6 +2114,7 @@ defmodule SymphonyElixir.Config.Schema do
   defp preserve_explicit_nil_path?(["agent", key]) when key in ["max_tokens_per_issue", "max_tokens_per_day"],
     do: true
 
+  defp preserve_explicit_nil_path?(["tracker", "waiting_on_sub_issues_state"]), do: true
   defp preserve_explicit_nil_path?(_path), do: false
 
   defp resolve_secret_setting(nil, fallback), do: normalize_secret_value(fallback)

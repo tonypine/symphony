@@ -14,9 +14,13 @@ Rules for every `breakdown` parent run:
 
 - Never create commits, push a branch, open a PR, or attach any other artifact for
   the parent. Its deliverables are its sub-tickets.
-- Keep the parent `In Progress` while any sub-ticket is open. Symphony does not
-  dispatch or continue a `breakdown` parent that has a sub-issue outside a terminal
-  state, so leaving it `In Progress` does not start another run.
+- Park the parent in `Waiting on sub-tickets` while any sub-ticket is open, so
+  `In Progress` only holds tickets an agent is working. Symphony does not dispatch
+  or continue a `breakdown` parent that has a sub-issue outside a terminal state,
+  and dispatches the close-out run from `Waiting on sub-tickets` once every
+  sub-issue is terminal. If `linear_update_state` refuses `Waiting on sub-tickets`
+  (the state is missing or turned off), leave the parent `In Progress`; it is held
+  there the same way.
 - Keep the workpad as the single progress record, as for any ticket.
 
 ### Breakdown run (no `Sub-issues` in the issue context)
@@ -29,10 +33,14 @@ Rules for every `breakdown` parent run:
    description lists every requirement from the parent ticket and the acceptance
    criteria of each sibling sub-ticket as a checklist, and says it should be promoted
    only after every other sub-ticket is `Done`.
-4. Record the sub-ticket identifiers in the workpad `Notes`, leave the parent
-   `In Progress`, and end the turn. A human promotes the sub-tickets to `Todo`.
+4. Record the sub-ticket identifiers in the workpad `Notes`, move the parent to
+   `Waiting on sub-tickets` with `linear_update_state`, and end the turn. A human
+   promotes the sub-tickets to `Todo`.
 
 ### Close-out run (every sub-issue is terminal)
+
+Symphony starts this run from `Waiting on sub-tickets` (or `In Progress`) once every
+sub-issue is terminal.
 
 1. Confirm with `linear_get_subissues` that every sub-ticket is `Done` (or
    deliberately cancelled) and that a `Final verification:` sub-ticket exists and is
