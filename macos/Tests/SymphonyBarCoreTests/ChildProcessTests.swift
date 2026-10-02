@@ -99,6 +99,18 @@ final class ChildProcessTests: XCTestCase {
         XCTAssertFalse(queue.sync { child.isRunning })
     }
 
+    func testDetachedProcessRunsInItsOwnSessionAndLogs() throws {
+        let marker = directory.appendingPathComponent("done")
+        let pid = try ChildProcess.spawnDetached(launch("echo helper output; sleep 1; touch done"), logURL: log)
+
+        XCTAssertEqual(getsid(pid), pid, "a new session, so the process outlives the app")
+        XCTAssertNotEqual(getsid(pid), getsid(0))
+        var status: Int32 = 0
+        XCTAssertEqual(waitpid(pid, &status, 0), pid)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path))
+        XCTAssertEqual(try logText(), "helper output\n")
+    }
+
     func testRunsInItsOwnProcessGroup() throws {
         let (child, exited, _) = try spawn("sleep 30")
         let record = try XCTUnwrap(ProcessTree.snapshot().first { $0.pid == child.pid })

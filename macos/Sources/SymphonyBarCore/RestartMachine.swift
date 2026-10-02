@@ -2,10 +2,17 @@ import Foundation
 
 /// The steps of a graceful restart, kept free of AppKit so they can be unit tested: check symphony.yml, pause
 /// dispatch, wait until no agent run is active, stop, start, wait until Symphony answers, then resume dispatch
-/// if the restart paused it. Events go in; the effects the app must carry out come back.
+/// if the restart paused it. Events go in; the effects the app must carry out come back. An update drains the same
+/// way but stops there, so the app can swap itself for the new version.
 public struct RestartMachine: Equatable {
     /// How long a started Symphony has to answer on its control URL before the restart reports it.
     public static let answerTimeout: TimeInterval = 120
+
+    public enum Purpose: Equatable {
+        case restart
+        /// Stop Symphony for an update instead of starting it again.
+        case update
+    }
 
     public enum Phase: Equatable {
         case idle
@@ -47,13 +54,17 @@ public struct RestartMachine: Equatable {
         case stop
         case start(symphonyBinary: String?)
         case alert(title: String, message: String)
+        /// An update's drain is done and Symphony has stopped; the app hands over to the new version.
+        case stopped
     }
 
     /// Alert titles: before Symphony is stopped it keeps running, after that it may not have come back.
     public static let notRestartedTitle = "Symphony wasn't restarted"
     public static let failedTitle = "Symphony didn't come back"
+    public static let notUpdatedTitle = "Symphony wasn't updated"
 
     public private(set) var phase: Phase = .idle
+    public private(set) var purpose: Purpose = .restart
     /// True once the restart paused dispatch, so only it resumes; a pause the user made survives the restart.
     public private(set) var pausedByRestart = false
     /// True once the wait for agent runs has outlasted its timeout.
@@ -79,16 +90,19 @@ public struct RestartMachine: Equatable {
 
     /// Starts a restart. `alreadyPaused` is whether dispatch is paused now; `symphonyBinary` replaces the embedded
     /// Symphony for the check and the start, for the updater. After `runsTimeout` seconds of waiting for agent runs
-    /// the restart also offers Restart Now Anyway. Does nothing while a restart is under way.
+    /// the restart also offers Restart Now Anyway. An `.update` ends with `.stopped` instead of starting Symphony.
+    /// Does nothing while a restart is under way.
     public mutating func begin(
         alreadyPaused: Bool,
         symphonyBinary: String? = nil,
+        purpose: Purpose = .restart,
         runsTimeout: TimeInterval,
         logPath: String,
         now: Date = Date()
     ) -> [Effect] {
         guard phase == .idle else { return [] }
         self = RestartMachine()
+        self.purpose = purpose
         self.alreadyPaused = alreadyPaused
         self.symphonyBinary = symphonyBinary
         self.runsTimeout = runsTimeout
@@ -103,7 +117,7 @@ public struct RestartMachine: Equatable {
             return configChecked(result, now: now)
 
         case let (.pausing, .controlFinished(.pause, .failed(message))):
-            return fail(Self.notRestartedTitle, "\(message)\n\nSymphony keeps running.", now: now)
+            return fail(notDoneTitle, "\(message)\n\nSymphony keeps running.", now: now)
 
         case (.pausing, .controlFinished(.pause, .done)):
             pausedByRestart = true
@@ -126,6 +140,10 @@ public struct RestartMachine: Equatable {
             return [.send(.resume)]
 
         case (.stopping, .exited):
+            if purpose == .update {
+                enter(.idle, now: now)
+                return [.stopped]
+            }
             enter(.starting, now: now)
             return [.start(symphonyBinary: symphonyBinary)]
 
@@ -164,7 +182,7 @@ public struct RestartMachine: Equatable {
         case let (.checkingConfig, .exited(exit)), let (.pausing, .exited(exit)), let (.waitingForRuns, .exited(exit)):
             // Symphony went away on its own; there is nothing left to restart gracefully.
             enter(.idle, now: now)
-            error = "Restart cancelled: Symphony \(exit.summary)"
+            error = "\(purpose == .update ? "Update" : "Restart") cancelled: Symphony \(exit.summary)"
             return []
 
         default:
@@ -174,29 +192,30 @@ public struct RestartMachine: Equatable {
 
     /// The line the menu shows for the restart: its progress, or why it failed.
     public var menuLine: String? {
+        let doing = purpose == .update ? "Updating" : "Restarting"
         switch phase {
         case .idle:
             return error
         case .checkingConfig:
-            return "Restarting: checking symphony.yml…"
+            return "\(doing): checking symphony.yml…"
         case .pausing:
-            return "Restarting: pausing dispatch…"
+            return "\(doing): pausing dispatch…"
         case .waitingForRuns(running: nil):
-            return "Restarting: waiting for dispatch to pause…"
+            return "\(doing): waiting for dispatch to pause…"
         case let .waitingForRuns(running: count?):
             return count == 1 ? "Waiting for 1 agent run…" : "Waiting for \(count) agent runs…"
         case .stopping:
-            return "Restarting: stopping Symphony…"
+            return "\(doing): stopping Symphony…"
         case .starting, .waitingForAnswer:
-            return "Restarting: waiting for Symphony to answer…"
+            return "\(doing): waiting for Symphony to answer…"
         case .resuming:
-            return "Restarting: resuming dispatch…"
+            return "\(doing): resuming dispatch…"
         }
     }
 
     private mutating func configChecked(_ result: ConfigCheckResult, now: Date) -> [Effect] {
         if case let .failed(message) = result {
-            return fail(Self.notRestartedTitle, "\(message)\n\nSymphony keeps running.", now: now)
+            return fail(notDoneTitle, "\(message)\n\nSymphony keeps running.", now: now)
         }
         guard alreadyPaused else {
             enter(.pausing, now: now)
@@ -229,6 +248,11 @@ public struct RestartMachine: Equatable {
         self.phase = phase
         phaseStart = now
         offersRestartNow = false
+    }
+
+    /// Before Symphony is stopped, a failed restart or update leaves it running.
+    private var notDoneTitle: String {
+        purpose == .update ? Self.notUpdatedTitle : Self.notRestartedTitle
     }
 
     /// Added to failures after the stop: a pause the restart made is kept by Symphony, so say so.

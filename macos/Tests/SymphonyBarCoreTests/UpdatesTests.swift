@@ -45,13 +45,19 @@ final class UpdatesTests: XCTestCase {
         return transport
     }
 
-    private func release(changes: Int? = 12) -> Release {
+    private func release(changes: Int? = 12, signed: Bool = false) -> Release {
         Release(
             version: "0.0.1.42",
             build: 42,
             notes: notes,
             pageURL: URL(string: "https://github.com/tonypine/symphony/releases/tag/v0.0.1.42")!,
-            changes: changes
+            changes: changes,
+            assets: ReleaseAssets(
+                zipName: "Symphony-0.0.1.42.zip",
+                zip: URL(string: "\(download)/Symphony-0.0.1.42.zip")!,
+                checksum: URL(string: "\(download)/Symphony-0.0.1.42.zip.sha256")!,
+                signature: signed ? URL(string: "\(download)/Symphony-0.0.1.42.zip.minisig")! : nil
+            )
         )
     }
 
@@ -76,6 +82,19 @@ final class UpdatesTests: XCTestCase {
         let result = await UpdateChecker(transport: try stub()).check(current: AppBuild(build: 50, isDevelopment: false))
 
         XCTAssertEqual(result, .upToDate(release()))
+    }
+
+    func testSignedReleaseListsItsSignature() async throws {
+        let transport = try stub(
+            release: releaseJSON(assets: [
+                "Symphony-0.0.1.42.zip", "Symphony-0.0.1.42.zip.sha256", "Symphony-0.0.1.42.zip.minisig", "version.json",
+            ]),
+            version: versionJSON.replacingOccurrences(of: #""minisig":null"#, with: #""minisig":"Symphony-0.0.1.42.zip.minisig""#)
+        )
+
+        let result = await UpdateChecker(transport: transport).check(current: AppBuild(build: 41, isDevelopment: false))
+
+        XCTAssertEqual(result, .available(release(signed: true)))
     }
 
     func testRequestIsUnauthenticatedGitHubJSON() throws {

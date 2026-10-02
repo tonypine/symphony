@@ -13,6 +13,9 @@ SIGNING_IDENTITY ?= -
 SYMPHONY_BIN ?=
 SHORT_VERSION ?=
 BUILD_NUMBER ?=
+# The minisign public key (the key line of minisign.pub) updates are verified
+# against, written into Info.plist. Without it the app's Update item is off.
+MINISIGN_PUBLIC_KEY ?=
 
 .PHONY: all app bundle install run test clean
 
@@ -24,6 +27,9 @@ app:
 	mkdir -p "$(APP)/Contents/MacOS"
 	cp "$$(swift build $(SWIFT_FLAGS) -c $(CONFIG) --show-bin-path)/$(EXECUTABLE)" "$(APP)/Contents/MacOS/$(EXECUTABLE)"
 	cp Info.plist "$(APP)/Contents/Info.plist"
+	mkdir -p "$(APP)/Contents/Resources"
+	cp Resources/update-helper.sh "$(APP)/Contents/Resources/update-helper.sh"
+	@if [ -n "$(MINISIGN_PUBLIC_KEY)" ]; then plutil -replace SymphonyUpdatePublicKey -string "$(MINISIGN_PUBLIC_KEY)" "$(APP)/Contents/Info.plist"; fi
 	codesign --force --sign "$(SIGNING_IDENTITY)" "$(APP)"
 	codesign --verify --strict "$(APP)"
 
@@ -54,6 +60,7 @@ run: app
 
 test:
 	swift test $(SWIFT_FLAGS)
+	sh Tests/update-helper-test.sh
 
 clean:
 	rm -rf $(BUILD_DIR) .build

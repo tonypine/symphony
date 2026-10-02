@@ -44,6 +44,13 @@ public final class ChildProcess {
         return child
     }
 
+    /// Starts `launch` in its own session, with output appended to `logURL`, and leaves it alone: it outlives the
+    /// app. Used for the update helper, which swaps the app after it quits.
+    @discardableResult
+    public static func spawnDetached(_ launch: ChildLaunch, logURL: URL) throws -> pid_t {
+        try spawnProcess(launch, logPath: logURL.path, detached: true)
+    }
+
     private init(pid: pid_t, queue: DispatchQueue, onExit: @escaping (ChildExit, Bool) -> Void) {
         self.pid = pid
         self.queue = queue
@@ -112,7 +119,7 @@ public final class ChildProcess {
         onExit(ChildExit(waitStatus: status), stopRequested)
     }
 
-    private static func spawnProcess(_ launch: ChildLaunch, logPath: String) throws -> pid_t {
+    private static func spawnProcess(_ launch: ChildLaunch, logPath: String, detached: Bool = false) throws -> pid_t {
         let logFD = open(logPath, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0o600)
         guard logFD >= 0 else { throw SpawnError(code: errno, step: "open log") }
         defer { close(logFD) }
@@ -120,8 +127,10 @@ public final class ChildProcess {
         var attributes: posix_spawnattr_t?
         posix_spawnattr_init(&attributes)
         defer { posix_spawnattr_destroy(&attributes) }
-        // Own process group (pgid = pid), default signal handling, nothing blocked, and no inherited descriptors.
-        let flags = POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_CLOEXEC_DEFAULT
+        // Own process group (pgid = pid), or own session when detached, default signal handling, nothing blocked,
+        // and no inherited descriptors.
+        let group = detached ? POSIX_SPAWN_SETSID : POSIX_SPAWN_SETPGROUP
+        let flags = group | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_CLOEXEC_DEFAULT
         posix_spawnattr_setflags(&attributes, Int16(flags))
         posix_spawnattr_setpgroup(&attributes, 0)
         var allSignals = sigset_t()

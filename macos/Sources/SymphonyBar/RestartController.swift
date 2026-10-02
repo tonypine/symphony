@@ -10,6 +10,9 @@ final class RestartController {
     private(set) var machine = RestartMachine()
     private let runner: SymphonyRunner
     private let poller: StatusPoller
+    /// Called once when an update's drain ends: `stopped` is true when Symphony stopped for the swap, and
+    /// `pausedByUpdate` when the drain paused dispatch.
+    private var updateFinished: ((_ stopped: Bool, _ pausedByUpdate: Bool) -> Void)?
 
     init(runner: SymphonyRunner, poller: StatusPoller) {
         self.runner = runner
@@ -23,6 +26,26 @@ final class RestartController {
             machine.begin(
                 alreadyPaused: alreadyPaused,
                 symphonyBinary: symphonyBinary,
+                runsTimeout: TimeInterval(runner.restartTimeoutMinutes * 60),
+                logPath: runner.logPath
+            )
+        )
+    }
+
+    /// Drains Symphony for an update like a restart (checking symphony.yml with the new `symphonyBinary`), but
+    /// stops it instead of starting it again. `finished` is called once the drain stops Symphony or ends early.
+    func drainForUpdate(
+        alreadyPaused: Bool,
+        symphonyBinary: String,
+        finished: @escaping (_ stopped: Bool, _ pausedByUpdate: Bool) -> Void
+    ) {
+        guard !machine.isRestarting else { return }
+        updateFinished = finished
+        perform(
+            machine.begin(
+                alreadyPaused: alreadyPaused,
+                symphonyBinary: symphonyBinary,
+                purpose: .update,
                 runsTimeout: TimeInterval(runner.restartTimeoutMinutes * 60),
                 logPath: runner.logPath
             )
@@ -62,7 +85,13 @@ final class RestartController {
             case let .alert(title, message):
                 // Shown after this turn, so the restart's state is settled before the modal alert runs.
                 DispatchQueue.main.async { SymphonyRunner.showAlert(title: title, body: message) }
+            case .stopped:
+                break
             }
+        }
+        if !machine.isRestarting, let finished = updateFinished {
+            updateFinished = nil
+            finished(effects.contains(.stopped), machine.pausedByRestart)
         }
     }
 
