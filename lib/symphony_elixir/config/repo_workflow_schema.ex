@@ -7,6 +7,10 @@ defmodule SymphonyElixir.Config.RepoWorkflowSchema do
 
   alias SymphonyElixir.Config.Schema
 
+  # Recompile this schema when an embed's defaults change; see SystemSchema.
+  require Schema.Hooks
+  require Schema.Verification
+
   @primary_key false
   @allowed_keys ~w(hooks prompts verification validation)
 
