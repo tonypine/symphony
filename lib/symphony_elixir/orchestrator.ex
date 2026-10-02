@@ -39,6 +39,10 @@ defmodule SymphonyElixir.Orchestrator do
   @default_snapshot_publish_ms 500
   @stop_session_cleanup_timeout_ms 5_000
   @fresh_dispatch_state_grace_ms 120_000
+  # A landing session can see its issue turn terminal (for example Linear's
+  # "PR merged -> Done" automation) before it posts its final workpad update.
+  @merging_state "merging"
+  @merging_terminal_grace_ms 300_000
   @snapshot_table :symphony_orchestrator_snapshot
   @snapshot_key :current
   @repo_poll_cold_failure_warm_after 3
@@ -1415,6 +1419,9 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp reconcile_issue_state(%Issue{} = issue, state, active_states, terminal_states) do
     cond do
+      terminal_issue_state?(issue.state, terminal_states) and merging_terminal_grace?(state, issue) ->
+        maybe_start_merging_terminal_grace(state, issue)
+
       terminal_issue_state?(issue.state, terminal_states) ->
         Logger.info("Issue moved to terminal state: #{issue_context(issue)} state=#{issue.state}; stopping active agent")
 
@@ -1445,6 +1452,36 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp reconcile_issue_state(_issue, state, _active_states, _terminal_states), do: state
+
+  defp merging_terminal_grace?(%State{} = state, %Issue{id: issue_id}) do
+    case Map.get(state.running, issue_id) do
+      %{terminal_grace_until_ms: grace_until_ms} when is_integer(grace_until_ms) ->
+        System.monotonic_time(:millisecond) <= grace_until_ms
+
+      %{issue: %Issue{state: running_state}} when is_binary(running_state) ->
+        normalize_issue_state(running_state) == @merging_state
+
+      _ ->
+        false
+    end
+  end
+
+  defp maybe_start_merging_terminal_grace(%State{} = state, %Issue{id: issue_id} = issue) do
+    case Map.get(state.running, issue_id) do
+      %{terminal_grace_until_ms: grace_until_ms} when is_integer(grace_until_ms) ->
+        state
+
+      running_entry ->
+        Logger.info(
+          "Issue moved to terminal state while landing: #{issue_context(issue)} state=#{issue.state}; " <>
+            "letting active agent finish for up to #{@merging_terminal_grace_ms}ms"
+        )
+
+        grace_until_ms = System.monotonic_time(:millisecond) + @merging_terminal_grace_ms
+        running = Map.put(state.running, issue_id, Map.put(running_entry, :terminal_grace_until_ms, grace_until_ms))
+        %{state | running: running}
+    end
+  end
 
   defp fresh_dispatch_stale_state?(%State{} = state, %Issue{id: issue_id}) when is_binary(issue_id) do
     case Map.get(state.running, issue_id) do

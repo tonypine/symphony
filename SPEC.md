@@ -1579,6 +1579,12 @@ Part B: Tracker state refresh
 - Fetch current issue states for all running issue IDs.
 - For each running issue:
   - If tracker state is terminal: terminate worker and clean workspace.
+    - Exception: when the worker was last seen in `Merging` (landing its own PR), an
+      integration such as "PR merged -> Done" can make the issue terminal before the agent
+      posts its final workpad update. Implementations SHOULD let that worker keep running for
+      a bounded grace period (5 minutes in this implementation) and only then terminate and
+      clean up. A worker that exits on its own during the grace follows the normal exit path,
+      whose continuation check sees the terminal state and cleans the workspace.
   - If tracker state is still active: update the in-memory issue snapshot.
   - If tracker state is neither active nor terminal: terminate worker without workspace cleanup.
 - If state refresh fails, keep workers running and try again on the next tick.
