@@ -245,6 +245,28 @@ records it as `stopped` without changing the Linear issue state.
 The Docker runtime mounts your operator config, repositories, credentials, and agent command into
 the service. See [docker/README.md](docker/README.md).
 
+## Writing tickets
+
+Give each ticket a short description of the problem, a scope, and acceptance criteria. A ticket that
+changes something a user sees or does (a screen, a menu, a CLI command, a dashboard page) also needs a
+`## User walkthrough` section: numbered steps a user takes, each with the result they should see. The
+agent copies these steps into its acceptance criteria, and the issue gate scores user-facing tickets
+lower when the section is missing. For example, for a fix to the menu bar app's Settings window:
+
+```markdown
+## User walkthrough
+
+1. Start the menu bar app. Its icon appears in the menu bar.
+2. Click the icon and choose **Settings…** (or press ⌘,). The Settings window opens, and every field
+   is visible: checkout folder, `symphony.yml`, command prefix, and `LINEAR_API_KEY`.
+3. Leave the window open for a few seconds. It stays the same size and the fields stay visible.
+4. Change the command prefix and click **Save**. The window closes; reopen Settings and the new
+   prefix is shown.
+```
+
+Write each result as something a person can check on screen or in the terminal, not as an
+implementation detail. Tickets with no user-facing change can leave the section out.
+
 ## Documentation
 
 - [docs/configuration.md](docs/configuration.md) — full config reference for `symphony.yml`,
