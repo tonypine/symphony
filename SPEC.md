@@ -421,6 +421,7 @@ Top-level keys accepted by the Elixir implementation:
 - `github`
 - `agent`
 - `pre_push_review`
+- `auto_review`
 - `pull_requests`
 - `verification`
 - `dashboard`
@@ -1023,7 +1024,43 @@ turn-budget failures, or validation/self-check paths that remove all findings SH
 then downgrade to `request_changes` with a non-convergence note instead of retrying the full executor
 run.
 
-#### 5.4.17 `notifications` (object)
+#### 5.4.17 `auto_review` (object)
+
+Fields:
+
+- `enabled` (boolean)
+  - Default: `false`.
+- `state` (non-empty string)
+  - Default: `Auto Review`. The tracker state issues wait in between the PR opening and human review.
+- `runtime` (`codex` or `claude`), `command` (string), `max_turns` (positive integer, default
+  `20`), `timeout_ms` (positive integer, default `1800000`), `max_concurrent` (positive integer,
+  default `1`), `max_fix_attempts` (non-negative integer, default `2`), `run_on` (`always` or
+  `first_push`, default `always`), `skip_globs` (list of strings, default `[]`), `playbooks` (map,
+  default `{}`)
+  - Reserved for the QA agent run. Parsed and validated; the current pass-through QA does not use
+    them.
+
+When enabled:
+
+- At startup Symphony SHOULD check that the configured Linear teams (`issues.linear.scope.team`
+  and `repositories[].route.team`; any team when none is configured) have a workflow state named
+  `state`. When the state is missing, or when `pull_requests.enabled` or
+  `pull_requests.checks.enabled` is off (nothing would move issues out of the state), Symphony MUST
+  log a warning and behave as if Auto Review were disabled until restart. When the check itself
+  fails, Auto Review stays on.
+- The post-PR transition (an active issue whose completed run opened a PR and has no rework signal)
+  MUST target `state` instead of `In Review`.
+- `linear_update_state` MUST refuse `In Review` from agent sessions with a clear error telling the
+  agent that Symphony moves the issue once the PR is open, rather than redirecting the target
+  state.
+- The CI poller MUST discover issues in `state` as well as `In Review`. Red CI follows the normal
+  `In Progress` fix loop and escalation. Green CI on an issue in `state` runs QA; today QA is a
+  pass-through that moves the issue to `In Review`. A failed move is reported and retried on the
+  next poll.
+
+When disabled, behaviour is unchanged.
+
+#### 5.4.18 `notifications` (object)
 
 Fields:
 
@@ -1333,6 +1370,17 @@ not require recognizing or validating extension fields unless that extension is 
 - `pre_push_review.runtime`: `codex` or `claude`, required when enabled
 - `pre_push_review.command`: string, required when enabled
 - `pre_push_review.max_iterations`: integer, default `1`
+- `auto_review.enabled`: boolean, default `false`
+- `auto_review.state`: string, default `Auto Review`
+- `auto_review.runtime`: `codex` or `claude`, optional
+- `auto_review.command`: string, optional
+- `auto_review.max_turns`: integer, default `20`
+- `auto_review.timeout_ms`: integer, default `1800000`
+- `auto_review.max_concurrent`: integer, default `1`
+- `auto_review.max_fix_attempts`: integer, default `2`
+- `auto_review.run_on`: `always` or `first_push`, default `always`
+- `auto_review.skip_globs`: list of strings, default `[]`
+- `auto_review.playbooks`: map, default `{}`
 - `notifications.enabled`: boolean, default `false`
 - `notifications.redact_titles`: boolean, default `false`
 - `notifications.channels`: list of Slack/webhook channel configs, default `[]`
@@ -1479,7 +1527,8 @@ The poller:
   example the agent merging its own PR) keeps its workspace until the run ends.
 - when `pull_requests.checks.enabled` is true, polls CI status for tracked PRs in every configured
   repository route, preserving the same retry, dispatch, and escalation behavior used for the
-  primary repository.
+  primary repository. With `auto_review` on, it also tracks PRs of issues in `auto_review.state`
+  and moves them to `In Review` on green CI (see `auto_review`).
 
 The orchestrator continues to own active-state dispatch, retry, run-store run records, and
 dashboard-visible agent execution. The PR review poller owns only polling-mode GitHub polling,

@@ -89,6 +89,15 @@ defmodule SymphonyElixir.Tracker.Memory do
     end
   end
 
+  @spec workflow_state_exists?(String.t(), [String.t()]) :: {:ok, boolean()} | {:error, term()}
+  def workflow_state_exists?(state_name, _teams) do
+    case Application.get_env(:symphony_elixir, :memory_tracker_workflow_states) do
+      nil -> {:ok, true}
+      {:error, _reason} = error -> error
+      states when is_list(states) -> {:ok, normalize_state(state_name) in Enum.map(states, &normalize_state/1)}
+    end
+  end
+
   defp configured_issues do
     Application.get_env(:symphony_elixir, :memory_tracker_issues, [])
   end

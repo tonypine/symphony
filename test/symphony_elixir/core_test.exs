@@ -1550,6 +1550,43 @@ defmodule SymphonyElixir.CoreTest do
     assert %{state: "In Review", pull_request_url: "https://github.com/example/repo/pull/124"} = state.watching[issue_id]
   end
 
+  test "retry for active completed PR moves issue to Auto Review when it is on" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_active_states: ["Todo", "In Progress", "Rework"],
+      tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
+      pr_review_mode: "polling",
+      ci: %{enabled: true},
+      auto_review: %{enabled: true}
+    )
+
+    assert %{state: "Auto Review"} = retry_post_pr_issue("issue-post-pr-auto-review", :PostPrAutoReviewOrchestrator, "Auto Review")
+  end
+
+  test "retry for active completed PR moves issue to in review when the Auto Review state is missing" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_active_states: ["Todo", "In Progress", "Rework"],
+      tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
+      pr_review_mode: "polling",
+      ci: %{enabled: true},
+      auto_review: %{enabled: true, state: "Auto Review Missing"}
+    )
+
+    Application.put_env(:symphony_elixir, :memory_tracker_workflow_states, ["In Progress", "In Review"])
+
+    on_exit(fn ->
+      Application.delete_env(:symphony_elixir, :memory_tracker_workflow_states)
+      SymphonyElixir.AutoReview.reset_for_test("Auto Review Missing")
+    end)
+
+    assert ExUnit.CaptureLog.capture_log(fn ->
+             assert :disabled = SymphonyElixir.AutoReview.check_tracker_state(Config.settings!(), [])
+           end) =~ "Auto Review disabled"
+
+    assert %{state: "In Review"} = retry_post_pr_issue("issue-post-pr-auto-review-missing", :PostPrAutoReviewMissingOrchestrator, "In Review")
+  end
+
   test "retry for active completed PR reschedules when moving issue to in review fails" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
@@ -5696,5 +5733,66 @@ defmodule SymphonyElixir.CoreTest do
       get_in(payload, ["params", "input"])
       |> Enum.map_join("\n", &Map.get(&1, "text", ""))
     end)
+  end
+
+  defp retry_post_pr_issue(issue_id, orchestrator_suffix, expected_state) do
+    retry_token = make_ref()
+    last_ran_at = DateTime.utc_now()
+    pr_url = "https://github.com/example/repo/pull/#{issue_id}"
+
+    Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [
+      %Issue{
+        id: issue_id,
+        identifier: "MT-#{issue_id}",
+        title: "Post PR",
+        state: "In Progress",
+        pull_request_url: pr_url,
+        updated_at: DateTime.add(last_ran_at, -10, :second)
+      }
+    ])
+
+    on_exit(fn ->
+      Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
+      Application.delete_env(:symphony_elixir, :memory_tracker_issues)
+    end)
+
+    {:ok, pid} = Orchestrator.start_link(name: Module.concat(__MODULE__, orchestrator_suffix))
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    initial_state = :sys.get_state(pid)
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:claimed, MapSet.new([issue_id]))
+      |> Map.put(:completed_run_metadata, %{issue_id => %{identifier: "MT-#{issue_id}", pull_request_url: pr_url, last_ran_at: last_ran_at}})
+      |> Map.put(:retry_attempts, %{
+        issue_id => %{
+          attempt: 1,
+          timer_ref: nil,
+          retry_token: retry_token,
+          due_at_ms: System.monotonic_time(:millisecond),
+          identifier: "MT-#{issue_id}"
+        }
+      })
+    end)
+
+    send(pid, {:retry_issue, issue_id, retry_token})
+
+    assert_receive {:memory_tracker_state_update, ^issue_id, ^expected_state}, 500
+
+    state =
+      wait_for_orchestrator_state(pid, fn state ->
+        match?(%{state: ^expected_state}, state.watching[issue_id])
+      end)
+
+    refute MapSet.member?(state.claimed, issue_id)
+    state.watching[issue_id]
   end
 end

@@ -76,6 +76,23 @@ pre_push_review:
   max_iterations: 1
   run_on: first_push
 
+# Auto Review: once the PR is open, Symphony moves the issue to `state` instead of
+# In Review and waits for CI there. Red CI goes back to In Progress; green CI moves
+# the issue to In Review. Needs a Linear state with this name (type started,
+# between In Progress and In Review) and `pull_requests.checks.enabled: true`.
+# auto_review:
+#   enabled: false
+#   state: Auto Review
+#   runtime: claude
+#   command: claude --dangerously-skip-permissions
+#   max_turns: 20
+#   timeout_ms: 1800000
+#   max_concurrent: 1
+#   max_fix_attempts: 2
+#   run_on: always
+#   skip_globs: []
+#   playbooks: {}
+
 pull_requests:
   enabled: true
   poll_interval_ms: 30000
