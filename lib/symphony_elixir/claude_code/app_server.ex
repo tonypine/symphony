@@ -5,6 +5,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
   require Logger
   alias SymphonyElixir.{AgentEnv, AgentMcp, AgentSandboxConfig, Config, DependencyGate, McpServer, PathSafety, SSH}
+  alias SymphonyElixir.AgentProcesses
   alias SymphonyElixir.ClaudeCode.McpConfig
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Agent
@@ -706,6 +707,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
       case open_local_prompt_port(executable, args, prompt_path, workspace) do
         {:ok, port} ->
+          :ok = AgentProcesses.track(port)
           {:ok, port, [prompt_path]}
 
         {:error, reason} ->
@@ -729,6 +731,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
              stdin_path: prompt_path
            ) do
         {:ok, port} ->
+          :ok = AgentProcesses.track(port)
           {:ok, port, [prompt_path]}
 
         {:error, reason} ->

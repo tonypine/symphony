@@ -70,6 +70,9 @@ defmodule SymphonyElixir.Application do
       core_children =
         [
           {Phoenix.PubSub, name: SymphonyElixir.PubSub},
+          # Before the task supervisor, so it stops after the agent runners and
+          # can stop the agent processes they leave behind.
+          SymphonyElixir.AgentProcesses,
           {Task.Supervisor, name: SymphonyElixir.TaskSupervisor},
           SymphonyElixir.Config.Cache,
           SymphonyElixir.McpServer,
