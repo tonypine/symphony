@@ -13,6 +13,7 @@ defmodule SymphonyElixir.AgentRunner do
     CiPoller,
     Config,
     DependencyAudit,
+    GitHub.PullRequest,
     Linear.Issue,
     Notifications,
     PromptBuilder,
@@ -226,9 +227,33 @@ defmodule SymphonyElixir.AgentRunner do
         head_ref
 
       _ ->
-        pending_reviewer_rework_head_ref(issue, opts) || pending_ci_rework_head_ref(issue, opts)
+        pending_reviewer_rework_head_ref(issue, opts) || pending_ci_rework_head_ref(issue, opts) ||
+          renamed_issue_pr_head_ref(issue, opts)
     end
   end
+
+  # Workspaces and branches default to `auto/<identifier>`, but the identifier
+  # changes when the Linear team key is renamed (TON-218 -> TP-218). Without
+  # this, the next dispatch builds a fresh `auto/TP-218` worktree and the scoped
+  # GitHub tools, which resolve the PR from the workspace's current branch, no
+  # longer see the PR opened on `auto/TON-218`. When the attached PR is still
+  # open, same-repo, and its head differs from the default branch, keep working
+  # on that head. Lookup failures fall back to the default branch.
+  defp renamed_issue_pr_head_ref(%Issue{identifier: identifier, pr_urls: [pr_url | _rest]}, opts)
+       when is_binary(identifier) and is_binary(pr_url) do
+    github = Keyword.get(opts, :github, PullRequest)
+
+    case github.fetch_ci_status(pr_url, []) do
+      {:ok, %{state: "OPEN", is_cross_repository: false, head_ref_name: head_ref}}
+      when is_binary(head_ref) and head_ref != "" ->
+        if head_ref != "auto/" <> identifier, do: head_ref
+
+      _status ->
+        nil
+    end
+  end
+
+  defp renamed_issue_pr_head_ref(_issue, _opts), do: nil
 
   # Reuse an already-resolved conflict snapshot when the caller supplied one
   # (same precedence as put_pr_conflict/2), otherwise look it up in the store.
