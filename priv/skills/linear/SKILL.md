@@ -44,6 +44,10 @@ arguments from prompts.
   assignee, in `Backlog`. `priority` is optional (0 none, 1 urgent, 2 high,
   3 medium, 4 low). Title and description are secret-scanned. At most 10 per
   run. Use it to split a ticket into sub-tickets or to file out-of-scope work.
+- `linear_create_project_update` with `{"body": "...", "health": "onTrack"}`:
+  posts an update to the current issue's project. `health` is optional
+  (`onTrack`, `atRisk`, `offTrack`). The body is secret-scanned. At most one per
+  run. Use it when a `breakdown` parent ticket closes out.
 
 ## Rules
 

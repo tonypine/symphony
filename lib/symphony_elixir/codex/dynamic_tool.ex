@@ -141,6 +141,19 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       }
     },
     %{
+      "name" => "linear_create_project_update",
+      "description" => "Post a project update to the current Linear issue's project. Use it once a parent ticket closes out, to summarize the work done. One per run.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["body"],
+        "properties" => %{
+          "body" => %{"type" => "string", "description" => "Markdown summary of the work."},
+          "health" => %{"type" => "string", "enum" => ["onTrack", "atRisk", "offTrack"]}
+        }
+      }
+    },
+    %{
       "name" => "github_get_pull_request",
       "description" => "Read the pull request for the current workspace branch in the configured origin repo.",
       "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
@@ -258,6 +271,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "linear_attach_url" => ["url", "title"],
     "linear_attach_file" => ["local_path", "title", "make_public"],
     "linear_create_subissue" => ["title", "description", "priority"],
+    "linear_create_project_update" => ["body", "health"],
     "github_get_pull_request" => [],
     "github_fetch_origin" => [],
     "github_create_pull_request" => ["title", "body", "draft"],
@@ -285,6 +299,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "linear.attach_url" => "linear_attach_url",
     "linear.attach_file" => "linear_attach_file",
     "linear.create_subissue" => "linear_create_subissue",
+    "linear.create_project_update" => "linear_create_project_update",
     "github.get_pull_request" => "github_get_pull_request",
     "github.fetch_origin" => "github_fetch_origin",
     "github.create_pull_request" => "github_create_pull_request",
@@ -414,6 +429,10 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   defp execute_linear_tool("linear_create_subissue", context, args, opts) do
     Linear.create_subissue(context, args, opts)
+  end
+
+  defp execute_linear_tool("linear_create_project_update", context, args, opts) do
+    Linear.create_project_update(context, args, opts)
   end
 
   defp execute_github_tool("github_get_pull_request", context, _args, opts), do: GitHub.get_pull_request(context, opts)
@@ -756,6 +775,37 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         "available_states" => available_states
       }
     }
+  end
+
+  defp tool_error_payload({:project_update_cap_reached, cap}) do
+    %{
+      "error" => %{
+        "code" => "project_update_cap_reached",
+        "message" => "This run already posted #{cap} project update, the per-run limit. Edit the existing update in Linear instead.",
+        "cap" => cap
+      }
+    }
+  end
+
+  defp tool_error_payload(:project_update_registry_unavailable) do
+    %{
+      "error" => %{
+        "code" => "project_update_registry_unavailable",
+        "message" => "Symphony has no per-run tool state for this session, so it cannot enforce the project update cap and refused to post."
+      }
+    }
+  end
+
+  defp tool_error_payload(:issue_has_no_project) do
+    %{"error" => %{"code" => "issue_has_no_project", "message" => "The current issue is not in a Linear project, so there is no project to post an update to."}}
+  end
+
+  defp tool_error_payload(:invalid_project_update_body) do
+    %{"error" => %{"code" => "invalid_project_update_body", "message" => "linear_create_project_update requires a non-blank string `body`."}}
+  end
+
+  defp tool_error_payload(:invalid_project_update_health) do
+    %{"error" => %{"code" => "invalid_project_update_health", "message" => "linear_create_project_update `health` must be onTrack, atRisk, or offTrack."}}
   end
 
   defp tool_error_payload(:invalid_subissue_title) do

@@ -1,6 +1,6 @@
 {% comment %}
 name: issue_context
-description: Standard Linear issue fields, description, recent comments, and linked issues for the agent to act on.
+description: Standard Linear issue fields, description, recent comments, linked issues, and sub-issues for the agent to act on.
 vars: [issue]
 {% endcomment %}Issue context:
 Identifier: {{ issue.identifier }}
@@ -24,5 +24,12 @@ Recent comments:
 Linked issues:
 {% for link in issue.linked_issues -%}
 - {{ link.relation }}: {{ link.identifier }} - {{ link.title }} ({{ link.state }})
+{% endfor -%}
+{%- endif -%}
+{%- if issue.sub_issues.size > 0 %}
+
+Sub-issues:
+{% for sub_issue in issue.sub_issues -%}
+- {{ sub_issue.identifier }} ({{ sub_issue.state }})
 {% endfor -%}
 {%- endif -%}

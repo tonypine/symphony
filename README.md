@@ -80,6 +80,9 @@ branch instead of opening a second one. If a claimed issue moves to a terminal s
 - **Workspace guardrails** — age-based cleanup, startup orphan removal, and disk free-space pauses.
 - **Scoped agent tools** — current-issue Linear updates, GitHub PR evidence, and attachment handling.
 - **Quality gate** — optionally scores issue clarity before dispatch so unclear work is held back.
+- **Parent tickets** — label a large ticket `breakdown` and the agent splits it into sub-tickets plus a
+  final verification ticket instead of opening a PR. The parent stays `In Progress` without being
+  re-dispatched until every sub-ticket is closed, then closes out with a Linear project update.
 - **Executor + reviewer runs** — an optional read-only reviewer agent gates the executor's push.
 - **Docker runner** — host Symphony with mounted repos, state, logs, and agent credentials.
 - **macOS menu bar app** — start, stop, pause, and resume Symphony from the menu bar, with its status in

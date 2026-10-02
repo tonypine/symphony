@@ -10,6 +10,8 @@ defmodule SymphonyElixir.Linear.Client do
 
   @issue_page_size 50
   @attachment_page_size 20
+  # Kept small: every polled issue pays for this nested connection in Linear query complexity.
+  @sub_issue_page_size 20
   @enrichment_comment_last 20
   @enrichment_relation_first 50
   @enrichment_comment_limit 3
@@ -61,6 +63,15 @@ defmodule SymphonyElixir.Linear.Client do
             body
             createdAt
             user {
+              name
+            }
+          }
+        }
+        children(first: #{@sub_issue_page_size}) {
+          nodes {
+            id
+            identifier
+            state {
               name
             }
           }
@@ -135,6 +146,15 @@ defmodule SymphonyElixir.Linear.Client do
             }
           }
         }
+        children(first: #{@sub_issue_page_size}) {
+          nodes {
+            id
+            identifier
+            state {
+              name
+            }
+          }
+        }
         inverseRelations(first: $relationFirst) {
           nodes {
             type
@@ -196,6 +216,15 @@ defmodule SymphonyElixir.Linear.Client do
           body
           createdAt
           user {
+            name
+          }
+        }
+      }
+      children(first: #{@sub_issue_page_size}) {
+        nodes {
+          id
+          identifier
+          state {
             name
           }
         }
@@ -1039,6 +1068,7 @@ defmodule SymphonyElixir.Linear.Client do
       assignee_id: assignee_field(assignee, "id"),
       pr_urls: pr_urls,
       blocked_by: extract_blockers(issue),
+      sub_issues: extract_sub_issues(issue),
       labels: extract_labels(issue),
       comments: extract_comments(issue),
       assigned_to_worker: assigned_to_worker?(assignee, assignee_filter),
@@ -1270,6 +1300,15 @@ defmodule SymphonyElixir.Linear.Client do
   end
 
   defp extract_blockers(_), do: []
+
+  defp extract_sub_issues(%{"children" => %{"nodes" => children}}) when is_list(children) do
+    Enum.flat_map(children, fn
+      %{} = child -> [%{id: child["id"], identifier: child["identifier"], state: get_in(child, ["state", "name"])}]
+      _child -> []
+    end)
+  end
+
+  defp extract_sub_issues(_), do: []
 
   defp extract_comments(%{"comments" => %{"nodes" => comments}}) when is_list(comments) do
     normalized_comments =

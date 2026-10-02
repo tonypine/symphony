@@ -194,6 +194,8 @@ Fields:
     - `id` (string or null)
     - `identifier` (string or null)
     - `state` (string or null)
+- `sub_issues` (list of sub-issue refs)
+  - Direct children of the issue, each with `id`, `identifier`, and `state` (string or null).
 - `created_at` (timestamp or null)
 - `updated_at` (timestamp or null)
 - `comments` (list)
@@ -1519,6 +1521,12 @@ An issue is dispatch-eligible only if all are true:
 - Per-state concurrency slots are available.
 - Blocker rule for `Todo` state passes:
   - If the issue state is `Todo`, do not dispatch when any blocker is non-terminal.
+- Parent rule passes:
+  - If the issue has the `breakdown` label, do not dispatch while any sub-issue is non-terminal
+    (a sub-issue with an unknown state counts as non-terminal). The parent waits in its active
+    state while its sub-issues are worked and becomes eligible again for close-out once every
+    sub-issue is terminal. The same rule ends a running parent's continuation turns and its
+    retries.
 
 Sorting order (stable intent):
 
@@ -2037,7 +2045,8 @@ Scoped Linear tool extension contract:
 - Suggested baseline tools: `linear_get_current_issue`, `linear_get_subissues`,
   `linear_get_parent_issue`, `linear_get_comments`, `linear_get_related_issues`,
   `linear_update_state`, `linear_add_comment`, `linear_update_comment`, `linear_delete_comment`,
-  `linear_attach_url`, `linear_attach_file`, and `linear_create_subissue`.
+  `linear_attach_url`, `linear_attach_file`, `linear_create_subissue`, and
+  `linear_create_project_update`.
 - `linear_update_state` MUST refuse `Merging` as a target, whether given by name or by state id,
   with an error saying a human has to approve. Moving an issue to `Merging` is how a human approves
   a merge (see `github_merge_pull_request`), so an agent cannot approve its own merge. Humans keep
@@ -2051,6 +2060,12 @@ Scoped Linear tool extension contract:
   comments before any Linear call. Creation MUST be capped per run (the Elixir cap is 10) with an
   explicit error past the cap, and MUST be refused when the run has no state to count against.
   The read-only reviewer scope MUST NOT advertise or execute it.
+- `linear_create_project_update` MUST only post to the current issue's project, resolved
+  server-side, and MUST accept only `body` and an optional `health` (`onTrack`, `atRisk`,
+  `offTrack`). It MUST fail with an explicit error when the current issue has no project. The body
+  MUST pass the same secret scan as comments before any Linear call. Posting MUST be capped per run
+  (the Elixir cap is 1) and refused when the run has no state to count against. The read-only
+  reviewer scope MUST NOT advertise or execute it.
 - The standardized Linear tool surface does not include an assignee mutation tool. Implementations
   MUST NOT advertise removed legacy names such as `linear_set_assignee`.
 - Linear read tools SHOULD wrap issue/comment fields in prompt-safety boundary tags before
@@ -2218,6 +2233,7 @@ Additional normalization details:
 
 - `labels` -> lowercase strings
 - `blocked_by` -> derived from inverse relations where relation type is `blocks`
+- `sub_issues` -> derived from the issue's `children` connection (bounded page)
 - `priority` -> integer only (non-integers become null)
 - `created_at` and `updated_at` -> parse ISO-8601 timestamps
 
@@ -3342,6 +3358,8 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Dispatch sort order is priority then oldest creation time
 - `Todo` issue with non-terminal blockers is not eligible
 - `Todo` issue with terminal blockers is eligible
+- `breakdown` issue with a non-terminal sub-issue is not eligible; once every sub-issue is
+  terminal it is eligible
 - Active-state issue refresh updates running entry state
 - Non-active state stops running agent without workspace cleanup
 - Terminal state stops running agent and cleans workspace

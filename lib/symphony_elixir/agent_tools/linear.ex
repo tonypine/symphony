@@ -30,6 +30,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
   # Sub-issues land in Backlog so an agent cannot start other agents; a human promotes them.
   @backlog_state "Backlog"
   @subissue_cap_per_run 10
+  # A project update notifies everyone following the project, so a run may post only one.
+  @project_update_cap_per_run 1
+  @project_update_healths ["onTrack", "atRisk", "offTrack"]
 
   @uuid_pattern ~r/\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i
 
@@ -273,6 +276,27 @@ defmodule SymphonyElixir.AgentTools.Linear do
   }
   """
 
+  @project_update_scope_query """
+  query SymphonyAgentProjectUpdateScope($id: String!) {
+    issue(id: $id) {
+      project { id }
+    }
+  }
+  """
+
+  @create_project_update_mutation """
+  mutation SymphonyAgentCreateProjectUpdate($input: ProjectUpdateCreateInput!) {
+    projectUpdateCreate(input: $input) {
+      success
+      projectUpdate {
+        id
+        url
+        health
+      }
+    }
+  }
+  """
+
   @type context :: %{
           optional(:issue) => Issue.t() | map(),
           optional(:issue_id) => String.t(),
@@ -503,6 +527,50 @@ defmodule SymphonyElixir.AgentTools.Linear do
           CommentRegistry.release_subissue(registry)
           error
       end
+    end
+  end
+
+  @doc """
+  Posts a project update to the current issue's project. Only `body` and an optional `health`
+  (`onTrack`, `atRisk`, `offTrack`) come from the caller; the project is read from the current
+  issue. At most #{@project_update_cap_per_run} per run.
+  """
+  @spec create_project_update(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
+  def create_project_update(context, attrs, opts \\ []) when is_map(attrs) do
+    registry = Map.get(context, :comment_registry)
+
+    with {:ok, issue_id} <- current_issue_id(context),
+         {:ok, body, health} <- validate_project_update_fields(attrs),
+         :ok <- SecretScanner.reject_fields_if_secret_pattern([body: body], context, "linear_create_project_update", opts),
+         :ok <- CommentRegistry.reserve_project_update(registry, @project_update_cap_per_run) do
+      case post_project_update(issue_id, body, health, opts) do
+        {:ok, response} ->
+          {:ok, response}
+
+        {:error, _reason} = error ->
+          CommentRegistry.release_project_update(registry)
+          error
+      end
+    end
+  end
+
+  defp validate_project_update_fields(attrs) do
+    body = Map.get(attrs, "body")
+    health = Map.get(attrs, "health")
+
+    cond do
+      not is_binary(body) or String.trim(body) == "" -> {:error, :invalid_project_update_body}
+      not (is_nil(health) or health in @project_update_healths) -> {:error, :invalid_project_update_health}
+      true -> {:ok, body, health}
+    end
+  end
+
+  defp post_project_update(issue_id, body, health, opts) do
+    with {:ok, scope} <- graphql(@project_update_scope_query, %{id: issue_id}, opts),
+         {:ok, project_id} <- fetch_path(scope, ["data", "issue", "project", "id"], :issue_has_no_project),
+         input = Map.reject(%{"projectId" => project_id, "body" => body, "health" => health}, fn {_key, value} -> is_nil(value) end),
+         {:ok, response} <- graphql(@create_project_update_mutation, %{input: input}, opts) do
+      check_mutation_success(response, "projectUpdateCreate")
     end
   end
 

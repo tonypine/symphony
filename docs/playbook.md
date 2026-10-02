@@ -45,8 +45,9 @@ This catalog is kept in sync with `priv/playbook/` by
 | `dependency_guardrail` | `lockfile` | Justify dependency changes and keep the lock file diff scoped to the current ticket. |
 | `escape_hatches` | — | Blocked-access and in-execution clarification escape hatches; both move the issue to Backlog and stop. |
 | `guardrails` | — | Cross-cutting safety and process guardrails for an issue run; repos append repo-specific guardrails after the render. |
-| `issue_context` | `issue` | Standard Linear issue fields, description, recent comments, and linked issues for the agent to act on. |
+| `issue_context` | `issue` | Standard Linear issue fields, description, recent comments, linked issues, and sub-issues for the agent to act on. |
 | `out_of_scope_backlog` | — | Split work and file out-of-scope improvements as Backlog sub-issues of the current issue with linear_create_subissue instead of expanding scope. |
+| `parent_tickets` | — | Parent tickets labeled breakdown are groomed into sub-tickets; breakdown, final verification, and close-out runs never open a PR. |
 | `pr_feedback_sweep` | — | Required sweep of all PR feedback channels; every actionable comment must be resolved or answered before In Review. |
 | `reproduce_and_blast_radius` | — | Capture a reproduction/acceptance signal and a blast-radius analysis before the first code edit. |
 | `scoped_tools` | — | How to discover and use the scoped linear_* and github_* tools Symphony injects for the current issue. |
@@ -84,6 +85,7 @@ You are working on a Linear ticket `{{ issue.identifier }}`
 {% render "guardrails" %}
 <!-- repo-authored: extra guardrails, e.g. lock-file rule -->
 
+{% render "parent_tickets" %}
 {% render "out_of_scope_backlog" %}
 {% render "dependency_guardrail", lockfile: "<your-lock-file>" %}
 {% render "workpad_template", agent: agent %}

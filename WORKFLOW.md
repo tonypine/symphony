@@ -107,6 +107,7 @@ You are working on a Linear ticket `{{ issue.identifier }}`
    - find/create `{{ agent.workpad_heading }}` bootstrap comment
    - only then begin analysis/planning/implementation work.
 6. Add a short comment if state and issue content are inconsistent, then proceed with the safest flow.
+7. If the ticket has the `breakdown` label, or its title starts with `Final verification:`, follow `Parent tickets` below in place of the implementation steps (Step 1 items 8-11 and Step 2). The `Todo` -> `In Progress` transition and the workpad still apply.
 
 ## Step 1: Start/continue execution (Todo or In Progress)
 
@@ -125,6 +126,7 @@ You are working on a Linear ticket `{{ issue.identifier }}`
     - Ensure `Acceptance Criteria` and `Validation` are current and still make sense for the task.
 4.  Start work by writing/updating a hierarchical plan in the workpad comment.
     - If the ticket asks you to split the work into sub-tickets, create each one with `linear_create_subissue` (see `Splitting work and out-of-scope improvements` below) and record their identifiers in the workpad `Notes`. They land in `Backlog` as children of this issue.
+    - If the work is clearly too large for one PR and the ticket has no `breakdown` label, say so in the workpad `Confusions` so a human can add the label; do not split it unasked.
 5.  Ensure the workpad includes a compact environment stamp at the top as a code fence line:
     - Format: `<host>:<abs-workdir>@<short-sha>`
     - Example: `devbox-01:/home/dev-user/code/symphony-workspaces/MT-32@7bdde33bc`
@@ -154,6 +156,8 @@ You are working on a Linear ticket `{{ issue.identifier }}`
 {% render "ci_triage" %}
 
 {% render "escape_hatches" %}
+
+{% render "parent_tickets" %}
 
 ## Step 2: Execution phase (Todo -> In Progress -> In Review)
 

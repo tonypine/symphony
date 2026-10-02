@@ -850,6 +850,88 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
     end
   end
 
+  describe "create_project_update/3" do
+    test "posts to the current issue's project with the given body and health" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      test_pid = self()
+
+      client = fn query, variables, _opts ->
+        send(test_pid, {:linear_called, query, variables})
+
+        if query =~ "SymphonyAgentProjectUpdateScope",
+          do: {:ok, %{"data" => %{"issue" => %{"project" => %{"id" => "project-1"}}}}},
+          else: {:ok, %{"data" => %{"projectUpdateCreate" => %{"success" => true, "projectUpdate" => %{"id" => "update-1"}}}}}
+      end
+
+      assert {:ok, response} =
+               Linear.create_project_update(
+                 %{issue: %Issue{id: "issue-parent"}, comment_registry: registry},
+                 %{"body" => "Shipped the wrapper.", "health" => "atRisk"},
+                 linear_client: client
+               )
+
+      assert get_in(response, ["data", "projectUpdateCreate", "projectUpdate", "id"]) == "update-1"
+      assert_received {:linear_called, _scope_query, %{id: "issue-parent"}}
+      assert_received {:linear_called, mutation, %{input: input}}
+      assert mutation =~ "SymphonyAgentCreateProjectUpdate"
+      assert input == %{"projectId" => "project-1", "body" => "Shipped the wrapper.", "health" => "atRisk"}
+
+      assert {:error, {:project_update_cap_reached, 1}} =
+               Linear.create_project_update(%{issue_id: "issue-parent", comment_registry: registry}, %{"body" => "Again"},
+                 linear_client: fn _query, _variables, _opts -> flunk("Linear should not be called past the cap") end
+               )
+    end
+
+    test "omits a missing health and gives the slot back when the post fails" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      test_pid = self()
+
+      client = fn query, variables, _opts ->
+        send(test_pid, {:linear_called, query, variables})
+
+        if query =~ "SymphonyAgentProjectUpdateScope",
+          do: {:ok, %{"data" => %{"issue" => %{"project" => %{"id" => "project-1"}}}}},
+          else: {:ok, %{"data" => %{"projectUpdateCreate" => %{"success" => false}}}}
+      end
+
+      context = %{issue_id: "issue-parent", comment_registry: registry}
+
+      assert {:error, {:linear_mutation_failed, "projectUpdateCreate", _body}} =
+               Linear.create_project_update(context, %{"body" => "Shipped"}, linear_client: client)
+
+      assert_received {:linear_called, _scope_query, _variables}
+      assert_received {:linear_called, _mutation, %{input: %{"projectId" => "project-1", "body" => "Shipped"} = input}}
+      refute Map.has_key?(input, "health")
+      assert Agent.get(registry, & &1.project_updates) == 0
+    end
+
+    test "rejects secret-bearing bodies and invalid input before calling Linear" do
+      workspace = tmp_workspace!("linear-agent-project-update-secret")
+      audit_dir = Path.join(workspace, "audit")
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      context = workspace |> secret_context() |> Map.put(:comment_registry, registry)
+      no_linear = fn _query, _variables, _opts -> flunk("Linear should not be called") end
+
+      try do
+        secret_body = %{"body" => "token " <> openai_fixture()}
+
+        assert {:error, :secret_pattern_detected} =
+                 Linear.create_project_update(context, secret_body, dir: audit_dir, linear_client: no_linear)
+
+        assert {:error, :invalid_project_update_body} =
+                 Linear.create_project_update(context, %{}, linear_client: no_linear)
+
+        assert {:error, :invalid_project_update_health} =
+                 Linear.create_project_update(context, %{"body" => "Shipped", "health" => 1}, linear_client: no_linear)
+
+        assert {:error, :missing_current_issue} = Linear.create_project_update(%{}, %{"body" => "Shipped"})
+        assert Agent.get(registry, & &1.project_updates) == 0
+      after
+        File.rm_rf(workspace)
+      end
+    end
+  end
+
   defp subissue_scope(states \\ [%{"id" => "state-backlog", "name" => "Backlog", "type" => "backlog"}]) do
     %{
       "id" => "issue-parent-uuid",

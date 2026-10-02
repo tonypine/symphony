@@ -236,6 +236,7 @@ defmodule SymphonyElixir.PromptBuilder do
     |> update_string_field(:description, &PromptSafety.linear_issue_body/1)
     |> update_list_field(:comments, &sanitize_issue_comments/1)
     |> update_list_field(:linked_issues, &sanitize_linked_issues/1)
+    |> update_list_field(:sub_issues, &sanitize_sub_issues/1)
     |> put_repo_key(repo_key)
   end
 
@@ -260,6 +261,10 @@ defmodule SymphonyElixir.PromptBuilder do
   end
 
   defp sanitize_linked_issue(linked_issue), do: linked_issue
+
+  defp sanitize_sub_issues(sub_issues) when is_list(sub_issues) do
+    Enum.map(sub_issues, &update_string_field(&1, :state, fn state -> PromptSafety.linear_issue_state(state) end))
+  end
 
   defp sanitize_reviewer_comments(comments) when is_list(comments) do
     Enum.map(comments, fn comment ->

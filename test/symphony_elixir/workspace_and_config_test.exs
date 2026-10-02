@@ -1573,6 +1573,13 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
           }
         ]
       },
+      "children" => %{
+        "nodes" => [
+          %{"id" => "issue-4", "identifier" => "MT-4", "state" => %{"name" => "Backlog"}},
+          %{"id" => "issue-5", "identifier" => "MT-5"},
+          "not-a-child"
+        ]
+      },
       "inverseRelations" => %{
         "nodes" => [
           %{
@@ -1600,6 +1607,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     issue = Client.normalize_issue_for_test(raw_issue, "user-1")
 
     assert issue.blocked_by == [%{id: "issue-2", identifier: "MT-2", state: "In Progress"}]
+    assert issue.sub_issues == [%{id: "issue-4", identifier: "MT-4", state: "Backlog"}, %{id: "issue-5", identifier: "MT-5", state: nil}]
     assert issue.labels == ["backend"]
     assert issue.comments == [%{author: "Reviewer", body: "Clarifying answer", created_at: ~U[2026-01-01 01:00:00Z]}]
     assert issue.priority == 2
@@ -2411,6 +2419,54 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     }
 
     assert Orchestrator.should_dispatch_issue_for_test(issue, state)
+  end
+
+  test "breakdown parent waits while a sub-issue is open and is eligible for close-out once all are terminal" do
+    state = %Orchestrator.State{
+      max_concurrent_agents: 3,
+      running: %{},
+      claimed: MapSet.new(),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    parent = %Issue{
+      id: "parent-1",
+      identifier: "MT-1101",
+      title: "Groom into sub-tickets",
+      state: "In Progress",
+      labels: ["breakdown"],
+      sub_issues: [
+        %{id: "child-1", identifier: "MT-1102", state: "Done"},
+        %{id: "child-2", identifier: "MT-1103", state: "Backlog"}
+      ]
+    }
+
+    refute Orchestrator.should_dispatch_issue_for_test(parent, state)
+    unknown_state_child = %{id: "child-3", identifier: "MT-1104", state: nil}
+    refute Orchestrator.should_dispatch_issue_for_test(%{parent | sub_issues: [unknown_state_child]}, state)
+
+    closed_out = %{parent | sub_issues: [%{id: "child-1", identifier: "MT-1102", state: "Done"}, %{id: "child-2", identifier: "MT-1103", state: "Cancelled"}]}
+    assert Orchestrator.should_dispatch_issue_for_test(closed_out, state)
+
+    # Without the breakdown label, open sub-issues (such as filed follow-ups) do not hold the ticket.
+    assert Orchestrator.should_dispatch_issue_for_test(%{parent | labels: ["improvement"]}, state)
+    refute Issue.waiting_on_sub_issues?(%{parent | sub_issues: nil}, ["Done"])
+  end
+
+  test "dispatch revalidation skips a breakdown parent once it has open sub-issues" do
+    stale_issue = %Issue{
+      id: "parent-2",
+      identifier: "MT-1105",
+      title: "Groom into sub-tickets",
+      state: "In Progress",
+      labels: ["breakdown"]
+    }
+
+    refreshed_issue = %{stale_issue | sub_issues: [%{id: "child-4", identifier: "MT-1106", state: "Todo"}]}
+    fetcher = fn ["parent-2"] -> {:ok, [refreshed_issue]} end
+
+    assert {:skip, %Issue{identifier: "MT-1105"}} = Orchestrator.revalidate_issue_for_dispatch_for_test(stale_issue, fetcher)
   end
 
   test "dispatch revalidation skips stale todo issue once a non-terminal blocker appears" do

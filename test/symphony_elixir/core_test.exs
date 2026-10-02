@@ -4812,6 +4812,106 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
+  test "agent runner stops continuing once a breakdown parent has open sub-issues" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-agent-runner-parent-hold-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      template_repo = Path.join(test_root, "source")
+      workspace_root = Path.join(test_root, "workspaces")
+      codex_binary = Path.join(test_root, "fake-codex")
+      trace_file = Path.join(test_root, "codex.trace")
+
+      File.mkdir_p!(template_repo)
+      File.write!(Path.join(template_repo, "README.md"), "# test")
+      System.cmd("git", ["-C", template_repo, "init", "-b", "main"])
+      System.cmd("git", ["-C", template_repo, "config", "user.name", "Test User"])
+      System.cmd("git", ["-C", template_repo, "config", "user.email", "test@example.com"])
+      System.cmd("git", ["-C", template_repo, "add", "README.md"])
+      System.cmd("git", ["-C", template_repo, "commit", "-m", "initial"])
+
+      File.write!(codex_binary, """
+      #!/bin/sh
+      trace_file="#{trace_file}"
+      printf 'RUN\\n' >> "$trace_file"
+      count=0
+
+      while IFS= read -r line; do
+        count=$((count + 1))
+        printf 'JSON:%s\\n' "$line" >> "$trace_file"
+        case "$count" in
+          1)
+            printf '%s\\n' '{"id":1,"result":{}}'
+            ;;
+          2)
+            ;;
+          3)
+            printf '%s\\n' '{"id":2,"result":{"thread":{"id":"thread-max"}}}'
+            ;;
+          4)
+            printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-max-1","status":"inProgress","items":[]}}}'
+            printf '%s\\n' '{"method":"turn/completed"}'
+            ;;
+          5)
+            printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-max-2","status":"inProgress","items":[]}}}'
+            printf '%s\\n' '{"method":"turn/completed"}'
+            ;;
+        esac
+      done
+      """)
+
+      File.chmod!(codex_binary, 0o755)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        workspace_root: workspace_root,
+        hook_after_create: "cp #{Path.join(template_repo, "README.md")} README.md",
+        agent_command: "#{codex_binary} app-server",
+        max_turns: 3
+      )
+
+      state_fetcher = fn [_issue_id] ->
+        {:ok,
+         [
+           %Issue{
+             id: "issue-parent-hold",
+             identifier: "MT-249",
+             title: "Groom into sub-tickets",
+             description: "Still active",
+             state: "In Progress",
+             labels: ["breakdown"],
+             sub_issues: [%{id: "child-1", identifier: "MT-250", state: "Backlog"}]
+           }
+         ]}
+      end
+
+      issue = %Issue{
+        id: "issue-parent-hold",
+        identifier: "MT-249",
+        title: "Groom into sub-tickets",
+        description: "Still active",
+        state: "In Progress",
+        url: "https://example.org/issues/MT-249",
+        labels: ["breakdown"]
+      }
+
+      assert :ok =
+               AgentRunner.run(issue, nil,
+                 issue_state_fetcher: state_fetcher,
+                 issue_enricher: no_op_issue_enricher()
+               )
+
+      trace = File.read!(trace_file)
+      assert length(String.split(trace, "RUN", trim: true)) == 1
+      assert length(Regex.scan(~r/"method":"turn\/start"/, trace)) == 1
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "app server starts with workspace cwd and expected startup command" do
     test_root =
       Path.join(

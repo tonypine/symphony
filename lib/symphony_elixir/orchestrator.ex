@@ -2452,7 +2452,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp should_dispatch_issue?(%Issue{} = issue, %State{} = state, active_states, terminal_states) do
     candidate_issue?(issue, active_states, terminal_states) and
-      !todo_issue_blocked_by_non_terminal?(issue, terminal_states) and
+      !issue_held?(issue, terminal_states) and
       !post_pr_quiet_active_issue?(issue, state) and
       issue_dispatch_slot_available?(issue, state)
   end
@@ -2516,10 +2516,17 @@ defmodule SymphonyElixir.Orchestrator do
   defp active_retry_issue?(%Issue{state: state_name} = issue, terminal_states) do
     active_issue_state?(state_name, active_state_set()) and
       !terminal_issue_state?(state_name, terminal_states) and
-      !todo_issue_blocked_by_non_terminal?(issue, terminal_states)
+      !issue_held?(issue, terminal_states)
   end
 
   defp active_retry_issue?(_issue, _terminal_states), do: false
+
+  # A `breakdown` parent waits in its active state while its sub-issues are worked; it is dispatched
+  # again for close-out once every sub-issue is terminal.
+  defp issue_held?(issue, terminal_states) do
+    todo_issue_blocked_by_non_terminal?(issue, terminal_states) or
+      Issue.waiting_on_sub_issues?(issue, terminal_states)
+  end
 
   defp todo_issue_blocked_by_non_terminal?(
          %Issue{state: issue_state, blocked_by: blockers},
@@ -2591,7 +2598,9 @@ defmodule SymphonyElixir.Orchestrator do
         state
 
       {:skip, %Issue{} = refreshed_issue} ->
-        Logger.info("Skipping stale dispatch after issue refresh: #{issue_context(refreshed_issue)} state=#{inspect(refreshed_issue.state)} blocked_by=#{length(refreshed_issue.blocked_by)}")
+        Logger.info(
+          "Skipping stale dispatch after issue refresh: #{issue_context(refreshed_issue)} state=#{inspect(refreshed_issue.state)} blocked_by=#{length(refreshed_issue.blocked_by)} sub_issues=#{length(refreshed_issue.sub_issues)}"
+        )
 
         state
 
@@ -6052,7 +6061,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp retry_candidate_issue?(%Issue{} = issue, terminal_states) do
     candidate_issue?(issue, active_state_set(), terminal_states) and
-      !todo_issue_blocked_by_non_terminal?(issue, terminal_states)
+      !issue_held?(issue, terminal_states)
   end
 
   defp post_pr_quiet_active_issue?(%Issue{id: issue_id} = issue, %State{} = state)
