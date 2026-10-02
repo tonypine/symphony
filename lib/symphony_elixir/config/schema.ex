@@ -1372,6 +1372,56 @@ defmodule SymphonyElixir.Config.Schema do
     end
   end
 
+  defmodule AutoReview do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @type t :: %__MODULE__{}
+
+    @primary_key false
+    @fields [
+      :enabled,
+      :state,
+      :kind,
+      :command,
+      :max_turns,
+      :timeout_ms,
+      :max_concurrent,
+      :max_fix_attempts,
+      :run_on,
+      :skip_globs,
+      :playbooks
+    ]
+
+    embedded_schema do
+      field(:enabled, :boolean, default: false)
+      field(:state, :string, default: "Auto Review")
+      field(:kind, :string)
+      field(:command, :string)
+      field(:max_turns, :integer, default: 20)
+      field(:timeout_ms, :integer, default: 1_800_000)
+      field(:max_concurrent, :integer, default: 1)
+      field(:max_fix_attempts, :integer, default: 2)
+      field(:run_on, :string, default: "always")
+      field(:skip_globs, {:array, :string}, default: [])
+      field(:playbooks, :map, default: %{})
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, @fields, empty_values: [])
+      |> validate_required([:state])
+      |> validate_inclusion(:kind, ["codex", "claude"])
+      |> validate_inclusion(:run_on, ["always", "first_push"])
+      |> validate_number(:max_turns, greater_than: 0)
+      |> validate_number(:timeout_ms, greater_than: 0)
+      |> validate_number(:max_concurrent, greater_than: 0)
+      |> validate_number(:max_fix_attempts, greater_than_or_equal_to: 0)
+    end
+  end
+
   defmodule Dependencies do
     @moduledoc false
     use Ecto.Schema
@@ -1614,6 +1664,7 @@ defmodule SymphonyElixir.Config.Schema do
     embeds_one(:quality_gate, QualityGate, on_replace: :update, defaults_to_struct: true)
     embeds_one(:learnings, Learnings, on_replace: :update, defaults_to_struct: true)
     embeds_one(:review_agent, ReviewAgent, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:auto_review, AutoReview, on_replace: :update, defaults_to_struct: true)
     embeds_one(:dependencies, Dependencies, on_replace: :update, defaults_to_struct: true)
     embeds_one(:notifications, Notifications, on_replace: :update, defaults_to_struct: true)
   end
@@ -1795,6 +1846,7 @@ defmodule SymphonyElixir.Config.Schema do
     |> cast_embed(:quality_gate, with: &QualityGate.changeset/2)
     |> cast_embed(:learnings, with: &Learnings.changeset/2)
     |> cast_embed(:review_agent, with: &ReviewAgent.changeset/2)
+    |> cast_embed(:auto_review, with: &AutoReview.changeset/2)
     |> cast_embed(:dependencies, with: &Dependencies.changeset/2)
     |> cast_embed(:notifications, with: &Notifications.changeset/2)
   end

@@ -11,7 +11,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   @primary_key false
   @allowed_keys ~w(
-    agent dashboard dependency_audit github issue_gate issues notifications poller pre_push_review pull_requests
+    agent auto_review dashboard dependency_audit github issue_gate issues notifications poller pre_push_review pull_requests
     repositories verification watchdog workers workspaces
   )
 
@@ -72,6 +72,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "agent.turn_sandbox_policy" => "agent.permissions.filesystem.turn_policy",
     "agent.turn_timeout_ms" => "agent.timeouts.turn_ms",
     "agent.command_timeout_ms" => "agent.timeouts.command_ms",
+    "auto_review.kind" => "auto_review.runtime",
     "ci.enabled" => "pull_requests.checks.enabled",
     "ci.escalation_state" => "pull_requests.checks.escalate_to_state",
     "ci.flaky_retry" => "pull_requests.checks.retry_failed_once",
@@ -294,6 +295,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     embeds_one(:quality_gate, Schema.QualityGate, on_replace: :update, defaults_to_struct: true)
     embeds_one(:learnings, Schema.Learnings, on_replace: :update, defaults_to_struct: true)
     embeds_one(:review_agent, Schema.ReviewAgent, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:auto_review, Schema.AutoReview, on_replace: :update, defaults_to_struct: true)
     embeds_one(:dependencies, Schema.Dependencies, on_replace: :update, defaults_to_struct: true)
     embeds_one(:notifications, Schema.Notifications, on_replace: :update, defaults_to_struct: true)
     embeds_many(:repos, Repo, on_replace: :delete)
@@ -338,6 +340,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
       "quality_gate" => struct_to_map(system_config.quality_gate),
       "learnings" => struct_to_map(system_config.learnings),
       "review_agent" => struct_to_map(system_config.review_agent),
+      "auto_review" => struct_to_map(system_config.auto_review),
       "dependencies" => struct_to_map(system_config.dependencies),
       "notifications" => notifications_to_map(system_config.notifications)
     }
@@ -399,6 +402,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     |> cast_embed(:quality_gate, with: &Schema.QualityGate.changeset/2)
     |> cast_embed(:learnings, with: &Schema.Learnings.changeset/2)
     |> cast_embed(:review_agent, with: &Schema.ReviewAgent.changeset/2)
+    |> cast_embed(:auto_review, with: &Schema.AutoReview.changeset/2)
     |> cast_embed(:dependencies, with: &Schema.Dependencies.changeset/2)
     |> cast_embed(:notifications, with: &Schema.Notifications.changeset/2)
     |> cast_embed(:repos, with: &Repo.changeset/2, required: true)
@@ -434,6 +438,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
          {:ok, agent_config} <- normalize_agent(Map.get(config, "agent", %{})),
          {:ok, worker} <- normalize_workers(Map.get(config, "workers", %{})),
          {:ok, pre_push_review} <- normalize_pre_push_review(Map.get(config, "pre_push_review", %{})),
+         {:ok, auto_review} <- normalize_auto_review(Map.get(config, "auto_review", %{})),
          {:ok, pull_requests} <- normalize_pull_requests(Map.get(config, "pull_requests", %{})),
          {:ok, poller} <- normalize_poller(Map.get(config, "poller", %{})),
          {:ok, issue_gate} <- normalize_issue_gate(Map.get(config, "issue_gate", %{})),
@@ -451,6 +456,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
        |> maybe_put("agent", Map.get(agent_config, "agent"))
        |> maybe_put("verification", Map.get(config, "verification"))
        |> maybe_put("review_agent", pre_push_review)
+       |> maybe_put("auto_review", auto_review)
        |> merge_sections(pull_requests)
        |> maybe_put("poller", poller)
        |> maybe_put("quality_gate", issue_gate)
@@ -649,6 +655,21 @@ defmodule SymphonyElixir.Config.SystemSchema do
        |> maybe_put("command", Map.get(config, "command"))
        |> maybe_put("max_iterations", Map.get(config, "max_iterations"))
        |> maybe_put("run_on", Map.get(config, "run_on"))}
+    end
+  end
+
+  defp normalize_auto_review(config) do
+    with {:ok, config} <- section_map(config, "auto_review"),
+         :ok <-
+           reject_unknown_section_keys(
+             config,
+             ~w(enabled state runtime command max_turns timeout_ms max_concurrent max_fix_attempts run_on skip_globs playbooks),
+             "auto_review"
+           ) do
+      {:ok,
+       config
+       |> Map.delete("runtime")
+       |> maybe_put("kind", Map.get(config, "runtime"))}
     end
   end
 

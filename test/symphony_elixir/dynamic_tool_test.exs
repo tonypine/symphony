@@ -222,6 +222,61 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     end
   end
 
+  test "update_state refuses In Review while Auto Review is on and allows other states" do
+    write_workflow_file!(Workflow.workflow_file_path(), auto_review: %{enabled: true})
+
+    states = [
+      %{"id" => "state-review", "name" => "In Review", "type" => "started"},
+      %{"id" => "state-progress", "name" => "In Progress", "type" => "started"}
+    ]
+
+    response =
+      DynamicTool.execute(
+        "linear_update_state",
+        %{"state_name_or_id" => "in review"},
+        issue: %Issue{id: "issue-current"},
+        linear_client: update_state_client(self(), states)
+      )
+
+    assert response["success"] == false
+
+    assert %{"error" => %{"code" => "in_review_set_by_auto_review", "message" => message}} =
+             Jason.decode!(response["output"])
+
+    assert message =~ "Symphony moves the issue to Auto Review once the PR is open; leave the state as it is."
+    refute_received {:linear_client_called, _query, %{stateId: _state_id}}
+
+    response =
+      DynamicTool.execute(
+        "linear_update_state",
+        %{"state_name_or_id" => "In Progress"},
+        issue: %Issue{id: "issue-current"},
+        linear_client: update_state_client(self(), states)
+      )
+
+    assert response["success"] == true
+    assert_received {:linear_client_called, _query, %{stateId: "state-progress"}}
+  end
+
+  test "update_state allows In Review when the startup check turned Auto Review off" do
+    write_workflow_file!(Workflow.workflow_file_path(), auto_review: %{enabled: true, state: "QA Missing"})
+    on_exit(fn -> SymphonyElixir.AutoReview.reset_for_test("QA Missing") end)
+
+    tracker = SymphonyElixir.Tracker.Memory
+    assert :disabled = SymphonyElixir.AutoReview.check_tracker_state(Config.settings!(), [], tracker: tracker)
+
+    response =
+      DynamicTool.execute(
+        "linear_update_state",
+        %{"state_name_or_id" => "In Review"},
+        issue: %Issue{id: "issue-current"},
+        linear_client: update_state_client(self(), [%{"id" => "state-review", "name" => "In Review", "type" => "started"}])
+      )
+
+    assert response["success"] == true
+    assert_received {:linear_client_called, _query, %{stateId: "state-review"}}
+  end
+
   test "add_comment surfaces commentCreate success=false from Linear as a failure" do
     {:ok, registry} = CommentRegistry.start_link()
 

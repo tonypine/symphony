@@ -10,6 +10,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
 
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
   alias SymphonyElixir.AgentTools.SecretScanner
+  alias SymphonyElixir.AutoReview
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Workspace.Attachments
@@ -629,8 +630,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
     if normalized == "" do
       {:error, :invalid_state}
     else
-      with {:ok, state} <- lookup_team_state(issue_id, normalized, opts) do
-        refuse_human_only_state(state)
+      with {:ok, state} <- lookup_team_state(issue_id, normalized, opts),
+           {:ok, state_id} <- refuse_human_only_state(state) do
+        refuse_auto_review_handoff_state(state, state_id, opts)
       end
     end
   end
@@ -659,6 +661,16 @@ defmodule SymphonyElixir.AgentTools.Linear do
   defp refuse_human_only_state(%{"id" => state_id} = state) do
     if state_name_matches?(state, @merging_state),
       do: {:error, {:merging_requires_human_approval, state["name"]}},
+      else: {:ok, state_id}
+  end
+
+  # With Auto Review on, Symphony moves the issue on from the PR being open, so an
+  # agent asking for `In Review` is refused rather than silently redirected.
+  defp refuse_auto_review_handoff_state(state, state_id, opts) do
+    settings = Keyword.get_lazy(opts, :settings, &Config.settings!/0)
+
+    if AutoReview.enabled?(settings) and state_name_matches?(state, AutoReview.review_state()),
+      do: {:error, {:in_review_set_by_auto_review, state["name"], AutoReview.state(settings)}},
       else: {:ok, state_id}
   end
 

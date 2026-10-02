@@ -13,6 +13,7 @@ defmodule SymphonyElixir.Tracker do
   @callback enrich_issue(Issue.t()) :: {:ok, Issue.t()} | {:error, term()}
   @callback create_comment(String.t(), String.t()) :: :ok | {:error, term()}
   @callback update_issue_state(String.t(), String.t()) :: :ok | {:error, term()}
+  @callback workflow_state_exists?(String.t(), [String.t()]) :: {:ok, boolean()} | {:error, term()}
 
   @spec fetch_candidate_issues() :: {:ok, [term()]} | {:error, term()}
   def fetch_candidate_issues do
@@ -52,6 +53,15 @@ defmodule SymphonyElixir.Tracker do
   @spec update_issue_state(String.t(), String.t()) :: :ok | {:error, term()}
   def update_issue_state(issue_id, state_name) do
     adapter().update_issue_state(issue_id, state_name)
+  end
+
+  @doc """
+  Whether a workflow state with this name exists in every given team (team keys or
+  ids). With no teams, any team having it counts.
+  """
+  @spec workflow_state_exists?(String.t(), [String.t()]) :: {:ok, boolean()} | {:error, term()}
+  def workflow_state_exists?(state_name, teams) when is_binary(state_name) and is_list(teams) do
+    adapter().workflow_state_exists?(state_name, teams)
   end
 
   @spec adapter() :: module()
