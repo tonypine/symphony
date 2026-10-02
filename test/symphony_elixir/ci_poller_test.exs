@@ -9,7 +9,8 @@ defmodule SymphonyElixir.CiPollerTest do
   defmodule FakeTracker do
     alias SymphonyElixir.Linear.Issue
 
-    def fetch_issues_by_states(_states) do
+    def fetch_issues_by_states(states) do
+      send(Application.fetch_env!(:symphony_elixir, :ci_test_recipient), {:fetch_issues_by_states, states})
       {:ok, Application.get_env(:symphony_elixir, :ci_test_issues, [])}
     end
 
@@ -163,6 +164,15 @@ defmodule SymphonyElixir.CiPollerTest do
     end
   end
 
+  defmodule FailingAutoReviewTracker do
+    def fetch_issues_by_states(states), do: FakeTracker.fetch_issues_by_states(states)
+
+    def update_issue_state(issue_id, state_name) do
+      send(Application.fetch_env!(:symphony_elixir, :ci_test_recipient), {:issue_state_update, issue_id, state_name})
+      {:error, :linear_unavailable}
+    end
+  end
+
   setup do
     audit_root =
       Path.join(
@@ -229,6 +239,101 @@ defmodule SymphonyElixir.CiPollerTest do
 
     refute_receive {:issue_state_update, _, _}
     refute_receive {:memory_tracker_comment, _, _}
+  end
+
+  test "with Auto Review off only In Review issues are watched" do
+    now = ~U[2026-05-06 09:00:00Z]
+    Application.put_env(:symphony_elixir, :ci_test_issues, [])
+
+    assert {:ok, %{discovered: 0, processed: 0, actions: []}} =
+             CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+    assert_receive {:fetch_issues_by_states, ["In Review"]}
+  end
+
+  describe "with Auto Review on" do
+    setup do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        pr_review_mode: "polling",
+        ci: %{enabled: true, log_excerpt_lines: 3, max_retries: 3},
+        auto_review: %{enabled: true}
+      )
+
+      :ok
+    end
+
+    test "green CI moves an Auto Review issue to In Review" do
+      now = ~U[2026-05-06 09:00:00Z]
+      issue = %{in_review_issue() | state: "Auto Review"}
+      Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+      Application.put_env(:symphony_elixir, :ci_test_status, green_status())
+      put_run(issue, now)
+
+      assert {:ok, %{discovered: 1, processed: 1, actions: [{:auto_review_passed, "issue-2401", "In Review"}]}} =
+               CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+      assert_receive {:fetch_issues_by_states, ["In Review", "Auto Review"]}
+      assert_receive {:issue_state_update, "issue-2401", "In Review"}
+      assert [%{status: "green"}] = RunStore.list_ci_checks()
+    end
+
+    test "red CI sends an Auto Review issue back to In Progress" do
+      now = ~U[2026-05-06 09:00:00Z]
+      issue = %{in_review_issue() | state: "Auto Review"}
+      Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+      Application.put_env(:symphony_elixir, :ci_test_status, failed_status("abc123"))
+      put_run(issue, now)
+
+      assert {:ok, %{actions: [{:rerun_requested, "issue-2401", "987"}]}} =
+               CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+      assert {:ok, %{actions: [{:state_transitioned, "issue-2401", :ci_failure, "In Progress"}]}} =
+               CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: DateTime.add(now, 1, :minute))
+
+      assert_receive {:issue_state_update, "issue-2401", "In Progress"}
+      refute_receive {:issue_state_update, "issue-2401", "In Review"}
+    end
+
+    test "green CI leaves an In Review issue where it is" do
+      now = ~U[2026-05-06 09:00:00Z]
+      issue = in_review_issue()
+      Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+      Application.put_env(:symphony_elixir, :ci_test_status, green_status())
+      put_run(issue, now)
+
+      assert {:ok, %{actions: [{:green, "issue-2401"}]}} =
+               CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+      refute_receive {:issue_state_update, _, _}
+    end
+
+    test "a failed move to In Review is reported and retried on the next poll" do
+      now = ~U[2026-05-06 09:00:00Z]
+      issue = %{in_review_issue() | state: "auto review"}
+      Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+      Application.put_env(:symphony_elixir, :ci_test_status, green_status())
+      put_run(issue, now)
+
+      assert {:ok, %{actions: [{:state_transition_error, "issue-2401", :auto_review, :linear_unavailable}]}} =
+               CiPoller.poll_once(tracker: FailingAutoReviewTracker, github: FakeGitHub, now: now)
+
+      assert_receive {:issue_state_update, "issue-2401", "In Review"}
+
+      assert {:ok, %{actions: [{:auto_review_passed, "issue-2401", "In Review"}]}} =
+               CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: DateTime.add(now, 1, :minute))
+    end
+
+    test "an issue with no state is not treated as in Auto Review" do
+      now = ~U[2026-05-06 09:00:00Z]
+      issue = %{in_review_issue() | state: nil}
+      Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+      Application.put_env(:symphony_elixir, :ci_test_status, green_status())
+      put_run(issue, now)
+
+      assert {:ok, %{actions: [{:green, "issue-2401"}]}} =
+               CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+    end
   end
 
   test "first failure reruns failed jobs without dispatching" do

@@ -21,6 +21,7 @@ Common optional sections:
 - `workspaces`
 - `pull_requests`
 - `pre_push_review`
+- `auto_review`
 - `dashboard`
 - `issue_gate`
 - `watchdog`
@@ -485,6 +486,56 @@ pre_push_review:
 When enabled, Symphony runs an executor/reviewer loop in the same workspace before push.
 `run_on` defaults to `always`; set it to `first_push` to skip the reviewer on PR follow-up runs while keeping it enabled for initial issue runs.
 Follow-up runs include explicit PR dispatches (`symphony pr`) and automatic rework runs triggered by reviewer comments, CI failures, or PR conflicts; these also omit the review-agent gate from the prompt so the agent can push and exit in a single turn.
+
+### `auto_review`
+
+Optional step between the PR opening and human review. Off by default; nothing changes unless you
+enable it.
+
+```yaml
+auto_review:
+  enabled: true
+  state: Auto Review
+  runtime: claude
+  command: claude --dangerously-skip-permissions
+  max_turns: 20
+  timeout_ms: 1800000
+  max_concurrent: 1
+  max_fix_attempts: 2
+  run_on: always
+  skip_globs: []
+  playbooks: {}
+```
+
+When enabled, Symphony moves an issue whose run opened a PR to `state` (default `Auto Review`)
+instead of `In Review`, and the CI poller watches it there:
+
+- red CI sends the issue back to `In Progress` through the usual CI fix loop;
+- green CI runs QA and moves the issue to `In Review`. QA is a pass-through for now, so green CI
+  is enough.
+
+Agents can no longer move the issue to `In Review` themselves: `linear_update_state("In Review")`
+returns "Symphony moves the issue to Auto Review once the PR is open; leave the state as it is."
+
+`runtime`, `command`, `max_turns`, `timeout_ms`, `max_concurrent`, `max_fix_attempts`, `run_on`,
+`skip_globs` and `playbooks` are validated but not used yet; they configure the QA agent run.
+
+Auto Review needs `pull_requests.enabled: true` and `pull_requests.checks.enabled: true`, because
+the CI poller is what moves issues out of the state. A PR with no CI checks stays in Auto Review.
+
+#### Adding the Linear state
+
+Auto Review needs a workflow state with the configured name in every Linear team Symphony works in
+(`issues.linear.scope.team` and each `repositories[].route.team`; any team when none is set):
+
+1. In Linear, open **Settings → Teams → <team> → Workflow**.
+2. Under **Started**, add a state named `Auto Review` (or your `auto_review.state`).
+3. Drag it between `In Progress` and `In Review`.
+4. Restart Symphony.
+
+At startup Symphony checks that the state exists. If it is missing, or if the CI poller is off,
+Symphony logs `Auto Review disabled: ...` and keeps moving issues to `In Review` until the next
+restart. If Linear cannot be reached for the check, Auto Review stays on.
 
 ### `issue_gate`
 

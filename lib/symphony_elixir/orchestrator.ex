@@ -11,6 +11,7 @@ defmodule SymphonyElixir.Orchestrator do
     AgentRunner,
     AgentTelemetry,
     AuditLog,
+    AutoReview,
     CiPoller,
     Config,
     Notifications,
@@ -32,7 +33,6 @@ defmodule SymphonyElixir.Orchestrator do
 
   @continuation_retry_delay_ms 1_000
   @failure_retry_base_ms 10_000
-  @post_pr_review_state "In Review"
   # Slightly above the dashboard render interval so "checking now…" can render.
   @poll_transition_render_delay_ms 20
   @default_transcript_buffer_size 200
@@ -3117,11 +3117,12 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp handle_post_pr_quiet_active_issue(%State{} = state, %Issue{} = issue, issue_id, attempt, metadata) do
-    Logger.info("Issue has an opened PR and no rework signal; moving to #{@post_pr_review_state}: #{issue_context(issue)}")
+    post_pr_state = AutoReview.post_pr_state(Config.settings!())
+    Logger.info("Issue has an opened PR and no rework signal; moving to #{post_pr_state}: #{issue_context(issue)}")
 
-    case Tracker.update_issue_state(issue_id, @post_pr_review_state) do
+    case Tracker.update_issue_state(issue_id, post_pr_state) do
       :ok ->
-        reviewed_issue = %Issue{issue | state: @post_pr_review_state, updated_at: DateTime.utc_now()}
+        reviewed_issue = %Issue{issue | state: post_pr_state, updated_at: DateTime.utc_now()}
 
         state =
           state
@@ -3131,7 +3132,7 @@ defmodule SymphonyElixir.Orchestrator do
         {:noreply, state}
 
       {:error, reason} ->
-        Logger.warning("Failed to move post-PR issue to #{@post_pr_review_state}: #{issue_context(issue)} reason=#{inspect(reason)}")
+        Logger.warning("Failed to move post-PR issue to #{post_pr_state}: #{issue_context(issue)} reason=#{inspect(reason)}")
 
         {:noreply,
          schedule_issue_retry(
@@ -3141,7 +3142,7 @@ defmodule SymphonyElixir.Orchestrator do
            Map.merge(metadata, %{
              identifier: issue.identifier,
              title: issue.title,
-             error: "failed to move post-PR issue to #{@post_pr_review_state}: #{inspect(reason)}"
+             error: "failed to move post-PR issue to #{post_pr_state}: #{inspect(reason)}"
            })
          )}
     end
@@ -3156,6 +3157,15 @@ defmodule SymphonyElixir.Orchestrator do
   defp handle_quality_gated_active_retry(%State{} = state, %Issue{} = issue, attempt, metadata) do
     state = start_quality_gate_or_dispatch([issue], state, {:active_retry, issue, attempt, metadata})
     {:noreply, state}
+  end
+
+  defp check_auto_review_tracker_state do
+    settings = Config.settings!()
+
+    case Config.repos() do
+      {:ok, repos} -> AutoReview.check_tracker_state(settings, AutoReview.configured_teams(settings, repos))
+      {:error, reason} -> Logger.warning("Skipping the Auto Review state check; failed to load repositories: #{inspect(reason)}")
+    end
   end
 
   defp startup_candidate_issues_result do
@@ -3189,6 +3199,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp start_startup_workspace_lifecycle_task(repo_keys, now_ms) when is_list(repo_keys) do
     start_async_task(fn ->
+      check_auto_review_tracker_state()
       candidate_issues_result = startup_candidate_issues_result()
       terminal_issues_result = startup_terminal_issues_result()
 

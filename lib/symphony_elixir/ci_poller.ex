@@ -6,7 +6,7 @@ defmodule SymphonyElixir.CiPoller do
   use GenServer
   require Logger
 
-  alias SymphonyElixir.{AuditLog, Config, Notifications, RunStore, Tracker}
+  alias SymphonyElixir.{AuditLog, AutoReview, Config, Notifications, RunStore, Tracker}
   alias SymphonyElixir.GitHub.PullRequest
   alias SymphonyElixir.Linear.Issue
 
@@ -211,29 +211,53 @@ defmodule SymphonyElixir.CiPoller do
     repo_key = repo_key_from_opts(opts)
     tracker = Keyword.get(opts, :tracker, Tracker)
 
-    with {:ok, discovered} <- discover_ci_checks(run_store, tracker, repo_key, now),
+    with {:ok, discovered, auto_review_issue_ids} <- discover_ci_checks(settings, run_store, tracker, repo_key, now),
          {:ok, checks} <- list_ci_checks(run_store, repo_key) do
-      opts = put_prefetched_rework_sources(opts, run_store, repo_key, checks)
+      opts =
+        opts
+        |> put_prefetched_rework_sources(run_store, repo_key, checks)
+        |> Keyword.put(:auto_review_issue_ids, auto_review_issue_ids)
+
       actions = Enum.map(checks, &process_ci_check(&1, settings, opts, now))
 
       {:ok, %{mode: :polling, discovered: discovered, processed: length(checks), actions: actions}}
     end
   end
 
-  defp discover_ci_checks(run_store, tracker, repo_key, now) do
-    with {:ok, issues} <- tracker.fetch_issues_by_states([@in_review_state]),
+  defp discover_ci_checks(settings, run_store, tracker, repo_key, now) do
+    with {:ok, issues} <- tracker.fetch_issues_by_states(watched_states(settings)),
          {:ok, runs} <- list_runs(run_store, repo_key),
          {:ok, existing} <- list_ci_checks(run_store, repo_key) do
       existing_by_issue = Map.new(existing, &{Map.get(&1, :issue_id), &1})
+      issues = Enum.filter(issues, &match?(%Issue{}, &1))
 
-      discovered =
-        issues
-        |> Enum.filter(&match?(%Issue{}, &1))
-        |> Enum.count(&persist_discovered_ci_check?(&1, runs, existing_by_issue, run_store, repo_key, now))
+      discovered = Enum.count(issues, &persist_discovered_ci_check?(&1, runs, existing_by_issue, run_store, repo_key, now))
 
-      {:ok, discovered}
+      {:ok, discovered, auto_review_issue_ids(settings, issues)}
     end
   end
+
+  # Auto Review issues have an open PR waiting on CI, just like In Review ones.
+  defp watched_states(settings) do
+    if AutoReview.enabled?(settings),
+      do: [@in_review_state, AutoReview.state(settings)],
+      else: [@in_review_state]
+  end
+
+  defp auto_review_issue_ids(settings, issues) do
+    if AutoReview.enabled?(settings) do
+      auto_review_state = normalize_state_name(AutoReview.state(settings))
+
+      issues
+      |> Enum.filter(&(normalize_state_name(&1.state) == auto_review_state))
+      |> MapSet.new(& &1.id)
+    else
+      MapSet.new()
+    end
+  end
+
+  defp normalize_state_name(state) when is_binary(state), do: state |> String.trim() |> String.downcase()
+  defp normalize_state_name(_state), do: ""
 
   defp persist_discovered_ci_check?(%Issue{} = issue, runs, existing_by_issue, run_store, repo_key, now) do
     existing = Map.get(existing_by_issue, issue.id)
@@ -706,7 +730,25 @@ defmodule SymphonyElixir.CiPoller do
           now
         )
 
-      complete_ci_update(opts, record, attrs, {:green, issue_id})
+      case complete_ci_update(opts, record, attrs, {:green, issue_id}) do
+        {:green, ^issue_id} = action -> maybe_pass_auto_review(action, issue_id, opts)
+        other -> other
+      end
+    end
+  end
+
+  # Pass-through QA: an issue in Auto Review with green CI goes straight to In Review.
+  defp maybe_pass_auto_review(action, issue_id, opts) do
+    if MapSet.member?(Keyword.get(opts, :auto_review_issue_ids, MapSet.new()), issue_id) do
+      tracker = Keyword.get(opts, :tracker, Tracker)
+      review_state = AutoReview.review_state()
+
+      case tracker.update_issue_state(issue_id, review_state) do
+        :ok -> {:auto_review_passed, issue_id, review_state}
+        {:error, reason} -> {:state_transition_error, issue_id, :auto_review, reason}
+      end
+    else
+      action
     end
   end
 

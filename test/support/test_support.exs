@@ -588,6 +588,7 @@ defmodule SymphonyElixir.TestSupport do
           quality_gate: %{enabled: false},
           learnings: nil,
           review_agent: nil,
+          auto_review: nil,
           dependencies: nil,
           notifications: nil,
           repos: nil,
@@ -663,6 +664,7 @@ defmodule SymphonyElixir.TestSupport do
     quality_gate = Keyword.get(config, :quality_gate)
     learnings = Keyword.get(config, :learnings)
     review_agent = Keyword.get(config, :review_agent)
+    auto_review = Keyword.get(config, :auto_review)
     dependencies = Keyword.get(config, :dependencies)
     notifications = Keyword.get(config, :notifications)
     repos = Keyword.get(config, :repos)
@@ -744,6 +746,7 @@ defmodule SymphonyElixir.TestSupport do
         verification_yaml(verification),
         quality_gate_yaml(quality_gate),
         review_agent_yaml(review_agent),
+        auto_review && "auto_review: #{yaml_value(auto_review)}",
         dependencies && "dependency_audit: #{yaml_value(dependencies)}",
         notifications_yaml(notifications),
         repos && "repositories: #{yaml_value(normalize_test_repositories(repos))}",

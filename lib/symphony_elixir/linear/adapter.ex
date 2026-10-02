@@ -37,6 +37,20 @@ defmodule SymphonyElixir.Linear.Adapter do
   }
   """
 
+  @workflow_states_query """
+  query SymphonyWorkflowStatesByName($stateName: String!) {
+    workflowStates(filter: {name: {eq: $stateName}}, first: 250) {
+      nodes {
+        id
+        team {
+          id
+          key
+        }
+      }
+    }
+  }
+  """
+
   @spec fetch_candidate_issues() :: {:ok, [term()]} | {:error, term()}
   def fetch_candidate_issues, do: client_module().fetch_candidate_issues()
 
@@ -80,6 +94,23 @@ defmodule SymphonyElixir.Linear.Adapter do
       {:error, reason} -> {:error, reason}
       _ -> {:error, :issue_update_failed}
     end
+  end
+
+  @spec workflow_state_exists?(String.t(), [String.t()]) :: {:ok, boolean()} | {:error, term()}
+  def workflow_state_exists?(state_name, teams) when is_binary(state_name) and is_list(teams) do
+    with {:ok, response} <- client_module().graphql(@workflow_states_query, %{stateName: state_name}),
+         nodes when is_list(nodes) <- get_in(response, ["data", "workflowStates", "nodes"]) do
+      state_teams = Enum.map(nodes, &(&1["team"] || %{}))
+      {:ok, if(teams == [], do: state_teams != [], else: Enum.all?(teams, &team_has_state?(&1, state_teams)))}
+    else
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :workflow_states_unavailable}
+    end
+  end
+
+  defp team_has_state?(team, state_teams) do
+    wanted = String.downcase(team)
+    Enum.any?(state_teams, fn state_team -> wanted in [String.downcase(to_string(state_team["key"])), String.downcase(to_string(state_team["id"]))] end)
   end
 
   defp client_module do
