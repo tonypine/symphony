@@ -7,10 +7,11 @@ Requires macOS 13+ and Xcode or the Command Line Tools.
 
 ```bash
 cd macos
-make        # builds an ad-hoc-signed build/Symphony.app
-make run    # builds and opens it
-make test   # runs swift test
-make clean  # removes build/ and .build/
+make          # builds an ad-hoc-signed build/Symphony.app
+make install  # builds it and copies it to ~/Applications (set INSTALL_DIR to change)
+make run      # builds and opens build/Symphony.app
+make test     # runs swift test
+make clean    # removes build/ and .build/
 ```
 
 The app is ad-hoc signed, so on first open Gatekeeper may ask you to confirm it
@@ -55,6 +56,21 @@ The login shell loads your zsh profile, so a Finder-launched app still finds `mi
 - If Symphony exits without being asked to, the app posts a notification (or shows an alert when
   notifications are off).
 - "Start Symphony when the app opens" starts it at launch.
+
+## Launch at Login
+
+The Launch at Login toggle in Settings registers the app with macOS as a login item
+(`SMAppService.mainApp`), so it is listed in System Settings → General → Login Items. The toggle shows
+what macOS reports, so turning the app off in System Settings turns the toggle off too. If macOS asks you
+to allow it, Save opens Login Items, and Settings shows a note until you do. With "Start Symphony when the
+app opens" also on, Symphony is running after login with no clicks.
+
+macOS opens the copy that was registered, so install the app first and turn the toggle on from that copy:
+
+```bash
+make install
+open ~/Applications/Symphony.app
+```
 
 ## Status
 

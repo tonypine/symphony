@@ -14,6 +14,10 @@ final class SettingsViewModel: ObservableObject {
     @Published var settings: AppSettings
     @Published var linearAPIKey = ""
     @Published var extraRows: [EnvironmentRow] = []
+    /// Launch at Login, read from macOS rather than UserDefaults so it follows changes made in System Settings.
+    @Published var launchAtLogin: Bool
+    @Published private(set) var loginItemNote: String?
+    @Published private(set) var loginItemError: String?
     @Published private(set) var issues: [SettingsIssue] = []
     @Published private(set) var keychainError: String?
 
@@ -23,11 +27,20 @@ final class SettingsViewModel: ObservableObject {
 
     private let store: SettingsStore
     private let validator: SettingsValidator
+    private let loginItem: LoginItemService
 
-    init(store: SettingsStore = SettingsStore(), validator: SettingsValidator = SettingsValidator()) {
+    init(
+        store: SettingsStore = SettingsStore(),
+        validator: SettingsValidator = SettingsValidator(),
+        loginItem: LoginItemService = MainAppLoginItem()
+    ) {
         self.store = store
         self.validator = validator
+        self.loginItem = loginItem
         settings = store.loadSettings()
+        let loginStatus = loginItem.status
+        launchAtLogin = LoginItem.isOn(loginStatus)
+        loginItemNote = LoginItem.note(loginStatus)
 
         do {
             let secrets = try store.loadSecrets()
@@ -67,6 +80,25 @@ final class SettingsViewModel: ObservableObject {
         storedNames = Set(secrets.extraEnvironment.map(\.name))
         keychainError = nil
         store.saveSettings(settings)
+        return saveLaunchAtLogin()
+    }
+
+    /// Registers or unregisters the login item. When macOS wants the user to allow it, opens Login Items.
+    private func saveLaunchAtLogin() -> Bool {
+        let wasPending = loginItem.status == .requiresApproval
+        do {
+            try LoginItem.apply(launchAtLogin, to: loginItem)
+        } catch {
+            loginItemError = "Could not change \(LoginItem.toggleTitle): \(error.localizedDescription)"
+            return false
+        }
+        loginItemError = nil
+        let status = loginItem.status
+        launchAtLogin = LoginItem.isOn(status)
+        loginItemNote = LoginItem.note(status)
+        if status == .requiresApproval && !wasPending {
+            MainAppLoginItem.openSystemSettings()
+        }
         return true
     }
 }

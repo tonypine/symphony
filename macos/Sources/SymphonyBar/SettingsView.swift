@@ -32,6 +32,14 @@ struct SettingsView: View {
                         }
                     }
                     Toggle("Start Symphony when the app opens", isOn: $model.settings.startOnLaunch)
+                    Toggle(LoginItem.toggleTitle, isOn: $model.launchAtLogin)
+                    if let note = model.loginItemNote {
+                        HStack {
+                            Text(note).foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Open Login Items") { MainAppLoginItem.openSystemSettings() }
+                        }
+                    }
                 }
 
                 Section {
@@ -64,6 +72,9 @@ struct SettingsView: View {
                 }
                 if let keychainError = model.keychainError {
                     Text(keychainError).foregroundStyle(.red)
+                }
+                if let loginItemError = model.loginItemError {
+                    Text(loginItemError).foregroundStyle(.red)
                 }
             }
             .padding(.horizontal, 20)

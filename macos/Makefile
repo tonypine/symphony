@@ -3,9 +3,10 @@ EXECUTABLE := SymphonyBar
 CONFIG := release
 BUILD_DIR := build
 APP := $(BUILD_DIR)/$(APP_NAME).app
+INSTALL_DIR ?= $(HOME)/Applications
 SWIFT_FLAGS ?=
 
-.PHONY: all app run test clean
+.PHONY: all app install run test clean
 
 all: app
 
@@ -17,6 +18,12 @@ app:
 	cp Info.plist "$(APP)/Contents/Info.plist"
 	codesign --force --sign - "$(APP)"
 	codesign --verify --strict "$(APP)"
+
+install: app
+	mkdir -p "$(INSTALL_DIR)"
+	rm -rf "$(INSTALL_DIR)/$(APP_NAME).app"
+	ditto "$(APP)" "$(INSTALL_DIR)/$(APP_NAME).app"
+	codesign --verify --strict "$(INSTALL_DIR)/$(APP_NAME).app"
 
 run: app
 	open "$(APP)"
