@@ -82,6 +82,9 @@ branch instead of opening a second one. If a claimed issue moves to a terminal s
 - **Quality gate** — optionally scores issue clarity before dispatch so unclear work is held back.
 - **Executor + reviewer runs** — an optional read-only reviewer agent gates the executor's push.
 - **Docker runner** — host Symphony with mounted repos, state, logs, and agent credentials.
+- **macOS menu bar app** — start, stop, pause, and resume Symphony from the menu bar, with its status in
+  the icon, the Linear key in the Keychain, and optional launch at login. See
+  [macos/README.md](macos/README.md).
 
 ![Symphony Web dashboard screenshot](.github/media/elixir-screenshot-web.png)
 
@@ -115,6 +118,10 @@ workflow prompts that let coding agents work safely.
    ```bash
    mise exec -- ./bin/symphony
    ```
+
+   On macOS you can instead start it from the menu bar app: `cd macos && make install`, open
+   `~/Applications/Symphony.app`, and set the checkout folder, `symphony.yml`, and `LINEAR_API_KEY` in its
+   Settings window. See [macos/README.md](macos/README.md) for prerequisites and first-run setup.
 
 The LiveView dashboard runs at `http://127.0.0.1:4000` by default. It has no built-in authentication
 and binds to loopback only — to expose it remotely, front it with a reverse proxy that handles auth
@@ -242,6 +249,8 @@ the service. See [docker/README.md](docker/README.md).
 - [docs/security.md](docs/security.md) — threat model, built-in protections, and best practices.
 - [docs/development.md](docs/development.md) — toolchain, testing, packaging, and fork notes.
 - [docs/releasing.md](docs/releasing.md) — how to version and publish a release.
+- [macos/README.md](macos/README.md) — the macOS menu bar app: build, first run, controls, and
+  troubleshooting.
 - [docs/logging.md](docs/logging.md),
   [docs/quality_gate_security.md](docs/quality_gate_security.md), and
   [docs/token_accounting.md](docs/token_accounting.md) — operational deep-dives.

@@ -3,7 +3,28 @@
 A macOS menu bar app for Symphony. Its menu shows Symphony's status, and has Start Symphony, Stop Symphony,
 Pause Dispatch, Resume Dispatch, Open Dashboard, Open Logs, Settings… and Quit.
 
-Requires macOS 13+ and Xcode or the Command Line Tools.
+The app runs the `bin/symphony` in your checkout with your `symphony.yml`, the same as running it from
+a terminal. It does not bundle Symphony.
+
+## Prerequisites
+
+- macOS 13 or later.
+- Xcode, or the Command Line Tools (`xcode-select --install`). `swift --version` should work.
+- A Symphony checkout with `bin/symphony` built and a `symphony.yml`, as in the
+  [Quickstart](../README.md#quickstart) steps 2–4:
+
+  ```bash
+  mise trust && mise install
+  mise exec -- mix setup
+  mise exec -- mix build              # writes bin/symphony
+  mise exec -- ./bin/symphony init    # writes symphony.yml in the current folder
+  ```
+
+- A Linear personal API key. You enter it in the app, so you don't need to export `LINEAR_API_KEY`.
+
+## Build and install
+
+From the checkout:
 
 ```bash
 cd macos
@@ -14,8 +35,42 @@ make test     # runs swift test
 make clean    # removes build/ and .build/
 ```
 
-The app is ad-hoc signed, so on first open Gatekeeper may ask you to confirm it
-(right-click the app and choose Open).
+Use `make install` and open the installed copy if you want Launch at Login:
+
+```bash
+open ~/Applications/Symphony.app
+```
+
+The app has no Dock icon or window of its own; look for its icon in the menu bar.
+
+## First run
+
+1. Open the app. The Settings window opens because no checkout folder is set yet.
+2. **Checkout folder:** choose the Symphony checkout, the folder that contains `bin/symphony`.
+3. **symphony.yml:** choose the operator config to run with.
+4. **Command prefix:** leave `mise exec --` so Symphony runs with the checkout's `mise` toolchain. Clear it
+   if `bin/symphony` runs without `mise`.
+5. **LINEAR_API_KEY:** paste your Linear API key. Add any other variables your `symphony.yml` or agents
+   need (for example a GitHub token) with Add Variable.
+6. Click **Save**. The app checks that both paths exist and that the key is set, then stores the key in the
+   login Keychain. macOS may ask to allow Keychain access; choose Always Allow.
+7. Choose **Start Symphony** from the menu. The icon shows `hourglass` while Symphony starts, then
+   `music.note.list` once it answers. Choose **Open Dashboard** to see it at `http://127.0.0.1:4000`.
+
+If the icon turns to a warning triangle instead, choose **Open Logs** and see [Troubleshooting](#troubleshooting).
+
+## Menu commands
+
+- **Start Symphony** starts `bin/symphony` as a child of the app.
+- **Stop Symphony** stops it and the agent runs it started. To let runs finish first, pause dispatch and
+  wait until the menu shows `0 running`.
+- **Pause Dispatch** holds new dispatch: Symphony picks up no new issues, but agent runs already under way
+  continue. The pause is kept across restarts.
+- **Resume Dispatch** lets Symphony pick up new issues again.
+- **Open Dashboard** opens the dashboard in the browser, and **Open Logs** opens Symphony's output log.
+- **Quit** stops Symphony first and asks before stopping active agent runs.
+
+The sections below describe each in detail.
 
 ## Settings
 
@@ -108,5 +163,27 @@ The state root is found as Symphony finds it:
 - Otherwise `~/Library/Application Support/symphony` or, for the Burrito release build, its `release/`
   subdirectory. The app can't tell which build runs, so it uses the one whose `control_url` was written
   last, then the one holding a `control_token`.
+
+## Troubleshooting
+
+- **macOS says the app can't be opened or is from an unidentified developer.** The app is ad-hoc signed,
+  not notarized. A copy built on this Mac normally opens directly; a copy that was downloaded or copied
+  from elsewhere may be blocked. Right-click the app and choose Open, or on macOS 15 and later open System
+  Settings → Privacy & Security and click Open Anyway.
+- **macOS asks for Keychain access again after a rebuild.** Each build has a new ad-hoc signature, so the
+  Keychain treats it as a new app. Enter your login password and choose Always Allow; the prompt stops
+  until the next rebuild.
+- **Start Symphony shows a message instead of starting.** The app checks the settings before it starts
+  Symphony. "Linear API key not set" and the path messages are fixed in Settings. "`…/bin/symphony` was not
+  found" means the checkout isn't built yet: run `mise exec -- mix build` in it.
+- **The icon shows a warning triangle right after Start.** Symphony exited. Choose Open Logs, or read
+  `~/Library/Logs/symphony/menubar-child.log` (the run before is in `menubar-child.log.1`). Common causes:
+  - `mise: command not found`: install `mise`, or clear the command prefix if you don't use it.
+  - Symphony rejected `symphony.yml`: run the same command from a terminal to see the error:
+    `cd <checkout> && mise exec -- ./bin/symphony --config <symphony.yml>`.
+- **The menu shows "running (external)" and Start is disabled.** A Symphony started elsewhere (for example
+  from a terminal) is answering on the control URL. Stop that one first, then Start from the menu.
+- **Pause or Resume shows an error under the status.** The app could not reach Symphony's control API or
+  its token was rejected; the message says which. See [Pause and Resume](#pause-and-resume).
 
 `SymphonyBarCore` holds pure logic that is unit tested without AppKit; `SymphonyBar` is the AppKit app.
