@@ -8,7 +8,9 @@ defmodule SymphonyElixir.CLI do
   # Retained so existing scripts (Docker, ops runbooks) that still pass the long
   # flag keep parsing — its value is ignored.
   @acknowledgement_switch :i_understand_that_this_will_be_running_without_the_usual_guardrails
-  @burrito_args_module Burrito.Util.Args
+  # Set by the Burrito wrapper before it execs the BEAM. The `burrito` dep is
+  # build-only (`runtime: false`), so `Burrito.Util.Args` is not in the release.
+  @burrito_bin_path_env "__BURRITO_BIN_PATH"
   @service_switches [
     {@acknowledgement_switch, :boolean},
     config: :string,
@@ -446,22 +448,15 @@ defmodule SymphonyElixir.CLI do
   end
 
   defp burrito_args do
-    if Code.ensure_loaded?(@burrito_args_module) and burrito_binary?() do
-      call_burrito_args(:argv)
-    else
-      :not_in_burrito
-    end
+    burrito_args(System.get_env(@burrito_bin_path_env), :init.get_plain_arguments())
   end
 
-  defp burrito_binary? do
-    call_burrito_args(:get_bin_path) != :not_in_burrito
-  end
-
-  defp call_burrito_args(function) do
-    # The Burrito module is only present in prod releases, so this call must stay dynamic.
-    # credo:disable-for-next-line Credo.Check.Refactor.Apply
-    apply(@burrito_args_module, function, [])
-  end
+  # Same as `Burrito.Util.Args.argv/0`: the wrapper passes its arguments after
+  # `-extra`, which the VM exposes as plain arguments.
+  @doc false
+  @spec burrito_args(String.t() | nil, [charlist() | String.t()]) :: [String.t()] | :not_in_burrito
+  def burrito_args(bin_path, _plain_arguments) when bin_path in [nil, ""], do: :not_in_burrito
+  def burrito_args(_bin_path, plain_arguments), do: Enum.map(plain_arguments, &to_string/1)
 
   @spec wait_for_shutdown() :: no_return()
   defp wait_for_shutdown do

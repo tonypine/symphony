@@ -76,3 +76,10 @@ make bundle SYMPHONY_BIN=../burrito_out/symphony-macos-arm64 SHORT_VERSION=0.0.1
 ```
 
 `make bundle` signs ad hoc unless you pass `SIGNING_IDENTITY`.
+
+The release workflow smoke-tests the binary before and after signing; run the
+same check locally (cwd is `macos/`, after the commands above):
+
+```bash
+../scripts/release/smoke_test.sh build/Symphony.app/Contents/Resources/symphony "$PWD/../symphony.yml"
+```
