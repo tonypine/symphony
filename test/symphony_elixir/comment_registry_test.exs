@@ -38,6 +38,18 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistryTest do
     assert :ok = CommentRegistry.reserve_subissue(pid, 2)
   end
 
+  test "reserve_project_update/2 counts separately from sub-issues and release gives a slot back" do
+    {:ok, pid} = CommentRegistry.start_link()
+
+    assert :ok = CommentRegistry.reserve_subissue(pid, 1)
+    assert :ok = CommentRegistry.reserve_project_update(pid, 1)
+    assert {:error, {:project_update_cap_reached, 1}} = CommentRegistry.reserve_project_update(pid, 1)
+
+    assert :ok = CommentRegistry.release_project_update(pid)
+    assert :ok = CommentRegistry.reserve_project_update(pid, 1)
+    assert {:error, :project_update_registry_unavailable} = CommentRegistry.reserve_project_update(nil, 1)
+  end
+
   test "reserve_subissue/2 refuses without a registry" do
     assert {:error, :subissue_registry_unavailable} = CommentRegistry.reserve_subissue(nil, 10)
   end

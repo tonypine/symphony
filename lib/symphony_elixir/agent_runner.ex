@@ -1099,6 +1099,10 @@ defmodule SymphonyElixir.AgentRunner do
             Logger.info("Stopping agent run for #{issue_context(refreshed_issue)} after PR opened; waiting for review, CI, or manual rework signal")
             {:done, refreshed_issue}
 
+          Issue.waiting_on_sub_issues?(refreshed_issue, Config.settings!().tracker.terminal_states) ->
+            Logger.info("Stopping agent run for #{issue_context(refreshed_issue)}; waiting for its open sub-issues")
+            {:done, refreshed_issue}
+
           active_issue_state?(refreshed_issue.state) ->
             {:continue, refreshed_issue}
 

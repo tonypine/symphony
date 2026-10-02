@@ -14,6 +14,7 @@ defmodule SymphonyElixir.PlaybookTest do
     guardrails
     issue_context
     out_of_scope_backlog
+    parent_tickets
     pr_feedback_sweep
     reproduce_and_blast_radius
     scoped_tools

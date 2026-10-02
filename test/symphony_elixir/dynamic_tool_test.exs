@@ -355,6 +355,77 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     end
   end
 
+  describe "linear_create_project_update" do
+    test "is advertised with only body and health, and hidden from the read-only scope" do
+      assert %{"inputSchema" => %{"properties" => properties, "required" => ["body"]}} =
+               Enum.find(DynamicTool.tool_specs(), &(&1["name"] == "linear_create_project_update"))
+
+      assert properties |> Map.keys() |> Enum.sort() == ["body", "health"]
+      refute "linear_create_project_update" in Enum.map(DynamicTool.tool_specs(:read_only), & &1["name"])
+
+      response =
+        DynamicTool.execute("linear_create_project_update", %{"body" => "Shipped"},
+          issue: %Issue{id: "issue-current"},
+          tool_scope: :read_only,
+          linear_client: fn _query, _variables, _opts -> flunk("read-only scope must not post project updates") end
+        )
+
+      assert %{"error" => %{"code" => "tool_scope_rejected"}} = Jason.decode!(response["output"])
+
+      response =
+        DynamicTool.execute("linear_create_project_update", %{"body" => "Shipped", "projectId" => "project-other"},
+          issue: %Issue{id: "issue-current"},
+          linear_client: fn _query, _variables, _opts -> flunk("smuggled project must not reach Linear") end
+        )
+
+      assert %{"error" => %{"code" => "unexpected_arguments", "arguments" => ["projectId"]}} = Jason.decode!(response["output"])
+    end
+
+    test "posts through the legacy alias and reports the cap past it" do
+      {:ok, registry} = CommentRegistry.start_link()
+
+      client = fn query, _variables, _opts ->
+        if query =~ "SymphonyAgentProjectUpdateScope",
+          do: {:ok, %{"data" => %{"issue" => %{"project" => %{"id" => "project-1"}}}}},
+          else: {:ok, %{"data" => %{"projectUpdateCreate" => %{"success" => true, "projectUpdate" => %{"id" => "update-1"}}}}}
+      end
+
+      opts = [issue: %Issue{id: "issue-current"}, comment_registry: registry, linear_client: client]
+
+      response = DynamicTool.execute("linear.create_project_update", %{body: "Shipped", health: "onTrack"}, opts)
+      assert response["success"] == true
+
+      response = DynamicTool.execute("linear_create_project_update", %{"body" => "Again"}, opts)
+      assert %{"error" => %{"code" => "project_update_cap_reached", "cap" => 1}} = Jason.decode!(response["output"])
+    end
+
+    test "returns explicit error payloads for invalid input, no registry and no project" do
+      {:ok, registry} = CommentRegistry.start_link()
+      no_linear = fn _query, _variables, _opts -> flunk("Linear should not be called") end
+      opts = [issue: %Issue{id: "issue-current"}, comment_registry: registry, linear_client: no_linear]
+
+      for {args, code} <- [
+            {%{"body" => " "}, "invalid_project_update_body"},
+            {%{"body" => "Shipped", "health" => "great"}, "invalid_project_update_health"}
+          ] do
+        response = DynamicTool.execute("linear_create_project_update", args, opts)
+        assert %{"error" => %{"code" => ^code}} = Jason.decode!(response["output"])
+      end
+
+      response = DynamicTool.execute("linear_create_project_update", %{"body" => "Shipped"}, Keyword.delete(opts, :comment_registry))
+      assert %{"error" => %{"code" => "project_update_registry_unavailable"}} = Jason.decode!(response["output"])
+
+      response =
+        DynamicTool.execute(
+          "linear_create_project_update",
+          %{"body" => "Shipped"},
+          Keyword.put(opts, :linear_client, fn _query, _variables, _opts -> {:ok, %{"data" => %{"issue" => %{"project" => nil}}}} end)
+        )
+
+      assert %{"error" => %{"code" => "issue_has_no_project"}} = Jason.decode!(response["output"])
+    end
+  end
+
   test "legacy dotted tool aliases are accepted but still reject smuggled issue ids" do
     response =
       DynamicTool.execute(
