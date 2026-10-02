@@ -2,7 +2,7 @@ import AppKit
 import SymphonyBarCore
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemValidation {
     private var statusItem: NSStatusItem?
     private let settingsWindow = SettingsWindowController()
     private let runner = SymphonyRunner()
@@ -26,6 +26,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let releaseNotesItem = NSMenuItem(title: UpdateMenu.releaseNotesTitle, action: nil, keyEquivalent: "")
     /// The result of a Check for Updates chosen by hand, under that item.
     private let updateResultItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    private lazy var updater = UpdateController(current: updates.current)
+    private lazy var installUpdateItem = menuItem("", action: #selector(installUpdate(_:)))
+    /// Under Update to vX: the update's progress, why it failed, or why Update is off.
+    private let updateLineItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    /// Set when the app started Symphony after an update: resume dispatch once it answers.
+    private var resumeWhenAnswering = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         EditMenu.install()
@@ -55,7 +61,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         releaseNotesItem.action = #selector(showReleaseNotes(_:))
         releaseNotesItem.target = self
         updateResultItem.isEnabled = false
+        updateLineItem.isEnabled = false
         menu.addItem(updateAvailableItem)
+        menu.addItem(installUpdateItem)
+        menu.addItem(updateLineItem)
         menu.addItem(releaseNotesItem)
         menu.addItem(menuItem(UpdateMenu.checkTitle, action: #selector(checkForUpdates(_:))))
         menu.addItem(updateResultItem)
@@ -78,6 +87,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // Start, Stop, Restart, Pause, Resume and the open items are enabled by validateMenuItem; the status lines
         // stay disabled.
         menu.autoenablesItems = true
+        // Refreshes the update items each time the menu opens, as Settings may have changed.
+        menu.delegate = self
         item.menu = menu
 
         statusItem = item
@@ -85,11 +96,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
         runner.onEvent = { [weak self] event in self?.handle(event) }
         restarter.onChange = { [weak self] in self?.showStatus() }
+        updater.onChange = { [weak self] in self?.showUpdateItems() }
         poller.stateRoot = { [weak self] in self?.runner.stateRoot ?? StateRoot.locate() }
         poller.onPoll = { [weak self] poll in
             guard let self else { return StatusMachine.pollInterval }
             handle(.polled(poll))
             return machine.nextPollInterval
+        }
+
+        // After an update, bring Symphony back as it was before the app quit.
+        let pendingUpdate = updater.pending.take()
+        if let pendingUpdate {
+            updater.removeDownloads()
+            if !pendingUpdate.succeeded(runningBuild: updates.current.build) {
+                let message = UpdateMenu.rolledBackMessage(pendingUpdate, logPath: updater.helperLogPath)
+                DispatchQueue.main.async { SymphonyRunner.showAlert(title: UpdateMenu.failedTitle, body: message) }
+            }
         }
 
         // First run: nothing to start yet, so ask for settings. Reads only UserDefaults, not the Keychain.
@@ -98,9 +120,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let settings = store.loadSettings()
         if settings.needsSetup {
             settingsWindow.show()
-        } else if settings.startOnLaunch {
+        } else if settings.startOnLaunch || pendingUpdate?.startSymphony == true {
             // Wait for the first poll, so a Symphony already running from the CLI is attached to, not started twice.
             startWhenStopped = true
+            resumeWhenAnswering = pendingUpdate?.resumeDispatch == true
         }
         poller.start()
 
@@ -139,8 +162,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             menuItem.title = runner.isStopping && !restarting ? StatusMenu.stoppingTitle : StatusMenu.stopTitle
             return runner.isRunning && machine.canStop && !runner.isStopping && !restarting
         case #selector(restartSymphony(_:)):
-            menuItem.title = restarting ? StatusMenu.restartingTitle : StatusMenu.restartTitle
-            return !restarting && runner.isRunning && !runner.isStopping && StatusMenu.canRestart(machine.status)
+            let restartingOnly = restarting && restarter.machine.purpose == .restart
+            menuItem.title = restartingOnly ? StatusMenu.restartingTitle : StatusMenu.restartTitle
+            return !restarting && !updater.isUpdating && runner.isRunning && !runner.isStopping
+                && StatusMenu.canRestart(machine.status)
         case #selector(restartNow(_:)):
             return restarter.machine.offersRestartNow
         case #selector(cancelRestart(_:)):
@@ -165,6 +190,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             return !updates.isChecking
         case #selector(showReleaseNotes(_:)):
             return availableRelease != nil
+        case #selector(installUpdate(_:)):
+            return availableRelease != nil && !updater.isUpdating && !restarting && !runner.isStopping
+                && updateBlocker == nil && (!runner.isRunning || StatusMenu.canRestart(machine.status))
         default:
             return true
         }
@@ -174,6 +202,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         do {
             try runner.start()
         } catch {
+            resumeWhenAnswering = false
             SymphonyRunner.showAlert(title: "Couldn't start Symphony", body: error.localizedDescription)
             if (error as? LaunchProblem)?.isFixedInSettings == true {
                 settingsWindow.show()
@@ -253,7 +282,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         UpdatePoller.showReleaseNotes(release)
     }
 
-    /// Shows or hides the update items. Background check failures change nothing; a check chosen by hand
+    /// Asks to confirm, then downloads and verifies the release, drains and stops Symphony, and hands over to the
+    /// update helper, which swaps the app and relaunches it.
+    @objc private func installUpdate(_ sender: Any?) {
+        guard let release = availableRelease, updateBlocker == nil, !updater.isUpdating, !restarting else { return }
+        let alert = NSAlert()
+        alert.messageText = "\(UpdateMenu.installTitle(release))?"
+        alert.informativeText = UpdateMenu.confirmation(release, symphonyRunning: runner.isRunning)
+        alert.addButton(withTitle: "Update")
+        alert.addButton(withTitle: "Cancel")
+        SymphonyRunner.activateApp()
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        controlError = nil
+        updater.prepare(release) { [weak self] update in self?.drainForUpdate(update) }
+    }
+
+    /// Pauses dispatch, waits for agent runs and stops Symphony, then hands over. A Symphony the app doesn't run
+    /// is left alone.
+    private func drainForUpdate(_ update: PreparedUpdate) {
+        guard runner.isRunning else {
+            handOff(update, symphonyStopped: false, resumeDispatch: false)
+            return
+        }
+        guard !restarting, !runner.isStopping, StatusMenu.canRestart(machine.status) else {
+            updater.fail("Symphony is starting, stopping or restarting; try again once it runs.")
+            return
+        }
+        restarter.drainForUpdate(
+            alreadyPaused: StatusMenu.canResume(machine.status),
+            symphonyBinary: update.symphonyBinary
+        ) { [weak self] stopped, pausedByUpdate in
+            guard let self else { return }
+            guard stopped else {
+                updater.cancel()
+                return
+            }
+            handOff(update, symphonyStopped: true, resumeDispatch: pausedByUpdate)
+        }
+    }
+
+    /// Starts the update helper and quits. When the helper can't start, Symphony comes back as it was.
+    private func handOff(_ update: PreparedUpdate, symphonyStopped: Bool, resumeDispatch: Bool) {
+        do {
+            try updater.handOff(update, symphonyStopped: symphonyStopped, resumeDispatch: resumeDispatch)
+            NSApp.terminate(nil)
+        } catch {
+            updater.fail(error.localizedDescription)
+            guard symphonyStopped else { return }
+            startSymphony(nil)
+            resumeWhenAnswering = resumeDispatch && runner.isRunning
+        }
+    }
+
+    /// Why Update is off, nil when it is available.
+    private var updateBlocker: String? {
+        updater.blocker(developmentMode: SettingsStore().loadSettings().developmentMode)
+    }
+
+    /// Records the result of an update check. Background check failures change nothing; a check chosen by hand
     /// leaves its result under Check for Updates.
     private func showUpdate(_ result: UpdateCheckResult?, manual: Bool) {
         switch result {
@@ -264,16 +351,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         case .failed?, nil:
             break
         }
-        if let release = availableRelease {
-            updateAvailableItem.title = UpdateMenu.availableTitle(release, current: updates.current)
-        }
-        updateAvailableItem.isHidden = availableRelease == nil
-        releaseNotesItem.isHidden = availableRelease == nil
-
         if manual {
             updateResultItem.title = result.flatMap(UpdateMenu.manualResultLine) ?? ""
         }
+        showUpdateItems()
+    }
+
+    /// Shows or hides the update items.
+    private func showUpdateItems() {
+        let release = availableRelease
+        if let release {
+            updateAvailableItem.title = UpdateMenu.availableTitle(release, current: updates.current)
+            installUpdateItem.title = updater.isUpdating ? UpdateMenu.installingTitle : UpdateMenu.installTitle(release)
+        }
+        updateAvailableItem.isHidden = release == nil
+        installUpdateItem.isHidden = release == nil
+        releaseNotesItem.isHidden = release == nil
+
+        let line = updater.menuLine ?? (release == nil ? nil : updateBlocker)
+        updateLineItem.title = line ?? ""
+        updateLineItem.isHidden = line == nil
         updateResultItem.isHidden = updateResultItem.title.isEmpty
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        showUpdateItems()
+    }
+
+    /// After an update, resumes the dispatch the update paused once the new Symphony answers.
+    private func resumeIfAnswering(_ poll: StatusPoll) {
+        guard resumeWhenAnswering, runner.isRunning, case .state = poll else { return }
+        resumeWhenAnswering = false
+        if StatusMenu.canResume(machine.status) { send(.resume) }
     }
 
     private func handle(_ event: StatusMachine.Event) {
@@ -284,6 +393,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             controlError = nil
         case let .exited(exit, _):
             controlError = nil
+            // Before the restart machine sees the exit, which may start Symphony again for a failed update.
+            resumeWhenAnswering = false
             restarter.handle(.exited(exit))
         case let .polled(poll):
             restarter.handle(.polled(poll))
@@ -291,10 +402,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         showStatus()
 
         switch event {
-        case .polled:
+        case let .polled(poll):
+            // Before a start below, so a poll taken before Symphony started can't count as its answer.
+            resumeIfAnswering(poll)
             if startWhenStopped {
                 startWhenStopped = false
-                if machine.canStart { startSymphony(nil) }
+                if machine.canStart {
+                    startSymphony(nil)
+                } else {
+                    resumeWhenAnswering = false
+                }
             }
         case .started, .exited:
             // Check straight away instead of waiting out the interval.
@@ -318,6 +435,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         sourceItem.title = runner.sourceLine
         guard let menu = statusTitleItem.menu else { return }
         detailItems.forEach(menu.removeItem)
+        let updating = restarter.machine.purpose == .update
+        restartNowItem.title = updating ? UpdateMenu.updateNowTitle : StatusMenu.restartNowTitle
+        cancelRestartItem.title = updating ? UpdateMenu.cancelUpdateTitle : StatusMenu.cancelRestartTitle
         restartNowItem.isHidden = !restarter.machine.offersRestartNow
         cancelRestartItem.isHidden = !restarter.machine.canCancel
         detailItems = StatusMenu.detailLines(

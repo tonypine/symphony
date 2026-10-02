@@ -84,7 +84,9 @@ If the icon turns to a warning triangle instead, choose **Open Logs** and see [T
 - **Resume Dispatch** lets Symphony pick up new issues again.
 - **Open Dashboard** opens the dashboard in the browser, and **Open Logs** opens Symphony's output log.
 - **Check for Updates…** looks for a newer Symphony release. When there is one, the menu shows
-  **Update available: vX (N changes)** and **Release Notes…**.
+  **Update available: vX (N changes)**, **Update to vX** and **Release Notes…**.
+- **Update to vX** downloads and verifies the release, waits for agent runs like Restart, then swaps the app
+  and relaunches it. See [Install an update](#install-an-update).
 - **Quit** stops Symphony first and asks before stopping active agent runs.
 
 The sections below describe each in detail.
@@ -252,6 +254,58 @@ of `Info.plist`, so it usually sees every release as newer.
 Background checks fail silently. When you choose Check for Updates, the result shows under it: "Symphony
 is up to date (vX)" or why the check failed, for example GitHub's rate limit.
 
+### Install an update
+
+**Update to vX** shows under Update available. After you confirm, the line under it shows each step:
+
+1. **Download** the release zip, its `.sha256` and its `.minisig` into
+   `~/Library/Caches/com.tonypine.symphony.bar/updates/`.
+2. **Verify** the zip's SHA-256 against the `.sha256`, then its minisign signature against the public key
+   built into the app (checked with CryptoKit; the `minisign` tool isn't needed). The update is refused,
+   with an alert that says why, on any mismatch.
+3. **Unzip** it with `ditto` and check the new app: `codesign --verify --strict` passes, it is Symphony
+   (same bundle identifier), its build is newer, and it is signed with the same certificate as the running
+   app. The Keychain keeps trusting a new version signed with the same certificate, so it doesn't prompt
+   again.
+4. **Drain Symphony** like [Restart](#restart), checking `symphony.yml` with the new version's Symphony:
+   pause dispatch, wait for `0 running` (**Update Now Anyway** shows after the restart timeout, **Cancel
+   Update** stops waiting), then stop Symphony. A Symphony the app didn't start is left alone.
+5. **Swap and relaunch:** the app starts a small helper (`Contents/Resources/update-helper.sh`, run from a
+   copy in the cache folder) and quits. Once the app has exited, the helper moves it to
+   `Symphony (previous).app` next to it (replacing an older one), moves the new app into place, and opens
+   it. If a move fails, it puts the old app back and opens that instead. Its log is
+   `~/Library/Caches/com.tonypine.symphony.bar/update-helper.log`.
+6. **Bring Symphony back:** the relaunched app starts Symphony from its new embedded binary and, once it
+   answers, resumes dispatch if the update paused it. A pause you made before the update stays. If the
+   helper had to put the old app back, an alert says so.
+
+Update is disabled, with the reason under it, when:
+
+- the app is a development build (no embedded Symphony), or Development mode is on;
+- the app was built without an update signing key (`MINISIGN_PUBLIC_KEY`, see
+  [docs/releasing.md](../docs/releasing.md));
+- the app's folder isn't writable, for example when macOS runs a downloaded app from a read-only
+  translocated copy. Move `Symphony.app` to `~/Applications` and open it from there.
+
+An app signed ad hoc refuses updates: there is no certificate to compare the new app's with. Install the
+release by hand, as on first install.
+
+### Roll back an update
+
+The replaced version stays next to the app, for example `~/Applications/Symphony (previous).app`. To go
+back to it:
+
+1. Quit Symphony from the menu (this stops Symphony).
+2. In Finder, or a terminal, swap the two apps:
+
+   ```bash
+   cd ~/Applications
+   mv Symphony.app "Symphony (rolled back).app"
+   mv "Symphony (previous).app" Symphony.app
+   ```
+
+3. Open `Symphony.app` and start Symphony. Delete `Symphony (rolled back).app` once you no longer need it.
+
 ## Troubleshooting
 
 - **macOS says the app can't be opened or is from an unidentified developer.** The app is ad-hoc signed,
@@ -273,6 +327,11 @@ is up to date (vX)" or why the check failed, for example GitHub's rate limit.
     `cd <checkout> && mise exec -- ./bin/symphony --config <symphony.yml>`.
 - **The menu shows "running (external)" and Start is disabled.** A Symphony started elsewhere (for example
   from a terminal) is answering on the control URL. Stop that one first, then Start from the menu.
+- **Update says "Symphony wasn't updated".** Nothing was replaced. A checksum or signature mismatch means
+  the download doesn't match what was published: check again later, or download the release by hand and
+  verify it as in [docs/releasing.md](../docs/releasing.md). "the update's signer can't be checked" or "isn't
+  signed with the same certificate" means this copy and the release are signed differently: install the
+  release by hand. A `symphony.yml` error comes from the new version's check; Symphony keeps running.
 - **Restart Symphony says "Symphony wasn't restarted".** The `symphony.yml` check (or the pause) failed, and
   the old Symphony is still running. Fix what the message names, then check it from a terminal with
   `Symphony.app/Contents/Resources/symphony check --config <symphony.yml>`, or in Development mode

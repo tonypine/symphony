@@ -51,6 +51,16 @@ optional; without them the release still publishes:
   asset. Without them there is no `.minisig`, and `version.json` has
   `"minisig": null`.
 
+One repository variable (**Settings → Secrets and variables → Actions → Variables**)
+is optional too:
+
+- `MINISIGN_PUBLIC_KEY`: the key line of the matching `minisign.pub` (the line
+  after `untrusted comment:`). `make bundle` writes it into the app's
+  `Info.plist` as `SymphonyUpdatePublicKey`, and the menu bar app verifies
+  updates against it. Without it the app's **Update to vX** item is off. The app
+  also refuses releases without a `.minisig`, and, while the app is signed ad
+  hoc, every update.
+
 The app is not notarized by Apple, so Gatekeeper warns on first launch of a
 downloaded copy. The release notes tell users to clear the quarantine flag with
 `xattr -dr com.apple.quarantine Symphony.app`.
@@ -75,7 +85,8 @@ cd macos
 make bundle SYMPHONY_BIN=../burrito_out/symphony-macos-arm64 SHORT_VERSION=0.0.1.0 BUILD_NUMBER=0
 ```
 
-`make bundle` signs ad hoc unless you pass `SIGNING_IDENTITY`.
+`make bundle` signs ad hoc unless you pass `SIGNING_IDENTITY`, and embeds the update key
+when you pass `MINISIGN_PUBLIC_KEY`.
 
 The release workflow smoke-tests the binary before and after signing; run the
 same check locally (cwd is `macos/`, after the commands above):

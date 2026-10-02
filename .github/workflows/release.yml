@@ -17,6 +17,11 @@ name: release
 #     and version.json says "signed": false.
 #   MINISIGN_SECRET_KEY, MINISIGN_PASSWORD
 #     publish a .minisig; without them version.json says "minisig": null.
+#
+# Optional repository variable:
+#   MINISIGN_PUBLIC_KEY
+#     the key line of the matching minisign.pub, embedded in the app so it can
+#     verify updates; without it the app's Update item is off.
 
 on:
   push:
@@ -126,6 +131,7 @@ jobs:
           SIGNED: ${{ steps.signing.outputs.signed }}
           SHORT_VERSION: ${{ steps.version.outputs.version }}
           BUILD_NUMBER: ${{ steps.version.outputs.build }}
+          MINISIGN_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
         run: |
           if [ "$SIGNED" = true ]; then
             identity="$MACOS_SIGNING_IDENTITY"

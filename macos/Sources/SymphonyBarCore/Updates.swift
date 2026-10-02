@@ -52,13 +52,34 @@ public struct Release: Equatable {
     public var pageURL: URL
     /// Number of changes since the previous release, when known.
     public var changes: Int?
+    /// Where to download the app from, nil when the release doesn't list it.
+    public var assets: ReleaseAssets?
 
-    public init(version: String, build: Int, notes: String, pageURL: URL, changes: Int?) {
+    public init(version: String, build: Int, notes: String, pageURL: URL, changes: Int?, assets: ReleaseAssets? = nil) {
         self.version = version
         self.build = build
         self.notes = notes
         self.pageURL = pageURL
         self.changes = changes
+        self.assets = assets
+    }
+}
+
+/// The download URLs of a release's zipped app and the files that check it.
+public struct ReleaseAssets: Equatable {
+    /// For example `Symphony-0.0.1.42.zip`.
+    public var zipName: String
+    public var zip: URL
+    /// The `.sha256` file.
+    public var checksum: URL
+    /// The `.minisig` file, nil when the release wasn't signed with minisign.
+    public var signature: URL?
+
+    public init(zipName: String, zip: URL, checksum: URL, signature: URL?) {
+        self.zipName = zipName
+        self.zip = zip
+        self.checksum = checksum
+        self.signature = signature
     }
 }
 
@@ -153,9 +174,12 @@ public final class UpdateChecker {
         guard versionResponse.statusCode == 200,
             let info = try? JSONDecoder().decode(VersionInfo.self, from: versionData)
         else { return .failure(.init("\(Self.versionAsset) for \(tag) couldn't be read")) }
-        guard let zip = info.zip, assets[zip] != nil, assets["\(zip).sha256"] != nil else {
+        guard let zip = info.zip, let zipURL = assets[zip].flatMap(URL.init(string:)),
+            let checksumURL = assets["\(zip).sha256"].flatMap(URL.init(string:))
+        else {
             return .failure(.init("the latest release (\(tag)) has no app to download"))
         }
+        let signatureURL = info.minisig.flatMap { assets[$0] }.flatMap(URL.init(string:))
 
         let notes = payload.body ?? ""
         let release = Release(
@@ -163,7 +187,8 @@ public final class UpdateChecker {
             build: info.build,
             notes: notes,
             pageURL: pageURL,
-            changes: Self.changeCount(notes: notes) ?? info.changes
+            changes: Self.changeCount(notes: notes) ?? info.changes,
+            assets: ReleaseAssets(zipName: zip, zip: zipURL, checksum: checksumURL, signature: signatureURL)
         )
         if let etag = response.value(forHTTPHeaderField: "ETag") {
             cached = (etag, release)
@@ -223,6 +248,7 @@ public final class UpdateChecker {
         let version: String
         let build: Int
         let zip: String?
+        let minisig: String?
         let changes: Int?
     }
 }
@@ -233,6 +259,34 @@ public enum UpdateMenu {
     public static let checkingTitle = "Checking for Updates…"
     public static let releaseNotesTitle = "Release Notes…"
     public static let openReleasePageTitle = "Open Release Page"
+    public static let installingTitle = "Updating Symphony…"
+    /// Shown while an update waits for agent runs, in place of the restart's items.
+    public static let updateNowTitle = "Update Now Anyway"
+    public static let cancelUpdateTitle = "Cancel Update"
+    public static let failedTitle = "Symphony wasn't updated"
+
+    /// For example "Update to v0.0.1.42".
+    public static func installTitle(_ release: Release) -> String {
+        "Update to v\(release.version)"
+    }
+
+    /// The line under the update items while the release downloads and is checked.
+    public static func preparingLine(_ release: Release) -> String {
+        "Updating: downloading and verifying v\(release.version)…"
+    }
+
+    /// The confirmation before an update, which says what will happen to agent runs.
+    public static func confirmation(_ release: Release, symphonyRunning: Bool) -> String {
+        let swap = "Symphony downloads and verifies v\(release.version), then relaunches as the new version. "
+            + "The current version is kept as Symphony (previous).app."
+        guard symphonyRunning else { return swap }
+        return swap + " Dispatch is paused first, and the update waits for active agent runs to finish."
+    }
+
+    /// Shown after a relaunch that is still the old build: the helper put the old app back.
+    public static func rolledBackMessage(_ pending: PendingUpdate, logPath: String) -> String {
+        "The update to v\(pending.version) couldn't replace the app, so this version was put back. See \(logPath)."
+    }
 
     /// For example "Update available: v0.0.1.42 (12 changes)", labelled for a development build.
     public static func availableTitle(_ release: Release, current: AppBuild) -> String {

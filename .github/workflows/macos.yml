@@ -44,3 +44,7 @@ jobs:
       - name: Run tests
         working-directory: macos
         run: time swift test
+
+      - name: Test the update helper
+        working-directory: macos
+        run: time sh Tests/update-helper-test.sh

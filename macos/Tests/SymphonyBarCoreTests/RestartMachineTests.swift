@@ -298,4 +298,82 @@ final class RestartMachineTests: XCTestCase {
         XCTAssertEqual(checking.handle(.controlFinished(.resume, .done)), [])
         XCTAssertEqual(checking.phase, .checkingConfig)
     }
+
+    // MARK: Update
+
+    private func beginUpdate(alreadyPaused: Bool = false) -> (RestartMachine, [Effect]) {
+        var machine = RestartMachine()
+        let effects = machine.begin(
+            alreadyPaused: alreadyPaused,
+            symphonyBinary: "/cache/Symphony.app/Contents/Resources/symphony",
+            purpose: .update,
+            runsTimeout: runsTimeout,
+            logPath: log,
+            now: began
+        )
+        return (machine, effects)
+    }
+
+    func testUpdateDrainsThenStopsWithoutStarting() {
+        var (machine, effects) = beginUpdate()
+        XCTAssertEqual(effects, [.checkConfig(symphonyBinary: "/cache/Symphony.app/Contents/Resources/symphony")])
+        XCTAssertEqual(machine.purpose, .update)
+        XCTAssertEqual(machine.menuLine, "Updating: checking symphony.yml…")
+
+        XCTAssertEqual(machine.handle(.configChecked(.passed), now: began), [.send(.pause)])
+        XCTAssertEqual(machine.menuLine, "Updating: pausing dispatch…")
+        XCTAssertEqual(machine.handle(.controlFinished(.pause, .done), now: began), [.pollNow])
+        XCTAssertEqual(machine.handle(.polled(pausedPoll(running: 2)), now: began), [])
+        XCTAssertEqual(machine.menuLine, "Waiting for 2 agent runs…")
+        XCTAssertEqual(machine.handle(.polled(pausedPoll(running: 0)), now: began), [.stop])
+        XCTAssertEqual(machine.menuLine, "Updating: stopping Symphony…")
+
+        effects = machine.handle(.exited(.signaled(15)), now: began)
+
+        XCTAssertEqual(effects, [.stopped])
+        XCTAssertFalse(machine.isRestarting)
+        XCTAssertTrue(machine.pausedByRestart, "the relaunched app resumes the dispatch the update paused")
+        XCTAssertNil(machine.menuLine)
+    }
+
+    func testUpdateKeepsAPauseTheUserMade() {
+        var (machine, _) = beginUpdate(alreadyPaused: true)
+        XCTAssertEqual(machine.handle(.configChecked(.passed), now: began), [.pollNow])
+        XCTAssertEqual(machine.handle(.polled(pausedPoll(running: 0)), now: began), [.stop])
+
+        XCTAssertEqual(machine.handle(.exited(.signaled(15)), now: began), [.stopped])
+        XCTAssertFalse(machine.pausedByRestart)
+    }
+
+    func testUpdateNowAnywayAfterTheTimeout() {
+        var (machine, _) = beginUpdate()
+        _ = machine.handle(.configChecked(.passed), now: began)
+        _ = machine.handle(.controlFinished(.pause, .done), now: began)
+        _ = machine.handle(.polled(pausedPoll(running: 1)), now: began.addingTimeInterval(runsTimeout))
+        XCTAssertTrue(machine.offersRestartNow)
+
+        XCTAssertEqual(machine.handle(.restartNow, now: began.addingTimeInterval(runsTimeout)), [.stop])
+        XCTAssertEqual(machine.handle(.exited(.signaled(15)), now: began), [.stopped])
+    }
+
+    func testNewBinaryConfigErrorRefusesTheUpdate() {
+        var (machine, _) = beginUpdate()
+
+        let effects = machine.handle(.configChecked(.failed("Config error: unknown key")), now: began)
+
+        XCTAssertEqual(
+            effects,
+            [.alert(title: "Symphony wasn't updated", message: "Config error: unknown key\n\nSymphony keeps running.")]
+        )
+        XCTAssertFalse(machine.isRestarting)
+    }
+
+    func testSymphonyExitingDuringTheDrainCancelsTheUpdate() {
+        var (machine, _) = beginUpdate()
+        _ = machine.handle(.configChecked(.passed), now: began)
+
+        XCTAssertEqual(machine.handle(.exited(.exited(1)), now: began), [])
+        XCTAssertFalse(machine.isRestarting)
+        XCTAssertEqual(machine.menuLine, "Update cancelled: Symphony \(ChildExit.exited(1).summary)")
+    }
 }
