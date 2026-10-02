@@ -11,7 +11,7 @@ defmodule SymphonyElixir.AgentTools.GitHub do
   alias SymphonyElixir.CiPoller
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.GitHub.PullRequest
+  alias SymphonyElixir.GitHub.{CommentMarker, PullRequest}
   alias SymphonyElixir.Workspace
 
   @merging_state "Merging"
@@ -84,7 +84,7 @@ defmodule SymphonyElixir.AgentTools.GitHub do
     with {:ok, body} <- require_string(body, :invalid_body),
          :ok <- SecretScanner.reject_fields_if_secret_pattern([body: body], context, "github_add_pr_comment", opts),
          {:ok, pr_url} <- current_pull_request_url(context, opts),
-         {:ok, _output} <- PullRequest.run_gh(["pr", "comment", pr_url, "--body", body], github_opts(context, opts)) do
+         {:ok, _output} <- PullRequest.run_gh(["pr", "comment", pr_url, "--body", CommentMarker.mark(body)], github_opts(context, opts)) do
       {:ok, %{"url" => pr_url}}
     end
   end
@@ -102,7 +102,7 @@ defmodule SymphonyElixir.AgentTools.GitHub do
            ),
          {:ok, pr_url} <- current_pull_request_url(context, opts),
          {:ok, payload} <-
-           PullRequest.post_inline_comment_reply(pr_url, comment_id, body, github_opts(context, opts)) do
+           PullRequest.post_inline_comment_reply(pr_url, comment_id, CommentMarker.mark(body), github_opts(context, opts)) do
       {:ok,
        %{
          "pr_url" => pr_url,

@@ -7,7 +7,7 @@ defmodule SymphonyElixir.PrReviewPoller do
   require Logger
 
   alias SymphonyElixir.{AuditLog, CiPoller, Config, Notifications, RunStore, Tracker, Workspace}
-  alias SymphonyElixir.GitHub.PullRequest
+  alias SymphonyElixir.GitHub.{CommentMarker, PullRequest}
   alias SymphonyElixir.Learnings.Reflection
   alias SymphonyElixir.Linear.Issue
 
@@ -694,6 +694,7 @@ defmodule SymphonyElixir.PrReviewPoller do
         last_review_activity_at: latest_review_activity_at,
         last_unaddressed_comment_at: latest_unaddressed_comment_at,
         last_review_decision: Map.get(activity, :review_decision),
+        review_self_users: ignored_users.self,
         updated_at: now
       }
       |> maybe_put_conflict_attrs(record, activity, now)
@@ -1453,14 +1454,14 @@ defmodule SymphonyElixir.PrReviewPoller do
     is_binary(pending_cursor) and pending_cursor != "" and pending_cursor == addressed_cursor
   end
 
-  defp reviewer_comments(comments, ignored_users) when is_list(ignored_users) do
+  defp reviewer_comments(comments, ignored_users) when is_map(ignored_users) do
     comments
     |> normalize_comments()
     |> Enum.reject(&(ignored_comment?(&1, ignored_users) or String.trim(Map.get(&1, :body, "")) == ""))
     |> sort_comments()
   end
 
-  defp review_activity_events(comments, ignored_users) when is_list(ignored_users) do
+  defp review_activity_events(comments, ignored_users) when is_map(ignored_users) do
     comments
     |> normalize_comments()
     |> Enum.reject(&(ignored_comment?(&1, ignored_users) or review_activity_drop?(&1)))
@@ -1503,15 +1504,37 @@ defmodule SymphonyElixir.PrReviewPoller do
 
   defp normalize_comment(_comment), do: %{id: nil}
 
-  defp ignored_comment?(comment, ignored_users) when is_list(ignored_users) do
+  # Configured ignored reviewers are always skipped. The PR author and the
+  # current `gh` user are the account Symphony posts with, which on a solo setup
+  # is also the human reviewer: their comments count as reviewer feedback unless
+  # Symphony posted them (marked) or they carry no text, such as the empty review
+  # GitHub wraps around a reply.
+  defp ignored_comment?(comment, %{ignored: ignored, self: self_users}) do
     author = normalize_user(Map.get(comment, :author))
 
-    author != nil and author in ignored_users
+    cond do
+      author == nil -> false
+      author in ignored -> true
+      author in self_users -> not operator_feedback?(comment)
+      true -> false
+    end
+  end
+
+  defp operator_feedback?(comment) do
+    body = Map.get(comment, :body)
+
+    is_binary(body) and String.trim(body) != "" and not CommentMarker.symphony_authored?(body)
   end
 
   defp ignored_review_users(settings, activity, current_gh_user) do
-    (configured_ignored_users(settings) ++
-       [Map.get(activity || %{}, :pr_author), current_gh_user])
+    ignored = settings |> configured_ignored_users() |> normalize_users()
+    self_users = normalize_users([Map.get(activity || %{}, :pr_author), current_gh_user])
+
+    %{ignored: ignored, self: self_users -- ignored}
+  end
+
+  defp normalize_users(users) do
+    users
     |> Enum.map(&normalize_user/1)
     |> Enum.reject(&is_nil/1)
     |> Enum.uniq()
@@ -2306,7 +2329,7 @@ defmodule SymphonyElixir.PrReviewPoller do
   defp maybe_request_review(record, comments, settings, github, opts, now) do
     if Map.get(settings.pr_review, :auto_request_review, false) do
       comments
-      |> reviewers_for_request(settings)
+      |> reviewers_for_request(record, settings)
       |> request_review(record, github)
       |> handle_request_review_result(record, opts, now)
     else
@@ -2337,8 +2360,9 @@ defmodule SymphonyElixir.PrReviewPoller do
     end
   end
 
-  defp reviewers_for_request(comments, settings) do
-    ignored = settings |> configured_ignored_users() |> Enum.map(&normalize_user/1) |> Enum.reject(&is_nil/1)
+  defp reviewers_for_request(comments, record, settings) do
+    # GitHub rejects review requests to the PR author, so skip Symphony's own account.
+    ignored = normalize_users(configured_ignored_users(settings) ++ string_list(Map.get(record, :review_self_users)))
 
     comments
     |> Enum.map(&Map.get(&1, :author))

@@ -1123,7 +1123,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
              "baseRefName" => "main"
            }), 0}
 
-        ["pr", "comment", ^pr_url, "--body", "Validation passed"], opts ->
+        ["pr", "comment", ^pr_url, "--body", "Validation passed\n\n<!-- symphony:agent -->"], opts ->
           assert opts[:cd] == workspace
           {"", 0}
       end
@@ -1168,7 +1168,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
              "baseRefName" => "main"
            }), 0}
 
-        ["api", "repos/acme/symphony/pulls/3051/comments/123/replies", "-f", "body=Acked."], opts ->
+        ["api", "repos/acme/symphony/pulls/3051/comments/123/replies", "-f", "body=Acked.\n\n<!-- symphony:agent -->"], opts ->
           assert opts[:cd] == workspace
           {Jason.encode!(%{"id" => 4242, "html_url" => "#{pr_url}#discussion_r4242"}), 0}
       end
@@ -1253,7 +1253,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
         ["pr", "view", "auto/ACME-3051", "--repo", "acme/symphony", "--json", _fields], _opts ->
           {Jason.encode!(%{"number" => 3051, "url" => pr_url}), 0}
 
-        ["api", "repos/acme/symphony/pulls/3051/comments/123/replies", "-f", "body=Hi"], _opts ->
+        ["api", "repos/acme/symphony/pulls/3051/comments/123/replies", "-f", "body=Hi\n\n<!-- symphony:agent -->"], _opts ->
           {Jason.encode!(%{"id" => 4242, "html_url" => "#{pr_url}#discussion_r4242"}), 0}
       end
 

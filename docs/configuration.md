@@ -462,6 +462,10 @@ pull_requests:
 - `poll_interval_ms` is shared by PR review polling and CI polling when checks are enabled.
 - PR polling detects GitHub merge-conflict signals, deduplicates by head/base identity, and injects
   conflict-resolution context into the next prompt. The agent still owns the merge resolution.
+- `review_comments.ignored_reviewers` skips those accounts entirely. Comments from the PR author
+  and the current `gh` user still count as review feedback, so your own review comments on an
+  agent PR send the issue back to work on the same PR. Symphony ends every PR comment it posts
+  with a hidden `<!-- symphony:agent -->` marker and skips those.
 - `checks.retry_failed_once` retries one likely-flaky failure before escalating.
 - `checks.max_fix_attempts` bounds automated CI rework.
 

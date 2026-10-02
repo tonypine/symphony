@@ -1426,6 +1426,12 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   @doc false
+  @spec sibling_active_workspace_identifiers_for_test(State.t(), String.t(), String.t() | nil) :: [String.t()]
+  def sibling_active_workspace_identifiers_for_test(%State{} = state, issue_id, repo_key) do
+    sibling_active_workspace_identifiers(state, issue_id, repo_key)
+  end
+
+  @doc false
   @spec seed_watching_for_test(State.t()) :: State.t()
   def seed_watching_for_test(%State{} = state) do
     seed_watching_from_completed_run_metadata(state)
@@ -2773,7 +2779,8 @@ defmodule SymphonyElixir.Orchestrator do
                repo_key: repo_key,
                worker_host: worker_host,
                run_id: run_id,
-               verification: verification
+               verification: verification,
+               active_workspace_identifiers: sibling_active_workspace_identifiers(state, issue.id, repo_key)
              ] ++ runner_opts
 
            AgentRunner.run(issue, recipient, opts)
@@ -3375,6 +3382,26 @@ defmodule SymphonyElixir.Orchestrator do
       identifiers = running_workspace_identifiers(running_entry)
       Map.update(acc, repo_key, identifiers, &(identifiers ++ &1))
     end)
+  end
+
+  # Workspaces other running or retrying issues in the same repo own. The
+  # dispatched agent must not detach their worktrees to take over a shared PR
+  # branch (see `Workspace.create_for_issue/4`).
+  defp sibling_active_workspace_identifiers(%State{} = state, issue_id, repo_key) do
+    running =
+      state.running
+      |> Enum.reject(fn {running_id, _entry} -> running_id == issue_id end)
+      |> Enum.filter(fn {_id, entry} -> (Map.get(entry, :repo_key) || state.repo_key) == repo_key end)
+      |> Enum.flat_map(fn {_id, entry} -> running_workspace_identifiers(entry) end)
+
+    retrying =
+      state.retry_attempts
+      |> Enum.reject(fn {retry_id, _retry} -> retry_id == issue_id end)
+      |> Enum.filter(fn {_id, retry} -> (Map.get(retry, :repo_key) || state.repo_key) == repo_key end)
+      |> Enum.map(fn {_id, retry} -> retry end)
+      |> retry_identifiers()
+
+    Enum.uniq(running ++ retrying)
   end
 
   defp running_workspace_identifiers(running_entry) do
