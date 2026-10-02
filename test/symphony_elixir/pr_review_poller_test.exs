@@ -2734,6 +2734,50 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     assert [] = RunStore.list_pr_reviews()
   end
 
+  test "defers merged-PR workspace cleanup until the issue's agent run ends" do
+    now = ~U[2026-05-01 09:00:00Z]
+    Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now)])
+    Application.put_env(:symphony_elixir, :pr_review_test_activity, open_activity(now, state: "MERGED"))
+    :ok = put_review(now)
+
+    run = %{
+      repo_key: @repo_key,
+      run_id: "run-landing-1780",
+      issue_id: "issue-1780",
+      issue_identifier: "ACME-1780",
+      status: "running",
+      workspace_path: "/tmp/workspaces/ACME-1780",
+      worker_host: nil,
+      started_at: DateTime.add(now, -60, :second)
+    }
+
+    :ok = RunStore.put_run(run)
+
+    assert {:ok, %{actions: [{:cleanup_deferred, "issue-1780", "merged"}]}} =
+             PrReviewPoller.poll_once(
+               tracker: FakeTracker,
+               github: FakeGitHub,
+               workspace: FakeWorkspace,
+               now: now
+             )
+
+    refute_received {:remove_workspace, _workspace_path, _worker_host}
+    assert [%{issue_id: "issue-1780", status: "watching"}] = RunStore.list_pr_reviews()
+
+    :ok = RunStore.put_run(Map.merge(run, %{status: "success", ended_at: now}))
+
+    assert {:ok, %{actions: [{:cleanup, "issue-1780", "merged"}]}} =
+             PrReviewPoller.poll_once(
+               tracker: FakeTracker,
+               github: FakeGitHub,
+               workspace: FakeWorkspace,
+               now: now
+             )
+
+    assert_receive {:remove_workspace, "/tmp/workspaces/ACME-1780", nil}
+    assert [] = RunStore.list_pr_reviews()
+  end
+
   test "does not run learning reflection when learnings are disabled" do
     now = ~U[2026-05-01 09:00:00Z]
     Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now)])

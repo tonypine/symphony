@@ -1130,29 +1130,40 @@ defmodule SymphonyElixir.PrReviewPoller do
     workspace = Keyword.get(opts, :workspace, Workspace)
     run_store = Keyword.get(opts, :run_store, RunStore)
 
-    if workspace_removed?(record) do
-      delete_review_after_cleanup(run_store, record, reason)
-    else
-      case workspace.remove(Map.get(record, :workspace_path), Map.get(record, :worker_host)) do
-        {:ok, _removed_paths} ->
-          finish_workspace_cleanup(record, opts, now, reason)
+    cond do
+      workspace_removed?(record) ->
+        delete_review_after_cleanup(run_store, record, reason)
 
-        {:error, cleanup_reason, output} ->
-          complete_review_update(
-            opts,
-            record,
-            cleanup_error_attrs(record, {cleanup_reason, output}, opts, now),
-            {:cleanup_error, Map.get(record, :issue_id), cleanup_reason}
-          )
+      active_agent_run?(Map.get(record, :issue_id), opts) ->
+        # Removing the workspace under a live agent turn breaks its post-turn
+        # steps; keep the record so the next poll cleans up after the run ends.
+        {:cleanup_deferred, Map.get(record, :issue_id), reason}
 
-        other ->
-          complete_review_update(
-            opts,
-            record,
-            cleanup_error_attrs(record, other, opts, now),
-            {:cleanup_error, Map.get(record, :issue_id), other}
-          )
-      end
+      true ->
+        remove_review_workspace(workspace, record, opts, now, reason)
+    end
+  end
+
+  defp remove_review_workspace(workspace, record, opts, now, reason) do
+    case workspace.remove(Map.get(record, :workspace_path), Map.get(record, :worker_host)) do
+      {:ok, _removed_paths} ->
+        finish_workspace_cleanup(record, opts, now, reason)
+
+      {:error, cleanup_reason, output} ->
+        complete_review_update(
+          opts,
+          record,
+          cleanup_error_attrs(record, {cleanup_reason, output}, opts, now),
+          {:cleanup_error, Map.get(record, :issue_id), cleanup_reason}
+        )
+
+      other ->
+        complete_review_update(
+          opts,
+          record,
+          cleanup_error_attrs(record, other, opts, now),
+          {:cleanup_error, Map.get(record, :issue_id), other}
+        )
     end
   end
 

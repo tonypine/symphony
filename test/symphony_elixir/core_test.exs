@@ -6,6 +6,14 @@ defmodule SymphonyElixir.CoreTest do
   alias SymphonyElixir.Config.Schema.Tracker, as: TrackerConfig
   alias SymphonyElixir.Secret
 
+  defmodule TerminalGuardDependencyAudit do
+    @spec audit(Path.t(), keyword()) :: {:ok, []} | {:hold, [map()]} | {:error, term()}
+    def audit(workspace, _opts) do
+      send(Application.fetch_env!(:symphony_elixir, :terminal_guard_audit_recipient), {:dependency_audit, workspace})
+      Application.fetch_env!(:symphony_elixir, :terminal_guard_audit_result)
+    end
+  end
+
   defmodule AttachedPrGitHub do
     # Stands in for GitHub.PullRequest.fetch_ci_status/2 on the attached PR; the
     # PR URL's fragment carries the head ref (and optional state) to report.
@@ -3997,7 +4005,12 @@ defmodule SymphonyElixir.CoreTest do
         state: "In Progress"
       }
 
-      state_fetcher = fn _ids -> flunk("dependency hold should stop before issue continuation fetch") end
+      test_pid = self()
+
+      state_fetcher = fn ids ->
+        send(test_pid, {:issue_state_fetch, ids})
+        {:ok, [issue]}
+      end
 
       assert :ok =
                AgentRunner.run(issue, nil,
@@ -4006,6 +4019,8 @@ defmodule SymphonyElixir.CoreTest do
                  issue_enricher: no_op_issue_enricher()
                )
 
+      assert_receive {:issue_state_fetch, ["issue-dep-hold"]}
+      refute_receive {:issue_state_fetch, _ids}, 50
       assert_receive {:memory_tracker_state_update, "issue-dep-hold", "In Review"}, 500
 
       assert_receive {:notification_event,
@@ -4019,6 +4034,124 @@ defmodule SymphonyElixir.CoreTest do
     after
       File.rm_rf(test_root)
     end
+  end
+
+  describe "agent runner dependency audit after the issue lands" do
+    setup do
+      test_root =
+        Path.join(
+          System.tmp_dir!(),
+          "symphony-elixir-agent-runner-terminal-guard-#{System.unique_integer([:positive])}"
+        )
+
+      workspace = Path.join([test_root, "workspaces", "MT-TERMINAL-GUARD"])
+      File.mkdir_p!(workspace)
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+      Application.put_env(:symphony_elixir, :terminal_guard_audit_recipient, self())
+
+      on_exit(fn ->
+        Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
+        Application.delete_env(:symphony_elixir, :terminal_guard_audit_recipient)
+        Application.delete_env(:symphony_elixir, :terminal_guard_audit_result)
+        File.rm_rf(test_root)
+      end)
+
+      issue = %Issue{
+        id: "issue-terminal-guard",
+        identifier: "MT-TERMINAL-GUARD",
+        title: "Terminal guard",
+        description: "Agent merges its PR during the turn",
+        state: "Merging"
+      }
+
+      %{test_root: test_root, workspace: workspace, issue: issue}
+    end
+
+    test "skips the audit when cleanup removed the workspace mid-turn", context do
+      write_terminal_guard_workflow!(context.test_root, ~s(rm -rf "#{context.workspace}"))
+      Application.put_env(:symphony_elixir, :terminal_guard_audit_result, {:hold, [%{package: "base_ref"}]})
+
+      assert :ok = run_terminal_guard_issue(context.issue, context.workspace)
+
+      refute File.exists?(context.workspace)
+      refute_received {:dependency_audit, _workspace}
+      refute_received {:memory_tracker_state_update, "issue-terminal-guard", _state}
+    end
+
+    test "does not move a terminal issue when the audit holds", context do
+      write_terminal_guard_workflow!(context.test_root)
+      Application.put_env(:symphony_elixir, :terminal_guard_audit_result, {:hold, [%{package: "helper"}]})
+      assert :ok = SymphonyElixir.Notifications.subscribe()
+
+      assert :ok = run_terminal_guard_issue(context.issue, context.workspace)
+
+      assert_received {:dependency_audit, _workspace}
+      refute_received {:memory_tracker_state_update, "issue-terminal-guard", _state}
+      refute_received {:notification_event, %SymphonyElixir.Notifications.Event{event: "dependency_pending_approval"}}
+    end
+
+    test "does not fail the run for a terminal issue when the audit errors", context do
+      write_terminal_guard_workflow!(context.test_root)
+      Application.put_env(:symphony_elixir, :terminal_guard_audit_result, {:error, :base_ref_unavailable})
+
+      assert :ok = run_terminal_guard_issue(context.issue, context.workspace)
+
+      assert_received {:dependency_audit, _workspace}
+      refute_received {:memory_tracker_state_update, "issue-terminal-guard", _state}
+    end
+
+    test "still fails the run for an active issue when the audit errors", context do
+      write_terminal_guard_workflow!(context.test_root)
+      Application.put_env(:symphony_elixir, :terminal_guard_audit_result, {:error, :base_ref_unavailable})
+
+      assert_raise RuntimeError, ~r/dependency_audit_failed/, fn ->
+        run_terminal_guard_issue(context.issue, context.workspace, "In Progress")
+      end
+    end
+  end
+
+  defp write_terminal_guard_workflow!(test_root, turn_command \\ ":") do
+    codex_binary = Path.join(test_root, "fake-codex")
+
+    File.write!(codex_binary, """
+    #!/bin/sh
+    count=0
+
+    while IFS= read -r line; do
+      count=$((count + 1))
+      case "$count" in
+        1)
+          printf '%s\\n' '{"id":1,"result":{}}'
+          ;;
+        3)
+          printf '%s\\n' '{"id":2,"result":{"thread":{"id":"thread-terminal-guard"}}}'
+          ;;
+        4)
+          #{turn_command}
+          printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-terminal-guard","status":"inProgress","items":[]}}}'
+          printf '%s\\n' '{"method":"turn/completed"}'
+          ;;
+      esac
+    done
+    """)
+
+    File.chmod!(codex_binary, 0o755)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      workspace_root: Path.join(test_root, "workspaces"),
+      agent_command: "#{codex_binary} app-server",
+      max_turns: 1
+    )
+  end
+
+  defp run_terminal_guard_issue(issue, workspace, refreshed_state \\ "Done") do
+    AgentRunner.run(issue, nil,
+      workspace_path: workspace,
+      issue_state_fetcher: fn _ids -> {:ok, [%{issue | state: refreshed_state}]} end,
+      issue_enricher: no_op_issue_enricher(),
+      dependency_audit_module: TerminalGuardDependencyAudit
+    )
   end
 
   test "agent runner review-agent approval injects a push handoff prompt" do

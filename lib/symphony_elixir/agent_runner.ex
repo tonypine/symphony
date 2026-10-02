@@ -13,6 +13,7 @@ defmodule SymphonyElixir.AgentRunner do
     CiPoller,
     Config,
     DependencyAudit,
+    DependencyGate,
     GitHub.PullRequest,
     Linear.Issue,
     Notifications,
@@ -432,7 +433,7 @@ defmodule SymphonyElixir.AgentRunner do
            ) do
       Logger.info("Completed agent run for #{issue_context(issue)} session_id=#{turn_session[:session_id]} workspace=#{workspace} turn=#{turn_number}/#{max_turns}")
 
-      case maybe_hold_for_dependency_approval(workspace, issue, turn_session, opts) do
+      case maybe_hold_for_dependency_approval(workspace, issue, turn_session, run_context) do
         :ok ->
           continue_after_completed_turn(
             issue,
@@ -473,7 +474,19 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp maybe_hold_for_dependency_approval(workspace, issue, turn_session, opts) do
+  # The workspace can be removed mid-turn (for example by PR-merge cleanup) and
+  # the agent may already have moved the issue to a terminal state. Neither case
+  # should turn into a hold that reopens the issue.
+  defp maybe_hold_for_dependency_approval(workspace, issue, turn_session, run_context) do
+    if DependencyGate.workspace_missing?(workspace, run_context.worker_host) do
+      Logger.info("Skipping dependency audit for #{issue_context(issue)}; workspace is gone workspace=#{workspace}")
+      :ok
+    else
+      audit_dependencies(workspace, issue, turn_session, run_context)
+    end
+  end
+
+  defp audit_dependencies(workspace, issue, turn_session, %{opts: opts, issue_state_fetcher: issue_state_fetcher}) do
     audit_module = dependency_audit_module(opts)
 
     audit_opts =
@@ -486,13 +499,21 @@ defmodule SymphonyElixir.AgentRunner do
       {:ok, []} ->
         :ok
 
-      {:hold, items} ->
-        hold_dependency_approval(issue, items, turn_session, opts)
-
-      {:error, reason} ->
-        {:error, {:dependency_audit_failed, reason}}
+      result ->
+        if DependencyGate.issue_terminal?(issue, issue_state_fetcher) do
+          Logger.info("Skipping dependency hold for #{issue_context(issue)}; issue is already terminal")
+          :ok
+        else
+          react_to_dependency_audit(result, issue, turn_session, opts)
+        end
     end
   end
+
+  defp react_to_dependency_audit({:hold, items}, issue, turn_session, opts),
+    do: hold_dependency_approval(issue, items, turn_session, opts)
+
+  defp react_to_dependency_audit({:error, reason}, _issue, _turn_session, _opts),
+    do: {:error, {:dependency_audit_failed, reason}}
 
   defp dependency_audit_module(opts) do
     Keyword.get(opts, :dependency_audit_module) || DependencyAudit
