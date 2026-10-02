@@ -1933,6 +1933,11 @@ Subprocess launch parameters:
 - Working directory: workspace path
 - Transport/framing: the protocol transport required by the configured adapter
 
+An agent subprocess MUST NOT outlive its session or the Symphony process. When the subprocess's
+transport closes, or Symphony stops (for example on SIGTERM), the implementation SHOULD send SIGTERM
+to the subprocess's process group and SIGKILL after a short grace period. Closing stdin alone is not
+enough: an agent may ignore EOF.
+
 Notes:
 
 - The Elixir implementation requires explicit `agent.runtime` and `agent.command`.

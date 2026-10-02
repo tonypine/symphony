@@ -32,9 +32,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private let updateLineItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     /// Set when the app started Symphony after an update: resume dispatch once it answers.
     private var resumeWhenAnswering = false
+    /// Stops an owned Symphony before the app exits on SIGTERM, SIGINT or SIGHUP.
+    private var terminationSignals: TerminationSignals?
+    private var exitingOnSignal = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         EditMenu.install()
+        terminationSignals = TerminationSignals(queue: .main) { [weak self] number in
+            MainActor.assumeIsolated { self?.terminate(onSignal: number) }
+        }
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 
@@ -152,6 +158,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             runner.stop { sender.reply(toApplicationShouldTerminate: true) }
         }
         return .terminateLater
+    }
+
+    /// A signal skips `applicationShouldTerminate`, so stop Symphony here, without asking, then exit. The exit runs
+    /// before the runner reports the exit, so a Restart under way can't start Symphony again. A second signal while
+    /// Symphony stops changes nothing: the stop already escalates to SIGKILL.
+    private func terminate(onSignal number: Int32) {
+        guard !exitingOnSignal else { return }
+        exitingOnSignal = true
+        runner.stop { TerminationSignals.exit(as: number) }
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {

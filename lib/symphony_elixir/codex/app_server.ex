@@ -7,6 +7,7 @@ defmodule SymphonyElixir.Codex.AppServer do
 
   require Logger
   alias SymphonyElixir.AgentEnv
+  alias SymphonyElixir.AgentProcesses
   alias SymphonyElixir.AgentSandboxConfig
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
   alias SymphonyElixir.AuditLog
@@ -502,6 +503,8 @@ defmodule SymphonyElixir.Codex.AppServer do
           ]
         )
 
+      :ok = AgentProcesses.track(port)
+
       case start_stdout_pump(port) do
         {:ok, stdout_pump} ->
           stderr_tail = start_stderr_tail(stderr_log_path, port)
@@ -534,6 +537,8 @@ defmodule SymphonyElixir.Codex.AppServer do
              env: AgentEnv.build(),
              reverse_forwards: mcp_reverse_forwards(mcp_session, remote_socket_path)
            ) do
+      :ok = AgentProcesses.track(port)
+
       case start_stdout_pump(port) do
         {:ok, stdout_pump} ->
           stderr_tail = %{worker_host: worker_host, path: remote_stderr_path}
