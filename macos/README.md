@@ -202,6 +202,8 @@ run `mise reshim` so the shim exists, then restart Symphony.
   tracks Symphony's process tree and kills anything still left once Symphony exits.
 - Quit stops Symphony first. If agent runs are active (per `/api/v1/state`), or that can't be checked,
   it asks before quitting.
+- A SIGTERM, SIGINT or SIGHUP to the app (a `kill`, or the terminal that started it closing) stops
+  Symphony the same way, without asking, before the app exits.
 - If Symphony exits without being asked to, the app posts a notification (or shows an alert when
   notifications are off).
 - "Start Symphony when the app opens" starts it at launch.
