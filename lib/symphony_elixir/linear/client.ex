@@ -44,6 +44,7 @@ defmodule SymphonyElixir.Linear.Client do
             title
             url
             sourceType
+            metadata
           }
         }
         assignee {
@@ -113,6 +114,7 @@ defmodule SymphonyElixir.Linear.Client do
             title
             url
             sourceType
+            metadata
           }
         }
         assignee {
@@ -177,6 +179,7 @@ defmodule SymphonyElixir.Linear.Client do
           title
           url
           sourceType
+          metadata
         }
       }
       assignee {
@@ -1110,6 +1113,7 @@ defmodule SymphonyElixir.Linear.Client do
 
   defp extract_pr_urls(%{"attachments" => %{"nodes" => attachments}}) when is_list(attachments) do
     attachments
+    |> Enum.reject(&finished_pull_request_attachment?/1)
     |> Enum.flat_map(fn attachment ->
       case pull_request_attachment_url(attachment) do
         nil -> []
@@ -1120,6 +1124,19 @@ defmodule SymphonyElixir.Linear.Client do
   end
 
   defp extract_pr_urls(_issue), do: []
+
+  # Linear's GitHub integration records the PR lifecycle in attachment metadata.
+  # A closed or merged PR is no longer the issue's in-flight PR, so it must not
+  # make the issue look post-PR. Missing or unknown metadata keeps the attachment.
+  defp finished_pull_request_attachment?(%{"metadata" => metadata}) when is_map(metadata) do
+    [metadata["status"], metadata["state"]]
+    |> Enum.any?(fn
+      status when is_binary(status) -> String.downcase(String.trim(status)) in ["closed", "merged"]
+      _status -> false
+    end)
+  end
+
+  defp finished_pull_request_attachment?(_attachment), do: false
 
   defp pull_request_attachment_url(%{"url" => url} = attachment) when is_binary(url) do
     case github_pull_request_url(url) do
