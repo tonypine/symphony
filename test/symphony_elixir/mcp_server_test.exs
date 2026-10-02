@@ -48,9 +48,9 @@ defmodule SymphonyElixir.McpServerTest do
   end
 
   test "startup reaper preserves extracted shim files and unrelated temp paths" do
-    shim_path = Path.join("/tmp", "symphony-mcp-shim-test-#{System.unique_integer([:positive])}")
+    shim_path = Path.join(test_socket_root(), "symphony-mcp-shim-test-#{System.unique_integer([:positive])}")
     stale_managed_dir = managed_socket_dir("stale-control")
-    outside_glob_dir = Path.join("/tmp", "something-else-#{System.unique_integer([:positive])}")
+    outside_glob_dir = Path.join(test_socket_root(), "something-else-#{System.unique_integer([:positive])}")
 
     File.write!(shim_path, "shim")
     File.mkdir_p!(stale_managed_dir)
@@ -112,6 +112,20 @@ defmodule SymphonyElixir.McpServerTest do
     server = unique_server()
     start_supervised!({McpServer, name: server})
 
+    if tmp_root_writable?() do
+      assert_default_root_session(server)
+    else
+      # Sandboxed agent runs deny writes to `/tmp`; the default root must still
+      # be `/tmp` and surface the denial rather than silently relocating.
+      assert {:error, {:mcp_socket_dir_failed, "/tmp/symphony-mcp-" <> _id, :eperm}} =
+               McpServer.start_session(%{workspace: System.tmp_dir!()},
+                 server: server,
+                 shim_path: "/tmp/shim"
+               )
+    end
+  end
+
+  defp assert_default_root_session(server) do
     {:ok, session} =
       McpServer.start_session(%{workspace: System.tmp_dir!()},
         server: server,
@@ -142,7 +156,7 @@ defmodule SymphonyElixir.McpServerTest do
     server = unique_server()
     start_supervised!({McpServer, name: server})
 
-    custom_root = "/tmp/sym-root-#{System.unique_integer([:positive])}"
+    custom_root = Path.join(test_socket_root(), "r-#{System.unique_integer([:positive])}")
     File.mkdir_p!(custom_root)
     on_exit(fn -> File.rm_rf(custom_root) end)
 
@@ -182,7 +196,7 @@ defmodule SymphonyElixir.McpServerTest do
     server = unique_server()
     start_supervised!({McpServer, name: server})
 
-    custom_root = "/tmp/sym-app-#{System.unique_integer([:positive])}"
+    custom_root = Path.join(test_socket_root(), "a-#{System.unique_integer([:positive])}")
     File.mkdir_p!(custom_root)
 
     System.delete_env("SYMPHONY_MCP_SOCKET_ROOT")
@@ -218,7 +232,7 @@ defmodule SymphonyElixir.McpServerTest do
     server = unique_server()
     start_supervised!({McpServer, name: server})
 
-    custom_root = "/tmp/sym-env-#{System.unique_integer([:positive])}"
+    custom_root = Path.join(test_socket_root(), "e-#{System.unique_integer([:positive])}")
     File.mkdir_p!(custom_root)
 
     prior_app = Application.get_env(:symphony_elixir, :mcp_socket_root)
@@ -1337,7 +1351,26 @@ defmodule SymphonyElixir.McpServerTest do
   end
 
   defp managed_socket_dir(label) do
-    Path.join("/tmp", "symphony-mcp-#{label}-#{System.unique_integer([:positive])}")
+    Path.join(test_socket_root(), "symphony-mcp-#{label}-#{System.unique_integer([:positive])}")
+  end
+
+  # Mirrors McpServer's root resolution without per-call opts; test_helper.exs
+  # points `:mcp_socket_root` at a short writable dir for sandboxed runs.
+  defp test_socket_root do
+    System.get_env("SYMPHONY_MCP_SOCKET_ROOT") || Application.get_env(:symphony_elixir, :mcp_socket_root, "/tmp")
+  end
+
+  defp tmp_root_writable? do
+    probe = Path.join("/tmp", "symphony-write-probe-#{System.unique_integer([:positive])}")
+
+    case File.mkdir(probe) do
+      :ok ->
+        File.rmdir(probe)
+        true
+
+      {:error, _reason} ->
+        false
+    end
   end
 
   defp socket_path do

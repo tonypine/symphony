@@ -599,7 +599,7 @@ defmodule SymphonyElixir.Workspace do
       "      reset_dirty=$(git -C \"$workspace\" status --porcelain=v1 --untracked-files=all)",
       "      reset_unpushed=$(git -C \"$workspace\" rev-list --max-count=1 HEAD --not --remotes)",
       "      [ -n \"$reset_dirty\" ] || [ -n \"$reset_unpushed\" ] || exit 0",
-      "      reset_index=$(mktemp -u)",
+      "      reset_index=$(mktemp -u \"${TMPDIR:-/tmp}/symphony-orphan.XXXXXX\")",
       "      GIT_INDEX_FILE=\"$reset_index\" git -C \"$workspace\" add -A",
       "      reset_tree=$(GIT_INDEX_FILE=\"$reset_index\" git -C \"$workspace\" write-tree)",
       "      rm -f \"$reset_index\"",

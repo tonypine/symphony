@@ -60,11 +60,17 @@ You are working on a Linear ticket `{{ issue.identifier }}`
     to collect slow-command data before optimizing tests or gate behavior.
   - Reserve `make all` and `make coverage` for the pre-push gate, not the inner
     edit/test loop.
-- In sandboxed Elixir runs, prefer
-  `HEX_HOME=/private/tmp/symphony-hex-home SYMPHONY_MCP_SOCKET_ROOT=/private/tmp/symphony-mcp make all`
-  for the full gate so Hex, Dialyzer, and MCP socket writes stay inside a
-  writable location. The MCP socket root must be a short path (the resulting
-  `<root>/symphony-mcp-<id>/sock` must fit the 104-byte Unix `sun_path` limit).
+- In sandboxed Elixir runs, run plain `make all` for the full gate; no Hex
+  install or env overrides are needed. Symphony passes the host's `MIX_HOME`,
+  `MIX_ARCHIVES`, and `HEX_HOME` to the agent so Hex and Rebar resolve, and the
+  test suite keeps MCP socket dirs under a short writable `TMPDIR`. Only when
+  `TMPDIR` is long and `/tmp` is not writable, set `SYMPHONY_MCP_SOCKET_ROOT`
+  to a short writable path (the resulting `<root>/symphony-mcp-<id>/sock` must
+  fit the 104-byte Unix `sun_path` limit).
+- Tests and hooks that start login shells (`sh -lc`, `bash -lc`) may print
+  `~/.profile: Operation not permitted` inside the sandbox. That is benign: the
+  sandbox denies reading shell startup files and the command still runs. Do not
+  record it as a workaround.
 - Keep tool output focused by default. For broad searches, diffs, and file
   reads, start with targeted `rg` queries, `sed -n` ranges, and modest
   `max_output_tokens` caps. Raise output caps only after narrowing the command
@@ -164,7 +170,7 @@ You are working on a Linear ticket `{{ issue.identifier }}`
 5.  Run validation/tests required for the scope.
     - Mandatory gate: execute all ticket-provided `Validation`/`Test Plan`/ `Testing` requirements when present; treat unmet items as incomplete work.
     - Prefer a targeted proof that directly demonstrates the behavior you changed.
-    - For the full Elixir gate in a sandboxed workspace, prefer `HEX_HOME=/private/tmp/symphony-hex-home make all`.
+    - For the full Elixir gate in a sandboxed workspace, run plain `make all` (see `Command and output hygiene`).
     - For long-running validation, use long waits and sparse polling so progress-only terminal output does not create many tiny transcript events.
     - Keep terminal output fed back into the model small: preserve failing command, exit code, and the most relevant error lines; summarize successful or repetitive output instead of pasting complete logs.
     - You may make temporary local proof edits to validate assumptions (for example: tweak a local build input for `make`, or hardcode a UI account / response path) when this increases confidence.

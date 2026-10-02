@@ -1177,8 +1177,11 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       assert :ok = AppServer.stop_session(%{workspace: "/tmp/ws", metadata: %{}, worker_host: nil})
     end
 
-    test "returns ok when local Claude settings file is already gone" do
+    test "returns ok when local Claude settings file is already gone without removing its shared parent dir" do
       missing_path = Path.join(System.tmp_dir!(), "missing-claude-settings-#{System.unique_integer([:positive])}.json")
+      sibling_path = Path.join(System.tmp_dir!(), "claude-settings-sibling-#{System.unique_integer([:positive])}")
+      File.write!(sibling_path, "keep")
+      on_exit(fn -> File.rm(sibling_path) end)
 
       assert :ok =
                AppServer.stop_session(%{
@@ -1187,6 +1190,8 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
                  worker_host: nil,
                  settings_path: missing_path
                })
+
+      assert File.read!(sibling_path) == "keep"
     end
 
     test "logs and returns ok when local Claude settings cleanup fails" do

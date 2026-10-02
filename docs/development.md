@@ -47,11 +47,19 @@ make coverage-profile
 make dialyzer-profile
 ```
 
-In sandboxed Codex workspaces, prefer a writable Hex cache location for the full gate:
+Inside Symphony's agent sandboxes (Claude Code or SRT-wrapped Codex), plain `make all` runs
+green without extra setup:
 
-```bash
-HEX_HOME=/private/tmp/symphony-hex-home make all
-```
+- Symphony passes the host's `MIX_HOME`, `MIX_ARCHIVES`, and `HEX_HOME` through to the agent, so
+  sandboxed `mix` uses the Hex and Rebar already installed for the host (for example in the
+  per-version `MIX_HOME` that `mise` exports).
+- `test/test_helper.exs` keeps MCP socket dirs under `TMPDIR` when it is short (for example
+  Claude Code's `/tmp/claude-501`) and under `/tmp` otherwise. If neither is writable, set
+  `SYMPHONY_MCP_SOCKET_ROOT` to a short writable path; the resulting
+  `<root>/symphony-mcp-<id>/sock` must fit the 104-byte Unix `sun_path` limit.
+- Workspace hooks keep running under a login shell (`sh -lc`) on the unsandboxed host, where they
+  rely on profile-provided `PATH` setup such as `mise`. When tests start login shells inside the
+  sandbox, `~/.profile: Operation not permitted` on stderr is expected and harmless.
 
 Run the real external end-to-end test only when you want Symphony to create disposable Linear
 resources and launch a real agent session:
