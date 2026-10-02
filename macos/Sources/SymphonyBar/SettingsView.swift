@@ -65,6 +65,8 @@ struct SettingsView: View {
                 }
             }
             .formStyle(.grouped)
+            // A grouped Form is scroll-backed with no height of its own (ideal height 0), so without this it collapses.
+            .frame(minHeight: 460, idealHeight: 560, maxHeight: 900)
 
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(model.issues.map(\.message), id: \.self) { message in

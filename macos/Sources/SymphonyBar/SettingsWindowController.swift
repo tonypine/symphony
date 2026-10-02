@@ -4,15 +4,23 @@ import SwiftUI
 /// Owns the single Settings window. Each time it opens, values are read fresh from UserDefaults and the Keychain.
 @MainActor
 final class SettingsWindowController: NSObject, NSWindowDelegate {
+    /// Room for the Form at about its ideal height plus the button bar.
+    private static let initialContentSize = NSSize(width: 600, height: 640)
+
     private var window: NSWindow?
 
     func show() {
         if window == nil {
             let model = SettingsViewModel()
             let view = SettingsView(model: model) { [weak self] in self?.window?.close() }
-            let window = NSWindow(contentViewController: NSHostingController(rootView: view))
+            let hostingController = NSHostingController(rootView: view)
+            // The default (.preferredContentSize) keeps resizing the window to SwiftUI's ideal size, which
+            // collapses the scroll-backed Form after the first layout pass. Let SwiftUI set only the bounds.
+            hostingController.sizingOptions = [.minSize, .maxSize]
+            let window = NSWindow(contentViewController: hostingController)
             window.title = "Symphony Settings"
-            window.styleMask = [.titled, .closable]
+            window.styleMask = [.titled, .closable, .resizable]
+            window.setContentSize(Self.initialContentSize)
             window.isReleasedWhenClosed = false
             window.delegate = self
             window.center()
