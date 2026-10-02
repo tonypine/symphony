@@ -9,6 +9,30 @@ defmodule SymphonyElixir.Config.SystemSchema do
   alias SymphonyElixir.Workflow
   alias SymphonyElixir.Workspace
 
+  # `defaults_to_struct: true` bakes each embed's struct into this schema at
+  # compile time, but Ecto only records a runtime reference to the embed. The
+  # requires make Mix recompile this module when an embed's defaults change,
+  # instead of keeping the old default after an incremental build.
+  require Schema.Agent
+  require Schema.AutoReview
+  require Schema.Ci
+  require Schema.Dependencies
+  require Schema.GitHub
+  require Schema.Learnings
+  require Schema.Notifications
+  require Schema.Observability
+  require Schema.Poller
+  require Schema.Polling
+  require Schema.PrReview
+  require Schema.QualityGate
+  require Schema.ReviewAgent
+  require Schema.Server
+  require Schema.Tracker
+  require Schema.Verification
+  require Schema.Watchdog
+  require Schema.Worker
+  require Schema.Workspace
+
   @primary_key false
   @allowed_keys ~w(
     agent auto_review dashboard dependency_audit github issue_gate issues notifications poller pre_push_review pull_requests
