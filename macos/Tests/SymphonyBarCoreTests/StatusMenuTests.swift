@@ -11,4 +11,9 @@ final class StatusMenuTests: XCTestCase {
         XCTAssertFalse(StatusMenu.iconSymbolName.isEmpty)
         XCTAssertFalse(StatusMenu.accessibilityLabel.isEmpty)
     }
+
+    func testSettingsItemUsesCommandComma() {
+        XCTAssertEqual(StatusMenu.settingsKeyEquivalent, ",")
+        XCTAssertEqual(StatusMenu.settingsTitle, "Settings…")
+    }
 }
