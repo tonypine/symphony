@@ -11,6 +11,7 @@ defmodule SymphonyElixir.Config do
   alias SymphonyElixir.Routing.Resolver, as: RoutingResolver
   alias SymphonyElixir.Secret
   alias SymphonyElixir.Workflow
+  alias SymphonyElixir.WorkflowSource
 
   @default_prompt_template """
   You are working on a Linear issue.
@@ -104,6 +105,13 @@ defmodule SymphonyElixir.Config do
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  @spec repo(String.t() | nil) :: {:ok, SystemSchema.Repo.t()} | {:error, term()}
+  def repo(repo_key) do
+    with {:ok, system_config} <- system() do
+      find_repo(system_config, repo_key)
     end
   end
 
@@ -596,12 +604,12 @@ defmodule SymphonyElixir.Config do
   defp load_repo_workflow(repo, source \\ :store)
 
   defp load_repo_workflow(%SystemSchema.Repo{} = repo, :file) do
-    Workflow.load(SystemSchema.repo_workflow_path(repo))
+    Workflow.load(WorkflowSource.read_path(repo))
   end
 
   defp load_repo_workflow(%SystemSchema.Repo{name: repo_name} = repo, _source) when is_binary(repo_name) and repo_name != "" do
     repo
-    |> SystemSchema.repo_workflow_path()
+    |> WorkflowSource.read_path()
     |> Cache.get_workflow()
     |> unwrap_cache_result()
   end

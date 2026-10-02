@@ -3,7 +3,7 @@ defmodule SymphonyElixir.HttpServerTest do
 
   import ExUnit.CaptureLog
 
-  alias SymphonyElixir.{ControlUrl, HttpServer, Paths, TestSupport}
+  alias SymphonyElixir.{ControlUrl, HttpServer, Paths, TestSupport, Workflow}
 
   @allow_remote_bind_env "SYMPHONY_ALLOW_REMOTE_BIND"
   @allowed_origins_env "SYMPHONY_DASHBOARD_ALLOWED_ORIGINS"
@@ -18,11 +18,20 @@ defmodule SymphonyElixir.HttpServerTest do
     allow_remote_bind = System.get_env(@allow_remote_bind_env)
     allowed_origins = System.get_env(@allowed_origins_env)
     previous_state_override = Application.get_env(:symphony_elixir, :state_root_override)
+    previous_symphony_path = Application.get_env(:symphony_elixir, :symphony_file_path)
     Paths.set_state_root(tmp)
+    # Earlier suites may clear the configured path, which falls back to the repo's own
+    # symphony.yml; pin the runtime fixture so this suite reads a local workflow.
+    Workflow.set_symphony_file_path(Path.expand("../fixtures/runtime/symphony.yml", __DIR__))
 
     on_exit(fn ->
       restore_env(@allow_remote_bind_env, allow_remote_bind)
       restore_env(@allowed_origins_env, allowed_origins)
+
+      case previous_symphony_path do
+        nil -> Workflow.clear_symphony_file_path()
+        path -> Workflow.set_symphony_file_path(path)
+      end
 
       case previous_state_override do
         nil -> Application.delete_env(:symphony_elixir, :state_root_override)
