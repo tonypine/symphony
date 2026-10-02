@@ -80,6 +80,8 @@ If the icon turns to a warning triangle instead, choose **Open Logs** and see [T
   continue. The pause is kept across restarts.
 - **Resume Dispatch** lets Symphony pick up new issues again.
 - **Open Dashboard** opens the dashboard in the browser, and **Open Logs** opens Symphony's output log.
+- **Check for Updates…** looks for a newer Symphony release. When there is one, the menu shows
+  **Update available: vX (N changes)** and **Release Notes…**.
 - **Quit** stops Symphony first and asks before stopping active agent runs.
 
 The sections below describe each in detail.
@@ -194,6 +196,27 @@ The state root is found as Symphony finds it:
 - Otherwise `~/Library/Application Support/symphony` or, for the Burrito release build, its `release/`
   subdirectory. The app can't tell which build runs, so it uses the one whose `control_url` was written
   last, then the one holding a `control_token`.
+
+## Updates
+
+The app checks the latest release at
+`https://api.github.com/repos/tonypine/symphony/releases/latest` at launch, every 6 hours, and when you
+choose Check for Updates. The request carries no token. It sends the last response's `ETag` in
+`If-None-Match`, so an unchanged release answers 304 Not Modified, which doesn't count against GitHub's
+rate limit of 60 unauthenticated requests an hour.
+
+A release counts only when it has `version.json` and the zip and `.sha256` that `version.json` names (see
+[docs/releasing.md](../docs/releasing.md)). The app compares `version.json` `build` with its own
+`CFBundleVersion`. When the release is newer, the menu shows **Update available: vX (N changes)**, taking
+N from the first line of the release notes ("12 changes since v…") or else from `version.json` `changes`.
+Choosing it, or **Release Notes…**, shows the notes in a scrollable window with **Open Release Page**.
+
+A development build (one without Symphony embedded at `Contents/Resources/symphony`, such as a plain
+`make`) still shows the indicator, labelled `· development build`. A local build keeps the `CFBundleVersion`
+of `Info.plist`, so it usually sees every release as newer.
+
+Background checks fail silently. When you choose Check for Updates, the result shows under it: "Symphony
+is up to date (vX)" or why the check failed, for example GitHub's rate limit.
 
 ## Troubleshooting
 
