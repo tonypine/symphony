@@ -162,8 +162,8 @@ defmodule SymphonyElixir.QaAgent do
 
     Parent issue (this is a sub-ticket; its acceptance criteria apply too):
     Identifier: #{Map.get(parent, "identifier")}
-    #{Map.get(parent, "title")}
-    #{Map.get(parent, "description")}
+    #{PromptSafety.linear_issue_title(Map.get(parent, "title") || "")}
+    #{PromptSafety.linear_issue_body(Map.get(parent, "description") || "")}
     """
   end
 

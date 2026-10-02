@@ -162,8 +162,12 @@ defmodule SymphonyElixir.AutoReview do
   defp reapply_outcome(issue, record, settings, opts) do
     case {Map.get(record, :qa_verdict), Map.get(record, :qa_applied)} do
       {"fail", true} ->
-        result = %{verdict: :fail, summary: "", steps: [], findings: get_in(record, [:qa_failure, :findings]) || []}
-        outcome = %{verdict: :fail, result: result, reason: "the issue came back to #{state(settings)} without a new commit"}
+        reason = "the issue came back to #{state(settings)} without a new commit"
+        last_failure = Map.get(record, :qa_failure) || Map.get(record, :qa_last_failure) || %{}
+        returned = "The fix run ended without pushing a commit: #{reason}. The earlier QA findings still apply."
+        findings = [returned | List.wrap(Map.get(last_failure, :findings))]
+        result = %{verdict: :fail, summary: returned, steps: [], findings: findings}
+        outcome = %{verdict: :fail, result: result, reason: reason}
         apply_outcome(issue, record, Map.get(record, :qa_sha), outcome, settings, opts)
 
       _other ->
@@ -346,7 +350,9 @@ defmodule SymphonyElixir.AutoReview do
   defp verdict_attrs(:fail, false, fix_attempts, sha, result) do
     %{
       qa_fix_attempts: fix_attempts + 1,
-      qa_failure: %{commit_sha: sha, summary: Map.get(result, :summary, ""), findings: QaAgent.failure_findings(result)}
+      qa_failure: %{commit_sha: sha, summary: Map.get(result, :summary, ""), findings: QaAgent.failure_findings(result)},
+      # Kept after the fix run clears `qa_failure`, for a return on the same SHA.
+      qa_last_failure: %{summary: Map.get(result, :summary, ""), findings: QaAgent.failure_findings(result)}
     }
   end
 

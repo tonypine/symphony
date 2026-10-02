@@ -179,6 +179,14 @@ defmodule SymphonyElixir.AutoReviewQaTest do
 
       assert :ok = CiPoller.complete_pending_qa_failure("issue-qa-flow")
       refute AgentRunner.build_first_turn_prompt(issue(), prompt_opts) =~ "Auto Review QA failure:"
+
+      assert {:auto_review_qa, "issue-qa-flow", :fail, "In Progress"} =
+               AutoReview.on_green(issue(), stored_record(), %{commit_sha: @sha}, Config.settings!(), [])
+
+      prompt = AgentRunner.build_first_turn_prompt(issue(%{state: "In Progress"}), prompt_opts)
+      assert prompt =~ "The fix run ended without pushing a commit"
+      assert prompt =~ "`symphony check --config bad.yml` exits 0"
+      refute prompt =~ "No findings were recorded."
     end
 
     test "a failure after max_fix_attempts escalates to In Review" do

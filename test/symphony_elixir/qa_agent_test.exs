@@ -219,6 +219,8 @@ defmodule SymphonyElixir.QaAgentTest do
       assert prompt =~ "Adds `symphony check`."
       assert prompt =~ "Parent issue (this is a sub-ticket"
       assert prompt =~ "- [ ] parent criterion"
+      assert prompt =~ ~r/<linear_issue_title>\s*Parent\s*<\/linear_issue_title>/
+      assert prompt =~ ~r/<linear_issue_body>\s*- \[ \] parent criterion\s*<\/linear_issue_body>/
       assert prompt =~ "### Playbook: cli"
       assert prompt =~ @sha
       assert prompt =~ ~s("verdict": "pass" | "fail" | "blocked")
