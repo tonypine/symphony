@@ -477,7 +477,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
          {:ok, scope} <- section_map(Map.get(linear, "scope", %{}), "issues.linear.scope"),
          :ok <- reject_unknown_section_keys(scope, ~w(project_slug team labels), "issues.linear.scope"),
          {:ok, states} <- section_map(Map.get(config, "states", %{}), "issues.states"),
-         :ok <- reject_unknown_section_keys(states, ~w(active terminal), "issues.states") do
+         :ok <- reject_unknown_section_keys(states, ~w(active terminal waiting_on_sub_issues), "issues.states") do
       tracker =
         %{}
         |> maybe_put("kind", Map.get(config, "provider"))
@@ -489,6 +489,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
         |> maybe_put("labels", Map.get(scope, "labels"))
         |> maybe_put("active_states", Map.get(states, "active"))
         |> maybe_put("terminal_states", Map.get(states, "terminal"))
+        |> maybe_put_configured("waiting_on_sub_issues_state", Map.get(states, "waiting_on_sub_issues"), Map.has_key?(states, "waiting_on_sub_issues"))
 
       polling = %{} |> maybe_put("interval_ms", Map.get(config, "poll_interval_ms"))
 
@@ -973,6 +974,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   defp preserve_explicit_nil_path?(["agent", key]) when key in ["max_tokens_per_issue", "max_tokens_per_day"],
     do: true
 
+  defp preserve_explicit_nil_path?(["tracker", "waiting_on_sub_issues_state"]), do: true
   defp preserve_explicit_nil_path?(_path), do: false
 
   defp format_errors(changeset) do

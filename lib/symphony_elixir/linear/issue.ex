@@ -85,7 +85,7 @@ defmodule SymphonyElixir.Linear.Issue do
       when is_list(labels) and is_list(sub_issues) do
     terminal_states = MapSet.new(terminal_states, &normalize_state/1)
 
-    Enum.any?(labels, &(normalize_state(&1) == @breakdown_label)) and
+    Enum.any?(labels, &breakdown_label?/1) and
       Enum.any?(sub_issues, fn
         %{state: state} when is_binary(state) -> !MapSet.member?(terminal_states, normalize_state(state))
         _sub_issue -> true
@@ -93,6 +93,24 @@ defmodule SymphonyElixir.Linear.Issue do
   end
 
   def waiting_on_sub_issues?(_issue, _terminal_states), do: false
+
+  @doc "True when the issue is a `breakdown` parent with sub-issues, every one of them in `terminal_states`."
+  @spec close_out_ready?(t(), Enumerable.t(String.t())) :: boolean()
+  def close_out_ready?(%__MODULE__{labels: labels, sub_issues: [_ | _]} = issue, terminal_states) when is_list(labels) do
+    breakdown?(issue) and not waiting_on_sub_issues?(issue, terminal_states)
+  end
+
+  def close_out_ready?(_issue, _terminal_states), do: false
+
+  @doc "True when the issue carries the `breakdown` label."
+  @spec breakdown?(t()) :: boolean()
+  def breakdown?(%__MODULE__{labels: labels}) when is_list(labels), do: Enum.any?(labels, &breakdown_label?/1)
+  def breakdown?(_issue), do: false
+
+  @doc "True when `label` is the `breakdown` label."
+  @spec breakdown_label?(term()) :: boolean()
+  def breakdown_label?(label) when is_binary(label), do: normalize_state(label) == @breakdown_label
+  def breakdown_label?(_label), do: false
 
   defp normalize_state(state), do: state |> String.trim() |> String.downcase()
 end

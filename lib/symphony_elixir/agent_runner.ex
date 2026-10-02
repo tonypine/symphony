@@ -20,6 +20,7 @@ defmodule SymphonyElixir.AgentRunner do
     PromptBuilder,
     PrReviewPoller,
     ReviewAgent,
+    SubIssueWait,
     Tracker,
     URLUtils,
     Verification,
@@ -1170,7 +1171,7 @@ defmodule SymphonyElixir.AgentRunner do
             Logger.info("Stopping agent run for #{issue_context(refreshed_issue)} after PR opened; waiting for review, CI, or manual rework signal")
             {:done, refreshed_issue}
 
-          Issue.waiting_on_sub_issues?(refreshed_issue, Config.settings!().tracker.terminal_states) ->
+          waiting_on_sub_issues?(refreshed_issue) ->
             Logger.info("Stopping agent run for #{issue_context(refreshed_issue)}; waiting for its open sub-issues")
             {:done, refreshed_issue}
 
@@ -1190,6 +1191,13 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp continue_with_issue?(issue, _issue_state_fetcher, _opts), do: {:done, issue}
+
+  defp waiting_on_sub_issues?(%Issue{} = issue) do
+    settings = Config.settings!()
+    terminal_states = settings.tracker.terminal_states
+
+    Issue.waiting_on_sub_issues?(issue, terminal_states) or SubIssueWait.held?(issue, terminal_states, settings)
+  end
 
   defp post_pr_quiet_continuation?(%Issue{} = previous_issue, %Issue{} = refreshed_issue, opts) do
     if attached_pr?(previous_issue) or attached_pr?(refreshed_issue) do
