@@ -9,6 +9,7 @@ defmodule SymphonyElixir.Config do
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.SystemSchema
   alias SymphonyElixir.Routing.Resolver, as: RoutingResolver
+  alias SymphonyElixir.RunKind
   alias SymphonyElixir.Secret
   alias SymphonyElixir.Workflow
   alias SymphonyElixir.WorkflowSource
@@ -217,6 +218,20 @@ defmodule SymphonyElixir.Config do
   end
 
   def max_concurrent_agents_for_state(_state_name), do: settings!().agent.max_concurrent_agents
+
+  @doc """
+  The model and effort for a run of `kind`: the `agent.run_profiles.<kind>` field, else
+  `agent.model` / `agent.effort`, else nil (add nothing to the agent command).
+  """
+  @spec run_profile(Schema.t(), RunKind.t() | String.t()) :: %{model: String.t() | nil, effort: String.t() | nil}
+  def run_profile(%Schema{agent: agent}, kind) do
+    profile = Map.get(agent.run_profiles, to_string(kind), %{})
+
+    %{
+      model: Map.get(profile, "model", agent.model),
+      effort: Map.get(profile, "effort", agent.effort)
+    }
+  end
 
   @spec review_agent_blocked_state(String.t()) :: String.t()
   def review_agent_blocked_state(repo_key) when is_binary(repo_key) do

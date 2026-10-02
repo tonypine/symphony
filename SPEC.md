@@ -1280,6 +1280,10 @@ Validation checks:
 - `issues.provider` is present and supported.
 - `agent.runtime` is present and supported.
 - `agent.command` is present and non-empty.
+- `agent.effort` and every `agent.run_profiles.<kind>.effort` are known effort values, and every
+  `agent.run_profiles` key is a known run kind.
+- `agent.command` does not already pass `--model` or `--effort` when `agent.model`,
+  `agent.effort`, or `agent.run_profiles` is set.
 - `issues.linear.api_key` is present after `$` resolution when `issues.provider == "linear"`.
 - At least one Linear scoping filter is present when `issues.provider == "linear"`. Core scope comes
   from `issues.linear.scope.project_slug`, `issues.linear.scope.team`, or non-empty
@@ -1357,6 +1361,12 @@ not require recognizing or validating extension fields unless that extension is 
 - `agent.limits.tokens_per_day`: integer or null, default `5000000`; explicit null disables the cap
 - `agent.runtime`: `codex` or `claude`, REQUIRED
 - `agent.command`: shell command string, REQUIRED
+- `agent.model`: model name string or null, default `null`
+- `agent.effort`: `low`, `medium`, `high`, `xhigh`, `max`, or null, default `null`
+- `agent.run_profiles`: map of run kind to `{model, effort}`, default `{}`. Run kinds:
+  `implementation`, `breakdown`, `close_out`, `final_verification`, `rework`, `landing`, `ci_fix`,
+  `review_feedback`, `pre_push_review`, `qa`. Each field resolves to the profile value, else
+  `agent.model` / `agent.effort`, else null (nothing added).
 - `agent.prompts.include_project_guides`: boolean, default `true`
 - `agent.prompts.project_guide_files`: list of relative paths or null, default `null`
 - `agent.permissions.approval_policy`: agent approval policy, default depends on `agent.runtime`

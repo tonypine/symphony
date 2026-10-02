@@ -487,6 +487,15 @@ defmodule SymphonyElixir.Config.Schema do
     import Ecto.Changeset
 
     alias SymphonyElixir.Config.Schema
+    alias SymphonyElixir.RunKind
+
+    @efforts ["low", "medium", "high", "xhigh", "max"]
+    @run_profile_keys ["model", "effort"]
+    @run_profile_error_keys Map.new(
+                              for kind <- RunKind.names(), suffix <- ["", ".model", ".effort"] do
+                                {kind <> suffix, :"run_profiles.#{kind}#{suffix}"}
+                              end
+                            )
 
     @default_max_tokens_per_issue 500_000
     @default_max_tokens_per_day 5_000_000
@@ -784,6 +793,9 @@ defmodule SymphonyElixir.Config.Schema do
       field(:max_tokens_per_day, :integer, default: @default_max_tokens_per_day)
       field(:max_consecutive_identical_tool_failures, :integer, default: 5)
       field(:command, :string)
+      field(:model, :string)
+      field(:effort, :string)
+      field(:run_profiles, :map, default: %{})
 
       field(:approval_policy, StringOrMap)
       field(:include_project_guides, :boolean, default: true)
@@ -816,6 +828,9 @@ defmodule SymphonyElixir.Config.Schema do
           :max_tokens_per_day,
           :max_consecutive_identical_tool_failures,
           :command,
+          :model,
+          :effort,
+          :run_profiles,
           :approval_policy,
           :include_project_guides,
           :project_guide_files,
@@ -843,11 +858,109 @@ defmodule SymphonyElixir.Config.Schema do
       |> validate_number(:command_timeout_ms, greater_than_or_equal_to: 0)
       |> validate_number(:codex_stdio_prompt_soft_limit, greater_than: 0)
       |> validate_project_guide_files()
+      |> validate_setting(:model, &check_model/1)
+      |> validate_setting(:effort, &check_effort/1)
+      |> validate_run_profiles()
+      |> validate_command_run_profile_flags()
       |> update_change(:max_concurrent_agents_by_state, &Schema.normalize_state_limits/1)
       |> Schema.validate_state_limits(:max_concurrent_agents_by_state)
       |> cast_embed(:mcp, with: &Mcp.changeset/2)
       |> cast_embed(:network_access, with: &NetworkAccess.changeset/2)
       |> cast_embed(:sandbox_runtime, with: &SandboxRuntime.changeset/2)
+    end
+
+    defp validate_setting(changeset, field, check) do
+      case Map.fetch(changeset.changes, field) do
+        {:ok, value} ->
+          case check.(value) do
+            {:ok, value} -> put_change(changeset, field, value)
+            {:error, message} -> add_error(changeset, field, message)
+          end
+
+        :error ->
+          changeset
+      end
+    end
+
+    defp check_model(model) when is_binary(model) do
+      case String.trim(model) do
+        "" -> {:error, "must not be blank"}
+        trimmed -> {:ok, trimmed}
+      end
+    end
+
+    defp check_model(_model), do: {:error, "must be a string"}
+
+    defp check_effort(effort) when effort in @efforts, do: {:ok, effort}
+    defp check_effort(_effort), do: {:error, "must be one of: #{Enum.join(@efforts, ", ")}"}
+
+    defp validate_run_profiles(changeset) do
+      case Map.fetch(changeset.changes, :run_profiles) do
+        {:ok, profiles} ->
+          {changeset, normalized} = Enum.reduce(profiles, {changeset, %{}}, &cast_run_profile/2)
+          put_change(changeset, :run_profiles, normalized)
+
+        :error ->
+          changeset
+      end
+    end
+
+    defp cast_run_profile({kind, profile}, {changeset, normalized}) do
+      kind = to_string(kind)
+
+      cond do
+        not Map.has_key?(@run_profile_error_keys, kind) ->
+          message = "has unknown run kind `#{kind}`; expected one of: #{Enum.join(RunKind.names(), ", ")}"
+          {add_error(changeset, :run_profiles, message), normalized}
+
+        not is_map(profile) ->
+          {add_error(changeset, @run_profile_error_keys[kind], "must be an object with model and/or effort"), normalized}
+
+        true ->
+          cast_run_profile_fields(changeset, normalized, kind, Map.new(profile, fn {key, value} -> {to_string(key), value} end))
+      end
+    end
+
+    defp cast_run_profile_fields(changeset, normalized, kind, profile) do
+      case Map.keys(profile) -- @run_profile_keys do
+        [] ->
+          {changeset, normalized_profile} = Enum.reduce(profile, {changeset, %{}}, &cast_run_profile_field(&1, &2, kind))
+          {changeset, Map.put(normalized, kind, normalized_profile)}
+
+        [unknown | _rest] ->
+          {add_error(changeset, @run_profile_error_keys[kind], "has unknown key `#{unknown}`; expected model or effort"), normalized}
+      end
+    end
+
+    defp cast_run_profile_field({key, value}, {changeset, fields}, kind) do
+      case check_run_profile_field(key, value) do
+        {:ok, value} -> {changeset, Map.put(fields, key, value)}
+        {:error, message} -> {add_error(changeset, @run_profile_error_keys["#{kind}.#{key}"], message), fields}
+      end
+    end
+
+    defp check_run_profile_field("model", model), do: check_model(model)
+    defp check_run_profile_field("effort", effort), do: check_effort(effort)
+
+    # The resolved model and effort are passed as flags, so the same flag in `agent.command`
+    # would be given twice.
+    defp validate_command_run_profile_flags(changeset) do
+      command = get_field(changeset, :command)
+
+      if run_profile_settings?(changeset) and is_binary(command) do
+        ["--model", "--effort"]
+        |> Enum.filter(&Regex.match?(~r/(^|\s)#{&1}(=|\s|$)/, command))
+        |> Enum.reduce(changeset, fn flag, acc ->
+          add_error(acc, :command, "must not pass #{flag} when agent.model, agent.effort or agent.run_profiles is set; remove it from agent.command")
+        end)
+      else
+        changeset
+      end
+    end
+
+    defp run_profile_settings?(changeset) do
+      not is_nil(get_field(changeset, :model)) or not is_nil(get_field(changeset, :effort)) or
+        get_field(changeset, :run_profiles) not in [nil, %{}]
     end
 
     defp validate_project_guide_files(changeset) do

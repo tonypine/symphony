@@ -74,6 +74,23 @@ defmodule SymphonyElixir.CLICheckTest do
     refute message =~ @secret
   end
 
+  test "reports run profile errors naming the key", %{root: root} do
+    cases = [
+      {"command: codex app-server\n  run_profiles:\n    bogus:\n      effort: low", "agent.run_profiles has unknown run kind `bogus`"},
+      {"command: codex app-server\n  effort: extreme", "agent.effort must be one of: low, medium, high, xhigh, max"},
+      {"command: claude --effort high\n  effort: low", "agent.command must not pass --effort when agent.model, agent.effort or agent.run_profiles is set"}
+    ]
+
+    for {agent_lines, expected} <- cases do
+      Cache.clear()
+      path = write_symphony!(root, String.replace(valid_symphony(root), "command: codex app-server", agent_lines))
+
+      assert {{:error, message}, ""} = check(["--config", path])
+      assert message =~ "Config error in #{path}: "
+      assert message =~ expected
+    end
+  end
+
   test "reports a broken repo WORKFLOW.md", %{root: root} do
     File.write!(Path.join([root, "app", "WORKFLOW.md"]), "---\nbogus_workflow_key: 1\n---\nPrompt\n")
     path = write_symphony!(root, valid_symphony(root))

@@ -1,0 +1,107 @@
+defmodule SymphonyElixir.RunKind do
+  @moduledoc """
+  Classifies what kind of agent run Symphony is about to start, so each kind can
+  get its own model and effort (`agent.run_profiles.<kind>`).
+
+  Classification is deterministic and uses the signals the orchestrator already
+  routes on. The first match wins:
+
+    1. `final_verification`: the title starts with `Final verification:`.
+    2. `close_out`: a `breakdown` parent whose sub-issues are all terminal.
+    3. `breakdown`: any other `breakdown` parent (normally one without sub-issues yet).
+    4. `landing`: the issue is in `Merging`.
+    5. `rework`: the issue is in `Rework`.
+    6. `ci_fix`: the run continues after a red CI run (`:ci_failure` signal).
+    7. `review_feedback`: the run continues after PR review comments
+       (non-empty `:reviewer_comments` signal).
+    8. `implementation`: everything else.
+
+  Parent and final-verification tickets come before states because they never
+  open a PR: the workflow sends them to the parent-ticket steps whatever their state.
+
+  `pre_push_review` and `qa` are never returned by `classify/2`; they name the
+  reviewer and QA agent runs, which Symphony starts itself.
+  """
+
+  alias SymphonyElixir.Linear.Issue
+
+  @type t ::
+          :implementation
+          | :breakdown
+          | :close_out
+          | :final_verification
+          | :rework
+          | :landing
+          | :ci_fix
+          | :review_feedback
+          | :pre_push_review
+          | :qa
+
+  @kinds [
+    :implementation,
+    :breakdown,
+    :close_out,
+    :final_verification,
+    :rework,
+    :landing,
+    :ci_fix,
+    :review_feedback,
+    :pre_push_review,
+    :qa
+  ]
+
+  @final_verification_prefix "Final verification:"
+  @landing_state "merging"
+  @rework_state "rework"
+  @default_terminal_states ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
+
+  @doc "Every run kind, in documentation order."
+  @spec kinds() :: [t()]
+  def kinds, do: @kinds
+
+  @doc "Every run kind as the string used for `agent.run_profiles` keys."
+  @spec names() :: [String.t()]
+  def names, do: Enum.map(@kinds, &Atom.to_string/1)
+
+  @doc """
+  Returns the run kind for `issue`.
+
+  Signals:
+
+    * `:terminal_states` - issue states that count as terminal for sub-issues
+      (default: the `issues.states.terminal` default).
+    * `:ci_failure` - the pending red CI context, or nil.
+    * `:reviewer_comments` - the pending PR review comments, or `[]`.
+  """
+  @spec classify(Issue.t(), keyword()) :: t()
+  def classify(%Issue{} = issue, signals \\ []) do
+    terminal_states = Keyword.get(signals, :terminal_states, @default_terminal_states)
+
+    cond do
+      final_verification?(issue) -> :final_verification
+      Issue.close_out_ready?(issue, terminal_states) -> :close_out
+      Issue.breakdown?(issue) -> :breakdown
+      in_state?(issue, @landing_state) -> :landing
+      in_state?(issue, @rework_state) -> :rework
+      present?(Keyword.get(signals, :ci_failure)) -> :ci_fix
+      present?(Keyword.get(signals, :reviewer_comments)) -> :review_feedback
+      true -> :implementation
+    end
+  end
+
+  defp final_verification?(%Issue{title: title}) when is_binary(title) do
+    title |> String.trim_leading() |> String.starts_with?(@final_verification_prefix)
+  end
+
+  defp final_verification?(_issue), do: false
+
+  defp in_state?(%Issue{state: state}, expected) when is_binary(state) do
+    state |> String.trim() |> String.downcase() == expected
+  end
+
+  defp in_state?(_issue, _expected), do: false
+
+  defp present?(nil), do: false
+  defp present?([]), do: false
+  defp present?(_value), do: true
+end
