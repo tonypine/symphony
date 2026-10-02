@@ -3569,6 +3569,61 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
+  test "agent runner refuses to take an attached PR's branch from a sibling an active issue owns" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-agent-runner-active-sibling-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      %{workspace_root: workspace_root, pr_head_sha: pr_head_sha} = setup_worktree_pr_head!(test_root)
+      primary_repo = Path.join(test_root, "primary")
+
+      # TP-225's agent is mid-run on the shared PR branch with a clean tree.
+      {:ok, sibling_workspace} =
+        SymphonyElixir.PathSafety.canonicalize(Path.join([workspace_root, "default", "TP-225"]))
+
+      File.mkdir_p!(Path.dirname(sibling_workspace))
+      git!(primary_repo, ["worktree", "add", "-b", "auto/TP-225", sibling_workspace, "origin/feature-head"])
+      git!(primary_repo, ["push", "origin", "auto/TP-225"])
+
+      {:ok, workspace} =
+        SymphonyElixir.PathSafety.canonicalize(Path.join([workspace_root, "default", "TP-226"]))
+
+      git!(primary_repo, ["worktree", "add", "-b", "auto/TP-226", workspace, "origin/main"])
+
+      pr_url = "https://github.com/org/repo/pull/225#auto/TP-225"
+
+      issue = %Issue{
+        id: "issue-shared-pr",
+        identifier: "TP-226",
+        title: "Mentions TP-225's PR",
+        description: "Linear linked the shared PR to both issues",
+        state: "In Progress",
+        pull_request_url: pr_url,
+        pr_urls: [pr_url]
+      }
+
+      capture_log(fn ->
+        assert_raise RuntimeError, ~r/branch_already_checked_out_elsewhere/, fn ->
+          AgentRunner.run(issue, nil,
+            issue_state_fetcher: fn [_issue_id] -> {:ok, [%{issue | state: "Done"}]} end,
+            issue_enricher: no_op_issue_enricher(),
+            github: AttachedPrGitHub,
+            active_workspace_identifiers: ["TP-225"]
+          )
+        end
+      end)
+
+      assert git!(sibling_workspace, ["branch", "--show-current"]) == "auto/TP-225"
+      assert git!(sibling_workspace, ["rev-parse", "HEAD"]) == pr_head_sha
+      assert git!(workspace, ["branch", "--show-current"]) == "auto/TP-226"
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "agent runner keeps the default branch when the attached PR already uses it or is closed" do
     test_root =
       Path.join(

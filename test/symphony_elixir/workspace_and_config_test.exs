@@ -1068,6 +1068,66 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     end
   end
 
+  test "worktree strategy keeps a clean sibling workspace's branch when an active issue owns it" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-workspace-worktree-active-sibling-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      primary_repo = Path.join(test_root, "primary")
+      origin_repo = Path.join(test_root, "origin.git")
+      workspace_root = Path.join(test_root, "workspaces")
+
+      create_primary_repo!(primary_repo, origin_repo)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        workspace_fetch_before_dispatch: false
+      )
+
+      # Another running issue's clean, pushed worktree has the shared PR branch
+      # checked out; detaching it would land that agent's next commit on a
+      # detached HEAD.
+      assert {:ok, sibling_workspace} = Workspace.create_for_issue("TP-225")
+      git!(sibling_workspace, ["push", "origin", "auto/TP-225"])
+
+      issue = %Issue{identifier: "TP-226", workspace_branch: "auto/TP-225"}
+
+      assert {:error, {:branch_already_checked_out_elsewhere, details}} =
+               Workspace.create_for_issue(issue, nil, nil, active_workspace_identifiers: ["TP-225"])
+
+      assert details[:branch] == "auto/TP-225"
+      assert SymphonyElixir.PathSafety.canonicalize(details[:at]) == {:ok, sibling_workspace}
+      assert String.trim(git!(sibling_workspace, ["branch", "--show-current"])) == "auto/TP-225"
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "orchestrator lists other running and retrying workspaces in the same repo as active siblings" do
+    state = %Orchestrator.State{
+      repo_key: "default",
+      running: %{
+        "issue-self" => %{identifier: "TP-226", issue: %Issue{identifier: "TP-226"}, workspace_path: "/ws/default/TON-226"},
+        "issue-running" => %{identifier: "TP-225", issue: %Issue{identifier: "TP-225"}, workspace_path: "/ws/default/TON-225"},
+        "issue-other-repo" => %{repo_key: "other", identifier: "TP-1", workspace_path: "/ws/other/TP-1"}
+      },
+      retry_attempts: %{
+        "issue-self" => %{identifier: "TP-226", repo_key: "default", workspace_path: "/ws/default/TON-226"},
+        "issue-retrying" => %{identifier: "TP-224", repo_key: "default", workspace_path: nil},
+        "issue-retrying-other-repo" => %{identifier: "TP-2", repo_key: "other"}
+      }
+    }
+
+    identifiers = Orchestrator.sibling_active_workspace_identifiers_for_test(state, "issue-self", "default")
+
+    assert Enum.sort(identifiers) == ["TON-225", "TP-224", "TP-225"]
+  end
+
   test "worktree reuse refuses when the requested branch is already checked out elsewhere" do
     test_root =
       Path.join(

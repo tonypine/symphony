@@ -69,10 +69,17 @@ defmodule SymphonyElixir.Workspace do
     System.cmd(command, safe_git_args(args), safe_git_opts(opts))
   end
 
-  @spec create_for_issue(map() | String.t() | nil, worker_host(), String.t() | nil) ::
+  # `opts`:
+  #   * `:active_workspace_identifiers` - identifiers (or workspace basenames) of
+  #     other issues a running or retrying agent owns. Their worktrees are never
+  #     detached to release a branch for this issue.
+  @spec create_for_issue(map() | String.t() | nil, worker_host(), String.t() | nil, keyword()) ::
           {:ok, Path.t()} | {:error, term()}
-  def create_for_issue(issue_or_identifier, worker_host \\ nil, repo_key \\ nil) do
-    issue_context = issue_context(issue_or_identifier, repo_key)
+  def create_for_issue(issue_or_identifier, worker_host \\ nil, repo_key \\ nil, opts \\ []) do
+    issue_context =
+      issue_or_identifier
+      |> issue_context(repo_key)
+      |> Map.put(:active_workspaces, normalize_identifier_set(Keyword.get(opts, :active_workspace_identifiers, [])))
 
     try do
       safe_repo_key = safe_identifier(issue_context.repo_key)
@@ -176,8 +183,9 @@ defmodule SymphonyElixir.Workspace do
          branch = worktree_branch(issue_context),
          base_ref = worktree_base_ref(issue_context),
          create_base_ref = worktree_create_base_ref(repo, issue_context, base_ref),
+         active_workspaces = issue_context.active_workspaces,
          {:ok, created?} <-
-           add_or_reuse_local_worktree(repo, workspace, branch, base_ref, create_base_ref) do
+           add_or_reuse_local_worktree(repo, workspace, branch, base_ref, create_base_ref, active_workspaces) do
       ensure_skip_comments_excluded(workspace)
       {:ok, workspace, created?}
     else
@@ -304,24 +312,24 @@ defmodule SymphonyElixir.Workspace do
   # in-progress worktree is preserved; set by PR runs to the PR head). `create_base_ref`
   # drives fresh worktree creation, defaulting to the configured base branch so a new
   # worktree branches off clean trunk rather than whatever the source repo HEAD is on.
-  defp add_or_reuse_local_worktree(repo, workspace, branch, base_ref, create_base_ref) do
+  defp add_or_reuse_local_worktree(repo, workspace, branch, base_ref, create_base_ref, active_workspaces) do
     cond do
       File.dir?(workspace) ->
-        reuse_local_worktree(repo, workspace, branch, base_ref)
+        reuse_local_worktree(repo, workspace, branch, base_ref, active_workspaces)
 
       File.exists?(workspace) ->
         File.rm_rf!(workspace)
-        add_local_worktree(repo, workspace, branch, create_base_ref)
+        add_local_worktree(repo, workspace, branch, create_base_ref, active_workspaces)
 
       true ->
-        add_local_worktree(repo, workspace, branch, create_base_ref)
+        add_local_worktree(repo, workspace, branch, create_base_ref, active_workspaces)
     end
   end
 
-  defp reuse_local_worktree(repo, workspace, branch, base_ref) do
+  defp reuse_local_worktree(repo, workspace, branch, base_ref, active_workspaces) do
     case registered_worktree?(repo, workspace) do
       true ->
-        with :ok <- reset_worktree_to_base_ref(repo, workspace, branch, base_ref) do
+        with :ok <- reset_worktree_to_base_ref(repo, workspace, branch, base_ref, active_workspaces) do
           {:ok, false}
         end
 
@@ -333,11 +341,11 @@ defmodule SymphonyElixir.Workspace do
   # PR runs pass an explicit base_ref (e.g. "origin/<head>") so a redispatch sees
   # the latest PR head on the requested branch. Issue runs pass nil and keep the
   # existing worktree state.
-  defp reset_worktree_to_base_ref(_repo, _workspace, _branch, nil), do: :ok
-  defp reset_worktree_to_base_ref(_repo, _workspace, _branch, ""), do: :ok
+  defp reset_worktree_to_base_ref(_repo, _workspace, _branch, nil, _active_workspaces), do: :ok
+  defp reset_worktree_to_base_ref(_repo, _workspace, _branch, "", _active_workspaces), do: :ok
 
-  defp reset_worktree_to_base_ref(repo, workspace, branch, base_ref) when is_binary(base_ref) do
-    with :ok <- check_branch_not_checked_out_elsewhere(repo, workspace, branch),
+  defp reset_worktree_to_base_ref(repo, workspace, branch, base_ref, active_workspaces) when is_binary(base_ref) do
+    with :ok <- check_branch_not_checked_out_elsewhere(repo, workspace, branch, active_workspaces),
          {:ok, commit_sha} <- resolve_git_commit(workspace, base_ref) do
       _ = backup_local_work_before_reset(workspace)
 
@@ -482,10 +490,10 @@ defmodule SymphonyElixir.Workspace do
     end
   end
 
-  defp add_local_worktree(repo, workspace, branch, base_ref) do
+  defp add_local_worktree(repo, workspace, branch, base_ref, active_workspaces) do
     File.mkdir_p!(Path.dirname(workspace))
 
-    case check_branch_not_checked_out_elsewhere(repo, workspace, branch) do
+    case check_branch_not_checked_out_elsewhere(repo, workspace, branch, active_workspaces) do
       :ok ->
         repo
         |> run_git(worktree_add_args(repo, workspace, branch, base_ref))
@@ -520,13 +528,13 @@ defmodule SymphonyElixir.Workspace do
 
   defp reuse_local_worktree_after_add_failure(_repo, _workspace, _attempts), do: :error
 
-  defp check_branch_not_checked_out_elsewhere(repo, workspace, branch) do
+  defp check_branch_not_checked_out_elsewhere(repo, workspace, branch, active_workspaces) do
     # On `git worktree list --porcelain` failure, fall through to the actual
     # `git worktree add` so its native error surfaces via the existing path.
     with {:ok, output} <- git_output(repo, ["worktree", "list", "--porcelain"]),
          path when is_binary(path) <- find_worktree_for_branch(output, branch),
          false <- Path.expand(path) == Path.expand(workspace),
-         :error <- release_branch_from_stale_sibling(path, workspace, branch) do
+         :error <- release_branch_from_stale_sibling(path, workspace, branch, active_workspaces) do
       {:error, {:branch_already_checked_out_elsewhere, branch: branch, at: path, requested: workspace}}
     else
       _ -> :ok
@@ -537,10 +545,11 @@ defmodule SymphonyElixir.Workspace do
   # workspace directory while its old sibling worktree still has the PR branch
   # checked out. When that sibling holds no uncommitted or unpushed work, detach
   # its HEAD so the renamed issue's workspace can take the branch over. Anything
-  # else (a worktree outside this repo's workspace dir, or one with local-only
-  # work) keeps the collision error.
-  defp release_branch_from_stale_sibling(owner, workspace, branch) do
+  # else (a worktree outside this repo's workspace dir, one a running or retrying
+  # agent owns, or one with local-only work) keeps the collision error.
+  defp release_branch_from_stale_sibling(owner, workspace, branch, active_workspaces) do
     if Path.dirname(Path.expand(owner)) == Path.dirname(Path.expand(workspace)) and
+         not MapSet.member?(active_workspaces, Path.basename(owner)) and
          not worktree_has_local_only_work?(owner) and
          run_git(owner, ["checkout", "--detach"]) == :ok do
       Logger.info("Released workspace branch from stale sibling worktree branch=#{branch} sibling=#{owner} workspace=#{workspace}")
