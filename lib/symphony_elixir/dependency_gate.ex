@@ -11,7 +11,7 @@ defmodule SymphonyElixir.DependencyGate do
 
   require Logger
 
-  alias SymphonyElixir.{DependencyAudit, Notifications, Tracker}
+  alias SymphonyElixir.{Config, DependencyAudit, Notifications, Tracker}
 
   @hold_state "In Review"
 
@@ -98,6 +98,37 @@ defmodule SymphonyElixir.DependencyGate do
   def audit(_gate), do: {:ok, []}
 
   @doc """
+  Returns true when a local workspace no longer exists on disk.
+
+  A workspace removed by cleanup has nothing left to audit, so callers treat it
+  as a clean audit rather than a hold. Remote workspaces are never reported
+  missing because the audit cannot see them from this host.
+  """
+  @spec workspace_missing?(term(), String.t() | nil) :: boolean()
+  def workspace_missing?(workspace, nil) when is_binary(workspace), do: not File.dir?(workspace)
+  def workspace_missing?(_workspace, _worker_host), do: false
+
+  @doc """
+  Returns true when the tracker reports the issue in a terminal state.
+
+  Used before any dependency hold moves state, so an issue that already reached
+  a terminal state (for example `Done` after its PR merged) is never reopened.
+  Lookup failures report false so a hold still applies when the state is unknown.
+  """
+  @spec issue_terminal?(term()) :: boolean()
+  def issue_terminal?(issue), do: issue_terminal?(issue, &Tracker.fetch_issue_states_by_ids/1)
+
+  @spec issue_terminal?(term(), ([String.t()] -> term())) :: boolean()
+  def issue_terminal?(%{id: issue_id}, issue_state_fetcher) when is_binary(issue_id) do
+    case issue_state_fetcher.([issue_id]) do
+      {:ok, [%{state: state} | _]} when is_binary(state) -> terminal_state?(state)
+      _other -> false
+    end
+  end
+
+  def issue_terminal?(_issue, _issue_state_fetcher), do: false
+
+  @doc """
   Move the gated issue to the configured review state and emit the
   `dependency_pending_approval` notification with the audit items as metadata.
   """
@@ -167,7 +198,17 @@ defmodule SymphonyElixir.DependencyGate do
   defp maybe_put_option(opts, _key, nil), do: opts
   defp maybe_put_option(opts, key, value), do: Keyword.put(opts, key, value)
 
-  defp move_issue_to_hold(%{issue: %{id: issue_id}}) when is_binary(issue_id) do
+  defp move_issue_to_hold(%{issue: %{id: issue_id} = issue}) when is_binary(issue_id) do
+    if issue_terminal?(issue) do
+      Logger.info("Skipping dependency hold state move for terminal issue issue_id=#{issue_id}")
+    else
+      update_issue_to_hold(issue_id)
+    end
+  end
+
+  defp move_issue_to_hold(_gate), do: :ok
+
+  defp update_issue_to_hold(issue_id) do
     case Tracker.update_issue_state(issue_id, @hold_state) do
       :ok ->
         :ok
@@ -178,7 +219,13 @@ defmodule SymphonyElixir.DependencyGate do
     end
   end
 
-  defp move_issue_to_hold(_gate), do: :ok
+  defp terminal_state?(state) do
+    normalized_state = normalize_state(state)
+
+    Enum.any?(Config.settings!().tracker.terminal_states, &(normalize_state(&1) == normalized_state))
+  end
+
+  defp normalize_state(state), do: state |> String.trim() |> String.downcase()
 
   defp emit_hold_event(%{issue: issue} = gate, items) do
     Notifications.emit_issue_event(
