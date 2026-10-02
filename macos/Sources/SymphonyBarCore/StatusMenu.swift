@@ -54,6 +54,19 @@ public enum StatusMenu {
         return lines + (controlError.map { [$0] } ?? [])
     }
 
+    /// Which Symphony Start runs: "Symphony v1.2.3 (embedded)" or "Development: <checkout>".
+    public static func sourceLine(_ settings: AppSettings, appVersion: String?, embeddedAvailable: Bool) -> String {
+        let settings = settings.trimmed()
+        if settings.developmentMode {
+            let checkout = settings.checkoutPath.isEmpty
+                ? "no checkout folder set" : (settings.checkoutPath as NSString).abbreviatingWithTildeInPath
+            return "Development: \(checkout)"
+        }
+        guard embeddedAvailable else { return "No embedded Symphony: turn on Development mode" }
+        guard let version = appVersion?.trimmingWhitespace(), !version.isEmpty else { return "Symphony (embedded)" }
+        return "Symphony v\(version) (embedded)"
+    }
+
     /// For example "2 running · 1 retrying".
     public static func countsLine(_ snapshot: StateSnapshot) -> String {
         "\(snapshot.running) running · \(snapshot.retrying) retrying"

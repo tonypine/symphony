@@ -23,8 +23,29 @@ public struct ChildLaunch: Equatable {
         self.environment = environment
     }
 
-    /// The shell script run by `zsh -lc`. Never holds a secret.
+    /// The shell script run by `zsh -lc` in Development mode. Never holds a secret.
     public var script: String { arguments.last ?? "" }
+}
+
+/// The Symphony binary shipped inside release builds of the app.
+public enum EmbeddedSymphony {
+    /// File name of the binary in the app bundle's `Contents/Resources`.
+    public static let resourceName = "symphony"
+
+    /// Shown when the embedded binary is missing, as in local `make` builds.
+    public static let missingMessage = "This build has no embedded Symphony; turn on Development mode in Settings."
+
+    /// Where the embedded binary would be, given the app's resources folder (`Bundle.main.resourcePath`).
+    public static func path(resourcesPath: String?) -> String? {
+        guard let resourcesPath, !resourcesPath.isEmpty else { return nil }
+        return (resourcesPath as NSString).appendingPathComponent(resourceName)
+    }
+
+    /// True when the binary is at `path`.
+    public static func isAvailable(at path: String?, files: FileChecker = LocalFileChecker()) -> Bool {
+        guard let path else { return false }
+        return files.isFile(atPath: path)
+    }
 }
 
 /// Why Symphony can't be started with the current settings.
@@ -34,6 +55,7 @@ public enum LaunchProblem: LocalizedError, Equatable {
     case commandPrefixInvalid
     case linearAPIKeyMissing
     case symphonyBinaryMissing(String)
+    case embeddedSymphonyMissing
 
     public var message: String {
         switch self {
@@ -47,6 +69,8 @@ public enum LaunchProblem: LocalizedError, Equatable {
             return "Linear API key not set. Add it in Settings."
         case .symphonyBinaryMissing(let path):
             return "\(path) was not found. Build it with `mise exec -- mix build` in the checkout."
+        case .embeddedSymphonyMissing:
+            return EmbeddedSymphony.missingMessage
         }
     }
 
@@ -61,14 +85,27 @@ public enum LaunchProblem: LocalizedError, Equatable {
 
 /// Builds the child launch from the saved settings. Secrets only ever go into the environment.
 public enum ChildLaunchBuilder {
+    /// Runs the embedded Symphony directly, or in Development mode the checkout's `bin/symphony` through a login
+    /// shell. `embeddedSymphonyPath` is where the app's embedded binary would be.
     public static func build(
         settings: AppSettings,
         secrets: SecretSettings,
         baseEnvironment: [String: String],
+        embeddedSymphonyPath: String? = nil,
         files: FileChecker = LocalFileChecker()
     ) throws -> ChildLaunch {
         let settings = settings.trimmed()
         let secrets = secrets.trimmed()
+
+        guard settings.developmentMode else {
+            return try buildEmbedded(
+                settings: settings,
+                secrets: secrets,
+                baseEnvironment: baseEnvironment,
+                binary: embeddedSymphonyPath,
+                files: files
+            )
+        }
 
         guard !settings.checkoutPath.isEmpty else { throw LaunchProblem.checkoutPathMissing }
         guard !settings.configPath.isEmpty else { throw LaunchProblem.configPathMissing }
@@ -86,6 +123,28 @@ public enum ChildLaunchBuilder {
             executable: ChildLaunch.shell,
             arguments: ["-lc", script],
             workingDirectory: settings.checkoutPath,
+            environment: environment(base: baseEnvironment, secrets: secrets)
+        )
+    }
+
+    /// `<embedded symphony> --config <symphony.yml>`, run directly in the folder holding symphony.yml.
+    private static func buildEmbedded(
+        settings: AppSettings,
+        secrets: SecretSettings,
+        baseEnvironment: [String: String],
+        binary: String?,
+        files: FileChecker
+    ) throws -> ChildLaunch {
+        guard !settings.configPath.isEmpty else { throw LaunchProblem.configPathMissing }
+        guard !secrets.linearAPIKey.isEmpty else { throw LaunchProblem.linearAPIKeyMissing }
+        guard let binary, EmbeddedSymphony.isAvailable(at: binary, files: files) else {
+            throw LaunchProblem.embeddedSymphonyMissing
+        }
+
+        return ChildLaunch(
+            executable: binary,
+            arguments: ["--config", settings.configPath],
+            workingDirectory: (settings.configPath as NSString).deletingLastPathComponent,
             environment: environment(base: baseEnvironment, secrets: secrets)
         )
     }

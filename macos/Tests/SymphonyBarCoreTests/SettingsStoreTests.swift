@@ -27,13 +27,58 @@ final class SettingsStoreTests: XCTestCase {
             configPath: "/src/symphony/symphony.yml",
             commandPrefix: "mise exec --",
             stopTimeoutSeconds: 45,
-            startOnLaunch: true
+            startOnLaunch: true,
+            developmentMode: true
         )
 
         SettingsStore(defaults: defaults, secrets: MemorySecretStore()).saveSettings(settings)
         let reopened = SettingsStore(defaults: defaults, secrets: MemorySecretStore())
 
         XCTAssertEqual(reopened.loadSettings(), settings)
+    }
+
+    func testDevelopmentModeIsOffUntilSaved() {
+        let store = SettingsStore(defaults: MemoryKeyValueStore(), secrets: MemorySecretStore())
+        XCTAssertFalse(store.loadSettings().developmentMode)
+    }
+
+    func testMigrationTurnsDevelopmentModeOnForACheckoutWithoutAnEmbeddedSymphony() {
+        let defaults = MemoryKeyValueStore()
+        defaults.values[SettingsStore.Key.checkoutPath] = "/src/symphony"
+        let store = SettingsStore(defaults: defaults, secrets: MemorySecretStore())
+
+        store.migrateDevelopmentMode(embeddedSymphonyAvailable: false)
+
+        XCTAssertTrue(store.loadSettings().developmentMode)
+        XCTAssertEqual(defaults.values[SettingsStore.Key.developmentMode] as? Bool, true)
+    }
+
+    func testMigrationLeavesDevelopmentModeOffOtherwise() {
+        for (checkout, embedded) in [("/src/symphony", true), ("", false), ("  ", false), ("", true)] {
+            let defaults = MemoryKeyValueStore()
+            defaults.values[SettingsStore.Key.checkoutPath] = checkout
+            let store = SettingsStore(defaults: defaults, secrets: MemorySecretStore())
+
+            store.migrateDevelopmentMode(embeddedSymphonyAvailable: embedded)
+
+            XCTAssertEqual(defaults.values[SettingsStore.Key.developmentMode] as? Bool, false, "\(checkout) \(embedded)")
+        }
+        let fresh = MemoryKeyValueStore()
+        SettingsStore(defaults: fresh, secrets: MemorySecretStore()).migrateDevelopmentMode(embeddedSymphonyAvailable: false)
+        XCTAssertEqual(fresh.values[SettingsStore.Key.developmentMode] as? Bool, false)
+    }
+
+    func testMigrationRunsOnlyOnceAndKeepsTheSavedChoice() {
+        let defaults = MemoryKeyValueStore()
+        let store = SettingsStore(defaults: defaults, secrets: MemorySecretStore())
+        store.saveSettings(AppSettings(checkoutPath: "/src/symphony", developmentMode: false))
+
+        store.migrateDevelopmentMode(embeddedSymphonyAvailable: false)
+        XCTAssertFalse(store.loadSettings().developmentMode)
+
+        store.saveSettings(AppSettings(developmentMode: true))
+        store.migrateDevelopmentMode(embeddedSymphonyAvailable: true)
+        XCTAssertTrue(store.loadSettings().developmentMode)
     }
 
     func testSecretsRoundTripThroughANewStore() throws {
@@ -124,6 +169,7 @@ final class SettingsStoreTests: XCTestCase {
                 SettingsStore.Key.commandPrefix,
                 SettingsStore.Key.stopTimeoutSeconds,
                 SettingsStore.Key.startOnLaunch,
+                SettingsStore.Key.developmentMode,
             ]
         )
         for value in defaults.values.values {

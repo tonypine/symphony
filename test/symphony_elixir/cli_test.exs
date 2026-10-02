@@ -238,6 +238,14 @@ defmodule SymphonyElixir.CLITest do
     assert :ok = CLI.maybe_configure_burrito_runtime()
   end
 
+  test "burrito_args reads the wrapper's plain arguments only inside a Burrito binary" do
+    assert CLI.burrito_args(nil, [~c"--help"]) == :not_in_burrito
+    assert CLI.burrito_args("", [~c"--help"]) == :not_in_burrito
+
+    assert CLI.burrito_args("/Applications/Symphony.app/Contents/Resources/symphony", [~c"check", ~c"--config", ~c"s.yml"]) ==
+             ["check", "--config", "s.yml"]
+  end
+
   test "reads root env overrides before applying flag overrides" do
     parent = self()
 

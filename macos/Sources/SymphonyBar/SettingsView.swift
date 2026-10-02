@@ -10,13 +10,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 0) {
             Form {
                 Section("Symphony") {
-                    PathField(title: "Checkout folder", path: $model.settings.checkoutPath, choosesDirectories: true)
                     PathField(title: "symphony.yml", path: $model.settings.configPath, choosesDirectories: false)
-                    TextField(
-                        "Command prefix",
-                        text: $model.settings.commandPrefix,
-                        prompt: Text("Optional, e.g. mise exec --")
-                    )
                     LabeledContent("Stop timeout") {
                         HStack {
                             TextField("Seconds", value: $model.settings.stopTimeoutSeconds, format: .number)
@@ -40,6 +34,26 @@ struct SettingsView: View {
                             Button("Open Login Items") { MainAppLoginItem.openSystemSettings() }
                         }
                     }
+                }
+
+                Section {
+                    Toggle("Development mode", isOn: $model.settings.developmentMode)
+                    if model.settings.developmentMode {
+                        PathField(title: "Checkout folder", path: $model.settings.checkoutPath, choosesDirectories: true)
+                        TextField(
+                            "Command prefix",
+                            text: $model.settings.commandPrefix,
+                            prompt: Text("Optional, e.g. mise exec --")
+                        )
+                    }
+                } footer: {
+                    Text(
+                        model.settings.developmentMode
+                            ? "Runs bin/symphony from the checkout through a login shell, for working on Symphony itself."
+                            : "Runs the Symphony built into this app. Turn on to run bin/symphony from a checkout."
+                    )
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
                 }
 
                 Section {
