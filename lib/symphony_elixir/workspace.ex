@@ -15,6 +15,7 @@ defmodule SymphonyElixir.Workspace do
     "core.sshCommand=ssh",
     "core.fsmonitor=",
     "core.hooksPath=",
+    "credential.helper=",
     "protocol.ext.allow=never",
     "protocol.file.allow=user"
   ]

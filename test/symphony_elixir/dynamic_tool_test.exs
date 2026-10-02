@@ -1104,6 +1104,10 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
           assert opts[:cd] == workspace
           {"git@github.com:acme/symphony.git\n", 0}
 
+        ["remote", "get-url", "--push", "--all", "origin"], opts ->
+          assert opts[:cd] == workspace
+          {"git@github.com:acme/symphony.git\n", 0}
+
         ["push", "origin", "auto/ACME-3051"], opts ->
           assert opts[:cd] == workspace
           {"pushed\n", 0}
@@ -1201,6 +1205,10 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
           {"auto/ACME-3051\n", 0}
 
         ["remote", "get-url", "origin"], opts ->
+          assert opts[:cd] == workspace
+          {"git@github.com:acme/symphony.git\n", 0}
+
+        ["remote", "get-url", "--push", "--all", "origin"], opts ->
           assert opts[:cd] == workspace
           {"git@github.com:acme/symphony.git\n", 0}
 

@@ -4,6 +4,7 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
   alias SymphonyElixir.AgentTools.GitHub
   alias SymphonyElixir.AgentTools.SecretScanner
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.Workspace
 
   test "public defaults fail closed when required scope is missing" do
     assert {:error, :missing_github_origin_repo} = GitHub.get_pull_request(%{})
@@ -217,6 +218,7 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
       ok_tuple_runner = fn
         ["branch", "--show-current"], _opts -> {:ok, "auto/ACME-3051\n"}
         ["remote", "get-url", "origin"], _opts -> {:ok, "git@github.com:acme/symphony.git\n"}
+        ["remote", "get-url", "--push", "--all", "origin"], _opts -> {:ok, "git@github.com:acme/symphony.git\n"}
         ["push", "origin", "auto/ACME-3051"], _opts -> {:ok, "pushed\n"}
       end
 
@@ -227,6 +229,7 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
       nonzero_runner = fn
         ["branch", "--show-current"], _opts -> {"auto/ACME-3051\n", 0}
         ["remote", "get-url", "origin"], _opts -> {"git@github.com:acme/symphony.git\n", 0}
+        ["remote", "get-url", "--push", "--all", "origin"], _opts -> {"git@github.com:acme/symphony.git\n", 0}
         ["push", "origin", "auto/ACME-3051"], _opts -> {"rejected\n", 1}
       end
 
@@ -370,6 +373,73 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
       assert String.trim(git!(origin, ["rev-parse", "refs/heads/auto/ACME-3051"])) != ""
     after
       File.rm_rf(test_root)
+    end
+  end
+
+  test "fetch_origin default git runner ignores a planted repo credential helper" do
+    test_root = tmp_workspace!("github-agent-safe-credential")
+    workspace = Path.join(test_root, "workspace")
+    proof = Path.join(test_root, "SYMPHONY_PWNED")
+    {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true, ip: {127, 0, 0, 1}])
+    {:ok, port} = :inet.port(listener)
+    server = Task.async(fn -> serve_unauthorized(listener) end)
+    origin = "http://127.0.0.1:#{port}/acme/symphony.git"
+
+    try do
+      File.mkdir_p!(workspace)
+      git!(workspace, ["init"])
+      git!(workspace, ["remote", "add", "origin", origin])
+      git!(workspace, ["config", "credential.helper", "!touch \"#{proof}\""])
+      git!(workspace, ["config", "credential.http://127.0.0.1.helper", "!touch \"#{proof}\""])
+
+      context = %{workspace: workspace, command_security: %{origin_url: origin, workspace: workspace}}
+
+      git_runner = fn args, opts ->
+        Workspace.safe_git(args, Keyword.put(opts, :env, [{"GIT_TERMINAL_PROMPT", "0"}]))
+      end
+
+      assert {:error, {:git_fetch_failed, _status, _output}} = GitHub.fetch_origin(context, git_runner: git_runner)
+      refute File.exists?(proof)
+    after
+      :gen_tcp.close(listener)
+      Task.shutdown(server, :brutal_kill)
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "push_branch default git runner refuses planted pushurl and url rewrites" do
+    for {key, value_fun} <- [
+          {"remote.origin.pushurl", fn _origin, decoy -> {"remote.origin.pushurl", decoy} end},
+          {"pushInsteadOf", fn origin, decoy -> {"url.#{decoy}.pushInsteadOf", origin} end},
+          {"insteadOf", fn origin, decoy -> {"url.#{decoy}.insteadOf", origin} end}
+        ] do
+      test_root = tmp_workspace!("github-agent-push-redirect")
+      workspace = Path.join(test_root, "workspace")
+      origin = Path.join(test_root, "origin.git")
+      decoy = Path.join(test_root, "decoy.git")
+
+      try do
+        File.mkdir_p!(workspace)
+        git!(test_root, ["init", "--bare", origin])
+        git!(test_root, ["init", "--bare", decoy])
+        git!(workspace, ["init", "-b", "auto/ACME-3051"])
+        git!(workspace, ["config", "user.name", "Test User"])
+        git!(workspace, ["config", "user.email", "test@example.com"])
+        File.write!(Path.join(workspace, "README.md"), "redirect\n")
+        git!(workspace, ["add", "README.md"])
+        git!(workspace, ["commit", "-m", "initial"])
+        git!(workspace, ["remote", "add", "origin", origin])
+        {config_key, config_value} = value_fun.(origin, decoy)
+        git!(workspace, ["config", config_key, config_value])
+
+        context = %{workspace: workspace, command_security: %{origin_url: origin, workspace: workspace}}
+
+        assert {:error, :origin_url_mismatch} = GitHub.push_branch(context), "planted #{key} was not refused"
+        assert git!(decoy, ["for-each-ref"]) == ""
+        assert git!(origin, ["for-each-ref"]) == ""
+      after
+        File.rm_rf(test_root)
+      end
     end
   end
 
@@ -1333,6 +1403,25 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
       ["branch", "--show-current"], opts ->
         assert opts[:cd] == workspace
         {"auto/ACME-3051\n", 0}
+    end
+  end
+
+  defp serve_unauthorized(listener) do
+    case :gen_tcp.accept(listener) do
+      {:ok, socket} ->
+        _request = :gen_tcp.recv(socket, 0, 5_000)
+
+        :gen_tcp.send(
+          socket,
+          "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"symphony\"\r\n" <>
+            "Content-Length: 0\r\nConnection: close\r\n\r\n"
+        )
+
+        :gen_tcp.close(socket)
+        serve_unauthorized(listener)
+
+      {:error, _reason} ->
+        :ok
     end
   end
 
