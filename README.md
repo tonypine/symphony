@@ -196,6 +196,14 @@ Start the service from a directory containing `symphony.yml` (or pass `--config`
 ./bin/symphony --config ./other.yml  # use a different operator config
 ```
 
+Validate `symphony.yml` and every repo `WORKFLOW.md` it points at without starting the service
+(exit 0 with `Config OK: <path>`, or exit 1 with the error on stderr):
+
+```bash
+./bin/symphony check                       # checks ./symphony.yml
+./bin/symphony check --config ./other.yml
+```
+
 Run a single issue synchronously, without the poll loop or dashboard:
 
 ```bash

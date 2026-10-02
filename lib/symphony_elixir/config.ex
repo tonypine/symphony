@@ -86,7 +86,7 @@ defmodule SymphonyElixir.Config do
         settings
 
       {:error, reason} ->
-        raise ArgumentError, message: format_config_error(reason)
+        raise ArgumentError, message: format_error(reason)
     end
   end
 
@@ -131,7 +131,7 @@ defmodule SymphonyElixir.Config do
         system_config
 
       {:error, reason} ->
-        raise ArgumentError, message: format_config_error(reason)
+        raise ArgumentError, message: format_error(reason)
     end
   end
 
@@ -161,7 +161,7 @@ defmodule SymphonyElixir.Config do
         repo_key
 
       {:error, reason} ->
-        raise ArgumentError, message: format_config_error(reason)
+        raise ArgumentError, message: format_error(reason)
     end
   end
 
@@ -184,7 +184,7 @@ defmodule SymphonyElixir.Config do
         settings
 
       {:error, reason} ->
-        raise ArgumentError, message: format_config_error(reason)
+        raise ArgumentError, message: format_error(reason)
     end
   end
 
@@ -745,24 +745,33 @@ defmodule SymphonyElixir.Config do
 
   def local_worktree_dirty_status(_repo), do: :not_applicable
 
-  defp format_config_error({:invalid_workflow_config, message}), do: "Invalid merged Symphony config: #{message}"
+  @doc """
+  Renders a config load or validation error as one human-readable line.
+  """
+  @spec format_error(term()) :: String.t()
+  def format_error({:invalid_workflow_config, message}), do: "Invalid merged Symphony config: #{message}"
 
-  defp format_config_error({:invalid_symphony_config, message}), do: "Invalid symphony.yml config: #{message}"
+  def format_error({:invalid_symphony_config, message}), do: "Invalid symphony.yml config: #{message}"
 
-  defp format_config_error({:missing_symphony_file, path, raw_reason}),
+  def format_error({:missing_symphony_file, path, raw_reason}),
     do: "Missing symphony.yml at #{path}: #{inspect(raw_reason)}"
 
-  defp format_config_error({:missing_workflow_file, path, raw_reason}),
+  def format_error({:missing_workflow_file, path, raw_reason}),
     do: "Missing WORKFLOW.md at #{path}: #{inspect(raw_reason)}"
 
-  defp format_config_error({:symphony_parse_error, raw_reason}), do: "Failed to parse symphony.yml: #{inspect(raw_reason)}"
+  def format_error({:symphony_parse_error, raw_reason}), do: "Failed to parse symphony.yml: #{format_parse_reason(raw_reason)}"
 
-  defp format_config_error({:workflow_parse_error, raw_reason}), do: "Failed to parse WORKFLOW.md: #{inspect(raw_reason)}"
+  def format_error({:workflow_parse_error, raw_reason}), do: "Failed to parse WORKFLOW.md: #{format_parse_reason(raw_reason)}"
 
-  defp format_config_error({:unknown_repo_key, repo_key}), do: "Unknown Symphony repo key: #{repo_key}"
+  def format_error({:unknown_repo_key, repo_key}), do: "Unknown Symphony repo key: #{repo_key}"
 
-  defp format_config_error(:symphony_file_not_a_map), do: "Failed to parse symphony.yml: file must decode to a map"
+  def format_error(:symphony_file_not_a_map), do: "Failed to parse symphony.yml: file must decode to a map"
 
-  defp format_config_error(:workflow_front_matter_not_a_map),
+  def format_error(:workflow_front_matter_not_a_map),
     do: "Failed to parse WORKFLOW.md: workflow front matter must decode to a map"
+
+  def format_error(reason), do: inspect(reason)
+
+  defp format_parse_reason(%YamlElixir.ParsingError{} = error), do: Exception.message(error)
+  defp format_parse_reason(raw_reason), do: inspect(raw_reason)
 end

@@ -3437,6 +3437,11 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - CLI accepts a `symphony init [--force]` subcommand that scaffolds a deterministic
   `symphony.yml`, refuses to overwrite an existing file without `--force`, and exits without
   starting the runtime.
+- CLI accepts a `symphony check [--config path]` subcommand that loads `symphony.yml` and every
+  configured repo `WORKFLOW.md` through the same validation the service runs at startup, without
+  starting the runtime or contacting the tracker or GitHub. It exits `0` and prints
+  `Config OK: <path>` when valid, and exits `1` with the error on stderr when the file is missing
+  or invalid. Errors name the file and key and never print secret values.
 - CLI accepts `--config path-to-symphony.yml` to select an alternate operator config.
 - CLI defaults to `./symphony.yml` when `--config` is omitted.
 - CLI errors when the resolved `symphony.yml` (explicit or default) does not exist.
