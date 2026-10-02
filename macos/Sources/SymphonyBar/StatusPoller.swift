@@ -6,6 +6,8 @@ import SymphonyBarCore
 final class StatusPoller {
     /// Called with each result; returns how long to wait before the next poll.
     var onPoll: ((StatusPoll) -> TimeInterval)?
+    /// Symphony's state directory, looked up before each poll since Symphony rewrites its control URL on start.
+    var stateRoot: () -> URL = { StateRoot.locate() }
 
     private var timer: Timer?
     private var inFlight = false
@@ -31,7 +33,7 @@ final class StatusPoller {
         }
         inFlight = true
         Task {
-            let result = await Self.fetch()
+            let result = await Self.fetch(stateRoot: stateRoot())
             inFlight = false
             let interval = onPoll?(result) ?? StatusMachine.pollInterval
             if pollAgain {
@@ -55,8 +57,8 @@ final class StatusPoller {
     }
 
     /// Fetches Symphony's state from the URL in its control URL file.
-    static func fetch() async -> StatusPoll {
-        let base = SymphonyState.baseURL(controlURLFile: SymphonyState.controlURLFile())
+    static func fetch(stateRoot: URL) async -> StatusPoll {
+        let base = StateRoot.controlURL(in: stateRoot)
         let request = URLRequest(
             url: SymphonyState.stateURL(base: base),
             cachePolicy: .reloadIgnoringLocalCacheData,

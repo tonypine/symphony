@@ -12,6 +12,8 @@ final class SymphonyRunner {
     private let logDirectory = ChildLog.defaultDirectory()
     private var child: ChildProcess?
     private var stopWaiters: [() -> Void] = []
+    // SYMPHONY_STATE_ROOT from the last start, which may come from the Keychain variables.
+    private var launchedStateRoot: String?
 
     init(store: SettingsStore = SettingsStore()) {
         self.store = store
@@ -19,6 +21,13 @@ final class SymphonyRunner {
 
     var isRunning: Bool { child != nil }
     var isStopping: Bool { child?.stopRequested == true }
+
+    /// Symphony's state directory, using the `SYMPHONY_STATE_ROOT` the app last started Symphony with.
+    var stateRoot: URL {
+        var environment = ProcessInfo.processInfo.environment
+        environment[StateRoot.environmentKey] = launchedStateRoot ?? environment[StateRoot.environmentKey]
+        return StateRoot.locate(environment: environment)
+    }
 
     /// Symphony's output log.
     var logURL: URL { logDirectory.appendingPathComponent(ChildLog.fileName) }
@@ -36,6 +45,7 @@ final class SymphonyRunner {
             secrets: try store.loadSecrets(),
             baseEnvironment: ProcessInfo.processInfo.environment
         )
+        launchedStateRoot = launch.environment[StateRoot.environmentKey]
         let log = try ChildLog.rotate(in: logDirectory)
         writeHeader(to: log, launch: launch)
 
@@ -60,7 +70,7 @@ final class SymphonyRunner {
 
     /// How many agent runs Symphony reports, or nil when its state can't be read.
     func activeRunCount() async -> Int? {
-        guard case let .state(snapshot) = await StatusPoller.fetch() else { return nil }
+        guard case let .state(snapshot) = await StatusPoller.fetch(stateRoot: stateRoot) else { return nil }
         return snapshot.running
     }
 

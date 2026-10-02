@@ -33,22 +33,25 @@ public enum StatusMenu {
         return "Symphony is \(statusWord(status))"
     }
 
-    /// Lines shown under the status title.
+    /// Lines shown under the status title, ending with the last Pause or Resume error when there is one.
     public static func detailLines(
         _ status: SymphonyStatus,
+        controlError: String? = nil,
         now: Date = Date(),
         timeZone: TimeZone = .current
     ) -> [String] {
+        let lines: [String]
         switch status {
         case .stopped, .starting:
-            return []
+            lines = []
         case let .running(snapshot, _):
-            return [countsLine(snapshot)]
+            lines = [countsLine(snapshot)]
         case let .paused(snapshot, _):
-            return [countsLine(snapshot)] + (snapshot.pause.map { [pauseLine($0, now: now, timeZone: timeZone)] } ?? [])
+            lines = [countsLine(snapshot)] + (snapshot.pause.map { [pauseLine($0, now: now, timeZone: timeZone)] } ?? [])
         case let .error(message):
-            return [message]
+            lines = [message]
         }
+        return lines + (controlError.map { [$0] } ?? [])
     }
 
     /// For example "2 running · 1 retrying".
@@ -99,6 +102,27 @@ public enum StatusMenu {
     /// Title of the menu item that stops Symphony, and its title while a stop is under way.
     public static let stopTitle = "Stop Symphony"
     public static let stoppingTitle = "Stopping Symphony…"
+
+    /// Title of the menu item that pauses dispatch. A pause only holds new dispatch, so the title says
+    /// active runs carry on.
+    public static let pauseTitle = "Pause Dispatch (active runs continue)"
+    public static let pausingTitle = "Pausing Dispatch…"
+
+    /// Title of the menu item that resumes dispatch.
+    public static let resumeTitle = "Resume Dispatch"
+    public static let resumingTitle = "Resuming Dispatch…"
+
+    /// Pause is offered while Symphony answers and dispatches, whether or not the app started it.
+    public static func canPause(_ status: SymphonyStatus) -> Bool {
+        if case .running = status { return true }
+        return false
+    }
+
+    /// Resume is offered while dispatch is paused, whoever paused it.
+    public static func canResume(_ status: SymphonyStatus) -> Bool {
+        if case .paused = status { return true }
+        return false
+    }
 
     /// Title of the menu item that opens the Settings window.
     public static let settingsTitle = "Settings…"

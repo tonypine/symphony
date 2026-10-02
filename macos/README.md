@@ -1,7 +1,7 @@
 # Symphony menu bar app
 
 A macOS menu bar app for Symphony. Its menu shows Symphony's status, and has Start Symphony, Stop Symphony,
-Open Dashboard, Open Logs, Settings… and Quit.
+Pause Dispatch, Resume Dispatch, Open Dashboard, Open Logs, Settings… and Quit.
 
 Requires macOS 13+ and Xcode or the Command Line Tools.
 
@@ -58,8 +58,8 @@ The login shell loads your zsh profile, so a Finder-launched app still finds `mi
 
 ## Status
 
-The app polls `GET /api/v1/state` on the URL in `~/Library/Application Support/symphony/control_url`
-(`http://127.0.0.1:4000` when that file is missing) every 5 seconds, and every second while Symphony starts.
+The app polls `GET /api/v1/state` on the URL in `<state root>/control_url` (`http://127.0.0.1:4000` when that
+file is missing) every 5 seconds, and every second while Symphony starts.
 It keeps App Nap off so the poll keeps that pace in the background.
 
 | Icon | Status |
@@ -75,5 +75,22 @@ reason and since when. If a Symphony the app didn't start (for example one start
 the app attaches to it as "running (external)": Start and Stop stay disabled, so the app neither starts a
 second Symphony nor stops one it doesn't own. Open Dashboard opens the control URL in the browser; Open Logs
 opens `menubar-child.log`.
+
+## Pause and Resume
+
+Pause Dispatch holds new dispatch; agent runs already under way continue. It calls
+`POST /api/v1/control/pause` with `{"reason":"paused from menu bar"}`, and Resume Dispatch calls
+`POST /api/v1/control/resume`, both with the bearer token in `<state root>/control_token`. Pause is offered
+while Symphony is running and Resume while it's paused, including for a Symphony the app didn't start.
+Symphony keeps the pause across restarts, so a restarted Symphony stays paused until you resume it. If the
+request fails (no token file, HTTP 401 for a wrong token, nothing answering), the menu shows why under the
+status until the next Pause or Resume.
+
+The state root is found as Symphony finds it:
+
+- `SYMPHONY_STATE_ROOT`, from the app's environment or from the variables Start Symphony last used.
+- Otherwise `~/Library/Application Support/symphony` or, for the Burrito release build, its `release/`
+  subdirectory. The app can't tell which build runs, so it uses the one whose `control_url` was written
+  last, then the one holding a `control_token`.
 
 `SymphonyBarCore` holds pure logic that is unit tested without AppKit; `SymphonyBar` is the AppKit app.

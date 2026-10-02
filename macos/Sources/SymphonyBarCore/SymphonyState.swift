@@ -39,11 +39,6 @@ public enum SymphonyState {
     /// Dashboard URL used when Symphony hasn't written its control URL file.
     public static let defaultBaseURL = URL(string: "http://127.0.0.1:4000")!
 
-    /// The file Symphony writes its control-plane URL to on start.
-    public static func controlURLFile(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
-        home.appendingPathComponent("Library/Application Support/symphony/control_url")
-    }
-
     /// The URL in the control URL file's contents, or the default when they are empty or not a URL.
     public static func baseURL(controlURLContents: String?) -> URL {
         let text = controlURLContents?.trimmingWhitespace() ?? ""
