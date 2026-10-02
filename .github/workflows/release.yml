@@ -87,6 +87,7 @@ jobs:
         run: |
           make package
           test -x burrito_out/symphony-macos-arm64
+          scripts/release/smoke_test.sh burrito_out/symphony-macos-arm64 "$GITHUB_WORKSPACE/symphony.yml"
 
       - name: Import the signing certificate
         id: signing
@@ -133,9 +134,7 @@ jobs:
           fi
           make bundle SYMPHONY_BIN="$GITHUB_WORKSPACE/burrito_out/symphony-macos-arm64" SIGNING_IDENTITY="$identity"
           codesign -dvv build/Symphony.app 2>&1 | grep -E '^(Identifier|Authority|Signature)=' || true
-          # Smoke test: the embedded binary boots and prints its usage (exit 1).
-          usage="$(build/Symphony.app/Contents/Resources/symphony --help 2>&1 || true)"
-          printf '%s\n' "$usage" | grep 'Usage: symphony'
+          ../scripts/release/smoke_test.sh build/Symphony.app/Contents/Resources/symphony "$GITHUB_WORKSPACE/symphony.yml"
 
       - name: Delete the temporary keychain
         if: always()
