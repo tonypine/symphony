@@ -2296,6 +2296,24 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       end
     end
 
+    test "closing the port after a timeout tolerates a cli that already exited" do
+      # Regression: the turn timeout fired, the cli exited, and the port closed
+      # before cleanup called Port.close/1, which raised ArgumentError.
+      port = Port.open({:spawn_executable, System.find_executable("sh")}, [:exit_status, args: ["-c", "exit 0"]])
+      monitor_ref = :erlang.monitor(:port, port)
+      assert_receive {^port, {:exit_status, 0}}, 5_000
+      assert_receive {:DOWN, ^monitor_ref, :port, ^port, _reason}, 5_000
+
+      assert AppServer.safe_close_port(port) == :ok
+    end
+
+    test "closing the port stops a cli that is still running" do
+      port = Port.open({:spawn_executable, System.find_executable("sh")}, [:exit_status, args: ["-c", "exec cat"]])
+
+      assert AppServer.safe_close_port(port) == :ok
+      assert Port.info(port) == nil
+    end
+
     test "runs a turn over ssh for remote workers" do
       test_root =
         Path.join(
