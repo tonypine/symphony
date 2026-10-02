@@ -16,6 +16,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     assert "github_create_pull_request" in tool_names
     assert "github_reply_to_review_comment" in tool_names
     assert "github_push_branch" in tool_names
+    assert "github_merge_pull_request" in tool_names
     assert "github_get_pr_checks" in tool_names
     assert "github_list_pr_comments" in tool_names
     assert "github_list_pr_review_comments" in tool_names
@@ -782,6 +783,46 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     end
   end
 
+  test "github_merge_pull_request merges through the scoped GitHub tool" do
+    workspace = tmp_workspace!("github-merge-pull-request")
+
+    try do
+      response =
+        DynamicTool.execute(
+          "github_merge_pull_request",
+          %{},
+          merge_tool_opts(workspace, "Merging", [%{"name" => "mix test", "status" => "COMPLETED", "conclusion" => "SUCCESS"}])
+        )
+
+      assert response["success"] == true
+      assert %{"merged" => true, "head_sha" => "abc123"} = Jason.decode!(response["output"])
+    after
+      File.rm_rf(workspace)
+    end
+  end
+
+  test "github_merge_pull_request explains each refusal to the agent" do
+    workspace = tmp_workspace!("github-merge-pull-request-refusals")
+
+    try do
+      failing_check = %{"name" => "mix test", "status" => "COMPLETED", "conclusion" => "FAILURE"}
+
+      unapproved = DynamicTool.execute("github_merge_pull_request", %{}, merge_tool_opts(workspace, "In Review", []))
+      assert %{"error" => %{"code" => "issue_not_in_merging_state", "message" => message}} = Jason.decode!(unapproved["output"])
+      assert message =~ ~s("In Review")
+
+      failing = DynamicTool.execute("github_merge_pull_request", %{}, merge_tool_opts(workspace, "Merging", [failing_check]))
+      assert %{"error" => %{"code" => "checks_not_passing", "reason" => reason}} = Jason.decode!(failing["output"])
+      assert reason =~ "mix test"
+
+      closed = DynamicTool.execute("github_merge_pull_request", %{}, merge_tool_opts(workspace, "Merging", [], "CLOSED"))
+      assert %{"error" => %{"code" => "pull_request_not_open", "message" => message}} = Jason.decode!(closed["output"])
+      assert message =~ ~s("CLOSED")
+    after
+      File.rm_rf(workspace)
+    end
+  end
+
   test "github.fetch_origin fetches the scoped origin only" do
     workspace = tmp_workspace!("github-fetch-origin")
 
@@ -1502,6 +1543,31 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
         {:ok, %{status: 200, body: ""}}
       end
     ]
+  end
+
+  defp merge_tool_opts(workspace, issue_state_name, status_check_rollup, pr_state \\ "OPEN") do
+    pr_url = "https://github.com/acme/symphony/pull/3051"
+
+    git_runner = fn ["branch", "--show-current"], _opts -> {"auto/ACME-3051\n", 0} end
+
+    gh_runner = fn
+      ["pr", "view", "auto/ACME-3051", "--repo", "acme/symphony", "--json", _fields], _opts ->
+        {Jason.encode!(%{"state" => pr_state, "title" => "Add tools", "body" => "Body", "url" => pr_url}), 0}
+
+      ["pr", "view", ^pr_url, "--json", _fields], _opts ->
+        {Jason.encode!(%{"state" => pr_state, "url" => pr_url, "headRefOid" => "abc123", "statusCheckRollup" => status_check_rollup}), 0}
+
+      ["pr", "merge", ^pr_url, "--squash", "--match-head-commit", "abc123" | _rest], _opts ->
+        {"", 0}
+    end
+
+    linear_client = fn _query, _variables, _opts ->
+      {:ok, %{"data" => %{"issue" => %{"id" => "issue-3051", "state" => %{"name" => issue_state_name}}}}}
+    end
+
+    workspace
+    |> github_tool_opts(git_runner: git_runner, gh_runner: gh_runner, linear_client: linear_client)
+    |> Keyword.put(:issue_id, "issue-3051")
   end
 
   defp github_tool_opts(workspace, opts) do

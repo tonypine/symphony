@@ -7,12 +7,14 @@ defmodule SymphonyElixir.AgentTools.GitHub do
   through tool arguments.
   """
 
-  alias SymphonyElixir.AgentTools.SecretScanner
+  alias SymphonyElixir.AgentTools.{Linear, SecretScanner}
+  alias SymphonyElixir.CiPoller
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.GitHub.PullRequest
   alias SymphonyElixir.Workspace
 
+  @merging_state "Merging"
   @pr_view_fields "number,state,title,body,url,headRefName,baseRefName"
   @failed_conclusions MapSet.new(["ACTION_REQUIRED", "CANCELLED", "FAILURE", "STARTUP_FAILURE", "TIMED_OUT"])
   @max_git_output_bytes 4_096
@@ -125,6 +127,26 @@ defmodule SymphonyElixir.AgentTools.GitHub do
     end
   end
 
+  @doc """
+  Squash-merges the current branch's pull request at the head commit whose checks were read.
+
+  A human approves the merge by moving the Linear issue to `Merging`, so the merge is refused in
+  any other state. It is also refused while a check is failing or pending; a pull request with no
+  checks at all is mergeable. Merging an already merged pull request succeeds without a second merge.
+  """
+  @spec merge_pull_request(context(), keyword()) :: {:ok, map()} | {:error, term()}
+  def merge_pull_request(context, opts \\ []) do
+    with :ok <- require_merging_state(context, opts),
+         {:ok, pr} <- view_current_pull_request(context, opts),
+         {:ok, pr_url} <- pull_request_url(pr) do
+      case Map.get(pr, "state") do
+        "MERGED" -> {:ok, %{"url" => pr_url, "merged" => true, "already_merged" => true}}
+        "OPEN" -> squash_merge_pull_request(pr, pr_url, context, opts)
+        state -> {:error, {:pull_request_not_open, state}}
+      end
+    end
+  end
+
   @spec get_pr_checks(context(), keyword()) :: {:ok, map()} | {:error, term()}
   def get_pr_checks(context, opts \\ []) do
     with {:ok, pr_url} <- current_pull_request_url(context, opts) do
@@ -182,12 +204,61 @@ defmodule SymphonyElixir.AgentTools.GitHub do
 
   defp current_pull_request_url(context, opts) do
     with {:ok, pr} <- view_current_pull_request(context, opts) do
-      case Map.get(pr, "url") do
-        url when is_binary(url) and url != "" -> {:ok, url}
-        _missing -> {:error, :missing_pull_request_url}
+      pull_request_url(pr)
+    end
+  end
+
+  defp pull_request_url(pr) do
+    case Map.get(pr, "url") do
+      url when is_binary(url) and url != "" -> {:ok, url}
+      _missing -> {:error, :missing_pull_request_url}
+    end
+  end
+
+  defp require_merging_state(context, opts) do
+    with {:ok, issue} <- Linear.get_current_issue(context, opts) do
+      case get_in(issue, ["state", "name"]) do
+        @merging_state -> :ok
+        state_name -> {:error, {:issue_not_in_merging_state, state_name}}
       end
     end
   end
+
+  defp squash_merge_pull_request(pr, pr_url, context, opts) do
+    with {:ok, ci_status} <- PullRequest.fetch_ci_status(pr_url, github_opts(context, opts)),
+         :ok <- require_passing_checks(ci_status),
+         {:ok, head_sha} <- head_commit_sha(ci_status),
+         {:ok, _output} <-
+           PullRequest.run_gh(
+             [
+               "pr",
+               "merge",
+               pr_url,
+               "--squash",
+               "--match-head-commit",
+               head_sha,
+               "--subject",
+               to_string(Map.get(pr, "title")),
+               "--body",
+               to_string(Map.get(pr, "body"))
+             ],
+             github_opts(context, opts)
+           ) do
+      {:ok, %{"url" => pr_url, "merged" => true, "already_merged" => false, "head_sha" => head_sha}}
+    end
+  end
+
+  defp require_passing_checks(%{checks: []}), do: :ok
+
+  defp require_passing_checks(ci_status) do
+    case CiPoller.ci_action(ci_status) do
+      :success -> :ok
+      outcome -> {:error, {:checks_not_passing, outcome}}
+    end
+  end
+
+  defp head_commit_sha(%{commit_sha: head_sha}) when is_binary(head_sha) and head_sha != "", do: {:ok, head_sha}
+  defp head_commit_sha(_ci_status), do: {:error, :missing_head_commit_sha}
 
   defp view_current_pull_request(context, opts) do
     with {:ok, origin_repo} <- origin_repo(context),

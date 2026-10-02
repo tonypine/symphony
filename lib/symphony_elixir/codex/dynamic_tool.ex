@@ -188,6 +188,11 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
     },
     %{
+      "name" => "github_merge_pull_request",
+      "description" => "Squash-merge the pull request for the current workspace branch. Only allowed while the current Linear issue is in Merging and no checks are failing or pending.",
+      "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
+    },
+    %{
       "name" => "github_get_pr_checks",
       "description" => "Read status checks for the pull request for the current workspace branch.",
       "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
@@ -240,6 +245,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "github_add_pr_comment" => ["body"],
     "github_reply_to_review_comment" => ["comment_id", "body"],
     "github_push_branch" => [],
+    "github_merge_pull_request" => [],
     "github_get_pr_checks" => [],
     "github_list_pr_comments" => [],
     "github_list_pr_review_comments" => [],
@@ -405,6 +411,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   end
 
   defp execute_github_tool("github_push_branch", context, _args, opts), do: GitHub.push_branch(context, opts)
+  defp execute_github_tool("github_merge_pull_request", context, _args, opts), do: GitHub.merge_pull_request(context, opts)
   defp execute_github_tool("github_get_pr_checks", context, _args, opts), do: GitHub.get_pr_checks(context, opts)
   defp execute_github_tool("github_list_pr_comments", context, _args, opts), do: GitHub.list_pr_comments(context, opts)
 
@@ -760,6 +767,34 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         "message" => "git fetch origin failed.",
         "status" => status,
         "output" => output
+      }
+    }
+  end
+
+  defp tool_error_payload({:issue_not_in_merging_state, state_name}) do
+    %{
+      "error" => %{
+        "code" => "issue_not_in_merging_state",
+        "message" => "github_merge_pull_request only merges after a human moves the issue to `Merging`. The issue is in #{inspect(state_name)}; do not move it yourself to get past this."
+      }
+    }
+  end
+
+  defp tool_error_payload({:pull_request_not_open, state}) do
+    %{
+      "error" => %{
+        "code" => "pull_request_not_open",
+        "message" => "The pull request for the current workspace branch is #{inspect(state)}, so it cannot be merged."
+      }
+    }
+  end
+
+  defp tool_error_payload({:checks_not_passing, outcome}) do
+    %{
+      "error" => %{
+        "code" => "checks_not_passing",
+        "message" => "Pull request checks are not all passing yet. Wait for pending checks to finish or fix the failures, then merge.",
+        "reason" => inspect(outcome)
       }
     }
   end

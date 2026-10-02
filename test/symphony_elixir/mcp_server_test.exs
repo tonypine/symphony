@@ -464,6 +464,7 @@ defmodule SymphonyElixir.McpServerTest do
       assert "github_get_pr_checks" in tool_names
       refute "linear_add_comment" in tool_names
       refute "github_create_pull_request" in tool_names
+      refute "github_merge_pull_request" in tool_names
 
       response =
         request!(socket, 2, "tools/call", %{

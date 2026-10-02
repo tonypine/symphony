@@ -23,6 +23,22 @@ description:
 - `gh` CLI is authenticated.
 - You are on the PR branch with a clean working tree.
 
+## When `gh` is unavailable
+
+Symphony denies raw `gh` to some runtimes (notably Claude). In that case, use
+the scoped Symphony tools in place of every `gh` command below:
+
+- PR state and mergeability: `github_get_pull_request`.
+- Checks and failure logs: `github_get_pr_checks`, `github_get_failed_run_log`.
+- Review feedback: `github_list_pr_comments`, `github_list_pr_review_comments`,
+  `github_list_pr_reviews`, `github_reply_to_review_comment`.
+- Publishing fixes: `github_push_branch`.
+- Merging: `github_merge_pull_request`. It squash-merges with the PR title and
+  body, and refuses unless the issue is in `Merging` and no check is failing
+  or pending. When it reports pending checks, wait and call it again.
+
+Skip `land_watch.py`; it shells out to `gh`.
+
 ## Steps
 
 1. Locate the PR for the current branch.
