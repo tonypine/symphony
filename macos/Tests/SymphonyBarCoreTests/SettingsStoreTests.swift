@@ -7,6 +7,7 @@ final class SettingsStoreTests: XCTestCase {
 
         XCTAssertEqual(store.loadSettings(), AppSettings())
         XCTAssertEqual(store.loadSettings().stopTimeoutSeconds, AppSettings.defaultStopTimeoutSeconds)
+        XCTAssertEqual(store.loadSettings().restartTimeoutMinutes, 30)
         XCTAssertFalse(store.loadSettings().startOnLaunch)
     }
 
@@ -27,6 +28,7 @@ final class SettingsStoreTests: XCTestCase {
             configPath: "/src/symphony/symphony.yml",
             commandPrefix: "mise exec --",
             stopTimeoutSeconds: 45,
+            restartTimeoutMinutes: 5,
             startOnLaunch: true,
             developmentMode: true
         )
@@ -168,6 +170,7 @@ final class SettingsStoreTests: XCTestCase {
                 SettingsStore.Key.configPath,
                 SettingsStore.Key.commandPrefix,
                 SettingsStore.Key.stopTimeoutSeconds,
+                SettingsStore.Key.restartTimeoutMinutes,
                 SettingsStore.Key.startOnLaunch,
                 SettingsStore.Key.developmentMode,
             ]

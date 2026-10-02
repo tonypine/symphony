@@ -10,6 +10,7 @@ public enum SettingsIssue: Equatable {
     case configPathNotFile
     case commandPrefixUnbalancedQuotes
     case stopTimeoutOutOfRange
+    case restartTimeoutOutOfRange
     case linearAPIKeyMissing
     case environmentNameInvalid(String)
     case environmentNameDuplicate(String)
@@ -36,6 +37,9 @@ public enum SettingsIssue: Equatable {
         case .stopTimeoutOutOfRange:
             let range = AppSettings.stopTimeoutRange
             return "The stop timeout must be between \(range.lowerBound) and \(range.upperBound) seconds."
+        case .restartTimeoutOutOfRange:
+            let range = AppSettings.restartTimeoutRange
+            return "The restart timeout must be between \(range.lowerBound) and \(range.upperBound) minutes."
         case .linearAPIKeyMissing:
             return "Enter a Linear API key."
         case .environmentNameInvalid(let name):
@@ -112,6 +116,9 @@ public struct SettingsValidator {
 
         if !AppSettings.stopTimeoutRange.contains(settings.stopTimeoutSeconds) {
             issues.append(.stopTimeoutOutOfRange)
+        }
+        if !AppSettings.restartTimeoutRange.contains(settings.restartTimeoutMinutes) {
+            issues.append(.restartTimeoutOutOfRange)
         }
 
         if secrets.linearAPIKey.isEmpty {

@@ -49,21 +49,18 @@ final class SymphonyRunner {
     /// Symphony's output log.
     var logURL: URL { logDirectory.appendingPathComponent(ChildLog.fileName) }
 
-    private var logPath: String {
+    /// The log path for messages, with `~` for the home folder.
+    var logPath: String {
         (logURL.path as NSString).abbreviatingWithTildeInPath
     }
 
     /// Starts Symphony. Throws a `LaunchProblem` when the settings aren't ready, or a Keychain, log or spawn error.
-    func start() throws {
+    /// `symphonyBinary` replaces the embedded Symphony, for the updater; Development mode runs the checkout anyway.
+    func start(symphonyBinary: String? = nil) throws {
         guard child == nil else { return }
 
         let settings = store.loadSettings()
-        let launch = try ChildLaunchBuilder.build(
-            settings: settings,
-            secrets: try store.loadSecrets(),
-            baseEnvironment: ProcessInfo.processInfo.environment,
-            embeddedSymphonyPath: Self.embeddedSymphonyPath
-        )
+        let launch = try launch(settings: settings, symphonyBinary: symphonyBinary)
         launchedStateRoot = launch.environment[StateRoot.environmentKey]
         let log = try ChildLog.rotate(in: logDirectory)
         writeHeader(to: log, launch: launch)
@@ -73,6 +70,27 @@ final class SymphonyRunner {
         }
         launchedSettings = settings
         onEvent?(.started)
+    }
+
+    /// The `symphony check --config <symphony.yml>` that matches what Start would run, with the same environment.
+    func checkLaunch(symphonyBinary: String? = nil) throws -> ChildLaunch {
+        try launch(settings: store.loadSettings(), symphonyBinary: symphonyBinary, subcommand: ["check"])
+    }
+
+    /// Minutes Restart waits for agent runs before it offers Restart Now Anyway.
+    var restartTimeoutMinutes: Int {
+        let range = AppSettings.restartTimeoutRange
+        return min(max(store.loadSettings().restartTimeoutMinutes, range.lowerBound), range.upperBound)
+    }
+
+    private func launch(settings: AppSettings, symphonyBinary: String?, subcommand: [String] = []) throws -> ChildLaunch {
+        try ChildLaunchBuilder.build(
+            settings: settings,
+            secrets: try store.loadSecrets(),
+            baseEnvironment: ProcessInfo.processInfo.environment,
+            embeddedSymphonyPath: symphonyBinary ?? Self.embeddedSymphonyPath,
+            subcommand: subcommand
+        )
     }
 
     /// Stops Symphony, calling `completion` once it has exited (straight away if it isn't running).

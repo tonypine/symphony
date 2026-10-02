@@ -9,6 +9,12 @@ public struct AppSettings: Equatable {
     /// Stop timeout used until the user picks one.
     public static let defaultStopTimeoutSeconds = 30
 
+    /// Bounds for the restart timeout, in minutes.
+    public static let restartTimeoutRange = 1...1440
+
+    /// Restart timeout used until the user picks one.
+    public static let defaultRestartTimeoutMinutes = 30
+
     /// Absolute path to the Symphony checkout.
     public var checkoutPath: String
 
@@ -21,6 +27,9 @@ public struct AppSettings: Equatable {
     /// Seconds to wait for Symphony to exit after asking it to stop.
     public var stopTimeoutSeconds: Int
 
+    /// Minutes Restart Symphony waits for agent runs to finish before it also offers Restart Now Anyway.
+    public var restartTimeoutMinutes: Int
+
     /// Start Symphony when the app opens.
     public var startOnLaunch: Bool
 
@@ -32,6 +41,7 @@ public struct AppSettings: Equatable {
         configPath: String = "",
         commandPrefix: String = AppSettings.defaultCommandPrefix,
         stopTimeoutSeconds: Int = AppSettings.defaultStopTimeoutSeconds,
+        restartTimeoutMinutes: Int = AppSettings.defaultRestartTimeoutMinutes,
         startOnLaunch: Bool = false,
         developmentMode: Bool = false
     ) {
@@ -39,6 +49,7 @@ public struct AppSettings: Equatable {
         self.configPath = configPath
         self.commandPrefix = commandPrefix
         self.stopTimeoutSeconds = stopTimeoutSeconds
+        self.restartTimeoutMinutes = restartTimeoutMinutes
         self.startOnLaunch = startOnLaunch
         self.developmentMode = developmentMode
     }
@@ -57,6 +68,7 @@ public struct AppSettings: Equatable {
             configPath: configPath.trimmingWhitespace(),
             commandPrefix: commandPrefix.trimmingWhitespace(),
             stopTimeoutSeconds: stopTimeoutSeconds,
+            restartTimeoutMinutes: restartTimeoutMinutes,
             startOnLaunch: startOnLaunch,
             developmentMode: developmentMode
         )

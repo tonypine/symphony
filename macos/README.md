@@ -1,7 +1,7 @@
 # Symphony menu bar app
 
 A macOS menu bar app for Symphony. Its menu shows Symphony's status, and has Start Symphony, Stop Symphony,
-Pause Dispatch, Resume Dispatch, Open Dashboard, Open Logs, Settings… and Quit.
+Restart Symphony, Pause Dispatch, Resume Dispatch, Open Dashboard, Open Logs, Settings… and Quit.
 
 The app runs Symphony with your `symphony.yml`, the same as running it from a terminal. Release builds
 carry a self-contained Symphony binary at `Contents/Resources/symphony` (see [Releasing](../docs/releasing.md))
@@ -74,8 +74,11 @@ If the icon turns to a warning triangle instead, choose **Open Logs** and see [T
 - The line under the status names the Symphony that Start runs: `Symphony v1.2.3 (embedded)`, or
   `Development: ~/path/to/checkout` in Development mode.
 - **Start Symphony** starts Symphony as a child of the app.
-- **Stop Symphony** stops it and the agent runs it started. To let runs finish first, pause dispatch and
-  wait until the menu shows `0 running`.
+- **Stop Symphony** stops it and the agent runs it started. To let runs finish first, use Restart Symphony,
+  or pause dispatch and wait until the menu shows `0 running`.
+- **Restart Symphony** checks `symphony.yml`, waits for agent runs to finish, then stops and starts Symphony
+  and resumes dispatch. See [Restart](#restart). While it waits, **Restart Now Anyway** (after the restart
+  timeout) and **Cancel Restart** also show.
 - **Pause Dispatch** holds new dispatch: Symphony picks up no new issues, but agent runs already under way
   continue. The pause is kept across restarts.
 - **Resume Dispatch** lets Symphony pick up new issues again.
@@ -95,8 +98,10 @@ set (or, in Development mode, no checkout folder).
   mode in Settings." for a local `make` build. The first time this version opens, Development mode is turned
   on if a checkout folder is already set and the app has no embedded Symphony, so existing setups keep
   running their checkout.
+- **Restart timeout** (1–1440 minutes, 30 by default) is how long Restart Symphony waits for agent runs
+  before it also offers Restart Now Anyway.
 - `symphony.yml` path, Development mode, checkout folder, command prefix (`mise exec --` until you change
-  it), stop timeout and "Start Symphony when the app opens" are stored in UserDefaults (`defaults read com.tonypine.symphony.bar`).
+  it), stop timeout, restart timeout and "Start Symphony when the app opens" are stored in UserDefaults (`defaults read com.tonypine.symphony.bar`).
 - Max concurrent agents (1–10) is `agent.concurrency.max_total` in the `symphony.yml` itself. The window
   reads it from the file each time it opens (10, Symphony's default, when the key is missing). Save changes
   only that line and keeps comments and indentation, adding the key when it is missing. Symphony
@@ -174,8 +179,8 @@ It keeps App Nap off so the poll keeps that pace in the background.
 
 While Symphony answers, the menu shows `N running · M retrying`, and while dispatch is paused, the pause
 reason and since when. If a Symphony the app didn't start (for example one started from the CLI) answers,
-the app attaches to it as "running (external)": Start and Stop stay disabled, so the app neither starts a
-second Symphony nor stops one it doesn't own. Open Dashboard opens the control URL in the browser; Open Logs
+the app attaches to it as "running (external)": Start, Stop and Restart stay disabled, so the app neither
+starts a second Symphony nor stops one it doesn't own. Open Dashboard opens the control URL in the browser; Open Logs
 opens `menubar-child.log`.
 
 ## Pause and Resume
@@ -194,6 +199,28 @@ The state root is found as Symphony finds it:
 - Otherwise `~/Library/Application Support/symphony` or, for the Burrito release build, its `release/`
   subdirectory. The app can't tell which build runs, so it uses the one whose `control_url` was written
   last, then the one holding a `control_token`.
+
+## Restart
+
+Restart Symphony restarts a Symphony the app started without ending agent runs. It is disabled for a
+Symphony the app didn't start ("running (external)"), and Start, Stop, Pause and Resume are disabled while it
+runs. The line under the status shows each step:
+
+1. **Check symphony.yml:** runs `symphony check --config <symphony.yml>` with the same binary and
+   environment Start uses (in Development mode, through the same login shell and command prefix). If the
+   check fails, an alert and a menu line show its error, and Symphony keeps running untouched.
+2. **Pause dispatch,** unless it is already paused. The restart remembers whether it paused it.
+3. **Wait for agent runs:** the menu shows "Waiting for N agent runs…" until a poll shows dispatch paused and
+   `0 running`. After the restart timeout (Settings, 30 minutes by default) **Restart Now Anyway** also shows;
+   it stops Symphony and the runs still active. **Cancel Restart** stops waiting and resumes dispatch if the
+   restart paused it.
+4. **Stop, then Start** with the configured `symphony.yml`.
+5. **Wait until Symphony answers** on its control URL, then **resume dispatch**, only if the restart paused it.
+   A pause you made before the restart stays, because Symphony keeps pauses across restarts.
+
+If Symphony doesn't come back (Start fails, it exits, or it doesn't answer within 2 minutes) an alert and the
+menu say why and name the log. A pause the restart made is then kept; choose Resume Dispatch once Symphony
+runs.
 
 ## Troubleshooting
 
@@ -216,6 +243,14 @@ The state root is found as Symphony finds it:
     `cd <checkout> && mise exec -- ./bin/symphony --config <symphony.yml>`.
 - **The menu shows "running (external)" and Start is disabled.** A Symphony started elsewhere (for example
   from a terminal) is answering on the control URL. Stop that one first, then Start from the menu.
+- **Restart Symphony says "Symphony wasn't restarted".** The `symphony.yml` check (or the pause) failed, and
+  the old Symphony is still running. Fix what the message names, then check it from a terminal with
+  `Symphony.app/Contents/Resources/symphony check --config <symphony.yml>`, or in Development mode
+  `cd <checkout> && mise exec -- ./bin/symphony check --config <symphony.yml>`, and restart again.
+- **Restart Symphony stays on "Waiting for N agent runs…".** Agent runs are still active. Wait, choose Restart
+  Now Anyway once the restart timeout has passed (lower it in Settings), or Cancel Restart.
+- **Restart Symphony says "Symphony didn't come back".** Choose Open Logs to see why it didn't start or
+  answer. If dispatch stays paused afterwards, choose Resume Dispatch.
 - **Pause or Resume shows an error under the status.** The app could not reach Symphony's control API or
   its token was rejected; the message says which. See [Pause and Resume](#pause-and-resume).
 

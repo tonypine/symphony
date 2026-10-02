@@ -25,6 +25,21 @@ struct SettingsView: View {
                             Text("seconds")
                         }
                     }
+                    LabeledContent("Restart timeout") {
+                        HStack {
+                            TextField("Minutes", value: $model.settings.restartTimeoutMinutes, format: .number)
+                                .labelsHidden()
+                                .frame(width: 60)
+                            Stepper(
+                                "Minutes",
+                                value: $model.settings.restartTimeoutMinutes,
+                                in: AppSettings.restartTimeoutRange
+                            )
+                            .labelsHidden()
+                            Text("minutes")
+                        }
+                    }
+                    .help("How long Restart Symphony waits for agent runs before it also offers Restart Now Anyway.")
                     Toggle("Start Symphony when the app opens", isOn: $model.settings.startOnLaunch)
                     Toggle(LoginItem.toggleTitle, isOn: $model.launchAtLogin)
                     if let note = model.loginItemNote {

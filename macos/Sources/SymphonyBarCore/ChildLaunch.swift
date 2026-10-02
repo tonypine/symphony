@@ -1,7 +1,7 @@
 import Foundation
 
 /// Everything needed to spawn Symphony: program, arguments, working directory and environment.
-public struct ChildLaunch: Equatable {
+public struct ChildLaunch: Equatable, Sendable {
     /// Login shell used so Finder-launched apps still get the user's PATH (and `mise`) from zsh startup files.
     public static let shell = "/bin/zsh"
 
@@ -86,12 +86,14 @@ public enum LaunchProblem: LocalizedError, Equatable {
 /// Builds the child launch from the saved settings. Secrets only ever go into the environment.
 public enum ChildLaunchBuilder {
     /// Runs the embedded Symphony directly, or in Development mode the checkout's `bin/symphony` through a login
-    /// shell. `embeddedSymphonyPath` is where the app's embedded binary would be.
+    /// shell. `embeddedSymphonyPath` is where the app's embedded binary would be. `subcommand`, for example
+    /// `["check"]`, goes before `--config`.
     public static func build(
         settings: AppSettings,
         secrets: SecretSettings,
         baseEnvironment: [String: String],
         embeddedSymphonyPath: String? = nil,
+        subcommand: [String] = [],
         files: FileChecker = LocalFileChecker()
     ) throws -> ChildLaunch {
         let settings = settings.trimmed()
@@ -103,6 +105,7 @@ public enum ChildLaunchBuilder {
                 secrets: secrets,
                 baseEnvironment: baseEnvironment,
                 binary: embeddedSymphonyPath,
+                subcommand: subcommand,
                 files: files
             )
         }
@@ -116,7 +119,7 @@ public enum ChildLaunchBuilder {
         let binary = settings.checkoutPath + "/bin/symphony"
         guard files.isFile(atPath: binary) else { throw LaunchProblem.symphonyBinaryMissing(binary) }
 
-        let words = prefix + [ChildLaunch.symphonyRelativePath, "--config", settings.configPath]
+        let words = prefix + [ChildLaunch.symphonyRelativePath] + subcommand + ["--config", settings.configPath]
         let script = "exec " + words.map(ShellWords.quote).joined(separator: " ")
 
         return ChildLaunch(
@@ -127,12 +130,13 @@ public enum ChildLaunchBuilder {
         )
     }
 
-    /// `<embedded symphony> --config <symphony.yml>`, run directly in the folder holding symphony.yml.
+    /// `<embedded symphony> [subcommand] --config <symphony.yml>`, run directly in the folder holding symphony.yml.
     private static func buildEmbedded(
         settings: AppSettings,
         secrets: SecretSettings,
         baseEnvironment: [String: String],
         binary: String?,
+        subcommand: [String],
         files: FileChecker
     ) throws -> ChildLaunch {
         guard !settings.configPath.isEmpty else { throw LaunchProblem.configPathMissing }
@@ -143,7 +147,7 @@ public enum ChildLaunchBuilder {
 
         return ChildLaunch(
             executable: binary,
-            arguments: ["--config", settings.configPath],
+            arguments: subcommand + ["--config", settings.configPath],
             workingDirectory: (settings.configPath as NSString).deletingLastPathComponent,
             environment: environment(base: baseEnvironment, secrets: secrets)
         )

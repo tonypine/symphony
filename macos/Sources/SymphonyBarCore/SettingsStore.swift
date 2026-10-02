@@ -16,6 +16,7 @@ public final class SettingsStore {
         public static let configPath = "configPath"
         public static let commandPrefix = "commandPrefix"
         public static let stopTimeoutSeconds = "stopTimeoutSeconds"
+        public static let restartTimeoutMinutes = "restartTimeoutMinutes"
         public static let startOnLaunch = "startOnLaunch"
         public static let developmentMode = "developmentMode"
     }
@@ -35,6 +36,8 @@ public final class SettingsStore {
             commandPrefix: defaults.object(forKey: Key.commandPrefix) as? String ?? AppSettings.defaultCommandPrefix,
             stopTimeoutSeconds: defaults.object(forKey: Key.stopTimeoutSeconds) as? Int
                 ?? AppSettings.defaultStopTimeoutSeconds,
+            restartTimeoutMinutes: defaults.object(forKey: Key.restartTimeoutMinutes) as? Int
+                ?? AppSettings.defaultRestartTimeoutMinutes,
             startOnLaunch: defaults.object(forKey: Key.startOnLaunch) as? Bool ?? false,
             developmentMode: defaults.object(forKey: Key.developmentMode) as? Bool ?? false
         )
@@ -54,6 +57,7 @@ public final class SettingsStore {
         defaults.set(settings.configPath, forKey: Key.configPath)
         defaults.set(settings.commandPrefix, forKey: Key.commandPrefix)
         defaults.set(settings.stopTimeoutSeconds, forKey: Key.stopTimeoutSeconds)
+        defaults.set(settings.restartTimeoutMinutes, forKey: Key.restartTimeoutMinutes)
         defaults.set(settings.startOnLaunch, forKey: Key.startOnLaunch)
         defaults.set(settings.developmentMode, forKey: Key.developmentMode)
     }
