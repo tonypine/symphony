@@ -3,7 +3,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   Reads pull request lifecycle state through the GitHub CLI.
   """
 
-  alias SymphonyElixir.GitHub.Hosts
+  alias SymphonyElixir.GitHub.{CommentMarker, Hosts}
 
   @type comment :: %{
           optional(:id) => String.t() | nil,
@@ -246,7 +246,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
          {:ok, _output} <-
            run_gh(
              github_api_args(host, "repos/#{owner}/#{repo}/pulls/#{number}/comments/#{comment_id}/replies") ++
-               ["-f", "body=#{body}"],
+               ["-f", "body=#{CommentMarker.mark(body)}"],
              opts
            ) do
       :ok
@@ -265,7 +265,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   end
 
   defp do_reply_to_pr_comment(pr_url, body, opts) do
-    case run_gh(["pr", "comment", pr_url, "--body", body], opts) do
+    case run_gh(["pr", "comment", pr_url, "--body", CommentMarker.mark(body)], opts) do
       {:ok, _output} -> :ok
       {:error, reason} -> {:error, reason}
     end

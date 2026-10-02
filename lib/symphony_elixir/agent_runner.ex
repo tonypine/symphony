@@ -191,7 +191,7 @@ defmodule SymphonyElixir.AgentRunner do
       _ ->
         issue
         |> sync_workspace_to_pr_head(opts)
-        |> Workspace.create_for_issue(worker_host, Keyword.get(opts, :repo_key))
+        |> Workspace.create_for_issue(worker_host, Keyword.get(opts, :repo_key), active_workspace_identifiers: Keyword.get(opts, :active_workspace_identifiers, []))
     end
   end
 
