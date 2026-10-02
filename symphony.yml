@@ -59,6 +59,14 @@ workspaces:
 agent:
   runtime: codex
   command: codex --config shell_environment_policy.inherit=all --config 'model="gpt-5.5"' --config model_reasoning_effort=high app-server
+  # Model and effort per kind of run. Drop the model and effort flags from `command` when
+  # setting any of these. Kinds: implementation, breakdown, close_out,
+  # final_verification, rework, landing, ci_fix, review_feedback, pre_push_review, qa.
+  # model: gpt-5.5
+  # effort: medium   # low | medium | high | xhigh | max
+  # run_profiles:
+  #   breakdown: { effort: xhigh }
+  #   landing: { effort: low }
   concurrency:
     max_total: 10
     # max_by_issue_state:

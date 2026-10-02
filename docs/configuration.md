@@ -217,6 +217,9 @@ Agent runtime, limits, timeouts, prompts, permissions, and MCP settings.
 agent:
   runtime: codex
   command: codex app-server
+  model:
+  effort:
+  run_profiles: {}
   concurrency:
     max_total: 10
     max_by_issue_state:
@@ -267,6 +270,8 @@ agent:
   available — Opus burns Agent-SDK credit much faster and Sonnet is usually
   sufficient for orchestration turns. Treat this as guidance; revisit when
   Anthropic's model lineup or credit policy changes.
+- `model`, `effort`, `run_profiles`: the model and effort per kind of run; see **Run profiles**
+  below. All unset by default, which leaves `command` as it is.
 - `concurrency.max_total`: maximum concurrent issue workers.
 - `limits.tokens_per_issue` and `limits.tokens_per_day`: explicit `null` disables that cap.
 - `permissions.filesystem.allow_read_paths`: extra read-only host paths rendered into Codex
@@ -275,6 +280,35 @@ agent:
   runtime as `sandbox.filesystem.allowWrite`. Use it to broaden Claude Code's default writable
   set (workspace + `/tmp`) — e.g. to grant test runs access to a configured MCP socket root.
 - `permissions.outer_sandbox`: optional outer sandbox wrapper, currently used for Codex SRT.
+
+**Run profiles:**
+
+Symphony classifies each run by kind so a cheap run (landing, a CI fix) need not use the same
+model and effort as an implementation run. Nothing applies the resolved model and effort to the
+agent command yet; this section only defines and validates the config.
+
+```yaml
+agent:
+  model: claude-sonnet-5-5
+  effort: medium
+  run_profiles:
+    breakdown: { model: claude-opus-5-5, effort: xhigh }
+    landing: { effort: low }
+```
+
+- `model`: default model for every run kind (string).
+- `effort`: default effort: `low`, `medium`, `high`, `xhigh`, or `max`.
+- `run_profiles.<kind>`: `model` and/or `effort` for one kind of run. Kinds, first match wins:
+  `final_verification` (title starts with `Final verification:`), `close_out` (`breakdown` parent
+  whose sub-issues are all terminal), `breakdown` (other `breakdown` parent), `landing` (`Merging`),
+  `rework` (`Rework`), `ci_fix` (continuation after red CI), `review_feedback` (continuation after
+  PR review comments), and `implementation` (everything else). `pre_push_review` and `qa` name the
+  pre-push reviewer and QA agent runs.
+- Resolution per field: `run_profiles.<kind>` value, else `agent.model` / `agent.effort`, else
+  nothing is added.
+- Config errors: an unknown kind under `run_profiles`, an unknown effort, an unknown profile key,
+  or `--model` / `--effort` already in `command` while any of `model`, `effort`, or
+  `run_profiles` is set. `symphony check` reports them.
 
 **Concurrency and turns:**
 
