@@ -1579,6 +1579,48 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert issue.pull_request_url == "https://github.com/example/repo/pull/42"
   end
 
+  test "linear client ignores closed and merged GitHub pull request attachments" do
+    attachment = fn number, metadata ->
+      %{"sourceType" => "github", "url" => "https://github.com/example/repo/pull/#{number}", "metadata" => metadata}
+    end
+
+    closed_only = %{
+      "id" => "issue-closed-pr",
+      "identifier" => "MT-CLOSED",
+      "title" => "Reopened issue",
+      "state" => %{"name" => "Todo"},
+      "attachments" => %{"nodes" => [attachment.(2, %{"status" => "closed"})]}
+    }
+
+    issue = Client.normalize_issue_for_test(closed_only)
+
+    assert issue.pull_request_url == nil
+    assert issue.pr_urls == []
+
+    mixed = %{
+      closed_only
+      | "attachments" => %{
+          "nodes" => [
+            attachment.(2, %{"status" => "Closed"}),
+            attachment.(3, %{"state" => " MERGED "}),
+            attachment.(4, %{"status" => nil}),
+            attachment.(5, %{"status" => "open"}),
+            attachment.(6, nil)
+          ]
+        }
+    }
+
+    issue = Client.normalize_issue_for_test(mixed)
+
+    assert issue.pull_request_url == "https://github.com/example/repo/pull/4"
+
+    assert issue.pr_urls == [
+             "https://github.com/example/repo/pull/4",
+             "https://github.com/example/repo/pull/5",
+             "https://github.com/example/repo/pull/6"
+           ]
+  end
+
   test "linear client rejects GitHub source attachments on non-allowlisted hosts" do
     malicious_hosts = [
       "evil.example",
