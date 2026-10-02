@@ -26,4 +26,19 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistryTest do
     assert CommentRegistry.owned?(pid, "also-valid")
     refute CommentRegistry.owned?(pid, "123")
   end
+
+  test "reserve_subissue/2 claims slots up to the cap and release_subissue/1 gives one back" do
+    {:ok, pid} = CommentRegistry.start_link()
+
+    assert :ok = CommentRegistry.reserve_subissue(pid, 2)
+    assert :ok = CommentRegistry.reserve_subissue(pid, 2)
+    assert {:error, {:subissue_cap_reached, 2}} = CommentRegistry.reserve_subissue(pid, 2)
+
+    assert :ok = CommentRegistry.release_subissue(pid)
+    assert :ok = CommentRegistry.reserve_subissue(pid, 2)
+  end
+
+  test "reserve_subissue/2 refuses without a registry" do
+    assert {:error, :subissue_registry_unavailable} = CommentRegistry.reserve_subissue(nil, 10)
+  end
 end

@@ -1,16 +1,23 @@
 {% comment %}
 name: out_of_scope_backlog
-description: File a separate Backlog issue for meaningful out-of-scope improvements instead of expanding scope.
+description: Split work and file out-of-scope improvements as Backlog sub-issues of the current issue with linear_create_subissue instead of expanding scope.
 vars: []
-{% endcomment %}## Out-of-scope improvements
+{% endcomment %}## Splitting work and out-of-scope improvements
+
+Use `linear_create_subissue` to file new work. It always creates a child of the
+current issue in the same team and project, assigned to the same assignee, in
+`Backlog`; a human promotes it to `Todo`. It takes only `title`, `description`
+and an optional `priority` (0 none, 1 urgent, 2 high, 3 medium, 4 low), and a
+run may create at most 10.
+
+When a ticket asks you to plan and split work into sub-tickets, create each
+sub-ticket with `linear_create_subissue` rather than only listing the plan.
+Make every sub-ticket deliverable on its own, in the order they should land.
 
 When you discover a meaningful improvement outside the current ticket's scope, do
-not expand scope. File a separate Linear issue instead. The follow-up issue must:
+not expand scope. File it with `linear_create_subissue` instead.
 
-- include a clear title, description, and acceptance criteria,
-- be placed in `Backlog`,
-- be assigned to the same project as the current issue,
-- link the current issue as `related`,
-- use `blockedBy` when the follow-up depends on the current issue.
-
-Record the new issue ID in the current workpad's `Notes`.
+Every new issue must include a clear title, a description, and acceptance
+criteria. Record the new issue identifiers in the current workpad's `Notes`. If
+the tool refuses (for example at the per-run cap), list the remaining issues in
+the workpad `Notes` for a human to file.

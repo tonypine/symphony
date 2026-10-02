@@ -2037,11 +2037,20 @@ Scoped Linear tool extension contract:
 - Suggested baseline tools: `linear_get_current_issue`, `linear_get_subissues`,
   `linear_get_parent_issue`, `linear_get_comments`, `linear_get_related_issues`,
   `linear_update_state`, `linear_add_comment`, `linear_update_comment`, `linear_delete_comment`,
-  `linear_attach_url`, and `linear_attach_file`.
+  `linear_attach_url`, `linear_attach_file`, and `linear_create_subissue`.
 - `linear_update_state` MUST refuse `Merging` as a target, whether given by name or by state id,
   with an error saying a human has to approve. Moving an issue to `Merging` is how a human approves
   a merge (see `github_merge_pull_request`), so an agent cannot approve its own merge. Humans keep
   setting `Merging` from Linear. Other transitions are unaffected.
+- `linear_create_subissue` MUST only create a child of the current issue: same team and project,
+  parent set to the current issue, and the current issue's assignee, all resolved server-side. It
+  MUST accept only `title`, `description`, and an optional `priority`, and MUST reject team,
+  project, parent, assignee, and state arguments. The new issue MUST land in the team's `Backlog`
+  state (falling back to a `backlog`-type state), never an active state, so an agent cannot start
+  other agents; a human promotes it. Title and description MUST pass the same secret scan as
+  comments before any Linear call. Creation MUST be capped per run (the Elixir cap is 10) with an
+  explicit error past the cap, and MUST be refused when the run has no state to count against.
+  The read-only reviewer scope MUST NOT advertise or execute it.
 - The standardized Linear tool surface does not include an assignee mutation tool. Implementations
   MUST NOT advertise removed legacy names such as `linear_set_assignee`.
 - Linear read tools SHOULD wrap issue/comment fields in prompt-safety boundary tags before

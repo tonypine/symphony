@@ -691,6 +691,194 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
     end
   end
 
+  describe "create_subissue/3" do
+    test "creates a Backlog child of the current issue in its team, project and assignee" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      test_pid = self()
+
+      states = [
+        %{"id" => "state-todo", "name" => "Todo", "type" => "unstarted"},
+        %{"id" => "state-icebox", "name" => "Icebox", "type" => "backlog"},
+        %{"id" => "state-backlog", "name" => "Backlog", "type" => "backlog"}
+      ]
+
+      assert {:ok, response} =
+               Linear.create_subissue(
+                 %{issue: %Issue{id: "issue-parent"}, comment_registry: registry},
+                 %{"title" => "  Add the wrapper  ", "description" => "Do the first slice.", "priority" => 2},
+                 linear_client: subissue_client(test_pid, subissue_scope(states))
+               )
+
+      assert get_in(response, ["data", "issueCreate", "issue", "identifier"]) == "TP-999"
+      assert_received {:linear_called, scope_query, %{id: "issue-parent"}}
+      assert scope_query =~ "SymphonyAgentSubissueScope"
+      assert_received {:linear_called, mutation, %{input: input}}
+      assert mutation =~ "SymphonyAgentCreateSubissue"
+
+      assert input == %{
+               "teamId" => "team-1",
+               "parentId" => "issue-parent-uuid",
+               "projectId" => "project-1",
+               "assigneeId" => "user-1",
+               "stateId" => "state-backlog",
+               "title" => "Add the wrapper",
+               "description" => "Do the first slice.",
+               "priority" => 2
+             }
+    end
+
+    test "falls back to a backlog-type state and omits a missing project, assignee and priority" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      test_pid = self()
+
+      scope =
+        %{"id" => "issue-parent-uuid", "team" => %{"id" => "team-1", "states" => %{"nodes" => [%{"id" => "state-ideas", "name" => "Ideas", "type" => "backlog"}]}}}
+
+      assert {:ok, _response} =
+               Linear.create_subissue(
+                 %{issue_id: "issue-parent", comment_registry: registry},
+                 %{"title" => "Follow-up", "description" => ""},
+                 linear_client: subissue_client(test_pid, scope)
+               )
+
+      assert_received {:linear_called, _scope_query, _variables}
+      assert_received {:linear_called, _mutation, %{input: input}}
+
+      assert input == %{
+               "teamId" => "team-1",
+               "parentId" => "issue-parent-uuid",
+               "stateId" => "state-ideas",
+               "title" => "Follow-up",
+               "description" => ""
+             }
+    end
+
+    test "refuses to create without a Backlog state and gives the slot back" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      states = [%{"id" => "state-todo", "name" => "Todo", "type" => "unstarted"}, %{"id" => "state-nameless"}]
+
+      assert {:error, {:backlog_state_not_found, ["Todo"]}} =
+               Linear.create_subissue(
+                 %{issue_id: "issue-parent", comment_registry: registry},
+                 %{"title" => "Follow-up", "description" => "body"},
+                 linear_client: subissue_client(self(), subissue_scope(states))
+               )
+
+      assert Agent.get(registry, & &1.subissues) == 0
+    end
+
+    test "gives the slot back when Linear reports the create failed" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+
+      client = fn query, _variables, _opts ->
+        if query =~ "SymphonyAgentSubissueScope",
+          do: {:ok, %{"data" => %{"issue" => subissue_scope()}}},
+          else: {:ok, %{"data" => %{"issueCreate" => %{"success" => false}}}}
+      end
+
+      assert {:error, {:linear_mutation_failed, "issueCreate", _body}} =
+               Linear.create_subissue(
+                 %{issue_id: "issue-parent", comment_registry: registry},
+                 %{"title" => "Follow-up", "description" => "body"},
+                 linear_client: client
+               )
+
+      assert Agent.get(registry, & &1.subissues) == 0
+    end
+
+    test "stops at the per-run cap without calling Linear" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      context = %{issue_id: "issue-parent", comment_registry: registry}
+      attrs = %{"title" => "Slice", "description" => "body"}
+
+      client = subissue_client(self(), subissue_scope())
+
+      for _ <- 1..10 do
+        assert {:ok, _response} = Linear.create_subissue(context, attrs, linear_client: client)
+      end
+
+      assert {:error, {:subissue_cap_reached, 10}} =
+               Linear.create_subissue(context, attrs, linear_client: fn _query, _variables, _opts -> flunk("Linear should not be called past the cap") end)
+    end
+
+    test "refuses to create without a per-run registry" do
+      assert {:error, :subissue_registry_unavailable} =
+               Linear.create_subissue(%{issue_id: "issue-parent"}, %{"title" => "Slice", "description" => "body"},
+                 linear_client: fn _query, _variables, _opts -> flunk("Linear should not be called") end
+               )
+    end
+
+    test "rejects secret-bearing titles and descriptions before calling Linear" do
+      workspace = tmp_workspace!("linear-agent-subissue-secret")
+      audit_dir = Path.join(workspace, "audit")
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      context = workspace |> secret_context() |> Map.put(:comment_registry, registry)
+      no_linear = fn _query, _variables, _opts -> flunk("Linear should not be called for secret-bearing sub-issues") end
+
+      try do
+        for attrs <- [
+              %{"title" => "token " <> openai_fixture(), "description" => "body"},
+              %{"title" => "Slice", "description" => "leaked: " <> private_key_fixture()}
+            ] do
+          assert {:error, :secret_pattern_detected} =
+                   Linear.create_subissue(context, attrs, dir: audit_dir, linear_client: no_linear)
+        end
+
+        assert Agent.get(registry, & &1.subissues) == 0
+        assert [%{"event_type" => "refused_agent_action", "reason" => "secret_pattern_detected"} | _rest] = audit_events(audit_dir)
+        refute inspect(audit_events(audit_dir)) =~ openai_fixture()
+      after
+        File.rm_rf(workspace)
+      end
+    end
+
+    test "validates title, description and priority" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      context = %{issue_id: "issue-parent", comment_registry: registry}
+      no_linear = [linear_client: fn _query, _variables, _opts -> flunk("Linear should not be called") end]
+
+      assert {:error, :invalid_subissue_title} = Linear.create_subissue(context, %{"description" => "body"}, no_linear)
+      assert {:error, :invalid_subissue_title} = Linear.create_subissue(context, %{"title" => "  ", "description" => "body"}, no_linear)
+      assert {:error, :invalid_subissue_description} = Linear.create_subissue(context, %{"title" => "Slice"}, no_linear)
+
+      for priority <- [5, -1, "2", 1.0] do
+        assert {:error, :invalid_subissue_priority} =
+                 Linear.create_subissue(context, %{"title" => "Slice", "description" => "body", "priority" => priority}, no_linear)
+      end
+
+      assert {:error, :missing_current_issue} = Linear.create_subissue(%{}, %{"title" => "Slice", "description" => "body"})
+    end
+  end
+
+  defp subissue_scope(states \\ [%{"id" => "state-backlog", "name" => "Backlog", "type" => "backlog"}]) do
+    %{
+      "id" => "issue-parent-uuid",
+      "team" => %{"id" => "team-1", "states" => %{"nodes" => states}},
+      "project" => %{"id" => "project-1"},
+      "assignee" => %{"id" => "user-1"}
+    }
+  end
+
+  defp subissue_client(test_pid, scope) do
+    fn query, variables, _opts ->
+      send(test_pid, {:linear_called, query, variables})
+
+      if query =~ "SymphonyAgentSubissueScope" do
+        {:ok, %{"data" => %{"issue" => scope}}}
+      else
+        {:ok,
+         %{
+           "data" => %{
+             "issueCreate" => %{
+               "success" => true,
+               "issue" => %{"id" => "issue-new", "identifier" => "TP-999", "url" => "https://linear.app/x/TP-999", "state" => %{"name" => "Backlog"}}
+             }
+           }
+         }}
+      end
+    end
+  end
+
   defp successful_file_upload_linear_client(test_pid, upload_headers \\ []) do
     fn query, variables, _opts ->
       cond do

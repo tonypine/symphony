@@ -122,6 +122,25 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       }
     },
     %{
+      "name" => "linear_create_subissue",
+      "description" => "Create a child issue of the current Linear issue, in its team and project and assigned to its assignee. The new issue lands in Backlog; a human promotes it. Capped per run.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["title", "description"],
+        "properties" => %{
+          "title" => %{"type" => "string"},
+          "description" => %{"type" => "string"},
+          "priority" => %{
+            "type" => "integer",
+            "minimum" => 0,
+            "maximum" => 4,
+            "description" => "Linear priority: 0 none, 1 urgent, 2 high, 3 medium, 4 low."
+          }
+        }
+      }
+    },
+    %{
       "name" => "github_get_pull_request",
       "description" => "Read the pull request for the current workspace branch in the configured origin repo.",
       "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
@@ -238,6 +257,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "linear_delete_comment" => ["comment_id"],
     "linear_attach_url" => ["url", "title"],
     "linear_attach_file" => ["local_path", "title", "make_public"],
+    "linear_create_subissue" => ["title", "description", "priority"],
     "github_get_pull_request" => [],
     "github_fetch_origin" => [],
     "github_create_pull_request" => ["title", "body", "draft"],
@@ -264,6 +284,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "linear.delete_comment" => "linear_delete_comment",
     "linear.attach_url" => "linear_attach_url",
     "linear.attach_file" => "linear_attach_file",
+    "linear.create_subissue" => "linear_create_subissue",
     "github.get_pull_request" => "github_get_pull_request",
     "github.fetch_origin" => "github_fetch_origin",
     "github.create_pull_request" => "github_create_pull_request",
@@ -391,6 +412,10 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     Linear.attach_file(context, Map.get(args, "local_path"), Map.get(args, "title"), opts)
   end
 
+  defp execute_linear_tool("linear_create_subissue", context, args, opts) do
+    Linear.create_subissue(context, args, opts)
+  end
+
   defp execute_github_tool("github_get_pull_request", context, _args, opts), do: GitHub.get_pull_request(context, opts)
   defp execute_github_tool("github_fetch_origin", context, _args, opts), do: GitHub.fetch_origin(context, opts)
 
@@ -431,6 +456,35 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   defp stringify_keys(arguments) do
     Map.new(arguments, fn {key, value} -> {to_string(key), value} end)
+  end
+
+  # A sub-issue's team, project, parent, assignee and state all come from the current issue.
+  defp reject_scope_arguments("linear_create_subissue" = tool, args) do
+    scope_keys = [
+      "team",
+      "teamId",
+      "team_id",
+      "project",
+      "projectId",
+      "project_id",
+      "parent",
+      "parentId",
+      "parent_id",
+      "assignee",
+      "assigneeId",
+      "assignee_id",
+      "state",
+      "stateId",
+      "state_id"
+    ]
+
+    with :ok <- reject_scope_arguments("linear_", args) do
+      if Enum.any?(Map.keys(args), &(&1 in scope_keys)) do
+        {:error, {:scope_argument_rejected, tool}}
+      else
+        :ok
+      end
+    end
   end
 
   defp reject_scope_arguments("linear_" <> _rest, args) do
@@ -592,6 +646,16 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     }
   end
 
+  defp tool_error_payload({:scope_argument_rejected, "linear_create_subissue"}) do
+    %{
+      "error" => %{
+        "code" => "scope_argument_rejected",
+        "message" =>
+          "linear_create_subissue always creates a Backlog child of the current issue in its team and project, assigned to its assignee; team, project, parent, assignee, and state arguments are not accepted."
+      }
+    }
+  end
+
   defp tool_error_payload({:unexpected_arguments, keys}) do
     %{
       "error" => %{
@@ -651,6 +715,47 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         "available_states" => available_states
       }
     }
+  end
+
+  defp tool_error_payload({:subissue_cap_reached, cap}) do
+    %{
+      "error" => %{
+        "code" => "subissue_cap_reached",
+        "message" => "This run already created #{cap} sub-issues, the per-run limit. List the remaining work in the workpad for a human to file instead.",
+        "cap" => cap
+      }
+    }
+  end
+
+  defp tool_error_payload(:subissue_registry_unavailable) do
+    %{
+      "error" => %{
+        "code" => "subissue_registry_unavailable",
+        "message" => "Symphony has no per-run tool state for this session, so it cannot enforce the sub-issue cap and refused to create the issue."
+      }
+    }
+  end
+
+  defp tool_error_payload({:backlog_state_not_found, available_states}) do
+    %{
+      "error" => %{
+        "code" => "backlog_state_not_found",
+        "message" => "The current issue's team has no Backlog state, so no sub-issue was created. Available states: #{Enum.join(available_states, ", ")}.",
+        "available_states" => available_states
+      }
+    }
+  end
+
+  defp tool_error_payload(:invalid_subissue_title) do
+    %{"error" => %{"code" => "invalid_subissue_title", "message" => "linear_create_subissue requires a non-blank string `title`."}}
+  end
+
+  defp tool_error_payload(:invalid_subissue_description) do
+    %{"error" => %{"code" => "invalid_subissue_description", "message" => "linear_create_subissue requires a string `description`."}}
+  end
+
+  defp tool_error_payload(:invalid_subissue_priority) do
+    %{"error" => %{"code" => "invalid_subissue_priority", "message" => "linear_create_subissue `priority` must be an integer from 0 to 4."}}
   end
 
   defp tool_error_payload({:linear_mutation_failed, field, body}) do

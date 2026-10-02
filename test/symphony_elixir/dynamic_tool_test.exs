@@ -248,6 +248,113 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     refute CommentRegistry.owned?(registry, "any-id")
   end
 
+  describe "linear_create_subissue" do
+    test "is advertised with only title, description and priority, and hidden from the read-only scope" do
+      assert %{"inputSchema" => %{"properties" => properties, "required" => ["title", "description"]}} =
+               Enum.find(DynamicTool.tool_specs(), &(&1["name"] == "linear_create_subissue"))
+
+      assert properties |> Map.keys() |> Enum.sort() == ["description", "priority", "title"]
+      refute "linear_create_subissue" in Enum.map(DynamicTool.tool_specs(:read_only), & &1["name"])
+
+      response =
+        DynamicTool.execute("linear_create_subissue", %{"title" => "Slice", "description" => "body"},
+          issue: %Issue{id: "issue-current"},
+          tool_scope: :read_only,
+          linear_client: fn _query, _variables, _opts -> flunk("read-only scope must not create issues") end
+        )
+
+      assert %{"error" => %{"code" => "tool_scope_rejected"}} = Jason.decode!(response["output"])
+    end
+
+    test "rejects smuggled team, project, parent, assignee, state and issue id arguments" do
+      {:ok, registry} = CommentRegistry.start_link()
+
+      for {key, code_message} <- [
+            {"teamId", "team, project, parent"},
+            {"project_id", "team, project, parent"},
+            {"parentId", "team, project, parent"},
+            {"parent", "team, project, parent"},
+            {"assigneeId", "team, project, parent"},
+            {"stateId", "team, project, parent"},
+            {"issue_id", "issue id arguments are not accepted"}
+          ] do
+        response =
+          DynamicTool.execute(
+            "linear_create_subissue",
+            %{"title" => "Slice", "description" => "body", key => "smuggled"},
+            issue: %Issue{id: "issue-current"},
+            comment_registry: registry,
+            linear_client: fn _query, _variables, _opts -> flunk("smuggled scope must not reach Linear") end
+          )
+
+        assert response["success"] == false
+        assert %{"error" => %{"code" => "scope_argument_rejected", "message" => message}} = Jason.decode!(response["output"])
+        assert message =~ code_message
+      end
+    end
+
+    test "creates the sub-issue through the legacy alias and reports the cap past it" do
+      {:ok, registry} = CommentRegistry.start_link()
+
+      client = fn query, _variables, _opts ->
+        if query =~ "SymphonyAgentSubissueScope" do
+          {:ok,
+           %{
+             "data" => %{
+               "issue" => %{
+                 "id" => "issue-current",
+                 "team" => %{"id" => "team-1", "states" => %{"nodes" => [%{"id" => "state-backlog", "name" => "Backlog"}]}}
+               }
+             }
+           }}
+        else
+          {:ok, %{"data" => %{"issueCreate" => %{"success" => true, "issue" => %{"identifier" => "TP-1"}}}}}
+        end
+      end
+
+      opts = [issue: %Issue{id: "issue-current"}, comment_registry: registry, linear_client: client]
+
+      for _ <- 1..10 do
+        response = DynamicTool.execute("linear.create_subissue", %{title: "Slice", description: "body", priority: 3}, opts)
+        assert response["success"] == true
+      end
+
+      response = DynamicTool.execute("linear_create_subissue", %{"title" => "Slice", "description" => "body"}, opts)
+      assert %{"error" => %{"code" => "subissue_cap_reached", "cap" => 10}} = Jason.decode!(response["output"])
+    end
+
+    test "returns explicit error payloads for invalid input, no registry and no Backlog state" do
+      {:ok, registry} = CommentRegistry.start_link()
+      no_linear = fn _query, _variables, _opts -> flunk("Linear should not be called") end
+      opts = [issue: %Issue{id: "issue-current"}, comment_registry: registry, linear_client: no_linear]
+
+      for {args, code} <- [
+            {%{"title" => " ", "description" => "body"}, "invalid_subissue_title"},
+            {%{"title" => "Slice", "description" => nil}, "invalid_subissue_description"},
+            {%{"title" => "Slice", "description" => "body", "priority" => 9}, "invalid_subissue_priority"}
+          ] do
+        response = DynamicTool.execute("linear_create_subissue", args, opts)
+        assert %{"error" => %{"code" => ^code}} = Jason.decode!(response["output"])
+      end
+
+      response =
+        DynamicTool.execute("linear_create_subissue", %{"title" => "Slice", "description" => "body"}, Keyword.delete(opts, :comment_registry))
+
+      assert %{"error" => %{"code" => "subissue_registry_unavailable"}} = Jason.decode!(response["output"])
+
+      response =
+        DynamicTool.execute(
+          "linear_create_subissue",
+          %{"title" => "Slice", "description" => "body"},
+          Keyword.put(opts, :linear_client, fn _query, _variables, _opts ->
+            {:ok, %{"data" => %{"issue" => %{"id" => "issue-current", "team" => %{"states" => %{"nodes" => [%{"id" => "s", "name" => "Todo"}]}}}}}}
+          end)
+        )
+
+      assert %{"error" => %{"code" => "backlog_state_not_found", "available_states" => ["Todo"]}} = Jason.decode!(response["output"])
+    end
+  end
+
   test "legacy dotted tool aliases are accepted but still reject smuggled issue ids" do
     response =
       DynamicTool.execute(

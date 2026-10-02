@@ -27,6 +27,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @default_attachment_allowed_hosts ["github.com"]
   # Moving an issue to `Merging` is how a human approves a merge, so agents may not do it.
   @merging_state "Merging"
+  # Sub-issues land in Backlog so an agent cannot start other agents; a human promotes them.
+  @backlog_state "Backlog"
+  @subissue_cap_per_run 10
 
   @uuid_pattern ~r/\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i
 
@@ -236,6 +239,40 @@ defmodule SymphonyElixir.AgentTools.Linear do
   }
   """
 
+  @subissue_scope_query """
+  query SymphonyAgentSubissueScope($id: String!) {
+    issue(id: $id) {
+      id
+      team {
+        id
+        states {
+          nodes {
+            id
+            name
+            type
+          }
+        }
+      }
+      project { id }
+      assignee { id }
+    }
+  }
+  """
+
+  @create_subissue_mutation """
+  mutation SymphonyAgentCreateSubissue($input: IssueCreateInput!) {
+    issueCreate(input: $input) {
+      success
+      issue {
+        id
+        identifier
+        url
+        state { id name type }
+      }
+    }
+  }
+  """
+
   @type context :: %{
           optional(:issue) => Issue.t() | map(),
           optional(:issue_id) => String.t(),
@@ -438,6 +475,85 @@ defmodule SymphonyElixir.AgentTools.Linear do
   end
 
   def attach_file(_context, _local_path, _title, _opts), do: {:error, :invalid_local_path}
+
+  @doc """
+  Creates a Backlog child of the current issue in the same team and project, assigned to the same
+  assignee. Only `title`, `description`, and `priority` come from the caller; everything that
+  scopes the new issue is read from the current issue. At most #{@subissue_cap_per_run} per run.
+  """
+  @spec create_subissue(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
+  def create_subissue(context, attrs, opts \\ []) when is_map(attrs) do
+    registry = Map.get(context, :comment_registry)
+
+    with {:ok, issue_id} <- current_issue_id(context),
+         {:ok, title, description, priority} <- validate_subissue_fields(attrs),
+         :ok <-
+           SecretScanner.reject_fields_if_secret_pattern(
+             [title: title, description: description],
+             context,
+             "linear_create_subissue",
+             opts
+           ),
+         :ok <- CommentRegistry.reserve_subissue(registry, @subissue_cap_per_run) do
+      case create_backlog_child(issue_id, title, description, priority, opts) do
+        {:ok, response} ->
+          {:ok, response}
+
+        {:error, _reason} = error ->
+          CommentRegistry.release_subissue(registry)
+          error
+      end
+    end
+  end
+
+  defp validate_subissue_fields(attrs) do
+    title = Map.get(attrs, "title")
+    description = Map.get(attrs, "description")
+    priority = Map.get(attrs, "priority")
+
+    cond do
+      not is_binary(title) or String.trim(title) == "" -> {:error, :invalid_subissue_title}
+      not is_binary(description) -> {:error, :invalid_subissue_description}
+      not (is_nil(priority) or priority in 0..4) -> {:error, :invalid_subissue_priority}
+      true -> {:ok, String.trim(title), description, priority}
+    end
+  end
+
+  defp create_backlog_child(issue_id, title, description, priority, opts) do
+    with {:ok, body} <- graphql(@subissue_scope_query, %{id: issue_id}, opts),
+         {:ok, parent} <- fetch_path(body, ["data", "issue"], :issue_not_found),
+         {:ok, states} <- fetch_path(parent, ["team", "states", "nodes"], []),
+         {:ok, state_id} <- backlog_state_id(states),
+         input = subissue_input(parent, state_id, title, description, priority),
+         {:ok, response} <- graphql(@create_subissue_mutation, %{input: input}, opts) do
+      check_mutation_success(response, "issueCreate")
+    end
+  end
+
+  defp backlog_state_id(states) do
+    state =
+      Enum.find(states, &state_name_matches?(&1, @backlog_state)) ||
+        Enum.find(states, &(&1["type"] == "backlog"))
+
+    case state do
+      %{"id" => state_id} -> {:ok, state_id}
+      _ -> {:error, {:backlog_state_not_found, states |> Enum.map(& &1["name"]) |> Enum.reject(&is_nil/1)}}
+    end
+  end
+
+  defp subissue_input(parent, state_id, title, description, priority) do
+    %{
+      "teamId" => get_in(parent, ["team", "id"]),
+      "parentId" => parent["id"],
+      "stateId" => state_id,
+      "title" => title,
+      "description" => description,
+      "projectId" => get_in(parent, ["project", "id"]),
+      "assigneeId" => get_in(parent, ["assignee", "id"]),
+      "priority" => priority
+    }
+    |> Map.reject(fn {_key, value} -> is_nil(value) end)
+  end
 
   defp resolve_state_id(issue_id, state_name_or_id, opts) do
     normalized = String.trim(state_name_or_id)
