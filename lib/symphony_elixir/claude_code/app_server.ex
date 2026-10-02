@@ -1273,8 +1273,10 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
          %{required_mcp_server: required_mcp_server, required_mcp_server_checked: false} = acc
        )
        when is_binary(required_mcp_server) do
+    # Only `init` lists the session's MCP servers; other `system` events (hooks,
+    # status) can arrive first and must not be read as "no servers".
     case Jason.decode(line) do
-      {:ok, %{"type" => "system"} = event} ->
+      {:ok, %{"type" => "system", "subtype" => "init"} = event} ->
         acc = %{acc | required_mcp_server_checked: true}
 
         if mcp_server_available?(event, required_mcp_server) do

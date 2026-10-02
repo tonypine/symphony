@@ -49,6 +49,38 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
+  defmodule McpRestartAgent do
+    # Coding-agent stand-in that replays scripted `run_turn` results per call and
+    # reports session starts/stops, for the continuation fresh-session retry.
+    def start_session(workspace, opts) do
+      recipient = Application.fetch_env!(:symphony_elixir, :mcp_restart_agent_recipient)
+      count = Application.get_env(:symphony_elixir, :mcp_restart_agent_sessions, 0) + 1
+      Application.put_env(:symphony_elixir, :mcp_restart_agent_sessions, count)
+      send(recipient, {:mcp_restart_start_session, count, workspace, opts})
+
+      case Application.get_env(:symphony_elixir, :mcp_restart_agent_start_results, %{}) do
+        %{^count => {:error, _reason} = error} -> error
+        _results -> {:ok, %{session: count}}
+      end
+    end
+
+    def run_turn(session, prompt, _issue, _opts) do
+      recipient = Application.fetch_env!(:symphony_elixir, :mcp_restart_agent_recipient)
+      count = Application.get_env(:symphony_elixir, :mcp_restart_agent_turns, 0) + 1
+      Application.put_env(:symphony_elixir, :mcp_restart_agent_turns, count)
+      send(recipient, {:mcp_restart_run_turn, count, session, prompt})
+
+      results = Application.fetch_env!(:symphony_elixir, :mcp_restart_agent_turn_results)
+      Enum.at(results, count - 1) || {:ok, %{session_id: "sess-#{count}"}}
+    end
+
+    def stop_session(session) do
+      recipient = Application.fetch_env!(:symphony_elixir, :mcp_restart_agent_recipient)
+      send(recipient, {:mcp_restart_stop_session, session})
+      :ok
+    end
+  end
+
   test "config defaults and validation checks" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_api_token: nil,
@@ -4270,6 +4302,247 @@ defmodule SymphonyElixir.CoreTest do
       assert Enum.at(turn_texts, 1) =~ "Avoid raw `gh` or `git push`"
     after
       clear_review_agent_env!()
+      File.rm_rf(test_root)
+    end
+  end
+
+  @missing_mcp_turn_error {:turn_failed,
+                           "missing_required_mcp_tools: required Symphony MCP server is not available in this Claude session. Missing MCP server: symphony. Advertised MCP servers: none."}
+
+  test "agent runner retries a continuation turn once in a fresh session when the Symphony MCP server is missing" do
+    run_mcp_restart_issue!(
+      [{:ok, %{session_id: "sess-1"}}, {:error, @missing_mcp_turn_error}, {:ok, %{session_id: "sess-3"}}],
+      fn result ->
+        assert result == :ok
+
+        assert_receive {:mcp_restart_start_session, 1, _workspace, _opts}
+        assert_receive {:mcp_restart_run_turn, 1, %{session: 1}, _first_prompt}
+        assert_receive {:mcp_restart_run_turn, 2, %{session: 1}, continuation_prompt}
+        assert_receive {:mcp_restart_start_session, 2, _workspace, restart_opts}
+        assert restart_opts[:issue].id == "issue-mcp-restart"
+        assert is_pid(restart_opts[:linear_comment_registry])
+        assert_receive {:worker_runtime_info, "issue-mcp-restart", %{agent_session: %{session: 2}}}
+        assert_receive {:mcp_restart_run_turn, 3, %{session: 2}, ^continuation_prompt}
+        assert_receive {:mcp_restart_stop_session, %{session: 2}}
+        assert_receive {:mcp_restart_stop_session, %{session: 1}}
+        refute_receive {:mcp_restart_stop_session, _session}, 50
+      end
+    )
+  end
+
+  test "agent runner treats a second missing Symphony MCP server on the retried continuation as terminal" do
+    run_mcp_restart_issue!(
+      [{:ok, %{session_id: "sess-1"}}, {:error, @missing_mcp_turn_error}, {:error, @missing_mcp_turn_error}],
+      fn result ->
+        assert {:exit, {:terminal_agent_setup_error, @missing_mcp_turn_error}} = result
+        assert_receive {:mcp_restart_start_session, 2, _workspace, _opts}
+        refute_receive {:mcp_restart_start_session, 3, _workspace, _opts}, 50
+        refute_receive {:mcp_restart_run_turn, 4, _session, _prompt}, 50
+      end
+    )
+  end
+
+  test "agent runner keeps a first-turn missing Symphony MCP server terminal without a retry" do
+    run_mcp_restart_issue!(
+      [{:error, @missing_mcp_turn_error}],
+      fn result ->
+        assert {:exit, {:terminal_agent_setup_error, @missing_mcp_turn_error}} = result
+        assert_receive {:mcp_restart_run_turn, 1, %{session: 1}, _prompt}
+        refute_receive {:mcp_restart_start_session, 2, _workspace, _opts}, 50
+        refute_receive {:mcp_restart_run_turn, 2, _session, _prompt}, 50
+      end
+    )
+  end
+
+  test "agent runner does not retry continuation failures that are not missing Symphony MCP tools" do
+    run_mcp_restart_issue!(
+      [{:ok, %{session_id: "sess-1"}}, {:error, {:turn_failed, "boom"}}],
+      fn result ->
+        assert {:raise, %RuntimeError{message: message}} = result
+        assert message =~ "boom"
+        refute_receive {:mcp_restart_start_session, 2, _workspace, _opts}, 50
+      end
+    )
+  end
+
+  test "agent runner keeps the original missing-tools error when the fresh session cannot start" do
+    run_mcp_restart_issue!(
+      [{:ok, %{session_id: "sess-1"}}, {:error, @missing_mcp_turn_error}],
+      fn result ->
+        assert {:exit, {:terminal_agent_setup_error, @missing_mcp_turn_error}} = result
+        assert_receive {:mcp_restart_start_session, 2, _workspace, _opts}
+        refute_receive {:mcp_restart_run_turn, 3, _session, _prompt}, 50
+        assert_receive {:mcp_restart_stop_session, %{session: 1}}
+      end,
+      start_results: %{2 => {:error, :mcp_server_unavailable}}
+    )
+  end
+
+  test "agent runner continuation after a Claude review agent in the same workspace still has the Symphony MCP config" do
+    # Ticket TP-275 repro: turn 1, then the pre-push review agent (a real Claude
+    # runtime session in the same workspace, started and stopped), then the
+    # reviewer-approved continuation. The continuation's `--mcp-config` must exist,
+    # list `symphony`, and point at a live socket.
+    with_claude_review_continuation!([fail_first_continuation: false], fn trace ->
+      assert [
+               ["turn", "connected", turn_config],
+               ["review", "connected", review_config],
+               ["continuation", "connected", continuation_config]
+             ] = trace
+
+      assert continuation_config == turn_config
+      refute review_config == turn_config
+      refute File.exists?(continuation_config)
+    end)
+  end
+
+  test "agent runner rebuilds the Claude session files when a continuation starts without the Symphony MCP server" do
+    with_claude_review_continuation!([fail_first_continuation: true], fn trace ->
+      assert [
+               ["turn", "connected", turn_config],
+               ["review", "connected", _review_config],
+               ["continuation", "failed", failed_config],
+               ["continuation", "connected", retried_config]
+             ] = trace
+
+      assert failed_config == turn_config
+      refute retried_config == turn_config
+      refute File.exists?(failed_config)
+      refute File.exists?(retried_config)
+    end)
+  end
+
+  defp with_claude_review_continuation!(opts, assertions) do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-agent-runner-claude-review-mcp-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      repo = review_agent_repo!(test_root)
+      fake_claude = Path.join(test_root, "fake-claude")
+      trace_file = Path.join(test_root, "claude.trace")
+      fail_marker = Path.join(test_root, "fail-first-continuation")
+
+      if Keyword.fetch!(opts, :fail_first_continuation), do: File.write!(fail_marker, "")
+
+      File.write!(fake_claude, """
+      #!/bin/sh
+      trace_file="#{trace_file}"
+      fail_marker="#{fail_marker}"
+      prompt=$(cat)
+      mcp_config=""
+      previous=""
+      for arg in "$@"; do
+        if [ "$previous" = "--mcp-config" ]; then mcp_config="$arg"; fi
+        previous="$arg"
+      done
+      status=failed
+      if [ -f "$mcp_config" ] && grep -q '"symphony"' "$mcp_config"; then
+        socket=$(sed -n 's/.*"--socket","\\([^"]*\\)".*/\\1/p' "$mcp_config")
+        if [ -z "$socket" ] || [ -S "$socket" ]; then status=connected; fi
+      fi
+      case "$prompt" in
+        *"Return ONLY one JSON object"*) kind=review ;;
+        *"Reviewer agent approved the committed diff"*) kind=continuation ;;
+        *) kind=turn ;;
+      esac
+      if [ "$kind" = continuation ] && [ -f "$fail_marker" ]; then
+        rm -f "$fail_marker"
+        status=failed
+      fi
+      printf '%s %s %s\\n' "$kind" "$status" "$mcp_config" >> "$trace_file"
+      printf '{"type":"system","subtype":"init","session_id":"sess-%s","cwd":"/tmp","tools":[],"mcp_servers":[{"name":"symphony","status":"%s"}],"model":"claude-opus-4-5","permissionMode":"default","apiKeySource":"env"}\\n' "$kind" "$status"
+      if [ "$kind" = review ]; then
+        printf '%s\\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"{\\"verdict\\":\\"approve\\",\\"comments\\":[]}"}]}}'
+      fi
+      printf '%s\\n' '{"type":"result","subtype":"success","duration_ms":5,"duration_api_ms":4,"is_error":false,"num_turns":1,"result":"Done.","session_id":"sess","total_cost_usd":0.001,"usage":{"input_tokens":1,"output_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}'
+      exit 0
+      """)
+
+      File.chmod!(fake_claude, 0o755)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        workspace_root: test_root,
+        agent_kind: "claude",
+        agent_command: fake_claude,
+        max_turns: 2,
+        review_agent: %{enabled: true, kind: "claude", command: fake_claude, max_iterations: 1},
+        prompt: "Initial prompt {{ issue.identifier }}"
+      )
+
+      assert :ok =
+               AgentRunner.run(review_agent_issue(), self(),
+                 workspace_path: repo,
+                 issue_state_fetcher: review_agent_state_fetcher(self(), 2),
+                 issue_enricher: no_op_issue_enricher()
+               )
+
+      trace_file
+      |> File.read!()
+      |> String.split("\n", trim: true)
+      |> Enum.map(&String.split(&1, " ", parts: 3))
+      |> assertions.()
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  defp run_mcp_restart_issue!(turn_results, assertions, opts \\ []) do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-agent-runner-mcp-restart-#{System.unique_integer([:positive])}"
+      )
+
+    Application.put_env(:symphony_elixir, :mcp_restart_agent_recipient, self())
+    Application.put_env(:symphony_elixir, :mcp_restart_agent_turn_results, turn_results)
+    Application.put_env(:symphony_elixir, :mcp_restart_agent_start_results, Keyword.get(opts, :start_results, %{}))
+
+    try do
+      workspace = Path.join(test_root, "MT-MCP-RESTART")
+      File.mkdir_p!(workspace)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        workspace_root: test_root,
+        max_turns: 3
+      )
+
+      issue = %Issue{id: "issue-mcp-restart", identifier: "MT-MCP-RESTART", title: "MCP restart", state: "In Progress"}
+
+      result =
+        try do
+          AgentRunner.run(issue, self(),
+            workspace_path: workspace,
+            agent_module: McpRestartAgent,
+            issue_state_fetcher: fn _ids ->
+              state = if Process.get(:mcp_restart_fetches, 0) >= 1, do: "Done", else: "In Progress"
+              Process.put(:mcp_restart_fetches, Process.get(:mcp_restart_fetches, 0) + 1)
+              {:ok, [%{issue | state: state}]}
+            end,
+            issue_enricher: no_op_issue_enricher()
+          )
+        rescue
+          error -> {:raise, error}
+        catch
+          :exit, reason -> {:exit, reason}
+        end
+
+      assertions.(result)
+    after
+      for key <- [
+            :mcp_restart_agent_recipient,
+            :mcp_restart_agent_turn_results,
+            :mcp_restart_agent_start_results,
+            :mcp_restart_agent_sessions,
+            :mcp_restart_agent_turns
+          ] do
+        Application.delete_env(:symphony_elixir, key)
+      end
+
       File.rm_rf(test_root)
     end
   end
