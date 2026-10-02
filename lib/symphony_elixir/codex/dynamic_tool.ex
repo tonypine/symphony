@@ -987,6 +987,28 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     }
   end
 
+  defp tool_error_payload({:waiting_on_sub_issues_state_for_breakdown_only, state_name}) do
+    %{
+      "error" => %{
+        "code" => "waiting_on_sub_issues_state_for_breakdown_only",
+        "message" =>
+          "linear_update_state can move only a `breakdown` parent to #{inspect(state_name)}, " <>
+            "where it waits for its sub-tickets; leave the state as it is."
+      }
+    }
+  end
+
+  defp tool_error_payload({:waiting_on_sub_issues_state_disabled, state_name}) do
+    %{
+      "error" => %{
+        "code" => "waiting_on_sub_issues_state_disabled",
+        "message" =>
+          "#{inspect(state_name)} is turned off in Symphony because the startup check did not find it; " <>
+            "leave the parent In Progress while its sub-tickets are open."
+      }
+    }
+  end
+
   defp tool_error_payload({:pull_request_not_open, state}) do
     %{
       "error" => %{

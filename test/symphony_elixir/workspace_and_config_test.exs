@@ -1818,7 +1818,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
     assert variables == %{
              filter: %{
-               "state" => %{"name" => %{"in" => ["Todo", "In Progress"]}},
+               "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets"]}},
                "project" => %{"slugId" => %{"eq" => "project"}},
                "team" => %{"key" => %{"eq" => "Test"}},
                "assignee" => %{"id" => %{"in" => ["user-1"]}}
@@ -1897,7 +1897,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     variables = capture_candidate_variables!()
 
     assert variables.filter == %{
-             "state" => %{"name" => %{"in" => ["Todo", "In Progress"]}},
+             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets"]}},
              "team" => %{"key" => %{"eq" => "ACME"}}
            }
 
@@ -1917,7 +1917,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     variables = capture_candidate_variables!()
 
     assert variables.filter == %{
-             "state" => %{"name" => %{"in" => ["Todo", "In Progress"]}},
+             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets"]}},
              "team" => %{"id" => %{"eq" => team_id}}
            }
   end
@@ -1933,7 +1933,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     variables = capture_candidate_variables!()
 
     assert variables.filter == %{
-             "state" => %{"name" => %{"in" => ["Todo", "In Progress"]}},
+             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets"]}},
              "team" => %{"id" => %{"eq" => team_id}}
            }
   end
@@ -1949,7 +1949,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     variables = capture_candidate_variables!()
 
     assert variables.filter == %{
-             "state" => %{"name" => %{"in" => ["Todo", "In Progress"]}},
+             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets"]}},
              "team" => %{"key" => %{"eq" => team}}
            }
   end
@@ -1964,7 +1964,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       variables = capture_candidate_variables!()
 
       assert variables.filter == %{
-               "state" => %{"name" => %{"in" => ["Todo", "In Progress"]}},
+               "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets"]}},
                "team" => %{"key" => %{"eq" => "Test"}},
                "labels" => %{"some" => %{"name" => %{"in" => labels}}}
              }
@@ -1994,7 +1994,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     variables = capture_candidate_variables!()
 
     assert variables.filter == %{
-             "state" => %{"name" => %{"in" => ["Todo", "In Progress"]}},
+             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets"]}},
              "team" => %{"key" => %{"eq" => "ACME"}},
              "labels" => %{"some" => %{"name" => %{"in" => ["backend"]}}}
            }
@@ -2012,7 +2012,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     variables = capture_candidate_variables!()
 
     assert variables.filter == %{
-             "state" => %{"name" => %{"in" => ["Todo", "In Progress"]}},
+             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets"]}},
              "project" => %{"slugId" => %{"eq" => "project"}},
              "team" => %{"key" => %{"eq" => "ACME"}},
              "labels" => %{"some" => %{"name" => %{"in" => ["backend"]}}},
@@ -2069,7 +2069,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert_receive {:candidate_query, ^query, api_variables}
 
     assert web_variables.filter == %{
-             "state" => %{"name" => %{"in" => ["Todo", "In Progress"]}},
+             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets"]}},
              "project" => %{
                "or" => [
                  %{"name" => %{"in" => ["Project Alpha"]}},
@@ -2082,7 +2082,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
            }
 
     assert api_variables.filter == %{
-             "state" => %{"name" => %{"in" => ["Todo", "In Progress"]}},
+             "state" => %{"name" => %{"in" => ["Todo", "In Progress", "Waiting on sub-tickets"]}},
              "project" => %{
                "or" => [
                  %{"name" => %{"in" => ["Project Beta"]}},

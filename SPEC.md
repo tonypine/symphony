@@ -1322,6 +1322,8 @@ not require recognizing or validating extension fields unless that extension is 
   `"me"` resolves the current Linear viewer
 - `issues.states.active`: list of strings, default `["Todo", "In Progress"]`
 - `issues.states.terminal`: list of strings, default `["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]`
+- `issues.states.waiting_on_sub_issues`: string or null, default `Waiting on sub-tickets`; added to
+  the active states when set
 - `issues.poll_interval_ms`: integer, default `30000`
 - `poller.backoff_base_ms`: positive integer or null; null uses the effective poll interval
 - `poller.max_backoff_ms`: positive integer, default `300000`
@@ -1612,10 +1614,20 @@ An issue is dispatch-eligible only if all are true:
   - If the issue state is `Todo`, do not dispatch when any blocker is non-terminal.
 - Parent rule passes:
   - If the issue has the `breakdown` label, do not dispatch while any sub-issue is non-terminal
-    (a sub-issue with an unknown state counts as non-terminal). The parent waits in its active
-    state while its sub-issues are worked and becomes eligible again for close-out once every
-    sub-issue is terminal. The same rule ends a running parent's continuation turns and its
-    retries.
+    (a sub-issue with an unknown state counts as non-terminal). The parent waits while its
+    sub-issues are worked and becomes eligible again for close-out once every sub-issue is
+    terminal. The same rule ends a running parent's continuation turns and its retries.
+- Waiting rule passes:
+  - An issue in the `issues.states.waiting_on_sub_issues` state is dispatched only when it is a
+    `breakdown` parent with at least one sub-issue and every sub-issue is terminal (the close-out
+    run). Any other issue in that state waits for a human.
+  - On each poll, a `breakdown` parent in `In Progress` with a non-terminal sub-issue that is not
+    running or claimed is moved to the waiting state, so `In Progress` only holds issues an agent
+    is working. The breakdown run's agent may also move its parent there with
+    `linear_update_state`, which refuses the state for issues without the `breakdown` label.
+  - At startup the service checks the configured teams have the waiting state. When it is
+    missing, it logs a warning and stops moving parents there until restart; parents then wait in
+    `In Progress` as before. When the check itself fails, the state stays on.
 
 Sorting order (stable intent):
 
@@ -3451,6 +3463,9 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - `Todo` issue with terminal blockers is eligible
 - `breakdown` issue with a non-terminal sub-issue is not eligible; once every sub-issue is
   terminal it is eligible
+- `breakdown` parent in `In Progress` with a non-terminal sub-issue moves to the waiting state;
+  an issue in the waiting state is eligible only as a `breakdown` parent whose sub-issues are all
+  terminal
 - Active-state issue refresh updates running entry state
 - Non-active state stops running agent without workspace cleanup
 - Terminal state stops running agent and cleans workspace

@@ -19,6 +19,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var controlInFlight: ControlAction?
     /// Why the last Pause or Resume failed, shown under the status until the next attempt.
     private var controlError: String?
+    private let updates = UpdatePoller()
+    /// The newer release, while there is one.
+    private var availableRelease: Release?
+    private let updateAvailableItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    private let releaseNotesItem = NSMenuItem(title: UpdateMenu.releaseNotesTitle, action: nil, keyEquivalent: "")
+    /// The result of a Check for Updates chosen by hand, under that item.
+    private let updateResultItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         EditMenu.install()
@@ -42,6 +49,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         menu.addItem(.separator())
         menu.addItem(menuItem(StatusMenu.openDashboardTitle, action: #selector(openDashboard(_:))))
         menu.addItem(menuItem(StatusMenu.openLogsTitle, action: #selector(openLogs(_:))))
+        menu.addItem(.separator())
+        updateAvailableItem.action = #selector(showReleaseNotes(_:))
+        updateAvailableItem.target = self
+        releaseNotesItem.action = #selector(showReleaseNotes(_:))
+        releaseNotesItem.target = self
+        updateResultItem.isEnabled = false
+        menu.addItem(updateAvailableItem)
+        menu.addItem(releaseNotesItem)
+        menu.addItem(menuItem(UpdateMenu.checkTitle, action: #selector(checkForUpdates(_:))))
+        menu.addItem(updateResultItem)
         menu.addItem(.separator())
         menu.addItem(
             menuItem(
@@ -86,6 +103,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             startWhenStopped = true
         }
         poller.start()
+
+        updates.onResult = { [weak self] result, manual in self?.showUpdate(result, manual: manual) }
+        showUpdate(nil, manual: false)
+        updates.start()
     }
 
     /// Quitting stops an owned Symphony first, after confirming when agent runs are active.
@@ -139,6 +160,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             }
         case #selector(openLogs(_:)):
             return FileManager.default.fileExists(atPath: runner.logURL.path)
+        case #selector(checkForUpdates(_:)):
+            menuItem.title = updates.isChecking ? UpdateMenu.checkingTitle : UpdateMenu.checkTitle
+            return !updates.isChecking
+        case #selector(showReleaseNotes(_:)):
+            return availableRelease != nil
         default:
             return true
         }
@@ -216,6 +242,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     @objc private func openLogs(_ sender: Any?) {
         NSWorkspace.shared.open(runner.logURL)
+    }
+
+    @objc private func checkForUpdates(_ sender: Any?) {
+        updates.check(manual: true)
+    }
+
+    @objc private func showReleaseNotes(_ sender: Any?) {
+        guard let release = availableRelease else { return }
+        UpdatePoller.showReleaseNotes(release)
+    }
+
+    /// Shows or hides the update items. Background check failures change nothing; a check chosen by hand
+    /// leaves its result under Check for Updates.
+    private func showUpdate(_ result: UpdateCheckResult?, manual: Bool) {
+        switch result {
+        case let .available(release)?:
+            availableRelease = release
+        case .upToDate?:
+            availableRelease = nil
+        case .failed?, nil:
+            break
+        }
+        if let release = availableRelease {
+            updateAvailableItem.title = UpdateMenu.availableTitle(release, current: updates.current)
+        }
+        updateAvailableItem.isHidden = availableRelease == nil
+        releaseNotesItem.isHidden = availableRelease == nil
+
+        if manual {
+            updateResultItem.title = result.flatMap(UpdateMenu.manualResultLine) ?? ""
+        }
+        updateResultItem.isHidden = updateResultItem.title.isEmpty
     }
 
     private func handle(_ event: StatusMachine.Event) {

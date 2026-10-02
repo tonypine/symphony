@@ -92,7 +92,7 @@ defmodule SymphonyElixir.CoreTest do
 
     config = Config.settings!()
     assert config.polling.interval_ms == 30_000
-    assert config.tracker.active_states == ["Todo", "In Progress"]
+    assert config.tracker.active_states == ["Todo", "In Progress", "Waiting on sub-tickets"]
     assert config.tracker.terminal_states == ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
     assert config.tracker.team == nil
     assert config.tracker.labels == []
@@ -5125,6 +5125,20 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "agent runner stops continuing once a breakdown parent has open sub-issues" do
+    open_sub_issues = [%{id: "child-1", identifier: "MT-250", state: "Backlog"}]
+
+    # The breakdown run ends with the parent In Progress (state missing) or parked in the waiting
+    # state; anything else in the waiting state is held too.
+    for {refreshed_state, labels, sub_issues} <- [
+          {"In Progress", ["breakdown"], open_sub_issues},
+          {"Waiting on sub-tickets", ["breakdown"], open_sub_issues},
+          {"Waiting on sub-tickets", ["feature"], []}
+        ] do
+      assert_agent_runner_stops_after_one_turn(refreshed_state, labels, sub_issues)
+    end
+  end
+
+  defp assert_agent_runner_stops_after_one_turn(refreshed_state, labels, sub_issues) do
     test_root =
       Path.join(
         System.tmp_dir!(),
@@ -5193,9 +5207,9 @@ defmodule SymphonyElixir.CoreTest do
              identifier: "MT-249",
              title: "Groom into sub-tickets",
              description: "Still active",
-             state: "In Progress",
-             labels: ["breakdown"],
-             sub_issues: [%{id: "child-1", identifier: "MT-250", state: "Backlog"}]
+             state: refreshed_state,
+             labels: labels,
+             sub_issues: sub_issues
            }
          ]}
       end

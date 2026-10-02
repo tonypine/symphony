@@ -22,6 +22,7 @@ defmodule SymphonyElixir.Orchestrator do
     RunStore,
     Secret,
     StatusDashboard,
+    SubIssueWait,
     Tracker,
     URLUtils,
     Verification,
@@ -93,6 +94,7 @@ defmodule SymphonyElixir.Orchestrator do
       budget_daily_used: 0,
       budget_daily_paused_logged: false,
       budget_exhausted: MapSet.new(),
+      parked_parents: MapSet.new(),
       setup_failed: %{},
       pause: %{paused: false, reason: nil, paused_at: nil},
       operator_pause_logged: false,
@@ -1380,6 +1382,10 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   @doc false
+  @spec park_breakdown_parents_for_test([Issue.t()], term()) :: term()
+  def park_breakdown_parents_for_test(issues, %State{} = state) when is_list(issues), do: park_breakdown_parents(issues, state)
+
+  @doc false
   @spec revalidate_issue_for_dispatch_for_test(Issue.t(), ([String.t()] -> term())) ::
           {:ok, Issue.t()} | {:skip, Issue.t() | :missing} | {:error, term()}
   def revalidate_issue_for_dispatch_for_test(%Issue{} = issue, issue_fetcher)
@@ -2388,6 +2394,8 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp continue_after_dispatch_readiness(%State{} = state, :poll, issues) do
+    state = park_breakdown_parents(issues, state)
+
     state =
       cond do
         operator_paused?(state) ->
@@ -2408,6 +2416,40 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp continue_after_dispatch_readiness(%State{} = state, {:active_retry, issue, attempt, metadata}, _issues) do
     handle_active_retry_after_readiness(state, issue, attempt, metadata)
+  end
+
+  # A `breakdown` parent left `In Progress` with open sub-issues moves to the waiting state, so
+  # `In Progress` only holds issues an agent is working. Candidates come from the repo poll cache,
+  # so a parent stays in `parked_parents` until the cache stops showing it `In Progress`.
+  defp park_breakdown_parents(issues, %State{} = state) do
+    settings = Config.settings!()
+    terminal_states = terminal_state_set()
+    parkable = Enum.filter(issues, &SubIssueWait.park?(&1, terminal_states, settings))
+    already_parked = MapSet.intersection(state.parked_parents, MapSet.new(parkable, & &1.id))
+
+    parked =
+      parkable
+      |> Enum.reject(&(MapSet.member?(already_parked, &1.id) or issue_claimed_or_running?(state, &1.id)))
+      |> Enum.filter(&park_breakdown_parent(&1, SubIssueWait.state(settings)))
+      |> MapSet.new(& &1.id)
+
+    %{state | parked_parents: MapSet.union(already_parked, parked)}
+  end
+
+  defp issue_claimed_or_running?(%State{} = state, issue_id) do
+    MapSet.member?(state.claimed, issue_id) or Map.has_key?(state.running, issue_id)
+  end
+
+  defp park_breakdown_parent(%Issue{id: issue_id} = issue, waiting_state) do
+    case Tracker.update_issue_state(issue_id, waiting_state) do
+      :ok ->
+        Logger.info("Moved breakdown parent to #{waiting_state} while its sub-issues are open: #{issue_context(issue)}")
+        true
+
+      {:error, reason} ->
+        Logger.warning("Failed to move breakdown parent to #{waiting_state}: #{issue_context(issue)} reason=#{inspect(reason)}")
+        false
+    end
   end
 
   defp dispatch_chosen_issues(issues, state) do
@@ -2522,11 +2564,12 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp active_retry_issue?(_issue, _terminal_states), do: false
 
-  # A `breakdown` parent waits in its active state while its sub-issues are worked; it is dispatched
-  # again for close-out once every sub-issue is terminal.
+  # A `breakdown` parent waits while its sub-issues are worked, in the waiting state or, when that
+  # is off, in its active state; it is dispatched again for close-out once every sub-issue is terminal.
   defp issue_held?(issue, terminal_states) do
     todo_issue_blocked_by_non_terminal?(issue, terminal_states) or
-      Issue.waiting_on_sub_issues?(issue, terminal_states)
+      Issue.waiting_on_sub_issues?(issue, terminal_states) or
+      SubIssueWait.held?(issue, terminal_states, Config.settings!())
   end
 
   defp todo_issue_blocked_by_non_terminal?(
@@ -3160,12 +3203,17 @@ defmodule SymphonyElixir.Orchestrator do
     {:noreply, state}
   end
 
-  defp check_auto_review_tracker_state do
+  defp check_tracker_workflow_states do
     settings = Config.settings!()
 
     case Config.repos() do
-      {:ok, repos} -> AutoReview.check_tracker_state(settings, AutoReview.configured_teams(settings, repos))
-      {:error, reason} -> Logger.warning("Skipping the Auto Review state check; failed to load repositories: #{inspect(reason)}")
+      {:ok, repos} ->
+        teams = AutoReview.configured_teams(settings, repos)
+        AutoReview.check_tracker_state(settings, teams)
+        SubIssueWait.check_tracker_state(settings, teams)
+
+      {:error, reason} ->
+        Logger.warning("Skipping the Auto Review and waiting-on-sub-issues state checks; failed to load repositories: #{inspect(reason)}")
     end
   end
 
@@ -3200,7 +3248,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp start_startup_workspace_lifecycle_task(repo_keys, now_ms) when is_list(repo_keys) do
     start_async_task(fn ->
-      check_auto_review_tracker_state()
+      check_tracker_workflow_states()
       candidate_issues_result = startup_candidate_issues_result()
       terminal_issues_result = startup_terminal_issues_result()
 

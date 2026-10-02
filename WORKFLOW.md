@@ -95,6 +95,7 @@ You are working on a Linear ticket `{{ issue.identifier }}`
    - `Todo` -> immediately move to `In Progress`, then ensure bootstrap workpad comment exists (create if missing), then start execution flow.
      - If PR is already attached, start by reviewing all open PR comments and deciding required changes vs explicit pushback responses.
    - `In Progress` -> continue execution flow from current scratchpad comment.
+   - `Waiting on sub-tickets` -> a `breakdown` parent waiting on its sub-tickets; do nothing and stop while any sub-ticket is open. Once every sub-ticket is terminal, run the close-out in `Parent tickets` below.
    - `Auto Review` -> Symphony is testing the PR as a user; do not change the issue or PR, stop and wait.
    - `In Review` -> wait and poll for decision/review updates.
    - `Merging` -> on entry, open and follow `.ai/skills/land/SKILL.md`; do not call `gh pr merge` directly.
