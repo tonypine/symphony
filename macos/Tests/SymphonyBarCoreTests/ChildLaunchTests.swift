@@ -268,6 +268,76 @@ final class ChildLaunchTests: XCTestCase {
         )
     }
 
+    // MARK: mise shims
+
+    private let shims = "/Users/me/.local/share/mise/shims"
+
+    func testEmbeddedPathAddsMiseShimsAfterTheAppPathWhenTheyExist() throws {
+        let launch = try buildEmbedded(files: StubFileChecker(directories: [shims], files: [embedded]))
+
+        XCTAssertEqual(
+            launch.environment["PATH"],
+            "/usr/bin:/bin:\(shims):/opt/homebrew/bin:/usr/local/bin:/Users/me/.local/bin"
+        )
+    }
+
+    func testEmbeddedPathLeavesOutMiseShimsWhenTheyDoNotExist() throws {
+        let launch = try buildEmbedded()
+
+        XCTAssertFalse(launch.environment["PATH"]!.contains("mise"))
+    }
+
+    func testMiseShimsFollowMiseDataDir() {
+        let files = StubFileChecker(directories: ["/data/mise/shims", shims])
+
+        XCTAssertEqual(
+            ChildLaunchBuilder.miseShimsDirectory(base: ["HOME": "/Users/me", "MISE_DATA_DIR": "/data/mise"], files: files),
+            "/data/mise/shims"
+        )
+        XCTAssertEqual(
+            ChildLaunchBuilder.miseShimsDirectory(base: ["HOME": "/Users/me", "MISE_DATA_DIR": ""], files: files),
+            shims
+        )
+        XCTAssertNil(ChildLaunchBuilder.miseShimsDirectory(base: ["MISE_DATA_DIR": "/elsewhere"], files: files))
+        XCTAssertNil(ChildLaunchBuilder.miseShimsDirectory(base: [:], files: files))
+    }
+
+    func testMiseShimsAlreadyOnPathAreNotAddedAgain() {
+        XCTAssertEqual(
+            ChildLaunchBuilder.pathWithFallbacks("\(shims):/usr/bin", home: nil, miseShims: shims),
+            "\(shims):/usr/bin:/opt/homebrew/bin:/usr/local/bin"
+        )
+    }
+
+    func testEmbeddedEnvironmentRunsAToolFromTheMiseShims() throws {
+        let dataDirectory = uniqueTemporaryDirectory("mise-data")
+        let shimsDirectory = dataDirectory.appendingPathComponent("shims", isDirectory: true)
+        try FileManager.default.createDirectory(at: shimsDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dataDirectory) }
+        let mix = shimsDirectory.appendingPathComponent("mix")
+        try "#!/bin/sh\necho \"Mix 1.19.5 $1\"\n".write(to: mix, atomically: false, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: mix.path)
+
+        let environment = ChildLaunchBuilder.environment(
+            base: ["HOME": "/nonexistent", "PATH": "/usr/bin:/bin", "MISE_DATA_DIR": dataDirectory.path],
+            secrets: SecretSettings(linearAPIKey: key)
+        )
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", "mix --version"]
+        process.environment = environment
+        let output = Pipe()
+        process.standardOutput = output
+        try process.run()
+        process.waitUntilExit()
+
+        XCTAssertEqual(process.terminationStatus, 0)
+        XCTAssertEqual(
+            String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8),
+            "Mix 1.19.5 --version\n"
+        )
+    }
+
     func testPathFallsBackToSystemDirectoriesWhenUnset() {
         XCTAssertEqual(
             ChildLaunchBuilder.pathWithFallbacks(nil, home: nil),
