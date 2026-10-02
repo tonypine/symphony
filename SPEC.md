@@ -401,7 +401,9 @@ Loader behavior:
   a workflow path inside a git checkout, the workflow is the file committed at that path on
   `origin/<base_branch>` (`origin/HEAD`, `origin/main`, then `origin/master` when no base branch
   is set), not the checkout's working tree. With `local`, or a path outside any git checkout, the
-  file is read from disk.
+  file is read from disk. With `ref`, the file is also read from disk, with a warning, until the
+  ref has been read once (for example a checkout with no `origin` remote or no resolvable base
+  branch ref).
 - The application selects a primary repo as the one marked `default: true`, otherwise the first
   repo in `repositories:`.
 

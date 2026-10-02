@@ -12,7 +12,9 @@ defmodule SymphonyElixir.WorkflowSource do
   `WORKFLOW.md` on the ref logs an error and keeps the last known good workflow.
 
   With `workflow_source: local`, or when the workflow file is not inside a git
-  checkout, the configured file is read directly.
+  checkout, the configured file is read directly. The configured file is also read
+  directly, with a warning, while no snapshot has been written yet, for example in
+  a checkout with no `origin` remote or no resolvable base branch ref.
   """
 
   require Logger
@@ -25,15 +27,19 @@ defmodule SymphonyElixir.WorkflowSource do
   @type refresh_result :: :ok | :unchanged | :skipped | {:error, term()}
 
   @doc """
-  Returns the path the workflow loaders read for `repo`.
+  Returns the path the workflow loaders read for `repo`: the ref snapshot once one
+  has been written, otherwise the configured file.
   """
   @spec read_path(SystemSchema.Repo.t()) :: Path.t()
   def read_path(%SystemSchema.Repo{} = repo) do
     local_path = SystemSchema.repo_workflow_path(repo)
 
-    case ref_checkout(repo, local_path) do
-      {:ok, _checkout} -> snapshot_path(repo, local_path)
-      :local -> local_path
+    with {:ok, _checkout} <- ref_checkout(repo, local_path),
+         snapshot = snapshot_path(repo, local_path),
+         true <- File.regular?(snapshot) do
+      snapshot
+    else
+      _ -> local_path
     end
   end
 
@@ -117,9 +123,18 @@ defmodule SymphonyElixir.WorkflowSource do
       write_snapshot(snapshot, content)
     else
       {:error, reason} ->
-        Logger.error("Failed to load workflow from ref repo=#{repo.name} checkout=#{checkout} workflow=#{workflow_in_repo} reason=#{inspect(reason)}; keeping last known good workflow")
-
+        log_refresh_error(repo, checkout, workflow_in_repo, snapshot, reason)
         {:error, reason}
+    end
+  end
+
+  defp log_refresh_error(repo, checkout, workflow_in_repo, snapshot, reason) do
+    if File.regular?(snapshot) do
+      Logger.error("Failed to load workflow from ref repo=#{repo.name} checkout=#{checkout} workflow=#{workflow_in_repo} reason=#{inspect(reason)}; keeping last known good workflow")
+    else
+      Logger.warning(
+        "Failed to load workflow from ref repo=#{repo.name} checkout=#{checkout} workflow=#{workflow_in_repo} reason=#{inspect(reason)}; reading the local workflow file until the ref resolves (set workflow_source: local to silence this)"
+      )
     end
   end
 

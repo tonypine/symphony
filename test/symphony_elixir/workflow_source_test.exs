@@ -58,9 +58,34 @@ defmodule SymphonyElixir.WorkflowSourceTest do
 
     test "reads a snapshot under the state root for the default ref source", %{root: root} do
       %{checkout: checkout} = git_repos!(root, "Committed prompt")
+      repo = repo(checkout)
 
-      assert WorkflowSource.read_path(repo(checkout)) ==
+      assert WorkflowSource.read_path(repo) == Path.join(checkout, "WORKFLOW.md")
+      assert WorkflowSource.refresh(repo) == :ok
+
+      assert WorkflowSource.read_path(repo) ==
                Path.join([root, "state", "workflows", "app", "WORKFLOW.md"])
+    end
+
+    test "reads the local file with a warning in a checkout with no origin", %{root: root} do
+      checkout = Path.join(root, "local-only")
+      File.mkdir_p!(checkout)
+      git!(checkout, ["init", "-q", "-b", "main"])
+      File.write!(Path.join(checkout, "WORKFLOW.md"), "Local prompt\n")
+      git!(checkout, ["add", "WORKFLOW.md"])
+      git!(checkout, ["commit", "-q", "-m", "workflow"])
+      write_symphony!(root, checkout)
+      {:ok, repo} = Config.repo("app")
+
+      log =
+        capture_log(fn ->
+          assert {:error, {:workflow_ref_not_found, _candidates}} = WorkflowSource.refresh(repo)
+        end)
+
+      assert log =~ "reading the local workflow file until the ref resolves"
+      assert WorkflowSource.read_path(repo) == Path.join(checkout, "WORKFLOW.md")
+      assert {:ok, %{prompt: "Local prompt"}} = Config.workflow_for_repo("app")
+      assert :ok = Config.validate_repo_workflows()
     end
   end
 
