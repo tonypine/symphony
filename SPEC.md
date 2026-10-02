@@ -1471,8 +1471,10 @@ The poller:
   and moves the issue back to `In Progress` for agent-owned conflict resolution;
 - moves the issue back to `In Progress` when GitHub reports approval so the orchestrator starts
   the merge/landing workflow through the normal run path;
-- removes tracked workspaces and durable review records when PRs close or remain idle beyond
-  `pull_requests.review_comments.stale_after_days`.
+- removes tracked workspaces and durable review records when PRs merge, close, or remain idle
+  beyond `pull_requests.review_comments.stale_after_days`; while the run store still reports a
+  `running` agent run for the issue, it defers that cleanup to a later poll so a live turn (for
+  example the agent merging its own PR) keeps its workspace until the run ends.
 - when `pull_requests.checks.enabled` is true, polls CI status for tracked PRs in every configured
   repository route, preserving the same retry, dispatch, and escalation behavior used for the
   primary repository.
