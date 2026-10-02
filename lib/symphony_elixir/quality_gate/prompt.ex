@@ -18,6 +18,9 @@ defmodule SymphonyElixir.QualityGate.Prompt do
     - Scope: bounded surface area for a single PR
     - Ambiguity markers: words like "maybe", "investigate", "explore", open-ended questions
     - Sandbox dependency: needs production credentials, manual UI testing, real browsers, deploys
+    - User walkthrough: a user-facing issue (UI, CLI output, anything a user sees or does)
+      without a "## User walkthrough" section of numbered steps, each with the expected
+      visible result, scores lower
 
   Reply with ONLY a single JSON object:
     {"score": <integer 1-10>, "reason": "<one short sentence>", "questions": ["<question>", "<question>", "<question>"]}
