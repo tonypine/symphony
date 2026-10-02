@@ -8,7 +8,8 @@ final class SettingsValidatorTests: XCTestCase {
         checkoutPath: "/src/symphony",
         configPath: "/src/symphony/symphony.yml",
         commandPrefix: "mise exec --",
-        stopTimeoutSeconds: 30
+        stopTimeoutSeconds: 30,
+        developmentMode: true
     )
 
     private let key = SecretSettings(linearAPIKey: "lin_api_secret")
@@ -23,9 +24,63 @@ final class SettingsValidatorTests: XCTestCase {
 
     func testEmptySettingsReportEveryRequiredField() {
         XCTAssertEqual(
-            issues(AppSettings(), SecretSettings()),
+            issues(AppSettings(developmentMode: true), SecretSettings()),
             [.checkoutPathMissing, .configPathMissing, .linearAPIKeyMissing]
         )
+    }
+
+    // MARK: Embedded Symphony (Development mode off)
+
+    private let embedded = "/Applications/Symphony.app/Contents/Resources/symphony"
+
+    private func embeddedIssues(_ settings: AppSettings, _ secrets: SecretSettings? = nil, hasBinary: Bool = true)
+        -> [SettingsIssue]
+    {
+        var files = self.files
+        if hasBinary { files.files.insert(embedded) }
+        return SettingsValidator(files: files, embeddedSymphonyPath: embedded).validate(settings, secrets ?? key)
+    }
+
+    func testEmbeddedModeNeedsOnlySymphonyYmlAndTheKey() {
+        XCTAssertEqual(embeddedIssues(AppSettings(configPath: "/src/symphony/symphony.yml")), [])
+        XCTAssertEqual(embeddedIssues(AppSettings(), SecretSettings()), [.configPathMissing, .linearAPIKeyMissing])
+    }
+
+    func testEmbeddedModeSkipsTheCheckoutAndCommandPrefix() {
+        let settings = AppSettings(
+            checkoutPath: "relative/missing",
+            configPath: "/src/symphony/symphony.yml",
+            commandPrefix: "env 'A"
+        )
+        XCTAssertEqual(embeddedIssues(settings), [])
+    }
+
+    func testEmbeddedModeStillChecksTheConfigPathAndTimeout() {
+        var settings = AppSettings(configPath: "/src/symphony/missing.yml")
+        settings.stopTimeoutSeconds = 0
+        XCTAssertEqual(embeddedIssues(settings), [.configPathNotFile, .stopTimeoutOutOfRange])
+    }
+
+    func testEmbeddedModeWithoutTheBinaryAsksForDevelopmentMode() {
+        let settings = AppSettings(configPath: "/src/symphony/symphony.yml")
+        XCTAssertEqual(embeddedIssues(settings, hasBinary: false), [.embeddedSymphonyMissing])
+        XCTAssertEqual(SettingsValidator(files: files).validate(settings, key), [.embeddedSymphonyMissing])
+        XCTAssertEqual(
+            SettingsIssue.embeddedSymphonyMissing.message,
+            "This build has no embedded Symphony; turn on Development mode in Settings."
+        )
+    }
+
+    func testDevelopmentModeDoesNotNeedTheEmbeddedBinary() {
+        XCTAssertEqual(SettingsValidator(files: files).validate(valid, key), [])
+    }
+
+    func testFirstRunNeedsSymphonyYmlAndInDevelopmentModeTheCheckout() {
+        XCTAssertTrue(AppSettings().needsSetup)
+        XCTAssertFalse(AppSettings(configPath: "/s.yml").needsSetup)
+        XCTAssertTrue(AppSettings(configPath: " ", developmentMode: false).needsSetup)
+        XCTAssertTrue(AppSettings(configPath: "/s.yml", developmentMode: true).needsSetup)
+        XCTAssertFalse(AppSettings(checkoutPath: "/src", configPath: "/s.yml", developmentMode: true).needsSetup)
     }
 
     func testCheckoutPathMustBeAnAbsoluteExistingDirectory() {
@@ -104,7 +159,7 @@ final class SettingsValidatorTests: XCTestCase {
         let all: [SettingsIssue] = [
             .checkoutPathMissing, .checkoutPathNotAbsolute, .checkoutPathNotDirectory,
             .configPathMissing, .configPathNotAbsolute, .configPathNotFile,
-            .commandPrefixUnbalancedQuotes, .stopTimeoutOutOfRange, .linearAPIKeyMissing,
+            .commandPrefixUnbalancedQuotes, .stopTimeoutOutOfRange, .linearAPIKeyMissing, .embeddedSymphonyMissing,
             .environmentNameInvalid("1X"), .environmentNameDuplicate("X"), .environmentNameReserved("LINEAR_API_KEY"),
         ]
         for issue in all {
@@ -114,10 +169,15 @@ final class SettingsValidatorTests: XCTestCase {
     }
 
     func testTrimmingRemovesWhitespaceAndBlankRows() {
-        let settings = AppSettings(checkoutPath: "  /src \n", configPath: "\t/src/s.yml ", commandPrefix: " mise exec -- ")
+        let settings = AppSettings(
+            checkoutPath: "  /src \n",
+            configPath: "\t/src/s.yml ",
+            commandPrefix: " mise exec -- ",
+            developmentMode: true
+        )
         XCTAssertEqual(
             settings.trimmed(),
-            AppSettings(checkoutPath: "/src", configPath: "/src/s.yml", commandPrefix: "mise exec --")
+            AppSettings(checkoutPath: "/src", configPath: "/src/s.yml", commandPrefix: "mise exec --", developmentMode: true)
         )
 
         let secrets = SecretSettings(

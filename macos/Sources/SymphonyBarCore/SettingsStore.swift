@@ -17,6 +17,7 @@ public final class SettingsStore {
         public static let commandPrefix = "commandPrefix"
         public static let stopTimeoutSeconds = "stopTimeoutSeconds"
         public static let startOnLaunch = "startOnLaunch"
+        public static let developmentMode = "developmentMode"
     }
 
     private let defaults: KeyValueStore
@@ -34,8 +35,18 @@ public final class SettingsStore {
             commandPrefix: defaults.object(forKey: Key.commandPrefix) as? String ?? AppSettings.defaultCommandPrefix,
             stopTimeoutSeconds: defaults.object(forKey: Key.stopTimeoutSeconds) as? Int
                 ?? AppSettings.defaultStopTimeoutSeconds,
-            startOnLaunch: defaults.object(forKey: Key.startOnLaunch) as? Bool ?? false
+            startOnLaunch: defaults.object(forKey: Key.startOnLaunch) as? Bool ?? false,
+            developmentMode: defaults.object(forKey: Key.developmentMode) as? Bool ?? false
         )
+    }
+
+    /// Picks Development mode the first time this version runs, so an install that already ran its checkout's
+    /// `bin/symphony` keeps doing so: on when a checkout folder is set and the app has no embedded Symphony,
+    /// off otherwise. Does nothing once the setting is stored.
+    public func migrateDevelopmentMode(embeddedSymphonyAvailable: Bool) {
+        guard defaults.object(forKey: Key.developmentMode) == nil else { return }
+        let checkoutPath = (defaults.object(forKey: Key.checkoutPath) as? String ?? "").trimmingWhitespace()
+        defaults.set(!checkoutPath.isEmpty && !embeddedSymphonyAvailable, forKey: Key.developmentMode)
     }
 
     public func saveSettings(_ settings: AppSettings) {
@@ -44,6 +55,7 @@ public final class SettingsStore {
         defaults.set(settings.commandPrefix, forKey: Key.commandPrefix)
         defaults.set(settings.stopTimeoutSeconds, forKey: Key.stopTimeoutSeconds)
         defaults.set(settings.startOnLaunch, forKey: Key.startOnLaunch)
+        defaults.set(settings.developmentMode, forKey: Key.developmentMode)
     }
 
     /// Reads the Linear API key and every other account under the Keychain service as an extra variable.

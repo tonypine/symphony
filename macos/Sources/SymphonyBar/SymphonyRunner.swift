@@ -14,6 +14,14 @@ final class SymphonyRunner {
     private var stopWaiters: [() -> Void] = []
     // SYMPHONY_STATE_ROOT from the last start, which may come from the Keychain variables.
     private var launchedStateRoot: String?
+    // Settings of the running Symphony, so the menu names the binary that runs even after Settings change.
+    private var launchedSettings: AppSettings?
+
+    /// Where this build's embedded Symphony is, at `Contents/Resources/symphony`.
+    nonisolated static let embeddedSymphonyPath = EmbeddedSymphony.path(resourcesPath: Bundle.main.resourcePath)
+
+    /// True when this build carries an embedded Symphony.
+    nonisolated static var hasEmbeddedSymphony: Bool { EmbeddedSymphony.isAvailable(at: embeddedSymphonyPath) }
 
     init(store: SettingsStore = SettingsStore()) {
         self.store = store
@@ -29,6 +37,15 @@ final class SymphonyRunner {
         return StateRoot.locate(environment: environment)
     }
 
+    /// Which Symphony runs, or would run on Start, for the menu.
+    var sourceLine: String {
+        StatusMenu.sourceLine(
+            launchedSettings ?? store.loadSettings(),
+            appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+            embeddedAvailable: Self.hasEmbeddedSymphony
+        )
+    }
+
     /// Symphony's output log.
     var logURL: URL { logDirectory.appendingPathComponent(ChildLog.fileName) }
 
@@ -40,10 +57,12 @@ final class SymphonyRunner {
     func start() throws {
         guard child == nil else { return }
 
+        let settings = store.loadSettings()
         let launch = try ChildLaunchBuilder.build(
-            settings: store.loadSettings(),
+            settings: settings,
             secrets: try store.loadSecrets(),
-            baseEnvironment: ProcessInfo.processInfo.environment
+            baseEnvironment: ProcessInfo.processInfo.environment,
+            embeddedSymphonyPath: Self.embeddedSymphonyPath
         )
         launchedStateRoot = launch.environment[StateRoot.environmentKey]
         let log = try ChildLog.rotate(in: logDirectory)
@@ -52,6 +71,7 @@ final class SymphonyRunner {
         child = try ChildProcess.spawn(launch, logURL: log, queue: .main) { [weak self] exit, requested in
             MainActor.assumeIsolated { self?.childExited(exit, requested: requested) }
         }
+        launchedSettings = settings
         onEvent?(.started)
     }
 
@@ -76,6 +96,7 @@ final class SymphonyRunner {
 
     private func childExited(_ exit: ChildExit, requested: Bool) {
         child = nil
+        launchedSettings = nil
         if !requested {
             notify(title: "Symphony stopped unexpectedly", body: StatusMenu.unexpectedExitMessage(exit, logPath: logPath))
         }

@@ -6,7 +6,7 @@ final class ChildLaunchTests: XCTestCase {
     private let files = StubFileChecker(files: ["/src/symphony/bin/symphony"])
 
     private func settings(prefix: String = "mise exec --", config: String = "/src/symphony/symphony.yml") -> AppSettings {
-        AppSettings(checkoutPath: "/src/symphony", configPath: config, commandPrefix: prefix)
+        AppSettings(checkoutPath: "/src/symphony", configPath: config, commandPrefix: prefix, developmentMode: true)
     }
 
     private func build(
@@ -60,7 +60,12 @@ final class ChildLaunchTests: XCTestCase {
 
     func testSettingsAreTrimmedBeforeBuilding() throws {
         let launch = try build(
-            AppSettings(checkoutPath: " /src/symphony ", configPath: "\t/src/s.yml\n", commandPrefix: "  ")
+            AppSettings(
+                checkoutPath: " /src/symphony ",
+                configPath: "\t/src/s.yml\n",
+                commandPrefix: "  ",
+                developmentMode: true
+            )
         )
 
         XCTAssertEqual(launch.workingDirectory, "/src/symphony")
@@ -131,14 +136,96 @@ final class ChildLaunchTests: XCTestCase {
             }
         }
 
-        XCTAssertEqual(problem(AppSettings(configPath: "/s.yml")), .checkoutPathMissing)
-        XCTAssertEqual(problem(AppSettings(checkoutPath: "/src/symphony")), .configPathMissing)
+        XCTAssertEqual(problem(AppSettings(configPath: "/s.yml", developmentMode: true)), .checkoutPathMissing)
+        XCTAssertEqual(problem(AppSettings(checkoutPath: "/src/symphony", developmentMode: true)), .configPathMissing)
         XCTAssertEqual(problem(settings(prefix: "env 'A")), .commandPrefixInvalid)
         XCTAssertEqual(
             problem(settings(), files: StubFileChecker()),
             .symphonyBinaryMissing("/src/symphony/bin/symphony")
         )
         XCTAssertNil(problem(settings()))
+    }
+
+    // MARK: Embedded Symphony (Development mode off)
+
+    private let embedded = "/Applications/Symphony.app/Contents/Resources/symphony"
+
+    private func buildEmbedded(
+        _ settings: AppSettings = AppSettings(configPath: "/Users/me/ops/symphony.yml"),
+        key: String = "lin_api_TOP_SECRET",
+        embeddedPath: String? = "/Applications/Symphony.app/Contents/Resources/symphony",
+        files: FileChecker? = nil
+    ) throws -> ChildLaunch {
+        try ChildLaunchBuilder.build(
+            settings: settings,
+            secrets: SecretSettings(
+                linearAPIKey: key,
+                extraEnvironment: [EnvironmentVariable(name: "GITHUB_TOKEN", value: "ghp_ALSO_SECRET")]
+            ),
+            baseEnvironment: ["HOME": "/Users/me", "PATH": "/usr/bin:/bin"],
+            embeddedSymphonyPath: embeddedPath,
+            files: files ?? StubFileChecker(files: [embedded])
+        )
+    }
+
+    func testEmbeddedModeRunsTheBundledBinaryDirectlyFromTheConfigFolder() throws {
+        let launch = try buildEmbedded()
+
+        XCTAssertEqual(launch.executable, embedded)
+        XCTAssertEqual(launch.arguments, ["--config", "/Users/me/ops/symphony.yml"])
+        XCTAssertEqual(launch.workingDirectory, "/Users/me/ops")
+    }
+
+    func testEmbeddedModeIgnoresTheCheckoutAndCommandPrefix() throws {
+        let launch = try buildEmbedded(
+            AppSettings(checkoutPath: "/src/symphony", configPath: " /Users/me/My Configs/s.yml ", commandPrefix: "env 'A")
+        )
+
+        XCTAssertEqual(launch.executable, embedded)
+        XCTAssertEqual(launch.arguments, ["--config", "/Users/me/My Configs/s.yml"])
+        XCTAssertEqual(launch.workingDirectory, "/Users/me/My Configs")
+    }
+
+    func testEmbeddedModeKeepsSecretsInTheEnvironmentOnly() throws {
+        let launch = try buildEmbedded()
+        let commandLine = ([launch.executable] + launch.arguments).joined(separator: " ")
+
+        XCTAssertEqual(launch.environment["LINEAR_API_KEY"], key)
+        XCTAssertEqual(launch.environment["GITHUB_TOKEN"], "ghp_ALSO_SECRET")
+        XCTAssertEqual(launch.environment["PATH"], "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin:/Users/me/.local/bin")
+        XCTAssertFalse(commandLine.contains(key))
+        XCTAssertFalse(commandLine.contains("ghp_ALSO_SECRET"))
+    }
+
+    func testEmbeddedModeReportsMissingSettingsAndBinary() {
+        func problem(_ build: () throws -> ChildLaunch) -> LaunchProblem? {
+            do {
+                _ = try build()
+                return nil
+            } catch {
+                return error as? LaunchProblem
+            }
+        }
+
+        XCTAssertEqual(problem { try buildEmbedded(AppSettings()) }, .configPathMissing)
+        XCTAssertEqual(problem { try buildEmbedded(key: " ") }, .linearAPIKeyMissing)
+        XCTAssertEqual(problem { try buildEmbedded(embeddedPath: nil) }, .embeddedSymphonyMissing)
+        XCTAssertEqual(problem { try buildEmbedded(files: StubFileChecker()) }, .embeddedSymphonyMissing)
+        XCTAssertNil(problem { try buildEmbedded() })
+        XCTAssertEqual(
+            LaunchProblem.embeddedSymphonyMissing.message,
+            "This build has no embedded Symphony; turn on Development mode in Settings."
+        )
+        XCTAssertTrue(LaunchProblem.embeddedSymphonyMissing.isFixedInSettings)
+    }
+
+    func testEmbeddedSymphonyLivesInTheBundleResources() {
+        XCTAssertEqual(EmbeddedSymphony.path(resourcesPath: "/Applications/Symphony.app/Contents/Resources"), embedded)
+        XCTAssertNil(EmbeddedSymphony.path(resourcesPath: nil))
+        XCTAssertNil(EmbeddedSymphony.path(resourcesPath: ""))
+        XCTAssertTrue(EmbeddedSymphony.isAvailable(at: embedded, files: StubFileChecker(files: [embedded])))
+        XCTAssertFalse(EmbeddedSymphony.isAvailable(at: embedded, files: StubFileChecker(directories: [embedded])))
+        XCTAssertFalse(EmbeddedSymphony.isAvailable(at: nil, files: StubFileChecker(files: [embedded])))
     }
 
     func testOnlyTheBinaryProblemIsFixedOutsideSettings() {
