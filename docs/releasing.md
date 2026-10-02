@@ -1,72 +1,78 @@
 # Releasing
 
-This guide describes how to publish a versioned Symphony release. Releases are
-built by the [`release` workflow](../.github/workflows/release.yml) and produce a
-GitHub Release with self-contained macOS binaries (`arm64` and `x86_64`) built
-via [Burrito](https://github.com/burrito-elixir/burrito).
+Symphony ships as `Symphony.app`, the macOS menu bar app with the self-contained
+[Burrito](https://github.com/burrito-elixir/burrito) `symphony` binary inside at
+`Contents/Resources/symphony`. The [`release` workflow](../.github/workflows/release.yml)
+builds and publishes it as a GitHub Release on every push to `main`, on every
+pushed `v*` tag, and when run by hand (**Actions → release → Run workflow**).
+Only macOS arm64 is built.
 
 ## Versioning
 
-- `mix.exs` `version:` is the single source of truth.
-- Versions follow [semantic versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`).
-- Versioning starts at `0.0.1`.
+Every release has a monotonic, machine-comparable version:
 
-## Prepare a release
+| Field | Value | Example |
+| --- | --- | --- |
+| `CFBundleVersion`, `version.json` `build` | the workflow run number | `42` |
+| `CFBundleShortVersionString`, `version.json` `version` | `<mix.exs version>.<run number>` | `0.0.1.42` |
+| Release tag | `v<short version>` | `v0.0.1.42` |
 
-1. Bump `version:` in `mix.exs` to the new version.
-2. Add a matching section to `changelog.txt`. The heading must be `## <version>`
-   (no `v` prefix); its body becomes the GitHub Release notes:
+A pushed `v*` tag is released under its own name with the same versions.
+Compare `build` to tell which release is newer. Bump `version:` in `mix.exs`
+for a new major, minor or patch version.
 
-   ```
-   ## 0.0.2
-   - Summary of what changed in this release.
-   ```
+## Release assets
 
-3. Commit and merge the changes to `main`.
+| Asset | What it is |
+| --- | --- |
+| `Symphony-<version>.zip` | `Symphony.app`, zipped with `ditto -c -k --keepParent` |
+| `Symphony-<version>.zip.sha256` | its SHA-256, checked with `shasum -a 256 -c` |
+| `Symphony-<version>.zip.minisig` | its minisign signature, only when the minisign key is configured |
+| `version.json` | `version`, `build`, `sha256`, `commit`, `published_at`, `signed`, `zip`, `minisig` (asset name or `null`), `changes` |
 
-## Cut the release
+The release notes list the commit subjects since the previous `v*` tag, headed
+"N changes since v…". Releases are not marked prerelease, so
+`releases/latest` returns the newest one. The assets are made by
+[`scripts/release/package.sh`](../scripts/release/package.sh), which you can run
+locally on a built app.
 
-Trigger the workflow manually — no local tagging is required:
+## Signing
 
-1. Go to **Actions → release → Run workflow**.
-2. Select the branch/ref to release (usually `main`, after merging the prep
-   changes).
-3. Enter the **version** (for example `0.0.2`, without the `v` prefix).
+The workflow signs the embedded binary first, then the app bundle, without
+`--deep` and without the hardened runtime. Two sets of repository secrets are
+optional; without them the release still publishes:
 
-The workflow then:
+- `MACOS_SIGNING_P12_BASE64`, `MACOS_SIGNING_P12_PASSWORD`, `MACOS_SIGNING_IDENTITY`:
+  the code-signing certificate. The workflow imports it into a temporary
+  keychain, signs with `MACOS_SIGNING_IDENTITY`, and deletes the keychain at the
+  end of the job. Without them the app is signed ad hoc, and `version.json` has
+  `"signed": false`.
+- `MINISIGN_SECRET_KEY`, `MINISIGN_PASSWORD`: the minisign key for the `.minisig`
+  asset. Without them there is no `.minisig`, and `version.json` has
+  `"minisig": null`.
 
-1. Verifies the input version is valid semver and matches `mix.exs`.
-2. Extracts the matching `changelog.txt` section as the release notes.
-3. Builds the macOS binaries with `MIX_ENV=prod mix release`.
-4. Creates the `v<version>` tag at the selected commit and publishes the GitHub
-   Release with both binaries attached.
+The app is not notarized by Apple, so Gatekeeper warns on first launch of a
+downloaded copy. The release notes tell users to clear the quarantine flag with
+`xattr -dr com.apple.quarantine Symphony.app`.
 
-Each guard fails the run loudly rather than producing a partial release:
+## Verify a release
 
-- version not semver,
-- version does not match `mix.exs`,
-- no `changelog.txt` entry for the version.
+```bash
+shasum -a 256 -c Symphony-<version>.zip.sha256
+minisign -Vm Symphony-<version>.zip -P <Symphony minisign public key>   # when published
+ditto -x -k Symphony-<version>.zip .
+codesign --verify --strict Symphony.app
+codesign --verify --strict Symphony.app/Contents/Resources/symphony
+codesign -dvv Symphony.app    # Authority=… once the certificate is configured
+./Symphony.app/Contents/Resources/symphony check
+```
 
-## Notes
+## Build the app locally
 
-- The workflow creates the `v<version>` tag at the commit of the ref you select,
-  so run it from the commit you intend to ship.
-- Only macOS binaries are produced today; there is no Linux binary or published
-  Docker image.
+```bash
+BURRITO_TARGET=macos_arm64 make package     # writes burrito_out/symphony-macos-arm64
+cd macos
+make bundle SYMPHONY_BIN=../burrito_out/symphony-macos-arm64 SHORT_VERSION=0.0.1.0 BUILD_NUMBER=0
+```
 
-## macOS Gatekeeper
-
-The binaries are ad-hoc signed by Burrito but **not** signed with an Apple
-Developer ID or notarized, because the project has no Apple Developer Program
-membership. As a result, macOS Gatekeeper shows "Apple could not verify
-`symphony_macos_arm64` is free of malware…" on first launch. This is a provenance
-check, not a sign that anything is wrong with the binary.
-
-The release workflow appends an **Installing on macOS** section to every release's
-notes that tells users to clear the quarantine flag
-(`xattr -d com.apple.quarantine …`) or right-click → **Open**.
-
-To remove the warning entirely (silent launch), the build would need to codesign
-each binary with a Developer ID Application certificate, run hardened-runtime
-notarization via `xcrun notarytool`, and distribute the notarized archive. That
-requires a paid Apple Developer account and is not set up today.
+`make bundle` signs ad hoc unless you pass `SIGNING_IDENTITY`.
