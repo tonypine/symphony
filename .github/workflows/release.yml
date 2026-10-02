@@ -1,78 +1,79 @@
 name: release
 
+# Builds Symphony.app with the self-contained Burrito `symphony` binary inside
+# and publishes it as a GitHub Release, on every push to main, on pushed v*
+# tags, and on demand.
+#
+# Versioning (monotonic and machine-comparable):
+#   CFBundleVersion            = github.run_number            e.g. 42
+#   CFBundleShortVersionString = <mix.exs version>.<run_number> e.g. 0.0.1.42
+#   release tag                = v<short version>              e.g. v0.0.1.42
+# A pushed v* tag is released under its own name, with the same versions.
+# version.json's `build` is the number to compare.
+#
+# Optional secrets. Without them the release still publishes:
+#   MACOS_SIGNING_P12_BASE64, MACOS_SIGNING_P12_PASSWORD, MACOS_SIGNING_IDENTITY
+#     sign with the Symphony certificate; without them the app is signed ad hoc
+#     and version.json says "signed": false.
+#   MINISIGN_SECRET_KEY, MINISIGN_PASSWORD
+#     publish a .minisig; without them version.json says "minisig": null.
+
 on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
   workflow_dispatch:
-    inputs:
-      version:
-        description: "Release version, e.g. 0.0.1 (must match mix.exs)"
-        required: true
-        type: string
 
 permissions:
   contents: write
 
+# Publish one release at a time, in push order, so releases/latest is the newest.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release:
     name: release
-    # macOS host so Burrito can produce the macOS binaries; mise installs Zig
-    # for the cross-compile to x86_64.
-    runs-on: macos-latest
+    # macOS 15: Zig 0.15.2 (pinned by Burrito) cannot link against the macOS 26
+    # SDK. Apple silicon, so the arm64 Burrito binary and the app build natively.
+    runs-on: macos-15
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # Full history and tags, for the commit subjects since the last release.
+          fetch-depth: 0
+          persist-credentials: false
 
-      - name: Verify input version matches mix.exs
+      - name: Compute version
         id: version
         env:
-          INPUT_VERSION: ${{ inputs.version }}
+          RUN_NUMBER: ${{ github.run_number }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          version="${INPUT_VERSION#v}"
-          if ! printf '%s' "$version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "::error::Version '$version' is not semver (expected e.g. 0.0.1)."
-            exit 1
-          fi
           mix_version="$(grep -oE 'version: "[0-9]+\.[0-9]+\.[0-9]+"' mix.exs | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')"
-          if [ "$version" != "$mix_version" ]; then
-            echo "::error::Input version $version does not match mix.exs version $mix_version. Bump mix.exs first."
+          if [ -z "$mix_version" ]; then
+            echo "::error::Could not read the version from mix.exs."
             exit 1
           fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-
-      - name: Extract changelog entry
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          awk -v ver="$VERSION" '
-            $0 == "## " ver { flag = 1; next }
-            /^## / && flag { flag = 0 }
-            flag { print }
-          ' changelog.txt > release_notes.md
-          if [ ! -s release_notes.md ]; then
-            echo "::error::No changelog.txt entry found for version $VERSION. Add a '## $VERSION' section."
-            exit 1
+          version="$mix_version.$RUN_NUMBER"
+          if [ "$REF_TYPE" = tag ]; then
+            tag="$REF_NAME"
+          else
+            tag="v$version"
           fi
-          # Append macOS install instructions. The binaries are ad-hoc signed
-          # but not notarized (no Apple Developer ID), so Gatekeeper warns that
-          # it cannot verify them. Tell users how to clear the quarantine flag.
-          cat >> release_notes.md <<'NOTES'
-
-## Installing on macOS
-
-These binaries are self-contained but not notarized by Apple, so on first launch
-macOS Gatekeeper warns that it "cannot verify" the binary. This is expected for
-an unsigned download — it does not mean the binary is unsafe. To run it, clear
-the quarantine flag after downloading:
-
-```bash
-xattr -d com.apple.quarantine ./symphony_macos_arm64   # or symphony_macos_x86_64
-chmod +x ./symphony_macos_arm64
-./symphony_macos_arm64
-```
-
-Alternatively, right-click the binary in Finder and choose **Open**, then confirm
-**Open** in the dialog.
-NOTES
+          echo "Releasing $version (build $RUN_NUMBER) as $tag"
+          {
+            echo "version=$version"
+            echo "build=$RUN_NUMBER"
+            echo "tag=$tag"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Set up mise tools
         uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
@@ -80,19 +81,114 @@ NOTES
           install: true
           cache: true
 
-      - name: Fetch prod dependencies
-        run: MIX_ENV=prod mix deps.get
+      - name: Build the Symphony binary (macOS arm64)
+        env:
+          BURRITO_TARGET: macos_arm64
+        run: |
+          make package
+          test -x burrito_out/symphony-macos-arm64
 
-      - name: Build release binaries
-        run: MIX_ENV=prod mix release
+      - name: Import the signing certificate
+        id: signing
+        env:
+          MACOS_SIGNING_P12_BASE64: ${{ secrets.MACOS_SIGNING_P12_BASE64 }}
+          MACOS_SIGNING_P12_PASSWORD: ${{ secrets.MACOS_SIGNING_P12_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        run: |
+          if [ -z "$MACOS_SIGNING_P12_BASE64" ] || [ -z "$MACOS_SIGNING_P12_PASSWORD" ] || [ -z "$MACOS_SIGNING_IDENTITY" ]; then
+            echo "No signing certificate configured; signing ad hoc."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/symphony-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 24)"
+          echo "::add-mask::$keychain_password"
+          p12="$RUNNER_TEMP/symphony-signing.p12"
+          (umask 077 && printf '%s' "$MACOS_SIGNING_P12_BASE64" | base64 --decode > "$p12")
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$p12" -k "$keychain" -f pkcs12 -P "$MACOS_SIGNING_P12_PASSWORD" -T /usr/bin/codesign > /dev/null
+          rm -f "$p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
+          # Put the temporary keychain first in the search list so codesign finds the identity.
+          existing="$(security list-keychains -d user | tr -d '"' | xargs)"
+          security list-keychains -d user -s "$keychain" $existing
+          echo "Imported the signing certificate into a temporary keychain."
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Build Symphony.app
+        working-directory: macos
+        env:
+          # Passed directly: step outputs that contain a secret are dropped.
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          SIGNED: ${{ steps.signing.outputs.signed }}
+          SHORT_VERSION: ${{ steps.version.outputs.version }}
+          BUILD_NUMBER: ${{ steps.version.outputs.build }}
+        run: |
+          if [ "$SIGNED" = true ]; then
+            identity="$MACOS_SIGNING_IDENTITY"
+          else
+            identity=-
+          fi
+          make bundle SYMPHONY_BIN="$GITHUB_WORKSPACE/burrito_out/symphony-macos-arm64" SIGNING_IDENTITY="$identity"
+          codesign -dvv build/Symphony.app 2>&1 | grep -E '^(Identifier|Authority|Signature)=' || true
+          # Smoke test: the embedded binary boots and prints its usage (exit 1).
+          usage="$(build/Symphony.app/Contents/Resources/symphony --help 2>&1 || true)"
+          printf '%s\n' "$usage" | grep 'Usage: symphony'
+
+      - name: Delete the temporary keychain
+        if: always()
+        run: |
+          keychain="$RUNNER_TEMP/symphony-signing.keychain-db"
+          rm -f "$RUNNER_TEMP/symphony-signing.p12"
+          if [ -f "$keychain" ]; then
+            security delete-keychain "$keychain"
+          fi
+
+      - name: Install minisign
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          if [ -z "$MINISIGN_SECRET_KEY" ]; then
+            echo "No minisign key configured; skipping the .minisig asset."
+            exit 0
+          fi
+          brew install minisign
+
+      - name: Package release assets
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+          VERSION: ${{ steps.version.outputs.version }}
+          BUILD_NUMBER: ${{ steps.version.outputs.build }}
+          TAG: ${{ steps.version.outputs.tag }}
+          SIGNED: ${{ steps.signing.outputs.signed }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          scripts/release/package.sh \
+            --app macos/build/Symphony.app \
+            --version "$VERSION" \
+            --build "$BUILD_NUMBER" \
+            --commit "$COMMIT" \
+            --tag "$TAG" \
+            --signed "$SIGNED" \
+            --out dist
+          cat dist/version.json
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          # Creates the v<version> tag at this commit if it does not exist.
-          tag_name: v${{ steps.version.outputs.version }}
-          name: v${{ steps.version.outputs.version }}
-          body_path: release_notes.md
+          # Creates the tag at this commit if it does not exist yet.
+          tag_name: ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: Symphony ${{ steps.version.outputs.version }}
+          body_path: dist/release_notes.md
+          prerelease: false
+          make_latest: true
+          fail_on_unmatched_files: false
           files: |
-            burrito_out/symphony_macos_arm64
-            burrito_out/symphony_macos_x86_64
+            dist/Symphony-${{ steps.version.outputs.version }}.zip
+            dist/Symphony-${{ steps.version.outputs.version }}.zip.sha256
+            dist/Symphony-${{ steps.version.outputs.version }}.zip.minisig
+            dist/version.json

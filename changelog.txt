@@ -1,8 +1,8 @@
 # Changelog
 
 All notable changes to Symphony are documented here. The section for each
-version is used as the body of its GitHub Release (see
-`.github/workflows/release.yml`).
+version was used as the body of its GitHub Release up to 0.0.1. Releases now
+list the commit subjects since the previous release (see `docs/releasing.md`).
 
 ## 0.0.1
 

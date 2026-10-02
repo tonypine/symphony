@@ -4,7 +4,8 @@ A macOS menu bar app for Symphony. Its menu shows Symphony's status, and has Sta
 Pause Dispatch, Resume Dispatch, Open Dashboard, Open Logs, Settings… and Quit.
 
 The app runs the `bin/symphony` in your checkout with your `symphony.yml`, the same as running it from
-a terminal. It does not bundle Symphony.
+a terminal. Release builds carry a self-contained Symphony binary at `Contents/Resources/symphony`
+(see [Releasing](../docs/releasing.md)), but the app does not run it yet.
 
 ## Prerequisites
 
@@ -33,7 +34,11 @@ make install  # builds it and copies it to ~/Applications (set INSTALL_DIR to ch
 make run      # builds and opens build/Symphony.app
 make test     # runs swift test
 make clean    # removes build/ and .build/
+make bundle SYMPHONY_BIN=../burrito_out/symphony-macos-arm64   # embeds a Symphony binary, as releases do
 ```
+
+`make` and `make bundle` sign ad hoc. Pass `SIGNING_IDENTITY="<certificate name>"` to sign with a
+certificate, and `SHORT_VERSION=` / `BUILD_NUMBER=` to set the versions in `Info.plist`.
 
 Use `make install` and open the installed copy if you want Launch at Login:
 

@@ -77,8 +77,9 @@ Packaged macOS binaries are built with Burrito and include the Erlang runtime:
 make package
 ```
 
-Release artifacts are written to `burrito_out/` such as `burrito_out/symphony-macos-arm64`.
-Distribution, code signing, notarization, and a Homebrew tap are not wired yet.
+Release artifacts are written to `burrito_out/` such as `burrito_out/symphony-macos-arm64`. Set
+`BURRITO_TARGET=macos_arm64` to build only that one. Releases ship it inside `Symphony.app`; see
+[Releasing](releasing.md). Notarization and a Homebrew tap are not wired yet.
 
 ## Why Elixir?
 
