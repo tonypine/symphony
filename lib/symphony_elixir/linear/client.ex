@@ -319,36 +319,40 @@ defmodule SymphonyElixir.Linear.Client do
     request_fun = Keyword.get(opts, :request_fun, &post_graphql_request/2)
     now_ms_fun = Keyword.get(opts, :now_ms_fun, &RateLimit.now_ms/0)
 
-    with :ok <- RateLimit.check(now_ms_fun.()),
+    with gate when gate in [:ok, :probe] <- RateLimit.check(now_ms_fun.()),
          {:ok, headers} <- graphql_headers() do
       RateLimit.record_request()
 
       payload
       |> request_fun.(headers)
-      |> handle_graphql_response(payload, now_ms_fun.())
+      |> handle_graphql_response(payload, now_ms_fun.(), gate == :probe)
     else
-      {:error, {:linear_rate_limited, _reset_ms}} = error -> error
+      {:error, {:linear_rate_limited, _retry_ms}} = error -> error
       {:error, reason} -> graphql_request_failed(reason)
     end
   end
 
-  defp handle_graphql_response({:ok, response}, payload, now_ms) do
-    case RateLimit.record_response(response, now_ms) do
-      {:rate_limited, reset_ms} ->
+  defp handle_graphql_response({:ok, response}, payload, now_ms, probe?) do
+    case RateLimit.record_response(response, now_ms, probe?) do
+      {:rate_limited, retry_ms} ->
         Logger.warning(
           "Linear rate limit reached; pausing Linear requests until " <>
-            "#{reset_ms |> DateTime.from_unix!(:millisecond) |> DateTime.to_iso8601()}" <>
+            "#{retry_ms |> DateTime.from_unix!(:millisecond) |> DateTime.to_iso8601()}, then probing" <>
             linear_error_context(payload, response)
         )
 
-        {:error, {:linear_rate_limited, reset_ms}}
+        {:error, {:linear_rate_limited, retry_ms}}
+
+      :resumed ->
+        Logger.info("Linear rate-limit probe succeeded; resuming Linear requests")
+        graphql_response_result(response, payload)
 
       :ok ->
         graphql_response_result(response, payload)
     end
   end
 
-  defp handle_graphql_response({:error, reason}, _payload, _now_ms), do: graphql_request_failed(reason)
+  defp handle_graphql_response({:error, reason}, _payload, _now_ms, _probe?), do: graphql_request_failed(reason)
 
   defp graphql_response_result(%{status: 200, body: body}, _payload), do: {:ok, body}
 

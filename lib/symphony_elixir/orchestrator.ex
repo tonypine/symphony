@@ -899,7 +899,8 @@ defmodule SymphonyElixir.Orchestrator do
     state = reconcile_stalled_running_issues(state)
 
     # While Linear is rate-limiting us, skip the whole cycle so no Linear call
-    # leaves this node; finish_poll_cycle/2 schedules the next tick at the reset.
+    # leaves this node; finish_poll_cycle/2 schedules the next tick for when the
+    # pause ends, and that cycle's first Linear call is the probe.
     if RateLimit.paused_until() do
       {:skip, state}
     else
@@ -1157,7 +1158,7 @@ defmodule SymphonyElixir.Orchestrator do
         state =
           state
           |> put_repo_poll_cache(repo_name, issues, now_ms)
-          |> put_repo_next_due(repo_name, now_ms + state.poll_interval_ms)
+          |> put_repo_next_due(repo_name, now_ms + linear_poll_interval_ms(state))
           |> record_tracker_poll_success()
 
         buckets = candidate_buckets_from_cache(state, repos)
@@ -1284,12 +1285,18 @@ defmodule SymphonyElixir.Orchestrator do
     %{state | repo_poll_cache: Map.put(state.repo_poll_cache, repo_name, failure_entry)}
   end
 
-  defp repo_poll_retry_delay_ms(%State{poll_interval_ms: interval_ms}, _repos)
+  defp repo_poll_retry_delay_ms(%State{poll_interval_ms: interval_ms} = state, _repos)
        when is_integer(interval_ms) and interval_ms > 0 do
-    interval_ms
+    linear_poll_interval_ms(state)
   end
 
   defp repo_poll_retry_delay_ms(state, repos), do: repo_poll_stagger_ms(state, repos)
+
+  # Soft brake: stretch the issue-poll interval while Linear reports little of
+  # the hourly budget left, so Symphony rarely runs it down to zero.
+  defp linear_poll_interval_ms(%State{poll_interval_ms: interval_ms}) do
+    interval_ms * RateLimit.poll_interval_multiplier()
+  end
 
   defp put_conflict_bucket(%State{} = state, conflicts) when is_list(conflicts) do
     conflict_map =
@@ -3020,7 +3027,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # A Linear rate limit is not the issue's fault; keep its attempt (and backoff)
-  # where it was and let schedule_issue_retry/4 wait for the reset.
+  # where it was and let schedule_issue_retry/4 wait for the pause to end.
   defp retry_attempt_after_refresh_failure(attempt, {:linear_rate_limited, _reset_ms}), do: attempt
   defp retry_attempt_after_refresh_failure(attempt, _reason), do: attempt + 1
 
@@ -5254,6 +5261,8 @@ defmodule SymphonyElixir.Orchestrator do
     %{
       rate_limited_for_ms: RateLimit.remaining_pause_ms(now_ms),
       paused_until_ms: status.paused_until_ms,
+      window_resets_in_ms: status.window_reset_ms && max(status.window_reset_ms - now_ms, 0),
+      poll_interval_multiplier: status.poll_interval_multiplier,
       requests_last_poll: state.linear_requests_last_poll,
       requests_remaining: status.requests_remaining,
       requests_limit: status.requests_limit

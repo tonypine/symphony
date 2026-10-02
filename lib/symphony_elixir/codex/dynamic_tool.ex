@@ -633,14 +633,14 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     }
   end
 
-  defp tool_error_payload({:linear_rate_limited, reset_ms}) do
-    reset_at = reset_ms |> DateTime.from_unix!(:millisecond) |> DateTime.to_iso8601()
+  defp tool_error_payload({:linear_rate_limited, retry_ms}) do
+    retry_at = retry_ms |> DateTime.from_unix!(:millisecond) |> DateTime.to_iso8601()
 
     %{
       "error" => %{
         "code" => "linear_rate_limited",
-        "message" => "Linear is rate-limiting Symphony; Linear calls are paused until #{reset_at}.",
-        "reset_at" => reset_at
+        "message" => "Linear is rate-limiting Symphony; Linear calls are paused until #{retry_at}. Retry after that.",
+        "retry_at" => retry_at
       }
     }
   end

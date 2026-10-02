@@ -420,8 +420,8 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
     colorize("│ Next refresh: ", @ansi_bold) <> format_refresh_status(polling) <> format_linear_budget(polling)
   end
 
-  defp format_refresh_status(%{linear: %{rate_limited_for_ms: pause_ms}}) when is_integer(pause_ms) and pause_ms > 0 do
-    colorize("Linear rate-limited; resuming in #{div(pause_ms + 999, 1000)}s", @ansi_yellow)
+  defp format_refresh_status(%{linear: %{rate_limited_for_ms: pause_ms} = linear}) when is_integer(pause_ms) and pause_ms > 0 do
+    colorize("Linear rate-limited; probing in #{div(pause_ms + 999, 1000)}s#{format_window_reset(linear)}", @ansi_yellow)
   end
 
   defp format_refresh_status(%{checking?: true}), do: colorize("checking now…", @ansi_cyan)
@@ -444,10 +444,23 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
           ""
       end
 
-    colorize(" (Linear: #{requests} req last poll#{remaining})", @ansi_gray)
+    slowed =
+      case linear do
+        %{poll_interval_multiplier: multiplier} when is_integer(multiplier) and multiplier > 1 -> ", polling slowed #{multiplier}x"
+        _ -> ""
+      end
+
+    colorize(" (Linear: #{requests} req last poll#{remaining}#{slowed})", @ansi_gray)
   end
 
   defp format_linear_budget(_polling), do: ""
+
+  # Linear's window is a rolling hour; its reset is when the whole budget is back.
+  defp format_window_reset(%{window_resets_in_ms: reset_in_ms}) when is_integer(reset_in_ms) and reset_in_ms > 0 do
+    " (full budget in #{div(reset_in_ms + 59_999, 60_000)}m)"
+  end
+
+  defp format_window_reset(_linear), do: ""
 
   defp format_workspace_lifecycle_lines(%{quota_configured: true} = lifecycle) do
     paused? = Map.get(lifecycle, :quota_paused) == true
