@@ -63,7 +63,10 @@ mix specs.check
 
 ## PR Requirements
 
-- PR body must follow `.github/pull_request_template.md` exactly.
+- PR body must follow `.github/pull_request_template.md`: `## References` and
+  `## This PR` are required; `## Important facts` and `## Stack` are optional and
+  should be dropped when empty. There is no test plan section; validation evidence
+  lives in the Linear workpad.
 - Validate PR body locally when needed:
 
 ```bash

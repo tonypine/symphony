@@ -1,22 +1,17 @@
-#### Context
+## References
 
-<!-- Why is this change needed? Length <= 240 chars -->
+- <!-- Ticket, related PRs, docs. e.g. Ticket: [TP-123](https://linear.app/...) -->
 
-#### TL;DR
+## This PR
 
-*<!-- A short description of what we are changing. Use simple language. Assume reader is not familiar with this code. Length <= 120 chars -->*
+<!-- One line on what a user sees change, or "Nothing changes on screen." -->
 
-#### Summary
+- <!-- What changed and why, in plain language. One bullet per behavior change -->
 
-- <!-- Details of the changes in bullet points -->
-- <!-- Keep them high level -->
-- <!-- Each item <= 120 chars -->
+## Important facts
 
-#### Alternatives
+- <!-- Optional: delete this section if empty. Risks, gotchas, follow-ups reviewers must know -->
 
-- <!-- What alternatives have been considered? Why not? -->
+## Stack
 
-#### Test Plan
-
-- [ ] `make all`
-- [ ] <!-- Additional targeted checks (list below) -->
+- <!-- Optional: delete this section if empty. PRs this one builds on or that build on it, in order -->

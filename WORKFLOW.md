@@ -182,10 +182,13 @@ You are working on a Linear ticket `{{ issue.identifier }}`
     - Record `coverage 100.00% — green` and `diff reviewed — clean` in the workpad before each push.
 8.  Attach PR URL to the issue (prefer attachment; use the workpad comment only if attachment is unavailable).
     - Ensure the GitHub PR has label `symphony` (add it if missing).
-    - Ensure the PR body is reviewer-facing and includes:
-      - **What changed and why**, including the motivation reviewers need to evaluate the approach,
-      - **Testing evidence**, with commands run and output snippets confirming the change works,
-      - **Follow-ups** for anything deferred to Backlog.
+    - Ensure the PR body is reviewer-facing and follows `.github/pull_request_template.md`:
+      - `## References`: the Linear ticket and any related PRs or docs,
+      - `## This PR`: what changed and why, in plain language, including the motivation reviewers need to evaluate the approach,
+      - `## Important facts` (optional): risks, gotchas, and follow-ups deferred to Backlog,
+      - `## Stack` (optional): PRs this one builds on or that build on it.
+    - Do not add a test plan to the PR body; keep validation evidence in the workpad.
+    - Validate the body with `mix pr_body.check --file <path>` before creating or updating the PR.
     - For UI-touching changes, capture before/after screenshots or a recording and attach them to the Linear issue with `linear_attach_file`. Do not embed them in the PR body.
 9.  Merge latest `origin/main` into branch, resolve conflicts, and rerun checks.
 10. Update the workpad comment with final checklist status and validation notes.
