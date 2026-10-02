@@ -887,6 +887,141 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
+  test "terminal issue state gives a landing agent a grace period before cleanup" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-merging-terminal-grace-#{System.unique_integer([:positive])}"
+      )
+
+    issue_id = "issue-merging"
+    issue_identifier = "MT-560"
+    workspace = Path.join([test_root, "api", issue_identifier])
+
+    try do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: test_root,
+        tracker_active_states: ["Todo", "In Progress", "Merging"],
+        tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
+      )
+
+      File.mkdir_p!(workspace)
+
+      agent_pid =
+        spawn(fn ->
+          receive do
+            :stop -> :ok
+          end
+        end)
+
+      on_exit(fn ->
+        if Process.alive?(agent_pid) do
+          Process.exit(agent_pid, :kill)
+        end
+      end)
+
+      state = %Orchestrator.State{
+        repo_key: "default",
+        running: %{
+          issue_id => %{
+            pid: agent_pid,
+            ref: nil,
+            repo_key: "api",
+            identifier: issue_identifier,
+            issue: %Issue{id: issue_id, state: "Merging", identifier: issue_identifier, repo_key: "api"},
+            started_at: DateTime.utc_now()
+          }
+        },
+        claimed: MapSet.new([issue_id]),
+        codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+        retry_attempts: %{}
+      }
+
+      issue = %Issue{id: issue_id, identifier: issue_identifier, state: "Done", title: "Merged", labels: []}
+
+      graced_state = Orchestrator.reconcile_issue_states_for_test([issue], state)
+
+      assert %{terminal_grace_until_ms: grace_until_ms} = graced_state.running[issue_id]
+      assert grace_until_ms > System.monotonic_time(:millisecond) + 60_000
+      assert MapSet.member?(graced_state.claimed, issue_id)
+      assert Process.alive?(agent_pid)
+      assert File.exists?(workspace)
+
+      assert Orchestrator.reconcile_issue_states_for_test([issue], graced_state) == graced_state
+
+      expired_state =
+        put_in(
+          graced_state.running[issue_id].terminal_grace_until_ms,
+          System.monotonic_time(:millisecond) - 1
+        )
+
+      updated_state = Orchestrator.reconcile_issue_states_for_test([issue], expired_state)
+
+      refute Map.has_key?(updated_state.running, issue_id)
+      refute MapSet.member?(updated_state.claimed, issue_id)
+      refute Process.alive?(agent_pid)
+      refute File.exists?(workspace)
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "terminal issue state stops an agent without an issue snapshot immediately" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-terminal-no-snapshot-#{System.unique_integer([:positive])}"
+      )
+
+    issue_id = "issue-no-snapshot"
+    issue_identifier = "MT-561"
+    workspace = Path.join([test_root, "api", issue_identifier])
+
+    try do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: test_root,
+        tracker_active_states: ["Todo", "In Progress", "Merging"],
+        tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
+      )
+
+      File.mkdir_p!(workspace)
+
+      agent_pid =
+        spawn(fn ->
+          receive do
+            :stop -> :ok
+          end
+        end)
+
+      state = %Orchestrator.State{
+        repo_key: "default",
+        running: %{
+          issue_id => %{
+            pid: agent_pid,
+            ref: nil,
+            repo_key: "api",
+            identifier: issue_identifier,
+            started_at: DateTime.utc_now()
+          }
+        },
+        claimed: MapSet.new([issue_id]),
+        codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+        retry_attempts: %{}
+      }
+
+      issue = %Issue{id: issue_id, identifier: issue_identifier, state: "Done", title: "Merged", labels: []}
+
+      updated_state = Orchestrator.reconcile_issue_states_for_test([issue], state)
+
+      refute Map.has_key?(updated_state.running, issue_id)
+      refute MapSet.member?(updated_state.claimed, issue_id)
+      refute Process.alive?(agent_pid)
+      refute File.exists?(workspace)
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "missing running issues stop active agents without cleaning the workspace" do
     test_root =
       Path.join(
