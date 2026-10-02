@@ -80,7 +80,7 @@ public enum MaxConcurrentAgents {
     }
 }
 
-/// Reads and writes `max_total` in a `symphony.yml` on disk.
+/// Reads and edits a `symphony.yml` on disk.
 public struct SymphonyConfigFile {
     public let path: String
 
@@ -89,15 +89,25 @@ public struct SymphonyConfigFile {
     }
 
     public func readMaxConcurrentAgents() throws -> Int? {
-        MaxConcurrentAgents.value(in: try String(contentsOf: url, encoding: .utf8))
+        MaxConcurrentAgents.value(in: try read())
     }
 
-    /// Sets `max_total`. Leaves the file untouched when it already has that value. A symlinked file is
-    /// written through the link, and the file keeps its permissions.
+    /// Sets `max_total`. Leaves the file untouched when it already has that value.
     public func writeMaxConcurrentAgents(_ value: Int) throws {
+        try rewrite { try MaxConcurrentAgents.setting(value, in: $0) }
+    }
+
+    func read() throws -> String {
+        try String(contentsOf: url, encoding: .utf8)
+    }
+
+    /// Replaces the file's text with `transform` of it. Leaves the file untouched when the text doesn't
+    /// change or `transform` throws. A symlinked file is written through the link, and the file keeps its
+    /// permissions.
+    func rewrite(_ transform: (String) throws -> String) throws {
         let url = url
         let text = try String(contentsOf: url, encoding: .utf8)
-        let updated = try MaxConcurrentAgents.setting(value, in: text)
+        let updated = try transform(text)
         guard updated != text else { return }
 
         // Write a sibling file and rename it over the original, so Symphony's config watcher never reads a
