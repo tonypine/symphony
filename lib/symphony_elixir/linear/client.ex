@@ -6,6 +6,7 @@ defmodule SymphonyElixir.Linear.Client do
   require Logger
   alias SymphonyElixir.{AgentLabels, AuditLog, Config, Linear.Issue, Secret}
   alias SymphonyElixir.GitHub.Hosts
+  alias SymphonyElixir.Linear.RateLimit
 
   @issue_page_size 50
   @attachment_page_size 20
@@ -316,23 +317,53 @@ defmodule SymphonyElixir.Linear.Client do
       when is_binary(query) and is_map(variables) and is_list(opts) do
     payload = build_graphql_payload(query, variables, Keyword.get(opts, :operation_name))
     request_fun = Keyword.get(opts, :request_fun, &post_graphql_request/2)
+    now_ms_fun = Keyword.get(opts, :now_ms_fun, &RateLimit.now_ms/0)
 
-    with {:ok, headers} <- graphql_headers(),
-         {:ok, %{status: 200, body: body}} <- request_fun.(payload, headers) do
-      {:ok, body}
+    with :ok <- RateLimit.check(now_ms_fun.()),
+         {:ok, headers} <- graphql_headers() do
+      RateLimit.record_request()
+
+      payload
+      |> request_fun.(headers)
+      |> handle_graphql_response(payload, now_ms_fun.())
     else
-      {:ok, response} ->
-        Logger.error(
-          "Linear GraphQL request failed status=#{response.status}" <>
+      {:error, {:linear_rate_limited, _reset_ms}} = error -> error
+      {:error, reason} -> graphql_request_failed(reason)
+    end
+  end
+
+  defp handle_graphql_response({:ok, response}, payload, now_ms) do
+    case RateLimit.record_response(response, now_ms) do
+      {:rate_limited, reset_ms} ->
+        Logger.warning(
+          "Linear rate limit reached; pausing Linear requests until " <>
+            "#{reset_ms |> DateTime.from_unix!(:millisecond) |> DateTime.to_iso8601()}" <>
             linear_error_context(payload, response)
         )
 
-        {:error, {:linear_api_status, response.status, Map.get(response, :body)}}
+        {:error, {:linear_rate_limited, reset_ms}}
 
-      {:error, reason} ->
-        Logger.error("Linear GraphQL request failed: #{AuditLog.redact_for_log(reason)}")
-        {:error, {:linear_api_request, reason}}
+      :ok ->
+        graphql_response_result(response, payload)
     end
+  end
+
+  defp handle_graphql_response({:error, reason}, _payload, _now_ms), do: graphql_request_failed(reason)
+
+  defp graphql_response_result(%{status: 200, body: body}, _payload), do: {:ok, body}
+
+  defp graphql_response_result(response, payload) do
+    Logger.error(
+      "Linear GraphQL request failed status=#{response.status}" <>
+        linear_error_context(payload, response)
+    )
+
+    {:error, {:linear_api_status, response.status, Map.get(response, :body)}}
+  end
+
+  defp graphql_request_failed(reason) do
+    Logger.error("Linear GraphQL request failed: #{AuditLog.redact_for_log(reason)}")
+    {:error, {:linear_api_request, reason}}
   end
 
   @doc false

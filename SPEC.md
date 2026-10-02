@@ -2215,6 +2215,7 @@ RECOMMENDED error categories:
 - `missing_linear_scoping_filter`
 - `linear_api_request` (transport failures)
 - `linear_api_status` (non-200 HTTP)
+- `linear_rate_limited` (Linear answered `RATELIMITED` or HTTP 429; carries the reset time)
 - `linear_graphql_errors`
 - `linear_unknown_payload`
 - `linear_missing_end_cursor` (pagination integrity error)
@@ -2224,6 +2225,10 @@ Orchestrator behavior on tracker errors:
 - Candidate fetch failure: log and skip dispatch for this tick.
 - Running-state refresh failure: log and keep active workers running.
 - Startup terminal cleanup failure: log warning and continue startup.
+- Rate limit: once Linear answers `RATELIMITED` (or HTTP 429), pause all Linear requests
+  process-wide until the reset time from the `x-ratelimit-*-reset` headers (fallback one minute,
+  capped at one hour). While paused, skip poll cycles, defer retries to the reset without counting
+  an attempt, refuse tracker calls locally, and surface the pause in the status snapshot.
 
 ### 11.5 Tracker Writes (Important Boundary)
 

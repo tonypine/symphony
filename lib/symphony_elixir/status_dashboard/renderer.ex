@@ -416,19 +416,38 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
     colorize(Enum.join(visible_names, ", ") <> suffix, @ansi_cyan)
   end
 
-  defp format_refresh_line(%{checking?: true}) do
-    colorize("│ Next refresh: ", @ansi_bold) <> colorize("checking now…", @ansi_cyan)
+  defp format_refresh_line(polling) do
+    colorize("│ Next refresh: ", @ansi_bold) <> format_refresh_status(polling) <> format_linear_budget(polling)
   end
 
-  defp format_refresh_line(%{next_poll_in_ms: due_in_ms}) when is_integer(due_in_ms) do
+  defp format_refresh_status(%{linear: %{rate_limited_for_ms: pause_ms}}) when is_integer(pause_ms) and pause_ms > 0 do
+    colorize("Linear rate-limited; resuming in #{div(pause_ms + 999, 1000)}s", @ansi_yellow)
+  end
+
+  defp format_refresh_status(%{checking?: true}), do: colorize("checking now…", @ansi_cyan)
+
+  defp format_refresh_status(%{next_poll_in_ms: due_in_ms}) when is_integer(due_in_ms) do
     due_in_ms = max(due_in_ms, 0)
     seconds = div(due_in_ms + 999, 1000)
-    colorize("│ Next refresh: ", @ansi_bold) <> colorize("#{seconds}s", @ansi_cyan)
+    colorize("#{seconds}s", @ansi_cyan)
   end
 
-  defp format_refresh_line(_) do
-    colorize("│ Next refresh: ", @ansi_bold) <> colorize("n/a", @ansi_gray)
+  defp format_refresh_status(_), do: colorize("n/a", @ansi_gray)
+
+  defp format_linear_budget(%{linear: %{requests_last_poll: requests} = linear}) when is_integer(requests) do
+    remaining =
+      case linear do
+        %{requests_remaining: left, requests_limit: limit} when is_integer(left) and is_integer(limit) ->
+          ", #{left}/#{limit} left this hour"
+
+        _ ->
+          ""
+      end
+
+    colorize(" (Linear: #{requests} req last poll#{remaining})", @ansi_gray)
   end
+
+  defp format_linear_budget(_polling), do: ""
 
   defp format_workspace_lifecycle_lines(%{quota_configured: true} = lifecycle) do
     paused? = Map.get(lifecycle, :quota_paused) == true

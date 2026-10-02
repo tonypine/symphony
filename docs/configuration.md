@@ -82,7 +82,12 @@ issues:
 ```
 
 - `provider`: `linear` or `memory`.
-- `poll_interval_ms`: issue candidate polling cadence.
+- `poll_interval_ms`: issue candidate polling cadence. Each scheduler tick costs roughly one Linear
+  request per running, watched, and due-repo lookup (about 3 per tick with work in flight), so the
+  default `30000` spends about 360 of a personal key's 2,500 requests/hour before agent tool calls.
+  The dashboard's refresh line shows requests since the last poll and the budget Linear reports left.
+  When Linear answers `RATELIMITED`, Symphony pauses all Linear calls (polling, retries, agent tools)
+  until the reset time from Linear's `x-ratelimit-*-reset` headers, then resumes.
 - `linear.scope`: default Linear scope. Repo routes can narrow or replace this per repo.
 - `states.active`: issue states eligible for dispatch.
 - `states.terminal`: states that stop active runs and allow cleanup.
