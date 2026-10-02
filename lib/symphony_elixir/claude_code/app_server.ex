@@ -1570,9 +1570,16 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
   defp strip_ansi(text) when is_binary(text), do: String.replace(text, ~r/\x1b\[[0-9;]*m/, "")
 
-  defp safe_close_port(port) do
+  @doc false
+  @spec safe_close_port(port()) :: :ok
+  def safe_close_port(port) do
     terminate_port_descendants(port)
-    if Port.info(port) != nil, do: Port.close(port)
+    Port.close(port)
+    :ok
+  rescue
+    # Killing descendants can make the CLI exit, and the port can close at
+    # any moment after a turn timeout. A closed port is a finished turn.
+    ArgumentError -> :ok
   end
 
   # Send SIGKILL to descendants of the port's OS process before closing the

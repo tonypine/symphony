@@ -35,6 +35,7 @@ defmodule SymphonyElixir.Codex.AppServer do
   @stderr_tail_line_count 5
   @stderr_tail_max_bytes 16_384
   @remote_stderr_tail_timeout_ms 1_000
+  @exited_port_message_wait_ms 1_000
   @codex_stdio_write_failed_pattern ~r/^(?:\d{4}-\d{2}-\d{2}T\S+\s+)?(?:(?:TRACE|DEBUG|INFO|WARN|WARNING|ERROR)\s+)?codex_app_server_transport::transport::stdio:\s+Failed to write to stdout\b/
   # Soft cap on the size of any single string field (e.g. aggregatedOutput) we keep on a
   # notification payload before forwarding it to the orchestrator/transcript/audit log. Codex itself
@@ -3991,8 +3992,9 @@ defmodule SymphonyElixir.Codex.AppServer do
     close_owned_port(port)
   end
 
+  @doc false
   @spec start_stdout_pump(port()) :: {:ok, stdout_pump()} | {:error, term()}
-  defp start_stdout_pump(port) when is_port(port) do
+  def start_stdout_pump(port) when is_port(port) do
     owner = self()
     ref = make_ref()
     # Port.connect/2 moves ownership to the pump; cache the OS PID while this
@@ -4019,9 +4021,30 @@ defmodule SymphonyElixir.Codex.AppServer do
       {:ok, %{pid: pid, ref: ref, os_pid: os_pid}}
     rescue
       exception ->
-        Logger.error("Failed to start Codex stdout pump: #{Exception.message(exception)}")
-        Process.exit(pid, :kill)
-        {:error, {:stdout_pump_connect_failed, Exception.message(exception)}}
+        # A process that exits at once can close the port before the pump
+        # takes it over. Its output and exit status are already in this
+        # mailbox, so hand them to the pump and let callers see the real exit.
+        if forward_exited_port_messages(port, pid) do
+          {:ok, %{pid: pid, ref: ref, os_pid: os_pid}}
+        else
+          Logger.error("Failed to start Codex stdout pump: #{Exception.message(exception)}")
+          Process.exit(pid, :kill)
+          {:error, {:stdout_pump_connect_failed, Exception.message(exception)}}
+        end
+    end
+  end
+
+  defp forward_exited_port_messages(port, pump_pid) do
+    receive do
+      {^port, {:data, _data}} = message ->
+        send(pump_pid, message)
+        forward_exited_port_messages(port, pump_pid)
+
+      {^port, {:exit_status, _status}} = message ->
+        send(pump_pid, message)
+        true
+    after
+      @exited_port_message_wait_ms -> false
     end
   end
 
@@ -4365,8 +4388,16 @@ defmodule SymphonyElixir.Codex.AppServer do
   defp tool_call_arguments(_params), do: %{}
 
   defp send_message(port, message) do
-    line = Jason.encode!(message) <> "\n"
+    port_command(port, Jason.encode!(message) <> "\n")
+  end
+
+  defp port_command(port, line) do
     Port.command(port, line)
+    :ok
+  rescue
+    # The process exited and closed the port; the stdout pump reports its
+    # exit status to whoever is waiting on a response.
+    ArgumentError -> :ok
   end
 
   defp needs_input?(method, payload)
