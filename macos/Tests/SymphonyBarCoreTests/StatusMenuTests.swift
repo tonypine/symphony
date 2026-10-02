@@ -25,6 +25,30 @@ final class StatusMenuTests: XCTestCase {
         XCTAssertEqual(StatusMenu.iconLabel(for: .error("boom")), "Symphony: error")
     }
 
+    func testSourceLineNamesTheSymphonyStartRuns() {
+        let embedded = AppSettings(checkoutPath: "/src/symphony", configPath: "/s.yml")
+        XCTAssertEqual(
+            StatusMenu.sourceLine(embedded, appVersion: "0.1.0.42", embeddedAvailable: true),
+            "Symphony v0.1.0.42 (embedded)"
+        )
+        XCTAssertEqual(StatusMenu.sourceLine(embedded, appVersion: nil, embeddedAvailable: true), "Symphony (embedded)")
+        XCTAssertEqual(StatusMenu.sourceLine(embedded, appVersion: " ", embeddedAvailable: true), "Symphony (embedded)")
+        XCTAssertEqual(
+            StatusMenu.sourceLine(embedded, appVersion: "0.1.0", embeddedAvailable: false),
+            "No embedded Symphony: turn on Development mode"
+        )
+
+        let development = AppSettings(checkoutPath: " /src/symphony ", developmentMode: true)
+        XCTAssertEqual(
+            StatusMenu.sourceLine(development, appVersion: "0.1.0", embeddedAvailable: true),
+            "Development: /src/symphony"
+        )
+        XCTAssertEqual(
+            StatusMenu.sourceLine(AppSettings(developmentMode: true), appVersion: nil, embeddedAvailable: false),
+            "Development: no checkout folder set"
+        )
+    }
+
     func testStatusTitles() {
         XCTAssertEqual(StatusMenu.statusTitle(.stopped), "Symphony is stopped")
         XCTAssertEqual(StatusMenu.statusTitle(.starting), "Symphony is starting…")

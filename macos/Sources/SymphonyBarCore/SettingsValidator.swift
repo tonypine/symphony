@@ -14,6 +14,7 @@ public enum SettingsIssue: Equatable {
     case environmentNameInvalid(String)
     case environmentNameDuplicate(String)
     case environmentNameReserved(String)
+    case embeddedSymphonyMissing
 
     /// Text shown under the form.
     public var message: String {
@@ -43,6 +44,8 @@ public enum SettingsIssue: Equatable {
             return "\(name) is listed more than once."
         case .environmentNameReserved(let name):
             return "\(name) is set by its own field, not as an extra variable."
+        case .embeddedSymphonyMissing:
+            return EmbeddedSymphony.missingMessage
         }
     }
 }
@@ -69,17 +72,25 @@ public struct LocalFileChecker: FileChecker {
 }
 
 /// Checks settings before they are saved. Pass trimmed values.
+/// The checkout folder and command prefix are checked only in Development mode; otherwise the embedded
+/// Symphony at `embeddedSymphonyPath` must exist.
 public struct SettingsValidator {
     private let files: FileChecker
+    private let embeddedSymphonyPath: String?
 
-    public init(files: FileChecker = LocalFileChecker()) {
+    public init(files: FileChecker = LocalFileChecker(), embeddedSymphonyPath: String? = nil) {
         self.files = files
+        self.embeddedSymphonyPath = embeddedSymphonyPath
     }
 
     public func validate(_ settings: AppSettings, _ secrets: SecretSettings) -> [SettingsIssue] {
         var issues: [SettingsIssue] = []
 
-        if settings.checkoutPath.isEmpty {
+        if !settings.developmentMode {
+            if !EmbeddedSymphony.isAvailable(at: embeddedSymphonyPath, files: files) {
+                issues.append(.embeddedSymphonyMissing)
+            }
+        } else if settings.checkoutPath.isEmpty {
             issues.append(.checkoutPathMissing)
         } else if !settings.checkoutPath.hasPrefix("/") {
             issues.append(.checkoutPathNotAbsolute)
@@ -95,7 +106,7 @@ public struct SettingsValidator {
             issues.append(.configPathNotFile)
         }
 
-        if ShellWords.split(settings.commandPrefix) == nil {
+        if settings.developmentMode, ShellWords.split(settings.commandPrefix) == nil {
             issues.append(.commandPrefixUnbalancedQuotes)
         }
 
