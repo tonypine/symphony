@@ -1,10 +1,97 @@
+import Foundation
+
 /// Pure description of the menu bar item, kept free of AppKit so it can be unit tested.
 public enum StatusMenu {
-    /// SF Symbol shown in the menu bar. Rendered as a template image so it follows light and dark menu bars.
-    public static let iconSymbolName = "music.note.list"
+    /// SF Symbol shown in the menu bar for each status. Rendered as a template image so it follows
+    /// light and dark menu bars.
+    public static func iconSymbolName(for status: SymphonyStatus) -> String {
+        switch status {
+        case .stopped:
+            return "stop.circle"
+        case .starting:
+            return "hourglass"
+        case .running:
+            return "music.note.list"
+        case .paused:
+            return "pause.circle"
+        case .error:
+            return "exclamationmark.triangle"
+        }
+    }
 
     /// Accessibility description for the status item button.
     public static let accessibilityLabel = "Symphony"
+
+    /// Tooltip and accessibility description for the status item, for example "Symphony: running".
+    public static func iconLabel(for status: SymphonyStatus) -> String {
+        "\(accessibilityLabel): \(statusWord(status))"
+    }
+
+    /// First line of the menu, for example "Symphony is running (external)".
+    public static func statusTitle(_ status: SymphonyStatus) -> String {
+        if case .error = status { return "Symphony has a problem" }
+        return "Symphony is \(statusWord(status))"
+    }
+
+    /// Lines shown under the status title.
+    public static func detailLines(
+        _ status: SymphonyStatus,
+        now: Date = Date(),
+        timeZone: TimeZone = .current
+    ) -> [String] {
+        switch status {
+        case .stopped, .starting:
+            return []
+        case let .running(snapshot, _):
+            return [countsLine(snapshot)]
+        case let .paused(snapshot, _):
+            return [countsLine(snapshot)] + (snapshot.pause.map { [pauseLine($0, now: now, timeZone: timeZone)] } ?? [])
+        case let .error(message):
+            return [message]
+        }
+    }
+
+    /// For example "2 running · 1 retrying".
+    public static func countsLine(_ snapshot: StateSnapshot) -> String {
+        "\(snapshot.running) running · \(snapshot.retrying) retrying"
+    }
+
+    /// For example "Paused since 14:03: deploy freeze". Shows the date too when the pause began on another day.
+    public static func pauseLine(_ pause: StateSnapshot.Pause, now: Date, timeZone: TimeZone) -> String {
+        var line = "Paused"
+        if let since = pause.since {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = timeZone
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = timeZone
+            formatter.dateFormat = calendar.isDate(since, inSameDayAs: now) ? "HH:mm" : "MMM d, HH:mm"
+            line += " since \(formatter.string(from: since))"
+        }
+        if let reason = pause.reason?.trimmingWhitespace(), !reason.isEmpty {
+            line += ": \(reason)"
+        }
+        return line
+    }
+
+    private static func statusWord(_ status: SymphonyStatus) -> String {
+        switch status {
+        case .stopped:
+            return "stopped"
+        case .starting:
+            return "starting…"
+        case let .running(_, external):
+            return external ? "running (external)" : "running"
+        case let .paused(_, external):
+            return external ? "paused (external)" : "paused"
+        case .error:
+            return "error"
+        }
+    }
+
+    /// Titles of the menu items that open Symphony's dashboard in the browser and its log.
+    public static let openDashboardTitle = "Open Dashboard"
+    public static let openLogsTitle = "Open Logs"
 
     /// Title of the menu item that starts Symphony.
     public static let startTitle = "Start Symphony"

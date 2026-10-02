@@ -1,0 +1,127 @@
+{
+  "awaiting_clarification": [],
+  "budget": {
+    "daily_limit": 1000000000,
+    "daily_paused": false,
+    "daily_remaining": 843534886,
+    "daily_used": 156465114,
+    "per_issue_limit": 100000000
+  },
+  "codex_totals": {
+    "cache_creation_input_tokens": 6568666,
+    "cached_input_tokens": 149857148,
+    "input_tokens": 156430436,
+    "output_tokens": 629302,
+    "seconds_running": 23413,
+    "total_tokens": 156465114,
+    "uncached_input_tokens": 4622
+  },
+  "conflicts": [],
+  "counts": {
+    "conflicts": 0,
+    "retrying": 0,
+    "running": 1,
+    "watching": 1
+  },
+  "dispatch_state": {
+    "active?": true,
+    "blockers": []
+  },
+  "generated_at": "2026-10-02T12:17:39Z",
+  "pause": {
+    "paused": false,
+    "paused_at": null,
+    "reason": null
+  },
+  "pollers": {
+    "ci": {
+      "consecutive_failures": 0,
+      "current_backoff_ms": null,
+      "poll_interval_ms": 60000,
+      "status": "running"
+    },
+    "pr_review": {
+      "consecutive_failures": 0,
+      "current_backoff_ms": null,
+      "poll_interval_ms": 60000,
+      "status": "running"
+    }
+  },
+  "rate_limits": null,
+  "repos": [
+    "symphony"
+  ],
+  "retrying": [],
+  "run_history": [
+    {
+      "attempt": 1,
+      "ended_at": null,
+      "error": null,
+      "issue_id": "63823fe4-cf11-4134-9938-a14343107538",
+      "issue_identifier": "TP-237",
+      "repo_key": "symphony",
+      "run_id": "63823fe4-cf11-4134-9938-a14343107538-1790943362766055-5955",
+      "runtime_seconds": 95,
+      "session_id": "10399efb-4771-4ac4-84cc-a48c7fb0ab56",
+      "started_at": "2026-10-02T12:16:02Z",
+      "state": "Todo",
+      "status": "running",
+      "title": "Show live Symphony status in the menu bar icon and menu",
+      "tokens": {
+        "cache_creation_input_tokens": 121716,
+        "cached_input_tokens": 1047979,
+        "input_tokens": 1169741,
+        "output_tokens": 412,
+        "total_tokens": 1170153,
+        "uncached_input_tokens": 46
+      },
+      "transcript_path": null,
+      "turn_count": 1,
+      "worker_host": null,
+      "workspace_path": "/Users/tonypine/symphony-workspaces/symphony/TP-237"
+    }
+  ],
+  "running": [
+    {
+      "issue_id": "63823fe4-cf11-4134-9938-a14343107538",
+      "issue_identifier": "TP-237",
+      "last_event": "token_count",
+      "last_event_at": "2026-10-02T12:17:38Z",
+      "last_message": "token_count",
+      "pull_request_url": null,
+      "repo_key": "symphony",
+      "run_kind": null,
+      "session_id": "10399efb-4771-4ac4-84cc-a48c7fb0ab56",
+      "started_at": "2026-10-02T12:16:02Z",
+      "state": "In Progress",
+      "title": "Show live Symphony status in the menu bar icon and menu",
+      "tokens": {
+        "cache_creation_input_tokens": 121716,
+        "cached_input_tokens": 1047979,
+        "input_tokens": 1169741,
+        "output_tokens": 412,
+        "total_tokens": 1170153,
+        "uncached_input_tokens": 46
+      },
+      "transcript_path": null,
+      "turn_count": 1,
+      "url": "https://linear.app/tonypine/issue/TP-237/show-live-symphony-status-in-the-menu-bar-icon-and-menu",
+      "worker_host": null,
+      "workspace_path": "/Users/tonypine/symphony-workspaces/symphony/TP-237"
+    }
+  ],
+  "skipped": [],
+  "watching": [
+    {
+      "issue_id": "5bde6acb-b9b9-45c4-9d52-2fe097506670",
+      "issue_identifier": "TP-229",
+      "last_ran_at": "2026-10-02T11:10:41Z",
+      "pull_request_url": null,
+      "repo_key": "symphony",
+      "seconds_since_last_run": 4017,
+      "state": "In Review",
+      "title": "Build MacOS wrapper for starting symphony",
+      "url": "https://linear.app/tonypine/issue/TP-229/build-macos-wrapper-for-starting-symphony"
+    }
+  ]
+}

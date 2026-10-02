@@ -16,7 +16,9 @@ let package = Package(
         .target(name: "SymphonyBarCore"),
         .testTarget(
             name: "SymphonyBarCoreTests",
-            dependencies: ["SymphonyBarCore"]
+            dependencies: ["SymphonyBarCore"],
+            // Read from the source tree by path, so the tests also run without a resource bundle.
+            exclude: ["Fixtures"]
         ),
     ]
 )
