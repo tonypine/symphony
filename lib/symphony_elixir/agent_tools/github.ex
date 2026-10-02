@@ -121,6 +121,7 @@ defmodule SymphonyElixir.AgentTools.GitHub do
       with {:ok, workspace} <- workspace(context),
            {:ok, branch} <- current_branch(context, opts),
            :ok <- verify_current_origin(context, workspace, opts),
+           :ok <- verify_push_urls(context, workspace, opts),
            {:ok, output} <- run_git(["push", "origin", branch], workspace, opts) do
         {:ok, %{"remote" => "origin", "branch" => branch, "output" => String.trim(output)}}
       end
@@ -351,6 +352,20 @@ defmodule SymphonyElixir.AgentTools.GitHub do
     with expected when is_binary(expected) and expected != "" <- expected_origin_url,
          {:ok, current_origin_url} <- current_origin_url(workspace, opts),
          true <- normalize_git_url(current_origin_url) == normalize_git_url(expected) do
+      :ok
+    else
+      _reason -> {:error, :origin_url_mismatch}
+    end
+  end
+
+  # `remote get-url --push --all` resolves `pushurl`, `pushInsteadOf` and `insteadOf`
+  # the same way `git push` does, so a planted rewrite cannot redirect the push.
+  defp verify_push_urls(context, workspace, opts) do
+    expected = context |> command_security() |> Map.get(:origin_url) |> normalize_git_url()
+
+    with {:ok, output} <- run_git(["remote", "get-url", "--push", "--all", "origin"], workspace, opts),
+         [_ | _] = push_urls <- String.split(output, "\n", trim: true),
+         true <- Enum.all?(push_urls, &(normalize_git_url(&1) == expected)) do
       :ok
     else
       _reason -> {:error, :origin_url_mismatch}
