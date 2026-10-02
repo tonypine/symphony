@@ -41,7 +41,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     },
     %{
       "name" => "linear_update_state",
-      "description" => "Move the current Linear issue to a state in its team's workflow.",
+      "description" => "Move the current Linear issue to a state in its team's workflow. Moving it to Merging is refused: only a human can approve a merge.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -776,6 +776,15 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       "error" => %{
         "code" => "issue_not_in_merging_state",
         "message" => "github_merge_pull_request only merges after a human moves the issue to `Merging`. The issue is in #{inspect(state_name)}; do not move it yourself to get past this."
+      }
+    }
+  end
+
+  defp tool_error_payload({:merging_requires_human_approval, state_name}) do
+    %{
+      "error" => %{
+        "code" => "merging_requires_human_approval",
+        "message" => "linear_update_state cannot move the issue to #{inspect(state_name)}. Moving an issue to `Merging` is how a human approves the merge, so a human has to do it in Linear."
       }
     }
   end

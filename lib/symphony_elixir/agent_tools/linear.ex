@@ -25,6 +25,8 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @public_file_upload_max_bytes 5 * 1024 * 1024
   @private_file_upload_max_bytes 50 * 1024 * 1024
   @default_attachment_allowed_hosts ["github.com"]
+  # Moving an issue to `Merging` is how a human approves a merge, so agents may not do it.
+  @merging_state "Merging"
 
   @uuid_pattern ~r/\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i
 
@@ -440,30 +442,44 @@ defmodule SymphonyElixir.AgentTools.Linear do
   defp resolve_state_id(issue_id, state_name_or_id, opts) do
     normalized = String.trim(state_name_or_id)
 
-    cond do
-      normalized == "" ->
-        {:error, :invalid_state}
-
-      Regex.match?(@uuid_pattern, normalized) ->
-        {:ok, normalized}
-
-      true ->
-        lookup_state_id_by_name(issue_id, normalized, opts)
+    if normalized == "" do
+      {:error, :invalid_state}
+    else
+      with {:ok, state} <- lookup_team_state(issue_id, normalized, opts) do
+        refuse_human_only_state(state)
+      end
     end
   end
 
-  defp lookup_state_id_by_name(issue_id, name, opts) do
+  # UUIDs are resolved against the team states too, so the target's name is known before the
+  # human-only check runs.
+  defp lookup_team_state(issue_id, name_or_id, opts) do
+    matches? =
+      if Regex.match?(@uuid_pattern, name_or_id),
+        do: &state_id_matches?(&1, name_or_id),
+        else: &state_name_matches?(&1, name_or_id)
+
     with {:ok, body} <- graphql(@team_states_query, %{id: issue_id}, opts),
          {:ok, states} <- fetch_path(body, ["data", "issue", "team", "states", "nodes"], []) do
-      case Enum.find(states, &state_name_matches?(&1, name)) do
-        %{"id" => state_id} ->
-          {:ok, state_id}
+      case Enum.find(states, matches?) do
+        %{"id" => _} = state ->
+          {:ok, state}
 
         _ ->
           available = states |> Enum.map(& &1["name"]) |> Enum.reject(&is_nil/1)
           {:error, {:state_not_found, available}}
       end
     end
+  end
+
+  defp refuse_human_only_state(%{"id" => state_id} = state) do
+    if state_name_matches?(state, @merging_state),
+      do: {:error, {:merging_requires_human_approval, state["name"]}},
+      else: {:ok, state_id}
+  end
+
+  defp state_id_matches?(state, state_id) do
+    String.downcase(to_string(state["id"])) == String.downcase(state_id)
   end
 
   defp state_name_matches?(state, name) do

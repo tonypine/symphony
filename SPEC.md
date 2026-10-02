@@ -2032,6 +2032,10 @@ Scoped Linear tool extension contract:
   `linear_get_parent_issue`, `linear_get_comments`, `linear_get_related_issues`,
   `linear_update_state`, `linear_add_comment`, `linear_update_comment`, `linear_delete_comment`,
   `linear_attach_url`, and `linear_attach_file`.
+- `linear_update_state` MUST refuse `Merging` as a target, whether given by name or by state id,
+  with an error saying a human has to approve. Moving an issue to `Merging` is how a human approves
+  a merge (see `github_merge_pull_request`), so an agent cannot approve its own merge. Humans keep
+  setting `Merging` from Linear. Other transitions are unaffected.
 - The standardized Linear tool surface does not include an assignee mutation tool. Implementations
   MUST NOT advertise removed legacy names such as `linear_set_assignee`.
 - Linear read tools SHOULD wrap issue/comment fields in prompt-safety boundary tags before
