@@ -10,13 +10,15 @@ public protocol SecretStore {
 }
 
 /// A Keychain error carrying the Security framework status.
-public struct KeychainError: Error, Equatable, CustomStringConvertible {
+public struct KeychainError: LocalizedError, Equatable, CustomStringConvertible {
     public let status: OSStatus
 
     public var description: String {
         let message = SecCopyErrorMessageString(status, nil) as String? ?? "unknown error"
         return "Keychain error \(status): \(message)"
     }
+
+    public var errorDescription: String? { description }
 }
 
 /// Generic password items in the login Keychain, one per account, under one service.

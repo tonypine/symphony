@@ -31,7 +31,7 @@ public final class SettingsStore {
         AppSettings(
             checkoutPath: defaults.object(forKey: Key.checkoutPath) as? String ?? "",
             configPath: defaults.object(forKey: Key.configPath) as? String ?? "",
-            commandPrefix: defaults.object(forKey: Key.commandPrefix) as? String ?? "",
+            commandPrefix: defaults.object(forKey: Key.commandPrefix) as? String ?? AppSettings.defaultCommandPrefix,
             stopTimeoutSeconds: defaults.object(forKey: Key.stopTimeoutSeconds) as? Int
                 ?? AppSettings.defaultStopTimeoutSeconds,
             startOnLaunch: defaults.object(forKey: Key.startOnLaunch) as? Bool ?? false
