@@ -6,6 +6,17 @@ defmodule SymphonyElixir.CoreTest do
   alias SymphonyElixir.Config.Schema.Tracker, as: TrackerConfig
   alias SymphonyElixir.Secret
 
+  defmodule AttachedPrGitHub do
+    # Stands in for GitHub.PullRequest.fetch_ci_status/2 on the attached PR; the
+    # PR URL's fragment carries the head ref (and optional state) to report.
+    def fetch_ci_status(pr_url, _opts) do
+      case URI.parse(pr_url).fragment |> String.split(":") do
+        [head_ref] -> {:ok, %{state: "OPEN", is_cross_repository: false, head_ref_name: head_ref}}
+        [head_ref, state] -> {:ok, %{state: state, is_cross_repository: false, head_ref_name: head_ref}}
+      end
+    end
+  end
+
   defmodule ReviewAgentSequenceAppServer do
     def start_session(workspace, opts) do
       recipient = Application.fetch_env!(:symphony_elixir, :agent_runner_review_agent_recipient)
@@ -3361,6 +3372,102 @@ defmodule SymphonyElixir.CoreTest do
       # left on its stale trunk state.
       assert File.exists?(Path.join(stale_workspace, "PR_HEAD.md"))
       assert git!(stale_workspace, ["rev-parse", "HEAD"]) == pr_head_sha
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "agent runner keeps the attached PR's branch after the issue's Linear key is renamed" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-agent-runner-key-rename-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      %{workspace_root: workspace_root, pr_head_sha: pr_head_sha} = setup_worktree_pr_head!(test_root)
+      primary_repo = Path.join(test_root, "primary")
+
+      # The PR was opened as TON-218 from the TON-218 worktree, which still has
+      # auto/TON-218 checked out (orphan_action defaults to "log").
+      {:ok, old_workspace} =
+        SymphonyElixir.PathSafety.canonicalize(Path.join([workspace_root, "default", "TON-218"]))
+
+      File.mkdir_p!(Path.dirname(old_workspace))
+      git!(primary_repo, ["worktree", "add", "-b", "auto/TON-218", old_workspace, "origin/feature-head"])
+      git!(primary_repo, ["push", "origin", "auto/TON-218"])
+
+      # A post-rename dispatch already built a fresh auto/TP-218 worktree on trunk.
+      {:ok, new_workspace} =
+        SymphonyElixir.PathSafety.canonicalize(Path.join([workspace_root, "default", "TP-218"]))
+
+      git!(primary_repo, ["worktree", "add", "-b", "auto/TP-218", new_workspace, "origin/main"])
+
+      pr_url = "https://github.com/org/repo/pull/218#auto/TON-218"
+
+      issue = %Issue{
+        id: "issue-key-rename",
+        identifier: "TP-218",
+        title: "Land the approved PR",
+        description: "Renamed from TON-218",
+        state: "Merging",
+        pull_request_url: pr_url,
+        pr_urls: [pr_url]
+      }
+
+      assert :ok =
+               AgentRunner.run(issue, nil,
+                 issue_state_fetcher: fn [_issue_id] -> {:ok, [%{issue | state: "Done"}]} end,
+                 issue_enricher: no_op_issue_enricher(),
+                 github: AttachedPrGitHub
+               )
+
+      # The TP-218 workspace now sits on the PR's head branch, so the scoped
+      # GitHub tools (which resolve the PR from the current branch) find it.
+      assert git!(new_workspace, ["branch", "--show-current"]) == "auto/TON-218"
+      assert git!(new_workspace, ["rev-parse", "HEAD"]) == pr_head_sha
+      # The clean old worktree released the branch instead of blocking dispatch.
+      assert git!(old_workspace, ["branch", "--show-current"]) == ""
+      assert git!(old_workspace, ["rev-parse", "HEAD"]) == pr_head_sha
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "agent runner keeps the default branch when the attached PR already uses it or is closed" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-agent-runner-attached-pr-default-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      %{workspace_root: workspace_root} = setup_worktree_pr_head!(test_root)
+
+      for {identifier, fragment} <- [{"TP-300", "auto/TP-300"}, {"TP-301", "feature-head:MERGED"}] do
+        pr_url = "https://github.com/org/repo/pull/300##{fragment}"
+
+        issue = %Issue{
+          id: "issue-#{identifier}",
+          identifier: identifier,
+          title: "Attached PR",
+          description: "No rename",
+          state: "In Progress",
+          pull_request_url: pr_url,
+          pr_urls: [pr_url]
+        }
+
+        assert :ok =
+                 AgentRunner.run(issue, nil,
+                   issue_state_fetcher: fn [_issue_id] -> {:ok, [%{issue | state: "Done"}]} end,
+                   issue_enricher: no_op_issue_enricher(),
+                   github: AttachedPrGitHub
+                 )
+
+        workspace = Path.join([workspace_root, "default", identifier])
+        assert git!(workspace, ["branch", "--show-current"]) == "auto/#{identifier}"
+        refute File.exists?(Path.join(workspace, "PR_HEAD.md"))
+      end
     after
       File.rm_rf(test_root)
     end

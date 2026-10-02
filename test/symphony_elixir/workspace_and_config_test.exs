@@ -1032,6 +1032,42 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     end
   end
 
+  test "worktree strategy keeps a sibling workspace's branch when it holds local-only work" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-workspace-worktree-dirty-sibling-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      primary_repo = Path.join(test_root, "primary")
+      workspace_root = Path.join(test_root, "workspaces")
+
+      create_primary_repo!(primary_repo)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        workspace_fetch_before_dispatch: false
+      )
+
+      # The pre-rename workspace still has its PR branch checked out, with an
+      # uncommitted edit that releasing the branch must not strand.
+      assert {:ok, old_workspace} = Workspace.create_for_issue("TON-219")
+      File.write!(Path.join(old_workspace, "wip.txt"), "uncommitted\n")
+
+      issue = %Issue{identifier: "TP-219", workspace_branch: "auto/TON-219"}
+
+      assert {:error, {:branch_already_checked_out_elsewhere, details}} = Workspace.create_for_issue(issue)
+      assert details[:branch] == "auto/TON-219"
+      assert SymphonyElixir.PathSafety.canonicalize(details[:at]) == {:ok, old_workspace}
+      assert String.trim(git!(old_workspace, ["branch", "--show-current"])) == "auto/TON-219"
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "worktree reuse refuses when the requested branch is already checked out elsewhere" do
     test_root =
       Path.join(
