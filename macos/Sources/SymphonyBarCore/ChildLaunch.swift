@@ -126,7 +126,7 @@ public enum ChildLaunchBuilder {
             executable: ChildLaunch.shell,
             arguments: ["-lc", script],
             workingDirectory: settings.checkoutPath,
-            environment: environment(base: baseEnvironment, secrets: secrets)
+            environment: environment(base: baseEnvironment, secrets: secrets, files: files)
         )
     }
 
@@ -149,14 +149,22 @@ public enum ChildLaunchBuilder {
             executable: binary,
             arguments: subcommand + ["--config", settings.configPath],
             workingDirectory: (settings.configPath as NSString).deletingLastPathComponent,
-            environment: environment(base: baseEnvironment, secrets: secrets)
+            environment: environment(base: baseEnvironment, secrets: secrets, files: files)
         )
     }
 
     /// The app's environment with PATH fallbacks, the extra variables and the Linear API key on top.
-    static func environment(base: [String: String], secrets: SecretSettings) -> [String: String] {
+    static func environment(
+        base: [String: String],
+        secrets: SecretSettings,
+        files: FileChecker = LocalFileChecker()
+    ) -> [String: String] {
         var environment = base
-        environment["PATH"] = pathWithFallbacks(base["PATH"], home: base["HOME"])
+        environment["PATH"] = pathWithFallbacks(
+            base["PATH"],
+            home: base["HOME"],
+            miseShims: miseShimsDirectory(base: base, files: files)
+        )
 
         for variable in secrets.extraEnvironment where !variable.name.isEmpty {
             environment[variable.name] = variable.value
@@ -167,11 +175,28 @@ public enum ChildLaunchBuilder {
         return environment
     }
 
-    static func pathWithFallbacks(_ path: String?, home: String?) -> String {
+    /// mise's shims folder (`$MISE_DATA_DIR/shims`, else `~/.local/share/mise/shims`), when it exists. The
+    /// embedded Symphony runs without `mise activate`, so the shims are how agents find mise-managed tools.
+    static func miseShimsDirectory(base: [String: String], files: FileChecker) -> String? {
+        let dataDirectory: String
+        if let configured = base["MISE_DATA_DIR"], !configured.isEmpty {
+            dataDirectory = configured
+        } else if let home = base["HOME"], !home.isEmpty {
+            dataDirectory = home + "/.local/share/mise"
+        } else {
+            return nil
+        }
+        let shims = (dataDirectory as NSString).appendingPathComponent("shims")
+        return files.isDirectory(atPath: shims) ? shims : nil
+    }
+
+    /// The app's PATH, then mise's shims (after the user's PATH, as `mise activate --shims` puts them), then the
+    /// fixed fallbacks. Directories already on PATH are not added again.
+    static func pathWithFallbacks(_ path: String?, home: String?, miseShims: String? = nil) -> String {
         var directories = (path ?? "").split(separator: ":").map(String.init)
         if directories.isEmpty { directories = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"] }
 
-        var fallbacks = ChildLaunch.fallbackPathDirectories
+        var fallbacks = (miseShims.map { [$0] } ?? []) + ChildLaunch.fallbackPathDirectories
         if let home, !home.isEmpty { fallbacks.append(home + "/.local/bin") }
         for directory in fallbacks where !directories.contains(directory) {
             directories.append(directory)

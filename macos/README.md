@@ -135,9 +135,16 @@ In Development mode it runs this in the checkout folder:
 /bin/zsh -lc 'exec mise exec -- ./bin/symphony --config /path/to/symphony.yml'
 ```
 
-The login shell loads your zsh profile, so a Finder-launched app still finds `mise`; `/opt/homebrew/bin`,
-`/usr/local/bin` and `~/.local/bin` are also appended to PATH. Build `bin/symphony` first with
-`mise exec -- mix build`. An empty `LINEAR_API_KEY` counts as not set, and Start asks you to add one.
+The login shell loads your zsh profile, so a Finder-launched app still finds `mise`. In both modes the app
+appends to PATH, after your own PATH: mise's shims folder (`$MISE_DATA_DIR/shims`, else
+`~/.local/share/mise/shims`) when it exists, then `/opt/homebrew/bin`, `/usr/local/bin` and `~/.local/bin`.
+Build `bin/symphony` first with `mise exec -- mix build`. An empty `LINEAR_API_KEY` counts as not set, and
+Start asks you to add one.
+
+The embedded Symphony doesn't load your shell profile or activate mise, so agents find tools only through
+mise's shims or the Homebrew folders above. A shim picks the tool version each repo asks for (its
+`mise.toml` or `.tool-versions`). If an agent reports `command not found` for a tool you installed with mise,
+run `mise reshim` so the shim exists, then restart Symphony.
 
 - Output goes to `~/Library/Logs/symphony/menubar-child.log`. Each start moves the previous log to
   `menubar-child.log.1`.
