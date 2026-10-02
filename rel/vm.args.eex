@@ -1,14 +1,13 @@
-## Node identity lives here (not only in env.sh) because the Burrito-packaged
-## binary boots the BEAM directly and reads only vm.args — it never sources
-## env.sh. The bin/symphony script reads vm.args too, so this keeps the node name
-## identical across both launch methods (the script additionally emits its own
-## identical --name from env.sh; erl warns "Multiple -name given" and uses the
-## first — harmless). Mnesia disc_copies are tagged with node(), so a stable node
-## name is required to reopen the on-disk RunStore schema.
+## No node name here. The Burrito-packaged binary boots the BEAM directly from
+## this file for every subcommand, and a fixed `-name` would make a one-off
+## command such as `symphony check` clash with a running Symphony before any
+## Elixir code runs. The service starts distribution itself as
+## symphony@127.0.0.1 (SymphonyElixir.ReleaseNode); the bin/symphony script gets
+## the same name from env.sh. Mnesia disc_copies are tagged with node(), so the
+## service's stable node name is what reopens the on-disk RunStore schema.
 ##
 ## The cookie is a secret and is NOT set here: the script launcher reads it via
-## env.sh, the Burrito launcher via SymphonyElixir.ReleaseCookie in runtime.exs.
--name symphony@127.0.0.1
+## env.sh, the Burrito launcher via SymphonyElixir.ReleaseCookie.
 
 ## Distribution exists only for local remote-console / observer access (the
 ## control plane is HTTP), so bind the distribution listener to loopback.

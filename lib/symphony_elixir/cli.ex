@@ -3,7 +3,7 @@ defmodule SymphonyElixir.CLI do
   Escript entrypoint for running Symphony with an operator `symphony.yml`.
   """
 
-  alias SymphonyElixir.{Config, Paths}
+  alias SymphonyElixir.{Config, Paths, ReleaseNode}
 
   # Retained so existing scripts (Docker, ops runbooks) that still pass the long
   # flag keep parsing — its value is ignored.
@@ -204,15 +204,16 @@ defmodule SymphonyElixir.CLI do
         args |> evaluate() |> halt()
 
       args ->
-        case configure(args) do
-          :ok ->
-            :ok
-
-          {:error, message} ->
-            IO.puts(:stderr, message)
-            System.halt(1)
+        with {:error, message} <- configure_service(args) do
+          halt({:error, message})
         end
     end
+  end
+
+  # Only the service takes the node name; `check` above runs undistributed so it
+  # can validate config next to a running Symphony.
+  defp configure_service(args) do
+    with :ok <- configure(args), do: ReleaseNode.start(ReleaseNode.runtime_deps())
   end
 
   defp parse_and_configure(args, deps) do
