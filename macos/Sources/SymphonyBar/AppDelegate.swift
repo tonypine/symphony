@@ -7,9 +7,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let settingsWindow = SettingsWindowController()
     private let runner = SymphonyRunner()
     private let poller = StatusPoller()
+    private lazy var restarter = RestartController(runner: runner, poller: poller)
     private var machine = StatusMachine()
     private let statusTitleItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let sourceItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    private lazy var restartNowItem = menuItem(StatusMenu.restartNowTitle, action: #selector(restartNow(_:)))
+    private lazy var cancelRestartItem = menuItem(StatusMenu.cancelRestartTitle, action: #selector(cancelRestart(_:)))
     private var detailItems: [NSMenuItem] = []
     private var startWhenStopped = false
     /// The Pause or Resume request under way, if any.
@@ -37,6 +40,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         menu.addItem(.separator())
         menu.addItem(menuItem(StatusMenu.startTitle, action: #selector(startSymphony(_:))))
         menu.addItem(menuItem(StatusMenu.stopTitle, action: #selector(stopSymphony(_:))))
+        menu.addItem(menuItem(StatusMenu.restartTitle, action: #selector(restartSymphony(_:))))
+        menu.addItem(restartNowItem)
+        menu.addItem(cancelRestartItem)
         menu.addItem(.separator())
         menu.addItem(menuItem(StatusMenu.pauseTitle, action: #selector(pauseDispatch(_:))))
         menu.addItem(menuItem(StatusMenu.resumeTitle, action: #selector(resumeDispatch(_:))))
@@ -69,7 +75,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 keyEquivalent: StatusMenu.quitKeyEquivalent
             )
         )
-        // Start, Stop, Pause, Resume and the open items are enabled by validateMenuItem; the status lines stay disabled.
+        // Start, Stop, Restart, Pause, Resume and the open items are enabled by validateMenuItem; the status lines
+        // stay disabled.
         menu.autoenablesItems = true
         item.menu = menu
 
@@ -77,6 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         showStatus()
 
         runner.onEvent = { [weak self] event in self?.handle(event) }
+        restarter.onChange = { [weak self] in self?.showStatus() }
         poller.stateRoot = { [weak self] in self?.runner.stateRoot ?? StateRoot.locate() }
         poller.onPoll = { [weak self] poll in
             guard let self else { return StatusMachine.pollInterval }
@@ -126,16 +134,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
         case #selector(startSymphony(_:)):
-            return !runner.isRunning && machine.canStart
+            return !runner.isRunning && machine.canStart && !restarting
         case #selector(stopSymphony(_:)):
-            menuItem.title = runner.isStopping ? StatusMenu.stoppingTitle : StatusMenu.stopTitle
-            return runner.isRunning && machine.canStop && !runner.isStopping
+            menuItem.title = runner.isStopping && !restarting ? StatusMenu.stoppingTitle : StatusMenu.stopTitle
+            return runner.isRunning && machine.canStop && !runner.isStopping && !restarting
+        case #selector(restartSymphony(_:)):
+            menuItem.title = restarting ? StatusMenu.restartingTitle : StatusMenu.restartTitle
+            return !restarting && runner.isRunning && !runner.isStopping && StatusMenu.canRestart(machine.status)
+        case #selector(restartNow(_:)):
+            return restarter.machine.offersRestartNow
+        case #selector(cancelRestart(_:)):
+            return restarter.machine.canCancel
         case #selector(pauseDispatch(_:)):
             menuItem.title = controlInFlight == .pause ? StatusMenu.pausingTitle : StatusMenu.pauseTitle
-            return controlInFlight == nil && StatusMenu.canPause(machine.status)
+            return controlInFlight == nil && !restarting && StatusMenu.canPause(machine.status)
         case #selector(resumeDispatch(_:)):
             menuItem.title = controlInFlight == .resume ? StatusMenu.resumingTitle : StatusMenu.resumeTitle
-            return controlInFlight == nil && StatusMenu.canResume(machine.status)
+            return controlInFlight == nil && !restarting && StatusMenu.canResume(machine.status)
         case #selector(openDashboard(_:)):
             switch machine.status {
             case .running, .paused:
@@ -169,6 +184,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc private func stopSymphony(_ sender: Any?) {
         runner.stop()
     }
+
+    @objc private func restartSymphony(_ sender: Any?) {
+        restart()
+    }
+
+    /// Restarts the app's Symphony gracefully: checks symphony.yml, pauses dispatch, waits for agent runs, stops,
+    /// starts, and resumes once Symphony answers. The updater passes `symphonyBinary` to run a different binary.
+    func restart(symphonyBinary: String? = nil) {
+        guard runner.isRunning, StatusMenu.canRestart(machine.status) else { return }
+        controlError = nil
+        restarter.restart(alreadyPaused: StatusMenu.canResume(machine.status), symphonyBinary: symphonyBinary)
+    }
+
+    @objc private func restartNow(_ sender: Any?) {
+        restarter.handle(.restartNow)
+    }
+
+    @objc private func cancelRestart(_ sender: Any?) {
+        restarter.handle(.cancel)
+    }
+
+    private var restarting: Bool { restarter.machine.isRestarting }
 
     @objc private func pauseDispatch(_ sender: Any?) {
         send(.pause)
@@ -242,11 +279,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private func handle(_ event: StatusMachine.Event) {
         machine.handle(event)
         switch event {
-        case .started, .exited:
+        case .started:
             // A Pause or Resume error was about the Symphony that was running before.
             controlError = nil
-        case .polled:
-            break
+        case let .exited(exit, _):
+            controlError = nil
+            restarter.handle(.exited(exit))
+        case let .polled(poll):
+            restarter.handle(.polled(poll))
         }
         showStatus()
 
@@ -278,7 +318,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         sourceItem.title = runner.sourceLine
         guard let menu = statusTitleItem.menu else { return }
         detailItems.forEach(menu.removeItem)
-        detailItems = StatusMenu.detailLines(status, controlError: controlError).map { line in
+        restartNowItem.isHidden = !restarter.machine.offersRestartNow
+        cancelRestartItem.isHidden = !restarter.machine.canCancel
+        detailItems = StatusMenu.detailLines(
+            status,
+            restartLine: restarter.machine.menuLine,
+            controlError: controlError
+        ).map { line in
             let item = NSMenuItem(title: line, action: nil, keyEquivalent: "")
             item.isEnabled = false
             return item

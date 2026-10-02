@@ -176,6 +176,30 @@ final class ChildLaunchTests: XCTestCase {
         XCTAssertEqual(launch.workingDirectory, "/Users/me/ops")
     }
 
+    func testCheckSubcommandGoesBeforeTheConfigInBothModes() throws {
+        let embeddedCheck = try ChildLaunchBuilder.build(
+            settings: AppSettings(configPath: "/Users/me/ops/symphony.yml"),
+            secrets: SecretSettings(linearAPIKey: key),
+            baseEnvironment: [:],
+            embeddedSymphonyPath: "/tmp/new/symphony",
+            subcommand: ["check"],
+            files: StubFileChecker(files: ["/tmp/new/symphony"])
+        )
+        XCTAssertEqual(embeddedCheck.executable, "/tmp/new/symphony")
+        XCTAssertEqual(embeddedCheck.arguments, ["check", "--config", "/Users/me/ops/symphony.yml"])
+        XCTAssertEqual(embeddedCheck.environment["LINEAR_API_KEY"], key)
+
+        let developmentCheck = try ChildLaunchBuilder.build(
+            settings: settings(),
+            secrets: SecretSettings(linearAPIKey: key),
+            baseEnvironment: [:],
+            subcommand: ["check"],
+            files: files
+        )
+        XCTAssertEqual(developmentCheck.script, "exec mise exec -- ./bin/symphony check --config /src/symphony/symphony.yml")
+        XCTAssertEqual(developmentCheck.workingDirectory, "/src/symphony")
+    }
+
     func testEmbeddedModeIgnoresTheCheckoutAndCommandPrefix() throws {
         let launch = try buildEmbedded(
             AppSettings(checkoutPath: "/src/symphony", configPath: " /Users/me/My Configs/s.yml ", commandPrefix: "env 'A")

@@ -33,9 +33,11 @@ public enum StatusMenu {
         return "Symphony is \(statusWord(status))"
     }
 
-    /// Lines shown under the status title, ending with the last Pause or Resume error when there is one.
+    /// Lines shown under the status title, then the restart's progress or error and the last Pause or Resume
+    /// error when there are any.
     public static func detailLines(
         _ status: SymphonyStatus,
+        restartLine: String? = nil,
         controlError: String? = nil,
         now: Date = Date(),
         timeZone: TimeZone = .current
@@ -51,7 +53,7 @@ public enum StatusMenu {
         case let .error(message):
             lines = [message]
         }
-        return lines + (controlError.map { [$0] } ?? [])
+        return lines + [restartLine, controlError].compactMap { $0 }
     }
 
     /// Which Symphony Start runs: "Symphony v1.2.3 (embedded)" or "Development: <checkout>".
@@ -135,6 +137,26 @@ public enum StatusMenu {
     public static func canResume(_ status: SymphonyStatus) -> Bool {
         if case .paused = status { return true }
         return false
+    }
+
+    /// Title of the menu item that restarts Symphony gracefully, and its title while a restart is under way.
+    public static let restartTitle = "Restart Symphony"
+    public static let restartingTitle = "Restarting Symphony…"
+
+    /// Shown while a restart waits for agent runs: after the timeout, stop without waiting any longer.
+    public static let restartNowTitle = "Restart Now Anyway"
+
+    /// Shown while a restart waits for agent runs: stop waiting and resume the dispatch the restart paused.
+    public static let cancelRestartTitle = "Cancel Restart"
+
+    /// Restart is offered for a Symphony the app started that answers; an external one is left alone.
+    public static func canRestart(_ status: SymphonyStatus) -> Bool {
+        switch status {
+        case let .running(_, external), let .paused(_, external):
+            return !external
+        case .stopped, .starting, .error:
+            return false
+        }
     }
 
     /// Title of the menu item that opens the Settings window.

@@ -128,6 +128,22 @@ final class SettingsValidatorTests: XCTestCase {
         }
     }
 
+    func testRestartTimeoutMustBeInRange() {
+        var settings = valid
+        for minutes in [AppSettings.restartTimeoutRange.lowerBound, AppSettings.restartTimeoutRange.upperBound] {
+            settings.restartTimeoutMinutes = minutes
+            XCTAssertEqual(issues(settings), [], "\(minutes)")
+        }
+        for minutes in [0, -1, AppSettings.restartTimeoutRange.upperBound + 1] {
+            settings.restartTimeoutMinutes = minutes
+            XCTAssertEqual(issues(settings), [.restartTimeoutOutOfRange], "\(minutes)")
+        }
+        XCTAssertEqual(
+            SettingsIssue.restartTimeoutOutOfRange.message,
+            "The restart timeout must be between 1 and 1440 minutes."
+        )
+    }
+
     func testExtraEnvironmentNamesAreChecked() {
         let secrets = SecretSettings(
             linearAPIKey: "lin_api_secret",

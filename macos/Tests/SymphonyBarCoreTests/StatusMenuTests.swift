@@ -83,6 +83,30 @@ final class StatusMenuTests: XCTestCase {
         XCTAssertEqual(StatusMenu.detailLines(.stopped, controlError: "Couldn't resume Symphony"), ["Couldn't resume Symphony"])
     }
 
+    func testDetailLinesShowTheRestartBeforeTheControlError() {
+        XCTAssertEqual(
+            StatusMenu.detailLines(
+                .running(snapshot, external: false),
+                restartLine: "Waiting for 2 agent runs…",
+                controlError: "Couldn't pause Symphony"
+            ),
+            ["2 running · 1 retrying", "Waiting for 2 agent runs…", "Couldn't pause Symphony"]
+        )
+    }
+
+    func testRestartIsOfferedOnlyForTheAppsAnsweringSymphony() {
+        XCTAssertEqual(allStatuses.map(StatusMenu.canRestart), [false, false, true, true, false])
+        XCTAssertFalse(StatusMenu.canRestart(.running(snapshot, external: true)))
+        XCTAssertFalse(StatusMenu.canRestart(.paused(snapshot, external: true)))
+    }
+
+    func testRestartTitles() {
+        XCTAssertEqual(StatusMenu.restartTitle, "Restart Symphony")
+        XCTAssertEqual(StatusMenu.restartingTitle, "Restarting Symphony…")
+        XCTAssertEqual(StatusMenu.restartNowTitle, "Restart Now Anyway")
+        XCTAssertEqual(StatusMenu.cancelRestartTitle, "Cancel Restart")
+    }
+
     func testPauseIsOfferedWhileRunningAndResumeWhilePaused() {
         let offered = allStatuses.map { (StatusMenu.canPause($0), StatusMenu.canResume($0)) }
 
