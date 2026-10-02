@@ -148,14 +148,10 @@ final class SymphonyStateTests: XCTestCase {
         XCTAssertEqual(SymphonyState.baseURL(controlURLFile: file).absoluteString, "http://127.0.0.1:4010")
     }
 
-    func testStateURLAndControlURLFile() {
+    func testStateURL() {
         XCTAssertEqual(
             SymphonyState.stateURL(base: URL(string: "http://127.0.0.1:4000")!).absoluteString,
             "http://127.0.0.1:4000/api/v1/state"
-        )
-        XCTAssertEqual(
-            SymphonyState.controlURLFile(home: URL(fileURLWithPath: "/Users/me")).path,
-            "/Users/me/Library/Application Support/symphony/control_url"
         )
     }
 }

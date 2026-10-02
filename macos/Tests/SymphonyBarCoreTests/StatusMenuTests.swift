@@ -51,6 +51,31 @@ final class StatusMenuTests: XCTestCase {
         XCTAssertEqual(StatusMenu.detailLines(.error("Symphony exited with status 1")), ["Symphony exited with status 1"])
     }
 
+    func testDetailLinesEndWithTheControlError() {
+        XCTAssertEqual(
+            StatusMenu.detailLines(.running(snapshot, external: false), controlError: "Couldn't pause Symphony: HTTP 500"),
+            ["2 running · 1 retrying", "Couldn't pause Symphony: HTTP 500"]
+        )
+        XCTAssertEqual(StatusMenu.detailLines(.stopped, controlError: "Couldn't resume Symphony"), ["Couldn't resume Symphony"])
+    }
+
+    func testPauseIsOfferedWhileRunningAndResumeWhilePaused() {
+        let offered = allStatuses.map { (StatusMenu.canPause($0), StatusMenu.canResume($0)) }
+
+        XCTAssertEqual(offered.map(\.0), [false, false, true, false, false])
+        XCTAssertEqual(offered.map(\.1), [false, false, false, true, false])
+        // An external Symphony is paused and resumed through its control API too.
+        XCTAssertTrue(StatusMenu.canPause(.running(snapshot, external: true)))
+        XCTAssertTrue(StatusMenu.canResume(.paused(snapshot, external: true)))
+    }
+
+    func testPauseTitleSaysActiveRunsContinue() {
+        XCTAssertEqual(StatusMenu.pauseTitle, "Pause Dispatch (active runs continue)")
+        XCTAssertEqual(StatusMenu.pausingTitle, "Pausing Dispatch…")
+        XCTAssertEqual(StatusMenu.resumeTitle, "Resume Dispatch")
+        XCTAssertEqual(StatusMenu.resumingTitle, "Resuming Dispatch…")
+    }
+
     func testPauseLine() {
         let sameDay = pausedAt.addingTimeInterval(3600)
         let nextDay = pausedAt.addingTimeInterval(86_400)

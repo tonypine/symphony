@@ -11,6 +11,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let statusTitleItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private var detailItems: [NSMenuItem] = []
     private var startWhenStopped = false
+    /// The Pause or Resume request under way, if any.
+    private var controlInFlight: ControlAction?
+    /// Why the last Pause or Resume failed, shown under the status until the next attempt.
+    private var controlError: String?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         EditMenu.install()
@@ -23,6 +27,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         menu.addItem(.separator())
         menu.addItem(menuItem(StatusMenu.startTitle, action: #selector(startSymphony(_:))))
         menu.addItem(menuItem(StatusMenu.stopTitle, action: #selector(stopSymphony(_:))))
+        menu.addItem(.separator())
+        menu.addItem(menuItem(StatusMenu.pauseTitle, action: #selector(pauseDispatch(_:))))
+        menu.addItem(menuItem(StatusMenu.resumeTitle, action: #selector(resumeDispatch(_:))))
         menu.addItem(.separator())
         menu.addItem(menuItem(StatusMenu.openDashboardTitle, action: #selector(openDashboard(_:))))
         menu.addItem(menuItem(StatusMenu.openLogsTitle, action: #selector(openLogs(_:))))
@@ -42,7 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 keyEquivalent: StatusMenu.quitKeyEquivalent
             )
         )
-        // Start, Stop and the open items are enabled by validateMenuItem; the status lines stay disabled.
+        // Start, Stop, Pause, Resume and the open items are enabled by validateMenuItem; the status lines stay disabled.
         menu.autoenablesItems = true
         item.menu = menu
 
@@ -50,6 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         showStatus()
 
         runner.onEvent = { [weak self] event in self?.handle(event) }
+        poller.stateRoot = { [weak self] in self?.runner.stateRoot ?? StateRoot.locate() }
         poller.onPoll = { [weak self] poll in
             guard let self else { return StatusMachine.pollInterval }
             handle(.polled(poll))
@@ -96,6 +104,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         case #selector(stopSymphony(_:)):
             menuItem.title = runner.isStopping ? StatusMenu.stoppingTitle : StatusMenu.stopTitle
             return runner.isRunning && machine.canStop && !runner.isStopping
+        case #selector(pauseDispatch(_:)):
+            menuItem.title = controlInFlight == .pause ? StatusMenu.pausingTitle : StatusMenu.pauseTitle
+            return controlInFlight == nil && StatusMenu.canPause(machine.status)
+        case #selector(resumeDispatch(_:)):
+            menuItem.title = controlInFlight == .resume ? StatusMenu.resumingTitle : StatusMenu.resumeTitle
+            return controlInFlight == nil && StatusMenu.canResume(machine.status)
         case #selector(openDashboard(_:)):
             switch machine.status {
             case .running, .paused:
@@ -125,12 +139,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         runner.stop()
     }
 
+    @objc private func pauseDispatch(_ sender: Any?) {
+        send(.pause)
+    }
+
+    @objc private func resumeDispatch(_ sender: Any?) {
+        send(.resume)
+    }
+
+    /// Sends Pause or Resume to Symphony's control API, then polls so the icon and menu follow.
+    private func send(_ action: ControlAction) {
+        guard controlInFlight == nil else { return }
+        controlInFlight = action
+        controlError = nil
+        showStatus()
+
+        let stateRoot = runner.stateRoot
+        Task {
+            let result = await ControlAPI.send(action, stateRoot: stateRoot)
+            controlInFlight = nil
+            if case let .failed(message) = result { controlError = message }
+            showStatus()
+            poller.pollNow()
+        }
+    }
+
     @objc private func openSettings(_ sender: Any?) {
         settingsWindow.show()
     }
 
     @objc private func openDashboard(_ sender: Any?) {
-        NSWorkspace.shared.open(SymphonyState.baseURL(controlURLFile: SymphonyState.controlURLFile()))
+        NSWorkspace.shared.open(StateRoot.controlURL(in: runner.stateRoot))
     }
 
     @objc private func openLogs(_ sender: Any?) {
@@ -139,6 +178,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     private func handle(_ event: StatusMachine.Event) {
         machine.handle(event)
+        switch event {
+        case .started, .exited:
+            // A Pause or Resume error was about the Symphony that was running before.
+            controlError = nil
+        case .polled:
+            break
+        }
         showStatus()
 
         switch event {
@@ -168,7 +214,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         statusTitleItem.title = StatusMenu.statusTitle(status)
         guard let menu = statusTitleItem.menu else { return }
         detailItems.forEach(menu.removeItem)
-        detailItems = StatusMenu.detailLines(status).map { line in
+        detailItems = StatusMenu.detailLines(status, controlError: controlError).map { line in
             let item = NSMenuItem(title: line, action: nil, keyEquivalent: "")
             item.isEnabled = false
             return item
