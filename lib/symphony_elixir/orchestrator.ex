@@ -27,7 +27,7 @@ defmodule SymphonyElixir.Orchestrator do
     Workspace
   }
 
-  alias SymphonyElixir.Linear.{Client, Issue}
+  alias SymphonyElixir.Linear.{Client, Issue, RateLimit}
   alias SymphonyElixirWeb.ObservabilityPubSub
 
   @continuation_retry_delay_ms 1_000
@@ -75,6 +75,8 @@ defmodule SymphonyElixir.Orchestrator do
       :watchdog_token,
       :startup_workspace_lifecycle_task_ref,
       :repo_poll_task_ref,
+      :linear_requests_last_poll,
+      linear_requests_mark: 0,
       running: %{},
       completed: MapSet.new(),
       completed_run_metadata: %{},
@@ -896,6 +898,17 @@ defmodule SymphonyElixir.Orchestrator do
   defp start_repo_poll_task(%State{} = state, now_ms) do
     state = reconcile_stalled_running_issues(state)
 
+    # While Linear is rate-limiting us, skip the whole cycle so no Linear call
+    # leaves this node; finish_poll_cycle/2 schedules the next tick for when the
+    # pause ends, and that cycle's first Linear call is the probe.
+    if RateLimit.paused_until() do
+      {:skip, state}
+    else
+      start_unpaused_repo_poll_task(state, now_ms)
+    end
+  end
+
+  defp start_unpaused_repo_poll_task(%State{} = state, now_ms) do
     with :ok <- Config.validate!(),
          {:ok, repos} <- Config.repos() do
       start_repo_poll_task_for_repos(state, repos, now_ms)
@@ -982,8 +995,14 @@ defmodule SymphonyElixir.Orchestrator do
   defp apply_repo_poll_task_result(%State{} = state, _result), do: finish_poll_cycle(state, System.monotonic_time(:millisecond))
 
   defp finish_poll_cycle(%State{} = state, now_ms) do
-    state
-    |> schedule_tick(next_repo_poll_delay_ms(state, now_ms))
+    requests_total = RateLimit.requests_total()
+
+    %{
+      state
+      | linear_requests_last_poll: max(requests_total - state.linear_requests_mark, 0),
+        linear_requests_mark: requests_total
+    }
+    |> schedule_tick(max(next_repo_poll_delay_ms(state, now_ms), RateLimit.remaining_pause_ms()))
     |> Map.put(:poll_check_in_progress, false)
   end
 
@@ -1139,7 +1158,7 @@ defmodule SymphonyElixir.Orchestrator do
         state =
           state
           |> put_repo_poll_cache(repo_name, issues, now_ms)
-          |> put_repo_next_due(repo_name, now_ms + state.poll_interval_ms)
+          |> put_repo_next_due(repo_name, now_ms + linear_poll_interval_ms(state))
           |> record_tracker_poll_success()
 
         buckets = candidate_buckets_from_cache(state, repos)
@@ -1266,12 +1285,18 @@ defmodule SymphonyElixir.Orchestrator do
     %{state | repo_poll_cache: Map.put(state.repo_poll_cache, repo_name, failure_entry)}
   end
 
-  defp repo_poll_retry_delay_ms(%State{poll_interval_ms: interval_ms}, _repos)
+  defp repo_poll_retry_delay_ms(%State{poll_interval_ms: interval_ms} = state, _repos)
        when is_integer(interval_ms) and interval_ms > 0 do
-    interval_ms
+    linear_poll_interval_ms(state)
   end
 
   defp repo_poll_retry_delay_ms(state, repos), do: repo_poll_stagger_ms(state, repos)
+
+  # Soft brake: stretch the issue-poll interval while Linear reports little of
+  # the hourly budget left, so Symphony rarely runs it down to zero.
+  defp linear_poll_interval_ms(%State{poll_interval_ms: interval_ms}) do
+    interval_ms * RateLimit.poll_interval_multiplier()
+  end
 
   defp put_conflict_bucket(%State{} = state, conflicts) when is_list(conflicts) do
     conflict_map =
@@ -2570,6 +2595,10 @@ defmodule SymphonyElixir.Orchestrator do
 
         state
 
+      {:error, {:linear_rate_limited, _reset_ms}} ->
+        Logger.debug("Skipping dispatch; Linear is rate-limited for #{issue_context(issue)}")
+        state
+
       {:error, reason} ->
         Logger.warning("Skipping dispatch; issue refresh failed for #{issue_context(issue)}: #{inspect(reason)}")
         state
@@ -2893,7 +2922,7 @@ defmodule SymphonyElixir.Orchestrator do
        when is_binary(issue_id) and is_map(metadata) do
     previous_retry = Map.get(state.retry_attempts, issue_id, %{attempt: 0})
     next_attempt = if is_integer(attempt), do: attempt, else: previous_retry.attempt + 1
-    delay_ms = retry_delay(next_attempt, metadata)
+    delay_ms = max(retry_delay(next_attempt, metadata), RateLimit.remaining_pause_ms())
     old_timer = Map.get(previous_retry, :timer_ref)
     identifier = pick_retry_identifier(issue_id, previous_retry, metadata)
     title = pick_retry_title(state, issue_id, previous_retry, metadata)
@@ -2988,17 +3017,26 @@ defmodule SymphonyElixir.Orchestrator do
         |> handle_retry_issue_lookup(state, issue_id, attempt, metadata)
 
       {:error, reason} ->
-        Logger.warning("Retry issue refresh failed for issue_id=#{issue_id} issue_identifier=#{metadata[:identifier] || issue_id}: #{inspect(reason)}")
-
-        {:noreply,
-         schedule_issue_retry(
-           state,
-           issue_id,
-           attempt + 1,
-           Map.merge(metadata, %{error: "retry issue refresh failed: #{inspect(reason)}"})
-         )}
+        retry_issue_refresh_failed(state, issue_id, attempt, metadata, reason)
     end
   end
+
+  defp retry_issue_refresh_failed(%State{} = state, issue_id, attempt, metadata, reason) do
+    Logger.warning("Retry issue refresh failed for issue_id=#{issue_id} issue_identifier=#{metadata[:identifier] || issue_id}: #{inspect(reason)}")
+
+    {:noreply,
+     schedule_issue_retry(
+       state,
+       issue_id,
+       retry_attempt_after_refresh_failure(attempt, reason),
+       Map.merge(metadata, %{error: "retry issue refresh failed: #{inspect(reason)}"})
+     )}
+  end
+
+  # A Linear rate limit is not the issue's fault; keep its attempt (and backoff)
+  # where it was and let schedule_issue_retry/4 wait for the pause to end.
+  defp retry_attempt_after_refresh_failure(attempt, {:linear_rate_limited, _reset_ms}), do: attempt
+  defp retry_attempt_after_refresh_failure(attempt, _reason), do: attempt + 1
 
   defp handle_retry_issue_sync_for_test(%State{} = state, issue_id, attempt, metadata, issue_fetcher)
        when is_function(issue_fetcher, 1) do
@@ -3009,15 +3047,7 @@ defmodule SymphonyElixir.Orchestrator do
         |> handle_retry_issue_lookup_sync_for_test(state, issue_id, attempt, metadata)
 
       {:error, reason} ->
-        Logger.warning("Retry issue refresh failed for issue_id=#{issue_id} issue_identifier=#{metadata[:identifier] || issue_id}: #{inspect(reason)}")
-
-        {:noreply,
-         schedule_issue_retry(
-           state,
-           issue_id,
-           attempt + 1,
-           Map.merge(metadata, %{error: "retry issue refresh failed: #{inspect(reason)}"})
-         )}
+        retry_issue_refresh_failed(state, issue_id, attempt, metadata, reason)
     end
   end
 
@@ -5245,8 +5275,24 @@ defmodule SymphonyElixir.Orchestrator do
       polling: %{
         checking?: state.poll_check_in_progress == true,
         next_poll_in_ms: next_poll_in_ms(state.next_poll_due_at_ms, now_ms),
-        poll_interval_ms: state.poll_interval_ms
+        poll_interval_ms: state.poll_interval_ms,
+        linear: linear_rate_limit_snapshot(state)
       }
+    }
+  end
+
+  defp linear_rate_limit_snapshot(%State{} = state) do
+    now_ms = RateLimit.now_ms()
+    status = RateLimit.status(now_ms)
+
+    %{
+      rate_limited_for_ms: RateLimit.remaining_pause_ms(now_ms),
+      paused_until_ms: status.paused_until_ms,
+      window_resets_in_ms: status.window_reset_ms && max(status.window_reset_ms - now_ms, 0),
+      poll_interval_multiplier: status.poll_interval_multiplier,
+      requests_last_poll: state.linear_requests_last_poll,
+      requests_remaining: status.requests_remaining,
+      requests_limit: status.requests_limit
     }
   end
 
