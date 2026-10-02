@@ -10,6 +10,16 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertFalse(store.loadSettings().startOnLaunch)
     }
 
+    func testCommandPrefixDefaultsToMiseUntilSavedEvenWhenCleared() {
+        let defaults = MemoryKeyValueStore()
+        let store = SettingsStore(defaults: defaults, secrets: MemorySecretStore())
+        XCTAssertEqual(store.loadSettings().commandPrefix, "mise exec --")
+
+        store.saveSettings(AppSettings(commandPrefix: ""))
+
+        XCTAssertEqual(store.loadSettings().commandPrefix, "")
+    }
+
     func testSettingsRoundTripThroughANewStore() {
         let defaults = MemoryKeyValueStore()
         let settings = AppSettings(

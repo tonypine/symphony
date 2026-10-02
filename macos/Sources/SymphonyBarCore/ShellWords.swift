@@ -38,6 +38,16 @@ public enum ShellWords {
         return words
     }
 
+    /// Quotes `word` so a POSIX shell reads it back as exactly one word. Plain words are left as they are.
+    public static func quote(_ word: String) -> String {
+        let plain = !word.isEmpty && word.unicodeScalars.allSatisfy { scalar in
+            ("a"..."z").contains(scalar) || ("A"..."Z").contains(scalar) || ("0"..."9").contains(scalar)
+                || "-_./=:,+@%".unicodeScalars.contains(scalar)
+        }
+        if plain { return word }
+        return "'" + word.map { $0 == "'" ? "'\\''" : String($0) }.joined() + "'"
+    }
+
     private static func readUntil(
         _ terminator: Character,
         from iterator: inout String.Iterator,

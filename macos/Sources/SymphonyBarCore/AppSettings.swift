@@ -3,6 +3,9 @@ public struct AppSettings: Equatable {
     /// Bounds for the stop timeout, in seconds.
     public static let stopTimeoutRange = 1...600
 
+    /// Command prefix used until the user saves one: run Symphony with the checkout's `mise` toolchain.
+    public static let defaultCommandPrefix = "mise exec --"
+
     /// Stop timeout used until the user picks one.
     public static let defaultStopTimeoutSeconds = 30
 
@@ -24,7 +27,7 @@ public struct AppSettings: Equatable {
     public init(
         checkoutPath: String = "",
         configPath: String = "",
-        commandPrefix: String = "",
+        commandPrefix: String = AppSettings.defaultCommandPrefix,
         stopTimeoutSeconds: Int = AppSettings.defaultStopTimeoutSeconds,
         startOnLaunch: Bool = false
     ) {
