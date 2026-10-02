@@ -10,7 +10,10 @@ defmodule SymphonyElixir.AgentEnvTest do
         "HOME" => "/home/symphony",
         "USER" => "symphony",
         "LANG" => "en_US.UTF-8",
-        "SSL_CERT_FILE" => "/custom/operator.pem"
+        "SSL_CERT_FILE" => "/custom/operator.pem",
+        "MIX_HOME" => "/opt/mise/elixir/.mix",
+        "MIX_ARCHIVES" => "/opt/mise/elixir/.mix/archives",
+        "HEX_HOME" => "/opt/hex"
       }
 
       result = AgentEnv.build(env)
@@ -20,6 +23,9 @@ defmodule SymphonyElixir.AgentEnvTest do
       assert {~c"USER", ~c"symphony"} in result
       assert {~c"LANG", ~c"en_US.UTF-8"} in result
       assert {~c"SSL_CERT_FILE", ~c"/custom/operator.pem"} in result
+      assert {~c"MIX_HOME", ~c"/opt/mise/elixir/.mix"} in result
+      assert {~c"MIX_ARCHIVES", ~c"/opt/mise/elixir/.mix/archives"} in result
+      assert {~c"HEX_HOME", ~c"/opt/hex"} in result
     end
 
     test "always sets SYMPHONY_AGENT_RUNTIME=1" do

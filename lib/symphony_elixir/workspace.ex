@@ -525,10 +525,28 @@ defmodule SymphonyElixir.Workspace do
     # `git worktree add` so its native error surfaces via the existing path.
     with {:ok, output} <- git_output(repo, ["worktree", "list", "--porcelain"]),
          path when is_binary(path) <- find_worktree_for_branch(output, branch),
-         false <- Path.expand(path) == Path.expand(workspace) do
+         false <- Path.expand(path) == Path.expand(workspace),
+         :error <- release_branch_from_stale_sibling(path, workspace, branch) do
       {:error, {:branch_already_checked_out_elsewhere, branch: branch, at: path, requested: workspace}}
     else
       _ -> :ok
+    end
+  end
+
+  # A Linear team-key rename (TON-218 -> TP-218) moves an issue to a new
+  # workspace directory while its old sibling worktree still has the PR branch
+  # checked out. When that sibling holds no uncommitted or unpushed work, detach
+  # its HEAD so the renamed issue's workspace can take the branch over. Anything
+  # else (a worktree outside this repo's workspace dir, or one with local-only
+  # work) keeps the collision error.
+  defp release_branch_from_stale_sibling(owner, workspace, branch) do
+    if Path.dirname(Path.expand(owner)) == Path.dirname(Path.expand(workspace)) and
+         not worktree_has_local_only_work?(owner) and
+         run_git(owner, ["checkout", "--detach"]) == :ok do
+      Logger.info("Released workspace branch from stale sibling worktree branch=#{branch} sibling=#{owner} workspace=#{workspace}")
+      :ok
+    else
+      :error
     end
   end
 
@@ -581,7 +599,7 @@ defmodule SymphonyElixir.Workspace do
       "      reset_dirty=$(git -C \"$workspace\" status --porcelain=v1 --untracked-files=all)",
       "      reset_unpushed=$(git -C \"$workspace\" rev-list --max-count=1 HEAD --not --remotes)",
       "      [ -n \"$reset_dirty\" ] || [ -n \"$reset_unpushed\" ] || exit 0",
-      "      reset_index=$(mktemp -u)",
+      "      reset_index=$(mktemp -u \"${TMPDIR:-/tmp}/symphony-orphan.XXXXXX\")",
       "      GIT_INDEX_FILE=\"$reset_index\" git -C \"$workspace\" add -A",
       "      reset_tree=$(GIT_INDEX_FILE=\"$reset_index\" git -C \"$workspace\" write-tree)",
       "      rm -f \"$reset_index\"",

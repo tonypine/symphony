@@ -6,47 +6,53 @@ defmodule Mix.Tasks.PrBody.CheckTest do
   import ExUnit.CaptureIO
 
   @template """
-  #### Context
+  ## References
 
-  <!-- Why is this change needed? -->
+  - <!-- Ticket and related links -->
 
-  #### TL;DR
+  ## This PR
 
-  *<!-- A short summary -->*
+  <!-- Behaviour in plain words -->
 
-  #### Summary
+  ### Important facts
 
-  - <!-- Summary bullet -->
+  - <!-- Optional: flags, migrations, dependencies, env vars -->
 
-  #### Alternatives
+  ## Stack
 
-  - <!-- Alternative bullet -->
-
-  #### Test Plan
-
-  - [ ] <!-- Test checkbox -->
+  <!-- Optional: what the stack delivers together -->
   """
 
   @valid_body """
-  #### Context
+  ## References
 
-  Context text.
+  - Ticket: TP-1
 
-  #### TL;DR
+  ## This PR
 
-  Short summary.
-
-  #### Summary
+  Nothing changes on screen.
 
   - First change.
 
-  #### Alternatives
+  ### Important facts
 
-  - Alternative considered.
+  - New environment variable `FOO`, unset by default.
 
-  #### Test Plan
+  ## Stack
 
-  - [x] Ran targeted checks.
+  Agents can merge their own PRs once a human approves.
+  """
+
+  @minimal_body """
+  ## References
+
+  - Ticket: TP-1
+
+  ## This PR
+
+  Nothing changes on screen.
+
+  Generated footer.
   """
 
   setup do
@@ -122,17 +128,30 @@ defmodule Mix.Tasks.PrBody.CheckTest do
     in_temp_repo(fn ->
       write_template!(@template)
 
-      missing_heading = String.replace(@valid_body, "#### Alternatives\n\n- Alternative considered.\n\n", "")
+      missing_heading = String.replace(@valid_body, "## This PR\n\nNothing changes on screen.\n\n- First change.\n\n", "")
       File.write!("body.md", missing_heading)
 
-      error_output =
-        capture_io(:stderr, fn ->
-          assert_raise Mix.Error, ~r/PR body format invalid/, fn ->
-            Check.run(["lint", "--file", "body.md"])
-          end
-        end)
+      assert lint_errors() =~ "Missing required heading: ## This PR"
+    end)
+  end
 
-      assert error_output =~ "Missing required heading: #### Alternatives"
+  test "fails for the previous Context/TL;DR/Test Plan format" do
+    in_temp_repo(fn ->
+      write_template!(@template)
+
+      File.write!("body.md", """
+      #### Context
+
+      Context text.
+
+      #### Test Plan
+
+      - [x] Ran targeted checks.
+      """)
+
+      error_output = lint_errors()
+      assert error_output =~ "Missing required heading: ## References"
+      assert error_output =~ "Missing required heading: ## This PR"
     end)
   end
 
@@ -140,38 +159,43 @@ defmodule Mix.Tasks.PrBody.CheckTest do
     in_temp_repo(fn ->
       write_template!(@template)
 
-      out_of_order = """
-      #### TL;DR
-
-      Short summary.
-
-      #### Context
-
-      Context text.
-
-      #### Summary
+      File.write!("body.md", """
+      ## This PR
 
       - First change.
 
-      #### Alternatives
+      ## References
 
-      - Alternative considered.
+      - Ticket: TP-1
+      """)
 
-      #### Test Plan
+      assert lint_errors() =~ "Required headings are out of order."
+    end)
+  end
 
-      - [x] Ran targeted checks.
-      """
+  test "fails when optional headings are out of order" do
+    in_temp_repo(fn ->
+      write_template!(@template)
 
-      File.write!("body.md", out_of_order)
+      File.write!("body.md", """
+      ## References
 
-      error_output =
-        capture_io(:stderr, fn ->
-          assert_raise Mix.Error, ~r/PR body format invalid/, fn ->
-            Check.run(["lint", "--file", "body.md"])
-          end
-        end)
+      - Ticket: TP-1
 
-      assert error_output =~ "Required headings are out of order."
+      ## This PR
+
+      - First change.
+
+      ## Stack
+
+      Agents can merge their own PRs.
+
+      ### Important facts
+
+      - New environment variable `FOO`, unset by default.
+      """)
+
+      assert lint_errors() =~ "Required headings are out of order."
     end)
   end
 
@@ -179,17 +203,10 @@ defmodule Mix.Tasks.PrBody.CheckTest do
     in_temp_repo(fn ->
       write_template!(@template)
 
-      empty_context = String.replace(@valid_body, "Context text.", "")
-      File.write!("body.md", empty_context)
+      empty_references = String.replace(@valid_body, "- Ticket: TP-1", "")
+      File.write!("body.md", empty_references)
 
-      error_output =
-        capture_io(:stderr, fn ->
-          assert_raise Mix.Error, ~r/PR body format invalid/, fn ->
-            Check.run(["lint", "--file", "body.md"])
-          end
-        end)
-
-      assert error_output =~ "Section cannot be empty: #### Context"
+      assert lint_errors() =~ "Section cannot be empty: ## References"
     end)
   end
 
@@ -197,86 +214,67 @@ defmodule Mix.Tasks.PrBody.CheckTest do
     in_temp_repo(fn ->
       write_template!(@template)
 
-      blank_alternatives = """
-      #### Context
+      File.write!("body.md", """
+      ## References
 
-      Context text.
+      - Ticket: TP-1
 
-      #### TL;DR
-
-      Short summary.
-
-      #### Summary
-
-      - First change.
-
-      #### Alternatives
+      ## This PR
 
 
-      #### Test Plan
+      ## Stack
 
-      - [x] Ran targeted checks.
-      """
+      Agents can merge their own PRs.
+      """)
 
-      File.write!("body.md", blank_alternatives)
-
-      error_output =
-        capture_io(:stderr, fn ->
-          assert_raise Mix.Error, ~r/PR body format invalid/, fn ->
-            Check.run(["lint", "--file", "body.md"])
-          end
-        end)
-
-      assert error_output =~ "Section cannot be empty: #### Alternatives"
+      assert lint_errors() =~ "Section cannot be empty: ## This PR"
     end)
   end
 
-  test "fails when bullet and checkbox expectations are not met" do
+  test "fails when an optional section is present but empty" do
     in_temp_repo(fn ->
       write_template!(@template)
 
-      invalid_body = """
-      #### Context
+      File.write!("body.md", @minimal_body <> "\n## Stack\n\n")
 
-      Context text.
+      assert lint_errors() =~ "Section cannot be empty: ## Stack"
+    end)
+  end
 
-      #### TL;DR
+  test "fails when bullet expectations are not met" do
+    in_temp_repo(fn ->
+      write_template!(@template)
 
-      Short summary.
+      File.write!("body.md", """
+      ## References
 
-      #### Summary
+      Ticket TP-1.
+
+      ## This PR
 
       Not a bullet.
 
-      #### Alternatives
+      ### Important facts
 
       Also not a bullet.
 
-      #### Test Plan
+      ## Stack
 
-      No checkbox.
-      """
+      Not a bullet either.
+      """)
 
-      File.write!("body.md", invalid_body)
-
-      error_output =
-        capture_io(:stderr, fn ->
-          assert_raise Mix.Error, ~r/PR body format invalid/, fn ->
-            Check.run(["lint", "--file", "body.md"])
-          end
-        end)
-
-      assert error_output =~ "Section must include at least one bullet item: #### Summary"
-      assert error_output =~ "Section must include at least one bullet item: #### Alternatives"
-      assert error_output =~ "Section must include at least one bullet item: #### Test Plan"
-      assert error_output =~ "Section must include at least one checkbox item: #### Test Plan"
+      error_output = lint_errors()
+      assert error_output =~ "Section must include at least one bullet item: ## References"
+      assert error_output =~ "Section must include at least one bullet item: ### Important facts"
+      refute error_output =~ "bullet item: ## This PR"
+      refute error_output =~ "bullet item: ## Stack"
     end)
   end
 
   test "fails when heading has no content delimiter" do
     in_temp_repo(fn ->
       write_template!(@template)
-      File.write!("body.md", "#### Context\nContext text.")
+      File.write!("body.md", "## References\n- Ticket: TP-1")
 
       capture_io(:stderr, fn ->
         assert_raise Mix.Error, ~r/PR body format invalid/, fn ->
@@ -289,7 +287,7 @@ defmodule Mix.Tasks.PrBody.CheckTest do
   test "fails when heading appears at end of file" do
     in_temp_repo(fn ->
       write_template!(@template)
-      File.write!("body.md", "#### Context")
+      File.write!("body.md", "## References")
 
       error_output =
         capture_io(:stderr, fn ->
@@ -298,7 +296,7 @@ defmodule Mix.Tasks.PrBody.CheckTest do
           end
         end)
 
-      assert error_output =~ "Section cannot be empty: #### Context"
+      assert error_output =~ "Section cannot be empty: ## References"
     end)
   end
 
@@ -313,6 +311,77 @@ defmodule Mix.Tasks.PrBody.CheckTest do
         end)
 
       assert output =~ "PR body format OK"
+    end)
+  end
+
+  test "passes when optional sections are omitted" do
+    in_temp_repo(fn ->
+      write_template!(@template)
+      File.write!("body.md", @minimal_body)
+
+      assert capture_io(fn -> Check.run(["lint", "--file", "body.md"]) end) =~ "PR body format OK"
+    end)
+  end
+
+  test "repository template accepts a References and This PR body" do
+    template = File.read!(".github/pull_request_template.md")
+
+    in_temp_repo(fn ->
+      write_template!(template)
+      File.write!("body.md", @minimal_body)
+
+      assert capture_io(fn -> Check.run(["lint", "--file", "body.md"]) end) =~ "PR body format OK"
+    end)
+  end
+
+  test "repository template accepts a full body with Important facts and Stack" do
+    template = File.read!(".github/pull_request_template.md")
+
+    in_temp_repo(fn ->
+      write_template!(template)
+      File.write!("body.md", @valid_body)
+
+      assert capture_io(fn -> Check.run(["lint", "--file", "body.md"]) end) =~ "PR body format OK"
+    end)
+  end
+
+  test "repository template requires bullets in References and Important facts only" do
+    template = File.read!(".github/pull_request_template.md")
+
+    in_temp_repo(fn ->
+      write_template!(template)
+
+      File.write!("body.md", """
+      ## References
+
+      Ticket TP-1.
+
+      ## This PR
+
+      Prose only.
+
+      ### Important facts
+
+      Prose only.
+
+      ## Stack
+
+      Prose only.
+      """)
+
+      error_output = lint_errors()
+      assert error_output =~ "Section must include at least one bullet item: ## References"
+      assert error_output =~ "Section must include at least one bullet item: ### Important facts"
+      refute error_output =~ "bullet item: ## This PR"
+      refute error_output =~ "bullet item: ## Stack"
+    end)
+  end
+
+  defp lint_errors do
+    capture_io(:stderr, fn ->
+      assert_raise Mix.Error, ~r/PR body format invalid/, fn ->
+        Check.run(["lint", "--file", "body.md"])
+      end
     end)
   end
 

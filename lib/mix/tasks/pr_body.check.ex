@@ -7,6 +7,10 @@ defmodule Mix.Tasks.PrBody.Check do
   Validates a PR description markdown file against the structure and expectations
   implied by the repository pull request template.
 
+  Every template heading is required unless its section placeholder starts with
+  `<!-- Optional`. Present sections must keep template order, be non-empty, and
+  include a bullet item when the template section has one.
+
   Usage:
 
       mix pr_body.check --file /path/to/pr_body.md
@@ -75,7 +79,7 @@ defmodule Mix.Tasks.PrBody.Check do
 
   defp extract_template_headings(template, template_path) do
     headings =
-      Regex.scan(~r/^\#{4,6}\s+.+$/m, template)
+      Regex.scan(~r/^\#{2,6}\s+.+$/m, template)
       |> Enum.map(&hd/1)
 
     if headings == [] do
@@ -99,10 +103,17 @@ defmodule Mix.Tasks.PrBody.Check do
 
   defp lint(template, body, headings) do
     []
-    |> check_required_headings(body, headings)
+    |> check_required_headings(body, required_headings(template, headings))
     |> check_order(body, headings)
     |> check_no_placeholders(body)
     |> check_sections_from_template(template, body, headings)
+  end
+
+  defp required_headings(template, headings) do
+    Enum.reject(headings, fn heading ->
+      section = capture_heading_section(template, heading, headings) || ""
+      Regex.match?(~r/<!--\s*Optional\b/, section)
+    end)
   end
 
   defp check_required_headings(errors, body, headings) do
@@ -140,9 +151,7 @@ defmodule Mix.Tasks.PrBody.Check do
           acc ++ ["Section cannot be empty: #{heading}"]
 
         true ->
-          acc
-          |> maybe_require_bullets(heading, template_section, body_section)
-          |> maybe_require_checkboxes(heading, template_section, body_section)
+          maybe_require_bullets(acc, heading, template_section, body_section)
       end
     end)
   end
@@ -152,16 +161,6 @@ defmodule Mix.Tasks.PrBody.Check do
 
     if requires_bullets and not Regex.match?(~r/^- /m, body_section) do
       errors ++ ["Section must include at least one bullet item: #{heading}"]
-    else
-      errors
-    end
-  end
-
-  defp maybe_require_checkboxes(errors, heading, template_section, body_section) do
-    requires_checkboxes = Regex.match?(~r/^- \[ \] /m, template_section || "")
-
-    if requires_checkboxes and not Regex.match?(~r/^- \[[ xX]\] /m, body_section) do
-      errors ++ ["Section must include at least one checkbox item: #{heading}"]
     else
       errors
     end

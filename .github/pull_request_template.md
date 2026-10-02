@@ -1,22 +1,15 @@
-#### Context
+## References
 
-<!-- Why is this change needed? Length <= 240 chars -->
+- <!-- Only links that exist: Ticket, design decision thread, design review, Loom. Drop a line rather than write "n/a". e.g. Ticket: [TP-123](https://linear.app/...) -->
 
-#### TL;DR
+## This PR
 
-*<!-- A short description of what we are changing. Use simple language. Assume reader is not familiar with this code. Length <= 120 chars -->*
+<!-- Short, behaviour in plain words. Open with "Nothing changes on screen." when nothing user-visible changes. Use a list only when the PR adds more than one distinct piece -->
 
-#### Summary
+### Important facts
 
-- <!-- Details of the changes in bullet points -->
-- <!-- Keep them high level -->
-- <!-- Each item <= 120 chars -->
+- <!-- Optional: delete this subsection if empty. Only for: a new feature flag and its default; another flag or setting that must also be on; a migration or backfill; a new dependency; a new environment variable. Risks, caveats, design rationale and follow-ups do not go here -->
 
-#### Alternatives
+## Stack
 
-- <!-- What alternatives have been considered? Why not? -->
-
-#### Test Plan
-
-- [ ] `make all`
-- [ ] <!-- Additional targeted checks (list below) -->
+<!-- Optional: delete this section when the PR stands alone. What all the parts of the stack deliver together, written once and repeated verbatim on every PR in the stack. Not a list of PRs; don't describe or number the parts -->

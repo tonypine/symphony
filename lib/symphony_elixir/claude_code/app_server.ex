@@ -14,6 +14,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
   @agent_runtime_env AgentEnv.runtime_marker_name()
   @agent_runtime_env_value AgentEnv.runtime_marker_value()
+  @settings_dir_prefix "symphony-claude-settings-"
   @port_line_bytes 1_048_576
   @approval_handoff_markers [
     "Reviewer agent approved the committed diff.",
@@ -604,11 +605,11 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   defp workspace_sandbox_allow_write_paths(_settings), do: []
 
   defp claude_settings_dir(nil, %{id: id}) when is_binary(id) do
-    Path.join(System.tmp_dir!(), "symphony-claude-settings-#{id}")
+    Path.join(System.tmp_dir!(), "#{@settings_dir_prefix}#{id}")
   end
 
   defp claude_settings_dir(worker_host, %{id: id}) when is_binary(worker_host) and is_binary(id) do
-    Path.join("/tmp", "symphony-claude-settings-#{id}")
+    Path.join("/tmp", "#{@settings_dir_prefix}#{id}")
   end
 
   defp effective_shim_path(_mcp_session, remote_shim_path) when is_binary(remote_shim_path),
@@ -982,10 +983,12 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     end)
 
     # `File.rm_rf` (not `rmdir`) so the nested `plugin/` skills tree is removed along with the
-    # per-session settings dir.
+    # per-session settings dir. Only Symphony-owned settings dirs are removed, so a path that
+    # sits directly in a shared dir such as TMPDIR never takes its siblings with it.
     file_paths
     |> Enum.map(&Path.dirname/1)
     |> Enum.uniq()
+    |> Enum.filter(&String.starts_with?(Path.basename(&1), @settings_dir_prefix))
     |> Enum.each(fn dir -> _ = File.rm_rf(dir) end)
 
     :ok
