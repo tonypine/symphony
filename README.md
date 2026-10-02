@@ -1,5 +1,23 @@
 # Symphony
 
+## Why This Fork Exists
+
+`tonypine/symphony` is my fork of Symphony and the base of a personal AI software factory: Linear
+tickets go in, reviewed pull requests come out, for both personal projects and professional work.
+
+Lineage: [openai/symphony](https://github.com/openai/symphony) →
+[Automattic/symphony](https://github.com/Automattic/symphony) →
+[tonypine/symphony](https://github.com/tonypine/symphony) (this repo).
+
+Where it is heading:
+
+- Run agents from more than one model provider. Claude already runs alongside Codex.
+- Bring in improvements from community forks.
+- Shape the workflow to fit how I work.
+
+What it changes so far: agents can merge their own PR through the scoped
+`github_merge_pull_request` tool once a human moves the issue to `Merging`.
+
 Symphony runs coding agents (Codex or Claude) on your Linear issues and GitHub pull requests, so
 your team manages the work instead of babysitting the agents.
 
@@ -233,8 +251,9 @@ the service. See [docker/README.md](docker/README.md).
 
 ## About This Fork
 
-This repository is a fork of OpenAI's
-[openai/symphony](https://github.com/openai/symphony), introduced in OpenAI's
+This repository is a fork of [Automattic/symphony](https://github.com/Automattic/symphony), which
+is itself a fork of OpenAI's [openai/symphony](https://github.com/openai/symphony), introduced in
+OpenAI's
 [open-source Codex orchestration Symphony post](https://openai.com/index/open-source-codex-orchestration-symphony/).
 This fork keeps Symphony as the Elixir/OTP service at the repository root and includes local
 operational changes. `SPEC.md` is retained as a behavior reference for this service, not as
