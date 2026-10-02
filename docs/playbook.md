@@ -46,7 +46,7 @@ This catalog is kept in sync with `priv/playbook/` by
 | `escape_hatches` | — | Blocked-access and in-execution clarification escape hatches; both move the issue to Backlog and stop. |
 | `guardrails` | — | Cross-cutting safety and process guardrails for an issue run; repos append repo-specific guardrails after the render. |
 | `issue_context` | `issue` | Standard Linear issue fields, description, recent comments, and linked issues for the agent to act on. |
-| `out_of_scope_backlog` | — | File a separate Backlog issue for meaningful out-of-scope improvements instead of expanding scope. |
+| `out_of_scope_backlog` | — | Split work and file out-of-scope improvements as Backlog sub-issues of the current issue with linear_create_subissue instead of expanding scope. |
 | `pr_feedback_sweep` | — | Required sweep of all PR feedback channels; every actionable comment must be resolved or answered before In Review. |
 | `reproduce_and_blast_radius` | — | Capture a reproduction/acceptance signal and a blast-radius analysis before the first code edit. |
 | `scoped_tools` | — | How to discover and use the scoped linear_* and github_* tools Symphony injects for the current issue. |

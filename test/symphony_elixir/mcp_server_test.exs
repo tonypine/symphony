@@ -477,6 +477,7 @@ defmodule SymphonyElixir.McpServerTest do
       assert "linear_get_current_issue" in tool_names
       assert "github_get_pr_checks" in tool_names
       refute "linear_add_comment" in tool_names
+      refute "linear_create_subissue" in tool_names
       refute "github_create_pull_request" in tool_names
       refute "github_merge_pull_request" in tool_names
 
