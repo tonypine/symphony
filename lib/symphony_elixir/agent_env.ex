@@ -13,6 +13,10 @@ defmodule SymphonyElixir.AgentEnv do
   Provider credentials must reach the agent runtime through its own config
   files (`~/.codex/auth.json`, `~/.claude/.credentials.json`), not the process
   environment.
+
+  `MIX_HOME`, `MIX_ARCHIVES`, and `HEX_HOME` pass through so agent shells use
+  the same Hex and Rebar install as the host (for example the per-version
+  `MIX_HOME` that `mise` exports) instead of prompting to install Hex.
   """
 
   @agent_runtime_env "SYMPHONY_AGENT_RUNTIME"
@@ -32,6 +36,9 @@ defmodule SymphonyElixir.AgentEnv do
     SHELL
     TZ
     SSL_CERT_FILE
+    MIX_HOME
+    MIX_ARCHIVES
+    HEX_HOME
   )
 
   @doc """

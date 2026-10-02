@@ -384,8 +384,11 @@ defmodule SymphonyElixir.McpServer do
     String.starts_with?(Path.basename(dir), @managed_socket_prefix)
   end
 
+  # Reap under the effective root so orphans left behind with a configured
+  # `SYMPHONY_MCP_SOCKET_ROOT` or `:mcp_socket_root` are cleaned up too.
   defp reap_orphaned_socket_dirs do
-    @managed_socket_root
+    []
+    |> resolved_socket_root()
     |> Path.join("#{@managed_socket_prefix}*")
     |> Path.wildcard()
     |> Enum.each(&reap_orphaned_socket_dir/1)
