@@ -1998,7 +1998,7 @@ Optional client-side tool extension:
 - Current standardized optional tools: scoped Linear tools whose protocol-facing names match
   `^[a-zA-Z0-9_-]+$`, such as `linear_get_current_issue`, `linear_get_comments`, and
   `linear_update_state`, and scoped GitHub tools such as `github_get_pull_request`,
-  `github_fetch_origin`, and `github_push_branch`.
+  `github_fetch_origin`, `github_push_branch`, and `github_merge_pull_request`.
 - If implemented, supported tools SHOULD be advertised to the agent session during startup using the
   protocol mechanism supported by the configured adapter.
 - Unsupported tool names SHOULD still return a failure result using the targeted protocol and
@@ -2053,6 +2053,10 @@ Scoped GitHub tool extension contract:
 - `github_fetch_origin`, if exposed, MUST fetch only the verified `origin`
   remote for the current workspace and MUST NOT accept prompt-supplied refspecs
   or remote names.
+- `github_merge_pull_request`, if exposed, MUST merge only the current
+  workspace branch's pull request, MUST refuse unless the current issue is in
+  the human-approved `Merging` state, MUST refuse while any check is failing or
+  pending, and MUST pin the merge to the head commit whose checks were read.
 - GitHub read-only review sessions SHOULD hide GitHub tools that mutate local
   workspace Git metadata or remote GitHub state.
 

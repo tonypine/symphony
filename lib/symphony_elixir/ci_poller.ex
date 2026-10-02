@@ -929,7 +929,9 @@ defmodule SymphonyElixir.CiPoller do
     end
   end
 
-  defp ci_action(ci_status) do
+  @doc false
+  @spec ci_action(map()) :: :closed | :pending | :success | {:failure, [map()]}
+  def ci_action(ci_status) do
     cond do
       closed_pr_state?(Map.get(ci_status, :state)) ->
         :closed

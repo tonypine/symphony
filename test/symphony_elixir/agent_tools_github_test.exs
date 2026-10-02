@@ -17,6 +17,7 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
     assert {:error, :missing_github_origin_repo} = GitHub.list_pr_review_comments(%{})
     assert {:error, :missing_github_origin_repo} = GitHub.list_pr_reviews(%{})
     assert {:error, :missing_github_origin_repo} = GitHub.get_failed_run_log(%{})
+    assert {:error, :missing_current_issue} = GitHub.merge_pull_request(%{})
     assert {:error, :missing_workspace} = GitHub.fetch_origin(%{})
     assert {:error, :missing_workspace} = GitHub.push_branch(%{})
   end
@@ -1137,6 +1138,152 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
 
     assert {:ok, %{"pr_url" => ^pr_url, "comment_id" => "42", "reply_id" => 7}} =
              GitHub.reply_to_review_comment(context, 42, "Acked.", git_runner: git_runner, gh_runner: gh_runner)
+  end
+
+  test "merge_pull_request squash-merges the pull request at the head commit whose checks passed" do
+    workspace = tmp_workspace!("github-agent-merge")
+
+    try do
+      pr_url = "https://github.com/acme/symphony/pull/3051"
+      passing_check = %{"name" => "mix test", "status" => "COMPLETED", "conclusion" => "SUCCESS"}
+
+      gh_runner =
+        merge_gh_runner(pr_url, "OPEN", [passing_check], fn args ->
+          assert args == [
+                   "pr",
+                   "merge",
+                   pr_url,
+                   "--squash",
+                   "--match-head-commit",
+                   "abc123",
+                   "--subject",
+                   "Add tools",
+                   "--body",
+                   "Body"
+                 ]
+        end)
+
+      assert {:ok, %{"url" => ^pr_url, "merged" => true, "already_merged" => false, "head_sha" => "abc123"}} =
+               GitHub.merge_pull_request(merge_context(workspace),
+                 git_runner: branch_runner(workspace),
+                 gh_runner: gh_runner,
+                 linear_client: issue_state_client("Merging")
+               )
+    after
+      File.rm_rf(workspace)
+    end
+  end
+
+  test "merge_pull_request refuses until a human moves the issue to Merging" do
+    workspace = tmp_workspace!("github-agent-merge-unapproved")
+
+    try do
+      gh_runner = fn args, _opts -> flunk("gh must not run before approval: #{inspect(args)}") end
+      opts = [git_runner: branch_runner(workspace), gh_runner: gh_runner, linear_client: issue_state_client("In Review")]
+
+      assert {:error, {:issue_not_in_merging_state, "In Review"}} =
+               GitHub.merge_pull_request(merge_context(workspace), opts)
+
+      assert {:error, :missing_current_issue} = GitHub.merge_pull_request(scoped_context(workspace), opts)
+    after
+      File.rm_rf(workspace)
+    end
+  end
+
+  test "merge_pull_request refuses failing or pending checks and merges a pull request without checks" do
+    workspace = tmp_workspace!("github-agent-merge-checks")
+
+    try do
+      pr_url = "https://github.com/acme/symphony/pull/3051"
+      failing_check = %{"name" => "mix test", "status" => "COMPLETED", "conclusion" => "FAILURE"}
+      pending_check = %{"name" => "mix test", "status" => "IN_PROGRESS", "conclusion" => nil}
+      refuse_merge = fn args -> flunk("merge must not run: #{inspect(args)}") end
+
+      merge_with_checks = fn checks, on_merge ->
+        GitHub.merge_pull_request(merge_context(workspace),
+          git_runner: branch_runner(workspace),
+          gh_runner: merge_gh_runner(pr_url, "OPEN", checks, on_merge),
+          linear_client: issue_state_client("Merging")
+        )
+      end
+
+      assert {:error, {:checks_not_passing, {:failure, [%{name: "mix test"}]}}} =
+               merge_with_checks.([failing_check], refuse_merge)
+
+      assert {:error, {:checks_not_passing, :pending}} = merge_with_checks.([pending_check], refuse_merge)
+      assert {:ok, %{"merged" => true, "head_sha" => "abc123"}} = merge_with_checks.([], fn _args -> :ok end)
+    after
+      File.rm_rf(workspace)
+    end
+  end
+
+  test "merge_pull_request needs the head commit to pin the merge" do
+    workspace = tmp_workspace!("github-agent-merge-head")
+
+    try do
+      pr_url = "https://github.com/acme/symphony/pull/3051"
+
+      gh_runner = fn
+        ["pr", "view", "auto/ACME-3051", "--repo", "acme/symphony", "--json", _fields], _opts ->
+          {Jason.encode!(%{"state" => "OPEN", "title" => "Add tools", "body" => "Body", "url" => pr_url}), 0}
+
+        ["pr", "view", ^pr_url, "--json", _fields], _opts ->
+          {Jason.encode!(%{"state" => "OPEN", "url" => pr_url, "statusCheckRollup" => []}), 0}
+      end
+
+      assert {:error, :missing_head_commit_sha} =
+               GitHub.merge_pull_request(merge_context(workspace),
+                 git_runner: branch_runner(workspace),
+                 gh_runner: gh_runner,
+                 linear_client: issue_state_client("Merging")
+               )
+    after
+      File.rm_rf(workspace)
+    end
+  end
+
+  test "merge_pull_request reports merged pull requests as done and refuses closed ones" do
+    workspace = tmp_workspace!("github-agent-merge-state")
+
+    try do
+      pr_url = "https://github.com/acme/symphony/pull/3051"
+      refuse_merge = fn args -> flunk("merge must not run: #{inspect(args)}") end
+
+      merge_in_state = fn pr_state ->
+        GitHub.merge_pull_request(merge_context(workspace),
+          git_runner: branch_runner(workspace),
+          gh_runner: merge_gh_runner(pr_url, pr_state, [], refuse_merge),
+          linear_client: issue_state_client("Merging")
+        )
+      end
+
+      assert {:ok, %{"url" => ^pr_url, "merged" => true, "already_merged" => true}} = merge_in_state.("MERGED")
+      assert {:error, {:pull_request_not_open, "CLOSED"}} = merge_in_state.("CLOSED")
+    after
+      File.rm_rf(workspace)
+    end
+  end
+
+  defp merge_context(workspace), do: Map.put(scoped_context(workspace), :issue_id, "issue-3051")
+
+  defp issue_state_client(state_name) do
+    fn _query, %{id: "issue-3051"}, _opts ->
+      {:ok, %{"data" => %{"issue" => %{"id" => "issue-3051", "identifier" => "ACME-3051", "state" => %{"name" => state_name}}}}}
+    end
+  end
+
+  defp merge_gh_runner(pr_url, pr_state, status_check_rollup, on_merge) do
+    fn
+      ["pr", "view", "auto/ACME-3051", "--repo", "acme/symphony", "--json", _fields], _opts ->
+        {Jason.encode!(%{"state" => pr_state, "title" => "Add tools", "body" => "Body", "url" => pr_url}), 0}
+
+      ["pr", "view", ^pr_url, "--json", _fields], _opts ->
+        {Jason.encode!(%{"state" => pr_state, "url" => pr_url, "headRefOid" => "abc123", "statusCheckRollup" => status_check_rollup}), 0}
+
+      ["pr", "merge" | _rest] = args, _opts ->
+        on_merge.(args)
+        {"", 0}
+    end
   end
 
   defp issue_comment(pr_url) do
