@@ -612,6 +612,7 @@ defmodule SymphonyElixirWeb.Presenter do
     %{
       repo_key: Map.get(entry, :repo_key),
       run_id: entry.run_id,
+      kind: Map.get(entry, :kind, "agent"),
       issue_id: entry.issue_id,
       issue_identifier: entry.issue_identifier,
       title: Map.get(entry, :title),

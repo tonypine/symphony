@@ -1403,7 +1403,7 @@ defmodule SymphonyElixir.Config.Schema do
       field(:timeout_ms, :integer, default: 1_800_000)
       field(:max_concurrent, :integer, default: 1)
       field(:max_fix_attempts, :integer, default: 2)
-      field(:run_on, :string, default: "always")
+      field(:run_on, :string, default: "every_push")
       field(:skip_globs, {:array, :string}, default: [])
       field(:playbooks, :map, default: %{})
     end
@@ -1414,7 +1414,7 @@ defmodule SymphonyElixir.Config.Schema do
       |> cast(attrs, @fields, empty_values: [])
       |> validate_required([:state])
       |> validate_inclusion(:kind, ["codex", "claude"])
-      |> validate_inclusion(:run_on, ["always", "first_push"])
+      |> validate_inclusion(:run_on, ["every_push", "first_pass"])
       |> validate_number(:max_turns, greater_than: 0)
       |> validate_number(:timeout_ms, greater_than: 0)
       |> validate_number(:max_concurrent, greater_than: 0)
@@ -1489,7 +1489,9 @@ defmodule SymphonyElixir.Config.Schema do
         "reviewer_commented",
         "rework_pushed",
         "ci_failed",
-        "ci_escalated"
+        "ci_escalated",
+        "qa_passed",
+        "qa_failed"
       ]
 
       embedded_schema do

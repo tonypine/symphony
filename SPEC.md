@@ -1032,13 +1032,19 @@ Fields:
   - Default: `false`.
 - `state` (non-empty string)
   - Default: `Auto Review`. The tracker state issues wait in between the PR opening and human review.
-- `runtime` (`codex` or `claude`), `command` (string), `max_turns` (positive integer, default
-  `20`), `timeout_ms` (positive integer, default `1800000`), `max_concurrent` (positive integer,
-  default `1`), `max_fix_attempts` (non-negative integer, default `2`), `run_on` (`always` or
-  `first_push`, default `always`), `skip_globs` (list of strings, default `[]`), `playbooks` (map,
-  default `{}`)
-  - Reserved for the QA agent run. Parsed and validated; the current pass-through QA does not use
-    them.
+- `runtime` (`codex` or `claude`, default `agent.runtime`), `command` (string, default
+  `agent.command`), `max_turns` (positive integer, default `20`), `timeout_ms` (positive integer,
+  default `1800000`)
+  - The QA agent session.
+- `max_concurrent` (positive integer, default `1`): QA passes running at once.
+- `max_fix_attempts` (non-negative integer, default `2`): QA failures sent back to `In Progress`
+  before the issue is handed to `In Review` anyway.
+- `run_on` (`every_push` or `first_pass`, default `every_push`): with `first_pass`, once a push
+  has passed QA, later pushes on the PR skip it.
+- `skip_globs` (list of strings, default `[]`): extra paths that, like docs and tests, never need
+  QA.
+- `playbooks` (map, default `{}`): per-kind overrides. A built-in kind takes `paths` and
+  `enabled`; a new kind needs `paths` and `prompt`.
 
 When enabled:
 
@@ -1054,9 +1060,26 @@ When enabled:
   agent that Symphony moves the issue once the PR is open, rather than redirecting the target
   state.
 - The CI poller MUST discover issues in `state` as well as `In Review`. Red CI follows the normal
-  `In Progress` fix loop and escalation. Green CI on an issue in `state` runs QA; today QA is a
-  pass-through that moves the issue to `In Review`. A failed move is reported and retried on the
-  next poll.
+  `In Progress` fix loop and escalation. Green CI on an issue in `state` starts a QA pass for the
+  PR head SHA, at most one per issue and `max_concurrent` overall.
+- QA selection is deterministic and runs before any agent: a `qa:skip` label skips; a
+  `qa:<kind>` label selects that playbook; a diff that only touches docs, tests or `skip_globs`
+  skips; otherwise playbooks are selected by their trigger paths, and the `cli` playbook also by a
+  `## User walkthrough` section in the issue. No selected playbook means skip. The built-in `cli`
+  playbook triggers on `bin/**`, `lib/symphony_elixir/cli.ex` and `lib/mix/tasks/**`.
+- The QA agent MUST run in a fresh detached worktree at the PR head SHA, outside the issue
+  workspace, removed afterwards, with a tool scope limited to read-only Linear/GitHub tools and
+  `linear_attach_file`. It answers with JSON: `verdict` (`pass`, `fail` or `blocked`), `summary`,
+  `steps` (`name`, `status`, `details`, `evidence`), `findings`, and `reason`. A run error or an
+  unreadable answer counts as `blocked`. The session stops at `agent.limits.tokens_per_issue`.
+- Symphony applies the verdict: `pass`, `blocked` and skip move the issue to `In Review`; `fail`
+  moves it to `In Progress` with the findings in the next run's prompt, or to `In Review` once
+  `max_fix_attempts` failures were sent back. Results are stored per head SHA; a failed move is
+  retried on the next poll, and an issue back in `state` on the same SHA after a `fail` counts as
+  another failure.
+- Each pass rewrites one `## Symphony QA Report` issue comment (an exception to the
+  single-workpad rule, written by Symphony only), records a run with `kind: "qa"`, tokens and
+  runtime in the run store, and emits `qa_passed` or `qa_failed`.
 
 When disabled, behaviour is unchanged.
 
@@ -1075,7 +1098,7 @@ Fields:
   - Webhook channels require `url` when notifications are enabled.
   - `events` is an OPTIONAL list drawn from: `pr_opened`, `awaiting_review`, `run_failed`,
     `issue_completed`, `budget_exceeded`, `reviewer_commented`, `rework_pushed`, `ci_failed`,
-    `ci_escalated`.
+    `ci_escalated`, `qa_passed`, `qa_failed`.
   - `headers` is an OPTIONAL map of webhook headers.
 
 ### 5.5 Prompt Template Contract
@@ -1378,7 +1401,7 @@ not require recognizing or validating extension fields unless that extension is 
 - `auto_review.timeout_ms`: integer, default `1800000`
 - `auto_review.max_concurrent`: integer, default `1`
 - `auto_review.max_fix_attempts`: integer, default `2`
-- `auto_review.run_on`: `always` or `first_push`, default `always`
+- `auto_review.run_on`: `every_push` or `first_pass`, default `every_push`
 - `auto_review.skip_globs`: list of strings, default `[]`
 - `auto_review.playbooks`: map, default `{}`
 - `notifications.enabled`: boolean, default `false`
@@ -1528,7 +1551,7 @@ The poller:
 - when `pull_requests.checks.enabled` is true, polls CI status for tracked PRs in every configured
   repository route, preserving the same retry, dispatch, and escalation behavior used for the
   primary repository. With `auto_review` on, it also tracks PRs of issues in `auto_review.state`
-  and moves them to `In Review` on green CI (see `auto_review`).
+  and starts a QA pass on green CI (see `auto_review`).
 
 The orchestrator continues to own active-state dispatch, retry, run-store run records, and
 dashboard-visible agent execution. The PR review poller owns only polling-mode GitHub polling,

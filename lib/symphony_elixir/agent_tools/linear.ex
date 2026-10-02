@@ -80,6 +80,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
         id
         identifier
         title
+        description
         state { id name type }
         url
       }

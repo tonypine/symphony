@@ -342,6 +342,25 @@ defmodule SymphonyElixir.RunStoreTest do
            ] = RunStore.list_runs(@repo_key)
   end
 
+  test "interrupt_running_runs also interrupts Auto Review QA runs" do
+    now = DateTime.utc_now()
+
+    assert :ok =
+             RunStore.put_run(%{
+               repo_key: @repo_key,
+               run_id: "qa-stale",
+               kind: "qa",
+               issue_id: "issue-qa",
+               issue_identifier: "ACME-3",
+               status: "qa_running",
+               attempt: 1,
+               started_at: now
+             })
+
+    assert {:ok, 1} = RunStore.interrupt_running_runs(@repo_key, "orchestrator restarted before worker exit")
+    assert [%{run_id: "qa-stale", kind: "qa", status: "failure"}] = RunStore.list_runs(@repo_key)
+  end
+
   test "interrupt_running_runs skips malformed running records" do
     now = DateTime.utc_now()
 

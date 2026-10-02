@@ -508,6 +508,7 @@ defmodule SymphonyElixir.ExtensionsTest do
              "run_history" => [
                %{
                  "run_id" => "run-http",
+                 "kind" => "agent",
                  "repo_key" => "default",
                  "issue_id" => "issue-http",
                  "issue_identifier" => "MT-HTTP",

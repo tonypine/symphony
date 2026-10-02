@@ -15,7 +15,9 @@ defmodule SymphonyElixir.Notifications.Event do
     "reviewer_commented",
     "rework_pushed",
     "ci_failed",
-    "ci_escalated"
+    "ci_escalated",
+    "qa_passed",
+    "qa_failed"
   ]
   @max_string_value_length 1024
 

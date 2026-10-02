@@ -118,6 +118,53 @@ defmodule SymphonyElixir.CiPoller do
     end
   end
 
+  @doc """
+  The QA failure waiting for the executor's fix run, or nil. Auto Review stores it
+  when QA fails and sends the issue back to In Progress.
+  """
+  @spec pending_qa_failure(String.t(), keyword()) :: map() | nil
+  def pending_qa_failure(issue_id, opts \\ []) do
+    run_store = Keyword.get(opts, :run_store, RunStore)
+
+    if is_binary(issue_id) do
+      Enum.find_value(repo_keys_from_opts(opts), &qa_failure_for_repo(run_store, &1, issue_id))
+    end
+  end
+
+  defp qa_failure_for_repo(run_store, repo_key, issue_id) do
+    case find_ci_check(run_store, repo_key, issue_id) do
+      %{qa_failure: %{} = qa_failure} -> qa_failure
+      _record -> nil
+    end
+  end
+
+  @doc "Clears the pending QA failure once a fix run has finished."
+  @spec complete_pending_qa_failure(String.t(), keyword()) :: :ok | {:error, term()}
+  def complete_pending_qa_failure(issue_id, opts \\ []) when is_binary(issue_id) do
+    run_store = Keyword.get(opts, :run_store, RunStore)
+
+    Enum.reduce_while(repo_keys_from_opts(opts), :ok, fn repo_key, :ok ->
+      case clear_qa_failure(run_store, repo_key, issue_id) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp clear_qa_failure(run_store, repo_key, issue_id) do
+    case find_ci_check(run_store, repo_key, issue_id) do
+      %{qa_failure: %{}} -> update_ci_check_record(run_store, repo_key, issue_id, %{qa_failure: nil})
+      _record -> :ok
+    end
+  end
+
+  defp find_ci_check(run_store, repo_key, issue_id) do
+    case list_ci_checks(run_store, repo_key) do
+      {:ok, checks} -> Enum.find(checks, &(Map.get(&1, :issue_id) == issue_id))
+      _error -> nil
+    end
+  end
+
   @doc false
   @spec ci_owned_issue?(String.t(), keyword()) :: boolean()
   def ci_owned_issue?(issue_id, opts \\ []) do
@@ -211,12 +258,12 @@ defmodule SymphonyElixir.CiPoller do
     repo_key = repo_key_from_opts(opts)
     tracker = Keyword.get(opts, :tracker, Tracker)
 
-    with {:ok, discovered, auto_review_issue_ids} <- discover_ci_checks(settings, run_store, tracker, repo_key, now),
+    with {:ok, discovered, auto_review_issues} <- discover_ci_checks(settings, run_store, tracker, repo_key, now),
          {:ok, checks} <- list_ci_checks(run_store, repo_key) do
       opts =
         opts
         |> put_prefetched_rework_sources(run_store, repo_key, checks)
-        |> Keyword.put(:auto_review_issue_ids, auto_review_issue_ids)
+        |> Keyword.put(:auto_review_issues, auto_review_issues)
 
       actions = Enum.map(checks, &process_ci_check(&1, settings, opts, now))
 
@@ -233,7 +280,7 @@ defmodule SymphonyElixir.CiPoller do
 
       discovered = Enum.count(issues, &persist_discovered_ci_check?(&1, runs, existing_by_issue, run_store, repo_key, now))
 
-      {:ok, discovered, auto_review_issue_ids(settings, issues)}
+      {:ok, discovered, auto_review_issues(settings, issues)}
     end
   end
 
@@ -244,15 +291,15 @@ defmodule SymphonyElixir.CiPoller do
       else: [@in_review_state]
   end
 
-  defp auto_review_issue_ids(settings, issues) do
+  defp auto_review_issues(settings, issues) do
     if AutoReview.enabled?(settings) do
       auto_review_state = normalize_state_name(AutoReview.state(settings))
 
       issues
       |> Enum.filter(&(normalize_state_name(&1.state) == auto_review_state))
-      |> MapSet.new(& &1.id)
+      |> Map.new(&{&1.id, &1})
     else
-      MapSet.new()
+      %{}
     end
   end
 
@@ -339,7 +386,7 @@ defmodule SymphonyElixir.CiPoller do
         cleanup_ci(record, opts, now, "closed")
 
       :success ->
-        mark_ci_green(record, ci_status, opts, now)
+        mark_ci_green(record, ci_status, settings, opts, now)
 
       :pending ->
         complete_ci_update(opts, record, ci_status_attrs(record, ci_status, %{status: "watching"}, now), {:watching, Map.get(record, :issue_id)})
@@ -683,7 +730,7 @@ defmodule SymphonyElixir.CiPoller do
     end
   end
 
-  defp mark_ci_green(record, ci_status, opts, now) do
+  defp mark_ci_green(record, ci_status, settings, opts, now) do
     issue_id = Map.get(record, :issue_id)
 
     if rework_in_progress?(record, opts) do
@@ -731,24 +778,17 @@ defmodule SymphonyElixir.CiPoller do
         )
 
       case complete_ci_update(opts, record, attrs, {:green, issue_id}) do
-        {:green, ^issue_id} = action -> maybe_pass_auto_review(action, issue_id, opts)
+        {:green, ^issue_id} = action -> maybe_run_auto_review_qa(action, Map.merge(record, attrs), ci_status, settings, opts)
         other -> other
       end
     end
   end
 
-  # Pass-through QA: an issue in Auto Review with green CI goes straight to In Review.
-  defp maybe_pass_auto_review(action, issue_id, opts) do
-    if MapSet.member?(Keyword.get(opts, :auto_review_issue_ids, MapSet.new()), issue_id) do
-      tracker = Keyword.get(opts, :tracker, Tracker)
-      review_state = AutoReview.review_state()
-
-      case tracker.update_issue_state(issue_id, review_state) do
-        :ok -> {:auto_review_passed, issue_id, review_state}
-        {:error, reason} -> {:state_transition_error, issue_id, :auto_review, reason}
-      end
-    else
-      action
+  # An issue in Auto Review with green CI gets a QA pass (see AutoReview.on_green/5).
+  defp maybe_run_auto_review_qa({:green, issue_id} = action, record, ci_status, settings, opts) do
+    case Map.get(Keyword.get(opts, :auto_review_issues, %{}), issue_id) do
+      %Issue{} = issue -> AutoReview.on_green(issue, record, ci_status, settings, opts)
+      nil -> action
     end
   end
 

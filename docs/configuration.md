@@ -502,7 +502,7 @@ auto_review:
   timeout_ms: 1800000
   max_concurrent: 1
   max_fix_attempts: 2
-  run_on: always
+  run_on: every_push
   skip_globs: []
   playbooks: {}
 ```
@@ -511,14 +511,67 @@ When enabled, Symphony moves an issue whose run opened a PR to `state` (default 
 instead of `In Review`, and the CI poller watches it there:
 
 - red CI sends the issue back to `In Progress` through the usual CI fix loop;
-- green CI runs QA and moves the issue to `In Review`. QA is a pass-through for now, so green CI
-  is enough.
+- green CI starts a QA pass on the PR head.
 
 Agents can no longer move the issue to `In Review` themselves: `linear_update_state("In Review")`
 returns "Symphony moves the issue to Auto Review once the PR is open; leave the state as it is."
 
-`runtime`, `command`, `max_turns`, `timeout_ms`, `max_concurrent`, `max_fix_attempts`, `run_on`,
-`skip_globs` and `playbooks` are validated but not used yet; they configure the QA agent run.
+#### QA passes
+
+Before any agent runs, Symphony decides whether the PR needs QA and which playbooks apply:
+
+| Signal | Result |
+| --- | --- |
+| `qa:skip` label | skipped |
+| `qa:<kind>` label (for example `qa:cli`) | that playbook runs |
+| only docs, tests or `skip_globs` paths changed | skipped |
+| `## User walkthrough` in the ticket | `cli` playbook runs |
+| a playbook's trigger paths changed | that playbook runs |
+| nothing else | skipped (internal changes rely on tests and the pre-push review) |
+
+The built-in `cli` playbook triggers on `bin/**`, `lib/symphony_elixir/cli.ex` and
+`lib/mix/tasks/**`. It builds the CLI, runs the walkthrough commands with throwaway config and
+state under `$TMPDIR`, and attaches a command transcript. A CLI pass typically costs 1–4 minutes
+and 50–150k tokens.
+
+The QA agent (`runtime` and `command`, defaulting to `agent.runtime` and `agent.command`) runs in
+a fresh worktree at the PR head under `<workspaces.root>/.qa/`, removed afterwards. It can read
+the issue, its parent and the PR, and attach evidence files with `linear_attach_file`; it cannot
+move the issue, comment, push or write to GitHub. The session stops at `timeout_ms`, `max_turns`,
+or `agent.limits.tokens_per_issue`.
+
+Symphony applies its verdict:
+
+- `pass` → `In Review`;
+- `fail` → back to `In Progress` on the same PR, with the findings in the next run's prompt; after
+  `max_fix_attempts` failures the issue goes to `In Review` instead;
+- `blocked` (the agent could not test, crashed, or gave an unreadable answer) → `In Review` with
+  the reason;
+- skipped → `In Review` with the reason.
+
+Every pass rewrites one `## Symphony QA Report` comment on the issue (Symphony's only comment
+besides the agent workpad) and records a run with `kind: "qa"`, its tokens and wall time in the
+run store, which the dashboard's run history shows. `qa_passed` and `qa_failed` notifications are
+available for `notifications.channels[].events`.
+
+Results are kept per PR head SHA. With `run_on: first_pass`, once a push has passed QA, later
+pushes on the PR skip it. `max_concurrent` caps how many QA passes run at once.
+
+`playbooks` overrides playbooks per kind:
+
+```yaml
+auto_review:
+  playbooks:
+    cli:
+      paths: ["bin/**", "lib/my_app/cli.ex"]
+    web:
+      paths: ["assets/**"]
+      prompt: |
+        ### Playbook: web
+        Start the dev server and check the changed pages.
+```
+
+Set `enabled: false` on a kind to turn it off.
 
 Auto Review needs `pull_requests.enabled: true` and `pull_requests.checks.enabled: true`, because
 the CI poller is what moves issues out of the state. A PR with no CI checks stays in Auto Review.

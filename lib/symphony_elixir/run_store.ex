@@ -1245,7 +1245,9 @@ defmodule SymphonyElixir.RunStore do
     |> Enum.reduce(0, &interrupt_running_record(&1, error, now, &2))
   end
 
-  defp interrupt_running_record(%{status: "running"} = record, error, now, count) do
+  # Auto Review QA runs use their own `qa_running` status so executor lookups never
+  # mistake them for agent runs; a restart interrupts them all the same.
+  defp interrupt_running_record(%{status: status} = record, error, now, count) when status in ["running", "qa_running"] do
     write_interrupted_run_record(record, error, now, count)
   end
 
