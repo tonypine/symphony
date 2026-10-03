@@ -561,20 +561,30 @@ defmodule SymphonyElixir.QaDriverTest do
       assert {:ok, %{"files" => [%{"path" => "qa-evidence/step-1.png"}, %{"path" => "qa-evidence/step-2.png", "title" => "Settings"}]}} =
                QaDriver.call_tool(driver, "qa_screenshot", %{"pid" => pid, "name" => "step"})
 
-      # An existing symlink at the destination is replaced, not followed.
-      outside = Path.join(System.tmp_dir!(), "qa-driver-outside-#{System.unique_integer([:positive])}")
-      File.write!(outside, "keep")
-      File.ln_s!(outside, Path.join(worktree, "qa-evidence/menu.png"))
-
       assert {:ok, %{"files" => [%{"path" => "qa-evidence/menu.png", "window_id" => 23}]}} =
                QaDriver.call_tool(driver, "qa_screenshot", %{"pid" => pid, "name" => "menu", "window_id" => 23})
 
-      assert File.read!(outside) == "keep"
       assert File.read!(Path.join(worktree, "qa-evidence/menu.png")) == "png"
-      File.rm!(outside)
 
-      assert {:ok, %{"files" => [%{"path" => "qa-evidence/menu.png"}]}} =
-               QaDriver.call_tool(driver, "qa_screenshot", %{"pid" => pid, "name" => "menu", "window_id" => 23})
+      # A taken name is never replaced, and a planted symlink is never followed.
+      assert error_code(QaDriver.call_tool(driver, "qa_screenshot", %{"pid" => pid, "name" => "menu", "window_id" => 23})) == "qa_screenshot_exists"
+
+      outside = Path.join(System.tmp_dir!(), "qa-driver-outside-#{System.unique_integer([:positive])}")
+      File.write!(outside, "keep")
+      File.ln_s!(outside, Path.join(worktree, "qa-evidence/planted.png"))
+      dangling = Path.join(System.tmp_dir!(), "qa-driver-dangling-#{System.unique_integer([:positive])}")
+      File.ln_s!(dangling, Path.join(worktree, "qa-evidence/dangling.png"))
+
+      for name <- ["planted", "dangling"] do
+        assert {:error, {:qa_tool, "qa_screenshot_exists", message}} =
+                 QaDriver.call_tool(driver, "qa_screenshot", %{"pid" => pid, "name" => name, "window_id" => 23})
+
+        assert message =~ "new name"
+      end
+
+      assert File.read!(outside) == "keep"
+      refute File.exists?(dangling)
+      File.rm!(outside)
 
       assert error_code(QaDriver.call_tool(driver, "qa_screenshot", %{"pid" => pid, "name" => "x", "window_id" => 99})) == "qa_window_not_found"
       assert error_code(QaDriver.call_tool(driver, "qa_screenshot", %{"pid" => pid, "name" => "x", "window_id" => 0})) == "invalid_arguments"
@@ -595,6 +605,17 @@ defmodule SymphonyElixir.QaDriverTest do
       assert error_code(QaDriver.call_tool(driver, "qa_screenshot", %{"pid" => pid, "name" => "x"})) == "qa_evidence_unsafe"
       assert File.ls!(Path.join(root, "outside")) == []
       File.rm!(Path.join(worktree, "qa-evidence"))
+
+      # Errors, not crashes, when qa-evidence/ cannot be created or written.
+      File.chmod!(worktree, 0o500)
+      on_exit(fn -> File.chmod(worktree, 0o755) end)
+      assert error_code(QaDriver.call_tool(driver, "qa_screenshot", %{"pid" => pid, "name" => "x"})) == "qa_evidence_unsafe"
+      File.chmod!(worktree, 0o755)
+
+      File.mkdir!(Path.join(worktree, "qa-evidence"))
+      File.chmod!(Path.join(worktree, "qa-evidence"), 0o500)
+      assert error_code(QaDriver.call_tool(driver, "qa_screenshot", %{"pid" => pid, "name" => "x"})) == "qa_screenshot_failed"
+      File.chmod!(Path.join(worktree, "qa-evidence"), 0o755)
 
       failing_capture =
         host(%{

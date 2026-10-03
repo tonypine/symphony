@@ -1093,7 +1093,7 @@ When enabled:
   build), `qa_launch_app` / `qa_quit_app` (only the configured bundle,
   resolved inside the worktree, launched from a copy the last successful `qa_build` made in a
   directory the agent sandbox cannot write, refused under the same worktree check, always with
-  `SYMPHONY_BAR_QA_ROOT` set to a private directory), `qa_screenshot` (into `qa-evidence/`), and
+  `SYMPHONY_BAR_QA_ROOT` set to a private directory), `qa_screenshot` (new files in `qa-evidence/`, never replacing or following an existing entry), and
   `qa_ax_tree`, `qa_ax_press`, `qa_ax_set_value`. Every tool that takes a PID MUST refuse a PID
   the pass did not launch. Apps still running when the pass ends MUST be quit. A missing Screen
   Recording or Accessibility grant MUST surface as a `qa_permission_missing` tool error that tells

@@ -23,7 +23,9 @@ defmodule SymphonyElixir.QaDriver do
   - `qa_quit_app`, `qa_screenshot`, `qa_ax_tree`, `qa_ax_press` and
     `qa_ax_set_value` accept only a PID this driver launched and that is still
     running;
-  - screenshots land in `qa-evidence/` under the worktree.
+  - screenshots land in `qa-evidence/` under the worktree, always as new files:
+    a name that already exists, symlinks included, is refused rather than
+    followed or replaced.
 
   Screenshots and accessibility calls need the Screen Recording and Accessibility
   grants of the process that runs Symphony. Without them the tools fail with
@@ -577,8 +579,10 @@ defmodule SymphonyElixir.QaDriver do
         {:ok, dir}
 
       {:error, :enoent} ->
-        File.mkdir_p!(dir)
-        {:ok, dir}
+        case File.mkdir(dir) do
+          :ok -> {:ok, dir}
+          {:error, reason} -> tool_error("qa_evidence_unsafe", "#{@evidence_dir}/ could not be created in the QA worktree: #{inspect(reason)}.")
+        end
 
       _other ->
         tool_error("qa_evidence_unsafe", "#{@evidence_dir}/ in the QA worktree must be a plain directory, not a symlink or file.")
@@ -593,7 +597,7 @@ defmodule SymphonyElixir.QaDriver do
     |> Enum.reduce_while({:ok, []}, fn {window, index}, {:ok, files} ->
       file = if numbered, do: "#{name}-#{index}.png", else: "#{name}.png"
 
-      case capture_window(config, window, Path.join(evidence, file)) do
+      case capture_window(config, window, evidence, file) do
         :ok ->
           entry = %{"path" => Path.join(@evidence_dir, file), "window_id" => window["id"], "title" => window["title"], "frame" => window["frame"]}
           {:cont, {:ok, [entry | files]}}
@@ -608,29 +612,35 @@ defmodule SymphonyElixir.QaDriver do
     end
   end
 
-  defp capture_window(config, window, destination) do
+  defp capture_window(config, window, evidence, file) do
     scratch = Path.join(config.scratch_dir, "window-#{window["id"]}.png")
     File.rm(scratch)
     args = ["-x", "-o", "-l", Integer.to_string(window["id"]), scratch]
 
     with {:ok, {_output, 0}} <- config.host.cmd.("/usr/sbin/screencapture", args, timeout_ms: @screenshot_timeout_ms, output_limit: @output_limit),
-         {:ok, %File.Stat{type: :regular}} <- File.lstat(scratch) do
-      replace_file(scratch, destination)
+         {:ok, %File.Stat{type: :regular}} <- File.lstat(scratch),
+         {:ok, png} <- File.read(scratch) do
+      File.rm(scratch)
+      write_evidence(Path.join(evidence, file), png, file)
     else
       _failure -> tool_error("qa_screenshot_failed", "screencapture could not capture window #{window["id"]}.")
     end
   end
 
-  defp replace_file(source, destination) do
-    case File.lstat(destination) do
-      {:ok, %File.Stat{type: :regular}} -> :ok
-      {:ok, _other} -> File.rm_rf!(destination)
-      {:error, _reason} -> :ok
-    end
+  # `:exclusive` is O_CREAT|O_EXCL: it never follows, replaces or removes a
+  # symlink or file the agent left at the name, so a screenshot cannot be
+  # redirected outside `qa-evidence/`.
+  defp write_evidence(destination, png, file) do
+    case File.write(destination, png, [:exclusive]) do
+      :ok ->
+        :ok
 
-    File.cp!(source, destination)
-    File.rm(source)
-    :ok
+      {:error, :eexist} ->
+        tool_error("qa_screenshot_exists", "#{@evidence_dir}/#{file} already exists. Give each screenshot a new name.")
+
+      {:error, reason} ->
+        tool_error("qa_screenshot_failed", "Could not save #{@evidence_dir}/#{file}: #{inspect(reason)}.")
+    end
   end
 
   defp tool_error(code, message), do: {:error, {:qa_tool, code, message}}

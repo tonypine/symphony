@@ -11,7 +11,8 @@ for you on the host. They only act on this worktree's configured app and on apps
   `frame` (`x`, `y`, `w`, `h` in points). Pass `role` or `text` to list only matching elements.
 - `qa_ax_press` (`action` defaults to `AXPress`; `AXRaise` focuses a window) and
   `qa_ax_set_value`: act on an element by the `path` `qa_ax_tree` gave it.
-- `qa_screenshot`: saves the app's windows to `qa-evidence/<name>.png`.
+- `qa_screenshot`: saves the app's windows to `qa-evidence/<name>.png`. Each name can be used
+  once; it never replaces an existing file.
 - `qa_quit_app`: quits the app and returns its recent output.
 
 Do not edit files in the worktree, gitignored ones included (such as build caches):
