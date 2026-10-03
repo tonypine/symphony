@@ -60,6 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         menu.addItem(menuItem(StatusMenu.resumeTitle, action: #selector(resumeDispatch(_:))))
         menu.addItem(.separator())
         menu.addItem(menuItem(StatusMenu.openDashboardTitle, action: #selector(openDashboard(_:))))
+        menu.addItem(menuItem(StatusMenu.openTerminalDashboardTitle, action: #selector(openTerminalDashboard(_:))))
         menu.addItem(menuItem(StatusMenu.openLogsTitle, action: #selector(openLogs(_:))))
         menu.addItem(.separator())
         updateAvailableItem.action = #selector(showReleaseNotes(_:))
@@ -193,7 +194,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         case #selector(resumeDispatch(_:)):
             menuItem.title = controlInFlight == .resume ? StatusMenu.resumingTitle : StatusMenu.resumeTitle
             return controlInFlight == nil && !restarting && StatusMenu.canResume(machine.status)
-        case #selector(openDashboard(_:)):
+        case #selector(openDashboard(_:)), #selector(openTerminalDashboard(_:)):
             switch machine.status {
             case .running, .paused:
                 return true
@@ -284,6 +285,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     @objc private func openDashboard(_ sender: Any?) {
         NSWorkspace.shared.open(StateRoot.controlURL(in: runner.stateRoot))
+    }
+
+    /// Opens Terminal running `symphony dashboard`, through a `.command` script in the app's temporary folder.
+    @objc private func openTerminalDashboard(_ sender: Any?) {
+        let failureTitle = "Couldn't open the dashboard in Terminal"
+        guard let terminal = NSWorkspace.shared.urlForApplication(
+            withBundleIdentifier: TerminalDashboard.terminalBundleIdentifier
+        ) else {
+            SymphonyRunner.showAlert(title: failureTitle, body: "Terminal.app was not found.")
+            return
+        }
+        do {
+            let script = FileManager.default.temporaryDirectory.appendingPathComponent(TerminalDashboard.scriptFileName)
+            try runner.terminalDashboardScript().write(to: script, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: script.path)
+            NSWorkspace.shared.open([script], withApplicationAt: terminal, configuration: NSWorkspace.OpenConfiguration()) {
+                _, error in
+                guard let error else { return }
+                DispatchQueue.main.async {
+                    SymphonyRunner.showAlert(title: failureTitle, body: error.localizedDescription)
+                }
+            }
+        } catch {
+            SymphonyRunner.showAlert(title: failureTitle, body: error.localizedDescription)
+        }
     }
 
     @objc private func openLogs(_ sender: Any?) {
