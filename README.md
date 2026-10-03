@@ -87,7 +87,8 @@ branch instead of opening a second one. If a claimed issue moves to a terminal s
   sub-ticket to `Todo`; move it to `Rework` to have the plan made again. The parent waits without
   being re-dispatched until every sub-ticket is closed, then closes out with a Linear project update.
   With Auto Review on, the final verification ticket is a QA pass over the merged parent: the report
-  goes on the parent and each failing step becomes a new ticket.
+  goes on the parent and each failing step becomes a new ticket that blocks the verification
+  ticket, which waits in `Todo` and runs again once those tickets are done.
 - **Executor + reviewer runs** — an optional read-only reviewer agent gates the executor's push.
 - **Docker runner** — host Symphony with mounted repos, state, logs, and agent credentials.
 - **macOS menu bar app** — start, stop, pause, and resume Symphony from the menu bar, with its status in

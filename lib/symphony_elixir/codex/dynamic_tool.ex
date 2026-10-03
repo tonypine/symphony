@@ -150,6 +150,24 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       }
     },
     %{
+      "name" => "linear_add_blocked_by",
+      "description" =>
+        "Mark the current Linear issue blocked by existing issues, such as the gap tickets a final verification filed. Symphony holds an issue in Todo until every blocker is Done or Canceled, then dispatches it again on its own.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["blocked_by"],
+        "properties" => %{
+          "blocked_by" => %{
+            "type" => "array",
+            "items" => %{"type" => "string"},
+            "minItems" => 1,
+            "description" => "Identifiers (e.g. TP-12) of the issues that block the current one."
+          }
+        }
+      }
+    },
+    %{
       "name" => "linear_create_project_update",
       "description" => "Post a project update to the current Linear issue's project. Use it once a parent ticket closes out, to summarize the work done. One per run.",
       "inputSchema" => %{
@@ -370,6 +388,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "linear_attach_url" => ["url", "title"],
     "linear_attach_file" => ["local_path", "title", "make_public"],
     "linear_create_subissue" => ["title", "description", "priority", "blocked_by"],
+    "linear_add_blocked_by" => ["blocked_by"],
     "linear_create_project_update" => ["body", "health"],
     "github_get_pull_request" => [],
     "github_fetch_origin" => [],
@@ -405,6 +424,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "linear.attach_url" => "linear_attach_url",
     "linear.attach_file" => "linear_attach_file",
     "linear.create_subissue" => "linear_create_subissue",
+    "linear.add_blocked_by" => "linear_add_blocked_by",
     "linear.create_project_update" => "linear_create_project_update",
     "github.get_pull_request" => "github_get_pull_request",
     "github.fetch_origin" => "github_fetch_origin",
@@ -557,6 +577,10 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   defp execute_linear_tool("linear_create_subissue", context, args, opts) do
     Linear.create_subissue(context, args, opts)
+  end
+
+  defp execute_linear_tool("linear_add_blocked_by", context, args, opts) do
+    Linear.add_blocked_by(context, args, opts)
   end
 
   defp execute_linear_tool("linear_create_project_update", context, args, opts) do
@@ -994,6 +1018,35 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         "code" => "blocked_by_relation_failed",
         "message" => "Created #{identifier}, but could not mark it blocked by #{blocker}, so it and any later `blocked_by` links are missing. Record them in the workpad for a human to add.",
         "identifier" => identifier,
+        "blocker" => blocker,
+        "reason" => inspect(reason)
+      }
+    }
+  end
+
+  defp tool_error_payload(:invalid_add_blocked_by) do
+    %{"error" => %{"code" => "invalid_add_blocked_by", "message" => "linear_add_blocked_by requires `blocked_by`, a non-empty list of issue identifiers."}}
+  end
+
+  defp tool_error_payload({:blocked_by_not_found, unknown}) do
+    %{
+      "error" => %{
+        "code" => "blocked_by_not_found",
+        "message" => "linear_add_blocked_by could not find #{Enum.join(unknown, ", ")}. Nothing was linked.",
+        "unknown" => unknown
+      }
+    }
+  end
+
+  defp tool_error_payload({:blocked_by_self, identifier}) do
+    %{"error" => %{"code" => "blocked_by_self", "message" => "linear_add_blocked_by cannot mark #{identifier}, the current issue, as its own blocker. Nothing was linked."}}
+  end
+
+  defp tool_error_payload({:add_blocked_by_failed, blocker, reason}) do
+    %{
+      "error" => %{
+        "code" => "add_blocked_by_failed",
+        "message" => "Could not mark the current issue blocked by #{blocker}; it and any later `blocked_by` links are missing. Retry, or record them in the workpad for a human to add.",
         "blocker" => blocker,
         "reason" => inspect(reason)
       }
