@@ -134,14 +134,27 @@ defmodule SymphonyElixir.Config.CacheTest do
       test_pid = self()
       dir = Path.dirname(Path.expand(symphony_path))
 
-      Application.put_env(:symphony_elixir, :config_cache_watcher, fn ^dir ->
-        send(test_pid, {:watch_attempt, dir})
+      # Accept every dir: the Cache calls this for any config read on the node,
+      # and a stub that only matches `dir` would crash it.
+      Application.put_env(:symphony_elixir, :config_cache_watcher, fn watched_dir ->
+        send(test_pid, {:watch_attempt, watched_dir})
         :ignore
       end)
 
+      # A config file in another dir stands in for any other process that reads
+      # config while this test runs.
+      other_path = Path.join([root, "other", "symphony.yml"])
+      File.mkdir_p!(Path.dirname(other_path))
+      File.write!(other_path, "tracker:\n  kind: memory\n")
+
+      cache_pid = Process.whereis(Cache)
+      assert is_pid(cache_pid)
+
       ExUnit.CaptureLog.capture_log(fn ->
         assert {:ok, _} = Cache.get_symphony(symphony_path)
-        cache_pid = Process.whereis(Cache)
+        :sys.get_state(cache_pid)
+
+        assert {:ok, _} = Cache.get_symphony(other_path)
         :sys.get_state(cache_pid)
 
         assert {:ok, _} = Cache.get_symphony(symphony_path)
@@ -154,7 +167,8 @@ defmodule SymphonyElixir.Config.CacheTest do
       assert_receive {:watch_attempt, ^dir}, 100
       refute_receive {:watch_attempt, ^dir}, 50
 
-      state = :sys.get_state(Process.whereis(Cache))
+      assert Process.whereis(Cache) == cache_pid
+      state = :sys.get_state(cache_pid)
       refute Map.has_key?(state.watchers, dir)
     end
 
