@@ -8,6 +8,7 @@ defmodule SymphonyElixir.Orchestrator do
   import Bitwise, only: [<<<: 2]
 
   alias SymphonyElixir.{
+    AgentProcesses,
     AgentRunner,
     AgentTelemetry,
     AuditLog,
@@ -2668,10 +2669,23 @@ defmodule SymphonyElixir.Orchestrator do
       !replan_pending?(issue, state) and
       !post_pr_quiet_active_issue?(issue, state) and
       !Map.has_key?(state.merging_ci_waits, issue.id) and
-      issue_dispatch_slot_available?(issue, state)
+      issue_dispatch_slot_available?(issue, state) and
+      !agent_left_running?(issue)
   end
 
   defp should_dispatch_issue?(_issue, _state, _active_states, _terminal_states), do: false
+
+  # An agent a previous Symphony left running may still be working in the issue's workspace.
+  defp agent_left_running?(%Issue{identifier: identifier} = issue) do
+    case AgentProcesses.dispatch_blocked_reason(identifier) do
+      nil ->
+        false
+
+      reason ->
+        Logger.debug("Skipping dispatch; an agent from a previous Symphony may still be running for #{issue_context(issue)}: #{reason}")
+        true
+    end
+  end
 
   defp issue_dispatch_slot_available?(%Issue{} = issue, %State{} = state) do
     !MapSet.member?(state.claimed, issue.id) and
@@ -3979,6 +3993,18 @@ defmodule SymphonyElixir.Orchestrator do
             identifier: issue.identifier,
             title: issue.title,
             error: workspace_quota_error(state)
+          })
+        )
+
+      agent_left_running?(issue) ->
+        schedule_issue_retry(
+          state,
+          issue.id,
+          attempt,
+          Map.merge(metadata, %{
+            identifier: issue.identifier,
+            title: issue.title,
+            error: "an agent from a previous Symphony may still be running in the workspace"
           })
         )
 

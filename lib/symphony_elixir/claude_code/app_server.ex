@@ -716,7 +716,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
       case open_local_prompt_port(executable, args, prompt_path, workspace, provider_env) do
         {:ok, port} ->
-          :ok = AgentProcesses.track(port)
+          :ok = AgentProcesses.track(port, workspace: workspace)
           {:ok, port, [prompt_path]}
 
         {:error, reason} ->
@@ -740,7 +740,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
              stdin_path: prompt_path
            ) do
         {:ok, port} ->
-          :ok = AgentProcesses.track(port)
+          :ok = AgentProcesses.track(port, workspace: workspace)
           {:ok, port, [prompt_path]}
 
         {:error, reason} ->
