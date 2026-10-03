@@ -8,6 +8,9 @@ name: release
 #   CFBundleVersion            = github.run_number            e.g. 42
 #   CFBundleShortVersionString = <mix.exs version>.<run_number> e.g. 0.0.1.42
 #   release tag                = v<short version>              e.g. v0.0.1.42
+#   Elixir release version     = <mix.exs version>-<run_number> e.g. 0.0.1-42
+#     Burrito unpacks each build into a directory named after it, so a new
+#     build doesn't run the code an older one unpacked.
 # A pushed v* tag is released under its own name, with the same versions.
 # version.json's `build` is the number to compare.
 #
@@ -63,7 +66,7 @@ jobs:
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
         run: |
-          mix_version="$(grep -oE 'version: "[0-9]+\.[0-9]+\.[0-9]+"' mix.exs | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')"
+          mix_version="$(grep -oE '@version "[0-9]+\.[0-9]+\.[0-9]+"' mix.exs | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')"
           if [ -z "$mix_version" ]; then
             echo "::error::Could not read the version from mix.exs."
             exit 1
@@ -90,6 +93,7 @@ jobs:
       - name: Build the Symphony binary (macOS arm64)
         env:
           BURRITO_TARGET: macos_arm64
+          SYMPHONY_BUILD_NUMBER: ${{ steps.version.outputs.build }}
         run: |
           make package
           test -x burrito_out/symphony-macos-arm64
