@@ -282,6 +282,9 @@ func screenshot(_ pid: pid_t, _ windowArgument: String, _ path: String) {
 let pidCommands: Set<String> = ["windows", "screenshot", "ax-tree", "ax-press", "ax-set-value"]
 let requestLimit = 64 * 1024
 let commandTimeout: TimeInterval = 60
+// Symphony waits 15 s for the helper it opens, so an older owner file was left
+// by a Symphony that died before its helper read it.
+let ownerFileMaxAge: time_t = 30
 
 func parentPID(_ pid: pid_t) -> pid_t? {
     var info = kinfo_proc()
@@ -335,19 +338,21 @@ func runDirectory() -> String? {
     return String(cString: home) + "/Library/Application Support/symphony/qa-driver/run"
 }
 
-func privateEntry(_ path: String, type: mode_t) -> Bool {
+func privateEntry(_ path: String, type: mode_t, maxAge: time_t? = nil) -> Bool {
     var info = stat()
     guard lstat(path, &info) == 0 else { return false }
-    return info.st_mode & S_IFMT == type && info.st_uid == getuid() && info.st_mode & 0o077 == 0
+    let fresh = maxAge.map { time(nil) - info.st_mtimespec.tv_sec <= $0 } ?? true
+    return info.st_mode & S_IFMT == type && info.st_uid == getuid() && info.st_mode & 0o077 == 0 && fresh
 }
 
 // Symphony leaves `qa-<owner>.owner` in the run directory before it opens the
 // helper. Only Symphony can write there, and the helper removes the file, so it
-// names one owner once.
+// names one owner once. A stale file, left by a Symphony that died, names no
+// one: its PID may since belong to another process.
 func claimedBy(_ path: String, owner: pid_t) -> Bool {
     guard let dir = runDirectory(), path == "\(dir)/qa-\(owner).sock", privateEntry(dir, type: S_IFDIR) else { return false }
     let marker = "\(dir)/qa-\(owner).owner"
-    return privateEntry(marker, type: S_IFREG) && unlink(marker) == 0
+    return privateEntry(marker, type: S_IFREG, maxAge: ownerFileMaxAge) && unlink(marker) == 0
 }
 
 // A one-shot PID command runs only as the child `runCommand` starts, never when

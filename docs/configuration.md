@@ -852,7 +852,8 @@ when Symphony does.
 The helper does not trust the process tree to tell Symphony from an agent: an agent can leave it,
 for example with a double fork or `nohup … &`. Before it opens the helper, Symphony leaves an
 owner file, `qa-<pid>.owner`, in the run directory. The helper serves only an owner whose file it
-finds there (it removes the file), only on that owner's socket in the same directory, and only an
+finds there and that is under 30 seconds old (it removes the file; an older one, left by a Symphony
+that crashed, names no one), only on that owner's socket in the same directory, and only an
 Erlang VM (`beam.smp`) that no other Erlang VM started. Agent sandboxes cannot write the run
 directory, so an agent cannot make itself the owner, nor put its own socket where Symphony
 connects. This holds only while the run directory stays out of the sandbox's writable paths: do
@@ -903,11 +904,6 @@ release `Symphony.app` signs the helper with the same certificate every time, so
 app updates. A locally built app (`make` in `macos/`) and the helper built from a terminal are
 signed ad hoc: macOS asks again after each rebuild, and after each Symphony version that changes
 the helper.
-
-> [!NOTE]
-> These checks follow the process tree. An agent can still make itself the owner if it first leaves
-> Symphony's process tree, for example by having `launchctl` or Terminal run a script, and that
-> script starts an Erlang VM and opens the helper.
 
 Without a grant the tools return `qa_permission_missing`, the QA agent answers `blocked` with the
 missing permission as the reason, and the issue goes to `In Review` with that reason in the QA
