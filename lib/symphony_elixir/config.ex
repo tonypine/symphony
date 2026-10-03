@@ -8,6 +8,7 @@ defmodule SymphonyElixir.Config do
   alias SymphonyElixir.Config.Cache
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.SystemSchema
+  alias SymphonyElixir.OpenRouter.Models, as: OpenRouterModels
   alias SymphonyElixir.Routing.Resolver, as: RoutingResolver
   alias SymphonyElixir.RunKind
   alias SymphonyElixir.Secret
@@ -277,27 +278,107 @@ defmodule SymphonyElixir.Config do
   end
 
   @doc """
-  Non-fatal problems `symphony check` reports after the config validates: a run kind resolves
-  to `openrouter` while `OPENROUTER_API_KEY` is unset.
+  What `symphony check` reports after the config validates, for runs whose provider is
+  `openrouter`. Warnings: `OPENROUTER_API_KEY` is unset, the models API cannot be reached, or
+  `effort` is set for a model that does not list `reasoning`. Errors: a model id OpenRouter does
+  not list, or a model without `tools`. Each model finding names the key that set the model or
+  effort. The models API is only asked when the key is set.
   """
-  @spec check_warnings() :: [String.t()]
-  def check_warnings do
+  @spec check_findings(keyword()) :: %{errors: [String.t()], warnings: [String.t()]}
+  def check_findings(opts \\ []) do
     with {:ok, system_config} <- system(),
          {:ok, repo_settings} <- repo_runtime_settings(system_config, source: :file) do
       repo_settings
-      |> Enum.flat_map(fn {_repo, settings} -> openrouter_run_kinds(settings) end)
+      |> Enum.flat_map(fn {_repo, settings} -> openrouter_profiles(settings) end)
       |> Enum.uniq()
-      |> openrouter_key_warnings(openrouter_api_key())
+      |> openrouter_findings(openrouter_api_key(), opts)
     else
-      {:error, _reason} -> []
+      {:error, _reason} -> %{errors: [], warnings: []}
     end
   end
 
-  defp openrouter_key_warnings([_ | _] = kinds, nil) do
-    ["#{@openrouter_api_key_env} is not set; runs that use provider openrouter will fail to start (#{Enum.join(kinds, ", ")})"]
+  defp openrouter_findings([], _key, _opts), do: %{errors: [], warnings: []}
+
+  defp openrouter_findings(profiles, nil, _opts) do
+    kinds = profiles |> Enum.map(& &1.kind) |> Enum.uniq()
+    %{errors: [], warnings: ["#{@openrouter_api_key_env} is not set; runs that use provider openrouter will fail to start (#{Enum.join(kinds, ", ")})"]}
   end
 
-  defp openrouter_key_warnings(_kinds, _key), do: []
+  defp openrouter_findings(profiles, _key, opts) do
+    case OpenRouterModels.catalog(opts) do
+      {:ok, catalog} ->
+        findings = profiles |> Enum.flat_map(&model_findings(&1, Map.get(catalog, &1.model))) |> Enum.uniq()
+
+        %{
+          errors: for({:error, message} <- findings, do: message),
+          warnings: for({:warning, message} <- findings, do: message)
+        }
+
+      {:error, reason} ->
+        %{
+          errors: [],
+          warnings: ["could not reach the OpenRouter models API (#{OpenRouterModels.format_reason(reason)}); OpenRouter models were not checked"]
+        }
+    end
+  end
+
+  defp model_findings(%{model: model, model_key: key}, nil) do
+    [{:error, "#{key}: OpenRouter has no model `#{model}`"}]
+  end
+
+  defp model_findings(%{model: model, model_key: key}, %{tools: false}) do
+    [{:error, "#{key}: OpenRouter model `#{model}` does not support tools; Symphony runs need tool use"}]
+  end
+
+  defp model_findings(%{model: model, effort: effort, effort_key: key}, %{reasoning: false}) when is_binary(effort) do
+    [{:warning, "#{key}: OpenRouter model `#{model}` does not support reasoning; its runs start without --effort #{effort}"}]
+  end
+
+  defp model_findings(_profile, _capabilities), do: []
+
+  # Every `openrouter` run kind with the model and effort it starts with, and the keys that set them.
+  defp openrouter_profiles(settings) do
+    for kind <- openrouter_run_kinds(settings) do
+      profile = effective_run_profile(settings, kind)
+
+      %{
+        kind: kind,
+        model: profile.model,
+        model_key: profile_key(settings, kind, :model),
+        effort: profile.effort,
+        effort_key: profile_key(settings, kind, :effort)
+      }
+    end
+  end
+
+  defp effective_run_profile(settings, "pre_push_review"), do: pre_push_review_profile(settings)
+  defp effective_run_profile(settings, "qa"), do: qa_profile(settings)
+  defp effective_run_profile(settings, kind), do: run_profile(settings, kind)
+
+  @doc """
+  The config key that sets `field` (`:model` or `:effort`) for run kind `kind`, for messages that
+  tell the operator what to change: `pre_push_review.model`, `agent.run_profiles.landing.effort`,
+  or `agent.model` when no profile overrides it.
+  """
+  @spec run_profile_key(Schema.t(), atom() | String.t(), :model | :effort) :: String.t()
+  def run_profile_key(%Schema{} = settings, kind, field) when field in [:model, :effort],
+    do: profile_key(settings, to_string(kind), field)
+
+  defp profile_key(settings, kind, field) do
+    with {section_key, section} <- own_profile_section(settings, kind),
+         value when not is_nil(value) <- Map.get(section, field) do
+      "#{section_key}.#{field}"
+    else
+      _agent_level ->
+        if Map.has_key?(Map.get(settings.agent.run_profiles, kind, %{}), Atom.to_string(field)),
+          do: "agent.run_profiles.#{kind}.#{field}",
+          else: "agent.#{field}"
+    end
+  end
+
+  defp own_profile_section(settings, "pre_push_review"), do: {"pre_push_review", settings.review_agent}
+  defp own_profile_section(settings, "qa"), do: {"auto_review", settings.auto_review}
+  defp own_profile_section(_settings, _kind), do: nil
 
   @spec review_agent_blocked_state(String.t()) :: String.t()
   def review_agent_blocked_state(repo_key) when is_binary(repo_key) do

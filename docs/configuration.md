@@ -329,6 +329,25 @@ agent:
   before `claude` starts and logs `OpenRouter run cannot start: OPENROUTER_API_KEY is not set
   run_kind=<kind>`; retries work as for any other failed start. `symphony check` prints a
   warning naming the run kinds that use `openrouter` while the variable is unset.
+- Model capabilities: Symphony agents need tool use, so an OpenRouter model must list `tools` in
+  `supported_parameters` on OpenRouter's models API (`GET https://openrouter.ai/api/v1/models`,
+  read without the key and cached in process for an hour). When `OPENROUTER_API_KEY` is set,
+  `symphony check` asks that API and reports, naming the key that set the model or effort
+  (`agent.run_profiles.<kind>.model`, `agent.model`, `pre_push_review.model`,
+  `auto_review.model`, and the matching `effort` keys):
+  - an error for a model id OpenRouter does not list, for example
+    `` agent.run_profiles.landing.model: OpenRouter has no model `acme/typo` ``;
+  - an error for a model without `tools`, for example
+    `` agent.run_profiles.landing.model: OpenRouter model `acme/chat-only` does not support tools ``;
+  - a warning when `effort` is set for a model that does not list `reasoning`.
+
+  When the API cannot be reached, `check` prints a warning and does not fail. Before an
+  OpenRouter run starts, Symphony looks the model up the same way: a model without `tools` fails
+  the run before `claude` starts and logs `OpenRouter run cannot start: model <id> does not
+  support tools run_kind=<kind>; set <key> to a model that lists tools`, where `<key>` is the
+  key that set the model, as in `check`; a model without `reasoning` starts without `--effort` and logs
+  a warning once per model. If the lookup fails, or OpenRouter does not list the model, the run
+  starts anyway and logs a warning, so an OpenRouter outage does not block work.
 - `run_profiles.<kind>`: `model`, `effort` and/or `provider` for one kind of run. Kinds, first match wins:
   `final_verification` (title starts with `Final verification:`), `breakdown` (`breakdown` parent in
   `Rework`), `close_out` (`breakdown` parent whose sub-issues are all terminal), `breakdown` (other

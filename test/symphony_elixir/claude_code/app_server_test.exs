@@ -4,6 +4,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
   alias SymphonyElixir.AgentSandboxConfig
   alias SymphonyElixir.ClaudeCode.AppServer
   alias SymphonyElixir.Config.Schema.Agent
+  alias SymphonyElixir.OpenRouter.Models
   import Bitwise, only: [band: 2]
 
   defmodule StubSSH do
@@ -1920,6 +1921,133 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       end)
     end
 
+    test "fails an OpenRouter run before launch when the model does not support tools" do
+      with_openrouter_key("sk-or-v1-REDACTED", fn ->
+        with_models_api(fn ->
+          with_provider_env_fake_claude("ACME-OPENROUTER-NOTOOLS", fn workspace ->
+            profile = %{kind: :landing, model: "acme/chat-only", effort: nil, provider: "openrouter"}
+
+            log =
+              capture_log(fn ->
+                assert AppServer.start_session(workspace, run_profile: profile) ==
+                         {:error, {:openrouter_model_unsupported, "acme/chat-only", :landing, :tools}}
+              end)
+
+            assert log =~
+                     "OpenRouter run cannot start: model acme/chat-only does not support tools run_kind=landing; " <>
+                       "set agent.model to a model that lists tools"
+
+            refute File.exists?(Path.join(workspace, "argv.trace"))
+          end)
+        end)
+      end)
+    end
+
+    test "names the key that set the model when a pre_push_review run model lacks tools" do
+      with_openrouter_key("sk-or-v1-REDACTED", fn ->
+        with_models_api(fn ->
+          with_provider_env_fake_claude("ACME-OPENROUTER-REVIEW-NOTOOLS", fn workspace ->
+            settings = Config.settings!()
+            settings = %{settings | review_agent: %{settings.review_agent | model: "acme/chat-only"}}
+            profile = %{kind: :pre_push_review, model: "acme/chat-only", effort: nil, provider: "openrouter"}
+
+            log =
+              capture_log(fn ->
+                assert AppServer.start_session(workspace, run_profile: profile, settings: settings) ==
+                         {:error, {:openrouter_model_unsupported, "acme/chat-only", :pre_push_review, :tools}}
+              end)
+
+            assert log =~ "run_kind=pre_push_review; set pre_push_review.model to a model that lists tools"
+          end)
+        end)
+      end)
+    end
+
+    test "keeps --effort for an OpenRouter model that supports reasoning" do
+      with_openrouter_key("sk-or-v1-REDACTED", fn ->
+        with_models_api(fn ->
+          with_provider_env_fake_claude("ACME-OPENROUTER-REASONING", fn workspace ->
+            profile = %{kind: :landing, model: "anthropic/claude-haiku-4.5", effort: "high", provider: "openrouter"}
+
+            log =
+              capture_log(fn ->
+                {:ok, session} = AppServer.start_session(workspace, run_profile: profile)
+                assert {:ok, _result} = AppServer.run_turn(session, "land it", %{identifier: "ACME-OPENROUTER-REASONING"}, [])
+                AppServer.stop_session(session)
+              end)
+
+            refute log =~ "OpenRouter"
+            args = workspace |> Path.join("argv.trace") |> File.read!() |> String.split("\n", trim: true)
+            assert Enum.take(args, -4) == ["--model", "anthropic/claude-haiku-4.5", "--effort", "high"]
+          end)
+        end)
+      end)
+    end
+
+    test "drops --effort for an OpenRouter model without reasoning and warns once per model" do
+      model = "acme/tools-only-#{System.unique_integer([:positive])}"
+
+      with_openrouter_key("sk-or-v1-REDACTED", fn ->
+        with_models_api([%{"id" => model, "supported_parameters" => ["tools"]}], fn ->
+          with_provider_env_fake_claude("ACME-OPENROUTER-EFFORT", fn workspace ->
+            profile = %{kind: :ci_fix, model: model, effort: "high", provider: "openrouter"}
+
+            log =
+              capture_log(fn ->
+                for _run <- 1..2 do
+                  {:ok, session} = AppServer.start_session(workspace, run_profile: profile)
+                  assert session.run_profile.effort == nil
+                  assert {:ok, _result} = AppServer.run_turn(session, "fix ci", %{identifier: "ACME-OPENROUTER-EFFORT"}, [])
+                  AppServer.stop_session(session)
+                end
+              end)
+
+            warning = "OpenRouter model #{model} does not support reasoning; starting its runs without --effort high"
+            assert log |> String.split(warning) |> length() == 2
+            args = workspace |> Path.join("argv.trace") |> File.read!() |> String.split("\n", trim: true)
+            assert Enum.take(args, -2) == ["--model", model]
+            refute "--effort" in args
+          end)
+        end)
+      end)
+    end
+
+    test "starts an OpenRouter run with a warning when the models API cannot be reached" do
+      with_openrouter_key("sk-or-v1-REDACTED", fn ->
+        with_provider_env_fake_claude("ACME-OPENROUTER-OFFLINE", fn workspace ->
+          profile = %{kind: :landing, model: "acme/chat-only", effort: "low", provider: "openrouter"}
+
+          log =
+            capture_log(fn ->
+              {:ok, session} = AppServer.start_session(workspace, run_profile: profile)
+              assert session.run_profile == profile
+              AppServer.stop_session(session)
+            end)
+
+          assert log =~ "Could not check OpenRouter model acme/chat-only: :network_disabled_in_tests; starting anyway run_kind=landing"
+        end)
+      end)
+    end
+
+    test "starts an OpenRouter run with a warning when OpenRouter does not list the model" do
+      with_openrouter_key("sk-or-v1-REDACTED", fn ->
+        with_models_api(fn ->
+          with_provider_env_fake_claude("ACME-OPENROUTER-UNKNOWN", fn workspace ->
+            profile = %{kind: :landing, model: "acme/typo", effort: "low", provider: "openrouter"}
+
+            log =
+              capture_log(fn ->
+                {:ok, session} = AppServer.start_session(workspace, run_profile: profile)
+                assert session.run_profile == profile
+                AppServer.stop_session(session)
+              end)
+
+            assert log =~ "OpenRouter does not list model acme/typo; starting anyway run_kind=landing"
+          end)
+        end)
+      end)
+    end
+
     test "rejects an OpenRouter profile on a remote worker" do
       with_openrouter_key("sk-or-v1-REDACTED", fn ->
         with_provider_env_fake_claude("ACME-OPENROUTER-REMOTE", fn workspace ->
@@ -3095,6 +3223,25 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       fun.()
     after
       restore_env("OPENROUTER_API_KEY", previous)
+    end
+  end
+
+  @openrouter_models [
+    %{"id" => "anthropic/claude-haiku-4.5", "supported_parameters" => ["tools", "reasoning"], "context_length" => 200_000},
+    %{"id" => "acme/chat-only", "supported_parameters" => ["max_tokens"], "context_length" => 8_192}
+  ]
+
+  defp with_models_api(models \\ @openrouter_models, fun) do
+    previous = Application.get_env(:symphony_elixir, :openrouter_models_request)
+    request_fun = fn _url, _opts -> {:ok, %{status: 200, body: %{"data" => models}}} end
+    Application.put_env(:symphony_elixir, :openrouter_models_request, request_fun)
+    Models.clear_cache()
+
+    try do
+      fun.()
+    after
+      Application.put_env(:symphony_elixir, :openrouter_models_request, previous)
+      Models.clear_cache()
     end
   end
 
