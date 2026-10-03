@@ -703,6 +703,7 @@ auto_review:
   run_on: every_push
   skip_globs: []
   playbooks: {}
+  # worker_host: qa@qa-vm.local   # optional: run macos_app QA on another macOS host
 ```
 
 `model` and `effort` (optional) set the QA agent's `--model` / `--effort` with the Claude runtime,
@@ -862,6 +863,91 @@ terminal app you start `symphony` from. Grant them once:
 Without a grant the tools return `qa_permission_missing`, the QA agent answers `blocked` with the
 missing permission as the reason, and the issue goes to `In Review` with that reason in the QA
 report.
+
+##### Running QA on a separate macOS host
+
+`qa_build` runs the PR's build and app unsandboxed, as a person building the PR would. To keep
+that away from your credentials, point `auto_review.worker_host` at a dedicated macOS VM or a
+separate macOS user:
+
+```yaml
+auto_review:
+  worker_host: qa@qa-vm.local     # user@host or host:port, as in workers.ssh_hosts
+```
+
+Symphony reaches it with the same SSH transport as `workers.ssh_hosts` (`SYMPHONY_SSH_CONFIG`
+applies), non-interactively, so key authentication must already work. Do not list it in
+`workers.ssh_hosts`: that list also receives coding runs. The QA agent still runs on the Symphony
+host and the worktree checks still apply there. Then:
+
+- `qa_build` copies the worktree's `HEAD` (`git archive`, so gitignored files and submodules stay
+  behind) into a fresh `src/` in a `0700` run directory under `~/.symphony-qa/runs/` on the QA
+  host, runs `build` there with the QA user's login environment, and copies the bundle into the
+  run directory;
+- `qa_launch_app` starts that copy with only `SYMPHONY_BAR_QA_ROOT` set;
+- the Swift helper is compiled there with `swiftc` on first use in each pass, into the run
+  directory's `helper/`. Passes never share it: each PR's build runs as the QA user, and a helper
+  it replaced could answer the permission, window and accessibility calls of later passes;
+- screenshots are captured there and copied back into `qa-evidence/` in the local QA worktree, so
+  the agent attaches them as before;
+- the run directory is removed when the pass ends. A build that times out is stopped on the
+  Symphony side; on the QA host it may run until it finishes.
+
+At the start of each pass Symphony checks that the QA host cannot reach your credentials and
+refuses it otherwise. The `qa_*` tools then fail with `qa_worker_unsafe` naming each problem, and
+the QA agent answers `blocked`. The check fails when the QA host:
+
+- can open your `~/.ssh`, or read your `~/.config/gh/hosts.yml` or login Keychain
+  (`~/Library/Keychains/login.keychain-db`), at your home path;
+- can read a file in Symphony's private state directory, which means it runs as you;
+- has a private key in its own `~/.ssh`, GitHub CLI credentials in `~/.config/gh`, or a global git
+  credential helper;
+- has a forwarded SSH agent (`ForwardAgent yes` for that host in your SSH config).
+
+An unreachable host gives `qa_worker_unreachable` and a `blocked` verdict.
+
+One QA host keeps state across passes. Removing the run directory removes the pass's source,
+bundles and helper, but anything a build or app leaves behind as the QA user stays on the host: a
+build that timed out and is still running, a background process, or changes to that user's files,
+caches and login environment. Any of these can tamper with a later pass. Symphony does not reset
+the host between passes. For full isolation, reset the VM between passes by running QA from a
+fresh throwaway clone of a clean image (see step 6 below); with a separate macOS user, treat its
+home as shared by every PR it has built.
+
+**A dedicated VM (recommended).** With [tart](https://tart.run):
+
+1. `tart clone ghcr.io/cirruslabs/macos-sequoia-xcode:latest symphony-qa` (an image with Xcode,
+   so `swiftc` and your build tools are there), then `tart run symphony-qa`.
+2. In the VM, sign in as its user (tart images use `admin`), turn on **System Settings → General →
+   Sharing → Remote Login** and **Users & Groups → Automatically log in as** that user. QA needs a
+   logged-in desktop session to open windows.
+3. Do not sign in to an Apple Account, copy SSH keys, run `gh auth login` or store passwords in the
+   VM. Add your public key to the VM user's `~/.ssh/authorized_keys` only.
+4. Grant TCC once, in the VM: **Privacy & Security → Screen & System Audio Recording** and
+   **Accessibility**, use **+**, press **⌘⇧G**, enter `/usr/libexec/sshd-keygen-wrapper` and turn it
+   on. Commands started over SSH are attributed to it, so this covers `screencapture` and the
+   helper. Restart the VM.
+5. Install whatever `build` needs (for example the repo's toolchain) and run the build once by hand
+   over SSH to confirm it works.
+6. Stop the VM and keep it as a clean image. To reset it between passes, delete the working copy
+   and clone it again: `tart delete symphony-qa-run; tart clone symphony-qa symphony-qa-run;
+   tart run --no-graphics symphony-qa-run`. Point `worker_host` at the clone (`tart ip
+   symphony-qa-run` prints its address); it keeps the image's login and TCC grants.
+
+**A separate macOS user** on the Symphony Mac works the same way: create a standard user, turn on
+Remote Login for it, keep it logged in (Fast User Switching), grant the TCC permissions above, and
+use `qa@localhost` as `worker_host`. macOS keeps your `~/.ssh`, `~/Library` and Keychain closed to
+other standard users by default; the start-of-pass check confirms it.
+
+To check a host by hand, run the same tests as the QA user:
+
+```sh
+ssh qa@qa-vm.local 'ls ~/.ssh; ls ~/.config/gh; git config --global credential.helper; echo "agent=$SSH_AUTH_SOCK";
+  ls /Users/<you>/.ssh /Users/<you>/Library/Keychains 2>&1 | head'
+```
+
+Only `authorized_keys` (and `known_hosts`) should show, the next three should be empty, and the
+last command should fail with `Permission denied` or `No such file or directory`.
 
 Auto Review needs `pull_requests.enabled: true` and `pull_requests.checks.enabled: true`, because
 the CI poller is what moves issues out of the state. A PR with no CI checks stays in Auto Review.

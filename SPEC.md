@@ -1084,6 +1084,9 @@ Fields:
   `build` (shell command run in the QA worktree), `app` (the `.app` bundle path relative to the
   repo root) and `build_timeout_ms` (default `900000`), and is off unless `build` and `app` are
   set.
+- `worker_host` (string, optional): an SSH host (`user@host` or `host:port`, the form
+  `workers.ssh_hosts` uses) where the `macos_app` playbook's `qa_*` tools run instead of the
+  Symphony host. It does not need to be, and should not be, listed in `workers.ssh_hosts`.
 
 When enabled:
 
@@ -1122,6 +1125,16 @@ When enabled:
   the pass did not launch. Apps still running when the pass ends MUST be quit. A missing Screen
   Recording or Accessibility grant MUST surface as a `qa_permission_missing` tool error that tells
   the agent to answer `blocked`. Other tool scopes MUST NOT list or run the `qa_*` tools.
+- With `worker_host` set, the worktree checks MUST stay on the Symphony host, and the build, the app,
+  screenshots and accessibility calls MUST run on that host over SSH: `qa_build` ships the
+  worktree's `HEAD` into a fresh build directory there, and screenshots are copied back into the
+  local `qa-evidence/`. The accessibility helper MUST be compiled into that pass's own run
+  directory, never shared with a later pass. Before a pass uses the host, Symphony MUST refuse one
+  that can open the operator's `~/.ssh`, read their `~/.config/gh/hosts.yml` or login Keychain,
+  read a file only the operator can read, or holds push credentials of its own (a private key in `~/.ssh`, GitHub CLI
+  credentials, a global git credential helper or a forwarded SSH agent); the `qa_*` tools then fail
+  with `qa_worker_unsafe` (or `qa_worker_unreachable` when the host cannot be reached) and tell the
+  agent to answer `blocked`.
 - The QA agent MUST run in a fresh detached worktree at the PR head SHA, outside the issue
   workspace, removed afterwards, with a tool scope limited to read-only Linear/GitHub tools and
   `linear_attach_file`. It answers with JSON: `verdict` (`pass`, `fail` or `blocked`), `summary`,

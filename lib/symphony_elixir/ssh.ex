@@ -34,6 +34,15 @@ defmodule SymphonyElixir.SSH do
     end
   end
 
+  # For callers that run the command themselves and parse its output: ssh never
+  # prompts and keeps its own warnings out of the output.
+  @spec command(String.t(), String.t()) :: {:ok, String.t(), [String.t()]} | {:error, term()}
+  def command(host, command) when is_binary(host) and is_binary(command) do
+    with {:ok, executable} <- ssh_executable() do
+      {:ok, executable, ssh_args(host, command, options: ["-o", "BatchMode=yes", "-o", "LogLevel=ERROR"])}
+    end
+  end
+
   @spec remote_shell_command(String.t()) :: String.t()
   def remote_shell_command(command) when is_binary(command) do
     "bash -lc " <> shell_escape(command)
@@ -91,6 +100,7 @@ defmodule SymphonyElixir.SSH do
     []
     |> maybe_put_config()
     |> maybe_put_reverse_forwards(Keyword.get(opts, :reverse_forwards, []))
+    |> Kernel.++(Keyword.get(opts, :options, []))
     |> Kernel.++(["-T"])
     |> maybe_put_port(port)
     |> Kernel.++([destination, remote_shell_command(command)])
@@ -157,7 +167,8 @@ defmodule SymphonyElixir.SSH do
     String.contains?(destination, "[") and String.contains?(destination, "]")
   end
 
-  defp shell_escape(value) when is_binary(value) do
+  @spec shell_escape(String.t()) :: String.t()
+  def shell_escape(value) when is_binary(value) do
     "'" <> String.replace(value, "'", "'\"'\"'") <> "'"
   end
 end
