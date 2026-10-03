@@ -832,6 +832,102 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       end
     end
 
+    test "a breakdown run links each sub-issue to the earlier ones it depends on" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      {:ok, linear} = Agent.start_link(fn -> %{children: [%{"id" => "issue-old", "identifier" => "TP-50"}], relations: []} end)
+      context = %{issue_id: "issue-parent", comment_registry: registry}
+      opts = [linear_client: in_memory_linear(linear)]
+
+      create = fn title, blocked_by ->
+        attrs = %{"title" => title, "description" => "Depends on: #{Enum.join(blocked_by, ", ")}", "blocked_by" => blocked_by}
+        assert {:ok, response} = Linear.create_subissue(context, attrs, opts)
+        get_in(response, ["data", "issueCreate", "issue"])
+      end
+
+      a = create.("A", [])
+      b = create.("B", [String.downcase(a["identifier"]) <> " ", "TP-50"])
+      final = create.("Final verification: Parent", [a["identifier"], b["identifier"], a["identifier"]])
+
+      assert {a["blockedBy"], b["blockedBy"], final["blockedBy"]} == {[], ["TP-101", "TP-50"], ["TP-101", "TP-102"]}
+
+      assert Agent.get(linear, &Enum.reverse(&1.relations)) == [
+               %{"issueId" => "issue-101", "relatedIssueId" => "issue-102", "type" => "blocks"},
+               %{"issueId" => "issue-old", "relatedIssueId" => "issue-102", "type" => "blocks"},
+               %{"issueId" => "issue-101", "relatedIssueId" => "issue-103", "type" => "blocks"},
+               %{"issueId" => "issue-102", "relatedIssueId" => "issue-103", "type" => "blocks"}
+             ]
+
+      assert Linear.CommentRegistry.created_subissues(registry) == %{"TP-101" => "issue-101", "TP-102" => "issue-102", "TP-103" => "issue-103"}
+    end
+
+    test "accepts a sub-issue this run created before Linear lists it as a child" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      Linear.CommentRegistry.record_subissue(registry, "TP-7", "issue-7")
+      test_pid = self()
+
+      assert {:ok, _response} =
+               Linear.create_subissue(
+                 %{issue_id: "issue-parent", comment_registry: registry},
+                 %{"title" => "Next", "description" => "body", "blocked_by" => ["TP-7"]},
+                 linear_client: subissue_client(test_pid, subissue_scope())
+               )
+
+      assert_received {:linear_called, relation_mutation, %{input: %{"issueId" => "issue-7", "relatedIssueId" => "issue-new", "type" => "blocks"}}}
+      assert relation_mutation =~ "SymphonyAgentCreateIssueRelation"
+    end
+
+    test "refuses a blocked_by outside the parent's sub-issues before creating anything" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      {:ok, linear} = Agent.start_link(fn -> %{children: [%{"id" => "issue-old", "identifier" => "TP-50"}], relations: []} end)
+
+      assert {:error, {:blocked_by_not_sibling, ["TP-1", "OPS-2"], ["TP-50"]}} =
+               Linear.create_subissue(
+                 %{issue_id: "issue-parent", comment_registry: registry},
+                 %{"title" => "B", "description" => "body", "blocked_by" => ["TP-1", "TP-50", "ops-2"]},
+                 linear_client: in_memory_linear(linear)
+               )
+
+      assert Agent.get(linear, & &1) == %{children: [%{"id" => "issue-old", "identifier" => "TP-50"}], relations: []}
+      assert Agent.get(registry, & &1.subissues) == 0
+    end
+
+    test "keeps the slot and names the created issue when a blocked-by link fails" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      scope = Map.put(subissue_scope(), "children", %{"nodes" => [%{"id" => "issue-old", "identifier" => "TP-50"}]})
+
+      client = fn query, variables, opts ->
+        if query =~ "SymphonyAgentCreateIssueRelation",
+          do: {:ok, %{"data" => %{"issueRelationCreate" => %{"success" => false}}}},
+          else: subissue_client(self(), scope).(query, variables, opts)
+      end
+
+      assert {:error, {:blocked_by_relation_failed, "TP-999", "TP-50", {:linear_mutation_failed, "issueRelationCreate", _body}}} =
+               Linear.create_subissue(
+                 %{issue_id: "issue-parent", comment_registry: registry},
+                 %{"title" => "B", "description" => "body", "blocked_by" => ["TP-50"]},
+                 linear_client: client
+               )
+
+      assert Agent.get(registry, & &1.subissues) == 1
+      assert Linear.CommentRegistry.created_subissues(registry) == %{"TP-999" => "issue-new"}
+    end
+
+    test "gives the slot back when Linear does not return the created issue" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+
+      client = fn query, _variables, _opts ->
+        if query =~ "SymphonyAgentSubissueScope",
+          do: {:ok, %{"data" => %{"issue" => subissue_scope()}}},
+          else: {:ok, %{"data" => %{"issueCreate" => %{"success" => true}}}}
+      end
+
+      context = %{issue_id: "issue-parent", comment_registry: registry}
+      attrs = %{"title" => "B", "description" => "body"}
+      assert {:error, :subissue_not_returned} = Linear.create_subissue(context, attrs, linear_client: client)
+
+      assert Agent.get(registry, & &1.subissues) == 0
+    end
+
     test "validates title, description and priority" do
       {:ok, registry} = Linear.CommentRegistry.start_link()
       context = %{issue_id: "issue-parent", comment_registry: registry}
@@ -844,6 +940,11 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       for priority <- [5, -1, "2", 1.0] do
         assert {:error, :invalid_subissue_priority} =
                  Linear.create_subissue(context, %{"title" => "Slice", "description" => "body", "priority" => priority}, no_linear)
+      end
+
+      for blocked_by <- ["TP-1", [" "], [1]] do
+        assert {:error, :invalid_subissue_blocked_by} =
+                 Linear.create_subissue(context, %{"title" => "Slice", "description" => "body", "blocked_by" => blocked_by}, no_linear)
       end
 
       assert {:error, :missing_current_issue} = Linear.create_subissue(%{}, %{"title" => "Slice", "description" => "body"})
@@ -959,6 +1060,32 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
          }}
       end
     end
+  end
+
+  # A stateful stand-in for Linear: children of the parent and the relations created between them.
+  defp in_memory_linear(linear) do
+    fn query, variables, _opts ->
+      cond do
+        query =~ "SymphonyAgentSubissueScope" ->
+          children = Agent.get(linear, & &1.children)
+          {:ok, %{"data" => %{"issue" => Map.put(subissue_scope(), "children", %{"nodes" => children})}}}
+
+        query =~ "SymphonyAgentCreateSubissue" ->
+          issue = Agent.get_and_update(linear, &add_in_memory_child(&1, variables.input))
+          {:ok, %{"data" => %{"issueCreate" => %{"success" => true, "issue" => issue}}}}
+
+        query =~ "SymphonyAgentCreateIssueRelation" ->
+          Agent.update(linear, &%{&1 | relations: [variables.input | &1.relations]})
+          {:ok, %{"data" => %{"issueRelationCreate" => %{"success" => true}}}}
+      end
+    end
+  end
+
+  # Numbers new issues from TP-101; the parent starts with one existing child.
+  defp add_in_memory_child(state, input) do
+    number = 100 + length(state.children)
+    issue = %{"id" => "issue-#{number}", "identifier" => "TP-#{number}", "parentId" => input["parentId"]}
+    {issue, %{state | children: state.children ++ [issue]}}
   end
 
   defp successful_file_upload_linear_client(test_pid, upload_headers \\ []) do

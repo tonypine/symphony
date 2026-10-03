@@ -2,7 +2,8 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
   @moduledoc false
 
   # Per-run state for the scoped Linear tools: the comment ids this run created (so it may only
-  # edit its own comments) and how many sub-issues it has created (so it stays under the cap).
+  # edit its own comments) and how many sub-issues it has created (so it stays under the cap), with
+  # their ids by identifier (so a later sub-issue may be blocked by an earlier one).
 
   use Agent
 
@@ -15,7 +16,8 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
       |> Enum.filter(&is_binary/1)
       |> MapSet.new()
 
-    Agent.start_link(fn -> %{comments: comments, subissues: 0, project_updates: 0} end, agent_opts)
+    state = %{comments: comments, subissues: 0, created_subissues: %{}, project_updates: 0}
+    Agent.start_link(fn -> state end, agent_opts)
   end
 
   @spec record(pid() | nil, String.t()) :: :ok
@@ -52,6 +54,16 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
   @doc "Gives back a slot claimed by `reserve_subissue/2` when the create did not go through."
   @spec release_subissue(pid()) :: :ok
   def release_subissue(pid) when is_pid(pid), do: release(pid, :subissues)
+
+  @doc "Records a sub-issue this run created, by identifier."
+  @spec record_subissue(pid(), String.t(), String.t()) :: :ok
+  def record_subissue(pid, identifier, issue_id) when is_pid(pid) and is_binary(identifier) and is_binary(issue_id) do
+    Agent.update(pid, fn state -> %{state | created_subissues: Map.put(state.created_subissues, identifier, issue_id)} end)
+  end
+
+  @doc "The sub-issues this run created, as a map of identifier to issue id."
+  @spec created_subissues(pid()) :: %{String.t() => String.t()}
+  def created_subissues(pid) when is_pid(pid), do: Agent.get(pid, & &1.created_subissues)
 
   @doc """
   Atomically claims one of the run's `cap` project-update slots, refusing without a registry like
