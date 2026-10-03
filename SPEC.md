@@ -676,6 +676,11 @@ Fields:
 - `poll_interval_ms` (integer)
   - Default: falls back to `issues.poll_interval_ms`.
   - Shared by PR review polling and CI polling when checks are enabled.
+- `auto_merge` (boolean)
+  - Default: `true`. Applies only when `enabled` is `true`.
+  - Lands `Merging` issues with GitHub auto-merge instead of a landing agent (see
+    "Landing with GitHub auto-merge" below). `false` keeps the landing agent for every `Merging`
+    issue.
 - `review_comments.rework_delay_minutes` (integer)
   - Polling-mode default: `10`.
   - Applies only in `polling` mode before moving an issue back to an active state for requested changes.
@@ -718,6 +723,8 @@ Fields:
   - Default: `1800000` (30 minutes).
   - How long a `Merging` issue whose landing run ended on pending checks stays held before the
     landing agent is dispatched again anyway.
+  - With `auto_merge`, also how long a PR may stay `BLOCKED` with auto-merge on and a green head
+    before the issue falls back to the landing agent.
 
 Review-comment options are ignored when `enabled` is not `true`. CI failure dispatch is driven only
 by failed status checks and ignores comment authorship; the ignored reviewer set above does not
@@ -1665,6 +1672,39 @@ The poller:
   and starts a QA pass on green CI (see `auto_review`). It also tracks PRs of issues in
   `Merging`, so a held landing run (below) sees its head settle and a red head takes the normal
   CI-failure dispatch.
+
+Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `enabled: true`):
+
+- The PR review poller also tracks PRs of issues in `Merging`, including ones with no run on record
+  (the record then has no workspace, and cleanup removes none). Each repository's poll tracks only
+  its own `Merging` issues (an issue with no repository belongs to the primary one). The orchestrator MUST NOT dispatch a
+  `Merging` issue with an attached PR while auto-merge owns it; it takes no slot and no agent.
+- On each poll of an open `Merging` PR, the poller MUST turn on auto-merge (GraphQL
+  `enablePullRequestAutoMerge`, `SQUASH`, the PR title as `<title> (#<number>)` and its body,
+  `expectedHeadOid` = the observed head) at most once per head, and not at all when GitHub already
+  shows auto-merge on. When GitHub refuses because the PR can already merge (`clean status`), the
+  poller squash-merges that head directly.
+- When `mergeStateStatus` is `BEHIND`, the poller MUST call
+  `PUT /repos/{owner}/{repo}/pulls/{number}/update-branch` with `expected_head_sha` at most once per
+  head. A failed call other than a conflict is retried on the next poll.
+- A conflict (`mergeable == "CONFLICTING"`, `mergeStateStatus == "DIRTY"`, or an update-branch
+  `merge conflict` reply) takes the conflict path above: the issue moves to `In Progress` with the
+  conflict context, and the fix returns through review.
+- A red head takes the CI poller's CI-failure path. Auto-merge stays on, so GitHub merges the PR
+  once the fix is green, whatever state the issue is in by then.
+- When GitHub reports the PR `MERGED` and Symphony turned on auto-merge for it (or the issue is in
+  `Merging`), the poller MUST move the issue to `Done` (already `Done` is fine) and then clean up as
+  for any merged PR. A failed transition is retried on the next poll.
+- When auto-merge can't be turned on (the repository doesn't allow it, the PR has no required
+  checks so GitHub reports it `UNSTABLE`, a permission error) or a squash merge fails, or the PR stays `BLOCKED` with
+  auto-merge on and a green head past `checks.landing_wait_timeout_ms`, the poller MUST log an
+  error, comment the reason on the issue, and fall back: the orchestrator then dispatches the
+  landing agent. The fallback lasts until the issue leaves `Merging`.
+- The state (`enabled`, `updating_branch`, `merging`, `conflict`, `fallback`, `merged`) is kept in
+  the PR review record, logged on every change, and listed under `auto_merge` in
+  `/api/v1/state` and on the dashboard (for example "auto-merge on, waiting for CI on `abc1234`").
+- Moving an issue out of `Merging` does not turn auto-merge off on GitHub; disable it on the PR to
+  stop the merge.
 
 When a landing run (issue in `Merging` with an attached PR) finishes a turn while the PR head's
 checks are pending, the agent runner MUST end the run instead of starting another continuation
@@ -2868,6 +2908,17 @@ Minimum endpoints:
         "used": 1,
         "running": [{"issue_id": "jkl012", "identifier": "MT-652", "state": "Merging"}]
       },
+      "auto_merge": [
+        {
+          "issue_id": "pqr678",
+          "issue_identifier": "MT-654",
+          "pull_request_url": "https://github.com/acme/app/pull/88",
+          "state": "enabled",
+          "head_sha": "abc1234def5678",
+          "status": "auto-merge on, waiting for CI on `abc1234`",
+          "updated_at": "2026-02-24T20:15:00Z"
+        }
+      ],
       "slot_waiting": [
         {
           "issue_id": "mno345",

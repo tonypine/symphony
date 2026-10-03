@@ -584,6 +584,7 @@ defmodule SymphonyElixir.TestSupport do
           pr_review_ignored_users: nil,
           pr_review_auto_reply: nil,
           pr_review_auto_request_review: nil,
+          pr_review_auto_merge: nil,
           ci: nil,
           verification: nil,
           server_port: nil,
@@ -662,6 +663,7 @@ defmodule SymphonyElixir.TestSupport do
     pr_review_ignored_users = Keyword.get(config, :pr_review_ignored_users)
     pr_review_auto_reply = Keyword.get(config, :pr_review_auto_reply)
     pr_review_auto_request_review = Keyword.get(config, :pr_review_auto_request_review)
+    pr_review_auto_merge = Keyword.get(config, :pr_review_auto_merge)
     ci = Keyword.get(config, :ci)
     verification = Keyword.get(config, :verification)
     server_port = Keyword.get(config, :server_port)
@@ -746,11 +748,14 @@ defmodule SymphonyElixir.TestSupport do
         ),
         pull_requests_yaml(
           pr_review_mode,
-          pr_review_cooldown_minutes,
-          pr_review_stale_days,
-          pr_review_ignored_users,
-          pr_review_auto_reply,
-          pr_review_auto_request_review,
+          [
+            cooldown_minutes: pr_review_cooldown_minutes,
+            stale_days: pr_review_stale_days,
+            ignored_users: pr_review_ignored_users,
+            auto_reply: pr_review_auto_reply,
+            auto_request_review: pr_review_auto_request_review,
+            auto_merge: pr_review_auto_merge
+          ],
           ci,
           learnings
         ),
@@ -985,7 +990,7 @@ defmodule SymphonyElixir.TestSupport do
     |> Enum.join("\n")
   end
 
-  defp pull_requests_yaml(mode, cooldown_minutes, stale_days, ignored_users, auto_reply, auto_request_review, ci, learnings) do
+  defp pull_requests_yaml(mode, review, ci, learnings) do
     ci = if is_nil(ci), do: %{}, else: map_from(ci)
     enabled = pull_requests_enabled_value(mode)
 
@@ -993,12 +998,13 @@ defmodule SymphonyElixir.TestSupport do
       "pull_requests:",
       "  enabled: #{yaml_value(enabled)}",
       "  poll_interval_ms: #{yaml_value(Map.get(ci, :poll_interval_ms))}",
+      "  auto_merge: #{yaml_value(review[:auto_merge])}",
       "  review_comments:",
-      "    rework_delay_minutes: #{yaml_value(cooldown_minutes)}",
-      "    stale_after_days: #{yaml_value(stale_days)}",
-      "    ignored_reviewers: #{yaml_value(ignored_users)}",
-      "    reply_after_addressing: #{yaml_value(auto_reply)}",
-      "    request_review_after_push: #{yaml_value(auto_request_review)}",
+      "    rework_delay_minutes: #{yaml_value(review[:cooldown_minutes])}",
+      "    stale_after_days: #{yaml_value(review[:stale_days])}",
+      "    ignored_reviewers: #{yaml_value(review[:ignored_users])}",
+      "    reply_after_addressing: #{yaml_value(review[:auto_reply])}",
+      "    request_review_after_push: #{yaml_value(review[:auto_request_review])}",
       checks_yaml(ci),
       learnings && "  learnings: #{yaml_value(learnings)}"
     ]

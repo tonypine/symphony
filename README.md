@@ -13,8 +13,9 @@ professional work.
 **Direction:** run agents from more than one model provider (Claude already runs alongside Codex),
 bring in improvements from community forks, and shape the workflow to fit how I work.
 
-**Changes so far:** agents can merge their own PR through the scoped `github_merge_pull_request`
-tool once a human moves the issue to `Merging`.
+**Changes so far:** once a human moves an issue to `Merging`, Symphony lands its PR with GitHub
+auto-merge, without an agent. When auto-merge can't be used, an agent merges it through the scoped
+`github_merge_pull_request` tool.
 
 Symphony runs coding agents (Codex or Claude) on your Linear issues and GitHub pull requests, so
 your team manages the work instead of babysitting the agents.

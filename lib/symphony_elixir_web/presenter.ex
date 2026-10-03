@@ -67,6 +67,7 @@ defmodule SymphonyElixirWeb.Presenter do
           dispatch_state: normalize_dispatch_state(snapshot),
           epic_lanes: normalize_epic_lanes(Map.get(snapshot, :epic_lanes)),
           finishing: normalize_finishing(Map.get(snapshot, :finishing)),
+          auto_merge: snapshot |> Map.get(:auto_merge, []) |> Enum.map(&auto_merge_payload/1),
           slot_waiting: snapshot |> Map.get(:slot_waiting, []) |> Enum.map(&slot_waiting_payload/1),
           rate_limits: snapshot.rate_limits,
           linear_usage: normalize_linear_usage(get_in(snapshot, [:polling, :linear, :usage]))
@@ -746,6 +747,18 @@ defmodule SymphonyElixirWeb.Presenter do
 
   defp normalize_finishing(%{slots: slots, used: used, running: running}), do: %{slots: slots, used: used, running: running}
   defp normalize_finishing(_finishing), do: %{slots: nil, used: 0, running: []}
+
+  defp auto_merge_payload(entry) do
+    %{
+      issue_id: entry.issue_id,
+      issue_identifier: entry.issue_identifier,
+      pull_request_url: entry.pr_url,
+      state: entry.state,
+      head_sha: entry.head_sha,
+      status: entry.status,
+      updated_at: iso8601(entry.updated_at)
+    }
+  end
 
   defp slot_waiting_payload(entry) do
     %{

@@ -12,6 +12,7 @@ defmodule SymphonyElixir.Orchestrator do
     AgentRunner,
     AgentTelemetry,
     AuditLog,
+    AutoMerge,
     AutoReview,
     BreakdownReview,
     CiPoller,
@@ -2769,7 +2770,7 @@ defmodule SymphonyElixir.Orchestrator do
       !issue_held?(issue, terminal_states) and
       !replan_pending?(issue, state) and
       !post_pr_quiet_active_issue?(issue, state) and
-      !Map.has_key?(state.merging_ci_waits, issue.id) and
+      !landing_held?(issue, state) and
       !MapSet.member?(state.claimed, issue.id) and
       !MapSet.member?(state.budget_exhausted, issue.id) and
       !setup_failed_suppressed?(state.setup_failed, issue) and
@@ -3295,7 +3296,9 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp revalidate_issue_for_dispatch(issue, _issue_fetcher, _terminal_states, _opts), do: {:ok, issue}
 
-  defp dispatch_revalidated_issue?(%Issue{} = issue, terminal_states, true), do: active_retry_issue?(issue, terminal_states)
+  defp dispatch_revalidated_issue?(%Issue{} = issue, terminal_states, true),
+    do: active_retry_issue?(issue, terminal_states) and !auto_merge_landing?(issue)
+
   defp dispatch_revalidated_issue?(%Issue{} = issue, terminal_states, _sticky_route?), do: retry_candidate_issue?(issue, terminal_states)
 
   defp complete_issue(%State{} = state, issue_id, running_entry) do
@@ -5774,6 +5777,7 @@ defmodule SymphonyElixir.Orchestrator do
       dispatch_state: dispatch_state_snapshot(state),
       epic_lanes: EpicLanes.snapshot(state.epic_lanes, epic_lane_running(state.running)),
       finishing: finishing_snapshot(state.running),
+      auto_merge: PrReviewPoller.auto_merge_statuses(),
       slot_waiting: slot_waiting_snapshot(state.slot_waiting) ++ merging_ci_waiting_snapshot(state.merging_ci_waits),
       pollers: poller_status_snapshot(),
       polling: %{
@@ -6609,7 +6613,24 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp retry_candidate_issue?(%Issue{} = issue, terminal_states) do
     candidate_issue?(issue, active_state_set(), terminal_states) and
-      !issue_held?(issue, terminal_states)
+      !issue_held?(issue, terminal_states) and
+      !auto_merge_landing?(issue)
+  end
+
+  # A `Merging` issue waiting for CI after its landing run, or landed by GitHub auto-merge.
+  defp landing_held?(%Issue{} = issue, %State{} = state) do
+    Map.has_key?(state.merging_ci_waits, issue.id) or auto_merge_landing?(issue)
+  end
+
+  # GitHub auto-merge lands a `Merging` issue without an agent (see AutoMerge); the landing
+  # agent only runs when the PR poller falls back to it.
+  defp auto_merge_landing?(%Issue{} = issue) do
+    if AutoMerge.owns_issue?(issue) do
+      Logger.debug("Skipping dispatch; GitHub auto-merge is landing #{issue_context(issue)}")
+      true
+    else
+      false
+    end
   end
 
   defp post_pr_quiet_active_issue?(%Issue{id: issue_id} = issue, %State{} = state)

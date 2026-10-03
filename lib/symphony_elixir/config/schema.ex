@@ -1309,6 +1309,7 @@ defmodule SymphonyElixir.Config.Schema do
       field(:ignored_users, {:array, :string}, default: [])
       field(:auto_reply, :boolean, default: false)
       field(:auto_request_review, :boolean, default: false)
+      field(:auto_merge, :boolean, default: true)
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
@@ -1316,7 +1317,16 @@ defmodule SymphonyElixir.Config.Schema do
       schema
       |> cast(
         polling_attrs(attrs),
-        [:mode, :poll_interval_ms, :cooldown_minutes, :stale_days, :ignored_users, :auto_reply, :auto_request_review],
+        [
+          :mode,
+          :poll_interval_ms,
+          :cooldown_minutes,
+          :stale_days,
+          :ignored_users,
+          :auto_reply,
+          :auto_request_review,
+          :auto_merge
+        ],
         empty_values: []
       )
       |> put_polling_defaults()

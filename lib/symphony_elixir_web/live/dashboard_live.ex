@@ -359,6 +359,9 @@ defmodule SymphonyElixirWeb.DashboardLive do
                   Landing: <%= Enum.map_join(@payload.finishing.running, ", ", & &1.identifier) %>
                 <% end %>
               </p>
+              <p :for={entry <- Map.get(@payload, :auto_merge, [])} class="section-copy">
+                <%= entry.issue_identifier %>: <%= entry.status %>
+              </p>
             </div>
           </div>
 

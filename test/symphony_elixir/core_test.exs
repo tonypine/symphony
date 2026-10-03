@@ -337,11 +337,13 @@ defmodule SymphonyElixir.CoreTest do
       pr_review_stale_days: 3,
       pr_review_ignored_users: ["symphony-bot", " agent-user "],
       pr_review_auto_reply: true,
-      pr_review_auto_request_review: true
+      pr_review_auto_request_review: true,
+      pr_review_auto_merge: false
     )
 
     config = Config.settings!()
     assert config.pr_review.mode == "polling"
+    assert config.pr_review.auto_merge == false
     assert config.pr_review.cooldown_minutes == 15
     assert config.pr_review.stale_days == 3
     assert config.pr_review.ignored_users == ["symphony-bot", "agent-user"]
@@ -355,6 +357,7 @@ defmodule SymphonyElixir.CoreTest do
 
     config = Config.settings!()
     assert config.pr_review.mode == "polling"
+    assert config.pr_review.auto_merge == true
     assert config.pr_review.cooldown_minutes == 10
     assert config.pr_review.stale_days == 7
     assert config.pr_review.ignored_users == []
