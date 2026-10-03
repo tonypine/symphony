@@ -9,6 +9,13 @@ hooks:
     fi
   before_remove: |
     mise exec -- mix workspace.before_remove
+# Used only when the operator sets `verification.enabled: true` in symphony.yml. Serves the
+# dashboard with an in-memory tracker; Auto Review's web playbook tests dashboard changes on it.
+verification:
+  dev_server:
+    start_cmd: scripts/qa-dashboard-server.sh
+    health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/api/v1/state"
+    health_timeout_ms: 600000
 prompts:
   pr: |
     You are working on an existing GitHub pull request.

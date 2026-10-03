@@ -12,7 +12,8 @@ defmodule SymphonyElixir.AutoReview do
     ticket whether to test and with which playbooks; a skip goes straight to
     `In Review` with a note;
   - `SymphonyElixir.QaAgent` runs the QA agent in a throwaway worktree at the PR head;
-  - `pass` and `blocked` go to `In Review`; `fail` goes back to `In Progress` with the
+  - `pass` and `blocked` go to `In Review` (a `web` pass whose dev server fails its
+    health check is `blocked`); `fail` goes back to `In Progress` with the
     findings as continuation context, and to `In Review` once
     `auto_review.max_fix_attempts` is used up.
 
@@ -28,7 +29,7 @@ defmodule SymphonyElixir.AutoReview do
 
   require Logger
 
-  alias SymphonyElixir.{Config, Notifications, QaAgent, QaRunner, RunStore, Tracker, Workspace}
+  alias SymphonyElixir.{Config, Notifications, QaAgent, QaRunner, RunStore, Tracker, Verification, Workspace}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaAgent.{Report, Selection}
@@ -198,7 +199,7 @@ defmodule SymphonyElixir.AutoReview do
       {:skip, "QA passed on an earlier push (`run_on: first_pass`)"}
     else
       case changed_paths(record, sha, opts) do
-        {:ok, paths} -> Selection.decide(issue, paths, config)
+        {:ok, paths} -> Selection.decide(issue, paths, config, dev_server?: Verification.dev_server_configured?(settings))
         {:error, reason} -> {:blocked, "could not list the PR's changed files: #{inspect(reason)}"}
       end
     end
@@ -299,6 +300,12 @@ defmodule SymphonyElixir.AutoReview do
     do: "the QA agent reached the per-issue token limit (#{total} of #{limit} tokens)"
 
   defp blocked_reason({:remote_worker_unsupported, host}), do: "QA does not run on remote workers yet (#{host})"
+
+  defp blocked_reason({:qa_dev_server_failed, {:verification_failed, :health_timeout}}),
+    do: "the dev server failed its health check, so the web playbook could not run"
+
+  defp blocked_reason({:qa_dev_server_failed, reason}), do: "the dev server did not start: #{inspect(reason)}"
+  defp blocked_reason({:qa_browser_mcp_invalid, errors}), do: "`auto_review.playbooks.web.browser_mcp` is invalid: #{errors}"
   defp blocked_reason({:malformed_qa_response, reason}), do: "the QA agent's answer could not be read: #{inspect(reason)}"
   defp blocked_reason(reason), do: "the QA agent could not finish: #{inspect(reason)}"
 

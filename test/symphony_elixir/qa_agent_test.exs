@@ -8,7 +8,14 @@ defmodule SymphonyElixir.QaAgentTest do
   alias SymphonyElixir.QaAgent.{Report, Selection}
 
   @sha "0123456789abcdef0123456789abcdef01234567"
-  @env_keys [:qa_test_recipient, :qa_test_start_result, :qa_test_messages, :qa_test_turn_result, :qa_test_turn_results]
+  @env_keys [
+    :qa_test_recipient,
+    :qa_test_start_result,
+    :qa_test_messages,
+    :qa_test_turn_result,
+    :qa_test_turn_results,
+    :qa_test_dev_server_result
+  ]
 
   defmodule FakeSession do
     def start_session(workspace, opts) do
@@ -50,6 +57,25 @@ defmodule SymphonyElixir.QaAgentTest do
         summary: "The CLI behaves as described.",
         steps: [%{name: "symphony check", status: "pass", details: "$ bin/symphony check\nexit: 0", evidence: ["https://uploads.linear.test/t.md"]}]
       })
+    end
+
+    defp recipient, do: Application.fetch_env!(:symphony_elixir, :qa_test_recipient)
+  end
+
+  # Stands in for `SymphonyElixir.Verification` in web passes.
+  defmodule FakeVerification do
+    def start_qa_dev_server(issue, run_id, worktree, opts) do
+      send(recipient(), {:dev_server_started, issue.identifier, run_id, worktree, opts})
+
+      case Application.get_env(:symphony_elixir, :qa_test_dev_server_result) do
+        nil -> {:ok, %{context: %{run_id: run_id}, pid: self(), port: 4321, url: "http://localhost:4321/"}}
+        result -> result
+      end
+    end
+
+    def stop_qa_dev_server(dev_server) do
+      send(recipient(), {:dev_server_stopped, dev_server.port})
+      :ok
     end
 
     defp recipient, do: Application.fetch_env!(:symphony_elixir, :qa_test_recipient)
@@ -138,6 +164,9 @@ defmodule SymphonyElixir.QaAgentTest do
       send(recipient, {:git, args, cwd})
 
       case {args, overrides} do
+        {["worktree", "add", "--detach", path, _sha], %{add_dev_server: result}} ->
+          add_unless_dev_server(path, result)
+
         {["worktree", "add", "--detach", path, _sha], %{add: result}} ->
           File.mkdir_p!(path)
           result
@@ -158,7 +187,16 @@ defmodule SymphonyElixir.QaAgentTest do
     end
   end
 
-  describe "Selection.decide/3" do
+  defp add_unless_dev_server(path, result) do
+    if String.ends_with?(path, "-dev-server") do
+      result
+    else
+      File.mkdir_p!(path)
+      {"", 0}
+    end
+  end
+
+  describe "Selection.decide/4" do
     test "skips an internal lib refactor with no walkthrough or entry-point change" do
       assert {:skip, reason} =
                Selection.decide(issue(), ["lib/symphony_elixir/orchestrator.ex", "lib/symphony_elixir/run_store.ex"], %{playbooks: %{}})
@@ -197,14 +235,14 @@ defmodule SymphonyElixir.QaAgentTest do
       config = %{
         playbooks: %{
           :cli => %{"paths" => ["scripts/**"]},
-          "web" => %{paths: ["assets/**"], prompt: "### Playbook: web"},
+          "api" => %{paths: ["api/**"], prompt: "### Playbook: api"},
           "empty" => %{paths: ["x/**"], prompt: "  "},
           "odd" => "not a map"
         }
       }
 
-      assert [%{kind: "cli", paths: ["scripts/**"]}, %{kind: "web", paths: ["assets/**"]}] = Selection.playbooks(config)
-      assert {:run, [%{kind: "web"}]} = Selection.decide(issue(), ["assets/app.js"], config)
+      assert [%{kind: "cli", paths: ["scripts/**"]}, %{kind: "api", paths: ["api/**"]}] = Selection.playbooks(config)
+      assert {:run, [%{kind: "api"}]} = Selection.decide(issue(), ["api/app.js"], config)
       assert {:skip, _reason} = Selection.decide(issue(), ["lib/symphony_elixir/cli.ex"], config)
 
       assert [] = Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false, "paths" => "bin/**"}}})
@@ -235,6 +273,32 @@ defmodule SymphonyElixir.QaAgentTest do
 
       odd_timeout = put_in(config, [:playbooks, "macos_app", "build_timeout_ms"], "soon")
       assert [_cli, %{kind: "macos_app", build_timeout_ms: nil}] = Selection.playbooks(odd_timeout)
+    end
+
+    test "the web playbook runs only when the verification dev server is configured" do
+      dashboard = ["lib/symphony_elixir_web/live/dashboard_live.ex", "priv/static/dashboard.css"]
+
+      refute Enum.any?(Selection.playbooks(%{playbooks: %{}}), &(&1.kind == "web"))
+      assert {:skip, _reason} = Selection.decide(issue(), dashboard, %{playbooks: %{}})
+
+      assert {:run, [%{kind: "web", prompt: prompt} = web]} = Selection.decide(issue(), dashboard, %{playbooks: %{}}, dev_server?: true)
+      refute Map.has_key?(web, :browser_mcp)
+      assert prompt =~ "### Playbook: web"
+      assert prompt =~ "browser_console_messages"
+      assert prompt =~ "qa-evidence/console.md"
+
+      for path <- ["lib/my_app_web.ex", "assets/js/app.tsx", "src/components/Card.vue"] do
+        assert {:run, [%{kind: "web"}]} = Selection.decide(issue(), [path], %{}, dev_server?: true)
+      end
+
+      assert {:run, [%{kind: "web"}]} = Selection.decide(issue(%{labels: ["qa:web"]}), ["README.md"], %{}, dev_server?: true)
+
+      glance = %{playbooks: %{"web" => %{browser_mcp: %{command: "glance-mcp", args: ["--headless"]}}}}
+
+      assert [_cli, %{kind: "web", browser_mcp: %{"command" => "glance-mcp", "args" => ["--headless"]}}] =
+               Selection.playbooks(glance, dev_server?: true)
+
+      assert [_cli] = Selection.playbooks(%{playbooks: %{"web" => %{"enabled" => false}}}, dev_server?: true)
     end
 
     test "glob matching keeps single stars inside one directory" do
@@ -428,6 +492,106 @@ defmodule SymphonyElixir.QaAgentTest do
       assert cli_opts[:qa_driver] == nil
     end
 
+    test "gives a web pass the dev server and a browser MCP server limited to localhost, then stops the server" do
+      [web] = Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false}}}, dev_server?: true)
+      settings = Config.settings!()
+      worktree = QaAgent.worktree_path(settings, "default", "TP-900", @sha)
+
+      assert {:ok, %{result: %{verdict: :pass}}} =
+               QaAgent.run(job(%{playbooks: [web]}), settings, git: fake_git(), qa_agent_module: FakeSession, verification: FakeVerification)
+
+      server_worktree = worktree <> "-dev-server"
+      workspace = job().workspace_path
+      assert_receive {:git, ["worktree", "add", "--detach", ^server_worktree, @sha], ^workspace}
+      assert_receive {:dev_server_started, "TP-900", "qa-run-1", ^server_worktree, start_opts}
+      assert start_opts[:repo_key] == "default"
+      assert start_opts[:settings] == settings
+      assert_receive {:qa_session_started, ^worktree, session_opts}
+      assert %{servers: %{"browser" => browser}} = session_opts[:settings].agent.mcp
+      assert browser.command == "npx"
+      assert browser.runtimes == [settings.agent.kind]
+
+      assert ["-y", "@playwright/mcp@latest", "--browser", "chromium", "--headless", "--isolated", "--allowed-origins", origins, "--output-dir", output] =
+               browser.args
+
+      assert origins == "http://localhost:4321;http://127.0.0.1:4321"
+      assert output == Path.join(worktree, "qa-evidence")
+      assert settings.agent.network_access.mode == "allowlist"
+      assert ["localhost", "127.0.0.1"] -- session_opts[:settings].agent.network_access.allowed_domains == []
+      refute "localhost" in settings.agent.network_access.allowed_domains
+
+      assert_receive {:qa_turn, _session, prompt, _issue, _opts}
+      assert prompt =~ "### Playbook: web"
+      assert prompt =~ "dev server for this PR head at http://localhost:4321/"
+      assert_receive {:dev_server_stopped, 4321}
+      assert_receive {:git, ["worktree", "remove", "--force", ^server_worktree], ^workspace}
+      refute File.exists?(server_worktree)
+
+      # Executor-style passes get neither the dev server nor the browser.
+      assert {:ok, _result} = QaAgent.run(job(), settings, git: fake_git(), qa_agent_module: FakeSession, verification: FakeVerification)
+      refute_receive {:dev_server_started, _identifier, _run_id, _worktree, _opts}
+      assert_receive {:qa_session_started, _worktree, cli_opts}
+      refute Map.has_key?(cli_opts[:settings].agent.mcp.servers, "browser")
+      refute QaAgent.prompt(job(), nil) =~ "Dev server:"
+    end
+
+    test "uses the operator's browser MCP server and leaves other network modes alone" do
+      glance = %{playbooks: %{"cli" => %{"enabled" => false}, "web" => %{"browser_mcp" => %{"command" => "glance-mcp", "args" => ["--stdio"]}}}}
+      [web] = Selection.playbooks(glance, dev_server?: true)
+      settings = Config.settings!()
+      open_settings = put_in(settings.agent.network_access.mode, "open")
+
+      assert {:ok, _result} =
+               QaAgent.run(job(%{playbooks: [web], run_id: nil, repo_key: nil}), open_settings,
+                 git: fake_git(),
+                 qa_agent_module: FakeSession,
+                 verification: FakeVerification
+               )
+
+      assert_receive {:dev_server_started, "TP-900", "qa-TP-900-0123456789ab", server_worktree, start_opts}
+      assert String.ends_with?(server_worktree, "-dev-server")
+      refute Keyword.has_key?(start_opts, :repo_key)
+      assert_receive {:qa_session_started, _worktree, session_opts}
+      assert %{command: "glance-mcp", args: ["--stdio"]} = session_opts[:settings].agent.mcp.servers["browser"]
+      assert session_opts[:settings].agent.network_access == open_settings.agent.network_access
+      assert_receive {:dev_server_stopped, 4321}
+    end
+
+    test "a dev server that does not start, or an invalid browser server, ends the pass before the agent runs" do
+      [web] = Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false}}}, dev_server?: true)
+      unhealthy = {:verification_failed, :health_timeout}
+      Application.put_env(:symphony_elixir, :qa_test_dev_server_result, {:error, unhealthy})
+
+      assert {:error, {:qa_dev_server_failed, ^unhealthy}, %{total_tokens: 0}} =
+               run_web(web)
+
+      assert_receive {:dev_server_started, "TP-900", _run_id, _worktree, _opts}
+      refute_receive {:qa_session_started, _worktree, _opts}
+      refute_receive {:dev_server_stopped, _port}
+
+      Application.delete_env(:symphony_elixir, :qa_test_dev_server_result)
+      remote = %{"web" => %{"browser_mcp" => %{"transport" => "http", "url" => "http://glance.test/mcp", "runtimes" => ["codex"]}}}
+      [web] = Selection.playbooks(%{playbooks: Map.put(remote, "cli", %{"enabled" => false})}, dev_server?: true)
+
+      assert {:error, {:qa_browser_mcp_invalid, errors}, _tokens} =
+               run_web(web)
+
+      assert errors =~ "runtimes"
+      assert_receive {:dev_server_started, "TP-900", _run_id, _worktree, _opts}
+      refute_receive {:qa_session_started, _worktree, _opts}
+      assert_receive {:dev_server_stopped, 4321}
+
+      assert {:error, {:qa_dev_server_failed, {:qa_worktree_failed, 128, "fatal: no space"}}, _tokens} =
+               QaAgent.run(job(%{playbooks: [web]}), Config.settings!(),
+                 git: fake_git(%{add_dev_server: {"fatal: no space\n", 128}}),
+                 qa_agent_module: FakeSession,
+                 verification: FakeVerification
+               )
+
+      refute_receive {:dev_server_started, _identifier, _run_id, _worktree, _opts}
+      refute_receive {:qa_session_started, _worktree, _opts}
+    end
+
     test "falls back to the streamed agent text when the turn result has no verdict" do
       Application.put_env(:symphony_elixir, :qa_test_messages, [{:agent_text, FakeSession.pass_json()}])
       Application.put_env(:symphony_elixir, :qa_test_turn_result, {:ok, %{result: "I tested it."}})
@@ -617,6 +781,10 @@ defmodule SymphonyElixir.QaAgentTest do
       no_parent = fn _query, _variables, _opts -> {:ok, %{"data" => %{"issue" => %{"parent" => nil}}}} end
       assert {:ok, _result} = QaAgent.run(job(), settings, git: fake_git(), qa_agent_module: FakeSession, linear_client: no_parent)
     end
+  end
+
+  defp run_web(web) do
+    QaAgent.run(job(%{playbooks: [web]}), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession, verification: FakeVerification)
   end
 
   describe "Report" do
