@@ -157,6 +157,18 @@ defmodule SymphonyElixir.AutoReviewQaTest do
       assert run.ended_at
     end
 
+    test "the report notes a verdict that took a follow-up turn" do
+      record = put_record()
+      {:ok, %{result: result} = run} = pass_result()
+      Application.put_env(:symphony_elixir, :qa_flow_agent_result, {:ok, %{run | result: Map.put(result, :follow_ups, 1)}})
+
+      assert {:auto_review_qa, "issue-qa-flow", :pass, "In Review"} =
+               AutoReview.run_qa(job(record), git: git_with_paths(["lib/symphony_elixir/cli.ex"]), qa_agent: FakeQaAgent)
+
+      assert_receive {:memory_tracker_comment, "issue-qa-flow", report}
+      assert report =~ "· verdict after 1 follow-up"
+    end
+
     test "the QA run starts with the QA profile and records its kind, model and effort" do
       write_workflow_file!(Workflow.workflow_file_path(),
         tracker_kind: "memory",
