@@ -8,6 +8,7 @@ defmodule SymphonyElixir.QaAgentTest do
   alias SymphonyElixir.QaAgent.{Report, Selection}
 
   @sha "0123456789abcdef0123456789abcdef01234567"
+  @env_keys [:qa_test_recipient, :qa_test_start_result, :qa_test_messages, :qa_test_turn_result, :qa_test_turn_results]
 
   defmodule FakeSession do
     def start_session(workspace, opts) do
@@ -23,7 +24,19 @@ defmodule SymphonyElixir.QaAgentTest do
       send(recipient(), {:qa_turn, session, prompt, issue, opts})
       on_message = Keyword.fetch!(opts, :on_message)
       Enum.each(Application.get_env(:symphony_elixir, :qa_test_messages, []), on_message)
-      Application.get_env(:symphony_elixir, :qa_test_turn_result, {:ok, %{result: pass_json()}})
+
+      # `:qa_test_turn_results` answers successive turns; the last answer repeats.
+      case Application.get_env(:symphony_elixir, :qa_test_turn_results) do
+        [result | [_ | _] = rest] ->
+          Application.put_env(:symphony_elixir, :qa_test_turn_results, rest)
+          result
+
+        [result] ->
+          result
+
+        nil ->
+          Application.get_env(:symphony_elixir, :qa_test_turn_result, {:ok, %{result: pass_json()}})
+      end
     end
 
     def stop_session(session) do
@@ -77,7 +90,7 @@ defmodule SymphonyElixir.QaAgentTest do
     Application.put_env(:symphony_elixir, :qa_test_recipient, self())
 
     on_exit(fn ->
-      for key <- [:qa_test_recipient, :qa_test_start_result, :qa_test_messages, :qa_test_turn_result] do
+      for key <- @env_keys do
         Application.delete_env(:symphony_elixir, key)
       end
     end)
@@ -283,6 +296,8 @@ defmodule SymphonyElixir.QaAgentTest do
       assert prompt =~ "### Playbook: cli"
       assert prompt =~ @sha
       assert prompt =~ ~s("verdict": "pass" | "fail" | "blocked")
+      assert prompt =~ "Ending your turn ends the session"
+      assert prompt =~ ~r/Do not leave\s+work running in the background/
 
       refute QaAgent.prompt(job(%{issue: issue(%{title: nil, description: nil})}), nil) =~ "Parent issue"
     end
@@ -420,11 +435,63 @@ defmodule SymphonyElixir.QaAgentTest do
       assert {:ok, %{result: %{verdict: :pass}}} = QaAgent.run(job(), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession)
     end
 
+    test "asks for the verdict in a follow-up turn of the same session when the answer has none" do
+      Application.put_env(:symphony_elixir, :qa_test_messages, [{:session_started, "sess-qa"}, {:agent_text, "Testing."}])
+
+      Application.put_env(:symphony_elixir, :qa_test_turn_results, [
+        {:ok, %{result: "I'll wait for the live run to finish before writing the transcript."}},
+        {:ok, %{result: FakeSession.pass_json()}}
+      ])
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %{result: %{verdict: :pass, follow_ups: 1}}} =
+                   QaAgent.run(job(), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession)
+        end)
+
+      assert log =~ "QA agent answered without a verdict for TP-900"
+      assert_receive {:qa_turn, session, first_prompt, _issue, first_opts}
+      assert first_prompt =~ "### Playbook: cli"
+      assert first_opts[:resume_session_id] == nil
+      assert_receive {:qa_turn, ^session, follow_up, _issue, follow_up_opts}
+      assert follow_up == QaAgent.follow_up_prompt()
+      assert follow_up =~ ~r/Return only the JSON\s+verdict object/
+      assert follow_up_opts[:resume_session_id] == "sess-qa"
+      refute_receive {:qa_turn, _session, _prompt, _issue, _opts}
+      assert_receive {:qa_session_stopped, ^session}
+    end
+
+    test "records blocked with no_verdict_object when the follow-up has no verdict either" do
+      Application.put_env(:symphony_elixir, :qa_test_turn_results, [{:ok, %{result: "Still waiting."}}, {:ok, %{result: "Still waiting."}}])
+
+      capture_log(fn ->
+        assert {:error, {:malformed_qa_response, :no_verdict_object}, _tokens} =
+                 QaAgent.run(job(), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession)
+      end)
+
+      assert_receive {:qa_turn, _session, _prompt, _issue, _opts}
+      assert_receive {:qa_turn, _session, follow_up, _issue, follow_up_opts}
+      assert follow_up == QaAgent.follow_up_prompt()
+      assert follow_up_opts[:resume_session_id] == nil
+      refute_receive {:qa_turn, _session, _prompt, _issue, _opts}
+
+      Application.put_env(:symphony_elixir, :qa_test_turn_results, [{:ok, %{result: "Still waiting."}}, {:error, :turn_timeout}])
+
+      capture_log(fn ->
+        assert {:error, {:qa_agent_failed, :turn_timeout}, _tokens} =
+                 QaAgent.run(job(), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession)
+      end)
+    end
+
     test "reports malformed answers and agent failures as errors with the tokens spent" do
       Application.put_env(:symphony_elixir, :qa_test_turn_result, {:ok, %{result: ~s({"verdict":"maybe"})}})
 
       assert {:error, {:malformed_qa_response, :invalid_verdict}, _tokens} =
                QaAgent.run(job(), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession)
+
+      # Only a missing verdict object earns a follow-up; a malformed one does not.
+      assert_receive {:qa_turn, _session, _prompt, _issue, _opts}
+      refute_receive {:qa_turn, _session, _prompt, _issue, _opts}
 
       Application.put_env(:symphony_elixir, :qa_test_turn_result, {:ok, %{}})
 
@@ -589,6 +656,10 @@ defmodule SymphonyElixir.QaAgentTest do
 
       escalated = Report.render(%{verdict: :fail, sha: @sha, target_state: "In Review", escalated: true, tokens: %{}, runtime_seconds: 0})
       assert escalated =~ "fix attempts used up"
+      refute escalated =~ "follow-up"
+
+      followed_up = Report.render(%{verdict: :fail, sha: @sha, target_state: "In Progress", findings: ["x"], follow_ups: 2})
+      assert followed_up =~ "`0123456789ab` · verdict after 2 follow-ups"
 
       skip = Report.render(%{verdict: :skip, sha: nil, target_state: "In Review", reason: "docs only"})
       assert skip =~ "**Verdict:** skipped → In Review"
