@@ -57,12 +57,14 @@ final class QAModeTests: XCTestCase {
 
     // MARK: - Store selection
 
-    func testWithoutQAModeTheAppUsesUserDefaultsTheKeychainAndMacOSLoginItems() {
+    func testWithoutQAModeTheAppUsesUserDefaultsTheSecretsFileAndMacOSLoginItems() {
         let stores = AppStores(environment: ["HOME": "/Users/me"], home: home)
 
         XCTAssertFalse(stores.isQAMode)
         XCTAssertTrue(stores.defaults as AnyObject === UserDefaults.standard)
-        XCTAssertEqual((stores.secrets as? KeychainSecretStore)?.service, KeychainSecretStore.defaultService)
+        let secrets = stores.secrets as? MigratingSecretStore
+        XCTAssertEqual(secrets?.file.file.path, "/Users/me/Library/Application Support/symphony/release/secrets.json")
+        XCTAssertEqual((secrets?.keychain as? KeychainSecretStore)?.service, KeychainSecretStore.defaultService)
         XCTAssertTrue(stores.loginItem is MainAppLoginItem)
         XCTAssertEqual(stores.logDirectory, ChildLog.defaultDirectory(home: home))
         XCTAssertNil(stores.updateCacheDirectory)

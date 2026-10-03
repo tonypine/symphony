@@ -86,12 +86,12 @@ public struct EnvironmentVariable: Equatable {
     }
 }
 
-/// Secret settings, stored only in the Keychain.
+/// Secret settings, stored only in the secret store, never in UserDefaults.
 public struct SecretSettings: Equatable {
-    /// Environment variable name, and Keychain account, of the Linear API key.
+    /// Environment variable name, and secret store account, of the Linear API key.
     public static let linearAPIKeyName = "LINEAR_API_KEY"
 
-    /// Environment variable name, and Keychain account, of the OpenRouter API key.
+    /// Environment variable name, and secret store account, of the OpenRouter API key.
     public static let openRouterAPIKeyName = "OPENROUTER_API_KEY"
 
     /// Names set by their own fields, never as extra variables.
