@@ -352,7 +352,7 @@ defmodule SymphonyElixir.QaAgent do
     case put_browser_mcp(qa_settings, job, worktree, dev_server, opts) do
       {:ok, qa_settings} ->
         prompt = prompt(job, fetch_parent(job, worktree, settings, opts))
-        driver = start_driver(job, worktree, opts)
+        driver = start_driver(job, worktree, settings, opts)
 
         try do
           run_tracked_session(agent_module, job, worktree, qa_settings, prompt, Keyword.put(opts, :qa_driver, driver))
@@ -663,13 +663,19 @@ defmodule SymphonyElixir.QaAgent do
   end
 
   # The `qa_*` host tools exist only for a pass that runs the `macos_app` playbook.
-  defp start_driver(job, worktree, opts) do
+  defp start_driver(job, worktree, settings, opts) do
     case Enum.find(job.playbooks, &(Map.get(&1, :kind) == "macos_app")) do
       nil ->
         nil
 
       playbook ->
-        driver_opts = [worktree: worktree, playbook: playbook, git: Keyword.get(opts, :git, &default_git/2)]
+        driver_opts = [
+          worktree: worktree,
+          playbook: playbook,
+          worker_host: settings.auto_review.worker_host,
+          git: Keyword.get(opts, :git, &default_git/2)
+        ]
+
         {:ok, driver} = QaDriver.start_link(Keyword.merge(driver_opts, Keyword.get(opts, :qa_driver_opts, [])))
         driver
     end
