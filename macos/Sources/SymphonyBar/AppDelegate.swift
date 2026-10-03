@@ -142,6 +142,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         updates.onResult = { [weak self] result, manual in self?.showUpdate(result, manual: manual) }
         showUpdate(nil, manual: false)
         updates.start()
+        QAScriptDriver.startIfScripted(menu: menu) { [weak self] in self?.runner.pid }
     }
 
     /// Quitting stops an owned Symphony first, after confirming when agent runs are active.
@@ -155,8 +156,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                 alert.informativeText = message
                 alert.addButton(withTitle: "Quit")
                 alert.addButton(withTitle: "Cancel")
-                SymphonyRunner.activateApp()
-                guard alert.runModal() == .alertFirstButtonReturn else {
+                guard SymphonyRunner.confirm(alert) else {
                     sender.reply(toApplicationShouldTerminate: false)
                     return
                 }
@@ -274,7 +274,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
         let stateRoot = runner.stateRoot
         Task {
-            let result = await ControlAPI.send(action, stateRoot: stateRoot)
+            let result = await ControlAPI.send(
+                action,
+                stateRoot: stateRoot,
+                fallback: AppStores.current.controlURLFallback
+            )
             controlInFlight = nil
             if case let .failed(message) = result { controlError = message }
             showStatus()
@@ -287,7 +291,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     }
 
     @objc private func openDashboard(_ sender: Any?) {
-        NSWorkspace.shared.open(StateRoot.controlURL(in: runner.stateRoot))
+        guard let url = StateRoot.controlURL(in: runner.stateRoot, fallback: AppStores.current.controlURLFallback) else {
+            return
+        }
+        NSWorkspace.shared.open(url)
     }
 
     /// Opens Terminal running `symphony dashboard`, through a `.command` script in the app's temporary folder.
@@ -337,8 +344,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         alert.informativeText = UpdateMenu.confirmation(release, symphonyRunning: runner.isRunning)
         alert.addButton(withTitle: "Update")
         alert.addButton(withTitle: "Cancel")
-        SymphonyRunner.activateApp()
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard SymphonyRunner.confirm(alert) else { return }
 
         controlError = nil
         updater.prepare(release) { [weak self] update in self?.drainForUpdate(update) }

@@ -136,7 +136,7 @@ final class UpdateController {
                 newApp: update.appURL
             ),
             workingDirectory: cacheDirectory.path,
-            environment: ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"]
+            environment: AppStores.current.updateHelperEnvironment
         )
         do {
             try ChildProcess.spawnDetached(launch, logURL: log)

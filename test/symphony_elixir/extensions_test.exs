@@ -296,6 +296,68 @@ defmodule SymphonyElixir.ExtensionsTest do
              Memory.fetch_candidate_issues_for_repo(%{name: "web", team: "ACME", labels: ["web"]})
   end
 
+  test "memory tracker reads its issues from issues_file when none are set" do
+    Application.delete_env(:symphony_elixir, :memory_tracker_issues)
+    symphony_dir = Path.dirname(Workflow.symphony_file_path())
+    issues_file = Path.join(symphony_dir, "issues.json")
+
+    File.write!(
+      issues_file,
+      Jason.encode!([
+        %{
+          "id" => "issue-file-1",
+          "identifier" => "E2E-1",
+          "state" => "Todo",
+          "title" => "Stub run",
+          "description" => "From the file",
+          "labels" => ["e2e", 7]
+        },
+        %{"id" => "issue-file-2", "identifier" => "E2E-2", "state" => "Done"},
+        %{"id" => "missing-state", "identifier" => "E2E-3"},
+        "not an issue"
+      ])
+    )
+
+    # Relative to the folder holding symphony.yml.
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", tracker_memory_issues_file: "issues.json")
+    assert Config.settings!().tracker.memory_issues_file == issues_file
+
+    assert {:ok, [first, second]} = Memory.fetch_candidate_issues()
+
+    assert %Issue{
+             id: "issue-file-1",
+             identifier: "E2E-1",
+             state: "Todo",
+             title: "Stub run",
+             description: "From the file",
+             labels: ["e2e"]
+           } = first
+
+    assert %Issue{id: "issue-file-2", identifier: "E2E-2", state: "Done", title: nil, labels: []} = second
+
+    # Read on every fetch, so a test can change the issues while Symphony runs.
+    File.write!(issues_file, Jason.encode!([%{"id" => "issue-file-1", "identifier" => "E2E-1", "state" => "Done"}]))
+    assert {:ok, [%Issue{state: "Done"}]} = Memory.fetch_issues_by_states(["Done"])
+
+    log =
+      capture_log(fn ->
+        File.write!(issues_file, ~s({"id": "not-a-list"}))
+        assert {:ok, []} = Memory.fetch_candidate_issues()
+        File.rm!(issues_file)
+        assert {:ok, []} = Memory.fetch_candidate_issues()
+      end)
+
+    assert log =~ "Memory tracker could not read issues_file=#{issues_file}"
+    assert log =~ ":enoent"
+
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    assert {:ok, []} = Memory.fetch_candidate_issues()
+
+    File.write!(Workflow.symphony_file_path(), "issues: [\n")
+    Cache.clear()
+    assert {:ok, []} = Memory.fetch_candidate_issues()
+  end
+
   test "linear adapter delegates reads and validates mutation responses" do
     Application.put_env(:symphony_elixir, :linear_client_module, FakeLinearClient)
 

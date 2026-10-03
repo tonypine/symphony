@@ -83,7 +83,10 @@ issues:
     waiting_on_sub_issues: Waiting on sub-tickets
 ```
 
-- `provider`: `linear` or `memory`.
+- `provider`: `linear` or `memory`. `memory` is a fake Linear for tests: it reads its issues from
+  `memory.issues_file` (relative to the folder holding `symphony.yml`), a JSON list of
+  `{"id", "identifier", "state", "title", "description", "labels"}` objects, on every fetch, so a test
+  can change them while Symphony runs. Comments and state changes go nowhere.
 - `poll_interval_ms`: issue candidate polling cadence. Each scheduler tick costs roughly one Linear
   request per running, watched, and due-repo lookup (about 3 per tick with work in flight), so the
   default `30000` spends about 360 of a personal key's 2,500 requests/hour before agent tool calls.

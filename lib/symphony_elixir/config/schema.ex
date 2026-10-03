@@ -101,6 +101,7 @@ defmodule SymphonyElixir.Config.Schema do
       field(:team, :string)
       field(:labels, {:array, :string}, default: [])
       field(:assignee, :string)
+      field(:memory_issues_file, :string)
       field(:active_states, {:array, :string}, default: ["Todo", "In Progress"])
       field(:terminal_states, {:array, :string}, default: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"])
       field(:waiting_on_sub_issues_state, :string, default: "Waiting on sub-tickets")
@@ -114,6 +115,7 @@ defmodule SymphonyElixir.Config.Schema do
       :team,
       :labels,
       :assignee,
+      :memory_issues_file,
       :active_states,
       :terminal_states,
       :waiting_on_sub_issues_state

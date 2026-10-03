@@ -56,9 +56,12 @@ final class StatusPoller {
         self.timer = timer
     }
 
-    /// Fetches Symphony's state from the URL in its control URL file.
+    /// Fetches Symphony's state from the URL in its control URL file. In QA mode nothing answers until Symphony has
+    /// written one.
     static func fetch(stateRoot: URL) async -> StatusPoll {
-        let base = StateRoot.controlURL(in: stateRoot)
+        guard let base = StateRoot.controlURL(in: stateRoot, fallback: AppStores.current.controlURLFallback) else {
+            return .unreachable
+        }
         let request = URLRequest(
             url: SymphonyState.stateURL(base: base),
             cachePolicy: .reloadIgnoringLocalCacheData,

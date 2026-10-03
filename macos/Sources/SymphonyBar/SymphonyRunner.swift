@@ -31,6 +31,8 @@ final class SymphonyRunner {
     }
 
     var isRunning: Bool { child != nil }
+    /// The Symphony the app started, nil while it runs none.
+    var pid: pid_t? { child?.pid }
     var isStopping: Bool { child?.stopRequested == true }
     /// True while Start waits to read the Keychain.
     private(set) var isStarting = false
@@ -137,8 +139,7 @@ final class SymphonyRunner {
             secrets: secrets,
             baseEnvironment: AppStores.current.environment,
             embeddedSymphonyPath: Self.embeddedSymphonyPath,
-            subcommand: subcommand,
-            qaMode: AppStores.current.isQAMode
+            subcommand: subcommand
         )
     }
 
@@ -187,8 +188,12 @@ final class SymphonyRunner {
         try? handle.write(contentsOf: Data(header.utf8))
     }
 
-    /// Posts a notification, or shows an alert when notifications aren't allowed.
+    /// Posts a notification, or shows an alert when notifications aren't allowed. Scripted QA mode records it.
     private func notify(title: String, body: String) {
+        if let script = QAScriptDriver.shared {
+            script.record(alertTitle: title, message: body)
+            return
+        }
         // UNUserNotificationCenter needs an app bundle; `swift run` has none.
         guard Bundle.main.bundleIdentifier != nil else {
             Self.showAlert(title: title, body: body)
@@ -207,12 +212,27 @@ final class SymphonyRunner {
         }
     }
 
+    /// Shows an alert, or in scripted QA mode records it instead.
     static func showAlert(title: String, body: String) {
+        if let script = QAScriptDriver.shared {
+            script.record(alertTitle: title, message: body)
+            return
+        }
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = body
         activateApp()
         alert.runModal()
+    }
+
+    /// Asks `alert`'s question and returns true for its first button. Scripted QA mode records it and answers yes.
+    static func confirm(_ alert: NSAlert) -> Bool {
+        if let script = QAScriptDriver.shared {
+            script.record(alertTitle: alert.messageText, message: alert.informativeText)
+            return true
+        }
+        activateApp()
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     static func activateApp() {
