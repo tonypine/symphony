@@ -14,12 +14,14 @@ defmodule SymphonyElixir.QaAgent do
   `pass | fail | blocked` with per-step results. An answer without that object gets
   one follow-up turn in the same session asking for it. A pass that runs the `macos_app`
   playbook also gets the host-side `qa_*` tools of a `SymphonyElixir.QaDriver`,
-  stopped (quitting every app it launched) when the pass ends.
+  stopped (quitting every app it launched) when the pass ends. Processes the agent
+  left running under the worktree, even detached ones, are stopped before the
+  worktree is removed (see `SymphonyElixir.LeftoverProcesses`).
   """
 
   require Logger
 
-  alias SymphonyElixir.{AgentTelemetry, AgentTools, PromptSafety, QaDriver, ReviewAgent, Workspace}
+  alias SymphonyElixir.{AgentTelemetry, AgentTools, LeftoverProcesses, PromptSafety, QaDriver, ReviewAgent, Workspace}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Issue
 
@@ -73,6 +75,7 @@ defmodule SymphonyElixir.QaAgent do
             try do
               run_in_worktree(job, worktree, settings, opts)
             after
+              stop_leftover_processes(job, worktree, opts)
               remove_worktree(job.workspace_path, worktree, git)
             end
 
@@ -124,6 +127,12 @@ defmodule SymphonyElixir.QaAgent do
     Write every artifact (transcripts, logs, screenshots) under `#{@evidence_dir}/` in this worktree
     or under `$TMPDIR`. Attach the files reviewers need with `linear_attach_file` and list the
     returned URLs as evidence.
+
+    Stop every process you start before you answer. Where you can, run servers and other
+    long-running commands in the foreground with a time limit (the command's own timeout option, or
+    `timeout` where it is installed) instead of `nohup`, `setsid` or `&`: the sandbox may not let you
+    stop a detached process later. Symphony stops anything still running from this worktree when the
+    pass ends.
 
     Issue:
     Identifier: #{issue.identifier}
@@ -499,6 +508,11 @@ defmodule SymphonyElixir.QaAgent do
       {:error, reason} -> {:error, reason}
       {output, status} -> {:error, {:qa_worktree_failed, status, String.trim(output)}}
     end
+  end
+
+  defp stop_leftover_processes(job, worktree, opts) do
+    context = "issue_id=#{job.issue.id} issue_identifier=#{job.issue.identifier}"
+    LeftoverProcesses.stop_under([worktree], Keyword.put(Keyword.get(opts, :leftover_processes, []), :log_context, context))
   end
 
   defp ensure_commit(workspace, sha, git) do

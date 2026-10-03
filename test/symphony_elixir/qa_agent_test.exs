@@ -3,6 +3,7 @@ defmodule SymphonyElixir.QaAgentTest do
 
   import ExUnit.CaptureLog
 
+  alias SymphonyElixir.LeftoverProcesses.Table
   alias SymphonyElixir.QaAgent
   alias SymphonyElixir.QaAgent.{Report, Selection}
 
@@ -52,6 +53,37 @@ defmodule SymphonyElixir.QaAgentTest do
     end
 
     defp recipient, do: Application.fetch_env!(:symphony_elixir, :qa_test_recipient)
+  end
+
+  # Starts `setsid nohup sleep` in the worktree, outside the agent's process group.
+  defmodule DetachingSession do
+    def start_session(workspace, opts) do
+      pid = SymphonyElixir.QaAgentTest.detached_sleep(workspace)
+      send(Application.fetch_env!(:symphony_elixir, :qa_test_recipient), {:detached, pid})
+      FakeSession.start_session(workspace, opts)
+    end
+
+    defdelegate run_turn(session, prompt, issue, opts), to: FakeSession
+    defdelegate stop_session(session), to: FakeSession
+  end
+
+  @doc false
+  def detached_sleep(cwd) do
+    script = ~S"""
+    nohup perl -MPOSIX -e 'POSIX::setsid() or die "setsid: $!"; exec "sleep", "600"' >/dev/null 2>&1 &
+    echo $!
+    """
+
+    {pid, 0} = System.cmd("sh", ["-c", script], cd: cwd)
+    String.to_integer(String.trim(pid))
+  end
+
+  # A zombie waiting for init to reap it counts as gone.
+  defp running?(pid) do
+    case System.cmd("ps", ["-o", "stat=", "-p", Integer.to_string(pid)], stderr_to_stdout: true) do
+      {stat, 0} -> not String.starts_with?(String.trim(stat), "Z")
+      {_output, _status} -> false
+    end
   end
 
   setup do
@@ -324,6 +356,52 @@ defmodule SymphonyElixir.QaAgentTest do
       assert_receive {:forwarded, _message}
       assert_receive {:qa_session_stopped, _session}
       refute File.exists?(worktree)
+    end
+
+    test "stops processes left running under the worktree before removing it" do
+      settings = Config.settings!()
+      worktree = QaAgent.worktree_path(settings, "default", "TP-900", @sha)
+      test_pid = self()
+      left = %{pid: 4242, start_time: "Sat Oct  3 08:00:00 2026", command: "sleep 600", cwd: worktree}
+      unrelated = %{left | pid: 4343, cwd: System.tmp_dir!()}
+      {:ok, reads} = Agent.start_link(fn -> [{:ok, [left, unrelated]}, {:ok, [unrelated]}] end)
+
+      leftover_processes = [
+        table: fn -> Agent.get_and_update(reads, fn [next | rest] -> {next, rest} end) end,
+        signal: fn pid, signal -> send(test_pid, {:signal, pid, signal, File.exists?(worktree)}) end
+      ]
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %{result: %{verdict: :pass}}} =
+                   QaAgent.run(job(), settings, git: fake_git(), qa_agent_module: FakeSession, leftover_processes: leftover_processes)
+        end)
+
+      assert_received {:signal, 4242, "TERM", true}
+      refute_received {:signal, 4343, _signal, _exists}
+      assert log =~ "Stopping leftover process issue_id=issue-qa issue_identifier=TP-900 pid=4242 cwd=#{worktree}"
+    end
+
+    @tag :process_table
+    test "a detached process started in the worktree is gone once the pass ends" do
+      unrelated = detached_sleep(System.tmp_dir!())
+      on_exit(fn -> System.cmd("kill", ["-KILL", Integer.to_string(unrelated)]) end)
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %{result: %{verdict: :pass}}} =
+                   QaAgent.run(job(), Config.settings!(),
+                     git: fake_git(),
+                     qa_agent_module: DetachingSession,
+                     leftover_processes: [table: &Table.read/0, grace_ms: 2_000]
+                   )
+        end)
+
+      assert_received {:detached, left}
+      refute running?(left)
+      assert log =~ "Stopping leftover process issue_id=issue-qa issue_identifier=TP-900 pid=#{left} "
+      assert running?(unrelated)
+      refute log =~ "pid=#{unrelated} "
     end
 
     test "gives a macos_app pass a QA driver and stops it when the pass ends" do

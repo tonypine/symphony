@@ -3507,8 +3507,16 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp cleanup_issue_workspace(_identifier, _worker_host), do: :ok
 
+  # The operator pause is checked before the quality gate and readiness tasks, so a paused
+  # Symphony reports the pause whatever else is in flight.
   defp handle_quality_gated_active_retry(%State{} = state, %Issue{} = issue, attempt, metadata) do
-    state = start_quality_gate_or_dispatch([issue], state, {:active_retry, issue, attempt, metadata})
+    state =
+      if operator_paused?(state) do
+        defer_retry_for_operator_pause(state, issue, attempt, metadata)
+      else
+        start_quality_gate_or_dispatch([issue], state, {:active_retry, issue, attempt, metadata})
+      end
+
     {:noreply, state}
   end
 
@@ -4066,18 +4074,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp handle_active_retry_after_readiness(state, issue, attempt, metadata) do
     cond do
       operator_paused?(state) ->
-        state = log_operator_pause(state)
-
-        schedule_issue_retry(
-          state,
-          issue.id,
-          attempt,
-          Map.merge(metadata, %{
-            identifier: issue.identifier,
-            title: issue.title,
-            error: "dispatch paused by operator"
-          })
-        )
+        defer_retry_for_operator_pause(state, issue, attempt, metadata)
 
       workspace_quota_paused?(state) ->
         state = log_workspace_quota_pause(state)
@@ -4114,6 +4111,20 @@ defmodule SymphonyElixir.Orchestrator do
         Logger.debug("No available slots for retrying #{issue_context(issue)}; waiting for a slot")
         wait_for_slot(state, issue, attempt, metadata, "no available orchestrator slots")
     end
+  end
+
+  defp defer_retry_for_operator_pause(%State{} = state, %Issue{} = issue, attempt, metadata) do
+    state
+    |> log_operator_pause()
+    |> schedule_issue_retry(
+      issue.id,
+      attempt,
+      Map.merge(metadata, %{
+        identifier: issue.identifier,
+        title: issue.title,
+        error: "dispatch paused by operator"
+      })
+    )
   end
 
   # Waiting for a slot is not a failure: the retry leaves the backoff queue with its attempt
