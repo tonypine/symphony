@@ -4,8 +4,10 @@ import Foundation
 public struct StateSnapshot: Equatable {
     public var running: Int
     public var retrying: Int
-    /// Set while dispatch is paused, nil otherwise.
+    /// Set while the operator paused dispatch, nil otherwise.
     public var pause: Pause?
+    /// Provider usage-limit holds, soonest resume first; empty when nothing is held.
+    public var usageLimits: [UsageLimit]
 
     public struct Pause: Equatable {
         public var reason: String?
@@ -17,10 +19,52 @@ public struct StateSnapshot: Equatable {
         }
     }
 
-    public init(running: Int = 0, retrying: Int = 0, pause: Pause? = nil) {
+    /// A hold Symphony put on new runs of a provider, for example after Claude's five-hour limit ran out.
+    public struct UsageLimit: Equatable {
+        public enum Phase: Equatable {
+            /// New runs wait for the window to reset.
+            case paused
+            /// The window reset, and one run checks the limit before the rest resume.
+            case canary
+            /// The window is close to used up, so new runs wait for it to reset.
+            case headroom
+        }
+
+        public var provider: String
+        /// `all`, or the model family the hold is on, for example `opus`.
+        public var scope: String
+        /// For example `five_hour` or `seven_day`; nil when the provider didn't say.
+        public var window: String?
+        public var phase: Phase
+        public var resetsAt: Date?
+        public var resumeAt: Date?
+        /// How much of the window is used, from 0 to 1, when known.
+        public var utilization: Double?
+
+        public init(
+            provider: String = "anthropic",
+            scope: String = "all",
+            window: String? = nil,
+            phase: Phase = .paused,
+            resetsAt: Date? = nil,
+            resumeAt: Date? = nil,
+            utilization: Double? = nil
+        ) {
+            self.provider = provider
+            self.scope = scope
+            self.window = window
+            self.phase = phase
+            self.resetsAt = resetsAt
+            self.resumeAt = resumeAt
+            self.utilization = utilization
+        }
+    }
+
+    public init(running: Int = 0, retrying: Int = 0, pause: Pause? = nil, usageLimits: [UsageLimit] = []) {
         self.running = running
         self.retrying = retrying
         self.pause = pause
+        self.usageLimits = usageLimits
     }
 }
 
@@ -72,6 +116,17 @@ public enum SymphonyState {
         if let pause = payload.pause, pause.paused {
             snapshot.pause = .init(reason: pause.reason, since: pause.pausedAt.flatMap(parseDate))
         }
+        snapshot.usageLimits = (payload.usageLimits ?? []).map { limit in
+            StateSnapshot.UsageLimit(
+                provider: limit.provider ?? "anthropic",
+                scope: limit.scope ?? "all",
+                window: limit.window,
+                phase: phase(limit.phase),
+                resetsAt: limit.resetsAt.flatMap(parseDate),
+                resumeAt: limit.resumeAt.flatMap(parseDate),
+                utilization: limit.utilization
+            )
+        }
         return .state(snapshot)
     }
 
@@ -84,6 +139,18 @@ public enum SymphonyState {
     /// Symphony writes whole-second UTC timestamps, for example `2026-10-02T12:16:02Z`.
     private static func parseDate(_ text: String) -> Date? {
         ISO8601DateFormatter().date(from: text)
+    }
+
+    /// An unknown phase reads as paused, the hold every Symphony with `usage_limits` reports.
+    private static func phase(_ text: String?) -> StateSnapshot.UsageLimit.Phase {
+        switch text {
+        case "canary":
+            return .canary
+        case "headroom":
+            return .headroom
+        default:
+            return .paused
+        }
     }
 
     private struct Payload: Decodable {
@@ -103,8 +170,19 @@ public enum SymphonyState {
             let message: String?
         }
 
+        struct UsageLimit: Decodable {
+            let provider: String?
+            let scope: String?
+            let window: String?
+            let phase: String?
+            let resetsAt: String?
+            let resumeAt: String?
+            let utilization: Double?
+        }
+
         let counts: Counts?
         let pause: Pause?
+        let usageLimits: [UsageLimit]?
         let error: Failure?
     }
 }
