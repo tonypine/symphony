@@ -18,6 +18,10 @@ Application.put_env(:symphony_elixir, :state_root, state_root)
 Application.put_env(:symphony_elixir, :logs_root, logs_root)
 Application.put_env(:symphony_elixir, :audit_log_dir, audit_dir)
 
+# Tests never reach openrouter.ai: a test that needs the models API stubs this itself.
+offline_models_request = fn _url, _opts -> {:error, :network_disabled_in_tests} end
+Application.put_env(:symphony_elixir, :openrouter_models_request, offline_models_request)
+
 # Sandboxed agent runs (Claude Code, SRT) deny writes to `/tmp` itself but
 # expose a short writable TMPDIR such as `/tmp/claude-501`. Keep MCP socket
 # dirs there so `<root>/symphony-mcp-<id>/sock` still fits the 104-byte Unix

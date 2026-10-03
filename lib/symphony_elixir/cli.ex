@@ -40,7 +40,7 @@ defmodule SymphonyElixir.CLI do
 
   @type deps :: %{
           check_config: (-> :ok | {:error, term()}),
-          check_warnings: (-> [String.t()]),
+          check_findings: (-> %{errors: [String.t()], warnings: [String.t()]}),
           file_regular?: (String.t() -> boolean()),
           init: ([String.t()] -> SymphonyElixir.Init.result()),
           set_symphony_file_path: (String.t() -> :ok | {:error, term()}),
@@ -155,14 +155,18 @@ defmodule SymphonyElixir.CLI do
   defp check_config(path, deps) do
     case deps.check_config.() do
       :ok ->
-        IO.puts("Config OK: #{path}")
-        Enum.each(deps.check_warnings.(), &IO.puts("Warning: #{&1}"))
-        {:halt, 0}
+        %{errors: errors, warnings: warnings} = deps.check_findings.()
+        if errors == [], do: IO.puts("Config OK: #{path}")
+        Enum.each(warnings, &IO.puts("Warning: #{&1}"))
+        check_result(path, errors)
 
       {:error, reason} ->
         {:error, "Config error in #{path}: #{Config.format_error(reason)}"}
     end
   end
+
+  defp check_result(_path, []), do: {:halt, 0}
+  defp check_result(path, errors), do: {:error, "Config error in #{path}: #{Enum.join(errors, "; ")}"}
 
   defp dispatch_pr(args) do
     case OptionParser.parse(args, strict: [intent: :string]) do
@@ -390,7 +394,7 @@ defmodule SymphonyElixir.CLI do
   defp runtime_deps do
     %{
       check_config: &Config.validate_repo_workflows/0,
-      check_warnings: &Config.check_warnings/0,
+      check_findings: &Config.check_findings/0,
       file_regular?: &File.regular?/1,
       init: &SymphonyElixir.Init.run/1,
       set_symphony_file_path: &SymphonyElixir.Workflow.set_symphony_file_path/1,

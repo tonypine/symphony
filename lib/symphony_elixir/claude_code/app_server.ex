@@ -10,6 +10,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Agent
   alias SymphonyElixir.GitHub.Hosts
+  alias SymphonyElixir.OpenRouter.Models, as: OpenRouterModels
   alias SymphonyElixir.ProjectGuidePrompt
   alias SymphonyElixir.Secret
   alias SymphonyElixir.SharedSkills
@@ -57,6 +58,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     run_profile = Keyword.get(opts, :run_profile)
 
     with :ok <- check_provider(run_profile, worker_host),
+         {:ok, run_profile} <- check_model_capabilities(run_profile),
          {:ok, expanded_workspace} <- validate_workspace_cwd(workspace, worker_host, settings),
          {:ok, mcp_session, remote_socket_path, remote_shim_path} <-
            start_mcp_session(expanded_workspace, worker_host, opts),
@@ -906,6 +908,53 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   defp check_provider(profile, _worker_host) do
     with {:ok, _env} <- provider_env(profile), do: :ok
   end
+
+  # Symphony runs need tool use, so an OpenRouter model whose catalog entry lacks `tools` fails
+  # the run before `claude` starts. `--effort` is dropped for a model without `reasoning`. When
+  # the catalog cannot be read, or does not list the model, the run starts anyway: an OpenRouter
+  # outage must not block work, and `symphony check` already rejects unknown ids.
+  defp check_model_capabilities(%{provider: "openrouter", model: model} = profile) when is_binary(model) do
+    kind = Map.get(profile, :kind)
+
+    case OpenRouterModels.lookup(model) do
+      {:ok, %{tools: false}} ->
+        Logger.error(
+          "OpenRouter run cannot start: model #{model} does not support tools run_kind=#{kind}; " <>
+            "set agent.run_profiles.#{kind}.model to a model that lists tools"
+        )
+
+        {:error, {:openrouter_model_unsupported, model, kind, :tools}}
+
+      {:ok, %{reasoning: false}} ->
+        {:ok, drop_unsupported_effort(profile)}
+
+      {:ok, _capabilities} ->
+        {:ok, profile}
+
+      {:error, :unknown_model} ->
+        Logger.warning("OpenRouter does not list model #{model}; starting anyway run_kind=#{kind}")
+        {:ok, profile}
+
+      {:error, {:unavailable, reason}} ->
+        Logger.warning("Could not check OpenRouter model #{model}: #{OpenRouterModels.format_reason(reason)}; starting anyway run_kind=#{kind}")
+        {:ok, profile}
+    end
+  end
+
+  defp check_model_capabilities(profile), do: {:ok, profile}
+
+  defp drop_unsupported_effort(%{model: model, effort: effort} = profile) when is_binary(effort) do
+    warned_key = {__MODULE__, :effort_dropped, model}
+
+    unless :persistent_term.get(warned_key, false) do
+      :persistent_term.put(warned_key, true)
+      Logger.warning("OpenRouter model #{model} does not support reasoning; starting its runs without --effort #{effort}")
+    end
+
+    %{profile | effort: nil}
+  end
+
+  defp drop_unsupported_effort(profile), do: profile
 
   # The env that points `claude` at the run's provider, read at each launch so the key never
   # sits in the session. Anthropic runs add nothing.

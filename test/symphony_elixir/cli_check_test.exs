@@ -6,6 +6,7 @@ defmodule SymphonyElixir.CLICheckTest do
   alias SymphonyElixir.CLI
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Cache
+  alias SymphonyElixir.OpenRouter.Models
   alias SymphonyElixir.Workflow
 
   @secret "lin_api_check_secret_value"
@@ -97,8 +98,15 @@ defmodule SymphonyElixir.CLICheckTest do
   describe "OpenRouter key" do
     setup do
       previous = System.get_env("OPENROUTER_API_KEY")
+      previous_request = Application.get_env(:symphony_elixir, :openrouter_models_request)
       System.delete_env("OPENROUTER_API_KEY")
-      on_exit(fn -> if previous, do: System.put_env("OPENROUTER_API_KEY", previous), else: System.delete_env("OPENROUTER_API_KEY") end)
+      Models.clear_cache()
+
+      on_exit(fn ->
+        if previous, do: System.put_env("OPENROUTER_API_KEY", previous), else: System.delete_env("OPENROUTER_API_KEY")
+        restore_app_env(:openrouter_models_request, previous_request)
+        Models.clear_cache()
+      end)
     end
 
     test "warns when a profile uses openrouter and OPENROUTER_API_KEY is unset", %{root: root} do
@@ -112,8 +120,9 @@ defmodule SymphonyElixir.CLICheckTest do
                "Config OK: #{path}\nWarning: OPENROUTER_API_KEY is not set; runs that use provider openrouter will fail to start (landing, ci_fix)\n"
     end
 
-    test "does not warn, or print the key, when OPENROUTER_API_KEY is set", %{root: root} do
+    test "does not warn, or print the key, when OPENROUTER_API_KEY is set and the model supports tools", %{root: root} do
       System.put_env("OPENROUTER_API_KEY", "sk-or-v1-check-secret")
+      stub_models_api()
       path = write_symphony!(root, openrouter_symphony(root))
 
       {result, output} = check(["--config", path])
@@ -130,20 +139,120 @@ defmodule SymphonyElixir.CLICheckTest do
       assert message =~ "agent.run_profiles.landing.provider openrouter is not supported with workers.ssh_hosts"
     end
 
-    test "check_warnings is empty when the config does not load", %{root: root} do
+    test "check_findings is empty when the config does not load", %{root: root} do
       write_symphony!(root, "issues: [unclosed\n")
       Workflow.set_symphony_file_path(Path.join(resolved(root), "symphony.yml"))
 
-      assert Config.check_warnings() == []
+      assert Config.check_findings() == %{errors: [], warnings: []}
+    end
+
+    test "does not ask the models API when no run uses openrouter", %{root: root} do
+      System.put_env("OPENROUTER_API_KEY", "sk-or-v1-check-secret")
+      Application.put_env(:symphony_elixir, :openrouter_models_request, fn _url, _opts -> flunk("models API called") end)
+      path = write_symphony!(root, valid_symphony(root))
+
+      assert check(["--config", path]) == {{:halt, 0}, "Config OK: #{path}\n"}
+    end
+
+    test "rejects a model without tools, naming the key and the model id", %{root: root} do
+      System.put_env("OPENROUTER_API_KEY", "sk-or-v1-check-secret")
+      stub_models_api()
+      path = write_symphony!(root, openrouter_symphony(root, "acme/chat-only"))
+
+      assert {{:error, message}, ""} = check(["--config", path])
+
+      assert message ==
+               "Config error in #{path}: agent.run_profiles.landing.model: OpenRouter model `acme/chat-only` does not support tools; Symphony runs need tool use"
+    end
+
+    test "rejects a model id OpenRouter does not list", %{root: root} do
+      System.put_env("OPENROUTER_API_KEY", "sk-or-v1-check-secret")
+      stub_models_api()
+      path = write_symphony!(root, openrouter_symphony(root, "acme/typo"))
+
+      assert {{:error, message}, ""} = check(["--config", path])
+      assert message == "Config error in #{path}: agent.run_profiles.landing.model: OpenRouter has no model `acme/typo`"
+    end
+
+    test "warns when effort is set for a model without reasoning", %{root: root} do
+      System.put_env("OPENROUTER_API_KEY", "sk-or-v1-check-secret")
+      stub_models_api()
+
+      content =
+        String.replace(valid_symphony(root), "  runtime: codex\n  command: codex app-server\n", """
+          runtime: claude
+          command: claude
+          provider: openrouter
+          model: acme/tools-only
+          effort: high
+          run_profiles:
+            landing: { effort: low }
+        """)
+
+      path = write_symphony!(root, content)
+
+      assert check(["--config", path]) ==
+               {{:halt, 0},
+                """
+                Config OK: #{path}
+                Warning: agent.effort: OpenRouter model `acme/tools-only` does not support reasoning; its runs start without --effort high
+                Warning: agent.run_profiles.landing.effort: OpenRouter model `acme/tools-only` does not support reasoning; its runs start without --effort low
+                """}
+    end
+
+    test "names the pre-push reviewer and QA agent keys", %{root: root} do
+      System.put_env("OPENROUTER_API_KEY", "sk-or-v1-check-secret")
+      stub_models_api()
+
+      content =
+        String.replace(valid_symphony(root), "  runtime: codex\n  command: codex app-server\n", """
+          runtime: claude
+          command: claude
+          provider: openrouter
+          model: anthropic/claude-haiku-4.5
+        pre_push_review:
+          model: acme/chat-only
+        auto_review:
+          model: acme/tools-only
+          effort: low
+        """)
+
+      path = write_symphony!(root, content)
+
+      assert check(["--config", path]) ==
+               {{:error, "Config error in #{path}: pre_push_review.model: OpenRouter model `acme/chat-only` does not support tools; Symphony runs need tool use"},
+                "Warning: auto_review.effort: OpenRouter model `acme/tools-only` does not support reasoning; its runs start without --effort low\n"}
+    end
+
+    test "only warns when the models API cannot be reached", %{root: root} do
+      System.put_env("OPENROUTER_API_KEY", "sk-or-v1-check-secret")
+      unreachable = fn _url, _opts -> {:error, %Req.TransportError{reason: :nxdomain}} end
+      Application.put_env(:symphony_elixir, :openrouter_models_request, unreachable)
+      path = write_symphony!(root, openrouter_symphony(root, "acme/chat-only"))
+
+      assert check(["--config", path]) ==
+               {{:halt, 0}, "Config OK: #{path}\nWarning: could not reach the OpenRouter models API (non-existing domain); OpenRouter models were not checked\n"}
     end
   end
 
-  defp openrouter_symphony(root) do
+  defp stub_models_api do
+    models = [
+      %{"id" => "anthropic/claude-haiku-4.5", "supported_parameters" => ["tools", "reasoning"], "context_length" => 200_000},
+      %{"id" => "acme/tools-only", "supported_parameters" => ["tools"], "context_length" => 32_000},
+      %{"id" => "acme/chat-only", "supported_parameters" => ["max_tokens"], "context_length" => 8_192}
+    ]
+
+    Application.put_env(:symphony_elixir, :openrouter_models_request, fn "https://openrouter.ai/api/v1/models", _opts ->
+      {:ok, %{status: 200, body: %{"data" => models}}}
+    end)
+  end
+
+  defp openrouter_symphony(root, landing_model \\ "anthropic/claude-haiku-4.5") do
     String.replace(valid_symphony(root), "  runtime: codex\n  command: codex app-server\n", """
       runtime: claude
       command: claude
       run_profiles:
-        landing: { provider: openrouter, model: anthropic/claude-haiku-4.5 }
+        landing: { provider: openrouter, model: #{landing_model} }
         ci_fix: { provider: openrouter, model: anthropic/claude-haiku-4.5 }
     """)
   end
@@ -218,7 +327,7 @@ defmodule SymphonyElixir.CLICheckTest do
     deps =
       %{
         check_config: &Config.validate_repo_workflows/0,
-        check_warnings: &Config.check_warnings/0,
+        check_findings: &Config.check_findings/0,
         file_regular?: &File.regular?/1,
         init: fn _args -> flunk("init called") end,
         set_symphony_file_path: &Workflow.set_symphony_file_path/1,
