@@ -85,6 +85,9 @@ defmodule SymphonyElixir.AgentRunner do
         Logger.error("Agent run failed for #{issue_context(issue)}: #{inspect(reason)}")
 
         cond do
+          usage_limit = usage_limit_reason(reason) ->
+            exit({:usage_limited, usage_limit})
+
           terminal_agent_setup_error?(reason) ->
             exit({:terminal_agent_setup_error, reason})
 
@@ -99,6 +102,10 @@ defmodule SymphonyElixir.AgentRunner do
         end
     end
   end
+
+  # The orchestrator holds the provider's runs until the limit resets instead of failing the run.
+  defp usage_limit_reason({:usage_limited, %{} = info}), do: info
+  defp usage_limit_reason(_reason), do: nil
 
   defp terminal_review_agent_block?({:review_agent_blocked, _reason}), do: true
   defp terminal_review_agent_block?(_reason), do: false

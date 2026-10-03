@@ -35,6 +35,7 @@ defmodule SymphonyElixir.RunStore do
   @data_tables Enum.map(@tables, fn {table, _attributes, _opts} -> table end)
   @codex_totals_key :codex_totals
   @pause_key :dispatch_pause
+  @usage_limits_key :usage_limits
   @unpaused %{paused: false, reason: nil, paused_at: nil}
   @quality_gate_cache_key :quality_gate_cache
   @quality_gate_comment_keys_key :quality_gate_comment_keys
@@ -630,6 +631,26 @@ defmodule SymphonyElixir.RunStore do
     end
   end
 
+  @doc """
+  Replaces the usage-limit holds, keyed by `{provider, scope}`. They are stored next to the
+  operator pause, not inside it, so clearing one never touches the other.
+  """
+  @spec put_usage_limits(map()) :: :ok | {:error, term()}
+  def put_usage_limits(usage_limits) when is_map(usage_limits) do
+    with :ok <- ensure_started() do
+      durable_transaction(fn -> write_usage_limits(usage_limits) end)
+    end
+  end
+
+  def put_usage_limits(_usage_limits), do: {:error, :invalid_usage_limits}
+
+  @spec get_usage_limits() :: map() | {:error, term()}
+  def get_usage_limits do
+    with :ok <- ensure_started() do
+      transaction(&read_usage_limits/0)
+    end
+  end
+
   @spec clear() :: :ok | {:error, term()}
   def clear do
     with :ok <- ensure_started() do
@@ -988,6 +1009,23 @@ defmodule SymphonyElixir.RunStore do
     case :mnesia.read(@totals_table, @codex_totals_key) do
       [{@totals_table, @codex_totals_key, totals}] -> totals
       [] -> nil
+    end
+  end
+
+  defp write_usage_limits(usage_limits) when map_size(usage_limits) == 0 do
+    :mnesia.delete({@pause_table, @usage_limits_key})
+    :ok
+  end
+
+  defp write_usage_limits(usage_limits) do
+    :mnesia.write({@pause_table, @usage_limits_key, usage_limits})
+    :ok
+  end
+
+  defp read_usage_limits do
+    case :mnesia.read(@pause_table, @usage_limits_key) do
+      [{@pause_table, @usage_limits_key, usage_limits}] when is_map(usage_limits) -> usage_limits
+      _ -> %{}
     end
   end
 

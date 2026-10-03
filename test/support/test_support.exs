@@ -734,7 +734,8 @@ defmodule SymphonyElixir.TestSupport do
           workspace_sandbox: workspace_sandbox,
           network_access: agent_network_access,
           sandbox_runtime: agent_sandbox_runtime,
-          mcp: Keyword.get(config, :agent_mcp)
+          mcp: Keyword.get(config, :agent_mcp),
+          usage_limit: Keyword.get(config, :agent_usage_limit)
         }),
         hooks_yaml(hook_after_create, hook_before_run, hook_after_run, hook_before_remove, hook_timeout_ms),
         prompts_yaml(prompts),
@@ -932,7 +933,8 @@ defmodule SymphonyElixir.TestSupport do
       "    filesystem: #{yaml_value(filesystem)}",
       config.network_access && "    network: #{yaml_value(config.network_access)}",
       outer_sandbox && "    outer_sandbox: #{yaml_value(outer_sandbox)}",
-      config.mcp && "  mcp: #{yaml_value(config.mcp)}"
+      config.mcp && "  mcp: #{yaml_value(config.mcp)}",
+      config.usage_limit && "  usage_limit: #{yaml_value(config.usage_limit)}"
     ]
     |> Enum.reject(&(&1 in [nil, false]))
     |> Enum.join("\n")
