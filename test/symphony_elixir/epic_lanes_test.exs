@@ -115,9 +115,10 @@ defmodule SymphonyElixir.EpicLanesTest do
       assert {:lane, %{identifier: "E2"}} = EpicLanes.slot_for(plan, "q2", ["B1"])
       assert EpicLanes.slot_for(plan, "S1", ["B1", "B1"]) == :shared
 
-      # Next to a ticket only E1 can hold, the shared blocker takes E2's lane.
+      # Next to a ticket only E1 can hold, the shared blocker takes E2's lane, until q2 needs it:
+      # then the blocker counts as shared.
       assert EpicLanes.slot_for(plan, "S1", ["B1", "p3"]) == :shared
-      assert EpicLanes.slot_for(plan, "q2", ["B1", "p3"]) == :shared
+      assert {:lane, %{identifier: "E2"}} = EpicLanes.slot_for(plan, "q2", ["B1", "p3"])
 
       snapshot = EpicLanes.snapshot(plan, %{"B1" => %{state: "In Progress"}, "p3" => %{state: "In Progress"}})
       assert %{lanes: [%{sub_issue: %{identifier: "p3"}}, %{sub_issue: %{identifier: "B1"}}], shared: %{used: 0}} = snapshot
@@ -208,6 +209,36 @@ defmodule SymphonyElixir.EpicLanesTest do
       assert EpicLanes.slot_for(plan, "b", ["a"]) == :shared
       assert EpicLanes.slot_for(plan, "c", ["a", "b"]) == :shared
       assert EpicLanes.slot_for(plan, "S1", ["a", "b", "c"]) == :none
+    end
+
+    test "a running blocker on two paths leaves the candidate the one lane it can use" do
+      # No shared slots: Y blocks a part of both epics; X is a parallel part of E1 only.
+      candidates = [
+        epic("E1", [{"p1", "Todo"}, {"X", "Todo"}]),
+        epic("E2", [{"q1", "Todo"}]),
+        ticket("p1", "Todo", blocked_by: [link("Y", "In Progress")]),
+        ticket("q1", "Todo", blocked_by: [link("Y", "In Progress")])
+      ]
+
+      plan = EpicLanes.plan(candidates, 2, 2, @terminal)
+
+      assert {:lane, %{identifier: "E1"}} = EpicLanes.slot_for(plan, "X", ["Y"])
+      assert EpicLanes.slot_for(plan, "S1", ["Y", "X"]) == :none
+
+      snapshot = EpicLanes.snapshot(plan, %{"Y" => %{}, "X" => %{}})
+      assert %{lanes: [%{sub_issue: %{identifier: "X"}}, %{sub_issue: %{identifier: "Y"}}], shared: %{used: 0}} = snapshot
+    end
+
+    test "the candidate does not take a lane a running ticket needs" do
+      # No shared slots: B1 runs in E1's lane, the only one on its path.
+      candidates = [
+        epic("E1", [{"p1", "Todo"}, {"A1", "Todo"}]),
+        ticket("p1", "Todo", blocked_by: [link("B1", "In Progress")])
+      ]
+
+      plan = EpicLanes.plan(candidates, 1, 1, @terminal)
+
+      assert EpicLanes.slot_for(plan, "A1", ["B1"]) == :none
     end
 
     test "with no plan yet every slot is shared" do

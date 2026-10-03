@@ -78,14 +78,27 @@ defmodule SymphonyElixir.EpicLanes do
   def slot_for(nil, _issue_id, _running_ids), do: :shared
 
   def slot_for(%{lanes: lanes, shared: shared}, issue_id, running_ids) when is_list(running_ids) do
-    running_ids = Enum.uniq(running_ids)
+    running_ids = running_ids |> Enum.uniq() |> List.delete(issue_id)
     occupancy = occupancy(lanes, running_ids)
-    lane = Enum.find(lanes, &(Map.has_key?(&1.members, issue_id) and not Map.has_key?(occupancy, &1.id)))
+    lane = candidate_lane(lanes, issue_id, running_ids, occupancy, shared)
 
     cond do
       lane -> {:lane, lane}
       length(running_ids) - map_size(occupancy) < shared -> :shared
       true -> :none
+    end
+  end
+
+  # Placing the candidate together with the running tickets lets a ticket on two paths move to its
+  # other lane rather than take the one lane the candidate could use. That counts only when the
+  # running tickets left without a lane still fit the shared pool; otherwise the candidate takes a
+  # lane the running tickets leave free.
+  defp candidate_lane(lanes, issue_id, running_ids, occupancy, shared) do
+    with_candidate = occupancy(lanes, [issue_id | running_ids])
+
+    case Enum.find(lanes, &(Map.get(with_candidate, &1.id) == issue_id)) do
+      %{} = lane when length(running_ids) - (map_size(with_candidate) - 1) <= shared -> lane
+      _no_lane -> Enum.find(lanes, &(Map.has_key?(&1.members, issue_id) and not Map.has_key?(occupancy, &1.id)))
     end
   end
 
