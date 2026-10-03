@@ -2749,7 +2749,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # An agent a previous Symphony left running may still be working in the issue's workspace.
-  defp agent_left_running?(%Issue{identifier: identifier} = issue) do
+  defp agent_left_running?(%{identifier: identifier} = issue) do
     case AgentProcesses.dispatch_blocked_reason(identifier) do
       nil ->
         false

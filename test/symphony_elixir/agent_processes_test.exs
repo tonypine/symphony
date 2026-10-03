@@ -183,7 +183,11 @@ defmodule SymphonyElixir.AgentProcessesTest do
 
   test "groups that are gone are dropped from the ledger" do
     path = ledger_path()
-    write_ledger(path, [%{pgid: 999_999, start_time: "Sat Oct  3 07:50:16 2026", workspace: "/workspaces/repo/TP-1"}])
+    port = open_agent("echo ready; read line")
+    exited_pid = os_pid(port)
+    Port.close(port)
+    assert eventually_gone?(exited_pid, 3_000)
+    write_ledger(path, [%{pgid: exited_pid, start_time: "Sat Oct  3 07:50:16 2026", workspace: "/workspaces/repo/TP-1"}])
 
     start_server(ledger_path: path, start_time: fn _pid -> flunk("a gone group needs no start time") end)
 
@@ -199,7 +203,7 @@ defmodule SymphonyElixir.AgentProcessesTest do
       path = ledger_path()
       port = open_agent(@eof_ignoring_agent)
       os_pid = os_pid(port)
-      write_ledger(path, [%{pgid: os_pid, start_time: recorded, workspace: "/workspaces/repo/TP-9"}, %{pgid: os_pid + 1}])
+      write_ledger(path, [%{pgid: os_pid, start_time: recorded, workspace: "/workspaces/repo/TP-9"}])
 
       log =
         capture_log(fn ->
