@@ -1136,6 +1136,17 @@ When enabled:
 - Each pass rewrites one `## Symphony QA Report` issue comment (an exception to the
   single-workpad rule, written by Symphony only), records a run with `kind: "qa"`, tokens and
   runtime in the run store, and emits `qa_passed` or `qa_failed`.
+- Parent walkthrough: a run of kind `final_verification` on a local worker with the Linear tracker,
+  for a ticket with a parent and no `qa:skip` label, MUST NOT start an executor agent. Symphony
+  runs the QA agent instead, with no PR, in a fresh worktree at the head of
+  `origin/<base_branch>`, with the parent as the issue under test and the verification ticket's
+  description as an extra checklist. Playbooks come from `qa:<kind>` labels on the ticket or the
+  parent, else every enabled playbook. The `## Symphony QA Report` is written on the parent and on
+  the verification ticket. `pass` and `blocked` move the verification ticket to `In Review`;
+  `fail` creates one `Backlog` child of the verification ticket per failing step (per finding when
+  no step failed), naming the step and holding its details and evidence, lists them in the report,
+  and moves the verification ticket to `Backlog`. There is no fix loop. Any other final
+  verification ticket gets the executor run.
 
 When disabled, behaviour is unchanged.
 
