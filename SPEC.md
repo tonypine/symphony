@@ -1953,7 +1953,8 @@ Note:
 #### 8.4.1 Provider Usage-Limit Holds
 
 When `agent.usage_limit.auto_pause` is on and a run ends because the provider's usage limit is
-reached (for Claude, a used-up five-hour or weekly window):
+reached (for Claude, a used-up five-hour or weekly window; for Codex, an error with
+`codexErrorInfo: usageLimitExceeded`, timed from the rate-limit window at 100% or more):
 
 - Create or refresh a hold keyed by `{provider, scope}`. Scope is the whole plan, or a model family
   for a model-specific window (`seven_day_opus` holds only runs whose model is Opus). A hold
@@ -1967,7 +1968,8 @@ reached (for Claude, a used-up five-hour or weekly window):
 - Runs of the same provider already in flight are left alone; each one is handled the same way if
   it hits the limit.
 - While a hold covers a candidate's resolved run profile (`run_profiles.<kind>.provider`, else
-  `agent.provider`, and its model for a model scope), every dispatch path skips it: the poll,
+  `agent.provider`, and its model for a model scope; runs of `agent.kind: codex` are provider
+  `openai`), every dispatch path skips it: the poll,
   retries, operator PR runs and Auto Review QA passes. Other providers keep dispatching. Epic lanes
   stay reserved.
 - At `resume_at` the hold moves to `phase: canary` and exactly one held retry, the first in normal

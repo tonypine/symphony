@@ -444,13 +444,15 @@ agent:
 
 **Usage limits:**
 
-- `usage_limit.auto_pause` (default `true`): when a run ends on the Claude usage limit, Symphony
+- `usage_limit.auto_pause` (default `true`): when a run ends on the Claude or Codex usage limit, Symphony
   holds new runs of that provider until the limit resets instead of failing the run. The retry
   keeps its attempt, gets no backoff and no `run_failed` notification, and the run is recorded as
   `usage_limited`. Runs on another provider (for example an `openrouter` run profile) keep
-  dispatching, and a weekly Opus limit holds only Opus runs. `false` keeps the old behaviour: the
+  dispatching, and a weekly Opus limit holds only Opus runs. Codex runs (`agent.kind: codex`) are
+  their own provider (`openai`): a Codex limit holds only Codex runs, and a Claude limit never
+  holds them. `false` keeps the old behaviour: the
   run fails and retries with the normal backoff.
-- `usage_limit.resume_margin_seconds` (default `120`, `>= 0`): added to the reset time Claude
+- `usage_limit.resume_margin_seconds` (default `120`, `>= 0`): added to the reset time the provider
   reports before runs resume.
 - `usage_limit.unknown_reset_retry_seconds` (default `900`, `>= 60`): how long the hold lasts when
   no reset time is known (neither in the rejection nor remembered for that window).
