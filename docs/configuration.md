@@ -675,8 +675,8 @@ tools for it on the host, outside the sandbox, and checks every argument:
 
 | Tool | Does | Refuses |
 | --- | --- | --- |
-| `qa_build` | runs `build` in the QA worktree with the agent's scrubbed environment | a worktree with changes outside `qa-evidence/` |
-| `qa_launch_app` | starts the `app` bundle's executable with `SYMPHONY_BAR_QA_ROOT` set to a private directory ([QA mode](../macos/README.md#qa-mode)), and returns its PID | a bundle that resolves (symlinks included) outside the worktree, or an executable that changed since the last `qa_build` |
+| `qa_build` | runs `build` in the QA worktree with the agent's scrubbed environment | a worktree with changes outside `qa-evidence/`, gitignored files included: none may exist before the first build, and none may appear or change after a build |
+| `qa_launch_app` | starts the `app` bundle's executable with `SYMPHONY_BAR_QA_ROOT` set to a private directory ([QA mode](../macos/README.md#qa-mode)), and returns its PID | a bundle that resolves (symlinks included) outside the worktree, an executable that changed since the last `qa_build`, or a worktree `qa_build` would refuse |
 | `qa_quit_app` | quits a launched app and returns its recent output | a PID it did not launch |
 | `qa_screenshot` | saves the app's on-screen windows to `qa-evidence/<name>.png` | a PID it did not launch, a window of another app |
 | `qa_ax_tree` | reads the accessibility tree (role, title, value, frame), filtered by `role` or `text`, capped in depth, nodes and size | a PID it did not launch |

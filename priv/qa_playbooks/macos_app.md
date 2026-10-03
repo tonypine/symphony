@@ -14,7 +14,8 @@ for you on the host. They only act on this worktree's configured app and on apps
 - `qa_screenshot`: saves the app's windows to `qa-evidence/<name>.png`.
 - `qa_quit_app`: quits the app and returns its recent output.
 
-Do not edit files in the worktree: `qa_build` refuses to build a modified checkout.
+Do not edit files in the worktree, gitignored ones included (such as build caches):
+`qa_build` and `qa_launch_app` refuse a modified checkout.
 
 1. Run `qa_build`. A non-zero `exit_status` from a change that should build is a failing
    step; quote the end of the output.

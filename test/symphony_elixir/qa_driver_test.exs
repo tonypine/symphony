@@ -206,6 +206,50 @@ defmodule SymphonyElixir.QaDriverTest do
       assert error_code(QaDriver.call_tool(broken_git, "qa_build", %{})) == "qa_git_failed"
     end
 
+    test "refuses gitignored files the agent planted or changed", %{worktree: worktree} do
+      {_output, 0} = System.cmd("git", ["init", "--quiet", worktree])
+      File.write!(Path.join(worktree, ".gitignore"), "macos/build/\nmacos/.build/\nqa-evidence/\n")
+      {_output, 0} = System.cmd("git", ["-C", worktree, "add", ".gitignore"])
+      identity = ["-c", "user.name=QA", "-c", "user.email=qa@example.com"]
+      {_output, 0} = System.cmd("git", ["-C", worktree | identity] ++ ["commit", "--quiet", "-m", "init"])
+      git = fn args, cwd -> System.cmd("git", ["-C", cwd | args], stderr_to_stdout: true) end
+
+      # Planted before the first build: the worktree is fresh, so nothing ignored may exist.
+      planted = Path.join(worktree, "macos/.build/checkouts/dep/Sources/Dep.swift")
+      File.mkdir_p!(Path.dirname(planted))
+      File.write!(planted, "evil()")
+      File.mkdir_p!(Path.join(worktree, "qa-evidence"))
+      File.write!(Path.join(worktree, "qa-evidence/a.png"), "png")
+      driver = start_driver(worktree, git: git)
+      assert {:error, {:qa_tool, "qa_worktree_modified", message}} = QaDriver.call_tool(driver, "qa_build", %{})
+      assert message =~ "macos/.build/checkouts/dep/Sources/Dep.swift"
+      refute_received {:cmd, "/bin/sh", _args, _opts}
+      File.rm_rf!(Path.join(worktree, "macos/.build"))
+
+      # The build's own ignored outputs are fine, and a rebuild accepts them.
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+
+      # A file rewritten after the build, even with its size and mtime restored, is refused.
+      plist = Path.join(worktree, @app <> "/Contents/Info.plist")
+      %File.Stat{mtime: mtime} = File.stat!(plist, time: :posix)
+      File.write!(plist, "<plst/>")
+      File.touch!(plist, mtime)
+      assert {:error, {:qa_tool, "qa_worktree_modified", message}} = QaDriver.call_tool(driver, "qa_launch_app", %{})
+      assert message =~ "Info.plist"
+      assert error_code(QaDriver.call_tool(driver, "qa_build", %{})) == "qa_worktree_modified"
+
+      # So is a new ignored file.
+      File.write!(plist, "<plist/>")
+      fresh = start_driver(worktree, git: git)
+      File.rm_rf!(Path.join(worktree, "macos/build"))
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(fresh, "qa_build", %{})
+      File.mkdir_p!(Path.dirname(planted))
+      File.write!(planted, "evil()")
+      assert error_code(QaDriver.call_tool(fresh, "qa_launch_app", %{})) == "qa_worktree_modified"
+      assert error_code(QaDriver.call_tool(fresh, "qa_build", %{})) == "qa_worktree_modified"
+    end
+
     test "reports a failing build and forgets the previous one", %{worktree: worktree} do
       driver = start_driver(worktree)
       assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})

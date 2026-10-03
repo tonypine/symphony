@@ -8,10 +8,13 @@ defmodule SymphonyElixir.QaDriver do
 
   - `qa_build` runs only the configured `build` command, in the QA worktree, with
     the agent's scrubbed environment, and refuses a worktree with edits outside
-    `qa-evidence/`;
+    `qa-evidence/`. Gitignored files count too (the build reads caches such as
+    SwiftPM's `.build/`): none may exist before the first build, and after a
+    build none may appear or change until the next one;
   - `qa_launch_app` starts only the configured `app` bundle, which must resolve
-    (symlinks included) inside the worktree and whose executable must be the one
-    the last `qa_build` produced. The app always gets `SYMPHONY_BAR_QA_ROOT`
+    (symlinks included) inside the worktree, whose executable must be the one
+    the last `qa_build` produced, and only while the worktree is as that build
+    left it. The app always gets `SYMPHONY_BAR_QA_ROOT`
     pointing at a private directory, so it never touches real settings or the
     login Keychain;
   - `qa_quit_app`, `qa_screenshot`, `qa_ax_tree`, `qa_ax_press` and
@@ -105,14 +108,16 @@ defmodule SymphonyElixir.QaDriver do
   # -- tools ------------------------------------------------------------------
 
   defp run_tool("qa_build", driver, config, _args) do
-    with :ok <- ensure_clean_worktree(config),
-         {:ok, {output, status}} <- run_build(config) do
-      record_build(driver, config, status, tail(output, @output_limit))
+    with :ok <- ensure_clean_worktree(config, GenServer.call(driver, :ignored)),
+         {:ok, {output, status}} <- run_build(config),
+         {:ok, ignored, _dirty} <- worktree_status(config) do
+      record_build(driver, config, status, tail(output, @output_limit), ignored_signatures(config, ignored))
     end
   end
 
   defp run_tool("qa_launch_app", driver, config, _args) do
     with {:ok, built} <- fetch_build(driver),
+         :ok <- ensure_clean_worktree(config, GenServer.call(driver, :ignored)),
          {:ok, fingerprint} <- fingerprint_app(config),
          :ok <- same_build(built, fingerprint) do
       GenServer.call(driver, {:launch, fingerprint.executable})
@@ -185,39 +190,72 @@ defmodule SymphonyElixir.QaDriver do
 
   # -- build and bundle checks ------------------------------------------------
 
-  defp ensure_clean_worktree(config) do
-    case config.git.(["status", "--porcelain=v1", "-z", "--untracked-files=all"], config.worktree) do
+  # Ignored files are inputs too: the host build reads caches such as SwiftPM's
+  # `.build/`, which the sandboxed agent can write. `baseline` holds the ignored
+  # files the last build left (empty before the first build); any other ignored
+  # file, or one whose signature changed, means the agent touched it.
+  defp ensure_clean_worktree(config, baseline) do
+    with {:ok, ignored, dirty} <- worktree_status(config) do
+      planted =
+        config
+        |> ignored_signatures(ignored)
+        |> Enum.reject(fn {path, signature} -> Map.get(baseline, path) == signature end)
+        |> Enum.map(fn {path, _signature} -> path end)
+        |> Enum.sort()
+
+      case dirty ++ planted do
+        [] ->
+          :ok
+
+        changed ->
+          tool_error(
+            "qa_worktree_modified",
+            "The QA worktree has changes outside #{@evidence_dir}/ (#{Enum.join(Enum.take(changed, 5), ", ")}). QA tests the PR head as pushed; do not edit files in the worktree, including gitignored ones."
+          )
+      end
+    end
+  end
+
+  defp worktree_status(config) do
+    args = ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=traditional"]
+
+    case config.git.(args, config.worktree) do
       {output, 0} ->
-        dirty =
+        {ignored, dirty} =
           output
           |> to_string()
           |> String.split(<<0>>, trim: true)
-          |> Enum.map(&String.slice(&1, 3..-1//1))
-          |> Enum.reject(&String.starts_with?(&1, @evidence_dir <> "/"))
+          |> Enum.reject(&String.starts_with?(String.slice(&1, 3..-1//1), @evidence_dir <> "/"))
+          |> Enum.split_with(&String.starts_with?(&1, "!! "))
 
-        if dirty == [] do
-          :ok
-        else
-          tool_error(
-            "qa_worktree_modified",
-            "The QA worktree has changes outside #{@evidence_dir}/ (#{Enum.join(Enum.take(dirty, 5), ", ")}). QA tests the PR head as pushed; do not edit files in the worktree."
-          )
-        end
+        {:ok, Enum.map(ignored, &String.slice(&1, 3..-1//1)), Enum.map(dirty, &String.slice(&1, 3..-1//1))}
 
       {output, status} ->
         tool_error("qa_git_failed", "git status failed (exit #{status}): #{tail(to_string(output), 500)}")
     end
   end
 
-  defp record_build(driver, config, 0, output) do
+  # ctime and inode cannot be set back by an unprivileged process, so a rewrite
+  # shows even when size and mtime are restored.
+  defp ignored_signatures(config, paths) do
+    for path <- paths,
+        {:ok, stat} <- [File.lstat(Path.join(config.worktree, path), time: :posix)],
+        into: %{} do
+      {path, {stat.type, stat.size, stat.mtime, stat.ctime, stat.inode}}
+    end
+  end
+
+  # The build's own outputs become the baseline whether or not it succeeded, so
+  # a failed build's partial outputs do not block the next attempt.
+  defp record_build(driver, config, 0, output, ignored) do
     with {:ok, fingerprint} <- fingerprint_app(config) do
-      GenServer.call(driver, {:record_build, fingerprint})
+      GenServer.call(driver, {:record_build, fingerprint, ignored})
       {:ok, %{"exit_status" => 0, "output" => output, "app" => config.app}}
     end
   end
 
-  defp record_build(driver, _config, status, output) do
-    GenServer.call(driver, {:record_build, nil})
+  defp record_build(driver, _config, status, output, ignored) do
+    GenServer.call(driver, {:record_build, nil, ignored})
     {:ok, %{"exit_status" => status, "output" => output}}
   end
 
@@ -543,13 +581,16 @@ defmodule SymphonyElixir.QaDriver do
       git: Keyword.get(opts, :git, &default_git/2)
     }
 
-    {:ok, %{config: config, build: nil, apps: %{}}}
+    {:ok, %{config: config, build: nil, ignored: %{}, apps: %{}}}
   end
 
   @impl true
   def handle_call(:config, _from, state), do: {:reply, state.config, state}
   def handle_call(:build, _from, state), do: {:reply, state.build, state}
-  def handle_call({:record_build, fingerprint}, _from, state), do: {:reply, :ok, %{state | build: fingerprint}}
+  def handle_call(:ignored, _from, state), do: {:reply, state.ignored, state}
+
+  def handle_call({:record_build, fingerprint, ignored}, _from, state),
+    do: {:reply, :ok, %{state | build: fingerprint, ignored: ignored}}
 
   def handle_call({:launch, executable}, _from, state) do
     running = Enum.count(state.apps, fn {_pid, app} -> app.exit_status == nil end)
