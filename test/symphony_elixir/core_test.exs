@@ -1587,6 +1587,75 @@ defmodule SymphonyElixir.CoreTest do
     assert %{state: "In Review"} = retry_post_pr_issue("issue-post-pr-auto-review-missing", :PostPrAutoReviewMissingOrchestrator, "In Review")
   end
 
+  test "retry for a Merging issue with a completed PR re-dispatches it instead of moving it back to review" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      quality_gate: %{enabled: false},
+      tracker_active_states: ["Todo", "In Progress", "Merging", "Rework"],
+      tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
+    )
+
+    issue_id = "issue-merging-waits-for-ci"
+    pr_url = "https://github.com/example/repo/pull/232"
+    retry_token = make_ref()
+    last_ran_at = DateTime.utc_now()
+
+    Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [
+      %Issue{
+        id: issue_id,
+        identifier: "MT-232",
+        title: "Land after CI",
+        state: "Merging",
+        pull_request_url: pr_url,
+        updated_at: DateTime.add(last_ran_at, -10, :second)
+      }
+    ])
+
+    on_exit(fn ->
+      Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
+      Application.delete_env(:symphony_elixir, :memory_tracker_issues)
+    end)
+
+    {:ok, pid} = Orchestrator.start_link(name: Module.concat(__MODULE__, :MergingWaitsForCiOrchestrator))
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    initial_state = :sys.get_state(pid)
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:max_concurrent_agents, 0)
+      |> Map.put(:claimed, MapSet.new([issue_id]))
+      |> Map.put(:completed_run_metadata, %{issue_id => %{identifier: "MT-232", pull_request_url: pr_url, last_ran_at: last_ran_at}})
+      |> Map.put(:retry_attempts, %{
+        issue_id => %{
+          attempt: 1,
+          timer_ref: nil,
+          retry_token: retry_token,
+          due_at_ms: System.monotonic_time(:millisecond),
+          identifier: "MT-232"
+        }
+      })
+    end)
+
+    send(pid, {:retry_issue, issue_id, retry_token})
+
+    state =
+      wait_for_orchestrator_state(pid, fn state ->
+        match?(%{attempt: 2, error: "no available orchestrator slots"}, state.retry_attempts[issue_id])
+      end)
+
+    refute_received {:memory_tracker_state_update, ^issue_id, _state}
+    assert MapSet.member?(state.claimed, issue_id)
+    refute Map.has_key?(state.watching, issue_id)
+  end
+
   test "retry for active completed PR reschedules when moving issue to in review fails" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
@@ -4036,6 +4105,79 @@ defmodule SymphonyElixir.CoreTest do
       assert Enum.at(turn_texts, 1) =~ "Continuation guidance:"
       assert Enum.at(turn_texts, 1) =~ "previous Codex turn completed"
       assert Enum.at(turn_texts, 1) =~ "continuation turn #2 of 3"
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "agent runner keeps a Merging issue with an attached PR in its continuation loop" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-elixir-agent-runner-merging-#{System.unique_integer([:positive])}")
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+      codex_binary = Path.join(test_root, "fake-codex")
+      trace_file = Path.join(test_root, "codex.trace")
+      File.mkdir_p!(test_root)
+
+      File.write!(codex_binary, """
+      #!/bin/sh
+      trace_file="#{trace_file}"
+      count=0
+
+      while IFS= read -r line; do
+        count=$((count + 1))
+        printf 'JSON:%s\\n' "$line" >> "$trace_file"
+        case "$count" in
+          1)
+            printf '%s\\n' '{"id":1,"result":{}}'
+            ;;
+          3)
+            printf '%s\\n' '{"id":2,"result":{"thread":{"id":"thread-merging"}}}'
+            ;;
+          4|5)
+            printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-merging","status":"inProgress","items":[]}}}'
+            printf '%s\\n' '{"method":"turn/completed"}'
+            ;;
+        esac
+      done
+      """)
+
+      File.chmod!(codex_binary, 0o755)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        tracker_active_states: ["Todo", "In Progress", "Merging", "Rework"],
+        workspace_root: workspace_root,
+        agent_command: "#{codex_binary} app-server",
+        max_turns: 3
+      )
+
+      issue = %Issue{
+        id: "issue-merging-continue",
+        identifier: "MT-232",
+        title: "Land after CI",
+        state: "Merging",
+        pull_request_url: "https://github.com/example/repo/pull/232",
+        url: "https://example.org/issues/MT-232",
+        labels: []
+      }
+
+      state_fetcher = fn [_issue_id] ->
+        attempt = Process.get(:merging_fetch_count, 0) + 1
+        Process.put(:merging_fetch_count, attempt)
+        {:ok, [%Issue{issue | state: if(attempt == 1, do: "Merging", else: "Done")}]}
+      end
+
+      assert :ok = AgentRunner.run(issue, nil, issue_state_fetcher: state_fetcher, issue_enricher: &{:ok, &1})
+
+      turn_starts =
+        trace_file
+        |> File.read!()
+        |> String.split("\n", trim: true)
+        |> Enum.map(&(&1 |> String.trim_leading("JSON:") |> Jason.decode!()))
+        |> Enum.filter(&(&1["method"] == "turn/start"))
+
+      assert length(turn_starts) == 2
     after
       File.rm_rf(test_root)
     end

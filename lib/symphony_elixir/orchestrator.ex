@@ -6187,6 +6187,7 @@ defmodule SymphonyElixir.Orchestrator do
     completed_run_has_pr?(completed_metadata) and
       active_issue_state?(issue.state) and
       !rework_state?(issue.state) and
+      !merging_state?(issue.state) and
       !pending_rework_signal?(issue, completed_metadata)
   end
 
@@ -6243,6 +6244,13 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp rework_state?(_state_name), do: false
+
+  # A `Merging` issue is approved; keep re-dispatching its landing agent instead of parking it.
+  defp merging_state?(state_name) when is_binary(state_name) do
+    normalize_issue_state(state_name) == @merging_state
+  end
+
+  defp merging_state?(_state_name), do: false
 
   defp dispatch_slots_available?(%Issue{} = issue, %State{} = state) do
     available_slots(state) > 0 and

@@ -1071,6 +1071,8 @@ When enabled:
   fails, Auto Review stays on.
 - The post-PR transition (an active issue whose completed run opened a PR and has no rework signal)
   MUST target `state` instead of `In Review`.
+- The post-PR transition MUST NOT apply to an issue in `Merging`: that state is a human's merge
+  approval, so Symphony MUST keep continuing and re-dispatching the landing agent instead.
 - `linear_update_state` MUST refuse `In Review` from agent sessions with a clear error telling the
   agent that Symphony moves the issue once the PR is open, rather than redirecting the target
   state.

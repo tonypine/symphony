@@ -234,6 +234,7 @@ You are working on a Linear ticket `{{ issue.identifier }}`
 3. Review comments on the PR (including the operator's own, when Symphony posts with the same GitHub account) are handled by Symphony: it moves the issue back to `In Progress` and re-activates you with the comments. Address them on the same PR and branch with the PR feedback sweep protocol, push, and return to `In Review`. Do not close the PR or reset the branch for review comments.
 4. If approved, human moves the issue to `Merging`.
 5. When the issue is in `Merging`, open and follow `.ai/skills/land/SKILL.md`, then run the `land` skill in a loop until the PR is merged. Do not call `gh pr merge` directly; merge with the scoped `github_merge_pull_request` tool.
+   - When checks are still pending, end the turn. Do not rely on `ScheduleWakeup`, `sleep` loops, or other in-session timers; they do nothing in unattended runs. Symphony keeps a `Merging` issue in `Merging` and resumes the landing agent so it can merge once checks pass.
 6. After merge is complete, move the issue to `Done`.
 
 ## Step 4: Rework handling

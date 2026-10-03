@@ -1224,6 +1224,7 @@ defmodule SymphonyElixir.AgentRunner do
     if attached_pr?(previous_issue) or attached_pr?(refreshed_issue) do
       active_issue_state?(refreshed_issue.state) and
         !rework_state?(refreshed_issue.state) and
+        !merging_state?(refreshed_issue.state) and
         pending_reviewer_comments(refreshed_issue, opts) == [] and
         is_nil(pending_ci_failure(refreshed_issue, opts)) and
         is_nil(pending_qa_failure(refreshed_issue, opts)) and
@@ -1240,6 +1241,14 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp rework_state?(_state_name), do: false
+
+  # `Merging` means a human approved the merge. Parking it as post-PR quiet would move it
+  # back to review and drop that approval while the landing agent waits for CI.
+  defp merging_state?(state_name) when is_binary(state_name) do
+    normalize_issue_state(state_name) == "merging"
+  end
+
+  defp merging_state?(_state_name), do: false
 
   defp audit_linear_state_transition(issue, refreshed_issue, run_id, opts) do
     issue
