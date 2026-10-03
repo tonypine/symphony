@@ -861,8 +861,7 @@ defmodule SymphonyElixir.Config.Schema do
       |> validate_number(:command_timeout_ms, greater_than_or_equal_to: 0)
       |> validate_number(:codex_stdio_prompt_soft_limit, greater_than: 0)
       |> validate_project_guide_files()
-      |> validate_setting(:model, &check_model/1)
-      |> validate_setting(:effort, &check_effort/1)
+      |> validate_profile_fields()
       |> validate_run_profiles()
       |> validate_command_run_profile_flags()
       |> update_change(:max_concurrent_agents_by_state, &Schema.normalize_state_limits/1)
@@ -886,6 +885,22 @@ defmodule SymphonyElixir.Config.Schema do
           validate_number(changeset, :epic_lanes, greater_than_or_equal_to: 0)
       end
     end
+
+    @doc false
+    @spec validate_profile_fields(Ecto.Changeset.t()) :: Ecto.Changeset.t()
+    def validate_profile_fields(changeset) do
+      changeset
+      |> validate_setting(:model, &check_model/1)
+      |> validate_setting(:effort, &check_effort/1)
+    end
+
+    @doc false
+    @spec profile_flags_in(String.t() | nil) :: [String.t()]
+    def profile_flags_in(command) when is_binary(command) do
+      Enum.filter(["--model", "--effort"], &Regex.match?(~r/(^|\s)#{&1}(=|\s|$)/, command))
+    end
+
+    def profile_flags_in(_command), do: []
 
     defp validate_setting(changeset, field, check) do
       case Map.fetch(changeset.changes, field) do
@@ -965,9 +980,9 @@ defmodule SymphonyElixir.Config.Schema do
     defp validate_command_run_profile_flags(changeset) do
       command = get_field(changeset, :command)
 
-      if run_profile_settings?(changeset) and is_binary(command) do
-        ["--model", "--effort"]
-        |> Enum.filter(&Regex.match?(~r/(^|\s)#{&1}(=|\s|$)/, command))
+      if run_profile_settings?(changeset) do
+        command
+        |> profile_flags_in()
         |> Enum.reduce(changeset, fn flag, acc ->
           add_error(acc, :command, "must not pass #{flag} when agent.model, agent.effort or agent.run_profiles is set; remove it from agent.command")
         end)
@@ -1501,12 +1516,14 @@ defmodule SymphonyElixir.Config.Schema do
     @type t :: %__MODULE__{}
 
     @primary_key false
-    @fields [:enabled, :kind, :command, :max_iterations, :run_on]
+    @fields [:enabled, :kind, :command, :model, :effort, :max_iterations, :run_on]
 
     embedded_schema do
       field(:enabled, :boolean, default: false)
       field(:kind, :string)
       field(:command, :string)
+      field(:model, :string)
+      field(:effort, :string)
       field(:max_iterations, :integer, default: 1)
       field(:run_on, :string, default: "always")
     end
@@ -1518,6 +1535,7 @@ defmodule SymphonyElixir.Config.Schema do
       |> validate_inclusion(:kind, ["codex", "claude"])
       |> validate_inclusion(:run_on, ["always", "first_push"])
       |> validate_number(:max_iterations, greater_than: 0)
+      |> Agent.validate_profile_fields()
       |> validate_required_when_enabled()
     end
 
@@ -1543,6 +1561,8 @@ defmodule SymphonyElixir.Config.Schema do
       :state,
       :kind,
       :command,
+      :model,
+      :effort,
       :max_turns,
       :timeout_ms,
       :max_concurrent,
@@ -1557,6 +1577,8 @@ defmodule SymphonyElixir.Config.Schema do
       field(:state, :string, default: "Auto Review")
       field(:kind, :string)
       field(:command, :string)
+      field(:model, :string)
+      field(:effort, :string)
       field(:max_turns, :integer, default: 20)
       field(:timeout_ms, :integer, default: 1_800_000)
       field(:max_concurrent, :integer, default: 1)
@@ -1577,6 +1599,7 @@ defmodule SymphonyElixir.Config.Schema do
       |> validate_number(:timeout_ms, greater_than: 0)
       |> validate_number(:max_concurrent, greater_than: 0)
       |> validate_number(:max_fix_attempts, greater_than_or_equal_to: 0)
+      |> Agent.validate_profile_fields()
     end
   end
 
@@ -2009,7 +2032,65 @@ defmodule SymphonyElixir.Config.Schema do
     |> cast_embed(:auto_review, with: &AutoReview.changeset/2)
     |> cast_embed(:dependencies, with: &Dependencies.changeset/2)
     |> cast_embed(:notifications, with: &Notifications.changeset/2)
+    |> validate_profile_command_flags()
   end
+
+  @doc """
+  Rejects `--model` / `--effort` in the pre-push reviewer and QA agent commands when a model or
+  effort resolves for that run kind, since the resolved values are passed as those flags.
+
+  The QA agent falls back to `agent.command`; that command is only checked here when the QA
+  agent's own `model` / `effort` is what makes the flag conflict, because the `agent` section
+  already rejects it otherwise.
+  """
+  @spec validate_profile_command_flags(Ecto.Changeset.t()) :: Ecto.Changeset.t()
+  def validate_profile_command_flags(changeset) do
+    agent = get_field(changeset, :agent)
+    review_agent = get_field(changeset, :review_agent)
+    auto_review = get_field(changeset, :auto_review)
+    agent_settings? = agent_profile_settings?(agent, nil)
+
+    changeset
+    |> reject_profile_flags(:review_agent, review_agent.command, &"must not pass #{&1} when a model or effort is set for the pre-push reviewer; remove it from the command", fn ->
+      own_profile_settings?(review_agent) or agent_profile_settings?(agent, "pre_push_review")
+    end)
+    |> reject_qa_profile_flags(auto_review, agent, agent_settings?)
+  end
+
+  defp reject_qa_profile_flags(changeset, %{command: command} = auto_review, agent, _agent_settings?) when is_binary(command) do
+    reject_profile_flags(changeset, :auto_review, command, &"must not pass #{&1} when a model or effort is set for the QA agent; remove it from the command", fn ->
+      own_profile_settings?(auto_review) or agent_profile_settings?(agent, "qa")
+    end)
+  end
+
+  defp reject_qa_profile_flags(changeset, auto_review, agent, false = _agent_settings?) do
+    message = &"is not set, and agent.command passes #{&1} while auto_review.model or auto_review.effort is set; set auto_review.command without #{&1}"
+    reject_profile_flags(changeset, :auto_review, agent.command, message, fn -> own_profile_settings?(auto_review) end)
+  end
+
+  defp reject_qa_profile_flags(changeset, _auto_review, _agent, true = _agent_settings?), do: changeset
+
+  defp reject_profile_flags(changeset, section, command, message, settings?) do
+    case Agent.profile_flags_in(command) do
+      [] ->
+        changeset
+
+      flags ->
+        if settings?.() do
+          section_changeset =
+            Enum.reduce(flags, Map.get(changeset.changes, section) || change(get_field(changeset, section)), &add_error(&2, :command, message.(&1)))
+
+          %{changeset | changes: Map.put(changeset.changes, section, section_changeset), valid?: false}
+        else
+          changeset
+        end
+    end
+  end
+
+  defp own_profile_settings?(%{model: model, effort: effort}), do: not is_nil(model) or not is_nil(effort)
+
+  defp agent_profile_settings?(agent, nil), do: own_profile_settings?(agent) or agent.run_profiles not in [nil, %{}]
+  defp agent_profile_settings?(agent, kind), do: own_profile_settings?(agent) or Map.has_key?(agent.run_profiles || %{}, kind)
 
   defp finalize_settings(settings) do
     tracker = %{

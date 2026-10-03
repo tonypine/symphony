@@ -101,10 +101,10 @@ defmodule SymphonyElixir.AutoReviewTest do
       repositories = [%{"key" => "default", "workflow" => "WORKFLOW.md", "route" => %{"team" => "Test"}}]
 
       assert {:error, {:invalid_symphony_config, message}} =
-               SystemSchema.parse(%{"auto_review" => %{"model" => "x"}, "repositories" => repositories})
+               SystemSchema.parse(%{"auto_review" => %{"temperature" => "x"}, "repositories" => repositories})
 
       assert message =~ "auto_review"
-      assert message =~ "model"
+      assert message =~ "temperature"
 
       assert {:error, {:invalid_symphony_config, message}} =
                SystemSchema.parse(%{"auto_review" => %{"runtime" => "gpt"}, "repositories" => repositories})

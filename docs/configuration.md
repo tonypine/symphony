@@ -307,7 +307,8 @@ agent:
   PR review comments), and `implementation` (everything else). `pre_push_review` and `qa` name the
   pre-push reviewer and QA agent runs.
 - Resolution per field: `run_profiles.<kind>` value, else `agent.model` / `agent.effort`, else
-  nothing is added.
+  nothing is added. The pre-push reviewer and the QA agent check their own section first:
+  `pre_push_review.model` / `.effort` and `auto_review.model` / `.effort`.
 - Config errors: an unknown kind under `run_profiles`, an unknown effort, an unknown profile key,
   or `--model` / `--effort` already in `command` while any of `model`, `effort`, or
   `run_profiles` is set. `symphony check` reports them.
@@ -315,7 +316,11 @@ agent:
   config: an edit applies to the next dispatch without a restart. Every continuation turn of a run
   keeps its profile. A CI fix or review feedback re-activation is a new run with its own kind.
 - The run history record keeps `run_kind`, `model` and `effort`, and the dispatch log line shows
-  `run_kind=… model=… effort=…` (`default` when nothing is added).
+  `run_kind=… model=… effort=…` (`default` when nothing is added). The pre-push reviewer runs
+  inside the run it reviews, so that run's record also keeps `reviewer_profile` next to
+  `reviewer_tokens`. A QA run's record keeps its own `run_kind: qa`, `model` and `effort`.
+- The web dashboard and the terminal status dashboard show the kind, model and effort of each
+  running run (and its reviewer's, when the pre-push review is on) and of the recent runs.
 - Codex runtime: `model` and `effort` are ignored; Codex keeps the model and reasoning effort
   from its own config (set them in `command`, for example `codex -c model_reasoning_effort=high
   app-server`). Symphony logs one warning when a run starts with a profile that resolves to a model or effort.
@@ -560,9 +565,16 @@ pre_push_review:
   enabled: true
   runtime: codex
   command: codex app-server
+  model: claude-opus-5-5
+  effort: high
   max_iterations: 1
   run_on: always
 ```
+
+`model` and `effort` (optional) set the reviewer's `--model` / `--effort` with the Claude runtime.
+Each one falls back to `agent.run_profiles.pre_push_review`, then `agent.model` / `agent.effort`;
+with none set the reviewer command is unchanged. They take the same values as `agent.model` /
+`agent.effort`, and `command` must not pass `--model` / `--effort` while any of them is set.
 
 When enabled, Symphony runs an executor/reviewer loop in the same workspace before push.
 `run_on` defaults to `always`; set it to `first_push` to skip the reviewer on PR follow-up runs while keeping it enabled for initial issue runs.
@@ -579,6 +591,8 @@ auto_review:
   state: Auto Review
   runtime: claude
   command: claude --dangerously-skip-permissions
+  model: claude-sonnet-5-5
+  effort: medium
   max_turns: 20
   timeout_ms: 1800000
   max_concurrent: 1
@@ -587,6 +601,11 @@ auto_review:
   skip_globs: []
   playbooks: {}
 ```
+
+`model` and `effort` (optional) set the QA agent's `--model` / `--effort` with the Claude runtime,
+falling back to `agent.run_profiles.qa`, then `agent.model` / `agent.effort`. Validation is the same
+as for `pre_push_review`; when `command` is not set the QA agent uses `agent.command`, which must
+then not pass the flag that `auto_review.model` / `auto_review.effort` sets.
 
 When enabled, Symphony moves an issue whose run opened a PR to `state` (default `Auto Review`)
 instead of `In Review`, and the CI poller watches it there:

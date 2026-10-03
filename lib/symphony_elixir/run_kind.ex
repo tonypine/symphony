@@ -67,6 +67,21 @@ defmodule SymphonyElixir.RunKind do
   def names, do: Enum.map(@kinds, &Atom.to_string/1)
 
   @doc """
+  A one-line label for a run's profile, as the dashboards show it: `kind · model · effort`.
+  A model or effort that resolved to nothing reads `default`. Accepts the in-memory profile
+  (`kind`) or a run history record (`run_kind`); returns nil when neither is present.
+  """
+  @spec label(map() | nil) :: String.t() | nil
+  def label(%{} = profile) do
+    case Map.get(profile, :kind) || Map.get(profile, :run_kind) do
+      nil -> nil
+      kind -> Enum.map_join([kind, Map.get(profile, :model), Map.get(profile, :effort)], " · ", &(&1 || "default"))
+    end
+  end
+
+  def label(nil), do: nil
+
+  @doc """
   Returns the run kind for `issue`.
 
   Signals:

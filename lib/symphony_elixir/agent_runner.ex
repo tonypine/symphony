@@ -950,7 +950,7 @@ defmodule SymphonyElixir.AgentRunner do
        }) do
     review_opts =
       opts
-      |> Keyword.take([:repo_key, :run_id, :linear_comment_registry, :review_agent_module])
+      |> Keyword.take([:repo_key, :run_id, :reviewer_run_profile, :linear_comment_registry, :review_agent_module])
       |> Keyword.put(:worker_host, worker_host)
       |> maybe_put_option(:base_branch, review_base_branch(opts))
       |> Keyword.put(:on_reviewer_message, reviewer_message_handler(codex_update_recipient, issue))

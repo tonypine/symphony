@@ -28,4 +28,8 @@
 \e[1m├─ Skipped (quality gate)\e[0m
 │
 │  \e[90mNo issues skipped this session\e[0m
+│
+\e[1m├─ Recent runs\e[0m
+│
+│  \e[90mNo runs yet\e[0m
 ╰─

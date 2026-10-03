@@ -81,7 +81,9 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
              runtime_seconds: 785,
              turn_count: 11,
              last_codex_event: "turn_completed",
-             last_codex_message: turn_completed_message("completed")
+             last_codex_message: turn_completed_message("completed"),
+             run_profile: %{kind: :implementation, model: "claude-opus-5-5", effort: "high"},
+             reviewer_run_profile: %{kind: :pre_push_review, model: "claude-sonnet-5-5", effort: nil}
            }),
            running_entry(%{
              identifier: "MT-102",
@@ -95,6 +97,26 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
            })
          ],
          retrying: [],
+         run_history: [
+           %{
+             issue_identifier: "MT-099",
+             status: "qa_pass",
+             run_kind: "qa",
+             model: "claude-haiku-4-5",
+             effort: "low",
+             tokens: %{total_tokens: 18_200}
+           },
+           %{
+             issue_identifier: "MT-098",
+             status: "success",
+             run_kind: "landing",
+             model: nil,
+             effort: "low",
+             tokens: %{total_tokens: 4_100},
+             reviewer_profile: %{run_kind: "pre_push_review", model: "claude-sonnet-5-5", effort: "medium"}
+           },
+           %{issue_id: "issue-old", status: nil, tokens: nil}
+         ],
          codex_totals: %{
            input_tokens: 250_000,
            output_tokens: 18_500,

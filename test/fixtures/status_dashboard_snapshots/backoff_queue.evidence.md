@@ -33,5 +33,9 @@
 ├─ Skipped (quality gate)
 │
 │  No issues skipped this session
+│
+├─ Recent runs
+│
+│  No runs yet
 ╰─
 ```
