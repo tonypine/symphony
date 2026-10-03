@@ -724,7 +724,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
          :ok <-
            reject_unknown_section_keys(
              config,
-             ~w(enabled state runtime command model effort max_turns timeout_ms max_concurrent max_fix_attempts run_on skip_globs playbooks),
+             ~w(enabled state runtime command model effort max_turns timeout_ms max_concurrent max_fix_attempts run_on skip_globs playbooks worker_host),
              "auto_review"
            ) do
       {:ok,

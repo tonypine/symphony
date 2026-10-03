@@ -21,7 +21,24 @@ defmodule SymphonyElixir.QaDriver.Host do
   @doc "The host functions `QaDriver` uses unless a test overrides them."
   @spec default() :: SymphonyElixir.QaDriver.host()
   def default do
-    %{cmd: &cmd/3, launch: &launch/2, kill: &kill/1, helper: &helper/0}
+    %{cmd: &cmd/3, launch: &launch/2, kill: &kill/1, helper: &helper/0, read: &read/1}
+  end
+
+  @doc "The helper's Swift source and the hash that names its compiled binary."
+  @spec helper_source() :: {String.t(), String.t()}
+  def helper_source, do: {@source_hash, @source}
+
+  @doc "Reads and removes a regular file (not a symlink) a host command wrote."
+  @spec read(Path.t()) :: {:ok, binary()} | {:error, term()}
+  def read(path) do
+    with {:ok, %File.Stat{type: :regular}} <- File.lstat(path),
+         {:ok, bytes} <- File.read(path) do
+      File.rm(path)
+      {:ok, bytes}
+    else
+      {:ok, %File.Stat{type: type}} -> {:error, {:not_a_file, type}}
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   @doc """

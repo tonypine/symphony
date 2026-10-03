@@ -1801,7 +1801,8 @@ defmodule SymphonyElixir.Config.Schema do
       :max_fix_attempts,
       :run_on,
       :skip_globs,
-      :playbooks
+      :playbooks,
+      :worker_host
     ]
 
     embedded_schema do
@@ -1818,6 +1819,7 @@ defmodule SymphonyElixir.Config.Schema do
       field(:run_on, :string, default: "every_push")
       field(:skip_globs, {:array, :string}, default: [])
       field(:playbooks, :map, default: %{})
+      field(:worker_host, :string)
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
@@ -1825,6 +1827,7 @@ defmodule SymphonyElixir.Config.Schema do
       schema
       |> cast(attrs, @fields, empty_values: [])
       |> validate_required([:state])
+      |> validate_format(:worker_host, ~r/\A[^\s-]\S*\z/, message: "must be an SSH host such as qa@qa-vm.local or qa-vm:2222")
       |> validate_inclusion(:kind, ["codex", "claude"])
       |> validate_inclusion(:run_on, ["every_push", "first_pass"])
       |> validate_number(:max_turns, greater_than: 0)
