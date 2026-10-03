@@ -12,6 +12,8 @@
 │   \e[90mID       STAGE          PID      AGE / TURN   TOKENS     SESSION        EVENT                                  \e[0m
 │   \e[90m───────────────────────────────────────────────────────────────────────────────────────────────────────────────\e[0m
 │ \e[35m●\e[0m \e[36mMT-101  \e[0m \e[35mrunning       \e[0m \e[33m4242    \e[0m \e[35m13m 5s / 11 \e[0m \e[33m   120,450\e[0m \e[36mthre...567890 \e[0m \e[35mturn completed (completed)             \e[0m
+│     \e[90mimplementation · claude-opus-5-5 · high\e[0m
+│     \e[90mreviewer: pre_push_review · claude-sonnet-5-5 · default\e[0m
 │ \e[32m●\e[0m \e[36mMT-102  \e[0m \e[32mrunning       \e[0m \e[33m5252    \e[0m \e[35m6m 52s / 4  \e[0m \e[33m    89,200\e[0m \e[36mthre...567890 \e[0m \e[32mmix test --cover                       \e[0m
 │
 \e[1m├─ Watching\e[0m
@@ -29,4 +31,10 @@
 \e[1m├─ Skipped (quality gate)\e[0m
 │
 │  \e[90mNo issues skipped this session\e[0m
+│
+\e[1m├─ Recent runs\e[0m
+│
+│  ◦ \e[36mMT-099  \e[0m qa_pass          \e[33m    18,200\e[0m \e[90mqa · claude-haiku-4-5 · low\e[0m
+│  ◦ \e[36mMT-098  \e[0m success          \e[33m     4,100\e[0m \e[90mlanding · default · low\e[0m\e[90m (reviewer: pre_push_review · claude-sonnet-5-5 · medium)\e[0m
+│  ◦ \e[36missue...\e[0m unknown          \e[33m         0\e[0m \e[90mprofile n/a\e[0m
 ╰─

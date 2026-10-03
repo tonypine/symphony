@@ -87,7 +87,8 @@ defmodule SymphonyElixir.MixProject do
           Mix.Tasks.Symphony.Stop,
           SymphonyElixir.Init,
           SymphonyElixir.AgentTools.Linear,
-          SymphonyElixir.AgentTools.Linear.CommentRegistry
+          SymphonyElixir.AgentTools.Linear.CommentRegistry,
+          SymphonyElixir.QaDriver.Host
         ]
       ],
       test_ignore_filters: [

@@ -3,7 +3,7 @@ defmodule SymphonyElixirWeb.Presenter do
   Shared projections for the observability API and dashboard.
   """
 
-  alias SymphonyElixir.{AuditLog, Config, Orchestrator, Quality, URLUtils}
+  alias SymphonyElixir.{AuditLog, Config, Orchestrator, Quality, RunKind, URLUtils}
   alias SymphonyElixir.Codex.MessageHumanizer
 
   @audit_page_size 200
@@ -468,6 +468,8 @@ defmodule SymphonyElixirWeb.Presenter do
     %{
       repo_key: Map.get(entry, :repo_key),
       run_kind: Map.get(entry, :run_kind),
+      run_profile: profile_payload(Map.get(entry, :run_profile)),
+      reviewer_profile: profile_payload(Map.get(entry, :reviewer_run_profile)),
       issue_id: entry.issue_id,
       issue_identifier: entry.identifier,
       title: Map.get(entry, :title),
@@ -614,6 +616,11 @@ defmodule SymphonyElixirWeb.Presenter do
       repo_key: Map.get(entry, :repo_key),
       run_id: entry.run_id,
       kind: Map.get(entry, :kind, "agent"),
+      run_kind: Map.get(entry, :run_kind),
+      model: Map.get(entry, :model),
+      effort: Map.get(entry, :effort),
+      profile_label: RunKind.label(entry),
+      reviewer_profile: entry |> Map.get(:reviewer_profile) |> profile_payload(),
       issue_id: entry.issue_id,
       issue_identifier: entry.issue_identifier,
       title: Map.get(entry, :title),
@@ -630,6 +637,18 @@ defmodule SymphonyElixirWeb.Presenter do
       turn_count: Map.get(entry, :turn_count, 0),
       runtime_seconds: Map.get(entry, :runtime_seconds, 0),
       tokens: Map.get(entry, :tokens, %{})
+    }
+  end
+
+  # Accepts the in-memory profile (`kind`) and the stored run record form (`run_kind`).
+  defp profile_payload(nil), do: nil
+
+  defp profile_payload(profile) do
+    %{
+      kind: to_string(Map.get(profile, :kind) || Map.get(profile, :run_kind)),
+      model: Map.get(profile, :model),
+      effort: Map.get(profile, :effort),
+      label: RunKind.label(profile)
     }
   end
 

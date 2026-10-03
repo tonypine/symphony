@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.RunKind do
   @moduledoc """
   Classifies what kind of agent run Symphony is about to start, so each kind can
-  get its own model and effort (`agent.run_profiles.<kind>`).
+  get its own model, effort and provider (`agent.run_profiles.<kind>`).
 
   Classification is deterministic and uses the signals the orchestrator already
   routes on. The first match wins:
@@ -37,8 +37,11 @@ defmodule SymphonyElixir.RunKind do
           | :pre_push_review
           | :qa
 
-  @typedoc "A run kind with the model and effort it resolves to; nil adds nothing to the agent command."
-  @type profile :: %{kind: t(), model: String.t() | nil, effort: String.t() | nil}
+  @typedoc "The provider that serves a run's model."
+  @type provider :: String.t()
+
+  @typedoc "A run kind with the model, effort and provider it resolves to; a nil model or effort adds nothing to the agent command."
+  @type profile :: %{kind: t(), model: String.t() | nil, effort: String.t() | nil, provider: provider()}
 
   @kinds [
     :implementation,
@@ -65,6 +68,21 @@ defmodule SymphonyElixir.RunKind do
   @doc "Every run kind as the string used for `agent.run_profiles` keys."
   @spec names() :: [String.t()]
   def names, do: Enum.map(@kinds, &Atom.to_string/1)
+
+  @doc """
+  A one-line label for a run's profile, as the dashboards show it: `kind · model · effort`.
+  A model or effort that resolved to nothing reads `default`. Accepts the in-memory profile
+  (`kind`) or a run history record (`run_kind`); returns nil when neither is present.
+  """
+  @spec label(map() | nil) :: String.t() | nil
+  def label(%{} = profile) do
+    case Map.get(profile, :kind) || Map.get(profile, :run_kind) do
+      nil -> nil
+      kind -> Enum.map_join([kind, Map.get(profile, :model), Map.get(profile, :effort)], " · ", &(&1 || "default"))
+    end
+  end
+
+  def label(nil), do: nil
 
   @doc """
   Returns the run kind for `issue`.

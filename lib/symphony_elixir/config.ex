@@ -220,17 +220,44 @@ defmodule SymphonyElixir.Config do
   def max_concurrent_agents_for_state(_state_name), do: settings!().agent.max_concurrent_agents
 
   @doc """
-  The model and effort for a run of `kind`: the `agent.run_profiles.<kind>` field, else
-  `agent.model` / `agent.effort`, else nil (add nothing to the agent command).
+  The model, effort and provider for a run of `kind`: the `agent.run_profiles.<kind>` field,
+  else `agent.model` / `agent.effort` / `agent.provider`. An unset model or effort is nil
+  (add nothing to the agent command); an unset provider is `"anthropic"`.
   """
-  @spec run_profile(Schema.t(), RunKind.t() | String.t()) :: %{model: String.t() | nil, effort: String.t() | nil}
+  @spec run_profile(Schema.t(), RunKind.t() | String.t()) :: %{
+          model: String.t() | nil,
+          effort: String.t() | nil,
+          provider: RunKind.provider()
+        }
   def run_profile(%Schema{agent: agent}, kind) do
     profile = Map.get(agent.run_profiles, to_string(kind), %{})
 
     %{
       model: Map.get(profile, "model", agent.model),
-      effort: Map.get(profile, "effort", agent.effort)
+      effort: Map.get(profile, "effort", agent.effort),
+      provider: Map.get(profile, "provider", agent.provider || "anthropic")
     }
+  end
+
+  @doc """
+  The profile the pre-push reviewer starts with: `pre_push_review.model` / `.effort`, else
+  `agent.run_profiles.pre_push_review`, else `agent.model` / `agent.effort`. The provider
+  resolves as in `run_profile/2`.
+  """
+  @spec pre_push_review_profile(Schema.t()) :: RunKind.profile()
+  def pre_push_review_profile(%Schema{review_agent: config} = settings), do: own_run_profile(settings, :pre_push_review, config)
+
+  @doc """
+  The profile the Auto Review QA agent starts with: `auto_review.model` / `.effort`, else
+  `agent.run_profiles.qa`, else `agent.model` / `agent.effort`. The provider resolves as in
+  `run_profile/2`.
+  """
+  @spec qa_profile(Schema.t()) :: RunKind.profile()
+  def qa_profile(%Schema{auto_review: config} = settings), do: own_run_profile(settings, :qa, config)
+
+  defp own_run_profile(settings, kind, config) do
+    fallback = run_profile(settings, kind)
+    Map.merge(fallback, %{kind: kind, model: config.model || fallback.model, effort: config.effort || fallback.effort})
   end
 
   @spec review_agent_blocked_state(String.t()) :: String.t()

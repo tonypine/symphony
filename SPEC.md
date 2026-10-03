@@ -1014,6 +1014,10 @@ Fields:
   - REQUIRED when `enabled` is true.
 - `command` (string)
   - REQUIRED when `enabled` is true.
+- `model` (string), `effort` (`low`, `medium`, `high`, `xhigh`, or `max`)
+  - Optional. Each resolves to this field, else `agent.run_profiles.pre_push_review`, else
+    `agent.model` / `agent.effort`, else null (nothing added). `command` MUST NOT pass `--model` /
+    `--effort` while any of them resolves.
 - `max_iterations` (positive integer)
   - Default: `1`.
 
@@ -1059,7 +1063,10 @@ Fields:
 - `skip_globs` (list of strings, default `[]`): extra paths that, like docs and tests, never need
   QA.
 - `playbooks` (map, default `{}`): per-kind overrides. A built-in kind takes `paths` and
-  `enabled`; a new kind needs `paths` and `prompt`.
+  `enabled`; a new kind needs `paths` and `prompt`. The built-in `macos_app` kind also takes
+  `build` (shell command run in the QA worktree), `app` (the `.app` bundle path relative to the
+  repo root) and `build_timeout_ms` (default `900000`), and is off unless `build` and `app` are
+  set.
 
 When enabled:
 
@@ -1081,7 +1088,20 @@ When enabled:
   `qa:<kind>` label selects that playbook; a diff that only touches docs, tests or `skip_globs`
   skips; otherwise playbooks are selected by their trigger paths, and the `cli` playbook also by a
   `## User walkthrough` section in the issue. No selected playbook means skip. The built-in `cli`
-  playbook triggers on `bin/**`, `lib/symphony_elixir/cli.ex` and `lib/mix/tasks/**`.
+  playbook triggers on `bin/**`, `lib/symphony_elixir/cli.ex` and `lib/mix/tasks/**`; the built-in
+  `macos_app` playbook on `**/*.swift`, `**/Info.plist`, `**/*.xib`, `**/*.storyboard` and
+  `**/*.xcassets/**`.
+- A pass that runs the `macos_app` playbook also gets host-side `qa_*` tools, executed by Symphony
+  outside the agent sandbox: `qa_build` (only the configured `build`, refused when the worktree has
+  changes outside `qa-evidence/`, including gitignored files that were not there after the last
+  build), `qa_launch_app` / `qa_quit_app` (only the configured bundle,
+  resolved inside the worktree, launched from a copy the last successful `qa_build` made in a
+  directory the agent sandbox cannot write, refused under the same worktree check, always with
+  `SYMPHONY_BAR_QA_ROOT` set to a private directory), `qa_screenshot` (new files in `qa-evidence/`, never replacing or following an existing entry), and
+  `qa_ax_tree`, `qa_ax_press`, `qa_ax_set_value`. Every tool that takes a PID MUST refuse a PID
+  the pass did not launch. Apps still running when the pass ends MUST be quit. A missing Screen
+  Recording or Accessibility grant MUST surface as a `qa_permission_missing` tool error that tells
+  the agent to answer `blocked`. Other tool scopes MUST NOT list or run the `qa_*` tools.
 - The QA agent MUST run in a fresh detached worktree at the PR head SHA, outside the issue
   workspace, removed afterwards, with a tool scope limited to read-only Linear/GitHub tools and
   `linear_attach_file`. It answers with JSON: `verdict` (`pass`, `fail` or `blocked`), `summary`,
@@ -1286,6 +1306,9 @@ Validation checks:
 - `agent.command` is present and non-empty.
 - `agent.effort` and every `agent.run_profiles.<kind>.effort` are known effort values, and every
   `agent.run_profiles` key is a known run kind.
+- `agent.provider` and every `agent.run_profiles.<kind>.provider` are `anthropic` or `openrouter`.
+  Every run kind that resolves to `openrouter` also resolves a model, and `openrouter` is only
+  used with `agent.runtime == "claude"`.
 - `agent.command` does not already pass `--model` or `--effort` when `agent.model`,
   `agent.effort`, or `agent.run_profiles` is set.
 - `issues.linear.api_key` is present after `$` resolution when `issues.provider == "linear"`.
@@ -1368,10 +1391,13 @@ not require recognizing or validating extension fields unless that extension is 
 - `agent.command`: shell command string, REQUIRED
 - `agent.model`: model name string or null, default `null`
 - `agent.effort`: `low`, `medium`, `high`, `xhigh`, `max`, or null, default `null`
-- `agent.run_profiles`: map of run kind to `{model, effort}`, default `{}`. Run kinds:
+- `agent.provider`: `anthropic` or `openrouter`, default `anthropic`. The provider that serves the
+  run's model; `openrouter` requires a resolved model and `agent.runtime == "claude"`.
+- `agent.run_profiles`: map of run kind to `{model, effort, provider}`, default `{}`. Run kinds:
   `implementation`, `breakdown`, `close_out`, `final_verification`, `rework`, `landing`, `ci_fix`,
   `review_feedback`, `pre_push_review`, `qa`. Each field resolves to the profile value, else
-  `agent.model` / `agent.effort`, else null (nothing added). The run kind and profile are resolved
+  `agent.model` / `agent.effort` / `agent.provider`, else null (nothing added) for model and
+  effort and `anthropic` for provider. The run kind and profile are resolved
   once per dispatch from the current config and kept for every continuation turn of that run. The
   Claude runtime appends `--model <model>` and `--effort <effort>` to its argv; the Codex runtime
   ignores both and logs a warning.
@@ -1430,11 +1456,16 @@ not require recognizing or validating extension fields unless that extension is 
 - `pre_push_review.enabled`: boolean, default `false`
 - `pre_push_review.runtime`: `codex` or `claude`, required when enabled
 - `pre_push_review.command`: string, required when enabled
+- `pre_push_review.model`: string or null, default `null`
+- `pre_push_review.effort`: `low`, `medium`, `high`, `xhigh`, `max`, or null, default `null`
 - `pre_push_review.max_iterations`: integer, default `1`
 - `auto_review.enabled`: boolean, default `false`
 - `auto_review.state`: string, default `Auto Review`
 - `auto_review.runtime`: `codex` or `claude`, optional
 - `auto_review.command`: string, optional
+- `auto_review.model`: string or null, default `null`; else `agent.run_profiles.qa`, else `agent.model`
+- `auto_review.effort`: `low`, `medium`, `high`, `xhigh`, `max`, or null, default `null`; else
+  `agent.run_profiles.qa`, else `agent.effort`
 - `auto_review.max_turns`: integer, default `20`
 - `auto_review.timeout_ms`: integer, default `1800000`
 - `auto_review.max_concurrent`: integer, default `1`
@@ -2543,7 +2574,7 @@ A human-readable status surface (terminal output, dashboard, etc.) is OPTIONAL a
 implementation-defined.
 
 If present, it SHOULD draw from orchestrator state/metrics only and MUST NOT be REQUIRED for
-correctness.
+correctness. It SHOULD show the run kind, model and effort of each running and recent run.
 
 ### 13.5 Session Metrics and Token Accounting
 
@@ -2937,6 +2968,8 @@ After restart:
 - Previously running sessions are not assumed recoverable; they SHOULD remain visible in run history
   and MAY be marked failed/interrupted.
 - Run history records SHOULD include the run kind and the model and effort the run started with.
+  QA runs record `qa`; the pre-push reviewer runs inside the run it reviews, whose record SHOULD
+  also include the reviewer's kind, model and effort.
 - Service recovers by:
   - startup terminal workspace cleanup
   - durable retry queue hydration

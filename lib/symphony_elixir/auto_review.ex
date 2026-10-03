@@ -233,6 +233,7 @@ defmodule SymphonyElixir.AutoReview do
     started_at = DateTime.utc_now()
     run_id = "qa-#{issue.identifier}-#{String.slice(sha, 0, 12)}-#{System.unique_integer([:positive])}"
     kinds = Enum.map(playbooks, & &1.kind)
+    run_profile = Config.qa_profile(settings)
 
     put_run(run_store, %{
       run_id: run_id,
@@ -243,6 +244,9 @@ defmodule SymphonyElixir.AutoReview do
       title: issue.title,
       state: issue.state,
       status: "qa_running",
+      run_kind: "qa",
+      model: run_profile.model,
+      effort: run_profile.effort,
       attempt: Map.get(record, :qa_fix_attempts, 0) + 1,
       started_at: started_at,
       ended_at: nil,
@@ -266,7 +270,8 @@ defmodule SymphonyElixir.AutoReview do
       run_id: run_id,
       pr_url: Map.get(job, :pr_url),
       playbooks: playbooks,
-      token_limit: settings.agent.max_tokens_per_issue
+      token_limit: settings.agent.max_tokens_per_issue,
+      run_profile: run_profile
     }
 
     {outcome, tokens} =

@@ -78,12 +78,33 @@ defmodule SymphonyElixir.CLICheckTest do
     cases = [
       {"command: codex app-server\n  run_profiles:\n    bogus:\n      effort: low", "agent.run_profiles has unknown run kind `bogus`"},
       {"command: codex app-server\n  effort: extreme", "agent.effort must be one of: low, medium, high, xhigh, max"},
-      {"command: claude --effort high\n  effort: low", "agent.command must not pass --effort when agent.model, agent.effort or agent.run_profiles is set"}
+      {"command: claude --effort high\n  effort: low", "agent.command must not pass --effort when agent.model, agent.effort or agent.run_profiles is set"},
+      {"command: codex app-server\n  provider: bedrock", "agent.provider must be one of: anthropic, openrouter"},
+      {"command: codex app-server\n  run_profiles:\n    landing:\n      provider: openrouter", "agent.run_profiles.landing.provider openrouter needs an OpenRouter model id"},
+      {"command: codex app-server\n  provider: openrouter\n  model: openai/gpt-5", "agent.provider openrouter is only supported with agent.runtime: claude"}
     ]
 
     for {agent_lines, expected} <- cases do
       Cache.clear()
       path = write_symphony!(root, String.replace(valid_symphony(root), "command: codex app-server", agent_lines))
+
+      assert {{:error, message}, ""} = check(["--config", path])
+      assert message =~ "Config error in #{path}: "
+      assert message =~ expected
+    end
+  end
+
+  test "reports pre-push reviewer and QA agent profile errors naming the key", %{root: root} do
+    cases = [
+      {"pre_push_review:\n  effort: extreme\n", "pre_push_review.effort must be one of: low, medium, high, xhigh, max"},
+      {"auto_review:\n  effort: extreme\n", "auto_review.effort must be one of: low, medium, high, xhigh, max"},
+      {"pre_push_review:\n  command: claude --model x\n  effort: low\n", "pre_push_review.command must not pass --model"},
+      {"auto_review:\n  command: claude --effort high\n  model: y\n", "auto_review.command must not pass --effort"}
+    ]
+
+    for {section, expected} <- cases do
+      Cache.clear()
+      path = write_symphony!(root, valid_symphony(root) <> section)
 
       assert {{:error, message}, ""} = check(["--config", path])
       assert message =~ "Config error in #{path}: "

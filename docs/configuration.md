@@ -219,6 +219,7 @@ agent:
   command: codex app-server
   model:
   effort:
+  provider: anthropic
   run_profiles: {}
   concurrency:
     max_total: 10
@@ -271,8 +272,9 @@ agent:
   available — Opus burns Agent-SDK credit much faster and Sonnet is usually
   sufficient for orchestration turns. Treat this as guidance; revisit when
   Anthropic's model lineup or credit policy changes.
-- `model`, `effort`, `run_profiles`: the model and effort per kind of run; see **Run profiles**
-  below. All unset by default, which leaves `command` as it is.
+- `model`, `effort`, `provider`, `run_profiles`: the model, effort and provider per kind of run;
+  see **Run profiles** below. Model and effort are unset by default, which leaves `command` as it
+  is; the provider defaults to `anthropic`.
 - `concurrency.max_total`: maximum concurrent issue workers.
 - `limits.tokens_per_issue` and `limits.tokens_per_day`: explicit `null` disables that cap.
 - `permissions.filesystem.allow_read_paths`: extra read-only host paths rendered into Codex
@@ -296,26 +298,39 @@ agent:
   run_profiles:
     breakdown: { model: claude-opus-5-5, effort: xhigh }
     landing: { effort: low }
+    ci_fix: { provider: openrouter, model: anthropic/claude-haiku-4.5 }
 ```
 
 - `model`: default model for every run kind (string).
 - `effort`: default effort: `low`, `medium`, `high`, `xhigh`, or `max`.
-- `run_profiles.<kind>`: `model` and/or `effort` for one kind of run. Kinds, first match wins:
+- `provider`: default provider that serves the model: `anthropic` (default) or `openrouter`.
+  `openrouter` needs a model for every run it serves (an OpenRouter model id such as
+  `anthropic/claude-haiku-4.5`) and works only with `runtime: claude`. Symphony does not launch
+  runs against OpenRouter yet; the setting is validated and resolved only.
+- `run_profiles.<kind>`: `model`, `effort` and/or `provider` for one kind of run. Kinds, first match wins:
   `final_verification` (title starts with `Final verification:`), `close_out` (`breakdown` parent
   whose sub-issues are all terminal), `breakdown` (other `breakdown` parent), `landing` (`Merging`),
   `rework` (`Rework`), `ci_fix` (continuation after red CI), `review_feedback` (continuation after
   PR review comments), and `implementation` (everything else). `pre_push_review` and `qa` name the
   pre-push reviewer and QA agent runs.
-- Resolution per field: `run_profiles.<kind>` value, else `agent.model` / `agent.effort`, else
-  nothing is added.
-- Config errors: an unknown kind under `run_profiles`, an unknown effort, an unknown profile key,
-  or `--model` / `--effort` already in `command` while any of `model`, `effort`, or
-  `run_profiles` is set. `symphony check` reports them.
+- Resolution per field: `run_profiles.<kind>` value, else `agent.model` / `agent.effort` /
+  `agent.provider`, else nothing is added (provider: `anthropic`). The pre-push reviewer and the
+  QA agent check their own section first: `pre_push_review.model` / `.effort` and
+  `auto_review.model` / `.effort`.
+- Config errors: an unknown kind under `run_profiles`, an unknown effort or provider, an unknown
+  profile key, `--model` / `--effort` already in `command` while any of `model`, `effort`, or
+  `run_profiles` is set, `openrouter` for a run that resolves no model, or `openrouter` with a
+  runtime other than `claude`. `symphony check` reports them and names the key that picked
+  `openrouter` (`agent.run_profiles.<kind>.provider`, else `agent.provider`).
 - The kind and profile are chosen once, when the run is dispatched, from the current workflow
   config: an edit applies to the next dispatch without a restart. Every continuation turn of a run
   keeps its profile. A CI fix or review feedback re-activation is a new run with its own kind.
 - The run history record keeps `run_kind`, `model` and `effort`, and the dispatch log line shows
-  `run_kind=… model=… effort=…` (`default` when nothing is added).
+  `run_kind=… model=… effort=…` (`default` when nothing is added). The pre-push reviewer runs
+  inside the run it reviews, so that run's record also keeps `reviewer_profile` next to
+  `reviewer_tokens`. A QA run's record keeps its own `run_kind: qa`, `model` and `effort`.
+- The web dashboard and the terminal status dashboard show the kind, model and effort of each
+  running run (and its reviewer's, when the pre-push review is on) and of the recent runs.
 - Codex runtime: `model` and `effort` are ignored; Codex keeps the model and reasoning effort
   from its own config (set them in `command`, for example `codex -c model_reasoning_effort=high
   app-server`). Symphony logs one warning when a run starts with a profile that resolves to a model or effort.
@@ -560,9 +575,16 @@ pre_push_review:
   enabled: true
   runtime: codex
   command: codex app-server
+  model: claude-opus-5-5
+  effort: high
   max_iterations: 1
   run_on: always
 ```
+
+`model` and `effort` (optional) set the reviewer's `--model` / `--effort` with the Claude runtime.
+Each one falls back to `agent.run_profiles.pre_push_review`, then `agent.model` / `agent.effort`;
+with none set the reviewer command is unchanged. They take the same values as `agent.model` /
+`agent.effort`, and `command` must not pass `--model` / `--effort` while any of them is set.
 
 When enabled, Symphony runs an executor/reviewer loop in the same workspace before push.
 `run_on` defaults to `always`; set it to `first_push` to skip the reviewer on PR follow-up runs while keeping it enabled for initial issue runs.
@@ -579,6 +601,8 @@ auto_review:
   state: Auto Review
   runtime: claude
   command: claude --dangerously-skip-permissions
+  model: claude-sonnet-5-5
+  effort: medium
   max_turns: 20
   timeout_ms: 1800000
   max_concurrent: 1
@@ -587,6 +611,11 @@ auto_review:
   skip_globs: []
   playbooks: {}
 ```
+
+`model` and `effort` (optional) set the QA agent's `--model` / `--effort` with the Claude runtime,
+falling back to `agent.run_profiles.qa`, then `agent.model` / `agent.effort`. Validation is the same
+as for `pre_push_review`; when `command` is not set the QA agent uses `agent.command`, which must
+then not pass the flag that `auto_review.model` / `auto_review.effort` sets.
 
 When enabled, Symphony moves an issue whose run opened a PR to `state` (default `Auto Review`)
 instead of `In Review`, and the CI poller watches it there:
@@ -653,6 +682,63 @@ auto_review:
 ```
 
 Set `enabled: false` on a kind to turn it off.
+
+#### macOS app QA
+
+The built-in `macos_app` playbook tests a macOS app by building it, launching it and using it
+through accessibility, the way a user would. It is off until you name the build command and the
+app bundle it produces:
+
+```yaml
+auto_review:
+  playbooks:
+    macos_app:
+      build: make -C macos app            # run in the QA worktree
+      app: macos/build/Symphony.app       # relative to the repo root
+      build_timeout_ms: 900000            # optional, default 15 minutes
+      # paths: ["macos/Sources/**"]       # optional, default: Swift, Info.plist, xib, storyboard, xcassets
+```
+
+The QA agent's sandbox cannot build Swift, open apps or read the screen, so Symphony runs these
+tools for it on the host, outside the sandbox, and checks every argument:
+
+| Tool | Does | Refuses |
+| --- | --- | --- |
+| `qa_build` | runs `build` in the QA worktree with the agent's scrubbed environment, then copies the `app` bundle into a private directory | a worktree with changes outside `qa-evidence/`, gitignored files included: none may exist before the first build, and none may appear or change after a build; a bundle that resolves (symlinks included) outside the worktree, or that holds an absolute symlink or one with `..` |
+| `qa_launch_app` | starts the private copy of the bundle with `SYMPHONY_BAR_QA_ROOT` set to a private directory ([QA mode](../macos/README.md#qa-mode)), and returns its PID | an executable that changed since the last `qa_build`, or a worktree `qa_build` would refuse |
+| `qa_quit_app` | quits a launched app and returns its recent output | a PID it did not launch |
+| `qa_screenshot` | saves the app's on-screen windows to new files `qa-evidence/<name>.png` | a PID it did not launch, a window of another app, a name that already exists (file or symlink) |
+| `qa_ax_tree` | reads the accessibility tree (role, title, value, frame), filtered by `role` or `text`, capped in depth, nodes and size | a PID it did not launch |
+| `qa_ax_press`, `qa_ax_set_value` | press an element (or `AXRaise` a window) and set a field's value | a PID it did not launch |
+
+At most three launched apps run at once, and every app still running is quit when the pass ends.
+Only QA agents see these tools; executor and reviewer sessions cannot list or call them.
+
+The playbook judges a window only after it settles: it waits about 10 seconds after the window
+opens, changes focus once, and then checks the sizes of the content and scroll areas in the
+accessibility tree, not just the window frame. A window that opens at full height and collapses
+seconds later fails, with the AX tree quoted and a screenshot attached.
+
+The screenshot and accessibility tools use a small Swift helper that Symphony compiles once with
+`swiftc` (Xcode or the Command Line Tools) into `<state root>/qa-driver/`. Bundle copies,
+screenshot staging and the app's QA root live in a `0700` directory per pass under
+`<state root>/qa-driver/runs/`, outside every path the agent sandbox may write, and are removed
+when the pass ends.
+
+##### One-time macOS permissions
+
+Screenshots need **Screen Recording** and the accessibility tools need **Accessibility**, both
+granted to the process that runs Symphony: `Symphony.app` when the menu bar app runs it, or the
+terminal app you start `symphony` from. Grant them once:
+
+1. Open **System Settings → Privacy & Security → Screen & System Audio Recording** and turn on
+   Symphony.app (or your terminal). Use **+** to add it when it is not listed.
+2. Open **System Settings → Privacy & Security → Accessibility** and do the same.
+3. Restart Symphony (and the terminal, when Symphony runs from one) so the grants apply.
+
+Without a grant the tools return `qa_permission_missing`, the QA agent answers `blocked` with the
+missing permission as the reason, and the issue goes to `In Review` with that reason in the QA
+report.
 
 Auto Review needs `pull_requests.enabled: true` and `pull_requests.checks.enabled: true`, because
 the CI poller is what moves issues out of the state. A PR with no CI checks stays in Auto Review.

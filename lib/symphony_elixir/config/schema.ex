@@ -490,9 +490,10 @@ defmodule SymphonyElixir.Config.Schema do
     alias SymphonyElixir.RunKind
 
     @efforts ["low", "medium", "high", "xhigh", "max"]
-    @run_profile_keys ["model", "effort"]
+    @providers ["anthropic", "openrouter"]
+    @run_profile_keys ["model", "effort", "provider"]
     @run_profile_error_keys Map.new(
-                              for kind <- RunKind.names(), suffix <- ["", ".model", ".effort"] do
+                              for kind <- RunKind.names(), suffix <- ["", ".model", ".effort", ".provider"] do
                                 {kind <> suffix, :"run_profiles.#{kind}#{suffix}"}
                               end
                             )
@@ -796,6 +797,7 @@ defmodule SymphonyElixir.Config.Schema do
       field(:command, :string)
       field(:model, :string)
       field(:effort, :string)
+      field(:provider, :string)
       field(:run_profiles, :map, default: %{})
 
       field(:approval_policy, StringOrMap)
@@ -832,6 +834,7 @@ defmodule SymphonyElixir.Config.Schema do
           :command,
           :model,
           :effort,
+          :provider,
           :run_profiles,
           :approval_policy,
           :include_project_guides,
@@ -861,9 +864,10 @@ defmodule SymphonyElixir.Config.Schema do
       |> validate_number(:command_timeout_ms, greater_than_or_equal_to: 0)
       |> validate_number(:codex_stdio_prompt_soft_limit, greater_than: 0)
       |> validate_project_guide_files()
-      |> validate_setting(:model, &check_model/1)
-      |> validate_setting(:effort, &check_effort/1)
+      |> validate_profile_fields()
+      |> validate_setting(:provider, &check_provider/1)
       |> validate_run_profiles()
+      |> validate_openrouter_profiles()
       |> validate_command_run_profile_flags()
       |> update_change(:max_concurrent_agents_by_state, &Schema.normalize_state_limits/1)
       |> Schema.validate_state_limits(:max_concurrent_agents_by_state)
@@ -886,6 +890,22 @@ defmodule SymphonyElixir.Config.Schema do
           validate_number(changeset, :epic_lanes, greater_than_or_equal_to: 0)
       end
     end
+
+    @doc false
+    @spec validate_profile_fields(Ecto.Changeset.t()) :: Ecto.Changeset.t()
+    def validate_profile_fields(changeset) do
+      changeset
+      |> validate_setting(:model, &check_model/1)
+      |> validate_setting(:effort, &check_effort/1)
+    end
+
+    @doc false
+    @spec profile_flags_in(String.t() | nil) :: [String.t()]
+    def profile_flags_in(command) when is_binary(command) do
+      Enum.filter(["--model", "--effort"], &Regex.match?(~r/(^|\s)#{&1}(=|\s|$)/, command))
+    end
+
+    def profile_flags_in(_command), do: []
 
     defp validate_setting(changeset, field, check) do
       case Map.fetch(changeset.changes, field) do
@@ -912,6 +932,9 @@ defmodule SymphonyElixir.Config.Schema do
     defp check_effort(effort) when effort in @efforts, do: {:ok, effort}
     defp check_effort(_effort), do: {:error, "must be one of: #{Enum.join(@efforts, ", ")}"}
 
+    defp check_provider(provider) when provider in @providers, do: {:ok, provider}
+    defp check_provider(_provider), do: {:error, "must be one of: #{Enum.join(@providers, ", ")}"}
+
     defp validate_run_profiles(changeset) do
       case Map.fetch(changeset.changes, :run_profiles) do
         {:ok, profiles} ->
@@ -932,7 +955,7 @@ defmodule SymphonyElixir.Config.Schema do
           {add_error(changeset, :run_profiles, message), normalized}
 
         not is_map(profile) ->
-          {add_error(changeset, @run_profile_error_keys[kind], "must be an object with model and/or effort"), normalized}
+          {add_error(changeset, @run_profile_error_keys[kind], "must be an object with model, effort and/or provider"), normalized}
 
         true ->
           cast_run_profile_fields(changeset, normalized, kind, Map.new(profile, fn {key, value} -> {to_string(key), value} end))
@@ -946,7 +969,7 @@ defmodule SymphonyElixir.Config.Schema do
           {changeset, Map.put(normalized, kind, normalized_profile)}
 
         [unknown | _rest] ->
-          {add_error(changeset, @run_profile_error_keys[kind], "has unknown key `#{unknown}`; expected model or effort"), normalized}
+          {add_error(changeset, @run_profile_error_keys[kind], "has unknown key `#{unknown}`; expected model, effort or provider"), normalized}
       end
     end
 
@@ -959,15 +982,59 @@ defmodule SymphonyElixir.Config.Schema do
 
     defp check_run_profile_field("model", model), do: check_model(model)
     defp check_run_profile_field("effort", effort), do: check_effort(effort)
+    defp check_run_profile_field("provider", provider), do: check_provider(provider)
+
+    # OpenRouter serves the model a run names, so every run it serves needs a resolved model,
+    # and only the Claude runtime can be pointed at it. Each error names the key that picked
+    # OpenRouter: the profile's `provider`, else `agent.provider`.
+    defp validate_openrouter_profiles(changeset) do
+      provider = get_field(changeset, :provider)
+      model = get_field(changeset, :model)
+      profiles = get_field(changeset, :run_profiles)
+
+      RunKind.names()
+      |> Enum.map(&{&1, Map.get(profiles, &1, %{})})
+      |> Enum.filter(fn {_kind, profile} -> Map.get(profile, "provider", provider) == "openrouter" end)
+      |> Enum.group_by(&openrouter_error_key/1, fn {kind, profile} -> {kind, Map.get(profile, "model", model)} end)
+      |> Enum.reduce(changeset, fn {key, resolved}, acc ->
+        acc
+        |> add_openrouter_runtime_error(key)
+        |> add_openrouter_model_error(key, for({kind, nil} <- resolved, do: kind))
+      end)
+    end
+
+    defp openrouter_error_key({kind, %{"provider" => _provider}}), do: @run_profile_error_keys["#{kind}.provider"]
+    defp openrouter_error_key({_kind, _profile}), do: :provider
+
+    defp add_openrouter_runtime_error(changeset, key) do
+      case get_field(changeset, :kind) do
+        "claude" -> changeset
+        _runtime -> add_error(changeset, key, "openrouter is only supported with agent.runtime: claude")
+      end
+    end
+
+    defp add_openrouter_model_error(changeset, _key, []), do: changeset
+
+    defp add_openrouter_model_error(changeset, :provider, kinds) do
+      add_error(
+        changeset,
+        :provider,
+        "openrouter needs an OpenRouter model id; set agent.model or agent.run_profiles.<kind>.model (missing for: #{Enum.join(kinds, ", ")})"
+      )
+    end
+
+    defp add_openrouter_model_error(changeset, key, [kind]) do
+      add_error(changeset, key, "openrouter needs an OpenRouter model id; set agent.run_profiles.#{kind}.model or agent.model")
+    end
 
     # The resolved model and effort are passed as flags, so the same flag in `agent.command`
     # would be given twice.
     defp validate_command_run_profile_flags(changeset) do
       command = get_field(changeset, :command)
 
-      if run_profile_settings?(changeset) and is_binary(command) do
-        ["--model", "--effort"]
-        |> Enum.filter(&Regex.match?(~r/(^|\s)#{&1}(=|\s|$)/, command))
+      if run_profile_settings?(changeset) do
+        command
+        |> profile_flags_in()
         |> Enum.reduce(changeset, fn flag, acc ->
           add_error(acc, :command, "must not pass #{flag} when agent.model, agent.effort or agent.run_profiles is set; remove it from agent.command")
         end)
@@ -1501,12 +1568,14 @@ defmodule SymphonyElixir.Config.Schema do
     @type t :: %__MODULE__{}
 
     @primary_key false
-    @fields [:enabled, :kind, :command, :max_iterations, :run_on]
+    @fields [:enabled, :kind, :command, :model, :effort, :max_iterations, :run_on]
 
     embedded_schema do
       field(:enabled, :boolean, default: false)
       field(:kind, :string)
       field(:command, :string)
+      field(:model, :string)
+      field(:effort, :string)
       field(:max_iterations, :integer, default: 1)
       field(:run_on, :string, default: "always")
     end
@@ -1518,6 +1587,7 @@ defmodule SymphonyElixir.Config.Schema do
       |> validate_inclusion(:kind, ["codex", "claude"])
       |> validate_inclusion(:run_on, ["always", "first_push"])
       |> validate_number(:max_iterations, greater_than: 0)
+      |> Agent.validate_profile_fields()
       |> validate_required_when_enabled()
     end
 
@@ -1543,6 +1613,8 @@ defmodule SymphonyElixir.Config.Schema do
       :state,
       :kind,
       :command,
+      :model,
+      :effort,
       :max_turns,
       :timeout_ms,
       :max_concurrent,
@@ -1557,6 +1629,8 @@ defmodule SymphonyElixir.Config.Schema do
       field(:state, :string, default: "Auto Review")
       field(:kind, :string)
       field(:command, :string)
+      field(:model, :string)
+      field(:effort, :string)
       field(:max_turns, :integer, default: 20)
       field(:timeout_ms, :integer, default: 1_800_000)
       field(:max_concurrent, :integer, default: 1)
@@ -1577,6 +1651,7 @@ defmodule SymphonyElixir.Config.Schema do
       |> validate_number(:timeout_ms, greater_than: 0)
       |> validate_number(:max_concurrent, greater_than: 0)
       |> validate_number(:max_fix_attempts, greater_than_or_equal_to: 0)
+      |> Agent.validate_profile_fields()
     end
   end
 
@@ -2009,7 +2084,65 @@ defmodule SymphonyElixir.Config.Schema do
     |> cast_embed(:auto_review, with: &AutoReview.changeset/2)
     |> cast_embed(:dependencies, with: &Dependencies.changeset/2)
     |> cast_embed(:notifications, with: &Notifications.changeset/2)
+    |> validate_profile_command_flags()
   end
+
+  @doc """
+  Rejects `--model` / `--effort` in the pre-push reviewer and QA agent commands when a model or
+  effort resolves for that run kind, since the resolved values are passed as those flags.
+
+  The QA agent falls back to `agent.command`; that command is only checked here when the QA
+  agent's own `model` / `effort` is what makes the flag conflict, because the `agent` section
+  already rejects it otherwise.
+  """
+  @spec validate_profile_command_flags(Ecto.Changeset.t()) :: Ecto.Changeset.t()
+  def validate_profile_command_flags(changeset) do
+    agent = get_field(changeset, :agent)
+    review_agent = get_field(changeset, :review_agent)
+    auto_review = get_field(changeset, :auto_review)
+    agent_settings? = agent_profile_settings?(agent, nil)
+
+    changeset
+    |> reject_profile_flags(:review_agent, review_agent.command, &"must not pass #{&1} when a model or effort is set for the pre-push reviewer; remove it from the command", fn ->
+      own_profile_settings?(review_agent) or agent_profile_settings?(agent, "pre_push_review")
+    end)
+    |> reject_qa_profile_flags(auto_review, agent, agent_settings?)
+  end
+
+  defp reject_qa_profile_flags(changeset, %{command: command} = auto_review, agent, _agent_settings?) when is_binary(command) do
+    reject_profile_flags(changeset, :auto_review, command, &"must not pass #{&1} when a model or effort is set for the QA agent; remove it from the command", fn ->
+      own_profile_settings?(auto_review) or agent_profile_settings?(agent, "qa")
+    end)
+  end
+
+  defp reject_qa_profile_flags(changeset, auto_review, agent, false = _agent_settings?) do
+    message = &"is not set, and agent.command passes #{&1} while auto_review.model or auto_review.effort is set; set auto_review.command without #{&1}"
+    reject_profile_flags(changeset, :auto_review, agent.command, message, fn -> own_profile_settings?(auto_review) end)
+  end
+
+  defp reject_qa_profile_flags(changeset, _auto_review, _agent, true = _agent_settings?), do: changeset
+
+  defp reject_profile_flags(changeset, section, command, message, settings?) do
+    case Agent.profile_flags_in(command) do
+      [] ->
+        changeset
+
+      flags ->
+        if settings?.() do
+          section_changeset =
+            Enum.reduce(flags, Map.get(changeset.changes, section) || change(get_field(changeset, section)), &add_error(&2, :command, message.(&1)))
+
+          %{changeset | changes: Map.put(changeset.changes, section, section_changeset), valid?: false}
+        else
+          changeset
+        end
+    end
+  end
+
+  defp own_profile_settings?(%{model: model, effort: effort}), do: not is_nil(model) or not is_nil(effort)
+
+  defp agent_profile_settings?(agent, nil), do: own_profile_settings?(agent) or agent.run_profiles not in [nil, %{}]
+  defp agent_profile_settings?(agent, kind), do: own_profile_settings?(agent) or Map.has_key?(agent.run_profiles || %{}, kind)
 
   defp finalize_settings(settings) do
     tracker = %{
