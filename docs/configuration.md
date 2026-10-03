@@ -331,7 +331,8 @@ agent:
   When the API cannot be reached, `check` prints a warning and does not fail. Before an
   OpenRouter run starts, Symphony looks the model up the same way: a model without `tools` fails
   the run before `claude` starts and logs `OpenRouter run cannot start: model <id> does not
-  support tools run_kind=<kind>`; a model without `reasoning` starts without `--effort` and logs
+  support tools run_kind=<kind>; set <key> to a model that lists tools`, where `<key>` is the
+  key that set the model, as in `check`; a model without `reasoning` starts without `--effort` and logs
   a warning once per model. If the lookup fails, or OpenRouter does not list the model, the run
   starts anyway and logs a warning, so an OpenRouter outage does not block work.
 - `run_profiles.<kind>`: `model`, `effort` and/or `provider` for one kind of run. Kinds, first match wins:

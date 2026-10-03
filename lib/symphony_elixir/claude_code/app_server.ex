@@ -58,7 +58,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     run_profile = Keyword.get(opts, :run_profile)
 
     with :ok <- check_provider(run_profile, worker_host),
-         {:ok, run_profile} <- check_model_capabilities(run_profile),
+         {:ok, run_profile} <- check_model_capabilities(run_profile, settings),
          {:ok, expanded_workspace} <- validate_workspace_cwd(workspace, worker_host, settings),
          {:ok, mcp_session, remote_socket_path, remote_shim_path} <-
            start_mcp_session(expanded_workspace, worker_host, opts),
@@ -913,14 +913,14 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   # the run before `claude` starts. `--effort` is dropped for a model without `reasoning`. When
   # the catalog cannot be read, or does not list the model, the run starts anyway: an OpenRouter
   # outage must not block work, and `symphony check` already rejects unknown ids.
-  defp check_model_capabilities(%{provider: "openrouter", model: model} = profile) when is_binary(model) do
+  defp check_model_capabilities(%{provider: "openrouter", model: model} = profile, settings) when is_binary(model) do
     kind = Map.get(profile, :kind)
 
     case OpenRouterModels.lookup(model) do
       {:ok, %{tools: false}} ->
         Logger.error(
           "OpenRouter run cannot start: model #{model} does not support tools run_kind=#{kind}; " <>
-            "set agent.run_profiles.#{kind}.model to a model that lists tools"
+            "set #{Config.run_profile_key(settings, kind, :model)} to a model that lists tools"
         )
 
         {:error, {:openrouter_model_unsupported, model, kind, :tools}}
@@ -941,7 +941,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     end
   end
 
-  defp check_model_capabilities(profile), do: {:ok, profile}
+  defp check_model_capabilities(profile, _settings), do: {:ok, profile}
 
   defp drop_unsupported_effort(%{model: model, effort: effort} = profile) when is_binary(effort) do
     warned_key = {__MODULE__, :effort_dropped, model}

@@ -8,7 +8,8 @@ defmodule SymphonyElixir.OpenRouter.Models do
   The catalog is cached for the life of the process, for `@ttl_ms`. A failed request is not
   cached, so the next lookup tries again. Tests swap the HTTP call with the
   `:openrouter_models_request` app env (a `(url, req_options) -> {:ok, response} | {:error,
-  reason}` function) or the `:request_fun` option.
+  reason}` function) or the `:request_fun` option. `:req_options` adds options to the default
+  `Req` request.
   """
 
   @endpoint "https://openrouter.ai/api/v1/models"
@@ -64,17 +65,35 @@ defmodule SymphonyElixir.OpenRouter.Models do
   @spec format_reason(term()) :: String.t()
   def format_reason({:http_status, status}), do: "HTTP #{status}"
   def format_reason(:invalid_body), do: "unexpected response body"
+  def format_reason({:exit, reason}), do: "request exited: #{inspect(reason)}"
   def format_reason(%{__exception__: true} = exception), do: Exception.message(exception)
   def format_reason(reason), do: inspect(reason)
 
   defp fetch(opts) do
-    request_fun = Keyword.get(opts, :request_fun) || Application.get_env(:symphony_elixir, :openrouter_models_request, &Req.get/2)
+    request_fun = Keyword.get(opts, :request_fun) || Application.get_env(:symphony_elixir, :openrouter_models_request, &request/2)
+    req_options = [receive_timeout: @timeout_ms, connect_options: [timeout: @timeout_ms], retry: false] ++ Keyword.get(opts, :req_options, [])
 
-    case request_fun.(@endpoint, receive_timeout: @timeout_ms, connect_options: [timeout: @timeout_ms], retry: false) do
+    case safe_request(request_fun, req_options) do
       {:ok, %{status: 200, body: %{"data" => models}}} when is_list(models) -> {:ok, parse(models)}
       {:ok, %{status: 200}} -> {:error, :invalid_body}
       {:ok, %{status: status}} -> {:error, {:http_status, status}}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # An exit from the HTTP client (a missing pool, a crashed connection) is a failed read, so
+  # callers warn instead of crashing.
+  defp safe_request(request_fun, req_options) do
+    request_fun.(@endpoint, req_options)
+  catch
+    :exit, reason -> {:error, {:exit, reason}}
+  end
+
+  # `symphony check` runs without starting the `:symphony_elixir` application, so `:req` and
+  # its Finch pool may not be running yet.
+  defp request(url, req_options) do
+    with {:ok, _started} <- Application.ensure_all_started(:req) do
+      Req.get(url, req_options)
     end
   end
 

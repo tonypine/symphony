@@ -71,6 +71,27 @@ defmodule SymphonyElixir.OpenRouter.ModelsTest do
     assert Models.catalog() == {:error, :network_disabled_in_tests}
   end
 
+  test "the default request starts :req and calls the models API through Req" do
+    previous = Application.get_env(:symphony_elixir, :openrouter_models_request)
+    Application.delete_env(:symphony_elixir, :openrouter_models_request)
+    on_exit(fn -> Application.put_env(:symphony_elixir, :openrouter_models_request, previous) end)
+
+    plug = fn conn ->
+      assert conn.method == "GET"
+      assert conn.request_path == "/api/v1/models"
+      Req.Test.json(conn, @catalog)
+    end
+
+    assert {:ok, %{"acme/chat-only" => %{tools: false}}} = Models.catalog(req_options: [plug: plug])
+  end
+
+  test "an exit from the request is a failed read, not a crash" do
+    request_fun = fn _url, _opts -> exit({:noproc, {GenServer, :call, [Req.FinchSupervisor]}}) end
+
+    assert {:error, {:exit, {:noproc, _call}} = reason} = Models.catalog(request_fun: request_fun)
+    assert Models.format_reason(reason) =~ "request exited: {:noproc"
+  end
+
   test "formats failure reasons" do
     assert Models.format_reason({:http_status, 503}) == "HTTP 503"
     assert Models.format_reason(:invalid_body) == "unexpected response body"

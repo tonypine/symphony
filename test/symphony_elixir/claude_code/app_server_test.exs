@@ -1935,9 +1935,29 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
 
             assert log =~
                      "OpenRouter run cannot start: model acme/chat-only does not support tools run_kind=landing; " <>
-                       "set agent.run_profiles.landing.model to a model that lists tools"
+                       "set agent.model to a model that lists tools"
 
             refute File.exists?(Path.join(workspace, "argv.trace"))
+          end)
+        end)
+      end)
+    end
+
+    test "names the key that set the model when a pre_push_review run model lacks tools" do
+      with_openrouter_key("sk-or-v1-REDACTED", fn ->
+        with_models_api(fn ->
+          with_provider_env_fake_claude("ACME-OPENROUTER-REVIEW-NOTOOLS", fn workspace ->
+            settings = Config.settings!()
+            settings = %{settings | review_agent: %{settings.review_agent | model: "acme/chat-only"}}
+            profile = %{kind: :pre_push_review, model: "acme/chat-only", effort: nil, provider: "openrouter"}
+
+            log =
+              capture_log(fn ->
+                assert AppServer.start_session(workspace, run_profile: profile, settings: settings) ==
+                         {:error, {:openrouter_model_unsupported, "acme/chat-only", :pre_push_review, :tools}}
+              end)
+
+            assert log =~ "run_kind=pre_push_review; set pre_push_review.model to a model that lists tools"
           end)
         end)
       end)

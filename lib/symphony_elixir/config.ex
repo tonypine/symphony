@@ -362,6 +362,15 @@ defmodule SymphonyElixir.Config do
   defp effective_run_profile(settings, "qa"), do: qa_profile(settings)
   defp effective_run_profile(settings, kind), do: run_profile(settings, kind)
 
+  @doc """
+  The config key that sets `field` (`:model` or `:effort`) for run kind `kind`, for messages that
+  tell the operator what to change: `pre_push_review.model`, `agent.run_profiles.landing.effort`,
+  or `agent.model` when no profile overrides it.
+  """
+  @spec run_profile_key(Schema.t(), atom() | String.t(), :model | :effort) :: String.t()
+  def run_profile_key(%Schema{} = settings, kind, field) when field in [:model, :effort],
+    do: profile_key(settings, to_string(kind), field)
+
   defp profile_key(settings, kind, field) do
     with {section_key, section} <- own_profile_section(settings, kind),
          value when not is_nil(value) <- Map.get(section, field) do
