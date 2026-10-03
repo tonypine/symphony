@@ -379,35 +379,176 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       assert {:notification, "tool_result"} = AppServer.parse_event(line)
     end
 
-    test "parses rate_limit_event with allowed_warning status as notification" do
+    test "parses rate_limit_event with allowed_warning status as a notification that remembers the window" do
       line =
         ~s({"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":1778749200,"rateLimitType":"seven_day","utilization":0.93,"isUsingOverage":false,"surpassedThreshold":0.75},"uuid":"u-1","session_id":"sess-1"})
 
-      assert {:notification, text} = AppServer.parse_event(line)
+      assert {:usage_window, text, window} = AppServer.parse_event(line)
       assert text =~ "seven_day"
       assert text =~ "allowed_warning"
       assert text =~ "93"
+
+      assert window == %{
+               window: "seven_day",
+               status: "allowed_warning",
+               resets_at: DateTime.from_unix!(1_778_749_200),
+               utilization: 0.93
+             }
     end
 
     test "parses rate_limit_event with integer utilization" do
       line =
         ~s({"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","rateLimitType":"seven_day","utilization":1},"uuid":"u-1","session_id":"sess-1"})
 
-      assert {:notification, text} = AppServer.parse_event(line)
+      assert {:usage_window, text, %{resets_at: nil, utilization: 1}} = AppServer.parse_event(line)
       assert text =~ "seven_day"
       assert text =~ "allowed_warning"
       assert text =~ "100"
+    end
+
+    test "parses an allowed rate_limit_event without a usage window as a plain notification" do
+      line = ~s({"type":"rate_limit_event","rate_limit_info":{"status":"allowed"},"session_id":"sess-1"})
+
+      assert {:notification, "rate_limit rate_limit allowed"} = AppServer.parse_event(line)
     end
 
     test "parses rate_limit_event with blocking status as rate_limited" do
       line =
         ~s({"type":"rate_limit_event","rate_limit_info":{"status":"exceeded","rateLimitType":"per_minute","utilization":1.05},"uuid":"u-1","session_id":"sess-1"})
 
-      assert {:rate_limited, info, reason} = AppServer.parse_event(line)
+      assert {:multi, [{:rate_limit_info, %{"rateLimitType" => "per_minute"}}, {:rate_limited, info, reason}]} =
+               AppServer.parse_event(line)
+
       assert reason =~ "per_minute"
       assert reason =~ "exceeded"
       assert info.message == reason
       assert info.retry_after_seconds == nil
+    end
+
+    test "parses a rejected five_hour rate_limit_event as a usage limit with its reset time" do
+      line =
+        ~s({"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1759528800,"rateLimitType":"five_hour","utilization":1.0,"isUsingOverage":false,"overageStatus":"rejected"},"session_id":"sess-1"})
+
+      assert {:multi, [{:rate_limit_info, %{"status" => "rejected"}}, {:usage_limited, info}]} =
+               AppServer.parse_event(line)
+
+      assert info == %{
+               provider: "anthropic",
+               window: "five_hour",
+               scope: :all,
+               resets_at: ~U[2025-10-03 22:00:00Z],
+               utilization: 1.0,
+               overage: "rejected",
+               source: :rate_limit_event
+             }
+    end
+
+    test "parses a rejected seven_day_opus rate_limit_event as an opus-scoped usage limit" do
+      line =
+        ~s({"type":"rate_limit_event","rate_limit_info":{"status":"rejected","rateLimitType":"seven_day_opus"},"session_id":"sess-1"})
+
+      assert {:multi, [_raw, {:usage_limited, %{window: "seven_day_opus", scope: "opus", resets_at: nil, utilization: nil}}]} =
+               AppServer.parse_event(line)
+    end
+
+    test "parses a rejected seven_day_sonnet rate_limit_event as a sonnet-scoped usage limit" do
+      line =
+        ~s({"type":"rate_limit_event","rate_limit_info":{"status":"rejected","rateLimitType":"seven_day_sonnet","resetsAt":-5},"session_id":"sess-1"})
+
+      assert {:multi, [_raw, {:usage_limited, %{scope: "sonnet", resets_at: nil}}]} = AppServer.parse_event(line)
+    end
+
+    test "drops a resetsAt that is out of DateTime range" do
+      line =
+        ~s({"type":"rate_limit_event","rate_limit_info":{"status":"rejected","rateLimitType":"seven_day","resetsAt":999999999999999},"session_id":"sess-1"})
+
+      assert {:multi, [_raw, {:usage_limited, %{window: "seven_day", resets_at: nil}}]} = AppServer.parse_event(line)
+    end
+
+    test "does not treat a spent window as a usage limit while overage is in use" do
+      for overage <- [~s("isUsingOverage":true), ~s("overageStatus":"allowed")] do
+        line =
+          ~s({"type":"rate_limit_event","rate_limit_info":{"status":"rejected","rateLimitType":"five_hour",#{overage}},"session_id":"sess-1"})
+
+        assert {:multi, [_raw, {:rate_limited, %{retry_after_seconds: nil}, "rate_limit five_hour rejected"}]} =
+                 AppServer.parse_event(line)
+      end
+    end
+
+    test "parses the older usage-limit result text with and without an epoch reset time" do
+      line =
+        ~s({"type":"result","subtype":"success","is_error":true,"result":"Claude AI usage limit reached|1759528800","session_id":"sess-1"})
+
+      assert {:usage_limited, %{provider: "anthropic", window: nil, scope: :all, resets_at: ~U[2025-10-03 22:00:00Z], source: :result_text}} =
+               AppServer.parse_event(line)
+
+      line =
+        ~s({"type":"result","subtype":"error_during_execution","is_error":true,"result":"Claude AI usage limit reached","session_id":"sess-1"})
+
+      assert {:usage_limited, %{resets_at: nil, source: :result_text}} = AppServer.parse_event(line)
+    end
+
+    test "parses the newer usage-limit result text with and without a reset time" do
+      line =
+        ~s|{"type":"result","subtype":"success","is_error":true,"result":"You've hit your limit · resets 3pm (UTC)","session_id":"sess-1"}|
+
+      assert {:usage_limited, %{source: :result_text, resets_at: %DateTime{} = resets_at}} = AppServer.parse_event(line)
+      assert {resets_at.hour, resets_at.minute} == {15, 0}
+      assert DateTime.diff(resets_at, DateTime.utc_now()) in 0..86_400
+
+      line = ~s({"type":"result","subtype":"error","is_error":true,"error":"You've hit your weekly limit","session_id":"sess-1"})
+
+      assert {:usage_limited, %{resets_at: nil, source: :result_text}} = AppServer.parse_event(line)
+    end
+
+    test "resolves newer usage-limit reset times in UTC-like zones and leaves other zones unknown" do
+      parse = fn reset ->
+        line =
+          Jason.encode!(%{"type" => "result", "subtype" => "success", "is_error" => true, "result" => "You've hit your session limit · resets #{reset}"})
+
+        assert {:usage_limited, %{resets_at: resets_at}} = AppServer.parse_event(line)
+        resets_at
+      end
+
+      now = DateTime.utc_now()
+
+      assert %DateTime{hour: 12, minute: 30} = parse.("12:30am (GMT+12)")
+      assert %DateTime{hour: 15, minute: 15} = parse.("10:15 (UTC-05:00)")
+      assert %DateTime{hour: 9, minute: 0} = parse.("9 (UTC)")
+      assert %DateTime{hour: 0, minute: 0} = parse.("12am (Etc/UTC)")
+
+      tomorrow = Date.add(DateTime.to_date(now), 1)
+      month = Enum.at(~w(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec), tomorrow.month - 1)
+      dated = parse.("#{month} #{tomorrow.day}, 3pm (UTC)")
+      assert DateTime.to_date(dated) == tomorrow
+
+      yesterday = Date.add(DateTime.to_date(now), -1)
+      month = Enum.at(~w(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec), yesterday.month - 1)
+      assert parse.("#{month} #{yesterday.day} at 3pm (UTC)").year > yesterday.year
+
+      assert parse.("3pm (America/Los_Angeles)") == nil
+      assert parse.("soon (UTC)") == nil
+      assert parse.("25pm (UTC)") == nil
+      assert parse.("Foo 3, 3pm (UTC)") == nil
+      assert parse.("Feb 31, 3pm (UTC)") == nil
+    end
+
+    test "keeps a 429 result error on the throttle path" do
+      line =
+        ~s({"type":"result","subtype":"error","is_error":true,"error":"API Error: 429 Too Many Requests","session_id":"sess-1"})
+
+      assert {:rate_limited, %{retry_after_seconds: nil}, "API Error: 429 Too Many Requests"} = AppServer.parse_event(line)
+    end
+
+    test "keeps today's parsing for error results without usage-limit text" do
+      line = ~s({"type":"result","subtype":"success","is_error":true,"result":"Something else","usage":{}})
+      assert {:turn_completed, _usage} = AppServer.parse_event(line)
+
+      line = ~s({"type":"result","subtype":"success","is_error":true,"usage":{}})
+      assert {:turn_completed, _usage} = AppServer.parse_event(line)
+
+      line = ~s({"type":"result","subtype":"error_max_turns","is_error":false})
+      assert {:malformed, ^line} = AppServer.parse_event(line)
     end
   end
 
@@ -420,6 +561,32 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
 
       assert rate_limits.limit_id == "claude-throttled"
       assert rate_limits.primary == %{remaining: 0, reset_in_seconds: 60}
+    end
+
+    test "converts usage-limit and usage-window events into worker update maps" do
+      info = %{
+        provider: "anthropic",
+        window: "five_hour",
+        scope: :all,
+        resets_at: ~U[2025-10-03 22:00:00Z],
+        utilization: 1.0,
+        overage: nil,
+        source: :rate_limit_event
+      }
+
+      assert %{event: :usage_limited, timestamp: %DateTime{}, usage_limit: ^info, message: message} =
+               AppServer.event_to_update({:usage_limited, info})
+
+      assert message == "usage_limited five_hour resets_at=2025-10-03T22:00:00Z"
+
+      assert %{message: "usage_limited unknown"} = AppServer.event_to_update({:usage_limited, %{info | window: nil, resets_at: nil}})
+
+      windows = %{"five_hour" => %{status: "allowed", resets_at: nil, utilization: 0.5}}
+
+      assert %{event: :notification, payload: "rate_limit five_hour allowed", usage_windows: ^windows} =
+               update = AppServer.event_to_update({:usage_window, "rate_limit five_hour allowed", windows})
+
+      refute Map.has_key?(update, :rate_limits)
     end
 
     test "omits reset_in_seconds when retry_after_seconds is nil" do
@@ -1459,6 +1626,103 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
         assert_received {:turn_msg, {:agent_text, _}}
         assert_received {:turn_msg, {:token_usage, %{input_tokens: 10, output_tokens: 5, total_tokens: 15}}}
         assert_received {:turn_msg, {:turn_completed, _}}
+      after
+        File.rm_rf(test_root)
+      end
+    end
+
+    test "returns a typed usage limit when Claude rejects the five-hour window" do
+      test_root =
+        Path.join(
+          System.tmp_dir!(),
+          "symphony-elixir-claude-code-usage-limit-#{System.unique_integer([:positive])}"
+        )
+
+      try do
+        workspace_root = Path.join(test_root, "workspaces")
+        workspace = Path.join(workspace_root, "ACME-LIMIT")
+        fake_claude = Path.join(test_root, "fake-claude")
+        File.mkdir_p!(workspace)
+
+        File.write!(fake_claude, """
+        #!/bin/sh
+        printf '%s\\n' '{"type":"system","subtype":"init","session_id":"sess-limit","cwd":"/tmp","tools":[],"mcp_servers":[],"model":"claude-opus-4-5","permissionMode":"default","apiKeySource":"none"}'
+        printf '%s\\n' '{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":1759528800,"rateLimitType":"five_hour","utilization":0.9},"session_id":"sess-limit"}'
+        printf '%s\\n' '{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1759528800,"rateLimitType":"five_hour","utilization":1.0,"overageStatus":"rejected"},"session_id":"sess-limit"}'
+        printf '%s\\n' '{"type":"result","subtype":"success","is_error":true,"result":"Claude AI usage limit reached|1759532400","session_id":"sess-limit","usage":{}}'
+        exit 1
+        """)
+
+        File.chmod!(fake_claude, 0o755)
+
+        write_workflow_file!(Workflow.workflow_file_path(),
+          workspace_root: workspace_root,
+          agent_kind: "claude",
+          agent_command: fake_claude
+        )
+
+        session = local_session(workspace, test_root)
+        test_pid = self()
+        on_message = fn msg -> send(test_pid, {:turn_msg, msg}) end
+        issue = %{id: "issue-limit", identifier: "ACME-LIMIT"}
+
+        log =
+          ExUnit.CaptureLog.capture_log(fn ->
+            send(test_pid, {:result, AppServer.run_turn(session, "do the thing", issue, on_message: on_message)})
+          end)
+
+        assert_received {:result, {:error, {:usage_limited, %{window: "five_hour", resets_at: %DateTime{} = resets_at} = info}}}
+        assert info.source == :rate_limit_event
+        assert resets_at == ~U[2025-10-03 22:00:00Z]
+
+        assert_received {:turn_msg, {:usage_window, _message, %{"five_hour" => five_hour}}}
+        assert five_hour == %{status: "allowed_warning", resets_at: ~U[2025-10-03 22:00:00Z], utilization: 0.9}
+        assert_received {:turn_msg, {:usage_limited, %{source: :rate_limit_event}}}
+        refute_received {:turn_msg, {:usage_limited, %{source: :result_text}}}
+        assert_received {:turn_msg, {:turn_failed, "usage_limited five_hour resets_at=2025-10-03T22:00:00Z"}}
+
+        assert log =~ "Claude rate_limit_event not allowed"
+        assert log =~ ~s(issue_id="issue-limit" issue_identifier="ACME-LIMIT" session_id="sess-limit")
+        assert log =~ ~s(rate_limit_info=%{)
+        assert log =~ ~s("status" => "rejected")
+        assert length(String.split(log, "Claude rate_limit_event not allowed")) == 2
+      after
+        File.rm_rf(test_root)
+      end
+    end
+
+    test "falls back to the result text when no rate_limit_event arrives" do
+      test_root =
+        Path.join(
+          System.tmp_dir!(),
+          "symphony-elixir-claude-code-usage-limit-text-#{System.unique_integer([:positive])}"
+        )
+
+      try do
+        workspace_root = Path.join(test_root, "workspaces")
+        workspace = Path.join(workspace_root, "ACME-LIMIT-TEXT")
+        fake_claude = Path.join(test_root, "fake-claude")
+        File.mkdir_p!(workspace)
+
+        File.write!(fake_claude, """
+        #!/bin/sh
+        printf '%s\\n' '{"type":"result","subtype":"success","is_error":true,"result":"Claude AI usage limit reached","session_id":"sess-limit-text","usage":{}}'
+        printf '%s\\n' '{"type":"result","subtype":"success","is_error":true,"result":"Claude AI usage limit reached|1759532400","session_id":"sess-limit-text","usage":{}}'
+        exit 0
+        """)
+
+        File.chmod!(fake_claude, 0o755)
+
+        write_workflow_file!(Workflow.workflow_file_path(),
+          workspace_root: workspace_root,
+          agent_kind: "claude",
+          agent_command: fake_claude
+        )
+
+        session = local_session(workspace, test_root)
+
+        assert {:error, {:usage_limited, %{window: nil, resets_at: ~U[2025-10-03 23:00:00Z], source: :result_text}}} =
+                 AppServer.run_turn(session, "do the thing", nil, [])
       after
         File.rm_rf(test_root)
       end
