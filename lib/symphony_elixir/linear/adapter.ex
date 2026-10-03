@@ -6,6 +6,7 @@ defmodule SymphonyElixir.Linear.Adapter do
   @behaviour SymphonyElixir.Tracker
 
   alias SymphonyElixir.Linear.{Client, Issue}
+  alias SymphonyElixir.Tracker
 
   @create_comment_mutation """
   mutation SymphonyCreateComment($issueId: String!, $body: String!) {
@@ -45,6 +46,44 @@ defmodule SymphonyElixir.Linear.Adapter do
         team {
           id
           key
+        }
+      }
+    }
+  }
+  """
+
+  # Bounded so the nested connection stays cheap; a breakdown parent is read only while it has
+  # Backlog sub-issues, and the transition that matters is a recent one.
+  @breakdown_history_query """
+  query SymphonyBreakdownHistory($id: String!) {
+    issue(id: $id) {
+      history(first: 50) {
+        nodes {
+          createdAt
+          fromState {
+            name
+          }
+          toState {
+            name
+          }
+        }
+      }
+      children(first: 50) {
+        nodes {
+          id
+          identifier
+          createdAt
+          state {
+            name
+          }
+          history(first: 20) {
+            nodes {
+              createdAt
+              toState {
+                name
+              }
+            }
+          }
         }
       }
     }
@@ -96,6 +135,21 @@ defmodule SymphonyElixir.Linear.Adapter do
     end
   end
 
+  @spec fetch_breakdown_history(String.t()) :: {:ok, Tracker.breakdown_history()} | {:error, term()}
+  def fetch_breakdown_history(issue_id) when is_binary(issue_id) do
+    with {:ok, response} <- client_module().graphql(@breakdown_history_query, %{id: issue_id}),
+         %{} = issue <- get_in(response, ["data", "issue"]) do
+      {:ok,
+       %{
+         state_changes: issue |> history_nodes() |> Enum.flat_map(&state_change/1),
+         sub_issues: issue |> get_in(["children", "nodes"]) |> List.wrap() |> Enum.map(&history_sub_issue/1)
+       }}
+    else
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :issue_not_found}
+    end
+  end
+
   @spec workflow_state_exists?(String.t(), [String.t()]) :: {:ok, boolean()} | {:error, term()}
   def workflow_state_exists?(state_name, teams) when is_binary(state_name) and is_list(teams) do
     with {:ok, response} <- client_module().graphql(@workflow_states_query, %{stateName: state_name}),
@@ -112,6 +166,37 @@ defmodule SymphonyElixir.Linear.Adapter do
     wanted = String.downcase(team)
     Enum.any?(state_teams, fn state_team -> wanted in [String.downcase(to_string(state_team["key"])), String.downcase(to_string(state_team["id"]))] end)
   end
+
+  defp history_nodes(issue), do: issue |> get_in(["history", "nodes"]) |> List.wrap()
+
+  # History entries for other edits (title, labels, ...) carry no target state.
+  defp state_change(%{"toState" => %{"name" => to}} = entry) when is_binary(to) do
+    case parse_datetime(entry["createdAt"]) do
+      %DateTime{} = at -> [%{at: at, from: get_in(entry, ["fromState", "name"]), to: to}]
+      nil -> []
+    end
+  end
+
+  defp state_change(_entry), do: []
+
+  defp history_sub_issue(child) do
+    %{
+      id: child["id"],
+      identifier: child["identifier"],
+      state: get_in(child, ["state", "name"]),
+      created_at: parse_datetime(child["createdAt"]),
+      state_changed_at: child |> history_nodes() |> Enum.flat_map(&state_change/1) |> Enum.map(& &1.at) |> Enum.max(DateTime, fn -> nil end)
+    }
+  end
+
+  defp parse_datetime(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> datetime
+      _ -> nil
+    end
+  end
+
+  defp parse_datetime(_value), do: nil
 
   defp client_module do
     Application.get_env(:symphony_elixir, :linear_client_module, Client)

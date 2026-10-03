@@ -6,13 +6,15 @@ vars: []
 
 Use `linear_create_subissue` to file new work. It always creates a child of the
 current issue in the same team and project, assigned to the same assignee, in
-`Backlog`; a human promotes it to `Todo`. It takes only `title`, `description`
-and an optional `priority` (0 none, 1 urgent, 2 high, 3 medium, 4 low), and a
-run may create at most 10.
+`Backlog`; a human promotes it to `Todo`. It takes only `title`, `description`,
+an optional `priority` (0 none, 1 urgent, 2 high, 3 medium, 4 low) and an
+optional `blocked_by` list of sibling sub-issue identifiers, and a run may
+create at most 10.
 
 When a ticket asks you to plan and split work into sub-tickets, create each
 sub-ticket with `linear_create_subissue` rather than only listing the plan.
-Make every sub-ticket deliverable on its own, in the order they should land.
+Make every sub-ticket deliverable on its own, in the order they should land, and
+pass `blocked_by` with the earlier sub-tickets each one depends on.
 
 When you discover a meaningful improvement outside the current ticket's scope, do
 not expand scope. File it with `linear_create_subissue` instead.

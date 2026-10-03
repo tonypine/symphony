@@ -528,14 +528,20 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp continue_after_completed_turn(issue, issue_state_fetcher, opts, run_context, agent_module, app_session, turn_number, max_turns) do
     case continue_with_issue?(issue, issue_state_fetcher, opts) do
-      {:continue, refreshed_issue} when turn_number < max_turns ->
-        run_context = %{run_context | issue: refreshed_issue}
-        continue_active_issue(agent_module, app_session, run_context, refreshed_issue, turn_number, max_turns)
-
       {:continue, refreshed_issue} ->
-        Logger.info("Reached agent.max_turns for #{issue_context(refreshed_issue)} with issue still active; returning control to orchestrator")
+        cond do
+          merging_ci_pending?(refreshed_issue, run_context) ->
+            :ok
 
-        :ok
+          turn_number < max_turns ->
+            run_context = %{run_context | issue: refreshed_issue}
+            continue_active_issue(agent_module, app_session, run_context, refreshed_issue, turn_number, max_turns)
+
+          true ->
+            Logger.info("Reached agent.max_turns for #{issue_context(refreshed_issue)} with issue still active; returning control to orchestrator")
+
+            :ok
+        end
 
       {:done, _refreshed_issue} ->
         :ok
@@ -1224,6 +1230,7 @@ defmodule SymphonyElixir.AgentRunner do
     if attached_pr?(previous_issue) or attached_pr?(refreshed_issue) do
       active_issue_state?(refreshed_issue.state) and
         !rework_state?(refreshed_issue.state) and
+        !merging_state?(refreshed_issue.state) and
         pending_reviewer_comments(refreshed_issue, opts) == [] and
         is_nil(pending_ci_failure(refreshed_issue, opts)) and
         is_nil(pending_qa_failure(refreshed_issue, opts)) and
@@ -1240,6 +1247,54 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp rework_state?(_state_name), do: false
+
+  # `Merging` means a human approved the merge. Parking it as post-PR quiet would move it
+  # back to review and drop that approval while the landing agent waits for CI.
+  defp merging_state?(state_name) when is_binary(state_name) do
+    normalize_issue_state(state_name) == "merging"
+  end
+
+  defp merging_state?(_state_name), do: false
+
+  # A landing agent that ends its turn while the PR head's checks are pending would only spend
+  # turns finding them still pending. End the run and tell the orchestrator, which holds the
+  # issue in `Merging` until the CI poller sees that head settle.
+  defp merging_ci_pending?(%Issue{} = issue, run_context) do
+    pr_url = URLUtils.pull_request_url(issue)
+
+    if merging_state?(issue.state) and is_binary(pr_url) do
+      github = Keyword.get(run_context.opts, :github, PullRequest)
+
+      case github.fetch_ci_status(pr_url, cwd: run_context.workspace) do
+        {:ok, ci_status} ->
+          maybe_wait_for_merging_ci(issue, pr_url, ci_status, run_context)
+
+        {:error, reason} ->
+          Logger.warning("Could not read CI status for landing #{issue_context(issue)}; continuing reason=#{inspect(reason)}")
+          false
+      end
+    else
+      false
+    end
+  end
+
+  defp maybe_wait_for_merging_ci(issue, pr_url, ci_status, run_context) do
+    if CiPoller.ci_action(ci_status) == :pending do
+      commit_sha = Map.get(ci_status, :commit_sha)
+      Logger.info("Stopping landing run for #{issue_context(issue)}; waiting for CI on #{commit_sha}")
+      send_merging_ci_wait(run_context.codex_update_recipient, issue, %{commit_sha: commit_sha, pr_url: pr_url})
+      true
+    else
+      false
+    end
+  end
+
+  defp send_merging_ci_wait(recipient, %Issue{id: issue_id}, wait) when is_pid(recipient) do
+    send(recipient, {:merging_ci_wait, issue_id, wait})
+    :ok
+  end
+
+  defp send_merging_ci_wait(_recipient, _issue, _wait), do: :ok
 
   defp audit_linear_state_transition(issue, refreshed_issue, run_id, opts) do
     issue

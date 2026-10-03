@@ -98,10 +98,14 @@ issues:
 - `states.waiting_on_sub_issues`: the state a `breakdown` parent waits in while its sub-tickets are
   worked, default `Waiting on sub-tickets`; `null` turns it off. It counts as active without being
   listed in `states.active`, but an issue in it is dispatched only for the close-out run, once it is
-  a `breakdown` parent whose sub-tickets are all terminal. The breakdown run ends by moving the
-  parent there (`linear_update_state` allows the state only for `breakdown` issues), and on every
-  poll Symphony moves a `breakdown` parent it finds `In Progress` with open sub-tickets there, so
-  `In Progress` only holds issues an agent is working. Create it in Linear as a started state just
+  a `breakdown` parent whose sub-tickets are all terminal. The breakdown run ends with the parent
+  in `In Review` and its sub-tickets in `Backlog`. A human approves the plan by moving the parent
+  from `In Review` to this state, and on the next poll Symphony moves every sub-ticket still in
+  `Backlog` to `Todo` (blocked-by links keep the order); moving the parent to `Rework` instead
+  cancels those sub-tickets and re-plans. Agents cannot move an issue here
+  (`linear_update_state` refuses it). On every poll Symphony also moves a `breakdown` parent it
+  finds `In Progress` with open sub-tickets here, so `In Progress` only holds issues an agent is
+  working; that move is not an approval and promotes nothing. Create it in Linear as a started state just
   after In Progress. At startup Symphony checks the configured teams have it; when it is missing,
   Symphony logs a warning and parents keep waiting `In Progress` until restart.
 
@@ -336,8 +340,9 @@ agent:
   a warning once per model. If the lookup fails, or OpenRouter does not list the model, the run
   starts anyway and logs a warning, so an OpenRouter outage does not block work.
 - `run_profiles.<kind>`: `model`, `effort` and/or `provider` for one kind of run. Kinds, first match wins:
-  `final_verification` (title starts with `Final verification:`), `close_out` (`breakdown` parent
-  whose sub-issues are all terminal), `breakdown` (other `breakdown` parent), `landing` (`Merging`),
+  `final_verification` (title starts with `Final verification:`), `breakdown` (`breakdown` parent in
+  `Rework`), `close_out` (`breakdown` parent whose sub-issues are all terminal), `breakdown` (other
+  `breakdown` parent), `landing` (`Merging`),
   `rework` (`Rework`), `ci_fix` (continuation after red CI), `review_feedback` (continuation after
   PR review comments), and `implementation` (everything else). `pre_push_review` and `qa` name the
   pre-push reviewer and QA agent runs.
@@ -575,6 +580,7 @@ pull_requests:
     retry_failed_once: true
     max_fix_attempts: 3
     escalate_to_state: In Review
+    landing_wait_timeout_ms: 1800000
   learnings:
     enabled: false
     provider: anthropic
@@ -594,6 +600,10 @@ pull_requests:
   with a hidden `<!-- symphony:agent -->` marker and skips those.
 - `checks.retry_failed_once` retries one likely-flaky failure before escalating.
 - `checks.max_fix_attempts` bounds automated CI rework.
+- `checks.landing_wait_timeout_ms` bounds how long a `Merging` issue waits for CI. When a landing
+  run ends with the PR head's checks pending, Symphony holds the issue in `Merging` and dispatches
+  the landing agent again once the CI poller sees that head go green (a red head goes through the
+  normal CI-failure fix loop), or after this timeout.
 
 ### `pre_push_review`
 

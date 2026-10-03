@@ -8,9 +8,9 @@ vars: []
 - `Todo` -> queued; immediately transition to `In Progress` before active work.
   - Special case: if a PR is already attached, treat as feedback/rework loop (run full PR feedback sweep, address or explicitly push back, revalidate, return to `In Review`).
 - `In Progress` -> implementation actively underway.
-- `Waiting on sub-tickets` -> a `breakdown` parent waiting on its sub-tickets; do nothing. Symphony starts the parent's close-out run from here once every sub-ticket is terminal (see `Parent tickets`).
+- `Waiting on sub-tickets` -> a `breakdown` parent whose plan a human approved, waiting on its sub-tickets; do nothing. Symphony promotes its `Backlog` sub-tickets to `Todo` on entry, and starts the parent's close-out run from here once every sub-ticket is terminal (see `Parent tickets`).
 - `Auto Review` -> Symphony is testing the PR as a user; do not change the issue or PR, wait.
-- `In Review` -> PR is attached and validated; waiting on human approval.
+- `In Review` -> PR is attached and validated (or, for a `breakdown` parent, its plan is in the workpad); waiting on human approval.
 - `Merging` -> approved by human; follow the repo's landing flow to merge (do not call `gh pr merge` directly).
 - `Rework` -> reviewer requested changes; planning + implementation required.
 - `Done` -> terminal state; no further action required.
