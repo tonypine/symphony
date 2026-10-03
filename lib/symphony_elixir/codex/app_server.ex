@@ -13,6 +13,7 @@ defmodule SymphonyElixir.Codex.AppServer do
   alias SymphonyElixir.AuditLog
   alias SymphonyElixir.Codex.DynamicTool
   alias SymphonyElixir.Codex.McpConfig
+  alias SymphonyElixir.Codex.UsageLimit, as: CodexUsageLimit
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.DependencyAudit
@@ -1380,9 +1381,12 @@ defmodule SymphonyElixir.Codex.AppServer do
          on_message,
          %{"method" => "turn/failed", "params" => _} = payload,
          payload_string,
-         _stream_context
+         stream_context
        ) do
-    handle_turn_failed(port, on_message, payload, payload_string)
+    case usage_limited(payload, stream_context.turn_stream_state) do
+      {:ok, info} -> handle_usage_limited(port, on_message, payload, payload_string, info)
+      :error -> handle_turn_failed(port, on_message, payload, payload_string)
+    end
   end
 
   defp handle_decoded_payload(
@@ -1414,21 +1418,29 @@ defmodule SymphonyElixir.Codex.AppServer do
         {:error, :sandbox_required}
 
       _ ->
-        handle_turn_method(
-          port,
-          on_message,
-          payload,
-          payload_string,
-          method,
-          %{
-            timeout_ms: stream_context.timeout_ms,
-            tool_executor: stream_context.tool_executor,
-            auto_approve_requests: stream_context.auto_approve_requests,
-            approval_context: stream_context.approval_context,
-            turn_stream_state: updated_turn_stream_state,
-            stderr_tail: stream_context.stderr_tail
-          }
-        )
+        updated_turn_stream_state = remember_rate_limits(updated_turn_stream_state, payload)
+
+        case usage_limited(payload, updated_turn_stream_state) do
+          {:ok, info} ->
+            handle_usage_limited(port, on_message, payload, payload_string, info)
+
+          :error ->
+            handle_turn_method(
+              port,
+              on_message,
+              payload,
+              payload_string,
+              method,
+              %{
+                timeout_ms: stream_context.timeout_ms,
+                tool_executor: stream_context.tool_executor,
+                auto_approve_requests: stream_context.auto_approve_requests,
+                approval_context: stream_context.approval_context,
+                turn_stream_state: updated_turn_stream_state,
+                stderr_tail: stream_context.stderr_tail
+              }
+            )
+        end
     end
   end
 
@@ -1447,6 +1459,13 @@ defmodule SymphonyElixir.Codex.AppServer do
   end
 
   defp handle_turn_completed(port, on_message, payload, payload_string, turn_stream_state) do
+    case usage_limited(payload, turn_stream_state) do
+      {:ok, info} -> handle_usage_limited(port, on_message, payload, payload_string, info)
+      :error -> handle_turn_completed_status(port, on_message, payload, payload_string, turn_stream_state)
+    end
+  end
+
+  defp handle_turn_completed_status(port, on_message, payload, payload_string, turn_stream_state) do
     case sandbox_startup_status_at_completion(turn_stream_state, payload) do
       :ready ->
         emit_turn_event(on_message, :turn_completed, payload, payload_string, port, payload)
@@ -1474,6 +1493,24 @@ defmodule SymphonyElixir.Codex.AppServer do
 
       {:error, {:turn_failed, Map.get(payload, "params")}}
     end
+  end
+
+  # A turn that ends on the Codex usage limit stops the run; the orchestrator holds Codex
+  # runs until the window resets (see `SymphonyElixir.UsageLimit`).
+  defp usage_limited(payload, turn_stream_state), do: CodexUsageLimit.usage_limited(payload, Map.get(turn_stream_state, :rate_limits))
+
+  defp remember_rate_limits(turn_stream_state, payload),
+    do: Map.put(turn_stream_state, :rate_limits, CodexUsageLimit.remember(Map.get(turn_stream_state, :rate_limits), payload))
+
+  defp handle_usage_limited(port, on_message, payload, payload_string, info) do
+    emit_message(
+      on_message,
+      :usage_limited,
+      %{payload: payload, raw: payload_string, usage_limit: info},
+      metadata_from_message(port, payload)
+    )
+
+    {:error, {:usage_limited, info}}
   end
 
   defp emit_turn_event(on_message, event, payload, payload_string, port, payload_details) do
@@ -3216,6 +3253,7 @@ defmodule SymphonyElixir.Codex.AppServer do
       command_timeout_ms: normalize_command_timeout_ms(command_timeout_ms),
       turn_started_at_ms: System.monotonic_time(:millisecond),
       active_command: nil,
+      rate_limits: nil,
       sandbox_startup: sandbox_startup,
       tool_failure_circuit_breaker: initial_tool_failure_circuit_breaker(max_consecutive_identical_tool_failures)
     }
