@@ -163,7 +163,9 @@ set (or, in Development mode, no checkout folder).
   reloads `symphony.yml` while it runs, so the new limit applies within a minute without a restart. More
   agents use the Linear and GitHub API budgets faster; 2–3 is a safe range on a personal Linear key.
   Each epic under way keeps one agent for its sub-tickets (`agent.concurrency.epic_lanes`, default every
-  slot), so 3 agents can mean 3 epics at once, or 2 epics plus 1 for other work.
+  slot), so 3 agents can mean 3 epics at once, or 2 epics plus 1 for other work. Merge (landing) runs and
+  Auto Review QA passes don't use these agents; up to `agent.concurrency.finishing_max` (default 2) of them
+  run on top.
 - `LINEAR_API_KEY` and any extra environment variables are stored only in the login Keychain, as generic
   passwords under service `symphony` with the variable name as the account:
 

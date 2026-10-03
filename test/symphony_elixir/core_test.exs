@@ -1300,15 +1300,17 @@ defmodule SymphonyElixir.CoreTest do
                {:ok, [refreshed_issue]}
              end)
 
+    # Waiting for a slot keeps the attempt and the sticky repo, outside the backoff queue.
     assert %{
-             attempt: 2,
+             attempt: 1,
              repo_key: "api",
              identifier: "MT-563",
-             error: "no available orchestrator slots"
-           } = updated_state.retry_attempts[issue_id]
+             reason: "no available orchestrator slots"
+           } = updated_state.slot_waiting[issue_id]
 
-    assert [%{issue_id: ^issue_id, repo_key: "api", identifier: "MT-563"}] =
-             RunStore.list_retries("api")
+    refute Map.has_key?(updated_state.retry_attempts, issue_id)
+    refute MapSet.member?(updated_state.claimed, issue_id)
+    assert [] = RunStore.list_retries("api")
 
     assert [] = RunStore.list_retries("web")
   end
@@ -1348,15 +1350,17 @@ defmodule SymphonyElixir.CoreTest do
                {:ok, [refreshed_issue]}
              end)
 
+    # Waiting for a slot keeps the attempt and the sticky repo, outside the backoff queue.
     assert %{
-             attempt: 2,
+             attempt: 1,
              repo_key: "api",
              identifier: "MT-564",
-             error: "no available orchestrator slots"
-           } = updated_state.retry_attempts[issue_id]
+             reason: "no available orchestrator slots"
+           } = updated_state.slot_waiting[issue_id]
 
-    assert [%{issue_id: ^issue_id, repo_key: "api", identifier: "MT-564"}] =
-             RunStore.list_retries("api")
+    refute Map.has_key?(updated_state.retry_attempts, issue_id)
+    refute MapSet.member?(updated_state.claimed, issue_id)
+    assert [] = RunStore.list_retries("api")
 
     assert [] = RunStore.list_retries("default")
   end

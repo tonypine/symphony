@@ -224,6 +224,7 @@ agent:
   concurrency:
     max_total: 10
     epic_lanes:
+    finishing_max: 2
     max_by_issue_state:
       rework: 2
   limits:
@@ -344,11 +345,22 @@ agent:
   one, in parent priority then age order, holds one lane: its sub-tickets run there one after
   another, and the lane stays reserved while the current part is in review or landing, so the next
   part starts as soon as it is unblocked. Epics beyond the lane count wait their turn. The slots
-  left over are shared, by priority then age, for standalone tickets and for an epic's extra
+  left over are shared, in dispatch order, for standalone tickets and for an epic's extra
   parallel sub-tickets. Set it to `max_total - 1` to always keep a slot for standalone work, or
   `0` to turn lanes off. Values outside `0..max_total` fail `symphony check`. The dashboard and
   `/api/v1/state` (`epic_lanes`) show each lane and the shared pool, and the dispatch log line
-  ends with `slot=lane:<epic>` or `slot=shared`.
+  ends with `slot=lane:<epic>`, `slot=shared` or `slot=finishing`.
+- `concurrency.finishing_max` (default: `2`) caps landing runs (tickets in `Merging`). They only
+  finish approved work, so they don't use `max_total` slots or epic lanes and start as soon as one
+  of these is free. Auto Review QA passes are capped by it too, on top of
+  `auto_review.max_concurrent`. Values below `1` fail `symphony check`.
+- Dispatch goes closest to done first: `Merging`, Auto Review, `Rework`, resumes such as
+  `In Progress`, then `Todo`; priority and age only break ties within a stage. While a `Merging`
+  ticket waits for a finishing slot, or a QA pass is queued, no `Todo` ticket starts; `Rework` and
+  resumes still do. A ticket that finds no free slot is not retried with backoff: it keeps its
+  attempt and starts on the first poll after a slot frees (a run ending triggers that poll). The
+  dashboard and `/api/v1/state` show the landing runs (`finishing`) and what is waiting for a slot
+  and why (`slot_waiting`).
 - `concurrency.max_by_issue_state` can cap work independently for specific issue states such as
   `rework`.
 - `limits.max_turns` caps how many back-to-back turns Symphony will run in a single worker
@@ -665,7 +677,8 @@ run store, which the dashboard's run history shows. `qa_passed` and `qa_failed` 
 available for `notifications.channels[].events`.
 
 Results are kept per PR head SHA. With `run_on: first_pass`, once a push has passed QA, later
-pushes on the PR skip it. `max_concurrent` caps how many QA passes run at once.
+pushes on the PR skip it. `max_concurrent` caps how many QA passes run at once, and
+`agent.concurrency.finishing_max` caps it again. QA passes never use the agent slots.
 
 `playbooks` overrides playbooks per kind:
 

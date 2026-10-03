@@ -579,6 +579,22 @@ defmodule SymphonyElixir.ExtensionsTest do
                "queued_epics" => [],
                "shared" => %{"slots" => 1, "used" => 1}
              },
+             "finishing" => %{
+               "slots" => 2,
+               "used" => 1,
+               "running" => [%{"issue_id" => "land-http", "identifier" => "MT-LAND", "state" => "Merging"}]
+             },
+             "slot_waiting" => [
+               %{
+                 "issue_id" => "wait-http",
+                 "issue_identifier" => "MT-WAIT",
+                 "title" => "Waiting",
+                 "state" => "Todo",
+                 "reason" => "a Merging or Auto Review issue is waiting for a slot",
+                 "attempt" => nil,
+                 "since" => "2026-10-03T06:00:00Z"
+               }
+             ],
              "rate_limits" => %{"primary" => %{"remaining" => 11}}
            }
 
@@ -1672,16 +1688,25 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "Idle, reserved"
     assert html =~ "Waiting for a lane: MT-E4"
     refute html =~ "No active epics"
+
+    assert html =~ "Finishing runs"
+    assert html =~ "Landing: MT-LAND"
+    assert html =~ "MT-WAIT"
+    assert html =~ "a Merging or Auto Review issue is waiting for a slot"
+    refute html =~ "Nothing is waiting for a slot."
   end
 
   test "dashboard liveview shows every slot as shared with no active epics" do
     empty_name = Module.concat(__MODULE__, :NoEpicLanesDashboardOrchestrator)
-    {:ok, _pid} = StaticOrchestrator.start_link(name: empty_name, snapshot: Map.delete(static_snapshot(), :epic_lanes))
+    snapshot = Map.drop(static_snapshot(), [:epic_lanes, :finishing, :slot_waiting])
+    {:ok, _pid} = StaticOrchestrator.start_link(name: empty_name, snapshot: snapshot)
     start_test_endpoint(orchestrator: empty_name, snapshot_timeout_ms: 50)
 
     {:ok, _view, html} = live(build_conn(), "/")
     assert html =~ "No active epics; every slot is shared."
     refute html =~ "Waiting for a lane"
+    assert html =~ "Nothing is waiting for a slot."
+    refute html =~ "Landing:"
   end
 
   test "dashboard liveview renders operational dispatch_state blocker chips" do
@@ -3038,6 +3063,18 @@ defmodule SymphonyElixir.ExtensionsTest do
         queued_epics: [],
         shared: %{slots: 1, used: 1}
       },
+      finishing: %{slots: 2, used: 1, running: [%{issue_id: "land-http", identifier: "MT-LAND", state: "Merging"}]},
+      slot_waiting: [
+        %{
+          issue_id: "wait-http",
+          identifier: "MT-WAIT",
+          title: "Waiting",
+          state: "Todo",
+          reason: "a Merging or Auto Review issue is waiting for a slot",
+          attempt: nil,
+          since: ~U[2026-10-03 06:00:00Z]
+        }
+      ],
       rate_limits: %{"primary" => %{"remaining" => 11}}
     }
   end

@@ -320,6 +320,45 @@ defmodule SymphonyElixirWeb.DashboardLive do
         <section class="section-card">
           <div class="section-header">
             <div>
+              <h2 class="section-title">Finishing runs</h2>
+              <p class="section-copy">
+                Landing runs use their own slots, outside the agent slots and lanes: <span class="numeric"><%= @payload.finishing.used %>/<%= @payload.finishing.slots %></span> in use.
+                <%= if @payload.finishing.running != [] do %>
+                  Landing: <%= Enum.map_join(@payload.finishing.running, ", ", & &1.identifier) %>
+                <% end %>
+              </p>
+            </div>
+          </div>
+
+          <%= if @payload.slot_waiting == [] do %>
+            <p class="empty-state">Nothing is waiting for a slot.</p>
+          <% else %>
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Waiting for a slot</th>
+                    <th>State</th>
+                    <th>Why</th>
+                    <th>Attempt</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr :for={entry <- @payload.slot_waiting}>
+                    <td><span class="issue-id"><%= entry.issue_identifier %></span></td>
+                    <td><%= entry.state %></td>
+                    <td><%= entry.reason %></td>
+                    <td class="numeric"><%= entry.attempt || "-" %></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          <% end %>
+        </section>
+
+        <section class="section-card">
+          <div class="section-header">
+            <div>
               <h2 class="section-title">Running sessions</h2>
               <p class="section-copy">Active issues, last known agent activity, and token usage.</p>
             </div>
