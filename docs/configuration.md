@@ -393,12 +393,17 @@ agent:
   sub-ticket approved and not finished (anything but Backlog, Triage or a terminal state). Each
   one, in parent priority then age order, holds one lane: its sub-tickets run there one after
   another, and the lane stays reserved while the current part is in review or landing, so the next
-  part starts as soon as it is unblocked. Epics beyond the lane count wait their turn. The slots
-  left over are shared, in dispatch order, for standalone tickets and for an epic's extra
-  parallel sub-tickets. Set it to `max_total - 1` to always keep a slot for standalone work, or
-  `0` to turn lanes off. Values outside `0..max_total` fail `symphony check`. The dashboard and
-  `/api/v1/state` (`epic_lanes`) show each lane and the shared pool, and the dispatch log line
-  ends with `slot=lane:<epic>`, `slot=shared` or `slot=finishing`.
+  part starts as soon as it is unblocked. The lane also runs whatever is in the way of the next
+  part: sub-tickets of sub-tickets at any depth, and tickets blocking any of those (transitively,
+  until Done), even when they belong to another parent. The nearest one goes first, so the epic's
+  next part beats a blocker of it, and priority and age only break ties. A ticket in the way of two
+  epics runs once, in whichever lane is free first. Epics beyond the lane count wait their turn.
+  The slots left over are shared, in dispatch order, for standalone tickets and for an epic's extra
+  parallel tickets. Set it to `max_total - 1` to always keep a slot for standalone work, or `0` to
+  turn lanes off. Values outside `0..max_total` fail `symphony check`. The dashboard and
+  `/api/v1/state` (`epic_lanes`) show each lane and the shared pool, with the ticket a lane runs
+  and why when it is not the epic's own sub-ticket (`MT-30 (In Progress), blocks MT-12`; `via` in
+  the API). The dispatch log line ends with `slot=lane:<epic>`, `slot=shared` or `slot=finishing`.
 - `concurrency.finishing_max` (default: `2`) caps landing runs (tickets in `Merging`; with
   `pull_requests.auto_merge` on, only the ones that fell back to the landing agent). They only
   finish approved work, so they don't use `max_total` slots or epic lanes and start as soon as one
