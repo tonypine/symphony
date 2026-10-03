@@ -1024,8 +1024,9 @@ Fields:
 - `command` (string)
   - REQUIRED when `enabled` is true.
 - `model` (string), `effort` (`low`, `medium`, `high`, `xhigh`, or `max`)
-  - Optional. Each resolves to this field, else `agent.run_profiles.pre_push_review`, else
-    `agent.model` / `agent.effort`, else null (nothing added). `command` MUST NOT pass `--model` /
+  - Optional. Each resolves to this field, else the `pre_push_review` run profile resolved as for
+    `agent.run_profiles` (the routed repository's `repositories[].agent` first), else null
+    (nothing added). `command` MUST NOT pass `--model` /
     `--effort` while any of them resolves.
 - `max_iterations` (positive integer)
   - Default: `1`.
@@ -1322,6 +1323,8 @@ Validation checks:
   used with `agent.runtime == "claude"` and without `workers.ssh_hosts`.
 - `agent.command` does not already pass `--model` or `--effort` when `agent.model`,
   `agent.effort`, or `agent.run_profiles` is set.
+- Every `repositories[].agent` block passes the same checks with the `agent` section beneath it,
+  and its errors name `repositories[<key>].agent...`.
 - `issues.linear.api_key` is present after `$` resolution when `issues.provider == "linear"`.
 - At least one Linear scoping filter is present when `issues.provider == "linear"`. Core scope comes
   from `issues.linear.scope.project_slug`, `issues.linear.scope.team`, or non-empty
@@ -1353,6 +1356,8 @@ not require recognizing or validating extension fields unless that extension is 
 - `repositories[].route.labels`: optional list of Linear label names with route-level AND semantics
 - `repositories[].route.assignee`: optional Linear assignee selector
 - `repositories[].default`: boolean, default `false`
+- `repositories[].agent`: optional `{provider, model, effort, run_profiles}` with the same values as
+  the `agent` keys, applied to issues routed to that repository (see `agent.run_profiles`)
 - `issues.provider`: string, REQUIRED, currently `linear` or `memory`
 - `issues.linear.endpoint`: string, default `https://api.linear.app/graphql` when provider is linear
 - `issues.linear.api_key`: string or `$VAR`, canonical env `LINEAR_API_KEY` when provider is linear
@@ -1407,9 +1412,11 @@ not require recognizing or validating extension fields unless that extension is 
   run's model; `openrouter` requires a resolved model and `agent.runtime == "claude"`.
 - `agent.run_profiles`: map of run kind to `{model, effort, provider}`, default `{}`. Run kinds:
   `implementation`, `breakdown`, `close_out`, `final_verification`, `rework`, `landing`, `ci_fix`,
-  `review_feedback`, `pre_push_review`, `qa`. Each field resolves to the profile value, else
-  `agent.model` / `agent.effort` / `agent.provider`, else null (nothing added) for model and
-  effort and `anthropic` for provider. The run kind and profile are resolved
+  `review_feedback`, `pre_push_review`, `qa`. Each field resolves, for the issue's routed
+  repository, to `repositories[].agent.run_profiles.<kind>`, else `repositories[].agent.<field>`,
+  else `agent.run_profiles.<kind>`, else `agent.model` / `agent.effort` / `agent.provider`, else
+  null (nothing added) for model and effort and `anthropic` for provider. Repo workflow front
+  matter is not a source. The run kind and profile are resolved
   once per dispatch from the current config and kept for every continuation turn of that run. The
   Claude runtime appends `--model <model>` and `--effort <effort>` to its argv; the Codex runtime
   ignores both and logs a warning. A Claude run whose provider is `openrouter` also starts with
@@ -1481,9 +1488,10 @@ not require recognizing or validating extension fields unless that extension is 
 - `auto_review.state`: string, default `Auto Review`
 - `auto_review.runtime`: `codex` or `claude`, optional
 - `auto_review.command`: string, optional
-- `auto_review.model`: string or null, default `null`; else `agent.run_profiles.qa`, else `agent.model`
-- `auto_review.effort`: `low`, `medium`, `high`, `xhigh`, `max`, or null, default `null`; else
-  `agent.run_profiles.qa`, else `agent.effort`
+- `auto_review.model`: string or null, default `null`; else the `qa` run profile's model (see
+  `agent.run_profiles`)
+- `auto_review.effort`: `low`, `medium`, `high`, `xhigh`, `max`, or null, default `null`; else the
+  `qa` run profile's effort
 - `auto_review.max_turns`: integer, default `20`
 - `auto_review.timeout_ms`: integer, default `1800000`
 - `auto_review.max_concurrent`: integer, default `1`
