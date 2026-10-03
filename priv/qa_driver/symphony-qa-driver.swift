@@ -23,7 +23,8 @@
 // from the owner, so the helper never reads or drives the operator's other apps.
 // The commands that take a PID refuse to run unless a serving helper started
 // them, so opening the helper through LaunchServices with one of them (which
-// would use its grants on any app) fails. Each command prints one JSON object on
+// would use its grants on any app) fails; only the copy Symphony compiles on a
+// separate QA host (`auto_review.worker_host`) runs them directly. Each command prints one JSON object on
 // stdout and exits 0, or prints `{"error": {"code", "message"}}` and exits 1.
 //
 //   permissions
@@ -505,8 +506,12 @@ case "serve" where args.count == 3:
 case "permissions":
     emit(["accessibility": AXIsProcessTrusted(), "screen_recording": CGPreflightScreenCaptureAccess()])
 
+// The copy compiled on a separate QA host (`-D SYMPHONY_QA_SSH`) holds no grant
+// of its own; commands it runs over SSH use the grant on sshd-keygen-wrapper.
+#if !SYMPHONY_QA_SSH
 case let command? where pidCommands.contains(command) && !startedByServingHelper():
     fail("not_allowed", "The helper runs \(command) only for Symphony, through serve.")
+#endif
 
 case "windows" where args.count == 2:
     windows(pidArgument(args[1]))

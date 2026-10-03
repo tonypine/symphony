@@ -22,6 +22,10 @@ defmodule SymphonyElixir.AutoReviewQaTest do
     end
   end
 
+  defmodule UnusedSession do
+    def start_session(_workspace, _opts), do: raise("a blocked web pass must not start the QA agent")
+  end
+
   defmodule FailingTracker do
     def update_issue_state(issue_id, state) do
       send(Application.fetch_env!(:symphony_elixir, :qa_flow_recipient), {:failed_state_update, issue_id, state})
@@ -334,6 +338,71 @@ defmodule SymphonyElixir.AutoReviewQaTest do
 
       assert_receive {:memory_tracker_comment, _issue_id, report}
       assert report =~ "could not list the PR's changed files"
+    end
+
+    test "a dashboard change whose dev server fails its health check is blocked, not failed" do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        pr_review_mode: "polling",
+        ci: %{enabled: true},
+        auto_review: %{enabled: true, max_fix_attempts: 2},
+        verification: %{
+          enabled: true,
+          port_allocation: %{range: [4190, 4199]},
+          dev_server: %{
+            start_cmd: "sleep 1",
+            health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/api/v1/state",
+            health_timeout_ms: 50,
+            stop_timeout_ms: 100
+          }
+        }
+      )
+
+      stop_verification_port_pool()
+      on_exit(&stop_verification_port_pool/0)
+      record = put_record()
+      paths = ["lib/symphony_elixir_web/live/dashboard_live.ex"]
+
+      git = fn
+        ["worktree", "add", "--detach", path, @sha], _cwd ->
+          File.mkdir_p!(path)
+          {"", 0}
+
+        args, cwd when hd(args) in ["merge-base", "diff"] ->
+          git_with_paths(paths).(args, cwd)
+
+        _args, _cwd ->
+          {"", 0}
+      end
+
+      assert {:auto_review_qa, "issue-qa-flow", :blocked, "In Review"} =
+               AutoReview.run_qa(job(record), git: git, qa_agent_module: __MODULE__.UnusedSession)
+
+      assert_receive {:memory_tracker_comment, "issue-qa-flow", report}
+      assert report =~ "**Verdict:** blocked → In Review"
+      assert report =~ "playbooks: web"
+      assert report =~ "the dev server failed its health check, so the web playbook could not run"
+      assert %{qa_verdict: "blocked", qa_failure: nil} = stored_record()
+      refute Map.has_key?(stored_record(), :qa_fix_attempts)
+      assert [%{status: "released", release_reason: "qa dev server did not start"}] = RunStore.list_verification_allocations()
+    end
+
+    test "other dev server and browser server errors are blocked with their cause" do
+      for {error, text} <- [
+            {{:qa_dev_server_failed, :exhausted}, "the dev server did not start: :exhausted"},
+            {{:qa_browser_mcp_invalid, "url can't be blank"}, "`auto_review.playbooks.web.browser_mcp` is invalid: url can't be blank"},
+            {{:qa_browser_mcp_unavailable, :no_npx}, "`npx` (Node.js) is not on Symphony's PATH"},
+            {{:qa_browser_mcp_unavailable, "@playwright/mcp@0.0.83"}, "`@playwright/mcp@0.0.83` is not installed on the Symphony host; run `npx -y @playwright/mcp@0.0.83 --version` there once"}
+          ] do
+        record = put_record()
+        Application.put_env(:symphony_elixir, :qa_flow_agent_result, {:error, error, QaAgent.empty_tokens()})
+
+        assert {:auto_review_qa, _issue_id, :blocked, "In Review"} =
+                 AutoReview.run_qa(job(record), git: git_with_paths(["bin/symphony"]), qa_agent: FakeQaAgent)
+
+        assert_receive {:memory_tracker_comment, _issue_id, report}
+        assert report =~ text
+      end
     end
 
     test "store, report and tracker failures are logged and the move is retried later" do

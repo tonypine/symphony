@@ -1083,7 +1083,12 @@ Fields:
   `enabled`; a new kind needs `paths` and `prompt`. The built-in `macos_app` kind also takes
   `build` (shell command run in the QA worktree), `app` (the `.app` bundle path relative to the
   repo root) and `build_timeout_ms` (default `900000`), and is off unless `build` and `app` are
-  set.
+  set. The built-in `web` kind also takes `browser_mcp` (an MCP server definition, the shape of
+  an `agent.mcp.servers` entry) and is off unless `verification.enabled` is true and
+  `verification.dev_server.start_cmd` is set.
+- `worker_host` (string, optional): an SSH host (`user@host` or `host:port`, the form
+  `workers.ssh_hosts` uses) where the `macos_app` playbook's `qa_*` tools run instead of the
+  Symphony host. It does not need to be, and should not be, listed in `workers.ssh_hosts`.
 
 When enabled:
 
@@ -1110,7 +1115,19 @@ When enabled:
   `## User walkthrough` section in the issue. No selected playbook means skip. The built-in `cli`
   playbook triggers on `bin/**`, `lib/symphony_elixir/cli.ex` and `lib/mix/tasks/**`; the built-in
   `macos_app` playbook on `**/*.swift`, `**/Info.plist`, `**/*.xib`, `**/*.storyboard` and
-  `**/*.xcassets/**`.
+  `**/*.xcassets/**`; the built-in `web` playbook on `lib/*_web/**`, `lib/*_web.ex`,
+  `priv/static/**`, `assets/**` and `.heex`, `.html`, `.css`, `.scss`, `.jsx`, `.tsx`, `.vue` and
+  `.svelte` files.
+- A pass that runs the `web` playbook MUST start `verification.dev_server` on a port from the
+  verification port pool, from its own worktree at the PR head (never the agent's), before the
+  agent starts, give the agent its URL, and stop it, release the port and remove that worktree
+  when the pass ends. A dev server that does not start or fails its health check MUST make the
+  pass `blocked`, not `fail`, without starting the agent. Only that QA session
+  gets a `browser` MCP server: `browser_mcp` when set, otherwise headless Playwright MCP limited
+  to the dev server's localhost origins and writing into `qa-evidence/`. The default server MUST
+  run an exact, pinned package version and MUST NOT download it during a pass; when `npx` or the
+  pinned package is missing the pass MUST be `blocked` without starting the agent. With
+  `agent.network_access.mode: allowlist` the session also allows `localhost` and `127.0.0.1`.
 - A pass that runs the `macos_app` playbook also gets host-side `qa_*` tools, executed by Symphony
   outside the agent sandbox: `qa_build` (only the configured `build`, refused when the worktree has
   changes outside `qa-evidence/`, including gitignored files that were not there after the last
@@ -1121,7 +1138,7 @@ When enabled:
   `qa_ax_tree`, `qa_ax_press`, `qa_ax_set_value`. Every tool that takes a PID MUST refuse a PID
   the pass did not launch. Apps still running when the pass ends MUST be quit. A missing Screen
   Recording or Accessibility grant MUST surface as a `qa_permission_missing` tool error that tells
-  the agent to answer `blocked`. Screenshots and accessibility calls MUST run in a separate helper
+  the agent to answer `blocked`. On the Symphony host, screenshots and accessibility calls MUST run in a separate helper
   app that Symphony opens through LaunchServices, so that grants made to it are never inherited by
   Symphony or the agents it spawns. The helper MUST answer only the Symphony process that opened
   it, MUST NOT accept an owner that another Symphony process started, and MUST NOT run a screenshot
@@ -1130,6 +1147,16 @@ When enabled:
   cannot forge (an owner file in a fixed run directory the sandbox cannot write), and Symphony
   MUST NOT put the helper's socket in a directory an agent can write. Other tool scopes MUST NOT
   list or run the `qa_*` tools.
+- With `worker_host` set, the worktree checks MUST stay on the Symphony host, and the build, the app,
+  screenshots and accessibility calls MUST run on that host over SSH: `qa_build` ships the
+  worktree's `HEAD` into a fresh build directory there, and screenshots are copied back into the
+  local `qa-evidence/`. The accessibility helper MUST be compiled into that pass's own run
+  directory, never shared with a later pass. Before a pass uses the host, Symphony MUST refuse one
+  that can open the operator's `~/.ssh`, read their `~/.config/gh/hosts.yml` or login Keychain,
+  read a file only the operator can read, or holds push credentials of its own (a private key in `~/.ssh`, GitHub CLI
+  credentials, a global git credential helper or a forwarded SSH agent); the `qa_*` tools then fail
+  with `qa_worker_unsafe` (or `qa_worker_unreachable` when the host cannot be reached) and tell the
+  agent to answer `blocked`.
 - The QA agent MUST run in a fresh detached worktree at the PR head SHA, outside the issue
   workspace, removed afterwards, with a tool scope limited to read-only Linear/GitHub tools and
   `linear_attach_file`. It answers with JSON: `verdict` (`pass`, `fail` or `blocked`), `summary`,
@@ -1533,7 +1560,7 @@ not require recognizing or validating extension fields unless that extension is 
 - `auto_review.max_fix_attempts`: integer, default `2`
 - `auto_review.run_on`: `every_push` or `first_pass`, default `every_push`
 - `auto_review.skip_globs`: list of strings, default `[]`
-- `auto_review.playbooks`: map, default `{}`
+- `auto_review.playbooks`: map, default `{}` (built-in kinds `cli`, `macos_app`, `web`)
 - `notifications.enabled`: boolean, default `false`
 - `notifications.redact_titles`: boolean, default `false`
 - `notifications.channels`: list of Slack/webhook channel configs, default `[]`
@@ -1810,10 +1837,18 @@ An issue is dispatch-eligible only if all are true:
     `Backlog` since before that change (created before it, no state change after it) moves to
     `Todo` in one batch. Blocked-by links keep the order. A parent the service parked from
     `In Progress` was not approved, so nothing moves.
-  - Rejection: for a `breakdown` parent in `Rework` with a sub-issue in `Backlog`, the sub-issues
-    in `Backlog` since the parent's latest move to `Rework` are cancelled (`Canceled`, else
-    `Cancelled`) before the re-plan is dispatched; until that succeeds the parent is not
-    dispatched. Sub-issues created by the re-plan are left alone.
+  - Rejection: for a `breakdown` parent in `Rework` with a sub-issue in `Backlog`, the rejected
+    plan's sub-issues in `Backlog` since the parent's latest move to `Rework` are cancelled
+    (`Canceled`, else `Cancelled`) before the re-plan is dispatched; until that succeeds the
+    parent is not dispatched. The plan's sub-issues are those created by the run that moved the
+    parent to `In Review`: from the parent's state change before its latest move to `In Review`
+    (before the `Rework` move) up to that move. With no such move nothing is cancelled.
+    Sub-issues a person added before that run or during the review, and sub-issues created by the
+    re-plan, are left alone.
+  - Record: after each batch the service posts one comment on the parent listing the identifiers
+    it moved: `Promoted to Todo: TP-a, TP-b` or
+    `Cancelled for re-plan: TP-c, TP-d (restore from Canceled if needed)`. A failed comment is
+    logged and does not retry the batch.
   - Both actions are idempotent across polls and restarts: a sub-issue a human (or a final
     verification run) moves back to `Backlog` later is not moved again. The service remembers the
     `Backlog` sub-issues it last acted on per parent and skips the history read while they are
@@ -3790,8 +3825,10 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
   to `Todo` within one poll; sub-issues in other states, or moved back to `Backlog` after the
   approval, are left alone, and a re-poll moves nothing
 - `breakdown` parent parked from `In Progress` to the waiting state has nothing promoted
-- `breakdown` parent in `Rework` has its pre-`Rework` `Backlog` sub-issues cancelled, is not held
+- `breakdown` parent in `Rework` has the rejected plan's pre-`Rework` `Backlog` sub-issues
+  cancelled, leaves a `Backlog` sub-issue a person created outside that run alone, is not held
   by its open sub-issues, and is not dispatched until the cancel succeeds
+- each promote and cancel batch posts one comment on the parent listing the moved identifiers
 - Active-state issue refresh updates running entry state
 - Non-active state stops running agent without workspace cleanup
 - Terminal state stops running agent and cleans workspace

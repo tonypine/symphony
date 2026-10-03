@@ -2572,9 +2572,18 @@ defmodule SymphonyElixir.Orchestrator do
 
     if moved != [] do
       Logger.info("Moved #{length(moved)} sub-issue(s) of breakdown parent to #{BreakdownReview.target(action)} (#{Enum.join(moved, ", ")}): #{issue_context(issue)}")
+      comment_breakdown_review(issue, action, moved)
     end
 
     length(moved) == length(results)
+  end
+
+  # One comment per batch records on the parent what Symphony changed, for the reviewer.
+  defp comment_breakdown_review(%Issue{id: issue_id} = issue, action, moved) do
+    case Tracker.create_comment(issue_id, BreakdownReview.comment(action, moved)) do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("Failed to comment on breakdown parent: #{issue_context(issue)} reason=#{inspect(reason)}")
+    end
   end
 
   # A rejected plan is made again only once its Backlog sub-issues are cancelled, so the re-plan

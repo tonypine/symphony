@@ -77,7 +77,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   end
 
   @spec run_turn(session(), String.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
-  def run_turn(%{workspace: workspace, worker_host: worker_host} = session, prompt, _issue, opts) do
+  def run_turn(%{workspace: workspace, worker_host: worker_host} = session, prompt, issue, opts) do
     on_message = Keyword.get(opts, :on_message, fn _msg -> :ok end)
     settings = settings_from_opts(opts)
     command = settings.agent.command
@@ -86,7 +86,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
     required_mcp_server = required_mcp_server_for_prompt(prompt)
 
-    read_opts = [required_mcp_server: required_mcp_server]
+    read_opts = [required_mcp_server: required_mcp_server, issue: issue]
     # `claude -p` starts a new conversation each turn unless told which one to resume.
     session = Map.put(session, :resume_session_id, Keyword.get(opts, :resume_session_id))
 
@@ -207,7 +207,29 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
            | {:token_usage_delta, map()}
            | {:turn_failed, String.t()}
            | {:rate_limited, %{retry_after_seconds: nil | non_neg_integer(), message: String.t()}, String.t()}
+           | {:usage_limited, usage_limit_info()}
+           | {:usage_window, String.t(), usage_window()}
+           | {:rate_limit_info, map()}
            | {:malformed, String.t()}
+
+  @typedoc "A Claude usage-limit hit: a plan window (five-hour or weekly) is used up."
+  @type usage_limit_info :: %{
+          provider: String.t(),
+          window: String.t() | nil,
+          scope: String.t() | :all,
+          resets_at: DateTime.t() | nil,
+          utilization: number() | nil,
+          overage: String.t() | boolean() | nil,
+          source: :rate_limit_event | :result_text
+        }
+
+  @typedoc "The latest reset time and utilization Claude reported for one usage window."
+  @type usage_window :: %{
+          window: String.t(),
+          status: String.t(),
+          resets_at: DateTime.t() | nil,
+          utilization: number() | nil
+        }
 
   @doc false
   @spec parse_event(String.t()) :: parsed_event | {:multi, [parsed_event]}
@@ -252,16 +274,30 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   defp parse_decoded_event(%{"type" => "rate_limit_event", "rate_limit_info" => info}, _line),
     do: classify_rate_limit_event(info)
 
-  defp parse_decoded_event(%{"type" => "result", "subtype" => "success"} = event, _line),
+  defp parse_decoded_event(%{"type" => "result", "is_error" => true} = event, line) do
+    case usage_limit_from_result(event) do
+      {:ok, info} -> {:usage_limited, info}
+      :error -> parse_result_event(event, line)
+    end
+  end
+
+  defp parse_decoded_event(%{"type" => "result"} = event, line), do: parse_result_event(event, line)
+
+  defp parse_decoded_event(_event, line), do: {:malformed, line}
+
+  defp parse_result_event(%{"subtype" => "success"} = event, _line),
     do: {:turn_completed, extract_turn_result(event)}
 
-  defp parse_decoded_event(%{"type" => "result", "subtype" => "error"} = event, _line) do
+  defp parse_result_event(%{"subtype" => "error"} = event, _line) do
     event
     |> Map.get("error", "unknown error")
     |> classify_error_event()
   end
 
-  defp parse_decoded_event(_event, line), do: {:malformed, line}
+  defp parse_result_event(_event, line), do: {:malformed, line}
+
+  @allowed_rate_limit_statuses ["allowed", "allowed_warning"]
+  @usage_windows ["five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet"]
 
   @rate_limit_pattern ~r/rate[\s_-]?limit|429|too many requests/i
   @retry_after_pattern ~r/retry[\s_-]?after[^\d]{0,8}(\d+)|(\d+)\s*seconds?/i
@@ -362,6 +398,26 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
         method: "turn/failed",
         params: %{error: %{message: reason}}
       }
+    }
+  end
+
+  def event_to_update({:usage_limited, info}) when is_map(info) do
+    %{
+      event: :usage_limited,
+      timestamp: DateTime.utc_now(),
+      usage_limit: info,
+      message: usage_limit_message(info)
+    }
+  end
+
+  # Stays a notification on the dashboard; `usage_windows` lets the orchestrator
+  # time a later rejection that arrives without a reset time.
+  def event_to_update({:usage_window, message, windows}) when is_binary(message) and is_map(windows) do
+    %{
+      event: :notification,
+      timestamp: DateTime.utc_now(),
+      payload: message,
+      usage_windows: windows
     }
   end
 
@@ -1230,7 +1286,10 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
       turn_completed: false,
       diagnostic_output_lines: [],
       required_mcp_server: Keyword.get(opts, :required_mcp_server),
-      required_mcp_server_checked: false
+      required_mcp_server_checked: false,
+      issue: Keyword.get(opts, :issue),
+      usage_limited: nil,
+      usage_windows: %{}
     }
 
     loop_state = %{
@@ -1349,6 +1408,8 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     end
   end
 
+  defp finalize_read_result(%{usage_limited: %{} = info}), do: {:error, {:usage_limited, info}}
+
   defp finalize_read_result(%{turn_failed: reason}) when is_binary(reason) do
     {:error, {:turn_failed, reason}}
   end
@@ -1364,7 +1425,10 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
      |> Map.delete(:turn_completed)
      |> Map.delete(:diagnostic_output_lines)
      |> Map.delete(:required_mcp_server)
-     |> Map.delete(:required_mcp_server_checked)}
+     |> Map.delete(:required_mcp_server_checked)
+     |> Map.delete(:issue)
+     |> Map.delete(:usage_limited)
+     |> Map.delete(:usage_windows)}
   end
 
   defp required_mcp_server_for_prompt(prompt) when is_binary(prompt) do
@@ -1532,6 +1596,9 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   defp apply_command_tracking_event({:turn_failed, _}, _active_tool_uses, _command_deadline, _timeout_ms, _now),
     do: {0, nil}
 
+  defp apply_command_tracking_event({:usage_limited, _info}, _active_tool_uses, _command_deadline, _timeout_ms, _now),
+    do: {0, nil}
+
   defp apply_command_tracking_event(
          {:rate_limited, _info, _reason},
          _active_tool_uses,
@@ -1597,6 +1664,33 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     on_message.({:rate_limited, info})
     on_message.({:turn_failed, reason})
     %{acc | turn_failed: reason}
+  end
+
+  # A rejection from the `rate_limit_event` wins over the result text that follows it:
+  # only the event carries the window and the epoch reset time.
+  defp apply_event({:usage_limited, info}, on_message, acc) do
+    info =
+      case acc.usage_limited do
+        %{source: :rate_limit_event} = earlier -> earlier
+        _none_or_fallback -> info
+      end
+
+    reason = usage_limit_message(info)
+    on_message.({:usage_limited, info})
+    on_message.({:turn_failed, reason})
+    %{acc | usage_limited: info, turn_failed: reason}
+  end
+
+  defp apply_event({:usage_window, message, %{window: window} = usage_window}, on_message, acc) do
+    windows = Map.put(acc.usage_windows, window, Map.take(usage_window, [:status, :resets_at, :utilization]))
+    on_message.({:usage_window, message, windows})
+    %{acc | usage_windows: windows}
+  end
+
+  defp apply_event({:rate_limit_info, info}, _on_message, acc) do
+    Logger.warning("Claude rate_limit_event not allowed #{issue_log_context(acc.issue)} session_id=#{inspect(acc.session_id)} rate_limit_info=#{inspect(info)}")
+
+    acc
   end
 
   defp apply_event({:malformed, raw}, _on_message, acc) do
@@ -1864,14 +1958,197 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
           "rate_limit #{rate_limit_type} #{status}"
       end
 
-    case status do
-      "allowed_warning" -> {:notification, message}
-      "allowed" -> {:notification, message}
-      _ -> {:rate_limited, %{retry_after_seconds: nil, message: message}, message}
+    cond do
+      status in @allowed_rate_limit_statuses and rate_limit_type in @usage_windows ->
+        {:usage_window, message, %{window: rate_limit_type, status: status, resets_at: epoch_to_datetime(Map.get(info, "resetsAt")), utilization: number_or_nil(utilization)}}
+
+      status in @allowed_rate_limit_statuses ->
+        {:notification, message}
+
+      rate_limit_type in @usage_windows and not using_overage?(info) ->
+        usage_limit = usage_limit_from_rate_limit_info(info, rate_limit_type, utilization)
+        {:multi, [{:rate_limit_info, info}, {:usage_limited, usage_limit}]}
+
+      true ->
+        {:multi, [{:rate_limit_info, info}, {:rate_limited, %{retry_after_seconds: nil, message: message}, message}]}
     end
   end
 
   defp classify_rate_limit_event(_), do: {:notification, "rate_limit event"}
+
+  defp usage_limit_from_rate_limit_info(info, window, utilization) do
+    %{
+      provider: "anthropic",
+      window: window,
+      scope: usage_window_scope(window),
+      resets_at: epoch_to_datetime(Map.get(info, "resetsAt")),
+      utilization: number_or_nil(utilization),
+      overage: Map.get(info, "overageStatus"),
+      source: :rate_limit_event
+    }
+  end
+
+  defp usage_window_scope("seven_day_opus"), do: "opus"
+  defp usage_window_scope("seven_day_sonnet"), do: "sonnet"
+  defp usage_window_scope(_window), do: :all
+
+  # With overage on, Claude keeps serving the request on extra usage, so the
+  # window being spent is not a stop.
+  defp using_overage?(info), do: Map.get(info, "isUsingOverage") == true or Map.get(info, "overageStatus") == "allowed"
+
+  defp epoch_to_datetime(seconds) when is_integer(seconds) and seconds > 0 do
+    case DateTime.from_unix(seconds) do
+      {:ok, datetime} -> datetime
+      {:error, _reason} -> nil
+    end
+  end
+
+  defp epoch_to_datetime(_seconds), do: nil
+
+  defp number_or_nil(value) when is_number(value), do: value
+  defp number_or_nil(_value), do: nil
+
+  # Older CLIs end the run with `Claude AI usage limit reached|<epoch>`; newer ones
+  # with `You've hit your limit · resets 3pm (Europe/Paris)`.
+  @usage_limit_epoch_pattern ~r/usage limit reached(?:\|(\d+))?/i
+  @usage_limit_text_pattern ~r/hit your\b[^·\n]*?\blimit(?:\s*·\s*resets\s+(.+?)\s*\(([^)]+)\))?/iu
+
+  defp usage_limit_from_result(event) do
+    text = Enum.find(["result", "error"], &is_binary(Map.get(event, &1)))
+    text = text && Map.get(event, text)
+
+    cond do
+      not is_binary(text) ->
+        :error
+
+      captures = Regex.run(@usage_limit_epoch_pattern, text, capture: :all_but_first) ->
+        {:ok, result_usage_limit(epoch_capture_to_datetime(captures))}
+
+      captures = Regex.run(@usage_limit_text_pattern, text, capture: :all_but_first) ->
+        {:ok, result_usage_limit(reset_text_to_datetime(captures, DateTime.utc_now()))}
+
+      true ->
+        :error
+    end
+  end
+
+  defp result_usage_limit(resets_at) do
+    %{
+      provider: "anthropic",
+      window: nil,
+      scope: :all,
+      resets_at: resets_at,
+      utilization: nil,
+      overage: nil,
+      source: :result_text
+    }
+  end
+
+  defp epoch_capture_to_datetime([epoch]), do: epoch_to_datetime(String.to_integer(epoch))
+  defp epoch_capture_to_datetime(_captures), do: nil
+
+  # Symphony has no time zone database, so only UTC-like zones resolve to an
+  # exact time; other zones leave the reset time unknown.
+  defp reset_text_to_datetime([time_text, zone], now) do
+    with {:ok, offset_seconds} <- utc_offset_seconds(String.trim(zone)),
+         {:ok, date, time} <- parse_reset_wall_time(String.trim(time_text), DateTime.add(now, offset_seconds)) do
+      next_reset(date, time, offset_seconds, now)
+    else
+      _unresolved -> nil
+    end
+  end
+
+  defp reset_text_to_datetime(_captures, _now), do: nil
+
+  defp utc_offset_seconds(zone) do
+    case Regex.run(~r/^(?:UTC|GMT|Etc\/UTC|Etc\/GMT|Z)(?:\s*([+-])(\d{1,2})(?::?(\d{2}))?)?$/i, zone) do
+      [_zone] -> {:ok, 0}
+      [_zone, sign, hours] -> {:ok, signed_offset(sign, hours, "0")}
+      [_zone, sign, hours, minutes] -> {:ok, signed_offset(sign, hours, minutes)}
+      nil -> :error
+    end
+  end
+
+  defp signed_offset(sign, hours, minutes) do
+    seconds = String.to_integer(hours) * 3600 + String.to_integer(minutes) * 60
+    if sign == "-", do: -seconds, else: seconds
+  end
+
+  @reset_time_pattern ~r/^(?:([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2}),?\s+(?:at\s+)?)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i
+
+  defp parse_reset_wall_time(text, local_now) do
+    # `Regex.run/3` drops trailing groups that did not match.
+    case Regex.run(@reset_time_pattern, text, capture: :all_but_first) do
+      [_month, _day, _hour | _rest] = captures ->
+        [month, day, hour, minute, meridiem] = captures ++ List.duplicate("", 5 - length(captures))
+
+        with {:ok, time} <- reset_time(hour, minute, meridiem),
+             {:ok, date} <- reset_date(month, day, DateTime.to_date(local_now)) do
+          {:ok, date, time}
+        end
+
+      nil ->
+        :error
+    end
+  end
+
+  defp reset_time(hour, minute, meridiem) do
+    hour = String.to_integer(hour)
+    minute = if minute == "", do: 0, else: String.to_integer(minute)
+
+    hour =
+      case String.downcase(meridiem) do
+        "am" when hour == 12 -> 0
+        "pm" when hour < 12 -> hour + 12
+        _ -> hour
+      end
+
+    Time.new(hour, minute, 0)
+  end
+
+  @months ~w(jan feb mar apr may jun jul aug sep oct nov dec)
+
+  defp reset_date("", _day, today), do: {:ok, {:next, today}}
+
+  defp reset_date(month, day, today) do
+    case Enum.find_index(@months, &(&1 == String.downcase(month))) do
+      nil -> :error
+      index -> with {:ok, date} <- Date.new(today.year, index + 1, String.to_integer(day)), do: {:ok, {:on, date}}
+    end
+  end
+
+  # A bare time is its next occurrence; a dated time that is already past is next year's.
+  defp next_reset({:next, today}, time, offset_seconds, now) do
+    candidate = wall_time_to_utc(today, time, offset_seconds)
+
+    if DateTime.compare(candidate, now) == :gt,
+      do: candidate,
+      else: wall_time_to_utc(Date.add(today, 1), time, offset_seconds)
+  end
+
+  defp next_reset({:on, date}, time, offset_seconds, now) do
+    candidate = wall_time_to_utc(date, time, offset_seconds)
+
+    if DateTime.compare(candidate, now) == :gt,
+      do: candidate,
+      else: wall_time_to_utc(%{date | year: date.year + 1}, time, offset_seconds)
+  end
+
+  defp wall_time_to_utc(date, time, offset_seconds) do
+    date
+    |> DateTime.new!(time)
+    |> DateTime.add(-offset_seconds)
+  end
+
+  defp usage_limit_message(%{window: window, resets_at: resets_at}) do
+    reset = if resets_at, do: " resets_at=#{DateTime.to_iso8601(resets_at)}", else: ""
+    "usage_limited #{window || "unknown"}#{reset}"
+  end
+
+  defp issue_log_context(issue) when is_map(issue),
+    do: "issue_id=#{inspect(Map.get(issue, :id))} issue_identifier=#{inspect(Map.get(issue, :identifier))}"
+
+  defp issue_log_context(_issue), do: "issue_id=nil issue_identifier=nil"
 
   defp extract_turn_result(event) do
     usage = Map.get(event, "usage", %{})
