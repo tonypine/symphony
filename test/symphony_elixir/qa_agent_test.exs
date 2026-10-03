@@ -528,8 +528,14 @@ defmodule SymphonyElixir.QaAgentTest do
       worktree = QaAgent.worktree_path(settings, "default", "TP-900", @sha)
 
       assert {:ok, %{result: %{verdict: :pass}}} =
-               QaAgent.run(job(%{playbooks: [web]}), settings, git: fake_git(), qa_agent_module: FakeSession, verification: FakeVerification)
+               QaAgent.run(job(%{playbooks: [web]}), settings,
+                 git: fake_git(),
+                 qa_agent_module: FakeSession,
+                 verification: FakeVerification,
+                 npx: fake_npx({"Version 0.0.83\n", 0})
+               )
 
+      assert_receive {:npx, ["--no", "@playwright/mcp@0.0.83", "--version"]}
       server_worktree = worktree <> "-dev-server"
       workspace = job().workspace_path
       assert_receive {:git, ["worktree", "add", "--detach", ^server_worktree, @sha], ^workspace}
@@ -541,10 +547,12 @@ defmodule SymphonyElixir.QaAgentTest do
       assert browser.command == "npx"
       assert browser.runtimes == [settings.agent.kind]
 
-      assert ["-y", "@playwright/mcp@latest", "--browser", "chromium", "--headless", "--isolated", "--allowed-origins", origins, "--output-dir", output] =
+      assert ["--no", "@playwright/mcp@0.0.83", "--browser", "chromium", "--headless", "--isolated", "--allowed-origins", origins, "--output-dir", output] =
                browser.args
 
       assert origins == "http://localhost:4321;http://127.0.0.1:4321"
+      assert QaAgent.playwright_mcp_package() == "@playwright/mcp@0.0.83"
+      refute Enum.any?(browser.args, &String.contains?(&1, "@latest"))
       assert output == Path.join(worktree, "qa-evidence")
       assert settings.agent.network_access.mode == "allowlist"
       assert ["localhost", "127.0.0.1"] -- session_opts[:settings].agent.network_access.allowed_domains == []
@@ -620,6 +628,37 @@ defmodule SymphonyElixir.QaAgentTest do
 
       refute_receive {:dev_server_started, _identifier, _run_id, _worktree, _opts}
       refute_receive {:qa_session_started, _worktree, _opts}
+    end
+
+    test "a missing npx or pinned Playwright MCP package ends the pass before the agent runs, without fetching it" do
+      [web] = Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false}}}, dev_server?: true)
+
+      for {npx_result, reason} <- [
+            {{:error, :enoent}, :no_npx},
+            {{"npx canceled due to missing packages and no YES option\n", 1}, "@playwright/mcp@0.0.83"}
+          ] do
+        assert {:error, {:qa_browser_mcp_unavailable, ^reason}, %{total_tokens: 0}} =
+                 QaAgent.run(job(%{playbooks: [web]}), Config.settings!(),
+                   git: fake_git(),
+                   qa_agent_module: FakeSession,
+                   verification: FakeVerification,
+                   npx: fake_npx(npx_result)
+                 )
+
+        assert_receive {:npx, ["--no", "@playwright/mcp@0.0.83", "--version"]}
+        refute_receive {:qa_session_started, _worktree, _opts}
+        assert_receive {:dev_server_stopped, 4321}
+      end
+    end
+
+    test "npx runs the npx found on PATH and reports when there is none" do
+      assert QaAgent.npx(["--version"], fn "npx" -> nil end) == {:error, :enoent}
+      assert {_output, 0} = QaAgent.npx(["--version"], fn "npx" -> System.find_executable("true") end)
+
+      case System.find_executable("npx") do
+        nil -> assert QaAgent.npx(["--version"]) == {:error, :enoent}
+        _npx -> assert {_output, 0} = QaAgent.npx(["--version"])
+      end
     end
 
     test "falls back to the streamed agent text when the turn result has no verdict" do
@@ -814,7 +853,21 @@ defmodule SymphonyElixir.QaAgentTest do
   end
 
   defp run_web(web) do
-    QaAgent.run(job(%{playbooks: [web]}), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession, verification: FakeVerification)
+    QaAgent.run(job(%{playbooks: [web]}), Config.settings!(),
+      git: fake_git(),
+      qa_agent_module: FakeSession,
+      verification: FakeVerification,
+      npx: fake_npx({"Version 0.0.83\n", 0})
+    )
+  end
+
+  defp fake_npx(result) do
+    test_pid = self()
+
+    fn args ->
+      send(test_pid, {:npx, args})
+      result
+    end
   end
 
   describe "Report" do

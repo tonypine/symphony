@@ -315,6 +315,13 @@ defmodule SymphonyElixir.AutoReview do
     do: "the dev server failed its health check, so the web playbook could not run"
 
   def blocked_reason({:qa_dev_server_failed, reason}), do: "the dev server did not start: #{inspect(reason)}"
+
+  def blocked_reason({:qa_browser_mcp_unavailable, :no_npx}),
+    do: "`npx` (Node.js) is not on Symphony's PATH, so the web playbook's browser could not start"
+
+  def blocked_reason({:qa_browser_mcp_unavailable, package}),
+    do: "`#{package}` is not installed on the Symphony host; run `npx -y #{package} --version` there once"
+
   def blocked_reason({:qa_browser_mcp_invalid, errors}), do: "`auto_review.playbooks.web.browser_mcp` is invalid: #{errors}"
   def blocked_reason({:malformed_qa_response, reason}), do: "the QA agent's answer could not be read: #{inspect(reason)}"
   def blocked_reason(reason), do: "the QA agent could not finish: #{inspect(reason)}"

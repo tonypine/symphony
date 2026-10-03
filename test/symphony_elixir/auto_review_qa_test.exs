@@ -390,7 +390,9 @@ defmodule SymphonyElixir.AutoReviewQaTest do
     test "other dev server and browser server errors are blocked with their cause" do
       for {error, text} <- [
             {{:qa_dev_server_failed, :exhausted}, "the dev server did not start: :exhausted"},
-            {{:qa_browser_mcp_invalid, "url can't be blank"}, "`auto_review.playbooks.web.browser_mcp` is invalid: url can't be blank"}
+            {{:qa_browser_mcp_invalid, "url can't be blank"}, "`auto_review.playbooks.web.browser_mcp` is invalid: url can't be blank"},
+            {{:qa_browser_mcp_unavailable, :no_npx}, "`npx` (Node.js) is not on Symphony's PATH"},
+            {{:qa_browser_mcp_unavailable, "@playwright/mcp@0.0.83"}, "`@playwright/mcp@0.0.83` is not installed on the Symphony host; run `npx -y @playwright/mcp@0.0.83 --version` there once"}
           ] do
         record = put_record()
         Application.put_env(:symphony_elixir, :qa_flow_agent_result, {:error, error, QaAgent.empty_tokens()})

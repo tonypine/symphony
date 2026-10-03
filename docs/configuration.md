@@ -835,8 +835,20 @@ step, saves the browser console to `qa-evidence/console.md`, and attaches both t
 the QA report links each step's screenshot and the console output. A console error from the
 changed page fails the step.
 
-The default browser server runs `npx -y @playwright/mcp@latest` on the Symphony host, so the host
-needs Node.js and, once, `npx playwright install chromium`. The origin allowlist keeps the browser
+The default browser server runs on the Symphony host, outside the agent sandbox, so it is pinned
+to `@playwright/mcp@0.0.83` and started with `npx --no`, which never downloads a package during a
+pass. Install it and Chromium once on the host:
+
+```bash
+npx -y @playwright/mcp@0.0.83 --version
+npx playwright install chromium
+```
+
+Before the agent starts, Symphony checks that `npx` is on its `PATH` and that the pinned package is
+installed. When either is missing, the pass is `blocked` and the report says what to install. The
+version is `@playwright_mcp_package` in `lib/symphony_elixir/qa_agent.ex`; to bump it, change it
+there, check the flags above against that release, and update the install command here. The
+origin allowlist keeps the browser
 on the dev server; Playwright documents it as a guard rather than a security boundary. To use
 another browser server, such as Glance, set `browser_mcp` to its MCP server definition (the shape
 of an [`agent.mcp.servers`](#agentmcp) entry); Symphony then starts it as given:

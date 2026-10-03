@@ -1121,7 +1121,9 @@ When enabled:
   when the pass ends. A dev server that does not start or fails its health check MUST make the
   pass `blocked`, not `fail`, without starting the agent. Only that QA session
   gets a `browser` MCP server: `browser_mcp` when set, otherwise headless Playwright MCP limited
-  to the dev server's localhost origins and writing into `qa-evidence/`. With
+  to the dev server's localhost origins and writing into `qa-evidence/`. The default server MUST
+  run an exact, pinned package version and MUST NOT download it during a pass; when `npx` or the
+  pinned package is missing the pass MUST be `blocked` without starting the agent. With
   `agent.network_access.mode: allowlist` the session also allows `localhost` and `127.0.0.1`.
 - A pass that runs the `macos_app` playbook also gets host-side `qa_*` tools, executed by Symphony
   outside the agent sandbox: `qa_build` (only the configured `build`, refused when the worktree has

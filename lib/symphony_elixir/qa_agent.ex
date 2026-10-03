@@ -40,6 +40,11 @@ defmodule SymphonyElixir.QaAgent do
   @max_verdict_follow_ups 1
   @browser_mcp_name "browser"
   @localhost_domains ["localhost", "127.0.0.1"]
+  # The default browser MCP server runs on the Symphony host, outside the agent sandbox, so it
+  # is pinned to an exact version and never fetched during a pass (`npx --no`). To bump it,
+  # change this version, check the flags in `default_browser_mcp/2` against that release, and
+  # update the install command in docs/configuration.md.
+  @playwright_mcp_package "@playwright/mcp@0.0.83"
 
   @type verdict :: :pass | :fail | :blocked
   @type step :: %{name: String.t(), status: String.t(), details: String.t(), evidence: [String.t()]}
@@ -344,7 +349,7 @@ defmodule SymphonyElixir.QaAgent do
   end
 
   defp run_with_tools(agent_module, job, worktree, settings, qa_settings, dev_server, opts) do
-    case put_browser_mcp(qa_settings, job, worktree, dev_server) do
+    case put_browser_mcp(qa_settings, job, worktree, dev_server, opts) do
       {:ok, qa_settings} ->
         prompt = prompt(job, fetch_parent(job, worktree, settings, opts))
         driver = start_driver(job, worktree, opts)
@@ -407,27 +412,58 @@ defmodule SymphonyElixir.QaAgent do
 
   # The `browser` MCP server exists only in this QA session's settings. The agent's own
   # sandbox may reach the dev server too: allowlist mode adds the localhost names.
-  defp put_browser_mcp(qa_settings, _job, _worktree, nil), do: {:ok, qa_settings}
+  defp put_browser_mcp(qa_settings, _job, _worktree, nil, _opts), do: {:ok, qa_settings}
 
-  defp put_browser_mcp(%Schema{agent: agent} = qa_settings, job, worktree, dev_server) do
-    attrs =
-      job
-      |> web_playbook()
-      |> Map.get(:browser_mcp)
-      |> Kernel.||(default_browser_mcp(dev_server, worktree))
-      |> Map.put("name", @browser_mcp_name)
-      |> Map.put_new("runtimes", [agent.kind])
-
-    case McpServer.changeset(%McpServer{}, attrs) |> Ecto.Changeset.apply_action(:insert) do
-      {:ok, server} ->
-        servers = Map.put(agent.mcp.servers || %{}, @browser_mcp_name, server)
-        agent = %{agent | mcp: %{agent.mcp | servers: servers}, network_access: allow_localhost(agent.network_access)}
-        {:ok, %{qa_settings | agent: agent}}
-
-      {:error, changeset} ->
-        {:error, {:qa_browser_mcp_invalid, changeset_errors(changeset)}}
+  defp put_browser_mcp(%Schema{agent: agent} = qa_settings, job, worktree, dev_server, opts) do
+    with {:ok, attrs} <- browser_mcp_attrs(job, worktree, dev_server, opts),
+         attrs = attrs |> Map.put("name", @browser_mcp_name) |> Map.put_new("runtimes", [agent.kind]),
+         {:ok, server} <- browser_mcp_server(attrs) do
+      servers = Map.put(agent.mcp.servers || %{}, @browser_mcp_name, server)
+      agent = %{agent | mcp: %{agent.mcp | servers: servers}, network_access: allow_localhost(agent.network_access)}
+      {:ok, %{qa_settings | agent: agent}}
     end
   end
+
+  defp browser_mcp_attrs(job, worktree, dev_server, opts) do
+    case job |> web_playbook() |> Map.get(:browser_mcp) do
+      nil ->
+        with :ok <- check_playwright_mcp(Keyword.get(opts, :npx, &npx/1)),
+             do: {:ok, default_browser_mcp(dev_server, worktree)}
+
+      attrs ->
+        {:ok, attrs}
+    end
+  end
+
+  defp browser_mcp_server(attrs) do
+    case McpServer.changeset(%McpServer{}, attrs) |> Ecto.Changeset.apply_action(:insert) do
+      {:ok, server} -> {:ok, server}
+      {:error, changeset} -> {:error, {:qa_browser_mcp_invalid, changeset_errors(changeset)}}
+    end
+  end
+
+  # Fails the pass as `blocked` when the pinned package is not installed, instead of letting
+  # the agent runtime fetch it.
+  defp check_playwright_mcp(npx) do
+    case npx.(["--no", @playwright_mcp_package, "--version"]) do
+      {_output, 0} -> :ok
+      {:error, :enoent} -> {:error, {:qa_browser_mcp_unavailable, :no_npx}}
+      {_output, _status} -> {:error, {:qa_browser_mcp_unavailable, @playwright_mcp_package}}
+    end
+  end
+
+  @doc false
+  @spec npx([String.t()], (String.t() -> String.t() | nil)) :: {String.t(), non_neg_integer()} | {:error, :enoent}
+  def npx(args, find_executable \\ &System.find_executable/1) do
+    case find_executable.("npx") do
+      nil -> {:error, :enoent}
+      npx -> System.cmd(npx, args, stderr_to_stdout: true)
+    end
+  end
+
+  @doc "The exact `@playwright/mcp` package the default browser MCP server runs."
+  @spec playwright_mcp_package() :: String.t()
+  def playwright_mcp_package, do: @playwright_mcp_package
 
   @doc "The default `browser` MCP server: headless Playwright limited to the dev server's origins."
   @spec default_browser_mcp(%{port: pos_integer(), url: String.t()}, Path.t()) :: map()
@@ -441,8 +477,8 @@ defmodule SymphonyElixir.QaAgent do
     %{
       "command" => "npx",
       "args" => [
-        "-y",
-        "@playwright/mcp@latest",
+        "--no",
+        @playwright_mcp_package,
         "--browser",
         "chromium",
         "--headless",
