@@ -102,7 +102,8 @@ issues:
   in `In Review` and its sub-tickets in `Backlog`. A human approves the plan by moving the parent
   from `In Review` to this state, and on the next poll Symphony moves every sub-ticket still in
   `Backlog` to `Todo` (blocked-by links keep the order); moving the parent to `Rework` instead
-  cancels those sub-tickets and re-plans. Agents cannot move an issue here
+  cancels the sub-tickets the rejected breakdown run created and re-plans. Each batch is listed
+  in one comment on the parent. Agents cannot move an issue here
   (`linear_update_state` refuses it). On every poll Symphony also moves a `breakdown` parent it
   finds `In Progress` with open sub-tickets here, so `In Progress` only holds issues an agent is
   working; that move is not an approval and promotes nothing. Create it in Linear as a started state just
