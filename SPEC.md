@@ -2077,6 +2077,12 @@ transport closes, or Symphony stops (for example on SIGTERM), the implementation
 to the subprocess's process group and SIGKILL after a short grace period. Closing stdin alone is not
 enough: an agent may ignore EOF.
 
+A SIGKILL or crash of Symphony skips that cleanup, so the implementation SHOULD record each agent's
+process group id, its leader's start time, and its workspace durably. On startup, before
+dispatching, it SHOULD stop recorded groups whose leader still has the recorded start time, MUST NOT
+signal a pid whose start time differs (the pid was reused), and SHOULD NOT dispatch issues in the
+workspace of a group it cannot confirm stopped until that group is gone, logging why.
+
 Notes:
 
 - The Elixir implementation requires explicit `agent.runtime` and `agent.command`.

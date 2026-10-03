@@ -1,5 +1,6 @@
 defmodule SymphonyElixir.CoreTest do
   use SymphonyElixir.TestSupport
+  alias SymphonyElixir.AgentProcesses
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Ci, as: CiConfig
   alias SymphonyElixir.Config.Schema.ReviewAgent, as: ReviewAgentConfig
@@ -1330,6 +1331,66 @@ defmodule SymphonyElixir.CoreTest do
     assert [] = RunStore.list_retries("api")
 
     assert [] = RunStore.list_retries("web")
+  end
+
+  test "an issue whose workspace may still hold a previous Symphony's agent is not dispatched" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      max_concurrent_agents: 2,
+      quality_gate: %{enabled: false},
+      tracker_active_states: ["Todo", "In Progress"],
+      tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
+    )
+
+    port =
+      Port.open({:spawn_executable, String.to_charlist(System.find_executable("sh"))}, [
+        :binary,
+        :exit_status,
+        args: [~c"-c", ~c"echo ready; exec sleep 600"]
+      ])
+
+    assert_receive {^port, {:data, "ready\n"}}, 5_000
+    {:os_pid, os_pid} = Port.info(port, :os_pid)
+    left_running = %{pgid: os_pid, start_time: nil, workspace: "/workspaces/default/MT-LEFT", reason: "left running"}
+    :sys.replace_state(AgentProcesses, &put_in(&1.blocked[os_pid], left_running))
+
+    on_exit(fn ->
+      :sys.replace_state(AgentProcesses, &%{&1 | blocked: Map.delete(&1.blocked, os_pid)})
+      System.cmd("kill", ["-KILL", "--", "-#{os_pid}"], stderr_to_stdout: true)
+    end)
+
+    issue_id = "issue-left-running"
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-LEFT",
+      title: "Left running",
+      state: "In Progress",
+      assigned_to_worker: true
+    }
+
+    state = %Orchestrator.State{
+      repo_key: "default",
+      max_concurrent_agents: 2,
+      running: %{},
+      claimed: MapSet.new(),
+      budget_exhausted: MapSet.new(),
+      retry_attempts: %{},
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0}
+    }
+
+    refute Orchestrator.should_dispatch_issue_for_test(issue, state)
+    assert Orchestrator.should_dispatch_issue_for_test(%{issue | id: "issue-other", identifier: "MT-OTHER"}, state)
+
+    metadata = %{repo_key: "default", identifier: "MT-LEFT", worker_host: nil, workspace_path: nil}
+    state = %{state | claimed: MapSet.new([issue_id])}
+
+    assert {:noreply, updated_state} =
+             Orchestrator.handle_retry_issue_for_test(state, issue_id, 1, metadata, fn [^issue_id] ->
+               {:ok, [issue]}
+             end)
+
+    assert %{attempt: 1, error: "an agent from a previous Symphony may still be running in the workspace"} =
+             updated_state.retry_attempts[issue_id]
   end
 
   test "retry keeps the original repo_key when the issue no longer matches any repo" do
