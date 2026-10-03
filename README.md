@@ -89,7 +89,7 @@ branch instead of opening a second one. If a claimed issue moves to a terminal s
 - **Executor + reviewer runs** — an optional read-only reviewer agent gates the executor's push.
 - **Docker runner** — host Symphony with mounted repos, state, logs, and agent credentials.
 - **macOS menu bar app** — start, stop, pause, and resume Symphony from the menu bar, with its status in
-  the icon, the Linear key in the Keychain, optional launch at login, and updates from the menu. See
+  the icon, the Linear key in a file only you can read, optional launch at login, and updates from the menu. See
   [macos/README.md](macos/README.md).
 
 ![Symphony Web dashboard screenshot](.github/media/elixir-screenshot-web.png)
@@ -119,8 +119,8 @@ Symphony, so you need no checkout, `mise` or Elixir.
 3. **Write a workflow per repo.** Invoke the `symphony-init-workflow` skill from Codex or Claude in
    each target repo; the agent inspects the repo and writes a tailored `WORKFLOW.md`.
 4. **Start Symphony.** In the app's Settings window, choose your `symphony.yml` and paste a Linear
-   personal API key (Settings → Security & access → Personal API keys); the app keeps it in the login
-   Keychain. Click Save, then choose **Start Symphony** from the menu.
+   personal API key (Settings → Security & access → Personal API keys); the app keeps it in a file
+   only you can read. Click Save, then choose **Start Symphony** from the menu.
 
 The app updates itself from the menu and keeps the version it replaced for rollback. See
 [macos/README.md](macos/README.md) for first run, Restart, Update, Rollback, and Development mode.

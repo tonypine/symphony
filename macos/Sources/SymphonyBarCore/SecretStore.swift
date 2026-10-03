@@ -92,3 +92,66 @@ public struct KeychainSecretStore: SecretStore {
         ]
     }
 }
+
+/// The app's secrets, in a `FileSecretStore` readable only by the user. The first use moves the login Keychain
+/// items earlier versions kept into the file. The Keychain pinned each item to the exact build that created it,
+/// so macOS asked for the password again after every update; the file doesn't.
+public final class MigratingSecretStore: SecretStore {
+    public static let fileName = "secrets.json"
+
+    public let file: FileSecretStore
+    public let keychain: SecretStore
+    private let lock = NSLock()
+
+    public init(file: FileSecretStore, keychain: SecretStore = KeychainSecretStore()) {
+        self.file = file
+        self.keychain = keychain
+    }
+
+    /// `~/Library/Application Support/symphony/release/secrets.json`, next to the release build's control token.
+    /// Fixed, so a stored `SYMPHONY_STATE_ROOT` can't move the file that holds it.
+    public static func defaultFile(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
+        StateRoot.defaultDirectory(home: home)
+            .appendingPathComponent(StateRoot.releaseSubdirectory, isDirectory: true)
+            .appendingPathComponent(fileName)
+    }
+
+    public func value(forAccount account: String) throws -> String? {
+        try migrateIfNeeded()
+        return try file.value(forAccount: account)
+    }
+
+    public func setValue(_ value: String, forAccount account: String) throws {
+        try migrateIfNeeded()
+        try file.setValue(value, forAccount: account)
+    }
+
+    public func removeValue(forAccount account: String) throws {
+        try migrateIfNeeded()
+        try file.removeValue(forAccount: account)
+    }
+
+    public func accounts() throws -> [String] {
+        try migrateIfNeeded()
+        return try file.accounts()
+    }
+
+    /// Until the file exists: copies every Keychain item into it, then deletes the items. Once it exists the
+    /// Keychain is never touched again. A failed Keychain read throws before the file is written, so the next
+    /// use tries again. A failed delete is ignored: the file holds the value, and the item is never read again.
+    private func migrateIfNeeded() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !FileManager.default.fileExists(atPath: file.file.path) else { return }
+
+        let accounts = try keychain.accounts()
+        var values: [String: String] = [:]
+        for account in accounts {
+            values[account] = try keychain.value(forAccount: account) ?? ""
+        }
+        try file.save(values)
+        for account in accounts {
+            try? keychain.removeValue(forAccount: account)
+        }
+    }
+}
