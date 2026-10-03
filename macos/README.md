@@ -95,7 +95,7 @@ The app has no Dock icon or window of its own; look for its icon in the menu bar
 ## First run
 
 A release app needs only two things: a `symphony.yml` and a Linear personal API key. You don't need to
-export `LINEAR_API_KEY`; the app keeps it in the login Keychain.
+export `LINEAR_API_KEY`; the app keeps it in a file only you can read.
 
 1. Open the app. The Settings window opens because no `symphony.yml` is set yet.
 2. **symphony.yml:** choose the operator config to run with. To make one, see the
@@ -106,9 +106,7 @@ export `LINEAR_API_KEY`; the app keeps it in the login Keychain.
    Variable.
 4. Leave **Development mode** off, so the app runs the Symphony embedded in it.
 5. Click **Save**. The app checks that `symphony.yml` exists, that the app has an embedded Symphony and that
-   the key is set, then stores the key in the login Keychain. macOS asks to allow Keychain access; enter
-   your login password and choose **Always Allow**. It currently asks again after each update (see
-   [Troubleshooting](#troubleshooting)).
+   the key is set, then stores the key in the secrets file (see [Settings](#settings)).
 6. Choose **Start Symphony** from the menu. The icon shows `hourglass` while Symphony starts, then
    `music.note.list` once it answers. Choose **Open Dashboard** to see it at `http://127.0.0.1:4000`.
 
@@ -204,29 +202,29 @@ set (or, in Development mode, no checkout folder).
   `auto_review.effort`. A provider alone moves nothing. Higher effort and bigger models use the shared
   5-hour usage limit faster. The next run picks the change up without a restart. The Codex runtime ignores
   these keys (see [Run profiles](../docs/configuration.md)).
-- `LINEAR_API_KEY` and any extra environment variables are stored only in the login Keychain, as generic
-  passwords under service `symphony` with the variable name as the account:
-
-  ```bash
-  security find-generic-password -s symphony -a LINEAR_API_KEY
-  ```
-
+- `LINEAR_API_KEY` and any extra environment variables are stored only in
+  `~/Library/Application Support/symphony/release/secrets.json`, next to Symphony's `control_token`, as a
+  JSON object of variable name to value. The file is readable only by you (`0600`), and agents' sandboxes
+  can't read `~/Library/Application Support`. Unlike the Keychain, the file also goes into file backups such
+  as Time Machine.
 - **OpenRouter** holds the optional `OPENROUTER_API_KEY`, which run profiles with `provider: openrouter`
-  need. It is stored in the Keychain like `LINEAR_API_KEY` and passed to Symphony only when set; it is never
-  written to `symphony.yml` or UserDefaults. **Test connection** checks the key with OpenRouter
+  need. It is stored in the secrets file like `LINEAR_API_KEY` and passed to Symphony only when set; it is
+  never written to `symphony.yml` or UserDefaults. **Test connection** checks the key with OpenRouter
   (`GET /api/v1/key`) and shows its label and credit, or why it was rejected, and the **Models** line counts
   the models OpenRouter offers and how many of them support tools.
 - When Save changes `LINEAR_API_KEY`, `OPENROUTER_API_KEY` or an extra variable while Symphony runs, the app
   restarts Symphony the way Restart Symphony does, so it picks up the new environment.
 
-macOS asks for Keychain access after the first install, and currently again after each update; choose
-Always Allow. A local `make` build is ad-hoc signed and asks again after each rebuild (see
-[Development mode](#development-mode)). Start, Restart and Update read the Keychain without blocking the
-menu: while macOS waits for the password, the menu shows "Waiting for Keychain access…".
+Earlier versions kept these in the login Keychain, which asked for the password again after every update.
+The first time a version with the secrets file reads them, it copies each `symphony` Keychain item into the
+file and leaves the item in place; after that it never reads the Keychain. That one read may still ask for Keychain
+access; choose Allow. Start, Restart, Update and Settings… read the secrets without blocking the menu: while
+macOS waits for the password, the menu and the Settings window show "Waiting for Keychain access…", and Save
+stays off until the secrets have been read.
 
 ## Running Symphony
 
-Start Symphony sets the Keychain variables only in Symphony's environment (never on its command line).
+Start Symphony sets the stored variables only in Symphony's environment (never on its command line).
 With Development mode off it runs the embedded binary directly, without a shell, in the folder that holds
 `symphony.yml`:
 
@@ -373,17 +371,19 @@ is up to date (vX)" or why the check failed, for example GitHub's rate limit.
 3. **Unzip** it with `ditto` and check the new app: `codesign --verify --strict` passes, it is Symphony
    (same bundle identifier), its build is newer, and it is signed with the same certificate as the running
    app.
-4. **Drain Symphony** like [Restart](#restart), checking `symphony.yml` with the new version's Symphony:
-   pause dispatch, wait for `0 running` (**Update Now Anyway** shows after the restart timeout, **Cancel
-   Update** stops waiting), then stop Symphony. A Symphony the app didn't start is left alone.
+4. **Drain Symphony** like [Restart](#restart), checking `symphony.yml` with the running Symphony: pause
+   dispatch, wait for `0 running` (**Update Now Anyway** shows after the restart timeout, **Cancel Update**
+   stops waiting), then stop Symphony. A Symphony the app didn't start is left alone. Nothing runs the new
+   version's Symphony yet: running it removes older versions' unpacked releases from
+   `~/Library/Application Support/.burrito/`, including the one the running Symphony loads its code from.
 5. **Swap and relaunch:** the app starts a small helper (`Contents/Resources/update-helper.sh`, run from a
    copy in the cache folder) and quits. Once the app has exited, the helper moves it to
    `Symphony (previous).app` next to it (replacing an older one), moves the new app into place, and opens
    it. If a move fails, it puts the old app back and opens that instead. Its log is
    `~/Library/Caches/com.tonypine.symphony.bar/update-helper.log`.
-6. **Bring Symphony back:** the relaunched app starts Symphony from its new embedded binary and, once it
-   answers, resumes dispatch if the update paused it. A pause you made before the update stays. If the
-   helper had to put the old app back, an alert says so.
+6. **Bring Symphony back:** the relaunched app starts Symphony from its new embedded binary, which removes
+   the old version's unpacked release, and, once it answers, resumes dispatch if the update paused it. A
+   pause you made before the update stays. If the helper had to put the old app back, an alert says so.
 
 Update is disabled, with the reason under it, when:
 
@@ -414,7 +414,9 @@ kept. To go back to it:
    mv "Symphony (previous).app" Symphony.app
    ```
 
-3. Open `Symphony.app` and start Symphony. Your settings and Keychain variables carry over. Delete
+3. Open `Symphony.app` and start Symphony. Your settings and stored variables carry over. A version from
+   before the secrets file reads the variables from the login Keychain instead, as they were when they were
+   copied into the file, so a variable changed in Settings since then has its old value there. Delete
    `Symphony (rolled back).app` once you no longer need it.
 
 The app then offers the newer release again as an update. To install an older release than the previous
@@ -458,8 +460,7 @@ certificate, `SHORT_VERSION=` / `BUILD_NUMBER=` to set the versions in `Info.pli
 replaces an installed release too; reinstall the release with the install script afterwards.
 
 A plain `make` build has no embedded Symphony, so it runs only in Development mode, and it can't update
-itself. Because it is ad-hoc signed, its signature changes on every rebuild, and macOS asks again for Keychain
-access after each rebuild.
+itself.
 
 ### Run a checkout
 
@@ -478,7 +479,7 @@ instead of the app; see [Running](../README.md#running).
 ## QA mode
 
 QA mode is for test launches, by hand or by a QA agent: the app keeps everything it would store under one
-directory and leaves your real settings, Keychain and Symphony alone. Auto Review's `macos_app` playbook
+directory and leaves your real settings, secrets and Symphony alone. Auto Review's `macos_app` playbook
 always launches the app this way (see [macOS app QA](../docs/configuration.md#macos-app-qa)). Turn it on by starting the app's binary
 with `SYMPHONY_BAR_QA_ROOT` set to a directory. A launch from Finder or `open` doesn't pass the variable on, so
 run the binary directly:
@@ -492,7 +493,7 @@ In QA mode, under that directory:
 | Path | Holds | Instead of |
 | --- | --- | --- |
 | `settings.plist` | the Settings values, Launch at Login, and the pending update across a relaunch | UserDefaults; Launch at Login registers nothing with macOS |
-| `secrets.json` | `LINEAR_API_KEY` and the other variables, readable only by you | the login Keychain |
+| `secrets.json` | `LINEAR_API_KEY` and the other variables, readable only by you | `~/Library/Application Support/symphony/release/secrets.json` |
 | `logs/` | Symphony's output log | `~/Library/Logs/symphony` |
 | `updates/` | update downloads and the update helper's log | `~/Library/Caches/<bundle id>` |
 | `state/` | Symphony's state: control URL and token | `~/Library/Application Support/symphony` |
@@ -500,8 +501,8 @@ In QA mode, under that directory:
 The app starts with empty settings, so Settings opens. It doesn't see a Symphony already running outside QA
 mode, so Stop, Restart, Pause and Resume can't reach it, unless `SYMPHONY_STATE_ROOT` is set too, which wins
 over `state/`. Start runs only a checkout: with Development mode off it reports "QA mode runs only a
-checkout's Symphony; turn on Development mode in Settings." Saving Settings writes no login Keychain item;
-`security find-generic-password -s symphony` lists the same items as before.
+checkout's Symphony; turn on Development mode in Settings." Saving Settings leaves
+`~/Library/Application Support/symphony/release/secrets.json` and the login Keychain as they were.
 
 ## Troubleshooting
 
@@ -521,12 +522,12 @@ checkout's Symphony; turn on Development mode in Settings." Saving Settings writ
   Apple, so macOS blocks a downloaded copy that still has the quarantine flag. Open System Settings →
   Privacy & Security and click Open Anyway, or clear the flag with
   `xattr -dr com.apple.quarantine ~/Applications/Symphony.app`. The install script clears it for you.
-- **macOS asks for Keychain access.** It asks after the first install, because the Keychain items are new
-  to this app: enter your login password and choose Always Allow. It currently asks again after each update
-  and after each rebuild of a `make` build: the Keychain pins each item to the exact build that may read it
-  unless the app is signed with an Apple-issued certificate, and this one isn't. While the prompt waits, the
-  menu shows "Waiting for Keychain access…" and Start stays off; if you can't see the prompt, look behind
-  other windows.
+- **macOS asks for Keychain access.** It asks once, when the first version with the secrets file copies the
+  variables an earlier version kept in the login Keychain into
+  `~/Library/Application Support/symphony/release/secrets.json`: enter your login password and choose Allow.
+  It doesn't ask again, after updates or rebuilds. While the prompt waits, the menu shows "Waiting for
+  Keychain access…" and Start stays off; if you can't see the prompt, look behind other windows. If you deny
+  it, nothing is copied and the next Start asks again.
 - **Start Symphony shows a message instead of starting.** The app checks the settings before it starts
   Symphony. "Linear API key not set" and the path messages are fixed in Settings. "This build has no
   embedded Symphony" means a local `make` build: turn on Development mode and set the checkout folder.
@@ -543,8 +544,9 @@ checkout's Symphony; turn on Development mode in Settings." Saving Settings writ
   the download doesn't match what was published: check again later, or download the release by hand and
   verify it as in [docs/releasing.md](../docs/releasing.md). "the update's signer can't be checked" or "isn't
   signed with the same certificate" means this copy and the release are signed differently: install the
-  release with the [install script](#with-the-install-script). A `symphony.yml` error comes from the new
-  version's check; Symphony keeps running.
+  release with the [install script](#with-the-install-script). A `symphony.yml` error comes from the
+  running version's check; Symphony keeps running. A setting only the new version rejects shows up after the
+  relaunch, when the new Symphony fails to start: choose Open Logs.
 - **Restart Symphony says "Symphony wasn't restarted".** The `symphony.yml` check (or the pause) failed, and
   the old Symphony is still running. Fix what the message names, then check it from a terminal with
   `~/Applications/Symphony.app/Contents/Resources/symphony check --config <symphony.yml>`, or in Development mode

@@ -399,7 +399,8 @@ agent:
   `0` to turn lanes off. Values outside `0..max_total` fail `symphony check`. The dashboard and
   `/api/v1/state` (`epic_lanes`) show each lane and the shared pool, and the dispatch log line
   ends with `slot=lane:<epic>`, `slot=shared` or `slot=finishing`.
-- `concurrency.finishing_max` (default: `2`) caps landing runs (tickets in `Merging`). They only
+- `concurrency.finishing_max` (default: `2`) caps landing runs (tickets in `Merging`; with
+  `pull_requests.auto_merge` on, only the ones that fell back to the landing agent). They only
   finish approved work, so they don't use `max_total` slots or epic lanes and start as soon as one
   of these is free. Auto Review QA passes are capped by it too, on top of
   `auto_review.max_concurrent`. Values below `1` fail `symphony check`.
@@ -596,6 +597,7 @@ PR review polling, review-comment handling, CI polling, and learning capture.
 pull_requests:
   enabled: true
   poll_interval_ms: 30000
+  auto_merge: true
   review_comments:
     rework_delay_minutes: 1
     stale_after_days: 7
@@ -631,7 +633,30 @@ pull_requests:
 - `checks.landing_wait_timeout_ms` bounds how long a `Merging` issue waits for CI. When a landing
   run ends with the PR head's checks pending, Symphony holds the issue in `Merging` and dispatches
   the landing agent again once the CI poller sees that head go green (a red head goes through the
-  normal CI-failure fix loop), or after this timeout.
+  normal CI-failure fix loop), or after this timeout. With `auto_merge`, a PR that stays `BLOCKED`
+  with auto-merge on and a green head for this long falls back to the landing agent.
+- `auto_merge` (default: `true`, needs `enabled: true`) lands `Merging` tickets with GitHub
+  auto-merge instead of a landing agent, so they take no agent slot:
+  - Symphony turns on auto-merge (squash, the PR title and body) once per PR head, or squash-merges
+    right away when GitHub says the PR can already merge. GitHub merges it when the required checks
+    pass, and Symphony moves the ticket to `Done`.
+  - A PR that is `BEHIND` the base branch gets one GitHub "Update branch" per head; CI runs on the
+    merged code and auto-merge fires when it passes.
+  - A merge conflict moves the ticket to `In Progress` with the conflict context (an agent run), and
+    a red head goes through the CI-failure fix loop with auto-merge left on, so the PR merges once
+    the fix is green.
+  - When auto-merge can't be used (the repository doesn't allow it, no required checks, a
+    permission error, or the PR stays blocked on a green head), Symphony logs the error, comments
+    the reason on the ticket, and falls back to the landing agent for that stay in `Merging`.
+  - `/api/v1/state` (`auto_merge`) and the dashboard show each PR's status, for example
+    "auto-merge on, waiting for CI on `abc1234`", "updating branch" or "blocked: conflict".
+  - Moving a ticket out of `Merging` does not turn auto-merge off; disable it on the PR to stop the
+    merge.
+  - Repository requirements: **Allow auto-merge** on (`allow_auto_merge`), and branch protection on
+    the base branch with required status checks. Requiring branches to be up to date before merging
+    (`strict`) is recommended, so GitHub never merges stale code; Symphony keeps the branch updated.
+    **Allow squash merging** must be on. Every required check must report on every PR (a
+    path-filtered required check that never runs keeps the PR `BLOCKED` until the fallback).
 
 ### `pre_push_review`
 
@@ -742,6 +767,29 @@ available for `notifications.channels[].events`.
 Results are kept per PR head SHA. With `run_on: first_pass`, once a push has passed QA, later
 pushes on the PR skip it. `max_concurrent` caps how many QA passes run at once, and
 `agent.concurrency.finishing_max` caps it again. QA passes never use the agent slots.
+
+#### Parent walkthrough
+
+A parent's `Final verification:` sub-ticket gets a QA-only run instead of an executor agent. Once
+the other sub-tickets have merged and the ticket is dispatched, Symphony runs the QA agent in a
+fresh worktree at the head of `origin/<base_branch>`, with the parent as the issue under test:
+it walks the parent's acceptance criteria and `## User walkthrough` plus the verification
+ticket's checklist (breakdown runs copy the walkthrough under `## Auto Review: parent
+walkthrough`), and attaches its evidence to the parent. There is no PR to diff, so `qa:<kind>`
+labels on the ticket or the parent choose the playbooks, and every enabled playbook runs without
+one.
+
+- the `## Symphony QA Report` is written on the parent and on the verification ticket;
+- `pass` and `blocked` → the verification ticket goes to `In Review` for a human to sign off;
+- `fail` → each failing step (or each finding, when no step failed) is filed as a `Backlog`
+  sub-ticket of the verification ticket that names the step and holds its details and evidence,
+  the report lists them, and the verification ticket is marked blocked by each one and stays in
+  `Todo`. Symphony holds it there and runs the walkthrough again once every gap is `Done` (or
+  cancelled), with no human step. When a gap could not be filed or linked, the ticket goes to
+  `Backlog` for a human instead. There is no fix loop.
+
+The ticket gets the usual executor run when the tracker is not Linear, the run is on a remote
+worker, it has the `qa:skip` label, or it has no parent.
 
 `playbooks` overrides playbooks per kind, and adds kinds of your own with `paths` and `prompt`:
 

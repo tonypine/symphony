@@ -295,6 +295,32 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     assert_received {:linear_client_called, _query, %{stateId: "state-review"}}
   end
 
+  test "update_state lets a final verification hand its result to In Review while Auto Review is on" do
+    write_workflow_file!(Workflow.workflow_file_path(), auto_review: %{enabled: true})
+    states = [%{"id" => "state-review", "name" => "In Review", "type" => "started"}]
+    test_pid = self()
+
+    client = fn query, variables, opts ->
+      if query =~ "SymphonyAgentIssueTeamStates" do
+        send(test_pid, {:linear_client_called, query, variables})
+        {:ok, %{"data" => %{"issue" => Map.put(team_states_issue(states, []), "title", "Final verification: Run profiles")}}}
+      else
+        update_state_client(test_pid, states).(query, variables, opts)
+      end
+    end
+
+    response =
+      DynamicTool.execute(
+        "linear_update_state",
+        %{"state_name_or_id" => "In Review"},
+        issue: %Issue{id: "issue-current"},
+        linear_client: client
+      )
+
+    assert response["success"] == true
+    assert_received {:linear_client_called, _query, %{stateId: "state-review"}}
+  end
+
   test "update_state refuses Waiting on sub-tickets: moving a parent there approves its plan" do
     on_exit(fn -> SymphonyElixir.SubIssueWait.reset_for_test("Waiting on sub-tickets") end)
 
@@ -588,6 +614,49 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
       response = DynamicTool.execute("linear_create_subissue", args, Keyword.put(opts, :linear_client, client.(%{"success" => true}, nil)))
       assert %{"error" => %{"code" => "subissue_not_returned"}} = Jason.decode!(response["output"])
+    end
+  end
+
+  describe "linear_add_blocked_by" do
+    test "is advertised with only blocked_by, hidden from the read-only scope, and links through the legacy alias" do
+      assert %{"inputSchema" => %{"properties" => properties, "required" => ["blocked_by"]}} =
+               Enum.find(DynamicTool.tool_specs(), &(&1["name"] == "linear_add_blocked_by"))
+
+      assert Map.keys(properties) == ["blocked_by"]
+      refute "linear_add_blocked_by" in Enum.map(DynamicTool.tool_specs(:read_only), & &1["name"])
+
+      client = fn query, variables, _opts ->
+        if query =~ "SymphonyAgentIssueByIdentifier",
+          do: {:ok, %{"data" => %{"issue" => %{"id" => "id-" <> variables.id, "identifier" => variables.id}}}},
+          else: {:ok, %{"data" => %{"issueRelationCreate" => %{"success" => true}}}}
+      end
+
+      response = DynamicTool.execute("linear.add_blocked_by", %{blocked_by: ["TP-2"]}, issue: %Issue{id: "issue-current"}, linear_client: client)
+      assert response["success"] == true
+      assert %{"blockedBy" => ["TP-2"]} = Jason.decode!(response["output"])
+    end
+
+    test "returns explicit error payloads" do
+      issue = %Issue{id: "issue-current"}
+
+      lookup = fn issue_node ->
+        fn query, _variables, _opts ->
+          if query =~ "SymphonyAgentIssueByIdentifier",
+            do: {:ok, %{"data" => %{"issue" => issue_node}}},
+            else: {:error, :linear_down}
+        end
+      end
+
+      for {args, client, code} <- [
+            {%{"blocked_by" => []}, lookup.(nil), "invalid_add_blocked_by"},
+            {%{"blocked_by" => ["TP-404"]}, lookup.(nil), "blocked_by_not_found"},
+            {%{"blocked_by" => ["TP-1"]}, lookup.(%{"id" => "issue-current"}), "blocked_by_self"},
+            {%{"blocked_by" => ["TP-2"]}, lookup.(%{"id" => "issue-2"}), "add_blocked_by_failed"}
+          ] do
+        response = DynamicTool.execute("linear_add_blocked_by", args, issue: issue, linear_client: client)
+        assert %{"error" => %{"code" => ^code, "message" => message}} = Jason.decode!(response["output"])
+        assert message =~ "linear_add_blocked_by" or message =~ "Could not mark the current issue blocked by TP-2"
+      end
     end
   end
 

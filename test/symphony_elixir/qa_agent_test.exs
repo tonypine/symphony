@@ -366,6 +366,36 @@ defmodule SymphonyElixir.QaAgentTest do
       refute QaAgent.prompt(job(%{issue: issue(%{title: nil, description: nil})}), nil) =~ "Parent issue"
     end
 
+    test "a parent walkthrough tests the parent at the base branch head against the verification checklist" do
+      verification = issue(%{id: "issue-fv", identifier: "TP-910", title: "Final verification: Parent", description: "- [ ] child criterion"})
+      parent = issue(%{id: "issue-parent", identifier: "TP-243", title: "Parent", description: "## User walkthrough\n1. Run it"})
+      prompt = QaAgent.prompt(job(%{issue: parent, verification_issue: verification, base_ref: "origin/main"}), nil)
+
+      assert prompt =~ "running the parent walkthrough"
+      assert prompt =~ "TP-910 asks for a final check"
+      assert prompt =~ "checked out at `#{@sha}`,\nthe head of `origin/main`"
+      assert prompt =~ "Identifier: TP-243"
+      assert prompt =~ "Verification checklist (TP-910, the parent's final verification sub-ticket)"
+      assert prompt =~ ~r/<linear_issue_body>\s*- \[ \] child criterion\s*<\/linear_issue_body>/
+      assert prompt =~ "so a follow-up ticket can fix it"
+      refute prompt =~ "The executor agent opened a PR"
+      refute prompt =~ "Parent issue (this is a sub-ticket"
+
+      untitled = issue(%{identifier: "TP-911", title: nil, description: nil})
+      assert QaAgent.prompt(job(%{issue: parent, verification_issue: untitled, base_ref: "origin/main"}), nil) =~ "Verification checklist (TP-911"
+      assert QaAgent.prompt(job(), nil) =~ "so the executor can fix it"
+    end
+
+    test "a parent walkthrough does not look up the parent of the parent" do
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "linear")
+      linear_client = fn query, _variables, _opts -> flunk("unexpected Linear query: #{query}") end
+      walkthrough = job(%{issue: issue(%{identifier: "TP-243"}), verification_issue: issue(%{identifier: "TP-910"}), base_ref: "origin/main"})
+
+      assert {:ok, _result} = QaAgent.run(walkthrough, Config.settings!(), git: fake_git(), qa_agent_module: FakeSession, linear_client: linear_client)
+      assert_receive {:qa_turn, _session, prompt, %Issue{identifier: "TP-243"}, _opts}
+      assert prompt =~ "Verification checklist (TP-910"
+    end
+
     test "QA settings take the auto_review runtime, turns and timeout" do
       write_workflow_file!(Workflow.workflow_file_path(),
         auto_review: %{runtime: "codex", command: "codex app-server", max_turns: 3, timeout_ms: 5_000}
@@ -839,6 +869,24 @@ defmodule SymphonyElixir.QaAgentTest do
 
       long = Report.render(%{verdict: :pass, sha: @sha, target_state: "In Review", steps: [%{name: "x", status: "pass", details: String.duplicate("a", 2_100), evidence: []}]})
       assert long =~ "[... truncated ...]"
+    end
+
+    test "renders a parent walkthrough with the base branch commit, the verification ticket and filed tickets" do
+      body =
+        Report.render(%{
+          verdict: :fail,
+          sha: @sha,
+          ref: "origin/main",
+          target_state: "Backlog",
+          target_issue: "TP-910",
+          findings: ["Settings is empty"],
+          filed: [%{identifier: "TP-912", title: "Parent walkthrough fails: open Settings"}]
+        })
+
+      assert body =~ "**Verdict:** fail → TP-910 Backlog"
+      assert body =~ "**Commit:** `0123456789ab` (head of `origin/main`)"
+      refute body =~ "PR head"
+      assert body =~ "### Filed tickets\n\n- TP-912 Parent walkthrough fails: open Settings"
     end
 
     test "creates the report comment on Linear and then rewrites it in place" do

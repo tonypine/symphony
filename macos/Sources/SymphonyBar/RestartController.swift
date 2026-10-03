@@ -20,31 +20,26 @@ final class RestartController {
     }
 
     /// Restarts the app's Symphony. `alreadyPaused` is whether dispatch is paused now, so a pause the user made
-    /// survives. The updater passes `symphonyBinary` to check and start a different Symphony binary.
-    func restart(alreadyPaused: Bool, symphonyBinary: String? = nil) {
+    /// survives.
+    func restart(alreadyPaused: Bool) {
         perform(
             machine.begin(
                 alreadyPaused: alreadyPaused,
-                symphonyBinary: symphonyBinary,
                 runsTimeout: TimeInterval(runner.restartTimeoutMinutes * 60),
                 logPath: runner.logPath
             )
         )
     }
 
-    /// Drains Symphony for an update like a restart (checking symphony.yml with the new `symphonyBinary`), but
-    /// stops it instead of starting it again. `finished` is called once the drain stops Symphony or ends early.
-    func drainForUpdate(
-        alreadyPaused: Bool,
-        symphonyBinary: String,
-        finished: @escaping (_ stopped: Bool, _ pausedByUpdate: Bool) -> Void
-    ) {
+    /// Drains Symphony for an update like a restart, but stops it instead of starting it again. symphony.yml is
+    /// checked with the running Symphony, not the new one: see `RestartMachine`. `finished` is called once the
+    /// drain stops Symphony or ends early.
+    func drainForUpdate(alreadyPaused: Bool, finished: @escaping (_ stopped: Bool, _ pausedByUpdate: Bool) -> Void) {
         guard !machine.isRestarting else { return }
         updateFinished = finished
         perform(
             machine.begin(
                 alreadyPaused: alreadyPaused,
-                symphonyBinary: symphonyBinary,
                 purpose: .update,
                 runsTimeout: TimeInterval(runner.restartTimeoutMinutes * 60),
                 logPath: runner.logPath
@@ -61,8 +56,8 @@ final class RestartController {
         onChange?()
         for effect in effects {
             switch effect {
-            case let .checkConfig(symphonyBinary):
-                checkConfig(symphonyBinary: symphonyBinary)
+            case .checkConfig:
+                checkConfig()
             case let .send(action):
                 let stateRoot = runner.stateRoot
                 Task {
@@ -75,8 +70,8 @@ final class RestartController {
             case .stop:
                 // The exit comes back through `handle(.exited)`.
                 runner.stop()
-            case let .start(symphonyBinary):
-                runner.start(symphonyBinary: symphonyBinary) { [weak self] error in
+            case .start:
+                runner.start { [weak self] error in
                     self?.handle(.startFinished(error: error?.localizedDescription))
                 }
             case let .alert(title, message):
@@ -92,8 +87,8 @@ final class RestartController {
         }
     }
 
-    private func checkConfig(symphonyBinary: String?) {
-        runner.checkLaunch(symphonyBinary: symphonyBinary) { [weak self] launch in
+    private func checkConfig() {
+        runner.checkLaunch { [weak self] launch in
             switch launch {
             case let .success(launch):
                 Task { self?.handle(.configChecked(await ConfigCheck.run(launch))) }

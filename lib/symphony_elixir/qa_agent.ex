@@ -62,7 +62,9 @@ defmodule SymphonyElixir.QaAgent do
           optional(:pr_url) => String.t() | nil,
           optional(:token_limit) => pos_integer() | nil,
           optional(:run_profile) => SymphonyElixir.RunKind.profile(),
-          optional(:dev_server_url) => String.t() | nil
+          optional(:dev_server_url) => String.t() | nil,
+          optional(:verification_issue) => Issue.t(),
+          optional(:base_ref) => String.t()
         }
   @type run_result :: %{result: result(), tokens: map()}
 
@@ -122,18 +124,17 @@ defmodule SymphonyElixir.QaAgent do
     }
   end
 
-  @doc "Builds the QA prompt for `job`; `parent` is the parent issue for sub-tickets."
+  @doc """
+  Builds the QA prompt for `job`; `parent` is the parent issue for sub-tickets. A job with
+  `:verification_issue` is a parent walkthrough: `job.issue` is the parent and the worktree is at
+  the base branch head (see `SymphonyElixir.AutoReview.ParentWalkthrough`).
+  """
   @spec prompt(job(), map() | nil) :: String.t()
   def prompt(job, parent) do
     issue = job.issue
 
     """
-    You are the QA agent in Symphony's Auto Review step.
-
-    The executor agent opened a PR for this Linear issue and CI is green. Test the change the way a
-    user would and report what happened. You are in a fresh, disposable worktree checked out at the
-    PR head `#{job.sha}`. Do not edit tracked files, commit, push, open PRs, move the issue, or post
-    comments: Symphony moves the issue and writes the QA report from your answer.
+    #{intro(job)}
 
     Write every artifact (transcripts, logs, screenshots) under `#{@evidence_dir}/` in this worktree
     or under `$TMPDIR`. Attach the files reviewers need with `linear_attach_file` and list the
@@ -150,7 +151,7 @@ defmodule SymphonyElixir.QaAgent do
     Title: #{PromptSafety.linear_issue_title(issue.title || "")}
     Description (walkthrough and acceptance criteria):
     #{PromptSafety.linear_issue_body(issue.description || "")}
-    #{parent_section(parent)}#{dev_server_section(Map.get(job, :dev_server_url))}
+    #{parent_section(parent)}#{verification_section(job)}#{dev_server_section(Map.get(job, :dev_server_url))}
     Playbooks to follow:
 
     #{Enum.map_join(job.playbooks, "\n\n", & &1.prompt)}
@@ -161,7 +162,7 @@ defmodule SymphonyElixir.QaAgent do
     Verdicts:
     - `pass`: every step you ran behaved as the ticket describes.
     - `fail`: at least one step shows a real defect in the change. List each defect in `findings`
-      with the command or action, what you expected, and what happened, so the executor can fix it.
+      with the command or action, what you expected, and what happened, so #{fixer(job)} can fix it.
     - `blocked`: you could not test the change (it does not build, a tool is missing, the
       environment refuses). Put the cause in `reason`.
 
@@ -186,6 +187,45 @@ defmodule SymphonyElixir.QaAgent do
     }
     """
   end
+
+  defp intro(%{verification_issue: %Issue{identifier: identifier}} = job) do
+    """
+    You are the QA agent in Symphony's Auto Review step, running the parent walkthrough.
+
+    Every sub-ticket of this parent Linear issue has merged, and #{identifier} asks for a final check
+    of the parent as a whole. There is no PR: test the merged result the way a user would, judged on
+    the parent's acceptance criteria and user walkthrough and on the verification checklist below,
+    and report what happened. You are in a fresh, disposable worktree checked out at `#{job.sha}`,
+    the head of `#{Map.get(job, :base_ref)}`. Do not edit tracked files, commit, push, open PRs,
+    move issues, or post comments: Symphony writes the QA report from your answer and files each
+    failing step as a new ticket.\
+    """
+  end
+
+  defp intro(job) do
+    """
+    You are the QA agent in Symphony's Auto Review step.
+
+    The executor agent opened a PR for this Linear issue and CI is green. Test the change the way a
+    user would and report what happened. You are in a fresh, disposable worktree checked out at the
+    PR head `#{job.sha}`. Do not edit tracked files, commit, push, open PRs, move the issue, or post
+    comments: Symphony moves the issue and writes the QA report from your answer.\
+    """
+  end
+
+  defp verification_section(%{verification_issue: %Issue{} = verification}) do
+    """
+
+    Verification checklist (#{verification.identifier}, the parent's final verification sub-ticket):
+    #{PromptSafety.linear_issue_title(verification.title || "")}
+    #{PromptSafety.linear_issue_body(verification.description || "")}
+    """
+  end
+
+  defp verification_section(_job), do: ""
+
+  defp fixer(%{verification_issue: %Issue{}}), do: "a follow-up ticket"
+  defp fixer(_job), do: "the executor"
 
   defp parent_section(%{} = parent) do
     """
@@ -598,6 +638,9 @@ defmodule SymphonyElixir.QaAgent do
         driver
     end
   end
+
+  # In a parent walkthrough `job.issue` already is the parent.
+  defp fetch_parent(%{verification_issue: %Issue{}}, _worktree, _settings, _opts), do: nil
 
   defp fetch_parent(job, worktree, settings, opts) do
     case parent_issue(job.issue, worktree, settings, opts) do

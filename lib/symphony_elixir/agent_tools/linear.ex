@@ -17,6 +17,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.Linear.{Client, Issue}
   alias SymphonyElixir.PathSafety
   alias SymphonyElixir.PromptSafety
+  alias SymphonyElixir.RunKind
   alias SymphonyElixir.SensitivePath
   alias SymphonyElixir.SubIssueWait
 
@@ -135,6 +136,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @team_states_query """
   query SymphonyAgentIssueTeamStates($id: String!) {
     issue(id: $id) {
+      title
       labels {
         nodes {
           name
@@ -291,6 +293,15 @@ defmodule SymphonyElixir.AgentTools.Linear do
   mutation SymphonyAgentCreateIssueRelation($input: IssueRelationCreateInput!) {
     issueRelationCreate(input: $input) {
       success
+    }
+  }
+  """
+
+  @issue_by_identifier_query """
+  query SymphonyAgentIssueByIdentifier($id: String!) {
+    issue(id: $id) {
+      id
+      identifier
     }
   }
   """
@@ -559,6 +570,82 @@ defmodule SymphonyElixir.AgentTools.Linear do
   end
 
   @doc """
+  Marks the current issue blocked by existing issues: each identifier in `blocked_by` gets a
+  `blocks` relation to the current issue, so Symphony holds it in `Todo` until every blocker is
+  terminal. A final verification uses it to wait on the gaps it filed. Every identifier is looked
+  up before any relation is created; unknown identifiers and the current issue itself are refused.
+  """
+  @spec add_blocked_by(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
+  def add_blocked_by(context, attrs, opts \\ []) when is_map(attrs) do
+    with {:ok, issue_id} <- current_issue_id(context),
+         {:ok, identifiers} <- validate_add_blocked_by(Map.get(attrs, "blocked_by")),
+         {:ok, blockers} <- resolve_issues_by_identifier(identifiers, opts),
+         :ok <- reject_self_blocker(blockers, issue_id),
+         :ok <- link_blockers_to(issue_id, blockers, opts) do
+      {:ok, %{"blockedBy" => identifiers}}
+    end
+  end
+
+  defp validate_add_blocked_by(blocked_by) do
+    if blocked_by != [] and valid_blocked_by?(blocked_by),
+      do: {:ok, normalize_identifiers(blocked_by)},
+      else: {:error, :invalid_add_blocked_by}
+  end
+
+  defp resolve_issues_by_identifier(identifiers, opts) do
+    with {:ok, resolved} <- lookup_identifiers(identifiers, opts),
+         [] <- for({identifier, nil} <- resolved, do: identifier) do
+      {:ok, resolved}
+    else
+      unknown when is_list(unknown) -> {:error, {:blocked_by_not_found, unknown}}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp lookup_identifiers(identifiers, opts) do
+    identifiers
+    |> Enum.reduce_while({:ok, []}, fn identifier, {:ok, acc} ->
+      case issue_id_for_identifier(identifier, opts) do
+        {:ok, id} -> {:cont, {:ok, [{identifier, id} | acc]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, resolved} -> {:ok, Enum.reverse(resolved)}
+      error -> error
+    end
+  end
+
+  # `{:ok, nil}` when Linear has no such issue.
+  defp issue_id_for_identifier(identifier, opts) do
+    case graphql(@issue_by_identifier_query, %{id: identifier}, opts) do
+      {:ok, %{"data" => %{"issue" => %{"id" => id}}}} when is_binary(id) -> {:ok, id}
+      {:ok, _body} -> {:ok, nil}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp reject_self_blocker(blockers, issue_id) do
+    case Enum.find(blockers, fn {_identifier, id} -> id == issue_id end) do
+      nil -> :ok
+      {identifier, _id} -> {:error, {:blocked_by_self, identifier}}
+    end
+  end
+
+  defp link_blockers_to(issue_id, blockers, opts) do
+    Enum.reduce_while(blockers, :ok, fn {blocker, blocker_id}, :ok ->
+      input = %{"issueId" => blocker_id, "relatedIssueId" => issue_id, "type" => "blocks"}
+
+      with {:ok, body} <- graphql(@create_issue_relation_mutation, %{input: input}, opts),
+           {:ok, _body} <- check_mutation_success(body, "issueRelationCreate") do
+        {:cont, :ok}
+      else
+        {:error, reason} -> {:halt, {:error, {:add_blocked_by_failed, blocker, reason}}}
+      end
+    end)
+  end
+
+  @doc """
   Posts a project update to the current issue's project. Only `body` and an optional `health`
   (`onTrack`, `atRisk`, `offTrack`) come from the caller; the project is read from the current
   issue. At most #{@project_update_cap_per_run} per run.
@@ -716,9 +803,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
     else
       settings = Keyword.get_lazy(opts, :settings, &Config.settings!/0)
 
-      with {:ok, state, labels} <- lookup_team_state(issue_id, normalized, opts),
+      with {:ok, state, pr_less?} <- lookup_team_state(issue_id, normalized, opts),
            {:ok, state_id} <- refuse_human_only_state(state),
-           {:ok, state_id} <- refuse_auto_review_handoff_state(state, state_id, labels, settings) do
+           {:ok, state_id} <- refuse_auto_review_handoff_state(state, state_id, pr_less?, settings) do
         refuse_waiting_on_sub_issues_state(state, state_id, settings)
       end
     end
@@ -736,8 +823,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
          {:ok, states} <- fetch_path(body, ["data", "issue", "team", "states", "nodes"], []) do
       case Enum.find(states, matches?) do
         %{"id" => _} = state ->
-          labels = body |> get_in(["data", "issue", "labels", "nodes"]) |> List.wrap() |> Enum.map(&label_name/1)
-          {:ok, state, labels}
+          {:ok, state, pr_less_issue?(get_in(body, ["data", "issue"]))}
 
         _ ->
           available = states |> Enum.map(& &1["name"]) |> Enum.reject(&is_nil/1)
@@ -754,10 +840,11 @@ defmodule SymphonyElixir.AgentTools.Linear do
 
   # With Auto Review on, Symphony moves the issue on from the PR being open, so an
   # agent asking for `In Review` is refused rather than silently redirected. A `breakdown`
-  # parent opens no PR: its plan goes to `In Review` for a human whatever Auto Review says.
-  defp refuse_auto_review_handoff_state(state, state_id, labels, settings) do
+  # parent and a `Final verification:` ticket open no PR: their result goes to `In Review`
+  # for a human whatever Auto Review says.
+  defp refuse_auto_review_handoff_state(state, state_id, pr_less?, settings) do
     if AutoReview.enabled?(settings) and state_name_matches?(state, AutoReview.review_state()) and
-         not Enum.any?(labels, &Issue.breakdown_label?/1),
+         not pr_less?,
        do: {:error, {:in_review_set_by_auto_review, state["name"], AutoReview.state(settings)}},
        else: {:ok, state_id}
   end
@@ -774,6 +861,11 @@ defmodule SymphonyElixir.AgentTools.Linear do
       nil ->
         {:ok, state_id}
     end
+  end
+
+  defp pr_less_issue?(issue) do
+    labels = issue |> get_in(["labels", "nodes"]) |> List.wrap() |> Enum.map(&label_name/1)
+    Enum.any?(labels, &Issue.breakdown_label?/1) or RunKind.classify(%Issue{title: issue["title"]}) == :final_verification
   end
 
   defp label_name(%{"name" => name}), do: name

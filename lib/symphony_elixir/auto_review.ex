@@ -31,7 +31,7 @@ defmodule SymphonyElixir.AutoReview do
 
   alias SymphonyElixir.{Config, Notifications, QaAgent, QaRunner, RunStore, Tracker, Verification, Workspace}
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.Linear.{Issue, Usage}
   alias SymphonyElixir.QaAgent.{Report, Selection}
 
   @review_state "In Review"
@@ -128,7 +128,11 @@ defmodule SymphonyElixir.AutoReview do
   the runner (`opts[:qa_runner]`, default `SymphonyElixir.QaRunner`).
   """
   @spec on_green(Issue.t(), map(), map(), Schema.t(), keyword()) :: tuple()
-  def on_green(%Issue{id: issue_id} = issue, record, ci_status, %Schema{} = settings, opts) do
+  def on_green(%Issue{} = issue, record, ci_status, %Schema{} = settings, opts) do
+    Usage.with_caller(:auto_review, fn -> handle_green(issue, record, ci_status, settings, opts) end)
+  end
+
+  defp handle_green(%Issue{id: issue_id} = issue, record, ci_status, settings, opts) do
     sha = Map.get(ci_status, :commit_sha)
 
     cond do
@@ -182,6 +186,8 @@ defmodule SymphonyElixir.AutoReview do
   """
   @spec run_qa(map(), keyword()) :: tuple()
   def run_qa(%{issue: issue, record: record, sha: sha, settings: settings} = job, opts) do
+    Usage.put_caller(:auto_review)
+
     outcome =
       case select(issue, record, sha, settings, opts) do
         {:skip, reason} -> %{verdict: :skip, reason: reason}
@@ -218,7 +224,9 @@ defmodule SymphonyElixir.AutoReview do
     end
   end
 
-  defp base_branch(repo_key) do
+  @doc "The branch PRs for `repo_key` merge into (`main` when the repository names none)."
+  @spec base_branch(String.t() | nil) :: String.t()
+  def base_branch(repo_key) do
     case Config.repo_base_branch(repo_key) do
       {:ok, branch} when is_binary(branch) and branch != "" -> branch
       _other -> "main"
@@ -296,18 +304,20 @@ defmodule SymphonyElixir.AutoReview do
     Map.merge(outcome, %{playbooks: kinds, tokens: tokens, runtime_seconds: runtime_seconds, run_id: run_id})
   end
 
-  defp blocked_reason({:qa_token_limit, total, limit}),
+  @doc "The `blocked` reason the QA report gives for a `SymphonyElixir.QaAgent.run/3` error."
+  @spec blocked_reason(term()) :: String.t()
+  def blocked_reason({:qa_token_limit, total, limit}),
     do: "the QA agent reached the per-issue token limit (#{total} of #{limit} tokens)"
 
-  defp blocked_reason({:remote_worker_unsupported, host}), do: "QA does not run on remote workers yet (#{host})"
+  def blocked_reason({:remote_worker_unsupported, host}), do: "QA does not run on remote workers yet (#{host})"
 
-  defp blocked_reason({:qa_dev_server_failed, {:verification_failed, :health_timeout}}),
+  def blocked_reason({:qa_dev_server_failed, {:verification_failed, :health_timeout}}),
     do: "the dev server failed its health check, so the web playbook could not run"
 
-  defp blocked_reason({:qa_dev_server_failed, reason}), do: "the dev server did not start: #{inspect(reason)}"
-  defp blocked_reason({:qa_browser_mcp_invalid, errors}), do: "`auto_review.playbooks.web.browser_mcp` is invalid: #{errors}"
-  defp blocked_reason({:malformed_qa_response, reason}), do: "the QA agent's answer could not be read: #{inspect(reason)}"
-  defp blocked_reason(reason), do: "the QA agent could not finish: #{inspect(reason)}"
+  def blocked_reason({:qa_dev_server_failed, reason}), do: "the dev server did not start: #{inspect(reason)}"
+  def blocked_reason({:qa_browser_mcp_invalid, errors}), do: "`auto_review.playbooks.web.browser_mcp` is invalid: #{errors}"
+  def blocked_reason({:malformed_qa_response, reason}), do: "the QA agent's answer could not be read: #{inspect(reason)}"
+  def blocked_reason(reason), do: "the QA agent could not finish: #{inspect(reason)}"
 
   # Stores the result for the head SHA, rewrites the QA report, then moves the issue.
   # The record is written first so a run dispatched by the move already sees the

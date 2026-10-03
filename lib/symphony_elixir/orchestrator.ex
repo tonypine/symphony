@@ -12,6 +12,7 @@ defmodule SymphonyElixir.Orchestrator do
     AgentRunner,
     AgentTelemetry,
     AuditLog,
+    AutoMerge,
     AutoReview,
     BreakdownReview,
     CiPoller,
@@ -34,11 +35,14 @@ defmodule SymphonyElixir.Orchestrator do
     Workspace
   }
 
-  alias SymphonyElixir.Linear.{Client, Issue, RateLimit}
+  alias SymphonyElixir.Linear.{Client, Issue, RateLimit, TransientRetry, Usage}
   alias SymphonyElixirWeb.ObservabilityPubSub
 
   @continuation_retry_delay_ms 1_000
   @failure_retry_base_ms 10_000
+  # A transient Linear error (timeout, refused connection, 5xx) is not the issue's
+  # fault: retry soon, without failure backoff. A rate limit waits for its pause.
+  @linear_wait_retry_delay_ms 5_000
   # Slightly above the dashboard render interval so "checking now…" can render.
   @poll_transition_render_delay_ms 20
   @default_transcript_buffer_size 200
@@ -103,6 +107,7 @@ defmodule SymphonyElixir.Orchestrator do
       breakdown_reviews: %{},
       merging_ci_waits: %{},
       epic_lanes: nil,
+      blocked: [],
       slot_waiting: %{},
       setup_failed: %{},
       pause: %{paused: false, reason: nil, paused_at: nil},
@@ -128,6 +133,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   @impl true
   def init(_opts) do
+    Usage.put_caller(:orchestrator)
     now_ms = System.monotonic_time(:millisecond)
     config = Config.settings!()
     repo_key = Config.repo_key!()
@@ -1032,6 +1038,7 @@ defmodule SymphonyElixir.Orchestrator do
           |> prune_quality_gate_cache_to_active(issues)
           |> clear_running_quality_gate_cache_entries()
           |> put_epic_lanes(issues)
+          |> put_blocked(issues)
           |> release_merging_ci_waits(issues)
 
         if available_slots(state) > 0 or available_finishing_slots(state) > 0 do
@@ -1445,6 +1452,10 @@ defmodule SymphonyElixir.Orchestrator do
   @doc false
   @spec put_epic_lanes_for_test(State.t(), [Issue.t()]) :: State.t()
   def put_epic_lanes_for_test(%State{} = state, issues) when is_list(issues), do: put_epic_lanes(state, issues)
+
+  @doc false
+  @spec put_blocked_for_test(State.t(), [Issue.t()]) :: State.t()
+  def put_blocked_for_test(%State{} = state, issues) when is_list(issues), do: put_blocked(state, issues)
 
   @doc false
   @spec review_breakdown_parents_for_test([Issue.t()], term()) :: term()
@@ -2765,7 +2776,7 @@ defmodule SymphonyElixir.Orchestrator do
       !issue_held?(issue, terminal_states) and
       !replan_pending?(issue, state) and
       !post_pr_quiet_active_issue?(issue, state) and
-      !Map.has_key?(state.merging_ci_waits, issue.id) and
+      !landing_held?(issue, state) and
       !MapSet.member?(state.claimed, issue.id) and
       !MapSet.member?(state.budget_exhausted, issue.id) and
       !setup_failed_suppressed?(state.setup_failed, issue) and
@@ -2781,6 +2792,27 @@ defmodule SymphonyElixir.Orchestrator do
     max_total = state.max_concurrent_agents || Config.settings!().agent.max_concurrent_agents
     %{state | epic_lanes: EpicLanes.plan(issues, max_total, Config.settings!().agent.epic_lanes, terminal_state_set())}
   end
+
+  # Candidates held in `Todo` by open blockers, recomputed on every poll tick for the snapshot.
+  defp put_blocked(%State{} = state, issues) do
+    terminal_states = Config.settings!().tracker.terminal_states
+
+    blocked =
+      for %Issue{} = issue <- issues, Issue.blocked?(issue, terminal_states) do
+        %{
+          issue_id: issue.id,
+          identifier: issue.identifier,
+          title: issue.title,
+          state: issue.state,
+          blockers: issue |> Issue.open_blockers(terminal_states) |> Enum.map(&blocker_snapshot/1)
+        }
+      end
+
+    %{state | blocked: Enum.sort_by(blocked, & &1.identifier)}
+  end
+
+  defp blocker_snapshot(%{} = blocker), do: %{identifier: Map.get(blocker, :identifier), state: Map.get(blocker, :state)}
+  defp blocker_snapshot(_blocker), do: %{identifier: nil, state: nil}
 
   defp epic_lane_slot_available?(%Issue{id: issue_id}, %State{} = state) do
     EpicLanes.slot_for(state.epic_lanes, issue_id, work_running_ids(state.running)) != :none
@@ -2855,32 +2887,16 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp active_retry_issue?(_issue, _terminal_states), do: false
 
+  # A `Todo` issue waits until every blocker is terminal (see `Issue.blocked?/2`).
   # A `breakdown` parent waits while its sub-issues are worked, in the waiting state or, when that
   # is off, in its active state; it is dispatched again for close-out once every sub-issue is terminal.
   # In `Rework` its plan was rejected, so it is broken down again whatever its sub-issues' states.
   defp issue_held?(issue, terminal_states) do
-    todo_issue_blocked_by_non_terminal?(issue, terminal_states) or
+    Issue.blocked?(issue, terminal_states) or
       (not Issue.replanning?(issue) and
          (Issue.waiting_on_sub_issues?(issue, terminal_states) or
             SubIssueWait.held?(issue, terminal_states, Config.settings!())))
   end
-
-  defp todo_issue_blocked_by_non_terminal?(
-         %Issue{state: issue_state, blocked_by: blockers},
-         terminal_states
-       )
-       when is_binary(issue_state) and is_list(blockers) do
-    normalize_issue_state(issue_state) == "todo" and
-      Enum.any?(blockers, fn
-        %{state: blocker_state} when is_binary(blocker_state) ->
-          !terminal_issue_state?(blocker_state, terminal_states)
-
-        _ ->
-          true
-      end)
-  end
-
-  defp todo_issue_blocked_by_non_terminal?(_issue, _terminal_states), do: false
 
   defp terminal_issue_state?(state_name, terminal_states) when is_binary(state_name) do
     MapSet.member?(terminal_states, normalize_issue_state(state_name))
@@ -2941,13 +2957,35 @@ defmodule SymphonyElixir.Orchestrator do
 
         state
 
-      {:error, {:linear_rate_limited, _reset_ms}} ->
-        Logger.debug("Skipping dispatch; Linear is rate-limited for #{issue_context(issue)}")
-        state
-
       {:error, reason} ->
-        Logger.warning("Skipping dispatch; issue refresh failed for #{issue_context(issue)}: #{inspect(reason)}")
-        state
+        skip_dispatch_after_refresh_failure(state, issue, attempt, preferred_worker_host, repo_key, reason)
+    end
+  end
+
+  # A retry that skips dispatch here has already left the retry queue while its
+  # claim stays; schedule it again so the issue is not stuck claimed with no retry.
+  defp skip_dispatch_after_refresh_failure(%State{} = state, issue, attempt, worker_host, repo_key, reason) do
+    case reason do
+      {:linear_rate_limited, _reset_ms} -> Logger.debug("Skipping dispatch; Linear is rate-limited for #{issue_context(issue)}")
+      reason -> Logger.warning("Skipping dispatch; issue refresh failed for #{issue_context(issue)}: #{inspect(reason)}")
+    end
+
+    if retry_attempt?(attempt) do
+      metadata =
+        linear_wait_metadata(
+          %{
+            identifier: issue.identifier,
+            title: issue.title,
+            worker_host: worker_host,
+            repo_key: repo_key,
+            error: dispatch_refresh_error(reason)
+          },
+          reason
+        )
+
+      schedule_issue_retry(state, issue.id, retry_attempt_after_refresh_failure(attempt, reason), metadata)
+    else
+      state
     end
   end
 
@@ -3269,7 +3307,9 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp revalidate_issue_for_dispatch(issue, _issue_fetcher, _terminal_states, _opts), do: {:ok, issue}
 
-  defp dispatch_revalidated_issue?(%Issue{} = issue, terminal_states, true), do: active_retry_issue?(issue, terminal_states)
+  defp dispatch_revalidated_issue?(%Issue{} = issue, terminal_states, true),
+    do: active_retry_issue?(issue, terminal_states) and !auto_merge_landing?(issue)
+
   defp dispatch_revalidated_issue?(%Issue{} = issue, terminal_states, _sticky_route?), do: retry_candidate_issue?(issue, terminal_states)
 
   defp complete_issue(%State{} = state, issue_id, running_entry) do
@@ -3391,14 +3431,17 @@ defmodule SymphonyElixir.Orchestrator do
        state,
        issue_id,
        retry_attempt_after_refresh_failure(attempt, reason),
-       Map.merge(metadata, %{error: "retry issue refresh failed: #{inspect(reason)}"})
+       metadata
+       |> Map.merge(%{error: "retry issue refresh failed: #{inspect(reason)}"})
+       |> linear_wait_metadata(reason)
      )}
   end
 
-  # A Linear rate limit is not the issue's fault; keep its attempt (and backoff)
-  # where it was and let schedule_issue_retry/4 wait for the pause to end.
-  defp retry_attempt_after_refresh_failure(attempt, {:linear_rate_limited, _reset_ms}), do: attempt
-  defp retry_attempt_after_refresh_failure(attempt, _reason), do: attempt + 1
+  # A Linear rate limit or a dropped connection is not the issue's fault; keep its
+  # attempt where it was and let schedule_issue_retry/4 wait for Linear.
+  defp retry_attempt_after_refresh_failure(attempt, reason) do
+    if TransientRetry.transient?(reason), do: retry_attempt(attempt), else: retry_attempt(attempt) + 1
+  end
 
   defp handle_retry_issue_sync_for_test(%State{} = state, issue_id, attempt, metadata, issue_fetcher)
        when is_function(issue_fetcher, 1) do
@@ -3473,7 +3516,7 @@ defmodule SymphonyElixir.Orchestrator do
     post_pr_state = AutoReview.post_pr_state(Config.settings!())
     Logger.info("Issue has an opened PR and no rework signal; moving to #{post_pr_state}: #{issue_context(issue)}")
 
-    case Tracker.update_issue_state(issue_id, post_pr_state) do
+    case Usage.with_caller(:post_pr_transition, fn -> Tracker.update_issue_state(issue_id, post_pr_state) end) do
       :ok ->
         reviewed_issue = %Issue{issue | state: post_pr_state, updated_at: DateTime.utc_now()}
 
@@ -3492,12 +3535,30 @@ defmodule SymphonyElixir.Orchestrator do
            state,
            issue_id,
            attempt,
-           Map.merge(metadata, %{
+           metadata
+           |> Map.merge(%{
              identifier: issue.identifier,
              title: issue.title,
-             error: "failed to move post-PR issue to #{post_pr_state}: #{inspect(reason)}"
+             error: post_pr_move_error(post_pr_state, reason)
            })
+           |> linear_wait_metadata(reason)
          )}
+    end
+  end
+
+  defp dispatch_refresh_error(reason) do
+    if TransientRetry.transient?(reason) do
+      "waiting for Linear before dispatch: #{inspect(reason)}"
+    else
+      "retry issue refresh failed: #{inspect(reason)}"
+    end
+  end
+
+  defp post_pr_move_error(post_pr_state, reason) do
+    if TransientRetry.transient?(reason) do
+      "waiting for Linear to move post-PR issue to #{post_pr_state}: #{inspect(reason)}"
+    else
+      "failed to move post-PR issue to #{post_pr_state}: #{inspect(reason)}"
     end
   end
 
@@ -4173,16 +4234,22 @@ defmodule SymphonyElixir.Orchestrator do
   defp setup_failed_suppressed?(_setup_failed, _issue), do: false
 
   defp retry_delay(attempt, metadata) when is_integer(attempt) and attempt > 0 and is_map(metadata) do
-    if retry_delay_type(metadata) == :continuation and attempt == 1 do
-      @continuation_retry_delay_ms
-    else
-      failure_retry_delay(attempt)
+    case retry_delay_type(metadata) do
+      :continuation when attempt == 1 -> @continuation_retry_delay_ms
+      :linear_wait -> @linear_wait_retry_delay_ms
+      _delay_type -> failure_retry_delay(attempt)
     end
   end
 
   defp retry_delay_type(%{delay_type: :continuation}), do: :continuation
   defp retry_delay_type(%{delay_type: "continuation"}), do: :continuation
+  defp retry_delay_type(%{delay_type: :linear_wait}), do: :linear_wait
+  defp retry_delay_type(%{delay_type: "linear_wait"}), do: :linear_wait
   defp retry_delay_type(_metadata), do: nil
+
+  defp linear_wait_metadata(metadata, reason) do
+    if TransientRetry.transient?(reason), do: Map.put(metadata, :delay_type, :linear_wait), else: metadata
+  end
 
   defp failure_retry_delay(attempt) do
     max_delay_power = min(attempt - 1, 10)
@@ -5720,7 +5787,9 @@ defmodule SymphonyElixir.Orchestrator do
       budget: budget_snapshot(state),
       dispatch_state: dispatch_state_snapshot(state),
       epic_lanes: EpicLanes.snapshot(state.epic_lanes, epic_lane_running(state.running)),
+      blocked: state.blocked || [],
       finishing: finishing_snapshot(state.running),
+      auto_merge: PrReviewPoller.auto_merge_statuses(),
       slot_waiting: slot_waiting_snapshot(state.slot_waiting) ++ merging_ci_waiting_snapshot(state.merging_ci_waits),
       pollers: poller_status_snapshot(),
       polling: %{
@@ -5795,7 +5864,8 @@ defmodule SymphonyElixir.Orchestrator do
       poll_interval_multiplier: status.poll_interval_multiplier,
       requests_last_poll: state.linear_requests_last_poll,
       requests_remaining: status.requests_remaining,
-      requests_limit: status.requests_limit
+      requests_limit: status.requests_limit,
+      usage: Usage.snapshot(now_ms)
     }
   end
 
@@ -6555,7 +6625,24 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp retry_candidate_issue?(%Issue{} = issue, terminal_states) do
     candidate_issue?(issue, active_state_set(), terminal_states) and
-      !issue_held?(issue, terminal_states)
+      !issue_held?(issue, terminal_states) and
+      !auto_merge_landing?(issue)
+  end
+
+  # A `Merging` issue waiting for CI after its landing run, or landed by GitHub auto-merge.
+  defp landing_held?(%Issue{} = issue, %State{} = state) do
+    Map.has_key?(state.merging_ci_waits, issue.id) or auto_merge_landing?(issue)
+  end
+
+  # GitHub auto-merge lands a `Merging` issue without an agent (see AutoMerge); the landing
+  # agent only runs when the PR poller falls back to it.
+  defp auto_merge_landing?(%Issue{} = issue) do
+    if AutoMerge.owns_issue?(issue) do
+      Logger.debug("Skipping dispatch; GitHub auto-merge is landing #{issue_context(issue)}")
+      true
+    else
+      false
+    end
   end
 
   defp post_pr_quiet_active_issue?(%Issue{id: issue_id} = issue, %State{} = state)

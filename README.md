@@ -13,8 +13,9 @@ professional work.
 **Direction:** run agents from more than one model provider (Claude already runs alongside Codex),
 bring in improvements from community forks, and shape the workflow to fit how I work.
 
-**Changes so far:** agents can merge their own PR through the scoped `github_merge_pull_request`
-tool once a human moves the issue to `Merging`.
+**Changes so far:** once a human moves an issue to `Merging`, Symphony lands its PR with GitHub
+auto-merge, without an agent. When auto-merge can't be used, an agent merges it through the scoped
+`github_merge_pull_request` tool.
 
 Symphony runs coding agents (Codex or Claude) on your Linear issues and GitHub pull requests, so
 your team manages the work instead of babysitting the agents.
@@ -85,10 +86,13 @@ branch instead of opening a second one. If a claimed issue moves to a terminal s
   plan by moving the parent to `Waiting on sub-tickets` and Symphony promotes every `Backlog`
   sub-ticket to `Todo`; move it to `Rework` to have the plan made again. The parent waits without
   being re-dispatched until every sub-ticket is closed, then closes out with a Linear project update.
+  With Auto Review on, the final verification ticket is a QA pass over the merged parent: the report
+  goes on the parent and each failing step becomes a new ticket that blocks the verification
+  ticket, which waits in `Todo` and runs again once those tickets are done.
 - **Executor + reviewer runs** — an optional read-only reviewer agent gates the executor's push.
 - **Docker runner** — host Symphony with mounted repos, state, logs, and agent credentials.
 - **macOS menu bar app** — start, stop, pause, and resume Symphony from the menu bar, with its status in
-  the icon, the Linear key in the Keychain, optional launch at login, and updates from the menu. See
+  the icon, the Linear key in a file only you can read, optional launch at login, and updates from the menu. See
   [macos/README.md](macos/README.md).
 
 ![Symphony Web dashboard screenshot](.github/media/elixir-screenshot-web.png)
@@ -118,8 +122,8 @@ Symphony, so you need no checkout, `mise` or Elixir.
 3. **Write a workflow per repo.** Invoke the `symphony-init-workflow` skill from Codex or Claude in
    each target repo; the agent inspects the repo and writes a tailored `WORKFLOW.md`.
 4. **Start Symphony.** In the app's Settings window, choose your `symphony.yml` and paste a Linear
-   personal API key (Settings → Security & access → Personal API keys); the app keeps it in the login
-   Keychain. Click Save, then choose **Start Symphony** from the menu.
+   personal API key (Settings → Security & access → Personal API keys); the app keeps it in a file
+   only you can read. Click Save, then choose **Start Symphony** from the menu.
 
 The app updates itself from the menu and keeps the version it replaced for rollback. See
 [macos/README.md](macos/README.md) for first run, Restart, Update, Rollback, and Development mode.

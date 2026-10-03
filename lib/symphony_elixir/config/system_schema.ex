@@ -118,6 +118,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "observability.snapshot_publish_ms" => "dashboard.snapshot_publish_ms",
     "observability.transcript_buffer_size" => "dashboard.transcript_buffer_size",
     "polling.interval_ms" => "issues.poll_interval_ms",
+    "pr_review.auto_merge" => "pull_requests.auto_merge",
     "pr_review.auto_reply" => "pull_requests.review_comments.reply_after_addressing",
     "pr_review.auto_request_review" => "pull_requests.review_comments.request_review_after_push",
     "pr_review.cooldown_minutes" => "pull_requests.review_comments.rework_delay_minutes",
@@ -735,7 +736,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   defp normalize_pull_requests(config) do
     with {:ok, config} <- section_map(config, "pull_requests"),
-         :ok <- reject_unknown_section_keys(config, ~w(enabled poll_interval_ms review_comments checks learnings), "pull_requests"),
+         :ok <- reject_unknown_section_keys(config, ~w(enabled poll_interval_ms auto_merge review_comments checks learnings), "pull_requests"),
          {:ok, review_comments} <- section_map(Map.get(config, "review_comments", %{}), "pull_requests.review_comments"),
          :ok <-
            reject_unknown_section_keys(
@@ -754,6 +755,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
         %{}
         |> maybe_put("mode", pr_enabled)
         |> maybe_put("poll_interval_ms", Map.get(config, "poll_interval_ms"))
+        |> maybe_put("auto_merge", Map.get(config, "auto_merge"))
         |> maybe_put("cooldown_minutes", Map.get(review_comments, "rework_delay_minutes"))
         |> maybe_put("stale_days", Map.get(review_comments, "stale_after_days"))
         |> maybe_put("ignored_users", Map.get(review_comments, "ignored_reviewers"))

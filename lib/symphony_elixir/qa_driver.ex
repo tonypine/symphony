@@ -19,7 +19,7 @@ defmodule SymphonyElixir.QaDriver do
     still matches what the build produced and the worktree is as that build
     left it, so later worktree edits cannot change what runs. The app always
     gets `SYMPHONY_BAR_QA_ROOT` pointing at the private directory, so it never
-    touches real settings or the login Keychain;
+    touches real settings or secrets;
   - `qa_quit_app`, `qa_screenshot`, `qa_ax_tree`, `qa_ax_press` and
     `qa_ax_set_value` accept only a PID this driver launched and that is still
     running;

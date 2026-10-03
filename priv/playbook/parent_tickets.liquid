@@ -39,7 +39,9 @@ Rules for every `breakdown` parent run:
    `blocked_by` listing every sibling sub-ticket. Its description lists every
    requirement from the parent ticket and the acceptance criteria of each sibling
    sub-ticket as a checklist, and says it should be promoted only after every
-   other sub-ticket is `Done`.
+   other sub-ticket is `Done`. When the parent has a `## User walkthrough`, copy
+   its numbered steps and expected results under an
+   `## Auto Review: parent walkthrough` heading in this description.
 4. Record the plan and the sub-ticket identifiers in the workpad `Notes`, move the
    parent to `In Review` with `linear_update_state`, and end the turn. The human
    reviewing the plan reads it there.
@@ -68,11 +70,21 @@ sub-issue is terminal, outside `Rework`.
 
 ### Final verification run (title starts with `Final verification:`)
 
+With Auto Review on, Symphony runs this ticket as the Auto Review parent walkthrough
+instead of starting an agent: a QA agent tests the default branch against the
+parent's acceptance criteria and walkthrough, the QA report goes on the parent, and
+each failing step is filed as a sub-ticket that blocks this one, which stays in `Todo`.
+The steps below apply when it does not
+(for example with Auto Review off, a `qa:skip` label, or no parent).
+
 1. Do not open a PR. Check each requirement in the description against the default
    branch (code, tests, docs, behaviour) and record a requirement-by-requirement
    checklist with evidence in the workpad.
-2. If anything is missing, file each gap with `linear_create_subissue`, list them in
-   the workpad, and move this ticket to `Backlog`; a human re-promotes it once the
-   gaps are closed.
+2. If anything is missing, file each gap with `linear_create_subissue` (or find the
+   existing ticket that covers it), mark this ticket blocked by every gap with
+   `linear_add_blocked_by`, list them in the workpad, move this ticket to `Todo`, and
+   end the turn. Symphony holds it there and runs it again once every gap is `Done`.
+   If a gap cannot be linked, move this ticket to `Backlog` instead and say why in
+   the workpad, so a human re-promotes it.
 3. When every requirement is met, move this ticket to `In Review` for a human to
    sign off and move it to `Done`. The parent's close-out run follows.

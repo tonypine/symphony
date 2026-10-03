@@ -112,6 +112,8 @@ pre_push_review:
 pull_requests:
   enabled: true
   poll_interval_ms: 30000
+  # Land Merging tickets with GitHub auto-merge instead of a landing agent.
+  # auto_merge: true
   review_comments:
     rework_delay_minutes: 1
     reply_after_addressing: true
