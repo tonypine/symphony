@@ -91,21 +91,32 @@ public struct SecretSettings: Equatable {
     /// Environment variable name, and Keychain account, of the Linear API key.
     public static let linearAPIKeyName = "LINEAR_API_KEY"
 
+    /// Environment variable name, and Keychain account, of the OpenRouter API key.
+    public static let openRouterAPIKeyName = "OPENROUTER_API_KEY"
+
+    /// Names set by their own fields, never as extra variables.
+    public static let reservedNames: Set<String> = [linearAPIKeyName, openRouterAPIKeyName]
+
     public var linearAPIKey: String
+
+    /// Optional; empty means Symphony gets no `OPENROUTER_API_KEY`.
+    public var openRouterAPIKey: String
 
     /// Extra environment variables, sorted by name when loaded.
     public var extraEnvironment: [EnvironmentVariable]
 
-    public init(linearAPIKey: String = "", extraEnvironment: [EnvironmentVariable] = []) {
+    public init(linearAPIKey: String = "", openRouterAPIKey: String = "", extraEnvironment: [EnvironmentVariable] = []) {
         self.linearAPIKey = linearAPIKey
+        self.openRouterAPIKey = openRouterAPIKey
         self.extraEnvironment = extraEnvironment
     }
 
-    /// The same secrets with whitespace trimmed from the key and names, and fully blank extra rows dropped.
+    /// The same secrets with whitespace trimmed from the keys and names, and fully blank extra rows dropped.
     /// Extra values are kept as typed.
     public func trimmed() -> SecretSettings {
         SecretSettings(
             linearAPIKey: linearAPIKey.trimmingWhitespace(),
+            openRouterAPIKey: openRouterAPIKey.trimmingWhitespace(),
             extraEnvironment: extraEnvironment.compactMap { variable in
                 let name = variable.name.trimmingWhitespace()
                 if name.isEmpty && variable.value.isEmpty { return nil }

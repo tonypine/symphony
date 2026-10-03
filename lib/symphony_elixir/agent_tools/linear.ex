@@ -251,7 +251,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   """
 
   @subissue_scope_query """
-  query SymphonyAgentSubissueScope($id: String!) {
+  query SymphonyAgentSubissueScope($id: String!, $first: Int!) {
     issue(id: $id) {
       id
       team {
@@ -266,6 +266,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
       }
       project { id }
       assignee { id }
+      children(first: $first) {
+        nodes { id identifier }
+      }
     }
   }
   """
@@ -280,6 +283,14 @@ defmodule SymphonyElixir.AgentTools.Linear do
         url
         state { id name type }
       }
+    }
+  }
+  """
+
+  @create_issue_relation_mutation """
+  mutation SymphonyAgentCreateIssueRelation($input: IssueRelationCreateInput!) {
+    issueRelationCreate(input: $input) {
+      success
     }
   }
   """
@@ -510,15 +521,20 @@ defmodule SymphonyElixir.AgentTools.Linear do
 
   @doc """
   Creates a Backlog child of the current issue in the same team and project, assigned to the same
-  assignee. Only `title`, `description`, and `priority` come from the caller; everything that
-  scopes the new issue is read from the current issue. At most #{@subissue_cap_per_run} per run.
+  assignee. Only `title`, `description`, `priority`, and `blocked_by` come from the caller;
+  everything that scopes the new issue is read from the current issue. At most
+  #{@subissue_cap_per_run} per run.
+
+  `blocked_by` lists identifiers of sibling sub-issues (the current issue's existing children, or
+  sub-issues this run created) that block the new one. Unknown identifiers are refused before
+  anything is created; the `blocks` relations are created right after the issue.
   """
   @spec create_subissue(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def create_subissue(context, attrs, opts \\ []) when is_map(attrs) do
     registry = Map.get(context, :comment_registry)
 
     with {:ok, issue_id} <- current_issue_id(context),
-         {:ok, title, description, priority} <- validate_subissue_fields(attrs),
+         {:ok, title, description, priority, blocked_by} <- validate_subissue_fields(attrs),
          :ok <-
            SecretScanner.reject_fields_if_secret_pattern(
              [title: title, description: description],
@@ -527,9 +543,13 @@ defmodule SymphonyElixir.AgentTools.Linear do
              opts
            ),
          :ok <- CommentRegistry.reserve_subissue(registry, @subissue_cap_per_run) do
-      case create_backlog_child(issue_id, title, description, priority, opts) do
+      case create_backlog_child(issue_id, {title, description, priority, blocked_by}, registry, opts) do
         {:ok, response} ->
           {:ok, response}
+
+        # The issue exists by then, so its slot stays used.
+        {:error, {:blocked_by_relation_failed, _identifier, _blocker, _reason}} = error ->
+          error
 
         {:error, _reason} = error ->
           CommentRegistry.release_subissue(registry)
@@ -586,23 +606,80 @@ defmodule SymphonyElixir.AgentTools.Linear do
     title = Map.get(attrs, "title")
     description = Map.get(attrs, "description")
     priority = Map.get(attrs, "priority")
+    blocked_by = Map.get(attrs, "blocked_by") || []
 
     cond do
       not is_binary(title) or String.trim(title) == "" -> {:error, :invalid_subissue_title}
       not is_binary(description) -> {:error, :invalid_subissue_description}
       not (is_nil(priority) or priority in 0..4) -> {:error, :invalid_subissue_priority}
-      true -> {:ok, String.trim(title), description, priority}
+      not valid_blocked_by?(blocked_by) -> {:error, :invalid_subissue_blocked_by}
+      true -> {:ok, String.trim(title), description, priority, normalize_identifiers(blocked_by)}
     end
   end
 
-  defp create_backlog_child(issue_id, title, description, priority, opts) do
-    with {:ok, body} <- graphql(@subissue_scope_query, %{id: issue_id}, opts),
+  defp valid_blocked_by?(blocked_by) do
+    is_list(blocked_by) and Enum.all?(blocked_by, &(is_binary(&1) and String.trim(&1) != ""))
+  end
+
+  defp normalize_identifiers(identifiers) do
+    identifiers |> Enum.map(&(&1 |> String.trim() |> String.upcase())) |> Enum.uniq()
+  end
+
+  defp create_backlog_child(issue_id, {title, description, priority, blocked_by}, registry, opts) do
+    with {:ok, body} <- graphql(@subissue_scope_query, %{id: issue_id, first: @related_issue_first}, opts),
          {:ok, parent} <- fetch_path(body, ["data", "issue"], :issue_not_found),
          {:ok, states} <- fetch_path(parent, ["team", "states", "nodes"], []),
          {:ok, state_id} <- backlog_state_id(states),
+         {:ok, blockers} <- resolve_blockers(blocked_by, parent, registry),
          input = subissue_input(parent, state_id, title, description, priority),
-         {:ok, response} <- graphql(@create_subissue_mutation, %{input: input}, opts) do
-      check_mutation_success(response, "issueCreate")
+         {:ok, response} <- graphql(@create_subissue_mutation, %{input: input}, opts),
+         {:ok, response} <- check_mutation_success(response, "issueCreate"),
+         {:ok, identifier, new_id} <- created_subissue(response) do
+      CommentRegistry.record_subissue(registry, identifier, new_id)
+      link_blockers(response, {identifier, new_id}, blockers, opts)
+    end
+  end
+
+  defp created_subissue(response) do
+    case get_in(response, ["data", "issueCreate", "issue"]) do
+      %{"id" => id, "identifier" => identifier} when is_binary(id) and is_binary(identifier) -> {:ok, identifier, id}
+      _ -> {:error, :subissue_not_returned}
+    end
+  end
+
+  # Only siblings may block the new sub-issue: the parent's children, plus the ones this run created
+  # in case Linear has not listed them yet.
+  defp resolve_blockers([], _parent, _registry), do: {:ok, []}
+
+  defp resolve_blockers(identifiers, parent, registry) do
+    siblings =
+      parent
+      |> get_in(["children", "nodes"])
+      |> List.wrap()
+      |> Map.new(&{&1["identifier"], &1["id"]})
+      |> Map.merge(CommentRegistry.created_subissues(registry))
+
+    case Enum.reject(identifiers, &Map.has_key?(siblings, &1)) do
+      [] -> {:ok, Enum.map(identifiers, &{&1, Map.fetch!(siblings, &1)})}
+      unknown -> {:error, {:blocked_by_not_sibling, unknown, siblings |> Map.keys() |> Enum.sort()}}
+    end
+  end
+
+  defp link_blockers(response, {identifier, new_id}, blockers, opts) do
+    linked =
+      Enum.reduce_while(blockers, :ok, fn {blocker, blocker_id}, :ok ->
+        input = %{"issueId" => blocker_id, "relatedIssueId" => new_id, "type" => "blocks"}
+
+        with {:ok, body} <- graphql(@create_issue_relation_mutation, %{input: input}, opts),
+             {:ok, _body} <- check_mutation_success(body, "issueRelationCreate") do
+          {:cont, :ok}
+        else
+          {:error, reason} -> {:halt, {:error, {:blocked_by_relation_failed, identifier, blocker, reason}}}
+        end
+      end)
+
+    with :ok <- linked do
+      {:ok, put_in(response, ["data", "issueCreate", "issue", "blockedBy"], Enum.map(blockers, &elem(&1, 0)))}
     end
   end
 
@@ -641,8 +718,8 @@ defmodule SymphonyElixir.AgentTools.Linear do
 
       with {:ok, state, labels} <- lookup_team_state(issue_id, normalized, opts),
            {:ok, state_id} <- refuse_human_only_state(state),
-           {:ok, state_id} <- refuse_auto_review_handoff_state(state, state_id, settings) do
-        refuse_waiting_on_sub_issues_state(state, state_id, labels, settings)
+           {:ok, state_id} <- refuse_auto_review_handoff_state(state, state_id, labels, settings) do
+        refuse_waiting_on_sub_issues_state(state, state_id, settings)
       end
     end
   end
@@ -676,30 +753,26 @@ defmodule SymphonyElixir.AgentTools.Linear do
   end
 
   # With Auto Review on, Symphony moves the issue on from the PR being open, so an
-  # agent asking for `In Review` is refused rather than silently redirected.
-  defp refuse_auto_review_handoff_state(state, state_id, settings) do
-    if AutoReview.enabled?(settings) and state_name_matches?(state, AutoReview.review_state()),
-      do: {:error, {:in_review_set_by_auto_review, state["name"], AutoReview.state(settings)}},
-      else: {:ok, state_id}
+  # agent asking for `In Review` is refused rather than silently redirected. A `breakdown`
+  # parent opens no PR: its plan goes to `In Review` for a human whatever Auto Review says.
+  defp refuse_auto_review_handoff_state(state, state_id, labels, settings) do
+    if AutoReview.enabled?(settings) and state_name_matches?(state, AutoReview.review_state()) and
+         not Enum.any?(labels, &Issue.breakdown_label?/1),
+       do: {:error, {:in_review_set_by_auto_review, state["name"], AutoReview.state(settings)}},
+       else: {:ok, state_id}
   end
 
-  # Only a `breakdown` parent parks in the waiting state, and only while that state is on; otherwise
-  # Symphony would hold the issue there with nothing to bring it back.
-  defp refuse_waiting_on_sub_issues_state(state, state_id, labels, settings) do
-    waiting_state = SubIssueWait.state(settings)
+  # Moving a `breakdown` parent from `In Review` to the waiting state approves its plan and
+  # promotes its sub-tickets, so only a human does it.
+  defp refuse_waiting_on_sub_issues_state(state, state_id, settings) do
+    case SubIssueWait.state(settings) do
+      waiting_state when is_binary(waiting_state) ->
+        if state_name_matches?(state, waiting_state),
+          do: {:error, {:waiting_on_sub_issues_state_requires_human_approval, state["name"]}},
+          else: {:ok, state_id}
 
-    cond do
-      is_nil(waiting_state) or not state_name_matches?(state, waiting_state) ->
+      nil ->
         {:ok, state_id}
-
-      not SubIssueWait.enabled?(settings) ->
-        {:error, {:waiting_on_sub_issues_state_disabled, state["name"]}}
-
-      Enum.any?(labels, &Issue.breakdown_label?/1) ->
-        {:ok, state_id}
-
-      true ->
-        {:error, {:waiting_on_sub_issues_state_for_breakdown_only, state["name"]}}
     end
   end
 

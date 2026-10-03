@@ -39,11 +39,14 @@ arguments from prompts.
   uploads and attaches a file only when the path resolves inside the workspace.
   Uploads are private by default. Set `make_public` to `true` only for artifacts
   intentionally safe to expose through a world-readable Linear CDN URL.
-- `linear_create_subissue` with `{"title": "...", "description": "...", "priority": 3}`:
+- `linear_create_subissue` with `{"title": "...", "description": "...", "priority": 3, "blocked_by": ["TP-12"]}`:
   creates a child of the current issue in its team and project, assigned to its
   assignee, in `Backlog`. `priority` is optional (0 none, 1 urgent, 2 high,
-  3 medium, 4 low). Title and description are secret-scanned. At most 10 per
-  run. Use it to split a ticket into sub-tickets or to file out-of-scope work.
+  3 medium, 4 low). `blocked_by` is optional: identifiers of the current issue's
+  sub-issues (existing ones or ones this run created) that block the new one;
+  any other identifier is refused before the issue is created. Title and
+  description are secret-scanned. At most 10 per run. Use it to split a ticket
+  into sub-tickets or to file out-of-scope work.
 - `linear_create_project_update` with `{"body": "...", "health": "onTrack"}`:
   posts an update to the current issue's project. `health` is optional
   (`onTrack`, `atRisk`, `offTrack`). The body is secret-scanned. At most one per

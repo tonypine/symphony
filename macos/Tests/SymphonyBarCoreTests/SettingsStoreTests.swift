@@ -107,6 +107,53 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(keychain.values[SecretSettings.linearAPIKeyName], "lin_api_secret")
     }
 
+    func testOpenRouterKeyRoundTripsThroughTheKeychainAndIsNotAnExtraVariable() throws {
+        let keychain = MemorySecretStore()
+        try SettingsStore(defaults: MemoryKeyValueStore(), secrets: keychain).saveSecrets(
+            SecretSettings(
+                linearAPIKey: "lin_api_secret",
+                openRouterAPIKey: "sk-or-v1-secret",
+                extraEnvironment: [EnvironmentVariable(name: "GITHUB_TOKEN", value: "ghp-a")]
+            )
+        )
+
+        XCTAssertEqual(keychain.values[SecretSettings.openRouterAPIKeyName], "sk-or-v1-secret")
+        let loaded = try SettingsStore(defaults: MemoryKeyValueStore(), secrets: keychain).loadSecrets()
+        XCTAssertEqual(loaded.openRouterAPIKey, "sk-or-v1-secret")
+        XCTAssertEqual(loaded.extraEnvironment, [EnvironmentVariable(name: "GITHUB_TOKEN", value: "ghp-a")])
+        XCTAssertEqual(SecretSettings.openRouterAPIKeyName, "OPENROUTER_API_KEY")
+    }
+
+    func testOpenRouterKeyStoredAsAnExtraVariableLoadsIntoItsField() throws {
+        let keychain = MemorySecretStore()
+        keychain.values = [SecretSettings.linearAPIKeyName: "one", "OPENROUTER_API_KEY": "sk-or-v1-old"]
+
+        let loaded = try SettingsStore(defaults: MemoryKeyValueStore(), secrets: keychain).loadSecrets()
+
+        XCTAssertEqual(loaded, SecretSettings(linearAPIKey: "one", openRouterAPIKey: "sk-or-v1-old"))
+    }
+
+    func testABlankOpenRouterKeyIsRemovedOnlyWhenNamed() throws {
+        let keychain = MemorySecretStore()
+        keychain.values = [SecretSettings.linearAPIKeyName: "one", SecretSettings.openRouterAPIKeyName: "sk-or-v1-a"]
+        let store = SettingsStore(defaults: MemoryKeyValueStore(), secrets: keychain)
+
+        // As after a failed Keychain read: the field is blank but the stored key was never loaded.
+        try store.saveSecrets(SecretSettings(linearAPIKey: "one"))
+        XCTAssertEqual(keychain.values[SecretSettings.openRouterAPIKeyName], "sk-or-v1-a")
+
+        // A set key is kept even when named.
+        try store.saveSecrets(
+            SecretSettings(linearAPIKey: "one", openRouterAPIKey: "sk-or-v1-b"),
+            removing: [SecretSettings.openRouterAPIKeyName]
+        )
+        XCTAssertEqual(keychain.values[SecretSettings.openRouterAPIKeyName], "sk-or-v1-b")
+
+        try store.saveSecrets(SecretSettings(linearAPIKey: "one"), removing: [SecretSettings.openRouterAPIKeyName])
+        XCTAssertEqual(keychain.values, [SecretSettings.linearAPIKeyName: "one"])
+        XCTAssertEqual(try store.loadSecrets().openRouterAPIKey, "")
+    }
+
     func testSavingSecretsRemovesOnlyTheNamedVariables() throws {
         let keychain = MemorySecretStore()
         let store = SettingsStore(defaults: MemoryKeyValueStore(), secrets: keychain)
@@ -159,6 +206,7 @@ final class SettingsStoreTests: XCTestCase {
         try store.saveSecrets(
             SecretSettings(
                 linearAPIKey: "lin_api_secret",
+                openRouterAPIKey: "sk-or-v1-secret",
                 extraEnvironment: [EnvironmentVariable(name: "OTHER_TOKEN", value: "other-secret")]
             )
         )
@@ -178,6 +226,7 @@ final class SettingsStoreTests: XCTestCase {
         for value in defaults.values.values {
             let text = "\(value)"
             XCTAssertFalse(text.contains("lin_api_secret"))
+            XCTAssertFalse(text.contains("sk-or-v1-secret"))
             XCTAssertFalse(text.contains("other-secret"))
             XCTAssertFalse(text.contains("OTHER_TOKEN"))
         }

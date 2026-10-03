@@ -9,9 +9,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     private var window: NSWindow?
 
+    /// Called after Save stored changed secrets, so a running Symphony restarts with them.
+    var onSecretsChanged: () -> Void = {}
+
     func show() {
         if window == nil {
-            let model = SettingsViewModel()
+            let model = SettingsViewModel(onSecretsChanged: { [weak self] in self?.onSecretsChanged() })
             let view = SettingsView(model: model) { [weak self] in self?.window?.close() }
             let hostingController = NSHostingController(rootView: view)
             // The default (.preferredContentSize) keeps resizing the window to SwiftUI's ideal size, which

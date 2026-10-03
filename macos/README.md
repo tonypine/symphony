@@ -192,6 +192,14 @@ set (or, in Development mode, no checkout folder).
   security find-generic-password -s symphony -a LINEAR_API_KEY
   ```
 
+- **OpenRouter** holds the optional `OPENROUTER_API_KEY`, which run profiles with `provider: openrouter`
+  need. It is stored in the Keychain like `LINEAR_API_KEY` and passed to Symphony only when set; it is never
+  written to `symphony.yml` or UserDefaults. **Test connection** checks the key with OpenRouter
+  (`GET /api/v1/key`) and shows its label and credit, or why it was rejected, and the **Models** line counts
+  the models OpenRouter offers and how many of them support tools.
+- When Save changes `LINEAR_API_KEY`, `OPENROUTER_API_KEY` or an extra variable while Symphony runs, the app
+  restarts Symphony the way Restart Symphony does, so it picks up the new environment.
+
 macOS asks for Keychain access after the first install, and currently again after each update; choose
 Always Allow. A local `make` build is ad-hoc signed and asks again after each rebuild (see
 [Development mode](#development-mode)). Start, Restart and Update read the Keychain without blocking the

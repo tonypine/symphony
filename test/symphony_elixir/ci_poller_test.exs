@@ -253,14 +253,46 @@ defmodule SymphonyElixir.CiPollerTest do
     refute_receive {:memory_tracker_comment, _, _}
   end
 
-  test "with Auto Review off only In Review issues are watched" do
+  test "with Auto Review off In Review and Merging issues are watched" do
     now = ~U[2026-05-06 09:00:00Z]
     Application.put_env(:symphony_elixir, :ci_test_issues, [])
 
     assert {:ok, %{discovered: 0, processed: 0, actions: []}} =
              CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
 
-    assert_receive {:fetch_issues_by_states, ["In Review"]}
+    assert_receive {:fetch_issues_by_states, ["In Review", "Merging"]}
+  end
+
+  test "a Merging issue's head is recorded and a red head goes through the CI-failure dispatch" do
+    now = ~U[2026-05-06 09:00:00Z]
+    issue = %{in_review_issue() | state: "Merging"}
+    Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+    running_status = %{green_status() | checks: [%{name: "specs", status: "IN_PROGRESS", conclusion: nil, run_id: "987"}]}
+    Application.put_env(:symphony_elixir, :ci_test_statuses, [running_status, green_status()])
+    put_run(issue, now)
+
+    assert CiPoller.observed_head("issue-2401") == nil
+
+    assert {:ok, %{discovered: 1, actions: [{:watching, "issue-2401"}]}} =
+             CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+    assert CiPoller.observed_head("issue-2401") == %{commit_sha: "abc123", conclusion: "IN_PROGRESS"}
+
+    assert {:ok, %{actions: [{:green, "issue-2401"}]}} =
+             CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: DateTime.add(now, 1, :minute))
+
+    assert %{conclusion: "SUCCESS"} = CiPoller.observed_head("issue-2401", repo_key: @repo_key)
+
+    Application.put_env(:symphony_elixir, :ci_test_status, failed_status("def456"))
+
+    assert {:ok, %{actions: [{:rerun_requested, "issue-2401", "987"}]}} =
+             CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: DateTime.add(now, 2, :minute))
+
+    assert {:ok, %{actions: [{:state_transitioned, "issue-2401", :ci_failure, "In Progress"}]}} =
+             CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: DateTime.add(now, 3, :minute))
+
+    assert_receive {:issue_state_update, "issue-2401", "In Progress"}
+    assert CiPoller.observed_head("issue-2401") == %{commit_sha: "def456", conclusion: "FAILURE"}
   end
 
   describe "with Auto Review on" do
@@ -285,7 +317,7 @@ defmodule SymphonyElixir.CiPollerTest do
       assert {:ok, %{discovered: 1, processed: 1, actions: [{:qa_started, "issue-2401", "abc123"}]}} =
                CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, qa_runner: FakeQaRunner, now: now)
 
-      assert_receive {:fetch_issues_by_states, ["In Review", "Auto Review"]}
+      assert_receive {:fetch_issues_by_states, ["In Review", "Auto Review", "Merging"]}
       assert_receive {:qa_request, %{issue: %Issue{id: "issue-2401"}, sha: "abc123", record: %{workspace_path: "/tmp/workspaces/ACME-2401"}}}
       refute_receive {:issue_state_update, _, _}
       assert [%{status: "green"}] = RunStore.list_ci_checks()
