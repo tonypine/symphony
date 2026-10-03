@@ -94,6 +94,60 @@ defmodule SymphonyElixir.CLICheckTest do
     end
   end
 
+  describe "OpenRouter key" do
+    setup do
+      previous = System.get_env("OPENROUTER_API_KEY")
+      System.delete_env("OPENROUTER_API_KEY")
+      on_exit(fn -> if previous, do: System.put_env("OPENROUTER_API_KEY", previous), else: System.delete_env("OPENROUTER_API_KEY") end)
+    end
+
+    test "warns when a profile uses openrouter and OPENROUTER_API_KEY is unset", %{root: root} do
+      path = write_symphony!(root, openrouter_symphony(root))
+
+      {result, output} = check(["--config", path])
+
+      assert result == {:halt, 0}
+
+      assert output ==
+               "Config OK: #{path}\nWarning: OPENROUTER_API_KEY is not set; runs that use provider openrouter will fail to start (landing, ci_fix)\n"
+    end
+
+    test "does not warn, or print the key, when OPENROUTER_API_KEY is set", %{root: root} do
+      System.put_env("OPENROUTER_API_KEY", "sk-or-v1-check-secret")
+      path = write_symphony!(root, openrouter_symphony(root))
+
+      {result, output} = check(["--config", path])
+
+      assert result == {:halt, 0}
+      assert output == "Config OK: #{path}\n"
+      refute inspect(Config.settings!(), limit: :infinity) =~ "sk-or-v1-check-secret"
+    end
+
+    test "rejects openrouter on SSH workers naming the key", %{root: root} do
+      path = write_symphony!(root, openrouter_symphony(root) <> "workers:\n  ssh_hosts: [worker-01]\n")
+
+      assert {{:error, message}, ""} = check(["--config", path])
+      assert message =~ "agent.run_profiles.landing.provider openrouter is not supported with workers.ssh_hosts"
+    end
+
+    test "check_warnings is empty when the config does not load", %{root: root} do
+      write_symphony!(root, "issues: [unclosed\n")
+      Workflow.set_symphony_file_path(Path.join(resolved(root), "symphony.yml"))
+
+      assert Config.check_warnings() == []
+    end
+  end
+
+  defp openrouter_symphony(root) do
+    String.replace(valid_symphony(root), "  runtime: codex\n  command: codex app-server\n", """
+      runtime: claude
+      command: claude
+      run_profiles:
+        landing: { provider: openrouter, model: anthropic/claude-haiku-4.5 }
+        ci_fix: { provider: openrouter, model: anthropic/claude-haiku-4.5 }
+    """)
+  end
+
   test "reports pre-push reviewer and QA agent profile errors naming the key", %{root: root} do
     cases = [
       {"pre_push_review:\n  effort: extreme\n", "pre_push_review.effort must be one of: low, medium, high, xhigh, max"},
@@ -164,6 +218,7 @@ defmodule SymphonyElixir.CLICheckTest do
     deps =
       %{
         check_config: &Config.validate_repo_workflows/0,
+        check_warnings: &Config.check_warnings/0,
         file_regular?: &File.regular?/1,
         init: fn _args -> flunk("init called") end,
         set_symphony_file_path: &Workflow.set_symphony_file_path/1,

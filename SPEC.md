@@ -714,6 +714,10 @@ Fields:
   - Default: `3`.
 - `checks.escalate_to_state` (string)
   - Default: `In Review`.
+- `checks.landing_wait_timeout_ms` (integer)
+  - Default: `1800000` (30 minutes).
+  - How long a `Merging` issue whose landing run ended on pending checks stays held before the
+    landing agent is dispatched again anyway.
 
 Review-comment options are ignored when `enabled` is not `true`. CI failure dispatch is driven only
 by failed status checks and ignores comment authorship; the ignored reviewer set above does not
@@ -1078,6 +1082,8 @@ When enabled:
   fails, Auto Review stays on.
 - The post-PR transition (an active issue whose completed run opened a PR and has no rework signal)
   MUST target `state` instead of `In Review`.
+- The post-PR transition MUST NOT apply to an issue in `Merging`: that state is a human's merge
+  approval, so Symphony MUST keep the issue in `Merging` and leave it with the landing agent.
 - `linear_update_state` MUST refuse `In Review` from agent sessions with a clear error telling the
   agent that Symphony moves the issue once the PR is open, rather than redirecting the target
   state.
@@ -1308,7 +1314,7 @@ Validation checks:
   `agent.run_profiles` key is a known run kind.
 - `agent.provider` and every `agent.run_profiles.<kind>.provider` are `anthropic` or `openrouter`.
   Every run kind that resolves to `openrouter` also resolves a model, and `openrouter` is only
-  used with `agent.runtime == "claude"`.
+  used with `agent.runtime == "claude"` and without `workers.ssh_hosts`.
 - `agent.command` does not already pass `--model` or `--effort` when `agent.model`,
   `agent.effort`, or `agent.run_profiles` is set.
 - `issues.linear.api_key` is present after `$` resolution when `issues.provider == "linear"`.
@@ -1400,7 +1406,13 @@ not require recognizing or validating extension fields unless that extension is 
   effort and `anthropic` for provider. The run kind and profile are resolved
   once per dispatch from the current config and kept for every continuation turn of that run. The
   Claude runtime appends `--model <model>` and `--effort <effort>` to its argv; the Codex runtime
-  ignores both and logs a warning.
+  ignores both and logs a warning. A Claude run whose provider is `openrouter` also starts with
+  `ANTHROPIC_BASE_URL=https://openrouter.ai/api`, `ANTHROPIC_AUTH_TOKEN` set from the
+  `OPENROUTER_API_KEY` environment variable of the Symphony process, an empty
+  `ANTHROPIC_API_KEY`, and `CLAUDE_CODE_SUBAGENT_MODEL=<model>`. If `OPENROUTER_API_KEY` is unset
+  or blank, the run fails before the agent starts with an error naming the run kind and the
+  variable. The key MUST NOT be written to config, logs, the audit log, the run store, or
+  transcripts.
 - `agent.prompts.include_project_guides`: boolean, default `true`
 - `agent.prompts.project_guide_files`: list of relative paths or null, default `null`
 - `agent.permissions.approval_policy`: agent approval policy, default depends on `agent.runtime`
@@ -1620,7 +1632,19 @@ The poller:
 - when `pull_requests.checks.enabled` is true, polls CI status for tracked PRs in every configured
   repository route, preserving the same retry, dispatch, and escalation behavior used for the
   primary repository. With `auto_review` on, it also tracks PRs of issues in `auto_review.state`
-  and starts a QA pass on green CI (see `auto_review`).
+  and starts a QA pass on green CI (see `auto_review`). It also tracks PRs of issues in
+  `Merging`, so a held landing run (below) sees its head settle and a red head takes the normal
+  CI-failure dispatch.
+
+When a landing run (issue in `Merging` with an attached PR) finishes a turn while the PR head's
+checks are pending, the agent runner MUST end the run instead of starting another continuation
+turn, and the orchestrator MUST hold the issue in `Merging` without a continuation retry and
+without dispatching it. The hold ends, and the landing agent is dispatched again through the normal
+poll, when the CI poller has observed that same head SHA with green checks, or when
+`pull_requests.checks.landing_wait_timeout_ms` has passed. The hold is dropped without a landing
+dispatch when the issue leaves `Merging` (for example the CI-failure dispatch moves it to
+`In Progress`). Holds live in orchestrator memory; after a restart the landing agent runs again and
+re-establishes the hold if checks are still pending.
 
 The orchestrator continues to own active-state dispatch, retry, run-store run records, and
 dashboard-visible agent execution. The PR review poller owns only polling-mode GitHub polling,
@@ -2243,8 +2267,12 @@ Scoped Linear tool extension contract:
   setting `Merging` from Linear. Other transitions are unaffected.
 - `linear_create_subissue` MUST only create a child of the current issue: same team and project,
   parent set to the current issue, and the current issue's assignee, all resolved server-side. It
-  MUST accept only `title`, `description`, and an optional `priority`, and MUST reject team,
-  project, parent, assignee, and state arguments. The new issue MUST land in the team's `Backlog`
+  MUST accept only `title`, `description`, an optional `priority`, and an optional `blocked_by`
+  list of issue identifiers, and MUST reject team, project, parent, assignee, and state arguments.
+  Each `blocked_by` identifier MUST name a sub-issue of the current issue (an existing child, or
+  one the run created earlier); otherwise the call MUST fail with an explicit error before the
+  issue is created. Accepted identifiers become `blocks` relations on the new issue, created right
+  after it. The new issue MUST land in the team's `Backlog`
   state (falling back to a `backlog`-type state), never an active state, so an agent cannot start
   other agents; a human promotes it. Title and description MUST pass the same secret scan as
   comments before any Linear call. Creation MUST be capped per run (the Elixir cap is 10) with an

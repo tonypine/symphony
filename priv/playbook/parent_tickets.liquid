@@ -32,11 +32,14 @@ Rules for every `breakdown` parent run:
 1. Read the description and comments, and write the planned split in the workpad.
 2. Create each sub-ticket with `linear_create_subissue`, in the order they should
    land. Each one must be deliverable as a single PR, with its own acceptance
-   criteria and a line naming any earlier sub-ticket it depends on.
-3. Create one last sub-ticket titled `Final verification: <parent title>`. Its
-   description lists every requirement from the parent ticket and the acceptance
-   criteria of each sibling sub-ticket as a checklist, and says it should be promoted
-   only after every other sub-ticket is `Done`.
+   criteria and a line naming any earlier sub-ticket it depends on. For every
+   sub-ticket it depends on, pass that identifier in `blocked_by` too, so Linear
+   records the blocked-by link and Symphony's dependency gate holds it back.
+3. Create one last sub-ticket titled `Final verification: <parent title>`, with
+   `blocked_by` listing every sibling sub-ticket. Its description lists every
+   requirement from the parent ticket and the acceptance criteria of each sibling
+   sub-ticket as a checklist, and says it should be promoted only after every
+   other sub-ticket is `Done`.
 4. Record the plan and the sub-ticket identifiers in the workpad `Notes`, move the
    parent to `In Review` with `linear_update_state`, and end the turn. The human
    reviewing the plan reads it there.

@@ -31,6 +31,7 @@ defmodule SymphonyElixir.Config do
   {% endif %}
   """
   @default_server_port 0
+  @openrouter_api_key_env "OPENROUTER_API_KEY"
   @codex_auto_approve_all_approval_policy "auto_approve_all"
   @codex_auto_approve_all_wire_approval_policy "never"
   @codex_srt_turn_sandbox_policy %{"type" => "externalSandbox"}
@@ -259,6 +260,51 @@ defmodule SymphonyElixir.Config do
     fallback = run_profile(settings, kind)
     Map.merge(fallback, %{kind: kind, model: config.model || fallback.model, effort: config.effort || fallback.effort})
   end
+
+  @doc "The environment variable Symphony reads the OpenRouter API key from."
+  @spec openrouter_api_key_env() :: String.t()
+  def openrouter_api_key_env, do: @openrouter_api_key_env
+
+  @doc """
+  The OpenRouter API key from Symphony's own environment, wrapped so `inspect/2` hides it, or
+  nil when it is unset or blank. It reaches the agent only through the subprocess env.
+  """
+  @spec openrouter_api_key() :: Secret.t() | nil
+  def openrouter_api_key do
+    case System.get_env(@openrouter_api_key_env) do
+      nil -> nil
+      value -> if String.trim(value) == "", do: nil, else: Secret.wrap(value)
+    end
+  end
+
+  @doc "The run kinds whose profile resolves to the `openrouter` provider."
+  @spec openrouter_run_kinds(Schema.t()) :: [String.t()]
+  def openrouter_run_kinds(%Schema{} = settings) do
+    for kind <- RunKind.names(), run_profile(settings, kind).provider == "openrouter", do: kind
+  end
+
+  @doc """
+  Non-fatal problems `symphony check` reports after the config validates: a run kind resolves
+  to `openrouter` while `OPENROUTER_API_KEY` is unset.
+  """
+  @spec check_warnings() :: [String.t()]
+  def check_warnings do
+    with {:ok, system_config} <- system(),
+         {:ok, repo_settings} <- repo_runtime_settings(system_config, source: :file) do
+      repo_settings
+      |> Enum.flat_map(fn {_repo, settings} -> openrouter_run_kinds(settings) end)
+      |> Enum.uniq()
+      |> openrouter_key_warnings(openrouter_api_key())
+    else
+      {:error, _reason} -> []
+    end
+  end
+
+  defp openrouter_key_warnings([_ | _] = kinds, nil) do
+    ["#{@openrouter_api_key_env} is not set; runs that use provider openrouter will fail to start (#{Enum.join(kinds, ", ")})"]
+  end
+
+  defp openrouter_key_warnings(_kinds, _key), do: []
 
   @spec review_agent_blocked_state(String.t()) :: String.t()
   def review_agent_blocked_state(repo_key) when is_binary(repo_key) do

@@ -215,6 +215,11 @@ prepends a managed runtime context (workspace isolation, untrusted-input handlin
 secret handling, response shape) before either, so keep `WORKFLOW.md` focused on repo-specific
 commands, conventions, and validation gates.
 
+To run a kind of run's model through OpenRouter, set `provider: openrouter` and an OpenRouter
+model id under `agent` or `agent.run_profiles.<kind>` (Claude runtime, local host only), and export
+`OPENROUTER_API_KEY` in Symphony's environment. The key reaches `claude` only through its process
+env.
+
 For the full reference — every supported key, defaults, prompt variables, CLI flags, and the issue
 gate — see [docs/configuration.md](docs/configuration.md).
 
