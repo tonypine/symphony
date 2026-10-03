@@ -371,17 +371,19 @@ is up to date (vX)" or why the check failed, for example GitHub's rate limit.
 3. **Unzip** it with `ditto` and check the new app: `codesign --verify --strict` passes, it is Symphony
    (same bundle identifier), its build is newer, and it is signed with the same certificate as the running
    app.
-4. **Drain Symphony** like [Restart](#restart), checking `symphony.yml` with the new version's Symphony:
-   pause dispatch, wait for `0 running` (**Update Now Anyway** shows after the restart timeout, **Cancel
-   Update** stops waiting), then stop Symphony. A Symphony the app didn't start is left alone.
+4. **Drain Symphony** like [Restart](#restart), checking `symphony.yml` with the running Symphony: pause
+   dispatch, wait for `0 running` (**Update Now Anyway** shows after the restart timeout, **Cancel Update**
+   stops waiting), then stop Symphony. A Symphony the app didn't start is left alone. Nothing runs the new
+   version's Symphony yet: running it removes older versions' unpacked releases from
+   `~/Library/Application Support/.burrito/`, including the one the running Symphony loads its code from.
 5. **Swap and relaunch:** the app starts a small helper (`Contents/Resources/update-helper.sh`, run from a
    copy in the cache folder) and quits. Once the app has exited, the helper moves it to
    `Symphony (previous).app` next to it (replacing an older one), moves the new app into place, and opens
    it. If a move fails, it puts the old app back and opens that instead. Its log is
    `~/Library/Caches/com.tonypine.symphony.bar/update-helper.log`.
-6. **Bring Symphony back:** the relaunched app starts Symphony from its new embedded binary and, once it
-   answers, resumes dispatch if the update paused it. A pause you made before the update stays. If the
-   helper had to put the old app back, an alert says so.
+6. **Bring Symphony back:** the relaunched app starts Symphony from its new embedded binary, which removes
+   the old version's unpacked release, and, once it answers, resumes dispatch if the update paused it. A
+   pause you made before the update stays. If the helper had to put the old app back, an alert says so.
 
 Update is disabled, with the reason under it, when:
 
@@ -542,8 +544,9 @@ checkout's Symphony; turn on Development mode in Settings." Saving Settings leav
   the download doesn't match what was published: check again later, or download the release by hand and
   verify it as in [docs/releasing.md](../docs/releasing.md). "the update's signer can't be checked" or "isn't
   signed with the same certificate" means this copy and the release are signed differently: install the
-  release with the [install script](#with-the-install-script). A `symphony.yml` error comes from the new
-  version's check; Symphony keeps running.
+  release with the [install script](#with-the-install-script). A `symphony.yml` error comes from the
+  running version's check; Symphony keeps running. A setting only the new version rejects shows up after the
+  relaunch, when the new Symphony fails to start: choose Open Logs.
 - **Restart Symphony says "Symphony wasn't restarted".** The `symphony.yml` check (or the pause) failed, and
   the old Symphony is still running. Fix what the message names, then check it from a terminal with
   `~/Applications/Symphony.app/Contents/Resources/symphony check --config <symphony.yml>`, or in Development mode

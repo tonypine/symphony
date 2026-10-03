@@ -69,6 +69,7 @@ defmodule SymphonyElixirWeb.Presenter do
           finishing: normalize_finishing(Map.get(snapshot, :finishing)),
           auto_merge: snapshot |> Map.get(:auto_merge, []) |> Enum.map(&auto_merge_payload/1),
           slot_waiting: snapshot |> Map.get(:slot_waiting, []) |> Enum.map(&slot_waiting_payload/1),
+          blocked: snapshot |> Map.get(:blocked, []) |> Enum.map(&blocked_payload/1),
           rate_limits: snapshot.rate_limits,
           linear_usage: normalize_linear_usage(get_in(snapshot, [:polling, :linear, :usage]))
         }
@@ -770,6 +771,23 @@ defmodule SymphonyElixirWeb.Presenter do
       attempt: Map.get(entry, :attempt),
       since: iso8601(Map.get(entry, :since))
     }
+  end
+
+  defp blocked_payload(entry) do
+    blockers = Enum.map(entry.blockers, &%{issue_identifier: &1.identifier, state: &1.state})
+
+    %{
+      issue_id: entry.issue_id,
+      issue_identifier: entry.identifier,
+      title: Map.get(entry, :title),
+      state: entry.state,
+      blocked_by: blockers,
+      summary: "#{entry.identifier} waiting on " <> Enum.map_join(blockers, ", ", &blocker_label/1)
+    }
+  end
+
+  defp blocker_label(%{issue_identifier: identifier, state: state}) do
+    "#{identifier || "an unknown issue"} (#{state || "unknown state"})"
   end
 
   defp normalize_dispatch_state(snapshot) when is_map(snapshot) do

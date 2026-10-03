@@ -7,6 +7,7 @@ defmodule SymphonyElixir.Linear.Issue do
   # the sub-tickets are worked.
   @breakdown_label "breakdown"
   @rework_state "rework"
+  @todo_state "todo"
 
   defstruct [
     :id,
@@ -112,6 +113,35 @@ defmodule SymphonyElixir.Linear.Issue do
     do: breakdown?(issue) and normalize_state(state) == @rework_state
 
   def replanning?(_issue), do: false
+
+  @doc """
+  The issue's blockers still outside `terminal_states`. A blocker counts as resolved only once it
+  is terminal (`Done`, `Canceled`, ...): `Merging`, `In Review`, `Auto Review` and `Rework` still
+  block, since the blocker's code is not on the default branch yet. A blocker without a known state
+  counts as open.
+  """
+  @spec open_blockers(t(), Enumerable.t(String.t())) :: [map()]
+  def open_blockers(%__MODULE__{blocked_by: blockers}, terminal_states) when is_list(blockers) do
+    terminal_states = MapSet.new(terminal_states, &normalize_state/1)
+
+    Enum.reject(blockers, fn
+      %{state: state} when is_binary(state) -> MapSet.member?(terminal_states, normalize_state(state))
+      _blocker -> false
+    end)
+  end
+
+  def open_blockers(_issue, _terminal_states), do: []
+
+  @doc """
+  True when the issue is in `Todo` with at least one open blocker (see `open_blockers/2`); Symphony
+  holds it until every blocker is terminal.
+  """
+  @spec blocked?(t(), Enumerable.t(String.t())) :: boolean()
+  def blocked?(%__MODULE__{state: state} = issue, terminal_states) when is_binary(state) do
+    normalize_state(state) == @todo_state and open_blockers(issue, terminal_states) != []
+  end
+
+  def blocked?(_issue, _terminal_states), do: false
 
   @doc "True when the issue carries the `breakdown` label."
   @spec breakdown?(t()) :: boolean()
