@@ -121,6 +121,36 @@ final class ChildLaunchTests: XCTestCase {
         XCTAssertNil(environment[""])
     }
 
+    func testEnvironmentHasTheOpenRouterKeyOnlyWhenSet() throws {
+        let base = ["PATH": "/usr/bin"]
+        let withKey = ChildLaunchBuilder.environment(
+            base: base,
+            secrets: SecretSettings(linearAPIKey: key, openRouterAPIKey: "sk-or-v1-SECRET")
+        )
+        XCTAssertEqual(withKey["OPENROUTER_API_KEY"], "sk-or-v1-SECRET")
+
+        let withoutKey = ChildLaunchBuilder.environment(base: base, secrets: SecretSettings(linearAPIKey: key))
+        XCTAssertFalse(withoutKey.keys.contains("OPENROUTER_API_KEY"))
+
+        // A blank field is trimmed to "not set", and the key never reaches the shell script.
+        let launch = try ChildLaunchBuilder.build(
+            settings: settings(),
+            secrets: SecretSettings(linearAPIKey: key, openRouterAPIKey: " \n"),
+            baseEnvironment: base,
+            files: files
+        )
+        XCTAssertFalse(launch.environment.keys.contains("OPENROUTER_API_KEY"))
+
+        let keyed = try ChildLaunchBuilder.build(
+            settings: settings(),
+            secrets: SecretSettings(linearAPIKey: key, openRouterAPIKey: " sk-or-v1-SECRET "),
+            baseEnvironment: base,
+            files: files
+        )
+        XCTAssertEqual(keyed.environment["OPENROUTER_API_KEY"], "sk-or-v1-SECRET")
+        XCTAssertFalse(keyed.arguments.joined(separator: " ").contains("sk-or-v1-SECRET"))
+    }
+
     func testMissingSettingsAndBinaryAreReported() {
         func problem(_ settings: AppSettings, files: FileChecker? = nil) -> LaunchProblem? {
             do {

@@ -156,6 +156,7 @@ final class SettingsValidatorTests: XCTestCase {
                 EnvironmentVariable(name: "GITHUB_TOKEN", value: "e"),
                 EnvironmentVariable(name: "GITHUB_TOKEN", value: "f"),
                 EnvironmentVariable(name: "LINEAR_API_KEY", value: "g"),
+                EnvironmentVariable(name: "OPENROUTER_API_KEY", value: "h"),
             ]
         )
 
@@ -167,6 +168,7 @@ final class SettingsValidatorTests: XCTestCase {
                 .environmentNameInvalid(""),
                 .environmentNameDuplicate("GITHUB_TOKEN"),
                 .environmentNameReserved("LINEAR_API_KEY"),
+                .environmentNameReserved("OPENROUTER_API_KEY"),
             ]
         )
     }
