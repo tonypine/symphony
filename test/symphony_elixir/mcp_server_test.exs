@@ -1362,6 +1362,73 @@ defmodule SymphonyElixir.McpServerTest do
     end)
   end
 
+  test "the Symphony MCP shim starts in a workspace that pins no Elixir version" do
+    # Regression (TP-346): with mise's shims on PATH, `#!/usr/bin/env elixir`
+    # asked mise for an Elixir version in a workspace that pins none, and the
+    # shim died with "No version is set for shim: elixir".
+    root = Path.join(System.tmp_dir!(), "symphony-no-mise-#{System.unique_integer([:positive])}")
+    workspace = Path.join(root, "workspace")
+    mise_shims = Path.join(root, "mise-shims")
+    File.mkdir_p!(workspace)
+    File.mkdir_p!(mise_shims)
+    on_exit(fn -> File.rm_rf(root) end)
+
+    for tool <- ["elixir", "erl"] do
+      shim = Path.join(mise_shims, tool)
+
+      File.write!(shim, """
+      #!/bin/sh
+      echo "mise ERROR No version is set for shim: #{tool}" >&2
+      exit 1
+      """)
+
+      File.chmod!(shim, 0o755)
+    end
+
+    server = unique_server()
+    start_supervised!({McpServer, name: server})
+
+    # Unix socket, or loopback TCP where the sandbox denies binding one.
+    {:ok, session} = McpServer.start_session(%{workspace: workspace}, server: server)
+    on_exit(fn -> McpServer.stop_session(session, server: server) end)
+
+    config = SymphonyElixir.AgentMcp.symphony_claude_config(session, session.socket_path, session.shim_path)
+    env = Map.put(config["env"], "PATH", mise_shims <> ":/usr/bin:/bin")
+    port_env = Enum.map(env, fn {name, value} -> {String.to_charlist(name), String.to_charlist(value)} end)
+
+    port =
+      Port.open({:spawn_executable, config["command"]}, [
+        :binary,
+        :exit_status,
+        {:args, config["args"]},
+        {:cd, workspace},
+        {:env, port_env}
+      ])
+
+    try do
+      assert %{"id" => 1, "result" => %{"serverInfo" => %{"name" => "symphony"}}} =
+               shim_request(port, %{"jsonrpc" => "2.0", "id" => 1, "method" => "initialize", "params" => %{}})
+    after
+      if Port.info(port), do: Port.close(port)
+    end
+
+    # The shim run on its own still goes through the failing `elixir` on PATH.
+    [_shim_path | shim_args] = Enum.drop_while(config["args"], &(&1 != session.shim_path))
+
+    direct =
+      Port.open({:spawn_executable, session.shim_path}, [
+        :binary,
+        :exit_status,
+        :stderr_to_stdout,
+        {:args, shim_args},
+        {:cd, workspace},
+        {:env, port_env}
+      ])
+
+    assert_receive {^direct, {:data, "mise ERROR No version is set for shim: elixir" <> _rest}}, 5_000
+    assert_receive {^direct, {:exit_status, 1}}, 5_000
+  end
+
   defp shim_request(port, payload) do
     Port.command(port, Jason.encode!(payload) <> "\n")
 

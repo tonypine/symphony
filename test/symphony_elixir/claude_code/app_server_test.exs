@@ -703,7 +703,12 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
         refute Map.has_key?(contents, "mcpServers")
 
         {:ok, mcp_config} = Jason.decode(File.read!(mcp_config_path))
-        assert get_in(mcp_config, ["mcpServers", "symphony", "command"]) =~ "symphony-mcp-shim"
+
+        assert {get_in(mcp_config, ["mcpServers", "symphony", "command"]), get_in(mcp_config, ["mcpServers", "symphony", "args"])} ==
+                 SymphonyElixir.McpShimCommand.build(
+                   session.mcp_session.shim_path,
+                   Enum.take(get_in(mcp_config, ["mcpServers", "symphony", "args"]), if(session.mcp_session.transport == :tcp, do: -4, else: -2))
+                 )
 
         assert_claude_mcp_config_matches_transport(mcp_config, session.mcp_session)
 
@@ -1810,6 +1815,70 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       after
         File.rm_rf(test_root)
       end
+    end
+
+    test "logs a Symphony MCP server that failed to start on turn 1 with its stderr" do
+      test_root = Path.join(System.tmp_dir!(), "symphony-elixir-claude-code-mcp-stderr-#{System.unique_integer([:positive])}")
+      cache_root = Path.join(test_root, "cache")
+      workspace = Path.join([test_root, "workspaces", "MOT-2"])
+      log_dir = Path.join([cache_root, String.replace(workspace, ~r/[^A-Za-z0-9]/, "-"), "mcp-logs-symphony"])
+      File.mkdir_p!(log_dir)
+      # An entry that can't be read as a file is skipped.
+      File.mkdir_p!(Path.join(log_dir, "2026-10-03T22-56-03-000Z.jsonl"))
+
+      File.write!(Path.join(log_dir, "2026-10-03T22-56-02-307Z.jsonl"), """
+      {"debug":"Starting connection with timeout of 30000ms","sessionId":"sess-mcp-failed"}
+      not json
+      {"error":"Server stderr: other session","sessionId":"sess-other"}
+      {"error":"Server stderr: mise ERROR No version is set for shim: elixir","sessionId":"sess-mcp-failed"}
+      """)
+
+      init = ~s({"type":"system","subtype":"init","session_id":"sess-mcp-failed","mcp_servers":[{"name":"symphony","status":"failed"}]})
+
+      log =
+        with_claude_cache_root(cache_root, fn ->
+          capture_log(fn -> assert {:ok, _result} = run_fake_init_turn(test_root, workspace, init) end)
+        end)
+
+      assert log =~ "Claude Symphony MCP server failed to start"
+      assert log =~ ~s(issue_identifier="MOT-2")
+      assert log =~ ~s(session_id="sess-mcp-failed")
+      assert log =~ "mise ERROR No version is set for shim: elixir"
+      refute log =~ "other session"
+    end
+
+    test "logs the Symphony MCP start failure without stderr when Claude left no log for the session" do
+      test_root = Path.join(System.tmp_dir!(), "symphony-elixir-claude-code-mcp-no-stderr-#{System.unique_integer([:positive])}")
+      workspace = Path.join([test_root, "workspaces", "MOT-3"])
+
+      with_claude_cache_root(Path.join(test_root, "cache"), fn ->
+        missing_dir_log =
+          capture_log(fn ->
+            init = ~s({"type":"system","subtype":"init","session_id":"sess-no-log","mcp_servers":[]})
+            assert {:ok, _result} = run_fake_init_turn(test_root, workspace, init)
+          end)
+
+        assert missing_dir_log =~ "Claude Symphony MCP server failed to start"
+        assert missing_dir_log =~ ~s(stderr="unavailable")
+
+        no_session_log =
+          capture_log(fn ->
+            assert {:ok, _result} = run_fake_init_turn(test_root, workspace, ~s({"type":"system","subtype":"init"}))
+          end)
+
+        assert no_session_log =~ ~s(session_id=nil)
+        assert no_session_log =~ ~s(stderr="unavailable")
+      end)
+    end
+
+    test "default Claude cache root follows the platform cache dir" do
+      home = System.user_home!()
+
+      assert AppServer.default_claude_cache_root({:unix, :darwin}, "/xdg") ==
+               Path.join([home, "Library", "Caches", "claude-cli-nodejs"])
+
+      assert AppServer.default_claude_cache_root({:unix, :linux}, "/xdg") == "/xdg/claude-cli-nodejs"
+      assert AppServer.default_claude_cache_root({:unix, :linux}, nil) == Path.join([home, ".cache", "claude-cli-nodejs"])
     end
 
     test "approved handoff ignores system events that arrive before init" do
@@ -3502,6 +3571,40 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
     """
   end
 
+  defp with_claude_cache_root(cache_root, fun) do
+    Application.put_env(:symphony_elixir, :claude_cache_root, cache_root)
+
+    try do
+      fun.()
+    after
+      Application.delete_env(:symphony_elixir, :claude_cache_root)
+      File.rm_rf(Path.dirname(cache_root))
+    end
+  end
+
+  defp run_fake_init_turn(test_root, workspace, init_json) do
+    fake_claude = Path.join(test_root, "fake-claude")
+    File.mkdir_p!(workspace)
+
+    File.write!(fake_claude, """
+    #!/bin/sh
+    printf '%s\\n' '#{init_json}'
+    printf '%s\\n' '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"result":"Done.","session_id":"sess","usage":{"input_tokens":1,"output_tokens":1}}'
+    exit 0
+    """)
+
+    File.chmod!(fake_claude, 0o755)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      workspace_root: Path.dirname(workspace),
+      agent_kind: "claude",
+      agent_command: fake_claude
+    )
+
+    issue = %{id: "issue-#{Path.basename(workspace)}", identifier: Path.basename(workspace)}
+    AppServer.run_turn(local_session(workspace, test_root), "do the thing", issue, [])
+  end
+
   defp local_session(workspace, test_root) do
     %{
       workspace: workspace,
@@ -3619,7 +3722,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
   end
 
   defp assert_claude_mcp_config_matches_transport(mcp_config, %{transport: :unix} = mcp_session) do
-    assert get_in(mcp_config, ["mcpServers", "symphony", "args"]) == [
+    assert Enum.take(get_in(mcp_config, ["mcpServers", "symphony", "args"]), -2) == [
              "--socket",
              mcp_session.socket_path
            ]
@@ -3628,7 +3731,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
   defp assert_claude_mcp_config_matches_transport(mcp_config, %{transport: :tcp} = mcp_session) do
     assert unix_socket_bind_probe() == {:error, :eperm}
 
-    assert get_in(mcp_config, ["mcpServers", "symphony", "args"]) == [
+    assert Enum.take(get_in(mcp_config, ["mcpServers", "symphony", "args"]), -4) == [
              "--tcp-host",
              "127.0.0.1",
              "--tcp-port",

@@ -26,6 +26,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   ]
   @handoff_required_mcp_server "symphony"
   @missing_required_mcp_tools_code "missing_required_mcp_tools"
+  @mcp_log_files_scanned 5
   @diagnostic_output_line_count 5
   @diagnostic_output_line_max_bytes 4_096
   # Grace window after a terminal `result`/`turn_completed`/`turn_failed` event
@@ -86,7 +87,10 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
     required_mcp_server = required_mcp_server_for_prompt(prompt)
 
-    read_opts = [required_mcp_server: required_mcp_server, issue: issue]
+    # Claude writes MCP server logs on the host it runs on.
+    mcp_log_workspace = if is_nil(worker_host), do: workspace
+
+    read_opts = [required_mcp_server: required_mcp_server, issue: issue, mcp_log_workspace: mcp_log_workspace]
     # `claude -p` starts a new conversation each turn unless told which one to resume.
     session = Map.put(session, :resume_session_id, Keyword.get(opts, :resume_session_id))
 
@@ -1286,7 +1290,8 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
       turn_completed: false,
       diagnostic_output_lines: [],
       required_mcp_server: Keyword.get(opts, :required_mcp_server),
-      required_mcp_server_checked: false,
+      mcp_servers_checked: false,
+      mcp_log_workspace: Keyword.get(opts, :mcp_log_workspace),
       issue: Keyword.get(opts, :issue),
       usage_limited: nil,
       usage_windows: %{}
@@ -1346,7 +1351,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     new_acc =
       event
       |> apply_event(on_message, acc)
-      |> then(&maybe_fail_missing_required_mcp_server(full_line, on_message, &1))
+      |> then(&check_symphony_mcp_server(full_line, on_message, &1))
 
     new_loop_state = %{
       tracked_loop_state
@@ -1425,7 +1430,8 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
      |> Map.delete(:turn_completed)
      |> Map.delete(:diagnostic_output_lines)
      |> Map.delete(:required_mcp_server)
-     |> Map.delete(:required_mcp_server_checked)
+     |> Map.delete(:mcp_servers_checked)
+     |> Map.delete(:mcp_log_workspace)
      |> Map.delete(:issue)
      |> Map.delete(:usage_limited)
      |> Map.delete(:usage_windows)}
@@ -1441,25 +1447,18 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
   defp required_mcp_server_for_prompt(_prompt), do: nil
 
-  defp maybe_fail_missing_required_mcp_server(
-         line,
-         on_message,
-         %{required_mcp_server: required_mcp_server, required_mcp_server_checked: false} = acc
-       )
-       when is_binary(required_mcp_server) do
+  defp check_symphony_mcp_server(line, on_message, %{mcp_servers_checked: false} = acc) do
     # Only `init` lists the session's MCP servers; other `system` events (hooks,
     # status) can arrive first and must not be read as "no servers".
     case Jason.decode(line) do
       {:ok, %{"type" => "system", "subtype" => "init"} = event} ->
-        acc = %{acc | required_mcp_server_checked: true}
+        acc = %{acc | mcp_servers_checked: true}
 
-        if mcp_server_available?(event, required_mcp_server) do
+        if mcp_server_available?(event, @handoff_required_mcp_server) do
           acc
         else
-          reason = missing_required_mcp_server_reason(required_mcp_server, event)
-          Logger.error("Claude required MCP server unavailable: #{reason}")
-          on_message.({:turn_failed, reason})
-          %{acc | turn_failed: reason}
+          log_symphony_mcp_start_failure(event, acc)
+          maybe_fail_missing_required_mcp_server(event, on_message, acc)
         end
 
       _not_system_event ->
@@ -1467,7 +1466,96 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     end
   end
 
-  defp maybe_fail_missing_required_mcp_server(_line, _on_message, acc), do: acc
+  defp check_symphony_mcp_server(_line, _on_message, acc), do: acc
+
+  # A turn that doesn't need the Symphony tools goes on without them; the
+  # error log above still records why the server didn't start.
+  defp maybe_fail_missing_required_mcp_server(event, on_message, %{required_mcp_server: required_mcp_server} = acc)
+       when is_binary(required_mcp_server) do
+    reason = missing_required_mcp_server_reason(required_mcp_server, event)
+    on_message.({:turn_failed, reason})
+    %{acc | turn_failed: reason}
+  end
+
+  defp maybe_fail_missing_required_mcp_server(_event, _on_message, acc), do: acc
+
+  defp log_symphony_mcp_start_failure(event, acc) do
+    session_id = Map.get(event, "session_id")
+
+    Logger.error(
+      "Claude Symphony MCP server failed to start #{issue_log_context(acc.issue)} session_id=#{inspect(session_id)} " <>
+        "advertised_mcp_servers=#{inspect(advertised_mcp_servers(event))} " <>
+        "stderr=#{inspect(symphony_mcp_stderr(acc.mcp_log_workspace, session_id))}"
+    )
+  end
+
+  # Claude logs each MCP server connection, with the server's stderr, under its
+  # cache dir in a folder named after the session's cwd, one file per start.
+  defp symphony_mcp_stderr(workspace, session_id) when is_binary(workspace) and is_binary(session_id) do
+    log_dir =
+      Path.join([
+        claude_cache_root(),
+        String.replace(workspace, ~r/[^A-Za-z0-9]/, "-"),
+        "mcp-logs-#{@handoff_required_mcp_server}"
+      ])
+
+    errors =
+      case File.ls(log_dir) do
+        {:ok, files} ->
+          files
+          |> Enum.sort(:desc)
+          |> Enum.take(@mcp_log_files_scanned)
+          |> Enum.flat_map(&mcp_log_errors(Path.join(log_dir, &1), session_id))
+
+        {:error, _reason} ->
+          []
+      end
+
+    case Enum.uniq(errors) do
+      [] -> "unavailable"
+      errors -> Enum.join(errors, "\n")
+    end
+  end
+
+  defp symphony_mcp_stderr(_workspace, _session_id), do: "unavailable"
+
+  defp mcp_log_errors(path, session_id) do
+    case File.read(path) do
+      {:ok, contents} ->
+        contents
+        |> String.split("\n", trim: true)
+        |> Enum.flat_map(&mcp_log_line_error(&1, session_id))
+
+      {:error, _reason} ->
+        []
+    end
+  end
+
+  defp mcp_log_line_error(line, session_id) do
+    case Jason.decode(line) do
+      {:ok, %{"sessionId" => ^session_id, "error" => error}} when is_binary(error) -> [error]
+      _other -> []
+    end
+  end
+
+  defp claude_cache_root do
+    Application.get_env(:symphony_elixir, :claude_cache_root) ||
+      default_claude_cache_root(:os.type(), System.get_env("XDG_CACHE_HOME"))
+  end
+
+  @doc false
+  @spec default_claude_cache_root({atom(), atom()}, String.t() | nil) :: Path.t()
+  def default_claude_cache_root({:unix, :darwin}, _xdg_cache_home) do
+    Path.join([System.user_home!(), "Library", "Caches", "claude-cli-nodejs"])
+  end
+
+  def default_claude_cache_root(_os_type, xdg_cache_home) when is_binary(xdg_cache_home) and xdg_cache_home != "" do
+    Path.join(xdg_cache_home, "claude-cli-nodejs")
+  end
+
+  def default_claude_cache_root(_os_type, _xdg_cache_home) do
+    Path.join([System.user_home!(), ".cache", "claude-cli-nodejs"])
+  end
 
   defp mcp_server_available?(%{"mcp_servers" => servers}, required_server) do
     servers

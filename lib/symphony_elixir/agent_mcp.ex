@@ -2,6 +2,7 @@ defmodule SymphonyElixir.AgentMcp do
   @moduledoc false
 
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.McpShimCommand
 
   @runtimes ["claude", "codex"]
 
@@ -93,9 +94,11 @@ defmodule SymphonyElixir.AgentMcp do
 
   @spec symphony_claude_config(map(), Path.t() | nil, Path.t()) :: map()
   def symphony_claude_config(mcp_session, socket_path, shim_path) do
+    {command, args} = symphony_shim_command(mcp_session, socket_path, shim_path)
+
     %{
-      "command" => shim_path,
-      "args" => symphony_shim_args(mcp_session, socket_path),
+      "command" => command,
+      "args" => args,
       "env" => symphony_shim_env(mcp_session),
       "alwaysLoad" => true
     }
@@ -103,14 +106,26 @@ defmodule SymphonyElixir.AgentMcp do
 
   @spec symphony_codex_toml_block(map(), Path.t() | nil, Path.t()) :: String.t()
   def symphony_codex_toml_block(mcp_session, socket_path, shim_path) do
+    {command, args} = symphony_shim_command(mcp_session, socket_path, shim_path)
+
     toml_table(
       ["mcp_servers", "symphony"],
       [
-        {"command", shim_path},
-        {"args", symphony_shim_args(mcp_session, socket_path)},
+        {"command", command},
+        {"args", args},
         {"env", symphony_shim_env(mcp_session)}
       ]
     )
+  end
+
+  # Only the shim on this host can run on this VM's ERTS. A remote worker runs
+  # the copy installed there, with that host's own `elixir`.
+  defp symphony_shim_command(%{shim_path: shim_path} = mcp_session, socket_path, shim_path) do
+    McpShimCommand.build(shim_path, symphony_shim_args(mcp_session, socket_path))
+  end
+
+  defp symphony_shim_command(mcp_session, socket_path, shim_path) do
+    {shim_path, symphony_shim_args(mcp_session, socket_path)}
   end
 
   defp symphony_shim_args(%{transport: :tcp, tcp_host: host, tcp_port: port}, _socket_path)
@@ -128,8 +143,9 @@ defmodule SymphonyElixir.AgentMcp do
   end
 
   defp maybe_put_runtime_path(env) do
-    # Claude may launch MCP servers with only the configured env. The shim uses
-    # `#!/usr/bin/env elixir`, so preserve PATH explicitly for that process.
+    # Claude may launch MCP servers with only the configured env. A remote
+    # worker's shim runs through `#!/usr/bin/env elixir`, so preserve PATH
+    # explicitly for that process.
     case System.get_env("PATH") do
       path when is_binary(path) and path != "" -> Map.put(env, "PATH", path)
       _missing -> env
