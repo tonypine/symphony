@@ -83,6 +83,8 @@ pre_push_review:
   enabled: true
   runtime: codex
   command: codex app-server
+  # model: claude-opus-5-5   # Claude runtime only; else agent.run_profiles.pre_push_review, then agent.model
+  # effort: high
   max_iterations: 1
   run_on: first_push
 
@@ -97,6 +99,8 @@ pre_push_review:
 #   state: Auto Review
 #   runtime: claude
 #   command: claude --dangerously-skip-permissions
+#   model: claude-sonnet-5-5   # else agent.run_profiles.qa, then agent.model
+#   effort: medium
 #   max_turns: 20
 #   timeout_ms: 1800000
 #   max_concurrent: 1

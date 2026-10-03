@@ -152,11 +152,18 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
 
       assert log =~ ~r/Dispatching issue to agent: issue_id=issue-profile-breakdown .* run_kind=breakdown model=claude-opus-5-5 effort=high/
 
-      assert [%{issue_id: "issue-profile-breakdown", run_kind: "breakdown", model: "claude-opus-5-5", effort: "high"}] =
+      assert [%{issue_id: "issue-profile-breakdown", run_kind: "breakdown", model: "claude-opus-5-5", effort: "high"} = first_run] =
                RunStore.list_runs()
 
+      refute Map.has_key?(first_run, :reviewer_profile)
+
       # Edit the workflow while Symphony runs: the next dispatch uses the new profile.
-      write_profile_workflow!(ctx, agent_model: nil, agent_run_profiles: %{"implementation" => %{"effort" => "low"}})
+      write_profile_workflow!(ctx,
+        agent_model: nil,
+        agent_run_profiles: %{"implementation" => %{"effort" => "low"}},
+        review_agent: %{enabled: true, kind: "claude", command: ctx.fake_claude, model: "claude-sonnet-5-5"}
+      )
+
       sub_ticket = issue("issue-profile-sub", "MT-PROFILE-2")
       Application.put_env(:symphony_elixir, :memory_tracker_issues, [sub_ticket])
 
@@ -166,7 +173,7 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
       log =
         capture_log(fn ->
           send(pid, :run_poll_cycle)
-          assert [_first, second] = wait_for_argv_lines(ctx.argv_trace, 2)
+          assert [_first, second | _reviewer] = wait_for_argv_lines(ctx.argv_trace, 2)
           assert String.ends_with?(second, "--print --effort low")
           refute second =~ "--model"
           wait_until(fn -> Enum.find(RunStore.list_runs(), &(&1.issue_id == "issue-profile-sub")) end)
@@ -174,8 +181,12 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
 
       assert log =~ ~r/Dispatching issue to agent: issue_id=issue-profile-sub .* run_kind=implementation model=default effort=low/
 
-      assert %{run_kind: "implementation", model: nil, effort: "low"} =
-               Enum.find(RunStore.list_runs(), &(&1.issue_id == "issue-profile-sub"))
+      assert %{
+               run_kind: "implementation",
+               model: nil,
+               effort: "low",
+               reviewer_profile: %{run_kind: "pre_push_review", model: "claude-sonnet-5-5", effort: "medium"}
+             } = Enum.find(RunStore.list_runs(), &(&1.issue_id == "issue-profile-sub"))
     end
   end
 

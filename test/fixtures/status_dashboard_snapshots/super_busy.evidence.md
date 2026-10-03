@@ -13,6 +13,8 @@
 │   ID       STAGE          PID      AGE / TURN   TOKENS     SESSION        EVENT
 │   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
 │ ● MT-101   running        4242     13m 5s / 11     120,450 thre...567890  turn completed (completed)
+│     implementation · claude-opus-5-5 · high
+│     reviewer: pre_push_review · claude-sonnet-5-5 · default
 │ ● MT-102   running        5252     6m 52s / 4       89,200 thre...567890  mix test --cover
 │
 ├─ Watching
@@ -30,5 +32,11 @@
 ├─ Skipped (quality gate)
 │
 │  No issues skipped this session
+│
+├─ Recent runs
+│
+│  ◦ MT-099   qa_pass              18,200 qa · claude-haiku-4-5 · low
+│  ◦ MT-098   success               4,100 landing · default · low (reviewer: pre_push_review · claude-sonnet-5-5 · medium)
+│  ◦ issue... unknown                   0 profile n/a
 ╰─
 ```

@@ -147,8 +147,10 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "repos.workspace.strategy" => "repositories.workspace.strategy",
     "review_agent.command" => "pre_push_review.command",
     "review_agent.enabled" => "pre_push_review.enabled",
+    "review_agent.effort" => "pre_push_review.effort",
     "review_agent.kind" => "pre_push_review.runtime",
     "review_agent.max_iterations" => "pre_push_review.max_iterations",
+    "review_agent.model" => "pre_push_review.model",
     "review_agent.run_on" => "pre_push_review.run_on",
     "server.host" => "dashboard.host",
     "server.port" => "dashboard.port",
@@ -431,6 +433,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     |> cast_embed(:auto_review, with: &Schema.AutoReview.changeset/2)
     |> cast_embed(:dependencies, with: &Schema.Dependencies.changeset/2)
     |> cast_embed(:notifications, with: &Schema.Notifications.changeset/2)
+    |> Schema.validate_profile_command_flags()
     |> cast_embed(:repos, with: &Repo.changeset/2, required: true)
     |> validate_length(:repos, min: 1)
     |> validate_unique_repo_names()
@@ -680,12 +683,14 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   defp normalize_pre_push_review(config) do
     with {:ok, config} <- section_map(config, "pre_push_review"),
-         :ok <- reject_unknown_section_keys(config, ~w(enabled runtime command max_iterations run_on), "pre_push_review") do
+         :ok <- reject_unknown_section_keys(config, ~w(enabled runtime command model effort max_iterations run_on), "pre_push_review") do
       {:ok,
        %{}
        |> maybe_put("enabled", Map.get(config, "enabled"))
        |> maybe_put("kind", Map.get(config, "runtime"))
        |> maybe_put("command", Map.get(config, "command"))
+       |> maybe_put("model", Map.get(config, "model"))
+       |> maybe_put("effort", Map.get(config, "effort"))
        |> maybe_put("max_iterations", Map.get(config, "max_iterations"))
        |> maybe_put("run_on", Map.get(config, "run_on"))}
     end
@@ -696,7 +701,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
          :ok <-
            reject_unknown_section_keys(
              config,
-             ~w(enabled state runtime command max_turns timeout_ms max_concurrent max_fix_attempts run_on skip_globs playbooks),
+             ~w(enabled state runtime command model effort max_turns timeout_ms max_concurrent max_fix_attempts run_on skip_globs playbooks),
              "auto_review"
            ) do
       {:ok,

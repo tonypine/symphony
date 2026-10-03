@@ -1117,6 +1117,8 @@ defmodule SymphonyElixir.TestSupport do
         kv("enabled", Map.get(config, :enabled)),
         kv("runtime", Map.get(config, :kind)),
         kv("command", Map.get(config, :command)),
+        kv("model", Map.get(config, :model)),
+        kv("effort", Map.get(config, :effort)),
         kv("max_iterations", Map.get(config, :max_iterations)),
         kv("run_on", Map.get(config, :run_on))
       ]

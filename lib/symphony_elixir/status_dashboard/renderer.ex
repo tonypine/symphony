@@ -10,7 +10,7 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
   """
 
   alias SymphonyElixir.Codex.MessageHumanizer
-  alias SymphonyElixir.{Config, Format, HttpServer, URLUtils}
+  alias SymphonyElixir.{Config, Format, HttpServer, RunKind, URLUtils}
 
   @throughput_window_ms 5_000
   @throughput_graph_window_ms 10 * 60 * 1000
@@ -31,6 +31,10 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
   @watching_url_min_width 24
   @watching_row_chrome_width 11
   @default_terminal_columns 115
+  @recent_runs_limit 5
+  @recent_id_width 8
+  @recent_status_width 16
+  @recent_tokens_width 10
 
   @ansi_reset IO.ANSI.reset()
   @ansi_bold IO.ANSI.bright()
@@ -83,6 +87,7 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
         awaiting_rows = format_awaiting_clarification_rows(awaiting_clarification, watching_url_width)
         awaiting_to_skipped_spacer = if(awaiting_clarification == [], do: [], else: ["│"])
         skipped_rows = format_skipped_rows(skipped)
+        recent_run_rows = format_recent_run_rows(Map.get(snapshot, :run_history, []))
 
         dispatch_state =
           snapshot
@@ -136,6 +141,8 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
            awaiting_to_skipped_spacer ++
            [colorize("├─ Skipped (quality gate)", @ansi_bold), "│"] ++
            skipped_rows ++
+           ["│", colorize("├─ Recent runs", @ansi_bold), "│"] ++
+           recent_run_rows ++
            [closing_border()])
         |> List.flatten()
         |> Enum.join("\n")
@@ -546,8 +553,46 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
     else
       running
       |> Enum.sort_by(& &1.identifier)
-      |> Enum.map(&format_running_summary(&1, running_event_width))
+      |> Enum.flat_map(&[format_running_summary(&1, running_event_width) | format_running_profile_lines(&1)])
     end
+  end
+
+  defp format_running_profile_lines(running_entry) do
+    [
+      {"", Map.get(running_entry, :run_profile)},
+      {"reviewer: ", Map.get(running_entry, :reviewer_run_profile)}
+    ]
+    |> Enum.flat_map(fn {prefix, profile} ->
+      case RunKind.label(profile) do
+        nil -> []
+        label -> ["│     " <> colorize(prefix <> label, @ansi_gray)]
+      end
+    end)
+  end
+
+  defp format_recent_run_rows([]), do: ["│  " <> colorize("No runs yet", @ansi_gray)]
+
+  defp format_recent_run_rows(runs) when is_list(runs) do
+    runs
+    |> Enum.take(@recent_runs_limit)
+    |> Enum.map(&format_recent_run_row/1)
+  end
+
+  defp format_recent_run_row(run) do
+    label = Map.get(run, :issue_identifier) || Map.get(run, :issue_id) || "unknown"
+    status = Map.get(run, :status) || "unknown"
+    total_tokens = Map.get(Map.get(run, :tokens) || %{}, :total_tokens, 0)
+    reviewer = run |> Map.get(:reviewer_profile) |> RunKind.label()
+
+    "│  ◦ " <>
+      colorize(format_cell(label, @recent_id_width), @ansi_cyan) <>
+      " " <>
+      format_cell(status, @recent_status_width) <>
+      " " <>
+      colorize(format_cell(format_count(total_tokens), @recent_tokens_width, :right), @ansi_yellow) <>
+      " " <>
+      colorize(RunKind.label(run) || "profile n/a", @ansi_gray) <>
+      if(reviewer, do: colorize(" (reviewer: #{reviewer})", @ansi_gray), else: "")
   end
 
   defp normalize_dispatch_state(%{blockers: blockers} = dispatch_state) when is_list(blockers) do

@@ -598,6 +598,11 @@ pre,
   min-width: 0;
 }
 
+.run-profile {
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
 .event-text {
   font-weight: 500;
   line-height: 1.45;
