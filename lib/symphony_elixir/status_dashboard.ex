@@ -6,6 +6,11 @@ defmodule SymphonyElixir.StatusDashboard do
   orchestrator snapshot, throttling renders, and writing to the terminal.
   All formatting/rendering logic — the bulk of the original module — lives in
   `SymphonyElixir.StatusDashboard.Renderer`.
+
+  It draws only when standard output is a terminal, so a Symphony whose output
+  goes to a file (as under the menu bar app) logs no frames. `frame/2` renders
+  the same view on request for `symphony dashboard`, which polls it over the
+  control API.
   """
 
   use GenServer
@@ -81,6 +86,18 @@ defmodule SymphonyElixir.StatusDashboard do
     end
   end
 
+  @doc """
+  Renders the current dashboard frame for a terminal `columns` wide, or the
+  default width when nil. Returns `:unavailable` when the dashboard isn't running.
+  """
+  @spec frame(pos_integer() | nil, GenServer.name()) :: {:ok, String.t()} | :unavailable
+  def frame(columns, server \\ __MODULE__) do
+    case GenServer.whereis(server) do
+      pid when is_pid(pid) -> GenServer.call(pid, {:frame, columns})
+      _ -> :unavailable
+    end
+  end
+
   @spec init(keyword()) :: {:ok, t()}
   def init(opts) do
     refresh_ms_override = keyword_override(opts, :refresh_ms)
@@ -138,6 +155,12 @@ defmodule SymphonyElixir.StatusDashboard do
       :ok
   end
 
+  @spec handle_call({:frame, pos_integer() | nil}, GenServer.from(), t()) :: {:reply, {:ok, String.t()}, t()}
+  def handle_call({:frame, columns}, _from, state) do
+    {snapshot_data, tps, state} = sample_snapshot(state, System.monotonic_time(:millisecond))
+    {:reply, {:ok, Renderer.format_snapshot_content(snapshot_data, tps, columns)}, state}
+  end
+
   @spec handle_info(term(), t()) :: {:noreply, t()}
   def handle_info(:tick, %{enabled: true} = state) do
     state = refresh_runtime_config(state)
@@ -186,7 +209,25 @@ defmodule SymphonyElixir.StatusDashboard do
 
   defp maybe_render(state) do
     now_ms = System.monotonic_time(:millisecond)
+    {snapshot_data, tps, state} = sample_snapshot(state, now_ms)
 
+    if snapshot_data != state.last_snapshot_fingerprint or periodic_rerender_due?(state, now_ms) do
+      content = Renderer.format_snapshot_content(snapshot_data, tps)
+
+      state
+      |> maybe_update_snapshot_fingerprint(snapshot_data)
+      |> maybe_enqueue_render(content, now_ms)
+    else
+      state
+    end
+  rescue
+    error in [ArgumentError, RuntimeError] ->
+      Logger.warning("Failed rendering status dashboard: #{Exception.message(error)}")
+      state
+  end
+
+  # Reads the orchestrator snapshot and records a token sample for the throughput figure.
+  defp sample_snapshot(state, now_ms) do
     {raw_snapshot_data, token_samples} =
       snapshot_with_samples(
         state.token_samples,
@@ -210,24 +251,7 @@ defmodule SymphonyElixir.StatusDashboard do
         current_tokens
       )
 
-    state =
-      state
-      |> Map.put(:last_tps_second, tps_second)
-      |> Map.put(:last_tps_value, tps)
-
-    if snapshot_data != state.last_snapshot_fingerprint or periodic_rerender_due?(state, now_ms) do
-      content = Renderer.format_snapshot_content(snapshot_data, tps)
-
-      state
-      |> maybe_update_snapshot_fingerprint(snapshot_data)
-      |> maybe_enqueue_render(content, now_ms)
-    else
-      state
-    end
-  rescue
-    error in [ArgumentError, RuntimeError] ->
-      Logger.warning("Failed rendering status dashboard: #{Exception.message(error)}")
-      state
+    {snapshot_data, tps, %{state | last_tps_second: tps_second, last_tps_value: tps}}
   end
 
   defp maybe_enqueue_render(state, content, now_ms) do
@@ -468,16 +492,23 @@ defmodule SymphonyElixir.StatusDashboard do
   end
 
   defp dashboard_enabled? do
+    not mix_test_env?() and stdout_terminal?()
+  end
+
+  defp mix_test_env? do
     if Code.ensure_loaded?(Mix) and function_exported?(Mix, :env, 0) do
       try do
-        Mix.env() != :test
+        Mix.env() == :test
       rescue
-        _ -> true
+        _ -> false
       end
     else
-      true
+      false
     end
   end
+
+  # `:io.columns/0` answers only when standard output is a terminal, not a file or pipe.
+  defp stdout_terminal?, do: match?({:ok, _columns}, :io.columns())
 
   defp keyword_override(opts, key) do
     if Keyword.has_key?(opts, key), do: Keyword.fetch!(opts, key), else: nil

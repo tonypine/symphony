@@ -688,6 +688,11 @@ dashboard:
 
 CLI `--host` and `--port` override these listener settings.
 
+`enabled` switches only the terminal dashboard Symphony draws on its own output. The web dashboard, the
+HTTP API and the control plane stay up when it is `false`. Symphony also skips the terminal dashboard when
+its output isn't a terminal (a file or a pipe). `symphony dashboard [--url <control url>]` draws the same
+view in another terminal by polling `GET /api/v1/state?format=terminal&columns=<n>` on the control plane.
+
 The dashboard also serves an Audit tab at `/audit` (filters, per-record expansion, daily hash-chain
 verification, NDJSON export); the same filtered stream is available from `/api/v1/audit`.
 Per-issue transcripts are available in the dashboard and as JSON at

@@ -1386,7 +1386,8 @@ not require recognizing or validating extension fields unless that extension is 
 - `watchdog.no_progress_threshold_ms`: integer, default `600000`
 - `workers.ssh_hosts`: list of strings, default `[]`
 - `workers.max_concurrent_agents_per_host`: positive integer or null
-- `dashboard.enabled`: boolean, default `true`
+- `dashboard.enabled`: boolean, default `true`; turns the terminal dashboard on or off. It does not stop
+  the HTTP server or control API. The terminal dashboard is drawn only when standard output is a terminal.
 - `dashboard.refresh_ms`: integer, default `1000`
 - `dashboard.render_interval_ms`: integer, default `16`
 - `dashboard.snapshot_publish_ms`: integer, default `500`

@@ -3,7 +3,7 @@ defmodule SymphonyElixir.CLI do
   Escript entrypoint for running Symphony with an operator `symphony.yml`.
   """
 
-  alias SymphonyElixir.{Config, Paths, ReleaseNode}
+  alias SymphonyElixir.{Config, ControlClient, Paths, ReleaseNode, TerminalDashboard}
 
   # Retained so existing scripts (Docker, ops runbooks) that still pass the long
   # flag keep parsing — its value is ignored.
@@ -28,6 +28,7 @@ defmodule SymphonyElixir.CLI do
     timeout: :string
   ]
   @check_switches [config: :string]
+  @dashboard_switches [url: :string]
   @default_symphony_file "symphony.yml"
 
   @type ensure_started_result :: {:ok, [atom()]} | {:error, term()}
@@ -49,7 +50,9 @@ defmodule SymphonyElixir.CLI do
           set_server_host_override: (String.t() | nil -> :ok | {:error, term()}),
           set_server_port_override: (non_neg_integer() | nil -> :ok | {:error, term()}),
           ensure_all_started: (-> ensure_started_result()),
-          run_one_shot: (String.t(), keyword() -> one_shot_result())
+          run_one_shot: (String.t(), keyword() -> one_shot_result()),
+          control_url: (-> String.t()),
+          run_dashboard: (String.t() -> :ok)
         }
 
   @spec main([String.t()]) :: no_return()
@@ -77,6 +80,9 @@ defmodule SymphonyElixir.CLI do
     case args do
       ["check" | check_args] ->
         evaluate_check(check_args, deps)
+
+      ["dashboard" | dashboard_args] ->
+        evaluate_dashboard(dashboard_args, deps)
 
       ["init" | init_args] ->
         evaluate_init(init_args, deps)
@@ -122,6 +128,19 @@ defmodule SymphonyElixir.CLI do
 
       _ ->
         {:error, check_usage_message()}
+    end
+  end
+
+  # Draws the running Symphony's dashboard from its control API; no config needed.
+  defp evaluate_dashboard(args, deps) do
+    case OptionParser.parse(args, strict: @dashboard_switches) do
+      {opts, [], []} ->
+        url = (opts |> Keyword.get_values(:url) |> List.last() || deps.control_url.()) |> String.trim_trailing("/")
+        :ok = deps.run_dashboard.(url)
+        {:halt, 0}
+
+      _ ->
+        {:error, dashboard_usage_message()}
     end
   end
 
@@ -200,7 +219,7 @@ defmodule SymphonyElixir.CLI do
       :not_in_burrito ->
         :ok
 
-      ["check" | _check_args] = args ->
+      [command | _args] = args when command in ["check", "dashboard"] ->
         args |> evaluate() |> halt()
 
       args ->
@@ -210,8 +229,8 @@ defmodule SymphonyElixir.CLI do
     end
   end
 
-  # Only the service takes the node name; `check` above runs undistributed so it
-  # can validate config next to a running Symphony.
+  # Only the service takes the node name; `check` and `dashboard` above run
+  # undistributed so they work next to a running Symphony.
   defp configure_service(args) do
     with :ok <- configure(args), do: ReleaseNode.start(ReleaseNode.runtime_deps())
   end
@@ -338,6 +357,7 @@ defmodule SymphonyElixir.CLI do
   defp usage_message do
     "Usage: symphony init [--force]\n" <>
       "       symphony check [--config <path-to-symphony.yml>]\n" <>
+      "       symphony dashboard [--url <control-url>]\n" <>
       "       symphony [--config <path-to-symphony.yml>] [--state-root <path>] [--logs-root <path>] [--host <host>] [--port <port>]\n" <>
       "       symphony pr <url-or-number> [--intent \"address review comments\"]\n" <>
       "       symphony run <issue-identifier> [--config <path-to-symphony.yml>] [--timeout <duration>] [--no-retry] [--state-root <path>] [--logs-root <path>]\n" <>
@@ -346,6 +366,10 @@ defmodule SymphonyElixir.CLI do
 
   defp check_usage_message do
     "Usage: symphony check [--config <path-to-symphony.yml>]"
+  end
+
+  defp dashboard_usage_message do
+    "Usage: symphony dashboard [--url <control-url>]"
   end
 
   @spec run_usage_message() :: String.t()
@@ -367,8 +391,14 @@ defmodule SymphonyElixir.CLI do
       set_server_host_override: &set_server_host_override/1,
       set_server_port_override: &set_server_port_override/1,
       ensure_all_started: fn -> Application.ensure_all_started(:symphony_elixir) end,
-      run_one_shot: &SymphonyElixir.OneShot.run/2
+      run_one_shot: &SymphonyElixir.OneShot.run/2,
+      control_url: fn -> ControlClient.control_url() end,
+      run_dashboard: &run_dashboard/1
     }
+  end
+
+  defp run_dashboard(url) do
+    TerminalDashboard.run(url, TerminalDashboard.runtime_deps(url), [])
   end
 
   defp set_symphony_config(opts, deps) do

@@ -266,7 +266,7 @@ defmodule SymphonyElixir.Config do
     end
   end
 
-  @spec server_port() :: non_neg_integer() | nil
+  @spec server_port() :: non_neg_integer()
   def server_port do
     case Application.get_env(:symphony_elixir, :server_port_override) do
       port when is_integer(port) and port >= 0 -> port
@@ -457,12 +457,10 @@ defmodule SymphonyElixir.Config do
     end)
   end
 
+  # `dashboard.enabled` only switches the terminal dashboard; the HTTP server and
+  # control API stay up so the menu bar app and `symphony dashboard` can reach it.
   defp default_server_port(settings) do
-    cond do
-      not settings.observability.dashboard_enabled -> nil
-      is_integer(settings.server.port) -> settings.server.port
-      true -> @default_server_port
-    end
+    if is_integer(settings.server.port), do: settings.server.port, else: @default_server_port
   end
 
   defp warn_if_budget_token_reporting_unavailable(%Schema{} = settings) do

@@ -233,6 +233,18 @@ Validate `symphony.yml` and every repo `WORKFLOW.md` it points at without starti
 ./bin/symphony check --config ./other.yml
 ```
 
+Watch a running Symphony's terminal dashboard from another terminal. It polls the control API at
+`<state-root>/control_url` (or `--url`) with the token in `<state-root>/control_token`; press `q` or
+Ctrl-C to quit:
+
+```bash
+./bin/symphony dashboard
+./bin/symphony dashboard --url http://127.0.0.1:4000
+```
+
+Symphony draws the terminal dashboard itself only when its output is a terminal, so a Symphony whose
+output goes to a file (as under the menu bar app) logs no dashboard frames.
+
 Run a single issue synchronously, without the poll loop or dashboard:
 
 ```bash

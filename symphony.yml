@@ -172,6 +172,7 @@ pull_requests:
 #     stop_timeout_ms: 10000
 
 dashboard:
+  # Terminal dashboard on Symphony's own output; the web dashboard and control API stay up either way.
   # enabled: true
   # host: 127.0.0.1
   # port: 0

@@ -6,10 +6,22 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   use Phoenix.Controller, formats: [:json]
 
   alias Plug.Conn
-  alias SymphonyElixir.Quality
+  alias SymphonyElixir.{Quality, StatusDashboard}
   alias SymphonyElixirWeb.{Endpoint, Presenter}
 
   @spec state(Conn.t(), map()) :: Conn.t()
+  def state(conn, %{"format" => "terminal"} = params) do
+    case StatusDashboard.frame(terminal_columns(params), status_dashboard()) do
+      {:ok, frame} ->
+        conn
+        |> put_resp_content_type("text/plain")
+        |> send_resp(200, frame)
+
+      :unavailable ->
+        error_response(conn, 503, "dashboard_unavailable", "Terminal dashboard is unavailable")
+    end
+  end
+
   def state(conn, _params) do
     json(conn, Presenter.state_payload(orchestrator(), snapshot_timeout_ms()))
   end
@@ -109,6 +121,19 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   end
 
   defp maybe_put_export_header(conn, _params), do: conn
+
+  defp terminal_columns(%{"columns" => columns}) when is_binary(columns) do
+    case Integer.parse(columns) do
+      {columns, ""} when columns > 0 -> columns
+      _ -> nil
+    end
+  end
+
+  defp terminal_columns(_params), do: nil
+
+  defp status_dashboard do
+    Endpoint.config(:status_dashboard) || StatusDashboard
+  end
 
   defp orchestrator do
     Endpoint.config(:orchestrator) || SymphonyElixir.Orchestrator
