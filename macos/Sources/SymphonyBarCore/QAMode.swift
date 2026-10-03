@@ -1,7 +1,7 @@
 import Foundation
 
 /// QA mode, for test launches: `SYMPHONY_BAR_QA_ROOT=<dir>` keeps the app's settings, secrets, Launch at Login,
-/// logs, update downloads and Symphony state under `<dir>`, never in UserDefaults or the login Keychain.
+/// logs, update downloads and Symphony state under `<dir>`, never in UserDefaults or the app's secrets file.
 public struct QAMode: Equatable {
     /// The directory QA mode keeps everything under. QA mode is on while it is set and not blank.
     public static let environmentKey = "SYMPHONY_BAR_QA_ROOT"
@@ -32,7 +32,7 @@ public struct QAMode: Equatable {
 }
 
 /// Where the app keeps its settings and secrets, and the environment it reads Symphony's state root from:
-/// UserDefaults, the login Keychain and macOS's login item normally, files under the QA root in QA mode.
+/// UserDefaults, the secrets file and macOS's login item normally, files under the QA root in QA mode.
 public struct AppStores {
     public let qaMode: QAMode?
     public let defaults: KeyValueStore
@@ -52,7 +52,7 @@ public struct AppStores {
         guard let qaMode = QAMode.detect(environment: environment) else {
             self.qaMode = nil
             defaults = UserDefaults.standard
-            secrets = KeychainSecretStore()
+            secrets = MigratingSecretStore(file: FileSecretStore(file: MigratingSecretStore.defaultFile(home: home)))
             loginItem = MainAppLoginItem()
             logDirectory = ChildLog.defaultDirectory(home: home)
             updateCacheDirectory = nil
@@ -118,8 +118,7 @@ public final class PropertyListFileStore: KeyValueStore {
     }
 }
 
-/// Secrets in a JSON file readable only by the user, one string per account. For QA mode only: the login
-/// Keychain is where real secrets belong.
+/// Secrets in a JSON file readable only by the user, one string per account.
 public struct FileSecretStore: SecretStore {
     public let file: URL
 
@@ -153,7 +152,8 @@ public struct FileSecretStore: SecretStore {
         return try JSONDecoder().decode([String: String].self, from: Data(contentsOf: file))
     }
 
-    private func save(_ values: [String: String]) throws {
+    /// Replaces every stored secret with `values`.
+    func save(_ values: [String: String]) throws {
         try FileManager.default.createDirectory(
             at: file.deletingLastPathComponent(),
             withIntermediateDirectories: true,

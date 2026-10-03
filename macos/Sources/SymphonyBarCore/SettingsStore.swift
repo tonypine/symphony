@@ -24,7 +24,7 @@ public final class SettingsStore {
     private let defaults: KeyValueStore
     private let secrets: SecretStore
 
-    public init(defaults: KeyValueStore = UserDefaults.standard, secrets: SecretStore = KeychainSecretStore()) {
+    public init(defaults: KeyValueStore = UserDefaults.standard, secrets: SecretStore) {
         self.defaults = defaults
         self.secrets = secrets
     }
@@ -62,7 +62,7 @@ public final class SettingsStore {
         defaults.set(settings.developmentMode, forKey: Key.developmentMode)
     }
 
-    /// Reads the Linear and OpenRouter API keys, and every other account under the Keychain service as an extra
+    /// Reads the Linear and OpenRouter API keys, and every other account in the secret store as an extra
     /// variable.
     public func loadSecrets() throws -> SecretSettings {
         let extra = try secrets.accounts()

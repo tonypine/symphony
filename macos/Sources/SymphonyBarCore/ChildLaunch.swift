@@ -135,7 +135,7 @@ public enum ChildLaunchBuilder {
         guard !settings.checkoutPath.isEmpty else { throw LaunchProblem.checkoutPathMissing }
         guard !settings.configPath.isEmpty else { throw LaunchProblem.configPathMissing }
         guard let prefix = ShellWords.split(settings.commandPrefix) else { throw LaunchProblem.commandPrefixInvalid }
-        // A blank Keychain item means "not set": starting would only fail on every Linear call.
+        // A blank stored key means "not set": starting would only fail on every Linear call.
         guard !secrets.linearAPIKey.isEmpty else { throw LaunchProblem.linearAPIKeyMissing }
 
         let binary = settings.checkoutPath + "/bin/symphony"
