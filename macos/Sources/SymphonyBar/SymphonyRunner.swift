@@ -9,7 +9,8 @@ final class SymphonyRunner {
     var onEvent: ((StatusMachine.Event) -> Void)?
 
     private let store: SettingsStore
-    private let secrets: SecretsReader
+    /// Reads the secrets for Start, config checks and the Settings window, one read at a time.
+    let secrets: SecretsReader
     private let logDirectory = AppStores.current.logDirectory
     private var child: ChildProcess?
     private var stopWaiters: [() -> Void] = []
@@ -33,7 +34,7 @@ final class SymphonyRunner {
     var isStopping: Bool { child?.stopRequested == true }
     /// True while Start waits to read the Keychain.
     private(set) var isStarting = false
-    /// True while Start or a config check waits to read the Keychain, which is usually a password prompt.
+    /// True while Start, a config check or Settings waits to read the Keychain, which is usually a password prompt.
     var isWaitingForKeychain: Bool { secrets.isWaiting }
 
     /// Called when a Keychain read starts or ends.

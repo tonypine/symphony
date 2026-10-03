@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import SymphonyBarCore
 
 /// Owns the single Settings window. Each time it opens, values are read fresh from UserDefaults and the secret store.
 @MainActor
@@ -8,13 +9,19 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private static let initialContentSize = NSSize(width: SettingsView.width, height: 720)
 
     private var window: NSWindow?
+    private let secrets: SecretsReader
+
+    /// `secrets` is shared with Start, so Settings and Start can't each put up a Keychain prompt.
+    init(secrets: SecretsReader) {
+        self.secrets = secrets
+    }
 
     /// Called after Save stored changed secrets, so a running Symphony restarts with them.
     var onSecretsChanged: () -> Void = {}
 
     func show() {
         if window == nil {
-            let model = SettingsViewModel(onSecretsChanged: { [weak self] in self?.onSecretsChanged() })
+            let model = SettingsViewModel(secrets: secrets, onSecretsChanged: { [weak self] in self?.onSecretsChanged() })
             let view = SettingsView(model: model) { [weak self] in self?.window?.close() }
             let hostingController = NSHostingController(rootView: view)
             // The default (.preferredContentSize) keeps resizing the window to SwiftUI's ideal size, which
