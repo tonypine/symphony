@@ -17,6 +17,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.Linear.{Client, Issue}
   alias SymphonyElixir.PathSafety
   alias SymphonyElixir.PromptSafety
+  alias SymphonyElixir.RunKind
   alias SymphonyElixir.SensitivePath
   alias SymphonyElixir.SubIssueWait
 
@@ -135,6 +136,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @team_states_query """
   query SymphonyAgentIssueTeamStates($id: String!) {
     issue(id: $id) {
+      title
       labels {
         nodes {
           name
@@ -716,9 +718,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
     else
       settings = Keyword.get_lazy(opts, :settings, &Config.settings!/0)
 
-      with {:ok, state, labels} <- lookup_team_state(issue_id, normalized, opts),
+      with {:ok, state, pr_less?} <- lookup_team_state(issue_id, normalized, opts),
            {:ok, state_id} <- refuse_human_only_state(state),
-           {:ok, state_id} <- refuse_auto_review_handoff_state(state, state_id, labels, settings) do
+           {:ok, state_id} <- refuse_auto_review_handoff_state(state, state_id, pr_less?, settings) do
         refuse_waiting_on_sub_issues_state(state, state_id, settings)
       end
     end
@@ -736,8 +738,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
          {:ok, states} <- fetch_path(body, ["data", "issue", "team", "states", "nodes"], []) do
       case Enum.find(states, matches?) do
         %{"id" => _} = state ->
-          labels = body |> get_in(["data", "issue", "labels", "nodes"]) |> List.wrap() |> Enum.map(&label_name/1)
-          {:ok, state, labels}
+          {:ok, state, pr_less_issue?(get_in(body, ["data", "issue"]))}
 
         _ ->
           available = states |> Enum.map(& &1["name"]) |> Enum.reject(&is_nil/1)
@@ -754,10 +755,11 @@ defmodule SymphonyElixir.AgentTools.Linear do
 
   # With Auto Review on, Symphony moves the issue on from the PR being open, so an
   # agent asking for `In Review` is refused rather than silently redirected. A `breakdown`
-  # parent opens no PR: its plan goes to `In Review` for a human whatever Auto Review says.
-  defp refuse_auto_review_handoff_state(state, state_id, labels, settings) do
+  # parent and a `Final verification:` ticket open no PR: their result goes to `In Review`
+  # for a human whatever Auto Review says.
+  defp refuse_auto_review_handoff_state(state, state_id, pr_less?, settings) do
     if AutoReview.enabled?(settings) and state_name_matches?(state, AutoReview.review_state()) and
-         not Enum.any?(labels, &Issue.breakdown_label?/1),
+         not pr_less?,
        do: {:error, {:in_review_set_by_auto_review, state["name"], AutoReview.state(settings)}},
        else: {:ok, state_id}
   end
@@ -774,6 +776,11 @@ defmodule SymphonyElixir.AgentTools.Linear do
       nil ->
         {:ok, state_id}
     end
+  end
+
+  defp pr_less_issue?(issue) do
+    labels = issue |> get_in(["labels", "nodes"]) |> List.wrap() |> Enum.map(&label_name/1)
+    Enum.any?(labels, &Issue.breakdown_label?/1) or RunKind.classify(%Issue{title: issue["title"]}) == :final_verification
   end
 
   defp label_name(%{"name" => name}), do: name
