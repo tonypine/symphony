@@ -115,6 +115,8 @@ struct SettingsView: View {
                             providerSource: model.runProfilesScope == .global && kind == nil ? "default" : "inherited",
                             canReset: model.runProfilesScope != .global,
                             openRouterModels: model.openRouterAPIKey.isEmpty ? nil : model.openRouterModelList,
+                            hasOpenRouterKey: !model.openRouterAPIKey.isEmpty,
+                            retryOpenRouterModels: model.loadOpenRouterModels,
                             isPickingModel: Binding(
                                 get: { model.openRouterPickerRow == kind?.rawValue ?? "default" },
                                 set: { model.openRouterPickerRow = $0 ? kind?.rawValue ?? "default" : nil }
@@ -268,8 +270,10 @@ private struct RunProfileRow: View {
     let providerSource: String
     /// Whether the row offers Reset to inherited, for a repository's rows.
     let canReset: Bool
-    /// OpenRouter's models, or nil when no OpenRouter key is entered.
+    /// OpenRouter's models, or nil when no OpenRouter key is entered or the list hasn't loaded yet.
     let openRouterModels: Result<[OpenRouterModel], OpenRouterFailure>?
+    let hasOpenRouterKey: Bool
+    let retryOpenRouterModels: () -> Void
     @Binding var isPickingModel: Bool
     @Binding var modelQuery: String
 
@@ -292,6 +296,8 @@ private struct RunProfileRow: View {
                             selection: $profile.model,
                             inheritedTitle: inherited.model.map { $0 + ", " + inheritedSource } ?? "default",
                             models: openRouterModels,
+                            hasKey: hasOpenRouterKey,
+                            retry: retryOpenRouterModels,
                             isPicking: $isPickingModel,
                             query: $modelQuery
                         )
@@ -353,25 +359,36 @@ private struct RunProfileRow: View {
 }
 
 /// A button showing the chosen OpenRouter model that opens a searchable list of the models that support tools.
-/// Without an OpenRouter key it shows a disabled hint instead.
+/// Without an OpenRouter key it shows a disabled hint instead, and while the list loads, a progress note.
 private struct OpenRouterModelField: View {
     @Binding var selection: String?
     let inheritedTitle: String
     let models: Result<[OpenRouterModel], OpenRouterFailure>?
+    let hasKey: Bool
+    let retry: () -> Void
     @Binding var isPicking: Bool
     @Binding var query: String
 
     var body: some View {
         switch models {
-        case nil:
+        case nil where !hasKey:
             Text("Add an OpenRouter key below first")
                 .foregroundStyle(.secondary)
                 .help("Enter an OpenRouter API key in the OpenRouter section to choose OpenRouter models.")
+        case nil:
+            HStack {
+                ProgressView().controlSize(.small)
+                Text("Loading models…").foregroundStyle(.secondary)
+            }
         case .failure(let failure)?:
-            Text(failure.message)
-                .foregroundStyle(.red)
-                .lineLimit(1)
-                .help(failure.message)
+            HStack {
+                Text(failure.message)
+                    .foregroundStyle(.red)
+                    .lineLimit(1)
+                    .help(failure.message)
+                Button("Retry", action: retry)
+                    .buttonStyle(.borderless)
+            }
         case .success(let models)?:
             Button {
                 query = ""

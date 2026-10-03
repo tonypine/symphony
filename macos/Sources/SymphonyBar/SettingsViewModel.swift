@@ -17,7 +17,12 @@ final class SettingsViewModel: ObservableObject {
     @Published var settings: AppSettings
     @Published var linearAPIKey = ""
     @Published var openRouterAPIKey = "" {
-        didSet { if openRouterAPIKey != oldValue { openRouterResult = nil } }
+        didSet {
+            guard openRouterAPIKey != oldValue else { return }
+            openRouterResult = nil
+            // A key entered into an empty field loads the list the Models pickers need, unless one is loaded.
+            if oldValue.isEmpty && !openRouterAPIKey.isEmpty, !hasOpenRouterModelList { loadOpenRouterModels() }
+        }
     }
     /// The last Test connection result: the key's label and credit, or why it failed.
     @Published private(set) var openRouterResult: Result<OpenRouterKeyInfo, OpenRouterFailure>?
@@ -25,6 +30,7 @@ final class SettingsViewModel: ObservableObject {
     @Published private(set) var openRouterModels: Result<String, OpenRouterFailure>?
     /// OpenRouter's models for the Models pickers, loaded while an OpenRouter key is entered.
     @Published private(set) var openRouterModelList: Result<[OpenRouterModel], OpenRouterFailure>?
+    @Published private(set) var isLoadingOpenRouterModels = false
     @Published private(set) var isTestingOpenRouter = false
     @Published var extraRows: [EnvironmentRow] = []
     /// Launch at Login, read from macOS rather than UserDefaults so it follows changes made in System Settings.
@@ -151,9 +157,26 @@ final class SettingsViewModel: ObservableObject {
 
     /// Loads OpenRouter's model list for the Models pickers. The list needs no key, but the pickers only offer
     /// OpenRouter models once a key is entered.
+    /// Retried from a failed list in the Models section.
     func loadOpenRouterModels() {
+        guard !isLoadingOpenRouterModels else { return }
+        isLoadingOpenRouterModels = true
         let client = openRouter
-        Task { openRouterModelList = await client.models() }
+        Task {
+            setOpenRouterModelList(await client.models())
+            isLoadingOpenRouterModels = false
+        }
+    }
+
+    private var hasOpenRouterModelList: Bool {
+        if case .success? = openRouterModelList { return true }
+        return false
+    }
+
+    /// A failed reload keeps a list that loaded earlier; otherwise the latest result replaces the last one.
+    private func setOpenRouterModelList(_ models: Result<[OpenRouterModel], OpenRouterFailure>) {
+        if case .failure = models, hasOpenRouterModelList { return }
+        openRouterModelList = models
     }
 
     /// Names that may be removed from the Keychain on save: the extra variables and a stored OpenRouter key.
@@ -178,7 +201,7 @@ final class SettingsViewModel: ObservableObject {
             // A key edited during the test makes the result stale.
             if openRouterAPIKey == key { openRouterResult = checked }
             openRouterModels = models.map(OpenRouterModel.summary)
-            if case .success = models { openRouterModelList = models }
+            setOpenRouterModelList(models)
             isTestingOpenRouter = false
         }
     }
