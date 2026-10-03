@@ -120,7 +120,7 @@ final class OpenRouterTests: XCTestCase {
         let body = """
             {"data":[
               {"id":"anthropic/claude-sonnet-4","name":"Anthropic: Claude Sonnet 4",
-               "supported_parameters":["max_tokens","tools","tool_choice"]},
+               "supported_parameters":["max_tokens","tools","tool_choice","reasoning"]},
               {"id":"openai/gpt-4o","name":"OpenAI: GPT-4o","supported_parameters":["tools"]},
               {"id":"some/text-only","name":"Text only","supported_parameters":["temperature"]},
               {"id":"some/bare"}
@@ -133,7 +133,9 @@ final class OpenRouterTests: XCTestCase {
         XCTAssertEqual(
             models,
             [
-                OpenRouterModel(id: "anthropic/claude-sonnet-4", name: "Anthropic: Claude Sonnet 4", supportsTools: true),
+                OpenRouterModel(
+                    id: "anthropic/claude-sonnet-4", name: "Anthropic: Claude Sonnet 4", supportsTools: true, supportsReasoning: true
+                ),
                 OpenRouterModel(id: "openai/gpt-4o", name: "OpenAI: GPT-4o", supportsTools: true),
                 OpenRouterModel(id: "some/text-only", name: "Text only", supportsTools: false),
                 OpenRouterModel(id: "some/bare", name: "some/bare", supportsTools: false),
@@ -141,6 +143,38 @@ final class OpenRouterTests: XCTestCase {
         )
         XCTAssertEqual(models.filter(\.supportsTools).map(\.id), ["anthropic/claude-sonnet-4", "openai/gpt-4o"])
         XCTAssertEqual(OpenRouterModel.summary(models), "4 models, 2 support tools")
+    }
+
+    func testToolModelsMatchIdOrNameAndSortByName() {
+        let models = [
+            OpenRouterModel(id: "openai/gpt-4o", name: "OpenAI: GPT-4o", supportsTools: true),
+            OpenRouterModel(id: "anthropic/claude-sonnet-4", name: "Anthropic: Claude Sonnet 4", supportsTools: true),
+            OpenRouterModel(id: "anthropic/claude-2", name: "Anthropic: Claude 2", supportsTools: false),
+        ]
+
+        XCTAssertEqual(
+            OpenRouterModel.toolModels(models, matching: "").map(\.id),
+            ["anthropic/claude-sonnet-4", "openai/gpt-4o"]
+        )
+        XCTAssertEqual(OpenRouterModel.toolModels(models, matching: " ANTHROPIC/ ").map(\.id), ["anthropic/claude-sonnet-4"])
+        XCTAssertEqual(OpenRouterModel.toolModels(models, matching: "gpt").map(\.id), ["openai/gpt-4o"])
+        XCTAssertEqual(OpenRouterModel.toolModels(models, matching: "sonnet 4").map(\.id), ["anthropic/claude-sonnet-4"])
+        XCTAssertEqual(OpenRouterModel.toolModels(models, matching: "claude 2"), [])
+    }
+
+    func testEffortNoteOnlyForAListedModelWithoutReasoning() {
+        let models = [
+            OpenRouterModel(id: "a/thinks", name: "Thinks", supportsTools: true, supportsReasoning: true),
+            OpenRouterModel(id: "a/fast", name: "Fast", supportsTools: true),
+        ]
+
+        XCTAssertEqual(
+            OpenRouterModel.effortNote(for: "a/fast", in: models),
+            "Fast doesn't support reasoning on OpenRouter, so effort has no effect on it."
+        )
+        XCTAssertNil(OpenRouterModel.effortNote(for: "a/thinks", in: models))
+        XCTAssertNil(OpenRouterModel.effortNote(for: "a/unknown", in: models))
+        XCTAssertNil(OpenRouterModel.effortNote(for: nil, in: models))
     }
 
     func testModelSummaryUsesSingularForOne() {

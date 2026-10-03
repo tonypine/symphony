@@ -4,11 +4,15 @@ import Foundation
 public enum RunProfilesConfigError: LocalizedError, Equatable {
     /// The keys use YAML the line editor doesn't handle. `line` counts from 1.
     case unsupported(line: Int, reason: String)
+    /// No `repositories[]` entry has the key.
+    case repositoryNotFound(String)
 
     public var errorDescription: String? {
         switch self {
         case .unsupported(let line, let reason):
             return "symphony.yml line \(line): \(reason). Edit models by hand."
+        case .repositoryNotFound(let key):
+            return "symphony.yml has no repository with key `\(key)`."
         }
     }
 }
@@ -44,27 +48,50 @@ public enum RunKind: String, CaseIterable, Identifiable {
     }
 }
 
-/// A field of a run profile, named as its YAML key.
+/// A field of a run profile, named as its YAML key, in the order new ones are written.
 public enum RunProfileField: String, CaseIterable {
-    case model, effort
+    case provider, model, effort
+
+    /// The fields `agent.command` can pass as `--model` / `--effort`.
+    static let commandFlags: [RunProfileField] = [.model, .effort]
 }
 
-/// The model and effort for one kind of run, or the defaults. A nil field is missing from the file.
+/// The provider, model and effort for one kind of run, or the defaults. A nil field is missing from the file.
 public struct RunProfile: Equatable {
     public var model: String?
     public var effort: String?
+    public var provider: String?
 
-    public init(model: String? = nil, effort: String? = nil) {
+    public init(model: String? = nil, effort: String? = nil, provider: String? = nil) {
         self.model = model
         self.effort = effort
+        self.provider = provider
     }
 
     public subscript(field: RunProfileField) -> String? {
-        get { field == .model ? model : effort }
+        get {
+            switch field {
+            case .provider: return provider
+            case .model: return model
+            case .effort: return effort
+            }
+        }
         set {
-            if field == .model { model = newValue } else { effort = newValue }
+            switch field {
+            case .provider: provider = newValue
+            case .model: model = newValue
+            case .effort: effort = newValue
+            }
         }
     }
+
+    /// Each field of this profile, or of `fallback` where this one is unset.
+    public func merged(over fallback: RunProfile) -> RunProfile {
+        RunProfile(model: model ?? fallback.model, effort: effort ?? fallback.effort, provider: provider ?? fallback.provider)
+    }
+
+    /// Whether a model or effort is set, which Symphony passes as `--model` / `--effort`. A provider alone isn't.
+    var setsModelOrEffort: Bool { model != nil || effort != nil }
 }
 
 /// `agent.model` / `agent.effort` and `agent.run_profiles`.
@@ -86,6 +113,65 @@ public struct RunProfiles: Equatable {
             } else {
                 defaults = newValue
             }
+        }
+    }
+
+    /// Whether Symphony passes a model or effort to every run from these profiles, so it rejects
+    /// `--model` / `--effort` in `agent.command`.
+    var setsCommandFlags: Bool { defaults.setsModelOrEffort || !kinds.isEmpty }
+
+    /// Whether these profiles give `kind` a model or effort, or a profile of its own.
+    func setsCommandFlags(for kind: RunKind) -> Bool { defaults.setsModelOrEffort || kinds[kind] != nil }
+}
+
+/// Which `agent` block of a `symphony.yml` the profiles are in: the top-level one, or a `repositories[]`
+/// entry's.
+public enum RunProfilesScope: Hashable {
+    case global
+    case repository(String)
+}
+
+/// The profiles of the top-level `agent` block and of each repository's `agent` block, keyed by
+/// repository key. A repository without a block holds empty profiles.
+public struct ScopedRunProfiles: Equatable {
+    public var global: RunProfiles
+    public var repositories: [String: RunProfiles]
+
+    public init(global: RunProfiles = RunProfiles(), repositories: [String: RunProfiles] = [:]) {
+        self.global = global
+        self.repositories = repositories
+    }
+
+    public subscript(scope: RunProfilesScope) -> RunProfiles {
+        get {
+            switch scope {
+            case .global: return global
+            case .repository(let key): return repositories[key] ?? RunProfiles()
+            }
+        }
+        set {
+            switch scope {
+            case .global: global = newValue
+            case .repository(let key): repositories[key] = newValue
+            }
+        }
+    }
+
+    /// What the row for `kind` (nil for the Default row) in `scope` resolves to where it sets nothing, the way
+    /// Symphony resolves each field: the repository's kind, the repository's defaults, `agent.run_profiles`'s
+    /// kind, `agent`'s defaults, then the flags in `agent.command` (`command`) and the `anthropic` provider.
+    public func inherited(_ kind: RunKind?, in scope: RunProfilesScope, command: RunProfile) -> RunProfile {
+        let base = RunProfile(model: command.model, effort: command.effort, provider: RunProfilesConfig.anthropic)
+        let global = global.defaults.merged(over: base)
+        switch (scope, kind) {
+        case (.global, nil):
+            return base
+        case (.global, _?):
+            return global
+        case (.repository, nil):
+            return global
+        case (.repository, let kind?):
+            return self[scope].defaults.merged(over: self.global[kind].merged(over: global))
         }
     }
 }
@@ -115,21 +201,29 @@ public enum RunProfilesConfig {
 
     public static let efforts = ["low", "medium", "high", "xhigh", "max"].map { RunProfileChoice(id: $0, title: $0) }
 
+    public static let anthropic = "anthropic"
+    public static let openRouter = "openrouter"
+
+    public static let providers = [
+        RunProfileChoice(id: anthropic, title: "Anthropic"),
+        RunProfileChoice(id: openRouter, title: "OpenRouter"),
+    ]
+
     /// `choices`, plus `current` when the file holds a value they don't list.
     public static func choices(_ choices: [RunProfileChoice], including current: String?) -> [RunProfileChoice] {
         guard let current, !choices.contains(where: { $0.id == current }) else { return choices }
         return choices + [RunProfileChoice(id: current, title: current)]
     }
 
-    /// The title of a picker's default entry: "default", or what `agent.command` passes, as in
+    /// The title of a picker's default entry: "default", or the value it falls back to and where from, as in
     /// "Opus 5.5, from command".
-    public static func defaultTitle(_ choices: [RunProfileChoice], inherited: String?) -> String {
+    public static func defaultTitle(_ choices: [RunProfileChoice], inherited: String?, source: String = "from command") -> String {
         guard let inherited else { return "default" }
-        return (choices.first { $0.id == inherited }?.title ?? inherited) + ", from command"
+        return (choices.first { $0.id == inherited }?.title ?? inherited) + ", " + source
     }
 
     /// Keys of `agent:` in the order new ones are written.
-    static let agentOrder = ["runtime", "command", "model", "effort", "run_profiles"]
+    static let agentOrder = ["runtime", "command", "provider", "model", "effort", "run_profiles"]
     /// Keys of `pre_push_review:` in the order new ones are written.
     static let prePushReviewOrder = ["enabled", "runtime", "command", "model", "effort"]
     /// Keys of `auto_review:` in the order new ones are written.
@@ -139,9 +233,10 @@ public enum RunProfilesConfig {
 
     // MARK: Reading
 
-    public static func profiles(in yaml: String) throws -> RunProfiles {
+    /// The profiles of the top-level `agent` block, or of a repository's `agent` block for `scope`.
+    public static func profiles(in yaml: String, scope: RunProfilesScope = .global) throws -> RunProfiles {
         let document = Document(yaml)
-        guard let agent = try agentKey(in: document) else { return RunProfiles() }
+        guard let agent = try agentKey(in: document, scope: scope) else { return RunProfiles() }
         let agentRange = document.children(of: agent)
         var profiles = RunProfiles()
         for field in RunProfileField.allCases {
@@ -178,6 +273,20 @@ public enum RunProfilesConfig {
         return profiles
     }
 
+    /// The profiles of the top-level `agent` block and of every repository.
+    public static func scopedProfiles(in yaml: String) throws -> ScopedRunProfiles {
+        var profiles = ScopedRunProfiles(global: try self.profiles(in: yaml))
+        for key in try repositoryKeys(in: yaml) {
+            profiles.repositories[key] = try self.profiles(in: yaml, scope: .repository(key))
+        }
+        return profiles
+    }
+
+    /// The keys of the `repositories[]` entries, in file order.
+    public static func repositoryKeys(in yaml: String) throws -> [String] {
+        try repositoryItems(in: Document(yaml)).map(\.key)
+    }
+
     private static func profile(from entries: [FlowEntry], on key: Document.Key) throws -> RunProfile {
         var profile = RunProfile()
         for entry in entries {
@@ -202,7 +311,7 @@ public enum RunProfilesConfig {
     static func splitCommandFlags(_ command: String) -> (command: String, flags: RunProfile) {
         var rest = command
         var flags = RunProfile()
-        for field in RunProfileField.allCases {
+        for field in RunProfileField.commandFlags {
             let pattern = #"(^|\s+)--"# + field.rawValue + #"(?:=(\S*)|\s+(?!-)(\S+))?(?=\s|$)"#
             let regex = try! NSRegularExpression(pattern: pattern)
             let matches = regex.matches(in: rest, range: NSRange(rest.startIndex..., in: rest))
@@ -250,52 +359,106 @@ public enum RunProfilesConfig {
     /// move into `pre_push_review.model` / `.effort`, unless the file sets those. `auto_review.command`
     /// and the `qa` kind work the same way. Runs then use the same model and effort as before.
     public static func updating(_ yaml: String, from old: RunProfiles, to new: RunProfiles) throws -> String {
+        try updating(yaml, from: ScopedRunProfiles(global: old), to: ScopedRunProfiles(global: new))
+    }
+
+    /// `updating(_:from:to:)` for the top-level `agent` block and every repository's. A repository's model,
+    /// effort or `run_profiles` count like the top-level ones for moving the command flags, as Symphony
+    /// rejects those flags in the commands either way.
+    public static func updating(_ yaml: String, from old: ScopedRunProfiles, to new: ScopedRunProfiles) throws -> String {
         guard old != new else { return yaml }
         var text = yaml
         var new = new
         let flags = try commandProfile(in: yaml)
-        if flags != RunProfile() && (new.defaults != RunProfile() || !new.kinds.isEmpty) {
-            for field in RunProfileField.allCases where new.defaults[field] == nil {
-                new.defaults[field] = flags[field]
+        if flags != RunProfile() && ([new.global] + new.repositories.values).contains(where: \.setsCommandFlags) {
+            for field in RunProfileField.commandFlags where new.global.defaults[field] == nil {
+                new.global.defaults[field] = flags[field]
             }
             text = try removingCommandFlags(in: text)
         }
+        // After the move, as `agent.model` / `.effort` set from the flags count too.
+        let all = [new.global] + new.repositories.values
         for (section, kind, order) in [(prePushReview, RunKind.prePushReview, prePushReviewOrder), (autoReview, .qa, autoReviewOrder)] {
             let sectionFlags = try commandFlags(in: yaml, section: section)
-            guard sectionFlags != RunProfile() && (new.defaults != RunProfile() || new.kinds[kind] != nil) else { continue }
+            guard sectionFlags != RunProfile() && all.contains(where: { $0.setsCommandFlags(for: kind) }) else { continue }
             text = try removingCommandFlags(in: text, section: section)
             text = try settingSection(section, to: sectionFlags, order: order, in: text)
         }
-        for kind in scopes {
-            for field in RunProfileField.allCases where old[kind][field] != new[kind][field] {
-                text = try setting(field, of: kind, to: new[kind][field], in: text)
+        let scopes = [RunProfilesScope.global] + Set(old.repositories.keys).union(new.repositories.keys).sorted().map(RunProfilesScope.repository)
+        for scope in scopes {
+            for kind in self.scopes {
+                for field in RunProfileField.allCases where old[scope][kind][field] != new[scope][kind][field] {
+                    text = try setting(field, of: kind, to: new[scope][kind][field], in: text, scope: scope)
+                }
             }
         }
         return text
     }
 
     /// The same text with one field set: `agent.<field>` for a nil kind, else
-    /// `agent.run_profiles.<kind>.<field>`. Rewrites only that value, keeping a trailing comment, or inserts
-    /// the key and any missing parent. A nil value removes the key, then a kind or `run_profiles:` it left
-    /// empty (Symphony rejects an empty one).
-    public static func setting(_ field: RunProfileField, of kind: RunKind?, to value: String?, in yaml: String) throws -> String {
+    /// `agent.run_profiles.<kind>.<field>`, or the same keys under `repositories[<key>].agent` for a
+    /// repository `scope`. Rewrites only that value, keeping a trailing comment, or inserts the key and any
+    /// missing parent. A nil value removes the key, then a kind, `run_profiles:` or repository `agent:` it
+    /// left empty (Symphony rejects an empty one).
+    public static func setting(
+        _ field: RunProfileField,
+        of kind: RunKind?,
+        to value: String?,
+        in yaml: String,
+        scope: RunProfilesScope = .global
+    ) throws -> String {
+        let text = try settingField(field, of: kind, to: value, in: yaml, scope: scope)
+        guard value == nil, case .repository = scope else { return text }
+        var document = Document(text)
+        guard let agent = try agentKey(in: document, scope: scope),
+              document.childIndent(in: document.children(of: agent)) == nil else { return text }
+        document.lines.remove(at: agent.index)
+        return document.text
+    }
+
+    private static func settingField(
+        _ field: RunProfileField,
+        of kind: RunKind?,
+        to value: String?,
+        in yaml: String,
+        scope: RunProfilesScope
+    ) throws -> String {
         var document = Document(yaml)
         let rendered = value.map(RepositoriesConfig.scalar)
-        let step = defaultIndentStep
+        var step = defaultIndentStep
+        // New kinds of a repository are written as indented blocks, which `RepositoriesConfig` can read.
+        var item: RepositoryItem?
+        if case .repository(let key) = scope {
+            item = try repositoryItem(key, in: document)
+            step = item?.step ?? step
+        }
 
-        guard let agent = try agentKey(in: document) else {
+        guard let agent = try agentKey(in: document, scope: scope) else {
             guard let rendered else { return yaml }
-            let pad = String(repeating: " ", count: step)
-            if let kind {
-                document.append(["agent:", pad + "run_profiles:", pad + pad + flowLine(kind, field, rendered)])
-            } else {
-                document.append(["agent:", pad + field.rawValue + ": " + rendered])
+            guard let item else {
+                let pad = String(repeating: " ", count: step)
+                if let kind {
+                    document.append(["agent:", pad + "run_profiles:", pad + pad + flowLine(kind, field, rendered)])
+                } else {
+                    document.append(["agent:", pad + field.rawValue + ": " + rendered])
+                }
+                return document.text
             }
+            let pad = String(repeating: " ", count: item.column)
+            var lines = [pad + "agent:"]
+            if let kind {
+                lines.append(pad + String(repeating: " ", count: step) + "run_profiles:")
+                lines += kindLines(kind, field, rendered, column: item.column + 2 * step, step: step, blocks: true)
+            } else {
+                lines.append(pad + String(repeating: " ", count: step) + field.rawValue + ": " + rendered)
+            }
+            document.lines.insert(contentsOf: lines, at: item.insertionIndex(in: document))
             return document.text
         }
         let agentRange = document.children(of: agent)
         let column = document.childIndent(in: agentRange) ?? agent.indent + step
         let agentStep = column - agent.indent
+        let preferBlocks = item != nil
 
         guard let kind else {
             try set(field.rawValue, to: rendered, under: agent, column: column, order: agentOrder, in: &document)
@@ -307,7 +470,8 @@ public enum RunProfilesConfig {
             let index = insertionIndex(for: "run_profiles", in: agentRange, order: agentOrder, after: agent, of: document)
             let pad = String(repeating: " ", count: column)
             document.lines.insert(
-                contentsOf: [pad + "run_profiles:", pad + String(repeating: " ", count: agentStep) + flowLine(kind, field, rendered)],
+                contentsOf: [pad + "run_profiles:"]
+                    + kindLines(kind, field, rendered, column: column + agentStep, step: agentStep, blocks: preferBlocks),
                 at: index
             )
             return document.text
@@ -320,8 +484,10 @@ public enum RunProfilesConfig {
                 // `run_profiles: {}` turns into a block holding the new kind.
                 guard let rendered else { return yaml }
                 document.lines[runProfiles.index] = inline.replacingValue(in: runProfiles, with: "")
-                let pad = String(repeating: " ", count: runProfiles.indent + agentStep)
-                document.lines.insert(pad + flowLine(kind, field, rendered), at: runProfiles.index + 1)
+                document.lines.insert(
+                    contentsOf: kindLines(kind, field, rendered, column: runProfiles.indent + agentStep, step: agentStep, blocks: preferBlocks),
+                    at: runProfiles.index + 1
+                )
                 return document.text
             }
             let entryIndex = entries.firstIndex { $0.key == kind.rawValue }
@@ -354,13 +520,11 @@ public enum RunProfilesConfig {
             guard let rendered else { return yaml }
             let last = document.lastStructural(in: profilesRange) ?? runProfiles.index
             let index = document.blockEnd(last, deeperThan: kindColumn) + 1
-            let pad = String(repeating: " ", count: kindColumn)
-            if try siblingsUseBlocks(in: profilesRange, of: document) {
-                let fieldPad = String(repeating: " ", count: kindColumn + agentStep)
-                document.lines.insert(contentsOf: [pad + kind.rawValue + ":", fieldPad + field.rawValue + ": " + rendered], at: index)
-            } else {
-                document.lines.insert(pad + flowLine(kind, field, rendered), at: index)
-            }
+            let blocks = try document.childIndent(in: profilesRange) == nil ? preferBlocks : siblingsUseBlocks(in: profilesRange, of: document)
+            document.lines.insert(
+                contentsOf: kindLines(kind, field, rendered, column: kindColumn, step: agentStep, blocks: blocks),
+                at: index
+            )
             return document.text
         }
         let kindInline = try InlineText(kindKey)
@@ -483,8 +647,9 @@ public enum RunProfilesConfig {
             guard entries[index].value != .text(rendered) else { return false }
             entries[index].value = .text(rendered)
         case (nil, let rendered?):
-            // Model goes before effort.
-            let position = field == .model ? 0 : entries.count
+            // Provider, then model, then effort.
+            let later = RunProfileField.allCases.drop { $0 != field }.dropFirst().map(\.rawValue)
+            let position = entries.firstIndex { later.contains($0.key) } ?? entries.count
             entries.insert(FlowEntry(key: field.rawValue, value: .text(rendered)), at: position)
         }
         return true
@@ -520,11 +685,109 @@ public enum RunProfilesConfig {
         kind.rawValue + ": { " + field.rawValue + ": " + rendered + " }"
     }
 
+    /// A new kind holding one field, at `column`: `kind: { field: value }`, or `kind:` with the field
+    /// indented under it.
+    private static func kindLines(
+        _ kind: RunKind,
+        _ field: RunProfileField,
+        _ rendered: String,
+        column: Int,
+        step: Int,
+        blocks: Bool
+    ) -> [String] {
+        let pad = String(repeating: " ", count: column)
+        guard blocks else { return [pad + flowLine(kind, field, rendered)] }
+        return [pad + kind.rawValue + ":", pad + String(repeating: " ", count: step) + field.rawValue + ": " + rendered]
+    }
+
     // MARK: Checks
 
-    /// The top-level `agent:` key, or nil when it's missing.
-    private static func agentKey(in document: Document) throws -> Document.Key? {
-        try sectionKey("agent", in: document)
+    /// The top-level `agent:` key, or a repository's `agent:` key, or nil when it's missing.
+    private static func agentKey(in document: Document, scope: RunProfilesScope = .global) throws -> Document.Key? {
+        guard case .repository(let key) = scope else { return try sectionKey("agent", in: document) }
+        let item = try repositoryItem(key, in: document)
+        if item.firstKey == "agent" {
+            throw Document.Key(name: "agent", index: item.dash, indent: item.column, rest: "").unsupported(
+                "put `key:` first, not `agent:`, on the repository's `-` line"
+            )
+        }
+        guard let agent = document.child("agent", in: item.body, indent: item.column) else { return nil }
+        try requireBlock(agent, InlineText(agent))
+        return agent
+    }
+
+    /// One `- key: ...` entry of `repositories:`.
+    struct RepositoryItem {
+        let key: String
+        /// The `-` line, and the name of the key on it.
+        let dash: Int
+        let firstKey: String
+        let dashIndent: Int
+        /// Column of the entry's keys.
+        let column: Int
+        /// The lines after the `-` line, up to the next entry.
+        let body: Range<Int>
+        /// How far the entry indents nested keys.
+        let step: Int
+
+        /// Where a new key goes: after the entry's last line and the comments indented under it.
+        func insertionIndex(in document: Document) -> Int {
+            let last = document.lastStructural(in: body) ?? dash
+            return document.blockEnd(last, deeperThan: dashIndent) + 1
+        }
+    }
+
+    private static func repositoryItem(_ key: String, in document: Document) throws -> RepositoryItem {
+        guard let item = try repositoryItems(in: document).first(where: { $0.key == key }) else {
+            throw RunProfilesConfigError.repositoryNotFound(key)
+        }
+        return item
+    }
+
+    /// The entries of the top-level `repositories:` list, which may start at the section's own column.
+    static func repositoryItems(in document: Document) throws -> [RepositoryItem] {
+        guard let section = document.child("repositories", in: document.all) else { return [] }
+        guard try InlineText(section).isNull else { throw section.unsupported("`repositories:` should hold `- key: ...` entries") }
+        func isDash(_ index: Int, _ indent: Int) -> Bool {
+            let content = document.lines[index].dropFirst(indent)
+            return content == "-" || content.hasPrefix("- ")
+        }
+
+        var structure: [Int] = []
+        for index in (section.index + 1)..<document.lines.count {
+            guard let indent = document.indent(at: index) else { continue }
+            if indent < section.indent || (indent == section.indent && !isDash(index, indent)) { break }
+            structure.append(index)
+        }
+        guard let first = structure.first, let end = structure.last.map({ $0 + 1 }) else { return [] }
+        let dashIndent = document.indent(at: first) ?? 0
+        let dashes = structure.filter { document.indent(at: $0) == dashIndent }
+        if let stray = dashes.first(where: { !isDash($0, dashIndent) }) {
+            throw section.unsupported("`repositories:` should hold `- key: ...` entries", line: stray)
+        }
+
+        return try dashes.enumerated().map { position, dash in
+            let body = (dash + 1)..<(position + 1 < dashes.count ? dashes[position + 1] : end)
+            let afterDash = document.lines[dash].dropFirst(dashIndent + 1)
+            let spaces = afterDash.prefix { $0 == " " }.count
+            let content = afterDash.dropFirst(spaces)
+            guard spaces > 0, let colon = content.firstIndex(of: ":"), !content.hasPrefix("#") else {
+                throw section.unsupported("put each repository's first key on its `-` line", line: dash)
+            }
+            let column = dashIndent + 1 + spaces
+            let firstKey = String(content[..<colon])
+            let keyLine = firstKey == "key"
+                ? Document.Key(name: "key", index: dash, indent: column, rest: String(content[content.index(after: colon)...]))
+                : document.child("key", in: body, indent: column)
+            guard let keyLine, let key = try decodeScalar(InlineText(keyLine).value, on: keyLine), !key.isEmpty else {
+                throw section.unsupported("a repository has no `key`", line: dash)
+            }
+            let nested = body.lazy.compactMap { document.indent(at: $0) }.first { $0 > column }
+            return RepositoryItem(
+                key: key, dash: dash, firstKey: firstKey, dashIndent: dashIndent, column: column, body: body,
+                step: nested.map { $0 - column } ?? defaultIndentStep
+            )
+        }
     }
 
     /// The top-level `name:` key, or nil when it's missing.
@@ -570,13 +833,29 @@ extension SymphonyConfigFile {
     public func writeRunProfiles(_ new: RunProfiles, from old: RunProfiles) throws {
         try rewrite { try RunProfilesConfig.updating($0, from: old, to: new) }
     }
+
+    /// The profiles of the top-level `agent` block and of every repository.
+    public func readScopedRunProfiles() throws -> ScopedRunProfiles {
+        try RunProfilesConfig.scopedProfiles(in: read())
+    }
+
+    /// Writes the fields that differ between `old` and `new` once `check` passes on the result; see
+    /// `rewrite(_:checkingWith:)`.
+    public func writeRunProfiles(
+        _ new: ScopedRunProfiles,
+        from old: ScopedRunProfiles,
+        checkingWith check: (String) async -> ConfigCheckResult
+    ) async throws -> ConfigCheckResult {
+        try await rewrite({ try RunProfilesConfig.updating($0, from: old, to: new) }, checkingWith: check)
+    }
 }
 
 // MARK: - Inline values
 
 extension Document.Key {
-    fileprivate func unsupported(_ reason: String) -> RunProfilesConfigError {
-        .unsupported(line: index + 1, reason: reason)
+    /// An error on this key's line, or on `line` (counted from 0) when given.
+    fileprivate func unsupported(_ reason: String, line: Int? = nil) -> RunProfilesConfigError {
+        .unsupported(line: (line ?? index) + 1, reason: reason)
     }
 }
 

@@ -166,27 +166,44 @@ set (or, in Development mode, no checkout folder).
   slot), so 3 agents can mean 3 epics at once, or 2 epics plus 1 for other work. Merge (landing) runs and
   Auto Review QA passes don't use these agents; up to `agent.concurrency.finishing_max` (default 2) of them
   run on top.
-- **Models** sets the Claude model and effort for each kind of run, also in the `symphony.yml` itself: the
-  Default row is `agent.model` / `agent.effort`, and each run kind row (breakdown, close-out, final
-  verification, implementation, rework, CI fix, review feedback, landing, pre-push review, QA) is
-  `agent.run_profiles.<kind>.model` / `.effort`. Models offered are Opus 5.5 (`claude-opus-5-5`), Sonnet 5.5
-  (`claude-sonnet-5-5`) and Haiku 4.5 (`claude-haiku-4-5-20251001`), plus any other value already in the
-  file; efforts are low, medium, high, xhigh and max. Save writes only the fields you changed: it rewrites
-  that one value (keeping a trailing comment), or inserts the key, the kind (as `breakdown: { effort: high }`,
-  or as an indented block when the other kinds are written that way) and `run_profiles:` when they are
+- **Models** sets the provider, model and effort for each kind of run, also in the `symphony.yml` itself.
+  The **Scope** picker chooses which `agent` block the rows edit: **All repositories** is the top-level
+  `agent` section, and each `repositories[]` key edits that repository's `repositories[<key>].agent`
+  overrides. The Default row is `agent.provider` / `agent.model` / `agent.effort`, and each run kind row
+  (breakdown, close-out, final verification, implementation, rework, CI fix, review feedback, landing,
+  pre-push review, QA) is `agent.run_profiles.<kind>.provider` / `.model` / `.effort` (the same keys under
+  the repository's `agent` for a repository scope). A field left unset shows, greyed out, the value it
+  inherits, resolved the way Symphony does: the repository's kind, the repository's Default row, the
+  All repositories kind, the All repositories Default row, then `agent.command` and the `anthropic` provider.
+  In a repository scope each row has **Reset to inherited**, which removes the row's keys on save, then a
+  kind, `run_profiles:` or repository `agent:` left empty.
+  - **Provider** is Anthropic (the default) or OpenRouter. Changing it clears the row's own model.
+  - **Model**: for Anthropic, Opus 5.5 (`claude-opus-5-5`), Sonnet 5.5 (`claude-sonnet-5-5`) and Haiku 4.5
+    (`claude-haiku-4-5-20251001`), plus any other value already in the file. For OpenRouter, a searchable
+    list of the OpenRouter models that support tools (loaded from `GET /api/v1/models` once an OpenRouter
+    key is entered); with no key the field points to the OpenRouter section instead.
+  - **Effort**: low, medium, high, xhigh and max. It is off, with a tooltip saying why, for an OpenRouter
+    model that doesn't list `reasoning`.
+
+  Save writes only the fields you changed: it rewrites that one value (keeping a trailing comment), or
+  inserts the key, the kind (as `breakdown: { effort: high }`, or as an indented block when the other kinds
+  are written that way, and always as a block in a repository) and `run_profiles:` / `agent:` when they are
   missing. Choosing "default" removes the key, then a kind or `run_profiles:` left empty. Comments and other
-  keys stay as they are, in block or `{ ... }` style. A layout the editor can't change, such as
-  `agent: { ... }` on one line, turns the pickers off with an error naming the line. Symphony rejects
-  `--model` or `--effort` in `agent.command` once any of these keys is set, so when `agent.command` passes
-  them the Default row shows their values (for example "Opus 5.5, from command"), and the first save that
-  sets a model or effort moves them out of the command (keeping the rest of the line and its comment) into
+  keys stay as they are, in block or `{ ... }` style, and a file you didn't change is never rewritten. Before
+  writing, Save runs `symphony check` on a copy of the changed file next to it, with the form's settings and
+  keys; when the check fails (for example an OpenRouter model without tools), its message shows in the Models
+  section and nothing is saved. A layout the editor can't change, such as `agent: { ... }` on one line, turns
+  the pickers off with an error naming the line. Symphony rejects `--model` or `--effort` in `agent.command`
+  once any model, effort or kind is set (top-level or in a repository), so when `agent.command` passes them
+  the Default row shows their values (for example "Opus 5.5, from command"), and the first save that sets a
+  model or effort moves them out of the command (keeping the rest of the line and its comment) into
   `agent.model` / `agent.effort`, unless you set the Default row in the same save. In the same way, once a
   save sets the Default row or the pre-push review row, `--model` / `--effort` in `pre_push_review.command`
   move into `pre_push_review.model` / `pre_push_review.effort` (a key already there wins), and once it sets the
   Default row or the QA row, those in `auto_review.command` move into `auto_review.model` /
-  `auto_review.effort`. Higher effort and bigger
-  models use the shared 5-hour usage limit faster. The next run picks the change up without a restart. The
-  Codex runtime ignores these keys (see [Run profiles](../docs/configuration.md)).
+  `auto_review.effort`. A provider alone moves nothing. Higher effort and bigger models use the shared
+  5-hour usage limit faster. The next run picks the change up without a restart. The Codex runtime ignores
+  these keys (see [Run profiles](../docs/configuration.md)).
 - `LINEAR_API_KEY` and any extra environment variables are stored only in the login Keychain, as generic
   passwords under service `symphony` with the variable name as the account:
 

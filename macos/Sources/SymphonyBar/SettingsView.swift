@@ -99,14 +99,35 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Picker("Scope", selection: $model.runProfilesScope) {
+                        Text("All repositories").tag(RunProfilesScope.global)
+                        ForEach(model.repositoryKeys, id: \.self) { key in
+                            Text(key).tag(RunProfilesScope.repository(key))
+                        }
+                    }
+                    .disabled(!model.canEditRunProfiles || model.repositoryKeys.isEmpty)
                     ForEach(RunProfilesConfig.scopes, id: \.self) { kind in
                         RunProfileRow(
                             kind: kind,
-                            profile: $model.runProfiles[kind],
-                            inherited: kind == nil ? model.commandProfile : RunProfile()
+                            profile: $model.runProfiles[model.runProfilesScope][kind],
+                            inherited: model.inheritedProfile(kind),
+                            inheritedSource: model.runProfilesScope == .global && kind == nil ? "from command" : "inherited",
+                            providerSource: model.runProfilesScope == .global && kind == nil ? "default" : "inherited",
+                            canReset: model.runProfilesScope != .global,
+                            openRouterModels: model.openRouterAPIKey.isEmpty ? nil : model.openRouterModelList,
+                            hasOpenRouterKey: !model.openRouterAPIKey.isEmpty,
+                            retryOpenRouterModels: model.loadOpenRouterModels,
+                            isPickingModel: Binding(
+                                get: { model.openRouterPickerRow == kind?.rawValue ?? "default" },
+                                set: { model.openRouterPickerRow = $0 ? kind?.rawValue ?? "default" : nil }
+                            ),
+                            modelQuery: $model.openRouterQuery
                         )
                     }
                     .disabled(!model.canEditRunProfiles)
+                    if let error = model.configCheckError {
+                        Text(error).foregroundStyle(.red)
+                    }
                     if model.commandProfile != RunProfile() {
                         Text(
                             "agent.command passes --model or --effort. Saving any model or effort moves them "
@@ -120,11 +141,13 @@ struct SettingsView: View {
                     Text("Models (saved in symphony.yml)")
                 } footer: {
                     Text(
-                        "Each kind of run uses its own model and effort, or the Default row when set to default. "
-                            + "Higher effort and bigger models use the shared 5-hour usage limit faster: keep "
-                            + "Opus and high effort for breakdown and hard implementation, and use Sonnet or "
-                            + "Haiku with low effort for landing and CI fixes. Claude runtime only. Applies to the "
-                            + "next run, no restart needed."
+                        "Each kind of run uses its own provider, model and effort, or the Default row where it "
+                            + "sets none. A repository's rows override All repositories for issues routed to it; "
+                            + "grey values are inherited. Higher effort and bigger models use the shared 5-hour "
+                            + "usage limit faster: keep Opus and high effort for breakdown and hard "
+                            + "implementation, and use Sonnet or Haiku with low effort for landing and CI fixes. "
+                            + "OpenRouter models must support tools. Claude runtime only. Save checks "
+                            + "symphony.yml with symphony check first; changes apply to the next run."
                     )
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -206,6 +229,9 @@ struct SettingsView: View {
                 if let configFileError = model.configFileError {
                     Text(configFileError).foregroundStyle(.red)
                 }
+                if model.configCheckError != nil {
+                    Text("symphony check rejected the models; see Models.").foregroundStyle(.red)
+                }
                 if let loginItemError = model.loginItemError {
                     Text(loginItemError).foregroundStyle(.red)
                 }
@@ -216,48 +242,207 @@ struct SettingsView: View {
                 Spacer()
                 Button("Cancel", action: close)
                     .keyboardShortcut(.cancelAction)
+                if model.isSaving {
+                    ProgressView().controlSize(.small)
+                    Text("Checking symphony.yml…").foregroundStyle(.secondary)
+                }
                 Button("Save") {
-                    if model.save() { close() }
+                    model.save(onSaved: close)
                 }
                 .keyboardShortcut(.defaultAction)
+                .disabled(model.isSaving)
             }
             .padding(20)
         }
-        .frame(width: 600)
+        .frame(width: SettingsView.width)
     }
+
+    static let width: CGFloat = 780
 }
 
-/// Model and effort pickers for one kind of run, or the Default row for a nil kind. `inherited` holds what
-/// runs use when a field is set to default, from the flags in `agent.command`.
+/// Provider, model and effort pickers for one kind of run, or the Default row for a nil kind. `inherited` holds
+/// what a field set to default falls back to, shown greyed out with `inheritedSource`, such as "inherited".
 private struct RunProfileRow: View {
     let kind: RunKind?
     @Binding var profile: RunProfile
     let inherited: RunProfile
+    let inheritedSource: String
+    let providerSource: String
+    /// Whether the row offers Reset to inherited, for a repository's rows.
+    let canReset: Bool
+    /// OpenRouter's models, or nil when no OpenRouter key is entered or the list hasn't loaded yet.
+    let openRouterModels: Result<[OpenRouterModel], OpenRouterFailure>?
+    let hasOpenRouterKey: Bool
+    let retryOpenRouterModels: () -> Void
+    @Binding var isPickingModel: Bool
+    @Binding var modelQuery: String
+
+    private var provider: String? { profile.provider ?? inherited.provider }
+    private var isOpenRouter: Bool { provider == RunProfilesConfig.openRouter }
+
+    private var effortNote: String? {
+        guard isOpenRouter, case .success(let models)? = openRouterModels else { return nil }
+        return OpenRouterModel.effortNote(for: profile.model ?? inherited.model, in: models)
+    }
 
     var body: some View {
         LabeledContent(kind?.title ?? "Default") {
             HStack {
-                picker("Model", $profile.model, RunProfilesConfig.models, inherited: inherited.model)
-                    .frame(width: 190)
-                picker("Effort", $profile.effort, RunProfilesConfig.efforts, inherited: inherited.effort)
+                picker("Provider", providerSelection, RunProfilesConfig.providers, inherited: inherited.provider, source: providerSource)
                     .frame(width: 150)
+                Group {
+                    if isOpenRouter {
+                        OpenRouterModelField(
+                            selection: $profile.model,
+                            inheritedTitle: inherited.model.map { $0 + ", " + inheritedSource } ?? "default",
+                            models: openRouterModels,
+                            hasKey: hasOpenRouterKey,
+                            retry: retryOpenRouterModels,
+                            isPicking: $isPickingModel,
+                            query: $modelQuery
+                        )
+                    } else {
+                        picker("Model", $profile.model, RunProfilesConfig.models, inherited: inherited.model)
+                    }
+                }
+                .frame(width: 210)
+                // The tooltip sits on a wrapper, as a disabled control shows none of its own.
+                HStack {
+                    picker("Effort", $profile.effort, RunProfilesConfig.efforts, inherited: inherited.effort)
+                        .disabled(effortNote != nil)
+                }
+                .frame(width: 130)
+                .help(effortNote ?? "Effort for this kind of run")
+                if canReset {
+                    Button {
+                        profile = RunProfile()
+                    } label: {
+                        Image(systemName: "arrow.uturn.backward.circle")
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(profile == RunProfile())
+                    .help("Reset to inherited")
+                    .accessibilityLabel("Reset to inherited")
+                }
             }
         }
+    }
+
+    /// Changing the provider drops the row's own model, which names a model of the other provider.
+    private var providerSelection: Binding<String?> {
+        Binding(
+            get: { profile.provider },
+            set: { provider in
+                guard provider != profile.provider else { return }
+                profile.provider = provider
+                profile.model = nil
+            }
+        )
     }
 
     private func picker(
         _ title: String,
         _ selection: Binding<String?>,
         _ choices: [RunProfileChoice],
-        inherited: String?
+        inherited: String?,
+        source: String? = nil
     ) -> some View {
         Picker(title, selection: selection) {
-            Text(RunProfilesConfig.defaultTitle(choices, inherited: inherited)).tag(String?.none)
+            Text(RunProfilesConfig.defaultTitle(choices, inherited: inherited, source: source ?? inheritedSource)).tag(String?.none)
             ForEach(RunProfilesConfig.choices(choices, including: selection.wrappedValue)) { choice in
                 Text(choice.title).tag(Optional(choice.id))
             }
         }
         .labelsHidden()
+        .opacity(selection.wrappedValue == nil ? 0.55 : 1)
+    }
+}
+
+/// A button showing the chosen OpenRouter model that opens a searchable list of the models that support tools.
+/// Without an OpenRouter key it shows a disabled hint instead, and while the list loads, a progress note.
+private struct OpenRouterModelField: View {
+    @Binding var selection: String?
+    let inheritedTitle: String
+    let models: Result<[OpenRouterModel], OpenRouterFailure>?
+    let hasKey: Bool
+    let retry: () -> Void
+    @Binding var isPicking: Bool
+    @Binding var query: String
+
+    var body: some View {
+        switch models {
+        case nil where !hasKey:
+            Text("Add an OpenRouter key below first")
+                .foregroundStyle(.secondary)
+                .help("Enter an OpenRouter API key in the OpenRouter section to choose OpenRouter models.")
+        case nil:
+            HStack {
+                ProgressView().controlSize(.small)
+                Text("Loading models…").foregroundStyle(.secondary)
+            }
+        case .failure(let failure)?:
+            HStack {
+                Text(failure.message)
+                    .foregroundStyle(.red)
+                    .lineLimit(1)
+                    .help(failure.message)
+                Button("Retry", action: retry)
+                    .buttonStyle(.borderless)
+            }
+        case .success(let models)?:
+            Button {
+                query = ""
+                isPicking = true
+            } label: {
+                HStack {
+                    Text(selection.map { id in models.first { $0.id == id }?.name ?? id } ?? inheritedTitle)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .opacity(selection == nil ? 0.55 : 1)
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.up.chevron.down").imageScale(.small)
+                }
+            }
+            .help(selection ?? "Choose an OpenRouter model that supports tools")
+            .popover(isPresented: $isPicking, arrowEdge: .bottom) {
+                picker(models)
+            }
+        }
+    }
+
+    private func picker(_ models: [OpenRouterModel]) -> some View {
+        let matches = OpenRouterModel.toolModels(models, matching: query)
+        return VStack(alignment: .leading, spacing: 8) {
+            TextField("Search models that support tools", text: $query)
+                .textFieldStyle(.roundedBorder)
+            List {
+                Button(inheritedTitle) { choose(nil) }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                ForEach(matches, id: \.id) { model in
+                    Button {
+                        choose(model.id)
+                    } label: {
+                        VStack(alignment: .leading) {
+                            Text(model.name)
+                            Text(model.id).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .frame(minHeight: 260)
+            if matches.isEmpty {
+                Text("No OpenRouter model that supports tools matches.").foregroundStyle(.secondary)
+            }
+        }
+        .padding(12)
+        .frame(width: 360, height: 360)
+    }
+
+    private func choose(_ id: String?) {
+        selection = id
+        isPicking = false
     }
 }
 
