@@ -623,7 +623,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     with {:ok, config} <- section_map(config, "agent"),
          :ok <- reject_unknown_section_keys(config, ~w(runtime command model effort provider run_profiles concurrency limits timeouts prompts permissions mcp), "agent"),
          {:ok, concurrency} <- section_map(Map.get(config, "concurrency", %{}), "agent.concurrency"),
-         :ok <- reject_unknown_section_keys(concurrency, ~w(max_total max_by_issue_state epic_lanes), "agent.concurrency"),
+         :ok <- reject_unknown_section_keys(concurrency, ~w(max_total max_by_issue_state epic_lanes finishing_max), "agent.concurrency"),
          {:ok, limits} <- section_map(Map.get(config, "limits", %{}), "agent.limits"),
          :ok <-
            reject_unknown_section_keys(
@@ -667,6 +667,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
         |> maybe_put("max_concurrent_agents", Map.get(concurrency, "max_total"))
         |> maybe_put("max_concurrent_agents_by_state", Map.get(concurrency, "max_by_issue_state"))
         |> maybe_put("epic_lanes", Map.get(concurrency, "epic_lanes"))
+        |> maybe_put("finishing_max", Map.get(concurrency, "finishing_max"))
         |> maybe_put("max_turns", Map.get(limits, "max_turns"))
         |> maybe_put("max_retry_backoff_ms", Map.get(limits, "retry_backoff_max_ms"))
         |> maybe_put("max_consecutive_identical_tool_failures", Map.get(limits, "max_consecutive_identical_tool_failures"))

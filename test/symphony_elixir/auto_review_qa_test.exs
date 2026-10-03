@@ -461,6 +461,41 @@ defmodule SymphonyElixir.AutoReviewQaTest do
       assert QaRunner.running(name) == %{}
     end
 
+    test "caps passes at finishing_max and remembers queued issues until they start or go quiet" do
+      test_pid = self()
+      name = :"qa_runner_#{System.unique_integer([:positive])}"
+
+      run_fun = fn job, _opts ->
+        send(test_pid, {:pass_started, job.issue.id, self()})
+
+        receive do
+          :finish -> :ok
+        end
+      end
+
+      start_supervised!({QaRunner, name: name, run_fun: run_fun})
+      settings = Config.settings!()
+      settings = %{settings | auto_review: %{settings.auto_review | max_concurrent: 5}, agent: %{settings.agent | finishing_max: 1}}
+      job = %{issue: issue(), record: %{}, sha: @sha, settings: settings}
+
+      assert :started = QaRunner.request(job, qa_runner_server: name)
+      assert_receive {:pass_started, "issue-qa-flow", pass_pid}
+      assert :busy = QaRunner.request(%{job | issue: issue(%{id: "other"})}, qa_runner_server: name)
+      assert QaRunner.queued(name) == ["other"]
+
+      send(pass_pid, :finish)
+      wait_until(fn -> QaRunner.running(name) == %{} end)
+      assert :started = QaRunner.request(%{job | issue: issue(%{id: "other"})}, qa_runner_server: name)
+      assert QaRunner.queued(name) == []
+
+      quiet = :"qa_runner_#{System.unique_integer([:positive])}"
+      start_supervised!({QaRunner, name: quiet, run_fun: run_fun, queued_ttl_ms: 0}, id: quiet)
+      assert :started = QaRunner.request(job, qa_runner_server: quiet)
+      assert :busy = QaRunner.request(%{job | issue: issue(%{id: "other"})}, qa_runner_server: quiet)
+      assert QaRunner.queued(quiet) == []
+      assert QaRunner.queued(:missing_qa_runner) == []
+    end
+
     test "reports an unavailable runner" do
       assert {:error, :qa_runner_unavailable} =
                QaRunner.request(%{issue: issue()}, qa_runner_server: :missing_qa_runner)
