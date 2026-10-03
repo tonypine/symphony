@@ -704,6 +704,7 @@ defmodule SymphonyElixir.TestSupport do
           command: agent_command,
           model: Keyword.get(config, :agent_model),
           effort: Keyword.get(config, :agent_effort),
+          provider: Keyword.get(config, :agent_provider),
           run_profiles: Keyword.get(config, :agent_run_profiles),
           max_concurrent_agents: max_concurrent_agents,
           epic_lanes: epic_lanes,
@@ -876,6 +877,16 @@ defmodule SymphonyElixir.TestSupport do
     |> Enum.join("\n")
   end
 
+  defp agent_profile_yaml(config) do
+    [:model, :effort, :provider, :run_profiles]
+    |> Enum.reject(&is_nil(Map.get(config, &1)))
+    |> Enum.map_join("\n", &"  #{&1}: #{yaml_value(Map.get(config, &1))}")
+    |> case do
+      "" -> nil
+      lines -> lines
+    end
+  end
+
   defp agent_yaml(config) do
     filesystem = normalize_agent_filesystem(config.thread_sandbox, config.turn_sandbox_policy, config.workspace_sandbox)
     outer_sandbox = normalize_outer_sandbox(config.sandbox_runtime)
@@ -884,9 +895,7 @@ defmodule SymphonyElixir.TestSupport do
       "agent:",
       "  runtime: #{yaml_value(config.kind)}",
       "  command: #{yaml_value(config.command)}",
-      config.model && "  model: #{yaml_value(config.model)}",
-      config.effort && "  effort: #{yaml_value(config.effort)}",
-      config.run_profiles && "  run_profiles: #{yaml_value(config.run_profiles)}",
+      agent_profile_yaml(config),
       "  concurrency:",
       "    max_total: #{yaml_value(config.max_concurrent_agents)}",
       "    max_by_issue_state: #{yaml_value(config.max_concurrent_agents_by_state)}",
@@ -1024,6 +1033,7 @@ defmodule SymphonyElixir.TestSupport do
     |> maybe_put(:default, Map.get(repo, :default) || Map.get(repo, "default"))
     |> maybe_put(:route, route)
     |> maybe_put(:workspace, workspace)
+    |> maybe_put(:agent, Map.get(repo, :agent) || Map.get(repo, "agent"))
   end
 
   defp normalize_test_repository_route(repo) do
