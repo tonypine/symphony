@@ -5,7 +5,7 @@ import SwiftUI
 @MainActor
 final class SettingsWindowController: NSObject, NSWindowDelegate {
     /// Room for the Form at about its ideal height plus the button bar.
-    private static let initialContentSize = NSSize(width: 600, height: 720)
+    private static let initialContentSize = NSSize(width: SettingsView.width, height: 720)
 
     private var window: NSWindow?
 

@@ -64,11 +64,32 @@ public struct OpenRouterModel: Equatable {
     public var name: String
     /// True when the model accepts the `tools` parameter, which agent runs need.
     public var supportsTools: Bool
+    /// True when the model accepts the `reasoning` parameter, which a run's effort sets.
+    public var supportsReasoning: Bool
 
-    public init(id: String, name: String, supportsTools: Bool) {
+    public init(id: String, name: String, supportsTools: Bool, supportsReasoning: Bool = false) {
         self.id = id
         self.name = name
         self.supportsTools = supportsTools
+        self.supportsReasoning = supportsReasoning
+    }
+
+    /// The models that support tools whose id or name contains `query`, ignoring case, sorted by name.
+    public static func toolModels(_ models: [OpenRouterModel], matching query: String) -> [OpenRouterModel] {
+        let query = query.trimmingWhitespace()
+        return models
+            .filter { model in
+                model.supportsTools
+                    && (query.isEmpty || model.id.localizedCaseInsensitiveContains(query)
+                        || model.name.localizedCaseInsensitiveContains(query))
+            }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    /// Why effort doesn't apply to the model `id`, or nil when it does or `models` doesn't list it.
+    public static func effortNote(for id: String?, in models: [OpenRouterModel]) -> String? {
+        guard let model = models.first(where: { $0.id == id }), !model.supportsReasoning else { return nil }
+        return "\(model.name) doesn't support reasoning on OpenRouter, so effort has no effect on it."
     }
 
     /// "312 models, 141 support tools".
@@ -159,7 +180,8 @@ public struct OpenRouterClient {
                 OpenRouterModel(
                     id: model.id,
                     name: model.name ?? model.id,
-                    supportsTools: model.supportedParameters?.contains("tools") ?? false
+                    supportsTools: model.supportedParameters?.contains("tools") ?? false,
+                    supportsReasoning: model.supportedParameters?.contains("reasoning") ?? false
                 )
             }
         )

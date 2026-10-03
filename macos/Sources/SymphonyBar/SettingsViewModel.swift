@@ -8,18 +8,29 @@ struct EnvironmentRow: Identifiable {
     var value: String
 }
 
+/// Runs `symphony check` on a symphony.yml at the given path with the form's settings and secrets.
+typealias SettingsConfigCheck = (_ configPath: String, AppSettings, SecretSettings) async -> ConfigCheckResult
+
 /// Form state for the Settings window. Loads on creation and saves only when everything validates.
 @MainActor
 final class SettingsViewModel: ObservableObject {
     @Published var settings: AppSettings
     @Published var linearAPIKey = ""
     @Published var openRouterAPIKey = "" {
-        didSet { if openRouterAPIKey != oldValue { openRouterResult = nil } }
+        didSet {
+            guard openRouterAPIKey != oldValue else { return }
+            openRouterResult = nil
+            // A key entered into an empty field loads the list the Models pickers need, unless one is loaded.
+            if oldValue.isEmpty && !openRouterAPIKey.isEmpty, !hasOpenRouterModelList { loadOpenRouterModels() }
+        }
     }
     /// The last Test connection result: the key's label and credit, or why it failed.
     @Published private(set) var openRouterResult: Result<OpenRouterKeyInfo, OpenRouterFailure>?
     /// "312 models, 141 support tools", or why the model list couldn't be loaded.
     @Published private(set) var openRouterModels: Result<String, OpenRouterFailure>?
+    /// OpenRouter's models for the Models pickers, loaded while an OpenRouter key is entered.
+    @Published private(set) var openRouterModelList: Result<[OpenRouterModel], OpenRouterFailure>?
+    @Published private(set) var isLoadingOpenRouterModels = false
     @Published private(set) var isTestingOpenRouter = false
     @Published var extraRows: [EnvironmentRow] = []
     /// Launch at Login, read from macOS rather than UserDefaults so it follows changes made in System Settings.
@@ -30,11 +41,23 @@ final class SettingsViewModel: ObservableObject {
     @Published private(set) var keychainError: String?
     /// `agent.concurrency.max_total` in the configured symphony.yml. Saved to that file, not UserDefaults.
     @Published var maxConcurrentAgents = MaxConcurrentAgents.symphonyDefault
-    /// `agent.model`, `agent.effort` and `agent.run_profiles` in the configured symphony.yml.
-    @Published var runProfiles = RunProfiles()
+    /// `agent.provider`, `.model`, `.effort` and `.run_profiles` in the configured symphony.yml, and the same
+    /// keys under each `repositories[].agent`.
+    @Published var runProfiles = ScopedRunProfiles()
+    /// The `agent` block the Models rows edit: the top-level one or a repository's.
+    @Published var runProfilesScope = RunProfilesScope.global
+    /// The `repositories[]` keys, in file order, for the scope picker.
+    @Published private(set) var repositoryKeys: [String] = []
     /// The `--model` / `--effort` in `agent.command`, which runs use while the Default row is set to default.
     @Published private(set) var commandProfile = RunProfile()
     @Published private(set) var configFileError: String?
+    /// Why `symphony check` rejected the changed models, shown in the Models section.
+    @Published private(set) var configCheckError: String?
+    /// The row whose OpenRouter model list is open (its run kind, or "default"), and the list's search text.
+    @Published var openRouterPickerRow: String?
+    @Published var openRouterQuery = ""
+    /// True while Save waits for `symphony check`.
+    @Published private(set) var isSaving = false
 
     /// The value read from symphony.yml, or nil when it couldn't be read. The file is written only when the
     /// stepper moved away from it, so an untouched form never edits symphony.yml.
@@ -42,7 +65,7 @@ final class SettingsViewModel: ObservableObject {
 
     /// The profiles read from symphony.yml, or nil when they couldn't be read. Only fields changed from these
     /// are written.
-    private var loadedRunProfiles: RunProfiles?
+    private var loadedRunProfiles: ScopedRunProfiles?
 
     /// Extra variable names known to be in the Keychain. Only these can be removed on save, so a failed
     /// load never turns into deletions.
@@ -56,6 +79,7 @@ final class SettingsViewModel: ObservableObject {
     private let validator: SettingsValidator
     private let loginItem: LoginItemService
     private let openRouter: OpenRouterClient
+    private let configCheck: SettingsConfigCheck
     private let onSecretsChanged: () -> Void
 
     init(
@@ -63,12 +87,14 @@ final class SettingsViewModel: ObservableObject {
         validator: SettingsValidator = SettingsValidator(embeddedSymphonyPath: SymphonyRunner.embeddedSymphonyPath),
         loginItem: LoginItemService = AppStores.current.loginItem,
         openRouter: OpenRouterClient = OpenRouterClient(),
+        configCheck: @escaping SettingsConfigCheck = SettingsViewModel.runConfigCheck,
         onSecretsChanged: @escaping () -> Void = {}
     ) {
         self.store = store
         self.validator = validator
         self.loginItem = loginItem
         self.openRouter = openRouter
+        self.configCheck = configCheck
         self.onSecretsChanged = onSecretsChanged
         settings = store.loadSettings()
         let loginStatus = loginItem.status
@@ -87,6 +113,7 @@ final class SettingsViewModel: ObservableObject {
         }
         loadMaxConcurrentAgents()
         loadRunProfiles()
+        if !openRouterAPIKey.isEmpty { loadOpenRouterModels() }
     }
 
     /// The stepper is off until a symphony.yml has been read.
@@ -104,21 +131,52 @@ final class SettingsViewModel: ObservableObject {
         }
     }
 
-    /// The model and effort pickers are off until a symphony.yml has been read.
-    var canEditRunProfiles: Bool { loadedRunProfiles != nil }
+    /// The model and effort pickers are off until a symphony.yml has been read, and while Save checks it.
+    var canEditRunProfiles: Bool { loadedRunProfiles != nil && !isSaving }
+
+    /// What each field of the row for `kind` falls back to in the current scope.
+    func inheritedProfile(_ kind: RunKind?) -> RunProfile {
+        runProfiles.inherited(kind, in: runProfilesScope, command: commandProfile)
+    }
 
     private func loadRunProfiles() {
         let path = settings.trimmed().configPath
         guard !path.isEmpty else { return }
         do {
             let file = SymphonyConfigFile(path: path)
-            let profiles = try file.readRunProfiles()
+            let profiles = try file.readScopedRunProfiles()
             commandProfile = try file.readCommandProfile()
             runProfiles = profiles
             loadedRunProfiles = profiles
+            repositoryKeys = try RunProfilesConfig.repositoryKeys(in: String(contentsOfFile: path, encoding: .utf8))
+            if case .repository(let key) = runProfilesScope, !repositoryKeys.contains(key) { runProfilesScope = .global }
         } catch {
             configFileError = "Could not read models from symphony.yml: \(error.localizedDescription)"
         }
+    }
+
+    /// Loads OpenRouter's model list for the Models pickers. The list needs no key, but the pickers only offer
+    /// OpenRouter models once a key is entered.
+    /// Retried from a failed list in the Models section.
+    func loadOpenRouterModels() {
+        guard !isLoadingOpenRouterModels else { return }
+        isLoadingOpenRouterModels = true
+        let client = openRouter
+        Task {
+            setOpenRouterModelList(await client.models())
+            isLoadingOpenRouterModels = false
+        }
+    }
+
+    private var hasOpenRouterModelList: Bool {
+        if case .success? = openRouterModelList { return true }
+        return false
+    }
+
+    /// A failed reload keeps a list that loaded earlier; otherwise the latest result replaces the last one.
+    private func setOpenRouterModelList(_ models: Result<[OpenRouterModel], OpenRouterFailure>) {
+        if case .failure = models, hasOpenRouterModelList { return }
+        openRouterModelList = models
     }
 
     /// Names that may be removed from the Keychain on save: the extra variables and a stored OpenRouter key.
@@ -143,6 +201,7 @@ final class SettingsViewModel: ObservableObject {
             // A key edited during the test makes the result stale.
             if openRouterAPIKey == key { openRouterResult = checked }
             openRouterModels = models.map(OpenRouterModel.summary)
+            setOpenRouterModelList(models)
             isTestingOpenRouter = false
         }
     }
@@ -155,8 +214,11 @@ final class SettingsViewModel: ObservableObject {
         extraRows.removeAll { $0.id == id }
     }
 
-    /// Validates and saves. Returns true when the settings were stored.
-    func save() -> Bool {
+    /// Validates and saves, then calls `onSaved` when everything was stored. Changed models are written only
+    /// after `symphony check` passes on them; until then nothing is saved, and a failure shows in
+    /// `configCheckError`.
+    func save(onSaved: @escaping () -> Void) {
+        guard !isSaving else { return }
         let settings = settings.trimmed()
         let secrets = SecretSettings(
             linearAPIKey: linearAPIKey,
@@ -165,8 +227,23 @@ final class SettingsViewModel: ObservableObject {
         ).trimmed()
 
         issues = validator.validate(settings, secrets)
-        guard issues.isEmpty else { return false }
+        guard issues.isEmpty else { return }
+        configCheckError = nil
 
+        guard let loaded = loadedRunProfiles, runProfiles != loaded else {
+            if saveRest(settings, secrets) { onSaved() }
+            return
+        }
+        isSaving = true
+        Task {
+            let saved = await saveRunProfiles(runProfiles, from: loaded, settings: settings, secrets: secrets)
+            isSaving = false
+            if saved && saveRest(settings, secrets) { onSaved() }
+        }
+    }
+
+    /// Saves everything but the models. Returns true when it was all stored.
+    private func saveRest(_ settings: AppSettings, _ secrets: SecretSettings) -> Bool {
         do {
             try store.saveSecrets(secrets, removing: storedNames)
         } catch {
@@ -178,9 +255,7 @@ final class SettingsViewModel: ObservableObject {
         let secretsChanged = secrets != loadedSecrets
         loadedSecrets = secrets
         store.saveSettings(settings)
-        let saved = saveMaxConcurrentAgents(to: settings.configPath)
-            && saveRunProfiles(to: settings.configPath)
-            && saveLaunchAtLogin()
+        let saved = saveMaxConcurrentAgents(to: settings.configPath) && saveLaunchAtLogin()
         // After the settings are stored, so the restart starts Symphony with all of them.
         if secretsChanged { onSecretsChanged() }
         return saved
@@ -200,19 +275,55 @@ final class SettingsViewModel: ObservableObject {
         return true
     }
 
-    /// Writes the model and effort fields the pickers changed to symphony.yml, then reads them back, since
-    /// saving can move `--model` / `--effort` out of `agent.command` into the Default row.
-    private func saveRunProfiles(to path: String) -> Bool {
-        guard let loaded = loadedRunProfiles, runProfiles != loaded else { return true }
+    /// Writes the provider, model and effort fields the rows changed to symphony.yml once `symphony check`
+    /// passes on the result, then reads them back, since saving can move `--model` / `--effort` out of
+    /// `agent.command` into the Default row.
+    private func saveRunProfiles(
+        _ profiles: ScopedRunProfiles,
+        from loaded: ScopedRunProfiles,
+        settings: AppSettings,
+        secrets: SecretSettings
+    ) async -> Bool {
+        let check = configCheck
+        let result: ConfigCheckResult
         do {
-            try SymphonyConfigFile(path: path).writeRunProfiles(runProfiles, from: loaded)
+            result = try await SymphonyConfigFile(path: settings.configPath).writeRunProfiles(profiles, from: loaded) { path in
+                await check(path, settings, secrets)
+            }
         } catch {
             configFileError = "Could not save models to symphony.yml: \(error.localizedDescription)"
+            return false
+        }
+        if case .failed(let message) = result {
+            configCheckError = "symphony check rejected these models, so nothing was saved: \(message)"
             return false
         }
         configFileError = nil
         loadRunProfiles()
         return configFileError == nil
+    }
+
+    /// `symphony check --config <configPath>`, run the way Start would run Symphony with these settings.
+    nonisolated static func runConfigCheck(
+        configPath: String,
+        settings: AppSettings,
+        secrets: SecretSettings
+    ) async -> ConfigCheckResult {
+        var settings = settings
+        settings.configPath = configPath
+        do {
+            let launch = try ChildLaunchBuilder.build(
+                settings: settings,
+                secrets: secrets,
+                baseEnvironment: AppStores.current.environment,
+                embeddedSymphonyPath: SymphonyRunner.embeddedSymphonyPath,
+                subcommand: ["check"],
+                qaMode: AppStores.current.isQAMode
+            )
+            return await ConfigCheck.run(launch)
+        } catch {
+            return .failed(error.localizedDescription)
+        }
     }
 
     /// Registers or unregisters the login item. When macOS wants the user to allow it, opens Login Items.
