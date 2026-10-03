@@ -2247,8 +2247,12 @@ Scoped Linear tool extension contract:
   setting `Merging` from Linear. Other transitions are unaffected.
 - `linear_create_subissue` MUST only create a child of the current issue: same team and project,
   parent set to the current issue, and the current issue's assignee, all resolved server-side. It
-  MUST accept only `title`, `description`, and an optional `priority`, and MUST reject team,
-  project, parent, assignee, and state arguments. The new issue MUST land in the team's `Backlog`
+  MUST accept only `title`, `description`, an optional `priority`, and an optional `blocked_by`
+  list of issue identifiers, and MUST reject team, project, parent, assignee, and state arguments.
+  Each `blocked_by` identifier MUST name a sub-issue of the current issue (an existing child, or
+  one the run created earlier); otherwise the call MUST fail with an explicit error before the
+  issue is created. Accepted identifiers become `blocks` relations on the new issue, created right
+  after it. The new issue MUST land in the team's `Backlog`
   state (falling back to a `backlog`-type state), never an active state, so an agent cannot start
   other agents; a human promotes it. Title and description MUST pass the same secret scan as
   comments before any Linear call. Creation MUST be capped per run (the Elixir cap is 10) with an

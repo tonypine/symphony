@@ -125,7 +125,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     },
     %{
       "name" => "linear_create_subissue",
-      "description" => "Create a child issue of the current Linear issue, in its team and project and assigned to its assignee. The new issue lands in Backlog; a human promotes it. Capped per run.",
+      "description" =>
+        "Create a child issue of the current Linear issue, in its team and project and assigned to its assignee. The new issue lands in Backlog; a human promotes it. Pass `blocked_by` with the identifiers of earlier sibling sub-issues it depends on to add Linear blocked-by links. Capped per run.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -138,6 +139,11 @@ defmodule SymphonyElixir.Codex.DynamicTool do
             "minimum" => 0,
             "maximum" => 4,
             "description" => "Linear priority: 0 none, 1 urgent, 2 high, 3 medium, 4 low."
+          },
+          "blocked_by" => %{
+            "type" => "array",
+            "items" => %{"type" => "string"},
+            "description" => "Identifiers (e.g. TP-12) of sub-issues that block this one. Only the current issue's existing sub-issues and ones created earlier in this run are accepted."
           }
         }
       }
@@ -362,7 +368,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "linear_delete_comment" => ["comment_id"],
     "linear_attach_url" => ["url", "title"],
     "linear_attach_file" => ["local_path", "title", "make_public"],
-    "linear_create_subissue" => ["title", "description", "priority"],
+    "linear_create_subissue" => ["title", "description", "priority", "blocked_by"],
     "linear_create_project_update" => ["body", "health"],
     "github_get_pull_request" => [],
     "github_fetch_origin" => [],
@@ -958,6 +964,37 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   defp tool_error_payload(:invalid_subissue_priority) do
     %{"error" => %{"code" => "invalid_subissue_priority", "message" => "linear_create_subissue `priority` must be an integer from 0 to 4."}}
+  end
+
+  defp tool_error_payload(:invalid_subissue_blocked_by) do
+    %{"error" => %{"code" => "invalid_subissue_blocked_by", "message" => "linear_create_subissue `blocked_by` must be a list of issue identifiers."}}
+  end
+
+  defp tool_error_payload({:blocked_by_not_sibling, unknown, siblings}) do
+    %{
+      "error" => %{
+        "code" => "blocked_by_not_sibling",
+        "message" => "linear_create_subissue `blocked_by` only accepts sub-issues of the current issue. Not a sub-issue: #{Enum.join(unknown, ", ")}. Nothing was created.",
+        "unknown" => unknown,
+        "sub_issues" => siblings
+      }
+    }
+  end
+
+  defp tool_error_payload({:blocked_by_relation_failed, identifier, blocker, reason}) do
+    %{
+      "error" => %{
+        "code" => "blocked_by_relation_failed",
+        "message" => "Created #{identifier}, but could not mark it blocked by #{blocker}, so it and any later `blocked_by` links are missing. Record them in the workpad for a human to add.",
+        "identifier" => identifier,
+        "blocker" => blocker,
+        "reason" => inspect(reason)
+      }
+    }
+  end
+
+  defp tool_error_payload(:subissue_not_returned) do
+    %{"error" => %{"code" => "subissue_not_returned", "message" => "Linear did not return the created sub-issue."}}
   end
 
   defp tool_error_payload({:linear_mutation_failed, field, body}) do
