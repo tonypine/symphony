@@ -102,6 +102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         showStatus()
 
         runner.onEvent = { [weak self] event in self?.handle(event) }
+        runner.onKeychainChange = { [weak self] in self?.showStatus() }
         restarter.onChange = { [weak self] in self?.showStatus() }
         updater.onChange = { [weak self] in self?.showUpdateItems() }
         poller.stateRoot = { [weak self] in
@@ -175,7 +176,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
         case #selector(startSymphony(_:)):
-            return !runner.isRunning && machine.canStart && !restarting
+            return !runner.isRunning && !runner.isStarting && machine.canStart && !restarting
         case #selector(stopSymphony(_:)):
             menuItem.title = runner.isStopping && !restarting ? StatusMenu.stoppingTitle : StatusMenu.stopTitle
             return runner.isRunning && machine.canStop && !runner.isStopping && !restarting
@@ -209,7 +210,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         case #selector(showReleaseNotes(_:)):
             return availableRelease != nil
         case #selector(installUpdate(_:)):
-            return availableRelease != nil && !updater.isUpdating && !restarting && !runner.isStopping
+            return availableRelease != nil && !updater.isUpdating && !restarting && !runner.isStarting
+                && !runner.isStopping
                 && updateBlocker == nil && (!runner.isRunning || StatusMenu.canRestart(machine.status))
         default:
             return true
@@ -217,9 +219,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     }
 
     @objc private func startSymphony(_ sender: Any?) {
-        do {
-            try runner.start()
-        } catch {
+        runner.start { [weak self] error in
+            guard let self, let error else { return }
             resumeWhenAnswering = false
             SymphonyRunner.showAlert(title: "Couldn't start Symphony", body: error.localizedDescription)
             if (error as? LaunchProblem)?.isFixedInSettings == true {
@@ -344,6 +345,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     /// Pauses dispatch, waits for agent runs and stops Symphony, then hands over. A Symphony the app doesn't run
     /// is left alone.
     private func drainForUpdate(_ update: PreparedUpdate) {
+        guard !runner.isStarting else {
+            updater.fail("Symphony is starting, stopping or restarting; try again once it runs.")
+            return
+        }
         guard runner.isRunning else {
             handOff(update, symphonyStopped: false, resumeDispatch: false)
             return
@@ -373,8 +378,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         } catch {
             updater.fail(error.localizedDescription)
             guard symphonyStopped else { return }
+            // Cleared again when the start fails; resumes only once the started Symphony answers.
+            resumeWhenAnswering = resumeDispatch
             startSymphony(nil)
-            resumeWhenAnswering = resumeDispatch && runner.isRunning
         }
     }
 
@@ -485,6 +491,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         cancelRestartItem.isHidden = !restarter.machine.canCancel
         detailItems = StatusMenu.detailLines(
             status,
+            waitingForKeychain: runner.isWaitingForKeychain,
             restartLine: restarter.machine.menuLine,
             controlError: controlError
         ).map { line in

@@ -33,10 +33,14 @@ public enum StatusMenu {
         return "Symphony is \(statusWord(status))"
     }
 
-    /// Lines shown under the status title, then the restart's progress or error and the last Pause or Resume
-    /// error when there are any.
+    /// Shown while Start, Restart or Update waits to read the Keychain, which is usually a password prompt.
+    public static let keychainWaitingLine = "Waiting for Keychain access…"
+
+    /// Lines shown under the status title, then the Keychain wait, the restart's progress or error and the last
+    /// Pause or Resume error when there are any.
     public static func detailLines(
         _ status: SymphonyStatus,
+        waitingForKeychain: Bool = false,
         restartLine: String? = nil,
         controlError: String? = nil,
         now: Date = Date(),
@@ -53,7 +57,7 @@ public enum StatusMenu {
         case let .error(message):
             lines = [message]
         }
-        return lines + [restartLine, controlError].compactMap { $0 }
+        return lines + [waitingForKeychain ? keychainWaitingLine : nil, restartLine, controlError].compactMap { $0 }
     }
 
     /// Which Symphony Start runs: "Symphony v1.2.3 (embedded)" or "Development: <checkout>".
