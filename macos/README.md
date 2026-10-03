@@ -218,8 +218,9 @@ set (or, in Development mode, no checkout folder).
 Earlier versions kept these in the login Keychain, which asked for the password again after every update.
 The first time a version with the secrets file reads them, it copies each `symphony` Keychain item into the
 file and leaves the item in place; after that it never reads the Keychain. That one read may still ask for Keychain
-access; choose Allow. Start, Restart and Update read the secrets without blocking the menu: while macOS waits
-for the password, the menu shows "Waiting for Keychain access…".
+access; choose Allow. Start, Restart, Update and Settings… read the secrets without blocking the menu: while
+macOS waits for the password, the menu and the Settings window show "Waiting for Keychain access…", and Save
+stays off until the secrets have been read.
 
 ## Running Symphony
 
