@@ -5,7 +5,7 @@ defmodule SymphonyElixir.Config.Schema do
 
   import Ecto.Changeset
 
-  alias SymphonyElixir.{PathSafety, Secret}
+  alias SymphonyElixir.{PathSafety, RunKind, Secret}
 
   require Logger
 
@@ -2178,9 +2178,32 @@ defmodule SymphonyElixir.Config.Schema do
   defp validate_finalized_settings(settings) do
     with :ok <- validate_agent_approval_policy(settings.agent),
          :ok <- validate_agent_sandbox_runtime(settings.agent),
-         :ok <- validate_agent_mcp(settings.agent) do
+         :ok <- validate_agent_mcp(settings.agent),
+         :ok <- validate_openrouter_workers(settings) do
       validate_finalized_notification_urls(settings.notifications)
     end
+  end
+
+  # The OpenRouter key reaches `claude` through the local subprocess env only, so an OpenRouter
+  # run cannot start on an SSH worker. The error names the key that picked OpenRouter.
+  defp validate_openrouter_workers(%__MODULE__{worker: %Worker{ssh_hosts: [_ | _]}, agent: agent}) do
+    case openrouter_provider_keys(agent) do
+      [] -> :ok
+      [key | _rest] -> {:error, "#{key} openrouter is not supported with workers.ssh_hosts; OpenRouter runs start on the local host only"}
+    end
+  end
+
+  defp validate_openrouter_workers(_settings), do: :ok
+
+  defp openrouter_provider_keys(%Agent{provider: provider, run_profiles: profiles}) do
+    Enum.flat_map(RunKind.names(), fn kind ->
+      case Map.get(profiles, kind, %{}) do
+        %{"provider" => "openrouter"} -> ["agent.run_profiles.#{kind}.provider"]
+        %{"provider" => _provider} -> []
+        _profile when provider == "openrouter" -> ["agent.provider"]
+        _profile -> []
+      end
+    end)
   end
 
   defp validate_agent_approval_policy(%Agent{kind: "codex", approval_policy: "never"}) do

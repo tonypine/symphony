@@ -1308,7 +1308,7 @@ Validation checks:
   `agent.run_profiles` key is a known run kind.
 - `agent.provider` and every `agent.run_profiles.<kind>.provider` are `anthropic` or `openrouter`.
   Every run kind that resolves to `openrouter` also resolves a model, and `openrouter` is only
-  used with `agent.runtime == "claude"`.
+  used with `agent.runtime == "claude"` and without `workers.ssh_hosts`.
 - `agent.command` does not already pass `--model` or `--effort` when `agent.model`,
   `agent.effort`, or `agent.run_profiles` is set.
 - `issues.linear.api_key` is present after `$` resolution when `issues.provider == "linear"`.
@@ -1400,7 +1400,13 @@ not require recognizing or validating extension fields unless that extension is 
   effort and `anthropic` for provider. The run kind and profile are resolved
   once per dispatch from the current config and kept for every continuation turn of that run. The
   Claude runtime appends `--model <model>` and `--effort <effort>` to its argv; the Codex runtime
-  ignores both and logs a warning.
+  ignores both and logs a warning. A Claude run whose provider is `openrouter` also starts with
+  `ANTHROPIC_BASE_URL=https://openrouter.ai/api`, `ANTHROPIC_AUTH_TOKEN` set from the
+  `OPENROUTER_API_KEY` environment variable of the Symphony process, an empty
+  `ANTHROPIC_API_KEY`, and `CLAUDE_CODE_SUBAGENT_MODEL=<model>`. If `OPENROUTER_API_KEY` is unset
+  or blank, the run fails before the agent starts with an error naming the run kind and the
+  variable. The key MUST NOT be written to config, logs, the audit log, the run store, or
+  transcripts.
 - `agent.prompts.include_project_guides`: boolean, default `true`
 - `agent.prompts.project_guide_files`: list of relative paths or null, default `null`
 - `agent.permissions.approval_policy`: agent approval policy, default depends on `agent.runtime`

@@ -24,6 +24,12 @@ defmodule SymphonyElixir.RunProfilesConfigTest do
     message
   end
 
+  defp worker_error!(agent, extra) do
+    {:ok, system} = SystemSchema.parse(Map.merge(symphony(agent), extra))
+    assert {:error, {:invalid_workflow_config, message}} = Schema.parse(SystemSchema.to_config_map(system))
+    message
+  end
+
   describe "Config.run_profile/2" do
     test "returns nil model and effort and the anthropic provider for every kind when nothing is set" do
       settings = settings!(%{})
@@ -137,6 +143,25 @@ defmodule SymphonyElixir.RunProfilesConfigTest do
 
       assert error!(%{"run_profiles" => %{"landing" => %{"provider" => "openrouter"}}}) =~
                "agent.run_profiles.landing.provider openrouter needs an OpenRouter model id; set agent.run_profiles.landing.model or agent.model"
+    end
+
+    test "openrouter on SSH workers names the key" do
+      workers = %{"workers" => %{"ssh_hosts" => ["worker-01"]}}
+
+      assert worker_error!(%{"provider" => "openrouter", "model" => "anthropic/claude-haiku-4.5"}, workers) ==
+               "agent.provider openrouter is not supported with workers.ssh_hosts; OpenRouter runs start on the local host only"
+
+      profiles = %{"implementation" => %{"provider" => "anthropic"}, "ci_fix" => %{"provider" => "openrouter", "model" => "x/y"}}
+
+      assert worker_error!(%{"run_profiles" => profiles}, workers) =~
+               "agent.run_profiles.ci_fix.provider openrouter is not supported with workers.ssh_hosts"
+    end
+
+    test "SSH workers are fine when no run uses openrouter" do
+      symphony = Map.put(symphony(%{"run_profiles" => %{"qa" => %{"provider" => "anthropic"}}}), "workers", %{"ssh_hosts" => ["worker-01"]})
+      {:ok, system} = SystemSchema.parse(symphony)
+
+      assert {:ok, _settings} = Schema.parse(SystemSchema.to_config_map(system))
     end
 
     test "openrouter with a non-claude runtime names the key" do
