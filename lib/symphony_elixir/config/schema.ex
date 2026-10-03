@@ -1934,7 +1934,9 @@ defmodule SymphonyElixir.Config.Schema do
         "ci_failed",
         "ci_escalated",
         "qa_passed",
-        "qa_failed"
+        "qa_failed",
+        "usage_limit_paused",
+        "usage_limit_resumed"
       ]
 
       embedded_schema do

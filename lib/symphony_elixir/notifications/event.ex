@@ -17,7 +17,9 @@ defmodule SymphonyElixir.Notifications.Event do
     "ci_failed",
     "ci_escalated",
     "qa_passed",
-    "qa_failed"
+    "qa_failed",
+    "usage_limit_paused",
+    "usage_limit_resumed"
   ]
   @max_string_value_length 1024
 
