@@ -10,13 +10,17 @@
 //   serve <socket> <owner pid>
 //
 // listens on a Unix socket and answers only the owner (the Symphony process that
-// launched it), and exits when the owner does. Each connection sends one JSON
-// line `{"args": [...]}` and gets back `{"status", "output"}`: the result of
-// running one of the commands below in a child of the helper, which keeps the
-// helper's grants. Commands that take a PID only run for a process that descends
+// launched it), and exits when the owner does. The owner must be a BEAM that no
+// other BEAM started, so an agent (which descends from Symphony's BEAM) cannot
+// open its own helper and name itself, or an Erlang VM it starts, the owner.
+// Each connection sends one JSON line `{"args": [...]}` and gets back
+// `{"status", "output"}`: the result of running one of the commands below in a
+// child of the helper, which keeps the helper's grants. Commands that take a PID only run for a process that descends
 // from the owner, so the helper never reads or drives the operator's other apps.
-// Each command prints one JSON object on stdout and exits 0, or prints
-// `{"error": {"code", "message"}}` and exits 1.
+// The commands that take a PID refuse to run unless a serving helper started
+// them, so opening the helper through LaunchServices with one of them (which
+// would use its grants on any app) fails. Each command prints one JSON object on
+// stdout and exits 0, or prints `{"error": {"code", "message"}}` and exits 1.
 //
 //   permissions
 //   windows <pid>
@@ -295,6 +299,42 @@ func descends(_ pid: pid_t, from owner: pid_t) -> Bool {
     return false
 }
 
+func executablePath(_ pid: pid_t) -> String? {
+    var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+    let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
+    return length > 0 ? String(cString: buffer) : nil
+}
+
+func isBEAM(_ pid: pid_t) -> Bool {
+    executablePath(pid).map { ($0 as NSString).lastPathComponent == "beam.smp" } ?? false
+}
+
+// Symphony's BEAM is started by Symphony.app or a terminal. Everything an agent
+// runs descends from it (through `erl_child_setup`), so a BEAM an agent starts
+// has a BEAM among its ancestors.
+func symphonyOwner(_ owner: pid_t) -> Bool {
+    guard isBEAM(owner) else { return false }
+    var current = owner
+
+    for _ in 0..<64 {
+        guard let parent = parentPID(current) else { return false }
+        if parent <= 1 { return true }
+        if isBEAM(parent) { return false }
+        current = parent
+    }
+
+    return false
+}
+
+// A one-shot PID command runs only as the child `runCommand` starts, never when
+// the helper is opened (by LaunchServices, so its parent is launchd) or run
+// directly with one.
+func startedByServingHelper() -> Bool {
+    let parent = getppid()
+    guard parent > 1, let own = executablePath(getpid()) else { return false }
+    return executablePath(parent) == own
+}
+
 func errorReply(_ code: String, _ message: String) -> [String: Any] {
     let output = (try? JSONSerialization.data(withJSONObject: ["error": ["code": code, "message": message]]))
         .flatMap { String(data: $0, encoding: .utf8) } ?? ""
@@ -377,6 +417,10 @@ func ownerAlive(_ owner: pid_t) -> Bool {
 }
 
 func serve(_ path: String, owner: pid_t) -> Never {
+    guard symphonyOwner(owner) else {
+        fail("owner_not_allowed", "The helper only serves the Symphony process.")
+    }
+
     let fd = socket(AF_UNIX, SOCK_STREAM, 0)
     var address = sockaddr_un()
     address.sun_family = sa_family_t(AF_UNIX)
@@ -431,6 +475,9 @@ case "serve" where args.count == 3:
 
 case "permissions":
     emit(["accessibility": AXIsProcessTrusted(), "screen_recording": CGPreflightScreenCaptureAccess()])
+
+case let command? where pidCommands.contains(command) && !startedByServingHelper():
+    fail("not_allowed", "The helper runs \(command) only for Symphony, through serve.")
 
 case "windows" where args.count == 2:
     windows(pidArgument(args[1]))

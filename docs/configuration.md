@@ -844,7 +844,12 @@ The screenshot and accessibility tools run in a small helper app, `SymphonyQADri
 holds the Screen Recording and Accessibility grants. Symphony opens it through LaunchServices
 (`open -a`) and talks to it over a Unix socket in a `0700` directory under
 `<state root>/qa-driver/run/`. The helper answers only the Symphony process that opened it, only
-for apps that process launched, and quits when Symphony does. `Symphony.app` ships it signed at
+for apps that process launched, and quits when Symphony does. It refuses to serve an owner that is
+not an Erlang VM (`beam.smp`) or that another Erlang VM started. Every process an agent runs
+descends from Symphony's VM, so an agent cannot open its own helper and make itself the owner. The
+helper also refuses its screenshot and accessibility commands when it is opened with them directly,
+for example `open -a SymphonyQADriver.app --args screenshot …`: it runs them only for its own
+`serve` process. `Symphony.app` ships it signed at
 `Symphony.app/Contents/Helpers/SymphonyQADriver.app`. When Symphony runs from a terminal, it
 compiles the helper once with `swiftc` (Xcode or the Command Line Tools) and signs it ad hoc at
 `<state root>/qa-driver/<hash>/SymphonyQADriver.app`. Bundle copies, screenshot staging and the
@@ -884,6 +889,11 @@ release `Symphony.app` signs the helper with the same certificate every time, so
 app updates. A locally built app (`make` in `macos/`) and the helper built from a terminal are
 signed ad hoc: macOS asks again after each rebuild, and after each Symphony version that changes
 the helper.
+
+> [!NOTE]
+> These checks follow the process tree. An agent can still make itself the owner if it first leaves
+> Symphony's process tree, for example by having `launchctl` or Terminal run a script, and that
+> script starts an Erlang VM and opens the helper.
 
 Without a grant the tools return `qa_permission_missing`, the QA agent answers `blocked` with the
 missing permission as the reason, and the issue goes to `In Review` with that reason in the QA
