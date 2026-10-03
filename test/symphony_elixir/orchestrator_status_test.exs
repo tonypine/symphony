@@ -2349,6 +2349,15 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     orchestrator_name = Module.concat(__MODULE__, :StartupAgeGcActiveOrchestrator)
 
+    # A stand-in agent, not the test process: if a poll ever stopped the agent, stopping
+    # the test process would kill the test.
+    worker_pid =
+      spawn(fn ->
+        receive do
+          :finish -> :ok
+        end
+      end)
+
     {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
 
     try do
@@ -2356,13 +2365,15 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
       :sys.replace_state(pid, fn state ->
         running_entry = %{
-          pid: self(),
+          pid: worker_pid,
           ref: nil,
           repo_key: "default",
           identifier: issue.identifier,
           issue: issue,
           workspace_path: active_workspace,
-          started_at: DateTime.utc_now()
+          started_at: DateTime.utc_now(),
+          # Freshly dispatched: a poll that reconciles the stale Backlog state keeps the run.
+          state_reconcile_grace_until_ms: System.monotonic_time(:millisecond) + 60_000
         }
 
         %{
@@ -2377,6 +2388,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       assert File.exists?(active_workspace)
     after
       if Process.alive?(pid), do: GenServer.stop(pid)
+      if Process.alive?(worker_pid), do: send(worker_pid, :finish)
 
       Application.delete_env(:symphony_elixir, :memory_tracker_fetch_candidate_sleep_ms)
       File.rm_rf(workspace_root)
@@ -2640,19 +2652,17 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert warning =~ "Operator dispatch pause active"
     assert RunStore.list_runs() == []
 
-    wait_for_orchestrator_state(
-      pid,
-      fn state -> map_size(state.dispatch_readiness_tasks || %{}) == 0 end,
-      500
-    )
-
     retry_token = make_ref()
     due_at_ms = System.monotonic_time(:millisecond)
 
+    # A readiness or quality gate task still in flight when the retry fires must not
+    # hide the pause: the retry reports the pause, not the deferral.
     :sys.replace_state(pid, fn state ->
       %{
         state
-        | retry_attempts: %{
+        | dispatch_readiness_tasks: Map.put(state.dispatch_readiness_tasks, make_ref(), %{kind: :poll, issues: []}),
+          quality_gate_tasks: Map.put(state.quality_gate_tasks, make_ref(), :poll),
+          retry_attempts: %{
             issue.id => %{
               attempt: 1,
               timer_ref: nil,
