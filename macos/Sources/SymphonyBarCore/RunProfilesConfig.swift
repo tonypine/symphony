@@ -132,6 +132,8 @@ public enum RunProfilesConfig {
     static let agentOrder = ["runtime", "command", "model", "effort", "run_profiles"]
     /// Keys of `pre_push_review:` in the order new ones are written.
     static let prePushReviewOrder = ["enabled", "runtime", "command", "model", "effort"]
+    /// Keys of `auto_review:` in the order new ones are written.
+    static let autoReviewOrder = ["enabled", "state", "runtime", "command", "model", "effort"]
     static let fieldOrder = RunProfileField.allCases.map(\.rawValue)
     static let defaultIndentStep = 2
 
@@ -187,7 +189,7 @@ public enum RunProfilesConfig {
     }
 
     /// The `--model` and `--effort` that `agent.command` passes, which runs use while `agent.model` and
-    /// `agent.effort` are unset. `section` reads `pre_push_review.command` instead.
+    /// `agent.effort` are unset. `section` reads another section's command, such as `pre_push_review`.
     public static func commandProfile(in yaml: String, section: String = "agent") throws -> RunProfile {
         let document = Document(yaml)
         guard let key = try commandKey(in: document, section: section),
@@ -245,8 +247,8 @@ public enum RunProfilesConfig {
     /// the result sets one, those flags move out of the command into `agent.model` / `agent.effort`, unless
     /// `new` sets those itself. It rejects them in `pre_push_review.command` once a model or effort resolves
     /// for pre-push review, so when the result sets a default or the `pre_push_review` kind, those flags
-    /// move into `pre_push_review.model` / `.effort`, unless the file sets those. Runs then use the same
-    /// model and effort as before.
+    /// move into `pre_push_review.model` / `.effort`, unless the file sets those. `auto_review.command`
+    /// and the `qa` kind work the same way. Runs then use the same model and effort as before.
     public static func updating(_ yaml: String, from old: RunProfiles, to new: RunProfiles) throws -> String {
         guard old != new else { return yaml }
         var text = yaml
@@ -258,10 +260,11 @@ public enum RunProfilesConfig {
             }
             text = try removingCommandFlags(in: text)
         }
-        let reviewFlags = try prePushReviewFlags(in: yaml)
-        if reviewFlags != RunProfile() && (new.defaults != RunProfile() || new.kinds[.prePushReview] != nil) {
-            text = try removingCommandFlags(in: text, section: prePushReview)
-            text = try settingPrePushReview(reviewFlags, in: text)
+        for (section, kind, order) in [(prePushReview, RunKind.prePushReview, prePushReviewOrder), (autoReview, .qa, autoReviewOrder)] {
+            let sectionFlags = try commandFlags(in: yaml, section: section)
+            guard sectionFlags != RunProfile() && (new.defaults != RunProfile() || new.kinds[kind] != nil) else { continue }
+            text = try removingCommandFlags(in: text, section: section)
+            text = try settingSection(section, to: sectionFlags, order: order, in: text)
         }
         for kind in scopes {
             for field in RunProfileField.allCases where old[kind][field] != new[kind][field] {
@@ -387,19 +390,20 @@ public enum RunProfilesConfig {
     }
 
     static let prePushReview = "pre_push_review"
+    static let autoReview = "auto_review"
 
-    /// The `--model` / `--effort` in `pre_push_review.command`. A `pre_push_review: { ... }` line only
-    /// matters, and so only fails, when its command passes one of them.
-    private static func prePushReviewFlags(in yaml: String) throws -> RunProfile {
+    /// The `--model` / `--effort` in `<section>.command`. A `<section>: { ... }` line only matters, and so
+    /// only fails, when its command passes one of them.
+    private static func commandFlags(in yaml: String, section name: String) throws -> RunProfile {
         let document = Document(yaml)
-        if let section = document.child(prePushReview, in: document.all), try InlineText(section).isFlowMap {
+        if let section = document.child(name, in: document.all), try InlineText(section).isFlowMap {
             let command = try InlineText(section).flowMap(section).first { $0.key == "command" }
             guard case .text(let raw)? = command?.value,
                   let value = try decodeScalar(Substring(raw), on: section),
                   splitCommandFlags(value).flags != RunProfile() else { return RunProfile() }
-            throw section.unsupported("`\(prePushReview):` should be an indented block")
+            throw section.unsupported("`\(name):` should be an indented block")
         }
-        return try commandProfile(in: yaml, section: prePushReview)
+        return try commandProfile(in: yaml, section: name)
     }
 
     /// The text with `--model` / `--effort` taken out of `<section>.command`, keeping the rest of the line,
@@ -423,10 +427,11 @@ public enum RunProfilesConfig {
         return document.text
     }
 
-    /// The text with `pre_push_review.model` / `.effort` set to the fields of `flags` the file leaves unset.
-    private static func settingPrePushReview(_ flags: RunProfile, in yaml: String) throws -> String {
+    /// The text with `<name>.model` / `.effort` set to the fields of `flags` the file leaves unset, new keys
+    /// going in `order`.
+    private static func settingSection(_ name: String, to flags: RunProfile, order: [String], in yaml: String) throws -> String {
         var document = Document(yaml)
-        guard let section = try sectionKey(prePushReview, in: document) else { return yaml }
+        guard let section = try sectionKey(name, in: document) else { return yaml }
         for field in RunProfileField.allCases {
             guard let value = flags[field] else { continue }
             let range = document.children(of: section)
@@ -434,7 +439,7 @@ public enum RunProfilesConfig {
             let column = document.childIndent(in: range) ?? section.indent + defaultIndentStep
             try set(
                 field.rawValue, to: RepositoriesConfig.scalar(value), under: section, column: column,
-                order: prePushReviewOrder, in: &document
+                order: order, in: &document
             )
         }
         return document.text

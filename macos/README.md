@@ -180,7 +180,9 @@ set (or, in Development mode, no checkout folder).
   sets a model or effort moves them out of the command (keeping the rest of the line and its comment) into
   `agent.model` / `agent.effort`, unless you set the Default row in the same save. In the same way, once a
   save sets the Default row or the pre-push review row, `--model` / `--effort` in `pre_push_review.command`
-  move into `pre_push_review.model` / `pre_push_review.effort` (a key already there wins). Higher effort and bigger
+  move into `pre_push_review.model` / `pre_push_review.effort` (a key already there wins), and once it sets the
+  Default row or the QA row, those in `auto_review.command` move into `auto_review.model` /
+  `auto_review.effort`. Higher effort and bigger
   models use the shared 5-hour usage limit faster. The next run picks the change up without a restart. The
   Codex runtime ignores these keys (see [Run profiles](../docs/configuration.md)).
 - `LINEAR_API_KEY` and any extra environment variables are stored only in the login Keychain, as generic

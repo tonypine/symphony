@@ -526,6 +526,63 @@ final class RunProfilesConfigTests: XCTestCase {
         }
     }
 
+    func testMovesFlagsOutOfTheQACommand() throws {
+        let yaml = """
+            agent:
+              command: claude
+            auto_review:
+              enabled: true
+              state: Auto Review
+              command: "claude --effort=low --dangerously-skip-permissions"  # QA
+              max_turns: 20
+
+            """
+        var new = RunProfiles()
+        new[.qa].model = "claude-sonnet-5-5"
+
+        XCTAssertEqual(try RunProfilesConfig.updating(yaml, from: RunProfiles(), to: new), """
+            agent:
+              command: claude
+              run_profiles:
+                qa: { model: claude-sonnet-5-5 }
+            auto_review:
+              enabled: true
+              state: Auto Review
+              command: "claude --dangerously-skip-permissions"  # QA
+              effort: low
+              max_turns: 20
+
+            """)
+    }
+
+    func testLeavesTheQACommandWhenNothingResolvesForIt() throws {
+        let yaml = "agent:\n  command: claude\nauto_review:\n  command: claude --model claude-opus-5-5\n"
+        var new = RunProfiles()
+        new[.prePushReview].effort = "high"
+
+        XCTAssertEqual(
+            try RunProfilesConfig.updating(yaml, from: RunProfiles(), to: new),
+            "agent:\n  command: claude\n  run_profiles:\n    pre_push_review: { effort: high }\nauto_review:\n  command: claude --model claude-opus-5-5\n"
+        )
+    }
+
+    func testKeepsAKindThatStillHasAProvider() throws {
+        let flow = "agent:\n  run_profiles:\n    breakdown: { provider: openrouter, model: x/y }\n"
+        let block = "agent:\n  run_profiles:\n    breakdown:\n      provider: openrouter\n      model: x/y\n"
+        let old = try RunProfilesConfig.profiles(in: flow)
+        XCTAssertEqual(old[.breakdown], RunProfile(model: "x/y"))
+        XCTAssertEqual(try RunProfilesConfig.profiles(in: block), old)
+
+        XCTAssertEqual(
+            try RunProfilesConfig.updating(flow, from: old, to: RunProfiles()),
+            "agent:\n  run_profiles:\n    breakdown: { provider: openrouter }\n"
+        )
+        XCTAssertEqual(
+            try RunProfilesConfig.updating(block, from: old, to: RunProfiles()),
+            "agent:\n  run_profiles:\n    breakdown:\n      provider: openrouter\n"
+        )
+    }
+
     func testDefaultTitleNamesTheCommandValue() {
         XCTAssertEqual(RunProfilesConfig.defaultTitle(RunProfilesConfig.models, inherited: nil), "default")
         XCTAssertEqual(RunProfilesConfig.defaultTitle(RunProfilesConfig.models, inherited: "claude-opus-5-5"), "Opus 5.5, from command")
