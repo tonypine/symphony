@@ -1091,7 +1091,8 @@ When enabled:
   outside the agent sandbox: `qa_build` (only the configured `build`, refused when the worktree has
   changes outside `qa-evidence/`, including gitignored files that were not there after the last
   build), `qa_launch_app` / `qa_quit_app` (only the configured bundle,
-  resolved inside the worktree, whose executable the last `qa_build` produced, refused under the same worktree check, always with
+  resolved inside the worktree, launched from a copy the last successful `qa_build` made in a
+  directory the agent sandbox cannot write, refused under the same worktree check, always with
   `SYMPHONY_BAR_QA_ROOT` set to a private directory), `qa_screenshot` (into `qa-evidence/`), and
   `qa_ax_tree`, `qa_ax_press`, `qa_ax_set_value`. Every tool that takes a PID MUST refuse a PID
   the pass did not launch. Apps still running when the pass ends MUST be quit. A missing Screen

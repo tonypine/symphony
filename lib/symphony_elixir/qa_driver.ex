@@ -11,12 +11,15 @@ defmodule SymphonyElixir.QaDriver do
     `qa-evidence/`. Gitignored files count too (the build reads caches such as
     SwiftPM's `.build/`): none may exist before the first build, and after a
     build none may appear or change until the next one;
-  - `qa_launch_app` starts only the configured `app` bundle, which must resolve
-    (symlinks included) inside the worktree, whose executable must be the one
-    the last `qa_build` produced, and only while the worktree is as that build
-    left it. The app always gets `SYMPHONY_BAR_QA_ROOT`
-    pointing at a private directory, so it never touches real settings or the
-    login Keychain;
+  - a successful `qa_build` copies the configured `app` bundle, which must
+    resolve (symlinks included) inside the worktree, into the driver's private
+    directory. Symlinks inside the bundle must be relative and must not climb
+    with `..`, so the copy cannot reach back into the worktree;
+  - `qa_launch_app` starts only that private copy, only while its executable
+    still matches what the build produced and the worktree is as that build
+    left it, so later worktree edits cannot change what runs. The app always
+    gets `SYMPHONY_BAR_QA_ROOT` pointing at the private directory, so it never
+    touches real settings or the login Keychain;
   - `qa_quit_app`, `qa_screenshot`, `qa_ax_tree`, `qa_ax_press` and
     `qa_ax_set_value` accept only a PID this driver launched and that is still
     running;
@@ -26,6 +29,10 @@ defmodule SymphonyElixir.QaDriver do
   grants of the process that runs Symphony. Without them the tools fail with
   `qa_permission_missing` and tell the agent to answer `blocked`.
 
+  The private directory (bundle copies, screenshot staging and the app's QA
+  root) is a `0700` directory under Symphony's state root, outside every path
+  the agent sandbox may write.
+
   When the driver stops (the QA pass ends or crashes) it quits every app it
   launched and removes its private directory.
   """
@@ -34,7 +41,7 @@ defmodule SymphonyElixir.QaDriver do
 
   require Logger
 
-  alias SymphonyElixir.{AgentEnv, PathSafety, Workspace}
+  alias SymphonyElixir.{AgentEnv, Paths, PathSafety, Workspace}
   alias SymphonyElixir.QaDriver.Host
 
   @evidence_dir "qa-evidence"
@@ -118,9 +125,9 @@ defmodule SymphonyElixir.QaDriver do
   defp run_tool("qa_launch_app", driver, config, _args) do
     with {:ok, built} <- fetch_build(driver),
          :ok <- ensure_clean_worktree(config, GenServer.call(driver, :ignored)),
-         {:ok, fingerprint} <- fingerprint_app(config),
-         :ok <- same_build(built, fingerprint) do
-      GenServer.call(driver, {:launch, fingerprint.executable})
+         {:ok, digest} <- file_digest(built.executable),
+         :ok <- same_build(built.digest, digest) do
+      GenServer.call(driver, {:launch, built.executable})
     end
   end
 
@@ -248,7 +255,10 @@ defmodule SymphonyElixir.QaDriver do
   # The build's own outputs become the baseline whether or not it succeeded, so
   # a failed build's partial outputs do not block the next attempt.
   defp record_build(driver, config, 0, output, ignored) do
-    with {:ok, fingerprint} <- fingerprint_app(config) do
+    with {:ok, built} <- fingerprint_app(config),
+         {:ok, copy} <- copy_bundle(config, built.bundle),
+         {:ok, fingerprint} <- fingerprint_bundle(config, copy),
+         :ok <- same_build(built.digest, fingerprint.digest) do
       GenServer.call(driver, {:record_build, fingerprint, ignored})
       {:ok, %{"exit_status" => 0, "output" => output, "app" => config.app}}
     end
@@ -276,11 +286,83 @@ defmodule SymphonyElixir.QaDriver do
 
   defp fingerprint_app(config) do
     with {:ok, bundle} <- resolve_inside(Path.expand(config.app, config.worktree), config.worktree, "qa_bundle_outside_worktree"),
-         :ok <- bundle_directory(bundle, config.app),
-         {:ok, name} <- bundle_executable_name(config, bundle),
+         :ok <- bundle_directory(bundle, config.app) do
+      fingerprint_bundle(config, bundle)
+    end
+  end
+
+  defp fingerprint_bundle(config, bundle) do
+    with {:ok, name} <- bundle_executable_name(config, bundle),
          {:ok, executable} <- resolve_inside(Path.join([bundle, "Contents", "MacOS", name]), bundle, "qa_executable_outside_bundle"),
          {:ok, digest} <- file_digest(executable) do
-      {:ok, %{executable: executable, digest: digest}}
+      {:ok, %{bundle: bundle, executable: executable, digest: digest}}
+    end
+  end
+
+  # The worktree stays agent-writable after the build, so QA launches a copy in
+  # the driver's private directory. Each build gets its own copy because apps
+  # launched from an earlier one may still be running.
+  defp copy_bundle(config, bundle) do
+    destination = Path.join([config.scratch_dir, "builds", Integer.to_string(System.unique_integer([:positive])), Path.basename(bundle)])
+    File.mkdir_p!(Path.dirname(destination))
+
+    case copy_tree(bundle, destination) do
+      :ok ->
+        {:ok, destination}
+
+      {:error, reason} ->
+        File.rm_rf(Path.dirname(destination))
+        tool_error("qa_bundle_unsafe", "The app bundle could not be copied for launch: #{reason}.")
+    end
+  end
+
+  defp copy_tree(source, destination) do
+    case File.lstat(source) do
+      {:ok, %File.Stat{type: :directory}} ->
+        source |> copy_dir(destination) |> copy_result(source)
+
+      {:ok, %File.Stat{type: :regular}} ->
+        source |> File.cp(destination) |> copy_result(source)
+
+      {:ok, %File.Stat{type: :symlink}} ->
+        copy_symlink(source, destination)
+
+      {:ok, %File.Stat{}} ->
+        {:error, "#{source} is not a file, directory or symlink"}
+
+      error ->
+        copy_result(error, source)
+    end
+  end
+
+  defp copy_dir(source, destination) do
+    with :ok <- File.mkdir(destination),
+         {:ok, entries} <- File.ls(source) do
+      copy_entries(Enum.sort(entries), source, destination)
+    end
+  end
+
+  defp copy_entries([], _source, _destination), do: :ok
+
+  defp copy_entries([entry | rest], source, destination) do
+    case copy_tree(Path.join(source, entry), Path.join(destination, entry)) do
+      :ok -> copy_entries(rest, source, destination)
+      error -> error
+    end
+  end
+
+  defp copy_result({:error, reason}, source) when not is_binary(reason), do: {:error, "#{source}: #{inspect(reason)}"}
+  defp copy_result(result, _source), do: result
+
+  # A relative target without `..` only descends from the link's own directory,
+  # and every other link in the copy obeys the same rule, so it stays inside it.
+  defp copy_symlink(source, destination) do
+    with {:ok, target} <- copy_result(File.read_link(source), source) do
+      if Path.type(target) == :relative and ".." not in Path.split(target) do
+        target |> File.ln_s(destination) |> copy_result(source)
+      else
+        {:error, "#{source} links to #{target}; links in the bundle must be relative and stay inside it"}
+      end
     end
   end
 
@@ -339,8 +421,8 @@ defmodule SymphonyElixir.QaDriver do
     end
   end
 
-  defp same_build(built, fingerprint) do
-    if built == fingerprint do
+  defp same_build(built_digest, digest) do
+    if built_digest == digest do
       :ok
     else
       tool_error("qa_app_changed", "The app executable changed after the last qa_build. Run qa_build again; QA launches only what the build produced.")
@@ -532,7 +614,7 @@ defmodule SymphonyElixir.QaDriver do
     args = ["-x", "-o", "-l", Integer.to_string(window["id"]), scratch]
 
     with {:ok, {_output, 0}} <- config.host.cmd.("/usr/sbin/screencapture", args, timeout_ms: @screenshot_timeout_ms, output_limit: @output_limit),
-         true <- File.regular?(scratch) do
+         {:ok, %File.Stat{type: :regular}} <- File.lstat(scratch) do
       replace_file(scratch, destination)
     else
       _failure -> tool_error("qa_screenshot_failed", "screencapture could not capture window #{window["id"]}.")
@@ -566,9 +648,9 @@ defmodule SymphonyElixir.QaDriver do
     Process.flag(:trap_exit, true)
     playbook = Keyword.fetch!(opts, :playbook)
     {:ok, worktree} = PathSafety.canonicalize(Keyword.fetch!(opts, :worktree))
-    scratch_dir = Path.join(System.tmp_dir!(), "symphony-qa-#{System.unique_integer([:positive])}")
+    scratch_dir = private_dir()
     qa_root = Path.join(scratch_dir, "app-root")
-    File.mkdir_p!(qa_root)
+    File.mkdir!(qa_root)
 
     config = %{
       worktree: worktree,
@@ -642,6 +724,18 @@ defmodule SymphonyElixir.QaDriver do
     for {pid, %{exit_status: nil}} <- state.apps, do: state.config.host.kill.(pid)
     File.rm_rf(state.config.scratch_dir)
     :ok
+  end
+
+  # Not under System.tmp_dir!(): the agent sandbox may write there.
+  defp private_dir do
+    runs = Path.join([Paths.state_root(), "qa-driver", "runs"])
+    File.mkdir_p!(runs)
+    File.chmod!(runs, 0o700)
+    dir = Path.join(runs, "#{System.os_time(:millisecond)}-#{System.unique_integer([:positive])}")
+    File.mkdir!(dir)
+    File.chmod!(dir, 0o700)
+    {:ok, canonical} = PathSafety.canonicalize(dir)
+    canonical
   end
 
   defp launch(executable, state) do

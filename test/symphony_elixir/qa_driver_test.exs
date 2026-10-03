@@ -3,7 +3,7 @@ defmodule SymphonyElixir.QaDriverTest do
 
   import ExUnit.CaptureLog
 
-  alias SymphonyElixir.{PathSafety, QaDriver}
+  alias SymphonyElixir.{Paths, PathSafety, QaDriver}
   alias SymphonyElixir.QaDriver.Host
 
   @app "macos/build/Demo.app"
@@ -128,9 +128,16 @@ defmodule SymphonyElixir.QaDriverTest do
       assert build_opts[:timeout_ms] == 900_000
       refute Enum.any?(build_opts[:env], fn {name, value} -> name == ~c"LINEAR_API_KEY" and value != false end)
 
+      %{scratch_dir: scratch_dir} = GenServer.call(driver, :config)
+      {:ok, state_root} = PathSafety.canonicalize(Paths.state_root())
+      assert String.starts_with?(scratch_dir, Path.join(state_root, "qa-driver/runs") <> "/")
+      assert File.stat!(scratch_dir).mode |> Bitwise.band(0o777) == 0o700
+
       assert_received {:launched, executable, launch_opts, _port, ^pid}
-      assert executable == Path.join([worktree, @app, "Contents", "MacOS", "Demo"])
+      assert String.starts_with?(executable, Path.join(scratch_dir, "builds") <> "/")
+      assert String.ends_with?(executable, "/Demo.app/Contents/MacOS/Demo")
       qa_root = launch_opts[:cd]
+      assert String.starts_with?(qa_root, scratch_dir <> "/")
       assert {~c"SYMPHONY_BAR_QA_ROOT", String.to_charlist(qa_root)} in launch_opts[:env]
       assert File.dir?(qa_root)
 
@@ -162,7 +169,7 @@ defmodule SymphonyElixir.QaDriverTest do
       assert error_code(QaDriver.call_tool(driver, "qa_ax_tree", %{"pid" => pid})) == "qa_pid_not_launched"
 
       QaDriver.stop(driver)
-      refute File.exists?(qa_root)
+      refute File.exists?(scratch_dir)
       assert error_code(QaDriver.call_tool(driver, "qa_build", %{})) == "qa_driver_unavailable"
     end
 
@@ -329,14 +336,86 @@ defmodule SymphonyElixir.QaDriverTest do
   end
 
   describe "qa_launch_app" do
-    test "launches only what the last build produced", %{worktree: worktree} do
+    test "launches a private copy of what the last build produced", %{worktree: worktree} do
       driver = start_driver(worktree)
       assert error_code(QaDriver.call_tool(driver, "qa_launch_app", %{})) == "qa_not_built"
 
       assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
       write_bundle(worktree, "agent-written binary")
+      {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{}) end)
+      assert {:ok, %{"pid" => _pid}} = result
+      assert_received {:launched, executable, _opts, _port, _pid}
+      refute String.starts_with?(executable, worktree)
+      assert File.read!(executable) == "binary-v1"
+
+      # The copy is checked again before every launch.
+      File.write!(executable, "tampered")
       assert error_code(QaDriver.call_tool(driver, "qa_launch_app", %{})) == "qa_app_changed"
       refute_received {:launched, _executable, _opts, _port, _pid}
+    end
+
+    test "copies in-bundle symlinks and refuses links that leave the bundle", %{worktree: worktree} do
+      build_with_link = fn target ->
+        fn
+          "/bin/sh", _args, opts ->
+            write_bundle(opts[:cd])
+            framework = Path.join([opts[:cd], @app, "Contents/Frameworks/Dep.framework"])
+            File.mkdir_p!(Path.join(framework, "Versions/A"))
+            File.write!(Path.join(framework, "Versions/A/Dep"), "dylib")
+            link = Path.join(framework, "Dep")
+            File.rm(link)
+            File.ln_s!(target, link)
+            {:ok, {"", 0}}
+
+          executable, args, opts ->
+            default_cmd(executable, args, opts, %{})
+        end
+      end
+
+      driver = start_driver(worktree, host: host(%{cmd: build_with_link.("Versions/A/Dep")}))
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+      {_result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{}) end)
+      assert_received {:launched, executable, _opts, _port, _pid}
+      copied = Path.join(Path.dirname(Path.dirname(executable)), "Frameworks/Dep.framework/Dep")
+      assert File.read_link!(copied) == "Versions/A/Dep"
+      assert File.read!(copied) == "dylib"
+
+      for target <- [Path.join(worktree, "evil.dylib"), "../../../../../evil.dylib", "Versions/../../Dep"] do
+        driver = start_driver(worktree, host: host(%{cmd: build_with_link.(target)}))
+        assert {:error, {:qa_tool, "qa_bundle_unsafe", message}} = QaDriver.call_tool(driver, "qa_build", %{})
+        assert message =~ "must be relative"
+        assert error_code(QaDriver.call_tool(driver, "qa_launch_app", %{})) == "qa_not_built"
+      end
+    end
+
+    test "refuses a bundle with special files or entries it cannot read", %{worktree: worktree} do
+      resources = Path.join([worktree, @app, "Contents/Resources"])
+
+      build_with = fn prepare ->
+        fn
+          "/bin/sh", _args, opts ->
+            write_bundle(opts[:cd])
+            File.rm_rf!(resources)
+            File.mkdir_p!(resources)
+            prepare.()
+            {:ok, {"", 0}}
+
+          executable, args, opts ->
+            default_cmd(executable, args, opts, %{})
+        end
+      end
+
+      fifo = build_with.(fn -> {_output, 0} = System.cmd("mkfifo", [Path.join(resources, "pipe")]) end)
+      driver = start_driver(worktree, host: host(%{cmd: fifo}))
+      assert {:error, {:qa_tool, "qa_bundle_unsafe", message}} = QaDriver.call_tool(driver, "qa_build", %{})
+      assert message =~ "pipe is not a file, directory or symlink"
+
+      # Listable but not searchable: the entries inside cannot be stat'ed.
+      unsearchable = build_with.(fn -> File.write!(Path.join(resources, "a"), "a") && File.chmod!(resources, 0o600) end)
+      driver = start_driver(worktree, host: host(%{cmd: unsearchable}))
+      assert {:error, {:qa_tool, "qa_bundle_unsafe", message}} = QaDriver.call_tool(driver, "qa_build", %{})
+      assert message =~ ":eacces"
+      File.chmod!(resources, 0o700)
     end
 
     test "caps running apps and reports launch failures", %{worktree: worktree} do
@@ -530,6 +609,28 @@ defmodule SymphonyElixir.QaDriverTest do
 
       {driver, pid} = launched_app(worktree, host: failing_capture)
       assert error_code(QaDriver.call_tool(driver, "qa_screenshot", %{"pid" => pid, "name" => "x"})) == "qa_screenshot_failed"
+    end
+
+    test "never copies a symlink planted at the screenshot staging path", %{root: root, worktree: worktree} do
+      secret = Path.join(root, "secret")
+      File.write!(secret, "host secret")
+
+      planting_capture =
+        host(%{
+          cmd: fn
+            "/usr/sbin/screencapture", args, _opts ->
+              File.ln_s!(secret, List.last(args))
+              {:ok, {"", 0}}
+
+            executable, args, opts ->
+              default_cmd(executable, args, opts, %{"permissions" => {~s({"screen_recording":true}), 0}, "windows" => {~s({"windows":[{"id":5,"layer":0,"onscreen":true,"frame":{"w":10,"h":10}}]}), 0}})
+          end
+        })
+
+      {driver, pid} = launched_app(worktree, host: planting_capture)
+      assert error_code(QaDriver.call_tool(driver, "qa_screenshot", %{"pid" => pid, "name" => "x"})) == "qa_screenshot_failed"
+      refute File.exists?(Path.join(worktree, "qa-evidence/x.png"))
+      assert File.read!(secret) == "host secret"
     end
   end
 
