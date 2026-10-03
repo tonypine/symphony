@@ -248,6 +248,8 @@ defmodule SymphonyElixir.Linear.Client do
   }
   """
 
+  @viewer_id_cache_key {__MODULE__, :viewer_id}
+
   @viewer_query """
   query SymphonyLinearViewer {
     viewer {
@@ -441,6 +443,13 @@ defmodule SymphonyElixir.Linear.Client do
   def fetch_issue_enrichment_for_test(%Issue{} = issue, graphql_fun)
       when is_function(graphql_fun, 2) do
     do_fetch_issue_enrichment(issue, graphql_fun)
+  end
+
+  @doc false
+  @spec reset_viewer_cache_for_test() :: :ok
+  def reset_viewer_cache_for_test do
+    :persistent_term.erase(@viewer_id_cache_key)
+    :ok
   end
 
   @doc false
@@ -1154,20 +1163,20 @@ defmodule SymphonyElixir.Linear.Client do
     end
   end
 
-  # The user behind an API key never changes, so `assignee: me` asks Linear once per key and
-  # GraphQL function instead of once per poll and repo.
+  # The user behind an API key never changes, so `assignee: me` asks Linear once per key instead
+  # of once per poll and repo. One entry holds the current key's viewer, so a key change replaces it.
   defp cached_viewer_id(graphql_fun) do
-    cache_key = {__MODULE__, :viewer_id, :erlang.phash2({Secret.unwrap(Config.settings!().tracker.api_key), graphql_fun})}
+    api_key_hash = :erlang.phash2(Secret.unwrap(Config.settings!().tracker.api_key))
 
-    case :persistent_term.get(cache_key, nil) do
-      nil ->
+    case :persistent_term.get(@viewer_id_cache_key, nil) do
+      {^api_key_hash, viewer_id} ->
+        {:ok, viewer_id}
+
+      _missing_or_other_key ->
         with {:ok, viewer_id} <- fetch_viewer_id(graphql_fun) do
-          :persistent_term.put(cache_key, viewer_id)
+          :persistent_term.put(@viewer_id_cache_key, {api_key_hash, viewer_id})
           {:ok, viewer_id}
         end
-
-      viewer_id ->
-        {:ok, viewer_id}
     end
   end
 

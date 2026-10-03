@@ -421,7 +421,8 @@ defmodule SymphonyElixir.CiPollerTest do
       Application.put_env(:symphony_elixir, :ci_test_status, green_status())
       put_run(issue, now)
 
-      assert {:ok, %{actions: [{:green, "issue-2401"}]}} =
+      # Nor in any state the repository watches, so it isn't picked up at all.
+      assert {:ok, %{discovered: 0, processed: 0, actions: []}} =
                CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
     end
   end
@@ -593,6 +594,42 @@ defmodule SymphonyElixir.CiPollerTest do
              failed_checks: [%{"name" => "specs"}],
              log_excerpt: "specs failed"
            } = CiPoller.pending_ci_failure("issue-ci-strings")
+  end
+
+  test "each repository keeps only the states it watches from the shared read" do
+    now = ~U[2026-05-06 09:00:00Z]
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      pr_review_mode: "polling",
+      ci: %{enabled: true},
+      repos: multi_repo_config()
+    )
+
+    # Auto Review is off, so no repository watches its state, yet the shared read returns an issue in it.
+    issue = %{in_review_issue() | id: "issue-pin-85", identifier: "PIN4WOO-85", state: "Auto Review"}
+    Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+
+    assert :ok =
+             RunStore.put_run(%{
+               repo_key: "secondary",
+               run_id: "run-pin-85",
+               issue_id: issue.id,
+               issue_identifier: issue.identifier,
+               status: "success",
+               workspace_path: "/tmp/workspaces/PIN4WOO-85",
+               worker_host: nil,
+               started_at: DateTime.add(now, -2, :minute),
+               ended_at: DateTime.add(now, -1, :minute)
+             })
+
+    assert {:ok, %{discovered: 0, processed: 0}} =
+             CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+    assert_receive {:fetch_issues_by_states, states}
+    refute "Auto Review" in states
+    refute_receive {:fetch_issues_by_states, _states}
+    assert [] = RunStore.list_ci_checks("secondary")
   end
 
   test "polls ci lifecycle records for non-default repos" do

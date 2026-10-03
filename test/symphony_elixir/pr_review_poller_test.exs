@@ -396,6 +396,33 @@ defmodule SymphonyElixir.PrReviewPollerTest do
            ] = RunStore.list_pr_reviews()
   end
 
+  test "each repository keeps only the states it watches from the shared read" do
+    now = ~U[2026-05-01 09:00:00Z]
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      pr_review_mode: "polling",
+      pr_review_auto_merge: false,
+      pr_review_cooldown_minutes: 30,
+      pr_review_stale_days: 7,
+      repos: multi_repo_config()
+    )
+
+    # Auto-merge is off, so no repository watches Merging, yet the shared read returns an issue in it.
+    issue = %{
+      in_review_issue(id: "issue-pin-85", identifier: "PIN4WOO-85", pr_url: "https://github.com/example/repo/pull/85", updated_at: now)
+      | state: "Merging"
+    }
+
+    Application.put_env(:symphony_elixir, :pr_review_test_issues, [issue])
+    assert :ok = RunStore.put_run(Map.put(review_run(issue, "/tmp/workspaces/PIN4WOO-85", now), :repo_key, "secondary"))
+
+    assert {:ok, %{discovered: 0, processed: 0}} =
+             PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+    assert [] = RunStore.list_pr_reviews("secondary")
+  end
+
   test "polls review lifecycle records for non-default repos" do
     now = ~U[2026-05-01 09:00:00Z]
     comment_at = DateTime.add(now, -45, :minute)

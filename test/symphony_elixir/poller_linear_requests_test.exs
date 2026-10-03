@@ -126,8 +126,6 @@ defmodule SymphonyElixir.PollerLinearRequestsTest do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "linear",
       tracker_endpoint: "http://127.0.0.1:#{port}/graphql",
-      # A fresh key per test, so the cached viewer of another test does not hide this one's lookup.
-      tracker_api_token: "token-#{System.unique_integer([:positive])}",
       tracker_assignee: "me",
       tracker_project_slug: nil,
       pr_review_mode: "polling",

@@ -245,8 +245,9 @@ defmodule SymphonyElixir.CiPoller do
     end
   end
 
-  # The tracker's state query already spans every repository, and the states a repository watches
-  # come from system-wide settings, so one read serves every repository this cycle.
+  # The tracker's state query already spans every repository, so one read of the states any
+  # repository watches serves them all this cycle; each repository keeps only the states its own
+  # settings watch.
   defp prefetch_watched_issues(repo_keys, opts) do
     tracker = Keyword.get(opts, :tracker, Tracker)
 
@@ -331,7 +332,7 @@ defmodule SymphonyElixir.CiPoller do
 
   defp fetch_watched_issues(settings, tracker, opts) do
     case Keyword.fetch(opts, :watched_issues) do
-      {:ok, issues} -> {:ok, issues}
+      {:ok, issues} -> {:ok, Enum.filter(issues, &issue_in_states?(&1, watched_states(settings)))}
       :error -> tracker.fetch_issues_by_states(watched_states(settings))
     end
   end
@@ -356,6 +357,11 @@ defmodule SymphonyElixir.CiPoller do
       %{}
     end
   end
+
+  defp issue_in_states?(%Issue{state: state}, states) when is_binary(state),
+    do: Enum.any?(states, &(normalize_state_name(&1) == normalize_state_name(state)))
+
+  defp issue_in_states?(_issue, _states), do: false
 
   defp normalize_state_name(state) when is_binary(state), do: state |> String.trim() |> String.downcase()
   defp normalize_state_name(_state), do: ""
