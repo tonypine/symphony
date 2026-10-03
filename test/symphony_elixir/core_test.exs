@@ -1317,15 +1317,17 @@ defmodule SymphonyElixir.CoreTest do
                {:ok, [refreshed_issue]}
              end)
 
+    # Waiting for a slot keeps the attempt and the sticky repo, outside the backoff queue.
     assert %{
-             attempt: 2,
+             attempt: 1,
              repo_key: "api",
              identifier: "MT-563",
-             error: "no available orchestrator slots"
-           } = updated_state.retry_attempts[issue_id]
+             reason: "no available orchestrator slots"
+           } = updated_state.slot_waiting[issue_id]
 
-    assert [%{issue_id: ^issue_id, repo_key: "api", identifier: "MT-563"}] =
-             RunStore.list_retries("api")
+    refute Map.has_key?(updated_state.retry_attempts, issue_id)
+    refute MapSet.member?(updated_state.claimed, issue_id)
+    assert [] = RunStore.list_retries("api")
 
     assert [] = RunStore.list_retries("web")
   end
@@ -1365,15 +1367,17 @@ defmodule SymphonyElixir.CoreTest do
                {:ok, [refreshed_issue]}
              end)
 
+    # Waiting for a slot keeps the attempt and the sticky repo, outside the backoff queue.
     assert %{
-             attempt: 2,
+             attempt: 1,
              repo_key: "api",
              identifier: "MT-564",
-             error: "no available orchestrator slots"
-           } = updated_state.retry_attempts[issue_id]
+             reason: "no available orchestrator slots"
+           } = updated_state.slot_waiting[issue_id]
 
-    assert [%{issue_id: ^issue_id, repo_key: "api", identifier: "MT-564"}] =
-             RunStore.list_retries("api")
+    refute Map.has_key?(updated_state.retry_attempts, issue_id)
+    refute MapSet.member?(updated_state.claimed, issue_id)
+    assert [] = RunStore.list_retries("api")
 
     assert [] = RunStore.list_retries("default")
   end
@@ -1663,9 +1667,10 @@ defmodule SymphonyElixir.CoreTest do
 
     send(pid, {:retry_issue, issue_id, retry_token})
 
+    # A landing run uses a finishing slot, so it starts even with no work slots free.
     state =
       wait_for_orchestrator_state(pid, fn state ->
-        match?(%{attempt: 2, error: "no available orchestrator slots"}, state.retry_attempts[issue_id])
+        Map.has_key?(state.running, issue_id) or match?(%{attempt: 2}, state.retry_attempts[issue_id])
       end)
 
     refute_received {:memory_tracker_state_update, ^issue_id, _state}
