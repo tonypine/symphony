@@ -102,6 +102,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "ci.flaky_retry" => "pull_requests.checks.retry_failed_once",
     "ci.log_excerpt_lines" => "pull_requests.checks.log_excerpt_lines",
     "ci.max_retries" => "pull_requests.checks.max_fix_attempts",
+    "ci.merging_wait_timeout_ms" => "pull_requests.checks.landing_wait_timeout_ms",
     "ci.poll_interval_ms" => "pull_requests.poll_interval_ms",
     "dependencies.allow_git_sources" => "dependency_audit.allow_git_sources",
     "dependencies.allow_path_sources" => "dependency_audit.allow_path_sources",
@@ -742,7 +743,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
              "pull_requests.review_comments"
            ),
          {:ok, checks} <- section_map(Map.get(config, "checks", %{}), "pull_requests.checks"),
-         :ok <- reject_unknown_section_keys(checks, ~w(enabled log_excerpt_lines retry_failed_once max_fix_attempts escalate_to_state), "pull_requests.checks"),
+         :ok <- reject_unknown_section_keys(checks, ~w(enabled log_excerpt_lines retry_failed_once max_fix_attempts escalate_to_state landing_wait_timeout_ms), "pull_requests.checks"),
          {:ok, learnings} <- section_map(Map.get(config, "learnings", %{}), "pull_requests.learnings"),
          :ok <- reject_unknown_section_keys(learnings, ~w(enabled provider model max_total_per_repo max_per_run), "pull_requests.learnings"),
          {:ok, mode} <- pr_review_mode(Map.get(config, "enabled")) do
@@ -765,6 +766,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
         |> maybe_put("flaky_retry", Map.get(checks, "retry_failed_once"))
         |> maybe_put("max_retries", Map.get(checks, "max_fix_attempts"))
         |> maybe_put("escalation_state", Map.get(checks, "escalate_to_state"))
+        |> maybe_put("merging_wait_timeout_ms", Map.get(checks, "landing_wait_timeout_ms"))
 
       {:ok,
        %{}
@@ -930,7 +932,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   end
 
   defp parse_repo_agents(%__MODULE__{} = system_config) do
-    sections = Map.take(system_config, [:agent, :review_agent, :auto_review])
+    sections = Map.take(system_config, [:agent, :review_agent, :auto_review, :worker])
 
     {repos, errors} =
       Enum.map_reduce(system_config.repos, [], fn

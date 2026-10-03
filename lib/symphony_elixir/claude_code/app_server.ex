@@ -11,8 +11,10 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   alias SymphonyElixir.Config.Schema.Agent
   alias SymphonyElixir.GitHub.Hosts
   alias SymphonyElixir.ProjectGuidePrompt
+  alias SymphonyElixir.Secret
   alias SymphonyElixir.SharedSkills
 
+  @openrouter_base_url "https://openrouter.ai/api"
   @agent_runtime_env AgentEnv.runtime_marker_name()
   @agent_runtime_env_value AgentEnv.runtime_marker_value()
   @settings_dir_prefix "symphony-claude-settings-"
@@ -52,8 +54,10 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   def start_session(workspace, opts \\ []) do
     worker_host = Keyword.get(opts, :worker_host)
     settings = settings_from_opts(opts)
+    run_profile = Keyword.get(opts, :run_profile)
 
-    with {:ok, expanded_workspace} <- validate_workspace_cwd(workspace, worker_host, settings),
+    with :ok <- check_provider(run_profile, worker_host),
+         {:ok, expanded_workspace} <- validate_workspace_cwd(workspace, worker_host, settings),
          {:ok, mcp_session, remote_socket_path, remote_shim_path} <-
            start_mcp_session(expanded_workspace, worker_host, opts),
          {:ok, session} <-
@@ -66,7 +70,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
              remote_shim_path
            ) do
       # Every turn of the session starts Claude with the profile chosen at dispatch.
-      {:ok, Map.put(session, :run_profile, Keyword.get(opts, :run_profile))}
+      {:ok, Map.put(session, :run_profile, run_profile)}
     end
   end
 
@@ -704,12 +708,13 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   end
 
   defp start_port(workspace, command, prompt, nil, session) do
-    with {:ok, {executable, command_args}} <- local_command(workspace, command),
+    with {:ok, provider_env} <- provider_env(Map.get(session, :run_profile)),
+         {:ok, {executable, command_args}} <- local_command(workspace, command),
          {:ok, prompt_path} <- write_local_prompt_file(workspace, prompt) do
       base_args = command_args ++ claude_settings_args(session)
       args = base_args ++ claude_stream_json_args(base_args) ++ run_profile_args(session)
 
-      case open_local_prompt_port(executable, args, prompt_path, workspace) do
+      case open_local_prompt_port(executable, args, prompt_path, workspace, provider_env) do
         {:ok, port} ->
           :ok = AgentProcesses.track(port)
           {:ok, port, [prompt_path]}
@@ -745,16 +750,19 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     end
   end
 
-  defp open_local_prompt_port(executable, args, prompt_path, workspace) do
+  defp open_local_prompt_port(executable, args, prompt_path, workspace, provider_env) do
     case System.find_executable("sh") do
       nil ->
         {:error, :shell_not_found}
 
       shell ->
+        # `Port.open/2` unsets a variable whose value is empty, so the shell sets those itself.
+        empty_exports = for {name, ""} <- provider_env, do: "export #{name}=; "
+
         shell_args =
           [
             "-c",
-            "prompt_file=$1; shift; exec \"$@\" < \"$prompt_file\"",
+            Enum.join(empty_exports) <> "prompt_file=$1; shift; exec \"$@\" < \"$prompt_file\"",
             "symphony-claude-prompt",
             prompt_path,
             executable
@@ -771,7 +779,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
              line: @port_line_bytes,
              args: Enum.map(shell_args, &String.to_charlist/1),
              cd: String.to_charlist(workspace),
-             env: AgentEnv.build()
+             env: AgentEnv.build_with(provider_env)
            ]
          )}
     end
@@ -887,6 +895,39 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     verbose_args = if "--verbose" in args, do: [], else: ["--verbose"]
     verbose_args ++ ["--output-format", "stream-json", "--print"]
   end
+
+  # OpenRouter runs only start locally: the key is passed through the subprocess env, which an
+  # SSH worker does not get. Config rejects `openrouter` with `workers.ssh_hosts`; this guards
+  # direct callers.
+  defp check_provider(%{provider: "openrouter"}, worker_host) when is_binary(worker_host) do
+    {:error, {:openrouter_remote_worker_unsupported, worker_host}}
+  end
+
+  defp check_provider(profile, _worker_host) do
+    with {:ok, _env} <- provider_env(profile), do: :ok
+  end
+
+  # The env that points `claude` at the run's provider, read at each launch so the key never
+  # sits in the session. Anthropic runs add nothing.
+  defp provider_env(%{provider: "openrouter"} = profile) do
+    case Config.openrouter_api_key() do
+      nil ->
+        kind = Map.get(profile, :kind)
+        Logger.error("OpenRouter run cannot start: #{Config.openrouter_api_key_env()} is not set run_kind=#{kind}")
+        {:error, {:missing_provider_env, Config.openrouter_api_key_env(), kind}}
+
+      api_key ->
+        {:ok,
+         %{
+           "ANTHROPIC_BASE_URL" => @openrouter_base_url,
+           "ANTHROPIC_AUTH_TOKEN" => Secret.unwrap(api_key),
+           "ANTHROPIC_API_KEY" => "",
+           "CLAUDE_CODE_SUBAGENT_MODEL" => Map.get(profile, :model)
+         }}
+    end
+  end
+
+  defp provider_env(_profile), do: {:ok, %{}}
 
   defp run_profile_args(%{run_profile: %{} = profile}) do
     flag_args("--model", Map.get(profile, :model)) ++ flag_args("--effort", Map.get(profile, :effort))

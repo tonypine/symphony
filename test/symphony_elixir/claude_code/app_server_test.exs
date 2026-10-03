@@ -1828,6 +1828,109 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       end
     end
 
+    test "launches an OpenRouter profile against OpenRouter with the key only in the subprocess env" do
+      key = "sk-or-v1-REDACTED_#{System.unique_integer([:positive])}"
+
+      with_openrouter_key(key, fn ->
+        with_provider_env_fake_claude("ACME-OPENROUTER", fn workspace ->
+          profile = %{kind: :landing, model: "anthropic/claude-haiku-4.5", effort: nil, provider: "openrouter"}
+
+          log =
+            capture_log(fn ->
+              {:ok, session} = AppServer.start_session(workspace, run_profile: profile)
+              assert {:ok, result} = AppServer.run_turn(session, "land it", %{identifier: "ACME-OPENROUTER"}, [])
+              refute inspect(session, limit: :infinity) =~ key
+              refute inspect(result, limit: :infinity) =~ key
+              AppServer.stop_session(session)
+            end)
+
+          refute log =~ key
+
+          assert provider_env_trace(workspace) == [
+                   "BASE_URL=https://openrouter.ai/api",
+                   "AUTH_TOKEN=#{key}",
+                   "API_KEY=",
+                   "SUBAGENT_MODEL=anthropic/claude-haiku-4.5",
+                   "OPENROUTER_API_KEY=<unset>"
+                 ]
+
+          args = workspace |> Path.join("argv.trace") |> File.read!() |> String.split("\n", trim: true)
+          assert Enum.take(args, -2) == ["--model", "anthropic/claude-haiku-4.5"]
+          refute Enum.any?(args, &(&1 =~ key))
+        end)
+      end)
+    end
+
+    test "launches an Anthropic profile without OpenRouter env, even when the key is set" do
+      with_openrouter_key("sk-or-v1-unused", fn ->
+        with_provider_env_fake_claude("ACME-ANTHROPIC", fn workspace ->
+          profile = %{kind: :ci_fix, model: "claude-haiku-4-5", effort: "low", provider: "anthropic"}
+
+          {:ok, session} = AppServer.start_session(workspace, run_profile: profile)
+          assert {:ok, _result} = AppServer.run_turn(session, "fix ci", %{identifier: "ACME-ANTHROPIC"}, [])
+
+          assert provider_env_trace(workspace) == [
+                   "BASE_URL=<unset>",
+                   "AUTH_TOKEN=<unset>",
+                   "API_KEY=<unset>",
+                   "SUBAGENT_MODEL=<unset>",
+                   "OPENROUTER_API_KEY=<unset>"
+                 ]
+
+          args = workspace |> Path.join("argv.trace") |> File.read!() |> String.split("\n", trim: true)
+          assert Enum.take(args, -7) == ["--output-format", "stream-json", "--print", "--model", "claude-haiku-4-5", "--effort", "low"]
+        end)
+      end)
+    end
+
+    test "fails an OpenRouter run before launch when OPENROUTER_API_KEY is missing" do
+      with_openrouter_key("  ", fn ->
+        with_provider_env_fake_claude("ACME-OPENROUTER-NOKEY", fn workspace ->
+          profile = %{kind: :ci_fix, model: "anthropic/claude-haiku-4.5", effort: nil, provider: "openrouter"}
+
+          log =
+            capture_log(fn ->
+              assert AppServer.start_session(workspace, run_profile: profile) ==
+                       {:error, {:missing_provider_env, "OPENROUTER_API_KEY", :ci_fix}}
+            end)
+
+          assert log =~ "OpenRouter run cannot start: OPENROUTER_API_KEY is not set run_kind=ci_fix"
+          refute File.exists?(Path.join(workspace, "argv.trace"))
+        end)
+      end)
+    end
+
+    test "fails the launch when OPENROUTER_API_KEY is removed after the session started" do
+      with_openrouter_key("sk-or-v1-REDACTED", fn ->
+        with_provider_env_fake_claude("ACME-OPENROUTER-GONE", fn workspace ->
+          profile = %{kind: :landing, model: "anthropic/claude-haiku-4.5", effort: nil, provider: "openrouter"}
+          {:ok, session} = AppServer.start_session(workspace, run_profile: profile)
+          System.delete_env("OPENROUTER_API_KEY")
+
+          log =
+            capture_log(fn ->
+              assert AppServer.run_turn(session, "land it", %{}, []) ==
+                       {:error, {:missing_provider_env, "OPENROUTER_API_KEY", :landing}}
+            end)
+
+          assert log =~ "run_kind=landing"
+          refute File.exists?(Path.join(workspace, "argv.trace"))
+          AppServer.stop_session(session)
+        end)
+      end)
+    end
+
+    test "rejects an OpenRouter profile on a remote worker" do
+      with_openrouter_key("sk-or-v1-REDACTED", fn ->
+        with_provider_env_fake_claude("ACME-OPENROUTER-REMOTE", fn workspace ->
+          profile = %{kind: :landing, model: "anthropic/claude-haiku-4.5", effort: nil, provider: "openrouter"}
+
+          assert AppServer.start_session(workspace, worker_host: "worker-01", run_profile: profile) ==
+                   {:error, {:openrouter_remote_worker_unsupported, "worker-01"}}
+        end)
+      end)
+    end
+
     test "uses a private prompt file for local Claude stdin and cleans it up" do
       test_root =
         Path.join(
@@ -2982,6 +3085,56 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       mcp_remote_socket_path: nil,
       mcp_remote_shim_path: nil
     }
+  end
+
+  defp with_openrouter_key(value, fun) do
+    previous = System.get_env("OPENROUTER_API_KEY")
+    System.put_env("OPENROUTER_API_KEY", value)
+
+    try do
+      fun.()
+    after
+      restore_env("OPENROUTER_API_KEY", previous)
+    end
+  end
+
+  defp with_provider_env_fake_claude(identifier, fun) do
+    test_root = Path.join(System.tmp_dir!(), "symphony-elixir-claude-code-provider-#{System.unique_integer([:positive])}")
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+      workspace = Path.join(workspace_root, identifier)
+      fake_claude = Path.join(test_root, "fake-claude")
+      File.mkdir_p!(workspace)
+
+      File.write!(fake_claude, """
+      #!/bin/sh
+      {
+        printf 'BASE_URL=%s\\n' "${ANTHROPIC_BASE_URL-<unset>}"
+        printf 'AUTH_TOKEN=%s\\n' "${ANTHROPIC_AUTH_TOKEN-<unset>}"
+        printf 'API_KEY=%s\\n' "${ANTHROPIC_API_KEY-<unset>}"
+        printf 'SUBAGENT_MODEL=%s\\n' "${CLAUDE_CODE_SUBAGENT_MODEL-<unset>}"
+        printf 'OPENROUTER_API_KEY=%s\\n' "${OPENROUTER_API_KEY-<unset>}"
+      } > "$PWD/provider-env.trace"
+      #{argv_tracing_fake_claude_script("sess-provider") |> String.replace("#!/bin/sh\n", "")}
+      """)
+
+      File.chmod!(fake_claude, 0o755)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        agent_kind: "claude",
+        agent_command: fake_claude
+      )
+
+      fun.(workspace)
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  defp provider_env_trace(workspace) do
+    workspace |> Path.join("provider-env.trace") |> File.read!() |> String.split("\n", trim: true)
   end
 
   defp argv_tracing_fake_claude_script(session_id) do

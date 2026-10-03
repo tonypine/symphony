@@ -98,10 +98,14 @@ issues:
 - `states.waiting_on_sub_issues`: the state a `breakdown` parent waits in while its sub-tickets are
   worked, default `Waiting on sub-tickets`; `null` turns it off. It counts as active without being
   listed in `states.active`, but an issue in it is dispatched only for the close-out run, once it is
-  a `breakdown` parent whose sub-tickets are all terminal. The breakdown run ends by moving the
-  parent there (`linear_update_state` allows the state only for `breakdown` issues), and on every
-  poll Symphony moves a `breakdown` parent it finds `In Progress` with open sub-tickets there, so
-  `In Progress` only holds issues an agent is working. Create it in Linear as a started state just
+  a `breakdown` parent whose sub-tickets are all terminal. The breakdown run ends with the parent
+  in `In Review` and its sub-tickets in `Backlog`. A human approves the plan by moving the parent
+  from `In Review` to this state, and on the next poll Symphony moves every sub-ticket still in
+  `Backlog` to `Todo` (blocked-by links keep the order); moving the parent to `Rework` instead
+  cancels those sub-tickets and re-plans. Agents cannot move an issue here
+  (`linear_update_state` refuses it). On every poll Symphony also moves a `breakdown` parent it
+  finds `In Progress` with open sub-tickets here, so `In Progress` only holds issues an agent is
+  working; that move is not an approval and promotes nothing. Create it in Linear as a started state just
   after In Progress. At startup Symphony checks the configured teams have it; when it is missing,
   Symphony logs a warning and parents keep waiting `In Progress` until restart.
 
@@ -313,11 +317,21 @@ agent:
 - `effort`: default effort: `low`, `medium`, `high`, `xhigh`, or `max`.
 - `provider`: default provider that serves the model: `anthropic` (default) or `openrouter`.
   `openrouter` needs a model for every run it serves (an OpenRouter model id such as
-  `anthropic/claude-haiku-4.5`) and works only with `runtime: claude`. Symphony does not launch
-  runs against OpenRouter yet; the setting is validated and resolved only.
+  `anthropic/claude-haiku-4.5`) and works only with `runtime: claude`. An `openrouter` run
+  starts `claude` with `ANTHROPIC_BASE_URL=https://openrouter.ai/api`,
+  `ANTHROPIC_AUTH_TOKEN=<OPENROUTER_API_KEY>`, an empty `ANTHROPIC_API_KEY`, `--model <id>`, and
+  `CLAUDE_CODE_SUBAGENT_MODEL=<id>` so subagents use the same model. `anthropic` runs start as
+  before.
+- `OPENROUTER_API_KEY` (environment variable, read from Symphony's own environment): the
+  OpenRouter API key. It is never written to `symphony.yml` and reaches the agent only through
+  the subprocess env, as `ANTHROPIC_AUTH_TOKEN`. When it is unset, an `openrouter` run fails
+  before `claude` starts and logs `OpenRouter run cannot start: OPENROUTER_API_KEY is not set
+  run_kind=<kind>`; retries work as for any other failed start. `symphony check` prints a
+  warning naming the run kinds that use `openrouter` while the variable is unset.
 - `run_profiles.<kind>`: `model`, `effort` and/or `provider` for one kind of run. Kinds, first match wins:
-  `final_verification` (title starts with `Final verification:`), `close_out` (`breakdown` parent
-  whose sub-issues are all terminal), `breakdown` (other `breakdown` parent), `landing` (`Merging`),
+  `final_verification` (title starts with `Final verification:`), `breakdown` (`breakdown` parent in
+  `Rework`), `close_out` (`breakdown` parent whose sub-issues are all terminal), `breakdown` (other
+  `breakdown` parent), `landing` (`Merging`),
   `rework` (`Rework`), `ci_fix` (continuation after red CI), `review_feedback` (continuation after
   PR review comments), and `implementation` (everything else). `pre_push_review` and `qa` name the
   pre-push reviewer and QA agent runs.
@@ -331,8 +345,9 @@ agent:
   per-repository profile goes under that repository's `repositories[].agent`.
 - Config errors: an unknown kind under `run_profiles`, an unknown effort or provider, an unknown
   profile key, `--model` / `--effort` already in `command` while any of `model`, `effort`, or
-  `run_profiles` is set, `openrouter` for a run that resolves no model, or `openrouter` with a
-  runtime other than `claude`. `symphony check` reports them and names the key that picked
+  `run_profiles` is set, `openrouter` for a run that resolves no model, `openrouter` with a
+  runtime other than `claude`, or `openrouter` with `workers.ssh_hosts` (OpenRouter runs start
+  on the local host only). `symphony check` reports them and names the key that picked
   `openrouter` (`agent.run_profiles.<kind>.provider`, else `agent.provider`). A
   `repositories[].agent` block is checked the same way against the `agent` section, including the
   `--model` / `--effort` flags in `agent.command`, `pre_push_review.command` and
@@ -561,6 +576,7 @@ pull_requests:
     retry_failed_once: true
     max_fix_attempts: 3
     escalate_to_state: In Review
+    landing_wait_timeout_ms: 1800000
   learnings:
     enabled: false
     provider: anthropic
@@ -580,6 +596,10 @@ pull_requests:
   with a hidden `<!-- symphony:agent -->` marker and skips those.
 - `checks.retry_failed_once` retries one likely-flaky failure before escalating.
 - `checks.max_fix_attempts` bounds automated CI rework.
+- `checks.landing_wait_timeout_ms` bounds how long a `Merging` issue waits for CI. When a landing
+  run ends with the PR head's checks pending, Symphony holds the issue in `Merging` and dispatches
+  the landing agent again once the CI poller sees that head go green (a red head goes through the
+  normal CI-failure fix loop), or after this timeout.
 
 ### `pre_push_review`
 
@@ -873,7 +893,8 @@ port range.
 
 ### `workers`
 
-Remote worker host settings.
+Remote worker host settings. Runs whose provider is `openrouter` start on the local host only, so
+`openrouter` is a config error while `ssh_hosts` is set.
 
 ```yaml
 workers:

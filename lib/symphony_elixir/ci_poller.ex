@@ -11,6 +11,7 @@ defmodule SymphonyElixir.CiPoller do
   alias SymphonyElixir.Linear.Issue
 
   @in_review_state "In Review"
+  @merging_state "Merging"
   @active_state "In Progress"
   @closed_pr_states ["CLOSED", "MERGED"]
   @github_error_backoff_threshold 3
@@ -158,6 +159,22 @@ defmodule SymphonyElixir.CiPoller do
     end
   end
 
+  @doc """
+  The PR head SHA and its CI conclusion (`"SUCCESS"`, `"FAILURE"`, `"IN_PROGRESS"`, ...) the
+  poller last observed for the issue, or nil before its first poll.
+  """
+  @spec observed_head(String.t(), keyword()) :: %{commit_sha: String.t() | nil, conclusion: String.t() | nil} | nil
+  def observed_head(issue_id, opts \\ []) when is_binary(issue_id) do
+    run_store = Keyword.get(opts, :run_store, RunStore)
+
+    Enum.find_value(repo_keys_from_opts(opts), fn repo_key ->
+      case find_ci_check(run_store, repo_key, issue_id) do
+        %{} = record -> %{commit_sha: Map.get(record, :last_observed_sha), conclusion: Map.get(record, :last_observed_conclusion)}
+        nil -> nil
+      end
+    end)
+  end
+
   defp find_ci_check(run_store, repo_key, issue_id) do
     case list_ci_checks(run_store, repo_key) do
       {:ok, checks} -> Enum.find(checks, &(Map.get(&1, :issue_id) == issue_id))
@@ -284,11 +301,13 @@ defmodule SymphonyElixir.CiPoller do
     end
   end
 
-  # Auto Review issues have an open PR waiting on CI, just like In Review ones.
+  # Auto Review issues have an open PR waiting on CI, just like In Review ones. Merging ones too:
+  # the orchestrator holds a landing agent that ended its turn on pending checks until this poller
+  # sees the head settle.
   defp watched_states(settings) do
     if AutoReview.enabled?(settings),
-      do: [@in_review_state, AutoReview.state(settings)],
-      else: [@in_review_state]
+      do: [@in_review_state, AutoReview.state(settings), @merging_state],
+      else: [@in_review_state, @merging_state]
   end
 
   defp auto_review_issues(settings, issues) do

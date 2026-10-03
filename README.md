@@ -81,8 +81,10 @@ branch instead of opening a second one. If a claimed issue moves to a terminal s
 - **Scoped agent tools** — current-issue Linear updates, GitHub PR evidence, and attachment handling.
 - **Quality gate** — optionally scores issue clarity before dispatch so unclear work is held back.
 - **Parent tickets** — label a large ticket `breakdown` and the agent splits it into sub-tickets plus a
-  final verification ticket instead of opening a PR. The parent stays `In Progress` without being
-  re-dispatched until every sub-ticket is closed, then closes out with a Linear project update.
+  final verification ticket instead of opening a PR, then moves the parent to `In Review`. Approve the
+  plan by moving the parent to `Waiting on sub-tickets` and Symphony promotes every `Backlog`
+  sub-ticket to `Todo`; move it to `Rework` to have the plan made again. The parent waits without
+  being re-dispatched until every sub-ticket is closed, then closes out with a Linear project update.
 - **Executor + reviewer runs** — an optional read-only reviewer agent gates the executor's push.
 - **Docker runner** — host Symphony with mounted repos, state, logs, and agent credentials.
 - **macOS menu bar app** — start, stop, pause, and resume Symphony from the menu bar, with its status in
@@ -212,6 +214,11 @@ The Markdown body is the issue prompt; `prompts.pr` is the optional PR-mode temp
 prepends a managed runtime context (workspace isolation, untrusted-input handling, scoped tools,
 secret handling, response shape) before either, so keep `WORKFLOW.md` focused on repo-specific
 commands, conventions, and validation gates.
+
+To run a kind of run's model through OpenRouter, set `provider: openrouter` and an OpenRouter
+model id under `agent` or `agent.run_profiles.<kind>` (Claude runtime, local host only), and export
+`OPENROUTER_API_KEY` in Symphony's environment (the macOS app sets it from the OpenRouter section of
+its Settings). The key reaches `claude` only through its process env.
 
 For the full reference — every supported key, defaults, prompt variables, CLI flags, and the issue
 gate — see [docs/configuration.md](docs/configuration.md).

@@ -106,9 +106,9 @@ export `LINEAR_API_KEY`; the app keeps it in the login Keychain.
    Variable.
 4. Leave **Development mode** off, so the app runs the Symphony embedded in it.
 5. Click **Save**. The app checks that `symphony.yml` exists, that the app has an embedded Symphony and that
-   the key is set, then stores the key in the login Keychain. macOS asks once to allow Keychain access;
-   enter your login password and choose **Always Allow**. Updates are signed with the same certificate, so
-   they don't ask again.
+   the key is set, then stores the key in the login Keychain. macOS asks to allow Keychain access; enter
+   your login password and choose **Always Allow**. It currently asks again after each update (see
+   [Troubleshooting](#troubleshooting)).
 6. Choose **Start Symphony** from the menu. The icon shows `hourglass` while Symphony starts, then
    `music.note.list` once it answers. Choose **Open Dashboard** to see it at `http://127.0.0.1:4000`.
 
@@ -171,9 +171,18 @@ set (or, in Development mode, no checkout folder).
   security find-generic-password -s symphony -a LINEAR_API_KEY
   ```
 
-macOS asks for Keychain access once after the first install; choose Always Allow. Updates are signed with
-the same certificate, so the Keychain keeps trusting them. A local `make` build is ad-hoc signed and asks
-again after each rebuild (see [Development mode](#development-mode)).
+- **OpenRouter** holds the optional `OPENROUTER_API_KEY`, which run profiles with `provider: openrouter`
+  need. It is stored in the Keychain like `LINEAR_API_KEY` and passed to Symphony only when set; it is never
+  written to `symphony.yml` or UserDefaults. **Test connection** checks the key with OpenRouter
+  (`GET /api/v1/key`) and shows its label and credit, or why it was rejected, and the **Models** line counts
+  the models OpenRouter offers and how many of them support tools.
+- When Save changes `LINEAR_API_KEY`, `OPENROUTER_API_KEY` or an extra variable while Symphony runs, the app
+  restarts Symphony the way Restart Symphony does, so it picks up the new environment.
+
+macOS asks for Keychain access after the first install, and currently again after each update; choose
+Always Allow. A local `make` build is ad-hoc signed and asks again after each rebuild (see
+[Development mode](#development-mode)). Start, Restart and Update read the Keychain without blocking the
+menu: while macOS waits for the password, the menu shows "Waiting for Keychain access…".
 
 ## Running Symphony
 
@@ -323,8 +332,7 @@ is up to date (vX)" or why the check failed, for example GitHub's rate limit.
    with an alert that says why, on any mismatch.
 3. **Unzip** it with `ditto` and check the new app: `codesign --verify --strict` passes, it is Symphony
    (same bundle identifier), its build is newer, and it is signed with the same certificate as the running
-   app. The Keychain keeps trusting a new version signed with the same certificate, so it doesn't prompt
-   again.
+   app.
 4. **Drain Symphony** like [Restart](#restart), checking `symphony.yml` with the new version's Symphony:
    pause dispatch, wait for `0 running` (**Update Now Anyway** shows after the restart timeout, **Cancel
    Update** stops waiting), then stop Symphony. A Symphony the app didn't start is left alone.
@@ -473,11 +481,12 @@ checkout's Symphony; turn on Development mode in Settings." Saving Settings writ
   Apple, so macOS blocks a downloaded copy that still has the quarantine flag. Open System Settings →
   Privacy & Security and click Open Anyway, or clear the flag with
   `xattr -dr com.apple.quarantine ~/Applications/Symphony.app`. The install script clears it for you.
-- **macOS asks for Keychain access.** It asks once after the first install, because the Keychain items are
-  new to this app: enter your login password and choose Always Allow. Updates are signed with the same
-  certificate, so they don't ask again. It asks again after installing a release over a local `make` build,
-  or after each rebuild of a `make` build, because those are ad-hoc signed and the Keychain treats each as a
-  new app.
+- **macOS asks for Keychain access.** It asks after the first install, because the Keychain items are new
+  to this app: enter your login password and choose Always Allow. It currently asks again after each update
+  and after each rebuild of a `make` build: the Keychain pins each item to the exact build that may read it
+  unless the app is signed with an Apple-issued certificate, and this one isn't. While the prompt waits, the
+  menu shows "Waiting for Keychain access…" and Start stays off; if you can't see the prompt, look behind
+  other windows.
 - **Start Symphony shows a message instead of starting.** The app checks the settings before it starts
   Symphony. "Linear API key not set" and the path messages are fixed in Settings. "This build has no
   embedded Symphony" means a local `make` build: turn on Development mode and set the checkout folder.

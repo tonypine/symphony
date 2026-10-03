@@ -714,6 +714,10 @@ Fields:
   - Default: `3`.
 - `checks.escalate_to_state` (string)
   - Default: `In Review`.
+- `checks.landing_wait_timeout_ms` (integer)
+  - Default: `1800000` (30 minutes).
+  - How long a `Merging` issue whose landing run ended on pending checks stays held before the
+    landing agent is dispatched again anyway.
 
 Review-comment options are ignored when `enabled` is not `true`. CI failure dispatch is driven only
 by failed status checks and ignores comment authorship; the ignored reviewer set above does not
@@ -1079,6 +1083,8 @@ When enabled:
   fails, Auto Review stays on.
 - The post-PR transition (an active issue whose completed run opened a PR and has no rework signal)
   MUST target `state` instead of `In Review`.
+- The post-PR transition MUST NOT apply to an issue in `Merging`: that state is a human's merge
+  approval, so Symphony MUST keep the issue in `Merging` and leave it with the landing agent.
 - `linear_update_state` MUST refuse `In Review` from agent sessions with a clear error telling the
   agent that Symphony moves the issue once the PR is open, rather than redirecting the target
   state.
@@ -1309,7 +1315,7 @@ Validation checks:
   `agent.run_profiles` key is a known run kind.
 - `agent.provider` and every `agent.run_profiles.<kind>.provider` are `anthropic` or `openrouter`.
   Every run kind that resolves to `openrouter` also resolves a model, and `openrouter` is only
-  used with `agent.runtime == "claude"`.
+  used with `agent.runtime == "claude"` and without `workers.ssh_hosts`.
 - `agent.command` does not already pass `--model` or `--effort` when `agent.model`,
   `agent.effort`, or `agent.run_profiles` is set.
 - Every `repositories[].agent` block passes the same checks with the `agent` section beneath it,
@@ -1407,7 +1413,13 @@ not require recognizing or validating extension fields unless that extension is 
   matter is not a source. The run kind and profile are resolved
   once per dispatch from the current config and kept for every continuation turn of that run. The
   Claude runtime appends `--model <model>` and `--effort <effort>` to its argv; the Codex runtime
-  ignores both and logs a warning.
+  ignores both and logs a warning. A Claude run whose provider is `openrouter` also starts with
+  `ANTHROPIC_BASE_URL=https://openrouter.ai/api`, `ANTHROPIC_AUTH_TOKEN` set from the
+  `OPENROUTER_API_KEY` environment variable of the Symphony process, an empty
+  `ANTHROPIC_API_KEY`, and `CLAUDE_CODE_SUBAGENT_MODEL=<model>`. If `OPENROUTER_API_KEY` is unset
+  or blank, the run fails before the agent starts with an error naming the run kind and the
+  variable. The key MUST NOT be written to config, logs, the audit log, the run store, or
+  transcripts.
 - `agent.prompts.include_project_guides`: boolean, default `true`
 - `agent.prompts.project_guide_files`: list of relative paths or null, default `null`
 - `agent.permissions.approval_policy`: agent approval policy, default depends on `agent.runtime`
@@ -1628,7 +1640,19 @@ The poller:
 - when `pull_requests.checks.enabled` is true, polls CI status for tracked PRs in every configured
   repository route, preserving the same retry, dispatch, and escalation behavior used for the
   primary repository. With `auto_review` on, it also tracks PRs of issues in `auto_review.state`
-  and starts a QA pass on green CI (see `auto_review`).
+  and starts a QA pass on green CI (see `auto_review`). It also tracks PRs of issues in
+  `Merging`, so a held landing run (below) sees its head settle and a red head takes the normal
+  CI-failure dispatch.
+
+When a landing run (issue in `Merging` with an attached PR) finishes a turn while the PR head's
+checks are pending, the agent runner MUST end the run instead of starting another continuation
+turn, and the orchestrator MUST hold the issue in `Merging` without a continuation retry and
+without dispatching it. The hold ends, and the landing agent is dispatched again through the normal
+poll, when the CI poller has observed that same head SHA with green checks, or when
+`pull_requests.checks.landing_wait_timeout_ms` has passed. The hold is dropped without a landing
+dispatch when the issue leaves `Merging` (for example the CI-failure dispatch moves it to
+`In Progress`). Holds live in orchestrator memory; after a restart the landing agent runs again and
+re-establishes the hold if checks are still pending.
 
 The orchestrator continues to own active-state dispatch, retry, run-store run records, and
 dashboard-visible agent execution. The PR review poller owns only polling-mode GitHub polling,
@@ -1675,14 +1699,34 @@ An issue is dispatch-eligible only if all are true:
     (a sub-issue with an unknown state counts as non-terminal). The parent waits while its
     sub-issues are worked and becomes eligible again for close-out once every sub-issue is
     terminal. The same rule ends a running parent's continuation turns and its retries.
+  - A `breakdown` parent in `Rework` is exempt: a human rejected its plan, so it is eligible for a
+    re-plan (run kind `breakdown`) whatever its sub-issues' states, once its rejected sub-issues
+    are cancelled (see the review rule below).
 - Waiting rule passes:
   - An issue in the `issues.states.waiting_on_sub_issues` state is dispatched only when it is a
     `breakdown` parent with at least one sub-issue and every sub-issue is terminal (the close-out
     run). Any other issue in that state waits for a human.
   - On each poll, a `breakdown` parent in `In Progress` with a non-terminal sub-issue that is not
     running or claimed is moved to the waiting state, so `In Progress` only holds issues an agent
-    is working. The breakdown run's agent may also move its parent there with
-    `linear_update_state`, which refuses the state for issues without the `breakdown` label.
+    is working. Agents cannot move an issue there: `linear_update_state` refuses the state,
+    because a human moving a parent there approves its plan (next rule).
+- Plan review rule:
+  - The breakdown run leaves its sub-issues in `Backlog` and moves the parent to `In Review`
+    (`linear_update_state` allows `In Review` for a `breakdown` parent even with Auto Review on).
+  - Approval: on each poll, for a `breakdown` parent in the waiting state with a sub-issue in
+    `Backlog` that is not running or claimed, the service reads the parent's state history. When
+    its latest state change is `In Review` to the waiting state, every sub-issue that has been in
+    `Backlog` since before that change (created before it, no state change after it) moves to
+    `Todo` in one batch. Blocked-by links keep the order. A parent the service parked from
+    `In Progress` was not approved, so nothing moves.
+  - Rejection: for a `breakdown` parent in `Rework` with a sub-issue in `Backlog`, the sub-issues
+    in `Backlog` since the parent's latest move to `Rework` are cancelled (`Canceled`, else
+    `Cancelled`) before the re-plan is dispatched; until that succeeds the parent is not
+    dispatched. Sub-issues created by the re-plan are left alone.
+  - Both actions are idempotent across polls and restarts: a sub-issue a human (or a final
+    verification run) moves back to `Backlog` later is not moved again. The service remembers the
+    `Backlog` sub-issues it last acted on per parent and skips the history read while they are
+    unchanged; a failed read or move is retried on the next poll.
   - At startup the service checks the configured teams have the waiting state. When it is
     missing, it logs a warning and stops moving parents there until restart; parents then wait in
     `In Progress` as before. When the check itself fails, the state stays on.
@@ -2231,8 +2275,12 @@ Scoped Linear tool extension contract:
   setting `Merging` from Linear. Other transitions are unaffected.
 - `linear_create_subissue` MUST only create a child of the current issue: same team and project,
   parent set to the current issue, and the current issue's assignee, all resolved server-side. It
-  MUST accept only `title`, `description`, and an optional `priority`, and MUST reject team,
-  project, parent, assignee, and state arguments. The new issue MUST land in the team's `Backlog`
+  MUST accept only `title`, `description`, an optional `priority`, and an optional `blocked_by`
+  list of issue identifiers, and MUST reject team, project, parent, assignee, and state arguments.
+  Each `blocked_by` identifier MUST name a sub-issue of the current issue (an existing child, or
+  one the run created earlier); otherwise the call MUST fail with an explicit error before the
+  issue is created. Accepted identifiers become `blocks` relations on the new issue, created right
+  after it. The new issue MUST land in the team's `Backlog`
   state (falling back to a `backlog`-type state), never an active state, so an agent cannot start
   other agents; a human promotes it. Title and description MUST pass the same secret scan as
   comments before any Linear call. Creation MUST be capped per run (the Elixir cap is 10) with an
@@ -2370,6 +2418,13 @@ An implementation MUST support these tracker adapter operations:
 
 3. `fetch_issue_states_by_ids(issue_ids)`
    - Used for active-run reconciliation.
+
+An implementation that reviews `breakdown` plans (Section 8, plan review rule) also supports:
+
+4. `fetch_breakdown_history(issue_id)`
+   - Return the issue's state changes (time, from state, to state) and each sub-issue's id,
+     identifier, state, creation time, and latest state-change time. The Linear adapter reads up to
+     50 history entries of the parent and 20 of each of up to 50 sub-issues.
 
 ### 11.2 Query Semantics (Linear)
 
@@ -3548,6 +3603,12 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - `breakdown` parent in `In Progress` with a non-terminal sub-issue moves to the waiting state;
   an issue in the waiting state is eligible only as a `breakdown` parent whose sub-issues are all
   terminal
+- `breakdown` parent moved from `In Review` to the waiting state has its `Backlog` sub-issues moved
+  to `Todo` within one poll; sub-issues in other states, or moved back to `Backlog` after the
+  approval, are left alone, and a re-poll moves nothing
+- `breakdown` parent parked from `In Progress` to the waiting state has nothing promoted
+- `breakdown` parent in `Rework` has its pre-`Rework` `Backlog` sub-issues cancelled, is not held
+  by its open sub-issues, and is not dispatched until the cancel succeeds
 - Active-state issue refresh updates running entry state
 - Non-active state stops running agent without workspace cleanup
 - Terminal state stops running agent and cleans workspace

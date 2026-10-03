@@ -94,6 +94,18 @@ final class StatusMenuTests: XCTestCase {
         )
     }
 
+    func testDetailLinesShowTheKeychainWaitBeforeTheRestart() {
+        XCTAssertEqual(StatusMenu.detailLines(.stopped, waitingForKeychain: true), ["Waiting for Keychain access…"])
+        XCTAssertEqual(
+            StatusMenu.detailLines(
+                .running(snapshot, external: false),
+                waitingForKeychain: true,
+                restartLine: "Restarting: starting Symphony…"
+            ),
+            ["2 running · 1 retrying", "Waiting for Keychain access…", "Restarting: starting Symphony…"]
+        )
+    }
+
     func testRestartIsOfferedOnlyForTheAppsAnsweringSymphony() {
         XCTAssertEqual(allStatuses.map(StatusMenu.canRestart), [false, false, true, true, false])
         XCTAssertFalse(StatusMenu.canRestart(.running(snapshot, external: true)))

@@ -5,7 +5,7 @@ defmodule SymphonyElixir.Config.Schema do
 
   import Ecto.Changeset
 
-  alias SymphonyElixir.{PathSafety, Secret}
+  alias SymphonyElixir.{PathSafety, RunKind, Secret}
 
   require Logger
 
@@ -502,7 +502,7 @@ defmodule SymphonyElixir.Config.Schema do
     end
 
     @type t :: %__MODULE__{}
-    @type sections :: %{agent: Agent.t(), review_agent: map(), auto_review: map()}
+    @type sections :: %{agent: Agent.t(), review_agent: map(), auto_review: map(), worker: map()}
 
     @spec changeset(t(), map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
@@ -519,7 +519,7 @@ defmodule SymphonyElixir.Config.Schema do
     def parse(attrs, sections, path) do
       case %__MODULE__{} |> changeset(attrs) |> apply_action(:validate) do
         {:ok, repo_agent} ->
-          case openrouter_errors(repo_agent, sections.agent, path) ++ command_flag_errors(repo_agent, sections, path) do
+          case openrouter_errors(repo_agent, sections, path) ++ command_flag_errors(repo_agent, sections, path) do
             [] -> {:ok, repo_agent}
             errors -> {:error, errors}
           end
@@ -566,7 +566,7 @@ defmodule SymphonyElixir.Config.Schema do
 
     # Only the runs this block points at OpenRouter are checked here; the `agent` section checks
     # its own. Each error names the key that picked OpenRouter.
-    defp openrouter_errors(repo_agent, agent, path) do
+    defp openrouter_errors(repo_agent, %{agent: agent, worker: worker}, path) do
       RunKind.names()
       |> Enum.filter(&(resolve(repo_agent, agent, &1).provider == "openrouter"))
       |> Enum.group_by(&openrouter_key(repo_agent, &1))
@@ -574,7 +574,9 @@ defmodule SymphonyElixir.Config.Schema do
       |> Enum.sort()
       |> Enum.flat_map(fn {key, kinds} ->
         missing = Enum.filter(kinds, &is_nil(resolve(repo_agent, agent, &1).model))
-        openrouter_runtime_errors(agent, path, key) ++ openrouter_model_errors(path, key, missing)
+
+        openrouter_runtime_errors(agent, path, key) ++
+          openrouter_worker_errors(worker, path, key) ++ openrouter_model_errors(path, key, missing)
       end)
     end
 
@@ -588,6 +590,12 @@ defmodule SymphonyElixir.Config.Schema do
 
     defp openrouter_runtime_errors(%{kind: "claude"}, _path, _key), do: []
     defp openrouter_runtime_errors(_agent, path, key), do: ["#{path}.#{key} openrouter is only supported with agent.runtime: claude"]
+
+    defp openrouter_worker_errors(%{ssh_hosts: [_ | _]}, path, key) do
+      ["#{path}.#{key} openrouter is not supported with workers.ssh_hosts; OpenRouter runs start on the local host only"]
+    end
+
+    defp openrouter_worker_errors(_worker, _path, _key), do: []
 
     defp openrouter_model_errors(_path, _key, []), do: []
 
@@ -1391,6 +1399,7 @@ defmodule SymphonyElixir.Config.Schema do
     @primary_key false
     @default_log_excerpt_lines 200
     @default_max_retries 3
+    @default_merging_wait_timeout_ms 1_800_000
 
     embedded_schema do
       field(:enabled, :boolean, default: false)
@@ -1399,6 +1408,7 @@ defmodule SymphonyElixir.Config.Schema do
       field(:flaky_retry, :boolean, default: true)
       field(:max_retries, :integer, default: @default_max_retries)
       field(:escalation_state, :string, default: "In Review")
+      field(:merging_wait_timeout_ms, :integer, default: @default_merging_wait_timeout_ms)
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
@@ -1406,13 +1416,22 @@ defmodule SymphonyElixir.Config.Schema do
       schema
       |> cast(
         attrs,
-        [:enabled, :poll_interval_ms, :log_excerpt_lines, :flaky_retry, :max_retries, :escalation_state],
+        [
+          :enabled,
+          :poll_interval_ms,
+          :log_excerpt_lines,
+          :flaky_retry,
+          :max_retries,
+          :escalation_state,
+          :merging_wait_timeout_ms
+        ],
         empty_values: []
       )
       |> normalize_escalation_state()
       |> validate_number(:poll_interval_ms, greater_than: 0)
       |> validate_number(:log_excerpt_lines, greater_than: 0)
       |> validate_number(:max_retries, greater_than_or_equal_to: 1)
+      |> validate_number(:merging_wait_timeout_ms, greater_than: 0)
     end
 
     defp normalize_escalation_state(changeset) do
@@ -2328,9 +2347,32 @@ defmodule SymphonyElixir.Config.Schema do
   defp validate_finalized_settings(settings) do
     with :ok <- validate_agent_approval_policy(settings.agent),
          :ok <- validate_agent_sandbox_runtime(settings.agent),
-         :ok <- validate_agent_mcp(settings.agent) do
+         :ok <- validate_agent_mcp(settings.agent),
+         :ok <- validate_openrouter_workers(settings) do
       validate_finalized_notification_urls(settings.notifications)
     end
+  end
+
+  # The OpenRouter key reaches `claude` through the local subprocess env only, so an OpenRouter
+  # run cannot start on an SSH worker. The error names the key that picked OpenRouter.
+  defp validate_openrouter_workers(%__MODULE__{worker: %Worker{ssh_hosts: [_ | _]}, agent: agent}) do
+    case openrouter_provider_keys(agent) do
+      [] -> :ok
+      [key | _rest] -> {:error, "#{key} openrouter is not supported with workers.ssh_hosts; OpenRouter runs start on the local host only"}
+    end
+  end
+
+  defp validate_openrouter_workers(_settings), do: :ok
+
+  defp openrouter_provider_keys(%Agent{provider: provider, run_profiles: profiles}) do
+    Enum.flat_map(RunKind.names(), fn kind ->
+      case Map.get(profiles, kind, %{}) do
+        %{"provider" => "openrouter"} -> ["agent.run_profiles.#{kind}.provider"]
+        %{"provider" => _provider} -> []
+        _profile when provider == "openrouter" -> ["agent.provider"]
+        _profile -> []
+      end
+    end)
   end
 
   defp validate_agent_approval_policy(%Agent{kind: "codex", approval_policy: "never"}) do

@@ -89,6 +89,16 @@ defmodule SymphonyElixir.Tracker.Memory do
     end
   end
 
+  @spec fetch_breakdown_history(String.t()) :: {:ok, SymphonyElixir.Tracker.breakdown_history()} | {:error, term()}
+  def fetch_breakdown_history(issue_id) do
+    send_event({:memory_tracker_breakdown_history, issue_id})
+
+    case Application.get_env(:symphony_elixir, :memory_tracker_breakdown_histories, %{}) do
+      {:error, _reason} = error -> error
+      histories -> {:ok, Map.get(histories, issue_id, %{state_changes: [], sub_issues: []})}
+    end
+  end
+
   @spec workflow_state_exists?(String.t(), [String.t()]) :: {:ok, boolean()} | {:error, term()}
   def workflow_state_exists?(state_name, _teams) do
     case Application.get_env(:symphony_elixir, :memory_tracker_workflow_states) do

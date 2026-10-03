@@ -237,6 +237,18 @@ defmodule SymphonyElixir.RepositoryRunProfilesTest do
                "repositories[app].agent.run_profiles.qa.provider openrouter is only supported with agent.runtime: claude"
     end
 
+    test "openrouter on SSH workers" do
+      workers = %{"workers" => %{"ssh_hosts" => ["worker-01"]}}
+
+      assert error!(%{"provider" => "openrouter", "model" => "openai/gpt-5"}, workers) =~
+               "repositories[app].agent.provider openrouter is not supported with workers.ssh_hosts; OpenRouter runs start on the local host only"
+
+      assert error!(%{"run_profiles" => %{"qa" => %{"provider" => "openrouter", "model" => "openai/gpt-5"}}}, workers) =~
+               "repositories[app].agent.run_profiles.qa.provider openrouter is not supported with workers.ssh_hosts"
+
+      assert {:ok, _system} = SystemSchema.parse(symphony(%{"provider" => "anthropic"}, workers))
+    end
+
     test "a model from the agent section satisfies openrouter, and the agent section's own openrouter is not repeated" do
       assert {:ok, %SystemSchema{repos: [%{agent: %{provider: "openrouter"}}]}} =
                SystemSchema.parse(symphony(%{"provider" => "openrouter"}, %{"agent" => %{"runtime" => "claude", "command" => "claude", "model" => "m"}}))
