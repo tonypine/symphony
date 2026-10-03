@@ -73,8 +73,15 @@ defmodule SymphonyElixir.Tracker.Memory do
   @spec create_comment(String.t(), String.t()) :: :ok | {:error, term()}
   def create_comment(issue_id, body) do
     maybe_sleep(:memory_tracker_create_comment_sleep_ms)
-    send_event({:memory_tracker_comment, issue_id, body})
-    :ok
+
+    case Application.get_env(:symphony_elixir, :memory_tracker_create_comment_result, :ok) do
+      :ok ->
+        send_event({:memory_tracker_comment, issue_id, body})
+        :ok
+
+      error ->
+        error
+    end
   end
 
   @spec update_issue_state(String.t(), String.t()) :: :ok | {:error, term()}
