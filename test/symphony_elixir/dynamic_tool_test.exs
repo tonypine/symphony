@@ -295,6 +295,32 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     assert_received {:linear_client_called, _query, %{stateId: "state-review"}}
   end
 
+  test "update_state lets a final verification hand its result to In Review while Auto Review is on" do
+    write_workflow_file!(Workflow.workflow_file_path(), auto_review: %{enabled: true})
+    states = [%{"id" => "state-review", "name" => "In Review", "type" => "started"}]
+    test_pid = self()
+
+    client = fn query, variables, opts ->
+      if query =~ "SymphonyAgentIssueTeamStates" do
+        send(test_pid, {:linear_client_called, query, variables})
+        {:ok, %{"data" => %{"issue" => Map.put(team_states_issue(states, []), "title", "Final verification: Run profiles")}}}
+      else
+        update_state_client(test_pid, states).(query, variables, opts)
+      end
+    end
+
+    response =
+      DynamicTool.execute(
+        "linear_update_state",
+        %{"state_name_or_id" => "In Review"},
+        issue: %Issue{id: "issue-current"},
+        linear_client: client
+      )
+
+    assert response["success"] == true
+    assert_received {:linear_client_called, _query, %{stateId: "state-review"}}
+  end
+
   test "update_state refuses Waiting on sub-tickets: moving a parent there approves its plan" do
     on_exit(fn -> SymphonyElixir.SubIssueWait.reset_for_test("Waiting on sub-tickets") end)
 

@@ -9,7 +9,7 @@ defmodule SymphonyElixir.PrReviewPoller do
   alias SymphonyElixir.{AuditLog, AutoMerge, CiPoller, Config, Notifications, RunStore, Tracker, Workspace}
   alias SymphonyElixir.GitHub.{CommentMarker, PullRequest}
   alias SymphonyElixir.Learnings.Reflection
-  alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.Linear.{Issue, Usage}
 
   @in_review_state "In Review"
   @merging_state "Merging"
@@ -75,6 +75,7 @@ defmodule SymphonyElixir.PrReviewPoller do
 
   @impl true
   def init(opts) do
+    Usage.put_caller(:pr_review_poller)
     poll_interval_ms = poll_interval_ms(opts)
     opts = poller_opts(opts, poll_interval_ms)
     state = %State{opts: opts, poll_interval_ms: poll_interval_ms}

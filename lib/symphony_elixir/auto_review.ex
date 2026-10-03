@@ -30,7 +30,7 @@ defmodule SymphonyElixir.AutoReview do
 
   alias SymphonyElixir.{Config, Notifications, QaAgent, QaRunner, RunStore, Tracker, Workspace}
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.Linear.{Issue, Usage}
   alias SymphonyElixir.QaAgent.{Report, Selection}
 
   @review_state "In Review"
@@ -127,7 +127,11 @@ defmodule SymphonyElixir.AutoReview do
   the runner (`opts[:qa_runner]`, default `SymphonyElixir.QaRunner`).
   """
   @spec on_green(Issue.t(), map(), map(), Schema.t(), keyword()) :: tuple()
-  def on_green(%Issue{id: issue_id} = issue, record, ci_status, %Schema{} = settings, opts) do
+  def on_green(%Issue{} = issue, record, ci_status, %Schema{} = settings, opts) do
+    Usage.with_caller(:auto_review, fn -> handle_green(issue, record, ci_status, settings, opts) end)
+  end
+
+  defp handle_green(%Issue{id: issue_id} = issue, record, ci_status, settings, opts) do
     sha = Map.get(ci_status, :commit_sha)
 
     cond do
@@ -181,6 +185,8 @@ defmodule SymphonyElixir.AutoReview do
   """
   @spec run_qa(map(), keyword()) :: tuple()
   def run_qa(%{issue: issue, record: record, sha: sha, settings: settings} = job, opts) do
+    Usage.put_caller(:auto_review)
+
     outcome =
       case select(issue, record, sha, settings, opts) do
         {:skip, reason} -> %{verdict: :skip, reason: reason}

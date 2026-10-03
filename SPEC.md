@@ -1099,7 +1099,8 @@ When enabled:
   approval, so Symphony MUST keep the issue in `Merging` and leave it with the landing agent.
 - `linear_update_state` MUST refuse `In Review` from agent sessions with a clear error telling the
   agent that Symphony moves the issue once the PR is open, rather than redirecting the target
-  state.
+  state. A `breakdown` parent and a ticket whose title starts with `Final verification:` open no
+  PR, so they MAY move to `In Review`.
 - The CI poller MUST discover issues in `state` as well as `In Review`. Red CI follows the normal
   `In Progress` fix loop and escalation. Green CI on an issue in `state` starts a QA pass for the
   PR head SHA, at most one per issue and `max_concurrent` overall.
@@ -1550,6 +1551,15 @@ Important nuance:
 - After each normal turn completion, the worker re-checks the tracker issue state.
 - If the issue is still in an active state, the worker SHOULD start another turn on the same live
   coding-agent thread in the same workspace, up to `agent.max_turns`.
+- An issue in `Rework` whose attached PR's head is the workspace `HEAD`, with no pending review,
+  CI, QA or conflict signal, MUST end the run and move to the post-PR state (the Auto Review state,
+  or `In Review` when Auto Review is off) once that `HEAD` differs from the head the `Rework` started
+  from. That start head MUST be recorded by the first run dispatched in `Rework` and kept across
+  re-dispatched runs until the issue leaves `Rework`, so rework an earlier run pushed counts and a
+  fresh `Rework` on an unchanged PR does not. Nothing else moves it out of `Rework`.
+- When the workspace `HEAD` is readable, two consecutive turns with no new commit, no issue state
+  change, no newly attached PR and no reviewer-agent verdict MUST end the run, move the issue to
+  `Backlog` and post a comment saying why. This does not apply in `Merging`.
 - The first turn SHOULD use the full rendered task prompt. Implementations MAY use a compact
   bootstrap prompt when the target agent transport cannot safely carry the full rendered prompt as a
   single startup message, provided the compact prompt preserves hard security rules and directs the
@@ -2573,6 +2583,16 @@ Orchestrator behavior on tracker errors:
   tracker calls locally, and surface the pause in the status snapshot.
 - Soft brake: record `x-ratelimit-requests-remaining` from every response and stretch the issue-poll
   interval 2x below 10% of `x-ratelimit-requests-limit` (4x below 5%) until the budget recovers.
+- Transient errors (a rate limit, a transport error such as a timeout or refused connection, or an
+  HTTP 429/5xx answer) after a finished agent turn do not fail the run: the post-turn issue refresh
+  waits for Linear (until the pause ends, or 5 s doubling up to 60 s) and retries in the same run
+  and session, for at most five minutes. A post-PR move to Auto Review or In Review, a retry's
+  issue refresh, and a retry's dispatch refresh that hit one keep the retry's attempt and retry
+  after 5 s (or when the pause ends) instead of the failure backoff. A retry whose dispatch refresh
+  fails for any reason is scheduled again rather than dropped.
+- Usage by caller: count every Linear request against its caller (orchestrator, CI poller, PR review
+  poller, Auto Review, post-PR transition, `agent:<identifier>` for an agent run and its tools) over
+  a rolling hour, and show the counts in the status snapshot (`linear_usage` in `/api/v1/state`).
 
 ### 11.5 Tracker Writes (Important Boundary)
 
@@ -2960,7 +2980,16 @@ Minimum endpoints:
         "daily_remaining": 3770000,
         "daily_paused": false
       },
-      "rate_limits": null
+      "rate_limits": null,
+      "linear_usage": {
+        "window_ms": 3600000,
+        "total": 412,
+        "callers": [
+          {"caller": "orchestrator", "requests": 240},
+          {"caller": "agent:ABC-123", "requests": 130},
+          {"caller": "ci_poller", "requests": 42}
+        ]
+      }
     }
     ```
 

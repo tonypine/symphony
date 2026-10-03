@@ -10,27 +10,35 @@ defmodule SymphonyElixir.AgentRunner do
     AgentTools,
     AgentTools.Linear.CommentRegistry,
     AuditLog,
+    AutoReview,
     CiPoller,
     Config,
     DependencyAudit,
     DependencyGate,
     GitHub.PullRequest,
     Linear.Issue,
+    Linear.TransientRetry,
+    Linear.Usage,
     Notifications,
     PromptBuilder,
     PrReviewPoller,
     ReviewAgent,
     RunKind,
+    RunStore,
     SubIssueWait,
     Tracker,
     URLUtils,
     Verification,
     Workpad,
-    Workspace
+    Workspace,
+    WorkspaceHead
   }
 
   @dev_server_pid_key {__MODULE__, :verification_dev_server_pid}
   @dependency_review_state "In Review"
+  @idle_park_state "Backlog"
+  # Consecutive turns with no new commit, no state change and no PR change that end the run.
+  @max_empty_turns 2
   # Fallback when settings are unavailable; the effective value comes from
   # `agent.codex_stdio_prompt_soft_limit` (see Config.Schema.Agent).
   @codex_stdio_prompt_soft_limit_fallback 65_536
@@ -64,6 +72,7 @@ defmodule SymphonyElixir.AgentRunner do
 
     # The orchestrator owns host retries so one worker lifetime never hops machines.
     worker_host = selected_worker_host(Keyword.get(opts, :worker_host), settings.worker.ssh_hosts)
+    Usage.put_caller({:agent, Map.get(issue, :identifier)})
 
     Logger.info("Starting agent run for #{issue_context(issue)} worker_host=#{worker_host_for_log(worker_host)}")
 
@@ -406,7 +415,8 @@ defmodule SymphonyElixir.AgentRunner do
         worker_host: worker_host,
         review_agent: initial_review_agent_state(),
         next_prompt: nil,
-        session_rebuilt: false
+        session_rebuilt: false,
+        progress: initial_progress(workspace, worker_host, issue, run_opts)
       }
 
       try do
@@ -529,9 +539,18 @@ defmodule SymphonyElixir.AgentRunner do
   defp continue_after_completed_turn(issue, issue_state_fetcher, opts, run_context, agent_module, app_session, turn_number, max_turns) do
     case continue_with_issue?(issue, issue_state_fetcher, opts) do
       {:continue, refreshed_issue} ->
+        run_context = track_turn_progress(run_context, refreshed_issue)
+
         cond do
           merging_ci_pending?(refreshed_issue, run_context) ->
             :ok
+
+          rework_finished?(refreshed_issue, run_context) ->
+            hand_off_finished_rework(refreshed_issue, run_context)
+
+          idle_turn_limit_reached?(refreshed_issue, run_context) ->
+            forget_rework_base(refreshed_issue, opts)
+            park_idle_issue(refreshed_issue)
 
           turn_number < max_turns ->
             run_context = %{run_context | issue: refreshed_issue}
@@ -543,8 +562,8 @@ defmodule SymphonyElixir.AgentRunner do
             :ok
         end
 
-      {:done, _refreshed_issue} ->
-        :ok
+      {:done, refreshed_issue} ->
+        forget_rework_base_outside_rework(refreshed_issue, opts)
 
       {:error, reason} ->
         {:error, reason}
@@ -1189,7 +1208,7 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp continue_with_issue?(%Issue{id: issue_id} = issue, issue_state_fetcher, opts) when is_binary(issue_id) do
-    case issue_state_fetcher.([issue_id]) do
+    case refresh_issue_state(issue, issue_state_fetcher, opts) do
       {:ok, [%Issue{} = refreshed_issue | _]} ->
         audit_linear_state_transition(issue, refreshed_issue, Keyword.get(opts, :run_id), opts)
 
@@ -1219,6 +1238,20 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp continue_with_issue?(issue, _issue_state_fetcher, _opts), do: {:done, issue}
 
+  # The turn is done; a rate limit or a dropped connection on this refresh says
+  # nothing about the run. Wait for Linear in this run and session instead of
+  # failing the run and starting a new session.
+  defp refresh_issue_state(%Issue{id: issue_id} = issue, issue_state_fetcher, opts) do
+    retry_opts =
+      opts
+      |> Keyword.get(:linear_retry_opts, [])
+      |> Keyword.put_new(:on_wait, fn reason, delay_ms ->
+        Logger.warning("Linear refresh after turn failed for #{issue_context(issue)}; retrying in #{delay_ms}ms in the same session reason=#{inspect(reason)}")
+      end)
+
+    TransientRetry.run(fn -> issue_state_fetcher.([issue_id]) end, retry_opts)
+  end
+
   defp waiting_on_sub_issues?(%Issue{} = issue) do
     settings = Config.settings!()
     terminal_states = settings.tracker.terminal_states
@@ -1231,13 +1264,147 @@ defmodule SymphonyElixir.AgentRunner do
       active_issue_state?(refreshed_issue.state) and
         !rework_state?(refreshed_issue.state) and
         !merging_state?(refreshed_issue.state) and
-        pending_reviewer_comments(refreshed_issue, opts) == [] and
-        is_nil(pending_ci_failure(refreshed_issue, opts)) and
-        is_nil(pending_qa_failure(refreshed_issue, opts)) and
-        is_nil(pending_pr_conflict(refreshed_issue, opts))
+        no_pending_rework_signal?(refreshed_issue, opts)
     else
       false
     end
+  end
+
+  defp no_pending_rework_signal?(%Issue{} = issue, opts) do
+    pending_reviewer_comments(issue, opts) == [] and
+      is_nil(pending_ci_failure(issue, opts)) and
+      is_nil(pending_qa_failure(issue, opts)) and
+      is_nil(pending_pr_conflict(issue, opts))
+  end
+
+  # A turn makes progress when it adds a commit, changes the issue state, attaches a PR or
+  # follows a reviewer-agent verdict (the push after an approval adds no commit). Without a
+  # readable workspace HEAD (an SSH worker, no git checkout) progress is unknown and no turn
+  # counts as empty.
+  defp initial_progress(workspace, worker_host, issue, opts) do
+    head = read_workspace_head(workspace, worker_host, opts)
+    fingerprint = progress_fingerprint(head, issue, initial_review_agent_state())
+    %{rework_base: rework_base(issue, head, opts), head: head, fingerprint: fingerprint, empty_turns: 0}
+  end
+
+  # The head a Rework started from: recorded by the first run dispatched in Rework and reused by
+  # re-dispatched runs, so rework an earlier run pushed still counts. A run outside Rework forgets
+  # it. When the store is unavailable only this run's own commits count.
+  defp rework_base(%Issue{id: issue_id} = issue, head, opts) when is_binary(issue_id) and is_binary(head) do
+    repo_key = run_repo_key(issue, opts)
+
+    if rework_state?(issue.state) and attached_pr?(issue) do
+      case RunStore.get_rework_base(repo_key, issue_id) do
+        base when is_binary(base) ->
+          base
+
+        nil ->
+          _ = RunStore.put_rework_base(repo_key, issue_id, head)
+          head
+
+        {:error, reason} ->
+          Logger.warning("Could not read the rework base for #{issue_context(issue)}; counting this run's commits only reason=#{inspect(reason)}")
+          head
+      end
+    else
+      forget_rework_base(issue, opts)
+      head
+    end
+  end
+
+  defp rework_base(_issue, head, _opts), do: head
+
+  defp forget_rework_base(%Issue{id: issue_id} = issue, opts) when is_binary(issue_id) do
+    _ = RunStore.delete_rework_base(run_repo_key(issue, opts), issue_id)
+    :ok
+  end
+
+  defp forget_rework_base(_issue, _opts), do: :ok
+
+  defp forget_rework_base_outside_rework(issue, opts) do
+    if rework_state?(Map.get(issue, :state)), do: :ok, else: forget_rework_base(issue, opts)
+  end
+
+  defp track_turn_progress(%{progress: progress} = run_context, %Issue{} = refreshed_issue) do
+    head = read_workspace_head(run_context.workspace, run_context.worker_host, run_context.opts)
+    fingerprint = progress_fingerprint(head, refreshed_issue, run_context.review_agent)
+    empty_turns = if is_nil(head) or fingerprint != progress.fingerprint, do: 0, else: progress.empty_turns + 1
+
+    %{run_context | progress: %{progress | head: head, fingerprint: fingerprint, empty_turns: empty_turns}}
+  end
+
+  defp read_workspace_head(workspace, worker_host, opts) do
+    reader = Keyword.get(opts, :workspace_head_reader, &WorkspaceHead.read/2)
+    reader.(workspace, worker_host)
+  end
+
+  defp progress_fingerprint(head, issue, review_agent),
+    do: {head, Map.get(issue, :state), URLUtils.pull_request_url(issue), review_agent}
+
+  # Nothing moves an issue out of `Rework` once its rework is done: the agent may not ask for
+  # `In Review` with Auto Review on, and the post-PR move skips `Rework`. The rework is done once
+  # the workspace HEAD has moved past the head the Rework started from (by this run or an earlier
+  # one), that HEAD is the attached PR's head, and no review, CI, QA or conflict signal is pending.
+  defp rework_finished?(%Issue{} = issue, %{progress: %{head: head} = progress} = run_context) when is_binary(head) do
+    rework_state?(issue.state) and attached_pr?(issue) and
+      head != progress.rework_base and
+      no_pending_rework_signal?(issue, run_context.opts) and
+      pr_head?(issue, head, run_context)
+  end
+
+  defp rework_finished?(_issue, _run_context), do: false
+
+  defp pr_head?(%Issue{} = issue, head, run_context) do
+    github = Keyword.get(run_context.opts, :github, PullRequest)
+
+    case github.fetch_ci_status(URLUtils.pull_request_url(issue), cwd: run_context.workspace) do
+      {:ok, %{commit_sha: ^head}} ->
+        true
+
+      {:ok, _ci_status} ->
+        false
+
+      {:error, reason} ->
+        Logger.warning("Could not read the PR head for rework #{issue_context(issue)}; continuing reason=#{inspect(reason)}")
+        false
+    end
+  end
+
+  defp hand_off_finished_rework(%Issue{id: issue_id} = issue, run_context) do
+    post_pr_state = run_context.opts |> Keyword.fetch!(:settings) |> AutoReview.post_pr_state()
+    Logger.info("Rework for #{issue_context(issue)} is pushed to its PR with no rework signal pending; moving to #{post_pr_state}")
+
+    case Tracker.update_issue_state(issue_id, post_pr_state) do
+      :ok ->
+        forget_rework_base(issue, run_context.opts)
+        :ok
+
+      {:error, reason} ->
+        {:error, {:rework_handoff_failed, reason}}
+    end
+  end
+
+  # A landing run waits on CI through `merging_ci_pending?/2`, and parking it would drop the
+  # human's merge approval.
+  defp idle_turn_limit_reached?(%Issue{} = issue, %{progress: progress}) do
+    progress.empty_turns >= @max_empty_turns and !merging_state?(issue.state)
+  end
+
+  defp park_idle_issue(%Issue{id: issue_id} = issue) do
+    Logger.warning("Parking #{issue_context(issue)} in #{@idle_park_state} after #{@max_empty_turns} turns with no new commit or state change")
+
+    with :ok <- Tracker.update_issue_state(issue_id, @idle_park_state),
+         :ok <- Tracker.create_comment(issue_id, idle_park_note()) do
+      :ok
+    else
+      {:error, reason} -> {:error, {:idle_park_failed, reason}}
+    end
+  end
+
+  defp idle_park_note do
+    """
+    Symphony parked this issue in #{@idle_park_state}: the agent's last #{@max_empty_turns} turns made no new commit and no state change, so another turn would repeat them. Move it back to Todo once it can make progress.
+    """
   end
 
   defp attached_pr?(%Issue{} = issue), do: is_binary(URLUtils.pull_request_url(issue))

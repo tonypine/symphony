@@ -8,7 +8,7 @@ defmodule SymphonyElixir.CiPoller do
 
   alias SymphonyElixir.{AuditLog, AutoReview, Config, Notifications, RunStore, Tracker}
   alias SymphonyElixir.GitHub.PullRequest
-  alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.Linear.{Issue, Usage}
 
   @in_review_state "In Review"
   @merging_state "Merging"
@@ -67,6 +67,7 @@ defmodule SymphonyElixir.CiPoller do
 
   @impl true
   def init(opts) do
+    Usage.put_caller(:ci_poller)
     poll_interval_ms = poll_interval_ms(opts)
     opts = poller_opts(opts, poll_interval_ms)
     state = %State{opts: opts, poll_interval_ms: poll_interval_ms}
