@@ -22,6 +22,7 @@ defmodule SymphonyElixir.AgentRunner do
     PrReviewPoller,
     ReviewAgent,
     RunKind,
+    RunStore,
     SubIssueWait,
     Tracker,
     URLUtils,
@@ -545,6 +546,7 @@ defmodule SymphonyElixir.AgentRunner do
             hand_off_finished_rework(refreshed_issue, run_context)
 
           idle_turn_limit_reached?(refreshed_issue, run_context) ->
+            forget_rework_base(refreshed_issue, opts)
             park_idle_issue(refreshed_issue)
 
           turn_number < max_turns ->
@@ -557,8 +559,8 @@ defmodule SymphonyElixir.AgentRunner do
             :ok
         end
 
-      {:done, _refreshed_issue} ->
-        :ok
+      {:done, refreshed_issue} ->
+        forget_rework_base_outside_rework(refreshed_issue, opts)
 
       {:error, reason} ->
         {:error, reason}
@@ -1265,7 +1267,45 @@ defmodule SymphonyElixir.AgentRunner do
   defp initial_progress(workspace, worker_host, issue, opts) do
     head = read_workspace_head(workspace, worker_host, opts)
     fingerprint = progress_fingerprint(head, issue, initial_review_agent_state())
-    %{start_head: head, head: head, fingerprint: fingerprint, empty_turns: 0}
+    %{rework_base: rework_base(issue, head, opts), head: head, fingerprint: fingerprint, empty_turns: 0}
+  end
+
+  # The head a Rework started from: recorded by the first run dispatched in Rework and reused by
+  # re-dispatched runs, so rework an earlier run pushed still counts. A run outside Rework forgets
+  # it. When the store is unavailable only this run's own commits count.
+  defp rework_base(%Issue{id: issue_id} = issue, head, opts) when is_binary(issue_id) and is_binary(head) do
+    repo_key = run_repo_key(issue, opts)
+
+    if rework_state?(issue.state) and attached_pr?(issue) do
+      case RunStore.get_rework_base(repo_key, issue_id) do
+        base when is_binary(base) ->
+          base
+
+        nil ->
+          _ = RunStore.put_rework_base(repo_key, issue_id, head)
+          head
+
+        {:error, reason} ->
+          Logger.warning("Could not read the rework base for #{issue_context(issue)}; counting this run's commits only reason=#{inspect(reason)}")
+          head
+      end
+    else
+      forget_rework_base(issue, opts)
+      head
+    end
+  end
+
+  defp rework_base(_issue, head, _opts), do: head
+
+  defp forget_rework_base(%Issue{id: issue_id} = issue, opts) when is_binary(issue_id) do
+    _ = RunStore.delete_rework_base(run_repo_key(issue, opts), issue_id)
+    :ok
+  end
+
+  defp forget_rework_base(_issue, _opts), do: :ok
+
+  defp forget_rework_base_outside_rework(issue, opts) do
+    if rework_state?(Map.get(issue, :state)), do: :ok, else: forget_rework_base(issue, opts)
   end
 
   defp track_turn_progress(%{progress: progress} = run_context, %Issue{} = refreshed_issue) do
@@ -1286,12 +1326,11 @@ defmodule SymphonyElixir.AgentRunner do
 
   # Nothing moves an issue out of `Rework` once its rework is done: the agent may not ask for
   # `In Review` with Auto Review on, and the post-PR move skips `Rework`. The rework is done once
-  # the attached PR's head is this workspace's HEAD, no review, CI, QA or conflict signal is
-  # pending, and either this run committed or a turn passed without any change (a re-dispatched
-  # run whose rework an earlier run already pushed).
+  # the workspace HEAD has moved past the head the Rework started from (by this run or an earlier
+  # one), that HEAD is the attached PR's head, and no review, CI, QA or conflict signal is pending.
   defp rework_finished?(%Issue{} = issue, %{progress: %{head: head} = progress} = run_context) when is_binary(head) do
     rework_state?(issue.state) and attached_pr?(issue) and
-      (head != progress.start_head or progress.empty_turns >= 1) and
+      head != progress.rework_base and
       no_pending_rework_signal?(issue, run_context.opts) and
       pr_head?(issue, head, run_context)
   end
@@ -1319,8 +1358,12 @@ defmodule SymphonyElixir.AgentRunner do
     Logger.info("Rework for #{issue_context(issue)} is pushed to its PR with no rework signal pending; moving to #{post_pr_state}")
 
     case Tracker.update_issue_state(issue_id, post_pr_state) do
-      :ok -> :ok
-      {:error, reason} -> {:error, {:rework_handoff_failed, reason}}
+      :ok ->
+        forget_rework_base(issue, run_context.opts)
+        :ok
+
+      {:error, reason} ->
+        {:error, {:rework_handoff_failed, reason}}
     end
   end
 

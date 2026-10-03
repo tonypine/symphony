@@ -61,11 +61,26 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     assert_received {:memory_tracker_state_update, "issue-progress", "In Review"}
   end
 
-  test "a re-dispatched Rework run whose rework is already pushed moves on after one empty turn" do
+  test "a re-dispatched Rework run whose rework an earlier run pushed moves on after one empty turn" do
+    run_issue!("Rework", heads: ["sha-old"], max_turns: 1)
+
+    assert RunStore.get_rework_base("default", "issue-progress") == "sha-old"
+    refute_received {:memory_tracker_state_update, _issue_id, _state}
+
+    Application.delete_env(:symphony_elixir, :progress_agent_turns)
     run_issue!("Rework", heads: ["sha-rework"])
 
     assert turns() == 1
     assert_received {:memory_tracker_state_update, "issue-progress", "Auto Review"}
+    assert RunStore.get_rework_base("default", "issue-progress") == nil
+  end
+
+  test "a fresh Rework run that starts on the PR head does not move on after an empty turn" do
+    run_issue!("Rework", heads: ["sha-rework"], states: ["Rework", "Todo"])
+
+    assert turns() == 2
+    refute_received {:memory_tracker_state_update, _issue_id, _state}
+    assert RunStore.get_rework_base("default", "issue-progress") == nil
   end
 
   test "a Rework run with unresolved review comments on the current head keeps going" do

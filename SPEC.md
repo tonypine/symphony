@@ -1546,8 +1546,10 @@ Important nuance:
   coding-agent thread in the same workspace, up to `agent.max_turns`.
 - An issue in `Rework` whose attached PR's head is the workspace `HEAD`, with no pending review,
   CI, QA or conflict signal, MUST end the run and move to the post-PR state (the Auto Review state,
-  or `In Review` when Auto Review is off) once the run has committed or one turn has passed with no
-  change. Nothing else moves it out of `Rework`.
+  or `In Review` when Auto Review is off) once that `HEAD` differs from the head the `Rework` started
+  from. That start head MUST be recorded by the first run dispatched in `Rework` and kept across
+  re-dispatched runs until the issue leaves `Rework`, so rework an earlier run pushed counts and a
+  fresh `Rework` on an unchanged PR does not. Nothing else moves it out of `Rework`.
 - When the workspace `HEAD` is readable, two consecutive turns with no new commit, no issue state
   change, no newly attached PR and no reviewer-agent verdict MUST end the run, move the issue to
   `Backlog` and post a comment saying why. This does not apply in `Merging`.
