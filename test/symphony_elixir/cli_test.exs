@@ -242,18 +242,29 @@ defmodule SymphonyElixir.CLITest do
     deps =
       base_deps(%{
         file_regular?: fn _path -> flunk("dashboard must not read symphony.yml") end,
-        control_url: fn -> "http://127.0.0.1:4555/" end,
-        run_dashboard: fn url ->
-          send(parent, {:dashboard, url})
+        control_url: fn ->
+          send(parent, :resolved_control_url)
+          "http://127.0.0.1:4555/"
+        end,
+        run_dashboard: fn url_source ->
+          send(parent, {:dashboard, url_source})
           :ok
         end
       })
 
+    # Without --url the control URL is resolved on each poll, not once at startup.
     assert {:halt, 0} = CLI.evaluate(["dashboard"], deps)
-    assert_received {:dashboard, "http://127.0.0.1:4555"}
+    assert_received {:dashboard, url_source}
+    refute_received :resolved_control_url
+    assert url_source.() == "http://127.0.0.1:4555"
+    assert_received :resolved_control_url
+    assert url_source.() == "http://127.0.0.1:4555"
+    assert_received :resolved_control_url
 
-    assert {:halt, 0} = CLI.evaluate(["dashboard", "--url", "http://127.0.0.1:4777"], deps)
-    assert_received {:dashboard, "http://127.0.0.1:4777"}
+    assert {:halt, 0} = CLI.evaluate(["dashboard", "--url", "http://127.0.0.1:4777/"], deps)
+    assert_received {:dashboard, url_source}
+    assert url_source.() == "http://127.0.0.1:4777"
+    refute_received :resolved_control_url
   end
 
   test "dashboard rejects unknown arguments with its usage" do

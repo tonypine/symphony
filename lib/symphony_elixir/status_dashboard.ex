@@ -32,6 +32,7 @@ defmodule SymphonyElixir.StatusDashboard do
     :enabled_override,
     :render_interval_ms_override,
     :render_fun,
+    :format_fun,
     :started_at_ms,
     :token_samples,
     :last_tps_second,
@@ -53,6 +54,7 @@ defmodule SymphonyElixir.StatusDashboard do
           enabled_override: boolean() | nil,
           render_interval_ms_override: pos_integer() | nil,
           render_fun: (String.t() -> term()),
+          format_fun: (term(), number(), pos_integer() | nil -> String.t()),
           started_at_ms: integer(),
           token_samples: [{integer(), integer()}],
           last_tps_second: integer() | nil,
@@ -107,6 +109,7 @@ defmodule SymphonyElixir.StatusDashboard do
     refresh_ms = refresh_ms_override || observability.refresh_ms
     render_interval_ms = render_interval_ms_override || observability.render_interval_ms
     render_fun = Keyword.get(opts, :render_fun, &render_to_terminal/1)
+    format_fun = Keyword.get(opts, :format_fun, &Renderer.format_snapshot_content/3)
     enabled = resolve_override(enabled_override, observability.dashboard_enabled and dashboard_enabled?())
     started_at_ms = System.monotonic_time(:millisecond)
     schedule_tick(refresh_ms, enabled)
@@ -120,6 +123,7 @@ defmodule SymphonyElixir.StatusDashboard do
        enabled_override: enabled_override,
        render_interval_ms_override: render_interval_ms_override,
        render_fun: render_fun,
+       format_fun: format_fun,
        started_at_ms: started_at_ms,
        token_samples: [],
        last_tps_second: nil,
@@ -155,10 +159,15 @@ defmodule SymphonyElixir.StatusDashboard do
       :ok
   end
 
-  @spec handle_call({:frame, pos_integer() | nil}, GenServer.from(), t()) :: {:reply, {:ok, String.t()}, t()}
+  @spec handle_call({:frame, pos_integer() | nil}, GenServer.from(), t()) ::
+          {:reply, {:ok, String.t()} | :unavailable, t()}
   def handle_call({:frame, columns}, _from, state) do
-    {snapshot_data, tps, state} = sample_snapshot(state, System.monotonic_time(:millisecond))
-    {:reply, {:ok, Renderer.format_snapshot_content(snapshot_data, tps, columns)}, state}
+    {snapshot_data, tps, next_state} = sample_snapshot(state, System.monotonic_time(:millisecond))
+    {:reply, {:ok, state.format_fun.(snapshot_data, tps, columns)}, next_state}
+  rescue
+    error in [ArgumentError, RuntimeError] ->
+      Logger.warning("Failed rendering status dashboard frame: #{Exception.message(error)}")
+      {:reply, :unavailable, state}
   end
 
   @spec handle_info(term(), t()) :: {:noreply, t()}
@@ -212,7 +221,7 @@ defmodule SymphonyElixir.StatusDashboard do
     {snapshot_data, tps, state} = sample_snapshot(state, now_ms)
 
     if snapshot_data != state.last_snapshot_fingerprint or periodic_rerender_due?(state, now_ms) do
-      content = Renderer.format_snapshot_content(snapshot_data, tps)
+      content = state.format_fun.(snapshot_data, tps, nil)
 
       state
       |> maybe_update_snapshot_fingerprint(snapshot_data)

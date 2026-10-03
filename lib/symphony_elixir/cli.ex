@@ -52,7 +52,7 @@ defmodule SymphonyElixir.CLI do
           ensure_all_started: (-> ensure_started_result()),
           run_one_shot: (String.t(), keyword() -> one_shot_result()),
           control_url: (-> String.t()),
-          run_dashboard: (String.t() -> :ok)
+          run_dashboard: ((-> String.t()) -> :ok)
         }
 
   @spec main([String.t()]) :: no_return()
@@ -135,12 +135,19 @@ defmodule SymphonyElixir.CLI do
   defp evaluate_dashboard(args, deps) do
     case OptionParser.parse(args, strict: @dashboard_switches) do
       {opts, [], []} ->
-        url = (opts |> Keyword.get_values(:url) |> List.last() || deps.control_url.()) |> String.trim_trailing("/")
-        :ok = deps.run_dashboard.(url)
+        :ok = deps.run_dashboard.(dashboard_url_source(opts, deps))
         {:halt, 0}
 
       _ ->
         {:error, dashboard_usage_message()}
+    end
+  end
+
+  # Without --url, the URL is looked up on every poll: a restarted Symphony may listen on a new port.
+  defp dashboard_url_source(opts, deps) do
+    case opts |> Keyword.get_values(:url) |> List.last() do
+      nil -> fn -> String.trim_trailing(deps.control_url.(), "/") end
+      url -> fn -> String.trim_trailing(url, "/") end
     end
   end
 
@@ -397,8 +404,8 @@ defmodule SymphonyElixir.CLI do
     }
   end
 
-  defp run_dashboard(url) do
-    TerminalDashboard.run(url, TerminalDashboard.runtime_deps(url), [])
+  defp run_dashboard(url_source) do
+    TerminalDashboard.run(url_source, TerminalDashboard.runtime_deps(), [])
   end
 
   defp set_symphony_config(opts, deps) do

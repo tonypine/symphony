@@ -9,6 +9,9 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   alias SymphonyElixir.{Quality, StatusDashboard}
   alias SymphonyElixirWeb.{Endpoint, Presenter}
 
+  # The frame is padded to the requested width inside StatusDashboard; cap it.
+  @max_terminal_columns 1_000
+
   @spec state(Conn.t(), map()) :: Conn.t()
   def state(conn, %{"format" => "terminal"} = params) do
     case StatusDashboard.frame(terminal_columns(params), status_dashboard()) do
@@ -124,7 +127,7 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
 
   defp terminal_columns(%{"columns" => columns}) when is_binary(columns) do
     case Integer.parse(columns) do
-      {columns, ""} when columns > 0 -> columns
+      {columns, ""} when columns > 0 -> min(columns, @max_terminal_columns)
       _ -> nil
     end
   end

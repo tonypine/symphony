@@ -10,8 +10,8 @@ defmodule SymphonyElixir.TerminalDashboardTest do
     {:ok, agent} = Agent.start_link(fn -> results end)
 
     %{
-      fetch_frame: fn columns ->
-        send(parent, {:fetched, columns})
+      fetch_frame: fn columns, url ->
+        send(parent, {:fetched, columns, url})
 
         Agent.get_and_update(agent, fn
           [result] -> {result, [result]}
@@ -26,7 +26,7 @@ defmodule SymphonyElixir.TerminalDashboardTest do
   end
 
   defp run_until_key(deps, key, opts \\ []) do
-    dashboard = Task.async(fn -> TerminalDashboard.run(@url, deps, Keyword.put_new(opts, :poll_ms, 10)) end)
+    dashboard = Task.async(fn -> TerminalDashboard.run(fn -> @url end, deps, Keyword.put_new(opts, :poll_ms, 10)) end)
     assert_receive {:opened, owner}
     assert_receive {:wrote, "\e[?1049h\e[?25l"}
     assert_receive {:wrote, frame}
@@ -38,7 +38,7 @@ defmodule SymphonyElixir.TerminalDashboardTest do
   test "draws the frame Symphony renders for the terminal's width, and quits on Ctrl-C" do
     frame = run_until_key(deps(self(), [{:ok, "╭─ SYMPHONY STATUS\n│ Agents: 1/3"}]), <<3>>)
 
-    assert_received {:fetched, 120}
+    assert_received {:fetched, 120, @url}
     assert frame =~ "\e[H\e[2J╭─ SYMPHONY STATUS\r\n│ Agents: 1/3\r\n"
     assert frame =~ "#{@url} · q or Ctrl-C to quit"
     assert_receive {:wrote, "\e[?25h\e[?1049l"}
@@ -48,7 +48,7 @@ defmodule SymphonyElixir.TerminalDashboardTest do
   test "polls again until q, ignoring other keys" do
     parent = self()
     deps = deps(parent, [{:ok, "first"}, {:ok, "second"}])
-    dashboard = Task.async(fn -> TerminalDashboard.run(@url, deps, poll_ms: 10) end)
+    dashboard = Task.async(fn -> TerminalDashboard.run(fn -> @url end, deps, poll_ms: 10) end)
     assert_receive {:opened, owner}
     send(owner, {:terminal_key, "x"})
     assert_receive {:wrote, "\e[H\e[2Jsecond" <> _}, 1_000
@@ -87,12 +87,35 @@ defmodule SymphonyElixir.TerminalDashboardTest do
     end
   end
 
+  test "looks the control URL up again on every poll" do
+    parent = self()
+    {:ok, urls} = Agent.start_link(fn -> ["http://127.0.0.1:4555", "http://127.0.0.1:4777"] end)
+
+    url_source = fn ->
+      Agent.get_and_update(urls, fn
+        [url] -> {url, [url]}
+        [url | rest] -> {url, rest}
+      end)
+    end
+
+    dashboard = Task.async(fn -> TerminalDashboard.run(url_source, deps(parent, [{:ok, "frame"}]), poll_ms: 10) end)
+    assert_receive {:opened, owner}
+    assert_receive {:fetched, 120, "http://127.0.0.1:4555"}
+    assert_receive {:wrote, "\e[H\e[2Jframe\r\n" <> first_footer}
+    assert first_footer =~ "http://127.0.0.1:4555 · q or Ctrl-C to quit"
+    assert_receive {:fetched, 120, "http://127.0.0.1:4777"}, 1_000
+    assert_receive {:wrote, "\e[H\e[2Jframe\r\n" <> second_footer}, 1_000
+    assert second_footer =~ "http://127.0.0.1:4777 · q or Ctrl-C to quit"
+    send(owner, {:terminal_key, "q"})
+    assert :ok = Task.await(dashboard)
+  end
+
   test "runtime deps fetch from the given control URL" do
-    deps = TerminalDashboard.runtime_deps("http://127.0.0.1:1")
+    deps = TerminalDashboard.runtime_deps()
     assert is_function(deps.open, 1)
 
     # Nothing listens on port 1; without a control token the client stops before connecting.
-    assert {:error, reason} = deps.fetch_frame.(80)
+    assert {:error, reason} = deps.fetch_frame.(80, "http://127.0.0.1:1")
     assert reason == :control_token_unavailable or match?({:connection_failed, _}, reason)
   end
 end

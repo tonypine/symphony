@@ -20,7 +20,7 @@ defmodule SymphonyElixir.TerminalDashboard do
 
   @type fetch_result :: {:ok, String.t()} | :unavailable | {:error, term()}
   @type deps :: %{
-          fetch_frame: (pos_integer() | nil -> fetch_result()),
+          fetch_frame: (pos_integer() | nil, String.t() -> fetch_result()),
           columns: (-> pos_integer() | nil),
           write: (iodata() -> term()),
           open: (pid() -> term()),
@@ -29,27 +29,28 @@ defmodule SymphonyElixir.TerminalDashboard do
 
   @doc """
   Polls and draws until a quit key arrives as `{:terminal_key, key}`, or the
-  terminal closes (`{:terminal_key, :eof}`).
+  terminal closes (`{:terminal_key, :eof}`). `url_source` gives the control URL
+  for each poll, so a Symphony that restarts on a new port is found again.
   """
-  @spec run(String.t(), deps(), keyword()) :: :ok
-  def run(url, deps, opts) do
+  @spec run((-> String.t()), deps(), keyword()) :: :ok
+  def run(url_source, deps, opts) do
     poll_ms = Keyword.get(opts, :poll_ms, @poll_ms)
     deps.open.(self())
     deps.write.(@enter_screen)
 
     try do
-      loop(url, deps, poll_ms)
+      loop(url_source, deps, poll_ms)
     after
       deps.write.(@leave_screen)
       deps.close.()
     end
   end
 
-  @doc "Dependencies that talk to the real terminal and the control API at `url`."
-  @spec runtime_deps(String.t()) :: deps()
-  def runtime_deps(url) do
+  @doc "Dependencies that talk to the real terminal and the control API."
+  @spec runtime_deps() :: deps()
+  def runtime_deps do
     %{
-      fetch_frame: &ControlClient.dashboard_frame(&1, control_url: url),
+      fetch_frame: &ControlClient.dashboard_frame(&1, control_url: &2),
       columns: &Terminal.columns/0,
       write: &Terminal.write/1,
       open: &Terminal.open/1,
@@ -57,22 +58,24 @@ defmodule SymphonyElixir.TerminalDashboard do
     }
   end
 
-  defp loop(url, deps, poll_ms) do
+  defp loop(url_source, deps, poll_ms) do
+    url = url_source.()
+
     frame =
       deps.columns.()
-      |> deps.fetch_frame.()
+      |> deps.fetch_frame.(url)
       |> frame_for(url)
 
     deps.write.(frame_sequence(frame <> "\n" <> footer(url)))
-    wait(url, deps, poll_ms)
+    wait(url_source, deps, poll_ms)
   end
 
-  defp wait(url, deps, poll_ms) do
+  defp wait(url_source, deps, poll_ms) do
     receive do
       {:terminal_key, key} when key in @quit_keys or key == :eof -> :ok
-      {:terminal_key, _key} -> wait(url, deps, poll_ms)
+      {:terminal_key, _key} -> wait(url_source, deps, poll_ms)
     after
-      poll_ms -> loop(url, deps, poll_ms)
+      poll_ms -> loop(url_source, deps, poll_ms)
     end
   end
 

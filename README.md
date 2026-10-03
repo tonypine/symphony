@@ -234,8 +234,8 @@ Validate `symphony.yml` and every repo `WORKFLOW.md` it points at without starti
 ```
 
 Watch a running Symphony's terminal dashboard from another terminal. It polls the control API at
-`<state-root>/control_url` (or `--url`) with the token in `<state-root>/control_token`; press `q` or
-Ctrl-C to quit:
+`<state-root>/control_url` (or `--url`) with the token in `<state-root>/control_token`, reading the URL
+again on every poll so it finds a restarted Symphony on its new port; press `q` or Ctrl-C to quit:
 
 ```bash
 ./bin/symphony dashboard

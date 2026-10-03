@@ -3,7 +3,6 @@ import XCTest
 
 final class TerminalDashboardTests: XCTestCase {
     private let stateRoot = URL(fileURLWithPath: "/Users/me/Library/Application Support/symphony/release")
-    private let controlURL = URL(string: "http://127.0.0.1:4011")!
     private let embedded = "/Applications/Symphony.app/Contents/Resources/symphony"
 
     private func script(_ settings: AppSettings, files: [String]) throws -> String {
@@ -11,7 +10,6 @@ final class TerminalDashboardTests: XCTestCase {
             settings: settings,
             embeddedSymphonyPath: embedded,
             stateRoot: stateRoot,
-            controlURL: controlURL,
             files: StubFileChecker(files: Set(files))
         )
     }
@@ -24,7 +22,7 @@ final class TerminalDashboardTests: XCTestCase {
             """
             #!/bin/zsh -l
             export SYMPHONY_STATE_ROOT='/Users/me/Library/Application Support/symphony/release'
-            exec /Applications/Symphony.app/Contents/Resources/symphony dashboard --url http://127.0.0.1:4011
+            exec /Applications/Symphony.app/Contents/Resources/symphony dashboard
 
             """
         )
@@ -41,13 +39,15 @@ final class TerminalDashboardTests: XCTestCase {
         let lines = try script(settings, files: ["/src/my symphony/bin/symphony"]).split(separator: "\n")
 
         XCTAssertEqual(lines[1], "cd '/src/my symphony' || exit 1")
-        XCTAssertEqual(lines[3], "exec mise exec -- ./bin/symphony dashboard --url http://127.0.0.1:4011")
+        XCTAssertEqual(lines[3], "exec mise exec -- ./bin/symphony dashboard")
     }
 
     func testScriptHoldsNoSecretFromTheEnvironment() throws {
         let text = try script(AppSettings(configPath: "/Users/me/symphony.yml"), files: [embedded])
 
         XCTAssertFalse(text.contains(SecretSettings.linearAPIKeyName))
+        // The CLI finds the control URL itself on every poll; a fixed one goes stale when Symphony restarts.
+        XCTAssertFalse(text.contains("--url"))
     }
 
     func testMissingBinariesAndBadSettingsAreLaunchProblems() {

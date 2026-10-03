@@ -80,12 +80,10 @@ final class SymphonyRunner {
     /// The `symphony dashboard` script for Terminal, from the binary the running Symphony came from (or Start
     /// would run), against the state directory the app watches.
     func terminalDashboardScript() throws -> String {
-        let root = stateRoot
-        return try TerminalDashboard.script(
+        try TerminalDashboard.script(
             settings: launchedSettings ?? store.loadSettings(),
             embeddedSymphonyPath: Self.embeddedSymphonyPath,
-            stateRoot: root,
-            controlURL: StateRoot.controlURL(in: root)
+            stateRoot: stateRoot
         )
     }
 
