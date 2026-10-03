@@ -51,7 +51,7 @@ defmodule SymphonyElixir.ParentWalkthroughTest do
           tracker_kind: "linear",
           pr_review_mode: "polling",
           ci: %{enabled: true},
-          auto_review: %{enabled: true, playbooks: %{"web" => %{paths: ["web/**"], prompt: "### Playbook: web"}}}
+          auto_review: %{enabled: true, playbooks: %{"api" => %{paths: ["api/**"], prompt: "### Playbook: api"}}}
         ],
         overrides
       )
@@ -259,7 +259,7 @@ defmodule SymphonyElixir.ParentWalkthroughTest do
       assert job.workspace_path == @workspace
       assert job.run_id == "run-1"
       assert job.run_profile.kind == :qa
-      assert Enum.map(job.playbooks, & &1.kind) == ["cli", "web"]
+      assert Enum.map(job.playbooks, & &1.kind) == ["cli", "api"]
       assert settings.auto_review.enabled
       assert agent_opts[:on_message] == on_message
       assert is_function(agent_opts[:git], 2)
@@ -268,7 +268,7 @@ defmodule SymphonyElixir.ParentWalkthroughTest do
       assert [{"issue-parent", report}, {"issue-fv", report}] = comments_posted()
       assert report =~ "**Verdict:** pass → TP-910 In Review"
       assert report =~ "**Commit:** `c0ffee001122` (head of `origin/main`)"
-      assert report =~ "playbooks: cli, web"
+      assert report =~ "playbooks: cli, api"
       assert report =~ "1200 tokens"
       assert report =~ "- **pass** Open Settings (evidence: https://uploads.linear.test/settings.png)"
     end
@@ -297,12 +297,20 @@ defmodule SymphonyElixir.ParentWalkthroughTest do
     test "qa labels on the ticket or the parent choose the playbooks" do
       agent_result(:pass, %{})
 
-      assert :ok = run(verification(%{labels: ["qa:web"]}))
-      assert_received {:qa_agent_run, %{playbooks: [%{kind: "web"}]}, _settings, _opts}
+      assert :ok = run(verification(%{labels: ["qa:api"]}))
+      assert_received {:qa_agent_run, %{playbooks: [%{kind: "api"}]}, _settings, _opts}
 
       Application.put_env(:symphony_elixir, :walkthrough_parent_result, {:ok, parent(%{labels: ["qa:cli"]})})
       assert :ok = run(verification())
       assert_received {:qa_agent_run, %{playbooks: [%{kind: "cli"}]}, _settings, _opts}
+    end
+
+    test "the built-in web playbook runs when the verification dev server is configured" do
+      write_settings!(verification: %{enabled: true, dev_server: %{start_cmd: "scripts/dev-server.sh", health_check_url: "http://127.0.0.1:4000/"}})
+      agent_result(:pass, %{})
+
+      assert :ok = run(verification(%{labels: ["qa:web"]}), settings: Config.settings!())
+      assert_received {:qa_agent_run, %{playbooks: [%{kind: "web"}]}, _settings, _opts}
     end
 
     test "each failing step becomes a Backlog child that names the step, holds the evidence and blocks the ticket in Todo" do

@@ -731,6 +731,7 @@ Before any agent runs, Symphony decides whether the PR needs QA and which playbo
 | `qa:<kind>` label (for example `qa:cli`) | that playbook runs |
 | only docs, tests or `skip_globs` paths changed | skipped |
 | `## User walkthrough` in the ticket | `cli` playbook runs |
+| web paths changed and `verification.dev_server` configured | `web` playbook runs |
 | a playbook's trigger paths changed | that playbook runs |
 | nothing else | skipped (internal changes rely on tests and the pre-push review) |
 
@@ -791,21 +792,82 @@ one.
 The ticket gets the usual executor run when the tracker is not Linear, the run is on a remote
 worker, it has the `qa:skip` label, or it has no parent.
 
-`playbooks` overrides playbooks per kind:
+`playbooks` overrides playbooks per kind, and adds kinds of your own with `paths` and `prompt`:
 
 ```yaml
 auto_review:
   playbooks:
     cli:
       paths: ["bin/**", "lib/my_app/cli.ex"]
-    web:
-      paths: ["assets/**"]
+    api:
+      paths: ["api/**"]
       prompt: |
-        ### Playbook: web
-        Start the dev server and check the changed pages.
+        ### Playbook: api
+        Call the changed endpoints with curl and check the responses.
 ```
 
 Set `enabled: false` on a kind to turn it off.
+
+#### Web app QA
+
+The built-in `web` playbook tests a web app in a headless browser against the project's dev
+server. It is on when `verification.enabled` is true and `verification.dev_server.start_cmd` is
+set (see [`verification`](#verification)), and triggers on `lib/*_web/**`, `lib/*_web.ex`,
+`priv/static/**`, `assets/**` and `.heex`, `.html`, `.css`, `.scss`, `.jsx`, `.tsx`, `.vue` and
+`.svelte` files (override with `paths`, or force it with a `qa:web` label).
+
+For a `web` pass Symphony:
+
+1. takes a port from the verification port pool and starts `dev_server.start_cmd` with
+   `SYMPHONY_VERIFICATION_PORT` set, from a second worktree at the PR head (so its build output
+   stays out of the agent's worktree), then waits for `health_check_url`. A server that
+   does not start or fails its health check within `health_timeout_ms` makes the pass `blocked`
+   ("the dev server failed its health check"), not `fail`, and no agent runs;
+2. gives the QA agent the server's address and a `browser` MCP server that only this QA session
+   gets. By default that is [Playwright MCP](https://github.com/microsoft/playwright-mcp) with
+   headless Chromium and an in-memory profile, limited with `--allowed-origins` to the dev server
+   on `localhost` / `127.0.0.1`, and saving files into `qa-evidence/`. With
+   `agent.network_access.mode: allowlist` the QA session's sandbox also allows `localhost` and
+   `127.0.0.1`;
+3. stops the dev server, releases the port and removes its worktree when the pass ends.
+
+The agent follows the ticket's `## User walkthrough` (or the changed pages), takes a screenshot per
+step, saves the browser console to `qa-evidence/console.md`, and attaches both to the issue, so
+the QA report links each step's screenshot and the console output. A console error from the
+changed page fails the step.
+
+The default browser server runs on the Symphony host, outside the agent sandbox, so it is pinned
+to `@playwright/mcp@0.0.83` and started with `npx --no`, which never downloads a package during a
+pass. Install it and Chromium once on the host:
+
+```bash
+npx -y @playwright/mcp@0.0.83 --version
+npx playwright install chromium
+```
+
+Before the agent starts, Symphony checks that `npx` is on its `PATH` and that the pinned package is
+installed. When either is missing, the pass is `blocked` and the report says what to install. The
+version is `@playwright_mcp_package` in `lib/symphony_elixir/qa_agent.ex`; to bump it, change it
+there, check the flags above against that release, and update the install command here. The
+origin allowlist keeps the browser
+on the dev server; Playwright documents it as a guard rather than a security boundary. To use
+another browser server, such as Glance, set `browser_mcp` to its MCP server definition (the shape
+of an [`agent.mcp.servers`](#agentmcp) entry); Symphony then starts it as given:
+
+```yaml
+auto_review:
+  playbooks:
+    web:
+      browser_mcp:
+        command: glance-mcp      # stdio server; or transport: http with url: (Claude runtime only)
+        args: ["--headless"]
+```
+
+An invalid `browser_mcp` makes the pass `blocked` with the error.
+
+Symphony's own `WORKFLOW.md` points `verification.dev_server` at `scripts/qa-dashboard-server.sh`,
+which builds Symphony from the PR head and serves the status dashboard with an in-memory tracker,
+so dashboard changes get a `web` pass once the operator sets `verification.enabled: true`.
 
 #### macOS app QA
 
@@ -1062,6 +1124,9 @@ verification:
 
 `WORKFLOW.md` can override `verification.dev_server` per repo while inheriting the operator-owned
 port range.
+
+Auto Review's `web` playbook starts the same dev server, from a worktree at the PR head, for each web QA pass
+(see [Web app QA](#web-app-qa)).
 
 ### `workers`
 

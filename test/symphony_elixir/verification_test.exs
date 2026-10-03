@@ -332,6 +332,91 @@ defmodule SymphonyElixir.VerificationTest do
     end
   end
 
+  describe "QA dev servers" do
+    setup do
+      issue = %Issue{id: "issue-qa-web", identifier: "ACME-WEB", title: "Dashboard tweak", state: "Auto Review"}
+      %{issue: issue, port: free_tcp_port()}
+    end
+
+    defp qa_settings(port, dev_server) do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        verification: %{enabled: true, port_allocation: %{range: [port, port]}, dev_server: dev_server}
+      )
+
+      Config.settings!()
+    end
+
+    test "starts the dev server in the worktree, reports its URL, then stops it and releases the port", %{issue: issue, port: port} do
+      settings =
+        qa_settings(port, %{
+          start_cmd: "python3 -m http.server $SYMPHONY_VERIFICATION_PORT --bind 127.0.0.1",
+          health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/",
+          health_timeout_ms: 5_000,
+          stop_timeout_ms: 1_000
+        })
+
+      assert Verification.dev_server_configured?(settings)
+
+      assert {:ok, %{pid: pid, port: ^port, url: url} = dev_server} =
+               Verification.start_qa_dev_server(issue, "qa-web-run", System.tmp_dir!(), settings: settings, repo_key: "default")
+
+      assert url == "http://127.0.0.1:#{port}/"
+      assert Process.alive?(pid)
+      assert :ok = Verification.stop_qa_dev_server(dev_server)
+      refute Process.alive?(pid)
+      assert [%{run_id: "qa-web-run", status: "released", release_reason: "qa pass ended"}] = RunStore.list_verification_allocations()
+    end
+
+    test "a dev server that fails its health check returns verification_failed and releases the port", %{issue: issue, port: port} do
+      settings =
+        qa_settings(port, %{
+          start_cmd: "sleep 1",
+          health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/healthz",
+          health_timeout_ms: 50,
+          stop_timeout_ms: 100
+        })
+
+      assert {:error, {:verification_failed, :health_timeout}} =
+               Verification.start_qa_dev_server(issue, "qa-web-unhealthy", System.tmp_dir!(), settings: settings)
+
+      assert [%{run_id: "qa-web-unhealthy", status: "released", release_reason: "qa dev server did not start"}] =
+               RunStore.list_verification_allocations()
+    end
+
+    test "needs verification on and a start command", %{issue: issue, port: port} do
+      no_command = qa_settings(port, %{})
+      refute Verification.dev_server_configured?(no_command)
+
+      assert {:error, :dev_server_not_configured} =
+               Verification.start_qa_dev_server(issue, "qa-web-no-command", System.tmp_dir!(), settings: no_command)
+
+      assert [%{status: "released"}] = RunStore.list_verification_allocations()
+
+      write_workflow_file!(Workflow.workflow_file_path())
+      disabled = Config.settings!()
+      refute Verification.dev_server_configured?(disabled)
+
+      assert {:error, :dev_server_not_configured} =
+               Verification.start_qa_dev_server(issue, "qa-web-off", System.tmp_dir!(), settings: disabled)
+    end
+
+    test "fails when the port pool has no free port", %{issue: issue, port: port} do
+      settings = qa_settings(port, %{start_cmd: "sleep 1", health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/"})
+      {:ok, _pid} = PortPool.start_link(reconcile_interval_ms: nil, process_alive?: fn _pid -> true end)
+      assert {:ok, _allocation} = PortPool.allocate(%{run_id: "holder", port_range: [port, port]})
+
+      assert {:error, :exhausted} = Verification.start_qa_dev_server(issue, "qa-web-busy", System.tmp_dir!(), settings: settings)
+    end
+
+    test "builds the base URL from the health check URL" do
+      settings = qa_settings(4000, %{start_cmd: "x", health_check_url: "http://localhost:$SYMPHONY_VERIFICATION_PORT/api/v1/state"})
+      assert Verification.dev_server_url(4123, settings) == "http://localhost:4123/"
+
+      settings = put_in(settings.verification.dev_server.health_check_url, nil)
+      assert Verification.dev_server_url(4123, settings) == "http://127.0.0.1:4123/"
+    end
+  end
+
   defp free_tcp_port do
     {:ok, socket} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
     {:ok, port} = :inet.port(socket)
