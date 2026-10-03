@@ -222,6 +222,7 @@ agent:
   run_profiles: {}
   concurrency:
     max_total: 10
+    epic_lanes:
     max_by_issue_state:
       rework: 2
   limits:
@@ -284,8 +285,9 @@ agent:
 **Run profiles:**
 
 Symphony classifies each run by kind so a cheap run (landing, a CI fix) need not use the same
-model and effort as an implementation run. Nothing applies the resolved model and effort to the
-agent command yet; this section only defines and validates the config.
+model and effort as an implementation run. With the Claude runtime, each run starts Claude with
+`--model <model>` / `--effort <effort>` for its kind, appended after Symphony's own flags; a field
+that resolves to nothing adds no flag, so with nothing set the command is unchanged.
 
 ```yaml
 agent:
@@ -309,10 +311,29 @@ agent:
 - Config errors: an unknown kind under `run_profiles`, an unknown effort, an unknown profile key,
   or `--model` / `--effort` already in `command` while any of `model`, `effort`, or
   `run_profiles` is set. `symphony check` reports them.
+- The kind and profile are chosen once, when the run is dispatched, from the current workflow
+  config: an edit applies to the next dispatch without a restart. Every continuation turn of a run
+  keeps its profile. A CI fix or review feedback re-activation is a new run with its own kind.
+- The run history record keeps `run_kind`, `model` and `effort`, and the dispatch log line shows
+  `run_kind=… model=… effort=…` (`default` when nothing is added).
+- Codex runtime: `model` and `effort` are ignored; Codex keeps the model and reasoning effort
+  from its own config (set them in `command`, for example `codex -c model_reasoning_effort=high
+  app-server`). Symphony logs one warning when a run starts with a profile that resolves to a model or effort.
 
 **Concurrency and turns:**
 
 - `concurrency.max_total` is the global dispatch cap.
+- `concurrency.epic_lanes` (default: `max_total`) is how many of those slots in-progress epics may
+  reserve. An epic is a `breakdown` parent in `Waiting on sub-tickets` with at least one
+  sub-ticket approved and not finished (anything but Backlog, Triage or a terminal state). Each
+  one, in parent priority then age order, holds one lane: its sub-tickets run there one after
+  another, and the lane stays reserved while the current part is in review or landing, so the next
+  part starts as soon as it is unblocked. Epics beyond the lane count wait their turn. The slots
+  left over are shared, by priority then age, for standalone tickets and for an epic's extra
+  parallel sub-tickets. Set it to `max_total - 1` to always keep a slot for standalone work, or
+  `0` to turn lanes off. Values outside `0..max_total` fail `symphony check`. The dashboard and
+  `/api/v1/state` (`epic_lanes`) show each lane and the shared pool, and the dispatch log line
+  ends with `slot=lane:<epic>` or `slot=shared`.
 - `concurrency.max_by_issue_state` can cap work independently for specific issue states such as
   `rework`.
 - `limits.max_turns` caps how many back-to-back turns Symphony will run in a single worker

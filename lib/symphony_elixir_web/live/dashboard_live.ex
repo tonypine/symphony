@@ -270,6 +270,55 @@ defmodule SymphonyElixirWeb.DashboardLive do
         <section class="section-card">
           <div class="section-header">
             <div>
+              <h2 class="section-title">Agent lanes</h2>
+              <p class="section-copy">
+                Each active epic keeps a lane for its sub-tickets. Shared pool: <span class="numeric"><%= @payload.epic_lanes.shared.used %>/<%= @payload.epic_lanes.shared.slots %></span> in use.
+              </p>
+            </div>
+          </div>
+
+          <%= if @payload.epic_lanes.lanes == [] do %>
+            <p class="empty-state">No active epics; every slot is shared.</p>
+          <% else %>
+            <div class="table-wrap">
+              <table class="data-table data-table-lanes">
+                <thead>
+                  <tr>
+                    <th>Epic</th>
+                    <th>Lane</th>
+                    <th>Sub-ticket</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr :for={lane <- @payload.epic_lanes.lanes}>
+                    <td>
+                      <div class="issue-stack">
+                        <a class="issue-id" href={lane.url} target="_blank" rel="noreferrer"><%= lane.identifier %></a>
+                        <span class="muted"><%= lane.title %></span>
+                      </div>
+                    </td>
+                    <td>
+                      <span class={if lane.status == "running", do: "state-badge state-badge-active", else: "state-badge"}>
+                        <%= if lane.status == "running", do: "Running", else: "Idle, reserved" %>
+                      </span>
+                    </td>
+                    <td><%= lane_part_label(lane) %></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          <% end %>
+
+          <%= if @payload.epic_lanes.queued_epics != [] do %>
+            <p class="section-copy">
+              Waiting for a lane: <%= Enum.map_join(@payload.epic_lanes.queued_epics, ", ", & &1.identifier) %>
+            </p>
+          <% end %>
+        </section>
+
+        <section class="section-card">
+          <div class="section-header">
+            <div>
               <h2 class="section-title">Running sessions</h2>
               <p class="section-copy">Active issues, last known agent activity, and token usage.</p>
             </div>
@@ -698,6 +747,10 @@ defmodule SymphonyElixirWeb.DashboardLive do
     |> assign(:repo_filter, repo_filter)
     |> assign(:visible_payload, filter_payload(payload, repo_filter))
   end
+
+  defp lane_part_label(%{status: "running", sub_issue: %{identifier: identifier, state: state}}), do: "#{identifier} (#{state})"
+  defp lane_part_label(%{sub_issue: %{identifier: identifier, state: state}}), do: "Waiting on #{identifier} (#{state})"
+  defp lane_part_label(_lane), do: "Waiting for its next sub-ticket"
 
   defp filter_payload(%{error: _} = payload, _repo_filter), do: payload
 

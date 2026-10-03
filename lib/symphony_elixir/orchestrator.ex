@@ -14,6 +14,7 @@ defmodule SymphonyElixir.Orchestrator do
     AutoReview,
     CiPoller,
     Config,
+    EpicLanes,
     Notifications,
     PrReviewPoller,
     PrRun,
@@ -95,6 +96,7 @@ defmodule SymphonyElixir.Orchestrator do
       budget_daily_paused_logged: false,
       budget_exhausted: MapSet.new(),
       parked_parents: MapSet.new(),
+      epic_lanes: nil,
       setup_failed: %{},
       pause: %{paused: false, reason: nil, paused_at: nil},
       operator_pause_logged: false,
@@ -980,6 +982,7 @@ defmodule SymphonyElixir.Orchestrator do
           state
           |> prune_quality_gate_cache_to_active(issues)
           |> clear_running_quality_gate_cache_entries()
+          |> put_epic_lanes(issues)
 
         if available_slots(state) > 0 do
           issues
@@ -1380,6 +1383,10 @@ defmodule SymphonyElixir.Orchestrator do
   def should_dispatch_issue_for_test(%Issue{} = issue, %State{} = state) do
     should_dispatch_issue?(issue, state, active_state_set(), terminal_state_set())
   end
+
+  @doc false
+  @spec put_epic_lanes_for_test(State.t(), [Issue.t()]) :: State.t()
+  def put_epic_lanes_for_test(%State{} = state, issues) when is_list(issues), do: put_epic_lanes(state, issues)
 
   @doc false
   @spec park_breakdown_parents_for_test([Issue.t()], term()) :: term()
@@ -2507,9 +2514,18 @@ defmodule SymphonyElixir.Orchestrator do
       !MapSet.member?(state.budget_exhausted, issue.id) and
       !setup_failed_suppressed?(state.setup_failed, issue) and
       !Map.has_key?(state.running, issue.id) and
-      available_slots(state) > 0 and
-      state_slots_available?(issue, state.running) and
+      dispatch_slots_available?(issue, state) and
       worker_slots_available?(state)
+  end
+
+  # Each active epic reserves a lane out of max_total, recomputed from the candidates every poll.
+  defp put_epic_lanes(%State{} = state, issues) do
+    max_total = state.max_concurrent_agents || Config.settings!().agent.max_concurrent_agents
+    %{state | epic_lanes: EpicLanes.plan(issues, max_total, Config.settings!().agent.epic_lanes, terminal_state_set())}
+  end
+
+  defp epic_lane_slot_available?(%Issue{id: issue_id}, %State{} = state) do
+    EpicLanes.slot_for(state.epic_lanes, issue_id, Map.keys(state.running)) != :none
   end
 
   defp state_slots_available?(%Issue{state: issue_state}, running) when is_map(running) do
@@ -2824,6 +2840,8 @@ defmodule SymphonyElixir.Orchestrator do
     repo_key = Map.fetch!(dispatch, :repo_key)
     runner_opts = Map.get(dispatch, :runner_opts, [])
     running_attrs = Map.get(dispatch, :running_attrs, %{})
+    # Read from the current workflow on every dispatch, so a config edit applies to the next run.
+    run_profile = AgentRunner.run_profile(issue, Config.settings_for_repo!(repo_key), repo_key: repo_key)
 
     case Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
            opts =
@@ -2832,6 +2850,7 @@ defmodule SymphonyElixir.Orchestrator do
                repo_key: repo_key,
                worker_host: worker_host,
                run_id: run_id,
+               run_profile: run_profile,
                verification: verification,
                active_workspace_identifiers: sibling_active_workspace_identifiers(state, issue.id, repo_key)
              ] ++ runner_opts
@@ -2842,7 +2861,11 @@ defmodule SymphonyElixir.Orchestrator do
         ref = Process.monitor(pid)
         started_at = DateTime.utc_now()
 
-        Logger.info("Dispatching issue to agent: #{issue_context(issue)} pid=#{inspect(pid)} attempt=#{inspect(attempt)} worker_host=#{worker_host || "local"}")
+        slot = EpicLanes.slot_label(state.epic_lanes, issue.id, Map.keys(state.running))
+
+        Logger.info(
+          "Dispatching issue to agent: #{issue_context(issue)} pid=#{inspect(pid)} attempt=#{inspect(attempt)} worker_host=#{worker_host || "local"} slot=#{slot} #{run_profile_log_fields(run_profile)}"
+        )
 
         running_entry =
           %{
@@ -2853,6 +2876,7 @@ defmodule SymphonyElixir.Orchestrator do
             identifier: issue.identifier,
             issue: issue,
             worker_host: worker_host,
+            run_profile: run_profile,
             verification: verification,
             workspace_path: nil,
             session_id: nil,
@@ -2927,6 +2951,10 @@ defmodule SymphonyElixir.Orchestrator do
           worker_host: worker_host
         })
     end
+  end
+
+  defp run_profile_log_fields(%{kind: kind, model: model, effort: effort}) do
+    "run_kind=#{kind} model=#{model || "default"} effort=#{effort || "default"}"
   end
 
   defp state_reconcile_grace_until_ms do
@@ -4744,7 +4772,13 @@ defmodule SymphonyElixir.Orchestrator do
       pull_request_url: URLUtils.pull_request_url(running_entry) || URLUtils.pull_request_url(issue),
       updated_at: now
     }
+    |> Map.merge(run_profile_record(Map.get(running_entry, :run_profile)))
   end
+
+  defp run_profile_record(%{kind: kind, model: model, effort: effort}),
+    do: %{run_kind: Atom.to_string(kind), model: model, effort: effort}
+
+  defp run_profile_record(nil), do: %{}
 
   defp run_update_from_entry(running_entry) when is_map(running_entry) do
     issue = Map.get(running_entry, :issue)
@@ -5355,6 +5389,7 @@ defmodule SymphonyElixir.Orchestrator do
       workspace_lifecycle: workspace_lifecycle_snapshot(state),
       budget: budget_snapshot(state),
       dispatch_state: dispatch_state_snapshot(state),
+      epic_lanes: EpicLanes.snapshot(state.epic_lanes, epic_lane_running(state.running)),
       pollers: poller_status_snapshot(),
       polling: %{
         checking?: state.poll_check_in_progress == true,
@@ -5363,6 +5398,12 @@ defmodule SymphonyElixir.Orchestrator do
         linear: linear_rate_limit_snapshot(state)
       }
     }
+  end
+
+  defp epic_lane_running(running) do
+    Map.new(running, fn {issue_id, entry} ->
+      {issue_id, %{identifier: entry.identifier, state: entry.issue.state}}
+    end)
   end
 
   defp linear_rate_limit_snapshot(%State{} = state) do
@@ -6204,7 +6245,9 @@ defmodule SymphonyElixir.Orchestrator do
   defp rework_state?(_state_name), do: false
 
   defp dispatch_slots_available?(%Issue{} = issue, %State{} = state) do
-    available_slots(state) > 0 and state_slots_available?(issue, state.running)
+    available_slots(state) > 0 and
+      epic_lane_slot_available?(issue, state) and
+      state_slots_available?(issue, state.running)
   end
 
   defp put_running_entry(%State{} = state, issue_id, running_entry)

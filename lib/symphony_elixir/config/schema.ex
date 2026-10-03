@@ -786,6 +786,7 @@ defmodule SymphonyElixir.Config.Schema do
     embedded_schema do
       field(:kind, :string)
       field(:max_concurrent_agents, :integer, default: 10)
+      field(:epic_lanes, :integer)
       field(:max_turns, :integer, default: 20)
       field(:max_retry_backoff_ms, :integer, default: 300_000)
       field(:max_concurrent_agents_by_state, :map, default: %{})
@@ -821,6 +822,7 @@ defmodule SymphonyElixir.Config.Schema do
         [
           :kind,
           :max_concurrent_agents,
+          :epic_lanes,
           :max_turns,
           :max_retry_backoff_ms,
           :max_concurrent_agents_by_state,
@@ -847,6 +849,7 @@ defmodule SymphonyElixir.Config.Schema do
       |> validate_required([:kind, :command])
       |> validate_inclusion(:kind, ["codex", "claude"])
       |> validate_number(:max_concurrent_agents, greater_than: 0)
+      |> validate_epic_lanes()
       |> validate_number(:max_turns, greater_than: 0)
       |> validate_number(:max_retry_backoff_ms, greater_than: 0)
       |> validate_number(:max_tokens_per_issue, greater_than: 0)
@@ -867,6 +870,21 @@ defmodule SymphonyElixir.Config.Schema do
       |> cast_embed(:mcp, with: &Mcp.changeset/2)
       |> cast_embed(:network_access, with: &NetworkAccess.changeset/2)
       |> cast_embed(:sandbox_runtime, with: &SandboxRuntime.changeset/2)
+    end
+
+    # Lanes come out of `max_total`, so there can be at most that many; unset means every slot can be a lane.
+    defp validate_epic_lanes(changeset) do
+      case get_field(changeset, :max_concurrent_agents) do
+        max_total when is_integer(max_total) and max_total > 0 ->
+          validate_number(changeset, :epic_lanes,
+            greater_than_or_equal_to: 0,
+            less_than_or_equal_to: max_total,
+            message: "must be between 0 and agent.concurrency.max_total (#{max_total})"
+          )
+
+        _max_total ->
+          validate_number(changeset, :epic_lanes, greater_than_or_equal_to: 0)
+      end
     end
 
     defp validate_setting(changeset, field, check) do

@@ -788,6 +788,10 @@ Fields:
     this many times consecutively within one turn. The signature MUST include execution kind,
     command/tool name, and a stable hash of arguments. Any successful execution or different
     execution signature resets the count.
+- `concurrency.epic_lanes` (integer)
+  - Default: `concurrency.max_total`.
+  - How many slots active epics may reserve as lanes (Section 8.3). Must be between `0` and
+    `concurrency.max_total`; other values fail configuration validation.
 - `concurrency.max_by_issue_state` (map `state_name -> positive integer`)
   - Default: empty map.
   - State keys are normalized (`lowercase`) for lookup.
@@ -1354,6 +1358,7 @@ not require recognizing or validating extension fields unless that extension is 
 - `hooks.timeout_ms`: integer, default `60000`
 - `agent.concurrency.max_total`: integer, default `10`
 - `agent.concurrency.max_by_issue_state`: map of positive integers, default `{}`
+- `agent.concurrency.epic_lanes`: integer between `0` and `max_total`, default `max_total`
 - `agent.limits.max_turns`: integer, default `20`
 - `agent.limits.retry_backoff_max_ms`: integer, default `300000` (5m)
 - `agent.limits.max_consecutive_identical_tool_failures`: integer, default `5`; `0` disables
@@ -1366,7 +1371,10 @@ not require recognizing or validating extension fields unless that extension is 
 - `agent.run_profiles`: map of run kind to `{model, effort}`, default `{}`. Run kinds:
   `implementation`, `breakdown`, `close_out`, `final_verification`, `rework`, `landing`, `ci_fix`,
   `review_feedback`, `pre_push_review`, `qa`. Each field resolves to the profile value, else
-  `agent.model` / `agent.effort`, else null (nothing added).
+  `agent.model` / `agent.effort`, else null (nothing added). The run kind and profile are resolved
+  once per dispatch from the current config and kept for every continuation turn of that run. The
+  Claude runtime appends `--model <model>` and `--effort <effort>` to its argv; the Codex runtime
+  ignores both and logs a warning.
 - `agent.prompts.include_project_guides`: boolean, default `true`
 - `agent.prompts.project_guide_files`: list of relative paths or null, default `null`
 - `agent.permissions.approval_policy`: agent approval policy, default depends on `agent.runtime`
@@ -1658,6 +1666,20 @@ Per-state limit:
 - otherwise fallback to global limit
 
 The runtime counts issues by their current tracked state in the `running` map.
+
+Epic lanes:
+
+- An active epic is a `breakdown` parent waiting on its sub-issues with at least one sub-issue
+  approved and not finished (any state other than `Backlog`, `Triage` or a terminal state).
+- Active epics are ordered by the parent's priority, then the parent's creation time. The first
+  `min(epic_lanes, max_concurrent_agents)` of them each reserve one slot (a lane); the rest wait
+  for a lane. `epic_lanes` defaults to `max_concurrent_agents`.
+- `shared_slots = max_concurrent_agents - lane_count`.
+- A sub-issue of an epic with a lane runs in that lane when no other sub-issue of the epic is
+  running; otherwise it, and every other issue, needs a free shared slot.
+- A lane with nothing running stays reserved, so the epic's next sub-issue starts there as soon as
+  its blocker merges, even when the shared slots are full.
+- Lanes are recomputed from the candidate issues on every poll tick.
 
 ### 8.4 Retry and Backoff
 
@@ -2914,6 +2936,7 @@ After restart:
 - Retry timers SHOULD be re-created from durable retry queue rows when a durable store is enabled.
 - Previously running sessions are not assumed recoverable; they SHOULD remain visible in run history
   and MAY be marked failed/interrupted.
+- Run history records SHOULD include the run kind and the model and effort the run started with.
 - Service recovers by:
   - startup terminal workspace cleanup
   - durable retry queue hydration
@@ -3475,6 +3498,8 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 ### 17.4 Orchestrator Dispatch, Reconciliation, and Retry
 
 - Dispatch sort order is priority then oldest creation time
+- Each active epic reserves one lane out of `max_total`; a standalone issue cannot take a reserved
+  lane while the epic's current sub-issue is in review, and the next sub-issue starts in it
 - `Todo` issue with non-terminal blockers is not eligible
 - `Todo` issue with terminal blockers is eligible
 - `breakdown` issue with a non-terminal sub-issue is not eligible; once every sub-issue is
@@ -3507,7 +3532,8 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
   `agent.permissions.outer_sandbox`, the local wrapper uses `bash --noprofile --norc -c`.
 - Codex launch preserves configured args while injecting the generated `workspace_write`
   permission profile
-- Claude launch parses `agent.command`, appends stream-json print arguments, feeds prompt input over
+- Claude launch parses `agent.command`, appends stream-json print arguments and then the run
+  profile's `--model` / `--effort` (when set), feeds prompt input over
   stdin from a private temporary file, and enforces `agent.timeouts.command_ms` after streamed
   tool-use events.
 - Claude prompt text is not present in local process argv or remote SSH argv

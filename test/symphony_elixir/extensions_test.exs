@@ -557,6 +557,21 @@ defmodule SymphonyElixir.ExtensionsTest do
                "ci" => "unavailable",
                "pr_review" => "unavailable"
              },
+             "epic_lanes" => %{
+               "max_total" => 2,
+               "lanes" => [
+                 %{
+                   "issue_id" => "epic-http",
+                   "identifier" => "MT-EPIC",
+                   "title" => "Epic",
+                   "url" => "https://linear.test/MT-EPIC",
+                   "status" => "waiting",
+                   "sub_issue" => %{"issue_id" => "part-http", "identifier" => "MT-PART", "state" => "In Review"}
+                 }
+               ],
+               "queued_epics" => [],
+               "shared" => %{"slots" => 1, "used" => 1}
+             },
              "rate_limits" => %{"primary" => %{"remaining" => 11}}
            }
 
@@ -1554,6 +1569,47 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "deploy window"
     assert html =~ "2026-05-06T08:30:00Z"
     assert html =~ "Resume All"
+  end
+
+  test "dashboard liveview renders each epic lane and the shared pool" do
+    orchestrator_name = Module.concat(__MODULE__, :EpicLanesDashboardOrchestrator)
+
+    lanes = [
+      lane("e1", "MT-E1", "running", %{issue_id: "p1", identifier: "MT-P1", state: "In Progress"}),
+      lane("e2", "MT-E2", "waiting", %{issue_id: "p2", identifier: "MT-P2", state: "In Review"}),
+      %{issue_id: "e3", identifier: "MT-E3", title: "Epic three", url: nil, status: "waiting", sub_issue: nil}
+    ]
+
+    snapshot =
+      Map.put(static_snapshot(), :epic_lanes, %{
+        max_total: 4,
+        lanes: lanes,
+        queued_epics: [%{issue_id: "e4", identifier: "MT-E4", title: "Epic four", url: nil}],
+        shared: %{slots: 1, used: 1}
+      })
+
+    {:ok, _orchestrator_pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: snapshot)
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    {:ok, _view, html} = live(build_conn(), "/")
+
+    assert html =~ "Agent lanes"
+    assert html =~ "MT-P1 (In Progress)"
+    assert html =~ "Waiting on MT-P2 (In Review)"
+    assert html =~ "Waiting for its next sub-ticket"
+    assert html =~ "Idle, reserved"
+    assert html =~ "Waiting for a lane: MT-E4"
+    refute html =~ "No active epics"
+  end
+
+  test "dashboard liveview shows every slot as shared with no active epics" do
+    empty_name = Module.concat(__MODULE__, :NoEpicLanesDashboardOrchestrator)
+    {:ok, _pid} = StaticOrchestrator.start_link(name: empty_name, snapshot: Map.delete(static_snapshot(), :epic_lanes))
+    start_test_endpoint(orchestrator: empty_name, snapshot_timeout_ms: 50)
+
+    {:ok, _view, html} = live(build_conn(), "/")
+    assert html =~ "No active epics; every slot is shared."
+    refute html =~ "Waiting for a lane"
   end
 
   test "dashboard liveview renders operational dispatch_state blocker chips" do
@@ -2818,6 +2874,10 @@ defmodule SymphonyElixir.ExtensionsTest do
 
   defp refute_filter_attribute(html, filter), do: refute(html =~ ~s(data-filter-#{filter}="true"))
 
+  defp lane(issue_id, identifier, status, sub_issue) do
+    %{issue_id: issue_id, identifier: identifier, title: "Epic #{identifier}", url: "https://linear.test/#{identifier}", status: status, sub_issue: sub_issue}
+  end
+
   defp static_snapshot do
     %{
       running: [
@@ -2890,6 +2950,21 @@ defmodule SymphonyElixir.ExtensionsTest do
         daily_used: 400,
         daily_remaining: 600,
         daily_paused: false
+      },
+      epic_lanes: %{
+        max_total: 2,
+        lanes: [
+          %{
+            issue_id: "epic-http",
+            identifier: "MT-EPIC",
+            title: "Epic",
+            url: "https://linear.test/MT-EPIC",
+            status: "waiting",
+            sub_issue: %{issue_id: "part-http", identifier: "MT-PART", state: "In Review"}
+          }
+        ],
+        queued_epics: [],
+        shared: %{slots: 1, used: 1}
       },
       rate_limits: %{"primary" => %{"remaining" => 11}}
     }

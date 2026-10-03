@@ -179,6 +179,20 @@ final class ChildProcessTests: XCTestCase {
         XCTAssertTrue(waitUntilGone(grandchild), "grandchild \(grandchild) outlived its parent")
     }
 
+    func testExitCleansUpDescendantsWhoseParentExitedEarlier() throws {
+        // The middle process exits first, so the grandchild is reparented to launchd while later tree refreshes
+        // run. The same happens when Symphony exits and a refresh lands before the exit is handled.
+        let (_, exited, result) = try spawn(
+            "/usr/bin/perl -MPOSIX -e '$|=1; my $m = fork(); if (!$m) { my $p = fork(); if (!$p) { setsid(); exec q(/bin/sleep), 30 } print qq($p\\n); select(undef, undef, undef, 0.5); exit 0 } waitpid($m, 0); select(undef, undef, undef, 0.5); exit 7'"
+        )
+        let grandchild = try XCTUnwrap(pid_t(waitForLogLines(1)[0]))
+        wait(for: [exited], timeout: 10)
+
+        XCTAssertEqual(result()?.0, .exited(7))
+        XCTAssertEqual(result()?.1, false)
+        XCTAssertTrue(waitUntilGone(grandchild), "grandchild \(grandchild) outlived Symphony")
+    }
+
     func testStopAfterExitDoesNothing() throws {
         let (child, exited, result) = try spawn("exit 0")
         wait(for: [exited], timeout: 10)

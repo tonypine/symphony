@@ -69,6 +69,7 @@ agent:
   #   landing: { effort: low }
   concurrency:
     max_total: 10
+    # epic_lanes: 9   # slots in-progress epics may reserve (default: max_total)
     # max_by_issue_state:
     #   rework: 2
   limits:

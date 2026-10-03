@@ -543,6 +543,7 @@ defmodule SymphonyElixir.TestSupport do
           worker_max_concurrent_agents_per_host: nil,
           github: nil,
           max_concurrent_agents: 10,
+          epic_lanes: nil,
           max_turns: 20,
           max_retry_backoff_ms: 300_000,
           max_concurrent_agents_by_state: %{},
@@ -620,6 +621,7 @@ defmodule SymphonyElixir.TestSupport do
     worker_max_concurrent_agents_per_host = Keyword.get(config, :worker_max_concurrent_agents_per_host)
     github = Keyword.get(config, :github)
     max_concurrent_agents = Keyword.get(config, :max_concurrent_agents)
+    epic_lanes = Keyword.get(config, :epic_lanes)
     max_turns = Keyword.get(config, :max_turns)
     max_retry_backoff_ms = Keyword.get(config, :max_retry_backoff_ms)
     max_concurrent_agents_by_state = Keyword.get(config, :max_concurrent_agents_by_state)
@@ -700,7 +702,11 @@ defmodule SymphonyElixir.TestSupport do
         agent_yaml(%{
           kind: agent_kind,
           command: agent_command,
+          model: Keyword.get(config, :agent_model),
+          effort: Keyword.get(config, :agent_effort),
+          run_profiles: Keyword.get(config, :agent_run_profiles),
           max_concurrent_agents: max_concurrent_agents,
+          epic_lanes: epic_lanes,
           max_concurrent_agents_by_state: max_concurrent_agents_by_state,
           max_turns: max_turns,
           max_retry_backoff_ms: max_retry_backoff_ms,
@@ -878,9 +884,13 @@ defmodule SymphonyElixir.TestSupport do
       "agent:",
       "  runtime: #{yaml_value(config.kind)}",
       "  command: #{yaml_value(config.command)}",
+      config.model && "  model: #{yaml_value(config.model)}",
+      config.effort && "  effort: #{yaml_value(config.effort)}",
+      config.run_profiles && "  run_profiles: #{yaml_value(config.run_profiles)}",
       "  concurrency:",
       "    max_total: #{yaml_value(config.max_concurrent_agents)}",
       "    max_by_issue_state: #{yaml_value(config.max_concurrent_agents_by_state)}",
+      !is_nil(config.epic_lanes) && "    epic_lanes: #{yaml_value(config.epic_lanes)}",
       "  limits:",
       "    max_turns: #{yaml_value(config.max_turns)}",
       "    retry_backoff_max_ms: #{yaml_value(config.max_retry_backoff_ms)}",

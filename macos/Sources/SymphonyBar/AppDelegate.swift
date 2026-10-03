@@ -104,7 +104,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         runner.onEvent = { [weak self] event in self?.handle(event) }
         restarter.onChange = { [weak self] in self?.showStatus() }
         updater.onChange = { [weak self] in self?.showUpdateItems() }
-        poller.stateRoot = { [weak self] in self?.runner.stateRoot ?? StateRoot.locate() }
+        poller.stateRoot = { [weak self] in
+            self?.runner.stateRoot ?? StateRoot.locate(environment: AppStores.current.environment)
+        }
         poller.onPoll = { [weak self] poll in
             guard let self else { return StatusMachine.pollInterval }
             handle(.polled(poll))
@@ -121,8 +123,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             }
         }
 
-        // First run: nothing to start yet, so ask for settings. Reads only UserDefaults, not the Keychain.
-        let store = SettingsStore()
+        // First run: nothing to start yet, so ask for settings. Reads only the settings, not the secrets.
+        let store = AppStores.current.settingsStore()
         store.migrateDevelopmentMode(embeddedSymphonyAvailable: SymphonyRunner.hasEmbeddedSymphony)
         let settings = store.loadSettings()
         if settings.needsSetup {
@@ -378,7 +380,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     /// Why Update is off, nil when it is available.
     private var updateBlocker: String? {
-        updater.blocker(developmentMode: SettingsStore().loadSettings().developmentMode)
+        updater.blocker(developmentMode: AppStores.current.settingsStore().loadSettings().developmentMode)
     }
 
     /// Records the result of an update check. Background check failures change nothing; a check chosen by hand

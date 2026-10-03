@@ -37,6 +37,9 @@ defmodule SymphonyElixir.RunKind do
           | :pre_push_review
           | :qa
 
+  @typedoc "A run kind with the model and effort it resolves to; nil adds nothing to the agent command."
+  @type profile :: %{kind: t(), model: String.t() | nil, effort: String.t() | nil}
+
   @kinds [
     :implementation,
     :breakdown,
