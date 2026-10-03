@@ -844,12 +844,24 @@ seconds later fails, with the AX tree quoted and a screenshot attached.
 
 The screenshot and accessibility tools run in a small helper app, `SymphonyQADriver.app`, which
 holds the Screen Recording and Accessibility grants. Symphony opens it through LaunchServices
-(`open -a`) and talks to it over a Unix socket in a `0700` directory under
-`<state root>/qa-driver/run/`. The helper answers only the Symphony process that opened it, only
-for apps that process launched, and quits when Symphony does. It refuses to serve an owner that is
-not an Erlang VM (`beam.smp`) or that another Erlang VM started. Every process an agent runs
-descends from Symphony's VM, so an agent cannot open its own helper and make itself the owner. The
-helper also refuses its screenshot and accessibility commands when it is opened with them directly,
+(`open -a`) and talks to it over a Unix socket in one fixed `0700` directory,
+`~/Library/Application Support/symphony/qa-driver/run/`, whatever the state root. The helper
+answers only the Symphony process that opened it, only for apps that process launched, and quits
+when Symphony does.
+
+The helper does not trust the process tree to tell Symphony from an agent: an agent can leave it,
+for example with a double fork or `nohup … &`. Before it opens the helper, Symphony leaves an
+owner file, `qa-<pid>.owner`, in the run directory. The helper serves only an owner whose file it
+finds there (it removes the file), only on that owner's socket in the same directory, and only an
+Erlang VM (`beam.smp`) that no other Erlang VM started. Agent sandboxes cannot write the run
+directory, so an agent cannot make itself the owner, nor put its own socket where Symphony
+connects. This holds only while the run directory stays out of the sandbox's writable paths: do
+not add it, or a parent of it, to `permissions.filesystem.allow_write_paths`, and do not run agents
+without a sandbox on a Mac where the helper has its grants. When the run directory path is longer
+than a Unix socket path allows (a very long home directory), the QA tools fail with
+`socket_path_too_long`.
+
+The helper also refuses its screenshot and accessibility commands when it is opened with them directly,
 for example `open -a SymphonyQADriver.app --args screenshot …`: it runs them only for its own
 `serve` process. `Symphony.app` ships it signed at
 `Symphony.app/Contents/Helpers/SymphonyQADriver.app`. When Symphony runs from a terminal, it

@@ -8,8 +8,15 @@ defmodule SymphonyElixir.QaDriver.Host do
   (or the terminal running Symphony) would reach every coding agent too. The
   helper is therefore never spawned from here: it is opened through LaunchServices
   (`open -a`), which makes it its own responsible process, and it answers over a
-  Unix socket in a `0700` directory, only to this Symphony process and only about
-  processes this Symphony process started.
+  Unix socket, only to this Symphony process and only about processes this
+  Symphony process started.
+
+  The socket lives in a fixed `0700` run directory,
+  `~/Library/Application Support/symphony/qa-driver/run`, that agent sandboxes
+  cannot write, whatever the state root. Before opening the helper, Symphony
+  leaves `qa-<pid>.owner` there. The helper serves only an owner whose file it
+  finds, and removes the file, so an agent cannot open a helper that serves it,
+  or plant a socket that answers this process.
 
   Symphony.app ships the helper signed at `Contents/Helpers/SymphonyQADriver.app`
   and passes its path in `SYMPHONY_QA_DRIVER_APP`, so a grant survives app
@@ -37,6 +44,7 @@ defmodule SymphonyElixir.QaDriver.Host do
   @quit_grace_ms 3_000
   @helper_start_ms 15_000
   @socket_path_limit 103
+  @run_dir ["Library", "Application Support", "symphony", "qa-driver", "run"]
 
   @doc "The host functions `QaDriver` uses unless a test overrides them."
   @spec default() :: SymphonyElixir.QaDriver.host()
@@ -204,17 +212,20 @@ defmodule SymphonyElixir.QaDriver.Host do
     end
   end
 
-  # One helper per Symphony process. A long state root falls back to the
-  # per-user temporary directory, since Unix socket paths are short.
+  # One helper per Symphony process, in the run directory the helper accepts.
+  # Never a temporary directory: agents can write there.
   defp socket_path do
-    name = "qa-#{System.pid()}.sock"
-    run_dir = Path.join([Paths.state_root(), "qa-driver", "run"])
-    dir = if byte_size(Path.join(run_dir, name)) <= @socket_path_limit, do: run_dir, else: Path.join(System.tmp_dir!(), "symphony-qa")
+    dir = Path.join([System.user_home!() | @run_dir])
+    path = Path.join(dir, "qa-#{System.pid()}.sock")
 
+    if byte_size(path) <= @socket_path_limit, do: private_dir(dir, path), else: {:error, {:socket_path_too_long, path}}
+  end
+
+  defp private_dir(dir, path) do
     with :ok <- File.mkdir_p(dir),
          :ok <- File.chmod(dir, 0o700),
          {:ok, %File.Stat{type: :directory}} <- File.lstat(dir) do
-      {:ok, Path.join(dir, name)}
+      {:ok, path}
     else
       {:ok, _stat} -> {:error, {:unsafe_socket_dir, dir}}
       {:error, reason} -> {:error, {:socket_dir, dir, reason}}
@@ -228,15 +239,24 @@ defmodule SymphonyElixir.QaDriver.Host do
     end
   end
 
-  # Under the lock another caller may have opened the helper already.
+  # Under the lock another caller may have opened the helper already. The helper
+  # removes the owner file when it accepts it; one it never read goes here.
   defp start_helper(app, socket_path) do
-    with {:error, _reason} <- connect(socket_path) do
+    owner_file = Path.rootname(socket_path) <> ".owner"
+
+    with {:error, _reason} <- connect(socket_path),
+         :ok <- File.write(owner_file, ""),
+         :ok <- File.chmod(owner_file, 0o600) do
       args = ["-g", "-j", "-n", "-a", app, "--args", "serve", socket_path, System.pid()]
 
-      case System.cmd("/usr/bin/open", args, stderr_to_stdout: true) do
-        {_output, 0} -> wait_for_helper(socket_path, System.monotonic_time(:millisecond) + @helper_start_ms)
-        {output, status} -> {:error, {:open_failed, status, String.trim(output)}}
-      end
+      result =
+        case System.cmd("/usr/bin/open", args, stderr_to_stdout: true) do
+          {_output, 0} -> wait_for_helper(socket_path, System.monotonic_time(:millisecond) + @helper_start_ms)
+          {output, status} -> {:error, {:open_failed, status, String.trim(output)}}
+        end
+
+      File.rm(owner_file)
+      result
     end
   end
 

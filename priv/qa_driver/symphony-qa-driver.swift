@@ -10,9 +10,13 @@
 //   serve <socket> <owner pid>
 //
 // listens on a Unix socket and answers only the owner (the Symphony process that
-// launched it), and exits when the owner does. The owner must be a BEAM that no
-// other BEAM started, so an agent (which descends from Symphony's BEAM) cannot
-// open its own helper and name itself, or an Erlang VM it starts, the owner.
+// launched it), and exits when the owner does. The socket must be
+// `qa-<owner pid>.sock` in the run directory, `~/Library/Application
+// Support/symphony/qa-driver/run`, which must be a `0700` directory of this
+// user, and Symphony must have left `qa-<owner pid>.owner` there first. Agent
+// sandboxes cannot write that directory, so an agent cannot name itself, or a
+// process it starts, the owner, even one it moved out of Symphony's process
+// tree. The owner must also be a BEAM that no other BEAM started.
 // Each connection sends one JSON line `{"args": [...]}` and gets back
 // `{"status", "output"}`: the result of running one of the commands below in a
 // child of the helper, which keeps the helper's grants. Commands that take a PID only run for a process that descends
@@ -326,6 +330,26 @@ func symphonyOwner(_ owner: pid_t) -> Bool {
     return false
 }
 
+func runDirectory() -> String? {
+    guard let entry = getpwuid(getuid()), let home = entry.pointee.pw_dir else { return nil }
+    return String(cString: home) + "/Library/Application Support/symphony/qa-driver/run"
+}
+
+func privateEntry(_ path: String, type: mode_t) -> Bool {
+    var info = stat()
+    guard lstat(path, &info) == 0 else { return false }
+    return info.st_mode & S_IFMT == type && info.st_uid == getuid() && info.st_mode & 0o077 == 0
+}
+
+// Symphony leaves `qa-<owner>.owner` in the run directory before it opens the
+// helper. Only Symphony can write there, and the helper removes the file, so it
+// names one owner once.
+func claimedBy(_ path: String, owner: pid_t) -> Bool {
+    guard let dir = runDirectory(), path == "\(dir)/qa-\(owner).sock", privateEntry(dir, type: S_IFDIR) else { return false }
+    let marker = "\(dir)/qa-\(owner).owner"
+    return privateEntry(marker, type: S_IFREG) && unlink(marker) == 0
+}
+
 // A one-shot PID command runs only as the child `runCommand` starts, never when
 // the helper is opened (by LaunchServices, so its parent is launchd) or run
 // directly with one.
@@ -417,8 +441,8 @@ func ownerAlive(_ owner: pid_t) -> Bool {
 }
 
 func serve(_ path: String, owner: pid_t) -> Never {
-    guard symphonyOwner(owner) else {
-        fail("owner_not_allowed", "The helper only serves the Symphony process.")
+    guard symphonyOwner(owner), claimedBy(path, owner: owner) else {
+        fail("owner_not_allowed", "The helper only serves the Symphony process, on its socket in the run directory.")
     }
 
     let fd = socket(AF_UNIX, SOCK_STREAM, 0)

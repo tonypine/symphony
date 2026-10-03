@@ -1125,8 +1125,11 @@ When enabled:
   app that Symphony opens through LaunchServices, so that grants made to it are never inherited by
   Symphony or the agents it spawns. The helper MUST answer only the Symphony process that opened
   it, MUST NOT accept an owner that another Symphony process started, and MUST NOT run a screenshot
-  or accessibility command that its own server did not start. Other tool scopes MUST NOT list or
-  run the `qa_*` tools.
+  or accessibility command that its own server did not start. The helper MUST NOT tell Symphony
+  from an agent by the process tree alone: it MUST accept an owner only on proof the agent sandbox
+  cannot forge (an owner file in a fixed run directory the sandbox cannot write), and Symphony
+  MUST NOT put the helper's socket in a directory an agent can write. Other tool scopes MUST NOT
+  list or run the `qa_*` tools.
 - The QA agent MUST run in a fresh detached worktree at the PR head SHA, outside the issue
   workspace, removed afterwards, with a tool scope limited to read-only Linear/GitHub tools and
   `linear_attach_file`. It answers with JSON: `verdict` (`pass`, `fail` or `blocked`), `summary`,
