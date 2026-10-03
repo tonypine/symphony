@@ -5,6 +5,14 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
 
   @run_profiles %{"breakdown" => %{"effort" => "high"}}
 
+  defmodule FakeParentWalkthrough do
+    def run(issue, workspace, opts) do
+      recipient = Application.fetch_env!(:symphony_elixir, :parent_walkthrough_recipient)
+      send(recipient, {:parent_walkthrough, issue, workspace, opts})
+      Application.fetch_env!(:symphony_elixir, :parent_walkthrough_result)
+    end
+  end
+
   setup do
     test_root = Path.join(System.tmp_dir!(), "symphony-run-profile-#{System.unique_integer([:positive])}")
     fake_claude = Path.join(test_root, "fake-claude")
@@ -220,6 +228,35 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
       assert [first, second] = argv_lines(ctx.argv_trace)
       assert String.ends_with?(first, "--print --model claude-opus-5-5 --effort medium")
       assert String.ends_with?(second, "--print --model claude-opus-5-5 --effort medium")
+    end
+
+    test "a final verification ticket the parent walkthrough handles starts no agent", ctx do
+      write_profile_workflow!(ctx)
+      workspace = Path.join([ctx.test_root, "workspaces", "MT-FV"])
+      File.mkdir_p!(workspace)
+      run_issue = issue("issue-fv", "MT-FV", %{state: "In Progress", title: "Final verification: Parent"})
+      Application.put_env(:symphony_elixir, :parent_walkthrough_recipient, self())
+      Application.put_env(:symphony_elixir, :parent_walkthrough_result, :ok)
+
+      on_exit(fn ->
+        Application.delete_env(:symphony_elixir, :parent_walkthrough_recipient)
+        Application.delete_env(:symphony_elixir, :parent_walkthrough_result)
+      end)
+
+      assert :ok =
+               AgentRunner.run(run_issue, self(),
+                 workspace_path: workspace,
+                 parent_walkthrough: FakeParentWalkthrough,
+                 issue_enricher: fn issue -> {:ok, issue} end
+               )
+
+      assert_received {:parent_walkthrough, %Issue{identifier: "MT-FV"}, ^workspace, opts}
+      assert opts[:worker_host] == nil
+      assert %Config.Schema{} = opts[:settings]
+      on_message = Keyword.fetch!(opts, :on_message)
+      on_message.(%{event: :notification})
+      assert_received {:codex_worker_update, "issue-fv", %{event: :notification}}
+      assert argv_lines(ctx.argv_trace) == []
     end
 
     test "with no model, effort or run profiles, Claude's argv is unchanged", ctx do

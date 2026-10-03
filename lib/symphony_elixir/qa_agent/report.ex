@@ -26,17 +26,22 @@ defmodule SymphonyElixir.QaAgent.Report do
   `:fail`, `:blocked` or `:skip`), `:sha`, `:target_state`, and optionally
   `:summary`, `:steps`, `:findings`, `:reason`, `:playbooks`, `:tokens`,
   `:runtime_seconds`, `:follow_ups`, `:escalated` and `:fix_attempt`/`:max_fix_attempts`.
+
+  A parent walkthrough also passes `:ref` (the branch the commit heads, in place of a PR),
+  `:target_issue` (the identifier of the verification ticket `:target_state` applies to) and
+  `:filed` (the tickets filed for failing steps, as `%{identifier, title}`).
   """
   @spec render(map()) :: String.t()
   def render(outcome) when is_map(outcome) do
     [
       @heading,
       "",
-      "**Verdict:** #{verdict_label(outcome)} → #{outcome.target_state}",
-      "**PR head:** `#{String.slice(outcome.sha || "", 0, 12)}`#{meta_suffix(outcome)}",
+      "**Verdict:** #{verdict_label(outcome)} → #{target_label(outcome)}",
+      "#{head_label(outcome)}#{meta_suffix(outcome)}",
       summary_block(outcome),
       steps_block(Map.get(outcome, :steps, [])),
       findings_block(Map.get(outcome, :findings, [])),
+      filed_block(Map.get(outcome, :filed, [])),
       "_Symphony rewrites this comment on every QA pass._"
     ]
     |> Enum.reject(&(&1 == nil))
@@ -52,6 +57,14 @@ defmodule SymphonyElixir.QaAgent.Report do
 
   defp verdict_label(%{verdict: :skip}), do: "skipped"
   defp verdict_label(%{verdict: verdict}), do: Atom.to_string(verdict)
+
+  defp target_label(%{target_issue: identifier, target_state: state}) when is_binary(identifier), do: "#{identifier} #{state}"
+  defp target_label(outcome), do: outcome.target_state
+
+  defp head_label(%{ref: ref} = outcome) when is_binary(ref), do: "**Commit:** `#{short_sha(outcome)}` (head of `#{ref}`)"
+  defp head_label(outcome), do: "**PR head:** `#{short_sha(outcome)}`"
+
+  defp short_sha(outcome), do: String.slice(outcome.sha || "", 0, 12)
 
   defp meta_suffix(outcome) do
     [
@@ -111,6 +124,12 @@ defmodule SymphonyElixir.QaAgent.Report do
 
   defp findings_block([]), do: nil
   defp findings_block(findings), do: Enum.join(["### Findings", "" | Enum.map(findings, &("- " <> &1))], "\n") <> "\n"
+
+  defp filed_block([]), do: nil
+
+  defp filed_block(filed) do
+    Enum.join(["### Filed tickets", "" | Enum.map(filed, &"- #{&1.identifier} #{&1.title}")], "\n") <> "\n"
+  end
 
   defp truncate(text) when byte_size(text) > @details_limit, do: binary_part(text, 0, @details_limit) <> "\n[... truncated ...]"
   defp truncate(text), do: text

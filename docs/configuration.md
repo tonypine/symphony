@@ -742,6 +742,27 @@ Results are kept per PR head SHA. With `run_on: first_pass`, once a push has pas
 pushes on the PR skip it. `max_concurrent` caps how many QA passes run at once, and
 `agent.concurrency.finishing_max` caps it again. QA passes never use the agent slots.
 
+#### Parent walkthrough
+
+A parent's `Final verification:` sub-ticket gets a QA-only run instead of an executor agent. Once
+the other sub-tickets have merged and the ticket is dispatched, Symphony runs the QA agent in a
+fresh worktree at the head of `origin/<base_branch>`, with the parent as the issue under test:
+it walks the parent's acceptance criteria and `## User walkthrough` plus the verification
+ticket's checklist (breakdown runs copy the walkthrough under `## Auto Review: parent
+walkthrough`), and attaches its evidence to the parent. There is no PR to diff, so `qa:<kind>`
+labels on the ticket or the parent choose the playbooks, and every enabled playbook runs without
+one.
+
+- the `## Symphony QA Report` is written on the parent and on the verification ticket;
+- `pass` and `blocked` → the verification ticket goes to `In Review` for a human to sign off;
+- `fail` → each failing step (or each finding, when no step failed) is filed as a `Backlog`
+  sub-ticket of the verification ticket that names the step and holds its details and evidence,
+  the report lists them, and the verification ticket goes to `Backlog` until a human re-promotes
+  it. There is no fix loop.
+
+The ticket gets the usual executor run when the tracker is not Linear, the run is on a remote
+worker, it has the `qa:skip` label, or it has no parent.
+
 `playbooks` overrides playbooks per kind:
 
 ```yaml

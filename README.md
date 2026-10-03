@@ -85,6 +85,8 @@ branch instead of opening a second one. If a claimed issue moves to a terminal s
   plan by moving the parent to `Waiting on sub-tickets` and Symphony promotes every `Backlog`
   sub-ticket to `Todo`; move it to `Rework` to have the plan made again. The parent waits without
   being re-dispatched until every sub-ticket is closed, then closes out with a Linear project update.
+  With Auto Review on, the final verification ticket is a QA pass over the merged parent: the report
+  goes on the parent and each failing step becomes a new ticket.
 - **Executor + reviewer runs** — an optional read-only reviewer agent gates the executor's push.
 - **Docker runner** — host Symphony with mounted repos, state, logs, and agent credentials.
 - **macOS menu bar app** — start, stop, pause, and resume Symphony from the menu bar, with its status in

@@ -11,6 +11,7 @@ defmodule SymphonyElixir.AgentRunner do
     AgentTools.Linear.CommentRegistry,
     AuditLog,
     AutoReview,
+    AutoReview.ParentWalkthrough,
     CiPoller,
     Config,
     DependencyAudit,
@@ -144,7 +145,7 @@ defmodule SymphonyElixir.AgentRunner do
                          |> Keyword.put(:worker_host, worker_host)
                          |> Keyword.put(:comment_registry, linear_comment_registry)
                        ) do
-                  run_codex_turns(
+                  run_issue(
                     workspace,
                     bootstrapped_issue,
                     codex_update_recipient,
@@ -374,6 +375,20 @@ defmodule SymphonyElixir.AgentRunner do
 
       nil ->
         CommentRegistry.start_link(seed_ids: seed_ids)
+    end
+  end
+
+  # A `Final verification:` ticket gets the Auto Review parent walkthrough in place of executor
+  # turns when it applies (see `SymphonyElixir.AutoReview.ParentWalkthrough`).
+  defp run_issue(workspace, issue, codex_update_recipient, opts, worker_host) do
+    walkthrough_opts =
+      opts
+      |> Keyword.put(:worker_host, worker_host)
+      |> Keyword.put(:on_message, codex_message_handler(codex_update_recipient, issue))
+
+    case Keyword.get(opts, :parent_walkthrough, ParentWalkthrough).run(issue, workspace, walkthrough_opts) do
+      :skip -> run_codex_turns(workspace, issue, codex_update_recipient, opts, worker_host)
+      result -> result
     end
   end
 
