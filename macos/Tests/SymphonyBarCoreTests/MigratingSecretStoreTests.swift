@@ -2,11 +2,10 @@ import Security
 import XCTest
 @testable import SymphonyBarCore
 
-/// A Keychain stand-in that counts reads and can fail them or the deletes.
+/// A Keychain stand-in that counts reads and can fail them.
 private final class LegacyKeychain: SecretStore {
     var values: [String: String] = [:]
     var readError: Error?
-    var deleteError: Error?
     private(set) var reads = 0
 
     func value(forAccount account: String) throws -> String? {
@@ -17,10 +16,7 @@ private final class LegacyKeychain: SecretStore {
 
     func setValue(_ value: String, forAccount account: String) throws { values[account] = value }
 
-    func removeValue(forAccount account: String) throws {
-        if let deleteError { throw deleteError }
-        values[account] = nil
-    }
+    func removeValue(forAccount account: String) throws { values[account] = nil }
 
     func accounts() throws -> [String] { values.keys.sorted() }
 }
@@ -59,12 +55,13 @@ final class MigratingSecretStoreTests: XCTestCase {
         )
     }
 
-    func testMovesBothKeysAndExtraVariablesOutOfTheKeychainOnce() throws {
-        keychain.values = [
+    func testCopiesBothKeysAndExtraVariablesOutOfTheKeychainOnce() throws {
+        let legacy = [
             SecretSettings.linearAPIKeyName: "lin_api_1",
             SecretSettings.openRouterAPIKeyName: "sk-or-v1-1",
             "GITHUB_TOKEN": "ghp-1",
         ]
+        keychain.values = legacy
         let settings = SettingsStore(defaults: MemoryKeyValueStore(), secrets: store)
 
         XCTAssertEqual(
@@ -75,7 +72,8 @@ final class MigratingSecretStoreTests: XCTestCase {
                 extraEnvironment: [EnvironmentVariable(name: "GITHUB_TOKEN", value: "ghp-1")]
             )
         )
-        XCTAssertEqual(keychain.values, [:])
+        // The items stay, so the previous version still finds them after a rollback.
+        XCTAssertEqual(keychain.values, legacy)
         XCTAssertEqual(keychain.reads, 3)
         let attributes = try FileManager.default.attributesOfItem(atPath: store.file.file.path)
         XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
@@ -118,16 +116,19 @@ final class MigratingSecretStoreTests: XCTestCase {
 
         keychain.readError = nil
         XCTAssertEqual(try store.value(forAccount: SecretSettings.linearAPIKeyName), "lin_api_1")
-        XCTAssertEqual(keychain.values, [:])
+        XCTAssertTrue(fileExists)
+        XCTAssertEqual(keychain.values, [SecretSettings.linearAPIKeyName: "lin_api_1"])
     }
 
-    func testAFailedDeleteKeepsTheMigratedValues() throws {
-        keychain.values = [SecretSettings.linearAPIKeyName: "lin_api_1"]
-        keychain.deleteError = KeychainError(status: errSecAuthFailed)
+    func testChangesAfterTheCopyLeaveTheKeychainItemsAsTheyWere() throws {
+        keychain.values = [SecretSettings.linearAPIKeyName: "lin_api_1", "GITHUB_TOKEN": "ghp-1"]
 
-        XCTAssertEqual(try store.value(forAccount: SecretSettings.linearAPIKeyName), "lin_api_1")
+        try store.setValue("lin_api_2", forAccount: SecretSettings.linearAPIKeyName)
+        try store.removeValue(forAccount: "GITHUB_TOKEN")
+
         XCTAssertEqual(try store.accounts(), [SecretSettings.linearAPIKeyName])
-        XCTAssertEqual(keychain.reads, 1)
+        XCTAssertEqual(try store.value(forAccount: SecretSettings.linearAPIKeyName), "lin_api_2")
+        XCTAssertEqual(keychain.values, [SecretSettings.linearAPIKeyName: "lin_api_1", "GITHUB_TOKEN": "ghp-1"])
     }
 
     func testAFailedFileWriteLeavesTheKeychainItems() throws {

@@ -136,9 +136,9 @@ public final class MigratingSecretStore: SecretStore {
         return try file.accounts()
     }
 
-    /// Until the file exists: copies every Keychain item into it, then deletes the items. Once it exists the
-    /// Keychain is never touched again. A failed Keychain read throws before the file is written, so the next
-    /// use tries again. A failed delete is ignored: the file holds the value, and the item is never read again.
+    /// Until the file exists: copies every Keychain item into it. Once it exists the Keychain is never touched
+    /// again. A failed Keychain read throws before the file is written, so the next use tries again. The items
+    /// stay in the Keychain, so a build from before the secrets file still finds them after a rollback.
     private func migrateIfNeeded() throws {
         lock.lock()
         defer { lock.unlock() }
@@ -150,8 +150,5 @@ public final class MigratingSecretStore: SecretStore {
             values[account] = try keychain.value(forAccount: account) ?? ""
         }
         try file.save(values)
-        for account in accounts {
-            try? keychain.removeValue(forAccount: account)
-        }
     }
 }

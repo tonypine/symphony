@@ -217,7 +217,7 @@ set (or, in Development mode, no checkout folder).
 
 Earlier versions kept these in the login Keychain, which asked for the password again after every update.
 The first time a version with the secrets file reads them, it copies each `symphony` Keychain item into the
-file and deletes the item; after that it never reads the Keychain. That one read may still ask for Keychain
+file and leaves the item in place; after that it never reads the Keychain. That one read may still ask for Keychain
 access; choose Allow. Start, Restart and Update read the secrets without blocking the menu: while macOS waits
 for the password, the menu shows "Waiting for Keychain access…".
 
@@ -411,7 +411,9 @@ kept. To go back to it:
    mv "Symphony (previous).app" Symphony.app
    ```
 
-3. Open `Symphony.app` and start Symphony. Your settings and stored variables carry over. Delete
+3. Open `Symphony.app` and start Symphony. Your settings and stored variables carry over. A version from
+   before the secrets file reads the variables from the login Keychain instead, as they were when they were
+   copied into the file, so a variable changed in Settings since then has its old value there. Delete
    `Symphony (rolled back).app` once you no longer need it.
 
 The app then offers the newer release again as an update. To install an older release than the previous
@@ -517,12 +519,12 @@ checkout's Symphony; turn on Development mode in Settings." Saving Settings leav
   Apple, so macOS blocks a downloaded copy that still has the quarantine flag. Open System Settings →
   Privacy & Security and click Open Anyway, or clear the flag with
   `xattr -dr com.apple.quarantine ~/Applications/Symphony.app`. The install script clears it for you.
-- **macOS asks for Keychain access.** It asks once, when the first version with the secrets file moves the
+- **macOS asks for Keychain access.** It asks once, when the first version with the secrets file copies the
   variables an earlier version kept in the login Keychain into
   `~/Library/Application Support/symphony/release/secrets.json`: enter your login password and choose Allow.
   It doesn't ask again, after updates or rebuilds. While the prompt waits, the menu shows "Waiting for
   Keychain access…" and Start stays off; if you can't see the prompt, look behind other windows. If you deny
-  it, nothing is moved and the next Start asks again.
+  it, nothing is copied and the next Start asks again.
 - **Start Symphony shows a message instead of starting.** The app checks the settings before it starts
   Symphony. "Linear API key not set" and the path messages are fixed in Settings. "This build has no
   embedded Symphony" means a local `make` build: turn on Development mode and set the checkout folder.
