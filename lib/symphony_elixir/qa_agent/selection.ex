@@ -15,6 +15,10 @@ defmodule SymphonyElixir.QaAgent.Selection do
   Built-in playbooks ship as `priv/qa_playbooks/<kind>.md`. `auto_review.playbooks`
   can override a built-in's `paths`, turn it off with `enabled: false`, or add a new
   kind with `paths` and `prompt`.
+
+  The built-in `macos_app` playbook is on only when its config names the `build`
+  command and the `app` bundle (relative to the repo root) that the host-side
+  `qa_*` tools of `SymphonyElixir.QaDriver` build and launch.
   """
 
   alias SymphonyElixir.Linear.Issue
@@ -44,7 +48,7 @@ defmodule SymphonyElixir.QaAgent.Selection do
   )
 
   @source_root Path.expand(Path.join([__DIR__, "..", "..", "..", "priv", "qa_playbooks"]))
-  @built_in_kinds ~w(cli)
+  @built_in_kinds ~w(cli macos_app)
 
   for kind <- @built_in_kinds do
     @external_resource Path.join(@source_root, kind <> ".md")
@@ -55,13 +59,24 @@ defmodule SymphonyElixir.QaAgent.Selection do
                      end)
 
   @built_in_paths %{
-    "cli" => ["bin/**", "lib/symphony_elixir/cli.ex", "lib/mix/tasks/**"]
+    "cli" => ["bin/**", "lib/symphony_elixir/cli.ex", "lib/mix/tasks/**"],
+    "macos_app" => ["**/*.swift", "**/Info.plist", "**/*.xib", "**/*.storyboard", "**/*.xcassets/**"]
   }
+
+  # Playbooks that need host-side settings before they can run.
+  @required_settings %{"macos_app" => ["build", "app"]}
 
   # Playbooks the ticket's `## User walkthrough` section selects.
   @walkthrough_kinds ["cli"]
 
-  @type playbook :: %{kind: String.t(), paths: [String.t()], prompt: String.t()}
+  @type playbook :: %{
+          required(:kind) => String.t(),
+          required(:paths) => [String.t()],
+          required(:prompt) => String.t(),
+          optional(:build) => String.t(),
+          optional(:app) => String.t(),
+          optional(:build_timeout_ms) => pos_integer() | nil
+        }
   @type decision :: {:run, [playbook()]} | {:skip, String.t()}
 
   @doc "Selects playbooks for `issue` given the PR's changed paths and `auto_review` config."
@@ -125,12 +140,30 @@ defmodule SymphonyElixir.QaAgent.Selection do
     prompt = string_value(Map.get(override, "prompt")) || Map.get(@built_in_prompts, kind)
     paths = string_list(Map.get(override, "paths")) || Map.get(@built_in_paths, kind, [])
 
-    if Map.get(override, "enabled") == false or is_nil(prompt) do
-      []
-    else
-      [%{kind: kind, paths: paths, prompt: prompt}]
+    cond do
+      Map.get(override, "enabled") == false or is_nil(prompt) -> []
+      not required_settings?(kind, override) -> []
+      true -> [put_host_settings(%{kind: kind, paths: paths, prompt: prompt}, kind, override)]
     end
   end
+
+  defp required_settings?(kind, override) do
+    @required_settings
+    |> Map.get(kind, [])
+    |> Enum.all?(&string_value(Map.get(override, &1)))
+  end
+
+  defp put_host_settings(playbook, "macos_app", override) do
+    timeout = Map.get(override, "build_timeout_ms")
+
+    Map.merge(playbook, %{
+      build: Map.fetch!(override, "build"),
+      app: Map.fetch!(override, "app"),
+      build_timeout_ms: if(is_integer(timeout) and timeout > 0, do: timeout)
+    })
+  end
+
+  defp put_host_settings(playbook, _kind, _override), do: playbook
 
   defp labelled_playbooks(playbooks, labels) do
     Enum.filter(playbooks, &((@label_prefix <> &1.kind) in labels))

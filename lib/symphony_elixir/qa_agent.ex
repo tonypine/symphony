@@ -11,12 +11,14 @@ defmodule SymphonyElixir.QaAgent do
 
   The agent follows the selected playbooks (see `SymphonyElixir.QaAgent.Selection`),
   writes evidence under `qa-evidence/`, and answers with one JSON object:
-  `pass | fail | blocked` with per-step results.
+  `pass | fail | blocked` with per-step results. A pass that runs the `macos_app`
+  playbook also gets the host-side `qa_*` tools of a `SymphonyElixir.QaDriver`,
+  stopped (quitting every app it launched) when the pass ends.
   """
 
   require Logger
 
-  alias SymphonyElixir.{AgentTelemetry, AgentTools, PromptSafety, ReviewAgent, Workspace}
+  alias SymphonyElixir.{AgentTelemetry, AgentTools, PromptSafety, QaDriver, ReviewAgent, Workspace}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Issue
 
@@ -254,7 +256,13 @@ defmodule SymphonyElixir.QaAgent do
     case resolve_agent_module(opts, qa_settings.agent.kind) do
       {:ok, agent_module} ->
         prompt = prompt(job, fetch_parent(job, worktree, settings, opts))
-        run_tracked_session(agent_module, job, worktree, qa_settings, prompt, opts)
+        driver = start_driver(job, worktree, opts)
+
+        try do
+          run_tracked_session(agent_module, job, worktree, qa_settings, prompt, Keyword.put(opts, :qa_driver, driver))
+        after
+          QaDriver.stop(driver)
+        end
 
       {:error, reason} ->
         {:error, reason, empty_tokens()}
@@ -285,7 +293,8 @@ defmodule SymphonyElixir.QaAgent do
       repo_key: Map.get(job, :repo_key),
       run_id: Map.get(job, :run_id),
       run_profile: Map.get_lazy(job, :run_profile, fn -> SymphonyElixir.Config.qa_profile(qa_settings) end),
-      tool_scope: :qa
+      tool_scope: :qa,
+      qa_driver: Keyword.get(opts, :qa_driver)
     ]
 
     case agent_module.start_session(worktree, session_opts) do
@@ -375,6 +384,19 @@ defmodule SymphonyElixir.QaAgent do
       output_tokens: 0,
       total_tokens: 0
     }
+  end
+
+  # The `qa_*` host tools exist only for a pass that runs the `macos_app` playbook.
+  defp start_driver(job, worktree, opts) do
+    case Enum.find(job.playbooks, &(Map.get(&1, :kind) == "macos_app")) do
+      nil ->
+        nil
+
+      playbook ->
+        driver_opts = [worktree: worktree, playbook: playbook, git: Keyword.get(opts, :git, &default_git/2)]
+        {:ok, driver} = QaDriver.start_link(Keyword.merge(driver_opts, Keyword.get(opts, :qa_driver_opts, [])))
+        driver
+    end
   end
 
   defp fetch_parent(job, worktree, settings, opts) do

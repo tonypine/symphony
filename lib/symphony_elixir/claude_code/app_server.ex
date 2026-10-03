@@ -515,7 +515,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
   defp tool_opts(opts) do
     opts
-    |> Keyword.take([:linear_client, :upload_client, :gh_runner, :git_runner, :settings, :tool_scope])
+    |> Keyword.take([:linear_client, :upload_client, :gh_runner, :git_runner, :settings, :tool_scope, :qa_driver])
   end
 
   defp install_remote_shim(_mcp_session, nil), do: {:ok, nil}

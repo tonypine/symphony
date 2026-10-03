@@ -405,6 +405,27 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       assert message =~ "JSON verdict"
     end
 
+    test "only the QA scope lists and runs the host-side qa tools" do
+      qa_tools = Enum.map(DynamicTool.tool_specs(:qa), & &1["name"])
+
+      for tool <- SymphonyElixir.QaDriver.tools() do
+        assert tool in qa_tools
+        refute tool in Enum.map(DynamicTool.tool_specs(), & &1["name"])
+        refute tool in Enum.map(DynamicTool.tool_specs(:read_only), & &1["name"])
+      end
+
+      response = DynamicTool.execute("qa_build", %{}, issue: %Issue{id: "issue-current"})
+      assert %{"error" => %{"code" => "tool_scope_rejected", "tool" => "qa_build", "message" => message}} = Jason.decode!(response["output"])
+      assert message =~ "only available to the QA agent"
+
+      response = DynamicTool.execute("qa_build", %{}, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
+      refute response["success"]
+      assert %{"error" => %{"code" => "qa_driver_unavailable"}} = Jason.decode!(response["output"])
+
+      response = DynamicTool.execute("qa_ax_tree", %{"pid" => 1, "depth" => 3}, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
+      assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
+    end
+
     test "rejects smuggled team, project, parent, assignee, state and issue id arguments" do
       {:ok, registry} = CommentRegistry.start_link()
 
