@@ -76,11 +76,8 @@ final class RestartController {
                 // The exit comes back through `handle(.exited)`.
                 runner.stop()
             case let .start(symphonyBinary):
-                do {
-                    try runner.start(symphonyBinary: symphonyBinary)
-                    handle(.startFinished(error: nil))
-                } catch {
-                    handle(.startFinished(error: error.localizedDescription))
+                runner.start(symphonyBinary: symphonyBinary) { [weak self] error in
+                    self?.handle(.startFinished(error: error?.localizedDescription))
                 }
             case let .alert(title, message):
                 // Shown after this turn, so the restart's state is settled before the modal alert runs.
@@ -96,15 +93,13 @@ final class RestartController {
     }
 
     private func checkConfig(symphonyBinary: String?) {
-        let launch: ChildLaunch
-        do {
-            launch = try runner.checkLaunch(symphonyBinary: symphonyBinary)
-        } catch {
-            handle(.configChecked(.failed(error.localizedDescription)))
-            return
-        }
-        Task {
-            handle(.configChecked(await ConfigCheck.run(launch)))
+        runner.checkLaunch(symphonyBinary: symphonyBinary) { [weak self] launch in
+            switch launch {
+            case let .success(launch):
+                Task { self?.handle(.configChecked(await ConfigCheck.run(launch))) }
+            case let .failure(error):
+                self?.handle(.configChecked(.failed(error.localizedDescription)))
+            }
         }
     }
 }

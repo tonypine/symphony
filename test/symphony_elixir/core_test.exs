@@ -25,6 +25,16 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
+  defmodule MergingCiGitHub do
+    # Stands in for GitHub.PullRequest.fetch_ci_status/2 for a landing run; reports
+    # the call and returns the configured CI status.
+    def fetch_ci_status(pr_url, opts) do
+      recipient = Application.fetch_env!(:symphony_elixir, :merging_ci_github_recipient)
+      send(recipient, {:merging_ci_status_fetched, pr_url, opts})
+      Application.fetch_env!(:symphony_elixir, :merging_ci_github_result)
+    end
+  end
+
   defmodule ReviewAgentSequenceAppServer do
     def start_session(workspace, opts) do
       recipient = Application.fetch_env!(:symphony_elixir, :agent_runner_review_agent_recipient)
@@ -113,6 +123,7 @@ defmodule SymphonyElixir.CoreTest do
     assert config.ci.flaky_retry == true
     assert config.ci.max_retries == 3
     assert config.ci.escalation_state == "In Review"
+    assert config.ci.merging_wait_timeout_ms == 1_800_000
 
     write_workflow_file!(Workflow.workflow_file_path(), poll_interval_ms: "invalid")
 
@@ -144,7 +155,8 @@ defmodule SymphonyElixir.CoreTest do
         log_excerpt_lines: 50,
         flaky_retry: false,
         max_retries: 1,
-        escalation_state: "Blocked"
+        escalation_state: "Blocked",
+        merging_wait_timeout_ms: 600_000
       }
     )
 
@@ -154,7 +166,8 @@ defmodule SymphonyElixir.CoreTest do
              log_excerpt_lines: 50,
              flaky_retry: false,
              max_retries: 1,
-             escalation_state: "Blocked"
+             escalation_state: "Blocked",
+             merging_wait_timeout_ms: 600_000
            } = Config.settings!().ci
 
     assert Config.settings!().pr_review.poll_interval_ms == 15_000
@@ -173,6 +186,10 @@ defmodule SymphonyElixir.CoreTest do
     write_workflow_file!(Workflow.workflow_file_path(), ci: %{enabled: true, max_retries: 0})
     assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
     assert message =~ "pull_requests.checks.max_fix_attempts"
+
+    write_workflow_file!(Workflow.workflow_file_path(), ci: %{merging_wait_timeout_ms: 0})
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "pull_requests.checks.landing_wait_timeout_ms"
 
     review_agent_config =
       %ReviewAgentConfig{}
@@ -1589,6 +1606,242 @@ defmodule SymphonyElixir.CoreTest do
            end) =~ "Auto Review disabled"
 
     assert %{state: "In Review"} = retry_post_pr_issue("issue-post-pr-auto-review-missing", :PostPrAutoReviewMissingOrchestrator, "In Review")
+  end
+
+  test "retry for a Merging issue with a completed PR re-dispatches it instead of moving it back to review" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      quality_gate: %{enabled: false},
+      tracker_active_states: ["Todo", "In Progress", "Merging", "Rework"],
+      tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
+    )
+
+    issue_id = "issue-merging-waits-for-ci"
+    pr_url = "https://github.com/example/repo/pull/232"
+    retry_token = make_ref()
+    last_ran_at = DateTime.utc_now()
+
+    Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [
+      %Issue{
+        id: issue_id,
+        identifier: "MT-232",
+        title: "Land after CI",
+        state: "Merging",
+        pull_request_url: pr_url,
+        updated_at: DateTime.add(last_ran_at, -10, :second)
+      }
+    ])
+
+    on_exit(fn ->
+      Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
+      Application.delete_env(:symphony_elixir, :memory_tracker_issues)
+    end)
+
+    {:ok, pid} = Orchestrator.start_link(name: Module.concat(__MODULE__, :MergingWaitsForCiOrchestrator))
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    initial_state = :sys.get_state(pid)
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:max_concurrent_agents, 0)
+      |> Map.put(:claimed, MapSet.new([issue_id]))
+      |> Map.put(:completed_run_metadata, %{issue_id => %{identifier: "MT-232", pull_request_url: pr_url, last_ran_at: last_ran_at}})
+      |> Map.put(:retry_attempts, %{
+        issue_id => %{
+          attempt: 1,
+          timer_ref: nil,
+          retry_token: retry_token,
+          due_at_ms: System.monotonic_time(:millisecond),
+          identifier: "MT-232"
+        }
+      })
+    end)
+
+    send(pid, {:retry_issue, issue_id, retry_token})
+
+    # A landing run uses a finishing slot, so it starts even with no work slots free.
+    state =
+      wait_for_orchestrator_state(pid, fn state ->
+        Map.has_key?(state.running, issue_id) or match?(%{attempt: 2}, state.retry_attempts[issue_id])
+      end)
+
+    refute_received {:memory_tracker_state_update, ^issue_id, _state}
+    assert MapSet.member?(state.claimed, issue_id)
+    refute Map.has_key?(state.watching, issue_id)
+  end
+
+  test "a landing run that ends on pending checks is held in Merging instead of continued" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_active_states: ["Todo", "In Progress", "Merging", "Rework"],
+      tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
+    )
+
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [])
+    on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_issues) end)
+
+    issue_id = "issue-merging-ci-hold"
+    pr_url = "https://github.com/example/repo/pull/232"
+    ref = make_ref()
+    {:ok, pid} = Orchestrator.start_link(name: Module.concat(__MODULE__, :MergingCiHoldOrchestrator))
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    issue = %Issue{id: issue_id, identifier: "MT-232", title: "Land after CI", state: "Merging", repo_key: "api", pull_request_url: pr_url}
+    initial_state = :sys.get_state(pid)
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:max_concurrent_agents, 0)
+      |> Map.put(:running, %{issue_id => %{pid: self(), ref: ref, repo_key: "api", identifier: "MT-232", issue: issue, started_at: DateTime.utc_now()}})
+      |> Map.put(:claimed, MapSet.new([issue_id]))
+      |> Map.put(:retry_attempts, %{})
+    end)
+
+    send(pid, {:merging_ci_wait, "issue-not-running", %{commit_sha: "sha-other", pr_url: pr_url}})
+    send(pid, {:merging_ci_wait, issue_id, %{commit_sha: "sha-pending", pr_url: pr_url}})
+    send(pid, {:DOWN, ref, :process, self(), :normal})
+
+    state = wait_for_orchestrator_state(pid, &(not Map.has_key?(&1.running, issue_id)))
+
+    refute Map.has_key?(state.retry_attempts, issue_id)
+    refute MapSet.member?(state.claimed, issue_id)
+    assert RunStore.list_retries("api") == []
+    assert %{commit_sha: "sha-pending", repo_key: "api", identifier: "MT-232", pull_request_url: ^pr_url} = state.merging_ci_waits[issue_id]
+    refute Map.has_key?(state.merging_ci_waits, "issue-not-running")
+    refute Orchestrator.should_dispatch_issue_for_test(issue, %{state | max_concurrent_agents: 1})
+
+    assert %{waiting_for_ci: [%{issue_id: ^issue_id, identifier: "MT-232", commit_sha: "sha-pending", seconds_waiting: seconds}]} =
+             GenServer.call(pid, :snapshot)
+
+    assert is_integer(seconds)
+  end
+
+  test "a held landing issue is dispatched once the CI poller sees its head go green" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_active_states: ["Todo", "In Progress", "Merging", "Rework"],
+      tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
+    )
+
+    issue_id = "issue-merging-ci-green"
+    issue = %Issue{id: issue_id, identifier: "MT-233", title: "Land after CI", state: "Merging", repo_key: "api"}
+    state = merging_ci_hold_state(issue_id, "sha-head", DateTime.utc_now())
+
+    # Nothing observed yet, then the poller still sees the head running.
+    assert held_after_release?(state, issue)
+    put_observed_head!(issue_id, "sha-head", "IN_PROGRESS")
+    assert held_after_release?(state, issue)
+
+    # A green result for an older head does not count.
+    put_observed_head!(issue_id, "sha-older", "SUCCESS")
+    assert held_after_release?(state, issue)
+
+    put_observed_head!(issue_id, "sha-head", "SUCCESS")
+    released = Orchestrator.release_merging_ci_waits_for_test(state, [issue])
+
+    assert released.merging_ci_waits == %{}
+    assert Orchestrator.should_dispatch_issue_for_test(issue, released)
+    # The released issue stays in Merging; nothing moved it back to review.
+    assert released.watching == %{}
+  end
+
+  test "a held landing issue with a red head goes through the CI-failure path, not a landing dispatch" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_active_states: ["Todo", "In Progress", "Merging", "Rework"],
+      tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
+    )
+
+    issue_id = "issue-merging-ci-red"
+    issue = %Issue{id: issue_id, identifier: "MT-234", title: "Land after CI", state: "Merging", repo_key: "api"}
+    state = merging_ci_hold_state(issue_id, "sha-head", DateTime.utc_now())
+
+    put_observed_head!(issue_id, "sha-head", "FAILURE")
+    assert held_after_release?(state, issue)
+
+    # The CI poller's failure dispatch moves the issue to In Progress; the hold lets go and
+    # the issue is dispatched as CI-failure rework.
+    rework_issue = %{issue | state: "In Progress"}
+    released = Orchestrator.release_merging_ci_waits_for_test(state, [rework_issue])
+
+    assert released.merging_ci_waits == %{}
+    assert Orchestrator.should_dispatch_issue_for_test(rework_issue, released)
+
+    # An issue that left the candidates altogether (for example escalated to review) also lets go.
+    assert Orchestrator.release_merging_ci_waits_for_test(state, []).merging_ci_waits == %{}
+  end
+
+  test "a held landing issue is re-dispatched once after the CI wait timeout" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_active_states: ["Todo", "In Progress", "Merging", "Rework"],
+      tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
+      ci: %{merging_wait_timeout_ms: 60_000}
+    )
+
+    assert Config.settings!().ci.merging_wait_timeout_ms == 60_000
+
+    issue_id = "issue-merging-ci-timeout"
+    issue = %Issue{id: issue_id, identifier: "MT-235", title: "Land after CI", state: "Merging", repo_key: "api"}
+    put_observed_head!(issue_id, "sha-head", "IN_PROGRESS")
+
+    assert held_after_release?(merging_ci_hold_state(issue_id, "sha-head", DateTime.add(DateTime.utc_now(), -59, :second)), issue)
+
+    state = merging_ci_hold_state(issue_id, "sha-head", DateTime.add(DateTime.utc_now(), -61, :second))
+    released = Orchestrator.release_merging_ci_waits_for_test(state, [issue])
+
+    assert released.merging_ci_waits == %{}
+    assert Orchestrator.should_dispatch_issue_for_test(issue, released)
+  end
+
+  defp merging_ci_hold_state(issue_id, commit_sha, since) do
+    %Orchestrator.State{
+      running: %{},
+      claimed: MapSet.new(),
+      budget_exhausted: MapSet.new(),
+      max_concurrent_agents: 1,
+      merging_ci_waits: %{
+        issue_id => %{
+          identifier: "MT-HOLD",
+          title: "Land after CI",
+          repo_key: "api",
+          pull_request_url: "https://github.com/example/repo/pull/232",
+          commit_sha: commit_sha,
+          since: since
+        }
+      }
+    }
+  end
+
+  defp held_after_release?(state, issue) do
+    released = Orchestrator.release_merging_ci_waits_for_test(state, [issue])
+    Map.has_key?(released.merging_ci_waits, issue.id) and not Orchestrator.should_dispatch_issue_for_test(issue, released)
+  end
+
+  defp put_observed_head!(issue_id, commit_sha, conclusion) do
+    :ok =
+      RunStore.put_ci_check(%{
+        repo_key: "api",
+        issue_id: issue_id,
+        status: "watching",
+        last_observed_sha: commit_sha,
+        last_observed_conclusion: conclusion
+      })
+
+    on_exit(fn -> RunStore.delete_ci_check("api", issue_id) end)
   end
 
   test "retry for active completed PR reschedules when moving issue to in review fails" do
@@ -4040,6 +4293,110 @@ defmodule SymphonyElixir.CoreTest do
       assert Enum.at(turn_texts, 1) =~ "Continuation guidance:"
       assert Enum.at(turn_texts, 1) =~ "previous Codex turn completed"
       assert Enum.at(turn_texts, 1) =~ "continuation turn #2 of 3"
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "agent runner ends a landing run on pending checks and reports the head to wait on" do
+    pr_url = "https://github.com/example/repo/pull/232"
+    pending = {:ok, %{commit_sha: "sha-pending", checks: [%{name: "make-all", status: "IN_PROGRESS", conclusion: nil}]}}
+
+    assert run_merging_landing_turns(pending) == 1
+    assert_received {:merging_ci_status_fetched, ^pr_url, [cwd: _workspace]}
+    assert_received {:merging_ci_wait, "issue-merging-continue", %{commit_sha: "sha-pending", pr_url: ^pr_url}}
+  end
+
+  test "agent runner keeps a landing run going when checks are settled or unreadable" do
+    green = {:ok, %{commit_sha: "sha-green", checks: [%{name: "make-all", status: "COMPLETED", conclusion: "SUCCESS"}]}}
+
+    assert run_merging_landing_turns(green) == 2
+    refute_received {:merging_ci_wait, _issue_id, _wait}
+
+    assert run_merging_landing_turns({:error, :gh_unavailable}) == 2
+    refute_received {:merging_ci_wait, _issue_id, _wait}
+  end
+
+  defp run_merging_landing_turns(ci_status_result) do
+    test_root = Path.join(System.tmp_dir!(), "symphony-elixir-agent-runner-merging-#{System.unique_integer([:positive])}")
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+      codex_binary = Path.join(test_root, "fake-codex")
+      trace_file = Path.join(test_root, "codex.trace")
+      File.mkdir_p!(test_root)
+
+      File.write!(codex_binary, """
+      #!/bin/sh
+      trace_file="#{trace_file}"
+      count=0
+
+      while IFS= read -r line; do
+        count=$((count + 1))
+        printf 'JSON:%s\\n' "$line" >> "$trace_file"
+        case "$count" in
+          1)
+            printf '%s\\n' '{"id":1,"result":{}}'
+            ;;
+          3)
+            printf '%s\\n' '{"id":2,"result":{"thread":{"id":"thread-merging"}}}'
+            ;;
+          4|5)
+            printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-merging","status":"inProgress","items":[]}}}'
+            printf '%s\\n' '{"method":"turn/completed"}'
+            ;;
+        esac
+      done
+      """)
+
+      File.chmod!(codex_binary, 0o755)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        tracker_active_states: ["Todo", "In Progress", "Merging", "Rework"],
+        workspace_root: workspace_root,
+        agent_command: "#{codex_binary} app-server",
+        max_turns: 3
+      )
+
+      Application.put_env(:symphony_elixir, :merging_ci_github_recipient, self())
+      Application.put_env(:symphony_elixir, :merging_ci_github_result, ci_status_result)
+
+      on_exit(fn ->
+        Application.delete_env(:symphony_elixir, :merging_ci_github_recipient)
+        Application.delete_env(:symphony_elixir, :merging_ci_github_result)
+      end)
+
+      issue = %Issue{
+        id: "issue-merging-continue",
+        identifier: "MT-232",
+        title: "Land after CI",
+        state: "Merging",
+        pull_request_url: "https://github.com/example/repo/pull/232",
+        url: "https://example.org/issues/MT-232",
+        labels: []
+      }
+
+      Process.delete(:merging_fetch_count)
+
+      state_fetcher = fn [_issue_id] ->
+        attempt = Process.get(:merging_fetch_count, 0) + 1
+        Process.put(:merging_fetch_count, attempt)
+        {:ok, [%Issue{issue | state: if(attempt == 1, do: "Merging", else: "Done")}]}
+      end
+
+      assert :ok =
+               AgentRunner.run(issue, self(),
+                 issue_state_fetcher: state_fetcher,
+                 issue_enricher: &{:ok, &1},
+                 github: MergingCiGitHub
+               )
+
+      trace_file
+      |> File.read!()
+      |> String.split("\n", trim: true)
+      |> Enum.map(&(&1 |> String.trim_leading("JSON:") |> Jason.decode!()))
+      |> Enum.count(&(&1["method"] == "turn/start"))
     after
       File.rm_rf(test_root)
     end

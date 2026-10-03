@@ -58,6 +58,17 @@ defmodule SymphonyElixir.RunKindTest do
       assert RunKind.classify(parent) == :close_out
     end
 
+    test "a breakdown parent in Rework is a breakdown run, even with every sub-issue terminal" do
+      cancelled = [%{id: "s1", identifier: "TP-2", state: "Canceled"}]
+      backlog = [%{id: "s1", identifier: "TP-2", state: "Backlog"}]
+
+      assert RunKind.classify(breakdown_parent(state: "Rework", sub_issues: cancelled)) == :breakdown
+      assert RunKind.classify(breakdown_parent(state: " rework ", sub_issues: backlog)) == :breakdown
+      assert RunKind.classify(issue(state: "Rework")) == :rework
+      refute Issue.replanning?(breakdown_parent(state: nil))
+      refute Issue.replanning?(nil)
+    end
+
     test "close-out uses the given terminal states" do
       parent = breakdown_parent(sub_issues: [%{id: "s1", identifier: "TP-2", state: "Shipped"}])
 

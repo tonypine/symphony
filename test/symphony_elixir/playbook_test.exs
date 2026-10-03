@@ -36,6 +36,16 @@ defmodule SymphonyElixir.PlaybookTest do
     end
   end
 
+  test "parent_tickets ends a breakdown run in In Review and leaves the approval to a human" do
+    assert {:ok, body} = Playbook.fetch("parent_tickets")
+
+    assert body =~ "move the\n   parent to `In Review` with `linear_update_state`, and end the turn."
+    assert body =~ "Never move the parent to `Waiting on sub-tickets` yourself"
+    assert body =~ "Symphony\n  then moves every sub-ticket still in `Backlog` to `Todo` in one batch"
+    assert body =~ "In `Rework` (a re-plan run)"
+    refute body =~ "A human\n   promotes the sub-tickets to `Todo`."
+  end
+
   test "fetch/1 returns :error for an unknown partial" do
     assert Playbook.fetch("does_not_exist") == :error
   end

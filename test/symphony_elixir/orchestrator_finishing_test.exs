@@ -86,6 +86,34 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
     assert dispatch_order(log) == ["land-2", "todo-1"]
   end
 
+  test "a Merging ticket held for CI neither lands nor waits for a slot, and a Todo still starts", ctx do
+    write_finishing_workflow!(ctx, max_concurrent_agents: 2)
+    held = issue("land-1", "MT-HELD", "Merging")
+    todo = issue("todo-1", "MT-TODO", "Todo")
+    tracked([held, todo])
+
+    hold = %{
+      identifier: "MT-HELD",
+      title: "Ticket MT-HELD",
+      repo_key: nil,
+      pull_request_url: "https://github.com/acme/repo/pull/1",
+      commit_sha: "abc123",
+      since: DateTime.utc_now()
+    }
+
+    state = %{orchestrator_state(2) | merging_ci_waits: %{"land-1" => hold}}
+
+    refute Orchestrator.should_dispatch_issue_for_test(held, state)
+
+    state = Orchestrator.dispatch_chosen_issues_for_test([held, todo], state)
+
+    assert Map.keys(state.running) == ["todo-1"]
+    assert state.slot_waiting == %{}
+
+    assert [%{issue_id: "land-1", state: "Merging", reason: "waiting for CI on abc123", attempt: nil}] =
+             state |> snapshot_of() |> Map.fetch!(:slot_waiting)
+  end
+
   test "a resume of Medium priority goes before an Urgent Todo when a slot frees", ctx do
     write_finishing_workflow!(ctx, max_concurrent_agents: 1)
     resume = issue("resume-1", "MT-RESUME", "In Progress", priority: 3)

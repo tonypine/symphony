@@ -81,6 +81,7 @@ defmodule SymphonyElixir.TestSupport do
           Application.delete_env(:symphony_elixir, :memory_tracker_issues)
           Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
           Application.delete_env(:symphony_elixir, :memory_tracker_update_issue_state_result)
+          Application.delete_env(:symphony_elixir, :memory_tracker_breakdown_histories)
           Application.delete_env(:symphony_elixir, :memory_tracker_fetch_candidate_sleep_ms)
           Application.delete_env(:symphony_elixir, :memory_tracker_fetch_states_sleep_ms)
           Application.delete_env(:symphony_elixir, :memory_tracker_create_comment_sleep_ms)
@@ -1010,7 +1011,8 @@ defmodule SymphonyElixir.TestSupport do
       "    log_excerpt_lines: #{yaml_value(Map.get(ci, :log_excerpt_lines))}",
       "    retry_failed_once: #{yaml_value(Map.get(ci, :flaky_retry))}",
       "    max_fix_attempts: #{yaml_value(Map.get(ci, :max_retries))}",
-      "    escalate_to_state: #{yaml_value(Map.get(ci, :escalation_state))}"
+      "    escalate_to_state: #{yaml_value(Map.get(ci, :escalation_state))}",
+      "    landing_wait_timeout_ms: #{yaml_value(Map.get(ci, :merging_wait_timeout_ms))}"
     ]
     |> Enum.join("\n")
   end

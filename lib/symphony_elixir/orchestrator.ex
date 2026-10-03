@@ -12,6 +12,7 @@ defmodule SymphonyElixir.Orchestrator do
     AgentTelemetry,
     AuditLog,
     AutoReview,
+    BreakdownReview,
     CiPoller,
     Config,
     EpicLanes,
@@ -98,6 +99,8 @@ defmodule SymphonyElixir.Orchestrator do
       budget_daily_paused_logged: false,
       budget_exhausted: MapSet.new(),
       parked_parents: MapSet.new(),
+      breakdown_reviews: %{},
+      merging_ci_waits: %{},
       epic_lanes: nil,
       slot_waiting: %{},
       setup_failed: %{},
@@ -412,6 +415,14 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  def handle_info({:merging_ci_wait, issue_id, wait}, %{running: running} = state)
+      when is_binary(issue_id) and is_map(wait) do
+    case Map.get(running, issue_id) do
+      nil -> {:noreply, state}
+      running_entry -> {:noreply, %{state | running: Map.put(running, issue_id, Map.put(running_entry, :merging_ci_wait, wait))}}
+    end
+  end
+
   def handle_info(
         {:codex_worker_update, issue_id, %{event: _, timestamp: _} = update},
         %{running: running} = state
@@ -514,19 +525,41 @@ defmodule SymphonyElixir.Orchestrator do
       false ->
         complete_pr_review_comment_cursor(issue_id, running_entry_repo_key(running_entry))
         complete_pending_qa_failure(issue_id, running_entry_repo_key(running_entry))
-        Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; scheduling active-state continuation check")
-
-        state
-        |> complete_issue(issue_id, running_entry)
-        |> schedule_issue_retry(issue_id, 1, %{
-          repo_key: running_entry_repo_key(running_entry),
-          identifier: running_entry.identifier,
-          title: running_entry_title(running_entry),
-          delay_type: :continuation,
-          worker_host: Map.get(running_entry, :worker_host),
-          workspace_path: Map.get(running_entry, :workspace_path)
-        })
+        complete_active_agent_run(state, issue_id, running_entry, session_id)
     end
+  end
+
+  # A landing run that ended on pending checks is held instead of continued (see
+  # release_merging_ci_waits/2).
+  defp complete_active_agent_run(%State{} = state, issue_id, %{merging_ci_wait: %{} = wait} = running_entry, session_id) do
+    Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; holding in Merging until CI settles on #{wait[:commit_sha]}")
+
+    hold = %{
+      identifier: running_entry.identifier,
+      title: running_entry_title(running_entry),
+      repo_key: running_entry_repo_key(running_entry),
+      pull_request_url: wait[:pr_url],
+      commit_sha: wait[:commit_sha],
+      since: DateTime.utc_now()
+    }
+
+    state = state |> complete_issue(issue_id, running_entry) |> release_issue_claim(issue_id)
+    %{state | merging_ci_waits: Map.put(state.merging_ci_waits, issue_id, hold)}
+  end
+
+  defp complete_active_agent_run(%State{} = state, issue_id, running_entry, session_id) do
+    Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; scheduling active-state continuation check")
+
+    state
+    |> complete_issue(issue_id, running_entry)
+    |> schedule_issue_retry(issue_id, 1, %{
+      repo_key: running_entry_repo_key(running_entry),
+      identifier: running_entry.identifier,
+      title: running_entry_title(running_entry),
+      delay_type: :continuation,
+      worker_host: Map.get(running_entry, :worker_host),
+      workspace_path: Map.get(running_entry, :workspace_path)
+    })
   end
 
   defp handle_abnormal_agent_exit(%State{} = state, issue_id, running_entry, session_id, reason) do
@@ -998,6 +1031,7 @@ defmodule SymphonyElixir.Orchestrator do
           |> prune_quality_gate_cache_to_active(issues)
           |> clear_running_quality_gate_cache_entries()
           |> put_epic_lanes(issues)
+          |> release_merging_ci_waits(issues)
 
         if available_slots(state) > 0 or available_finishing_slots(state) > 0 do
           issues
@@ -1404,8 +1438,16 @@ defmodule SymphonyElixir.Orchestrator do
   def dispatch_chosen_issues_for_test(issues, %State{} = state) when is_list(issues), do: dispatch_chosen_issues(issues, state)
 
   @doc false
+  @spec release_merging_ci_waits_for_test(State.t(), [Issue.t()]) :: State.t()
+  def release_merging_ci_waits_for_test(%State{} = state, issues) when is_list(issues), do: release_merging_ci_waits(state, issues)
+
+  @doc false
   @spec put_epic_lanes_for_test(State.t(), [Issue.t()]) :: State.t()
   def put_epic_lanes_for_test(%State{} = state, issues) when is_list(issues), do: put_epic_lanes(state, issues)
+
+  @doc false
+  @spec review_breakdown_parents_for_test([Issue.t()], term()) :: term()
+  def review_breakdown_parents_for_test(issues, %State{} = state) when is_list(issues), do: review_breakdown_parents(issues, state)
 
   @doc false
   @spec park_breakdown_parents_for_test([Issue.t()], term()) :: term()
@@ -2410,7 +2452,10 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp continue_after_dispatch_readiness(%State{} = state, :poll, issues) do
-    state = park_breakdown_parents(issues, state)
+    state =
+      issues
+      |> park_breakdown_parents(state)
+      |> then(&review_breakdown_parents(issues, &1))
 
     state =
       cond do
@@ -2450,6 +2495,123 @@ defmodule SymphonyElixir.Orchestrator do
       |> MapSet.new(& &1.id)
 
     %{state | parked_parents: MapSet.union(already_parked, parked)}
+  end
+
+  # A human's review of a `breakdown` parent's plan: approving it (In Review to the waiting state)
+  # promotes its Backlog sub-issues to Todo, rejecting it (Rework) cancels them before the re-plan.
+  # `breakdown_reviews` maps each parent to the Backlog sub-issues last acted on, so a re-poll
+  # showing the same ones does not ask Linear again; a parent that needs nothing is dropped.
+  defp review_breakdown_parents(issues, %State{} = state) do
+    settings = Config.settings!()
+
+    pending =
+      Enum.flat_map(issues, fn issue ->
+        case BreakdownReview.action(issue, settings) do
+          nil -> []
+          action -> [{issue, action, issue.id}]
+        end
+      end)
+
+    kept = Map.take(state.breakdown_reviews, Enum.map(pending, &elem(&1, 2)))
+
+    reviews =
+      Enum.reduce(pending, kept, fn {issue, action, issue_id}, reviews ->
+        backlog = BreakdownReview.backlog_sub_issue_ids(issue)
+
+        cond do
+          issue_claimed_or_running?(state, issue_id) or Map.get(reviews, issue_id) == backlog -> reviews
+          review_breakdown_parent(issue, action, settings) -> Map.put(reviews, issue_id, backlog)
+          true -> Map.delete(reviews, issue_id)
+        end
+      end)
+
+    %{state | breakdown_reviews: reviews}
+  end
+
+  defp review_breakdown_parent(%Issue{id: issue_id} = issue, action, settings) do
+    case Tracker.fetch_breakdown_history(issue_id) do
+      {:ok, history} ->
+        action
+        |> BreakdownReview.sub_issues_to_move(history, settings)
+        |> Enum.map(&move_breakdown_sub_issue(issue, action, &1))
+        |> log_breakdown_review(issue, action)
+
+      {:error, reason} ->
+        Logger.warning("Failed to read breakdown parent history: #{issue_context(issue)} reason=#{inspect(reason)}")
+        false
+    end
+  end
+
+  defp move_breakdown_sub_issue(issue, action, %{id: sub_issue_id, identifier: identifier}) do
+    case BreakdownReview.move(action, sub_issue_id, Tracker.adapter()) do
+      :ok ->
+        {:ok, identifier}
+
+      {:error, reason} ->
+        Logger.warning("Failed to move sub-issue #{identifier} of breakdown parent to #{BreakdownReview.target(action)}: #{issue_context(issue)} reason=#{inspect(reason)}")
+        :error
+    end
+  end
+
+  defp log_breakdown_review([], _issue, _action), do: true
+
+  defp log_breakdown_review(results, issue, action) do
+    moved = for {:ok, identifier} <- results, do: identifier
+
+    if moved != [] do
+      Logger.info("Moved #{length(moved)} sub-issue(s) of breakdown parent to #{BreakdownReview.target(action)} (#{Enum.join(moved, ", ")}): #{issue_context(issue)}")
+    end
+
+    length(moved) == length(results)
+  end
+
+  # A rejected plan is made again only once its Backlog sub-issues are cancelled, so the re-plan
+  # does not duplicate them.
+  defp replan_pending?(%Issue{id: issue_id} = issue, %State{breakdown_reviews: reviews}) do
+    BreakdownReview.action(issue, Config.settings!()) == :replace and not Map.has_key?(reviews, issue_id)
+  end
+
+  # A landing run that ended on pending checks stays held in `Merging` until the CI poller sees
+  # that head go green, the issue leaves `Merging` (a red head takes the CI-failure path), or
+  # `ci.merging_wait_timeout_ms` passes. Releasing it lets this poll dispatch the landing agent.
+  defp release_merging_ci_waits(%State{merging_ci_waits: waits} = state, _issues) when map_size(waits) == 0, do: state
+
+  defp release_merging_ci_waits(%State{} = state, issues) do
+    issues_by_id = Map.new(issues, &{&1.id, &1})
+    now = DateTime.utc_now()
+    timeout_ms = Config.settings!().ci.merging_wait_timeout_ms
+
+    waits =
+      Map.filter(state.merging_ci_waits, fn {issue_id, wait} ->
+        case merging_ci_wait_release(Map.get(issues_by_id, issue_id), issue_id, wait, now, timeout_ms) do
+          nil ->
+            true
+
+          reason ->
+            Logger.info("Releasing Merging CI hold: issue_id=#{issue_id} issue_identifier=#{wait.identifier} commit_sha=#{wait.commit_sha} reason=#{reason}")
+            false
+        end
+      end)
+
+    %{state | merging_ci_waits: waits}
+  end
+
+  defp merging_ci_wait_release(issue, issue_id, wait, now, timeout_ms) do
+    cond do
+      not match?(%Issue{}, issue) or not merging_state?(issue.state) -> "left Merging"
+      DateTime.diff(now, wait.since, :millisecond) >= timeout_ms -> "timed out after #{timeout_ms}ms"
+      merging_ci_head_green?(issue_id, wait) -> "CI green"
+      true -> nil
+    end
+  end
+
+  defp merging_ci_head_green?(issue_id, wait) do
+    opts = if is_binary(wait.repo_key), do: [repo_key: wait.repo_key], else: []
+
+    case CiPoller.observed_head(issue_id, opts) do
+      %{commit_sha: commit_sha, conclusion: "SUCCESS"} -> commit_sha == wait.commit_sha
+      _observed -> false
+    end
   end
 
   defp issue_claimed_or_running?(%State{} = state, issue_id) do
@@ -2587,7 +2749,9 @@ defmodule SymphonyElixir.Orchestrator do
   defp dispatch_eligible?(%Issue{} = issue, %State{} = state, active_states, terminal_states) do
     candidate_issue?(issue, active_states, terminal_states) and
       !issue_held?(issue, terminal_states) and
+      !replan_pending?(issue, state) and
       !post_pr_quiet_active_issue?(issue, state) and
+      !Map.has_key?(state.merging_ci_waits, issue.id) and
       !MapSet.member?(state.claimed, issue.id) and
       !MapSet.member?(state.budget_exhausted, issue.id) and
       !setup_failed_suppressed?(state.setup_failed, issue) and
@@ -2679,10 +2843,12 @@ defmodule SymphonyElixir.Orchestrator do
 
   # A `breakdown` parent waits while its sub-issues are worked, in the waiting state or, when that
   # is off, in its active state; it is dispatched again for close-out once every sub-issue is terminal.
+  # In `Rework` its plan was rejected, so it is broken down again whatever its sub-issues' states.
   defp issue_held?(issue, terminal_states) do
     todo_issue_blocked_by_non_terminal?(issue, terminal_states) or
-      Issue.waiting_on_sub_issues?(issue, terminal_states) or
-      SubIssueWait.held?(issue, terminal_states, Config.settings!())
+      (not Issue.replanning?(issue) and
+         (Issue.waiting_on_sub_issues?(issue, terminal_states) or
+            SubIssueWait.held?(issue, terminal_states, Config.settings!())))
   end
 
   defp todo_issue_blocked_by_non_terminal?(
@@ -5452,6 +5618,20 @@ defmodule SymphonyElixir.Orchestrator do
         }
       end)
 
+    waiting_for_ci =
+      Enum.map(state.merging_ci_waits, fn {issue_id, wait} ->
+        %{
+          issue_id: issue_id,
+          repo_key: wait.repo_key || state.repo_key,
+          identifier: wait.identifier,
+          title: wait.title,
+          pull_request_url: wait.pull_request_url,
+          commit_sha: wait.commit_sha,
+          waiting_since: wait.since,
+          seconds_waiting: seconds_since(wait.since, now)
+        }
+      end)
+
     conflicts =
       state.conflicts
       |> Map.values()
@@ -5490,6 +5670,7 @@ defmodule SymphonyElixir.Orchestrator do
     %{
       running: running,
       watching: watching,
+      waiting_for_ci: waiting_for_ci,
       conflicts: conflicts,
       retrying: retrying,
       awaiting_clarification: awaiting_clarification,
@@ -5503,7 +5684,7 @@ defmodule SymphonyElixir.Orchestrator do
       dispatch_state: dispatch_state_snapshot(state),
       epic_lanes: EpicLanes.snapshot(state.epic_lanes, epic_lane_running(state.running)),
       finishing: finishing_snapshot(state.running),
-      slot_waiting: slot_waiting_snapshot(state.slot_waiting),
+      slot_waiting: slot_waiting_snapshot(state.slot_waiting) ++ merging_ci_waiting_snapshot(state.merging_ci_waits),
       pollers: poller_status_snapshot(),
       polling: %{
         checking?: state.poll_check_in_progress == true,
@@ -5533,6 +5714,23 @@ defmodule SymphonyElixir.Orchestrator do
       entry
       |> Map.take([:identifier, :title, :state, :reason, :attempt, :since])
       |> Map.put(:issue_id, issue_id)
+    end)
+    |> Enum.sort_by(& &1.since, DateTime)
+  end
+
+  # Merging issues held for CI aren't waiting for a slot, but they show in the same list with why.
+  defp merging_ci_waiting_snapshot(merging_ci_waits) do
+    merging_ci_waits
+    |> Enum.map(fn {issue_id, wait} ->
+      %{
+        issue_id: issue_id,
+        identifier: wait.identifier,
+        title: wait.title,
+        state: "Merging",
+        reason: "waiting for CI on #{wait.commit_sha}",
+        attempt: nil,
+        since: wait.since
+      }
     end)
     |> Enum.sort_by(& &1.since, DateTime)
   end
@@ -6330,6 +6528,7 @@ defmodule SymphonyElixir.Orchestrator do
     completed_run_has_pr?(completed_metadata) and
       active_issue_state?(issue.state) and
       !rework_state?(issue.state) and
+      !merging_state?(issue.state) and
       !pending_rework_signal?(issue, completed_metadata)
   end
 
@@ -6386,6 +6585,13 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp rework_state?(_state_name), do: false
+
+  # A `Merging` issue is approved; keep re-dispatching its landing agent instead of parking it.
+  defp merging_state?(state_name) when is_binary(state_name) do
+    normalize_issue_state(state_name) == @merging_state
+  end
+
+  defp merging_state?(_state_name), do: false
 
   defp dispatch_slots_available?(%Issue{} = issue, %State{} = state) do
     if finishing_issue?(issue) do

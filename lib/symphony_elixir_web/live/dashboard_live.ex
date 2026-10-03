@@ -331,13 +331,13 @@ defmodule SymphonyElixirWeb.DashboardLive do
           </div>
 
           <%= if @payload.slot_waiting == [] do %>
-            <p class="empty-state">Nothing is waiting for a slot.</p>
+            <p class="empty-state">Nothing is waiting to start.</p>
           <% else %>
             <div class="table-wrap">
               <table class="data-table">
                 <thead>
                   <tr>
-                    <th>Waiting for a slot</th>
+                    <th>Waiting to start</th>
                     <th>State</th>
                     <th>Why</th>
                     <th>Attempt</th>

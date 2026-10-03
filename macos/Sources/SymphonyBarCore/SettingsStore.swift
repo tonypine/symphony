@@ -62,32 +62,39 @@ public final class SettingsStore {
         defaults.set(settings.developmentMode, forKey: Key.developmentMode)
     }
 
-    /// Reads the Linear API key and every other account under the Keychain service as an extra variable.
+    /// Reads the Linear and OpenRouter API keys, and every other account under the Keychain service as an extra
+    /// variable.
     public func loadSecrets() throws -> SecretSettings {
-        let keyName = SecretSettings.linearAPIKeyName
         let extra = try secrets.accounts()
-            .filter { $0 != keyName }
+            .filter { !SecretSettings.reservedNames.contains($0) }
             .sorted()
             .map { EnvironmentVariable(name: $0, value: try secrets.value(forAccount: $0) ?? "") }
 
         return SecretSettings(
-            linearAPIKey: try secrets.value(forAccount: keyName) ?? "",
+            linearAPIKey: try secrets.value(forAccount: SecretSettings.linearAPIKeyName) ?? "",
+            openRouterAPIKey: try secrets.value(forAccount: SecretSettings.openRouterAPIKeyName) ?? "",
             extraEnvironment: extra
         )
     }
 
     /// Writes the secrets, then removes the named extra variables. Only names in `removing` are ever
     /// deleted, so a list that failed to load or is stale can't wipe stored variables. Names still listed
-    /// and the Linear API key are never removed.
+    /// and the Linear API key are never removed. A blank OpenRouter key is removed only when `removing`
+    /// names it, like an extra variable.
     public func saveSecrets(_ settings: SecretSettings, removing removed: Set<String> = []) throws {
         let keyName = SecretSettings.linearAPIKeyName
         try secrets.setValue(settings.linearAPIKey, forAccount: keyName)
 
+        var kept = Set(settings.extraEnvironment.map(\.name)).union([keyName])
+        if !settings.openRouterAPIKey.isEmpty {
+            try secrets.setValue(settings.openRouterAPIKey, forAccount: SecretSettings.openRouterAPIKeyName)
+            kept.insert(SecretSettings.openRouterAPIKeyName)
+        }
+
         for variable in settings.extraEnvironment {
             try secrets.setValue(variable.value, forAccount: variable.name)
         }
-        let kept = Set(settings.extraEnvironment.map(\.name))
-        for account in removed.subtracting(kept).subtracting([keyName]).sorted() {
+        for account in removed.subtracting(kept).sorted() {
             try secrets.removeValue(forAccount: account)
         }
     }

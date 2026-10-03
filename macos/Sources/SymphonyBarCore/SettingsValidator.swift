@@ -129,7 +129,7 @@ public struct SettingsValidator {
         var duplicates = Set<String>()
         for variable in secrets.extraEnvironment {
             let name = variable.name
-            if name == SecretSettings.linearAPIKeyName {
+            if SecretSettings.reservedNames.contains(name) {
                 issues.append(.environmentNameReserved(name))
             } else if !Self.isValidEnvironmentName(name) {
                 issues.append(.environmentNameInvalid(name))

@@ -1693,7 +1693,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "Landing: MT-LAND"
     assert html =~ "MT-WAIT"
     assert html =~ "a Merging or Auto Review issue is waiting for a slot"
-    refute html =~ "Nothing is waiting for a slot."
+    refute html =~ "Nothing is waiting to start."
   end
 
   test "dashboard liveview shows every slot as shared with no active epics" do
@@ -1705,7 +1705,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     {:ok, _view, html} = live(build_conn(), "/")
     assert html =~ "No active epics; every slot is shared."
     refute html =~ "Waiting for a lane"
-    assert html =~ "Nothing is waiting for a slot."
+    assert html =~ "Nothing is waiting to start."
     refute html =~ "Landing:"
   end
 

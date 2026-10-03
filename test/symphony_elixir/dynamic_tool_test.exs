@@ -277,15 +277,33 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     assert_received {:linear_client_called, _query, %{stateId: "state-review"}}
   end
 
-  test "update_state allows Waiting on sub-tickets only for a breakdown parent" do
-    SymphonyElixir.SubIssueWait.reset_for_test("Waiting on sub-tickets")
+  test "update_state lets a breakdown parent hand its plan to In Review while Auto Review is on" do
+    write_workflow_file!(Workflow.workflow_file_path(), auto_review: %{enabled: true})
+
+    response =
+      DynamicTool.execute(
+        "linear_update_state",
+        %{"state_name_or_id" => "In Review"},
+        issue: %Issue{id: "issue-current"},
+        linear_client:
+          update_state_client(self(), [%{"id" => "state-review", "name" => "In Review", "type" => "started"}], [
+            %{"name" => "Breakdown"}
+          ])
+      )
+
+    assert response["success"] == true
+    assert_received {:linear_client_called, _query, %{stateId: "state-review"}}
+  end
+
+  test "update_state refuses Waiting on sub-tickets: moving a parent there approves its plan" do
+    on_exit(fn -> SymphonyElixir.SubIssueWait.reset_for_test("Waiting on sub-tickets") end)
 
     states = [
       %{"id" => "state-waiting", "name" => "Waiting on sub-tickets", "type" => "started"},
       %{"id" => "state-progress", "name" => "In Progress", "type" => "started"}
     ]
 
-    for labels <- [nil, [%{"name" => "feature"}, %{}]] do
+    refuse = fn labels ->
       response =
         DynamicTool.execute(
           "linear_update_state",
@@ -296,27 +314,17 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
       assert response["success"] == false
 
-      assert %{"error" => %{"code" => "waiting_on_sub_issues_state_for_breakdown_only", "message" => message}} =
+      assert %{"error" => %{"code" => "waiting_on_sub_issues_state_requires_human_approval", "message" => message}} =
                Jason.decode!(response["output"])
 
-      assert message =~ "only a `breakdown` parent"
+      assert message =~ "approves its plan and promotes its sub-tickets"
+      assert message =~ "move the parent to `In Review` instead"
       refute_received {:linear_client_called, _query, %{stateId: _state_id}}
     end
 
-    response =
-      DynamicTool.execute(
-        "linear_update_state",
-        %{"state_name_or_id" => "Waiting on sub-tickets"},
-        issue: %Issue{id: "issue-current"},
-        linear_client: update_state_client(self(), states, [%{"name" => "Breakdown"}])
-      )
+    for labels <- [nil, [%{"name" => "feature"}, %{}], [%{"name" => "Breakdown"}]], do: refuse.(labels)
 
-    assert response["success"] == true
-    assert_received {:linear_client_called, _query, %{stateId: "state-waiting"}}
-  end
-
-  test "update_state refuses Waiting on sub-tickets when the startup check turned it off" do
-    on_exit(fn -> SymphonyElixir.SubIssueWait.reset_for_test("Waiting on sub-tickets") end)
+    # Also when the startup check turned the state off.
     Application.put_env(:symphony_elixir, :memory_tracker_workflow_states, ["In Progress"])
     on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_workflow_states) end)
 
@@ -325,21 +333,35 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       assert :disabled = SymphonyElixir.SubIssueWait.check_tracker_state(Config.settings!(), [], tracker: tracker)
     end)
 
+    refuse.([%{"name" => "breakdown"}])
+
+    response =
+      DynamicTool.execute(
+        "linear_update_state",
+        %{"state_name_or_id" => "In Progress"},
+        issue: %Issue{id: "issue-current"},
+        linear_client: update_state_client(self(), states, [%{"name" => "breakdown"}])
+      )
+
+    assert response["success"] == true
+    assert_received {:linear_client_called, _query, %{stateId: "state-progress"}}
+  end
+
+  test "update_state allows Waiting on sub-tickets when the waiting state is turned off in config" do
+    settings = Config.settings!()
+    settings = %{settings | tracker: %{settings.tracker | waiting_on_sub_issues_state: nil}}
+
     response =
       DynamicTool.execute(
         "linear_update_state",
         %{"state_name_or_id" => "Waiting on sub-tickets"},
         issue: %Issue{id: "issue-current"},
-        linear_client:
-          update_state_client(self(), [%{"id" => "state-waiting", "name" => "Waiting on sub-tickets", "type" => "started"}], [
-            %{"name" => "breakdown"}
-          ])
+        settings: settings,
+        linear_client: update_state_client(self(), [%{"id" => "state-waiting", "name" => "Waiting on sub-tickets", "type" => "started"}])
       )
 
-    assert response["success"] == false
-    assert %{"error" => %{"code" => "waiting_on_sub_issues_state_disabled", "message" => message}} = Jason.decode!(response["output"])
-    assert message =~ "leave the parent In Progress"
-    refute_received {:linear_client_called, _query, %{stateId: _state_id}}
+    assert response["success"] == true
+    assert_received {:linear_client_called, _query, %{stateId: "state-waiting"}}
   end
 
   test "add_comment surfaces commentCreate success=false from Linear as a failure" do
@@ -369,11 +391,11 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
   end
 
   describe "linear_create_subissue" do
-    test "is advertised with only title, description and priority, and hidden from the read-only scope" do
+    test "is advertised with only title, description, priority and blocked_by, and hidden from the read-only scope" do
       assert %{"inputSchema" => %{"properties" => properties, "required" => ["title", "description"]}} =
                Enum.find(DynamicTool.tool_specs(), &(&1["name"] == "linear_create_subissue"))
 
-      assert properties |> Map.keys() |> Enum.sort() == ["description", "priority", "title"]
+      assert properties |> Map.keys() |> Enum.sort() == ["blocked_by", "description", "priority", "title"]
       refute "linear_create_subissue" in Enum.map(DynamicTool.tool_specs(:read_only), & &1["name"])
 
       response =
@@ -468,7 +490,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
              }
            }}
         else
-          {:ok, %{"data" => %{"issueCreate" => %{"success" => true, "issue" => %{"identifier" => "TP-1"}}}}}
+          {:ok, %{"data" => %{"issueCreate" => %{"success" => true, "issue" => %{"id" => "issue-new", "identifier" => "TP-1"}}}}}
         end
       end
 
@@ -491,7 +513,8 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       for {args, code} <- [
             {%{"title" => " ", "description" => "body"}, "invalid_subissue_title"},
             {%{"title" => "Slice", "description" => nil}, "invalid_subissue_description"},
-            {%{"title" => "Slice", "description" => "body", "priority" => 9}, "invalid_subissue_priority"}
+            {%{"title" => "Slice", "description" => "body", "priority" => 9}, "invalid_subissue_priority"},
+            {%{"title" => "Slice", "description" => "body", "blocked_by" => "TP-1"}, "invalid_subissue_blocked_by"}
           ] do
         response = DynamicTool.execute("linear_create_subissue", args, opts)
         assert %{"error" => %{"code" => ^code}} = Jason.decode!(response["output"])
@@ -512,6 +535,59 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
         )
 
       assert %{"error" => %{"code" => "backlog_state_not_found", "available_states" => ["Todo"]}} = Jason.decode!(response["output"])
+    end
+
+    test "returns explicit error payloads for blocked_by refusals and failed links" do
+      {:ok, registry} = CommentRegistry.start_link()
+
+      client = fn create_result, relation_result ->
+        fn query, _variables, _opts ->
+          cond do
+            query =~ "SymphonyAgentSubissueScope" ->
+              {:ok,
+               %{
+                 "data" => %{
+                   "issue" => %{
+                     "id" => "issue-current",
+                     "team" => %{"id" => "team-1", "states" => %{"nodes" => [%{"id" => "state-backlog", "name" => "Backlog"}]}},
+                     "children" => %{"nodes" => [%{"id" => "issue-a", "identifier" => "TP-2"}]}
+                   }
+                 }
+               }}
+
+            query =~ "SymphonyAgentCreateSubissue" ->
+              {:ok, %{"data" => %{"issueCreate" => create_result}}}
+
+            true ->
+              {:ok, %{"data" => %{"issueRelationCreate" => relation_result}}}
+          end
+        end
+      end
+
+      created = %{"success" => true, "issue" => %{"id" => "issue-new", "identifier" => "TP-3"}}
+      opts = [issue: %Issue{id: "issue-current"}, comment_registry: registry, linear_client: client.(created, %{"success" => true})]
+      args = %{"title" => "Slice", "description" => "body", "blocked_by" => ["tp-2"]}
+
+      response = DynamicTool.execute("linear_create_subissue", args, opts)
+      assert response["success"] == true
+      assert %{"data" => %{"issueCreate" => %{"issue" => %{"blockedBy" => ["TP-2"]}}}} = Jason.decode!(response["output"])
+
+      response = DynamicTool.execute("linear_create_subissue", %{args | "blocked_by" => ["TP-2", "OPS-9"]}, opts)
+
+      assert %{"error" => %{"code" => "blocked_by_not_sibling", "unknown" => ["OPS-9"], "sub_issues" => ["TP-2", "TP-3"], "message" => message}} =
+               Jason.decode!(response["output"])
+
+      assert message =~ "Not a sub-issue: OPS-9. Nothing was created."
+
+      response = DynamicTool.execute("linear_create_subissue", args, Keyword.put(opts, :linear_client, client.(created, %{"success" => false})))
+
+      assert %{"error" => %{"code" => "blocked_by_relation_failed", "identifier" => "TP-3", "blocker" => "TP-2", "message" => message}} =
+               Jason.decode!(response["output"])
+
+      assert message =~ "Created TP-3, but could not mark it blocked by TP-2"
+
+      response = DynamicTool.execute("linear_create_subissue", args, Keyword.put(opts, :linear_client, client.(%{"success" => true}, nil)))
+      assert %{"error" => %{"code" => "subissue_not_returned"}} = Jason.decode!(response["output"])
     end
   end
 

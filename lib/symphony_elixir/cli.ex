@@ -40,6 +40,7 @@ defmodule SymphonyElixir.CLI do
 
   @type deps :: %{
           check_config: (-> :ok | {:error, term()}),
+          check_warnings: (-> [String.t()]),
           file_regular?: (String.t() -> boolean()),
           init: ([String.t()] -> SymphonyElixir.Init.result()),
           set_symphony_file_path: (String.t() -> :ok | {:error, term()}),
@@ -155,6 +156,7 @@ defmodule SymphonyElixir.CLI do
     case deps.check_config.() do
       :ok ->
         IO.puts("Config OK: #{path}")
+        Enum.each(deps.check_warnings.(), &IO.puts("Warning: #{&1}"))
         {:halt, 0}
 
       {:error, reason} ->
@@ -388,6 +390,7 @@ defmodule SymphonyElixir.CLI do
   defp runtime_deps do
     %{
       check_config: &Config.validate_repo_workflows/0,
+      check_warnings: &Config.check_warnings/0,
       file_regular?: &File.regular?/1,
       init: &SymphonyElixir.Init.run/1,
       set_symphony_file_path: &SymphonyElixir.Workflow.set_symphony_file_path/1,
