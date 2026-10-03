@@ -20,6 +20,7 @@ defmodule SymphonyElixir.AgentRunner do
     PromptBuilder,
     PrReviewPoller,
     ReviewAgent,
+    RunKind,
     SubIssueWait,
     Tracker,
     URLUtils,
@@ -36,6 +37,24 @@ defmodule SymphonyElixir.AgentRunner do
   @terminal_agent_setup_error_marker "missing_required_mcp_tools"
 
   @type worker_host :: String.t() | nil
+
+  @doc """
+  The kind of run `issue` is about to start and its model and effort, from `settings`.
+
+  The orchestrator resolves this once per dispatch and passes it as `:run_profile`, so every
+  turn of the run, continuations included, starts the agent with the same model and effort.
+  """
+  @spec run_profile(Issue.t(), Config.Schema.t(), keyword()) :: RunKind.profile()
+  def run_profile(%Issue{} = issue, settings, opts \\ []) do
+    kind =
+      RunKind.classify(issue,
+        terminal_states: settings.tracker.terminal_states,
+        ci_failure: pending_ci_failure(issue, opts),
+        reviewer_comments: pending_reviewer_comments(issue, opts)
+      )
+
+    settings |> Config.run_profile(kind) |> Map.put(:kind, kind)
+  end
 
   @spec run(map(), pid() | nil, keyword()) :: :ok | no_return()
   def run(issue, codex_update_recipient \\ nil, opts \\ []) do
@@ -358,6 +377,7 @@ defmodule SymphonyElixir.AgentRunner do
     issue_state_fetcher = Keyword.get(opts, :issue_state_fetcher, &Tracker.fetch_issue_states_by_ids/1)
 
     seed_ids = AgentTools.Linear.recover_comment_registry_seeds(issue, settings.tracker.kind)
+    opts = Keyword.put_new_lazy(opts, :run_profile, fn -> run_profile(issue, settings, opts) end)
 
     with {:ok, agent_module} <- agent_module(opts),
          {:ok, linear_comment_registry} <- ensure_comment_registry(opts, seed_ids),
@@ -448,6 +468,7 @@ defmodule SymphonyElixir.AgentRunner do
       settings: Keyword.fetch!(opts, :settings),
       issue: issue,
       run_id: Keyword.get(opts, :run_id),
+      run_profile: Keyword.fetch!(opts, :run_profile),
       repo_key: Keyword.get(opts, :repo_key),
       linear_comment_registry: Keyword.get(opts, :linear_comment_registry),
       dependency_audit_module: dependency_audit_module(opts),

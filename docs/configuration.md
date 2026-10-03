@@ -285,8 +285,9 @@ agent:
 **Run profiles:**
 
 Symphony classifies each run by kind so a cheap run (landing, a CI fix) need not use the same
-model and effort as an implementation run. Nothing applies the resolved model and effort to the
-agent command yet; this section only defines and validates the config.
+model and effort as an implementation run. With the Claude runtime, each run starts Claude with
+`--model <model>` / `--effort <effort>` for its kind, appended after Symphony's own flags; a field
+that resolves to nothing adds no flag, so with nothing set the command is unchanged.
 
 ```yaml
 agent:
@@ -310,6 +311,14 @@ agent:
 - Config errors: an unknown kind under `run_profiles`, an unknown effort, an unknown profile key,
   or `--model` / `--effort` already in `command` while any of `model`, `effort`, or
   `run_profiles` is set. `symphony check` reports them.
+- The kind and profile are chosen once, when the run is dispatched, from the current workflow
+  config: an edit applies to the next dispatch without a restart. Every continuation turn of a run
+  keeps its profile. A CI fix or review feedback re-activation is a new run with its own kind.
+- The run history record keeps `run_kind`, `model` and `effort`, and the dispatch log line shows
+  `run_kind=… model=… effort=…` (`default` when nothing is added).
+- Codex runtime: `model` and `effort` are ignored; Codex keeps the model and reasoning effort
+  from its own config (set them in `command`, for example `codex -c model_reasoning_effort=high
+  app-server`). Symphony logs one warning when a run starts with a profile that resolves to a model or effort.
 
 **Concurrency and turns:**
 
