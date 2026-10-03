@@ -101,11 +101,12 @@ defmodule SymphonyElixir.ParentWalkthroughTest do
     end
   end
 
-  # Answers the parent lookup, the QA report comments and sub-issue creation.
+  # Answers the parent lookup, the QA report comments, sub-issue creation and blocked-by links.
   defp linear_client(opts \\ []) do
     recipient = self()
     parent_node = Keyword.get(opts, :parent, %{"id" => "issue-parent", "identifier" => "TP-900"})
     create_result = Keyword.get(opts, :create)
+    relation_result = Keyword.get(opts, :relation, {:ok, %{"data" => %{"issueRelationCreate" => %{"success" => true}}}})
 
     fn query, variables, _opts ->
       send(recipient, {:linear, query, variables})
@@ -135,6 +136,12 @@ defmodule SymphonyElixir.ParentWalkthroughTest do
         query =~ "SymphonyAgentCreateSubissue" ->
           n = System.unique_integer([:positive])
           create_result || {:ok, %{"data" => %{"issueCreate" => %{"success" => true, "issue" => %{"id" => "new-#{n}", "identifier" => "TP-9#{n}"}}}}}
+
+        query =~ "SymphonyAgentIssueByIdentifier" ->
+          {:ok, %{"data" => %{"issue" => %{"id" => "id-" <> variables.id, "identifier" => variables.id}}}}
+
+        query =~ "SymphonyAgentCreateIssueRelation" ->
+          relation_result
       end
     end
   end
@@ -168,10 +175,18 @@ defmodule SymphonyElixir.ParentWalkthroughTest do
     end)
   end
 
-  defp created_subissues do
-    receive_all()
+  defp created_subissues(messages \\ receive_all()) do
+    messages
     |> Enum.flat_map(fn
       {:linear, query, %{input: input}} -> if query =~ "SymphonyAgentCreateSubissue", do: [input], else: []
+      _message -> []
+    end)
+  end
+
+  defp relations_created(messages) do
+    messages
+    |> Enum.flat_map(fn
+      {:linear, query, %{input: input}} -> if query =~ "SymphonyAgentCreateIssueRelation", do: [input], else: []
       _message -> []
     end)
   end
@@ -290,7 +305,7 @@ defmodule SymphonyElixir.ParentWalkthroughTest do
       assert_received {:qa_agent_run, %{playbooks: [%{kind: "cli"}]}, _settings, _opts}
     end
 
-    test "each failing step becomes a Backlog child that names the step and holds the evidence" do
+    test "each failing step becomes a Backlog child that names the step, holds the evidence and blocks the ticket in Todo" do
       agent_result(:fail, %{
         summary: "Settings opens empty.",
         steps: [
@@ -302,9 +317,14 @@ defmodule SymphonyElixir.ParentWalkthroughTest do
       })
 
       assert :ok = run(verification())
-      assert_received {:state_update, "issue-fv", "Backlog"}
+      assert_received {:state_update, "issue-fv", "Todo"}
 
-      assert [first, second] = created_subissues()
+      messages = receive_all()
+      assert [first, second] = created_subissues(messages)
+
+      assert [%{"issueId" => "id-" <> _, "relatedIssueId" => "issue-fv", "type" => "blocks"}, %{"relatedIssueId" => "issue-fv"}] =
+               relations_created(messages)
+
       assert first["parentId"] == "issue-fv"
       assert first["stateId"] == "state-backlog"
       assert first["title"] == "Parent walkthrough fails: Open Settings"
@@ -343,8 +363,20 @@ defmodule SymphonyElixir.ParentWalkthroughTest do
 
       log = capture_log(fn -> assert :ok = run(verification(), linear_client: failing) end)
       assert log =~ "Failed to file a parent walkthrough finding for TP-910"
+      assert_received {:state_update, "issue-fv", "Backlog"}
       assert [{"issue-parent", report} | _rest] = comments_posted()
       refute report =~ "### Filed tickets"
+    end
+
+    test "a gap that cannot block the ticket sends it to Backlog for a human" do
+      agent_result(:fail, %{findings: ["The About tab is missing"]})
+      failing = linear_client(relation: {:error, :linear_down})
+
+      log = capture_log(fn -> assert :ok = run(verification(), linear_client: failing) end)
+      assert log =~ ~r/Failed to mark TP-910 blocked by TP-9\d+/
+      assert_received {:state_update, "issue-fv", "Backlog"}
+      assert [{"issue-parent", report}, _ticket] = comments_posted()
+      assert report =~ "**Verdict:** fail → TP-910 Backlog"
     end
 
     test "the report lists the filed tickets" do
@@ -352,7 +384,7 @@ defmodule SymphonyElixir.ParentWalkthroughTest do
 
       assert :ok = run(verification())
       assert [{"issue-parent", report}, _ticket] = comments_posted()
-      assert report =~ "**Verdict:** fail → TP-910 Backlog"
+      assert report =~ "**Verdict:** fail → TP-910 Todo"
       assert report =~ ~r/### Filed tickets\n\n- TP-9\d+ Parent walkthrough finding: The About tab is missing/
     end
 
