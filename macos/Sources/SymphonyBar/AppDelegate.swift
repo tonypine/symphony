@@ -4,8 +4,8 @@ import SymphonyBarCore
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemValidation {
     private var statusItem: NSStatusItem?
-    private let settingsWindow = SettingsWindowController()
     private let runner = SymphonyRunner()
+    private lazy var settingsWindow = SettingsWindowController(secrets: runner.secrets)
     private let poller = StatusPoller()
     private lazy var restarter = RestartController(runner: runner, poller: poller)
     private var machine = StatusMachine()

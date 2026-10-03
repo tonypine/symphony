@@ -154,7 +154,15 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    if model.isLoadingSecrets {
+                        HStack {
+                            ProgressView().controlSize(.small)
+                            Text(StatusMenu.keychainWaitingLine).foregroundStyle(.secondary)
+                        }
+                    }
+                    // Off until the read fills them in, so nothing typed is overwritten.
                     SecureField(SecretSettings.linearAPIKeyName, text: $model.linearAPIKey, prompt: Text("lin_api_…"))
+                        .disabled(model.isLoadingSecrets)
                     ForEach($model.extraRows) { $row in
                         HStack {
                             TextField("Name", text: $row.name, prompt: Text("NAME"))
@@ -171,6 +179,7 @@ struct SettingsView: View {
                         }
                     }
                     Button("Add Variable") { model.addRow() }
+                        .disabled(model.isLoadingSecrets)
                 } header: {
                     Text("Environment (stored in a file only you can read)")
                 }
@@ -181,6 +190,7 @@ struct SettingsView: View {
                         text: $model.openRouterAPIKey,
                         prompt: Text("sk-or-…")
                     )
+                    .disabled(model.isLoadingSecrets)
                     HStack {
                         Button("Test connection") { model.testOpenRouter() }
                             .disabled(model.isTestingOpenRouter || model.openRouterAPIKey.isEmpty)
@@ -250,7 +260,7 @@ struct SettingsView: View {
                     model.save(onSaved: close)
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(model.isSaving)
+                .disabled(!model.canSave)
             }
             .padding(20)
         }

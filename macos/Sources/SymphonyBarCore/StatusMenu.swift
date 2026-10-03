@@ -33,7 +33,7 @@ public enum StatusMenu {
         return "Symphony is \(statusWord(status))"
     }
 
-    /// Shown while Start, Restart or Update waits to read the Keychain, which is usually a password prompt.
+    /// Shown while Start, Restart, Update or Settings waits to read the Keychain, which is usually a password prompt.
     public static let keychainWaitingLine = "Waiting for Keychain access…"
 
     /// Lines shown under the status title, then the Keychain wait, the restart's progress or error and the last
