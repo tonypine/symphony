@@ -2709,18 +2709,20 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  # Candidates go out closest-to-done first. Once a Merging or Auto Review issue is left waiting
-  # for a slot, no Todo issue starts in this pass. `slot_waiting` is rebuilt from the pass, keeping
-  # the attempt of any retry that was waiting for a slot.
+  # Candidates go out closest-to-done first, each epic lane's tickets nearest the epic first. Once
+  # a Merging or Auto Review issue is left waiting for a slot, no Todo issue starts in this pass.
+  # `slot_waiting` is rebuilt from the pass, keeping the attempt of any retry that was waiting for a slot.
   defp dispatch_chosen_issues(issues, state) do
     active_states = active_state_set()
     terminal_states = terminal_state_set()
     previous_waiting = state.slot_waiting || %{}
     finish_waiting? = qa_pass_queued?()
+    auto_review_state = Config.settings!() |> AutoReview.state() |> normalize_issue_state()
 
     {state, _finish_waiting?} =
       issues
       |> sort_issues_for_dispatch()
+      |> then(&EpicLanes.order(state.epic_lanes, &1, fn issue -> stage_rank(issue.state, auto_review_state) end))
       |> Enum.reduce({%{state | slot_waiting: %{}}, finish_waiting?}, fn issue, acc ->
         maybe_dispatch_chosen_issue(issue, acc, previous_waiting, active_states, terminal_states)
       end)

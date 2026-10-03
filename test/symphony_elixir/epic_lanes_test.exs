@@ -59,6 +59,127 @@ defmodule SymphonyElixir.EpicLanesTest do
     end
   end
 
+  describe "the epic's path" do
+    test "takes in sub-tickets at any depth and open blockers, transitively, with how each was reached" do
+      candidates = [
+        epic("E1", [{"p1", "Todo"}, {"p2", "In Progress"}, {"old", "Done"}]),
+        # The next part waits on a blocker outside the epic, which waits on another one.
+        ticket("p1", "Todo", blocked_by: [link("B1", "In Progress"), link("gone", "Done"), %{identifier: "no-id"}]),
+        ticket("B1", "In Progress", blocked_by: [link("B2", nil)]),
+        # An in-flight part with its own sub-ticket, itself blocked by the next part (a cycle).
+        ticket("p2", "In Progress", sub_issues: [link("g1", "Todo")]),
+        ticket("g1", "Todo", blocked_by: [link("p1", "Todo")])
+      ]
+
+      %{lanes: [%{members: members}]} = EpicLanes.plan(candidates, 2, nil, @terminal)
+
+      assert Map.keys(members) |> Enum.sort() == ["B1", "B2", "g1", "p1", "p2"]
+      assert %{depth: 1, via: nil} = members["p1"]
+      assert %{depth: 2, via: %{relation: "blocks", identifier: "p1"}} = members["B1"]
+      assert %{depth: 2, via: %{relation: "sub_ticket_of", identifier: "p2"}} = members["g1"]
+      # B2 has no state and was not fetched: it is on the path, but a leaf.
+      assert %{depth: 3, state: nil, via: %{relation: "blocks", identifier: "B1"}} = members["B2"]
+    end
+
+    test "the lane runs a blocker of the next part from outside the epic instead of idling" do
+      candidates = [epic("E1", [{"p1", "Todo"}]), ticket("p1", "Todo", blocked_by: [link("B1", "Todo")]), ticket("B1", "Todo"), standalone("S1")]
+      plan = EpicLanes.plan(candidates, 2, 1, @terminal)
+
+      # The shared slot is taken; the blocker still starts, in the epic's lane.
+      assert {:lane, %{identifier: "E1"}} = EpicLanes.slot_for(plan, "B1", ["S1"])
+      assert EpicLanes.slot_label(plan, "B1", ["S1"]) == "lane:E1"
+    end
+
+    test "a grandchild runs in the epic's lane" do
+      candidates = [epic("E1", [{"p1", "In Progress"}]), ticket("p1", "In Progress", sub_issues: [link("g1", "Todo")]), ticket("g1", "Todo")]
+      plan = EpicLanes.plan(candidates, 1, nil, @terminal)
+
+      assert {:lane, %{identifier: "E1"}} = EpicLanes.slot_for(plan, "g1", [])
+    end
+
+    test "a blocker shared by two epics holds one lane, whichever is free first" do
+      candidates = [
+        epic("E1", [{"p1", "Todo"}, {"p3", "Todo"}]),
+        epic("E2", [{"q1", "Todo"}, {"q2", "Todo"}]),
+        ticket("p1", "Todo", blocked_by: [link("B1", "Todo")]),
+        ticket("q1", "Todo", blocked_by: [link("B1", "Todo")]),
+        ticket("B1", "Todo")
+      ]
+
+      plan = EpicLanes.plan(candidates, 3, 2, @terminal)
+
+      assert {:lane, %{identifier: "E1"}} = EpicLanes.slot_for(plan, "B1", [])
+      assert {:lane, %{identifier: "E2"}} = EpicLanes.slot_for(plan, "B1", ["p3"])
+
+      # Running, it counts once: E2's lane and the shared slot are both still free.
+      assert {:lane, %{identifier: "E2"}} = EpicLanes.slot_for(plan, "q2", ["B1"])
+      assert EpicLanes.slot_for(plan, "S1", ["B1", "B1"]) == :shared
+
+      # Next to a ticket only E1 can hold, the shared blocker takes E2's lane, until q2 needs it:
+      # then the blocker counts as shared.
+      assert EpicLanes.slot_for(plan, "S1", ["B1", "p3"]) == :shared
+      assert {:lane, %{identifier: "E2"}} = EpicLanes.slot_for(plan, "q2", ["B1", "p3"])
+
+      snapshot = EpicLanes.snapshot(plan, %{"B1" => %{state: "In Progress"}, "p3" => %{state: "In Progress"}})
+      assert %{lanes: [%{sub_issue: %{identifier: "p3"}}, %{sub_issue: %{identifier: "B1"}}], shared: %{used: 0}} = snapshot
+    end
+
+    test "with nothing on the path ready, the lane stays reserved" do
+      candidates = [
+        epic("E1", [{"p1", "Todo"}]),
+        ticket("p1", "Todo", blocked_by: [link("B1", "In Review")]),
+        ticket("B1", "In Review"),
+        standalone("S1"),
+        standalone("S2")
+      ]
+
+      plan = EpicLanes.plan(candidates, 2, nil, @terminal)
+
+      assert EpicLanes.slot_for(plan, "S1", []) == :shared
+      assert EpicLanes.slot_for(plan, "S2", ["S1"]) == :none
+      assert %{lanes: [%{status: "waiting", sub_issue: %{identifier: "p1"}}]} = EpicLanes.snapshot(plan, %{"S1" => %{}})
+    end
+
+    test "the snapshot names the ticket a running blocker or sub-ticket serves" do
+      candidates = [
+        epic("E1", [{"p1", "Todo"}]),
+        epic("E2", [{"q1", "In Progress"}]),
+        ticket("p1", "Todo", blocked_by: [link("B1", "Todo")]),
+        ticket("q1", "In Progress", sub_issues: [link("g1", "Todo")])
+      ]
+
+      plan = EpicLanes.plan(candidates, 3, nil, @terminal)
+
+      assert %{
+               lanes: [
+                 %{status: "running", sub_issue: %{identifier: "B1", state: "In Progress", via: %{relation: "blocks", identifier: "p1"}}},
+                 %{status: "running", sub_issue: %{identifier: "g1", state: "Todo", via: %{relation: "sub_ticket_of", identifier: "q1"}}}
+               ]
+             } = EpicLanes.snapshot(plan, %{"B1" => %{state: "In Progress"}, "g1" => %{}})
+    end
+  end
+
+  describe "order/3" do
+    test "each lane's tickets go nearest first, within their own positions and stage" do
+      candidates = [
+        epic("E1", [{"p1", "Todo"}, {"p2", "In Progress"}, {"r1", "Rework"}]),
+        epic("E2", [{"q1", "Todo"}]),
+        ticket("p2", "In Progress", sub_issues: [link("g1", "Todo"), link("g2", "Rework"), link("q1", "Todo")])
+      ]
+
+      plan = EpicLanes.plan(candidates, 3, nil, @terminal)
+      stage = fn issue -> issue.state end
+
+      # Dispatch order by priority: the grandchildren rank above the next part.
+      issues =
+        [ticket("g2", "Rework"), ticket("r1", "Rework"), ticket("g1", "Todo"), standalone("S1")] ++
+          [:not_an_issue, ticket("q1", "Todo"), ticket("p1", "Todo")]
+
+      assert plan |> EpicLanes.order(issues, stage) |> Enum.map(&ids/1) == ["r1", "g2", "p1", "S1", :not_an_issue, "q1", "g1"]
+      assert EpicLanes.order(nil, issues, stage) == issues
+    end
+  end
+
   describe "slot_for/3" do
     test "a lane stays reserved for its epic while a standalone takes the shared slot, then runs the next part" do
       # max_total 2: part 1 in review, part 2 blocked by it, one standalone ready.
@@ -88,6 +209,36 @@ defmodule SymphonyElixir.EpicLanesTest do
       assert EpicLanes.slot_for(plan, "b", ["a"]) == :shared
       assert EpicLanes.slot_for(plan, "c", ["a", "b"]) == :shared
       assert EpicLanes.slot_for(plan, "S1", ["a", "b", "c"]) == :none
+    end
+
+    test "a running blocker on two paths leaves the candidate the one lane it can use" do
+      # No shared slots: Y blocks a part of both epics; X is a parallel part of E1 only.
+      candidates = [
+        epic("E1", [{"p1", "Todo"}, {"X", "Todo"}]),
+        epic("E2", [{"q1", "Todo"}]),
+        ticket("p1", "Todo", blocked_by: [link("Y", "In Progress")]),
+        ticket("q1", "Todo", blocked_by: [link("Y", "In Progress")])
+      ]
+
+      plan = EpicLanes.plan(candidates, 2, 2, @terminal)
+
+      assert {:lane, %{identifier: "E1"}} = EpicLanes.slot_for(plan, "X", ["Y"])
+      assert EpicLanes.slot_for(plan, "S1", ["Y", "X"]) == :none
+
+      snapshot = EpicLanes.snapshot(plan, %{"Y" => %{}, "X" => %{}})
+      assert %{lanes: [%{sub_issue: %{identifier: "X"}}, %{sub_issue: %{identifier: "Y"}}], shared: %{used: 0}} = snapshot
+    end
+
+    test "the candidate does not take a lane a running ticket needs" do
+      # No shared slots: B1 runs in E1's lane, the only one on its path.
+      candidates = [
+        epic("E1", [{"p1", "Todo"}, {"A1", "Todo"}]),
+        ticket("p1", "Todo", blocked_by: [link("B1", "In Progress")])
+      ]
+
+      plan = EpicLanes.plan(candidates, 1, 1, @terminal)
+
+      assert EpicLanes.slot_for(plan, "A1", ["B1"]) == :none
     end
 
     test "with no plan yet every slot is shared" do
@@ -147,6 +298,24 @@ defmodule SymphonyElixir.EpicLanesTest do
       sub_issues: [%{identifier: "no-id"} | Enum.map(parts, fn {id, state} -> %{id: id, identifier: id, state: state} end)]
     }
   end
+
+  defp ticket(id, state, opts \\ []) do
+    %Issue{
+      id: id,
+      identifier: id,
+      title: id,
+      state: state,
+      priority: 2,
+      labels: [],
+      blocked_by: Keyword.get(opts, :blocked_by, []),
+      sub_issues: Keyword.get(opts, :sub_issues, [])
+    }
+  end
+
+  defp link(id, state), do: %{id: id, identifier: id, state: state}
+
+  defp ids(%Issue{id: id}), do: id
+  defp ids(other), do: other
 
   defp standalone(identifier) do
     %Issue{id: identifier, identifier: identifier, title: identifier, state: "Todo", priority: 2, labels: []}
