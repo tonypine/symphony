@@ -454,6 +454,9 @@ agent:
   reports before runs resume.
 - `usage_limit.unknown_reset_retry_seconds` (default `900`, `>= 60`): how long the hold lasts when
   no reset time is known (neither in the rejection nor remembered for that window).
+- At the resume time one held run (the first in dispatch order) goes out alone. If Claude accepts
+  it, the other held runs follow; if it hits the limit again, the hold starts over from the new
+  reset time (or `unknown_reset_retry_seconds`). New Claude work stays held meanwhile.
 - The hold is kept across restarts and is separate from the operator pause: resuming never
   clears a pause you set.
 

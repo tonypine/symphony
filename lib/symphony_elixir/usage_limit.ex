@@ -7,6 +7,10 @@ defmodule SymphonyElixir.UsageLimit do
   `{provider, scope}`: scope `:all` holds every run of the provider, a model scope
   (`"opus"`, `"sonnet"`) only runs whose model is in that family.
 
+  At `resume_at` a hold moves to `phase: :canary`: one held run goes out alone while the
+  hold keeps covering every other run, and the canary's outcome decides whether the hold
+  clears or pauses again.
+
   The orchestrator owns the holds and persists them with `RunStore.put_usage_limits/1`;
   this module builds and matches them.
   """
@@ -26,7 +30,8 @@ defmodule SymphonyElixir.UsageLimit do
           resets_at: DateTime.t() | nil,
           resume_at: DateTime.t(),
           source: atom() | nil,
-          phase: :paused,
+          phase: :paused | :canary,
+          canary_issue_id: String.t() | nil,
           issue_identifier: String.t() | nil
         }
 
@@ -43,7 +48,8 @@ defmodule SymphonyElixir.UsageLimit do
   Creates the hold for `info`, or refreshes `existing`. A known reset time is used as
   reported; an unknown one falls back to the remembered reset time of the window (see
   `remember_windows/2`), then to `now + unknown_reset_retry_seconds`. A refresh without
-  a known reset time never brings the resume time forward.
+  a known reset time never brings the resume time forward. A canary hold goes back to
+  `:paused`.
   """
   @spec put(entry() | nil, map(), keyword()) :: entry()
   def put(existing, info, opts) when is_map(info) do
@@ -75,6 +81,7 @@ defmodule SymphonyElixir.UsageLimit do
       resume_at: resume_at,
       source: Map.get(info, :source),
       phase: :paused,
+      canary_issue_id: nil,
       issue_identifier: Keyword.get(opts, :issue_identifier)
     }
   end
@@ -134,12 +141,27 @@ defmodule SymphonyElixir.UsageLimit do
   defp scope_matches?(scope, model) when is_binary(scope) and is_binary(model), do: String.contains?(String.downcase(model), scope)
   defp scope_matches?(_scope, _model), do: false
 
-  @doc "The first hold in `usage_limits` that covers `profile`, or nil."
-  @spec holding(map(), map()) :: entry() | nil
-  def holding(usage_limits, profile) when is_map(usage_limits) and is_map(profile) do
+  @doc "Moves `entry` to the canary phase with `issue_id` as the one run let through."
+  @spec canary(entry(), String.t()) :: entry()
+  def canary(entry, issue_id) when is_binary(issue_id), do: Map.merge(entry, %{phase: :canary, canary_issue_id: issue_id})
+
+  @doc "Whether `entry` is in the canary phase with `issue_id` as its canary."
+  @spec canary?(entry(), String.t() | nil) :: boolean()
+  def canary?(entry, issue_id), do: Map.get(entry, :phase) == :canary and Map.get(entry, :canary_issue_id) == issue_id
+
+  @doc "`entry` back in the paused phase; a canary restored after a restart is chosen again."
+  @spec paused(entry()) :: entry()
+  def paused(entry), do: Map.merge(entry, %{phase: :paused, canary_issue_id: nil})
+
+  @doc """
+  The first hold in `usage_limits` that covers `profile`, or nil. A hold in the canary
+  phase does not hold its own canary, `issue_id`.
+  """
+  @spec holding(map(), map(), String.t() | nil) :: entry() | nil
+  def holding(usage_limits, profile, issue_id \\ nil) when is_map(usage_limits) and is_map(profile) do
     usage_limits
     |> Enum.sort_by(fn {_key, entry} -> DateTime.to_unix(entry.resume_at) end, :desc)
-    |> Enum.find_value(fn {_key, entry} -> if covers?(entry, profile), do: entry end)
+    |> Enum.find_value(fn {_key, entry} -> if covers?(entry, profile) and not canary?(entry, issue_id), do: entry end)
   end
 
   @doc "The persisted hold that covers `profile`, or nil; for dispatch paths outside the orchestrator."

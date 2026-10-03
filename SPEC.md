@@ -1970,10 +1970,21 @@ reached (for Claude, a used-up five-hour or weekly window):
   `agent.provider`, and its model for a model scope), every dispatch path skips it: the poll,
   retries, operator PR runs and Auto Review QA passes. Other providers keep dispatching. Epic lanes
   stay reserved.
-- At `resume_at` the hold is cleared, an immediate poll tick runs, and held retries return to normal
-  candidate selection with their attempt, as a retry waiting for a slot does. Resuming never sets
-  or clears the operator pause; the daily budget, workspace quota and Linear rate-limit gates still
-  apply.
+- At `resume_at` the hold moves to `phase: canary` and exactly one held retry, the first in normal
+  dispatch order, is released as the canary; an immediate poll tick runs. The hold keeps covering
+  every other run of that provider, so slots freed by held runs are not filled with other work on
+  it. With nothing held, the hold is cleared and no canary runs.
+- When the canary's first `rate_limit_event` is `allowed` or `allowed_warning`, or the canary ends
+  any way other than this limit (success, another failure, which follows the normal failure path),
+  the hold is cleared and the other held retries return to normal candidate selection with their
+  attempt, as a retry waiting for a slot does.
+- When the canary ends on the same usage limit, the hold goes back to `phase: paused` with the new
+  `resume_at` (as above) and the canary's retry is held with its attempt. It is the same episode:
+  `since` is kept and no second pause is reported.
+- A canary that leaves the active states before it runs is replaced by the next held retry. A
+  canary hold restored on startup starts over from `phase: paused`.
+- Resuming never sets or clears the operator pause; the daily budget, workspace quota and Linear
+  rate-limit gates still apply.
 
 ### 8.5 Active Run Reconciliation
 

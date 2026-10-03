@@ -327,7 +327,7 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
     Process.cancel_timer(state.retry_attempts[issue.id].timer_ref)
   end
 
-  test "the resume timer clears the hold and dispatches the held issue with the same attempt", ctx do
+  test "the resume timer dispatches the held issue as the canary with the same attempt, and its clean exit clears the hold", ctx do
     write_usage_workflow!(ctx)
     pid = start_orchestrator(ctx, :ResumeOrchestrator)
     issue = issue("issue-usage-resume", "MT-RESUME")
@@ -347,8 +347,10 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
       capture_log(fn ->
         send(pid, {:usage_limit_resume, @anthropic})
         wait_until(fn -> Enum.find(RunStore.list_runs(:all), &(&1.issue_id == issue.id and &1.status != "usage_limited")) end)
+        wait_until(fn -> :sys.get_state(pid).usage_limits == %{} end)
       end)
 
+    assert log =~ "Usage limit canary provider=anthropic scope=all issue_identifier=MT-RESUME"
     assert log =~ "Usage limit resumed provider=anthropic scope=all paused_for_s=3720"
     assert %{attempt: 3} = Enum.find(RunStore.list_runs(:all), &(&1.issue_id == issue.id and &1.status != "usage_limited"))
     assert RunStore.get_usage_limits() == %{}
@@ -372,7 +374,7 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
     send(pid, {:usage_limit_resume, @anthropic})
     state = :sys.get_state(pid)
 
-    assert state.usage_limits == %{}
+    assert %{phase: :canary, canary_issue_id: "issue-usage-operator"} = state.usage_limits[@anthropic]
     assert %{paused: true, reason: "maintenance"} = state.pause
     assert %{paused: true} = RunStore.get_paused()
     assert %{attempt: 3, reason: "usage limit resumed"} = state.slot_waiting[issue.id]
@@ -454,6 +456,213 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
 
     gh_runner = fn ["pr", "view", "123" | _rest], _opts -> {pr, 0} end
     assert {:error, :usage_limited} = Orchestrator.dispatch_pr(pid, "123", gh_runner: gh_runner)
+  end
+
+  # Holds `held` on the usage limit, then makes `canary` (left running) the hold's canary.
+  defp start_canary!(ctx, pid, %Issue{} = canary, held) do
+    {canary_pid, canary_ref, _run_id} = start_run!(pid, canary)
+
+    for %Issue{} = issue <- held do
+      {worker_pid, worker_ref, _run_id} = start_run!(pid, issue)
+      send(pid, {:DOWN, worker_ref, :process, worker_pid, {:usage_limited, usage_info(ctx)}})
+    end
+
+    :sys.replace_state(pid, fn state ->
+      %{state | usage_limits: %{@anthropic => UsageLimit.canary(state.usage_limits[@anthropic], canary.id)}}
+    end)
+
+    {canary_pid, canary_ref}
+  end
+
+  test "at resume_at only the first held run in dispatch order goes out, and the hold keeps the provider's slots", ctx do
+    write_usage_workflow!(ctx)
+    pid = start_orchestrator(ctx, :CanaryOrchestrator)
+    working = issue("issue-canary-working", "MT-WORKING")
+    landing = issue("issue-canary-landing", "MT-LANDING", %{state: "Merging"})
+
+    for %Issue{} = held <- [working, landing] do
+      {worker_pid, worker_ref, _run_id} = start_run!(pid, held)
+      send(pid, {:DOWN, worker_ref, :process, worker_pid, {:usage_limited, usage_info(ctx)}})
+    end
+
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [working, landing])
+    set_clock(ctx, DateTime.add(ctx.now, 3720))
+
+    log =
+      capture_log(fn ->
+        send(pid, {:usage_limit_resume, @anthropic})
+        send(self(), {:state, :sys.get_state(pid)})
+      end)
+
+    assert_received {:state, state}
+    assert log =~ "Usage limit canary provider=anthropic scope=all issue_identifier=MT-LANDING"
+    assert %{phase: :canary, canary_issue_id: "issue-canary-landing"} = state.usage_limits[@anthropic]
+    assert %{phase: :canary} = RunStore.get_usage_limits()[@anthropic]
+    assert %{attempt: 3} = state.slot_waiting[landing.id]
+    assert %{attempt: 3, usage_limit_key: @anthropic} = state.retry_attempts[working.id]
+    refute Map.has_key?(state.usage_limit_timers, @anthropic)
+
+    # Only the canary may take a slot: the other held run and new Claude work stay held.
+    assert Orchestrator.should_dispatch_issue_for_test(landing, %{state | claimed: MapSet.new()})
+    refute Orchestrator.should_dispatch_issue_for_test(working, %{state | claimed: MapSet.new()})
+    refute Orchestrator.should_dispatch_issue_for_test(issue("issue-canary-fresh", "MT-FRESH", %{state: "Todo"}), state)
+
+    # A late resume timer leaves the canary alone, and a held retry that comes due waits the
+    # unknown-reset interval rather than spinning.
+    send(pid, {:usage_limit_resume, @anthropic})
+    assert %{phase: :canary, canary_issue_id: "issue-canary-landing"} = :sys.get_state(pid).usage_limits[@anthropic]
+
+    assert {:noreply, retried} =
+             Orchestrator.handle_retry_issue_for_test(state, working.id, 3, %{identifier: working.identifier}, fn _ids -> {:ok, [working]} end)
+
+    assert %{attempt: 3, delay_type: :usage_limit, due_at_ms: due_at_ms} = retried.retry_attempts[working.id]
+    delay_ms = due_at_ms - System.monotonic_time(:millisecond)
+    assert delay_ms > 890_000 and delay_ms <= 900_000
+    Process.cancel_timer(retried.retry_attempts[working.id].timer_ref)
+  end
+
+  test "the canary falls back to issue id order when the tracker cannot order the held runs", ctx do
+    write_usage_workflow!(ctx)
+    pid = start_orchestrator(ctx, :CanaryFallbackOrchestrator)
+
+    for %Issue{} = held <- [issue("issue-canary-b", "MT-B"), issue("issue-canary-a", "MT-A")] do
+      {worker_pid, worker_ref, _run_id} = start_run!(pid, held)
+      send(pid, {:DOWN, worker_ref, :process, worker_pid, {:usage_limited, usage_info(ctx)}})
+    end
+
+    state = :sys.get_state(pid)
+    on_exit(fn -> Enum.each(state.retry_attempts, fn {_id, retry} -> Process.cancel_timer(retry.timer_ref) end) end)
+
+    for fetcher <- [fn _ids -> {:error, :boom} end, fn _ids -> {:ok, []} end] do
+      canary_state = Orchestrator.start_usage_limit_canary_for_test(state, @anthropic, fetcher)
+      assert %{canary_issue_id: "issue-canary-a"} = canary_state.usage_limits[@anthropic]
+    end
+  end
+
+  test "with nothing held at resume_at the hold clears without a canary", ctx do
+    write_usage_workflow!(ctx)
+    pid = start_orchestrator(ctx, :CanaryEmptyOrchestrator)
+    :sys.replace_state(pid, &%{&1 | usage_limits: %{@anthropic => hold(ctx)}})
+    set_clock(ctx, DateTime.add(ctx.now, 3720))
+
+    log =
+      capture_log(fn ->
+        send(pid, {:usage_limit_resume, @anthropic})
+        :sys.get_state(pid)
+      end)
+
+    assert :sys.get_state(pid).usage_limits == %{}
+    assert log =~ "Usage limit resumed provider=anthropic scope=all paused_for_s=3720"
+    refute log =~ "Usage limit canary"
+  end
+
+  test "an allowed rate_limit_event from the canary clears the hold and releases the rest", ctx do
+    write_usage_workflow!(ctx)
+    pid = start_orchestrator(ctx, :CanaryAllowedOrchestrator)
+    canary = issue("issue-canary-allowed", "MT-CANARY")
+    held = issue("issue-canary-rest", "MT-REST")
+    start_canary!(ctx, pid, canary, [held])
+
+    # Updates without usage windows say nothing about the limit.
+    send(pid, {:codex_worker_update, canary.id, %{event: :notification, timestamp: DateTime.utc_now(), payload: "hi", usage_windows: %{}}})
+    assert %{phase: :canary} = :sys.get_state(pid).usage_limits[@anthropic]
+
+    send(
+      pid,
+      {:codex_worker_update, canary.id,
+       %{
+         event: :notification,
+         timestamp: DateTime.utc_now(),
+         payload: "rate_limit five_hour allowed",
+         usage_windows: %{"five_hour" => %{status: "allowed", resets_at: DateTime.add(ctx.now, 18_000), utilization: 0.01}}
+       }}
+    )
+
+    state = :sys.get_state(pid)
+    assert state.usage_limits == %{}
+    assert RunStore.get_usage_limits() == %{}
+    refute Map.has_key?(state.retry_attempts, held.id)
+    assert Map.has_key?(state.running, canary.id)
+  end
+
+  test "a canary that hits the limit again pauses with the new reset, keeps its attempt and logs it once", ctx do
+    write_usage_workflow!(ctx)
+    pid = start_orchestrator(ctx, :CanaryRepauseOrchestrator)
+    canary = issue("issue-canary-limited", "MT-CANARY")
+    held = issue("issue-canary-waiting", "MT-WAITING")
+    {canary_pid, canary_ref} = start_canary!(ctx, pid, canary, [held])
+    set_clock(ctx, DateTime.add(ctx.now, 3720))
+    next_reset = DateTime.add(ctx.now, 7200)
+
+    log =
+      capture_log(fn ->
+        info = usage_info(ctx, %{resets_at: next_reset})
+        send(pid, {:DOWN, canary_ref, :process, canary_pid, {:usage_limited, info}})
+        :sys.get_state(pid)
+      end)
+
+    state = :sys.get_state(pid)
+    assert log =~ "Usage limit still active provider=anthropic scope=all next_resume_at=#{DateTime.to_iso8601(DateTime.add(next_reset, 120))} issue_identifier=MT-CANARY"
+    refute log =~ "Usage limit pause"
+    refute log =~ "Usage limit resumed"
+
+    assert %{phase: :paused, canary_issue_id: nil, since: since, resume_at: resume_at} = state.usage_limits[@anthropic]
+    assert since == ctx.now
+    assert resume_at == DateTime.add(next_reset, 120)
+    assert is_reference(state.usage_limit_timers[@anthropic])
+    assert %{attempt: 3, usage_limit_key: @anthropic} = state.retry_attempts[canary.id]
+    assert %{attempt: 3, usage_limit_key: @anthropic} = state.retry_attempts[held.id]
+  end
+
+  test "a canary that fails for another reason clears the hold and retries on the normal path", ctx do
+    write_usage_workflow!(ctx)
+    pid = start_orchestrator(ctx, :CanaryFailOrchestrator)
+    canary = issue("issue-canary-failed", "MT-CANARY")
+    held = issue("issue-canary-next", "MT-NEXT")
+    {canary_pid, canary_ref} = start_canary!(ctx, pid, canary, [held])
+
+    send(pid, {:DOWN, canary_ref, :process, canary_pid, :boom})
+    state = :sys.get_state(pid)
+
+    assert state.usage_limits == %{}
+    assert %{attempt: 4, delay_type: nil} = state.retry_attempts[canary.id]
+    refute Map.has_key?(state.retry_attempts, held.id)
+  end
+
+  test "a canary that left the active states is replaced by the next held run", ctx do
+    write_usage_workflow!(ctx)
+    pid = start_orchestrator(ctx, :CanaryGoneOrchestrator)
+    held = issue("issue-canary-replacement", "MT-REPLACEMENT")
+    {worker_pid, worker_ref, _run_id} = start_run!(pid, held)
+    send(pid, {:DOWN, worker_ref, :process, worker_pid, {:usage_limited, usage_info(ctx)}})
+
+    :sys.replace_state(pid, fn state ->
+      %{state | usage_limits: %{@anthropic => UsageLimit.canary(state.usage_limits[@anthropic], "issue-canary-gone")}}
+    end)
+
+    state = :sys.get_state(pid)
+    on_exit(fn -> Enum.each(state.retry_attempts, fn {_id, retry} -> Process.cancel_timer(retry.timer_ref) end) end)
+
+    log = capture_log(fn -> send(self(), {:state, Orchestrator.dispatch_chosen_issues_for_test([], state)}) end)
+    assert_received {:state, state}
+
+    assert log =~ "Usage limit canary gone provider=anthropic scope=all issue_id=issue-canary-gone"
+    assert %{phase: :canary, canary_issue_id: "issue-canary-replacement"} = state.usage_limits[@anthropic]
+    assert %{attempt: 3} = state.slot_waiting[held.id]
+
+    # A canary that was dispatched is left alone.
+    claimed = %{state | claimed: MapSet.put(state.claimed, held.id)}
+    assert Orchestrator.dispatch_chosen_issues_for_test([], claimed).usage_limits == state.usage_limits
+  end
+
+  test "a canary restored after a restart is chosen again at resume_at", ctx do
+    write_usage_workflow!(ctx)
+    :ok = RunStore.put_usage_limits(%{@anthropic => UsageLimit.canary(hold(ctx), "issue-canary-before-restart")})
+    pid = start_orchestrator(ctx, :CanaryRestartOrchestrator)
+    state = :sys.get_state(pid)
+
+    assert %{phase: :paused, canary_issue_id: nil} = state.usage_limits[@anthropic]
+    assert is_reference(state.usage_limit_timers[@anthropic])
   end
 
   defp orchestrator_state do

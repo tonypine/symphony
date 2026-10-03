@@ -304,7 +304,8 @@ records it as `stopped` without changing the Linear issue state.
 
 When a run hits the Claude usage limit, Symphony holds new Claude runs on its own and resumes them
 when the limit resets (plus `agent.usage_limit.resume_margin_seconds`), keeping each held issue's
-attempt. Runs on other providers keep going, and an operator pause is never cleared by it. Set
+attempt. One held run goes first; the rest follow only once Claude accepts it, and the hold starts
+again if the limit is still in force. Runs on other providers keep going, and an operator pause is never cleared by it. Set
 `agent.usage_limit.auto_pause: false` to fail and retry such runs as before.
 
 ### Docker
