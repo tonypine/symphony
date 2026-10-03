@@ -1006,6 +1006,59 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert download_conn.resp_body == cli_line <> "\n"
   end
 
+  test "state api serves the terminal dashboard frame for symphony dashboard" do
+    dashboard = Module.concat(__MODULE__, :TerminalFrameDashboard)
+    start_supervised!({SymphonyElixir.StatusDashboard, name: dashboard, enabled: false})
+    start_test_endpoint(status_dashboard: dashboard, snapshot_timeout_ms: 5)
+
+    conn = get(build_conn(), "/api/v1/state?format=terminal&columns=140")
+    assert response(conn, 200) =~ "SYMPHONY STATUS"
+    assert Plug.Conn.get_resp_header(conn, "content-type") == ["text/plain; charset=utf-8"]
+
+    # A width that isn't a positive number falls back to the default width.
+    assert response(get(build_conn(), "/api/v1/state?format=terminal&columns=wide"), 200) =~ "SYMPHONY STATUS"
+    assert response(get(build_conn(), "/api/v1/state?format=terminal&columns[]=1"), 200) =~ "SYMPHONY STATUS"
+    assert response(get(build_conn(), "/api/v1/state?format=terminal"), 200) =~ "SYMPHONY STATUS"
+  end
+
+  test "state api caps the terminal frame width" do
+    dashboard = Module.concat(__MODULE__, :WidthEchoDashboard)
+
+    echo_width = fn _snapshot, _tps, columns -> "columns=#{inspect(columns)}" end
+    start_supervised!({SymphonyElixir.StatusDashboard, name: dashboard, enabled: false, format_fun: echo_width})
+
+    start_test_endpoint(status_dashboard: dashboard, snapshot_timeout_ms: 5)
+
+    assert response(get(build_conn(), "/api/v1/state?format=terminal&columns=1000000000"), 200) == "columns=1000"
+    assert response(get(build_conn(), "/api/v1/state?format=terminal&columns=140"), 200) == "columns=140"
+  end
+
+  test "state api answers 503 for the terminal frame when rendering it fails" do
+    dashboard = Module.concat(__MODULE__, :RaisingFrameDashboard)
+
+    raise_bad = fn _snapshot, _tps, _columns -> raise ArgumentError, "bad snapshot" end
+    pid = start_supervised!({SymphonyElixir.StatusDashboard, name: dashboard, enabled: false, format_fun: raise_bad})
+
+    start_test_endpoint(status_dashboard: dashboard, snapshot_timeout_ms: 5)
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert json_response(get(build_conn(), "/api/v1/state?format=terminal"), 503) ==
+                 %{"error" => %{"code" => "dashboard_unavailable", "message" => "Terminal dashboard is unavailable"}}
+      end)
+
+    assert log =~ "Failed rendering status dashboard frame: bad snapshot"
+    assert Process.alive?(pid)
+    assert GenServer.whereis(dashboard) == pid
+  end
+
+  test "state api answers 503 for the terminal frame when no dashboard runs" do
+    start_test_endpoint(status_dashboard: Module.concat(__MODULE__, :MissingDashboard), snapshot_timeout_ms: 5)
+
+    assert json_response(get(build_conn(), "/api/v1/state?format=terminal"), 503) ==
+             %{"error" => %{"code" => "dashboard_unavailable", "message" => "Terminal dashboard is unavailable"}}
+  end
+
   test "phoenix observability api preserves 405, 404, and unavailable behavior" do
     unavailable_orchestrator = Module.concat(__MODULE__, :UnavailableOrchestrator)
     start_test_endpoint(orchestrator: unavailable_orchestrator, snapshot_timeout_ms: 5)

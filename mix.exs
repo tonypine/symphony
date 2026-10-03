@@ -1,10 +1,12 @@
 defmodule SymphonyElixir.MixProject do
   use Mix.Project
 
+  @version "0.0.1"
+
   def project do
     [
       app: :symphony_elixir,
-      version: "0.0.1",
+      version: @version,
       elixir: "~> 1.19",
       compilers: [:phoenix_live_view] ++ Mix.compilers(),
       start_permanent: Mix.env() == :prod,
@@ -56,6 +58,7 @@ defmodule SymphonyElixir.MixProject do
           SymphonyElixir.HttpServer,
           SymphonyElixir.StatusDashboard,
           SymphonyElixir.StatusDashboard.Renderer,
+          SymphonyElixir.TerminalDashboard.Terminal,
           SymphonyElixir.LogFile,
           SymphonyElixir.Workflow,
           SymphonyElixir.WorkflowStore,
@@ -152,6 +155,7 @@ defmodule SymphonyElixir.MixProject do
   defp releases do
     [
       symphony: [
+        version: release_version(),
         include_executables_for: [:unix],
         applications: [
           symphony_elixir: :permanent
@@ -165,5 +169,19 @@ defmodule SymphonyElixir.MixProject do
         ]
       ]
     ]
+  end
+
+  # Burrito unpacks into a directory named after the release version and reuses
+  # it when it already exists, so each packaged build needs its own version. The
+  # build number goes in as a semver pre-release (0.0.1-42): Burrito's launcher
+  # must parse the version as semver and orders numeric pre-releases by value, so
+  # it still deletes the directories of older builds. A pre-release sorts below
+  # the plain version, so an unsuffixed build's directory (such as one from
+  # before build numbers) is never deleted and has to be removed by hand.
+  defp release_version do
+    case System.get_env("SYMPHONY_BUILD_NUMBER", "") do
+      "" -> @version
+      build -> "#{@version}-#{build}"
+    end
   end
 end
