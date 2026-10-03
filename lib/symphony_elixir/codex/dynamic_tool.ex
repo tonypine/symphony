@@ -6,6 +6,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   require Logger
 
   alias SymphonyElixir.AgentTools.{GitHub, Linear}
+  alias SymphonyElixir.Linear.Usage, as: LinearUsage
   alias SymphonyElixir.QaDriver
 
   @tool_schemas [
@@ -443,12 +444,18 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
     case Map.fetch(@allowed_arguments, tool) do
       {:ok, allowed_arguments} ->
-        with_arguments(tool, arguments, allowed_arguments, &execute_authorized_tool(tool, context, &1, opts))
+        with_issue_caller(context.issue, fn ->
+          with_arguments(tool, arguments, allowed_arguments, &execute_authorized_tool(tool, context, &1, opts))
+        end)
 
       :error ->
         tool_not_found_response(tool)
     end
   end
+
+  # Linear requests from an agent's tool calls count against its issue.
+  defp with_issue_caller(%{identifier: identifier}, fun) when is_binary(identifier), do: LinearUsage.with_caller({:agent, identifier}, fun)
+  defp with_issue_caller(_issue, fun), do: fun.()
 
   @spec tool_specs() :: [map()]
   def tool_specs, do: @tool_schemas

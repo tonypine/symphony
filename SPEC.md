@@ -2543,6 +2543,16 @@ Orchestrator behavior on tracker errors:
   tracker calls locally, and surface the pause in the status snapshot.
 - Soft brake: record `x-ratelimit-requests-remaining` from every response and stretch the issue-poll
   interval 2x below 10% of `x-ratelimit-requests-limit` (4x below 5%) until the budget recovers.
+- Transient errors (a rate limit, a transport error such as a timeout or refused connection, or an
+  HTTP 429/5xx answer) after a finished agent turn do not fail the run: the post-turn issue refresh
+  waits for Linear (until the pause ends, or 5 s doubling up to 60 s) and retries in the same run
+  and session, for at most five minutes. A post-PR move to Auto Review or In Review, a retry's
+  issue refresh, and a retry's dispatch refresh that hit one keep the retry's attempt and retry
+  after 5 s (or when the pause ends) instead of the failure backoff. A retry whose dispatch refresh
+  fails for any reason is scheduled again rather than dropped.
+- Usage by caller: count every Linear request against its caller (orchestrator, CI poller, PR review
+  poller, Auto Review, post-PR transition, `agent:<identifier>` for an agent run and its tools) over
+  a rolling hour, and show the counts in the status snapshot (`linear_usage` in `/api/v1/state`).
 
 ### 11.5 Tracker Writes (Important Boundary)
 
@@ -2919,7 +2929,16 @@ Minimum endpoints:
         "daily_remaining": 3770000,
         "daily_paused": false
       },
-      "rate_limits": null
+      "rate_limits": null,
+      "linear_usage": {
+        "window_ms": 3600000,
+        "total": 412,
+        "callers": [
+          {"caller": "orchestrator", "requests": 240},
+          {"caller": "agent:ABC-123", "requests": 130},
+          {"caller": "ci_poller", "requests": 42}
+        ]
+      }
     }
     ```
 

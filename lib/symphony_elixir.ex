@@ -75,6 +75,7 @@ defmodule SymphonyElixir.Application do
           SymphonyElixir.AgentProcesses,
           {Task.Supervisor, name: SymphonyElixir.TaskSupervisor},
           SymphonyElixir.Config.Cache,
+          SymphonyElixir.Linear.Usage,
           SymphonyElixir.McpServer,
           {Registry, keys: :unique, name: SymphonyElixir.Repo.Registry},
           repo_supervisor_specs(system_config.repos),

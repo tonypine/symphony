@@ -6,7 +6,7 @@ defmodule SymphonyElixir.Linear.Client do
   require Logger
   alias SymphonyElixir.{AgentLabels, AuditLog, Config, Linear.Issue, Secret}
   alias SymphonyElixir.GitHub.Hosts
-  alias SymphonyElixir.Linear.RateLimit
+  alias SymphonyElixir.Linear.{RateLimit, Usage}
 
   @issue_page_size 50
   @attachment_page_size 20
@@ -351,6 +351,7 @@ defmodule SymphonyElixir.Linear.Client do
     with gate when gate in [:ok, :probe] <- RateLimit.check(now_ms_fun.()),
          {:ok, headers} <- graphql_headers() do
       RateLimit.record_request()
+      Usage.record()
 
       payload
       |> request_fun.(headers)
