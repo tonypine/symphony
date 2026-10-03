@@ -42,7 +42,8 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
           plugin_dir: Path.t(),
           mcp_session: McpServer.session() | nil,
           mcp_remote_socket_path: Path.t() | nil,
-          mcp_remote_shim_path: Path.t() | nil
+          mcp_remote_shim_path: Path.t() | nil,
+          run_profile: SymphonyElixir.RunKind.profile() | nil
         }
 
   # --- AgentBehaviour callbacks ---
@@ -54,15 +55,18 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
     with {:ok, expanded_workspace} <- validate_workspace_cwd(workspace, worker_host, settings),
          {:ok, mcp_session, remote_socket_path, remote_shim_path} <-
-           start_mcp_session(expanded_workspace, worker_host, opts) do
-      create_session(
-        expanded_workspace,
-        worker_host,
-        settings,
-        mcp_session,
-        remote_socket_path,
-        remote_shim_path
-      )
+           start_mcp_session(expanded_workspace, worker_host, opts),
+         {:ok, session} <-
+           create_session(
+             expanded_workspace,
+             worker_host,
+             settings,
+             mcp_session,
+             remote_socket_path,
+             remote_shim_path
+           ) do
+      # Every turn of the session starts Claude with the profile chosen at dispatch.
+      {:ok, Map.put(session, :run_profile, Keyword.get(opts, :run_profile))}
     end
   end
 
@@ -703,7 +707,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     with {:ok, {executable, command_args}} <- local_command(workspace, command),
          {:ok, prompt_path} <- write_local_prompt_file(workspace, prompt) do
       base_args = command_args ++ claude_settings_args(session)
-      args = base_args ++ claude_stream_json_args(base_args)
+      args = base_args ++ claude_stream_json_args(base_args) ++ run_profile_args(session)
 
       case open_local_prompt_port(executable, args, prompt_path, workspace) do
         {:ok, port} ->
@@ -884,10 +888,19 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     verbose_args ++ ["--output-format", "stream-json", "--print"]
   end
 
+  defp run_profile_args(%{run_profile: %{} = profile}) do
+    flag_args("--model", Map.get(profile, :model)) ++ flag_args("--effort", Map.get(profile, :effort))
+  end
+
+  defp run_profile_args(_session), do: []
+
+  defp flag_args(_flag, nil), do: []
+  defp flag_args(flag, value), do: [flag, value]
+
   defp remote_launch_command(workspace, command_words, session) do
     command =
       (command_words ++ claude_settings_args(session))
-      |> then(&(&1 ++ claude_stream_json_args(&1)))
+      |> then(&(&1 ++ claude_stream_json_args(&1) ++ run_profile_args(session)))
       |> Enum.map_join(" ", &shell_escape/1)
 
     [

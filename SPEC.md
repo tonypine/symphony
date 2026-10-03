@@ -1385,7 +1385,10 @@ not require recognizing or validating extension fields unless that extension is 
 - `agent.run_profiles`: map of run kind to `{model, effort}`, default `{}`. Run kinds:
   `implementation`, `breakdown`, `close_out`, `final_verification`, `rework`, `landing`, `ci_fix`,
   `review_feedback`, `pre_push_review`, `qa`. Each field resolves to the profile value, else
-  `agent.model` / `agent.effort`, else null (nothing added).
+  `agent.model` / `agent.effort`, else null (nothing added). The run kind and profile are resolved
+  once per dispatch from the current config and kept for every continuation turn of that run. The
+  Claude runtime appends `--model <model>` and `--effort <effort>` to its argv; the Codex runtime
+  ignores both and logs a warning.
 - `agent.prompts.include_project_guides`: boolean, default `true`
 - `agent.prompts.project_guide_files`: list of relative paths or null, default `null`
 - `agent.permissions.approval_policy`: agent approval policy, default depends on `agent.runtime`
@@ -2946,6 +2949,7 @@ After restart:
 - Retry timers SHOULD be re-created from durable retry queue rows when a durable store is enabled.
 - Previously running sessions are not assumed recoverable; they SHOULD remain visible in run history
   and MAY be marked failed/interrupted.
+- Run history records SHOULD include the run kind and the model and effort the run started with.
 - Service recovers by:
   - startup terminal workspace cleanup
   - durable retry queue hydration
@@ -3541,7 +3545,8 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
   `agent.permissions.outer_sandbox`, the local wrapper uses `bash --noprofile --norc -c`.
 - Codex launch preserves configured args while injecting the generated `workspace_write`
   permission profile
-- Claude launch parses `agent.command`, appends stream-json print arguments, feeds prompt input over
+- Claude launch parses `agent.command`, appends stream-json print arguments and then the run
+  profile's `--model` / `--effort` (when set), feeds prompt input over
   stdin from a private temporary file, and enforces `agent.timeouts.command_ms` after streamed
   tool-use events.
 - Claude prompt text is not present in local process argv or remote SSH argv

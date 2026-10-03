@@ -2840,6 +2840,8 @@ defmodule SymphonyElixir.Orchestrator do
     repo_key = Map.fetch!(dispatch, :repo_key)
     runner_opts = Map.get(dispatch, :runner_opts, [])
     running_attrs = Map.get(dispatch, :running_attrs, %{})
+    # Read from the current workflow on every dispatch, so a config edit applies to the next run.
+    run_profile = AgentRunner.run_profile(issue, Config.settings_for_repo!(repo_key), repo_key: repo_key)
 
     case Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
            opts =
@@ -2848,6 +2850,7 @@ defmodule SymphonyElixir.Orchestrator do
                repo_key: repo_key,
                worker_host: worker_host,
                run_id: run_id,
+               run_profile: run_profile,
                verification: verification,
                active_workspace_identifiers: sibling_active_workspace_identifiers(state, issue.id, repo_key)
              ] ++ runner_opts
@@ -2860,7 +2863,9 @@ defmodule SymphonyElixir.Orchestrator do
 
         slot = EpicLanes.slot_label(state.epic_lanes, issue.id, Map.keys(state.running))
 
-        Logger.info("Dispatching issue to agent: #{issue_context(issue)} pid=#{inspect(pid)} attempt=#{inspect(attempt)} worker_host=#{worker_host || "local"} slot=#{slot}")
+        Logger.info(
+          "Dispatching issue to agent: #{issue_context(issue)} pid=#{inspect(pid)} attempt=#{inspect(attempt)} worker_host=#{worker_host || "local"} slot=#{slot} #{run_profile_log_fields(run_profile)}"
+        )
 
         running_entry =
           %{
@@ -2871,6 +2876,7 @@ defmodule SymphonyElixir.Orchestrator do
             identifier: issue.identifier,
             issue: issue,
             worker_host: worker_host,
+            run_profile: run_profile,
             verification: verification,
             workspace_path: nil,
             session_id: nil,
@@ -2945,6 +2951,10 @@ defmodule SymphonyElixir.Orchestrator do
           worker_host: worker_host
         })
     end
+  end
+
+  defp run_profile_log_fields(%{kind: kind, model: model, effort: effort}) do
+    "run_kind=#{kind} model=#{model || "default"} effort=#{effort || "default"}"
   end
 
   defp state_reconcile_grace_until_ms do
@@ -4762,7 +4772,13 @@ defmodule SymphonyElixir.Orchestrator do
       pull_request_url: URLUtils.pull_request_url(running_entry) || URLUtils.pull_request_url(issue),
       updated_at: now
     }
+    |> Map.merge(run_profile_record(Map.get(running_entry, :run_profile)))
   end
+
+  defp run_profile_record(%{kind: kind, model: model, effort: effort}),
+    do: %{run_kind: Atom.to_string(kind), model: model, effort: effort}
+
+  defp run_profile_record(nil), do: %{}
 
   defp run_update_from_entry(running_entry) when is_map(running_entry) do
     issue = Map.get(running_entry, :issue)

@@ -106,6 +106,7 @@ defmodule SymphonyElixir.Codex.AppServer do
   def start_session(workspace, opts \\ []) do
     worker_host = Keyword.get(opts, :worker_host)
     settings = settings_from_opts(opts)
+    warn_ignored_run_profile(Keyword.get(opts, :run_profile), Keyword.get(opts, :issue))
 
     with :ok <- validate_remote_launch_preconditions(worker_host, settings),
          {:ok, expanded_workspace} <- validate_workspace_cwd(workspace, worker_host, settings),
@@ -123,6 +124,15 @@ defmodule SymphonyElixir.Codex.AppServer do
       )
     end
   end
+
+  # Codex keeps the model and reasoning effort from its own config: Symphony's effort levels
+  # do not map one-to-one onto `model_reasoning_effort`, so a run profile is not applied.
+  defp warn_ignored_run_profile(%{kind: kind, model: model, effort: effort}, %{id: _id, identifier: _identifier} = issue)
+       when not is_nil(model) or not is_nil(effort) do
+    Logger.warning("Ignoring agent.model and agent.effort for the codex runtime #{issue_context(issue)} run_kind=#{kind} model=#{model || "default"} effort=#{effort || "default"}")
+  end
+
+  defp warn_ignored_run_profile(_profile, _issue), do: :ok
 
   defp start_session_with_mcp(
          workspace,

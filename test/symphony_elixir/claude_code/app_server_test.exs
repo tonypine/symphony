@@ -1788,6 +1788,46 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       end
     end
 
+    test "appends the run profile's model and effort after the Claude flags" do
+      test_root =
+        Path.join(
+          System.tmp_dir!(),
+          "symphony-elixir-claude-code-run-profile-#{System.unique_integer([:positive])}"
+        )
+
+      try do
+        workspace_root = Path.join(test_root, "workspaces")
+        workspace = Path.join(workspace_root, "ACME-RUN-PROFILE")
+        fake_claude = Path.join(test_root, "fake-claude")
+        File.mkdir_p!(workspace)
+
+        File.write!(fake_claude, argv_tracing_fake_claude_script("sess-run-profile"))
+        File.chmod!(fake_claude, 0o755)
+
+        write_workflow_file!(Workflow.workflow_file_path(),
+          workspace_root: workspace_root,
+          agent_kind: "claude",
+          agent_command: fake_claude
+        )
+
+        {:ok, session} =
+          AppServer.start_session(workspace, run_profile: %{kind: :ci_fix, model: "claude-haiku-4-5", effort: nil})
+
+        assert {:ok, _result} = AppServer.run_turn(session, "fix ci", %{identifier: "ACME-RUN-PROFILE"}, [])
+
+        args =
+          Path.join(workspace, "argv.trace")
+          |> File.read!()
+          |> String.split("\n", trim: false)
+          |> Enum.drop(-1)
+
+        assert Enum.take(args, -5) == ["--output-format", "stream-json", "--print", "--model", "claude-haiku-4-5"]
+        refute "--effort" in args
+      after
+        File.rm_rf(test_root)
+      end
+    end
+
     test "uses a private prompt file for local Claude stdin and cleans it up" do
       test_root =
         Path.join(
@@ -2312,6 +2352,61 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
 
       assert AppServer.safe_close_port(port) == :ok
       assert Port.info(port) == nil
+    end
+
+    test "passes the run profile's model and effort to Claude over ssh" do
+      test_root =
+        Path.join(
+          System.tmp_dir!(),
+          "symphony-elixir-claude-code-remote-run-profile-#{System.unique_integer([:positive])}"
+        )
+
+      previous_path = System.get_env("PATH")
+
+      on_exit(fn ->
+        restore_env("PATH", previous_path)
+      end)
+
+      try do
+        workspace_root = Path.join(test_root, "workspaces")
+        workspace = Path.join(workspace_root, "ACME-REMOTE-PROFILE")
+        trace_file = Path.join(test_root, "ssh-command.trace")
+        fake_ssh = Path.join(test_root, "ssh")
+        File.mkdir_p!(workspace)
+        System.put_env("PATH", test_root <> ":" <> (previous_path || ""))
+
+        File.write!(fake_ssh, """
+        #!/bin/sh
+        for arg in "$@"; do
+          last_arg="$arg"
+        done
+        printf '%s' "$last_arg" > "#{trace_file}"
+        printf '%s\\n' '{"type":"system","subtype":"init","session_id":"sess-remote-profile","cwd":"/remote","tools":[],"mcp_servers":[],"model":"claude-opus-5-5","permissionMode":"default","apiKeySource":"env"}'
+        printf '%s\\n' '{"type":"result","subtype":"success","duration_ms":200,"duration_api_ms":150,"is_error":false,"num_turns":1,"result":"remote done","session_id":"sess-remote-profile","total_cost_usd":0.0,"usage":{"input_tokens":5,"output_tokens":3,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"server_tool_use":{"web_search_requests":0}}}'
+        exit 0
+        """)
+
+        File.chmod!(fake_ssh, 0o755)
+
+        write_workflow_file!(Workflow.workflow_file_path(),
+          workspace_root: workspace_root,
+          agent_kind: "claude",
+          agent_command: "fake-claude-remote"
+        )
+
+        {:ok, session} =
+          AppServer.start_session(workspace,
+            worker_host: "worker-01",
+            run_profile: %{kind: :breakdown, model: "claude-opus-5-5", effort: "high"}
+          )
+
+        assert {:ok, _result} = AppServer.run_turn(session, "remote breakdown", %{}, [])
+
+        assert File.read!(trace_file) =~
+                 ~s(--print'"'"' '"'"'--model'"'"' '"'"'claude-opus-5-5'"'"' '"'"'--effort'"'"' '"'"'high'"'"' < "$prompt_file")
+      after
+        File.rm_rf(test_root)
+      end
     end
 
     test "runs a turn over ssh for remote workers" do
