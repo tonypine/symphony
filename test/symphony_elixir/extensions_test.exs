@@ -620,7 +620,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                }
              ],
              "rate_limits" => %{"primary" => %{"remaining" => 11}},
-             "linear_usage" => %{"window_ms" => 3_600_000, "total" => 0, "callers" => []}
+             "linear_usage" => %{"window_ms" => 3_600_000, "total" => 0, "callers" => [], "queries" => []}
            }
 
     conn = get(build_conn(), "/api/v1/MT-HTTP")
@@ -1424,7 +1424,11 @@ defmodule SymphonyElixir.ExtensionsTest do
     request_fun = fn _payload, _headers -> {:ok, %{status: 200, headers: %{}, body: %{"data" => %{}}}} end
     linear_call = fn -> {:ok, _body} = Client.graphql("query { viewer { id } }", %{}, request_fun: request_fun) end
 
-    Usage.with_caller({:agent, "MT-USAGE-API"}, fn -> Enum.each(1..3, fn _ -> linear_call.() end) end)
+    named_call = fn ->
+      {:ok, _body} = Client.graphql("query SymphonyUsageApiProbe { viewer { id } }", %{}, request_fun: request_fun)
+    end
+
+    Usage.with_caller({:agent, "MT-USAGE-API"}, fn -> Enum.each(1..3, fn _ -> named_call.() end) end)
     Usage.with_caller(:ci_poller, linear_call)
 
     usage = Usage.snapshot()
@@ -1433,10 +1437,12 @@ defmodule SymphonyElixir.ExtensionsTest do
     {:ok, _orchestrator_pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: snapshot)
     start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
 
-    assert %{"window_ms" => 3_600_000, "total" => total, "callers" => callers} =
+    assert %{"window_ms" => 3_600_000, "total" => total, "callers" => callers, "queries" => queries} =
              build_conn() |> get("/api/v1/state") |> json_response(200) |> Map.fetch!("linear_usage")
 
     assert total == usage.total and total >= 4
+    assert %{"query" => "SymphonyUsageApiProbe", "requests" => 3} in queries
+    assert Enum.any?(queries, &match?(%{"query" => "unnamed", "requests" => requests} when requests >= 1, &1))
     assert %{"caller" => "agent:MT-USAGE-API", "requests" => 3} in callers
     assert Enum.any?(callers, &match?(%{"caller" => "ci_poller", "requests" => requests} when requests >= 1, &1))
 

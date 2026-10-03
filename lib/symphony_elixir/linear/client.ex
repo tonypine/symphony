@@ -19,6 +19,7 @@ defmodule SymphonyElixir.Linear.Client do
   @workpad_markers AgentLabels.known_workpad_markers()
   @max_error_body_log_bytes 1_000
   @team_id_pattern ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+  @operation_name_pattern ~r/^\s*(?:query|mutation)\s+([A-Za-z_][A-Za-z0-9_]*)/
 
   @query """
   query SymphonyLinearPoll($filter: IssueFilter!, $first: Int!, $relationFirst: Int!, $attachmentFirst: Int!, $commentLast: Int!, $after: String) {
@@ -351,7 +352,7 @@ defmodule SymphonyElixir.Linear.Client do
     with gate when gate in [:ok, :probe] <- RateLimit.check(now_ms_fun.()),
          {:ok, headers} <- graphql_headers() do
       RateLimit.record_request()
-      Usage.record()
+      Usage.record(Map.get(payload, "operationName") || operation_name(query))
 
       payload
       |> request_fun.(headers)
@@ -918,6 +919,13 @@ defmodule SymphonyElixir.Linear.Client do
 
   defp maybe_put_operation_name(payload, _operation_name), do: payload
 
+  defp operation_name(query) do
+    case Regex.run(@operation_name_pattern, query, capture: :all_but_first) do
+      [name] -> name
+      nil -> nil
+    end
+  end
+
   defp linear_error_context(payload, response) when is_map(payload) do
     operation_name =
       case Map.get(payload, "operationName") do
@@ -1141,14 +1149,34 @@ defmodule SymphonyElixir.Linear.Client do
   end
 
   defp resolve_viewer_assignee_filter(graphql_fun) when is_function(graphql_fun, 2) do
+    with {:ok, viewer_id} <- cached_viewer_id(graphql_fun) do
+      {:ok, %{configured_assignee: "me", match_values: MapSet.new([viewer_id])}}
+    end
+  end
+
+  # The user behind an API key never changes, so `assignee: me` asks Linear once per key and
+  # GraphQL function instead of once per poll and repo.
+  defp cached_viewer_id(graphql_fun) do
+    cache_key = {__MODULE__, :viewer_id, :erlang.phash2({Secret.unwrap(Config.settings!().tracker.api_key), graphql_fun})}
+
+    case :persistent_term.get(cache_key, nil) do
+      nil ->
+        with {:ok, viewer_id} <- fetch_viewer_id(graphql_fun) do
+          :persistent_term.put(cache_key, viewer_id)
+          {:ok, viewer_id}
+        end
+
+      viewer_id ->
+        {:ok, viewer_id}
+    end
+  end
+
+  defp fetch_viewer_id(graphql_fun) do
     case graphql_fun.(@viewer_query, %{}) do
       {:ok, %{"data" => %{"viewer" => viewer}}} when is_map(viewer) ->
         case assignee_id(viewer) do
-          nil ->
-            {:error, :missing_linear_viewer_identity}
-
-          viewer_id ->
-            {:ok, %{configured_assignee: "me", match_values: MapSet.new([viewer_id])}}
+          nil -> {:error, :missing_linear_viewer_identity}
+          viewer_id -> {:ok, viewer_id}
         end
 
       {:ok, _body} ->

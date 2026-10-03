@@ -404,10 +404,37 @@ defmodule SymphonyElixir.PrReviewPoller do
 
   defp poll_once_for_repos(opts) do
     with {:ok, repos} <- Config.repos() do
-      repos
-      |> Enum.map(&Map.get(&1, :name))
-      |> Enum.reject(&(&1 in [nil, ""]))
-      |> Enum.reduce_while({:ok, empty_poll_summary(:tracker)}, &poll_repo_and_merge(&1, &2, opts))
+      repo_keys = repos |> Enum.map(&Map.get(&1, :name)) |> Enum.reject(&(&1 in [nil, ""]))
+
+      with {:ok, opts} <- prefetch_watched_issues(repo_keys, opts) do
+        Enum.reduce_while(repo_keys, {:ok, empty_poll_summary(:tracker)}, &poll_repo_and_merge(&1, &2, opts))
+      end
+    end
+  end
+
+  # The tracker's state query already spans every repository, and the states a repository watches
+  # come from system-wide settings, so one read serves every repository this cycle.
+  defp prefetch_watched_issues(repo_keys, opts) do
+    tracker = Keyword.get(opts, :tracker, Tracker)
+
+    case repo_keys |> Enum.flat_map(&repo_watched_states/1) |> Enum.uniq() do
+      [] ->
+        {:ok, opts}
+
+      states ->
+        with {:ok, issues} <- tracker.fetch_issues_by_states(states) do
+          {:ok, Keyword.put(opts, :watched_issues, issues)}
+        end
+    end
+  end
+
+  # A repository whose settings fail to load reports that error from its own poll.
+  defp repo_watched_states(repo_key) do
+    with {:ok, settings} <- Config.settings_for_repo(repo_key),
+         "polling" <- settings.pr_review.mode do
+      watched_states(settings)
+    else
+      _skipped -> []
     end
   end
 
@@ -442,7 +469,7 @@ defmodule SymphonyElixir.PrReviewPoller do
     tracker = Keyword.get(opts, :tracker, Tracker)
     current_gh_user = resolve_current_gh_user(opts)
 
-    with {:ok, discovered, merging_issue_ids} <- discover_reviews(settings, run_store, tracker, repo_key, now),
+    with {:ok, discovered, merging_issue_ids} <- discover_reviews(settings, run_store, tracker, repo_key, now, opts),
          {:ok, reviews} <- list_pr_reviews(run_store, repo_key) do
       opts = Keyword.put(opts, :merging_issue_ids, merging_issue_ids)
 
@@ -485,8 +512,8 @@ defmodule SymphonyElixir.PrReviewPoller do
   end
 
   # With auto-merge on, `Merging` issues are watched too: this poller lands them (see AutoMerge).
-  defp discover_reviews(settings, run_store, tracker, repo_key, now) do
-    with {:ok, issues} <- tracker.fetch_issues_by_states(watched_states(settings)),
+  defp discover_reviews(settings, run_store, tracker, repo_key, now, opts) do
+    with {:ok, issues} <- fetch_watched_issues(settings, tracker, opts),
          {:ok, runs} <- list_runs(run_store, repo_key),
          {:ok, existing} <- list_pr_reviews(run_store, repo_key) do
       existing_by_issue = Map.new(existing, &{Map.get(&1, :issue_id), &1})
@@ -514,6 +541,13 @@ defmodule SymphonyElixir.PrReviewPoller do
 
   defp watched_states(settings) do
     if AutoMerge.enabled?(settings), do: [@in_review_state, @merging_state], else: [@in_review_state]
+  end
+
+  defp fetch_watched_issues(settings, tracker, opts) do
+    case Keyword.fetch(opts, :watched_issues) do
+      {:ok, issues} -> {:ok, issues}
+      :error -> tracker.fetch_issues_by_states(watched_states(settings))
+    end
   end
 
   defp persist_discovered_review?(%Issue{} = issue, runs, existing_by_issue, merging_issue_ids, run_store, repo_key, now) do
@@ -2171,7 +2205,7 @@ defmodule SymphonyElixir.PrReviewPoller do
     issue_id = Map.get(record, :issue_id)
 
     with issue_id when is_binary(issue_id) and issue_id != "" <- issue_id,
-         {:ok, issues} <- tracker.fetch_issue_states_by_ids([issue_id]),
+         {:ok, issues} <- watched_or_fetched_issue(issue_id, tracker, opts),
          %Issue{} = issue <- Enum.find(issues, &(&1.id == issue_id)) do
       {:ok, issue}
     else
@@ -2179,6 +2213,14 @@ defmodule SymphonyElixir.PrReviewPoller do
       "" -> :missing
       {:error, reason} -> {:error, reason}
       _other -> :missing
+    end
+  end
+
+  # This cycle's watched issues already hold every In Review issue; only others cost a Linear read.
+  defp watched_or_fetched_issue(issue_id, tracker, opts) do
+    case opts |> Keyword.get(:watched_issues, []) |> Enum.filter(&match?(%Issue{id: ^issue_id}, &1)) do
+      [] -> tracker.fetch_issue_states_by_ids([issue_id])
+      issues -> {:ok, issues}
     end
   end
 

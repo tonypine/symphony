@@ -2700,7 +2700,12 @@ Orchestrator behavior on tracker errors:
   fails for any reason is scheduled again rather than dropped.
 - Usage by caller: count every Linear request against its caller (orchestrator, CI poller, PR review
   poller, Auto Review, post-PR transition, `agent:<identifier>` for an agent run and its tools) over
-  a rolling hour, and show the counts in the status snapshot (`linear_usage` in `/api/v1/state`).
+  a rolling hour, and by query (the GraphQL operation name, `unnamed` without one), and show the
+  counts in the status snapshot (`linear_usage` in `/api/v1/state`).
+- Request budget: the CI and PR review pollers each read their watched states once per poll for
+  every repository together, not once per repository; the PR review poller takes an issue it needs
+  from that read before asking Linear for it. With `assignee: me`, the viewer behind the API key is
+  looked up once and reused.
 
 ### 11.5 Tracker Writes (Important Boundary)
 
@@ -3106,6 +3111,11 @@ Minimum endpoints:
           {"caller": "orchestrator", "requests": 240},
           {"caller": "agent:ABC-123", "requests": 130},
           {"caller": "ci_poller", "requests": 42}
+        ],
+        "queries": [
+          {"query": "SymphonyLinearPoll", "requests": 260},
+          {"query": "SymphonyLinearIssuesById", "requests": 82},
+          {"query": "SymphonyAgentCurrentIssue", "requests": 70}
         ]
       }
     }
