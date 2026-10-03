@@ -352,6 +352,28 @@ defmodule SymphonyElixir.AutoMergeTest do
     refute_received {:issue_state_update, _issue_id, _state}
   end
 
+  test "a Merging PR with no run on record is still watched and landed" do
+    now = ~U[2026-10-03 12:00:00Z]
+    merging = issue("Merging")
+    track([merging, %{issue("In Review") | id: "issue-no-run", pr_urls: ["https://github.com/example/repo/pull/9"]}])
+    activity(head: "head-1", merge_state: "BLOCKED")
+
+    assert AutoMerge.owns_issue?(merging)
+
+    capture_log(fn -> assert {:ok, %{discovered: 1, actions: [{:auto_merge, @issue_id, "enabled"}]}} = poll(now) end)
+
+    assert_received {:enable_auto_merge, @pr_url, _request}
+    assert [%{issue_id: @issue_id, workspace_path: nil}] = RunStore.list_pr_reviews(@repo_key)
+    assert AutoMerge.owns_issue?(merging)
+
+    activity(head: "head-1", state: "MERGED", auto_merge_enabled: true)
+
+    capture_log(fn -> assert {:ok, %{discovered: 0, actions: [{:cleanup, @issue_id, "merged"}]}} = poll(DateTime.add(now, 60)) end)
+
+    assert_received {:issue_state_update, @issue_id, "Done"}
+    assert RunStore.list_pr_reviews(@repo_key) == []
+  end
+
   test "with auto-merge off, Merging issues are not watched and the landing agent owns them" do
     now = ~U[2026-10-03 12:00:00Z]
     write_auto_merge_workflow!(pr_review_auto_merge: false)

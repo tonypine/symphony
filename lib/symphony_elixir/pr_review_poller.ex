@@ -491,12 +491,13 @@ defmodule SymphonyElixir.PrReviewPoller do
       existing_by_issue = Map.new(existing, &{Map.get(&1, :issue_id), &1})
       issues = Enum.filter(issues, &match?(%Issue{}, &1))
 
-      discovered = Enum.count(issues, &persist_discovered_review?(&1, runs, existing_by_issue, run_store, repo_key, now))
-
       merging_issue_ids =
         if AutoMerge.enabled?(settings),
           do: issues |> Enum.filter(&AutoMerge.merging?/1) |> MapSet.new(& &1.id),
           else: MapSet.new()
+
+      discovered =
+        Enum.count(issues, &persist_discovered_review?(&1, runs, existing_by_issue, merging_issue_ids, run_store, repo_key, now))
 
       {:ok, discovered, merging_issue_ids}
     end
@@ -506,10 +507,14 @@ defmodule SymphonyElixir.PrReviewPoller do
     if AutoMerge.enabled?(settings), do: [@in_review_state, @merging_state], else: [@in_review_state]
   end
 
-  defp persist_discovered_review?(%Issue{} = issue, runs, existing_by_issue, run_store, repo_key, now) do
+  defp persist_discovered_review?(%Issue{} = issue, runs, existing_by_issue, merging_issue_ids, run_store, repo_key, now) do
     existing = Map.get(existing_by_issue, issue.id)
 
-    case discover_review_record(issue, runs, existing, now) do
+    record =
+      discover_review_record(issue, runs, existing, now) ||
+        discover_auto_merge_record(issue, existing, merging_issue_ids, now)
+
+    case record do
       nil ->
         false
 
@@ -570,6 +575,31 @@ defmodule SymphonyElixir.PrReviewPoller do
   end
 
   defp discover_review_record(_issue, _runs, _existing, _now), do: nil
+
+  # Auto-merge owns every `Merging` issue with a PR (see AutoMerge.owns_issue?/2), so the
+  # poller must watch it even without a run to take the workspace from (run history reset,
+  # PR opened outside Symphony). GitHub calls run with `cwd: nil` and cleanup skips the
+  # workspace removal.
+  defp discover_auto_merge_record(%Issue{} = issue, nil, merging_issue_ids, now) do
+    with true <- Enum.member?(merging_issue_ids, issue.id),
+         pr_url when is_binary(pr_url) <- first_pr_url(issue) do
+      %{
+        issue_id: issue.id,
+        issue_identifier: issue.identifier,
+        issue_title: issue.title,
+        issue_url: issue.url,
+        pr_url: pr_url,
+        workspace_path: nil,
+        status: "watching",
+        inserted_at: now,
+        updated_at: now
+      }
+    else
+      _other -> nil
+    end
+  end
+
+  defp discover_auto_merge_record(_issue, _existing, _merging_issue_ids, _now), do: nil
 
   defp log_poll_action_warnings(%{actions: actions}) when is_list(actions) do
     Enum.each(actions, &log_poll_action_warning/1)
@@ -1308,10 +1338,16 @@ defmodule SymphonyElixir.PrReviewPoller do
         # steps; keep the record so the next poll cleans up after the run ends.
         {:cleanup_deferred, Map.get(record, :issue_id), reason}
 
+      no_workspace?(record) ->
+        finish_workspace_cleanup(record, opts, now, reason)
+
       true ->
         remove_review_workspace(workspace, record, opts, now, reason)
     end
   end
+
+  # Records discovered for auto-merge without a run have no workspace to remove.
+  defp no_workspace?(record), do: not match?(path when is_binary(path) and path != "", Map.get(record, :workspace_path))
 
   defp remove_review_workspace(workspace, record, opts, now, reason) do
     case workspace.remove(Map.get(record, :workspace_path), Map.get(record, :worker_host)) do
