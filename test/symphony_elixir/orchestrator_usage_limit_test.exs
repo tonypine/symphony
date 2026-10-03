@@ -4,6 +4,7 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
   alias SymphonyElixir.{Notifications, UsageLimit}
 
   @anthropic {"anthropic", :all}
+  @openai {"openai", :all}
 
   setup do
     test_root = Path.join(System.tmp_dir!(), "symphony-usage-limit-#{System.unique_integer([:positive])}")
@@ -297,6 +298,45 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
     assert log =~ "Skipping dispatch; usage limit holds provider=anthropic scope=all"
     assert Orchestrator.should_dispatch_issue_for_test(issue("i-or", "MT-OR", %{state: "Rework"}), state)
     assert Orchestrator.should_dispatch_issue_for_test(issue("i-claude", "MT-CLAUDE"), orchestrator_state())
+  end
+
+  test "a Codex hold skips Codex candidates while Claude candidates still dispatch, and the reverse", ctx do
+    openai_hold = hold(ctx, %{provider: "openai", reason: "codex_usage_limit", window: "primary"})
+    codex_hold = %{orchestrator_state() | usage_limits: %{@openai => openai_hold}}
+    claude_hold = %{orchestrator_state() | usage_limits: %{@anthropic => hold(ctx)}}
+    candidate = issue("i-run", "MT-RUN")
+
+    write_usage_workflow!(ctx, agent_kind: "codex", agent_command: "codex app-server")
+
+    log =
+      capture_log([level: :debug], fn ->
+        refute Orchestrator.should_dispatch_issue_for_test(candidate, codex_hold)
+      end)
+
+    assert log =~ "Skipping dispatch; usage limit holds provider=openai scope=all"
+    assert Orchestrator.should_dispatch_issue_for_test(candidate, claude_hold)
+
+    write_usage_workflow!(ctx)
+
+    refute Orchestrator.should_dispatch_issue_for_test(candidate, claude_hold)
+    assert Orchestrator.should_dispatch_issue_for_test(candidate, codex_hold)
+  end
+
+  test "a Codex usage-limited exit holds only the openai provider", ctx do
+    write_usage_workflow!(ctx, agent_kind: "codex", agent_command: "codex app-server")
+    pid = start_orchestrator(ctx, :CodexPauseOrchestrator)
+    issue = issue("issue-codex-pause", "MT-CODEX")
+    {worker_pid, worker_ref, _run_id} = start_run!(pid, issue)
+    info = usage_info(ctx, %{provider: "openai", window: "primary", utilization: 1.0, source: :codex_error})
+
+    send(pid, {:DOWN, worker_ref, :process, worker_pid, {:usage_limited, info}})
+    state = :sys.get_state(pid)
+
+    assert %{attempt: 3, delay_type: :usage_limit, usage_limit_key: @openai} = state.retry_attempts[issue.id]
+    assert Map.keys(state.usage_limits) == [@openai]
+    assert %{reason: "codex_usage_limit", window: "primary", resume_at: resume_at} = state.usage_limits[@openai]
+    assert resume_at == DateTime.add(ctx.now, 3720)
+    assert %{@openai => %{provider: "openai"}} = RunStore.get_usage_limits()
   end
 
   test "a seven_day_opus hold skips only Opus runs", ctx do
@@ -623,6 +663,47 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
     run_issue = issue("issue-limited", "MT-LIMITED")
 
     assert {:usage_limited, %{provider: "anthropic", scope: :all, resets_at: resets_at, source: :result_text}} =
+             catch_exit(
+               AgentRunner.run(run_issue, nil,
+                 workspace_path: workspace,
+                 issue_state_fetcher: fn _ids -> {:ok, [run_issue]} end,
+                 issue_enricher: fn issue -> {:ok, issue} end
+               )
+             )
+
+    assert resets_at == DateTime.from_unix!(1_790_000_000)
+  end
+
+  test "AgentRunner exits with the Codex usage limit instead of raising", ctx do
+    limited_codex = Path.join(ctx.test_root, "limited-codex")
+
+    File.write!(limited_codex, """
+    #!/bin/sh
+    count=0
+
+    while IFS= read -r _line; do
+      count=$((count + 1))
+
+      case "$count" in
+        1) printf '%s\\n' '{"id":1,"result":{}}' ;;
+        2) printf '%s\\n' '{"id":2,"result":{"thread":{"id":"thr_limited"}}}' ;;
+        3)
+          printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn_limited","status":"inProgress","items":[]}}}'
+          printf '%s\\n' '{"method":"account/rateLimits/updated","params":{"rateLimits":{"primary":{"usedPercent":100,"windowDurationMins":300,"resetsAt":1790000000}}}}'
+          printf '%s\\n' '{"method":"error","params":{"willRetry":false,"error":{"message":"You have hit your usage limit.","codexErrorInfo":"usageLimitExceeded"}}}'
+          ;;
+        *) sleep 1 ;;
+      esac
+    done
+    """)
+
+    File.chmod!(limited_codex, 0o755)
+    write_usage_workflow!(ctx, agent_kind: "codex", agent_command: "#{limited_codex} app-server")
+    workspace = Path.join([ctx.test_root, "workspaces", "MT-CODEX-LIMITED"])
+    File.mkdir_p!(workspace)
+    run_issue = issue("issue-codex-limited", "MT-CODEX-LIMITED")
+
+    assert {:usage_limited, %{provider: "openai", scope: :all, window: "primary", resets_at: resets_at, source: :codex_error}} =
              catch_exit(
                AgentRunner.run(run_issue, nil,
                  workspace_path: workspace,

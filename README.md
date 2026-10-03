@@ -302,8 +302,8 @@ mise exec -- mix symphony.pr 123 --intent "fix failing CI"
 `Pause` stops new dispatches while in-flight agents continue; `Stop` ends one issue's session and
 records it as `stopped` without changing the Linear issue state.
 
-When a run hits the Claude usage limit, Symphony holds new Claude runs on its own and resumes them
-when the limit resets (plus `agent.usage_limit.resume_margin_seconds`), keeping each held issue's
+When a run hits the Claude or Codex usage limit, Symphony holds new runs of that agent on its own
+and resumes them when the limit resets (plus `agent.usage_limit.resume_margin_seconds`), keeping each held issue's
 attempt. Runs on other providers keep going, and an operator pause is never cleared by it. Set
 `agent.usage_limit.auto_pause: false` to fail and retry such runs as before.
 
