@@ -6,7 +6,7 @@ for you on the host. They only act on this worktree's configured app and on apps
 
 - `qa_build`: runs the configured build command. Call it once, before anything else.
 - `qa_launch_app`: launches the bundle `qa_build` produced, in QA mode (private settings and
-  secrets, never the real Keychain), and returns its `pid`.
+  secrets, never the real ones), and returns its `pid`.
 - `qa_ax_tree`: the app's accessibility tree with each element's role, title, value and
   `frame` (`x`, `y`, `w`, `h` in points). Pass `role` or `text` to list only matching elements.
 - `qa_ax_press` (`action` defaults to `AXPress`; `AXRaise` focuses a window) and

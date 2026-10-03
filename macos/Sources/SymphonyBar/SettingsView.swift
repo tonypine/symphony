@@ -172,7 +172,7 @@ struct SettingsView: View {
                     }
                     Button("Add Variable") { model.addRow() }
                 } header: {
-                    Text("Environment (stored in the Keychain)")
+                    Text("Environment (stored in a file only you can read)")
                 }
 
                 Section {
@@ -208,7 +208,7 @@ struct SettingsView: View {
                     Text("OpenRouter")
                 } footer: {
                     Text(
-                        "Stored in the Keychain and passed to Symphony as \(SecretSettings.openRouterAPIKeyName) "
+                        "Stored with your other secrets and passed to Symphony as \(SecretSettings.openRouterAPIKeyName) "
                             + "for run profiles with provider: openrouter. Leave blank to turn OpenRouter off."
                     )
                     .font(.callout)
@@ -223,8 +223,8 @@ struct SettingsView: View {
                 ForEach(model.issues.map(\.message), id: \.self) { message in
                     Text(message).foregroundStyle(.red)
                 }
-                if let keychainError = model.keychainError {
-                    Text(keychainError).foregroundStyle(.red)
+                if let secretsError = model.secretsError {
+                    Text(secretsError).foregroundStyle(.red)
                 }
                 if let configFileError = model.configFileError {
                     Text(configFileError).foregroundStyle(.red)

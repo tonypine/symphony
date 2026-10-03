@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// Owns the single Settings window. Each time it opens, values are read fresh from UserDefaults and the Keychain.
+/// Owns the single Settings window. Each time it opens, values are read fresh from UserDefaults and the secret store.
 @MainActor
 final class SettingsWindowController: NSObject, NSWindowDelegate {
     /// Room for the Form at about its ideal height plus the button bar.

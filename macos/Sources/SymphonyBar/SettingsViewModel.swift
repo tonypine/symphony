@@ -38,7 +38,7 @@ final class SettingsViewModel: ObservableObject {
     @Published private(set) var loginItemNote: String?
     @Published private(set) var loginItemError: String?
     @Published private(set) var issues: [SettingsIssue] = []
-    @Published private(set) var keychainError: String?
+    @Published private(set) var secretsError: String?
     /// `agent.concurrency.max_total` in the configured symphony.yml. Saved to that file, not UserDefaults.
     @Published var maxConcurrentAgents = MaxConcurrentAgents.symphonyDefault
     /// `agent.provider`, `.model`, `.effort` and `.run_profiles` in the configured symphony.yml, and the same
@@ -67,11 +67,11 @@ final class SettingsViewModel: ObservableObject {
     /// are written.
     private var loadedRunProfiles: ScopedRunProfiles?
 
-    /// Extra variable names known to be in the Keychain. Only these can be removed on save, so a failed
+    /// Extra variable names known to be stored. Only these can be removed on save, so a failed
     /// load never turns into deletions.
     private var storedNames: Set<String> = []
 
-    /// The secrets as read from the Keychain, or nil when the read failed. Saving different secrets restarts
+    /// The secrets as read from the store, or nil when the read failed. Saving different secrets restarts
     /// Symphony so it picks them up.
     private var loadedSecrets: SecretSettings?
 
@@ -109,7 +109,7 @@ final class SettingsViewModel: ObservableObject {
             storedNames = Self.storedNames(secrets)
             loadedSecrets = secrets.trimmed()
         } catch {
-            keychainError = "Could not read the Keychain: \(error)"
+            secretsError = "Could not read the secrets: \(error)"
         }
         loadMaxConcurrentAgents()
         loadRunProfiles()
@@ -179,7 +179,7 @@ final class SettingsViewModel: ObservableObject {
         openRouterModelList = models
     }
 
-    /// Names that may be removed from the Keychain on save: the extra variables and a stored OpenRouter key.
+    /// Names that may be removed from the store on save: the extra variables and a stored OpenRouter key.
     private static func storedNames(_ secrets: SecretSettings) -> Set<String> {
         var names = Set(secrets.extraEnvironment.map(\.name))
         if !secrets.openRouterAPIKey.isEmpty { names.insert(SecretSettings.openRouterAPIKeyName) }
@@ -247,11 +247,11 @@ final class SettingsViewModel: ObservableObject {
         do {
             try store.saveSecrets(secrets, removing: storedNames)
         } catch {
-            keychainError = "Could not save to the Keychain: \(error)"
+            secretsError = "Could not save the secrets: \(error)"
             return false
         }
         storedNames = Self.storedNames(secrets)
-        keychainError = nil
+        secretsError = nil
         let secretsChanged = secrets != loadedSecrets
         loadedSecrets = secrets
         store.saveSettings(settings)

@@ -13,7 +13,7 @@ final class SymphonyRunner {
     private let logDirectory = AppStores.current.logDirectory
     private var child: ChildProcess?
     private var stopWaiters: [() -> Void] = []
-    // SYMPHONY_STATE_ROOT from the last start, which may come from the Keychain variables.
+    // SYMPHONY_STATE_ROOT from the last start, which may come from the stored variables.
     private var launchedStateRoot: String?
     // Settings of the running Symphony, so the menu names the binary that runs even after Settings change.
     private var launchedSettings: AppSettings?
