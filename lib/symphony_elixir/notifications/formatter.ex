@@ -17,6 +17,9 @@ defmodule SymphonyElixir.Notifications.Formatter do
     "qa_failed"
   ]
 
+  # Not about one issue: the headline and text carry the reason (which limit, when it resumes).
+  @usage_limit_events ["usage_limit_paused", "usage_limit_resumed"]
+
   @spec webhook_payload(Event.t(), keyword()) :: map()
   def webhook_payload(%Event{} = event, opts \\ []) do
     redact_titles = Keyword.get(opts, :redact_titles, false)
@@ -50,7 +53,7 @@ defmodule SymphonyElixir.Notifications.Formatter do
     title = event_title(event.event)
 
     %{
-      "text" => "#{title}: #{event.issue_identifier || event.issue_id || "issue"}",
+      "text" => "#{title}: #{text_subject(event)}",
       "attachments" => [
         %{
           "color" => event_color(event.event),
@@ -82,13 +85,13 @@ defmodule SymphonyElixir.Notifications.Formatter do
     Map.reject(payload, fn {_key, value} -> is_nil(value) end)
   end
 
+  defp text_subject(%Event{event: event_name, reason: reason}) when event_name in @usage_limit_events, do: reason
+  defp text_subject(event), do: event.issue_identifier || event.issue_id || "issue"
+
   defp headline_block(event, title, redact_titles) do
     title_parts =
-      [
-        "*#{escape_mrkdwn(title)}*",
-        issue_link(event),
-        title_text(event.issue_title, redact_titles)
-      ]
+      event
+      |> headline_parts(title, redact_titles)
       |> Enum.reject(&blank?/1)
 
     %{
@@ -117,6 +120,14 @@ defmodule SymphonyElixir.Notifications.Formatter do
     else
       %{"type" => "section", "fields" => fields}
     end
+  end
+
+  defp headline_parts(%Event{event: event_name} = event, title, _redact_titles) when event_name in @usage_limit_events do
+    ["*#{escape_mrkdwn(title)}*", event.reason && escape_mrkdwn(event.reason)]
+  end
+
+  defp headline_parts(event, title, redact_titles) do
+    ["*#{escape_mrkdwn(title)}*", issue_link(event), title_text(event.issue_title, redact_titles)]
   end
 
   defp context_block(event) do
@@ -175,6 +186,8 @@ defmodule SymphonyElixir.Notifications.Formatter do
   defp event_title("qa_failed"), do: "QA failed"
   defp event_title("reviewer_commented"), do: "Reviewer commented"
   defp event_title("rework_pushed"), do: "Rework pushed"
+  defp event_title("usage_limit_paused"), do: "Usage limit paused"
+  defp event_title("usage_limit_resumed"), do: "Usage limit resumed"
   defp event_title(event), do: event
 
   defp event_color("run_failed"), do: "danger"
@@ -186,6 +199,8 @@ defmodule SymphonyElixir.Notifications.Formatter do
   defp event_color("budget_exceeded"), do: "warning"
   defp event_color("dependency_pending_approval"), do: "warning"
   defp event_color("issue_completed"), do: "good"
+  defp event_color("usage_limit_paused"), do: "warning"
+  defp event_color("usage_limit_resumed"), do: "good"
   defp event_color(_event), do: "#2f80ed"
 
   defp blank?(value), do: value in [nil, ""]

@@ -629,7 +629,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   defp normalize_agent(config) do
     with {:ok, config} <- section_map(config, "agent"),
-         :ok <- reject_unknown_section_keys(config, ~w(runtime command model effort provider run_profiles concurrency limits timeouts prompts permissions mcp), "agent"),
+         :ok <- reject_unknown_section_keys(config, ~w(runtime command model effort provider run_profiles concurrency limits timeouts prompts permissions mcp usage_limit), "agent"),
          {:ok, concurrency} <- section_map(Map.get(config, "concurrency", %{}), "agent.concurrency"),
          :ok <- reject_unknown_section_keys(concurrency, ~w(max_total max_by_issue_state epic_lanes finishing_max), "agent.concurrency"),
          {:ok, limits} <- section_map(Map.get(config, "limits", %{}), "agent.limits"),
@@ -657,7 +657,14 @@ defmodule SymphonyElixir.Config.SystemSchema do
          {:ok, outer_sandbox} <- section_map(Map.get(permissions, "outer_sandbox", %{}), "agent.permissions.outer_sandbox"),
          :ok <- reject_unknown_section_keys(outer_sandbox, ~w(runtime command enable_weaker_network_isolation), "agent.permissions.outer_sandbox"),
          {:ok, mcp} <- section_map(Map.get(config, "mcp", %{}), "agent.mcp"),
-         :ok <- reject_unknown_section_keys(mcp, ~w(inherit allowed_servers servers), "agent.mcp") do
+         :ok <- reject_unknown_section_keys(mcp, ~w(inherit allowed_servers servers), "agent.mcp"),
+         {:ok, usage_limit} <- section_map(Map.get(config, "usage_limit", %{}), "agent.usage_limit"),
+         :ok <-
+           reject_unknown_section_keys(
+             usage_limit,
+             ~w(auto_pause resume_margin_seconds unknown_reset_retry_seconds),
+             "agent.usage_limit"
+           ) do
       sandbox_runtime =
         %{}
         |> maybe_put("kind", Map.get(outer_sandbox, "runtime"))
@@ -694,6 +701,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
         |> maybe_put("network_access", network)
         |> maybe_put("sandbox_runtime", sandbox_runtime)
         |> maybe_put("mcp", mcp)
+        |> maybe_put("usage_limit", usage_limit)
 
       workspace_sandbox =
         %{}
@@ -990,6 +998,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     |> struct_to_map()
     |> Map.update("network_access", nil, &struct_to_map/1)
     |> Map.update("sandbox_runtime", nil, &struct_to_map/1)
+    |> Map.update("usage_limit", nil, &struct_to_map/1)
   end
 
   defp workspace_to_map(%Schema.Workspace{} = workspace) do

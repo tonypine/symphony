@@ -10,7 +10,7 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
   """
 
   alias SymphonyElixir.Codex.MessageHumanizer
-  alias SymphonyElixir.{Config, Format, HttpServer, RunKind, URLUtils}
+  alias SymphonyElixir.{Config, Format, HttpServer, RunKind, URLUtils, UsageLimit}
 
   @throughput_window_ms 5_000
   @throughput_graph_window_ms 10 * 60 * 1000
@@ -95,7 +95,7 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
           |> normalize_dispatch_state()
 
         snapshot_status_lines = format_snapshot_status_lines(snapshot)
-        dispatch_lines = format_dispatch_lines(dispatch_state)
+        dispatch_lines = format_dispatch_lines(dispatch_state) ++ format_usage_limit_lines(Map.get(snapshot, :usage_limits, []))
 
         ([
            colorize("╭─ SYMPHONY STATUS", @ansi_bold)
@@ -671,7 +671,16 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
       "(#{format_count(consecutive_failures)} consecutive failures since #{format_time_of_day(since)})"
   end
 
+  defp format_blocker_line(%{kind: :usage_limit, resume_at: resume_at} = blocker) do
+    "#{UsageLimit.limit_label(blocker)} reached (resumes #{DateTime.to_iso8601(resume_at)})"
+  end
+
   defp format_blocker_line(%{kind: kind}), do: "blocked: #{kind}"
+
+  defp format_usage_limit_lines(usage_limits) do
+    now = DateTime.utc_now()
+    Enum.map(usage_limits, &(colorize("│ ", @ansi_bold) <> colorize(UsageLimit.banner(&1, now), @ansi_yellow)))
+  end
 
   defp format_tracker_name(:linear), do: "linear"
   defp format_tracker_name("linear"), do: "linear"

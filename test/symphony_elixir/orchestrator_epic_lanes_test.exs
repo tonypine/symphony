@@ -41,6 +41,61 @@ defmodule SymphonyElixir.OrchestratorEpicLanesTest do
     assert Orchestrator.should_dispatch_issue_for_test(part_2, state)
   end
 
+  test "the epic's lane runs the blocker of its next part, a ticket outside the epic, while the shared slot is busy" do
+    # The final verification waits on a fix filed under another parent, as TP-272 waited on TP-323.
+    blocker = %Issue{id: "b1", identifier: "MT-30", title: "Fix", state: "Todo"}
+    other_parent = %Issue{id: "o1", identifier: "MT-29", title: "Other parent", state: "In Progress", sub_issues: [Map.take(blocker, [:id, :identifier, :state])]}
+    final = %Issue{id: "p2", identifier: "MT-12", title: "Final verification", state: "Todo", blocked_by: [%{id: "b1", identifier: "MT-30", state: "Todo"}]}
+    standalone = %Issue{id: "s1", identifier: "MT-20", title: "Standalone", state: "Todo"}
+    epic = epic("e1", "MT-10", [%{id: "p1", identifier: "MT-11", state: "Done"}, final])
+
+    state =
+      orchestrator_state(2)
+      |> Orchestrator.put_epic_lanes_for_test([epic, final, blocker, other_parent, standalone])
+      |> run(standalone)
+
+    refute Orchestrator.should_dispatch_issue_for_test(final, state)
+    assert Orchestrator.should_dispatch_issue_for_test(blocker, state)
+
+    state = run(state, blocker)
+    # Dispatched once: running, it is not offered again, and it fills the lane.
+    refute Orchestrator.should_dispatch_issue_for_test(blocker, state)
+
+    assert %{lanes: [%{status: "running", sub_issue: %{identifier: "MT-30", via: via}}], shared: %{used: 1}} =
+             snapshot_of(state).epic_lanes
+
+    assert via == %{relation: "blocks", identifier: "MT-12"}
+  end
+
+  test "a grandchild of the epic runs in its lane when the shared slot is busy" do
+    grandchild = %Issue{id: "g1", identifier: "MT-13", title: "Grandchild", state: "Todo"}
+    part = %Issue{id: "p1", identifier: "MT-11", title: "Part", state: "In Progress", sub_issues: [%{id: "g1", identifier: "MT-13", state: "Todo"}]}
+    standalone = %Issue{id: "s1", identifier: "MT-20", title: "Standalone", state: "Todo"}
+    epic = epic("e1", "MT-10", [part])
+
+    state =
+      orchestrator_state(2)
+      |> Orchestrator.put_epic_lanes_for_test([epic, part, grandchild, standalone])
+      |> run(standalone)
+
+    assert Orchestrator.should_dispatch_issue_for_test(grandchild, state)
+  end
+
+  test "a blocker shared by two epics runs once and holds one lane" do
+    blocker = %Issue{id: "b1", identifier: "MT-30", title: "Shared fix", state: "Todo"}
+    blocked_by = [%{id: "b1", identifier: "MT-30", state: "Todo"}]
+    part_1 = %Issue{id: "p1", identifier: "MT-11", title: "Part", state: "Todo", blocked_by: blocked_by}
+    part_2 = %Issue{id: "q1", identifier: "MT-21", title: "Part", state: "Todo", blocked_by: blocked_by}
+    sibling = %Issue{id: "q2", identifier: "MT-22", title: "Sibling", state: "Todo"}
+    candidates = [epic("e1", "MT-10", [part_1]), epic("e2", "MT-20", [part_2, sibling]), part_1, part_2, sibling, blocker]
+
+    state = orchestrator_state(2) |> Orchestrator.put_epic_lanes_for_test(candidates) |> run(blocker)
+
+    refute Orchestrator.should_dispatch_issue_for_test(blocker, state)
+    # The other epic's lane is still free for its own work.
+    assert Orchestrator.should_dispatch_issue_for_test(sibling, state)
+  end
+
   test "three active epics take every slot of max_total 3 and a fourth epic waits" do
     epics = for n <- 1..4, do: epic("e#{n}", "MT-#{n}0", [%{id: "p#{n}", identifier: "MT-#{n}1", state: "Todo"}])
     parts = for n <- 1..4, do: %Issue{id: "p#{n}", identifier: "MT-#{n}1", title: "Part", state: "Todo"}
@@ -114,6 +169,11 @@ defmodule SymphonyElixir.OrchestratorEpicLanesTest do
       priority: 2,
       sub_issues: Enum.map(sub_issues, &Map.take(&1, [:id, :identifier, :state]))
     }
+  end
+
+  defp snapshot_of(state) do
+    {:reply, snapshot, _state} = Orchestrator.handle_call(:snapshot, {self(), make_ref()}, state)
+    snapshot
   end
 
   defp run(state, %Issue{} = issue) do

@@ -722,6 +722,31 @@ defmodule SymphonyElixir.Config.Schema do
       end
     end
 
+    defmodule UsageLimit do
+      @moduledoc false
+      use Ecto.Schema
+      import Ecto.Changeset
+
+      @type t :: %__MODULE__{}
+
+      @primary_key false
+
+      embedded_schema do
+        field(:auto_pause, :boolean, default: true)
+        field(:resume_margin_seconds, :integer, default: 120)
+        field(:unknown_reset_retry_seconds, :integer, default: 900)
+      end
+
+      @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+      def changeset(schema, attrs) do
+        schema
+        |> cast(attrs, [:auto_pause, :resume_margin_seconds, :unknown_reset_retry_seconds], empty_values: [])
+        |> validate_required([:auto_pause, :resume_margin_seconds, :unknown_reset_retry_seconds])
+        |> validate_number(:resume_margin_seconds, greater_than_or_equal_to: 0)
+        |> validate_number(:unknown_reset_retry_seconds, greater_than_or_equal_to: 60)
+      end
+    end
+
     defmodule Mcp do
       @moduledoc false
       use Ecto.Schema
@@ -956,6 +981,7 @@ defmodule SymphonyElixir.Config.Schema do
       embeds_one(:mcp, Mcp, on_replace: :update, defaults_to_struct: true)
       embeds_one(:network_access, NetworkAccess, on_replace: :update, defaults_to_struct: true)
       embeds_one(:sandbox_runtime, SandboxRuntime, on_replace: :update, defaults_to_struct: true)
+      embeds_one(:usage_limit, UsageLimit, on_replace: :update, defaults_to_struct: true)
       # The routed repository's `repositories[].agent` block; `Config` sets it per repository.
       embeds_one(:repository, Schema.RepoAgent, on_replace: :update)
       field(:turn_timeout_ms, :integer, default: 3_600_000)
@@ -1025,6 +1051,7 @@ defmodule SymphonyElixir.Config.Schema do
       |> cast_embed(:mcp, with: &Mcp.changeset/2)
       |> cast_embed(:network_access, with: &NetworkAccess.changeset/2)
       |> cast_embed(:sandbox_runtime, with: &SandboxRuntime.changeset/2)
+      |> cast_embed(:usage_limit, with: &UsageLimit.changeset/2)
       |> cast_embed(:repository, with: &Schema.RepoAgent.changeset/2)
     end
 
@@ -1909,7 +1936,9 @@ defmodule SymphonyElixir.Config.Schema do
         "ci_failed",
         "ci_escalated",
         "qa_passed",
-        "qa_failed"
+        "qa_failed",
+        "usage_limit_paused",
+        "usage_limit_resumed"
       ]
 
       embedded_schema do

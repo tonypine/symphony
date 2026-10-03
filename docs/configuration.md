@@ -248,6 +248,10 @@ agent:
     retry_backoff_max_ms: 300000
     tokens_per_issue:
     tokens_per_day:
+  usage_limit:
+    auto_pause: true
+    resume_margin_seconds: 120
+    unknown_reset_retry_seconds: 900
   prompts:
     include_project_guides: true
     project_guide_files: [AGENTS.md]
@@ -397,12 +401,17 @@ agent:
   sub-ticket approved and not finished (anything but Backlog, Triage or a terminal state). Each
   one, in parent priority then age order, holds one lane: its sub-tickets run there one after
   another, and the lane stays reserved while the current part is in review or landing, so the next
-  part starts as soon as it is unblocked. Epics beyond the lane count wait their turn. The slots
-  left over are shared, in dispatch order, for standalone tickets and for an epic's extra
-  parallel sub-tickets. Set it to `max_total - 1` to always keep a slot for standalone work, or
-  `0` to turn lanes off. Values outside `0..max_total` fail `symphony check`. The dashboard and
-  `/api/v1/state` (`epic_lanes`) show each lane and the shared pool, and the dispatch log line
-  ends with `slot=lane:<epic>`, `slot=shared` or `slot=finishing`.
+  part starts as soon as it is unblocked. The lane also runs whatever is in the way of the next
+  part: sub-tickets of sub-tickets at any depth, and tickets blocking any of those (transitively,
+  until Done), even when they belong to another parent. The nearest one goes first, so the epic's
+  next part beats a blocker of it, and priority and age only break ties. A ticket in the way of two
+  epics runs once, in whichever lane is free first. Epics beyond the lane count wait their turn.
+  The slots left over are shared, in dispatch order, for standalone tickets and for an epic's extra
+  parallel tickets. Set it to `max_total - 1` to always keep a slot for standalone work, or `0` to
+  turn lanes off. Values outside `0..max_total` fail `symphony check`. The dashboard and
+  `/api/v1/state` (`epic_lanes`) show each lane and the shared pool, with the ticket a lane runs
+  and why when it is not the epic's own sub-ticket (`MT-30 (In Progress), blocks MT-12`; `via` in
+  the API). The dispatch log line ends with `slot=lane:<epic>`, `slot=shared` or `slot=finishing`.
 - `concurrency.finishing_max` (default: `2`) caps landing runs (tickets in `Merging`; with
   `pull_requests.auto_merge` on, only the ones that fell back to the landing agent). They only
   finish approved work, so they don't use `max_total` slots or epic lanes and start as soon as one
@@ -435,6 +444,31 @@ agent:
   command that may not report token usage.
 - The dashboard surfaces daily usage, daily remaining headroom, and per-issue usage. Cached,
   cache-created, fresh input, and output tokens are shown separately when reported.
+
+**Usage limits:**
+
+- `usage_limit.auto_pause` (default `true`): when a run ends on the Claude or Codex usage limit, Symphony
+  holds new runs of that provider until the limit resets instead of failing the run. The retry
+  keeps its attempt, gets no backoff and no `run_failed` notification, and the run is recorded as
+  `usage_limited`. Runs on another provider (for example an `openrouter` run profile) keep
+  dispatching, and a weekly Opus limit holds only Opus runs. Codex runs (`agent.kind: codex`) are
+  their own provider (`openai`): a Codex limit holds only Codex runs, and a Claude limit never
+  holds them. `false` keeps the old behaviour: the
+  run fails and retries with the normal backoff.
+- `usage_limit.resume_margin_seconds` (default `120`, `>= 0`): added to the reset time the provider
+  reports before runs resume.
+- `usage_limit.unknown_reset_retry_seconds` (default `900`, `>= 60`): how long the hold lasts when
+  no reset time is known (neither in the rejection nor remembered for that window).
+- At the resume time one held run (the first in dispatch order) goes out alone. If Claude accepts
+  it, the other held runs follow; if it hits the limit again, the hold starts over from the new
+  reset time (or `unknown_reset_retry_seconds`). New Claude work stays held meanwhile.
+- The hold is kept across restarts and is separate from the operator pause: resuming never
+  clears a pause you set.
+- While a hold is in place, the dashboards show `Paused: Claude 5-hour limit, resumes ~14:05`
+  (local time), `/api/v1/state` lists it under `usage_limits`, and `dispatch_state.blockers` has a
+  `usage_limit` entry. The `usage_limit_paused` and `usage_limit_resumed` notifications go out once
+  when a hold starts and once when it clears, not once per held run. A hold clears when the first
+  run is accepted, not when it goes out, and a first run that hits the limit again sends nothing.
 
 **Project guides:**
 

@@ -1,0 +1,2 @@
+{"method":"codex/event/token_count","params":{"id":"0","msg":{"type":"token_count","info":null,"rate_limits":{"primary":{"used_percent":12.0,"window_minutes":300,"resets_at":1791043200},"secondary":{"used_percent":100.0,"window_minutes":10080,"resets_at":1791504000}}},"conversationId":"thr_usage"}}
+{"method":"codex/event/error","params":{"id":"0","msg":{"type":"error","message":"You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro) or try again in 4 days 2 hours 5 minutes."},"conversationId":"thr_usage"}}
