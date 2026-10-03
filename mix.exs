@@ -59,6 +59,7 @@ defmodule SymphonyElixir.MixProject do
           SymphonyElixir.StatusDashboard,
           SymphonyElixir.StatusDashboard.Renderer,
           SymphonyElixir.TerminalDashboard.Terminal,
+          SymphonyElixir.LeftoverProcesses.Table,
           SymphonyElixir.LogFile,
           SymphonyElixir.Workflow,
           SymphonyElixir.WorkflowStore,
