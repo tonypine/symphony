@@ -1,11 +1,9 @@
 name: macos
 
+# `macos` is a required check, so the workflow runs on every pull request and the
+# `changes` job decides whether to build. On pushes to `main` the path filter is enough.
 on:
   pull_request:
-    paths:
-      - "macos/**"
-      - "scripts/install-macos.sh"
-      - ".github/workflows/macos.yml"
   push:
     branches:
       - main
@@ -22,10 +20,45 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  macos:
-    name: macos
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      macos: ${{ steps.diff.outputs.macos }}
+
+    steps:
+      - name: Checkout
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Check for macOS changes
+        id: diff
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "macos=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # HEAD is the PR merged into its base, so HEAD^1 is the base.
+          changed="$(git diff --name-only HEAD^1 HEAD)"
+          echo "$changed"
+          if echo "$changed" | grep -qE '^(macos/|scripts/install-macos\.sh$|\.github/workflows/macos\.yml$)'; then
+            echo "macos=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "macos=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: macos build
     runs-on: macos-latest
     timeout-minutes: 30
+    needs: changes
+    if: ${{ needs.changes.outputs.macos == 'true' }}
 
     steps:
       - name: Checkout
@@ -55,6 +88,8 @@ jobs:
     name: install script
     runs-on: macos-latest
     timeout-minutes: 15
+    needs: changes
+    if: ${{ needs.changes.outputs.macos == 'true' }}
 
     steps:
       - name: Checkout
@@ -102,3 +137,31 @@ jobs:
             echo "::error::$APP still has the quarantine flag"
             exit 1
           fi
+
+  # The required check. It passes when nothing under macos/ changed (build skipped)
+  # or the build passed, and fails when change detection or the build failed.
+  macos:
+    name: macos
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs:
+      - changes
+      - build
+    if: ${{ always() }}
+
+    steps:
+      - name: Summarize gate results
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+        run: |
+          echo "changes: $CHANGES_RESULT"
+          echo "build: $BUILD_RESULT"
+
+          if [ "$CHANGES_RESULT" != "success" ]; then
+            exit 1
+          fi
+          case "$BUILD_RESULT" in
+            success | skipped) ;;
+            *) exit 1 ;;
+          esac
