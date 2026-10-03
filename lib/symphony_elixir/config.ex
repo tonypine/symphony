@@ -233,6 +233,25 @@ defmodule SymphonyElixir.Config do
     }
   end
 
+  @doc """
+  The profile the pre-push reviewer starts with: `pre_push_review.model` / `.effort`, else
+  `agent.run_profiles.pre_push_review`, else `agent.model` / `agent.effort`.
+  """
+  @spec pre_push_review_profile(Schema.t()) :: RunKind.profile()
+  def pre_push_review_profile(%Schema{review_agent: config} = settings), do: own_run_profile(settings, :pre_push_review, config)
+
+  @doc """
+  The profile the Auto Review QA agent starts with: `auto_review.model` / `.effort`, else
+  `agent.run_profiles.qa`, else `agent.model` / `agent.effort`.
+  """
+  @spec qa_profile(Schema.t()) :: RunKind.profile()
+  def qa_profile(%Schema{auto_review: config} = settings), do: own_run_profile(settings, :qa, config)
+
+  defp own_run_profile(settings, kind, config) do
+    fallback = run_profile(settings, kind)
+    %{kind: kind, model: config.model || fallback.model, effort: config.effort || fallback.effort}
+  end
+
   @spec review_agent_blocked_state(String.t()) :: String.t()
   def review_agent_blocked_state(repo_key) when is_binary(repo_key) do
     settings_for_repo!(repo_key).ci.escalation_state

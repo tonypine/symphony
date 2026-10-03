@@ -43,7 +43,8 @@ defmodule SymphonyElixir.QaAgent do
           optional(:worker_host) => String.t() | nil,
           optional(:run_id) => String.t() | nil,
           optional(:pr_url) => String.t() | nil,
-          optional(:token_limit) => pos_integer() | nil
+          optional(:token_limit) => pos_integer() | nil,
+          optional(:run_profile) => SymphonyElixir.RunKind.profile()
         }
   @type run_result :: %{result: result(), tokens: map()}
 
@@ -283,6 +284,7 @@ defmodule SymphonyElixir.QaAgent do
       issue: job.issue,
       repo_key: Map.get(job, :repo_key),
       run_id: Map.get(job, :run_id),
+      run_profile: Map.get_lazy(job, :run_profile, fn -> SymphonyElixir.Config.qa_profile(qa_settings) end),
       tool_scope: :qa
     ]
 

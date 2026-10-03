@@ -157,6 +157,24 @@ defmodule SymphonyElixir.AutoReviewQaTest do
       assert run.ended_at
     end
 
+    test "the QA run starts with the QA profile and records its kind, model and effort" do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        pr_review_mode: "polling",
+        ci: %{enabled: true},
+        agent_effort: "low",
+        auto_review: %{enabled: true, max_fix_attempts: 2, model: "claude-haiku-4-5"}
+      )
+
+      record = put_record()
+      Application.put_env(:symphony_elixir, :qa_flow_agent_result, pass_result())
+
+      AutoReview.run_qa(job(record), git: git_with_paths(["lib/symphony_elixir/cli.ex"]), qa_agent: FakeQaAgent)
+
+      assert_receive {:qa_agent_run, %{run_profile: %{kind: :qa, model: "claude-haiku-4-5", effort: "low"}}, _settings}
+      assert [%{kind: "qa", run_kind: "qa", model: "claude-haiku-4-5", effort: "low"}] = RunStore.list_runs(@repo_key, :all)
+    end
+
     test "a failing CLI behaviour returns to In Progress with the finding in the continuation prompt" do
       record = put_record()
       Application.put_env(:symphony_elixir, :qa_flow_agent_result, fail_result())

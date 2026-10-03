@@ -360,6 +360,7 @@ defmodule SymphonyElixir.ReviewAgent do
                issue: issue,
                repo_key: Keyword.get(opts, :repo_key),
                run_id: Keyword.get(opts, :run_id),
+               run_profile: Keyword.get(opts, :reviewer_run_profile) || Config.pre_push_review_profile(settings),
                tool_scope: :read_only,
                linear_comment_registry: Keyword.get(opts, :linear_comment_registry)
              ) do
