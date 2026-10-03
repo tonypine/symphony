@@ -783,8 +783,10 @@ one.
 - `pass` and `blocked` → the verification ticket goes to `In Review` for a human to sign off;
 - `fail` → each failing step (or each finding, when no step failed) is filed as a `Backlog`
   sub-ticket of the verification ticket that names the step and holds its details and evidence,
-  the report lists them, and the verification ticket goes to `Backlog` until a human re-promotes
-  it. There is no fix loop.
+  the report lists them, and the verification ticket is marked blocked by each one and stays in
+  `Todo`. Symphony holds it there and runs the walkthrough again once every gap is `Done` (or
+  cancelled), with no human step. When a gap could not be filed or linked, the ticket goes to
+  `Backlog` for a human instead. There is no fix loop.
 
 The ticket gets the usual executor run when the tracker is not Linear, the run is on a remote
 worker, it has the `qa:skip` label, or it has no parent.

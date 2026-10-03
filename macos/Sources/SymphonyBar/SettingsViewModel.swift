@@ -38,7 +38,10 @@ final class SettingsViewModel: ObservableObject {
     @Published private(set) var loginItemNote: String?
     @Published private(set) var loginItemError: String?
     @Published private(set) var issues: [SettingsIssue] = []
-    @Published private(set) var keychainError: String?
+    @Published private(set) var secretsError: String?
+    /// True until the secrets have been read, which can wait on a Keychain prompt while they move out of the
+    /// Keychain. Save stays off until then, so an empty form can't overwrite them.
+    @Published private(set) var isLoadingSecrets = true
     /// `agent.concurrency.max_total` in the configured symphony.yml. Saved to that file, not UserDefaults.
     @Published var maxConcurrentAgents = MaxConcurrentAgents.symphonyDefault
     /// `agent.provider`, `.model`, `.effort` and `.run_profiles` in the configured symphony.yml, and the same
@@ -67,15 +70,16 @@ final class SettingsViewModel: ObservableObject {
     /// are written.
     private var loadedRunProfiles: ScopedRunProfiles?
 
-    /// Extra variable names known to be in the Keychain. Only these can be removed on save, so a failed
+    /// Extra variable names known to be stored. Only these can be removed on save, so a failed
     /// load never turns into deletions.
     private var storedNames: Set<String> = []
 
-    /// The secrets as read from the Keychain, or nil when the read failed. Saving different secrets restarts
+    /// The secrets as read from the store, or nil when the read failed. Saving different secrets restarts
     /// Symphony so it picks them up.
     private var loadedSecrets: SecretSettings?
 
     private let store: SettingsStore
+    private let secrets: SecretsReader
     private let validator: SettingsValidator
     private let loginItem: LoginItemService
     private let openRouter: OpenRouterClient
@@ -84,6 +88,7 @@ final class SettingsViewModel: ObservableObject {
 
     init(
         store: SettingsStore = AppStores.current.settingsStore(),
+        secrets: SecretsReader? = nil,
         validator: SettingsValidator = SettingsValidator(embeddedSymphonyPath: SymphonyRunner.embeddedSymphonyPath),
         loginItem: LoginItemService = AppStores.current.loginItem,
         openRouter: OpenRouterClient = OpenRouterClient(),
@@ -91,6 +96,7 @@ final class SettingsViewModel: ObservableObject {
         onSecretsChanged: @escaping () -> Void = {}
     ) {
         self.store = store
+        self.secrets = secrets ?? SecretsReader(load: store.loadSecrets)
         self.validator = validator
         self.loginItem = loginItem
         self.openRouter = openRouter
@@ -101,19 +107,27 @@ final class SettingsViewModel: ObservableObject {
         launchAtLogin = LoginItem.isOn(loginStatus)
         loginItemNote = LoginItem.note(loginStatus)
 
-        do {
-            let secrets = try store.loadSecrets()
+        loadMaxConcurrentAgents()
+        loadRunProfiles()
+        // Off the main thread, so a Keychain prompt can't freeze the app while Settings opens.
+        self.secrets.read { [weak self] result in self?.showSecrets(result) }
+    }
+
+    /// Fills the secret fields from the read. A failed read leaves `storedNames` empty, so Save can't delete
+    /// anything stored.
+    private func showSecrets(_ result: Result<SecretSettings, Error>) {
+        isLoadingSecrets = false
+        switch result {
+        case .success(let secrets):
             linearAPIKey = secrets.linearAPIKey
+            // Setting a non-empty key loads the OpenRouter model list.
             openRouterAPIKey = secrets.openRouterAPIKey
             extraRows = secrets.extraEnvironment.map { EnvironmentRow(name: $0.name, value: $0.value) }
             storedNames = Self.storedNames(secrets)
             loadedSecrets = secrets.trimmed()
-        } catch {
-            keychainError = "Could not read the Keychain: \(error)"
+        case .failure(let error):
+            secretsError = "Could not read the secrets: \(error)"
         }
-        loadMaxConcurrentAgents()
-        loadRunProfiles()
-        if !openRouterAPIKey.isEmpty { loadOpenRouterModels() }
     }
 
     /// The stepper is off until a symphony.yml has been read.
@@ -179,7 +193,7 @@ final class SettingsViewModel: ObservableObject {
         openRouterModelList = models
     }
 
-    /// Names that may be removed from the Keychain on save: the extra variables and a stored OpenRouter key.
+    /// Names that may be removed from the store on save: the extra variables and a stored OpenRouter key.
     private static func storedNames(_ secrets: SecretSettings) -> Set<String> {
         var names = Set(secrets.extraEnvironment.map(\.name))
         if !secrets.openRouterAPIKey.isEmpty { names.insert(SecretSettings.openRouterAPIKeyName) }
@@ -214,11 +228,14 @@ final class SettingsViewModel: ObservableObject {
         extraRows.removeAll { $0.id == id }
     }
 
+    /// Save is off while it runs and until the secrets have been read.
+    var canSave: Bool { !isSaving && !isLoadingSecrets }
+
     /// Validates and saves, then calls `onSaved` when everything was stored. Changed models are written only
     /// after `symphony check` passes on them; until then nothing is saved, and a failure shows in
     /// `configCheckError`.
     func save(onSaved: @escaping () -> Void) {
-        guard !isSaving else { return }
+        guard canSave else { return }
         let settings = settings.trimmed()
         let secrets = SecretSettings(
             linearAPIKey: linearAPIKey,
@@ -247,11 +264,11 @@ final class SettingsViewModel: ObservableObject {
         do {
             try store.saveSecrets(secrets, removing: storedNames)
         } catch {
-            keychainError = "Could not save to the Keychain: \(error)"
+            secretsError = "Could not save the secrets: \(error)"
             return false
         }
         storedNames = Self.storedNames(secrets)
-        keychainError = nil
+        secretsError = nil
         let secretsChanged = secrets != loadedSecrets
         loadedSecrets = secrets
         store.saveSettings(settings)

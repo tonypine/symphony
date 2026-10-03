@@ -3,7 +3,9 @@ import Foundation
 /// The steps of a graceful restart, kept free of AppKit so they can be unit tested: check symphony.yml, pause
 /// dispatch, wait until no agent run is active, stop, start, wait until Symphony answers, then resume dispatch
 /// if the restart paused it. Events go in; the effects the app must carry out come back. An update drains the same
-/// way but stops there, so the app can swap itself for the new version.
+/// way but stops there, so the app can swap itself for the new version. The update never runs the new version's
+/// Symphony: running it deletes older versions' unpacked releases, including the one the running Symphony loads
+/// its modules from, so the new one only runs once the relaunched app starts it.
 public struct RestartMachine: Equatable {
     /// How long a started Symphony has to answer on its control URL before the restart reports it.
     public static let answerTimeout: TimeInterval = 120
@@ -45,14 +47,13 @@ public struct RestartMachine: Equatable {
     }
 
     public enum Effect: Equatable {
-        /// Run `<binary> check --config <symphony.yml>` as Start would run Symphony. `symphonyBinary` replaces the
-        /// embedded Symphony when set.
-        case checkConfig(symphonyBinary: String?)
+        /// Run `symphony check --config <symphony.yml>` with the app's own Symphony, as Start would run it.
+        case checkConfig
         case send(ControlAction)
         /// Poll Symphony's state now instead of waiting out the interval.
         case pollNow
         case stop
-        case start(symphonyBinary: String?)
+        case start
         case alert(title: String, message: String)
         /// An update's drain is done and Symphony has stopped; the app hands over to the new version.
         case stopped
@@ -72,7 +73,6 @@ public struct RestartMachine: Equatable {
     /// Why the last restart failed, shown in the menu until the next restart.
     public private(set) var error: String?
 
-    private var symphonyBinary: String?
     private var alreadyPaused = false
     private var runsTimeout: TimeInterval = 0
     private var logPath = ""
@@ -88,13 +88,12 @@ public struct RestartMachine: Equatable {
         return false
     }
 
-    /// Starts a restart. `alreadyPaused` is whether dispatch is paused now; `symphonyBinary` replaces the embedded
-    /// Symphony for the check and the start, for the updater. After `runsTimeout` seconds of waiting for agent runs
-    /// the restart also offers Restart Now Anyway. An `.update` ends with `.stopped` instead of starting Symphony.
+    /// Starts a restart. `alreadyPaused` is whether dispatch is paused now. After `runsTimeout` seconds of waiting
+    /// for agent runs the restart also offers Restart Now Anyway. An `.update` ends with `.stopped` instead of
+    /// starting Symphony.
     /// Does nothing while a restart is under way.
     public mutating func begin(
         alreadyPaused: Bool,
-        symphonyBinary: String? = nil,
         purpose: Purpose = .restart,
         runsTimeout: TimeInterval,
         logPath: String,
@@ -104,11 +103,10 @@ public struct RestartMachine: Equatable {
         self = RestartMachine()
         self.purpose = purpose
         self.alreadyPaused = alreadyPaused
-        self.symphonyBinary = symphonyBinary
         self.runsTimeout = runsTimeout
         self.logPath = logPath
         enter(.checkingConfig, now: now)
-        return [.checkConfig(symphonyBinary: symphonyBinary)]
+        return [.checkConfig]
     }
 
     public mutating func handle(_ event: Event, now: Date = Date()) -> [Effect] {
@@ -145,7 +143,7 @@ public struct RestartMachine: Equatable {
                 return [.stopped]
             }
             enter(.starting, now: now)
-            return [.start(symphonyBinary: symphonyBinary)]
+            return [.start]
 
         case let (.starting, .startFinished(startError)):
             guard let startError else {

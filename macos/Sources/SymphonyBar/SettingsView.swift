@@ -154,7 +154,15 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    if model.isLoadingSecrets {
+                        HStack {
+                            ProgressView().controlSize(.small)
+                            Text(StatusMenu.keychainWaitingLine).foregroundStyle(.secondary)
+                        }
+                    }
+                    // Off until the read fills them in, so nothing typed is overwritten.
                     SecureField(SecretSettings.linearAPIKeyName, text: $model.linearAPIKey, prompt: Text("lin_api_…"))
+                        .disabled(model.isLoadingSecrets)
                     ForEach($model.extraRows) { $row in
                         HStack {
                             TextField("Name", text: $row.name, prompt: Text("NAME"))
@@ -171,8 +179,9 @@ struct SettingsView: View {
                         }
                     }
                     Button("Add Variable") { model.addRow() }
+                        .disabled(model.isLoadingSecrets)
                 } header: {
-                    Text("Environment (stored in the Keychain)")
+                    Text("Environment (stored in a file only you can read)")
                 }
 
                 Section {
@@ -181,6 +190,7 @@ struct SettingsView: View {
                         text: $model.openRouterAPIKey,
                         prompt: Text("sk-or-…")
                     )
+                    .disabled(model.isLoadingSecrets)
                     HStack {
                         Button("Test connection") { model.testOpenRouter() }
                             .disabled(model.isTestingOpenRouter || model.openRouterAPIKey.isEmpty)
@@ -208,7 +218,7 @@ struct SettingsView: View {
                     Text("OpenRouter")
                 } footer: {
                     Text(
-                        "Stored in the Keychain and passed to Symphony as \(SecretSettings.openRouterAPIKeyName) "
+                        "Stored with your other secrets and passed to Symphony as \(SecretSettings.openRouterAPIKeyName) "
                             + "for run profiles with provider: openrouter. Leave blank to turn OpenRouter off."
                     )
                     .font(.callout)
@@ -223,8 +233,8 @@ struct SettingsView: View {
                 ForEach(model.issues.map(\.message), id: \.self) { message in
                     Text(message).foregroundStyle(.red)
                 }
-                if let keychainError = model.keychainError {
-                    Text(keychainError).foregroundStyle(.red)
+                if let secretsError = model.secretsError {
+                    Text(secretsError).foregroundStyle(.red)
                 }
                 if let configFileError = model.configFileError {
                     Text(configFileError).foregroundStyle(.red)
@@ -250,7 +260,7 @@ struct SettingsView: View {
                     model.save(onSaved: close)
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(model.isSaving)
+                .disabled(!model.canSave)
             }
             .padding(20)
         }

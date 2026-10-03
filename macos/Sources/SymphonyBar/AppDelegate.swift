@@ -4,8 +4,8 @@ import SymphonyBarCore
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemValidation {
     private var statusItem: NSStatusItem?
-    private let settingsWindow = SettingsWindowController()
     private let runner = SymphonyRunner()
+    private lazy var settingsWindow = SettingsWindowController(secrets: runner.secrets)
     private let poller = StatusPoller()
     private lazy var restarter = RestartController(runner: runner, poller: poller)
     private var machine = StatusMachine()
@@ -240,11 +240,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     }
 
     /// Restarts the app's Symphony gracefully: checks symphony.yml, pauses dispatch, waits for agent runs, stops,
-    /// starts, and resumes once Symphony answers. The updater passes `symphonyBinary` to run a different binary.
-    func restart(symphonyBinary: String? = nil) {
+    /// starts, and resumes once Symphony answers.
+    func restart() {
         guard runner.isRunning, StatusMenu.canRestart(machine.status) else { return }
         controlError = nil
-        restarter.restart(alreadyPaused: StatusMenu.canResume(machine.status), symphonyBinary: symphonyBinary)
+        restarter.restart(alreadyPaused: StatusMenu.canResume(machine.status))
     }
 
     @objc private func restartNow(_ sender: Any?) {
@@ -359,10 +359,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             updater.fail("Symphony is starting, stopping or restarting; try again once it runs.")
             return
         }
-        restarter.drainForUpdate(
-            alreadyPaused: StatusMenu.canResume(machine.status),
-            symphonyBinary: update.symphonyBinary
-        ) { [weak self] stopped, pausedByUpdate in
+        let alreadyPaused = StatusMenu.canResume(machine.status)
+        restarter.drainForUpdate(alreadyPaused: alreadyPaused) { [weak self] stopped, pausedByUpdate in
             guard let self else { return }
             guard stopped else {
                 updater.cancel()
