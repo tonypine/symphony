@@ -452,6 +452,80 @@ final class RunProfilesConfigTests: XCTestCase {
         )
     }
 
+    func testMovesFlagsOutOfBothCommands() throws {
+        let yaml = """
+            agent:
+              runtime: claude
+              command: claude --model claude-opus-5-5 --dangerously-skip-permissions --verbose
+
+            pre_push_review:
+              enabled: true
+              runtime: claude
+              command: claude --model claude-opus-5-5 --effort=high --dangerously-skip-permissions  # reviewer
+              max_iterations: 1
+
+            """
+        let old = try RunProfilesConfig.profiles(in: yaml)
+        var new = old
+        new[.breakdown].effort = "high"
+
+        XCTAssertEqual(try RunProfilesConfig.updating(yaml, from: old, to: new), """
+            agent:
+              runtime: claude
+              command: claude --dangerously-skip-permissions --verbose
+              model: claude-opus-5-5
+              run_profiles:
+                breakdown: { effort: high }
+
+            pre_push_review:
+              enabled: true
+              runtime: claude
+              command: claude --dangerously-skip-permissions  # reviewer
+              model: claude-opus-5-5
+              effort: high
+              max_iterations: 1
+
+            """)
+    }
+
+    func testLeavesThePrePushCommandWhenNothingResolvesForIt() throws {
+        let yaml = "agent:\n  command: claude\npre_push_review:\n  command: claude --model claude-opus-5-5\n"
+        var new = RunProfiles()
+        new[.breakdown].effort = "high"
+
+        XCTAssertEqual(
+            try RunProfilesConfig.updating(yaml, from: RunProfiles(), to: new),
+            "agent:\n  command: claude\n  run_profiles:\n    breakdown: { effort: high }\npre_push_review:\n  command: claude --model claude-opus-5-5\n"
+        )
+    }
+
+    func testSettingThePrePushKindMovesItsFlagsAndKeepsItsOwnKeys() throws {
+        let yaml = "agent:\n  command: claude\npre_push_review:\n  command: 'claude --model claude-opus-5-5 --effort low'\n  effort: max\n"
+        var new = RunProfiles()
+        new[.prePushReview].effort = "high"
+
+        XCTAssertEqual(
+            try RunProfilesConfig.updating(yaml, from: RunProfiles(), to: new),
+            "agent:\n  command: claude\n  run_profiles:\n    pre_push_review: { effort: high }\n"
+                + "pre_push_review:\n  command: 'claude'\n  model: claude-opus-5-5\n  effort: max\n"
+        )
+    }
+
+    func testAOneLinePrePushSectionFailsOnlyWithFlags() throws {
+        var new = RunProfiles()
+        new.defaults.effort = "high"
+        let plain = "agent:\n  command: claude\npre_push_review: { enabled: true, command: claude }\n"
+
+        XCTAssertEqual(
+            try RunProfilesConfig.updating(plain, from: RunProfiles(), to: new),
+            "agent:\n  command: claude\n  effort: high\npre_push_review: { enabled: true, command: claude }\n"
+        )
+        let flagged = "agent:\n  command: claude\npre_push_review: { command: claude --model x }\n"
+        XCTAssertThrowsError(try RunProfilesConfig.updating(flagged, from: RunProfiles(), to: new)) { error in
+            XCTAssertEqual(error as? RunProfilesConfigError, .unsupported(line: 3, reason: "`pre_push_review:` should be an indented block"))
+        }
+    }
+
     func testDefaultTitleNamesTheCommandValue() {
         XCTAssertEqual(RunProfilesConfig.defaultTitle(RunProfilesConfig.models, inherited: nil), "default")
         XCTAssertEqual(RunProfilesConfig.defaultTitle(RunProfilesConfig.models, inherited: "claude-opus-5-5"), "Opus 5.5, from command")

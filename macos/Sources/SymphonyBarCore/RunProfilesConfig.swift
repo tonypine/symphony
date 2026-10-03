@@ -130,6 +130,8 @@ public enum RunProfilesConfig {
 
     /// Keys of `agent:` in the order new ones are written.
     static let agentOrder = ["runtime", "command", "model", "effort", "run_profiles"]
+    /// Keys of `pre_push_review:` in the order new ones are written.
+    static let prePushReviewOrder = ["enabled", "runtime", "command", "model", "effort"]
     static let fieldOrder = RunProfileField.allCases.map(\.rawValue)
     static let defaultIndentStep = 2
 
@@ -185,10 +187,10 @@ public enum RunProfilesConfig {
     }
 
     /// The `--model` and `--effort` that `agent.command` passes, which runs use while `agent.model` and
-    /// `agent.effort` are unset.
-    public static func commandProfile(in yaml: String) throws -> RunProfile {
+    /// `agent.effort` are unset. `section` reads `pre_push_review.command` instead.
+    public static func commandProfile(in yaml: String, section: String = "agent") throws -> RunProfile {
         let document = Document(yaml)
-        guard let key = try commandKey(in: document),
+        guard let key = try commandKey(in: document, section: section),
               let command = try decodeScalar(InlineText(key).value, on: key) else { return RunProfile() }
         return splitCommandFlags(command).flags
     }
@@ -241,7 +243,10 @@ public enum RunProfilesConfig {
     ///
     /// Symphony rejects `--model` / `--effort` in `agent.command` once any model or effort is set, so when
     /// the result sets one, those flags move out of the command into `agent.model` / `agent.effort`, unless
-    /// `new` sets those itself. Runs then use the same model and effort as before.
+    /// `new` sets those itself. It rejects them in `pre_push_review.command` once a model or effort resolves
+    /// for pre-push review, so when the result sets a default or the `pre_push_review` kind, those flags
+    /// move into `pre_push_review.model` / `.effort`, unless the file sets those. Runs then use the same
+    /// model and effort as before.
     public static func updating(_ yaml: String, from old: RunProfiles, to new: RunProfiles) throws -> String {
         guard old != new else { return yaml }
         var text = yaml
@@ -252,6 +257,11 @@ public enum RunProfilesConfig {
                 new.defaults[field] = flags[field]
             }
             text = try removingCommandFlags(in: text)
+        }
+        let reviewFlags = try prePushReviewFlags(in: yaml)
+        if reviewFlags != RunProfile() && (new.defaults != RunProfile() || new.kinds[.prePushReview] != nil) {
+            text = try removingCommandFlags(in: text, section: prePushReview)
+            text = try settingPrePushReview(reviewFlags, in: text)
         }
         for kind in scopes {
             for field in RunProfileField.allCases where old[kind][field] != new[kind][field] {
@@ -376,11 +386,27 @@ public enum RunProfilesConfig {
         return document.text
     }
 
-    /// The text with `--model` / `--effort` taken out of `agent.command`, keeping the rest of the line, its
-    /// quoting and any trailing comment.
-    private static func removingCommandFlags(in yaml: String) throws -> String {
+    static let prePushReview = "pre_push_review"
+
+    /// The `--model` / `--effort` in `pre_push_review.command`. A `pre_push_review: { ... }` line only
+    /// matters, and so only fails, when its command passes one of them.
+    private static func prePushReviewFlags(in yaml: String) throws -> RunProfile {
+        let document = Document(yaml)
+        if let section = document.child(prePushReview, in: document.all), try InlineText(section).isFlowMap {
+            let command = try InlineText(section).flowMap(section).first { $0.key == "command" }
+            guard case .text(let raw)? = command?.value,
+                  let value = try decodeScalar(Substring(raw), on: section),
+                  splitCommandFlags(value).flags != RunProfile() else { return RunProfile() }
+            throw section.unsupported("`\(prePushReview):` should be an indented block")
+        }
+        return try commandProfile(in: yaml, section: prePushReview)
+    }
+
+    /// The text with `--model` / `--effort` taken out of `<section>.command`, keeping the rest of the line,
+    /// its quoting and any trailing comment.
+    private static func removingCommandFlags(in yaml: String, section: String = "agent") throws -> String {
         var document = Document(yaml)
-        guard let key = try commandKey(in: document) else { return yaml }
+        guard let key = try commandKey(in: document, section: section) else { return yaml }
         let inline = try InlineText(key)
         let rendered: String
         switch inline.value.first {
@@ -394,6 +420,23 @@ public enum RunProfilesConfig {
             rendered = splitCommandFlags(String(inline.value)).command
         }
         document.lines[key.index] = inline.replacingValue(in: key, with: rendered)
+        return document.text
+    }
+
+    /// The text with `pre_push_review.model` / `.effort` set to the fields of `flags` the file leaves unset.
+    private static func settingPrePushReview(_ flags: RunProfile, in yaml: String) throws -> String {
+        var document = Document(yaml)
+        guard let section = try sectionKey(prePushReview, in: document) else { return yaml }
+        for field in RunProfileField.allCases {
+            guard let value = flags[field] else { continue }
+            let range = document.children(of: section)
+            guard document.child(field.rawValue, in: range) == nil else { continue }
+            let column = document.childIndent(in: range) ?? section.indent + defaultIndentStep
+            try set(
+                field.rawValue, to: RepositoriesConfig.scalar(value), under: section, column: column,
+                order: prePushReviewOrder, in: &document
+            )
+        }
         return document.text
     }
 
@@ -476,15 +519,20 @@ public enum RunProfilesConfig {
 
     /// The top-level `agent:` key, or nil when it's missing.
     private static func agentKey(in document: Document) throws -> Document.Key? {
-        guard let agent = document.child("agent", in: document.all) else { return nil }
-        try requireBlock(agent, InlineText(agent))
-        return agent
+        try sectionKey("agent", in: document)
     }
 
-    /// `agent.command`, or nil when it's missing.
-    private static func commandKey(in document: Document) throws -> Document.Key? {
-        guard let agent = try agentKey(in: document),
-              let key = document.child("command", in: document.children(of: agent)) else { return nil }
+    /// The top-level `name:` key, or nil when it's missing.
+    private static func sectionKey(_ name: String, in document: Document) throws -> Document.Key? {
+        guard let section = document.child(name, in: document.all) else { return nil }
+        try requireBlock(section, InlineText(section))
+        return section
+    }
+
+    /// `<section>.command`, or nil when it's missing.
+    private static func commandKey(in document: Document, section: String) throws -> Document.Key? {
+        guard let parent = try sectionKey(section, in: document),
+              let key = document.child("command", in: document.children(of: parent)) else { return nil }
         try requireScalar(key, in: document)
         return key
     }
