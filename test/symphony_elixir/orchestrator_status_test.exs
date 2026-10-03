@@ -4641,8 +4641,13 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
         StatusDashboard.notify_update(dashboard_name)
         Process.sleep(25)
+
+        # `symphony dashboard` gets the same view through the control API.
+        assert {:ok, frame} = StatusDashboard.frame(140, dashboard_name)
+        assert Regex.replace(~r/\e\[[0-9;]*m/, frame, "") =~ "Tokens: new 20 | cached 100 | created 0 | out 30"
       end)
 
+    assert StatusDashboard.frame(140, Module.concat(__MODULE__, :NoSuchDashboard)) == :unavailable
     assert log =~ "snapshot stale"
     assert length(String.split(log, "snapshot stale")) == 2
   end

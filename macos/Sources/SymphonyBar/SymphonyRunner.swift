@@ -77,6 +77,16 @@ final class SymphonyRunner {
         try launch(settings: store.loadSettings(), symphonyBinary: symphonyBinary, subcommand: ["check"])
     }
 
+    /// The `symphony dashboard` script for Terminal, from the binary the running Symphony came from (or Start
+    /// would run), against the state directory the app watches.
+    func terminalDashboardScript() throws -> String {
+        try TerminalDashboard.script(
+            settings: launchedSettings ?? store.loadSettings(),
+            embeddedSymphonyPath: Self.embeddedSymphonyPath,
+            stateRoot: stateRoot
+        )
+    }
+
     /// Minutes Restart waits for agent runs before it offers Restart Now Anyway.
     var restartTimeoutMinutes: Int {
         let range = AppSettings.restartTimeoutRange
