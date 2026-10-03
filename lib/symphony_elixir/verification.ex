@@ -9,6 +9,7 @@ defmodule SymphonyElixir.Verification do
   @env_var "SYMPHONY_VERIFICATION_PORT"
   @dev_server_supervisor SymphonyElixir.Verification.DevServerSupervisor
 
+  @type qa_dev_server :: %{context: context(), pid: pid(), port: pos_integer(), url: String.t()}
   @type context :: %{
           run_id: String.t(),
           repo_key: String.t(),
@@ -38,6 +39,66 @@ defmodule SymphonyElixir.Verification do
   @spec enabled?(Schema.t()) :: boolean()
   def enabled?(%Schema{verification: %{enabled: enabled}}), do: enabled == true
   def enabled?(_settings), do: false
+
+  @doc "Whether verification is on and `verification.dev_server.start_cmd` is set."
+  @spec dev_server_configured?(Schema.t()) :: boolean()
+  def dev_server_configured?(%Schema{verification: %{dev_server: %{start_cmd: command}}} = settings),
+    do: enabled?(settings) and is_binary(command) and command != ""
+
+  @doc """
+  Allocates a port and starts `verification.dev_server` in `workspace` for a QA pass,
+  waiting for its health check. The port is released again when the server does not
+  start. Stop it with `stop_qa_dev_server/1`.
+  """
+  @spec start_qa_dev_server(Issue.t(), String.t(), Path.t(), keyword()) :: {:ok, qa_dev_server()} | {:error, term()}
+  def start_qa_dev_server(%Issue{} = issue, run_id, workspace, opts) when is_binary(run_id) and is_binary(workspace) do
+    settings = Keyword.fetch!(opts, :settings)
+
+    case allocate_for_dispatch(issue, run_id, nil, opts) do
+      {:ok, %{port: port} = context} ->
+        case start_dev_server(context, workspace, settings: settings) do
+          {:ok, pid} when is_pid(pid) ->
+            {:ok, %{context: context, pid: pid, port: port, url: dev_server_url(port, settings)}}
+
+          other ->
+            release(context, "qa dev server did not start")
+            {:error, dev_server_error(other)}
+        end
+
+      {:ok, nil} ->
+        {:error, :dev_server_not_configured}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc "Stops a dev server from `start_qa_dev_server/4` and releases its port."
+  @spec stop_qa_dev_server(qa_dev_server()) :: :ok
+  def stop_qa_dev_server(%{context: context, pid: pid}) do
+    stop_dev_server(pid)
+    release(context, "qa pass ended")
+  end
+
+  @doc "The dev server's base URL: the health check URL's scheme, host and port."
+  @spec dev_server_url(pos_integer(), Schema.t()) :: String.t()
+  def dev_server_url(port, %Schema{verification: %{dev_server: %{health_check_url: url}}}) when is_integer(port) do
+    uri = URI.parse(interpolate_port(url || "", port))
+    "#{uri.scheme || "http"}://#{uri.host || "127.0.0.1"}:#{uri.port || port}/"
+  end
+
+  @doc "Replaces `$SYMPHONY_VERIFICATION_PORT` and `${SYMPHONY_VERIFICATION_PORT}` in `value`."
+  @spec interpolate_port(String.t(), pos_integer()) :: String.t()
+  def interpolate_port(value, port) when is_binary(value) do
+    port = to_string(port)
+
+    value
+    |> String.replace("${#{@env_var}}", port)
+    |> String.replace("$#{@env_var}", port)
+  end
+
+  defp dev_server_error({:ok, nil}), do: :dev_server_not_configured
+  defp dev_server_error({:error, reason}), do: reason
 
   @doc false
   @spec allocate_for_dispatch(Issue.t(), String.t(), String.t() | nil, keyword()) ::

@@ -14,22 +14,37 @@ defmodule SymphonyElixir.QaAgent do
   `pass | fail | blocked` with per-step results. An answer without that object gets
   one follow-up turn in the same session asking for it. A pass that runs the `macos_app`
   playbook also gets the host-side `qa_*` tools of a `SymphonyElixir.QaDriver`,
-  stopped (quitting every app it launched) when the pass ends. Processes the agent
+  stopped (quitting every app it launched) when the pass ends. A pass that runs the
+  `web` playbook starts `verification.dev_server` on a pooled port from a second
+  worktree at the PR head (a server that fails its health check makes the pass
+  `blocked`), and its session alone gets a `browser` MCP server: headless Playwright
+  limited to the dev server's localhost origins, or the playbook's `browser_mcp`.
+  Processes the agent
   left running under the worktree, even detached ones, are stopped before the
   worktree is removed (see `SymphonyElixir.LeftoverProcesses`).
   """
 
   require Logger
 
-  alias SymphonyElixir.{AgentTelemetry, AgentTools, LeftoverProcesses, PromptSafety, QaDriver, ReviewAgent, Workspace}
+  alias SymphonyElixir.{AgentTelemetry, AgentTools, LeftoverProcesses, PromptSafety, QaDriver, ReviewAgent}
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.Config.Schema.Agent.Mcp.Server, as: McpServer
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.Verification
+  alias SymphonyElixir.Workspace
 
   @evidence_dir "qa-evidence"
   @worktree_dir ".qa"
   @token_keys [:uncached_input, :cached_input, :cache_creation_input, :output, :total]
   @step_statuses ["pass", "fail", "blocked", "skipped"]
   @max_verdict_follow_ups 1
+  @browser_mcp_name "browser"
+  @localhost_domains ["localhost", "127.0.0.1"]
+  # The default browser MCP server runs on the Symphony host, outside the agent sandbox, so it
+  # is pinned to an exact version and never fetched during a pass (`npx --no`). To bump it,
+  # change this version, check the flags in `default_browser_mcp/2` against that release, and
+  # update the install command in docs/configuration.md.
+  @playwright_mcp_package "@playwright/mcp@0.0.83"
 
   @type verdict :: :pass | :fail | :blocked
   @type step :: %{name: String.t(), status: String.t(), details: String.t(), evidence: [String.t()]}
@@ -52,6 +67,7 @@ defmodule SymphonyElixir.QaAgent do
           optional(:pr_url) => String.t() | nil,
           optional(:token_limit) => pos_integer() | nil,
           optional(:run_profile) => SymphonyElixir.RunKind.profile(),
+          optional(:dev_server_url) => String.t() | nil,
           optional(:verification_issue) => Issue.t(),
           optional(:base_ref) => String.t()
         }
@@ -140,7 +156,7 @@ defmodule SymphonyElixir.QaAgent do
     Title: #{PromptSafety.linear_issue_title(issue.title || "")}
     Description (walkthrough and acceptance criteria):
     #{PromptSafety.linear_issue_body(issue.description || "")}
-    #{parent_section(parent)}#{verification_section(job)}
+    #{parent_section(parent)}#{verification_section(job)}#{dev_server_section(Map.get(job, :dev_server_url))}
     Playbooks to follow:
 
     #{Enum.map_join(job.playbooks, "\n\n", & &1.prompt)}
@@ -228,6 +244,17 @@ defmodule SymphonyElixir.QaAgent do
 
   defp parent_section(_parent), do: ""
 
+  defp dev_server_section(url) when is_binary(url) do
+    """
+
+    Dev server:
+    Symphony started the project's dev server for this PR head at #{url} and stops it when the
+    pass ends. The `browser` MCP server can reach it.
+    """
+  end
+
+  defp dev_server_section(_url), do: ""
+
   @doc "Parses the QA agent's answer."
   @spec parse_response(String.t() | nil) :: {:ok, result()} | {:error, term()}
   def parse_response(text) when is_binary(text) do
@@ -311,6 +338,19 @@ defmodule SymphonyElixir.QaAgent do
 
     case resolve_agent_module(opts, qa_settings.agent.kind) do
       {:ok, agent_module} ->
+        with_dev_server(job, worktree, settings, opts, fn dev_server ->
+          job = Map.put(job, :dev_server_url, dev_server && dev_server.url)
+          run_with_tools(agent_module, job, worktree, settings, qa_settings, dev_server, opts)
+        end)
+
+      {:error, reason} ->
+        {:error, reason, empty_tokens()}
+    end
+  end
+
+  defp run_with_tools(agent_module, job, worktree, settings, qa_settings, dev_server, opts) do
+    case put_browser_mcp(qa_settings, job, worktree, dev_server, opts) do
+      {:ok, qa_settings} ->
         prompt = prompt(job, fetch_parent(job, worktree, settings, opts))
         driver = start_driver(job, worktree, settings, opts)
 
@@ -323,6 +363,141 @@ defmodule SymphonyElixir.QaAgent do
       {:error, reason} ->
         {:error, reason, empty_tokens()}
     end
+  end
+
+  # Only a pass that runs the `web` playbook starts the dev server. It runs from its own
+  # worktree at the PR head, so its build output never lands in the agent's worktree (where
+  # `qa_build` refuses untracked files), and is stopped, with its port released, when the
+  # pass ends.
+  defp with_dev_server(job, worktree, settings, opts, fun) do
+    if web_playbook(job) do
+      git = Keyword.get(opts, :git, &default_git/2)
+
+      case add_worktree(job, worktree <> "-dev-server", git) do
+        {:ok, server_worktree} ->
+          try do
+            run_dev_server(job, server_worktree, settings, opts, fun)
+          after
+            stop_leftover_processes(job, server_worktree, opts)
+            remove_worktree(job.workspace_path, server_worktree, git)
+          end
+
+        {:error, reason} ->
+          {:error, {:qa_dev_server_failed, reason}, empty_tokens()}
+      end
+    else
+      fun.(nil)
+    end
+  end
+
+  defp run_dev_server(job, server_worktree, settings, opts, fun) do
+    verification = Keyword.get(opts, :verification, Verification)
+    run_id = Map.get(job, :run_id) || "qa-#{job.issue.identifier}-#{String.slice(job.sha, 0, 12)}"
+    start_opts = Enum.reject([settings: settings, repo_key: Map.get(job, :repo_key)], &is_nil(elem(&1, 1)))
+
+    case verification.start_qa_dev_server(job.issue, run_id, server_worktree, start_opts) do
+      {:ok, dev_server} ->
+        try do
+          fun.(dev_server)
+        after
+          verification.stop_qa_dev_server(dev_server)
+        end
+
+      {:error, reason} ->
+        {:error, {:qa_dev_server_failed, reason}, empty_tokens()}
+    end
+  end
+
+  defp web_playbook(job), do: Enum.find(job.playbooks, &(Map.get(&1, :kind) == "web"))
+
+  # The `browser` MCP server exists only in this QA session's settings. The agent's own
+  # sandbox may reach the dev server too: allowlist mode adds the localhost names.
+  defp put_browser_mcp(qa_settings, _job, _worktree, nil, _opts), do: {:ok, qa_settings}
+
+  defp put_browser_mcp(%Schema{agent: agent} = qa_settings, job, worktree, dev_server, opts) do
+    with {:ok, attrs} <- browser_mcp_attrs(job, worktree, dev_server, opts),
+         attrs = attrs |> Map.put("name", @browser_mcp_name) |> Map.put_new("runtimes", [agent.kind]),
+         {:ok, server} <- browser_mcp_server(attrs) do
+      servers = Map.put(agent.mcp.servers || %{}, @browser_mcp_name, server)
+      agent = %{agent | mcp: %{agent.mcp | servers: servers}, network_access: allow_localhost(agent.network_access)}
+      {:ok, %{qa_settings | agent: agent}}
+    end
+  end
+
+  defp browser_mcp_attrs(job, worktree, dev_server, opts) do
+    case job |> web_playbook() |> Map.get(:browser_mcp) do
+      nil ->
+        with :ok <- check_playwright_mcp(Keyword.get(opts, :npx, &npx/1)),
+             do: {:ok, default_browser_mcp(dev_server, worktree)}
+
+      attrs ->
+        {:ok, attrs}
+    end
+  end
+
+  defp browser_mcp_server(attrs) do
+    case McpServer.changeset(%McpServer{}, attrs) |> Ecto.Changeset.apply_action(:insert) do
+      {:ok, server} -> {:ok, server}
+      {:error, changeset} -> {:error, {:qa_browser_mcp_invalid, changeset_errors(changeset)}}
+    end
+  end
+
+  # Fails the pass as `blocked` when the pinned package is not installed, instead of letting
+  # the agent runtime fetch it.
+  defp check_playwright_mcp(npx) do
+    case npx.(["--no", @playwright_mcp_package, "--version"]) do
+      {_output, 0} -> :ok
+      {:error, :enoent} -> {:error, {:qa_browser_mcp_unavailable, :no_npx}}
+      {_output, _status} -> {:error, {:qa_browser_mcp_unavailable, @playwright_mcp_package}}
+    end
+  end
+
+  @doc false
+  @spec npx([String.t()], (String.t() -> String.t() | nil)) :: {String.t(), non_neg_integer()} | {:error, :enoent}
+  def npx(args, find_executable \\ &System.find_executable/1) do
+    case find_executable.("npx") do
+      nil -> {:error, :enoent}
+      npx -> System.cmd(npx, args, stderr_to_stdout: true)
+    end
+  end
+
+  @doc "The exact `@playwright/mcp` package the default browser MCP server runs."
+  @spec playwright_mcp_package() :: String.t()
+  def playwright_mcp_package, do: @playwright_mcp_package
+
+  @doc "The default `browser` MCP server: headless Playwright limited to the dev server's origins."
+  @spec default_browser_mcp(%{port: pos_integer(), url: String.t()}, Path.t()) :: map()
+  def default_browser_mcp(%{port: port, url: url}, worktree) do
+    origins =
+      [URI.parse(url), URI.parse("http://localhost:#{port}"), URI.parse("http://127.0.0.1:#{port}")]
+      |> Enum.map(&"#{&1.scheme}://#{&1.host}:#{&1.port}")
+      |> Enum.uniq()
+      |> Enum.join(";")
+
+    %{
+      "command" => "npx",
+      "args" => [
+        "--no",
+        @playwright_mcp_package,
+        "--browser",
+        "chromium",
+        "--headless",
+        "--isolated",
+        "--allowed-origins",
+        origins,
+        "--output-dir",
+        Path.join(worktree, @evidence_dir)
+      ]
+    }
+  end
+
+  defp allow_localhost(%{mode: "allowlist", allowed_domains: domains} = network_access),
+    do: %{network_access | allowed_domains: Enum.uniq(domains ++ @localhost_domains)}
+
+  defp allow_localhost(network_access), do: network_access
+
+  defp changeset_errors(changeset) do
+    Enum.map_join(changeset.errors, "; ", fn {field, {message, _opts}} -> "#{field} #{message}" end)
   end
 
   defp run_tracked_session(agent_module, job, worktree, qa_settings, prompt, opts) do
@@ -543,7 +718,10 @@ defmodule SymphonyElixir.QaAgent do
   def agent_module(other), do: {:error, {:unsupported_qa_agent_kind, other}}
 
   defp create_worktree(job, settings, git) do
-    worktree = worktree_path(settings, Map.get(job, :repo_key), job.issue.identifier, job.sha)
+    add_worktree(job, worktree_path(settings, Map.get(job, :repo_key), job.issue.identifier, job.sha), git)
+  end
+
+  defp add_worktree(job, worktree, git) do
     workspace = job.workspace_path
 
     # A leftover worktree from an interrupted pass would make `worktree add` fail.

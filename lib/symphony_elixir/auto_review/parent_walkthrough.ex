@@ -27,7 +27,7 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
 
   require Logger
 
-  alias SymphonyElixir.{AgentTools, AutoReview, Config, QaAgent, RunKind, Tracker, Workspace}
+  alias SymphonyElixir.{AgentTools, AutoReview, Config, QaAgent, RunKind, Tracker, Verification, Workspace}
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Issue
@@ -120,7 +120,7 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
 
   defp run_agent(issue, parent, workspace, %{sha: sha, base_ref: base_ref}, settings, opts) do
     started_at = System.monotonic_time(:second)
-    playbooks = playbooks(issue, parent, settings.auto_review)
+    playbooks = playbooks(issue, parent, settings)
 
     job = %{
       issue: parent,
@@ -150,8 +150,8 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
     })
   end
 
-  defp playbooks(issue, parent, config) do
-    playbooks = Selection.playbooks(config)
+  defp playbooks(issue, parent, settings) do
+    playbooks = Selection.playbooks(settings.auto_review, dev_server?: Verification.dev_server_configured?(settings))
     labels = labels(issue) ++ labels(parent)
 
     case Enum.filter(playbooks, &((@label_prefix <> &1.kind) in labels)) do
