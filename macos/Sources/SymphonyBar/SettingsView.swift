@@ -98,6 +98,25 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    ForEach(RunProfilesConfig.scopes, id: \.self) { kind in
+                        RunProfileRow(kind: kind, profile: $model.runProfiles[kind])
+                    }
+                    .disabled(!model.canEditRunProfiles)
+                } header: {
+                    Text("Models (saved in symphony.yml)")
+                } footer: {
+                    Text(
+                        "Each kind of run uses its own model and effort, or the Default row when set to default. "
+                            + "Higher effort and bigger models use the shared 5-hour usage limit faster: keep "
+                            + "Opus and high effort for breakdown and hard implementation, and use Sonnet or "
+                            + "Haiku with low effort for landing and CI fixes. Claude runtime only. Applies to the "
+                            + "next run, no restart needed."
+                    )
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                }
+
+                Section {
                     SecureField(SecretSettings.linearAPIKeyName, text: $model.linearAPIKey, prompt: Text("lin_api_…"))
                     ForEach($model.extraRows) { $row in
                         HStack {
@@ -151,6 +170,33 @@ struct SettingsView: View {
             .padding(20)
         }
         .frame(width: 600)
+    }
+}
+
+/// Model and effort pickers for one kind of run, or the Default row for a nil kind.
+private struct RunProfileRow: View {
+    let kind: RunKind?
+    @Binding var profile: RunProfile
+
+    var body: some View {
+        LabeledContent(kind?.title ?? "Default") {
+            HStack {
+                picker("Model", $profile.model, RunProfilesConfig.models)
+                    .frame(width: 140)
+                picker("Effort", $profile.effort, RunProfilesConfig.efforts)
+                    .frame(width: 100)
+            }
+        }
+    }
+
+    private func picker(_ title: String, _ selection: Binding<String?>, _ choices: [RunProfileChoice]) -> some View {
+        Picker(title, selection: selection) {
+            Text("default").tag(String?.none)
+            ForEach(RunProfilesConfig.choices(choices, including: selection.wrappedValue)) { choice in
+                Text(choice.title).tag(Optional(choice.id))
+            }
+        }
+        .labelsHidden()
     }
 }
 

@@ -160,6 +160,19 @@ set (or, in Development mode, no checkout folder).
   agents use the Linear and GitHub API budgets faster; 2–3 is a safe range on a personal Linear key.
   Each epic under way keeps one agent for its sub-tickets (`agent.concurrency.epic_lanes`, default every
   slot), so 3 agents can mean 3 epics at once, or 2 epics plus 1 for other work.
+- **Models** sets the Claude model and effort for each kind of run, also in the `symphony.yml` itself: the
+  Default row is `agent.model` / `agent.effort`, and each run kind row (breakdown, close-out, final
+  verification, implementation, rework, CI fix, review feedback, landing, pre-push review, QA) is
+  `agent.run_profiles.<kind>.model` / `.effort`. Models offered are Opus 5.5 (`claude-opus-5-5`), Sonnet 5.5
+  (`claude-sonnet-5-5`) and Haiku 4.5 (`claude-haiku-4-5-20251001`), plus any other value already in the
+  file; efforts are low, medium, high, xhigh and max. Save writes only the fields you changed: it rewrites
+  that one value (keeping a trailing comment), or inserts the key, the kind (as `breakdown: { effort: high }`,
+  or as an indented block when the other kinds are written that way) and `run_profiles:` when they are
+  missing. Choosing "default" removes the key, then a kind or `run_profiles:` left empty. Comments and other
+  keys stay as they are, in block or `{ ... }` style. A layout the editor can't change, such as
+  `agent: { ... }` on one line, turns the pickers off with an error naming the line. Higher effort and bigger
+  models use the shared 5-hour usage limit faster. The next run picks the change up without a restart. The
+  Codex runtime ignores these keys (see [Run profiles](../docs/configuration.md)).
 - `LINEAR_API_KEY` and any extra environment variables are stored only in the login Keychain, as generic
   passwords under service `symphony` with the variable name as the account:
 
