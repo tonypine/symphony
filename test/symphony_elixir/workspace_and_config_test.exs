@@ -3017,8 +3017,9 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert Config.server_host() == "localhost"
     Application.delete_env(:symphony_elixir, :server_host_override)
 
+    # `dashboard.enabled: false` turns off only the terminal dashboard, not the control API.
     write_workflow_file!(Workflow.workflow_file_path(), observability_enabled: false)
-    assert Config.server_port() == nil
+    assert Config.server_port() == 0
 
     write_workflow_file!(Workflow.workflow_file_path(),
       max_tokens_per_issue: 500_000,

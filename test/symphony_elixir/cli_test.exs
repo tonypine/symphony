@@ -20,7 +20,9 @@ defmodule SymphonyElixir.CLITest do
         set_server_host_override: fn _host -> :ok end,
         set_server_port_override: fn _port -> :ok end,
         ensure_all_started: fn -> {:ok, [:symphony_elixir]} end,
-        run_one_shot: fn _identifier, _opts -> {:ok, %{}} end
+        run_one_shot: fn _identifier, _opts -> {:ok, %{}} end,
+        control_url: fn -> "http://127.0.0.1:4000" end,
+        run_dashboard: fn _url -> :ok end
       },
       overrides
     )
@@ -232,6 +234,44 @@ defmodule SymphonyElixir.CLITest do
     assert_received {:state_root, expanded_path}
     assert expanded_path == Path.expand("tmp/configure-state")
     refute_received :started
+  end
+
+  test "dashboard draws from the running Symphony's control URL without loading config" do
+    parent = self()
+
+    deps =
+      base_deps(%{
+        file_regular?: fn _path -> flunk("dashboard must not read symphony.yml") end,
+        control_url: fn ->
+          send(parent, :resolved_control_url)
+          "http://127.0.0.1:4555/"
+        end,
+        run_dashboard: fn url_source ->
+          send(parent, {:dashboard, url_source})
+          :ok
+        end
+      })
+
+    # Without --url the control URL is resolved on each poll, not once at startup.
+    assert {:halt, 0} = CLI.evaluate(["dashboard"], deps)
+    assert_received {:dashboard, url_source}
+    refute_received :resolved_control_url
+    assert url_source.() == "http://127.0.0.1:4555"
+    assert_received :resolved_control_url
+    assert url_source.() == "http://127.0.0.1:4555"
+    assert_received :resolved_control_url
+
+    assert {:halt, 0} = CLI.evaluate(["dashboard", "--url", "http://127.0.0.1:4777/"], deps)
+    assert_received {:dashboard, url_source}
+    assert url_source.() == "http://127.0.0.1:4777"
+    refute_received :resolved_control_url
+  end
+
+  test "dashboard rejects unknown arguments with its usage" do
+    assert {:error, "Usage: symphony dashboard [--url <control-url>]"} =
+             CLI.evaluate(["dashboard", "--port", "4000"], base_deps())
+
+    assert {:error, "Usage: symphony dashboard" <> _} = CLI.evaluate(["dashboard", "extra"], base_deps())
   end
 
   test "maybe_configure_burrito_runtime is a no-op outside Burrito" do

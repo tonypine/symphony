@@ -1014,6 +1014,10 @@ Fields:
   - REQUIRED when `enabled` is true.
 - `command` (string)
   - REQUIRED when `enabled` is true.
+- `model` (string), `effort` (`low`, `medium`, `high`, `xhigh`, or `max`)
+  - Optional. Each resolves to this field, else `agent.run_profiles.pre_push_review`, else
+    `agent.model` / `agent.effort`, else null (nothing added). `command` MUST NOT pass `--model` /
+    `--effort` while any of them resolves.
 - `max_iterations` (positive integer)
   - Default: `1`.
 
@@ -1410,7 +1414,8 @@ not require recognizing or validating extension fields unless that extension is 
 - `watchdog.no_progress_threshold_ms`: integer, default `600000`
 - `workers.ssh_hosts`: list of strings, default `[]`
 - `workers.max_concurrent_agents_per_host`: positive integer or null
-- `dashboard.enabled`: boolean, default `true`
+- `dashboard.enabled`: boolean, default `true`; turns the terminal dashboard on or off. It does not stop
+  the HTTP server or control API. The terminal dashboard is drawn only when standard output is a terminal.
 - `dashboard.refresh_ms`: integer, default `1000`
 - `dashboard.render_interval_ms`: integer, default `16`
 - `dashboard.snapshot_publish_ms`: integer, default `500`
@@ -1445,11 +1450,16 @@ not require recognizing or validating extension fields unless that extension is 
 - `pre_push_review.enabled`: boolean, default `false`
 - `pre_push_review.runtime`: `codex` or `claude`, required when enabled
 - `pre_push_review.command`: string, required when enabled
+- `pre_push_review.model`: string or null, default `null`
+- `pre_push_review.effort`: `low`, `medium`, `high`, `xhigh`, `max`, or null, default `null`
 - `pre_push_review.max_iterations`: integer, default `1`
 - `auto_review.enabled`: boolean, default `false`
 - `auto_review.state`: string, default `Auto Review`
 - `auto_review.runtime`: `codex` or `claude`, optional
 - `auto_review.command`: string, optional
+- `auto_review.model`: string or null, default `null`; else `agent.run_profiles.qa`, else `agent.model`
+- `auto_review.effort`: `low`, `medium`, `high`, `xhigh`, `max`, or null, default `null`; else
+  `agent.run_profiles.qa`, else `agent.effort`
 - `auto_review.max_turns`: integer, default `20`
 - `auto_review.timeout_ms`: integer, default `1800000`
 - `auto_review.max_concurrent`: integer, default `1`
@@ -2558,7 +2568,7 @@ A human-readable status surface (terminal output, dashboard, etc.) is OPTIONAL a
 implementation-defined.
 
 If present, it SHOULD draw from orchestrator state/metrics only and MUST NOT be REQUIRED for
-correctness.
+correctness. It SHOULD show the run kind, model and effort of each running and recent run.
 
 ### 13.5 Session Metrics and Token Accounting
 
@@ -2952,6 +2962,8 @@ After restart:
 - Previously running sessions are not assumed recoverable; they SHOULD remain visible in run history
   and MAY be marked failed/interrupted.
 - Run history records SHOULD include the run kind and the model and effort the run started with.
+  QA runs record `qa`; the pre-push reviewer runs inside the run it reviews, whose record SHOULD
+  also include the reviewer's kind, model and effort.
 - Service recovers by:
   - startup terminal workspace cleanup
   - durable retry queue hydration

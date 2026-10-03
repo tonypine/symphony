@@ -11,6 +11,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
   @dashboard_reload_task :dashboard_reload
   @default_control_confirm_timeout_ms 10_000
   @dashboard_pause_reason "Paused from dashboard"
+  @recent_runs_limit 10
 
   @impl true
   def mount(params, _session, socket) do
@@ -364,6 +365,8 @@ defmodule SymphonyElixirWeb.DashboardLive do
                         <span :if={entry.run_kind == :pr || entry.run_kind == "pr"} class="repo-chip repo-chip-pr">
                           <span class="repo-chip-text">PR</span>
                         </span>
+                        <span :if={entry[:run_profile]} class="muted run-profile" title="Run kind · model · effort"><%= entry.run_profile.label %></span>
+                        <span :if={entry[:reviewer_profile]} class="muted run-profile" title="Pre-push reviewer: run kind · model · effort">Reviewer: <%= entry.reviewer_profile.label %></span>
                       </div>
                     </td>
                     <td>
@@ -443,6 +446,61 @@ defmodule SymphonyElixirWeb.DashboardLive do
                         </button>
                       <% end %>
                     </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          <% end %>
+        </section>
+
+        <section class="section-card">
+          <div class="section-header">
+            <div>
+              <h2 class="section-title">Recent runs</h2>
+              <p class="section-copy">The latest runs with the kind, model and effort each one started with.</p>
+            </div>
+          </div>
+
+          <%= if recent_runs(@visible_payload) == [] do %>
+            <p class="empty-state">No runs yet.</p>
+          <% else %>
+            <div class="table-wrap">
+              <table class="data-table data-table-recent-runs">
+                <colgroup>
+                  <col style="width: 9rem;" />
+                  <col style="width: 10rem;" />
+                  <col />
+                  <col style="width: 9rem;" />
+                  <col style="width: 9rem;" />
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th>Issue</th>
+                    <th>Run kind</th>
+                    <th>Model / effort</th>
+                    <th>Status</th>
+                    <th>Tokens</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr :for={run <- recent_runs(@visible_payload)}>
+                    <td>
+                      <div class="issue-stack">
+                        <span class="issue-id" title={run.title}><%= run.issue_identifier %></span>
+                        <.repo_chip repo={repo_label(run)} />
+                      </div>
+                    </td>
+                    <td><%= run.run_kind || run.kind %></td>
+                    <td>
+                      <div class="detail-stack">
+                        <span><%= profile_value(run.model) %> · <%= profile_value(run.effort) %></span>
+                        <span :if={run.reviewer_profile} class="muted">
+                          Reviewer: <%= profile_value(run.reviewer_profile.model) %> · <%= profile_value(run.reviewer_profile.effort) %>
+                        </span>
+                      </div>
+                    </td>
+                    <td><%= run.status %></td>
+                    <td class="numeric"><%= format_int(Map.get(run.tokens || %{}, :total_tokens, 0)) %></td>
                   </tr>
                 </tbody>
               </table>
@@ -763,6 +821,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
     |> Map.update(:retrying, [], &filter_repo_rows(&1, repo_filter))
     |> Map.update(:awaiting_clarification, [], &filter_repo_rows(&1, repo_filter))
     |> Map.update(:skipped, [], &filter_repo_rows(&1, repo_filter))
+    |> Map.update(:run_history, [], &filter_repo_rows(&1, repo_filter))
     |> Map.update(:conflicts, [], &filter_conflict_rows(&1, repo_filter))
     |> refresh_visible_counts()
   end
@@ -971,6 +1030,12 @@ defmodule SymphonyElixirWeb.DashboardLive do
   end
 
   defp format_int(_value), do: "n/a"
+
+  defp recent_runs(payload), do: payload |> Map.get(:run_history, []) |> Enum.take(@recent_runs_limit)
+
+  # A model or effort that resolved to nothing adds no flag, so the runtime's own default applies.
+  defp profile_value(nil), do: "default"
+  defp profile_value(value), do: value
 
   defp format_compact_int(value) when is_integer(value) do
     abs_value = abs(value)

@@ -2841,7 +2841,9 @@ defmodule SymphonyElixir.Orchestrator do
     runner_opts = Map.get(dispatch, :runner_opts, [])
     running_attrs = Map.get(dispatch, :running_attrs, %{})
     # Read from the current workflow on every dispatch, so a config edit applies to the next run.
-    run_profile = AgentRunner.run_profile(issue, Config.settings_for_repo!(repo_key), repo_key: repo_key)
+    settings = Config.settings_for_repo!(repo_key)
+    run_profile = AgentRunner.run_profile(issue, settings, repo_key: repo_key)
+    reviewer_run_profile = if review_agent_enabled?(settings), do: Config.pre_push_review_profile(settings)
 
     case Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
            opts =
@@ -2851,6 +2853,7 @@ defmodule SymphonyElixir.Orchestrator do
                worker_host: worker_host,
                run_id: run_id,
                run_profile: run_profile,
+               reviewer_run_profile: reviewer_run_profile,
                verification: verification,
                active_workspace_identifiers: sibling_active_workspace_identifiers(state, issue.id, repo_key)
              ] ++ runner_opts
@@ -2877,6 +2880,7 @@ defmodule SymphonyElixir.Orchestrator do
             issue: issue,
             worker_host: worker_host,
             run_profile: run_profile,
+            reviewer_run_profile: reviewer_run_profile,
             verification: verification,
             workspace_path: nil,
             session_id: nil,
@@ -4773,7 +4777,12 @@ defmodule SymphonyElixir.Orchestrator do
       updated_at: now
     }
     |> Map.merge(run_profile_record(Map.get(running_entry, :run_profile)))
+    |> Map.merge(reviewer_profile_record(Map.get(running_entry, :reviewer_run_profile)))
   end
+
+  # The pre-push reviewer runs inside this run, so its profile sits next to `reviewer_tokens`.
+  defp reviewer_profile_record(nil), do: %{}
+  defp reviewer_profile_record(profile), do: %{reviewer_profile: run_profile_record(profile)}
 
   defp run_profile_record(%{kind: kind, model: model, effort: effort}),
     do: %{run_kind: Atom.to_string(kind), model: model, effort: effort}
@@ -5255,6 +5264,8 @@ defmodule SymphonyElixir.Orchestrator do
           issue_id: issue_id,
           repo_key: Map.get(metadata, :repo_key),
           run_kind: Map.get(metadata, :run_kind) || Map.get(metadata.issue, :run_kind),
+          run_profile: Map.get(metadata, :run_profile),
+          reviewer_run_profile: Map.get(metadata, :reviewer_run_profile),
           identifier: metadata.identifier,
           title: running_entry_title(metadata),
           state: metadata.issue.state,

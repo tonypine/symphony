@@ -91,6 +91,24 @@ defmodule SymphonyElixir.CLICheckTest do
     end
   end
 
+  test "reports pre-push reviewer and QA agent profile errors naming the key", %{root: root} do
+    cases = [
+      {"pre_push_review:\n  effort: extreme\n", "pre_push_review.effort must be one of: low, medium, high, xhigh, max"},
+      {"auto_review:\n  effort: extreme\n", "auto_review.effort must be one of: low, medium, high, xhigh, max"},
+      {"pre_push_review:\n  command: claude --model x\n  effort: low\n", "pre_push_review.command must not pass --model"},
+      {"auto_review:\n  command: claude --effort high\n  model: y\n", "auto_review.command must not pass --effort"}
+    ]
+
+    for {section, expected} <- cases do
+      Cache.clear()
+      path = write_symphony!(root, valid_symphony(root) <> section)
+
+      assert {{:error, message}, ""} = check(["--config", path])
+      assert message =~ "Config error in #{path}: "
+      assert message =~ expected
+    end
+  end
+
   test "reports a broken repo WORKFLOW.md", %{root: root} do
     File.write!(Path.join([root, "app", "WORKFLOW.md"]), "---\nbogus_workflow_key: 1\n---\nPrompt\n")
     path = write_symphony!(root, valid_symphony(root))

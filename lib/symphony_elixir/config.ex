@@ -233,6 +233,25 @@ defmodule SymphonyElixir.Config do
     }
   end
 
+  @doc """
+  The profile the pre-push reviewer starts with: `pre_push_review.model` / `.effort`, else
+  `agent.run_profiles.pre_push_review`, else `agent.model` / `agent.effort`.
+  """
+  @spec pre_push_review_profile(Schema.t()) :: RunKind.profile()
+  def pre_push_review_profile(%Schema{review_agent: config} = settings), do: own_run_profile(settings, :pre_push_review, config)
+
+  @doc """
+  The profile the Auto Review QA agent starts with: `auto_review.model` / `.effort`, else
+  `agent.run_profiles.qa`, else `agent.model` / `agent.effort`.
+  """
+  @spec qa_profile(Schema.t()) :: RunKind.profile()
+  def qa_profile(%Schema{auto_review: config} = settings), do: own_run_profile(settings, :qa, config)
+
+  defp own_run_profile(settings, kind, config) do
+    fallback = run_profile(settings, kind)
+    %{kind: kind, model: config.model || fallback.model, effort: config.effort || fallback.effort}
+  end
+
   @spec review_agent_blocked_state(String.t()) :: String.t()
   def review_agent_blocked_state(repo_key) when is_binary(repo_key) do
     settings_for_repo!(repo_key).ci.escalation_state
@@ -266,7 +285,7 @@ defmodule SymphonyElixir.Config do
     end
   end
 
-  @spec server_port() :: non_neg_integer() | nil
+  @spec server_port() :: non_neg_integer()
   def server_port do
     case Application.get_env(:symphony_elixir, :server_port_override) do
       port when is_integer(port) and port >= 0 -> port
@@ -457,12 +476,10 @@ defmodule SymphonyElixir.Config do
     end)
   end
 
+  # `dashboard.enabled` only switches the terminal dashboard; the HTTP server and
+  # control API stay up so the menu bar app and `symphony dashboard` can reach it.
   defp default_server_port(settings) do
-    cond do
-      not settings.observability.dashboard_enabled -> nil
-      is_integer(settings.server.port) -> settings.server.port
-      true -> @default_server_port
-    end
+    if is_integer(settings.server.port), do: settings.server.port, else: @default_server_port
   end
 
   defp warn_if_budget_token_reporting_unavailable(%Schema{} = settings) do

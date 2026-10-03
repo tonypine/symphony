@@ -456,6 +456,8 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "state" => "In Progress",
                  "url" => "https://linear.app/example/issue/MT-HTTP",
                  "run_kind" => nil,
+                 "run_profile" => nil,
+                 "reviewer_profile" => nil,
                  "pull_request_url" => nil,
                  "worker_host" => nil,
                  "workspace_path" => nil,
@@ -509,6 +511,11 @@ defmodule SymphonyElixir.ExtensionsTest do
                %{
                  "run_id" => "run-http",
                  "kind" => "agent",
+                 "run_kind" => nil,
+                 "model" => nil,
+                 "effort" => nil,
+                 "profile_label" => nil,
+                 "reviewer_profile" => nil,
                  "repo_key" => "default",
                  "issue_id" => "issue-http",
                  "issue_identifier" => "MT-HTTP",
@@ -999,6 +1006,59 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert download_conn.resp_body == cli_line <> "\n"
   end
 
+  test "state api serves the terminal dashboard frame for symphony dashboard" do
+    dashboard = Module.concat(__MODULE__, :TerminalFrameDashboard)
+    start_supervised!({SymphonyElixir.StatusDashboard, name: dashboard, enabled: false})
+    start_test_endpoint(status_dashboard: dashboard, snapshot_timeout_ms: 5)
+
+    conn = get(build_conn(), "/api/v1/state?format=terminal&columns=140")
+    assert response(conn, 200) =~ "SYMPHONY STATUS"
+    assert Plug.Conn.get_resp_header(conn, "content-type") == ["text/plain; charset=utf-8"]
+
+    # A width that isn't a positive number falls back to the default width.
+    assert response(get(build_conn(), "/api/v1/state?format=terminal&columns=wide"), 200) =~ "SYMPHONY STATUS"
+    assert response(get(build_conn(), "/api/v1/state?format=terminal&columns[]=1"), 200) =~ "SYMPHONY STATUS"
+    assert response(get(build_conn(), "/api/v1/state?format=terminal"), 200) =~ "SYMPHONY STATUS"
+  end
+
+  test "state api caps the terminal frame width" do
+    dashboard = Module.concat(__MODULE__, :WidthEchoDashboard)
+
+    echo_width = fn _snapshot, _tps, columns -> "columns=#{inspect(columns)}" end
+    start_supervised!({SymphonyElixir.StatusDashboard, name: dashboard, enabled: false, format_fun: echo_width})
+
+    start_test_endpoint(status_dashboard: dashboard, snapshot_timeout_ms: 5)
+
+    assert response(get(build_conn(), "/api/v1/state?format=terminal&columns=1000000000"), 200) == "columns=1000"
+    assert response(get(build_conn(), "/api/v1/state?format=terminal&columns=140"), 200) == "columns=140"
+  end
+
+  test "state api answers 503 for the terminal frame when rendering it fails" do
+    dashboard = Module.concat(__MODULE__, :RaisingFrameDashboard)
+
+    raise_bad = fn _snapshot, _tps, _columns -> raise ArgumentError, "bad snapshot" end
+    pid = start_supervised!({SymphonyElixir.StatusDashboard, name: dashboard, enabled: false, format_fun: raise_bad})
+
+    start_test_endpoint(status_dashboard: dashboard, snapshot_timeout_ms: 5)
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert json_response(get(build_conn(), "/api/v1/state?format=terminal"), 503) ==
+                 %{"error" => %{"code" => "dashboard_unavailable", "message" => "Terminal dashboard is unavailable"}}
+      end)
+
+    assert log =~ "Failed rendering status dashboard frame: bad snapshot"
+    assert Process.alive?(pid)
+    assert GenServer.whereis(dashboard) == pid
+  end
+
+  test "state api answers 503 for the terminal frame when no dashboard runs" do
+    start_test_endpoint(status_dashboard: Module.concat(__MODULE__, :MissingDashboard), snapshot_timeout_ms: 5)
+
+    assert json_response(get(build_conn(), "/api/v1/state?format=terminal"), 503) ==
+             %{"error" => %{"code" => "dashboard_unavailable", "message" => "Terminal dashboard is unavailable"}}
+  end
+
   test "phoenix observability api preserves 405, 404, and unavailable behavior" do
     unavailable_orchestrator = Module.concat(__MODULE__, :UnavailableOrchestrator)
     start_test_endpoint(orchestrator: unavailable_orchestrator, snapshot_timeout_ms: 5)
@@ -1262,6 +1322,71 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "Agent update"
     refute html =~ "Claude update"
     refute html =~ "Codex update"
+  end
+
+  test "dashboard liveview shows the run kind, model and effort of running and recent runs" do
+    orchestrator_name = Module.concat(__MODULE__, :RunProfileDashboardOrchestrator)
+    snapshot = static_snapshot()
+    [running] = snapshot.running
+    [history] = snapshot.run_history
+
+    snapshot = %{
+      snapshot
+      | running: [
+          Map.merge(running, %{
+            run_profile: %{kind: :implementation, model: "claude-opus-5-5", effort: "high"},
+            reviewer_run_profile: %{kind: :pre_push_review, model: nil, effort: "medium"}
+          })
+        ],
+        run_history: [
+          Map.merge(history, %{
+            run_id: "qa-run",
+            issue_identifier: "MT-QA",
+            kind: "qa",
+            status: "qa_pass",
+            run_kind: "qa",
+            model: "claude-haiku-4-5",
+            effort: "low"
+          }),
+          Map.merge(history, %{
+            run_kind: "implementation",
+            model: "claude-opus-5-5",
+            effort: nil,
+            reviewer_profile: %{run_kind: "pre_push_review", model: "claude-sonnet-5-5", effort: "medium"}
+          }),
+          Map.merge(history, %{run_id: "api-run", repo_key: "api", issue_identifier: "MT-API-RUN", tokens: nil})
+        ]
+    }
+
+    {:ok, _orchestrator_pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: snapshot)
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    {:ok, _view, html} = live(build_conn(), "/")
+
+    assert html =~ "implementation · claude-opus-5-5 · high"
+    assert html =~ "Reviewer: pre_push_review · default · medium"
+    assert html =~ "Recent runs"
+    assert html =~ "MT-QA"
+    assert html =~ "claude-haiku-4-5 · low"
+    assert html =~ "claude-opus-5-5 · default"
+    assert html =~ "Reviewer: claude-sonnet-5-5 · medium"
+    assert html =~ "MT-API-RUN"
+
+    {:ok, _view, html} = live(build_conn(), "/?repo=default")
+
+    assert html =~ "MT-QA"
+    refute html =~ "MT-API-RUN"
+  end
+
+  test "dashboard liveview shows an empty recent runs section" do
+    orchestrator_name = Module.concat(__MODULE__, :NoRunsDashboardOrchestrator)
+    snapshot = %{static_snapshot() | run_history: []}
+    {:ok, _orchestrator_pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: snapshot)
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    {:ok, _view, html} = live(build_conn(), "/")
+
+    assert html =~ "No runs yet."
   end
 
   test "dashboard liveview narrows rows from repo query string" do
