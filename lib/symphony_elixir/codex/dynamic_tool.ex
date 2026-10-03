@@ -1107,24 +1107,13 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     }
   end
 
-  defp tool_error_payload({:waiting_on_sub_issues_state_for_breakdown_only, state_name}) do
+  defp tool_error_payload({:waiting_on_sub_issues_state_requires_human_approval, state_name}) do
     %{
       "error" => %{
-        "code" => "waiting_on_sub_issues_state_for_breakdown_only",
+        "code" => "waiting_on_sub_issues_state_requires_human_approval",
         "message" =>
-          "linear_update_state can move only a `breakdown` parent to #{inspect(state_name)}, " <>
-            "where it waits for its sub-tickets; leave the state as it is."
-      }
-    }
-  end
-
-  defp tool_error_payload({:waiting_on_sub_issues_state_disabled, state_name}) do
-    %{
-      "error" => %{
-        "code" => "waiting_on_sub_issues_state_disabled",
-        "message" =>
-          "#{inspect(state_name)} is turned off in Symphony because the startup check did not find it; " <>
-            "leave the parent In Progress while its sub-tickets are open."
+          "linear_update_state cannot move the issue to #{inspect(state_name)}. Moving a `breakdown` parent there " <>
+            "approves its plan and promotes its sub-tickets, so a human does it; move the parent to `In Review` instead."
       }
     }
   end

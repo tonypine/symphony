@@ -7,14 +7,15 @@ defmodule SymphonyElixir.RunKind do
   routes on. The first match wins:
 
     1. `final_verification`: the title starts with `Final verification:`.
-    2. `close_out`: a `breakdown` parent whose sub-issues are all terminal.
-    3. `breakdown`: any other `breakdown` parent (normally one without sub-issues yet).
-    4. `landing`: the issue is in `Merging`.
-    5. `rework`: the issue is in `Rework`.
-    6. `ci_fix`: the run continues after a red CI run (`:ci_failure` signal).
-    7. `review_feedback`: the run continues after PR review comments
+    2. `breakdown`: a `breakdown` parent in `Rework`, whose rejected plan is made again.
+    3. `close_out`: a `breakdown` parent whose sub-issues are all terminal.
+    4. `breakdown`: any other `breakdown` parent (normally one without sub-issues yet).
+    5. `landing`: the issue is in `Merging`.
+    6. `rework`: the issue is in `Rework`.
+    7. `ci_fix`: the run continues after a red CI run (`:ci_failure` signal).
+    8. `review_feedback`: the run continues after PR review comments
        (non-empty `:reviewer_comments` signal).
-    8. `implementation`: everything else.
+    9. `implementation`: everything else.
 
   Parent and final-verification tickets come before states because they never
   open a PR: the workflow sends them to the parent-ticket steps whatever their state.
@@ -100,14 +101,17 @@ defmodule SymphonyElixir.RunKind do
 
     cond do
       final_verification?(issue) -> :final_verification
-      Issue.close_out_ready?(issue, terminal_states) -> :close_out
-      Issue.breakdown?(issue) -> :breakdown
+      Issue.breakdown?(issue) -> parent_kind(issue, terminal_states)
       in_state?(issue, @landing_state) -> :landing
       in_state?(issue, @rework_state) -> :rework
       present?(Keyword.get(signals, :ci_failure)) -> :ci_fix
       present?(Keyword.get(signals, :reviewer_comments)) -> :review_feedback
       true -> :implementation
     end
+  end
+
+  defp parent_kind(issue, terminal_states) do
+    if Issue.close_out_ready?(issue, terminal_states) and not Issue.replanning?(issue), do: :close_out, else: :breakdown
   end
 
   defp final_verification?(%Issue{title: title}) when is_binary(title) do

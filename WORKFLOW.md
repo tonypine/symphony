@@ -99,7 +99,7 @@ You are working on a Linear ticket `{{ issue.identifier }}`
    - `Auto Review` -> Symphony is testing the PR as a user; do not change the issue or PR, stop and wait.
    - `In Review` -> wait and poll for decision/review updates.
    - `Merging` -> on entry, open and follow `.ai/skills/land/SKILL.md`; do not call `gh pr merge` directly.
-   - `Rework` -> run rework flow.
+   - `Rework` -> run rework flow (for a `breakdown` parent, the re-plan run in `Parent tickets` below).
    - `Done` -> do nothing and shut down.
 4. Check whether a PR already exists for the current branch and whether it is closed.
    - If a branch PR exists and is `CLOSED` or `MERGED`, treat prior branch work as non-reusable for this run.
