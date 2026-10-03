@@ -90,8 +90,9 @@ struct SettingsView: View {
                 } footer: {
                     Text(
                         "Each epic under way keeps one of these agents for its sub-tickets; the rest take "
-                            + "other work. More agents use the Linear and GitHub API budgets faster. 2–3 is a "
-                            + "safe range on a personal Linear key. Applies within a minute, no restart needed."
+                            + "other work. Merges and QA runs don't count here: up to 2 more run on top. More "
+                            + "agents use the Linear and GitHub API budgets faster. 2–3 is a safe range on a "
+                            + "personal Linear key. Applies within a minute, no restart needed."
                     )
                     .font(.callout)
                     .foregroundStyle(.secondary)

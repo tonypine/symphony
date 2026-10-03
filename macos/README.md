@@ -163,7 +163,9 @@ set (or, in Development mode, no checkout folder).
   reloads `symphony.yml` while it runs, so the new limit applies within a minute without a restart. More
   agents use the Linear and GitHub API budgets faster; 2–3 is a safe range on a personal Linear key.
   Each epic under way keeps one agent for its sub-tickets (`agent.concurrency.epic_lanes`, default every
-  slot), so 3 agents can mean 3 epics at once, or 2 epics plus 1 for other work.
+  slot), so 3 agents can mean 3 epics at once, or 2 epics plus 1 for other work. Merge (landing) runs and
+  Auto Review QA passes don't use these agents; up to `agent.concurrency.finishing_max` (default 2) of them
+  run on top.
 - **Models** sets the Claude model and effort for each kind of run, also in the `symphony.yml` itself: the
   Default row is `agent.model` / `agent.effort`, and each run kind row (breakdown, close-out, final
   verification, implementation, rework, CI fix, review feedback, landing, pre-push review, QA) is

@@ -209,7 +209,19 @@ defmodule SymphonyElixir.Config.SystemSchema do
     import Ecto.Changeset
 
     @primary_key false
-    @fields [:name, :path, :workflow, :workflow_source, :base_branch, :team, :labels, :projects, :assignee, :default]
+    @fields [
+      :name,
+      :path,
+      :workflow,
+      :workflow_source,
+      :base_branch,
+      :team,
+      :labels,
+      :projects,
+      :assignee,
+      :default,
+      :agent
+    ]
 
     defmodule Workspace do
       @moduledoc false
@@ -247,6 +259,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
       field(:projects, {:array, :string}, default: [])
       field(:assignee, :string)
       field(:default, :boolean, default: false)
+      # The raw `agent` block until `SystemSchema.parse/1` replaces it with a `Schema.RepoAgent`.
+      field(:agent, :map)
       embeds_one(:workspace, Workspace, on_replace: :update)
     end
 
@@ -344,7 +358,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
       |> changeset()
       |> apply_action(:validate)
       |> case do
-        {:ok, system_config} -> {:ok, finalize_repos(system_config)}
+        {:ok, system_config} -> system_config |> finalize_repos() |> parse_repo_agents()
         {:error, changeset} -> {:error, {:invalid_symphony_config, format_errors(changeset)}}
       end
     end
@@ -548,11 +562,13 @@ defmodule SymphonyElixir.Config.SystemSchema do
     path = "repositories[#{index}]"
 
     with {:ok, repo} <- section_map(repo, path),
-         :ok <- reject_unknown_section_keys(repo, ~w(key workflow workflow_source base_branch route workspace default), path),
+         :ok <- reject_unknown_section_keys(repo, ~w(key workflow workflow_source base_branch route workspace default agent), path),
          {:ok, route} <- section_map(Map.get(repo, "route", %{}), path <> ".route"),
          :ok <- reject_unknown_section_keys(route, ~w(team projects labels assignee), path <> ".route"),
          {:ok, workspace} <- optional_section_map(Map.get(repo, "workspace"), path <> ".workspace"),
-         :ok <- reject_unknown_section_keys(workspace || %{}, ~w(strategy repo fetch_before_dispatch), path <> ".workspace") do
+         :ok <- reject_unknown_section_keys(workspace || %{}, ~w(strategy repo fetch_before_dispatch), path <> ".workspace"),
+         {:ok, agent} <- section_map(Map.get(repo, "agent"), repo_agent_path(Map.get(repo, "key"), index)),
+         :ok <- reject_unknown_section_keys(agent, ~w(provider model effort run_profiles), repo_agent_path(Map.get(repo, "key"), index)) do
       normalized =
         %{}
         |> maybe_put("name", Map.get(repo, "key"))
@@ -565,10 +581,14 @@ defmodule SymphonyElixir.Config.SystemSchema do
         |> maybe_put("labels", Map.get(route, "labels"))
         |> maybe_put("assignee", Map.get(route, "assignee"))
         |> maybe_put("workspace", workspace)
+        |> maybe_put("agent", agent)
 
       {:ok, normalized}
     end
   end
+
+  defp repo_agent_path(key, _index) when is_binary(key) and key != "", do: "repositories[#{key}].agent"
+  defp repo_agent_path(_key, index), do: "repositories[#{index}].agent"
 
   defp normalize_workspaces(config) do
     with {:ok, config} <- section_map(config, "workspaces"),
@@ -603,7 +623,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     with {:ok, config} <- section_map(config, "agent"),
          :ok <- reject_unknown_section_keys(config, ~w(runtime command model effort provider run_profiles concurrency limits timeouts prompts permissions mcp), "agent"),
          {:ok, concurrency} <- section_map(Map.get(config, "concurrency", %{}), "agent.concurrency"),
-         :ok <- reject_unknown_section_keys(concurrency, ~w(max_total max_by_issue_state epic_lanes), "agent.concurrency"),
+         :ok <- reject_unknown_section_keys(concurrency, ~w(max_total max_by_issue_state epic_lanes finishing_max), "agent.concurrency"),
          {:ok, limits} <- section_map(Map.get(config, "limits", %{}), "agent.limits"),
          :ok <-
            reject_unknown_section_keys(
@@ -647,6 +667,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
         |> maybe_put("max_concurrent_agents", Map.get(concurrency, "max_total"))
         |> maybe_put("max_concurrent_agents_by_state", Map.get(concurrency, "max_by_issue_state"))
         |> maybe_put("epic_lanes", Map.get(concurrency, "epic_lanes"))
+        |> maybe_put("finishing_max", Map.get(concurrency, "finishing_max"))
         |> maybe_put("max_turns", Map.get(limits, "max_turns"))
         |> maybe_put("max_retry_backoff_ms", Map.get(limits, "retry_backoff_max_ms"))
         |> maybe_put("max_consecutive_identical_tool_failures", Map.get(limits, "max_consecutive_identical_tool_failures"))
@@ -909,6 +930,27 @@ defmodule SymphonyElixir.Config.SystemSchema do
       end)
 
     %{system_config | repos: repos}
+  end
+
+  defp parse_repo_agents(%__MODULE__{} = system_config) do
+    sections = Map.take(system_config, [:agent, :review_agent, :auto_review, :worker])
+
+    {repos, errors} =
+      Enum.map_reduce(system_config.repos, [], fn
+        %Repo{agent: nil} = repo, errors ->
+          {repo, errors}
+
+        %Repo{agent: agent, name: name} = repo, errors ->
+          case Schema.RepoAgent.parse(agent, sections, repo_agent_path(name, nil)) do
+            {:ok, repo_agent} -> {%{repo | agent: repo_agent}, errors}
+            {:error, repo_errors} -> {repo, errors ++ repo_errors}
+          end
+      end)
+
+    case errors do
+      [] -> {:ok, %{system_config | repos: repos}}
+      errors -> {:error, {:invalid_symphony_config, Enum.join(errors, ", ")}}
+    end
   end
 
   defp resolve_path(path) when is_binary(path), do: Path.expand(path)
