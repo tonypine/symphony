@@ -1425,7 +1425,12 @@ not require recognizing or validating extension fields unless that extension is 
   `ANTHROPIC_API_KEY`, and `CLAUDE_CODE_SUBAGENT_MODEL=<model>`. If `OPENROUTER_API_KEY` is unset
   or blank, the run fails before the agent starts with an error naming the run kind and the
   variable. The key MUST NOT be written to config, logs, the audit log, the run store, or
-  transcripts.
+  transcripts. Before an OpenRouter run starts, the implementation looks the model up in
+  OpenRouter's models catalog (`GET https://openrouter.ai/api/v1/models`, cached in process with
+  a TTL). A model whose `supported_parameters` lacks `tools` fails the run before the agent starts,
+  with an error naming the model, the run kind, and the missing capability. A model without
+  `reasoning` starts without `--effort`, with a warning logged once per model. If the catalog
+  cannot be read, or does not list the model, the run starts and a warning is logged.
 - `agent.prompts.include_project_guides`: boolean, default `true`
 - `agent.prompts.project_guide_files`: list of relative paths or null, default `null`
 - `agent.permissions.approval_policy`: agent approval policy, default depends on `agent.runtime`
@@ -2076,6 +2081,12 @@ An agent subprocess MUST NOT outlive its session or the Symphony process. When t
 transport closes, or Symphony stops (for example on SIGTERM), the implementation SHOULD send SIGTERM
 to the subprocess's process group and SIGKILL after a short grace period. Closing stdin alone is not
 enough: an agent may ignore EOF.
+
+A SIGKILL or crash of Symphony skips that cleanup, so the implementation SHOULD record each agent's
+process group id, its leader's start time, and its workspace durably. On startup, before
+dispatching, it SHOULD stop recorded groups whose leader still has the recorded start time, MUST NOT
+signal a pid whose start time differs (the pid was reused), and SHOULD NOT dispatch issues in the
+workspace of a group it cannot confirm stopped until that group is gone, logging why.
 
 Notes:
 

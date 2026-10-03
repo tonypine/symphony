@@ -513,7 +513,7 @@ defmodule SymphonyElixir.Codex.AppServer do
           ]
         )
 
-      :ok = AgentProcesses.track(port)
+      :ok = AgentProcesses.track(port, workspace: workspace)
 
       case start_stdout_pump(port) do
         {:ok, stdout_pump} ->
@@ -547,7 +547,7 @@ defmodule SymphonyElixir.Codex.AppServer do
              env: AgentEnv.build(),
              reverse_forwards: mcp_reverse_forwards(mcp_session, remote_socket_path)
            ) do
-      :ok = AgentProcesses.track(port)
+      :ok = AgentProcesses.track(port, workspace: workspace)
 
       case start_stdout_pump(port) do
         {:ok, stdout_pump} ->
