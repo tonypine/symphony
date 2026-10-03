@@ -66,6 +66,8 @@ defmodule SymphonyElixirWeb.Presenter do
           budget: normalize_budget(Map.get(snapshot, :budget)),
           dispatch_state: normalize_dispatch_state(snapshot),
           epic_lanes: normalize_epic_lanes(Map.get(snapshot, :epic_lanes)),
+          finishing: normalize_finishing(Map.get(snapshot, :finishing)),
+          slot_waiting: snapshot |> Map.get(:slot_waiting, []) |> Enum.map(&slot_waiting_payload/1),
           rate_limits: snapshot.rate_limits
         }
 
@@ -733,6 +735,21 @@ defmodule SymphonyElixirWeb.Presenter do
   end
 
   defp normalize_epic_lanes(_epic_lanes), do: %{max_total: nil, lanes: [], queued_epics: [], shared: %{slots: nil, used: 0}}
+
+  defp normalize_finishing(%{slots: slots, used: used, running: running}), do: %{slots: slots, used: used, running: running}
+  defp normalize_finishing(_finishing), do: %{slots: nil, used: 0, running: []}
+
+  defp slot_waiting_payload(entry) do
+    %{
+      issue_id: entry.issue_id,
+      issue_identifier: entry.identifier,
+      title: Map.get(entry, :title),
+      state: entry.state,
+      reason: entry.reason,
+      attempt: Map.get(entry, :attempt),
+      since: iso8601(Map.get(entry, :since))
+    }
+  end
 
   defp normalize_dispatch_state(snapshot) when is_map(snapshot) do
     case Map.get(snapshot, :dispatch_state) do

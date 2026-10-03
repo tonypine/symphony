@@ -481,6 +481,150 @@ defmodule SymphonyElixir.Config.Schema do
     end
   end
 
+  defmodule RepoAgent do
+    @moduledoc false
+    # A repository's `repositories[].agent` block: run profile settings that take precedence over
+    # the `agent` section for issues routed to that repository.
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    alias SymphonyElixir.Config.Schema
+    alias SymphonyElixir.Config.Schema.Agent
+    alias SymphonyElixir.RunKind
+
+    @primary_key false
+
+    embedded_schema do
+      field(:model, :string)
+      field(:effort, :string)
+      field(:provider, :string)
+      field(:run_profiles, :map, default: %{})
+    end
+
+    @type t :: %__MODULE__{}
+    @type sections :: %{agent: Agent.t(), review_agent: map(), auto_review: map(), worker: map()}
+
+    @spec changeset(t(), map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [:model, :effort, :provider, :run_profiles], empty_values: [])
+      |> Agent.validate_run_profile_settings()
+    end
+
+    @doc """
+    Parses a repository's agent block against the operator sections it overrides. Each error is
+    a message that starts with `path`, the block's config key (`repositories[<key>].agent`).
+    """
+    @spec parse(map(), sections(), String.t()) :: {:ok, t()} | {:error, [String.t()]}
+    def parse(attrs, sections, path) do
+      case %__MODULE__{} |> changeset(attrs) |> apply_action(:validate) do
+        {:ok, repo_agent} ->
+          case openrouter_errors(repo_agent, sections, path) ++ command_flag_errors(repo_agent, sections, path) do
+            [] -> {:ok, repo_agent}
+            errors -> {:error, errors}
+          end
+
+        {:error, changeset} ->
+          {:error, field_errors(changeset, path)}
+      end
+    end
+
+    @doc """
+    The model, effort and provider a run of `kind` resolves to, field by field:
+    `repositories[].agent.run_profiles.<kind>`, `repositories[].agent`, `agent.run_profiles.<kind>`,
+    `agent`, then nil (or `"anthropic"` for the provider).
+    """
+    @spec resolve(t() | nil, Agent.t(), String.t()) :: %{
+            model: String.t() | nil,
+            effort: String.t() | nil,
+            provider: RunKind.provider()
+          }
+    def resolve(repo_agent, agent, kind) do
+      layers = [profile(repo_agent, kind), fields(repo_agent), profile(agent, kind), fields(agent)]
+
+      %{
+        model: Enum.find_value(layers, & &1["model"]),
+        effort: Enum.find_value(layers, & &1["effort"]),
+        provider: Enum.find_value(layers, & &1["provider"]) || "anthropic"
+      }
+    end
+
+    defp profile(nil, _kind), do: %{}
+    defp profile(%{run_profiles: profiles}, kind), do: Map.get(profiles, kind, %{})
+
+    defp fields(nil), do: %{}
+    defp fields(%{model: model, effort: effort, provider: provider}), do: %{"model" => model, "effort" => effort, "provider" => provider}
+
+    defp field_errors(changeset, path) do
+      changeset
+      |> traverse_errors(fn {message, opts} ->
+        Enum.reduce(opts, message, fn {key, value}, acc -> String.replace(acc, "%{#{key}}", to_string(value)) end)
+      end)
+      |> Enum.flat_map(fn {key, messages} -> Enum.map(messages, &"#{path}.#{key} #{&1}") end)
+      |> Enum.sort()
+    end
+
+    # Only the runs this block points at OpenRouter are checked here; the `agent` section checks
+    # its own. Each error names the key that picked OpenRouter.
+    defp openrouter_errors(repo_agent, %{agent: agent, worker: worker}, path) do
+      RunKind.names()
+      |> Enum.filter(&(resolve(repo_agent, agent, &1).provider == "openrouter"))
+      |> Enum.group_by(&openrouter_key(repo_agent, &1))
+      |> Map.delete(nil)
+      |> Enum.sort()
+      |> Enum.flat_map(fn {key, kinds} ->
+        missing = Enum.filter(kinds, &is_nil(resolve(repo_agent, agent, &1).model))
+
+        openrouter_runtime_errors(agent, path, key) ++
+          openrouter_worker_errors(worker, path, key) ++ openrouter_model_errors(path, key, missing)
+      end)
+    end
+
+    defp openrouter_key(repo_agent, kind) do
+      cond do
+        Map.has_key?(profile(repo_agent, kind), "provider") -> "run_profiles.#{kind}.provider"
+        repo_agent.provider == "openrouter" -> "provider"
+        true -> nil
+      end
+    end
+
+    defp openrouter_runtime_errors(%{kind: "claude"}, _path, _key), do: []
+    defp openrouter_runtime_errors(_agent, path, key), do: ["#{path}.#{key} openrouter is only supported with agent.runtime: claude"]
+
+    defp openrouter_worker_errors(%{ssh_hosts: [_ | _]}, path, key) do
+      ["#{path}.#{key} openrouter is not supported with workers.ssh_hosts; OpenRouter runs start on the local host only"]
+    end
+
+    defp openrouter_worker_errors(_worker, _path, _key), do: []
+
+    defp openrouter_model_errors(_path, _key, []), do: []
+
+    defp openrouter_model_errors(path, "provider", kinds) do
+      [
+        "#{path}.provider openrouter needs an OpenRouter model id; set #{path}.model, #{path}.run_profiles.<kind>.model or agent.model (missing for: #{Enum.join(kinds, ", ")})"
+      ]
+    end
+
+    defp openrouter_model_errors(path, key, [kind]) do
+      ["#{path}.#{key} openrouter needs an OpenRouter model id; set #{path}.run_profiles.#{kind}.model, #{path}.model or agent.model"]
+    end
+
+    # The resolved model and effort are passed as flags, so a command that already passes one
+    # would give it twice. `agent.command` serves every run kind; the reviewer and QA commands
+    # only their own.
+    defp command_flag_errors(repo_agent, sections, path) do
+      [
+        {"agent.command", sections.agent.command, Schema.profile_settings?(repo_agent, nil)},
+        {"pre_push_review.command", sections.review_agent.command, Schema.profile_settings?(repo_agent, "pre_push_review")},
+        {"auto_review.command", sections.auto_review.command, Schema.profile_settings?(repo_agent, "qa")}
+      ]
+      |> Enum.filter(fn {_key, _command, settings?} -> settings? end)
+      |> Enum.flat_map(fn {key, command, _settings?} ->
+        Enum.map(Agent.profile_flags_in(command), &"#{key} must not pass #{&1} when #{path} sets a model, effort or run_profiles; remove it from #{key}")
+      end)
+    end
+  end
+
   defmodule Agent do
     @moduledoc false
     use Ecto.Schema
@@ -788,6 +932,7 @@ defmodule SymphonyElixir.Config.Schema do
       field(:kind, :string)
       field(:max_concurrent_agents, :integer, default: 10)
       field(:epic_lanes, :integer)
+      field(:finishing_max, :integer, default: 2)
       field(:max_turns, :integer, default: 20)
       field(:max_retry_backoff_ms, :integer, default: 300_000)
       field(:max_concurrent_agents_by_state, :map, default: %{})
@@ -809,12 +954,16 @@ defmodule SymphonyElixir.Config.Schema do
       embeds_one(:mcp, Mcp, on_replace: :update, defaults_to_struct: true)
       embeds_one(:network_access, NetworkAccess, on_replace: :update, defaults_to_struct: true)
       embeds_one(:sandbox_runtime, SandboxRuntime, on_replace: :update, defaults_to_struct: true)
+      # The routed repository's `repositories[].agent` block; `Config` sets it per repository.
+      embeds_one(:repository, Schema.RepoAgent, on_replace: :update)
       field(:turn_timeout_ms, :integer, default: 3_600_000)
       field(:read_timeout_ms, :integer, default: 30_000)
       field(:stall_timeout_ms, :integer, default: 300_000)
       field(:command_timeout_ms, :integer, default: 600_000)
       field(:codex_stdio_prompt_soft_limit, :integer, default: @default_codex_stdio_prompt_soft_limit)
     end
+
+    @type t :: %__MODULE__{}
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
@@ -825,6 +974,7 @@ defmodule SymphonyElixir.Config.Schema do
           :kind,
           :max_concurrent_agents,
           :epic_lanes,
+          :finishing_max,
           :max_turns,
           :max_retry_backoff_ms,
           :max_concurrent_agents_by_state,
@@ -853,6 +1003,7 @@ defmodule SymphonyElixir.Config.Schema do
       |> validate_inclusion(:kind, ["codex", "claude"])
       |> validate_number(:max_concurrent_agents, greater_than: 0)
       |> validate_epic_lanes()
+      |> validate_number(:finishing_max, greater_than: 0)
       |> validate_number(:max_turns, greater_than: 0)
       |> validate_number(:max_retry_backoff_ms, greater_than: 0)
       |> validate_number(:max_tokens_per_issue, greater_than: 0)
@@ -864,9 +1015,7 @@ defmodule SymphonyElixir.Config.Schema do
       |> validate_number(:command_timeout_ms, greater_than_or_equal_to: 0)
       |> validate_number(:codex_stdio_prompt_soft_limit, greater_than: 0)
       |> validate_project_guide_files()
-      |> validate_profile_fields()
-      |> validate_setting(:provider, &check_provider/1)
-      |> validate_run_profiles()
+      |> validate_run_profile_settings()
       |> validate_openrouter_profiles()
       |> validate_command_run_profile_flags()
       |> update_change(:max_concurrent_agents_by_state, &Schema.normalize_state_limits/1)
@@ -874,6 +1023,7 @@ defmodule SymphonyElixir.Config.Schema do
       |> cast_embed(:mcp, with: &Mcp.changeset/2)
       |> cast_embed(:network_access, with: &NetworkAccess.changeset/2)
       |> cast_embed(:sandbox_runtime, with: &SandboxRuntime.changeset/2)
+      |> cast_embed(:repository, with: &Schema.RepoAgent.changeset/2)
     end
 
     # Lanes come out of `max_total`, so there can be at most that many; unset means every slot can be a lane.
@@ -897,6 +1047,15 @@ defmodule SymphonyElixir.Config.Schema do
       changeset
       |> validate_setting(:model, &check_model/1)
       |> validate_setting(:effort, &check_effort/1)
+    end
+
+    @doc false
+    @spec validate_run_profile_settings(Ecto.Changeset.t()) :: Ecto.Changeset.t()
+    def validate_run_profile_settings(changeset) do
+      changeset
+      |> validate_profile_fields()
+      |> validate_setting(:provider, &check_provider/1)
+      |> validate_run_profiles()
     end
 
     @doc false
@@ -2111,18 +2270,18 @@ defmodule SymphonyElixir.Config.Schema do
     agent = get_field(changeset, :agent)
     review_agent = get_field(changeset, :review_agent)
     auto_review = get_field(changeset, :auto_review)
-    agent_settings? = agent_profile_settings?(agent, nil)
+    agent_settings? = profile_settings?(agent, nil)
 
     changeset
     |> reject_profile_flags(:review_agent, review_agent.command, &"must not pass #{&1} when a model or effort is set for the pre-push reviewer; remove it from the command", fn ->
-      own_profile_settings?(review_agent) or agent_profile_settings?(agent, "pre_push_review")
+      own_profile_settings?(review_agent) or profile_settings?(agent, "pre_push_review")
     end)
     |> reject_qa_profile_flags(auto_review, agent, agent_settings?)
   end
 
   defp reject_qa_profile_flags(changeset, %{command: command} = auto_review, agent, _agent_settings?) when is_binary(command) do
     reject_profile_flags(changeset, :auto_review, command, &"must not pass #{&1} when a model or effort is set for the QA agent; remove it from the command", fn ->
-      own_profile_settings?(auto_review) or agent_profile_settings?(agent, "qa")
+      own_profile_settings?(auto_review) or profile_settings?(agent, "qa")
     end)
   end
 
@@ -2152,8 +2311,10 @@ defmodule SymphonyElixir.Config.Schema do
 
   defp own_profile_settings?(%{model: model, effort: effort}), do: not is_nil(model) or not is_nil(effort)
 
-  defp agent_profile_settings?(agent, nil), do: own_profile_settings?(agent) or agent.run_profiles not in [nil, %{}]
-  defp agent_profile_settings?(agent, kind), do: own_profile_settings?(agent) or Map.has_key?(agent.run_profiles || %{}, kind)
+  @doc false
+  @spec profile_settings?(Agent.t() | RepoAgent.t(), String.t() | nil) :: boolean()
+  def profile_settings?(agent, nil), do: own_profile_settings?(agent) or agent.run_profiles not in [nil, %{}]
+  def profile_settings?(agent, kind), do: own_profile_settings?(agent) or Map.has_key?(agent.run_profiles || %{}, kind)
 
   defp finalize_settings(settings) do
     tracker = %{

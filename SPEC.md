@@ -796,6 +796,11 @@ Fields:
   - Default: `concurrency.max_total`.
   - How many slots active epics may reserve as lanes (Section 8.3). Must be between `0` and
     `concurrency.max_total`; other values fail configuration validation.
+- `concurrency.finishing_max` (positive integer)
+  - Default: `2`.
+  - Landing runs (issues in `Merging`) that may run at once outside `max_total` and the epic lanes
+    (Section 8.3). Auto Review QA passes are also capped by it. Values below `1` fail configuration
+    validation.
 - `concurrency.max_by_issue_state` (map `state_name -> positive integer`)
   - Default: empty map.
   - State keys are normalized (`lowercase`) for lookup.
@@ -1019,8 +1024,9 @@ Fields:
 - `command` (string)
   - REQUIRED when `enabled` is true.
 - `model` (string), `effort` (`low`, `medium`, `high`, `xhigh`, or `max`)
-  - Optional. Each resolves to this field, else `agent.run_profiles.pre_push_review`, else
-    `agent.model` / `agent.effort`, else null (nothing added). `command` MUST NOT pass `--model` /
+  - Optional. Each resolves to this field, else the `pre_push_review` run profile resolved as for
+    `agent.run_profiles` (the routed repository's `repositories[].agent` first), else null
+    (nothing added). `command` MUST NOT pass `--model` /
     `--effort` while any of them resolves.
 - `max_iterations` (positive integer)
   - Default: `1`.
@@ -1317,6 +1323,8 @@ Validation checks:
   used with `agent.runtime == "claude"` and without `workers.ssh_hosts`.
 - `agent.command` does not already pass `--model` or `--effort` when `agent.model`,
   `agent.effort`, or `agent.run_profiles` is set.
+- Every `repositories[].agent` block passes the same checks with the `agent` section beneath it,
+  and its errors name `repositories[<key>].agent...`.
 - `issues.linear.api_key` is present after `$` resolution when `issues.provider == "linear"`.
 - At least one Linear scoping filter is present when `issues.provider == "linear"`. Core scope comes
   from `issues.linear.scope.project_slug`, `issues.linear.scope.team`, or non-empty
@@ -1348,6 +1356,8 @@ not require recognizing or validating extension fields unless that extension is 
 - `repositories[].route.labels`: optional list of Linear label names with route-level AND semantics
 - `repositories[].route.assignee`: optional Linear assignee selector
 - `repositories[].default`: boolean, default `false`
+- `repositories[].agent`: optional `{provider, model, effort, run_profiles}` with the same values as
+  the `agent` keys, applied to issues routed to that repository (see `agent.run_profiles`)
 - `issues.provider`: string, REQUIRED, currently `linear` or `memory`
 - `issues.linear.endpoint`: string, default `https://api.linear.app/graphql` when provider is linear
 - `issues.linear.api_key`: string or `$VAR`, canonical env `LINEAR_API_KEY` when provider is linear
@@ -1388,6 +1398,7 @@ not require recognizing or validating extension fields unless that extension is 
 - `agent.concurrency.max_total`: integer, default `10`
 - `agent.concurrency.max_by_issue_state`: map of positive integers, default `{}`
 - `agent.concurrency.epic_lanes`: integer between `0` and `max_total`, default `max_total`
+- `agent.concurrency.finishing_max`: integer `>= 1`, default `2`
 - `agent.limits.max_turns`: integer, default `20`
 - `agent.limits.retry_backoff_max_ms`: integer, default `300000` (5m)
 - `agent.limits.max_consecutive_identical_tool_failures`: integer, default `5`; `0` disables
@@ -1401,9 +1412,11 @@ not require recognizing or validating extension fields unless that extension is 
   run's model; `openrouter` requires a resolved model and `agent.runtime == "claude"`.
 - `agent.run_profiles`: map of run kind to `{model, effort, provider}`, default `{}`. Run kinds:
   `implementation`, `breakdown`, `close_out`, `final_verification`, `rework`, `landing`, `ci_fix`,
-  `review_feedback`, `pre_push_review`, `qa`. Each field resolves to the profile value, else
-  `agent.model` / `agent.effort` / `agent.provider`, else null (nothing added) for model and
-  effort and `anthropic` for provider. The run kind and profile are resolved
+  `review_feedback`, `pre_push_review`, `qa`. Each field resolves, for the issue's routed
+  repository, to `repositories[].agent.run_profiles.<kind>`, else `repositories[].agent.<field>`,
+  else `agent.run_profiles.<kind>`, else `agent.model` / `agent.effort` / `agent.provider`, else
+  null (nothing added) for model and effort and `anthropic` for provider. Repo workflow front
+  matter is not a source. The run kind and profile are resolved
   once per dispatch from the current config and kept for every continuation turn of that run. The
   Claude runtime appends `--model <model>` and `--effort <effort>` to its argv; the Codex runtime
   ignores both and logs a warning. A Claude run whose provider is `openrouter` also starts with
@@ -1475,9 +1488,10 @@ not require recognizing or validating extension fields unless that extension is 
 - `auto_review.state`: string, default `Auto Review`
 - `auto_review.runtime`: `codex` or `claude`, optional
 - `auto_review.command`: string, optional
-- `auto_review.model`: string or null, default `null`; else `agent.run_profiles.qa`, else `agent.model`
-- `auto_review.effort`: `low`, `medium`, `high`, `xhigh`, `max`, or null, default `null`; else
-  `agent.run_profiles.qa`, else `agent.effort`
+- `auto_review.model`: string or null, default `null`; else the `qa` run profile's model (see
+  `agent.run_profiles`)
+- `auto_review.effort`: `low`, `medium`, `high`, `xhigh`, `max`, or null, default `null`; else the
+  `qa` run profile's effort
 - `auto_review.max_turns`: integer, default `20`
 - `auto_review.timeout_ms`: integer, default `1800000`
 - `auto_review.max_concurrent`: integer, default `1`
@@ -1723,17 +1737,30 @@ An issue is dispatch-eligible only if all are true:
     missing, it logs a warning and stops moving parents there until restart; parents then wait in
     `In Progress` as before. When the check itself fails, the state stays on.
 
-Sorting order (stable intent):
+Sorting order (stable intent), closest to done first:
 
-1. `priority` ascending (1..4 are preferred; null/unknown sorts last)
-2. `created_at` oldest first
-3. `identifier` lexicographic tie-breaker
+1. stage: `Merging`, then the Auto Review state, then `Rework`, then any other active state
+   (a resume, such as `In Progress`), then `Todo`
+2. `priority` ascending (1..4 are preferred; null/unknown sorts last)
+3. `created_at` oldest first
+4. `identifier` lexicographic tie-breaker
+
+While an issue in `Merging` or the Auto Review state is waiting for a slot (or an Auto Review QA
+pass is queued), no `Todo` issue is dispatched. `Rework` and resumes still are.
 
 ### 8.3 Concurrency Control
 
 Global limit:
 
-- `available_slots = max(max_concurrent_agents - running_count, 0)`
+- `available_slots = max(max_concurrent_agents - running_count, 0)`, where `running_count`
+  leaves out landing runs.
+
+Finishing limit:
+
+- A landing run (an issue in `Merging` that is not a parent ticket) does not use `available_slots`
+  or an epic lane. It needs `landing_running_count < finishing_max` instead.
+- Auto Review QA passes run outside the orchestrator's slots, at most
+  `min(auto_review.max_concurrent, finishing_max)` at once.
 
 Per-state limit:
 
@@ -1776,7 +1803,11 @@ Retry handling behavior:
 3. If not found, release claim.
 4. If found and still candidate-eligible:
    - Dispatch if slots are available.
-   - Otherwise requeue with error `no available orchestrator slots`.
+   - Otherwise release the claim and record the issue as waiting for a slot, keeping its
+     `attempt`. Waiting for a slot is not a failure: no backoff applies. The poll dispatches the
+     issue in the Section 8.2 order as soon as a slot is free, and a run ending triggers an
+     immediate poll tick while anything waits. A retry deferred because a dispatch readiness task
+     is already in flight waits the same way.
 5. If found but no longer active, release claim.
 
 Note:
@@ -2803,7 +2834,23 @@ Minimum endpoints:
           "issue_identifier": "MT-650",
           "attempt": 3,
           "due_at": "2026-02-24T20:16:00Z",
-          "error": "no available orchestrator slots"
+          "error": "agent exited: turn timeout"
+        }
+      ],
+      "finishing": {
+        "slots": 2,
+        "used": 1,
+        "running": [{"issue_id": "jkl012", "identifier": "MT-652", "state": "Merging"}]
+      },
+      "slot_waiting": [
+        {
+          "issue_id": "mno345",
+          "issue_identifier": "MT-653",
+          "title": "Add the export button",
+          "state": "Todo",
+          "reason": "a Merging or Auto Review issue is waiting for a slot",
+          "attempt": null,
+          "since": "2026-02-24T20:15:30Z"
         }
       ],
       "watching": [
@@ -3500,10 +3547,12 @@ on_retry_timer(issue_id, state):
     return state
 
   if available_slots(state) == 0:
-    return schedule_retry(state, issue_id, retry_entry.attempt + 1, {
-      identifier: issue.identifier,
-      error: "no available orchestrator slots"
-    })
+    state.claimed.remove(issue_id)
+    state.slot_waiting[issue_id] = {
+      attempt: retry_entry.attempt,
+      reason: "no available orchestrator slots"
+    }
+    return state
 
   return dispatch_issue(issue, state, attempt=retry_entry.attempt)
 ```
@@ -3591,7 +3640,12 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 
 ### 17.4 Orchestrator Dispatch, Reconciliation, and Retry
 
-- Dispatch sort order is priority then oldest creation time
+- Dispatch sort order is stage (`Merging`, Auto Review, `Rework`, resume, `Todo`), then priority,
+  then oldest creation time
+- A landing run starts while every `max_total` slot and epic lane is busy, up to `finishing_max`
+- No `Todo` issue is dispatched while a `Merging` issue waits for a finishing slot
+- A retry that finds no slot keeps its attempt, gets no backoff, and starts on the first poll after
+  a slot frees
 - Each active epic reserves one lane out of `max_total`; a standalone issue cannot take a reserved
   lane while the epic's current sub-issue is in review, and the next sub-issue starts in it
 - `Todo` issue with non-terminal blockers is not eligible

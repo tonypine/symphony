@@ -545,6 +545,7 @@ defmodule SymphonyElixir.TestSupport do
           github: nil,
           max_concurrent_agents: 10,
           epic_lanes: nil,
+          finishing_max: nil,
           max_turns: 20,
           max_retry_backoff_ms: 300_000,
           max_concurrent_agents_by_state: %{},
@@ -623,6 +624,7 @@ defmodule SymphonyElixir.TestSupport do
     github = Keyword.get(config, :github)
     max_concurrent_agents = Keyword.get(config, :max_concurrent_agents)
     epic_lanes = Keyword.get(config, :epic_lanes)
+    finishing_max = Keyword.get(config, :finishing_max)
     max_turns = Keyword.get(config, :max_turns)
     max_retry_backoff_ms = Keyword.get(config, :max_retry_backoff_ms)
     max_concurrent_agents_by_state = Keyword.get(config, :max_concurrent_agents_by_state)
@@ -705,9 +707,11 @@ defmodule SymphonyElixir.TestSupport do
           command: agent_command,
           model: Keyword.get(config, :agent_model),
           effort: Keyword.get(config, :agent_effort),
+          provider: Keyword.get(config, :agent_provider),
           run_profiles: Keyword.get(config, :agent_run_profiles),
           max_concurrent_agents: max_concurrent_agents,
           epic_lanes: epic_lanes,
+          finishing_max: finishing_max,
           max_concurrent_agents_by_state: max_concurrent_agents_by_state,
           max_turns: max_turns,
           max_retry_backoff_ms: max_retry_backoff_ms,
@@ -877,6 +881,16 @@ defmodule SymphonyElixir.TestSupport do
     |> Enum.join("\n")
   end
 
+  defp agent_profile_yaml(config) do
+    [:model, :effort, :provider, :run_profiles]
+    |> Enum.reject(&is_nil(Map.get(config, &1)))
+    |> Enum.map_join("\n", &"  #{&1}: #{yaml_value(Map.get(config, &1))}")
+    |> case do
+      "" -> nil
+      lines -> lines
+    end
+  end
+
   defp agent_yaml(config) do
     filesystem = normalize_agent_filesystem(config.thread_sandbox, config.turn_sandbox_policy, config.workspace_sandbox)
     outer_sandbox = normalize_outer_sandbox(config.sandbox_runtime)
@@ -885,13 +899,12 @@ defmodule SymphonyElixir.TestSupport do
       "agent:",
       "  runtime: #{yaml_value(config.kind)}",
       "  command: #{yaml_value(config.command)}",
-      config.model && "  model: #{yaml_value(config.model)}",
-      config.effort && "  effort: #{yaml_value(config.effort)}",
-      config.run_profiles && "  run_profiles: #{yaml_value(config.run_profiles)}",
+      agent_profile_yaml(config),
       "  concurrency:",
       "    max_total: #{yaml_value(config.max_concurrent_agents)}",
       "    max_by_issue_state: #{yaml_value(config.max_concurrent_agents_by_state)}",
-      !is_nil(config.epic_lanes) && "    epic_lanes: #{yaml_value(config.epic_lanes)}",
+      optional_yaml_line("    epic_lanes", config.epic_lanes),
+      optional_yaml_line("    finishing_max", config.finishing_max),
       "  limits:",
       "    max_turns: #{yaml_value(config.max_turns)}",
       "    retry_backoff_max_ms: #{yaml_value(config.max_retry_backoff_ms)}",
@@ -918,6 +931,9 @@ defmodule SymphonyElixir.TestSupport do
     |> Enum.reject(&(&1 in [nil, false]))
     |> Enum.join("\n")
   end
+
+  defp optional_yaml_line(_key, nil), do: nil
+  defp optional_yaml_line(key, value), do: "#{key}: #{yaml_value(value)}"
 
   defp normalize_agent_filesystem(thread_sandbox, turn_sandbox_policy, workspace_sandbox) do
     workspace_sandbox = if is_nil(workspace_sandbox), do: %{}, else: map_from(workspace_sandbox)
@@ -1026,6 +1042,7 @@ defmodule SymphonyElixir.TestSupport do
     |> maybe_put(:default, Map.get(repo, :default) || Map.get(repo, "default"))
     |> maybe_put(:route, route)
     |> maybe_put(:workspace, workspace)
+    |> maybe_put(:agent, Map.get(repo, :agent) || Map.get(repo, "agent"))
   end
 
   defp normalize_test_repository_route(repo) do

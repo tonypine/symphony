@@ -131,6 +131,11 @@ repositories:
       strategy: worktree
       repo: ~/code/web
       fetch_before_dispatch: true
+    agent:
+      provider: openrouter
+      model: anthropic/claude-sonnet-4.5
+      run_profiles:
+        breakdown: { provider: anthropic, model: claude-opus-5-5, effort: xhigh }
 ```
 
 - `key`: unique repo key used in dashboards, run records, and prompt context. Keys must also remain
@@ -158,6 +163,9 @@ repositories:
   worktree branches off the source repo's current HEAD.
 - `route`: Linear team, project, label, or assignee selectors.
 - `workspace`: per-repo override for workspace population.
+- `agent`: per-repo `provider`, `model`, `effort` and `run_profiles` for issues routed to this
+  repo. They take the same values as the `agent` keys and win over them field by field; see
+  **Run profiles** under `agent`. Errors name the key, e.g. `repositories[web].agent.effort`.
 
 Routing validation rejects duplicate keys, workspace-sanitized key collisions, identical routes,
 ambiguous team catch-alls, multiple defaults, and multi-repo global worktree settings that do not
@@ -228,6 +236,7 @@ agent:
   concurrency:
     max_total: 10
     epic_lanes:
+    finishing_max: 2
     max_by_issue_state:
       rework: 2
   limits:
@@ -327,16 +336,23 @@ agent:
   `rework` (`Rework`), `ci_fix` (continuation after red CI), `review_feedback` (continuation after
   PR review comments), and `implementation` (everything else). `pre_push_review` and `qa` name the
   pre-push reviewer and QA agent runs.
-- Resolution per field: `run_profiles.<kind>` value, else `agent.model` / `agent.effort` /
-  `agent.provider`, else nothing is added (provider: `anthropic`). The pre-push reviewer and the
-  QA agent check their own section first: `pre_push_review.model` / `.effort` and
-  `auto_review.model` / `.effort`.
+- Resolution per field, for the repository the issue is routed to:
+  `repositories[].agent.run_profiles.<kind>`, then `repositories[].agent.<field>`, then
+  `agent.run_profiles.<kind>`, then `agent.<field>`, else nothing is added (provider:
+  `anthropic`). A repository without an `agent` block resolves from the `agent` section alone. The
+  pre-push reviewer and the QA agent check their own section first: `pre_push_review.model` /
+  `.effort` and `auto_review.model` / `.effort`.
+- `WORKFLOW.md` front matter cannot set any of these: `symphony.yml` owns the agent runtime, so a
+  per-repository profile goes under that repository's `repositories[].agent`.
 - Config errors: an unknown kind under `run_profiles`, an unknown effort or provider, an unknown
   profile key, `--model` / `--effort` already in `command` while any of `model`, `effort`, or
   `run_profiles` is set, `openrouter` for a run that resolves no model, `openrouter` with a
   runtime other than `claude`, or `openrouter` with `workers.ssh_hosts` (OpenRouter runs start
   on the local host only). `symphony check` reports them and names the key that picked
-  `openrouter` (`agent.run_profiles.<kind>.provider`, else `agent.provider`).
+  `openrouter` (`agent.run_profiles.<kind>.provider`, else `agent.provider`). A
+  `repositories[].agent` block is checked the same way against the `agent` section, including the
+  `--model` / `--effort` flags in `agent.command`, `pre_push_review.command` and
+  `auto_review.command`, and its errors name `repositories[<key>].agent...`.
 - The kind and profile are chosen once, when the run is dispatched, from the current workflow
   config: an edit applies to the next dispatch without a restart. Every continuation turn of a run
   keeps its profile. A CI fix or review feedback re-activation is a new run with its own kind.
@@ -359,11 +375,23 @@ agent:
   one, in parent priority then age order, holds one lane: its sub-tickets run there one after
   another, and the lane stays reserved while the current part is in review or landing, so the next
   part starts as soon as it is unblocked. Epics beyond the lane count wait their turn. The slots
-  left over are shared, by priority then age, for standalone tickets and for an epic's extra
+  left over are shared, in dispatch order, for standalone tickets and for an epic's extra
   parallel sub-tickets. Set it to `max_total - 1` to always keep a slot for standalone work, or
   `0` to turn lanes off. Values outside `0..max_total` fail `symphony check`. The dashboard and
   `/api/v1/state` (`epic_lanes`) show each lane and the shared pool, and the dispatch log line
-  ends with `slot=lane:<epic>` or `slot=shared`.
+  ends with `slot=lane:<epic>`, `slot=shared` or `slot=finishing`.
+- `concurrency.finishing_max` (default: `2`) caps landing runs (tickets in `Merging`). They only
+  finish approved work, so they don't use `max_total` slots or epic lanes and start as soon as one
+  of these is free. Auto Review QA passes are capped by it too, on top of
+  `auto_review.max_concurrent`. Values below `1` fail `symphony check`.
+- Dispatch goes closest to done first: `Merging`, Auto Review, `Rework`, resumes such as
+  `In Progress`, then `Todo`; priority and age only break ties within a stage. While a `Merging`
+  ticket waits for a finishing slot, or a QA pass is queued, no `Todo` ticket starts; `Rework` and
+  resumes still do. A ticket that finds no free slot is not retried with backoff: it keeps its
+  attempt and starts on the first poll after a slot frees (a run ending triggers that poll). The
+  dashboard and `/api/v1/state` show the landing runs (`finishing`) and what is waiting for a slot
+  and why (`slot_waiting`). A `Merging` ticket held while CI runs on its head is listed there as
+  `waiting for CI on <sha>`; it doesn't count as waiting for a slot, so it doesn't hold back `Todo`.
 - `concurrency.max_by_issue_state` can cap work independently for specific issue states such as
   `rework`.
 - `limits.max_turns` caps how many back-to-back turns Symphony will run in a single worker
@@ -602,7 +630,8 @@ pre_push_review:
 ```
 
 `model` and `effort` (optional) set the reviewer's `--model` / `--effort` with the Claude runtime.
-Each one falls back to `agent.run_profiles.pre_push_review`, then `agent.model` / `agent.effort`;
+Each one falls back to the `pre_push_review` run profile (the routed repository's
+`repositories[].agent`, then `agent.run_profiles.pre_push_review`, then `agent.model` / `agent.effort`);
 with none set the reviewer command is unchanged. They take the same values as `agent.model` /
 `agent.effort`, and `command` must not pass `--model` / `--effort` while any of them is set.
 
@@ -633,7 +662,8 @@ auto_review:
 ```
 
 `model` and `effort` (optional) set the QA agent's `--model` / `--effort` with the Claude runtime,
-falling back to `agent.run_profiles.qa`, then `agent.model` / `agent.effort`. Validation is the same
+falling back to the `qa` run profile (the routed repository's `repositories[].agent`, then
+`agent.run_profiles.qa`, then `agent.model` / `agent.effort`). Validation is the same
 as for `pre_push_review`; when `command` is not set the QA agent uses `agent.command`, which must
 then not pass the flag that `auto_review.model` / `auto_review.effort` sets.
 
@@ -685,7 +715,8 @@ run store, which the dashboard's run history shows. `qa_passed` and `qa_failed` 
 available for `notifications.channels[].events`.
 
 Results are kept per PR head SHA. With `run_on: first_pass`, once a push has passed QA, later
-pushes on the PR skip it. `max_concurrent` caps how many QA passes run at once.
+pushes on the PR skip it. `max_concurrent` caps how many QA passes run at once, and
+`agent.concurrency.finishing_max` caps it again. QA passes never use the agent slots.
 
 `playbooks` overrides playbooks per kind:
 

@@ -3,10 +3,15 @@ defmodule SymphonyElixir.QaRunner do
   Runs Auto Review QA passes in the background.
 
   The CI poller asks for a pass when an issue in Auto Review has green CI. The runner
-  starts at most `auto_review.max_concurrent` passes, one per issue, each as a task
-  under `SymphonyElixir.TaskSupervisor` that runs `SymphonyElixir.AutoReview.run_qa/2`
-  and applies its own outcome. A request for an issue that already has a pass running
-  is a no-op, so a slow pass is never started twice.
+  starts at most `auto_review.max_concurrent` passes, and never more than
+  `agent.concurrency.finishing_max`, one per issue, each as a task under
+  `SymphonyElixir.TaskSupervisor` that runs `SymphonyElixir.AutoReview.run_qa/2` and
+  applies its own outcome. A request for an issue that already has a pass running is a
+  no-op, so a slow pass is never started twice.
+
+  A request turned away because the runner is full leaves the issue queued until a pass
+  starts for it or no request has come for it in 10 minutes. The orchestrator
+  starts no fresh `Todo` work while a pass is queued.
   """
 
   use GenServer
@@ -15,6 +20,8 @@ defmodule SymphonyElixir.QaRunner do
   alias SymphonyElixir.AutoReview
 
   @type request_result :: :started | :running | :busy | {:error, term()}
+
+  @queued_ttl_ms 10 * 60_000
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
@@ -44,11 +51,22 @@ defmodule SymphonyElixir.QaRunner do
     end
   end
 
+  @doc "Issue ids whose last request was turned away because the runner was full."
+  @spec queued(GenServer.server()) :: [String.t()]
+  def queued(server \\ __MODULE__) do
+    case GenServer.whereis(server) do
+      nil -> []
+      pid -> GenServer.call(pid, :queued)
+    end
+  end
+
   @impl true
   def init(opts) do
     {:ok,
      %{
        running: %{},
+       queued: %{},
+       queued_ttl_ms: Keyword.get(opts, :queued_ttl_ms, @queued_ttl_ms),
        run_fun: Keyword.get(opts, :run_fun, &AutoReview.run_qa/2),
        task_supervisor: Keyword.get(opts, :task_supervisor, SymphonyElixir.TaskSupervisor)
      }}
@@ -56,14 +74,16 @@ defmodule SymphonyElixir.QaRunner do
 
   @impl true
   def handle_call({:request, %{issue: %{id: issue_id}, sha: sha} = job, opts}, _from, state) do
-    max_concurrent = job |> Map.fetch!(:settings) |> Map.fetch!(:auto_review) |> Map.fetch!(:max_concurrent)
+    settings = Map.fetch!(job, :settings)
+    max_passes = min(settings.auto_review.max_concurrent, settings.agent.finishing_max)
+    state = %{state | queued: state |> live_queued() |> Map.delete(issue_id)}
 
     cond do
       Map.has_key?(state.running, issue_id) ->
         {:reply, :running, state}
 
-      map_size(state.running) >= max_concurrent ->
-        {:reply, :busy, state}
+      map_size(state.running) >= max_passes ->
+        {:reply, :busy, %{state | queued: Map.put(state.queued, issue_id, now_ms())}}
 
       true ->
         start_pass(state, issue_id, sha, job, opts)
@@ -72,6 +92,10 @@ defmodule SymphonyElixir.QaRunner do
 
   def handle_call(:running, _from, state) do
     {:reply, Map.new(state.running, fn {issue_id, %{sha: sha}} -> {issue_id, sha} end), state}
+  end
+
+  def handle_call(:queued, _from, state) do
+    {:reply, state |> live_queued() |> Map.keys() |> Enum.sort(), state}
   end
 
   @impl true
@@ -87,6 +111,13 @@ defmodule SymphonyElixir.QaRunner do
   end
 
   def handle_info(_message, state), do: {:noreply, state}
+
+  defp live_queued(state) do
+    cutoff = now_ms() - state.queued_ttl_ms
+    Map.filter(state.queued, fn {_issue_id, queued_at} -> queued_at > cutoff end)
+  end
+
+  defp now_ms, do: System.monotonic_time(:millisecond)
 
   defp start_pass(state, issue_id, sha, job, opts) do
     run_fun = state.run_fun
