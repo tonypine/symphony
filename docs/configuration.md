@@ -883,8 +883,9 @@ host and the worktree checks still apply there. Then:
   host, runs `build` there with the QA user's login environment, and copies the bundle into the
   run directory;
 - `qa_launch_app` starts that copy with only `SYMPHONY_BAR_QA_ROOT` set;
-- the Swift helper is compiled there with `swiftc` once per Symphony version, into
-  `~/.symphony-qa/helper/`;
+- the Swift helper is compiled there with `swiftc` on first use in each pass, into the run
+  directory's `helper/`. Passes never share it: each PR's build runs as the QA user, and a helper
+  it replaced could answer the permission, window and accessibility calls of later passes;
 - screenshots are captured there and copied back into `qa-evidence/` in the local QA worktree, so
   the agent attaches them as before;
 - the run directory is removed when the pass ends. A build that times out is stopped on the
@@ -903,6 +904,14 @@ the QA agent answers `blocked`. The check fails when the QA host:
 
 An unreachable host gives `qa_worker_unreachable` and a `blocked` verdict.
 
+One QA host keeps state across passes. Removing the run directory removes the pass's source,
+bundles and helper, but anything a build or app leaves behind as the QA user stays on the host: a
+build that timed out and is still running, a background process, or changes to that user's files,
+caches and login environment. Any of these can tamper with a later pass. Symphony does not reset
+the host between passes. For full isolation, reset the VM between passes by running QA from a
+fresh throwaway clone of a clean image (see step 6 below); with a separate macOS user, treat its
+home as shared by every PR it has built.
+
 **A dedicated VM (recommended).** With [tart](https://tart.run):
 
 1. `tart clone ghcr.io/cirruslabs/macos-sequoia-xcode:latest symphony-qa` (an image with Xcode,
@@ -918,7 +927,10 @@ An unreachable host gives `qa_worker_unreachable` and a `blocked` verdict.
    helper. Restart the VM.
 5. Install whatever `build` needs (for example the repo's toolchain) and run the build once by hand
    over SSH to confirm it works.
-6. Stop the VM and keep the image; `tart run --no-graphics symphony-qa` starts it for Symphony.
+6. Stop the VM and keep it as a clean image. To reset it between passes, delete the working copy
+   and clone it again: `tart delete symphony-qa-run; tart clone symphony-qa symphony-qa-run;
+   tart run --no-graphics symphony-qa-run`. Point `worker_host` at the clone (`tart ip
+   symphony-qa-run` prints its address); it keeps the image's login and TCC grants.
 
 **A separate macOS user** on the Symphony Mac works the same way: create a standard user, turn on
 Remote Login for it, keep it logged in (Fast User Switching), grant the TCC permissions above, and

@@ -8,8 +8,10 @@ defmodule SymphonyElixir.QaDriver.Remote do
   argument shell-quoted. Symphony owns one `0700` run directory per pass under
   `~/.symphony-qa/runs/` there: the worktree's `HEAD` is unpacked into `src/`
   for the build, bundle copies go to `builds/` and the app's QA root is
-  `app-root/`. The Swift helper is compiled on the QA host once per source hash
-  into `~/.symphony-qa/helper/<hash>/`.
+  `app-root/`. The Swift helper is compiled into the run directory's `helper/`
+  on first use in each pass, never shared between passes: every pass's build
+  runs as the QA user and could replace a shared binary, which answers the
+  permission, window and accessibility calls of later passes.
 
   Before a pass uses the host, `prepare/3` refuses one that could reach the
   operator's credentials: one that can open the operator's `~/.ssh`, read their
@@ -53,7 +55,7 @@ defmodule SymphonyElixir.QaDriver.Remote do
   """
 
   @helper_script """
-  dir="$HOME/.symphony-qa/helper/$1"; bin="$dir/symphony-qa-driver"
+  dir="$1/helper"; bin="$dir/symphony-qa-driver"
   if [ ! -x "$bin" ]; then
     umask 077
     mkdir -p "$dir" || exit 1
@@ -86,7 +88,7 @@ defmodule SymphonyElixir.QaDriver.Remote do
       cmd: &cmd(ssh_host, &1, &2, &3),
       launch: &launch(ssh_host, &1, &2),
       kill: &kill(ssh_host, &1),
-      helper: fn -> helper(ssh_host) end,
+      helper: &helper(ssh_host, &1),
       read: &read(ssh_host, &1),
       prepare: &prepare(ssh_host, &1, &2),
       ship: &ship(ssh_host, &1, &2),
@@ -173,28 +175,24 @@ defmodule SymphonyElixir.QaDriver.Remote do
     :ok
   end
 
-  @doc "Path of the Swift helper on the QA host, compiling it there on first use."
-  @spec helper(String.t()) :: {:ok, String.t()} | {:error, term()}
-  def helper(ssh_host) do
-    {hash, source} = Host.helper_source()
-    key = {__MODULE__, :helper, ssh_host, hash}
+  @doc "Path of the Swift helper in the run directory `dir` on the QA host, compiling it there on first use."
+  @spec helper(String.t(), String.t()) :: {:ok, String.t()} | {:error, term()}
+  def helper(ssh_host, dir) do
+    {_hash, source} = Host.helper_source()
 
-    case :persistent_term.get(key, nil) do
-      nil -> compile_helper(ssh_host, key, hash, source)
-      path -> {:ok, path}
+    if Regex.match?(@run_dir, dir) do
+      compile_helper(ssh_host, dir, source)
+    else
+      {:error, {:not_a_run_dir, dir}}
     end
   end
 
-  defp compile_helper(ssh_host, key, hash, source) do
-    case run(ssh_host, @helper_script, [hash, Base.encode64(source)], timeout_ms: @compile_timeout_ms) do
+  defp compile_helper(ssh_host, dir, source) do
+    case run(ssh_host, @helper_script, [dir, Base.encode64(source)], timeout_ms: @compile_timeout_ms) do
       {:ok, {output, 0}} ->
         case marker(output, "symphony-qa-helper") do
-          nil ->
-            {:error, {:swiftc_failed, 0, tail(output, 2_000)}}
-
-          path ->
-            :persistent_term.put(key, path)
-            {:ok, path}
+          nil -> {:error, {:swiftc_failed, 0, tail(output, 2_000)}}
+          path -> {:ok, path}
         end
 
       {:ok, {output, status}} ->

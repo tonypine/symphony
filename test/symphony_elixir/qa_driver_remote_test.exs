@@ -143,7 +143,8 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
       assert log =~ "executable=#{run_dir}/builds/"
 
       assert {:ok, %{"root" => %{"children" => [%{"title" => "Settings"}]}}} = QaDriver.call_tool(driver, "qa_ax_tree", %{"pid" => pid})
-      assert File.read!(Path.join(qa_home, ".symphony-qa/helper/#{elem(Host.helper_source(), 0)}/symphony-qa-driver.swift")) == elem(Host.helper_source(), 1)
+      assert File.read!(Path.join(run_dir, "helper/symphony-qa-driver.swift")) == elem(Host.helper_source(), 1)
+      refute File.exists?(Path.join(qa_home, ".symphony-qa/helper"))
 
       assert {:ok, %{"files" => [%{"path" => "qa-evidence/settings.png", "window_id" => 11}]}} =
                QaDriver.call_tool(driver, "qa_screenshot", %{"pid" => pid, "name" => "settings"})
@@ -286,23 +287,36 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
       assert {:error, ":ssh_not_found"} = Remote.ship(ssh_host, tar, dest)
     end
 
-    test "helper compiles once per host and reports failures", %{ssh_host: ssh_host} do
-      assert {:ok, path} = Remote.helper(ssh_host)
+    test "helper compiles into each run directory and reports failures", %{root: root, ssh_host: ssh_host} do
+      %{prepare: prepare, helper: helper} = Remote.host(ssh_host)
+      {:ok, dir} = prepare.(Path.join(root, "operator"), Path.join(root, "no-canary"))
+      {:ok, other_dir} = prepare.(Path.join(root, "operator"), Path.join(root, "no-canary"))
+
+      assert {:ok, path} = helper.(dir)
+      assert path == Path.join(dir, "helper/symphony-qa-driver")
       assert File.regular?(path)
-      File.rm!(path)
-      assert {:ok, ^path} = Remote.helper(ssh_host)
+      assert {:ok, other_path} = Remote.helper(ssh_host, other_dir)
+      assert other_path == Path.join(other_dir, "helper/symphony-qa-driver")
+
+      # A build that replaced one pass's helper does not reach another pass.
+      File.write!(path, "#!/bin/sh\necho forged\n")
+      assert {:ok, ^path} = Remote.helper(ssh_host, dir)
+      refute File.read!(other_path) =~ "forged"
+
+      assert {:error, {:not_a_run_dir, "/tmp/elsewhere"}} = Remote.helper(ssh_host, "/tmp/elsewhere")
 
       System.put_env("QA_FAKE_SWIFTC_FAIL", "1")
       on_exit(fn -> System.delete_env("QA_FAKE_SWIFTC_FAIL") end)
-      assert {:error, {:swiftc_failed, 1, output}} = Remote.helper(ssh_host <> "-other")
+      File.rm!(other_path)
+      assert {:error, {:swiftc_failed, 1, output}} = Remote.helper(ssh_host, other_dir)
       assert output =~ "no such module"
 
       System.put_env("QA_FAKE_SSH_MODE", "output")
       System.put_env("QA_FAKE_SSH_OUTPUT", "nothing useful\n")
-      assert {:error, {:swiftc_failed, 0, "nothing useful\n"}} = Remote.helper(ssh_host <> "-third")
+      assert {:error, {:swiftc_failed, 0, "nothing useful\n"}} = Remote.helper(ssh_host, dir)
 
       System.put_env("PATH", "/nonexistent")
-      assert {:error, :ssh_not_found} = Remote.helper(ssh_host <> "-fourth")
+      assert {:error, :ssh_not_found} = Remote.helper(ssh_host, dir)
     end
 
     test "read copies a regular file back and removes it", %{root: root, ssh_host: ssh_host} do

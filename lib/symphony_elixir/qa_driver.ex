@@ -94,12 +94,14 @@ defmodule SymphonyElixir.QaDriver do
           required(:cmd) => (String.t(), [String.t()], keyword() -> {:ok, {String.t(), integer()}} | {:error, term()}),
           required(:launch) => (String.t(), keyword() -> {:ok, port(), pos_integer()} | {:error, term()}),
           required(:kill) => (pos_integer() -> :ok),
-          required(:helper) => (-> {:ok, Path.t()} | {:error, term()}),
+          # A QA host's helper takes the pass's run directory.
+          required(:helper) => (-> helper_result()) | (String.t() -> helper_result()),
           optional(:read) => (Path.t() -> {:ok, binary()} | {:error, term()}),
           optional(:prepare) => (Path.t(), Path.t() -> {:ok, String.t()} | {:error, {atom(), String.t()}}),
           optional(:ship) => (Path.t(), String.t() -> :ok | {:error, String.t()}),
           optional(:cleanup) => (String.t() -> :ok)
         }
+  @type helper_result :: {:ok, Path.t()} | {:error, term()}
   @type tool_error :: {:qa_tool, String.t(), String.t()}
 
   @doc "The `qa_*` tool names this driver serves."
@@ -177,7 +179,7 @@ defmodule SymphonyElixir.QaDriver do
     with {:ok, pid} <- running_pid(driver, args),
          {:ok, name} <- screenshot_name(Map.get(args, "name")),
          {:ok, window_id} <- optional_integer(args, "window_id", 1, 0xFFFF_FFFF),
-         {:ok, helper} <- helper(config),
+         {:ok, helper} <- helper(driver, config),
          :ok <- require_screen_recording(config, helper),
          {:ok, %{"windows" => windows}} <- run_helper(config, helper, ["windows", Integer.to_string(pid)]),
          {:ok, targets} <- screenshot_targets(windows, window_id),
@@ -192,7 +194,7 @@ defmodule SymphonyElixir.QaDriver do
          {:ok, text} <- optional_string(args, "text", 200),
          {:ok, max_depth} <- optional_integer(args, "max_depth", 1, 40),
          {:ok, max_nodes} <- optional_integer(args, "max_nodes", 1, 1000),
-         {:ok, helper} <- helper(config),
+         {:ok, helper} <- helper(driver, config),
          helper_args = [
            "ax-tree",
            Integer.to_string(pid),
@@ -217,7 +219,7 @@ defmodule SymphonyElixir.QaDriver do
     with {:ok, pid} <- running_pid(driver, args),
          {:ok, path} <- element_path(Map.get(args, "path")),
          {:ok, action} <- press_action(Map.get(args, "action")),
-         {:ok, helper} <- helper(config) do
+         {:ok, helper} <- helper(driver, config) do
       run_helper(config, helper, ["ax-press", Integer.to_string(pid), path, action])
     end
   end
@@ -226,7 +228,7 @@ defmodule SymphonyElixir.QaDriver do
     with {:ok, pid} <- running_pid(driver, args),
          {:ok, path} <- element_path(Map.get(args, "path")),
          {:ok, value} <- set_value(Map.get(args, "value")),
-         {:ok, helper} <- helper(config) do
+         {:ok, helper} <- helper(driver, config) do
       run_helper(config, helper, ["ax-set-value", Integer.to_string(pid), path, value])
     end
   end
@@ -604,10 +606,23 @@ defmodule SymphonyElixir.QaDriver do
 
   # -- helper -----------------------------------------------------------------
 
-  defp helper(config) do
-    case config.host.helper.() do
-      {:ok, path} -> {:ok, path}
-      {:error, reason} -> tool_error("qa_helper_unavailable", "Symphony could not build its macOS QA helper with swiftc: #{inspect(reason)}")
+  # A QA host gets its own helper in each pass's run directory; the driver
+  # remembers the path so later calls skip the round trip.
+  defp helper(driver, config) do
+    case GenServer.call(driver, :helper) do
+      nil -> build_helper(driver, config)
+      path -> {:ok, path}
+    end
+  end
+
+  defp build_helper(driver, config) do
+    case if(config.remote?, do: config.host.helper.(config.host_dir), else: config.host.helper.()) do
+      {:ok, path} ->
+        GenServer.call(driver, {:helper, path})
+        {:ok, path}
+
+      {:error, reason} ->
+        tool_error("qa_helper_unavailable", "Symphony could not build its macOS QA helper with swiftc: #{inspect(reason)}")
     end
   end
 
@@ -782,7 +797,7 @@ defmodule SymphonyElixir.QaDriver do
       git: Keyword.get(opts, :git, &default_git/2)
     }
 
-    {:ok, %{config: host_dirs(config, worker_host), build: nil, ignored: %{}, apps: %{}}}
+    {:ok, %{config: host_dirs(config, worker_host), build: nil, ignored: %{}, apps: %{}, helper: nil}}
   end
 
   # `host_dir` holds the bundle copies, screenshot staging and the app's QA root
@@ -826,6 +841,8 @@ defmodule SymphonyElixir.QaDriver do
   def handle_call(:config, _from, state), do: {:reply, state.config, state}
   def handle_call(:build, _from, state), do: {:reply, state.build, state}
   def handle_call(:ignored, _from, state), do: {:reply, state.ignored, state}
+  def handle_call(:helper, _from, state), do: {:reply, state.helper, state}
+  def handle_call({:helper, path}, _from, state), do: {:reply, :ok, %{state | helper: path}}
 
   def handle_call({:record_build, fingerprint, ignored}, _from, state),
     do: {:reply, :ok, %{state | build: fingerprint, ignored: ignored}}

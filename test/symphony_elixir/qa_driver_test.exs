@@ -715,6 +715,7 @@ defmodule SymphonyElixir.QaDriverTest do
         end,
         ship: fn tar, dest -> send(test, {:ship, tar, dest}) && Map.get(overrides, :ship, :ok) end,
         read: fn path -> send(test, {:read, path}) && Map.get(overrides, :read, {:ok, "png"}) end,
+        helper: fn dir -> send(test, {:helper, dir}) && {:ok, @helper} end,
         cleanup: fn dir -> send(test, {:cleanup, dir}) && :ok end
       })
     end
@@ -769,11 +770,29 @@ defmodule SymphonyElixir.QaDriverTest do
       assert capture == @run_dir <> "/window-11.png"
       assert_received {:read, ^capture}
       assert File.read!(Path.join(worktree, "qa-evidence/settings.png")) == "png"
+      assert_received {:helper, @run_dir}
+
+      assert {:ok, %{"root" => _root}} = QaDriver.call_tool(driver, "qa_ax_tree", %{"pid" => pid})
+      refute_received {:helper, _dir}
 
       QaDriver.stop(driver)
       assert_received {:killed, ^pid}
       assert_received {:cleanup, @run_dir}
       refute File.exists?(scratch_dir)
+    end
+
+    test "compiles a fresh helper for each pass", %{worktree: worktree} do
+      other_run_dir = "/Users/qa/.symphony-qa/runs/run.def456"
+
+      for run_dir <- [@run_dir, other_run_dir] do
+        driver = remote_driver(worktree, remote_host(%{prepare: {:ok, run_dir}}))
+        assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+        {{:ok, %{"pid" => pid}}, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{}) end)
+
+        assert {:ok, %{"root" => _root}} = QaDriver.call_tool(driver, "qa_ax_tree", %{"pid" => pid})
+        assert_received {:helper, ^run_dir}
+        QaDriver.stop(driver)
+      end
     end
 
     test "refuses an unsafe or unreachable QA host", %{worktree: worktree} do

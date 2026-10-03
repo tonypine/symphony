@@ -1128,9 +1128,10 @@ When enabled:
 - With `worker_host` set, the worktree checks MUST stay on the Symphony host, and the build, the app,
   screenshots and accessibility calls MUST run on that host over SSH: `qa_build` ships the
   worktree's `HEAD` into a fresh build directory there, and screenshots are copied back into the
-  local `qa-evidence/`. Before a pass uses the host, Symphony MUST refuse one that can open the
-  operator's `~/.ssh`, read their `~/.config/gh/hosts.yml` or login Keychain, read a file only the
-  operator can read, or holds push credentials of its own (a private key in `~/.ssh`, GitHub CLI
+  local `qa-evidence/`. The accessibility helper MUST be compiled into that pass's own run
+  directory, never shared with a later pass. Before a pass uses the host, Symphony MUST refuse one
+  that can open the operator's `~/.ssh`, read their `~/.config/gh/hosts.yml` or login Keychain,
+  read a file only the operator can read, or holds push credentials of its own (a private key in `~/.ssh`, GitHub CLI
   credentials, a global git credential helper or a forwarded SSH agent); the `qa_*` tools then fail
   with `qa_worker_unsafe` (or `qa_worker_unreachable` when the host cannot be reached) and tell the
   agent to answer `blocked`.
