@@ -273,6 +273,29 @@ defmodule SymphonyElixir.QaDriverTest do
       enoent = start_driver(worktree, host: host(%{cmd: fn _exe, _args, _opts -> {:error, :enoent} end}))
       assert error_code(QaDriver.call_tool(enoent, "qa_build", %{})) == "qa_build_failed"
 
+      # A timed-out build's partial outputs do not block the next attempt.
+      {_output, 0} = System.cmd("git", ["init", "--quiet", worktree])
+      File.write!(Path.join(worktree, ".gitignore"), "macos/.build/\nqa-evidence/\n")
+      {_output, 0} = System.cmd("git", ["-C", worktree, "add", ".gitignore"])
+      identity = ["-c", "user.name=QA", "-c", "user.email=qa@example.com"]
+      {_output, 0} = System.cmd("git", ["-C", worktree | identity] ++ ["commit", "--quiet", "-m", "init"])
+      git = fn args, cwd -> System.cmd("git", ["-C", cwd | args], stderr_to_stdout: true) end
+      partial = Path.join(worktree, "macos/.build/partial.o")
+
+      slow_build = fn "/bin/sh", _args, _opts ->
+        File.mkdir_p!(Path.dirname(partial))
+        File.write!(partial, "obj")
+        {:error, :timeout}
+      end
+
+      slow = start_driver(worktree, git: git, host: host(%{cmd: slow_build}))
+      assert error_code(QaDriver.call_tool(slow, "qa_build", %{})) == "qa_build_timeout"
+      assert error_code(QaDriver.call_tool(slow, "qa_build", %{})) == "qa_build_timeout"
+      assert error_code(QaDriver.call_tool(slow, "qa_launch_app", %{})) == "qa_not_built"
+      File.rm_rf!(Path.join(worktree, "macos/.build"))
+      File.rm_rf!(Path.join(worktree, ".git"))
+      File.rm!(Path.join(worktree, ".gitignore"))
+
       noisy_build = fn "/bin/sh", _args, _opts -> {:ok, {String.duplicate("x", 9_000), 1}} end
       noisy = start_driver(worktree, host: host(%{cmd: noisy_build}))
       assert {:ok, %{"exit_status" => 1, "output" => "…" <> rest}} = QaDriver.call_tool(noisy, "qa_build", %{})

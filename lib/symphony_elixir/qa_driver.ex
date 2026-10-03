@@ -118,7 +118,7 @@ defmodule SymphonyElixir.QaDriver do
 
   defp run_tool("qa_build", driver, config, _args) do
     with :ok <- ensure_clean_worktree(config, GenServer.call(driver, :ignored)),
-         {:ok, {output, status}} <- run_build(config),
+         {:ok, {output, status}} <- run_build(config) |> rebaseline_on_timeout(driver, config),
          {:ok, ignored, _dirty} <- worktree_status(config) do
       record_build(driver, config, status, tail(output, @output_limit), ignored_signatures(config, ignored))
     end
@@ -274,6 +274,17 @@ defmodule SymphonyElixir.QaDriver do
     GenServer.call(driver, {:record_build, nil, ignored})
     {:ok, %{"exit_status" => status, "output" => output}}
   end
+
+  # A killed build has usually written part of its outputs already. The worktree
+  # was clean when it started, so those outputs become the baseline too.
+  defp rebaseline_on_timeout({:error, {:qa_tool, "qa_build_timeout", _message}} = error, driver, config) do
+    with {:ok, ignored, _dirty} <- worktree_status(config) do
+      GenServer.call(driver, {:record_build, nil, ignored_signatures(config, ignored)})
+      error
+    end
+  end
+
+  defp rebaseline_on_timeout(result, _driver, _config), do: result
 
   defp run_build(config) do
     opts = [cd: config.worktree, env: AgentEnv.build(), timeout_ms: config.build_timeout_ms, output_limit: @output_limit]
