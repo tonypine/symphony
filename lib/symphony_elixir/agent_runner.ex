@@ -29,6 +29,7 @@ defmodule SymphonyElixir.AgentRunner do
     SubIssueWait,
     Tracker,
     URLUtils,
+    UsageLimit,
     Verification,
     Workpad,
     Workspace,
@@ -62,7 +63,7 @@ defmodule SymphonyElixir.AgentRunner do
         reviewer_comments: pending_reviewer_comments(issue, opts)
       )
 
-    settings |> Config.run_profile(kind) |> Map.put(:kind, kind)
+    settings |> Config.run_profile(kind) |> Map.put(:kind, kind) |> UsageLimit.for_agent_kind(settings.agent.kind)
   end
 
   @spec run(map(), pid() | nil, keyword()) :: :ok | no_return()

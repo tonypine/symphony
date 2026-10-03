@@ -144,13 +144,16 @@ defmodule SymphonyElixir.AutoReview do
         reapply_outcome(issue, record, settings, opts)
 
       # The next green poll asks again once the provider's usage limit has reset.
-      UsageLimit.persisted_holding(Config.qa_profile(settings)) ->
+      UsageLimit.persisted_holding(qa_usage_profile(settings)) ->
         {:qa_waiting, issue_id, :usage_limited}
 
       true ->
         request_qa(issue, record, sha, ci_status, settings, opts)
     end
   end
+
+  # The QA agent runs on `auto_review.kind` (else `agent.kind`), so a Codex QA agent waits on the Codex limit.
+  defp qa_usage_profile(settings), do: UsageLimit.for_agent_kind(Config.qa_profile(settings), QaAgent.qa_settings(settings).agent.kind)
 
   defp request_qa(%Issue{id: issue_id} = issue, record, sha, ci_status, settings, opts) do
     job = %{

@@ -44,6 +44,22 @@ defmodule SymphonyElixir.UsageLimitTest do
            } = entry
   end
 
+  test "a Codex hold is keyed and named for the openai provider" do
+    entry = put(nil, info(%{provider: "openai", window: "primary", source: :codex_error}))
+
+    assert %{provider: "openai", scope: :all, reason: "codex_usage_limit", window: "primary"} = entry
+    assert UsageLimit.key(entry) == {"openai", :all}
+  end
+
+  test "for_agent_kind makes Codex runs openai and leaves other runs alone" do
+    profile = %{kind: :implementation, model: nil, effort: nil, provider: "anthropic"}
+
+    assert UsageLimit.for_agent_kind(profile, "codex").provider == "openai"
+    assert UsageLimit.for_agent_kind(profile, "claude") == profile
+    refute UsageLimit.covers?({"anthropic", :all}, UsageLimit.for_agent_kind(profile, "codex"))
+    assert UsageLimit.covers?({"openai", :all}, UsageLimit.for_agent_kind(profile, "codex"))
+  end
+
   test "an unknown reset uses the remembered window, else the retry interval" do
     windows =
       UsageLimit.remember_windows(%{}, %{
