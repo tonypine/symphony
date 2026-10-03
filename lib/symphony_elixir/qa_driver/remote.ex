@@ -210,7 +210,7 @@ defmodule SymphonyElixir.QaDriver.Remote do
   own `serve` process: it holds no grant of its own, and commands started over
   SSH use the grant on `sshd-keygen-wrapper`.
   """
-  @spec call_helper(String.t(), String.t(), [String.t()], keyword()) :: {:ok, {String.t(), integer()}} | {:error, term()}
+  @spec call_helper(String.t(), String.t(), [String.t()], keyword()) :: SymphonyElixir.QaDriver.cmd_result()
   def call_helper(ssh_host, helper, args, opts), do: cmd(ssh_host, helper, args, opts)
 
   @doc "Copies a regular file from the QA host and removes it there."

@@ -1,6 +1,0 @@
-#!/bin/sh
-case "$1" in
-  permissions) echo '{"accessibility":true,"screen_recording":true}' ;;
-  windows) echo '{"windows":[{"id":11,"title":"Settings","layer":0,"onscreen":true,"frame":{"x":0,"y":0,"w":548,"h":420}}]}' ;;
-  ax-tree) echo '{"root":{"path":"","role":"AXApplication","children":[{"path":"0","role":"AXWindow","title":"Settings"}]},"nodes":2,"truncated":false}' ;;
-esac

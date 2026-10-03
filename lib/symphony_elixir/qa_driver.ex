@@ -98,13 +98,14 @@ defmodule SymphonyElixir.QaDriver do
           required(:kill) => (pos_integer() -> :ok),
           # A QA host's helper takes the pass's run directory.
           required(:helper) => (-> helper_result()) | (String.t() -> helper_result()),
-          required(:call_helper) => (Path.t(), [String.t()], keyword() -> {:ok, {String.t(), integer()}} | {:error, term()}),
+          required(:call_helper) => (Path.t(), [String.t()], keyword() -> cmd_result()),
           optional(:read) => (Path.t() -> {:ok, binary()} | {:error, term()}),
           optional(:prepare) => (Path.t(), Path.t() -> {:ok, String.t()} | {:error, {atom(), String.t()}}),
           optional(:ship) => (Path.t(), String.t() -> :ok | {:error, String.t()}),
           optional(:cleanup) => (String.t() -> :ok)
         }
   @type helper_result :: {:ok, Path.t()} | {:error, term()}
+  @type cmd_result :: {:ok, {String.t(), integer()}} | {:error, term()}
   @type tool_error :: {:qa_tool, String.t(), String.t()}
 
   @doc "The `qa_*` tool names this driver serves."
