@@ -159,7 +159,8 @@ public enum ChildLaunchBuilder {
         )
     }
 
-    /// The app's environment with PATH fallbacks, the extra variables and the Linear API key on top.
+    /// The app's environment with PATH fallbacks, the extra variables and the Linear and OpenRouter API keys on top.
+    /// The OpenRouter key is passed only when set.
     static func environment(
         base: [String: String],
         secrets: SecretSettings,
@@ -177,6 +178,9 @@ public enum ChildLaunchBuilder {
         }
         if !secrets.linearAPIKey.isEmpty {
             environment[SecretSettings.linearAPIKeyName] = secrets.linearAPIKey
+        }
+        if !secrets.openRouterAPIKey.isEmpty {
+            environment[SecretSettings.openRouterAPIKeyName] = secrets.openRouterAPIKey
         }
         return environment
     }

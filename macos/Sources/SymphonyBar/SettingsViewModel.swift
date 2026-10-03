@@ -13,6 +13,14 @@ struct EnvironmentRow: Identifiable {
 final class SettingsViewModel: ObservableObject {
     @Published var settings: AppSettings
     @Published var linearAPIKey = ""
+    @Published var openRouterAPIKey = "" {
+        didSet { if openRouterAPIKey != oldValue { openRouterResult = nil } }
+    }
+    /// The last Test connection result: the key's label and credit, or why it failed.
+    @Published private(set) var openRouterResult: Result<OpenRouterKeyInfo, OpenRouterFailure>?
+    /// "312 models, 141 support tools", or why the model list couldn't be loaded.
+    @Published private(set) var openRouterModels: Result<String, OpenRouterFailure>?
+    @Published private(set) var isTestingOpenRouter = false
     @Published var extraRows: [EnvironmentRow] = []
     /// Launch at Login, read from macOS rather than UserDefaults so it follows changes made in System Settings.
     @Published var launchAtLogin: Bool
@@ -32,18 +40,28 @@ final class SettingsViewModel: ObservableObject {
     /// load never turns into deletions.
     private var storedNames: Set<String> = []
 
+    /// The secrets as read from the Keychain, or nil when the read failed. Saving different secrets restarts
+    /// Symphony so it picks them up.
+    private var loadedSecrets: SecretSettings?
+
     private let store: SettingsStore
     private let validator: SettingsValidator
     private let loginItem: LoginItemService
+    private let openRouter: OpenRouterClient
+    private let onSecretsChanged: () -> Void
 
     init(
         store: SettingsStore = AppStores.current.settingsStore(),
         validator: SettingsValidator = SettingsValidator(embeddedSymphonyPath: SymphonyRunner.embeddedSymphonyPath),
-        loginItem: LoginItemService = AppStores.current.loginItem
+        loginItem: LoginItemService = AppStores.current.loginItem,
+        openRouter: OpenRouterClient = OpenRouterClient(),
+        onSecretsChanged: @escaping () -> Void = {}
     ) {
         self.store = store
         self.validator = validator
         self.loginItem = loginItem
+        self.openRouter = openRouter
+        self.onSecretsChanged = onSecretsChanged
         settings = store.loadSettings()
         let loginStatus = loginItem.status
         launchAtLogin = LoginItem.isOn(loginStatus)
@@ -52,8 +70,10 @@ final class SettingsViewModel: ObservableObject {
         do {
             let secrets = try store.loadSecrets()
             linearAPIKey = secrets.linearAPIKey
+            openRouterAPIKey = secrets.openRouterAPIKey
             extraRows = secrets.extraEnvironment.map { EnvironmentRow(name: $0.name, value: $0.value) }
-            storedNames = Set(secrets.extraEnvironment.map(\.name))
+            storedNames = Self.storedNames(secrets)
+            loadedSecrets = secrets.trimmed()
         } catch {
             keychainError = "Could not read the Keychain: \(error)"
         }
@@ -75,6 +95,32 @@ final class SettingsViewModel: ObservableObject {
         }
     }
 
+    /// Names that may be removed from the Keychain on save: the extra variables and a stored OpenRouter key.
+    private static func storedNames(_ secrets: SecretSettings) -> Set<String> {
+        var names = Set(secrets.extraEnvironment.map(\.name))
+        if !secrets.openRouterAPIKey.isEmpty { names.insert(SecretSettings.openRouterAPIKeyName) }
+        return names
+    }
+
+    /// Checks the OpenRouter key and loads the model list, both at once.
+    func testOpenRouter() {
+        guard !isTestingOpenRouter else { return }
+        isTestingOpenRouter = true
+        openRouterResult = nil
+        openRouterModels = nil
+        let key = openRouterAPIKey
+        let client = openRouter
+        Task {
+            async let keyResult = client.checkKey(key)
+            async let modelsResult = client.models()
+            let (checked, models) = await (keyResult, modelsResult)
+            // A key edited during the test makes the result stale.
+            if openRouterAPIKey == key { openRouterResult = checked }
+            openRouterModels = models.map(OpenRouterModel.summary)
+            isTestingOpenRouter = false
+        }
+    }
+
     func addRow() {
         extraRows.append(EnvironmentRow(name: "", value: ""))
     }
@@ -88,6 +134,7 @@ final class SettingsViewModel: ObservableObject {
         let settings = settings.trimmed()
         let secrets = SecretSettings(
             linearAPIKey: linearAPIKey,
+            openRouterAPIKey: openRouterAPIKey,
             extraEnvironment: extraRows.map { EnvironmentVariable(name: $0.name, value: $0.value) }
         ).trimmed()
 
@@ -100,10 +147,15 @@ final class SettingsViewModel: ObservableObject {
             keychainError = "Could not save to the Keychain: \(error)"
             return false
         }
-        storedNames = Set(secrets.extraEnvironment.map(\.name))
+        storedNames = Self.storedNames(secrets)
         keychainError = nil
+        let secretsChanged = secrets != loadedSecrets
+        loadedSecrets = secrets
         store.saveSettings(settings)
-        return saveMaxConcurrentAgents(to: settings.configPath) && saveLaunchAtLogin()
+        let saved = saveMaxConcurrentAgents(to: settings.configPath) && saveLaunchAtLogin()
+        // After the settings are stored, so the restart starts Symphony with all of them.
+        if secretsChanged { onSecretsChanged() }
+        return saved
     }
 
     /// Writes `max_total` to symphony.yml when the stepper changed it.

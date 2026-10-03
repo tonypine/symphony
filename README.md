@@ -217,9 +217,10 @@ commands, conventions, and validation gates.
 
 To run a kind of run's model through OpenRouter, set `provider: openrouter` and an OpenRouter
 model id under `agent` or `agent.run_profiles.<kind>` (Claude runtime, local host only), and export
-`OPENROUTER_API_KEY` in Symphony's environment. The key reaches `claude` only through its process
-env. The model must support tool use: `symphony check` asks OpenRouter's models API and rejects
-an unknown model id or one without `tools`.
+`OPENROUTER_API_KEY` in Symphony's environment (the macOS app sets it from the OpenRouter section of
+its Settings). The key reaches `claude` only through its process env. The model must support tool
+use: `symphony check` asks OpenRouter's models API and rejects an unknown model id or one without
+`tools`.
 
 For the full reference — every supported key, defaults, prompt variables, CLI flags, and the issue
 gate — see [docs/configuration.md](docs/configuration.md).
