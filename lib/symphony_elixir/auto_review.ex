@@ -327,7 +327,7 @@ defmodule SymphonyElixir.AutoReview do
 
     report =
       outcome
-      |> Map.merge(Map.take(result, [:summary, :steps, :findings]))
+      |> Map.merge(Map.take(result, [:summary, :steps, :findings, :follow_ups]))
       |> Map.merge(%{
         sha: sha,
         target_state: target_state,

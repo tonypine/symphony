@@ -1117,8 +1117,9 @@ When enabled:
 - The QA agent MUST run in a fresh detached worktree at the PR head SHA, outside the issue
   workspace, removed afterwards, with a tool scope limited to read-only Linear/GitHub tools and
   `linear_attach_file`. It answers with JSON: `verdict` (`pass`, `fail` or `blocked`), `summary`,
-  `steps` (`name`, `status`, `details`, `evidence`), `findings`, and `reason`. A run error or an
-  unreadable answer counts as `blocked`. The session stops at `agent.limits.tokens_per_issue`.
+  `steps` (`name`, `status`, `details`, `evidence`), `findings`, and `reason`. An answer with no
+  verdict object SHOULD get one follow-up turn in the same session asking for it. A run error or
+  an answer still unreadable after that counts as `blocked`. The session stops at `agent.limits.tokens_per_issue`.
 - Symphony applies the verdict: `pass`, `blocked` and skip move the issue to `In Review`; `fail`
   moves it to `In Progress` with the findings in the next run's prompt, or to `In Review` once
   `max_fix_attempts` failures were sent back. Results are stored per head SHA; a failed move is

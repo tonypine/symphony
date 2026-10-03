@@ -2059,6 +2059,42 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       end)
     end
 
+    test "resumes the given conversation when the turn names a session id" do
+      test_root =
+        Path.join(
+          System.tmp_dir!(),
+          "symphony-elixir-claude-code-resume-#{System.unique_integer([:positive])}"
+        )
+
+      try do
+        workspace_root = Path.join(test_root, "workspaces")
+        workspace = Path.join(workspace_root, "ACME-RESUME")
+        fake_claude = Path.join(test_root, "fake-claude")
+        File.mkdir_p!(workspace)
+
+        File.write!(fake_claude, argv_tracing_fake_claude_script("sess-resume"))
+        File.chmod!(fake_claude, 0o755)
+
+        write_workflow_file!(Workflow.workflow_file_path(),
+          workspace_root: workspace_root,
+          agent_kind: "claude",
+          agent_command: fake_claude
+        )
+
+        {:ok, session} = AppServer.start_session(workspace)
+        trace = Path.join(workspace, "argv.trace")
+        read_args = fn -> trace |> File.read!() |> String.split("\n", trim: true) end
+
+        assert {:ok, _result} = AppServer.run_turn(session, "verdict please", %{identifier: "ACME-RESUME"}, resume_session_id: "sess-resume")
+        assert Enum.take(read_args.(), -2) == ["--resume", "sess-resume"]
+
+        assert {:ok, _result} = AppServer.run_turn(session, "fresh turn", %{identifier: "ACME-RESUME"}, [])
+        refute "--resume" in read_args.()
+      after
+        File.rm_rf(test_root)
+      end
+    end
+
     test "uses a private prompt file for local Claude stdin and cleans it up" do
       test_root =
         Path.join(

@@ -717,7 +717,9 @@ The QA agent (`runtime` and `command`, defaulting to `agent.runtime` and `agent.
 a fresh worktree at the PR head under `<workspaces.root>/.qa/`, removed afterwards. It can read
 the issue, its parent and the PR, and attach evidence files with `linear_attach_file`; it cannot
 move the issue, comment, push or write to GitHub. The session stops at `timeout_ms`, `max_turns`,
-or `agent.limits.tokens_per_issue`.
+or `agent.limits.tokens_per_issue`. An agent that ends its turn without the JSON verdict gets one
+follow-up turn in the same session asking for it, and the QA report notes "verdict after 1
+follow-up".
 
 Symphony applies its verdict:
 

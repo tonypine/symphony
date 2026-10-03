@@ -87,6 +87,8 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     required_mcp_server = required_mcp_server_for_prompt(prompt)
 
     read_opts = [required_mcp_server: required_mcp_server]
+    # `claude -p` starts a new conversation each turn unless told which one to resume.
+    session = Map.put(session, :resume_session_id, Keyword.get(opts, :resume_session_id))
 
     with {:ok, prompt} <- ProjectGuidePrompt.append_to_prompt(prompt, workspace, settings, :claude),
          {:ok, port, prompt_cleanup_paths} <- start_port(workspace, command, prompt, worker_host, session) do
@@ -714,7 +716,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
          {:ok, {executable, command_args}} <- local_command(workspace, command),
          {:ok, prompt_path} <- write_local_prompt_file(workspace, prompt) do
       base_args = command_args ++ claude_settings_args(session)
-      args = base_args ++ claude_stream_json_args(base_args) ++ run_profile_args(session)
+      args = base_args ++ claude_stream_json_args(base_args) ++ run_profile_args(session) ++ resume_args(session)
 
       case open_local_prompt_port(executable, args, prompt_path, workspace, provider_env) do
         {:ok, port} ->
@@ -984,13 +986,15 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
   defp run_profile_args(_session), do: []
 
+  defp resume_args(session), do: flag_args("--resume", Map.get(session, :resume_session_id))
+
   defp flag_args(_flag, nil), do: []
   defp flag_args(flag, value), do: [flag, value]
 
   defp remote_launch_command(workspace, command_words, session) do
     command =
       (command_words ++ claude_settings_args(session))
-      |> then(&(&1 ++ claude_stream_json_args(&1) ++ run_profile_args(session)))
+      |> then(&(&1 ++ claude_stream_json_args(&1) ++ run_profile_args(session) ++ resume_args(session)))
       |> Enum.map_join(" ", &shell_escape/1)
 
     [

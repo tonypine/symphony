@@ -25,7 +25,7 @@ defmodule SymphonyElixir.QaAgent.Report do
   Renders the report for a QA outcome. `outcome` carries `:verdict` (`:pass`,
   `:fail`, `:blocked` or `:skip`), `:sha`, `:target_state`, and optionally
   `:summary`, `:steps`, `:findings`, `:reason`, `:playbooks`, `:tokens`,
-  `:runtime_seconds`, `:escalated` and `:fix_attempt`/`:max_fix_attempts`.
+  `:runtime_seconds`, `:follow_ups`, `:escalated` and `:fix_attempt`/`:max_fix_attempts`.
   """
   @spec render(map()) :: String.t()
   def render(outcome) when is_map(outcome) do
@@ -57,7 +57,8 @@ defmodule SymphonyElixir.QaAgent.Report do
     [
       playbooks_meta(Map.get(outcome, :playbooks, [])),
       runtime_meta(Map.get(outcome, :runtime_seconds)),
-      tokens_meta(Map.get(outcome, :tokens))
+      tokens_meta(Map.get(outcome, :tokens)),
+      follow_ups_meta(Map.get(outcome, :follow_ups))
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.map_join(&(" · " <> &1))
@@ -71,6 +72,10 @@ defmodule SymphonyElixir.QaAgent.Report do
 
   defp tokens_meta(%{total_tokens: total}) when is_integer(total) and total > 0, do: "#{total} tokens"
   defp tokens_meta(_tokens), do: nil
+
+  defp follow_ups_meta(1), do: "verdict after 1 follow-up"
+  defp follow_ups_meta(count) when is_integer(count) and count > 1, do: "verdict after #{count} follow-ups"
+  defp follow_ups_meta(_count), do: nil
 
   defp summary_block(outcome) do
     text =
