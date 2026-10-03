@@ -37,9 +37,9 @@ final class SettingsViewModel: ObservableObject {
     private let loginItem: LoginItemService
 
     init(
-        store: SettingsStore = SettingsStore(),
+        store: SettingsStore = AppStores.current.settingsStore(),
         validator: SettingsValidator = SettingsValidator(embeddedSymphonyPath: SymphonyRunner.embeddedSymphonyPath),
-        loginItem: LoginItemService = MainAppLoginItem()
+        loginItem: LoginItemService = AppStores.current.loginItem
     ) {
         self.store = store
         self.validator = validator

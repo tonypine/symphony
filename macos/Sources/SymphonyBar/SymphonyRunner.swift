@@ -9,7 +9,7 @@ final class SymphonyRunner {
     var onEvent: ((StatusMachine.Event) -> Void)?
 
     private let store: SettingsStore
-    private let logDirectory = ChildLog.defaultDirectory()
+    private let logDirectory = AppStores.current.logDirectory
     private var child: ChildProcess?
     private var stopWaiters: [() -> Void] = []
     // SYMPHONY_STATE_ROOT from the last start, which may come from the Keychain variables.
@@ -23,7 +23,7 @@ final class SymphonyRunner {
     /// True when this build carries an embedded Symphony.
     nonisolated static var hasEmbeddedSymphony: Bool { EmbeddedSymphony.isAvailable(at: embeddedSymphonyPath) }
 
-    init(store: SettingsStore = SettingsStore()) {
+    init(store: SettingsStore = AppStores.current.settingsStore()) {
         self.store = store
     }
 
@@ -32,7 +32,7 @@ final class SymphonyRunner {
 
     /// Symphony's state directory, using the `SYMPHONY_STATE_ROOT` the app last started Symphony with.
     var stateRoot: URL {
-        var environment = ProcessInfo.processInfo.environment
+        var environment = AppStores.current.environment
         environment[StateRoot.environmentKey] = launchedStateRoot ?? environment[StateRoot.environmentKey]
         return StateRoot.locate(environment: environment)
     }
@@ -87,9 +87,10 @@ final class SymphonyRunner {
         try ChildLaunchBuilder.build(
             settings: settings,
             secrets: try store.loadSecrets(),
-            baseEnvironment: ProcessInfo.processInfo.environment,
+            baseEnvironment: AppStores.current.environment,
             embeddedSymphonyPath: symphonyBinary ?? Self.embeddedSymphonyPath,
-            subcommand: subcommand
+            subcommand: subcommand,
+            qaMode: AppStores.current.isQAMode
         )
     }
 

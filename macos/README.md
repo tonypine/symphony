@@ -16,6 +16,7 @@ and start it. To work on Symphony itself, build the app from source and run a ch
 - [Update](#update)
 - [Rollback](#rollback)
 - [Development mode](#development-mode)
+- [QA mode](#qa-mode)
 - [Troubleshooting](#troubleshooting)
 
 ## Install
@@ -420,6 +421,33 @@ access after each rebuild.
 After changing Symphony, run `mise exec -- mix build` in the checkout and choose Restart Symphony. Turn
 Development mode off to go back to the embedded Symphony. You can also run a checkout from a terminal
 instead of the app; see [Running](../README.md#running).
+
+## QA mode
+
+QA mode is for test launches, by hand or by a QA agent: the app keeps everything it would store under one
+directory and leaves your real settings, Keychain and Symphony alone. Turn it on by starting the app's binary
+with `SYMPHONY_BAR_QA_ROOT` set to a directory. A launch from Finder or `open` doesn't pass the variable on, so
+run the binary directly:
+
+```bash
+SYMPHONY_BAR_QA_ROOT="$(mktemp -d)" ./build/Symphony.app/Contents/MacOS/SymphonyBar
+```
+
+In QA mode, under that directory:
+
+| Path | Holds | Instead of |
+| --- | --- | --- |
+| `settings.plist` | the Settings values, Launch at Login, and the pending update across a relaunch | UserDefaults; Launch at Login registers nothing with macOS |
+| `secrets.json` | `LINEAR_API_KEY` and the other variables, readable only by you | the login Keychain |
+| `logs/` | Symphony's output log | `~/Library/Logs/symphony` |
+| `updates/` | update downloads and the update helper's log | `~/Library/Caches/<bundle id>` |
+| `state/` | Symphony's state: control URL and token | `~/Library/Application Support/symphony` |
+
+The app starts with empty settings, so Settings opens. It doesn't see a Symphony already running outside QA
+mode, so Stop, Restart, Pause and Resume can't reach it, unless `SYMPHONY_STATE_ROOT` is set too, which wins
+over `state/`. Start runs only a checkout: with Development mode off it reports "QA mode runs only a
+checkout's Symphony; turn on Development mode in Settings." Saving Settings writes no login Keychain item;
+`security find-generic-password -s symphony` lists the same items as before.
 
 ## Troubleshooting
 

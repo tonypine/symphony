@@ -15,7 +15,7 @@ final class UpdateController {
     /// Why the last update failed, shown in the menu until the next one.
     private(set) var error: String?
 
-    let pending = PendingUpdateStore()
+    let pending = PendingUpdateStore(defaults: AppStores.current.defaults)
     let cacheDirectory: URL
     private let current: AppBuild
     private let publicKey: MinisignPublicKey?
@@ -25,7 +25,8 @@ final class UpdateController {
     init(current: AppBuild) {
         self.current = current
         let identifier = Bundle.main.bundleIdentifier ?? "com.tonypine.symphony.bar"
-        cacheDirectory = UpdateInstaller.defaultCacheDirectory(bundleIdentifier: identifier)
+        cacheDirectory = AppStores.current.updateCacheDirectory
+            ?? UpdateInstaller.defaultCacheDirectory(bundleIdentifier: identifier)
         publicKey = (Bundle.main.object(forInfoDictionaryKey: UpdateHelper.publicKeyInfoKey) as? String)
             .flatMap { try? MinisignPublicKey($0) }
         installer = UpdateInstaller(
