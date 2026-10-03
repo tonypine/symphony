@@ -5,7 +5,13 @@ defmodule SymphonyElixir.DispatchState do
   A dispatch is `active?` only when zero operational blockers apply. Blockers
   are tagged maps so callers can render each one with a specific message +
   remediation.
+
+  A provider usage-limit hold (`:usage_limit`) is listed for every hold, but only makes
+  dispatch inactive when the holds cover every run profile in use (`config.run_profiles`,
+  each a `provider` and `model`): runs on another provider or model still dispatch.
   """
+
+  alias SymphonyElixir.UsageLimit
 
   @type blocker ::
           %{kind: :manual, reason: String.t() | nil, since: DateTime.t() | nil}
@@ -30,6 +36,15 @@ defmodule SymphonyElixir.DispatchState do
               since: DateTime.t(),
               consecutive_failures: non_neg_integer()
             }
+          | %{
+              kind: :usage_limit,
+              provider: String.t(),
+              scope: String.t() | :all,
+              window: String.t() | nil,
+              resets_at: DateTime.t() | nil,
+              resume_at: DateTime.t(),
+              phase: atom()
+            }
 
   @type t :: %{active?: boolean(), blockers: [blocker]}
 
@@ -51,7 +66,26 @@ defmodule SymphonyElixir.DispatchState do
       |> maybe_tracker_unavailable(state, config)
       |> Enum.reverse()
 
-    %{active?: blockers == [], blockers: blockers}
+    holds = Map.get(state, :usage_limits, [])
+
+    %{
+      active?: blockers == [] and not every_profile_held?(holds, config),
+      blockers: blockers ++ Enum.map(holds, &usage_limit_blocker/1)
+    }
+  end
+
+  defp every_profile_held?([], _config), do: false
+
+  defp every_profile_held?(holds, config) do
+    config
+    |> Map.get(:run_profiles, [])
+    |> Enum.all?(fn profile -> Enum.any?(holds, &UsageLimit.covers?(&1, profile)) end)
+  end
+
+  defp usage_limit_blocker(hold) do
+    hold
+    |> Map.take([:provider, :scope, :window, :resets_at, :resume_at, :phase])
+    |> Map.put(:kind, :usage_limit)
   end
 
   defp maybe_manual(blockers, %{pause: %{paused: true} = pause}) do

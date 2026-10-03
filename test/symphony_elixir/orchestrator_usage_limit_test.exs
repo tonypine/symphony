@@ -399,6 +399,145 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
     assert :sys.get_state(pid).usage_limits == %{}
   end
 
+  test "the snapshot lists the hold and its blocker, and one event goes out per transition", ctx do
+    write_usage_workflow!(ctx)
+    pid = start_orchestrator(ctx, :SnapshotOrchestrator)
+    first = issue("issue-usage-snap-1", "MT-SNAP-1")
+    second = issue("issue-usage-snap-2", "MT-SNAP-2")
+    {first_pid, first_ref, _run_id} = start_run!(pid, first)
+    {second_pid, second_ref, _run_id} = start_run!(pid, second)
+    :ok = Notifications.subscribe()
+
+    assert %{usage_limits: [], dispatch_state: %{active?: true, blockers: []}} = GenServer.call(pid, :snapshot)
+
+    send(pid, {:codex_worker_update, first.id, %{event: :notification, timestamp: DateTime.utc_now(), usage_windows: %{"five_hour" => %{resets_at: DateTime.add(ctx.now, 3600), utilization: 0.97}}}})
+    # Both runs hit the same limit: one hold, one "paused" event.
+    send(pid, {:DOWN, first_ref, :process, first_pid, {:usage_limited, usage_info(ctx)}})
+    send(pid, {:DOWN, second_ref, :process, second_pid, {:usage_limited, usage_info(ctx)}})
+    snapshot = GenServer.call(pid, :snapshot)
+
+    resume_at = DateTime.add(ctx.now, 3720)
+    resets_at = DateTime.add(ctx.now, 3600)
+
+    assert [
+             %{
+               provider: "anthropic",
+               scope: :all,
+               reason: "claude_usage_limit",
+               window: "five_hour",
+               phase: :paused,
+               since: since,
+               resets_at: ^resets_at,
+               resume_at: ^resume_at,
+               source: :rate_limit_event,
+               utilization: 0.97,
+               issue_identifier: "MT-SNAP-2"
+             }
+           ] = snapshot.usage_limits
+
+    assert since == ctx.now
+
+    # Every run profile is Claude, so dispatch is paused.
+    assert %{active?: false, blockers: [blocker]} = snapshot.dispatch_state
+
+    assert blocker == %{
+             kind: :usage_limit,
+             provider: "anthropic",
+             scope: :all,
+             window: "five_hour",
+             resets_at: resets_at,
+             resume_at: resume_at,
+             phase: :paused
+           }
+
+    assert_receive {:notification_event, %Notifications.Event{event: "usage_limit_paused"} = paused}, 1_000
+    assert paused.issue_identifier == "MT-SNAP-1"
+    assert paused.reason == "Claude 5-hour limit; resumes at #{DateTime.to_iso8601(resume_at)}"
+    assert %{provider: "anthropic", scope: "all", window: "five_hour", resume_at: ^resume_at} = paused.metadata
+    refute_receive {:notification_event, %Notifications.Event{event: "usage_limit_paused"}}, 100
+
+    set_clock(ctx, resume_at)
+
+    capture_log(fn ->
+      send(pid, {:usage_limit_resume, @anthropic})
+      assert_receive {:notification_event, %Notifications.Event{event: "usage_limit_resumed"} = resumed}, 1_000
+      assert resumed.reason == "Claude 5-hour limit"
+      assert resumed.issue_identifier == nil
+    end)
+
+    assert %{usage_limits: [], dispatch_state: %{blockers: []}} = GenServer.call(pid, :snapshot)
+
+    send(pid, {:usage_limit_resume, @anthropic})
+    :sys.get_state(pid)
+    refute_receive {:notification_event, %Notifications.Event{event: "usage_limit_resumed"}}, 100
+  end
+
+  # The ticket walkthrough end to end: a fake `claude` rejects the five-hour window once.
+  test "a rejected five_hour window pauses, shows in the state API and banner, then resumes", ctx do
+    rejected_once = Path.join(ctx.test_root, "rejected-once")
+    fake_claude = Path.join(ctx.test_root, "fake-claude-limited")
+
+    File.write!(fake_claude, """
+    #!/bin/sh
+    cat > /dev/null
+    if [ ! -f #{rejected_once} ]; then
+      touch #{rejected_once}
+      resets_at=$(( $(date +%s) + 2 ))
+      printf '%s\\n' '{"type":"system","subtype":"init","session_id":"sess-limit","cwd":"/tmp","tools":[],"mcp_servers":[{"name":"symphony","status":"connected"}],"model":"claude-opus-5-5","permissionMode":"default","apiKeySource":"env"}'
+      printf '{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":%s,"rateLimitType":"five_hour","utilization":1.0},"session_id":"sess-limit"}\\n' "$resets_at"
+      exit 1
+    fi
+    exec #{ctx.fake_claude}
+    """)
+
+    File.chmod!(fake_claude, 0o755)
+
+    write_usage_workflow!(%{ctx | fake_claude: fake_claude},
+      agent_usage_limit: %{resume_margin_seconds: 0},
+      tracker_active_states: ["Todo"]
+    )
+
+    issue = issue("issue-usage-walk", "MT-WALK", %{state: "Todo"})
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+    :ok = Notifications.subscribe()
+
+    name = Module.concat(__MODULE__, :WalkthroughOrchestrator)
+
+    capture_log(fn ->
+      {:ok, pid} = Orchestrator.start_link(name: name)
+      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+
+      # 1. The run ends usage_limited.
+      wait_until(fn -> Enum.find(RunStore.list_runs(:all), &(&1.issue_id == issue.id and &1.status == "usage_limited")) end)
+
+      # 2. and 3. The state API lists the hold and its blocker; the banner reads from it.
+      payload = SymphonyElixirWeb.Presenter.state_payload(name, 1_000)
+      assert [%{provider: "anthropic", window: "five_hour", resume_at: resume_at} = hold] = payload.usage_limits
+      assert is_binary(resume_at)
+      assert [%{kind: :usage_limit, provider: "anthropic", window: "five_hour"}] = payload.dispatch_state.blockers
+      assert payload.dispatch_state.active? == false
+      assert UsageLimit.banner(hold, DateTime.utc_now()) =~ ~r/^Paused: Claude 5-hour limit, resumes ~\d{2}:\d{2}$/
+
+      # 4. Past resume_at the hold clears and the issue runs again.
+      wait_until(fn -> SymphonyElixirWeb.Presenter.state_payload(name, 1_000).usage_limits == [] end)
+      assert SymphonyElixirWeb.Presenter.state_payload(name, 1_000).dispatch_state.blockers == []
+      wait_until(fn -> Enum.find(RunStore.list_runs(:all), &(&1.issue_id == issue.id and &1.status != "usage_limited")) end)
+    end)
+
+    assert_receive {:notification_event, %Notifications.Event{event: "usage_limit_paused", issue_identifier: "MT-WALK"}}, 1_000
+    assert_receive {:notification_event, %Notifications.Event{event: "usage_limit_resumed"}}, 1_000
+    refute_receive {:notification_event, %Notifications.Event{event: "usage_limit_" <> _}}, 200
+  end
+
+  test "a partial hold is listed but leaves dispatch active for the other provider", ctx do
+    write_usage_workflow!(ctx, agent_run_profiles: %{"rework" => %{"provider" => "openrouter", "model" => "openai/gpt-5"}})
+    pid = start_orchestrator(ctx, :PartialHoldOrchestrator)
+    :sys.replace_state(pid, &%{&1 | usage_limits: %{@anthropic => hold(ctx)}})
+
+    assert %{usage_limits: [%{provider: "anthropic"}], dispatch_state: %{active?: true, blockers: [%{kind: :usage_limit}]}} =
+             GenServer.call(pid, :snapshot)
+  end
+
   test "an operator pause set during the hold stays paused after auto-resume", ctx do
     write_usage_workflow!(ctx)
     pid = start_orchestrator(ctx, :OperatorPauseOrchestrator)

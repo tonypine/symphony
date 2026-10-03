@@ -5885,6 +5885,7 @@ defmodule SymphonyElixir.Orchestrator do
       run_history: persisted_run_history(state.repo_key),
       codex_totals: state.codex_totals,
       rate_limits: Map.get(state, :rate_limits),
+      usage_limits: UsageLimit.snapshot(state.usage_limits, state.usage_windows),
       pause: state.pause || unpaused_state(),
       workspace_lifecycle: workspace_lifecycle_snapshot(state),
       budget: budget_snapshot(state),
@@ -6555,6 +6556,8 @@ defmodule SymphonyElixir.Orchestrator do
         issue_identifier: identifier
       )
 
+    if is_nil(existing), do: emit_usage_limit_event(:usage_limit_paused, entry, issue_identifier: identifier)
+
     if is_nil(existing) or existing.resume_at != entry.resume_at do
       Logger.warning(
         "Usage limit pause provider=#{entry.provider} scope=#{UsageLimit.scope_label(entry.scope)} window=#{entry.window || "unknown"} " <>
@@ -6572,6 +6575,28 @@ defmodule SymphonyElixir.Orchestrator do
     |> log_run_store_error("persist usage limits")
 
     %{state | usage_limits: usage_limits}
+  end
+
+  # One event per hold transition: a new hold and its clearing. A refreshed hold, or a run
+  # hitting a hold already in place, emits nothing.
+  defp emit_usage_limit_event(event, entry, attrs \\ []) do
+    resume = if event == :usage_limit_paused, do: "; resumes at #{DateTime.to_iso8601(entry.resume_at)}", else: ""
+
+    Notifications.emit_event(
+      event,
+      Map.merge(Map.new(attrs), %{
+        reason: UsageLimit.limit_label(entry) <> resume,
+        metadata: %{
+          provider: entry.provider,
+          scope: UsageLimit.scope_label(entry.scope),
+          window: entry.window,
+          since: entry.since,
+          resets_at: entry.resets_at,
+          resume_at: entry.resume_at,
+          source: entry.source
+        }
+      })
+    )
   end
 
   defp format_optional_datetime(%DateTime{} = datetime), do: DateTime.to_iso8601(datetime)
@@ -6610,6 +6635,7 @@ defmodule SymphonyElixir.Orchestrator do
   # for a slot does; the immediate tick dispatches them unless another gate still applies.
   defp resume_usage_limit(%State{} = state, key, entry, now) do
     Logger.warning("Usage limit resumed provider=#{entry.provider} scope=#{UsageLimit.scope_label(entry.scope)} paused_for_s=#{DateTime.diff(now, entry.since)}")
+    emit_usage_limit_event(:usage_limit_resumed, entry)
 
     state =
       state
@@ -6823,9 +6849,11 @@ defmodule SymphonyElixir.Orchestrator do
         pause: state.pause || unpaused_state(),
         budget_daily_used: state.budget_daily_used,
         budget_day_started_on: state.budget_day_started_on,
-        tracker_health: state.tracker_health
+        tracker_health: state.tracker_health,
+        usage_limits: UsageLimit.snapshot(state.usage_limits, state.usage_windows)
       },
       %{
+        run_profiles: run_profiles_in_use(state, settings),
         daily_limit: agent.max_tokens_per_day,
         quality_gate: settings.quality_gate,
         learnings: settings.learnings,
@@ -6834,6 +6862,19 @@ defmodule SymphonyElixir.Orchestrator do
       },
       System.get_env()
     )
+  end
+
+  # Every provider and model a run could resolve to, across run kinds and configured repos.
+  # Only needed (and only resolved) while a usage-limit hold is in place.
+  defp run_profiles_in_use(%State{usage_limits: usage_limits}, _settings) when map_size(usage_limits) == 0, do: []
+
+  defp run_profiles_in_use(%State{}, settings) do
+    repo_settings =
+      for {:ok, repos} <- [Config.repos()], repo <- repos, {:ok, repo_settings} <- [Config.settings_for_repo(repo.name)], do: repo_settings
+
+    for settings <- [settings | repo_settings], kind <- RunKind.names(), uniq: true do
+      settings |> Config.run_profile(kind) |> Map.take([:provider, :model])
+    end
   end
 
   defp budget_remaining(limit, used) when is_integer(limit) and limit > 0 do

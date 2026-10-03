@@ -3,7 +3,7 @@ defmodule SymphonyElixirWeb.Presenter do
   Shared projections for the observability API and dashboard.
   """
 
-  alias SymphonyElixir.{AuditLog, Config, Orchestrator, Quality, RunKind, URLUtils}
+  alias SymphonyElixir.{AuditLog, Config, Orchestrator, Quality, RunKind, URLUtils, UsageLimit}
   alias SymphonyElixir.Codex.MessageHumanizer
 
   @audit_page_size 200
@@ -63,6 +63,7 @@ defmodule SymphonyElixirWeb.Presenter do
           codex_totals: normalize_codex_totals(Map.get(snapshot, :codex_totals)),
           pollers: normalize_pollers(Map.get(snapshot, :pollers)),
           pause: normalize_pause(Map.get(snapshot, :pause)),
+          usage_limits: snapshot |> Map.get(:usage_limits, []) |> Enum.map(&usage_limit_payload/1),
           budget: normalize_budget(Map.get(snapshot, :budget)),
           dispatch_state: normalize_dispatch_state(snapshot),
           epic_lanes: normalize_epic_lanes(Map.get(snapshot, :epic_lanes)),
@@ -715,6 +716,25 @@ defmodule SymphonyElixirWeb.Presenter do
     %{paused: false, reason: nil, paused_at: nil}
   end
 
+  defp usage_limit_payload(entry) do
+    %{
+      provider: entry.provider,
+      scope: UsageLimit.scope_label(entry.scope),
+      reason: Map.get(entry, :reason),
+      window: Map.get(entry, :window),
+      phase: optional_string(Map.get(entry, :phase)),
+      since: iso8601(Map.get(entry, :since)),
+      resets_at: iso8601(Map.get(entry, :resets_at)),
+      resume_at: iso8601(entry.resume_at),
+      source: optional_string(Map.get(entry, :source)),
+      utilization: Map.get(entry, :utilization),
+      issue_identifier: Map.get(entry, :issue_identifier)
+    }
+  end
+
+  defp optional_string(nil), do: nil
+  defp optional_string(value), do: to_string(value)
+
   defp normalize_budget(budget) when is_map(budget) do
     %{
       per_issue_limit: Map.get(budget, :per_issue_limit),
@@ -887,6 +907,18 @@ defmodule SymphonyElixirWeb.Presenter do
       reason: Map.get(b, :reason),
       since: iso8601(Map.get(b, :since)),
       consecutive_failures: Map.get(b, :consecutive_failures, 0)
+    }
+  end
+
+  defp normalize_blocker(%{kind: :usage_limit} = b) do
+    %{
+      kind: :usage_limit,
+      provider: Map.get(b, :provider),
+      scope: UsageLimit.scope_label(Map.get(b, :scope, :all)),
+      window: Map.get(b, :window),
+      phase: optional_string(Map.get(b, :phase)),
+      resets_at: iso8601(Map.get(b, :resets_at)),
+      resume_at: iso8601(Map.get(b, :resume_at))
     }
   end
 
