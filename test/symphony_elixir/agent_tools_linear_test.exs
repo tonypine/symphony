@@ -951,6 +951,69 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
     end
   end
 
+  describe "add_blocked_by/3" do
+    # Looks issues up by identifier (TP-404 is unknown) and records the relations it creates.
+    defp blocked_by_client(relation_result \\ {:ok, %{"data" => %{"issueRelationCreate" => %{"success" => true}}}}) do
+      test_pid = self()
+
+      fn query, variables, _opts ->
+        send(test_pid, {:linear_called, query, variables})
+
+        cond do
+          query =~ "SymphonyAgentIssueByIdentifier" and variables.id == "TP-404" -> {:ok, %{"data" => %{"issue" => nil}}}
+          query =~ "SymphonyAgentIssueByIdentifier" -> {:ok, %{"data" => %{"issue" => %{"id" => "id-" <> variables.id, "identifier" => variables.id}}}}
+          query =~ "SymphonyAgentCreateIssueRelation" -> relation_result
+        end
+      end
+    end
+
+    test "marks the current issue blocked by each issue, after looking every one up" do
+      context = %{issue: %Issue{id: "issue-verify"}}
+
+      assert {:ok, %{"blockedBy" => ["TP-323", "TP-324"]}} =
+               Linear.add_blocked_by(context, %{"blocked_by" => [" tp-323 ", "TP-324", "TP-323"]}, linear_client: blocked_by_client())
+
+      assert_received {:linear_called, _lookup, %{id: "TP-323"}}
+      assert_received {:linear_called, _lookup, %{id: "TP-324"}}
+      assert_received {:linear_called, _mutation, %{input: %{"issueId" => "id-TP-323", "relatedIssueId" => "issue-verify", "type" => "blocks"}}}
+      assert_received {:linear_called, _mutation, %{input: %{"issueId" => "id-TP-324", "relatedIssueId" => "issue-verify", "type" => "blocks"}}}
+    end
+
+    test "links nothing for invalid input, an unknown issue, the current issue or a failed lookup" do
+      context = %{issue: %Issue{id: "issue-verify"}}
+      no_linear = fn _query, _variables, _opts -> flunk("Linear should not be called") end
+
+      for blocked_by <- [nil, [], "TP-1", [" "], [1]] do
+        assert {:error, :invalid_add_blocked_by} =
+                 Linear.add_blocked_by(context, %{"blocked_by" => blocked_by}, linear_client: no_linear)
+      end
+
+      assert {:error, :missing_current_issue} = Linear.add_blocked_by(%{}, %{"blocked_by" => ["TP-1"]}, linear_client: no_linear)
+
+      assert {:error, {:blocked_by_not_found, ["TP-404"]}} =
+               Linear.add_blocked_by(context, %{"blocked_by" => ["TP-1", "TP-404"]}, linear_client: blocked_by_client())
+
+      assert {:error, {:blocked_by_self, "TP-SELF"}} =
+               Linear.add_blocked_by(%{issue_id: "id-TP-SELF"}, %{"blocked_by" => ["TP-SELF"]}, linear_client: blocked_by_client())
+
+      refute_received {:linear_called, "mutation" <> _rest, _variables}
+
+      down = fn _query, _variables, _opts -> {:error, :linear_down} end
+      assert {:error, :linear_down} = Linear.add_blocked_by(context, %{"blocked_by" => ["TP-1"]}, linear_client: down)
+    end
+
+    test "stops at the first relation Linear refuses" do
+      context = %{issue: %Issue{id: "issue-verify"}}
+      refused = blocked_by_client({:ok, %{"data" => %{"issueRelationCreate" => %{"success" => false}}}})
+
+      assert {:error, {:add_blocked_by_failed, "TP-1", {:linear_mutation_failed, "issueRelationCreate", _body}}} =
+               Linear.add_blocked_by(context, %{"blocked_by" => ["TP-1", "TP-2"]}, linear_client: refused)
+
+      assert {:error, {:add_blocked_by_failed, "TP-1", :linear_down}} =
+               Linear.add_blocked_by(context, %{"blocked_by" => ["TP-1"]}, linear_client: blocked_by_client({:error, :linear_down}))
+    end
+  end
+
   describe "create_project_update/3" do
     test "posts to the current issue's project with the given body and health" do
       {:ok, registry} = Linear.CommentRegistry.start_link()

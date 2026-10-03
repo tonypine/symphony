@@ -9,7 +9,8 @@ final class SymphonyRunner {
     var onEvent: ((StatusMachine.Event) -> Void)?
 
     private let store: SettingsStore
-    private let secrets: SecretsReader
+    /// Reads the secrets for Start, config checks and the Settings window, one read at a time.
+    let secrets: SecretsReader
     private let logDirectory = AppStores.current.logDirectory
     private var child: ChildProcess?
     private var stopWaiters: [() -> Void] = []
@@ -34,7 +35,7 @@ final class SymphonyRunner {
     var isStopping: Bool { child?.stopRequested == true }
     /// True while Start waits to read the Keychain.
     private(set) var isStarting = false
-    /// True while Start or a config check waits to read the Keychain, which is usually a password prompt.
+    /// True while Start, a config check or Settings waits to read the Keychain, which is usually a password prompt.
     var isWaitingForKeychain: Bool { secrets.isWaiting }
 
     /// Called when a Keychain read starts or ends.
@@ -69,9 +70,8 @@ final class SymphonyRunner {
 
     /// Starts Symphony, reading the Keychain off the main thread so a password prompt can't freeze the menu.
     /// `completion` gets nil once Symphony runs, or a `LaunchProblem` when the settings aren't ready, or a Keychain,
-    /// log or spawn error. `symphonyBinary` replaces the embedded Symphony, for the updater; Development mode runs
-    /// the checkout anyway.
-    func start(symphonyBinary: String? = nil, completion: ((Error?) -> Void)? = nil) {
+    /// log or spawn error.
+    func start(completion: ((Error?) -> Void)? = nil) {
         guard child == nil, !isStarting else {
             completion?(nil)
             return
@@ -83,7 +83,7 @@ final class SymphonyRunner {
             guard let self else { return }
             isStarting = false
             do {
-                try spawn(settings: settings, secrets: secrets.get(), symphonyBinary: symphonyBinary)
+                try spawn(settings: settings, secrets: secrets.get())
                 completion?(nil)
             } catch {
                 completion?(error)
@@ -91,8 +91,8 @@ final class SymphonyRunner {
         }
     }
 
-    private func spawn(settings: AppSettings, secrets: SecretSettings, symphonyBinary: String?) throws {
-        let launch = try launch(settings: settings, secrets: secrets, symphonyBinary: symphonyBinary)
+    private func spawn(settings: AppSettings, secrets: SecretSettings) throws {
+        let launch = try launch(settings: settings, secrets: secrets)
         launchedStateRoot = launch.environment[StateRoot.environmentKey]
         let log = try ChildLog.rotate(in: logDirectory)
         writeHeader(to: log, launch: launch)
@@ -106,17 +106,12 @@ final class SymphonyRunner {
 
     /// The `symphony check --config <symphony.yml>` that matches what Start would run, with the same environment,
     /// read off the main thread like Start.
-    func checkLaunch(symphonyBinary: String? = nil, completion: @escaping (Result<ChildLaunch, Error>) -> Void) {
+    func checkLaunch(completion: @escaping (Result<ChildLaunch, Error>) -> Void) {
         let settings = store.loadSettings()
         secrets.read { [weak self] secrets in
             guard let self else { return }
             completion(Result {
-                try self.launch(
-                    settings: settings,
-                    secrets: secrets.get(),
-                    symphonyBinary: symphonyBinary,
-                    subcommand: ["check"]
-                )
+                try self.launch(settings: settings, secrets: secrets.get(), subcommand: ["check"])
             })
         }
     }
@@ -137,17 +132,12 @@ final class SymphonyRunner {
         return min(max(store.loadSettings().restartTimeoutMinutes, range.lowerBound), range.upperBound)
     }
 
-    private func launch(
-        settings: AppSettings,
-        secrets: SecretSettings,
-        symphonyBinary: String?,
-        subcommand: [String] = []
-    ) throws -> ChildLaunch {
+    private func launch(settings: AppSettings, secrets: SecretSettings, subcommand: [String] = []) throws -> ChildLaunch {
         try ChildLaunchBuilder.build(
             settings: settings,
             secrets: secrets,
             baseEnvironment: AppStores.current.environment,
-            embeddedSymphonyPath: symphonyBinary ?? Self.embeddedSymphonyPath,
+            embeddedSymphonyPath: Self.embeddedSymphonyPath,
             qaDriverAppPath: Self.qaDriverAppPath,
             subcommand: subcommand,
             qaMode: AppStores.current.isQAMode

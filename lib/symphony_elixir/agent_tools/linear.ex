@@ -297,6 +297,15 @@ defmodule SymphonyElixir.AgentTools.Linear do
   }
   """
 
+  @issue_by_identifier_query """
+  query SymphonyAgentIssueByIdentifier($id: String!) {
+    issue(id: $id) {
+      id
+      identifier
+    }
+  }
+  """
+
   @project_update_scope_query """
   query SymphonyAgentProjectUpdateScope($id: String!) {
     issue(id: $id) {
@@ -558,6 +567,82 @@ defmodule SymphonyElixir.AgentTools.Linear do
           error
       end
     end
+  end
+
+  @doc """
+  Marks the current issue blocked by existing issues: each identifier in `blocked_by` gets a
+  `blocks` relation to the current issue, so Symphony holds it in `Todo` until every blocker is
+  terminal. A final verification uses it to wait on the gaps it filed. Every identifier is looked
+  up before any relation is created; unknown identifiers and the current issue itself are refused.
+  """
+  @spec add_blocked_by(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
+  def add_blocked_by(context, attrs, opts \\ []) when is_map(attrs) do
+    with {:ok, issue_id} <- current_issue_id(context),
+         {:ok, identifiers} <- validate_add_blocked_by(Map.get(attrs, "blocked_by")),
+         {:ok, blockers} <- resolve_issues_by_identifier(identifiers, opts),
+         :ok <- reject_self_blocker(blockers, issue_id),
+         :ok <- link_blockers_to(issue_id, blockers, opts) do
+      {:ok, %{"blockedBy" => identifiers}}
+    end
+  end
+
+  defp validate_add_blocked_by(blocked_by) do
+    if blocked_by != [] and valid_blocked_by?(blocked_by),
+      do: {:ok, normalize_identifiers(blocked_by)},
+      else: {:error, :invalid_add_blocked_by}
+  end
+
+  defp resolve_issues_by_identifier(identifiers, opts) do
+    with {:ok, resolved} <- lookup_identifiers(identifiers, opts),
+         [] <- for({identifier, nil} <- resolved, do: identifier) do
+      {:ok, resolved}
+    else
+      unknown when is_list(unknown) -> {:error, {:blocked_by_not_found, unknown}}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp lookup_identifiers(identifiers, opts) do
+    identifiers
+    |> Enum.reduce_while({:ok, []}, fn identifier, {:ok, acc} ->
+      case issue_id_for_identifier(identifier, opts) do
+        {:ok, id} -> {:cont, {:ok, [{identifier, id} | acc]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, resolved} -> {:ok, Enum.reverse(resolved)}
+      error -> error
+    end
+  end
+
+  # `{:ok, nil}` when Linear has no such issue.
+  defp issue_id_for_identifier(identifier, opts) do
+    case graphql(@issue_by_identifier_query, %{id: identifier}, opts) do
+      {:ok, %{"data" => %{"issue" => %{"id" => id}}}} when is_binary(id) -> {:ok, id}
+      {:ok, _body} -> {:ok, nil}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp reject_self_blocker(blockers, issue_id) do
+    case Enum.find(blockers, fn {_identifier, id} -> id == issue_id end) do
+      nil -> :ok
+      {identifier, _id} -> {:error, {:blocked_by_self, identifier}}
+    end
+  end
+
+  defp link_blockers_to(issue_id, blockers, opts) do
+    Enum.reduce_while(blockers, :ok, fn {blocker, blocker_id}, :ok ->
+      input = %{"issueId" => blocker_id, "relatedIssueId" => issue_id, "type" => "blocks"}
+
+      with {:ok, body} <- graphql(@create_issue_relation_mutation, %{input: input}, opts),
+           {:ok, _body} <- check_mutation_success(body, "issueRelationCreate") do
+        {:cont, :ok}
+      else
+        {:error, reason} -> {:halt, {:error, {:add_blocked_by_failed, blocker, reason}}}
+      end
+    end)
   end
 
   @doc """

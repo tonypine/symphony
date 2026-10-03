@@ -617,6 +617,49 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     end
   end
 
+  describe "linear_add_blocked_by" do
+    test "is advertised with only blocked_by, hidden from the read-only scope, and links through the legacy alias" do
+      assert %{"inputSchema" => %{"properties" => properties, "required" => ["blocked_by"]}} =
+               Enum.find(DynamicTool.tool_specs(), &(&1["name"] == "linear_add_blocked_by"))
+
+      assert Map.keys(properties) == ["blocked_by"]
+      refute "linear_add_blocked_by" in Enum.map(DynamicTool.tool_specs(:read_only), & &1["name"])
+
+      client = fn query, variables, _opts ->
+        if query =~ "SymphonyAgentIssueByIdentifier",
+          do: {:ok, %{"data" => %{"issue" => %{"id" => "id-" <> variables.id, "identifier" => variables.id}}}},
+          else: {:ok, %{"data" => %{"issueRelationCreate" => %{"success" => true}}}}
+      end
+
+      response = DynamicTool.execute("linear.add_blocked_by", %{blocked_by: ["TP-2"]}, issue: %Issue{id: "issue-current"}, linear_client: client)
+      assert response["success"] == true
+      assert %{"blockedBy" => ["TP-2"]} = Jason.decode!(response["output"])
+    end
+
+    test "returns explicit error payloads" do
+      issue = %Issue{id: "issue-current"}
+
+      lookup = fn issue_node ->
+        fn query, _variables, _opts ->
+          if query =~ "SymphonyAgentIssueByIdentifier",
+            do: {:ok, %{"data" => %{"issue" => issue_node}}},
+            else: {:error, :linear_down}
+        end
+      end
+
+      for {args, client, code} <- [
+            {%{"blocked_by" => []}, lookup.(nil), "invalid_add_blocked_by"},
+            {%{"blocked_by" => ["TP-404"]}, lookup.(nil), "blocked_by_not_found"},
+            {%{"blocked_by" => ["TP-1"]}, lookup.(%{"id" => "issue-current"}), "blocked_by_self"},
+            {%{"blocked_by" => ["TP-2"]}, lookup.(%{"id" => "issue-2"}), "add_blocked_by_failed"}
+          ] do
+        response = DynamicTool.execute("linear_add_blocked_by", args, issue: issue, linear_client: client)
+        assert %{"error" => %{"code" => ^code, "message" => message}} = Jason.decode!(response["output"])
+        assert message =~ "linear_add_blocked_by" or message =~ "Could not mark the current issue blocked by TP-2"
+      end
+    end
+  end
+
   describe "linear_create_project_update" do
     test "is advertised with only body and health, and hidden from the read-only scope" do
       assert %{"inputSchema" => %{"properties" => properties, "required" => ["body"]}} =

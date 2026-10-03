@@ -11,9 +11,11 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
   - the `## Symphony QA Report` is written on the parent and on the verification ticket;
   - `pass` and `blocked` move the verification ticket to `In Review` for a human to sign off;
   - `fail` files each failing step (or, without failing steps, each finding) as a Backlog child of
-    the verification ticket that names the step and holds its details and evidence, and moves the
-    verification ticket to `Backlog` until a human re-promotes it, as for any gap a final
-    verification finds.
+    the verification ticket that names the step and holds its details and evidence, marks the
+    verification ticket blocked by each one, and leaves it in `Todo`, as for any gap a final
+    verification finds. Symphony's blocked-by gate holds it there and dispatches it again once every
+    gap is terminal. When a gap could not be filed or linked, the ticket goes to `Backlog` for a
+    human instead, since nothing would hold it.
 
   Playbooks come from `qa:<kind>` labels on the verification ticket or the parent; without one,
   every enabled playbook is offered, since there is no diff to select from.
@@ -32,7 +34,8 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
   alias SymphonyElixir.QaAgent.{Report, Selection}
 
   @review_state "In Review"
-  @gap_state "Backlog"
+  @gap_state "Todo"
+  @unlinked_gap_state "Backlog"
   @skip_label "qa:skip"
   @label_prefix "qa:"
   @title_limit 120
@@ -162,7 +165,7 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
   defp apply_outcome(issue, parent, outcome, settings, opts) do
     {target_state, filed} =
       case outcome.verdict do
-        :fail -> {@gap_state, file_failures(issue, parent, outcome, opts)}
+        :fail -> fail_target(file_failures(issue, parent, outcome, opts))
         _verdict -> {@review_state, []}
       end
 
@@ -183,6 +186,13 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
     end
   end
 
+  # Only gaps that block the ticket bring it back; without them it would start again at once.
+  defp fail_target(filed) do
+    if filed != [] and Enum.all?(filed, & &1.linked?),
+      do: {@gap_state, filed},
+      else: {@unlinked_gap_state, filed}
+  end
+
   defp publish(target, report, settings, opts) do
     case Report.publish(target, report, Keyword.put(linear_opts(opts), :settings, settings)) do
       :ok -> :ok
@@ -190,7 +200,7 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
     end
   end
 
-  # Children of the verification ticket, like the gaps an executor final verification files.
+  # Children of the verification ticket that block it, like the gaps an executor final verification files.
   defp file_failures(issue, parent, outcome, opts) do
     {:ok, registry} = CommentRegistry.start_link()
     context = %{issue: issue, comment_registry: registry}
@@ -203,7 +213,8 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
 
         case AgentTools.Linear.create_subissue(context, attrs, linear_opts(opts)) do
           {:ok, response} ->
-            [%{identifier: get_in(response, ["data", "issueCreate", "issue", "identifier"]), title: title}]
+            identifier = get_in(response, ["data", "issueCreate", "issue", "identifier"])
+            [%{identifier: identifier, title: title, linked?: link_gap(context, issue, identifier, opts)}]
 
           {:error, reason} ->
             Logger.warning("Failed to file a parent walkthrough finding for #{issue.identifier}: #{inspect(reason)}")
@@ -212,6 +223,17 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
       end)
     after
       Agent.stop(registry)
+    end
+  end
+
+  defp link_gap(context, issue, identifier, opts) do
+    case AgentTools.Linear.add_blocked_by(context, %{"blocked_by" => [identifier]}, linear_opts(opts)) do
+      {:ok, _response} ->
+        true
+
+      {:error, reason} ->
+        Logger.warning("Failed to mark #{issue.identifier} blocked by #{identifier}: #{inspect(reason)}")
+        false
     end
   end
 
