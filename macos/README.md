@@ -174,7 +174,11 @@ set (or, in Development mode, no checkout folder).
   or as an indented block when the other kinds are written that way) and `run_profiles:` when they are
   missing. Choosing "default" removes the key, then a kind or `run_profiles:` left empty. Comments and other
   keys stay as they are, in block or `{ ... }` style. A layout the editor can't change, such as
-  `agent: { ... }` on one line, turns the pickers off with an error naming the line. Higher effort and bigger
+  `agent: { ... }` on one line, turns the pickers off with an error naming the line. Symphony rejects
+  `--model` or `--effort` in `agent.command` once any of these keys is set, so when `agent.command` passes
+  them the Default row shows their values (for example "Opus 5.5, from command"), and the first save that
+  sets a model or effort moves them out of the command (keeping the rest of the line and its comment) into
+  `agent.model` / `agent.effort`, unless you set the Default row in the same save. Higher effort and bigger
   models use the shared 5-hour usage limit faster. The next run picks the change up without a restart. The
   Codex runtime ignores these keys (see [Run profiles](../docs/configuration.md)).
 - `LINEAR_API_KEY` and any extra environment variables are stored only in the login Keychain, as generic

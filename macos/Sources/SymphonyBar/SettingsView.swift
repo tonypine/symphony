@@ -99,9 +99,21 @@ struct SettingsView: View {
 
                 Section {
                     ForEach(RunProfilesConfig.scopes, id: \.self) { kind in
-                        RunProfileRow(kind: kind, profile: $model.runProfiles[kind])
+                        RunProfileRow(
+                            kind: kind,
+                            profile: $model.runProfiles[kind],
+                            inherited: kind == nil ? model.commandProfile : RunProfile()
+                        )
                     }
                     .disabled(!model.canEditRunProfiles)
+                    if model.commandProfile != RunProfile() {
+                        Text(
+                            "agent.command passes --model or --effort. Saving any model or effort moves them "
+                                + "to the Default row, so runs keep the same model and effort."
+                        )
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    }
                 } header: {
                     Text("Models (saved in symphony.yml)")
                 } footer: {
@@ -173,25 +185,32 @@ struct SettingsView: View {
     }
 }
 
-/// Model and effort pickers for one kind of run, or the Default row for a nil kind.
+/// Model and effort pickers for one kind of run, or the Default row for a nil kind. `inherited` holds what
+/// runs use when a field is set to default, from the flags in `agent.command`.
 private struct RunProfileRow: View {
     let kind: RunKind?
     @Binding var profile: RunProfile
+    let inherited: RunProfile
 
     var body: some View {
         LabeledContent(kind?.title ?? "Default") {
             HStack {
-                picker("Model", $profile.model, RunProfilesConfig.models)
-                    .frame(width: 140)
-                picker("Effort", $profile.effort, RunProfilesConfig.efforts)
-                    .frame(width: 100)
+                picker("Model", $profile.model, RunProfilesConfig.models, inherited: inherited.model)
+                    .frame(width: 190)
+                picker("Effort", $profile.effort, RunProfilesConfig.efforts, inherited: inherited.effort)
+                    .frame(width: 150)
             }
         }
     }
 
-    private func picker(_ title: String, _ selection: Binding<String?>, _ choices: [RunProfileChoice]) -> some View {
+    private func picker(
+        _ title: String,
+        _ selection: Binding<String?>,
+        _ choices: [RunProfileChoice],
+        inherited: String?
+    ) -> some View {
         Picker(title, selection: selection) {
-            Text("default").tag(String?.none)
+            Text(RunProfilesConfig.defaultTitle(choices, inherited: inherited)).tag(String?.none)
             ForEach(RunProfilesConfig.choices(choices, including: selection.wrappedValue)) { choice in
                 Text(choice.title).tag(Optional(choice.id))
             }

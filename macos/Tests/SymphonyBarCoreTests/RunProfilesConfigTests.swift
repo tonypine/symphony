@@ -344,6 +344,121 @@ final class RunProfilesConfigTests: XCTestCase {
         XCTAssertEqual(RunKind.ciFix.id, "ci_fix")
     }
 
+    // MARK: Flags in agent.command
+
+    func testReadsModelAndEffortFlagsFromTheCommand() throws {
+        XCTAssertEqual(
+            try RunProfilesConfig.commandProfile(in: "agent:\n  command: claude --model claude-opus-5-5 --effort=high --verbose\n"),
+            RunProfile(model: "claude-opus-5-5", effort: "high")
+        )
+        XCTAssertEqual(
+            try RunProfilesConfig.commandProfile(in: "agent:\n  command: \"claude --model='claude-haiku-4-5-20251001'\"  # quoted\n"),
+            RunProfile(model: "claude-haiku-4-5-20251001")
+        )
+        XCTAssertEqual(try RunProfilesConfig.commandProfile(in: config), RunProfile())
+        XCTAssertEqual(try RunProfilesConfig.commandProfile(in: "agent:\n  command: claude --models x --model-y z\n"), RunProfile())
+        XCTAssertEqual(try RunProfilesConfig.commandProfile(in: "issues:\n  provider: linear\n"), RunProfile())
+    }
+
+    func testSplitsFlagsOutOfACommand() {
+        let split = RunProfilesConfig.splitCommandFlags("--effort low claude --model a --verbose --model=b --effort")
+        XCTAssertEqual(split.command, "claude --verbose")
+        XCTAssertEqual(split.flags, RunProfile(model: "b", effort: "low"))
+    }
+
+    func testSettingAKindMovesCommandFlagsToTheDefaults() throws {
+        let yaml = """
+            agent:
+              runtime: claude
+              command: claude --model claude-opus-5-5 --verbose
+              concurrency:
+                max_total: 2
+
+            """
+        let old = try RunProfilesConfig.profiles(in: yaml)
+        var new = old
+        new[.breakdown].effort = "high"
+
+        XCTAssertEqual(try RunProfilesConfig.updating(yaml, from: old, to: new), """
+            agent:
+              runtime: claude
+              command: claude --verbose
+              model: claude-opus-5-5
+              run_profiles:
+                breakdown: { effort: high }
+              concurrency:
+                max_total: 2
+
+            """)
+    }
+
+    func testMovesTheEqualsFormAndKeepsTheCommandComment() throws {
+        let yaml = "agent:\n  command: claude --model=claude-opus-5-5 --effort=xhigh --verbose  # main runs\n"
+        var new = RunProfiles()
+        new[.landing].model = "claude-haiku-4-5-20251001"
+
+        XCTAssertEqual(
+            try RunProfilesConfig.updating(yaml, from: RunProfiles(), to: new),
+            """
+            agent:
+              command: claude --verbose  # main runs
+              model: claude-opus-5-5
+              effort: xhigh
+              run_profiles:
+                landing: { model: claude-haiku-4-5-20251001 }
+
+            """.trimmingCharacters(in: .newlines) + "\n"
+        )
+    }
+
+    func testADefaultSetInTheSameSaveWinsOverTheCommandFlag() throws {
+        let yaml = "agent:\n  command: 'claude --model claude-opus-5-5 --effort high'\n"
+        var new = RunProfiles()
+        new.defaults.model = "claude-sonnet-5-5"
+
+        XCTAssertEqual(
+            try RunProfilesConfig.updating(yaml, from: RunProfiles(), to: new),
+            "agent:\n  command: 'claude'\n  model: claude-sonnet-5-5\n  effort: high\n"
+        )
+    }
+
+    func testKeepsDoubleQuotesOnTheCommand() throws {
+        let yaml = "agent:\n  command: \"claude --effort low --verbose\"\n"
+        var new = RunProfiles()
+        new[.qa].effort = "medium"
+
+        XCTAssertEqual(
+            try RunProfilesConfig.updating(yaml, from: RunProfiles(), to: new),
+            "agent:\n  command: \"claude --verbose\"\n  effort: low\n  run_profiles:\n    qa: { effort: medium }\n"
+        )
+    }
+
+    func testLeavesCommandFlagsWhenTheSaveSetsNothing() throws {
+        let yaml = "agent:\n  command: claude --model claude-opus-5-5\n  run_profiles:\n    qa: { effort: low }\n"
+        let old = try RunProfilesConfig.profiles(in: yaml)
+
+        XCTAssertEqual(try RunProfilesConfig.updating(yaml, from: old, to: RunProfiles()), "agent:\n  command: claude --model claude-opus-5-5\n")
+        XCTAssertEqual(try RunProfilesConfig.updating(yaml, from: old, to: old), yaml)
+    }
+
+    func testWithoutCommandFlagsTheOutputIsUnchanged() throws {
+        let old = try RunProfilesConfig.profiles(in: config)
+        var new = old
+        new[.breakdown].effort = "high"
+
+        XCTAssertEqual(
+            try RunProfilesConfig.updating(config, from: old, to: new),
+            try RunProfilesConfig.setting(.effort, of: .breakdown, to: "high", in: config)
+        )
+    }
+
+    func testDefaultTitleNamesTheCommandValue() {
+        XCTAssertEqual(RunProfilesConfig.defaultTitle(RunProfilesConfig.models, inherited: nil), "default")
+        XCTAssertEqual(RunProfilesConfig.defaultTitle(RunProfilesConfig.models, inherited: "claude-opus-5-5"), "Opus 5.5, from command")
+        XCTAssertEqual(RunProfilesConfig.defaultTitle(RunProfilesConfig.efforts, inherited: "high"), "high, from command")
+        XCTAssertEqual(RunProfilesConfig.defaultTitle(RunProfilesConfig.models, inherited: "opus"), "opus, from command")
+    }
+
     // MARK: File
 
     func testFileWritesOnlyChangedFields() throws {
@@ -362,6 +477,7 @@ final class RunProfilesConfigTests: XCTestCase {
         let written = try String(contentsOfFile: path, encoding: .utf8)
         XCTAssertEqual(changedLines(config, written), ["    breakdown: { effort: high }  # big tickets"])
         XCTAssertEqual(try file.readRunProfiles(), new)
+        XCTAssertEqual(try file.readCommandProfile(), RunProfile())
     }
 
     private func changedLines(_ original: String, _ updated: String) -> [String] {

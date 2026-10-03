@@ -121,6 +121,13 @@ public enum RunProfilesConfig {
         return choices + [RunProfileChoice(id: current, title: current)]
     }
 
+    /// The title of a picker's default entry: "default", or what `agent.command` passes, as in
+    /// "Opus 5.5, from command".
+    public static func defaultTitle(_ choices: [RunProfileChoice], inherited: String?) -> String {
+        guard let inherited else { return "default" }
+        return (choices.first { $0.id == inherited }?.title ?? inherited) + ", from command"
+    }
+
     /// Keys of `agent:` in the order new ones are written.
     static let agentOrder = ["runtime", "command", "model", "effort", "run_profiles"]
     static let fieldOrder = RunProfileField.allCases.map(\.rawValue)
@@ -177,6 +184,50 @@ public enum RunProfilesConfig {
         return profile
     }
 
+    /// The `--model` and `--effort` that `agent.command` passes, which runs use while `agent.model` and
+    /// `agent.effort` are unset.
+    public static func commandProfile(in yaml: String) throws -> RunProfile {
+        let document = Document(yaml)
+        guard let key = try commandKey(in: document),
+              let command = try decodeScalar(InlineText(key).value, on: key) else { return RunProfile() }
+        return splitCommandFlags(command).flags
+    }
+
+    /// The command without its `--model` / `--effort` flags (`--model x` or `--model=x`), and their values.
+    /// Matches the flags Symphony rejects in `agent.command` once any model or effort is set.
+    static func splitCommandFlags(_ command: String) -> (command: String, flags: RunProfile) {
+        var rest = command
+        var flags = RunProfile()
+        for field in RunProfileField.allCases {
+            let pattern = #"(^|\s+)--"# + field.rawValue + #"(?:=(\S*)|\s+(?!-)(\S+))?(?=\s|$)"#
+            let regex = try! NSRegularExpression(pattern: pattern)
+            let matches = regex.matches(in: rest, range: NSRange(rest.startIndex..., in: rest))
+            // The CLI takes the last one.
+            for match in matches {
+                for group in [2, 3] {
+                    if let value = Range(match.range(at: group), in: rest), let unquoted = unquoted(rest[value]) {
+                        flags[field] = unquoted
+                    }
+                }
+            }
+            for match in matches.reversed() {
+                rest.removeSubrange(Range(match.range, in: rest)!)
+            }
+        }
+        if command.first?.isWhitespace != true {
+            rest = String(rest.drop { $0.isWhitespace })
+        }
+        return (rest, flags)
+    }
+
+    private static func unquoted(_ value: Substring) -> String? {
+        var value = value
+        if value.count >= 2, let quote = value.first, quote == "'" || quote == "\"", value.last == quote {
+            value = value.dropFirst().dropLast()
+        }
+        return value.isEmpty ? nil : String(value)
+    }
+
     /// The value of a direct child `name:` of the range.
     private static func scalar(_ name: String, in range: Range<Int>, of document: Document) throws -> String? {
         guard let key = document.child(name, in: range) else { return nil }
@@ -187,8 +238,21 @@ public enum RunProfilesConfig {
     // MARK: Writing
 
     /// The same text with every field that differs between `old` and `new` written, and nothing else.
+    ///
+    /// Symphony rejects `--model` / `--effort` in `agent.command` once any model or effort is set, so when
+    /// the result sets one, those flags move out of the command into `agent.model` / `agent.effort`, unless
+    /// `new` sets those itself. Runs then use the same model and effort as before.
     public static func updating(_ yaml: String, from old: RunProfiles, to new: RunProfiles) throws -> String {
+        guard old != new else { return yaml }
         var text = yaml
+        var new = new
+        let flags = try commandProfile(in: yaml)
+        if flags != RunProfile() && (new.defaults != RunProfile() || !new.kinds.isEmpty) {
+            for field in RunProfileField.allCases where new.defaults[field] == nil {
+                new.defaults[field] = flags[field]
+            }
+            text = try removingCommandFlags(in: text)
+        }
         for kind in scopes {
             for field in RunProfileField.allCases where old[kind][field] != new[kind][field] {
                 text = try setting(field, of: kind, to: new[kind][field], in: text)
@@ -312,6 +376,27 @@ public enum RunProfilesConfig {
         return document.text
     }
 
+    /// The text with `--model` / `--effort` taken out of `agent.command`, keeping the rest of the line, its
+    /// quoting and any trailing comment.
+    private static func removingCommandFlags(in yaml: String) throws -> String {
+        var document = Document(yaml)
+        guard let key = try commandKey(in: document) else { return yaml }
+        let inline = try InlineText(key)
+        let rendered: String
+        switch inline.value.first {
+        case "'"?:
+            guard let command = try decodeScalar(inline.value, on: key) else { return yaml }
+            rendered = "'" + splitCommandFlags(command).command.replacingOccurrences(of: "'", with: "''") + "'"
+        case "\""?:
+            guard let command = try decodeScalar(inline.value, on: key) else { return yaml }
+            rendered = RepositoriesConfig.scalar(splitCommandFlags(command).command)
+        default:
+            rendered = splitCommandFlags(String(inline.value)).command
+        }
+        document.lines[key.index] = inline.replacingValue(in: key, with: rendered)
+        return document.text
+    }
+
     /// Sets the scalar child `name:` of `parent`: rewrites its value, inserts it in `order`, or removes it for nil.
     private static func set(
         _ name: String,
@@ -396,6 +481,14 @@ public enum RunProfilesConfig {
         return agent
     }
 
+    /// `agent.command`, or nil when it's missing.
+    private static func commandKey(in document: Document) throws -> Document.Key? {
+        guard let agent = try agentKey(in: document),
+              let key = document.child("command", in: document.children(of: agent)) else { return nil }
+        try requireScalar(key, in: document)
+        return key
+    }
+
     private static func requireBlock(_ key: Document.Key, _ inline: InlineText) throws {
         guard inline.isNull else { throw key.unsupported("`\(key.name):` should be an indented block") }
     }
@@ -413,6 +506,11 @@ public enum RunProfilesConfig {
 extension SymphonyConfigFile {
     public func readRunProfiles() throws -> RunProfiles {
         try RunProfilesConfig.profiles(in: read())
+    }
+
+    /// The `--model` / `--effort` that `agent.command` passes.
+    public func readCommandProfile() throws -> RunProfile {
+        try RunProfilesConfig.commandProfile(in: read())
     }
 
     /// Writes the fields that differ between `old` and `new`. Leaves the file untouched when none do.

@@ -24,6 +24,8 @@ final class SettingsViewModel: ObservableObject {
     @Published var maxConcurrentAgents = MaxConcurrentAgents.symphonyDefault
     /// `agent.model`, `agent.effort` and `agent.run_profiles` in the configured symphony.yml.
     @Published var runProfiles = RunProfiles()
+    /// The `--model` / `--effort` in `agent.command`, which runs use while the Default row is set to default.
+    @Published private(set) var commandProfile = RunProfile()
     @Published private(set) var configFileError: String?
 
     /// The value read from symphony.yml, or nil when it couldn't be read. The file is written only when the
@@ -89,7 +91,9 @@ final class SettingsViewModel: ObservableObject {
         let path = settings.trimmed().configPath
         guard !path.isEmpty else { return }
         do {
-            let profiles = try SymphonyConfigFile(path: path).readRunProfiles()
+            let file = SymphonyConfigFile(path: path)
+            let profiles = try file.readRunProfiles()
+            commandProfile = try file.readCommandProfile()
             runProfiles = profiles
             loadedRunProfiles = profiles
         } catch {
@@ -144,7 +148,8 @@ final class SettingsViewModel: ObservableObject {
         return true
     }
 
-    /// Writes the model and effort fields the pickers changed to symphony.yml.
+    /// Writes the model and effort fields the pickers changed to symphony.yml, then reads them back, since
+    /// saving can move `--model` / `--effort` out of `agent.command` into the Default row.
     private func saveRunProfiles(to path: String) -> Bool {
         guard let loaded = loadedRunProfiles, runProfiles != loaded else { return true }
         do {
@@ -154,8 +159,8 @@ final class SettingsViewModel: ObservableObject {
             return false
         }
         configFileError = nil
-        loadedRunProfiles = runProfiles
-        return true
+        loadRunProfiles()
+        return configFileError == nil
     }
 
     /// Registers or unregisters the login item. When macOS wants the user to allow it, opens Login Items.
