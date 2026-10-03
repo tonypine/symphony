@@ -6,7 +6,7 @@ defmodule SymphonyElixir.ExtensionsTest do
 
   alias Mix.Tasks.Symphony.Audit
   alias SymphonyElixir.AuditLog
-  alias SymphonyElixir.Linear.Adapter
+  alias SymphonyElixir.Linear.{Adapter, Client, Usage}
   alias SymphonyElixir.Tracker.Memory
   alias SymphonyElixirWeb.ObservabilityPubSub
 
@@ -584,6 +584,17 @@ defmodule SymphonyElixir.ExtensionsTest do
                "used" => 1,
                "running" => [%{"issue_id" => "land-http", "identifier" => "MT-LAND", "state" => "Merging"}]
              },
+             "auto_merge" => [
+               %{
+                 "issue_id" => "merge-http",
+                 "issue_identifier" => "MT-MERGE",
+                 "pull_request_url" => "https://github.com/acme/repo/pull/9",
+                 "state" => "enabled",
+                 "head_sha" => "abc1234def",
+                 "status" => "auto-merge on, waiting for CI on `abc1234`",
+                 "updated_at" => "2026-10-03T06:00:00Z"
+               }
+             ],
              "slot_waiting" => [
                %{
                  "issue_id" => "wait-http",
@@ -595,7 +606,8 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "since" => "2026-10-03T06:00:00Z"
                }
              ],
-             "rate_limits" => %{"primary" => %{"remaining" => 11}}
+             "rate_limits" => %{"primary" => %{"remaining" => 11}},
+             "linear_usage" => %{"window_ms" => 3_600_000, "total" => 0, "callers" => []}
            }
 
     conn = get(build_conn(), "/api/v1/MT-HTTP")
@@ -1394,6 +1406,44 @@ defmodule SymphonyElixir.ExtensionsTest do
     refute html =~ "MT-API-RUN"
   end
 
+  test "state api and dashboard show Linear requests per caller for the last hour" do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_api_token: "token")
+    request_fun = fn _payload, _headers -> {:ok, %{status: 200, headers: %{}, body: %{"data" => %{}}}} end
+    linear_call = fn -> {:ok, _body} = Client.graphql("query { viewer { id } }", %{}, request_fun: request_fun) end
+
+    Usage.with_caller({:agent, "MT-USAGE-API"}, fn -> Enum.each(1..3, fn _ -> linear_call.() end) end)
+    Usage.with_caller(:ci_poller, linear_call)
+
+    usage = Usage.snapshot()
+    orchestrator_name = Module.concat(__MODULE__, :LinearUsageOrchestrator)
+    snapshot = Map.put(static_snapshot(), :polling, %{linear: %{usage: usage}})
+    {:ok, _orchestrator_pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: snapshot)
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    assert %{"window_ms" => 3_600_000, "total" => total, "callers" => callers} =
+             build_conn() |> get("/api/v1/state") |> json_response(200) |> Map.fetch!("linear_usage")
+
+    assert total == usage.total and total >= 4
+    assert %{"caller" => "agent:MT-USAGE-API", "requests" => 3} in callers
+    assert Enum.any?(callers, &match?(%{"caller" => "ci_poller", "requests" => requests} when requests >= 1, &1))
+
+    {:ok, _view, html} = live(build_conn(), "/")
+
+    assert html =~ "Linear requests"
+    assert html =~ "agent:MT-USAGE-API"
+    refute html =~ "No Linear requests in the last hour."
+  end
+
+  test "dashboard liveview shows an empty Linear requests section" do
+    orchestrator_name = Module.concat(__MODULE__, :NoLinearUsageOrchestrator)
+    {:ok, _orchestrator_pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: static_snapshot())
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    {:ok, _view, html} = live(build_conn(), "/")
+
+    assert html =~ "No Linear requests in the last hour."
+  end
+
   test "dashboard liveview shows an empty recent runs section" do
     orchestrator_name = Module.concat(__MODULE__, :NoRunsDashboardOrchestrator)
     snapshot = %{static_snapshot() | run_history: []}
@@ -1691,6 +1741,7 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     assert html =~ "Finishing runs"
     assert html =~ "Landing: MT-LAND"
+    assert html =~ "MT-MERGE: auto-merge on, waiting for CI on `abc1234`"
     assert html =~ "MT-WAIT"
     assert html =~ "a Merging or Auto Review issue is waiting for a slot"
     refute html =~ "Nothing is waiting to start."
@@ -3064,6 +3115,17 @@ defmodule SymphonyElixir.ExtensionsTest do
         shared: %{slots: 1, used: 1}
       },
       finishing: %{slots: 2, used: 1, running: [%{issue_id: "land-http", identifier: "MT-LAND", state: "Merging"}]},
+      auto_merge: [
+        %{
+          issue_id: "merge-http",
+          issue_identifier: "MT-MERGE",
+          pr_url: "https://github.com/acme/repo/pull/9",
+          state: "enabled",
+          head_sha: "abc1234def",
+          status: "auto-merge on, waiting for CI on `abc1234`",
+          updated_at: ~U[2026-10-03 06:00:00Z]
+        }
+      ],
       slot_waiting: [
         %{
           issue_id: "wait-http",

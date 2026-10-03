@@ -8,6 +8,21 @@ description:
 
 # Land
 
+## When this applies
+
+Symphony normally lands an approved (`Merging`) PR itself with GitHub
+auto-merge: it turns auto-merge on, updates the branch when it falls behind the
+base branch, and moves the issue to `Done` once GitHub merges it. No agent runs
+for that. Conflicts come back as an `In Progress` run with the conflict context,
+and a red head as a CI-failure run; fix those like any other run, and the PR
+merges once the fix is green.
+
+Use this skill only when Symphony dispatches you while the issue is in
+`Merging`. That means auto-merge could not be used (the repository doesn't
+allow it, the PR has no required checks, a permission error, or the PR stayed
+blocked on a green head); a comment on the issue says why. It also applies when
+asked to land a PR outside Symphony.
+
 ## Goals
 
 - Ensure the PR is conflict-free with main.

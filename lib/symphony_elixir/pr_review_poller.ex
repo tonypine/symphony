@@ -6,12 +6,14 @@ defmodule SymphonyElixir.PrReviewPoller do
   use GenServer
   require Logger
 
-  alias SymphonyElixir.{AuditLog, CiPoller, Config, Notifications, RunStore, Tracker, Workspace}
+  alias SymphonyElixir.{AuditLog, AutoMerge, CiPoller, Config, Notifications, RunStore, Tracker, Workspace}
   alias SymphonyElixir.GitHub.{CommentMarker, PullRequest}
   alias SymphonyElixir.Learnings.Reflection
-  alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.Linear.{Issue, Usage}
 
   @in_review_state "In Review"
+  @merging_state "Merging"
+  @done_state "Done"
   @active_state "In Progress"
   @changes_requested "CHANGES_REQUESTED"
   @approved "APPROVED"
@@ -73,6 +75,7 @@ defmodule SymphonyElixir.PrReviewPoller do
 
   @impl true
   def init(opts) do
+    Usage.put_caller(:pr_review_poller)
     poll_interval_ms = poll_interval_ms(opts)
     opts = poller_opts(opts, poll_interval_ms)
     state = %State{opts: opts, poll_interval_ms: poll_interval_ms}
@@ -439,8 +442,10 @@ defmodule SymphonyElixir.PrReviewPoller do
     tracker = Keyword.get(opts, :tracker, Tracker)
     current_gh_user = resolve_current_gh_user(opts)
 
-    with {:ok, discovered} <- discover_reviews(run_store, tracker, repo_key, now),
+    with {:ok, discovered, merging_issue_ids} <- discover_reviews(settings, run_store, tracker, repo_key, now),
          {:ok, reviews} <- list_pr_reviews(run_store, repo_key) do
+      opts = Keyword.put(opts, :merging_issue_ids, merging_issue_ids)
+
       actions =
         reviews
         |> Enum.map(&process_review(&1, settings, current_gh_user, opts, now))
@@ -479,25 +484,46 @@ defmodule SymphonyElixir.PrReviewPoller do
     end
   end
 
-  defp discover_reviews(run_store, tracker, repo_key, now) do
-    with {:ok, issues} <- tracker.fetch_issues_by_states([@in_review_state]),
+  # With auto-merge on, `Merging` issues are watched too: this poller lands them (see AutoMerge).
+  defp discover_reviews(settings, run_store, tracker, repo_key, now) do
+    with {:ok, issues} <- tracker.fetch_issues_by_states(watched_states(settings)),
          {:ok, runs} <- list_runs(run_store, repo_key),
          {:ok, existing} <- list_pr_reviews(run_store, repo_key) do
       existing_by_issue = Map.new(existing, &{Map.get(&1, :issue_id), &1})
+      issues = Enum.filter(issues, &match?(%Issue{}, &1))
+
+      merging_issue_ids =
+        if AutoMerge.enabled?(settings),
+          do: issues |> Enum.filter(&(AutoMerge.merging?(&1) and issue_in_repo?(&1, repo_key))) |> MapSet.new(& &1.id),
+          else: MapSet.new()
 
       discovered =
-        issues
-        |> Enum.filter(&match?(%Issue{}, &1))
-        |> Enum.count(&persist_discovered_review?(&1, runs, existing_by_issue, run_store, repo_key, now))
+        Enum.count(issues, &persist_discovered_review?(&1, runs, existing_by_issue, merging_issue_ids, run_store, repo_key, now))
 
-      {:ok, discovered}
+      {:ok, discovered, merging_issue_ids}
     end
   end
 
-  defp persist_discovered_review?(%Issue{} = issue, runs, existing_by_issue, run_store, repo_key, now) do
+  # The tracker returns `Merging` issues from every repository; only this repository's are landed
+  # here, so its auto-merge setting never applies to another's PRs. A missing repo_key means the
+  # primary repository, as in `Config.settings_for_repo/1`.
+  defp issue_in_repo?(%Issue{repo_key: issue_repo_key}, repo_key) when is_binary(issue_repo_key) and issue_repo_key != "",
+    do: issue_repo_key == repo_key
+
+  defp issue_in_repo?(%Issue{}, repo_key), do: repo_key == Config.repo_key_or_nil()
+
+  defp watched_states(settings) do
+    if AutoMerge.enabled?(settings), do: [@in_review_state, @merging_state], else: [@in_review_state]
+  end
+
+  defp persist_discovered_review?(%Issue{} = issue, runs, existing_by_issue, merging_issue_ids, run_store, repo_key, now) do
     existing = Map.get(existing_by_issue, issue.id)
 
-    case discover_review_record(issue, runs, existing, now) do
+    record =
+      discover_review_record(issue, runs, existing, now) ||
+        discover_auto_merge_record(issue, existing, merging_issue_ids, now)
+
+    case record do
       nil ->
         false
 
@@ -558,6 +584,31 @@ defmodule SymphonyElixir.PrReviewPoller do
   end
 
   defp discover_review_record(_issue, _runs, _existing, _now), do: nil
+
+  # Auto-merge owns every `Merging` issue with a PR (see AutoMerge.owns_issue?/2), so the
+  # poller must watch it even without a run to take the workspace from (run history reset,
+  # PR opened outside Symphony). GitHub calls run with `cwd: nil` and cleanup skips the
+  # workspace removal.
+  defp discover_auto_merge_record(%Issue{} = issue, nil, merging_issue_ids, now) do
+    with true <- Enum.member?(merging_issue_ids, issue.id),
+         pr_url when is_binary(pr_url) <- first_pr_url(issue) do
+      %{
+        issue_id: issue.id,
+        issue_identifier: issue.identifier,
+        issue_title: issue.title,
+        issue_url: issue.url,
+        pr_url: pr_url,
+        workspace_path: nil,
+        status: "watching",
+        inserted_at: now,
+        updated_at: now
+      }
+    else
+      _other -> nil
+    end
+  end
+
+  defp discover_auto_merge_record(_issue, _existing, _merging_issue_ids, _now), do: nil
 
   defp log_poll_action_warnings(%{actions: actions}) when is_list(actions) do
     Enum.each(actions, &log_poll_action_warning/1)
@@ -638,11 +689,15 @@ defmodule SymphonyElixir.PrReviewPoller do
     {attrs, latest_activity_at, unaddressed_comments} =
       review_activity_attrs(record, activity, ignored_users, now)
 
+    attrs = clear_auto_merge_fallback(attrs, record, opts)
+
     case review_action(record, activity, latest_activity_at, unaddressed_comments, ignored_users, settings, now) do
       :merged ->
-        record
-        |> maybe_capture_learnings(activity, settings, opts, now)
-        |> cleanup_review(opts, now, "merged")
+        with {:ok, record} <- finish_auto_merge(record, opts, now) do
+          record
+          |> maybe_capture_learnings(activity, settings, opts, now)
+          |> cleanup_review(opts, now, "merged")
+        end
 
       :closed ->
         cleanup_review(record, opts, now, "closed")
@@ -654,8 +709,17 @@ defmodule SymphonyElixir.PrReviewPoller do
         maybe_transition_rework(record, attrs, settings, opts, now)
 
       :conflict ->
-        maybe_transition_conflict(record, attrs, opts, now)
+        maybe_transition_conflict(record, put_auto_merge_conflict(attrs, record, activity, opts, now), opts, now)
 
+      action when action in [:approved, :stale, :watching] ->
+        if auto_merge_issue?(record, opts),
+          do: run_auto_merge(record, attrs, activity, settings, opts, now),
+          else: handle_review_action(action, record, attrs, opts, now)
+    end
+  end
+
+  defp handle_review_action(action, record, attrs, opts, now) do
+    case action do
       :approved ->
         maybe_transition_merge(record, attrs, opts, now)
 
@@ -664,6 +728,149 @@ defmodule SymphonyElixir.PrReviewPoller do
 
       :watching ->
         complete_review_update(opts, record, attrs, {:watching, Map.get(record, :issue_id)})
+    end
+  end
+
+  @doc """
+  The auto-merge state the poller keeps for the issue's PR (see `SymphonyElixir.AutoMerge`),
+  or nil when auto-merge hasn't handled it.
+  """
+  @spec auto_merge(String.t(), keyword()) :: AutoMerge.t() | nil
+  def auto_merge(issue_id, opts \\ []) when is_binary(issue_id) do
+    run_store = Keyword.get(opts, :run_store, RunStore)
+
+    Enum.find_value(repo_keys_from_opts(opts), fn repo_key ->
+      with {:ok, records} <- list_pr_reviews(run_store, repo_key),
+           %{auto_merge: %{} = auto_merge} <- Enum.find(records, &(Map.get(&1, :issue_id) == issue_id)) do
+        auto_merge
+      else
+        _other -> nil
+      end
+    end)
+  end
+
+  @doc "Every PR the poller is landing with auto-merge, with a short status for the dashboard."
+  @spec auto_merge_statuses(keyword()) :: [map()]
+  def auto_merge_statuses(opts \\ []) do
+    run_store = Keyword.get(opts, :run_store, RunStore)
+
+    repo_keys_from_opts(opts)
+    |> Enum.flat_map(fn repo_key ->
+      case list_pr_reviews(run_store, repo_key) do
+        {:ok, records} -> Enum.filter(records, &auto_merge_status?/1)
+        {:error, _reason} -> []
+      end
+    end)
+    |> Enum.map(fn record ->
+      auto_merge = Map.fetch!(record, :auto_merge)
+
+      %{
+        issue_id: Map.get(record, :issue_id),
+        issue_identifier: Map.get(record, :issue_identifier),
+        pr_url: Map.get(record, :pr_url),
+        state: auto_merge.state,
+        head_sha: Map.get(auto_merge, :head_sha),
+        status: AutoMerge.describe(auto_merge),
+        updated_at: Map.get(auto_merge, :updated_at)
+      }
+    end)
+    |> Enum.sort_by(&(&1.issue_identifier || &1.issue_id || ""))
+  end
+
+  defp auto_merge_status?(%{auto_merge: %{state: state}}) when is_binary(state), do: true
+  defp auto_merge_status?(_record), do: false
+
+  defp auto_merge_issue?(record, opts) do
+    MapSet.member?(Keyword.get(opts, :merging_issue_ids, MapSet.new()), Map.get(record, :issue_id))
+  end
+
+  # A fallback hands one stay in `Merging` to the landing agent. Once the issue leaves
+  # `Merging`, the next approval tries auto-merge again.
+  defp clear_auto_merge_fallback(attrs, record, opts) do
+    if AutoMerge.fallback?(Map.get(record, :auto_merge)) and not auto_merge_issue?(record, opts),
+      do: Map.put(attrs, :auto_merge, nil),
+      else: attrs
+  end
+
+  defp put_auto_merge_conflict(attrs, record, activity, opts, now) do
+    previous = Map.get(record, :auto_merge)
+
+    if auto_merge_issue?(record, opts) or AutoMerge.armed?(previous) do
+      auto_merge = AutoMerge.conflict(previous, Map.get(activity, :head_ref_oid), now)
+      AutoMerge.log_transition(record, previous, auto_merge)
+      Map.put(attrs, :auto_merge, auto_merge)
+    else
+      attrs
+    end
+  end
+
+  defp run_auto_merge(record, attrs, activity, settings, opts, now) do
+    issue_id = Map.get(record, :issue_id)
+
+    case AutoMerge.step(record, activity, settings, opts, now) do
+      {:ok, auto_merge} ->
+        complete_review_update(opts, record, Map.put(attrs, :auto_merge, auto_merge), {:auto_merge, issue_id, auto_merge.state})
+
+      {:conflict, auto_merge} ->
+        # GitHub couldn't merge the base branch in: same path as a conflict GitHub reports.
+        conflicted = Map.merge(activity, %{mergeable: @conflicting_mergeable, merge_state_status: @dirty_merge_state})
+
+        attrs =
+          attrs
+          |> maybe_put_conflict_attrs(record, conflicted, now)
+          |> Map.put(:auto_merge, auto_merge)
+
+        case conflict_review_action(record, conflicted) do
+          :conflict -> maybe_transition_conflict(record, attrs, opts, now)
+          _watching -> complete_review_update(opts, record, attrs, {:auto_merge, issue_id, auto_merge.state})
+        end
+
+      {:fallback, auto_merge} ->
+        attrs = Map.put(attrs, :auto_merge, auto_merge)
+
+        action = {:auto_merge, issue_id, "fallback"}
+
+        with ^action <- complete_review_update(opts, record, attrs, action) do
+          comment_auto_merge_fallback(record, auto_merge, opts)
+          action
+        end
+    end
+  end
+
+  defp comment_auto_merge_fallback(record, auto_merge, opts) do
+    tracker = Keyword.get(opts, :tracker, Tracker)
+    issue_id = Map.get(record, :issue_id)
+
+    case tracker.create_comment(issue_id, AutoMerge.fallback_comment(Map.get(record, :pr_url), auto_merge)) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Failed to comment the auto-merge fallback issue_id=#{issue_id}: #{inspect(reason)}")
+        :ok
+    end
+  end
+
+  # GitHub merged a PR Symphony was landing with auto-merge: move the issue to Done (Linear's
+  # GitHub integration may already have) before the usual merged cleanup.
+  defp finish_auto_merge(record, opts, now) do
+    previous = Map.get(record, :auto_merge)
+
+    if AutoMerge.armed?(previous) or auto_merge_issue?(record, opts) do
+      tracker = Keyword.get(opts, :tracker, Tracker)
+      issue_id = Map.get(record, :issue_id)
+
+      case tracker.update_issue_state(issue_id, @done_state) do
+        :ok ->
+          auto_merge = AutoMerge.merged(previous, now)
+          AutoMerge.log_transition(record, previous, auto_merge)
+          {:ok, Map.put(record, :auto_merge, auto_merge)}
+
+        {:error, reason} ->
+          record_transition_error(record, %{}, opts, now, "done", reason)
+      end
+    else
+      {:ok, record}
     end
   end
 
@@ -1140,10 +1347,16 @@ defmodule SymphonyElixir.PrReviewPoller do
         # steps; keep the record so the next poll cleans up after the run ends.
         {:cleanup_deferred, Map.get(record, :issue_id), reason}
 
+      no_workspace?(record) ->
+        finish_workspace_cleanup(record, opts, now, reason)
+
       true ->
         remove_review_workspace(workspace, record, opts, now, reason)
     end
   end
+
+  # Records discovered for auto-merge without a run have no workspace to remove.
+  defp no_workspace?(record), do: not match?(path when is_binary(path) and path != "", Map.get(record, :workspace_path))
 
   defp remove_review_workspace(workspace, record, opts, now, reason) do
     case workspace.remove(Map.get(record, :workspace_path), Map.get(record, :worker_host)) do
@@ -2838,6 +3051,7 @@ defmodule SymphonyElixir.PrReviewPoller do
   defp action_atom("rework"), do: :rework
   defp action_atom("merge"), do: :merge
   defp action_atom("conflict"), do: :conflict
+  defp action_atom("done"), do: :done
 
   defp schedule_poll(%State{} = state, delay_ms) when is_integer(delay_ms) and delay_ms >= 0 do
     if is_reference(state.timer_ref) do

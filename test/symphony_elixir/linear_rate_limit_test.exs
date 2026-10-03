@@ -318,6 +318,8 @@ defmodule SymphonyElixir.LinearRateLimitTest do
       assert pause_ms > 50_000
       assert %{window_resets_in_ms: window_resets_in_ms} = linear
       assert window_resets_in_ms > 3_000_000
+      assert %{usage: %{window_ms: 3_600_000, total: total, callers: callers}} = linear
+      assert total == callers |> Enum.map(& &1.requests) |> Enum.sum()
       assert RateLimit.requests_total() == requests_before
 
       plain = snapshot |> then(&Renderer.format_snapshot_content({:ok, &1}, 0.0)) |> strip_ansi()
@@ -365,17 +367,81 @@ defmodule SymphonyElixir.LinearRateLimitTest do
 
       log =
         capture_log(fn ->
-          assert {:noreply, %Orchestrator.State{running: running}} =
+          assert {:noreply, %Orchestrator.State{running: running} = updated_state} =
                    Orchestrator.handle_retry_issue_for_test(state, issue_id, 1, %{identifier: "MT-225"}, fn [^issue_id] ->
                      {:ok, [issue]}
                    end)
 
           assert running == %{}
+
+          # The retry stays queued for when the pause ends, at the same attempt.
+          assert %{attempt: 1, due_at_ms: due_at_ms, timer_ref: timer_ref, error: "waiting for Linear before dispatch: " <> _} =
+                   updated_state.retry_attempts[issue_id]
+
+          assert due_at_ms - System.monotonic_time(:millisecond) > 50_000
+          Process.cancel_timer(timer_ref)
         end)
 
       refute log =~ "issue refresh failed"
       assert RateLimit.requests_total() == requests_before
     end
+
+    test "a retry whose dispatch refresh times out stays queued at the same attempt" do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_api_token: "token",
+        tracker_endpoint: "http://127.0.0.1:9/graphql",
+        max_concurrent_agents: 1,
+        quality_gate: %{enabled: false}
+      )
+
+      {state, issue_id, retry} = retry_after_dispatch_refresh(2)
+
+      assert %{attempt: 2, due_at_ms: due_at_ms, delay_type: :linear_wait, error: error} = retry
+      assert error =~ "waiting for Linear before dispatch: {:linear_api_request, %Req.TransportError{"
+      assert_in_delta due_at_ms - System.monotonic_time(:millisecond), 5_000, 1_000
+      assert MapSet.member?(state.claimed, issue_id)
+    end
+
+    test "a retry whose dispatch refresh fails for good is rescheduled with the next attempt" do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_api_token: nil,
+        max_concurrent_agents: 1,
+        quality_gate: %{enabled: false}
+      )
+
+      {_state, _issue_id, retry} = retry_after_dispatch_refresh(2)
+
+      assert %{attempt: 3, delay_type: nil, error: "retry issue refresh failed: " <> _} = retry
+    end
+  end
+
+  # Runs a retry whose first refresh sees an active issue; the dispatch refresh
+  # that follows goes to the (unreachable or unconfigured) Linear endpoint.
+  defp retry_after_dispatch_refresh(attempt) do
+    issue_id = "issue-dispatch-refresh-#{System.unique_integer([:positive])}"
+    issue = %Issue{id: issue_id, identifier: "MT-322", title: "Dispatch", state: "Todo", assigned_to_worker: true}
+
+    state = %Orchestrator.State{
+      repo_key: "default",
+      max_concurrent_agents: 1,
+      claimed: MapSet.new([issue_id]),
+      codex_totals: @empty_codex_totals
+    }
+
+    capture_log(fn ->
+      assert {:noreply, %Orchestrator.State{running: running} = updated_state} =
+               Orchestrator.handle_retry_issue_for_test(state, issue_id, attempt, %{identifier: "MT-322"}, fn [^issue_id] ->
+                 {:ok, [issue]}
+               end)
+
+      assert running == %{}
+      assert %{timer_ref: timer_ref} = retry = updated_state.retry_attempts[issue_id]
+      Process.cancel_timer(timer_ref)
+      send(self(), {:dispatch_refresh_result, updated_state, retry})
+    end)
+
+    assert_received {:dispatch_refresh_result, updated_state, retry}
+    {updated_state, issue_id, retry}
   end
 
   test "agent tools explain the pause and when to retry" do

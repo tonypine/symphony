@@ -337,11 +337,13 @@ defmodule SymphonyElixir.CoreTest do
       pr_review_stale_days: 3,
       pr_review_ignored_users: ["symphony-bot", " agent-user "],
       pr_review_auto_reply: true,
-      pr_review_auto_request_review: true
+      pr_review_auto_request_review: true,
+      pr_review_auto_merge: false
     )
 
     config = Config.settings!()
     assert config.pr_review.mode == "polling"
+    assert config.pr_review.auto_merge == false
     assert config.pr_review.cooldown_minutes == 15
     assert config.pr_review.stale_days == 3
     assert config.pr_review.ignored_users == ["symphony-bot", "agent-user"]
@@ -355,6 +357,7 @@ defmodule SymphonyElixir.CoreTest do
 
     config = Config.settings!()
     assert config.pr_review.mode == "polling"
+    assert config.pr_review.auto_merge == true
     assert config.pr_review.cooldown_minutes == 10
     assert config.pr_review.stale_days == 7
     assert config.pr_review.ignored_users == []
@@ -1982,6 +1985,93 @@ defmodule SymphonyElixir.CoreTest do
     assert %{attempt: 1, due_at_ms: due_at_ms, error: error} = state.retry_attempts[issue_id]
     assert error =~ "failed to move post-PR issue to In Review: :rate_limited"
     assert_due_in_range(due_at_ms, 9_000, 10_500)
+  end
+
+  for {label, transient_error} <- [
+        rate_limit: {:linear_rate_limited, 1_791_000_030_000},
+        timeout: {:linear_api_request, %Req.TransportError{reason: :timeout}}
+      ] do
+    test "retry for active completed PR waits for Linear without backoff when moving to in review hits a #{label}" do
+      transient_error = unquote(Macro.escape(transient_error))
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        tracker_active_states: ["Todo", "In Progress", "Rework"],
+        tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
+      )
+
+      issue_id = "issue-post-pr-review-linear-#{unquote(label)}"
+      retry_token = make_ref()
+      last_ran_at = DateTime.utc_now()
+
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, {:error, transient_error})
+
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [
+        %Issue{
+          id: issue_id,
+          identifier: "MT-PR-REVIEW-FAIL",
+          title: "Post PR review update failure",
+          state: "In Progress",
+          pull_request_url: "https://github.com/example/repo/pull/125",
+          updated_at: DateTime.add(last_ran_at, -10, :second)
+        }
+      ])
+
+      on_exit(fn ->
+        Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
+        Application.delete_env(:symphony_elixir, :memory_tracker_update_issue_state_result)
+        Application.delete_env(:symphony_elixir, :memory_tracker_issues)
+      end)
+
+      orchestrator_name = Module.concat(__MODULE__, :"PostPrReviewLinearWait#{unquote(label)}Orchestrator")
+      {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+      on_exit(fn ->
+        if Process.alive?(pid) do
+          Process.exit(pid, :normal)
+        end
+      end)
+
+      initial_state = :sys.get_state(pid)
+
+      :sys.replace_state(pid, fn _ ->
+        initial_state
+        |> Map.put(:claimed, MapSet.new([issue_id]))
+        |> Map.put(:completed_run_metadata, %{
+          issue_id => %{
+            identifier: "MT-PR-REVIEW-FAIL",
+            pull_request_url: "https://github.com/example/repo/pull/125",
+            last_ran_at: last_ran_at
+          }
+        })
+        |> Map.put(:retry_attempts, %{
+          issue_id => %{
+            attempt: 1,
+            timer_ref: nil,
+            retry_token: retry_token,
+            due_at_ms: System.monotonic_time(:millisecond),
+            identifier: "MT-PR-REVIEW-FAIL"
+          }
+        })
+      end)
+
+      send(pid, {:retry_issue, issue_id, retry_token})
+
+      refute_receive {:memory_tracker_state_update, ^issue_id, "In Review"}, 100
+
+      state =
+        wait_for_orchestrator_state(pid, fn state ->
+          match?(%{error: "waiting for Linear to move post-PR issue to In Review" <> _}, state.retry_attempts[issue_id])
+        end)
+
+      assert MapSet.member?(state.claimed, issue_id)
+      refute Map.has_key?(state.watching, issue_id)
+      assert %{attempt: 1, due_at_ms: due_at_ms, error: error} = state.retry_attempts[issue_id]
+      refute error =~ "failed"
+      assert %{delay_type: :linear_wait} = state.retry_attempts[issue_id]
+      assert_due_in_range(due_at_ms, 4_000, 5_500)
+    end
   end
 
   test "abnormal worker exit increments retry attempt progressively" do
@@ -4837,6 +4927,64 @@ defmodule SymphonyElixir.CoreTest do
     )
   end
 
+  for {label, transient_error} <- [
+        rate_limit: {:linear_rate_limited, 1_791_000_030_000},
+        timeout: {:linear_api_request, %Req.TransportError{reason: :timeout}}
+      ] do
+    test "agent runner waits out a Linear #{label} on the post-turn refresh and continues in the same session" do
+      transient_error = unquote(Macro.escape(transient_error))
+      now_ms = 1_791_000_000_000
+      parent = self()
+
+      fetcher = fn _ids ->
+        fetches = Process.get(:linear_wait_fetches, 0) + 1
+        Process.put(:linear_wait_fetches, fetches)
+
+        case fetches do
+          1 -> {:error, transient_error}
+          2 -> {:ok, [%Issue{id: "issue-mcp-restart", identifier: "MT-MCP-RESTART", state: "In Progress"}]}
+          _later -> {:ok, [%Issue{id: "issue-mcp-restart", identifier: "MT-MCP-RESTART", state: "Done"}]}
+        end
+      end
+
+      log =
+        capture_log(fn ->
+          run_mcp_restart_issue!(
+            [{:ok, %{session_id: "sess-1"}}, {:ok, %{session_id: "sess-1"}}],
+            fn result ->
+              assert result == :ok
+              assert_receive {:mcp_restart_start_session, 1, _workspace, _opts}
+              assert_receive {:mcp_restart_run_turn, 1, %{session: 1}, _first_prompt}
+              assert_receive {:linear_wait_slept, delay_ms}
+              assert delay_ms == if(unquote(label) == :rate_limit, do: 30_000, else: 5_000)
+              assert_receive {:mcp_restart_run_turn, 2, %{session: 1}, _continuation_prompt}
+              refute_receive {:mcp_restart_start_session, 2, _workspace, _opts}, 50
+            end,
+            issue_state_fetcher: fetcher,
+            runner_opts: [
+              linear_retry_opts: [now_ms_fun: fn -> now_ms end, sleep_fun: &send(parent, {:linear_wait_slept, &1})]
+            ]
+          )
+        end)
+
+      assert log =~ "Linear refresh after turn failed for issue_id=issue-mcp-restart"
+      assert log =~ "in the same session"
+      refute log =~ "Agent run failed"
+    end
+  end
+
+  test "agent runner fails the run on a post-turn refresh error that is not transient" do
+    run_mcp_restart_issue!(
+      [{:ok, %{session_id: "sess-1"}}],
+      fn result ->
+        assert {:raise, %RuntimeError{message: message}} = result
+        assert message =~ "issue_state_refresh_failed"
+        refute_receive {:mcp_restart_run_turn, 2, _session, _prompt}, 50
+      end,
+      issue_state_fetcher: fn _ids -> {:error, :missing_linear_api_token} end
+    )
+  end
+
   test "agent runner continuation after a Claude review agent in the same workspace still has the Symphony MCP config" do
     # Ticket TP-275 repro: turn 1, then the pre-push review agent (a real Claude
     # runtime session in the same workspace, started and stopped), then the
@@ -4972,17 +5120,23 @@ defmodule SymphonyElixir.CoreTest do
 
       issue = %Issue{id: "issue-mcp-restart", identifier: "MT-MCP-RESTART", title: "MCP restart", state: "In Progress"}
 
+      default_fetcher = fn _ids ->
+        state = if Process.get(:mcp_restart_fetches, 0) >= 1, do: "Done", else: "In Progress"
+        Process.put(:mcp_restart_fetches, Process.get(:mcp_restart_fetches, 0) + 1)
+        {:ok, [%{issue | state: state}]}
+      end
+
       result =
         try do
-          AgentRunner.run(issue, self(),
-            workspace_path: workspace,
-            agent_module: McpRestartAgent,
-            issue_state_fetcher: fn _ids ->
-              state = if Process.get(:mcp_restart_fetches, 0) >= 1, do: "Done", else: "In Progress"
-              Process.put(:mcp_restart_fetches, Process.get(:mcp_restart_fetches, 0) + 1)
-              {:ok, [%{issue | state: state}]}
-            end,
-            issue_enricher: no_op_issue_enricher()
+          AgentRunner.run(
+            issue,
+            self(),
+            [
+              workspace_path: workspace,
+              agent_module: McpRestartAgent,
+              issue_state_fetcher: Keyword.get(opts, :issue_state_fetcher, default_fetcher),
+              issue_enricher: no_op_issue_enricher()
+            ] ++ Keyword.get(opts, :runner_opts, [])
           )
         rescue
           error -> {:raise, error}

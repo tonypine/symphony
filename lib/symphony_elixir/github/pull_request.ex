@@ -24,6 +24,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
           pr_title: String.t() | nil,
           pr_description: String.t() | nil,
           pr_author: String.t() | nil,
+          pr_node_id: String.t() | nil,
           state: String.t() | nil,
           review_decision: String.t() | nil,
           mergeable: String.t() | nil,
@@ -33,6 +34,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
           head_ref_oid: String.t() | nil,
           base_ref_oid: String.t() | nil,
           is_cross_repository: boolean() | nil,
+          auto_merge_enabled: boolean(),
           latest_activity_at: DateTime.t() | nil,
           latest_review_activity_at: DateTime.t() | nil,
           comments: [comment()]
@@ -167,6 +169,110 @@ defmodule SymphonyElixir.GitHub.PullRequest do
 
   def rerun_failed(_run_id, _opts), do: {:error, :invalid_run_id}
 
+  @typedoc "What a squash merge needs: the PR's GraphQL node id, the head it was checked at, and its title and body."
+  @type squash_request :: %{
+          pr_node_id: String.t(),
+          head_sha: String.t(),
+          pr_number: non_neg_integer() | nil,
+          pr_title: String.t() | nil,
+          pr_description: String.t() | nil
+        }
+
+  @enable_auto_merge_mutation """
+  mutation($pullRequestId: ID!, $expectedHeadOid: GitObjectID, $commitHeadline: String, $commitBody: String) {
+    enablePullRequestAutoMerge(input: {pullRequestId: $pullRequestId, mergeMethod: SQUASH, expectedHeadOid: $expectedHeadOid, commitHeadline: $commitHeadline, commitBody: $commitBody}) {
+      clientMutationId
+    }
+  }
+  """
+
+  @merge_mutation """
+  mutation($pullRequestId: ID!, $expectedHeadOid: GitObjectID, $commitHeadline: String, $commitBody: String) {
+    mergePullRequest(input: {pullRequestId: $pullRequestId, mergeMethod: SQUASH, expectedHeadOid: $expectedHeadOid, commitHeadline: $commitHeadline, commitBody: $commitBody}) {
+      clientMutationId
+    }
+  }
+  """
+
+  @doc """
+  Turns on GitHub auto-merge (squash, PR title and body) for the head in `request`. GitHub
+  refuses it for a PR that can already merge; that comes back as `{:error, :clean_status}`.
+  """
+  @spec enable_auto_merge(String.t(), squash_request(), keyword()) :: :ok | {:error, term()}
+  def enable_auto_merge(pr_url, request, opts \\ []) when is_binary(pr_url) and is_map(request) do
+    case squash_mutation(pr_url, @enable_auto_merge_mutation, request, opts) do
+      {:error, {:gh_failed, _args, _status, output}} = error ->
+        if clean_status_output?(output), do: {:error, :clean_status}, else: error
+
+      result ->
+        result
+    end
+  end
+
+  @doc "Squash-merges the PR now, only if its head is still the one in `request`."
+  @spec squash_merge(String.t(), squash_request(), keyword()) :: :ok | {:error, term()}
+  def squash_merge(pr_url, request, opts \\ []) when is_binary(pr_url) and is_map(request) do
+    squash_mutation(pr_url, @merge_mutation, request, opts)
+  end
+
+  @doc """
+  Merges the base branch into the PR branch on GitHub, only if the head is still
+  `expected_head_sha`. A merge conflict comes back as `{:error, :conflict}`.
+  """
+  @spec update_branch(String.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  def update_branch(pr_url, expected_head_sha, opts \\ []) when is_binary(pr_url) and is_binary(expected_head_sha) do
+    with {:ok, host, owner, repo, number} <- parse_github_pr_url(pr_url, opts),
+         args = github_api_args(host, "repos/#{owner}/#{repo}/pulls/#{number}/update-branch") ++ ["--method", "PUT", "-f", "expected_head_sha=#{expected_head_sha}"],
+         {:ok, _output} <- run_gh(args, opts) do
+      :ok
+    else
+      :error ->
+        {:error, :invalid_pr_url}
+
+      {:error, {:gh_failed, _args, _status, output}} = error ->
+        if merge_conflict_output?(output), do: {:error, :conflict}, else: error
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp squash_mutation(pr_url, mutation, request, opts) do
+    with {:ok, host, _owner, _repo, _number} <- parse_github_pr_url(pr_url, opts),
+         {:ok, _output} <- run_gh(github_api_args(host, "graphql") ++ squash_mutation_fields(mutation, request), opts) do
+      :ok
+    else
+      :error -> {:error, :invalid_pr_url}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp squash_mutation_fields(mutation, request) do
+    [
+      "-f",
+      "query=#{mutation}",
+      "-f",
+      "pullRequestId=#{Map.fetch!(request, :pr_node_id)}",
+      "-f",
+      "expectedHeadOid=#{Map.fetch!(request, :head_sha)}",
+      "-f",
+      "commitHeadline=#{squash_headline(request)}",
+      "-f",
+      "commitBody=#{Map.get(request, :pr_description) || ""}"
+    ]
+  end
+
+  # GitHub's own squash title: "<PR title> (#<number>)".
+  defp squash_headline(%{pr_title: title, pr_number: number}) when is_binary(title) and is_integer(number), do: "#{title} (##{number})"
+  defp squash_headline(%{pr_title: title}) when is_binary(title), do: title
+  defp squash_headline(_request), do: ""
+
+  defp clean_status_output?(output) when is_binary(output), do: output =~ ~r/clean status/i
+  defp clean_status_output?(_output), do: false
+
+  defp merge_conflict_output?(output) when is_binary(output), do: output =~ ~r/merge conflict/i
+  defp merge_conflict_output?(_output), do: false
+
   def post_inline_comment_reply(pr_url, comment_id, body, opts \\ [])
 
   @spec post_inline_comment_reply(term(), term(), term(), keyword()) :: {:ok, map()} | {:error, term()}
@@ -286,6 +392,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
          pr_title: Map.get(pr, "title"),
          pr_description: Map.get(pr, "body"),
          pr_author: get_in(pr, ["author", "login"]),
+         pr_node_id: normalize_id(Map.get(pr, "id")),
          state: Map.get(pr, "state"),
          review_decision: Map.get(pr, "reviewDecision"),
          mergeable: normalize_id(Map.get(pr, "mergeable")),
@@ -295,6 +402,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
          head_ref_oid: normalize_id(Map.get(pr, "headRefOid")),
          base_ref_oid: normalize_id(Map.get(pr, "baseRefOid")),
          is_cross_repository: Map.get(pr, "isCrossRepository"),
+         auto_merge_enabled: is_map(Map.get(pr, "autoMergeRequest")),
          latest_activity_at: latest_activity_at,
          latest_review_activity_at: latest_review_activity_at,
          comments: comments
@@ -342,7 +450,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
       "view",
       pr_url,
       "--json",
-      "number,state,reviewDecision,mergeable,mergeStateStatus,headRefName,baseRefName,headRefOid,baseRefOid,isCrossRepository,updatedAt,comments,reviews,title,body,url,author"
+      "id,number,state,reviewDecision,mergeable,mergeStateStatus,autoMergeRequest,headRefName,baseRefName,headRefOid,baseRefOid,isCrossRepository,updatedAt,comments,reviews,title,body,url,author"
     ]
 
     with {:ok, output} <- run_gh(args, opts),

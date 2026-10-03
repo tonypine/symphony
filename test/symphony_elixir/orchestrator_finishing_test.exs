@@ -114,6 +114,48 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
              state |> snapshot_of() |> Map.fetch!(:slot_waiting)
   end
 
+  test "with GitHub auto-merge on, a Merging ticket with a PR takes no slot and no agent", ctx do
+    write_finishing_workflow!(ctx, max_concurrent_agents: 2, pr_review_mode: "polling")
+    landing = issue("land-1", "MT-LAND", "Merging", pr_urls: ["https://github.com/acme/repo/pull/1"])
+    todo = issue("todo-1", "MT-TODO", "Todo")
+    tracked([landing, todo])
+
+    refute Orchestrator.should_dispatch_issue_for_test(landing, orchestrator_state(2))
+    refute Orchestrator.dispatch_revalidated_issue_for_test(landing, false)
+    refute Orchestrator.dispatch_revalidated_issue_for_test(landing, true)
+
+    state = Orchestrator.dispatch_chosen_issues_for_test([landing, todo], orchestrator_state(2))
+
+    assert Map.keys(state.running) == ["todo-1"]
+    assert state.slot_waiting == %{}
+
+    :ok =
+      RunStore.put_pr_review(%{
+        repo_key: "default",
+        issue_id: "land-1",
+        issue_identifier: "MT-LAND",
+        pr_url: "https://github.com/acme/repo/pull/1",
+        auto_merge: %{state: "enabled", head_sha: "abc1234def", updated_at: ~U[2026-10-03 12:00:00Z]}
+      })
+
+    assert [%{issue_identifier: "MT-LAND", state: "enabled", status: "auto-merge on, waiting for CI on `abc1234`"}] =
+             snapshot_of(state).auto_merge
+
+    # The PR poller fell back (auto-merge couldn't be enabled): the landing agent runs.
+    :ok = RunStore.update_pr_review("default", "land-1", %{auto_merge: %{state: "fallback", reason: "not allowed"}})
+
+    state = Orchestrator.dispatch_chosen_issues_for_test([landing], %{state | running: %{}})
+    assert %{run_profile: %{kind: :landing}} = state.running["land-1"]
+  end
+
+  test "with GitHub auto-merge on, a Merging ticket without a PR still gets the landing agent", ctx do
+    write_finishing_workflow!(ctx, max_concurrent_agents: 2, pr_review_mode: "polling")
+    landing = issue("land-1", "MT-LAND", "Merging")
+    tracked([landing])
+
+    assert Orchestrator.should_dispatch_issue_for_test(landing, orchestrator_state(2))
+  end
+
   test "a resume of Medium priority goes before an Urgent Todo when a slot frees", ctx do
     write_finishing_workflow!(ctx, max_concurrent_agents: 1)
     resume = issue("resume-1", "MT-RESUME", "In Progress", priority: 3)

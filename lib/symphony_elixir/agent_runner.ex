@@ -18,6 +18,8 @@ defmodule SymphonyElixir.AgentRunner do
     DependencyGate,
     GitHub.PullRequest,
     Linear.Issue,
+    Linear.TransientRetry,
+    Linear.Usage,
     Notifications,
     PromptBuilder,
     PrReviewPoller,
@@ -71,6 +73,7 @@ defmodule SymphonyElixir.AgentRunner do
 
     # The orchestrator owns host retries so one worker lifetime never hops machines.
     worker_host = selected_worker_host(Keyword.get(opts, :worker_host), settings.worker.ssh_hosts)
+    Usage.put_caller({:agent, Map.get(issue, :identifier)})
 
     Logger.info("Starting agent run for #{issue_context(issue)} worker_host=#{worker_host_for_log(worker_host)}")
 
@@ -1220,7 +1223,7 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp continue_with_issue?(%Issue{id: issue_id} = issue, issue_state_fetcher, opts) when is_binary(issue_id) do
-    case issue_state_fetcher.([issue_id]) do
+    case refresh_issue_state(issue, issue_state_fetcher, opts) do
       {:ok, [%Issue{} = refreshed_issue | _]} ->
         audit_linear_state_transition(issue, refreshed_issue, Keyword.get(opts, :run_id), opts)
 
@@ -1249,6 +1252,20 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp continue_with_issue?(issue, _issue_state_fetcher, _opts), do: {:done, issue}
+
+  # The turn is done; a rate limit or a dropped connection on this refresh says
+  # nothing about the run. Wait for Linear in this run and session instead of
+  # failing the run and starting a new session.
+  defp refresh_issue_state(%Issue{id: issue_id} = issue, issue_state_fetcher, opts) do
+    retry_opts =
+      opts
+      |> Keyword.get(:linear_retry_opts, [])
+      |> Keyword.put_new(:on_wait, fn reason, delay_ms ->
+        Logger.warning("Linear refresh after turn failed for #{issue_context(issue)}; retrying in #{delay_ms}ms in the same session reason=#{inspect(reason)}")
+      end)
+
+    TransientRetry.run(fn -> issue_state_fetcher.([issue_id]) end, retry_opts)
+  end
 
   defp waiting_on_sub_issues?(%Issue{} = issue) do
     settings = Config.settings!()
