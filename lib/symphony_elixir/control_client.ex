@@ -2,7 +2,9 @@ defmodule SymphonyElixir.ControlClient do
   @moduledoc """
   Client for the Symphony daemon's operator controls: pause, resume, stop,
   and PR dispatch. Talks to the HTTP control plane at
-  `POST /api/v1/control/*` so the CLI does not need distributed Erlang.
+  `POST /api/v1/control/*` so the CLI does not need distributed Erlang. It also
+  fetches the terminal dashboard frame (`GET /api/v1/state?format=terminal`)
+  for `symphony dashboard`.
 
   Calls invoked from inside the daemon BEAM (e.g. tests, attached IEx)
   short-circuit to the in-process `SymphonyElixir.Orchestrator` GenServer
@@ -15,6 +17,7 @@ defmodule SymphonyElixir.ControlClient do
   @url_env "SYMPHONY_CONTROL_URL"
   @token_env "SYMPHONY_CONTROL_TOKEN"
   @control_path "/api/v1/control/"
+  @state_path "/api/v1/state"
 
   @type control_result :: {:ok, map()} | :unavailable | {:error, term()}
 
@@ -39,6 +42,38 @@ defmodule SymphonyElixir.ControlClient do
     invoke(:dispatch_pr, [target, pr_opts], "dispatch_pr", body_for_pr(target, pr_opts), opts)
   end
 
+  @doc """
+  Fetches the running Symphony's terminal dashboard, rendered for `columns`
+  (the server's default width when nil). Always goes over HTTP.
+  """
+  @spec dashboard_frame(pos_integer() | nil, keyword()) :: {:ok, String.t()} | :unavailable | {:error, term()}
+  def dashboard_frame(columns, opts \\ []) do
+    with {:ok, token} <- resolve_token(opts) do
+      query = URI.encode_query(Enum.reject([format: "terminal", columns: columns], &is_nil(elem(&1, 1))))
+      url = control_url(opts) <> @state_path <> "?" <> query
+      getter = Keyword.get(opts, :http_get, &default_get/2)
+
+      case getter.(url, token) do
+        {:ok, 200, frame} when is_binary(frame) -> {:ok, frame}
+        {:ok, 503, _payload} -> :unavailable
+        {:ok, status, payload} -> {:error, {:http_status, status, payload}}
+        {:error, reason} -> {:error, {:connection_failed, reason}}
+      end
+    end
+  end
+
+  @doc """
+  The control plane URL the client talks to: `:control_url`, then
+  `SYMPHONY_CONTROL_URL`, then the URL the running Symphony wrote.
+  """
+  @spec control_url(keyword()) :: String.t()
+  def control_url(opts \\ []) do
+    Keyword.get(opts, :control_url) ||
+      System.get_env(@url_env) ||
+      ControlUrl.read() ||
+      @default_url
+  end
+
   defp invoke(function, args, path_suffix, body, opts) do
     if Keyword.get(opts, :prefer_local?, true) and local_orchestrator_alive?() do
       apply(Orchestrator, function, args)
@@ -56,7 +91,7 @@ defmodule SymphonyElixir.ControlClient do
 
   defp remote_post(path_suffix, body, opts) do
     with {:ok, token} <- resolve_token(opts) do
-      url = resolve_url(opts) <> @control_path <> path_suffix
+      url = control_url(opts) <> @control_path <> path_suffix
       poster = Keyword.get(opts, :http_post, &default_post/3)
 
       case poster.(url, body, token) do
@@ -68,13 +103,6 @@ defmodule SymphonyElixir.ControlClient do
         {:error, reason} -> {:error, {:connection_failed, reason}}
       end
     end
-  end
-
-  defp resolve_url(opts) do
-    Keyword.get(opts, :control_url) ||
-      System.get_env(@url_env) ||
-      ControlUrl.read() ||
-      @default_url
   end
 
   defp resolve_token(opts) do
@@ -112,6 +140,22 @@ defmodule SymphonyElixir.ControlClient do
            headers: [{"authorization", "Bearer " <> token}],
            connect_options: [timeout: 5_000],
            receive_timeout: 15_000
+         ) do
+      {:ok, %Req.Response{status: status, body: payload}} -> {:ok, status, payload}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # No retries: the dashboard polls again a second later anyway.
+  defp default_get(url, token) do
+    {:ok, _started} = Application.ensure_all_started(:req)
+
+    case Req.get(url,
+           headers: [{"authorization", "Bearer " <> token}],
+           decode_body: false,
+           retry: false,
+           connect_options: [timeout: 2_000],
+           receive_timeout: 5_000
          ) do
       {:ok, %Req.Response{status: status, body: payload}} -> {:ok, status, payload}
       {:error, reason} -> {:error, reason}

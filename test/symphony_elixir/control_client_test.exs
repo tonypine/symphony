@@ -198,6 +198,63 @@ defmodule SymphonyElixir.ControlClientTest do
     assert_received {:posted, "http://persisted:5555/api/v1/control/resume", _body, "persisted-token"}
   end
 
+  describe "dashboard_frame/2" do
+    defp stub_get(parent, result) do
+      fn url, token ->
+        send(parent, {:got, url, token})
+        result
+      end
+    end
+
+    defp dashboard_opts(parent, result) do
+      [control_url: "http://127.0.0.1:9999", control_token: "test-token", http_get: stub_get(parent, result)]
+    end
+
+    test "GETs the terminal frame for the given width with the bearer token" do
+      parent = self()
+
+      assert {:ok, "frame"} = ControlClient.dashboard_frame(132, dashboard_opts(parent, {:ok, 200, "frame"}))
+      assert_received {:got, "http://127.0.0.1:9999/api/v1/state?format=terminal&columns=132", "test-token"}
+
+      assert {:ok, "frame"} = ControlClient.dashboard_frame(nil, dashboard_opts(parent, {:ok, 200, "frame"}))
+      assert_received {:got, "http://127.0.0.1:9999/api/v1/state?format=terminal", "test-token"}
+    end
+
+    test "maps 503, other statuses and transport errors" do
+      parent = self()
+
+      assert :unavailable = ControlClient.dashboard_frame(80, dashboard_opts(parent, {:ok, 503, %{}}))
+
+      assert {:error, {:http_status, 401, %{"error" => "no"}}} =
+               ControlClient.dashboard_frame(80, dashboard_opts(parent, {:ok, 401, %{"error" => "no"}}))
+
+      assert {:error, {:connection_failed, :econnrefused}} =
+               ControlClient.dashboard_frame(80, dashboard_opts(parent, {:error, :econnrefused}))
+    end
+
+    test "needs a control token" do
+      assert {:error, :control_token_unavailable} =
+               ControlClient.dashboard_frame(80, control_url: "http://127.0.0.1:9999")
+    end
+
+    test "reaches a real control plane over HTTP" do
+      assert {:error, {:connection_failed, _reason}} =
+               ControlClient.dashboard_frame(80, control_url: "http://127.0.0.1:1", control_token: "t")
+    end
+  end
+
+  test "control_url prefers the option, then SYMPHONY_CONTROL_URL, then the persisted URL" do
+    assert ControlClient.control_url() == "http://127.0.0.1:4000"
+
+    File.mkdir_p!(Path.dirname(Paths.control_url_file()))
+    File.write!(Paths.control_url_file(), "http://persisted:5555\n")
+    assert ControlClient.control_url() == "http://persisted:5555"
+
+    System.put_env("SYMPHONY_CONTROL_URL", "http://from-env:1234")
+    assert ControlClient.control_url() == "http://from-env:1234"
+    assert ControlClient.control_url(control_url: "http://option:1") == "http://option:1"
+  end
+
   defp restore(name, nil), do: System.delete_env(name)
   defp restore(name, value), do: System.put_env(name, value)
 end

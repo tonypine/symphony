@@ -1,8 +1,8 @@
 # Symphony menu bar app
 
 Symphony for macOS is a menu bar app, `Symphony.app`. Its menu shows Symphony's status, and has Start
-Symphony, Stop Symphony, Restart Symphony, Pause Dispatch, Resume Dispatch, Open Dashboard, Open Logs,
-Check for Updates…, Settings… and Quit.
+Symphony, Stop Symphony, Restart Symphony, Pause Dispatch, Resume Dispatch, Open Dashboard, Open Dashboard in
+Terminal, Open Logs, Check for Updates…, Settings… and Quit.
 
 The app runs Symphony with your `symphony.yml`, the same as running it from a terminal. A release carries a
 self-contained Symphony binary at `Contents/Resources/symphony` (see [Releasing](../docs/releasing.md)), so
@@ -130,6 +130,10 @@ app opens" in Settings (see [Launch at Login](#launch-at-login)).
   continue. The pause is kept across restarts.
 - **Resume Dispatch** lets Symphony pick up new issues again.
 - **Open Dashboard** opens the dashboard in the browser, and **Open Logs** opens Symphony's output log.
+- **Open Dashboard in Terminal** opens a Terminal window running `symphony dashboard`: the live terminal
+  dashboard (running agents, retry queue, recent events) of the Symphony the app watches. It runs the same
+  binary as Start (`bin/symphony` from the checkout in Development mode). Press `q` or Ctrl-C, or close the
+  window, to quit; Symphony keeps running.
 - **Check for Updates…** looks for a newer Symphony release. When there is one, the menu shows
   **Update available: vX (N changes)**, **Update to vX** and **Release Notes…**.
 - **Update to vX** downloads and verifies the release, waits for agent runs like Restart, then swaps the app
@@ -212,7 +216,8 @@ mise's shims or the Homebrew folders above. A shim picks the tool version each r
 run `mise reshim` so the shim exists, then restart Symphony.
 
 - Output goes to `~/Library/Logs/symphony/menubar-child.log`. Each start moves the previous log to
-  `menubar-child.log.1`.
+  `menubar-child.log.1`. The log holds log lines only: Symphony doesn't draw its terminal dashboard into a
+  file.
 - Symphony runs in its own process group. Stop sends SIGTERM to the group and SIGKILL after the stop
   timeout. Agent CLIs run in their own sessions (Erlang starts port programs that way), so the app also
   tracks Symphony's process tree and kills anything still left once Symphony exits.

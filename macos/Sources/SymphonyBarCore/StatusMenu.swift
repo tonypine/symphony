@@ -107,8 +107,10 @@ public enum StatusMenu {
         }
     }
 
-    /// Titles of the menu items that open Symphony's dashboard in the browser and its log.
+    /// Titles of the menu items that open Symphony's dashboard in the browser, its terminal dashboard in
+    /// Terminal, and its log.
     public static let openDashboardTitle = "Open Dashboard"
+    public static let openTerminalDashboardTitle = "Open Dashboard in Terminal"
     public static let openLogsTitle = "Open Logs"
 
     /// Title of the menu item that starts Symphony.
