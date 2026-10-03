@@ -15,7 +15,8 @@ public struct SpawnError: LocalizedError, Equatable, CustomStringConvertible {
 ///
 /// It runs in its own process group, with stdin from /dev/null and stdout and stderr appended to a log file.
 /// Stopping sends SIGTERM to the group and SIGKILL after the timeout. Once the process exits, anything left in
-/// its group, and the descendants it was last seen with (agent CLIs run in their own sessions), is killed.
+/// its group, and every descendant it was seen with that still runs (agent CLIs run in their own sessions), is
+/// killed.
 ///
 /// Use it only from `queue`; `onExit` is called there, once.
 public final class ChildProcess {
@@ -94,10 +95,16 @@ public final class ChildProcess {
         }
     }
 
+    /// Records the current descendants, keeping earlier ones that still run. A process whose parent exits is
+    /// reparented to launchd and drops out of the tree, and that includes the moment Symphony itself exits:
+    /// a refresh between the exit and `handleExit` must not forget what is left to kill.
     private func refreshDescendants() {
         let table = ProcessTree.snapshot()
         guard !table.isEmpty else { return }
-        descendants = ProcessTree.descendants(of: pid, in: table)
+        let current = ProcessTree.descendants(of: pid, in: table)
+        let currentPIDs = Set(current.map(\.pid))
+        let orphaned = ProcessTree.survivors(of: descendants, in: table).filter { !currentPIDs.contains($0.pid) }
+        descendants = current + orphaned
     }
 
     private func handleExit() {
