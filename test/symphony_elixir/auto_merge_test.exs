@@ -388,6 +388,40 @@ defmodule SymphonyElixir.AutoMergeTest do
     refute AutoMerge.owns_issue?(%{merging | repo_key: "missing-repo"})
   end
 
+  test "each repository's poll lands only its own Merging issues" do
+    now = ~U[2026-10-03 12:00:00Z]
+    other_workflow = Path.join(Path.dirname(Workflow.workflow_file_path()), "OTHER_WORKFLOW.md")
+    File.write!(other_workflow, "Other repository.\n")
+
+    write_auto_merge_workflow!(
+      repos: [
+        %{key: @repo_key, workflow: Workflow.workflow_file_path(), default: true, team: "Test"},
+        %{key: "other", workflow: other_workflow, team: "Other"}
+      ]
+    )
+
+    other = %{issue("Merging") | repo_key: "other"}
+    track([other])
+    activity(head: "head-1", merge_state: "BLOCKED")
+
+    assert {:ok, %{discovered: 0, actions: []}} = poll(now, repo_key: @repo_key)
+    refute_received {:enable_auto_merge, _pr_url, _request}
+
+    # Polling every repository adopts and lands the PR once, under its own repository.
+    capture_log(fn -> assert {:ok, %{discovered: 1, actions: [{:auto_merge, @issue_id, "enabled"}]}} = poll(now) end)
+    assert_received {:enable_auto_merge, @pr_url, _request}
+    refute_received {:enable_auto_merge, _pr_url, _request}
+    assert RunStore.list_pr_reviews(@repo_key) == []
+    assert [%{issue_id: @issue_id}] = RunStore.list_pr_reviews("other")
+
+    # An issue without a repo_key belongs to the primary repository.
+    :ok = RunStore.delete_pr_review("other", @issue_id)
+    track([%{other | repo_key: nil}])
+    assert {:ok, %{discovered: 0}} = poll(now, repo_key: "other")
+    capture_log(fn -> assert {:ok, %{discovered: 1}} = poll(now, repo_key: @repo_key) end)
+    assert [%{issue_id: @issue_id}] = RunStore.list_pr_reviews(@repo_key)
+  end
+
   test "status helpers" do
     now = ~U[2026-10-03 12:00:00Z]
 
@@ -436,7 +470,8 @@ defmodule SymphonyElixir.AutoMergeTest do
     def enable_auto_merge(_pr_url, _request, _opts), do: {:error, String.duplicate("x", 400)}
   end
 
-  defp poll(now), do: PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now, current_gh_user: "operator")
+  defp poll(now, opts \\ []),
+    do: PrReviewPoller.poll_once([tracker: FakeTracker, github: FakeGitHub, now: now, current_gh_user: "operator"] ++ opts)
 
   defp write_auto_merge_workflow!(overrides \\ []) do
     write_workflow_file!(

@@ -1666,7 +1666,8 @@ The poller:
 Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `enabled: true`):
 
 - The PR review poller also tracks PRs of issues in `Merging`, including ones with no run on record
-  (the record then has no workspace, and cleanup removes none). The orchestrator MUST NOT dispatch a
+  (the record then has no workspace, and cleanup removes none). Each repository's poll tracks only
+  its own `Merging` issues (an issue with no repository belongs to the primary one). The orchestrator MUST NOT dispatch a
   `Merging` issue with an attached PR while auto-merge owns it; it takes no slot and no agent.
 - On each poll of an open `Merging` PR, the poller MUST turn on auto-merge (GraphQL
   `enablePullRequestAutoMerge`, `SQUASH`, the PR title as `<title> (#<number>)` and its body,

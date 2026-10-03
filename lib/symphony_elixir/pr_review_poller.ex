@@ -493,7 +493,7 @@ defmodule SymphonyElixir.PrReviewPoller do
 
       merging_issue_ids =
         if AutoMerge.enabled?(settings),
-          do: issues |> Enum.filter(&AutoMerge.merging?/1) |> MapSet.new(& &1.id),
+          do: issues |> Enum.filter(&(AutoMerge.merging?(&1) and issue_in_repo?(&1, repo_key))) |> MapSet.new(& &1.id),
           else: MapSet.new()
 
       discovered =
@@ -502,6 +502,14 @@ defmodule SymphonyElixir.PrReviewPoller do
       {:ok, discovered, merging_issue_ids}
     end
   end
+
+  # The tracker returns `Merging` issues from every repository; only this repository's are landed
+  # here, so its auto-merge setting never applies to another's PRs. A missing repo_key means the
+  # primary repository, as in `Config.settings_for_repo/1`.
+  defp issue_in_repo?(%Issue{repo_key: issue_repo_key}, repo_key) when is_binary(issue_repo_key) and issue_repo_key != "",
+    do: issue_repo_key == repo_key
+
+  defp issue_in_repo?(%Issue{}, repo_key), do: repo_key == Config.repo_key_or_nil()
 
   defp watched_states(settings) do
     if AutoMerge.enabled?(settings), do: [@in_review_state, @merging_state], else: [@in_review_state]
