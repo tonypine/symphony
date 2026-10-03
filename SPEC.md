@@ -1083,7 +1083,9 @@ Fields:
   `enabled`; a new kind needs `paths` and `prompt`. The built-in `macos_app` kind also takes
   `build` (shell command run in the QA worktree), `app` (the `.app` bundle path relative to the
   repo root) and `build_timeout_ms` (default `900000`), and is off unless `build` and `app` are
-  set.
+  set. The built-in `web` kind also takes `browser_mcp` (an MCP server definition, the shape of
+  an `agent.mcp.servers` entry) and is off unless `verification.enabled` is true and
+  `verification.dev_server.start_cmd` is set.
 - `worker_host` (string, optional): an SSH host (`user@host` or `host:port`, the form
   `workers.ssh_hosts` uses) where the `macos_app` playbook's `qa_*` tools run instead of the
   Symphony host. It does not need to be, and should not be, listed in `workers.ssh_hosts`.
@@ -1113,7 +1115,19 @@ When enabled:
   `## User walkthrough` section in the issue. No selected playbook means skip. The built-in `cli`
   playbook triggers on `bin/**`, `lib/symphony_elixir/cli.ex` and `lib/mix/tasks/**`; the built-in
   `macos_app` playbook on `**/*.swift`, `**/Info.plist`, `**/*.xib`, `**/*.storyboard` and
-  `**/*.xcassets/**`.
+  `**/*.xcassets/**`; the built-in `web` playbook on `lib/*_web/**`, `lib/*_web.ex`,
+  `priv/static/**`, `assets/**` and `.heex`, `.html`, `.css`, `.scss`, `.jsx`, `.tsx`, `.vue` and
+  `.svelte` files.
+- A pass that runs the `web` playbook MUST start `verification.dev_server` on a port from the
+  verification port pool, from its own worktree at the PR head (never the agent's), before the
+  agent starts, give the agent its URL, and stop it, release the port and remove that worktree
+  when the pass ends. A dev server that does not start or fails its health check MUST make the
+  pass `blocked`, not `fail`, without starting the agent. Only that QA session
+  gets a `browser` MCP server: `browser_mcp` when set, otherwise headless Playwright MCP limited
+  to the dev server's localhost origins and writing into `qa-evidence/`. The default server MUST
+  run an exact, pinned package version and MUST NOT download it during a pass; when `npx` or the
+  pinned package is missing the pass MUST be `blocked` without starting the agent. With
+  `agent.network_access.mode: allowlist` the session also allows `localhost` and `127.0.0.1`.
 - A pass that runs the `macos_app` playbook also gets host-side `qa_*` tools, executed by Symphony
   outside the agent sandbox: `qa_build` (only the configured `build`, refused when the worktree has
   changes outside `qa-evidence/`, including gitignored files that were not there after the last
@@ -1538,7 +1552,7 @@ not require recognizing or validating extension fields unless that extension is 
 - `auto_review.max_fix_attempts`: integer, default `2`
 - `auto_review.run_on`: `every_push` or `first_pass`, default `every_push`
 - `auto_review.skip_globs`: list of strings, default `[]`
-- `auto_review.playbooks`: map, default `{}`
+- `auto_review.playbooks`: map, default `{}` (built-in kinds `cli`, `macos_app`, `web`)
 - `notifications.enabled`: boolean, default `false`
 - `notifications.redact_titles`: boolean, default `false`
 - `notifications.channels`: list of Slack/webhook channel configs, default `[]`

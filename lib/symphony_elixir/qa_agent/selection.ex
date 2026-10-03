@@ -18,7 +18,10 @@ defmodule SymphonyElixir.QaAgent.Selection do
 
   The built-in `macos_app` playbook is on only when its config names the `build`
   command and the `app` bundle (relative to the repo root) that the host-side
-  `qa_*` tools of `SymphonyElixir.QaDriver` build and launch.
+  `qa_*` tools of `SymphonyElixir.QaDriver` build and launch. The built-in `web`
+  playbook is on only when `verification.dev_server` is configured
+  (`dev_server?: true`), since its pass drives that server in a browser; its
+  optional `browser_mcp` replaces the default Playwright MCP server.
   """
 
   alias SymphonyElixir.Linear.Issue
@@ -48,7 +51,7 @@ defmodule SymphonyElixir.QaAgent.Selection do
   )
 
   @source_root Path.expand(Path.join([__DIR__, "..", "..", "..", "priv", "qa_playbooks"]))
-  @built_in_kinds ~w(cli macos_app)
+  @built_in_kinds ~w(cli macos_app web)
 
   for kind <- @built_in_kinds do
     @external_resource Path.join(@source_root, kind <> ".md")
@@ -60,7 +63,21 @@ defmodule SymphonyElixir.QaAgent.Selection do
 
   @built_in_paths %{
     "cli" => ["bin/**", "lib/symphony_elixir/cli.ex", "lib/mix/tasks/**"],
-    "macos_app" => ["**/*.swift", "**/Info.plist", "**/*.xib", "**/*.storyboard", "**/*.xcassets/**"]
+    "macos_app" => ["**/*.swift", "**/Info.plist", "**/*.xib", "**/*.storyboard", "**/*.xcassets/**"],
+    "web" => [
+      "lib/*_web/**",
+      "lib/*_web.ex",
+      "priv/static/**",
+      "assets/**",
+      "**/*.heex",
+      "**/*.html",
+      "**/*.css",
+      "**/*.scss",
+      "**/*.jsx",
+      "**/*.tsx",
+      "**/*.vue",
+      "**/*.svelte"
+    ]
   }
 
   # Playbooks that need host-side settings before they can run.
@@ -75,15 +92,20 @@ defmodule SymphonyElixir.QaAgent.Selection do
           required(:prompt) => String.t(),
           optional(:build) => String.t(),
           optional(:app) => String.t(),
-          optional(:build_timeout_ms) => pos_integer() | nil
+          optional(:build_timeout_ms) => pos_integer() | nil,
+          optional(:browser_mcp) => map() | nil
         }
   @type decision :: {:run, [playbook()]} | {:skip, String.t()}
 
-  @doc "Selects playbooks for `issue` given the PR's changed paths and `auto_review` config."
-  @spec decide(Issue.t(), [String.t()], map()) :: decision()
-  def decide(%Issue{} = issue, changed_paths, auto_review) when is_list(changed_paths) do
+  @doc """
+  Selects playbooks for `issue` given the PR's changed paths and `auto_review` config.
+  `dev_server?: true` says `verification.dev_server` is configured, which the `web`
+  playbook needs.
+  """
+  @spec decide(Issue.t(), [String.t()], map(), keyword()) :: decision()
+  def decide(%Issue{} = issue, changed_paths, auto_review, opts \\ []) when is_list(changed_paths) do
     labels = issue |> Issue.label_names() |> Enum.map(&normalize_label/1)
-    playbooks = playbooks(auto_review)
+    playbooks = playbooks(auto_review, opts)
     skip_globs = Map.get(auto_review, :skip_globs) || []
 
     cond do
@@ -121,8 +143,9 @@ defmodule SymphonyElixir.QaAgent.Selection do
   end
 
   @doc "The enabled playbooks: built-ins with config overrides, plus config-defined kinds."
-  @spec playbooks(map()) :: [playbook()]
-  def playbooks(auto_review) do
+  @spec playbooks(map(), keyword()) :: [playbook()]
+  def playbooks(auto_review, opts \\ []) do
+    dev_server? = Keyword.get(opts, :dev_server?, false)
     overrides = stringify_keys(Map.get(auto_review, :playbooks) || %{})
 
     custom_kinds =
@@ -132,22 +155,25 @@ defmodule SymphonyElixir.QaAgent.Selection do
       |> Enum.sort()
 
     (@built_in_kinds ++ custom_kinds)
-    |> Enum.flat_map(&build_playbook(&1, Map.get(overrides, &1)))
+    |> Enum.flat_map(&build_playbook(&1, Map.get(overrides, &1), dev_server?))
   end
 
-  defp build_playbook(kind, override) do
+  defp build_playbook(kind, override, dev_server?) do
     override = if is_map(override), do: stringify_keys(override), else: %{}
     prompt = string_value(Map.get(override, "prompt")) || Map.get(@built_in_prompts, kind)
     paths = string_list(Map.get(override, "paths")) || Map.get(@built_in_paths, kind, [])
 
     cond do
       Map.get(override, "enabled") == false or is_nil(prompt) -> []
-      not required_settings?(kind, override) -> []
+      not required_settings?(kind, override, dev_server?) -> []
       true -> [put_host_settings(%{kind: kind, paths: paths, prompt: prompt}, kind, override)]
     end
   end
 
-  defp required_settings?(kind, override) do
+  # The `web` playbook drives the verification dev server, so it needs one configured.
+  defp required_settings?("web", _override, dev_server?), do: dev_server?
+
+  defp required_settings?(kind, override, _dev_server?) do
     @required_settings
     |> Map.get(kind, [])
     |> Enum.all?(&string_value(Map.get(override, &1)))
@@ -161,6 +187,13 @@ defmodule SymphonyElixir.QaAgent.Selection do
       app: Map.fetch!(override, "app"),
       build_timeout_ms: if(is_integer(timeout) and timeout > 0, do: timeout)
     })
+  end
+
+  defp put_host_settings(playbook, "web", override) do
+    case Map.get(override, "browser_mcp") do
+      %{} = browser_mcp -> Map.put(playbook, :browser_mcp, stringify_keys(browser_mcp))
+      _default -> playbook
+    end
   end
 
   defp put_host_settings(playbook, _kind, _override), do: playbook

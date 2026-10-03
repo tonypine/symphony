@@ -103,7 +103,7 @@ defmodule SymphonyElixir.Verification.DevServer do
             dev_server_pgid: metadata.pgid
           })
 
-        health_url = interpolate_port(config.health_check_url, port)
+        health_url = Verification.interpolate_port(config.health_check_url, port)
 
         case wait_for_health(health_url, config.health_timeout_ms) do
           :ok ->
@@ -329,14 +329,6 @@ defmodule SymphonyElixir.Verification.DevServer do
     end
   rescue
     _exception -> false
-  end
-
-  defp interpolate_port(value, port) when is_binary(value) do
-    port = to_string(port)
-
-    value
-    |> String.replace("${#{Verification.env_var()}}", port)
-    |> String.replace("$#{Verification.env_var()}", port)
   end
 
   defp stop_process(%{port_handle: nil}), do: :ok
