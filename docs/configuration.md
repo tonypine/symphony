@@ -903,7 +903,8 @@ Symphony opens the helper again for the next QA pass, so you don't need to resta
 release `Symphony.app` signs the helper with the same certificate every time, so the grants survive
 app updates. A locally built app (`make` in `macos/`) and the helper built from a terminal are
 signed ad hoc: macOS asks again after each rebuild, and after each Symphony version that changes
-the helper.
+the helper. Both are signed with the hardened runtime, so code injected with
+`DYLD_INSERT_LIBRARIES` does not load into the helper and can't use its grants.
 
 Without a grant the tools return `qa_permission_missing`, the QA agent answers `blocked` with the
 missing permission as the reason, and the issue goes to `In Review` with that reason in the QA

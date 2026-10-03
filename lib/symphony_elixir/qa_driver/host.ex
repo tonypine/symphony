@@ -36,7 +36,14 @@ defmodule SymphonyElixir.QaDriver.Host do
   @external_resource @plist_path
   @source File.read!(@source_path)
   @plist File.read!(@plist_path)
-  @source_hash :sha256 |> :crypto.hash(@source <> @plist) |> Base.encode16(case: :lower) |> binary_part(0, 16)
+  # Hardened runtime: dyld ignores DYLD_INSERT_LIBRARIES, so no other code runs
+  # with the helper's grants. The flags are hashed too, so a helper signed
+  # differently is rebuilt rather than reused.
+  @codesign_args ["--force", "--options", "runtime", "--sign", "-"]
+  @source_hash :sha256
+               |> :crypto.hash([@source, @plist | @codesign_args])
+               |> Base.encode16(case: :lower)
+               |> binary_part(0, 16)
   @app_name "SymphonyQADriver.app"
   @executable "symphony-qa-driver"
   @app_env "SYMPHONY_QA_DRIVER_APP"
@@ -168,7 +175,7 @@ defmodule SymphonyElixir.QaDriver.Host do
          :ok <- File.write(Path.join(contents, "Info.plist"), @plist),
          {:ok, {_output, 0}} <-
            cmd(swiftc, ["-O", "-o", Path.join([contents, "MacOS", @executable]), source], env: AgentEnv.build(), timeout_ms: @compile_timeout_ms),
-         {:ok, {_output, 0}} <- cmd("/usr/bin/codesign", ["--force", "--sign", "-", staging], timeout_ms: @compile_timeout_ms) do
+         {:ok, {_output, 0}} <- cmd("/usr/bin/codesign", @codesign_args ++ [staging], timeout_ms: @compile_timeout_ms) do
       publish(staging, app)
     else
       {:ok, {output, status}} ->

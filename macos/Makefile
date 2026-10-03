@@ -25,6 +25,9 @@ MINISIGN_PUBLIC_KEY ?=
 
 all: app
 
+# The QA helper is signed with the hardened runtime, so dyld ignores
+# DYLD_INSERT_LIBRARIES and no other code runs with its Accessibility and Screen
+# Recording grants. It needs no entitlements: both are TCC grants.
 app:
 	swift build $(SWIFT_FLAGS) -c $(CONFIG) --product $(EXECUTABLE)
 	rm -rf "$(APP)"
@@ -37,7 +40,7 @@ app:
 	mkdir -p "$(QA_DRIVER_APP)/Contents/MacOS"
 	swiftc -O -o "$(QA_DRIVER_APP)/Contents/MacOS/symphony-qa-driver" "$(QA_DRIVER_SOURCE)/symphony-qa-driver.swift"
 	cp "$(QA_DRIVER_SOURCE)/Info.plist" "$(QA_DRIVER_APP)/Contents/Info.plist"
-	codesign --force --sign "$(SIGNING_IDENTITY)" "$(QA_DRIVER_APP)"
+	codesign --force --options runtime --sign "$(SIGNING_IDENTITY)" "$(QA_DRIVER_APP)"
 	codesign --force --sign "$(SIGNING_IDENTITY)" "$(APP)"
 	codesign --verify --strict "$(QA_DRIVER_APP)"
 	codesign --verify --strict "$(APP)"
