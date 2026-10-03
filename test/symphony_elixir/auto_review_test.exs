@@ -72,7 +72,8 @@ defmodule SymphonyElixir.AutoReviewTest do
           max_fix_attempts: 0,
           run_on: "first_pass",
           skip_globs: ["docs/**"],
-          playbooks: %{web: %{paths: ["assets/**"]}}
+          playbooks: %{web: %{paths: ["assets/**"]}},
+          worker_host: "qa@qa-vm.local:2222"
         }
       )
 
@@ -89,7 +90,8 @@ defmodule SymphonyElixir.AutoReviewTest do
                max_fix_attempts: 0,
                run_on: "first_pass",
                skip_globs: ["docs/**"],
-               playbooks: %{"web" => %{"paths" => ["assets/**"]}}
+               playbooks: %{"web" => %{"paths" => ["assets/**"]}},
+               worker_host: "qa@qa-vm.local:2222"
              } = auto_review
 
       assert AutoReview.enabled?(settings)
@@ -117,7 +119,9 @@ defmodule SymphonyElixir.AutoReviewTest do
             {"timeout_ms", 0},
             {"max_concurrent", 0},
             {"max_fix_attempts", -1},
-            {"state", ""}
+            {"state", ""},
+            {"worker_host", "-oProxyCommand=sh"},
+            {"worker_host", "qa vm"}
           ] do
         assert {:error, {:invalid_symphony_config, message}} =
                  SystemSchema.parse(%{"auto_review" => %{key => value}, "repositories" => repositories})

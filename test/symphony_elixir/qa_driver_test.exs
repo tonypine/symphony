@@ -23,25 +23,7 @@ defmodule SymphonyElixir.QaDriverTest do
   # helper answers from `helper_replies`, screencapture writes the file it is given.
   defp host(overrides \\ %{}) do
     test = self()
-
-    replies =
-      Map.merge(
-        %{
-          "permissions" => {~s({"accessibility":true,"screen_recording":true}), 0},
-          "windows" =>
-            {Jason.encode!(%{
-               windows: [
-                 %{id: 11, title: "Settings", layer: 0, onscreen: true, frame: %{x: 0, y: 0, w: 548, h: 88}},
-                 %{id: 12, title: "", layer: 25, onscreen: true, frame: %{x: 0, y: 0, w: 24, h: 24}},
-                 %{id: 13, title: "Hidden", layer: 0, onscreen: false, frame: %{x: 0, y: 0, w: 400, h: 300}}
-               ]
-             }), 0},
-          "ax-tree" => {~s({"root":{"path":"","role":"AXApplication"},"nodes":1,"truncated":false}), 0},
-          "ax-press" => {~s({"ok":true,"element":{"path":"0.1","role":"AXButton"}}), 0},
-          "ax-set-value" => {~s({"ok":true,"element":{"path":"0.2","role":"AXTextField"}}), 0}
-        },
-        Map.get(overrides, :helper_replies, %{})
-      )
+    replies = replies(overrides)
 
     %{
       cmd: fn executable, args, opts ->
@@ -58,6 +40,26 @@ defmodule SymphonyElixir.QaDriverTest do
       kill: fn pid -> send(test, {:killed, pid}) && :ok end,
       helper: Map.get(overrides, :helper, fn -> {:ok, @helper} end)
     }
+  end
+
+  defp replies(overrides) do
+    Map.merge(
+      %{
+        "permissions" => {~s({"accessibility":true,"screen_recording":true}), 0},
+        "windows" =>
+          {Jason.encode!(%{
+             windows: [
+               %{id: 11, title: "Settings", layer: 0, onscreen: true, frame: %{x: 0, y: 0, w: 548, h: 88}},
+               %{id: 12, title: "", layer: 25, onscreen: true, frame: %{x: 0, y: 0, w: 24, h: 24}},
+               %{id: 13, title: "Hidden", layer: 0, onscreen: false, frame: %{x: 0, y: 0, w: 400, h: 300}}
+             ]
+           }), 0},
+        "ax-tree" => {~s({"root":{"path":"","role":"AXApplication"},"nodes":1,"truncated":false}), 0},
+        "ax-press" => {~s({"ok":true,"element":{"path":"0.1","role":"AXButton"}}), 0},
+        "ax-set-value" => {~s({"ok":true,"element":{"path":"0.2","role":"AXTextField"}}), 0}
+      },
+      Map.get(overrides, :helper_replies, %{})
+    )
   end
 
   defp default_cmd("/bin/sh", ["-c", build], opts, _replies) do
@@ -687,6 +689,139 @@ defmodule SymphonyElixir.QaDriverTest do
       assert error_code(QaDriver.call_tool(driver, "qa_screenshot", %{"pid" => pid, "name" => "x"})) == "qa_screenshot_failed"
       refute File.exists?(Path.join(worktree, "qa-evidence/x.png"))
       assert File.read!(secret) == "host secret"
+    end
+  end
+
+  describe "worker_host" do
+    @run_dir "/Users/qa/.symphony-qa/runs/run.abc123"
+
+    # A stubbed QA host: the build and bundle script answer without touching the
+    # local disk, and `read` returns the capture.
+    defp remote_host(overrides \\ %{}) do
+      test = self()
+      bundle = Map.get(overrides, :bundle, fn dest -> {:ok, {"symphony-qa-app:#{dest}/Demo.app/Contents/MacOS/Demo\n", 0}} end)
+
+      cmd = fn
+        "/bin/sh", ["-c", "make app"], _opts -> {:ok, {"Build complete!\n", 0}}
+        "/bin/sh", ["-c", _script, "sh", _build_dir, @app, dest], _opts -> bundle.(dest)
+        "/usr/sbin/screencapture", _args, _opts -> {:ok, {"", 0}}
+        executable, args, opts -> default_cmd(executable, args, opts, replies(%{}))
+      end
+
+      Map.merge(host(%{cmd: cmd}), %{
+        prepare: fn home, canary ->
+          send(test, {:prepare, home, canary, File.stat!(canary).mode})
+          Map.get(overrides, :prepare, {:ok, @run_dir})
+        end,
+        ship: fn tar, dest -> send(test, {:ship, tar, dest}) && Map.get(overrides, :ship, :ok) end,
+        read: fn path -> send(test, {:read, path}) && Map.get(overrides, :read, {:ok, "png"}) end,
+        cleanup: fn dir -> send(test, {:cleanup, dir}) && :ok end
+      })
+    end
+
+    defp remote_git(["archive" | _args], _cwd), do: {"fatal: not a valid object name HEAD\n", 128}
+    defp remote_git(args, cwd), do: clean_git(args, cwd)
+
+    defp remote_driver(worktree, host, git \\ &clean_git/2) do
+      {{:ok, driver}, _log} =
+        with_log(fn ->
+          QaDriver.start_link(
+            worktree: worktree,
+            worker_host: "qa@qa-vm",
+            playbook: %{build: "make app", app: @app},
+            host: host,
+            git: git
+          )
+        end)
+
+      on_exit(fn -> QaDriver.stop(driver) end)
+      driver
+    end
+
+    test "builds, launches and captures on the QA host", %{worktree: worktree} do
+      driver = remote_driver(worktree, remote_host())
+      %{scratch_dir: scratch_dir} = GenServer.call(driver, :config)
+
+      assert_received {:prepare, home, canary, mode}
+      assert home == System.user_home!()
+      assert canary == Path.join(scratch_dir, "canary")
+      assert Bitwise.band(mode, 0o777) == 0o600
+
+      assert {:ok, %{"exit_status" => 0, "app" => @app}} = QaDriver.call_tool(driver, "qa_build", %{})
+      assert_received {:ship, tar, dest}
+      assert tar == Path.join(scratch_dir, "src.tar")
+      assert dest == @run_dir <> "/src"
+      refute File.exists?(tar)
+      assert_received {:cmd, "/bin/sh", ["-c", "make app"], build_opts}
+      assert build_opts[:cd] == @run_dir <> "/src"
+      assert_received {:cmd, "/bin/sh", ["-c", _script, "sh", @run_dir <> "/src", @app, bundle_dest], _opts}
+      assert String.starts_with?(bundle_dest, @run_dir <> "/builds/")
+
+      {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{}) end)
+      assert {:ok, %{"pid" => pid}} = result
+      assert_received {:launched, executable, launch_opts, _port, ^pid}
+      assert executable == bundle_dest <> "/Demo.app/Contents/MacOS/Demo"
+      assert launch_opts[:cd] == @run_dir <> "/app-root"
+      assert launch_opts[:env] == [{"SYMPHONY_BAR_QA_ROOT", @run_dir <> "/app-root"}]
+
+      assert {:ok, %{"files" => [%{"path" => "qa-evidence/settings.png"}]}} = QaDriver.call_tool(driver, "qa_screenshot", %{"pid" => pid, "name" => "settings"})
+      assert_received {:cmd, "/usr/sbin/screencapture", ["-x", "-o", "-l", "11", capture], _opts}
+      assert capture == @run_dir <> "/window-11.png"
+      assert_received {:read, ^capture}
+      assert File.read!(Path.join(worktree, "qa-evidence/settings.png")) == "png"
+
+      QaDriver.stop(driver)
+      assert_received {:killed, ^pid}
+      assert_received {:cleanup, @run_dir}
+      refute File.exists?(scratch_dir)
+    end
+
+    test "refuses an unsafe or unreachable QA host", %{worktree: worktree} do
+      driver = remote_driver(worktree, remote_host(%{prepare: {:error, {:unsafe, "has a private key ~/.ssh/id_ed25519"}}}))
+
+      for tool <- ["qa_build", "qa_launch_app", "qa_screenshot"] do
+        assert {:error, {:qa_tool, "qa_worker_unsafe", message}} = QaDriver.call_tool(driver, tool, %{})
+        assert message =~ "The QA host qa@qa-vm has a private key ~/.ssh/id_ed25519."
+      end
+
+      QaDriver.stop(driver)
+      refute_received {:cleanup, _dir}
+
+      driver = remote_driver(worktree, remote_host(%{prepare: {:error, {:unreachable, "ssh exited with status 255"}}}))
+      assert {:error, {:qa_tool, "qa_worker_unreachable", message}} = QaDriver.call_tool(driver, "qa_build", %{})
+      assert message =~ "could not be prepared: ssh exited with status 255"
+    end
+
+    test "reports a failed copy to the QA host", %{worktree: worktree} do
+      driver = remote_driver(worktree, remote_host(), &remote_git/2)
+      assert {:error, {:qa_tool, "qa_git_failed", message}} = QaDriver.call_tool(driver, "qa_build", %{})
+      assert message =~ "not a valid object name"
+      refute_received {:ship, _tar, _dest}
+
+      driver = remote_driver(worktree, remote_host(%{ship: {:error, "exit 2: tar: write error"}}))
+      assert {:error, {:qa_tool, "qa_build_failed", message}} = QaDriver.call_tool(driver, "qa_build", %{})
+      assert message =~ "could not be copied to the QA host: exit 2: tar: write error"
+      refute_received {:cmd, "/bin/sh", ["-c", "make app"], _opts}
+    end
+
+    test "reports a bundle the QA host cannot use", %{worktree: worktree} do
+      for {reply, expected} <- [
+            {{:ok, {"macos/build/Demo.app is not a directory\n", 1}}, "macos/build/Demo.app is not a directory"},
+            {{:ok, {"copied\n", 0}}, "copied"},
+            {{:error, :timeout}, ":timeout"}
+          ] do
+        driver = remote_driver(worktree, remote_host(%{bundle: fn _dest -> reply end}))
+        assert {:error, {:qa_tool, "qa_app_missing", message}} = QaDriver.call_tool(driver, "qa_build", %{})
+        assert message =~ "not a usable .app on the QA host: #{expected}"
+        assert error_code(QaDriver.call_tool(driver, "qa_launch_app", %{})) == "qa_not_built"
+      end
+    end
+
+    test "reports a capture it cannot copy back", %{worktree: worktree} do
+      driver = remote_driver(worktree, remote_host(%{read: {:error, :unreadable}}))
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+      {{:ok, %{"pid" => pid}}, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{}) end)
+      assert error_code(QaDriver.call_tool(driver, "qa_screenshot", %{"pid" => pid, "name" => "settings"})) == "qa_screenshot_failed"
     end
   end
 
