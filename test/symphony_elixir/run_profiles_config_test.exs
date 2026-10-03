@@ -25,19 +25,19 @@ defmodule SymphonyElixir.RunProfilesConfigTest do
   end
 
   describe "Config.run_profile/2" do
-    test "returns nil model and effort for every kind when nothing is set" do
+    test "returns nil model and effort and the anthropic provider for every kind when nothing is set" do
       settings = settings!(%{})
 
       for kind <- RunKind.kinds() do
-        assert Config.run_profile(settings, kind) == %{model: nil, effort: nil}
+        assert Config.run_profile(settings, kind) == %{model: nil, effort: nil, provider: "anthropic"}
       end
     end
 
     test "falls back to agent.model and agent.effort" do
       settings = settings!(%{"model" => "claude-sonnet-5-5", "effort" => "medium"})
 
-      assert Config.run_profile(settings, :implementation) == %{model: "claude-sonnet-5-5", effort: "medium"}
-      assert Config.run_profile(settings, "landing") == %{model: "claude-sonnet-5-5", effort: "medium"}
+      assert Config.run_profile(settings, :implementation) == %{model: "claude-sonnet-5-5", effort: "medium", provider: "anthropic"}
+      assert Config.run_profile(settings, "landing") == %{model: "claude-sonnet-5-5", effort: "medium", provider: "anthropic"}
     end
 
     test "a profile field overrides the default, field by field" do
@@ -52,17 +52,109 @@ defmodule SymphonyElixir.RunProfilesConfigTest do
           }
         })
 
-      assert Config.run_profile(settings, :breakdown) == %{model: "claude-opus-5-5", effort: "xhigh"}
-      assert Config.run_profile(settings, :landing) == %{model: "claude-sonnet-5-5", effort: "low"}
-      assert Config.run_profile(settings, :ci_fix) == %{model: "claude-haiku-4-5", effort: "medium"}
-      assert Config.run_profile(settings, :implementation) == %{model: "claude-sonnet-5-5", effort: "medium"}
+      assert Config.run_profile(settings, :breakdown) == %{model: "claude-opus-5-5", effort: "xhigh", provider: "anthropic"}
+      assert Config.run_profile(settings, :landing) == %{model: "claude-sonnet-5-5", effort: "low", provider: "anthropic"}
+      assert Config.run_profile(settings, :ci_fix) == %{model: "claude-haiku-4-5", effort: "medium", provider: "anthropic"}
+      assert Config.run_profile(settings, :implementation) == %{model: "claude-sonnet-5-5", effort: "medium", provider: "anthropic"}
     end
 
     test "a profile without agent defaults leaves the other field nil" do
       settings = settings!(%{"run_profiles" => %{"qa" => %{"effort" => "max"}}})
 
-      assert Config.run_profile(settings, :qa) == %{model: nil, effort: "max"}
-      assert Config.run_profile(settings, :rework) == %{model: nil, effort: nil}
+      assert Config.run_profile(settings, :qa) == %{model: nil, effort: "max", provider: "anthropic"}
+      assert Config.run_profile(settings, :rework) == %{model: nil, effort: nil, provider: "anthropic"}
+    end
+  end
+
+  describe "provider" do
+    test "resolves profile, then agent.provider, then anthropic" do
+      settings =
+        settings!(%{
+          "model" => "anthropic/claude-sonnet-5.5",
+          "provider" => "openrouter",
+          "run_profiles" => %{
+            "landing" => %{"provider" => "anthropic", "model" => "claude-haiku-4-5"},
+            "qa" => %{"effort" => "low"}
+          }
+        })
+
+      assert settings.agent.provider == "openrouter"
+      assert Config.run_profile(settings, :landing) == %{model: "claude-haiku-4-5", effort: nil, provider: "anthropic"}
+      assert Config.run_profile(settings, :qa) == %{model: "anthropic/claude-sonnet-5.5", effort: "low", provider: "openrouter"}
+      assert Config.run_profile(settings, :implementation).provider == "openrouter"
+    end
+
+    test "a profile can pick openrouter with its own model" do
+      settings = settings!(%{"run_profiles" => %{"landing" => %{"provider" => "openrouter", "model" => "anthropic/claude-haiku-4.5"}}})
+
+      assert Config.run_profile(settings, :landing) == %{model: "anthropic/claude-haiku-4.5", effort: nil, provider: "openrouter"}
+      assert Config.run_profile(settings, :implementation) == %{model: nil, effort: nil, provider: "anthropic"}
+    end
+
+    test "agent.provider openrouter is fine when every run resolves a model" do
+      profiles = Map.new(RunKind.names(), &{&1, %{"model" => "openai/gpt-5"}})
+      settings = settings!(%{"provider" => "openrouter", "run_profiles" => profiles})
+
+      assert Config.run_profile(settings, :qa).provider == "openrouter"
+    end
+
+    test "with no provider set anywhere, resolved model and effort match the previous resolution" do
+      settings =
+        settings!(%{
+          "model" => "claude-sonnet-5-5",
+          "effort" => "medium",
+          "run_profiles" => %{"breakdown" => %{"model" => "claude-opus-5-5", "effort" => "xhigh"}, "landing" => %{"effort" => "low"}}
+        })
+
+      for kind <- RunKind.kinds() do
+        profile = Config.run_profile(settings, kind)
+        run_profile = Map.get(settings.agent.run_profiles, Atom.to_string(kind), %{})
+
+        assert Map.delete(profile, :provider) == %{
+                 model: Map.get(run_profile, "model", settings.agent.model),
+                 effort: Map.get(run_profile, "effort", settings.agent.effort)
+               }
+
+        assert profile.provider == "anthropic"
+      end
+
+      refute Enum.any?(Map.values(settings.agent.run_profiles), &Map.has_key?(&1, "provider"))
+    end
+
+    test "unknown provider names the key" do
+      assert error!(%{"provider" => "bedrock"}) =~ "agent.provider must be one of: anthropic, openrouter"
+
+      assert error!(%{"run_profiles" => %{"qa" => %{"provider" => "bedrock"}}}) =~
+               "agent.run_profiles.qa.provider must be one of: anthropic, openrouter"
+    end
+
+    test "openrouter without a resolved model names the key" do
+      message = error!(%{"provider" => "openrouter", "run_profiles" => %{"qa" => %{"model" => "openai/gpt-5"}}})
+
+      assert message =~ "agent.provider openrouter needs an OpenRouter model id; set agent.model or agent.run_profiles.<kind>.model"
+      assert message =~ "(missing for: implementation, breakdown,"
+      refute message =~ "qa"
+
+      assert error!(%{"run_profiles" => %{"landing" => %{"provider" => "openrouter"}}}) =~
+               "agent.run_profiles.landing.provider openrouter needs an OpenRouter model id; set agent.run_profiles.landing.model or agent.model"
+    end
+
+    test "openrouter with a non-claude runtime names the key" do
+      codex = %{"runtime" => "codex", "command" => "codex app-server"}
+
+      assert error!(Map.merge(codex, %{"provider" => "openrouter", "model" => "openai/gpt-5"})) =~
+               "agent.provider openrouter is only supported with agent.runtime: claude"
+
+      message = error!(Map.merge(codex, %{"run_profiles" => %{"landing" => %{"provider" => "openrouter", "model" => "openai/gpt-5"}}}))
+
+      assert message =~ "agent.run_profiles.landing.provider openrouter is only supported with agent.runtime: claude"
+      refute message =~ "agent.provider "
+    end
+
+    test "anthropic is accepted with a codex runtime" do
+      settings = settings!(%{"runtime" => "codex", "command" => "codex app-server", "provider" => "anthropic"})
+
+      assert Config.run_profile(settings, :qa).provider == "anthropic"
     end
   end
 
@@ -71,6 +163,7 @@ defmodule SymphonyElixir.RunProfilesConfigTest do
 
     assert settings.agent.model == nil
     assert settings.agent.effort == nil
+    assert settings.agent.provider == nil
     assert settings.agent.run_profiles == %{}
     assert settings.agent.command == "claude --dangerously-skip-permissions"
   end
@@ -105,13 +198,13 @@ defmodule SymphonyElixir.RunProfilesConfigTest do
 
     test "non-object run_profiles or profile" do
       assert error!(%{"run_profiles" => "fast"}) =~ "agent.run_profiles is invalid"
-      assert error!(%{"run_profiles" => %{"qa" => "fast"}}) =~ "agent.run_profiles.qa must be an object with model and/or effort"
+      assert error!(%{"run_profiles" => %{"qa" => "fast"}}) =~ "agent.run_profiles.qa must be an object with model, effort and/or provider"
     end
 
     test "unknown profile key" do
       message = error!(%{"run_profiles" => %{"qa" => %{"temperature" => 1}}})
 
-      assert message =~ "agent.run_profiles.qa has unknown key `temperature`; expected model or effort"
+      assert message =~ "agent.run_profiles.qa has unknown key `temperature`; expected model, effort or provider"
     end
 
     test "--effort in agent.command with agent.effort set" do

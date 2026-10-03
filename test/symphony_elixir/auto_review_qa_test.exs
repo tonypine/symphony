@@ -171,7 +171,7 @@ defmodule SymphonyElixir.AutoReviewQaTest do
 
       AutoReview.run_qa(job(record), git: git_with_paths(["lib/symphony_elixir/cli.ex"]), qa_agent: FakeQaAgent)
 
-      assert_receive {:qa_agent_run, %{run_profile: %{kind: :qa, model: "claude-haiku-4-5", effort: "low"}}, _settings}
+      assert_receive {:qa_agent_run, %{run_profile: %{kind: :qa, model: "claude-haiku-4-5", effort: "low", provider: "anthropic"}}, _settings}
       assert [%{kind: "qa", run_kind: "qa", model: "claude-haiku-4-5", effort: "low"}] = RunStore.list_runs(@repo_key, :all)
     end
 

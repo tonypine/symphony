@@ -78,7 +78,10 @@ defmodule SymphonyElixir.CLICheckTest do
     cases = [
       {"command: codex app-server\n  run_profiles:\n    bogus:\n      effort: low", "agent.run_profiles has unknown run kind `bogus`"},
       {"command: codex app-server\n  effort: extreme", "agent.effort must be one of: low, medium, high, xhigh, max"},
-      {"command: claude --effort high\n  effort: low", "agent.command must not pass --effort when agent.model, agent.effort or agent.run_profiles is set"}
+      {"command: claude --effort high\n  effort: low", "agent.command must not pass --effort when agent.model, agent.effort or agent.run_profiles is set"},
+      {"command: codex app-server\n  provider: bedrock", "agent.provider must be one of: anthropic, openrouter"},
+      {"command: codex app-server\n  run_profiles:\n    landing:\n      provider: openrouter", "agent.run_profiles.landing.provider openrouter needs an OpenRouter model id"},
+      {"command: codex app-server\n  provider: openrouter\n  model: openai/gpt-5", "agent.provider openrouter is only supported with agent.runtime: claude"}
     ]
 
     for {agent_lines, expected} <- cases do

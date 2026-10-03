@@ -34,8 +34,9 @@ defmodule SymphonyElixir.RunProfileReviewQaTest do
     test "nothing set resolves to nil model and effort" do
       settings = settings!(%{})
 
-      assert Config.pre_push_review_profile(settings) == %{kind: :pre_push_review, model: nil, effort: nil}
-      assert Config.qa_profile(settings) == %{kind: :qa, model: nil, effort: nil}
+      unset = %{model: nil, effort: nil, provider: "anthropic"}
+      assert Config.pre_push_review_profile(settings) == Map.put(unset, :kind, :pre_push_review)
+      assert Config.qa_profile(settings) == Map.put(unset, :kind, :qa)
     end
 
     test "own field, then agent.run_profiles.<kind>, then agent.model / agent.effort" do
@@ -49,8 +50,8 @@ defmodule SymphonyElixir.RunProfileReviewQaTest do
       }
 
       settings = settings!(base)
-      assert Config.pre_push_review_profile(settings) == %{kind: :pre_push_review, model: "claude-sonnet-5-5", effort: "high"}
-      assert Config.qa_profile(settings) == %{kind: :qa, model: "claude-haiku-4-5", effort: "medium"}
+      assert Config.pre_push_review_profile(settings) == %{kind: :pre_push_review, model: "claude-sonnet-5-5", effort: "high", provider: "anthropic"}
+      assert Config.qa_profile(settings) == %{kind: :qa, model: "claude-haiku-4-5", effort: "medium", provider: "anthropic"}
 
       settings =
         settings!(
@@ -60,8 +61,8 @@ defmodule SymphonyElixir.RunProfileReviewQaTest do
           })
         )
 
-      assert Config.pre_push_review_profile(settings) == %{kind: :pre_push_review, model: "claude-opus-5-5", effort: "max"}
-      assert Config.qa_profile(settings) == %{kind: :qa, model: "claude-haiku-4-5", effort: "low"}
+      assert Config.pre_push_review_profile(settings) == %{kind: :pre_push_review, model: "claude-opus-5-5", effort: "max", provider: "anthropic"}
+      assert Config.qa_profile(settings) == %{kind: :qa, model: "claude-haiku-4-5", effort: "low", provider: "anthropic"}
     end
   end
 

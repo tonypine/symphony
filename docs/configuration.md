@@ -219,6 +219,7 @@ agent:
   command: codex app-server
   model:
   effort:
+  provider: anthropic
   run_profiles: {}
   concurrency:
     max_total: 10
@@ -271,8 +272,9 @@ agent:
   available — Opus burns Agent-SDK credit much faster and Sonnet is usually
   sufficient for orchestration turns. Treat this as guidance; revisit when
   Anthropic's model lineup or credit policy changes.
-- `model`, `effort`, `run_profiles`: the model and effort per kind of run; see **Run profiles**
-  below. All unset by default, which leaves `command` as it is.
+- `model`, `effort`, `provider`, `run_profiles`: the model, effort and provider per kind of run;
+  see **Run profiles** below. Model and effort are unset by default, which leaves `command` as it
+  is; the provider defaults to `anthropic`.
 - `concurrency.max_total`: maximum concurrent issue workers.
 - `limits.tokens_per_issue` and `limits.tokens_per_day`: explicit `null` disables that cap.
 - `permissions.filesystem.allow_read_paths`: extra read-only host paths rendered into Codex
@@ -296,22 +298,30 @@ agent:
   run_profiles:
     breakdown: { model: claude-opus-5-5, effort: xhigh }
     landing: { effort: low }
+    ci_fix: { provider: openrouter, model: anthropic/claude-haiku-4.5 }
 ```
 
 - `model`: default model for every run kind (string).
 - `effort`: default effort: `low`, `medium`, `high`, `xhigh`, or `max`.
-- `run_profiles.<kind>`: `model` and/or `effort` for one kind of run. Kinds, first match wins:
+- `provider`: default provider that serves the model: `anthropic` (default) or `openrouter`.
+  `openrouter` needs a model for every run it serves (an OpenRouter model id such as
+  `anthropic/claude-haiku-4.5`) and works only with `runtime: claude`. Symphony does not launch
+  runs against OpenRouter yet; the setting is validated and resolved only.
+- `run_profiles.<kind>`: `model`, `effort` and/or `provider` for one kind of run. Kinds, first match wins:
   `final_verification` (title starts with `Final verification:`), `close_out` (`breakdown` parent
   whose sub-issues are all terminal), `breakdown` (other `breakdown` parent), `landing` (`Merging`),
   `rework` (`Rework`), `ci_fix` (continuation after red CI), `review_feedback` (continuation after
   PR review comments), and `implementation` (everything else). `pre_push_review` and `qa` name the
   pre-push reviewer and QA agent runs.
-- Resolution per field: `run_profiles.<kind>` value, else `agent.model` / `agent.effort`, else
-  nothing is added. The pre-push reviewer and the QA agent check their own section first:
-  `pre_push_review.model` / `.effort` and `auto_review.model` / `.effort`.
-- Config errors: an unknown kind under `run_profiles`, an unknown effort, an unknown profile key,
-  or `--model` / `--effort` already in `command` while any of `model`, `effort`, or
-  `run_profiles` is set. `symphony check` reports them.
+- Resolution per field: `run_profiles.<kind>` value, else `agent.model` / `agent.effort` /
+  `agent.provider`, else nothing is added (provider: `anthropic`). The pre-push reviewer and the
+  QA agent check their own section first: `pre_push_review.model` / `.effort` and
+  `auto_review.model` / `.effort`.
+- Config errors: an unknown kind under `run_profiles`, an unknown effort or provider, an unknown
+  profile key, `--model` / `--effort` already in `command` while any of `model`, `effort`, or
+  `run_profiles` is set, `openrouter` for a run that resolves no model, or `openrouter` with a
+  runtime other than `claude`. `symphony check` reports them and names the key that picked
+  `openrouter` (`agent.run_profiles.<kind>.provider`, else `agent.provider`).
 - The kind and profile are chosen once, when the run is dispatched, from the current workflow
   config: an edit applies to the next dispatch without a restart. Every continuation turn of a run
   keeps its profile. A CI fix or review feedback re-activation is a new run with its own kind.

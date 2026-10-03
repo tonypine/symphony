@@ -490,9 +490,10 @@ defmodule SymphonyElixir.Config.Schema do
     alias SymphonyElixir.RunKind
 
     @efforts ["low", "medium", "high", "xhigh", "max"]
-    @run_profile_keys ["model", "effort"]
+    @providers ["anthropic", "openrouter"]
+    @run_profile_keys ["model", "effort", "provider"]
     @run_profile_error_keys Map.new(
-                              for kind <- RunKind.names(), suffix <- ["", ".model", ".effort"] do
+                              for kind <- RunKind.names(), suffix <- ["", ".model", ".effort", ".provider"] do
                                 {kind <> suffix, :"run_profiles.#{kind}#{suffix}"}
                               end
                             )
@@ -796,6 +797,7 @@ defmodule SymphonyElixir.Config.Schema do
       field(:command, :string)
       field(:model, :string)
       field(:effort, :string)
+      field(:provider, :string)
       field(:run_profiles, :map, default: %{})
 
       field(:approval_policy, StringOrMap)
@@ -832,6 +834,7 @@ defmodule SymphonyElixir.Config.Schema do
           :command,
           :model,
           :effort,
+          :provider,
           :run_profiles,
           :approval_policy,
           :include_project_guides,
@@ -862,7 +865,9 @@ defmodule SymphonyElixir.Config.Schema do
       |> validate_number(:codex_stdio_prompt_soft_limit, greater_than: 0)
       |> validate_project_guide_files()
       |> validate_profile_fields()
+      |> validate_setting(:provider, &check_provider/1)
       |> validate_run_profiles()
+      |> validate_openrouter_profiles()
       |> validate_command_run_profile_flags()
       |> update_change(:max_concurrent_agents_by_state, &Schema.normalize_state_limits/1)
       |> Schema.validate_state_limits(:max_concurrent_agents_by_state)
@@ -927,6 +932,9 @@ defmodule SymphonyElixir.Config.Schema do
     defp check_effort(effort) when effort in @efforts, do: {:ok, effort}
     defp check_effort(_effort), do: {:error, "must be one of: #{Enum.join(@efforts, ", ")}"}
 
+    defp check_provider(provider) when provider in @providers, do: {:ok, provider}
+    defp check_provider(_provider), do: {:error, "must be one of: #{Enum.join(@providers, ", ")}"}
+
     defp validate_run_profiles(changeset) do
       case Map.fetch(changeset.changes, :run_profiles) do
         {:ok, profiles} ->
@@ -947,7 +955,7 @@ defmodule SymphonyElixir.Config.Schema do
           {add_error(changeset, :run_profiles, message), normalized}
 
         not is_map(profile) ->
-          {add_error(changeset, @run_profile_error_keys[kind], "must be an object with model and/or effort"), normalized}
+          {add_error(changeset, @run_profile_error_keys[kind], "must be an object with model, effort and/or provider"), normalized}
 
         true ->
           cast_run_profile_fields(changeset, normalized, kind, Map.new(profile, fn {key, value} -> {to_string(key), value} end))
@@ -961,7 +969,7 @@ defmodule SymphonyElixir.Config.Schema do
           {changeset, Map.put(normalized, kind, normalized_profile)}
 
         [unknown | _rest] ->
-          {add_error(changeset, @run_profile_error_keys[kind], "has unknown key `#{unknown}`; expected model or effort"), normalized}
+          {add_error(changeset, @run_profile_error_keys[kind], "has unknown key `#{unknown}`; expected model, effort or provider"), normalized}
       end
     end
 
@@ -974,6 +982,50 @@ defmodule SymphonyElixir.Config.Schema do
 
     defp check_run_profile_field("model", model), do: check_model(model)
     defp check_run_profile_field("effort", effort), do: check_effort(effort)
+    defp check_run_profile_field("provider", provider), do: check_provider(provider)
+
+    # OpenRouter serves the model a run names, so every run it serves needs a resolved model,
+    # and only the Claude runtime can be pointed at it. Each error names the key that picked
+    # OpenRouter: the profile's `provider`, else `agent.provider`.
+    defp validate_openrouter_profiles(changeset) do
+      provider = get_field(changeset, :provider)
+      model = get_field(changeset, :model)
+      profiles = get_field(changeset, :run_profiles)
+
+      RunKind.names()
+      |> Enum.map(&{&1, Map.get(profiles, &1, %{})})
+      |> Enum.filter(fn {_kind, profile} -> Map.get(profile, "provider", provider) == "openrouter" end)
+      |> Enum.group_by(&openrouter_error_key/1, fn {kind, profile} -> {kind, Map.get(profile, "model", model)} end)
+      |> Enum.reduce(changeset, fn {key, resolved}, acc ->
+        acc
+        |> add_openrouter_runtime_error(key)
+        |> add_openrouter_model_error(key, for({kind, nil} <- resolved, do: kind))
+      end)
+    end
+
+    defp openrouter_error_key({kind, %{"provider" => _provider}}), do: @run_profile_error_keys["#{kind}.provider"]
+    defp openrouter_error_key({_kind, _profile}), do: :provider
+
+    defp add_openrouter_runtime_error(changeset, key) do
+      case get_field(changeset, :kind) do
+        "claude" -> changeset
+        _runtime -> add_error(changeset, key, "openrouter is only supported with agent.runtime: claude")
+      end
+    end
+
+    defp add_openrouter_model_error(changeset, _key, []), do: changeset
+
+    defp add_openrouter_model_error(changeset, :provider, kinds) do
+      add_error(
+        changeset,
+        :provider,
+        "openrouter needs an OpenRouter model id; set agent.model or agent.run_profiles.<kind>.model (missing for: #{Enum.join(kinds, ", ")})"
+      )
+    end
+
+    defp add_openrouter_model_error(changeset, key, [kind]) do
+      add_error(changeset, key, "openrouter needs an OpenRouter model id; set agent.run_profiles.#{kind}.model or agent.model")
+    end
 
     # The resolved model and effort are passed as flags, so the same flag in `agent.command`
     # would be given twice.
