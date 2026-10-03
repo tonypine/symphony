@@ -324,24 +324,18 @@ final class RestartMachineTests: XCTestCase {
         XCTAssertNil(machine.menuLine)
     }
 
-    /// TP-339: the new version's Symphony deletes the running version's unpacked release on its first run, so an
-    /// update only checks symphony.yml with the running Symphony and never starts one before it hands over.
+    /// TP-339: running the new version's Symphony deletes the running version's unpacked release, so an update
+    /// checks symphony.yml with the running Symphony and starts none before it hands over to the relaunched app.
     func testUpdateRunsNoOtherSymphonyBeforeTheOldOneStops() {
-        for paths in [
-            [Event.polled(pausedPoll(running: 0))],
-            [.polled(pausedPoll(running: 1)), .restartNow],
-        ] {
+        for waiting in [[Event.polled(pausedPoll(running: 0))], [.polled(pausedPoll(running: 1)), .restartNow]] {
             var (machine, effects) = beginUpdate()
-            var later = began
-            for event in [.configChecked(.passed), .controlFinished(.pause, .done)] + paths + [.exited(.signaled(15))] {
-                later = later.addingTimeInterval(runsTimeout)
-                effects += machine.handle(event, now: later)
+            var now = began
+            for event in [.configChecked(.passed), .controlFinished(.pause, .done)] + waiting + [.exited(.signaled(15))] {
+                now = now.addingTimeInterval(runsTimeout)
+                effects += machine.handle(event, now: now)
             }
 
-            XCTAssertEqual(effects.first, .checkConfig, "symphony.yml is checked with the app's own Symphony")
-            XCTAssertFalse(effects.contains(.start))
-            XCTAssertEqual(effects.firstIndex(of: .stop).map { $0 < effects.count - 1 }, true)
-            XCTAssertEqual(effects.last, .stopped, "the relaunched app starts the new Symphony once this one stopped")
+            XCTAssertEqual(effects, [.checkConfig, .send(.pause), .pollNow, .stop, .stopped])
         }
     }
 
