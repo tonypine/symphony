@@ -1144,9 +1144,11 @@ When enabled:
   parent, else every enabled playbook. The `## Symphony QA Report` is written on the parent and on
   the verification ticket. `pass` and `blocked` move the verification ticket to `In Review`;
   `fail` creates one `Backlog` child of the verification ticket per failing step (per finding when
-  no step failed), naming the step and holding its details and evidence, lists them in the report,
-  and moves the verification ticket to `Backlog`. There is no fix loop. Any other final
-  verification ticket gets the executor run.
+  no step failed), naming the step and holding its details and evidence, marks the verification
+  ticket blocked by each one, lists them in the report, and moves the verification ticket to
+  `Todo`, where the blocker rule holds it until every gap is terminal. When no gap could be filed
+  and linked, it moves the verification ticket to `Backlog` instead. There is no fix loop. Any
+  other final verification ticket gets the executor run.
 
 When disabled, behaviour is unchanged.
 
@@ -1767,6 +1769,14 @@ An issue is dispatch-eligible only if all are true:
 - Per-state concurrency slots are available.
 - Blocker rule for `Todo` state passes:
   - If the issue state is `Todo`, do not dispatch when any blocker is non-terminal.
+  - A blocker counts as resolved only once its state is in `terminal_states`. `Merging`,
+    `In Review`, `Auto Review` and `Rework` still block, since the blocker's change is not on the
+    default branch yet. A blocker without a known state counts as open.
+  - A run whose issue ends a turn back in `Todo` with an open blocker stops; the issue is
+    dispatched again on the first poll after every blocker is terminal.
+  - The status snapshot lists each held candidate with its open blockers (`blocked` in
+    `/api/v1/state`, for example "MT-12 waiting on MT-15 (In Progress)"), and the dashboard shows
+    them under "Waiting on blockers".
 - Parent rule passes:
   - If the issue has the `breakdown` label, do not dispatch while any sub-issue is non-terminal
     (a sub-issue with an unknown state counts as non-terminal). The parent waits while its
@@ -2363,8 +2373,8 @@ Scoped Linear tool extension contract:
 - Suggested baseline tools: `linear_get_current_issue`, `linear_get_subissues`,
   `linear_get_parent_issue`, `linear_get_comments`, `linear_get_related_issues`,
   `linear_update_state`, `linear_add_comment`, `linear_update_comment`, `linear_delete_comment`,
-  `linear_attach_url`, `linear_attach_file`, `linear_create_subissue`, and
-  `linear_create_project_update`.
+  `linear_attach_url`, `linear_attach_file`, `linear_create_subissue`, `linear_add_blocked_by`,
+  and `linear_create_project_update`.
 - `linear_update_state` MUST refuse `Merging` as a target, whether given by name or by state id,
   with an error saying a human has to approve. Moving an issue to `Merging` is how a human approves
   a merge (see `github_merge_pull_request`), so an agent cannot approve its own merge. Humans keep
@@ -2382,6 +2392,12 @@ Scoped Linear tool extension contract:
   comments before any Linear call. Creation MUST be capped per run (the Elixir cap is 10) with an
   explicit error past the cap, and MUST be refused when the run has no state to count against.
   The read-only reviewer scope MUST NOT advertise or execute it.
+- `linear_add_blocked_by` MUST only add relations to the current issue: it accepts only a
+  non-empty `blocked_by` list of issue identifiers and creates one `blocks` relation from each to
+  the current issue. Every identifier MUST be looked up before any relation is created; an unknown
+  identifier or the current issue itself MUST fail with an explicit error and link nothing. A final
+  verification uses it to wait on its gaps in `Todo`. The read-only reviewer scope MUST NOT
+  advertise or execute it.
 - `linear_create_project_update` MUST only post to the current issue's project, resolved
   server-side, and MUST accept only `body` and an optional `health` (`onTrack`, `atRisk`,
   `offTrack`). It MUST fail with an explicit error when the current issue has no project. The body
@@ -2939,6 +2955,16 @@ Minimum endpoints:
           "reason": "a Merging or Auto Review issue is waiting for a slot",
           "attempt": null,
           "since": "2026-02-24T20:15:30Z"
+        }
+      ],
+      "blocked": [
+        {
+          "issue_id": "stu901",
+          "issue_identifier": "MT-655",
+          "title": "Final verification: Export",
+          "state": "Todo",
+          "blocked_by": [{"issue_identifier": "MT-656", "state": "In Progress"}],
+          "summary": "MT-655 waiting on MT-656 (In Progress)"
         }
       ],
       "watching": [

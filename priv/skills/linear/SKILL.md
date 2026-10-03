@@ -47,6 +47,11 @@ arguments from prompts.
   any other identifier is refused before the issue is created. Title and
   description are secret-scanned. At most 10 per run. Use it to split a ticket
   into sub-tickets or to file out-of-scope work.
+- `linear_add_blocked_by` with `{"blocked_by": ["TP-12"]}`: marks the current
+  issue blocked by existing issues. Symphony holds an issue in `Todo` until every
+  blocker is `Done` or `Canceled`, then runs it again. Unknown identifiers and the
+  current issue itself are refused before anything is linked. Use it when a final
+  verification files gaps.
 - `linear_create_project_update` with `{"body": "...", "health": "onTrack"}`:
   posts an update to the current issue's project. `health` is optional
   (`onTrack`, `atRisk`, `offTrack`). The body is secret-scanned. At most one per

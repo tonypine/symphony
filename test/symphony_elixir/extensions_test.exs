@@ -606,6 +606,19 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "since" => "2026-10-03T06:00:00Z"
                }
              ],
+             "blocked" => [
+               %{
+                 "issue_id" => "verify-http",
+                 "issue_identifier" => "MT-VERIFY",
+                 "title" => "Final verification: Export",
+                 "state" => "Todo",
+                 "blocked_by" => [
+                   %{"issue_identifier" => "MT-GAP", "state" => "In Progress"},
+                   %{"issue_identifier" => nil, "state" => nil}
+                 ],
+                 "summary" => "MT-VERIFY waiting on MT-GAP (In Progress), an unknown issue (unknown state)"
+               }
+             ],
              "rate_limits" => %{"primary" => %{"remaining" => 11}},
              "linear_usage" => %{"window_ms" => 3_600_000, "total" => 0, "callers" => []}
            }
@@ -1745,11 +1758,13 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "MT-WAIT"
     assert html =~ "a Merging or Auto Review issue is waiting for a slot"
     refute html =~ "Nothing is waiting to start."
+    assert html =~ "Waiting on blockers"
+    assert html =~ "MT-VERIFY waiting on MT-GAP (In Progress)"
   end
 
   test "dashboard liveview shows every slot as shared with no active epics" do
     empty_name = Module.concat(__MODULE__, :NoEpicLanesDashboardOrchestrator)
-    snapshot = Map.drop(static_snapshot(), [:epic_lanes, :finishing, :slot_waiting])
+    snapshot = Map.drop(static_snapshot(), [:epic_lanes, :finishing, :slot_waiting, :blocked])
     {:ok, _pid} = StaticOrchestrator.start_link(name: empty_name, snapshot: snapshot)
     start_test_endpoint(orchestrator: empty_name, snapshot_timeout_ms: 50)
 
@@ -1757,6 +1772,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "No active epics; every slot is shared."
     refute html =~ "Waiting for a lane"
     assert html =~ "Nothing is waiting to start."
+    refute html =~ "Waiting on blockers"
     refute html =~ "Landing:"
   end
 
@@ -3135,6 +3151,15 @@ defmodule SymphonyElixir.ExtensionsTest do
           reason: "a Merging or Auto Review issue is waiting for a slot",
           attempt: nil,
           since: ~U[2026-10-03 06:00:00Z]
+        }
+      ],
+      blocked: [
+        %{
+          issue_id: "verify-http",
+          identifier: "MT-VERIFY",
+          title: "Final verification: Export",
+          state: "Todo",
+          blockers: [%{identifier: "MT-GAP", state: "In Progress"}, %{identifier: nil, state: nil}]
         }
       ],
       rate_limits: %{"primary" => %{"remaining" => 11}}

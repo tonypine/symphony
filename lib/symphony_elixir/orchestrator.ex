@@ -107,6 +107,7 @@ defmodule SymphonyElixir.Orchestrator do
       breakdown_reviews: %{},
       merging_ci_waits: %{},
       epic_lanes: nil,
+      blocked: [],
       slot_waiting: %{},
       setup_failed: %{},
       pause: %{paused: false, reason: nil, paused_at: nil},
@@ -1037,6 +1038,7 @@ defmodule SymphonyElixir.Orchestrator do
           |> prune_quality_gate_cache_to_active(issues)
           |> clear_running_quality_gate_cache_entries()
           |> put_epic_lanes(issues)
+          |> put_blocked(issues)
           |> release_merging_ci_waits(issues)
 
         if available_slots(state) > 0 or available_finishing_slots(state) > 0 do
@@ -1450,6 +1452,10 @@ defmodule SymphonyElixir.Orchestrator do
   @doc false
   @spec put_epic_lanes_for_test(State.t(), [Issue.t()]) :: State.t()
   def put_epic_lanes_for_test(%State{} = state, issues) when is_list(issues), do: put_epic_lanes(state, issues)
+
+  @doc false
+  @spec put_blocked_for_test(State.t(), [Issue.t()]) :: State.t()
+  def put_blocked_for_test(%State{} = state, issues) when is_list(issues), do: put_blocked(state, issues)
 
   @doc false
   @spec review_breakdown_parents_for_test([Issue.t()], term()) :: term()
@@ -2787,6 +2793,27 @@ defmodule SymphonyElixir.Orchestrator do
     %{state | epic_lanes: EpicLanes.plan(issues, max_total, Config.settings!().agent.epic_lanes, terminal_state_set())}
   end
 
+  # Candidates held in `Todo` by open blockers, recomputed on every poll tick for the snapshot.
+  defp put_blocked(%State{} = state, issues) do
+    terminal_states = Config.settings!().tracker.terminal_states
+
+    blocked =
+      for %Issue{} = issue <- issues, Issue.blocked?(issue, terminal_states) do
+        %{
+          issue_id: issue.id,
+          identifier: issue.identifier,
+          title: issue.title,
+          state: issue.state,
+          blockers: issue |> Issue.open_blockers(terminal_states) |> Enum.map(&blocker_snapshot/1)
+        }
+      end
+
+    %{state | blocked: Enum.sort_by(blocked, & &1.identifier)}
+  end
+
+  defp blocker_snapshot(%{} = blocker), do: %{identifier: Map.get(blocker, :identifier), state: Map.get(blocker, :state)}
+  defp blocker_snapshot(_blocker), do: %{identifier: nil, state: nil}
+
   defp epic_lane_slot_available?(%Issue{id: issue_id}, %State{} = state) do
     EpicLanes.slot_for(state.epic_lanes, issue_id, work_running_ids(state.running)) != :none
   end
@@ -2860,32 +2887,16 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp active_retry_issue?(_issue, _terminal_states), do: false
 
+  # A `Todo` issue waits until every blocker is terminal (see `Issue.blocked?/2`).
   # A `breakdown` parent waits while its sub-issues are worked, in the waiting state or, when that
   # is off, in its active state; it is dispatched again for close-out once every sub-issue is terminal.
   # In `Rework` its plan was rejected, so it is broken down again whatever its sub-issues' states.
   defp issue_held?(issue, terminal_states) do
-    todo_issue_blocked_by_non_terminal?(issue, terminal_states) or
+    Issue.blocked?(issue, terminal_states) or
       (not Issue.replanning?(issue) and
          (Issue.waiting_on_sub_issues?(issue, terminal_states) or
             SubIssueWait.held?(issue, terminal_states, Config.settings!())))
   end
-
-  defp todo_issue_blocked_by_non_terminal?(
-         %Issue{state: issue_state, blocked_by: blockers},
-         terminal_states
-       )
-       when is_binary(issue_state) and is_list(blockers) do
-    normalize_issue_state(issue_state) == "todo" and
-      Enum.any?(blockers, fn
-        %{state: blocker_state} when is_binary(blocker_state) ->
-          !terminal_issue_state?(blocker_state, terminal_states)
-
-        _ ->
-          true
-      end)
-  end
-
-  defp todo_issue_blocked_by_non_terminal?(_issue, _terminal_states), do: false
 
   defp terminal_issue_state?(state_name, terminal_states) when is_binary(state_name) do
     MapSet.member?(terminal_states, normalize_issue_state(state_name))
@@ -5776,6 +5787,7 @@ defmodule SymphonyElixir.Orchestrator do
       budget: budget_snapshot(state),
       dispatch_state: dispatch_state_snapshot(state),
       epic_lanes: EpicLanes.snapshot(state.epic_lanes, epic_lane_running(state.running)),
+      blocked: state.blocked || [],
       finishing: finishing_snapshot(state.running),
       auto_merge: PrReviewPoller.auto_merge_statuses(),
       slot_waiting: slot_waiting_snapshot(state.slot_waiting) ++ merging_ci_waiting_snapshot(state.merging_ci_waits),
