@@ -1,16 +1,32 @@
-// Symphony QA driver helper.
+// Symphony QA driver helper, the executable of `SymphonyQADriver.app`.
 //
-// Symphony compiles this file once with `swiftc` and runs it on the host for the
-// Auto Review QA tools (`SymphonyElixir.QaDriver`). Symphony checks every PID
-// before calling it; the helper only reads and drives the process it is given.
+// It runs on the host for the Auto Review QA tools (`SymphonyElixir.QaDriver`).
+// Screen Recording and Accessibility are granted to this app only, never to
+// Symphony.app: macOS gives every process an app spawns that app's grants, and
+// Symphony.app spawns the coding agents. Symphony launches the helper through
+// LaunchServices (`open -a`), so the helper is its own responsible process and
+// nothing Symphony spawns inherits its grants.
+//
+//   serve <socket> <owner pid>
+//
+// listens on a Unix socket and answers only the owner (the Symphony process that
+// launched it), and exits when the owner does. Each connection sends one JSON
+// line `{"args": [...]}` and gets back `{"status", "output"}`: the result of
+// running one of the commands below in a child of the helper, which keeps the
+// helper's grants. Commands that take a PID only run for a process that descends
+// from the owner, so the helper never reads or drives the operator's other apps.
 // Each command prints one JSON object on stdout and exits 0, or prints
 // `{"error": {"code", "message"}}` and exits 1.
 //
 //   permissions
 //   windows <pid>
+//   screenshot <pid> <window id> <png path>
 //   ax-tree <pid> <max-depth> <max-nodes> <role or ""> <text or "">
 //   ax-press <pid> <path> <action>
 //   ax-set-value <pid> <path> <value>
+//
+// Opened with no arguments (by hand, from Finder or `open`), it asks for both
+// permissions, so that it is listed in System Settings.
 
 import ApplicationServices
 import CoreGraphics
@@ -201,10 +217,10 @@ func axFailure(_ result: AXError, _ verb: String) -> Never {
     }
 }
 
-func windows(_ pid: pid_t) {
+func ownedWindows(_ pid: pid_t) -> [[String: Any]] {
     let list = (CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]]) ?? []
 
-    let owned: [[String: Any]] = list.compactMap { info in
+    return list.compactMap { info in
         guard (info[kCGWindowOwnerPID as String] as? Int).map(pid_t.init) == pid,
               let id = info[kCGWindowNumber as String] as? Int else { return nil }
 
@@ -223,18 +239,204 @@ func windows(_ pid: pid_t) {
             ]
         ]
     }
-
-    emit(["windows": owned])
 }
 
-let args = Array(CommandLine.arguments.dropFirst())
+func windows(_ pid: pid_t) {
+    emit(["windows": ownedWindows(pid)])
+}
+
+func screenshot(_ pid: pid_t, _ windowArgument: String, _ path: String) {
+    guard let window = Int(windowArgument), ownedWindows(pid).contains(where: { $0["id"] as? Int == window }) else {
+        fail("window_not_found", "Window \(windowArgument) does not belong to process \(pid).")
+    }
+    guard path.hasPrefix("/"), !FileManager.default.fileExists(atPath: path) else {
+        fail("invalid_path", "The screenshot path must be absolute and must not exist yet.")
+    }
+
+    let capture = Process()
+    capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+    capture.arguments = ["-x", "-o", "-l", String(window), path]
+    capture.standardOutput = FileHandle.nullDevice
+    capture.standardError = FileHandle.nullDevice
+
+    do { try capture.run() } catch { fail("screenshot_failed", "screencapture could not start: \(error).") }
+    capture.waitUntilExit()
+
+    if capture.terminationStatus != 0 || !FileManager.default.fileExists(atPath: path) {
+        fail("screenshot_failed", "screencapture could not capture window \(window).")
+    }
+
+    emit(["ok": true])
+}
+
+// -- server ---------------------------------------------------------------------
+
+let pidCommands: Set<String> = ["windows", "screenshot", "ax-tree", "ax-press", "ax-set-value"]
+let requestLimit = 64 * 1024
+let commandTimeout: TimeInterval = 60
+
+func parentPID(_ pid: pid_t) -> pid_t? {
+    var info = kinfo_proc()
+    var size = MemoryLayout<kinfo_proc>.stride
+    var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+    guard sysctl(&mib, 4, &info, &size, nil, 0) == 0, size > 0 else { return nil }
+    return info.kp_eproc.e_ppid
+}
+
+func descends(_ pid: pid_t, from owner: pid_t) -> Bool {
+    var current = pid
+
+    for _ in 0..<64 {
+        guard let parent = parentPID(current), parent > 1 else { return false }
+        if parent == owner { return true }
+        current = parent
+    }
+
+    return false
+}
+
+func errorReply(_ code: String, _ message: String) -> [String: Any] {
+    let output = (try? JSONSerialization.data(withJSONObject: ["error": ["code": code, "message": message]]))
+        .flatMap { String(data: $0, encoding: .utf8) } ?? ""
+    return ["status": 1, "output": output]
+}
+
+// Runs one command as a child of the helper, so it keeps the helper's grants.
+func runCommand(_ args: [String], owner: pid_t) -> [String: Any] {
+    guard let command = args.first, command == "permissions" || pidCommands.contains(command) else {
+        return errorReply("usage", "Unknown command.")
+    }
+
+    if pidCommands.contains(command) {
+        guard args.count > 1, let pid = Int32(args[1]), pid > 0, descends(pid, from: owner) else {
+            return errorReply("pid_not_allowed", "The helper only drives apps Symphony launched.")
+        }
+    }
+
+    let child = Process()
+    let output = Pipe()
+    child.executableURL = URL(fileURLWithPath: Bundle.main.executablePath ?? CommandLine.arguments[0])
+    child.arguments = args
+    child.standardOutput = output
+    child.standardError = FileHandle.nullDevice
+
+    do { try child.run() } catch { return errorReply("helper_failed", "The helper could not run \(command): \(error).") }
+
+    let timer = DispatchWorkItem { if child.isRunning { child.terminate() } }
+    DispatchQueue.global().asyncAfter(deadline: .now() + commandTimeout, execute: timer)
+    let data = output.fileHandleForReading.readDataToEndOfFile()
+    child.waitUntilExit()
+    timer.cancel()
+
+    return ["status": Int(child.terminationStatus), "output": String(decoding: data, as: UTF8.self)]
+}
+
+func readRequest(_ fd: Int32) -> [String]? {
+    var data = Data()
+    var buffer = [UInt8](repeating: 0, count: 4096)
+
+    while data.count < requestLimit, !data.contains(UInt8(ascii: "\n")) {
+        let count = read(fd, &buffer, buffer.count)
+        if count <= 0 { break }
+        data.append(contentsOf: buffer[0..<count])
+    }
+
+    guard let line = data.split(separator: UInt8(ascii: "\n")).first,
+          let request = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
+          let args = request["args"] as? [String] else { return nil }
+
+    return args
+}
+
+func writeAll(_ fd: Int32, _ data: Data) {
+    data.withUnsafeBytes { raw in
+        var offset = 0
+        while offset < raw.count {
+            let written = write(fd, raw.baseAddress! + offset, raw.count - offset)
+            if written <= 0 { return }
+            offset += written
+        }
+    }
+}
+
+func handle(_ fd: Int32, owner: pid_t) {
+    defer { close(fd) }
+
+    var peer: pid_t = 0
+    var length = socklen_t(MemoryLayout<pid_t>.size)
+    guard getsockopt(fd, SOL_LOCAL, LOCAL_PEERPID, &peer, &length) == 0, peer == owner else { return }
+
+    let reply = readRequest(fd).map { runCommand($0, owner: owner) } ?? errorReply("usage", "Send one JSON line {\"args\": [...]}.")
+    var data = (try? JSONSerialization.data(withJSONObject: reply)) ?? Data("{}".utf8)
+    data.append(UInt8(ascii: "\n"))
+    writeAll(fd, data)
+}
+
+func ownerAlive(_ owner: pid_t) -> Bool {
+    kill(owner, 0) == 0 || errno == EPERM
+}
+
+func serve(_ path: String, owner: pid_t) -> Never {
+    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+    var address = sockaddr_un()
+    address.sun_family = sa_family_t(AF_UNIX)
+    let bytes = Array(path.utf8)
+
+    guard fd >= 0, bytes.count < MemoryLayout.size(ofValue: address.sun_path) else {
+        fail("socket_failed", "Could not create the helper socket at \(path).")
+    }
+
+    withUnsafeMutableBytes(of: &address.sun_path) { raw in
+        raw.copyBytes(from: bytes)
+        raw[bytes.count] = 0
+    }
+
+    unlink(path)
+    let bound = withUnsafePointer(to: &address) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+    }
+
+    guard bound == 0, chmod(path, 0o600) == 0, listen(fd, 16) == 0 else {
+        fail("socket_failed", "Could not listen on the helper socket at \(path).")
+    }
+
+    Thread.detachNewThread {
+        while ownerAlive(owner) { sleep(2) }
+        unlink(path)
+        exit(0)
+    }
+
+    while true {
+        let client = accept(fd, nil, nil)
+        if client < 0 { continue }
+        DispatchQueue.global().async { handle(client, owner: owner) }
+    }
+}
+
+func requestPermissions() {
+    let accessibility = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
+    let screenRecording = CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess()
+    emit(["accessibility": accessibility, "screen_recording": screenRecording])
+}
+
+// LaunchServices may add a `-psn_…` argument to an app it opens.
+let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-psn_") }
 
 switch args.first {
+case nil:
+    requestPermissions()
+
+case "serve" where args.count == 3:
+    serve(args[1], owner: pidArgument(args[2]))
+
 case "permissions":
     emit(["accessibility": AXIsProcessTrusted(), "screen_recording": CGPreflightScreenCaptureAccess()])
 
 case "windows" where args.count == 2:
     windows(pidArgument(args[1]))
+
+case "screenshot" where args.count == 4:
+    screenshot(pidArgument(args[1]), args[2], args[3])
 
 case "ax-tree" where args.count == 6:
     requireAccessibility()

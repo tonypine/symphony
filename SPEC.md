@@ -1121,7 +1121,9 @@ When enabled:
   `qa_ax_tree`, `qa_ax_press`, `qa_ax_set_value`. Every tool that takes a PID MUST refuse a PID
   the pass did not launch. Apps still running when the pass ends MUST be quit. A missing Screen
   Recording or Accessibility grant MUST surface as a `qa_permission_missing` tool error that tells
-  the agent to answer `blocked`. Other tool scopes MUST NOT list or run the `qa_*` tools.
+  the agent to answer `blocked`. Screenshots and accessibility calls MUST run in a separate helper
+  app that Symphony opens through LaunchServices, so that grants made to it are never inherited by
+  Symphony or the agents it spawns. Other tool scopes MUST NOT list or run the `qa_*` tools.
 - The QA agent MUST run in a fresh detached worktree at the PR head SHA, outside the issue
   workspace, removed afterwards, with a tool scope limited to read-only Linear/GitHub tools and
   `linear_attach_file`. It answers with JSON: `verdict` (`pass`, `fail` or `blocked`), `summary`,

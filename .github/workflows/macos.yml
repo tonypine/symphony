@@ -9,6 +9,7 @@ on:
       - main
     paths:
       - "macos/**"
+      - "priv/qa_driver/**"
       - "scripts/install-macos.sh"
       - ".github/workflows/macos.yml"
 
@@ -47,7 +48,7 @@ jobs:
           # HEAD is the PR merged into its base, so HEAD^1 is the base.
           changed="$(git diff --name-only HEAD^1 HEAD)"
           echo "$changed"
-          if echo "$changed" | grep -qE '^(macos/|scripts/install-macos\.sh$|\.github/workflows/macos\.yml$)'; then
+          if echo "$changed" | grep -qE '^(macos/|priv/qa_driver/|scripts/install-macos\.sh$|\.github/workflows/macos\.yml$)'; then
             echo "macos=true" >> "$GITHUB_OUTPUT"
           else
             echo "macos=false" >> "$GITHUB_OUTPUT"

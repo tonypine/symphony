@@ -840,22 +840,50 @@ opens, changes focus once, and then checks the sizes of the content and scroll a
 accessibility tree, not just the window frame. A window that opens at full height and collapses
 seconds later fails, with the AX tree quoted and a screenshot attached.
 
-The screenshot and accessibility tools use a small Swift helper that Symphony compiles once with
-`swiftc` (Xcode or the Command Line Tools) into `<state root>/qa-driver/`. Bundle copies,
-screenshot staging and the app's QA root live in a `0700` directory per pass under
-`<state root>/qa-driver/runs/`, outside every path the agent sandbox may write, and are removed
-when the pass ends.
+The screenshot and accessibility tools run in a small helper app, `SymphonyQADriver.app`, which
+holds the Screen Recording and Accessibility grants. Symphony opens it through LaunchServices
+(`open -a`) and talks to it over a Unix socket in a `0700` directory under
+`<state root>/qa-driver/run/`. The helper answers only the Symphony process that opened it, only
+for apps that process launched, and quits when Symphony does. `Symphony.app` ships it signed at
+`Symphony.app/Contents/Helpers/SymphonyQADriver.app`. When Symphony runs from a terminal, it
+compiles the helper once with `swiftc` (Xcode or the Command Line Tools) and signs it ad hoc at
+`<state root>/qa-driver/<hash>/SymphonyQADriver.app`. Bundle copies, screenshot staging and the
+app's QA root live in a `0700` directory per pass under `<state root>/qa-driver/runs/`, outside
+every path the agent sandbox may write, and are removed when the pass ends.
 
 ##### One-time macOS permissions
 
-Screenshots need **Screen Recording** and the accessibility tools need **Accessibility**, both
-granted to the process that runs Symphony: `Symphony.app` when the menu bar app runs it, or the
-terminal app you start `symphony` from. Grant them once:
+Screenshots need **Screen Recording** and the accessibility tools need **Accessibility**. Grant
+both to **Symphony QA Driver** (`SymphonyQADriver.app`) and to nothing else.
 
-1. Open **System Settings → Privacy & Security → Screen & System Audio Recording** and turn on
-   Symphony.app (or your terminal). Use **+** to add it when it is not listed.
-2. Open **System Settings → Privacy & Security → Accessibility** and do the same.
-3. Restart Symphony (and the terminal, when Symphony runs from one) so the grants apply.
+> [!WARNING]
+> Do not grant Screen Recording or Accessibility to `Symphony.app`, or to the terminal you run
+> `symphony` from. macOS passes an app's grants to every process it starts, and Symphony starts
+> the coding agents, which run with `--dangerously-skip-permissions`. With such a grant, any agent
+> could run `screencapture` or an AppleScript to read your screen (mail, browser, password
+> prompts) and drive any app, including clicking "Always Allow" on a Keychain prompt. Symphony
+> opens the helper through LaunchServices, so the helper's grants stay with the helper. If you
+> already granted `Symphony.app` or your terminal, turn those grants off.
+
+1. Open the helper once so macOS lists it. With the menu bar app:
+
+   ```bash
+   open ~/Applications/Symphony.app/Contents/Helpers/SymphonyQADriver.app
+   ```
+
+   When Symphony runs from a terminal, the helper only exists after the first QA pass builds it.
+   Open it from `<state root>/qa-driver/<hash>/SymphonyQADriver.app` instead. macOS asks for
+   Accessibility and Screen Recording.
+2. Open **System Settings → Privacy & Security → Screen & System Audio Recording** and turn on
+   Symphony QA Driver. Use **+** to add `SymphonyQADriver.app` when it is not listed.
+3. Open **System Settings → Privacy & Security → Accessibility** and do the same.
+4. Check that `Symphony.app` and your terminal are off in both lists.
+
+Symphony opens the helper again for the next QA pass, so you don't need to restart anything. A
+release `Symphony.app` signs the helper with the same certificate every time, so the grants survive
+app updates. A locally built app (`make` in `macos/`) and the helper built from a terminal are
+signed ad hoc: macOS asks again after each rebuild, and after each Symphony version that changes
+the helper.
 
 Without a grant the tools return `qa_permission_missing`, the QA agent answers `blocked` with the
 missing permission as the reason, and the issue goes to `In Review` with that reason in the QA

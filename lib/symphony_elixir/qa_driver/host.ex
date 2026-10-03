@@ -1,27 +1,47 @@
 defmodule SymphonyElixir.QaDriver.Host do
   @moduledoc """
   The OS boundary of `SymphonyElixir.QaDriver`: timed commands, app launches,
-  process kills and the compiled Swift helper.
+  process kills and the Swift helper app, `SymphonyQADriver.app`.
 
-  The helper source ships as `priv/qa_driver/symphony-qa-driver.swift` and is
-  embedded at compile time (escript and Burrito builds drop `priv/`). On first use
-  it is compiled with `swiftc` into `<state root>/qa-driver/<source hash>/`, so a
-  new Symphony version builds a new helper and the old one is never reused.
+  Screen Recording and Accessibility are granted to the helper app only. macOS
+  gives every process an app spawns that app's grants, so a grant on Symphony.app
+  (or the terminal running Symphony) would reach every coding agent too. The
+  helper is therefore never spawned from here: it is opened through LaunchServices
+  (`open -a`), which makes it its own responsible process, and it answers over a
+  Unix socket in a `0700` directory, only to this Symphony process and only about
+  processes this Symphony process started.
+
+  Symphony.app ships the helper signed at `Contents/Helpers/SymphonyQADriver.app`
+  and passes its path in `SYMPHONY_QA_DRIVER_APP`, so a grant survives app
+  updates. Without it (Symphony run from a terminal) the helper source, which
+  ships as `priv/qa_driver/` and is embedded at compile time (escript and Burrito
+  builds drop `priv/`), is compiled with `swiftc` on first use and signed ad hoc
+  into `<state root>/qa-driver/<source hash>/`, so a new helper source builds a
+  new helper that needs a new grant.
   """
 
   alias SymphonyElixir.{AgentEnv, Paths, ProcessTree}
 
-  @source_path Path.expand(Path.join([__DIR__, "..", "..", "..", "priv", "qa_driver", "symphony-qa-driver.swift"]))
+  @source_dir Path.expand(Path.join([__DIR__, "..", "..", "..", "priv", "qa_driver"]))
+  @source_path Path.join(@source_dir, "symphony-qa-driver.swift")
+  @plist_path Path.join(@source_dir, "Info.plist")
   @external_resource @source_path
+  @external_resource @plist_path
   @source File.read!(@source_path)
-  @source_hash :sha256 |> :crypto.hash(@source) |> Base.encode16(case: :lower) |> binary_part(0, 16)
+  @plist File.read!(@plist_path)
+  @source_hash :sha256 |> :crypto.hash(@source <> @plist) |> Base.encode16(case: :lower) |> binary_part(0, 16)
+  @app_name "SymphonyQADriver.app"
+  @executable "symphony-qa-driver"
+  @app_env "SYMPHONY_QA_DRIVER_APP"
   @compile_timeout_ms 300_000
   @quit_grace_ms 3_000
+  @helper_start_ms 15_000
+  @socket_path_limit 103
 
   @doc "The host functions `QaDriver` uses unless a test overrides them."
   @spec default() :: SymphonyElixir.QaDriver.host()
   def default do
-    %{cmd: &cmd/3, launch: &launch/2, kill: &kill/1, helper: &helper/0}
+    %{cmd: &cmd/3, launch: &launch/2, kill: &kill/1, helper: &helper/0, call_helper: &call_helper/3}
   end
 
   @doc """
@@ -110,27 +130,154 @@ defmodule SymphonyElixir.QaDriver.Host do
     end
   end
 
-  @doc "Path to the compiled Swift helper, compiling it on first use."
+  @doc """
+  Path to the helper app: Symphony.app's signed copy when `SYMPHONY_QA_DRIVER_APP`
+  names one, else a copy compiled and signed ad hoc on first use.
+  """
   @spec helper() :: {:ok, Path.t()} | {:error, term()}
   def helper do
-    dir = Path.join([Paths.state_root(), "qa-driver", @source_hash])
-    binary = Path.join(dir, "symphony-qa-driver")
-
-    if File.regular?(binary), do: {:ok, binary}, else: compile(dir, binary)
+    case System.get_env(@app_env) do
+      app when is_binary(app) and app != "" -> if File.dir?(app), do: {:ok, app}, else: {:error, {:qa_driver_app_missing, app}}
+      _unset -> compiled_helper()
+    end
   end
 
-  defp compile(dir, binary) do
+  defp compiled_helper do
+    dir = Path.join([Paths.state_root(), "qa-driver", @source_hash])
+    app = Path.join(dir, @app_name)
+
+    if File.dir?(app), do: {:ok, app}, else: compile(dir, app)
+  end
+
+  defp compile(dir, app) do
+    staging = app <> ".#{System.unique_integer([:positive])}"
+    contents = Path.join(staging, "Contents")
     source = Path.join(dir, "symphony-qa-driver.swift")
-    staging = binary <> ".#{System.unique_integer([:positive])}"
 
     with swiftc when is_binary(swiftc) <- System.find_executable("swiftc") || {:error, :swiftc_not_found},
-         :ok <- File.mkdir_p(dir),
+         :ok <- File.mkdir_p(Path.join(contents, "MacOS")),
          :ok <- File.write(source, @source),
-         {:ok, {_output, 0}} <- cmd(swiftc, ["-O", "-o", staging, source], env: AgentEnv.build(), timeout_ms: @compile_timeout_ms),
-         :ok <- File.rename(staging, binary) do
-      {:ok, binary}
+         :ok <- File.write(Path.join(contents, "Info.plist"), @plist),
+         {:ok, {_output, 0}} <-
+           cmd(swiftc, ["-O", "-o", Path.join([contents, "MacOS", @executable]), source], env: AgentEnv.build(), timeout_ms: @compile_timeout_ms),
+         {:ok, {_output, 0}} <- cmd("/usr/bin/codesign", ["--force", "--sign", "-", staging], timeout_ms: @compile_timeout_ms) do
+      publish(staging, app)
     else
-      {:ok, {output, status}} -> {:error, {:swiftc_failed, status, String.slice(output, -2_000, 2_000)}}
+      {:ok, {output, status}} ->
+        File.rm_rf(staging)
+        {:error, {:helper_build_failed, status, String.slice(output, -2_000, 2_000)}}
+
+      {:error, reason} ->
+        File.rm_rf(staging)
+        {:error, reason}
+    end
+  end
+
+  # Another QA pass may have published the same helper first.
+  defp publish(staging, app) do
+    case File.rename(staging, app) do
+      :ok ->
+        {:ok, app}
+
+      {:error, reason} ->
+        File.rm_rf(staging)
+        if File.dir?(app), do: {:ok, app}, else: {:error, reason}
+    end
+  end
+
+  @doc """
+  Runs one helper command (`args`) in the helper app, opening the app first when
+  it is not running yet. Returns the command's output and exit status like
+  `cmd/3`. Options: `:timeout_ms` and `:output_limit`.
+  """
+  @spec call_helper(Path.t(), [String.t()], keyword()) :: {:ok, {String.t(), integer()}} | {:error, term()}
+  def call_helper(app, args, opts) do
+    deadline = System.monotonic_time(:millisecond) + Keyword.fetch!(opts, :timeout_ms)
+
+    with {:ok, socket_path} <- socket_path(),
+         {:ok, socket} <- helper_socket(app, socket_path) do
+      try do
+        request(socket, args, Keyword.get(opts, :output_limit, 8_000), deadline)
+      after
+        :gen_tcp.close(socket)
+      end
+    end
+  end
+
+  # One helper per Symphony process. A long state root falls back to the
+  # per-user temporary directory, since Unix socket paths are short.
+  defp socket_path do
+    name = "qa-#{System.pid()}.sock"
+    run_dir = Path.join([Paths.state_root(), "qa-driver", "run"])
+    dir = if byte_size(Path.join(run_dir, name)) <= @socket_path_limit, do: run_dir, else: Path.join(System.tmp_dir!(), "symphony-qa")
+
+    with :ok <- File.mkdir_p(dir),
+         :ok <- File.chmod(dir, 0o700),
+         {:ok, %File.Stat{type: :directory}} <- File.lstat(dir) do
+      {:ok, Path.join(dir, name)}
+    else
+      {:ok, _stat} -> {:error, {:unsafe_socket_dir, dir}}
+      {:error, reason} -> {:error, {:socket_dir, dir, reason}}
+    end
+  end
+
+  defp helper_socket(app, socket_path) do
+    case connect(socket_path) do
+      {:ok, socket} -> {:ok, socket}
+      {:error, _reason} -> :global.trans({__MODULE__, self()}, fn -> start_helper(app, socket_path) end, [node()])
+    end
+  end
+
+  # Under the lock another caller may have opened the helper already.
+  defp start_helper(app, socket_path) do
+    with {:error, _reason} <- connect(socket_path) do
+      args = ["-g", "-j", "-n", "-a", app, "--args", "serve", socket_path, System.pid()]
+
+      case System.cmd("/usr/bin/open", args, stderr_to_stdout: true) do
+        {_output, 0} -> wait_for_helper(socket_path, System.monotonic_time(:millisecond) + @helper_start_ms)
+        {output, status} -> {:error, {:open_failed, status, String.trim(output)}}
+      end
+    end
+  end
+
+  defp wait_for_helper(socket_path, deadline) do
+    case connect(socket_path) do
+      {:ok, socket} ->
+        {:ok, socket}
+
+      {:error, reason} ->
+        if System.monotonic_time(:millisecond) >= deadline do
+          {:error, {:helper_not_started, reason}}
+        else
+          Process.sleep(100)
+          wait_for_helper(socket_path, deadline)
+        end
+    end
+  end
+
+  defp connect(socket_path) do
+    :gen_tcp.connect({:local, socket_path}, 0, [:binary, active: false, packet: :raw], 1_000)
+  end
+
+  defp request(socket, args, limit, deadline) do
+    with :ok <- :gen_tcp.send(socket, [Jason.encode!(%{"args" => args}), "\n"]),
+         {:ok, reply} <- receive_reply(socket, "", deadline),
+         {:ok, %{"status" => status, "output" => output}} when is_integer(status) and is_binary(output) <- Jason.decode(reply) do
+      output = if byte_size(output) > limit, do: binary_part(output, byte_size(output) - limit, limit), else: output
+      {:ok, {output, status}}
+    else
+      {:error, reason} -> {:error, reason}
+      _other -> {:error, :helper_reply_unreadable}
+    end
+  end
+
+  # The helper closes the connection after its one reply line. It closes it
+  # without a reply when it does not answer this process.
+  defp receive_reply(socket, reply, deadline) do
+    case :gen_tcp.recv(socket, 0, max(deadline - System.monotonic_time(:millisecond), 0)) do
+      {:ok, data} -> receive_reply(socket, reply <> data, deadline)
+      {:error, :closed} when reply != "" -> {:ok, reply}
+      {:error, :closed} -> {:error, :helper_refused}
       {:error, reason} -> {:error, reason}
     end
   end
