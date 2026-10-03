@@ -16,10 +16,21 @@ Every release has a monotonic, machine-comparable version:
 | `CFBundleVersion`, `version.json` `build` | the workflow run number | `42` |
 | `CFBundleShortVersionString`, `version.json` `version` | `<mix.exs version>.<run number>` | `0.0.1.42` |
 | Release tag | `v<short version>` | `v0.0.1.42` |
+| Elixir release version (`SYMPHONY_BUILD_NUMBER`) | `<mix.exs version>-<run number>` | `0.0.1-42` |
 
 A pushed `v*` tag is released under its own name with the same versions.
-Compare `build` to tell which release is newer. Bump `version:` in `mix.exs`
+Compare `build` to tell which release is newer. Bump `@version` in `mix.exs`
 for a new major, minor or patch version.
+
+Burrito unpacks the binary into
+`~/Library/Application Support/.burrito/symphony_erts-<erts>_<release version>/`
+and reuses that directory when it exists, so each build needs its own Elixir
+release version. `make package` appends `SYMPHONY_BUILD_NUMBER` to the `mix.exs`
+version as a semver pre-release; without it the release version is the plain
+`mix.exs` version. Burrito deletes the directories of lower versions when a
+newer build first runs. A pre-release sorts below the plain version, so the
+directory of an unsuffixed build (`symphony_erts-<erts>_0.0.1`, including any
+unpacked before build numbers were added) is never deleted; remove it by hand.
 
 ## Release assets
 
@@ -85,9 +96,9 @@ codesign -dvv Symphony.app    # Authority=… once the certificate is configured
 ## Build the app locally
 
 ```bash
-BURRITO_TARGET=macos_arm64 make package     # writes burrito_out/symphony-macos-arm64
+BURRITO_TARGET=macos_arm64 SYMPHONY_BUILD_NUMBER=1 make package   # writes burrito_out/symphony-macos-arm64
 cd macos
-make bundle SYMPHONY_BIN=../burrito_out/symphony-macos-arm64 SHORT_VERSION=0.0.1.0 BUILD_NUMBER=0
+make bundle SYMPHONY_BIN=../burrito_out/symphony-macos-arm64 SHORT_VERSION=0.0.1.1 BUILD_NUMBER=1
 ```
 
 `make bundle` signs ad hoc unless you pass `SIGNING_IDENTITY`, and embeds the update key
