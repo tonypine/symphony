@@ -22,6 +22,17 @@ Application.put_env(:symphony_elixir, :audit_log_dir, audit_dir)
 offline_models_request = fn _url, _opts -> {:error, :network_disabled_in_tests} end
 Application.put_env(:symphony_elixir, :openrouter_models_request, offline_models_request)
 
+# QA passes in tests find no leftover processes; a test that needs the real
+# process table passes `:table` itself.
+Application.put_env(:symphony_elixir, :leftover_process_table, fn -> {:ok, []} end)
+
+# Tests that stop real detached processes need `ps`, which sandboxed agent runs
+# (macOS Seatbelt) deny.
+case SymphonyElixir.LeftoverProcesses.Table.read() do
+  {:ok, [_ | _]} -> :ok
+  _denied -> ExUnit.configure(exclude: [:process_table | Keyword.get(ExUnit.configuration(), :exclude, [])])
+end
+
 # Sandboxed agent runs (Claude Code, SRT) deny writes to `/tmp` itself but
 # expose a short writable TMPDIR such as `/tmp/claude-501`. Keep MCP socket
 # dirs there so `<root>/symphony-mcp-<id>/sock` still fits the 104-byte Unix

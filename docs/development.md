@@ -69,6 +69,17 @@ export LINEAR_API_KEY=...
 make e2e
 ```
 
+## Required checks
+
+`main` requires the `make-all`, `macos` and `validate-pr-description` checks. A required check
+must report on every pull request: a check that never runs blocks the PR, and GitHub auto-merge
+waits on it forever. Don't put a `paths` filter on the trigger of a workflow that holds a
+required check. Run it on every pull request, decide in a first job whether anything relevant
+changed, skip the expensive jobs when nothing did, and end with a gate job under the required
+name that passes when they passed or were skipped. The [`macos` workflow](../.github/workflows/macos.yml)
+does this, and only builds the app when `macos/`, `scripts/install-macos.sh` or the workflow
+itself changed.
+
 ## Packaging
 
 Packaged macOS binaries are built with Burrito and include the Erlang runtime:

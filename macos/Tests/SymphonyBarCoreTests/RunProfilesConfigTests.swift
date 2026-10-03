@@ -570,15 +570,17 @@ final class RunProfilesConfigTests: XCTestCase {
         let flow = "agent:\n  run_profiles:\n    breakdown: { provider: openrouter, model: x/y }\n"
         let block = "agent:\n  run_profiles:\n    breakdown:\n      provider: openrouter\n      model: x/y\n"
         let old = try RunProfilesConfig.profiles(in: flow)
-        XCTAssertEqual(old[.breakdown], RunProfile(model: "x/y"))
+        XCTAssertEqual(old[.breakdown], RunProfile(model: "x/y", provider: "openrouter"))
         XCTAssertEqual(try RunProfilesConfig.profiles(in: block), old)
+        var new = old
+        new[.breakdown].model = nil
 
         XCTAssertEqual(
-            try RunProfilesConfig.updating(flow, from: old, to: RunProfiles()),
+            try RunProfilesConfig.updating(flow, from: old, to: new),
             "agent:\n  run_profiles:\n    breakdown: { provider: openrouter }\n"
         )
         XCTAssertEqual(
-            try RunProfilesConfig.updating(block, from: old, to: RunProfiles()),
+            try RunProfilesConfig.updating(block, from: old, to: new),
             "agent:\n  run_profiles:\n    breakdown:\n      provider: openrouter\n"
         )
     }

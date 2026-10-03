@@ -109,15 +109,43 @@ public struct SymphonyConfigFile {
         let text = try String(contentsOf: url, encoding: .utf8)
         let updated = try transform(text)
         guard updated != text else { return }
+        try replace(url, with: writeSibling(of: url, updated))
+    }
 
-        // Write a sibling file and rename it over the original, so Symphony's config watcher never reads a
-        // half-written file.
-        let files = FileManager.default
-        let permissions = try files.attributesOfItem(atPath: url.path)[.posixPermissions]
+    /// Like `rewrite`, but runs `check` (such as `symphony check`) on a sibling copy of the new text first,
+    /// and replaces the file only when it passes. Returns the check's result, or `.passed` when the text
+    /// doesn't change. The copy sits next to the file, so relative paths in it resolve the same way.
+    public func rewrite(
+        _ transform: (String) throws -> String,
+        checkingWith check: (String) async -> ConfigCheckResult
+    ) async throws -> ConfigCheckResult {
+        let url = url
+        let text = try String(contentsOf: url, encoding: .utf8)
+        let updated = try transform(text)
+        guard updated != text else { return .passed }
+        let candidate = try writeSibling(of: url, updated)
+        let result = await check(candidate.path)
+        guard result == .passed else {
+            try? FileManager.default.removeItem(at: candidate)
+            return result
+        }
+        try replace(url, with: candidate)
+        return .passed
+    }
+
+    /// Writes `text` to a new hidden file next to `url`.
+    private func writeSibling(of url: URL, _ text: String) throws -> URL {
         let temporary = url.deletingLastPathComponent().appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString)")
-        try Data(updated.utf8).write(to: temporary)
+        try Data(text.utf8).write(to: temporary)
+        return temporary
+    }
+
+    /// Renames `temporary` over `url`, so Symphony's config watcher never reads a half-written file. The file
+    /// keeps its permissions; `temporary` is removed when this fails.
+    private func replace(_ url: URL, with temporary: URL) throws {
+        let files = FileManager.default
         do {
-            if let permissions {
+            if let permissions = try files.attributesOfItem(atPath: url.path)[.posixPermissions] {
                 try files.setAttributes([.posixPermissions: permissions], ofItemAtPath: temporary.path)
             }
             guard rename(temporary.path, url.path) == 0 else {
@@ -174,6 +202,11 @@ struct Document {
     /// The direct child `key:` line in the range.
     func child(_ key: String, in range: Range<Int>) -> Key? {
         guard let childIndent = childIndent(in: range) else { return nil }
+        return child(key, in: range, indent: childIndent)
+    }
+
+    /// The `key:` line at `childIndent` in the range.
+    func child(_ key: String, in range: Range<Int>, indent childIndent: Int) -> Key? {
         let marker = key + ":"
         for index in range where indent(at: index) == childIndent {
             let content = lines[index].dropFirst(childIndent)
