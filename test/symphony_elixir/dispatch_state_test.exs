@@ -12,6 +12,52 @@ defmodule SymphonyElixir.DispatchStateTest do
       assert %{active?: true, blockers: []} = DispatchState.compute(state, config, env)
     end
 
+    test "usage-limit hold pauses dispatch only when it covers every run profile in use" do
+      hold = %{
+        provider: "anthropic",
+        scope: :all,
+        window: "five_hour",
+        resets_at: ~U[2026-10-03 14:03:00Z],
+        resume_at: ~U[2026-10-03 14:05:00Z],
+        phase: :paused,
+        reason: "claude_usage_limit",
+        utilization: 1.0
+      }
+
+      state = Map.put(base_state(), :usage_limits, [hold])
+
+      blocker = %{
+        kind: :usage_limit,
+        provider: "anthropic",
+        scope: :all,
+        window: "five_hour",
+        resets_at: ~U[2026-10-03 14:03:00Z],
+        resume_at: ~U[2026-10-03 14:05:00Z],
+        phase: :paused
+      }
+
+      anthropic_only = base_config(%{run_profiles: [%{provider: "anthropic", model: "claude-opus-4"}, %{provider: "anthropic", model: nil}]})
+      assert %{active?: false, blockers: [^blocker]} = DispatchState.compute(state, anthropic_only, full_env())
+
+      mixed = base_config(%{run_profiles: [%{provider: "anthropic", model: nil}, %{provider: "openrouter", model: "z-ai/glm-4.6"}]})
+      assert %{active?: true, blockers: [^blocker]} = DispatchState.compute(state, mixed, full_env())
+
+      # An Opus-only hold leaves Sonnet runs dispatching.
+      opus_hold = %{hold | scope: "opus", window: "seven_day_opus"}
+      models = base_config(%{run_profiles: [%{provider: "anthropic", model: "claude-opus-4"}, %{provider: "anthropic", model: "claude-sonnet-4"}]})
+
+      assert %{active?: true, blockers: [%{kind: :usage_limit, scope: "opus"}]} =
+               DispatchState.compute(%{state | usage_limits: [opus_hold]}, models, full_env())
+
+      assert %{active?: false} = DispatchState.compute(%{state | usage_limits: [opus_hold, hold]}, models, full_env())
+
+      # Listed after the other blockers.
+      paused = Map.put(state, :pause, %{paused: true, reason: nil, paused_at: nil})
+
+      assert %{active?: false, blockers: [%{kind: :manual}, ^blocker]} =
+               DispatchState.compute(paused, mixed, full_env())
+    end
+
     test "manual pause blocker carries reason and timestamp" do
       paused_at = ~U[2026-05-08 10:00:00Z]
 

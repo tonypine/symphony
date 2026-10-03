@@ -1202,7 +1202,7 @@ Fields:
   - Webhook channels require `url` when notifications are enabled.
   - `events` is an OPTIONAL list drawn from: `pr_opened`, `awaiting_review`, `run_failed`,
     `issue_completed`, `budget_exceeded`, `reviewer_commented`, `rework_pushed`, `ci_failed`,
-    `ci_escalated`, `qa_passed`, `qa_failed`.
+    `ci_escalated`, `qa_passed`, `qa_failed`, `usage_limit_paused`, `usage_limit_resumed`.
   - `headers` is an OPTIONAL map of webhook headers.
 
 ### 5.5 Prompt Template Contract
@@ -1974,6 +1974,10 @@ reached (for Claude, a used-up five-hour or weekly window):
   candidate selection with their attempt, as a retry waiting for a slot does. Resuming never sets
   or clears the operator pause; the daily budget, workspace quota and Linear rate-limit gates still
   apply.
+- Emit one `usage_limit_paused` notification when a hold is created (not when a held run refreshes
+  it) and one `usage_limit_resumed` when it clears. A hold restored on startup emits nothing.
+- Show each hold in the status surfaces (Section 13), for example
+  `Paused: Claude 5-hour limit, resumes ~14:05` in local time.
 
 ### 8.5 Active Run Reconciliation
 
@@ -2823,8 +2827,14 @@ SHOULD return:
   - `output_tokens`
   - `total_tokens`
   - `seconds_running` (aggregate runtime seconds as of snapshot time, including active sessions)
-- `rate_limits` (latest coding-agent rate limit payload, if available)
-- `pause`, `budget`, `dispatch_state`, and `workspace_lifecycle` when those extensions are enabled
+- `rate_limits` (latest coding-agent rate limit payload, if available; telemetry only)
+- `usage_limits` (provider usage-limit holds, Section 8.4.1; empty when nothing is held), each with
+  `provider`, `scope`, `reason`, `window`, `phase`, `since`, `resets_at`, `resume_at`, `source` and
+  `utilization` (the latest utilization seen for the window, or null)
+- `pause`, `budget`, `dispatch_state`, and `workspace_lifecycle` when those extensions are enabled.
+  `pause` is the operator pause only. Each usage-limit hold adds a `dispatch_state.blockers` entry
+  `{kind: "usage_limit", provider, scope, window, resets_at, resume_at, phase}`, but
+  `dispatch_state.active?` is false only when the holds cover every provider (and model) in use.
 
 Elixir implementation note: the current snapshot's `run_history` is read from the primary repo
 partition, while budget hydration reads runs across all repo partitions.
@@ -3099,6 +3109,21 @@ Minimum endpoints:
         "daily_paused": false
       },
       "rate_limits": null,
+      "usage_limits": [
+        {
+          "provider": "anthropic",
+          "scope": "all",
+          "reason": "claude_usage_limit",
+          "window": "five_hour",
+          "phase": "paused",
+          "since": "2026-02-24T19:02:11Z",
+          "resets_at": "2026-02-24T21:00:00Z",
+          "resume_at": "2026-02-24T21:02:00Z",
+          "source": "rate_limit_event",
+          "utilization": 1.0,
+          "issue_identifier": "MT-648"
+        }
+      ],
       "linear_usage": {
         "window_ms": 3600000,
         "total": 412,

@@ -456,6 +456,10 @@ agent:
   no reset time is known (neither in the rejection nor remembered for that window).
 - The hold is kept across restarts and is separate from the operator pause: resuming never
   clears a pause you set.
+- While a hold is in place, the dashboards show `Paused: Claude 5-hour limit, resumes ~14:05`
+  (local time), `/api/v1/state` lists it under `usage_limits`, and `dispatch_state.blockers` has a
+  `usage_limit` entry. The `usage_limit_paused` and `usage_limit_resumed` notifications go out once
+  when a hold starts and once when it clears, not once per held run.
 
 **Project guides:**
 
