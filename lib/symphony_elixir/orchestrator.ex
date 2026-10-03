@@ -34,11 +34,14 @@ defmodule SymphonyElixir.Orchestrator do
     Workspace
   }
 
-  alias SymphonyElixir.Linear.{Client, Issue, RateLimit}
+  alias SymphonyElixir.Linear.{Client, Issue, RateLimit, TransientRetry, Usage}
   alias SymphonyElixirWeb.ObservabilityPubSub
 
   @continuation_retry_delay_ms 1_000
   @failure_retry_base_ms 10_000
+  # A transient Linear error (timeout, refused connection, 5xx) is not the issue's
+  # fault: retry soon, without failure backoff. A rate limit waits for its pause.
+  @linear_wait_retry_delay_ms 5_000
   # Slightly above the dashboard render interval so "checking now…" can render.
   @poll_transition_render_delay_ms 20
   @default_transcript_buffer_size 200
@@ -128,6 +131,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   @impl true
   def init(_opts) do
+    Usage.put_caller(:orchestrator)
     now_ms = System.monotonic_time(:millisecond)
     config = Config.settings!()
     repo_key = Config.repo_key!()
@@ -2941,13 +2945,35 @@ defmodule SymphonyElixir.Orchestrator do
 
         state
 
-      {:error, {:linear_rate_limited, _reset_ms}} ->
-        Logger.debug("Skipping dispatch; Linear is rate-limited for #{issue_context(issue)}")
-        state
-
       {:error, reason} ->
-        Logger.warning("Skipping dispatch; issue refresh failed for #{issue_context(issue)}: #{inspect(reason)}")
-        state
+        skip_dispatch_after_refresh_failure(state, issue, attempt, preferred_worker_host, repo_key, reason)
+    end
+  end
+
+  # A retry that skips dispatch here has already left the retry queue while its
+  # claim stays; schedule it again so the issue is not stuck claimed with no retry.
+  defp skip_dispatch_after_refresh_failure(%State{} = state, issue, attempt, worker_host, repo_key, reason) do
+    case reason do
+      {:linear_rate_limited, _reset_ms} -> Logger.debug("Skipping dispatch; Linear is rate-limited for #{issue_context(issue)}")
+      reason -> Logger.warning("Skipping dispatch; issue refresh failed for #{issue_context(issue)}: #{inspect(reason)}")
+    end
+
+    if retry_attempt?(attempt) do
+      metadata =
+        linear_wait_metadata(
+          %{
+            identifier: issue.identifier,
+            title: issue.title,
+            worker_host: worker_host,
+            repo_key: repo_key,
+            error: dispatch_refresh_error(reason)
+          },
+          reason
+        )
+
+      schedule_issue_retry(state, issue.id, retry_attempt_after_refresh_failure(attempt, reason), metadata)
+    else
+      state
     end
   end
 
@@ -3391,14 +3417,17 @@ defmodule SymphonyElixir.Orchestrator do
        state,
        issue_id,
        retry_attempt_after_refresh_failure(attempt, reason),
-       Map.merge(metadata, %{error: "retry issue refresh failed: #{inspect(reason)}"})
+       metadata
+       |> Map.merge(%{error: "retry issue refresh failed: #{inspect(reason)}"})
+       |> linear_wait_metadata(reason)
      )}
   end
 
-  # A Linear rate limit is not the issue's fault; keep its attempt (and backoff)
-  # where it was and let schedule_issue_retry/4 wait for the pause to end.
-  defp retry_attempt_after_refresh_failure(attempt, {:linear_rate_limited, _reset_ms}), do: attempt
-  defp retry_attempt_after_refresh_failure(attempt, _reason), do: attempt + 1
+  # A Linear rate limit or a dropped connection is not the issue's fault; keep its
+  # attempt where it was and let schedule_issue_retry/4 wait for Linear.
+  defp retry_attempt_after_refresh_failure(attempt, reason) do
+    if TransientRetry.transient?(reason), do: retry_attempt(attempt), else: retry_attempt(attempt) + 1
+  end
 
   defp handle_retry_issue_sync_for_test(%State{} = state, issue_id, attempt, metadata, issue_fetcher)
        when is_function(issue_fetcher, 1) do
@@ -3473,7 +3502,7 @@ defmodule SymphonyElixir.Orchestrator do
     post_pr_state = AutoReview.post_pr_state(Config.settings!())
     Logger.info("Issue has an opened PR and no rework signal; moving to #{post_pr_state}: #{issue_context(issue)}")
 
-    case Tracker.update_issue_state(issue_id, post_pr_state) do
+    case Usage.with_caller(:post_pr_transition, fn -> Tracker.update_issue_state(issue_id, post_pr_state) end) do
       :ok ->
         reviewed_issue = %Issue{issue | state: post_pr_state, updated_at: DateTime.utc_now()}
 
@@ -3492,12 +3521,30 @@ defmodule SymphonyElixir.Orchestrator do
            state,
            issue_id,
            attempt,
-           Map.merge(metadata, %{
+           metadata
+           |> Map.merge(%{
              identifier: issue.identifier,
              title: issue.title,
-             error: "failed to move post-PR issue to #{post_pr_state}: #{inspect(reason)}"
+             error: post_pr_move_error(post_pr_state, reason)
            })
+           |> linear_wait_metadata(reason)
          )}
+    end
+  end
+
+  defp dispatch_refresh_error(reason) do
+    if TransientRetry.transient?(reason) do
+      "waiting for Linear before dispatch: #{inspect(reason)}"
+    else
+      "retry issue refresh failed: #{inspect(reason)}"
+    end
+  end
+
+  defp post_pr_move_error(post_pr_state, reason) do
+    if TransientRetry.transient?(reason) do
+      "waiting for Linear to move post-PR issue to #{post_pr_state}: #{inspect(reason)}"
+    else
+      "failed to move post-PR issue to #{post_pr_state}: #{inspect(reason)}"
     end
   end
 
@@ -4173,16 +4220,22 @@ defmodule SymphonyElixir.Orchestrator do
   defp setup_failed_suppressed?(_setup_failed, _issue), do: false
 
   defp retry_delay(attempt, metadata) when is_integer(attempt) and attempt > 0 and is_map(metadata) do
-    if retry_delay_type(metadata) == :continuation and attempt == 1 do
-      @continuation_retry_delay_ms
-    else
-      failure_retry_delay(attempt)
+    case retry_delay_type(metadata) do
+      :continuation when attempt == 1 -> @continuation_retry_delay_ms
+      :linear_wait -> @linear_wait_retry_delay_ms
+      _delay_type -> failure_retry_delay(attempt)
     end
   end
 
   defp retry_delay_type(%{delay_type: :continuation}), do: :continuation
   defp retry_delay_type(%{delay_type: "continuation"}), do: :continuation
+  defp retry_delay_type(%{delay_type: :linear_wait}), do: :linear_wait
+  defp retry_delay_type(%{delay_type: "linear_wait"}), do: :linear_wait
   defp retry_delay_type(_metadata), do: nil
+
+  defp linear_wait_metadata(metadata, reason) do
+    if TransientRetry.transient?(reason), do: Map.put(metadata, :delay_type, :linear_wait), else: metadata
+  end
 
   defp failure_retry_delay(attempt) do
     max_delay_power = min(attempt - 1, 10)
@@ -5795,7 +5848,8 @@ defmodule SymphonyElixir.Orchestrator do
       poll_interval_multiplier: status.poll_interval_multiplier,
       requests_last_poll: state.linear_requests_last_poll,
       requests_remaining: status.requests_remaining,
-      requests_limit: status.requests_limit
+      requests_limit: status.requests_limit,
+      usage: Usage.snapshot(now_ms)
     }
   end
 

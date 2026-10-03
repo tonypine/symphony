@@ -68,7 +68,8 @@ defmodule SymphonyElixirWeb.Presenter do
           epic_lanes: normalize_epic_lanes(Map.get(snapshot, :epic_lanes)),
           finishing: normalize_finishing(Map.get(snapshot, :finishing)),
           slot_waiting: snapshot |> Map.get(:slot_waiting, []) |> Enum.map(&slot_waiting_payload/1),
-          rate_limits: snapshot.rate_limits
+          rate_limits: snapshot.rate_limits,
+          linear_usage: normalize_linear_usage(get_in(snapshot, [:polling, :linear, :usage]))
         }
 
       :timeout ->
@@ -269,6 +270,13 @@ defmodule SymphonyElixirWeb.Presenter do
   end
 
   defp normalize_pollers(_pollers), do: %{ci: :unavailable, pr_review: :unavailable}
+
+  # Linear requests per caller over the last hour, busiest first.
+  defp normalize_linear_usage(%{window_ms: window_ms, total: total, callers: callers}) do
+    %{window_ms: window_ms, total: total, callers: Enum.map(callers, &Map.take(&1, [:caller, :requests]))}
+  end
+
+  defp normalize_linear_usage(_usage), do: %{window_ms: 3_600_000, total: 0, callers: []}
 
   defp normalize_poller_status(%{} = status) do
     %{

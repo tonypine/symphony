@@ -271,6 +271,38 @@ defmodule SymphonyElixirWeb.DashboardLive do
         <section class="section-card">
           <div class="section-header">
             <div>
+              <h2 class="section-title">Linear requests</h2>
+              <p class="section-copy">
+                Requests sent to Linear in the last hour, by caller: <span class="numeric"><%= @payload.linear_usage.total %></span> in total.
+              </p>
+            </div>
+          </div>
+
+          <%= if @payload.linear_usage.callers == [] do %>
+            <p class="empty-state">No Linear requests in the last hour.</p>
+          <% else %>
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Caller</th>
+                    <th>Requests</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr :for={caller <- @payload.linear_usage.callers}>
+                    <td><%= caller.caller %></td>
+                    <td class="numeric"><%= caller.requests %></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          <% end %>
+        </section>
+
+        <section class="section-card">
+          <div class="section-header">
+            <div>
               <h2 class="section-title">Agent lanes</h2>
               <p class="section-copy">
                 Each active epic keeps a lane for its sub-tickets. Shared pool: <span class="numeric"><%= @payload.epic_lanes.shared.used %>/<%= @payload.epic_lanes.shared.slots %></span> in use.
