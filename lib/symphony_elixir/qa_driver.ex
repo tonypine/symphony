@@ -263,6 +263,10 @@ defmodule SymphonyElixir.QaDriver do
          :ok <- same_build(built.digest, fingerprint.digest) do
       GenServer.call(driver, {:record_build, fingerprint, ignored})
       {:ok, %{"exit_status" => 0, "output" => output, "app" => config.app}}
+    else
+      {:error, _reason} = error ->
+        GenServer.call(driver, {:record_build, nil, ignored})
+        error
     end
   end
 

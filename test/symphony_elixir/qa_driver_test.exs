@@ -386,6 +386,18 @@ defmodule SymphonyElixir.QaDriverTest do
         assert message =~ "must be relative"
         assert error_code(QaDriver.call_tool(driver, "qa_launch_app", %{})) == "qa_not_built"
       end
+
+      # A refused bundle still becomes the baseline and drops the earlier build,
+      # so its outputs do not block the next attempt as agent edits.
+      {:ok, target} = Agent.start_link(fn -> "Versions/A/Dep" end)
+      retry = fn executable, args, opts -> build_with_link.(Agent.get(target, & &1)).(executable, args, opts) end
+      driver = start_driver(worktree, host: host(%{cmd: retry}))
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+      Agent.update(target, fn _target -> Path.join(worktree, "evil.dylib") end)
+      assert error_code(QaDriver.call_tool(driver, "qa_build", %{})) == "qa_bundle_unsafe"
+      assert error_code(QaDriver.call_tool(driver, "qa_launch_app", %{})) == "qa_not_built"
+      Agent.update(target, fn _target -> "Versions/A/Dep" end)
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
     end
 
     test "refuses a bundle with special files or entries it cannot read", %{worktree: worktree} do
