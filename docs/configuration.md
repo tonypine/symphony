@@ -556,6 +556,7 @@ pull_requests:
     retry_failed_once: true
     max_fix_attempts: 3
     escalate_to_state: In Review
+    landing_wait_timeout_ms: 1800000
   learnings:
     enabled: false
     provider: anthropic
@@ -575,6 +576,10 @@ pull_requests:
   with a hidden `<!-- symphony:agent -->` marker and skips those.
 - `checks.retry_failed_once` retries one likely-flaky failure before escalating.
 - `checks.max_fix_attempts` bounds automated CI rework.
+- `checks.landing_wait_timeout_ms` bounds how long a `Merging` issue waits for CI. When a landing
+  run ends with the PR head's checks pending, Symphony holds the issue in `Merging` and dispatches
+  the landing agent again once the CI poller sees that head go green (a red head goes through the
+  normal CI-failure fix loop), or after this timeout.
 
 ### `pre_push_review`
 

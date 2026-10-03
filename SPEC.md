@@ -714,6 +714,10 @@ Fields:
   - Default: `3`.
 - `checks.escalate_to_state` (string)
   - Default: `In Review`.
+- `checks.landing_wait_timeout_ms` (integer)
+  - Default: `1800000` (30 minutes).
+  - How long a `Merging` issue whose landing run ended on pending checks stays held before the
+    landing agent is dispatched again anyway.
 
 Review-comment options are ignored when `enabled` is not `true`. CI failure dispatch is driven only
 by failed status checks and ignores comment authorship; the ignored reviewer set above does not
@@ -1078,6 +1082,8 @@ When enabled:
   fails, Auto Review stays on.
 - The post-PR transition (an active issue whose completed run opened a PR and has no rework signal)
   MUST target `state` instead of `In Review`.
+- The post-PR transition MUST NOT apply to an issue in `Merging`: that state is a human's merge
+  approval, so Symphony MUST keep the issue in `Merging` and leave it with the landing agent.
 - `linear_update_state` MUST refuse `In Review` from agent sessions with a clear error telling the
   agent that Symphony moves the issue once the PR is open, rather than redirecting the target
   state.
@@ -1626,7 +1632,19 @@ The poller:
 - when `pull_requests.checks.enabled` is true, polls CI status for tracked PRs in every configured
   repository route, preserving the same retry, dispatch, and escalation behavior used for the
   primary repository. With `auto_review` on, it also tracks PRs of issues in `auto_review.state`
-  and starts a QA pass on green CI (see `auto_review`).
+  and starts a QA pass on green CI (see `auto_review`). It also tracks PRs of issues in
+  `Merging`, so a held landing run (below) sees its head settle and a red head takes the normal
+  CI-failure dispatch.
+
+When a landing run (issue in `Merging` with an attached PR) finishes a turn while the PR head's
+checks are pending, the agent runner MUST end the run instead of starting another continuation
+turn, and the orchestrator MUST hold the issue in `Merging` without a continuation retry and
+without dispatching it. The hold ends, and the landing agent is dispatched again through the normal
+poll, when the CI poller has observed that same head SHA with green checks, or when
+`pull_requests.checks.landing_wait_timeout_ms` has passed. The hold is dropped without a landing
+dispatch when the issue leaves `Merging` (for example the CI-failure dispatch moves it to
+`In Progress`). Holds live in orchestrator memory; after a restart the landing agent runs again and
+re-establishes the hold if checks are still pending.
 
 The orchestrator continues to own active-state dispatch, retry, run-store run records, and
 dashboard-visible agent execution. The PR review poller owns only polling-mode GitHub polling,
