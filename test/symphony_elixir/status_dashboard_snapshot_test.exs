@@ -517,6 +517,47 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
     refute rendered =~ "linear tracker unavailable"
   end
 
+  test "dashboard shows a usage-limit banner with today's time or another day's date" do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    later = DateTime.add(now, 3 * 86_400)
+
+    snapshot_data =
+      {:ok,
+       %{
+         running: [],
+         retrying: [],
+         codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+         rate_limits: nil,
+         usage_limits: [
+           %{provider: "anthropic", scope: :all, window: "five_hour", resume_at: now},
+           %{provider: "anthropic", scope: "opus", window: "seven_day_opus", resume_at: later}
+         ],
+         dispatch_state: %{
+           active?: false,
+           blockers: [
+             %{
+               kind: :usage_limit,
+               provider: "anthropic",
+               scope: :all,
+               window: "five_hour",
+               resets_at: nil,
+               resume_at: now,
+               phase: :paused
+             }
+           ]
+         }
+       }}
+
+    rendered = render_snapshot(snapshot_data, 0.0)
+
+    assert rendered =~ ~r/Paused: Claude 5-hour limit, resumes ~\d{2}:\d{2}\e/
+    assert rendered =~ ~r/Paused: Claude weekly Opus limit, resumes ~[A-Z][a-z]{2} \d{1,2} \d{2}:\d{2}\e/
+    assert rendered =~ "Claude 5-hour limit reached (resumes #{DateTime.to_iso8601(now)})"
+
+    idle = render_snapshot({:ok, %{running: [], retrying: [], codex_totals: %{}, rate_limits: nil}}, 0.0)
+    refute idle =~ "Paused:"
+  end
+
   test "snapshot fixture: workspace dirty blocker alone does not pause dispatch" do
     snapshot_data =
       {:ok,

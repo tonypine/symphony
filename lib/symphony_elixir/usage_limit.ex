@@ -181,4 +181,82 @@ defmodule SymphonyElixir.UsageLimit do
   @spec scope_label(String.t() | :all) :: String.t()
   def scope_label(:all), do: "all"
   def scope_label(scope) when is_binary(scope), do: scope
+
+  @doc "The limit a hold is on, as people read it: `Claude 5-hour limit`."
+  @spec limit_label(map()) :: String.t()
+  def limit_label(entry) when is_map(entry) do
+    "#{provider_label(Map.get(entry, :provider))} #{window_label(Map.get(entry, :window))}"
+  end
+
+  defp provider_label(provider) when provider in [nil, "anthropic"], do: "Claude"
+  defp provider_label("openrouter"), do: "OpenRouter"
+  defp provider_label(provider), do: to_string(provider)
+
+  defp window_label("five_hour"), do: "5-hour limit"
+  defp window_label("seven_day"), do: "weekly limit"
+  defp window_label("seven_day_opus"), do: "weekly Opus limit"
+  defp window_label("seven_day_sonnet"), do: "weekly Sonnet limit"
+  defp window_label(nil), do: "usage limit"
+  defp window_label(window), do: "#{window} limit"
+
+  @doc """
+  The dashboard banner for a hold: `Paused: Claude 5-hour limit, resumes ~14:05`. The resume
+  time is in local time, with the date when it is not today. `resume_at` may be a
+  `DateTime` or an ISO 8601 string. `opts[:to_local]` converts a UTC `NaiveDateTime` to local
+  time (default: the host's time zone).
+  """
+  @spec banner(map(), DateTime.t(), keyword()) :: String.t()
+  def banner(entry, %DateTime{} = now, opts \\ []) when is_map(entry) do
+    "Paused: #{limit_label(entry)}" <> resume_suffix(datetime(Map.get(entry, :resume_at)), now, opts)
+  end
+
+  defp resume_suffix(nil, _now, _opts), do: ""
+
+  defp resume_suffix(%DateTime{} = resume_at, now, opts) do
+    to_local = Keyword.get(opts, :to_local, &host_local_time/1)
+    local = to_local.(DateTime.to_naive(resume_at))
+    time = local |> NaiveDateTime.to_time() |> Calendar.strftime("%H:%M")
+
+    if NaiveDateTime.to_date(local) == NaiveDateTime.to_date(to_local.(DateTime.to_naive(now))) do
+      ", resumes ~#{time}"
+    else
+      ", resumes ~#{Calendar.strftime(local, "%b %-d")} #{time}"
+    end
+  end
+
+  defp datetime(%DateTime{} = datetime), do: datetime
+
+  defp datetime(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> datetime
+      {:error, _reason} -> nil
+    end
+  end
+
+  defp datetime(_value), do: nil
+
+  defp host_local_time(%NaiveDateTime{} = utc) do
+    utc
+    |> NaiveDateTime.to_erl()
+    |> :calendar.universal_time_to_local_time()
+    |> NaiveDateTime.from_erl!()
+  end
+
+  @doc """
+  The holds as the status snapshot lists them, soonest resume first, each with the latest
+  utilization seen for its window.
+  """
+  @spec snapshot(map(), windows()) :: [map()]
+  def snapshot(usage_limits, windows) when is_map(usage_limits) and is_map(windows) do
+    usage_limits
+    |> Map.values()
+    |> Enum.sort_by(&DateTime.to_unix(&1.resume_at))
+    |> Enum.map(fn entry ->
+      seen = Map.get(windows, {entry.provider, entry.window}, %{})
+
+      entry
+      |> Map.take([:provider, :scope, :reason, :window, :phase, :since, :resets_at, :resume_at, :source, :issue_identifier])
+      |> Map.put(:utilization, Map.get(seen, :utilization))
+    end)
+  end
 end

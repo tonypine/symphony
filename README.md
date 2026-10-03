@@ -308,6 +308,14 @@ attempt. One held run goes first; the rest follow only once Claude accepts it, a
 again if the limit is still in force. Runs on other providers keep going, and an operator pause is never cleared by it. Set
 `agent.usage_limit.auto_pause: false` to fail and retry such runs as before.
 
+While Claude runs are held, the web and terminal dashboards show a banner such as
+`Paused: Claude 5-hour limit, resumes ~14:05` (local time, with the date when it isn't today), and
+`/api/v1/state` lists each hold under `usage_limits` with its window, reset and resume times, next to
+a `usage_limit` entry in `dispatch_state.blockers`. `dispatch_state.active?` turns false only when
+every provider in use is held. Slack and webhook channels get one `usage_limit_paused` message when
+the hold starts and one `usage_limit_resumed` message when it clears, which is once Claude accepts
+the first run, not when it starts.
+
 ### Docker
 
 The Docker runtime mounts your operator config, repositories, credentials, and agent command into
