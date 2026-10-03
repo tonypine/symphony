@@ -1802,10 +1802,18 @@ An issue is dispatch-eligible only if all are true:
     `Backlog` since before that change (created before it, no state change after it) moves to
     `Todo` in one batch. Blocked-by links keep the order. A parent the service parked from
     `In Progress` was not approved, so nothing moves.
-  - Rejection: for a `breakdown` parent in `Rework` with a sub-issue in `Backlog`, the sub-issues
-    in `Backlog` since the parent's latest move to `Rework` are cancelled (`Canceled`, else
-    `Cancelled`) before the re-plan is dispatched; until that succeeds the parent is not
-    dispatched. Sub-issues created by the re-plan are left alone.
+  - Rejection: for a `breakdown` parent in `Rework` with a sub-issue in `Backlog`, the rejected
+    plan's sub-issues in `Backlog` since the parent's latest move to `Rework` are cancelled
+    (`Canceled`, else `Cancelled`) before the re-plan is dispatched; until that succeeds the
+    parent is not dispatched. The plan's sub-issues are those created by the run that moved the
+    parent to `In Review`: from the parent's state change before its latest move to `In Review`
+    (before the `Rework` move) up to that move. With no such move nothing is cancelled.
+    Sub-issues a person added before that run or during the review, and sub-issues created by the
+    re-plan, are left alone.
+  - Record: after each batch the service posts one comment on the parent listing the identifiers
+    it moved: `Promoted to Todo: TP-a, TP-b` or
+    `Cancelled for re-plan: TP-c, TP-d (restore from Canceled if needed)`. A failed comment is
+    logged and does not retry the batch.
   - Both actions are idempotent across polls and restarts: a sub-issue a human (or a final
     verification run) moves back to `Backlog` later is not moved again. The service remembers the
     `Backlog` sub-issues it last acted on per parent and skips the history read while they are
@@ -3782,8 +3790,10 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
   to `Todo` within one poll; sub-issues in other states, or moved back to `Backlog` after the
   approval, are left alone, and a re-poll moves nothing
 - `breakdown` parent parked from `In Progress` to the waiting state has nothing promoted
-- `breakdown` parent in `Rework` has its pre-`Rework` `Backlog` sub-issues cancelled, is not held
+- `breakdown` parent in `Rework` has the rejected plan's pre-`Rework` `Backlog` sub-issues
+  cancelled, leaves a `Backlog` sub-issue a person created outside that run alone, is not held
   by its open sub-issues, and is not dispatched until the cancel succeeds
+- each promote and cancel batch posts one comment on the parent listing the moved identifiers
 - Active-state issue refresh updates running entry state
 - Non-active state stops running agent without workspace cleanup
 - Terminal state stops running agent and cleans workspace
