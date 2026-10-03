@@ -1900,10 +1900,20 @@ Epic lanes:
   `min(epic_lanes, max_concurrent_agents)` of them each reserve one slot (a lane); the rest wait
   for a lane. `epic_lanes` defaults to `max_concurrent_agents`.
 - `shared_slots = max_concurrent_agents - lane_count`.
-- A sub-issue of an epic with a lane runs in that lane when no other sub-issue of the epic is
-  running; otherwise it, and every other issue, needs a free shared slot.
-- A lane with nothing running stays reserved, so the epic's next sub-issue starts there as soon as
-  its blocker merges, even when the shared slots are full.
+- An epic's path is its non-terminal sub-issues, their sub-issues at any depth, and the
+  non-terminal blockers (`blocked_by`) of any of those, transitively. The walk follows the
+  candidate issues; an issue that is not a candidate ends its branch. Each issue on the path keeps
+  its shortest distance from the epic and the issue it blocks or is a sub-issue of.
+- An issue on the path of an epic with a lane runs in that lane when nothing else holds it;
+  otherwise it, and every other issue, needs a free shared slot. An issue on the path of two epics
+  runs in whichever lane is free first and holds only one lane.
+- Within a dispatch stage, a lane's issues go nearest the epic first: the epic's next part, then a
+  blocker or sub-issue of it, and so on. They swap only among the places they already hold in the
+  dispatch order, so priority and age only break ties between them.
+- A lane with nothing running stays reserved, so the next issue on the epic's path starts there as
+  soon as its blocker merges, even when the shared slots are full.
+- The `epic_lanes` snapshot shows, for a running lane, the issue it runs and, when that is not one
+  of the epic's own sub-issues, the issue it blocks or is a sub-issue of (`via`).
 - Lanes are recomputed from the candidate issues on every poll tick.
 
 ### 8.4 Retry and Backoff
@@ -3867,6 +3877,8 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
   a slot frees
 - Each active epic reserves one lane out of `max_total`; a standalone issue cannot take a reserved
   lane while the epic's current sub-issue is in review, and the next sub-issue starts in it
+- An epic's lane runs a blocker of its next part from outside the epic, and a sub-issue of a
+  sub-issue; a blocker shared by two epics runs once and holds one lane
 - `Todo` issue with non-terminal blockers is not eligible
 - `Todo` issue with terminal blockers is eligible
 - `breakdown` issue with a non-terminal sub-issue is not eligible; once every sub-issue is

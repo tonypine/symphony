@@ -1727,8 +1727,10 @@ defmodule SymphonyElixir.ExtensionsTest do
     orchestrator_name = Module.concat(__MODULE__, :EpicLanesDashboardOrchestrator)
 
     lanes = [
-      lane("e1", "MT-E1", "running", %{issue_id: "p1", identifier: "MT-P1", state: "In Progress"}),
+      lane("e1", "MT-E1", "running", %{issue_id: "p1", identifier: "MT-P1", state: "In Progress", via: nil}),
       lane("e2", "MT-E2", "waiting", %{issue_id: "p2", identifier: "MT-P2", state: "In Review"}),
+      lane("e5", "MT-E5", "running", %{issue_id: "b5", identifier: "MT-B5", state: "In Progress", via: %{relation: "blocks", identifier: "MT-P5"}}),
+      lane("e6", "MT-E6", "running", %{issue_id: "g6", identifier: "MT-G6", state: "Todo", via: %{relation: "sub_ticket_of", identifier: "MT-P6"}}),
       %{issue_id: "e3", identifier: "MT-E3", title: "Epic three", url: nil, status: "waiting", sub_issue: nil}
     ]
 
@@ -1747,6 +1749,9 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     assert html =~ "Agent lanes"
     assert html =~ "MT-P1 (In Progress)"
+    refute html =~ "MT-P1 (In Progress),"
+    assert html =~ "MT-B5 (In Progress), blocks MT-P5"
+    assert html =~ "MT-G6 (Todo), sub-ticket of MT-P6"
     assert html =~ "Waiting on MT-P2 (In Review)"
     assert html =~ "Waiting for its next sub-ticket"
     assert html =~ "Idle, reserved"

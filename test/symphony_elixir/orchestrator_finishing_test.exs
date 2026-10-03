@@ -243,6 +243,25 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
     assert Orchestrator.should_dispatch_issue_for_test(landing, state)
   end
 
+  test "an epic's lane starts its next part before a higher-priority grandchild", ctx do
+    write_finishing_workflow!(ctx, max_concurrent_agents: 2, epic_lanes: 1)
+    part = issue("c1", "MT-C1", "Todo", priority: 3)
+    parent = issue("p2", "MT-P2", "In Progress", sub_issues: [%{id: "g1", identifier: "MT-G1", state: "Todo"}])
+    grandchild = issue("g1", "MT-G1", "Todo", priority: 1)
+    standalone = issue("s1", "MT-S1", "Todo", priority: 2)
+    epic = epic("e1", "MT-E1", [%{id: "c1", identifier: "MT-C1", state: "Todo"}, %{id: "p2", identifier: "MT-P2", state: "In Progress"}])
+    tracked([part, grandchild, standalone])
+
+    state = Orchestrator.put_epic_lanes_for_test(orchestrator_state(2), [epic, part, parent, grandchild, standalone])
+    candidates = [grandchild, standalone, part]
+    log = capture_log(fn -> send(self(), {:state, Orchestrator.dispatch_chosen_issues_for_test(candidates, state)}) end)
+    assert_received {:state, state}
+
+    assert dispatch_order(log) == ["c1", "s1"]
+    assert log =~ ~r/issue_id=c1 .* slot=lane:MT-E1/
+    assert %{reason: "work slots full"} = state.slot_waiting["g1"]
+  end
+
   test "landing runs leave the work slots and lane snapshot to implementation work" do
     state =
       orchestrator_state(1)
