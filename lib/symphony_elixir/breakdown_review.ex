@@ -61,8 +61,9 @@ defmodule SymphonyElixir.BreakdownReview do
   @doc """
   The sub-issues `action` applies to: those in `Backlog` since before the move that asked for it,
   and for `:replace` only those created by the rejected plan's run, between the parent's state
-  change before its latest move to `In Review` and that move. With no such move as the parent's latest state change (for example a parent Symphony parked
-  from `In Progress`, which nobody approved), there are none.
+  change before its latest move to `In Review` and that move. With no such move as the parent's
+  latest state change (for example a parent Symphony parked from `In Progress`, which nobody
+  approved), or no move to `In Review` before a rejection, there are none.
   """
   @spec sub_issues_to_move(action(), Tracker.breakdown_history(), term()) :: [map()]
   def sub_issues_to_move(action, %{state_changes: changes, sub_issues: sub_issues}, settings) do
