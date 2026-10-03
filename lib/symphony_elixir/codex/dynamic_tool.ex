@@ -6,6 +6,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   require Logger
 
   alias SymphonyElixir.AgentTools.{GitHub, Linear}
+  alias SymphonyElixir.QaDriver
 
   @tool_schemas [
     %{
@@ -252,6 +253,96 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     }
   ]
 
+  # Host-side macOS app tools (`SymphonyElixir.QaDriver`), listed and allowed only in
+  # the `:qa` scope.
+  @pid_property %{"type" => "integer", "minimum" => 1, "description" => "A PID qa_launch_app returned."}
+  @element_path_property %{"type" => "string", "description" => "An element path from qa_ax_tree, like `0.2.1`."}
+
+  @qa_tool_schemas [
+    %{
+      "name" => "qa_build",
+      "description" => "Run the configured macos_app build command in the QA worktree on the host. Takes no arguments; fails when the worktree has edits outside qa-evidence/.",
+      "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
+    },
+    %{
+      "name" => "qa_launch_app",
+      "description" => "Launch the configured app bundle the last qa_build produced, in QA mode (private settings and secrets). Returns its PID.",
+      "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
+    },
+    %{
+      "name" => "qa_quit_app",
+      "description" => "Quit an app qa_launch_app launched and return its recent output.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["pid"],
+        "properties" => %{"pid" => @pid_property}
+      }
+    },
+    %{
+      "name" => "qa_screenshot",
+      "description" => "Capture the launched app's on-screen windows (or one window_id) to qa-evidence/<name>.png. Returns the files with each window's frame.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["pid", "name"],
+        "properties" => %{
+          "pid" => @pid_property,
+          "name" => %{"type" => "string", "description" => "File name without extension: letters, digits, `.`, `_`, `-`."},
+          "window_id" => %{"type" => "integer", "minimum" => 1}
+        }
+      }
+    },
+    %{
+      "name" => "qa_ax_tree",
+      "description" =>
+        "Read the launched app's accessibility tree: role, title, value, identifier and frame (x, y, w, h) per element. With role or text, returns matching elements as a flat list. Size-capped.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["pid"],
+        "properties" => %{
+          "pid" => @pid_property,
+          "role" => %{"type" => "string", "maxLength" => 64, "description" => "Only elements with this AX role, e.g. AXTextField."},
+          "text" => %{"type" => "string", "maxLength" => 200, "description" => "Only elements whose title, value, description or identifier contains this."},
+          "max_depth" => %{"type" => "integer", "minimum" => 1, "maximum" => 40, "default" => 12},
+          "max_nodes" => %{"type" => "integer", "minimum" => 1, "maximum" => 1000, "default" => 300}
+        }
+      }
+    },
+    %{
+      "name" => "qa_ax_press",
+      "description" => "Perform an accessibility action (AXPress by default, or AXRaise to focus a window) on an element of the launched app.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["pid", "path"],
+        "properties" => %{
+          "pid" => @pid_property,
+          "path" => @element_path_property,
+          "action" => %{
+            "type" => "string",
+            "enum" => ~w(AXPress AXRaise AXShowMenu AXConfirm AXCancel AXIncrement AXDecrement AXPick)
+          }
+        }
+      }
+    },
+    %{
+      "name" => "qa_ax_set_value",
+      "description" => "Set the value of a text field or other editable element of the launched app.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["pid", "path", "value"],
+        "properties" => %{
+          "pid" => @pid_property,
+          "path" => @element_path_property,
+          "value" => %{"type" => "string", "maxLength" => 10_000}
+        }
+      }
+    }
+  ]
+
   @tool_names Enum.map(@tool_schemas, & &1["name"])
   @invalid_tool_names Enum.reject(@tool_names, fn name -> Regex.match?(~r/^[a-zA-Z0-9_-]+$/, name) end)
 
@@ -285,7 +376,14 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "github_list_pr_comments" => [],
     "github_list_pr_review_comments" => [],
     "github_list_pr_reviews" => [],
-    "github_get_failed_run_log" => []
+    "github_get_failed_run_log" => [],
+    "qa_build" => [],
+    "qa_launch_app" => [],
+    "qa_quit_app" => ["pid"],
+    "qa_screenshot" => ["pid", "name", "window_id"],
+    "qa_ax_tree" => ["pid", "role", "text", "max_depth", "max_nodes"],
+    "qa_ax_press" => ["pid", "path", "action"],
+    "qa_ax_set_value" => ["pid", "path", "value"]
   }
   @legacy_tool_aliases %{
     "linear.get_current_issue" => "linear_get_current_issue",
@@ -351,7 +449,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   @spec tool_specs(:default | :read_only | :qa | nil) :: [map()]
   def tool_specs(:read_only), do: Enum.filter(@tool_schemas, &(Map.get(&1, "name") in @read_only_tools))
-  def tool_specs(:qa), do: Enum.filter(@tool_schemas, &(Map.get(&1, "name") in @qa_tools))
+  def tool_specs(:qa), do: Enum.filter(@tool_schemas, &(Map.get(&1, "name") in @qa_tools)) ++ @qa_tool_schemas
   def tool_specs(_scope), do: tool_specs()
 
   defp tool_context(opts) do
@@ -377,11 +475,19 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   defp execute_tool("linear_" <> _rest = tool, context, args, opts), do: execute_linear_tool(tool, context, args, opts)
   defp execute_tool("github_" <> _rest = tool, context, args, opts), do: execute_github_tool(tool, context, args, opts)
+  defp execute_tool("qa_" <> _rest = tool, _context, args, opts), do: QaDriver.call_tool(Keyword.get(opts, :qa_driver), tool, args)
 
   defp execute_authorized_tool(tool, context, args, opts) do
     case authorize_tool_scope(tool, opts) do
       :ok -> execute_tool(tool, context, args, opts)
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp authorize_tool_scope("qa_" <> _rest = tool, opts) do
+    case Keyword.get(opts, :tool_scope) do
+      :qa -> :ok
+      scope -> {:error, {:tool_scope_rejected, scope, tool}}
     end
   end
 
@@ -714,6 +820,20 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         "scope" => "qa"
       }
     }
+  end
+
+  defp tool_error_payload({:tool_scope_rejected, _scope, "qa_" <> _rest = tool}) do
+    %{
+      "error" => %{
+        "code" => "tool_scope_rejected",
+        "message" => "#{tool} drives a macOS app for Auto Review QA and is only available to the QA agent.",
+        "tool" => tool
+      }
+    }
+  end
+
+  defp tool_error_payload({:qa_tool, code, message}) do
+    %{"error" => %{"code" => code, "message" => message}}
   end
 
   defp tool_error_payload(:missing_linear_api_token) do

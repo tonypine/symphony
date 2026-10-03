@@ -165,6 +165,33 @@ defmodule SymphonyElixir.QaAgentTest do
       assert [] = Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false, "paths" => "bin/**"}}})
     end
 
+    test "the macos_app playbook runs only when its build command and app bundle are configured" do
+      swift = ["macos/Sources/SymphonyBar/SettingsView.swift"]
+
+      refute Enum.any?(Selection.playbooks(%{playbooks: %{}}), &(&1.kind == "macos_app"))
+      assert {:skip, _reason} = Selection.decide(issue(), swift, %{playbooks: %{}})
+      assert [] = Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => %{"build" => "make app"}}})
+
+      config = %{
+        playbooks: %{
+          "macos_app" => %{"build" => "make -C macos app", "app" => "macos/build/Symphony.app", "build_timeout_ms" => 600_000}
+        }
+      }
+
+      assert {:run, [%{kind: "macos_app", build: "make -C macos app", app: "macos/build/Symphony.app", build_timeout_ms: 600_000, prompt: prompt}]} =
+               Selection.decide(issue(), swift, config)
+
+      assert prompt =~ "### Playbook: macos_app"
+      assert prompt =~ "wait about 10 seconds"
+      assert prompt =~ "qa_permission_missing"
+
+      assert {:run, [%{kind: "macos_app"}]} = Selection.decide(issue(%{labels: ["qa:macos_app"]}), ["README.md"], config)
+      assert {:skip, _reason} = Selection.decide(issue(), ["macos/Tests/SymphonyBarCoreTests/QAModeTests.swift"], config)
+
+      odd_timeout = put_in(config, [:playbooks, "macos_app", "build_timeout_ms"], "soon")
+      assert [_cli, %{kind: "macos_app", build_timeout_ms: nil}] = Selection.playbooks(odd_timeout)
+    end
+
     test "glob matching keeps single stars inside one directory" do
       assert Selection.glob_match?("lib/mix/tasks/a/b.ex", "lib/mix/tasks/**")
       assert Selection.glob_match?("a.md", "**/*.md")
@@ -282,6 +309,30 @@ defmodule SymphonyElixir.QaAgentTest do
       assert_receive {:forwarded, _message}
       assert_receive {:qa_session_stopped, _session}
       refute File.exists?(worktree)
+    end
+
+    test "gives a macos_app pass a QA driver and stops it when the pass ends" do
+      [macos_app] =
+        Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => %{"build" => "make app", "app" => "build/App.app"}}})
+
+      assert {:ok, %{result: %{verdict: :pass}}} =
+               QaAgent.run(job(%{playbooks: [macos_app]}), Config.settings!(),
+                 git: fake_git(),
+                 qa_agent_module: FakeSession,
+                 qa_driver_opts: [host: %{kill: fn _pid -> :ok end}]
+               )
+
+      assert_receive {:qa_session_started, _worktree, session_opts}
+      driver = session_opts[:qa_driver]
+      assert is_pid(driver)
+      assert_receive {:qa_turn, _session, prompt, _issue, turn_opts}
+      assert turn_opts[:qa_driver] == driver
+      assert prompt =~ "### Playbook: macos_app"
+      refute Process.alive?(driver)
+
+      assert {:ok, _result} = QaAgent.run(job(), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession)
+      assert_receive {:qa_session_started, _worktree, cli_opts}
+      assert cli_opts[:qa_driver] == nil
     end
 
     test "falls back to the streamed agent text when the turn result has no verdict" do

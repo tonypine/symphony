@@ -425,7 +425,8 @@ instead of the app; see [Running](../README.md#running).
 ## QA mode
 
 QA mode is for test launches, by hand or by a QA agent: the app keeps everything it would store under one
-directory and leaves your real settings, Keychain and Symphony alone. Turn it on by starting the app's binary
+directory and leaves your real settings, Keychain and Symphony alone. Auto Review's `macos_app` playbook
+always launches the app this way (see [macOS app QA](../docs/configuration.md#macos-app-qa)). Turn it on by starting the app's binary
 with `SYMPHONY_BAR_QA_ROOT` set to a directory. A launch from Finder or `open` doesn't pass the variable on, so
 run the binary directly:
 

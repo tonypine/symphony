@@ -645,6 +645,60 @@ auto_review:
 
 Set `enabled: false` on a kind to turn it off.
 
+#### macOS app QA
+
+The built-in `macos_app` playbook tests a macOS app by building it, launching it and using it
+through accessibility, the way a user would. It is off until you name the build command and the
+app bundle it produces:
+
+```yaml
+auto_review:
+  playbooks:
+    macos_app:
+      build: make -C macos app            # run in the QA worktree
+      app: macos/build/Symphony.app       # relative to the repo root
+      build_timeout_ms: 900000            # optional, default 15 minutes
+      # paths: ["macos/Sources/**"]       # optional, default: Swift, Info.plist, xib, storyboard, xcassets
+```
+
+The QA agent's sandbox cannot build Swift, open apps or read the screen, so Symphony runs these
+tools for it on the host, outside the sandbox, and checks every argument:
+
+| Tool | Does | Refuses |
+| --- | --- | --- |
+| `qa_build` | runs `build` in the QA worktree with the agent's scrubbed environment | a worktree with changes outside `qa-evidence/` |
+| `qa_launch_app` | starts the `app` bundle's executable with `SYMPHONY_BAR_QA_ROOT` set to a private directory ([QA mode](../macos/README.md#qa-mode)), and returns its PID | a bundle that resolves (symlinks included) outside the worktree, or an executable that changed since the last `qa_build` |
+| `qa_quit_app` | quits a launched app and returns its recent output | a PID it did not launch |
+| `qa_screenshot` | saves the app's on-screen windows to `qa-evidence/<name>.png` | a PID it did not launch, a window of another app |
+| `qa_ax_tree` | reads the accessibility tree (role, title, value, frame), filtered by `role` or `text`, capped in depth, nodes and size | a PID it did not launch |
+| `qa_ax_press`, `qa_ax_set_value` | press an element (or `AXRaise` a window) and set a field's value | a PID it did not launch |
+
+At most three launched apps run at once, and every app still running is quit when the pass ends.
+Only QA agents see these tools; executor and reviewer sessions cannot list or call them.
+
+The playbook judges a window only after it settles: it waits about 10 seconds after the window
+opens, changes focus once, and then checks the sizes of the content and scroll areas in the
+accessibility tree, not just the window frame. A window that opens at full height and collapses
+seconds later fails, with the AX tree quoted and a screenshot attached.
+
+The screenshot and accessibility tools use a small Swift helper that Symphony compiles once with
+`swiftc` (Xcode or the Command Line Tools) into `<state root>/qa-driver/`.
+
+##### One-time macOS permissions
+
+Screenshots need **Screen Recording** and the accessibility tools need **Accessibility**, both
+granted to the process that runs Symphony: `Symphony.app` when the menu bar app runs it, or the
+terminal app you start `symphony` from. Grant them once:
+
+1. Open **System Settings → Privacy & Security → Screen & System Audio Recording** and turn on
+   Symphony.app (or your terminal). Use **+** to add it when it is not listed.
+2. Open **System Settings → Privacy & Security → Accessibility** and do the same.
+3. Restart Symphony (and the terminal, when Symphony runs from one) so the grants apply.
+
+Without a grant the tools return `qa_permission_missing`, the QA agent answers `blocked` with the
+missing permission as the reason, and the issue goes to `In Review` with that reason in the QA
+report.
+
 Auto Review needs `pull_requests.enabled: true` and `pull_requests.checks.enabled: true`, because
 the CI poller is what moves issues out of the state. A PR with no CI checks stays in Auto Review.
 
