@@ -5,6 +5,26 @@ defmodule SymphonyElixir.Tracker do
 
   alias SymphonyElixir.{Config, Linear.Issue}
 
+  @typedoc "A state change in an issue's history: when it happened and the states it moved between."
+  @type state_change :: %{at: DateTime.t(), from: String.t() | nil, to: String.t()}
+
+  @typedoc """
+  What Symphony reads to act on a `breakdown` parent's review: the parent's state changes, and each
+  sub-issue with its creation time and the time of its latest state change (nil when it never moved).
+  """
+  @type breakdown_history :: %{
+          state_changes: [state_change()],
+          sub_issues: [
+            %{
+              id: String.t() | nil,
+              identifier: String.t() | nil,
+              state: String.t() | nil,
+              created_at: DateTime.t() | nil,
+              state_changed_at: DateTime.t() | nil
+            }
+          ]
+        }
+
   @callback fetch_candidate_issues() :: {:ok, [term()]} | {:error, term()}
   @callback fetch_candidate_issues_for_repo(term()) :: {:ok, [term()]} | {:error, term()}
   @callback fetch_issue_by_identifier(String.t()) :: {:ok, Issue.t()} | {:error, term()}
@@ -13,6 +33,7 @@ defmodule SymphonyElixir.Tracker do
   @callback enrich_issue(Issue.t()) :: {:ok, Issue.t()} | {:error, term()}
   @callback create_comment(String.t(), String.t()) :: :ok | {:error, term()}
   @callback update_issue_state(String.t(), String.t()) :: :ok | {:error, term()}
+  @callback fetch_breakdown_history(String.t()) :: {:ok, breakdown_history()} | {:error, term()}
   @callback workflow_state_exists?(String.t(), [String.t()]) :: {:ok, boolean()} | {:error, term()}
 
   @spec fetch_candidate_issues() :: {:ok, [term()]} | {:error, term()}
@@ -53,6 +74,11 @@ defmodule SymphonyElixir.Tracker do
   @spec update_issue_state(String.t(), String.t()) :: :ok | {:error, term()}
   def update_issue_state(issue_id, state_name) do
     adapter().update_issue_state(issue_id, state_name)
+  end
+
+  @spec fetch_breakdown_history(String.t()) :: {:ok, breakdown_history()} | {:error, term()}
+  def fetch_breakdown_history(issue_id) when is_binary(issue_id) do
+    adapter().fetch_breakdown_history(issue_id)
   end
 
   @doc """

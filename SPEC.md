@@ -1691,14 +1691,34 @@ An issue is dispatch-eligible only if all are true:
     (a sub-issue with an unknown state counts as non-terminal). The parent waits while its
     sub-issues are worked and becomes eligible again for close-out once every sub-issue is
     terminal. The same rule ends a running parent's continuation turns and its retries.
+  - A `breakdown` parent in `Rework` is exempt: a human rejected its plan, so it is eligible for a
+    re-plan (run kind `breakdown`) whatever its sub-issues' states, once its rejected sub-issues
+    are cancelled (see the review rule below).
 - Waiting rule passes:
   - An issue in the `issues.states.waiting_on_sub_issues` state is dispatched only when it is a
     `breakdown` parent with at least one sub-issue and every sub-issue is terminal (the close-out
     run). Any other issue in that state waits for a human.
   - On each poll, a `breakdown` parent in `In Progress` with a non-terminal sub-issue that is not
     running or claimed is moved to the waiting state, so `In Progress` only holds issues an agent
-    is working. The breakdown run's agent may also move its parent there with
-    `linear_update_state`, which refuses the state for issues without the `breakdown` label.
+    is working. Agents cannot move an issue there: `linear_update_state` refuses the state,
+    because a human moving a parent there approves its plan (next rule).
+- Plan review rule:
+  - The breakdown run leaves its sub-issues in `Backlog` and moves the parent to `In Review`
+    (`linear_update_state` allows `In Review` for a `breakdown` parent even with Auto Review on).
+  - Approval: on each poll, for a `breakdown` parent in the waiting state with a sub-issue in
+    `Backlog` that is not running or claimed, the service reads the parent's state history. When
+    its latest state change is `In Review` to the waiting state, every sub-issue that has been in
+    `Backlog` since before that change (created before it, no state change after it) moves to
+    `Todo` in one batch. Blocked-by links keep the order. A parent the service parked from
+    `In Progress` was not approved, so nothing moves.
+  - Rejection: for a `breakdown` parent in `Rework` with a sub-issue in `Backlog`, the sub-issues
+    in `Backlog` since the parent's latest move to `Rework` are cancelled (`Canceled`, else
+    `Cancelled`) before the re-plan is dispatched; until that succeeds the parent is not
+    dispatched. Sub-issues created by the re-plan are left alone.
+  - Both actions are idempotent across polls and restarts: a sub-issue a human (or a final
+    verification run) moves back to `Backlog` later is not moved again. The service remembers the
+    `Backlog` sub-issues it last acted on per parent and skips the history read while they are
+    unchanged; a failed read or move is retried on the next poll.
   - At startup the service checks the configured teams have the waiting state. When it is
     missing, it logs a warning and stops moving parents there until restart; parents then wait in
     `In Progress` as before. When the check itself fails, the state stays on.
@@ -2247,8 +2267,12 @@ Scoped Linear tool extension contract:
   setting `Merging` from Linear. Other transitions are unaffected.
 - `linear_create_subissue` MUST only create a child of the current issue: same team and project,
   parent set to the current issue, and the current issue's assignee, all resolved server-side. It
-  MUST accept only `title`, `description`, and an optional `priority`, and MUST reject team,
-  project, parent, assignee, and state arguments. The new issue MUST land in the team's `Backlog`
+  MUST accept only `title`, `description`, an optional `priority`, and an optional `blocked_by`
+  list of issue identifiers, and MUST reject team, project, parent, assignee, and state arguments.
+  Each `blocked_by` identifier MUST name a sub-issue of the current issue (an existing child, or
+  one the run created earlier); otherwise the call MUST fail with an explicit error before the
+  issue is created. Accepted identifiers become `blocks` relations on the new issue, created right
+  after it. The new issue MUST land in the team's `Backlog`
   state (falling back to a `backlog`-type state), never an active state, so an agent cannot start
   other agents; a human promotes it. Title and description MUST pass the same secret scan as
   comments before any Linear call. Creation MUST be capped per run (the Elixir cap is 10) with an
@@ -2386,6 +2410,13 @@ An implementation MUST support these tracker adapter operations:
 
 3. `fetch_issue_states_by_ids(issue_ids)`
    - Used for active-run reconciliation.
+
+An implementation that reviews `breakdown` plans (Section 8, plan review rule) also supports:
+
+4. `fetch_breakdown_history(issue_id)`
+   - Return the issue's state changes (time, from state, to state) and each sub-issue's id,
+     identifier, state, creation time, and latest state-change time. The Linear adapter reads up to
+     50 history entries of the parent and 20 of each of up to 50 sub-issues.
 
 ### 11.2 Query Semantics (Linear)
 
@@ -3564,6 +3595,12 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - `breakdown` parent in `In Progress` with a non-terminal sub-issue moves to the waiting state;
   an issue in the waiting state is eligible only as a `breakdown` parent whose sub-issues are all
   terminal
+- `breakdown` parent moved from `In Review` to the waiting state has its `Backlog` sub-issues moved
+  to `Todo` within one poll; sub-issues in other states, or moved back to `Backlog` after the
+  approval, are left alone, and a re-poll moves nothing
+- `breakdown` parent parked from `In Progress` to the waiting state has nothing promoted
+- `breakdown` parent in `Rework` has its pre-`Rework` `Backlog` sub-issues cancelled, is not held
+  by its open sub-issues, and is not dispatched until the cancel succeeds
 - Active-state issue refresh updates running entry state
 - Non-active state stops running agent without workspace cleanup
 - Terminal state stops running agent and cleans workspace
