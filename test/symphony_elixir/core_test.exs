@@ -5714,7 +5714,12 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
-  defp assert_agent_runner_stops_after_one_turn(refreshed_state, labels, sub_issues) do
+  test "agent runner stops continuing once a final verification parks itself in Todo behind its gaps" do
+    gap = %{id: "gap-1", identifier: "MT-260", state: "Backlog"}
+    assert_agent_runner_stops_after_one_turn("Todo", [], [gap], [gap])
+  end
+
+  defp assert_agent_runner_stops_after_one_turn(refreshed_state, labels, sub_issues, blocked_by \\ []) do
     test_root =
       Path.join(
         System.tmp_dir!(),
@@ -5785,7 +5790,8 @@ defmodule SymphonyElixir.CoreTest do
              description: "Still active",
              state: refreshed_state,
              labels: labels,
-             sub_issues: sub_issues
+             sub_issues: sub_issues,
+             blocked_by: blocked_by
            }
          ]}
       end

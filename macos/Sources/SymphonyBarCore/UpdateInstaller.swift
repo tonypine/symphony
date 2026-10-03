@@ -128,7 +128,8 @@ public struct PreparedUpdate: Equatable {
     public var release: Release
     /// The new Symphony.app, in the cache folder.
     public var appURL: URL
-    /// Its embedded Symphony, used to check symphony.yml before the swap.
+    /// Its embedded Symphony. Don't run it while the current Symphony runs: running it deletes the current
+    /// version's unpacked release from under it.
     public var symphonyBinary: String
 
     public init(release: Release, appURL: URL, symphonyBinary: String) {

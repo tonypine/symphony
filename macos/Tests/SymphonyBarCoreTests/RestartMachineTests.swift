@@ -3,6 +3,7 @@ import XCTest
 
 final class RestartMachineTests: XCTestCase {
     private typealias Effect = RestartMachine.Effect
+    private typealias Event = RestartMachine.Event
 
     private let began = Date(timeIntervalSince1970: 1_000_000)
     private let runsTimeout: TimeInterval = 30 * 60
@@ -13,11 +14,10 @@ final class RestartMachineTests: XCTestCase {
         .state(StateSnapshot(running: running, pause: .init(reason: ControlAction.pauseReason)))
     }
 
-    private func begin(alreadyPaused: Bool = false, symphonyBinary: String? = nil) -> (RestartMachine, [Effect]) {
+    private func begin(alreadyPaused: Bool = false) -> (RestartMachine, [Effect]) {
         var machine = RestartMachine()
         let effects = machine.begin(
             alreadyPaused: alreadyPaused,
-            symphonyBinary: symphonyBinary,
             runsTimeout: runsTimeout,
             logPath: log,
             now: began
@@ -44,7 +44,7 @@ final class RestartMachineTests: XCTestCase {
 
     func testConfigErrorAbortsWithSymphonyUntouched() {
         var (machine, effects) = begin()
-        XCTAssertEqual(effects, [.checkConfig(symphonyBinary: nil)])
+        XCTAssertEqual(effects, [.checkConfig])
         XCTAssertEqual(machine.phase, .checkingConfig)
         XCTAssertTrue(machine.isRestarting)
         XCTAssertEqual(machine.menuLine, "Restarting: checking symphony.yml…")
@@ -104,7 +104,7 @@ final class RestartMachineTests: XCTestCase {
 
         XCTAssertEqual(machine.handle(.polled(pausedPoll(running: 0))), [.stop])
         XCTAssertEqual(machine.menuLine, "Restarting: stopping Symphony…")
-        XCTAssertEqual(machine.handle(.exited(.signaled(15))), [.start(symphonyBinary: nil)])
+        XCTAssertEqual(machine.handle(.exited(.signaled(15))), [.start])
         XCTAssertEqual(machine.phase, .starting)
         XCTAssertEqual(machine.handle(.startFinished(error: nil)), [])
         XCTAssertEqual(machine.phase, .waitingForAnswer)
@@ -137,7 +137,7 @@ final class RestartMachineTests: XCTestCase {
         effects += machine.handle(.startFinished(error: nil))
         effects += machine.handle(.polled(pausedPoll(running: 0)))
 
-        XCTAssertEqual(effects, [.checkConfig(symphonyBinary: nil), .pollNow, .stop, .start(symphonyBinary: nil)])
+        XCTAssertEqual(effects, [.checkConfig, .pollNow, .stop, .start])
         XCTAssertFalse(machine.pausedByRestart)
         XCTAssertEqual(machine.phase, .idle)
         XCTAssertNil(machine.menuLine)
@@ -262,17 +262,6 @@ final class RestartMachineTests: XCTestCase {
         }
     }
 
-    func testUpdaterBinaryIsUsedForTheCheckAndTheStart() {
-        var (machine, effects) = begin(symphonyBinary: "/tmp/update/symphony")
-        XCTAssertEqual(effects, [.checkConfig(symphonyBinary: "/tmp/update/symphony")])
-
-        _ = machine.handle(.configChecked(.passed))
-        _ = machine.handle(.controlFinished(.pause, .done))
-        _ = machine.handle(.polled(pausedPoll(running: 0)))
-
-        XCTAssertEqual(machine.handle(.exited(.signaled(15))), [.start(symphonyBinary: "/tmp/update/symphony")])
-    }
-
     func testBeginIsIgnoredWhileRestartingAndClearsTheLastError() {
         var (machine, _) = begin()
         XCTAssertEqual(machine.begin(alreadyPaused: true, runsTimeout: runsTimeout, logPath: log), [])
@@ -281,7 +270,7 @@ final class RestartMachineTests: XCTestCase {
         _ = machine.handle(.configChecked(.failed("Config error")))
         XCTAssertEqual(machine.menuLine, "Config error")
 
-        XCTAssertEqual(machine.begin(alreadyPaused: false, runsTimeout: runsTimeout, logPath: log), [.checkConfig(symphonyBinary: nil)])
+        XCTAssertEqual(machine.begin(alreadyPaused: false, runsTimeout: runsTimeout, logPath: log), [.checkConfig])
         XCTAssertNil(machine.error)
     }
 
@@ -305,7 +294,6 @@ final class RestartMachineTests: XCTestCase {
         var machine = RestartMachine()
         let effects = machine.begin(
             alreadyPaused: alreadyPaused,
-            symphonyBinary: "/cache/Symphony.app/Contents/Resources/symphony",
             purpose: .update,
             runsTimeout: runsTimeout,
             logPath: log,
@@ -316,7 +304,7 @@ final class RestartMachineTests: XCTestCase {
 
     func testUpdateDrainsThenStopsWithoutStarting() {
         var (machine, effects) = beginUpdate()
-        XCTAssertEqual(effects, [.checkConfig(symphonyBinary: "/cache/Symphony.app/Contents/Resources/symphony")])
+        XCTAssertEqual(effects, [.checkConfig])
         XCTAssertEqual(machine.purpose, .update)
         XCTAssertEqual(machine.menuLine, "Updating: checking symphony.yml…")
 
@@ -334,6 +322,21 @@ final class RestartMachineTests: XCTestCase {
         XCTAssertFalse(machine.isRestarting)
         XCTAssertTrue(machine.pausedByRestart, "the relaunched app resumes the dispatch the update paused")
         XCTAssertNil(machine.menuLine)
+    }
+
+    /// TP-339: running the new version's Symphony deletes the running version's unpacked release, so an update
+    /// checks symphony.yml with the running Symphony and starts none before it hands over to the relaunched app.
+    func testUpdateRunsNoOtherSymphonyBeforeTheOldOneStops() {
+        for waiting in [[Event.polled(pausedPoll(running: 0))], [.polled(pausedPoll(running: 1)), .restartNow]] {
+            var (machine, effects) = beginUpdate()
+            var now = began
+            for event in [.configChecked(.passed), .controlFinished(.pause, .done)] + waiting + [.exited(.signaled(15))] {
+                now = now.addingTimeInterval(runsTimeout)
+                effects += machine.handle(event, now: now)
+            }
+
+            XCTAssertEqual(effects, [.checkConfig, .send(.pause), .pollNow, .stop, .stopped])
+        }
     }
 
     func testUpdateKeepsAPauseTheUserMade() {
