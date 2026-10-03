@@ -134,8 +134,8 @@ public struct SymphonyConfigFile {
     }
 }
 
-/// Block-style YAML lines, enough to find one nested key by indentation.
-private struct Document {
+/// Block-style YAML lines, enough to find one nested key by indentation. Shared with `RunProfilesConfig`.
+struct Document {
     /// A `key:` line.
     struct Key {
         let name: String
@@ -190,11 +190,34 @@ private struct Document {
         guard ValueLine(key.rest).value.isEmpty else {
             throw MaxConcurrentAgentsError.notABlock(key.name)
         }
+        return children(of: key)
+    }
+
+    /// Lines after the key up to the next structural line at the key's indent or less, whatever its value.
+    func children(of key: Key) -> Range<Int> {
         let start = key.index + 1
         let end = (start..<lines.count).first { index in
             indent(at: index).map { $0 <= key.indent } ?? false
         } ?? lines.count
         return start..<end
+    }
+
+    /// The last structural line in the range.
+    func lastStructural(in range: Range<Int>) -> Int? {
+        range.reversed().first { indent(at: $0) != nil }
+    }
+
+    /// `last` moved past the comment lines right after it that are indented deeper than `column`, which
+    /// belong to the same block.
+    func blockEnd(_ last: Int, deeperThan column: Int) -> Int {
+        var end = last
+        while end + 1 < lines.count {
+            let line = lines[end + 1]
+            let indent = line.prefix { $0 == " " }.count
+            guard indent > column, line.dropFirst(indent).hasPrefix("#") else { break }
+            end += 1
+        }
+        return end
     }
 
     mutating func insert(_ newLines: [String], after index: Int) {

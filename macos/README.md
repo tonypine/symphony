@@ -166,6 +166,27 @@ set (or, in Development mode, no checkout folder).
   slot), so 3 agents can mean 3 epics at once, or 2 epics plus 1 for other work. Merge (landing) runs and
   Auto Review QA passes don't use these agents; up to `agent.concurrency.finishing_max` (default 2) of them
   run on top.
+- **Models** sets the Claude model and effort for each kind of run, also in the `symphony.yml` itself: the
+  Default row is `agent.model` / `agent.effort`, and each run kind row (breakdown, close-out, final
+  verification, implementation, rework, CI fix, review feedback, landing, pre-push review, QA) is
+  `agent.run_profiles.<kind>.model` / `.effort`. Models offered are Opus 5.5 (`claude-opus-5-5`), Sonnet 5.5
+  (`claude-sonnet-5-5`) and Haiku 4.5 (`claude-haiku-4-5-20251001`), plus any other value already in the
+  file; efforts are low, medium, high, xhigh and max. Save writes only the fields you changed: it rewrites
+  that one value (keeping a trailing comment), or inserts the key, the kind (as `breakdown: { effort: high }`,
+  or as an indented block when the other kinds are written that way) and `run_profiles:` when they are
+  missing. Choosing "default" removes the key, then a kind or `run_profiles:` left empty. Comments and other
+  keys stay as they are, in block or `{ ... }` style. A layout the editor can't change, such as
+  `agent: { ... }` on one line, turns the pickers off with an error naming the line. Symphony rejects
+  `--model` or `--effort` in `agent.command` once any of these keys is set, so when `agent.command` passes
+  them the Default row shows their values (for example "Opus 5.5, from command"), and the first save that
+  sets a model or effort moves them out of the command (keeping the rest of the line and its comment) into
+  `agent.model` / `agent.effort`, unless you set the Default row in the same save. In the same way, once a
+  save sets the Default row or the pre-push review row, `--model` / `--effort` in `pre_push_review.command`
+  move into `pre_push_review.model` / `pre_push_review.effort` (a key already there wins), and once it sets the
+  Default row or the QA row, those in `auto_review.command` move into `auto_review.model` /
+  `auto_review.effort`. Higher effort and bigger
+  models use the shared 5-hour usage limit faster. The next run picks the change up without a restart. The
+  Codex runtime ignores these keys (see [Run profiles](../docs/configuration.md)).
 - `LINEAR_API_KEY` and any extra environment variables are stored only in the login Keychain, as generic
   passwords under service `symphony` with the variable name as the account:
 

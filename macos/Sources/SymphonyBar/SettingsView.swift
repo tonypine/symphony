@@ -99,6 +99,38 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    ForEach(RunProfilesConfig.scopes, id: \.self) { kind in
+                        RunProfileRow(
+                            kind: kind,
+                            profile: $model.runProfiles[kind],
+                            inherited: kind == nil ? model.commandProfile : RunProfile()
+                        )
+                    }
+                    .disabled(!model.canEditRunProfiles)
+                    if model.commandProfile != RunProfile() {
+                        Text(
+                            "agent.command passes --model or --effort. Saving any model or effort moves them "
+                                + "to the Default row, and any in pre_push_review.command or auto_review.command "
+                                + "into that section, so runs keep the same model and effort."
+                        )
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("Models (saved in symphony.yml)")
+                } footer: {
+                    Text(
+                        "Each kind of run uses its own model and effort, or the Default row when set to default. "
+                            + "Higher effort and bigger models use the shared 5-hour usage limit faster: keep "
+                            + "Opus and high effort for breakdown and hard implementation, and use Sonnet or "
+                            + "Haiku with low effort for landing and CI fixes. Claude runtime only. Applies to the "
+                            + "next run, no restart needed."
+                    )
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                }
+
+                Section {
                     SecureField(SecretSettings.linearAPIKeyName, text: $model.linearAPIKey, prompt: Text("lin_api_…"))
                     ForEach($model.extraRows) { $row in
                         HStack {
@@ -192,6 +224,40 @@ struct SettingsView: View {
             .padding(20)
         }
         .frame(width: 600)
+    }
+}
+
+/// Model and effort pickers for one kind of run, or the Default row for a nil kind. `inherited` holds what
+/// runs use when a field is set to default, from the flags in `agent.command`.
+private struct RunProfileRow: View {
+    let kind: RunKind?
+    @Binding var profile: RunProfile
+    let inherited: RunProfile
+
+    var body: some View {
+        LabeledContent(kind?.title ?? "Default") {
+            HStack {
+                picker("Model", $profile.model, RunProfilesConfig.models, inherited: inherited.model)
+                    .frame(width: 190)
+                picker("Effort", $profile.effort, RunProfilesConfig.efforts, inherited: inherited.effort)
+                    .frame(width: 150)
+            }
+        }
+    }
+
+    private func picker(
+        _ title: String,
+        _ selection: Binding<String?>,
+        _ choices: [RunProfileChoice],
+        inherited: String?
+    ) -> some View {
+        Picker(title, selection: selection) {
+            Text(RunProfilesConfig.defaultTitle(choices, inherited: inherited)).tag(String?.none)
+            ForEach(RunProfilesConfig.choices(choices, including: selection.wrappedValue)) { choice in
+                Text(choice.title).tag(Optional(choice.id))
+            }
+        }
+        .labelsHidden()
     }
 }
 

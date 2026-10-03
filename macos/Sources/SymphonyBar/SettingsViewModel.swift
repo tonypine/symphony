@@ -30,11 +30,19 @@ final class SettingsViewModel: ObservableObject {
     @Published private(set) var keychainError: String?
     /// `agent.concurrency.max_total` in the configured symphony.yml. Saved to that file, not UserDefaults.
     @Published var maxConcurrentAgents = MaxConcurrentAgents.symphonyDefault
+    /// `agent.model`, `agent.effort` and `agent.run_profiles` in the configured symphony.yml.
+    @Published var runProfiles = RunProfiles()
+    /// The `--model` / `--effort` in `agent.command`, which runs use while the Default row is set to default.
+    @Published private(set) var commandProfile = RunProfile()
     @Published private(set) var configFileError: String?
 
     /// The value read from symphony.yml, or nil when it couldn't be read. The file is written only when the
     /// stepper moved away from it, so an untouched form never edits symphony.yml.
     private var loadedMaxConcurrentAgents: Int?
+
+    /// The profiles read from symphony.yml, or nil when they couldn't be read. Only fields changed from these
+    /// are written.
+    private var loadedRunProfiles: RunProfiles?
 
     /// Extra variable names known to be in the Keychain. Only these can be removed on save, so a failed
     /// load never turns into deletions.
@@ -78,6 +86,7 @@ final class SettingsViewModel: ObservableObject {
             keychainError = "Could not read the Keychain: \(error)"
         }
         loadMaxConcurrentAgents()
+        loadRunProfiles()
     }
 
     /// The stepper is off until a symphony.yml has been read.
@@ -92,6 +101,23 @@ final class SettingsViewModel: ObservableObject {
             loadedMaxConcurrentAgents = value
         } catch {
             configFileError = "Could not read max_total from symphony.yml: \(error.localizedDescription)"
+        }
+    }
+
+    /// The model and effort pickers are off until a symphony.yml has been read.
+    var canEditRunProfiles: Bool { loadedRunProfiles != nil }
+
+    private func loadRunProfiles() {
+        let path = settings.trimmed().configPath
+        guard !path.isEmpty else { return }
+        do {
+            let file = SymphonyConfigFile(path: path)
+            let profiles = try file.readRunProfiles()
+            commandProfile = try file.readCommandProfile()
+            runProfiles = profiles
+            loadedRunProfiles = profiles
+        } catch {
+            configFileError = "Could not read models from symphony.yml: \(error.localizedDescription)"
         }
     }
 
@@ -152,7 +178,9 @@ final class SettingsViewModel: ObservableObject {
         let secretsChanged = secrets != loadedSecrets
         loadedSecrets = secrets
         store.saveSettings(settings)
-        let saved = saveMaxConcurrentAgents(to: settings.configPath) && saveLaunchAtLogin()
+        let saved = saveMaxConcurrentAgents(to: settings.configPath)
+            && saveRunProfiles(to: settings.configPath)
+            && saveLaunchAtLogin()
         // After the settings are stored, so the restart starts Symphony with all of them.
         if secretsChanged { onSecretsChanged() }
         return saved
@@ -170,6 +198,21 @@ final class SettingsViewModel: ObservableObject {
         configFileError = nil
         loadedMaxConcurrentAgents = maxConcurrentAgents
         return true
+    }
+
+    /// Writes the model and effort fields the pickers changed to symphony.yml, then reads them back, since
+    /// saving can move `--model` / `--effort` out of `agent.command` into the Default row.
+    private func saveRunProfiles(to path: String) -> Bool {
+        guard let loaded = loadedRunProfiles, runProfiles != loaded else { return true }
+        do {
+            try SymphonyConfigFile(path: path).writeRunProfiles(runProfiles, from: loaded)
+        } catch {
+            configFileError = "Could not save models to symphony.yml: \(error.localizedDescription)"
+            return false
+        }
+        configFileError = nil
+        loadRunProfiles()
+        return configFileError == nil
     }
 
     /// Registers or unregisters the login item. When macOS wants the user to allow it, opens Login Items.
