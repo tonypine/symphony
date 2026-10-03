@@ -104,6 +104,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         runner.onEvent = { [weak self] event in self?.handle(event) }
         runner.onKeychainChange = { [weak self] in self?.showStatus() }
         restarter.onChange = { [weak self] in self?.showStatus() }
+        // Symphony reads its secrets only at start; restart() does nothing while it isn't running.
+        settingsWindow.onSecretsChanged = { [weak self] in self?.restart() }
         updater.onChange = { [weak self] in self?.showUpdateItems() }
         poller.stateRoot = { [weak self] in
             self?.runner.stateRoot ?? StateRoot.locate(environment: AppStores.current.environment)
