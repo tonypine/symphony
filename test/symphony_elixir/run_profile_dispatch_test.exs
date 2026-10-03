@@ -114,20 +114,20 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
       settings = Config.settings!()
 
       assert AgentRunner.run_profile(issue("i-1", "MT-1", %{labels: ["breakdown"]}), settings) ==
-               %{kind: :breakdown, model: "claude-opus-5-5", effort: "high"}
+               %{kind: :breakdown, model: "claude-opus-5-5", effort: "high", provider: "anthropic"}
 
       assert AgentRunner.run_profile(issue("i-2", "MT-2"), settings) ==
-               %{kind: :implementation, model: "claude-opus-5-5", effort: "medium"}
+               %{kind: :implementation, model: "claude-opus-5-5", effort: "medium", provider: "anthropic"}
 
       assert AgentRunner.run_profile(issue("i-3", "MT-3", %{state: "Merging"}), settings) ==
-               %{kind: :landing, model: "claude-opus-5-5", effort: "medium"}
+               %{kind: :landing, model: "claude-opus-5-5", effort: "medium", provider: "anthropic"}
     end
 
     test "resolves nil model and effort when nothing is configured", ctx do
       write_profile_workflow!(ctx, agent_model: nil, agent_effort: nil, agent_run_profiles: nil)
 
       assert AgentRunner.run_profile(issue("i-1", "MT-1"), Config.settings!()) ==
-               %{kind: :implementation, model: nil, effort: nil}
+               %{kind: :implementation, model: nil, effort: nil, provider: "anthropic"}
     end
   end
 

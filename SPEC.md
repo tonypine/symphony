@@ -1286,6 +1286,9 @@ Validation checks:
 - `agent.command` is present and non-empty.
 - `agent.effort` and every `agent.run_profiles.<kind>.effort` are known effort values, and every
   `agent.run_profiles` key is a known run kind.
+- `agent.provider` and every `agent.run_profiles.<kind>.provider` are `anthropic` or `openrouter`.
+  Every run kind that resolves to `openrouter` also resolves a model, and `openrouter` is only
+  used with `agent.runtime == "claude"`.
 - `agent.command` does not already pass `--model` or `--effort` when `agent.model`,
   `agent.effort`, or `agent.run_profiles` is set.
 - `issues.linear.api_key` is present after `$` resolution when `issues.provider == "linear"`.
@@ -1368,10 +1371,13 @@ not require recognizing or validating extension fields unless that extension is 
 - `agent.command`: shell command string, REQUIRED
 - `agent.model`: model name string or null, default `null`
 - `agent.effort`: `low`, `medium`, `high`, `xhigh`, `max`, or null, default `null`
-- `agent.run_profiles`: map of run kind to `{model, effort}`, default `{}`. Run kinds:
+- `agent.provider`: `anthropic` or `openrouter`, default `anthropic`. The provider that serves the
+  run's model; `openrouter` requires a resolved model and `agent.runtime == "claude"`.
+- `agent.run_profiles`: map of run kind to `{model, effort, provider}`, default `{}`. Run kinds:
   `implementation`, `breakdown`, `close_out`, `final_verification`, `rework`, `landing`, `ci_fix`,
   `review_feedback`, `pre_push_review`, `qa`. Each field resolves to the profile value, else
-  `agent.model` / `agent.effort`, else null (nothing added). The run kind and profile are resolved
+  `agent.model` / `agent.effort` / `agent.provider`, else null (nothing added) for model and
+  effort and `anthropic` for provider. The run kind and profile are resolved
   once per dispatch from the current config and kept for every continuation turn of that run. The
   Claude runtime appends `--model <model>` and `--effort <effort>` to its argv; the Codex runtime
   ignores both and logs a warning.

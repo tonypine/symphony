@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.RunKind do
   @moduledoc """
   Classifies what kind of agent run Symphony is about to start, so each kind can
-  get its own model and effort (`agent.run_profiles.<kind>`).
+  get its own model, effort and provider (`agent.run_profiles.<kind>`).
 
   Classification is deterministic and uses the signals the orchestrator already
   routes on. The first match wins:
@@ -37,8 +37,11 @@ defmodule SymphonyElixir.RunKind do
           | :pre_push_review
           | :qa
 
-  @typedoc "A run kind with the model and effort it resolves to; nil adds nothing to the agent command."
-  @type profile :: %{kind: t(), model: String.t() | nil, effort: String.t() | nil}
+  @typedoc "The provider that serves a run's model."
+  @type provider :: String.t()
+
+  @typedoc "A run kind with the model, effort and provider it resolves to; a nil model or effort adds nothing to the agent command."
+  @type profile :: %{kind: t(), model: String.t() | nil, effort: String.t() | nil, provider: provider()}
 
   @kinds [
     :implementation,

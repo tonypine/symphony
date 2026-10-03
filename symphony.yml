@@ -62,6 +62,7 @@ agent:
   # Model and effort per kind of run. Drop the model and effort flags from `command` when
   # setting any of these. Kinds: implementation, breakdown, close_out,
   # final_verification, rework, landing, ci_fix, review_feedback, pre_push_review, qa.
+  # `provider: openrouter` (default `anthropic`) needs `runtime: claude`; see symphony.claude.yml.
   # model: gpt-5.5
   # effort: medium   # low | medium | high | xhigh | max
   # run_profiles:

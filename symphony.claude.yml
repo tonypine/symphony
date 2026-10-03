@@ -43,14 +43,16 @@ workspaces:
 agent:
   runtime: claude
   command: claude --model claude-opus-4-7 --dangerously-skip-permissions --verbose
-  # Model and effort per kind of run. Drop the model and effort flags from `command` when
-  # setting any of these. Kinds: implementation, breakdown, close_out,
+  # Model, effort and provider per kind of run. Drop the model and effort flags from `command`
+  # when setting any of these. Kinds: implementation, breakdown, close_out,
   # final_verification, rework, landing, ci_fix, review_feedback, pre_push_review, qa.
+  # `openrouter` needs an OpenRouter model id for every run it serves.
   # model: claude-sonnet-5-5
   # effort: medium   # low | medium | high | xhigh | max
+  # provider: anthropic   # anthropic | openrouter
   # run_profiles:
   #   breakdown: { model: claude-opus-5-5, effort: xhigh }
-  #   landing: { effort: low }
+  #   landing: { provider: openrouter, model: anthropic/claude-haiku-4.5 }
   concurrency:
     max_total: 10
   limits:

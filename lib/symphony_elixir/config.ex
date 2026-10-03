@@ -220,16 +220,22 @@ defmodule SymphonyElixir.Config do
   def max_concurrent_agents_for_state(_state_name), do: settings!().agent.max_concurrent_agents
 
   @doc """
-  The model and effort for a run of `kind`: the `agent.run_profiles.<kind>` field, else
-  `agent.model` / `agent.effort`, else nil (add nothing to the agent command).
+  The model, effort and provider for a run of `kind`: the `agent.run_profiles.<kind>` field,
+  else `agent.model` / `agent.effort` / `agent.provider`. An unset model or effort is nil
+  (add nothing to the agent command); an unset provider is `"anthropic"`.
   """
-  @spec run_profile(Schema.t(), RunKind.t() | String.t()) :: %{model: String.t() | nil, effort: String.t() | nil}
+  @spec run_profile(Schema.t(), RunKind.t() | String.t()) :: %{
+          model: String.t() | nil,
+          effort: String.t() | nil,
+          provider: RunKind.provider()
+        }
   def run_profile(%Schema{agent: agent}, kind) do
     profile = Map.get(agent.run_profiles, to_string(kind), %{})
 
     %{
       model: Map.get(profile, "model", agent.model),
-      effort: Map.get(profile, "effort", agent.effort)
+      effort: Map.get(profile, "effort", agent.effort),
+      provider: Map.get(profile, "provider", agent.provider || "anthropic")
     }
   end
 
