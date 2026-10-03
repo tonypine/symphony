@@ -718,8 +718,8 @@ defmodule SymphonyElixir.AgentTools.Linear do
 
       with {:ok, state, labels} <- lookup_team_state(issue_id, normalized, opts),
            {:ok, state_id} <- refuse_human_only_state(state),
-           {:ok, state_id} <- refuse_auto_review_handoff_state(state, state_id, settings) do
-        refuse_waiting_on_sub_issues_state(state, state_id, labels, settings)
+           {:ok, state_id} <- refuse_auto_review_handoff_state(state, state_id, labels, settings) do
+        refuse_waiting_on_sub_issues_state(state, state_id, settings)
       end
     end
   end
@@ -753,30 +753,26 @@ defmodule SymphonyElixir.AgentTools.Linear do
   end
 
   # With Auto Review on, Symphony moves the issue on from the PR being open, so an
-  # agent asking for `In Review` is refused rather than silently redirected.
-  defp refuse_auto_review_handoff_state(state, state_id, settings) do
-    if AutoReview.enabled?(settings) and state_name_matches?(state, AutoReview.review_state()),
-      do: {:error, {:in_review_set_by_auto_review, state["name"], AutoReview.state(settings)}},
-      else: {:ok, state_id}
+  # agent asking for `In Review` is refused rather than silently redirected. A `breakdown`
+  # parent opens no PR: its plan goes to `In Review` for a human whatever Auto Review says.
+  defp refuse_auto_review_handoff_state(state, state_id, labels, settings) do
+    if AutoReview.enabled?(settings) and state_name_matches?(state, AutoReview.review_state()) and
+         not Enum.any?(labels, &Issue.breakdown_label?/1),
+       do: {:error, {:in_review_set_by_auto_review, state["name"], AutoReview.state(settings)}},
+       else: {:ok, state_id}
   end
 
-  # Only a `breakdown` parent parks in the waiting state, and only while that state is on; otherwise
-  # Symphony would hold the issue there with nothing to bring it back.
-  defp refuse_waiting_on_sub_issues_state(state, state_id, labels, settings) do
-    waiting_state = SubIssueWait.state(settings)
+  # Moving a `breakdown` parent from `In Review` to the waiting state approves its plan and
+  # promotes its sub-tickets, so only a human does it.
+  defp refuse_waiting_on_sub_issues_state(state, state_id, settings) do
+    case SubIssueWait.state(settings) do
+      waiting_state when is_binary(waiting_state) ->
+        if state_name_matches?(state, waiting_state),
+          do: {:error, {:waiting_on_sub_issues_state_requires_human_approval, state["name"]}},
+          else: {:ok, state_id}
 
-    cond do
-      is_nil(waiting_state) or not state_name_matches?(state, waiting_state) ->
+      nil ->
         {:ok, state_id}
-
-      not SubIssueWait.enabled?(settings) ->
-        {:error, {:waiting_on_sub_issues_state_disabled, state["name"]}}
-
-      Enum.any?(labels, &Issue.breakdown_label?/1) ->
-        {:ok, state_id}
-
-      true ->
-        {:error, {:waiting_on_sub_issues_state_for_breakdown_only, state["name"]}}
     end
   end
 

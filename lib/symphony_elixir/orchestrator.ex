@@ -12,6 +12,7 @@ defmodule SymphonyElixir.Orchestrator do
     AgentTelemetry,
     AuditLog,
     AutoReview,
+    BreakdownReview,
     CiPoller,
     Config,
     EpicLanes,
@@ -96,6 +97,7 @@ defmodule SymphonyElixir.Orchestrator do
       budget_daily_paused_logged: false,
       budget_exhausted: MapSet.new(),
       parked_parents: MapSet.new(),
+      breakdown_reviews: %{},
       merging_ci_waits: %{},
       epic_lanes: nil,
       setup_failed: %{},
@@ -1425,6 +1427,10 @@ defmodule SymphonyElixir.Orchestrator do
   def put_epic_lanes_for_test(%State{} = state, issues) when is_list(issues), do: put_epic_lanes(state, issues)
 
   @doc false
+  @spec review_breakdown_parents_for_test([Issue.t()], term()) :: term()
+  def review_breakdown_parents_for_test(issues, %State{} = state) when is_list(issues), do: review_breakdown_parents(issues, state)
+
+  @doc false
   @spec park_breakdown_parents_for_test([Issue.t()], term()) :: term()
   def park_breakdown_parents_for_test(issues, %State{} = state) when is_list(issues), do: park_breakdown_parents(issues, state)
 
@@ -2437,7 +2443,10 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp continue_after_dispatch_readiness(%State{} = state, :poll, issues) do
-    state = park_breakdown_parents(issues, state)
+    state =
+      issues
+      |> park_breakdown_parents(state)
+      |> then(&review_breakdown_parents(issues, &1))
 
     state =
       cond do
@@ -2477,6 +2486,80 @@ defmodule SymphonyElixir.Orchestrator do
       |> MapSet.new(& &1.id)
 
     %{state | parked_parents: MapSet.union(already_parked, parked)}
+  end
+
+  # A human's review of a `breakdown` parent's plan: approving it (In Review to the waiting state)
+  # promotes its Backlog sub-issues to Todo, rejecting it (Rework) cancels them before the re-plan.
+  # `breakdown_reviews` maps each parent to the Backlog sub-issues last acted on, so a re-poll
+  # showing the same ones does not ask Linear again; a parent that needs nothing is dropped.
+  defp review_breakdown_parents(issues, %State{} = state) do
+    settings = Config.settings!()
+
+    pending =
+      Enum.flat_map(issues, fn issue ->
+        case BreakdownReview.action(issue, settings) do
+          nil -> []
+          action -> [{issue, action, issue.id}]
+        end
+      end)
+
+    kept = Map.take(state.breakdown_reviews, Enum.map(pending, &elem(&1, 2)))
+
+    reviews =
+      Enum.reduce(pending, kept, fn {issue, action, issue_id}, reviews ->
+        backlog = BreakdownReview.backlog_sub_issue_ids(issue)
+
+        cond do
+          issue_claimed_or_running?(state, issue_id) or Map.get(reviews, issue_id) == backlog -> reviews
+          review_breakdown_parent(issue, action, settings) -> Map.put(reviews, issue_id, backlog)
+          true -> Map.delete(reviews, issue_id)
+        end
+      end)
+
+    %{state | breakdown_reviews: reviews}
+  end
+
+  defp review_breakdown_parent(%Issue{id: issue_id} = issue, action, settings) do
+    case Tracker.fetch_breakdown_history(issue_id) do
+      {:ok, history} ->
+        action
+        |> BreakdownReview.sub_issues_to_move(history, settings)
+        |> Enum.map(&move_breakdown_sub_issue(issue, action, &1))
+        |> log_breakdown_review(issue, action)
+
+      {:error, reason} ->
+        Logger.warning("Failed to read breakdown parent history: #{issue_context(issue)} reason=#{inspect(reason)}")
+        false
+    end
+  end
+
+  defp move_breakdown_sub_issue(issue, action, %{id: sub_issue_id, identifier: identifier}) do
+    case BreakdownReview.move(action, sub_issue_id, Tracker.adapter()) do
+      :ok ->
+        {:ok, identifier}
+
+      {:error, reason} ->
+        Logger.warning("Failed to move sub-issue #{identifier} of breakdown parent to #{BreakdownReview.target(action)}: #{issue_context(issue)} reason=#{inspect(reason)}")
+        :error
+    end
+  end
+
+  defp log_breakdown_review([], _issue, _action), do: true
+
+  defp log_breakdown_review(results, issue, action) do
+    moved = for {:ok, identifier} <- results, do: identifier
+
+    if moved != [] do
+      Logger.info("Moved #{length(moved)} sub-issue(s) of breakdown parent to #{BreakdownReview.target(action)} (#{Enum.join(moved, ", ")}): #{issue_context(issue)}")
+    end
+
+    length(moved) == length(results)
+  end
+
+  # A rejected plan is made again only once its Backlog sub-issues are cancelled, so the re-plan
+  # does not duplicate them.
+  defp replan_pending?(%Issue{id: issue_id} = issue, %State{breakdown_reviews: reviews}) do
+    BreakdownReview.action(issue, Config.settings!()) == :replace and not Map.has_key?(reviews, issue_id)
   end
 
   # A landing run that ended on pending checks stays held in `Merging` until the CI poller sees
@@ -2582,6 +2665,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp should_dispatch_issue?(%Issue{} = issue, %State{} = state, active_states, terminal_states) do
     candidate_issue?(issue, active_states, terminal_states) and
       !issue_held?(issue, terminal_states) and
+      !replan_pending?(issue, state) and
       !post_pr_quiet_active_issue?(issue, state) and
       !Map.has_key?(state.merging_ci_waits, issue.id) and
       issue_dispatch_slot_available?(issue, state)
@@ -2662,10 +2746,12 @@ defmodule SymphonyElixir.Orchestrator do
 
   # A `breakdown` parent waits while its sub-issues are worked, in the waiting state or, when that
   # is off, in its active state; it is dispatched again for close-out once every sub-issue is terminal.
+  # In `Rework` its plan was rejected, so it is broken down again whatever its sub-issues' states.
   defp issue_held?(issue, terminal_states) do
     todo_issue_blocked_by_non_terminal?(issue, terminal_states) or
-      Issue.waiting_on_sub_issues?(issue, terminal_states) or
-      SubIssueWait.held?(issue, terminal_states, Config.settings!())
+      (not Issue.replanning?(issue) and
+         (Issue.waiting_on_sub_issues?(issue, terminal_states) or
+            SubIssueWait.held?(issue, terminal_states, Config.settings!())))
   end
 
   defp todo_issue_blocked_by_non_terminal?(

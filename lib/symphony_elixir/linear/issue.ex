@@ -6,6 +6,7 @@ defmodule SymphonyElixir.Linear.Issue do
   # A human puts this label on a parent ticket to have it groomed into sub-tickets; it stays on while
   # the sub-tickets are worked.
   @breakdown_label "breakdown"
+  @rework_state "rework"
 
   defstruct [
     :id,
@@ -101,6 +102,16 @@ defmodule SymphonyElixir.Linear.Issue do
   end
 
   def close_out_ready?(_issue, _terminal_states), do: false
+
+  @doc """
+  True when the issue is a `breakdown` parent in `Rework`: a human rejected its plan, so it is
+  broken down again whatever state its sub-issues are in.
+  """
+  @spec replanning?(t()) :: boolean()
+  def replanning?(%__MODULE__{state: state} = issue) when is_binary(state),
+    do: breakdown?(issue) and normalize_state(state) == @rework_state
+
+  def replanning?(_issue), do: false
 
   @doc "True when the issue carries the `breakdown` label."
   @spec breakdown?(t()) :: boolean()
