@@ -279,6 +279,44 @@ defmodule SymphonyElixir.RunStore do
     end
   end
 
+  # The PR head an issue's Rework started from, kept across re-dispatched runs so a run can
+  # tell rework an earlier run already pushed from a fresh Rework nobody has worked on yet.
+  @spec put_rework_base(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
+  def put_rework_base(repo_key, issue_id, head) when is_binary(issue_id) and is_binary(head) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      durable_transaction(fn ->
+        :mnesia.write({@totals_table, rework_base_key(repo_key, issue_id), head})
+        :ok
+      end)
+    end
+  end
+
+  def put_rework_base(_repo_key, _issue_id, _head), do: {:error, :invalid_rework_base}
+
+  @spec get_rework_base(String.t(), String.t()) :: String.t() | nil | {:error, term()}
+  def get_rework_base(repo_key, issue_id) when is_binary(issue_id) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      transaction(fn -> read_rework_base(repo_key, issue_id) end)
+    end
+  end
+
+  def get_rework_base(_repo_key, _issue_id), do: {:error, :invalid_issue_id}
+
+  @spec delete_rework_base(String.t(), String.t()) :: :ok | {:error, term()}
+  def delete_rework_base(repo_key, issue_id) when is_binary(issue_id) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      durable_transaction(fn ->
+        :mnesia.delete({@totals_table, rework_base_key(repo_key, issue_id)})
+        :ok
+      end)
+    end
+  end
+
+  def delete_rework_base(_repo_key, _issue_id), do: {:error, :invalid_issue_id}
+
   @spec put_pr_review(map()) :: :ok | {:error, term()}
   def put_pr_review(%{repo_key: repo_key, issue_id: issue_id} = record) when is_binary(issue_id) do
     with {:ok, repo_key} <- normalize_repo_key(repo_key),
@@ -1054,6 +1092,15 @@ defmodule SymphonyElixir.RunStore do
   defp normalize_repo_key(_repo_key), do: {:error, :invalid_repo_key}
 
   defp scoped_key(repo_key, id), do: {repo_key, id}
+
+  defp rework_base_key(repo_key, issue_id), do: {:rework_base, repo_key, issue_id}
+
+  defp read_rework_base(repo_key, issue_id) do
+    case :mnesia.read(@totals_table, rework_base_key(repo_key, issue_id)) do
+      [{@totals_table, _key, head}] when is_binary(head) -> head
+      _ -> nil
+    end
+  end
 
   defp normalize_update(attrs, immutable_fields) do
     attrs
