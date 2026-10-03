@@ -7,7 +7,9 @@ defmodule SymphonyElixir.BreakdownReviewTest do
   alias SymphonyElixir.Linear.Adapter
 
   @waiting "Waiting on sub-tickets"
+  @started ~U[2026-10-02 08:00:00Z]
   @planned ~U[2026-10-02 09:00:00Z]
+  @reviewed ~U[2026-10-02 09:30:00Z]
   @approved ~U[2026-10-02 10:00:00Z]
   @later ~U[2026-10-02 11:00:00Z]
 
@@ -87,18 +89,32 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       assert BreakdownReview.sub_issues_to_move(:promote, history([approval()], subs), no_waiting_state) == []
     end
 
-    test "a rejection replaces the sub-issues in Backlog since before the move to Rework" do
+    test "a rejection replaces the rejected plan's sub-issues in Backlog since before the move to Rework" do
+      settings = Config.settings!()
+
       history =
-        history([change("In Review", "Rework", @approved)], [
+        history(Enum.reverse(rejection()), [
           history_sub("c1", "Backlog"),
           # Created by the re-plan.
           history_sub("c2", "Backlog", created_at: @later),
-          history_sub("c3", "In Progress")
+          history_sub("c3", "In Progress"),
+          # Added by a person before the breakdown run, and while the plan sat in review.
+          history_sub("c4", "Backlog", created_at: ~U[2026-10-01 00:00:00Z]),
+          history_sub("c5", "Backlog", created_at: ~U[2026-10-02 09:45:00Z]),
+          history_sub("c6", "Backlog", created_at: @started)
         ])
 
-      assert ids(BreakdownReview.sub_issues_to_move(:replace, history, Config.settings!())) == ["c1"]
+      assert ids(BreakdownReview.sub_issues_to_move(:replace, history, settings)) == ["c1", "c6"]
       approved = %{history | state_changes: [approval()]}
-      assert BreakdownReview.sub_issues_to_move(:replace, approved, Config.settings!()) == []
+      assert BreakdownReview.sub_issues_to_move(:replace, approved, settings) == []
+
+      # With no move to In Review before the rejection there is no plan to cancel.
+      unreviewed = %{history | state_changes: [change("Todo", "In Progress", @started), change("In Progress", "Rework", @approved)]}
+      assert BreakdownReview.sub_issues_to_move(:replace, unreviewed, settings) == []
+
+      # With no state change before the move to In Review, every earlier sub-issue is the plan's.
+      reviewed_only = %{history | state_changes: Enum.drop(rejection(), 1)}
+      assert ids(BreakdownReview.sub_issues_to_move(:replace, reviewed_only, settings)) == ["c1", "c4", "c6"]
     end
   end
 
@@ -125,6 +141,9 @@ defmodule SymphonyElixir.BreakdownReviewTest do
 
       assert BreakdownReview.target(:promote) == "Todo"
       assert BreakdownReview.target(:replace) == "Canceled"
+
+      assert BreakdownReview.comment(:promote, ["TP-1", "TP-2"]) == "Promoted to Todo: TP-1, TP-2"
+      assert BreakdownReview.comment(:replace, ["TP-3"]) == "Cancelled for re-plan: TP-3 (restore from Canceled if needed)"
     end
   end
 
@@ -148,6 +167,8 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       assert_received {:memory_tracker_state_update, "c2", "Todo"}
       refute_received {:memory_tracker_state_update, _id, _state}
       assert log =~ "Moved 2 sub-issue(s) of breakdown parent to Todo (MT-c1, MT-c2)"
+      assert_received {:memory_tracker_comment, "parent", "Promoted to Todo: MT-c1, MT-c2"}
+      refute_received {:memory_tracker_comment, _id, _body}
       assert state.breakdown_reviews == %{"parent" => ["c1", "c2"]}
 
       # Re-polling the same candidate neither asks Linear again nor promotes again.
@@ -168,6 +189,7 @@ defmodule SymphonyElixir.BreakdownReviewTest do
 
       assert_received {:memory_tracker_breakdown_history, "parent"}
       refute_received {:memory_tracker_state_update, _id, _state}
+      refute_received {:memory_tracker_comment, _id, _body}
       assert state.breakdown_reviews == %{"parent" => ["c1"]}
 
       # After a restart it is read again, and still left alone.
@@ -206,6 +228,15 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       log = capture_log(fn -> assert review([parent], orchestrator_state()).breakdown_reviews == %{} end)
       assert log =~ "Failed to move sub-issue MT-c1 of breakdown parent to Todo"
       refute log =~ "Moved"
+      refute_received {:memory_tracker_comment, _id, _body}
+
+      # A failed comment is logged; the sub-issues moved, so the review is done.
+      Application.delete_env(:symphony_elixir, :memory_tracker_update_issue_state_result)
+      Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, {:error, :boom})
+      log = capture_log(fn -> assert review([parent], orchestrator_state()).breakdown_reviews == %{"parent" => ["c1"]} end)
+      assert log =~ "Failed to comment on breakdown parent"
+      assert log =~ ":boom"
+      Application.delete_env(:symphony_elixir, :memory_tracker_create_comment_result)
 
       # With no history configured the memory tracker reports no state changes.
       Application.delete_env(:symphony_elixir, :memory_tracker_breakdown_histories)
@@ -232,12 +263,15 @@ defmodule SymphonyElixir.BreakdownReviewTest do
     test "rejecting the plan cancels its Backlog sub-tickets before the re-plan dispatches, without touching new ones" do
       write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", tracker_active_states: ["Todo", "In Progress", "Rework"])
 
-      parent = parent("Rework", [sub("c1", "Backlog"), sub("c2", "Todo"), sub("c3", "Backlog")])
+      parent = parent("Rework", [sub("c1", "Backlog"), sub("c2", "Todo"), sub("c3", "Backlog"), sub("c4", "Backlog"), sub("c5", "Backlog")])
 
-      put_history("parent", [change("In Review", "Rework", @approved)], [
+      put_history("parent", rejection(), [
         history_sub("c1", "Backlog"),
         history_sub("c2", "Todo"),
-        history_sub("c3", "Backlog", created_at: @later)
+        history_sub("c3", "Backlog", created_at: @later),
+        # A person parked these under the parent before the breakdown run and during the review.
+        history_sub("c4", "Backlog", created_at: ~U[2026-10-01 00:00:00Z]),
+        history_sub("c5", "Backlog", created_at: ~U[2026-10-02 09:45:00Z])
       ])
 
       # Open sub-issues hold a breakdown parent, but not one in Rework; it waits only for the cancel.
@@ -250,6 +284,8 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       assert_received {:memory_tracker_state_update, "c1", "Canceled"}
       refute_received {:memory_tracker_state_update, _id, _state}
       assert log =~ "Moved 1 sub-issue(s) of breakdown parent to Canceled (MT-c1)"
+      assert_received {:memory_tracker_comment, "parent", "Cancelled for re-plan: MT-c1 (restore from Canceled if needed)"}
+      refute_received {:memory_tracker_comment, _id, _body}
       assert Orchestrator.should_dispatch_issue_for_test(parent, state)
 
       # The re-plan's own sub-tickets do not hold it either.
@@ -367,6 +403,10 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       created_at: Keyword.get(opts, :created_at, @planned),
       state_changed_at: Keyword.get(opts, :state_changed_at)
     }
+  end
+
+  defp rejection do
+    [change("Todo", "In Progress", @started), change("In Progress", "In Review", @reviewed), change("In Review", "Rework", @approved)]
   end
 
   defp approval(at \\ @approved), do: change("In Review", @waiting, at)

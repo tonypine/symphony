@@ -6,7 +6,10 @@ defmodule SymphonyElixir.BreakdownReview do
   approves the plan with one move of the parent, `In Review` to the waiting state
   (`Waiting on sub-tickets`), and Symphony then moves every sub-issue still in `Backlog` to
   `Todo` in one batch; blocked-by links keep the order. Moving the parent to `Rework` rejects
-  the plan: Symphony cancels the sub-issues still in `Backlog` and runs the breakdown again.
+  the plan: Symphony cancels the plan's sub-issues still in `Backlog` and runs the breakdown again.
+  The plan's sub-issues are the ones created while the parent was worked into `In Review`, so a
+  sub-issue a person added under the parent before or after that run, such as a parked
+  `Final verification`, is left alone.
 
   Symphony only polls, so it reads the parent's state history to see the move. A sub-issue is
   acted on only when it has sat in `Backlog` since before that move, which keeps both actions
@@ -56,14 +59,18 @@ defmodule SymphonyElixir.BreakdownReview do
   def backlog_sub_issue_ids(_issue), do: []
 
   @doc """
-  The sub-issues `action` applies to: those in `Backlog` since before the move that asked for it.
-  With no such move as the parent's latest state change (for example a parent Symphony parked
-  from `In Progress`, which nobody approved), there are none.
+  The sub-issues `action` applies to: those in `Backlog` since before the move that asked for it,
+  and for `:replace` only those created by the rejected plan's run, between the parent's state
+  change before its latest move to `In Review` and that move. With no such move as the parent's
+  latest state change (for example a parent Symphony parked from `In Progress`, which nobody
+  approved), or no move to `In Review` before a rejection, there are none.
   """
   @spec sub_issues_to_move(action(), Tracker.breakdown_history(), term()) :: [map()]
   def sub_issues_to_move(action, %{state_changes: changes, sub_issues: sub_issues}, settings) do
-    case decided_at(action, latest(changes), settings) do
-      %DateTime{} = at -> Enum.filter(sub_issues, &backlog_since?(&1, at))
+    with %DateTime{} = at <- decided_at(action, latest(changes), settings),
+         {from, to} <- plan_window(action, changes, at) do
+      Enum.filter(sub_issues, &(backlog_since?(&1, at) and created_in?(&1, from, to)))
+    else
       nil -> []
     end
   end
@@ -86,6 +93,13 @@ defmodule SymphonyElixir.BreakdownReview do
   def target(:promote), do: @todo_state
   def target(:replace), do: hd(@canceled_states)
 
+  @doc "The comment Symphony posts on the parent after moving a batch of its sub-issues."
+  @spec comment(action(), [String.t()]) :: String.t()
+  def comment(:promote, identifiers), do: "Promoted to #{@todo_state}: #{Enum.join(identifiers, ", ")}"
+
+  def comment(:replace, identifiers),
+    do: "Cancelled for re-plan: #{Enum.join(identifiers, ", ")} (restore from #{target(:replace)} if needed)"
+
   defp decided_at(:promote, %{from: from, to: to, at: at}, settings) do
     if state_matches?(from, AutoReview.review_state()) and state_matches?(to, SubIssueWait.state(settings)), do: at
   end
@@ -95,6 +109,26 @@ defmodule SymphonyElixir.BreakdownReview do
   end
 
   defp decided_at(_action, nil, _settings), do: nil
+
+  # When the plan's sub-issues were created: `:promote` takes every sub-issue from before the
+  # approval, `:replace` only the run that moved the parent to `In Review` before the rejection.
+  defp plan_window(:promote, _changes, at), do: {nil, at}
+
+  defp plan_window(:replace, changes, at) do
+    review_state = AutoReview.review_state()
+
+    changes
+    |> Enum.filter(&(DateTime.compare(&1.at, at) == :lt))
+    |> Enum.sort_by(& &1.at, {:desc, DateTime})
+    |> Enum.drop_while(&(not state_matches?(&1.to, review_state)))
+    |> case do
+      [review, previous | _] -> {previous.at, review.at}
+      [review] -> {nil, review.at}
+      [] -> nil
+    end
+  end
+
+  defp created_in?(%{created_at: created_at}, from, to), do: not after?(created_at, to) and not after?(from, created_at)
 
   defp latest([]), do: nil
   defp latest(changes), do: Enum.max_by(changes, & &1.at, DateTime)

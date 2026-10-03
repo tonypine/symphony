@@ -20,8 +20,9 @@ Rules for every `breakdown` parent run:
   then moves every sub-ticket still in `Backlog` to `Todo` in one batch; blocked-by
   links keep the order. Never move the parent to `Waiting on sub-tickets` yourself:
   `linear_update_state` refuses it because that move is the approval.
-- A human rejects the plan by moving the parent to `Rework`. Symphony cancels its
-  sub-tickets still in `Backlog` and starts a re-plan run.
+- A human rejects the plan by moving the parent to `Rework`. Symphony cancels the
+  rejected plan's sub-tickets still in `Backlog` and starts a re-plan run. Each
+  batch Symphony promotes or cancels is listed in one comment on the parent.
 - Symphony does not dispatch or continue a `breakdown` parent outside `Rework` that
   has a sub-issue outside a terminal state, and dispatches the close-out run once
   every sub-issue is terminal.
@@ -49,10 +50,13 @@ Rules for every `breakdown` parent run:
 In `Rework` (a re-plan run), the human rejected the plan:
 
 - Read every review comment and write in the workpad what the new plan changes.
-- Symphony has cancelled the sub-tickets that were still in `Backlog`. Do not create
-  a replacement for a sub-ticket outside `Backlog` and `Canceled` (a human already
-  promoted it), and do not create one twice: a sub-ticket in `Backlog` that was
-  created after the parent moved to `Rework` belongs to this re-plan.
+- Symphony has cancelled the rejected plan's sub-tickets that were still in
+  `Backlog`, and listed them in a comment on the parent. A `Backlog` sub-ticket a
+  person added outside the breakdown run (a follow-up idea, a parked
+  `Final verification:`) stays; leave it alone and fold it into the new plan. Do not
+  create a replacement for a sub-ticket outside `Backlog` and `Canceled` (a human
+  already promoted it), and do not create one twice: a sub-ticket in `Backlog` that
+  was created after the parent moved to `Rework` belongs to this re-plan.
 - Then follow steps 2-4 for the new plan, including the `Final verification:`
   sub-ticket, and move the parent to `In Review` again.
 
