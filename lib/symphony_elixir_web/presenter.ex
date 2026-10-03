@@ -65,6 +65,7 @@ defmodule SymphonyElixirWeb.Presenter do
           pause: normalize_pause(Map.get(snapshot, :pause)),
           budget: normalize_budget(Map.get(snapshot, :budget)),
           dispatch_state: normalize_dispatch_state(snapshot),
+          epic_lanes: normalize_epic_lanes(Map.get(snapshot, :epic_lanes)),
           rate_limits: snapshot.rate_limits
         }
 
@@ -702,6 +703,17 @@ defmodule SymphonyElixirWeb.Presenter do
       daily_paused: false
     }
   end
+
+  defp normalize_epic_lanes(%{lanes: lanes, queued_epics: queued, shared: shared} = epic_lanes) do
+    %{
+      max_total: Map.get(epic_lanes, :max_total),
+      lanes: lanes,
+      queued_epics: queued,
+      shared: shared
+    }
+  end
+
+  defp normalize_epic_lanes(_epic_lanes), do: %{max_total: nil, lanes: [], queued_epics: [], shared: %{slots: nil, used: 0}}
 
   defp normalize_dispatch_state(snapshot) when is_map(snapshot) do
     case Map.get(snapshot, :dispatch_state) do
