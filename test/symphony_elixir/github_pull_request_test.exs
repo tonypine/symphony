@@ -25,7 +25,7 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
     runner = fn
       ["pr", "view", ^pr_url, "--json", fields], opts ->
         assert fields ==
-                 "number,state,reviewDecision,mergeable,mergeStateStatus,headRefName,baseRefName,headRefOid,baseRefOid,isCrossRepository,updatedAt,comments,reviews,title,body,url,author"
+                 "id,number,state,reviewDecision,mergeable,mergeStateStatus,autoMergeRequest,headRefName,baseRefName,headRefOid,baseRefOid,isCrossRepository,updatedAt,comments,reviews,title,body,url,author"
 
         assert opts[:stderr_to_stdout]
 
@@ -441,5 +441,83 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
              PullRequest.request_review(pr_url, ["reviewer"], gh_runner: runner, github_enterprise_hosts: [])
 
     refute_receive {:gh_called, _args}
+  end
+
+  describe "auto-merge" do
+    @request %{pr_node_id: "PR_node", head_sha: "head-1", pr_number: 42, pr_title: "Ship it", pr_description: "Body"}
+
+    test "enable_auto_merge sends a squash auto-merge for the observed head with the PR title and body" do
+      pr_url = "https://github.example.com/org/repo/pull/42"
+
+      runner = fn ["api", "--hostname", "github.example.com", "graphql" | fields], opts ->
+        assert opts[:stderr_to_stdout]
+        assert ["-f", "query=" <> query | rest] = fields
+        assert query =~ "enablePullRequestAutoMerge"
+        assert query =~ "mergeMethod: SQUASH"
+
+        assert rest == [
+                 "-f",
+                 "pullRequestId=PR_node",
+                 "-f",
+                 "expectedHeadOid=head-1",
+                 "-f",
+                 "commitHeadline=Ship it (#42)",
+                 "-f",
+                 "commitBody=Body"
+               ]
+
+        {~s({"data":{}}), 0}
+      end
+
+      assert :ok = PullRequest.enable_auto_merge(pr_url, @request, gh_runner: runner, github_enterprise_hosts: ["github.example.com"])
+    end
+
+    test "enable_auto_merge reports a PR that can already merge, and other failures as they are" do
+      pr_url = "https://github.com/org/repo/pull/42"
+      clean = fn ["api", "graphql" | _fields], _opts -> {"gh: Pull request Pull request is in clean status (enablePullRequestAutoMerge)", 1} end
+      denied = fn ["api", "graphql" | _fields], _opts -> {"gh: Auto merge is not allowed for this repository", 1} end
+
+      assert {:error, :clean_status} = PullRequest.enable_auto_merge(pr_url, @request, gh_runner: clean)
+
+      assert {:error, {:gh_failed, _args, 1, "gh: Auto merge is not allowed" <> _}} =
+               PullRequest.enable_auto_merge(pr_url, @request, gh_runner: denied)
+
+      assert {:error, :invalid_pr_url} = PullRequest.enable_auto_merge("https://example.com/nope", @request, gh_runner: clean)
+    end
+
+    test "squash_merge merges the observed head and falls back to the bare title or an empty headline" do
+      pr_url = "https://github.com/org/repo/pull/42"
+      test_pid = self()
+
+      runner = fn ["api", "graphql", "-f", "query=" <> query | fields], _opts ->
+        send(test_pid, {:mutation, query, fields})
+        {"{}", 0}
+      end
+
+      assert :ok = PullRequest.squash_merge(pr_url, %{@request | pr_number: nil}, gh_runner: runner)
+      assert_received {:mutation, query, fields}
+      assert query =~ "mergePullRequest"
+      assert "commitHeadline=Ship it" in fields
+
+      assert :ok = PullRequest.squash_merge(pr_url, %{pr_node_id: "PR_node", head_sha: "head-1"}, gh_runner: runner)
+      assert_received {:mutation, _query, fields}
+      assert "commitHeadline=" in fields
+      assert "commitBody=" in fields
+    end
+
+    test "update_branch asks GitHub to merge the base in for the expected head" do
+      pr_url = "https://github.com/org/repo/pull/42"
+
+      ok = fn ["api", "repos/org/repo/pulls/42/update-branch", "--method", "PUT", "-f", "expected_head_sha=head-1"], _opts -> {~s({"message":"Updating pull request branch."}), 0} end
+      conflict = fn _args, _opts -> {"{\"message\":\"merge conflict between base and head\"}\ngh: merge conflict between base and head (HTTP 422)", 1} end
+      stale = fn _args, _opts -> {"gh: expected head sha didn't match current head ref. (HTTP 422)", 1} end
+      unavailable = fn _args, _opts -> {:error, :enoent} end
+
+      assert :ok = PullRequest.update_branch(pr_url, "head-1", gh_runner: ok)
+      assert {:error, :conflict} = PullRequest.update_branch(pr_url, "head-1", gh_runner: conflict)
+      assert {:error, {:gh_failed, _args, 1, _output}} = PullRequest.update_branch(pr_url, "head-1", gh_runner: stale)
+      assert {:error, :enoent} = PullRequest.update_branch(pr_url, "head-1", gh_runner: unavailable)
+      assert {:error, :invalid_pr_url} = PullRequest.update_branch("https://github.com/org/repo/issues/42", "head-1", gh_runner: ok)
+    end
   end
 end

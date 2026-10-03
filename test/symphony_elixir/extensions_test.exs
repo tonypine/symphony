@@ -584,6 +584,17 @@ defmodule SymphonyElixir.ExtensionsTest do
                "used" => 1,
                "running" => [%{"issue_id" => "land-http", "identifier" => "MT-LAND", "state" => "Merging"}]
              },
+             "auto_merge" => [
+               %{
+                 "issue_id" => "merge-http",
+                 "issue_identifier" => "MT-MERGE",
+                 "pull_request_url" => "https://github.com/acme/repo/pull/9",
+                 "state" => "enabled",
+                 "head_sha" => "abc1234def",
+                 "status" => "auto-merge on, waiting for CI on `abc1234`",
+                 "updated_at" => "2026-10-03T06:00:00Z"
+               }
+             ],
              "slot_waiting" => [
                %{
                  "issue_id" => "wait-http",
@@ -1691,6 +1702,7 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     assert html =~ "Finishing runs"
     assert html =~ "Landing: MT-LAND"
+    assert html =~ "MT-MERGE: auto-merge on, waiting for CI on `abc1234`"
     assert html =~ "MT-WAIT"
     assert html =~ "a Merging or Auto Review issue is waiting for a slot"
     refute html =~ "Nothing is waiting to start."
@@ -3064,6 +3076,17 @@ defmodule SymphonyElixir.ExtensionsTest do
         shared: %{slots: 1, used: 1}
       },
       finishing: %{slots: 2, used: 1, running: [%{issue_id: "land-http", identifier: "MT-LAND", state: "Merging"}]},
+      auto_merge: [
+        %{
+          issue_id: "merge-http",
+          issue_identifier: "MT-MERGE",
+          pr_url: "https://github.com/acme/repo/pull/9",
+          state: "enabled",
+          head_sha: "abc1234def",
+          status: "auto-merge on, waiting for CI on `abc1234`",
+          updated_at: ~U[2026-10-03 06:00:00Z]
+        }
+      ],
       slot_waiting: [
         %{
           issue_id: "wait-http",
