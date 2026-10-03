@@ -89,8 +89,9 @@ struct SettingsView: View {
                     Text("Agents (saved in symphony.yml)")
                 } footer: {
                     Text(
-                        "More agents use the Linear and GitHub API budgets faster. 2–3 is a safe range on a "
-                            + "personal Linear key. Applies within a minute, no restart needed."
+                        "Each epic under way keeps one of these agents for its sub-tickets; the rest take "
+                            + "other work. More agents use the Linear and GitHub API budgets faster. 2–3 is a "
+                            + "safe range on a personal Linear key. Applies within a minute, no restart needed."
                     )
                     .font(.callout)
                     .foregroundStyle(.secondary)

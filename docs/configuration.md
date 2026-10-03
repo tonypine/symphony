@@ -222,6 +222,7 @@ agent:
   run_profiles: {}
   concurrency:
     max_total: 10
+    epic_lanes:
     max_by_issue_state:
       rework: 2
   limits:
@@ -313,6 +314,17 @@ agent:
 **Concurrency and turns:**
 
 - `concurrency.max_total` is the global dispatch cap.
+- `concurrency.epic_lanes` (default: `max_total`) is how many of those slots in-progress epics may
+  reserve. An epic is a `breakdown` parent in `Waiting on sub-tickets` with at least one
+  sub-ticket approved and not finished (anything but Backlog, Triage or a terminal state). Each
+  one, in parent priority then age order, holds one lane: its sub-tickets run there one after
+  another, and the lane stays reserved while the current part is in review or landing, so the next
+  part starts as soon as it is unblocked. Epics beyond the lane count wait their turn. The slots
+  left over are shared, by priority then age, for standalone tickets and for an epic's extra
+  parallel sub-tickets. Set it to `max_total - 1` to always keep a slot for standalone work, or
+  `0` to turn lanes off. Values outside `0..max_total` fail `symphony check`. The dashboard and
+  `/api/v1/state` (`epic_lanes`) show each lane and the shared pool, and the dispatch log line
+  ends with `slot=lane:<epic>` or `slot=shared`.
 - `concurrency.max_by_issue_state` can cap work independently for specific issue states such as
   `rework`.
 - `limits.max_turns` caps how many back-to-back turns Symphony will run in a single worker
