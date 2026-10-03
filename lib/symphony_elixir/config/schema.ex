@@ -1176,6 +1176,7 @@ defmodule SymphonyElixir.Config.Schema do
     @primary_key false
     @default_log_excerpt_lines 200
     @default_max_retries 3
+    @default_merging_wait_timeout_ms 1_800_000
 
     embedded_schema do
       field(:enabled, :boolean, default: false)
@@ -1184,6 +1185,7 @@ defmodule SymphonyElixir.Config.Schema do
       field(:flaky_retry, :boolean, default: true)
       field(:max_retries, :integer, default: @default_max_retries)
       field(:escalation_state, :string, default: "In Review")
+      field(:merging_wait_timeout_ms, :integer, default: @default_merging_wait_timeout_ms)
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
@@ -1191,13 +1193,22 @@ defmodule SymphonyElixir.Config.Schema do
       schema
       |> cast(
         attrs,
-        [:enabled, :poll_interval_ms, :log_excerpt_lines, :flaky_retry, :max_retries, :escalation_state],
+        [
+          :enabled,
+          :poll_interval_ms,
+          :log_excerpt_lines,
+          :flaky_retry,
+          :max_retries,
+          :escalation_state,
+          :merging_wait_timeout_ms
+        ],
         empty_values: []
       )
       |> normalize_escalation_state()
       |> validate_number(:poll_interval_ms, greater_than: 0)
       |> validate_number(:log_excerpt_lines, greater_than: 0)
       |> validate_number(:max_retries, greater_than_or_equal_to: 1)
+      |> validate_number(:merging_wait_timeout_ms, greater_than: 0)
     end
 
     defp normalize_escalation_state(changeset) do
