@@ -305,8 +305,17 @@ agent:
 - `effort`: default effort: `low`, `medium`, `high`, `xhigh`, or `max`.
 - `provider`: default provider that serves the model: `anthropic` (default) or `openrouter`.
   `openrouter` needs a model for every run it serves (an OpenRouter model id such as
-  `anthropic/claude-haiku-4.5`) and works only with `runtime: claude`. Symphony does not launch
-  runs against OpenRouter yet; the setting is validated and resolved only.
+  `anthropic/claude-haiku-4.5`) and works only with `runtime: claude`. An `openrouter` run
+  starts `claude` with `ANTHROPIC_BASE_URL=https://openrouter.ai/api`,
+  `ANTHROPIC_AUTH_TOKEN=<OPENROUTER_API_KEY>`, an empty `ANTHROPIC_API_KEY`, `--model <id>`, and
+  `CLAUDE_CODE_SUBAGENT_MODEL=<id>` so subagents use the same model. `anthropic` runs start as
+  before.
+- `OPENROUTER_API_KEY` (environment variable, read from Symphony's own environment): the
+  OpenRouter API key. It is never written to `symphony.yml` and reaches the agent only through
+  the subprocess env, as `ANTHROPIC_AUTH_TOKEN`. When it is unset, an `openrouter` run fails
+  before `claude` starts and logs `OpenRouter run cannot start: OPENROUTER_API_KEY is not set
+  run_kind=<kind>`; retries work as for any other failed start. `symphony check` prints a
+  warning naming the run kinds that use `openrouter` while the variable is unset.
 - `run_profiles.<kind>`: `model`, `effort` and/or `provider` for one kind of run. Kinds, first match wins:
   `final_verification` (title starts with `Final verification:`), `close_out` (`breakdown` parent
   whose sub-issues are all terminal), `breakdown` (other `breakdown` parent), `landing` (`Merging`),
@@ -319,8 +328,9 @@ agent:
   `auto_review.model` / `.effort`.
 - Config errors: an unknown kind under `run_profiles`, an unknown effort or provider, an unknown
   profile key, `--model` / `--effort` already in `command` while any of `model`, `effort`, or
-  `run_profiles` is set, `openrouter` for a run that resolves no model, or `openrouter` with a
-  runtime other than `claude`. `symphony check` reports them and names the key that picked
+  `run_profiles` is set, `openrouter` for a run that resolves no model, `openrouter` with a
+  runtime other than `claude`, or `openrouter` with `workers.ssh_hosts` (OpenRouter runs start
+  on the local host only). `symphony check` reports them and names the key that picked
   `openrouter` (`agent.run_profiles.<kind>.provider`, else `agent.provider`).
 - The kind and profile are chosen once, when the run is dispatched, from the current workflow
   config: an edit applies to the next dispatch without a restart. Every continuation turn of a run
@@ -856,7 +866,8 @@ port range.
 
 ### `workers`
 
-Remote worker host settings.
+Remote worker host settings. Runs whose provider is `openrouter` start on the local host only, so
+`openrouter` is a config error while `ssh_hosts` is set.
 
 ```yaml
 workers:
