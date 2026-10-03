@@ -334,7 +334,7 @@ the durable store SHOULD record:
 
 - `repo_key` on partitioned records so colliding issue/run identifiers in different repos do not
   overwrite each other.
-- per-run status (`running`, `success`, `failure`, `timeout`, or implementation-defined stopped
+- per-run status (`running`, `success`, `failure`, `timeout`, `usage_limited`, or implementation-defined stopped
   states)
 - issue ID, identifier, title, tracker state, attempt number, start/end time, error
 - workspace path, worker host, session ID, transcript path when available
@@ -819,6 +819,14 @@ Fields:
 - `limits.tokens_per_day` (integer or null)
   - Default: `5000000`.
   - Explicit `null` disables the daily cap.
+- `usage_limit.auto_pause` (boolean)
+  - Default: `true`.
+  - When a run ends on a provider usage limit, hold that provider's runs until the limit resets
+    (Section 8.4.1). `false` fails the run and retries it with the normal backoff.
+- `usage_limit.resume_margin_seconds` (integer `>= 0`)
+  - Default: `120`. Added to the reported reset time before runs resume.
+- `usage_limit.unknown_reset_retry_seconds` (integer `>= 60`)
+  - Default: `900`. How long the hold lasts when no reset time is known.
 - `prompts.include_project_guides` (boolean)
   - Default: `true`.
   - When enabled, implementations MAY append a `## Project conventions` section to the rendered
@@ -1453,6 +1461,9 @@ not require recognizing or validating extension fields unless that extension is 
 - `agent.limits.max_consecutive_identical_tool_failures`: integer, default `5`; `0` disables
 - `agent.limits.tokens_per_issue`: integer or null, default `500000`; explicit null disables the cap
 - `agent.limits.tokens_per_day`: integer or null, default `5000000`; explicit null disables the cap
+- `agent.usage_limit.auto_pause`: boolean, default `true`
+- `agent.usage_limit.resume_margin_seconds`: integer `>= 0`, default `120`
+- `agent.usage_limit.unknown_reset_retry_seconds`: integer `>= 60`, default `900`
 - `agent.runtime`: `codex` or `claude`, REQUIRED
 - `agent.command`: shell command string, REQUIRED
 - `agent.model`: model name string or null, default `null`
@@ -1920,6 +1931,31 @@ Note:
   (including terminal transitions for currently running issues).
 - Retry handling mainly operates on active candidates and releases claims when the issue is absent,
   rather than performing terminal cleanup itself.
+
+#### 8.4.1 Provider Usage-Limit Holds
+
+When `agent.usage_limit.auto_pause` is on and a run ends because the provider's usage limit is
+reached (for Claude, a used-up five-hour or weekly window):
+
+- Create or refresh a hold keyed by `{provider, scope}`. Scope is the whole plan, or a model family
+  for a model-specific window (`seven_day_opus` holds only runs whose model is Opus). A hold
+  records `reason`, `window`, `since`, `resets_at`, `resume_at`, `source` and `phase`, and is
+  persisted next to (not inside) the operator pause and restored on startup.
+- `resume_at` is `resets_at + usage_limit.resume_margin_seconds`. With no reset time, use the last
+  reset time the provider reported for that window, else `now + usage_limit.unknown_reset_retry_seconds`.
+- Record the run as `usage_limited`, emit no `run_failed` event, keep the workspace, and hold the
+  retry with the same attempt and no backoff. Its delay is the larger of the time left on the hold
+  and any Linear rate-limit pause.
+- Runs of the same provider already in flight are left alone; each one is handled the same way if
+  it hits the limit.
+- While a hold covers a candidate's resolved run profile (`run_profiles.<kind>.provider`, else
+  `agent.provider`, and its model for a model scope), every dispatch path skips it: the poll,
+  retries, operator PR runs and Auto Review QA passes. Other providers keep dispatching. Epic lanes
+  stay reserved.
+- At `resume_at` the hold is cleared, an immediate poll tick runs, and held retries return to normal
+  candidate selection with their attempt, as a retry waiting for a slot does. Resuming never sets
+  or clears the operator pause; the daily budget, workspace quota and Linear rate-limit gates still
+  apply.
 
 ### 8.5 Active Run Reconciliation
 
