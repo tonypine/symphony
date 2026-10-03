@@ -11,7 +11,8 @@ defmodule SymphonyElixir.QaAgent do
 
   The agent follows the selected playbooks (see `SymphonyElixir.QaAgent.Selection`),
   writes evidence under `qa-evidence/`, and answers with one JSON object:
-  `pass | fail | blocked` with per-step results. A pass that runs the `macos_app`
+  `pass | fail | blocked` with per-step results. An answer without that object gets
+  one follow-up turn in the same session asking for it. A pass that runs the `macos_app`
   playbook also gets the host-side `qa_*` tools of a `SymphonyElixir.QaDriver`,
   stopped (quitting every app it launched) when the pass ends.
   """
@@ -26,6 +27,7 @@ defmodule SymphonyElixir.QaAgent do
   @worktree_dir ".qa"
   @token_keys [:uncached_input, :cached_input, :cache_creation_input, :output, :total]
   @step_statuses ["pass", "fail", "blocked", "skipped"]
+  @max_verdict_follow_ups 1
 
   @type verdict :: :pass | :fail | :blocked
   @type step :: %{name: String.t(), status: String.t(), details: String.t(), evidence: [String.t()]}
@@ -34,7 +36,8 @@ defmodule SymphonyElixir.QaAgent do
           required(:summary) => String.t(),
           required(:steps) => [step()],
           required(:findings) => [String.t()],
-          optional(:reason) => String.t()
+          optional(:reason) => String.t(),
+          optional(:follow_ups) => pos_integer()
         }
   @type job :: %{
           required(:issue) => Issue.t(),
@@ -141,6 +144,10 @@ defmodule SymphonyElixir.QaAgent do
       with the command or action, what you expected, and what happened, so the executor can fix it.
     - `blocked`: you could not test the change (it does not build, a tool is missing, the
       environment refuses). Put the cause in `reason`.
+
+    Ending your turn ends the session: you cannot come back later to check on anything. Do not leave
+    work running in the background. Run each command in the foreground with a timeout, or poll it
+    until it finishes, before you answer.
 
     Return ONLY one JSON object in this shape:
     {
@@ -308,14 +315,59 @@ defmodule SymphonyElixir.QaAgent do
   end
 
   defp run_turn(agent_module, session, prompt, issue, turn_opts, tracker) do
-    case agent_module.run_turn(session, prompt, issue, turn_opts) do
-      {:ok, turn_result} -> parse_turn(turn_result, Agent.get(tracker, & &1.messages))
-      {:error, reason} -> {:error, {:qa_agent_failed, reason}}
-    end
+    run_turns(agent_module, session, prompt, issue, turn_opts, tracker, 0)
   catch
     :throw, {:qa_token_limit, total, limit} -> {:error, {:qa_token_limit, total, limit}}
   after
     agent_module.stop_session(session)
+  end
+
+  # An agent that ends its turn without the verdict object (for example while waiting on
+  # something it left running) is asked for it in a follow-up turn of the same session.
+  defp run_turns(agent_module, session, prompt, issue, turn_opts, tracker, follow_ups) do
+    case agent_module.run_turn(session, prompt, issue, turn_opts) do
+      {:ok, turn_result} ->
+        messages = Agent.get_and_update(tracker, &{Enum.reverse(&1.messages), %{&1 | messages: []}})
+
+        case parse_turn(turn_result, messages) do
+          {:ok, result} ->
+            {:ok, put_follow_ups(result, follow_ups)}
+
+          {:error, {:malformed_qa_response, :no_verdict_object}} when follow_ups < @max_verdict_follow_ups ->
+            Logger.info("QA agent answered without a verdict for #{issue.identifier}; asking for it (follow-up #{follow_ups + 1})")
+            turn_opts = Keyword.put(turn_opts, :resume_session_id, session_id(messages) || turn_opts[:resume_session_id])
+            run_turns(agent_module, session, follow_up_prompt(), issue, turn_opts, tracker, follow_ups + 1)
+
+          {:error, _reason} = error ->
+            error
+        end
+
+      {:error, reason} ->
+        {:error, {:qa_agent_failed, reason}}
+    end
+  end
+
+  defp put_follow_ups(result, 0), do: result
+  defp put_follow_ups(result, follow_ups), do: Map.put(result, :follow_ups, follow_ups)
+
+  # The Claude runtime starts a new `claude -p` per turn, so the follow-up resumes the
+  # conversation by id. Codex keeps its thread and ignores the option.
+  defp session_id(messages) do
+    Enum.find_value(Enum.reverse(messages), fn
+      {:session_started, session_id} when is_binary(session_id) -> session_id
+      _message -> nil
+    end)
+  end
+
+  @doc "The follow-up prompt for an answer that has no verdict object."
+  @spec follow_up_prompt() :: String.t()
+  def follow_up_prompt do
+    """
+    Your last answer did not include the JSON verdict object, and ending your turn ends the session.
+    Finish now: do not start new work or wait for anything still running. Return only the JSON
+    verdict object, in the shape from the first message, for what you have tested so far. Mark each
+    step you could not finish `skipped` and say why.
+    """
   end
 
   defp parse_turn(turn_result, messages) do
