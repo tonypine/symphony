@@ -3045,9 +3045,10 @@ defmodule SymphonyElixir.Orchestrator do
     %{state | blocked: Enum.sort_by(blocked, & &1.identifier)}
   end
 
-  # Forced tickets are found in the repo this poll fetched. Each one already queued is refreshed by
-  # id on every poll, so it stays queued while it sits outside the active states (In Review, ...)
-  # and leaves only when its label goes, it is terminal, or Linear no longer returns it.
+  # Forced tickets are found in the repo this poll fetched, which only holds active states. Each one
+  # already queued is refreshed by id on every poll, so it stays queued while it sits outside the
+  # active states (In Review, ...) and leaves only when its label goes, it is terminal, or Linear no
+  # longer returns it.
   defp apply_forced_poll_result(%State{} = state, repo_result, forced_ids, forced_result) do
     discovered =
       case repo_result do

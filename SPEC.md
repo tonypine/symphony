@@ -839,10 +839,11 @@ Fields:
     validation.
 - `concurrency.force_label` (string)
   - Default: `expedite`.
-  - A non-terminal issue carrying this label (case-insensitive) is forced. The orchestrator records
-    when it first saw each forced issue (`forced_since`, persisted across restarts), refreshes the
-    known ones by id on every poll, and drops one when the label is removed, the issue is terminal,
-    or the tracker no longer returns it. Forced issues are reported in the status snapshot
+  - An issue carrying this label (case-insensitive) joins the forced queue when a poll's candidate
+    fetch, which only returns active states, first sees it with the label. The orchestrator records
+    that time (`forced_since`, persisted across restarts), refreshes the queued issues by id on
+    every poll so they stay queued in any non-terminal state (In Review, Merging, ...), and drops
+    one when the label is removed, the issue is terminal, or the tracker no longer returns it. Forced issues are reported in the status snapshot
     (`forced`) and the audit log (`forced_start`, `forced_end`); dispatch does not treat them
     differently yet.
 - `concurrency.forced_max` (positive integer)

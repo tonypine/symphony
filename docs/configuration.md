@@ -436,10 +436,12 @@ agent:
   `auto_review.max_concurrent`. Values below `1` fail `symphony check`.
 - `concurrency.force_label` (default: `expedite`) is the label a human puts on a ticket to have it
   worked now, through to Done (matched case-insensitively). Symphony records when a poll first
-  sees a ticket carry it outside a terminal state (`forced_since`, kept across restarts) and lists
-  the forced tickets in `/api/v1/state` (`forced`), earliest first with their queue `position`. A
-  ticket leaves the list at the next poll after the label is removed, it reaches a terminal state,
-  or Linear no longer returns it. The audit log records `forced_start` and `forced_end` (with
+  sees a ticket in an active state (`tracker.active_states`) carry it (`forced_since`, kept across
+  restarts); a ticket labelled in another state, such as `Backlog` or `In Review`, joins once it
+  moves into an active state. Once queued it stays listed in any non-terminal state (`In Review`,
+  `Merging`, ...). `/api/v1/state` lists the forced tickets (`forced`), earliest first with their
+  queue `position`. A ticket leaves the list at the next poll after the label is removed, it
+  reaches a terminal state, or Linear no longer returns it. The audit log records `forced_start` and `forced_end` (with
   `reason`: `label_removed`, `terminal` or `missing`). Forcing doesn't change dispatch yet.
 - `concurrency.forced_max` (default: `1`) is how many forced tickets may be worked at once, once
   forcing changes dispatch; `/api/v1/state` reports it under `concurrency`. Values below `1` fail

@@ -151,7 +151,10 @@ defmodule SymphonyElixir.ForcedQueueTest do
 
   describe "the orchestrator" do
     test "lists a forced ticket in /api/v1/state, audits it, keeps it across a restart and drops it once the label goes", ctx do
-      forced = issue("forced-1", "MT-F1", "In Review", ["Expedite"])
+      # Linear's poll only returns active states, so the label is first seen on a Todo ticket. An
+      # open blocker keeps it from being dispatched.
+      blocker = %{id: "blocker-1", identifier: "MT-B1", state: "In Progress"}
+      forced = %{issue("forced-1", "MT-F1", "Todo", ["Expedite"]) | blocked_by: [blocker]}
       tracked([forced, issue("plain-1", "MT-P1", "In Review", ["bug"])])
 
       {pid, name} = start_orchestrator(ctx, :FirstOrchestrator)
@@ -160,11 +163,17 @@ defmodule SymphonyElixir.ForcedQueueTest do
 
       payload = Presenter.state_payload(name, 1_000)
 
-      assert [%{issue_id: "forced-1", issue_identifier: "MT-F1", title: "Ticket MT-F1", state: "In Review", forced_since: "2026-10-04T06:00:00Z", position: 1}] =
+      assert [%{issue_id: "forced-1", issue_identifier: "MT-F1", title: "Ticket MT-F1", state: "Todo", forced_since: "2026-10-04T06:00:00Z", position: 1}] =
                payload.forced
 
       assert %{max_total: 10, finishing_max: 2, forced_max: 1} = payload.concurrency
       refute Enum.any?(payload.running, &(&1.issue_id == "forced-1"))
+
+      # Once queued it stays listed outside the active states, refreshed by id.
+      forced = %{forced | state: "In Review", blocked_by: []}
+      tracked([forced])
+      send(pid, :run_poll_cycle)
+      wait_until(fn -> match?(%{"forced-1" => %{state: "In Review"}}, :sys.get_state(pid).forced) end)
 
       GenServer.stop(pid)
 
