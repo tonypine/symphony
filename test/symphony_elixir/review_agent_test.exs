@@ -37,6 +37,7 @@ defmodule SymphonyElixir.ReviewAgentTest do
     def start_session(workspace, opts) do
       parent = Application.fetch_env!(:symphony_elixir, :review_agent_sequence_parent)
       send(parent, :review_agent_sequence_session_started)
+      send(parent, {:review_agent_sequence_session_opts, opts})
       {:ok, %{workspace: workspace, opts: opts}}
     end
 
@@ -546,6 +547,38 @@ defmodule SymphonyElixir.ReviewAgentTest do
       assert prompt =~ "Review the diff by reading it."
       assert prompt =~ "Do not run the test suite, `make all`, coverage or static analysis such as Dialyzer"
       assert prompt =~ "CI runs them after the push."
+    after
+      clear_sequence_responses!()
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "evaluate gives the reviewer the executor run's temp folder as its $TMPDIR" do
+    test_root = unique_tmp("symphony-elixir-review-agent-tmp-dir")
+
+    try do
+      repo = git_repo_with_change!(test_root)
+      put_sequence_responses!([~s({"verdict":"approve","comments":[]}), ~s({"verdict":"approve","comments":[]})])
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        review_agent: %{enabled: true, kind: "codex", command: "codex app-server"}
+      )
+
+      assert {:ok, %{verdict: :approve}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(),
+                 review_agent_module: SequenceReviewer,
+                 agent_tmp_dir: "/tmp/symphony-run-0123456789ab"
+               )
+
+      assert_receive {:review_agent_sequence_session_opts, opts}
+      assert opts[:extra_env] == %{"TMPDIR" => "/tmp/symphony-run-0123456789ab"}
+
+      # A run without a temp folder of its own leaves the reviewer's runtime default.
+      assert {:ok, %{verdict: :approve}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+
+      assert_receive {:review_agent_sequence_session_opts, opts}
+      assert opts[:extra_env] == %{}
     after
       clear_sequence_responses!()
       File.rm_rf(test_root)

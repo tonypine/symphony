@@ -12,7 +12,7 @@ defmodule SymphonyElixir.StrayProcesses do
     Claude Code temp folder (`/tmp/claude-<uid>`) or a Symphony temp folder
     (`symphony-*` under `$TMPDIR` or `/tmp`),
   - has used more than `watchdog.stray_process_cpu_minutes` of CPU time, and
-  - is not in the workspace, QA worktree, QA temp folder or Claude Code task
+  - is not in the workspace, temp folder, QA worktree or Claude Code task
     folder of a running agent or QA pass.
 
   Symphony and the processes it still runs are never flagged. The dashboard
@@ -23,7 +23,7 @@ defmodule SymphonyElixir.StrayProcesses do
   use GenServer
   require Logger
 
-  alias SymphonyElixir.{Config, LeftoverProcesses, Orchestrator, QaRunner, StatusDashboard}
+  alias SymphonyElixir.{AgentRunner, Config, LeftoverProcesses, Orchestrator, QaRunner, StatusDashboard}
   alias SymphonyElixir.LeftoverProcesses.Table
 
   @snapshot_timeout_ms 15_000
@@ -183,7 +183,8 @@ defmodule SymphonyElixir.StrayProcesses do
     case Orchestrator.snapshot(Keyword.get(opts, :orchestrator, Orchestrator), @snapshot_timeout_ms) do
       %{running: running} ->
         agent_workspaces = for %{workspace_path: path} <- running, is_binary(path), do: path
-        {:ok, agent_workspaces ++ QaRunner.workspaces(Keyword.get(opts, :qa_runner, QaRunner))}
+        agent_tmp_dirs = Enum.flat_map(agent_workspaces, &AgentRunner.tmp_dirs/1)
+        {:ok, agent_workspaces ++ agent_tmp_dirs ++ QaRunner.workspaces(Keyword.get(opts, :qa_runner, QaRunner))}
 
       unavailable ->
         {:error, {:orchestrator_snapshot, unavailable}}
