@@ -67,6 +67,22 @@ those paths, or a symlink's target, itself. The refusal binds only those tools: 
 the agent's shell skips it (Claude's settings deny `git push`, but only as a command pattern), and
 the tools then trust what that push put on the branch.
 
+The `protected-paths` CI workflow covers that gap. On a pull request from an `auto/*` branch it
+runs `mix protected_paths.check`, which fails when the pull request's own commits since the
+merge-base with the base branch change one of those paths or a symlink's target. Changes merged
+from the base branch pass. It runs only on `pull_request_target`, so the workflow and the check
+come from the base branch and the pull request can't change them. A person who made such a change
+on purpose waives it for the current head commit in one of two ways, so a later push is checked
+again. Adding the `protected-paths-approved` label waives the head the pull request has at that
+moment; to waive a later head, remove and re-add it. It counts only when a person other than the
+pull request's author adds it, since an agent may act as the author. An approving review of the
+current head commit counts too, but only from a reviewer with write access (an owner, member or
+collaborator), since anyone who can read the repository can approve. A review doesn't start a run,
+so after approving, re-run the job. Bots count for neither. The workflow tells Symphony's pull
+requests apart only by the `auto/` branch prefix. So it skips the case where a person's own open
+pull request on another branch is attached to the issue, and Symphony keeps working on that
+branch.
+
 Every local agent may also write one per-user cache folder, `~/Library/Caches/symphony/agent` on
 macOS, which holds its Hex home, its `elixir_make` cache and Dialyxir's core PLTs (see
 `permissions.filesystem.allow_write_paths` in [configuration](configuration.md)). Runs share it,
@@ -124,7 +140,10 @@ are *not* covered by these switches — see Best Practices below.
 ### Untrusted-input handling
 
 Linear titles, descriptions, and comments are rendered into the prompt inside bounded `<linear_...>`
-blocks. Symphony also prepends a managed runtime context that instructs the agent to treat
+blocks. Titles, descriptions, and other fields have every `&`, `<` and `>` escaped. Comment bodies
+escape only the `<` that opens a `<linear_...>`, `<github_pr_...>` or chat role tag (`<system>`,
+`<user>`, ...), so the agent can rewrite its workpad from a read without adding a layer of HTML
+entities each time, and a body still can't close its block. Symphony also prepends a managed runtime context that instructs the agent to treat
 Linear/GitHub/CI/tool-output boundaries as data only, work only in the prepared workspace, prefer
 scoped tools, and avoid common secret paths. Repo `WORKFLOW.md` files can add stricter repo-local
 rules, but they do not need to duplicate those Symphony-owned guardrails.
