@@ -478,14 +478,14 @@ defmodule SymphonyElixir.CiPoller do
     end
   end
 
-  # Records the human's decision on gate verdicts whose issue left In Review. It runs before the
-  # checks are processed, so the CI check record of a PR merged since the last poll still holds
-  # the head the human merged.
+  # Records the human's decision on gate verdicts whose issue left In Review (or Human Review). It
+  # runs before the checks are processed, so the CI check record of a PR merged since the last
+  # poll still holds the head the human merged.
   defp observe_gate_decisions(settings, repo_key, issues, runs, ci_checks, opts) do
     agreement_opts = [
       run_store: Keyword.get(opts, :run_store, RunStore),
       tracker: Keyword.get(opts, :tracker, Tracker),
-      auto_review_state: AutoReview.state(settings)
+      waiting_states: [AutoReview.state(settings) | HumanReview.review_states(settings)]
     ]
 
     Agreement.observe(repo_key, issues, runs, ci_checks, agreement_opts ++ Keyword.take(opts, [:audit_dir]))

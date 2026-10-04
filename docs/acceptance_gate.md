@@ -60,8 +60,8 @@ it is, as for a late QA pass.
 ## Agreement with the human reviewer
 
 In `shadow` mode a human still reviews every PR the gate judged, so each review measures the gate.
-The CI poller watches the issue after the verdict, and once the issue leaves In Review it records
-the human's decision on the gate run:
+The CI poller watches the issue after the verdict, and once the issue leaves In Review (or Human
+Review, where a ticket that needs a person waits) it records the human's decision on the gate run:
 
 | The issue moves to | Decision |
 | --- | --- |
@@ -69,7 +69,7 @@ the human's decision on the gate run:
 | Rework | `rework` |
 | In Progress, after a PR review comment or a change request that came after the verdict | `rework` |
 | In Progress without one (a red CI head, a merge conflict) | none yet: the poller keeps watching |
-| In Review or Auto Review | none yet |
+| In Review, Human Review or Auto Review | none yet |
 | any other state (Backlog, Canceled, ...) | `none`: the verdict doesn't count |
 
 The PR review comment comes from the PR review poller: a change request or a review comment

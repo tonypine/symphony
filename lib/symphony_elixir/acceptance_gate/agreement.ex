@@ -9,7 +9,8 @@ defmodule SymphonyElixir.AcceptanceGate.Agreement do
     * a move to Merging (or straight to Done) is `approve`;
     * a move to Rework, or back to In Progress with PR review comments (the PR review poller's
       `rework` action after the verdict, for a change request or a review comment), is `rework`;
-    * In Review, Auto Review and In Progress without review comments are still waiting;
+    * In Review, Auto Review, Human Review and In Progress without review comments are still
+      waiting;
     * any other state is `none`: no decision, and the verdict doesn't count.
 
   An `approve` or `rework` writes one `acceptance_gate_agreement` audit event. `stats/1` sums the
@@ -26,7 +27,7 @@ defmodule SymphonyElixir.AcceptanceGate.Agreement do
   @recent_limit 20
   @min_judged 20
   @review_actions ["rework"]
-  @waiting_states ["in review", "auto review"]
+  @waiting_states ["In Review", "Auto Review", "Human Review"]
 
   @type stats :: %{
           judged: non_neg_integer(),
@@ -55,18 +56,19 @@ defmodule SymphonyElixir.AcceptanceGate.Agreement do
 
   @doc """
   The human's decision on a gate verdict, from the issue's current Linear `state` and its PR
-  review record: `"approve"`, `"rework"`, `"none"`, or nil while it is still waiting (also when
-  the state is unknown).
+  review record: `"approve"`, `"rework"`, `"none"`, or nil while it is still waiting in one of
+  `waiting_states` (the states a person reviews in) or back in progress without review comments
+  (also when the state is unknown).
   """
-  @spec human_decision(map(), String.t() | nil, map() | nil, String.t()) :: String.t() | nil
-  def human_decision(gate_run, state, pr_review, auto_review_state) do
+  @spec human_decision(map(), String.t() | nil, map() | nil, [String.t()]) :: String.t() | nil
+  def human_decision(gate_run, state, pr_review, waiting_states) do
     case normalize(state) do
       "" -> nil
       "merging" -> "approve"
       "done" -> "approve"
       "rework" -> "rework"
       "in progress" -> if review_since?(pr_review, Map.get(gate_run, :judged_at)), do: "rework"
-      state -> if state in [normalize(auto_review_state) | @waiting_states], do: nil, else: "none"
+      state -> if state in Enum.map(waiting_states, &normalize/1), do: nil, else: "none"
     end
   end
 
@@ -80,8 +82,8 @@ defmodule SymphonyElixir.AcceptanceGate.Agreement do
   repository's runs). `issues` are the issues the CI poller watches this cycle; the state of any
   other issue is read from the tracker. `ci_checks` give the PR head the human decided on.
 
-  Options: `:run_store`, `:tracker`, `:auto_review_state` (default `"Auto Review"`), `:now`,
-  `:audit_dir`. Returns `{issue_id, decision}` for each decision recorded.
+  Options: `:run_store`, `:tracker`, `:waiting_states` (default In Review, Auto Review and Human
+  Review), `:now`, `:audit_dir`. Returns `{issue_id, decision}` for each decision recorded.
   """
   @spec observe(String.t(), [Issue.t()], [map()], [map()], keyword()) :: [{String.t(), String.t()}]
   def observe(repo_key, issues, runs, ci_checks, opts) do
@@ -95,13 +97,13 @@ defmodule SymphonyElixir.AcceptanceGate.Agreement do
     states = issue_states(pending, issues, Keyword.get(opts, :tracker, Tracker))
     run_store = Keyword.get(opts, :run_store, RunStore)
     pr_reviews = pr_reviews(run_store, repo_key, pending, states)
-    auto_review_state = Keyword.get(opts, :auto_review_state, "Auto Review")
+    waiting_states = Keyword.get(opts, :waiting_states, @waiting_states)
 
     Enum.flat_map(pending, fn gate_run ->
       issue_id = Map.get(gate_run, :issue_id)
       state = Map.get(states, issue_id)
 
-      case human_decision(gate_run, state, Map.get(pr_reviews, issue_id), auto_review_state) do
+      case human_decision(gate_run, state, Map.get(pr_reviews, issue_id), waiting_states) do
         nil -> []
         decision -> record(repo_key, gate_run, decision, state, ci_check(ci_checks, issue_id), run_store, opts)
       end

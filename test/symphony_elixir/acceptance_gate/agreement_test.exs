@@ -8,6 +8,7 @@ defmodule SymphonyElixir.AcceptanceGate.AgreementTest do
 
   @judged_at ~U[2026-10-04 10:00:00Z]
   @now ~U[2026-10-04 12:00:00Z]
+  @waiting ["In Review", "Auto Review", "Human Review"]
 
   defmodule FakeTracker do
     def fetch_issue_states_by_ids(ids) do
@@ -72,23 +73,24 @@ defmodule SymphonyElixir.AcceptanceGate.AgreementTest do
       run = gate_run("issue-1", "approve")
       review = fn action, at -> %{last_action: action, last_action_at: at} end
 
-      assert Agreement.human_decision(run, "Merging", nil, "Auto Review") == "approve"
-      assert Agreement.human_decision(run, " done ", nil, "Auto Review") == "approve"
-      assert Agreement.human_decision(run, "Rework", nil, "Auto Review") == "rework"
-      assert Agreement.human_decision(run, "In Progress", review.("rework", @now), "Auto Review") == "rework"
-      assert Agreement.human_decision(run, "In Progress", review.("rework", @judged_at), "Auto Review") == "rework"
+      assert Agreement.human_decision(run, "Merging", nil, @waiting) == "approve"
+      assert Agreement.human_decision(run, " done ", nil, @waiting) == "approve"
+      assert Agreement.human_decision(run, "Rework", nil, @waiting) == "rework"
+      assert Agreement.human_decision(run, "In Progress", review.("rework", @now), @waiting) == "rework"
+      assert Agreement.human_decision(run, "In Progress", review.("rework", @judged_at), @waiting) == "rework"
 
       # Waiting: still in review, or back in progress without review comments since the verdict.
-      assert Agreement.human_decision(run, "In Review", nil, "Auto Review") == nil
-      assert Agreement.human_decision(run, "QA Review", nil, "QA Review") == nil
-      assert Agreement.human_decision(run, "Auto Review", nil, "QA Review") == nil
-      assert Agreement.human_decision(run, "In Progress", nil, "Auto Review") == nil
-      assert Agreement.human_decision(run, "In Progress", review.("rework", ~U[2026-10-04 09:00:00Z]), "Auto Review") == nil
-      assert Agreement.human_decision(run, "In Progress", review.("conflict", @now), "Auto Review") == nil
-      assert Agreement.human_decision(run, "In Progress", review.("merge", @now), "Auto Review") == nil
-      assert Agreement.human_decision(run, nil, nil, "Auto Review") == nil
+      assert Agreement.human_decision(run, "In Review", nil, @waiting) == nil
+      assert Agreement.human_decision(run, "Human Review", nil, @waiting) == nil
+      assert Agreement.human_decision(run, "QA Review", nil, ["QA Review", "In Review"]) == nil
+      assert Agreement.human_decision(run, "Auto Review", nil, ["QA Review", "In Review"]) == "none"
+      assert Agreement.human_decision(run, "In Progress", nil, @waiting) == nil
+      assert Agreement.human_decision(run, "In Progress", review.("rework", ~U[2026-10-04 09:00:00Z]), @waiting) == nil
+      assert Agreement.human_decision(run, "In Progress", review.("conflict", @now), @waiting) == nil
+      assert Agreement.human_decision(run, "In Progress", review.("merge", @now), @waiting) == nil
+      assert Agreement.human_decision(run, nil, nil, @waiting) == nil
 
-      assert Agreement.human_decision(run, "Canceled", nil, "Auto Review") == "none"
+      assert Agreement.human_decision(run, "Canceled", nil, @waiting) == "none"
     end
   end
 
@@ -105,6 +107,7 @@ defmodule SymphonyElixir.AcceptanceGate.AgreementTest do
         gate_run("sent-back", "rework", %{agent_verdict: "rework"}),
         gate_run("commented", "approve"),
         gate_run("escalated", "escalate", %{agent_verdict: "approve"}),
+        gate_run("with-person", "approve"),
         gate_run("canceled", "approve"),
         gate_run("superseded", "rework", %{judged_at: ~U[2026-10-04 08:00:00Z]}),
         gate_run("superseded", "approve", %{head_sha: "sha-new"}),
@@ -117,7 +120,13 @@ defmodule SymphonyElixir.AcceptanceGate.AgreementTest do
 
       Process.put(:tracker_states, %{"sent-back" => "Rework", "commented" => "In Progress", "canceled" => "Canceled", "superseded" => "Merging"})
 
-      issues = [%Issue{id: "merged", state: "Merging"}, %Issue{id: "escalated", state: "In Review"}, %Issue{id: "unrelated", state: "In Review"}]
+      issues = [
+        %Issue{id: "merged", state: "Merging"},
+        %Issue{id: "escalated", state: "In Review"},
+        %Issue{id: "with-person", state: "Human Review"},
+        %Issue{id: "unrelated", state: "In Review"}
+      ]
+
       ci_checks = [%{issue_id: "sent-back", last_observed_sha: "sha-pushed"}, %{issue_id: "merged", last_observed_sha: "sha-merged"}]
 
       opts = [tracker: FakeTracker, now: @now, audit_dir: dir]
@@ -135,6 +144,7 @@ defmodule SymphonyElixir.AcceptanceGate.AgreementTest do
       assert %{human_decision: "none", agreed: nil} = stored("canceled")
       assert %{human_decision: "approve", head_sha: "sha-new", agreed: true} = stored("superseded")
       assert stored("escalated") == nil
+      assert stored("with-person") == nil
 
       assert [
                %{"issue_identifier" => "COMMENTED", "verdict" => "approve", "decision" => "rework", "agreed" => false},
@@ -143,7 +153,7 @@ defmodule SymphonyElixir.AcceptanceGate.AgreementTest do
                %{"issue_identifier" => "SUPERSEDED", "decision" => "approve"}
              ] = agreement_events(dir)
 
-      # A second poll finds only the escalated verdict still waiting, and it is watched.
+      # A second poll finds only the verdicts still in review waiting, and they are watched.
       assert Agreement.observe("default", issues, RunStore.list_runs("default", :all), ci_checks, tracker: RaisingTracker) == []
     end
 
