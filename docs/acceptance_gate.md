@@ -4,10 +4,51 @@ The acceptance gate is a step in Auto Review, after QA. It decides whether a PR 
 a human. A gate agent reads the ticket and the PR. Before the agent's verdict counts, fixed
 escalation rules check the ticket and the diff, and any rule that triggers sends the PR to a human.
 
-So far Symphony has only the gate's config, its kill switch, its escalation rules
-(`SymphonyElixir.AcceptanceGate.Escalation`) and the context the gate agent will read
-(`SymphonyElixir.AcceptanceGate.Context`). Nothing runs the gate yet, so every `mode` behaves
-like `off` for now.
+Auto Review runs CI, then QA, then the gate. The gate runs in `shadow` mode: it records an
+advisory verdict and the issue moves to In Review as before. `enforce` doesn't apply verdicts
+yet and behaves like `shadow`.
+
+## How a gate pass runs
+
+With `mode` other than `off`, a QA `pass`, `skip` or `blocked` doesn't move the issue to In Review
+straight away. Auto Review asks `SymphonyElixir.AcceptanceGate.Runner` for a gate pass on the PR
+head, and the issue moves on once the gate has a verdict for that SHA. A QA `fail` goes back to
+In Progress as before and never reaches the gate.
+
+- **The runner.** Like the QA runner, it runs passes in the background, one per issue and at most
+  `max_concurrent` at once. A forced ticket goes first. While the gate agent's provider is held by
+  a usage limit, nothing starts; the next green CI poll asks again.
+- **The pass** (`AcceptanceGate.run/3`) builds the context (below), checks the escalation rules,
+  then runs the gate agent in a throwaway worktree at the merge result. The session is read-only:
+  the read-only Linear and GitHub tools only, a read-only Codex sandbox, and for Claude no
+  file-editing tool and no shell write in its working directory. Pushing and the `gh` CLI stay
+  denied. A merge conflict with current main skips the agent.
+- **What the agent judges**, in this order: each acceptance criterion (the checklist items under
+  the ticket's `Acceptance` or `Acceptance Criteria` headings, then the workpad's
+  `### Acceptance Criteria`) as `met`, `unmet` or `unclear` with `file:line` evidence; conflicts and
+  overlaps with the other open PRs; scope (anything the ticket asks for that is missing, and any
+  unrelated change); and judgment calls for a human (a product or UX decision, ambiguous criteria).
+  It doesn't review code style or bugs, which the pre-push reviewer covers, unless a bug makes a
+  criterion unmet. It answers with JSON: `verdict` (`approve`, `rework` or `escalate`),
+  `criteria[]`, `overlaps[]`, `scope[]`, `escalation_reasons[]` and `follow_ups[]` (gaps outside
+  the ticket). An answer without a readable JSON object gets one follow-up turn.
+- **The final verdict.** Any escalation rule that triggers forces `escalate`, and the agent's own
+  verdict is kept as `agent_verdict`. A QA `blocked` adds the reason `qa_blocked`. A PR that
+  conflicts with current main is `rework` (reason `conflict`). An inconclusive pass (an unreadable
+  answer, an agent or context error) records no verdict, and the next green poll runs the gate
+  again. The `escalate.inconclusive_limit`-th inconclusive pass on the same SHA escalates with the
+  reason `inconclusive`.
+- **Storage.** The verdict is stored per head SHA on the issue's CI check record: `gate_sha`,
+  `gate_verdict`, `gate_agent_verdict`, `gate_reasons`, `gate_run_id` (and `gate_mode`,
+  `gate_inconclusive`). The run is stored with `kind: "acceptance_gate"` and its tokens. A green
+  poll on a SHA that already has a verdict applies it again and starts no new run.
+- **Visibility.** Each pass rewrites one `## Symphony Acceptance Gate` comment on the Linear issue,
+  as the QA report is rewritten. It shows the mode (advisory in `shadow`), the verdict, the agent's
+  verdict, a table with one row per acceptance criterion (criterion, result, evidence), the
+  overlaps, the scope findings, the escalation reasons, the proposed follow-ups (listed, not
+  filed), the tokens and the runtime.
+- **Audit log.** Each verdict writes one `acceptance_gate_verdict` event with the issue, the SHA,
+  the mode, the verdict, the agent's verdict, the reasons, the run id and the tokens.
 
 ## Where it is configured
 
@@ -53,7 +94,7 @@ Quote regular expressions with single quotes in YAML, so a backslash stays a bac
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `mode` | `off` | The kill switch. `off`: the gate doesn't run. `shadow`: the gate runs and records its verdict, and the PR goes to a human as usual. `enforce`: the gate's verdict counts. |
+| `mode` | `off` | The kill switch. `off`: the gate doesn't run. `shadow`: the gate runs and records its verdict, and the PR goes to a human as usual. `enforce`: the gate's verdict counts (not applied yet: it behaves like `shadow`). |
 | `runtime` | `null` | The gate agent's runtime, `codex` or `claude`. The key is `runtime`, as in `auto_review.runtime`. `kind` is rejected, and the error points at `runtime`. |
 | `command` | `null` | The gate agent's command. |
 | `model` | `null` | The gate agent's model. Unset, it falls back to the `acceptance_gate` run profile: `repositories[].agent.run_profiles.acceptance_gate`, `repositories[].agent.model`, `agent.run_profiles.acceptance_gate`, then `agent.model` (`Config.acceptance_gate_profile/1`). |
@@ -137,6 +178,9 @@ so `0.4.0` to `0.5.0` is a major change. Only a leading version is read, after a
 
 `Context.build(issue, record, sha, settings, opts)` prepares the gate agent's input, so the agent
 doesn't spend turns collecting it. `record` is the issue's CI check record and `sha` the PR head.
+Its `diff_summary` feeds the escalation rules: each changed file's numstat and added lines, read
+from the whole diff before it is cut, and the content of a changed `mix.lock` or `package.json` on
+the base tip and in the merge result.
 
 - **The PR merged onto current main.** Symphony fetches the base branch (`repositories[].base_branch`,
   else `main`) from `origin` once per build, checks it out in a throwaway worktree under

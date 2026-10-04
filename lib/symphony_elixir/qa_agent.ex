@@ -748,7 +748,9 @@ defmodule SymphonyElixir.QaAgent do
     end
   end
 
-  defp merge_usage(tokens, usage) do
+  @doc false
+  @spec merge_usage(map(), map() | nil) :: map()
+  def merge_usage(tokens, usage) do
     Enum.reduce(@token_keys, tokens, fn key, acc ->
       field = token_field(key)
 

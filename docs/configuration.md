@@ -1104,8 +1104,9 @@ That repository's `macos_app` playbook builds with `make -C macos app` and trigg
 `auto_review.acceptance_gate` configures the acceptance gate: its kill switch (`mode`, default
 `off`), the gate agent's run settings and the escalation rules that send a PR to a human. It is
 operator config only: a repository's `WORKFLOW.md` can't set it, and `repositories[].acceptance_gate`
-can only add rules. Nothing runs the gate yet. Every key, the built-in rules and example blocks are
-in [`docs/acceptance_gate.md`](acceptance_gate.md).
+can only add rules. With `mode: shadow`, Auto Review runs a gate pass after QA, writes an advisory
+`## Symphony Acceptance Gate` comment, and moves the issue to In Review as before. Every key, the
+built-in rules and example blocks are in [`docs/acceptance_gate.md`](acceptance_gate.md).
 
 #### Android settings
 
