@@ -38,6 +38,8 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   # once the grace expires so the caller is not stuck waiting for the port
   # `exit_status`.
   @post_completion_grace_default_ms 1_500
+  @denied_commands ["Bash(gh:*)", "Bash(ghe:*)", "Bash(git push:*)", "Bash(git remote add:*)", "Bash(git remote set-url:*)"]
+  @file_edit_tools ["Edit", "Write", "NotebookEdit"]
 
   @type session :: %{
           workspace: Path.t(),
@@ -72,8 +74,8 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
              worker_host,
              settings,
              mcp_session,
-             remote_socket_path,
-             remote_shim_path
+             {remote_socket_path, remote_shim_path},
+             Keyword.get(opts, :read_only, false)
            ) do
       # Every turn of the session starts Claude with the profile chosen at dispatch, and with
       # the caller's `:extra_env` (a QA pass's own `CLAUDE_CODE_TMPDIR`) on the local host.
@@ -173,18 +175,25 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     end
   end
 
-  defp build_claude_settings(network_access, allow_read_paths, allow_write_paths, deny_write_paths) do
-    network_access
-    |> build_sandbox_settings(allow_read_paths, allow_write_paths, deny_write_paths)
-    |> Map.put("permissions", %{
-      "deny" => [
-        "Bash(gh:*)",
-        "Bash(ghe:*)",
-        "Bash(git push:*)",
-        "Bash(git remote add:*)",
-        "Bash(git remote set-url:*)"
-      ]
-    })
+  # The `settings.json` a Claude session starts with: the sandbox, and the permission rules that
+  # deny pushing and the `gh` CLI. A read-only session (`read_only: true` in `start_session/2`,
+  # the acceptance gate) also gets no file-editing tool and can't write its working directory
+  # from the shell.
+  @doc false
+  @spec build_claude_settings(Agent.NetworkAccess.t(), [String.t()], [String.t()], [String.t()], boolean()) :: map()
+  def build_claude_settings(network_access, allow_read_paths, allow_write_paths, deny_write_paths \\ [], read_only? \\ false) do
+    settings =
+      network_access
+      |> build_sandbox_settings(allow_read_paths, allow_write_paths, deny_write_paths)
+      |> Map.put("permissions", %{"deny" => @denied_commands})
+
+    if read_only? do
+      settings
+      |> update_in(["permissions", "deny"], &(&1 ++ @file_edit_tools))
+      |> update_in(["sandbox", "filesystem", "denyWrite"], &(&1 ++ ["."]))
+    else
+      settings
+    end
   end
 
   defp build_mcp_config(mcp_session, socket_path, shim_path, settings) do
@@ -477,14 +486,14 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     end
   end
 
-  defp create_session(workspace, worker_host, settings, mcp_session, remote_socket_path, remote_shim_path) do
+  defp create_session(workspace, worker_host, settings, mcp_session, {remote_socket_path, remote_shim_path}, read_only?) do
     case write_claude_runtime_files(
            workspace,
            worker_host,
            settings,
            mcp_session,
-           remote_socket_path,
-           remote_shim_path
+           {remote_socket_path, remote_shim_path},
+           read_only?
          ) do
       {:ok, runtime_files} ->
         {:ok,
@@ -642,7 +651,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     end
   end
 
-  defp write_claude_runtime_files(workspace, worker_host, settings, mcp_session, socket_path, remote_shim_path) do
+  defp write_claude_runtime_files(workspace, worker_host, settings, mcp_session, {socket_path, remote_shim_path}, read_only?) do
     network_access = settings.agent.network_access
     allow_read_paths = workspace_sandbox_allow_read_paths(settings)
     allow_write_paths = workspace_sandbox_allow_write_paths(settings) ++ host_allow_write_paths(worker_host)
@@ -650,7 +659,10 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     effective_socket_path = socket_path || mcp_session.socket_path
 
     deny_write_paths = host_deny_write_paths(workspace, worker_host)
-    settings_json = build_claude_settings(network_access, allow_read_paths, allow_write_paths, deny_write_paths)
+
+    settings_json =
+      build_claude_settings(network_access, allow_read_paths, allow_write_paths, deny_write_paths, read_only?)
+
     settings_dir = claude_settings_dir(worker_host, mcp_session)
     settings_path = Path.join(settings_dir, "settings.json")
     mcp_config_path = Path.join(settings_dir, "mcp_config.json")
