@@ -51,8 +51,10 @@ public enum StatusMenu {
         case .stopped, .starting:
             lines = []
         case let .running(snapshot, _), let .paused(snapshot, _):
-            // The operator pause first, then the usage-limit holds, then what an update would release.
-            lines = [countsLine(snapshot)] + (snapshot.pause.map { [pauseLine($0, now: now, timeZone: timeZone)] } ?? [])
+            // What waits on the operator's review first, then the operator pause, then the usage-limit holds,
+            // then what an update would release.
+            lines = [countsLine(snapshot)] + (humanReviewLine(snapshot.humanReview).map { [$0] } ?? [])
+                + (snapshot.pause.map { [pauseLine($0, now: now, timeZone: timeZone)] } ?? [])
                 + snapshot.usageLimits.map { usageLimitLine($0, now: now, timeZone: timeZone) }
                 + (updateUnblocksLine(snapshot.updateUnblocks).map { [$0] } ?? [])
         case let .error(message):
@@ -84,6 +86,18 @@ public enum StatusMenu {
             return "Update to unblock 1 ticket"
         default:
             return "Update to unblock \(count) tickets"
+        }
+    }
+
+    /// "1 ticket waits on you in Human Review" while tickets wait in Human Review, nil when none does.
+    public static func humanReviewLine(_ count: Int) -> String? {
+        switch count {
+        case ...0:
+            return nil
+        case 1:
+            return "1 ticket waits on you in Human Review"
+        default:
+            return "\(count) tickets wait on you in Human Review"
         }
     }
 

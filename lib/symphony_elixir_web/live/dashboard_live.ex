@@ -245,6 +245,12 @@ defmodule SymphonyElixirWeb.DashboardLive do
           </article>
 
           <article class="metric-card">
+            <p class="metric-label">Human Review</p>
+            <p class="metric-value numeric"><%= @visible_payload.counts.human_review %></p>
+            <p class="metric-detail">needs you</p>
+          </article>
+
+          <article class="metric-card">
             <p class="metric-label">Retrying</p>
             <p class="metric-value numeric"><%= @visible_payload.counts.retrying %></p>
             <p class="metric-detail">backoff</p>
@@ -1026,6 +1032,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
     payload
     |> Map.update(:running, [], &filter_repo_rows(&1, repo_filter))
     |> Map.update(:watching, [], &filter_repo_rows(&1, repo_filter))
+    |> Map.update(:human_review, [], &filter_repo_rows(&1, repo_filter))
     |> Map.update(:retrying, [], &filter_repo_rows(&1, repo_filter))
     |> Map.update(:awaiting_clarification, [], &filter_repo_rows(&1, repo_filter))
     |> Map.update(:skipped, [], &filter_repo_rows(&1, repo_filter))
@@ -1038,6 +1045,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
     Map.put(payload, :counts, %{
       running: payload |> Map.get(:running, []) |> length(),
       watching: payload |> Map.get(:watching, []) |> length(),
+      human_review: payload |> Map.get(:human_review, []) |> length(),
       conflicts: payload |> Map.get(:conflicts, []) |> length(),
       retrying: payload |> Map.get(:retrying, []) |> length()
     })

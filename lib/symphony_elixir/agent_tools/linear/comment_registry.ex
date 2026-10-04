@@ -3,7 +3,8 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
 
   # Per-run state for the scoped Linear tools: the comment ids this run created (so it may only
   # edit its own comments) and how many sub-issues it has created (so it stays under the cap), with
-  # their ids by identifier (so a later sub-issue may be blocked by an earlier one).
+  # their ids by identifier (so a later sub-issue may be blocked by an earlier one), and whether it
+  # asked a person for something (so its issue waits for that person in the Human Review state).
 
   use Agent
 
@@ -16,7 +17,14 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
       |> Enum.filter(&is_binary/1)
       |> MapSet.new()
 
-    state = %{comments: comments, subissues: 0, created_subissues: %{}, project_updates: 0}
+    state = %{
+      comments: comments,
+      subissues: 0,
+      created_subissues: %{},
+      project_updates: 0,
+      human_action_requested: false
+    }
+
     Agent.start_link(fn -> state end, agent_opts)
   end
 
@@ -96,6 +104,15 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
   @doc "Gives back a slot claimed by `reserve_human_action/2` when no request was posted."
   @spec release_human_action(pid()) :: :ok
   def release_human_action(pid) when is_pid(pid), do: release(pid, :human_actions)
+
+  @doc "Records that the run's issue has an open human-action request, posted now or earlier."
+  @spec record_human_action_request(pid()) :: :ok
+  def record_human_action_request(pid) when is_pid(pid), do: Agent.update(pid, &Map.put(&1, :human_action_requested, true))
+
+  @doc "True once `record_human_action_request/1` ran for this run."
+  @spec human_action_requested?(pid() | nil) :: boolean()
+  def human_action_requested?(pid) when is_pid(pid), do: Agent.get(pid, &Map.get(&1, :human_action_requested, false))
+  def human_action_requested?(_pid), do: false
 
   defp reserve(pid, counter, cap, cap_error) do
     Agent.get_and_update(pid, fn state ->

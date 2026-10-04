@@ -59,7 +59,7 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
     Enum.sort_by(actions, & &1.key)
   end
 
-  test "queries the route's scope for labelled, in-review or final verification issues that are not terminal" do
+  test "queries the route's scope for labelled, In Review, Human Review or final verification issues that are not terminal" do
     assert {:ok, %{}} = collect([])
 
     assert_received {:query, query, variables}
@@ -73,6 +73,7 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
                  "or" => [
                    %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => "human-action"}}}},
                    %{"state" => %{"name" => %{"eqIgnoreCase" => "In Review"}}},
+                   %{"state" => %{"name" => %{"eqIgnoreCase" => "Human Review"}}},
                    %{"title" => %{"startsWith" => "Final verification:"}}
                  ]
                },
@@ -236,6 +237,49 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
            ] = actions(collected)
   end
 
+  test "lists every issue in Human Review, marked so the update puts it first" do
+    plan = node("MOT-60", %{"state" => %{"name" => "Human Review"}, "labels" => labels(["breakdown"])})
+
+    blocked =
+      node("MOT-61", %{
+        "state" => %{"name" => "Human Review"},
+        "comments" =>
+          comments([
+            %{"id" => "c1", "body" => "## Symphony QA Report\n\n**Verdict:** blocked → Human Review\n\nReason: no OpenRouter key\n", "createdAt" => "2026-10-03T10:00:00.000Z"}
+          ])
+      })
+
+    requested =
+      node("MOT-62", %{
+        "state" => %{"name" => "Human Review"},
+        "labels" => labels(["human-action"]),
+        "comments" => comments([request_comment("comment-1", "Add the OpenRouter key", "2026-10-03T10:00:00.000Z")]),
+        "history" => history([%{"createdAt" => "2026-10-03T10:05:00.000Z", "fromState" => %{"name" => "In Progress"}, "toState" => %{"name" => "Human Review"}}])
+      })
+
+    plain = node("MOT-63", %{"state" => %{"name" => "Human Review"}})
+    in_review = node("MOT-64", %{"state" => %{"name" => "In Review"}, "labels" => labels(["breakdown"])})
+
+    assert {:ok, collected} = collect([plan, blocked, requested, plain, in_review])
+
+    assert [
+             %Action{key: "plan:id-MOT-60", kind: :plan_review, human_review: true, done_when: "MOT-60 leaves Human Review."},
+             %Action{key: "plan:id-MOT-64", kind: :plan_review, human_review: false},
+             %Action{key: "qa:id-MOT-61", kind: :qa_blocked, human_review: true, done_when: "MOT-61 leaves Human Review, or its next QA report is not blocked."},
+             %Action{key: "request:comment-1", kind: :request, human_review: true},
+             %Action{
+               key: "review:id-MOT-63",
+               kind: :human_review,
+               human_review: true,
+               title: "Review MOT-63",
+               why: "MOT-63 waits in Human Review: only you can move it on.",
+               est_minutes: 10,
+               steps: [_read, "Move MOT-63 to `Merging` to approve its PR, to `Rework` to send it back, or to `Done` to sign off a final verification."],
+               done_when: "MOT-63 leaves Human Review."
+             }
+           ] = actions(collected)
+  end
+
   test "lists no action for a QA report blocked by the provider's usage limit" do
     usage_limited_report =
       "## Symphony QA Report\n\n**Verdict:** blocked → TP-368 In Review\n\n" <>
@@ -342,13 +386,15 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
 
     other_ticket = walkthrough_report("MOT-70", :blocked, "In Review", %{reason: "no permission"})
     no_target = %{"id" => "c1", "body" => "## Symphony QA Report\n\n**Verdict:** blocked → In Review\n", "createdAt" => "2026-10-03T10:00:00.000Z"}
+    no_state = walkthrough_report("MOT-82", :blocked, "In Review", %{reason: "no permission"})
 
     nodes = [
       verification("MOT-73", "In Review", passed),
       verification("MOT-74", "Todo", failed),
       verification("MOT-75", "In Review", other_ticket),
       verification("MOT-76", "In Review", no_target),
-      verification("MOT-77", "Todo", nil)
+      verification("MOT-77", "Todo", nil),
+      verification("MOT-82", nil, no_state, %{"state" => nil})
     ]
 
     assert {:ok, %{}} = collect(nodes)
@@ -376,6 +422,30 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
                project: %{id: "project-1"}
              }
            ] = actions(collected)
+  end
+
+  test "lists a blocked final verification the walkthrough moved to Human Review first, without a second review action" do
+    report = walkthrough_report("MOT-79", :blocked, "Human Review", %{reason: "no OpenRouter key on the QA host"})
+
+    assert {:ok, %{"project-2" => %{actions: [action]}}} = collect([verification("MOT-79", "Human Review", report)])
+
+    assert %Action{
+             key: "verification:id-MOT-79",
+             kind: :verification_blocked,
+             human_review: true,
+             done_when: "MOT-79 leaves Human Review, or its next walkthrough is not blocked."
+           } = action
+  end
+
+  test "with human_review: null, queries and lists only In Review as before" do
+    no_human_review = %Schema{tracker: %{settings().tracker | human_review_state: nil}}
+
+    assert {:ok, collected} = collect([node("MOT-63", %{"state" => %{"name" => "Human Review"}})], settings: no_human_review)
+    assert collected == %{}
+
+    assert_received {:query, _query, %{filter: %{"and" => [_scope, %{"or" => wanted}, _terminal]}}}
+    assert [_label, in_review, _final_verification] = wanted
+    assert in_review == %{"state" => %{"name" => %{"eqIgnoreCase" => "In Review"}}}
   end
 
   test "skips issues outside a project and merges what several routes return" do

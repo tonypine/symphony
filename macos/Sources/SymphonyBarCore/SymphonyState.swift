@@ -14,6 +14,8 @@ public struct StateSnapshot: Equatable {
     public var updateUnblocks: Int
     /// Tickets forced past the dispatch limits, in queue order; empty when none is, or when Symphony predates them.
     public var forced: [ForcedTicket]
+    /// Tickets waiting in Human Review, which only the operator can move on; 0 when Symphony predates it.
+    public var humanReview: Int
 
     public struct Pause: Equatable {
         public var reason: String?
@@ -128,7 +130,8 @@ public struct StateSnapshot: Equatable {
         usageLimits: [UsageLimit] = [],
         budget: Budget? = nil,
         updateUnblocks: Int = 0,
-        forced: [ForcedTicket] = []
+        forced: [ForcedTicket] = [],
+        humanReview: Int = 0
     ) {
         self.running = running
         self.retrying = retrying
@@ -137,6 +140,7 @@ public struct StateSnapshot: Equatable {
         self.budget = budget
         self.updateUnblocks = updateUnblocks
         self.forced = forced
+        self.humanReview = humanReview
     }
 }
 
@@ -195,7 +199,8 @@ public enum SymphonyState {
         guard let counts = payload.counts else { return .failed("Symphony's state couldn't be read") }
 
         var snapshot = StateSnapshot(
-            running: counts.running, retrying: counts.retrying ?? 0, updateUnblocks: payload.appUpdate?.unblocks ?? 0
+            running: counts.running, retrying: counts.retrying ?? 0, updateUnblocks: payload.appUpdate?.unblocks ?? 0,
+            humanReview: counts.humanReview ?? 0
         )
         if let pause = payload.pause, pause.paused {
             snapshot.pause = .init(reason: pause.reason, since: pause.pausedAt.flatMap(parseDate))
@@ -261,6 +266,8 @@ public enum SymphonyState {
         struct Counts: Decodable {
             let running: Int
             let retrying: Int?
+            /// Missing before Symphony had a Human Review state.
+            let humanReview: Int?
         }
 
         struct Pause: Decodable {
