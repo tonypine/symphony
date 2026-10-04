@@ -479,8 +479,16 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "qa_android_install",
       "description" =>
-        "Install the APK at the android_app playbook's apk_path, which you build in your sandbox with the playbook's build command, on Symphony's emulator, with fresh app data. Takes no arguments; fails when tracked files in the worktree changed.",
-      "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
+        "Install the APKs at the android_app playbook's APK paths, which you build in your sandbox with the playbook's build command, on Symphony's emulator, with fresh app data. " <>
+          "Every install first uninstalls every configured app, so install all of them at once when the walkthrough needs more than one. " <>
+          "Reports the application IDs each APK installed; fails when tracked files in the worktree changed.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "properties" => %{
+          "apk" => %{"type" => "string", "description" => "Install only this one of the playbook's APK paths. Defaults to all of them."}
+        }
+      }
     },
     %{
       "name" => "qa_android_launch",
@@ -644,7 +652,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "qa_ax_press" => ["pid", "path", "action"],
     "qa_ax_set_value" => ["pid", "path", "value"],
     "qa_put_file" => ["local_path", "remote_name"],
-    "qa_android_install" => [],
+    "qa_android_install" => ["apk"],
     "qa_android_launch" => ["application_id"],
     "qa_android_stop" => ["application_id"],
     "qa_android_screenshot" => ["name"],

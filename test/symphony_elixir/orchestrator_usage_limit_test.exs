@@ -583,7 +583,7 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
       assert [%{provider: "anthropic", window: "five_hour", resume_at: ^expected_resume_at} = hold] = payload.usage_limits
       assert [%{kind: :usage_limit, provider: "anthropic", window: "five_hour"}] = payload.dispatch_state.blockers
       assert payload.dispatch_state.active? == false
-      assert UsageLimit.banner(hold, DateTime.utc_now()) =~ ~r/^Paused: Claude 5-hour limit, resumes ~\d{2}:\d{2}$/
+      assert UsageLimit.banner(hold, DateTime.utc_now()) =~ ~r/^Paused: Claude 5-hour limit, resumes ~(?:[A-Z][a-z]{2} \d{1,2} )?\d{2}:\d{2}$/
 
       # 4. Past resume_at the hold clears and the issue runs again.
       set_clock(ctx, resume_at)
