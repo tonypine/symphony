@@ -8,6 +8,9 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
   alias SymphonyElixirWeb.ObservabilityPubSub
 
   @snapshot_table :symphony_orchestrator_snapshot
+  # The wait_for_* helpers poll until their condition holds, so a passing test never waits
+  # this long; it only keeps a slow, loaded host from failing on the deadline.
+  @min_wait_ms 5_000
 
   defmodule StopSessionAgent do
     @spec stop_session(map()) :: :ok
@@ -2292,6 +2295,8 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
       log =
         capture_log(fn ->
+          # A startup cycle still in flight would skip this one, and with it the age GC.
+          wait_for_poll_cycle_idle(pid)
           send(pid, :run_poll_cycle)
 
           wait_for_snapshot(
@@ -2370,6 +2375,9 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
           issue: issue,
           workspace_path: active_workspace,
           started_at: DateTime.utc_now(),
+          last_codex_timestamp: nil,
+          last_codex_message: nil,
+          last_codex_event: nil,
           # Freshly dispatched: a poll that reconciles the stale Backlog state keeps the run.
           state_reconcile_grace_until_ms: System.monotonic_time(:millisecond) + 60_000
         }
@@ -6281,12 +6289,18 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     get_orchestrator_state(pid)
   end
 
+  # Idle also means no dispatch readiness task: a cycle that reaches dispatch while one is in
+  # flight defers its dispatch and skips the workspace age GC that task would run.
   defp wait_for_poll_cycle_idle(pid) do
-    wait_for_orchestrator_state(pid, &(is_nil(&1.repo_poll_task_ref) and not &1.poll_check_in_progress), 5_000)
+    wait_for_orchestrator_state(
+      pid,
+      &(is_nil(&1.repo_poll_task_ref) and not &1.poll_check_in_progress and &1.dispatch_readiness_tasks == %{}),
+      5_000
+    )
   end
 
   defp wait_for_orchestrator_state(pid, predicate, timeout_ms) when is_function(predicate, 1) do
-    deadline_ms = System.monotonic_time(:millisecond) + timeout_ms
+    deadline_ms = System.monotonic_time(:millisecond) + max(timeout_ms, @min_wait_ms)
     do_wait_for_orchestrator_state(pid, predicate, deadline_ms)
   end
 
@@ -6320,7 +6334,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
   end
 
   defp wait_for_snapshot(pid, predicate, timeout_ms \\ 200) when is_function(predicate, 1) do
-    deadline_ms = System.monotonic_time(:millisecond) + timeout_ms
+    deadline_ms = System.monotonic_time(:millisecond) + max(timeout_ms, @min_wait_ms)
     do_wait_for_snapshot(pid, predicate, deadline_ms)
   end
 
@@ -6340,7 +6354,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
   end
 
   defp wait_for_snapshot_cache(pid, predicate, timeout_ms) when is_function(predicate, 1) do
-    deadline_ms = System.monotonic_time(:millisecond) + timeout_ms
+    deadline_ms = System.monotonic_time(:millisecond) + max(timeout_ms, @min_wait_ms)
     do_wait_for_snapshot_cache(pid, predicate, deadline_ms)
   end
 
@@ -6380,7 +6394,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
   end
 
   defp wait_for_run_record(repo_key, predicate, timeout_ms) when is_binary(repo_key) and is_function(predicate, 1) do
-    deadline_ms = System.monotonic_time(:millisecond) + timeout_ms
+    deadline_ms = System.monotonic_time(:millisecond) + max(timeout_ms, @min_wait_ms)
     do_wait_for_run_record(repo_key, predicate, deadline_ms)
   end
 
@@ -6417,7 +6431,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
   end
 
   defp wait_for_file_contents(path, expected, timeout_ms) when is_binary(path) do
-    deadline_ms = System.monotonic_time(:millisecond) + timeout_ms
+    deadline_ms = System.monotonic_time(:millisecond) + max(timeout_ms, @min_wait_ms)
     do_wait_for_file_contents(path, expected, deadline_ms)
   end
 
