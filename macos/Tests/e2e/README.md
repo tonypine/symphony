@@ -34,8 +34,8 @@ the app's status, the update helper's, app's and stub agent's logs, and the proc
 work folder is removed on success and kept on failure (or with `--keep`).
 
 Both bundles must be signed with the same certificate, as real updates are. Without one given, the test makes
-a throwaway self-signed code-signing identity in a temporary keychain. `codesign --verify` and the app accept
-it only once it is trusted for code signing, so set one of:
+a throwaway self-signed code-signing identity in a temporary keychain, on your keychain search list until the
+test ends. `codesign --verify` and the app accept it only once it is trusted for code signing, so set one of:
 
 | Variable | Effect |
 | --- | --- |

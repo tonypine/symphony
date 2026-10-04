@@ -29,6 +29,7 @@ import json
 import os
 import plistlib
 import pwd
+import re
 import secrets
 import shutil
 import signal
@@ -222,11 +223,24 @@ class Signing:
              "-T", "/usr/bin/codesign"])
         run(["security", "set-key-partition-list", "-S", "apple-tool:,apple:,codesign:", "-s",
              "-k", self.password, self.keychain])
+        # codesign only finds an identity in a keychain on the search list, even with --keychain.
+        output = run(["security", "list-keychains", "-d", "user"]).stdout
+        self.search_list = [line.strip().strip('"') for line in output.splitlines() if line.strip()]
+        run(["security", "list-keychains", "-d", "user", "-s", self.keychain, *self.search_list])
         self.certificate = cert
-        self.identity = name
+        self.identity = self._identity_hash(name)
         self.flags = ["--keychain", str(self.keychain)]
-        log(f"created the throwaway signing identity '{name}' in {self.keychain}")
+        log(f"created the throwaway signing identity '{name}' ({self.identity}) in {self.keychain}")
         self._check_trust()
+
+    def _identity_hash(self, name):
+        """The SHA-1 of the imported identity, which codesign matches without a trusted certificate."""
+        output = run(["security", "find-identity", "-p", "codesigning", self.keychain]).stdout
+        for line in output.splitlines():
+            match = re.match(r'\s*\d+\) ([0-9A-F]{40}) "(.*)"', line)
+            if match and match.group(2) == name:
+                return match.group(1)
+        raise Failure(f"the keychain {self.keychain} has no code-signing identity '{name}':\n{output}")
 
     def _check_trust(self):
         """`codesign --verify` needs the certificate trusted for code signing, in the build and in the app."""
@@ -243,9 +257,6 @@ class Signing:
                 "for code signing until the test ends (uses sudo)."
             )
         log("trusting the throwaway certificate for code signing until the test ends")
-        output = run(["security", "list-keychains", "-d", "user"]).stdout
-        self.search_list = [line.strip().strip('"') for line in output.splitlines() if line.strip()]
-        run(["security", "list-keychains", "-d", "user", "-s", self.keychain, *self.search_list])
         run(["sudo", "-n", "security", "add-trusted-cert", "-d", "-r", "trustRoot", "-p", "codeSign",
              "-k", "/Library/Keychains/System.keychain", self.certificate])
         self.trusted = True
