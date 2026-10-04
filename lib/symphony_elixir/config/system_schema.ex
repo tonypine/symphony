@@ -5,6 +5,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   import Ecto.Changeset
 
+  alias SymphonyElixir.AcceptanceGate
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.ManagedClone
   alias SymphonyElixir.Workflow
@@ -41,6 +42,13 @@ defmodule SymphonyElixir.Config.SystemSchema do
     pull_requests
     repositories verification watchdog workers workspaces
   )
+
+  # `repositories[].acceptance_gate` sets the kill switch, the numbers and extra escalation
+  # rules; the gate agent's runtime, model and concurrency stay global.
+  @acceptance_gate_keys ~w(mode runtime command model effort max_turns timeout_ms max_concurrent escalate)
+  @repo_acceptance_gate_keys ~w(mode max_turns timeout_ms escalate)
+  @acceptance_gate_escalate_keys ~w(labels ticket_patterns paths diff_patterns dependencies max_changed_lines busy_files inconclusive_limit)
+  @acceptance_gate_busy_files_keys ~w(top window_days max_lines)
 
   @removed_top_level_keys %{
     "ci" => "use `pull_requests.checks`",
@@ -100,6 +108,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "agent.turn_timeout_ms" => "agent.timeouts.turn_ms",
     "agent.command_timeout_ms" => "agent.timeouts.command_ms",
     "auto_review.kind" => "auto_review.runtime",
+    "auto_review.acceptance_gate.kind" => "auto_review.acceptance_gate.runtime",
     "ci.enabled" => "pull_requests.checks.enabled",
     "ci.escalation_state" => "pull_requests.checks.escalate_to_state",
     "ci.flaky_retry" => "pull_requests.checks.retry_failed_once",
@@ -224,7 +233,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
       :projects,
       :assignee,
       :default,
-      :agent
+      :agent,
+      :acceptance_gate
     ]
 
     defmodule Workspace do
@@ -267,6 +277,9 @@ defmodule SymphonyElixir.Config.SystemSchema do
       field(:default, :boolean, default: false)
       # The raw `agent` block until `SystemSchema.parse/1` replaces it with a `Schema.RepoAgent`.
       field(:agent, :map)
+      # The raw `acceptance_gate` override until `SystemSchema.parse/1` replaces it with the
+      # repository's effective `auto_review.acceptance_gate` block, as a string-keyed map.
+      field(:acceptance_gate, :map)
       embeds_one(:workspace, Workspace, on_replace: :update)
     end
 
@@ -365,9 +378,18 @@ defmodule SymphonyElixir.Config.SystemSchema do
       |> changeset()
       |> apply_action(:validate)
       |> case do
-        {:ok, system_config} -> system_config |> finalize_repos() |> parse_repo_agents()
-        {:error, changeset} -> {:error, {:invalid_symphony_config, format_errors(changeset)}}
+        {:ok, system_config} ->
+          finalize(system_config)
+
+        {:error, changeset} ->
+          {:error, {:invalid_symphony_config, format_errors(changeset)}}
       end
+    end
+  end
+
+  defp finalize(system_config) do
+    with {:ok, system_config} <- system_config |> finalize_repos() |> parse_repo_agents() do
+      merge_repo_acceptance_gates(system_config)
     end
   end
 
@@ -581,14 +603,16 @@ defmodule SymphonyElixir.Config.SystemSchema do
     path = "repositories[#{index}]"
 
     with {:ok, repo} <- section_map(repo, path),
-         :ok <- reject_unknown_section_keys(repo, ~w(key workflow workflow_source base_branch route workspace default agent), path),
+         :ok <- reject_unknown_section_keys(repo, ~w(key workflow workflow_source base_branch route workspace default agent acceptance_gate), path),
          {:ok, route} <- section_map(Map.get(repo, "route", %{}), path <> ".route"),
          :ok <- reject_unknown_section_keys(route, ~w(team projects labels assignee), path <> ".route"),
          {:ok, workspace} <- optional_section_map(Map.get(repo, "workspace"), path <> ".workspace"),
          :ok <- reject_unknown_section_keys(workspace || %{}, ~w(strategy repo fetch_before_dispatch source), path <> ".workspace"),
          {:ok, workspace} <- normalize_repo_source(repo, workspace, repo_path(Map.get(repo, "key"), index)),
          {:ok, agent} <- section_map(Map.get(repo, "agent"), repo_agent_path(Map.get(repo, "key"), index)),
-         :ok <- reject_unknown_section_keys(agent, ~w(provider model effort run_profiles), repo_agent_path(Map.get(repo, "key"), index)) do
+         :ok <- reject_unknown_section_keys(agent, ~w(provider model effort run_profiles), repo_agent_path(Map.get(repo, "key"), index)),
+         {:ok, acceptance_gate} <-
+           normalize_acceptance_gate(Map.get(repo, "acceptance_gate"), repo_path(Map.get(repo, "key"), index) <> ".acceptance_gate", @repo_acceptance_gate_keys) do
       normalized =
         %{}
         |> maybe_put("name", Map.get(repo, "key"))
@@ -602,6 +626,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
         |> maybe_put("assignee", Map.get(route, "assignee"))
         |> maybe_put("workspace", workspace)
         |> maybe_put("agent", agent)
+        |> maybe_put("acceptance_gate", acceptance_gate)
 
       {:ok, normalized}
     end
@@ -819,17 +844,48 @@ defmodule SymphonyElixir.Config.SystemSchema do
          :ok <-
            reject_unknown_section_keys(
              config,
-             ~w(enabled state runtime command model effort max_turns timeout_ms max_concurrent max_fix_attempts run_on skip_globs playbooks worker_host android),
+             ~w(enabled state runtime command model effort max_turns timeout_ms max_concurrent max_fix_attempts run_on skip_globs playbooks worker_host android acceptance_gate),
              "auto_review"
            ),
          {:ok, android} <- section_map(Map.get(config, "android"), "auto_review.android"),
-         :ok <- reject_unknown_section_keys(android, ~w(avd sdk_root boot_timeout_ms idle_timeout_ms), "auto_review.android") do
+         :ok <- reject_unknown_section_keys(android, ~w(avd sdk_root boot_timeout_ms idle_timeout_ms), "auto_review.android"),
+         {:ok, acceptance_gate} <- normalize_acceptance_gate(Map.get(config, "acceptance_gate"), "auto_review.acceptance_gate", @acceptance_gate_keys) do
       {:ok,
        config
-       |> Map.delete("runtime")
-       |> maybe_put("kind", Map.get(config, "runtime"))}
+       |> Map.drop(["runtime", "acceptance_gate"])
+       |> maybe_put("kind", Map.get(config, "runtime"))
+       |> maybe_put("acceptance_gate", acceptance_gate)}
     end
   end
+
+  defp normalize_acceptance_gate(nil, _path, _allowed_keys), do: {:ok, nil}
+
+  defp normalize_acceptance_gate(config, path, allowed_keys) do
+    with {:ok, config} <- section_map(config, path),
+         :ok <- reject_acceptance_gate_kind(config, path, allowed_keys),
+         :ok <- reject_unknown_section_keys(config, allowed_keys, path),
+         {:ok, escalate} <- section_map(Map.get(config, "escalate"), path <> ".escalate"),
+         :ok <- reject_unknown_section_keys(escalate, @acceptance_gate_escalate_keys, path <> ".escalate"),
+         {:ok, busy_files} <- section_map(Map.get(escalate, "busy_files"), path <> ".escalate.busy_files"),
+         :ok <- reject_unknown_section_keys(busy_files, @acceptance_gate_busy_files_keys, path <> ".escalate.busy_files") do
+      {:ok,
+       config
+       |> Map.drop(["runtime", "escalate"])
+       |> maybe_put("kind", Map.get(config, "runtime"))
+       |> maybe_put("escalate", escalate)}
+    end
+  end
+
+  # The other agent sections name their runtime `runtime`; say so instead of "unknown key".
+  defp reject_acceptance_gate_kind(%{"kind" => _kind}, path, allowed_keys) do
+    if "runtime" in allowed_keys do
+      {:error, {:invalid_symphony_config, "`#{path}.kind` is not valid; use `#{path}.runtime`"}}
+    else
+      :ok
+    end
+  end
+
+  defp reject_acceptance_gate_kind(_config, _path, _allowed_keys), do: :ok
 
   defp normalize_pull_requests(config) do
     with {:ok, config} <- section_map(config, "pull_requests"),
@@ -1064,6 +1120,38 @@ defmodule SymphonyElixir.Config.SystemSchema do
       [] -> {:ok, %{system_config | repos: repos}}
       errors -> {:error, {:invalid_symphony_config, Enum.join(errors, ", ")}}
     end
+  end
+
+  # Each repository with an `acceptance_gate` override gets its effective block: the global one
+  # with the override merged on top (`AcceptanceGate.Settings.merge_override/2`), validated again so an
+  # error names the repository's key.
+  defp merge_repo_acceptance_gates(%__MODULE__{} = system_config) do
+    global = struct_to_map(system_config.auto_review.acceptance_gate)
+
+    {repos, errors} =
+      Enum.map_reduce(system_config.repos, [], fn
+        %Repo{acceptance_gate: nil} = repo, errors ->
+          {repo, errors}
+
+        %Repo{acceptance_gate: override, name: name} = repo, errors ->
+          merged = AcceptanceGate.Settings.merge_override(global, override)
+
+          case %AcceptanceGate.Settings{} |> AcceptanceGate.Settings.changeset(merged) |> apply_action(:validate) do
+            {:ok, settings} -> {%{repo | acceptance_gate: struct_to_map(settings)}, errors}
+            {:error, changeset} -> {repo, errors ++ acceptance_gate_errors(changeset, repo_path(name, nil) <> ".acceptance_gate")}
+          end
+      end)
+
+    case errors do
+      [] -> {:ok, %{system_config | repos: repos}}
+      errors -> {:error, {:invalid_symphony_config, Enum.join(errors, ", ")}}
+    end
+  end
+
+  defp acceptance_gate_errors(changeset, path) do
+    changeset
+    |> traverse_errors(&translate_error/1)
+    |> flatten_errors(path)
   end
 
   defp resolve_path(path) when is_binary(path), do: Path.expand(path)
