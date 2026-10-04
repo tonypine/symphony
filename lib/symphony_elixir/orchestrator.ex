@@ -2191,17 +2191,16 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp defer_quality_gate_request(%State{} = state, {:active_retry, issue, attempt, metadata}) do
     Logger.debug("Deferring active retry dispatch: quality gate task already in flight for #{issue_context(issue)}")
+    schedule_issue_retry(state, issue.id, attempt, deferred_retry_metadata(issue, metadata, "quality gate task already in flight; deferred"))
+  end
 
-    schedule_issue_retry(
-      state,
-      issue.id,
-      attempt,
-      Map.merge(metadata, %{
-        identifier: issue.identifier,
-        title: issue.title,
-        error: "quality gate task already in flight; deferred"
-      })
-    )
+  # `pop_retry_attempt_state/3` turns a continuation's `delay_type` into `continuation: true`, and
+  # `schedule_issue_retry/4` reads only `delay_type`. Set it back, or the deferred retry waits the
+  # failure backoff and a headroom hold sees a new run when it fires.
+  defp deferred_retry_metadata(issue, metadata, error) do
+    deferral = %{identifier: issue.identifier, title: issue.title, error: error}
+    deferral = if metadata[:continuation] == true, do: Map.put(deferral, :delay_type, :continuation), else: deferral
+    Map.merge(metadata, deferral)
   end
 
   defp start_quality_gate_task(issues, %State{} = state, context, gate_config) do
@@ -2562,18 +2561,7 @@ defmodule SymphonyElixir.Orchestrator do
   # a slot would send it back through candidate selection, where a headroom hold sees a new run.
   defp defer_dispatch_readiness_request(%State{} = state, {:active_retry, issue, attempt, %{continuation: true} = metadata}) do
     Logger.debug("Deferring continuation retry dispatch: dispatch readiness task already in flight for #{issue_context(issue)}")
-
-    schedule_issue_retry(
-      state,
-      issue.id,
-      attempt,
-      Map.merge(metadata, %{
-        identifier: issue.identifier,
-        title: issue.title,
-        delay_type: :continuation,
-        error: "dispatch readiness task already in flight; deferred"
-      })
-    )
+    schedule_issue_retry(state, issue.id, attempt, deferred_retry_metadata(issue, metadata, "dispatch readiness task already in flight; deferred"))
   end
 
   defp defer_dispatch_readiness_request(%State{} = state, {:active_retry, issue, attempt, metadata}) do
