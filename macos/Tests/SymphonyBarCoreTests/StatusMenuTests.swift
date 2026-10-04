@@ -72,18 +72,6 @@ final class StatusMenuTests: XCTestCase {
             ["2 running · 1 retrying", "Paused since 12:16: deploy freeze"]
         )
         XCTAssertEqual(StatusMenu.detailLines(.paused(snapshot, external: false)), ["2 running · 1 retrying"])
-
-        var held = snapshot
-        held.usageLimits = ["Holding new runs: Claude at 92%, resets ~14:05"]
-        XCTAssertEqual(
-            StatusMenu.detailLines(.running(held, external: false)),
-            ["2 running · 1 retrying", "Holding new runs: Claude at 92%, resets ~14:05"]
-        )
-        held.pause = paused.pause
-        XCTAssertEqual(
-            StatusMenu.detailLines(.paused(held, external: false), now: now, timeZone: utc),
-            ["2 running · 1 retrying", "Paused since 12:16: deploy freeze", "Holding new runs: Claude at 92%, resets ~14:05"]
-        )
         XCTAssertEqual(StatusMenu.detailLines(.error("Symphony exited with status 1")), ["Symphony exited with status 1"])
     }
 
@@ -156,6 +144,84 @@ final class StatusMenuTests: XCTestCase {
         XCTAssertEqual(StatusMenu.pauseLine(.init(reason: nil, since: pausedAt), now: nextDay, timeZone: utc), "Paused since Oct 2, 12:16")
         XCTAssertEqual(StatusMenu.pauseLine(.init(reason: "lunch", since: nil), now: sameDay, timeZone: utc), "Paused: lunch")
         XCTAssertEqual(StatusMenu.pauseLine(.init(reason: "  ", since: nil), now: sameDay, timeZone: utc), "Paused")
+    }
+
+    // 2026-10-02 12:16:02 UTC is the reset; resumes two minutes after.
+    private var claudeLimit: StateSnapshot.UsageLimit {
+        .init(window: "five_hour", phase: .paused, resetsAt: pausedAt, resumeAt: pausedAt.addingTimeInterval(120))
+    }
+
+    func testUsageLimitLines() {
+        let sameDay = pausedAt.addingTimeInterval(-3600)
+        let dayBefore = pausedAt.addingTimeInterval(-86_400)
+
+        XCTAssertEqual(StatusMenu.usageLimitLine(claudeLimit, now: sameDay, timeZone: utc), "Paused: Claude limit, resumes ~12:18")
+        XCTAssertEqual(
+            StatusMenu.usageLimitLine(claudeLimit, now: dayBefore, timeZone: utc),
+            "Paused: Claude limit, resumes ~Oct 2 12:18"
+        )
+        XCTAssertEqual(
+            StatusMenu.usageLimitLine(claudeLimit, now: sameDay, timeZone: TimeZone(identifier: "America/Sao_Paulo")!),
+            "Paused: Claude limit, resumes ~09:18"
+        )
+        XCTAssertEqual(StatusMenu.usageLimitLine(.init(resumeAt: nil), now: sameDay, timeZone: utc), "Paused: Claude limit")
+
+        var canary = claudeLimit
+        canary.phase = .canary
+        XCTAssertEqual(StatusMenu.usageLimitLine(canary, now: sameDay, timeZone: utc), "Resuming: checking Claude limit…")
+
+        let headroom = StateSnapshot.UsageLimit(window: "five_hour", phase: .headroom, resetsAt: pausedAt, utilization: 0.906)
+        XCTAssertEqual(
+            StatusMenu.usageLimitLine(headroom, now: sameDay, timeZone: utc),
+            "Holding new runs: Claude at 91%, resets ~12:16"
+        )
+        XCTAssertEqual(
+            StatusMenu.usageLimitLine(.init(provider: "openai", phase: .headroom), now: sameDay, timeZone: utc),
+            "Holding new runs: Codex"
+        )
+    }
+
+    func testLimitNames() {
+        let names = ["five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet", "monthly", nil].map {
+            StatusMenu.limitName(.init(window: $0))
+        }
+        XCTAssertEqual(names, [
+            "Claude 5-hour limit", "Claude weekly limit", "Claude weekly Opus limit", "Claude weekly Sonnet limit",
+            "Claude monthly limit", "Claude usage limit",
+        ])
+        XCTAssertEqual(StatusMenu.limitName(.init(provider: "openrouter", window: "five_hour")), "OpenRouter 5-hour limit")
+        XCTAssertEqual(StatusMenu.limitName(.init(provider: "acme")), "acme usage limit")
+    }
+
+    func testAUsageLimitHoldShowsAsPausedWithPauseStillOffered() {
+        var held = snapshot
+        held.usageLimits = [claudeLimit]
+        let status = SymphonyStatus.running(held, external: false)
+
+        XCTAssertEqual(StatusMenu.iconSymbolName(for: status), "pause.circle")
+        XCTAssertEqual(StatusMenu.statusTitle(status), "Symphony is paused")
+        XCTAssertEqual(StatusMenu.iconLabel(for: .running(held, external: true)), "Symphony: paused (external)")
+        XCTAssertEqual(
+            StatusMenu.detailLines(status, now: pausedAt, timeZone: utc),
+            ["2 running · 1 retrying", "Paused: Claude limit, resumes ~12:18"]
+        )
+        // Pause and Resume only control the operator pause.
+        XCTAssertTrue(StatusMenu.canPause(status))
+        XCTAssertFalse(StatusMenu.canResume(status))
+    }
+
+    func testTheOperatorPauseShowsBeforeTheUsageLimitHold() {
+        var both = snapshot
+        both.pause = .init(reason: "deploy freeze", since: pausedAt)
+        both.usageLimits = [claudeLimit]
+        let status = SymphonyStatus.paused(both, external: false)
+
+        XCTAssertEqual(
+            StatusMenu.detailLines(status, now: pausedAt, timeZone: utc),
+            ["2 running · 1 retrying", "Paused since 12:16: deploy freeze", "Paused: Claude limit, resumes ~12:18"]
+        )
+        XCTAssertFalse(StatusMenu.canPause(status))
+        XCTAssertTrue(StatusMenu.canResume(status))
     }
 
     func testOpenItemTitles() {

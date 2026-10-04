@@ -1149,7 +1149,15 @@ When enabled:
   `qa_ax_tree`, `qa_ax_press`, `qa_ax_set_value`. Every tool that takes a PID MUST refuse a PID
   the pass did not launch. Apps still running when the pass ends MUST be quit. A missing Screen
   Recording or Accessibility grant MUST surface as a `qa_permission_missing` tool error that tells
-  the agent to answer `blocked`. Other tool scopes MUST NOT list or run the `qa_*` tools.
+  the agent to answer `blocked`. On the Symphony host, screenshots and accessibility calls MUST run in a separate helper
+  app that Symphony opens through LaunchServices, so that grants made to it are never inherited by
+  Symphony or the agents it spawns. The helper MUST answer only the Symphony process that opened
+  it, MUST NOT accept an owner that another Symphony process started, and MUST NOT run a screenshot
+  or accessibility command that its own server did not start. The helper MUST NOT tell Symphony
+  from an agent by the process tree alone: it MUST accept an owner only on proof the agent sandbox
+  cannot forge (an owner file in a fixed run directory the sandbox cannot write), and Symphony
+  MUST NOT put the helper's socket in a directory an agent can write. Other tool scopes MUST NOT
+  list or run the `qa_*` tools.
 - With `worker_host` set, the worktree checks MUST stay on the Symphony host, and the build, the app,
   screenshots and accessibility calls MUST run on that host over SSH: `qa_build` ships the
   worktree's `HEAD` into a fresh build directory there, and screenshots are copied back into the

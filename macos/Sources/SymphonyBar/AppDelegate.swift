@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private let poller = StatusPoller()
     private lazy var restarter = RestartController(runner: runner, poller: poller)
     private var machine = StatusMachine()
+    private var usageLimitNotices = UsageLimitNotices()
     private let statusTitleItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let sourceItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private lazy var restartNowItem = menuItem(StatusMenu.restartNowTitle, action: #selector(restartNow(_:)))
@@ -447,6 +448,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             restarter.handle(.exited(exit))
         case let .polled(poll):
             restarter.handle(.polled(poll))
+            for notice in usageLimitNotices.notices(for: poll) {
+                runner.notify(title: notice.title, body: notice.body)
+            }
         }
         showStatus()
 
