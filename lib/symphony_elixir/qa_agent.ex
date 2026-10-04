@@ -38,6 +38,7 @@ defmodule SymphonyElixir.QaAgent do
   alias SymphonyElixir.Config.Schema.Agent.Mcp.Server, as: McpServer
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaAndroid.Driver, as: AndroidDriver
+  alias SymphonyElixir.Repo.Fetcher
   alias SymphonyElixir.Verification
   alias SymphonyElixir.Workspace
 
@@ -883,9 +884,11 @@ defmodule SymphonyElixir.QaAgent do
     LeftoverProcesses.stop_under(roots, Keyword.put(Keyword.get(opts, :leftover_processes, []), :log_context, context))
   end
 
+  # The fetch runs under the per-repo fetch lock: the workspace shares its `.git`
+  # with the source checkout and every other worktree of it.
   defp ensure_commit(workspace, sha, git) do
     with {_output, status} when status != 0 <- git.(["cat-file", "-e", sha <> "^{commit}"], workspace),
-         {output, status} when status != 0 <- git.(["fetch", "--quiet", "origin", sha], workspace) do
+         {output, status} when status != 0 <- Fetcher.fetch(workspace, fn -> git.(["fetch", "--quiet", "origin", sha], workspace) end) do
       {:error, {:qa_commit_unavailable, sha, status, String.trim(output)}}
     else
       {_output, 0} -> :ok

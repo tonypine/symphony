@@ -259,7 +259,8 @@ defmodule SymphonyElixir.WorkspaceTest do
       )
 
       tasks = for identifier <- ["RSM-F1", "RSM-F2", "RSM-F3"], do: Task.async(fn -> Workspace.create_for_issue(identifier) end)
-      wait_for_fetch_waiters(Path.expand(primary_repo), 3)
+      {:ok, fetch_key} = SymphonyElixir.PathSafety.canonicalize(Path.join(primary_repo, ".git"))
+      wait_for_fetch_waiters(fetch_key, 3)
       File.write!(release, "")
 
       assert [{:ok, _workspace1}, {:ok, _workspace2}, {:ok, _workspace3}] = Enum.map(tasks, &Task.await(&1, 10_000))
@@ -328,14 +329,15 @@ defmodule SymphonyElixir.WorkspaceTest do
     |> Enum.count(&(&1 == "worktree #{workspace}"))
   end
 
-  defp wait_for_fetch_waiters(repo, count, attempts \\ 500) do
+  # The fetcher keys a repo by its git common dir.
+  defp wait_for_fetch_waiters(key, count, attempts \\ 500) do
     case :sys.get_state(SymphonyElixir.Repo.Fetcher) do
-      %{^repo => {_ref, waiters}} when length(waiters) == count ->
+      %{^key => {{:fetch, _ref, waiters}, []}} when length(waiters) == count ->
         :ok
 
       _fetches when attempts > 0 ->
         Process.sleep(10)
-        wait_for_fetch_waiters(repo, count, attempts - 1)
+        wait_for_fetch_waiters(key, count, attempts - 1)
     end
   end
 
