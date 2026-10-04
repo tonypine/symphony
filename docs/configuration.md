@@ -559,6 +559,10 @@ An optional outer-sandbox wrapper using `@anthropic-ai/sandbox-runtime`.
 - Symphony prefers a managed Unix socket. If the OS denies that managed socket bind with `EPERM`,
   Symphony falls back to a random `127.0.0.1` loopback TCP port. Explicit socket paths remain
   strict and report the bind error.
+- Managed socket dirs live under `SYMPHONY_MCP_SOCKET_ROOT` when set, otherwise under `/tmp` when
+  Symphony can write there, otherwise under `TMPDIR` (for example a sandbox's `/tmp/claude-501`).
+  Symphony logs the root it chose at startup. When `<root>/symphony-mcp-<id>/sock` would not fit
+  the 104-byte Unix `sun_path` limit, the dir is named after a short hash of the session ID.
 - Symphony emits `enableWeakerNestedSandbox: true` for Linux/Docker compatibility.
   `enable_weaker_network_isolation` maps directly to the same SRT setting; keep it `false`
   unless required.
