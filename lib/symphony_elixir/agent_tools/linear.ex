@@ -1204,8 +1204,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
   Withdraws open human-action requests on the current issue that are no longer needed: replies
   `## Action withdrawn` with `reason` under each one (or only under the one titled `title`), and
   removes the `human_actions.label` label once no open request is left, so the next human-action
-  update drops them. An issue with no open request is left as it is. The reason is refused when it
-  holds a secret pattern.
+  update drops them and the run's next move to `Backlog` or `In Review` no longer goes to Human
+  Review. An issue with no open request is left as it is. The reason is refused when it holds a
+  secret pattern.
   """
   @spec withdraw_human_action(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def withdraw_human_action(context, attrs, opts \\ []) when is_map(attrs) do
@@ -1214,7 +1215,8 @@ defmodule SymphonyElixir.AgentTools.Linear do
          :ok <- SecretScanner.reject_fields_if_secret_pattern([reason: reason], context, "linear_withdraw_human_action", opts),
          {:ok, settings} <- human_actions_settings(context, opts) do
       case post_withdrawal(issue_id, reason, title, settings, opts) do
-        {:ok, %{"withdrawn" => true}} = result ->
+        {:ok, %{"withdrawn" => true} = withdrawal} = result ->
+          forget_human_action_request(context, withdrawal)
           Keyword.get(opts, :refresh_human_actions, &HumanActions.refresh/0).()
           result
 
@@ -1223,6 +1225,12 @@ defmodule SymphonyElixir.AgentTools.Linear do
       end
     end
   end
+
+  # With no open request left on the issue, the run's issue no longer waits on a person.
+  defp forget_human_action_request(context, %{"labelRemoved" => true}),
+    do: CommentRegistry.clear_human_action_request(Map.get(context, :comment_registry))
+
+  defp forget_human_action_request(_context, _withdrawal), do: :ok
 
   defp validate_withdrawal(attrs) do
     reason = Map.get(attrs, "reason")
