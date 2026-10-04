@@ -95,9 +95,9 @@ defmodule SymphonyElixir.Workspace do
 
       with {:ok, workspace} <- workspace_path_for_issue(safe_repo_key, safe_id, worker_host),
            :ok <- validate_workspace_path(workspace, worker_host),
-           {:ok, workspace, created?} <- ensure_workspace(workspace, issue_context, worker_host),
+           {:ok, workspace, after_create} <- ensure_workspace(workspace, issue_context, worker_host),
            :ok <- refresh_repo_workflow(issue_context, worker_host),
-           :ok <- maybe_run_after_create_hook(workspace, issue_context, created?, worker_host) do
+           :ok <- maybe_run_after_create_hook(workspace, issue_context, after_create, worker_host) do
         {:ok, workspace}
       end
     rescue
@@ -138,16 +138,31 @@ defmodule SymphonyElixir.Workspace do
   defp locally_fetched_repo(%{workspace: %{strategy: "worktree", fetch_before_dispatch: true, repo: repo}}, nil), do: repo
   defp locally_fetched_repo(_settings, _worker_host), do: nil
 
+  # Returns the workspace with what its `after_create` still needs: `:new` for a
+  # workspace just created, `:unfinished` for a reused one whose `after_create`
+  # never succeeded, and `:done` otherwise. A remote prepare script reports the
+  # state itself; a local one is read from the pending marker here.
   defp ensure_workspace(workspace, issue_context, worker_host) do
     settings = settings_for_issue_context(issue_context)
 
-    case settings.workspace.strategy do
-      "worktree" ->
-        ensure_worktree_workspace(workspace, issue_context, worker_host, settings)
+    result =
+      case settings.workspace.strategy do
+        "worktree" ->
+          ensure_worktree_workspace(workspace, issue_context, worker_host, settings)
 
-      _strategy ->
-        ensure_directory_workspace(workspace, issue_context, worker_host, settings)
+        _strategy ->
+          ensure_directory_workspace(workspace, issue_context, worker_host, settings)
+      end
+
+    case result do
+      {:ok, workspace, true} -> {:ok, workspace, :new}
+      {:ok, workspace, false} -> {:ok, workspace, local_after_create_state(workspace)}
+      other -> other
     end
+  end
+
+  defp local_after_create_state(workspace) do
+    if File.exists?(after_create_pending_marker(workspace)), do: :unfinished, else: :done
   end
 
   defp ensure_directory_workspace(workspace, _issue_context, nil, _settings) do
@@ -171,6 +186,7 @@ defmodule SymphonyElixir.Workspace do
         remote_shell_assign("root", settings.workspace.root),
         remote_shell_assign("workspace", workspace),
         remote_workspace_parent_containment_preamble(),
+        remote_after_create_running_check(),
         "if [ -d \"$workspace\" ]; then",
         "  created=0",
         "elif [ -e \"$workspace\" ]; then",
@@ -181,10 +197,11 @@ defmodule SymphonyElixir.Workspace do
         "  mkdir -p \"$workspace\"",
         "  created=1",
         "fi",
+        remote_after_create_pending_mark_command(settings),
         "cd \"$workspace\"",
         "physical_workspace=$(pwd -P)",
         remote_workspace_containment_check(),
-        "printf '%s\\t%s\\t%s\\n' '#{@remote_workspace_marker}' \"$created\" \"$physical_workspace\""
+        remote_workspace_output_command()
       ]
       |> Enum.reject(&(&1 == ""))
       |> Enum.join("\n")
@@ -252,6 +269,7 @@ defmodule SymphonyElixir.Workspace do
         "git -C \"$repo\" rev-parse --git-dir >/dev/null",
         remote_fetch_before_dispatch_command(settings),
         remote_workspace_parent_containment_preamble(),
+        remote_after_create_running_check(),
         "if [ -d \"$workspace\" ]; then",
         "  if ! worktrees=$(git -C \"$repo\" worktree list --porcelain); then",
         "    echo \"workspace_worktree_list_failed: $repo\"",
@@ -283,10 +301,11 @@ defmodule SymphonyElixir.Workspace do
         "  #{remote_worktree_add_command()}",
         "  created=1",
         "fi",
+        remote_after_create_pending_mark_command(settings),
         "cd \"$workspace\"",
         "physical_workspace=$(pwd -P)",
         remote_workspace_containment_check(),
-        "printf '%s\\t%s\\t%s\\n' '#{@remote_workspace_marker}' \"$created\" \"$physical_workspace\""
+        remote_workspace_output_command()
       ]
       |> List.flatten()
       |> Enum.reject(&(&1 in ["", nil, false]))
@@ -868,7 +887,8 @@ defmodule SymphonyElixir.Workspace do
           remote_shell_assign("root", settings.workspace.root),
           remote_shell_assign("workspace", workspace),
           remote_workspace_mutation_containment_preamble(),
-          "rm -rf \"$workspace\""
+          "rm -rf \"$workspace\"",
+          remote_after_create_marker_remove_command()
         ]
         |> Enum.join("\n")
 
@@ -932,6 +952,7 @@ defmodule SymphonyElixir.Workspace do
           "  echo \"workspace_not_registered_worktree: $workspace\"",
           "  exit 42",
           "fi",
+          remote_after_create_marker_remove_command(),
           "if git -C \"$repo\" rev-parse --verify \"refs/heads/$branch\" >/dev/null 2>&1; then",
           "  if ! branch_delete_output=$(git -C \"$repo\" branch -D \"$branch\" 2>&1); then",
           "    case \"$branch_delete_output\" in",
@@ -1491,24 +1512,24 @@ defmodule SymphonyElixir.Workspace do
     end
   end
 
-  defp maybe_run_after_create_hook(workspace, issue_context, created?, worker_host) do
+  defp maybe_run_after_create_hook(workspace, issue_context, after_create, worker_host) do
     hooks = hooks_for_issue_context(issue_context)
 
-    cond do
-      is_nil(hooks.after_create) ->
+    case after_create do
+      _after_create when is_nil(hooks.after_create) ->
         :ok
 
-      created? ->
+      :new ->
         run_after_create_hook(hooks, workspace, issue_context, worker_host)
 
-      after_create_pending?(workspace, worker_host) ->
+      :unfinished ->
         Logger.info(
           "Running workspace hook an earlier run left unfinished hook=after_create #{issue_log_context(issue_context)} workspace=#{workspace} worker_host=#{worker_host_for_log(worker_host)}"
         )
 
         run_after_create_hook(hooks, workspace, issue_context, worker_host)
 
-      true ->
+      :done ->
         :ok
     end
   end
@@ -1528,6 +1549,7 @@ defmodule SymphonyElixir.Workspace do
   defp run_after_create_hook_with_retry(%Hooks{after_create: command} = hooks, workspace, issue_context, worker_host) do
     timeout_ms = Hooks.after_create_timeout_ms(hooks)
     env = workspace_ref_hook_env(issue_context)
+    command = after_create_command(command, workspace, worker_host)
     run = fn -> run_hook(command, workspace, issue_context, "after_create", worker_host, timeout_ms, env) end
 
     case run.() do
@@ -1543,18 +1565,16 @@ defmodule SymphonyElixir.Workspace do
     end
   end
 
-  # Marks a local workspace whose `after_create` hasn't succeeded yet, so a later
-  # run runs it again there rather than starting the agent in a half-set-up
+  # Marks a workspace whose `after_create` hasn't succeeded yet, so a later run
+  # runs it again there rather than starting the agent in a half-set-up
   # workspace. The marker sits beside the workspace, not in it, so a hook that
   # clones into the empty workspace still can, and it goes when the workspace is
-  # removed or trashed. An SSH worker keeps none: a timed-out hook can still be
-  # running there, and a second copy would race it.
+  # removed or trashed. On an SSH worker the prepare script writes the marker for
+  # a workspace it creates, the hook keeps it (see `after_create_command/3`), and
+  # the next prepare script reads it.
   defp after_create_pending_marker(workspace) do
     Path.join(Path.dirname(workspace), ".#{Path.basename(workspace)}.after_create_pending")
   end
-
-  defp after_create_pending?(workspace, nil), do: File.exists?(after_create_pending_marker(workspace))
-  defp after_create_pending?(_workspace, _worker_host), do: false
 
   defp mark_after_create_pending(workspace, nil), do: File.touch!(after_create_pending_marker(workspace))
   defp mark_after_create_pending(_workspace, _worker_host), do: :ok
@@ -1565,6 +1585,70 @@ defmodule SymphonyElixir.Workspace do
   end
 
   defp clear_after_create_pending(_workspace, _worker_host), do: :ok
+
+  # A remote hook writes the pid of its shell into the marker and removes the marker
+  # only once it succeeds. A timeout kills only the local `ssh`, so the hook can
+  # still be running on the worker, and still finish there: the pid lets the next
+  # run's prepare script tell such a hook from one that died, and wait for it
+  # rather than start a second copy beside it.
+  defp after_create_command(command, _workspace, nil), do: command
+
+  defp after_create_command(command, workspace, _worker_host) do
+    marker = shell_escape(after_create_pending_marker(workspace))
+
+    """
+    {
+    printf '%s\\n' "$$" > #{marker} || exit 1
+    (
+    #{command}
+    )
+    after_create_status=$?
+    if [ "$after_create_status" -eq 0 ]; then rm -f #{marker}; fi
+    exit "$after_create_status"
+    }\
+    """
+  end
+
+  # Shell lines for the remote prepare scripts. The marker path matches
+  # `after_create_pending_marker/1`. A marker naming a live process is a hook an
+  # earlier run timed out on that is still running: the prepare fails (exit 46),
+  # before it touches the workspace, and a later retry finds it finished.
+  defp remote_after_create_running_check do
+    """
+    after_create_marker="${workspace%/*}/.${workspace##*/}.after_create_pending"
+    if [ -f "$after_create_marker" ]; then
+      after_create_pid=$(cat "$after_create_marker")
+      if [ -n "$after_create_pid" ] && kill -0 "$after_create_pid" 2>/dev/null; then
+        echo "workspace_after_create_still_running: pid $after_create_pid"
+        exit 46
+      fi
+    fi\
+    """
+  end
+
+  # Marks a workspace the prepare script just created, in the same command, so
+  # one whose hook never starts (its `ssh` fails, or the run stops first) is set
+  # up on the next run. An empty marker names no process, so it reads as pending,
+  # not running; the hook overwrites it with its pid.
+  defp remote_after_create_pending_mark_command(%{hooks: %Hooks{after_create: nil}}), do: ""
+
+  defp remote_after_create_pending_mark_command(_settings) do
+    ~s(if [ "$created" = 1 ]; then : > "$after_create_marker"; fi)
+  end
+
+  defp remote_after_create_marker_remove_command do
+    ~s(rm -f "${workspace%/*}/.${workspace##*/}.after_create_pending")
+  end
+
+  defp remote_workspace_output_command do
+    """
+    after_create_pending=0
+    if [ "$created" = 0 ] && [ -f "$after_create_marker" ]; then
+      after_create_pending=1
+    fi
+    printf '%s\\t%s\\t%s\\t%s\\n' '#{@remote_workspace_marker}' "$created" "$physical_workspace" "$after_create_pending"\
+    """
+  end
 
   defp maybe_run_before_remove_hook(workspace, issue_context, nil) do
     hooks = hooks_for_issue_context(issue_context)
@@ -2070,9 +2154,9 @@ defmodule SymphonyElixir.Workspace do
 
     payload =
       Enum.find_value(lines, fn line ->
-        case String.split(line, "\t", parts: 3) do
-          [@remote_workspace_marker, created, path] when created in ["0", "1"] and path != "" ->
-            {created == "1", path}
+        case String.split(line, "\t", parts: 4) do
+          [@remote_workspace_marker, created, path | pending] when created in ["0", "1"] and path != "" ->
+            {remote_after_create_state(created, pending), path}
 
           _ ->
             nil
@@ -2080,13 +2164,17 @@ defmodule SymphonyElixir.Workspace do
       end)
 
     case payload do
-      {created?, workspace} when is_boolean(created?) and is_binary(workspace) ->
-        {:ok, workspace, created?}
+      {after_create, workspace} when is_binary(workspace) ->
+        {:ok, workspace, after_create}
 
       _ ->
         {:error, {:workspace_prepare_failed, :invalid_output, output}}
     end
   end
+
+  defp remote_after_create_state("1", _pending), do: :new
+  defp remote_after_create_state("0", ["1"]), do: :unfinished
+  defp remote_after_create_state("0", _pending), do: :done
 
   defp remove_local_worktree(repo, workspace, issue_context) do
     cond do
