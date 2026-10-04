@@ -10,6 +10,11 @@ defmodule SymphonyElixir.PromptSafety do
   # deletes the tail from Linear on the next update.
   @workpad_comment_limit 50_000
   @truncation_marker_pattern ~r/\[\.\.\. truncated by Symphony: \w+ exceeded \d+ characters \.\.\.\]/
+  # Tags a comment body could open or close to step out of its boundary: Symphony's own
+  # `<linear_*>` and `<github_pr_*>` boundaries, and chat role tags.
+  @comment_tag_name "\\s*\\/?\\s*(?:linear_\\w*|github_pr_\\w*|system|developer|assistant|user)\\b"
+  @comment_tag_open ~r/<(?=#{@comment_tag_name})/i
+  @escaped_comment_tag_open ~r/&lt;(?=#{@comment_tag_name})/i
   @state_limit 100
   @acceptance_criteria_limit 10_000
   @ci_log_excerpt_limit 20_000
@@ -31,14 +36,20 @@ defmodule SymphonyElixir.PromptSafety do
   def linear_issue_body(value), do: linear_block(value, "linear_issue_body", @description_limit)
 
   @spec linear_issue_comment_body(String.t()) :: String.t()
-  def linear_issue_comment_body(value), do: linear_block(value, "linear_issue_comment_body", @comment_limit)
+  def linear_issue_comment_body(value), do: comment_block(value, @comment_limit)
 
   @doc """
   Wraps a workpad comment like `linear_issue_comment_body/1`, with a limit large enough
   that the agent reads the whole workpad before rewriting it.
   """
   @spec linear_workpad_comment_body(String.t()) :: String.t()
-  def linear_workpad_comment_body(value), do: linear_block(value, "linear_issue_comment_body", @workpad_comment_limit)
+  def linear_workpad_comment_body(value), do: comment_block(value, @workpad_comment_limit)
+
+  @doc """
+  Reverses the escaping `linear_issue_comment_body/1` applies to a comment body.
+  """
+  @spec unescape_comment_body(String.t()) :: String.t()
+  def unescape_comment_body(value) when is_binary(value), do: Regex.replace(@escaped_comment_tag_open, value, "<")
 
   @doc """
   True when `value` carries the marker `truncate_linear_text/3` appends, i.e. it was copied
@@ -61,16 +72,26 @@ defmodule SymphonyElixir.PromptSafety do
   def ci_failure_log_excerpt(value), do: linear_block(value, "ci_failure_log_excerpt", @ci_log_excerpt_limit)
 
   @spec pr_conflict_field(String.t()) :: String.t()
-  def pr_conflict_field(value), do: sanitize_untrusted_text(value, @pr_conflict_field_limit, "pr_conflict")
+  def pr_conflict_field(value), do: sanitize_untrusted_text(value, @pr_conflict_field_limit, "pr_conflict", &escape_boundary_text/1)
 
   @spec linear_block(String.t(), String.t(), pos_integer()) :: String.t()
   def linear_block(value, tag, limit) when is_binary(value) and is_binary(tag) and is_integer(limit) and limit > 0 do
+    boundary_block(value, tag, limit, &escape_boundary_text/1)
+  end
+
+  # The agent reads a comment and rewrites it whole, so the escaping has to survive a
+  # verbatim copy: escaping every `&`, `<` and `>` would add a layer of entities to the
+  # stored text on each read and rewrite. Only the `<` that opens a boundary or role tag is
+  # escaped, which still keeps the body from closing its boundary.
+  defp comment_block(value, limit), do: boundary_block(value, "linear_issue_comment_body", limit, &escape_comment_tags/1)
+
+  defp boundary_block(value, tag, limit, escape) do
     if String.trim(value) == "" do
       value
     else
       """
       <#{tag}>
-      #{sanitize_untrusted_text(value, limit, tag)}
+      #{sanitize_untrusted_text(value, limit, tag, escape)}
       </#{tag}>\
       """
     end
@@ -98,11 +119,11 @@ defmodule SymphonyElixir.PromptSafety do
 
   def warning_section(_warnings), do: ""
 
-  defp sanitize_untrusted_text(value, limit, tag)
+  defp sanitize_untrusted_text(value, limit, tag, escape)
        when is_binary(value) and is_integer(limit) and limit > 0 and is_binary(tag) do
     value
     |> strip_instruction_markers()
-    |> escape_boundary_text()
+    |> escape.()
     |> truncate_linear_text(limit, tag)
   end
 
@@ -138,6 +159,8 @@ defmodule SymphonyElixir.PromptSafety do
     |> String.replace("<", "&lt;")
     |> String.replace(">", "&gt;")
   end
+
+  defp escape_comment_tags(value) when is_binary(value), do: Regex.replace(@comment_tag_open, value, "&lt;")
 
   defp truncate_linear_text(value, limit, tag) when is_binary(value) do
     if String.length(value) > limit do
