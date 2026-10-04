@@ -3047,6 +3047,12 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     on_exit(fn -> restore_env("LINEAR_API_KEY", previous_linear_api_key) end)
     System.delete_env("LINEAR_API_KEY")
 
+    # Config.validate!/0 logs each budget warning once per node; clear the flags so an
+    # earlier run or test cannot swallow the warnings asserted below.
+    for {{Config, :warned_once, _message} = key, _value} <- :persistent_term.get() do
+      :persistent_term.erase(key)
+    end
+
     write_workflow_file!(Workflow.workflow_file_path(),
       workspace_root: nil,
       max_concurrent_agents: nil,
@@ -3272,6 +3278,8 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
     assert warning =~ "agent.max_tokens_per_issue is configured"
     assert warning =~ "may not report token usage"
+
+    refute capture_log(fn -> assert :ok = Config.validate!() end) =~ "may not report token usage"
 
     write_workflow_file!(Workflow.workflow_file_path(),
       max_tokens_per_day: 5_000_000,

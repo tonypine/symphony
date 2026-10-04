@@ -435,6 +435,10 @@ defmodule SymphonyElixir.Config.Schema do
       field(:strategy, :string, default: "clone")
       field(:repo, :string)
       field(:fetch_before_dispatch, :boolean, default: true)
+      # `owner/repo` of a repo Symphony clones itself (`repositories[].workspace.source`);
+      # `repo` then points at that clone under `clones_root`.
+      field(:github, :string)
+      field(:clones_root, :string)
       embeds_one(:attachments, Attachments, on_replace: :update, defaults_to_struct: true)
       embeds_one(:sandbox, Sandbox, on_replace: :update, defaults_to_struct: true)
       embeds_one(:lifecycle, Lifecycle, on_replace: :update, defaults_to_struct: true)
@@ -443,7 +447,7 @@ defmodule SymphonyElixir.Config.Schema do
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
       schema
-      |> cast(attrs, [:root, :strategy, :repo, :fetch_before_dispatch], empty_values: [])
+      |> cast(attrs, [:root, :strategy, :repo, :fetch_before_dispatch, :github, :clones_root], empty_values: [])
       |> cast_embed(:attachments, with: &Attachments.changeset/2)
       |> cast_embed(:sandbox, with: &Sandbox.changeset/2)
       |> cast_embed(:lifecycle, with: &Lifecycle.changeset/2)
@@ -522,6 +526,45 @@ defmodule SymphonyElixir.Config.Schema do
       |> cast_embed(:webhooks, with: &Webhooks.changeset/2)
       |> update_change(:enterprise_hosts, &Schema.normalize_domain_list/1)
       |> validate_number(:failed_run_log_max_bytes, greater_than: 0)
+    end
+  end
+
+  defmodule PushCheck do
+    @moduledoc false
+    # Repo-local (WORKFLOW.md). `github_push_branch` pushes with repo hooks disabled, so the agent
+    # runs `command` in its own sandbox, which records its result for HEAD in `result_file`.
+    # Symphony only reads that file; it never runs the command. Off while `command` is unset.
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    alias SymphonyElixir.Config.Schema
+
+    @type t :: %__MODULE__{}
+
+    @primary_key false
+    embedded_schema do
+      field(:command, :string)
+      field(:result_file, :string, default: "tmp/push-check")
+      field(:paths, {:array, :string}, default: [])
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [:command, :result_file, :paths], empty_values: [])
+      |> Schema.validate_present([:result_file])
+      |> validate_change(:result_file, &validate_result_file/2)
+      |> validate_change(:paths, fn :paths, paths ->
+        if Enum.all?(paths, &(String.trim(&1) != "")), do: [], else: [paths: "must contain only non-empty strings"]
+      end)
+    end
+
+    defp validate_result_file(:result_file, path) do
+      if Path.type(path) == :relative and ".." not in Path.split(path) do
+        []
+      else
+        [result_file: "must be a path inside the workspace, relative and without `..`"]
+      end
     end
   end
 
@@ -2215,6 +2258,7 @@ defmodule SymphonyElixir.Config.Schema do
     embeds_one(:github, GitHub, on_replace: :update, defaults_to_struct: true)
     embeds_one(:agent, Agent, on_replace: :update, defaults_to_struct: true)
     embeds_one(:hooks, Hooks, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:push_check, PushCheck, on_replace: :update, defaults_to_struct: true)
     embeds_one(:observability, Observability, on_replace: :update, defaults_to_struct: true)
     embeds_one(:pr_review, PrReview, on_replace: :update, defaults_to_struct: true)
     embeds_one(:ci, Ci, on_replace: :update, defaults_to_struct: true)
@@ -2409,6 +2453,7 @@ defmodule SymphonyElixir.Config.Schema do
     |> cast_embed(:github, with: &GitHub.changeset/2)
     |> cast_embed(:agent, with: &Agent.changeset/2)
     |> cast_embed(:hooks, with: &Hooks.changeset/2)
+    |> cast_embed(:push_check, with: &PushCheck.changeset/2)
     |> cast_embed(:observability, with: &Observability.changeset/2)
     |> cast_embed(:pr_review, with: &PrReview.changeset/2)
     |> cast_embed(:ci, with: &Ci.changeset/2)

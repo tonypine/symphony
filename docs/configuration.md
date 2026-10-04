@@ -168,7 +168,8 @@ repositories:
   new worktree branches off (preferring `origin/<base_branch>`); when unset, a new
   worktree branches off the source repo's current HEAD.
 - `route`: Linear team, project, label, or assignee selectors.
-- `workspace`: per-repo override for workspace population.
+- `workspace`: per-repo override for workspace population (`strategy`, `repo`,
+  `fetch_before_dispatch`), or `source` for a repo Symphony clones itself (see below).
 - `agent`: per-repo `provider`, `model`, `effort` and `run_profiles` for issues routed to this
   repo. They take the same values as the `agent` keys and win over them field by field; see
   **Run profiles** under `agent`. Errors name the key, e.g. `repositories[web].agent.effort`.
@@ -176,6 +177,40 @@ repositories:
 Routing validation rejects duplicate keys, workspace-sanitized key collisions, identical routes,
 ambiguous team catch-alls, multiple defaults, and multi-repo global worktree settings that do not
 provide per-repo workspace overrides.
+
+#### A repo Symphony clones itself
+
+A repo does not need a local checkout. Set `workspace.source` to the GitHub repository instead of
+`workspace.repo`, and Symphony keeps its own clone of it:
+
+```yaml
+repositories:
+  - key: web
+    workflow: WORKFLOW.md   # a path inside the repository
+    workspace:
+      source: acme/web      # or https://github.com/acme/web, git@github.com:acme/web.git
+```
+
+- The clone lives at `<workspaces.clones_root>/<owner>/<repo>`, by default
+  `~/.local/share/symphony/repos/acme/web`. It has no working tree of its own. Agent worktrees and
+  their `auto/<issue>` branches are made from it the way `strategy: worktree` makes them from a
+  local checkout, so they live in the clone, never in a folder of yours. Symphony never reads or
+  writes your own checkout of the repo, if you have one.
+- Symphony clones it at startup when it is missing (and again on the next dispatch if it is
+  deleted), then fetches it before every dispatch (`fetch_before_dispatch`, on by default).
+  Dispatches for the same repo wait for each other's clone or fetch.
+- Symphony clones over SSH, `git@github.com:<owner>/<repo>.git`, whatever form `source` is written
+  in, with the SSH keys your own git uses. It runs git with credential helpers turned off, so an
+  HTTPS remote could not push.
+- `WORKFLOW.md` is read from the clone's fetched base branch, as with `workflow_source: ref`.
+  Without `base_branch`, new worktrees branch off the fetched `origin/HEAD`.
+- A failed clone or fetch fails that dispatch with an error naming the repo key, and the issue is
+  retried; other repos keep running. A clone that cannot be made the first time Symphony starts
+  stops startup, because the repo has no `WORKFLOW.md` to read yet.
+
+Symphony rejects `source` when it is not `owner/repo` or a github.com URL, and together with
+`workspace.repo`, `workspace.strategy: clone`, `workflow_source: local`, a `workflow` path outside
+the repository (absolute, `~` or `..`), or `workers.ssh_hosts` (the clone stays on this machine).
 
 Symphony's own repository needs no setting. A released app knows the commit and repository it was
 built from, so a `Todo` ticket blocked by a fix merged in that repository stays in `Todo` after the
@@ -193,6 +228,7 @@ Workspace root, population defaults, attachments, and cleanup.
 ```yaml
 workspaces:
   root: ~/code/symphony-workspaces
+  clones_root: ~/.local/share/symphony/repos
   strategy: clone
   repo: ~/code/source-repo
   fetch_before_dispatch: true
@@ -207,6 +243,11 @@ workspaces:
     orphan_action: log
     trash_dir: .trash
 ```
+
+`clones_root` is where Symphony keeps its clones of `repositories[].workspace.source` repos
+(default `~/.local/share/symphony/repos`). An agent's git commands write into that clone, so keep
+it out of the agent sandbox's denied folders: not under `~/Library/Application Support`, for
+example.
 
 Issue workspaces are created under `workspaces.root/<repo_key>/<issue_key>`. The agent cwd is always
 the issue workspace, never the source repository. For SSH workers, configure `workspaces.root` as an
@@ -1514,6 +1555,8 @@ hooks:
 prompts:
   pr: |
     You are working on PR {{ pr.url }}.
+push_check:
+  command: scripts/push-check
 verification:
   dev_server:
     start_cmd: "pnpm dev --port $SYMPHONY_VERIFICATION_PORT"
@@ -1580,3 +1623,29 @@ hooks:
   started inside its sandbox, and the hook leaves no daemon behind.
 
 Each repository's `WORKFLOW.md` sets its own hooks and timeouts.
+
+### Push check
+
+`github_push_branch` pushes through Symphony, outside the agent sandbox, with repo git hooks turned
+off: Symphony never runs a script the agent can edit. `push_check` holds those pushes to the
+repo's own checks instead. The agent runs `command` in its sandbox; the command writes
+`<sha> pass`, or `<sha> fail` followed by one failure per line, to `result_file`. Symphony only
+reads that file.
+
+```yaml
+push_check:
+  command: .githooks/pre-push --head  # shown to the agent; Symphony never runs it
+  result_file: tmp/push-check         # workspace-relative; default tmp/push-check
+  paths: ["*.ex", "*.exs", "mix.lock"] # git pathspecs; default [] means any file
+```
+
+- A push changes the files between the branch's `origin/<branch>` ref, or else its merge-base with
+  `origin/HEAD` (`origin/main`, `origin/master`), and the commit it pushes. When none of them
+  matches `paths`, the push goes ahead without a result, after a couple of `git` reads.
+- Otherwise the tool refuses the push until `result_file` records `pass` for the exact commit it
+  pushes. The refusal says whether the result is missing, is for another commit, or failed, and
+  passes on the recorded failures and the command to run again.
+- `result_file` is read only when it is a regular file of at most 16 KiB; a symlink is not
+  followed. Keep it out of git (for example under an ignored `tmp/`).
+- The check is off while `command` is unset. It doesn't apply to `git push` from the agent's shell,
+  where the repo's own `pre-push` hook can run.

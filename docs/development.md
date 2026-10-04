@@ -26,6 +26,12 @@ mise exec -- mix setup
 fails. A push that changes no Elixir file skips the checks. Tests, coverage and Dialyzer stay in
 CI. Don't bypass it with `git push --no-verify`; fix what it reports and push again.
 
+`.githooks/pre-push --head` runs the same checks on everything `HEAD` adds since its merge-base
+with `origin/main` and records the result in `tmp/push-check`. Symphony's `github_push_branch`
+tool skips repo hooks, so it reads that file instead (`push_check` in `WORKFLOW.md`): an agent
+runs the command in its sandbox after its last commit. Uncommitted Elixir changes fail this mode,
+since the result would not describe `HEAD`.
+
 ## Testing
 
 Use the fast local gate while iterating:
