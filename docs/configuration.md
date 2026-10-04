@@ -1534,6 +1534,8 @@ hooks:
 prompts:
   pr: |
     You are working on PR {{ pr.url }}.
+push_check:
+  command: scripts/push-check
 verification:
   dev_server:
     start_cmd: "pnpm dev --port $SYMPHONY_VERIFICATION_PORT"
@@ -1600,3 +1602,29 @@ hooks:
   started inside its sandbox, and the hook leaves no daemon behind.
 
 Each repository's `WORKFLOW.md` sets its own hooks and timeouts.
+
+### Push check
+
+`github_push_branch` pushes through Symphony, outside the agent sandbox, with repo git hooks turned
+off: Symphony never runs a script the agent can edit. `push_check` holds those pushes to the
+repo's own checks instead. The agent runs `command` in its sandbox; the command writes
+`<sha> pass`, or `<sha> fail` followed by one failure per line, to `result_file`. Symphony only
+reads that file.
+
+```yaml
+push_check:
+  command: .githooks/pre-push --head  # shown to the agent; Symphony never runs it
+  result_file: tmp/push-check         # workspace-relative; default tmp/push-check
+  paths: ["*.ex", "*.exs", "mix.lock"] # git pathspecs; default [] means any file
+```
+
+- A push changes the files between the branch's `origin/<branch>` ref, or else its merge-base with
+  `origin/HEAD` (`origin/main`, `origin/master`), and the commit it pushes. When none of them
+  matches `paths`, the push goes ahead without a result, after a couple of `git` reads.
+- Otherwise the tool refuses the push until `result_file` records `pass` for the exact commit it
+  pushes. The refusal says whether the result is missing, is for another commit, or failed, and
+  passes on the recorded failures and the command to run again.
+- `result_file` is read only when it is a regular file of at most 16 KiB; a symlink is not
+  followed. Keep it out of git (for example under an ignored `tmp/`).
+- The check is off while `command` is unset. It doesn't apply to `git push` from the agent's shell,
+  where the repo's own `pre-push` hook can run.
