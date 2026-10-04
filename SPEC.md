@@ -2273,8 +2273,13 @@ Forced allowance:
   orchestrator's forced runs from its published snapshot, so the count can lag by one publish
   interval). A pass on the allowance takes no QA slot and counts toward `forced_max` for the
   orchestrator's dispatch too; past `forced_max` the request stays queued at the front and no
-  extra pass starts. Forcing never skips QA or changes its verdict. A forced `Final verification:`
-  parent walkthrough is an ordinary dispatch and uses the forced allowance like any other run.
+  extra pass starts. When an issue leaves the forced queue (or stops being a forced parent's part)
+  while its pass on the allowance is going, the pass is no longer `forced`: it gives the allowance
+  back, so an issue still forced can take it, and goes on as a normal pass. A pass whose issue was
+  never in the forced queue (labelled while in an Auto Review state outside the active states,
+  which the poll does not fetch) keeps the allowance until it ends. Forcing never skips QA or
+  changes its verdict. A forced `Final verification:` parent walkthrough is an ordinary dispatch
+  and uses the forced allowance like any other run.
 
 Finishing limit:
 
@@ -4606,7 +4611,8 @@ infrastructure.
   time, in blocked-by order and without labelling it, then its close-out run; a forced parent in
   `In Review` is not moved
 - A forced issue's QA request goes to the front of the QA queue and, with the QA slots full,
-  starts on the forced allowance while it has room; its verdict is applied as for any pass
+  starts on the forced allowance while it has room; its verdict is applied as for any pass; once
+  the issue is no longer forced the pass gives the allowance back and goes on as a normal pass
 - The snapshot's `forced` rows report each forced issue's phase and what it waits on (an open
   blocker by identifier); a forced issue past `forced_stale_after_hours` is `stale` and notified
   once; a forced issue entering `In Review` is notified; a forced issue that reaches a terminal
