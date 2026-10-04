@@ -37,12 +37,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             self.window = window
         }
 
-        if #available(macOS 14, *) {
-            NSApp.activate()
-        } else {
-            NSApp.activate(ignoringOtherApps: true)
-        }
+        SymphonyRunner.activateApp()
         window?.makeKeyAndOrderFront(nil)
+        // Puts the window in front even if the system still declined to activate the app.
+        window?.orderFrontRegardless()
     }
 
     func windowWillClose(_ notification: Notification) {
