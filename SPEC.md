@@ -3031,8 +3031,17 @@ Scoped Linear tool extension contract:
   `linear_withdraw_human_action`.
 - `linear_add_comment` MAY take a `parent_id` naming a comment on the current issue; the comment is
   then posted as a reply under it. `linear_get_comments` SHOULD return each reply's parent id.
+- `linear_get_related_issues` MAY read beyond the current issue, but only inside its family: the
+  issues it blocks or is blocked by, its parent, its siblings (the parent's other children) and its
+  sub-issues. Without arguments it lists them as summaries. With an `identifier` (and an optional
+  `comment_limit`) it reads that one issue's title, description, state, labels and comments,
+  wrapped, truncated and secret-redacted like the current issue's reads, so a final verification
+  can read its siblings' QA reports and a sub-issue its parent's workpad. Any other identifier MUST
+  fail with an explicit error that lists the family, before the issue is read. It stays read-only
+  and is available to the read-only reviewer and QA scopes.
 - Reads whose issue descriptions and comments reach the agent (`linear_get_current_issue`,
-  `linear_get_comments`, `linear_get_subissues`, `linear_get_parent_issue`, and the dispatch
+  `linear_get_comments`, `linear_get_subissues`, `linear_get_parent_issue`, a
+  `linear_get_related_issues` read by `identifier`, and the dispatch
   enrichment that supplies the prompt's description and comments) SHOULD ask Linear for pre-signed
   upload URLs with the `public-file-urls-expire-in` header, so the agent can download attached
   images and files from `uploads.linear.app` without a Linear credential. The Elixir

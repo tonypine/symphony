@@ -18,8 +18,13 @@ arguments from prompts.
 - `linear_get_parent_issue` with `{}`: parent issue, or `null`.
 - `linear_get_comments` with optional `{"limit": 50}`: current issue comments,
   newest first.
-- `linear_get_related_issues` with `{}`: blocks and blocked-by issue summaries
-  only: id, identifier, and title.
+- `linear_get_related_issues` with `{}`: the current issue's family as summaries
+  (relation, id, identifier, title, state): the issues it blocks and is blocked
+  by, its parent, its siblings and its sub-issues. With
+  `{"identifier": "TP-12", "comment_limit": 50}` it reads one of them in full
+  (description, state, labels, `relations`, comments newest first), for example
+  a sibling's QA report or the parent's workpad. Any issue outside the family is
+  refused with `issue_outside_family` and the list of identifiers it can read.
 
 ## Write Tools
 
