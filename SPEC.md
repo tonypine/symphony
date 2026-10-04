@@ -171,6 +171,9 @@ Fields:
 - `description` (string or null)
 - `priority` (integer or null)
   - Lower numbers are higher priority in dispatch sorting.
+  - Priority means importance, not queue position: it only orders issues within a dispatch stage
+    (Section 8.2) and never gets an issue a slot past a limit. Forcing (`concurrency.force_label`,
+    Section 8.3) is the way to have an issue worked ahead of the queue.
 - `state` (string)
   - Current tracker state name.
 - `team` (object or null)
@@ -1988,6 +1991,23 @@ pass queued on `auto_review.max_concurrent` holds nothing back: it would not sta
 an idle agent slot. The held `Todo` issue's `slot_waiting` reason names the issue it waits for
 (`MT-2 (Merging) is waiting for a finishing slot`, `QA pass for MT-3 is waiting for a finishing
 slot`).
+
+Priority vs expedite: `priority` means importance and only orders issues waiting for normal slots,
+after the stage. Raising it never gets an issue past `max_total`, a per-state cap, the epic lanes
+or `finishing_max`. To have an issue worked now, a person forces it with the
+`concurrency.force_label` label (default `expedite`, or `symphony force <identifier>`); Section 8.3
+lists what forcing bypasses and what it respects. Forcing only removes the wait for a slot. These
+transitions stay with a person, forced or not:
+
+| Transition | Who |
+| --- | --- |
+| `Backlog` -> `Todo` | a person promotes the issue; forcing does not |
+| `In Review` -> `Merging` | a person approves the PR |
+| `In Review` -> the waiting state (default `Waiting on sub-tickets`) | a person approves a `breakdown` plan |
+| any state -> `Rework` | a person rejects the approach |
+| `Final verification:` `In Review` -> `Done` | a person signs it off |
+
+The review-agent verdict and the Auto Review QA verdict are still required for a forced issue.
 
 ### 8.3 Concurrency Control
 
