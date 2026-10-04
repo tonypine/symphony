@@ -267,6 +267,57 @@ defmodule SymphonyElixir.CLITest do
     refute_received :resolved_control_url
   end
 
+  test "force prints the ticket's place in the forced queue without loading config" do
+    parent = self()
+
+    deps =
+      base_deps(%{
+        file_regular?: fn _path -> flunk("force must not read symphony.yml") end,
+        force_issue: fn identifier, clear? ->
+          send(parent, {:force, identifier, clear?})
+          Process.get(:force_result)
+        end
+      })
+
+    Process.put(:force_result, {:ok, %{forced: true, state: "Todo", position: 1, forced_max: 1, holders: ["MT-1"]}})
+    assert {{:halt, 0}, "MT-1 forced (slot 1 of 1)\n"} = force(deps, ["force", " MT-1 "])
+    assert_received {:force, "MT-1", false}
+
+    Process.put(:force_result, {:ok, %{issue_identifier: "MT-2", forced: false}})
+    assert {{:halt, 0}, "MT-2 no longer forced\n"} = force(deps, ["force", "--clear", "mt-2"])
+    assert_received {:force, "mt-2", true}
+  end
+
+  test "force explains why it could not reach or use the running Symphony" do
+    deps =
+      base_deps(%{
+        control_url: fn -> "http://127.0.0.1:4555" end,
+        force_issue: fn _identifier, _clear? -> Process.get(:force_result) end
+      })
+
+    for {result, message} <- [
+          {{:error, :control_token_unavailable}, "No control token: start Symphony first, or set SYMPHONY_CONTROL_TOKEN to the token in <state-root>/control_token"},
+          {{:error, {:unauthorized, %{}}}, "The running Symphony rejected the control token; check SYMPHONY_CONTROL_TOKEN"},
+          {{:error, {:connection_failed, :econnrefused}}, "Could not reach Symphony at http://127.0.0.1:4555; is it running?"},
+          {{:error, {:invalid_request, %{"error" => %{"message" => "MT-1 is Done; only an open ticket can be forced"}}}}, "MT-1 is Done; only an open ticket can be forced"},
+          {{:error, {:http_status, 404, %{"error" => %{"message" => "MT-1 was not found in Linear"}}}}, "MT-1 was not found in Linear"},
+          {{:error, {:http_status, 500, "boom"}}, ~s(Could not force MT-1: {:http_status, 500, "boom"})},
+          {:unavailable, "Symphony's orchestrator is unavailable; try again once it has started"}
+        ] do
+      Process.put(:force_result, result)
+      assert {{:error, ^message}, ""} = force(deps, ["force", "MT-1"])
+    end
+  end
+
+  test "force rejects a missing, blank or extra identifier and unknown flags with its usage" do
+    usage = "Usage: symphony force [--clear] <issue-identifier>"
+    deps = base_deps(%{force_issue: fn _identifier, _clear? -> flunk("must not call the control API") end})
+
+    for args <- [["force"], ["force", "  "], ["force", "MT-1", "MT-2"], ["force", "--all", "MT-1"]] do
+      assert {:error, ^usage} = CLI.evaluate(args, deps)
+    end
+  end
+
   test "dashboard rejects unknown arguments with its usage" do
     assert {:error, "Usage: symphony dashboard [--url <control-url>]"} =
              CLI.evaluate(["dashboard", "--port", "4000"], base_deps())
@@ -378,5 +429,12 @@ defmodule SymphonyElixir.CLITest do
 
     assert {:error, message} = CLI.evaluate(["workflow", "bogus"], base_deps())
     assert message =~ "symphony workflow preview"
+  end
+
+  defp force(deps, args) do
+    parent = self()
+    output = capture_io(fn -> send(parent, {:result, CLI.evaluate(args, deps)}) end)
+    assert_received {:result, result}
+    {result, output}
   end
 end
