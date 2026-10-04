@@ -362,9 +362,10 @@ final class ScopedRunProfilesTests: XCTestCase {
             agent:
               command: claude
               model: claude-opus-5-5
+              run_profiles:
+                pre_push_review: { effort: high }
             pre_push_review:
               command: claude
-              effort: high
             repositories:
               - key: web
                 agent:

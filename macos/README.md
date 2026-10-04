@@ -209,10 +209,13 @@ set (or, in Development mode, no checkout folder).
   the Default row shows their values (for example "Opus 5.5, from command"), and the first save that sets a
   model or effort moves them out of the command (keeping the rest of the line and its comment) into
   `agent.model` / `agent.effort`, unless you set the Default row in the same save. In the same way, once a
-  save sets the Default row or the pre-push review row, `--model` / `--effort` in `pre_push_review.command`
-  move into `pre_push_review.model` / `pre_push_review.effort` (a key already there wins), and once it sets the
-  Default row or the QA row, those in `auto_review.command` move into `auto_review.model` /
-  `auto_review.effort`. A provider alone moves nothing. Higher effort and bigger models use the shared
+  save sets the Default row or the pre-push review row, `pre_push_review.model` / `pre_push_review.effort`, or
+  else `--model` / `--effort` in `pre_push_review.command`, move into the pre-push review row
+  (`agent.run_profiles.pre_push_review`), and once it sets the Default row or the QA row, those of
+  `auto_review` move into the QA row. Those section keys outrank the rows and name no provider, so left in
+  place they would hide the row's choice, and an OpenRouter Default row would make Symphony look their Claude
+  model up on OpenRouter. A moved model keeps the provider it ran on, and a value you change in that row in
+  the same save wins over the moved one. A provider alone moves nothing. Higher effort and bigger models use the shared
   5-hour usage limit faster. The next run picks the change up without a restart. The Codex runtime ignores
   these keys (see [Run profiles](../docs/configuration.md)).
 - `LINEAR_API_KEY` and any extra environment variables are stored only in

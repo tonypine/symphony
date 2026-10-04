@@ -224,10 +224,6 @@ public enum RunProfilesConfig {
 
     /// Keys of `agent:` in the order new ones are written.
     static let agentOrder = ["runtime", "command", "provider", "model", "effort", "run_profiles"]
-    /// Keys of `pre_push_review:` in the order new ones are written.
-    static let prePushReviewOrder = ["enabled", "runtime", "command", "model", "effort"]
-    /// Keys of `auto_review:` in the order new ones are written.
-    static let autoReviewOrder = ["enabled", "state", "runtime", "command", "model", "effort"]
     static let fieldOrder = RunProfileField.allCases.map(\.rawValue)
     static let defaultIndentStep = 2
 
@@ -355,9 +351,14 @@ public enum RunProfilesConfig {
     /// Symphony rejects `--model` / `--effort` in `agent.command` once any model or effort is set, so when
     /// the result sets one, those flags move out of the command into `agent.model` / `agent.effort`, unless
     /// `new` sets those itself. It rejects them in `pre_push_review.command` once a model or effort resolves
-    /// for pre-push review, so when the result sets a default or the `pre_push_review` kind, those flags
-    /// move into `pre_push_review.model` / `.effort`, unless the file sets those. `auto_review.command`
-    /// and the `qa` kind work the same way. Runs then use the same model and effort as before.
+    /// for pre-push review. `pre_push_review.model` / `.effort` outrank the `pre_push_review` kind and name no
+    /// provider, so a model there would also be checked against the provider the kind picks, such as
+    /// OpenRouter. When the result sets a default or the `pre_push_review` kind, the section's keys, else
+    /// its flags, move into `agent.run_profiles.pre_push_review`, the row Settings shows, for each field
+    /// that row keeps from `old`; a moved model keeps the provider the kind had in `old`. A row whose model
+    /// or provider changes drops the section's model, which names a model of the old provider.
+    /// `auto_review` and the `qa` kind work the same way. Runs then use the same model, effort and provider
+    /// as before, except where the rows change them or a repository's rows set them.
     public static func updating(_ yaml: String, from old: RunProfiles, to new: RunProfiles) throws -> String {
         try updating(yaml, from: ScopedRunProfiles(global: old), to: ScopedRunProfiles(global: new))
     }
@@ -378,11 +379,20 @@ public enum RunProfilesConfig {
         }
         // After the move, as `agent.model` / `.effort` set from the flags count too.
         let all = [new.global] + new.repositories.values
-        for (section, kind, order) in [(prePushReview, RunKind.prePushReview, prePushReviewOrder), (autoReview, .qa, autoReviewOrder)] {
-            let sectionFlags = try commandFlags(in: yaml, section: section)
-            guard sectionFlags != RunProfile() && all.contains(where: { $0.setsCommandFlags(for: kind) }) else { continue }
+        for (section, kind) in [(prePushReview, RunKind.prePushReview), (autoReview, .qa)] {
+            let moving = try sectionProfile(in: yaml, section: section)
+            guard moving != RunProfile() && all.contains(where: { $0.setsCommandFlags(for: kind) }) else { continue }
+            let kept = old.global[kind]
+            var row = new.global[kind]
+            if let model = moving.model, row.model == kept.model, row.provider == kept.provider {
+                row.model = model
+                let previous = provider(of: kind, in: old.global)
+                if row.provider == nil && provider(of: kind, in: new.global) != previous { row.provider = previous }
+            }
+            if let effort = moving.effort, row.effort == kept.effort { row.effort = effort }
+            new.global[kind] = row
             text = try removingCommandFlags(in: text, section: section)
-            text = try settingSection(section, to: sectionFlags, order: order, in: text)
+            text = try removingSectionKeys(section, in: text)
         }
         let scopes = [RunProfilesScope.global] + Set(old.repositories.keys).union(new.repositories.keys).sorted().map(RunProfilesScope.repository)
         for scope in scopes {
@@ -556,6 +566,21 @@ public enum RunProfilesConfig {
     static let prePushReview = "pre_push_review"
     static let autoReview = "auto_review"
 
+    /// The model and effort `<section>` gives its runs: its `model` / `effort` keys, else the `--model` /
+    /// `--effort` in its command. A `<section>: { ... }` line only matters, and so only fails, when its command
+    /// passes one of them; its keys stay where they are.
+    private static func sectionProfile(in yaml: String, section name: String) throws -> RunProfile {
+        let flags = try commandFlags(in: yaml, section: name)
+        let document = Document(yaml)
+        guard let section = document.child(name, in: document.all), try InlineText(section).isNull else { return flags }
+        let range = document.children(of: section)
+        let keys = RunProfile(
+            model: try scalar("model", in: range, of: document),
+            effort: try scalar("effort", in: range, of: document)
+        )
+        return keys.merged(over: flags)
+    }
+
     /// The `--model` / `--effort` in `<section>.command`. A `<section>: { ... }` line only matters, and so
     /// only fails, when its command passes one of them.
     private static func commandFlags(in yaml: String, section name: String) throws -> RunProfile {
@@ -591,22 +616,19 @@ public enum RunProfilesConfig {
         return document.text
     }
 
-    /// The text with `<name>.model` / `.effort` set to the fields of `flags` the file leaves unset, new keys
-    /// going in `order`.
-    private static func settingSection(_ name: String, to flags: RunProfile, order: [String], in yaml: String) throws -> String {
+    /// The text without `<name>.model` / `.effort`.
+    private static func removingSectionKeys(_ name: String, in yaml: String) throws -> String {
         var document = Document(yaml)
         guard let section = try sectionKey(name, in: document) else { return yaml }
-        for field in RunProfileField.allCases {
-            guard let value = flags[field] else { continue }
-            let range = document.children(of: section)
-            guard document.child(field.rawValue, in: range) == nil else { continue }
-            let column = document.childIndent(in: range) ?? section.indent + defaultIndentStep
-            try set(
-                field.rawValue, to: RepositoriesConfig.scalar(value), under: section, column: column,
-                order: order, in: &document
-            )
+        for field in RunProfileField.commandFlags {
+            try set(field.rawValue, to: nil, under: section, column: 0, order: [], in: &document)
         }
         return document.text
+    }
+
+    /// The provider runs of `kind` get from the top-level `agent` block.
+    private static func provider(of kind: RunKind, in profiles: RunProfiles) -> String {
+        profiles[kind].provider ?? profiles.defaults.provider ?? anthropic
     }
 
     /// Sets the scalar child `name:` of `parent`: rewrites its value, inserts it in `order`, or removes it for nil.
