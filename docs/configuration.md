@@ -493,9 +493,10 @@ agent:
   at a time (its sub-tickets at any depth and their open blockers, picked in epic-lane order, so
   blocked-by links keep their order; the `Final verification:` sub-ticket comes last) counts as
   forced in the parent's place in the queue, without the label being written on it. It keeps that
-  until it leaves the path or stops running or waiting on a retry; the other sub-tickets use normal
-  slots and the epic lane. `/api/v1/state` shows it as the parent's `forced[].sub_issue`. Forcing
-  never approves a plan: a forced parent in `In Review` stays there, shown with
+  until it leaves the path or stops running or waiting on a retry; a sub-ticket in Auto Review is
+  the part too, so its QA pass is forced. The other sub-tickets use normal slots and the epic lane.
+  `/api/v1/state` shows it as the parent's `forced[].sub_issue`. Forcing never approves a plan: a
+  forced parent in `In Review` stays there, shown with
   `forced[].waiting_on_human: true` (as is any forced ticket in `Backlog`, `Triage` or `In Review`).
   Forcing a sub-ticket itself forces only that sub-ticket.
 - `concurrency.forced_stale_after_hours` (default: `72`) is how long a ticket may stay forced before
@@ -940,8 +941,9 @@ pushes on the PR skip it. `max_concurrent` caps how many QA passes run at once, 
 queued on `max_concurrent` doesn't hold `Todo` tickets back; one queued because `finishing_max` is
 lower does.
 
-A forced ticket's pass (see `concurrency.force_label`) goes to the front of the queue: while it
-waits, a free QA slot is kept for it. The slot is kept only while the ticket keeps asking: if
+A forced ticket's pass (see `concurrency.force_label`, including a forced parent's current
+sub-ticket) goes to the front of the queue: while it waits, a free QA slot is kept for it. The
+slot is kept only while the ticket keeps asking: if
 no request has come for it in two CI poll intervals (it left Auto Review, or its CI went red or
 pending), other tickets take free slots again. When every QA slot is busy it starts on the forced
 allowance instead, as long as fewer than `concurrency.forced_max` forced runs and forced passes

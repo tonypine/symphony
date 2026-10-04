@@ -240,6 +240,37 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
                snapshot_of(state).forced
     end
 
+    test "keeps a sub-ticket in Auto Review as its part, from its link when Auto Review is not active, and forces no other meanwhile", ctx do
+      write_forced_workflow!(ctx, max_concurrent_agents: 1, forced_max: 2)
+      in_review = issue("part-1", "MT-P1", "Auto Review", priority: 4)
+      next = issue("part-2", "MT-P2", "Todo", priority: 1)
+      parent = parent([in_review, next])
+      candidates = [parent, next, in_review]
+      tracked(candidates)
+
+      # Its run opened the PR, so it does not dispatch from Auto Review.
+      state =
+        %{
+          orchestrator_state(1)
+          | forced: %{"epic-1" => queue_entry(parent, ~U[2026-10-04 06:00:00Z])},
+            completed_run_metadata: %{"part-1" => %{pr_url: "https://github.com/example/repo/pull/7"}}
+        }
+        |> run(issue("impl-1", "MT-1", "In Progress"), :implementation)
+        |> plan_poll(candidates)
+
+      assert %{"epic-1" => %{issue_id: "part-1", identifier: "MT-P1", state: "Auto Review"}} = state.forced_parts
+
+      state = Orchestrator.dispatch_chosen_issues_for_test(candidates, state)
+      refute Map.has_key?(state.running, "part-1")
+      refute Map.has_key?(state.running, "part-2")
+      assert [%{issue_id: "part-2", reason: "work slots full", forced: false}] = snapshot_of(state).slot_waiting
+      assert [%{issue_id: "epic-1", sub_issue: %{issue_id: "part-1", state: "Auto Review"}}] = snapshot_of(state).forced
+
+      # Without Auto Review among the active states, its sub-issue link still names it.
+      state = plan_poll(state, [parent, next])
+      assert %{"epic-1" => %{issue_id: "part-1", identifier: "MT-P1", state: "Auto Review"}} = state.forced_parts
+    end
+
     test "follows blocked-by order between sub-tickets, then forces the Final verification sub-ticket", ctx do
       write_forced_workflow!(ctx, max_concurrent_agents: 1)
       first = issue("part-1", "MT-P1", "Todo", priority: 4)
