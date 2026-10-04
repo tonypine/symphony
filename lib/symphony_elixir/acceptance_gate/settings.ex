@@ -153,10 +153,6 @@ defmodule SymphonyElixir.AcceptanceGate.Settings do
     embeds_one(:escalate, Escalate, on_replace: :update, defaults_to_struct: true)
   end
 
-  @doc "The values `mode` accepts: `off` turns the gate off, `shadow` records its verdict only, `enforce` acts on it."
-  @spec modes() :: [String.t()]
-  def modes, do: @modes
-
   @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
   def changeset(schema, attrs) do
     schema
