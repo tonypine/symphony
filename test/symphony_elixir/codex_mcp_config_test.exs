@@ -29,10 +29,13 @@ defmodule SymphonyElixir.Codex.McpConfigTest do
     assert {:ok, config} = build_config(settings, host_codex_home)
 
     assert config =~ "[mcp_servers.symphony]"
-    assert config =~ ~s(command = "/tmp/symphony-mcp-shim")
-    assert config =~ ~s(args = ["--socket", "/tmp/symphony-mcp.sock"])
+    {erlexec, _args, _env} = SymphonyElixir.McpShimCommand.build("/tmp/symphony-mcp-shim", [])
+    assert config =~ "command = #{Jason.encode!(erlexec)}"
+    assert config =~ ~s("-extra", "/tmp/symphony-mcp-shim", "--socket", "/tmp/symphony-mcp.sock"])
     assert config =~ ~s(SYMPHONY_MCP_SESSION_TOKEN = "session-token")
     assert config =~ "PATH = "
+    assert config =~ ~s(BINDIR = )
+    assert config =~ ~s(EMU = "beam")
     refute config =~ "--session"
     refute config =~ "host-secret"
   end
@@ -48,7 +51,7 @@ defmodule SymphonyElixir.Codex.McpConfigTest do
     assert {:ok, config} =
              McpConfig.build_config(settings!(%{inherit: "none"}), session, nil, session.shim_path, host_codex_home: nil)
 
-    assert config =~ ~s(args = ["--tcp-host", "127.0.0.1", "--tcp-port", "58213"])
+    assert config =~ ~s("/tmp/symphony-mcp-shim", "--tcp-host", "127.0.0.1", "--tcp-port", "58213"])
     assert config =~ ~s(SYMPHONY_MCP_SESSION_TOKEN = "session-token")
     assert config =~ "PATH = "
     refute config =~ "--socket"

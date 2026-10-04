@@ -754,7 +754,9 @@ When enabled, Symphony moves an issue whose run opened a PR to `state` (default 
 instead of `In Review`, and the CI poller watches it there:
 
 - red CI sends the issue back to `In Progress` through the usual CI fix loop;
-- green CI starts a QA pass on the PR head.
+- green CI starts a QA pass on the PR head;
+- a PR that conflicts with its base and has no checks (GitHub runs no CI on it) goes to `Rework`
+  with a comment saying which branch to merge in.
 
 Agents can no longer move the issue to `In Review` themselves: `linear_update_state("In Review")`
 returns "Symphony moves the issue to Auto Review once the PR is open; leave the state as it is."

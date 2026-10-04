@@ -59,6 +59,7 @@ defmodule SymphonyElixir.TestSupport do
         Workflow.set_workflow_file_path(workflow_file)
         Application.put_env(:symphony_elixir, :config_cache_watch, false)
         Cache.clear()
+        Client.reset_viewer_cache_for_test()
         write_workflow_file!(workflow_file, tracker_api_token: nil)
         Workflow.set_workflow_file_path(workflow_file)
         ensure_symphony_started!()
