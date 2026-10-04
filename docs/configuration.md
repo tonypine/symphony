@@ -426,6 +426,8 @@ agent:
   dashboard and `/api/v1/state` show the landing runs (`finishing`) and what is waiting for a slot
   and why (`slot_waiting`). A `Merging` ticket held while CI runs on its head is listed there as
   `waiting for CI on <sha>`; it doesn't count as waiting for a slot, so it doesn't hold back `Todo`.
+  `/api/v1/state` also lists the issue ids Symphony holds a claim on (`claimed`); a claim with no
+  running agent, retry or slot wait is released at the end of the next poll.
 - `concurrency.max_by_issue_state` can cap work independently for specific issue states such as
   `rework`.
 - `limits.max_turns` caps how many back-to-back turns Symphony will run in a single worker
