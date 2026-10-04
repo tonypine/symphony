@@ -4798,6 +4798,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       assert trace =~ "~/primary-clone"
       assert trace =~ "${repo#~/}"
       assert trace =~ "git -C \"$repo\" fetch origin"
+      assert trace =~ "*\"cannot lock ref\"*) sleep 1; git -C \"$repo\" fetch origin ;;"
       assert trace =~ "git -C \"$repo\" worktree add"
       assert trace =~ "export SYMPHONY_BRANCH="
       assert trace =~ "auto/MT-SSH-WT"
