@@ -1955,9 +1955,12 @@ Epic lanes:
 
 - An active epic is a `breakdown` parent waiting on its sub-issues with at least one sub-issue
   approved and not finished (any state other than `Backlog`, `Triage` or a terminal state).
-- Active epics are ordered by the parent's priority, then the parent's creation time. The first
-  `min(epic_lanes, max_concurrent_agents)` of them each reserve one slot (a lane); the rest wait
-  for a lane. `epic_lanes` defaults to `max_concurrent_agents`.
+- An active epic yields while nothing on its path can run: every open issue on the path is in
+  `In Review`, `Backlog` or `Triage`, has no known state, is a `breakdown` parent waiting on its
+  sub-issues (outside `Rework`), or is a `Todo` with open blockers. A yielded epic takes no lane.
+- The other active epics are ordered by the parent's priority, then the parent's creation time. The
+  first `min(epic_lanes, max_concurrent_agents)` of them each reserve one slot (a lane); the rest
+  wait for a lane. `epic_lanes` defaults to `max_concurrent_agents`.
 - `shared_slots = max_concurrent_agents - lane_count`.
 - An epic's path is its non-terminal sub-issues, their sub-issues at any depth, and the
   non-terminal blockers (`blocked_by`) of any of those, transitively. The walk follows the
@@ -1969,11 +1972,15 @@ Epic lanes:
 - Within a dispatch stage, a lane's issues go nearest the epic first: the epic's next part, then a
   blocker or sub-issue of it, and so on. They swap only among the places they already hold in the
   dispatch order, so priority and age only break ties between them.
-- A lane with nothing running stays reserved, so the next issue on the epic's path starts there as
-  soon as its blocker merges, even when the shared slots are full.
+- A lane with nothing running stays reserved while an issue on its path can run, for example a
+  blocker that is landing, so the next issue on the epic's path starts there as soon as its blocker
+  merges, even when the shared slots are full.
 - The `epic_lanes` snapshot shows, for a running lane, the issue it runs and, when that is not one
-  of the epic's own sub-issues, the issue it blocks or is a sub-issue of (`via`).
-- Lanes are recomputed from the candidate issues on every poll tick.
+  of the epic's own sub-issues, the issue it blocks or is a sub-issue of (`via`). Yielded epics
+  follow the lanes with `status: "yielded"` and a `reason` naming each open issue on the path and
+  what it waits on.
+- Lanes are recomputed from the candidate issues on every poll tick, so a yielded epic takes a lane
+  again once an issue on its path can run.
 
 ### 8.4 Retry and Backoff
 
