@@ -3847,6 +3847,8 @@ defmodule SymphonyElixir.CoreTest do
       end
 
       refute_received {:worker_runtime_info, "issue-s-373", %{workspace_hook: _hook}}
+      # As the run ends, the orchestrator hears which comments it posted.
+      assert_received {:worker_runtime_info, "issue-s-373", %{comment_ids: comment_ids}} when is_list(comment_ids)
     after
       File.rm_rf(test_root)
     end

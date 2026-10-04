@@ -931,10 +931,13 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert state.codex_totals.total_tokens == 23
     assert state.budget_daily_used == 25
 
+    # The comments the run posted, sent as it ends, stay with the completed run.
+    send(pid, {:worker_runtime_info, issue_id, %{comment_ids: ["reply-1"]}})
     send(pid, {:DOWN, process_ref, :process, self(), :normal})
     completed_state = get_orchestrator_state(pid)
 
     assert completed_state.completed_run_metadata[issue_id].tokens.total_tokens == 23
+    assert completed_state.completed_run_metadata[issue_id].comment_ids == ["reply-1"]
   end
 
   test "orchestrator accounts reviewer token usage separately while preserving totals" do

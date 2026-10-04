@@ -71,6 +71,50 @@ defmodule SymphonyElixir.OrchestratorPlanCommentsTest do
     refute_received {:memory_tracker_state_update, _issue_id, _state}
   end
 
+  test "a person's comment made while a revision run worked is picked up once the parent is back in In Review" do
+    parent = parent("In Review", [%{id: "child-1", identifier: "MOT-31", state: "Backlog"}], [~U[2026-10-04 12:40:00Z]])
+
+    # The revision run started at 12:20, read c1, answered it at 12:35 and moved the parent back to
+    # In Review at 12:38. Tony commented at 12:30, while the parent was In Progress.
+    put_feedback(
+      "parent",
+      [
+        change(~U[2026-10-04 12:00:00Z], "In Progress", "In Review"),
+        change(~U[2026-10-04 12:15:00Z], "In Review", "In Progress"),
+        change(~U[2026-10-04 12:38:00Z], "In Progress", "In Review")
+      ],
+      [
+        comment("c1", "Split MOT-32 in two", ~U[2026-10-04 12:10:00Z]),
+        comment("c2", "Also rename MOT-31", ~U[2026-10-04 12:30:00Z]),
+        comment("run-reply", "Done: MOT-32 is now MOT-32 and MOT-33.", ~U[2026-10-04 12:35:00Z], parent_id: "c1"),
+        comment("run-artifact", "## Journeys\n\nChanged: history split", ~U[2026-10-04 12:36:00Z])
+      ]
+    )
+
+    run = %{started_at: ~U[2026-10-04 12:20:00Z], last_ran_at: ~U[2026-10-04 12:40:00Z], comment_ids: ["run-reply", "run-artifact"]}
+    state = %{state() | completed_run_metadata: %{"parent" => run}, plan_comment_checks: %{"parent" => ~U[2026-10-04 12:10:00Z]}}
+
+    log = capture_log([level: :info], fn -> send(self(), {:state, act(state, parent)}) end)
+
+    assert_received {:state, state}
+    assert_received {:memory_tracker_state_update, "parent", "In Progress"}
+    assert log =~ "from 1 new comment(s)"
+    assert state.plan_comment_checks == %{"parent" => ~U[2026-10-04 12:40:00Z]}
+
+    # Once the next run answers c2 under its thread, the run's own comments start nothing.
+    put_feedback("parent", [change(~U[2026-10-04 12:58:00Z], "In Progress", "In Review")], [
+      comment("c2", "Also rename MOT-31", ~U[2026-10-04 12:30:00Z]),
+      comment("run-2-reply", "Done: MOT-31 is renamed.", ~U[2026-10-04 12:55:00Z], parent_id: "c2")
+    ])
+
+    run = %{started_at: ~U[2026-10-04 12:45:00Z], last_ran_at: ~U[2026-10-04 13:00:00Z], comment_ids: ["run-2-reply"]}
+    state = %{state | completed_run_metadata: %{"parent" => run}}
+    act(state, %{parent | comments: [%{author: "Tony", body: "comment", created_at: ~U[2026-10-04 12:55:00Z]}]})
+
+    assert_received {:memory_tracker_plan_comments, "parent"}
+    refute_received {:memory_tracker_state_update, _issue_id, _state}
+  end
+
   test "a comment on an approved plan gets one reply under its thread and changes nothing" do
     approved = [%{id: "child-1", identifier: "MOT-31", state: "In Progress"}]
     parent = parent(@waiting, approved, [~U[2026-10-04 12:10:00Z], nil])
@@ -84,10 +128,39 @@ defmodule SymphonyElixir.OrchestratorPlanCommentsTest do
 
     assert_received {:memory_tracker_reply, "parent", "c1", reply}
     assert reply == PlanComments.reply("MOT-30")
+    assert reply =~ ~r/^If this asks for a change to the plan: /
     refute_received {:memory_tracker_reply, _issue_id, _thread_id, _body}
     refute_received {:memory_tracker_state_update, _issue_id, _state}
     assert state.plan_comment_checks == %{"parent" => ~U[2026-10-04 12:10:00Z]}
     refute Orchestrator.should_dispatch_issue_for_test(parent, state)
+  end
+
+  test "a note in a thread on an approved plan, or a comment from before Symphony started, gets no reply" do
+    approved = [%{id: "child-1", identifier: "MOT-31", state: "In Progress"}]
+    parent = parent(@waiting, approved, [~U[2026-10-04 12:20:00Z]])
+
+    put_feedback("parent", [change(~U[2026-10-04 11:00:00Z], "In Review", @waiting)], [
+      comment("status", "MOT-31 is halfway, MOT-32 next", ~U[2026-10-04 11:30:00Z]),
+      comment("status-reply", PlanComments.reply("MOT-30"), ~U[2026-10-04 11:31:00Z], parent_id: "status"),
+      comment("fyi", "FYI: the design review moved to Friday", ~U[2026-10-04 12:20:00Z], parent_id: "status")
+    ])
+
+    state = act(state(), parent)
+
+    assert_received {:memory_tracker_plan_comments, "parent"}
+    refute_received {:memory_tracker_reply, _issue_id, _thread_id, _body}
+    assert state.plan_comment_checks == %{"parent" => ~U[2026-10-04 12:20:00Z]}
+
+    # The first poll after a restart: a parent already waiting gets no burst of replies to old comments.
+    put_feedback("parent", [change(~U[2026-10-04 11:00:00Z], "In Review", @waiting)], [
+      comment("question", "Should MOT-32 wait for the API?", ~U[2026-10-04 12:20:00Z])
+    ])
+
+    state = act(%{state() | plan_comments_since: ~U[2026-10-04 13:00:00Z]}, parent)
+
+    assert_received {:memory_tracker_plan_comments, "parent"}
+    refute_received {:memory_tracker_reply, _issue_id, _thread_id, _body}
+    assert state.plan_comment_checks == %{"parent" => ~U[2026-10-04 12:20:00Z]}
   end
 
   test "retries on the next poll when Linear fails" do

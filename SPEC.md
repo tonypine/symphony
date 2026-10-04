@@ -2128,18 +2128,24 @@ An issue is dispatch-eligible only if all are true:
   - Comments: a person's comment on a `breakdown` parent's plan is read on the poll that follows
     it. Only comments with a user and no bot actor count, and not Symphony's own (the workpad, a
     QA report, an `Action needed` request, a promote or cancel record, a run-failure note, its own
-    replies), told apart by how they start because the service and the reviewer can share one
-    Linear user. A comment counts when it is newer than the parent's latest move into its current
-    state and than the end of the service's last run on it. The service reads the parent's history
-    and comments only when the poll shows a comment newer than the last one it acted on.
+    replies, and every comment its last run on the parent posted). The service and the reviewer
+    can share one Linear user, so the run's comments are told apart by id, which the run reports as
+    it ends, and the others by how they start. The service reads the parent's history and comments
+    only when the poll shows a comment newer than the last one it acted on.
     - Plan under review (the parent in `In Review`, its plan not approved): the service moves the
       parent to `In Progress`, where the resume rule dispatches a `breakdown` run that revises the
       plan in place: it edits the artifact comments, updates, files or cancels `Backlog`
-      sub-issues only, replies under each comment, and moves the parent back to `In Review`.
+      sub-issues only, replies under each comment, and moves the parent back to `In Review`. A
+      comment counts when it is newer than the start of the service's last run on the parent and
+      no later comment of that run answers it in its thread, so a comment made while the run
+      worked is acted on once the parent is back in `In Review`. When the run's comments are
+      unknown (a run from before a restart), a comment counts when it is newer than the parent's
+      latest move into `In Review` and than the end of that run.
     - Approved plan (the parent in the waiting state, or in `In Review` with its plan approved):
-      nothing is dispatched and the plan is unchanged. The service replies once under each
-      comment thread that an approved plan is not changed from comments and that `Rework`
-      re-plans it.
+      nothing is dispatched and the plan is unchanged. Under each top-level comment newer than the
+      parent's latest move into its state, the end of the service's last run on it and the
+      service's start, the service replies once that if the comment asks for a plan change,
+      `Rework` re-plans it. Replies inside a thread get nothing.
     - `Rework` keeps its meaning: a full re-plan.
   - Approval: on each poll, for a `breakdown` parent in the waiting state with a sub-issue in
     `Backlog` that is not running or claimed, the service reads the parent's state history. When
@@ -4612,8 +4618,10 @@ infrastructure.
 - `breakdown` parent in `Todo` or `In Progress` whose non-terminal sub-issues are all in `Backlog`
   is eligible as a `breakdown` run and is not moved to the waiting state
 - a person's comment on a `breakdown` parent in `In Review` with an unapproved plan moves it to
-  `In Progress`; the service's own comments and integration bots' comments move nothing; a comment
-  on an approved plan gets one reply and moves nothing
+  `In Progress`; the service's own comments and integration bots' comments move nothing; a person's
+  comment made while the revision run worked moves it again once it is back in `In Review`; a
+  top-level comment on an approved plan gets one reply and moves nothing, and a reply inside a
+  thread or a comment from before the service started gets none
 - `breakdown` parent in `In Progress` with an approved non-terminal sub-issue moves to the waiting state;
   an issue in the waiting state is eligible only as a `breakdown` parent whose sub-issues are all
   terminal

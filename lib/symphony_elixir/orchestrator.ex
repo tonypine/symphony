@@ -115,6 +115,7 @@ defmodule SymphonyElixir.Orchestrator do
       parked_parents: MapSet.new(),
       breakdown_reviews: %{},
       plan_comment_checks: %{},
+      plan_comments_since: nil,
       merging_ci_waits: %{},
       epic_lanes: nil,
       blocked: [],
@@ -187,6 +188,7 @@ defmodule SymphonyElixir.Orchestrator do
       claimed: claimed,
       retry_attempts: retry_attempts,
       completed_run_metadata: completed_run_metadata,
+      plan_comments_since: DateTime.utc_now(),
       codex_totals: codex_totals,
       rate_limits: nil,
       tracker_health: empty_tracker_health(config.tracker.kind),
@@ -440,6 +442,7 @@ defmodule SymphonyElixir.Orchestrator do
           |> maybe_put_runtime_value(:workspace_path, runtime_info[:workspace_path])
           |> maybe_put_runtime_value(:agent_module, runtime_info[:agent_module])
           |> maybe_put_runtime_value(:agent_session, runtime_info[:agent_session])
+          |> maybe_put_runtime_value(:comment_ids, runtime_info[:comment_ids])
           |> Map.put(:last_event_at, last_event_at)
           |> maybe_put_workspace_hook(runtime_info)
 
@@ -2838,7 +2841,8 @@ defmodule SymphonyElixir.Orchestrator do
   # goes back to `In Progress`, where the breakdown run revises it, and an approved plan gets a reply.
   # Parents waiting for review come from the watching refresh, approved ones from the candidates.
   # `plan_comment_checks` keeps the newest comment each parent's poll showed once it was acted on,
-  # so Linear is read again only when a newer comment shows up.
+  # so Linear is read again only when a newer comment shows up. `plan_comments_since` is when this
+  # orchestrator started: comments on an approved plan from before it get no reply.
   defp act_on_plan_comments(%State{} = state, issues) do
     settings = Config.settings!()
     terminal_states = terminal_state_set()
@@ -2848,7 +2852,7 @@ defmodule SymphonyElixir.Orchestrator do
            false <- issue_claimed_or_running?(state, issue.id),
            %DateTime{} = newest <- newest_comment_at(issue),
            true <- newer_comment?(newest, Map.get(state.plan_comment_checks, issue.id)),
-           true <- read_plan_comments(issue, action, last_ran_at(state, issue.id)) do
+           true <- read_plan_comments(issue, action, last_run(state, issue.id), state.plan_comments_since) do
         %{state | plan_comment_checks: Map.put(state.plan_comment_checks, issue.id, newest)}
       else
         _skip -> state
@@ -2856,10 +2860,11 @@ defmodule SymphonyElixir.Orchestrator do
     end)
   end
 
-  defp read_plan_comments(%Issue{id: issue_id} = issue, action, ran_at) do
+  defp read_plan_comments(%Issue{id: issue_id} = issue, action, last_run, started_at) do
     case Tracker.fetch_plan_comments(issue_id) do
       {:ok, feedback} ->
-        act_on_pending_plan_comments(issue, action, PlanComments.pending(action, feedback, issue.state, ran_at))
+        pending = PlanComments.pending(action, feedback, issue.state, last_run, started_at)
+        act_on_pending_plan_comments(issue, action, pending)
 
       {:error, reason} ->
         Logger.warning("Failed to read comments on breakdown parent: #{issue_context(issue)} reason=#{inspect(reason)}")
@@ -2912,9 +2917,9 @@ defmodule SymphonyElixir.Orchestrator do
   defp newer_comment?(_newest, nil), do: true
   defp newer_comment?(newest, checked), do: DateTime.compare(newest, checked) == :gt
 
-  defp last_ran_at(%State{completed_run_metadata: metadata}, issue_id) do
-    case get_in(metadata, [issue_id, :last_ran_at]) do
-      %DateTime{} = at -> at
+  defp last_run(%State{completed_run_metadata: metadata}, issue_id) do
+    case Map.get(metadata, issue_id) do
+      %{} = run -> %{started_at: Map.get(run, :started_at), ended_at: Map.get(run, :last_ran_at), comment_ids: Map.get(run, :comment_ids)}
       _unknown -> nil
     end
   end
@@ -7332,6 +7337,7 @@ defmodule SymphonyElixir.Orchestrator do
       url: issue_url(issue),
       pull_request_url: URLUtils.pull_request_url(running_entry) || URLUtils.pull_request_url(issue),
       last_ran_at: DateTime.utc_now(),
+      comment_ids: Map.get(running_entry, :comment_ids),
       session_id: Map.get(running_entry, :session_id),
       started_at: Map.get(running_entry, :started_at),
       last_event_at: Map.get(running_entry, :last_event_at) || Map.get(running_entry, :last_codex_timestamp),

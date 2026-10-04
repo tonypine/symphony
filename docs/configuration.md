@@ -127,8 +127,10 @@ issues:
     to `In Progress`, and the `breakdown` run edits the plan in place: it rewrites the artifact
     comments, updates, files or cancels `Backlog` sub-tickets (`linear_update_subissue` refuses
     any other), replies under each comment and moves the parent back to `In Review`. Symphony's
-    own comments and integration bots' comments start nothing. A comment on an approved plan
-    changes nothing: Symphony replies once under its thread that `Rework` re-plans it.
+    own comments and integration bots' comments start nothing. A comment made while the run works
+    is picked up once the parent is back in `In Review`, unless the run answered it. A comment on
+    an approved plan changes nothing: under a new top-level comment Symphony replies once that, if
+    it asks for a plan change, `Rework` re-plans it.
   - **Re-plan:** moving the parent to `Rework` makes the plan again from scratch, as above.
 
 For Linear, configure at least one global scope under `issues.linear.scope` or repo-level route

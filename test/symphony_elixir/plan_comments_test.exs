@@ -44,8 +44,8 @@ defmodule SymphonyElixir.PlanCommentsTest do
     end
   end
 
-  describe "pending/4" do
-    test "keeps people's comments since the parent entered its state and the last run ended" do
+  describe "pending/5" do
+    test "without the last run's comments, keeps people's comments since the parent entered its state and the run ended" do
       feedback = %{
         state_changes: [
           change(~U[2026-10-04 10:00:00Z], "In Progress", "In Review"),
@@ -64,28 +64,61 @@ defmodule SymphonyElixir.PlanCommentsTest do
         ]
       }
 
-      assert ids(PlanComments.pending(:revise, feedback, "In Review", nil)) == ["first", "second"]
-      # The revision run's own replies come before its run ended.
-      assert ids(PlanComments.pending(:revise, feedback, "in review", ~U[2026-10-04 12:15:00Z])) == ["second"]
-      assert PlanComments.pending(:revise, feedback, @waiting, nil) == []
-      assert PlanComments.pending(:revise, %{feedback | state_changes: []}, "In Review", nil) == []
+      assert ids(PlanComments.pending(:revise, feedback, "In Review", nil, nil)) == ["first", "second"]
+      # A run from before a restart: its comments are unknown, so only comments after it ended count.
+      restored = %{started_at: ~U[2026-10-04 12:05:00Z], ended_at: ~U[2026-10-04 12:15:00Z], comment_ids: nil}
+      assert ids(PlanComments.pending(:revise, feedback, "in review", restored, nil)) == ["second"]
+      assert PlanComments.pending(:revise, feedback, @waiting, nil, nil) == []
+      assert PlanComments.pending(:revise, %{feedback | state_changes: []}, "In Review", nil, nil) == []
     end
 
-    test "answers each thread on an approved plan once" do
+    test "keeps a person's comment made while the revision run worked, but not the run's own comments" do
+      feedback = %{
+        state_changes: [
+          change(~U[2026-10-04 10:00:00Z], "In Progress", "In Review"),
+          change(~U[2026-10-04 11:00:00Z], "In Review", "In Progress"),
+          change(~U[2026-10-04 11:40:00Z], "In Progress", "In Review")
+        ],
+        comments: [
+          comment("asked", "Split the history screen", ~U[2026-10-04 10:30:00Z]),
+          comment("during", "Also rename MT-3", ~U[2026-10-04 11:10:00Z]),
+          comment("answered", "And drop MT-4", ~U[2026-10-04 11:12:00Z]),
+          comment("run-reply", "Done: MT-2 is now two tickets.", ~U[2026-10-04 11:20:00Z], parent_id: "asked"),
+          comment("run-reply-2", "Done: MT-4 is cancelled.", ~U[2026-10-04 11:21:00Z], parent_id: "answered"),
+          comment("run-artifact", "## Journeys (changed: history split)", ~U[2026-10-04 11:22:00Z]),
+          comment("after-move", "Thanks, one more: keep MT-5", ~U[2026-10-04 11:45:00Z], parent_id: "asked")
+        ]
+      }
+
+      run = %{started_at: ~U[2026-10-04 11:05:00Z], ended_at: ~U[2026-10-04 11:50:00Z], comment_ids: ["run-reply", "run-reply-2", "run-artifact"]}
+
+      # "asked" came before the run started, "answered" got a reply from it, and its own comments never count.
+      assert ids(PlanComments.pending(:revise, feedback, "In Review", run, nil)) == ["during", "after-move"]
+      # Measured from the run's start, even with no move into In Review in the history.
+      assert ids(PlanComments.pending(:revise, %{feedback | state_changes: []}, "In Review", run, nil)) == ["during", "after-move"]
+    end
+
+    test "answers each top-level comment on an approved plan once, and nothing from before Symphony started" do
       feedback = %{
         state_changes: [change(~U[2026-10-04 10:00:00Z], "In Review", @waiting)],
         comments: [
           comment("a", "Can we drop the history screen?", ~U[2026-10-04 11:00:00Z]),
           comment("a-reply", PlanComments.reply("MT-1"), ~U[2026-10-04 11:01:00Z], parent_id: "a"),
           comment("a-follow-up", "Why not?", ~U[2026-10-04 11:05:00Z], parent_id: "a"),
-          comment("b", "Also rename it", ~U[2026-10-04 11:02:00Z]),
+          comment("b", "MT-2 landed, MT-3 is next", ~U[2026-10-04 11:02:00Z]),
+          comment("b-note", "FYI the design review is Friday", ~U[2026-10-04 11:03:00Z], parent_id: "b"),
           comment("c", "Answered already", ~U[2026-10-04 10:30:00Z]),
-          comment("c-reply", PlanComments.reply(nil), ~U[2026-10-04 10:31:00Z], parent_id: "c")
+          comment("c-reply", PlanComments.reply(nil), ~U[2026-10-04 10:31:00Z], parent_id: "c"),
+          comment("before-approval", "Looks good", ~U[2026-10-04 09:30:00Z]),
+          comment("no-body", nil, ~U[2026-10-04 11:04:00Z])
         ]
       }
 
-      assert ids(PlanComments.pending(:answer, feedback, @waiting, nil)) == ["b", "a-follow-up"]
-      assert Enum.map(PlanComments.pending(:answer, feedback, @waiting, nil), &PlanComments.thread_id/1) == ["b", "a"]
+      assert ids(PlanComments.pending(:answer, feedback, @waiting, nil, nil)) == ["b"]
+      assert PlanComments.pending(:answer, feedback, @waiting, nil, ~U[2026-10-04 11:10:00Z]) == []
+      ended = %{started_at: nil, ended_at: ~U[2026-10-04 11:10:00Z], comment_ids: nil}
+      assert PlanComments.pending(:answer, feedback, @waiting, ended, nil) == []
+      assert PlanComments.pending(:answer, %{feedback | state_changes: []}, @waiting, nil, nil) == []
     end
   end
 
@@ -115,9 +148,11 @@ defmodule SymphonyElixir.PlanCommentsTest do
     end
   end
 
-  test "reply/1 points at Rework and names the parent" do
-    assert PlanComments.reply("MT-1") =~ "move MT-1 to Rework"
-    assert PlanComments.reply(nil) =~ "move the parent to Rework"
+  test "reply/1 is guidance for a change request, points at Rework and names the parent" do
+    assert PlanComments.reply("MT-1") =~ ~r/^If this asks for a change to the plan: /
+    assert PlanComments.reply("MT-1") =~ "Move MT-1 to Rework"
+    assert PlanComments.reply(nil) =~ "Move the parent to Rework"
+    refute PlanComments.reply("MT-1") =~ "changed nothing"
   end
 
   describe "Linear adapter and memory tracker" do
