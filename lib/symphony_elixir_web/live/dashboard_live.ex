@@ -1166,7 +1166,9 @@ defmodule SymphonyElixirWeb.DashboardLive do
   defp blocker_label(%{kind: :tracker_unavailable, tracker: tracker}),
     do: "#{tracker |> tracker_name() |> String.capitalize()} tracker unavailable"
 
-  defp blocker_label(%{kind: :usage_limit} = blocker), do: "#{UsageLimit.limit_label(blocker)} reached"
+  defp blocker_label(%{kind: :usage_limit} = blocker) do
+    if UsageLimit.headroom?(blocker), do: "#{UsageLimit.limit_label(blocker)} headroom: holding new runs", else: "#{UsageLimit.limit_label(blocker)} reached"
+  end
 
   defp blocker_detail(%{kind: :manual, reason: reason, since: since}) do
     [reason, since && "since #{since}"]
