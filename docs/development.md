@@ -16,6 +16,16 @@ mise install
 mise exec -- mix setup
 ```
 
+## Pre-push hook
+
+`make setup` runs `git config core.hooksPath .githooks`, which turns on
+`.githooks/pre-push` for the clone and all its worktrees (Symphony workspaces get it from
+`WORKFLOW.md`'s `after_create`). On every `git push` that changes an Elixir file, the hook runs
+`mix format --check-formatted`, `mix compile --warnings-as-errors` and
+`mix credo --strict <changed files>`, and rejects the push with the fixing command when one
+fails. A push that changes no Elixir file skips the checks. Tests, coverage and Dialyzer stay in
+CI. Don't bypass it with `git push --no-verify`; fix what it reports and push again.
+
 ## Testing
 
 Use the fast local gate while iterating:
