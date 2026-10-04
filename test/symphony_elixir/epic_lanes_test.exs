@@ -7,7 +7,7 @@ defmodule SymphonyElixir.EpicLanesTest do
   @terminal ["Done", "Canceled"]
 
   describe "plan/4" do
-    test "an epic with a sub-ticket in review keeps its lane; the rest of max_total is shared" do
+    test "an epic with a sub-ticket in review and another ready keeps its lane; the rest of max_total is shared" do
       plan = EpicLanes.plan([epic("E1", [{"p1", "In Review"}, {"p2", "Todo"}]), standalone("S1")], 2, nil, @terminal)
 
       assert [%{identifier: "E1"}] = plan.lanes
@@ -124,22 +124,6 @@ defmodule SymphonyElixir.EpicLanesTest do
       assert %{lanes: [%{sub_issue: %{identifier: "p3"}}, %{sub_issue: %{identifier: "B1"}}], shared: %{used: 0}} = snapshot
     end
 
-    test "with nothing on the path ready, the lane stays reserved" do
-      candidates = [
-        epic("E1", [{"p1", "Todo"}]),
-        ticket("p1", "Todo", blocked_by: [link("B1", "In Review")]),
-        ticket("B1", "In Review"),
-        standalone("S1"),
-        standalone("S2")
-      ]
-
-      plan = EpicLanes.plan(candidates, 2, nil, @terminal)
-
-      assert EpicLanes.slot_for(plan, "S1", []) == :shared
-      assert EpicLanes.slot_for(plan, "S2", ["S1"]) == :none
-      assert %{lanes: [%{status: "waiting", sub_issue: %{identifier: "p1"}}]} = EpicLanes.snapshot(plan, %{"S1" => %{}})
-    end
-
     test "the snapshot names the ticket a running blocker or sub-ticket serves" do
       candidates = [
         epic("E1", [{"p1", "Todo"}]),
@@ -156,6 +140,77 @@ defmodule SymphonyElixir.EpicLanesTest do
                  %{status: "running", sub_issue: %{identifier: "g1", state: "Todo", via: %{relation: "sub_ticket_of", identifier: "q1"}}}
                ]
              } = EpicLanes.snapshot(plan, %{"B1" => %{state: "In Progress"}, "g1" => %{}})
+    end
+  end
+
+  describe "yielding a lane" do
+    test "an epic whose only open sub-ticket is in review yields its lane to the shared pool" do
+      plan = EpicLanes.plan([epic("E1", [{"p1", "In Review"}, {"p0", "Done"}]), standalone("S1"), standalone("S2")], 2, nil, @terminal)
+
+      assert plan.lanes == []
+      assert plan.shared == 2
+      assert EpicLanes.slot_for(plan, "S2", ["S1"]) == :shared
+
+      assert %{
+               lanes: [%{identifier: "E1", status: "yielded", reason: "Nothing on its path can run: p1 (In Review)", sub_issue: %{identifier: "p1", state: "In Review"}}],
+               queued_epics: [],
+               shared: %{slots: 2, used: 1}
+             } = EpicLanes.snapshot(plan, %{"S1" => %{}})
+    end
+
+    test "the next queued epic gets the lane, and the epic takes it back once its sub-ticket returns to Todo" do
+      in_review = [epic("E1", [{"p1", "In Review"}], priority: 1), epic("E2", [{"q1", "Todo"}])]
+      plan = EpicLanes.plan(in_review, 2, 1, @terminal)
+
+      assert [%{identifier: "E2"}] = plan.lanes
+      assert plan.queued == []
+      assert [%{identifier: "E1"}] = plan.yielded
+      assert {:lane, %{identifier: "E2"}} = EpicLanes.slot_for(plan, "q1", [])
+
+      plan = EpicLanes.plan([epic("E1", [{"p1", "Todo"}], priority: 1), epic("E2", [{"q1", "Todo"}]), ticket("p1", "Todo")], 2, 1, @terminal)
+
+      assert [%{identifier: "E1"}] = plan.lanes
+      assert [%{identifier: "E2"}] = plan.queued
+      assert plan.yielded == []
+      assert {:lane, %{identifier: "E1"}} = EpicLanes.slot_for(plan, "p1", [])
+    end
+
+    test "the epic takes a lane back once a new ticket on its path can run" do
+      parked = [epic("E1", [{"p1", "In Review"}, {"p2", "Backlog"}]), ticket("p2", "Backlog")]
+      assert %{lanes: [], yielded: [%{yield_reason: "Nothing on its path can run: p1 (In Review), p2 (Backlog)"}]} = EpicLanes.plan(parked, 2, nil, @terminal)
+
+      # A human approves part 2.
+      approved = [epic("E1", [{"p1", "In Review"}, {"p2", "Todo"}]), ticket("p2", "Todo")]
+      assert %{lanes: [%{identifier: "E1"}], yielded: []} = plan = EpicLanes.plan(approved, 2, nil, @terminal)
+      assert {:lane, %{identifier: "E1"}} = EpicLanes.slot_for(plan, "p2", ["S1"])
+    end
+
+    test "a part blocked by a ticket that waits on a person yields; a blocker Symphony can run keeps the lane" do
+      held = [epic("E1", [{"p1", "Todo"}]), ticket("p1", "Todo", blocked_by: [link("B1", "In Review"), link("B2", nil)])]
+
+      assert %{yielded: [%{yield_reason: reason}]} = EpicLanes.plan(held, 2, nil, @terminal)
+      assert reason == "Nothing on its path can run: p1 (Todo, blocked by B1, B2), B1 (In Review), B2 (state unknown)"
+
+      for blocker_state <- ["Todo", "In Progress", "Merging"] do
+        runnable = [epic("E1", [{"p1", "Todo"}]), ticket("p1", "Todo", blocked_by: [link("B1", blocker_state)])]
+        assert %{lanes: [%{identifier: "E1"}], yielded: []} = EpicLanes.plan(runnable, 2, nil, @terminal)
+      end
+    end
+
+    test "a sub-ticket waiting on its own sub-tickets keeps the lane only while one below it can run" do
+      parent = ticket("p1", "Waiting on sub-tickets", sub_issues: [link("g1", "In Review")])
+      waiting = [epic("E1", [{"p1", "Waiting on sub-tickets"}]), %{parent | labels: ["breakdown"]}]
+
+      # The sub-ticket is an epic of its own, with the same verdict.
+      assert %{lanes: [], yielded: [%{identifier: "E1", yield_reason: reason}, %{identifier: "p1"}]} = EpicLanes.plan(waiting, 2, nil, @terminal)
+      assert reason == "Nothing on its path can run: p1 (Waiting on sub-tickets, waiting on its sub-tickets), g1 (In Review)"
+
+      runnable = [epic("E1", [{"p1", "Waiting on sub-tickets"}]), %{parent | labels: ["breakdown"], sub_issues: [link("g1", "Todo")]}]
+      assert %{lanes: [%{identifier: "E1"}, %{identifier: "p1"}], yielded: []} = EpicLanes.plan(runnable, 2, nil, @terminal)
+
+      # A rejected plan is broken down again, so a sub-ticket in Rework keeps the lane.
+      replanning = [epic("E1", [{"p1", "Rework"}]), %{parent | state: "Rework", labels: ["breakdown"]}]
+      assert %{lanes: [%{identifier: "E1"}], yielded: [%{identifier: "p1"}]} = EpicLanes.plan(replanning, 2, nil, @terminal)
     end
   end
 

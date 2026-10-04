@@ -350,7 +350,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
             <div>
               <h2 class="section-title">Agent lanes</h2>
               <p class="section-copy">
-                Each active epic keeps a lane for its sub-tickets and the tickets blocking them. Shared pool: <span class="numeric"><%= @payload.epic_lanes.shared.used %>/<%= @payload.epic_lanes.shared.slots %></span> in use.
+                Each active epic keeps a lane for its sub-tickets and the tickets blocking them, and yields it while they all wait on people. Shared pool: <span class="numeric"><%= @payload.epic_lanes.shared.used %>/<%= @payload.epic_lanes.shared.slots %></span> in use.
               </p>
             </div>
           </div>
@@ -377,7 +377,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
                     </td>
                     <td>
                       <span class={if lane.status == "running", do: "state-badge state-badge-active", else: "state-badge"}>
-                        <%= if lane.status == "running", do: "Running", else: "Idle, reserved" %>
+                        <%= lane_status_label(lane.status) %>
                       </span>
                     </td>
                     <td><%= lane_part_label(lane) %></td>
@@ -943,6 +943,12 @@ defmodule SymphonyElixirWeb.DashboardLive do
     |> assign(:repo_filter, repo_filter)
     |> assign(:visible_payload, filter_payload(payload, repo_filter))
   end
+
+  defp lane_status_label("running"), do: "Running"
+  defp lane_status_label("yielded"), do: "Yielded"
+  defp lane_status_label(_status), do: "Idle, reserved"
+
+  defp lane_part_label(%{status: "yielded", reason: reason}), do: reason
 
   defp lane_part_label(%{status: "running", sub_issue: %{identifier: identifier, state: state} = part}),
     do: "#{identifier} (#{state})" <> lane_part_via(Map.get(part, :via))

@@ -15,30 +15,43 @@ defmodule SymphonyElixir.OrchestratorEpicLanesTest do
     :ok
   end
 
-  test "a standalone ticket takes the shared slot while the epic's lane waits for its next part" do
+  test "an epic whose next part waits on a review yields its lane, and takes it back once the part can run" do
     part_1 = %{id: "p1", identifier: "MT-11", state: "In Review"}
     part_2 = %Issue{id: "p2", identifier: "MT-12", title: "Part 2", state: "Todo", blocked_by: [part_1]}
     standalone = %Issue{id: "s1", identifier: "MT-20", title: "Standalone", state: "Todo"}
     other = %Issue{id: "s2", identifier: "MT-21", title: "Other", state: "Todo"}
-    epic = epic("e1", "MT-10", [part_1, %{id: "p2", identifier: "MT-12", state: "Todo"}])
+    epic = epic("e1", "MT-10", [part_1, part_2])
 
     state = Orchestrator.put_epic_lanes_for_test(orchestrator_state(2), [epic, part_2, standalone, other])
 
-    assert [%{identifier: "MT-10"}] = state.epic_lanes.lanes
+    assert state.epic_lanes.lanes == []
+    assert state.epic_lanes.shared == 2
     assert Orchestrator.should_dispatch_issue_for_test(standalone, state)
     # Part 2 is still blocked by part 1, which is in review.
     refute Orchestrator.should_dispatch_issue_for_test(part_2, state)
 
     state = run(state, standalone)
-    # A second standalone ticket cannot take the reserved lane.
+    # The slot the lane would have held goes to a second standalone ticket.
+    assert Orchestrator.should_dispatch_issue_for_test(other, state)
+
+    reason = "Nothing on its path can run: MT-11 (In Review), MT-12 (Todo, blocked by MT-11)"
+
+    assert %{lanes: [lane], shared: %{slots: 2, used: 1}} = snapshot_of(state).epic_lanes
+    assert %{identifier: "MT-10", status: "yielded", reason: ^reason, sub_issue: sub_issue} = lane
+
+    assert %{identifier: "MT-11", state: "In Review"} = sub_issue
+
+    # Review sends part 1 back to Todo: at the next poll the epic has its lane again, so part 1
+    # starts there while the shared slot left is taken.
+    part_1 = %Issue{id: "p1", identifier: "MT-11", title: "Part 1", state: "Todo"}
+    part_2 = %{part_2 | blocked_by: [Map.take(part_1, [:id, :identifier, :state])]}
+    candidates = [epic("e1", "MT-10", [part_1, part_2]), part_1, part_2, standalone, other]
+    state = Orchestrator.put_epic_lanes_for_test(state, candidates)
+
+    assert [%{identifier: "MT-10"}] = state.epic_lanes.lanes
+    assert state.epic_lanes.yielded == []
+    assert Orchestrator.should_dispatch_issue_for_test(part_1, state)
     refute Orchestrator.should_dispatch_issue_for_test(other, state)
-
-    # Part 1 merges; part 2 starts in the lane straight away.
-    merged = epic("e1", "MT-10", [%{part_1 | state: "Done"}, %{id: "p2", identifier: "MT-12", state: "Todo"}])
-    part_2 = %{part_2 | blocked_by: [%{part_1 | state: "Done"}]}
-    state = Orchestrator.put_epic_lanes_for_test(state, [merged, part_2, standalone, other])
-
-    assert Orchestrator.should_dispatch_issue_for_test(part_2, state)
   end
 
   test "the epic's lane runs the blocker of its next part, a ticket outside the epic, while the shared slot is busy" do
