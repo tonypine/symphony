@@ -8,7 +8,9 @@ tracker) and a stub agent, and checks four scenarios:
 1. Update N -> N+1 while a run is active: the old Symphony drains and stops, the
    new app starts its Symphony on its own, dispatch resumes, only N+1's unpacked
    release is left, and no BEAM from N is left running.
-2. Restart while a run is active: it waits for the run, restarts and resumes.
+2. Restart while a run is active, pressed after dispatch was resumed but before
+   the app polled again: it pauses dispatch itself, waits for the run, restarts
+   and resumes.
 3. Restart with a broken symphony.yml: refused with the config error, and the
    running Symphony is left as it was.
 4. Rollback to `Symphony (previous).app`: it starts and still reads its secrets.
@@ -40,6 +42,7 @@ import tempfile
 import threading
 import time
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 
 MACOS = Path(__file__).resolve().parents[2]
@@ -48,6 +51,7 @@ BUILD_N = int(os.environ.get("SYMPHONY_E2E_BUILD_N", "90001"))
 BUILD_N1 = BUILD_N + 1
 STUB_SECONDS = int(os.environ.get("SYMPHONY_E2E_STUB_SECONDS", "15"))
 ISSUE = "E2E-1"
+PAUSE_TITLE = "Pause Dispatch (active runs continue)"
 
 
 class Failure(Exception):
@@ -539,6 +543,42 @@ class Instance:
         except (OSError, ValueError):
             return None
 
+    def control(self, action):
+        """Sends `pause` or `resume` to Symphony's control API itself, as the dashboard or another client would."""
+        state = self.qa / "state"
+        request = urllib.request.Request(
+            f"{(state / 'control_url').read_text().strip()}/api/v1/control/{action}",
+            data=b"{}",
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {(state / 'control_token').read_text().strip()}",
+                "Content-Type": "application/json",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=10):
+            pass
+        log(f"sent {action} to Symphony's control API")
+
+    def pause_requests(self, since):
+        """The `POST /api/v1/control/pause` lines Symphony logged at or after `since` (epoch seconds).
+
+        The log is written late (synced every few seconds), so a line's own time tells which pause it was.
+        """
+        found = []
+        for path in (self.qa / "symphony-logs").glob("symphony.log*"):
+            if not re.fullmatch(r"symphony\.log(\.\d+)?", path.name):
+                continue  # the wrap log's .idx and .siz files
+            for line in path.read_text(errors="replace").splitlines():
+                if "POST /api/v1/control/pause" not in line:
+                    continue
+                try:
+                    logged = datetime.fromisoformat(line.split(" ", 1)[0].replace("Z", "+00:00")).timestamp()
+                except ValueError:
+                    continue
+                if logged >= since:
+                    found.append(line)
+        return found
+
     def symphony_pid(self):
         return (self.status() or {}).get("symphony_pid")
 
@@ -774,10 +814,17 @@ def _fresh_session(instance):
 
 
 def scenario_restart(instance):
-    log("scenario 2: Restart while a run is active")
+    log("scenario 2: Restart while a run is active, right after dispatch was resumed")
     sessions = wait_for("a run with time left", lambda: _fresh_session(instance), 120)
     old_symphony = instance.symphony_pid()
     runs_before = len(instance.runs())
+    # TP-435: the app's last poll shows dispatch paused, but it is resumed before Restart is pressed, so the restart
+    # can't count on that pause. Pause from the menu (the app polls right after), resume behind its back, and press
+    # Restart before its next poll, 5s later.
+    instance.press(PAUSE_TITLE)
+    wait_for("the menu to show dispatch paused", lambda: instance.menu().get("Resume Dispatch"), 10)
+    instance.control("resume")
+    pressed = time.time()
     tracker = Tracker(instance, [old_symphony])
     tracker.start()
     try:
@@ -786,6 +833,11 @@ def scenario_restart(instance):
             "Symphony to restart",
             lambda: (pid := instance.symphony_pid()) and pid != old_symphony and pid,
             180,
+        )
+        wait_for(
+            "the restart's own POST /api/v1/control/pause in Symphony's log",
+            lambda: instance.pause_requests(since=pressed),
+            30,
         )
         instance.wait_for_new_run(runs_before, BUILD_N1)
         wait_for("dispatch to be resumed", lambda: (s := instance.symphony_state()) and not s["pause"]["paused"], 60)
