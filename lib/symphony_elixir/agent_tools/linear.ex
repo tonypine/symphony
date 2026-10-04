@@ -116,9 +116,11 @@ defmodule SymphonyElixir.AgentTools.Linear do
   }
   """
 
+  # The current issue's family: the blockers it lists, plus its parent, siblings and sub-issues.
   @related_issues_query """
   query SymphonyAgentRelatedIssues($id: String!, $first: Int!) {
     issue(id: $id) {
+      id
       relations(first: $first) {
         nodes {
           type
@@ -126,6 +128,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
             id
             identifier
             title
+            state { name }
           }
         }
       }
@@ -136,7 +139,45 @@ defmodule SymphonyElixir.AgentTools.Linear do
             id
             identifier
             title
+            state { name }
           }
+        }
+      }
+      parent {
+        id
+        identifier
+        title
+        state { name }
+        children(first: $first) {
+          nodes { id identifier title state { name } }
+        }
+      }
+      children(first: $first) {
+        nodes { id identifier title state { name } }
+      }
+    }
+  }
+  """
+
+  @related_issue_query """
+  query SymphonyAgentRelatedIssue($id: String!, $limit: Int!) {
+    issue(id: $id) {
+      id
+      identifier
+      title
+      description
+      priority
+      state { id name type }
+      labels { nodes { name } }
+      url
+      comments(last: $limit, orderBy: createdAt) {
+        nodes {
+          id
+          body
+          createdAt
+          updatedAt
+          user { id name }
+          parent { id }
         }
       }
     }
@@ -490,17 +531,67 @@ defmodule SymphonyElixir.AgentTools.Linear do
          {:ok, normalized_limit} <- normalize_limit(limit),
          {:ok, body} <- signed_graphql(@comments_query, %{id: issue_id, limit: normalized_limit}, opts),
          {:ok, nodes} <- fetch_path(body, ["data", "issue", "comments", "nodes"], []) do
-      {:ok, nodes |> Enum.reverse() |> Enum.map(&wrap_comment(&1, context, opts))}
+      {:ok, nodes |> Enum.reverse() |> Enum.map(&wrap_comment(&1, context, "linear_get_comments", opts))}
     end
   end
 
   @spec get_related_issues(context(), keyword()) :: {:ok, [map()]} | {:error, term()}
   def get_related_issues(context, opts \\ []) do
+    with {:ok, related} <- fetch_related_issues(context, opts) do
+      {:ok, Enum.map(related, &wrap_issue_summary/1)}
+    end
+  end
+
+  @doc """
+  Reads one issue of the current issue's family (its parent, a sibling, a sub-issue, or an issue
+  it blocks or is blocked by) with its comments, newest first. Any other issue is refused.
+  """
+  @spec get_related_issue(context(), String.t() | nil, integer() | nil, keyword()) :: {:ok, map()} | {:error, term()}
+  def get_related_issue(context, identifier, comment_limit, opts \\ []) do
+    with {:ok, identifier} <- validate_related_identifier(identifier),
+         {:ok, limit} <- normalize_limit(comment_limit),
+         {:ok, related} <- fetch_related_issues(context, opts),
+         {:ok, issue_id, relations} <- family_member(related, identifier),
+         {:ok, body} <- signed_graphql(@related_issue_query, %{id: issue_id, limit: limit}, opts),
+         {:ok, issue} <- fetch_path(body, ["data", "issue"], :issue_not_found) do
+      {:ok, wrap_related_issue(issue, relations, context, opts)}
+    end
+  end
+
+  defp fetch_related_issues(context, opts) do
     with {:ok, issue_id} <- current_issue_id(context),
          {:ok, body} <- graphql(@related_issues_query, %{id: issue_id, first: @related_issue_first}, opts),
          {:ok, issue} <- fetch_path(body, ["data", "issue"], :issue_not_found) do
-      {:ok, issue |> related_issues() |> Enum.map(&wrap_issue_summary/1)}
+      {:ok, related_issues(issue) ++ family_issues(issue)}
     end
+  end
+
+  defp validate_related_identifier(identifier) do
+    if non_blank?(identifier), do: {:ok, identifier |> String.trim() |> String.upcase()}, else: {:error, :invalid_related_issue_identifier}
+  end
+
+  defp family_member(related, identifier) do
+    case Enum.filter(related, &(is_binary(&1["identifier"]) and String.upcase(&1["identifier"]) == identifier)) do
+      [] ->
+        {:error, {:issue_outside_family, identifier, related |> Enum.map(& &1["identifier"]) |> Enum.uniq()}}
+
+      [%{"id" => issue_id} | _rest] = matches ->
+        {:ok, issue_id, matches |> Enum.map(&family_relation/1) |> Enum.uniq()}
+    end
+  end
+
+  defp family_relation(%{"relation" => "relation", "type" => type}), do: type
+  defp family_relation(%{"relation" => "inverse_relation"}), do: "blocked_by"
+  defp family_relation(%{"relation" => relation}), do: relation
+
+  defp wrap_related_issue(issue, relations, context, opts) do
+    comments = get_in(issue, ["comments", "nodes"]) || []
+
+    issue
+    |> wrap_issue_summary()
+    |> Map.put("labels", Enum.map(get_in(issue, ["labels", "nodes"]) || [], & &1["name"]))
+    |> Map.put("relations", relations)
+    |> Map.put("comments", comments |> Enum.reverse() |> Enum.map(&wrap_comment(&1, context, "linear_get_related_issues", opts)))
   end
 
   @spec update_state(context(), String.t()) :: {:ok, map()} | {:error, term()}
@@ -1549,15 +1640,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
 
       case issue do
         %{} ->
-          [
-            %{
-              "relation" => direction,
-              "type" => type,
-              "id" => issue["id"],
-              "identifier" => issue["identifier"],
-              "title" => issue["title"]
-            }
-          ]
+          [Map.merge(%{"relation" => direction, "type" => type}, family_summary(issue))]
 
         _ ->
           []
@@ -1568,6 +1651,30 @@ defmodule SymphonyElixir.AgentTools.Linear do
   end
 
   defp related_issue_from_relation(_relation, _direction), do: []
+
+  # The parent, the parent's other children, and the current issue's own children.
+  defp family_issues(issue) do
+    parent = Map.get(issue, "parent")
+    siblings = Enum.reject(child_nodes(parent), &(&1["id"] == issue["id"]))
+
+    Enum.map(List.wrap(parent), &family_entry(&1, "parent")) ++
+      Enum.map(siblings, &family_entry(&1, "sibling")) ++
+      Enum.map(child_nodes(issue), &family_entry(&1, "sub_issue"))
+  end
+
+  defp child_nodes(%{"children" => %{"nodes" => nodes}}) when is_list(nodes), do: nodes
+  defp child_nodes(_issue), do: []
+
+  defp family_entry(issue, relation), do: Map.put(family_summary(issue), "relation", relation)
+
+  defp family_summary(issue) do
+    %{
+      "id" => issue["id"],
+      "identifier" => issue["identifier"],
+      "title" => issue["title"],
+      "state" => get_in(issue, ["state", "name"])
+    }
+  end
 
   defp wrap_issue(issue) when is_map(issue) do
     issue
@@ -1601,13 +1708,13 @@ defmodule SymphonyElixir.AgentTools.Linear do
 
   defp wrap_comment(comment), do: comment
 
-  defp wrap_comment(comment, context, opts) when is_map(comment) do
+  defp wrap_comment(comment, context, tool, opts) when is_map(comment) do
     comment
-    |> redact_string_field("body", context, "linear_get_comments", opts)
+    |> redact_string_field("body", context, tool, opts)
     |> wrap_string_field("body", &wrap_comment_body/1)
   end
 
-  defp wrap_comment(comment, _context, _opts), do: comment
+  defp wrap_comment(comment, _context, _tool, _opts), do: comment
 
   # The workpad is detected the way `Workpad` finds it, and read back whole so the agent's
   # rewrite does not drop the text past the ordinary comment limit.
