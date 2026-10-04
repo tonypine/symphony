@@ -1175,6 +1175,43 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     }
   end
 
+  defp tool_error_payload({:push_check_required, reason, %{"command" => command, "result_file" => result_file, "head" => head} = details}) do
+    found =
+      case reason do
+        :missing -> "There is no `#{result_file}`."
+        :stale -> "`#{result_file}` holds the result for #{short_sha(details["recorded_head"])}, not for this commit."
+        :invalid -> "`#{result_file}` is not a push check result."
+      end
+
+    %{
+      "error" => %{
+        "code" => "push_check_required",
+        "message" =>
+          "Push refused: this push changes files the repository's push check covers, and the check has not passed for " <>
+            "#{short_sha(head)}. #{found} Commit your work, run `#{command}` in your shell (it runs the checks in your " <>
+            "sandbox and records the result), fix anything it reports, then call github_push_branch again.",
+        "command" => command,
+        "result_file" => result_file,
+        "head" => head
+      }
+    }
+  end
+
+  defp tool_error_payload({:push_check_failed, %{"command" => command, "result_file" => result_file, "head" => head, "output" => output}}) do
+    %{
+      "error" => %{
+        "code" => "push_check_failed",
+        "message" =>
+          "Push refused: the repository's push check failed for #{short_sha(head)}:\n#{output}\n" <>
+            "Run `#{command}` in your shell to see each check's output. Fix what it names, commit, run the " <>
+            "command again, then call github_push_branch again.",
+        "command" => command,
+        "result_file" => result_file,
+        "head" => head
+      }
+    }
+  end
+
   defp tool_error_payload({:issue_not_in_merging_state, state_name}) do
     %{
       "error" => %{
@@ -1297,4 +1334,6 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       }
     }
   end
+
+  defp short_sha(sha), do: String.slice(sha, 0, 12)
 end

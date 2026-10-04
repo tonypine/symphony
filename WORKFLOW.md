@@ -12,6 +12,13 @@ hooks:
     fi
   before_remove: |
     mise exec -- mix workspace.before_remove
+# `github_push_branch` pushes with repo hooks off, so it refuses a push that changes one of
+# `paths` until `command`, run by the agent in its sandbox, records a pass for that commit in
+# `result_file`. Symphony only reads the file; it never runs the command.
+push_check:
+  command: .githooks/pre-push --head
+  result_file: tmp/push-check
+  paths: ["*.ex", "*.exs", "*.heex", "*.eex", "mix.lock"]
 # Used only when the operator sets `verification.enabled: true` in symphony.yml. Serves the
 # dashboard with an in-memory tracker; Auto Review's web playbook tests dashboard changes on it.
 verification:
@@ -220,6 +227,7 @@ You are working on a Linear ticket `{{ issue.identifier }}`
     - Targeted pre-push checks: `mix format --check-formatted`, `mix compile --warnings-as-errors`, `mix specs.check`, `mix credo --strict <changed files>`, and every new or changed test file plus the test files of the modules you changed.
     - Do not run `make all`, `make check`, `make coverage`, the full `mix test`, `mix test --stale` or Dialyzer before a push (see `Command and output hygiene` for the optional `make all` on shared infrastructure). CI is the gate for the full suite, the 100% coverage report and Dialyzer.
     - `git push` runs the repo's `.githooks/pre-push` hook, which reruns the format, compile and credo checks on the Elixir files the push changes and rejects the push when one fails. Never use `git push --no-verify`. When the hook fails, fix the issue it names (it prints the fixing command, such as `mix format`), commit, and push again.
+    - `github_push_branch` skips repo hooks, so when the push changes an Elixir file it needs the result of `.githooks/pre-push --head` for the commit it pushes. Run that command in your shell after your last commit: it runs the same checks in your sandbox and records the result in `tmp/push-check`. The tool refuses the push when the result is missing, is for another commit, or names a failed check; fix what it names, commit, run the command again and push. A push that changes no Elixir file needs no result.
     - If a prior push's CI checks are still failing, follow the `CI failure triage protocol` before re-pushing. A CI coverage gap is a red check like any other: add tests that exercise the missing branches, or extend `mix.exs` `test_coverage` `ignore_modules` only for genuinely untestable I/O shims.
     - After staging/committing changes and before pushing, run `git diff origin/main..HEAD` to review committed-only diff for:
       - stray debug statements, `console.log`, hardcoded test values, or temporary proof edits,

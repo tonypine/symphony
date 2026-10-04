@@ -46,6 +46,13 @@ description:
    push changes). Never use `git push --no-verify`: when the hook rejects the
    push, fix the issue it names (it prints the fixing command, such as
    `mix format`), commit, and push again.
+   The scoped `github_push_branch` tool skips repo hooks, so it checks the
+   result of `.githooks/pre-push --head` instead: when the push changes an
+   Elixir file, run that command in your shell after your last commit. It runs
+   the same checks on what `HEAD` would push and records the result for the
+   tool. The tool refuses the push when the result is missing, is for another
+   commit, or names a failed check; fix what it names, commit, run the command
+   again and push.
 4. If push is not clean/rejected:
    - If the failure is a non-fast-forward or sync problem, run the `pull`
      skill to merge `origin/main`, resolve conflicts, and rerun validation.
