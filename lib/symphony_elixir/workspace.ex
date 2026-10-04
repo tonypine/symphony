@@ -1827,7 +1827,7 @@ defmodule SymphonyElixir.Workspace do
       :hide,
       args: ["-lc", command],
       cd: workspace,
-      env: Enum.map(env, fn {key, value} -> {String.to_charlist(key), String.to_charlist(value)} end)
+      env: Enum.map(env ++ [no_gradle_daemon_env()], fn {key, value} -> {String.to_charlist(key), String.to_charlist(value)} end)
     ]
 
     {:ok, Port.open({:spawn_executable, System.find_executable("sh") || "/bin/sh"}, port_opts)}
@@ -1841,6 +1841,14 @@ defmodule SymphonyElixir.Workspace do
       |> Enum.join("\n")
 
     SSH.start_port(worker_host, script)
+  end
+
+  # A local hook runs outside the agent's sandbox. A Gradle daemon it started
+  # would serve later builds that share its registry and outlive the run, and one
+  # it joined could have been started inside an agent's sandbox, so its builds
+  # run without one (see `SymphonyElixir.AgentEnv.gradle_env/1`).
+  defp no_gradle_daemon_env do
+    {"GRADLE_OPTS", String.trim("#{System.get_env("GRADLE_OPTS")} -Dorg.gradle.daemon=false")}
   end
 
   defp collect_hook_output(port, owner, output, deadline) do

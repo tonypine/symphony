@@ -315,6 +315,17 @@ agent:
 - `permissions.filesystem.allow_write_paths`: extra writable host paths emitted to the Claude
   runtime as `sandbox.filesystem.allowWrite`. Use it to broaden Claude Code's default writable
   set (workspace + `/tmp`) — e.g. to grant test runs access to a configured MCP socket root.
+  For Gradle builds, add `~/.gradle` so builds share its caches. Daemons don't come with it:
+  each local agent run starts with
+  `GRADLE_OPTS="-Dorg.gradle.daemon.registry.base=<workspace>/.gradle-daemons"`, so its Gradle
+  daemons register in its own workspace (git ignores the folder) rather than in
+  `~/.gradle/daemon`, where a daemon started in one agent's sandbox would serve, and fail, builds
+  in another workspace. A daemon's working folder is in that registry, so the run's end stops it
+  (see `workspaces` above). If `.gradle-daemons` is a symlink or a file, the run gets no
+  `GRADLE_OPTS`, and Symphony only ever creates the folder's `.gitignore`, never overwrites it, so
+  it never writes outside the workspace. Local hooks run outside the sandbox and build without a daemon:
+  Symphony appends `-Dorg.gradle.daemon=false` to the host's `GRADLE_OPTS`. Neither applies on SSH
+  workers.
 - `permissions.outer_sandbox`: optional outer sandbox wrapper, currently used for Codex SRT.
 
 **Run profiles:**
@@ -1419,5 +1430,8 @@ hooks:
   minutes) and the watchdog (`watchdog.no_progress_threshold_ms`) wait for the hook's own timeout,
   so a long install isn't ended as a stalled run. Their clocks start again when the hook ends.
 - A run that is stopped while a hook runs on this machine stops the hook too.
+- A hook on this machine runs Gradle without a daemon: Symphony appends `-Dorg.gradle.daemon=false`
+  to the host's `GRADLE_OPTS`. Gradle then never hands the hook's build to a daemon an agent
+  started inside its sandbox, and the hook leaves no daemon behind.
 
 Each repository's `WORKFLOW.md` sets its own hooks and timeouts.
