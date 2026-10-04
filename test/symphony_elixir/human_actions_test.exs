@@ -5,11 +5,17 @@ defmodule SymphonyElixir.HumanActionsTest do
 
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.HumanActions
-  alias SymphonyElixir.HumanActions.{Action, Update}
+  alias SymphonyElixir.HumanActions.{Action, CiSecrets, Update}
   alias SymphonyElixir.Linear.Usage
 
   @project %{id: "project-1", name: "Cycle"}
   @minute 60_000
+
+  # GitHub as the test process's dictionary says it is.
+  defmodule FakeGitHub do
+    def list_branch_runs("acme/cycle", "main", _opts), do: {:ok, Process.get(:runs)}
+    def fetch_failed_log(run_id, repo: "acme/cycle"), do: {:ok, Process.get({:log, run_id})}
+  end
 
   defp action(key, attrs \\ %{}) do
     struct!(
@@ -42,6 +48,9 @@ defmodule SymphonyElixir.HumanActionsTest do
         query =~ "SymphonyHumanActionsPostUpdate" ->
           send(test_pid, {:posted, variables.input})
           post
+
+        query =~ "SymphonyHumanActionsRepoProjects" ->
+          {:ok, %{"data" => %{"projects" => %{"nodes" => [@project |> Map.new(fn {key, value} -> {Atom.to_string(key), value} end)]}}}}
       end
     end
   end
@@ -61,7 +70,7 @@ defmodule SymphonyElixir.HumanActionsTest do
       notify: fn event, attrs -> send(test_pid, {:notified, event, attrs}) end
     ]
 
-    %{opts: Keyword.merge(defaults, Keyword.drop(opts, [:actions, :clock, :previous])), projects: %{}, timer: make_ref()}
+    %{opts: Keyword.merge(defaults, Keyword.drop(opts, [:actions, :clock, :previous])), projects: %{}, ci: %{}, timer: make_ref()}
   end
 
   defp start_clock(now_ms) do
@@ -128,6 +137,49 @@ defmodule SymphonyElixir.HumanActionsTest do
     Agent.update(clock, fn _now -> 60 * @minute end)
     HumanActions.run_once(state)
     refute_received {:posted, _input}
+  end
+
+  test "lists a workflow on the default branch that keeps failing on a missing secret, until it is green again" do
+    clock = start_clock(0)
+    fake_value = "ghp_" <> String.duplicate("A1b2", 9)
+    red = fn id -> %{id: id, workflow_name: "Release", status: "COMPLETED", conclusion: "FAILURE", url: nil, created_at: nil} end
+
+    github_opts = [github: FakeGitHub, github_repo: fn %{name: "cycle"} -> "acme/cycle" end, base_branch: fn "cycle" -> "main" end]
+    ci_collect = fn repos, cache, opts -> CiSecrets.collect(repos, cache, opts ++ github_opts) end
+    settings = %Schema{ci: %{%Schema{}.ci | enabled: true}, tracker: %{%Schema{}.tracker | project_slug: "cycle"}}
+
+    state =
+      state(
+        actions: start_actions([]),
+        clock: clock,
+        repos: fn -> {:ok, [%{name: "cycle"}]} end,
+        ci_collect: ci_collect,
+        settings_fun: fn -> settings end
+      )
+
+    Process.put({:log, "1"}, "SIGNING_KEY=#{fake_value}\nError: secret SIGNING_KEY is not set\n")
+    Process.put({:log, "2"}, "SIGNING_KEY=#{fake_value}\nError: secret SIGNING_KEY is not set\n")
+
+    # One red run is not enough.
+    Process.put(:runs, [red.("1")])
+    state = HumanActions.run_once(state)
+    refute_received {:posted, _input}
+
+    Process.put(:runs, [red.("2"), red.("1")])
+    state = HumanActions.run_once(state)
+    assert_received {:posted, %{"projectId" => "project-1", "health" => "atRisk", "body" => body}}
+    assert body =~ "**1 action needs you.**"
+    assert body =~ "### 1. Add the `SIGNING_KEY` secret"
+    assert body =~ "Unblocks the `Release` workflow on `main` in acme/cycle"
+    assert body =~ "1. Open https://github.com/acme/cycle/settings/secrets/actions (the repository's Settings → Secrets and variables → Actions)."
+    assert body =~ "**Done when:** the next run of `Release` on `main` is green."
+    refute body =~ fake_value
+    assert_received {:notified, :human_action_needed, %{issue_identifier: nil, reason: "Add the `SIGNING_KEY` secret", metadata: %{"kind" => "ci_secret"}}}
+
+    Process.put(:runs, [%{red.("3") | conclusion: "SUCCESS"}, red.("2"), red.("1")])
+    Agent.update(clock, fn _now -> 15 * @minute end)
+    HumanActions.run_once(state)
+    assert_received {:posted, %{"projectId" => "project-1", "health" => "onTrack", "body" => "**Nothing needs you.**" <> _rest}}
   end
 
   test "posts nothing for a project that never had an action" do
