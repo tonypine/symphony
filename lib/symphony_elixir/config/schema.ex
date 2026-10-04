@@ -2010,7 +2010,9 @@ defmodule SymphonyElixir.Config.Schema do
         "usage_limit_paused",
         "usage_limit_headroom",
         "usage_limit_resumed",
-        "forced_waiting"
+        "forced_waiting",
+        "forced_human_gate",
+        "forced_stale"
       ]
 
       embedded_schema do

@@ -524,7 +524,7 @@ defmodule SymphonyElixir.ExtensionsTest do
              "generated_at" => state_payload["generated_at"],
              "build" => %{"version" => "0.0.1.168", "sha" => "d3d301b0123456789abcdef0123456789abcdef0"},
              "repos" => ["default"],
-             "counts" => %{"running" => 1, "watching" => 1, "conflicts" => 0, "retrying" => 1, "claimed" => 2},
+             "counts" => %{"running" => 1, "watching" => 1, "conflicts" => 0, "retrying" => 1, "claimed" => 2, "forced" => 2},
              "running" => [
                %{
                  "issue_id" => "issue-http",
@@ -727,9 +727,16 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "title" => "Fix the release",
                  "state" => "In Review",
                  "forced_since" => "2026-10-03T05:00:00Z",
+                 "forced_for_seconds" => 3_600,
+                 "stale" => false,
                  "position" => 1,
                  "waiting_on_human" => true,
-                 "sub_issue" => nil
+                 "sub_issue" => nil,
+                 "phase" => "waiting_for_human",
+                 "running" => false,
+                 "waiting_on" => "human",
+                 "blockers" => [],
+                 "summary" => "waiting for a human"
                },
                %{
                  "issue_id" => "forced-parent-http",
@@ -737,9 +744,16 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "title" => "Export",
                  "state" => "Waiting on sub-tickets",
                  "forced_since" => "2026-10-03T06:00:00Z",
+                 "forced_for_seconds" => 300_000,
+                 "stale" => true,
                  "position" => 2,
                  "waiting_on_human" => false,
-                 "sub_issue" => %{"issue_id" => "part-http", "issue_identifier" => "MT-PART", "state" => "Todo"}
+                 "sub_issue" => %{"issue_id" => "part-http", "issue_identifier" => "MT-PART", "state" => "Todo"},
+                 "phase" => "implementation",
+                 "running" => false,
+                 "waiting_on" => "blocker",
+                 "blockers" => ["MT-GAP"],
+                 "summary" => "implementation · waiting on blocker MT-GAP"
                }
              ],
              "concurrency" => %{"max_total" => 10, "finishing_max" => 2, "forced_max" => 1},
@@ -966,7 +980,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     refute_received :request_refresh_called
 
     state_payload = json_response(get(build_conn(), "/api/v1/state"), 200)
-    assert state_payload["counts"] == %{"running" => 1, "watching" => 1, "conflicts" => 0, "retrying" => 1, "claimed" => 2}
+    assert state_payload["counts"] == %{"running" => 1, "watching" => 1, "conflicts" => 0, "retrying" => 1, "claimed" => 2, "forced" => 2}
   end
 
   test "phoenix observability api allows configured origins to refresh" do
@@ -1947,6 +1961,48 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "Waiting on blockers"
     assert html =~ "MT-VERIFY waiting on MT-GAP (In Progress)"
     assert html =~ "MT-UPDATE waiting for an app update: MT-FIX merged in `9f54098`, running `d3d301b`"
+  end
+
+  test "dashboard liveview lists forced tickets above the running sessions and marks forced rows" do
+    orchestrator_name = Module.concat(__MODULE__, :ForcedDashboardOrchestrator)
+    mark_forced = fn rows -> Enum.map(rows, &Map.put(&1, :forced, true)) end
+
+    snapshot =
+      static_snapshot()
+      |> Map.update!(:running, mark_forced)
+      |> Map.update!(:retrying, mark_forced)
+      |> Map.update!(:slot_waiting, mark_forced)
+
+    {:ok, _orchestrator_pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: snapshot)
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    {:ok, _view, html} = live(build_conn(), "/")
+
+    assert [_before, after_forced] = String.split(html, ~r/<h2 class="section-title">\s*Forced\s*<\/h2>/, parts: 2)
+    assert [forced_section, _rest] = String.split(after_forced, "Running sessions", parts: 2)
+    assert forced_section =~ "MT-FORCED"
+    assert forced_section =~ "waiting for a human"
+    assert forced_section =~ "1h 0m"
+    assert forced_section =~ "now MT-PART (Todo)"
+    assert forced_section =~ "blocker MT-GAP"
+    assert forced_section =~ "3d 11h"
+    assert forced_section =~ "Stale"
+    assert html =~ ~r/<p class="metric-label">\s*Forced\s*<\/p>\s*<p class="metric-value numeric">\s*2\/1\s*<\/p>/
+    # The forced section's two rows, and the forced running, retry and waiting-to-start rows.
+    assert length(String.split(html, ~s(class="forced-marker"))) - 1 == 5
+  end
+
+  test "dashboard liveview leaves the forced section out with no forced tickets" do
+    orchestrator_name = Module.concat(__MODULE__, :UnforcedDashboardOrchestrator)
+    snapshot = Map.drop(static_snapshot(), [:forced, :concurrency])
+    {:ok, _orchestrator_pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: snapshot)
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    {:ok, _view, html} = live(build_conn(), "/")
+
+    refute html =~ ~r/<h2 class="section-title">\s*Forced\s*<\/h2>/
+    refute html =~ "forced-marker"
+    assert html =~ ~r/<p class="metric-label">\s*Forced\s*<\/p>\s*<p class="metric-value numeric">\s*0\/1\s*<\/p>/
   end
 
   test "dashboard liveview shows every slot as shared with no active epics" do
@@ -3268,7 +3324,7 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     response = Req.get!("http://127.0.0.1:#{port}/api/v1/state")
     assert response.status == 200
-    assert response.body["counts"] == %{"running" => 1, "watching" => 1, "conflicts" => 0, "retrying" => 1, "claimed" => 2}
+    assert response.body["counts"] == %{"running" => 1, "watching" => 1, "conflicts" => 0, "retrying" => 1, "claimed" => 2, "forced" => 2}
 
     dashboard_css = Req.get!("http://127.0.0.1:#{port}/dashboard.css")
     assert dashboard_css.status == 200
@@ -3549,9 +3605,15 @@ defmodule SymphonyElixir.ExtensionsTest do
           title: "Fix the release",
           state: "In Review",
           forced_since: ~U[2026-10-03 05:00:00.123456Z],
+          forced_for_seconds: 3_600,
+          stale: false,
           position: 1,
           waiting_on_human: true,
-          sub_issue: nil
+          sub_issue: nil,
+          phase: :waiting_for_human,
+          running: false,
+          waiting_on: :human,
+          blockers: []
         },
         %{
           issue_id: "forced-parent-http",
@@ -3559,9 +3621,15 @@ defmodule SymphonyElixir.ExtensionsTest do
           title: "Export",
           state: "Waiting on sub-tickets",
           forced_since: ~U[2026-10-03 06:00:00Z],
+          forced_for_seconds: 300_000,
+          stale: true,
           position: 2,
           waiting_on_human: false,
-          sub_issue: %{issue_id: "part-http", identifier: "MT-PART", state: "Todo"}
+          sub_issue: %{issue_id: "part-http", identifier: "MT-PART", state: "Todo"},
+          phase: :implementation,
+          running: false,
+          waiting_on: :blocker,
+          blockers: ["MT-GAP"]
         }
       ],
       concurrency: %{max_total: 10, finishing_max: 2, forced_max: 1},
