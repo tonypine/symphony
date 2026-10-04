@@ -896,6 +896,100 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     refute Map.has_key?(record, :pending_last_addressed_comment_id)
   end
 
+  test "a PR whose only comment is the Linear linkback stays in review" do
+    now = ~U[2026-05-01 09:00:00Z]
+    latest_comment_at = DateTime.add(now, -31, :minute)
+    linkback = "<!-- linear-linkback -->\n<details><summary>TP-5 The search is spread out</summary></details>"
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      pr_review_mode: "polling",
+      pr_review_cooldown_minutes: 30,
+      pr_review_stale_days: 7,
+      pr_review_ignored_users: ["github-actions[bot]"]
+    )
+
+    Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now)])
+    :ok = put_review(now)
+
+    for comments <- [
+          [%{id: "linear-linkback", kind: "comment", author: "linear-code", body: linkback, created_at: latest_comment_at}],
+          [%{id: "linear-rest", kind: "comment", author: "linear[bot]", body: "Linked to TP-5.", created_at: latest_comment_at}],
+          # The marker is enough, whoever posted it: here the PR author's account.
+          [%{id: "linkback-as-author", kind: "comment", author: "pr-author", body: "  " <> linkback, created_at: latest_comment_at}]
+        ] do
+      Application.put_env(
+        :symphony_elixir,
+        :pr_review_test_activity,
+        open_activity(latest_comment_at, pr_author: "pr-author", comments: comments)
+      )
+
+      assert {:ok, %{actions: [{:watching, "issue-1780"}]}} =
+               PrReviewPoller.poll_once(
+                 tracker: FakeTracker,
+                 github: FakeGitHub,
+                 current_gh_user: nil,
+                 now: now
+               )
+
+      refute_receive {:issue_state_update, _, _}
+      assert [%{status: "watching"} = record] = RunStore.list_pr_reviews()
+      refute Map.has_key?(record, :pending_last_addressed_comment_id)
+      assert PrReviewPoller.pending_reviewer_comments("issue-1780") == []
+    end
+  end
+
+  test "a human review comment next to the Linear linkback still triggers comment rework" do
+    now = ~U[2026-05-01 09:00:00Z]
+    latest_comment_at = DateTime.add(now, -31, :minute)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      pr_review_mode: "polling",
+      pr_review_cooldown_minutes: 30,
+      pr_review_stale_days: 7
+    )
+
+    Application.put_env(:symphony_elixir, :pr_review_test_issues, [in_review_issue(updated_at: now)])
+    :ok = put_review(now)
+
+    Application.put_env(
+      :symphony_elixir,
+      :pr_review_test_activity,
+      open_activity(latest_comment_at,
+        comments: [
+          %{
+            id: "linear-linkback",
+            kind: "comment",
+            author: "linear-code",
+            body: "<!-- linear-linkback -->\n<details><summary>TP-5</summary></details>",
+            created_at: DateTime.add(latest_comment_at, -5, :minute)
+          },
+          %{id: "human-comment", kind: "inline_comment", author: "reviewer", body: "Rename this helper.", created_at: latest_comment_at}
+        ]
+      )
+    )
+
+    assert {:ok, %{actions: [{:state_transitioned, "issue-1780", :rework, "In Progress"}]}} =
+             PrReviewPoller.poll_once(
+               tracker: FakeTracker,
+               github: FakeGitHub,
+               current_gh_user: nil,
+               now: now
+             )
+
+    assert_receive {:issue_state_update, "issue-1780", "In Progress"}
+    assert [%{id: "human-comment", author: "reviewer"}] = pending = PrReviewPoller.pending_reviewer_comments("issue-1780")
+    assert SymphonyElixir.RunKind.classify(%Issue{id: "issue-1780", state: "In Progress"}, reviewer_comments: pending) == :review_feedback
+
+    assert PrReviewPoller.trigger_comment_log_fields("issue-1780") ==
+             ~s(trigger_comment_id=human-comment trigger_comment_author=reviewer trigger_comment="Rename this helper." pending_comments=1)
+  end
+
+  test "the trigger comment log fields fall back when nothing is pending" do
+    assert PrReviewPoller.trigger_comment_log_fields("issue-without-review") == "trigger_comment=none"
+  end
+
   test "PR author comments posted by Symphony or without text do not trigger comment rework" do
     now = ~U[2026-05-01 09:00:00Z]
     latest_comment_at = DateTime.add(now, -31, :minute)

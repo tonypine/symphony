@@ -61,12 +61,30 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
       end
     end)
 
-    # Let the boot tick finish so later state changes are not raced by it.
-    :sys.get_state(pid)
+    await_boot_poll(pid)
     pid
   end
 
+  # The boot tick starts an async poll whose running-state refresh stops any run the memory
+  # tracker does not list. Wait for it to finish so it cannot end the runs `start_run!` fakes.
+  defp await_boot_poll(pid) do
+    wait_until(fn ->
+      state = :sys.get_state(pid)
+      poll_idle? = not state.poll_check_in_progress and is_nil(state.repo_poll_task_ref)
+      poll_idle? and is_nil(state.startup_workspace_lifecycle_task_ref)
+    end)
+  end
+
   defp set_clock(ctx, %DateTime{} = now), do: Agent.update(ctx.clock, fn _ -> now end)
+
+  # Handles `message` inside the orchestrator and returns its state right after, before a poll
+  # the message schedules can run against the memory tracker and change it.
+  defp deliver(pid, message) do
+    :sys.replace_state(pid, fn state ->
+      {:noreply, state} = Orchestrator.handle_info(message, state)
+      state
+    end)
+  end
 
   defp issue(id, identifier, attrs \\ %{}) do
     struct!(
@@ -461,10 +479,7 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
     set_clock(ctx, resume_at)
 
     # Starting the canary is not a resume: the hold stays, shown in the canary phase.
-    capture_log(fn ->
-      send(pid, {:usage_limit_resume, @anthropic})
-      :sys.get_state(pid)
-    end)
+    capture_log(fn -> deliver(pid, {:usage_limit_resume, @anthropic}) end)
 
     assert %{usage_limits: [%{phase: :canary}], dispatch_state: %{blockers: [%{phase: :canary}]}} = GenServer.call(pid, :snapshot)
     refute_receive {:notification_event, %Notifications.Event{event: "usage_limit_resumed"}}, 100
@@ -472,6 +487,8 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
 
   # The ticket walkthrough end to end: a fake `claude` rejects the five-hour window once.
   test "a rejected five_hour window pauses, shows in the state API and banner, then resumes", ctx do
+    # The limit resets an hour from the injected clock; the test moves the clock there.
+    resume_at = DateTime.add(ctx.now, 3600)
     rejected_once = Path.join(ctx.test_root, "rejected-once")
     fake_claude = Path.join(ctx.test_root, "fake-claude-limited")
 
@@ -480,9 +497,8 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
     cat > /dev/null
     if [ ! -f #{rejected_once} ]; then
       touch #{rejected_once}
-      resets_at=$(( $(date +%s) + 2 ))
       printf '%s\\n' '{"type":"system","subtype":"init","session_id":"sess-limit","cwd":"/tmp","tools":[],"mcp_servers":[{"name":"symphony","status":"connected"}],"model":"claude-opus-5-5","permissionMode":"default","apiKeySource":"env"}'
-      printf '{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":%s,"rateLimitType":"five_hour","utilization":1.0},"session_id":"sess-limit"}\\n' "$resets_at"
+      printf '{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":%s,"rateLimitType":"five_hour","utilization":1.0},"session_id":"sess-limit"}\\n' #{DateTime.to_unix(resume_at)}
       exit 1
     fi
     exec #{ctx.fake_claude}
@@ -502,21 +518,28 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
     name = Module.concat(__MODULE__, :WalkthroughOrchestrator)
 
     capture_log(fn ->
-      {:ok, pid} = Orchestrator.start_link(name: name)
-      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+      pid = start_orchestrator(ctx, :WalkthroughOrchestrator)
 
       # 1. The run ends usage_limited.
       wait_until(fn -> Enum.find(RunStore.list_runs(:all), &(&1.issue_id == issue.id and &1.status == "usage_limited")) end)
 
-      # 2. and 3. The state API lists the hold and its blocker; the banner reads from it.
-      payload = SymphonyElixirWeb.Presenter.state_payload(name, 1_000)
-      assert [%{provider: "anthropic", window: "five_hour", resume_at: resume_at} = hold] = payload.usage_limits
-      assert is_binary(resume_at)
+      # 2. and 3. The state API lists the hold and its blocker; the banner reads from it. The API
+      # reads the last published snapshot, so wait for one taken after the pause.
+      payload =
+        wait_until(fn ->
+          payload = SymphonyElixirWeb.Presenter.state_payload(name, 1_000)
+          payload.usage_limits != [] and payload
+        end)
+
+      expected_resume_at = DateTime.to_iso8601(resume_at)
+      assert [%{provider: "anthropic", window: "five_hour", resume_at: ^expected_resume_at} = hold] = payload.usage_limits
       assert [%{kind: :usage_limit, provider: "anthropic", window: "five_hour"}] = payload.dispatch_state.blockers
       assert payload.dispatch_state.active? == false
       assert UsageLimit.banner(hold, DateTime.utc_now()) =~ ~r/^Paused: Claude 5-hour limit, resumes ~\d{2}:\d{2}$/
 
       # 4. Past resume_at the hold clears and the issue runs again.
+      set_clock(ctx, resume_at)
+      send(pid, {:usage_limit_resume, @anthropic})
       wait_until(fn -> SymphonyElixirWeb.Presenter.state_payload(name, 1_000).usage_limits == [] end)
       assert SymphonyElixirWeb.Presenter.state_payload(name, 1_000).dispatch_state.blockers == []
       wait_until(fn -> Enum.find(RunStore.list_runs(:all), &(&1.issue_id == issue.id and &1.status != "usage_limited")) end)
@@ -546,8 +569,7 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
 
     assert {:ok, %{paused: true}} = Orchestrator.pause_dispatch(pid, "maintenance")
     set_clock(ctx, DateTime.add(ctx.now, 3720))
-    send(pid, {:usage_limit_resume, @anthropic})
-    state = :sys.get_state(pid)
+    state = deliver(pid, {:usage_limit_resume, @anthropic})
 
     assert %{phase: :canary, canary_issue_id: "issue-usage-operator"} = state.usage_limits[@anthropic]
     assert %{paused: true, reason: "maintenance"} = state.pause
@@ -576,8 +598,7 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
     assert %{attempt: 3, usage_limit_key: @anthropic, delay_type: :usage_limit} = state.retry_attempts[issue.id]
 
     set_clock(ctx, DateTime.add(ctx.now, 3720))
-    send(restarted, {:usage_limit_resume, @anthropic})
-    assert %{attempt: 3} = :sys.get_state(restarted).slot_waiting[issue.id]
+    assert %{attempt: 3} = deliver(restarted, {:usage_limit_resume, @anthropic}).slot_waiting[issue.id]
   end
 
   test "an unknown reset uses the remembered window reset time from worker updates", ctx do
@@ -664,10 +685,7 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
     set_clock(ctx, DateTime.add(ctx.now, 3720))
 
     log =
-      capture_log(fn ->
-        send(pid, {:usage_limit_resume, @anthropic})
-        send(self(), {:state, :sys.get_state(pid)})
-      end)
+      capture_log(fn -> send(self(), {:state, deliver(pid, {:usage_limit_resume, @anthropic})}) end)
 
     assert_received {:state, state}
     assert log =~ "Usage limit canary provider=anthropic scope=all issue_identifier=MT-LANDING"
@@ -684,8 +702,8 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
 
     # A late resume timer leaves the canary alone, and a held retry that comes due waits the
     # unknown-reset interval rather than spinning.
-    send(pid, {:usage_limit_resume, @anthropic})
-    assert %{phase: :canary, canary_issue_id: "issue-canary-landing"} = :sys.get_state(pid).usage_limits[@anthropic]
+    assert {:noreply, late} = Orchestrator.handle_info({:usage_limit_resume, @anthropic}, state)
+    assert %{phase: :canary, canary_issue_id: "issue-canary-landing"} = late.usage_limits[@anthropic]
 
     assert {:noreply, retried} =
              Orchestrator.handle_retry_issue_for_test(state, working.id, 3, %{identifier: working.identifier}, fn _ids -> {:ok, [working]} end)
@@ -807,8 +825,7 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
     held = issue("issue-canary-next", "MT-NEXT")
     {canary_pid, canary_ref} = start_canary!(ctx, pid, canary, [held])
 
-    send(pid, {:DOWN, canary_ref, :process, canary_pid, :boom})
-    state = :sys.get_state(pid)
+    state = deliver(pid, {:DOWN, canary_ref, :process, canary_pid, :boom})
 
     assert state.usage_limits == %{}
     assert %{attempt: 4, delay_type: nil} = state.retry_attempts[canary.id]

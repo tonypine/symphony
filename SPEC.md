@@ -694,6 +694,9 @@ Fields:
     automated, non-actionable status (e.g. `github-actions[bot]`, `jp-launch-control[bot]`).
     Do not list review bots such as `copilot-pull-request-reviewer[bot]`, whose comments
     are actionable reviews.
+  - Comments from the Linear GitHub integration (`linear-code`, `linear-code[bot]`,
+    `linear[bot]`) and any comment whose body starts with `<!-- linear-linkback -->` are always
+    skipped, on top of this list.
   - The PR author returned by `gh pr view` and the auto-detected current `gh` user (when
     `gh api user` succeeds) are Symphony's own account, which on a solo setup is also the
     human reviewer. Their comments count as reviewer feedback unless they are blank or
@@ -1550,8 +1553,9 @@ not require recognizing or validating extension fields unless that extension is 
 - `pull_requests.poll_interval_ms`: positive integer or null; falls back to `issues.poll_interval_ms`
 - `pull_requests.review_comments.rework_delay_minutes`: polling-mode integer, default `10`
 - `pull_requests.review_comments.stale_after_days`: polling-mode integer, default `7`
-- `pull_requests.review_comments.ignored_reviewers`: polling-mode list of strings, default `[]`; comments from
-  the auto-detected current `gh` user and PR author are skipped only when Symphony posted them
+- `pull_requests.review_comments.ignored_reviewers`: polling-mode list of strings, default `[]`, on top of
+  the always-skipped Linear integration linkback; comments from the auto-detected current `gh` user
+  and PR author are skipped only when Symphony posted them
 - `pull_requests.review_comments.reply_after_addressing`: polling-mode boolean, default `false`
 - `pull_requests.review_comments.request_review_after_push`: polling-mode boolean, default `false`
 - `pull_requests.checks.enabled`: boolean, default `false`
@@ -1769,8 +1773,11 @@ Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `
 - On each poll of an open `Merging` PR, the poller MUST turn on auto-merge (GraphQL
   `enablePullRequestAutoMerge`, `SQUASH`, the PR title as `<title> (#<number>)` and its body,
   `expectedHeadOid` = the observed head) at most once per head, and not at all when GitHub already
-  shows auto-merge on. When GitHub refuses because the PR can already merge (`clean status`), the
-  poller squash-merges that head directly.
+  shows auto-merge on. When GitHub refuses (the PR can already merge, the branch has no protection,
+  the repository doesn't allow auto-merge), the poller MUST read the PR again: one already `MERGED`
+  takes the merged path below, and an open one at the same head with `mergeStateStatus == "CLEAN"`
+  and every check `SUCCESS`, `NEUTRAL` or `SKIPPED` (or no checks at all) is squash-merged directly
+  with the same `mergePullRequest` fields. The poller logs which path it took.
 - When `mergeStateStatus` is `BEHIND`, the poller MUST call
   `PUT /repos/{owner}/{repo}/pulls/{number}/update-branch` with `expected_head_sha` at most once per
   head. A failed call other than a conflict is retried on the next poll.
@@ -1782,8 +1789,8 @@ Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `
 - When GitHub reports the PR `MERGED` and Symphony turned on auto-merge for it (or the issue is in
   `Merging`), the poller MUST move the issue to `Done` (already `Done` is fine) and then clean up as
   for any merged PR. A failed transition is retried on the next poll.
-- When auto-merge can't be turned on (the repository doesn't allow it, the PR has no required
-  checks so GitHub reports it `UNSTABLE`, a permission error) or a squash merge fails, or the PR stays `BLOCKED` with
+- When auto-merge can't be turned on and the PR isn't merged or clean and green (a red or pending
+  check, `UNSTABLE`, `BEHIND`, a permission error, the PR can't be read), or a squash merge fails, or the PR stays `BLOCKED` with
   auto-merge on and a green head past `checks.landing_wait_timeout_ms`, the poller MUST log an
   error, comment the reason on the issue, and fall back: the orchestrator then dispatches the
   landing agent. The fallback lasts until the issue leaves `Merging`.
