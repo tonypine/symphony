@@ -1665,7 +1665,24 @@ lists:
 - an issue with the label and no such comment, as a task in itself (its description's list items
   become the steps);
 - a `breakdown` parent in `In Review`, waiting for its plan to be approved;
-- an issue in `In Review` whose `## Symphony QA Report` has the verdict `blocked`.
+- an issue in `In Review` whose `## Symphony QA Report` has the verdict `blocked`;
+- with `pull_requests.checks.enabled`, a GitHub Actions workflow on the repository's base branch
+  (`repositories[].base_branch`, default `main`) that keeps failing on a missing secret: its two
+  latest finished runs failed (cancelled and skipped runs aside), and the failed-step log of the
+  latest names a secret as missing, as an empty `${{ secrets.X }}` or a message such as
+  `secret X is not set`, `Missing secret: X` or `the X secret is empty`. Each secret named becomes
+  one action, "Add the `X` secret", with the steps to add it in the repository's Settings → Secrets
+  and variables → Actions, the failed run to re-run, and the workflow it unblocks. It belongs to no
+  issue, so it is listed in the update of every project the repository routes (its `projects`, else
+  `issues.linear.scope.project_slug`); a repository routed by team or label alone has no project to
+  post to, and its workflow runs are not read. Only the secret's name is taken from the log, never a
+  value.
+
+  Each read costs one `gh run list` per repository, plus one `gh run view --log-failed` per
+  workflow whose latest run is newly red twice in a row: a run's log is read once, as the CI poller
+  reads a PR's. Finding the repository's projects costs one Linear request per repository, the
+  first time one of its workflows fails this way. When GitHub or Linear cannot be read, the
+  repository's last actions stay listed.
 
 A supervisor or a person adds an action by hand the same way: put the label on the issue, and
 optionally a comment in the request format:
@@ -1688,7 +1705,8 @@ leaves a state a person moves it out of (anything but `issues.states.active`, th
 the Auto Review state), such as `Backlog` back to `Todo`. The agent's own move to `Backlog` keeps it
 open. Removing the label closes every action on the issue, and so does a terminal state. A plan
 review closes when the parent leaves `In Review`, and a blocked QA pass when the issue leaves
-`In Review` or its next QA report is not `blocked`. Closed actions drop out of the next update.
+`In Review` or its next QA report is not `blocked`. A missing secret closes when the next run of
+its workflow on the base branch is green. Closed actions drop out of the next update.
 
 **When Symphony posts.** A project gets an update only when its set of open actions differs from
 the set in the last update Symphony posted there, never just because a poll ran. When the last

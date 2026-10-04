@@ -251,6 +251,49 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
 
     assert {:ok, "failed log"} = PullRequest.fetch_failed_log("987", gh_runner: runner)
     assert :ok = PullRequest.rerun_failed("987", gh_runner: runner)
+
+    other_repo = fn ["run", "view", "987", "--log-failed", "-R", "acme/cycle"], _opts -> {"other log", 0} end
+    assert {:ok, "other log"} = PullRequest.fetch_failed_log("987", gh_runner: other_repo, repo: "acme/cycle")
+  end
+
+  test "list_branch_runs reads the latest workflow runs on a branch in one request" do
+    runner = fn
+      ["run", "list", "-R", "acme/cycle", "--branch", "main", "--limit", "50", "--json", "databaseId,workflowName,status,conclusion,url,createdAt"], opts ->
+        assert opts[:stderr_to_stdout]
+
+        {Jason.encode!([
+           %{
+             "databaseId" => 12,
+             "workflowName" => "Release",
+             "status" => "completed",
+             "conclusion" => "failure",
+             "url" => "https://github.com/acme/cycle/actions/runs/12",
+             "createdAt" => "2026-10-04T10:00:00Z"
+           },
+           %{"databaseId" => 11, "workflowName" => "CI", "status" => "in_progress", "conclusion" => ""},
+           "not a run"
+         ]), 0}
+
+      ["run", "list", "-R", "acme/web", "--branch", "trunk", "--limit", "5" | _rest], _opts ->
+        {"not json", 0}
+    end
+
+    assert {:ok, [release, ci]} = PullRequest.list_branch_runs("acme/cycle", "main", gh_runner: runner)
+
+    assert release == %{
+             id: "12",
+             workflow_name: "Release",
+             status: "COMPLETED",
+             conclusion: "FAILURE",
+             url: "https://github.com/acme/cycle/actions/runs/12",
+             created_at: ~U[2026-10-04 10:00:00Z]
+           }
+
+    assert %{id: "11", status: "IN_PROGRESS", conclusion: "", created_at: nil} = ci
+    assert {:error, :invalid_workflow_runs_payload} = PullRequest.list_branch_runs("acme/web", "trunk", gh_runner: runner, limit: 5)
+
+    failing = fn _args, _opts -> {"HTTP 404", 1} end
+    assert {:error, {:gh_failed, _args, 1, "HTTP 404"}} = PullRequest.list_branch_runs("acme/cycle", "main", gh_runner: failing)
   end
 
   test "fetch_pr_comments reads paginated top-level PR comments" do
