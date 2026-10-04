@@ -69,15 +69,33 @@ defmodule SymphonyElixir.AgentEnv do
   (see `SymphonyElixir.LeftoverProcesses`).
 
   Creates the folder with a `.gitignore` of `*`, so git never lists it.
+
+  Symphony runs outside the sandbox, so it never writes through a link the
+  workspace holds: the `.gitignore` is only created, never overwritten, and when
+  `.gradle-daemons` is a symlink or a file the env is empty, so neither a write
+  nor the registry leaves the workspace.
   """
   @spec gradle_env(Path.t()) :: %{String.t() => String.t()}
   def gradle_env(workspace) when is_binary(workspace) do
     registry = Path.join(workspace, @gradle_daemon_dir)
-    _ = File.mkdir_p(registry)
-    _ = File.write(Path.join(registry, ".gitignore"), "*\n")
 
-    # Quoted, so `gradlew` keeps a path with spaces as one argument.
-    %{"GRADLE_OPTS" => ~s("-Dorg.gradle.daemon.registry.base=#{registry}")}
+    if plain_directory?(registry) do
+      # `:exclusive` fails on any existing path, a symlink included.
+      _ = File.write(Path.join(registry, ".gitignore"), "*\n", [:exclusive])
+
+      # Quoted, so `gradlew` keeps a path with spaces as one argument.
+      %{"GRADLE_OPTS" => ~s("-Dorg.gradle.daemon.registry.base=#{registry}")}
+    else
+      %{}
+    end
+  end
+
+  defp plain_directory?(path) do
+    case File.lstat(path) do
+      {:ok, %File.Stat{type: :directory}} -> true
+      {:error, :enoent} -> File.mkdir(path) == :ok
+      _other -> false
+    end
   end
 
   @doc """

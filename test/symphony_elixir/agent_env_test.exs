@@ -17,6 +17,47 @@ defmodule SymphonyElixir.AgentEnvTest do
       assert {_output, 0} = System.cmd("git", ["init", "-q", workspace])
       assert {"", 0} = System.cmd("git", ["-C", workspace, "status", "--porcelain", "--untracked-files=all"])
     end
+
+    test "never writes through symlinks the workspace holds" do
+      test_root = Path.join(System.tmp_dir!(), "symphony-agent-env-gradle-#{System.unique_integer([:positive])}")
+      on_exit(fn -> File.rm_rf(test_root) end)
+      outside_dir = Path.join(test_root, "outside")
+      outside_file = Path.join(test_root, "outside.txt")
+      File.mkdir_p!(outside_dir)
+      File.write!(outside_file, "keep\n")
+
+      linked_dir = Path.join(test_root, "linked-dir")
+      File.mkdir_p!(linked_dir)
+      File.ln_s!(outside_dir, Path.join(linked_dir, ".gradle-daemons"))
+
+      assert AgentEnv.gradle_env(linked_dir) == %{}
+      assert File.ls!(outside_dir) == []
+
+      linked_file = Path.join(test_root, "linked-file")
+      registry = Path.join(linked_file, ".gradle-daemons")
+      File.mkdir_p!(registry)
+      File.ln_s!(outside_file, Path.join(registry, ".gitignore"))
+
+      assert AgentEnv.gradle_env(linked_file) == %{"GRADLE_OPTS" => ~s("-Dorg.gradle.daemon.registry.base=#{registry}")}
+      assert File.read!(outside_file) == "keep\n"
+
+      dangling = Path.join(test_root, "dangling")
+      dangling_target = Path.join(test_root, "missing.txt")
+      File.mkdir_p!(Path.join(dangling, ".gradle-daemons"))
+      File.ln_s!(dangling_target, Path.join([dangling, ".gradle-daemons", ".gitignore"]))
+
+      assert %{"GRADLE_OPTS" => _opts} = AgentEnv.gradle_env(dangling)
+      refute File.exists?(dangling_target)
+    end
+
+    test "leaves the env empty when the registry is a file" do
+      workspace = Path.join(System.tmp_dir!(), "symphony-agent-env-gradle-#{System.unique_integer([:positive])}")
+      on_exit(fn -> File.rm_rf(workspace) end)
+      File.mkdir_p!(workspace)
+      File.write!(Path.join(workspace, ".gradle-daemons"), "")
+
+      assert AgentEnv.gradle_env(workspace) == %{}
+    end
   end
 
   describe "build/1" do

@@ -321,7 +321,9 @@ agent:
   daemons register in its own workspace (git ignores the folder) rather than in
   `~/.gradle/daemon`, where a daemon started in one agent's sandbox would serve, and fail, builds
   in another workspace. A daemon's working folder is in that registry, so the run's end stops it
-  (see `workspaces` above). Local hooks run outside the sandbox and build without a daemon:
+  (see `workspaces` above). If `.gradle-daemons` is a symlink or a file, the run gets no
+  `GRADLE_OPTS`, and Symphony only ever creates the folder's `.gitignore`, never overwrites it, so
+  it never writes outside the workspace. Local hooks run outside the sandbox and build without a daemon:
   Symphony appends `-Dorg.gradle.daemon=false` to the host's `GRADLE_OPTS`. Neither applies on SSH
   workers.
 - `permissions.outer_sandbox`: optional outer sandbox wrapper, currently used for Codex SRT.
