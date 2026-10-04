@@ -11,7 +11,10 @@ for you on the host. They only act on this worktree's configured app and on apps
 - `qa_ax_tree`: the app's accessibility tree with each element's role, title, value and
   `frame` (`x`, `y`, `w`, `h` in points). Pass `role` or `text` to list only matching elements.
 - `qa_ax_press` (`action` defaults to `AXPress`; `AXRaise` focuses a window) and
-  `qa_ax_set_value`: act on an element by the `path` `qa_ax_tree` gave it.
+  `qa_ax_set_value`: act on an element by the `path` `qa_ax_tree` gave it. `qa_ax_set_value`
+  types into a text field the way a person does and presses Tab to commit it, so the app
+  saves what it shows; it fails with `text_not_entered` or `not_focused` when the text did not
+  land.
 - `qa_screenshot`: saves the app's windows to `qa-evidence/<name>.png`. Each name can be used
   once; it never replaces an existing file.
 - `qa_quit_app`: quits the app and returns its recent output.
@@ -42,7 +45,8 @@ Do not edit files in the worktree, gitignored ones included (such as build cache
    `settings-open`), and after every action that changes the UI.
 7. Exercise the change: fill fields with `qa_ax_set_value`, press the buttons the
    walkthrough names, and read the tree again to check the result. Use made-up values, never
-   real credentials.
+   real credentials, and never write what you typed into a secure field (an API key) in the
+   report, a comment or a file name.
    For every file the app must open (a config path in Settings, a `WORKFLOW.md`), write the fixture under `qa-evidence/` or `$TMPDIR`, call `qa_put_file`,
    and give the app the `path` it returns, never your own path: the app may run on a
    separate QA machine that cannot see your files. Type that path into the field rather
