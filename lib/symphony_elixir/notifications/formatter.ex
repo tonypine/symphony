@@ -193,6 +193,7 @@ defmodule SymphonyElixir.Notifications.Formatter do
   defp event_title("forced_waiting"), do: "Forced ticket waiting"
   defp event_title("forced_human_gate"), do: "Forced ticket waiting for your review"
   defp event_title("forced_stale"), do: "Forced ticket stale"
+  defp event_title("human_action_needed"), do: "Action needed from you"
   defp event_title(event), do: event
 
   defp event_color("run_failed"), do: "danger"

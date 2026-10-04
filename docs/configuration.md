@@ -27,6 +27,7 @@ Common optional sections:
 - `watchdog`
 - `dependency_audit`
 - `notifications`
+- `human_actions`
 - `verification`
 - `workers`
 - `github`
@@ -56,7 +57,8 @@ pollers, gates, dashboard, notifications, and worker hosts.
 
 Each repository listed in `repositories` has a `WORKFLOW.md`. That file owns repo-local prompt text
 and optional front-matter keys for `hooks`, `prompts`, `verification`, `validation`, and
-`auto_review.playbooks` overrides.
+`auto_review.playbooks` overrides, and `human_actions.enabled` to turn human-action updates off for
+that repository.
 
 Relative repository workflow paths resolve from the directory containing `symphony.yml`.
 
@@ -1105,7 +1107,28 @@ auto_review:
 | `idle_timeout_ms` | `600000` (10 minutes) | How long an idle emulator stays up. |
 
 A non-string `avd` or `sdk_root`, or a timeout that is not a positive integer, fails `symphony
-check`. Nothing uses these settings yet; the Android QA tools come in a later release.
+check`.
+
+Symphony runs the emulator on the host, because the QA agent's sandbox cannot (it needs the
+hypervisor, Mach ports, adb sockets and a lot of memory). The agent sandbox does not change.
+
+- At most one emulator runs. A QA pass that needs it while another holds it waits its turn, and
+  gives up with a clear error after 30 minutes.
+- It boots `avd` with `-no-window -no-audio -no-boot-anim -read-only -no-snapshot-save`, so QA
+  never changes the AVD, and waits up to `boot_timeout_ms` for it to finish booting. An unset
+  `avd`, a missing `emulator/emulator` or `platform-tools/adb` under `sdk_root`, an AVD the
+  emulator does not list and a boot timeout each fail with their own message.
+- Symphony starts its own adb server on port `15037` and the emulator on console port `5600`
+  (serial `emulator-5600`), and sends every adb call there. Your own adb server (port `5037`),
+  emulators and phones are left alone, and your adb server does not see Symphony's emulator: it
+  only scans console ports 5554 to 5584.
+- It stops `idle_timeout_ms` after the last QA pass gives it back (or exits), and when Symphony
+  stops. An emulator that crashes is booted again by the next QA pass.
+- The emulator's and adb server's process ids are recorded in
+  `<state root>/qa-android/emulator-processes.json`. If Symphony crashes, its next start stops
+  those processes, only when they still run with the same start time.
+
+The Android QA tools that use the emulator come in a later release.
 
 #### Web app QA
 
@@ -1546,6 +1569,155 @@ notifications:
     - kind: slack
       webhook_url: $SLACK_WEBHOOK_URL
       events: [pr_opened, awaiting_review, run_failed]
+```
+
+### `human_actions`
+
+Posts a Linear project update listing everything only a person can do in a project, with the steps
+to do it, so the person finds out from Linear (on a phone too) rather than from scattered comments.
+On by default with a Linear tracker.
+
+```yaml
+human_actions:
+  enabled: true
+  label: human-action
+  interval_ms: 300000
+  min_update_interval_ms: 900000
+```
+
+- `enabled` (default `true`): `false` turns it off for every repository. A repository can turn it
+  off for its own issues in its `WORKFLOW.md` front matter:
+
+  ```md
+  ---
+  human_actions:
+    enabled: false
+  ---
+  ```
+
+  With it off, Symphony reads none of that repository's issues for human actions, and
+  `linear_request_human_action` refuses with `human_actions_disabled` so the agent writes a plain
+  blocker comment instead.
+- `label` (default `human-action`): the label that marks an issue as needing a person. The agent
+  tool adds it, creating it in the issue's team the first time when the workspace has none.
+- `interval_ms` (default `300000`): how often Symphony reads the open actions. A read is one Linear
+  request per repository route, plus one per project the first time Symphony sees it, plus one per
+  update posted. They show as `human_actions` in the dashboard's Linear usage table.
+- `min_update_interval_ms` (default `900000`): the least time between two updates to one project. A
+  change inside that window is posted once the window has passed, with whatever is open by then.
+
+**Where actions come from.** On each read, in the scope each repository route polls, Symphony
+lists:
+
+- each open `## Action needed:` comment on an issue with the label. Agents post one with
+  `linear_request_human_action` (`title`, `why`, `steps`, optional `unblocks` and `est_minutes`)
+  when they hit something only a person can do: a missing secret or permission, an account to set
+  up, a product decision, a check on a device. Then they follow the blocked-access escape hatch as
+  usual. A request whose title matches one still open on the issue is not posted again;
+- an issue with the label and no such comment, as a task in itself (its description's list items
+  become the steps);
+- a `breakdown` parent in `In Review`, waiting for its plan to be approved;
+- an issue in `In Review` whose `## Symphony QA Report` has the verdict `blocked`.
+
+A supervisor or a person adds an action by hand the same way: put the label on the issue, and
+optionally a comment in the request format:
+
+```md
+## Action needed: Turn on the pre-push hook
+
+**Why:** Pushes skip the format and credo checks without it.
+**Unblocks:** clean pushes from your laptop
+**Time:** about 2 min
+
+**Steps:**
+1. In your checkout, run `git config core.hooksPath .githooks`.
+```
+
+Only the heading is required.
+
+**When an action closes.** A request closes when its issue moves on: after the request, the issue
+leaves a state a person moves it out of (anything but `issues.states.active`, the waiting state and
+the Auto Review state), such as `Backlog` back to `Todo`. The agent's own move to `Backlog` keeps it
+open. Removing the label closes every action on the issue, and so does a terminal state. A plan
+review closes when the parent leaves `In Review`, and a blocked QA pass when the issue leaves
+`In Review` or its next QA report is not `blocked`. Closed actions drop out of the next update.
+
+**When Symphony posts.** A project gets an update only when its set of open actions differs from
+the set in the last update Symphony posted there, never just because a poll ran. When the last
+action closes, one short "Nothing needs you" update says so, and nothing more is posted until a new
+action opens. Each new action is also sent as a `human_action_needed` notification on the
+configured `notifications` channels. After a restart Symphony reads the list id back from the
+project's recent updates, so it does not post the same list again. A project whose every action
+closed while Symphony was stopped keeps its last update until a new action opens.
+
+**The update.** It is written to be read on a phone and acted on without opening anything else:
+
+- one numbered heading per action, so the list scans on a narrow screen;
+- under it, how long it takes and what it unblocks, so the reader can pick what to do first;
+- the why, then the steps as a numbered list, one instruction per line (no tables, which scroll
+  sideways on a phone);
+- a closing **Done when** line, saying how the action leaves the list;
+- quickest actions first, so a short session clears the small ones;
+- a footer with the list id, which is how Symphony recognises its own last update.
+
+The update sets the project health: `atRisk` while any action is open, `onTrack` when none is.
+Symphony cannot judge the schedule beyond that, so it never sets `offTrack`; this replaces the
+health set by the project's previous update. No secret value reaches an update:
+`linear_request_human_action` refuses any field that holds a secret pattern, and the whole update
+is redacted again before it is posted, which covers secrets pasted into an issue or comment by hand.
+
+A rendered example, for a mix of a missing secret, a breakdown plan, a hand-labelled task and a
+blocked QA pass:
+
+```md
+**4 actions need you.** Quickest first.
+
+### 1. Add the release signing secrets
+
+**~10 min** · Unblocks [MOT-24](https://linear.app/acme/issue/MOT-24): the Release workflow on `main`
+
+**Why:** Every Release run on `main` fails at the signing step without them.
+
+1. Open github.com/acme/cycle → Settings → Secrets and variables → Actions.
+2. Add `MACOS_CERTIFICATE` with the base64 of the Developer ID certificate (.p12).
+3. Add `MACOS_CERTIFICATE_PASSWORD` with its password.
+4. Move MOT-24 to Todo.
+
+**Done when:** you remove the `human-action` label from MOT-24, or move it on once it is unblocked.
+
+### 2. Approve the breakdown plan for MOT-40
+
+**~10 min** · Unblocks [MOT-40](https://linear.app/acme/issue/MOT-40): its sub-tickets, waiting in Backlog
+
+**Why:** MOT-40 is split into sub-tickets, and none of them starts before you approve the plan.
+
+1. Read the plan in the `## Symphony Workpad` comment on MOT-40.
+2. To approve, move MOT-40 to `Waiting on sub-tickets`; Symphony moves its sub-tickets to Todo.
+3. To reject it, comment what to change and move MOT-40 to `Rework`.
+
+**Done when:** MOT-40 leaves In Review.
+
+### 3. Turn on the pre-push hook on your laptop
+
+Tracked in [MOT-31](https://linear.app/acme/issue/MOT-31)
+
+1. Run `git config core.hooksPath .githooks` in your cycle checkout.
+
+**Done when:** you close MOT-31, or remove its `human-action` label.
+
+### 4. Unblock QA for MOT-52
+
+Unblocks [MOT-52](https://linear.app/acme/issue/MOT-52): the review of its PR
+
+**Why:** Auto Review could not test the PR: the QA host has no Screen Recording permission for the app.
+
+1. Fix the cause above, on the machine QA runs on.
+2. Then test the PR yourself and move MOT-52 to `Merging` to approve it, or to `Rework` to send it back.
+
+**Done when:** MOT-52 leaves In Review, or its next QA report is not blocked.
+
+---
+_Symphony posts a new update when this list changes · list `6b00e3cd`_
 ```
 
 ## `WORKFLOW.md`
