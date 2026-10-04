@@ -1372,6 +1372,11 @@ When enabled:
   `max_fix_attempts` failures were sent back. Results are stored per head SHA; a failed move is
   retried on the next poll, and an issue back in `state` on the same SHA after a `fail` counts as
   another failure.
+- Before applying a verdict, Symphony MUST read the issue's state again and the PR's last polled
+  state and head. When the issue left `state` (a human approved or merged it while QA ran), the PR
+  is merged or closed, or the head moved past the tested SHA, the report is still written but the
+  issue is not moved, no result is stored for the SHA, and `QA outcome not applied` is logged with
+  the reason. A state that cannot be read again applies the verdict.
 - Each pass rewrites one `## Symphony QA Report` issue comment (an exception to the
   single-workpad rule, written by Symphony only), records a run with `kind: "qa"`, tokens and
   runtime in the run store, and emits `qa_passed` or `qa_failed`.
