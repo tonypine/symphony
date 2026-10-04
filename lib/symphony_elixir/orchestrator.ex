@@ -3337,10 +3337,11 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # A forced `breakdown` parent waiting on its sub-tickets is one forced unit: its current part, the
-  # first ticket on its epic path that can run, counts as forced without the label being written on
-  # it. Parts are picked in EpicLanes order (stage, then nearest the epic, then dispatch order), so a
-  # blocked sub-ticket waits for its blocker. A part stays the parent's while it runs or waits on a
-  # retry, so no second one takes the forced allowance meanwhile. Rebuilt from every poll's candidates.
+  # first ticket on its epic path that can run or is in Auto Review, counts as forced without the
+  # label being written on it. Parts are picked in EpicLanes order (stage, then nearest the epic,
+  # then dispatch order), so a blocked sub-ticket waits for its blocker. A part stays the parent's
+  # while it runs, waits on a retry or is in Auto Review, so no second one takes the forced
+  # allowance meanwhile. Rebuilt from every poll's candidates.
   defp put_forced_parts(%State{} = state, issues) do
     settings = Config.settings!()
     active_states = active_state_set()
@@ -3382,23 +3383,37 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  # A sub-ticket in Auto Review is the part while its QA pass waits or runs, so that pass is forced
+  # too (see `AutoReview.on_green/5`): its run's PR keeps it from dispatching, and when Auto Review
+  # is not an active state it is known only from its sub-issue link.
   defp next_forced_part(%Issue{id: parent_id}, members, ordered, %State{} = state, {active_states, terminal_states, auto_review_state}) do
-    ordered
-    |> Enum.flat_map(fn
-      {%Issue{id: issue_id} = issue, index} when is_map_key(members, issue_id) ->
+    candidates =
+      for {%Issue{id: issue_id} = issue, index} <- ordered, is_map_key(members, issue_id) do
         member = Map.fetch!(members, issue_id)
-        [{{stage_rank(issue.state, auto_review_state), member.depth, index}, issue, member}]
+        {{stage_rank(issue.state, auto_review_state), member.depth, index}, issue, member}
+      end
 
-      _not_on_path ->
-        []
-    end)
+    candidate_ids = MapSet.new(candidates, fn {_rank, issue, _member} -> issue.id end)
+
+    in_auto_review =
+      for {issue_id, member} <- members,
+          not MapSet.member?(candidate_ids, issue_id),
+          auto_review_issue?(member.state, auto_review_state) do
+        {{stage_rank(member.state, auto_review_state), member.depth, length(ordered)}, %Issue{id: issue_id, identifier: member.identifier, state: member.state}, member}
+      end
+
+    (candidates ++ in_auto_review)
     |> Enum.sort_by(&elem(&1, 0))
     |> Enum.find_value(fn {_rank, issue, member} ->
       # Judged as the parent's part, so a usage-limit headroom hold does not rule it out.
       as_part = %{state | forced_parts: Map.put(state.forced_parts, parent_id, %{issue_id: issue.id})}
-      if dispatch_eligible?(issue, as_part, active_states, terminal_states), do: forced_part_entry(issue.id, member)
+
+      if auto_review_issue?(issue.state, auto_review_state) or dispatch_eligible?(issue, as_part, active_states, terminal_states),
+        do: forced_part_entry(issue.id, member)
     end)
   end
+
+  defp auto_review_issue?(state_name, auto_review_state), do: is_binary(state_name) and normalize_issue_state(state_name) == auto_review_state
 
   defp forced_part_entry(issue_id, member), do: %{issue_id: issue_id, identifier: member.identifier, state: member.state}
 

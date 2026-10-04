@@ -36,6 +36,7 @@ defmodule SymphonyElixir.AutoReview do
   alias SymphonyElixir.{Config, Notifications, QaAgent, QaRunner, RunStore, Tracker, UsageLimit, Verification}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.{Issue, Usage}
+  alias SymphonyElixir.Orchestrator
   alias SymphonyElixir.QaAgent.{Report, Selection}
   alias SymphonyElixir.Workspace
 
@@ -167,7 +168,7 @@ defmodule SymphonyElixir.AutoReview do
       sha: sha,
       pr_url: Map.get(ci_status, :pr_url) || Map.get(record, :pr_url),
       settings: settings,
-      forced: Issue.forced?(issue, settings)
+      forced: Issue.forced?(issue, settings) or forced_part?(issue_id)
     }
 
     case Keyword.get(opts, :qa_runner, QaRunner).request(job, Keyword.take(opts, [:tracker, :run_store])) do
@@ -175,6 +176,16 @@ defmodule SymphonyElixir.AutoReview do
       :running -> {:qa_running, issue_id}
       :busy -> {:qa_queued, issue_id}
       {:error, reason} -> {:qa_request_error, issue_id, reason}
+    end
+  end
+
+  # A forced `breakdown` parent's current sub-ticket is forced without the label. The published
+  # snapshot is read from ETS: calling the orchestrator here could deadlock, since it calls the QA
+  # runner while it dispatches.
+  defp forced_part?(issue_id) do
+    case Orchestrator.snapshot_cache_entry() do
+      {:ok, %{snapshot: %{forced: forced}}} when is_list(forced) -> Enum.any?(forced, &match?(%{sub_issue: %{issue_id: ^issue_id}}, &1))
+      _missing -> false
     end
   end
 
