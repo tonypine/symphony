@@ -7,6 +7,7 @@ defmodule SymphonyElixir.Workspace do
   alias SymphonyElixir.{Config, ManagedClone, PathSafety, ProcessTree, SSH, WorkflowSource}
   alias SymphonyElixir.Config.Schema.Hooks
   alias SymphonyElixir.GitHub.Repo, as: GitHubRepo
+  alias SymphonyElixir.Repo.FetchLog
 
   @remote_workspace_marker "__SYMPHONY_WORKSPACE__"
   # How much of a timed-out hook's output its log line keeps.
@@ -346,10 +347,11 @@ defmodule SymphonyElixir.Workspace do
   # A `workspace.source` repo is Symphony's own clone: it is made again if it is
   # missing and fetched (when `fetch_before_dispatch` is on), under a per-clone lock.
   defp prepare_worktree_repo(repo, issue_context, %{workspace: %{github: github} = workspace}) when is_binary(github) do
-    ManagedClone.sync(issue_context.repo_key, github, repo, fetch: workspace.fetch_before_dispatch)
+    result = ManagedClone.sync(issue_context.repo_key, github, repo, fetch: workspace.fetch_before_dispatch)
+    if workspace.fetch_before_dispatch, do: FetchLog.record(issue_context.repo_key, result), else: result
   end
 
-  defp prepare_worktree_repo(repo, _issue_context, settings), do: maybe_fetch_worktree_repo(repo, settings)
+  defp prepare_worktree_repo(repo, issue_context, settings), do: maybe_fetch_worktree_repo(repo, issue_context, settings)
 
   # The clone's local default branch is never updated by a fetch, so with no
   # `base_branch` a new branch starts from the fetched `origin/HEAD`. An existing
@@ -360,9 +362,9 @@ defmodule SymphonyElixir.Workspace do
 
   defp managed_clone_base_ref(_repo, _branch, _settings), do: nil
 
-  defp maybe_fetch_worktree_repo(repo, settings) do
+  defp maybe_fetch_worktree_repo(repo, issue_context, settings) do
     case settings.workspace.fetch_before_dispatch do
-      true -> run_git(repo, ["fetch", "origin"])
+      true -> FetchLog.record(issue_context.repo_key, run_git(repo, ["fetch", "origin"]))
       false -> :ok
     end
   end

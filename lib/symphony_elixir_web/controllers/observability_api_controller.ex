@@ -6,7 +6,7 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   use Phoenix.Controller, formats: [:json]
 
   alias Plug.Conn
-  alias SymphonyElixir.{Quality, StatusDashboard}
+  alias SymphonyElixir.{Config, Quality, StatusDashboard}
   alias SymphonyElixirWeb.{Endpoint, Presenter}
 
   # The frame is padded to the requested width inside StatusDashboard; cap it.
@@ -27,6 +27,17 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
 
   def state(conn, _params) do
     json(conn, Presenter.state_payload(orchestrator(), snapshot_timeout_ms(), stray_processes()))
+  end
+
+  @spec repos(Conn.t(), map()) :: Conn.t()
+  def repos(conn, _params) do
+    case Presenter.repos_payload(orchestrator(), snapshot_timeout_ms()) do
+      {:ok, payload} ->
+        json(conn, payload)
+
+      {:error, reason} ->
+        error_response(conn, 503, "config_unavailable", Config.format_error(reason))
+    end
   end
 
   @spec issue(Conn.t(), map()) :: Conn.t()

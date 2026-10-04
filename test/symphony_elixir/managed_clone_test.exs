@@ -5,6 +5,7 @@ defmodule SymphonyElixir.ManagedCloneTest do
 
   alias SymphonyElixir.{AgentSandboxConfig, Config, ManagedClone, Paths, Workflow, WorkflowSource, Workspace}
   alias SymphonyElixir.Config.{Cache, Schema, SystemSchema}
+  alias SymphonyElixir.Repo.FetchLog
 
   @git_env [
     {"GIT_AUTHOR_NAME", "Symphony Test"},
@@ -297,6 +298,7 @@ defmodule SymphonyElixir.ManagedCloneTest do
 
       assert {:ok, workspace} = Workspace.create_for_issue("TP-2", nil, "web")
       assert rev!(workspace, "HEAD") == second
+      assert %{result: :ok} = FetchLog.last("web")
       refute rev!(clone, "main") == second
       assert {:ok, %{prompt: "Second prompt"}} = Config.workflow_for_repo("web")
 
@@ -368,6 +370,7 @@ defmodule SymphonyElixir.ManagedCloneTest do
         end)
 
       assert log =~ "repo=web"
+      assert %{result: {:error, {:managed_clone_failed, "web", {:fetch, _reason}}}} = FetchLog.last("web")
       assert {:ok, _workspace} = Workspace.create_for_issue("TP-2", nil, "app")
     end
   end
