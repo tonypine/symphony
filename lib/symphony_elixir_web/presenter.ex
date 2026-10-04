@@ -3,7 +3,18 @@ defmodule SymphonyElixirWeb.Presenter do
   Shared projections for the observability API and dashboard.
   """
 
-  alias SymphonyElixir.{AuditLog, Config, Orchestrator, Quality, RunKind, StrayProcesses, URLUtils, UsageLimit}
+  alias SymphonyElixir.{
+    AuditLog,
+    BuildInfo,
+    Config,
+    Orchestrator,
+    Quality,
+    RunKind,
+    StrayProcesses,
+    URLUtils,
+    UsageLimit
+  }
+
   alias SymphonyElixir.Codex.MessageHumanizer
 
   @audit_page_size 200
@@ -38,9 +49,11 @@ defmodule SymphonyElixirWeb.Presenter do
     case Orchestrator.snapshot(orchestrator, snapshot_timeout_ms) do
       %{} = snapshot ->
         run_history = Map.get(snapshot, :run_history, [])
+        blocked = Map.get(snapshot, :blocked, [])
 
         %{
           generated_at: generated_at,
+          build: Map.take(BuildInfo.current(), [:version, :sha]),
           repos: repo_keys(snapshot),
           counts: %{
             running: length(snapshot.running),
@@ -74,7 +87,8 @@ defmodule SymphonyElixirWeb.Presenter do
           qa: normalize_qa(Map.get(snapshot, :qa)),
           auto_merge: snapshot |> Map.get(:auto_merge, []) |> Enum.map(&auto_merge_payload/1),
           slot_waiting: snapshot |> Map.get(:slot_waiting, []) |> Enum.map(&slot_waiting_payload/1),
-          blocked: snapshot |> Map.get(:blocked, []) |> Enum.map(&blocked_payload/1),
+          blocked: Enum.map(blocked, &blocked_payload/1),
+          app_update: app_update_payload(blocked),
           forced: snapshot |> Map.get(:forced, []) |> Enum.map(&forced_payload/1),
           concurrency: Map.get(snapshot, :concurrency),
           claimed: Map.get(snapshot, :claimed, []),
@@ -524,7 +538,8 @@ defmodule SymphonyElixirWeb.Presenter do
       transcript_path: Map.get(entry, :transcript_path),
       turn_count: Map.get(entry, :turn_count, 0),
       last_event: entry.last_codex_event,
-      last_message: summarize_message(entry.last_codex_message),
+      last_message: running_message(entry),
+      linear_wait_until: entry |> Map.get(:linear_wait_until) |> iso8601(),
       started_at: iso8601(entry.started_at),
       last_event_at: iso8601(Map.get(entry, :last_event_at) || entry.last_codex_timestamp),
       forced: Map.get(entry, :forced, false),
@@ -620,7 +635,8 @@ defmodule SymphonyElixirWeb.Presenter do
       state: running.state,
       started_at: iso8601(running.started_at),
       last_event: running.last_codex_event,
-      last_message: summarize_message(running.last_codex_message),
+      last_message: running_message(running),
+      linear_wait_until: running |> Map.get(:linear_wait_until) |> iso8601(),
       last_event_at: iso8601(Map.get(running, :last_event_at) || running.last_codex_timestamp),
       tokens: %{
         input_tokens: entry_input_tokens(running),
@@ -831,15 +847,27 @@ defmodule SymphonyElixirWeb.Presenter do
 
   defp blocked_payload(entry) do
     blockers = Enum.map(entry.blockers, &%{issue_identifier: &1.identifier, state: &1.state})
+    reason = Map.get(entry, :reason)
 
     %{
       issue_id: entry.issue_id,
       issue_identifier: entry.identifier,
       title: Map.get(entry, :title),
       state: entry.state,
+      kind: entry |> Map.get(:kind, :blockers) |> Atom.to_string(),
+      reason: reason,
       blocked_by: blockers,
-      summary: "#{entry.identifier} waiting on " <> Enum.map_join(blockers, ", ", &blocker_label/1)
+      summary: blocked_summary(entry.identifier, reason, blockers)
     }
+  end
+
+  defp blocked_summary(identifier, reason, _blockers) when is_binary(reason), do: "#{identifier} #{reason}"
+  defp blocked_summary(identifier, nil, blockers), do: "#{identifier} waiting on " <> Enum.map_join(blockers, ", ", &blocker_label/1)
+
+  # Tickets an app update would release: each one waits only for the running app to include a fix.
+  defp app_update_payload(blocked) do
+    identifiers = for %{kind: :app_update, identifier: identifier} <- blocked, do: identifier
+    %{unblocks: length(identifiers), issue_identifiers: identifiers}
   end
 
   defp forced_payload(entry) do
@@ -1187,6 +1215,10 @@ defmodule SymphonyElixirWeb.Presenter do
   defp repo_key_matches?(entry, repo_key), do: Map.get(entry, :repo_key) == repo_key
 
   defp current_repo_key, do: Config.repo_key_or_nil()
+
+  # A run waiting out a Linear rate limit or outage has no new agent message to show.
+  defp running_message(%{linear_wait_until: %DateTime{}}), do: "waiting for Linear"
+  defp running_message(running), do: summarize_message(running.last_codex_message)
 
   defp summarize_message(nil), do: nil
   defp summarize_message(message), do: MessageHumanizer.humanize(message)

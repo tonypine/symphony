@@ -10,6 +10,8 @@ public struct StateSnapshot: Equatable {
     public var usageLimits: [UsageLimit]
     /// Today's tokens against `agent.limits`, nil when Symphony didn't report them.
     public var budget: Budget?
+    /// Tickets held only until the running Symphony includes a fix that merged: updating releases them.
+    public var updateUnblocks: Int
 
     public struct Pause: Equatable {
         public var reason: String?
@@ -91,13 +93,15 @@ public struct StateSnapshot: Equatable {
         retrying: Int = 0,
         pause: Pause? = nil,
         usageLimits: [UsageLimit] = [],
-        budget: Budget? = nil
+        budget: Budget? = nil,
+        updateUnblocks: Int = 0
     ) {
         self.running = running
         self.retrying = retrying
         self.pause = pause
         self.usageLimits = usageLimits
         self.budget = budget
+        self.updateUnblocks = updateUnblocks
     }
 }
 
@@ -155,7 +159,9 @@ public enum SymphonyState {
         }
         guard let counts = payload.counts else { return .failed("Symphony's state couldn't be read") }
 
-        var snapshot = StateSnapshot(running: counts.running, retrying: counts.retrying ?? 0)
+        var snapshot = StateSnapshot(
+            running: counts.running, retrying: counts.retrying ?? 0, updateUnblocks: payload.appUpdate?.unblocks ?? 0
+        )
         if let pause = payload.pause, pause.paused {
             snapshot.pause = .init(reason: pause.reason, since: pause.pausedAt.flatMap(parseDate))
         }
@@ -240,10 +246,15 @@ public enum SymphonyState {
             let perIssueLimit: Int?
         }
 
+        struct AppUpdate: Decodable {
+            let unblocks: Int?
+        }
+
         let counts: Counts?
         let pause: Pause?
         let budget: Budget?
         let usageLimits: [UsageLimit]?
+        let appUpdate: AppUpdate?
         let error: Failure?
     }
 }

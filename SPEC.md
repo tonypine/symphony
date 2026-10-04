@@ -1930,6 +1930,16 @@ An issue is dispatch-eligible only if all are true:
   - The status snapshot lists each held candidate with its open blockers (`blocked` in
     `/api/v1/state`, for example "MT-12 waiting on MT-15 (In Progress)"), and the dashboard shows
     them under "Waiting on blockers".
+  - A fix to Symphony itself takes effect when the running app is updated, not when it merges.
+    When the running build knows its commit and repository (`SYMPHONY_BUILD_SHA` and
+    `SYMPHONY_BUILD_REPO`, set by the release workflow), a `Todo` issue whose blockers are all
+    terminal stays held while a blocker's merged pull request is in that repository and its merge
+    commit is not in the running build (GitHub compares `<merge sha>...<build sha>` as neither
+    `ahead` nor `identical`). Its `blocked` entry has `kind: "app_update"` and a `reason` such as
+    "waiting for an app update: MT-15 merged in `9f54098`, running `d3d301b`", and
+    `app_update.unblocks` counts these issues. Blockers merged in another repository, a build from a
+    checkout (no sha), and the `skip-update-hold` label on the held issue or on the blocker release
+    the issue at once. A lookup that fails releases it too, as before.
 - Parent rule passes:
   - If the issue has the `breakdown` label, do not dispatch while any sub-issue is non-terminal
     (a sub-issue with an unknown state counts as non-terminal). The parent waits while its
@@ -3116,6 +3126,9 @@ SHOULD return:
 - `running` (list of running session rows)
 - each running row SHOULD include `turn_count`
 - each running row SHOULD include `repo_key`
+- each running row SHOULD include `linear_wait_until`: while the run waits out a Linear rate limit
+  or outage (Section 8.5), when that wait ends, otherwise null; dashboards show such a run as
+  waiting for Linear
 - `watching` (list of recently completed issues now in non-active, non-terminal states)
 - each watching row SHOULD include issue identifier, current state, issue URL, last-run time, and
   final transcript replay metadata while the watch remains open
@@ -3301,6 +3314,7 @@ Minimum endpoints:
     ```json
     {
       "generated_at": "2026-02-24T20:15:30Z",
+      "build": {"version": "0.0.1.168", "sha": "d3d301b0123456789abcdef0123456789abcdef0"},
       "counts": {
         "running": 2,
         "watching": 1,
@@ -3318,6 +3332,7 @@ Minimum endpoints:
           "turn_count": 7,
           "last_event": "turn_completed",
           "last_message": "",
+          "linear_wait_until": null,
           "started_at": "2026-02-24T20:10:12Z",
           "last_event_at": "2026-02-24T20:14:59Z",
           "forced": false,
@@ -3380,10 +3395,23 @@ Minimum endpoints:
           "issue_identifier": "MT-655",
           "title": "Final verification: Export",
           "state": "Todo",
+          "kind": "blockers",
+          "reason": null,
           "blocked_by": [{"issue_identifier": "MT-656", "state": "In Progress"}],
           "summary": "MT-655 waiting on MT-656 (In Progress)"
+        },
+        {
+          "issue_id": "stu902",
+          "issue_identifier": "MT-658",
+          "title": "Final verification: Pause",
+          "state": "Todo",
+          "kind": "app_update",
+          "reason": "waiting for an app update: MT-659 merged in `9f54098`, running `d3d301b`",
+          "blocked_by": [{"issue_identifier": "MT-659", "state": "merged in 9f54098"}],
+          "summary": "MT-658 waiting for an app update: MT-659 merged in `9f54098`, running `d3d301b`"
         }
       ],
+      "app_update": {"unblocks": 1, "issue_identifiers": ["MT-658"]},
       "forced": [
         {
           "issue_id": "vwx234",
@@ -3510,6 +3538,7 @@ Minimum endpoints:
         "started_at": "2026-02-24T20:10:12Z",
         "last_event": "notification",
         "last_message": "Working on tests",
+        "linear_wait_until": null,
         "last_event_at": "2026-02-24T20:14:59Z",
         "tokens": {
           "input_tokens": 1200,

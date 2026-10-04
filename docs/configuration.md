@@ -176,6 +176,15 @@ Routing validation rejects duplicate keys, workspace-sanitized key collisions, i
 ambiguous team catch-alls, multiple defaults, and multi-repo global worktree settings that do not
 provide per-repo workspace overrides.
 
+Symphony's own repository needs no setting. A released app knows the commit and repository it was
+built from, so a `Todo` ticket blocked by a fix merged in that repository stays in `Todo` after the
+fix is `Done`, until the running app includes the fix's merge commit. The dashboard and
+`/api/v1/state` say why ("waiting for an app update: TP-419 merged in `9f54098`, running
+`d3d301b`"), and the menu bar shows "Update to unblock N tickets". Put the `skip-update-hold` label
+on the held ticket, or on a blocker that needs no app update (a docs-only or `WORKFLOW.md` change),
+to release it at `Done`. Blockers merged in other repositories, and every blocker when Symphony runs
+from a checkout, release their tickets at `Done`.
+
 ### `workspaces`
 
 Workspace root, population defaults, attachments, and cleanup.
