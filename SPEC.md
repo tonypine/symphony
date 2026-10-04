@@ -2165,6 +2165,9 @@ Forced allowance:
 - A forced run is marked `forced: true` and is counted by none of `running_count`, the finishing
   count, the per-state counts or the epic lanes, so it never takes a normal slot. A run already
   going when the label is added stays a normal run, and a running agent is never pre-empted.
+  When an issue leaves the forced queue (or stops being a forced parent's part) while its forced
+  run is going, that run is no longer `forced`: it gives the forced allowance back, so an issue
+  still forced can take it, and goes on as a normal run.
 - A forced issue that finds `forced_max` forced runs running gets no extra slot. It still sorts
   first for a normal slot (and runs as a normal run if it gets one), shows its queue position in
   the `forced` snapshot and as its `slot_waiting` reason (`queued #2; forced slot taken by MT-1`),
@@ -4500,6 +4503,8 @@ infrastructure.
 - A forced issue dispatches first, on its own `forced_max` allowance, while `max_total`, the epic
   lanes, `finishing_max` and the per-state caps are full, on the poll and the retry path; its run
   takes no normal slot, and a second forced issue past `forced_max` waits and is noted once
+- A forced run whose issue is no longer forced gives the forced allowance back and goes on as a
+  normal run
 - The daily token budget and a usage-limit headroom hold do not stop a forced dispatch; the
   operator pause, blocked-by links and a `paused` usage-limit hold do
 - A forced `breakdown` parent waiting on its sub-issues forces one issue on its epic path at a
