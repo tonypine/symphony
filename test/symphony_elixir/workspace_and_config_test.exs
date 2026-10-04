@@ -592,6 +592,34 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     end
   end
 
+  test "local hooks run Gradle without a daemon and keep the host's GRADLE_OPTS" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-workspace-gradle-hook-#{System.unique_integer([:positive])}"
+      )
+
+    previous_gradle_opts = System.get_env("GRADLE_OPTS")
+    on_exit(fn -> restore_env("GRADLE_OPTS", previous_gradle_opts) end)
+
+    try do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: Path.join(test_root, "workspaces"),
+        hook_after_create: "printf '%s' \"$GRADLE_OPTS\" > gradle_opts.txt"
+      )
+
+      System.delete_env("GRADLE_OPTS")
+      assert {:ok, workspace} = Workspace.create_for_issue("GRADLE-1")
+      assert File.read!(Path.join(workspace, "gradle_opts.txt")) == "-Dorg.gradle.daemon=false"
+
+      System.put_env("GRADLE_OPTS", "-Xmx64m")
+      assert {:ok, workspace} = Workspace.create_for_issue("GRADLE-2")
+      assert File.read!(Path.join(workspace, "gradle_opts.txt")) == "-Xmx64m -Dorg.gradle.daemon=false"
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "repo-level worktree settings select the matched repo primary clone" do
     test_root =
       Path.join(

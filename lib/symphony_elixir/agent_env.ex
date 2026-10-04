@@ -17,10 +17,14 @@ defmodule SymphonyElixir.AgentEnv do
   `MIX_HOME`, `MIX_ARCHIVES`, and `HEX_HOME` pass through so agent shells use
   the same Hex and Rebar install as the host (for example the per-version
   `MIX_HOME` that `mise` exports) instead of prompting to install Hex.
+
+  A local agent also gets its own Gradle daemon registry in its workspace (see
+  `gradle_env/1`).
   """
 
   @agent_runtime_env "SYMPHONY_AGENT_RUNTIME"
   @agent_runtime_env_value "1"
+  @gradle_daemon_dir ".gradle-daemons"
 
   @passthrough ~w(
     PATH
@@ -52,6 +56,29 @@ defmodule SymphonyElixir.AgentEnv do
   """
   @spec runtime_marker_value() :: String.t()
   def runtime_marker_value, do: @agent_runtime_env_value
+
+  @doc """
+  The env that keeps an agent's Gradle builds on daemons of its own.
+
+  Gradle daemons detach, outlive the build and are shared through the
+  `~/.gradle/daemon` registry. A daemon started inside one agent's sandbox can
+  only write to that agent's workspace, so a build elsewhere it serves fails, and
+  it runs on after the run. With the registry in `<workspace>/.gradle-daemons`,
+  a daemon only serves builds started with the same registry, and its working
+  folder, `<registry>/<version>`, is in the workspace, so the run's end stops it
+  (see `SymphonyElixir.LeftoverProcesses`).
+
+  Creates the folder with a `.gitignore` of `*`, so git never lists it.
+  """
+  @spec gradle_env(Path.t()) :: %{String.t() => String.t()}
+  def gradle_env(workspace) when is_binary(workspace) do
+    registry = Path.join(workspace, @gradle_daemon_dir)
+    _ = File.mkdir_p(registry)
+    _ = File.write(Path.join(registry, ".gitignore"), "*\n")
+
+    # Quoted, so `gradlew` keeps a path with spaces as one argument.
+    %{"GRADLE_OPTS" => ~s("-Dorg.gradle.daemon.registry.base=#{registry}")}
+  end
 
   @doc """
   Builds the env list from the current process environment.

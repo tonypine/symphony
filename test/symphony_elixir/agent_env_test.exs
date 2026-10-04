@@ -3,6 +3,22 @@ defmodule SymphonyElixir.AgentEnvTest do
 
   alias SymphonyElixir.AgentEnv
 
+  describe "gradle_env/1" do
+    test "points Gradle at a daemon registry in the workspace that git ignores" do
+      test_root = Path.join(System.tmp_dir!(), "symphony-agent-env-gradle-#{System.unique_integer([:positive])}")
+      on_exit(fn -> File.rm_rf(test_root) end)
+      workspace = Path.join(test_root, "work space")
+      File.mkdir_p!(workspace)
+      registry = Path.join(workspace, ".gradle-daemons")
+
+      assert AgentEnv.gradle_env(workspace) == %{"GRADLE_OPTS" => ~s("-Dorg.gradle.daemon.registry.base=#{registry}")}
+      assert File.read!(Path.join(registry, ".gitignore")) == "*\n"
+
+      assert {_output, 0} = System.cmd("git", ["init", "-q", workspace])
+      assert {"", 0} = System.cmd("git", ["-C", workspace, "status", "--porcelain", "--untracked-files=all"])
+    end
+  end
+
   describe "build/1" do
     test "passes whitelisted vars through as charlist tuples" do
       env = %{
