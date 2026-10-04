@@ -55,10 +55,17 @@ each session's Claude settings and the MCP shim there.
 
 Both runtimes also deny writes to the workspace's own instructions and workflow files:
 `WORKFLOW.md`, `symphony.yml`, the project `.claude/` settings, agents, commands and hooks, and the
-skill directories `.ai/skills`, `.claude/skills` and `.codex/skills`. A `git merge` in the sandbox
-therefore fails when the base branch changed one of them, so agents merge the base branch with
-`github_sync_base`, which merges outside the sandbox with repo hooks off and leaves the commit to
-the agent. It and `github_push_branch` refuse a branch that changes one of those paths itself.
+skill directories `.ai/skills`, `.claude/skills` and `.codex/skills`. In a local workspace the deny
+also covers the files a symlink in one of those points at: Symphony's own `.ai/skills/pull` links
+to `priv/skills/pull`, so `priv/skills/pull` is read-only to the agent. An SSH worker's workspace
+gets the plain list.
+
+A `git merge` in the sandbox therefore fails when the base branch changed one of them, so agents
+merge the base branch with `github_sync_base`, which merges outside the sandbox with repo hooks off
+and leaves the commit to the agent. It and `github_push_branch` refuse a branch that changes one of
+those paths, or a symlink's target, itself. The refusal binds only those tools: a `git push` from
+the agent's shell skips it (Claude's settings deny `git push`, but only as a command pattern), and
+the tools then trust what that push put on the branch.
 
 ### No windows on the host desktop
 

@@ -1917,6 +1917,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
           ["ls-remote" | _rest], _opts -> remote_heads(scenario)
           ["rev-parse", "--verify", "--quiet", "MERGE_HEAD"], _opts -> merge_head_status(scenario)
           ["rev-parse", "HEAD"], _opts -> {"abc123\n", 0}
+          ["ls-tree" | _rest], _opts -> {"", 0}
           ["diff", "--name-only", "--no-renames" | _rest], _opts -> protected_diff(scenario)
           ["diff", "--name-only", "--diff-filter=U"], _opts -> {"", 0}
           ["-c" | _rest], _opts -> merge_status(scenario)

@@ -39,7 +39,9 @@ defmodule SymphonyElixir.AgentSandboxConfig do
       `hooks,plugins,skills}` plus `~/.mcp.json` (auto-loaded on next Claude Code session;
       writes to these would silently persist prompt-injection across runs)
     * project-local skills `.ai/skills`, `.claude/skills`, `.codex/skills` (an agent must not
-      rewrite its own instructions; `github_sync_base` merges the base branch's changes to them)
+      rewrite its own instructions; `github_sync_base` merges the base branch's changes to them),
+      and for a local workspace the files a symlink in a protected path points at
+      (`workspace_link_targets/1`)
     * shell startup files, `~/.gitconfig`, and macOS launch agent roots
   """
 
@@ -160,15 +162,88 @@ defmodule SymphonyElixir.AgentSandboxConfig do
     for "./" <> path <- @deny_write_paths, path != ".git", do: path
   end
 
+  @doc """
+  Workspace paths that a symlink inside a write-protected path points at, relative to the
+  workspace root: `priv/skills/pull` for `.ai/skills/pull -> ../../priv/skills/pull`.
+
+  Sandboxes match real paths, so denying `.ai/skills` leaves a linked skill's own files writable.
+  Reads the links on disk; returns `[]` when the workspace has none.
+  """
+  @spec workspace_link_targets(Path.t()) :: [String.t()]
+  def workspace_link_targets(workspace) do
+    list_links = fn paths -> {:ok, Enum.flat_map(paths, &disk_links(workspace, &1))} end
+    {:ok, targets} = link_targets(workspace_protected_paths(), list_links)
+    targets
+  end
+
+  @doc """
+  Follows the symlinks `list_links` finds under `paths`, then under each target in turn, and
+  returns the targets. `list_links` returns `{link, target}` pairs, paths relative to the
+  workspace root. Targets outside the workspace, the workspace root itself and `.git` are left
+  out.
+  """
+  @spec link_targets([String.t()], ([String.t()] -> {:ok, [{String.t(), String.t()}]} | {:error, term()})) ::
+          {:ok, [String.t()]} | {:error, term()}
+  def link_targets(paths, list_links), do: follow_links(paths, list_links, MapSet.new(paths), [])
+
+  defp follow_links([], _list_links, _seen, targets), do: {:ok, Enum.reverse(targets)}
+
+  defp follow_links(paths, list_links, seen, targets) do
+    with {:ok, links} <- list_links.(paths) do
+      new =
+        links
+        |> Enum.flat_map(fn {link, target} -> resolve_link(link, target) end)
+        |> Enum.uniq()
+        |> Enum.reject(&MapSet.member?(seen, &1))
+
+      follow_links(new, list_links, MapSet.union(seen, MapSet.new(new)), Enum.reverse(new, targets))
+    end
+  end
+
+  defp resolve_link(_link, "/" <> _absolute), do: []
+
+  defp resolve_link(link, target) do
+    segments = String.split(Path.dirname(link), "/") ++ String.split(target, "/")
+
+    case Enum.reduce_while(segments, [], &resolve_segment/2) do
+      :outside -> []
+      reversed -> reversed |> Enum.reverse() |> workspace_link_target()
+    end
+  end
+
+  defp workspace_link_target([]), do: []
+  defp workspace_link_target([".git" | _rest]), do: []
+  defp workspace_link_target(segments), do: [Path.join(segments)]
+
+  defp resolve_segment(segment, acc) when segment in [".", ""], do: {:cont, acc}
+  defp resolve_segment("..", []), do: {:halt, :outside}
+  defp resolve_segment("..", [_parent | acc]), do: {:cont, acc}
+  defp resolve_segment(segment, acc), do: {:cont, [segment | acc]}
+
+  defp disk_links(workspace, path) do
+    full_path = Path.join(workspace, path)
+
+    case File.read_link(full_path) do
+      {:ok, target} ->
+        [{path, target}]
+
+      {:error, _not_a_link} ->
+        case File.ls(full_path) do
+          {:ok, entries} -> Enum.flat_map(entries, &disk_links(workspace, Path.join(path, &1)))
+          {:error, _not_a_directory} -> []
+        end
+    end
+  end
+
   @doc false
-  @spec claude_filesystem_settings([String.t()], [String.t()]) :: map()
-  def claude_filesystem_settings(allow_read_paths \\ [], allow_write_paths \\ []) do
+  @spec claude_filesystem_settings([String.t()], [String.t()], [String.t()]) :: map()
+  def claude_filesystem_settings(allow_read_paths \\ [], allow_write_paths \\ [], extra_deny_write_paths \\ []) do
     allow_read_paths = normalize_allow_read_paths(allow_read_paths)
     allow_write_paths = allow_write_paths |> normalize_allow_read_paths() |> expand_home_paths()
 
     base = %{
       "denyRead" => @deny_read_paths |> Enum.reject(&(&1 in allow_read_paths)) |> expand_home_paths(),
-      "denyWrite" => expand_home_paths(@deny_write_paths)
+      "denyWrite" => expand_home_paths(@deny_write_paths ++ normalize_sandbox_paths(extra_deny_write_paths))
     }
 
     case allow_write_paths do
@@ -289,22 +364,23 @@ defmodule SymphonyElixir.AgentSandboxConfig do
 
     deny_read_paths
     |> Enum.map(&{&1, "none"})
-    |> Kernel.++(codex_project_entries(Keyword.get(opts, :workspace)))
+    |> Kernel.++(codex_project_entries(Keyword.get(opts, :workspace), Keyword.get(opts, :deny_write_paths, [])))
     |> Kernel.++(external_write_protect_entries)
     |> Kernel.++(Enum.map(operator_allow_read_paths, &{&1, "read"}))
     |> toml_inline_table()
   end
 
-  defp codex_project_entries(workspace) when is_binary(workspace) do
+  defp codex_project_entries(workspace, extra_deny_write_paths) when is_binary(workspace) do
     workspace = String.trim(workspace)
 
     if codex_workspace_path?(workspace) do
       [{workspace, "write"}] ++
-        (@deny_write_paths
+        ((@deny_write_paths ++ normalize_sandbox_paths(extra_deny_write_paths))
          |> Enum.filter(&project_relative_sandbox_path?/1)
          |> Enum.map(fn path ->
            {Path.join(workspace, String.trim_leading(path, "./")), "read"}
-         end))
+         end)
+         |> Enum.uniq())
     else
       legacy_codex_project_entries()
     end
@@ -313,7 +389,7 @@ defmodule SymphonyElixir.AgentSandboxConfig do
   # Fallback for direct unit-level callers that do not have a resolved runtime
   # workspace. AppServer launch paths pass the validated workspace so current
   # Codex versions do not have to rely on this legacy special path.
-  defp codex_project_entries(_workspace), do: legacy_codex_project_entries()
+  defp codex_project_entries(_workspace, _extra_deny_write_paths), do: legacy_codex_project_entries()
 
   defp codex_workspace_path?("/" <> _rest), do: true
   defp codex_workspace_path?("~/" <> _rest), do: true

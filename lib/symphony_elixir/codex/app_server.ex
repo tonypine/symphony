@@ -831,7 +831,8 @@ defmodule SymphonyElixir.Codex.AppServer do
         Schema.codex_effective_network_allowed_domains(settings),
         workspace_sandbox_allow_read_paths(settings),
         extra_deny_read_paths,
-        workspace: workspace
+        workspace: workspace,
+        deny_write_paths: workspace_link_targets(workspace, opts)
       )
 
     with {:ok, command} <- inject_config_overrides(command, overrides) do
@@ -970,6 +971,13 @@ defmodule SymphonyElixir.Codex.AppServer do
     settings
     |> srt_workspace_write_paths(workspace)
     |> Enum.flat_map(&git_metadata_deny_write_paths(&1, workspace))
+    |> Kernel.++(Enum.map(workspace_link_targets(workspace, []), &Path.join(workspace, &1)))
+  end
+
+  # The real files behind symlinked skills (`.ai/skills/pull -> ../../priv/skills/pull`). A remote
+  # workspace isn't on this host, so it keeps the plain deny list.
+  defp workspace_link_targets(workspace, opts) do
+    if Keyword.get(opts, :remote, false), do: [], else: AgentSandboxConfig.workspace_link_targets(workspace)
   end
 
   # Git stages blob objects under `<git_dir>/objects` before updating the index, so denying

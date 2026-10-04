@@ -454,6 +454,49 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
     end
   end
 
+  test "sync_base and push_branch refuse a branch that changes the files behind a symlinked skill" do
+    fixture = sync_fixture!("github-agent-sync-base-skill-link")
+
+    try do
+      # As in Symphony's own repo: `.ai/skills/pull` links to the shipped `priv/skills/pull`.
+      commit_files!(fixture.upstream, %{"priv/skills/pull/SKILL.md" => "pull v1\n"}, "ship the pull skill")
+      File.ln_s!("../../priv/skills/pull", Path.join(fixture.upstream, ".ai/skills/pull"))
+      commit_files!(fixture.upstream, %{}, "link the pull skill")
+      git!(fixture.upstream, ["push", "origin", "main"])
+      git!(fixture.workspace, ["pull", "--ff-only", "origin", "main"])
+
+      commit_files!(fixture.workspace, %{"priv/skills/pull/SKILL.md" => "agent rewrite\n"}, "rewrite the pull skill")
+
+      files = ["priv/skills/pull/SKILL.md"]
+      assert {:error, {:protected_paths_changed, ^files}} = GitHub.sync_base(fixture.context)
+      assert {:error, {:protected_paths_changed, ^files}} = GitHub.push_branch(fixture.context)
+    after
+      File.rm_rf(fixture.root)
+    end
+  end
+
+  test "sync_base surfaces a git error reading a protected symlink" do
+    workspace = tmp_workspace!("github-agent-sync-base-link-error")
+
+    try do
+      git_runner = fn
+        ["branch", "--show-current"], _opts -> {"auto/ACME-3051\n", 0}
+        ["remote", "get-url", "origin"], _opts -> {"git@github.com:acme/symphony.git\n", 0}
+        ["fetch", "origin"], _opts -> {"", 0}
+        ["ls-remote", "--symref", "origin", "HEAD"], _opts -> {"ref: refs/heads/main\tHEAD\n", 0}
+        ["ls-remote" | _rest], _opts -> {"abc123\trefs/heads/main\n", 0}
+        ["rev-parse", "--verify", "--quiet", "MERGE_HEAD"], _opts -> {"", 1}
+        ["ls-tree" | _rest], _opts -> {"100644 blob aaa111\t.ai/skills/push/SKILL.md\0" <> "120000 blob bbb222\t.ai/skills/pull\0", 0}
+        ["cat-file", "blob", "bbb222"], _opts -> {"fatal: bad object\n", 128}
+      end
+
+      assert {:error, {:git_failed, ["cat-file", "blob", "bbb222"], 128, _output}} =
+               GitHub.sync_base(scoped_context(workspace), git_runner: git_runner)
+    after
+      File.rm_rf(workspace)
+    end
+  end
+
   test "sync_base merges the configured base branch" do
     fixture = sync_fixture!("github-agent-sync-base-configured")
 
@@ -517,6 +560,7 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
         ["ls-remote", "--symref", "origin", "HEAD"], _opts -> {"", 0}
         ["ls-remote" | _rest], _opts -> {"abc123\trefs/heads/main\nfed789\trefs/heads/auto/ACME-3051\n", 0}
         ["rev-parse", "--verify", "--quiet", "MERGE_HEAD"], _opts -> {"", 1}
+        ["ls-tree" | _rest], _opts -> {"", 0}
         ["diff" | _rest], _opts -> {"", 0}
         # The branch and its remote copy have diverged, so there is no fast-forward.
         ["merge-base", "--is-ancestor", "HEAD", "fed789"], _opts -> {"", 1}

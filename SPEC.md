@@ -3076,8 +3076,13 @@ Scoped GitHub tool extension contract:
 - `github_push_branch`, if exposed, MUST refuse a push whose branch changes a
   write-protected workspace path itself, except files identical to the
   branch's `origin` copy.
-- Both MUST read the base and branch heads from the remote (`git ls-remote`),
-  not from local remote-tracking refs, which the agent can rewrite.
+- For both, a write-protected path includes the files a symlink inside one
+  points at (`.ai/skills/pull -> ../../priv/skills/pull` protects
+  `priv/skills/pull`). Both MUST read the base and branch heads from the remote
+  (`git ls-remote`), not from local remote-tracking refs, which the agent can
+  rewrite.
+- These checks bind only the scoped tools. A `git push` from the agent's shell
+  skips them, and what it pushed then counts as the branch's `origin` copy.
 - `github_merge_pull_request`, if exposed, MUST merge only the current
   workspace branch's pull request, MUST refuse unless the current issue is in
   the human-approved `Merging` state, MUST refuse while any check is failing or
