@@ -6440,6 +6440,7 @@ defmodule SymphonyElixir.Orchestrator do
           transcript_buffer: transcript_buffer_list(metadata),
           transcript_buffer_size: Map.get(metadata, :transcript_buffer_size, 0),
           forced: forced_entry?(metadata),
+          linear_wait_until: active_linear_wait_until(metadata, now),
           runtime_seconds: running_seconds(metadata.started_at, now)
         }
       end)
@@ -8058,6 +8059,13 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp running_seconds(_started_at, _now), do: 0
+
+  # The dashboard shows a run as waiting for Linear until its latest wait ends.
+  defp active_linear_wait_until(%{linear_wait_until: %DateTime{} = wait_until}, %DateTime{} = now) do
+    if DateTime.after?(wait_until, now), do: wait_until
+  end
+
+  defp active_linear_wait_until(_running_entry, _now), do: nil
 
   defp seconds_since(%DateTime{} = timestamp, %DateTime{} = now) do
     max(0, DateTime.diff(now, timestamp, :second))
