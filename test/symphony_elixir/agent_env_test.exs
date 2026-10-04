@@ -9,13 +9,35 @@ defmodule SymphonyElixir.AgentEnvTest do
       on_exit(fn -> File.rm_rf(test_root) end)
       workspace = Path.join(test_root, "work space")
       File.mkdir_p!(workspace)
+      File.write!(Path.join(workspace, "gradlew"), "")
       registry = Path.join(workspace, ".gradle-daemons")
 
       assert AgentEnv.gradle_env(workspace) == %{"GRADLE_OPTS" => ~s("-Dorg.gradle.daemon.registry.base=#{registry}")}
       assert File.read!(Path.join(registry, ".gitignore")) == "*\n"
 
       assert {_output, 0} = System.cmd("git", ["init", "-q", workspace])
-      assert {"", 0} = System.cmd("git", ["-C", workspace, "status", "--porcelain", "--untracked-files=all"])
+      assert {"?? gradlew\n", 0} = System.cmd("git", ["-C", workspace, "status", "--porcelain", "--untracked-files=all"])
+    end
+
+    test "only gives a Gradle project a registry" do
+      test_root = Path.join(System.tmp_dir!(), "symphony-agent-env-gradle-#{System.unique_integer([:positive])}")
+      on_exit(fn -> File.rm_rf(test_root) end)
+
+      plain = Path.join(test_root, "plain")
+      File.mkdir_p!(Path.join(plain, "android"))
+      File.write!(Path.join([plain, "android", "settings.gradle"]), "")
+
+      assert AgentEnv.gradle_env(plain) == %{}
+      refute File.exists?(Path.join(plain, ".gradle-daemons"))
+
+      for marker <- ~w(gradlew settings.gradle settings.gradle.kts) do
+        workspace = Path.join(test_root, marker)
+        File.mkdir_p!(workspace)
+        File.write!(Path.join(workspace, marker), "")
+
+        assert %{"GRADLE_OPTS" => _opts} = AgentEnv.gradle_env(workspace)
+        assert File.dir?(Path.join(workspace, ".gradle-daemons"))
+      end
     end
 
     test "never writes through symlinks the workspace holds" do
@@ -28,6 +50,7 @@ defmodule SymphonyElixir.AgentEnvTest do
 
       linked_dir = Path.join(test_root, "linked-dir")
       File.mkdir_p!(linked_dir)
+      File.write!(Path.join(linked_dir, "settings.gradle.kts"), "")
       File.ln_s!(outside_dir, Path.join(linked_dir, ".gradle-daemons"))
 
       assert AgentEnv.gradle_env(linked_dir) == %{}
@@ -36,6 +59,7 @@ defmodule SymphonyElixir.AgentEnvTest do
       linked_file = Path.join(test_root, "linked-file")
       registry = Path.join(linked_file, ".gradle-daemons")
       File.mkdir_p!(registry)
+      File.write!(Path.join(linked_file, "settings.gradle.kts"), "")
       File.ln_s!(outside_file, Path.join(registry, ".gitignore"))
 
       assert AgentEnv.gradle_env(linked_file) == %{"GRADLE_OPTS" => ~s("-Dorg.gradle.daemon.registry.base=#{registry}")}
@@ -44,6 +68,7 @@ defmodule SymphonyElixir.AgentEnvTest do
       dangling = Path.join(test_root, "dangling")
       dangling_target = Path.join(test_root, "missing.txt")
       File.mkdir_p!(Path.join(dangling, ".gradle-daemons"))
+      File.write!(Path.join(dangling, "settings.gradle.kts"), "")
       File.ln_s!(dangling_target, Path.join([dangling, ".gradle-daemons", ".gitignore"]))
 
       assert %{"GRADLE_OPTS" => _opts} = AgentEnv.gradle_env(dangling)
@@ -54,6 +79,7 @@ defmodule SymphonyElixir.AgentEnvTest do
       workspace = Path.join(System.tmp_dir!(), "symphony-agent-env-gradle-#{System.unique_integer([:positive])}")
       on_exit(fn -> File.rm_rf(workspace) end)
       File.mkdir_p!(workspace)
+      File.write!(Path.join(workspace, "settings.gradle.kts"), "")
       File.write!(Path.join(workspace, ".gradle-daemons"), "")
 
       assert AgentEnv.gradle_env(workspace) == %{}
