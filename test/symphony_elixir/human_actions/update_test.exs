@@ -124,6 +124,25 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
     assert Update.health(example_actions()) == "atRisk"
   end
 
+  test "lists actions on Human Review issues first, and says so" do
+    review = %Action{
+      key: "review:id-MOT-63",
+      kind: :human_review,
+      title: "Review MOT-63",
+      est_minutes: 30,
+      steps: ["Move MOT-63 to `Merging` to approve its PR."],
+      issue: %{issue("MOT-63", "Final verification: OpenRouter") | state: "Human Review"},
+      project: @project,
+      human_review: true
+    }
+
+    {body, []} = Update.render(example_actions() ++ [review], "human-action")
+
+    assert body =~ "**5 actions need you.** Human Review tickets first, then quickest first.\n\n### 1. Review MOT-63\n\n**Human Review** · **~30 min** · Unblocks"
+    assert body =~ "### 2. Add the release signing secrets"
+    assert [%Action{key: "review:id-MOT-63"} | _rest] = Update.sort(example_actions() ++ [review])
+  end
+
   test "renders exactly the example docs/configuration.md shows" do
     docs = File.read!(Path.expand("../../../docs/configuration.md", __DIR__))
     [_before, after_intro] = String.split(docs, "A rendered example, for a mix of", parts: 2)

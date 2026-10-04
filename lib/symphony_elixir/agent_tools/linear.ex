@@ -18,6 +18,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.HumanActions
   alias SymphonyElixir.HumanActions.Collector, as: HumanActionsCollector
   alias SymphonyElixir.HumanActions.Request
+  alias SymphonyElixir.HumanReview
   alias SymphonyElixir.Linear.{Client, Issue, TransientRetry}
   alias SymphonyElixir.PathSafety
   alias SymphonyElixir.PromptSafety
@@ -116,9 +117,11 @@ defmodule SymphonyElixir.AgentTools.Linear do
   }
   """
 
+  # The current issue's family: the blockers it lists, plus its parent, siblings and sub-issues.
   @related_issues_query """
   query SymphonyAgentRelatedIssues($id: String!, $first: Int!) {
     issue(id: $id) {
+      id
       relations(first: $first) {
         nodes {
           type
@@ -126,6 +129,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
             id
             identifier
             title
+            state { name }
           }
         }
       }
@@ -136,7 +140,45 @@ defmodule SymphonyElixir.AgentTools.Linear do
             id
             identifier
             title
+            state { name }
           }
+        }
+      }
+      parent {
+        id
+        identifier
+        title
+        state { name }
+        children(first: $first) {
+          nodes { id identifier title state { name } }
+        }
+      }
+      children(first: $first) {
+        nodes { id identifier title state { name } }
+      }
+    }
+  }
+  """
+
+  @related_issue_query """
+  query SymphonyAgentRelatedIssue($id: String!, $limit: Int!) {
+    issue(id: $id) {
+      id
+      identifier
+      title
+      description
+      priority
+      state { id name type }
+      labels { nodes { name } }
+      url
+      comments(last: $limit, orderBy: createdAt) {
+        nodes {
+          id
+          body
+          createdAt
+          updatedAt
+          user { id name }
+          parent { id }
         }
       }
     }
@@ -147,6 +189,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   query SymphonyAgentIssueTeamStates($id: String!) {
     issue(id: $id) {
       title
+      description
       labels {
         nodes {
           name
@@ -490,17 +533,67 @@ defmodule SymphonyElixir.AgentTools.Linear do
          {:ok, normalized_limit} <- normalize_limit(limit),
          {:ok, body} <- signed_graphql(@comments_query, %{id: issue_id, limit: normalized_limit}, opts),
          {:ok, nodes} <- fetch_path(body, ["data", "issue", "comments", "nodes"], []) do
-      {:ok, nodes |> Enum.reverse() |> Enum.map(&wrap_comment(&1, context, opts))}
+      {:ok, nodes |> Enum.reverse() |> Enum.map(&wrap_comment(&1, context, "linear_get_comments", opts))}
     end
   end
 
   @spec get_related_issues(context(), keyword()) :: {:ok, [map()]} | {:error, term()}
   def get_related_issues(context, opts \\ []) do
+    with {:ok, related} <- fetch_related_issues(context, opts) do
+      {:ok, Enum.map(related, &wrap_issue_summary/1)}
+    end
+  end
+
+  @doc """
+  Reads one issue of the current issue's family (its parent, a sibling, a sub-issue, or an issue
+  it blocks or is blocked by) with its comments, newest first. Any other issue is refused.
+  """
+  @spec get_related_issue(context(), String.t() | nil, integer() | nil, keyword()) :: {:ok, map()} | {:error, term()}
+  def get_related_issue(context, identifier, comment_limit, opts \\ []) do
+    with {:ok, identifier} <- validate_related_identifier(identifier),
+         {:ok, limit} <- normalize_limit(comment_limit),
+         {:ok, related} <- fetch_related_issues(context, opts),
+         {:ok, issue_id, relations} <- family_member(related, identifier),
+         {:ok, body} <- signed_graphql(@related_issue_query, %{id: issue_id, limit: limit}, opts),
+         {:ok, issue} <- fetch_path(body, ["data", "issue"], :issue_not_found) do
+      {:ok, wrap_related_issue(issue, relations, context, opts)}
+    end
+  end
+
+  defp fetch_related_issues(context, opts) do
     with {:ok, issue_id} <- current_issue_id(context),
          {:ok, body} <- graphql(@related_issues_query, %{id: issue_id, first: @related_issue_first}, opts),
          {:ok, issue} <- fetch_path(body, ["data", "issue"], :issue_not_found) do
-      {:ok, issue |> related_issues() |> Enum.map(&wrap_issue_summary/1)}
+      {:ok, related_issues(issue) ++ family_issues(issue)}
     end
+  end
+
+  defp validate_related_identifier(identifier) do
+    if non_blank?(identifier), do: {:ok, identifier |> String.trim() |> String.upcase()}, else: {:error, :invalid_related_issue_identifier}
+  end
+
+  defp family_member(related, identifier) do
+    case Enum.filter(related, &(is_binary(&1["identifier"]) and String.upcase(&1["identifier"]) == identifier)) do
+      [] ->
+        {:error, {:issue_outside_family, identifier, related |> Enum.map(& &1["identifier"]) |> Enum.uniq()}}
+
+      [%{"id" => issue_id} | _rest] = matches ->
+        {:ok, issue_id, matches |> Enum.map(&family_relation/1) |> Enum.uniq()}
+    end
+  end
+
+  defp family_relation(%{"relation" => "relation", "type" => type}), do: type
+  defp family_relation(%{"relation" => "inverse_relation"}), do: "blocked_by"
+  defp family_relation(%{"relation" => relation}), do: relation
+
+  defp wrap_related_issue(issue, relations, context, opts) do
+    comments = get_in(issue, ["comments", "nodes"]) || []
+
+    issue
+    |> wrap_issue_summary()
+    |> Map.put("labels", Enum.map(get_in(issue, ["labels", "nodes"]) || [], & &1["name"]))
+    |> Map.put("relations", relations)
+    |> Map.put("comments", comments |> Enum.reverse() |> Enum.map(&wrap_comment(&1, context, "linear_get_related_issues", opts)))
   end
 
   @spec update_state(context(), String.t()) :: {:ok, map()} | {:error, term()}
@@ -509,7 +602,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @spec update_state(context(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def update_state(context, state_name_or_id, opts) when is_binary(state_name_or_id) do
     with {:ok, issue_id} <- current_issue_id(context),
-         {:ok, state_id} <- resolve_state_id(issue_id, state_name_or_id, opts),
+         {:ok, state_id} <- resolve_state_id(issue_id, state_name_or_id, CommentRegistry.human_action_requested?(Map.get(context, :comment_registry)), opts),
          {:ok, response} <- graphql(@update_issue_state_mutation, %{id: issue_id, stateId: state_id}, opts) do
       check_mutation_success(response, "issueUpdate")
     end
@@ -990,7 +1083,13 @@ defmodule SymphonyElixir.AgentTools.Linear do
          :ok <- CommentRegistry.reserve_human_action(registry, @human_action_cap_per_run) do
       case post_human_action(issue_id, request, settings, opts) do
         {:ok, %{"requested" => true}} = result ->
+          CommentRegistry.record_human_action_request(registry)
           Keyword.get(opts, :refresh_human_actions, &HumanActions.refresh/0).()
+          result
+
+        {:ok, %{"reason" => "already_open"}} = result ->
+          CommentRegistry.release_human_action(registry)
+          CommentRegistry.record_human_action_request(registry)
           result
 
         other ->
@@ -1320,7 +1419,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
     |> Map.reject(fn {_key, value} -> is_nil(value) end)
   end
 
-  defp resolve_state_id(issue_id, state_name_or_id, opts) do
+  defp resolve_state_id(issue_id, state_name_or_id, human_action_requested?, opts) do
     normalized = String.trim(state_name_or_id)
 
     if normalized == "" do
@@ -1328,9 +1427,10 @@ defmodule SymphonyElixir.AgentTools.Linear do
     else
       settings = Keyword.get_lazy(opts, :settings, &Config.settings!/0)
 
-      with {:ok, state, pr_less?} <- lookup_team_state(issue_id, normalized, opts),
-           {:ok, state_id} <- refuse_human_only_state(state),
-           {:ok, state_id} <- refuse_auto_review_handoff_state(state, state_id, pr_less?, settings) do
+      with {:ok, state, issue, states} <- lookup_team_state(issue_id, normalized, opts),
+           :ok <- refuse_auto_review_handoff_state(state, pr_less_issue?(issue), settings),
+           state = human_review_redirect(state, issue, states, human_action_requested?, settings),
+           {:ok, state_id} <- refuse_human_only_state(state) do
         refuse_waiting_on_sub_issues_state(state, state_id, settings)
       end
     end
@@ -1348,13 +1448,45 @@ defmodule SymphonyElixir.AgentTools.Linear do
          {:ok, states} <- fetch_path(body, ["data", "issue", "team", "states", "nodes"], []) do
       case Enum.find(states, matches?) do
         %{"id" => _} = state ->
-          {:ok, state, pr_less_issue?(get_in(body, ["data", "issue"]))}
+          {:ok, state, get_in(body, ["data", "issue"]), states}
 
         _ ->
           available = states |> Enum.map(& &1["name"]) |> Enum.reject(&is_nil/1)
           {:error, {:state_not_found, available}}
       end
     end
+  end
+
+  # An issue only a person can move on goes to the Human Review state instead of `In Review`, apart
+  # from the supervisor's queue: a `breakdown` plan whose ticket says a person reviews it, and the
+  # issue of a run that asked a person for something (which also goes there instead of `Backlog`).
+  defp human_review_redirect(state, issue, states, human_action_requested?, settings) do
+    with true <- HumanReview.enabled?(settings),
+         true <- needs_person?(state, issue, human_action_requested?, settings),
+         %{"id" => _} = human_review <- Enum.find(states, &state_name_matches?(&1, HumanReview.state(settings))) do
+      human_review
+    else
+      _keep -> state
+    end
+  end
+
+  defp needs_person?(state, issue, human_action_requested?, settings) do
+    cond do
+      state_name_matches?(state, @backlog_state) ->
+        human_action_requested?
+
+      state_name_matches?(state, AutoReview.review_state()) ->
+        human_action_requested? or human_reviewed_plan?(issue, settings)
+
+      true ->
+        false
+    end
+  end
+
+  defp human_reviewed_plan?(issue, settings) do
+    labels = issue |> get_in(["labels", "nodes"]) |> List.wrap() |> Enum.map(&label_name/1) |> Enum.filter(&is_binary/1)
+    plan = %Issue{title: issue["title"], description: issue["description"], labels: labels}
+    Issue.breakdown?(plan) and HumanReview.requested_by_ticket?(plan, settings)
   end
 
   defp refuse_human_only_state(%{"id" => state_id} = state) do
@@ -1364,14 +1496,16 @@ defmodule SymphonyElixir.AgentTools.Linear do
   end
 
   # With Auto Review on, Symphony moves the issue on from the PR being open, so an
-  # agent asking for `In Review` is refused rather than silently redirected. A `breakdown`
-  # parent and a `Final verification:` ticket open no PR: their result goes to `In Review`
-  # for a human whatever Auto Review says.
-  defp refuse_auto_review_handoff_state(state, state_id, pr_less?, settings) do
-    if AutoReview.enabled?(settings) and state_name_matches?(state, AutoReview.review_state()) and
-         not pr_less?,
+  # agent asking for `In Review` or the Human Review state is refused rather than silently
+  # redirected. It runs before the Human Review redirect, so a run that asked a person for
+  # something cannot skip QA that way: a blocked PR reaches Human Review through Auto Review.
+  # A `breakdown` parent and a `Final verification:` ticket open no PR: their result goes to
+  # a person whatever Auto Review says.
+  defp refuse_auto_review_handoff_state(state, pr_less?, settings) do
+    if AutoReview.enabled?(settings) and not pr_less? and
+         (state_name_matches?(state, AutoReview.review_state()) or HumanReview.in_state?(state["name"], settings)),
        do: {:error, {:in_review_set_by_auto_review, state["name"], AutoReview.state(settings)}},
-       else: {:ok, state_id}
+       else: :ok
   end
 
   # Moving a `breakdown` parent from `In Review` to the waiting state approves its plan and
@@ -1549,15 +1683,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
 
       case issue do
         %{} ->
-          [
-            %{
-              "relation" => direction,
-              "type" => type,
-              "id" => issue["id"],
-              "identifier" => issue["identifier"],
-              "title" => issue["title"]
-            }
-          ]
+          [Map.merge(%{"relation" => direction, "type" => type}, family_summary(issue))]
 
         _ ->
           []
@@ -1568,6 +1694,30 @@ defmodule SymphonyElixir.AgentTools.Linear do
   end
 
   defp related_issue_from_relation(_relation, _direction), do: []
+
+  # The parent, the parent's other children, and the current issue's own children.
+  defp family_issues(issue) do
+    parent = Map.get(issue, "parent")
+    siblings = Enum.reject(child_nodes(parent), &(&1["id"] == issue["id"]))
+
+    Enum.map(List.wrap(parent), &family_entry(&1, "parent")) ++
+      Enum.map(siblings, &family_entry(&1, "sibling")) ++
+      Enum.map(child_nodes(issue), &family_entry(&1, "sub_issue"))
+  end
+
+  defp child_nodes(%{"children" => %{"nodes" => nodes}}) when is_list(nodes), do: nodes
+  defp child_nodes(_issue), do: []
+
+  defp family_entry(issue, relation), do: Map.put(family_summary(issue), "relation", relation)
+
+  defp family_summary(issue) do
+    %{
+      "id" => issue["id"],
+      "identifier" => issue["identifier"],
+      "title" => issue["title"],
+      "state" => get_in(issue, ["state", "name"])
+    }
+  end
 
   defp wrap_issue(issue) when is_map(issue) do
     issue
@@ -1601,13 +1751,13 @@ defmodule SymphonyElixir.AgentTools.Linear do
 
   defp wrap_comment(comment), do: comment
 
-  defp wrap_comment(comment, context, opts) when is_map(comment) do
+  defp wrap_comment(comment, context, tool, opts) when is_map(comment) do
     comment
-    |> redact_string_field("body", context, "linear_get_comments", opts)
+    |> redact_string_field("body", context, tool, opts)
     |> wrap_string_field("body", &wrap_comment_body/1)
   end
 
-  defp wrap_comment(comment, _context, _opts), do: comment
+  defp wrap_comment(comment, _context, _tool, _opts), do: comment
 
   # The workpad is detected the way `Workpad` finds it, and read back whole so the agent's
   # rewrite does not drop the text past the ordinary comment limit.

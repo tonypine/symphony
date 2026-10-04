@@ -14,6 +14,7 @@ defmodule SymphonyElixir.CiPoller do
   alias SymphonyElixir.AcceptanceGate.Agreement
   alias SymphonyElixir.{AuditLog, AutoMerge, AutoReview, Config, Notifications, Orchestrator, RunStore, Tracker}
   alias SymphonyElixir.GitHub.{PullRequest, Webhook}
+  alias SymphonyElixir.HumanReview
   alias SymphonyElixir.Linear.{Issue, Usage}
 
   @in_review_state "In Review"
@@ -504,13 +505,15 @@ defmodule SymphonyElixir.CiPoller do
     end
   end
 
-  # Auto Review issues have an open PR waiting on CI, just like In Review ones. Merging ones too:
-  # the orchestrator holds a landing agent that ended its turn on pending checks until this poller
-  # sees the head settle.
+  # Auto Review and Human Review issues have an open PR waiting on CI, just like In Review ones.
+  # Merging ones too: the orchestrator holds a landing agent that ended its turn on pending checks
+  # until this poller sees the head settle.
   defp watched_states(settings) do
+    review_states = HumanReview.review_states(settings)
+
     if AutoReview.enabled?(settings),
-      do: [@in_review_state, AutoReview.state(settings), @merging_state],
-      else: [@in_review_state, @merging_state]
+      do: review_states ++ [AutoReview.state(settings), @merging_state],
+      else: review_states ++ [@merging_state]
   end
 
   defp auto_review_issues(settings, issues) do

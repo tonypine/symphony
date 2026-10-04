@@ -424,6 +424,26 @@ defmodule SymphonyElixir.ParentWalkthroughTest do
       assert [] = created_subissues()
     end
 
+    test "manual steps left after a pass or a blocked pass hand the sign-off to Human Review" do
+      manual = %{name: "Call OpenRouter with a real key", status: "skipped", details: "No key on the QA host.", evidence: []}
+
+      agent_result(:pass, %{needs_person: true, steps: [manual]})
+      assert :ok = run(verification())
+      assert_received {:state_update, "issue-fv", "Human Review"}
+      assert [{"issue-parent", report}, {"issue-fv", report}] = comments_posted()
+      assert report =~ "**Verdict:** pass → TP-910 Human Review"
+
+      agent_result(:blocked, %{reason: "OPENROUTER_API_KEY is not set", needs_person: true, steps: [%{manual | status: "blocked"}]})
+      assert :ok = run(verification())
+      assert_received {:state_update, "issue-fv", "Human Review"}
+
+      settings = Config.settings!()
+      off = %{settings | tracker: %{settings.tracker | human_review_state: nil}}
+      agent_result(:pass, %{needs_person: true, steps: [manual]})
+      assert :ok = run(verification(), settings: off)
+      assert_received {:state_update, "issue-fv", "In Review"}
+    end
+
     test "findings without a failing step are filed one per finding, and a failed create is logged" do
       long = String.duplicate("y", 200)
 
@@ -486,6 +506,17 @@ defmodule SymphonyElixir.ParentWalkthroughTest do
       assert [{"issue-parent", report}, _ticket] = comments_posted()
       assert report =~ ~s(Reason: could not read the head of origin/main: {:git_failed, 128, "fatal: unreachable"})
       refute_received {:qa_agent_run, _job, _settings, _opts}
+    end
+
+    test "a QA agent that hits the usage limit writes no report, keeps the ticket's state and returns the limit" do
+      info = %{provider: "anthropic", scope: :all, window: "five_hour", resets_at: ~U[2026-10-04 17:20:00Z]}
+      error = {:qa_agent_failed, {:usage_limited, info}}
+      Application.put_env(:symphony_elixir, :walkthrough_agent_result, {:error, error, QaAgent.empty_tokens()})
+
+      assert {:error, {:usage_limited, ^info}} = run(verification())
+      assert_received {:qa_agent_run, _job, _settings, _opts}
+      refute_received {:state_update, _issue_id, _state}
+      assert comments_posted() == []
     end
 
     test "a rate-limited final state move keeps the verdict and applies it after the wait" do

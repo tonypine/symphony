@@ -84,6 +84,11 @@ branch instead of opening a second one. If a claimed issue moves to a terminal s
   (`nice -n 10`) than Symphony, so one run's busy loop can't starve Symphony, QA passes, or other runs.
 - **Scoped agent tools** — current-issue Linear updates, GitHub PR evidence, and attachment handling.
 - **Quality gate** — optionally scores issue clarity before dispatch so unclear work is held back.
+- **Human Review** — tickets only the operator can move on (a QA block that needs a secret or a hand
+  check, a plan the ticket says a human reviews, a `linear_request_human_action` request, a final
+  verification with manual checks left) wait in `Human Review` instead of `In Review`, so the board,
+  the dashboard and the menu bar show what waits on you apart from the supervisor's queue. Set
+  `issues.states.human_review: null` to keep them in `In Review`.
 - **Parent tickets** — label a large ticket `breakdown` and the agent splits it into sub-tickets plus a
   final verification ticket instead of opening a PR, then moves the parent to `In Review`. Approve the
   plan by moving the parent to `Waiting on sub-tickets` and Symphony promotes every `Backlog`
@@ -345,10 +350,10 @@ Forcing only removes the wait for a slot. These transitions stay with a person:
 | Transition | Who |
 | --- | --- |
 | `Backlog` → `Todo` | a person promotes the ticket; forcing doesn't |
-| `In Review` → `Merging` | a person approves the PR |
-| `In Review` → `Waiting on sub-tickets` | a person approves a `breakdown` plan |
+| `In Review` or `Human Review` → `Merging` | a person approves the PR |
+| `In Review` or `Human Review` → `Waiting on sub-tickets` | a person approves a `breakdown` plan |
 | any state → `Rework` | a person rejects the approach |
-| `Final verification:` `In Review` → `Done` | a person signs it off |
+| `Final verification:` `In Review` or `Human Review` → `Done` | a person signs it off |
 
 The review-agent verdict and the Auto Review QA verdict are still required: forcing never skips or
 changes them.
@@ -388,7 +393,9 @@ records it as `stopped` without changing the Linear issue state.
 When a run hits the Claude or Codex usage limit, Symphony holds new runs of that agent on its own
 and resumes them when the limit resets (plus `agent.usage_limit.resume_margin_seconds`), keeping each held issue's
 attempt. One held run goes first; the rest follow only once it is accepted, and the hold starts
-again if the limit is still in force. Runs on other providers keep going, and an operator pause is never cleared by it. Set
+again if the limit is still in force. Runs on other providers keep going, and an operator pause is never cleared by it.
+An Auto Review QA pass that hits the limit is held the same way: it records no verdict, the issue
+stays where it is, and the pass runs again after the hold. Set
 `agent.usage_limit.auto_pause: false` to fail and retry such runs as before.
 
 While Claude runs are held, the web and terminal dashboards show a banner such as

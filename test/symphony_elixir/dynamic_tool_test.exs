@@ -4,6 +4,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
   alias SymphonyElixir.Codex.DynamicTool
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.PromptSafety
   alias SymphonyElixir.QaAndroid.Driver, as: QaAndroidDriver
 
   test "tool_specs advertises scoped Linear tools and not raw GraphQL" do
@@ -373,6 +374,102 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
     assert response["success"] == true
     assert_received {:linear_client_called, _query, %{stateId: "state-progress"}}
+  end
+
+  describe "update_state and Human Review" do
+    @review_states [
+      %{"id" => "state-backlog", "name" => "Backlog", "type" => "backlog"},
+      %{"id" => "state-todo", "name" => "Todo", "type" => "unstarted"},
+      %{"id" => "state-review", "name" => "In Review", "type" => "started"},
+      %{"id" => "state-human", "name" => "Human Review", "type" => "started"}
+    ]
+
+    defp move(target, issue_fields, opts \\ []) do
+      test_pid = self()
+      {states, opts} = Keyword.pop(opts, :states, @review_states)
+
+      client = fn query, variables, client_opts ->
+        if query =~ "SymphonyAgentIssueTeamStates",
+          do: {:ok, %{"data" => %{"issue" => Map.merge(team_states_issue(states, []), issue_fields)}}},
+          else: update_state_client(test_pid, states).(query, variables, client_opts)
+      end
+
+      response =
+        DynamicTool.execute("linear_update_state", %{"state_name_or_id" => target}, [issue: %Issue{id: "issue-current"}, linear_client: client] ++ opts)
+
+      assert response["success"] == true
+      assert_received {:linear_client_called, _query, %{stateId: state_id}}
+      state_id
+    end
+
+    test "a breakdown plan whose ticket says a person reviews it goes to Human Review instead of In Review" do
+      needs_human = %{"title" => "Split the importer", "labels" => %{"nodes" => [%{"name" => "breakdown"}, %{"name" => "needs-human"}]}}
+      must_not = %{"title" => "Split the importer", "description" => "This plan must not auto-approve.", "labels" => %{"nodes" => [%{"name" => "breakdown"}]}}
+      plain_plan = %{"title" => "Split the importer", "description" => "Plan it.", "labels" => %{"nodes" => [%{"name" => "breakdown"}]}}
+      not_a_plan = %{"title" => "Fix the importer", "labels" => %{"nodes" => [%{"name" => "needs-human"}]}}
+
+      assert move("In Review", needs_human) == "state-human"
+      assert move("in review", must_not) == "state-human"
+      assert move("In Review", plain_plan) == "state-review"
+      assert move("In Review", not_a_plan) == "state-review"
+
+      # Without the state in the team, or with it turned off, the plan goes to In Review as before.
+      assert move("In Review", needs_human, states: Enum.drop(@review_states, -1)) == "state-review"
+      settings = Config.settings!()
+      off = %{settings | tracker: %{settings.tracker | human_review_state: nil}}
+      assert move("In Review", needs_human, settings: off) == "state-review"
+    end
+
+    test "after a human-action request, the move to Backlog or In Review goes to Human Review" do
+      {:ok, registry} = CommentRegistry.start_link()
+
+      assert move("Backlog", %{}, comment_registry: registry) == "state-backlog"
+
+      CommentRegistry.record_human_action_request(registry)
+      assert move("Backlog", %{}, comment_registry: registry) == "state-human"
+      assert move("In Review", %{}, comment_registry: registry) == "state-human"
+      assert move("Todo", %{}, comment_registry: registry) == "state-todo"
+
+      settings = Config.settings!()
+      off = %{settings | tracker: %{settings.tracker | human_review_state: nil}}
+      assert move("Backlog", %{}, comment_registry: registry, settings: off) == "state-backlog"
+    end
+
+    test "with Auto Review off, an agent can move its issue to Human Review itself" do
+      assert move("Human Review", %{}) == "state-human"
+    end
+
+    test "with Auto Review on, an issue with a PR cannot reach Human Review through the tool" do
+      write_workflow_file!(Workflow.workflow_file_path(), auto_review: %{enabled: true})
+      {:ok, registry} = CommentRegistry.start_link()
+      CommentRegistry.record_human_action_request(registry)
+      implementation = %{"title" => "Fix the importer", "labels" => %{"nodes" => []}}
+      test_pid = self()
+
+      for target <- ["In Review", "Human Review", "human review"] do
+        response =
+          DynamicTool.execute(
+            "linear_update_state",
+            %{"state_name_or_id" => target},
+            issue: %Issue{id: "issue-current"},
+            comment_registry: registry,
+            linear_client: fn query, variables, client_opts ->
+              if query =~ "SymphonyAgentIssueTeamStates",
+                do: {:ok, %{"data" => %{"issue" => Map.merge(team_states_issue(@review_states, []), implementation)}}},
+                else: update_state_client(test_pid, @review_states).(query, variables, client_opts)
+            end
+          )
+
+        assert response["success"] == false
+        assert %{"error" => %{"code" => "in_review_set_by_auto_review"}} = Jason.decode!(response["output"])
+        refute_received {:linear_client_called, _query, %{stateId: _state_id}}
+      end
+
+      # The move to Backlog after a request has no PR to review, so it still goes to Human Review,
+      # and a PR-less breakdown plan can still be moved there.
+      assert move("Backlog", implementation, comment_registry: registry) == "state-human"
+      assert move("Human Review", %{"labels" => %{"nodes" => [%{"name" => "breakdown"}]}}) == "state-human"
+    end
   end
 
   test "update_state allows Waiting on sub-tickets when the waiting state is turned off in config" do
@@ -912,6 +1009,57 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
         assert %{"error" => %{"code" => ^code, "message" => message}} = Jason.decode!(response["output"])
         assert message =~ "linear_add_blocked_by" or message =~ "Could not mark the current issue blocked by TP-2"
       end
+    end
+  end
+
+  describe "linear_get_related_issues" do
+    setup do
+      family = %{
+        "id" => "issue-fv",
+        "inverseRelations" => %{"nodes" => [%{"type" => "blocks", "issue" => %{"id" => "issue-2", "identifier" => "TP-2", "title" => "Slice"}}]},
+        "parent" => %{"id" => "issue-1", "identifier" => "TP-1", "title" => "Parent", "children" => %{"nodes" => [%{"id" => "issue-2", "identifier" => "TP-2", "title" => "Slice"}]}}
+      }
+
+      client = fn query, variables, _opts ->
+        if query =~ "SymphonyAgentRelatedIssues",
+          do: {:ok, %{"data" => %{"issue" => family}}},
+          else: {:ok, %{"data" => %{"issue" => %{"id" => variables.id, "identifier" => "TP-2", "comments" => %{"nodes" => [%{"id" => "qa", "body" => "QA report"}]}}}}}
+      end
+
+      [opts: [issue: %Issue{id: "issue-fv"}, tool_scope: :read_only, linear_client: client]]
+    end
+
+    test "lists the family, and reads a sibling's comments in the read-only scope", %{opts: opts} do
+      assert %{"inputSchema" => %{"properties" => properties}} = Enum.find(DynamicTool.tool_specs(:read_only), &(&1["name"] == "linear_get_related_issues"))
+      assert properties |> Map.keys() |> Enum.sort() == ["comment_limit", "identifier"]
+      assert "linear_get_related_issues" in Enum.map(DynamicTool.tool_specs(:qa), & &1["name"])
+
+      response = DynamicTool.execute("linear_get_related_issues", %{}, opts)
+      assert Enum.map(Jason.decode!(response["output"]), &{&1["relation"], &1["identifier"]}) == [{"inverse_relation", "TP-2"}, {"parent", "TP-1"}, {"sibling", "TP-2"}]
+
+      response = DynamicTool.execute("linear_get_related_issues", %{"identifier" => "TP-2", "comment_limit" => 10}, opts)
+      assert response["success"] == true
+      assert %{"relations" => ["blocked_by", "sibling"], "comments" => [%{"id" => "qa", "body" => body}]} = Jason.decode!(response["output"])
+      assert body == PromptSafety.linear_issue_comment_body("QA report")
+    end
+
+    test "returns explicit error payloads", %{opts: opts} do
+      for {args, code} <- [
+            {%{"identifier" => "TP-99"}, "issue_outside_family"},
+            {%{"comment_limit" => 5}, "invalid_related_issue_identifier"},
+            {%{"identifier" => "TP-2", "comment_limit" => 0}, "invalid_limit"}
+          ] do
+        response = DynamicTool.execute("linear_get_related_issues", args, opts)
+        refute response["success"]
+        assert %{"error" => %{"code" => ^code}} = Jason.decode!(response["output"])
+      end
+
+      response = DynamicTool.execute("linear_get_related_issues", %{"identifier" => "TP-99"}, opts)
+      assert %{"error" => %{"message" => message, "related_issues" => ["TP-2", "TP-1"]}} = Jason.decode!(response["output"])
+      assert message =~ "TP-99 is not the parent, a sibling, a sub-issue or a blocker"
+
+      response = DynamicTool.execute("linear_get_related_issues", %{"issue_id" => "issue-other"}, opts)
+      assert %{"error" => %{"code" => "scope_argument_rejected"}} = Jason.decode!(response["output"])
     end
   end
 

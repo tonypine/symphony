@@ -10,6 +10,8 @@ defmodule SymphonyElixir.WorkflowSource do
 
   The snapshot is only replaced with content that parses, so a missing or invalid
   `WORKFLOW.md` on the ref logs an error and keeps the last known good workflow.
+  The error is kept next to the snapshot until the ref loads again, so
+  `GET /api/v1/repos` reports it even across a restart (see `ref_error/1`).
 
   With `workflow_source: local`, or when the workflow file is not inside a git
   checkout, the configured file is read directly. The configured file is also read
@@ -27,7 +29,7 @@ defmodule SymphonyElixir.WorkflowSource do
 
   alias SymphonyElixir.Config.{Cache, SystemSchema}
   alias SymphonyElixir.{ManagedClone, Paths, Workflow, Workspace}
-  alias SymphonyElixir.Repo.FetchLog
+  alias SymphonyElixir.Repo.{Fetcher, FetchLog}
 
   @default_branch_refs ["origin/HEAD", "origin/main", "origin/master"]
 
@@ -48,6 +50,24 @@ defmodule SymphonyElixir.WorkflowSource do
     else
       _ -> local_path
     end
+  end
+
+  @doc """
+  Why the repo's `WORKFLOW.md` on the ref did not load at the last refresh, while
+  the last known good snapshot is kept, or nil.
+  """
+  @spec ref_error(SystemSchema.Repo.t()) :: term() | nil
+  def ref_error(%SystemSchema.Repo{} = repo) do
+    local_path = SystemSchema.repo_workflow_path(repo)
+
+    with {:ok, _checkout} <- ref_checkout(repo, local_path),
+         {:ok, binary} <- File.read(ref_error_path(snapshot_path(repo, local_path))) do
+      :erlang.binary_to_term(binary, [:safe])
+    else
+      _ -> nil
+    end
+  rescue
+    ArgumentError -> nil
   end
 
   @doc """
@@ -135,11 +155,13 @@ defmodule SymphonyElixir.WorkflowSource do
     Path.join([Paths.state_root(), "workflows", Workspace.safe_identifier(name), Path.basename(local_path)])
   end
 
+  defp ref_error_path(snapshot), do: snapshot <> ".ref-error"
+
   defp maybe_fetch(repo, checkout, opts) do
     fetched_repo = Keyword.get(opts, :fetched_repo)
 
     if Keyword.get(opts, :fetch, false) and not same_checkout?(checkout, fetched_repo) do
-      case FetchLog.record(repo.name, git(checkout, ["fetch", "origin"])) do
+      case FetchLog.record(repo.name, git_result(Fetcher.fetch_origin(checkout), ["fetch", "origin"])) do
         {:ok, _output} ->
           :ok
 
@@ -160,6 +182,7 @@ defmodule SymphonyElixir.WorkflowSource do
       {:ok, content, _workflow} ->
         first_snapshot? = not File.regular?(snapshot)
         result = write_snapshot(snapshot, content)
+        File.rm(ref_error_path(snapshot))
         if first_snapshot?, do: switch_primary_store_to_snapshot(repo, snapshot)
         result
 
@@ -188,8 +211,11 @@ defmodule SymphonyElixir.WorkflowSource do
 
   defp log_refresh_error(repo, checkout, workflow_in_repo, snapshot, reason) do
     if File.regular?(snapshot) do
+      File.write(ref_error_path(snapshot), :erlang.term_to_binary(reason))
       Logger.error("Failed to load workflow from ref repo=#{repo.name} checkout=#{checkout} workflow=#{workflow_in_repo} reason=#{inspect(reason)}; keeping last known good workflow")
     else
+      File.rm(ref_error_path(snapshot))
+
       Logger.warning(
         "Failed to load workflow from ref repo=#{repo.name} checkout=#{checkout} workflow=#{workflow_in_repo} reason=#{inspect(reason)}; reading the local workflow file until the ref resolves (set workflow_source: local to silence this)"
       )
@@ -236,10 +262,8 @@ defmodule SymphonyElixir.WorkflowSource do
     end
   end
 
-  defp git(checkout, args) do
-    case Workspace.safe_git(["-C", checkout | args]) do
-      {output, 0} -> {:ok, output}
-      {output, status} -> {:error, {:git_failed, args, status, String.trim(output)}}
-    end
-  end
+  defp git(checkout, args), do: git_result(Workspace.safe_git(["-C", checkout | args]), args)
+
+  defp git_result({output, 0}, _args), do: {:ok, output}
+  defp git_result({output, status}, args), do: {:error, {:git_failed, args, status, String.trim(output)}}
 end

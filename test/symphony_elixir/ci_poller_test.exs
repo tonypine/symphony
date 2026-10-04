@@ -315,14 +315,41 @@ defmodule SymphonyElixir.CiPollerTest do
     assert [%{"issue_identifier" => "ACME-2401", "verdict" => "approve", "decision" => "approve"}] = Enum.to_list(events)
   end
 
-  test "with Auto Review off In Review and Merging issues are watched" do
+  test "with Auto Review off In Review, Human Review and Merging issues are watched" do
     now = ~U[2026-05-06 09:00:00Z]
     Application.put_env(:symphony_elixir, :ci_test_issues, [])
 
     assert {:ok, %{discovered: 0, processed: 0, actions: []}} =
              CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
 
+    assert_receive {:fetch_issues_by_states, ["In Review", "Human Review", "Merging"]}
+  end
+
+  test "with human_review: null only In Review and Merging issues are watched" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_human_review_state: nil,
+      pr_review_mode: "polling",
+      ci: %{enabled: true, log_excerpt_lines: 3, max_retries: 3}
+    )
+
+    Application.put_env(:symphony_elixir, :ci_test_issues, [])
+
+    assert {:ok, %{discovered: 0, processed: 0, actions: []}} =
+             CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: ~U[2026-05-06 09:00:00Z])
+
     assert_receive {:fetch_issues_by_states, ["In Review", "Merging"]}
+  end
+
+  test "a Human Review issue's PR is watched like an In Review one" do
+    now = ~U[2026-05-06 09:00:00Z]
+    issue = %{in_review_issue() | state: "Human Review"}
+    Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+    Application.put_env(:symphony_elixir, :ci_test_status, green_status())
+    put_run(issue, now)
+
+    assert {:ok, %{discovered: 1, processed: 1, actions: [{:green, "issue-2401"}]}} =
+             CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
   end
 
   test "a Merging issue's head is recorded and a red head goes through the CI-failure dispatch" do
@@ -379,7 +406,7 @@ defmodule SymphonyElixir.CiPollerTest do
       assert {:ok, %{discovered: 1, processed: 1, actions: [{:qa_started, "issue-2401", "abc123"}]}} =
                CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, qa_runner: FakeQaRunner, now: now)
 
-      assert_receive {:fetch_issues_by_states, ["In Review", "Auto Review", "Merging"]}
+      assert_receive {:fetch_issues_by_states, ["In Review", "Human Review", "Auto Review", "Merging"]}
       assert_receive {:qa_request, %{issue: %Issue{id: "issue-2401"}, sha: "abc123", record: %{workspace_path: "/tmp/workspaces/ACME-2401"}}}
       refute_receive {:issue_state_update, _, _}
       assert [%{status: "green"}] = RunStore.list_ci_checks()

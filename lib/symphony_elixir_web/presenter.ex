@@ -9,6 +9,7 @@ defmodule SymphonyElixirWeb.Presenter do
     BuildInfo,
     Config,
     ForcedStatus,
+    HumanReview,
     Orchestrator,
     Quality,
     RunKind,
@@ -53,6 +54,7 @@ defmodule SymphonyElixirWeb.Presenter do
       %{} = snapshot ->
         run_history = Map.get(snapshot, :run_history, [])
         blocked = Map.get(snapshot, :blocked, [])
+        human_review = snapshot |> Map.get(:watching, []) |> Enum.filter(&HumanReview.in_state?(Map.get(&1, :state)))
 
         %{
           generated_at: generated_at,
@@ -61,6 +63,7 @@ defmodule SymphonyElixirWeb.Presenter do
           counts: %{
             running: length(snapshot.running),
             watching: length(Map.get(snapshot, :watching, [])),
+            human_review: length(human_review),
             conflicts: length(Map.get(snapshot, :conflicts, [])),
             retrying: length(snapshot.retrying),
             claimed: length(Map.get(snapshot, :claimed, [])),
@@ -68,6 +71,7 @@ defmodule SymphonyElixirWeb.Presenter do
           },
           running: Enum.map(snapshot.running, &running_entry_payload/1),
           watching: snapshot |> Map.get(:watching, []) |> Enum.map(&watching_entry_payload/1),
+          human_review: Enum.map(human_review, &watching_entry_payload/1),
           conflicts: snapshot |> Map.get(:conflicts, []) |> Enum.map(&conflict_entry_payload/1),
           retrying: Enum.map(snapshot.retrying, &retry_entry_payload/1),
           awaiting_clarification:
