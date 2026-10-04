@@ -71,4 +71,5 @@ Verdicts for this playbook:
 - When a tool returns `qa_android_unavailable`, stop this playbook: mark each app step you could
   not check `blocked` with the tool's message in `details`. Then continue with the steps of the
   other playbooks offered to you (such as `cli` or `web`) and report each of them as `pass` or
-  `fail`. Answer `blocked` with the tool's message as `reason`.
+  `fail`. Answer `blocked` with the tool's message as `reason`. Never start the emulator, `qemu-*`
+  or `adb start-server` yourself to get around it: your sandbox cannot run them.

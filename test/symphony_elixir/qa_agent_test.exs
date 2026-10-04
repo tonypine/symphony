@@ -6,6 +6,7 @@ defmodule SymphonyElixir.QaAgentTest do
   alias SymphonyElixir.LeftoverProcesses.Table
   alias SymphonyElixir.QaAgent
   alias SymphonyElixir.QaAgent.{Report, Selection}
+  alias SymphonyElixir.QaAndroid.Driver, as: AndroidDriver
 
   @sha "0123456789abcdef0123456789abcdef01234567"
   @env_keys [
@@ -488,6 +489,23 @@ defmodule SymphonyElixir.QaAgentTest do
       refute QaAgent.prompt(job(), nil) =~ "Android app:"
     end
 
+    test "every QA prompt forbids starting an emulator or simulator and blocks device steps without the android_app playbook" do
+      parent = issue(%{id: "issue-parent", identifier: "TP-243", title: "Parent", description: "- [ ] parent criterion"})
+      verification = issue(%{id: "issue-fv", identifier: "TP-910", title: "Final verification: Parent", description: "- [ ] child criterion"})
+      android_app = %{kind: "android_app", paths: [], prompt: "Test the Android app.", build: "./gradlew assembleDebug", apk_path: "app.apk", application_ids: ["com.example.app"]}
+
+      for prompt <- [
+            QaAgent.prompt(job(), nil),
+            QaAgent.prompt(job(%{issue: parent, verification_issue: verification, base_ref: "origin/main"}), nil),
+            QaAgent.prompt(job(%{playbooks: [android_app]}), nil)
+          ] do
+        assert prompt =~ ~r/Never start an emulator, a simulator or a device tool yourself \(`emulator`, `qemu-\*`,\s+`xcrun simctl boot`, `adb start-server`/
+
+        assert prompt =~
+                 ~r/When a step needs an\s+Android device and no `android_app` playbook is offered to you below, mark that step `blocked`\s+with "no Android QA playbook configured for this repo"/
+      end
+    end
+
     test "QA prompts and built-in playbooks leave the test suite to CI" do
       parent = issue(%{id: "issue-parent", identifier: "TP-243", title: "Parent", description: "- [ ] parent criterion"})
       verification = issue(%{id: "issue-fv", identifier: "TP-910", title: "Final verification: Parent", description: "- [ ] child criterion"})
@@ -831,6 +849,46 @@ defmodule SymphonyElixir.QaAgentTest do
       assert {:ok, _result} = QaAgent.run(job(), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession)
       assert_receive {:qa_session_started, _worktree, cli_opts}
       assert cli_opts[:qa_android_driver] == nil
+    end
+
+    test "an Android change in a repo without the android_app playbook gets its device steps blocked, not an emulator" do
+      walkthrough = "## User walkthrough\n\n1. Open the app on a foldable.\n   The list and detail panes show side by side."
+      android_change = issue(%{description: walkthrough})
+
+      assert {:run, playbooks} =
+               Selection.decide(android_change, ["app/src/main/java/com/example/app/AdaptiveLayout.kt"], %{playbooks: %{}})
+
+      refute Enum.any?(playbooks, &(&1.kind == "android_app"))
+
+      # A compliant agent: the qa_android_* tools refuse without the playbook, so it marks the
+      # device step blocked with the reason the prompt and the tool error give.
+      {:error, {:qa_tool, "qa_android_driver_unavailable", tool_message}} = AndroidDriver.call_tool(nil, "qa_android_install", %{})
+      assert tool_message =~ "Do not start an emulator or adb yourself"
+      assert tool_message =~ AndroidDriver.no_playbook_reason()
+
+      blocked =
+        Jason.encode!(%{
+          verdict: "blocked",
+          summary: "The device steps need an Android emulator this repo does not configure.",
+          steps: [%{name: "Open the app on a foldable", status: "blocked", details: AndroidDriver.no_playbook_reason(), evidence: []}],
+          reason: AndroidDriver.no_playbook_reason()
+        })
+
+      Application.put_env(:symphony_elixir, :qa_test_turn_result, {:ok, %{result: blocked}})
+
+      assert {:ok, %{result: %{verdict: :blocked, reason: "no Android QA playbook configured for this repo", steps: [%{status: "blocked"}]}}} =
+               QaAgent.run(job(%{issue: android_change, playbooks: playbooks}), Config.settings!(),
+                 git: fake_git(),
+                 qa_agent_module: FakeSession,
+                 qa_android_driver_opts: [checkout: fn -> flunk("a pass without the android_app playbook must not boot an emulator") end]
+               )
+
+      assert_receive {:qa_session_started, _worktree, session_opts}
+      assert session_opts[:qa_android_driver] == nil
+      assert_receive {:qa_turn, _session, prompt, _issue, _turn_opts}
+      assert prompt =~ "Never start an emulator, a simulator or a device tool yourself"
+      assert prompt =~ ~r/mark that step `blocked`\s+with "no Android QA playbook configured for this repo"/
+      refute prompt =~ "### Playbook: android_app"
     end
 
     test "gives a web pass the dev server and a browser MCP server limited to localhost, then stops the server" do

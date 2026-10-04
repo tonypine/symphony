@@ -1340,7 +1340,9 @@ When enabled:
   remove its private directory. An emulator that cannot start MUST
   surface as `qa_android_unavailable`, telling the agent to answer `blocked`. Other tool scopes MUST
   NOT list or run them. The QA prompt MUST give the agent the playbook's `build`, `apk_path` and
-  `application_ids`.
+  `application_ids`. Every QA prompt MUST tell the agent never to start an emulator, simulator or
+  device tool itself, and to mark a step that needs an Android device `blocked` when no
+  `android_app` playbook runs in the pass.
 - With `worker_host` set, the worktree checks MUST stay on the Symphony host, and the build, the app,
   screenshots and accessibility calls MUST run on that host over SSH: `qa_build` ships the
   worktree's `HEAD` into a fresh build directory there, and screenshots are copied back into the

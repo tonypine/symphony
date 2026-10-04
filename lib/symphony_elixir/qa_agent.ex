@@ -176,6 +176,8 @@ defmodule SymphonyElixir.QaAgent do
     stop a detached process later. Symphony stops anything still running from this worktree or
     `$TMPDIR` when the pass ends.
 
+    #{device_rule()}
+
     Issue:
     Identifier: #{issue.identifier}
     Title: #{PromptSafety.linear_issue_title(issue.title || "")}
@@ -219,6 +221,21 @@ defmodule SymphonyElixir.QaAgent do
       "findings": ["<required for fail: one actionable defect per entry>"],
       "reason": "<required for blocked>"
     }
+    """
+  end
+
+  # The sandbox denies the hypervisor and Mach ports, so an emulator the agent boots dies with
+  # SIGILL and leaves crash reports on the host (TP-497). Only Symphony's host-side driver boots one.
+  defp device_rule do
+    """
+    Never start an emulator, a simulator or a device tool yourself (`emulator`, `qemu-*`,
+    `xcrun simctl boot`, `adb start-server`, or a script that runs them): your sandbox cannot run
+    them, and each attempt leaves crash reports on the host. Only Symphony boots a device, for the
+    `android_app` playbook, and you reach it through the `qa_android_*` tools; when those tools say
+    the device is unavailable, the step is `blocked`, not a reason to boot one. When a step needs an
+    Android device and no `android_app` playbook is offered to you below, mark that step `blocked`
+    with "#{AndroidDriver.no_playbook_reason()}" in `details`, and do not try to run it another
+    way.\
     """
   end
 

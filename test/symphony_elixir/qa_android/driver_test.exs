@@ -175,6 +175,9 @@ defmodule SymphonyElixir.QaAndroid.DriverTest do
                ~w(qa_android_install qa_android_launch qa_android_stop qa_android_screenshot qa_android_ui_tree qa_android_tap qa_android_type qa_android_key qa_android_rotate qa_android_dark_mode qa_android_font_scale)
 
       assert error_code(Driver.call_tool(nil, "qa_android_install", %{})) == "qa_android_driver_unavailable"
+      assert {:error, {:qa_tool, _code, message}} = Driver.call_tool(nil, "qa_android_install", %{})
+      assert message =~ "Do not start an emulator or adb yourself"
+      assert message =~ ~s(`blocked` with "no Android QA playbook configured for this repo")
       assert Driver.stop(nil) == :ok
     end
 
