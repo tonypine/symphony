@@ -1,6 +1,8 @@
 ### Playbook: cli
 
 Exercise the command-line entry points this change touches, the way a user would.
+Do not run the project's test suite, `make all`, coverage or Dialyzer: CI already ran them.
+Judge the change only by what the commands do.
 
 1. Find how the project builds and runs its CLI: read `AGENTS.md`, `README.md` and the
    `Makefile` (for an Elixir escript this is usually `mix deps.get` then `mix build` or

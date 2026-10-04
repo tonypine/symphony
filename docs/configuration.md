@@ -769,7 +769,11 @@ Each one falls back to the `pre_push_review` run profile (the routed repository'
 with none set the reviewer command is unchanged. They take the same values as `agent.model` /
 `agent.effort`, and `command` must not pass `--model` / `--effort` while any of them is set.
 
-When enabled, Symphony runs an executor/reviewer loop in the same workspace before push.
+When enabled, Symphony runs an executor/reviewer loop in the same workspace before push. The
+reviewer reads the committed diff; its prompt tells it not to run the test suite, coverage or
+Dialyzer, which CI runs after the push. Checks are split by cost: agents run cheap, targeted checks
+locally (format, compile, lint, the tests for the changed code; Symphony's own list is in its
+`WORKFLOW.md`), and the full suite, coverage and Dialyzer run only in CI.
 `run_on` defaults to `always`; set it to `first_push` to skip the reviewer on PR follow-up runs while keeping it enabled for initial issue runs.
 Follow-up runs include explicit PR dispatches (`symphony pr`) and automatic rework runs triggered by reviewer comments, CI failures, or PR conflicts; these also omit the review-agent gate from the prompt so the agent can push and exit in a single turn.
 
@@ -842,6 +846,11 @@ move the issue, comment, push or write to GitHub. The session stops at `timeout_
 or `agent.limits.tokens_per_issue`. An agent that ends its turn without the JSON verdict gets one
 follow-up turn in the same session asking for it, and the QA report notes "verdict after 1
 follow-up".
+
+QA never runs the test suite, `make all`, coverage or Dialyzer: a pass starts only once CI is green
+on the PR head, so the prompt and every built-in playbook tell the agent to rely on CI and to build
+only what it needs to use the change. A parent walkthrough marks a criterion that only asks for
+tests or CI to pass as `skipped`, covered by CI on the base branch.
 
 Symphony applies its verdict:
 
@@ -1354,3 +1363,40 @@ untrusted-input, scoped-tool, workpad, secret-handling, and final-response rules
 should add repository commands, conventions, validation gates, and handoff policy rather than
 duplicating those Symphony-owned rules. The repo workflow front matter is intentionally small;
 operator/runtime settings belong in `symphony.yml`.
+
+### Workspace hooks
+
+`hooks` runs shell scripts in the workspace at four points: `after_create` (when the
+workspace is new), `before_run` and `after_run` (around every run), and `before_remove` (before the
+workspace is deleted). A failing `after_create` or `before_run` fails the run; `after_run` and
+`before_remove` failures are logged and ignored.
+
+```yaml
+hooks:
+  after_create: |
+    mise exec -- mix deps.get
+  timeout_ms: 60000                 # every hook; default 1 minute
+  after_create_timeout_ms: 900000   # after_create only; optional
+```
+
+- `timeout_ms` bounds each hook run. It defaults to 60000 (1 minute).
+- `after_create_timeout_ms` bounds `after_create`, which usually installs dependencies. When it is
+  unset, `after_create` gets the larger of `timeout_ms` and 600000 (10 minutes).
+- When a hook times out, Symphony logs its last 20 output lines (`output_tail=`), so a hang can be
+  told apart from a slow install. A hook on this machine is stopped, with everything it started.
+  For a hook on an SSH worker, Symphony closes the `ssh` session, but the hook can keep running on
+  the worker.
+- A timed-out `after_create` on this machine is run once more, in the same run and the same
+  workspace, so it can pick up whatever the first try got done; the retry doesn't count as an agent
+  attempt. Write `after_create` so it is safe to run twice. A second timeout fails the run.
+- When `after_create` on this machine fails or times out, the workspace is kept, and the next run
+  runs `after_create` again in it before the agent starts. Until it succeeds once, Symphony keeps
+  an empty `.<issue>.after_create_pending` file beside the workspace.
+- A timed-out `after_create` on an SSH worker is not retried, and the next run doesn't run it again
+  either, since the first try may still be running there. The timeout fails the run.
+- While `after_create` or `before_run` runs, the agent stall timeout (`agent.timeouts.stall_ms`, 5
+  minutes) and the watchdog (`watchdog.no_progress_threshold_ms`) wait for the hook's own timeout,
+  so a long install isn't ended as a stalled run. Their clocks start again when the hook ends.
+- A run that is stopped while a hook runs on this machine stops the hook too.
+
+Each repository's `WORKFLOW.md` sets its own hooks and timeouts.

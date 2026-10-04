@@ -511,6 +511,8 @@ defmodule SymphonyElixir.ReviewAgent do
 
     Review the executor's committed diff for this Linear issue. You may inspect files and use read-only scoped Linear/GitHub tools, but you must not modify files, write Linear/GitHub data, push, or open a PR.
 
+    Review the diff by reading it. Do not run the test suite, `make all`, coverage or static analysis such as Dialyzer, even when the workflow below asks the executor to: CI runs them after the push.
+
     Issue:
     #{present_issue(issue)}
 

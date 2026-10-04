@@ -9,8 +9,9 @@ Use this whenever pushed checks come back failing, at any push gate.
 1. Read the check summary via `github_get_pr_checks()` to identify which check
    failed, then read the failed-step log excerpt via `github_get_failed_run_log()`.
 2. Categorize the failure as flaky/retryable infrastructure or a real code defect.
-3. For real failures, diagnose the root cause, fix it, rerun validation locally,
-   then loop back through the validation, diff-review, commit, and push gates.
+3. For real failures, diagnose the root cause, fix it, rerun the failing tests and
+   the targeted checks locally (not the full suite: CI reruns it on push), then
+   loop back through the validation, diff-review, commit, and push gates.
 4. Never use `--no-verify`, `--force`, or skipped hooks to bypass failures.
 5. If the failure is in unrelated pre-existing code, document it in the workpad and
    note it explicitly in the PR description.

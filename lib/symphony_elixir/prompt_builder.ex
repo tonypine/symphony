@@ -144,7 +144,7 @@ defmodule SymphonyElixir.PromptBuilder do
       "",
       "- Follow the repository workflow and existing workpad.",
       "- Keep implementation scoped to the ticket.",
-      "- Run targeted validation for the changed behavior, then the required repo gate before handoff when feasible.",
+      "- Run targeted validation for the changed behavior and the repository workflow's pre-push checks before handoff; leave the full test suite to CI.",
       "- Final message must report completed actions and blockers only. Do not include next steps for the user."
     ]
     |> List.flatten()

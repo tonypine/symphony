@@ -4527,6 +4527,136 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert %{attempt: 1, error: "stalled for " <> _} = get_orchestrator_state(pid).retry_attempts[issue_id]
   end
 
+  test "a workspace hook holds the first-turn stall check and the watchdog until its own deadline" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_api_token: nil,
+      agent_stall_timeout_ms: 1_000,
+      watchdog: %{enabled: true, tick_interval_ms: 60_000, no_progress_threshold_ms: 1_000}
+    )
+
+    issue_id = "issue-hook-stall"
+    orchestrator_name = Module.concat(__MODULE__, :HookStallOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        stop_process(pid)
+      end
+    end)
+
+    {worker_pid, worker_ref} = start_blocked_worker()
+    dispatched_at = DateTime.add(DateTime.utc_now(), -5, :second)
+    initial_state = get_orchestrator_state(pid)
+
+    running_entry = %{
+      pid: worker_pid,
+      ref: worker_ref,
+      repo_key: Config.repo_key!(),
+      run_id: "run-hook-stall",
+      identifier: "MT-HOOK-STALL",
+      issue: %Issue{id: issue_id, identifier: "MT-HOOK-STALL", state: "In Progress"},
+      session_id: nil,
+      agent_module: StopSessionAgent,
+      agent_session: %{recipient: self()},
+      last_codex_message: nil,
+      last_codex_timestamp: nil,
+      last_codex_event: nil,
+      last_event_at: dispatched_at,
+      started_at: dispatched_at
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.put(initial_state.claimed, issue_id))
+    end)
+
+    reconcile = fn ->
+      send(pid, :tick)
+      send(pid, :watchdog_tick)
+      Process.sleep(100)
+      get_orchestrator_state(pid)
+    end
+
+    # A slow after_create that started well past both clocks ago, with time left on its own timeout.
+    hook = %{name: "after_create", deadline: DateTime.add(DateTime.utc_now(), 60, :second)}
+    send(pid, {:worker_runtime_info, issue_id, %{workspace_hook: hook}})
+
+    :sys.replace_state(pid, fn state ->
+      update_in(state.running[issue_id], &Map.put(&1, :last_event_at, dispatched_at))
+    end)
+
+    assert %{workspace_hook: ^hook} = reconcile.().running[issue_id]
+    assert Process.alive?(worker_pid)
+
+    # Once it ends, both clocks start over from its end.
+    send(pid, {:worker_runtime_info, issue_id, %{workspace_hook: nil}})
+
+    assert %{workspace_hook: nil} = reconcile.().running[issue_id]
+    assert Process.alive?(worker_pid)
+
+    # A hook still running well past its own deadline is a stall.
+    overdue_hook = %{name: "after_create", deadline: DateTime.add(DateTime.utc_now(), -5, :second)}
+    send(pid, {:worker_runtime_info, issue_id, %{workspace_hook: overdue_hook}})
+    send(pid, :tick)
+    Process.sleep(100)
+    state = get_orchestrator_state(pid)
+
+    refute Map.has_key?(state.running, issue_id)
+    refute Process.alive?(worker_pid)
+    assert %{attempt: 1, error: "stalled for " <> _} = state.retry_attempts[issue_id]
+  end
+
+  test "the watchdog alone waits out a workspace hook's deadline, whatever the last transcript event" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_api_token: nil,
+      agent_stall_timeout_ms: 0,
+      watchdog: %{enabled: true, tick_interval_ms: 60_000, no_progress_threshold_ms: 1_000}
+    )
+
+    issue = %Issue{
+      id: "issue-watchdog-hook",
+      identifier: "MT-WATCHDOG-HOOK",
+      title: "Watchdog during a hook",
+      description: "Keep a worker running while its hook runs",
+      state: "In Progress"
+    }
+
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+
+    orchestrator_name = Module.concat(__MODULE__, :WatchdogHookOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        stop_process(pid)
+      end
+    end)
+
+    {worker_pid, worker_ref} = start_blocked_worker()
+    old_event_at = DateTime.add(DateTime.utc_now(), -5, :second)
+
+    running_entry =
+      running_entry(issue, worker_pid, worker_ref, "run-watchdog-hook", old_event_at, %{
+        last_codex_timestamp: old_event_at,
+        last_codex_event: :notification,
+        last_event_at: old_event_at,
+        workspace_hook: %{name: "before_run", deadline: DateTime.add(DateTime.utc_now(), 60, :second)}
+      })
+
+    put_running_entry(pid, issue, running_entry)
+
+    send(pid, :watchdog_tick)
+    Process.sleep(50)
+
+    assert Map.has_key?(get_orchestrator_state(pid).running, issue.id)
+    assert Process.alive?(worker_pid)
+
+    Process.demonitor(worker_ref, [:flush])
+    Process.exit(worker_pid, :shutdown)
+  end
+
   test "a run waiting on Linear is not restarted as stalled or stuck until the wait ends" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",

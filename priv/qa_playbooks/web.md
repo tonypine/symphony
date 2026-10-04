@@ -11,7 +11,8 @@ page's accessibility tree, with a `ref` for each element), `browser_click`, `bro
 server has its own names for the same actions; use its tools the same way.
 
 Do not edit files in the worktree, and do not start a second dev server: use the one Symphony
-started.
+started. Do not run the project's test suite, `make all`, coverage or static analysis: CI already
+ran them.
 
 1. Open the dev server's address. A page that does not load (connection refused, a 500, a blank
    body) is a failing step; quote what the snapshot or the console shows.
