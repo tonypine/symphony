@@ -3609,6 +3609,11 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert "github.com" in built_in_domains
     assert "registry.npmjs.org" in built_in_domains
 
+    for domain <- ["dl.google.com", "maven.google.com", "release-assets.githubusercontent.com"] do
+      assert domain in built_in_domains
+      assert domain in Schema.claude_built_in_network_allowed_domains()
+    end
+
     assert settings.agent.network_access.mode == "allowlist"
     assert settings.agent.network_access.allowed_domains == ["api.mycompany.com", "registry.npmjs.org"]
     assert settings.agent.network_access.denied_domains == ["registry.npmjs.org", "api.github.com"]
