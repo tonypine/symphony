@@ -1520,7 +1520,7 @@ any other repository command on the host; they only call Symphony's adb.
 | `qa_android_tap` | taps the centre of a node `path` from the last tree, or a point `x`, `y` | a point off the display, a path not in the last tree's result |
 | `qa_android_type` | types `text` (up to 500 characters) into the focused field; a newline presses Enter. Each part is single-quoted for the device's shell, so no character can run a command | anything but printable ASCII and newlines |
 | `qa_android_key` | presses `back`, `enter`, `ime_action`, `tab`, `del`, `dpad_up`, `dpad_down`, `dpad_left`, `dpad_right` or `escape` | any other key |
-| `qa_android_rotate` | turns off auto-rotate and sets `portrait` or `landscape` | any other orientation |
+| `qa_android_rotate` | turns off auto-rotate and locks `portrait` or `landscape` (`cmd window user-rotation lock`, or the `user_rotation` setting on Android 9 and older), then waits up to 5 s for the display to turn; fails with `qa_android_rotate_failed` when it does not, for example when the app locks its orientation | any other orientation |
 | `qa_android_dark_mode` | turns the night theme `on` or `off` (`cmd uimode night`) | |
 | `qa_android_font_scale` | sets the font scale to 0.85, 1.0, 1.15, 1.3, 1.5, 1.8 or 2.0 | any other scale |
 
