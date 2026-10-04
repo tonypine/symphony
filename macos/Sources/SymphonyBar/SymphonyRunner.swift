@@ -188,7 +188,7 @@ final class SymphonyRunner {
     }
 
     /// Posts a notification, or shows an alert when notifications aren't allowed.
-    private func notify(title: String, body: String) {
+    func notify(title: String, body: String) {
         // UNUserNotificationCenter needs an app bundle; `swift run` has none.
         guard Bundle.main.bundleIdentifier != nil else {
             Self.showAlert(title: title, body: body)
