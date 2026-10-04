@@ -3335,7 +3335,7 @@ defmodule SymphonyElixir.Orchestrator do
         slot = dispatch_slot_label(state, issue)
 
         Logger.info(
-          "Dispatching issue to agent: #{issue_context(issue)} pid=#{inspect(pid)} attempt=#{inspect(attempt)} worker_host=#{worker_host || "local"} slot=#{slot} #{run_profile_log_fields(run_profile)}"
+          "Dispatching issue to agent: #{issue_context(issue)} pid=#{inspect(pid)} attempt=#{inspect(attempt)} worker_host=#{worker_host || "local"} slot=#{slot} #{run_profile_log_fields(run_profile)}#{trigger_comment_log_fields(issue, run_profile, repo_key)}"
         )
 
         running_entry =
@@ -3428,6 +3428,14 @@ defmodule SymphonyElixir.Orchestrator do
   defp run_profile_log_fields(%{kind: kind, model: model, effort: effort}) do
     "run_kind=#{kind} model=#{model || "default"} effort=#{effort || "default"}"
   end
+
+  # Names the PR comment a review_feedback run answers, so a run started by a stray
+  # comment can be traced to it.
+  defp trigger_comment_log_fields(%Issue{id: issue_id}, %{kind: :review_feedback}, repo_key) do
+    " " <> PrReviewPoller.trigger_comment_log_fields(issue_id, repo_key_opt(repo_key))
+  end
+
+  defp trigger_comment_log_fields(_issue, _run_profile, _repo_key), do: ""
 
   defp state_reconcile_grace_until_ms do
     System.monotonic_time(:millisecond) + @fresh_dispatch_state_grace_ms
