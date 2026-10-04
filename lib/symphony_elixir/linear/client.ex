@@ -570,6 +570,19 @@ defmodule SymphonyElixir.Linear.Client do
     end
   end
 
+  @doc """
+  The project filter for the projects a repo route polls: its `projects`, else the tracker's
+  `project_slug`. `:none` when the route names no project (it routes by team or label alone).
+  """
+  @spec repo_project_filter(term(), map()) :: {:ok, map()} | :none
+  def repo_project_filter(repo, tracker) do
+    case {repo_projects(repo), effective_project_slug(repo, tracker)} do
+      {[], slug} when is_binary(slug) -> {:ok, %{"slugId" => %{"eq" => slug}}}
+      {[], _slug} -> :none
+      {projects, _slug} -> {:ok, project_filter_clause(projects)}
+    end
+  end
+
   defp repo_issue_filter(repo, tracker, state_names, graphql_fun) do
     with {:ok, assignee_filter} <- repo_assignee_filter(repo, tracker, graphql_fun) do
       {labels, label_mode} = effective_labels(repo, tracker)
