@@ -3,6 +3,7 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
 
   alias SymphonyElixir.AgentTools.GitHub
   alias SymphonyElixir.AgentTools.SecretScanner
+  alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Workspace
 
@@ -373,6 +374,76 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
       assert String.trim(git!(origin, ["rev-parse", "refs/heads/auto/ACME-3051"])) != ""
     after
       File.rm_rf(test_root)
+    end
+  end
+
+  test "push_branch holds a push that changes a checked path to the recorded push check result" do
+    test_root = tmp_workspace!("github-agent-push-check")
+    workspace = Path.join(test_root, "workspace")
+    origin = Path.join(test_root, "origin.git")
+    proof = Path.join(test_root, "SYMPHONY_PWNED")
+
+    try do
+      File.mkdir_p!(workspace)
+      git!(test_root, ["init", "--bare", origin])
+      git!(workspace, ["init", "-b", "auto/ACME-424"])
+      git!(workspace, ["config", "user.name", "Test User"])
+      git!(workspace, ["config", "user.email", "test@example.com"])
+      File.mkdir_p!(Path.join(workspace, "lib"))
+      File.write!(Path.join(workspace, "lib/app.ex"), "defmodule App do\nend\n")
+      git!(workspace, ["add", "lib/app.ex"])
+      git!(workspace, ["commit", "-m", "initial"])
+      git!(workspace, ["remote", "add", "origin", origin])
+      # Symphony must never run the check itself, nor a repo hook.
+      File.mkdir_p!(Path.join(workspace, ".githooks"))
+      File.write!(Path.join(workspace, ".githooks/pre-push"), "#!/bin/sh\ntouch \"#{proof}\"\n")
+      File.chmod!(Path.join(workspace, ".githooks/pre-push"), 0o755)
+      git!(workspace, ["config", "core.hooksPath", ".githooks"])
+      head = workspace |> git!(["rev-parse", "HEAD"]) |> String.trim()
+
+      context = %{workspace: workspace, command_security: %{origin_url: origin, workspace: workspace}}
+
+      settings = %Schema{
+        push_check: %Schema.PushCheck{command: ".githooks/pre-push --head", result_file: "tmp/push-check", paths: ["*.ex"]}
+      }
+
+      assert {:error, {:push_check_required, :missing, %{"head" => ^head}}} =
+               GitHub.push_branch(context, settings: settings)
+
+      File.mkdir_p!(Path.join(workspace, "tmp"))
+      File.write!(Path.join(workspace, "tmp/push-check"), "#{head} fail\nmix credo --strict failed.\n")
+
+      assert {:error, {:push_check_failed, %{"output" => "mix credo --strict failed."}}} =
+               GitHub.push_branch(context, settings: settings)
+
+      assert {_output, status} = System.cmd("git", ["rev-parse", "--verify", "--quiet", "refs/heads/auto/ACME-424"], cd: origin)
+      assert status != 0
+
+      File.write!(Path.join(workspace, "tmp/push-check"), "#{head} pass\n")
+
+      assert {:ok, %{"branch" => "auto/ACME-424"}} = GitHub.push_branch(context, settings: settings)
+      assert String.trim(git!(origin, ["rev-parse", "refs/heads/auto/ACME-424"])) == head
+      refute File.exists?(proof)
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "push_branch reads the push check from the issue's repository" do
+    workspace = tmp_workspace!("github-agent-push-check-repo")
+
+    try do
+      context = Map.put(scoped_context(workspace), :issue, %{repo_key: Config.repo_key!()})
+
+      git_runner = fn
+        ["branch", "--show-current"], _opts -> {"auto/ACME-3051\n", 0}
+        ["remote" | _rest], _opts -> {"git@github.com:acme/symphony.git\n", 0}
+        ["push", "origin", "auto/ACME-3051"], _opts -> {"pushed\n", 0}
+      end
+
+      assert {:ok, %{"output" => "pushed"}} = GitHub.push_branch(context, git_runner: git_runner)
+    after
+      File.rm_rf(workspace)
     end
   end
 

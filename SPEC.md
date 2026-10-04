@@ -472,19 +472,22 @@ Allowed repo-local front matter keys:
 
 - `hooks`
 - `prompts`
+- `push_check`
 - `verification`
 - `validation`
+- `auto_review`, with only its `playbooks` key
 
-Unknown repo workflow keys are rejected with an error that directs the operator to move
-operator-owned configuration to `symphony.yml`.
+Unknown repo workflow keys, and `auto_review` keys other than `playbooks`, are rejected with an
+error that directs the operator to move operator-owned configuration to `symphony.yml`.
 
 ### 5.4 Config Schema
 
 Unless explicitly called out as repo-local, fields in this section live in `symphony.yml` and become
-part of the merged runtime config. Repo-local front matter contributes `hooks` and `verification`
-values to the runtime settings for that repo. Nested repo-local maps are merged over the operator
-config so repos can override only their dev-server command while inheriting process-wide
-verification defaults such as port allocation.
+part of the merged runtime config. Repo-local front matter contributes `hooks`, `push_check`,
+`verification` and `auto_review.playbooks` values to the runtime settings for that repo. Nested
+repo-local maps are merged over the operator config so repos can override only their dev-server
+command while inheriting process-wide verification defaults such as port allocation, or only one
+playbook's settings while inheriting the operator's other playbooks.
 
 #### 5.4.1 `repositories` (list)
 
@@ -828,6 +831,33 @@ Fields:
     minutes), since it usually installs dependencies.
   - Applies to `after_create` only, and to each try.
   - Invalid values fail configuration validation.
+
+#### 5.4.8a `push_check` (object, repo-local)
+
+Holds pushes made through the scoped `github_push_branch` tool, which runs outside the agent sandbox
+with repo git hooks disabled, to the repository's own checks. The implementation MUST NOT run
+`command` or any other workspace file; the agent runs it inside its sandbox.
+
+Fields:
+
+- `command` (string, OPTIONAL)
+  - Default: `null`, which turns the check off.
+  - The command the agent runs to check what the branch would push. Shown in refusals.
+- `result_file` (workspace-relative path, OPTIONAL)
+  - Default: `tmp/push-check`. Absolute paths and `..` fail configuration validation.
+  - The command writes `<sha> pass`, or `<sha> fail` followed by one failure per line.
+- `paths` (list of git pathspecs, OPTIONAL)
+  - Default: `[]`, which matches every file.
+
+Behavior:
+
+- The pushed range starts at `refs/remotes/origin/<branch>` when it exists, else at the merge-base
+  with `origin/HEAD`, `origin/main` or `origin/master`; without either, every push is checked.
+- A push whose range changes no file matching `paths` proceeds without a result.
+- Otherwise the tool refuses the push unless `result_file` is a regular file (not a symlink, at most
+  16 KiB) whose first line is the pushed commit's SHA followed by `pass`. A `fail` result for that
+  commit is refused with the recorded failure lines; a missing result, a result for another commit
+  or an unreadable file is refused with the command to run.
 
 #### 5.4.8 `agent` (object)
 
@@ -1188,10 +1218,16 @@ Fields:
   repo root) and `build_timeout_ms` (default `900000`), and is off unless `build` and `app` are
   set. The built-in `web` kind also takes `browser_mcp` (an MCP server definition, the shape of
   an `agent.mcp.servers` entry) and is off unless `verification.enabled` is true and
-  `verification.dev_server.start_cmd` is set.
+  `verification.dev_server.start_cmd` is set. A repository's `WORKFLOW.md` MAY set
+  `auto_review.playbooks` too; for that repository's QA passes each kind is merged over this map
+  key by key, the repository's value winning.
 - `worker_host` (string, optional): an SSH host (`user@host` or `host:port`, the form
   `workers.ssh_hosts` uses) where the `macos_app` playbook's `qa_*` tools run instead of the
   Symphony host. It does not need to be, and should not be, listed in `workers.ssh_hosts`.
+- `android` (object, optional): host settings for Android QA. `avd` (AVD name, required for
+  Android QA), `sdk_root` (string, default `$ANDROID_HOME`, then `$ANDROID_SDK_ROOT`, then
+  `~/Library/Android/sdk`), `boot_timeout_ms` (positive integer, default `180000`) and
+  `idle_timeout_ms` (positive integer, default `600000`).
 
 When enabled:
 
@@ -1690,7 +1726,13 @@ not require recognizing or validating extension fields unless that extension is 
 - `auto_review.max_fix_attempts`: integer, default `2`
 - `auto_review.run_on`: `every_push` or `first_pass`, default `every_push`
 - `auto_review.skip_globs`: list of strings, default `[]`
-- `auto_review.playbooks`: map, default `{}` (built-in kinds `cli`, `macos_app`, `web`)
+- `auto_review.playbooks`: map, default `{}` (built-in kinds `cli`, `macos_app`, `web`); a
+  repository's `WORKFLOW.md` may override it per kind
+- `auto_review.android.avd`: string, optional
+- `auto_review.android.sdk_root`: string, default `$ANDROID_HOME`, then `$ANDROID_SDK_ROOT`, then
+  `~/Library/Android/sdk`
+- `auto_review.android.boot_timeout_ms`: integer, default `180000`
+- `auto_review.android.idle_timeout_ms`: integer, default `600000`
 - `notifications.enabled`: boolean, default `false`
 - `notifications.redact_titles`: boolean, default `false`
 - `notifications.channels`: list of Slack/webhook channel configs, default `[]`

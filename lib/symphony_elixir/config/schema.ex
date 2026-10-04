@@ -529,6 +529,45 @@ defmodule SymphonyElixir.Config.Schema do
     end
   end
 
+  defmodule PushCheck do
+    @moduledoc false
+    # Repo-local (WORKFLOW.md). `github_push_branch` pushes with repo hooks disabled, so the agent
+    # runs `command` in its own sandbox, which records its result for HEAD in `result_file`.
+    # Symphony only reads that file; it never runs the command. Off while `command` is unset.
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    alias SymphonyElixir.Config.Schema
+
+    @type t :: %__MODULE__{}
+
+    @primary_key false
+    embedded_schema do
+      field(:command, :string)
+      field(:result_file, :string, default: "tmp/push-check")
+      field(:paths, {:array, :string}, default: [])
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [:command, :result_file, :paths], empty_values: [])
+      |> Schema.validate_present([:result_file])
+      |> validate_change(:result_file, &validate_result_file/2)
+      |> validate_change(:paths, fn :paths, paths ->
+        if Enum.all?(paths, &(String.trim(&1) != "")), do: [], else: [paths: "must contain only non-empty strings"]
+      end)
+    end
+
+    defp validate_result_file(:result_file, path) do
+      if Path.type(path) == :relative and ".." not in Path.split(path) do
+        []
+      else
+        [result_file: "must be a path inside the workspace, relative and without `..`"]
+      end
+    end
+  end
+
   defmodule RepoAgent do
     @moduledoc false
     # A repository's `repositories[].agent` block: run profile settings that take precedence over
@@ -1891,6 +1930,39 @@ defmodule SymphonyElixir.Config.Schema do
 
     @type t :: %__MODULE__{}
 
+    defmodule Android do
+      @moduledoc false
+      use Ecto.Schema
+      import Ecto.Changeset
+
+      @type t :: %__MODULE__{}
+
+      @primary_key false
+      @fields [:avd, :sdk_root, :boot_timeout_ms, :idle_timeout_ms]
+
+      # Host settings for the Android emulator; the build command and APK path are per-repository
+      # playbook settings.
+      embedded_schema do
+        field(:avd, :string)
+        field(:sdk_root, :string)
+        field(:boot_timeout_ms, :integer, default: 180_000)
+        field(:idle_timeout_ms, :integer, default: 600_000)
+      end
+
+      @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+      def changeset(schema, attrs) do
+        schema
+        |> cast(attrs, @fields, empty_values: [], message: fn field, _meta -> cast_message(field) end)
+        |> validate_format(:avd, ~r/\A[A-Za-z0-9._-]+\z/, message: "must be an AVD name such as Pixel_3a_API_34")
+        |> validate_format(:sdk_root, ~r/\S/, message: "must not be blank")
+        |> validate_number(:boot_timeout_ms, greater_than: 0, message: "must be a positive integer")
+        |> validate_number(:idle_timeout_ms, greater_than: 0, message: "must be a positive integer")
+      end
+
+      defp cast_message(field) when field in [:avd, :sdk_root], do: "must be a string"
+      defp cast_message(_field), do: "must be a positive integer"
+    end
+
     @primary_key false
     @fields [
       :enabled,
@@ -1924,12 +1996,14 @@ defmodule SymphonyElixir.Config.Schema do
       field(:skip_globs, {:array, :string}, default: [])
       field(:playbooks, :map, default: %{})
       field(:worker_host, :string)
+      embeds_one(:android, Android, on_replace: :update, defaults_to_struct: true)
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
       schema
       |> cast(attrs, @fields, empty_values: [])
+      |> cast_embed(:android, with: &Android.changeset/2)
       |> Schema.validate_present([:state])
       |> validate_format(:worker_host, ~r/\A[^\s-]\S*\z/, message: "must be an SSH host such as qa@qa-vm.local or qa-vm:2222")
       |> validate_inclusion(:kind, ["codex", "claude"])
@@ -2184,6 +2258,7 @@ defmodule SymphonyElixir.Config.Schema do
     embeds_one(:github, GitHub, on_replace: :update, defaults_to_struct: true)
     embeds_one(:agent, Agent, on_replace: :update, defaults_to_struct: true)
     embeds_one(:hooks, Hooks, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:push_check, PushCheck, on_replace: :update, defaults_to_struct: true)
     embeds_one(:observability, Observability, on_replace: :update, defaults_to_struct: true)
     embeds_one(:pr_review, PrReview, on_replace: :update, defaults_to_struct: true)
     embeds_one(:ci, Ci, on_replace: :update, defaults_to_struct: true)
@@ -2378,6 +2453,7 @@ defmodule SymphonyElixir.Config.Schema do
     |> cast_embed(:github, with: &GitHub.changeset/2)
     |> cast_embed(:agent, with: &Agent.changeset/2)
     |> cast_embed(:hooks, with: &Hooks.changeset/2)
+    |> cast_embed(:push_check, with: &PushCheck.changeset/2)
     |> cast_embed(:observability, with: &Observability.changeset/2)
     |> cast_embed(:pr_review, with: &PrReview.changeset/2)
     |> cast_embed(:ci, with: &Ci.changeset/2)
