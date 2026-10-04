@@ -143,6 +143,29 @@ final class RestartMachineTests: XCTestCase {
         XCTAssertNil(machine.menuLine)
     }
 
+    func testAPauseThatIsGoneIsMadeAgain() {
+        var (machine, effects) = begin(alreadyPaused: true)
+        effects += machine.handle(.configChecked(.passed))
+        // The menu still showed paused, but dispatch had already been resumed.
+        effects += machine.handle(.polled(.state(StateSnapshot(running: 1))))
+        XCTAssertEqual(machine.phase, .pausing)
+        effects += machine.handle(.controlFinished(.pause, .done))
+        effects += machine.handle(.polled(pausedPoll(running: 0)))
+        effects += machine.handle(.exited(.signaled(15)))
+        effects += machine.handle(.startFinished(error: nil))
+        effects += machine.handle(.polled(pausedPoll(running: 0)))
+
+        XCTAssertEqual(effects, [.checkConfig, .pollNow, .send(.pause), .pollNow, .stop, .start, .send(.resume)])
+        XCTAssertTrue(machine.pausedByRestart)
+    }
+
+    func testAnUnpausedPollTakenBeforeTheRestartsPauseIsIgnored() {
+        var machine = waiting()
+
+        XCTAssertEqual(machine.handle(.polled(.state(StateSnapshot(running: 2)))), [])
+        XCTAssertEqual(machine.phase, .waitingForRuns(running: nil))
+    }
+
     func testTimeoutOffersRestartNow() {
         var machine = waiting()
         XCTAssertTrue(machine.canCancel)
