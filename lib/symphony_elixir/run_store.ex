@@ -341,6 +341,28 @@ defmodule SymphonyElixir.RunStore do
 
   def get_own_state_move(_issue_id), do: {:error, :invalid_issue_id}
 
+  @doc """
+  Replaces the forced-ticket queue (`SymphonyElixir.ForcedQueue` entries keyed by issue id), so a
+  restart keeps each ticket's `forced_since` and its place in the queue.
+  """
+  @spec put_forced(String.t(), map()) :: :ok | {:error, term()}
+  def put_forced(repo_key, entries) when is_map(entries) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      durable_transaction(fn -> write_forced(repo_key, entries) end)
+    end
+  end
+
+  def put_forced(_repo_key, _entries), do: {:error, :invalid_forced_entries}
+
+  @spec get_forced(String.t()) :: map() | {:error, term()}
+  def get_forced(repo_key) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      transaction(fn -> read_forced(repo_key) end)
+    end
+  end
+
   @spec put_pr_review(map()) :: :ok | {:error, term()}
   def put_pr_review(%{repo_key: repo_key, issue_id: issue_id} = record) when is_binary(issue_id) do
     with {:ok, repo_key} <- normalize_repo_key(repo_key),
@@ -1160,6 +1182,25 @@ defmodule SymphonyElixir.RunStore do
     case :mnesia.read(@totals_table, rework_base_key(repo_key, issue_id)) do
       [{@totals_table, _key, head}] when is_binary(head) -> head
       _ -> nil
+    end
+  end
+
+  defp forced_key(repo_key), do: {:forced, repo_key}
+
+  defp write_forced(repo_key, entries) when map_size(entries) == 0 do
+    :mnesia.delete({@totals_table, forced_key(repo_key)})
+    :ok
+  end
+
+  defp write_forced(repo_key, entries) do
+    :mnesia.write({@totals_table, forced_key(repo_key), entries})
+    :ok
+  end
+
+  defp read_forced(repo_key) do
+    case :mnesia.read(@totals_table, forced_key(repo_key)) do
+      [{@totals_table, _key, entries}] when is_map(entries) -> entries
+      _ -> %{}
     end
   end
 

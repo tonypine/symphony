@@ -1,4 +1,4 @@
-.PHONY: help all setup deps build package fmt fmt-check lint test test-profile coverage coverage-profile check ci dialyzer dialyzer-profile e2e
+.PHONY: help all setup deps audit build package fmt fmt-check lint test test-profile coverage coverage-profile check ci dialyzer dialyzer-profile e2e
 
 MIX ?= mix
 TEST_MAX_CASES ?= 4
@@ -7,13 +7,17 @@ TEST_ENV := ELIXIR_ERL_OPTIONS="+S $(BEAM_SCHEDULERS):$(BEAM_SCHEDULERS)"
 TEST_ARGS := --max-cases $(TEST_MAX_CASES)
 
 help:
-	@echo "Targets: setup, deps, fmt, fmt-check, lint, test, test-profile, coverage, coverage-profile, check, dialyzer, dialyzer-profile, e2e, ci"
+	@echo "Targets: setup, deps, audit, fmt, fmt-check, lint, test, test-profile, coverage, coverage-profile, check, dialyzer, dialyzer-profile, e2e, ci"
 
 setup:
 	$(MIX) setup
 
 deps:
 	$(MIX) deps.get
+
+# `mix deps.get` only rejects advisories for packages it downloads, so a warm deps/ dir hides them.
+audit:
+	$(MIX) hex.audit
 
 build:
 	$(MIX) build
@@ -70,6 +74,7 @@ check:
 
 ci:
 	$(MAKE) setup
+	$(MAKE) audit
 	$(MAKE) build
 	$(MAKE) fmt-check
 	$(MAKE) lint
