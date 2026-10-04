@@ -214,6 +214,9 @@ repositories:
 - A failed clone or fetch fails that dispatch with an error naming the repo key, and the issue is
   retried; other repos keep running. A clone that cannot be made the first time Symphony starts
   stops startup, because the repo has no `WORKFLOW.md` to read yet.
+- `symphony check` does not clone. Before the first clone it checks the rest of the config, skips
+  the repo's `WORKFLOW.md` and prints a warning saying Symphony clones the repo when it starts, so a
+  repo added while Symphony runs can be applied with a restart.
 
 Symphony rejects `source` when it is not `owner/repo` or a github.com URL, and together with
 `workspace.repo`, `workspace.strategy: clone`, `workflow_source: local`, a `workflow` path outside
