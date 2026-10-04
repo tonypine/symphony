@@ -165,6 +165,50 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     end
   end
 
+  describe "the stop after a PR is open" do
+    test "waits until the workspace HEAD is the PR head, so a committed fix is pushed first" do
+      pr_heads = [{:ok, %{commit_sha: "sha-old", checks: []}}, {:ok, %{commit_sha: "sha-fix", checks: []}}]
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:by_turn, pr_heads})
+
+      log = capture_log(fn -> run_issue!("In Progress", heads: ["sha-old", "sha-fix"], max_turns: 4) end)
+
+      assert turns() == 2
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+      assert log =~ "Not stopping agent run for issue_id=issue-progress issue_identifier=TP-337 after PR opened; workspace HEAD sha-fix is not its PR head sha-old"
+      assert log =~ "Stopping agent run for issue_id=issue-progress issue_identifier=TP-337 after PR opened"
+    end
+
+    test "still stops after the first turn when the workspace HEAD is the PR head" do
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-pushed", checks: []}})
+
+      for heads <- [["sha-pushed"], ["sha-old", "sha-pushed"]] do
+        Application.delete_env(:symphony_elixir, :progress_agent_turns)
+
+        log = capture_log(fn -> run_issue!("In Progress", heads: heads, max_turns: 4) end)
+
+        assert turns() == 1
+        assert_received {:pr_head_fetched, @pr_url}
+        assert log =~ "Stopping agent run for issue_id=issue-progress issue_identifier=TP-337 after PR opened"
+        refute log =~ "Not stopping"
+      end
+    end
+
+    test "stops as before when the workspace HEAD or the PR head is unreadable" do
+      for {heads, pr_head_result} <- [
+            {[nil], {:ok, %{commit_sha: "sha-old", checks: []}}},
+            {["sha-old", "sha-fix"], {:error, :gh_unavailable}},
+            {["sha-old", "sha-fix"], {:ok, %{commit_sha: nil, checks: []}}}
+          ] do
+        Application.put_env(:symphony_elixir, :progress_pr_head_result, pr_head_result)
+        Application.delete_env(:symphony_elixir, :progress_agent_turns)
+
+        run_issue!("In Progress", heads: heads, max_turns: 4)
+
+        assert turns() == 1
+      end
+    end
+  end
+
   describe "a run on an issue whose PR is already open" do
     @pending_checks [%{name: "make-all", status: "IN_PROGRESS", conclusion: nil}]
     @green_checks [%{name: "make-all", status: "COMPLETED", conclusion: "SUCCESS"}]
@@ -419,7 +463,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
 
   defp turns, do: Application.get_env(:symphony_elixir, :progress_agent_turns, 0)
 
-  test "the workspace HEAD reads from a local git checkout only" do
+  test "the workspace HEAD and its unpushed commits read from a local git checkout only" do
     root = Path.join(System.tmp_dir!(), "symphony-workspace-head-#{System.unique_integer([:positive])}")
     repo = Path.join(root, "repo")
     File.mkdir_p!(repo)
@@ -436,6 +480,25 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       assert WorkspaceHead.read(repo, nil) == String.trim(sha)
       assert WorkspaceHead.read(repo, "worker-1") == nil
       assert WorkspaceHead.read(Path.join(root, "missing"), nil) == nil
+
+      # With no remote-tracking branch at all, nothing says the commit is unpushed.
+      assert WorkspaceHead.unpushed_head(repo, nil) == nil
+
+      System.cmd("git", ["-C", repo, "update-ref", "refs/remotes/origin/main", "HEAD"])
+      assert WorkspaceHead.unpushed_head(repo, nil) == nil
+
+      File.write!(Path.join(repo, "fix.txt"), "fix")
+      System.cmd("git", ["-C", repo, "add", "fix.txt"])
+      System.cmd("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "fix"])
+      {fix_sha, 0} = System.cmd("git", ["-C", repo, "rev-parse", "HEAD"])
+
+      assert WorkspaceHead.unpushed_head(repo, nil) == String.trim(fix_sha)
+      assert WorkspaceHead.unpushed_head(repo, "worker-1") == nil
+      assert WorkspaceHead.unpushed_head(nil, nil) == nil
+      assert WorkspaceHead.unpushed_head(Path.join(root, "missing"), nil) == nil
+
+      System.cmd("git", ["-C", repo, "update-ref", "refs/remotes/origin/auto/TP-337", "HEAD"])
+      assert WorkspaceHead.unpushed_head(repo, nil) == nil
     after
       File.rm_rf(root)
     end

@@ -412,6 +412,8 @@ Loader behavior:
   file is read from disk. With `ref`, the file is also read from disk, with a warning, until the
   ref has been read once (for example a checkout with no `origin` remote or no resolvable base
   branch ref).
+- For a repo with `workspace.source`, `workflow` is a path inside the repository and is always read
+  from the fetched ref of Symphony's own clone, which has no working tree.
 - The application selects a primary repo as the one marked `default: true`, otherwise the first
   repo in `repositories:`.
 
@@ -502,6 +504,7 @@ Fields:
 - `workflow` (path string)
   - Default: `WORKFLOW.md`.
   - Resolved relative to the directory containing `symphony.yml`, unless absolute.
+  - With `workspace.source`, it is a relative path inside the repository instead.
 - `workflow_source` (string)
   - Default: `ref`. Allowed: `ref`, `local`.
   - `ref` reads the committed workflow from the fetched remote base branch; `local` reads the
@@ -512,6 +515,24 @@ Fields:
   - `repo` is REQUIRED when the effective strategy is `worktree`; it points at that repo's primary
     clone used for `git worktree add`.
   - `fetch_before_dispatch` controls whether the primary clone fetches `origin` before worktree
+    creation.
+  - `source` (string) OPTIONAL: a GitHub repository, as `owner/repo` or a github.com URL, that
+    Symphony clones and manages itself instead of using a local checkout.
+    - The clone lives at `<workspaces.clones_root>/<owner>/<repo>` and is made without a working
+      tree. It MUST be readable and writable from the agent sandbox, because an agent worktree's
+      `.git` points into it; the default root is outside every sandbox deny list.
+    - Symphony clones over SSH (`git@github.com:<owner>/<repo>.git`) whatever URL form is given.
+    - The clone is made at startup when missing (and again on the next dispatch if it disappears)
+      and fetched before every dispatch when `fetch_before_dispatch` is on. Clone and fetch are
+      serialized per clone, so concurrent dispatches for the same repo never race.
+    - Agent worktrees and their `auto/<issue>` branches are created from the clone, as with
+      `strategy: worktree`. Without `base_branch`, a fresh worktree branches off the fetched
+      `origin/HEAD`.
+    - The workflow is read from the clone's fetched ref (Section 5.1).
+    - A clone or fetch failure fails that dispatch with an error naming the repo key; other repos
+      are unaffected. A clone that cannot be made at the first startup stops startup, since the
+      repo has no workflow to read yet.
+    - The engineer's own checkout of the repo is never read or written.
 - `route` (object)
   - OPTIONAL Linear selectors for this repo route.
   - `team`: Linear team key or team ID.
@@ -536,6 +557,9 @@ Validation:
 - More than one default repo for the same team is rejected.
 - With multiple repos, a global `workspaces.strategy: worktree` is invalid unless every repo
   provides an explicit `repositories[].workspace.strategy` override.
+- `workspace.source` MUST be `owner/repo` or a github.com URL. It is rejected together with
+  `workspace.repo`, `workspace.strategy: clone`, `workflow_source: local`, a `workflow` path outside
+  the repository, or `workers.ssh_hosts`.
 
 #### 5.4.2 `issues` (object)
 
@@ -593,6 +617,10 @@ Fields:
   - For SSH workers, `root` SHOULD be an absolute path on the remote host; orchestrator-side remote
     path validation MUST reject relative and `~` roots because their expansion would occur on a
     different host.
+- `clones_root` (path string)
+  - Default: `~/.local/share/symphony/repos`.
+  - Where Symphony keeps its clones of `repositories[].workspace.source` repos. It MUST stay outside
+    the agent sandbox's denied paths (for example not under `~/Library/Application Support`).
 - `strategy`, `repo`, `fetch_before_dispatch`
   - Defaults for `repositories[].workspace`.
   - Multi-repo configs SHOULD set worktree population under each repo instead of globally.
@@ -1222,6 +1250,11 @@ When enabled:
   later MUST be moved by the next poll instead of dispatched.
 - The post-PR transition MUST NOT apply to an issue in `Merging`: that state is a human's merge
   approval, so Symphony MUST keep the issue in `Merging` and leave it with the landing agent.
+- The post-PR transition MUST NOT apply while the workspace of the run that last worked on the
+  issue has commits no remote-tracking branch has: the PR is still on its old head. Symphony MUST
+  log it, keep the issue in its active state and dispatch it again, so the next run reviews and
+  pushes those commits. A workspace it cannot read (an SSH worker, no git checkout) does not block
+  the transition.
 - `linear_update_state` MUST refuse `In Review` from agent sessions with a clear error telling the
   agent that Symphony moves the issue once the PR is open, rather than redirecting the target
   state. A `breakdown` parent and a ticket whose title starts with `Final verification:` open no
@@ -1763,6 +1796,12 @@ Important nuance:
   the run and move to the post-PR state, even while the review, CI, QA or conflict signal that
   started the run is still pending. Such a signal is only cleared once the run ends, so without
   this a fix run on an open PR never ends on its own.
+- A run on an active issue with an attached PR and no pending review, CI, QA or conflict signal
+  (outside `Rework` and `Merging`) MUST end after a turn only once its work is on the PR: the
+  workspace `HEAD` is the PR head and, when the pre-push reviewer applies to the run, that head is
+  the one the run started on or has passed the reviewer. Otherwise it MUST log why and continue, so
+  the reviewer runs and the agent pushes. When the workspace `HEAD` or the PR head cannot be read,
+  the run ends as before and the post-PR transition's workspace check applies.
 - When the workspace `HEAD` is readable, two consecutive turns with no new commit, no issue state
   change, no newly attached PR and no reviewer-agent verdict MUST end the run, move the issue to
   `Backlog` and post a comment saying why. This does not apply in `Merging`, nor while the attached
