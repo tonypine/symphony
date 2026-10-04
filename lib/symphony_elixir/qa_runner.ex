@@ -126,11 +126,8 @@ defmodule SymphonyElixir.QaRunner do
       Map.has_key?(state.running, issue_id) ->
         {:reply, :running, state}
 
-      normal_passes(state) < min(max_concurrent, finishing_max) and (forced? or not forced_queued?(queued)) ->
-        start_pass(state, issue_id, sha, job, opts, false)
-
-      forced? and forced_slot_free?(state, settings) ->
-        start_pass(state, issue_id, sha, job, opts, true)
+      slot = pass_slot(state, forced?, settings) ->
+        start_pass(state, issue_id, sha, job, opts, slot == :forced)
 
       true ->
         waiting_on = if finishing_max < max_concurrent, do: :finishing_max, else: :max_concurrent
@@ -190,6 +187,22 @@ defmodule SymphonyElixir.QaRunner do
   defp live_queued(state) do
     cutoff = now_ms() - state.queued_ttl_ms
     Map.filter(state.queued, fn {_issue_id, %{at: queued_at}} -> queued_at > cutoff end)
+  end
+
+  # A free QA slot goes to a forced request, or to an unforced one while no forced request is
+  # queued. With every QA slot busy, a forced request may take the forced allowance.
+  defp pass_slot(state, forced?, settings) do
+    cond do
+      normal_passes(state) < min(settings.auto_review.max_concurrent, settings.agent.finishing_max) and
+          (forced? or not forced_queued?(state.queued)) ->
+        :qa
+
+      forced? and forced_slot_free?(state, settings) ->
+        :forced
+
+      true ->
+        nil
+    end
   end
 
   defp forced_queued?(queued), do: Enum.any?(queued, fn {_issue_id, entry} -> entry.forced end)
