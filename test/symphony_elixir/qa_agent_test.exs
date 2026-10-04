@@ -93,6 +93,22 @@ defmodule SymphonyElixir.QaAgentTest do
     defdelegate stop_session(session), to: FakeSession
   end
 
+  # Exports the PR to `$TMPDIR/qa/checkout` and starts a detached `sleep` there, outside the
+  # worktree, as the TP-413 pass did with `./bin/symphony`.
+  defmodule TmpDirDetachingSession do
+    def start_session(workspace, opts) do
+      tmp_dir = Path.join(Map.fetch!(opts[:extra_env], "CLAUDE_CODE_TMPDIR"), "claude-501")
+      checkout = Path.join(tmp_dir, "qa/checkout")
+      File.mkdir_p!(checkout)
+      pid = SymphonyElixir.QaAgentTest.detached_sleep(checkout)
+      send(Application.fetch_env!(:symphony_elixir, :qa_test_recipient), {:detached, pid, checkout})
+      FakeSession.start_session(workspace, opts)
+    end
+
+    defdelegate run_turn(session, prompt, issue, opts), to: FakeSession
+    defdelegate stop_session(session), to: FakeSession
+  end
+
   @doc false
   def detached_sleep(cwd) do
     script = ~S"""
@@ -102,6 +118,11 @@ defmodule SymphonyElixir.QaAgentTest do
 
     {pid, 0} = System.cmd("sh", ["-c", script], cd: cwd)
     String.to_integer(String.trim(pid))
+  end
+
+  defp base_tmp_dir(base) do
+    [tmp_dir] = QaAgent.tmp_dirs(QaAgent.worktree_path(Config.settings!(), "default", "TP-900", @sha), [base])
+    tmp_dir
   end
 
   # A zombie waiting for init to reap it counts as gone.
@@ -567,6 +588,112 @@ defmodule SymphonyElixir.QaAgentTest do
       assert log =~ "Stopping leftover process issue_id=issue-qa issue_identifier=TP-900 pid=#{left} "
       assert running?(unrelated)
       refute log =~ "pid=#{unrelated} "
+    end
+
+    @tag :process_table
+    test "a detached process started under the pass's $TMPDIR, outside the worktree, is gone once the pass ends" do
+      # Another session's process in the shared temp folder, as another run or Tony's own.
+      shared = Path.join(System.tmp_dir!(), "qa-agent-test-shared/qa/checkout")
+      File.mkdir_p!(shared)
+      unrelated = detached_sleep(shared)
+
+      on_exit(fn ->
+        System.cmd("kill", ["-KILL", Integer.to_string(unrelated)])
+        File.rm_rf(Path.join(System.tmp_dir!(), "qa-agent-test-shared"))
+      end)
+
+      worktree = QaAgent.worktree_path(Config.settings!(), "default", "TP-900", @sha)
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %{result: %{verdict: :pass}}} =
+                   QaAgent.run(job(), Config.settings!(),
+                     git: fake_git(),
+                     qa_agent_module: TmpDirDetachingSession,
+                     leftover_processes: [table: &Table.read/0, grace_ms: 2_000]
+                   )
+        end)
+
+      assert_received {:detached, left, checkout}
+      refute String.starts_with?(checkout, worktree)
+      refute running?(left)
+      assert log =~ "Stopping leftover process issue_id=issue-qa issue_identifier=TP-900 pid=#{left} "
+      assert running?(unrelated)
+      refute log =~ "pid=#{unrelated} "
+      refute File.exists?(checkout)
+    end
+
+    test "gives the agent a private temp folder of its own, stops what runs under it and removes it" do
+      settings = Config.settings!()
+      worktree = QaAgent.worktree_path(settings, "default", "TP-900", @sha)
+      base = Path.join(System.tmp_dir!(), "qa-agent-test-tmp-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(base)
+      on_exit(fn -> File.rm_rf(base) end)
+      [tmp_dir] = QaAgent.tmp_dirs(worktree, [base])
+      # A folder left by an interrupted pass doesn't carry over.
+      File.mkdir_p!(Path.join(tmp_dir, "stale"))
+      test_pid = self()
+      left = %{pid: 4242, start_time: "Sun Oct  4 08:00:00 2026", command: "./bin/symphony --port 47413", cwd: Path.join(tmp_dir, "claude-501/qa/checkout")}
+      shared = %{left | pid: 4343, cwd: Path.join(System.tmp_dir!(), "qa/checkout")}
+      {:ok, reads} = Agent.start_link(fn -> [{:ok, [left, shared]}, {:ok, [shared]}] end)
+
+      leftover_processes = [
+        table: fn -> Agent.get_and_update(reads, fn [next | rest] -> {next, rest} end) end,
+        signal: fn pid, signal -> send(test_pid, {:signal, pid, signal}) end
+      ]
+
+      assert {:ok, %{result: %{verdict: :pass}}} =
+               QaAgent.run(job(), settings, git: fake_git(), qa_agent_module: FakeSession, tmp_bases: [base], leftover_processes: leftover_processes)
+
+      assert_received {:qa_session_started, ^worktree, session_opts}
+      assert session_opts[:extra_env] == %{"CLAUDE_CODE_TMPDIR" => tmp_dir}
+      assert List.last(session_opts[:settings].workspace.sandbox.allow_write_paths) == tmp_dir
+      assert String.length(tmp_dir) == String.length(base) + String.length("/symphony-qa-") + 12
+      assert_received {:signal, 4242, "TERM"}
+      refute_received {:signal, 4343, _signal}
+      refute File.exists?(tmp_dir)
+    end
+
+    test "makes the temp folder private and falls back to the next base when one can't hold it" do
+      base = Path.join(System.tmp_dir!(), "qa-agent-test-tmp-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(base)
+      on_exit(fn -> File.rm_rf(base) end)
+      not_a_dir = Path.join(base, "file")
+      File.write!(not_a_dir, "")
+      test_pid = self()
+
+      assert {:ok, _result} =
+               QaAgent.run(job(), Config.settings!(),
+                 git: fake_git(),
+                 qa_agent_module: FakeSession,
+                 tmp_bases: [not_a_dir, base],
+                 leftover_processes: [
+                   table: fn ->
+                     send(test_pid, {:mode, File.stat!(base_tmp_dir(base)).mode})
+                     {:ok, []}
+                   end
+                 ]
+               )
+
+      assert_received {:qa_session_started, _worktree, session_opts}
+      assert %{"CLAUDE_CODE_TMPDIR" => tmp_dir} = session_opts[:extra_env]
+      assert Path.dirname(tmp_dir) == base
+      assert_received {:mode, mode}
+      assert Bitwise.band(mode, 0o777) == 0o700
+    end
+
+    test "is blocked without starting the agent when no temp folder can be made" do
+      not_a_dir = Path.join(System.tmp_dir!(), "qa-agent-test-file-#{System.unique_integer([:positive])}")
+      File.write!(not_a_dir, "")
+      on_exit(fn -> File.rm(not_a_dir) end)
+      worktree = QaAgent.worktree_path(Config.settings!(), "default", "TP-900", @sha)
+      [tmp_dir] = QaAgent.tmp_dirs(worktree, [not_a_dir])
+
+      assert {:error, {:qa_tmp_dir_failed, [^tmp_dir]}, _tokens} =
+               QaAgent.run(job(), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession, tmp_bases: [not_a_dir])
+
+      refute_received {:qa_session_started, _worktree, _opts}
+      refute File.exists?(worktree)
     end
 
     test "gives a macos_app pass a QA driver and stops it when the pass ends" do

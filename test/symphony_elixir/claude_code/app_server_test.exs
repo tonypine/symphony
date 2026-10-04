@@ -2048,6 +2048,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
         printf 'SSH_AUTH_SOCK=%s\\n' "${SSH_AUTH_SOCK-<unset>}" >> "$trace_file"
         printf 'RUNTIME=%s\\n' "${SYMPHONY_AGENT_RUNTIME-<unset>}" >> "$trace_file"
         printf 'GRADLE_OPTS=%s\\n' "${GRADLE_OPTS-<unset>}" >> "$trace_file"
+        printf 'CLAUDE_CODE_TMPDIR=%s\\n' "${CLAUDE_CODE_TMPDIR-<unset>}" >> "$trace_file"
         printf '%s\\n' '{"type":"system","subtype":"init","session_id":"sess-env-strip","cwd":"/tmp","tools":[],"mcp_servers":[],"model":"claude-opus-4-5","permissionMode":"default","apiKeySource":"env"}'
         printf '%s\\n' '{"type":"result","subtype":"success","duration_ms":500,"duration_api_ms":400,"is_error":false,"num_turns":1,"result":"Done.","session_id":"sess-env-strip","total_cost_usd":0.001,"usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"server_tool_use":{"web_search_requests":0}}}'
         exit 0
@@ -2074,6 +2075,15 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
         assert trace =~ "SSH_AUTH_SOCK=<unset>"
         assert trace =~ "RUNTIME=1"
         assert trace =~ ~r/^GRADLE_OPTS="-Dorg.gradle.daemon.registry.base=\S*\/workspaces\/[A-Z]+-ENVSTRIP\/.gradle-daemons"$/m
+        assert trace =~ "CLAUDE_CODE_TMPDIR=<unset>"
+
+        # A QA pass gives its session a temp folder of its own.
+        File.rm!(trace_file)
+        {:ok, qa_session} = AppServer.start_session(workspace, extra_env: %{"CLAUDE_CODE_TMPDIR" => "/tmp/symphony-qa-0123456789ab"})
+        assert {:ok, _result} = AppServer.run_turn(qa_session, "confirm env strip", %{}, [])
+        qa_trace = File.read!(trace_file)
+        assert qa_trace =~ "CLAUDE_CODE_TMPDIR=/tmp/symphony-qa-0123456789ab"
+        assert qa_trace =~ "LINEAR=<unset>"
 
         Enum.each(secret_vars, fn {_name, value} ->
           refute trace =~ value, "secret value leaked into Claude subprocess: #{value}"
