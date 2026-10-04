@@ -371,13 +371,15 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
 
     other_ticket = walkthrough_report("MOT-70", :blocked, "In Review", %{reason: "no permission"})
     no_target = %{"id" => "c1", "body" => "## Symphony QA Report\n\n**Verdict:** blocked → In Review\n", "createdAt" => "2026-10-03T10:00:00.000Z"}
+    no_state = walkthrough_report("MOT-82", :blocked, "In Review", %{reason: "no permission"})
 
     nodes = [
       verification("MOT-73", "In Review", passed),
       verification("MOT-74", "Todo", failed),
       verification("MOT-75", "In Review", other_ticket),
       verification("MOT-76", "In Review", no_target),
-      verification("MOT-77", "Todo", nil)
+      verification("MOT-77", "Todo", nil),
+      verification("MOT-82", nil, no_state, %{"state" => nil})
     ]
 
     assert {:ok, %{}} = collect(nodes)
