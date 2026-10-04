@@ -29,6 +29,7 @@ defmodule SymphonyElixir.AgentRunner do
     SubIssueWait,
     Tracker,
     URLUtils,
+    UsageLimit,
     Verification,
     Workpad,
     Workspace,
@@ -62,7 +63,7 @@ defmodule SymphonyElixir.AgentRunner do
         reviewer_comments: pending_reviewer_comments(issue, opts)
       )
 
-    settings |> Config.run_profile(kind) |> Map.put(:kind, kind)
+    settings |> Config.run_profile(kind) |> Map.put(:kind, kind) |> UsageLimit.for_agent_kind(settings.agent.kind)
   end
 
   @spec run(map(), pid() | nil, keyword()) :: :ok | no_return()
@@ -85,6 +86,9 @@ defmodule SymphonyElixir.AgentRunner do
         Logger.error("Agent run failed for #{issue_context(issue)}: #{inspect(reason)}")
 
         cond do
+          usage_limit = usage_limit_reason(reason) ->
+            exit({:usage_limited, usage_limit})
+
           terminal_agent_setup_error?(reason) ->
             exit({:terminal_agent_setup_error, reason})
 
@@ -99,6 +103,10 @@ defmodule SymphonyElixir.AgentRunner do
         end
     end
   end
+
+  # The orchestrator holds the provider's runs until the limit resets instead of failing the run.
+  defp usage_limit_reason({:usage_limited, %{} = info}), do: info
+  defp usage_limit_reason(_reason), do: nil
 
   defp terminal_review_agent_block?({:review_agent_blocked, _reason}), do: true
   defp terminal_review_agent_block?(_reason), do: false

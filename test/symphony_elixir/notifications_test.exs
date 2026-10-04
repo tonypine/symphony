@@ -305,7 +305,9 @@ defmodule SymphonyElixir.NotificationsTest do
              "ci_failed",
              "ci_escalated",
              "qa_passed",
-             "qa_failed"
+             "qa_failed",
+             "usage_limit_paused",
+             "usage_limit_resumed"
            ]
 
     assert Event.known_event?(" RUN_FAILED ")
@@ -453,6 +455,39 @@ defmodule SymphonyElixir.NotificationsTest do
 
     redacted = Formatter.slack_payload(event, redact_titles: true)
     refute Jason.encode!(redacted) =~ "Broken run"
+  end
+
+  test "formatter shows which usage limit paused or resumed dispatch, without an issue link" do
+    metadata = %{provider: "anthropic", scope: "all", window: "five_hour", resume_at: ~U[2026-05-06 14:05:00Z]}
+
+    {:ok, paused} =
+      Event.new(:usage_limit_paused, %{
+        issue_identifier: "ACME-3",
+        reason: "Claude 5-hour limit; resumes at 2026-05-06T14:05:00Z",
+        metadata: metadata,
+        timestamp: ~U[2026-05-06 09:00:00Z]
+      })
+
+    {:ok, resumed} = Event.new("usage_limit_resumed", %{reason: "Claude 5-hour limit", metadata: metadata})
+
+    paused_slack = Formatter.slack_payload(paused)
+    resumed_slack = Formatter.slack_payload(resumed)
+
+    assert paused_slack["text"] == "Usage limit paused: Claude 5-hour limit; resumes at 2026-05-06T14:05:00Z"
+    assert [%{"color" => "warning", "blocks" => [headline | _]}] = paused_slack["attachments"]
+    assert headline["text"]["text"] == "*Usage limit paused* - Claude 5-hour limit; resumes at 2026-05-06T14:05:00Z"
+
+    assert resumed_slack["text"] == "Usage limit resumed: Claude 5-hour limit"
+    assert [%{"color" => "good", "blocks" => [resumed_headline | _]}] = resumed_slack["attachments"]
+    assert resumed_headline["text"]["text"] == "*Usage limit resumed* - Claude 5-hour limit"
+
+    webhook = Formatter.webhook_payload(paused)
+    assert webhook["event"] == "usage_limit_paused"
+    assert webhook["issue_identifier"] == "ACME-3"
+    assert webhook["reason"] == "Claude 5-hour limit; resumes at 2026-05-06T14:05:00Z"
+    assert webhook["metadata"] == metadata
+    assert Jason.decode!(Jason.encode!(webhook))["metadata"]["resume_at"] == "2026-05-06T14:05:00Z"
+    assert Formatter.webhook_payload(resumed)["event"] == "usage_limit_resumed"
   end
 
   test "formatter includes reviewer feedback context for webhook and Slack payloads" do

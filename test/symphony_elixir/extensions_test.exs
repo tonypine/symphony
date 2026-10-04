@@ -549,6 +549,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                "reason" => nil,
                "paused_at" => nil
              },
+             "usage_limits" => [],
              "budget" => %{
                "per_issue_limit" => 500,
                "daily_limit" => 1_000,
@@ -1726,8 +1727,10 @@ defmodule SymphonyElixir.ExtensionsTest do
     orchestrator_name = Module.concat(__MODULE__, :EpicLanesDashboardOrchestrator)
 
     lanes = [
-      lane("e1", "MT-E1", "running", %{issue_id: "p1", identifier: "MT-P1", state: "In Progress"}),
+      lane("e1", "MT-E1", "running", %{issue_id: "p1", identifier: "MT-P1", state: "In Progress", via: nil}),
       lane("e2", "MT-E2", "waiting", %{issue_id: "p2", identifier: "MT-P2", state: "In Review"}),
+      lane("e5", "MT-E5", "running", %{issue_id: "b5", identifier: "MT-B5", state: "In Progress", via: %{relation: "blocks", identifier: "MT-P5"}}),
+      lane("e6", "MT-E6", "running", %{issue_id: "g6", identifier: "MT-G6", state: "Todo", via: %{relation: "sub_ticket_of", identifier: "MT-P6"}}),
       %{issue_id: "e3", identifier: "MT-E3", title: "Epic three", url: nil, status: "waiting", sub_issue: nil}
     ]
 
@@ -1746,6 +1749,9 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     assert html =~ "Agent lanes"
     assert html =~ "MT-P1 (In Progress)"
+    refute html =~ "MT-P1 (In Progress),"
+    assert html =~ "MT-B5 (In Progress), blocks MT-P5"
+    assert html =~ "MT-G6 (Todo), sub-ticket of MT-P6"
     assert html =~ "Waiting on MT-P2 (In Review)"
     assert html =~ "Waiting for its next sub-ticket"
     assert html =~ "Idle, reserved"
@@ -1838,6 +1844,99 @@ defmodule SymphonyElixir.ExtensionsTest do
     refute html =~ "ops-control-blocker-workspace_dirty"
   end
 
+  test "dashboard liveview shows a usage-limit banner with today's time or another day's date" do
+    orchestrator_name = Module.concat(__MODULE__, :UsageLimitDashboardOrchestrator)
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    later = DateTime.add(now, 3 * 86_400)
+
+    snapshot =
+      static_snapshot()
+      |> Map.put(:usage_limits, [
+        usage_limit_entry(%{window: "five_hour", resume_at: now}),
+        usage_limit_entry(%{scope: "opus", window: "seven_day_opus", resume_at: later})
+      ])
+      |> Map.put(:dispatch_state, %{
+        active?: false,
+        blockers: [
+          %{kind: :usage_limit, provider: "anthropic", scope: :all, window: "five_hour", resets_at: nil, resume_at: now, phase: :paused}
+        ]
+      })
+
+    {:ok, _orchestrator_pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: snapshot)
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    {:ok, _view, html} = live(build_conn(), "/")
+
+    assert html =~ "usage-limit-banner"
+    assert html =~ ~r/Paused: Claude 5-hour limit, resumes ~\d{2}:\d{2}\s*</
+    assert html =~ ~r/Paused: Claude weekly Opus limit, resumes ~[A-Z][a-z]{2} \d{1,2} \d{2}:\d{2}\s*</
+    assert html =~ "Dispatch paused"
+    assert html =~ "Claude 5-hour limit reached"
+    assert html =~ "resumes at #{DateTime.to_iso8601(now)}"
+    assert html =~ "ops-control-blocker-usage_limit"
+  end
+
+  test "state API lists usage-limit holds and the usage_limit dispatch blocker" do
+    orchestrator_name = Module.concat(__MODULE__, :UsageLimitApiOrchestrator)
+    resume_at = ~U[2026-10-03 14:05:00Z]
+
+    snapshot =
+      static_snapshot()
+      |> Map.put(:usage_limits, [usage_limit_entry(%{resume_at: resume_at, source: nil, utilization: nil})])
+      |> Map.put(:dispatch_state, %{
+        active?: false,
+        blockers: [
+          %{
+            kind: :usage_limit,
+            provider: "anthropic",
+            scope: :all,
+            window: "five_hour",
+            resets_at: ~U[2026-10-03 14:03:00Z],
+            resume_at: resume_at,
+            phase: :paused
+          }
+        ]
+      })
+
+    {:ok, _orchestrator_pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: snapshot)
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    payload = json_response(get(build_conn(), "/api/v1/state"), 200)
+
+    assert payload["usage_limits"] == [
+             %{
+               "provider" => "anthropic",
+               "scope" => "all",
+               "reason" => "claude_usage_limit",
+               "window" => "five_hour",
+               "phase" => "paused",
+               "since" => "2026-10-03T09:05:00Z",
+               "resets_at" => "2026-10-03T14:03:00Z",
+               "resume_at" => "2026-10-03T14:05:00Z",
+               "source" => nil,
+               "utilization" => nil,
+               "issue_identifier" => "MT-HELD"
+             }
+           ]
+
+    assert payload["dispatch_state"] == %{
+             "active?" => false,
+             "blockers" => [
+               %{
+                 "kind" => "usage_limit",
+                 "provider" => "anthropic",
+                 "scope" => "all",
+                 "window" => "five_hour",
+                 "phase" => "paused",
+                 "resets_at" => "2026-10-03T14:03:00Z",
+                 "resume_at" => "2026-10-03T14:05:00Z"
+               }
+             ]
+           }
+
+    assert payload["pause"] == %{"paused" => false, "reason" => nil, "paused_at" => nil}
+  end
+
   test "dashboard liveview ignores stale workspace dirty dispatch blockers" do
     orchestrator_name = Module.concat(__MODULE__, :WorkspaceDirtyDashboardOrchestrator)
 
@@ -1866,6 +1965,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "Dispatch active"
     refute html =~ "Dispatch paused"
     refute html =~ "Primary worktree has uncommitted changes"
+    refute html =~ "usage-limit-banner"
   end
 
   test "dashboard liveview disarms armed pause control after timeout" do
@@ -3040,6 +3140,25 @@ defmodule SymphonyElixir.ExtensionsTest do
 
   defp lane(issue_id, identifier, status, sub_issue) do
     %{issue_id: issue_id, identifier: identifier, title: "Epic #{identifier}", url: "https://linear.test/#{identifier}", status: status, sub_issue: sub_issue}
+  end
+
+  defp usage_limit_entry(attrs) do
+    Map.merge(
+      %{
+        provider: "anthropic",
+        scope: :all,
+        reason: "claude_usage_limit",
+        window: "five_hour",
+        phase: :paused,
+        since: ~U[2026-10-03 09:05:00Z],
+        resets_at: ~U[2026-10-03 14:03:00Z],
+        resume_at: ~U[2026-10-03 14:05:00Z],
+        source: :rate_limit_event,
+        utilization: 1.0,
+        issue_identifier: "MT-HELD"
+      },
+      attrs
+    )
   end
 
   defp static_snapshot do

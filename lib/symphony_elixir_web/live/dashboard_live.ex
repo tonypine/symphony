@@ -5,7 +5,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   use Phoenix.LiveView, layout: {SymphonyElixirWeb.Layouts, :app}
 
-  alias SymphonyElixir.{Config, URLUtils}
+  alias SymphonyElixir.{Config, URLUtils, UsageLimit}
   alias SymphonyElixirWeb.{Endpoint, ObservabilityPubSub, Presenter}
   @runtime_tick_ms 1_000
   @dashboard_reload_task :dashboard_reload
@@ -161,6 +161,12 @@ defmodule SymphonyElixirWeb.DashboardLive do
           </p>
         </section>
       <% else %>
+        <section :if={@payload.usage_limits != []} class="usage-limit-banner" role="status">
+          <p :for={usage_limit <- @payload.usage_limits} class="usage-limit-banner-line">
+            <%= UsageLimit.banner(usage_limit, @now) %>
+          </p>
+        </section>
+
         <section class={["ops-control-card", !@payload.dispatch_state.active? && "ops-control-card-paused"]}>
           <div class="ops-control-main">
             <div class="ops-control-copy">
@@ -305,7 +311,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
             <div>
               <h2 class="section-title">Agent lanes</h2>
               <p class="section-copy">
-                Each active epic keeps a lane for its sub-tickets. Shared pool: <span class="numeric"><%= @payload.epic_lanes.shared.used %>/<%= @payload.epic_lanes.shared.slots %></span> in use.
+                Each active epic keeps a lane for its sub-tickets and the tickets blocking them. Shared pool: <span class="numeric"><%= @payload.epic_lanes.shared.used %>/<%= @payload.epic_lanes.shared.slots %></span> in use.
               </p>
             </div>
           </div>
@@ -319,7 +325,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
                   <tr>
                     <th>Epic</th>
                     <th>Lane</th>
-                    <th>Sub-ticket</th>
+                    <th>Ticket</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -899,9 +905,15 @@ defmodule SymphonyElixirWeb.DashboardLive do
     |> assign(:visible_payload, filter_payload(payload, repo_filter))
   end
 
-  defp lane_part_label(%{status: "running", sub_issue: %{identifier: identifier, state: state}}), do: "#{identifier} (#{state})"
+  defp lane_part_label(%{status: "running", sub_issue: %{identifier: identifier, state: state} = part}),
+    do: "#{identifier} (#{state})" <> lane_part_via(Map.get(part, :via))
+
   defp lane_part_label(%{sub_issue: %{identifier: identifier, state: state}}), do: "Waiting on #{identifier} (#{state})"
   defp lane_part_label(_lane), do: "Waiting for its next sub-ticket"
+
+  defp lane_part_via(%{relation: "blocks", identifier: identifier}), do: ", blocks #{identifier}"
+  defp lane_part_via(%{relation: "sub_ticket_of", identifier: identifier}), do: ", sub-ticket of #{identifier}"
+  defp lane_part_via(_via), do: ""
 
   defp filter_payload(%{error: _} = payload, _repo_filter), do: payload
 
@@ -1154,6 +1166,8 @@ defmodule SymphonyElixirWeb.DashboardLive do
   defp blocker_label(%{kind: :tracker_unavailable, tracker: tracker}),
     do: "#{tracker |> tracker_name() |> String.capitalize()} tracker unavailable"
 
+  defp blocker_label(%{kind: :usage_limit} = blocker), do: "#{UsageLimit.limit_label(blocker)} reached"
+
   defp blocker_detail(%{kind: :manual, reason: reason, since: since}) do
     [reason, since && "since #{since}"]
     |> Enum.reject(&is_nil/1)
@@ -1163,6 +1177,8 @@ defmodule SymphonyElixirWeb.DashboardLive do
   defp blocker_detail(%{kind: :budget, used: used, limit: limit, resets_on: resets_on}) do
     "#{format_compact_int(used)} / #{format_compact_int(limit)} (resets #{resets_on})"
   end
+
+  defp blocker_detail(%{kind: :usage_limit, resume_at: resume_at}), do: "resumes at #{resume_at}"
 
   defp blocker_detail(%{kind: :missing_api_key}),
     do: "set the env var and restart symphony"

@@ -453,6 +453,26 @@ defmodule SymphonyElixir.AutoReviewQaTest do
                AutoReview.on_green(issue(), record, %{commit_sha: nil}, settings, [])
     end
 
+    test "waits without asking the runner while the QA provider is held by a usage limit" do
+      record = put_record()
+      # The QA agent runs Codex here, so only the openai hold applies to it.
+      settings = Config.settings!()
+      on_exit(fn -> RunStore.put_usage_limits(%{}) end)
+      resume_at = DateTime.add(DateTime.utc_now(), 3600)
+      :ok = RunStore.put_usage_limits(%{{"openai", :all} => %{provider: "openai", scope: :all, resume_at: resume_at}})
+
+      assert {:qa_waiting, "issue-qa-flow", :usage_limited} =
+               AutoReview.on_green(issue(), record, %{commit_sha: @sha, pr_url: nil}, settings, qa_runner: FakeRunner)
+
+      refute_received {:qa_runner_request, _job, _opts}
+
+      :ok = RunStore.put_usage_limits(%{{"anthropic", :all} => %{provider: "anthropic", scope: :all, resume_at: resume_at}})
+      Application.put_env(:symphony_elixir, :qa_flow_runner_result, :started)
+
+      assert {:qa_started, "issue-qa-flow", @sha} =
+               AutoReview.on_green(issue(), record, %{commit_sha: @sha, pr_url: nil}, settings, qa_runner: FakeRunner)
+    end
+
     test "re-applies a stored verdict and counts a return without a new commit as another failed attempt" do
       settings = Config.settings!()
       record = put_record(%{qa_sha: @sha, qa_verdict: "blocked", qa_target_state: "In Review", qa_applied: false})
