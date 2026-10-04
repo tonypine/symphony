@@ -4,9 +4,11 @@ defmodule SymphonyElixir.SubIssueWait do
   (`issues.states.waiting_on_sub_issues`, default `Waiting on sub-tickets`).
 
   A human approving the breakdown plan moves the parent there, and on every poll Symphony
-  moves a `breakdown` parent it finds `In Progress` with open sub-issues there too,
-  so `In Progress` only holds issues an agent is working. The poll's candidates can be
-  stale, so the parent's state is read again just before the move. The state is active but
+  moves a `breakdown` parent it finds `In Progress` with approved sub-issues open there too,
+  so `In Progress` only holds issues an agent is working. A parent whose open sub-issues are
+  all still in `Backlog` was never approved, so it is not moved: it gets a breakdown run that
+  picks the plan up where it stopped (see `Issue.unapproved_plan?/2`). The poll's candidates
+  can be stale, so the parent's state is read again just before the move. The state is active but
   held: an issue in it is dispatched only for the close-out run, once it is a
   `breakdown` parent whose sub-issues are all terminal.
 
@@ -94,7 +96,10 @@ defmodule SymphonyElixir.SubIssueWait do
     in_state?(issue, settings) and not Issue.close_out_ready?(issue, terminal_states)
   end
 
-  @doc "True when Symphony should move `issue` from `In Progress` to the waiting state."
+  @doc """
+  True when Symphony should move `issue` from `In Progress` to the waiting state: a `breakdown`
+  parent whose approved sub-issues are open (see `Issue.waiting_on_sub_issues?/2`).
+  """
   @spec park?(Issue.t() | term(), Enumerable.t(String.t()), Schema.t() | term()) :: boolean()
   def park?(%Issue{} = issue, terminal_states, settings) do
     enabled?(settings) and parked_from?(issue) and Issue.waiting_on_sub_issues?(issue, terminal_states)

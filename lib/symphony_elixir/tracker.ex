@@ -3,7 +3,7 @@ defmodule SymphonyElixir.Tracker do
   Adapter boundary for issue tracker reads and writes.
   """
 
-  alias SymphonyElixir.{Config, Linear.Issue}
+  alias SymphonyElixir.{Config, Linear.Issue, PlanComments}
 
   @typedoc "A state change in an issue's history: when it happened and the states it moved between."
   @type state_change :: %{at: DateTime.t(), from: String.t() | nil, to: String.t()}
@@ -36,6 +36,8 @@ defmodule SymphonyElixir.Tracker do
   @callback add_issue_label(String.t(), String.t()) :: :ok | {:error, term()}
   @callback remove_issue_label(String.t(), String.t()) :: :ok | {:error, term()}
   @callback fetch_breakdown_history(String.t()) :: {:ok, breakdown_history()} | {:error, term()}
+  @callback fetch_plan_comments(String.t()) :: {:ok, PlanComments.feedback()} | {:error, term()}
+  @callback create_reply(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
   @callback workflow_state_exists?(String.t(), [String.t()]) :: {:ok, boolean()} | {:error, term()}
 
   @spec fetch_candidate_issues() :: {:ok, [term()]} | {:error, term()}
@@ -93,6 +95,18 @@ defmodule SymphonyElixir.Tracker do
   @spec fetch_breakdown_history(String.t()) :: {:ok, breakdown_history()} | {:error, term()}
   def fetch_breakdown_history(issue_id) when is_binary(issue_id) do
     adapter().fetch_breakdown_history(issue_id)
+  end
+
+  @doc "The issue's state changes and comments, which `SymphonyElixir.PlanComments` acts on."
+  @spec fetch_plan_comments(String.t()) :: {:ok, PlanComments.feedback()} | {:error, term()}
+  def fetch_plan_comments(issue_id) when is_binary(issue_id) do
+    adapter().fetch_plan_comments(issue_id)
+  end
+
+  @doc "Posts `body` on the issue as a reply under the comment `parent_comment_id`."
+  @spec create_reply(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
+  def create_reply(issue_id, parent_comment_id, body) when is_binary(issue_id) and is_binary(parent_comment_id) and is_binary(body) do
+    adapter().create_reply(issue_id, parent_comment_id, body)
   end
 
   @doc """

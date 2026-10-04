@@ -105,6 +105,10 @@ defmodule SymphonyElixir.BreakdownReview do
   def comment(:replace, identifiers),
     do: "Cancelled for re-plan: #{Enum.join(identifiers, ", ")} (restore from #{target(:replace)} if needed)"
 
+  @doc "How the comments Symphony posts on the parent after moving a batch start, to tell them from a person's."
+  @spec comment_openers() :: [String.t()]
+  def comment_openers, do: ["Promoted to #{@todo_state}:", "Cancelled for re-plan:"]
+
   defp decided_at(:promote, %{from: from, to: to, at: at}, settings, own_move_at) do
     if state_matches?(from, AutoReview.review_state()) and state_matches?(to, SubIssueWait.state(settings)) and
          not own_move?(at, own_move_at),
