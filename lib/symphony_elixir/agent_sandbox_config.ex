@@ -178,7 +178,7 @@ defmodule SymphonyElixir.AgentSandboxConfig do
   `:os.type()`) and `:getconf` (the `getconf` executable).
   """
   @spec item_replacement_write_paths(keyword()) :: [String.t()]
-  def item_replacement_write_paths(opts \\ []) do
+  def item_replacement_write_paths(opts) do
     case Keyword.get_lazy(opts, :os_type, &:os.type/0) do
       {:unix, :darwin} ->
         case System.cmd(Keyword.get(opts, :getconf, "getconf"), ["DARWIN_USER_TEMP_DIR"], stderr_to_stdout: true) do
