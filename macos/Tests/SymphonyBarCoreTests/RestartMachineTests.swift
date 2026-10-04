@@ -14,6 +14,10 @@ final class RestartMachineTests: XCTestCase {
         .state(StateSnapshot(running: running, pause: .init(reason: ControlAction.pauseReason)))
     }
 
+    private func dispatchingPoll(running: Int) -> StatusPoll {
+        .state(StateSnapshot(running: running))
+    }
+
     private func begin(alreadyPaused: Bool = false) -> (RestartMachine, [Effect]) {
         var machine = RestartMachine()
         let effects = machine.begin(
@@ -90,6 +94,10 @@ final class RestartMachineTests: XCTestCase {
         XCTAssertEqual(machine.phase, .waitingForRuns(running: nil))
         XCTAssertEqual(machine.menuLine, "Restarting: waiting for dispatch to pause…")
 
+        // A poll from before the pause took hold doesn't count, even with nothing running.
+        XCTAssertEqual(machine.handle(.polled(dispatchingPoll(running: 0))), [])
+        XCTAssertEqual(machine.phase, .waitingForRuns(running: nil))
+
         // Waits while runs are active.
         XCTAssertEqual(machine.handle(.polled(pausedPoll(running: 2))), [])
         XCTAssertEqual(machine.menuLine, "Waiting for 2 agent runs…")
@@ -97,10 +105,6 @@ final class RestartMachineTests: XCTestCase {
         XCTAssertEqual(machine.menuLine, "Waiting for 1 agent run…")
         XCTAssertEqual(machine.handle(.polled(.unreachable)), [])
         XCTAssertEqual(machine.menuLine, "Waiting for 1 agent run…")
-
-        // A poll from before the pause took hold doesn't count, even with nothing running.
-        XCTAssertEqual(machine.handle(.polled(.state(StateSnapshot(running: 0)))), [])
-        XCTAssertEqual(machine.phase, .waitingForRuns(running: 1))
 
         XCTAssertEqual(machine.handle(.polled(pausedPoll(running: 0))), [.stop])
         XCTAssertEqual(machine.menuLine, "Restarting: stopping Symphony…")
@@ -141,6 +145,60 @@ final class RestartMachineTests: XCTestCase {
         XCTAssertFalse(machine.pausedByRestart)
         XCTAssertEqual(machine.phase, .idle)
         XCTAssertNil(machine.menuLine)
+    }
+
+    /// TP-435: the app's last poll showed dispatch paused, but it was resumed before the restart's first poll.
+    func testAPauseResumedBeforeTheFirstPollIsMadeAgainAndResumedAfterwards() {
+        var (machine, effects) = begin(alreadyPaused: true)
+        effects += machine.handle(.configChecked(.passed))
+        XCTAssertEqual(machine.phase, .waitingForRuns(running: nil))
+
+        // Even a first poll shows the resume: the poll that said paused was taken before the restart began.
+        XCTAssertEqual(machine.handle(.polled(dispatchingPoll(running: 2))), [.send(.pause)])
+        XCTAssertEqual(machine.phase, .pausing)
+        XCTAssertEqual(machine.menuLine, "Restarting: pausing dispatch…")
+        XCTAssertEqual(machine.handle(.controlFinished(.pause, .done)), [.pollNow])
+        XCTAssertTrue(machine.pausedByRestart)
+
+        effects = machine.handle(.polled(pausedPoll(running: 2)))
+        effects += machine.handle(.polled(pausedPoll(running: 0)))
+        effects += machine.handle(.exited(.signaled(15)))
+        effects += machine.handle(.startFinished(error: nil))
+        effects += machine.handle(.polled(pausedPoll(running: 0)))
+        effects += machine.handle(.controlFinished(.resume, .done))
+
+        XCTAssertEqual(effects, [.stop, .start, .send(.resume)])
+        XCTAssertEqual(machine.phase, .idle)
+        XCTAssertNil(machine.menuLine)
+    }
+
+    func testAPauseResumedWhileTheRestartWaitsIsMadeAgain() {
+        for alreadyPaused in [false, true] {
+            var machine = waiting(alreadyPaused: alreadyPaused)
+            XCTAssertEqual(machine.handle(.polled(pausedPoll(running: 1))), [])
+
+            XCTAssertEqual(machine.handle(.polled(dispatchingPoll(running: 2))), [.send(.pause)])
+            XCTAssertEqual(machine.phase, .pausing)
+            XCTAssertFalse(machine.canCancel)
+
+            XCTAssertEqual(machine.handle(.controlFinished(.pause, .done)), [.pollNow])
+            XCTAssertTrue(machine.pausedByRestart)
+            XCTAssertEqual(machine.phase, .waitingForRuns(running: nil))
+        }
+    }
+
+    func testFailingToPauseAResumedDispatchAbortsTheRestart() {
+        var machine = waiting(alreadyPaused: true)
+        _ = machine.handle(.polled(dispatchingPoll(running: 1)))
+
+        let effects = machine.handle(.controlFinished(.pause, .failed("Couldn't pause Symphony: HTTP 500")))
+
+        XCTAssertEqual(
+            effects,
+            [.alert(title: "Symphony wasn't restarted", message: "Couldn't pause Symphony: HTTP 500\n\nSymphony keeps running.")]
+        )
+        XCTAssertEqual(machine.phase, .idle)
+        XCTAssertFalse(machine.pausedByRestart)
     }
 
     func testTimeoutOffersRestartNow() {
@@ -346,6 +404,20 @@ final class RestartMachineTests: XCTestCase {
 
         XCTAssertEqual(machine.handle(.exited(.signaled(15)), now: began), [.stopped])
         XCTAssertFalse(machine.pausedByRestart)
+    }
+
+    /// TP-435: the relaunched app resumes dispatch once the update's drain paused it, even when the user's pause
+    /// was resumed before the drain's first poll.
+    func testUpdatePausesAResumedDispatchAndHandsTheResumeOver() {
+        var (machine, _) = beginUpdate(alreadyPaused: true)
+        XCTAssertEqual(machine.handle(.configChecked(.passed), now: began), [.pollNow])
+        XCTAssertEqual(machine.handle(.polled(dispatchingPoll(running: 1)), now: began), [.send(.pause)])
+        XCTAssertEqual(machine.menuLine, "Updating: pausing dispatch…")
+        XCTAssertEqual(machine.handle(.controlFinished(.pause, .done), now: began), [.pollNow])
+        XCTAssertEqual(machine.handle(.polled(pausedPoll(running: 0)), now: began), [.stop])
+
+        XCTAssertEqual(machine.handle(.exited(.signaled(15)), now: began), [.stopped])
+        XCTAssertTrue(machine.pausedByRestart)
     }
 
     func testUpdateNowAnywayAfterTheTimeout() {

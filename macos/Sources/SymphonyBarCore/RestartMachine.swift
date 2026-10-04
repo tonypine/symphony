@@ -22,7 +22,8 @@ public struct RestartMachine: Equatable {
         case checkingConfig
         /// Asking Symphony to pause dispatch.
         case pausing
-        /// Waiting until no agent run is active. `running` is nil until a poll shows dispatch paused.
+        /// Waiting until no agent run is active. `running` is nil until a poll shows dispatch paused. A poll that
+        /// shows it isn't paused sends the restart back to `pausing`.
         case waitingForRuns(running: Int?)
         case stopping
         case starting
@@ -66,7 +67,8 @@ public struct RestartMachine: Equatable {
 
     public private(set) var phase: Phase = .idle
     public private(set) var purpose: Purpose = .restart
-    /// True once the restart paused dispatch, so only it resumes; a pause the user made survives the restart.
+    /// True once the restart paused dispatch, so only it resumes; a pause the user made survives the restart, unless
+    /// dispatch is resumed while the restart waits and the restart pauses it again.
     public private(set) var pausedByRestart = false
     /// True once the wait for agent runs has outlasted its timeout.
     public private(set) var offersRestartNow = false
@@ -74,6 +76,8 @@ public struct RestartMachine: Equatable {
     public private(set) var error: String?
 
     private var alreadyPaused = false
+    /// True until the first poll after the restart's own pause: a poll already under way may predate the pause.
+    private var pollMayPredatePause = false
     private var runsTimeout: TimeInterval = 0
     private var logPath = ""
     private var phaseStart = Date.distantPast
@@ -88,7 +92,8 @@ public struct RestartMachine: Equatable {
         return false
     }
 
-    /// Starts a restart. `alreadyPaused` is whether dispatch is paused now. After `runsTimeout` seconds of waiting
+    /// Starts a restart. `alreadyPaused` is whether dispatch is paused now, as the app's last poll saw it; the next
+    /// poll can show it resumed since, and then the restart pauses it. After `runsTimeout` seconds of waiting
     /// for agent runs the restart also offers Restart Now Anyway. An `.update` ends with `.stopped` instead of
     /// starting Symphony.
     /// Does nothing while a restart is under way.
@@ -119,6 +124,7 @@ public struct RestartMachine: Equatable {
 
         case (.pausing, .controlFinished(.pause, .done)):
             pausedByRestart = true
+            pollMayPredatePause = true
             enter(.waitingForRuns(running: nil), now: now)
             return [.pollNow]
 
@@ -224,13 +230,23 @@ public struct RestartMachine: Equatable {
     }
 
     private mutating func waitedForRuns(_ poll: StatusPoll, now: Date) -> [Effect] {
-        // Only a poll that shows dispatch paused was taken after the pause, so its count can't grow any more.
-        if case let .state(snapshot) = poll, snapshot.pause != nil {
-            guard snapshot.running > 0 else {
-                enter(.stopping, now: now)
-                return [.stop]
+        // Polls run one at a time, so only the first one after the restart's own pause can have started before it.
+        let mayPredatePause = pollMayPredatePause
+        pollMayPredatePause = false
+        if case let .state(snapshot) = poll {
+            if snapshot.pause != nil {
+                // A poll that shows dispatch paused was taken after the pause, so its count can't grow any more.
+                guard snapshot.running > 0 else {
+                    enter(.stopping, now: now)
+                    return [.stop]
+                }
+                phase = .waitingForRuns(running: snapshot.running)
+            } else if !mayPredatePause {
+                // Dispatch was resumed after the poll the restart began with, or while it waits. Pause it, so the
+                // restart resumes it afterwards instead of waiting forever for a pause.
+                enter(.pausing, now: now)
+                return [.send(.pause)]
             }
-            phase = .waitingForRuns(running: snapshot.running)
         }
         if now.timeIntervalSince(phaseStart) >= runsTimeout { offersRestartNow = true }
         return []
