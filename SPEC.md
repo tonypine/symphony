@@ -2014,6 +2014,17 @@ Forced allowance:
 - Still respected: the operator pause, the Linear rate-limit pause, the workspace quota pause, the
   per-host worker cap, blocked-by links, setup-failure suppression, retry backoff, post-PR quiet,
   and the auto-merge / `Merging` CI waits.
+- A forced `breakdown` parent is one forced unit; its breakdown, re-plan and close-out runs are
+  forced runs. While it waits on its sub-issues (and is not re-planning), its current part is
+  forced too, without the service writing the label on it: the first issue on its epic path
+  (see Epic lanes below) that is dispatch-eligible, in epic-lane order (stage, then nearest the epic, then
+  dispatch order), so a blocked sub-issue waits for its blocker and the `Final verification:`
+  sub-issue comes once it is unblocked. The part keeps its parent's place in the forced queue, and
+  stays the parent's while it is on the path and running, claimed or waiting on a retry, so at
+  most one of the parent's issues runs on the forced allowance at a time. The parent's other
+  sub-issues use normal slots and the epic lane. Forcing a sub-issue forces only that sub-issue.
+- Forcing never moves an issue or approves a plan: a forced parent in `In Review` stays there until
+  a human moves it.
 - A forced issue's Auto Review QA request goes to the front of the QA queue: while it is queued, a
   free QA slot MUST be turned away from unforced requests. A queued forced request holds the slot
   only while it is refreshed: once no request has come for it in two CI poll intervals (the issue
@@ -3074,7 +3085,10 @@ SHOULD return:
 - `retrying` (list of retry queue rows)
 - each retry row SHOULD include `repo_key`
 - running, retry and `slot_waiting` rows SHOULD include `forced`: for a running row, whether it
-  runs on the forced allowance; for the others, whether the issue is in the forced queue
+  runs on the forced allowance; for the others, whether the issue is in the forced queue or is a
+  forced parent's current part
+- `forced` rows SHOULD include `sub_issue` (a forced `breakdown` parent's current part, or null)
+  and `waiting_on_human` (the issue is in `Backlog`, `Triage` or `In Review`)
 - `qa` (Auto Review QA passes): `running` rows (`issue_id`, `identifier`, `sha`, `forced`: whether
   the pass runs on the forced allowance) and `queued` rows (`issue_id`, `identifier`, `forced`:
   whether the request is a forced ticket's, at the front of the queue)
@@ -3340,7 +3354,9 @@ Minimum endpoints:
           "title": "Fix the release build",
           "state": "In Progress",
           "forced_since": "2026-02-24T19:00:00Z",
-          "position": 1
+          "position": 1,
+          "waiting_on_human": false,
+          "sub_issue": null
         }
       ],
       "concurrency": {"max_total": 10, "finishing_max": 2, "forced_max": 1},
@@ -4182,6 +4198,9 @@ infrastructure.
   takes no normal slot, and a second forced issue past `forced_max` waits and is noted once
 - The daily token budget and a usage-limit headroom hold do not stop a forced dispatch; the
   operator pause, blocked-by links and a `paused` usage-limit hold do
+- A forced `breakdown` parent waiting on its sub-issues forces one issue on its epic path at a
+  time, in blocked-by order and without labelling it, then its close-out run; a forced parent in
+  `In Review` is not moved
 - A forced issue's QA request goes to the front of the QA queue and, with the QA slots full,
   starts on the forced allowance while it has room; its verdict is applied as for any pass
 - No `Todo` issue is dispatched while a `Merging` issue waits for a finishing slot

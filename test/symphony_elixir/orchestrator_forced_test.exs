@@ -3,7 +3,8 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
 
   alias SymphonyElixir.{Notifications, QaRunner, UsageLimit}
 
-  @active_states ["Todo", "In Progress", "Merging", "Rework", "Auto Review"]
+  @active_states ["Todo", "In Progress", "Merging", "Rework", "Auto Review", "Waiting on sub-tickets"]
+  @waiting "Waiting on sub-tickets"
   @anthropic {"anthropic", :all}
 
   setup do
@@ -199,6 +200,190 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
       {_state, log} = dispatch_with_log([landing, unqueued, newer, older], state)
 
       assert dispatch_order(log) == ["forced-old", "forced-new", "forced-unqueued", "land-1"]
+    end
+  end
+
+  describe "a forced breakdown parent" do
+    test "starts its first sub-ticket on the allowance with every normal slot full, and no second one while it runs", ctx do
+      write_forced_workflow!(ctx, max_concurrent_agents: 1, forced_max: 2)
+      first = issue("part-1", "MT-P1", "Todo", priority: 2)
+      second = issue("part-2", "MT-P2", "Todo", priority: 3)
+      parent = parent([first, second])
+      candidates = [parent, second, first]
+      tracked(candidates)
+
+      state =
+        %{orchestrator_state(1) | forced: %{"epic-1" => queue_entry(parent, ~U[2026-10-04 06:00:00Z])}}
+        |> run(issue("impl-1", "MT-1", "In Progress"), :implementation)
+        |> plan_poll(candidates)
+
+      assert %{"epic-1" => %{issue_id: "part-1", identifier: "MT-P1", state: "Todo"}} = state.forced_parts
+
+      {state, log} = dispatch_with_log(candidates, state)
+
+      assert %{forced: true} = state.running["part-1"]
+      assert log =~ ~r/Dispatching issue to agent: issue_id=part-1 .* slot=forced forced=true/
+      refute Map.has_key?(state.running, "epic-1")
+      assert [%{issue_id: "part-2", reason: "work slots full", forced: false}] = snapshot_of(state).slot_waiting
+
+      # No label is written on a sub-ticket.
+      assert Enum.all?(tracked_issues(), &(&1.id == "epic-1" or &1.labels == []))
+
+      # The next poll keeps the running part as the parent's, so the second waits for a normal slot
+      # though the forced allowance has room.
+      state = plan_poll(state, candidates)
+      assert %{"epic-1" => %{issue_id: "part-1"}} = state.forced_parts
+      state = Orchestrator.dispatch_chosen_issues_for_test(candidates, state)
+      refute Map.has_key?(state.running, "part-2")
+
+      assert [%{issue_id: "epic-1", sub_issue: %{issue_id: "part-1", identifier: "MT-P1"}, waiting_on_human: false}] =
+               snapshot_of(state).forced
+    end
+
+    test "follows blocked-by order between sub-tickets, then forces the Final verification sub-ticket", ctx do
+      write_forced_workflow!(ctx, max_concurrent_agents: 1)
+      first = issue("part-1", "MT-P1", "Todo", priority: 4)
+      second = issue("part-2", "MT-P2", "Todo", priority: 1, blocked_by: [link(first)])
+      verify = issue("verify-1", "MT-V", "Todo", title: "Final verification: Export", blocked_by: [link(first), link(second)])
+      candidates = [parent([first, second, verify]), first, second, verify]
+      tracked(candidates)
+
+      full = run(orchestrator_state(1), issue("impl-1", "MT-1", "In Progress"), :implementation)
+      state = full |> plan_poll(candidates) |> then(&Orchestrator.dispatch_chosen_issues_for_test(candidates, &1))
+
+      assert %{forced: true} = state.running["part-1"]
+      refute Map.has_key?(state.running, "part-2")
+
+      # The first part lands: the second is unblocked and becomes the parent's part.
+      done = %{first | state: "Done"}
+      second = %{second | blocked_by: [link(done)]}
+      verify = %{verify | blocked_by: [link(done), link(second)]}
+      candidates = [parent([done, second, verify]), second, verify]
+      tracked(candidates)
+
+      state = %{state | running: Map.delete(state.running, "part-1"), claimed: MapSet.delete(state.claimed, "part-1")}
+      state = state |> plan_poll(candidates) |> then(&Orchestrator.dispatch_chosen_issues_for_test(candidates, &1))
+
+      assert %{"epic-1" => %{issue_id: "part-2"}} = state.forced_parts
+      assert %{forced: true} = state.running["part-2"]
+      refute Map.has_key?(state.running, "verify-1")
+
+      # Once every other sub-ticket is Done, the Final verification sub-ticket is forced the same way.
+      second = %{second | state: "Done"}
+      verify = %{verify | blocked_by: [link(done), link(second)]}
+      candidates = [parent([done, second, verify]), verify]
+      tracked(candidates)
+
+      state = %{state | running: Map.delete(state.running, "part-2"), claimed: MapSet.delete(state.claimed, "part-2")}
+      state = state |> plan_poll(candidates) |> then(&Orchestrator.dispatch_chosen_issues_for_test(candidates, &1))
+
+      assert %{forced: true} = state.running["verify-1"]
+    end
+
+    test "starts its close-out run on the forced allowance once every sub-ticket is terminal", ctx do
+      write_forced_workflow!(ctx, max_concurrent_agents: 1)
+      parent = parent([issue("part-1", "MT-P1", "Done"), issue("part-2", "MT-P2", "Canceled")])
+      tracked([parent])
+
+      state = orchestrator_state(1) |> run(issue("impl-1", "MT-1", "In Progress"), :implementation) |> plan_poll([parent])
+      assert state.forced_parts == %{}
+
+      {state, log} = dispatch_with_log([parent], state)
+
+      assert %{forced: true} = state.running["epic-1"]
+      assert log =~ ~r/issue_id=epic-1 .* slot=forced forced=true/
+    end
+
+    test "in In Review is left there, shown as waiting on a human, and forces none of its Backlog sub-tickets", ctx do
+      write_forced_workflow!(ctx)
+      backlog = issue("part-1", "MT-P1", "Backlog")
+      parent = %{parent([backlog]) | state: "In Review"}
+      tracked([parent, backlog])
+
+      state = %{orchestrator_state(10) | forced: %{"epic-1" => queue_entry(parent, ~U[2026-10-04 06:00:00Z])}}
+      state = plan_poll(state, [parent, backlog])
+      state = Orchestrator.dispatch_chosen_issues_for_test([parent, backlog], state)
+
+      assert state.forced_parts == %{}
+      assert state.running == %{}
+      assert [%{state: "In Review", labels: ["breakdown", "expedite"]}, %{state: "Backlog", labels: []}] = tracked_issues()
+      assert [%{issue_id: "epic-1", waiting_on_human: true, sub_issue: nil}] = snapshot_of(state).forced
+    end
+
+    test "queues its sub-ticket in the parent's place when the forced allowance is taken", ctx do
+      write_forced_workflow!(ctx, max_concurrent_agents: 1)
+      :ok = Notifications.subscribe()
+      holder = issue("forced-1", "MT-F1", "In Progress", forced: true)
+      part = issue("part-1", "MT-P1", "Todo")
+      parent = parent([part])
+      candidates = [parent, part]
+      tracked(candidates)
+
+      queue = %{
+        "forced-1" => queue_entry(holder, ~U[2026-10-04 06:00:00Z]),
+        "epic-1" => queue_entry(parent, ~U[2026-10-04 07:00:00Z])
+      }
+
+      state =
+        %{orchestrator_state(1) | forced: queue}
+        |> run(holder, :implementation, forced: true)
+        |> run(issue("impl-1", "MT-1", "In Progress"), :implementation)
+        |> plan_poll(candidates)
+
+      {state, log} = dispatch_with_log(candidates, state)
+
+      refute Map.has_key?(state.running, "part-1")
+      assert %{reason: "queued #2; forced slot taken by MT-F1"} = state.slot_waiting["part-1"]
+      assert log =~ "Forced ticket waiting: issue_id=part-1"
+      assert_receive {:notification_event, %Notifications.Event{event: "forced_waiting", issue_identifier: "MT-P1"}}
+      assert [%{issue_id: "part-1", forced: true}] = snapshot_of(state).slot_waiting
+
+      # The next poll keeps it noted, so it is not announced again.
+      state = plan_poll(state, candidates)
+      assert MapSet.member?(state.forced_waiting_noted, "part-1")
+    end
+
+    test "a part waiting on a retry shows as forced, and keeps its place in a usage limit canary pick", ctx do
+      write_forced_workflow!(ctx)
+      part = issue("part-1", "MT-P1", "In Progress")
+      plain = issue("plain-1", "MT-1", "In Progress", priority: 1)
+      parent = parent([part])
+      due_at_ms = System.monotonic_time(:millisecond)
+      held = fn issue -> %{attempt: 1, identifier: issue.identifier, title: issue.title, repo_key: "default", usage_limit_key: @anthropic, due_at_ms: due_at_ms} end
+
+      state =
+        %{
+          orchestrator_state(1)
+          | usage_limits: %{@anthropic => hold(:paused)},
+            retry_attempts: %{"plain-1" => held.(plain), "part-1" => held.(part)},
+            claimed: MapSet.new(["plain-1", "part-1"]),
+            forced_parts: %{"epic-1" => %{issue_id: "part-1", identifier: "MT-P1", state: "In Progress"}}
+        }
+        |> plan_poll([parent, part, plain])
+
+      assert %{"epic-1" => %{issue_id: "part-1"}} = state.forced_parts
+      retrying = Enum.sort_by(snapshot_of(state).retrying, & &1.issue_id)
+      assert [%{issue_id: "part-1", forced: true}, %{issue_id: "plain-1", forced: false}] = retrying
+
+      state = Orchestrator.start_usage_limit_canary_for_test(state, @anthropic, fn _ids -> {:ok, [plain, part]} end)
+      assert %{phase: :canary, canary_issue_id: "part-1"} = state.usage_limits[@anthropic]
+    end
+
+    test "is not forced through a re-plan's sub-tickets, and forcing a sub-ticket forces only that one", ctx do
+      write_forced_workflow!(ctx, max_concurrent_agents: 1)
+      forced_part = issue("part-1", "MT-P1", "Todo", forced: true)
+      other = issue("part-2", "MT-P2", "Todo")
+      plain_parent = %{parent([forced_part, other]) | labels: ["breakdown"]}
+      replanning = %{parent([other]) | id: "epic-2", identifier: "MT-EPIC2", state: "Rework"}
+      candidates = [plain_parent, replanning, forced_part, other]
+      tracked(candidates)
+
+      state = orchestrator_state(1) |> run(issue("impl-1", "MT-1", "In Progress"), :implementation) |> plan_poll([nil | candidates])
+      assert state.forced_parts == %{}
+
+      state = Orchestrator.dispatch_chosen_issues_for_test([forced_part, other], state)
+      assert %{forced: true} = state.running["part-1"]
+      refute Map.has_key?(state.running, "part-2")
     end
   end
 
@@ -458,6 +643,18 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
     }
   end
 
+  defp parent(sub_issues) do
+    issue("epic-1", "MT-EPIC", @waiting, title: "Export", labels: ["breakdown", "expedite"], sub_issues: Enum.map(sub_issues, &link/1))
+  end
+
+  defp link(%Issue{} = issue), do: %{id: issue.id, identifier: issue.identifier, state: issue.state}
+
+  defp plan_poll(state, candidates) do
+    state
+    |> Orchestrator.put_epic_lanes_for_test(candidates)
+    |> Orchestrator.put_forced_parts_for_test(candidates)
+  end
+
   defp queue_entry(%Issue{} = issue, forced_since) do
     %{identifier: issue.identifier, title: issue.title, state: issue.state, repo_key: nil, forced_since: forced_since}
   end
@@ -488,6 +685,7 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
   end
 
   defp tracked(issues), do: Application.put_env(:symphony_elixir, :memory_tracker_issues, issues)
+  defp tracked_issues, do: Application.get_env(:symphony_elixir, :memory_tracker_issues)
 
   defp dispatch_order(log) do
     ~r/Dispatching issue to agent: issue_id=(\S+)/

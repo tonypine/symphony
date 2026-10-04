@@ -169,6 +169,25 @@ defmodule SymphonyElixir.EpicLanes do
 
   defp home_lane(_lanes, _issue), do: nil
 
+  @doc """
+  The tickets on the path of the active epic `epic_id`, whether it holds a lane, is queued for one or
+  has yielded it; an empty map when the plan has no such epic.
+  """
+  @spec members(t() | nil, String.t()) :: %{optional(String.t()) => member()}
+  def members(%{lanes: lanes, queued: queued, yielded: yielded}, epic_id) do
+    case Enum.find(lanes ++ queued ++ yielded, &(&1.id == epic_id)) do
+      %{members: members} -> members
+      nil -> %{}
+    end
+  end
+
+  def members(nil, _epic_id), do: %{}
+
+  @doc "True when a ticket in `state` waits for a person: not yet approved (Backlog, Triage) or In Review."
+  @spec human_gated_state?(String.t() | nil) :: boolean()
+  def human_gated_state?(state) when is_binary(state), do: MapSet.member?(@human_gated_states, normalize_state(state))
+  def human_gated_state?(_state), do: false
+
   @doc "The slot name the dispatch log line uses: `lane:<epic>` or `shared`."
   @spec slot_label(t() | nil, String.t(), [String.t()]) :: String.t()
   def slot_label(plan, issue_id, running_ids) do
@@ -299,7 +318,7 @@ defmodule SymphonyElixir.EpicLanes do
 
     cond do
       not is_binary(state) -> "state unknown"
-      MapSet.member?(@human_gated_states, normalize_state(state)) -> state
+      human_gated_state?(state) -> state
       waiting_parent?(issue, terminal_states) -> "#{state}, waiting on its sub-tickets"
       Issue.blocked?(issue, terminal_states) -> "#{state}, blocked by #{blocker_names(issue, terminal_states)}"
       true -> nil

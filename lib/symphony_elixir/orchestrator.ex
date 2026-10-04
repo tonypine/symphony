@@ -112,6 +112,7 @@ defmodule SymphonyElixir.Orchestrator do
       blocked: [],
       forced: %{},
       forced_waiting_noted: MapSet.new(),
+      forced_parts: %{},
       forced_touched: %{},
       slot_waiting: %{},
       setup_failed: %{},
@@ -1155,6 +1156,7 @@ defmodule SymphonyElixir.Orchestrator do
           |> prune_quality_gate_cache_to_active(issues)
           |> clear_running_quality_gate_cache_entries()
           |> put_epic_lanes(issues)
+          |> put_forced_parts(issues)
           |> put_blocked(issues)
           |> release_merging_ci_waits(issues)
 
@@ -1601,6 +1603,10 @@ defmodule SymphonyElixir.Orchestrator do
   @doc false
   @spec put_epic_lanes_for_test(State.t(), [Issue.t()]) :: State.t()
   def put_epic_lanes_for_test(%State{} = state, issues) when is_list(issues), do: put_epic_lanes(state, issues)
+
+  @doc false
+  @spec put_forced_parts_for_test(State.t(), [Issue.t()]) :: State.t()
+  def put_forced_parts_for_test(%State{} = state, issues) when is_list(issues), do: put_forced_parts(state, issues)
 
   @doc false
   @spec apply_forced_poll_result_for_test(State.t(), term(), [String.t()], term(), integer()) :: State.t()
@@ -2898,7 +2904,7 @@ defmodule SymphonyElixir.Orchestrator do
       issues
       |> sort_issues_for_dispatch()
       |> then(&EpicLanes.order(state.epic_lanes, &1, fn issue -> stage_rank(issue.state, auto_review_state) end))
-      |> forced_first(state.forced)
+      |> forced_first(state)
       |> Enum.reduce({%{state | slot_waiting: slot_waiting}, qa_finishing_hold()}, fn issue, acc ->
         maybe_dispatch_chosen_issue(issue, acc, previous_waiting, active_states, terminal_states)
       end)
@@ -2909,7 +2915,7 @@ defmodule SymphonyElixir.Orchestrator do
   # The daily token budget pauses new dispatch, but not a forced ticket's: the forced candidates
   # still go out, and every other issue waiting for a slot keeps its place.
   defp dispatch_forced_over_daily_budget(%State{} = state, issues) do
-    forced = Enum.filter(issues, &forced_candidate?/1)
+    forced = Enum.filter(issues, &forced_candidate?(&1, state))
     next_state = dispatch_chosen_issues(forced, state, keep_waiting: true)
 
     for %Issue{id: issue_id} = issue <- forced,
@@ -2962,7 +2968,7 @@ defmodule SymphonyElixir.Orchestrator do
   # A forced ticket that finds the forced allowance taken gets no extra slot; it still goes first
   # for a normal one. It is logged and notified once per wait, naming the forced runs holding it.
   defp note_forced_allowance_full(%State{} = state, %Issue{id: issue_id} = issue) do
-    if forced_issue?(issue) and not forced_slot_available?(issue, state) and not MapSet.member?(state.forced_waiting_noted, issue_id) do
+    if forced_issue?(issue, state) and not forced_slot_available?(issue, state) and not MapSet.member?(state.forced_waiting_noted, issue_id) do
       reason = forced_wait_reason(issue, state)
 
       Logger.warning(
@@ -2977,7 +2983,8 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp forced_wait_reason(%Issue{id: issue_id}, %State{} = state) do
-    position = Enum.find_value(ForcedQueue.snapshot(state.forced), &(&1.issue_id == issue_id && &1.position))
+    queue_id = forced_queue_id(issue_id, state)
+    position = Enum.find_value(ForcedQueue.snapshot(state.forced), &(&1.issue_id == queue_id && &1.position))
     queued = if position, do: "queued ##{position}; ", else: ""
     "#{queued}forced slot taken by #{Enum.join(forced_running_identifiers(state), ", ")}"
   end
@@ -2988,15 +2995,16 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # Forced tickets go first, in `forced_since` order; one the queue has not recorded yet follows
-  # the queued ones. The rest keep their order.
-  defp forced_first(issues, forced) do
-    {forced_issues, rest} = Enum.split_with(issues, &forced_candidate?/1)
-    Enum.sort_by(forced_issues, &forced_sort_key(&1, forced)) ++ rest
+  # the queued ones, and a forced parent's sub-ticket takes its parent's place. The rest keep
+  # their order.
+  defp forced_first(issues, %State{} = state) do
+    {forced_issues, rest} = Enum.split_with(issues, &forced_candidate?(&1, state))
+    Enum.sort_by(forced_issues, &forced_sort_key(&1, state)) ++ rest
   end
 
-  defp forced_sort_key(%Issue{id: issue_id}, forced) do
-    case forced do
-      %{^issue_id => %{forced_since: %DateTime{} = forced_since}} -> {0, DateTime.to_unix(forced_since, :microsecond)}
+  defp forced_sort_key(%Issue{id: issue_id}, %State{forced: forced} = state) do
+    case Map.get(forced, forced_queue_id(issue_id, state)) do
+      %{forced_since: %DateTime{} = forced_since} -> {0, DateTime.to_unix(forced_since, :microsecond)}
       _not_queued -> {1, 0}
     end
   end
@@ -3022,7 +3030,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp slot_wait_reason(%Issue{} = issue, %State{} = state) do
     cond do
-      forced_issue?(issue) and not forced_slot_available?(issue, state) -> forced_wait_reason(issue, state)
+      forced_issue?(issue, state) and not forced_slot_available?(issue, state) -> forced_wait_reason(issue, state)
       finishing_issue?(issue) -> "finishing slots full"
       true -> "work slots full"
     end
@@ -3181,7 +3189,8 @@ defmodule SymphonyElixir.Orchestrator do
       Enum.each(changes, &record_forced_change(&1, state.repo_key))
     end
 
-    %{state | forced: forced, forced_waiting_noted: MapSet.filter(state.forced_waiting_noted, &Map.has_key?(forced, &1))}
+    state = %{state | forced: forced}
+    %{state | forced_waiting_noted: MapSet.filter(state.forced_waiting_noted, &forced_queued?(&1, state))}
   end
 
   # Linear answers an unknown identifier with an "Entity not found" GraphQL error rather than a null issue.
@@ -3295,14 +3304,14 @@ defmodule SymphonyElixir.Orchestrator do
   # past `max_total`, the epic lanes, `finishing_max` and the per-state caps. A run on it carries
   # `forced: true` and takes none of those slots. A forced ticket past `forced_max` competes for a
   # normal slot and runs as a normal run.
-  defp forced_issue?(%Issue{} = issue), do: Issue.forced?(issue, Config.settings!())
+  defp forced_issue?(%Issue{} = issue, %State{} = state), do: Issue.forced?(issue, Config.settings!()) or forced_part?(issue.id, state)
 
-  defp forced_candidate?(issue), do: match?(%Issue{}, issue) and forced_issue?(issue)
+  defp forced_candidate?(issue, state), do: match?(%Issue{}, issue) and forced_issue?(issue, state)
 
   defp forced_entry?(%{forced: true}), do: true
   defp forced_entry?(_running_entry), do: false
 
-  defp forced_slot_available?(%Issue{} = issue, %State{} = state), do: forced_issue?(issue) and forced_slot_free?(state)
+  defp forced_slot_available?(%Issue{} = issue, %State{} = state), do: forced_issue?(issue, state) and forced_slot_free?(state)
 
   defp forced_slot_free?(%State{running: running}) do
     forced_runs = Enum.count(running, fn {_issue_id, entry} -> forced_entry?(entry) end)
@@ -3322,9 +3331,95 @@ defmodule SymphonyElixir.Orchestrator do
   # forced allowance can take, or to note once that one has to wait.
   defp forced_pass_needed?(%State{} = state, issues) do
     Enum.any?(issues, fn issue ->
-      forced_candidate?(issue) and not issue_taken?(issue, state) and
+      forced_candidate?(issue, state) and not issue_taken?(issue, state) and
         (forced_slot_free?(state) or not MapSet.member?(state.forced_waiting_noted, issue.id))
     end)
+  end
+
+  # A forced `breakdown` parent waiting on its sub-tickets is one forced unit: its current part, the
+  # first ticket on its epic path that can run, counts as forced without the label being written on
+  # it. Parts are picked in EpicLanes order (stage, then nearest the epic, then dispatch order), so a
+  # blocked sub-ticket waits for its blocker. A part stays the parent's while it runs or waits on a
+  # retry, so no second one takes the forced allowance meanwhile. Rebuilt from every poll's candidates.
+  defp put_forced_parts(%State{} = state, issues) do
+    settings = Config.settings!()
+    active_states = active_state_set()
+    terminal_states = terminal_state_set()
+    auto_review_state = settings |> AutoReview.state() |> normalize_issue_state()
+    states = {active_states, terminal_states, auto_review_state}
+    ordered = issues |> sort_issues_for_dispatch() |> Enum.with_index()
+
+    parts =
+      issues
+      |> Enum.filter(&forced_waiting_parent?(&1, settings, terminal_states))
+      |> Enum.flat_map(fn %Issue{id: parent_id} = parent ->
+        members = EpicLanes.members(state.epic_lanes, parent_id)
+
+        case kept_forced_part(parent, members, state) || next_forced_part(parent, members, ordered, state, states) do
+          nil -> []
+          part -> [{parent_id, part}]
+        end
+      end)
+      |> Map.new()
+
+    state = %{state | forced_parts: parts}
+    %{state | forced_waiting_noted: MapSet.filter(state.forced_waiting_noted, &forced_queued?(&1, state))}
+  end
+
+  defp forced_waiting_parent?(%Issue{} = issue, settings, terminal_states) do
+    Issue.forced?(issue, settings) and Issue.waiting_on_sub_issues?(issue, terminal_states) and not Issue.replanning?(issue)
+  end
+
+  defp forced_waiting_parent?(_issue, _settings, _terminal_states), do: false
+
+  defp kept_forced_part(%Issue{id: parent_id}, members, %State{} = state) do
+    with %{issue_id: issue_id} <- Map.get(state.forced_parts, parent_id),
+         %{} = member <- Map.get(members, issue_id),
+         true <- issue_taken?(%Issue{id: issue_id}, state) do
+      forced_part_entry(issue_id, member)
+    else
+      _no_part -> nil
+    end
+  end
+
+  defp next_forced_part(%Issue{id: parent_id}, members, ordered, %State{} = state, {active_states, terminal_states, auto_review_state}) do
+    ordered
+    |> Enum.flat_map(fn
+      {%Issue{id: issue_id} = issue, index} when is_map_key(members, issue_id) ->
+        member = Map.fetch!(members, issue_id)
+        [{{stage_rank(issue.state, auto_review_state), member.depth, index}, issue, member}]
+
+      _not_on_path ->
+        []
+    end)
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Enum.find_value(fn {_rank, issue, member} ->
+      # Judged as the parent's part, so a usage-limit headroom hold does not rule it out.
+      as_part = %{state | forced_parts: Map.put(state.forced_parts, parent_id, %{issue_id: issue.id})}
+      if dispatch_eligible?(issue, as_part, active_states, terminal_states), do: forced_part_entry(issue.id, member)
+    end)
+  end
+
+  defp forced_part_entry(issue_id, member), do: %{issue_id: issue_id, identifier: member.identifier, state: member.state}
+
+  defp forced_part?(issue_id, %State{forced_parts: parts}), do: Enum.any?(parts, fn {_parent_id, part} -> part.issue_id == issue_id end)
+
+  # Forced on its own, or as a forced parent's part.
+  defp forced_queued?(issue_id, %State{} = state), do: Map.has_key?(state.forced, issue_id) or forced_part?(issue_id, state)
+
+  # The forced queue entry an issue waits under: its own, else its forced parent's.
+  defp forced_queue_id(issue_id, %State{forced: forced, forced_parts: parts}) do
+    if Map.has_key?(forced, issue_id),
+      do: issue_id,
+      else: Enum.find_value(parts, issue_id, fn {parent_id, part} -> part.issue_id == issue_id && parent_id end)
+  end
+
+  # The forced queue for the snapshot: each forced parent with its current part, and whether the
+  # ticket waits for a person (not yet approved, or In Review) rather than for Symphony.
+  defp forced_snapshot(%State{} = state) do
+    for entry <- ForcedQueue.snapshot(state.forced) do
+      Map.merge(entry, %{sub_issue: Map.get(state.forced_parts, entry.issue_id), waiting_on_human: EpicLanes.human_gated_state?(entry.state)})
+    end
   end
 
   defp work_running_ids(running) when is_map(running) do
@@ -6307,7 +6402,7 @@ defmodule SymphonyElixir.Orchestrator do
           reason: Map.get(retry, :reason),
           elapsed_ms: Map.get(retry, :elapsed_ms),
           delay_type: retry_delay_type(retry),
-          forced: Map.has_key?(state.forced, issue_id)
+          forced: forced_queued?(issue_id, state)
         }
       end)
 
@@ -6404,12 +6499,12 @@ defmodule SymphonyElixir.Orchestrator do
       dispatch_state: dispatch_state_snapshot(state),
       epic_lanes: EpicLanes.snapshot(state.epic_lanes, epic_lane_running(state.running)),
       blocked: state.blocked || [],
-      forced: ForcedQueue.snapshot(state.forced),
+      forced: forced_snapshot(state),
       concurrency: concurrency_snapshot(state),
       finishing: finishing_snapshot(state.running),
       qa: qa_snapshot(),
       auto_merge: PrReviewPoller.auto_merge_statuses(),
-      slot_waiting: slot_waiting_snapshot(state.slot_waiting, state.forced) ++ merging_ci_waiting_snapshot(state.merging_ci_waits, state.forced),
+      slot_waiting: slot_waiting_snapshot(state.slot_waiting, state) ++ merging_ci_waiting_snapshot(state),
       claimed: state.claimed |> MapSet.to_list() |> Enum.sort(),
       pollers: poller_status_snapshot(),
       polling: %{
@@ -6444,18 +6539,18 @@ defmodule SymphonyElixir.Orchestrator do
     }
   end
 
-  defp slot_waiting_snapshot(slot_waiting, forced) do
+  defp slot_waiting_snapshot(slot_waiting, %State{} = state) do
     slot_waiting
     |> Enum.map(fn {issue_id, entry} ->
       entry
       |> Map.take([:identifier, :title, :state, :reason, :attempt, :since])
-      |> Map.merge(%{issue_id: issue_id, forced: Map.has_key?(forced, issue_id)})
+      |> Map.merge(%{issue_id: issue_id, forced: forced_queued?(issue_id, state)})
     end)
     |> Enum.sort_by(& &1.since, DateTime)
   end
 
   # Merging issues held for CI aren't waiting for a slot, but they show in the same list with why.
-  defp merging_ci_waiting_snapshot(merging_ci_waits, forced) do
+  defp merging_ci_waiting_snapshot(%State{merging_ci_waits: merging_ci_waits} = state) do
     merging_ci_waits
     |> Enum.map(fn {issue_id, wait} ->
       %{
@@ -6466,7 +6561,7 @@ defmodule SymphonyElixir.Orchestrator do
         reason: "waiting for CI on #{wait.commit_sha}",
         attempt: nil,
         since: wait.since,
-        forced: Map.has_key?(forced, issue_id)
+        forced: forced_queued?(issue_id, state)
       }
     end)
     |> Enum.sort_by(& &1.since, DateTime)
@@ -7248,7 +7343,7 @@ defmodule SymphonyElixir.Orchestrator do
         clear_usage_limit(state, key, entry)
 
       held ->
-        {issue_id, retry} = pick_usage_limit_canary(held, issue_fetcher, state.forced)
+        {issue_id, retry} = pick_usage_limit_canary(held, issue_fetcher, state)
         Logger.warning("Usage limit canary provider=#{entry.provider} scope=#{UsageLimit.scope_label(entry.scope)} issue_identifier=#{retry[:identifier]}")
 
         state
@@ -7263,13 +7358,13 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # Issues the tracker no longer returns sort last, by id. A forced ticket goes first.
-  defp pick_usage_limit_canary(held, issue_fetcher, forced) do
+  defp pick_usage_limit_canary(held, issue_fetcher, %State{} = state) do
     held_by_id = Map.new(held)
     issue_ids = held_by_id |> Map.keys() |> Enum.sort()
 
     ordered_ids =
       case issue_fetcher.(issue_ids) do
-        {:ok, issues} -> issues |> sort_issues_for_dispatch() |> forced_first(forced) |> Enum.map(& &1.id)
+        {:ok, issues} -> issues |> sort_issues_for_dispatch() |> forced_first(state) |> Enum.map(& &1.id)
         {:error, _reason} -> []
       end
 
@@ -7362,7 +7457,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp usage_limit_hold(%State{usage_limits: usage_limits} = state, %Issue{} = issue, continuation?) do
     repo_key = dispatch_repo_key(state, issue)
     profile = AgentRunner.run_profile(issue, Config.settings_for_repo!(repo_key), repo_key: repo_key)
-    UsageLimit.holding(usage_limits, Map.merge(profile, %{continuation: continuation?, forced: forced_issue?(issue)}), issue.id)
+    UsageLimit.holding(usage_limits, Map.merge(profile, %{continuation: continuation?, forced: forced_issue?(issue, state)}), issue.id)
   end
 
   defp remember_usage_windows(%State{} = state, %{usage_windows: %{} = windows}) do

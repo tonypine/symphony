@@ -697,7 +697,19 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "title" => "Fix the release",
                  "state" => "In Review",
                  "forced_since" => "2026-10-03T05:00:00Z",
-                 "position" => 1
+                 "position" => 1,
+                 "waiting_on_human" => true,
+                 "sub_issue" => nil
+               },
+               %{
+                 "issue_id" => "forced-parent-http",
+                 "issue_identifier" => "MT-EPIC",
+                 "title" => "Export",
+                 "state" => "Waiting on sub-tickets",
+                 "forced_since" => "2026-10-03T06:00:00Z",
+                 "position" => 2,
+                 "waiting_on_human" => false,
+                 "sub_issue" => %{"issue_id" => "part-http", "issue_identifier" => "MT-PART", "state" => "Todo"}
                }
              ],
              "concurrency" => %{"max_total" => 10, "finishing_max" => 2, "forced_max" => 1},
@@ -3484,7 +3496,19 @@ defmodule SymphonyElixir.ExtensionsTest do
           title: "Fix the release",
           state: "In Review",
           forced_since: ~U[2026-10-03 05:00:00.123456Z],
-          position: 1
+          position: 1,
+          waiting_on_human: true,
+          sub_issue: nil
+        },
+        %{
+          issue_id: "forced-parent-http",
+          identifier: "MT-EPIC",
+          title: "Export",
+          state: "Waiting on sub-tickets",
+          forced_since: ~U[2026-10-03 06:00:00Z],
+          position: 2,
+          waiting_on_human: false,
+          sub_issue: %{issue_id: "part-http", identifier: "MT-PART", state: "Todo"}
         }
       ],
       concurrency: %{max_total: 10, finishing_max: 2, forced_max: 1},
