@@ -13,8 +13,10 @@ defmodule SymphonyElixir.McpServer do
   @protocol_version "2025-06-18"
   @auth_header "symphony-session-token"
   @header_separator "\r\n\r\n"
-  @managed_socket_root "/tmp"
   @managed_socket_prefix "symphony-mcp-"
+  @socket_root_probe_prefix ".symphony-mcp-probe-"
+  # macOS `sun_path` is 104 bytes including the trailing NUL (Linux allows 108).
+  @max_socket_path_bytes 103
   @shim_prefix "symphony-mcp-shim-"
   @orphaned_socket_dir_grace_seconds 5
 
@@ -68,14 +70,19 @@ defmodule SymphonyElixir.McpServer do
   def tool_specs, do: DynamicTool.tool_specs()
 
   @impl true
-  def init(_opts) do
-    reap_orphaned_socket_dirs()
-    {:ok, %{sessions: %{}, tokens: %{}, acceptors: %{}}}
+  def init(opts) do
+    default_socket_root = default_socket_root(opts)
+    socket_root = resolved_socket_root(default_socket_root: default_socket_root)
+    Logger.info("MCP socket root=#{socket_root}")
+    reap_orphaned_socket_dirs(socket_root)
+
+    {:ok, %{sessions: %{}, tokens: %{}, acceptors: %{}, default_socket_root: default_socket_root}}
   end
 
   @impl true
   def handle_call({:start_session, context, opts}, _from, state) do
     id = token()
+    opts = Keyword.put(opts, :default_socket_root, state.default_socket_root)
 
     case open_and_secure_socket(opts, id) do
       {:ok, socket_dir, socket_path, listen_socket, endpoint} ->
@@ -201,16 +208,56 @@ defmodule SymphonyElixir.McpServer do
         {:ok, Path.dirname(path), path}
 
       _ ->
-        dir = Path.join(resolved_socket_root(opts), "#{@managed_socket_prefix}#{id}")
-        {:ok, dir, Path.join(dir, "sock")}
+        root = resolved_socket_root(opts)
+
+        with {:error, _too_long} <- managed_socket_paths(root, id),
+             {:error, path} <- managed_socket_paths(root, short_socket_id(id)) do
+          {:error, {:mcp_socket_path_too_long, path}}
+        end
     end
+  end
+
+  defp managed_socket_paths(root, id) do
+    dir = Path.join(root, "#{@managed_socket_prefix}#{id}")
+    path = Path.join(dir, "sock")
+
+    if byte_size(path) <= @max_socket_path_bytes, do: {:ok, dir, path}, else: {:error, path}
+  end
+
+  # A long root (macOS `/var/folders/...` TMPDIR) leaves no room for the full
+  # 43-byte session id, so name the dir after a short hash of it instead.
+  defp short_socket_id(id) do
+    :sha256
+    |> :crypto.hash(id)
+    |> binary_part(0, 6)
+    |> Base.encode16(case: :lower)
   end
 
   defp resolved_socket_root(opts) do
     with nil <- opt_socket_root(opts),
          nil <- system_env_socket_root(),
          nil <- app_env_socket_root() do
-      @managed_socket_root
+      Keyword.fetch!(opts, :default_socket_root)
+    end
+  end
+
+  # Sandboxed agent runs (Claude Code, SRT) deny writes to `/tmp` itself but
+  # allow their own TMPDIR, so use the first candidate a dir can be made in.
+  defp default_socket_root(opts) do
+    candidates = Keyword.get_lazy(opts, :default_socket_roots, fn -> ["/tmp", System.tmp_dir!()] end)
+    Enum.find(candidates, List.last(candidates), &writable_dir?/1)
+  end
+
+  defp writable_dir?(root) do
+    probe = Path.join(root, "#{@socket_root_probe_prefix}#{System.pid()}-#{System.unique_integer([:positive])}")
+
+    case File.mkdir(probe) do
+      :ok ->
+        _ = File.rmdir(probe)
+        true
+
+      {:error, _reason} ->
+        false
     end
   end
 
@@ -390,10 +437,10 @@ defmodule SymphonyElixir.McpServer do
   end
 
   # Reap under the effective root so orphans left behind with a configured
-  # `SYMPHONY_MCP_SOCKET_ROOT` or `:mcp_socket_root` are cleaned up too.
-  defp reap_orphaned_socket_dirs do
-    []
-    |> resolved_socket_root()
+  # `SYMPHONY_MCP_SOCKET_ROOT`, `:mcp_socket_root` or a fallback root are
+  # cleaned up too.
+  defp reap_orphaned_socket_dirs(socket_root) do
+    socket_root
     |> Path.join("#{@managed_socket_prefix}*")
     |> Path.wildcard()
     |> Enum.each(&reap_orphaned_socket_dir/1)

@@ -2355,6 +2355,9 @@ Notes:
 - Codex local launch prefers a managed Unix socket for Symphony's implicit MCP server. If the OS
   denies managed Unix socket binding with `EPERM`, the implementation falls back to a random
   `127.0.0.1` TCP listener. Explicit Unix socket paths remain strict and surface the bind error.
+- Managed MCP socket dirs are created under `SYMPHONY_MCP_SOCKET_ROOT` when set, otherwise under
+  `/tmp` when it is writable, otherwise under the system temp dir (`TMPDIR`). A socket path that
+  would exceed the 104-byte `sun_path` limit uses a short hash of the session ID as its dir name.
 - The implicit MCP server logs transport/framing failures with method, tool, request ID, payload
   byte size, MCP session ID, and transport when available. Malformed newline-delimited JSON returns
   a structured JSON-RPC parse error when the request ID can be recovered, and response-send failures
