@@ -10,6 +10,8 @@ defmodule SymphonyElixir.Linear.TransientRetry do
   the wait budget is spent, is returned as it is.
   """
 
+  require Logger
+
   alias SymphonyElixir.Linear.RateLimit
 
   @max_wait_ms 300_000
@@ -45,6 +47,9 @@ defmodule SymphonyElixir.Linear.TransientRetry do
     * `:sleep_fun` - `fn delay_ms -> any end` (default `Process.sleep/1`)
     * `:now_ms_fun` - `fn -> now_ms end` (default `RateLimit.now_ms/0`)
     * `:on_wait` - `fn reason, delay_ms -> any end`, called before each wait
+      (default: a warning naming `:label`, or nothing without one)
+    * `:label` - what the call does, for that warning (for example
+      `"moving issue_id=... issue_identifier=TP-1 to In Progress"`)
   """
   @spec run((-> result()), keyword()) :: result()
   def run(fun, opts \\ []) when is_function(fun, 0) and is_list(opts) do
@@ -54,11 +59,19 @@ defmodule SymphonyElixir.Linear.TransientRetry do
     config = %{
       sleep_fun: Keyword.get(opts, :sleep_fun, &Process.sleep/1),
       now_ms_fun: now_ms_fun,
-      on_wait: Keyword.get(opts, :on_wait, fn _reason, _delay_ms -> :ok end),
+      on_wait: Keyword.get_lazy(opts, :on_wait, fn -> default_on_wait(Keyword.get(opts, :label)) end),
       deadline_ms: deadline_ms
     }
 
     attempt(fun, config, 1)
+  end
+
+  defp default_on_wait(nil), do: fn _reason, _delay_ms -> :ok end
+
+  defp default_on_wait(label) do
+    fn reason, delay_ms ->
+      Logger.warning("Linear call failed while #{label}; retrying in #{delay_ms}ms reason=#{inspect(reason)}")
+    end
   end
 
   defp attempt(fun, config, attempt) do

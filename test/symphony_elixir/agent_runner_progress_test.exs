@@ -4,6 +4,8 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
   alias SymphonyElixir.WorkspaceHead
 
   @pr_url "https://github.com/example/repo/pull/337"
+  @now_ms 1_791_000_000_000
+  @rate_limited {:error, {:linear_rate_limited, 1_791_000_030_000}}
 
   defmodule ProgressAgent do
     # Coding-agent stand-in: every turn completes and is reported to the test.
@@ -37,7 +39,8 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
             :progress_agent_recipient,
             :progress_agent_turns,
             :progress_pr_head_result,
-            :memory_tracker_update_issue_state_result
+            :memory_tracker_update_issue_state_result,
+            :memory_tracker_create_comment_result
           ] do
         Application.delete_env(:symphony_elixir, key)
       end
@@ -193,6 +196,57 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     end
   end
 
+  describe "a Linear rate limit on a run's own Linear call" do
+    test "a finished rework waits it out on its post-PR move instead of failing the run" do
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [@rate_limited])
+
+      log = capture_log(fn -> assert :ok = run_issue!("Rework", heads: ["sha-old", "sha-rework"], runner_opts: linear_wait_opts()) end)
+
+      assert turns() == 1
+      assert_received {:linear_wait_slept, 30_000}
+      assert_received {:memory_tracker_state_update, "issue-progress", "Auto Review"}
+      assert log =~ "Linear call failed while moving issue_id=issue-progress issue_identifier=TP-337 to Auto Review after rework"
+      refute log =~ "Agent run failed"
+    end
+
+    test "an idle park waits it out on its state move and its note instead of failing the run" do
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [@rate_limited])
+      # The first comment is the workpad bootstrap's; the second is the park note.
+      Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, [:ok, @rate_limited])
+
+      log =
+        capture_log(fn ->
+          assert :ok = run_issue!("In Progress", heads: ["sha-same"], pr_url: nil, max_turns: 5, runner_opts: linear_wait_opts())
+        end)
+
+      assert turns() == 2
+      assert_received {:linear_wait_slept, 30_000}
+      assert_received {:linear_wait_slept, 30_000}
+      assert_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+      assert_received {:memory_tracker_comment, "issue-progress", workpad}
+      assert workpad =~ "## Symphony Workpad"
+      assert_received {:memory_tracker_comment, "issue-progress", note}
+      assert note =~ "Symphony parked this issue in Backlog"
+      assert log =~ "Linear call failed while parking issue_id=issue-progress issue_identifier=TP-337 in Backlog"
+      refute log =~ "Agent run failed for"
+    end
+
+    test "a move still rate-limited when the wait runs out ends the run as a Linear wait" do
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, @rate_limited)
+      runner_opts = [linear_retry_opts: [max_wait_ms: 0]]
+
+      capture_log(fn ->
+        assert {:linear_unavailable, {:idle_park_failed, {:linear_rate_limited, 1_791_000_030_000}}} =
+                 catch_exit(run_issue!("In Progress", heads: ["sha-same"], pr_url: nil, max_turns: 5, runner_opts: runner_opts))
+      end)
+    end
+  end
+
+  defp linear_wait_opts do
+    parent = self()
+    [linear_retry_opts: [now_ms_fun: fn -> @now_ms end, sleep_fun: &send(parent, {:linear_wait_slept, &1})]]
+  end
+
   # `heads` is the workspace HEAD at run start and after each turn (the last one repeats);
   # `states` is the issue state after each turn (the last one repeats).
   defp run_issue!(state, opts) do
@@ -214,13 +268,17 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     issue = %Issue{id: "issue-progress", identifier: "TP-337", title: "Leave Rework", state: state, pull_request_url: pr_url}
 
     try do
-      AgentRunner.run(issue, nil,
-        workspace_path: workspace,
-        agent_module: ProgressAgent,
-        github: ProgressGitHub,
-        workspace_head_reader: fn ^workspace, nil -> at_turn(heads) end,
-        issue_state_fetcher: fn _ids -> {:ok, [%{issue | state: at_turn(states, -1)}]} end,
-        issue_enricher: &{:ok, &1}
+      AgentRunner.run(
+        issue,
+        nil,
+        [
+          workspace_path: workspace,
+          agent_module: ProgressAgent,
+          github: ProgressGitHub,
+          workspace_head_reader: fn ^workspace, nil -> at_turn(heads) end,
+          issue_state_fetcher: fn _ids -> {:ok, [%{issue | state: at_turn(states, -1)}]} end,
+          issue_enricher: &{:ok, &1}
+        ] ++ Keyword.get(opts, :runner_opts, [])
       )
     after
       File.rm_rf(test_root)

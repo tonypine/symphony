@@ -99,6 +99,9 @@ defmodule SymphonyElixir.AgentRunner do
           terminal_tool_failure_circuit_breaker?(reason) ->
             exit(reason)
 
+          linear_unavailable?(reason) ->
+            exit({:linear_unavailable, reason})
+
           true ->
             raise RuntimeError, "Agent run failed for #{issue_context(issue)}: #{inspect(reason)}"
         end
@@ -114,6 +117,15 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp terminal_tool_failure_circuit_breaker?({:tool_failure_circuit_breaker, _payload}), do: true
   defp terminal_tool_failure_circuit_breaker?(_reason), do: false
+
+  # A step that still could not reach Linear once its wait ran out, such as
+  # `{:idle_park_failed, {:linear_rate_limited, until_ms}}`, failed through no fault of the
+  # issue; the orchestrator retries the run without counting an attempt.
+  defp linear_unavailable?(reason) when is_tuple(reason) and tuple_size(reason) > 1 do
+    reason |> elem(tuple_size(reason) - 1) |> TransientRetry.transient?()
+  end
+
+  defp linear_unavailable?(_reason), do: false
 
   defp terminal_agent_setup_error?(reason) do
     reason
@@ -229,7 +241,7 @@ defmodule SymphonyElixir.AgentRunner do
     issue_enricher = Keyword.get(opts, :issue_enricher, &Tracker.enrich_issue/1)
 
     try do
-      case issue_enricher.(issue) do
+      case with_linear_retry(fn -> issue_enricher.(issue) end, "enriching #{issue_context(issue)}", opts) do
         {:ok, enriched_issue} ->
           enriched_issue
 
@@ -433,7 +445,7 @@ defmodule SymphonyElixir.AgentRunner do
     max_turns = Keyword.get(opts, :max_turns, settings.agent.max_turns)
     issue_state_fetcher = Keyword.get(opts, :issue_state_fetcher, &Tracker.fetch_issue_states_by_ids/1)
 
-    seed_ids = AgentTools.Linear.recover_comment_registry_seeds(issue, settings.tracker.kind)
+    seed_ids = AgentTools.Linear.recover_comment_registry_seeds(issue, settings.tracker.kind, Keyword.take(opts, [:linear_retry_opts]))
     opts = Keyword.put_new_lazy(opts, :run_profile, fn -> run_profile(issue, settings, opts) end)
 
     with {:ok, agent_module} <- agent_module(opts),
@@ -598,7 +610,7 @@ defmodule SymphonyElixir.AgentRunner do
 
           idle_turn_limit_reached?(refreshed_issue, run_context) ->
             forget_rework_base(refreshed_issue, opts)
-            park_idle_issue(refreshed_issue)
+            park_idle_issue(refreshed_issue, opts)
 
           turn_number < max_turns ->
             run_context = %{run_context | issue: refreshed_issue}
@@ -665,7 +677,9 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp hold_dependency_approval(%Issue{id: issue_id} = issue, items, turn_session, opts)
        when is_binary(issue_id) do
-    case Tracker.update_issue_state(issue_id, @dependency_review_state) do
+    move = fn -> Tracker.update_issue_state(issue_id, @dependency_review_state) end
+
+    case with_linear_retry(move, "moving #{issue_context(issue)} to #{@dependency_review_state} for dependency approval", opts) do
       :ok ->
         Notifications.emit_issue_event(
           :dependency_pending_approval,
@@ -1304,6 +1318,12 @@ defmodule SymphonyElixir.AgentRunner do
     TransientRetry.run(fn -> issue_state_fetcher.([issue_id]) end, retry_opts)
   end
 
+  # Waits out a rate limit or a dropped connection on a Linear call the run makes, the
+  # same way the post-turn refresh does, instead of failing the run.
+  defp with_linear_retry(fun, label, opts) do
+    TransientRetry.run(fun, opts |> Keyword.get(:linear_retry_opts, []) |> Keyword.put(:label, label))
+  end
+
   defp waiting_on_sub_issues?(%Issue{} = issue) do
     settings = Config.settings!()
     terminal_states = settings.tracker.terminal_states
@@ -1425,8 +1445,9 @@ defmodule SymphonyElixir.AgentRunner do
   defp hand_off_finished_rework(%Issue{id: issue_id} = issue, run_context) do
     post_pr_state = run_context.opts |> Keyword.fetch!(:settings) |> AutoReview.post_pr_state()
     Logger.info("Rework for #{issue_context(issue)} is pushed to its PR with no rework signal pending; moving to #{post_pr_state}")
+    move = fn -> Tracker.update_issue_state(issue_id, post_pr_state) end
 
-    case Tracker.update_issue_state(issue_id, post_pr_state) do
+    case with_linear_retry(move, "moving #{issue_context(issue)} to #{post_pr_state} after rework", run_context.opts) do
       :ok ->
         forget_rework_base(issue, run_context.opts)
         :ok
@@ -1460,11 +1481,12 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp park_idle_issue(%Issue{id: issue_id} = issue) do
+  defp park_idle_issue(%Issue{id: issue_id} = issue, opts) do
     Logger.warning("Parking #{issue_context(issue)} in #{@idle_park_state} after #{@max_empty_turns} turns with no new commit or state change")
+    label = "parking #{issue_context(issue)} in #{@idle_park_state}"
 
-    with :ok <- Tracker.update_issue_state(issue_id, @idle_park_state),
-         :ok <- Tracker.create_comment(issue_id, idle_park_note()) do
+    with :ok <- with_linear_retry(fn -> Tracker.update_issue_state(issue_id, @idle_park_state) end, label, opts),
+         :ok <- with_linear_retry(fn -> Tracker.create_comment(issue_id, idle_park_note()) end, label, opts) do
       :ok
     else
       {:error, reason} -> {:error, {:idle_park_failed, reason}}

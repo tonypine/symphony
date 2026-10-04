@@ -17,6 +17,10 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
     gap is terminal. When a gap could not be filed or linked, the ticket goes to `Backlog` for a
     human instead, since nothing would hold it.
 
+  Each Linear call waits out a rate limit or a dropped connection
+  (`SymphonyElixir.Linear.TransientRetry`) instead of failing the run; the verdict is kept while the
+  final state move waits, so a finished QA pass is not thrown away.
+
   Playbooks come from `qa:<kind>` labels on the verification ticket or the parent; without one,
   every enabled playbook is offered, since there is no diff to select from.
 
@@ -30,7 +34,7 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
   alias SymphonyElixir.{AgentTools, AutoReview, Config, QaAgent, RunKind, Tracker, Verification, Workspace}
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.Linear.{Issue, TransientRetry}
   alias SymphonyElixir.QaAgent.{Report, Selection}
 
   @review_state "In Review"
@@ -47,7 +51,8 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
   `{:error, reason}` when the parent could not be read or the ticket could not be moved.
 
   Options: `:settings` (required), `:repo_key`, `:run_id`, `:worker_host`, `:on_message`
-  (forwarded agent messages), and `:tracker`, `:qa_agent`, `:git`, `:linear_client` for tests.
+  (forwarded agent messages), `:linear_retry_opts` (`TransientRetry.run/2` options), and
+  `:tracker`, `:qa_agent`, `:git`, `:linear_client` for tests.
   """
   @spec run(Issue.t(), Path.t(), keyword()) :: :ok | :skip | {:error, term()}
   def run(%Issue{} = issue, workspace, opts) do
@@ -81,9 +86,12 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
   end
 
   defp fetch_parent(issue, opts) do
-    case AgentTools.Linear.get_parent_issue(%{issue: issue}, linear_opts(opts)) do
+    read_parent = fn -> AgentTools.Linear.get_parent_issue(%{issue: issue}, linear_opts(opts)) end
+
+    case with_linear_retry(read_parent, "reading the parent of #{issue.identifier}", opts) do
       {:ok, %{"identifier" => identifier}} when is_binary(identifier) ->
-        Keyword.get(opts, :tracker, Tracker).fetch_issue_by_identifier(identifier)
+        fetch = fn -> Keyword.get(opts, :tracker, Tracker).fetch_issue_by_identifier(identifier) end
+        with_linear_retry(fetch, "reading the parent #{identifier}", opts)
 
       {:ok, _no_parent} ->
         {:skip, "the ticket has no parent"}
@@ -175,8 +183,9 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
       |> Report.render()
 
     Enum.each([parent, issue], &publish(&1, report, settings, opts))
+    move = fn -> Keyword.get(opts, :tracker, Tracker).update_issue_state(issue.id, target_state) end
 
-    case Keyword.get(opts, :tracker, Tracker).update_issue_state(issue.id, target_state) do
+    case with_linear_retry(move, "moving #{issue.identifier} to #{target_state} after the parent walkthrough", opts) do
       :ok ->
         Logger.info("Parent walkthrough for #{parent.identifier} ended #{outcome.verdict}; moved #{issue.identifier} to #{target_state}")
         :ok
@@ -194,7 +203,9 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
   end
 
   defp publish(target, report, settings, opts) do
-    case Report.publish(target, report, Keyword.put(linear_opts(opts), :settings, settings)) do
+    post = fn -> Report.publish(target, report, Keyword.put(linear_opts(opts), :settings, settings)) end
+
+    case with_linear_retry(post, "publishing the parent walkthrough QA report on #{target.identifier}", opts) do
       :ok -> :ok
       {:error, reason} -> Logger.warning("Failed to publish the parent walkthrough QA report on #{target.identifier}: #{inspect(reason)}")
     end
@@ -210,8 +221,9 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
       |> failure_tickets(%{issue: issue, parent: parent, outcome: outcome})
       |> Enum.flat_map(fn {title, description} ->
         attrs = %{"title" => title, "description" => description}
+        create = fn -> AgentTools.Linear.create_subissue(context, attrs, linear_opts(opts)) end
 
-        case AgentTools.Linear.create_subissue(context, attrs, linear_opts(opts)) do
+        case with_linear_retry(create, "filing a parent walkthrough finding for #{issue.identifier}", opts) do
           {:ok, response} ->
             identifier = get_in(response, ["data", "issueCreate", "issue", "identifier"])
             [%{identifier: identifier, title: title, linked?: link_gap(context, issue, identifier, opts)}]
@@ -227,7 +239,9 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
   end
 
   defp link_gap(context, issue, identifier, opts) do
-    case AgentTools.Linear.add_blocked_by(context, %{"blocked_by" => [identifier]}, linear_opts(opts)) do
+    link = fn -> AgentTools.Linear.add_blocked_by(context, %{"blocked_by" => [identifier]}, linear_opts(opts)) end
+
+    case with_linear_retry(link, "marking #{issue.identifier} blocked by #{identifier}", opts) do
       {:ok, _response} ->
         true
 
@@ -312,6 +326,10 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
   defp title(text), do: text |> String.slice(0, @title_limit) |> String.trim()
 
   defp linear_opts(opts), do: Keyword.take(opts, [:linear_client])
+
+  defp with_linear_retry(fun, label, opts) do
+    TransientRetry.run(fun, opts |> Keyword.get(:linear_retry_opts, []) |> Keyword.put(:label, label))
+  end
 
   defp default_git(args, cwd), do: Workspace.safe_git(["-C", cwd | args], stderr_to_stdout: true)
 end

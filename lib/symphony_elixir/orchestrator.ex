@@ -662,19 +662,35 @@ defmodule SymphonyElixir.Orchestrator do
       true ->
         Logger.warning("Agent task exited for issue_id=#{issue_id} session_id=#{session_id} reason=#{inspect(reason)}; scheduling retry")
 
-        next_attempt = next_retry_attempt_from_running(running_entry)
+        {next_attempt, retry_metadata} = failed_run_retry(running_entry, reason)
         emit_run_failed(running_entry, error, next_attempt)
 
-        schedule_issue_retry(state, issue_id, next_attempt, %{
-          repo_key: running_entry_repo_key(running_entry),
-          identifier: running_entry.identifier,
-          title: running_entry_title(running_entry),
-          error: error,
-          worker_host: Map.get(running_entry, :worker_host),
-          workspace_path: Map.get(running_entry, :workspace_path)
-        })
+        schedule_issue_retry(
+          state,
+          issue_id,
+          next_attempt,
+          Map.merge(
+            %{
+              repo_key: running_entry_repo_key(running_entry),
+              identifier: running_entry.identifier,
+              title: running_entry_title(running_entry),
+              error: error,
+              worker_host: Map.get(running_entry, :worker_host),
+              workspace_path: Map.get(running_entry, :workspace_path)
+            },
+            retry_metadata
+          )
+        )
     end
   end
+
+  # The run waited for Linear as long as it may and Linear was still rate-limited or
+  # unreachable. That is not the issue's fault: keep its attempt and let
+  # schedule_issue_retry/4 wait for Linear instead of backing off.
+  defp failed_run_retry(running_entry, {:linear_unavailable, _reason}),
+    do: {retry_attempt(Map.get(running_entry, :retry_attempt)), %{delay_type: :linear_wait}}
+
+  defp failed_run_retry(running_entry, _reason), do: {next_retry_attempt_from_running(running_entry), %{}}
 
   # Not the issue's fault: the attempt stays, no backoff is added and no `run_failed` goes
   # out. The retry is held until the provider's limit resets, keeping the workspace.
@@ -707,6 +723,10 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp agent_exit_reason_summary({:review_agent_blocked, payload}) do
     "review_agent blocked: #{review_agent_block_reason(payload)}"
+  end
+
+  defp agent_exit_reason_summary({:linear_unavailable, reason}) do
+    "waiting for Linear: #{inspect(reason)}"
   end
 
   defp agent_exit_reason_summary({:tool_failure_circuit_breaker, payload}) do
