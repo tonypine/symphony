@@ -9,7 +9,10 @@ TEST_ARGS := --max-cases $(TEST_MAX_CASES)
 help:
 	@echo "Targets: setup, deps, audit, fmt, fmt-check, lint, test, test-profile, coverage, coverage-profile, check, dialyzer, dialyzer-profile, e2e, ci"
 
+# Turns on .githooks/pre-push (format, compile and credo on the files a push changes)
+# for this clone and all its worktrees.
 setup:
+	git config core.hooksPath .githooks
 	$(MIX) setup
 
 deps:
