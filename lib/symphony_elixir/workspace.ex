@@ -7,7 +7,7 @@ defmodule SymphonyElixir.Workspace do
   alias SymphonyElixir.{Config, ManagedClone, PathSafety, ProcessTree, SSH, WorkflowSource}
   alias SymphonyElixir.Config.Schema.Hooks
   alias SymphonyElixir.GitHub.Repo, as: GitHubRepo
-  alias SymphonyElixir.Repo.FetchLog
+  alias SymphonyElixir.Repo.{Fetcher, FetchLog}
 
   @remote_workspace_marker "__SYMPHONY_WORKSPACE__"
   # How much of a timed-out hook's output its log line keeps.
@@ -364,8 +364,15 @@ defmodule SymphonyElixir.Workspace do
 
   defp maybe_fetch_worktree_repo(repo, issue_context, settings) do
     case settings.workspace.fetch_before_dispatch do
-      true -> FetchLog.record(issue_context.repo_key, run_git(repo, ["fetch", "origin"]))
+      true -> FetchLog.record(issue_context.repo_key, fetch_origin(repo))
       false -> :ok
+    end
+  end
+
+  defp fetch_origin(repo) do
+    case Fetcher.fetch_origin(repo) do
+      {_output, 0} -> :ok
+      {output, status} -> {:error, {:git_failed, repo, ["fetch", "origin"], status}, output}
     end
   end
 
