@@ -6,11 +6,19 @@ defmodule SymphonyElixir.Linear.Adapter do
   @behaviour SymphonyElixir.Tracker
 
   alias SymphonyElixir.Linear.{Client, Issue}
-  alias SymphonyElixir.Tracker
+  alias SymphonyElixir.{PlanComments, Tracker}
 
   @create_comment_mutation """
   mutation SymphonyCreateComment($issueId: String!, $body: String!) {
     commentCreate(input: {issueId: $issueId, body: $body}) {
+      success
+    }
+  }
+  """
+
+  @create_reply_mutation """
+  mutation SymphonyCreateReply($issueId: String!, $parentId: String!, $body: String!) {
+    commentCreate(input: {issueId: $issueId, parentId: $parentId, body: $body}) {
       success
     }
   }
@@ -131,6 +139,42 @@ defmodule SymphonyElixir.Linear.Adapter do
   }
   """
 
+  # The newest comments are the ones that matter: a comment counts only after the parent's latest
+  # move into its state.
+  @plan_comments_query """
+  query SymphonyPlanComments($id: String!) {
+    issue(id: $id) {
+      history(first: 50) {
+        nodes {
+          createdAt
+          fromState {
+            name
+          }
+          toState {
+            name
+          }
+        }
+      }
+      comments(last: 50, orderBy: createdAt) {
+        nodes {
+          id
+          body
+          createdAt
+          parent {
+            id
+          }
+          user {
+            id
+          }
+          botActor {
+            id
+          }
+        }
+      }
+    }
+  }
+  """
+
   @spec fetch_candidate_issues() :: {:ok, [term()]} | {:error, term()}
   def fetch_candidate_issues, do: client_module().fetch_candidate_issues()
 
@@ -156,6 +200,19 @@ defmodule SymphonyElixir.Linear.Adapter do
       :ok
     else
       false -> {:error, :comment_create_failed}
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :comment_create_failed}
+    end
+  end
+
+  @spec create_reply(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
+  def create_reply(issue_id, parent_comment_id, body) when is_binary(issue_id) and is_binary(parent_comment_id) and is_binary(body) do
+    variables = %{issueId: issue_id, parentId: parent_comment_id, body: body}
+
+    with {:ok, response} <- client_module().graphql(@create_reply_mutation, variables),
+         true <- get_in(response, ["data", "commentCreate", "success"]) == true do
+      :ok
+    else
       {:error, reason} -> {:error, reason}
       _ -> {:error, :comment_create_failed}
     end
@@ -223,6 +280,21 @@ defmodule SymphonyElixir.Linear.Adapter do
     end
   end
 
+  @spec fetch_plan_comments(String.t()) :: {:ok, PlanComments.feedback()} | {:error, term()}
+  def fetch_plan_comments(issue_id) when is_binary(issue_id) do
+    with {:ok, response} <- client_module().graphql(@plan_comments_query, %{id: issue_id}),
+         %{} = issue <- get_in(response, ["data", "issue"]) do
+      {:ok,
+       %{
+         state_changes: issue |> history_nodes() |> Enum.flat_map(&state_change/1),
+         comments: issue |> get_in(["comments", "nodes"]) |> List.wrap() |> Enum.map(&plan_comment/1)
+       }}
+    else
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :issue_not_found}
+    end
+  end
+
   @spec workflow_state_exists?(String.t(), [String.t()]) :: {:ok, boolean()} | {:error, term()}
   def workflow_state_exists?(state_name, teams) when is_binary(state_name) and is_list(teams) do
     with {:ok, response} <- client_module().graphql(@workflow_states_query, %{stateName: state_name}),
@@ -259,6 +331,17 @@ defmodule SymphonyElixir.Linear.Adapter do
       state: get_in(child, ["state", "name"]),
       created_at: parse_datetime(child["createdAt"]),
       state_changed_at: child |> history_nodes() |> Enum.flat_map(&state_change/1) |> Enum.map(& &1.at) |> Enum.max(DateTime, fn -> nil end)
+    }
+  end
+
+  # A comment without a user came from an integration, as does one with a bot actor.
+  defp plan_comment(comment) do
+    %{
+      id: comment["id"],
+      body: comment["body"],
+      created_at: parse_datetime(comment["createdAt"]),
+      parent_id: get_in(comment, ["parent", "id"]),
+      bot?: is_map(comment["botActor"]) or not is_map(comment["user"])
     }
   end
 

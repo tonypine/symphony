@@ -87,8 +87,12 @@ branch instead of opening a second one. If a claimed issue moves to a terminal s
 - **Parent tickets** — label a large ticket `breakdown` and the agent splits it into sub-tickets plus a
   final verification ticket instead of opening a PR, then moves the parent to `In Review`. Approve the
   plan by moving the parent to `Waiting on sub-tickets` and Symphony promotes every `Backlog`
-  sub-ticket to `Todo`; move it to `Rework` to have the plan made again. The parent waits without
-  being re-dispatched until every sub-ticket is closed, then closes out with a Linear project update.
+  sub-ticket to `Todo`; comment on the plan while it is `In Review` to have it revised in place
+  (artifact comments edited, `Backlog` sub-tickets updated, each comment answered); move it to
+  `Rework` to have the plan made again. A plan run that stopped midway resumes from its workpad
+  when the parent is moved to `In Progress`, keeping the sub-tickets already filed. The approved
+  parent waits without being re-dispatched until every sub-ticket is closed, then closes out with
+  a Linear project update.
   With Auto Review on, the final verification ticket is a QA pass over the merged parent: the report
   goes on the parent and each failing step becomes a new ticket that blocks the verification
   ticket, which waits in `Todo` and runs again once those tickets are done.

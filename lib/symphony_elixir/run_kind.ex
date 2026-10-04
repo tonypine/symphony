@@ -9,7 +9,8 @@ defmodule SymphonyElixir.RunKind do
     1. `final_verification`: the title starts with `Final verification:`.
     2. `breakdown`: a `breakdown` parent in `Rework`, whose rejected plan is made again.
     3. `close_out`: a `breakdown` parent whose sub-issues are all terminal.
-    4. `breakdown`: any other `breakdown` parent (normally one without sub-issues yet).
+    4. `breakdown`: any other `breakdown` parent: one without sub-issues yet, one whose
+       never-approved plan stopped midway, or one revising its plan from review comments.
     5. `landing`: the issue is in `Merging`.
     6. `rework`: the issue is in `Rework`.
     7. `ci_fix`: the run continues after a red CI run (`:ci_failure` signal).

@@ -22,6 +22,7 @@ defmodule SymphonyElixir.Orchestrator do
     ForcedQueue,
     ForcedStatus,
     Notifications,
+    PlanComments,
     PrReviewPoller,
     PrRun,
     QaRunner,
@@ -58,6 +59,8 @@ defmodule SymphonyElixir.Orchestrator do
   # A landing session can see its issue turn terminal (for example Linear's
   # "PR merged -> Done" automation) before it posts its final workpad update.
   @merging_state "merging"
+  # A breakdown parent goes back here for its run to revise the plan from people's comments.
+  @plan_revision_state "In Progress"
   @merging_terminal_grace_ms 300_000
   @snapshot_table :symphony_orchestrator_snapshot
   @snapshot_key :current
@@ -111,6 +114,8 @@ defmodule SymphonyElixir.Orchestrator do
       budget_exhausted: MapSet.new(),
       parked_parents: MapSet.new(),
       breakdown_reviews: %{},
+      plan_comment_checks: %{},
+      plan_comments_since: nil,
       merging_ci_waits: %{},
       epic_lanes: nil,
       blocked: [],
@@ -183,6 +188,7 @@ defmodule SymphonyElixir.Orchestrator do
       claimed: claimed,
       retry_attempts: retry_attempts,
       completed_run_metadata: completed_run_metadata,
+      plan_comments_since: DateTime.utc_now(),
       codex_totals: codex_totals,
       rate_limits: nil,
       tracker_health: empty_tracker_health(config.tracker.kind),
@@ -436,6 +442,7 @@ defmodule SymphonyElixir.Orchestrator do
           |> maybe_put_runtime_value(:workspace_path, runtime_info[:workspace_path])
           |> maybe_put_runtime_value(:agent_module, runtime_info[:agent_module])
           |> maybe_put_runtime_value(:agent_session, runtime_info[:agent_session])
+          |> maybe_put_runtime_value(:comment_ids, runtime_info[:comment_ids])
           |> Map.put(:last_event_at, last_event_at)
           |> maybe_put_workspace_hook(runtime_info)
 
@@ -1646,6 +1653,10 @@ defmodule SymphonyElixir.Orchestrator do
     do: review_breakdown_parents(issues, state, opts)
 
   @doc false
+  @spec act_on_plan_comments_for_test(term(), [Issue.t()]) :: term()
+  def act_on_plan_comments_for_test(%State{} = state, issues) when is_list(issues), do: act_on_plan_comments(state, issues)
+
+  @doc false
   @spec park_breakdown_parents_for_test([Issue.t()], term()) :: term()
   def park_breakdown_parents_for_test(issues, %State{} = state) when is_list(issues), do: park_breakdown_parents(issues, state)
 
@@ -1818,6 +1829,7 @@ defmodule SymphonyElixir.Orchestrator do
       terminal_state_set()
     )
     |> reconcile_missing_watching_issue_ids(issue_ids, issues)
+    |> act_on_plan_comments(issues)
   end
 
   defp apply_watching_issue_states_result(%State{} = state, _issue_ids, {:error, reason}) do
@@ -2676,6 +2688,7 @@ defmodule SymphonyElixir.Orchestrator do
       issues
       |> park_breakdown_parents(state)
       |> then(&review_breakdown_parents(issues, &1))
+      |> act_on_plan_comments(issues)
 
     state =
       cond do
@@ -2821,6 +2834,93 @@ defmodule SymphonyElixir.Orchestrator do
     case Tracker.create_comment(issue_id, BreakdownReview.comment(action, moved)) do
       :ok -> :ok
       {:error, reason} -> Logger.warning("Failed to comment on breakdown parent: #{issue_context(issue)} reason=#{inspect(reason)}")
+    end
+  end
+
+  # A person's new comment on a `breakdown` parent's plan (see `PlanComments`): a plan under review
+  # goes back to `In Progress`, where the breakdown run revises it, and an approved plan gets a reply.
+  # Parents waiting for review come from the watching refresh, approved ones from the candidates.
+  # `plan_comment_checks` keeps the newest comment each parent's poll showed once it was acted on,
+  # so Linear is read again only when a newer comment shows up. `plan_comments_since` is when this
+  # orchestrator started: comments on an approved plan from before it get no reply.
+  defp act_on_plan_comments(%State{} = state, issues) do
+    settings = Config.settings!()
+    terminal_states = terminal_state_set()
+
+    Enum.reduce(issues, state, fn issue, state ->
+      with action when not is_nil(action) <- PlanComments.action(issue, terminal_states, settings),
+           false <- issue_claimed_or_running?(state, issue.id),
+           %DateTime{} = newest <- newest_comment_at(issue),
+           true <- newer_comment?(newest, Map.get(state.plan_comment_checks, issue.id)),
+           true <- read_plan_comments(issue, action, last_run(state, issue.id), state.plan_comments_since) do
+        %{state | plan_comment_checks: Map.put(state.plan_comment_checks, issue.id, newest)}
+      else
+        _skip -> state
+      end
+    end)
+  end
+
+  defp read_plan_comments(%Issue{id: issue_id} = issue, action, last_run, started_at) do
+    case Tracker.fetch_plan_comments(issue_id) do
+      {:ok, feedback} ->
+        pending = PlanComments.pending(action, feedback, issue.state, last_run, started_at)
+        act_on_pending_plan_comments(issue, action, pending)
+
+      {:error, reason} ->
+        Logger.warning("Failed to read comments on breakdown parent: #{issue_context(issue)} reason=#{inspect(reason)}")
+        false
+    end
+  end
+
+  defp act_on_pending_plan_comments(_issue, _action, []), do: true
+
+  defp act_on_pending_plan_comments(%Issue{id: issue_id} = issue, :revise, comments) do
+    case Tracker.update_issue_state(issue_id, @plan_revision_state) do
+      :ok ->
+        Logger.info("Moved breakdown parent to #{@plan_revision_state} to revise its plan from #{length(comments)} new comment(s): #{issue_context(issue)}")
+        true
+
+      {:error, reason} ->
+        Logger.warning("Failed to move breakdown parent to #{@plan_revision_state} for its plan's comments: #{issue_context(issue)} reason=#{inspect(reason)}")
+        false
+    end
+  end
+
+  defp act_on_pending_plan_comments(%Issue{id: issue_id} = issue, :answer, comments) do
+    comments
+    |> Enum.map(&PlanComments.thread_id/1)
+    |> Enum.uniq()
+    |> Enum.map(fn thread_id ->
+      case Tracker.create_reply(issue_id, thread_id, PlanComments.reply(issue.identifier)) do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning("Failed to reply to a comment on an approved breakdown plan: #{issue_context(issue)} comment_id=#{thread_id} reason=#{inspect(reason)}")
+          :error
+      end
+    end)
+    |> Enum.all?(&(&1 == :ok))
+  end
+
+  defp newest_comment_at(%Issue{comments: comments}) when is_list(comments) do
+    comments
+    |> Enum.flat_map(fn
+      %{created_at: %DateTime{} = at} -> [at]
+      _comment -> []
+    end)
+    |> Enum.max(DateTime, fn -> nil end)
+  end
+
+  defp newest_comment_at(_issue), do: nil
+
+  defp newer_comment?(_newest, nil), do: true
+  defp newer_comment?(newest, checked), do: DateTime.compare(newest, checked) == :gt
+
+  defp last_run(%State{completed_run_metadata: metadata}, issue_id) do
+    case Map.get(metadata, issue_id) do
+      %{} = run -> %{started_at: Map.get(run, :started_at), ended_at: Map.get(run, :last_ran_at), comment_ids: Map.get(run, :comment_ids)}
+      _unknown -> nil
     end
   end
 
@@ -3737,7 +3837,9 @@ defmodule SymphonyElixir.Orchestrator do
   # A `Todo` issue waits until every blocker is terminal (see `Issue.blocked?/2`).
   # A `breakdown` parent waits while its sub-issues are worked, in the waiting state or, when that
   # is off, in its active state; it is dispatched again for close-out once every sub-issue is terminal.
-  # In `Rework` its plan was rejected, so it is broken down again whatever its sub-issues' states.
+  # One whose open sub-issues are all still in Backlog was never approved: outside the waiting state
+  # it runs to finish or revise its plan. In `Rework` its plan was rejected, so it is broken down
+  # again whatever its sub-issues' states.
   defp issue_held?(issue, terminal_states) do
     Issue.blocked?(issue, terminal_states) or
       (not Issue.replanning?(issue) and
@@ -7235,6 +7337,7 @@ defmodule SymphonyElixir.Orchestrator do
       url: issue_url(issue),
       pull_request_url: URLUtils.pull_request_url(running_entry) || URLUtils.pull_request_url(issue),
       last_ran_at: DateTime.utc_now(),
+      comment_ids: Map.get(running_entry, :comment_ids),
       session_id: Map.get(running_entry, :session_id),
       started_at: Map.get(running_entry, :started_at),
       last_event_at: Map.get(running_entry, :last_event_at) || Map.get(running_entry, :last_codex_timestamp),
