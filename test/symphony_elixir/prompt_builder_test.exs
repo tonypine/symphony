@@ -48,6 +48,11 @@ defmodule SymphonyElixir.PromptBuilderTest do
 
     assert issue_prompt =~
              "Never open a pull request against a repository other than the repository configured for this workflow."
+
+    for prompt <- [pr_prompt, issue_prompt] do
+      assert prompt =~ "Never launch an app, an `NSApplication`, or a window on the host"
+      assert prompt =~ "Take UI screenshots offscreen only, with SwiftUI `ImageRenderer`"
+    end
   end
 
   test "prompt builder falls back to default PR prompt when PR branch is absent" do
@@ -519,6 +524,8 @@ defmodule SymphonyElixir.PromptBuilderTest do
     assert prompt =~ "linear_get_current_issue"
     assert prompt =~ ~s(linear_get_comments` with `{"limit": 5})
     assert prompt =~ "read `WORKFLOW.md` in small sections"
+    assert prompt =~ "Never launch an app, an `NSApplication`, or a window on the host"
+    assert prompt =~ "Take UI screenshots offscreen only, with SwiftUI `ImageRenderer`"
     assert prompt =~ "<linear_issue_title>"
     assert prompt =~ "[removed prompt-injection request]"
     refute prompt =~ String.duplicate("D", 100)
