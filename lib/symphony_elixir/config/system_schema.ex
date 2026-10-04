@@ -749,9 +749,11 @@ defmodule SymphonyElixir.Config.SystemSchema do
          :ok <-
            reject_unknown_section_keys(
              config,
-             ~w(enabled state runtime command model effort max_turns timeout_ms max_concurrent max_fix_attempts run_on skip_globs playbooks worker_host),
+             ~w(enabled state runtime command model effort max_turns timeout_ms max_concurrent max_fix_attempts run_on skip_globs playbooks worker_host android),
              "auto_review"
-           ) do
+           ),
+         {:ok, android} <- section_map(Map.get(config, "android"), "auto_review.android"),
+         :ok <- reject_unknown_section_keys(android, ~w(avd sdk_root boot_timeout_ms idle_timeout_ms), "auto_review.android") do
       {:ok,
        config
        |> Map.delete("runtime")

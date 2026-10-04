@@ -472,17 +472,19 @@ Allowed repo-local front matter keys:
 - `prompts`
 - `verification`
 - `validation`
+- `auto_review`, with only its `playbooks` key
 
-Unknown repo workflow keys are rejected with an error that directs the operator to move
-operator-owned configuration to `symphony.yml`.
+Unknown repo workflow keys, and `auto_review` keys other than `playbooks`, are rejected with an
+error that directs the operator to move operator-owned configuration to `symphony.yml`.
 
 ### 5.4 Config Schema
 
 Unless explicitly called out as repo-local, fields in this section live in `symphony.yml` and become
-part of the merged runtime config. Repo-local front matter contributes `hooks` and `verification`
-values to the runtime settings for that repo. Nested repo-local maps are merged over the operator
-config so repos can override only their dev-server command while inheriting process-wide
-verification defaults such as port allocation.
+part of the merged runtime config. Repo-local front matter contributes `hooks`, `verification` and
+`auto_review.playbooks` values to the runtime settings for that repo. Nested repo-local maps are
+merged over the operator config so repos can override only their dev-server command while
+inheriting process-wide verification defaults such as port allocation, or only one playbook's
+settings while inheriting the operator's other playbooks.
 
 #### 5.4.1 `repositories` (list)
 
@@ -1160,10 +1162,16 @@ Fields:
   repo root) and `build_timeout_ms` (default `900000`), and is off unless `build` and `app` are
   set. The built-in `web` kind also takes `browser_mcp` (an MCP server definition, the shape of
   an `agent.mcp.servers` entry) and is off unless `verification.enabled` is true and
-  `verification.dev_server.start_cmd` is set.
+  `verification.dev_server.start_cmd` is set. A repository's `WORKFLOW.md` MAY set
+  `auto_review.playbooks` too; for that repository's QA passes each kind is merged over this map
+  key by key, the repository's value winning.
 - `worker_host` (string, optional): an SSH host (`user@host` or `host:port`, the form
   `workers.ssh_hosts` uses) where the `macos_app` playbook's `qa_*` tools run instead of the
   Symphony host. It does not need to be, and should not be, listed in `workers.ssh_hosts`.
+- `android` (object, optional): host settings for Android QA. `avd` (AVD name, required for
+  Android QA), `sdk_root` (string, default `$ANDROID_HOME`, then `$ANDROID_SDK_ROOT`, then
+  `~/Library/Android/sdk`), `boot_timeout_ms` (positive integer, default `180000`) and
+  `idle_timeout_ms` (positive integer, default `600000`).
 
 When enabled:
 
@@ -1662,7 +1670,13 @@ not require recognizing or validating extension fields unless that extension is 
 - `auto_review.max_fix_attempts`: integer, default `2`
 - `auto_review.run_on`: `every_push` or `first_pass`, default `every_push`
 - `auto_review.skip_globs`: list of strings, default `[]`
-- `auto_review.playbooks`: map, default `{}` (built-in kinds `cli`, `macos_app`, `web`)
+- `auto_review.playbooks`: map, default `{}` (built-in kinds `cli`, `macos_app`, `web`); a
+  repository's `WORKFLOW.md` may override it per kind
+- `auto_review.android.avd`: string, optional
+- `auto_review.android.sdk_root`: string, default `$ANDROID_HOME`, then `$ANDROID_SDK_ROOT`, then
+  `~/Library/Android/sdk`
+- `auto_review.android.boot_timeout_ms`: integer, default `180000`
+- `auto_review.android.idle_timeout_ms`: integer, default `600000`
 - `notifications.enabled`: boolean, default `false`
 - `notifications.redact_titles`: boolean, default `false`
 - `notifications.channels`: list of Slack/webhook channel configs, default `[]`
