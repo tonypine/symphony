@@ -59,6 +59,20 @@ final class SettingsViewModel: ObservableObject {
     /// The row whose OpenRouter model list is open (its run kind, or "default"), and the list's search text.
     @Published var openRouterPickerRow: String?
     @Published var openRouterQuery = ""
+    /// `agent.limits.tokens_per_day` and `.tokens_per_issue` in the configured symphony.yml. A change is checked
+    /// with `symphony check` shortly after the last edit.
+    @Published var dailyTokenLimit = TokenLimitField(.tokens(TokenLimits.defaultPerDay), default: TokenLimits.defaultPerDay) {
+        didSet { if dailyTokenLimit != oldValue { checkTokenLimits() } }
+    }
+    @Published var issueTokenLimit = TokenLimitField(.tokens(TokenLimits.defaultPerIssue), default: TokenLimits.defaultPerIssue) {
+        didSet { if issueTokenLimit != oldValue { checkTokenLimits() } }
+    }
+    /// Why `symphony check` rejects the changed token limits. Save stays off while it's set.
+    @Published private(set) var tokenLimitsError: String?
+    /// True while `symphony check` runs on the changed token limits.
+    @Published private(set) var isCheckingTokenLimits = false
+    /// Today's tokens from Symphony's latest state, nil while it isn't answering.
+    @Published var budget: StateSnapshot.Budget?
     /// True while Save waits for `symphony check`.
     @Published private(set) var isSaving = false
 
@@ -69,6 +83,13 @@ final class SettingsViewModel: ObservableObject {
     /// The profiles read from symphony.yml, or nil when they couldn't be read. Only fields changed from these
     /// are written.
     private var loadedRunProfiles: ScopedRunProfiles?
+
+    /// The limits read from symphony.yml, or nil when they couldn't be read. Only limits changed from these
+    /// are written.
+    private var loadedTokenLimits: TokenLimits?
+
+    /// The pending or running `symphony check` on the changed token limits.
+    private var tokenLimitsCheck: Task<Void, Never>?
 
     /// Extra variable names known to be stored. Only these can be removed on save, so a failed
     /// load never turns into deletions.
@@ -108,6 +129,7 @@ final class SettingsViewModel: ObservableObject {
         loginItemNote = LoginItem.note(loginStatus)
 
         loadMaxConcurrentAgents()
+        loadTokenLimits()
         loadRunProfiles()
         // Off the main thread, so a Keychain prompt can't freeze the app while Settings opens.
         self.secrets.read { [weak self] result in self?.showSecrets(result) }
@@ -142,6 +164,59 @@ final class SettingsViewModel: ObservableObject {
             loadedMaxConcurrentAgents = value
         } catch {
             configFileError = "Could not read max_total from symphony.yml: \(error.localizedDescription)"
+        }
+    }
+
+    /// The token limit switches and fields are off until a symphony.yml and the secrets `symphony check` runs
+    /// with have been read, and while Save checks it.
+    var canEditTokenLimits: Bool { loadedTokenLimits != nil && !isLoadingSecrets && !isSaving }
+
+    private func loadTokenLimits() {
+        let path = settings.trimmed().configPath
+        guard !path.isEmpty else { return }
+        do {
+            let limits = try SymphonyConfigFile(path: path).readTokenLimits()
+            // Before the fields, so filling them in doesn't start a check.
+            loadedTokenLimits = limits
+            dailyTokenLimit = TokenLimitField(limits.perDay, default: TokenLimits.defaultPerDay)
+            issueTokenLimit = TokenLimitField(limits.perIssue, default: TokenLimits.defaultPerIssue)
+        } catch {
+            configFileError = "Could not read the token limits from symphony.yml: \(error.localizedDescription)"
+        }
+    }
+
+    /// The limits in the form, or nil while a field that's switched on holds no whole number.
+    private var formTokenLimits: TokenLimits? {
+        guard let perDay = dailyTokenLimit.limit, let perIssue = issueTokenLimit.limit else { return nil }
+        return TokenLimits(perDay: perDay, perIssue: perIssue)
+    }
+
+    /// Runs `symphony check` on a copy of symphony.yml with the changed limits, half a second after the last
+    /// edit, so a value it rejects shows before Save.
+    private func checkTokenLimits() {
+        tokenLimitsCheck?.cancel()
+        tokenLimitsCheck = nil
+        isCheckingTokenLimits = false
+        tokenLimitsError = nil
+        guard let loaded = loadedTokenLimits, let limits = formTokenLimits, limits != loaded else { return }
+        isCheckingTokenLimits = true
+        let settings = settings.trimmed()
+        let secrets = formSecrets
+        let check = configCheck
+        tokenLimitsCheck = Task {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled else { return }
+            let result: ConfigCheckResult
+            do {
+                result = try await SymphonyConfigFile(path: settings.configPath).checkTokenLimits(limits, from: loaded) { path in
+                    await check(path, settings, secrets)
+                }
+            } catch {
+                result = .failed(error.localizedDescription)
+            }
+            guard !Task.isCancelled else { return }
+            isCheckingTokenLimits = false
+            if case .failed(let message) = result { tokenLimitsError = "symphony check rejects this: \(message)" }
         }
     }
 
@@ -228,32 +303,50 @@ final class SettingsViewModel: ObservableObject {
         extraRows.removeAll { $0.id == id }
     }
 
-    /// Save is off while it runs and until the secrets have been read.
-    var canSave: Bool { !isSaving && !isLoadingSecrets }
+    /// Save is off while it runs, until the secrets have been read, and while the token limits aren't valid
+    /// or are being checked.
+    var canSave: Bool {
+        !isSaving && !isLoadingSecrets && formTokenLimits != nil && tokenLimitsError == nil && !isCheckingTokenLimits
+    }
 
-    /// Validates and saves, then calls `onSaved` when everything was stored. Changed models are written only
-    /// after `symphony check` passes on them; until then nothing is saved, and a failure shows in
-    /// `configCheckError`.
-    func save(onSaved: @escaping () -> Void) {
-        guard canSave else { return }
-        let settings = settings.trimmed()
-        let secrets = SecretSettings(
+    /// The secrets as entered in the form.
+    private var formSecrets: SecretSettings {
+        SecretSettings(
             linearAPIKey: linearAPIKey,
             openRouterAPIKey: openRouterAPIKey,
             extraEnvironment: extraRows.map { EnvironmentVariable(name: $0.name, value: $0.value) }
         ).trimmed()
+    }
+
+    /// Validates and saves, then calls `onSaved` when everything was stored. Changed models and token limits are
+    /// written only after `symphony check` passes on them; until then the rest isn't saved, and a failure shows
+    /// in `configCheckError` or `tokenLimitsError`.
+    func save(onSaved: @escaping () -> Void) {
+        guard canSave else { return }
+        let settings = settings.trimmed()
+        let secrets = formSecrets
 
         issues = validator.validate(settings, secrets)
         guard issues.isEmpty else { return }
         configCheckError = nil
 
-        guard let loaded = loadedRunProfiles, runProfiles != loaded else {
+        let profiles = runProfiles
+        let loadedProfiles = loadedRunProfiles.flatMap { $0 != profiles ? $0 : nil }
+        let limits = formTokenLimits
+        let loadedLimits = loadedTokenLimits.flatMap { $0 != limits ? $0 : nil }
+        guard loadedProfiles != nil || loadedLimits != nil else {
             if saveRest(settings, secrets) { onSaved() }
             return
         }
         isSaving = true
         Task {
-            let saved = await saveRunProfiles(runProfiles, from: loaded, settings: settings, secrets: secrets)
+            var saved = true
+            if let loadedProfiles {
+                saved = await saveRunProfiles(profiles, from: loadedProfiles, settings: settings, secrets: secrets)
+            }
+            if saved, let limits, let loadedLimits {
+                saved = await saveTokenLimits(limits, from: loadedLimits, settings: settings, secrets: secrets)
+            }
             isSaving = false
             if saved && saveRest(settings, secrets) { onSaved() }
         }
@@ -318,6 +411,32 @@ final class SettingsViewModel: ObservableObject {
         configFileError = nil
         loadRunProfiles()
         return configFileError == nil
+    }
+
+    /// Writes the token limits that changed to symphony.yml once `symphony check` passes on the result.
+    private func saveTokenLimits(
+        _ limits: TokenLimits,
+        from loaded: TokenLimits,
+        settings: AppSettings,
+        secrets: SecretSettings
+    ) async -> Bool {
+        let check = configCheck
+        let result: ConfigCheckResult
+        do {
+            result = try await SymphonyConfigFile(path: settings.configPath).writeTokenLimits(limits, from: loaded) { path in
+                await check(path, settings, secrets)
+            }
+        } catch {
+            configFileError = "Could not save the token limits to symphony.yml: \(error.localizedDescription)"
+            return false
+        }
+        if case .failed(let message) = result {
+            tokenLimitsError = "symphony check rejected these token limits, so nothing was saved: \(message)"
+            return false
+        }
+        configFileError = nil
+        loadedTokenLimits = limits
+        return true
     }
 
     /// `symphony check --config <configPath>`, run the way Start would run Symphony with these settings.

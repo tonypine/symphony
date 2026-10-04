@@ -22,60 +22,74 @@ public enum MaxConcurrentAgents {
     /// What Symphony uses when the key is missing.
     public static let symphonyDefault = 10
 
-    /// Indent added for a new nested key when the file gives no example to follow.
-    static let defaultIndentStep = 2
-
     /// The `max_total` value, or nil when the key is missing or not a whole number.
     public static func value(in yaml: String) -> Int? {
-        let document = Document(yaml)
-        guard let agent = document.child("agent", in: document.all),
-              let agentBlock = try? document.block(of: agent),
-              let concurrency = document.child("concurrency", in: agentBlock),
-              let concurrencyBlock = try? document.block(of: concurrency),
-              let maxTotal = document.child("max_total", in: concurrencyBlock)
-        else { return nil }
-        return Int(ValueLine(maxTotal.rest).value)
+        (try? AgentSetting.value("max_total", in: "concurrency", of: yaml)).flatMap { Int($0) }
     }
 
     /// The same text with `max_total` set to `value`. Inserts the key, and `concurrency:` or `agent:` when
     /// they are missing too.
     public static func setting(_ value: Int, in yaml: String) throws -> String {
+        try AgentSetting.setting("max_total", in: "concurrency", to: String(value), in: yaml)
+    }
+}
+
+/// One `agent.<section>.<key>` value in the text of a `symphony.yml`. Only that one line is rewritten, or
+/// inserted when missing, so comments, ordering and indentation stay as they are.
+enum AgentSetting {
+    /// Indent added for a new nested key when the file gives no example to follow.
+    static let defaultIndentStep = 2
+
+    /// The value after `key:` without its comment, "" when empty, or nil when the key or a section above it
+    /// is missing. Throws `MaxConcurrentAgentsError.notABlock` when a section above it holds an inline value.
+    static func value(_ key: String, in section: String, of yaml: String) throws -> String? {
+        let document = Document(yaml)
+        guard let agent = document.child("agent", in: document.all) else { return nil }
+        let agentBlock = try document.block(of: agent)
+        guard let sectionKey = document.child(section, in: agentBlock) else { return nil }
+        let sectionBlock = try document.block(of: sectionKey)
+        return document.child(key, in: sectionBlock).map { ValueLine($0.rest).value }
+    }
+
+    /// The same text with `key` set to `value`. Inserts the key, and the section or `agent:` when they are
+    /// missing too.
+    static func setting(_ key: String, in section: String, to value: String, in yaml: String) throws -> String {
         var document = Document(yaml)
 
         guard let agent = document.child("agent", in: document.all) else {
             let step = defaultIndentStep
             document.append([
                 "agent:",
-                String(repeating: " ", count: step) + "concurrency:",
-                String(repeating: " ", count: step * 2) + "max_total: \(value)",
+                String(repeating: " ", count: step) + "\(section):",
+                String(repeating: " ", count: step * 2) + "\(key): \(value)",
             ])
             return document.text
         }
         let agentBlock = try document.block(of: agent)
         let agentChildIndent = document.childIndent(in: agentBlock) ?? agent.indent + defaultIndentStep
 
-        guard let concurrency = document.child("concurrency", in: agentBlock) else {
+        guard let sectionKey = document.child(section, in: agentBlock) else {
             let step = agentChildIndent - agent.indent
             document.insert(
                 [
-                    String(repeating: " ", count: agentChildIndent) + "concurrency:",
-                    String(repeating: " ", count: agentChildIndent + step) + "max_total: \(value)",
+                    String(repeating: " ", count: agentChildIndent) + "\(section):",
+                    String(repeating: " ", count: agentChildIndent + step) + "\(key): \(value)",
                 ],
                 after: agent.index
             )
             return document.text
         }
-        let concurrencyBlock = try document.block(of: concurrency)
+        let sectionBlock = try document.block(of: sectionKey)
 
-        guard let maxTotal = document.child("max_total", in: concurrencyBlock) else {
-            let indent = document.childIndent(in: concurrencyBlock)
-                ?? concurrency.indent + (agentChildIndent - agent.indent)
-            document.insert([String(repeating: " ", count: indent) + "max_total: \(value)"], after: concurrency.index)
+        guard let line = document.child(key, in: sectionBlock) else {
+            let indent = document.childIndent(in: sectionBlock)
+                ?? sectionKey.indent + (agentChildIndent - agent.indent)
+            document.insert([String(repeating: " ", count: indent) + "\(key): \(value)"], after: sectionKey.index)
             return document.text
         }
 
-        let prefix = String(repeating: " ", count: maxTotal.indent) + "max_total:"
-        document.lines[maxTotal.index] = prefix + ValueLine(maxTotal.rest).replacingValue(with: String(value))
+        let prefix = String(repeating: " ", count: line.indent) + "\(key):"
+        document.lines[line.index] = prefix + ValueLine(line.rest).replacingValue(with: value)
         return document.text
     }
 }
@@ -131,6 +145,21 @@ public struct SymphonyConfigFile {
         }
         try replace(url, with: candidate)
         return .passed
+    }
+
+    /// Runs `check` on a sibling copy of `transform` of the file's text, then removes the copy and leaves the
+    /// file as it is. Returns `.passed` when the text doesn't change.
+    public func checking(
+        _ transform: (String) throws -> String,
+        with check: (String) async -> ConfigCheckResult
+    ) async throws -> ConfigCheckResult {
+        let url = url
+        let text = try String(contentsOf: url, encoding: .utf8)
+        let updated = try transform(text)
+        guard updated != text else { return .passed }
+        let candidate = try writeSibling(of: url, updated)
+        defer { try? FileManager.default.removeItem(at: candidate) }
+        return await check(candidate.path)
     }
 
     /// Writes `text` to a new hidden file next to `url`.
