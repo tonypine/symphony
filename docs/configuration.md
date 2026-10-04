@@ -232,7 +232,8 @@ repositories:
   Without `base_branch`, new worktrees branch off the fetched `origin/HEAD`.
 - A failed clone or fetch fails that dispatch with an error naming the repo key, and the issue is
   retried; other repos keep running. A clone that cannot be made the first time Symphony starts
-  stops startup, because the repo has no `WORKFLOW.md` to read yet.
+  stops startup, because the repo has no `WORKFLOW.md` to read yet. The startup error names the repo,
+  the URL and folder it cloned, and git's error, and the log file keeps it too.
 - `symphony check` does not clone. Before the first clone it checks the rest of the config, skips
   the repo's `WORKFLOW.md` and prints a warning saying Symphony clones the repo when it starts, so a
   repo added while Symphony runs can be applied with a restart.

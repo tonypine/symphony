@@ -3,7 +3,7 @@ defmodule SymphonyElixir.CLI do
   Escript entrypoint for running Symphony with an operator `symphony.yml`.
   """
 
-  alias SymphonyElixir.{Config, ControlClient, Paths, ReleaseNode, TerminalDashboard}
+  alias SymphonyElixir.{Config, ControlClient, LogFile, Paths, ReleaseNode, TerminalDashboard}
 
   # Retained so existing scripts (Docker, ops runbooks) that still pass the long
   # flag keep parsing — its value is ignored.
@@ -68,10 +68,14 @@ defmodule SymphonyElixir.CLI do
 
   @spec halt({:halt, non_neg_integer()} | {:error, String.t()} | {:error, String.t(), non_neg_integer()}) ::
           no_return()
-  defp halt({:halt, code}), do: System.halt(code)
+  defp halt({:halt, code}) do
+    LogFile.flush()
+    System.halt(code)
+  end
 
   defp halt({:error, message, code}) do
     IO.puts(:stderr, message)
+    LogFile.flush()
     System.halt(code)
   end
 
@@ -420,9 +424,16 @@ defmodule SymphonyElixir.CLI do
         :ok
 
       {:error, reason} ->
-        {:error, "Failed to start Symphony: #{inspect(reason)}"}
+        {:error, "Failed to start Symphony: #{startup_error(reason)}"}
     end
   end
+
+  # An exception raised while the application starts comes back wrapped in the
+  # application master's `:bad_return`; its message is what a person needs.
+  defp startup_error({_app, {:bad_return, {_start, {:EXIT, {exception, _stacktrace}}}}}) when is_exception(exception),
+    do: Exception.message(exception)
+
+  defp startup_error(reason), do: inspect(reason)
 
   @spec usage_message() :: String.t()
   defp usage_message do
