@@ -11,7 +11,7 @@ defmodule SymphonyElixir.CiPoller do
   use GenServer
   require Logger
 
-  alias SymphonyElixir.{AuditLog, AutoReview, Config, Notifications, Orchestrator, RunStore, Tracker}
+  alias SymphonyElixir.{AuditLog, AutoMerge, AutoReview, Config, Notifications, Orchestrator, RunStore, Tracker}
   alias SymphonyElixir.GitHub.{PullRequest, Webhook}
   alias SymphonyElixir.Linear.{Issue, Usage}
 
@@ -427,12 +427,14 @@ defmodule SymphonyElixir.CiPoller do
     repo_key = repo_key_from_opts(opts)
     tracker = Keyword.get(opts, :tracker, Tracker)
 
-    with {:ok, discovered, auto_review_issues} <- discover_ci_checks(settings, run_store, tracker, repo_key, now, opts),
+    with {:ok, discovered, auto_review_issues, merging_issue_ids} <-
+           discover_ci_checks(settings, run_store, tracker, repo_key, now, opts),
          {:ok, checks} <- list_ci_checks(run_store, repo_key) do
       opts =
         opts
         |> put_prefetched_rework_sources(run_store, repo_key, checks)
         |> Keyword.put(:auto_review_issues, auto_review_issues)
+        |> Keyword.put(:merging_issue_ids, merging_issue_ids)
 
       actions = Enum.map(checks, &process_ci_check(&1, settings, opts, now))
       settled = count_settled(checks, run_store, repo_key)
@@ -469,8 +471,15 @@ defmodule SymphonyElixir.CiPoller do
 
       discovered = Enum.count(issues, &persist_discovered_ci_check?(&1, runs, existing_by_issue, run_store, repo_key, now))
 
-      {:ok, discovered, auto_review_issues(settings, issues)}
+      {:ok, discovered, auto_review_issues(settings, issues), auto_merge_issue_ids(settings, issues)}
     end
+  end
+
+  # `Merging` issues GitHub auto-merge lands: a CI-fix run for one turns auto-merge off first.
+  defp auto_merge_issue_ids(settings, issues) do
+    if AutoMerge.enabled?(settings),
+      do: issues |> Enum.filter(&AutoMerge.merging?/1) |> MapSet.new(& &1.id),
+      else: MapSet.new()
   end
 
   defp fetch_watched_issues(settings, tracker, opts) do
@@ -782,12 +791,95 @@ defmodule SymphonyElixir.CiPoller do
     tracker = Keyword.get(opts, :tracker, Tracker)
     issue_id = Map.get(record, :issue_id)
 
-    case failed_log_excerpt(record, failed_checks, settings, opts) do
-      {:ok, log_excerpt} ->
-        persist_and_dispatch_ci_failure(record, ci_status, failed_checks, opts, now, tracker, issue_id, log_excerpt)
+    with {:ok, log_excerpt} <- failed_log_excerpt(record, failed_checks, settings, opts),
+         :ok <- hold_auto_merge_for_fix(record, ci_status, opts, now) do
+      persist_and_dispatch_ci_failure(record, ci_status, failed_checks, opts, now, tracker, issue_id, log_excerpt)
+    else
+      {:error, reason} -> record_poll_error(record, reason, opts, now)
+    end
+  end
 
-      {:error, reason} ->
-        record_poll_error(record, reason, opts, now)
+  # Before a CI-fix run of a `Merging` issue: the fix may push code the approval never covered,
+  # so turn GitHub auto-merge off and hold it off until the issue is approved into `Merging`
+  # again. While GitHub won't turn it off, the fix waits for the next poll (a red head can't
+  # merge meanwhile).
+  defp hold_auto_merge_for_fix(record, ci_status, opts, now) do
+    issue_id = Map.get(record, :issue_id)
+
+    if MapSet.member?(Keyword.get(opts, :merging_issue_ids, MapSet.new()), issue_id) do
+      run_store = Keyword.get(opts, :run_store, RunStore)
+      repo_key = Map.get(record, :repo_key) || repo_key_from_opts(opts)
+      review = find_pr_review(run_store, repo_key, issue_id)
+      previous = review && Map.get(review, :auto_merge)
+
+      case AutoMerge.disable_for_ci_fix(record, ci_status, previous, opts, now) do
+        {:ok, auto_merge} ->
+          store_auto_merge_hold(run_store, repo_key, review, record, previous, auto_merge)
+
+        {:disabled, auto_merge} ->
+          Logger.info(
+            "Auto-merge #{Map.get(record, :issue_identifier)}: turned GitHub auto-merge off because CI failed; the fix goes back through review issue_id=#{issue_id} pr_url=#{Map.get(record, :pr_url)} commit_sha=#{auto_merge.head_sha}"
+          )
+
+          record_auto_merge_disabled(record, auto_merge)
+          comment_auto_merge_disabled(record, opts)
+          store_auto_merge_hold(run_store, repo_key, review, record, previous, auto_merge)
+
+        {:error, reason} ->
+          Logger.warning(
+            "Auto-merge #{Map.get(record, :issue_identifier)}: turning GitHub auto-merge off for the CI fix failed; the fix waits until it is off issue_id=#{issue_id} pr_url=#{Map.get(record, :pr_url)}: #{inspect(reason)}"
+          )
+
+          {:error, {:disable_auto_merge_failed, reason}}
+      end
+    else
+      :ok
+    end
+  end
+
+  defp find_pr_review(run_store, repo_key, issue_id) do
+    case list_pr_reviews(run_store, repo_key) do
+      {:ok, reviews} -> Enum.find(reviews, &(Map.get(&1, :issue_id) == issue_id))
+      {:error, _reason} -> nil
+    end
+  end
+
+  # The PR poller reads the hold so it doesn't turn auto-merge on again during this `Merging`
+  # stay. With no PR review record yet, the poller starts a fresh one on the next approval.
+  defp store_auto_merge_hold(_run_store, _repo_key, nil, _record, _previous, _auto_merge), do: :ok
+
+  defp store_auto_merge_hold(run_store, repo_key, review, record, previous, auto_merge) do
+    case run_store.update_pr_review(repo_key, Map.get(review, :issue_id), %{auto_merge: auto_merge}) do
+      :ok -> AutoMerge.log_transition(record, previous, auto_merge)
+      {:error, reason} -> {:error, {:auto_merge_hold_failed, reason}}
+    end
+  end
+
+  defp record_auto_merge_disabled(record, auto_merge) do
+    %{
+      event_type: "auto_merge_disabled",
+      repo_key: Map.get(record, :repo_key),
+      issue_id: Map.get(record, :issue_id),
+      issue_identifier: Map.get(record, :issue_identifier),
+      pr_url: Map.get(record, :pr_url),
+      head_sha: auto_merge.head_sha,
+      reason: "ci_failure",
+      detail: "GitHub auto-merge turned off because CI failed; the CI fix goes back through review"
+    }
+    |> AuditLog.record()
+    |> case do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("Failed to record auto_merge_disabled audit event issue_id=#{Map.get(record, :issue_id)}: #{inspect(reason)}")
+    end
+  end
+
+  defp comment_auto_merge_disabled(record, opts) do
+    tracker = Keyword.get(opts, :tracker, Tracker)
+    issue_id = Map.get(record, :issue_id)
+
+    case tracker.create_comment(issue_id, AutoMerge.ci_fix_comment(Map.get(record, :pr_url))) do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("Failed to comment that auto-merge was turned off for a CI fix issue_id=#{issue_id}: #{inspect(reason)}")
     end
   end
 

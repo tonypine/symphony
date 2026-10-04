@@ -52,6 +52,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   @type ci_status :: %{
           pr_url: String.t(),
           pr_title: String.t() | nil,
+          pr_node_id: String.t() | nil,
           state: String.t() | nil,
           head_ref_name: String.t() | nil,
           commit_sha: String.t() | nil,
@@ -60,6 +61,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
           mergeable: String.t() | nil,
           merge_state_status: String.t() | nil,
           base_ref_name: String.t() | nil,
+          auto_merge_enabled: boolean(),
           checks: [ci_check()]
         }
 
@@ -73,6 +75,17 @@ defmodule SymphonyElixir.GitHub.PullRequest do
           optional(:commit_id) => String.t() | nil,
           optional(:submitted_at) => DateTime.t() | nil
         }
+
+  @type workflow_run :: %{
+          id: String.t() | nil,
+          workflow_name: String.t() | nil,
+          status: String.t() | nil,
+          conclusion: String.t() | nil,
+          url: String.t() | nil,
+          created_at: DateTime.t() | nil
+        }
+
+  @run_fields "databaseId,workflowName,status,conclusion,url,createdAt"
 
   @doc "Whether a fetched PR conflicts with its base: `mergeable` is `CONFLICTING` or `mergeStateStatus` is `DIRTY`."
   @spec conflicting?(map()) :: boolean()
@@ -148,12 +161,50 @@ defmodule SymphonyElixir.GitHub.PullRequest do
 
   def fetch_failed_log(run_id, opts \\ [])
 
+  @doc """
+  The failed-step log of a workflow run. The repository is the checkout in `:cwd`, or `:repo`
+  (`owner/repo` or `host/owner/repo`) when given.
+  """
   @spec fetch_failed_log(String.t() | integer(), keyword()) :: {:ok, String.t()} | {:error, term()}
   def fetch_failed_log(run_id, opts) when (is_binary(run_id) or is_integer(run_id)) and is_list(opts) do
-    run_gh(["run", "view", to_string(run_id), "--log-failed"], opts)
+    run_gh(["run", "view", to_string(run_id), "--log-failed"] ++ repo_args(opts), opts)
   end
 
   def fetch_failed_log(_run_id, _opts), do: {:error, :invalid_run_id}
+
+  @doc """
+  The latest workflow runs on `branch` of `repo` (`owner/repo` or `host/owner/repo`), newest
+  first, in one request: at most `:limit` runs (default 50).
+  """
+  @spec list_branch_runs(String.t(), String.t(), keyword()) :: {:ok, [workflow_run()]} | {:error, term()}
+  def list_branch_runs(repo, branch, opts \\ []) when is_binary(repo) and is_binary(branch) and is_list(opts) do
+    args = ["run", "list", "-R", repo, "--branch", branch, "--limit", to_string(Keyword.get(opts, :limit, 50)), "--json", @run_fields]
+
+    with {:ok, output} <- run_gh(args, opts) do
+      case Jason.decode(output) do
+        {:ok, runs} when is_list(runs) -> {:ok, runs |> Enum.filter(&is_map/1) |> Enum.map(&normalize_workflow_run/1)}
+        _other -> {:error, :invalid_workflow_runs_payload}
+      end
+    end
+  end
+
+  defp normalize_workflow_run(run) do
+    %{
+      id: normalize_id(run["databaseId"]),
+      workflow_name: run["workflowName"],
+      status: upcase(run["status"]),
+      conclusion: upcase(run["conclusion"]),
+      url: run["url"],
+      created_at: parse_datetime(run["createdAt"])
+    }
+  end
+
+  defp repo_args(opts) do
+    case Keyword.get(opts, :repo) do
+      repo when is_binary(repo) and repo != "" -> ["-R", repo]
+      _none -> []
+    end
+  end
 
   def fetch_pr_comments(pr_url, opts \\ [])
 
@@ -240,13 +291,18 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   @doc """
   Turns on GitHub auto-merge (squash, PR title and body) for the head in `request`. GitHub
   refuses it for a PR that can already merge; that comes back as `{:error, :clean_status}`.
-  Other refusals (no branch protection, auto-merge not allowed) come back as the `gh` failure.
+  A head that moved since it was read comes back as `{:error, :head_moved}`. Other refusals
+  (no branch protection, auto-merge not allowed) come back as the `gh` failure.
   """
   @spec enable_auto_merge(String.t(), squash_request(), keyword()) :: :ok | {:error, term()}
   def enable_auto_merge(pr_url, request, opts \\ []) when is_binary(pr_url) and is_map(request) do
     case squash_mutation(pr_url, @enable_auto_merge_mutation, request, opts) do
       {:error, {:gh_failed, _args, _status, output}} = error ->
-        if clean_status_output?(output), do: {:error, :clean_status}, else: error
+        cond do
+          clean_status_output?(output) -> {:error, :clean_status}
+          head_moved_output?(output) -> {:error, :head_moved}
+          true -> error
+        end
 
       result ->
         result
@@ -333,6 +389,9 @@ defmodule SymphonyElixir.GitHub.PullRequest do
 
   defp clean_status_output?(output) when is_binary(output), do: output =~ ~r/clean status/i
   defp clean_status_output?(_output), do: false
+
+  defp head_moved_output?(output) when is_binary(output), do: output =~ ~r/expected head oid does not match/i
+  defp head_moved_output?(_output), do: false
 
   defp merge_conflict_output?(output) when is_binary(output), do: output =~ ~r/merge conflict/i
   defp merge_conflict_output?(_output), do: false
@@ -483,7 +542,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
       "view",
       pr_url,
       "--json",
-      "number,state,title,url,headRefName,headRefOid,baseRefName,isCrossRepository,headRepository,mergeable,mergeStateStatus,statusCheckRollup"
+      "id,number,state,title,url,headRefName,headRefOid,baseRefName,isCrossRepository,headRepository,mergeable,mergeStateStatus,autoMergeRequest,statusCheckRollup"
     ]
 
     with {:ok, _host, _owner, _repo, _number} <- parse_github_pr_url(pr_url, opts),
@@ -493,6 +552,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
        %{
          pr_url: Map.get(pr, "url") || pr_url,
          pr_title: Map.get(pr, "title"),
+         pr_node_id: normalize_id(Map.get(pr, "id")),
          state: Map.get(pr, "state"),
          head_ref_name: normalize_id(Map.get(pr, "headRefName")),
          commit_sha: normalize_id(Map.get(pr, "headRefOid")),
@@ -501,6 +561,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
          mergeable: normalize_id(Map.get(pr, "mergeable")),
          merge_state_status: normalize_id(Map.get(pr, "mergeStateStatus")),
          base_ref_name: normalize_id(Map.get(pr, "baseRefName")),
+         auto_merge_enabled: is_map(Map.get(pr, "autoMergeRequest")),
          checks: normalize_status_check_rollup(Map.get(pr, "statusCheckRollup"))
        }}
     else

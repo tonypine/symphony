@@ -149,10 +149,11 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
 
     runner = fn
       ["pr", "view", ^pr_url, "--json", fields], opts ->
-        assert fields == "number,state,title,url,headRefName,headRefOid,baseRefName,isCrossRepository,headRepository,mergeable,mergeStateStatus,statusCheckRollup"
+        assert fields == "id,number,state,title,url,headRefName,headRefOid,baseRefName,isCrossRepository,headRepository,mergeable,mergeStateStatus,autoMergeRequest,statusCheckRollup"
         assert opts[:stderr_to_stdout]
 
         {Jason.encode!(%{
+           "id" => "PR_kwDO17",
            "state" => "OPEN",
            "title" => "Fix CI",
            "url" => pr_url,
@@ -163,6 +164,7 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
            "baseRefName" => "main",
            "mergeable" => "CONFLICTING",
            "mergeStateStatus" => "DIRTY",
+           "autoMergeRequest" => %{"mergeMethod" => "SQUASH"},
            "statusCheckRollup" => [
              %{
                "name" => "test",
@@ -185,6 +187,8 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
     assert status.base_ref_name == "main"
     assert status.mergeable == "CONFLICTING"
     assert status.merge_state_status == "DIRTY"
+    assert status.pr_node_id == "PR_kwDO17"
+    assert status.auto_merge_enabled
     assert [%{name: "test", conclusion: "FAILURE", run_id: "987"}] = status.checks
   end
 
@@ -200,7 +204,14 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
   test "fetch_ci_status maps status context state into status and conclusion" do
     pr_url = "https://github.com/org/repo/pull/17"
 
-    runner = fn ["pr", "view", ^pr_url, "--json", "number,state,title,url,headRefName,headRefOid,baseRefName,isCrossRepository,headRepository,mergeable,mergeStateStatus,statusCheckRollup"], _opts ->
+    runner = fn [
+                  "pr",
+                  "view",
+                  ^pr_url,
+                  "--json",
+                  "id,number,state,title,url,headRefName,headRefOid,baseRefName,isCrossRepository,headRepository,mergeable,mergeStateStatus,autoMergeRequest,statusCheckRollup"
+                ],
+                _opts ->
       {Jason.encode!(%{
          "state" => "OPEN",
          "title" => "Fix legacy contexts",
@@ -216,6 +227,8 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
     end
 
     assert {:ok, status} = PullRequest.fetch_ci_status(pr_url, gh_runner: runner)
+    assert status.pr_node_id == nil
+    refute status.auto_merge_enabled
 
     assert [
              %{name: "ci/failure", status: "FAILURE", conclusion: "FAILURE", details_url: "https://ci.example.test/failure"},
@@ -238,6 +251,49 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
 
     assert {:ok, "failed log"} = PullRequest.fetch_failed_log("987", gh_runner: runner)
     assert :ok = PullRequest.rerun_failed("987", gh_runner: runner)
+
+    other_repo = fn ["run", "view", "987", "--log-failed", "-R", "acme/cycle"], _opts -> {"other log", 0} end
+    assert {:ok, "other log"} = PullRequest.fetch_failed_log("987", gh_runner: other_repo, repo: "acme/cycle")
+  end
+
+  test "list_branch_runs reads the latest workflow runs on a branch in one request" do
+    runner = fn
+      ["run", "list", "-R", "acme/cycle", "--branch", "main", "--limit", "50", "--json", "databaseId,workflowName,status,conclusion,url,createdAt"], opts ->
+        assert opts[:stderr_to_stdout]
+
+        {Jason.encode!([
+           %{
+             "databaseId" => 12,
+             "workflowName" => "Release",
+             "status" => "completed",
+             "conclusion" => "failure",
+             "url" => "https://github.com/acme/cycle/actions/runs/12",
+             "createdAt" => "2026-10-04T10:00:00Z"
+           },
+           %{"databaseId" => 11, "workflowName" => "CI", "status" => "in_progress", "conclusion" => ""},
+           "not a run"
+         ]), 0}
+
+      ["run", "list", "-R", "acme/web", "--branch", "trunk", "--limit", "5" | _rest], _opts ->
+        {"not json", 0}
+    end
+
+    assert {:ok, [release, ci]} = PullRequest.list_branch_runs("acme/cycle", "main", gh_runner: runner)
+
+    assert release == %{
+             id: "12",
+             workflow_name: "Release",
+             status: "COMPLETED",
+             conclusion: "FAILURE",
+             url: "https://github.com/acme/cycle/actions/runs/12",
+             created_at: ~U[2026-10-04 10:00:00Z]
+           }
+
+    assert %{id: "11", status: "IN_PROGRESS", conclusion: "", created_at: nil} = ci
+    assert {:error, :invalid_workflow_runs_payload} = PullRequest.list_branch_runs("acme/web", "trunk", gh_runner: runner, limit: 5)
+
+    failing = fn _args, _opts -> {"HTTP 404", 1} end
+    assert {:error, {:gh_failed, _args, 1, "HTTP 404"}} = PullRequest.list_branch_runs("acme/cycle", "main", gh_runner: failing)
   end
 
   test "fetch_pr_comments reads paginated top-level PR comments" do
@@ -493,6 +549,12 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
       denied = fn ["api", "graphql" | _fields], _opts -> {"gh: Auto merge is not allowed for this repository", 1} end
 
       assert {:error, :clean_status} = PullRequest.enable_auto_merge(pr_url, @request, gh_runner: clean)
+
+      moved = fn ["api", "graphql" | _fields], _opts ->
+        {~s(gh: Failed to add PR #164: expected head oid does not match the current head oid \(enablePullRequestAutoMerge\)), 1}
+      end
+
+      assert {:error, :head_moved} = PullRequest.enable_auto_merge(pr_url, @request, gh_runner: moved)
 
       assert {:error, {:gh_failed, _args, 1, "gh: Auto merge is not allowed" <> _}} =
                PullRequest.enable_auto_merge(pr_url, @request, gh_runner: denied)
