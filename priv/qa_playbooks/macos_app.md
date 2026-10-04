@@ -43,8 +43,7 @@ Do not edit files in the worktree, gitignored ones included (such as build cache
 7. Exercise the change: fill fields with `qa_ax_set_value`, press the buttons the
    walkthrough names, and read the tree again to check the result. Use made-up values, never
    real credentials.
-   For every file the app must open (a config path in Settings, a checkout folder's
-   `WORKFLOW.md`), write the fixture under `qa-evidence/` or `$TMPDIR`, call `qa_put_file`,
+   For every file the app must open (a config path in Settings, a `WORKFLOW.md`), write the fixture under `qa-evidence/` or `$TMPDIR`, call `qa_put_file`,
    and give the app the `path` it returns, never your own path: the app may run on a
    separate QA machine that cannot see your files. Type that path into the field rather
    than browsing for it in a file picker.

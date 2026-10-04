@@ -8,8 +8,9 @@ defmodule SymphonyElixir.QaDriver.Remote do
   argument shell-quoted. Symphony owns one `0700` run directory per pass under
   `~/.symphony-qa/runs/` there: the worktree's `HEAD` is unpacked into `src/`
   for the build, bundle copies go to `builds/`, fixture files `qa_put_file`
-  copies go to `files/` and the app's QA root is `app-root/`. The Swift helper is compiled into the run directory's `helper/`
-  on first use in each pass, never shared between passes: every pass's build
+  copies go to `files/` and the app's QA root is `app-root/`. The Swift helper
+  is compiled into the run directory's `helper/` on first use in each pass,
+  never shared between passes: every pass's build
   runs as the QA user and could replace a shared binary, which answers the
   permission, window and accessibility calls of later passes.
 
