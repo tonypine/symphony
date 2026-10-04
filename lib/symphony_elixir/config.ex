@@ -841,7 +841,7 @@ defmodule SymphonyElixir.Config do
   defp load_repo_workflow(%SystemSchema.Repo{} = repo, :check) do
     if uncloned_managed_repo?(repo),
       do: {:ok, %{config: %{}, prompt: "", prompt_template: ""}},
-      else: load_repo_workflow(repo, :file)
+      else: WorkflowSource.load_for_check(repo)
   end
 
   defp load_repo_workflow(%SystemSchema.Repo{} = repo, :file) do
