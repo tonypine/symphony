@@ -251,6 +251,15 @@ defmodule SymphonyElixir.Config do
   def qa_profile(%Schema{auto_review: config} = settings), do: own_run_profile(settings, :qa, config)
 
   @doc """
+  The profile the acceptance gate agent starts with: `auto_review.acceptance_gate.model` /
+  `.effort`, else the `acceptance_gate` run profile as resolved by `run_profile/2`. The
+  provider resolves as in `run_profile/2`.
+  """
+  @spec acceptance_gate_profile(Schema.t()) :: RunKind.profile()
+  def acceptance_gate_profile(%Schema{auto_review: %{acceptance_gate: config}} = settings),
+    do: own_run_profile(settings, :acceptance_gate, config)
+
+  @doc """
   The host's `auto_review.android` settings for Android QA. `sdk_root` falls back to
   `$ANDROID_HOME`, then `$ANDROID_SDK_ROOT`, then `~/Library/Android/sdk`, and is expanded.
   `avd` is nil when unset. `env` defaults to Symphony's own environment.
@@ -377,6 +386,7 @@ defmodule SymphonyElixir.Config do
 
   defp effective_run_profile(settings, "pre_push_review"), do: pre_push_review_profile(settings)
   defp effective_run_profile(settings, "qa"), do: qa_profile(settings)
+  defp effective_run_profile(settings, "acceptance_gate"), do: acceptance_gate_profile(settings)
   defp effective_run_profile(settings, kind), do: run_profile(settings, kind)
 
   @doc """
@@ -409,6 +419,10 @@ defmodule SymphonyElixir.Config do
 
   defp own_profile_setting(settings, "pre_push_review", field), do: {"pre_push_review", Map.get(settings.review_agent, field)}
   defp own_profile_setting(settings, "qa", field), do: {"auto_review", Map.get(settings.auto_review, field)}
+
+  defp own_profile_setting(settings, "acceptance_gate", field),
+    do: {"auto_review.acceptance_gate", Map.get(settings.auto_review.acceptance_gate, field)}
+
   defp own_profile_setting(_settings, _kind, _field), do: nil
 
   @spec review_agent_blocked_state(String.t()) :: String.t()
@@ -820,7 +834,15 @@ defmodule SymphonyElixir.Config do
     |> SystemSchema.to_config_map()
     |> merge_repo_workspace(repo)
     |> merge_repo_agent(repo)
+    |> merge_repo_acceptance_gate(repo)
     |> deep_merge(repo_config)
+  end
+
+  defp merge_repo_acceptance_gate(config, %SystemSchema.Repo{acceptance_gate: nil}), do: config
+
+  # `SystemSchema.parse/1` already merged the repository's override into the global block.
+  defp merge_repo_acceptance_gate(config, %SystemSchema.Repo{acceptance_gate: acceptance_gate}) do
+    put_in(config, ["auto_review", "acceptance_gate"], acceptance_gate)
   end
 
   defp merge_repo_agent(config, %SystemSchema.Repo{agent: nil}), do: config
