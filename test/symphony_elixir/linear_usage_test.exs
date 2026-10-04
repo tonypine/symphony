@@ -137,11 +137,11 @@ defmodule SymphonyElixir.LinearUsageTest do
       busy = {:agent, "MT-USAGE-BUSY-#{System.unique_integer([:positive])}"}
       old = {:agent, "MT-USAGE-OLD-#{System.unique_integer([:positive])}"}
 
-      Usage.with_caller(quiet, fn -> Usage.record(@now_ms - 59 * 60_000) end)
-      Usage.with_caller(busy, fn -> Enum.each(1..3, fn _ -> Usage.record(@now_ms) end) end)
-      Usage.with_caller(old, fn -> Usage.record(@now_ms - 60 * 60_000) end)
+      Usage.with_caller(quiet, fn -> Usage.record(nil, @now_ms - 59 * 60_000) end)
+      Usage.with_caller(busy, fn -> Enum.each(1..3, fn _ -> Usage.record("SymphonyUsageBusy", @now_ms) end) end)
+      Usage.with_caller(old, fn -> Usage.record("SymphonyUsageOld", @now_ms - 60 * 60_000) end)
 
-      %{window_ms: 3_600_000, total: total, callers: callers} = Usage.snapshot(@now_ms)
+      %{window_ms: 3_600_000, total: total, callers: callers, queries: queries} = Usage.snapshot(@now_ms)
       labels = Enum.map(callers, & &1.caller)
 
       assert %{caller: Usage.caller_label(busy), requests: 3} in callers
@@ -150,6 +150,10 @@ defmodule SymphonyElixir.LinearUsageTest do
       busy_index = Enum.find_index(labels, &(&1 == Usage.caller_label(busy)))
       assert busy_index < Enum.find_index(labels, &(&1 == Usage.caller_label(quiet)))
       assert total == callers |> Enum.map(& &1.requests) |> Enum.sum()
+      assert total == queries |> Enum.map(& &1.requests) |> Enum.sum()
+      assert %{query: "SymphonyUsageBusy", requests: 3} in queries
+      assert Enum.any?(queries, &(&1.query == "unnamed"))
+      refute "SymphonyUsageOld" in Enum.map(queries, & &1.query)
 
       # The bucket that left the window is gone for good.
       refute Usage.caller_label(old) in Enum.map(Usage.snapshot(@now_ms - 60 * 60_000).callers, & &1.caller)
@@ -161,7 +165,7 @@ defmodule SymphonyElixir.LinearUsageTest do
 
       assert Usage.record() == :ok
       assert Usage.reset() == :ok
-      assert Usage.snapshot() == %{window_ms: 3_600_000, total: 0, callers: []}
+      assert Usage.snapshot() == %{window_ms: 3_600_000, total: 0, callers: [], queries: []}
     end
 
     test "reset clears every count" do
@@ -170,6 +174,7 @@ defmodule SymphonyElixir.LinearUsageTest do
 
       assert Usage.reset() == :ok
       assert Usage.snapshot().callers == []
+      assert Usage.snapshot().queries == []
     end
   end
 
