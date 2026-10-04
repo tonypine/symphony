@@ -59,6 +59,21 @@ defmodule SymphonyElixir.LeftoverProcesses do
     end
   end
 
+  @doc """
+  The Claude Code task folders of `workspace` under `tmp_dir`: Claude Code keeps a
+  session's background task output under
+  `<tmp_dir>/claude-<uid>/<workspace path with every non-alphanumeric as ->/`.
+  """
+  @spec claude_task_dirs(Path.t(), Path.t()) :: [Path.t()]
+  def claude_task_dirs(workspace, tmp_dir) do
+    slug = String.replace(workspace, ~r/[^a-zA-Z0-9]/, "-")
+
+    tmp_dir
+    |> Path.join("claude-*")
+    |> Path.join(slug)
+    |> Path.wildcard()
+  end
+
   @doc "Whether the process runs in, or was started from, a folder under one of `roots`."
   @spec under_roots?(entry(), [Path.t()]) :: boolean()
   def under_roots?(%{cwd: cwd, command: command}, roots) do
@@ -74,9 +89,12 @@ defmodule SymphonyElixir.LeftoverProcesses do
     Regex.match?(~r/(^|[\s=:'"<>])#{Regex.escape(root)}($|[\s\/'"])/, command)
   end
 
-  # Symphony and every process it started and still runs. A process an agent
-  # detached was re-parented to init when its parent exited, so it isn't one.
-  defp symphony_pids(entries, own_pid) do
+  @doc """
+  Symphony (`own_pid`) and every process it started and still runs. A process an
+  agent detached was re-parented to init when its parent exited, so it isn't one.
+  """
+  @spec symphony_pids([entry()], pos_integer()) :: MapSet.t(pos_integer())
+  def symphony_pids(entries, own_pid) do
     children = Enum.group_by(entries, &Map.get(&1, :ppid), & &1.pid)
     [own_pid] |> with_descendants(children, []) |> MapSet.new()
   end
@@ -138,9 +156,12 @@ defmodule SymphonyElixir.LeftoverProcesses do
     end
   end
 
-  # The folder as given and with symlinks resolved (`/tmp` is `/private/tmp` on
-  # macOS), since `lsof` and `/proc` report resolved working folders.
-  defp root_paths(root) do
+  @doc """
+  The folder as given and with symlinks resolved (`/tmp` is `/private/tmp` on
+  macOS), since `lsof` and `/proc` report resolved working folders.
+  """
+  @spec root_paths(Path.t()) :: [Path.t()]
+  def root_paths(root) do
     root = Path.expand(root)
 
     case PathSafety.canonicalize(root) do
@@ -152,9 +173,13 @@ defmodule SymphonyElixir.LeftoverProcesses do
   defp log_context(nil), do: ""
   defp log_context(context), do: " " <> context
 
-  defp default_table, do: Application.get_env(:symphony_elixir, :leftover_process_table, &Table.read/0)
+  @doc "The process table reader, `Table.read/0` unless the app env names another."
+  @spec default_table() :: table_fun()
+  def default_table, do: Application.get_env(:symphony_elixir, :leftover_process_table, &Table.read/0)
 
-  defp own_pid, do: String.to_integer(System.pid())
+  @doc "This BEAM's OS pid."
+  @spec own_pid() :: pos_integer()
+  def own_pid, do: String.to_integer(System.pid())
 
   defp signal(pid, signal) do
     System.cmd(System.find_executable("kill") || "/bin/kill", ["-#{signal}", Integer.to_string(pid)], stderr_to_stdout: true)
