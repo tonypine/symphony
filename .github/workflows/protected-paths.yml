@@ -1,0 +1,117 @@
+name: protected-paths
+
+# `github_sync_base` and `github_push_branch` refuse a Symphony branch whose own commits change a
+# path the agent sandbox write-protects, but a `git push` from the agent's shell skips them. This
+# checks the pull request itself.
+#
+# `pull_request_target` runs this file and the check's code from the base branch, so the pull
+# request can't change them. Its commits are only read as git data, never run. No other trigger:
+# `pull_request_review` would run the pull request's own copy of this file. A review doesn't
+# start a run, so whoever approves re-runs the job.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: protected-paths-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  protected-paths:
+    name: protected paths
+    if: ${{ startsWith(github.event.pull_request.head.ref, 'auto/') }}
+    runs-on: ubuntu-latest
+    env:
+      WAIVER_LABEL: protected-paths-approved
+
+    steps:
+      # A person who changed a protected path on the agent's branch on purpose waives the check
+      # for the current head commit, either by adding the label or with an approving review of
+      # that commit. The label counts only in the run its own adding starts, for the head at that
+      # moment, so a later push is checked again; to waive a new head, remove and re-add it. It
+      # counts only from a person other than the pull request's author, since the agent may push
+      # and label as the author. The review counts only from an owner, member or collaborator,
+      # since anyone who can read the repository can approve.
+      - name: Look for a person's waiver
+        id: waiver
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          ACTION: ${{ github.event.action }}
+          LABEL: ${{ github.event.label.name }}
+          SENDER: ${{ github.event.sender.login }}
+          SENDER_TYPE: ${{ github.event.sender.type }}
+        run: |
+          if [ "$ACTION" = "labeled" ] && [ "$LABEL" = "$WAIVER_LABEL" ]; then
+            if [ "$SENDER" != "$PR_AUTHOR" ] && [ "$SENDER_TYPE" != "Bot" ]; then
+              echo "Waived for $HEAD_SHA by the $WAIVER_LABEL label, added by $SENDER."
+              echo "waived=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            echo "Ignoring the $WAIVER_LABEL label: $SENDER added it, and only a person other than the author $PR_AUTHOR can."
+          fi
+
+          approvers=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/reviews" \
+            --jq ".[] | select(.state == \"APPROVED\" and .commit_id == \"$HEAD_SHA\" and .user.type != \"Bot\" and (.author_association == \"OWNER\" or .author_association == \"MEMBER\" or .author_association == \"COLLABORATOR\")) | .user.login")
+
+          if [ -n "$approvers" ]; then
+            echo "Waived by the approving review of $(echo $approvers | tr ' ' ',')."
+            echo "waived=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out the base branch
+        if: ${{ steps.waiver.outputs.waived != 'true' }}
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          persist-credentials: false
+
+      - name: Fetch the pull request's commits
+        if: ${{ steps.waiver.outputs.waived != 'true' }}
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: pull-request
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up mise tools
+        if: ${{ steps.waiver.outputs.waived != 'true' }}
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+        with:
+          install: true
+          cache: true
+
+      - name: Cache deps and build
+        if: ${{ steps.waiver.outputs.waived != 'true' }}
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-${{ hashFiles('mix.lock', 'mix.exs', 'mise.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-
+
+      - name: Install dependencies
+        if: ${{ steps.waiver.outputs.waived != 'true' }}
+        run: mix deps.get
+
+      - name: Check the pull request's own commits
+        if: ${{ steps.waiver.outputs.waived != 'true' }}
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if ! mix protected_paths.check --repo pull-request --base "origin/$BASE_REF" --head "$HEAD_SHA"; then
+            echo "::error::This pull request's own commits change paths an agent must not edit (its skills, WORKFLOW.md, sandbox settings). Revert them, or, if a person made the change on purpose, have a person other than the author add the $WAIVER_LABEL label after the last push (remove and re-add it if it is already there), or have a person with write access approve the pull request and re-run this job."
+            exit 1
+          fi
