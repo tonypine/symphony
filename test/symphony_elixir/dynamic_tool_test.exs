@@ -1042,6 +1042,67 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       response = DynamicTool.execute("linear_request_human_action", @request, opts)
       assert %{"error" => %{"code" => "human_action_cap_reached", "cap" => 5}} = Jason.decode!(response["output"])
     end
+
+    test "tells the agent to check a CI job's UTC age before asking about it" do
+      assert %{"description" => description} = Enum.find(DynamicTool.tool_specs(), &(&1["name"] == "linear_request_human_action"))
+      assert description =~ "compute the job's age from the API's UTC timestamps against the current UTC time"
+      assert description =~ "under 30 minutes old, wait for the CI poller's re-run"
+    end
+  end
+
+  describe "linear_withdraw_human_action" do
+    test "is advertised with its fields and hidden from the read-only scope" do
+      assert %{"inputSchema" => %{"properties" => properties, "required" => ["reason"]}} =
+               Enum.find(DynamicTool.tool_specs(), &(&1["name"] == "linear_withdraw_human_action"))
+
+      assert properties |> Map.keys() |> Enum.sort() == ["reason", "title"]
+      refute "linear_withdraw_human_action" in Enum.map(DynamicTool.tool_specs(:read_only), & &1["name"])
+
+      response =
+        DynamicTool.execute("linear_withdraw_human_action", %{"reason" => "Not needed.", "issue_id" => "issue-other"},
+          issue: %Issue{id: "issue-current"},
+          linear_client: fn _query, _variables, _opts -> flunk("smuggled issue must not reach Linear") end
+        )
+
+      assert %{"error" => %{"code" => "scope_argument_rejected"}} = Jason.decode!(response["output"])
+    end
+
+    test "withdraws the request and returns explicit error payloads" do
+      request = %{"id" => "comment-1", "body" => "## Action needed: Re-run CI", "createdAt" => "2026-10-04T18:57:00.000Z"}
+
+      client = fn query, _variables, _opts ->
+        cond do
+          query =~ "SymphonyAgentHumanActionScope" ->
+            {:ok,
+             %{
+               "data" => %{
+                 "issue" => %{
+                   "id" => "issue-current",
+                   "labels" => %{"nodes" => [%{"id" => "l1", "name" => "human-action"}]},
+                   "comments" => %{"nodes" => [request]}
+                 }
+               }
+             }}
+
+          query =~ "SymphonyAgentAddReply" ->
+            {:ok, %{"data" => %{"commentCreate" => %{"success" => true, "comment" => %{"id" => "reply-1"}}}}}
+
+          query =~ "SymphonyAgentRemoveLabel" ->
+            {:ok, %{"data" => %{"issueRemoveLabel" => %{"success" => true}}}}
+        end
+      end
+
+      opts = [issue: %Issue{id: "issue-current", identifier: "MOT-24"}, linear_client: client, refresh_human_actions: fn -> :ok end]
+
+      response = DynamicTool.execute("linear_withdraw_human_action", %{"reason" => "The run had just started."}, opts)
+      assert response["success"] == true
+      assert %{"withdrawn" => true, "replyCommentIds" => ["reply-1"], "labelRemoved" => true} = Jason.decode!(response["output"])
+
+      response = DynamicTool.execute("linear_withdraw_human_action", %{"reason" => " "}, opts)
+
+      assert %{"error" => %{"code" => "invalid_human_action_withdrawal", "message" => "linear_withdraw_human_action: `reason`" <> _rest}} =
+               Jason.decode!(response["output"])
+    end
   end
 
   test "legacy dotted tool aliases are accepted but still reject smuggled issue ids" do

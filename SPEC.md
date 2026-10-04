@@ -1309,7 +1309,9 @@ When enabled:
   can open for a fixture file the agent wrote (on a separate QA host, a copy in the pass's run
   directory there). `qa_put_file` MUST read only a regular file of bounded size that resolves inside
   the QA worktree or the pass's temp folder, and MUST refuse symlinks and files with other hard
-  links. Every tool that takes a PID MUST refuse a PID
+  links. `qa_ax_set_value` MUST enter a text field's value so the app registers the edit, with key
+  events sent to that app alone, and the tools MUST NOT return a secure field's value. Every tool that
+  takes a PID MUST refuse a PID
   the pass did not launch. Apps still running when the pass ends MUST be quit. A missing Screen
   Recording or Accessibility grant MUST surface as a `qa_permission_missing` tool error that tells
   the agent to mark the app steps `blocked`, finish the other playbooks' steps and answer
@@ -1337,7 +1339,8 @@ When enabled:
   `qa_android_install` has installed a configured app in the pass. The tree MUST be read through
   `adb exec-out`, never from a file on the device, and capped in depth, nodes and bytes, saying when
   nodes were left out; tap MUST refuse a point off the display and a path that is not in the last
-  tree; keys, orientations, night modes and font scales MUST come from fixed allowlists; and typed
+  tree; keys, orientations, night modes and font scales MUST come from fixed allowlists; rotate MUST
+  report success only once the display has turned, and `qa_android_rotate_failed` otherwise; and typed
   text MUST reach the device's shell quoted so that no character in it can run a command. When the
   pass ends or crashes, Symphony MUST reset the rotation, dark mode and font scale the pass changed,
   uninstall the configured apps and every package installed in the pass, release the lease and
@@ -2993,7 +2996,8 @@ Scoped Linear tool extension contract:
   `linear_get_parent_issue`, `linear_get_comments`, `linear_get_related_issues`,
   `linear_update_state`, `linear_add_comment`, `linear_update_comment`, `linear_delete_comment`,
   `linear_attach_url`, `linear_attach_file`, `linear_create_subissue`, `linear_update_subissue`,
-  `linear_add_blocked_by`, `linear_create_project_update`, and `linear_request_human_action`.
+  `linear_add_blocked_by`, `linear_create_project_update`, `linear_request_human_action`, and
+  `linear_withdraw_human_action`.
 - `linear_add_comment` MAY take a `parent_id` naming a comment on the current issue; the comment is
   then posted as a reply under it. `linear_get_comments` SHOULD return each reply's parent id.
 - Reads whose issue descriptions and comments reach the agent (`linear_get_current_issue`,
@@ -3049,6 +3053,14 @@ Scoped Linear tool extension contract:
   MUST be capped per run (the Elixir cap is 5) and refused when the run has no state to count
   against, or when the issue's repository turned human actions off. The read-only reviewer scope
   MUST NOT advertise or execute it.
+- `linear_withdraw_human_action` MUST only act on the current issue and MUST accept only a
+  non-blank `reason` and an optional `title`. The reason MUST pass the same secret scan as comments
+  before any Linear call. It replies `## Action withdrawn` with the reason under each open request
+  on the issue (only the one whose title matches, when `title` is given), and removes the
+  human-action label once no open request is left. A request with such a reply MUST NOT be listed
+  in a human-action project update, and MUST NOT block a new request with the same title. With no
+  open request to withdraw it MUST change nothing. The read-only reviewer scope MUST NOT advertise
+  or execute it.
 - The standardized Linear tool surface does not include an assignee mutation tool. Implementations
   MUST NOT advertise removed legacy names such as `linear_set_assignee`.
 - Linear read tools SHOULD wrap issue/comment fields in prompt-safety boundary tags before
