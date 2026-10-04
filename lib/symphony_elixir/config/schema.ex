@@ -1930,6 +1930,11 @@ defmodule SymphonyElixir.Config.Schema do
     use Ecto.Schema
     import Ecto.Changeset
 
+    alias SymphonyElixir.AcceptanceGate
+
+    # Recompile when the gate's defaults change (see the note in `SystemSchema`).
+    require AcceptanceGate.Settings
+
     @type t :: %__MODULE__{}
 
     defmodule Android do
@@ -1999,6 +2004,7 @@ defmodule SymphonyElixir.Config.Schema do
       field(:playbooks, :map, default: %{})
       field(:worker_host, :string)
       embeds_one(:android, Android, on_replace: :update, defaults_to_struct: true)
+      embeds_one(:acceptance_gate, AcceptanceGate.Settings, on_replace: :update, defaults_to_struct: true)
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
@@ -2006,6 +2012,7 @@ defmodule SymphonyElixir.Config.Schema do
       schema
       |> cast(attrs, @fields, empty_values: [])
       |> cast_embed(:android, with: &Android.changeset/2)
+      |> cast_embed(:acceptance_gate, with: &AcceptanceGate.Settings.changeset/2)
       |> Schema.validate_present([:state])
       |> validate_format(:worker_host, ~r/\A[^\s-]\S*\z/, message: "must be an SSH host such as qa@qa-vm.local or qa-vm:2222")
       |> validate_inclusion(:kind, ["codex", "claude"])
