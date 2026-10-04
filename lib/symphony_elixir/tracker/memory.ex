@@ -89,7 +89,7 @@ defmodule SymphonyElixir.Tracker.Memory do
   def create_comment(issue_id, body) do
     maybe_sleep(:memory_tracker_create_comment_sleep_ms)
 
-    case Application.get_env(:symphony_elixir, :memory_tracker_create_comment_result, :ok) do
+    case next_result(:memory_tracker_create_comment_result) do
       :ok ->
         send_event({:memory_tracker_comment, issue_id, body})
         :ok
@@ -101,7 +101,7 @@ defmodule SymphonyElixir.Tracker.Memory do
 
   @spec update_issue_state(String.t(), String.t()) :: :ok | {:error, term()}
   def update_issue_state(issue_id, state_name) do
-    case Application.get_env(:symphony_elixir, :memory_tracker_update_issue_state_result, :ok) do
+    case next_result(:memory_tracker_update_issue_state_result) do
       :ok ->
         send_event({:memory_tracker_state_update, issue_id, state_name})
         :ok
@@ -127,6 +127,22 @@ defmodule SymphonyElixir.Tracker.Memory do
       nil -> {:ok, true}
       {:error, _reason} = error -> error
       states when is_list(states) -> {:ok, normalize_state(state_name) in Enum.map(states, &normalize_state/1)}
+    end
+  end
+
+  # A list of results answers one call each, then `:ok`, so a test can script a failure
+  # followed by a success.
+  defp next_result(key) do
+    case Application.get_env(:symphony_elixir, key, :ok) do
+      [result | rest] ->
+        Application.put_env(:symphony_elixir, key, rest)
+        result
+
+      [] ->
+        :ok
+
+      result ->
+        result
     end
   end
 
