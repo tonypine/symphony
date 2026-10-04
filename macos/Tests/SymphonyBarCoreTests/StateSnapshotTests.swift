@@ -136,10 +136,10 @@ final class StateSnapshotTests: XCTestCase {
 
     func testDecodesTheTicketsAnUpdateWouldUnblock() throws {
         let data = try recordedState(replacing: "app_update", with: ["unblocks": 2, "issue_identifiers": ["TP-313", "TP-332"]])
-        XCTAssertEqual(SymphonyState.poll(data: data, statusCode: 200), .state(StateSnapshot(running: 1, updateUnblocks: 2)))
+        XCTAssertEqual(SymphonyState.poll(data: data, statusCode: 200), .state(StateSnapshot(running: 1, budget: recordedBudget, updateUnblocks: 2)))
 
         let empty = try recordedState(replacing: "app_update", with: [String: Any]())
-        XCTAssertEqual(SymphonyState.poll(data: empty, statusCode: 200), .state(StateSnapshot(running: 1)))
+        XCTAssertEqual(SymphonyState.poll(data: empty, statusCode: 200), .state(StateSnapshot(running: 1, budget: recordedBudget)))
     }
 
     func testRetryingDefaultsToZero() {
