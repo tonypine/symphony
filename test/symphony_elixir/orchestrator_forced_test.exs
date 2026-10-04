@@ -167,6 +167,38 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
       refute MapSet.member?(state.forced_waiting_noted, "forced-2")
     end
 
+    test "a cleared ticket's run gives the allowance back, and a forced landing takes it with finishing_max full", ctx do
+      write_forced_workflow!(ctx, max_concurrent_agents: 1, finishing_max: 1)
+      landing = issue("forced-3", "MT-F3", "Merging", forced: true)
+      cleared = issue("forced-4", "MT-F4", "In Progress", forced: true)
+      tracked([landing, cleared])
+
+      queue = %{
+        "forced-3" => queue_entry(landing, ~U[2026-10-04 06:00:00Z]),
+        "forced-4" => queue_entry(cleared, ~U[2026-10-04 07:00:00Z])
+      }
+
+      state =
+        %{orchestrator_state(1) | forced: queue}
+        |> run(cleared, :implementation, forced: true)
+        |> run(issue("land-1", "MT-LAND", "Merging"), :landing)
+
+      # `symphony force --clear MT-F4` while its forced run is going.
+      clear = {:force_issue, %{cleared | labels: []}}
+      log = capture_log(fn -> send(self(), {:reply, Orchestrator.handle_call(clear, {self(), make_ref()}, state)}) end)
+
+      assert_received {:reply, {:reply, {:ok, %{forced: false}}, state}}
+      assert %{forced: false} = state.running["forced-4"]
+      assert log =~ "Forced run released the forced allowance: issue_id=forced-4 issue_identifier=MT-F4"
+      assert %{forced: false} = Enum.find(snapshot_of(state).running, &(&1.issue_id == "forced-4"))
+
+      {state, log} = dispatch_with_log([landing], state)
+
+      assert %{forced: true, run_profile: %{kind: :landing}} = state.running["forced-3"]
+      assert log =~ ~r/issue_id=forced-3 .* slot=forced forced=true/
+      refute log =~ "Forced ticket waiting"
+    end
+
     test "a forced ticket past forced_max takes a free normal slot as a normal run", ctx do
       write_forced_workflow!(ctx, max_concurrent_agents: 1)
       second = issue("forced-2", "MT-F2", "Todo", forced: true)
@@ -372,6 +404,29 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
       # The next poll keeps it noted, so it is not announced again.
       state = plan_poll(state, candidates)
       assert MapSet.member?(state.forced_waiting_noted, "part-1")
+    end
+
+    test "a part running on the allowance gives it back once the parent's label is removed", ctx do
+      write_forced_workflow!(ctx, max_concurrent_agents: 1)
+      part = issue("part-1", "MT-P1", "In Progress")
+      parent = parent([part])
+      candidates = [parent, part]
+      tracked(candidates)
+
+      state =
+        %{orchestrator_state(1) | forced: %{"epic-1" => queue_entry(parent, ~U[2026-10-04 06:00:00Z])}}
+        |> plan_poll(candidates)
+        |> run(part, :implementation, forced: true)
+        |> plan_poll(candidates)
+
+      assert %{forced: true} = state.running["part-1"]
+
+      cleared = %{parent | labels: ["breakdown"]}
+      state = state |> refresh([cleared]) |> plan_poll([cleared, part])
+
+      assert state.forced == %{}
+      assert state.forced_parts == %{}
+      assert %{forced: false} = state.running["part-1"]
     end
 
     test "a part waiting on a retry shows as forced, and keeps its place in a usage limit canary pick", ctx do
