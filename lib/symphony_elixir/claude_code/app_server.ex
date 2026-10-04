@@ -14,6 +14,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   alias SymphonyElixir.ProjectGuidePrompt
   alias SymphonyElixir.Secret
   alias SymphonyElixir.SharedSkills
+  alias SymphonyElixir.UsageLimit
 
   @openrouter_base_url "https://openrouter.ai/api"
   @agent_runtime_env AgentEnv.runtime_marker_name()
@@ -2068,17 +2069,13 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     %{
       provider: "anthropic",
       window: window,
-      scope: usage_window_scope(window),
+      scope: UsageLimit.scope_for_window(window),
       resets_at: epoch_to_datetime(Map.get(info, "resetsAt")),
       utilization: number_or_nil(utilization),
       overage: Map.get(info, "overageStatus"),
       source: :rate_limit_event
     }
   end
-
-  defp usage_window_scope("seven_day_opus"), do: "opus"
-  defp usage_window_scope("seven_day_sonnet"), do: "sonnet"
-  defp usage_window_scope(_window), do: :all
 
   # With overage on, Claude keeps serving the request on extra usage, so the
   # window being spent is not a stop.

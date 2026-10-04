@@ -32,7 +32,8 @@ defmodule SymphonyElixirWeb.Presenter do
 
   @spec state_payload(GenServer.name(), timeout()) :: map()
   def state_payload(orchestrator, snapshot_timeout_ms) do
-    generated_at = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+    now = DateTime.utc_now()
+    generated_at = now |> DateTime.truncate(:second) |> DateTime.to_iso8601()
 
     case Orchestrator.snapshot(orchestrator, snapshot_timeout_ms) do
       %{} = snapshot ->
@@ -63,7 +64,7 @@ defmodule SymphonyElixirWeb.Presenter do
           codex_totals: normalize_codex_totals(Map.get(snapshot, :codex_totals)),
           pollers: normalize_pollers(Map.get(snapshot, :pollers)),
           pause: normalize_pause(Map.get(snapshot, :pause)),
-          usage_limits: snapshot |> Map.get(:usage_limits, []) |> Enum.map(&usage_limit_payload/1),
+          usage_limits: snapshot |> Map.get(:usage_limits, []) |> Enum.map(&usage_limit_payload(&1, now)),
           budget: normalize_budget(Map.get(snapshot, :budget)),
           dispatch_state: normalize_dispatch_state(snapshot),
           epic_lanes: normalize_epic_lanes(Map.get(snapshot, :epic_lanes)),
@@ -738,7 +739,7 @@ defmodule SymphonyElixirWeb.Presenter do
     %{paused: false, reason: nil, paused_at: nil}
   end
 
-  defp usage_limit_payload(entry) do
+  defp usage_limit_payload(entry, now) do
     %{
       provider: entry.provider,
       scope: UsageLimit.scope_label(entry.scope),
@@ -750,7 +751,8 @@ defmodule SymphonyElixirWeb.Presenter do
       resume_at: iso8601(entry.resume_at),
       source: optional_string(Map.get(entry, :source)),
       utilization: Map.get(entry, :utilization),
-      issue_identifier: Map.get(entry, :issue_identifier)
+      issue_identifier: Map.get(entry, :issue_identifier),
+      banner: UsageLimit.banner(entry, now)
     }
   end
 

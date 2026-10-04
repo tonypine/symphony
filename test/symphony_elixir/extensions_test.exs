@@ -1897,12 +1897,21 @@ defmodule SymphonyElixir.ExtensionsTest do
       static_snapshot()
       |> Map.put(:usage_limits, [
         usage_limit_entry(%{window: "five_hour", resume_at: now}),
-        usage_limit_entry(%{scope: "opus", window: "seven_day_opus", resume_at: later})
+        usage_limit_entry(%{scope: "opus", window: "seven_day_opus", resume_at: later}),
+        usage_limit_entry(%{
+          window: "seven_day",
+          phase: :headroom,
+          reason: "claude_usage_headroom",
+          utilization: 0.92,
+          resets_at: now,
+          resume_at: now
+        })
       ])
       |> Map.put(:dispatch_state, %{
         active?: false,
         blockers: [
-          %{kind: :usage_limit, provider: "anthropic", scope: :all, window: "five_hour", resets_at: nil, resume_at: now, phase: :paused}
+          %{kind: :usage_limit, provider: "anthropic", scope: :all, window: "five_hour", resets_at: nil, resume_at: now, phase: :paused},
+          %{kind: :usage_limit, provider: "anthropic", scope: :all, window: "seven_day", resets_at: now, resume_at: now, phase: :headroom}
         ]
       })
 
@@ -1916,13 +1925,16 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ ~r/Paused: Claude weekly Opus limit, resumes ~[A-Z][a-z]{2} \d{1,2} \d{2}:\d{2}\s*</
     assert html =~ "Dispatch paused"
     assert html =~ "Claude 5-hour limit reached"
+    assert html =~ ~r/Holding new runs: Claude at 92%, resets ~\d{2}:\d{2}\s*</
+    assert html =~ "Claude weekly limit headroom: holding new runs"
     assert html =~ "resumes at #{DateTime.to_iso8601(now)}"
     assert html =~ "ops-control-blocker-usage_limit"
   end
 
   test "state API lists usage-limit holds and the usage_limit dispatch blocker" do
     orchestrator_name = Module.concat(__MODULE__, :UsageLimitApiOrchestrator)
-    resume_at = ~U[2026-10-03 14:05:00Z]
+    # Days ahead, so the banner always carries the date whatever day the test runs.
+    resume_at = DateTime.utc_now() |> DateTime.add(3, :day) |> DateTime.truncate(:second)
 
     snapshot =
       static_snapshot()
@@ -1947,7 +1959,11 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     payload = json_response(get(build_conn(), "/api/v1/state"), 200)
 
-    assert payload["usage_limits"] == [
+    assert [%{"banner" => banner} = usage_limit] = payload["usage_limits"]
+    # The menu bar shows the banner as the dashboards do, in Symphony's local time.
+    assert banner =~ ~r/^Paused: Claude 5-hour limit, resumes ~[A-Z][a-z]{2} \d{1,2} \d{2}:\d{2}$/
+
+    assert [Map.delete(usage_limit, "banner")] == [
              %{
                "provider" => "anthropic",
                "scope" => "all",
@@ -1956,7 +1972,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                "phase" => "paused",
                "since" => "2026-10-03T09:05:00Z",
                "resets_at" => "2026-10-03T14:03:00Z",
-               "resume_at" => "2026-10-03T14:05:00Z",
+               "resume_at" => DateTime.to_iso8601(resume_at),
                "source" => nil,
                "utilization" => nil,
                "issue_identifier" => "MT-HELD"
@@ -1973,7 +1989,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "window" => "five_hour",
                  "phase" => "paused",
                  "resets_at" => "2026-10-03T14:03:00Z",
-                 "resume_at" => "2026-10-03T14:05:00Z"
+                 "resume_at" => DateTime.to_iso8601(resume_at)
                }
              ]
            }

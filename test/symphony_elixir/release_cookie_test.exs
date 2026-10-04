@@ -2,6 +2,7 @@ defmodule SymphonyElixir.ReleaseCookieTest do
   use ExUnit.Case, async: false
 
   @env_script Path.expand("../../rel/env.sh.eex", __DIR__)
+  @distribution_timeout_ms 30_000
 
   setup do
     tmp = Path.join(System.tmp_dir!(), "symphony-release-cookie-test-#{System.unique_integer([:positive])}")
@@ -83,29 +84,10 @@ defmodule SymphonyElixir.ReleaseCookieTest do
     server_node = unique_node("symphony_cookie_server")
     good_cookie = "cookie#{System.unique_integer([:positive])}"
     bad_cookie = "wrong#{System.unique_integer([:positive])}"
+    deadline = System.monotonic_time(:millisecond) + @distribution_timeout_ms
 
-    port =
-      Port.open({:spawn_executable, erl}, [
-        :binary,
-        :exit_status,
-        args: [
-          "-noshell",
-          "-setcookie",
-          good_cookie,
-          "-name",
-          server_node,
-          "-eval",
-          "timer:sleep(30000), erlang:halt()."
-        ]
-      ])
-
-    on_exit(fn ->
-      _ = rpc_halt(erl, server_node, good_cookie)
-      drain_port(port)
-    end)
-
-    assert eventually(fn -> ping_node(erl, server_node, good_cookie) == :pong end)
-    assert ping_node(erl, server_node, bad_cookie) == :pang
+    assert {:ok, dist_port} = start_server(erl, server_node, good_cookie, deadline)
+    assert ping_node(erl, dist_port, server_node, bad_cookie) == :pang
   end
 
   defp source_env(args, opts \\ []) do
@@ -137,43 +119,82 @@ defmodule SymphonyElixir.ReleaseCookieTest do
     end
   end
 
-  defp ping_node(erl, server_node, cookie) do
+  defp ping_node(erl, dist_port, server_node, cookie) do
     client_node = unique_node("symphony_cookie_client")
 
     eval =
       ~s|Target = list_to_atom("#{server_node}"), case net_adm:ping(Target) of pong -> halt(0); pang -> halt(1) end.|
 
-    case System.cmd(erl, ["-noshell", "-setcookie", cookie, "-name", client_node, "-eval", eval], stderr_to_stdout: true) do
+    args = ["-noshell", "-setcookie", cookie, "-name", client_node, "-dist_listen", "false"] ++ dist_args(dist_port)
+
+    case System.cmd(erl, args ++ ["-eval", eval], stderr_to_stdout: true) do
       {_output, 0} -> :pong
       {_output, _status} -> :pang
     end
   end
 
-  defp rpc_halt(erl, server_node, cookie) do
-    client_node = unique_node("symphony_cookie_stop")
-    eval = ~s|Target = list_to_atom("#{server_node}"), rpc:call(Target, erlang, halt, []), halt(0).|
+  defp dist_args(dist_port), do: ["-start_epmd", "false", "-erl_epmd_port", Integer.to_string(dist_port)]
 
-    System.cmd(erl, ["-noshell", "-setcookie", cookie, "-name", client_node, "-eval", eval], stderr_to_stdout: true)
+  defp free_tcp_port do
+    {:ok, socket} = :gen_tcp.listen(0, [])
+    {:ok, port} = :inet.port(socket)
+    :ok = :gen_tcp.close(socket)
+    port
   end
 
-  defp eventually(fun, attempts \\ 20)
-  defp eventually(_fun, 0), do: false
+  # The nodes meet on a per-test port instead of the shared epmd, so a cold or
+  # slow epmd on a loaded runner can't delay or break the server's startup. The
+  # probed port can be taken before the server binds it, so a server that exits
+  # with eaddrinuse is started once more on a fresh port.
+  defp start_server(erl, server_node, cookie, deadline, retries \\ 1) do
+    dist_port = free_tcp_port()
 
-  defp eventually(fun, attempts) do
-    if fun.() do
-      true
-    else
-      Process.sleep(100)
-      eventually(fun, attempts - 1)
+    port =
+      Port.open({:spawn_executable, erl}, [
+        :binary,
+        :exit_status,
+        :stderr_to_stdout,
+        args:
+          ["-noshell", "-setcookie", cookie, "-name", server_node] ++
+            dist_args(dist_port) ++ ["-eval", "timer:sleep(120000), erlang:halt()."]
+      ])
+
+    {:os_pid, os_pid} = Port.info(port, :os_pid)
+    on_exit(fn -> System.cmd("kill", [Integer.to_string(os_pid)], stderr_to_stdout: true) end)
+
+    case await_pong(port, fn -> ping_node(erl, dist_port, server_node, cookie) end, deadline) do
+      :ok ->
+        {:ok, dist_port}
+
+      {:error, {:exit_status, _status, output}} = error ->
+        if retries > 0 and output =~ "eaddrinuse" do
+          start_server(erl, server_node, cookie, deadline, retries - 1)
+        else
+          error
+        end
+
+      error ->
+        error
     end
   end
 
-  defp drain_port(port) do
+  defp await_pong(port, ping, deadline, output \\ "") do
     receive do
-      {^port, {:exit_status, _status}} -> :ok
-      {^port, {:data, _data}} -> drain_port(port)
+      {^port, {:data, data}} -> await_pong(port, ping, deadline, output <> data)
+      {^port, {:exit_status, status}} -> {:error, {:exit_status, status, output}}
     after
-      100 -> :ok
+      0 ->
+        cond do
+          ping.() == :pong ->
+            :ok
+
+          System.monotonic_time(:millisecond) >= deadline ->
+            {:error, {:timeout, output}}
+
+          true ->
+            Process.sleep(100)
+            await_pong(port, ping, deadline, output)
+        end
     end
   end
 
