@@ -2419,6 +2419,10 @@ reached (for Claude, a used-up five-hour or weekly window; for Codex, an error w
   and any Linear rate-limit pause.
 - Runs of the same provider already in flight are left alone; each one is handled the same way if
   it hits the limit.
+- An Auto Review QA pass whose agent hits the limit creates or refreshes the hold the same way. It
+  records no verdict, writes no QA report and leaves the issue's state alone; a PR-head pass is
+  requested again by the first green CI poll after the hold clears, and a `Final verification:`
+  walkthrough is held and retried as its run.
 - While a hold covers a candidate's resolved run profile (`run_profiles.<kind>.provider`, else
   `agent.provider`, and its model for a model scope; runs of `agent.kind: codex` are provider
   `openai`), every dispatch path skips it: the poll,
