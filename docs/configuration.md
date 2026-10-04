@@ -945,8 +945,11 @@ with none set the reviewer command is unchanged. They take the same values as `a
 `agent.effort`, and `command` must not pass `--model` / `--effort` while any of them is set.
 
 When enabled, Symphony runs an executor/reviewer loop in the same workspace before push. The
-reviewer reads the committed diff; its prompt tells it not to run the test suite, coverage or
-Dialyzer, which CI runs after the push. Checks are split by cost: agents run cheap, targeted checks
+reviewer reads the committed diff for code quality and bugs: correctness, tests for new branches,
+error handling, and the repo's code rules from its `AGENTS.md` / `CLAUDE.md`. It doesn't judge the
+ticket's acceptance criteria or scope; the acceptance gate does (see
+[`acceptance_gate.md`](acceptance_gate.md#who-reviews-what)). Its prompt tells it not to run the
+test suite, coverage or Dialyzer, which CI runs after the push. Checks are split by cost: agents run cheap, targeted checks
 locally (format, compile, lint, the tests for the changed code; Symphony's own list is in its
 `WORKFLOW.md`), and the full suite, coverage and Dialyzer run only in CI.
 `run_on` defaults to `always`; set it to `first_push` to skip the reviewer on PR follow-up runs while keeping it enabled for initial issue runs.

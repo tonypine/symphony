@@ -1171,8 +1171,10 @@ Fields:
   - Default: `1`.
 
 When enabled, Symphony SHOULD run an executor + reviewer flow in the same workspace. The executor
-SHOULD stop before pushing, the reviewer SHOULD receive issue context plus the committed diff, and
-the reviewer MUST return a structured verdict of `approve`, `request_changes`, or `block`. Reviewer
+SHOULD stop before pushing, the reviewer SHOULD receive issue context plus the committed diff, the
+reviewer SHOULD judge code quality and bugs (correctness, tests for new branches, error handling,
+the repository's code rules) and not the issue's acceptance criteria or scope, and the reviewer
+MUST return a structured verdict of `approve`, `request_changes`, or `block`. Reviewer
 sessions SHOULD expose only read-only scoped Linear/GitHub tools. An `approve` verdict SHOULD keep
 later executor continuations in push/PR handoff mode rather than reintroducing the pre-push reviewer
 gate. `request_changes` and `block` verdicts SHOULD include evidence-backed findings with file,
