@@ -5,6 +5,7 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
   alias SymphonyElixir.AgentTools.SecretScanner
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.Workflow
   alias SymphonyElixir.Workspace
 
   test "public defaults fail closed when required scope is missing" do
@@ -22,6 +23,7 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
     assert {:error, :missing_current_issue} = GitHub.merge_pull_request(%{})
     assert {:error, :missing_workspace} = GitHub.fetch_origin(%{})
     assert {:error, :missing_workspace} = GitHub.push_branch(%{})
+    assert {:error, :missing_workspace} = GitHub.sync_base(%{})
   end
 
   test "validates explicit inputs and workspace context" do
@@ -220,6 +222,7 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
         ["branch", "--show-current"], _opts -> {:ok, "auto/ACME-3051\n"}
         ["remote", "get-url", "origin"], _opts -> {:ok, "git@github.com:acme/symphony.git\n"}
         ["remote", "get-url", "--push", "--all", "origin"], _opts -> {:ok, "git@github.com:acme/symphony.git\n"}
+        ["ls-remote" | _rest], _opts -> {:ok, ""}
         ["push", "origin", "auto/ACME-3051"], _opts -> {:ok, "pushed\n"}
       end
 
@@ -231,7 +234,15 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
         ["branch", "--show-current"], _opts -> {"auto/ACME-3051\n", 0}
         ["remote", "get-url", "origin"], _opts -> {"git@github.com:acme/symphony.git\n", 0}
         ["remote", "get-url", "--push", "--all", "origin"], _opts -> {"git@github.com:acme/symphony.git\n", 0}
+        ["ls-remote" | _rest], _opts -> {"", 0}
         ["push", "origin", "auto/ACME-3051"], _opts -> {"rejected\n", 1}
+      end
+
+      ls_remote_error_runner = fn
+        ["branch", "--show-current"], _opts -> {"auto/ACME-3051\n", 0}
+        ["remote" | _rest], _opts -> {"git@github.com:acme/symphony.git\n", 0}
+        ["ls-remote" | _rest], _opts -> {"fatal: unable to access origin\n", 128}
+        ["push" | _rest], _opts -> flunk("the push should not run")
       end
 
       raising_runner = fn _args, _opts -> :erlang.error(:enoent) end
@@ -244,6 +255,9 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
 
       assert {:error, {:git_failed, ["push", "origin", "auto/ACME-3051"], 1, "rejected\n"}} =
                GitHub.push_branch(scoped_context(workspace), git_runner: nonzero_runner)
+
+      assert {:error, {:git_failed, ["ls-remote" | _rest], 128, _output}} =
+               GitHub.push_branch(scoped_context(workspace), git_runner: ls_remote_error_runner)
 
       assert {:error, {:git_unavailable, _message}} =
                GitHub.push_branch(scoped_context(workspace), git_runner: raising_runner)
@@ -338,6 +352,178 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
 
       assert {:error, :git_boom} =
                GitHub.fetch_origin(scoped_context(workspace), git_runner: git_runner)
+    after
+      File.rm_rf(workspace)
+    end
+  end
+
+  test "sync_base merges a base branch change to a write-protected skill file" do
+    fixture = sync_fixture!("github-agent-sync-base-skill")
+
+    try do
+      commit_files!(fixture.workspace, %{"lib/feature.ex" => "feature\n"}, "agent work")
+      commit_files!(fixture.upstream, %{".ai/skills/push/SKILL.md" => "push v2\n"}, "change the push skill")
+      git!(fixture.upstream, ["push", "origin", "main"])
+
+      assert {:ok, %{"status" => "merge_staged", "base" => "origin/main", "conflicts" => [], "message" => message}} =
+               GitHub.sync_base(fixture.context)
+
+      assert message =~ "Run `git commit --no-edit`"
+      assert File.read!(Path.join(fixture.workspace, ".ai/skills/push/SKILL.md")) == "push v2\n"
+
+      git!(fixture.workspace, ["commit", "--no-edit"])
+      head = fixture.workspace |> git!(["rev-parse", "HEAD"]) |> String.trim()
+      assert git!(fixture.workspace, ["log", "-1", "--format=%s"]) == "Merge origin/main into auto/ACME-483\n"
+
+      assert {:ok, %{"status" => "synced", "head" => ^head, "message" => message}} = GitHub.sync_base(fixture.context)
+      assert message =~ "contains origin/main"
+
+      # The skill change came from main, so it is not the branch's own change.
+      assert {:ok, %{"branch" => "auto/ACME-483"}} = GitHub.push_branch(fixture.context)
+    after
+      File.rm_rf(fixture.root)
+    end
+  end
+
+  test "sync_base fast-forwards to the branch's remote copy before merging the base branch" do
+    fixture = sync_fixture!("github-agent-sync-base-fast-forward")
+
+    try do
+      git!(fixture.workspace, ["push", "origin", "auto/ACME-483"])
+      commit_files!(fixture.upstream, %{".ai/skills/push/SKILL.md" => "push v2\n"}, "change the push skill")
+      # GitHub brought the branch up to date with main.
+      git!(fixture.upstream, ["push", "origin", "main", "main:auto/ACME-483"])
+      main = fixture.upstream |> git!(["rev-parse", "HEAD"]) |> String.trim()
+
+      assert {:ok, %{"status" => "synced", "head" => ^main}} = GitHub.sync_base(fixture.context)
+      assert File.read!(Path.join(fixture.workspace, ".ai/skills/push/SKILL.md")) == "push v2\n"
+    after
+      File.rm_rf(fixture.root)
+    end
+  end
+
+  test "sync_base leaves conflicts for the agent and refuses to start a second merge" do
+    fixture = sync_fixture!("github-agent-sync-base-conflicts")
+
+    try do
+      commit_files!(fixture.workspace, %{"lib/app.ex" => "app agent\n"}, "agent work")
+      commit_files!(fixture.upstream, %{"lib/app.ex" => "app main\n"}, "main work")
+      git!(fixture.upstream, ["push", "origin", "main"])
+
+      assert {:ok, %{"status" => "conflicts", "conflicts" => ["lib/app.ex"], "message" => message}} =
+               GitHub.sync_base(fixture.context)
+
+      assert message =~ "Resolve them"
+      # zdiff3 shows the merge-base too.
+      assert File.read!(Path.join(fixture.workspace, "lib/app.ex")) =~ "|||||||"
+
+      assert {:error, :merge_in_progress} = GitHub.sync_base(fixture.context)
+    after
+      File.rm_rf(fixture.root)
+    end
+  end
+
+  test "sync_base and push_branch refuse a branch that changes a protected path itself, unless a person pushed it" do
+    fixture = sync_fixture!("github-agent-sync-base-protected")
+
+    try do
+      commit_files!(fixture.workspace, %{".ai/skills/push/SKILL.md" => "agent rewrite\n", "WORKFLOW.md" => "agent rewrite\n"}, "rewrite")
+      commit_files!(fixture.upstream, %{"lib/app.ex" => "app v2\n"}, "main work")
+      git!(fixture.upstream, ["push", "origin", "main"])
+
+      files = [".ai/skills/push/SKILL.md", "WORKFLOW.md"]
+      assert {:error, {:protected_paths_changed, ^files}} = GitHub.sync_base(fixture.context)
+      assert {:error, {:protected_paths_changed, ^files}} = GitHub.push_branch(fixture.context)
+      assert {_output, status} = System.cmd("git", ["rev-parse", "--verify", "--quiet", "refs/heads/auto/ACME-483"], cd: fixture.origin)
+      assert status != 0
+
+      # The agent can rewrite its own remote-tracking refs, so they prove nothing.
+      head = fixture.workspace |> git!(["rev-parse", "HEAD"]) |> String.trim()
+      git!(fixture.workspace, ["update-ref", "refs/remotes/origin/auto/ACME-483", head])
+      git!(fixture.workspace, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/auto/ACME-483"])
+
+      assert {:error, {:protected_paths_changed, ^files}} = GitHub.sync_base(fixture.context)
+      assert {:error, {:protected_paths_changed, ^files}} = GitHub.push_branch(fixture.context)
+
+      # A person pushed the same change themselves.
+      git!(fixture.workspace, ["push", "origin", "auto/ACME-483"])
+
+      assert {:ok, %{"status" => "merge_staged"}} = GitHub.sync_base(fixture.context)
+    after
+      File.rm_rf(fixture.root)
+    end
+  end
+
+  test "sync_base merges the configured base branch" do
+    fixture = sync_fixture!("github-agent-sync-base-configured")
+
+    try do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        repos: [
+          %{
+            "name" => "default",
+            "path" => Path.dirname(Workflow.workflow_file_path()),
+            "workflow" => Path.basename(Workflow.workflow_file_path()),
+            "team" => "Test",
+            "base_branch" => "develop"
+          }
+        ]
+      )
+
+      commit_files!(fixture.upstream, %{".ai/skills/push/SKILL.md" => "push develop\n"}, "develop work")
+      git!(fixture.upstream, ["push", "origin", "main:develop"])
+
+      assert {:ok, %{"status" => "synced", "base" => "origin/develop"}} = GitHub.sync_base(fixture.context)
+      assert File.read!(Path.join(fixture.workspace, ".ai/skills/push/SKILL.md")) == "push develop\n"
+    after
+      File.rm_rf(fixture.root)
+    end
+  end
+
+  test "sync_base reports a merge git refuses and a missing base branch" do
+    fixture = sync_fixture!("github-agent-sync-base-refused")
+    empty_origin = Path.join(fixture.root, "empty.git")
+    bare_workspace = Path.join(fixture.root, "bare-workspace")
+
+    try do
+      commit_files!(fixture.upstream, %{"lib/app.ex" => "app v2\n"}, "main work")
+      git!(fixture.upstream, ["push", "origin", "main"])
+      File.write!(Path.join(fixture.workspace, "lib/app.ex"), "uncommitted\n")
+
+      assert {:error, {:git_merge_failed, _status, output}} = GitHub.sync_base(fixture.context)
+      assert output =~ "would be overwritten"
+
+      git!(fixture.root, ["init", "--bare", empty_origin])
+      File.mkdir_p!(bare_workspace)
+      git!(bare_workspace, ["init", "-b", "auto/ACME-483"])
+      git!(bare_workspace, ["remote", "add", "origin", empty_origin])
+      context = %{workspace: bare_workspace, command_security: %{origin_url: empty_origin, workspace: bare_workspace}}
+
+      assert {:error, {:base_branch_not_found, "origin/main"}} = GitHub.sync_base(context)
+    after
+      File.rm_rf(fixture.root)
+    end
+  end
+
+  test "sync_base skips a diverged remote copy and surfaces git runner errors from the merge" do
+    workspace = tmp_workspace!("github-agent-sync-base-runner-error")
+
+    try do
+      git_runner = fn
+        ["branch", "--show-current"], _opts -> {"auto/ACME-3051\n", 0}
+        ["remote", "get-url", "origin"], _opts -> {"git@github.com:acme/symphony.git\n", 0}
+        ["fetch", "origin"], _opts -> {"", 0}
+        # A remote without a HEAD symref falls back to `main`.
+        ["ls-remote", "--symref", "origin", "HEAD"], _opts -> {"", 0}
+        ["ls-remote" | _rest], _opts -> {"abc123\trefs/heads/main\nfed789\trefs/heads/auto/ACME-3051\n", 0}
+        ["rev-parse", "--verify", "--quiet", "MERGE_HEAD"], _opts -> {"", 1}
+        ["diff" | _rest], _opts -> {"", 0}
+        # The branch and its remote copy have diverged, so there is no fast-forward.
+        ["merge-base", "--is-ancestor", "HEAD", "fed789"], _opts -> {"", 1}
+        ["-c" | _rest], _opts -> {:error, :git_boom}
+      end
+
+      assert {:error, :git_boom} = GitHub.sync_base(scoped_context(workspace), git_runner: git_runner)
     after
       File.rm_rf(workspace)
     end
@@ -438,6 +624,7 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
       git_runner = fn
         ["branch", "--show-current"], _opts -> {"auto/ACME-3051\n", 0}
         ["remote" | _rest], _opts -> {"git@github.com:acme/symphony.git\n", 0}
+        ["ls-remote" | _rest], _opts -> {"", 0}
         ["push", "origin", "auto/ACME-3051"], _opts -> {"pushed\n", 0}
       end
 
@@ -1017,6 +1204,15 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
     assert {:error, {:unsupported_for_ssh_worker, :github_push_branch}} = GitHub.push_branch(context)
   end
 
+  test "sync_base is explicitly unsupported for ssh workers" do
+    context = %{
+      workspace: "/remote/workspaces/MT-3187",
+      command_security: %{origin_url: "git@github.com:acme/symphony.git", worker_host: "worker-01"}
+    }
+
+    assert {:error, {:unsupported_for_ssh_worker, :github_sync_base}} = GitHub.sync_base(context)
+  end
+
   test "fetch_origin is explicitly unsupported for ssh workers" do
     remote_workspace = "/remote/workspaces/MT-3187"
 
@@ -1501,6 +1697,46 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
       {:error, _reason} ->
         :ok
     end
+  end
+
+  # An origin whose `main` holds a skill file, the agent's clone of it on `auto/ACME-483`, and a
+  # second clone standing in for people pushing to `main`.
+  defp sync_fixture!(name) do
+    root = tmp_workspace!(name)
+    origin = Path.join(root, "origin.git")
+    upstream = Path.join(root, "upstream")
+    workspace = Path.join(root, "workspace")
+
+    git!(root, ["init", "--bare", "-b", "main", origin])
+    File.mkdir_p!(upstream)
+    git!(upstream, ["init", "-b", "main"])
+    configure_identity!(upstream)
+    commit_files!(upstream, %{".ai/skills/push/SKILL.md" => "push v1\n", "lib/app.ex" => "app v1\n"}, "initial")
+    git!(upstream, ["remote", "add", "origin", origin])
+    git!(upstream, ["push", "origin", "main"])
+
+    git!(root, ["clone", origin, workspace])
+    configure_identity!(workspace)
+    git!(workspace, ["checkout", "-b", "auto/ACME-483"])
+
+    context = %{workspace: workspace, command_security: %{origin_url: origin, workspace: workspace}}
+    %{root: root, origin: origin, upstream: upstream, workspace: workspace, context: context}
+  end
+
+  defp configure_identity!(repo) do
+    git!(repo, ["config", "user.name", "Test User"])
+    git!(repo, ["config", "user.email", "test@example.com"])
+  end
+
+  defp commit_files!(repo, files, message) do
+    for {path, contents} <- files do
+      path = Path.join(repo, path)
+      File.mkdir_p!(Path.dirname(path))
+      File.write!(path, contents)
+    end
+
+    git!(repo, ["add", "--all"])
+    git!(repo, ["commit", "-m", message])
   end
 
   defp tmp_workspace!(name) do

@@ -38,6 +38,8 @@ defmodule SymphonyElixir.AgentSandboxConfig do
       and user-scope `~/.claude/{CLAUDE.md,settings.json,settings.local.json,agents,commands,`
       `hooks,plugins,skills}` plus `~/.mcp.json` (auto-loaded on next Claude Code session;
       writes to these would silently persist prompt-injection across runs)
+    * project-local skills `.ai/skills`, `.claude/skills`, `.codex/skills` (an agent must not
+      rewrite its own instructions; `github_sync_base` merges the base branch's changes to them)
     * shell startup files, `~/.gitconfig`, and macOS launch agent roots
   """
 
@@ -97,6 +99,9 @@ defmodule SymphonyElixir.AgentSandboxConfig do
     "./.claude/agents",
     "./.claude/commands",
     "./.claude/hooks",
+    "./.ai/skills",
+    "./.claude/skills",
+    "./.codex/skills",
     "./.git",
     "./mise.toml",
     "./.tool-versions",
@@ -146,6 +151,14 @@ defmodule SymphonyElixir.AgentSandboxConfig do
   @doc false
   @spec deny_write_paths() :: [String.t()]
   def deny_write_paths, do: @deny_write_paths
+
+  @doc """
+  The write-protected paths inside a workspace, relative to its root, without `.git`.
+  """
+  @spec workspace_protected_paths() :: [String.t()]
+  def workspace_protected_paths do
+    for "./" <> path <- @deny_write_paths, path != ".git", do: path
+  end
 
   @doc false
   @spec claude_filesystem_settings([String.t()], [String.t()]) :: map()

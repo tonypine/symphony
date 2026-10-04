@@ -48,6 +48,13 @@ runtime's `sandbox.filesystem.allowWrite` so the agent can write under specific 
 the Claude Code default (workspace + `/tmp`). Codex/SRT already authors a broader writable set
 under `/tmp` and the workspace, so this knob only affects the Claude runtime today.
 
+Both runtimes also deny writes to the workspace's own instructions and workflow files:
+`WORKFLOW.md`, `symphony.yml`, the project `.claude/` settings, agents, commands and hooks, and the
+skill directories `.ai/skills`, `.claude/skills` and `.codex/skills`. A `git merge` in the sandbox
+therefore fails when the base branch changed one of them, so agents merge the base branch with
+`github_sync_base`, which merges outside the sandbox with repo hooks off and leaves the commit to
+the agent. It and `github_push_branch` refuse a branch that changes one of those paths itself.
+
 ### No windows on the host desktop
 
 On a macOS host, agents run on the operator's desktop, so a GUI program an agent starts puts its

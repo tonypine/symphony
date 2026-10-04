@@ -7,7 +7,7 @@ defmodule SymphonyElixir.AgentTools.GitHub do
   through tool arguments.
   """
 
-  alias SymphonyElixir.AgentTools.{Linear, PushCheck, SecretScanner}
+  alias SymphonyElixir.AgentTools.{Linear, ProtectedPaths, PushCheck, SecretScanner}
   alias SymphonyElixir.CiPoller
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
@@ -18,6 +18,7 @@ defmodule SymphonyElixir.AgentTools.GitHub do
   @pr_view_fields "number,state,title,body,url,headRefName,baseRefName"
   @failed_conclusions MapSet.new(["ACTION_REQUIRED", "CANCELLED", "FAILURE", "STARTUP_FAILURE", "TIMED_OUT"])
   @max_git_output_bytes 4_096
+  @merge_config ["-c", "rerere.enabled=true", "-c", "rerere.autoupdate=true", "-c", "merge.conflictstyle=zdiff3"]
 
   @type context :: %{
           optional(:issue) => map() | nil,
@@ -41,6 +42,32 @@ defmodule SymphonyElixir.AgentTools.GitHub do
            :ok <- verify_current_origin(context, workspace, opts),
            {:ok, output} <- run_fetch_origin(workspace, opts) do
         {:ok, %{"remote" => "origin", "output" => output |> sanitize_git_output() |> String.trim()}}
+      end
+    end
+  end
+
+  @doc """
+  Fetches `origin` and merges the base branch into the checked-out branch, outside the agent sandbox.
+
+  The sandbox write-protects paths such as `.ai/skills`, so the agent's own `git merge` fails when
+  the base branch changed one. Symphony first fast-forwards to the branch's remote copy when that
+  is ahead, then merges with `--no-commit` and repo hooks off: the agent commits the merge (or
+  resolves the conflicts) in its sandbox. It refuses a branch that changes a protected path itself.
+  """
+  @spec sync_base(context(), keyword()) :: {:ok, map()} | {:error, term()}
+  def sync_base(context, opts \\ []) do
+    if ssh_worker?(context) do
+      {:error, {:unsupported_for_ssh_worker, :github_sync_base}}
+    else
+      with {:ok, workspace} <- workspace(context),
+           {:ok, branch} <- current_branch_from_workspace(context, opts),
+           :ok <- verify_current_origin(context, workspace, opts),
+           {:ok, _output} <- run_fetch_origin(workspace, opts),
+           {:ok, heads} <- remote_heads(context, workspace, branch, opts),
+           :ok <- refuse_merge_in_progress(workspace, opts),
+           :ok <- ProtectedPaths.verify(heads.base_sha, "HEAD", heads.branch_sha, &run_git(&1, workspace, opts)),
+           :ok <- fast_forward_to_remote_branch(workspace, heads.branch_sha, opts) do
+        merge_base_ref(workspace, branch, heads, opts)
       end
     end
   end
@@ -122,6 +149,7 @@ defmodule SymphonyElixir.AgentTools.GitHub do
            {:ok, branch} <- current_branch(context, opts),
            :ok <- verify_current_origin(context, workspace, opts),
            :ok <- verify_push_urls(context, workspace, opts),
+           :ok <- verify_push_protected_paths(context, workspace, branch, opts),
            {:ok, push_check} <- push_check_settings(context, opts),
            :ok <- PushCheck.verify(workspace, branch, push_check, &run_git(&1, workspace, opts)),
            {:ok, output} <- run_git(["push", "origin", branch], workspace, opts) do
@@ -385,6 +413,130 @@ defmodule SymphonyElixir.AgentTools.GitHub do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  # A repository whose remote has no base branch can't tell the branch's own changes apart, so the
+  # push goes ahead as it did before the check existed.
+  defp verify_push_protected_paths(context, workspace, branch, opts) do
+    case remote_heads(context, workspace, branch, opts) do
+      {:ok, heads} ->
+        with {:ok, _output} <- run_fetch_origin(workspace, opts) do
+          ProtectedPaths.verify(heads.base_sha, "refs/heads/#{branch}", heads.branch_sha, &run_git(&1, workspace, opts))
+        end
+
+      {:error, {:base_branch_not_found, _base_ref}} ->
+        :ok
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # Read from the remote itself: the agent can rewrite its own `refs/remotes/origin/*`.
+  defp remote_heads(context, workspace, branch, opts) do
+    with {:ok, base} <- base_branch(context, workspace, opts),
+         {:ok, output} <- run_git(["ls-remote", "origin", "refs/heads/#{base}", "refs/heads/#{branch}"], workspace, opts) do
+      heads = for line <- String.split(output, "\n", trim: true), [sha, ref] <- [String.split(line, "\t")], into: %{}, do: {ref, sha}
+
+      case Map.fetch(heads, "refs/heads/#{base}") do
+        {:ok, base_sha} -> {:ok, %{base_ref: "origin/#{base}", base_sha: base_sha, branch_sha: Map.get(heads, "refs/heads/#{branch}")}}
+        :error -> {:error, {:base_branch_not_found, "origin/#{base}"}}
+      end
+    end
+  end
+
+  defp base_branch(context, workspace, opts) do
+    case Config.repo_base_branch(issue_repo_key(context)) do
+      {:ok, branch} when is_binary(branch) and branch != "" -> {:ok, branch}
+      _none -> remote_default_branch(workspace, opts)
+    end
+  end
+
+  # Without a configured base branch, a new workspace branch starts from the remote's HEAD.
+  defp remote_default_branch(workspace, opts) do
+    with {:ok, output} <- run_git(["ls-remote", "--symref", "origin", "HEAD"], workspace, opts) do
+      case Regex.run(~r{^ref: refs/heads/(\S+)\tHEAD$}m, output) do
+        [_line, branch] -> {:ok, branch}
+        nil -> {:ok, "main"}
+      end
+    end
+  end
+
+  defp refuse_merge_in_progress(workspace, opts) do
+    if merge_in_progress?(workspace, opts), do: {:error, :merge_in_progress}, else: :ok
+  end
+
+  defp merge_in_progress?(workspace, opts) do
+    match?({:ok, _sha}, run_git(["rev-parse", "--verify", "--quiet", "MERGE_HEAD"], workspace, opts))
+  end
+
+  # Pulls in what was pushed to the branch since (a base-branch update GitHub made, say). A branch
+  # with local commits its remote copy lacks, or with no remote copy, stays as it is.
+  defp fast_forward_to_remote_branch(_workspace, nil, _opts), do: :ok
+
+  defp fast_forward_to_remote_branch(workspace, branch_sha, opts) do
+    case run_git(["merge-base", "--is-ancestor", "HEAD", branch_sha], workspace, opts) do
+      {:ok, _output} ->
+        with {:ok, _output} <- run_merge(["merge", "--ff-only", branch_sha], workspace, opts), do: :ok
+
+      {:error, _reason} ->
+        :ok
+    end
+  end
+
+  defp merge_base_ref(workspace, branch, %{base_ref: base_ref, base_sha: base_sha}, opts) do
+    message = "Merge #{base_ref} into #{branch}"
+
+    case run_merge(["merge", "--no-commit", "-m", message, base_sha], workspace, opts) do
+      {:error, {:git_merge_failed, _status, output}} = error ->
+        if merge_in_progress?(workspace, opts), do: merge_result(workspace, base_ref, output, opts), else: error
+
+      {:ok, output} ->
+        merge_result(workspace, base_ref, output, opts)
+
+      error ->
+        error
+    end
+  end
+
+  defp run_merge(args, workspace, opts) do
+    case run_git(@merge_config ++ args, workspace, opts) do
+      {:error, {:git_failed, _args, status, output}} ->
+        {:error, {:git_merge_failed, status, sanitize_git_output(output)}}
+
+      result ->
+        result
+    end
+  end
+
+  defp merge_result(workspace, base_ref, output, opts) do
+    with {:ok, head} <- run_git(["rev-parse", "HEAD"], workspace, opts),
+         {:ok, conflicts} <- run_git(["diff", "--name-only", "--diff-filter=U"], workspace, opts) do
+      conflicts = String.split(conflicts, "\n", trim: true)
+      status = merge_status(merge_in_progress?(workspace, opts), conflicts)
+
+      {:ok,
+       %{
+         "base" => base_ref,
+         "status" => status,
+         "head" => String.trim(head),
+         "conflicts" => conflicts,
+         "message" => merge_message(status, base_ref),
+         "output" => output |> sanitize_git_output() |> String.trim()
+       }}
+    end
+  end
+
+  defp merge_status(false, _conflicts), do: "synced"
+  defp merge_status(true, []), do: "merge_staged"
+  defp merge_status(true, _conflicts), do: "conflicts"
+
+  defp merge_message("synced", base_ref), do: "The branch contains #{base_ref}; there is nothing to commit."
+  defp merge_message("merge_staged", base_ref), do: "#{base_ref} merged without conflicts. Run `git commit --no-edit` to record the merge."
+
+  defp merge_message("conflicts", base_ref) do
+    "Merging #{base_ref} left conflicts in the listed files. Resolve them, `git add` them, then run " <>
+      "`git -c rerere.enabled=true commit --no-edit` so rerere records the resolution."
   end
 
   defp current_origin_url(workspace, opts) do

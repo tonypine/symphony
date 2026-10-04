@@ -85,6 +85,9 @@ defmodule SymphonyElixir.AgentSandboxConfigTest do
              "./.claude/agents",
              "./.claude/commands",
              "./.claude/hooks",
+             "./.ai/skills",
+             "./.claude/skills",
+             "./.codex/skills",
              "./.git",
              "./mise.toml",
              "./.tool-versions",
@@ -121,6 +124,25 @@ defmodule SymphonyElixir.AgentSandboxConfigTest do
              "denyRead" => expand_home_paths(AgentSandboxConfig.deny_read_paths()),
              "denyWrite" => expand_home_paths(AgentSandboxConfig.deny_write_paths())
            }
+  end
+
+  test "workspace protected paths are the repo-relative deny-write paths without .git" do
+    assert AgentSandboxConfig.workspace_protected_paths() == [
+             "WORKFLOW.md",
+             "symphony.yml",
+             "symphony.local.yml",
+             ".claude/settings.json",
+             ".claude/settings.local.json",
+             ".claude/CLAUDE.md",
+             ".claude/agents",
+             ".claude/commands",
+             ".claude/hooks",
+             ".ai/skills",
+             ".claude/skills",
+             ".codex/skills",
+             "mise.toml",
+             ".tool-versions"
+           ]
   end
 
   test "Claude filesystem settings deny writes to Claude Code persistence files (auto-loaded across sessions)" do
@@ -266,6 +288,9 @@ defmodule SymphonyElixir.AgentSandboxConfigTest do
     assert filesystem =~ ~s("#{Path.join(workspace, "WORKFLOW.md")}"="read")
     assert filesystem =~ ~s("#{Path.join(workspace, ".claude/settings.json")}"="read")
     assert filesystem =~ ~s("#{Path.join(workspace, ".git")}"="read")
+    # An agent must not rewrite its own skills; `github_sync_base` merges the base branch's changes.
+    assert filesystem =~ ~s("#{Path.join(workspace, ".ai/skills")}"="read")
+    assert filesystem =~ ~s("#{Path.join(workspace, ".codex/skills")}"="read")
     assert filesystem =~ ~s("/Volumes"="none")
     assert filesystem =~ ~s("~/.ssh"="none")
     assert filesystem =~ ~s("~/.claude/.credentials.json"="none")
