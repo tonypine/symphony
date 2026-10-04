@@ -60,6 +60,26 @@ defmodule SymphonyElixir.LeftoverProcessesTest do
       assert log =~ "pid=12 cwd=/private/tmp/qa283"
     end
 
+    test "stops a detached Gradle daemon whose registry is in the workspace" do
+      daemon_command = "/opt/jdk/bin/java -cp /Users/me/.gradle/wrapper/dists/gradle-9.8.0/lib/gradle-daemon-main-9.8.0.jar org.gradle.launcher.daemon.bootstrap.GradleDaemon 9.8.0"
+      ours = entry(21, ppid: 1, cwd: @root <> "/.gradle-daemons/9.8.0", command: daemon_command)
+      shared = entry(22, ppid: 1, cwd: "/Users/me/.gradle/daemon/9.8.0", command: daemon_command)
+
+      capture_log(fn ->
+        stopped =
+          LeftoverProcesses.stop_under([@root],
+            table: table([{:ok, [ours, shared]}, {:ok, []}]),
+            signal: recording_signal(),
+            own_pid: 99
+          )
+
+        assert Enum.map(stopped, & &1.pid) == [21]
+      end)
+
+      assert_received {:signal, 21, "TERM"}
+      refute_received {:signal, _pid, _signal}
+    end
+
     test "spares Symphony and the processes it still runs, and logs CPU time" do
       symphony = entry(50, ppid: 1, cwd: @root)
       git = entry(51, ppid: 50, cwd: @root, command: "git -C #{@root} status")

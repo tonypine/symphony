@@ -2046,6 +2046,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
         printf 'GITHUB=%s\\n' "${GITHUB_TOKEN-<unset>}" >> "$trace_file"
         printf 'SSH_AUTH_SOCK=%s\\n' "${SSH_AUTH_SOCK-<unset>}" >> "$trace_file"
         printf 'RUNTIME=%s\\n' "${SYMPHONY_AGENT_RUNTIME-<unset>}" >> "$trace_file"
+        printf 'GRADLE_OPTS=%s\\n' "${GRADLE_OPTS-<unset>}" >> "$trace_file"
         printf '%s\\n' '{"type":"system","subtype":"init","session_id":"sess-env-strip","cwd":"/tmp","tools":[],"mcp_servers":[],"model":"claude-opus-4-5","permissionMode":"default","apiKeySource":"env"}'
         printf '%s\\n' '{"type":"result","subtype":"success","duration_ms":500,"duration_api_ms":400,"is_error":false,"num_turns":1,"result":"Done.","session_id":"sess-env-strip","total_cost_usd":0.001,"usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"server_tool_use":{"web_search_requests":0}}}'
         exit 0
@@ -2071,6 +2072,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
         assert trace =~ "GITHUB=<unset>"
         assert trace =~ "SSH_AUTH_SOCK=<unset>"
         assert trace =~ "RUNTIME=1"
+        assert trace =~ ~r/^GRADLE_OPTS="-Dorg.gradle.daemon.registry.base=\S*\/workspaces\/[A-Z]+-ENVSTRIP\/.gradle-daemons"$/m
 
         Enum.each(secret_vars, fn {_name, value} ->
           refute trace =~ value, "secret value leaked into Claude subprocess: #{value}"

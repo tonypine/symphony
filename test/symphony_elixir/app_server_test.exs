@@ -1860,6 +1860,7 @@ defmodule SymphonyElixir.AppServerTest do
       printf 'GITHUB=%s\\n' "${GITHUB_TOKEN-<unset>}" >> "$trace_file"
       printf 'SSH_AUTH_SOCK=%s\\n' "${SSH_AUTH_SOCK-<unset>}" >> "$trace_file"
       printf 'RUNTIME=%s\\n' "${SYMPHONY_AGENT_RUNTIME-<unset>}" >> "$trace_file"
+      printf 'GRADLE_OPTS=%s\\n' "${GRADLE_OPTS-<unset>}" >> "$trace_file"
 
       count=0
       while IFS= read -r _line; do
@@ -1902,6 +1903,7 @@ defmodule SymphonyElixir.AppServerTest do
       assert trace =~ "GITHUB=<unset>"
       assert trace =~ "SSH_AUTH_SOCK=<unset>"
       assert trace =~ "RUNTIME=1"
+      assert trace =~ ~r/^GRADLE_OPTS="-Dorg.gradle.daemon.registry.base=\S*\/workspaces\/[A-Z]+-ENVSTRIP\/.gradle-daemons"$/m
 
       Enum.each(secret_vars, fn {_name, value} ->
         refute trace =~ value, "secret value leaked into agent subprocess: #{value}"
