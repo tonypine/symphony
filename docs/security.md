@@ -70,10 +70,12 @@ the tools then trust what that push put on the branch.
 The `protected-paths` CI workflow covers that gap. On a pull request from an `auto/*` branch it
 runs `mix protected_paths.check`, which fails when the pull request's own commits since the
 merge-base with the base branch change one of those paths or a symlink's target. Changes merged
-from the base branch pass. It runs on `pull_request_target`, so the workflow and the check come
-from the base branch and the pull request can't change them. A person who made such a change on
-purpose waives it with the `protected-paths-approved` label, or with an approving review of the
-current head commit (bots don't count).
+from the base branch pass. It runs only on `pull_request_target`, so the workflow and the check
+come from the base branch and the pull request can't change them. A person who made such a change
+on purpose waives it in one of two ways. The `protected-paths-approved` label counts only when a
+person other than the pull request's author added it, since an agent may act as the author. An
+approving review of the current head commit counts too, but a review doesn't start a run, so after
+approving, re-run the job. Bots count for neither.
 
 Every local agent may also write one per-user cache folder, `~/Library/Caches/symphony/agent` on
 macOS, which holds its Hex home, its `elixir_make` cache and Dialyxir's core PLTs (see
