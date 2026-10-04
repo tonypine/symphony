@@ -2035,6 +2035,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
         fake_claude = Path.join(test_root, "fake-claude")
         trace_file = Path.join(test_root, "claude-env-strip.trace")
         File.mkdir_p!(workspace)
+        File.write!(Path.join(workspace, "settings.gradle.kts"), "")
 
         File.write!(fake_claude, """
         #!/bin/sh
