@@ -26,17 +26,20 @@ description:
 ## Steps
 
 1. Identify current branch and confirm remote state.
-2. Run local validation before pushing. `make check` is useful for the inner
-   loop, but it is not enough for push readiness. The push gate must include
-   the coverage check (`make coverage` or `make all`) and finish with `Coverage: 100.00%`
-   against `Threshold: 100.00%`. The repo enforces 100% coverage in the CI
-   `coverage report` job; pushing with anything lower (e.g. `99.89%`) is the
-   most common cause of failed auto-PRs. If coverage is short, add tests that
-   exercise the missing branches; reach for `mix.exs` `test_coverage`
-   `ignore_modules` only for genuinely untestable I/O shims, and never as a
-   shortcut to make the gate pass. In sandboxed Codex workspaces, prefer
-   `HEX_HOME=/private/tmp/symphony-hex-home make all` so Hex and Dialyzer
-   cache writes stay in a writable location.
+2. Run the targeted pre-push checks from `WORKFLOW.md` before pushing:
+   `mix format --check-formatted`, `mix compile --warnings-as-errors`,
+   `mix specs.check`, `mix credo --strict <changed files>`, and every new or
+   changed test file plus the test files of the modules you changed
+   (`mix test <file>` or `<file>:<line>`). Don't run the full `mix test`,
+   `make check`, `make coverage`, `make all` or Dialyzer locally: CI is the
+   gate for the full suite, the 100% coverage report and Dialyzer, and those
+   runs are slow in a sandbox and load the shared host. Plan a test for every
+   new branch anyway. When CI's `coverage report` job finds a gap, treat it
+   like any red check: add tests that exercise the missing branches. Reach for
+   `mix.exs` `test_coverage` `ignore_modules` only for genuinely untestable I/O
+   shims, never as a shortcut. `make all` stays an optional extra for a
+   change to shared infrastructure (the config schema, orchestrator core); run
+   it with `TEST_MAX_CASES=2 BEAM_SCHEDULERS=2` and record why in the workpad.
 3. Push branch to `origin` with upstream tracking if needed, using whatever
    remote URL is already configured.
 4. If push is not clean/rejected:
@@ -74,11 +77,12 @@ description:
 # Identify branch
 branch=$(git branch --show-current)
 
-# Fast local confidence gate while iterating
-HEX_HOME=/private/tmp/symphony-hex-home make check
-
-# Required push-readiness gate
-HEX_HOME=/private/tmp/symphony-hex-home make all
+# Targeted pre-push checks (CI runs the full suite, coverage and Dialyzer)
+mix format --check-formatted
+mix compile --warnings-as-errors
+mix specs.check
+mix credo --strict <changed files>
+mix test <new or changed test files> <test files of the changed modules>
 
 # Initial push: respect the current origin remote.
 git push -u origin HEAD
