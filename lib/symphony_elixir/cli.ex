@@ -456,7 +456,7 @@ defmodule SymphonyElixir.CLI do
   @spec runtime_deps() :: deps()
   defp runtime_deps do
     %{
-      check_config: &Config.validate_repo_workflows/0,
+      check_config: &Config.check_repo_workflows/0,
       check_findings: &Config.check_findings/0,
       file_regular?: &File.regular?/1,
       init: &SymphonyElixir.Init.run/1,
