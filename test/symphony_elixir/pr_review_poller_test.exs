@@ -673,6 +673,51 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     assert PrReviewPoller.pending_pr_head_ref("issue-1780") == "auto/ACME-1780"
   end
 
+  test "discovers a Human Review issue's PR like an In Review one, unless human_review is null" do
+    now = ~U[2026-05-01 09:00:00Z]
+    issue = %{in_review_issue(updated_at: now) | state: "Human Review"}
+    Application.put_env(:symphony_elixir, :pr_review_test_issues, [issue])
+    Application.put_env(:symphony_elixir, :pr_review_test_activity, open_activity(now))
+
+    assert :ok =
+             RunStore.put_run(%{
+               repo_key: @repo_key,
+               run_id: "run-1",
+               issue_id: issue.id,
+               issue_identifier: issue.identifier,
+               status: "success",
+               workspace_path: "/tmp/workspaces/ACME-1780",
+               worker_host: nil,
+               started_at: DateTime.add(now, -120, :second),
+               ended_at: DateTime.add(now, -60, :second)
+             })
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_human_review_state: nil,
+      pr_review_mode: "polling",
+      pr_review_auto_merge: false,
+      pr_review_cooldown_minutes: 30,
+      pr_review_stale_days: 7
+    )
+
+    assert {:ok, %{discovered: 0}} =
+             PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      pr_review_mode: "polling",
+      pr_review_auto_merge: false,
+      pr_review_cooldown_minutes: 30,
+      pr_review_stale_days: 7
+    )
+
+    assert {:ok, %{discovered: 1}} =
+             PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+    assert [%{issue_id: "issue-1780", status: "watching"}] = RunStore.list_pr_reviews()
+  end
+
   test "cross-repo reviewer comments remain watching and do not expose a PR head ref" do
     now = ~U[2026-05-01 09:00:00Z]
     latest_comment_at = DateTime.add(now, -31, :minute)

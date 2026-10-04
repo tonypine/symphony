@@ -11,7 +11,8 @@ defmodule SymphonyElixir.QaAgent do
 
   The agent follows the selected playbooks (see `SymphonyElixir.QaAgent.Selection`),
   writes evidence under `qa-evidence/`, and answers with one JSON object:
-  `pass | fail | blocked` with per-step results. An answer without that object gets
+  `pass | fail | blocked` with per-step results, and `needs_person` when only a person can do what
+  is left (`SymphonyElixir.HumanReview`). An answer without that object gets
   one follow-up turn in the same session asking for it. A pass that runs the `macos_app`
   playbook also gets the host-side `qa_*` tools of a `SymphonyElixir.QaDriver`,
   stopped (quitting every app it launched) when the pass ends. A pass that runs the
@@ -62,6 +63,7 @@ defmodule SymphonyElixir.QaAgent do
           required(:steps) => [step()],
           required(:findings) => [String.t()],
           optional(:reason) => String.t(),
+          optional(:needs_person) => true,
           optional(:follow_ups) => pos_integer()
         }
   @type job :: %{
@@ -198,6 +200,10 @@ defmodule SymphonyElixir.QaAgent do
     - `blocked`: you could not test the change (it does not build, a tool is missing, the
       environment refuses). Put the cause in `reason`.
 
+    Set `needs_person` to true when only a person can do what is left: provide a missing secret,
+    API key or account, or check a step by hand or on a real device. Leave it false when the cause is
+    the build, the code, or this QA setup's tools, which an agent can fix.
+
     When one playbook is blocked, mark its steps `blocked` and continue with the other playbooks'
     steps: report `pass` or `fail` for every step that could run. The verdict stays `blocked` while
     any step is blocked, with each failing step's defect in `details`.
@@ -219,7 +225,8 @@ defmodule SymphonyElixir.QaAgent do
         }
       ],
       "findings": ["<required for fail: one actionable defect per entry>"],
-      "reason": "<required for blocked>"
+      "reason": "<required for blocked>",
+      "needs_person": true | false
     }
     """
   end
@@ -384,7 +391,8 @@ defmodule SymphonyElixir.QaAgent do
          reason = trimmed(Map.get(decoded, "reason")),
          :ok <- validate_verdict(verdict, steps, findings, reason) do
       result = %{verdict: verdict, summary: trimmed(Map.get(decoded, "summary")) || "", steps: steps, findings: findings}
-      {:ok, if(reason, do: Map.put(result, :reason, reason), else: result)}
+      result = if reason, do: Map.put(result, :reason, reason), else: result
+      {:ok, if(Map.get(decoded, "needs_person") == true, do: Map.put(result, :needs_person, true), else: result)}
     else
       {:error, reason} -> {:error, {:malformed_qa_response, reason}}
     end

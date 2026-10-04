@@ -320,8 +320,8 @@ defmodule SymphonyElixir.EpicLanesTest do
     end
   end
 
-  test "human_gated_state?/1 is true for Backlog, Triage and In Review" do
-    assert Enum.all?(["Backlog", " triage", "In Review"], &EpicLanes.human_gated_state?/1)
+  test "human_gated_state?/1 is true for Backlog, Triage, In Review and Human Review" do
+    assert Enum.all?(["Backlog", " triage", "In Review", "Human Review"], &EpicLanes.human_gated_state?/1)
     refute Enum.any?(["Todo", "Merging", nil], &EpicLanes.human_gated_state?/1)
   end
 

@@ -93,6 +93,27 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       assert BreakdownReview.sub_issues_to_move(:promote, history([approval()], subs), no_waiting_state) == []
     end
 
+    test "a move out of Human Review approves and rejects a plan exactly as one out of In Review" do
+      settings = Config.settings!()
+      subs = [history_sub("c1", "Backlog")]
+
+      approved = history([change("Human Review", @waiting, @approved)], subs)
+      assert ids(BreakdownReview.sub_issues_to_move(:promote, approved, settings)) == ["c1"]
+
+      rejected =
+        history(
+          [change("Todo", "In Progress", @started), change("In Progress", "Human Review", @reviewed), change("Human Review", "Rework", @approved)],
+          [history_sub("c1", "Backlog"), history_sub("c2", "Backlog", created_at: @later)]
+        )
+
+      assert ids(BreakdownReview.sub_issues_to_move(:replace, rejected, settings)) == ["c1"]
+
+      # With the state turned off, a move out of it approves nothing.
+      off = %{settings | tracker: %{settings.tracker | human_review_state: nil}}
+      assert BreakdownReview.sub_issues_to_move(:promote, approved, off) == []
+      assert BreakdownReview.sub_issues_to_move(:replace, rejected, off) == []
+    end
+
     test "a move Symphony made itself is never an approval" do
       settings = Config.settings!()
       subs = [history_sub("c1", "Backlog")]

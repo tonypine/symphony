@@ -1272,10 +1272,12 @@ When enabled:
   log it, keep the issue in its active state and dispatch it again, so the next run reviews and
   pushes those commits. A workspace it cannot read (an SSH worker, no git checkout) does not block
   the transition.
-- `linear_update_state` MUST refuse `In Review` from agent sessions with a clear error telling the
-  agent that Symphony moves the issue once the PR is open, rather than redirecting the target
-  state. A `breakdown` parent and a ticket whose title starts with `Final verification:` open no
-  PR, so they MAY move to `In Review`.
+- `linear_update_state` MUST refuse `In Review`, and the `issues.states.human_review` state, from
+  agent sessions with a clear error telling the agent that Symphony moves the issue once the PR is
+  open, rather than redirecting the target state. The refusal applies before the human review
+  redirect, so a run that posted a `linear_request_human_action` request cannot skip QA; its blocked
+  PR reaches the human review state through the QA verdict. A `breakdown` parent and a ticket whose
+  title starts with `Final verification:` open no PR, so they MAY move to either state.
 - The CI poller MUST discover issues in `state` as well as `In Review`. Red CI follows the normal
   `In Progress` fix loop and escalation. Green CI on an issue in `state` starts a QA pass for the
   PR head SHA, at most one per issue and `max_concurrent` overall. GitHub runs no `pull_request`
@@ -1680,6 +1682,8 @@ not require recognizing or validating extension fields unless that extension is 
 - `issues.states.terminal`: list of strings, default `["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]`
 - `issues.states.waiting_on_sub_issues`: string or null, default `Waiting on sub-tickets`; added to
   the active states when set
+- `issues.states.human_review`: string or null, default `Human Review`; null turns it off. It MUST
+  NOT be one of the active states (see the human review rule)
 - `issues.poll_interval_ms`: integer, default `30000`
 - `poller.backoff_base_ms`: positive integer or null; null uses the effective poll interval
 - `poller.max_backoff_ms`: positive integer, default `300000`
@@ -2175,9 +2179,29 @@ An issue is dispatch-eligible only if all are true:
     before the move and skips it unless it is still `In Progress`; a failed read skips every
     parent until the next poll. Agents cannot move an issue there: `linear_update_state` refuses the state,
     because a human moving a parent there approves its plan (next rule).
+- Human review rule:
+  - An issue in the `issues.states.human_review` state waits for a person only; it is never
+    dispatched. The CI and PR review pollers watch its PR as in `In Review`, and wherever a
+    person's move out of `In Review` means something (a plan approval or rejection, a plan comment),
+    a move out of the human review state means the same. Merging, Rework and Done read only the
+    state moved to, so they behave the same from either.
+  - The service puts an issue there instead of `In Review` when only a person can move it on: an
+    Auto Review QA verdict `blocked` whose answer sets `needs_person`; a `Final verification:`
+    parent walkthrough that passes, or is blocked with no failing step, with `needs_person` set;
+    `linear_update_state` to `In Review` for a `breakdown` parent whose ticket has an
+    `auto_review.acceptance_gate.escalate` label other than `breakdown` or matches one of its
+    ticket patterns; and `linear_update_state` to `Backlog` or `In Review` from a run that posted
+    (or found open) a `linear_request_human_action` request (with Auto Review on, only `Backlog`
+    or a PR-less issue: the Auto Review rule refuses the rest). The tool's answer names the state.
+  - When the state is null, or the startup check finds a configured team without it (the state is
+    then off until restart, with a warning), those issues go to `In Review` as before.
+  - The human-action update lists issues in the state first, the state API reports
+    `counts.human_review` and a `human_review` list of watched issues in it, and a supervisor never
+    moves an issue out of it on the operator's behalf.
 - Plan review rule:
   - The breakdown run leaves its sub-issues in `Backlog` and moves the parent to `In Review`
-    (`linear_update_state` allows `In Review` for a `breakdown` parent even with Auto Review on).
+    (`linear_update_state` allows `In Review` for a `breakdown` parent even with Auto Review on),
+    or to the human review state when the ticket asks for a human review (human review rule).
   - Comments: a person's comment on a `breakdown` parent's plan is read on the poll that follows
     it. Only comments with a user and no bot actor count, and not Symphony's own (the workpad, a
     QA report, an `Action needed` request, a promote or cancel record, a run-failure note, its own
@@ -2202,7 +2226,7 @@ An issue is dispatch-eligible only if all are true:
     - `Rework` keeps its meaning: a full re-plan.
   - Approval: on each poll, for a `breakdown` parent in the waiting state with a sub-issue in
     `Backlog` that is not running or claimed, the service reads the parent's state history. When
-    its latest state change is `In Review` to the waiting state, every sub-issue that has been in
+    its latest state change is `In Review` (or the human review state) to the waiting state, every sub-issue that has been in
     `Backlog` since before that change (created before it, no state change after it) moves to
     `Todo` in one batch. Blocked-by links keep the order. A parent the service parked from
     `In Progress` was not approved, so nothing moves. Only a person's move approves: the service

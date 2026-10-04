@@ -710,6 +710,16 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
       refresh(state, [parent])
       assert_receive {:notification_event, %Notifications.Event{event: "forced_human_gate", issue_identifier: "MT-EPIC", reason: "MT-EPIC's plan is waiting for your review"}}
     end
+
+    test "a forced parent whose plan reaches Human Review is noticed as waiting for review too", ctx do
+      write_forced_workflow!(ctx)
+      :ok = Notifications.subscribe()
+      parent = %{parent([issue("part-1", "MT-P1", "Backlog")]) | state: "Human Review"}
+      state = %{orchestrator_state(1) | forced: %{"epic-1" => queue_entry(%{parent | state: "Todo"}, DateTime.utc_now())}}
+
+      refresh(state, [parent])
+      assert_receive {:notification_event, %Notifications.Event{event: "forced_human_gate", issue_identifier: "MT-EPIC"}}
+    end
   end
 
   describe "Auto Review QA passes" do

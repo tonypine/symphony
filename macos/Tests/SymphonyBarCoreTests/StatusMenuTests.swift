@@ -87,6 +87,23 @@ final class StatusMenuTests: XCTestCase {
         XCTAssertNil(StatusMenu.updateUnblocksLine(-1))
     }
 
+    func testDetailLinesSayHowManyTicketsWaitInHumanReview() {
+        var waiting = StateSnapshot(running: 2, retrying: 1, updateUnblocks: 1, humanReview: 3)
+        waiting.pause = .init(reason: "deploy freeze", since: pausedAt)
+
+        XCTAssertEqual(
+            StatusMenu.detailLines(.paused(waiting, external: false), now: pausedAt.addingTimeInterval(600), timeZone: utc),
+            [
+                "2 running · 1 retrying",
+                "3 tickets wait on you in Human Review",
+                "Paused since 12:16: deploy freeze",
+                "Update to unblock 1 ticket",
+            ]
+        )
+        XCTAssertEqual(StatusMenu.humanReviewLine(1), "1 ticket waits on you in Human Review")
+        XCTAssertNil(StatusMenu.humanReviewLine(0))
+    }
+
     func testForcedTicketsShowOnlyWhileSymphonyAnswers() {
         let ticket = StateSnapshot.ForcedTicket(identifier: "TP-123", summary: "implementation · running")
         let forced = StateSnapshot(running: 1, forced: [ticket])
