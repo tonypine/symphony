@@ -395,7 +395,7 @@ defmodule SymphonyElixir.QaAgentTest do
 
       walkthrough = QaAgent.prompt(job(%{issue: parent, verification_issue: verification, base_ref: "origin/main"}), nil)
       assert walkthrough =~ ~r/Do not run the test suite, `make all`, coverage or static analysis such as Dialyzer: CI runs\s+them on every merge to `origin\/main`/
-      assert walkthrough =~ ~s("covered by CI on origin/main")
+      refute walkthrough =~ "covered by CI on"
       refute walkthrough =~ "ran them green on this PR head"
 
       macos_app = %{build: "make app", app: "build/App.app"}
@@ -406,6 +406,39 @@ defmodule SymphonyElixir.QaAgentTest do
         assert prompt =~ ~r/Do not run the project's test suite, `make all`, coverage or (Dialyzer|static analysis): CI already\s+ran them/,
                "#{kind} playbook must leave the test suite to CI"
       end
+    end
+
+    test "a parent walkthrough judges test, coverage and CI criteria by CI's run on the base branch head" do
+      parent = issue(%{id: "issue-parent", identifier: "TP-243", title: "Parent", description: "- [ ] make all is green"})
+      verification = issue(%{id: "issue-fv", identifier: "TP-910", title: "Final verification: Parent", description: "- [ ] CI is green"})
+      walkthrough = QaAgent.prompt(job(%{issue: parent, verification_issue: verification, base_ref: "origin/main"}), nil)
+
+      [_intro, rule] = String.split(walkthrough, "Do not run the test suite", parts: 2)
+      [rule, _rest] = String.split(rule, "Write every artifact", parts: 2)
+
+      assert "Do not run the test suite" <> rule == """
+             Do not run the test suite, `make all`, coverage or static analysis such as Dialyzer: CI runs
+             them on every merge to `origin/main`. Judge a criterion that asks for tests, coverage or CI to
+             pass by CI's runs on `#{@sha}`, the commit you are on:
+
+             - Read the runs with `gh run list --commit #{@sha} --json databaseId,workflowName,status,conclusion,url`
+               where `gh` is allowed, else through GitHub's public API:
+               `curl -fsS "https://api.github.com/repos/<owner>/<repo>/actions/runs?head_sha=#{@sha}"`, with
+               `<owner>/<repo>` from `git remote get-url origin`.
+             - Every run completed with conclusion `success`: mark the criterion `pass` and put each run's URL
+               and conclusion in `details`.
+             - A run failed (any conclusion other than `success`, `skipped` or `neutral`): mark the criterion
+               `fail`, and in `details` and `findings` name the failing workflow and job (`gh run view <id>
+               --json jobs`, or the run's `jobs_url`) with the run URL. A red `origin/main` is a defect.
+             - Mark it `skipped` only when no run can be read (the commands are refused, or CI has no run for
+               this commit) or a run is still in progress, and say which in `details`, with the run URL when
+               there is one.
+
+             Build only what you need to use the feature, and judge it by what a user sees.
+
+             """
+
+      refute QaAgent.prompt(job(), nil) =~ "actions/runs"
     end
 
     test "a parent walkthrough does not look up the parent of the parent" do
