@@ -134,15 +134,15 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   # --- Sandbox settings ---
 
   @doc false
-  @spec build_sandbox_settings(Agent.NetworkAccess.t(), [String.t()], [String.t()]) :: map()
-  def build_sandbox_settings(%Agent.NetworkAccess{mode: mode} = network_access, allow_read_paths \\ [], allow_write_paths \\ []) do
+  @spec build_sandbox_settings(Agent.NetworkAccess.t(), [String.t()], [String.t()], [String.t()]) :: map()
+  def build_sandbox_settings(%Agent.NetworkAccess{mode: mode} = network_access, allow_read_paths \\ [], allow_write_paths \\ [], deny_write_paths \\ []) do
     base =
       %{
         "sandbox" => %{
           "enabled" => true,
           "failIfUnavailable" => true,
           "allowUnsandboxedCommands" => false,
-          "filesystem" => AgentSandboxConfig.claude_filesystem_settings(allow_read_paths, allow_write_paths)
+          "filesystem" => AgentSandboxConfig.claude_filesystem_settings(allow_read_paths, allow_write_paths, deny_write_paths)
         }
       }
 
@@ -173,9 +173,9 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     end
   end
 
-  defp build_claude_settings(network_access, allow_read_paths, allow_write_paths) do
+  defp build_claude_settings(network_access, allow_read_paths, allow_write_paths, deny_write_paths) do
     network_access
-    |> build_sandbox_settings(allow_read_paths, allow_write_paths)
+    |> build_sandbox_settings(allow_read_paths, allow_write_paths, deny_write_paths)
     |> Map.put("permissions", %{
       "deny" => [
         "Bash(gh:*)",
@@ -642,14 +642,15 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     end
   end
 
-  defp write_claude_runtime_files(_workspace, worker_host, settings, mcp_session, socket_path, remote_shim_path) do
+  defp write_claude_runtime_files(workspace, worker_host, settings, mcp_session, socket_path, remote_shim_path) do
     network_access = settings.agent.network_access
     allow_read_paths = workspace_sandbox_allow_read_paths(settings)
     allow_write_paths = workspace_sandbox_allow_write_paths(settings) ++ host_allow_write_paths(worker_host)
     effective_shim_path = effective_shim_path(mcp_session, remote_shim_path)
     effective_socket_path = socket_path || mcp_session.socket_path
 
-    settings_json = build_claude_settings(network_access, allow_read_paths, allow_write_paths)
+    deny_write_paths = host_deny_write_paths(workspace, worker_host)
+    settings_json = build_claude_settings(network_access, allow_read_paths, allow_write_paths, deny_write_paths)
     settings_dir = claude_settings_dir(worker_host, mcp_session)
     settings_path = Path.join(settings_dir, "settings.json")
     mcp_config_path = Path.join(settings_dir, "mcp_config.json")
@@ -694,6 +695,14 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   end
 
   defp host_allow_write_paths(_worker_host), do: []
+
+  # The real files behind symlinked skills (`.ai/skills/pull -> ../../priv/skills/pull`). An SSH
+  # worker's workspace isn't on this host, so it keeps the plain deny list.
+  defp host_deny_write_paths(workspace, nil) when is_binary(workspace) do
+    for path <- AgentSandboxConfig.workspace_link_targets(workspace), do: "./" <> path
+  end
+
+  defp host_deny_write_paths(_workspace, _worker_host), do: []
 
   defp claude_settings_dir(nil, %{id: id}) when is_binary(id) do
     Path.join(System.tmp_dir!(), "#{@settings_dir_prefix}#{id}")

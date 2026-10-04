@@ -1305,7 +1305,11 @@ When enabled:
   resolved inside the worktree, launched from a copy the last successful `qa_build` made in a
   directory the agent sandbox cannot write, refused under the same worktree check, always with
   `SYMPHONY_BAR_QA_ROOT` set to a private directory), `qa_screenshot` (new files in `qa-evidence/`, never replacing or following an existing entry), and
-  `qa_ax_tree`, `qa_ax_press`, `qa_ax_set_value`. Every tool that takes a PID MUST refuse a PID
+  `qa_ax_tree`, `qa_ax_press`, `qa_ax_set_value`, and `qa_put_file`, which returns a path the app
+  can open for a fixture file the agent wrote (on a separate QA host, a copy in the pass's run
+  directory there). `qa_put_file` MUST read only a regular file of bounded size that resolves inside
+  the QA worktree or the pass's temp folder, and MUST refuse symlinks and files with other hard
+  links. Every tool that takes a PID MUST refuse a PID
   the pass did not launch. Apps still running when the pass ends MUST be quit. A missing Screen
   Recording or Accessibility grant MUST surface as a `qa_permission_missing` tool error that tells
   the agent to mark the app steps `blocked`, finish the other playbooks' steps and answer
@@ -1366,6 +1370,11 @@ When enabled:
   `max_fix_attempts` failures were sent back. Results are stored per head SHA; a failed move is
   retried on the next poll, and an issue back in `state` on the same SHA after a `fail` counts as
   another failure.
+- Before applying a verdict, Symphony MUST read the issue's state again and the PR's last polled
+  state and head. When the issue left `state` (a human approved or merged it while QA ran), the PR
+  is merged or closed, or the head moved past the tested SHA, the report is still written but the
+  issue is not moved, no result is stored for the SHA, and `QA outcome not applied` is logged with
+  the reason. A state that cannot be read again applies the verdict.
 - Each pass rewrites one `## Symphony QA Report` issue comment (an exception to the
   single-workpad rule, written by Symphony only), records a run with `kind: "qa"`, tokens and
   runtime in the run store, and emits `qa_passed` or `qa_failed`.
@@ -1525,9 +1534,9 @@ Dynamic reload behavior:
 
 - The Elixir implementation polls repo `WORKFLOW.md` files and keeps each `WorkflowStore` on the
   last known good workflow when reload fails.
-- For `workflow_source: ref`, the workflow is re-read from the remote base branch at startup and
-  on every dispatch after the pre-dispatch fetch, so a change pushed to the base branch applies to
-  the next dispatch without restart. A missing or invalid workflow on the ref is logged and the
+- For `workflow_source: ref`, the workflow is re-read from the remote base branch at startup,
+  on every dispatch after the pre-dispatch fetch, and before every Auto Review QA pass, so a change
+  pushed to the base branch applies to the next dispatch or QA pass without restart. A missing or invalid workflow on the ref is logged and the
   last known good workflow is kept. Until the ref has been read once, the local file is read
   with a warning, and readers switch to the ref without restart once it resolves.
 - `symphony.yml` is re-read through the config layer during runtime operations such as dispatch,
@@ -1841,10 +1850,13 @@ Important nuance:
   re-dispatched runs until the issue leaves `Rework`, so rework an earlier run pushed counts and a
   fresh `Rework` on an unchanged PR does not. Nothing else moves it out of `Rework`.
 - Outside `Rework` and `Merging`, an issue whose attached PR's head is the workspace `HEAD`, where
-  that `HEAD` differs from the one the run started on and every check on it has passed, MUST end
-  the run and move to the post-PR state, even while the review, CI, QA or conflict signal that
-  started the run is still pending. Such a signal is only cleared once the run ends, so without
-  this a fix run on an open PR never ends on its own.
+  that `HEAD` differs from the one the run started on and has checks that are still running or
+  have all passed, MUST end the run and move to the post-PR state, even while the review, CI, QA
+  or conflict signal that started the run is still pending. Such a signal is only cleared once the
+  run ends, so without this a fix run on an open PR never ends on its own. The CI poller then owns
+  that head: QA on green, a flaky re-run or a CI-fix run on red. A head with no checks reported yet
+  or a failed check does not end the run this way, nor does a head the pre-push reviewer applies to
+  and has not yet passed: the run continues so the reviewer runs on it first.
 - A run on an active issue with an attached PR and no pending review, CI, QA or conflict signal
   (outside `Rework` and `Merging`) MUST end after a turn only once its work is on the PR: the
   workspace `HEAD` is the PR head and, when the pre-push reviewer applies to the run, that head is
@@ -1854,8 +1866,9 @@ Important nuance:
 - When the workspace `HEAD` is readable, two consecutive turns with no new commit, no issue state
   change, no newly attached PR and no reviewer-agent verdict MUST end the run, move the issue to
   `Backlog` and post a comment saying why. This does not apply in `Merging`, nor while the attached
-  PR's head is the workspace `HEAD` and that head has checks still pending; such a run keeps
-  turning up to `agent.max_turns`.
+  PR's head is the workspace `HEAD` and that head has checks still pending; such a run (in
+  `Rework`, one that started on that head, or one whose pushed head awaits the pre-push reviewer)
+  keeps turning up to `agent.max_turns`.
 - The first turn SHOULD use the full rendered task prompt. Implementations MAY use a compact
   bootstrap prompt when the target agent transport cannot safely carry the full rendered prompt as a
   single startup message, provided the compact prompt preserves hard security rules and directs the
@@ -2963,7 +2976,7 @@ Optional client-side tool extension:
 - Current standardized optional tools: scoped Linear tools whose protocol-facing names match
   `^[a-zA-Z0-9_-]+$`, such as `linear_get_current_issue`, `linear_get_comments`, and
   `linear_update_state`, and scoped GitHub tools such as `github_get_pull_request`,
-  `github_fetch_origin`, `github_push_branch`, and `github_merge_pull_request`.
+  `github_fetch_origin`, `github_sync_base`, `github_push_branch`, and `github_merge_pull_request`.
 - If implemented, supported tools SHOULD be advertised to the agent session during startup using the
   protocol mechanism supported by the configured adapter.
 - Unsupported tool names SHOULD still return a failure result using the targeted protocol and
@@ -3074,6 +3087,24 @@ Scoped GitHub tool extension contract:
 - `github_fetch_origin`, if exposed, MUST fetch only the verified `origin`
   remote for the current workspace and MUST NOT accept prompt-supplied refspecs
   or remote names.
+- `github_sync_base`, if exposed, MUST fetch the verified `origin`, then merge
+  only the repository's base branch (the configured `base_branch`, else the
+  remote's `HEAD` branch) into the checked-out workspace branch, after
+  fast-forwarding to that branch's `origin` copy when it is ahead. It runs
+  outside the agent sandbox so the merge can update write-protected workspace
+  paths; it MUST run with repo hooks off, MUST NOT create the merge commit (the
+  agent commits or resolves conflicts in its sandbox), and MUST refuse a branch
+  whose own changes since the merge-base touch a write-protected path.
+- `github_push_branch`, if exposed, MUST refuse a push whose branch changes a
+  write-protected workspace path itself, except files identical to the
+  branch's `origin` copy.
+- For both, a write-protected path includes the files a symlink inside one
+  points at (`.ai/skills/pull -> ../../priv/skills/pull` protects
+  `priv/skills/pull`). Both MUST read the base and branch heads from the remote
+  (`git ls-remote`), not from local remote-tracking refs, which the agent can
+  rewrite.
+- These checks bind only the scoped tools. A `git push` from the agent's shell
+  skips them, and what it pushed then counts as the branch's `origin` copy.
 - `github_merge_pull_request`, if exposed, MUST merge only the current
   workspace branch's pull request, MUST refuse unless the current issue is in
   the human-approved `Merging` state, MUST refuse while any check is failing or
@@ -3255,7 +3286,7 @@ Orchestrator behavior on tracker errors:
   (until the pause ends, or 5 s doubling up to 60 s) and retries in the same run and session, for at
   most five minutes. This covers the issue enrichment and workpad bootstrap (the Todo → In Progress
   move, the workpad read and create), the post-turn issue refresh, the dependency-approval move, the
-  move after a finished rework or a green pushed head, the idle park and its note, and the parent
+  move after a finished rework or a pushed head with CI running or green, the idle park and its note, and the parent
   walkthrough's parent read, QA report, gap tickets and final state move (the verdict is kept while
   that move waits, for up to 30 minutes rather than five, since a lost verdict means running the
   whole QA walkthrough again and filing its gap tickets twice). The run tells the orchestrator how long each wait lasts,

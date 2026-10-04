@@ -8,6 +8,8 @@ defmodule SymphonyElixir.AutoReview do
   and green CI starts a QA pass (`on_green/5`) that runs in the background
   (`SymphonyElixir.QaRunner`, `run_qa/2`):
 
+  - the repo's `WORKFLOW.md` is re-read from its base branch (`SymphonyElixir.WorkflowSource`),
+    so playbooks merged since the last dispatch apply;
   - `SymphonyElixir.QaAgent.Selection` decides from the changed paths, labels and
     ticket whether to test and with which playbooks; a skip goes straight to
     `In Review` with a note;
@@ -18,7 +20,9 @@ defmodule SymphonyElixir.AutoReview do
     `auto_review.max_fix_attempts` is used up;
   - a pass whose QA agent runs into the provider's usage limit gets no verdict: the
     issue stays in Auto Review, the orchestrator holds the provider's runs until the
-    limit resets (`agent.usage_limit.auto_pause`), and the pass runs again after that.
+    limit resets (`agent.usage_limit.auto_pause`), and the pass runs again after that;
+  - a pass that ends after its issue left Auto Review, its PR merged or closed, or its
+    head moved on writes its report but leaves the issue where it is.
 
   Results are kept per PR head SHA on the CI check record, every pass rewrites the
   `## Symphony QA Report` comment, and each agent run is stored in the run store
@@ -41,7 +45,7 @@ defmodule SymphonyElixir.AutoReview do
   alias SymphonyElixir.Linear.{Issue, Usage}
   alias SymphonyElixir.Orchestrator
   alias SymphonyElixir.QaAgent.{Report, Selection}
-  alias SymphonyElixir.Workspace
+  alias SymphonyElixir.{WorkflowSource, Workspace}
 
   @review_state "In Review"
   @active_state "In Progress"
@@ -247,11 +251,15 @@ defmodule SymphonyElixir.AutoReview do
   a `SymphonyElixir.QaRunner` task.
   """
   @spec run_qa(map(), keyword()) :: tuple()
-  def run_qa(%{issue: issue, record: record, sha: sha, settings: settings} = job, opts) do
+  def run_qa(%{issue: issue, record: record, sha: sha} = job, opts) do
     Usage.put_caller(:auto_review)
+    {settings, workflow_refresh} = refresh_settings(Map.get(record, :repo_key), job.settings)
+    job = %{job | settings: settings}
+    selection = select(issue, record, sha, settings, opts)
+    log_selection(issue, sha, selection, settings, workflow_refresh)
 
     outcome =
-      case select(issue, record, sha, settings, opts) do
+      case selection do
         {:skip, reason} -> %{verdict: :skip, reason: reason}
         {:blocked, reason} -> %{verdict: :blocked, reason: reason}
         {:run, playbooks} -> run_agent(job, playbooks, opts)
@@ -259,7 +267,14 @@ defmodule SymphonyElixir.AutoReview do
 
     case outcome do
       %{verdict: :usage_limited} -> hold_pass(issue, sha, outcome, opts)
-      _verdict -> apply_outcome(issue, record, sha, outcome, settings, opts)
+      _verdict -> apply_or_report(issue, record, sha, outcome, settings, opts)
+    end
+  end
+
+  defp apply_or_report(issue, record, sha, outcome, settings, opts) do
+    case moved_on(issue, record, sha, settings, opts) do
+      nil -> apply_outcome(issue, record, sha, outcome, settings, opts)
+      reason -> report_unapplied(issue, sha, outcome, reason, opts)
     end
   end
 
@@ -281,6 +296,91 @@ defmodule SymphonyElixir.AutoReview do
     end
   end
 
+  # A pass takes minutes and `issue` is from when it was requested: a human may have approved
+  # or merged the PR, or a new commit may have been pushed, in the meantime. A state that
+  # cannot be read again applies the outcome, as before.
+  defp moved_on(issue, record, sha, settings, opts) do
+    issue_moved(issue, settings, opts) || pr_moved(record, sha, opts)
+  end
+
+  defp issue_moved(issue, settings, opts) do
+    case Keyword.get(opts, :tracker, Tracker).fetch_issue_states_by_ids([issue.id]) do
+      {:ok, [%Issue{state: current} | _rest]} when is_binary(current) ->
+        if normalize_state(current) != normalize_state(state(settings)), do: "the issue moved to #{current}"
+
+      _unknown ->
+        nil
+    end
+  end
+
+  # The CI poller keeps the stored record on the PR's latest state and head.
+  defp pr_moved(record, sha, opts) do
+    stored = stored_ci_check(record, opts) || %{}
+    pr_state = stored |> Map.get(:pr_state) |> to_string() |> String.upcase()
+    head = Map.get(stored, :last_observed_sha)
+
+    cond do
+      pr_state in ["MERGED", "CLOSED"] -> "the PR is #{String.downcase(pr_state)}"
+      is_binary(head) and head != sha -> "the PR head moved to `#{String.slice(head, 0, 12)}`"
+      true -> nil
+    end
+  end
+
+  defp stored_ci_check(record, opts) do
+    case Keyword.get(opts, :run_store, RunStore).list_ci_checks(Map.get(record, :repo_key)) do
+      checks when is_list(checks) -> Enum.find(checks, &(Map.get(&1, :issue_id) == Map.get(record, :issue_id)))
+      {:error, _reason} -> nil
+    end
+  end
+
+  defp normalize_state(state), do: state |> String.trim() |> String.downcase()
+
+  # The report is still written, but the stored record keeps no verdict for the SHA, so the
+  # issue gets a fresh pass if it comes back to Auto Review on it.
+  defp report_unapplied(issue, sha, outcome, reason, opts) do
+    Logger.info(
+      "QA outcome not applied: #{reason} issue_id=#{issue.id} issue_identifier=#{issue.identifier} " <>
+        "verdict=#{outcome.verdict} sha=#{sha}"
+    )
+
+    publish_report(issue, sha, outcome, %{target_state: "no move (#{reason})"}, opts)
+    {:auto_review_qa_not_applied, issue.id, outcome.verdict, reason}
+  end
+
+  # The repo's `WORKFLOW.md` snapshot, where its `auto_review.playbooks` come from, is
+  # otherwise refreshed only at startup and on dispatch. Fetching and refreshing it here
+  # lets a playbook merged since then apply to this pass. The job's settings, read
+  # when CI went green, are kept when the repo's workflow can't be read.
+  defp refresh_settings(repo_key, settings) do
+    with {:ok, repo} <- Config.repo(repo_key),
+         result = WorkflowSource.refresh(repo, fetch: settings.workspace.fetch_before_dispatch),
+         {:ok, refreshed} <- Config.settings_for_repo(repo_key) do
+      {refreshed, result}
+    else
+      {:error, reason} -> {settings, {:error, reason}}
+    end
+  end
+
+  defp log_selection(issue, sha, selection, settings, workflow_refresh) do
+    {decision, selected} =
+      case selection do
+        {:run, playbooks} -> {"run", Enum.map(playbooks, & &1.kind)}
+        {verdict, reason} -> {"#{verdict} reason=#{inspect(reason)}", []}
+      end
+
+    available = Enum.map(Selection.playbooks(settings.auto_review, dev_server?: dev_server?(settings)), & &1.kind)
+    untriggered = for kind <- available, kind not in selected, do: {kind, "not triggered"}
+    not_selected = untriggered ++ Selection.unavailable(settings.auto_review, dev_server?: dev_server?(settings))
+
+    Logger.info(
+      "QA selection issue_id=#{issue.id} issue_identifier=#{issue.identifier} sha=#{sha} decision=#{decision} " <>
+        "playbooks=#{Enum.join(selected, ",")} not_selected=#{inspect(Enum.map_join(not_selected, "; ", fn {kind, why} -> "#{kind}: #{why}" end))} " <>
+        "workflow_refresh=#{inspect(workflow_refresh)}"
+    )
+  end
+
+  defp dev_server?(settings), do: Verification.dev_server_configured?(settings)
+
   defp select(issue, record, sha, settings, opts) do
     config = settings.auto_review
 
@@ -288,7 +388,7 @@ defmodule SymphonyElixir.AutoReview do
       {:skip, "QA passed on an earlier push (`run_on: first_pass`)"}
     else
       case changed_paths(record, sha, opts) do
-        {:ok, paths} -> Selection.decide(issue, paths, config, dev_server?: Verification.dev_server_configured?(settings))
+        {:ok, paths} -> Selection.decide(issue, paths, config, dev_server?: dev_server?(settings))
         {:error, reason} -> {:blocked, "could not list the PR's changed files: #{inspect(reason)}"}
       end
     end
@@ -450,25 +550,34 @@ defmodule SymphonyElixir.AutoReview do
 
     update_ci_check(Keyword.get(opts, :run_store, RunStore), record, attrs)
 
-    report =
-      outcome
-      |> Map.merge(Map.take(result, [:summary, :steps, :findings, :follow_ups]))
-      |> Map.merge(%{
-        sha: sha,
+    publish_report(
+      issue,
+      sha,
+      outcome,
+      %{
         target_state: target_state,
         escalated: escalated?,
         fix_attempt: if(verdict == :fail and not escalated?, do: fix_attempts + 1),
         max_fix_attempts: config.max_fix_attempts
-      })
+      },
+      opts
+    )
+
+    notify(issue, record, verdict, target_state, outcome)
+    transition(issue, Map.merge(record, attrs), verdict, target_state, opts)
+  end
+
+  defp publish_report(issue, sha, outcome, attrs, opts) do
+    report =
+      outcome
+      |> Map.merge(Map.take(Map.get(outcome, :result, %{}), [:summary, :steps, :findings, :follow_ups]))
+      |> Map.merge(Map.put(attrs, :sha, sha))
       |> Report.render()
 
     case Report.publish(issue, report, Keyword.take(opts, [:linear_client, :settings])) do
       :ok -> :ok
       {:error, reason} -> Logger.warning("Failed to publish the QA report for #{issue.identifier}: #{inspect(reason)}")
     end
-
-    notify(issue, record, verdict, target_state, outcome)
-    transition(issue, Map.merge(record, attrs), verdict, target_state, opts)
   end
 
   defp target(:fail, fix_attempts, max_fix_attempts) when fix_attempts < max_fix_attempts, do: {@active_state, false}

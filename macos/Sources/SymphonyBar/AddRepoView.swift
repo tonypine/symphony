@@ -2,14 +2,21 @@ import AppKit
 import SwiftUI
 import SymphonyBarCore
 
-/// What the Add Repo sheet edits and shows. Linear's projects and labels load when it opens, with the stored
-/// `LINEAR_API_KEY`; the repos in `symphony.yml` are read once, to check the key and the route against them.
+/// What the Add Repo sheet edits and shows, also as the Edit Repo sheet of a connected repo. Linear's projects and
+/// labels load when it opens, with the stored `LINEAR_API_KEY`; the repos in `symphony.yml` are read once, to check
+/// the key and the route against them.
 @MainActor
 final class AddRepoViewModel: ObservableObject {
     enum LinearState: Equatable {
         case loading
         case loaded
         case failed(String)
+    }
+
+    /// What Save wrote.
+    enum Saved {
+        case added(key: String, madeDefault: String?)
+        case edited(from: RepositoryEntry, to: RepositoryEntry)
     }
 
     @Published var draft = AddRepoDraft()
@@ -24,42 +31,61 @@ final class AddRepoViewModel: ObservableObject {
     /// Why the sheet can't add a repo at all: no `symphony.yml` is set, or its repos can't be read.
     let configProblem: String?
     let configPath: String
+    /// The repo the sheet edits, as `symphony.yml` has it; nil while adding one.
+    let editing: RepositoryEntry?
     private let existing: [RepositoryEntry]
     private let secrets: SecretsReader
     /// True once the key was typed, so picking another source no longer replaces it.
     private var keyEdited = false
     private let linearClient: (_ apiKey: String) -> LinearClient
-    private let onSaved: (_ key: String, _ madeDefault: String?) -> Void
+    private let onSaved: (Saved) -> Void
 
+    /// With `editing`, the sheet opens on that repo's entry and Save rewrites it.
     init(
         configPath: String,
         secrets: SecretsReader,
+        editing key: String? = nil,
         linearClient: @escaping (_ apiKey: String) -> LinearClient = { LinearClient(apiKey: $0) },
-        onSaved: @escaping (_ key: String, _ madeDefault: String?) -> Void
+        onSaved: @escaping (Saved) -> Void
     ) {
         self.configPath = configPath.trimmingCharacters(in: .whitespacesAndNewlines)
         self.secrets = secrets
         self.linearClient = linearClient
         self.onSaved = onSaved
+        var existing: [RepositoryEntry] = []
+        var configProblem: String?
         if self.configPath.isEmpty {
-            existing = []
             configProblem = "Set the symphony.yml path in Settings first."
         } else {
             do {
                 existing = try SymphonyConfigFile(path: self.configPath).readRepositories()
-                configProblem = nil
             } catch {
-                existing = []
                 let shown = (self.configPath as NSString).abbreviatingWithTildeInPath
                 configProblem = "Couldn't read the repos in \(shown): \(error.localizedDescription)"
             }
         }
+        let editing = key.flatMap { key in existing.first { $0.key == key } }
+        if let key, editing == nil, configProblem == nil {
+            configProblem = "symphony.yml has no repo `\(key)`."
+        }
+        self.editing = editing
+        self.existing = existing
+        self.configProblem = configProblem
+        if let editing {
+            draft = EditRepo.draft(for: editing)
+            keyEdited = true
+        }
         loadLinear()
+    }
+
+    var title: String {
+        editing.map { EditRepo.sheetTitle(key: $0.key) } ?? AddRepo.sheetTitle
     }
 
     /// The entry Save writes, or what stops it.
     var validation: Result<RepositoryEntry, AddRepoProblem> {
         if let configProblem { return .failure(AddRepoProblem(configProblem)) }
+        if let editing { return EditRepo.entry(for: draft, editing: editing, existing: existing) }
         return AddRepo.entry(for: draft, existing: existing)
     }
 
@@ -68,9 +94,17 @@ final class AddRepoViewModel: ObservableObject {
         return false
     }
 
-    /// The labels an issue in the picked project can carry.
+    /// The labels an issue in the picked project can carry, and those the edited repo's route has already.
     var labelChoices: [String] {
-        LinearLabel.names(labels, for: projects.first { $0.name == draft.project })
+        let names = LinearLabel.names(labels, for: projects.first { $0.name == draft.project })
+        let kept = (editing?.route.labels ?? []).filter { !names.contains($0) }
+        return names + kept
+    }
+
+    /// The edited repo's project when Linear doesn't list it by that name, so the picker can show it.
+    var unlistedProject: String? {
+        guard let project = draft.project, !projects.contains(where: { $0.name == project }) else { return nil }
+        return project
     }
 
     // MARK: Bindings
@@ -154,9 +188,16 @@ final class AddRepoViewModel: ObservableObject {
     func save() {
         guard canSave, case let .success(entry) = validation else { return }
         do {
-            let madeDefault = try SymphonyConfigFile(path: configPath).connectRepository(entry)
-            saveError = nil
-            onSaved(entry.key, madeDefault)
+            let file = SymphonyConfigFile(path: configPath)
+            if let editing {
+                try file.updateRepository(editing.key, to: entry)
+                saveError = nil
+                onSaved(.edited(from: editing, to: entry))
+            } else {
+                let madeDefault = try file.connectRepository(entry)
+                saveError = nil
+                onSaved(.added(key: entry.key, madeDefault: madeDefault))
+            }
         } catch {
             saveError = "Couldn't save symphony.yml: \(error.localizedDescription)"
         }
@@ -176,7 +217,7 @@ struct AddRepoView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(AddRepo.sheetTitle)
+            Text(model.title)
                 .font(.headline)
                 .padding([.top, .horizontal], 16)
             Form {
@@ -189,7 +230,12 @@ struct AddRepoView: View {
                 }
                 Section {
                     TextField("Repo key", text: model.key, prompt: Text("Filled in from the repo name"))
-                    TextField("Base branch", text: $model.draft.baseBranch, prompt: Text(AddRepo.defaultBaseBranch))
+                        .disabled(model.editing != nil)
+                    TextField(
+                        "Base branch",
+                        text: $model.draft.baseBranch,
+                        prompt: Text(model.editing == nil ? AddRepo.defaultBaseBranch : "origin's default branch")
+                    )
                 }
                 Section("Linear routing") {
                     linear
@@ -241,6 +287,7 @@ struct AddRepoView: View {
     private var folderText: String {
         switch model.draft.folder {
         case nil:
+            if let repo = model.editing?.workspace.repo, model.editing?.workspace.source == nil { return "\(repo) (current)" }
             return "No folder chosen"
         case let .success(checkout)?:
             return "\((checkout.path as NSString).abbreviatingWithTildeInPath) (\(checkout.gitHub))"
@@ -252,7 +299,7 @@ struct AddRepoView: View {
     private var folderColor: Color {
         switch model.draft.folder {
         case nil:
-            return .secondary
+            return model.editing?.workspace.repo != nil && model.editing?.workspace.source == nil ? .primary : .secondary
         case .success?:
             return .primary
         case .failure?:
@@ -277,7 +324,10 @@ struct AddRepoView: View {
             }
         case .loaded:
             Picker("Project", selection: model.project) {
-                Text("Choose a project…").tag(String?.none)
+                Text(model.editing == nil ? "Choose a project…" : "No project").tag(String?.none)
+                if let unlisted = model.unlistedProject {
+                    Text(unlisted).tag(String?.some(unlisted))
+                }
                 ForEach(model.projects) { project in
                     Text(project.name).tag(String?.some(project.name))
                 }

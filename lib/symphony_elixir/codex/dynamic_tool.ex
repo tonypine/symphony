@@ -243,6 +243,12 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
     },
     %{
+      "name" => "github_sync_base",
+      "description" =>
+        "Fetch origin and merge the base branch (e.g. origin/main) into the current workspace branch, outside the sandbox, so the merge can update write-protected files such as `.ai/skills`. Fast-forwards to the branch's remote copy first when it is ahead. Merges with `--no-commit`: on `merge_staged` run `git commit --no-edit`; on `conflicts` resolve the listed files, `git add` them, then `git -c rerere.enabled=true commit --no-edit`. Refuses a branch that changes a protected path itself.",
+      "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
+    },
+    %{
       "name" => "github_create_pull_request",
       "description" => "Create a pull request from the current workspace branch to the configured origin repo default branch.",
       "inputSchema" => %{
@@ -417,6 +423,20 @@ defmodule SymphonyElixir.Codex.DynamicTool do
           "value" => %{"type" => "string", "maxLength" => 10_000}
         }
       }
+    },
+    %{
+      "name" => "qa_put_file",
+      "description" =>
+        "Put a fixture file you wrote (a test config, a WORKFLOW.md) where the app can open it, and return the path to give the app. On a separate QA host the app cannot see your files, so always pass it this path. Only a regular file of at most 1 MB under the worktree or $TMPDIR; no symlinks.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["local_path"],
+        "properties" => %{
+          "local_path" => %{"type" => "string", "description" => "The file, absolute or relative to the worktree, e.g. qa-evidence/qa-config/symphony.yml."},
+          "remote_name" => %{"type" => "string", "description" => "File name on the QA host: letters, digits, `.`, `_`, `-`. Defaults to the local file name."}
+        }
+      }
     }
   ]
 
@@ -572,6 +592,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "linear_request_human_action" => ["title", "why", "steps", "unblocks", "est_minutes"],
     "github_get_pull_request" => [],
     "github_fetch_origin" => [],
+    "github_sync_base" => [],
     "github_create_pull_request" => ["title", "body", "draft"],
     "github_update_pull_request_body" => ["body"],
     "github_add_pr_comment" => ["body"],
@@ -590,6 +611,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "qa_ax_tree" => ["pid", "role", "text", "max_depth", "max_nodes"],
     "qa_ax_press" => ["pid", "path", "action"],
     "qa_ax_set_value" => ["pid", "path", "value"],
+    "qa_put_file" => ["local_path", "remote_name"],
     "qa_android_install" => [],
     "qa_android_launch" => ["application_id"],
     "qa_android_stop" => ["application_id"],
@@ -619,6 +641,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "linear.create_project_update" => "linear_create_project_update",
     "github.get_pull_request" => "github_get_pull_request",
     "github.fetch_origin" => "github_fetch_origin",
+    "github.sync_base" => "github_sync_base",
     "github.create_pull_request" => "github_create_pull_request",
     "github.update_pull_request_body" => "github_update_pull_request_body",
     "github.add_pr_comment" => "github_add_pr_comment",
@@ -794,6 +817,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   defp execute_github_tool("github_get_pull_request", context, _args, opts), do: GitHub.get_pull_request(context, opts)
   defp execute_github_tool("github_fetch_origin", context, _args, opts), do: GitHub.fetch_origin(context, opts)
+  defp execute_github_tool("github_sync_base", context, _args, opts), do: GitHub.sync_base(context, opts)
 
   defp execute_github_tool("github_create_pull_request", context, args, opts) do
     GitHub.create_pull_request(context, Map.get(args, "title"), Map.get(args, "body"), Map.get(args, "draft"), opts)
@@ -1482,6 +1506,57 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       "error" => %{
         "code" => "unsupported_for_ssh_worker",
         "message" => "github_fetch_origin is not supported for SSH worker sessions. Symphony only brokers local workspace fetches through this tool."
+      }
+    }
+  end
+
+  defp tool_error_payload({:unsupported_for_ssh_worker, :github_sync_base}) do
+    %{
+      "error" => %{
+        "code" => "unsupported_for_ssh_worker",
+        "message" => "github_sync_base is not supported for SSH worker sessions. Symphony only merges in local workspaces through this tool."
+      }
+    }
+  end
+
+  defp tool_error_payload({:base_branch_not_found, base_ref}) do
+    %{
+      "error" => %{
+        "code" => "base_branch_not_found",
+        "message" => "The origin remote has no branch for #{base_ref}, the repository's base branch, so there is nothing to merge.",
+        "base" => base_ref
+      }
+    }
+  end
+
+  defp tool_error_payload(:merge_in_progress) do
+    %{
+      "error" => %{
+        "code" => "merge_in_progress",
+        "message" => "A merge is already in progress in this workspace. Resolve and commit it (`git commit --no-edit`) before syncing again."
+      }
+    }
+  end
+
+  defp tool_error_payload({:protected_paths_changed, files}) do
+    %{
+      "error" => %{
+        "code" => "protected_paths_changed",
+        "message" =>
+          "Refused: this branch changes write-protected files itself: #{Enum.join(files, ", ")}. An agent must not change its own " <>
+            "instructions or workflow files. Drop those changes from the branch, and file a follow-up with linear_create_subissue for a person to make them.",
+        "files" => files
+      }
+    }
+  end
+
+  defp tool_error_payload({:git_merge_failed, status, output}) do
+    %{
+      "error" => %{
+        "code" => "git_merge_failed",
+        "message" => "git merge failed and left no merge in progress. Read the output, fix the cause (for example commit or discard local changes it names), then try again.",
+        "status" => status,
+        "output" => output
       }
     }
   end
