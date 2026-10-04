@@ -227,6 +227,14 @@ defmodule SymphonyElixir.AcceptanceGateTest do
       refute prompt =~ "cut at 120 KB"
     end
 
+    test "the prompt leaves code style and bugs to the pre-push reviewer unless one makes a criterion unmet", %{settings: settings} do
+      AcceptanceGate.run(job(), settings, run_opts())
+
+      assert_received {:gate_turn, _session, prompt, _issue, _opts}
+      assert prompt =~ "Do not review code style or look for bugs: the pre-push reviewer did."
+      assert prompt =~ "A bug counts only when it\nmakes an acceptance criterion unmet."
+    end
+
     test "a bare context and a ticket without criteria get placeholders in the prompt", %{settings: settings} do
       Process.put(
         :gate_context,
