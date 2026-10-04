@@ -207,8 +207,8 @@ defmodule SymphonyElixir.ParentWalkthroughTest do
     Application.put_env(:symphony_elixir, :walkthrough_agent_result, {:ok, %{result: result, tokens: tokens}})
   end
 
-  defp comments_posted do
-    receive_all()
+  defp comments_posted(messages \\ receive_all()) do
+    messages
     |> Enum.flat_map(fn
       {:linear, query, %{issueId: issue_id, body: body}} -> if query =~ "SymphonyAgentAddComment", do: [{issue_id, body}], else: []
       _message -> []
@@ -386,6 +386,42 @@ defmodule SymphonyElixir.ParentWalkthroughTest do
       assert second["title"] == "Parent walkthrough fails: Save the API key"
       assert second["description"] =~ "[... truncated ...]"
       assert second["description"] =~ "The QA agent recorded no evidence for this"
+    end
+
+    test "a blocked app part still reports the CLI checks and files a failing CLI step as a gap" do
+      reason = "The Symphony QA Driver helper app has no Screen Recording permission, so QA cannot see the app."
+
+      agent_result(:blocked, %{
+        reason: reason,
+        steps: [
+          %{name: "symphony check prints the run profile", status: "pass", details: "$ symphony check\nok", evidence: []},
+          %{name: "repository override names its key", status: "fail", details: "$ symphony check\nnames agent.model", evidence: []},
+          %{name: "Open Settings", status: "blocked", details: reason, evidence: []}
+        ],
+        findings: ["The capability error names agent.model"]
+      })
+
+      assert :ok = run(verification())
+      assert_received {:state_update, "issue-fv", "Todo"}
+
+      messages = receive_all()
+      assert [gap] = created_subissues(messages)
+      assert gap["title"] == "Parent walkthrough fails: repository override names its key"
+      assert [%{"relatedIssueId" => "issue-fv", "type" => "blocks"}] = relations_created(messages)
+
+      assert [{"issue-parent", report}, {"issue-fv", report}] = comments_posted(messages)
+      assert report =~ "**Verdict:** blocked → TP-910 Todo"
+      assert report =~ "Reason: " <> reason
+      assert report =~ "- **pass** symphony check prints the run profile"
+      assert report =~ "- **fail** repository override names its key"
+      assert report =~ "- **blocked** Open Settings"
+      assert report =~ ~r/### Filed tickets\n\n- TP-9\d+ Parent walkthrough fails: repository override names its key/
+
+      agent_result(:blocked, %{reason: reason, steps: [%{name: "Open Settings", status: "blocked", details: reason, evidence: []}]})
+
+      assert :ok = run(verification())
+      assert_received {:state_update, "issue-fv", "In Review"}
+      assert [] = created_subissues()
     end
 
     test "findings without a failing step are filed one per finding, and a failed create is logged" do
