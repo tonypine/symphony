@@ -14,7 +14,6 @@ on:
 
 permissions:
   contents: read
-  issues: read
   pull-requests: read
 
 concurrency:
@@ -31,10 +30,12 @@ jobs:
 
     steps:
       # A person who changed a protected path on the agent's branch on purpose waives the check
-      # with the label, or with an approving review of the current head commit. The label counts
-      # only when its last adder is a person other than the pull request's author, since the
-      # agent may push and label as the author. The review counts only from an owner, member or
-      # collaborator, since anyone who can read the repository can approve.
+      # for the current head commit, either by adding the label or with an approving review of
+      # that commit. The label counts only in the run its own adding starts, for the head at that
+      # moment, so a later push is checked again; to waive a new head, remove and re-add it. It
+      # counts only from a person other than the pull request's author, since the agent may push
+      # and label as the author. The review counts only from an owner, member or collaborator,
+      # since anyone who can read the repository can approve.
       - name: Look for a person's waiver
         id: waiver
         env:
@@ -43,21 +44,19 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+          ACTION: ${{ github.event.action }}
+          LABEL: ${{ github.event.label.name }}
+          SENDER: ${{ github.event.sender.login }}
+          SENDER_TYPE: ${{ github.event.sender.type }}
         run: |
-          if jq -e --arg label "$WAIVER_LABEL" 'any(. == $label)' <<<"$LABELS" >/dev/null; then
-            labeler=$(gh api --paginate "repos/$REPO/issues/$PR_NUMBER/events" \
-              --jq ".[] | select(.event == \"labeled\" and .label.name == \"$WAIVER_LABEL\") | \"\(.actor.login) \(.actor.type)\"" |
-              tail -n 1)
-            read -r login type <<<"$labeler"
-
-            if [ -n "$login" ] && [ "$login" != "$PR_AUTHOR" ] && [ "$type" != "Bot" ]; then
-              echo "Waived by the $WAIVER_LABEL label, added by $login."
+          if [ "$ACTION" = "labeled" ] && [ "$LABEL" = "$WAIVER_LABEL" ]; then
+            if [ "$SENDER" != "$PR_AUTHOR" ] && [ "$SENDER_TYPE" != "Bot" ]; then
+              echo "Waived for $HEAD_SHA by the $WAIVER_LABEL label, added by $SENDER."
               echo "waived=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
 
-            echo "Ignoring the $WAIVER_LABEL label: ${login:-nobody} added it, and only a person other than the author $PR_AUTHOR can."
+            echo "Ignoring the $WAIVER_LABEL label: $SENDER added it, and only a person other than the author $PR_AUTHOR can."
           fi
 
           approvers=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/reviews" \
@@ -113,6 +112,6 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           if ! mix protected_paths.check --repo pull-request --base "origin/$BASE_REF" --head "$HEAD_SHA"; then
-            echo "::error::This pull request's own commits change paths an agent must not edit (its skills, WORKFLOW.md, sandbox settings). Revert them, or, if a person made the change on purpose, have a person other than the author add the $WAIVER_LABEL label, or have a person with write access approve the pull request and re-run this job."
+            echo "::error::This pull request's own commits change paths an agent must not edit (its skills, WORKFLOW.md, sandbox settings). Revert them, or, if a person made the change on purpose, have a person other than the author add the $WAIVER_LABEL label after the last push (remove and re-add it if it is already there), or have a person with write access approve the pull request and re-run this job."
             exit 1
           fi
