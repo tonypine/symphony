@@ -75,6 +75,60 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
              ]
     end
 
+    test "reads a workpad past the ordinary comment limit whole, so a rewrite keeps its tail" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      Linear.CommentRegistry.record(registry, "workpad")
+      context = %{issue_id: "issue-current", comment_registry: registry}
+      workpad = "## Symphony Workpad\n\n### Notes\n\n" <> String.duplicate("note ", 1_600) <> "\n- TAIL-NOTE past 5000"
+      other = String.duplicate("b", 8_000)
+      assert String.length(workpad) > 8_000
+
+      assert {:ok, [read_other, read_workpad]} =
+               Linear.get_comments(context, 2,
+                 linear_client: fn _query, _variables, _opts ->
+                   {:ok,
+                    %{
+                      "data" => %{
+                        "issue" => %{
+                          "comments" => %{"nodes" => [%{"id" => "workpad", "body" => workpad}, %{"id" => "other", "body" => other}]}
+                        }
+                      }
+                    }}
+                 end
+               )
+
+      assert read_other["body"] =~ "linear_issue_comment_body exceeded 5000 characters"
+      refute PromptSafety.truncated?(read_workpad["body"])
+
+      rewrite =
+        read_workpad["body"]
+        |> String.replace_prefix("<linear_issue_comment_body>\n", "")
+        |> String.replace_suffix("\n</linear_issue_comment_body>", "")
+        |> Kernel.<>("\n- new note from this run")
+
+      assert {:ok, _response} =
+               Linear.update_comment(context, "workpad", rewrite,
+                 linear_client: fn _query, variables, _opts ->
+                   assert variables.body =~ "TAIL-NOTE past 5000"
+                   assert String.starts_with?(variables.body, workpad)
+                   {:ok, %{"data" => %{"commentUpdate" => %{"success" => true}}}}
+                 end
+               )
+    end
+
+    test "update_comment refuses a body copied from a truncated read" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      Linear.CommentRegistry.record(registry, "comment-owned")
+      truncated_read = PromptSafety.linear_issue_comment_body(String.duplicate("c", 5_001))
+
+      assert {:error, :truncated_comment_body} =
+               Linear.update_comment(%{issue_id: "issue-current", comment_registry: registry}, "comment-owned", truncated_read,
+                 linear_client: fn _query, _variables, _opts ->
+                   flunk("Linear should not be called for a truncated comment body")
+                 end
+               )
+    end
+
     test "redacts secret patterns from returned comment bodies before wrapping" do
       workspace = tmp_workspace!("linear-agent-comment-read-redaction")
       audit_dir = Path.join(workspace, "audit")
