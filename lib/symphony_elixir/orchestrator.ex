@@ -3314,7 +3314,22 @@ defmodule SymphonyElixir.Orchestrator do
     end
 
     state = %{state | forced: forced}
+
     %{state | forced_waiting_noted: MapSet.filter(state.forced_waiting_noted, &forced_queued?(&1, state))}
+    |> release_unforced_runs()
+  end
+
+  # A run on the forced allowance gives it back once its ticket is no longer forced (its label was
+  # removed, or its forced parent's was): it goes on as a normal run, and a ticket still forced can
+  # take the allowance.
+  defp release_unforced_runs(%State{running: running} = state) do
+    released =
+      for {issue_id, entry} <- running, forced_entry?(entry), not forced_queued?(issue_id, state), into: %{} do
+        Logger.info("Forced run released the forced allowance: issue_id=#{issue_id} issue_identifier=#{entry.identifier}; no longer forced, running on as a normal run")
+        {issue_id, %{entry | forced: false}}
+      end
+
+    %{state | running: Map.merge(running, released)}
   end
 
   # Linear answers an unknown identifier with an "Entity not found" GraphQL error rather than a null issue.
@@ -3507,7 +3522,9 @@ defmodule SymphonyElixir.Orchestrator do
       |> Map.new()
 
     state = %{state | forced_parts: parts}
+
     %{state | forced_waiting_noted: MapSet.filter(state.forced_waiting_noted, &forced_queued?(&1, state))}
+    |> release_unforced_runs()
   end
 
   defp forced_waiting_parent?(%Issue{} = issue, settings, terminal_states) do
