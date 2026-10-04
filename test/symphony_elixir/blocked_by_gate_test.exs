@@ -93,6 +93,104 @@ defmodule SymphonyElixir.BlockedByGateTest do
     end
   end
 
+  describe "a Todo ticket blocked by a fix to Symphony itself" do
+    @old_build "d3d301b0123456789abcdef0123456789abcdef0"
+    @new_build "53b1e370123456789abcdef0123456789abcdef0"
+    @merge_sha "9f54098b96666e6e233247d53fc995c3b293c4f2"
+    @fix_pr "https://github.com/acme/symphony/pull/132"
+
+    setup do
+      previous = Application.fetch_env(:symphony_elixir, :build)
+
+      on_exit(fn ->
+        case previous do
+          {:ok, value} -> Application.put_env(:symphony_elixir, :build, value)
+          :error -> Application.delete_env(:symphony_elixir, :build)
+        end
+      end)
+    end
+
+    test "stays held after the fix merges, until the running app includes its merge commit" do
+      run_build(@old_build)
+      issue = %Issue{todo_blocked_by(blocker("TP-419", "Done")) | id: "verify", identifier: "TP-332", title: "Final verification: Pause"}
+      fix = %Issue{id: "id-TP-419", identifier: "TP-419", state: "Done", pr_urls: [@fix_pr]}
+
+      state = poll(orchestrator_state(), [issue], fix)
+
+      refute Issue.blocked?(issue, terminal_states())
+      refute Orchestrator.should_dispatch_issue_for_test(issue, state)
+
+      assert state.blocked == [
+               %{
+                 issue_id: "verify",
+                 identifier: "TP-332",
+                 title: "Final verification: Pause",
+                 state: "Todo",
+                 kind: :app_update,
+                 reason: "waiting for an app update: TP-419 merged in `9f54098`, running `d3d301b`",
+                 blockers: [%{identifier: "TP-419", state: "merged in 9f54098"}]
+               }
+             ]
+
+      assert snapshot_of(state).blocked == state.blocked
+
+      # The same build on the next poll: nothing new to look up, still held.
+      assert poll(state, [issue], :no_lookup).blocked == state.blocked
+
+      # The app updates to a build that includes the merge commit.
+      run_build(@new_build)
+      state = poll(state, [issue], fix)
+
+      assert state.blocked == []
+      assert state.update_holds == %{}
+      assert Orchestrator.should_dispatch_issue_for_test(issue, state)
+    end
+
+    test "a blocker merged in another repository releases its dependent at Done, as before" do
+      run_build(@old_build)
+      issue = todo_blocked_by(blocker("APP-1", "Done"))
+      fix = %Issue{id: "id-APP-1", identifier: "APP-1", state: "Done", pr_urls: ["https://github.com/acme/web-app/pull/5"]}
+
+      state = poll(orchestrator_state(), [issue], fix)
+
+      assert state.blocked == []
+      assert Orchestrator.should_dispatch_issue_for_test(issue, state)
+    end
+
+    test "a build from a checkout holds nothing" do
+      Application.put_env(:symphony_elixir, :build, sha: nil, repo: nil, number: nil)
+      issue = todo_blocked_by(blocker("TP-419", "Done"))
+
+      state = poll(orchestrator_state(), [issue], :no_lookup)
+
+      assert state.blocked == []
+      assert Orchestrator.should_dispatch_issue_for_test(issue, state)
+    end
+
+    defp run_build(sha), do: Application.put_env(:symphony_elixir, :build, sha: sha, repo: "https://github.com/acme/symphony", number: "168")
+
+    # What a poll does: the poll task looks blockers up, then the poll result applies the holds.
+    defp poll(state, issues, fix) do
+      build = SymphonyElixir.BuildInfo.current()
+
+      lookups =
+        case fix do
+          :no_lookup ->
+            [fetch_issues: fn _ids -> flunk("nothing to look up") end, commit_included?: fn _url, _sha, _build -> flunk("cached") end]
+
+          %Issue{} ->
+            [
+              fetch_issues: fn _ids -> {:ok, [fix]} end,
+              merge_commit_sha: fn @fix_pr -> {:ok, @merge_sha} end,
+              commit_included?: fn @fix_pr, @merge_sha, build_sha -> {:ok, build_sha == @new_build} end
+            ]
+        end
+
+      cache = SymphonyElixir.UpdateHold.resolve(issues, build, state.update_hold_cache, terminal_states(), lookups)
+      Orchestrator.put_blocked_for_test(%{state | update_hold_cache: cache}, issues)
+    end
+  end
+
   defp todo_blocked_by(blocker) do
     %Issue{id: "issue", identifier: "MT-1", title: "Blocked", state: "Todo", blocked_by: [blocker]}
   end
