@@ -8,6 +8,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
 
   require Logger
 
+  alias SymphonyElixir.AgentLabels
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
   alias SymphonyElixir.AgentTools.SecretScanner
   alias SymphonyElixir.AutoReview
@@ -462,6 +463,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @spec update_comment(context(), String.t(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def update_comment(context, comment_id, body, opts) when is_binary(comment_id) and is_binary(body) do
     with :ok <- verify_comment_owner(context, comment_id),
+         :ok <- reject_truncated_body(body),
          :ok <- SecretScanner.reject_fields_if_secret_pattern([body: body], context, "linear_update_comment", opts),
          {:ok, response} <- graphql(@update_comment_mutation, %{id: comment_id, body: body}, opts) do
       check_mutation_success(response, "commentUpdate")
@@ -1246,7 +1248,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   defp wrap_comment(comment) when is_map(comment) do
     comment
     |> redact_string_field("body")
-    |> wrap_string_field("body", &PromptSafety.linear_issue_comment_body/1)
+    |> wrap_string_field("body", &wrap_comment_body/1)
   end
 
   defp wrap_comment(comment), do: comment
@@ -1254,10 +1256,23 @@ defmodule SymphonyElixir.AgentTools.Linear do
   defp wrap_comment(comment, context, opts) when is_map(comment) do
     comment
     |> redact_string_field("body", context, "linear_get_comments", opts)
-    |> wrap_string_field("body", &PromptSafety.linear_issue_comment_body/1)
+    |> wrap_string_field("body", &wrap_comment_body/1)
   end
 
   defp wrap_comment(comment, _context, _opts), do: comment
+
+  # The workpad is detected the way `Workpad` finds it, and read back whole so the agent's
+  # rewrite does not drop the text past the ordinary comment limit.
+  defp wrap_comment_body(body) do
+    if Enum.any?(AgentLabels.known_workpad_markers(), &String.contains?(body, &1)),
+      do: PromptSafety.linear_workpad_comment_body(body),
+      else: PromptSafety.linear_issue_comment_body(body)
+  end
+
+  # A body copied from a cut read would replace the stored comment with its truncated text.
+  defp reject_truncated_body(body) do
+    if PromptSafety.truncated?(body), do: {:error, :truncated_comment_body}, else: :ok
+  end
 
   defp redact_string_field(map, key) when is_map(map) and is_binary(key) do
     case Map.fetch(map, key) do
