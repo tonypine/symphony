@@ -4,7 +4,7 @@ defmodule SymphonyElixir.SubIssueWaitTest do
   import ExUnit.CaptureLog
 
   alias SymphonyElixir.Config.{Schema, SystemSchema}
-  alias SymphonyElixir.{RunStore, SubIssueWait}
+  alias SymphonyElixir.{RunKind, RunStore, SubIssueWait}
 
   @waiting "Waiting on sub-tickets"
 
@@ -157,16 +157,49 @@ defmodule SymphonyElixir.SubIssueWaitTest do
 
     test "parks a breakdown parent In Progress with open sub-issues while the state is on" do
       settings = Config.settings!()
-      open = [%{id: "c1", identifier: "MT-2", state: "Backlog"}]
+      open = [%{id: "c1", identifier: "MT-2", state: "Todo"}, %{id: "c2", identifier: "MT-3", state: "Backlog"}]
       parent = %Issue{id: "p", identifier: "MT-1", title: "Parent", state: " in progress ", labels: ["breakdown"], sub_issues: open}
 
       assert SubIssueWait.park?(parent, ["Done"], settings)
+      assert SubIssueWait.park?(%{parent | sub_issues: [%{id: "c1", identifier: "MT-2"}]}, ["Done"], settings)
       refute SubIssueWait.park?(%{parent | state: @waiting}, ["Done"], settings)
       refute SubIssueWait.park?(%{parent | state: "Todo"}, ["Done"], settings)
       refute SubIssueWait.park?(%{parent | sub_issues: [%{id: "c1", identifier: "MT-2", state: "Done"}]}, ["Done"], settings)
       refute SubIssueWait.park?(%{parent | labels: []}, ["Done"], settings)
       refute SubIssueWait.park?(%{parent | state: nil}, ["Done"], settings)
       refute SubIssueWait.park?(nil, ["Done"], settings)
+    end
+
+    test "tells a never-approved plan, with every open sub-issue in Backlog, from an approved one" do
+      settings = Config.settings!()
+      backlog = [%{id: "c1", identifier: "MT-2", state: " backlog "}, %{id: "c2", identifier: "MT-3", state: "Cancelled"}]
+      parent = %Issue{id: "p", identifier: "MT-1", title: "Parent", state: "In Progress", labels: ["breakdown"], sub_issues: backlog}
+      terminal = ["Done", "Cancelled"]
+
+      assert Issue.unapproved_plan?(parent, terminal)
+      refute Issue.waiting_on_sub_issues?(parent, terminal)
+      refute SubIssueWait.park?(parent, terminal, settings)
+      refute Issue.close_out_ready?(parent, terminal)
+
+      # A sub-issue already promoted or done means a person approved the plan.
+      for approved <- [%{id: "c4", identifier: "MT-5", state: "In Progress"}, %{id: "c4", identifier: "MT-5", state: "Done"}] do
+        parent = %{parent | sub_issues: [approved | backlog]}
+        refute Issue.unapproved_plan?(parent, terminal)
+        assert Issue.waiting_on_sub_issues?(parent, terminal)
+        assert SubIssueWait.park?(parent, terminal, settings)
+      end
+
+      refute Issue.unapproved_plan?(%{parent | sub_issues: []}, terminal)
+      refute Issue.unapproved_plan?(%{parent | sub_issues: [%{id: "c2", identifier: "MT-3", state: "Cancelled"}]}, terminal)
+      refute Issue.unapproved_plan?(%{parent | labels: ["feature"]}, terminal)
+      refute Issue.unapproved_plan?(%{parent | sub_issues: nil}, terminal)
+      refute Issue.unapproved_plan?(nil, terminal)
+      refute Issue.close_out_ready?(%{parent | sub_issues: nil}, terminal)
+      refute Issue.waiting_on_sub_issues?(%{parent | sub_issues: nil}, terminal)
+      refute Issue.waiting_on_sub_issues?(nil, terminal)
+
+      # The waiting state still holds it: only a person moves a parent there.
+      assert SubIssueWait.held?(%{parent | state: @waiting}, terminal, settings)
     end
   end
 
@@ -204,7 +237,7 @@ defmodule SymphonyElixir.SubIssueWaitTest do
 
     test "moves a breakdown parent found In Progress with open sub-issues to the waiting state" do
       state = orchestrator_state()
-      open = [%{id: "child-1", identifier: "MT-1302", state: "Backlog"}]
+      open = [%{id: "child-1", identifier: "MT-1302", state: "Todo"}]
       parent = %Issue{id: "parent-park", identifier: "MT-1301", title: "Parent", state: "In Progress", labels: ["breakdown"], sub_issues: open}
       running = %{parent | id: "parent-running", identifier: "MT-1303"}
       claimed = %{parent | id: "parent-claimed", identifier: "MT-1304"}
@@ -275,7 +308,7 @@ defmodule SymphonyElixir.SubIssueWaitTest do
 
     test "parks nothing when the fresh read fails, and tries again on the next poll" do
       state = orchestrator_state()
-      open = [%{id: "child-1", identifier: "MT-1602", state: "Backlog"}]
+      open = [%{id: "child-1", identifier: "MT-1602", state: "Todo"}]
       parent = %Issue{id: "parent-retry", identifier: "MT-1601", title: "Parent", state: "In Progress", labels: ["breakdown"], sub_issues: open}
       Application.put_env(:symphony_elixir, :memory_tracker_issues, [parent])
       Application.put_env(:symphony_elixir, :memory_tracker_fetch_issue_states_result, {:error, :timeout})
@@ -295,7 +328,7 @@ defmodule SymphonyElixir.SubIssueWaitTest do
       capture_log(fn -> assert :disabled = SubIssueWait.check_tracker_state(Config.settings!(), []) end)
 
       state = orchestrator_state()
-      open = [%{id: "child-1", identifier: "MT-1402", state: "Backlog"}]
+      open = [%{id: "child-1", identifier: "MT-1402", state: "Todo"}]
       parent = %Issue{id: "parent-old", identifier: "MT-1401", title: "Parent", state: "In Progress", labels: ["breakdown"], sub_issues: open}
 
       assert Orchestrator.park_breakdown_parents_for_test([parent], state).parked_parents == MapSet.new()
@@ -304,6 +337,33 @@ defmodule SymphonyElixir.SubIssueWaitTest do
       refute Orchestrator.should_dispatch_issue_for_test(parent, state)
       closed_out = %{parent | sub_issues: [%{id: "child-1", identifier: "MT-1402", state: "Done"}]}
       assert Orchestrator.should_dispatch_issue_for_test(closed_out, state)
+    end
+
+    test "resumes a never-approved plan stopped midway instead of parking it" do
+      state = orchestrator_state()
+      # MOT-30: the run filed 7 of 9 sub-tickets, hit Linear's usage limit, and a person moved it back.
+      backlog = for n <- 31..37, do: %{id: "child-#{n}", identifier: "MOT-#{n}", state: "Backlog"}
+      parent = %Issue{id: "parent-resume", identifier: "MOT-30", title: "Plan the MVP", state: "In Progress", labels: ["breakdown", "expedite"], sub_issues: backlog}
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [parent])
+
+      assert Orchestrator.park_breakdown_parents_for_test([parent], state).parked_parents == MapSet.new()
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+      assert RunStore.get_own_state_move("parent-resume") == nil
+
+      assert Orchestrator.should_dispatch_issue_for_test(parent, state)
+      assert Orchestrator.should_dispatch_issue_for_test(%{parent | state: "Todo"}, state)
+      assert Orchestrator.dispatch_revalidated_issue_for_test(parent, true)
+      assert RunKind.classify(parent) == :breakdown
+
+      # Nothing approved it, so nothing is promoted either.
+      reviewed = Orchestrator.review_breakdown_parents_for_test([parent], state)
+      assert reviewed.breakdown_reviews == %{}
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+
+      # Once a person approved the plan, the same parent waits for its sub-tickets.
+      approved = %{parent | sub_issues: Enum.map(backlog, &%{&1 | state: "Todo"})}
+      refute Orchestrator.should_dispatch_issue_for_test(approved, state)
+      refute Orchestrator.should_dispatch_issue_for_test(%{approved | state: @waiting}, state)
     end
 
     test "a poll cycle parks a breakdown parent In Progress and does not dispatch it" do

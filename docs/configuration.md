@@ -111,11 +111,27 @@ issues:
   cancels the sub-tickets the rejected breakdown run created and re-plans. Each batch is listed
   in one comment on the parent. Agents cannot move an issue here
   (`linear_update_state` refuses it). On every poll Symphony also moves a `breakdown` parent it
-  finds `In Progress` with open sub-tickets here, so `In Progress` only holds issues an agent is
-  working, after a fresh read confirms it is still `In Progress`; that move is not an approval and
+  finds `In Progress` with open sub-tickets of an approved plan here (some sub-ticket left
+  `Backlog`), so `In Progress` only holds issues an agent is working, after a fresh read confirms it is still `In Progress`; that move is not an approval and
   promotes nothing, even if Symphony and the reviewer share one Linear user. Create it in Linear as a started state just
   after In Progress. At startup Symphony checks the configured teams have it; when it is missing,
   Symphony logs a warning and parents keep waiting `In Progress` until restart.
+
+  Three ways a plan moves forward besides approval, and when each applies:
+  - **Resume:** a parent in `Todo` or `In Progress` whose open sub-tickets are all still in
+    `Backlog` (and none `Done`) was never approved, so it is neither held nor moved here: it gets
+    a `breakdown` run that picks the plan up from its workpad, keeps every artifact and sub-ticket
+    already made, files what is left and moves the parent to `In Review`. Use it after a plan run
+    stopped midway, for example on Linear's usage limit.
+  - **Revise:** a person's comment on a parent in `In Review` whose plan is not approved moves it
+    to `In Progress`, and the `breakdown` run edits the plan in place: it rewrites the artifact
+    comments, updates, files or cancels `Backlog` sub-tickets (`linear_update_subissue` refuses
+    any other), replies under each comment and moves the parent back to `In Review`. Symphony's
+    own comments and integration bots' comments start nothing. A comment made while the run works
+    is picked up once the parent is back in `In Review`, unless the run answered it. A comment on
+    an approved plan changes nothing: under a new top-level comment Symphony replies once that, if
+    it asks for a plan change, `Rework` re-plans it.
+  - **Re-plan:** moving the parent to `Rework` makes the plan again from scratch, as above.
 
 For Linear, configure at least one global scope under `issues.linear.scope` or repo-level route
 selector under `repositories[].route`.
@@ -389,6 +405,8 @@ agent:
 - `permissions.filesystem.allow_write_paths`: extra writable host paths emitted to the Claude
   runtime as `sandbox.filesystem.allowWrite`. Use it to broaden Claude Code's default writable
   set (workspace + `/tmp`) — e.g. to grant test runs access to a configured MCP socket root.
+  On macOS, Symphony also adds the per-user temp dir's `TemporaryItems` for local runs
+  (Foundation's atomic writes need it; see `docs/security.md`).
   For Gradle builds, add `~/.gradle` so builds share its caches. Daemons don't come with it:
   each local agent run in a Gradle project (`gradlew`, `settings.gradle` or
   `settings.gradle.kts` at the workspace root) starts with
@@ -459,7 +477,7 @@ agent:
 - `run_profiles.<kind>`: `model`, `effort` and/or `provider` for one kind of run. Kinds, first match wins:
   `final_verification` (title starts with `Final verification:`), `breakdown` (`breakdown` parent in
   `Rework`), `close_out` (`breakdown` parent whose sub-issues are all terminal), `breakdown` (other
-  `breakdown` parent), `landing` (`Merging`),
+  `breakdown` parent: a new, resumed or revised plan), `landing` (`Merging`),
   `rework` (`Rework`), `ci_fix` (continuation after red CI), `review_feedback` (continuation after
   PR review comments), and `implementation` (everything else). `pre_push_review`, `qa` and
   `acceptance_gate` name the pre-push reviewer, QA agent and acceptance gate runs.
