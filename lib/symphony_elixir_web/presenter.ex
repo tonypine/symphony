@@ -4,6 +4,7 @@ defmodule SymphonyElixirWeb.Presenter do
   """
 
   alias SymphonyElixir.{
+    AcceptanceGate,
     AuditLog,
     BuildInfo,
     Config,
@@ -88,6 +89,7 @@ defmodule SymphonyElixirWeb.Presenter do
           epic_lanes: normalize_epic_lanes(Map.get(snapshot, :epic_lanes)),
           finishing: normalize_finishing(Map.get(snapshot, :finishing)),
           qa: normalize_qa(Map.get(snapshot, :qa)),
+          acceptance_gate: acceptance_gate_payload(AcceptanceGate.Agreement.snapshot()),
           auto_merge: snapshot |> Map.get(:auto_merge, []) |> Enum.map(&auto_merge_payload/1),
           slot_waiting: snapshot |> Map.get(:slot_waiting, []) |> Enum.map(&slot_waiting_payload/1),
           blocked: Enum.map(blocked, &blocked_payload/1),
@@ -517,6 +519,9 @@ defmodule SymphonyElixirWeb.Presenter do
       },
       recent_events: (running && recent_events_payload(running)) || [],
       last_error: retry && retry.error,
+      acceptance_gate:
+        AcceptanceGate.Agreement.latest(repo_key_from_entries(running, retry, watching), issue_id_from_entries(running, retry, watching))
+        |> gate_verdict_payload(),
       tracked: %{}
     }
 
@@ -844,6 +849,36 @@ defmodule SymphonyElixirWeb.Presenter do
 
   defp normalize_qa(%{running: running, queued: queued}), do: %{running: running, queued: queued}
   defp normalize_qa(_qa), do: %{running: [], queued: []}
+
+  defp acceptance_gate_payload(gate) do
+    %{
+      running: gate.running,
+      queued: gate.queued,
+      recent: Enum.map(gate.recent, &gate_verdict_payload/1),
+      agreement: gate.agreement
+    }
+  end
+
+  defp gate_verdict_payload(nil), do: nil
+
+  defp gate_verdict_payload(run) do
+    %{
+      repo_key: Map.get(run, :repo_key),
+      issue_id: Map.get(run, :issue_id),
+      issue_identifier: Map.get(run, :issue_identifier),
+      pr_url: Map.get(run, :pr_url),
+      head_sha: Map.get(run, :head_sha),
+      mode: Map.get(run, :mode),
+      verdict: run.verdict,
+      agent_verdict: Map.get(run, :agent_verdict),
+      reasons: Map.get(run, :reasons) || [],
+      criteria: Map.get(run, :criteria) || %{met: 0, unmet: 0, unclear: 0},
+      judged_at: iso8601(Map.get(run, :judged_at)),
+      run_id: Map.get(run, :run_id),
+      human_decision: Map.get(run, :human_decision),
+      human_decided_at: iso8601(Map.get(run, :human_decided_at))
+    }
+  end
 
   defp auto_merge_payload(entry) do
     %{

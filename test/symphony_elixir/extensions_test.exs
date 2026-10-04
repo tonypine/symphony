@@ -5,6 +5,7 @@ defmodule SymphonyElixir.ExtensionsTest do
   import Phoenix.LiveViewTest
 
   alias Mix.Tasks.Symphony.Audit
+  alias SymphonyElixir.AcceptanceGate.Runner, as: GateRunner
   alias SymphonyElixir.{AuditLog, StrayProcesses}
   alias SymphonyElixir.Linear.{Adapter, Client, Usage}
   alias SymphonyElixir.Tracker.Memory
@@ -517,8 +518,44 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
 
+    :ok =
+      RunStore.put_run(%{
+        repo_key: "default",
+        run_id: "gate-MT-WATCH",
+        kind: "acceptance_gate",
+        issue_id: "issue-watch",
+        issue_identifier: "MT-WATCH",
+        pr_url: "https://github.com/example/repo/pull/123",
+        head_sha: "abc1234def",
+        mode: "shadow",
+        verdict: "escalate",
+        agent_verdict: "approve",
+        reasons: [%{rule: "size", detail: "1600 changed lines outside docs and tests"}],
+        criteria: %{met: 2, unmet: 0, unclear: 1},
+        tokens: %{total_tokens: 5_000},
+        started_at: ~U[2026-10-03 05:50:00Z],
+        judged_at: ~U[2026-10-03 06:00:00Z]
+      })
+
     conn = get(build_conn(), "/api/v1/state")
     state_payload = json_response(conn, 200)
+
+    gate_verdict = %{
+      "repo_key" => "default",
+      "issue_id" => "issue-watch",
+      "issue_identifier" => "MT-WATCH",
+      "pr_url" => "https://github.com/example/repo/pull/123",
+      "head_sha" => "abc1234def",
+      "mode" => "shadow",
+      "verdict" => "escalate",
+      "agent_verdict" => "approve",
+      "reasons" => [%{"rule" => "size", "detail" => "1600 changed lines outside docs and tests"}],
+      "criteria" => %{"met" => 2, "unmet" => 0, "unclear" => 1},
+      "judged_at" => "2026-10-03T06:00:00Z",
+      "run_id" => "gate-MT-WATCH",
+      "human_decision" => nil,
+      "human_decided_at" => nil
+    }
 
     assert state_payload == %{
              "generated_at" => state_payload["generated_at"],
@@ -671,6 +708,25 @@ defmodule SymphonyElixir.ExtensionsTest do
                "running" => [%{"issue_id" => "qa-forced-http", "identifier" => "MT-QA-F", "sha" => "abc1234def", "forced" => true}],
                "queued" => [%{"issue_id" => "qa-queued-http", "identifier" => "MT-QA-Q", "forced" => false}]
              },
+             "acceptance_gate" => %{
+               "running" => [],
+               "queued" => [],
+               "recent" => [gate_verdict],
+               "agreement" => %{
+                 "default" => %{
+                   "judged" => 0,
+                   "agreed" => 0,
+                   "agreement_rate" => nil,
+                   "unsafe_approvals" => 0,
+                   "false_reworks" => 0,
+                   "escalations" => 0,
+                   "escalations_merged_unchanged" => 0,
+                   "tokens" => %{"median" => nil, "p90" => nil},
+                   "ready_to_enforce" => false,
+                   "unmet_condition" => "at least 20 judged tickets (0 so far)"
+                 }
+               }
+             },
              "auto_merge" => [
                %{
                  "issue_id" => "merge-http",
@@ -801,6 +857,7 @@ defmodule SymphonyElixir.ExtensionsTest do
              "logs" => %{"codex_session_logs" => []},
              "recent_events" => [],
              "last_error" => nil,
+             "acceptance_gate" => nil,
              "tracked" => %{}
            }
 
@@ -832,6 +889,7 @@ defmodule SymphonyElixir.ExtensionsTest do
              "logs" => %{"codex_session_logs" => []},
              "recent_events" => [],
              "last_error" => nil,
+             "acceptance_gate" => gate_verdict,
              "tracked" => %{}
            }
 
@@ -1595,6 +1653,89 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     assert html =~ "MT-QA"
     refute html =~ "MT-API-RUN"
+  end
+
+  test "dashboard liveview shows the acceptance gate's passes, verdicts and each repo's agreement" do
+    orchestrator_name = Module.concat(__MODULE__, :AcceptanceGateDashboardOrchestrator)
+    {:ok, _pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: static_snapshot())
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    {:ok, _view, html} = live(build_conn(), "/")
+    assert html =~ "Auto Review"
+    assert html =~ "Acceptance gate: 0 running, 0 queued."
+    assert html =~ "The acceptance gate has not judged a ticket yet."
+
+    test_pid = self()
+
+    run_fun = fn _job, _opts ->
+      send(test_pid, {:gate_pass, self()})
+
+      receive do
+        :finish -> :ok
+      end
+    end
+
+    start_supervised!({GateRunner, run_fun: run_fun})
+    issue = %{id: "issue-gate", identifier: "MT-GATE"}
+    gate_job = %{issue: issue, record: %{repo_key: "default", workspace_path: "/tmp/ws"}, sha: "abc1234", settings: Config.settings!()}
+    assert :started = GateRunner.request(gate_job, [])
+    assert_receive {:gate_pass, pass_pid}
+    on_exit(fn -> send(pass_pid, :finish) end)
+
+    gate_run = fn repo_key, identifier, verdict, attrs ->
+      Map.merge(
+        %{
+          repo_key: repo_key,
+          run_id: "gate-#{identifier}",
+          kind: "acceptance_gate",
+          issue_id: "issue-#{identifier}",
+          issue_identifier: identifier,
+          head_sha: "abc1234",
+          mode: "shadow",
+          verdict: verdict,
+          agent_verdict: verdict,
+          reasons: [],
+          criteria: %{met: 1, unmet: 0, unclear: 0},
+          tokens: %{total_tokens: 1_000},
+          started_at: ~U[2026-10-03 05:00:00Z],
+          judged_at: ~U[2026-10-03 05:00:00Z]
+        },
+        attrs
+      )
+    end
+
+    decided = %{human_decision: "approve", human_decided_at: ~U[2026-10-03 07:00:00Z], unchanged: true}
+
+    runs =
+      [
+        gate_run.("default", "MT-ESC", "escalate", %{
+          agent_verdict: "approve",
+          reasons: [%{rule: "size", detail: "1600 changed lines"}],
+          criteria: %{met: 2, unmet: 0, unclear: 1},
+          judged_at: ~U[2026-10-03 06:00:00Z]
+        }),
+        gate_run.("web", "MT-WEB", "approve", %{judged_at: ~U[2026-10-03 05:30:00Z]}),
+        gate_run.("api", "MT-API", "rework", decided)
+      ] ++ for(n <- 1..20, do: gate_run.("default", "MT-OK-#{n}", "approve", Map.put(decided, :judged_at, ~U[2026-10-03 05:00:00Z] |> DateTime.add(n))))
+
+    Enum.each(runs, &(:ok = RunStore.put_run(&1)))
+
+    {:ok, _view, html} = live(build_conn(), "/")
+
+    assert html =~ "Acceptance gate: 1 running (MT-GATE), 0 queued."
+    assert html =~ "MT-ESC: escalate (agent: approve) · 2 met, 0 unmet, 1 unclear · reasons: size · shadow · human: waiting"
+    assert html =~ "MT-WEB: approve · 1 met, 0 unmet, 0 unclear · shadow · human: waiting"
+    assert html =~ "MT-OK-20: approve · 1 met, 0 unmet, 0 unclear · shadow · human: approve"
+
+    assert html =~
+             "default: 20 judged, 20 agreed (100%), 0 unsafe approvals, 0 false reworks, 0 escalations (0 merged unchanged), " <>
+               "gate tokens median 1000, p90 1000 · ready to enforce"
+
+    assert html =~
+             "api: 1 judged, 0 agreed (0%), 0 unsafe approvals, 1 false reworks, 0 escalations (0 merged unchanged), " <>
+               "gate tokens median 1000, p90 1000 · not ready to enforce: at least 20 judged tickets (1 so far)"
+
+    assert html =~ "web: 0 judged, 0 agreed (n/a), 0 unsafe approvals, 0 false reworks, 0 escalations (0 merged unchanged), gate tokens median n/a, p90 n/a"
   end
 
   test "state api and dashboard show Linear requests per caller for the last hour" do
