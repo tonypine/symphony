@@ -16,6 +16,9 @@ defmodule SymphonyElixir.HumanActions.Collector do
     is a `:verification_blocked` on its parent's project, while the ticket stays in the state the
     walkthrough moved it to.
 
+  Neither lists a `blocked` verdict whose QA agent was stopped by the provider's usage limit: that
+  pass runs again once the limit resets.
+
   Issues outside a project are skipped: there is no project to post the update to.
   """
 
@@ -32,6 +35,9 @@ defmodule SymphonyElixir.HumanActions.Collector do
   @plan_review_minutes 10
   @verdict_pattern ~r/^\*\*Verdict:\*\*\s*(\w+)/m
   @reason_pattern ~r/^Reason:\s*(.+)$/m
+  # The `blocked` reason of a QA agent that hit the provider's usage limit, as older QA reports
+  # wrote it: `the QA agent could not finish: {:qa_agent_failed, {:usage_limited, ...}}`.
+  @usage_limit_pattern ~r/:usage_limited\b/
   # A parent walkthrough's report names the verification ticket and the state it moved it to.
   @walkthrough_target_pattern ~r/^\*\*Verdict:\*\*\s*\w+\s*→\s*(\S+)\s+(.+?)\s*$/m
   @blocked_step_pattern ~r/^- \*\*blocked\*\* (.+?)(?: \(evidence: .*\))?$/m
@@ -266,7 +272,8 @@ defmodule SymphonyElixir.HumanActions.Collector do
 
   defp qa_blocked_actions(%{issue: issue} = context, true) do
     case latest_qa_report(context.node) do
-      %{verdict: "blocked", reason: reason} ->
+      # A pass that hit the usage limit runs again once the limit resets: nobody needs to unblock it.
+      %{verdict: "blocked", reason: reason, usage_limited?: false} ->
         [
           action(context, %{
             key: "qa:#{issue.id}",
@@ -291,8 +298,9 @@ defmodule SymphonyElixir.HumanActions.Collector do
 
   # The verdict line says where the walkthrough left the ticket: `In Review`, or `Todo` when the
   # failing steps it could run were filed as gap tickets.
+  # A walkthrough that hit the usage limit runs again once the limit resets: nobody needs to unblock it.
   defp verification_blocked_actions(%{issue: issue} = context, true) do
-    with %{verdict: "blocked", body: body} = report <- latest_qa_report(context.node),
+    with %{verdict: "blocked", usage_limited?: false, body: body} = report <- latest_qa_report(context.node),
          [_, target, target_state] <- Regex.run(@walkthrough_target_pattern, body),
          true <- target == issue.identifier and state_is?(issue.state, target_state) do
       [verification_blocked_action(context, report, target_state)]
@@ -345,8 +353,18 @@ defmodule SymphonyElixir.HumanActions.Collector do
     |> Enum.filter(&(is_binary(&1["body"]) and String.starts_with?(String.trim(&1["body"]), Report.heading())))
     |> Enum.max_by(&(&1["createdAt"] || ""), fn -> nil end)
     |> case do
-      %{"body" => body} -> %{verdict: capture(@verdict_pattern, body), reason: capture(@reason_pattern, body), body: body}
-      nil -> nil
+      %{"body" => body} ->
+        reason = capture(@reason_pattern, body)
+
+        %{
+          verdict: capture(@verdict_pattern, body),
+          reason: reason,
+          usage_limited?: is_binary(reason) and Regex.match?(@usage_limit_pattern, reason),
+          body: body
+        }
+
+      nil ->
+        nil
     end
   end
 
