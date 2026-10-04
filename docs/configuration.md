@@ -950,13 +950,14 @@ labels on the ticket or the parent choose the playbooks, and every enabled playb
 one.
 
 - the `## Symphony QA Report` is written on the parent and on the verification ticket;
-- `pass` and `blocked` → the verification ticket goes to `In Review` for a human to sign off;
-- `fail` → each failing step (or each finding, when no step failed) is filed as a `Backlog`
-  sub-ticket of the verification ticket that names the step and holds its details and evidence,
-  the report lists them, and the verification ticket is marked blocked by each one and stays in
-  `Todo`. Symphony holds it there and runs the walkthrough again once every gap is `Done` (or
-  cancelled), with no human step. When a gap could not be filed or linked, the ticket goes to
-  `Backlog` for a human instead. There is no fix loop.
+- `pass` (or `blocked` with no failing step) → the verification ticket goes to `In Review` for a
+  human to sign off;
+- `fail` (or `blocked` with a failing step) → each failing step (or each finding, when no step
+  failed) is filed as a `Backlog` sub-ticket of the verification ticket that names the step and
+  holds its details and evidence, the report lists them, and the verification ticket is marked
+  blocked by each one and stays in `Todo`. Symphony holds it there and runs the walkthrough again
+  once every gap is `Done` (or cancelled), with no human step. When a gap could not be filed or
+  linked, the ticket goes to `Backlog` for a human instead. There is no fix loop.
 
 The ticket gets the usual executor run when the tracker is not Linear, the run is on a remote
 worker, it has the `qa:skip` label, or it has no parent.
@@ -1138,9 +1139,11 @@ signed ad hoc: macOS asks again after each rebuild, and after each Symphony vers
 the helper. Both are signed with the hardened runtime, so code injected with
 `DYLD_INSERT_LIBRARIES` does not load into the helper and can't use its grants.
 
-Without a grant the tools return `qa_permission_missing`, the QA agent answers `blocked` with the
-missing permission as the reason, and the issue goes to `In Review` with that reason in the QA
-report.
+Without a grant the tools return `qa_permission_missing`. The QA agent marks the app steps
+`blocked`, still runs the steps of the other playbooks offered (`cli`, `web`) and reports each as
+`pass` or `fail`, then answers `blocked` with the missing permission as the reason. The issue goes
+to `In Review` with that reason in the QA report; in a parent walkthrough, a failing step from the
+other playbooks is filed as a gap as usual.
 
 ##### Running QA on a separate macOS host
 

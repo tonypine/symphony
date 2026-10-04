@@ -9,8 +9,10 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
   its evidence attachments land on the parent. There is no fix loop:
 
   - the `## Symphony QA Report` is written on the parent and on the verification ticket;
-  - `pass` and `blocked` move the verification ticket to `In Review` for a human to sign off;
-  - `fail` files each failing step (or, without failing steps, each finding) as a Backlog child of
+  - `pass` (or `blocked` with no failing step) moves the verification ticket to `In Review` for a
+    human to sign off;
+  - `fail` (or `blocked` with a failing step, such as the macOS app part blocked while a CLI check
+    failed) files each failing step (or, without failing steps, each finding) as a Backlog child of
     the verification ticket that names the step and holds its details and evidence, marks the
     verification ticket blocked by each one, and leaves it in `Todo`, as for any gap a final
     verification finds. Symphony's blocked-by gate holds it there and dispatches it again once every
@@ -178,6 +180,7 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
     {target_state, filed} =
       case outcome.verdict do
         :fail -> fail_target(file_failures(issue, parent, outcome, opts))
+        :blocked -> blocked_target(issue, parent, outcome, opts)
         _verdict -> {@review_state, []}
       end
 
@@ -205,6 +208,14 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
     if filed != [] and Enum.all?(filed, & &1.linked?),
       do: {@gap_state, filed},
       else: {@unlinked_gap_state, filed}
+  end
+
+  # A blocked playbook (the macOS app without its grants) does not hide the other playbooks'
+  # failing steps: they are filed as gaps, as for `fail`. Without one, a human takes over.
+  defp blocked_target(issue, parent, outcome, opts) do
+    if Enum.any?(Map.get(outcome, :steps, []), &(&1.status == "fail")),
+      do: fail_target(file_failures(issue, parent, outcome, opts)),
+      else: {@review_state, []}
   end
 
   defp publish(target, report, settings, opts) do
