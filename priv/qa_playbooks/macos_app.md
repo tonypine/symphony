@@ -15,6 +15,8 @@ for you on the host. They only act on this worktree's configured app and on apps
 - `qa_screenshot`: saves the app's windows to `qa-evidence/<name>.png`. Each name can be used
   once; it never replaces an existing file.
 - `qa_quit_app`: quits the app and returns its recent output.
+- `qa_put_file`: puts a file you wrote under `qa-evidence/` or `$TMPDIR` (a test `symphony.yml`,
+  a `WORKFLOW.md`) where the app can open it, and returns the `path` to give the app.
 
 Do not edit files in the worktree, gitignored ones included (such as build caches):
 `qa_build` and `qa_launch_app` refuse a modified checkout.
@@ -41,6 +43,10 @@ Do not edit files in the worktree, gitignored ones included (such as build cache
 7. Exercise the change: fill fields with `qa_ax_set_value`, press the buttons the
    walkthrough names, and read the tree again to check the result. Use made-up values, never
    real credentials.
+   For every file the app must open (a config path in Settings, a `WORKFLOW.md`), write the fixture under `qa-evidence/` or `$TMPDIR`, call `qa_put_file`,
+   and give the app the `path` it returns, never your own path: the app may run on a
+   separate QA machine that cannot see your files. Type that path into the field rather
+   than browsing for it in a file picker.
 8. Run `qa_quit_app` when you are done.
 9. Attach the screenshots that show each step's result with `linear_attach_file`
    (`make_public: false`) and list the returned URLs in that step's `evidence`.
