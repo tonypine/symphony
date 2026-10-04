@@ -58,8 +58,8 @@ defmodule SymphonyElixir.QaDriver do
 
   require Logger
 
-  alias SymphonyElixir.{AgentEnv, Paths, PathSafety, Workspace}
-  alias SymphonyElixir.QaDriver.{Host, Remote}
+  alias SymphonyElixir.{AgentEnv, PathSafety, Workspace}
+  alias SymphonyElixir.QaDriver.{Checks, Host, Remote}
 
   @evidence_dir "qa-evidence"
   @qa_root_env "SYMPHONY_BAR_QA_ROOT"
@@ -71,12 +71,8 @@ defmodule SymphonyElixir.QaDriver do
   @tree_bytes_limit 100_000
   @max_running_apps 3
   @max_screenshots 8
-  # Every tool error that stops the macOS app part says this, so the other playbooks still run.
-  @blocked_hint "Mark the app steps you could not check `blocked` with this reason, finish the other playbooks' steps " <>
-                  "(pass or fail), then answer with verdict `blocked` and this reason."
   @value_limit 10_000
   @press_actions ~w(AXPress AXRaise AXShowMenu AXConfirm AXCancel AXIncrement AXDecrement AXPick)
-  @screenshot_name ~r/\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z/
   @element_path ~r/\A\d{1,4}(\.\d{1,4}){0,63}\z/
 
   # Checks and copies the bundle on a QA host: `$1` build dir, `$2` app path,
@@ -186,13 +182,13 @@ defmodule SymphonyElixir.QaDriver do
 
   defp run_tool("qa_screenshot", driver, config, args) do
     with {:ok, pid} <- running_pid(driver, args),
-         {:ok, name} <- screenshot_name(Map.get(args, "name")),
+         {:ok, name} <- Checks.screenshot_name(Map.get(args, "name")),
          {:ok, window_id} <- optional_integer(args, "window_id", 1, 0xFFFF_FFFF),
          {:ok, helper} <- helper(driver, config),
          :ok <- require_screen_recording(config, helper),
          {:ok, %{"windows" => windows}} <- run_helper(config, helper, ["windows", Integer.to_string(pid)]),
          {:ok, targets} <- screenshot_targets(windows, window_id),
-         {:ok, evidence} <- evidence_dir(config) do
+         {:ok, evidence} <- Checks.ensure_evidence_dir(config.worktree) do
       capture(config, helper, pid, targets, name, evidence)
     end
   end
@@ -258,46 +254,17 @@ defmodule SymphonyElixir.QaDriver do
         |> Enum.sort()
 
       case dirty ++ planted do
-        [] ->
-          :ok
-
-        changed ->
-          tool_error(
-            "qa_worktree_modified",
-            "The QA worktree has changes outside #{@evidence_dir}/ (#{Enum.join(Enum.take(changed, 5), ", ")}). QA tests the PR head as pushed; do not edit files in the worktree, including gitignored ones."
-          )
+        [] -> :ok
+        changed -> Checks.worktree_modified(changed, "do not edit files in the worktree, including gitignored ones.")
       end
     end
   end
 
+  # `qa-evidence/` is the agent's to write, and so are new files in the folders
+  # Symphony itself writes into the QA agent's workspace, such as
+  # `.gradle-daemons/`: the build does not read them.
   defp worktree_status(config) do
-    args = ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=traditional"]
-
-    case config.git.(args, config.worktree) do
-      {output, 0} ->
-        {ignored, dirty} =
-          output
-          |> to_string()
-          |> String.split(<<0>>, trim: true)
-          |> Enum.reject(&skipped?/1)
-          |> Enum.split_with(&String.starts_with?(&1, "!! "))
-
-        {:ok, Enum.map(ignored, &String.slice(&1, 3..-1//1)), Enum.map(dirty, &String.slice(&1, 3..-1//1))}
-
-      {output, status} ->
-        tool_error("qa_git_failed", "git status failed (exit #{status}): #{tail(to_string(output), 500)}")
-    end
-  end
-
-  # `qa-evidence/` is the agent's to write. Symphony itself writes folders such
-  # as `.gradle-daemons/` into the QA agent's workspace (see
-  # `SymphonyElixir.AgentEnv.owned_dirs/0`); the build does not read them, so new
-  # files there do not count either, but a change to a tracked file there does.
-  defp skipped?(entry) do
-    {status, path} = String.split_at(entry, 3)
-
-    String.starts_with?(path, @evidence_dir <> "/") or
-      (status in ["?? ", "!! "] and Enum.any?(AgentEnv.owned_dirs(), &String.starts_with?(path, &1 <> "/")))
+    Checks.worktree_status(config.git, config.worktree, ["--untracked-files=all", "--ignored=traditional"])
   end
 
   # ctime and inode cannot be set back by an unprivileged process, so a rewrite
@@ -575,18 +542,6 @@ defmodule SymphonyElixir.QaDriver do
     end
   end
 
-  defp screenshot_name(name) when is_binary(name) do
-    name = String.replace_suffix(name, ".png", "")
-
-    if Regex.match?(@screenshot_name, name) do
-      {:ok, name}
-    else
-      tool_error("invalid_arguments", "`name` must be 1-64 characters of letters, digits, `.`, `_` or `-`, starting with a letter or digit.")
-    end
-  end
-
-  defp screenshot_name(_name), do: tool_error("invalid_arguments", "`name` is required.")
-
   defp element_path(path) when is_binary(path) do
     if Regex.match?(@element_path, path) do
       {:ok, path}
@@ -698,7 +653,7 @@ defmodule SymphonyElixir.QaDriver do
     tool_error(
       "qa_permission_missing",
       "#{holder} has no #{grant} permission, so QA cannot see the app. " <>
-        "#{@blocked_hint} An operator grants Screen Recording and Accessibility to #{grantee} " <>
+        "#{Checks.blocked_hint()} An operator grants Screen Recording and Accessibility to #{grantee} " <>
         "once in System Settings > Privacy & Security (see docs/configuration.md, Auto Review macOS app QA)."
     )
   end
@@ -721,24 +676,6 @@ defmodule SymphonyElixir.QaDriver do
 
   defp visible?(%{"frame" => %{"w" => width, "h" => height}}), do: width > 1 and height > 1
   defp visible?(_window), do: false
-
-  defp evidence_dir(config) do
-    dir = Path.join(config.worktree, @evidence_dir)
-
-    case File.lstat(dir) do
-      {:ok, %File.Stat{type: :directory}} ->
-        {:ok, dir}
-
-      {:error, :enoent} ->
-        case File.mkdir(dir) do
-          :ok -> {:ok, dir}
-          {:error, reason} -> tool_error("qa_evidence_unsafe", "#{@evidence_dir}/ could not be created in the QA worktree: #{inspect(reason)}.")
-        end
-
-      _other ->
-        tool_error("qa_evidence_unsafe", "#{@evidence_dir}/ in the QA worktree must be a plain directory, not a symlink or file.")
-    end
-  end
 
   defp capture(config, helper, pid, targets, name, evidence) do
     numbered = length(targets) > 1
@@ -771,25 +708,9 @@ defmodule SymphonyElixir.QaDriver do
 
     with {:ok, {_output, 0}} <- config.host.call_helper.(helper, args, timeout_ms: @screenshot_timeout_ms, output_limit: @output_limit),
          {:ok, png} <- config.host.read.(scratch) do
-      write_evidence(Path.join(evidence, file), png, file)
+      Checks.write_evidence(Path.join(evidence, file), png, file)
     else
       _failure -> tool_error("qa_screenshot_failed", "screencapture could not capture window #{window["id"]}.")
-    end
-  end
-
-  # `:exclusive` is O_CREAT|O_EXCL: it never follows, replaces or removes a
-  # symlink or file the agent left at the name, so a screenshot cannot be
-  # redirected outside `qa-evidence/`.
-  defp write_evidence(destination, png, file) do
-    case File.write(destination, png, [:exclusive]) do
-      :ok ->
-        :ok
-
-      {:error, :eexist} ->
-        tool_error("qa_screenshot_exists", "#{@evidence_dir}/#{file} already exists. Give each screenshot a new name.")
-
-      {:error, reason} ->
-        tool_error("qa_screenshot_failed", "Could not save #{@evidence_dir}/#{file}: #{inspect(reason)}.")
     end
   end
 
@@ -816,7 +737,7 @@ defmodule SymphonyElixir.QaDriver do
       build: Map.fetch!(playbook, :build),
       app: Map.fetch!(playbook, :app),
       build_timeout_ms: Map.get(playbook, :build_timeout_ms) || @default_build_timeout_ms,
-      scratch_dir: private_dir(),
+      scratch_dir: Checks.private_dir("qa-driver"),
       remote?: worker_host != nil,
       host: Map.merge(base_host, Map.new(Keyword.get(opts, :host, %{}))),
       git: Keyword.get(opts, :git, &default_git/2)
@@ -851,12 +772,12 @@ defmodule SymphonyElixir.QaDriver do
           config,
           "qa_worker_unsafe",
           "The QA host #{worker_host} #{problems}. QA must not run where PR code can reach push credentials. " <>
-            "#{@blocked_hint} An operator fixes the QA host (see docs/configuration.md, Auto Review macOS app QA)."
+            "#{Checks.blocked_hint()} An operator fixes the QA host (see docs/configuration.md, Auto Review macOS app QA)."
         )
 
       {:error, {:unreachable, reason}} ->
         Logger.warning("QA driver could not reach worker_host=#{worker_host}: #{reason}")
-        unavailable(config, "qa_worker_unreachable", "The QA host #{worker_host} could not be prepared: #{reason}. #{@blocked_hint}")
+        unavailable(config, "qa_worker_unreachable", "The QA host #{worker_host} could not be prepared: #{reason}. #{Checks.blocked_hint()}")
     end
   end
 
@@ -923,18 +844,6 @@ defmodule SymphonyElixir.QaDriver do
     if state.config.remote? and state.config.host_dir, do: state.config.host.cleanup.(state.config.host_dir)
     File.rm_rf(state.config.scratch_dir)
     :ok
-  end
-
-  # Not under System.tmp_dir!(): the agent sandbox may write there.
-  defp private_dir do
-    runs = Path.join([Paths.state_root(), "qa-driver", "runs"])
-    File.mkdir_p!(runs)
-    File.chmod!(runs, 0o700)
-    dir = Path.join(runs, "#{System.os_time(:millisecond)}-#{System.unique_integer([:positive])}")
-    File.mkdir!(dir)
-    File.chmod!(dir, 0o700)
-    {:ok, canonical} = PathSafety.canonicalize(dir)
-    canonical
   end
 
   defp launch(executable, state) do

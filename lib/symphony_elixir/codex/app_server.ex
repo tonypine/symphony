@@ -402,7 +402,7 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
-  @dynamic_tool_forwarded_opts [:gh_runner, :git_runner, :settings, :tool_scope, :qa_driver]
+  @dynamic_tool_forwarded_opts [:gh_runner, :git_runner, :settings, :tool_scope, :qa_driver, :qa_android_driver]
 
   defp dynamic_tool_executor(issue, workspace, command_security, dependency_gate, on_message, metadata, opts) do
     registry = Keyword.get(opts, :linear_comment_registry) || temporary_comment_registry()
@@ -732,7 +732,7 @@ defmodule SymphonyElixir.Codex.AppServer do
 
   defp tool_opts(opts) do
     opts
-    |> Keyword.take([:linear_client, :upload_client, :gh_runner, :git_runner, :settings, :tool_scope, :qa_driver])
+    |> Keyword.take([:linear_client, :upload_client, :gh_runner, :git_runner, :settings, :tool_scope, :qa_driver, :qa_android_driver])
   end
 
   defp install_remote_shim(_mcp_session, nil), do: {:ok, nil}
