@@ -2517,6 +2517,24 @@ defmodule SymphonyElixir.Orchestrator do
     finish_poll_cycle(state, System.monotonic_time(:millisecond))
   end
 
+  # A continuation stays a retry so its continuation flag reaches the headroom check; waiting for
+  # a slot would send it back through candidate selection, where a headroom hold sees a new run.
+  defp defer_dispatch_readiness_request(%State{} = state, {:active_retry, issue, attempt, %{continuation: true} = metadata}) do
+    Logger.debug("Deferring continuation retry dispatch: dispatch readiness task already in flight for #{issue_context(issue)}")
+
+    schedule_issue_retry(
+      state,
+      issue.id,
+      attempt,
+      Map.merge(metadata, %{
+        identifier: issue.identifier,
+        title: issue.title,
+        delay_type: :continuation,
+        error: "dispatch readiness task already in flight; deferred"
+      })
+    )
+  end
+
   defp defer_dispatch_readiness_request(%State{} = state, {:active_retry, issue, attempt, metadata}) do
     Logger.debug("Deferring active retry dispatch: dispatch readiness task already in flight for #{issue_context(issue)}")
     wait_for_slot(state, issue, attempt, metadata, "dispatch readiness task already in flight")
