@@ -521,13 +521,39 @@ In QA mode, under that directory:
 | `secrets.json` | `LINEAR_API_KEY` and the other variables, readable only by you | `~/Library/Application Support/symphony/release/secrets.json` |
 | `logs/` | Symphony's output log | `~/Library/Logs/symphony` |
 | `updates/` | update downloads and the update helper's log | `~/Library/Caches/<bundle id>` |
-| `state/` | Symphony's state: control URL and token | `~/Library/Application Support/symphony` |
+| `state/` | Symphony's state: control URL and token (`SYMPHONY_STATE_ROOT`) | `~/Library/Application Support/symphony` |
+| `symphony-logs/` | Symphony's own logs (`SYMPHONY_LOGS_ROOT`) | `~/Library/Logs/symphony/release` |
+| `burrito/` | the embedded Symphony's unpacked release, in `burrito/.burrito/` (`SYMPHONY_INSTALL_DIR`) | `~/Library/Application Support/.burrito` |
 
 The app starts with empty settings, so Settings opens. It doesn't see a Symphony already running outside QA
 mode, so Stop, Restart, Pause and Resume can't reach it, unless `SYMPHONY_STATE_ROOT` is set too, which wins
-over `state/`. Start runs only a checkout: with Development mode off it reports "QA mode runs only a
-checkout's Symphony; turn on Development mode in Settings." Saving Settings leaves
-`~/Library/Application Support/symphony/release/secrets.json` and the login Keychain as they were.
+over `state/`. Until its own Symphony has written a control URL, the app doesn't look for one on the default
+port 4000 either, where the Symphony a normal launch runs answers. `SYMPHONY_LOGS_ROOT` and
+`SYMPHONY_INSTALL_DIR` set in the environment win over `symphony-logs/` and `burrito/` the same way. Saving
+Settings leaves `~/Library/Application Support/symphony/release/secrets.json` and the login Keychain as they
+were.
+
+Start runs a checkout in Development mode, or the embedded Symphony with Development mode off. The embedded
+Symphony unpacks under `burrito/`, so it never removes the installed app's unpacked release (running a newer
+build removes older builds' unpacked releases from its folder). It still takes the Erlang node name
+`symphony@127.0.0.1`, so while another Symphony release runs, start the app with its own `ERL_EPMD_PORT`, for
+example `ERL_EPMD_PORT=24369`, and use a `symphony.yml` whose `dashboard.port` is free (`0` picks one).
+
+Two more variables, read only in QA mode:
+
+- `SYMPHONY_BAR_UPDATE_URL` replaces GitHub's `releases/latest` URL for update checks, for a local update feed
+  that answers in the same format. An update in QA mode relaunches the app with its environment, so the new
+  version is in QA mode too, with the same folders.
+- `SYMPHONY_BAR_QA_SCRIPTED=1` lets a script drive the app without Accessibility access. The app presses the
+  menu item whose title a file in `commands/` holds (files are taken in name order and deleted; a name
+  starting with `.` is skipped, so write one and rename it). As a click would, it presses only a visible,
+  enabled item. It keeps `status.json` current: its pid, version, build and bundle path, the pid of the
+  Symphony it runs, every visible menu item with whether it is enabled, the presses it handled (`pressed`,
+  `disabled` or `missing`) and the alerts it would have shown. It shows no alerts: it records them there,
+  and answers confirmations (Update, Quit) yes.
+
+The [end-to-end test](Tests/e2e/README.md) uses all of this to test Update, Restart and rollback without
+touching the installed app.
 
 ## Troubleshooting
 

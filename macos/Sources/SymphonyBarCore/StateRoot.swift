@@ -40,9 +40,10 @@ public enum StateRoot {
         return candidates.first { modificationDate($0.appendingPathComponent(controlTokenFileName)) != nil } ?? base
     }
 
-    /// The control plane URL in `root`, or `SymphonyState.defaultBaseURL` when Symphony hasn't written one.
-    public static func controlURL(in root: URL) -> URL {
-        SymphonyState.baseURL(controlURLFile: root.appendingPathComponent(controlURLFileName))
+    /// The control plane URL in `root`, or `fallback` (`SymphonyState.defaultBaseURL` unless given) when Symphony
+    /// hasn't written one.
+    public static func controlURL(in root: URL, fallback: URL? = SymphonyState.defaultBaseURL) -> URL? {
+        SymphonyState.baseURL(controlURLFile: root.appendingPathComponent(controlURLFileName), fallback: fallback)
     }
 
     public static func controlTokenFile(in root: URL) -> URL {

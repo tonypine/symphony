@@ -1,34 +1,59 @@
 import Foundation
 
 /// QA mode, for test launches: `SYMPHONY_BAR_QA_ROOT=<dir>` keeps the app's settings, secrets, Launch at Login,
-/// logs, update downloads and Symphony state under `<dir>`, never in UserDefaults or the app's secrets file.
+/// logs, update downloads, Symphony's state and logs and the embedded Symphony's unpacked release under `<dir>`,
+/// never in UserDefaults, the app's secrets file or the folders a normal launch uses.
 public struct QAMode: Equatable {
     /// The directory QA mode keeps everything under. QA mode is on while it is set and not blank.
     public static let environmentKey = "SYMPHONY_BAR_QA_ROOT"
+    /// `1` makes the app scriptable: see `QAScript`.
+    public static let scriptedKey = "SYMPHONY_BAR_QA_SCRIPTED"
+    /// The releases/latest URL update checks read instead of GitHub's, for a local update feed.
+    public static let updateURLKey = "SYMPHONY_BAR_UPDATE_URL"
+    /// Where Symphony writes its logs (`SymphonyElixir.Paths`).
+    public static let symphonyLogsRootKey = "SYMPHONY_LOGS_ROOT"
+    /// Where the embedded Burrito binary unpacks its release, under `.burrito/`. Burrito's launcher removes older
+    /// versions' unpacked releases from that folder, so a test launch must never share it with the installed app.
+    public static let burritoInstallDirectoryKey = "SYMPHONY_INSTALL_DIR"
 
     public static let settingsFileName = "settings.plist"
     public static let secretsFileName = "secrets.json"
     public static let logsFolder = "logs"
+    public static let symphonyLogsFolder = "symphony-logs"
     public static let updatesFolder = "updates"
     public static let stateFolder = "state"
+    public static let burritoFolder = "burrito"
 
     public let root: URL
+    /// True when `SYMPHONY_BAR_QA_SCRIPTED` is `1`.
+    public let scripted: Bool
+    /// The update feed from `SYMPHONY_BAR_UPDATE_URL`, nil for GitHub's.
+    public let updateURL: URL?
 
-    public init(root: URL) {
+    public init(root: URL, scripted: Bool = false, updateURL: URL? = nil) {
         self.root = root.standardizedFileURL
+        self.scripted = scripted
+        self.updateURL = updateURL
     }
 
     /// QA mode from `SYMPHONY_BAR_QA_ROOT`, or nil when it is unset or blank. `~` is expanded.
     public static func detect(environment: [String: String]) -> QAMode? {
         guard let path = environment[environmentKey]?.trimmingWhitespace(), !path.isEmpty else { return nil }
-        return QAMode(root: URL(fileURLWithPath: (path as NSString).expandingTildeInPath, isDirectory: true))
+        let updateURL = environment[updateURLKey].flatMap { URL(string: $0.trimmingWhitespace()) }
+        return QAMode(
+            root: URL(fileURLWithPath: (path as NSString).expandingTildeInPath, isDirectory: true),
+            scripted: environment[scriptedKey]?.trimmingWhitespace() == "1",
+            updateURL: updateURL.flatMap { ["http", "https"].contains($0.scheme ?? "") ? $0 : nil }
+        )
     }
 
     public var settingsFile: URL { root.appendingPathComponent(Self.settingsFileName) }
     public var secretsFile: URL { root.appendingPathComponent(Self.secretsFileName) }
     public var logDirectory: URL { root.appendingPathComponent(Self.logsFolder, isDirectory: true) }
+    public var symphonyLogsRoot: URL { root.appendingPathComponent(Self.symphonyLogsFolder, isDirectory: true) }
     public var updateCacheDirectory: URL { root.appendingPathComponent(Self.updatesFolder, isDirectory: true) }
     public var stateRoot: URL { root.appendingPathComponent(Self.stateFolder, isDirectory: true) }
+    public var burritoInstallDirectory: URL { root.appendingPathComponent(Self.burritoFolder, isDirectory: true) }
 }
 
 /// Where the app keeps its settings and secrets, and the environment it reads Symphony's state root from:
@@ -41,8 +66,14 @@ public struct AppStores {
     public let logDirectory: URL
     /// Where update downloads go, nil for the default caches folder.
     public let updateCacheDirectory: URL?
-    /// The app's environment. In QA mode `SYMPHONY_STATE_ROOT` defaults to `<QA root>/state`, so the app neither
-    /// sees nor controls a Symphony started outside QA mode, and the Symphony it starts keeps its state there.
+    /// The releases/latest URL update checks read.
+    public let updateURL: URL
+    /// The control URL used while Symphony hasn't written one. Nil in QA mode, so the app never mistakes the
+    /// Symphony a normal launch runs, on the default port, for its own.
+    public let controlURLFallback: URL?
+    /// The app's environment. In QA mode `SYMPHONY_STATE_ROOT`, `SYMPHONY_LOGS_ROOT` and `SYMPHONY_INSTALL_DIR`
+    /// default to folders under the QA root, so the app neither sees nor controls a Symphony started outside QA
+    /// mode, and the Symphony it starts keeps its state, logs and unpacked release there.
     public let environment: [String: String]
 
     public init(
@@ -56,6 +87,8 @@ public struct AppStores {
             loginItem = MainAppLoginItem()
             logDirectory = ChildLog.defaultDirectory(home: home)
             updateCacheDirectory = nil
+            updateURL = UpdateChecker.latestReleaseURL
+            controlURLFallback = SymphonyState.defaultBaseURL
             self.environment = environment
             return
         }
@@ -67,14 +100,29 @@ public struct AppStores {
         loginItem = FileLoginItem(defaults: defaults)
         logDirectory = qaMode.logDirectory
         updateCacheDirectory = qaMode.updateCacheDirectory
+        updateURL = qaMode.updateURL ?? UpdateChecker.latestReleaseURL
+        controlURLFallback = nil
         var environment = environment
-        if environment[StateRoot.environmentKey]?.trimmingWhitespace().isEmpty ?? true {
-            environment[StateRoot.environmentKey] = qaMode.stateRoot.path
+        for (key, folder) in [
+            (StateRoot.environmentKey, qaMode.stateRoot),
+            (QAMode.symphonyLogsRootKey, qaMode.symphonyLogsRoot),
+            (QAMode.burritoInstallDirectoryKey, qaMode.burritoInstallDirectory),
+        ] where environment[key]?.trimmingWhitespace().isEmpty ?? true {
+            environment[key] = folder.path
         }
         self.environment = environment
     }
 
     public var isQAMode: Bool { qaMode != nil }
+
+    /// The update helper's environment. In QA mode it is the app's, so the app the helper relaunches is in QA mode
+    /// too and keeps the same folders.
+    public var updateHelperEnvironment: [String: String] {
+        guard isQAMode else { return ["PATH": UpdateHelper.path] }
+        var environment = environment
+        environment["PATH"] = environment["PATH"].flatMap { $0.isEmpty ? nil : $0 } ?? UpdateHelper.path
+        return environment
+    }
 
     public func settingsStore() -> SettingsStore {
         SettingsStore(defaults: defaults, secrets: secrets)
@@ -191,7 +239,7 @@ public final class FileLoginItem: LoginItemService {
 
 /// Writes `data` to a new file with `permissions` next to `file`, then renames it over `file`, so readers see the old
 /// contents or the new ones, never part of a write.
-private func writeReplacing(_ file: URL, with data: Data, permissions: mode_t) throws {
+func writeReplacing(_ file: URL, with data: Data, permissions: mode_t) throws {
     let temporary = file.deletingLastPathComponent().appendingPathComponent(".\(file.lastPathComponent).\(UUID())")
     let descriptor = open(temporary.path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, permissions)
     guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }

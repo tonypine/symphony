@@ -606,6 +606,7 @@ defmodule SymphonyElixir.TestSupport do
 
     tracker_kind = Keyword.get(config, :tracker_kind)
     tracker_endpoint = Keyword.get(config, :tracker_endpoint)
+    tracker_memory_issues_file = Keyword.get(config, :tracker_memory_issues_file)
     tracker_api_token = Keyword.get(config, :tracker_api_token)
     tracker_project_slug = Keyword.get(config, :tracker_project_slug)
     tracker_team = Keyword.get(config, :tracker_team)
@@ -686,6 +687,7 @@ defmodule SymphonyElixir.TestSupport do
         issues_yaml(%{
           kind: tracker_kind,
           endpoint: tracker_endpoint,
+          memory_issues_file: tracker_memory_issues_file,
           api_token: tracker_api_token,
           project_slug: tracker_project_slug,
           team: tracker_team,
@@ -834,10 +836,12 @@ defmodule SymphonyElixir.TestSupport do
       "      project_slug: #{yaml_value(config.project_slug)}",
       "      team: #{yaml_value(config.team)}",
       "      labels: #{yaml_value(config.labels)}",
+      config.memory_issues_file && "  memory:\n    issues_file: #{yaml_value(config.memory_issues_file)}",
       "  states:",
       "    active: #{yaml_value(config.active_states)}",
       "    terminal: #{yaml_value(config.terminal_states)}"
     ]
+    |> Enum.reject(&is_nil/1)
     |> Enum.join("\n")
   end
 

@@ -97,6 +97,8 @@ public enum UpdateEligibility {
 public enum UpdateHelper {
     public static let resourceName = "update-helper.sh"
     public static let logName = "update-helper.log"
+    /// The helper's PATH outside QA mode: the system tools it runs.
+    public static let path = "/usr/bin:/bin:/usr/sbin:/sbin"
     /// The Info.plist key that holds the minisign public key releases are checked against.
     public static let publicKeyInfoKey = "SymphonyUpdatePublicKey"
 

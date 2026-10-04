@@ -7,10 +7,19 @@ defmodule SymphonyElixir.Tracker.Memory do
   slow tracker I/O and exercise the orchestrator's async-task paths
   (e.g. snapshot responsiveness while a Linear call is in flight). In
   production this module is unused, and with no env set the sleep is a no-op.
+
+  The issues come from `:memory_tracker_issues` when it is set. Otherwise they
+  are read on every fetch from the JSON file `issues.memory.issues_file` names, a
+  list of `{"id", "identifier", "state", "title", "description", "labels"}`
+  objects, so a release binary (the menu bar app's end-to-end test) can run
+  against a fake Linear whose issues the test edits while Symphony runs.
   """
 
   @behaviour SymphonyElixir.Tracker
 
+  require Logger
+
+  alias SymphonyElixir.Config
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.Routing.Resolver
 
@@ -122,8 +131,45 @@ defmodule SymphonyElixir.Tracker.Memory do
   end
 
   defp configured_issues do
-    Application.get_env(:symphony_elixir, :memory_tracker_issues, [])
+    case Application.fetch_env(:symphony_elixir, :memory_tracker_issues) do
+      {:ok, issues} -> issues
+      :error -> issues_from_file()
+    end
   end
+
+  defp issues_from_file do
+    case Config.settings() do
+      {:ok, %{tracker: %{memory_issues_file: path}}} when is_binary(path) -> read_issues_file(path)
+      _settings -> []
+    end
+  end
+
+  defp read_issues_file(path) do
+    with {:ok, body} <- File.read(path),
+         {:ok, entries} when is_list(entries) <- Jason.decode(body) do
+      Enum.flat_map(entries, &issue_from_json/1)
+    else
+      error ->
+        Logger.warning("Memory tracker could not read issues_file=#{path}: #{inspect(error)}")
+        []
+    end
+  end
+
+  defp issue_from_json(%{"id" => id, "identifier" => identifier, "state" => state} = entry)
+       when is_binary(id) and is_binary(identifier) and is_binary(state) do
+    [
+      %Issue{
+        id: id,
+        identifier: identifier,
+        state: state,
+        title: Map.get(entry, "title"),
+        description: Map.get(entry, "description"),
+        labels: Enum.filter(List.wrap(Map.get(entry, "labels")), &is_binary/1)
+      }
+    ]
+  end
+
+  defp issue_from_json(_entry), do: []
 
   defp issue_entries do
     Enum.filter(configured_issues(), &match?(%Issue{}, &1))

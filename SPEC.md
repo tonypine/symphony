@@ -1437,6 +1437,8 @@ not require recognizing or validating extension fields unless that extension is 
 - `issues.linear.scope.team`: optional Linear team key or team ID
 - `issues.linear.scope.labels`: optional list of Linear label names
 - At least one issue-level or repository route selector is REQUIRED when provider is linear.
+- `issues.memory.issues_file`: optional path, relative to `symphony.yml`, of a JSON list of issues
+  the memory provider reads on every fetch
 - `issues.linear.assignee`: optional string or `$VAR`, canonical env `LINEAR_ASSIGNEE`;
   `"me"` resolves the current Linear viewer
 - `issues.states.active`: list of strings, default `["Todo", "In Progress"]`
@@ -1626,7 +1628,9 @@ Important nuance:
   fresh `Rework` on an unchanged PR does not. Nothing else moves it out of `Rework`.
 - When the workspace `HEAD` is readable, two consecutive turns with no new commit, no issue state
   change, no newly attached PR and no reviewer-agent verdict MUST end the run, move the issue to
-  `Backlog` and post a comment saying why. This does not apply in `Merging`.
+  `Backlog` and post a comment saying why. This does not apply in `Merging`, nor while the attached
+  PR's head is the workspace `HEAD` and that head has checks still pending; such a run keeps
+  turning up to `agent.max_turns`.
 - The first turn SHOULD use the full rendered task prompt. Implementations MAY use a compact
   bootstrap prompt when the target agent transport cannot safely carry the full rendered prompt as a
   single startup message, provided the compact prompt preserves hard security rules and directs the

@@ -12,6 +12,10 @@
 # is relaunched. The app copies this script out of its bundle and runs it
 # detached, so moving the bundle doesn't pull it from under itself.
 #
+# In QA mode (SYMPHONY_BAR_QA_ROOT set, see macos/README.md) the app passes its
+# environment on, and the helper runs the app's binary directly instead of
+# `open`, which would start it without that environment, outside QA mode.
+#
 # Optional environment, for tests:
 #   SYMPHONY_UPDATE_OPEN          relaunch command (default /usr/bin/open)
 #   SYMPHONY_UPDATE_WAIT_SECONDS  how long to wait for PID (default 120)
@@ -35,6 +39,13 @@ log() {
 
 relaunch() {
   log "relaunching $current"
+  if [ -n "${SYMPHONY_BAR_QA_ROOT:-}" ] && [ -z "${SYMPHONY_UPDATE_OPEN:-}" ]; then
+    executable="$(plutil -extract CFBundleExecutable raw -o - "$current/Contents/Info.plist" 2> /dev/null)" ||
+      executable=SymphonyBar
+    nohup "$current/Contents/MacOS/$executable" > /dev/null 2>&1 &
+    log "started $current/Contents/MacOS/$executable in QA mode as pid $!"
+    return
+  fi
   $open_command "$current" || log "couldn't relaunch $current"
 }
 
