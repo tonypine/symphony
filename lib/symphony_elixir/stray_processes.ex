@@ -12,8 +12,8 @@ defmodule SymphonyElixir.StrayProcesses do
     Claude Code temp folder (`/tmp/claude-<uid>`) or a Symphony temp folder
     (`symphony-*` under `$TMPDIR` or `/tmp`),
   - has used more than `watchdog.stray_process_cpu_minutes` of CPU time, and
-  - is not in the workspace, QA worktree or Claude Code task folder of a running
-    agent or QA pass.
+  - is not in the workspace, QA worktree, QA temp folder or Claude Code task
+    folder of a running agent or QA pass.
 
   Symphony and the processes it still runs are never flagged. The dashboard
   shows the flagged processes. Each one is logged when it is first flagged and

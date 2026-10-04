@@ -64,7 +64,7 @@ defmodule SymphonyElixir.QaRunner do
     end
   end
 
-  @doc "The issue workspace and QA worktree of every pass in flight."
+  @doc "The issue workspace, QA worktree and temp folders of every pass in flight."
   @spec workspaces(GenServer.server()) :: [Path.t()]
   def workspaces(server \\ __MODULE__) do
     case GenServer.whereis(server) do
@@ -255,9 +255,10 @@ defmodule SymphonyElixir.QaRunner do
     end
   end
 
-  # The pass works in a worktree of the issue workspace (see `QaAgent.run/3`).
+  # The pass works in a worktree of the issue workspace, with a temp folder of its own (see
+  # `QaAgent.run/3`).
   defp pass_paths(%{issue: issue, record: record, settings: settings}, sha) do
     worktree = QaAgent.worktree_path(settings, Map.get(record, :repo_key), Map.get(issue, :identifier), sha)
-    Enum.filter([Map.get(record, :workspace_path), worktree], &is_binary/1)
+    Enum.filter([Map.get(record, :workspace_path), worktree], &is_binary/1) ++ QaAgent.tmp_dirs(worktree)
   end
 end
