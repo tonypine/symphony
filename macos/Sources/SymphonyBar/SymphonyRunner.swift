@@ -237,6 +237,18 @@ final class SymphonyRunner {
         return alert.runModal() == .alertFirstButtonReturn
     }
 
+    /// Asks `alert`'s question with `field` under it and returns the field's text for its first button, nil for any
+    /// other. Scripted QA mode records it and answers with the press's input.
+    static func prompt(_ alert: NSAlert, field: NSTextField) -> String? {
+        if let script = QAScriptDriver.shared {
+            return script.answer(promptTitle: alert.messageText, message: alert.informativeText)
+        }
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        activateApp()
+        return alert.runModal() == .alertFirstButtonReturn ? field.stringValue : nil
+    }
+
     /// Brings the app in front of whichever app is active. The macOS 14 `NSApp.activate()` only asks, and the
     /// system declines it while another app is frontmost, which is the usual case for a menu bar app.
     static func activateApp() {

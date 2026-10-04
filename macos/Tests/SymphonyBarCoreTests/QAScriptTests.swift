@@ -31,6 +31,22 @@ final class QAScriptTests: XCTestCase {
         )
     }
 
+    func testLinesAfterTheTitleAnswerAPrompt() {
+        let file = root.appendingPathComponent("001")
+
+        XCTAssertEqual(
+            QAScript.Command(file: file, contents: "Force a ticket…\n TP-123 \n"),
+            QAScript.Command(file: file, title: "Force a ticket…", input: "TP-123")
+        )
+        XCTAssertEqual(
+            QAScript.Command(file: file, contents: "Force a ticket…\r\nTP-123\r\n"),
+            QAScript.Command(file: file, title: "Force a ticket…", input: "TP-123")
+        )
+        XCTAssertEqual(QAScript.Command(file: file, contents: " Start Symphony \n"), QAScript.Command(file: file, title: "Start Symphony"))
+        XCTAssertEqual(QAScript.Command(file: file, contents: "Force a ticket…\n  \n"), QAScript.Command(file: file, title: "Force a ticket…"))
+        XCTAssertEqual(QAScript.Command(file: file, contents: ""), QAScript.Command(file: file, title: ""))
+    }
+
     func testStatusIsWrittenAsJSONWithANullSymphonyPID() throws {
         var status = QAScript.Status(
             pid: 42,

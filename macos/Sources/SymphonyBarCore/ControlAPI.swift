@@ -4,6 +4,10 @@ import Foundation
 public enum ControlAction: Equatable {
     case pause
     case resume
+    /// Adds the force label to the ticket, so it skips the dispatch limits.
+    case force(String)
+    /// Removes the force label from the ticket.
+    case stopForcing(String)
 
     /// Reason Symphony records for a pause from the menu; the dashboard and the menu show it.
     public static let pauseReason = "paused from menu bar"
@@ -14,6 +18,8 @@ public enum ControlAction: Equatable {
             return "api/v1/control/pause"
         case .resume:
             return "api/v1/control/resume"
+        case .force, .stopForcing:
+            return "api/v1/control/force"
         }
     }
 
@@ -23,16 +29,24 @@ public enum ControlAction: Equatable {
             return ["reason": Self.pauseReason]
         case .resume:
             return [:]
+        case let .force(identifier):
+            return ["identifier": identifier]
+        case let .stopForcing(identifier):
+            return ["identifier": identifier, "clear": "true"]
         }
     }
 
-    /// Verb for error messages, for example "Couldn't pause Symphony".
-    var verb: String {
+    /// Start of error messages, for example "Couldn't pause Symphony" or "Couldn't force TP-123".
+    var failurePrefix: String {
         switch self {
         case .pause:
-            return "pause"
+            return "Couldn't pause Symphony"
         case .resume:
-            return "resume"
+            return "Couldn't resume Symphony"
+        case let .force(identifier):
+            return "Couldn't force \(identifier)"
+        case let .stopForcing(identifier):
+            return "Couldn't stop forcing \(identifier)"
         }
     }
 }
@@ -90,23 +104,23 @@ public enum ControlAPI {
     /// Message for when the state directory holds no control token.
     public static func missingToken(_ action: ControlAction, tokenFile: URL) -> ControlResult {
         let path = (tokenFile.path as NSString).abbreviatingWithTildeInPath
-        return .failed("Couldn't \(action.verb) Symphony: no control token in \(path)")
+        return .failed("\(action.failurePrefix): no control token in \(path)")
     }
 
     /// Message for when the state directory holds no control URL and there is no default to try.
     public static func missingControlURL(_ action: ControlAction, file: URL) -> ControlResult {
         let path = (file.path as NSString).abbreviatingWithTildeInPath
-        return .failed("Couldn't \(action.verb) Symphony: no control URL in \(path)")
+        return .failed("\(action.failurePrefix): no control URL in \(path)")
     }
 
     /// Message for when nothing answered on the control URL.
     public static func unreachable(_ action: ControlAction, base: URL) -> ControlResult {
-        .failed("Couldn't \(action.verb) Symphony: nothing answered at \(base.absoluteString)")
+        .failed("\(action.failurePrefix): nothing answered at \(base.absoluteString)")
     }
 
     /// Turns a control response into a result.
     public static func result(_ action: ControlAction, statusCode: Int, data: Data) -> ControlResult {
-        let prefix = "Couldn't \(action.verb) Symphony"
+        let prefix = action.failurePrefix
         switch statusCode {
         case 200:
             return .done
