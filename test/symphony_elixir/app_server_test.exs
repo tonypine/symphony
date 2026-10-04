@@ -255,6 +255,92 @@ defmodule SymphonyElixir.AppServerTest do
     end
   end
 
+  test "app server logs the pid, command and run id of the Codex process it starts" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-elixir-app-server-codex-priority-#{System.unique_integer([:positive])}")
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+      workspace = Path.join(workspace_root, "MT-CODEX-NICE")
+      codex_binary = Path.join(test_root, "fake-codex")
+      File.mkdir_p!(workspace)
+
+      File.write!(codex_binary, """
+      #!/bin/sh
+      count=0
+      while IFS= read -r line; do
+        count=$((count + 1))
+        case "$count" in
+          1) printf '%s\\n' '{"id":1,"result":{}}' ;;
+          2) printf '%s\\n' '{"id":2,"result":{"thread":{"id":"thread-codex-nice"}}}' ;;
+        esac
+      done
+      """)
+
+      File.chmod!(codex_binary, 0o755)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        agent_command: "#{codex_binary} app-server"
+      )
+
+      log =
+        capture_log(fn ->
+          assert {:ok, session} = AppServer.start_session(workspace, run_id: "run-codex-nice")
+          assert :ok = AppServer.stop_session(session)
+        end)
+
+      # Sandboxed test runs can't lower the priority, so either message is logged.
+      assert log =~ ~r/Started agent (below|at) Symphony's CPU priority.* pid=\d+ run_id=run-codex-nice command="#{codex_binary} app-server"/
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  @tag :process_table
+  @tag :setpriority
+  test "app server starts Codex and the processes it starts below Symphony's CPU priority" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-elixir-app-server-codex-niceness-#{System.unique_integer([:positive])}")
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+      workspace = Path.join(workspace_root, "MT-CODEX-NICE")
+      codex_binary = Path.join(test_root, "fake-codex")
+      trace = Path.join(test_root, "niceness.trace")
+      File.mkdir_p!(workspace)
+
+      File.write!(codex_binary, """
+      #!/bin/sh
+      ps -o nice= -p $$ > "#{trace}"
+      sh -c 'ps -o nice= -p $$' >> "#{trace}"
+      count=0
+      while IFS= read -r line; do
+        count=$((count + 1))
+        case "$count" in
+          1) printf '%s\\n' '{"id":1,"result":{}}' ;;
+          2) printf '%s\\n' '{"id":2,"result":{"thread":{"id":"thread-codex-nice"}}}' ;;
+        esac
+      done
+      """)
+
+      File.chmod!(codex_binary, 0o755)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        agent_command: "#{codex_binary} app-server"
+      )
+
+      assert {:ok, session} = AppServer.start_session(workspace)
+      assert :ok = AppServer.stop_session(session)
+
+      {symphony, 0} = System.cmd("ps", ["-o", "nice=", "-p", System.pid()])
+      assert [agent, child] = trace |> File.read!() |> String.split() |> Enum.map(&String.to_integer/1)
+      assert agent > String.to_integer(String.trim(symphony))
+      assert child == agent
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "app server opts out of high-volume executor notifications during initialize" do
     test_root =
       Path.join(

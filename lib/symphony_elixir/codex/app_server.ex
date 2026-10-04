@@ -7,6 +7,7 @@ defmodule SymphonyElixir.Codex.AppServer do
 
   require Logger
   alias SymphonyElixir.AgentEnv
+  alias SymphonyElixir.AgentPriority
   alias SymphonyElixir.AgentProcesses
   alias SymphonyElixir.AgentSandboxConfig
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
@@ -120,8 +121,7 @@ defmodule SymphonyElixir.Codex.AppServer do
         mcp_session,
         remote_socket_path,
         remote_shim_path,
-        Keyword.get(opts, :tool_scope),
-        Keyword.get(opts, :process_tree_module, ProcessTree)
+        opts
       )
     end
   end
@@ -142,10 +142,13 @@ defmodule SymphonyElixir.Codex.AppServer do
          mcp_session,
          remote_socket_path,
          remote_shim_path,
-         tool_scope,
-         process_tree_module
+         opts
        ) do
-    case start_port(workspace, worker_host, settings, mcp_session, remote_socket_path, remote_shim_path) do
+    tool_scope = Keyword.get(opts, :tool_scope)
+    process_tree_module = Keyword.get(opts, :process_tree_module, ProcessTree)
+    run_id = Keyword.get(opts, :run_id)
+
+    case start_port(workspace, worker_host, settings, mcp_session, remote_socket_path, remote_shim_path, run_id) do
       {:ok, port, stdout_pump, codex_home, launch_cleanup_paths, remote_codex_home, stderr_tail} ->
         launch_context = %{
           codex_home: codex_home,
@@ -492,7 +495,7 @@ defmodule SymphonyElixir.Codex.AppServer do
 
   defp validate_remote_launch_preconditions(_worker_host, _settings), do: :ok
 
-  defp start_port(workspace, nil, settings, mcp_session, _remote_socket_path, _remote_shim_path) do
+  defp start_port(workspace, nil, settings, mcp_session, _remote_socket_path, _remote_shim_path, run_id) do
     with {:ok, executable} <- bash_executable(),
          {:ok, codex_home} <- McpConfig.write_home(settings, mcp_session),
          {:ok, command, launch_cleanup_paths} <-
@@ -501,13 +504,16 @@ defmodule SymphonyElixir.Codex.AppServer do
       :ok = File.touch!(stderr_log_path)
       wrapped_command = wrap_command_with_stderr_redirect(command, stderr_log_path)
 
+      shell_args = local_shell_args(settings, wrapped_command)
+      {port_executable, port_args, priority} = AgentPriority.command(executable, shell_args)
+
       port =
         Port.open(
-          {:spawn_executable, String.to_charlist(executable)},
+          {:spawn_executable, port_executable},
           [
             :binary,
             :exit_status,
-            args: local_shell_args(settings, wrapped_command),
+            args: port_args,
             cd: String.to_charlist(workspace),
             env: AgentEnv.build_with(%{"CODEX_HOME" => codex_home.home_path}),
             line: @port_line_bytes
@@ -515,6 +521,7 @@ defmodule SymphonyElixir.Codex.AppServer do
         )
 
       :ok = AgentProcesses.track(port, workspace: workspace)
+      :ok = AgentPriority.log_started(port, settings.agent.command, run_id, priority)
 
       case start_stdout_pump(port) do
         {:ok, stdout_pump} ->
@@ -536,7 +543,7 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
-  defp start_port(workspace, worker_host, settings, mcp_session, remote_socket_path, remote_shim_path)
+  defp start_port(workspace, worker_host, settings, mcp_session, remote_socket_path, remote_shim_path, _run_id)
        when is_binary(worker_host) do
     with {:ok, remote_command, remote_codex_home, remote_stderr_path} <-
            remote_launch_command(workspace, settings, mcp_session, remote_socket_path, remote_shim_path),

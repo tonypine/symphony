@@ -33,6 +33,13 @@ case SymphonyElixir.LeftoverProcesses.Table.read() do
   _denied -> ExUnit.configure(exclude: [:process_table | Keyword.get(ExUnit.configuration(), :exclude, [])])
 end
 
+# Tests that measure an agent's niceness need `setpriority`, which sandboxed
+# agent runs deny; `nice` then warns and runs the command unchanged.
+case System.cmd("nice", ["-n", "1", "true"], stderr_to_stdout: true) do
+  {"", 0} -> :ok
+  _denied -> ExUnit.configure(exclude: [:setpriority | Keyword.get(ExUnit.configuration(), :exclude, [])])
+end
+
 # Sandboxed agent runs (Claude Code, SRT) deny writes to `/tmp` itself but
 # expose a short writable TMPDIR such as `/tmp/claude-501`. Keep MCP socket
 # dirs there so `<root>/symphony-mcp-<id>/sock` still fits the 104-byte Unix
