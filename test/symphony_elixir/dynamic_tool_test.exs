@@ -4,6 +4,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
   alias SymphonyElixir.Codex.DynamicTool
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.QaAndroid.Driver, as: QaAndroidDriver
 
   test "tool_specs advertises scoped Linear tools and not raw GraphQL" do
     tool_names = Enum.map(DynamicTool.tool_specs(), & &1["name"])
@@ -471,6 +472,35 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       assert %{"error" => %{"code" => "qa_driver_unavailable"}} = Jason.decode!(response["output"])
 
       response = DynamicTool.execute("qa_ax_tree", %{"pid" => 1, "depth" => 3}, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
+      assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
+    end
+
+    test "only the QA scope lists and runs the qa_android tools, routed to the Android driver" do
+      qa_tools = Enum.map(DynamicTool.tool_specs(:qa), & &1["name"])
+
+      for tool <- QaAndroidDriver.tools() do
+        assert tool in qa_tools
+        refute tool in Enum.map(DynamicTool.tool_specs(), & &1["name"])
+        refute tool in Enum.map(DynamicTool.tool_specs(:read_only), & &1["name"])
+
+        # Executor and reviewer sessions.
+        response = DynamicTool.execute(tool, %{}, issue: %Issue{id: "issue-current"})
+        assert %{"error" => %{"code" => "tool_scope_rejected", "tool" => ^tool, "message" => message}} = Jason.decode!(response["output"])
+        assert message =~ "Android app"
+
+        response = DynamicTool.execute(tool, %{}, issue: %Issue{id: "issue-current"}, tool_scope: :read_only)
+        assert %{"error" => %{"code" => "tool_scope_rejected", "tool" => ^tool}} = Jason.decode!(response["output"])
+      end
+
+      # The macOS driver is not asked, even when it is there.
+      response =
+        DynamicTool.execute("qa_android_install", %{}, issue: %Issue{id: "issue-current"}, tool_scope: :qa, qa_driver: self())
+
+      assert %{"error" => %{"code" => "qa_android_driver_unavailable"}} = Jason.decode!(response["output"])
+
+      response =
+        DynamicTool.execute("qa_android_launch", %{"application_id" => "com.example.app", "pid" => 1}, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
+
       assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
     end
 

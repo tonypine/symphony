@@ -15,6 +15,9 @@ defmodule SymphonyElixir.QaAgent do
   one follow-up turn in the same session asking for it. A pass that runs the `macos_app`
   playbook also gets the host-side `qa_*` tools of a `SymphonyElixir.QaDriver`,
   stopped (quitting every app it launched) when the pass ends. A pass that runs the
+  `android_app` playbook gets the `qa_android_*` tools of a
+  `SymphonyElixir.QaAndroid.Driver` in the same way, which uninstalls its apps and
+  gives the emulator back when the pass ends. A pass that runs the
   `web` playbook starts `verification.dev_server` on a pooled port from a second
   worktree at the PR head (a server that fails its health check makes the pass
   `blocked`), and its session alone gets a `browser` MCP server: headless Playwright
@@ -33,6 +36,7 @@ defmodule SymphonyElixir.QaAgent do
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Agent.Mcp.Server, as: McpServer
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.QaAndroid.Driver, as: AndroidDriver
   alias SymphonyElixir.Verification
   alias SymphonyElixir.Workspace
 
@@ -434,11 +438,14 @@ defmodule SymphonyElixir.QaAgent do
       {:ok, qa_settings} ->
         prompt = prompt(job, fetch_parent(job, worktree, settings, opts))
         driver = start_driver(job, worktree, settings, opts)
+        android_driver = start_android_driver(job, worktree, opts)
+        opts = Keyword.merge(opts, qa_driver: driver, qa_android_driver: android_driver)
 
         try do
-          run_tracked_session(agent_module, job, worktree, qa_settings, prompt, Keyword.put(opts, :qa_driver, driver))
+          run_tracked_session(agent_module, job, worktree, qa_settings, prompt, opts)
         after
           QaDriver.stop(driver)
+          AndroidDriver.stop(android_driver)
         end
 
       {:error, reason} ->
@@ -612,6 +619,7 @@ defmodule SymphonyElixir.QaAgent do
       run_profile: Map.get_lazy(job, :run_profile, fn -> SymphonyElixir.Config.qa_profile(qa_settings) end),
       tool_scope: :qa,
       qa_driver: Keyword.get(opts, :qa_driver),
+      qa_android_driver: Keyword.get(opts, :qa_android_driver),
       extra_env: tmp_dir_env(qa_settings.agent.kind, tmp_dir)
     ]
 
@@ -769,6 +777,19 @@ defmodule SymphonyElixir.QaAgent do
         ]
 
         {:ok, driver} = QaDriver.start_link(Keyword.merge(driver_opts, Keyword.get(opts, :qa_driver_opts, [])))
+        driver
+    end
+  end
+
+  # The `qa_android_*` host tools exist only for a pass that runs the `android_app` playbook.
+  defp start_android_driver(job, worktree, opts) do
+    case Enum.find(job.playbooks, &(Map.get(&1, :kind) == "android_app")) do
+      nil ->
+        nil
+
+      playbook ->
+        driver_opts = [worktree: worktree, playbook: playbook, git: Keyword.get(opts, :git, &default_git/2)]
+        {:ok, driver} = AndroidDriver.start_link(Keyword.merge(driver_opts, Keyword.get(opts, :qa_android_driver_opts, [])))
         driver
     end
   end
