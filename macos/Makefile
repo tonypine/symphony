@@ -3,6 +3,10 @@ EXECUTABLE := SymphonyBar
 CONFIG := release
 BUILD_DIR := build
 APP := $(BUILD_DIR)/$(APP_NAME).app
+# The QA driver helper app holds the Screen Recording and Accessibility grants, so
+# Symphony.app and the agents it spawns never get them (see docs/configuration.md).
+QA_DRIVER_SOURCE := ../priv/qa_driver
+QA_DRIVER_APP := $(APP)/Contents/Helpers/SymphonyQADriver.app
 INSTALL_DIR ?= $(HOME)/Applications
 SWIFT_FLAGS ?=
 # `-` signs ad hoc, so local builds need no certificate. CI passes the
@@ -27,6 +31,9 @@ MINISIGN_PUBLIC_KEY ?=
 
 all: app
 
+# The QA helper is signed with the hardened runtime, so dyld ignores
+# DYLD_INSERT_LIBRARIES and no other code runs with its Accessibility and Screen
+# Recording grants. It needs no entitlements: both are TCC grants.
 app:
 	@if [ -z "$(PREBUILT_EXECUTABLE)" ]; then swift build $(SWIFT_FLAGS) -c $(CONFIG) --product $(EXECUTABLE); fi
 	rm -rf "$(APP)"
@@ -37,7 +44,12 @@ app:
 	mkdir -p "$(APP)/Contents/Resources"
 	cp Resources/update-helper.sh "$(APP)/Contents/Resources/update-helper.sh"
 	@if [ -n "$(MINISIGN_PUBLIC_KEY)" ]; then plutil -replace SymphonyUpdatePublicKey -string "$(MINISIGN_PUBLIC_KEY)" "$(APP)/Contents/Info.plist"; fi
+	mkdir -p "$(QA_DRIVER_APP)/Contents/MacOS"
+	swiftc -O -o "$(QA_DRIVER_APP)/Contents/MacOS/symphony-qa-driver" "$(QA_DRIVER_SOURCE)/symphony-qa-driver.swift"
+	cp "$(QA_DRIVER_SOURCE)/Info.plist" "$(QA_DRIVER_APP)/Contents/Info.plist"
+	codesign --force --options runtime --sign "$(SIGNING_IDENTITY)" $(CODESIGN_FLAGS) "$(QA_DRIVER_APP)"
 	codesign --force --sign "$(SIGNING_IDENTITY)" $(CODESIGN_FLAGS) "$(APP)"
+	codesign --verify --strict "$(QA_DRIVER_APP)"
 	codesign --verify --strict "$(APP)"
 
 # Builds the app with Symphony embedded at Contents/Resources/symphony. The
@@ -54,6 +66,7 @@ bundle: app
 	codesign --force --sign "$(SIGNING_IDENTITY)" $(CODESIGN_FLAGS) "$(APP)/Contents/Resources/symphony"
 	codesign --force --sign "$(SIGNING_IDENTITY)" $(CODESIGN_FLAGS) "$(APP)"
 	codesign --verify --strict "$(APP)/Contents/Resources/symphony"
+	codesign --verify --strict "$(QA_DRIVER_APP)"
 	codesign --verify --strict "$(APP)"
 
 install: app

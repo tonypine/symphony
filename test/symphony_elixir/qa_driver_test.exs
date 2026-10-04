@@ -20,16 +20,21 @@ defmodule SymphonyElixir.QaDriverTest do
   end
 
   # A fake host: the build writes the bundle, plutil names its executable, the
-  # helper answers from `helper_replies`, screencapture writes the file it is given.
+  # helper app answers from `helper_replies` (through `cmd`, so tests see every
+  # helper call as a `{:cmd, @helper, args, opts}` message), and its screenshot
+  # command writes the file it is given.
   defp host(overrides \\ %{}) do
     test = self()
     replies = replies(overrides)
 
+    cmd = fn executable, args, opts ->
+      send(test, {:cmd, executable, args, opts})
+      Map.get(overrides, :cmd, &default_cmd(&1, &2, &3, replies)).(executable, args, opts)
+    end
+
     %{
-      cmd: fn executable, args, opts ->
-        send(test, {:cmd, executable, args, opts})
-        Map.get(overrides, :cmd, &default_cmd(&1, &2, &3, replies)).(executable, args, opts)
-      end,
+      cmd: cmd,
+      call_helper: cmd,
       launch:
         Map.get(overrides, :launch, fn executable, opts ->
           port = Port.open({:spawn, "cat"}, [:binary])
@@ -68,16 +73,16 @@ defmodule SymphonyElixir.QaDriverTest do
 
   defp default_cmd("/usr/bin/plutil", _args, _opts, _replies), do: {:ok, {"Demo\n", 0}}
 
+  defp default_cmd(@helper, ["screenshot" | _rest] = args, _opts, _replies) do
+    File.write!(List.last(args), "png")
+    {:ok, {~s({"ok":true}), 0}}
+  end
+
   defp default_cmd(@helper, [command | _rest], _opts, replies) do
     case Map.fetch!(replies, command) do
       {:error, _reason} = error -> error
       result -> {:ok, result}
     end
-  end
-
-  defp default_cmd("/usr/sbin/screencapture", args, _opts, _replies) do
-    File.write!(List.last(args), "png")
-    {:ok, {"", 0}}
   end
 
   defp write_bundle(worktree, contents \\ "binary-v1") do
@@ -657,8 +662,8 @@ defmodule SymphonyElixir.QaDriverTest do
       failing_capture =
         host(%{
           cmd: fn
-            "/usr/sbin/screencapture", _args, _opts ->
-              {:ok, {"could not create image", 1}}
+            @helper, ["screenshot" | _rest], _opts ->
+              {:ok, {~s({"error":{"code":"screenshot_failed","message":"no image"}}), 1}}
 
             executable, args, opts ->
               default_cmd(executable, args, opts, %{"permissions" => {~s({"screen_recording":true}), 0}, "windows" => {~s({"windows":[{"id":5,"layer":0,"onscreen":true,"frame":{"w":10,"h":10}}]}), 0}})
@@ -676,9 +681,9 @@ defmodule SymphonyElixir.QaDriverTest do
       planting_capture =
         host(%{
           cmd: fn
-            "/usr/sbin/screencapture", args, _opts ->
+            @helper, ["screenshot" | _rest] = args, _opts ->
               File.ln_s!(secret, List.last(args))
-              {:ok, {"", 0}}
+              {:ok, {~s({"ok":true}), 0}}
 
             executable, args, opts ->
               default_cmd(executable, args, opts, %{"permissions" => {~s({"screen_recording":true}), 0}, "windows" => {~s({"windows":[{"id":5,"layer":0,"onscreen":true,"frame":{"w":10,"h":10}}]}), 0}})
@@ -704,8 +709,8 @@ defmodule SymphonyElixir.QaDriverTest do
       cmd = fn
         "/bin/sh", ["-c", "make app"], _opts -> {:ok, {"Build complete!\n", 0}}
         "/bin/sh", ["-c", _script, "sh", _build_dir, @app, dest], _opts -> bundle.(dest)
-        "/usr/sbin/screencapture", _args, _opts -> {:ok, {"", 0}}
-        executable, args, opts -> default_cmd(executable, args, opts, replies(%{}))
+        @helper, ["screenshot" | _args], _opts -> {:ok, {~s({"ok":true}), 0}}
+        executable, args, opts -> default_cmd(executable, args, opts, replies(Map.take(overrides, [:helper_replies])))
       end
 
       Map.merge(host(%{cmd: cmd}), %{
@@ -766,7 +771,7 @@ defmodule SymphonyElixir.QaDriverTest do
       assert launch_opts[:env] == [{"SYMPHONY_BAR_QA_ROOT", @run_dir <> "/app-root"}]
 
       assert {:ok, %{"files" => [%{"path" => "qa-evidence/settings.png"}]}} = QaDriver.call_tool(driver, "qa_screenshot", %{"pid" => pid, "name" => "settings"})
-      assert_received {:cmd, "/usr/sbin/screencapture", ["-x", "-o", "-l", "11", capture], _opts}
+      assert_received {:cmd, @helper, ["screenshot", _pid, "11", capture], _opts}
       assert capture == @run_dir <> "/window-11.png"
       assert_received {:read, ^capture}
       assert File.read!(Path.join(worktree, "qa-evidence/settings.png")) == "png"
@@ -836,6 +841,16 @@ defmodule SymphonyElixir.QaDriverTest do
       end
     end
 
+    test "names the QA host's SSH grant when a permission is missing", %{worktree: worktree} do
+      driver = remote_driver(worktree, remote_host(%{helper_replies: %{"permissions" => {~s({"accessibility":true,"screen_recording":false}), 0}}}))
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+      {{:ok, %{"pid" => pid}}, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{}) end)
+
+      assert {:error, {:qa_tool, "qa_permission_missing", message}} = QaDriver.call_tool(driver, "qa_screenshot", %{"pid" => pid, "name" => "x"})
+      assert message =~ "SSH on the QA host has no Screen Recording permission"
+      assert message =~ "/usr/libexec/sshd-keygen-wrapper on the QA host"
+    end
+
     test "reports a capture it cannot copy back", %{worktree: worktree} do
       driver = remote_driver(worktree, remote_host(%{read: {:error, :unreadable}}))
       assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
@@ -859,7 +874,7 @@ defmodule SymphonyElixir.QaDriverTest do
       assert Host.kill(pid) == :ok
       assert_receive {^port, {:exit_status, _status}}, 5_000
       assert {:error, _message} = Host.launch("/nonexistent/qa", cd: System.tmp_dir!(), env: [])
-      assert %{cmd: _cmd, launch: _launch, kill: _kill, helper: _helper} = Host.default()
+      assert %{cmd: _cmd, launch: _launch, kill: _kill, helper: _helper, call_helper: _call_helper} = Host.default()
     end
   end
 end

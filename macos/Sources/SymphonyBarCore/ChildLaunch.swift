@@ -48,6 +48,19 @@ public enum EmbeddedSymphony {
     }
 }
 
+/// The QA driver helper app shipped in the bundle. It holds the Screen Recording and Accessibility grants for
+/// Auto Review QA, so that Symphony.app, and the agents Symphony spawns, never hold them.
+public enum QADriverApp {
+    /// Tells Symphony where the helper is.
+    public static let environmentKey = "SYMPHONY_QA_DRIVER_APP"
+
+    /// Where the helper would be, given the app's bundle folder (`Bundle.main.bundlePath`).
+    public static func path(bundlePath: String?) -> String? {
+        guard let bundlePath, !bundlePath.isEmpty else { return nil }
+        return (bundlePath as NSString).appendingPathComponent("Contents/Helpers/SymphonyQADriver.app")
+    }
+}
+
 /// Why Symphony can't be started with the current settings.
 public enum LaunchProblem: LocalizedError, Equatable {
     case checkoutPathMissing
@@ -87,12 +100,14 @@ public enum LaunchProblem: LocalizedError, Equatable {
 public enum ChildLaunchBuilder {
     /// Runs the embedded Symphony directly, or in Development mode the checkout's `bin/symphony` through a login
     /// shell. `embeddedSymphonyPath` is where the app's embedded binary would be. `subcommand`, for example
-    /// `["check"]`, goes before `--config`.
+    /// `["check"]`, goes before `--config`. `qaDriverAppPath` is where the bundled QA driver helper would be;
+    /// Symphony gets it in `SYMPHONY_QA_DRIVER_APP` when it is there.
     public static func build(
         settings: AppSettings,
         secrets: SecretSettings,
         baseEnvironment: [String: String],
         embeddedSymphonyPath: String? = nil,
+        qaDriverAppPath: String? = nil,
         subcommand: [String] = [],
         files: FileChecker = LocalFileChecker()
     ) throws -> ChildLaunch {
@@ -104,6 +119,7 @@ public enum ChildLaunchBuilder {
                 settings: settings,
                 secrets: secrets,
                 baseEnvironment: baseEnvironment,
+                qaDriverAppPath: qaDriverAppPath,
                 binary: embeddedSymphonyPath,
                 subcommand: subcommand,
                 files: files
@@ -126,7 +142,7 @@ public enum ChildLaunchBuilder {
             executable: ChildLaunch.shell,
             arguments: ["-lc", script],
             workingDirectory: settings.checkoutPath,
-            environment: environment(base: baseEnvironment, secrets: secrets, files: files)
+            environment: environment(base: baseEnvironment, secrets: secrets, qaDriverAppPath: qaDriverAppPath, files: files)
         )
     }
 
@@ -135,6 +151,7 @@ public enum ChildLaunchBuilder {
         settings: AppSettings,
         secrets: SecretSettings,
         baseEnvironment: [String: String],
+        qaDriverAppPath: String?,
         binary: String?,
         subcommand: [String],
         files: FileChecker
@@ -149,15 +166,16 @@ public enum ChildLaunchBuilder {
             executable: binary,
             arguments: subcommand + ["--config", settings.configPath],
             workingDirectory: (settings.configPath as NSString).deletingLastPathComponent,
-            environment: environment(base: baseEnvironment, secrets: secrets, files: files)
+            environment: environment(base: baseEnvironment, secrets: secrets, qaDriverAppPath: qaDriverAppPath, files: files)
         )
     }
 
     /// The app's environment with PATH fallbacks, the extra variables and the Linear and OpenRouter API keys on top.
-    /// The OpenRouter key is passed only when set.
+    /// The OpenRouter key is passed only when set, and the QA driver helper only when it is there.
     static func environment(
         base: [String: String],
         secrets: SecretSettings,
+        qaDriverAppPath: String? = nil,
         files: FileChecker = LocalFileChecker()
     ) -> [String: String] {
         var environment = base
@@ -166,6 +184,9 @@ public enum ChildLaunchBuilder {
             home: base["HOME"],
             miseShims: miseShimsDirectory(base: base, files: files)
         )
+        if let qaDriverAppPath, files.isDirectory(atPath: qaDriverAppPath) {
+            environment[QADriverApp.environmentKey] = qaDriverAppPath
+        }
 
         for variable in secrets.extraEnvironment where !variable.name.isEmpty {
             environment[variable.name] = variable.value
