@@ -62,8 +62,17 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
       end
     end)
 
-    :sys.get_state(pid)
+    await_boot_poll(pid)
     pid
+  end
+
+  # The boot tick starts an async poll whose running-state refresh stops any run the memory
+  # tracker does not list. Wait for it to finish so it cannot end the runs `start_run!` fakes.
+  defp await_boot_poll(pid) do
+    wait_until(fn ->
+      state = :sys.get_state(pid)
+      not state.poll_check_in_progress and is_nil(state.repo_poll_task_ref) and is_nil(state.startup_workspace_lifecycle_task_ref)
+    end)
   end
 
   defp set_clock(ctx, %DateTime{} = now), do: Agent.update(ctx.clock, fn _ -> now end)
@@ -328,6 +337,8 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
 
   # The ticket walkthrough: a fake `claude` warns at 92% of the five-hour window once, then succeeds.
   test "the running issue finishes and continues, new runs wait, and they dispatch after the reset", ctx do
+    # The window resets an hour from the injected clock; the test moves the clock there.
+    resets_at = DateTime.add(ctx.now, 3600)
     warned_once = Path.join(ctx.test_root, "warned-once")
     fake_claude = Path.join(ctx.test_root, "fake-claude-warning")
 
@@ -337,8 +348,7 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
     printf '%s\\n' '{"type":"system","subtype":"init","session_id":"sess-headroom","cwd":"/tmp","tools":[],"mcp_servers":[{"name":"symphony","status":"connected"}],"model":"claude-opus-5-5","permissionMode":"default","apiKeySource":"env"}'
     if [ ! -f #{warned_once} ]; then
       touch #{warned_once}
-      resets_at=$(( $(date +%s) + 6 ))
-      printf '{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":%s,"rateLimitType":"five_hour","utilization":0.92},"session_id":"sess-headroom"}\\n' "$resets_at"
+      printf '{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":%s,"rateLimitType":"five_hour","utilization":0.92},"session_id":"sess-headroom"}\\n' #{DateTime.to_unix(resets_at)}
     fi
     printf '%s\\n' '{"type":"result","subtype":"success","duration_ms":5,"duration_api_ms":4,"is_error":false,"num_turns":1,"result":"Done.","session_id":"sess-headroom","total_cost_usd":0.0,"usage":{"input_tokens":1,"output_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}'
     exit 0
@@ -359,8 +369,7 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
     runs_for = fn issue_id -> Enum.filter(RunStore.list_runs(:all), &(&1.issue_id == issue_id)) end
 
     capture_log(fn ->
-      {:ok, pid} = Orchestrator.start_link(name: name)
-      on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+      pid = start_orchestrator(ctx, :WalkthroughOrchestrator)
 
       # 1. The warning puts the hold in place and the running issue finishes normally.
       wait_until(fn -> SymphonyElixirWeb.Presenter.state_payload(name, 1_000).usage_limits != [] end)
@@ -378,6 +387,8 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
       assert runs_for.(queued.id) == []
 
       # 3. Past the reset the hold clears and the queued issue dispatches.
+      set_clock(ctx, resets_at)
+      send(pid, {:usage_limit_resume, @anthropic})
       wait_until(fn -> SymphonyElixirWeb.Presenter.state_payload(name, 1_000).usage_limits == [] end)
       wait_until(fn -> runs_for.(queued.id) != [] end)
     end)
