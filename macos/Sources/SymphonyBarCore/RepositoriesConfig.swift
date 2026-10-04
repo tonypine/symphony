@@ -164,15 +164,21 @@ public enum RepositoriesConfig {
         return text.text
     }
 
-    /// The same text without the entry `key`. Comments around it stay; a blank line that separated it from
-    /// its neighbours goes with it.
+    /// The same text without the entry `key` and the comment lines right above it with no blank line between,
+    /// which describe it. Other comments stay; a blank line that separated it from its neighbours goes with it.
     public static func removing(_ key: String, from yaml: String) throws -> String {
         var text = ConfigLines(yaml)
         let section = try Section(text)
         guard let item = section.item(key) else { throw RepositoriesConfigError.notFound(key) }
         guard section.items.count > 1 else { throw RepositoriesConfigError.lastRepository(key) }
 
-        let start = item.dashIndex
+        // Comments indented under the previous entry right after it belong to that entry.
+        let previous = section.items.last { $0.dashIndex < item.dashIndex }
+        let floor = previous.map { text.end(of: $0) } ?? section.keyIndex ?? -1
+        var start = item.dashIndex
+        while start - 1 > floor, text.isComment(start - 1) {
+            start -= 1
+        }
         text.lines.removeSubrange(start...text.end(of: item))
         if start < text.lines.count, text.isBlank(start) {
             if text.isBlank(start - 1) {
@@ -404,6 +410,11 @@ private struct ConfigLines {
 
     func isBlank(_ index: Int) -> Bool {
         lines.indices.contains(index) && lines[index].allSatisfy(\.isWhitespace)
+    }
+
+    /// True for a line holding only a `# comment`.
+    func isComment(_ index: Int) -> Bool {
+        lines.indices.contains(index) && lines[index].drop { $0 == " " || $0 == "\t" }.hasPrefix("#")
     }
 
     /// `last` moved past the comment lines right after it that are indented deeper than `column`, which
