@@ -74,6 +74,10 @@ defmodule SymphonyElixir.RunKind do
   @spec names() :: [String.t()]
   def names, do: Enum.map(@kinds, &Atom.to_string/1)
 
+  @doc "The title prefix that makes a ticket a `final_verification` run."
+  @spec final_verification_prefix() :: String.t()
+  def final_verification_prefix, do: @final_verification_prefix
+
   @doc """
   A one-line label for a run's profile, as the dashboards show it: `kind · model · effort`.
   A model or effort that resolved to nothing reads `default`. Accepts the in-memory profile
