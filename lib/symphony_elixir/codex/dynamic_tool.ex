@@ -39,8 +39,24 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     },
     %{
       "name" => "linear_get_related_issues",
-      "description" => "Read blocks and blocked-by issue summaries for the current Linear issue.",
-      "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
+      "description" =>
+        "Without arguments, list the current Linear issue's family as summaries: the issues it blocks and is blocked by, its parent, its siblings (the parent's other sub-issues) and its sub-issues. Pass `identifier` to read one of them in full, with its description, state, labels and comments (newest first), such as a sibling's QA report or the parent's workpad. Any other issue is refused.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "properties" => %{
+          "identifier" => %{
+            "type" => "string",
+            "description" => "Identifier (e.g. TP-12) of the parent, a sibling, a sub-issue or a blocker (either direction) to read in full."
+          },
+          "comment_limit" => %{
+            "type" => "integer",
+            "minimum" => 1,
+            "maximum" => 100,
+            "description" => "How many of its latest comments to read with `identifier` (default 50)."
+          }
+        }
+      }
     },
     %{
       "name" => "linear_update_state",
@@ -593,7 +609,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "linear_get_subissues" => [],
     "linear_get_parent_issue" => [],
     "linear_get_comments" => ["limit"],
-    "linear_get_related_issues" => [],
+    "linear_get_related_issues" => ["identifier", "comment_limit"],
     "linear_update_state" => ["state_name_or_id"],
     "linear_add_comment" => ["body", "parent_id"],
     "linear_update_comment" => ["comment_id", "body"],
@@ -774,7 +790,11 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   defp execute_linear_tool("linear_get_current_issue", context, _args, opts), do: Linear.get_current_issue(context, opts)
   defp execute_linear_tool("linear_get_subissues", context, _args, opts), do: Linear.get_subissues(context, opts)
   defp execute_linear_tool("linear_get_parent_issue", context, _args, opts), do: Linear.get_parent_issue(context, opts)
-  defp execute_linear_tool("linear_get_related_issues", context, _args, opts), do: Linear.get_related_issues(context, opts)
+  defp execute_linear_tool("linear_get_related_issues", context, args, opts) when map_size(args) == 0, do: Linear.get_related_issues(context, opts)
+
+  defp execute_linear_tool("linear_get_related_issues", context, args, opts) do
+    Linear.get_related_issue(context, Map.get(args, "identifier"), Map.get(args, "comment_limit"), opts)
+  end
 
   defp execute_linear_tool("linear_get_comments", context, args, opts) do
     Linear.get_comments(context, Map.get(args, "limit"), opts)
@@ -1419,6 +1439,30 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         "message" => "Could not mark the current issue blocked by #{blocker}; it and any later `blocked_by` links are missing. Retry, or record them in the workpad for a human to add.",
         "blocker" => blocker,
         "reason" => inspect(reason)
+      }
+    }
+  end
+
+  defp tool_error_payload(:invalid_related_issue_identifier) do
+    %{
+      "error" => %{
+        "code" => "invalid_related_issue_identifier",
+        "message" => "linear_get_related_issues `identifier` must be an issue identifier such as TP-12. Call it without arguments to list the issues it can read."
+      }
+    }
+  end
+
+  defp tool_error_payload(:invalid_limit) do
+    %{"error" => %{"code" => "invalid_limit", "message" => "The comment limit must be a positive integer."}}
+  end
+
+  defp tool_error_payload({:issue_outside_family, identifier, related_issues}) do
+    %{
+      "error" => %{
+        "code" => "issue_outside_family",
+        "message" =>
+          "#{identifier} is not the parent, a sibling, a sub-issue or a blocker of the current issue, so linear_get_related_issues does not read it. It reads only the issues listed in `related_issues`.",
+        "related_issues" => related_issues
       }
     }
   end

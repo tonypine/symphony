@@ -23,6 +23,10 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
   A `blocked` verdict also puts the ticket in the parent project's human-action update (see
   `SymphonyElixir.HumanActions.Collector`), since only a person can provide what QA was missing.
 
+  A QA agent that runs into the provider's usage limit gets no verdict: no report is written, the
+  ticket keeps its state, and `run/3` returns `{:error, {:usage_limited, info}}`, so the
+  orchestrator holds the run and starts it again once the limit resets, as for any agent run.
+
   Each Linear call waits out a rate limit or a dropped connection
   (`SymphonyElixir.Linear.TransientRetry`) instead of failing the run; the verdict is kept while the
   final state move waits, for up to 30 minutes rather than the default five, so a finished QA pass is
@@ -58,7 +62,8 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
   @doc """
   Runs the parent walkthrough for `issue` in its `workspace` when it applies, applies the outcome
   and returns `:ok`. Returns `:skip` when the ticket should get the executor run instead, and
-  `{:error, reason}` when the parent could not be read or the ticket could not be moved.
+  `{:error, reason}` when the parent could not be read or the ticket could not be moved, and
+  `{:error, {:usage_limited, info}}` when the QA agent hit the provider's usage limit.
 
   Options: `:settings` (required), `:repo_key`, `:run_id`, `:worker_host`, `:on_message`
   (forwarded agent messages), `:linear_retry_opts` (`TransientRetry.run/2` options), and
@@ -124,7 +129,14 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
           %{verdict: :blocked, sha: nil, reason: "could not read the head of #{base_ref}: #{inspect(reason)}"}
       end
 
-    apply_outcome(issue, parent, Map.put(outcome, :ref, base_ref), settings, opts)
+    case outcome do
+      %{usage_limit: info} ->
+        Logger.info("Parent walkthrough for #{parent.identifier} hit the usage limit; #{issue.identifier} keeps its state and runs again once the hold lifts")
+        {:error, {:usage_limited, info}}
+
+      _outcome ->
+        apply_outcome(issue, parent, Map.put(outcome, :ref, base_ref), settings, opts)
+    end
   end
 
   defp base_commit(workspace, branch, git) do
@@ -158,7 +170,7 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
     outcome =
       case Keyword.get(opts, :qa_agent, QaAgent).run(job, settings, agent_opts) do
         {:ok, %{result: result, tokens: tokens}} -> Map.put(result, :tokens, tokens)
-        {:error, reason, tokens} -> %{verdict: :blocked, reason: AutoReview.blocked_reason(reason), tokens: tokens}
+        {:error, reason, tokens} -> error_outcome(reason, tokens)
       end
 
     Map.merge(outcome, %{
@@ -166,6 +178,13 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
       playbooks: Enum.map(playbooks, & &1.kind),
       runtime_seconds: System.monotonic_time(:second) - started_at
     })
+  end
+
+  defp error_outcome(reason, tokens) do
+    case AutoReview.usage_limit(reason) do
+      %{} = info -> %{usage_limit: info}
+      nil -> %{verdict: :blocked, reason: AutoReview.blocked_reason(reason), tokens: tokens}
+    end
   end
 
   defp playbooks(issue, parent, settings) do

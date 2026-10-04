@@ -434,6 +434,90 @@ defmodule SymphonyElixir.AutoReviewQaTest do
       assert report =~ "could not list the PR's changed files"
     end
 
+    test "a pass that hits the usage limit stores no verdict, keeps the issue in Auto Review and runs again once the hold lifts" do
+      record = put_record()
+      on_exit(fn -> RunStore.put_usage_limits(%{}) end)
+      resets_at = DateTime.add(DateTime.utc_now(), 3600)
+      # The QA agent runs Codex here, so its limit is the openai one.
+      info = %{provider: "openai", scope: :all, window: "primary", resets_at: resets_at, source: :rate_limit_event}
+      error = {:qa_agent_failed, {:usage_limited, info}}
+      Application.put_env(:symphony_elixir, :qa_flow_agent_result, {:error, error, QaAgent.empty_tokens()})
+      resume_at = DateTime.add(resets_at, 120)
+      test_pid = self()
+
+      hold = fn held_info, identifier ->
+        send(test_pid, {:usage_limit_hold, held_info, identifier})
+        entry = %{provider: "openai", scope: :all, resume_at: resume_at}
+        :ok = RunStore.put_usage_limits(%{{"openai", :all} => entry})
+        {:ok, entry}
+      end
+
+      assert {:qa_usage_limited, "issue-qa-flow", ^resume_at} =
+               AutoReview.run_qa(job(record), git: git_with_paths(["bin/symphony"]), qa_agent: FakeQaAgent, usage_limit_hold: hold)
+
+      assert_receive {:usage_limit_hold, ^info, "TP-901"}
+      refute_received {:memory_tracker_comment, _issue_id, _report}
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+      refute Map.get(stored_record(), :qa_verdict)
+      assert [%{kind: "qa", status: "qa_usage_limited", error: "the QA agent hit the openai primary limit"}] = RunStore.list_runs(@repo_key, :all)
+
+      # The next green poll waits for the hold, then asks for the same pass again.
+      settings = Config.settings!()
+      ci_status = %{commit_sha: @sha, pr_url: nil}
+
+      assert {:qa_waiting, "issue-qa-flow", :usage_limited} =
+               AutoReview.on_green(issue(), stored_record(), ci_status, settings, qa_runner: FakeRunner)
+
+      refute_received {:qa_runner_request, _job, _opts}
+
+      :ok = RunStore.put_usage_limits(%{})
+      Application.put_env(:symphony_elixir, :qa_flow_runner_result, :started)
+
+      assert {:qa_started, "issue-qa-flow", @sha} =
+               AutoReview.on_green(issue(), stored_record(), ci_status, settings, qa_runner: FakeRunner)
+
+      assert_receive {:qa_runner_request, %{sha: @sha}, _opts}
+    end
+
+    test "a usage-limited pass whose hold could not be recorded still stores no verdict" do
+      record = put_record()
+      error = {:usage_limited, %{provider: "anthropic", scope: :all, window: "five_hour"}}
+      Application.put_env(:symphony_elixir, :qa_flow_agent_result, {:error, error, QaAgent.empty_tokens()})
+
+      log =
+        capture_log(fn ->
+          # No orchestrator runs in this test, so the hold has nowhere to go.
+          assert {:qa_usage_limited, "issue-qa-flow", nil} =
+                   AutoReview.run_qa(job(record), git: git_with_paths(["bin/symphony"]), qa_agent: FakeQaAgent)
+        end)
+
+      assert log =~ "the hold was not recorded: :unavailable"
+      refute_received {:memory_tracker_comment, _issue_id, _report}
+      refute Map.get(stored_record(), :qa_verdict)
+    end
+
+    test "with auto_pause off, a usage-limited pass is blocked like any other agent error" do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        pr_review_mode: "polling",
+        ci: %{enabled: true},
+        agent_usage_limit: %{auto_pause: false},
+        auto_review: %{enabled: true, max_fix_attempts: 2}
+      )
+
+      record = put_record()
+      error = {:qa_agent_failed, {:usage_limited, %{provider: "anthropic", scope: :all, window: "five_hour"}}}
+      Application.put_env(:symphony_elixir, :qa_flow_agent_result, {:error, error, QaAgent.empty_tokens()})
+
+      no_hold = fn _info, _identifier -> flunk("a usage limit must not be held with auto_pause off") end
+
+      opts = [git: git_with_paths(["bin/symphony"]), qa_agent: FakeQaAgent, usage_limit_hold: no_hold]
+      assert {:auto_review_qa, "issue-qa-flow", :blocked, "In Review"} = AutoReview.run_qa(job(record), opts)
+
+      assert_receive {:memory_tracker_comment, _issue_id, report}
+      assert report =~ "could not finish: {:qa_agent_failed, {:usage_limited"
+    end
+
     test "a dashboard change whose dev server fails its health check is blocked, not failed" do
       write_workflow_file!(Workflow.workflow_file_path(),
         tracker_kind: "memory",

@@ -508,6 +508,17 @@ defmodule SymphonyElixir.ParentWalkthroughTest do
       refute_received {:qa_agent_run, _job, _settings, _opts}
     end
 
+    test "a QA agent that hits the usage limit writes no report, keeps the ticket's state and returns the limit" do
+      info = %{provider: "anthropic", scope: :all, window: "five_hour", resets_at: ~U[2026-10-04 17:20:00Z]}
+      error = {:qa_agent_failed, {:usage_limited, info}}
+      Application.put_env(:symphony_elixir, :walkthrough_agent_result, {:error, error, QaAgent.empty_tokens()})
+
+      assert {:error, {:usage_limited, ^info}} = run(verification())
+      assert_received {:qa_agent_run, _job, _settings, _opts}
+      refute_received {:state_update, _issue_id, _state}
+      assert comments_posted() == []
+    end
+
     test "a rate-limited final state move keeps the verdict and applies it after the wait" do
       agent_result(:fail, %{findings: ["The About tab is missing"]})
       Application.put_env(:symphony_elixir, :walkthrough_state_result, [@rate_limited])

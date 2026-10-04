@@ -1078,6 +1078,11 @@ Symphony applies its verdict:
   the reason;
 - skipped → `In Review` with the reason.
 
+A pass whose QA agent runs into the Claude or Codex usage limit gets no verdict and no report: the
+issue stays in Auto Review, Symphony holds that provider's runs until the limit resets (as for an
+agent run, see `agent.usage_limit`), and the next green CI poll after that runs the pass again on
+the same PR head. With `agent.usage_limit.auto_pause: false` it is `blocked` instead.
+
 Every pass rewrites one `## Symphony QA Report` comment on the issue (Symphony's only comment
 besides the agent workpad) and records a run with `kind: "qa"`, its tokens and wall time in the
 run store, which the dashboard's run history shows. `qa_passed` and `qa_failed` notifications are
@@ -1127,6 +1132,8 @@ one.
 - `blocked` in either case also lists the ticket in the parent project's human-action update
   (see `human_actions`), with the reason and the blocked steps, since only a person can provide
   what QA was missing.
+- a QA agent that runs into the usage limit gets no verdict and no report: the ticket keeps its
+  state and its run is held and started again once the limit resets, as for any agent run.
 
 The ticket gets the usual executor run when the tracker is not Linear, the run is on a remote
 worker, it has the `qa:skip` label, or it has no parent.

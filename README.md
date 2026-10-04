@@ -393,7 +393,9 @@ records it as `stopped` without changing the Linear issue state.
 When a run hits the Claude or Codex usage limit, Symphony holds new runs of that agent on its own
 and resumes them when the limit resets (plus `agent.usage_limit.resume_margin_seconds`), keeping each held issue's
 attempt. One held run goes first; the rest follow only once it is accepted, and the hold starts
-again if the limit is still in force. Runs on other providers keep going, and an operator pause is never cleared by it. Set
+again if the limit is still in force. Runs on other providers keep going, and an operator pause is never cleared by it.
+An Auto Review QA pass that hits the limit is held the same way: it records no verdict, the issue
+stays where it is, and the pass runs again after the hold. Set
 `agent.usage_limit.auto_pause: false` to fail and retry such runs as before.
 
 While Claude runs are held, the web and terminal dashboards show a banner such as
