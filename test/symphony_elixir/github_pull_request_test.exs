@@ -149,7 +149,7 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
 
     runner = fn
       ["pr", "view", ^pr_url, "--json", fields], opts ->
-        assert fields == "number,state,title,url,headRefName,headRefOid,isCrossRepository,headRepository,statusCheckRollup"
+        assert fields == "number,state,title,url,headRefName,headRefOid,baseRefName,isCrossRepository,headRepository,mergeable,mergeStateStatus,statusCheckRollup"
         assert opts[:stderr_to_stdout]
 
         {Jason.encode!(%{
@@ -160,6 +160,9 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
            "headRefOid" => "abc123",
            "isCrossRepository" => false,
            "headRepository" => %{"nameWithOwner" => "org/repo"},
+           "baseRefName" => "main",
+           "mergeable" => "CONFLICTING",
+           "mergeStateStatus" => "DIRTY",
            "statusCheckRollup" => [
              %{
                "name" => "test",
@@ -179,13 +182,25 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
     assert status.commit_sha == "abc123"
     assert status.is_cross_repository == false
     assert status.head_repository == %{"nameWithOwner" => "org/repo"}
+    assert status.base_ref_name == "main"
+    assert status.mergeable == "CONFLICTING"
+    assert status.merge_state_status == "DIRTY"
     assert [%{name: "test", conclusion: "FAILURE", run_id: "987"}] = status.checks
+  end
+
+  test "conflicting? reads mergeable and mergeStateStatus" do
+    assert PullRequest.conflicting?(%{mergeable: "CONFLICTING", merge_state_status: "DIRTY"})
+    assert PullRequest.conflicting?(%{mergeable: " conflicting ", merge_state_status: nil})
+    assert PullRequest.conflicting?(%{mergeable: "UNKNOWN", merge_state_status: "dirty"})
+    refute PullRequest.conflicting?(%{mergeable: "MERGEABLE", merge_state_status: "CLEAN"})
+    refute PullRequest.conflicting?(%{mergeable: "UNKNOWN", merge_state_status: "UNKNOWN"})
+    refute PullRequest.conflicting?(%{})
   end
 
   test "fetch_ci_status maps status context state into status and conclusion" do
     pr_url = "https://github.com/org/repo/pull/17"
 
-    runner = fn ["pr", "view", ^pr_url, "--json", "number,state,title,url,headRefName,headRefOid,isCrossRepository,headRepository,statusCheckRollup"], _opts ->
+    runner = fn ["pr", "view", ^pr_url, "--json", "number,state,title,url,headRefName,headRefOid,baseRefName,isCrossRepository,headRepository,mergeable,mergeStateStatus,statusCheckRollup"], _opts ->
       {Jason.encode!(%{
          "state" => "OPEN",
          "title" => "Fix legacy contexts",

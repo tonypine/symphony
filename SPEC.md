@@ -1116,7 +1116,10 @@ When enabled:
   PR, so they MAY move to `In Review`.
 - The CI poller MUST discover issues in `state` as well as `In Review`. Red CI follows the normal
   `In Progress` fix loop and escalation. Green CI on an issue in `state` starts a QA pass for the
-  PR head SHA, at most one per issue and `max_concurrent` overall.
+  PR head SHA, at most one per issue and `max_concurrent` overall. GitHub runs no `pull_request`
+  workflows on a PR that conflicts with its base, so an issue in `state` whose PR has no checks
+  and is `CONFLICTING` (or `DIRTY`) MUST move to `Rework` with a comment naming the base branch to
+  merge in, instead of waiting for CI.
 - QA selection is deterministic and runs before any agent: a `qa:skip` label skips; a
   `qa:<kind>` label selects that playbook; a diff that only touches docs, tests or `skip_globs`
   skips; otherwise playbooks are selected by their trigger paths, and the `cli` playbook also by a

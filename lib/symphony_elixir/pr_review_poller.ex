@@ -1123,10 +1123,7 @@ defmodule SymphonyElixir.PrReviewPoller do
 
   defp normalize_conflict_context(_context), do: nil
 
-  defp merge_conflict?(activity) when is_map(activity) do
-    normalize_decision(Map.get(activity, :mergeable)) == @conflicting_mergeable or
-      normalize_decision(Map.get(activity, :merge_state_status)) == @dirty_merge_state
-  end
+  defp merge_conflict?(activity) when is_map(activity), do: PullRequest.conflicting?(activity)
 
   defp unsupported_cross_repo?(activity) do
     Map.get(activity, :is_cross_repository) == true
