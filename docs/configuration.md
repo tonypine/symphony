@@ -175,6 +175,9 @@ repositories:
 - `agent`: per-repo `provider`, `model`, `effort` and `run_profiles` for issues routed to this
   repo. They take the same values as the `agent` keys and win over them field by field; see
   **Run profiles** under `agent`. Errors name the key, e.g. `repositories[web].agent.effort`.
+- `acceptance_gate`: per-repo acceptance gate `mode`, `max_turns`, `timeout_ms` and `escalate`
+  rules. The mode and numbers replace the global `auto_review.acceptance_gate` ones; lists add to
+  them. See [`docs/acceptance_gate.md`](acceptance_gate.md).
 
 Routing validation rejects duplicate keys, workspace-sanitized key collisions, identical routes,
 ambiguous team catch-alls, multiple defaults, and multi-repo global worktree settings that do not
@@ -445,8 +448,8 @@ agent:
   `Rework`), `close_out` (`breakdown` parent whose sub-issues are all terminal), `breakdown` (other
   `breakdown` parent), `landing` (`Merging`),
   `rework` (`Rework`), `ci_fix` (continuation after red CI), `review_feedback` (continuation after
-  PR review comments), and `implementation` (everything else). `pre_push_review` and `qa` name the
-  pre-push reviewer and QA agent runs.
+  PR review comments), and `implementation` (everything else). `pre_push_review`, `qa` and
+  `acceptance_gate` name the pre-push reviewer, QA agent and acceptance gate runs.
 - Resolution per field, for the repository the issue is routed to:
   `repositories[].agent.run_profiles.<kind>`, then `repositories[].agent.<field>`, then
   `agent.run_profiles.<kind>`, then `agent.<field>`, else nothing is added (provider:
@@ -1088,6 +1091,14 @@ auto_review:
 That repository's `macos_app` playbook builds with `make -C macos app` and triggers on
 `macos/Sources/**`; other repositories keep the default paths. A kind only one repository sets
 (`api` above, say) exists only for that repository.
+
+#### Acceptance gate
+
+`auto_review.acceptance_gate` configures the acceptance gate: its kill switch (`mode`, default
+`off`), the gate agent's run settings and the escalation rules that send a PR to a human. It is
+operator config only: a repository's `WORKFLOW.md` can't set it, and `repositories[].acceptance_gate`
+can only add rules. Nothing runs the gate yet. Every key, the built-in rules and example blocks are
+in [`docs/acceptance_gate.md`](acceptance_gate.md).
 
 #### Android settings
 

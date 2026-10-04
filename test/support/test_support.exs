@@ -1068,12 +1068,15 @@ defmodule SymphonyElixir.TestSupport do
     %{}
     |> maybe_put(:key, Map.get(repo, :key) || Map.get(repo, "key") || Map.get(repo, :name) || Map.get(repo, "name"))
     |> maybe_put(:workflow, normalize_test_repository_workflow(repo))
-    |> maybe_put(:base_branch, Map.get(repo, :base_branch) || Map.get(repo, "base_branch"))
-    |> maybe_put(:default, Map.get(repo, :default) || Map.get(repo, "default"))
+    |> maybe_put(:base_branch, repo_field(repo, :base_branch))
+    |> maybe_put(:default, repo_field(repo, :default))
     |> maybe_put(:route, route)
     |> maybe_put(:workspace, workspace)
-    |> maybe_put(:agent, Map.get(repo, :agent) || Map.get(repo, "agent"))
+    |> maybe_put(:agent, repo_field(repo, :agent))
+    |> maybe_put(:acceptance_gate, repo_field(repo, :acceptance_gate))
   end
+
+  defp repo_field(repo, key), do: Map.get(repo, key) || Map.get(repo, Atom.to_string(key))
 
   defp normalize_test_repository_route(repo) do
     %{}

@@ -12,7 +12,7 @@ defmodule SymphonyElixir.RunKindTest do
     issue(Keyword.merge([labels: ["Breakdown"]], attrs))
   end
 
-  test "lists every kind, including the reserved reviewer and QA kinds" do
+  test "lists every kind, including the reserved reviewer, QA and acceptance gate kinds" do
     assert RunKind.kinds() == [
              :implementation,
              :breakdown,
@@ -23,7 +23,8 @@ defmodule SymphonyElixir.RunKindTest do
              :ci_fix,
              :review_feedback,
              :pre_push_review,
-             :qa
+             :qa,
+             :acceptance_gate
            ]
 
     assert RunKind.names() == Enum.map(RunKind.kinds(), &Atom.to_string/1)
