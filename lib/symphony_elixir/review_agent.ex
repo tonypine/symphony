@@ -5,7 +5,7 @@ defmodule SymphonyElixir.ReviewAgent do
 
   require Logger
 
-  alias SymphonyElixir.{AgentLabels, Config, PromptSafety, SSH}
+  alias SymphonyElixir.{AgentLabels, AgentTmpDir, Config, PromptSafety, SSH}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.ReviewAgent.Context
@@ -447,7 +447,9 @@ defmodule SymphonyElixir.ReviewAgent do
                run_id: Keyword.get(opts, :run_id),
                run_profile: Keyword.get(opts, :reviewer_run_profile) || Config.pre_push_review_profile(settings),
                tool_scope: :read_only,
-               linear_comment_registry: Keyword.get(opts, :linear_comment_registry)
+               linear_comment_registry: Keyword.get(opts, :linear_comment_registry),
+               # The executor run's temp folder, which the run's settings already make writable.
+               extra_env: AgentTmpDir.env(reviewer_settings.agent.kind, Keyword.get(opts, :agent_tmp_dir))
              ) do
         try do
           turn_opts =
