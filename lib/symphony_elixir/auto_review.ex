@@ -18,6 +18,9 @@ defmodule SymphonyElixir.AutoReview do
     health check is `blocked`); `fail` goes back to `In Progress` with the
     findings as continuation context, and to `In Review` once
     `auto_review.max_fix_attempts` is used up;
+  - a pass whose QA agent runs into the provider's usage limit gets no verdict: the
+    issue stays in Auto Review, the orchestrator holds the provider's runs until the
+    limit resets (`agent.usage_limit.auto_pause`), and the pass runs again after that;
   - a pass that ends after its issue left Auto Review, its PR merged or closed, or its
     head moved on writes its report but leaves the issue where it is.
 
@@ -349,9 +352,34 @@ defmodule SymphonyElixir.AutoReview do
         {:run, playbooks} -> run_agent(job, playbooks, opts)
       end
 
+    case outcome do
+      %{verdict: :usage_limited} -> hold_pass(issue, sha, outcome, opts)
+      _verdict -> apply_or_report(issue, record, sha, outcome, settings, opts)
+    end
+  end
+
+  defp apply_or_report(issue, record, sha, outcome, settings, opts) do
     case moved_on(issue, record, sha, settings, opts) do
       nil -> apply_outcome(issue, record, sha, outcome, settings, opts)
       reason -> report_unapplied(issue, sha, outcome, reason, opts)
+    end
+  end
+
+  # A pass that ran into the provider's usage limit says nothing about the PR: it stores no
+  # verdict, writes no QA report and leaves the issue in Auto Review. The orchestrator holds the
+  # provider's runs until the limit resets, as for an agent run, and the first green CI poll after
+  # that asks for the same pass again (see `handle_green/5`).
+  defp hold_pass(issue, sha, outcome, opts) do
+    hold = Keyword.get(opts, :usage_limit_hold, &Orchestrator.hold_for_usage_limit/2)
+
+    case hold.(outcome.usage_limit, issue.identifier) do
+      {:ok, %{resume_at: resume_at}} ->
+        Logger.info("QA pass hit the usage limit for #{issue.identifier} sha=#{sha}; no verdict, running it again after #{DateTime.to_iso8601(resume_at)}")
+        {:qa_usage_limited, issue.id, resume_at}
+
+      other ->
+        Logger.warning("QA pass hit the usage limit for #{issue.identifier} sha=#{sha}; no verdict, but the hold was not recorded: #{inspect(other)}")
+        {:qa_usage_limited, issue.id, nil}
     end
   end
 
@@ -528,7 +556,7 @@ defmodule SymphonyElixir.AutoReview do
     {outcome, tokens} =
       case Keyword.get(opts, :qa_agent, QaAgent).run(agent_job, settings, opts) do
         {:ok, %{result: result, tokens: tokens}} -> {%{verdict: result.verdict, result: result}, tokens}
-        {:error, reason, tokens} -> {%{verdict: :blocked, reason: blocked_reason(reason)}, tokens}
+        {:error, reason, tokens} -> {error_outcome(reason, settings), tokens}
       end
 
     ended_at = DateTime.utc_now()
@@ -545,6 +573,24 @@ defmodule SymphonyElixir.AutoReview do
 
     Map.merge(outcome, %{playbooks: kinds, tokens: tokens, runtime_seconds: runtime_seconds, run_id: run_id})
   end
+
+  # With `agent.usage_limit.auto_pause` off, a usage limit is `blocked` like any other error, as
+  # an agent run that hits it fails.
+  defp error_outcome(reason, settings) do
+    case usage_limit(reason) do
+      %{} = info when settings.agent.usage_limit.auto_pause ->
+        %{verdict: :usage_limited, usage_limit: info, reason: "the QA agent hit the #{UsageLimit.limit_label(info)}"}
+
+      _other ->
+        %{verdict: :blocked, reason: blocked_reason(reason)}
+    end
+  end
+
+  @doc "The usage-limit info of a `SymphonyElixir.QaAgent.run/3` error caused by a provider usage limit, else nil."
+  @spec usage_limit(term()) :: map() | nil
+  def usage_limit({:qa_agent_failed, reason}), do: usage_limit(reason)
+  def usage_limit({:usage_limited, %{} = info}), do: info
+  def usage_limit(_reason), do: nil
 
   @doc "The `blocked` reason the QA report gives for a `SymphonyElixir.QaAgent.run/3` error."
   @spec blocked_reason(term()) :: String.t()
