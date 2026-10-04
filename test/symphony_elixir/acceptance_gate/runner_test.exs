@@ -131,6 +131,8 @@ defmodule SymphonyElixir.AcceptanceGate.RunnerTest do
     assert {:error, :gate_runner_unavailable} = Runner.request(job(codex, "a"), gate_runner_server: name)
     assert Runner.workspaces(name) == []
     assert Runner.snapshot(name) == %{running: [], queued: []}
+    assert Runner.workspaces() == []
+    assert Runner.snapshot() == %{running: [], queued: []}
 
     supervisor = start_supervised!({Task.Supervisor, max_children: 0})
     start_supervised!({Runner, name: name, task_supervisor: supervisor})

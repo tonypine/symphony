@@ -296,6 +296,12 @@ defmodule SymphonyElixir.AcceptanceGateTest do
       assert %{outcome: {:inconclusive, {:gate_worktree_failed, 128, "fatal: bad object"}}} =
                AcceptanceGate.run(job(), settings, run_opts(git: failing_git))
 
+      not_a_repo = Path.join(Process.get(:gate_root), "not-a-repo")
+      File.mkdir_p!(not_a_repo)
+
+      assert %{outcome: {:inconclusive, {:gate_worktree_failed, 128, _output}}} =
+               AcceptanceGate.run(job(%{record: record(%{workspace_path: not_a_repo})}), settings, Keyword.delete(run_opts(), :git))
+
       unsupported = put_in(settings.auto_review.acceptance_gate.kind, "gpt")
 
       assert %{outcome: {:inconclusive, {:unsupported_qa_agent_kind, "gpt"}}} =

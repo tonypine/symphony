@@ -27,7 +27,7 @@ defmodule SymphonyElixir.AcceptanceGate.Runner do
   @queued_ttl_ms 10 * 60_000
 
   @spec start_link(keyword()) :: GenServer.on_start()
-  def start_link(opts \\ []) do
+  def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
   end
 
@@ -37,7 +37,7 @@ defmodule SymphonyElixir.AcceptanceGate.Runner do
   `AutoReview.run_gate/2`.
   """
   @spec request(map(), keyword()) :: request_result()
-  def request(%{issue: %{id: issue_id}, settings: settings} = job, opts \\ []) when is_binary(issue_id) do
+  def request(%{issue: %{id: issue_id}, settings: settings} = job, opts) when is_binary(issue_id) do
     server = Keyword.get(opts, :gate_runner_server, __MODULE__)
 
     cond do

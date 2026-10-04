@@ -655,7 +655,7 @@ defmodule SymphonyElixir.AcceptanceGate do
   `### Acceptance Criteria` items the ticket doesn't already list.
   """
   @spec criteria(Issue.t(), Schema.t(), keyword()) :: [%{id: String.t(), criterion: String.t()}]
-  def criteria(%Issue{} = issue, %Schema{} = settings, opts \\ []) do
+  def criteria(%Issue{} = issue, %Schema{} = settings, opts) do
     (checklist(issue.description, ~r/^acceptance( criteria)?:?$/i) ++ workpad_criteria(issue, settings, opts))
     |> Enum.reject(&(&1 == @bootstrap_criterion))
     |> Enum.uniq_by(&normalize/1)
