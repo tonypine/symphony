@@ -95,6 +95,56 @@ final class StateSnapshotTests: XCTestCase {
         XCTAssertEqual(SymphonyState.poll(data: empty, statusCode: 200), .state(StateSnapshot(running: 1)))
     }
 
+    func testDecodesTheForcedTickets() throws {
+        let data = try recordedState(replacing: "forced", with: [
+            [
+                "issue_id": "issue-123", "issue_identifier": "TP-123", "title": "Ship it", "state": "In Progress",
+                "forced_since": "2026-10-02T12:16:02Z", "forced_for_seconds": 300, "stale": false, "position": 1,
+                "waiting_on_human": false, "sub_issue": NSNull(), "phase": "implementation", "running": true,
+                "waiting_on": NSNull(), "blockers": [String](), "summary": "implementation · running",
+            ],
+            [
+                "issue_id": "issue-100", "issue_identifier": "TP-100", "state": "Todo", "forced_for_seconds": 270_000,
+                "stale": true, "sub_issue": ["issue_id": "issue-101", "issue_identifier": "TP-101", "state": "In Review"],
+                "phase": "waiting_for_human", "summary": "waiting for a human",
+            ],
+            // Without a phase Symphony sends no summary; without an identifier, the id names it.
+            ["issue_id": "issue-7", "issue_identifier": NSNull(), "state": "Todo", "phase": NSNull(), "summary": NSNull()],
+            ["title": "No id at all"],
+        ])
+
+        XCTAssertEqual(
+            SymphonyState.poll(data: data, statusCode: 200),
+            .state(
+                StateSnapshot(
+                    running: 1,
+                    forced: [
+                        .init(identifier: "TP-123", summary: "implementation · running", state: "In Progress", forcedForSeconds: 300),
+                        .init(
+                            identifier: "TP-100",
+                            summary: "waiting for a human",
+                            state: "Todo",
+                            forcedForSeconds: 270_000,
+                            stale: true,
+                            part: "TP-101"
+                        ),
+                        .init(identifier: "issue-7", state: "Todo"),
+                    ]
+                )
+            )
+        )
+    }
+
+    func testOlderSymphonyWithoutForcedTicketsDecodesWithNone() throws {
+        // The recorded state predates `forced`.
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: recordedState()) as? [String: Any])
+        XCTAssertNil(object["forced"])
+        XCTAssertEqual(SymphonyState.poll(data: try recordedState(), statusCode: 200), .state(StateSnapshot(running: 1)))
+
+        let empty = try recordedState(replacing: "forced", with: [Any]())
+        XCTAssertEqual(SymphonyState.poll(data: empty, statusCode: 200), .state(StateSnapshot(running: 1)))
+    }
+
     func testRetryingDefaultsToZero() {
         XCTAssertEqual(
             SymphonyState.poll(data: Data(#"{"counts": {"running": 2}}"#.utf8), statusCode: 200),

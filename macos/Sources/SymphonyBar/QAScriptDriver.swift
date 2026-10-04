@@ -17,6 +17,8 @@ final class QAScriptDriver {
     private var alerts: [QAScript.Alert] = []
     private var presses: [QAScript.Press] = []
     private var lastStatus: QAScript.Status?
+    /// The answer for a text prompt the press under way shows.
+    private var promptInput: String?
     private var timer: Timer?
 
     /// Starts the driver when the app is in scripted QA mode. `symphonyPID` is the Symphony the app runs.
@@ -50,6 +52,14 @@ final class QAScriptDriver {
         writeStatus()
     }
 
+    /// Records a text prompt the app would have shown and answers it with the press's input; nil, as for Cancel,
+    /// when the command held none.
+    func answer(promptTitle title: String, message: String) -> String? {
+        record(alertTitle: title, message: message)
+        defer { promptInput = nil }
+        return promptInput
+    }
+
     private func tick() {
         for command in QAScript.pendingCommands(in: qaMode.commandsFolder) {
             try? FileManager.default.removeItem(at: command.file)
@@ -61,7 +71,7 @@ final class QAScriptDriver {
     /// Presses the visible item the command names, if it is enabled, as a click would, and records the result.
     private func press(_ command: QAScript.Command) {
         refreshMenu()
-        let item = menu.items.first { !$0.isHidden && !$0.isSeparatorItem && $0.title == command.title }
+        let item = visibleItems(menu).first { $0.title == command.title }
         let result: QAScript.PressResult
         if let item {
             result = item.isEnabled && item.action != nil ? .pressed : .disabled
@@ -72,7 +82,16 @@ final class QAScriptDriver {
         guard result == .pressed, let item, let action = item.action else { return }
         // Record the press before acting: Quit doesn't return here, as `terminate(_:)` exits the app.
         writeStatus()
+        promptInput = command.input
+        defer { promptInput = nil }
         NSApp.sendAction(action, to: item.target, from: item)
+    }
+
+    /// The visible items of `menu`, each followed by the visible items of its submenu.
+    private func visibleItems(_ menu: NSMenu) -> [NSMenuItem] {
+        menu.items.filter { !$0.isHidden && !$0.isSeparatorItem }.flatMap { item in
+            [item] + (item.submenu.map(visibleItems) ?? [])
+        }
     }
 
     /// Updates the items the way opening the menu does: the delegate's refresh, then enabling.
@@ -90,7 +109,7 @@ final class QAScriptDriver {
             build: AppBuild(infoDictionary: info, hasEmbeddedSymphony: true).build,
             appPath: Bundle.main.bundleURL.path,
             symphonyPID: symphonyPID(),
-            menu: menu.items.filter { !$0.isHidden && !$0.isSeparatorItem }.map {
+            menu: visibleItems(menu).map {
                 QAScript.MenuItem(title: $0.title, enabled: $0.isEnabled)
             },
             alerts: alerts,

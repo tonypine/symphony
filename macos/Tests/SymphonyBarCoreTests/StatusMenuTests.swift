@@ -87,6 +87,69 @@ final class StatusMenuTests: XCTestCase {
         XCTAssertNil(StatusMenu.updateUnblocksLine(-1))
     }
 
+    func testForcedTicketsShowOnlyWhileSymphonyAnswers() {
+        let ticket = StateSnapshot.ForcedTicket(identifier: "TP-123", summary: "implementation · running")
+        let forced = StateSnapshot(running: 1, forced: [ticket])
+
+        XCTAssertEqual(StatusMenu.forcedTickets(.running(forced, external: false)), [ticket])
+        XCTAssertEqual(StatusMenu.forcedTickets(.paused(forced, external: true)), [ticket])
+        XCTAssertEqual(StatusMenu.forcedTickets(.running(snapshot, external: false)), [])
+        for status in [SymphonyStatus.stopped, .starting, .error("boom")] {
+            XCTAssertEqual(StatusMenu.forcedTickets(status), [], "\(status)")
+        }
+    }
+
+    func testForceIsOfferedWhileSymphonyAnswers() {
+        XCTAssertTrue(StatusMenu.canForce(.running(snapshot, external: false)))
+        XCTAssertTrue(StatusMenu.canForce(.running(snapshot, external: true)))
+        XCTAssertTrue(StatusMenu.canForce(.paused(snapshot, external: false)))
+        XCTAssertFalse(StatusMenu.canForce(.stopped))
+        XCTAssertFalse(StatusMenu.canForce(.starting))
+        XCTAssertFalse(StatusMenu.canForce(.error("boom")))
+    }
+
+    func testForcedLines() {
+        XCTAssertEqual(
+            StatusMenu.forcedLine(.init(identifier: "TP-123", summary: "implementation · running", forcedForSeconds: 45)),
+            "⚡ TP-123 · implementation · running · forced 45s"
+        )
+        XCTAssertEqual(
+            StatusMenu.forcedLine(.init(identifier: "TP-123", summary: "implementation · running")),
+            "⚡ TP-123 · implementation · running"
+        )
+        XCTAssertEqual(
+            StatusMenu.forcedLine(
+                .init(identifier: "TP-100", summary: "waiting for a human", forcedForSeconds: 270_000, stale: true, part: "TP-101")
+            ),
+            "⚡ TP-100 → TP-101 · waiting for a human · forced 3d 3h · stale"
+        )
+        // Without a summary, the ticket's state says where it is.
+        XCTAssertEqual(StatusMenu.forcedLine(.init(identifier: "TP-7", state: "Todo", forcedForSeconds: 720)), "⚡ TP-7 · Todo · forced 12m")
+        XCTAssertEqual(StatusMenu.forcedLine(.init(identifier: "TP-7")), "⚡ TP-7")
+        XCTAssertEqual(StatusMenu.stopForcingTitle("TP-123"), "Stop forcing TP-123")
+    }
+
+    func testDurationLabelsMatchTheDashboards() {
+        XCTAssertEqual(StatusMenu.durationLabel(-5), "0s")
+        XCTAssertEqual(StatusMenu.durationLabel(0), "0s")
+        XCTAssertEqual(StatusMenu.durationLabel(59), "59s")
+        XCTAssertEqual(StatusMenu.durationLabel(60), "1m")
+        XCTAssertEqual(StatusMenu.durationLabel(3_599), "59m")
+        XCTAssertEqual(StatusMenu.durationLabel(3_600), "1h 0m")
+        XCTAssertEqual(StatusMenu.durationLabel(11_100), "3h 5m")
+        XCTAssertEqual(StatusMenu.durationLabel(86_399), "23h 59m")
+        XCTAssertEqual(StatusMenu.durationLabel(86_400), "1d 0h")
+        XCTAssertEqual(StatusMenu.durationLabel(187_200), "2d 4h")
+    }
+
+    func testForcePrompt() {
+        XCTAssertEqual(StatusMenu.forceTitle, "Force a ticket…")
+        XCTAssertEqual(StatusMenu.forcingTitle("TP-123"), "Forcing TP-123…")
+        XCTAssertEqual(StatusMenu.forceIdentifier(" TP-123\n"), "TP-123")
+        XCTAssertNil(StatusMenu.forceIdentifier(""))
+        XCTAssertNil(StatusMenu.forceIdentifier("  \n"))
+    }
+
     func testDetailLinesEndWithTheControlError() {
         XCTAssertEqual(
             StatusMenu.detailLines(.running(snapshot, external: false), controlError: "Couldn't pause Symphony: HTTP 500"),

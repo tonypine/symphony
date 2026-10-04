@@ -20,6 +20,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private var controlInFlight: ControlAction?
     /// Why the last Pause or Resume failed, shown under the status until the next attempt.
     private var controlError: String?
+    /// Heads the forced tickets, hidden while there are none.
+    private let forcedTitleItem = NSMenuItem(title: StatusMenu.forcedTitle, action: nil, keyEquivalent: "")
+    private lazy var forceItem = menuItem(StatusMenu.forceTitle, action: #selector(forceTicket(_:)))
+    /// A row for each forced ticket, between its heading and Force a ticket….
+    private var forcedItems: [NSMenuItem] = []
+    /// The force or stop-forcing request under way, if any.
+    private var forceInFlight: ControlAction?
     private let updates = UpdatePoller()
     /// The newer release, while there is one.
     private var availableRelease: Release?
@@ -59,6 +66,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         menu.addItem(.separator())
         menu.addItem(menuItem(StatusMenu.pauseTitle, action: #selector(pauseDispatch(_:))))
         menu.addItem(menuItem(StatusMenu.resumeTitle, action: #selector(resumeDispatch(_:))))
+        menu.addItem(.separator())
+        forcedTitleItem.isEnabled = false
+        menu.addItem(forcedTitleItem)
+        menu.addItem(forceItem)
         menu.addItem(.separator())
         menu.addItem(menuItem(StatusMenu.openDashboardTitle, action: #selector(openDashboard(_:))))
         menu.addItem(menuItem(StatusMenu.openTerminalDashboardTitle, action: #selector(openTerminalDashboard(_:))))
@@ -198,6 +209,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         case #selector(resumeDispatch(_:)):
             menuItem.title = controlInFlight == .resume ? StatusMenu.resumingTitle : StatusMenu.resumeTitle
             return controlInFlight == nil && !restarting && StatusMenu.canResume(machine.status)
+        case #selector(forceTicket(_:)):
+            if case let .force(identifier)? = forceInFlight {
+                menuItem.title = StatusMenu.forcingTitle(identifier)
+            } else {
+                menuItem.title = StatusMenu.forceTitle
+            }
+            return forceInFlight == nil && StatusMenu.canForce(machine.status)
+        case #selector(stopForcing(_:)):
+            return forceInFlight == nil && StatusMenu.canForce(machine.status)
         case #selector(openDashboard(_:)), #selector(openTerminalDashboard(_:)):
             switch machine.status {
             case .running, .paused:
@@ -283,6 +303,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             controlInFlight = nil
             if case let .failed(message) = result { controlError = message }
             showStatus()
+            poller.pollNow()
+        }
+    }
+
+    /// Asks for a ticket and forces it past the dispatch limits.
+    @objc private func forceTicket(_ sender: Any?) {
+        guard forceInFlight == nil else { return }
+        let alert = NSAlert()
+        alert.messageText = StatusMenu.forcePromptTitle
+        alert.informativeText = StatusMenu.forcePromptMessage
+        alert.addButton(withTitle: StatusMenu.forcePromptButton)
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.placeholderString = StatusMenu.forcePromptPlaceholder
+        guard let input = SymphonyRunner.prompt(alert, field: field), let identifier = StatusMenu.forceIdentifier(input)
+        else { return }
+        sendForce(.force(identifier))
+    }
+
+    @objc private func stopForcing(_ sender: NSMenuItem) {
+        guard let identifier = sender.representedObject as? String else { return }
+        sendForce(.stopForcing(identifier))
+    }
+
+    /// Sends a force or stop-forcing request, then polls so the forced tickets follow. A failure shows an alert, as
+    /// the request came from a prompt or a submenu the user has left.
+    private func sendForce(_ action: ControlAction) {
+        guard forceInFlight == nil else { return }
+        forceInFlight = action
+
+        let stateRoot = runner.stateRoot
+        Task {
+            let result = await ControlAPI.send(
+                action,
+                stateRoot: stateRoot,
+                fallback: AppStores.current.controlURLFallback
+            )
+            forceInFlight = nil
+            if case let .failed(message) = result { SymphonyRunner.showAlert(title: message, body: "") }
             poller.pollNow()
         }
     }
@@ -511,6 +570,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         }
         for (offset, item) in detailItems.enumerated() {
             menu.insertItem(item, at: menu.index(of: statusTitleItem) + 1 + offset)
+        }
+        showForced(in: menu)
+    }
+
+    /// Shows a row for each forced ticket, with a submenu to stop forcing it, and hides their heading while there
+    /// are none. While the same tickets are listed, only the rows' titles change, so an open submenu stays open.
+    private func showForced(in menu: NSMenu) {
+        let tickets = StatusMenu.forcedTickets(machine.status)
+        forcedTitleItem.isHidden = tickets.isEmpty
+        if forcedItems.map({ $0.representedObject as? String }) == tickets.map(\.identifier) {
+            zip(forcedItems, tickets).forEach { item, ticket in item.title = StatusMenu.forcedLine(ticket) }
+            return
+        }
+        forcedItems.forEach(menu.removeItem)
+        forcedItems = tickets.map { ticket in
+            let stop = menuItem(StatusMenu.stopForcingTitle(ticket.identifier), action: #selector(stopForcing(_:)))
+            stop.representedObject = ticket.identifier
+            let submenu = NSMenu()
+            submenu.addItem(stop)
+            let item = NSMenuItem(title: StatusMenu.forcedLine(ticket), action: nil, keyEquivalent: "")
+            item.representedObject = ticket.identifier
+            item.submenu = submenu
+            return item
+        }
+        // Taken once: each row goes in above Force a ticket…, which moves down.
+        let start = menu.index(of: forceItem)
+        for (offset, item) in forcedItems.enumerated() {
+            menu.insertItem(item, at: start + offset)
         }
     }
 

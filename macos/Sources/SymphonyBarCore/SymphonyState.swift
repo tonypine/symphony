@@ -10,6 +10,8 @@ public struct StateSnapshot: Equatable {
     public var usageLimits: [UsageLimit]
     /// Tickets held only until the running Symphony includes a fix that merged: updating releases them.
     public var updateUnblocks: Int
+    /// Tickets forced past the dispatch limits, in queue order; empty when none is, or when Symphony predates them.
+    public var forced: [ForcedTicket]
 
     public struct Pause: Equatable {
         public var reason: String?
@@ -62,14 +64,51 @@ public struct StateSnapshot: Equatable {
         }
     }
 
+    /// A ticket forced past the dispatch limits (`symphony force`, or its force label in Linear).
+    public struct ForcedTicket: Equatable {
+        public var identifier: String
+        /// What it is doing and what it waits on, as Symphony words it: "implementation · running",
+        /// "implementation · waiting on blocker TP-1", "waiting for a human". Nil when Symphony didn't say.
+        public var summary: String?
+        /// Its Linear state, for example "Todo".
+        public var state: String?
+        public var forcedForSeconds: Int?
+        /// Forced for longer than `agent.concurrency.forced_stale_after_hours`.
+        public var stale: Bool
+        /// For a forced parent, the sub-ticket it is working through now.
+        public var part: String?
+
+        public init(
+            identifier: String,
+            summary: String? = nil,
+            state: String? = nil,
+            forcedForSeconds: Int? = nil,
+            stale: Bool = false,
+            part: String? = nil
+        ) {
+            self.identifier = identifier
+            self.summary = summary
+            self.state = state
+            self.forcedForSeconds = forcedForSeconds
+            self.stale = stale
+            self.part = part
+        }
+    }
+
     public init(
-        running: Int = 0, retrying: Int = 0, pause: Pause? = nil, usageLimits: [UsageLimit] = [], updateUnblocks: Int = 0
+        running: Int = 0,
+        retrying: Int = 0,
+        pause: Pause? = nil,
+        usageLimits: [UsageLimit] = [],
+        updateUnblocks: Int = 0,
+        forced: [ForcedTicket] = []
     ) {
         self.running = running
         self.retrying = retrying
         self.pause = pause
         self.usageLimits = usageLimits
         self.updateUnblocks = updateUnblocks
+        self.forced = forced
     }
 }
 
@@ -144,6 +183,17 @@ public enum SymphonyState {
                 utilization: limit.utilization
             )
         }
+        snapshot.forced = (payload.forced ?? []).compactMap { ticket in
+            guard let identifier = ticket.issueIdentifier ?? ticket.issueId else { return nil }
+            return StateSnapshot.ForcedTicket(
+                identifier: identifier,
+                summary: ticket.summary,
+                state: ticket.state,
+                forcedForSeconds: ticket.forcedForSeconds,
+                stale: ticket.stale ?? false,
+                part: ticket.subIssue?.issueIdentifier
+            )
+        }
         return .state(snapshot)
     }
 
@@ -201,10 +251,26 @@ public enum SymphonyState {
             let unblocks: Int?
         }
 
+        struct Forced: Decodable {
+            struct Part: Decodable {
+                let issueIdentifier: String?
+            }
+
+            let issueId: String?
+            let issueIdentifier: String?
+            let summary: String?
+            let state: String?
+            let forcedForSeconds: Int?
+            let stale: Bool?
+            let subIssue: Part?
+        }
+
         let counts: Counts?
         let pause: Pause?
         let usageLimits: [UsageLimit]?
         let appUpdate: AppUpdate?
+        /// Missing before Symphony reported forced tickets.
+        let forced: [Forced]?
         let error: Failure?
     }
 }
