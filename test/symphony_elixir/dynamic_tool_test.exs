@@ -502,6 +502,11 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
         DynamicTool.execute("qa_android_launch", %{"application_id" => "com.example.app", "pid" => 1}, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
 
       assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
+
+      for {tool, args} <- [{"qa_android_tap", %{"x" => 1, "y" => 1, "pid" => 1}}, {"qa_android_type", %{"text" => "a", "shell" => "id"}}] do
+        response = DynamicTool.execute(tool, args, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
+        assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
+      end
     end
 
     test "rejects smuggled team, project, parent, assignee, state and issue id arguments" do

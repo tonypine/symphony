@@ -1322,9 +1322,17 @@ When enabled:
   `application_ids`, and MUST uninstall and refuse a package outside `application_ids` that the
   install added or replaced, including after an install that reported failure.
   `qa_android_launch` / `qa_android_stop` MUST refuse an application ID outside
-  `application_ids`; `qa_android_screenshot` follows the `qa_screenshot` file rules. When the
-  pass ends or crashes, Symphony MUST uninstall the configured apps and every package installed in
-  the pass, release the lease and remove its private directory. An emulator that cannot start MUST
+  `application_ids`; `qa_android_screenshot` follows the `qa_screenshot` file rules.
+  `qa_android_ui_tree`, `qa_android_tap`, `qa_android_type`, `qa_android_key`,
+  `qa_android_rotate`, `qa_android_dark_mode` and `qa_android_font_scale` MUST act only while
+  `qa_android_install` has installed a configured app in the pass. The tree MUST be read through
+  `adb exec-out`, never from a file on the device, and capped in depth, nodes and bytes, saying when
+  nodes were left out; tap MUST refuse a point off the display and a path that is not in the last
+  tree; keys, orientations, night modes and font scales MUST come from fixed allowlists; and typed
+  text MUST reach the device's shell quoted so that no character in it can run a command. When the
+  pass ends or crashes, Symphony MUST reset the rotation, dark mode and font scale the pass changed,
+  uninstall the configured apps and every package installed in the pass, release the lease and
+  remove its private directory. An emulator that cannot start MUST
   surface as `qa_android_unavailable`, telling the agent to answer `blocked`. Other tool scopes MUST
   NOT list or run them.
 - With `worker_host` set, the worktree checks MUST stay on the Symphony host, and the build, the app,
