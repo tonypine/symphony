@@ -1433,25 +1433,121 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     end
   end
 
-  test "workspace surfaces after_create hook timeouts" do
-    workspace_root =
-      Path.join(
-        System.tmp_dir!(),
-        "symphony-elixir-workspace-hook-timeout-#{System.unique_integer([:positive])}"
-      )
+  test "workspace retries an after_create hook that times out once, in the workspace it left" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-elixir-workspace-hook-retry-#{System.unique_integer([:positive])}")
+    runs_file = Path.join(test_root, "after_create.runs")
 
     try do
+      File.mkdir_p!(test_root)
+
+      # The first try prints 25 lines, leaves a file behind, starts a background
+      # job and hangs; the second needs that file and finishes at once.
       write_workflow_file!(Workflow.workflow_file_path(),
-        workspace_root: workspace_root,
-        hook_timeout_ms: 10,
-        hook_after_create: "sleep 1"
+        workspace_root: Path.join(test_root, "workspaces"),
+        hook_after_create_timeout_ms: 1_000,
+        hook_after_create: """
+        echo run >> #{runs_file}
+        if [ "$(wc -l < #{runs_file})" -eq 1 ]; then
+          i=1
+          while [ $i -le 25 ]; do echo "progress line $i"; i=$((i + 1)); done
+          echo partial > partial.txt
+          (sleep 2; echo late > late-background.txt) &
+          sleep 2
+          echo late > late.txt
+        fi
+        test -f partial.txt
+        """
       )
 
-      assert {:error, {:workspace_hook_timeout, "after_create", 10}} =
-               Workspace.create_for_issue("MT-TIMEOUT")
+      log =
+        capture_log(fn ->
+          assert {:ok, workspace} = Workspace.create_for_issue("MT-RETRY")
+          assert File.read!(runs_file) == "run\nrun\n"
+          refute File.exists?(Path.join(Path.dirname(workspace), ".MT-RETRY.after_create_pending"))
+
+          # The timed-out shell and its background job were stopped, so neither got
+          # past its sleep.
+          Process.sleep(1_500)
+          refute File.exists?(Path.join(workspace, "late.txt"))
+          refute File.exists?(Path.join(workspace, "late-background.txt"))
+        end)
+
+      assert log =~ "Workspace hook timed out hook=after_create"
+      assert log =~ "timeout_ms=1000"
+      assert log =~ "Retrying workspace hook after timeout hook=after_create"
+      assert log =~ ~s(output_tail="progress line 6\\nprogress line 7)
+      assert log =~ ~s(progress line 25")
+      refute log =~ "progress line 5\\n"
     after
-      File.rm_rf(workspace_root)
+      File.rm_rf(test_root)
     end
+  end
+
+  test "workspace fails when after_create times out on its retry too, and the next run runs it again" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-elixir-workspace-hook-timeout-#{System.unique_integer([:positive])}")
+    workspace_root = Path.join(test_root, "workspaces")
+    workspace = Path.join([workspace_root, "default", "MT-TIMEOUT"])
+    pending_marker = Path.join([workspace_root, "default", ".MT-TIMEOUT.after_create_pending"])
+    runs_file = Path.join(test_root, "after_create.runs")
+
+    try do
+      File.mkdir_p!(test_root)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        hook_after_create_timeout_ms: 200,
+        hook_after_create: "echo run >> #{runs_file}; echo partial > partial.txt; sleep 2"
+      )
+
+      log =
+        capture_log(fn ->
+          assert {:error, {:workspace_hook_timeout, "after_create", 200}} =
+                   Workspace.create_for_issue("MT-TIMEOUT")
+        end)
+
+      assert File.read!(runs_file) == "run\nrun\n"
+      assert File.read!(Path.join(workspace, "partial.txt")) == "partial\n"
+      assert File.exists?(pending_marker)
+      assert log =~ "timeout_ms=200 output_tail="
+
+      # The next run finds the workspace but runs the unfinished hook again in it.
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        hook_after_create: "echo run >> #{runs_file}; test -f partial.txt"
+      )
+
+      log =
+        capture_log(fn ->
+          assert {:ok, reused_workspace} = Workspace.create_for_issue("MT-TIMEOUT")
+          assert Path.basename(reused_workspace) == "MT-TIMEOUT"
+        end)
+
+      assert File.read!(runs_file) == "run\nrun\nrun\n"
+      refute File.exists?(pending_marker)
+      assert log =~ "Running workspace hook an earlier run left unfinished hook=after_create"
+
+      # Once it has succeeded, a reused workspace doesn't run it again.
+      assert {:ok, _workspace} = Workspace.create_for_issue("MT-TIMEOUT")
+      assert File.read!(runs_file) == "run\nrun\nrun\n"
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "after_create gets ten minutes, or a longer hooks.timeout_ms, unless after_create_timeout_ms is set" do
+    write_workflow_file!(Workflow.workflow_file_path())
+    assert Config.settings!().hooks.after_create_timeout_ms == nil
+    assert Schema.Hooks.after_create_timeout_ms(Config.settings!().hooks) == 600_000
+
+    write_workflow_file!(Workflow.workflow_file_path(), hook_timeout_ms: 900_000)
+    assert Schema.Hooks.after_create_timeout_ms(Config.settings!().hooks) == 900_000
+
+    write_workflow_file!(Workflow.workflow_file_path(), hook_timeout_ms: 900_000, hook_after_create_timeout_ms: 120_000)
+    assert Schema.Hooks.after_create_timeout_ms(Config.settings!().hooks) == 120_000
+
+    write_workflow_file!(Workflow.workflow_file_path(), hook_after_create_timeout_ms: 0)
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate_repo_workflows()
+    assert message =~ "after_create_timeout_ms"
   end
 
   test "workspace creates an empty directory when no bootstrap hook is configured" do
@@ -4401,6 +4497,62 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       assert trace =~ "auto/MT-SSH-WS"
       assert trace =~ "rm -rf"
       assert trace =~ workspace_path
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "remote after_create timeouts are named after the hook and not retried" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-elixir-remote-hook-timeout-#{System.unique_integer([:positive])}")
+    previous_path = System.get_env("PATH")
+    on_exit(fn -> restore_env("PATH", previous_path) end)
+
+    try do
+      runs_file = Path.join(test_root, "after_create.runs")
+      fake_ssh = Path.join(test_root, "ssh")
+      workspace_path = "/remote/home/.symphony-remote-workspaces/default/MT-SSH-TIMEOUT"
+
+      File.mkdir_p!(test_root)
+      System.put_env("PATH", test_root <> ":" <> (previous_path || ""))
+
+      # Stands in for the worker: the first after_create hangs, a second would succeed.
+      File.write!(fake_ssh, """
+      #!/bin/sh
+      case "$*" in
+        *"__SYMPHONY_WORKSPACE__"*)
+          printf '%s\\t%s\\t%s\\n' '__SYMPHONY_WORKSPACE__' '1' '#{workspace_path}'
+          ;;
+        *"remote-setup"*)
+          echo run >> #{runs_file}
+          if [ "$(wc -l < #{runs_file})" -eq 1 ]; then
+            echo "remote setup still resolving"
+            sleep 2
+          fi
+          ;;
+      esac
+
+      exit 0
+      """)
+
+      File.chmod!(fake_ssh, 0o755)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: "/remote/home/.symphony-remote-workspaces",
+        worker_ssh_hosts: ["worker-01"],
+        hook_after_create_timeout_ms: 1_000,
+        hook_after_create: "remote-setup"
+      )
+
+      log =
+        capture_log(fn ->
+          assert {:error, {:workspace_hook_timeout, "after_create", 1_000}} =
+                   Workspace.create_for_issue("MT-SSH-TIMEOUT", "worker-01")
+        end)
+
+      assert File.read!(runs_file) == "run\n"
+      assert log =~ "Workspace hook timed out hook=after_create"
+      assert log =~ ~s(worker_host=worker-01 timeout_ms=1000 output_tail="remote setup still resolving")
+      refute log =~ "Retrying workspace hook after timeout"
     after
       File.rm_rf(test_root)
     end

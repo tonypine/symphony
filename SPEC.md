@@ -762,8 +762,12 @@ Fields:
 Fields:
 
 - `after_create` (multiline shell script string, OPTIONAL)
-  - Runs only when a workspace directory is newly created.
+  - Runs when a workspace directory is newly created, and again when a later run reuses a local
+    workspace whose `after_create` never succeeded.
   - Failure aborts workspace creation.
+  - A timeout of a local hook is retried once, in the same workspace and the same attempt, before
+    it aborts workspace creation, so the script should be safe to run again. A timeout on an SSH
+    worker is not retried.
 - `before_run` (multiline shell script string, OPTIONAL)
   - Runs before each agent attempt after workspace preparation and before launching the coding
     agent.
@@ -777,9 +781,14 @@ Fields:
   - Failure is logged but ignored; cleanup still proceeds.
 - `timeout_ms` (integer, OPTIONAL)
   - Default: `60000`
-  - Applies to all workspace hooks.
+  - Applies to all workspace hooks except `after_create` when `after_create_timeout_ms` is set.
   - Invalid values fail configuration validation.
   - Changes SHOULD be re-applied at runtime for future hook executions.
+- `after_create_timeout_ms` (integer or null, OPTIONAL)
+  - Default: `null`, which gives `after_create` the larger of `timeout_ms` and `600000` (10
+    minutes), since it usually installs dependencies.
+  - Applies to `after_create` only, and to each try.
+  - Invalid values fail configuration validation.
 
 #### 5.4.8 `agent` (object)
 
@@ -1481,6 +1490,8 @@ not require recognizing or validating extension fields unless that extension is 
 - `hooks.after_run`: shell script or null
 - `hooks.before_remove`: shell script or null
 - `hooks.timeout_ms`: integer, default `60000`
+- `hooks.after_create_timeout_ms`: integer or null, default `null` (the larger of `hooks.timeout_ms`
+  and `600000`)
 - `agent.concurrency.max_total`: integer, default `10`
 - `agent.concurrency.max_by_issue_state`: map of positive integers, default `{}`
 - `agent.concurrency.epic_lanes`: integer between `0` and `max_total`, default `max_total`
@@ -2162,7 +2173,9 @@ Algorithm summary:
      otherwise refuse with a branch-collision error.
 6. Mark `created_now=true` only if the directory or worktree was created during this call; otherwise
    `created_now=false`.
-7. If `created_now=true`, run `hooks.after_create` if configured.
+7. If `created_now=true`, run `hooks.after_create` if configured. Also run it for a reused local
+   workspace whose `after_create` has not yet succeeded (it failed or timed out), so the agent does
+   not start in a half-prepared workspace.
 
 Notes:
 
@@ -2207,12 +2220,22 @@ Execution contract:
 - When verification is enabled for the run, `hooks.before_run` and `hooks.after_run` receive
   `SYMPHONY_VERIFICATION_PORT` in their environment. If a project starts its dev server from a hook
   instead of `verification.dev_server.start_cmd`, it is responsible for backgrounding and cleanup.
-- Hook timeout uses `hooks.timeout_ms`; default: `60000 ms`.
-- Log hook start, failures, and timeouts.
+- Hook timeout uses `hooks.timeout_ms`; default: `60000 ms`. `after_create` uses
+  `hooks.after_create_timeout_ms`, or the larger of `hooks.timeout_ms` and `600000 ms` when unset.
+- On a timeout of a local hook, stop the hook's process and what it started, at once, so the hook
+  cannot start its next command. For a hook on an SSH worker, close the SSH session; the hook may
+  keep running on the worker.
+- Log hook start, failures, and timeouts. A timeout log includes the hook's last output lines, so a
+  hang can be told apart from a slow hook.
 
 Failure semantics:
 
-- `after_create` failure or timeout is fatal to workspace creation.
+- `after_create` failure is fatal to workspace creation. A local hook's timeout is retried once in
+  the workspace as the first try left it, within the same run attempt; a second timeout is fatal to
+  workspace creation. An SSH worker hook's timeout is fatal at once, since the first try may still
+  be running on the worker. A failed local `after_create` leaves the workspace in place, and the
+  next run that reuses it runs `after_create` again before the agent starts. An SSH worker's
+  workspace is not, for the same reason as the retry.
 - `before_run` failure or timeout is fatal to the current run attempt.
 - `after_run` failure or timeout is logged and ignored.
 - `before_remove` failure or timeout is logged and ignored.
@@ -3945,7 +3968,10 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Existing non-directory path at workspace location is handled safely (replace or fail per
   implementation policy)
 - OPTIONAL workspace population/synchronization errors are surfaced
-- `after_create` hook runs only on new workspace creation
+- `after_create` hook runs on new workspace creation, and again on a reused local workspace whose
+  `after_create` has not yet succeeded
+- Local `after_create` timeout is retried once within the same attempt; a second timeout fails
+  creation; an `after_create` timeout on an SSH worker fails creation without a retry
 - `before_run` hook runs before each attempt and failure/timeouts abort the current attempt
 - `after_run` hook runs after each attempt and failure/timeouts are logged and ignored
 - `before_remove` hook runs on cleanup and failures/timeouts are ignored
@@ -4138,7 +4164,8 @@ Use the same validation profiles as Section 17:
 - Issue tracker client with candidate fetch + state refresh + terminal fetch
 - Workspace manager with sanitized per-issue workspaces
 - Workspace lifecycle hooks (`after_create`, `before_run`, `after_run`, `before_remove`)
-- Hook timeout config (`hooks.timeout_ms`, default `60000`)
+- Hook timeout config (`hooks.timeout_ms`, default `60000`; `hooks.after_create_timeout_ms`,
+  default the larger of `hooks.timeout_ms` and `600000`)
 - Coding-agent adapter client for configured `agent.runtime`
 - Agent launch command config (`agent.runtime`, `agent.command`)
 - Strict prompt rendering with `issue`, `attempt`, `agent`, and `repo_key` variables
