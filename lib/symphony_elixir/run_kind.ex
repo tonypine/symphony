@@ -20,8 +20,9 @@ defmodule SymphonyElixir.RunKind do
   Parent and final-verification tickets come before states because they never
   open a PR: the workflow sends them to the parent-ticket steps whatever their state.
 
-  `pre_push_review` and `qa` are never returned by `classify/2`; they name the
-  reviewer and QA agent runs, which Symphony starts itself.
+  `pre_push_review`, `qa` and `acceptance_gate` are never returned by `classify/2`;
+  they name the reviewer, QA agent and acceptance gate runs, which Symphony starts
+  itself.
   """
 
   alias SymphonyElixir.Linear.Issue
@@ -37,6 +38,7 @@ defmodule SymphonyElixir.RunKind do
           | :review_feedback
           | :pre_push_review
           | :qa
+          | :acceptance_gate
 
   @typedoc "The provider that serves a run's model."
   @type provider :: String.t()
@@ -54,7 +56,8 @@ defmodule SymphonyElixir.RunKind do
     :ci_fix,
     :review_feedback,
     :pre_push_review,
-    :qa
+    :qa,
+    :acceptance_gate
   ]
 
   @final_verification_prefix "Final verification:"

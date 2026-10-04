@@ -33,6 +33,28 @@ repositories:
       fetch_before_dispatch: true
       # Or let Symphony clone the repo itself instead of using `repo` (drop `repo` then):
       # source: your-org/symphony
+    # Per-repo acceptance gate: mode and numbers replace the global ones, lists
+    # add to them (docs/acceptance_gate.md). The gate can't approve itself:
+    # acceptance_gate:
+    #   mode: shadow
+    #   escalate:
+    #     paths:
+    #       - lib/symphony_elixir/auto_review.ex
+    #       - lib/symphony_elixir/auto_review/**
+    #       - lib/symphony_elixir/acceptance_gate.ex
+    #       - lib/symphony_elixir/acceptance_gate/**
+    #       - lib/symphony_elixir/auto_merge.ex
+    #       - lib/symphony_elixir/review_agent.ex
+    #       - lib/symphony_elixir/review_agent/**
+    #       - lib/symphony_elixir/agent_sandbox_config.ex
+    #       - lib/symphony_elixir/path_safety.ex
+    #       - lib/symphony_elixir/prompt_safety.ex
+    #       - lib/symphony_elixir/sensitive_path.ex
+    #       - lib/symphony_elixir/secret.ex
+    #       - lib/symphony_elixir/agent_tools/**
+    #       - lib/symphony_elixir/agent_mcp.ex
+    #       - lib/symphony_elixir/github/webhook.ex
+    #       - lib/symphony_elixir_web/plugs/**
 
 workspaces:
   root: ~/Projects/symphony-workspaces
@@ -151,6 +173,27 @@ pre_push_review:
 #   run_on: every_push
 #   skip_globs: []
 #   playbooks: {}
+#   # Acceptance gate (docs/acceptance_gate.md): after QA, decides whether a PR
+#   # can merge without a human; escalation rules send it to one regardless.
+#   # Nothing runs it yet. Configured lists add to the built-in rules.
+#   acceptance_gate:
+#     mode: off              # off | shadow | enforce (the kill switch)
+#     runtime: claude
+#     command: claude --dangerously-skip-permissions
+#     model: claude-opus-5-5   # else agent.run_profiles.acceptance_gate, then agent.model
+#     effort: high
+#     max_turns: 12
+#     timeout_ms: 900000
+#     max_concurrent: 2
+#     escalate:
+#       labels: [needs-human, breakdown]
+#       ticket_patterns: []  # added to the built-in patterns
+#       paths: []            # added to the built-in auth/secret/migration/CI paths
+#       diff_patterns: []    # added to the built-in DROP/TRUNCATE/DELETE FROM/rm -rf
+#       dependencies: major  # off | major | any
+#       max_changed_lines: 1500
+#       busy_files: { top: 10, window_days: 14, max_lines: 300 }
+#       inconclusive_limit: 2
 
 pull_requests:
   enabled: true
