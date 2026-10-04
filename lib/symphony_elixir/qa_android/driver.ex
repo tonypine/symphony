@@ -11,15 +11,16 @@ defmodule SymphonyElixir.QaAndroid.Driver do
 
   - `qa_android_install` refuses a worktree with edits to tracked files outside
     `qa-evidence/` (the APK and the build's outputs are gitignored files the
-    sandboxed build creates, so those are fine). The playbook's `apk_path` must
+    sandboxed build creates, so those are fine). It installs every one of the
+    playbook's `apk_paths`, or the one its `apk` argument names. Each path must
     resolve, symlinks included, inside the worktree and name a regular file, not
     a symlink, of at most 512 MB. The host
-    never parses the APK: it copies it into the driver's private directory,
+    never parses an APK: it copies each one into the driver's private directory,
     uninstalls every configured `application_ids` entry (which wipes its data)
     and every package installed since the pass's first install began, and runs
-    `adb install -r` from the copy. A package the install added or replaced
-    that is not in `application_ids` is uninstalled again and refused, and so is
-    every package a failed install may have left;
+    `adb install -r` from each copy in turn. A package an install added or
+    replaced that is not in `application_ids` is uninstalled again and refused,
+    and so is every package a failed install may have left;
   - `qa_android_launch` and `qa_android_stop` accept only a configured
     application ID. Launch starts the app's launcher activity, only after
     `qa_android_install` installed it in this pass, and waits until it is the
@@ -125,7 +126,7 @@ defmodule SymphonyElixir.QaAndroid.Driver do
   Starts a driver for one QA pass and takes the emulator's lease.
 
   Options: `:worktree` (required), `:playbook` (the `android_app` playbook with
-  `apk_path` and `application_ids`), `:git` (a `fn args, cwd -> {output, status}`),
+  `apk_paths` and `application_ids`), `:git` (a `fn args, cwd -> {output, status}`),
   and, for tests, `:cmd` (runs an adb command, as
   `SymphonyElixir.QaDriver.Host.cmd/3`), `:checkout` and `:checkin` (as
   `SymphonyElixir.QaAndroid.Emulator.checkout/2` and `checkin/2`), `:open`
@@ -175,13 +176,14 @@ defmodule SymphonyElixir.QaAndroid.Driver do
 
   # -- tools ------------------------------------------------------------------
 
-  defp run_tool("qa_android_install", driver, config, _args) do
-    with :ok <- ensure_tracked_unchanged(config),
-         {:ok, copy} <- copy_apk(config) do
+  defp run_tool("qa_android_install", driver, config, args) do
+    with {:ok, apks} <- apks_to_install(config, args),
+         :ok <- ensure_tracked_unchanged(config),
+         {:ok, copies} <- copy_apks(config, apks) do
       try do
-        install(driver, config, copy)
+        install(driver, config, copies)
       after
-        File.rm(copy)
+        remove_copies(copies)
       end
     end
   end
@@ -302,15 +304,44 @@ defmodule SymphonyElixir.QaAndroid.Driver do
     end
   end
 
+  defp apks_to_install(config, %{"apk" => apk}) when is_binary(apk) do
+    if apk in config.apk_paths do
+      {:ok, [apk]}
+    else
+      tool_error("qa_apk_not_configured", "#{inspect(apk)} is not one of the playbook's apk_paths (#{Enum.join(config.apk_paths, ", ")}).")
+    end
+  end
+
+  defp apks_to_install(config, args) when is_map_key(args, "apk"),
+    do: tool_error("invalid_arguments", "`apk` must be one of the playbook's apk_paths (#{Enum.join(config.apk_paths, ", ")}).")
+
+  defp apks_to_install(config, _args), do: {:ok, config.apk_paths}
+
+  # Every APK is checked and copied before the device changes.
+  defp copy_apks(config, apks) do
+    Enum.reduce_while(apks, {:ok, []}, fn apk, {:ok, copies} ->
+      case copy_apk(config, apk) do
+        {:ok, copy} ->
+          {:cont, {:ok, copies ++ [{apk, copy}]}}
+
+        error ->
+          remove_copies(copies)
+          {:halt, error}
+      end
+    end)
+  end
+
+  defp remove_copies(copies), do: Enum.each(copies, fn {_apk, copy} -> File.rm(copy) end)
+
   # The checks run on the path, then again on the file that was opened, so a
   # file swapped for a symlink in between is refused rather than copied. The
   # size cap applies to the opened file, and only that size is copied.
-  defp copy_apk(config) do
-    with {:ok, path, stat} <- checked_apk(config),
-         {:ok, fd} <- open_apk(config, path) do
+  defp copy_apk(config, apk) do
+    with {:ok, path, stat} <- checked_apk(config, apk),
+         {:ok, fd} <- open_apk(config, apk, path) do
       try do
-        with {:ok, size} <- same_file(fd, stat, config) do
-          write_copy(config, fd, size)
+        with {:ok, size} <- same_file(fd, stat, config, apk) do
+          write_copy(config, apk, fd, size)
         end
       after
         :file.close(fd)
@@ -318,67 +349,67 @@ defmodule SymphonyElixir.QaAndroid.Driver do
     end
   end
 
-  defp checked_apk(config) do
-    path = Path.expand(config.apk_path, config.worktree)
+  defp checked_apk(config, apk) do
+    path = Path.expand(apk, config.worktree)
 
-    with {:ok, canonical} <- inside_worktree(path, config) do
+    with {:ok, canonical} <- inside_worktree(path, config, apk) do
       case File.lstat(path) do
         {:ok, %File.Stat{type: :regular} = stat} -> {:ok, canonical, stat}
-        {:ok, %File.Stat{type: :symlink}} -> tool_error("qa_apk_unsafe", "#{config.apk_path} is a symlink; the APK must be the file the build wrote.")
-        {:ok, %File.Stat{type: type}} -> apk_missing(config, "is a #{type}, not a file")
-        {:error, reason} -> apk_missing(config, "could not be read (#{inspect(reason)})")
+        {:ok, %File.Stat{type: :symlink}} -> tool_error("qa_apk_unsafe", "#{apk} is a symlink; the APK must be the file the build wrote.")
+        {:ok, %File.Stat{type: type}} -> apk_missing(apk, "is a #{type}, not a file")
+        {:error, reason} -> apk_missing(apk, "could not be read (#{inspect(reason)})")
       end
     end
   end
 
-  defp inside_worktree(path, config) do
+  defp inside_worktree(path, config, apk) do
     case PathSafety.canonicalize(path) do
       {:ok, canonical} ->
         if String.starts_with?(canonical, config.worktree <> "/") do
           {:ok, canonical}
         else
-          tool_error("qa_apk_outside_worktree", "#{config.apk_path} resolves to #{canonical}, outside the QA worktree. QA installs only the APK built in it.")
+          tool_error("qa_apk_outside_worktree", "#{apk} resolves to #{canonical}, outside the QA worktree. QA installs only the APK built in it.")
         end
 
       {:error, reason} ->
-        tool_error("qa_apk_outside_worktree", "#{config.apk_path} could not be resolved: #{inspect(reason)}")
+        tool_error("qa_apk_outside_worktree", "#{apk} could not be resolved: #{inspect(reason)}")
     end
   end
 
-  defp apk_missing(config, problem) do
-    tool_error("qa_apk_missing", "#{config.apk_path} #{problem}. Run the playbook's build command in your sandbox first and check its output.")
+  defp apk_missing(apk, problem) do
+    tool_error("qa_apk_missing", "#{apk} #{problem}. Run the playbook's build command in your sandbox first and check its output.")
   end
 
-  defp open_apk(config, path) do
+  defp open_apk(config, apk, path) do
     case config.open.(path) do
       {:ok, fd} -> {:ok, fd}
-      {:error, reason} -> apk_missing(config, "could not be opened (#{inspect(reason)})")
+      {:error, reason} -> apk_missing(apk, "could not be opened (#{inspect(reason)})")
     end
   end
 
-  defp same_file(fd, stat, config) do
+  defp same_file(fd, stat, config, apk) do
     case :file.read_file_info(fd) do
       {:ok, info} ->
         opened = File.Stat.from_record(info)
 
         cond do
           {opened.type, opened.inode, opened.major_device} != {:regular, stat.inode, stat.major_device} ->
-            tool_error("qa_apk_unsafe", "#{config.apk_path} changed while Symphony opened it. Run qa_android_install again once the build is done.")
+            tool_error("qa_apk_unsafe", "#{apk} changed while Symphony opened it. Run qa_android_install again once the build is done.")
 
           opened.size > config.max_apk_bytes ->
-            tool_error("qa_apk_too_large", "#{config.apk_path} is #{opened.size} bytes; QA installs APKs of at most #{config.max_apk_bytes} bytes.")
+            tool_error("qa_apk_too_large", "#{apk} is #{opened.size} bytes; QA installs APKs of at most #{config.max_apk_bytes} bytes.")
 
           true ->
             {:ok, opened.size}
         end
 
       {:error, reason} ->
-        apk_missing(config, "could not be read (#{inspect(reason)})")
+        apk_missing(apk, "could not be read (#{inspect(reason)})")
     end
   end
 
   # Only the size the cap was checked on is copied, so a file that grows after the checks stays under it.
-  defp write_copy(config, fd, size) do
+  defp write_copy(config, apk, fd, size) do
     copy = Path.join(config.scratch_dir, "app-#{System.unique_integer([:positive])}.apk")
     {:ok, out} = :file.open(copy, [:write, :exclusive, :raw, :binary])
     result = copy_bytes(fd, out, size)
@@ -390,7 +421,7 @@ defmodule SymphonyElixir.QaAndroid.Driver do
 
       {:error, reason} ->
         File.rm(copy)
-        apk_missing(config, "could not be copied (#{inspect(reason)})")
+        apk_missing(apk, "could not be copied (#{inspect(reason)})")
     end
   end
 
@@ -408,16 +439,25 @@ defmodule SymphonyElixir.QaAndroid.Driver do
   # starts clean. The packages are compared with the baseline the pass's first
   # install took: a package's code path changes whenever it is installed again,
   # so a package `install -r` replaced shows up as changed, as a new one does.
-  defp install(driver, config, copy) do
+  defp install(driver, config, copies) do
     with {:ok, baseline} <- GenServer.call(driver, :baseline, @adb_timeout_ms * 2) do
       remove_installed(config, baseline)
       GenServer.call(driver, {:installed, []})
 
-      with :ok <- adb_install(config, copy),
-           {:ok, now} <- third_party_packages(config) do
-        installed(driver, config, changed(now, baseline))
-      else
-        # The install may have gone through all the same.
+      case install_each(config, copies, baseline, []) do
+        {:ok, by_apk} ->
+          installed = by_apk |> Enum.flat_map(&elem(&1, 1)) |> Enum.uniq() |> Enum.sort()
+          GenServer.call(driver, {:installed, installed})
+          Logger.info("Android QA installed application_ids=#{Enum.join(installed, ",")}")
+
+          {:ok,
+           %{
+             "installed" => installed,
+             "apks" => Enum.map(by_apk, fn {apk, ids} -> %{"apk" => apk, "application_ids" => ids} end),
+             "note" => "The app data is fresh. Launch an app with qa_android_launch and its application_id."
+           }}
+
+        # An install may have gone through all the same.
         error ->
           remove_installed(config, baseline)
           error
@@ -425,26 +465,35 @@ defmodule SymphonyElixir.QaAndroid.Driver do
     end
   end
 
-  defp installed(_driver, config, []) do
+  # Each APK's packages are those that changed since the one before it.
+  defp install_each(_config, [], _before, by_apk), do: {:ok, Enum.reverse(by_apk)}
+
+  defp install_each(config, [{apk, copy} | rest], before, by_apk) do
+    with :ok <- adb_install(config, copy),
+         {:ok, now} <- third_party_packages(config),
+         {:ok, added} <- configured_packages(config, apk, changed(now, before)) do
+      install_each(config, rest, now, [{apk, added} | by_apk])
+    end
+  end
+
+  defp configured_packages(config, apk, []) do
     tool_error(
       "qa_apk_package_not_configured",
-      "The APK installed none of the configured application_ids (#{Enum.join(config.application_ids, ", ")}). Check the playbook's application_ids and apk_path."
+      "#{apk} installed none of the configured application_ids (#{Enum.join(config.application_ids, ", ")}). Check the playbook's application_ids and apk_paths."
     )
   end
 
-  defp installed(driver, config, added) do
+  defp configured_packages(config, apk, added) do
     case added -- config.application_ids do
       [] ->
-        GenServer.call(driver, {:installed, added})
-        Logger.info("Android QA installed application_ids=#{Enum.join(added, ",")}")
-        {:ok, %{"installed" => added, "note" => "The app data is fresh. Launch it with qa_android_launch."}}
+        {:ok, added}
 
       unconfigured ->
         uninstall(config, added)
 
         tool_error(
           "qa_apk_package_not_configured",
-          "The APK installed #{Enum.join(unconfigured, ", ")}, which is not one of the configured application_ids (#{Enum.join(config.application_ids, ", ")}); it was uninstalled."
+          "#{apk} installed #{Enum.join(unconfigured, ", ")}, which is not one of the configured application_ids (#{Enum.join(config.application_ids, ", ")}); it was uninstalled."
         )
     end
   end
@@ -836,7 +885,7 @@ defmodule SymphonyElixir.QaAndroid.Driver do
 
     config = %{
       worktree: worktree,
-      apk_path: Map.fetch!(playbook, :apk_path),
+      apk_paths: Map.fetch!(playbook, :apk_paths),
       # They are passed to `adb shell`, which runs them through the device's shell.
       application_ids: playbook |> Map.fetch!(:application_ids) |> Enum.filter(&(is_binary(&1) and Regex.match?(@application_id, &1))),
       git: Keyword.get(opts, :git, &default_git/2),
