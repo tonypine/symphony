@@ -281,7 +281,7 @@ You are working on a Linear ticket `{{ issue.identifier }}`
     - Re-open and refresh the workpad before state transition so `Plan`, `Acceptance Criteria`, and `Validation` exactly match completed work.
 12. Only then move issue to `In Review`.
     - No blocked-access exception: blocked issues must follow the blocked-access escape hatch and move to `Backlog` with a blocker comment.
-    - If `linear_update_state` refuses `In Review` because Auto Review is on, leave the state as it is and end the turn; Symphony moves the issue to `Auto Review` itself.
+    - If `linear_update_state` refuses `In Review` or `Human Review` because Auto Review is on, leave the state as it is and end the turn; Symphony moves the issue to `Auto Review` itself.
     - After the PR is attached and the issue is moved to `In Review`, end the turn. Do not continue ordinary implementation work unless Symphony injects reviewer, CI, or operator rework context.
 13. For `Todo` tickets that already had a PR attached at kickoff:
     - Ensure all existing PR feedback was reviewed and resolved, including inline review comments (code changes or explicit, justified pushback response).

@@ -433,8 +433,40 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       assert move("Backlog", %{}, comment_registry: registry, settings: off) == "state-backlog"
     end
 
-    test "an agent can move its issue to Human Review itself" do
+    test "with Auto Review off, an agent can move its issue to Human Review itself" do
       assert move("Human Review", %{}) == "state-human"
+    end
+
+    test "with Auto Review on, an issue with a PR cannot reach Human Review through the tool" do
+      write_workflow_file!(Workflow.workflow_file_path(), auto_review: %{enabled: true})
+      {:ok, registry} = CommentRegistry.start_link()
+      CommentRegistry.record_human_action_request(registry)
+      implementation = %{"title" => "Fix the importer", "labels" => %{"nodes" => []}}
+      test_pid = self()
+
+      for target <- ["In Review", "Human Review", "human review"] do
+        response =
+          DynamicTool.execute(
+            "linear_update_state",
+            %{"state_name_or_id" => target},
+            issue: %Issue{id: "issue-current"},
+            comment_registry: registry,
+            linear_client: fn query, variables, client_opts ->
+              if query =~ "SymphonyAgentIssueTeamStates",
+                do: {:ok, %{"data" => %{"issue" => Map.merge(team_states_issue(@review_states, []), implementation)}}},
+                else: update_state_client(test_pid, @review_states).(query, variables, client_opts)
+            end
+          )
+
+        assert response["success"] == false
+        assert %{"error" => %{"code" => "in_review_set_by_auto_review"}} = Jason.decode!(response["output"])
+        refute_received {:linear_client_called, _query, %{stateId: _state_id}}
+      end
+
+      # The move to Backlog after a request has no PR to review, so it still goes to Human Review,
+      # and a PR-less breakdown plan can still be moved there.
+      assert move("Backlog", implementation, comment_registry: registry) == "state-human"
+      assert move("Human Review", %{"labels" => %{"nodes" => [%{"name" => "breakdown"}]}}) == "state-human"
     end
   end
 

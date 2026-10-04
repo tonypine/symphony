@@ -1020,7 +1020,8 @@ instead of `In Review`, and the CI poller watches it there:
 - a PR that conflicts with its base and has no checks (GitHub runs no CI on it) goes to `Rework`
   with a comment saying which branch to merge in.
 
-Agents can no longer move the issue to `In Review` themselves: `linear_update_state("In Review")`
+Agents can no longer move the issue to `In Review` or `Human Review` themselves (a `breakdown` plan
+or a `Final verification:` ticket, which open no PR, still can): `linear_update_state("In Review")`
 returns "Symphony moves the issue to Auto Review once the PR is open; leave the state as it is."
 
 #### QA passes

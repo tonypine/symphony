@@ -1236,9 +1236,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
       settings = Keyword.get_lazy(opts, :settings, &Config.settings!/0)
 
       with {:ok, state, issue, states} <- lookup_team_state(issue_id, normalized, opts),
+           :ok <- refuse_auto_review_handoff_state(state, pr_less_issue?(issue), settings),
            state = human_review_redirect(state, issue, states, human_action_requested?, settings),
-           {:ok, state_id} <- refuse_human_only_state(state),
-           {:ok, state_id} <- refuse_auto_review_handoff_state(state, state_id, pr_less_issue?(issue), settings) do
+           {:ok, state_id} <- refuse_human_only_state(state) do
         refuse_waiting_on_sub_issues_state(state, state_id, settings)
       end
     end
@@ -1304,14 +1304,16 @@ defmodule SymphonyElixir.AgentTools.Linear do
   end
 
   # With Auto Review on, Symphony moves the issue on from the PR being open, so an
-  # agent asking for `In Review` is refused rather than silently redirected. A `breakdown`
-  # parent and a `Final verification:` ticket open no PR: their result goes to `In Review`
-  # for a human whatever Auto Review says.
-  defp refuse_auto_review_handoff_state(state, state_id, pr_less?, settings) do
-    if AutoReview.enabled?(settings) and state_name_matches?(state, AutoReview.review_state()) and
-         not pr_less?,
+  # agent asking for `In Review` or the Human Review state is refused rather than silently
+  # redirected. It runs before the Human Review redirect, so a run that asked a person for
+  # something cannot skip QA that way: a blocked PR reaches Human Review through Auto Review.
+  # A `breakdown` parent and a `Final verification:` ticket open no PR: their result goes to
+  # a person whatever Auto Review says.
+  defp refuse_auto_review_handoff_state(state, pr_less?, settings) do
+    if AutoReview.enabled?(settings) and not pr_less? and
+         (state_name_matches?(state, AutoReview.review_state()) or HumanReview.in_state?(state["name"], settings)),
        do: {:error, {:in_review_set_by_auto_review, state["name"], AutoReview.state(settings)}},
-       else: {:ok, state_id}
+       else: :ok
   end
 
   # Moving a `breakdown` parent from `In Review` to the waiting state approves its plan and
