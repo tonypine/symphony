@@ -850,7 +850,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
               line: @port_line_bytes,
               args: port_args,
               cd: String.to_charlist(workspace),
-              env: AgentEnv.build_with(provider_env)
+              env: AgentEnv.build_with(Map.merge(AgentEnv.gradle_env(workspace), provider_env))
             ]
           )
 

@@ -167,6 +167,18 @@ defmodule SymphonyElixirWeb.DashboardLive do
           </p>
         </section>
 
+        <section :if={@payload.stray_processes != []} class="stray-process-banner" role="alert">
+          <p class="stray-process-banner-title">Processes using CPU with no run attached</p>
+          <ul class="stray-process-list">
+            <li :for={process <- @payload.stray_processes} class="stray-process-line">
+              <strong>pid <%= process.pid %></strong>
+              <code class="stray-process-command"><%= process.command %></code>
+              <span class="muted">in <%= process.cwd || "an unknown folder" %></span>
+              <span class="numeric"><%= format_runtime_seconds(process.cpu_seconds) %> CPU</span>
+            </li>
+          </ul>
+        </section>
+
         <section class={["ops-control-card", !@payload.dispatch_state.active? && "ops-control-card-paused"]}>
           <div class="ops-control-main">
             <div class="ops-control-copy">
@@ -920,7 +932,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
   end
 
   defp load_payload do
-    Presenter.state_payload(orchestrator(), snapshot_timeout_ms())
+    Presenter.state_payload(orchestrator(), snapshot_timeout_ms(), stray_processes())
   end
 
   defp queue_dashboard_reload(socket) do
@@ -1051,6 +1063,10 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   defp orchestrator do
     Endpoint.config(:orchestrator) || SymphonyElixir.Orchestrator
+  end
+
+  defp stray_processes do
+    Endpoint.config(:stray_processes) || SymphonyElixir.StrayProcesses
   end
 
   defp snapshot_timeout_ms do

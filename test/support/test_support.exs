@@ -990,8 +990,12 @@ defmodule SymphonyElixir.TestSupport do
       "watchdog:",
       "  enabled: #{yaml_value(Map.get(config, :enabled))}",
       "  tick_interval_ms: #{yaml_value(Map.get(config, :tick_interval_ms))}",
-      "  no_progress_threshold_ms: #{yaml_value(Map.get(config, :no_progress_threshold_ms))}"
+      "  no_progress_threshold_ms: #{yaml_value(Map.get(config, :no_progress_threshold_ms))}",
+      if(Map.has_key?(config, :stray_process_cpu_minutes),
+        do: "  stray_process_cpu_minutes: #{yaml_value(config.stray_process_cpu_minutes)}"
+      )
     ]
+    |> Enum.reject(&is_nil/1)
     |> Enum.join("\n")
   end
 

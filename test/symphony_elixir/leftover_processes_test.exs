@@ -60,6 +60,26 @@ defmodule SymphonyElixir.LeftoverProcessesTest do
       assert log =~ "pid=12 cwd=/private/tmp/qa283"
     end
 
+    test "stops a detached Gradle daemon whose registry is in the workspace" do
+      daemon_command = "/opt/jdk/bin/java -cp /Users/me/.gradle/wrapper/dists/gradle-9.8.0/lib/gradle-daemon-main-9.8.0.jar org.gradle.launcher.daemon.bootstrap.GradleDaemon 9.8.0"
+      ours = entry(21, ppid: 1, cwd: @root <> "/.gradle-daemons/9.8.0", command: daemon_command)
+      shared = entry(22, ppid: 1, cwd: "/Users/me/.gradle/daemon/9.8.0", command: daemon_command)
+
+      capture_log(fn ->
+        stopped =
+          LeftoverProcesses.stop_under([@root],
+            table: table([{:ok, [ours, shared]}, {:ok, []}]),
+            signal: recording_signal(),
+            own_pid: 99
+          )
+
+        assert Enum.map(stopped, & &1.pid) == [21]
+      end)
+
+      assert_received {:signal, 21, "TERM"}
+      refute_received {:signal, _pid, _signal}
+    end
+
     test "spares Symphony and the processes it still runs, and logs CPU time" do
       symphony = entry(50, ppid: 1, cwd: @root)
       git = entry(51, ppid: 50, cwd: @root, command: "git -C #{@root} status")
@@ -187,6 +207,18 @@ defmodule SymphonyElixir.LeftoverProcessesTest do
     test "parses lsof cwd output" do
       output = "p1\nfcwd\nn/\np3726\nfcwd\nn/private/tmp/qa283\npbad\nn/ignored\n"
       assert Table.parse_lsof(output) == %{1 => "/", 3726 => "/private/tmp/qa283"}
+    end
+
+    test "reads CPU time in seconds from macOS and Linux ps formats" do
+      assert Table.cpu_seconds("165:01.23") == 9_901
+      assert Table.cpu_seconds("0:05.99") == 5
+      assert Table.cpu_seconds("02:45:01") == 9_901
+      assert Table.cpu_seconds("1-00:00:30") == 86_430
+      assert Table.cpu_seconds("42") == 42
+
+      for invalid <- ["bad", "1:2:3:4", "x-00:01", "a:01", "1:b:01", nil] do
+        assert Table.cpu_seconds(invalid) == nil
+      end
     end
 
     test "reports a ps failure" do
