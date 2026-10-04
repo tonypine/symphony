@@ -866,8 +866,13 @@ follow-up".
 
 QA never runs the test suite, `make all`, coverage or Dialyzer: a pass starts only once CI is green
 on the PR head, so the prompt and every built-in playbook tell the agent to rely on CI and to build
-only what it needs to use the change. A parent walkthrough marks a criterion that only asks for
-tests or CI to pass as `skipped`, covered by CI on the base branch.
+only what it needs to use the change. A parent walkthrough judges a criterion that asks for tests,
+coverage or CI to pass by CI's runs on the base branch head it tests, read with `gh run list` where
+the sandbox allows `gh`, else through GitHub's public API: green runs make the step `pass` with the
+run URLs, a failed run makes it `fail` naming the failing job and the run (so it is filed as a gap),
+and it is `skipped` only when no run can be read or a run is still in progress. The public API is
+`api.github.com`, which is not in the built-in network allowlist; add it to
+`agent.permissions.network.allowed_domains` for the fallback to work.
 
 Symphony applies its verdict:
 
