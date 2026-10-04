@@ -98,6 +98,10 @@ branch instead of opening a second one. If a claimed issue moves to a terminal s
   changes. Agents add requests with `linear_request_human_action`; see `human_actions` in
   [docs/configuration.md](docs/configuration.md).
 - **Executor + reviewer runs** — an optional read-only reviewer agent gates the executor's push.
+- **Auto Review** — an optional QA agent uses each PR the way a user would before human review, with
+  built-in playbooks for CLIs (`cli`), web apps in a headless browser (`web`), macOS apps through
+  accessibility (`macos_app`) and Android apps on a host-side emulator (`android_app`). See
+  [`auto_review`](docs/configuration.md#auto_review).
 - **Docker runner** — host Symphony with mounted repos, state, logs, and agent credentials.
 - **macOS menu bar app** — start, stop, pause, and resume Symphony from the menu bar, with its status in
   the icon, the Linear key in a file only you can read, optional launch at login, and updates from the menu. See

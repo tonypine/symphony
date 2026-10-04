@@ -1227,9 +1227,12 @@ Fields:
   repo root) and `build_timeout_ms` (default `900000`), and is off unless `build` and `app` are
   set. The built-in `web` kind also takes `browser_mcp` (an MCP server definition, the shape of
   an `agent.mcp.servers` entry) and is off unless `verification.enabled` is true and
-  `verification.dev_server.start_cmd` is set. A repository's `WORKFLOW.md` MAY set
-  `auto_review.playbooks` too; for that repository's QA passes each kind is merged over this map
-  key by key, the repository's value winning.
+  `verification.dev_server.start_cmd` is set. The built-in `android_app` kind also takes `build`
+  (shell command the QA agent runs in its own sandbox), `apk_path` (the APK it writes, relative to
+  the repo root) and `application_ids` (list of strings), and is off unless `build`, `apk_path`, a
+  non-empty `application_ids` and `auto_review.android.avd` are set. A repository's
+  `WORKFLOW.md` MAY set `auto_review.playbooks` too; for that repository's QA passes each kind is
+  merged over this map key by key, the repository's value winning.
 - `worker_host` (string, optional): an SSH host (`user@host` or `host:port`, the form
   `workers.ssh_hosts` uses) where the `macos_app` playbook's `qa_*` tools run instead of the
   Symphony host. It does not need to be, and should not be, listed in `workers.ssh_hosts`.
@@ -1280,9 +1283,11 @@ When enabled:
   `## User walkthrough` section in the issue. No selected playbook means skip. The built-in `cli`
   playbook triggers on `bin/**`, `lib/symphony_elixir/cli.ex` and `lib/mix/tasks/**`; the built-in
   `macos_app` playbook on `**/*.swift`, `**/Info.plist`, `**/*.xib`, `**/*.storyboard` and
-  `**/*.xcassets/**`; the built-in `web` playbook on `lib/*_web/**`, `lib/*_web.ex`,
-  `priv/static/**`, `assets/**` and `.heex`, `.html`, `.css`, `.scss`, `.jsx`, `.tsx`, `.vue` and
-  `.svelte` files.
+  `**/*.xcassets/**`; the built-in `android_app` playbook on `**/*.kt`, `**/*.java`,
+  `**/AndroidManifest.xml`, `**/src/main/res/**`, `**/*.gradle.kts` and `**/*.gradle`, with
+  `**/src/test/**` and `**/src/androidTest/**` counted as tests; the built-in `web` playbook on
+  `lib/*_web/**`, `lib/*_web.ex`, `priv/static/**`, `assets/**` and `.heex`, `.html`, `.css`,
+  `.scss`, `.jsx`, `.tsx`, `.vue` and `.svelte` files.
 - A pass that runs the `web` playbook MUST start `verification.dev_server` on a port from the
   verification port pool, from its own worktree at the PR head (never the agent's), before the
   agent starts, give the agent its URL, and stop it, release the port and remove that worktree
@@ -1334,7 +1339,8 @@ When enabled:
   uninstall the configured apps and every package installed in the pass, release the lease and
   remove its private directory. An emulator that cannot start MUST
   surface as `qa_android_unavailable`, telling the agent to answer `blocked`. Other tool scopes MUST
-  NOT list or run them.
+  NOT list or run them. The QA prompt MUST give the agent the playbook's `build`, `apk_path` and
+  `application_ids`.
 - With `worker_host` set, the worktree checks MUST stay on the Symphony host, and the build, the app,
   screenshots and accessibility calls MUST run on that host over SSH: `qa_build` ships the
   worktree's `HEAD` into a fresh build directory there, and screenshots are copied back into the
@@ -1767,8 +1773,8 @@ not require recognizing or validating extension fields unless that extension is 
 - `auto_review.max_fix_attempts`: integer, default `2`
 - `auto_review.run_on`: `every_push` or `first_pass`, default `every_push`
 - `auto_review.skip_globs`: list of strings, default `[]`
-- `auto_review.playbooks`: map, default `{}` (built-in kinds `cli`, `macos_app`, `web`); a
-  repository's `WORKFLOW.md` may override it per kind
+- `auto_review.playbooks`: map, default `{}` (built-in kinds `cli`, `macos_app`, `android_app`,
+  `web`); a repository's `WORKFLOW.md` may override it per kind
 - `auto_review.android.avd`: string, optional
 - `auto_review.android.sdk_root`: string, default `$ANDROID_HOME`, then `$ANDROID_SDK_ROOT`, then
   `~/Library/Android/sdk`
