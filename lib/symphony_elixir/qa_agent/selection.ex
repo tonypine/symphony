@@ -145,6 +145,10 @@ defmodule SymphonyElixir.QaAgent.Selection do
 
   def user_walkthrough?(_issue), do: false
 
+  @doc "Whether `path` is a docs or test file, by the globs that skip QA for docs/test-only diffs."
+  @spec docs_or_test?(String.t()) :: boolean()
+  def docs_or_test?(path) when is_binary(path), do: Enum.any?(@docs_and_test_globs, &glob_match?(path, &1))
+
   @doc "Whether `path` matches the glob (`**` spans directories, `*` and `?` do not)."
   @spec glob_match?(String.t(), String.t()) :: boolean()
   def glob_match?(path, glob) when is_binary(path) and is_binary(glob) do
@@ -247,7 +251,7 @@ defmodule SymphonyElixir.QaAgent.Selection do
   end
 
   defp docs_test_or_skipped?(path, skip_globs) do
-    Enum.any?(@docs_and_test_globs ++ skip_globs, &glob_match?(path, &1))
+    docs_or_test?(path) or Enum.any?(skip_globs, &glob_match?(path, &1))
   end
 
   defp glob_regex(glob) do

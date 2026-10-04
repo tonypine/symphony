@@ -237,6 +237,32 @@ defmodule SymphonyElixir.CLICheckTest do
                 "Warning: auto_review.effort: OpenRouter model `acme/tools-only` does not support reasoning; its runs start without --effort low\n"}
     end
 
+    test "names the acceptance gate keys", %{root: root} do
+      System.put_env("OPENROUTER_API_KEY", "sk-or-v1-check-secret")
+      stub_models_api()
+
+      content =
+        String.replace(valid_symphony(root), "  runtime: codex\n  command: codex app-server\n", """
+          runtime: claude
+          command: claude
+          provider: openrouter
+          model: anthropic/claude-haiku-4.5
+        auto_review:
+          acceptance_gate:
+            model: acme/tools-only
+            effort: low
+        """)
+
+      path = write_symphony!(root, content)
+
+      assert check(["--config", path]) ==
+               {{:halt, 0},
+                """
+                Config OK: #{path}
+                Warning: auto_review.acceptance_gate.effort: OpenRouter model `acme/tools-only` does not support reasoning; its runs start without --effort low
+                """}
+    end
+
     test "names the repository key that set the model", %{root: root} do
       System.put_env("OPENROUTER_API_KEY", "sk-or-v1-check-secret")
       stub_models_api()
