@@ -1342,6 +1342,44 @@ defmodule SymphonyElixir.ExtensionsTest do
     end)
   end
 
+  test "dashboard liveview shows whether GitHub webhooks are active and where CI results came from" do
+    ci_status = fn webhooks ->
+      %{status: :running, consecutive_failures: 0, current_backoff_ms: nil, poll_interval_ms: 60_000}
+      |> Map.put(:webhooks, webhooks)
+    end
+
+    active = %{
+      enabled: true,
+      relay: "smee",
+      last_event_at: DateTime.add(DateTime.utc_now(), -90, :second),
+      events_received: 12,
+      rejected: 1,
+      results_via_webhook: 3,
+      results_via_poll: 2
+    }
+
+    cases = [
+      {:WebhooksActiveOrchestrator, %{ci: ci_status.(active), pr_review: :unavailable}, ["Active through smee", "1m ago", "12 (1 rejected)", "3 via relay, 2 by polling"]},
+      {:WebhooksQuietOrchestrator, %{ci: ci_status.(%{active | last_event_at: nil}), pr_review: :unavailable}, ["none yet"]},
+      {:WebhooksOffOrchestrator, %{ci: ci_status.(%{active | enabled: false}), pr_review: :unavailable}, ["Off. CI results arrive by polling only."]},
+      {:WebhooksNoPollerOrchestrator, %{ci: :unavailable, pr_review: :unavailable}, ["The CI poller is not running."]}
+    ]
+
+    for {name, pollers, expected} <- cases do
+      orchestrator_name = Module.concat(__MODULE__, name)
+      {:ok, pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: Map.put(static_snapshot(), :pollers, pollers))
+      start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+      {:ok, _view, html} = live(build_conn(), "/")
+
+      assert html =~ "GitHub webhooks"
+      Enum.each(expected, &assert(html =~ &1))
+
+      stop_supervised!(SymphonyElixirWeb.Endpoint)
+      GenServer.stop(pid)
+    end
+  end
+
   test "dashboard liveview uses neutral agent update header for Claude config" do
     write_workflow_file!(Workflow.workflow_file_path(),
       agent_kind: "claude",

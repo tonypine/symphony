@@ -465,17 +465,49 @@ defmodule SymphonyElixir.Config.Schema do
 
     alias SymphonyElixir.Config.Schema
 
+    defmodule Webhooks do
+      @moduledoc false
+      # GitHub webhooks delivered through a relay to `POST /api/v1/github/webhook`. They only
+      # speed up the CI poller; polling stays on and catches up on anything a relay drops.
+      use Ecto.Schema
+      import Ecto.Changeset
+
+      @relays ["smee", "cloudflare_tunnel", "gh_webhook_forward"]
+      @events ["check_suite", "check_run", "workflow_run", "pull_request"]
+
+      @type t :: %__MODULE__{}
+
+      @derive {Inspect, except: [:secret]}
+      @primary_key false
+      embedded_schema do
+        field(:enabled, :boolean, default: false)
+        field(:relay, :string, default: "smee")
+        field(:secret, :string)
+        field(:events, {:array, :string}, default: @events)
+      end
+
+      @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+      def changeset(schema, attrs) do
+        schema
+        |> cast(attrs, [:enabled, :relay, :secret, :events], empty_values: [])
+        |> validate_inclusion(:relay, @relays)
+        |> validate_subset(:events, @events)
+      end
+    end
+
     @primary_key false
     embedded_schema do
       field(:enterprise_hosts, {:array, :string}, default: [])
       field(:failed_run_log_max_bytes, :integer, default: 65_536)
       field(:open_pull_requests_as_draft, :boolean, default: true)
+      embeds_one(:webhooks, Webhooks, on_replace: :update, defaults_to_struct: true)
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
       schema
       |> cast(attrs, [:enterprise_hosts, :failed_run_log_max_bytes, :open_pull_requests_as_draft], empty_values: [])
+      |> cast_embed(:webhooks, with: &Webhooks.changeset/2)
       |> update_change(:enterprise_hosts, &Schema.normalize_domain_list/1)
       |> validate_number(:failed_run_log_max_bytes, greater_than: 0)
     end
@@ -2385,8 +2417,10 @@ defmodule SymphonyElixir.Config.Schema do
     }
 
     notifications = normalize_notifications(settings.notifications)
+    webhooks = settings.github.webhooks
+    github = %{settings.github | webhooks: %{webhooks | secret: webhooks.secret |> resolve_secret_setting(nil) |> Secret.wrap()}}
 
-    %{settings | tracker: tracker, workspace: workspace, agent: agent, notifications: notifications}
+    %{settings | tracker: tracker, workspace: workspace, agent: agent, notifications: notifications, github: github}
   end
 
   defp validate_finalized_settings(settings) do

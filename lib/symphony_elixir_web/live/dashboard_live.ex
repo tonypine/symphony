@@ -309,6 +309,45 @@ defmodule SymphonyElixirWeb.DashboardLive do
         <section class="section-card">
           <div class="section-header">
             <div>
+              <h2 class="section-title">GitHub webhooks</h2>
+              <p class="section-copy">CI results from a webhook relay land in seconds; the CI poll still runs and catches up on anything the relay misses.</p>
+            </div>
+          </div>
+
+          <%= case github_webhooks(@payload) do %>
+            <% nil -> %>
+              <p class="empty-state">The CI poller is not running.</p>
+            <% %{enabled: false} -> %>
+              <p class="empty-state">Off. CI results arrive by polling only.</p>
+            <% webhooks -> %>
+              <div class="table-wrap">
+                <table class="data-table">
+                  <tbody>
+                    <tr>
+                      <th>Status</th>
+                      <td>Active through <%= webhooks.relay %></td>
+                    </tr>
+                    <tr>
+                      <th>Last event</th>
+                      <td class="numeric"><%= format_event_at(webhooks.last_event_at, @now) || "none yet" %></td>
+                    </tr>
+                    <tr>
+                      <th>Events received</th>
+                      <td class="numeric"><%= webhooks.events_received %> (<%= webhooks.rejected %> rejected)</td>
+                    </tr>
+                    <tr>
+                      <th>CI results</th>
+                      <td class="numeric"><%= webhooks.results_via_webhook %> via relay, <%= webhooks.results_via_poll %> by polling</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+          <% end %>
+        </section>
+
+        <section class="section-card">
+          <div class="section-header">
+            <div>
               <h2 class="section-title">Agent lanes</h2>
               <p class="section-copy">
                 Each active epic keeps a lane for its sub-tickets and the tickets blocking them. Shared pool: <span class="numeric"><%= @payload.epic_lanes.shared.used %>/<%= @payload.epic_lanes.shared.slots %></span> in use.
@@ -1066,6 +1105,9 @@ defmodule SymphonyElixirWeb.DashboardLive do
   end
 
   defp format_ago(_seconds), do: "n/a"
+
+  defp github_webhooks(%{pollers: %{ci: %{webhooks: %{} = webhooks}}}), do: webhooks
+  defp github_webhooks(_payload), do: nil
 
   defp format_event_at(nil, _now), do: nil
 

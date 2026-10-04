@@ -744,6 +744,18 @@ Fields:
     draft argument. An explicit argument from the agent always takes precedence.
   - Keeps PR review-state independent of whether the first-turn prompt carried a
     draft directive (which a compacted bootstrap prompt would not).
+- `webhooks` (object)
+  - `enabled` (boolean, default `false`): accept GitHub deliveries at `POST /api/v1/github/webhook`.
+  - `relay` (string, default `smee`): `smee`, `cloudflare_tunnel` or `gh_webhook_forward`; shown on
+    the dashboard.
+  - `secret` (string, `$VAR` allowed): the hook's shared secret. When unset, Symphony reads
+    `<state-root>/github_webhook_secret`. A delivery whose `X-Hub-Signature-256` does not verify
+    gets `401` and is logged without its payload.
+  - `events` (list, default `[check_suite, check_run, workflow_run, pull_request]`): the event
+    types acted on.
+  - A delivery about a PR the CI poller already watches runs the CI poll for that repository at
+    once, through the same state machine as the timed poll; a `ping` runs a full poll. Polling
+    stays on and catches up on anything a relay drops.
 
 #### 5.4.8 `hooks` (object)
 

@@ -291,12 +291,29 @@ defmodule SymphonyElixirWeb.Presenter do
       status: Map.get(status, :status, Map.get(status, "status")),
       consecutive_failures: integer_map_value(status, :consecutive_failures),
       current_backoff_ms: integer_or_nil(Map.get(status, :current_backoff_ms, Map.get(status, "current_backoff_ms"))),
-      poll_interval_ms: integer_or_nil(Map.get(status, :poll_interval_ms, Map.get(status, "poll_interval_ms")))
+      poll_interval_ms: integer_or_nil(Map.get(status, :poll_interval_ms, Map.get(status, "poll_interval_ms"))),
+      webhooks: normalize_webhooks(Map.get(status, :webhooks))
     }
   end
 
   defp normalize_poller_status(:unavailable), do: :unavailable
   defp normalize_poller_status(_status), do: :unavailable
+
+  # GitHub webhook deliveries the CI poller has seen, and how many CI results arrived through
+  # them versus through the timed poll.
+  defp normalize_webhooks(%{} = webhooks) do
+    %{
+      enabled: Map.get(webhooks, :enabled) == true,
+      relay: Map.get(webhooks, :relay),
+      last_event_at: iso8601(Map.get(webhooks, :last_event_at)),
+      events_received: integer_map_value(webhooks, :events_received),
+      rejected: integer_map_value(webhooks, :rejected),
+      results_via_webhook: integer_map_value(webhooks, :results_via_webhook),
+      results_via_poll: integer_map_value(webhooks, :results_via_poll)
+    }
+  end
+
+  defp normalize_webhooks(_webhooks), do: nil
 
   defp integer_or_nil(value) when is_integer(value), do: value
   defp integer_or_nil(_value), do: nil
