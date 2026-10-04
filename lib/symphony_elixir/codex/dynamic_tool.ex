@@ -28,7 +28,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     },
     %{
       "name" => "linear_get_comments",
-      "description" => "Read comments on the current Linear issue, newest first.",
+      "description" => "Read comments on the current Linear issue, newest first. A reply carries its thread's first comment id in `parent.id`.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -57,13 +57,17 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     },
     %{
       "name" => "linear_add_comment",
-      "description" => "Add a comment to the current Linear issue.",
+      "description" => "Add a comment to the current Linear issue. Pass `parent_id` to reply under one of its comments.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
         "required" => ["body"],
         "properties" => %{
-          "body" => %{"type" => "string"}
+          "body" => %{"type" => "string"},
+          "parent_id" => %{
+            "type" => "string",
+            "description" => "Id of a comment on the current issue to reply under (for a reply, its thread's first comment)."
+          }
         }
       }
     },
@@ -146,6 +150,30 @@ defmodule SymphonyElixir.Codex.DynamicTool do
             "type" => "array",
             "items" => %{"type" => "string"},
             "description" => "Identifiers (e.g. TP-12) of sub-issues that block this one. Only the current issue's existing sub-issues and ones created earlier in this run are accepted."
+          }
+        }
+      }
+    },
+    %{
+      "name" => "linear_update_subissue",
+      "description" =>
+        "Change a Backlog sub-issue of the current Linear issue to bring a plan in line with review comments: replace its `title` and/or `description`, set `blocked_by` to the complete list of sibling sub-issues that block it, or cancel it with `cancel_reason` (posted on it first). A sub-issue outside Backlog was promoted by a person and is refused.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["identifier"],
+        "properties" => %{
+          "identifier" => %{"type" => "string", "description" => "Identifier (e.g. TP-12) of a sub-issue of the current issue."},
+          "title" => %{"type" => "string"},
+          "description" => %{"type" => "string"},
+          "blocked_by" => %{
+            "type" => "array",
+            "items" => %{"type" => "string"},
+            "description" => "Every sibling sub-issue that blocks this one. Links to siblings not listed are removed; links to other issues stay."
+          },
+          "cancel_reason" => %{
+            "type" => "string",
+            "description" => "Cancel the sub-issue, posting this on it as the reason. Cannot be combined with other changes."
           }
         }
       }
@@ -532,12 +560,13 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "linear_get_comments" => ["limit"],
     "linear_get_related_issues" => [],
     "linear_update_state" => ["state_name_or_id"],
-    "linear_add_comment" => ["body"],
+    "linear_add_comment" => ["body", "parent_id"],
     "linear_update_comment" => ["comment_id", "body"],
     "linear_delete_comment" => ["comment_id"],
     "linear_attach_url" => ["url", "title"],
     "linear_attach_file" => ["local_path", "title", "make_public"],
     "linear_create_subissue" => ["title", "description", "priority", "blocked_by"],
+    "linear_update_subissue" => ["identifier", "title", "description", "blocked_by", "cancel_reason"],
     "linear_add_blocked_by" => ["blocked_by"],
     "linear_create_project_update" => ["body", "health"],
     "linear_request_human_action" => ["title", "why", "steps", "unblocks", "est_minutes"],
@@ -717,6 +746,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   end
 
   defp execute_linear_tool("linear_add_comment", context, args, opts) do
+    opts = if Map.has_key?(args, "parent_id"), do: Keyword.put(opts, :parent_id, args["parent_id"]), else: opts
+
     with {:ok, response} <- Linear.add_comment(context, Map.get(args, "body"), opts) do
       {:ok, compact_comment_mutation_response(response, "commentCreate", opts)}
     end
@@ -743,6 +774,10 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   defp execute_linear_tool("linear_create_subissue", context, args, opts) do
     Linear.create_subissue(context, args, opts)
+  end
+
+  defp execute_linear_tool("linear_update_subissue", context, args, opts) do
+    Linear.update_subissue(context, args, opts)
   end
 
   defp execute_linear_tool("linear_add_blocked_by", context, args, opts) do
@@ -1222,6 +1257,90 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         "message" => "Created #{identifier}, but could not mark it blocked by #{blocker}, so it and any later `blocked_by` links are missing. Record them in the workpad for a human to add.",
         "identifier" => identifier,
         "blocker" => blocker,
+        "reason" => inspect(reason)
+      }
+    }
+  end
+
+  defp tool_error_payload(:invalid_comment_parent) do
+    %{"error" => %{"code" => "invalid_comment_parent", "message" => "linear_add_comment `parent_id` must be the non-blank id of a comment on the current issue."}}
+  end
+
+  defp tool_error_payload(:invalid_subissue_identifier) do
+    %{"error" => %{"code" => "invalid_subissue_identifier", "message" => "linear_update_subissue requires `identifier`, a sub-issue identifier such as TP-12."}}
+  end
+
+  defp tool_error_payload(:invalid_subissue_cancel_reason) do
+    %{"error" => %{"code" => "invalid_subissue_cancel_reason", "message" => "linear_update_subissue `cancel_reason` must be a non-blank string."}}
+  end
+
+  defp tool_error_payload(:invalid_subissue_update) do
+    %{
+      "error" => %{
+        "code" => "invalid_subissue_update",
+        "message" => "linear_update_subissue needs `title`, `description` or `blocked_by` to change, or `cancel_reason` alone to cancel. Nothing was changed."
+      }
+    }
+  end
+
+  defp tool_error_payload({:not_a_subissue, identifier, sub_issues}) do
+    %{
+      "error" => %{
+        "code" => "not_a_subissue",
+        "message" => "#{identifier} is not a sub-issue of the current issue. Nothing was changed.",
+        "sub_issues" => sub_issues
+      }
+    }
+  end
+
+  defp tool_error_payload({:subissue_not_in_backlog, identifier, state}) do
+    %{
+      "error" => %{
+        "code" => "subissue_not_in_backlog",
+        "message" => "#{identifier} is in #{state || "an unknown state"}, not Backlog: a person promoted it, so it is left as it is. Nothing was changed.",
+        "state" => state
+      }
+    }
+  end
+
+  defp tool_error_payload({:canceled_state_not_found, states}) do
+    %{
+      "error" => %{
+        "code" => "canceled_state_not_found",
+        "message" => "The team has no Canceled state to move the sub-issue to. Nothing was changed.",
+        "states" => states
+      }
+    }
+  end
+
+  defp tool_error_payload({:subissue_blocked_by_not_sibling, unknown, siblings}) do
+    %{
+      "error" => %{
+        "code" => "blocked_by_not_sibling",
+        "message" => "linear_update_subissue `blocked_by` only accepts other sub-issues of the current issue. Not one: #{Enum.join(unknown, ", ")}. Nothing was changed.",
+        "unknown" => unknown,
+        "sub_issues" => siblings
+      }
+    }
+  end
+
+  defp tool_error_payload({:subissue_blocked_by_failed, identifier, blocker, reason}) do
+    %{
+      "error" => %{
+        "code" => "blocked_by_relation_failed",
+        "message" => "Could not mark #{identifier} blocked by #{blocker}; it and any later `blocked_by` changes are missing. Retry, or record them in the workpad for a human to make.",
+        "identifier" => identifier,
+        "blocker" => blocker,
+        "reason" => inspect(reason)
+      }
+    }
+  end
+
+  defp tool_error_payload({:remove_blocked_by_failed, reason}) do
+    %{
+      "error" => %{
+        "code" => "remove_blocked_by_failed",
+        "message" => "Could not remove a blocked-by link the new list leaves out. Record it in the workpad for a human to remove.",
         "reason" => inspect(reason)
       }
     }

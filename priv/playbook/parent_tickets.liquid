@@ -1,6 +1,6 @@
 {% comment %}
 name: parent_tickets
-description: Parent tickets labeled breakdown are groomed into sub-tickets; breakdown, final verification, and close-out runs never open a PR.
+description: Parent tickets labeled breakdown are groomed into sub-tickets; breakdown (new, resumed, revised, re-planned), final verification, and close-out runs never open a PR.
 vars: []
 {% endcomment %}## Parent tickets (tickets with sub-tickets)
 
@@ -23,10 +23,28 @@ Rules for every `breakdown` parent run:
 - A human rejects the plan by moving the parent to `Rework`. Symphony cancels the
   rejected plan's sub-tickets still in `Backlog` and starts a re-plan run. Each
   batch Symphony promotes or cancels is listed in one comment on the parent.
-- Symphony does not dispatch or continue a `breakdown` parent outside `Rework` that
-  has a sub-issue outside a terminal state, and dispatches the close-out run once
-  every sub-issue is terminal.
+- A plan is approved once a sub-ticket left `Backlog`. Symphony does not dispatch or
+  continue a `breakdown` parent outside `Rework` whose approved plan has a sub-issue
+  outside a terminal state, and dispatches the close-out run once every sub-issue is
+  terminal. A parent whose open sub-tickets are all still in `Backlog` was never
+  approved: in `Todo` or `In Progress` it gets a breakdown run, never the waiting
+  state.
+- Never promote a sub-ticket, and never edit or cancel one outside `Backlog`:
+  `linear_update_subissue` refuses it, because a person already promoted it.
 - Keep the workpad as the single progress record, as for any ticket.
+
+Which breakdown run this is:
+
+- **New plan:** the parent has no sub-tickets yet. Follow the breakdown run below.
+- **Resume:** the parent is in `Todo` or `In Progress`, has sub-tickets in `Backlog`
+  only, and no person commented since the plan was last handed over for review. A
+  previous run stopped midway (a usage limit, a crash, a person moving it back).
+  Read the workpad and the newest comments, keep every artifact comment and
+  sub-ticket already made, do only what is left of the breakdown run below (never
+  file a sub-ticket a second time), and move the parent to `In Review`.
+- **Revise:** Symphony moved the parent from `In Review` back to `In Progress`
+  because a person commented on the plan. Follow the plan revision run below.
+- **Re-plan:** the parent is in `Rework`. Follow the re-plan run below.
 
 ### Breakdown run (no `Sub-issues` in the issue context, or the parent is in `Rework`)
 
@@ -59,6 +77,35 @@ In `Rework` (a re-plan run), the human rejected the plan:
   was created after the parent moved to `Rework` belongs to this re-plan.
 - Then follow steps 2-4 for the new plan, including the `Final verification:`
   sub-ticket, and move the parent to `In Review` again.
+
+### Plan revision run (a person commented on the plan under review)
+
+When a person comments on a `breakdown` parent in `In Review` whose plan is not
+approved yet, Symphony moves it to `In Progress` and starts this run. It changes the
+plan in place; it is not a re-plan.
+
+1. Read every comment since the plan was handed over for review (newest first with
+   `linear_get_comments`). Only people's comments count: skip the workpad, QA
+   reports, `Action needed` requests, Symphony's promote and cancel lists, and
+   integration bots. List in the workpad what each comment asks.
+2. Edit the existing artifact comments (use cases, features, journeys and so on) with
+   `linear_update_comment` instead of posting new copies. Start each edited comment
+   with a short note of what changed.
+3. Bring the sub-tickets in line with `linear_update_subissue` and
+   `linear_create_subissue`: update the description, title and blocked-by links of
+   `Backlog` sub-tickets, file new ones (keep the `Final verification:` sub-ticket's
+   checklist and `blocked_by` current), and cancel the ones the change drops with a
+   `cancel_reason` saying why. Leave every sub-ticket outside `Backlog` as it is.
+4. Reply under each comment with `linear_add_comment` and its `parent_id`: what
+   changed, or why nothing did for a question or a pushback.
+5. Record the changes in the workpad `Notes`, move the parent to `In Review` with
+   `linear_update_state`, and end the turn. Never move it to `Waiting on sub-tickets`
+   and never promote a sub-ticket: approval stays a person's move.
+
+A comment on an approved plan (the parent in `Waiting on sub-tickets`, or back in
+`In Review` with sub-tickets promoted) changes nothing: Symphony replies under it
+that the plan is not changed from comments, and that moving the parent to `Rework`
+re-plans it while keeping the sub-tickets already promoted.
 
 ### Close-out run (every sub-issue is terminal)
 

@@ -417,6 +417,222 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     refute CommentRegistry.owned?(registry, "any-id")
   end
 
+  describe "replies and linear_update_subissue" do
+    test "linear_add_comment replies under a comment, and linear_get_comments shows the thread" do
+      {:ok, registry} = CommentRegistry.start_link()
+      test_pid = self()
+
+      client = fn query, variables, _opts ->
+        send(test_pid, {:linear_client_called, query, variables})
+
+        if query =~ "SymphonyAgentIssueComments" do
+          reply = %{"id" => "reply", "body" => "Done", "parent" => %{"id" => "c1"}}
+          {:ok, %{"data" => %{"issue" => %{"comments" => %{"nodes" => [reply]}}}}}
+        else
+          {:ok, %{"data" => %{"commentCreate" => %{"success" => true, "comment" => %{"id" => "reply", "body" => variables.body}}}}}
+        end
+      end
+
+      opts = [issue: %Issue{id: "issue-current"}, comment_registry: registry, linear_client: client]
+
+      assert DynamicTool.execute("linear_add_comment", %{"body" => "Done", "parent_id" => " c1 "}, opts)["success"] == true
+      assert_received {:linear_client_called, query, %{issueId: "issue-current", parentId: "c1", body: "Done"}}
+      assert query =~ "SymphonyAgentAddReply"
+      assert CommentRegistry.owned?(registry, "reply")
+
+      for parent_id <- [" ", 7] do
+        response = DynamicTool.execute("linear_add_comment", %{"body" => "Done", "parent_id" => parent_id}, opts)
+        assert %{"error" => %{"code" => "invalid_comment_parent"}} = Jason.decode!(response["output"])
+      end
+
+      response = DynamicTool.execute("linear_get_comments", %{}, opts)
+      assert [%{"id" => "reply", "parent" => %{"id" => "c1"}}] = Jason.decode!(response["output"])
+      assert_received {:linear_client_called, query, _variables}
+      assert query =~ "parent { id }"
+    end
+
+    test "is advertised outside the read-only scope" do
+      assert %{"inputSchema" => %{"properties" => properties, "required" => ["identifier"]}} =
+               Enum.find(DynamicTool.tool_specs(), &(&1["name"] == "linear_update_subissue"))
+
+      assert Enum.sort(Map.keys(properties)) == ["blocked_by", "cancel_reason", "description", "identifier", "title"]
+      refute "linear_update_subissue" in Enum.map(DynamicTool.tool_specs(:read_only), & &1["name"])
+    end
+
+    test "edits a Backlog sub-issue and sets its sibling blockers" do
+      opts = update_subissue_opts()
+
+      response =
+        DynamicTool.execute(
+          "linear_update_subissue",
+          %{"identifier" => "tp-3", "title" => " History ", "description" => "New scope", "blocked_by" => ["TP-2", "TP-5"]},
+          opts
+        )
+
+      assert response["success"] == true
+      assert %{"identifier" => "TP-3", "updated" => ["description", "title"], "blockedBy" => ["TP-2", "TP-5"]} = Jason.decode!(response["output"])
+      assert_received {:linear_client_called, _query, %{id: "issue-3", input: %{"title" => "History", "description" => "New scope"}}}
+      # TP-2 already blocks it; TP-5 is added; TP-4 is no longer listed and is removed;
+      # OPS-1 is not a sibling and stays.
+      assert_received {:linear_client_called, _query, %{input: %{"issueId" => "issue-5", "relatedIssueId" => "issue-3", "type" => "blocks"}}}
+      assert_received {:linear_client_called, query, %{id: "rel-4"}}
+      assert query =~ "SymphonyAgentDeleteIssueRelation"
+      refute_received {:linear_client_called, _query, %{input: %{"issueId" => "issue-2"}}}
+      refute_received {:linear_client_called, _query, %{id: "rel-ops"}}
+
+      response = DynamicTool.execute("linear_update_subissue", %{"identifier" => "TP-3", "description" => "Only this"}, opts)
+      assert %{"identifier" => "TP-3", "updated" => ["description"]} = decoded = Jason.decode!(response["output"])
+      refute Map.has_key?(decoded, "blockedBy")
+
+      response = DynamicTool.execute("linear_update_subissue", %{"identifier" => "TP-3", "blocked_by" => []}, opts)
+      assert %{"updated" => [], "blockedBy" => []} = Jason.decode!(response["output"])
+      refute_received {:linear_client_called, _query, %{input: %{"title" => _title}}}
+    end
+
+    test "cancels a Backlog sub-issue after posting the reason on it" do
+      response = DynamicTool.execute("linear_update_subissue", %{"identifier" => "TP-3", "cancel_reason" => "Merged into TP-2"}, update_subissue_opts())
+
+      assert %{"identifier" => "TP-3", "canceled" => true} = Jason.decode!(response["output"])
+      assert_received {:linear_client_called, _query, %{issueId: "issue-3", body: "Merged into TP-2"}}
+      assert_received {:linear_client_called, _query, %{id: "issue-3", input: %{"stateId" => "state-canceled"}}}
+
+      no_canceled = update_subissue_opts(states: [%{"id" => "state-backlog", "name" => "Backlog"}])
+      response = DynamicTool.execute("linear_update_subissue", %{"identifier" => "TP-3", "cancel_reason" => "Dropped"}, no_canceled)
+      assert %{"error" => %{"code" => "canceled_state_not_found", "states" => ["Backlog"]}} = Jason.decode!(response["output"])
+      refute_received {:linear_client_called, _query, %{body: "Dropped"}}
+
+      by_type = update_subissue_opts(states: [%{"id" => "state-wontfix", "name" => "Won't do", "type" => "canceled"}])
+      DynamicTool.execute("linear_update_subissue", %{"identifier" => "TP-3", "cancel_reason" => "Dropped"}, by_type)
+      assert_received {:linear_client_called, _query, %{input: %{"stateId" => "state-wontfix"}}}
+    end
+
+    test "never changes a sub-issue a person promoted, or an issue that is not a sub-issue" do
+      opts = update_subissue_opts()
+
+      for args <- [%{"identifier" => "TP-4", "title" => "x"}, %{"identifier" => "TP-4", "cancel_reason" => "Dropped"}] do
+        response = DynamicTool.execute("linear_update_subissue", args, opts)
+
+        assert %{"error" => %{"code" => "subissue_not_in_backlog", "state" => "In Progress", "message" => message}} = Jason.decode!(response["output"])
+        assert message =~ "TP-4 is in In Progress, not Backlog"
+      end
+
+      response = DynamicTool.execute("linear_update_subissue", %{"identifier" => "TP-6", "title" => "x"}, opts)
+      assert %{"error" => %{"code" => "subissue_not_in_backlog", "message" => message}} = Jason.decode!(response["output"])
+      assert message =~ "an unknown state"
+
+      response = DynamicTool.execute("linear_update_subissue", %{"identifier" => "OPS-1", "title" => "x"}, opts)
+      assert %{"error" => %{"code" => "not_a_subissue", "sub_issues" => ["TP-2", "TP-3", "TP-4", "TP-5", "TP-6"]}} = Jason.decode!(response["output"])
+
+      # Only mutations past the scope read would change anything; none ran.
+      refute_received {:linear_client_called, _query, %{input: _input}}
+      refute_received {:linear_client_called, _query, %{body: _body}}
+    end
+
+    test "returns explicit error payloads for invalid input and failed writes" do
+      no_linear = [issue: %Issue{id: "issue-current"}, linear_client: fn _query, _variables, _opts -> flunk("Linear should not be called") end]
+
+      for {args, code} <- [
+            {%{"title" => "x"}, "invalid_subissue_identifier"},
+            {%{"identifier" => " ", "title" => "x"}, "invalid_subissue_identifier"},
+            {%{"identifier" => "TP-3"}, "invalid_subissue_update"},
+            {%{"identifier" => "TP-3", "title" => " "}, "invalid_subissue_title"},
+            {%{"identifier" => "TP-3", "description" => 1}, "invalid_subissue_description"},
+            {%{"identifier" => "TP-3", "blocked_by" => "TP-2"}, "invalid_subissue_blocked_by"},
+            {%{"identifier" => "TP-3", "cancel_reason" => ""}, "invalid_subissue_cancel_reason"},
+            {%{"identifier" => "TP-3", "cancel_reason" => "Dropped", "title" => "x"}, "invalid_subissue_update"}
+          ] do
+        response = DynamicTool.execute("linear_update_subissue", args, no_linear)
+        assert %{"error" => %{"code" => ^code}} = Jason.decode!(response["output"])
+      end
+
+      response = DynamicTool.execute("linear_update_subissue", %{"identifier" => "TP-3", "state" => "Todo"}, no_linear)
+      assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
+
+      opts = update_subissue_opts()
+      response = DynamicTool.execute("linear_update_subissue", %{"identifier" => "TP-3", "blocked_by" => ["TP-3", "OPS-1"]}, opts)
+
+      assert %{"error" => %{"code" => "blocked_by_not_sibling", "unknown" => ["TP-3", "OPS-1"], "message" => message}} = Jason.decode!(response["output"])
+      assert message =~ "Nothing was changed."
+
+      failing = update_subissue_opts(fail: "SymphonyAgentCreateIssueRelation")
+      response = DynamicTool.execute("linear_update_subissue", %{"identifier" => "TP-3", "blocked_by" => ["TP-2", "TP-5"]}, failing)
+      assert %{"error" => %{"code" => "blocked_by_relation_failed", "identifier" => "TP-3", "blocker" => "TP-5"}} = Jason.decode!(response["output"])
+
+      failing = update_subissue_opts(fail: "SymphonyAgentDeleteIssueRelation")
+      response = DynamicTool.execute("linear_update_subissue", %{"identifier" => "TP-3", "blocked_by" => ["TP-2"]}, failing)
+      assert %{"error" => %{"code" => "remove_blocked_by_failed"}} = Jason.decode!(response["output"])
+
+      failing = update_subissue_opts(fail: "SymphonyAgentUpdateSubissue")
+      response = DynamicTool.execute("linear_update_subissue", %{"identifier" => "TP-3", "title" => "x"}, failing)
+      assert %{"error" => %{"code" => "linear_mutation_failed", "field" => "issueUpdate"}} = Jason.decode!(response["output"])
+
+      empty = update_subissue_opts(scope: %{"data" => %{"issue" => nil}})
+      response = DynamicTool.execute("linear_update_subissue", %{"identifier" => "TP-3", "title" => "x"}, empty)
+      assert response["success"] == false
+    end
+  end
+
+  defp update_subissue_opts(overrides \\ []) do
+    test_pid = self()
+
+    states =
+      Keyword.get(overrides, :states, [
+        %{"id" => "state-backlog", "name" => "Backlog", "type" => "backlog"},
+        %{"id" => "state-canceled", "name" => "Canceled", "type" => "canceled"}
+      ])
+
+    child = fn id, identifier, state, relations ->
+      %{"id" => id, "identifier" => identifier, "state" => state, "inverseRelations" => %{"nodes" => relations}}
+    end
+
+    blocker = fn id, type, issue_id, identifier ->
+      %{"id" => id, "type" => type, "issue" => %{"id" => issue_id, "identifier" => identifier}}
+    end
+
+    scope =
+      Keyword.get(overrides, :scope, %{
+        "data" => %{
+          "issue" => %{
+            "id" => "issue-current",
+            "team" => %{"states" => %{"nodes" => states}},
+            "children" => %{
+              "nodes" => [
+                child.("issue-2", "TP-2", %{"name" => "Backlog"}, []),
+                child.("issue-3", "TP-3", %{"name" => "Backlog"}, [
+                  blocker.("rel-2", "blocks", "issue-2", "TP-2"),
+                  blocker.("rel-4", "blocks", "issue-4", "TP-4"),
+                  blocker.("rel-ops", "blocks", "issue-ops", "OPS-1"),
+                  blocker.("rel-dup", "duplicate", "issue-5", "TP-5")
+                ]),
+                child.("issue-4", "TP-4", %{"name" => "In Progress"}, []),
+                child.("issue-5", "TP-5", %{"name" => "Backlog"}, []),
+                %{"id" => "issue-6", "identifier" => "TP-6", "state" => nil}
+              ]
+            }
+          }
+        }
+      })
+
+    fail = Keyword.get(overrides, :fail)
+
+    client = fn query, variables, _opts ->
+      send(test_pid, {:linear_client_called, query, variables})
+
+      {field, name} =
+        cond do
+          query =~ "SymphonyAgentSubissueUpdateScope" -> {nil, nil}
+          query =~ "SymphonyAgentUpdateSubissue" -> {"issueUpdate", "SymphonyAgentUpdateSubissue"}
+          query =~ "SymphonyAgentDeleteIssueRelation" -> {"issueRelationDelete", "SymphonyAgentDeleteIssueRelation"}
+          query =~ "SymphonyAgentCreateIssueRelation" -> {"issueRelationCreate", "SymphonyAgentCreateIssueRelation"}
+          query =~ "SymphonyAgentAddComment" -> {"commentCreate", "SymphonyAgentAddComment"}
+        end
+
+      if field, do: {:ok, %{"data" => %{field => %{"success" => fail != name}}}}, else: {:ok, scope}
+    end
+
+    [issue: %Issue{id: "issue-current"}, linear_client: client]
+  end
+
   describe "linear_create_subissue" do
     test "is advertised with only title, description, priority and blocked_by, and hidden from the read-only scope" do
       assert %{"inputSchema" => %{"properties" => properties, "required" => ["title", "description"]}} =

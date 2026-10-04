@@ -6221,7 +6221,7 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "agent runner stops continuing once a breakdown parent has open sub-issues" do
-    open_sub_issues = [%{id: "child-1", identifier: "MT-250", state: "Backlog"}]
+    open_sub_issues = [%{id: "child-1", identifier: "MT-250", state: "Todo"}]
 
     # The breakdown run ends with the parent In Progress (state missing) or parked in the waiting
     # state; anything else in the waiting state is held too.
@@ -6234,12 +6234,19 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
+  test "agent runner keeps a breakdown run going while its plan's sub-issues are all in Backlog" do
+    # The plan is not handed over yet: a resumed run keeps filing sub-tickets until it moves the
+    # parent to In Review (max_turns ends this one).
+    backlog = [%{id: "child-1", identifier: "MT-250", state: "Backlog"}]
+    assert_agent_runner_stops_after_one_turn("In Progress", ["breakdown"], backlog, [], 2)
+  end
+
   test "agent runner stops continuing once a final verification parks itself in Todo behind its gaps" do
     gap = %{id: "gap-1", identifier: "MT-260", state: "Backlog"}
     assert_agent_runner_stops_after_one_turn("Todo", [], [gap], [gap])
   end
 
-  defp assert_agent_runner_stops_after_one_turn(refreshed_state, labels, sub_issues, blocked_by \\ []) do
+  defp assert_agent_runner_stops_after_one_turn(refreshed_state, labels, sub_issues, blocked_by \\ [], turns \\ 1) do
     test_root =
       Path.join(
         System.tmp_dir!(),
@@ -6297,7 +6304,7 @@ defmodule SymphonyElixir.CoreTest do
         workspace_root: workspace_root,
         hook_after_create: "cp #{Path.join(template_repo, "README.md")} README.md",
         agent_command: "#{codex_binary} app-server",
-        max_turns: 3
+        max_turns: if(turns == 1, do: 3, else: turns)
       )
 
       state_fetcher = fn [_issue_id] ->
@@ -6334,7 +6341,7 @@ defmodule SymphonyElixir.CoreTest do
 
       trace = File.read!(trace_file)
       assert length(String.split(trace, "RUN", trim: true)) == 1
-      assert length(Regex.scan(~r/"method":"turn\/start"/, trace)) == 1
+      assert length(Regex.scan(~r/"method":"turn\/start"/, trace)) == turns
     after
       File.rm_rf(test_root)
     end

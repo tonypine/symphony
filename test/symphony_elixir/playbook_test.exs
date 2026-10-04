@@ -46,6 +46,21 @@ defmodule SymphonyElixir.PlaybookTest do
     refute body =~ "A human\n   promotes the sub-tickets to `Todo`."
   end
 
+  test "parent_tickets resumes a stopped plan and revises one under review without re-planning" do
+    assert {:ok, body} = Playbook.fetch("parent_tickets")
+    flat = String.replace(body, ~r/\s+/, " ")
+
+    assert flat =~ "**Resume:** the parent is in `Todo` or `In Progress`, has sub-tickets in `Backlog` only"
+    assert flat =~ "keep every artifact comment and sub-ticket already made"
+    assert flat =~ "never file a sub-ticket a second time"
+    assert flat =~ "### Plan revision run (a person commented on the plan under review)"
+    assert flat =~ "Edit the existing artifact comments (use cases, features, journeys and so on) with `linear_update_comment`"
+    assert flat =~ "Leave every sub-ticket outside `Backlog` as it is."
+    assert flat =~ "Reply under each comment with `linear_add_comment` and its `parent_id`"
+    assert flat =~ "Never move it to `Waiting on sub-tickets` and never promote a sub-ticket"
+    assert flat =~ "**Re-plan:** the parent is in `Rework`."
+  end
+
   test "fetch/1 returns :error for an unknown partial" do
     assert Playbook.fetch("does_not_exist") == :error
   end

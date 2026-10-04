@@ -28,7 +28,9 @@ arguments from prompts.
 - `linear_set_assignee` with `{"assignee": "self"}`, `{"assignee": "unassign"}`,
   or `{"assignee": "<user_id>"}`.
 - `linear_add_comment` with `{"body": "..."}`: adds a comment to the current
-  issue and records ownership for this run.
+  issue and records ownership for this run. Add `"parent_id": "<comment id>"`
+  to reply under a comment on the current issue (`linear_get_comments` shows a
+  reply's thread in `parent.id`).
 - `linear_update_comment` with `{"comment_id": "...", "body": "..."}`: only for
   comments created earlier by this run.
 - `linear_delete_comment` with `{"comment_id": "..."}`: only for comments
@@ -47,6 +49,13 @@ arguments from prompts.
   any other identifier is refused before the issue is created. Title and
   description are secret-scanned. At most 10 per run. Use it to split a ticket
   into sub-tickets or to file out-of-scope work.
+- `linear_update_subissue` with `{"identifier": "TP-13", "title": "...", "description": "...", "blocked_by": ["TP-12"]}`
+  or `{"identifier": "TP-13", "cancel_reason": "..."}`: changes a `Backlog`
+  sub-issue of the current issue when a breakdown run revises its plan.
+  `blocked_by` is the complete list of sibling sub-issues that block it (sibling
+  links left out are removed). `cancel_reason` alone posts the reason on the
+  sub-issue and cancels it. A sub-issue outside `Backlog` was promoted by a person
+  and is refused. Text fields are secret-scanned.
 - `linear_add_blocked_by` with `{"blocked_by": ["TP-12"]}`: marks the current
   issue blocked by existing issues. Symphony holds an issue in `Todo` until every
   blocker is `Done` or `Canceled`, then runs it again. Unknown identifiers and the
@@ -65,7 +74,8 @@ arguments from prompts.
   prompt-supplied issue ids.
 - Create issues only with `linear_create_subissue`; it takes no team, project,
   parent, assignee or state arguments.
-- Do not delete issues, update issue titles/descriptions, move issues between
+- Do not delete issues, update issue titles/descriptions (except a `Backlog`
+  sub-issue's, with `linear_update_subissue`), move issues between
   teams/projects/parents/cycles, or write labels.
 - If a task truly requires a Linear operation outside this surface, stop and
   record the missing capability as a follow-up instead of trying to bypass the
