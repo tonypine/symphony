@@ -1355,5 +1355,9 @@ hooks:
   an empty `.<issue>.after_create_pending` file beside the workspace.
 - A timed-out `after_create` on an SSH worker is not retried, and the next run doesn't run it again
   either, since the first try may still be running there. The timeout fails the run.
+- While `after_create` or `before_run` runs, the agent stall timeout (`agent.timeouts.stall_ms`, 5
+  minutes) and the watchdog (`watchdog.no_progress_threshold_ms`) wait for the hook's own timeout,
+  so a long install isn't ended as a stalled run. Their clocks start again when the hook ends.
+- A run that is stopped while a hook runs on this machine stops the hook too.
 
 Each repository's `WORKFLOW.md` sets its own hooks and timeouts.

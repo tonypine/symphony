@@ -1534,6 +1534,86 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     end
   end
 
+  test "removing a workspace whose after_create failed removes its pending marker too" do
+    workspace_root = Path.join(System.tmp_dir!(), "symphony-elixir-workspace-hook-marker-#{System.unique_integer([:positive])}")
+    pending_marker = Path.join([workspace_root, "default", ".MT-MARKER.after_create_pending"])
+
+    try do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        hook_after_create: "exit 3"
+      )
+
+      capture_log(fn ->
+        assert {:error, {:workspace_hook_failed, "after_create", 3, _output}} = Workspace.create_for_issue("MT-MARKER")
+      end)
+
+      assert File.exists?(pending_marker)
+
+      assert {:ok, _removed_paths} = Workspace.remove(Path.join([workspace_root, "default", "MT-MARKER"]))
+      refute File.exists?(pending_marker)
+    after
+      File.rm_rf(workspace_root)
+    end
+  end
+
+  test "workspace reports each hook run to on_hook, with the hook's timeout" do
+    workspace_root = Path.join(System.tmp_dir!(), "symphony-elixir-workspace-on-hook-#{System.unique_integer([:positive])}")
+    test_pid = self()
+    on_hook = &send(test_pid, {:hook, &1})
+
+    try do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        hook_after_create: "true",
+        hook_before_run: "true"
+      )
+
+      assert {:ok, workspace} = Workspace.create_for_issue("MT-ON-HOOK", nil, nil, on_hook: on_hook)
+      assert_received {:hook, {:started, "after_create", 600_000}}
+      assert_received {:hook, {:finished, "after_create"}}
+
+      assert :ok = Workspace.run_before_run_hook(workspace, "MT-ON-HOOK", nil, on_hook: on_hook)
+      assert_received {:hook, {:started, "before_run", 60_000}}
+      assert_received {:hook, {:finished, "before_run"}}
+    after
+      File.rm_rf(workspace_root)
+    end
+  end
+
+  test "a run stopped while after_create runs stops the hook and what it started" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-elixir-workspace-hook-owner-exit-#{System.unique_integer([:positive])}")
+    started_file = Path.join(test_root, "started")
+
+    try do
+      File.mkdir_p!(test_root)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: Path.join(test_root, "workspaces"),
+        hook_after_create: """
+        (sleep 2; echo late > #{test_root}/late-background.txt) &
+        touch #{started_file}
+        sleep 2
+        echo late > #{test_root}/late.txt
+        """
+      )
+
+      capture_log(fn ->
+        run = spawn(fn -> Workspace.create_for_issue("MT-STOPPED") end)
+        assert wait_for_file(started_file, 5_000)
+        Process.exit(run, :kill)
+
+        # Both would have written by now had they outlived the run.
+        Process.sleep(2_500)
+      end)
+
+      refute File.exists?(Path.join(test_root, "late.txt"))
+      refute File.exists?(Path.join(test_root, "late-background.txt"))
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "after_create gets ten minutes, or a longer hooks.timeout_ms, unless after_create_timeout_ms is set" do
     write_workflow_file!(Workflow.workflow_file_path())
     assert Config.settings!().hooks.after_create_timeout_ms == nil
@@ -5342,6 +5422,20 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       refute File.exists?(Path.join(workspace, "unrelated.txt"))
     after
       File.rm_rf(test_root)
+    end
+  end
+
+  defp wait_for_file(path, timeout_ms) do
+    cond do
+      File.exists?(path) ->
+        true
+
+      timeout_ms <= 0 ->
+        false
+
+      true ->
+        Process.sleep(20)
+        wait_for_file(path, timeout_ms - 20)
     end
   end
 

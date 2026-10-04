@@ -3546,6 +3546,7 @@ defmodule SymphonyElixir.CoreTest do
       )
 
       issue = %Issue{
+        id: "issue-s-373",
         identifier: "S-373",
         title: "Slow setup",
         description: "after_create is slow once",
@@ -3556,13 +3557,21 @@ defmodule SymphonyElixir.CoreTest do
 
       log =
         capture_log(fn ->
-          assert :ok = AgentRunner.run(issue, nil, issue_enricher: &{:ok, &1})
+          assert :ok = AgentRunner.run(issue, self(), issue_enricher: &{:ok, &1})
         end)
 
       assert File.read!(hook_runs) == "run\nrun\n"
       assert File.read!(agent_launches) == "launch\n"
       assert log =~ "Retrying workspace hook after timeout hook=after_create"
       refute log =~ "Agent run failed"
+
+      # The orchestrator heard of both tries, each with its own deadline.
+      for _try <- 1..2 do
+        assert_received {:worker_runtime_info, "issue-s-373", %{workspace_hook: %{name: "after_create", deadline: %DateTime{}}}}
+        assert_received {:worker_runtime_info, "issue-s-373", %{workspace_hook: nil}}
+      end
+
+      refute_received {:worker_runtime_info, "issue-s-373", %{workspace_hook: _hook}}
     after
       File.rm_rf(test_root)
     end

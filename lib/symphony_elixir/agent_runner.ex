@@ -129,7 +129,7 @@ defmodule SymphonyElixir.AgentRunner do
       {:ok, verification} ->
         verification_env = Verification.env(verification)
 
-        case workspace_for_issue(issue, opts, worker_host) do
+        case workspace_for_issue(issue, codex_update_recipient, opts, worker_host) do
           {:ok, workspace} ->
             send_worker_runtime_info(codex_update_recipient, issue, worker_host, workspace)
 
@@ -137,7 +137,8 @@ defmodule SymphonyElixir.AgentRunner do
               with :ok <-
                      Workspace.run_before_run_hook(workspace, issue, worker_host,
                        env: verification_env,
-                       settings: settings
+                       settings: settings,
+                       on_hook: workspace_hook_listener(codex_update_recipient, issue)
                      ),
                    {:ok, dev_server_pid} <-
                      Verification.start_dev_server(verification, workspace, settings: settings) do
@@ -244,7 +245,7 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp workspace_for_issue(issue, opts, worker_host) do
+  defp workspace_for_issue(issue, codex_update_recipient, opts, worker_host) do
     case Keyword.get(opts, :workspace_path) do
       workspace when is_binary(workspace) and workspace != "" ->
         with :ok <- Workspace.validate(workspace, worker_host) do
@@ -254,9 +255,27 @@ defmodule SymphonyElixir.AgentRunner do
       _ ->
         issue
         |> sync_workspace_to_pr_head(opts)
-        |> Workspace.create_for_issue(worker_host, Keyword.get(opts, :repo_key), active_workspace_identifiers: Keyword.get(opts, :active_workspace_identifiers, []))
+        |> Workspace.create_for_issue(worker_host, Keyword.get(opts, :repo_key),
+          active_workspace_identifiers: Keyword.get(opts, :active_workspace_identifiers, []),
+          on_hook: workspace_hook_listener(codex_update_recipient, issue)
+        )
     end
   end
+
+  # Tells the orchestrator a workspace hook is running, and until when, so its stall
+  # and watchdog clocks wait out the hook's own timeout rather than end the run.
+  defp workspace_hook_listener(recipient, %Issue{id: issue_id}) when is_pid(recipient) and is_binary(issue_id) do
+    fn
+      {:started, hook_name, timeout_ms} ->
+        deadline = DateTime.add(DateTime.utc_now(), timeout_ms, :millisecond)
+        send(recipient, {:worker_runtime_info, issue_id, %{workspace_hook: %{name: hook_name, deadline: deadline}}})
+
+      {:finished, _hook_name} ->
+        send(recipient, {:worker_runtime_info, issue_id, %{workspace_hook: nil}})
+    end
+  end
+
+  defp workspace_hook_listener(_recipient, _issue), do: nil
 
   # When an issue is dispatched to rework an existing PR (resolve a merge
   # conflict or address reviewer comments), the workspace must reflect the

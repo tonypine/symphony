@@ -269,7 +269,12 @@ Fields:
 - `last_codex_timestamp` (timestamp or null)
 - `last_event_at` (timestamp or null)
   - Updated for every transcript event and initialized when runtime dispatch metadata is received.
+  - Also updated when a workspace hook starts or ends.
   - Used by no-progress watchdog detection.
+- `workspace_hook` (object or null)
+  - The `after_create` or `before_run` hook the worker is running: `name`, and `deadline`, when the
+    hook's own timeout ends it. Null when no hook runs.
+  - Used by stall detection and the watchdog (Section 8.5).
 - `last_codex_message` (summarized payload)
 - `input_tokens` (integer, legacy total input bucket)
 - `uncached_input_tokens` (integer)
@@ -2081,7 +2086,10 @@ tick.
 Part A: First-turn stall detection
 
 - For each running issue that has not emitted any coding-agent event, compute `elapsed_ms` since
-  `started_at`.
+  `started_at`, or since its last workspace hook (`after_create`, `before_run`) ended when that is
+  later.
+- While a workspace hook runs, compute `elapsed_ms` since the hook's deadline instead. The hook is
+  bounded by its own timeout (Section 9.4), which can be longer than `stall_timeout_ms`.
 - If `elapsed_ms > agent.stall_timeout_ms`, terminate the worker and queue a retry.
 - If `stall_timeout_ms <= 0`, skip stall detection entirely.
 
@@ -2104,7 +2112,9 @@ Part C: No-progress watchdog
 
 - Independently of the poll tick, a watchdog tick runs every `watchdog.tick_interval_ms`.
 - If `watchdog.enabled == false`, the tick performs no session termination.
-- For each running issue, compute `elapsed_ms` since `last_event_at`.
+- For each running issue, compute `elapsed_ms` since `last_event_at`, where a workspace hook's start
+  and end count as events. While a workspace hook runs, compute it since the hook's deadline, as in
+  Part A.
 - If `elapsed_ms >= watchdog.no_progress_threshold_ms`, terminate the agent session, run
   `after_run`, record the run as `timeout`, emit `run_stuck`, and queue a retry through the normal
   retry helper/backoff path.
@@ -2227,6 +2237,11 @@ Execution contract:
   keep running on the worker.
 - Log hook start, failures, and timeouts. A timeout log includes the hook's last output lines, so a
   hang can be told apart from a slow hook.
+- The worker reports each `after_create` and `before_run` run to the orchestrator as it starts, with
+  the deadline its timeout sets, and as it ends, so stall detection and the watchdog (Section 8.5)
+  wait for the hook's own timeout.
+- When the run that started a local hook is stopped, stop the hook and what it started, as on a
+  timeout.
 
 Failure semantics:
 
@@ -3678,7 +3693,10 @@ function watchdog_tick(state):
     return state
 
   for each (issue_id, running_entry) in state.running:
-    elapsed_ms = now_utc() - running_entry.last_event_at
+    if running_entry.workspace_hook is not null:
+      elapsed_ms = now_utc() - running_entry.workspace_hook.deadline
+    else:
+      elapsed_ms = now_utc() - running_entry.last_event_at
     if elapsed_ms >= watchdog.no_progress_threshold_ms:
       agent.stop_session(running_entry.agent_session)
       run_hook_best_effort("after_run", running_entry.workspace_path)
@@ -4038,6 +4056,7 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Completed issues in non-active, non-terminal states appear as watching rows
 - Terminal completed issues are removed from watching rows
 - First-turn stall detection kills never-started sessions and schedules retry
+- Stall detection and the watchdog wait for a running workspace hook's deadline
 - Watchdog no-progress detection stops stuck sessions, runs `after_run`, emits `run_stuck`, and
   schedules retry
 - Slot exhaustion requeues retries with explicit error reason

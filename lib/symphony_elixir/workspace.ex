@@ -78,6 +78,8 @@ defmodule SymphonyElixir.Workspace do
   #   * `:active_workspace_identifiers` - identifiers (or workspace basenames) of
   #     other issues a running or retrying agent owns. Their worktrees are never
   #     detached to release a branch for this issue.
+  #   * `:on_hook` - called with `{:started, hook_name, timeout_ms}` and
+  #     `{:finished, hook_name}` around each hook run.
   @spec create_for_issue(map() | String.t() | nil, worker_host(), String.t() | nil, keyword()) ::
           {:ok, Path.t()} | {:error, term()}
   def create_for_issue(issue_or_identifier, worker_host \\ nil, repo_key \\ nil, opts \\ []) do
@@ -85,6 +87,7 @@ defmodule SymphonyElixir.Workspace do
       issue_or_identifier
       |> issue_context(repo_key)
       |> Map.put(:active_workspaces, normalize_identifier_set(Keyword.get(opts, :active_workspace_identifiers, [])))
+      |> Map.put(:on_hook, Keyword.get(opts, :on_hook))
 
     try do
       safe_repo_key = safe_identifier(issue_context.repo_key)
@@ -818,11 +821,15 @@ defmodule SymphonyElixir.Workspace do
   defp remove_workspace(workspace, issue_context, nil) do
     settings = settings_for_issue_context(issue_context)
 
-    if settings.workspace.strategy == "worktree" do
-      remove_worktree_workspace(workspace, issue_context, nil, settings)
-    else
-      remove_directory_workspace(workspace, issue_context, nil, settings)
-    end
+    result =
+      if settings.workspace.strategy == "worktree" do
+        remove_worktree_workspace(workspace, issue_context, nil, settings)
+      else
+        remove_directory_workspace(workspace, issue_context, nil, settings)
+      end
+
+    if match?({:ok, _removed_paths}, result), do: clear_after_create_pending(workspace, nil)
+    result
   end
 
   defp remove_workspace(workspace, issue_context, worker_host) when is_binary(worker_host) do
@@ -1244,6 +1251,7 @@ defmodule SymphonyElixir.Workspace do
     with :ok <- validate_workspace_path(entry.path, nil),
          :ok <- File.mkdir_p(trash_root),
          :ok <- File.rename(entry.path, destination) do
+      clear_after_create_pending(entry.path, nil)
       Logger.warning("Workspace orphan found repo_key=#{entry.repo_key} identifier=#{entry.identifier} workspace=#{entry.path} action=trash destination=#{destination}")
 
       %{
@@ -1344,7 +1352,11 @@ defmodule SymphonyElixir.Workspace do
   @spec run_before_run_hook(Path.t(), map() | String.t() | nil, worker_host(), keyword()) ::
           :ok | {:error, term()}
   def run_before_run_hook(workspace, issue_or_identifier, worker_host \\ nil, opts \\ []) when is_binary(workspace) do
-    issue_context = issue_context(issue_or_identifier, Keyword.get(opts, :repo_key))
+    issue_context =
+      issue_or_identifier
+      |> issue_context(Keyword.get(opts, :repo_key))
+      |> Map.put(:on_hook, Keyword.get(opts, :on_hook))
+
     hooks = hooks_for_issue_context(issue_context, opts)
     env = Keyword.get(opts, :env, [])
 
@@ -1534,8 +1546,9 @@ defmodule SymphonyElixir.Workspace do
   # Marks a local workspace whose `after_create` hasn't succeeded yet, so a later
   # run runs it again there rather than starting the agent in a half-set-up
   # workspace. The marker sits beside the workspace, not in it, so a hook that
-  # clones into the empty workspace still can. An SSH worker keeps none: a
-  # timed-out hook can still be running there, and a second copy would race it.
+  # clones into the empty workspace still can, and it goes when the workspace is
+  # removed or trashed. An SSH worker keeps none: a timed-out hook can still be
+  # running there, and a second copy would race it.
   defp after_create_pending_marker(workspace) do
     Path.join(Path.dirname(workspace), ".#{Path.basename(workspace)}.after_create_pending")
   end
@@ -1763,7 +1776,11 @@ defmodule SymphonyElixir.Workspace do
   defp run_hook(command, workspace, issue_context, hook_name, worker_host, timeout_ms, env) do
     Logger.info("Running workspace hook hook=#{hook_name} #{issue_log_context(issue_context)} workspace=#{workspace} worker_host=#{worker_host_for_log(worker_host)}")
 
-    case run_hook_command(command, workspace, worker_host, env, timeout_ms) do
+    notify_hook(issue_context, {:started, hook_name, timeout_ms})
+    result = run_hook_command(command, workspace, worker_host, env, timeout_ms)
+    notify_hook(issue_context, {:finished, hook_name})
+
+    case result do
       {:ok, cmd_result} ->
         handle_hook_command_result(cmd_result, workspace, issue_context, hook_name)
 
@@ -1779,13 +1796,24 @@ defmodule SymphonyElixir.Workspace do
     end
   end
 
+  # A hook runs under its own timeout, so the run's owner (the orchestrator) holds its
+  # stall and watchdog clocks while one runs.
+  defp notify_hook(%{on_hook: on_hook}, event) when is_function(on_hook, 1), do: on_hook.(event)
+  defp notify_hook(_issue_context, _event), do: :ok
+
   # Runs the hook as a port in its own process, rather than through `System.cmd/3`,
   # so a timeout can stop a local hook (a retry must not race the first try) and
-  # still report what it printed.
+  # still report what it printed. The process traps exits so that a run stopped
+  # mid-hook stops the hook too, rather than leave it running beside the
+  # `after_create` the next run starts in the same workspace.
   defp run_hook_command(command, workspace, worker_host, env, timeout_ms) do
+    owner = self()
+
     Task.async(fn ->
+      Process.flag(:trap_exit, true)
+
       with {:ok, port} <- open_hook_port(command, workspace, worker_host, env) do
-        collect_hook_output(port, [], System.monotonic_time(:millisecond) + timeout_ms)
+        collect_hook_output(port, owner, [], System.monotonic_time(:millisecond) + timeout_ms)
       end
     end)
     |> Task.await(:infinity)
@@ -1815,13 +1843,17 @@ defmodule SymphonyElixir.Workspace do
     SSH.start_port(worker_host, script)
   end
 
-  defp collect_hook_output(port, output, deadline) do
+  defp collect_hook_output(port, owner, output, deadline) do
     receive do
       {^port, {:data, data}} ->
-        collect_hook_output(port, [output, data], deadline)
+        collect_hook_output(port, owner, [output, data], deadline)
 
       {^port, {:exit_status, status}} ->
         {:ok, {IO.iodata_to_binary(output), status}}
+
+      {:EXIT, ^owner, _reason} ->
+        stop_hook_process(port)
+        exit(:shutdown)
     after
       max(deadline - System.monotonic_time(:millisecond), 0) ->
         stop_hook_process(port)
