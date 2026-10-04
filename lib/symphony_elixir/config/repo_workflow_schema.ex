@@ -116,7 +116,8 @@ defmodule SymphonyElixir.Config.RepoWorkflowSchema do
       "before_run" => configured_value(paths, "before_run", hooks.before_run),
       "after_run" => configured_value(paths, "after_run", hooks.after_run),
       "before_remove" => configured_value(paths, "before_remove", hooks.before_remove),
-      "timeout_ms" => configured_value(paths, "timeout_ms", hooks.timeout_ms)
+      "timeout_ms" => configured_value(paths, "timeout_ms", hooks.timeout_ms),
+      "after_create_timeout_ms" => configured_value(paths, "after_create_timeout_ms", hooks.after_create_timeout_ms)
     }
     |> drop_nil_values()
   end

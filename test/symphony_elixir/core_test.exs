@@ -3669,6 +3669,87 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
+  test "agent runner starts the agent in one attempt when after_create times out once" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-elixir-agent-runner-hook-retry-#{System.unique_integer([:positive])}")
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+      codex_binary = Path.join(test_root, "fake-codex")
+      hook_runs = Path.join(test_root, "after_create.runs")
+      agent_launches = Path.join(test_root, "agent.launches")
+
+      File.mkdir_p!(workspace_root)
+
+      File.write!(codex_binary, """
+      #!/bin/sh
+      echo launch >> #{agent_launches}
+      count=0
+      while IFS= read -r line; do
+        count=$((count + 1))
+        case "$count" in
+          1)
+            printf '%s\\n' '{\"id\":1,\"result\":{}}'
+            ;;
+          3)
+            printf '%s\\n' '{\"id\":2,\"result\":{\"thread\":{\"id\":\"thread-1\"}}}'
+            ;;
+          4)
+            printf '%s\\n' '{\"id\":3,\"result\":{\"turn\":{\"id\":\"turn-1\",\"status\":\"inProgress\",\"items\":[]}}}'
+            printf '%s\\n' '{\"method\":\"turn/completed\"}'
+            exit 0
+            ;;
+          *)
+            ;;
+        esac
+      done
+      """)
+
+      File.chmod!(codex_binary, 0o755)
+
+      # Slow on its first try only, like a dependency install on a loaded machine.
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        workspace_root: workspace_root,
+        hook_after_create_timeout_ms: 1_000,
+        hook_after_create: """
+        echo run >> #{hook_runs}
+        if [ "$(wc -l < #{hook_runs})" -eq 1 ]; then sleep 2; fi
+        """,
+        agent_command: "#{codex_binary} app-server"
+      )
+
+      issue = %Issue{
+        id: "issue-s-373",
+        identifier: "S-373",
+        title: "Slow setup",
+        description: "after_create is slow once",
+        state: "In Progress",
+        url: "https://example.org/issues/S-373",
+        labels: []
+      }
+
+      log =
+        capture_log(fn ->
+          assert :ok = AgentRunner.run(issue, self(), issue_enricher: &{:ok, &1})
+        end)
+
+      assert File.read!(hook_runs) == "run\nrun\n"
+      assert File.read!(agent_launches) == "launch\n"
+      assert log =~ "Retrying workspace hook after timeout hook=after_create"
+      refute log =~ "Agent run failed"
+
+      # The orchestrator heard of both tries, each with its own deadline.
+      for _try <- 1..2 do
+        assert_received {:worker_runtime_info, "issue-s-373", %{workspace_hook: %{name: "after_create", deadline: %DateTime{}}}}
+        assert_received {:worker_runtime_info, "issue-s-373", %{workspace_hook: nil}}
+      end
+
+      refute_received {:worker_runtime_info, "issue-s-373", %{workspace_hook: _hook}}
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "agent runner compacts oversized Codex first-turn prompts before app-server send" do
     test_root =
       Path.join(
