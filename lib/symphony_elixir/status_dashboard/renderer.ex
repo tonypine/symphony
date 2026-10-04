@@ -208,7 +208,7 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
     turn_count = Map.get(running_entry, :turn_count, 0)
     age = format_cell(format_runtime_and_turns(runtime_seconds, turn_count), @running_age_width)
     event = running_entry.last_codex_event || "none"
-    event_label = format_cell(summarize_message(running_entry.last_codex_message), running_event_width)
+    event_label = format_cell(running_event_label(running_entry), running_event_width)
 
     tokens = format_count(total_tokens) |> format_cell(@running_tokens_width, :right)
 
@@ -1345,6 +1345,10 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
   defp colorize(value, code) do
     "#{code}#{value}#{@ansi_reset}"
   end
+
+  # A run waiting out a Linear rate limit or outage has no new agent message to show.
+  defp running_event_label(%{linear_wait_until: %DateTime{}}), do: "waiting for Linear"
+  defp running_event_label(running_entry), do: summarize_message(running_entry.last_codex_message)
 
   defp summarize_message(message), do: MessageHumanizer.humanize(message)
 
