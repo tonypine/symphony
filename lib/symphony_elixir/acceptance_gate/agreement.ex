@@ -8,7 +8,7 @@ defmodule SymphonyElixir.AcceptanceGate.Agreement do
 
     * a move to Merging (or straight to Done) is `approve`;
     * a move to Rework, or back to In Progress with PR review comments (the PR review poller's
-      `changes_requested` or `review_comments` action after the verdict), is `rework`;
+      `rework` action after the verdict, for a change request or a review comment), is `rework`;
     * In Review, Auto Review and In Progress without review comments are still waiting;
     * any other state is `none`: no decision, and the verdict doesn't count.
 
@@ -25,7 +25,7 @@ defmodule SymphonyElixir.AcceptanceGate.Agreement do
   @window 50
   @recent_limit 20
   @min_judged 20
-  @review_actions ["changes_requested", "review_comments"]
+  @review_actions ["rework"]
   @waiting_states ["in review", "auto review"]
 
   @type stats :: %{

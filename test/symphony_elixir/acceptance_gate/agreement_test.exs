@@ -75,16 +75,17 @@ defmodule SymphonyElixir.AcceptanceGate.AgreementTest do
       assert Agreement.human_decision(run, "Merging", nil, "Auto Review") == "approve"
       assert Agreement.human_decision(run, " done ", nil, "Auto Review") == "approve"
       assert Agreement.human_decision(run, "Rework", nil, "Auto Review") == "rework"
-      assert Agreement.human_decision(run, "In Progress", review.("review_comments", @now), "Auto Review") == "rework"
-      assert Agreement.human_decision(run, "In Progress", review.("changes_requested", @judged_at), "Auto Review") == "rework"
+      assert Agreement.human_decision(run, "In Progress", review.("rework", @now), "Auto Review") == "rework"
+      assert Agreement.human_decision(run, "In Progress", review.("rework", @judged_at), "Auto Review") == "rework"
 
       # Waiting: still in review, or back in progress without review comments since the verdict.
       assert Agreement.human_decision(run, "In Review", nil, "Auto Review") == nil
       assert Agreement.human_decision(run, "QA Review", nil, "QA Review") == nil
       assert Agreement.human_decision(run, "Auto Review", nil, "QA Review") == nil
       assert Agreement.human_decision(run, "In Progress", nil, "Auto Review") == nil
-      assert Agreement.human_decision(run, "In Progress", review.("review_comments", ~U[2026-10-04 09:00:00Z]), "Auto Review") == nil
+      assert Agreement.human_decision(run, "In Progress", review.("rework", ~U[2026-10-04 09:00:00Z]), "Auto Review") == nil
       assert Agreement.human_decision(run, "In Progress", review.("conflict", @now), "Auto Review") == nil
+      assert Agreement.human_decision(run, "In Progress", review.("merge", @now), "Auto Review") == nil
       assert Agreement.human_decision(run, nil, nil, "Auto Review") == nil
 
       assert Agreement.human_decision(run, "Canceled", nil, "Auto Review") == "none"
@@ -112,7 +113,7 @@ defmodule SymphonyElixir.AcceptanceGate.AgreementTest do
       ]
 
       put_runs(runs)
-      :ok = RunStore.put_pr_review(%{repo_key: "default", issue_id: "commented", last_action: "review_comments", last_action_at: @now})
+      :ok = RunStore.put_pr_review(%{repo_key: "default", issue_id: "commented", last_action: "rework", last_action_at: @now})
 
       Process.put(:tracker_states, %{"sent-back" => "Rework", "commented" => "In Progress", "canceled" => "Canceled", "superseded" => "Merging"})
 

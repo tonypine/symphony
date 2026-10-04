@@ -72,8 +72,8 @@ the human's decision on the gate run:
 | In Review or Auto Review | none yet |
 | any other state (Backlog, Canceled, ...) | `none`: the verdict doesn't count |
 
-The PR review comment comes from the PR review poller: its `changes_requested` or
-`review_comments` move back to In Progress. The decision is checked on every CI poll, before the
+The PR review comment comes from the PR review poller: a change request or a review comment
+moves the issue back to In Progress and stores `last_action: "rework"` on its PR review record. The decision is checked on every CI poll, before the
 poll processes the PR, so a PR merged since the last poll still has the head the human merged.
 Only each issue's latest verdict is watched: a new verdict on a new push replaces the old one.
 
