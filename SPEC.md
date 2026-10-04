@@ -4805,7 +4805,10 @@ infrastructure.
   configured repo `WORKFLOW.md` through the same validation the service runs at startup, without
   starting the runtime or contacting the tracker or GitHub. It exits `0` and prints
   `Config OK: <path>` when valid, and exits `1` with the error on stderr when the file is missing
-  or invalid. Errors name the file and key and never print secret values. A `workspace.source`
+  or invalid. For a `workflow_source: ref` repo it validates the `WORKFLOW.md` startup would use:
+  the file committed on the base branch ref when it parses (as last fetched; `check` does not fetch
+  or write the snapshot), otherwise the last good snapshot or the file on disk. Errors name the
+  file and key and never print secret values. A `workspace.source`
   repo whose clone does not exist yet is checked without its `WORKFLOW.md` (the service clones it
   at startup before reading it), and the check prints a warning naming the repo.
 - CLI accepts `--config path-to-symphony.yml` to select an alternate operator config.
