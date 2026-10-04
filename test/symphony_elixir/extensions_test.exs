@@ -5,6 +5,7 @@ defmodule SymphonyElixir.ExtensionsTest do
   import Phoenix.LiveViewTest
 
   alias Mix.Tasks.Symphony.Audit
+  alias SymphonyElixir.AcceptanceGate
   alias SymphonyElixir.AcceptanceGate.Runner, as: GateRunner
   alias SymphonyElixir.{AuditLog, StrayProcesses}
   alias SymphonyElixir.Linear.{Adapter, Client, Usage}
@@ -75,6 +76,10 @@ defmodule SymphonyElixir.ExtensionsTest do
     def handle_call(:request_refresh, _from, state) do
       {:reply, :unavailable, state}
     end
+  end
+
+  defmodule ConflictGateContext do
+    def build(_issue, _record, _sha, _settings, _opts), do: {:conflict, ["README.md"]}
   end
 
   defmodule StaticOrchestrator do
@@ -1736,6 +1741,36 @@ defmodule SymphonyElixir.ExtensionsTest do
                "gate tokens median 1000, p90 1000 · not ready to enforce: at least 20 judged tickets (1 so far)"
 
     assert html =~ "web: 0 judged, 0 agreed (n/a), 0 unsafe approvals, 0 false reworks, 0 escalations (0 merged unchanged), gate tokens median n/a, p90 n/a"
+  end
+
+  test "state api and dashboard list a gate run the acceptance gate stored among the recent runs" do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    audit_dir = Path.join(System.tmp_dir!(), "gate-run-history-#{System.unique_integer([:positive])}")
+    on_exit(fn -> File.rm_rf(audit_dir) end)
+
+    issue = %Issue{id: "issue-gate-run", identifier: "MT-GATE-RUN", title: "Gate run", description: "", state: "Auto Review", labels: []}
+    record = %{repo_key: "default", issue_id: issue.id, pr_url: "https://github.com/example/repo/pull/7", workspace_path: "/tmp/ws"}
+    job = %{issue: issue, record: record, sha: "abc1234def", settings: Config.settings!(), qa: %{verdict: :pass}}
+
+    assert {:ok, %{verdict: "rework"}} = AcceptanceGate.judge(job, context: ConflictGateContext, dir: audit_dir)
+    assert [gate_run] = RunStore.list_runs("default", :all)
+    refute Map.has_key?(gate_run, :attempt)
+
+    orchestrator_name = Module.concat(__MODULE__, :GateRunHistoryOrchestrator)
+    snapshot = %{static_snapshot() | run_history: [gate_run]}
+    {:ok, _pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: snapshot)
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    state_payload = build_conn() |> get("/api/v1/state") |> json_response(200)
+
+    assert [%{"kind" => "acceptance_gate", "issue_identifier" => "MT-GATE-RUN", "status" => "gate_rework", "attempt" => nil}] =
+             state_payload["run_history"]
+
+    assert [%{"issue_identifier" => "MT-GATE-RUN", "verdict" => "rework"}] = state_payload["acceptance_gate"]["recent"]
+
+    {:ok, _view, html} = live(build_conn(), "/")
+
+    assert html =~ "MT-GATE-RUN: rework"
   end
 
   test "state api and dashboard show Linear requests per caller for the last hour" do

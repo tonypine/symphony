@@ -716,7 +716,7 @@ defmodule SymphonyElixirWeb.Presenter do
       title: Map.get(entry, :title),
       state: Map.get(entry, :state),
       status: entry.status,
-      attempt: entry.attempt,
+      attempt: Map.get(entry, :attempt),
       started_at: iso8601(entry.started_at),
       ended_at: iso8601(Map.get(entry, :ended_at)),
       error: Map.get(entry, :error),
