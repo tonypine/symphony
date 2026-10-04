@@ -527,7 +527,8 @@ defmodule SymphonyElixir.Config.Schema do
   defmodule RepoAgent do
     @moduledoc false
     # A repository's `repositories[].agent` block: run profile settings that take precedence over
-    # the `agent` section for issues routed to that repository.
+    # the `agent` section for issues routed to that repository. `key` is the repository's key,
+    # which `Config` sets so messages can name `repositories[<key>].agent.*`.
     use Ecto.Schema
     import Ecto.Changeset
 
@@ -542,6 +543,7 @@ defmodule SymphonyElixir.Config.Schema do
       field(:effort, :string)
       field(:provider, :string)
       field(:run_profiles, :map, default: %{})
+      field(:key, :string)
     end
 
     @type t :: %__MODULE__{}
@@ -550,7 +552,7 @@ defmodule SymphonyElixir.Config.Schema do
     @spec changeset(t(), map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
       schema
-      |> cast(attrs, [:model, :effort, :provider, :run_profiles], empty_values: [])
+      |> cast(attrs, [:model, :effort, :provider, :run_profiles, :key], empty_values: [])
       |> Agent.validate_run_profile_settings()
     end
 

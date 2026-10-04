@@ -364,8 +364,9 @@ agent:
   `supported_parameters` on OpenRouter's models API (`GET https://openrouter.ai/api/v1/models`,
   read without the key and cached in process for an hour). When `OPENROUTER_API_KEY` is set,
   `symphony check` asks that API and reports, naming the key that set the model or effort
-  (`agent.run_profiles.<kind>.model`, `agent.model`, `pre_push_review.model`,
-  `auto_review.model`, and the matching `effort` keys):
+  (`pre_push_review.model`, `auto_review.model`, `repositories[<key>].agent.run_profiles.<kind>.model`,
+  `repositories[<key>].agent.model`, `agent.run_profiles.<kind>.model`, `agent.model`, and the
+  matching `effort` keys; the first one set, in the order a run resolves them):
   - an error for a model id OpenRouter does not list, for example
     `` agent.run_profiles.landing.model: OpenRouter has no model `acme/typo` ``;
   - an error for a model without `tools`, for example
