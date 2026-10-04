@@ -724,8 +724,8 @@ defmodule SymphonyElixir.AgentRunner do
       rework_finished?(issue, run_context) ->
         hand_off_finished_rework(issue, run_context)
 
-      pushed_head_ci_green?(issue, run_context) ->
-        hand_off_green_pushed_head(issue, run_context)
+      ci_action = pushed_head_handoff_ci_action(issue, run_context) ->
+        hand_off_pushed_head(issue, ci_action, run_context)
 
       idle_turn_limit_reached?(issue, run_context) ->
         forget_rework_base(issue, run_context.opts)
@@ -1567,22 +1567,33 @@ defmodule SymphonyElixir.AgentRunner do
 
   # A run on an issue whose PR is already open (a conflict, CI, QA or review fix) never takes the
   # post-PR stop: the signal that started it stays pending until the run ends. Once it has pushed
-  # a new head to that PR and CI on that head is green, there is nothing left to wait for, so it
-  # moves to the post-PR state instead of turning until the idle check parks it. `Rework` and
-  # `Merging` keep their own rules (`rework_finished?/2`, `merging_ci_pending?/2`).
-  defp pushed_head_ci_green?(%Issue{} = issue, %{progress: %{head: head, start_head: start_head}} = run_context)
+  # a new head to that PR and CI on that head is running or green, the CI poller takes it from
+  # there: in the post-PR state it starts QA on green, and re-runs a flaky failure or dispatches a
+  # fix run on red. So the run moves to that state instead of turning while CI runs until the idle
+  # check parks it. A head the pre-push reviewer applies to but has not passed keeps the run going,
+  # as the post-PR stop does (`head_reviewed?/2`), so the next turn reviews it. Gives the CI action
+  # (`:pending` or `:success`), or nil for a head with no checks yet, a red head, another PR head or
+  # an unreviewed head. `Rework` and `Merging` keep their own rules (`rework_finished?/2`,
+  # `merging_ci_pending?/2`).
+  defp pushed_head_handoff_ci_action(%Issue{} = issue, %{progress: %{head: head, start_head: start_head}} = run_context)
        when is_binary(head) and is_binary(start_head) do
-    head != start_head and !rework_state?(issue.state) and !merging_state?(issue.state) and
-      pushed_head_ci_action(issue, run_context) == :success
+    if head != start_head and !rework_state?(issue.state) and !merging_state?(issue.state) and
+         head_reviewed?(head, run_context) do
+      case pushed_head_ci_action(issue, run_context) do
+        action when action in [:pending, :success] -> action
+        _action -> nil
+      end
+    end
   end
 
-  defp pushed_head_ci_green?(_issue, _run_context), do: false
+  defp pushed_head_handoff_ci_action(_issue, _run_context), do: nil
 
-  defp hand_off_green_pushed_head(%Issue{} = issue, %{progress: %{head: head}} = run_context) do
+  defp hand_off_pushed_head(%Issue{} = issue, ci_action, %{progress: %{head: head}} = run_context) do
     post_pr_state = post_pr_state(run_context)
-    Logger.info("CI is green on #{issue_context(issue)}'s pushed head #{head} on its PR; moving to #{post_pr_state}")
+    ci = if ci_action == :success, do: "green", else: "running"
+    Logger.info("CI is #{ci} on #{issue_context(issue)}'s pushed head #{head} on its PR; moving to #{post_pr_state}")
 
-    case move_to_post_pr_state(issue, post_pr_state, "after its pushed head went green", run_context) do
+    case move_to_post_pr_state(issue, post_pr_state, "with CI #{ci} on its pushed head", run_context) do
       :ok -> :ok
       {:error, reason} -> {:error, {:pushed_head_handoff_failed, reason}}
     end
@@ -1596,8 +1607,9 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   # A landing run waits on CI through `merging_ci_pending?/2`, and parking it would drop the
-  # human's merge approval. A run that pushed its HEAD to the PR and waits on that head's checks
-  # is not idle either; it keeps turning, up to `agent.max_turns`, until CI settles.
+  # human's merge approval. A run whose HEAD is the PR head with checks pending, but that is not
+  # handed off (a Rework run, or one that started on that head), is not idle either; it keeps
+  # turning, up to `agent.max_turns`, until CI settles.
   defp idle_turn_limit_reached?(%Issue{} = issue, %{progress: progress} = run_context) do
     progress.empty_turns >= @max_empty_turns and !merging_state?(issue.state) and
       !pushed_head_ci_pending?(issue, run_context)
