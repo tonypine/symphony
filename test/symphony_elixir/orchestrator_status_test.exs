@@ -427,9 +427,11 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     }
 
     send(pid, {:codex_worker_update, issue_id, update})
+    # The orchestrator broadcasts while it handles the update, so the event is here once it replies.
+    :sys.get_state(pid)
 
-    assert_receive {:transcript_event, transcript_event}
-    assert Map.take(transcript_event, [:repo_key, :issue_id]) == %{repo_key: repo_key, issue_id: issue_id}
+    assert_received {:transcript_event, %{issue_id: ^issue_id} = transcript_event}
+    assert transcript_event.repo_key == repo_key
   end
 
   test "orchestrator keeps transcript available when running issue becomes watched" do

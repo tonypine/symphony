@@ -8,6 +8,8 @@ defmodule SymphonyElixir.AutoReview do
   and green CI starts a QA pass (`on_green/5`) that runs in the background
   (`SymphonyElixir.QaRunner`, `run_qa/2`):
 
+  - the repo's `WORKFLOW.md` is re-read from its base branch (`SymphonyElixir.WorkflowSource`),
+    so playbooks merged since the last dispatch apply;
   - `SymphonyElixir.QaAgent.Selection` decides from the changed paths, labels and
     ticket whether to test and with which playbooks; a skip goes straight to
     `In Review` with a note;
@@ -40,7 +42,7 @@ defmodule SymphonyElixir.AutoReview do
   alias SymphonyElixir.Linear.{Issue, Usage}
   alias SymphonyElixir.Orchestrator
   alias SymphonyElixir.QaAgent.{Report, Selection}
-  alias SymphonyElixir.Workspace
+  alias SymphonyElixir.{WorkflowSource, Workspace}
 
   @review_state "In Review"
   @active_state "In Progress"
@@ -246,11 +248,15 @@ defmodule SymphonyElixir.AutoReview do
   a `SymphonyElixir.QaRunner` task.
   """
   @spec run_qa(map(), keyword()) :: tuple()
-  def run_qa(%{issue: issue, record: record, sha: sha, settings: settings} = job, opts) do
+  def run_qa(%{issue: issue, record: record, sha: sha} = job, opts) do
     Usage.put_caller(:auto_review)
+    {settings, workflow_refresh} = refresh_settings(Map.get(record, :repo_key), job.settings)
+    job = %{job | settings: settings}
+    selection = select(issue, record, sha, settings, opts)
+    log_selection(issue, sha, selection, settings, workflow_refresh)
 
     outcome =
-      case select(issue, record, sha, settings, opts) do
+      case selection do
         {:skip, reason} -> %{verdict: :skip, reason: reason}
         {:blocked, reason} -> %{verdict: :blocked, reason: reason}
         {:run, playbooks} -> run_agent(job, playbooks, opts)
@@ -313,6 +319,40 @@ defmodule SymphonyElixir.AutoReview do
     {:auto_review_qa_not_applied, issue.id, outcome.verdict, reason}
   end
 
+  # The repo's `WORKFLOW.md` snapshot, where its `auto_review.playbooks` come from, is
+  # otherwise refreshed only at startup and on dispatch. Fetching and refreshing it here
+  # lets a playbook merged since then apply to this pass. The job's settings, read
+  # when CI went green, are kept when the repo's workflow can't be read.
+  defp refresh_settings(repo_key, settings) do
+    with {:ok, repo} <- Config.repo(repo_key),
+         result = WorkflowSource.refresh(repo, fetch: settings.workspace.fetch_before_dispatch),
+         {:ok, refreshed} <- Config.settings_for_repo(repo_key) do
+      {refreshed, result}
+    else
+      {:error, reason} -> {settings, {:error, reason}}
+    end
+  end
+
+  defp log_selection(issue, sha, selection, settings, workflow_refresh) do
+    {decision, selected} =
+      case selection do
+        {:run, playbooks} -> {"run", Enum.map(playbooks, & &1.kind)}
+        {verdict, reason} -> {"#{verdict} reason=#{inspect(reason)}", []}
+      end
+
+    available = Enum.map(Selection.playbooks(settings.auto_review, dev_server?: dev_server?(settings)), & &1.kind)
+    untriggered = for kind <- available, kind not in selected, do: {kind, "not triggered"}
+    not_selected = untriggered ++ Selection.unavailable(settings.auto_review, dev_server?: dev_server?(settings))
+
+    Logger.info(
+      "QA selection issue_id=#{issue.id} issue_identifier=#{issue.identifier} sha=#{sha} decision=#{decision} " <>
+        "playbooks=#{Enum.join(selected, ",")} not_selected=#{inspect(Enum.map_join(not_selected, "; ", fn {kind, why} -> "#{kind}: #{why}" end))} " <>
+        "workflow_refresh=#{inspect(workflow_refresh)}"
+    )
+  end
+
+  defp dev_server?(settings), do: Verification.dev_server_configured?(settings)
+
   defp select(issue, record, sha, settings, opts) do
     config = settings.auto_review
 
@@ -320,7 +360,7 @@ defmodule SymphonyElixir.AutoReview do
       {:skip, "QA passed on an earlier push (`run_on: first_pass`)"}
     else
       case changed_paths(record, sha, opts) do
-        {:ok, paths} -> Selection.decide(issue, paths, config, dev_server?: Verification.dev_server_configured?(settings))
+        {:ok, paths} -> Selection.decide(issue, paths, config, dev_server?: dev_server?(settings))
         {:error, reason} -> {:blocked, "could not list the PR's changed files: #{inspect(reason)}"}
       end
     end

@@ -142,9 +142,14 @@ defmodule SymphonyElixir.AutoReviewQaTest do
       record = put_record()
       Application.put_env(:symphony_elixir, :qa_flow_agent_result, pass_result())
 
-      assert {:auto_review_qa, "issue-qa-flow", :pass, "In Review"} =
-               AutoReview.run_qa(job(record), git: git_with_paths(["lib/symphony_elixir/cli.ex"]), qa_agent: FakeQaAgent)
+      log =
+        capture_log(fn ->
+          assert {:auto_review_qa, "issue-qa-flow", :pass, "In Review"} =
+                   AutoReview.run_qa(job(record), git: git_with_paths(["lib/symphony_elixir/cli.ex"]), qa_agent: FakeQaAgent)
+        end)
 
+      assert log =~ "QA selection issue_id=issue-qa-flow issue_identifier=TP-901 sha=#{@sha} decision=run playbooks=cli not_selected=\"macos_app: needs"
+      assert log =~ "web: needs `verification.dev_server`\" workflow_refresh=:skipped"
       assert_receive {:qa_agent_run, agent_job, _settings}
       assert [%{kind: "cli"}] = agent_job.playbooks
       assert agent_job.token_limit == Config.settings!().agent.max_tokens_per_issue
@@ -257,9 +262,14 @@ defmodule SymphonyElixir.AutoReviewQaTest do
     test "a docs-only PR is skipped straight to In Review without an agent run" do
       record = put_record()
 
-      assert {:auto_review_qa, "issue-qa-flow", :skip, "In Review"} =
-               AutoReview.run_qa(job(record), git: git_with_paths(["README.md", "docs/configuration.md"]), qa_agent: FakeQaAgent)
+      log =
+        capture_log(fn ->
+          assert {:auto_review_qa, "issue-qa-flow", :skip, "In Review"} =
+                   AutoReview.run_qa(job(record), git: git_with_paths(["README.md", "docs/configuration.md"]), qa_agent: FakeQaAgent)
+        end)
 
+      assert log =~ ~s(QA selection issue_id=issue-qa-flow issue_identifier=TP-901 sha=#{@sha} decision=skip reason="the PR only changes docs)
+      assert log =~ ~s(not_selected="cli: not triggered; macos_app: needs)
       refute_receive {:qa_agent_run, _job, _settings}
       assert_receive {:memory_tracker_comment, _issue_id, report}
       assert report =~ "skipped → In Review"
@@ -276,6 +286,20 @@ defmodule SymphonyElixir.AutoReviewQaTest do
       refute_receive {:qa_agent_run, _job, _settings}
       assert_receive {:memory_tracker_comment, _issue_id, report}
       assert report =~ "no QA playbook applies"
+    end
+
+    test "keeps the settings it was started with when the repo's workflow can't be read" do
+      record = put_record(%{repo_key: "removed"})
+      Application.put_env(:symphony_elixir, :qa_flow_agent_result, pass_result())
+      settings = Config.settings!()
+      settings = %{settings | auto_review: %{settings.auto_review | playbooks: %{"cli" => %{"paths" => ["scripts/**"]}}}}
+
+      job = job(record, %{settings: settings})
+      opts = [git: git_with_paths(["scripts/release"]), qa_agent: FakeQaAgent]
+      log = capture_log(fn -> assert {:auto_review_qa, _id, :pass, "In Review"} = AutoReview.run_qa(job, opts) end)
+
+      assert_receive {:qa_agent_run, %{playbooks: [%{kind: "cli", paths: ["scripts/**"]}]}, ^settings}
+      assert log =~ ~s(workflow_refresh={:error, {:unknown_repo_key, "removed"}})
     end
 
     test "run_on first_pass skips QA once a push has passed" do
