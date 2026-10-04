@@ -47,6 +47,7 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.{Issue, TransientRetry}
   alias SymphonyElixir.QaAgent.{Report, Selection}
+  alias SymphonyElixir.Repo.Fetcher
 
   @review_state "In Review"
   @gap_state "Todo"
@@ -140,7 +141,7 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
   end
 
   defp base_commit(workspace, branch, git) do
-    with {_output, 0} <- git.(["fetch", "--quiet", "origin", branch], workspace),
+    with {_output, 0} <- Fetcher.fetch(workspace, fn -> git.(["fetch", "--quiet", "origin", branch], workspace) end),
          {sha, 0} <- git.(["rev-parse", "--verify", "refs/remotes/origin/#{branch}^{commit}"], workspace) do
       {:ok, String.trim(sha)}
     else

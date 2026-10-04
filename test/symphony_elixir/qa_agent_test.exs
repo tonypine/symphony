@@ -216,6 +216,9 @@ defmodule SymphonyElixir.QaAgentTest do
         {["cat-file" | _rest], %{cat_file: result}} ->
           result
 
+        {["fetch" | _rest], %{fetch: fetch}} when is_function(fetch, 0) ->
+          fetch.()
+
         {["fetch" | _rest], %{fetch: result}} ->
           result
 
@@ -1185,6 +1188,19 @@ defmodule SymphonyElixir.QaAgentTest do
                QaAgent.run(job(%{token_limit: 1_000}), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession)
 
       assert_receive {:qa_session_stopped, _session}
+    end
+
+    test "runs the commit fetch once more after cannot lock ref" do
+      {:ok, fetches} = Agent.start_link(fn -> [{"error: cannot lock ref 'refs/remotes/origin/main': is at 784f59f4 but expected a2d3de89\n", 1}, {"fatal: no such ref", 128}] end)
+      fetch = fn -> Agent.get_and_update(fetches, fn [result | rest] -> {result, rest} end) end
+      git = fake_git(%{cat_file: {"missing", 1}, fetch: fetch})
+
+      assert {:error, {:qa_commit_unavailable, @sha, 128, "fatal: no such ref"}, _tokens} =
+               QaAgent.run(job(), Config.settings!(), git: git, qa_agent_module: FakeSession)
+
+      assert Agent.get(fetches, & &1) == []
+      assert_received {:git, ["fetch", "--quiet", "origin", @sha], _workspace}
+      assert_received {:git, ["fetch", "--quiet", "origin", @sha], _workspace}
     end
 
     test "fetches a missing commit and reports worktree failures" do

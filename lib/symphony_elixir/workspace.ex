@@ -378,7 +378,7 @@ defmodule SymphonyElixir.Workspace do
 
   defp remote_fetch_before_dispatch_command(settings) do
     if settings.workspace.fetch_before_dispatch do
-      "git -C \"$repo\" fetch origin"
+      Fetcher.remote_fetch_origin_script()
     end
   end
 

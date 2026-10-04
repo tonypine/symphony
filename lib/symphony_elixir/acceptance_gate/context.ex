@@ -33,6 +33,7 @@ defmodule SymphonyElixir.AcceptanceGate.Context do
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.GitHub.PullRequest
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.Repo.Fetcher
 
   @worktree_dir ".acceptance-gate"
   @max_diff_bytes 120_000
@@ -127,7 +128,7 @@ defmodule SymphonyElixir.AcceptanceGate.Context do
   end
 
   defp fetch_base(workspace, base, git) do
-    with {:ok, _output} <- run(git, ["fetch", "--quiet", "origin", "+refs/heads/#{base}:refs/remotes/origin/#{base}"], workspace),
+    with {:ok, _output} <- run(&fetch(git, &1, &2), ["fetch", "--quiet", "origin", "+refs/heads/#{base}:refs/remotes/origin/#{base}"], workspace),
          {:ok, base_sha} <- run(git, ["rev-parse", "--verify", "--quiet", "refs/remotes/origin/#{base}^{commit}"], workspace) do
       {:ok, String.trim(base_sha)}
     end
@@ -135,7 +136,7 @@ defmodule SymphonyElixir.AcceptanceGate.Context do
 
   defp ensure_commit(workspace, sha, git) do
     with {_output, status} when status != 0 <- git.(["cat-file", "-e", sha <> "^{commit}"], workspace),
-         {output, status} when status != 0 <- git.(["fetch", "--quiet", "origin", sha], workspace) do
+         {output, status} when status != 0 <- fetch(git, ["fetch", "--quiet", "origin", sha], workspace) do
       {:error, {:commit_unavailable, sha, status, String.trim(output)}}
     else
       {_output, 0} -> :ok
@@ -412,6 +413,10 @@ defmodule SymphonyElixir.AcceptanceGate.Context do
       {output, status} -> {:error, {:git_failed, git_command(args), status, String.trim(output)}}
     end
   end
+
+  # Under the per-repo fetch lock: the workspace shares its `.git` with the
+  # source checkout and every other worktree of it.
+  defp fetch(git, args, cwd), do: Fetcher.fetch(cwd, fn -> git.(args, cwd) end)
 
   defp git_command(args), do: Enum.find(args, &(not String.starts_with?(&1, "-") and not String.contains?(&1, "=")))
 
