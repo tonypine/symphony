@@ -1,28 +1,37 @@
 \e[1m╭─ SYMPHONY STATUS\e[0m
 \e[1m│ Dispatch: \e[0m\e[32mactive\e[0m
-\e[1m│ Agents: \e[0m\e[32m0\e[0m\e[90m/\e[0m\e[90m10\e[0m\e[90m · forced \e[0m\e[33m0\e[0m\e[90m/\e[0m\e[90m1\e[0m
-\e[1m│ Throughput: \e[0m\e[36m0 tps\e[0m
-\e[1m│ Runtime: \e[0m\e[35m45m 0s\e[0m
-\e[1m│ Tokens: \e[0m\e[33mnew 18,000\e[0m\e[90m | \e[0m\e[33mcached 0\e[0m\e[90m | \e[0m\e[33mcreated 0\e[0m\e[90m | \e[0m\e[33mout 2,200\e[0m
+\e[1m│ Agents: \e[0m\e[32m2\e[0m\e[90m/\e[0m\e[90m10\e[0m\e[90m · forced \e[0m\e[33m4\e[0m\e[90m/\e[0m\e[90m1\e[0m
+\e[1m│ Throughput: \e[0m\e[36m3 tps\e[0m
+\e[1m│ Runtime: \e[0m\e[35m10m 0s\e[0m
+\e[1m│ Tokens: \e[0m\e[33mnew 1,000\e[0m\e[90m | \e[0m\e[33mcached 0\e[0m\e[90m | \e[0m\e[33mcreated 0\e[0m\e[90m | \e[0m\e[33mout 200\e[0m
 \e[1m│ Rate Limits: \e[0m\e[90munavailable\e[0m
 \e[1m│ Repos: \e[0m\e[36mdefault\e[0m
 \e[1m│ Next refresh: \e[0m\e[90mn/a\e[0m
+\e[1m├─ Forced\e[0m
+│
+│   \e[90mID       PHASE                WAITING ON               FORCED FOR\e[0m
+│ ⚡\e[36mMT-F1   \e[0m \e[35mimplementation      \e[0m \e[32mrunning                 \e[0m \e[90m2h 3m\e[0m
+│ ⚡\e[36mMT-F2   \e[0m \e[35mimplementation      \e[0m \e[33mblocker MT-9, MT-10     \e[0m \e[90m5m\e[0m
+│ ⚡\e[36mMT-F3   \e[0m \e[35mwaiting for a human \e[0m \e[33mhuman                   \e[0m \e[90m3d 3h\e[0m \e[31mstale\e[0m
+│ ⚡\e[36mMT-EPIC \e[0m \e[35mCI fix              \e[0m \e[33mslot                    \e[0m \e[90m42s\e[0m\e[90m → MT-P1\e[0m
+│
 \e[1m├─ Running\e[0m
 │
 │   \e[90mID       STAGE          PID      AGE / TURN   TOKENS     SESSION        EVENT                                  \e[0m
 │   \e[90m───────────────────────────────────────────────────────────────────────────────────────────────────────────────\e[0m
-│  \e[90mNo active agents\e[0m
+│ \e[34m●\e[0m \e[36mMT-2    \e[0m \e[34mIn Progress   \e[0m \e[33m4242    \e[0m \e[35m0m 0s / 1   \e[0m \e[33m         0\e[0m \e[36mthre...567890 \e[0m \e[34magent message streaming: reading the...\e[0m
+│ ⚡\e[36mMT-F1   \e[0m \e[34mIn Progress   \e[0m \e[33m4242    \e[0m \e[35m0m 0s / 1   \e[0m \e[33m         0\e[0m \e[36mthre...567890 \e[0m \e[34magent message streaming: writing the...\e[0m
 │
 \e[1m├─ Watching\e[0m
 │
 │   \e[90mID       STATE          LAST RUN     LINEAR URL                                                            \e[0m
 │   \e[90m───────────────────────────────────────────────────────────────────────────────────────────────────────────\e[0m
-│ \e[34m◌\e[0m \e[36mMT-902  \e[0m \e[33mHuman Review  \e[0m \e[35m45m ago     \e[0m \e[36mhttps://linear.app/example/issue/MT-902                               \e[0m
-│ \e[34m◌\e[0m \e[36mMT-901  \e[0m \e[33mIn Review     \e[0m \e[35m2h ago      \e[0m \e[36mhttps://linear.app/example/issue/MT-901                               \e[0m
+│  \e[90mNo watched issues\e[0m
 │
 \e[1m├─ Backoff queue\e[0m
 │
-│  \e[90mNo queued retries\e[0m
+│  \e[33m↻\e[0m \e[31mMT-F4\e[0m ⚡ \e[33mattempt=2\e[0m\e[2m in \e[0m\e[36m4.000s\e[0m \e[2merror=worker crashed\e[0m
+│
 \e[1m├─ Awaiting clarification\e[0m
 │
 │  \e[90mNo issues awaiting clarification\e[0m
