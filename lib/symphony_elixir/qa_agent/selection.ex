@@ -21,7 +21,11 @@ defmodule SymphonyElixir.QaAgent.Selection do
   `qa_*` tools of `SymphonyElixir.QaDriver` build and launch. The built-in `web`
   playbook is on only when `verification.dev_server` is configured
   (`dev_server?: true`), since its pass drives that server in a browser; its
-  optional `browser_mcp` replaces the default Playwright MCP server.
+  optional `browser_mcp` replaces the default Playwright MCP server. The built-in
+  `android_app` playbook is on only when its config names the `build` command the
+  QA agent runs in its sandbox, the `apk_path` it writes and the app's
+  `application_ids`, and `auto_review.android.avd` names the emulator that the
+  host-side `qa_android_*` tools of `SymphonyElixir.QaAndroid.Driver` drive.
   """
 
   alias SymphonyElixir.Linear.Issue
@@ -43,6 +47,8 @@ defmodule SymphonyElixir.QaAgent.Selection do
     **/tests/**
     spec/**
     **/__tests__/**
+    **/src/test/**
+    **/src/androidTest/**
     **/*_test.exs
     **/*_test.go
     **/*.test.*
@@ -51,7 +57,7 @@ defmodule SymphonyElixir.QaAgent.Selection do
   )
 
   @source_root Path.expand(Path.join([__DIR__, "..", "..", "..", "priv", "qa_playbooks"]))
-  @built_in_kinds ~w(cli macos_app web)
+  @built_in_kinds ~w(cli macos_app android_app web)
 
   for kind <- @built_in_kinds do
     @external_resource Path.join(@source_root, kind <> ".md")
@@ -64,6 +70,7 @@ defmodule SymphonyElixir.QaAgent.Selection do
   @built_in_paths %{
     "cli" => ["bin/**", "lib/symphony_elixir/cli.ex", "lib/mix/tasks/**"],
     "macos_app" => ["**/*.swift", "**/Info.plist", "**/*.xib", "**/*.storyboard", "**/*.xcassets/**"],
+    "android_app" => ["**/*.kt", "**/*.java", "**/AndroidManifest.xml", "**/src/main/res/**", "**/*.gradle.kts", "**/*.gradle"],
     "web" => [
       "lib/*_web/**",
       "lib/*_web.ex",
@@ -81,7 +88,7 @@ defmodule SymphonyElixir.QaAgent.Selection do
   }
 
   # Playbooks that need host-side settings before they can run.
-  @required_settings %{"macos_app" => ["build", "app"]}
+  @required_settings %{"macos_app" => ["build", "app"], "android_app" => ["build", "apk_path"]}
 
   # Playbooks the ticket's `## User walkthrough` section selects.
   @walkthrough_kinds ["cli"]
@@ -93,6 +100,8 @@ defmodule SymphonyElixir.QaAgent.Selection do
           optional(:build) => String.t(),
           optional(:app) => String.t(),
           optional(:build_timeout_ms) => pos_integer() | nil,
+          optional(:apk_path) => String.t(),
+          optional(:application_ids) => [String.t()],
           optional(:browser_mcp) => map() | nil
         }
   @type decision :: {:run, [playbook()]} | {:skip, String.t()}
@@ -100,7 +109,7 @@ defmodule SymphonyElixir.QaAgent.Selection do
   @doc """
   Selects playbooks for `issue` given the PR's changed paths and `auto_review` config.
   `dev_server?: true` says `verification.dev_server` is configured, which the `web`
-  playbook needs.
+  playbook needs; the `android_app` playbook reads `auto_review.android.avd`.
   """
   @spec decide(Issue.t(), [String.t()], map(), keyword()) :: decision()
   def decide(%Issue{} = issue, changed_paths, auto_review, opts \\ []) when is_list(changed_paths) do
@@ -149,7 +158,7 @@ defmodule SymphonyElixir.QaAgent.Selection do
   @doc "The enabled playbooks: built-ins with config overrides, plus config-defined kinds."
   @spec playbooks(map(), keyword()) :: [playbook()]
   def playbooks(auto_review, opts \\ []) do
-    dev_server? = Keyword.get(opts, :dev_server?, false)
+    host = %{dev_server?: Keyword.get(opts, :dev_server?, false), android_avd?: android_avd?(auto_review)}
     overrides = stringify_keys(Map.get(auto_review, :playbooks) || %{})
 
     custom_kinds =
@@ -159,28 +168,46 @@ defmodule SymphonyElixir.QaAgent.Selection do
       |> Enum.sort()
 
     (@built_in_kinds ++ custom_kinds)
-    |> Enum.flat_map(&build_playbook(&1, Map.get(overrides, &1), dev_server?))
+    |> Enum.flat_map(&build_playbook(&1, Map.get(overrides, &1), host))
   end
 
-  defp build_playbook(kind, override, dev_server?) do
+  defp android_avd?(auto_review) do
+    case Map.get(auto_review, :android) do
+      %{avd: avd} -> string_value(avd) != nil
+      _unset -> false
+    end
+  end
+
+  defp build_playbook(kind, override, host) do
     override = if is_map(override), do: stringify_keys(override), else: %{}
     prompt = string_value(Map.get(override, "prompt")) || Map.get(@built_in_prompts, kind)
     paths = string_list(Map.get(override, "paths")) || Map.get(@built_in_paths, kind, [])
 
     cond do
       Map.get(override, "enabled") == false or is_nil(prompt) -> []
-      not required_settings?(kind, override, dev_server?) -> []
+      not required_settings?(kind, override, host) -> []
       true -> [put_host_settings(%{kind: kind, paths: paths, prompt: prompt}, kind, override)]
     end
   end
 
   # The `web` playbook drives the verification dev server, so it needs one configured.
-  defp required_settings?("web", _override, dev_server?), do: dev_server?
+  defp required_settings?("web", _override, host), do: host.dev_server?
 
-  defp required_settings?(kind, override, _dev_server?) do
+  # The `android_app` playbook also needs the app's IDs and an emulator to run it on.
+  defp required_settings?("android_app", override, host) do
+    host.android_avd? and application_ids(override) != [] and named_settings?("android_app", override)
+  end
+
+  defp required_settings?(kind, override, _host), do: named_settings?(kind, override)
+
+  defp named_settings?(kind, override) do
     @required_settings
     |> Map.get(kind, [])
     |> Enum.all?(&string_value(Map.get(override, &1)))
+  end
+
+  defp application_ids(override) do
+    override |> Map.get("application_ids") |> string_list() |> List.wrap() |> Enum.filter(&string_value/1)
   end
 
   defp put_host_settings(playbook, "macos_app", override) do
@@ -190,6 +217,14 @@ defmodule SymphonyElixir.QaAgent.Selection do
       build: Map.fetch!(override, "build"),
       app: Map.fetch!(override, "app"),
       build_timeout_ms: if(is_integer(timeout) and timeout > 0, do: timeout)
+    })
+  end
+
+  defp put_host_settings(playbook, "android_app", override) do
+    Map.merge(playbook, %{
+      build: Map.fetch!(override, "build"),
+      apk_path: Map.fetch!(override, "apk_path"),
+      application_ids: application_ids(override)
     })
   end
 

@@ -343,6 +343,67 @@ defmodule SymphonyElixir.ConfigSplitTest do
     assert {:skip, _reason} = Selection.decide(issue, ["app/Main.kt"], other_settings.auto_review)
   end
 
+  test "an Android repo's android_app playbook runs on app source changes only with an AVD on the host", %{root: root} do
+    android_repo =
+      write_repo!(root, "android", """
+      ---
+      auto_review:
+        playbooks:
+          android_app:
+            build: ./gradlew :app:assembleDebug
+            apk_path: app/build/outputs/apk/debug/app-debug.apk
+            application_ids: ["com.example.app"]
+      ---
+      Android prompt
+      """)
+
+    other_repo = write_repo!(root, "other", "Other prompt\n")
+
+    symphony = fn android ->
+      write_symphony_text!(root, """
+      issues:
+        provider: memory
+      agent:
+        runtime: codex
+        command: codex app-server
+      auto_review:
+        enabled: true
+      #{android}
+      repositories:
+        - key: android
+          workflow: #{Path.join(android_repo.path, "WORKFLOW.md")}
+          route:
+            team: Test
+          default: true
+        - key: other
+          workflow: #{Path.join(other_repo.path, "WORKFLOW.md")}
+          route:
+            team: Test
+            labels:
+              - other
+      """)
+
+      SymphonyElixir.Workflow.set_symphony_file_path(Path.join(root, "symphony.yml"))
+      Cache.clear()
+    end
+
+    issue = %Issue{id: "issue-1", identifier: "TP-1", title: "Change", labels: []}
+    kotlin = ["app/src/main/java/com/example/app/MainActivity.kt"]
+
+    symphony.("  android:\n    avd: Pixel_3a_API_34")
+    android_settings = Config.settings_for_repo!("android")
+
+    assert {:run, [%{kind: "android_app", build: "./gradlew :app:assembleDebug", application_ids: ["com.example.app"]}]} =
+             Selection.decide(issue, kotlin, android_settings.auto_review)
+
+    assert {:skip, reason} = Selection.decide(issue, ["app/src/test/java/com/example/app/MainActivityTest.kt"], android_settings.auto_review)
+    assert reason =~ "only changes docs, tests"
+    assert {:skip, _reason} = Selection.decide(issue, kotlin, Config.settings_for_repo!("other").auto_review)
+
+    symphony.("")
+    assert {:skip, _reason} = Selection.decide(issue, kotlin, Config.settings_for_repo!("android").auto_review)
+  end
+
   test "repo workflow auto_review accepts only playbooks maps", %{root: root} do
     for {front_matter, expected} <- [
           {"auto_review:\n  enabled: true", ~r/operator-level key `auto_review.enabled`.*only `auto_review.playbooks`.*symphony.yml/},
