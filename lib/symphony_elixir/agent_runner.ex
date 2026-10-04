@@ -1570,12 +1570,15 @@ defmodule SymphonyElixir.AgentRunner do
   # a new head to that PR and CI on that head is running or green, the CI poller takes it from
   # there: in the post-PR state it starts QA on green, and re-runs a flaky failure or dispatches a
   # fix run on red. So the run moves to that state instead of turning while CI runs until the idle
-  # check parks it. Gives the CI action (`:pending` or `:success`), or nil for a head with no checks
-  # yet, a red head or another PR head. `Rework` and `Merging` keep their own rules
-  # (`rework_finished?/2`, `merging_ci_pending?/2`).
+  # check parks it. A head the pre-push reviewer applies to but has not passed keeps the run going,
+  # as the post-PR stop does (`head_reviewed?/2`), so the next turn reviews it. Gives the CI action
+  # (`:pending` or `:success`), or nil for a head with no checks yet, a red head, another PR head or
+  # an unreviewed head. `Rework` and `Merging` keep their own rules (`rework_finished?/2`,
+  # `merging_ci_pending?/2`).
   defp pushed_head_handoff_ci_action(%Issue{} = issue, %{progress: %{head: head, start_head: start_head}} = run_context)
        when is_binary(head) and is_binary(start_head) do
-    if head != start_head and !rework_state?(issue.state) and !merging_state?(issue.state) do
+    if head != start_head and !rework_state?(issue.state) and !merging_state?(issue.state) and
+         head_reviewed?(head, run_context) do
       case pushed_head_ci_action(issue, run_context) do
         action when action in [:pending, :success] -> action
         _action -> nil

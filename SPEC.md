@@ -1846,7 +1846,8 @@ Important nuance:
   or conflict signal that started the run is still pending. Such a signal is only cleared once the
   run ends, so without this a fix run on an open PR never ends on its own. The CI poller then owns
   that head: QA on green, a flaky re-run or a CI-fix run on red. A head with no checks reported yet
-  or a failed check does not end the run this way.
+  or a failed check does not end the run this way, nor does a head the pre-push reviewer applies to
+  and has not yet passed: the run continues so the reviewer runs on it first.
 - A run on an active issue with an attached PR and no pending review, CI, QA or conflict signal
   (outside `Rework` and `Merging`) MUST end after a turn only once its work is on the PR: the
   workspace `HEAD` is the PR head and, when the pre-push reviewer applies to the run, that head is
@@ -1857,7 +1858,8 @@ Important nuance:
   change, no newly attached PR and no reviewer-agent verdict MUST end the run, move the issue to
   `Backlog` and post a comment saying why. This does not apply in `Merging`, nor while the attached
   PR's head is the workspace `HEAD` and that head has checks still pending; such a run (in
-  `Rework`, or one that started on that head) keeps turning up to `agent.max_turns`.
+  `Rework`, one that started on that head, or one whose pushed head awaits the pre-push reviewer)
+  keeps turning up to `agent.max_turns`.
 - The first turn SHOULD use the full rendered task prompt. Implementations MAY use a compact
   bootstrap prompt when the target agent transport cannot safely carry the full rendered prompt as a
   single startup message, provided the compact prompt preserves hard security rules and directs the
