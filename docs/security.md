@@ -67,6 +67,14 @@ those paths, or a symlink's target, itself. The refusal binds only those tools: 
 the agent's shell skips it (Claude's settings deny `git push`, but only as a command pattern), and
 the tools then trust what that push put on the branch.
 
+The `protected-paths` CI workflow covers that gap. On a pull request from an `auto/*` branch it
+runs `mix protected_paths.check`, which fails when the pull request's own commits since the
+merge-base with the base branch change one of those paths or a symlink's target. Changes merged
+from the base branch pass. It runs on `pull_request_target`, so the workflow and the check come
+from the base branch and the pull request can't change them. A person who made such a change on
+purpose waives it with the `protected-paths-approved` label, or with an approving review of the
+current head commit (bots don't count).
+
 Every local agent may also write one per-user cache folder, `~/Library/Caches/symphony/agent` on
 macOS, which holds its Hex home, its `elixir_make` cache and Dialyxir's core PLTs (see
 `permissions.filesystem.allow_write_paths` in [configuration](configuration.md)). Runs share it,
