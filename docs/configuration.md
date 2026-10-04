@@ -1059,7 +1059,27 @@ auto_review:
 | `idle_timeout_ms` | `600000` (10 minutes) | How long an idle emulator stays up. |
 
 A non-string `avd` or `sdk_root`, or a timeout that is not a positive integer, fails `symphony
-check`. Nothing uses these settings yet; the Android QA tools come in a later release.
+check`.
+
+Symphony runs the emulator on the host, because the QA agent's sandbox cannot (it needs the
+hypervisor, Mach ports, adb sockets and a lot of memory). The agent sandbox does not change.
+
+- At most one emulator runs. A QA pass that needs it while another holds it waits its turn, and
+  gives up with a clear error after 30 minutes.
+- It boots `avd` with `-no-window -no-audio -no-boot-anim -read-only -no-snapshot-save`, so QA
+  never changes the AVD, and waits up to `boot_timeout_ms` for it to finish booting. An unset
+  `avd`, a missing `emulator/emulator` or `platform-tools/adb` under `sdk_root`, an AVD the
+  emulator does not list and a boot timeout each fail with their own message.
+- Symphony starts its own adb server on port `15037` and the emulator on console port `5584`
+  (serial `emulator-5584`), and sends every adb call there. Your own adb server (port `5037`),
+  emulators and phones are left alone.
+- It stops `idle_timeout_ms` after the last QA pass gives it back (or exits), and when Symphony
+  stops. An emulator that crashes is booted again by the next QA pass.
+- The emulator's and adb server's process ids are recorded in
+  `<state root>/qa-android/emulator-processes.json`. If Symphony crashes, its next start stops
+  those processes, only when they still run with the same start time.
+
+The Android QA tools that use the emulator come in a later release.
 
 #### Web app QA
 

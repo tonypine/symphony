@@ -184,6 +184,49 @@ defmodule SymphonyElixir.LeftoverProcessesTest do
     end
   end
 
+  describe "stop_running/2" do
+    test "stops only the recorded processes still running with the same start time" do
+      emulator = entry(61, command: "/sdk/emulator/emulator -avd Pixel")
+      adb = entry(62, command: "adb -L tcp:15037 fork-server server")
+      reused = entry(63, command: "sleep 600")
+      reused_now = %{reused | start_time: "Sat Oct  3 09:00:00 2026", command: "vim"}
+      unrelated = entry(64, command: "sleep 600")
+
+      log =
+        capture_log(fn ->
+          stopped =
+            LeftoverProcesses.stop_running([emulator, adb, reused, entry(65, command: "gone")],
+              table: table([{:ok, [emulator, adb, reused_now, unrelated]}, {:ok, []}]),
+              signal: recording_signal(),
+              log_context: "qa_android_emulator"
+            )
+
+          assert Enum.map(stopped, & &1.pid) == [61, 62]
+        end)
+
+      assert_received {:signal, 61, "TERM"}
+      assert_received {:signal, 62, "TERM"}
+      refute_received {:signal, _pid, _signal}
+      assert log =~ "Stopping leftover process qa_android_emulator pid=61"
+    end
+
+    test "logs and signals nothing when the process table can't be read" do
+      log =
+        capture_log(fn ->
+          denied = fn -> {:error, :denied} end
+          assert [] = LeftoverProcesses.stop_running([entry(71, [])], table: denied, signal: recording_signal())
+        end)
+
+      assert log =~ "Could not read the process table to stop recorded processes pids=71: :denied"
+      refute_received {:signal, _pid, _signal}
+    end
+
+    test "reads the configured process table by default" do
+      # The test helper configures an empty process table.
+      assert [] = LeftoverProcesses.stop_running([entry(81, [])])
+    end
+  end
+
   describe "Table" do
     test "parses ps output with its five-word start time" do
       output = """

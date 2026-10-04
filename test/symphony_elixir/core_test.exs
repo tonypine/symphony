@@ -603,6 +603,7 @@ defmodule SymphonyElixir.CoreTest do
     refute SymphonyElixir.RunStore in nested_children
     refute SymphonyElixir.HttpServer in nested_children
     refute SymphonyElixir.StatusDashboard in nested_children
+    refute SymphonyElixir.QaAndroid.Emulator in nested_children
     assert Enum.any?(nested_children, &match?(%{id: {SymphonyElixir.Repo.Supervisor, "default"}}, &1))
 
     test_children =
@@ -612,6 +613,7 @@ defmodule SymphonyElixir.CoreTest do
       })
 
     assert SymphonyElixir.Orchestrator in test_children
+    assert SymphonyElixir.QaAndroid.Emulator in test_children
   end
 
   test "application starts PR review poller only in polling mode" do

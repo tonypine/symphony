@@ -60,6 +60,31 @@ defmodule SymphonyElixir.LeftoverProcesses do
   end
 
   @doc """
+  Stops the processes in `entries` that still run as the same process (same pid
+  and start time), such as processes recorded by an earlier Symphony, and
+  returns the ones it signalled. A pid reused by another process is left alone.
+  Takes the options of `stop_under/2`.
+  """
+  @spec stop_running([entry()], keyword()) :: [entry()]
+  def stop_running(entries, opts \\ []) when is_list(entries) do
+    table = Keyword.get_lazy(opts, :table, &default_table/0)
+    context = log_context(Keyword.get(opts, :log_context))
+    recorded = MapSet.new(entries, &{&1.pid, &1.start_time})
+
+    case table.() do
+      {:ok, current} ->
+        targets = Enum.filter(current, &MapSet.member?(recorded, {&1.pid, &1.start_time}))
+        stop(targets, table, Keyword.get(opts, :signal, &signal/2), Keyword.get(opts, :grace_ms, @default_grace_ms), context)
+        targets
+
+      {:error, reason} ->
+        pids = Enum.map_join(entries, ",", & &1.pid)
+        Logger.warning("Could not read the process table to stop recorded processes#{context} pids=#{pids}: #{inspect(reason)}")
+        []
+    end
+  end
+
+  @doc """
   The Claude Code task folders of `workspace` under `tmp_dir`: Claude Code keeps a
   session's background task output under
   `<tmp_dir>/claude-<uid>/<workspace path with every non-alphanumeric as ->/`.
@@ -181,7 +206,9 @@ defmodule SymphonyElixir.LeftoverProcesses do
   @spec own_pid() :: pos_integer()
   def own_pid, do: String.to_integer(System.pid())
 
-  defp signal(pid, signal) do
+  @doc "Sends `signal` (`TERM`, `KILL`) to `pid` with `kill`."
+  @spec signal(pos_integer(), String.t()) :: {String.t(), non_neg_integer()}
+  def signal(pid, signal) do
     System.cmd(System.find_executable("kill") || "/bin/kill", ["-#{signal}", Integer.to_string(pid)], stderr_to_stdout: true)
   end
 end
