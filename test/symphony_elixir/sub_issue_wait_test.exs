@@ -4,7 +4,7 @@ defmodule SymphonyElixir.SubIssueWaitTest do
   import ExUnit.CaptureLog
 
   alias SymphonyElixir.Config.{Schema, SystemSchema}
-  alias SymphonyElixir.SubIssueWait
+  alias SymphonyElixir.{RunStore, SubIssueWait}
 
   @waiting "Waiting on sub-tickets"
 
@@ -211,6 +211,7 @@ defmodule SymphonyElixir.SubIssueWaitTest do
       plain = %Issue{id: "plain", identifier: "MT-1305", title: "Work", state: "In Progress", sub_issues: open}
 
       state = %{state | running: %{"parent-running" => %{}}, claimed: MapSet.new(["parent-claimed"])}
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [parent, running, claimed, plain])
 
       log =
         capture_log([level: :info], fn ->
@@ -223,6 +224,8 @@ defmodule SymphonyElixir.SubIssueWaitTest do
       refute_received {:memory_tracker_state_update, _issue_id, _state}
       assert log =~ "Moved breakdown parent to Waiting on sub-tickets while its sub-issues are open"
       assert parked_state.parked_parents == MapSet.new(["parent-park"])
+      # Recorded as Symphony's own move, so a review never reads it as a person's approval.
+      assert %DateTime{} = RunStore.get_own_state_move("parent-park")
 
       # The cached candidate still shows it In Progress until the next repo fetch; it is not moved again.
       assert ^parked_state = Orchestrator.park_breakdown_parents_for_test([parent], parked_state)
@@ -243,6 +246,48 @@ defmodule SymphonyElixir.SubIssueWaitTest do
 
       assert log =~ "Failed to move breakdown parent to Waiting on sub-tickets"
       assert log =~ ":boom"
+    end
+
+    test "leaves a parent its breakdown run moved to In Review there, with its sub-tickets in Backlog" do
+      state = orchestrator_state()
+      backlog = [%{id: "child-1", identifier: "MOT-14", state: "Backlog"}, %{id: "child-2", identifier: "MOT-5", state: "Backlog"}]
+      cached = %Issue{id: "parent-review", identifier: "MOT-4", title: "Parent", state: "In Progress", labels: ["breakdown"], sub_issues: backlog}
+      in_review = %{cached | state: "In Review"}
+
+      # The run has ended and released its claim, but the poll cache still shows the parent In Progress.
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [in_review])
+
+      state = Orchestrator.park_breakdown_parents_for_test([cached], state)
+      assert state.parked_parents == MapSet.new()
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+      assert RunStore.get_own_state_move("parent-review") == nil
+
+      # A parent gone from the fresh read is not moved either.
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [])
+      assert Orchestrator.park_breakdown_parents_for_test([cached], state).parked_parents == MapSet.new()
+
+      # The next poll sees it In Review: it waits for a human's review, and nothing is promoted.
+      reviewed = Orchestrator.review_breakdown_parents_for_test([in_review], state)
+      assert reviewed.breakdown_reviews == %{}
+      refute_received {:memory_tracker_breakdown_history, _issue_id}
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+    end
+
+    test "parks nothing when the fresh read fails, and tries again on the next poll" do
+      state = orchestrator_state()
+      open = [%{id: "child-1", identifier: "MT-1602", state: "Backlog"}]
+      parent = %Issue{id: "parent-retry", identifier: "MT-1601", title: "Parent", state: "In Progress", labels: ["breakdown"], sub_issues: open}
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [parent])
+      Application.put_env(:symphony_elixir, :memory_tracker_fetch_issue_states_result, {:error, :timeout})
+
+      log = capture_log(fn -> assert Orchestrator.park_breakdown_parents_for_test([parent], state).parked_parents == MapSet.new() end)
+      assert log =~ "Failed to refresh breakdown parents before parking"
+      assert log =~ ":timeout"
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+
+      Application.delete_env(:symphony_elixir, :memory_tracker_fetch_issue_states_result)
+      assert Orchestrator.park_breakdown_parents_for_test([parent], state).parked_parents == MapSet.new(["parent-retry"])
+      assert_received {:memory_tracker_state_update, "parent-retry", @waiting}
     end
 
     test "keeps today's In Progress behaviour when the state is missing" do

@@ -17,6 +17,7 @@ defmodule SymphonyElixir.AgentRunner do
     DependencyAudit,
     DependencyGate,
     GitHub.PullRequest,
+    LeftoverProcesses,
     Linear.Issue,
     Linear.TransientRetry,
     Linear.Usage,
@@ -172,6 +173,7 @@ defmodule SymphonyElixir.AgentRunner do
               )
 
               stop_remembered_verification_dev_server()
+              stop_leftover_processes(workspace, issue, worker_host, opts)
               Verification.release(verification, "after_run completed")
             end
 
@@ -198,6 +200,29 @@ defmodule SymphonyElixir.AgentRunner do
       pid when is_pid(pid) -> Verification.stop_dev_server(pid)
       _ -> :ok
     end
+  end
+
+  # Stops what the agent left running in its workspace, detached ones included
+  # (see `SymphonyElixir.LeftoverProcesses`). The process table is read on this
+  # host, so a remote worker's processes are left alone.
+  defp stop_leftover_processes(workspace, issue, nil, opts) do
+    leftover_opts = opts |> Keyword.get(:leftover_processes, []) |> Keyword.put(:log_context, issue_context(issue))
+    LeftoverProcesses.stop_under([workspace | claude_task_dirs(workspace, opts)], leftover_opts)
+    :ok
+  end
+
+  defp stop_leftover_processes(_workspace, _issue, _worker_host, _opts), do: :ok
+
+  # Claude Code keeps a session's background task output under
+  # `/tmp/claude-<uid>/<workspace path with every non-alphanumeric as ->/`.
+  defp claude_task_dirs(workspace, opts) do
+    slug = String.replace(workspace, ~r/[^a-zA-Z0-9]/, "-")
+
+    opts
+    |> Keyword.get(:claude_tmp_dir, "/tmp")
+    |> Path.join("claude-*")
+    |> Path.join(slug)
+    |> Path.wildcard()
   end
 
   defp enrich_issue_for_dispatch(issue, opts) do

@@ -1,23 +1,31 @@
 defmodule SymphonyElixir.LeftoverProcesses.Table do
   @moduledoc """
   Reads the process table for `SymphonyElixir.LeftoverProcesses`: each process's
-  pid, start time and command line from `ps`, and its working folder from
-  `/proc/<pid>/cwd` on Linux or `lsof` elsewhere.
+  pid, parent pid, start time, CPU time and command line from `ps`, and its
+  working folder from `/proc/<pid>/cwd` on Linux or `lsof` elsewhere.
   """
 
   alias SymphonyElixir.LeftoverProcesses
 
   @type cmd_fun :: (String.t(), [String.t()], keyword() -> {String.t(), non_neg_integer()})
+  @type ps_entry :: %{
+          pid: pos_integer(),
+          ppid: non_neg_integer(),
+          start_time: String.t(),
+          cpu_time: String.t(),
+          command: String.t()
+        }
 
-  # `lstart` is five words, for example `Sat Oct  3 08:00:00 2026`.
-  @ps_line ~r/^\s*(\d+)\s+(\S+\s+\S+\s+\d+\s+\d+:\d+:\d+\s+\d+)\s+(.*)$/
+  # `lstart` is five words, for example `Sat Oct  3 08:00:00 2026`; `time` is
+  # one, `165:01.23` on macOS or `02:45:01` on Linux.
+  @ps_line ~r/^\s*(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\d+\s+\d+:\d+:\d+\s+\d+)\s+(\S+)\s+(.*)$/
 
   @doc "Every process visible to this user, or an error when `ps` can't list them."
   @spec read(cmd_fun()) :: {:ok, [LeftoverProcesses.entry()]} | {:error, term()}
   def read(cmd \\ &System.cmd/3) do
     ps = System.find_executable("ps") || "/bin/ps"
 
-    case cmd.(ps, ["-A", "-ww", "-o", "pid=,lstart=,args="], stderr_to_stdout: true, env: [{"LC_ALL", "C"}]) do
+    case cmd.(ps, ["-A", "-ww", "-o", "pid=,ppid=,lstart=,time=,args="], stderr_to_stdout: true, env: [{"LC_ALL", "C"}]) do
       {output, 0} ->
         processes = parse_ps(output)
         cwds = cwds(Enum.map(processes, & &1.pid), cmd)
@@ -30,15 +38,23 @@ defmodule SymphonyElixir.LeftoverProcesses.Table do
     exception -> {:error, Exception.message(exception)}
   end
 
-  @doc "Parses `ps -o pid=,lstart=,args=` output."
-  @spec parse_ps(String.t()) :: [%{pid: pos_integer(), start_time: String.t(), command: String.t()}]
+  @doc "Parses `ps -o pid=,ppid=,lstart=,time=,args=` output."
+  @spec parse_ps(String.t()) :: [ps_entry()]
   def parse_ps(output) do
     output
     |> String.split("\n", trim: true)
     |> Enum.flat_map(fn line ->
       case Regex.run(@ps_line, line) do
-        [_line, pid, start_time, command] ->
-          [%{pid: String.to_integer(pid), start_time: String.replace(start_time, ~r/\s+/, " "), command: String.trim(command)}]
+        [_line, pid, ppid, start_time, cpu_time, command] ->
+          [
+            %{
+              pid: String.to_integer(pid),
+              ppid: String.to_integer(ppid),
+              start_time: String.replace(start_time, ~r/\s+/, " "),
+              cpu_time: cpu_time,
+              command: String.trim(command)
+            }
+          ]
 
         nil ->
           []

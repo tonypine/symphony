@@ -70,10 +70,16 @@ defmodule SymphonyElixir.Tracker.Memory do
     maybe_sleep(:memory_tracker_fetch_states_sleep_ms)
     wanted_ids = MapSet.new(issue_ids)
 
-    {:ok,
-     Enum.filter(issue_entries(), fn %Issue{id: id} ->
-       MapSet.member?(wanted_ids, id)
-     end)}
+    case Application.get_env(:symphony_elixir, :memory_tracker_fetch_issue_states_result) do
+      {:error, _reason} = error ->
+        error
+
+      _ ->
+        {:ok,
+         Enum.filter(issue_entries(), fn %Issue{id: id} ->
+           MapSet.member?(wanted_ids, id)
+         end)}
+    end
   end
 
   @spec enrich_issue(Issue.t()) :: {:ok, Issue.t()} | {:error, term()}

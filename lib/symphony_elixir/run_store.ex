@@ -318,6 +318,29 @@ defmodule SymphonyElixir.RunStore do
 
   def delete_rework_base(_repo_key, _issue_id), do: {:error, :invalid_issue_id}
 
+  # When Symphony itself last moved an issue's state in Linear. Symphony and the person reviewing
+  # can share one Linear user, so the issue's history alone cannot tell their moves apart.
+  @spec put_own_state_move(String.t(), DateTime.t()) :: :ok | {:error, term()}
+  def put_own_state_move(issue_id, %DateTime{} = at) when is_binary(issue_id) do
+    with :ok <- ensure_started() do
+      durable_transaction(fn ->
+        :mnesia.write({@totals_table, own_state_move_key(issue_id), at})
+        :ok
+      end)
+    end
+  end
+
+  def put_own_state_move(_issue_id, _at), do: {:error, :invalid_own_state_move}
+
+  @spec get_own_state_move(String.t()) :: DateTime.t() | nil | {:error, term()}
+  def get_own_state_move(issue_id) when is_binary(issue_id) do
+    with :ok <- ensure_started() do
+      transaction(fn -> read_own_state_move(issue_id) end)
+    end
+  end
+
+  def get_own_state_move(_issue_id), do: {:error, :invalid_issue_id}
+
   @spec put_pr_review(map()) :: :ok | {:error, term()}
   def put_pr_review(%{repo_key: repo_key, issue_id: issue_id} = record) when is_binary(issue_id) do
     with {:ok, repo_key} <- normalize_repo_key(repo_key),
@@ -1136,6 +1159,15 @@ defmodule SymphonyElixir.RunStore do
   defp read_rework_base(repo_key, issue_id) do
     case :mnesia.read(@totals_table, rework_base_key(repo_key, issue_id)) do
       [{@totals_table, _key, head}] when is_binary(head) -> head
+      _ -> nil
+    end
+  end
+
+  defp own_state_move_key(issue_id), do: {:own_state_move, issue_id}
+
+  defp read_own_state_move(issue_id) do
+    case :mnesia.read(@totals_table, own_state_move_key(issue_id)) do
+      [{@totals_table, _key, %DateTime{} = at}] -> at
       _ -> nil
     end
   end
