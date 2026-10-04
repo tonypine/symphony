@@ -23,8 +23,8 @@ defmodule SymphonyElixir.QaAgent.Selection do
   (`dev_server?: true`), since its pass drives that server in a browser; its
   optional `browser_mcp` replaces the default Playwright MCP server. The built-in
   `android_app` playbook is on only when its config names the `build` command the
-  QA agent runs in its sandbox, the `apk_path` it writes and the app's
-  `application_ids`, and `auto_review.android.avd` names the emulator that the
+  QA agent runs in its sandbox, the APKs it writes (`apk_paths`, or one
+  `apk_path`) and the apps' `application_ids`, and `auto_review.android.avd` names the emulator that the
   host-side `qa_android_*` tools of `SymphonyElixir.QaAndroid.Driver` drive.
   """
 
@@ -88,7 +88,7 @@ defmodule SymphonyElixir.QaAgent.Selection do
   }
 
   # Playbooks that need host-side settings before they can run.
-  @required_settings %{"macos_app" => ["build", "app"], "android_app" => ["build", "apk_path"]}
+  @required_settings %{"macos_app" => ["build", "app"], "android_app" => ["build"]}
 
   # Playbooks the ticket's `## User walkthrough` section selects.
   @walkthrough_kinds ["cli"]
@@ -100,7 +100,7 @@ defmodule SymphonyElixir.QaAgent.Selection do
           optional(:build) => String.t(),
           optional(:app) => String.t(),
           optional(:build_timeout_ms) => pos_integer() | nil,
-          optional(:apk_path) => String.t(),
+          optional(:apk_paths) => [String.t()],
           optional(:application_ids) => [String.t()],
           optional(:browser_mcp) => map() | nil
         }
@@ -234,12 +234,14 @@ defmodule SymphonyElixir.QaAgent.Selection do
   # The `web` playbook drives the verification dev server, so it needs one configured.
   defp missing_settings("web", _override, host), do: if(host.dev_server?, do: [], else: ["verification.dev_server"])
 
-  # The `android_app` playbook also needs the app's IDs and an emulator to run it on.
+  # The `android_app` playbook also needs an APK, the app's IDs and an emulator to run it on.
   defp missing_settings("android_app", override, host) do
     named = missing_named_settings("android_app", override)
+    # Either key will do; the reason wraps each entry in backticks.
+    apks = if apk_paths(override) == [], do: ["auto_review.playbooks.android_app.apk_path` or `auto_review.playbooks.android_app.apk_paths"], else: []
     ids = if application_ids(override) == [], do: ["auto_review.playbooks.android_app.application_ids"], else: []
     avd = if host.android_avd?, do: [], else: ["auto_review.android.avd"]
-    named ++ ids ++ avd
+    named ++ apks ++ ids ++ avd
   end
 
   defp missing_settings(kind, override, _host), do: missing_named_settings(kind, override)
@@ -250,6 +252,12 @@ defmodule SymphonyElixir.QaAgent.Selection do
 
   defp application_ids(override) do
     override |> Map.get("application_ids") |> string_list() |> List.wrap() |> Enum.filter(&string_value/1)
+  end
+
+  # `apk_path` is a one-item `apk_paths`; a playbook may set both.
+  defp apk_paths(override) do
+    paths = [Map.get(override, "apk_path") | override |> Map.get("apk_paths") |> string_list() |> List.wrap()]
+    paths |> Enum.filter(&string_value/1) |> Enum.uniq()
   end
 
   defp put_host_settings(playbook, "macos_app", override) do
@@ -265,7 +273,7 @@ defmodule SymphonyElixir.QaAgent.Selection do
   defp put_host_settings(playbook, "android_app", override) do
     Map.merge(playbook, %{
       build: Map.fetch!(override, "build"),
-      apk_path: Map.fetch!(override, "apk_path"),
+      apk_paths: apk_paths(override),
       application_ids: application_ids(override)
     })
   end
