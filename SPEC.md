@@ -1370,6 +1370,11 @@ When enabled:
   `max_fix_attempts` failures were sent back. Results are stored per head SHA; a failed move is
   retried on the next poll, and an issue back in `state` on the same SHA after a `fail` counts as
   another failure.
+- Before applying a verdict, Symphony MUST read the issue's state again and the PR's last polled
+  state and head. When the issue left `state` (a human approved or merged it while QA ran), the PR
+  is merged or closed, or the head moved past the tested SHA, the report is still written but the
+  issue is not moved, no result is stored for the SHA, and `QA outcome not applied` is logged with
+  the reason. A state that cannot be read again applies the verdict.
 - Each pass rewrites one `## Symphony QA Report` issue comment (an exception to the
   single-workpad rule, written by Symphony only), records a run with `kind: "qa"`, tokens and
   runtime in the run store, and emits `qa_passed` or `qa_failed`.
@@ -2994,7 +2999,7 @@ Optional client-side tool extension:
 - Current standardized optional tools: scoped Linear tools whose protocol-facing names match
   `^[a-zA-Z0-9_-]+$`, such as `linear_get_current_issue`, `linear_get_comments`, and
   `linear_update_state`, and scoped GitHub tools such as `github_get_pull_request`,
-  `github_fetch_origin`, `github_push_branch`, and `github_merge_pull_request`.
+  `github_fetch_origin`, `github_sync_base`, `github_push_branch`, and `github_merge_pull_request`.
 - If implemented, supported tools SHOULD be advertised to the agent session during startup using the
   protocol mechanism supported by the configured adapter.
 - Unsupported tool names SHOULD still return a failure result using the targeted protocol and
@@ -3105,6 +3110,24 @@ Scoped GitHub tool extension contract:
 - `github_fetch_origin`, if exposed, MUST fetch only the verified `origin`
   remote for the current workspace and MUST NOT accept prompt-supplied refspecs
   or remote names.
+- `github_sync_base`, if exposed, MUST fetch the verified `origin`, then merge
+  only the repository's base branch (the configured `base_branch`, else the
+  remote's `HEAD` branch) into the checked-out workspace branch, after
+  fast-forwarding to that branch's `origin` copy when it is ahead. It runs
+  outside the agent sandbox so the merge can update write-protected workspace
+  paths; it MUST run with repo hooks off, MUST NOT create the merge commit (the
+  agent commits or resolves conflicts in its sandbox), and MUST refuse a branch
+  whose own changes since the merge-base touch a write-protected path.
+- `github_push_branch`, if exposed, MUST refuse a push whose branch changes a
+  write-protected workspace path itself, except files identical to the
+  branch's `origin` copy.
+- For both, a write-protected path includes the files a symlink inside one
+  points at (`.ai/skills/pull -> ../../priv/skills/pull` protects
+  `priv/skills/pull`). Both MUST read the base and branch heads from the remote
+  (`git ls-remote`), not from local remote-tracking refs, which the agent can
+  rewrite.
+- These checks bind only the scoped tools. A `git push` from the agent's shell
+  skips them, and what it pushed then counts as the branch's `origin` copy.
 - `github_merge_pull_request`, if exposed, MUST merge only the current
   workspace branch's pull request, MUST refuse unless the current issue is in
   the human-approved `Merging` state, MUST refuse while any check is failing or

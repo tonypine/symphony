@@ -13,7 +13,9 @@ yet and behaves like `shadow`.
 With `mode` other than `off`, a QA `pass`, `skip` or `blocked` doesn't move the issue to In Review
 straight away. Auto Review asks `SymphonyElixir.AcceptanceGate.Runner` for a gate pass on the PR
 head, and the issue moves on once the gate has a verdict for that SHA. A QA `fail` goes back to
-In Progress as before and never reaches the gate.
+In Progress as before and never reaches the gate. A verdict that comes after the issue left Auto
+Review, its PR merged or closed, or its head moved on is still recorded, but the issue stays where
+it is, as for a late QA pass.
 
 - **The runner.** Like the QA runner, it runs passes in the background, one per issue and at most
   `max_concurrent` at once. A forced ticket goes first. While the gate agent's provider is held by

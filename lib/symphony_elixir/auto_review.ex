@@ -17,7 +17,9 @@ defmodule SymphonyElixir.AutoReview do
   - `pass` and `blocked` go to `In Review` (a `web` pass whose dev server fails its
     health check is `blocked`); `fail` goes back to `In Progress` with the
     findings as continuation context, and to `In Review` once
-    `auto_review.max_fix_attempts` is used up.
+    `auto_review.max_fix_attempts` is used up;
+  - a pass that ends after its issue left Auto Review, its PR merged or closed, or its
+    head moved on writes its report but leaves the issue where it is.
 
   Results are kept per PR head SHA on the CI check record, every pass rewrites the
   `## Symphony QA Report` comment, and each agent run is stored in the run store
@@ -255,16 +257,34 @@ defmodule SymphonyElixir.AutoReview do
   @doc """
   Runs one acceptance gate pass for a job built by Auto Review and applies its verdict. Runs in a
   `SymphonyElixir.AcceptanceGate.Runner` task. An inconclusive pass below the limit leaves the
-  issue in Auto Review, and the next green poll asks for another pass.
+  issue in Auto Review, and the next green poll asks for another pass. A verdict that comes after
+  the issue left Auto Review, or after its PR merged, closed or moved on, is kept but moves nothing.
   """
   @spec run_gate(map(), keyword()) :: tuple()
-  def run_gate(%{issue: issue, record: record, sha: sha} = job, opts) do
+  def run_gate(%{issue: issue, record: record, sha: sha, settings: settings} = job, opts) do
     Usage.put_caller(:auto_review)
 
     case Keyword.get(opts, :acceptance_gate, AcceptanceGate).judge(job, opts) do
-      {:ok, %{verdict: nil}} -> {:gate_inconclusive, issue.id, sha}
-      {:ok, decision} -> apply_gate_verdict(issue, Map.merge(record, %{gate_sha: sha, gate_verdict: decision.verdict}), opts)
+      {:ok, %{verdict: nil}} ->
+        {:gate_inconclusive, issue.id, sha}
+
+      {:ok, decision} ->
+        record = Map.merge(record, %{gate_sha: sha, gate_verdict: decision.verdict})
+
+        case moved_on(issue, record, sha, settings, opts) do
+          nil -> apply_gate_verdict(issue, record, opts)
+          reason -> gate_unapplied(issue, sha, decision.verdict, reason)
+        end
     end
+  end
+
+  defp gate_unapplied(issue, sha, verdict, reason) do
+    Logger.info(
+      "Acceptance gate outcome not applied: #{reason} issue_id=#{issue.id} issue_identifier=#{issue.identifier} " <>
+        "verdict=#{verdict} sha=#{sha}"
+    )
+
+    {:auto_review_gate_not_applied, issue.id, verdict, reason}
   end
 
   # `shadow` (and `enforce` until it is applied) only records the verdict: the issue moves where
@@ -329,7 +349,61 @@ defmodule SymphonyElixir.AutoReview do
         {:run, playbooks} -> run_agent(job, playbooks, opts)
       end
 
-    apply_outcome(issue, record, sha, outcome, settings, opts)
+    case moved_on(issue, record, sha, settings, opts) do
+      nil -> apply_outcome(issue, record, sha, outcome, settings, opts)
+      reason -> report_unapplied(issue, sha, outcome, reason, opts)
+    end
+  end
+
+  # A pass takes minutes and `issue` is from when it was requested: a human may have approved
+  # or merged the PR, or a new commit may have been pushed, in the meantime. A state that
+  # cannot be read again applies the outcome, as before.
+  defp moved_on(issue, record, sha, settings, opts) do
+    issue_moved(issue, settings, opts) || pr_moved(record, sha, opts)
+  end
+
+  defp issue_moved(issue, settings, opts) do
+    case Keyword.get(opts, :tracker, Tracker).fetch_issue_states_by_ids([issue.id]) do
+      {:ok, [%Issue{state: current} | _rest]} when is_binary(current) ->
+        if normalize_state(current) != normalize_state(state(settings)), do: "the issue moved to #{current}"
+
+      _unknown ->
+        nil
+    end
+  end
+
+  # The CI poller keeps the stored record on the PR's latest state and head.
+  defp pr_moved(record, sha, opts) do
+    stored = stored_ci_check(record, opts) || %{}
+    pr_state = stored |> Map.get(:pr_state) |> to_string() |> String.upcase()
+    head = Map.get(stored, :last_observed_sha)
+
+    cond do
+      pr_state in ["MERGED", "CLOSED"] -> "the PR is #{String.downcase(pr_state)}"
+      is_binary(head) and head != sha -> "the PR head moved to `#{String.slice(head, 0, 12)}`"
+      true -> nil
+    end
+  end
+
+  defp stored_ci_check(record, opts) do
+    case Keyword.get(opts, :run_store, RunStore).list_ci_checks(Map.get(record, :repo_key)) do
+      checks when is_list(checks) -> Enum.find(checks, &(Map.get(&1, :issue_id) == Map.get(record, :issue_id)))
+      {:error, _reason} -> nil
+    end
+  end
+
+  defp normalize_state(state), do: state |> String.trim() |> String.downcase()
+
+  # The report is still written, but the stored record keeps no verdict for the SHA, so the
+  # issue gets a fresh pass if it comes back to Auto Review on it.
+  defp report_unapplied(issue, sha, outcome, reason, opts) do
+    Logger.info(
+      "QA outcome not applied: #{reason} issue_id=#{issue.id} issue_identifier=#{issue.identifier} " <>
+        "verdict=#{outcome.verdict} sha=#{sha}"
+    )
+
+    publish_report(issue, sha, outcome, %{target_state: "no move (#{reason})"}, opts)
+    {:auto_review_qa_not_applied, issue.id, outcome.verdict, reason}
   end
 
   # The repo's `WORKFLOW.md` snapshot, where its `auto_review.playbooks` come from, is
@@ -518,28 +592,37 @@ defmodule SymphonyElixir.AutoReview do
 
     update_ci_check(Keyword.get(opts, :run_store, RunStore), record, attrs)
 
-    report =
-      outcome
-      |> Map.merge(Map.take(result, [:summary, :steps, :findings, :follow_ups]))
-      |> Map.merge(%{
-        sha: sha,
+    publish_report(
+      issue,
+      sha,
+      outcome,
+      %{
         target_state: target_state,
         escalated: escalated?,
         fix_attempt: if(verdict == :fail and not escalated?, do: fix_attempts + 1),
         max_fix_attempts: config.max_fix_attempts
-      })
-      |> Report.render()
-
-    case Report.publish(issue, report, Keyword.take(opts, [:linear_client, :settings])) do
-      :ok -> :ok
-      {:error, reason} -> Logger.warning("Failed to publish the QA report for #{issue.identifier}: #{inspect(reason)}")
-    end
+      },
+      opts
+    )
 
     notify(issue, record, verdict, target_state, outcome)
 
     if gate_after_qa?(verdict, settings),
       do: request_gate(issue, Map.merge(record, attrs), sha, settings, opts),
       else: transition(issue, Map.merge(record, attrs), verdict, target_state, opts)
+  end
+
+  defp publish_report(issue, sha, outcome, attrs, opts) do
+    report =
+      outcome
+      |> Map.merge(Map.take(Map.get(outcome, :result, %{}), [:summary, :steps, :findings, :follow_ups]))
+      |> Map.merge(Map.put(attrs, :sha, sha))
+      |> Report.render()
+
+    case Report.publish(issue, report, Keyword.take(opts, [:linear_client, :settings])) do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("Failed to publish the QA report for #{issue.identifier}: #{inspect(reason)}")
+    end
   end
 
   defp target(:fail, fix_attempts, max_fix_attempts) when fix_attempts < max_fix_attempts, do: {@active_state, false}

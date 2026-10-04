@@ -195,7 +195,7 @@ defmodule SymphonyElixir.AcceptanceGateTest do
       assert {:ok, %{"type" => "readOnly"}} = Schema.resolve_runtime_turn_sandbox_policy(gate_settings, worktree)
 
       # Claude gets no file-editing tool, can't write its working directory, and still can't push.
-      claude = ClaudeAppServer.build_claude_settings(gate_settings.agent.network_access, [], [], opts[:read_only])
+      claude = ClaudeAppServer.build_claude_settings(gate_settings.agent.network_access, [], [], [], opts[:read_only])
       assert ["Edit", "Write", "NotebookEdit"] -- claude["permissions"]["deny"] == []
       assert "Bash(git push:*)" in claude["permissions"]["deny"]
       assert "Bash(gh:*)" in claude["permissions"]["deny"]

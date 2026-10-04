@@ -82,7 +82,9 @@ defmodule SymphonyElixir.AutoReviewGateTest do
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
     on_exit(fn ->
-      for key <- [:gate_flow_recipient, :gate_flow_qa_result, :gate_flow_runner_result, :gate_flow_turn_result] do
+      keys = ~w(gate_flow_recipient gate_flow_qa_result gate_flow_runner_result gate_flow_turn_result memory_tracker_issues)a
+
+      for key <- keys do
         Application.delete_env(:symphony_elixir, key)
       end
 
@@ -298,6 +300,31 @@ defmodule SymphonyElixir.AutoReviewGateTest do
 
       assert %{gate_sha: @sha, gate_verdict: "approve", gate_agent_verdict: "approve", qa_applied: true} = stored_record()
       assert [%{kind: "acceptance_gate", status: "gate_approve", tokens: %{total_tokens: 1_000}}] = RunStore.list_runs(@repo_key, :all)
+    end
+
+    test "a verdict that comes after the issue left Auto Review or its PR moved on is kept but moves nothing", %{root: root} do
+      settings = settings("shadow", root)
+
+      for {issue_state, record_attrs, reason} <- [
+            {"Merging", %{}, "the issue moved to Merging"},
+            {"Auto Review", %{pr_state: "MERGED"}, "the PR is merged"},
+            {"Auto Review", %{pr_state: "OPEN", last_observed_sha: "0123456789abcdef0123"}, "the PR head moved to `0123456789ab`"}
+          ] do
+        Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue(%{state: issue_state})])
+        record = put_record(Map.merge(%{qa_sha: @sha, qa_verdict: "pass", qa_target_state: "In Review"}, record_attrs))
+
+        log =
+          capture_log([level: :info], fn ->
+            assert {:auto_review_gate_not_applied, "issue-gate-flow", "approve", ^reason} =
+                     AutoReview.run_gate(gate_job(record, settings), gate_opts(root))
+          end)
+
+        assert log =~ "Acceptance gate outcome not applied: #{reason} issue_id=issue-gate-flow issue_identifier=TP-960 verdict=approve"
+        assert_receive {:memory_tracker_comment, "issue-gate-flow", body}
+        assert body =~ "## Symphony Acceptance Gate"
+        refute_received {:memory_tracker_state_update, _issue_id, _state}
+        assert %{gate_sha: @sha, gate_verdict: "approve"} = stored_record()
+      end
     end
 
     test "a needs-human label escalates over the agent's approve, and both verdicts are recorded and audited", %{root: root} do
