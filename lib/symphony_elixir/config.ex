@@ -669,6 +669,11 @@ defmodule SymphonyElixir.Config do
   defp non_empty_list?(values) when is_list(values), do: Enum.any?(values, &present_string?/1)
   defp non_empty_list?(_values), do: false
 
+  # Symphony makes the clone of a `workspace.source` repo itself, at startup or on the
+  # first dispatch. Its index is empty (a `--no-checkout` clone), so the dirty check
+  # below does not apply either.
+  defp validate_workspace_semantics(%Schema{workspace: %{github: github}}) when is_binary(github), do: :ok
+
   defp validate_workspace_semantics(%Schema{workspace: %{strategy: "worktree"} = workspace, worker: worker}) do
     cond do
       not is_binary(workspace.repo) or String.trim(workspace.repo) == "" ->

@@ -6,6 +6,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   import Ecto.Changeset
 
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.ManagedClone
   alias SymphonyElixir.Workflow
   alias SymphonyElixir.Workspace
 
@@ -237,6 +238,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
         field(:strategy, :string)
         field(:repo, :string)
         field(:fetch_before_dispatch, :boolean)
+        # `owner/repo` from `workspace.source`: Symphony clones the repo itself.
+        field(:github, :string)
       end
 
       @type t :: %__MODULE__{}
@@ -244,7 +247,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
       @spec changeset(t(), map()) :: Ecto.Changeset.t()
       def changeset(schema, attrs) do
         schema
-        |> cast(attrs, [:strategy, :repo, :fetch_before_dispatch], empty_values: [])
+        |> cast(attrs, [:strategy, :repo, :fetch_before_dispatch, :github], empty_values: [])
         |> validate_inclusion(:strategy, ["clone", "worktree"])
       end
     end
@@ -482,6 +485,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
          {:ok, workspace} <- normalize_workspaces(Map.get(config, "workspaces", %{})),
          {:ok, agent_config} <- normalize_agent(Map.get(config, "agent", %{})),
          {:ok, worker} <- normalize_workers(Map.get(config, "workers", %{})),
+         :ok <- reject_managed_sources_on_ssh_workers(repos, worker),
          {:ok, pre_push_review} <- normalize_pre_push_review(Map.get(config, "pre_push_review", %{})),
          {:ok, auto_review} <- normalize_auto_review(Map.get(config, "auto_review", %{})),
          {:ok, pull_requests} <- normalize_pull_requests(Map.get(config, "pull_requests", %{})),
@@ -574,7 +578,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
          {:ok, route} <- section_map(Map.get(repo, "route", %{}), path <> ".route"),
          :ok <- reject_unknown_section_keys(route, ~w(team projects labels assignee), path <> ".route"),
          {:ok, workspace} <- optional_section_map(Map.get(repo, "workspace"), path <> ".workspace"),
-         :ok <- reject_unknown_section_keys(workspace || %{}, ~w(strategy repo fetch_before_dispatch), path <> ".workspace"),
+         :ok <- reject_unknown_section_keys(workspace || %{}, ~w(strategy repo fetch_before_dispatch source), path <> ".workspace"),
+         {:ok, workspace} <- normalize_repo_source(repo, workspace, repo_path(Map.get(repo, "key"), index)),
          {:ok, agent} <- section_map(Map.get(repo, "agent"), repo_agent_path(Map.get(repo, "key"), index)),
          :ok <- reject_unknown_section_keys(agent, ~w(provider model effort run_profiles), repo_agent_path(Map.get(repo, "key"), index)) do
       normalized =
@@ -595,12 +600,76 @@ defmodule SymphonyElixir.Config.SystemSchema do
     end
   end
 
-  defp repo_agent_path(key, _index) when is_binary(key) and key != "", do: "repositories[#{key}].agent"
-  defp repo_agent_path(_key, index), do: "repositories[#{index}].agent"
+  defp repo_agent_path(key, index), do: repo_path(key, index) <> ".agent"
+
+  defp repo_path(key, _index) when is_binary(key) and key != "", do: "repositories[#{key}]"
+  defp repo_path(_key, index), do: "repositories[#{index}]"
+
+  # `workspace.source` is kept as `workspace.github` (`owner/repo`); `finalize_repos/1`
+  # points the repo at Symphony's clone of it.
+  defp normalize_repo_source(repo, %{"source" => source} = workspace, path) do
+    with {:ok, github} <- source_github(source, path <> ".workspace.source"),
+         :ok <- reject_source_conflicts(repo, workspace, path) do
+      {:ok, workspace |> Map.delete("source") |> Map.put("github", github)}
+    end
+  end
+
+  defp normalize_repo_source(_repo, workspace, _path), do: {:ok, workspace}
+
+  defp source_github(source, path) do
+    case ManagedClone.parse_source(source) do
+      {:ok, github} ->
+        {:ok, github}
+
+      :error ->
+        {:error, {:invalid_symphony_config, "`#{path}` must be a GitHub repository, as `owner/repo` or a github.com URL like `https://github.com/owner/repo`, got: #{inspect(source)}"}}
+    end
+  end
+
+  defp reject_source_conflicts(repo, workspace, path) do
+    cond do
+      Map.has_key?(workspace, "repo") ->
+        {:error, {:invalid_symphony_config, "`#{path}.workspace.source` and `#{path}.workspace.repo` cannot both be set: Symphony clones a `source` itself, `repo` is your own checkout; keep one"}}
+
+      Map.get(workspace, "strategy") not in [nil, "worktree"] ->
+        {:error, {:invalid_symphony_config, "`#{path}.workspace.source` needs `strategy: worktree`, the default for a source; remove `#{path}.workspace.strategy`"}}
+
+      Map.get(repo, "workflow_source") == "local" ->
+        {:error,
+         {:invalid_symphony_config,
+          "`#{path}.workflow_source: local` cannot be used with `#{path}.workspace.source`: Symphony's clone has no working tree, so the workflow is read from the fetched ref"}}
+
+      not repo_relative_path?(Map.get(repo, "workflow", "WORKFLOW.md")) ->
+        {:error, {:invalid_symphony_config, "`#{path}.workflow` must be a path inside the repository, like `WORKFLOW.md`, when `#{path}.workspace.source` is set"}}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp repo_relative_path?(path) when is_binary(path) do
+    Path.type(path) == :relative and not String.starts_with?(path, "~") and ".." not in Path.split(path)
+  end
+
+  # A non-string `workflow` is reported by the changeset.
+  defp repo_relative_path?(_path), do: true
+
+  defp reject_managed_sources_on_ssh_workers(repos, worker) do
+    managed_repos = for %{"workspace" => %{"github" => _github}} = repo <- repos || [], do: Map.get(repo, "name")
+
+    case {managed_repos, Map.get(worker, "ssh_hosts")} do
+      {[_ | _], [_ | _]} ->
+        {:error,
+         {:invalid_symphony_config, "`workers.ssh_hosts` cannot be used with repositories that set `workspace.source` (#{Enum.join(managed_repos, ", ")}): Symphony keeps their clone on this machine"}}
+
+      _other ->
+        :ok
+    end
+  end
 
   defp normalize_workspaces(config) do
     with {:ok, config} <- section_map(config, "workspaces"),
-         :ok <- reject_unknown_section_keys(config, ~w(root strategy repo fetch_before_dispatch cleanup attachments), "workspaces"),
+         :ok <- reject_unknown_section_keys(config, ~w(root clones_root strategy repo fetch_before_dispatch cleanup attachments), "workspaces"),
          {:ok, cleanup} <- section_map(Map.get(config, "cleanup", %{}), "workspaces.cleanup"),
          :ok <- reject_unknown_section_keys(cleanup, ~w(enabled max_age_days interval_ms min_free_bytes orphan_action trash_dir), "workspaces.cleanup"),
          {:ok, attachments} <- section_map(Map.get(config, "attachments", %{}), "workspaces.attachments"),
@@ -617,6 +686,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
       workspace =
         %{}
         |> maybe_put("root", Map.get(config, "root"))
+        |> maybe_put("clones_root", Map.get(config, "clones_root"))
         |> maybe_put("strategy", Map.get(config, "strategy"))
         |> maybe_put("repo", Map.get(config, "repo"))
         |> maybe_put("fetch_before_dispatch", Map.get(config, "fetch_before_dispatch"))
@@ -943,10 +1013,17 @@ defmodule SymphonyElixir.Config.SystemSchema do
   end
 
   defp finalize_repos(%__MODULE__{} = system_config) do
+    clones_root = system_config.workspace.clones_root
+
     repos =
-      Enum.map(system_config.repos, fn %Repo{} = repo ->
-        repo_path = resolve_optional_path(repo.path)
-        %{repo | path: repo_path}
+      Enum.map(system_config.repos, fn
+        %Repo{workspace: %Repo.Workspace{github: github} = workspace} = repo when is_binary(github) ->
+          clone = ManagedClone.path(clones_root, github)
+          %{repo | path: clone, workspace: %{workspace | repo: clone, strategy: "worktree"}}
+
+        %Repo{} = repo ->
+          repo_path = resolve_optional_path(repo.path)
+          %{repo | path: repo_path}
       end)
 
     %{system_config | repos: repos}

@@ -31,9 +31,12 @@ repositories:
       strategy: worktree
       repo: ~/Projects/symphony
       fetch_before_dispatch: true
+      # Or let Symphony clone the repo itself instead of using `repo` (drop `repo` then):
+      # source: your-org/symphony
 
 workspaces:
   root: ~/Projects/symphony-workspaces
+  # clones_root: ~/.local/share/symphony/repos   # Symphony's clones of `workspace.source` repos
   # strategy: clone
   # repo: ~/Projects/symphony
   # fetch_before_dispatch: true
