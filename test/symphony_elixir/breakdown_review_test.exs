@@ -269,7 +269,7 @@ defmodule SymphonyElixir.BreakdownReviewTest do
 
       log =
         capture_log(fn ->
-          state = Orchestrator.review_breakdown_parents_for_test([parent], orchestrator_state(), run_store: UnreadableRunStore)
+          state = review([parent], orchestrator_state(), run_store: UnreadableRunStore)
           assert state.breakdown_reviews == %{}
         end)
 
@@ -448,7 +448,7 @@ defmodule SymphonyElixir.BreakdownReviewTest do
     end
   end
 
-  defp review(issues, state), do: Orchestrator.review_breakdown_parents_for_test(issues, state)
+  defp review(issues, state, opts \\ []), do: Orchestrator.review_breakdown_parents_for_test(issues, state, opts)
 
   defp parent(state, sub_issues) do
     %Issue{id: "parent", identifier: "MT-1", title: "Groom into sub-tickets", state: state, labels: ["breakdown"], sub_issues: sub_issues}
