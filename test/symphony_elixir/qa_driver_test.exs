@@ -534,7 +534,8 @@ defmodule SymphonyElixir.QaDriverTest do
 
       assert {:error, {:qa_tool, "qa_permission_missing", message}} = QaDriver.call_tool(driver, "qa_screenshot", %{"pid" => pid, "name" => "x"})
       assert message =~ "Screen Recording"
-      assert message =~ "blocked"
+      assert message =~ "Mark the app steps you could not check `blocked` with this reason, finish the other playbooks' steps"
+      assert message =~ "then answer with verdict `blocked` and this reason"
 
       assert {:error, {:qa_tool, "qa_permission_missing", message}} = QaDriver.call_tool(driver, "qa_ax_tree", %{"pid" => pid})
       assert message =~ "Accessibility"
