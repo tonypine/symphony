@@ -48,6 +48,23 @@ runtime's `sandbox.filesystem.allowWrite` so the agent can write under specific 
 the Claude Code default (workspace + `/tmp`). Codex/SRT already authors a broader writable set
 under `/tmp` and the workspace, so this knob only affects the Claude runtime today.
 
+### No windows on the host desktop
+
+On a macOS host, agents run on the operator's desktop, so a GUI program an agent starts puts its
+windows, and its "quit unexpectedly" dialog when it crashes, on the operator's screen.
+
+- The managed runtime context tells every agent never to launch an app, an `NSApplication`, or a
+  window on the host. UI screenshots come from offscreen rendering (SwiftUI `ImageRenderer`) or
+  from the QA pass, which drives the app on its own QA machine.
+- The Claude Code and SRT Seatbelt profiles allow only a fixed list of mach services, and the
+  window server (`com.apple.windowserver.active`) is not on it. Symphony never adds to that list
+  (`allowMachLookup`) or turns on `allowAppleEvents`, so an AppKit program started in the agent
+  sandbox gets no window server connection and can't draw. Offscreen `ImageRenderer` snapshots
+  still work.
+- The profiles still allow LaunchServices (`com.apple.coreservices.launchservicesd`), which the
+  runtimes don't let Symphony turn off. An AppKit program that crashes without a window server
+  may still produce a crash dialog, so the prompt rule is what keeps agents from starting one.
+
 ### Optional outer sandbox (Codex + SRT)
 
 Set `agent.sandbox_runtime.kind: srt` to wrap Codex with

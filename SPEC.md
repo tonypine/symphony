@@ -1411,8 +1411,9 @@ Rendering requirements:
 - Unknown filters MUST fail rendering.
 - Before the rendered issue template or PR template, prepend a managed Symphony runtime context.
   That context MUST cover workspace-only execution, untrusted Linear/GitHub/CI/tool-output
-  handling, scoped Linear/GitHub tool preference, workpad usage, obvious secret paths, and final
-  response expectations. Repo `WORKFLOW.md` templates SHOULD NOT be required to restate these
+  handling, scoped Linear/GitHub tool preference, workpad usage, obvious secret paths, never
+  launching an app or window on the host (UI screenshots come from offscreen rendering or the QA
+  pass), and final response expectations. Repo `WORKFLOW.md` templates SHOULD NOT be required to restate these
   Symphony-owned rules.
 
 Template input variables:
