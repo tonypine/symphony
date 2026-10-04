@@ -914,7 +914,9 @@ queued on `max_concurrent` doesn't hold `Todo` tickets back; one queued because 
 lower does.
 
 A forced ticket's pass (see `concurrency.force_label`) goes to the front of the queue: while it
-waits, a free QA slot is kept for it. When every QA slot is busy it starts on the forced
+waits, a free QA slot is kept for it. The slot is kept only while the ticket keeps asking: if
+no request has come for it in two CI poll intervals (it left Auto Review, or its CI went red or
+pending), other tickets take free slots again. When every QA slot is busy it starts on the forced
 allowance instead, as long as fewer than `concurrency.forced_max` forced runs and forced passes
 are going; such a pass takes no QA slot, counts toward `forced_max`, and is logged with
 `forced=true`. Past `forced_max` it waits at the front of the queue. The verdict is applied as for

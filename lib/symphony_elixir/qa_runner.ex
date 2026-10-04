@@ -17,11 +17,13 @@ defmodule SymphonyElixir.QaRunner do
 
   A forced ticket's request (`job.forced`, see `agent.concurrency.force_label`) goes to the front
   of the queue: while one is queued, a free slot is turned away from unforced requests, so the
-  forced ticket takes it on its next request. With every slot busy, a forced request starts on the
-  forced allowance instead, while fewer than `agent.concurrency.forced_max` forced runs (the
-  orchestrator's, read from its published snapshot, plus forced passes here) are going. A pass on
-  the allowance is marked `forced` and takes no QA slot. Forcing changes when a pass starts, never
-  its verdict.
+  forced ticket takes it on its next request. A queued forced request holds the slot only while its
+  ticket keeps asking: once no request has come for it in two CI poll intervals (the ticket left
+  Auto Review, or its CI is no longer green), unforced requests take free slots again. With every
+  slot busy, a forced request starts on the forced allowance instead, while fewer than
+  `agent.concurrency.forced_max` forced runs (the orchestrator's, read from its published snapshot,
+  plus forced passes here) are going. A pass on the allowance is marked `forced` and takes no QA
+  slot. Forcing changes when a pass starts, never its verdict.
   """
 
   use GenServer
@@ -108,6 +110,7 @@ defmodule SymphonyElixir.QaRunner do
        running: %{},
        queued: %{},
        queued_ttl_ms: Keyword.get(opts, :queued_ttl_ms, @queued_ttl_ms),
+       forced_hold_ms: Keyword.get(opts, :forced_hold_ms),
        run_fun: Keyword.get(opts, :run_fun, &AutoReview.run_qa/2),
        forced_runs_fun: Keyword.get(opts, :forced_runs_fun, &orchestrator_forced_runs/0),
        task_supervisor: Keyword.get(opts, :task_supervisor, SymphonyElixir.TaskSupervisor)
@@ -194,7 +197,7 @@ defmodule SymphonyElixir.QaRunner do
   defp pass_slot(state, forced?, settings) do
     cond do
       normal_passes(state) < min(settings.auto_review.max_concurrent, settings.agent.finishing_max) and
-          (forced? or not forced_queued?(state.queued)) ->
+          (forced? or not forced_queued?(state, settings)) ->
         :qa
 
       forced? and forced_slot_free?(state, settings) ->
@@ -205,7 +208,15 @@ defmodule SymphonyElixir.QaRunner do
     end
   end
 
-  defp forced_queued?(queued), do: Enum.any?(queued, fn {_issue_id, entry} -> entry.forced end)
+  # Only a forced request asked for within the hold counts: the CI poller asks again on every poll
+  # while the ticket is green in Auto Review, so an older one has stopped asking.
+  defp forced_queued?(state, settings) do
+    cutoff = now_ms() - forced_hold_ms(state, settings)
+    Enum.any?(state.queued, fn {_issue_id, entry} -> entry.forced and entry.at > cutoff end)
+  end
+
+  defp forced_hold_ms(%{forced_hold_ms: hold_ms}, _settings) when is_integer(hold_ms), do: hold_ms
+  defp forced_hold_ms(_state, settings), do: 2 * (settings.ci.poll_interval_ms || settings.pr_review.poll_interval_ms || settings.polling.interval_ms)
 
   defp normal_passes(state), do: Enum.count(state.running, fn {_issue_id, entry} -> not entry.forced end)
 

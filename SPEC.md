@@ -2015,14 +2015,16 @@ Forced allowance:
   per-host worker cap, blocked-by links, setup-failure suppression, retry backoff, post-PR quiet,
   and the auto-merge / `Merging` CI waits.
 - A forced issue's Auto Review QA request goes to the front of the QA queue: while it is queued, a
-  free QA slot MUST be turned away from unforced requests. When every QA slot is busy, a forced
-  request starts its pass on the forced allowance if fewer than `forced_max` forced runs and forced
-  QA passes are going (the QA runner MAY read the orchestrator's forced runs from its published
-  snapshot, so the count can lag by one publish interval). A pass on the allowance takes no QA
-  slot and counts toward `forced_max` for the orchestrator's dispatch too; past `forced_max` the
-  request stays queued at the front and no extra pass starts. Forcing never skips QA or changes
-  its verdict. A forced `Final verification:` parent walkthrough is an ordinary dispatch and uses
-  the forced allowance like any other run.
+  free QA slot MUST be turned away from unforced requests. A queued forced request holds the slot
+  only while it is refreshed: once no request has come for it in two CI poll intervals (the issue
+  left Auto Review or its CI is no longer green), unforced requests MUST take free slots again.
+  When every QA slot is busy, a forced request starts its pass on the forced allowance if fewer
+  than `forced_max` forced runs and forced QA passes are going (the QA runner MAY read the
+  orchestrator's forced runs from its published snapshot, so the count can lag by one publish
+  interval). A pass on the allowance takes no QA slot and counts toward `forced_max` for the
+  orchestrator's dispatch too; past `forced_max` the request stays queued at the front and no
+  extra pass starts. Forcing never skips QA or changes its verdict. A forced `Final verification:`
+  parent walkthrough is an ordinary dispatch and uses the forced allowance like any other run.
 
 Finishing limit:
 

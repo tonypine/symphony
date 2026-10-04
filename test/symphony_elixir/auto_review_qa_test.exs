@@ -738,6 +738,39 @@ defmodule SymphonyElixir.AutoReviewQaTest do
       assert %{running: [%{issue_id: "forced", forced: false}]} = QaRunner.snapshot(name)
     end
 
+    test "a forced request that stopped asking no longer holds a free slot" do
+      test_pid = self()
+      name = :"qa_runner_#{System.unique_integer([:positive])}"
+
+      run_fun = fn job, _opts ->
+        send(test_pid, {:pass_started, job.issue.id, self()})
+
+        receive do
+          :finish -> :ok
+        end
+      end
+
+      start_supervised!({QaRunner, name: name, run_fun: run_fun, forced_hold_ms: 0, forced_runs_fun: fn -> 0 end})
+      settings = Config.settings!()
+      settings = %{settings | auto_review: %{settings.auto_review | max_concurrent: 1}, agent: %{settings.agent | forced_max: 0}}
+
+      job = fn id, forced? ->
+        %{issue: issue(%{id: id}), record: %{}, sha: @sha, settings: settings, forced: forced?}
+      end
+
+      assert :started = QaRunner.request(job.("normal", false), qa_runner_server: name)
+      assert_receive {:pass_started, "normal", normal_pid}
+      assert :busy = QaRunner.request(job.("forced", true), qa_runner_server: name)
+
+      send(normal_pid, :finish)
+      wait_until(fn -> QaRunner.running(name) == %{} end)
+
+      # The forced ticket has not asked again within the hold, so the free slot goes to the next request.
+      assert :started = QaRunner.request(job.("other", false), qa_runner_server: name)
+      assert_receive {:pass_started, "other", _pid}
+      assert %{queued: [%{issue_id: "forced", forced: true}]} = QaRunner.snapshot(name)
+    end
+
     test "reports an unavailable runner" do
       assert {:error, :qa_runner_unavailable} =
                QaRunner.request(%{issue: issue()}, qa_runner_server: :missing_qa_runner)
