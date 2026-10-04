@@ -95,6 +95,7 @@ defmodule SymphonyElixir.Application do
              SymphonyElixir.Orchestrator,
              pr_review_child_spec(system_config),
              qa_runner_child_spec(system_config),
+             SymphonyElixir.QaAndroid.Emulator,
              SymphonyElixir.StrayProcesses,
              ci_child_spec(system_config),
              human_actions_child_spec(system_config),
