@@ -33,6 +33,32 @@ defmodule SymphonyElixir.WorkflowStore do
     end
   end
 
+  @typedoc """
+  Whether the store's `WORKFLOW.md` loads: `:valid` when it does, `:missing` when the
+  file is not there and `:invalid` when it does not parse. `error` is the reason of
+  the last failed load, nil once a load works again. A store keeps serving its last
+  good workflow while the file is missing or invalid.
+  """
+  @type status :: %{path: Path.t() | nil, status: :valid | :missing | :invalid, error: term()}
+
+  @doc """
+  Reloads the store's workflow if it changed and reports whether it loads, or
+  `:unavailable` when the store is not running.
+  """
+  @spec status(GenServer.server()) :: {:ok, status()} | :unavailable
+  def status(server \\ __MODULE__) do
+    case resolve_server(server) do
+      pid when is_pid(pid) -> {:ok, GenServer.call(pid, :status)}
+      _ -> :unavailable
+    end
+  end
+
+  @doc "Classifies a workflow load error: nil is `:valid`, a missing file `:missing`, anything else `:invalid`."
+  @spec load_status(term()) :: :valid | :missing | :invalid
+  def load_status(nil), do: :valid
+  def load_status({:missing_workflow_file, _path, _reason}), do: :missing
+  def load_status(_reason), do: :invalid
+
   @spec force_reload(GenServer.server()) :: :ok | {:error, term()}
   def force_reload(server \\ __MODULE__) do
     case resolve_server(server) do
@@ -92,6 +118,17 @@ defmodule SymphonyElixir.WorkflowStore do
     end
   end
 
+  def handle_call(:status, _from, %State{} = state) do
+    new_state =
+      case reload_state(state) do
+        {:ok, new_state} -> new_state
+        {:error, _reason, new_state} -> new_state
+      end
+
+    status = %{path: current_path(new_state), status: load_status(new_state.last_error), error: new_state.last_error}
+    {:reply, status, new_state}
+  end
+
   @impl true
   def handle_info(:poll, %State{} = state) do
     schedule_poll()
@@ -127,21 +164,21 @@ defmodule SymphonyElixir.WorkflowStore do
 
       {:error, reason} ->
         log_reload_error(path, reason)
-        {:error, reason, state}
+        {:error, reason, %{state | last_error: reason}}
     end
   end
 
   defp reload_current_path(path, state) do
     case current_stamp(path) do
       {:ok, stamp} when stamp == state.stamp ->
-        {:ok, state}
+        {:ok, %{state | last_error: nil}}
 
       {:ok, _stamp} ->
         reload_path(path, state)
 
       {:error, reason} ->
         log_reload_error(path, reason)
-        {:error, reason, state}
+        {:error, reason, %{state | last_error: reason}}
     end
   end
 
@@ -160,7 +197,7 @@ defmodule SymphonyElixir.WorkflowStore do
          {:ok, content} <- File.read(path) do
       {:ok, {stat.mtime, stat.size, :erlang.phash2(content)}}
     else
-      {:error, reason} -> {:error, reason}
+      {:error, reason} -> {:error, {:missing_workflow_file, path, reason}}
     end
   end
 

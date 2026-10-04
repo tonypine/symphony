@@ -17,6 +17,7 @@ defmodule SymphonyElixirWeb.Presenter do
   }
 
   alias SymphonyElixir.Codex.MessageHumanizer
+  alias SymphonyElixir.Repo.Status, as: RepoStatus
 
   @audit_page_size 200
   @audit_event_types ~w(
@@ -103,6 +104,28 @@ defmodule SymphonyElixirWeb.Presenter do
 
       :unavailable ->
         %{generated_at: generated_at, error: %{code: "snapshot_unavailable", message: "Snapshot unavailable"}}
+    end
+  end
+
+  @doc """
+  One entry per configured repo (see `SymphonyElixir.Repo.Status`). When the
+  orchestrator snapshot is unavailable the repos are still listed, with no
+  worktrees, next to an `error`.
+  """
+  @spec repos_payload(GenServer.name(), timeout()) :: {:ok, map()} | {:error, term()}
+  def repos_payload(orchestrator, snapshot_timeout_ms) do
+    generated_at = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+
+    {running, error} =
+      case Orchestrator.snapshot(orchestrator, snapshot_timeout_ms) do
+        %{} = snapshot -> {Map.get(snapshot, :running, []), nil}
+        :timeout -> {[], %{code: "snapshot_timeout", message: "Snapshot timed out"}}
+        :unavailable -> {[], %{code: "snapshot_unavailable", message: "Snapshot unavailable"}}
+      end
+
+    with {:ok, repos} <- RepoStatus.list(running) do
+      payload = %{generated_at: generated_at, repos: repos}
+      {:ok, if(error, do: Map.put(payload, :error, error), else: payload)}
     end
   end
 

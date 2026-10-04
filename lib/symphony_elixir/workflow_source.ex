@@ -27,6 +27,7 @@ defmodule SymphonyElixir.WorkflowSource do
 
   alias SymphonyElixir.Config.{Cache, SystemSchema}
   alias SymphonyElixir.{ManagedClone, Paths, Workflow, Workspace}
+  alias SymphonyElixir.Repo.FetchLog
 
   @default_branch_refs ["origin/HEAD", "origin/main", "origin/master"]
 
@@ -120,7 +121,7 @@ defmodule SymphonyElixir.WorkflowSource do
     fetched_repo = Keyword.get(opts, :fetched_repo)
 
     if Keyword.get(opts, :fetch, false) and not same_checkout?(checkout, fetched_repo) do
-      case git(checkout, ["fetch", "origin"]) do
+      case FetchLog.record(repo.name, git(checkout, ["fetch", "origin"])) do
         {:ok, _output} ->
           :ok
 

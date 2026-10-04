@@ -180,6 +180,11 @@ Routing validation rejects duplicate keys, workspace-sanitized key collisions, i
 ambiguous team catch-alls, multiple defaults, and multi-repo global worktree settings that do not
 provide per-repo workspace overrides.
 
+`GET /api/v1/repos` lists every repository with its source (local checkout or Symphony's clone, and
+whether the clone exists yet), its GitHub repository, its route, whether its `WORKFLOW.md` is
+valid, missing or invalid, its last fetch before a dispatch and the worktrees of its running agents.
+See `SPEC.md` (section 13.8.2) for the response shape.
+
 #### A repo Symphony clones itself
 
 A repo does not need a local checkout. Set `workspace.source` to the GitHub repository instead of
