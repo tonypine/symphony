@@ -694,6 +694,9 @@ Fields:
     automated, non-actionable status (e.g. `github-actions[bot]`, `jp-launch-control[bot]`).
     Do not list review bots such as `copilot-pull-request-reviewer[bot]`, whose comments
     are actionable reviews.
+  - Comments from the Linear GitHub integration (`linear-code`, `linear-code[bot]`,
+    `linear[bot]`) and any comment whose body starts with `<!-- linear-linkback -->` are always
+    skipped, on top of this list.
   - The PR author returned by `gh pr view` and the auto-detected current `gh` user (when
     `gh api user` succeeds) are Symphony's own account, which on a solo setup is also the
     human reviewer. Their comments count as reviewer feedback unless they are blank or
@@ -1550,8 +1553,9 @@ not require recognizing or validating extension fields unless that extension is 
 - `pull_requests.poll_interval_ms`: positive integer or null; falls back to `issues.poll_interval_ms`
 - `pull_requests.review_comments.rework_delay_minutes`: polling-mode integer, default `10`
 - `pull_requests.review_comments.stale_after_days`: polling-mode integer, default `7`
-- `pull_requests.review_comments.ignored_reviewers`: polling-mode list of strings, default `[]`; comments from
-  the auto-detected current `gh` user and PR author are skipped only when Symphony posted them
+- `pull_requests.review_comments.ignored_reviewers`: polling-mode list of strings, default `[]`, on top of
+  the always-skipped Linear integration linkback; comments from the auto-detected current `gh` user
+  and PR author are skipped only when Symphony posted them
 - `pull_requests.review_comments.reply_after_addressing`: polling-mode boolean, default `false`
 - `pull_requests.review_comments.request_review_after_push`: polling-mode boolean, default `false`
 - `pull_requests.checks.enabled`: boolean, default `false`
