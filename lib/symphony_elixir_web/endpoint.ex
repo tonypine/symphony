@@ -22,6 +22,7 @@ defmodule SymphonyElixirWeb.Endpoint do
   plug(Plug.Parsers,
     parsers: [:urlencoded, :multipart, :json],
     pass: ["*/*"],
+    body_reader: {SymphonyElixirWeb.Plugs.RawBodyReader, :read_body, []},
     json_decoder: Jason
   )
 

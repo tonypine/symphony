@@ -1,8 +1,12 @@
 defmodule SymphonyElixir.CiPollerTest do
   use SymphonyElixir.TestSupport
 
+  import Phoenix.ConnTest, only: [build_conn: 0, post: 3, json_response: 2]
+
   alias SymphonyElixir.CiPoller
   alias SymphonyElixir.Notifications
+
+  @endpoint SymphonyElixirWeb.Endpoint
 
   @repo_key "default"
 
@@ -159,6 +163,11 @@ defmodule SymphonyElixir.CiPollerTest do
     end
   end
 
+  defmodule WebhookRaisingRunStore do
+    def list_ci_checks(_repo_key), do: [%{issue_id: "issue-2401", pr_url: "https://github.com/example/repo/pull/2401"}]
+    def list_runs(_repo_key, _scope), do: raise("webhook poll exploded")
+  end
+
   defmodule FailingTransitionTracker do
     def fetch_issues_by_states(_states), do: {:ok, []}
 
@@ -221,6 +230,7 @@ defmodule SymphonyElixir.CiPollerTest do
       Application.delete_env(:symphony_elixir, :ci_test_recipient)
       Application.delete_env(:symphony_elixir, :ci_test_review_activity)
       Application.delete_env(:symphony_elixir, :ci_test_ci_record)
+      Application.delete_env(:symphony_elixir, :ci_test_self_pid)
 
       if previous_audit_dir do
         Application.put_env(:symphony_elixir, :audit_log_dir, previous_audit_dir)
@@ -1659,6 +1669,239 @@ defmodule SymphonyElixir.CiPollerTest do
 
     assert audit_event?("poller_degraded", "ci", "degraded")
     assert audit_event?("poller_recovered", "ci", "recovered")
+  end
+
+  describe "with GitHub webhooks on" do
+    @webhook_secret "s3cret"
+
+    setup do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        pr_review_mode: "polling",
+        ci: %{enabled: true, log_excerpt_lines: 3, max_retries: 3, flaky_retry: false},
+        github: %{webhooks: %{enabled: true, secret: @webhook_secret}}
+      )
+
+      name = Module.concat(__MODULE__, "Poller#{System.unique_integer([:positive])}")
+      start_test_endpoint(ci_poller: name)
+      {:ok, name: name}
+    end
+
+    test "a signed check_suite completed for a Merging PR's head lands it green within 5 s", %{name: name} do
+      issue = %{in_review_issue() | state: "Merging"}
+      Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+      Application.put_env(:symphony_elixir, :ci_test_statuses, [pending_status()])
+      Application.put_env(:symphony_elixir, :ci_test_status, green_status())
+      put_run(issue, DateTime.utc_now())
+      start_webhook_poller(name, on_webhook_result: fn -> send(self_pid(), :refresh_requested) end)
+
+      assert_receive {:fetch_ci_status, _pr_url}, 5_000
+      assert_eventually(fn -> CiPoller.observed_head("issue-2401") == %{commit_sha: "abc123", conclusion: "IN_PROGRESS"} end)
+
+      assert %{"status" => "accepted"} = deliver_webhook("check_suite", check_suite_completed("abc123"), 202)
+
+      assert_receive :refresh_requested, 5_000
+      assert CiPoller.observed_head("issue-2401") == %{commit_sha: "abc123", conclusion: "SUCCESS"}
+
+      assert %{webhooks: webhooks} = CiPoller.status()
+
+      assert %{enabled: true, relay: "smee", events_received: 1, last_event_at: %DateTime{}} = webhooks
+      assert %{results_via_webhook: 1, results_via_poll: 0} = webhooks
+    end
+
+    test "a signed red check_suite takes the CI-failure path once, and the next poll does not dispatch again", %{name: name} do
+      issue = %{in_review_issue() | state: "Merging"}
+      Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+      Application.put_env(:symphony_elixir, :ci_test_statuses, [pending_status()])
+      Application.put_env(:symphony_elixir, :ci_test_status, failed_status("abc123"))
+      put_run(issue, DateTime.utc_now())
+      start_webhook_poller(name, on_webhook_result: fn -> :ok end)
+
+      assert_receive {:fetch_ci_status, _pr_url}, 5_000
+      assert_eventually(fn -> CiPoller.observed_head("issue-2401") != nil end)
+
+      deliver_webhook("check_suite", check_suite_completed("abc123"), 202)
+
+      assert_receive {:issue_state_update, "issue-2401", "In Progress"}, 5_000
+
+      send(name, :poll)
+      assert_receive {:fetch_ci_status, _pr_url}, 5_000
+      assert_eventually(fn -> match?(%{webhooks: %{results_via_poll: 0}}, CiPoller.status()) end)
+      :sys.get_state(name)
+
+      refute_receive {:issue_state_update, "issue-2401", _state}, 200
+      assert [%{status: "failure_already_handled", dispatched_shas: ["abc123"], ci_retry_count: 1}] = RunStore.list_ci_checks()
+    end
+
+    test "with the relay down the timed poll alone lands the PR", %{name: name} do
+      issue = %{in_review_issue() | state: "Merging"}
+      Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+      Application.put_env(:symphony_elixir, :ci_test_statuses, [pending_status()])
+      Application.put_env(:symphony_elixir, :ci_test_status, green_status())
+      put_run(issue, DateTime.utc_now())
+      start_webhook_poller(name, poll_interval_ms: 50, settings: Config.settings!())
+
+      assert_eventually(fn -> CiPoller.observed_head("issue-2401") == %{commit_sha: "abc123", conclusion: "SUCCESS"} end)
+
+      assert_eventually(fn ->
+        match?(%{webhooks: %{enabled: true, events_received: 0, results_via_webhook: 0, results_via_poll: 1}}, CiPoller.status())
+      end)
+    end
+
+    test "a ping catches up with a full poll at once", %{name: name} do
+      Application.put_env(:symphony_elixir, :ci_test_issues, [])
+      start_webhook_poller(name)
+      assert_receive {:fetch_issues_by_states, _states}, 5_000
+
+      assert %{"status" => "catching_up"} = deliver_webhook("ping", %{"zen" => "Design for failure."}, 202)
+
+      assert_receive {:fetch_issues_by_states, _states}, 5_000
+    end
+
+    test "deliveries about unwatched PRs, ignored events and bad signatures run no poll", %{name: name} do
+      issue = in_review_issue()
+      Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+      Application.put_env(:symphony_elixir, :ci_test_status, pending_status())
+      put_run(issue, DateTime.utc_now())
+      start_webhook_poller(name)
+      assert_receive {:fetch_ci_status, _pr_url}, 5_000
+      assert_eventually(fn -> CiPoller.observed_head("issue-2401") != nil end)
+
+      deliver_webhook("check_suite", check_suite_completed("other-sha", 99), 202)
+      assert %{"status" => "ignored"} = deliver_webhook("check_suite", %{"action" => "requested"}, 202)
+
+      log =
+        capture_log(fn ->
+          conn = post_webhook("check_suite", Jason.encode!(check_suite_completed("abc123")), "sha256=" <> String.duplicate("0", 64))
+          assert json_response(conn, 401)
+        end)
+
+      assert log =~ "Rejected GitHub webhook"
+      refute log =~ "abc123"
+
+      assert_eventually(fn -> match?(%{webhooks: %{events_received: 2, rejected: 1}}, CiPoller.status()) end)
+      refute_receive {:fetch_ci_status, _pr_url}, 200
+    end
+
+    test "a burst of deliveries runs one poll", %{name: name} do
+      issue = in_review_issue()
+      Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+      Application.put_env(:symphony_elixir, :ci_test_status, pending_status())
+      put_run(issue, DateTime.utc_now())
+      start_webhook_poller(name, webhook_debounce_ms: 200)
+      assert_receive {:fetch_ci_status, _pr_url}, 5_000
+      assert_eventually(fn -> CiPoller.observed_head("issue-2401") != nil end)
+
+      for event <- ["check_run", "check_run", "check_suite"] do
+        deliver_webhook(event, %{"action" => "completed", "repository" => repository(), event => %{"head_sha" => "abc123"}}, 202)
+      end
+
+      assert_receive {:fetch_ci_status, _pr_url}, 5_000
+      refute_receive {:fetch_ci_status, _pr_url}, 400
+    end
+
+    test "a webhook poll that fails is logged and the poller keeps running", %{name: name} do
+      log =
+        capture_log(fn ->
+          start_webhook_poller(name, run_store: WebhookRaisingRunStore)
+          assert :ok = CiPoller.webhook_delivery({:ci, %{event: "check_suite", action: "completed", head_sha: nil, pr_urls: ["https://github.com/example/repo/pull/2401"]}}, name)
+
+          assert_eventually(fn ->
+            state = :sys.get_state(name)
+            state.webhook_timer_ref == nil and state.webhooks.events_received == 1
+          end)
+
+          :sys.get_state(name)
+        end)
+
+      assert log =~ "CI poll for a GitHub webhook failed repo_key=default"
+      assert log =~ "webhook poll exploded"
+    end
+
+    test "a webhook result asks the orchestrator to refresh", %{name: name} do
+      issue = %{in_review_issue() | state: "Merging"}
+      Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+      Application.put_env(:symphony_elixir, :ci_test_statuses, [pending_status()])
+      Application.put_env(:symphony_elixir, :ci_test_status, green_status())
+      put_run(issue, DateTime.utc_now())
+      start_webhook_poller(name)
+      assert_receive {:fetch_ci_status, _pr_url}, 5_000
+      assert_eventually(fn -> CiPoller.observed_head("issue-2401") != nil end)
+
+      deliver_webhook("check_suite", check_suite_completed("abc123"), 202)
+
+      assert_eventually(fn -> match?(%{webhooks: %{results_via_webhook: 1}}, CiPoller.status()) end)
+    end
+
+    test "the endpoint answers 503 while the CI poller is not running" do
+      assert %{"error" => %{"code" => "ci_poller_unavailable"}} = deliver_webhook("check_suite", check_suite_completed("abc123"), 503)
+      assert CiPoller.webhook_delivery(:ping, Module.concat(__MODULE__, Missing)) == :unavailable
+    end
+  end
+
+  defp start_webhook_poller(name, opts \\ []) do
+    opts =
+      Keyword.merge(
+        [name: name, tracker: FakeTracker, github: FakeGitHub, poll_interval_ms: 3_600_000, webhook_debounce_ms: 10],
+        opts
+      )
+
+    pid = start_supervised!({CiPoller, opts})
+    Application.put_env(:symphony_elixir, :ci_test_self_pid, self())
+    pid
+  end
+
+  defp self_pid, do: Application.fetch_env!(:symphony_elixir, :ci_test_self_pid)
+
+  defp start_test_endpoint(overrides) do
+    endpoint_config =
+      :symphony_elixir
+      |> Application.get_env(SymphonyElixirWeb.Endpoint, [])
+      |> Keyword.merge(server: false, secret_key_base: String.duplicate("s", 64))
+      |> Keyword.merge(overrides)
+
+    Application.put_env(:symphony_elixir, SymphonyElixirWeb.Endpoint, endpoint_config)
+    start_supervised!({SymphonyElixirWeb.Endpoint, []})
+  end
+
+  defp deliver_webhook(event, payload, status) do
+    body = Jason.encode!(payload)
+    signature = "sha256=" <> (:hmac |> :crypto.mac(:sha256, @webhook_secret, body) |> Base.encode16(case: :lower))
+
+    event
+    |> post_webhook(body, signature)
+    |> json_response(status)
+  end
+
+  defp post_webhook(event, body, signature) do
+    build_conn()
+    |> Plug.Conn.put_req_header("content-type", "application/json")
+    |> Plug.Conn.put_req_header("x-github-event", event)
+    |> Plug.Conn.put_req_header("x-github-delivery", "delivery-1")
+    |> Plug.Conn.put_req_header("x-hub-signature-256", signature)
+    |> post("/api/v1/github/webhook", body)
+  end
+
+  defp check_suite_completed(head_sha, pr_number \\ 2401) do
+    %{
+      "action" => "completed",
+      "repository" => repository(),
+      "check_suite" => %{"head_sha" => head_sha, "conclusion" => "success", "pull_requests" => [%{"number" => pr_number}]}
+    }
+  end
+
+  defp repository, do: %{"full_name" => "example/repo", "html_url" => "https://github.com/example/repo"}
+
+  defp assert_eventually(fun, attempts \\ 100) do
+    cond do
+      fun.() -> :ok
+      attempts == 0 -> flunk("condition never became true")
+      true -> Process.sleep(20) && assert_eventually(fun, attempts - 1)
+    end
+  end
+
+  defp pending_status do
+    %{green_status() | checks: [%{name: "specs", status: "IN_PROGRESS", conclusion: nil, run_id: "987"}]}
   end
 
   defp in_review_issue do
