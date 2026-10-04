@@ -314,7 +314,9 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
       assert {:error, "/tmp/elsewhere/files/a is not a file in a run directory"} = Remote.put(ssh_host, file, "/tmp/elsewhere", "a")
       assert {:error, _message} = Remote.put(ssh_host, file, dir, "../escape")
 
-      assert {:error, "exit 1: " <> _rest} = Remote.put(ssh_host, Path.join(root, "missing"), dir, "missing.yml")
+      # The local shell's status for a failed redirect differs: 1 in bash, 2 in dash.
+      assert {:error, "exit " <> rest} = Remote.put(ssh_host, Path.join(root, "missing"), dir, "missing.yml")
+      assert rest =~ "No such file"
       refute File.exists?(Path.join(dir, "files/missing.yml"))
 
       File.mkdir_p!(Path.join(dir, "files/taken"))
