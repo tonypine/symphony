@@ -426,7 +426,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     },
     %{
       "name" => "qa_ax_set_value",
-      "description" => "Set the value of a text field or other editable element of the launched app.",
+      "description" =>
+        "Set the value of a text field or other editable element of the launched app. A text field, secure ones included, gets the value typed in the way a person does (the app comes to the front, the field is focused, its text replaced, then Tab commits it), so the app saves what it shows. Single-line fields refuse tabs and line breaks. A secure field's value is never returned.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
