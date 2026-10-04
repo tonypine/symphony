@@ -3,12 +3,14 @@ defmodule SymphonyElixir.LeftoverProcesses do
   Stops the processes a run leaves behind in its folder.
 
   `SymphonyElixir.AgentProcesses` stops an agent's process group, but `nohup`,
-  `setsid` and daemonizing all leave that group. When a run ends, this module
-  finds every process whose working folder, or a path on its command line (the
-  executable or a script), is under one of the run's folders, and stops it:
-  SIGTERM, then SIGKILL after a grace period to the ones still running as the
-  same process (same pid and start time). It logs each process it stops. A
-  process outside those folders, or Symphony itself, is never signalled.
+  `setsid` and daemonizing all leave that group. When an agent run or a QA pass
+  ends, this module finds every process whose working folder, or a path on its
+  command line (the executable or a script), is under one of the run's folders,
+  and stops it: SIGTERM, then SIGKILL after a grace period to the ones still
+  running as the same process (same pid and start time). It logs each process
+  it stops with its CPU time. A process outside those folders, Symphony itself,
+  or a process Symphony is still running (a `git -C <workspace>` call, a hook)
+  is never signalled.
   """
 
   require Logger
@@ -21,7 +23,9 @@ defmodule SymphonyElixir.LeftoverProcesses do
 
   @type entry :: %{
           required(:pid) => pos_integer(),
+          optional(:ppid) => non_neg_integer(),
           required(:start_time) => String.t(),
+          optional(:cpu_time) => String.t(),
           required(:command) => String.t(),
           required(:cwd) => String.t() | nil
         }
@@ -44,8 +48,8 @@ defmodule SymphonyElixir.LeftoverProcesses do
 
     case table.() do
       {:ok, entries} ->
-        own_pid = Keyword.get_lazy(opts, :own_pid, &own_pid/0)
-        targets = Enum.filter(entries, &(&1.pid != own_pid and under_roots?(&1, roots)))
+        spared = symphony_pids(entries, Keyword.get_lazy(opts, :own_pid, &own_pid/0))
+        targets = Enum.filter(entries, &(not MapSet.member?(spared, &1.pid) and under_roots?(&1, roots)))
         stop(targets, table, signal, Keyword.get(opts, :grace_ms, @default_grace_ms), context)
         targets
 
@@ -64,16 +68,30 @@ defmodule SymphonyElixir.LeftoverProcesses do
   defp path_under?(path, root) when is_binary(path), do: path == root or String.starts_with?(path, root <> "/")
   defp path_under?(_path, _root), do: false
 
-  # A path argument starting with `root`, as the executable, a script, or an `--opt=path` value.
+  # A path argument starting with `root`, as the executable, a script, an
+  # `--opt=path` value, or a shell redirection such as `2>path`.
   defp command_mentions?(command, root) do
-    Regex.match?(~r/(^|[\s=:'"])#{Regex.escape(root)}($|[\s\/'"])/, command)
+    Regex.match?(~r/(^|[\s=:'"<>])#{Regex.escape(root)}($|[\s\/'"])/, command)
+  end
+
+  # Symphony and every process it started and still runs. A process an agent
+  # detached was re-parented to init when its parent exited, so it isn't one.
+  defp symphony_pids(entries, own_pid) do
+    children = Enum.group_by(entries, &Map.get(&1, :ppid), & &1.pid)
+    [own_pid] |> with_descendants(children, []) |> MapSet.new()
+  end
+
+  defp with_descendants([], _children, pids), do: pids
+
+  defp with_descendants([pid | rest], children, pids) do
+    with_descendants(Map.get(children, pid, []) ++ rest, children, [pid | pids])
   end
 
   defp stop([], _table, _signal, _grace_ms, _context), do: :ok
 
   defp stop(targets, table, signal, grace_ms, context) do
     Enum.each(targets, fn entry ->
-      Logger.info("Stopping leftover process#{context} pid=#{entry.pid} cwd=#{entry.cwd || "unknown"} command=#{inspect(entry.command)}")
+      Logger.info("Stopping leftover process#{context} pid=#{entry.pid} cwd=#{entry.cwd || "unknown"} cpu_time=#{Map.get(entry, :cpu_time) || "unknown"} command=#{inspect(entry.command)}")
       signal.(entry.pid, "TERM")
     end)
 

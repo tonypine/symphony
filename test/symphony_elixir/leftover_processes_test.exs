@@ -56,8 +56,31 @@ defmodule SymphonyElixir.LeftoverProcessesTest do
 
       for pid <- [11, 12, 13], do: assert_received({:signal, ^pid, "TERM"})
       refute_received {:signal, _pid, _signal}
-      assert log =~ "Stopping leftover process issue_identifier=TP-1 pid=11 cwd=#{@root}/sub"
+      assert log =~ "Stopping leftover process issue_identifier=TP-1 pid=11 cwd=#{@root}/sub cpu_time=unknown"
       assert log =~ "pid=12 cwd=/private/tmp/qa283"
+    end
+
+    test "spares Symphony and the processes it still runs, and logs CPU time" do
+      symphony = entry(50, ppid: 1, cwd: @root)
+      git = entry(51, ppid: 50, cwd: @root, command: "git -C #{@root} status")
+      git_helper = entry(52, ppid: 51, cwd: @root, command: "git-remote-https origin")
+      detached = entry(53, ppid: 1, cwd: @root, cpu_time: "165:01.23", command: "yes")
+
+      log =
+        capture_log(fn ->
+          stopped =
+            LeftoverProcesses.stop_under([@root],
+              table: table([{:ok, [symphony, git, git_helper, detached]}, {:ok, []}]),
+              signal: recording_signal(),
+              own_pid: 50
+            )
+
+          assert Enum.map(stopped, & &1.pid) == [53]
+        end)
+
+      assert_received {:signal, 53, "TERM"}
+      refute_received {:signal, _pid, _signal}
+      assert log =~ "Stopping leftover process pid=53 cwd=#{@root} cpu_time=165:01.23 command=\"yes\""
     end
 
     test "sends SIGKILL after the grace period only to the same processes" do
@@ -144,14 +167,20 @@ defmodule SymphonyElixir.LeftoverProcessesTest do
   describe "Table" do
     test "parses ps output with its five-word start time" do
       output = """
-          1 Sat Oct  3 07:00:00 2026 /sbin/launchd
-       3726 Sat Oct  3 08:15:02 2026 /usr/bin/escript /w/.qa/TP-283/bin/symphony run --port 4000
+          1     0 Sat Oct  3 07:00:00 2026   0:12.50 /sbin/launchd
+       3726     1 Sat Oct  3 08:15:02 2026 165:01.23 /usr/bin/escript /w/.qa/TP-283/bin/symphony run --port 4000
       junk
       """
 
       assert Table.parse_ps(output) == [
-               %{pid: 1, start_time: "Sat Oct 3 07:00:00 2026", command: "/sbin/launchd"},
-               %{pid: 3726, start_time: "Sat Oct 3 08:15:02 2026", command: "/usr/bin/escript /w/.qa/TP-283/bin/symphony run --port 4000"}
+               %{pid: 1, ppid: 0, start_time: "Sat Oct 3 07:00:00 2026", cpu_time: "0:12.50", command: "/sbin/launchd"},
+               %{
+                 pid: 3726,
+                 ppid: 1,
+                 start_time: "Sat Oct 3 08:15:02 2026",
+                 cpu_time: "165:01.23",
+                 command: "/usr/bin/escript /w/.qa/TP-283/bin/symphony run --port 4000"
+               }
              ]
     end
 
