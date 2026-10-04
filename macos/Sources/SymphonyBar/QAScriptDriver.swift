@@ -53,21 +53,26 @@ final class QAScriptDriver {
     private func tick() {
         for command in QAScript.pendingCommands(in: qaMode.commandsFolder) {
             try? FileManager.default.removeItem(at: command.file)
-            let result = press(command.title)
-            presses.append(QAScript.Press(command: command.file.lastPathComponent, title: command.title, result: result))
+            press(command)
         }
         writeStatus()
     }
 
-    /// Presses the visible item titled `title`, if it is enabled, as a click would.
-    private func press(_ title: String) -> QAScript.PressResult {
+    /// Presses the visible item the command names, if it is enabled, as a click would, and records the result.
+    private func press(_ command: QAScript.Command) {
         refreshMenu()
-        guard let item = menu.items.first(where: { !$0.isHidden && !$0.isSeparatorItem && $0.title == title }) else {
-            return .missing
+        let item = menu.items.first { !$0.isHidden && !$0.isSeparatorItem && $0.title == command.title }
+        let result: QAScript.PressResult
+        if let item {
+            result = item.isEnabled && item.action != nil ? .pressed : .disabled
+        } else {
+            result = .missing
         }
-        guard item.isEnabled, let action = item.action else { return .disabled }
+        presses.append(QAScript.Press(command: command.file.lastPathComponent, title: command.title, result: result))
+        guard result == .pressed, let item, let action = item.action else { return }
+        // Record the press before acting: Quit doesn't return here, as `terminate(_:)` exits the app.
+        writeStatus()
         NSApp.sendAction(action, to: item.target, from: item)
-        return .pressed
     }
 
     /// Updates the items the way opening the menu does: the delegate's refresh, then enabling.
