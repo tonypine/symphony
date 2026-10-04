@@ -14,8 +14,6 @@ defmodule SymphonyElixir.HumanActions.Collector do
   Issues outside a project are skipped: there is no project to post the update to.
   """
 
-  require Logger
-
   alias SymphonyElixir.{AutoReview, SubIssueWait}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.HumanActions.{Action, Request}
@@ -31,8 +29,8 @@ defmodule SymphonyElixir.HumanActions.Collector do
   @reason_pattern ~r/^Reason:\s*(.+)$/m
 
   @query """
-  query SymphonyHumanActions($filter: IssueFilter!, $first: Int!, $commentLast: Int!, $historyFirst: Int!) {
-    issues(filter: $filter, first: $first) {
+  query SymphonyHumanActions($filter: IssueFilter!, $first: Int!, $after: String, $commentLast: Int!, $historyFirst: Int!) {
+    issues(filter: $filter, first: $first, after: $after) {
       nodes {
         id
         identifier
@@ -49,7 +47,7 @@ defmodule SymphonyElixir.HumanActions.Collector do
           nodes { createdAt fromState { name } toState { name } }
         }
       }
-      pageInfo { hasNextPage }
+      pageInfo { hasNextPage endCursor }
     }
   }
   """
@@ -89,24 +87,42 @@ defmodule SymphonyElixir.HumanActions.Collector do
     scope_filter = Keyword.get(opts, :scope_filter, &Client.repo_scope_filter/1)
     linear_client = Keyword.get(opts, :linear_client, &Client.graphql/3)
 
-    with {:ok, scope} <- scope_filter.(repo),
-         {:ok, body} <- linear_client.(@query, variables(scope, settings), []) do
-      issue_nodes(body)
+    with {:ok, scope} <- scope_filter.(repo) do
+      read_pages(filter(scope, settings), nil, [], linear_client)
     end
   end
 
-  defp variables(scope, settings) do
-    %{filter: filter(scope, settings), first: @issue_first, commentLast: @comment_last, historyFirst: @history_first}
+  # Reads every page: an issue left past the first page would drop its actions from the update
+  # as if they had closed.
+  defp read_pages(filter, after_cursor, acc, linear_client) do
+    with {:ok, body} <- linear_client.(@query, variables(filter, after_cursor), []),
+         {:ok, nodes, next} <- issue_page(body) do
+      case next do
+        {:next, cursor} -> read_pages(filter, cursor, [nodes | acc], linear_client)
+        :done -> {:ok, [nodes | acc] |> Enum.reverse() |> Enum.concat()}
+      end
+    end
   end
 
-  defp issue_nodes(%{"data" => %{"issues" => %{"nodes" => nodes} = issues}}) when is_list(nodes) do
-    if get_in(issues, ["pageInfo", "hasNextPage"]) == true,
-      do: Logger.warning("Human actions: more than #{@issue_first} issues to read; listing the first #{@issue_first}")
-
-    {:ok, nodes}
+  defp variables(filter, after_cursor) do
+    %{
+      filter: filter,
+      first: @issue_first,
+      after: after_cursor,
+      commentLast: @comment_last,
+      historyFirst: @history_first
+    }
   end
 
-  defp issue_nodes(body), do: {:error, {:human_actions_query_failed, body}}
+  defp issue_page(%{"data" => %{"issues" => %{"nodes" => nodes} = issues}}) when is_list(nodes) do
+    case issues["pageInfo"] do
+      %{"hasNextPage" => true, "endCursor" => cursor} when is_binary(cursor) and cursor != "" -> {:ok, nodes, {:next, cursor}}
+      %{"hasNextPage" => true} -> {:error, :linear_missing_end_cursor}
+      _page_info -> {:ok, nodes, :done}
+    end
+  end
+
+  defp issue_page(body), do: {:error, {:human_actions_query_failed, body}}
 
   defp filter(scope, settings) do
     wanted = %{

@@ -1,8 +1,6 @@
 defmodule SymphonyElixir.HumanActions.CollectorTest do
   use ExUnit.Case, async: true
 
-  import ExUnit.CaptureLog
-
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.HumanActions.{Action, Collector, Request}
 
@@ -16,7 +14,7 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
 
     client = fn query, variables, _opts ->
       send(test_pid, {:query, query, variables})
-      {:ok, %{"data" => %{"issues" => %{"nodes" => nodes, "pageInfo" => %{"hasNextPage" => Keyword.get(opts, :next_page, false)}}}}}
+      {:ok, %{"data" => %{"issues" => %{"nodes" => nodes, "pageInfo" => %{"hasNextPage" => false}}}}}
     end
 
     Collector.collect(Keyword.get(opts, :repos, [:repo]),
@@ -43,6 +41,8 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
       attrs
     )
   end
+
+  defp page(nodes, page_info), do: %{"data" => %{"issues" => %{"nodes" => nodes, "pageInfo" => page_info}}}
 
   defp labels(names), do: %{"nodes" => Enum.map(names, &%{"name" => &1})}
   defp comments(comments), do: %{"nodes" => comments}
@@ -218,9 +218,41 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
     assert %{project: %{id: "project-2", name: nil}, actions: [%Action{key: "task:id-ENG-1"}]} = collected["project-2"]
   end
 
-  test "warns when there are more issues than one page" do
-    log = capture_log(fn -> assert {:ok, %{}} = collect([], next_page: true) end)
-    assert log =~ "more than 50 issues to read"
+  test "reads every page of issues" do
+    test_pid = self()
+    first = node("MOT-1", %{"labels" => labels(["human-action"])})
+    second = node("MOT-2", %{"labels" => labels(["human-action"])})
+
+    client = fn _query, variables, _opts ->
+      send(test_pid, {:after, variables.after})
+
+      case variables.after do
+        nil -> {:ok, page([first], %{"hasNextPage" => true, "endCursor" => "cursor-1"})}
+        "cursor-1" -> {:ok, page([second], %{"hasNextPage" => false, "endCursor" => "cursor-2"})}
+      end
+    end
+
+    opts = [settings: settings(), linear_client: client, scope_filter: fn _repo -> {:ok, @scope} end]
+    assert {:ok, result} = Collector.collect([:repo], opts)
+    assert ["task:id-MOT-1", "task:id-MOT-2"] = result |> actions() |> Enum.map(& &1.key)
+    assert_received {:after, nil}
+    assert_received {:after, "cursor-1"}
+  end
+
+  test "fails when a later page cannot be read" do
+    page = page([], %{"hasNextPage" => true, "endCursor" => "cursor-1"})
+    opts = [settings: settings(), scope_filter: fn _repo -> {:ok, @scope} end]
+
+    client = fn _query, variables, _opts ->
+      if variables.after == nil, do: {:ok, page}, else: {:error, :linear_down}
+    end
+
+    assert {:error, :linear_down} = Collector.collect([:repo], Keyword.put(opts, :linear_client, client))
+
+    no_cursor = put_in(page, ["data", "issues", "pageInfo"], %{"hasNextPage" => true})
+
+    assert {:error, :linear_missing_end_cursor} =
+             Collector.collect([:repo], Keyword.put(opts, :linear_client, fn _query, _variables, _opts -> {:ok, no_cursor} end))
   end
 
   test "fails as a whole when a route cannot be read" do
