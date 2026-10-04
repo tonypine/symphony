@@ -549,6 +549,9 @@ defmodule SymphonyElixir.TestSupport do
           max_concurrent_agents: 10,
           epic_lanes: nil,
           finishing_max: nil,
+          force_label: nil,
+          forced_max: nil,
+          forced_stale_after_hours: nil,
           max_turns: 20,
           max_retry_backoff_ms: 300_000,
           max_concurrent_agents_by_state: %{},
@@ -631,6 +634,9 @@ defmodule SymphonyElixir.TestSupport do
     max_concurrent_agents = Keyword.get(config, :max_concurrent_agents)
     epic_lanes = Keyword.get(config, :epic_lanes)
     finishing_max = Keyword.get(config, :finishing_max)
+    force_label = Keyword.get(config, :force_label)
+    forced_max = Keyword.get(config, :forced_max)
+    forced_stale_after_hours = Keyword.get(config, :forced_stale_after_hours)
     max_turns = Keyword.get(config, :max_turns)
     max_retry_backoff_ms = Keyword.get(config, :max_retry_backoff_ms)
     max_concurrent_agents_by_state = Keyword.get(config, :max_concurrent_agents_by_state)
@@ -715,6 +721,9 @@ defmodule SymphonyElixir.TestSupport do
           max_concurrent_agents: max_concurrent_agents,
           epic_lanes: epic_lanes,
           finishing_max: finishing_max,
+          force_label: force_label,
+          forced_max: forced_max,
+          forced_stale_after_hours: forced_stale_after_hours,
           max_concurrent_agents_by_state: max_concurrent_agents_by_state,
           max_turns: max_turns,
           max_retry_backoff_ms: max_retry_backoff_ms,
@@ -915,6 +924,9 @@ defmodule SymphonyElixir.TestSupport do
       "    max_by_issue_state: #{yaml_value(config.max_concurrent_agents_by_state)}",
       optional_yaml_line("    epic_lanes", config.epic_lanes),
       optional_yaml_line("    finishing_max", config.finishing_max),
+      optional_yaml_line("    force_label", config.force_label),
+      optional_yaml_line("    forced_max", config.forced_max),
+      optional_yaml_line("    forced_stale_after_hours", config.forced_stale_after_hours),
       "  limits:",
       "    max_turns: #{yaml_value(config.max_turns)}",
       "    retry_backoff_max_ms: #{yaml_value(config.max_retry_backoff_ms)}",

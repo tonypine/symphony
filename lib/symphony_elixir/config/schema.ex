@@ -1005,6 +1005,9 @@ defmodule SymphonyElixir.Config.Schema do
       field(:max_concurrent_agents, :integer, default: 10)
       field(:epic_lanes, :integer)
       field(:finishing_max, :integer, default: 2)
+      field(:force_label, :string, default: "expedite")
+      field(:forced_max, :integer, default: 1)
+      field(:forced_stale_after_hours, :integer, default: 72)
       field(:max_turns, :integer, default: 20)
       field(:max_retry_backoff_ms, :integer, default: 300_000)
       field(:max_concurrent_agents_by_state, :map, default: %{})
@@ -1048,6 +1051,9 @@ defmodule SymphonyElixir.Config.Schema do
           :max_concurrent_agents,
           :epic_lanes,
           :finishing_max,
+          :force_label,
+          :forced_max,
+          :forced_stale_after_hours,
           :max_turns,
           :max_retry_backoff_ms,
           :max_concurrent_agents_by_state,
@@ -1072,11 +1078,13 @@ defmodule SymphonyElixir.Config.Schema do
         ],
         empty_values: []
       )
-      |> validate_required([:kind, :command])
+      |> validate_required([:kind, :command, :force_label])
       |> validate_inclusion(:kind, ["codex", "claude"])
       |> validate_number(:max_concurrent_agents, greater_than: 0)
       |> validate_epic_lanes()
       |> validate_number(:finishing_max, greater_than: 0)
+      |> validate_number(:forced_max, greater_than: 0)
+      |> validate_number(:forced_stale_after_hours, greater_than: 0)
       |> validate_number(:max_turns, greater_than: 0)
       |> validate_number(:max_retry_backoff_ms, greater_than: 0)
       |> validate_number(:max_tokens_per_issue, greater_than: 0)

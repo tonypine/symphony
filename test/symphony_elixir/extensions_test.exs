@@ -683,6 +683,17 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "summary" => "MT-VERIFY waiting on MT-GAP (In Progress), an unknown issue (unknown state)"
                }
              ],
+             "forced" => [
+               %{
+                 "issue_id" => "forced-http",
+                 "issue_identifier" => "MT-FORCED",
+                 "title" => "Fix the release",
+                 "state" => "In Review",
+                 "forced_since" => "2026-10-03T05:00:00Z",
+                 "position" => 1
+               }
+             ],
+             "concurrency" => %{"max_total" => 10, "finishing_max" => 2, "forced_max" => 1},
              "claimed" => ["issue-http", "retry-http"],
              "rate_limits" => %{"primary" => %{"remaining" => 11}},
              "linear_usage" => %{"window_ms" => 3_600_000, "total" => 0, "callers" => [], "queries" => []}
@@ -3455,6 +3466,17 @@ defmodule SymphonyElixir.ExtensionsTest do
           blockers: [%{identifier: "MT-GAP", state: "In Progress"}, %{identifier: nil, state: nil}]
         }
       ],
+      forced: [
+        %{
+          issue_id: "forced-http",
+          identifier: "MT-FORCED",
+          title: "Fix the release",
+          state: "In Review",
+          forced_since: ~U[2026-10-03 05:00:00.123456Z],
+          position: 1
+        }
+      ],
+      concurrency: %{max_total: 10, finishing_max: 2, forced_max: 1},
       rate_limits: %{"primary" => %{"remaining" => 11}}
     }
   end
