@@ -231,10 +231,6 @@ public struct RestartMachine: Equatable {
                 return [.stop]
             }
             phase = .waitingForRuns(running: snapshot.running)
-        } else if case .state = poll, !pausedByRestart {
-            // The pause the restart counted on is gone (the menu's status was older than a resume), so pause now.
-            enter(.pausing, now: now)
-            return [.send(.pause)]
         }
         if now.timeIntervalSince(phaseStart) >= runsTimeout { offersRestartNow = true }
         return []
