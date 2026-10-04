@@ -31,6 +31,7 @@ defmodule SymphonyElixir.MixProject do
           SymphonyElixir.Notifications.Notifier,
           SymphonyElixir.Repo.Supervisor,
           SymphonyElixir.SpecsCheck,
+          SymphonyElixir.ChangedCoverage.Runner,
           SymphonyElixir.OneShot,
           SymphonyElixir.Orchestrator,
           SymphonyElixir.Orchestrator.State,
@@ -97,7 +98,7 @@ defmodule SymphonyElixir.MixProject do
         "test/support/test_support.exs"
       ],
       dialyzer: [
-        plt_add_apps: [:mix, :mnesia],
+        plt_add_apps: [:mix, :mnesia, :tools],
         # A Symphony agent's sandbox can't write the host's MIX_HOME, where Dialyxir keeps its
         # core PLTs by default, so an agent keeps them in its cache folder.
         plt_core_path: System.get_env("SYMPHONY_AGENT_CACHE_DIR")
@@ -107,6 +108,11 @@ defmodule SymphonyElixir.MixProject do
       aliases: aliases(),
       deps: deps()
     ]
+  end
+
+  # `mix cover.changed` runs the tests with --cover, so it needs the test build.
+  def cli do
+    [preferred_envs: ["cover.changed": :test]]
   end
 
   # Run "mix help compile.app" to learn about applications.
