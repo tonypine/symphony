@@ -11,6 +11,7 @@ defmodule SymphonyElixir.CiPoller do
   use GenServer
   require Logger
 
+  alias SymphonyElixir.AcceptanceGate.Agreement
   alias SymphonyElixir.{AuditLog, AutoMerge, AutoReview, Config, Notifications, Orchestrator, RunStore, Tracker}
   alias SymphonyElixir.GitHub.{PullRequest, Webhook}
   alias SymphonyElixir.HumanReview
@@ -471,9 +472,23 @@ defmodule SymphonyElixir.CiPoller do
       issues = Enum.filter(issues, &match?(%Issue{}, &1))
 
       discovered = Enum.count(issues, &persist_discovered_ci_check?(&1, runs, existing_by_issue, run_store, repo_key, now))
+      observe_gate_decisions(settings, repo_key, issues, runs, existing, opts)
 
       {:ok, discovered, auto_review_issues(settings, issues), auto_merge_issue_ids(settings, issues)}
     end
+  end
+
+  # Records the human's decision on gate verdicts whose issue left In Review (or Human Review). It
+  # runs before the checks are processed, so the CI check record of a PR merged since the last
+  # poll still holds the head the human merged.
+  defp observe_gate_decisions(settings, repo_key, issues, runs, ci_checks, opts) do
+    agreement_opts = [
+      run_store: Keyword.get(opts, :run_store, RunStore),
+      tracker: Keyword.get(opts, :tracker, Tracker),
+      waiting_states: [AutoReview.state(settings) | HumanReview.review_states(settings)]
+    ]
+
+    Agreement.observe(repo_key, issues, runs, ci_checks, agreement_opts ++ Keyword.take(opts, [:audit_dir]))
   end
 
   # `Merging` issues GitHub auto-merge lands: a CI-fix run for one turns auto-merge off first.

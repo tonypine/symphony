@@ -20,7 +20,9 @@ defmodule SymphonyElixir.AcceptanceGate do
       escalates with reason `inconclusive`;
     * the verdict is stored per head SHA on the CI check record (`gate_sha`, `gate_verdict`,
       `gate_agent_verdict`, `gate_reasons`, `gate_run_id`), the run in the run store with
-      `kind: "acceptance_gate"` and its tokens, the `## Symphony Acceptance Gate` Linear comment
+      `kind: "acceptance_gate"`, its tokens and the verdict (`verdict`, `agent_verdict`, `reasons`,
+      the `criteria` counts, `judged_at`; `SymphonyElixir.AcceptanceGate.Agreement` later adds the
+      human's decision), the `## Symphony Acceptance Gate` Linear comment
       is rewritten, and each verdict writes one `acceptance_gate_verdict` audit event.
 
   In `shadow` mode the verdict is advisory: Auto Review moves the issue to In Review as it did
@@ -175,6 +177,7 @@ defmodule SymphonyElixir.AcceptanceGate do
       error: nil,
       worker_host: Map.get(record, :worker_host),
       workspace_path: worktree_path(settings, repo_key, issue.identifier, sha),
+      pr_url: Map.get(record, :pr_url),
       head_sha: sha,
       turn_count: 1,
       runtime_seconds: 0,
@@ -194,6 +197,11 @@ defmodule SymphonyElixir.AcceptanceGate do
       error: inconclusive_error(result.outcome),
       runtime_seconds: runtime_seconds,
       tokens: result.tokens,
+      verdict: decision.verdict,
+      agent_verdict: decision.agent_verdict,
+      reasons: decision.reasons,
+      criteria: criteria_counts(result.outcome),
+      judged_at: if(decision.verdict, do: ended_at),
       updated_at: ended_at
     })
 
@@ -226,6 +234,12 @@ defmodule SymphonyElixir.AcceptanceGate do
     if decision.verdict, do: audit(issue, record, sha, settings, decision, run_id, result.tokens, opts)
 
     {:ok, decision}
+  end
+
+  defp criteria_counts(outcome) do
+    statuses = for {:answer, %{criteria: criteria}} <- [outcome], criterion <- criteria, do: criterion.status
+    count = fn status -> Enum.count(statuses, &(&1 == status)) end
+    %{met: count.("met"), unmet: count.("unmet"), unclear: count.("unclear")}
   end
 
   defp inconclusive_error({:inconclusive, reason}), do: inspect(reason)
