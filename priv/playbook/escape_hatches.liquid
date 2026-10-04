@@ -19,6 +19,14 @@ auth/permissions that cannot be resolved in-session.
   post it with `linear_request_human_action` (title, why, exact steps, what it
   unblocks; secret names only, never values) instead of `linear_add_comment`:
   Symphony then lists it in the project's update for that person.
+- Before requesting a human action for slow or stuck CI, compute the job's age
+  from the API's UTC timestamps (`startedAt`, `createdAt`) against the current
+  UTC time (`date -u`), never against local time. When the job is under 30
+  minutes old, wait for the CI poller's flaky re-run instead of asking a human.
+- When a request turns out not to be needed, withdraw it with
+  `linear_withdraw_human_action` (the reason, plus the request's `title` when the
+  issue has more than one). A comment saying it is no longer needed leaves it
+  listed.
 - Record the blocker comment URL in the workpad, move the ticket to `Backlog` (so
   it does not look like a validated PR review), and stop.
 

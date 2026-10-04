@@ -1830,7 +1830,10 @@ lists:
   `linear_request_human_action` (`title`, `why`, `steps`, optional `unblocks` and `est_minutes`)
   when they hit something only a person can do: a missing secret or permission, an account to set
   up, a product decision, a check on a device. Then they follow the blocked-access escape hatch as
-  usual. A request whose title matches one still open on the issue is not posted again;
+  usual. A request whose title matches one still open on the issue is not posted again. An agent
+  that finds its request is not needed after all withdraws it with `linear_withdraw_human_action`
+  (`reason`, optional `title`): Symphony replies `## Action withdrawn` with the reason under the
+  request, which closes it, and removes the label once no open request is left on the issue;
 - an issue with the label and no such comment, as a task in itself (its description's list items
   become the steps);
 - a `breakdown` parent in `In Review`, waiting for its plan to be approved;

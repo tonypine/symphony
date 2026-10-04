@@ -150,6 +150,34 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
            ] = actions(collected)
   end
 
+  test "drops a withdrawn request, and lists a labelled issue whose requests were all withdrawn as nothing" do
+    withdrawal = fn id, parent_id ->
+      %{"id" => id, "body" => Request.render_withdrawal("Not needed."), "createdAt" => "2026-10-04T19:00:00.000Z", "parent" => %{"id" => parent_id}}
+    end
+
+    partly =
+      node("MOT-33", %{
+        "labels" => labels(["human-action"]),
+        "comments" =>
+          comments([
+            request_comment("comment-1", "Re-run the stuck dialyzer job", "2026-10-04T18:57:00.000Z"),
+            request_comment("comment-2", "Add the release signing secrets", "2026-10-04T18:58:00.000Z"),
+            withdrawal.("reply-1", "comment-1"),
+            %{"id" => "reply-2", "body" => "Still waiting on this.", "createdAt" => "2026-10-04T19:01:00.000Z", "parent" => %{"id" => "comment-2"}},
+            Map.put(withdrawal.("comment-3", "comment-9"), "parent", nil)
+          ])
+      })
+
+    all_withdrawn =
+      node("MOT-34", %{
+        "labels" => labels(["human-action"]),
+        "comments" => comments([request_comment("comment-4", "Re-run CI", "2026-10-04T18:57:00.000Z"), withdrawal.("reply-4", "comment-4")])
+      })
+
+    assert {:ok, collected} = collect([partly, all_withdrawn])
+    assert [%Action{key: "request:comment-2", title: "Add the release signing secrets"}] = actions(collected)
+  end
+
   test "lists a breakdown parent waiting in In Review for its plan" do
     parent = node("MOT-40", %{"state" => %{"name" => "In Review"}, "labels" => labels(["breakdown"])})
 
