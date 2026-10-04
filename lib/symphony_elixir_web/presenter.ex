@@ -845,9 +845,16 @@ defmodule SymphonyElixirWeb.Presenter do
       title: entry.title,
       state: entry.state,
       forced_since: iso8601(entry.forced_since),
-      position: entry.position
+      position: entry.position,
+      waiting_on_human: Map.get(entry, :waiting_on_human, false),
+      sub_issue: forced_sub_issue_payload(Map.get(entry, :sub_issue))
     }
   end
+
+  defp forced_sub_issue_payload(%{issue_id: issue_id} = part),
+    do: %{issue_id: issue_id, issue_identifier: Map.get(part, :identifier), state: Map.get(part, :state)}
+
+  defp forced_sub_issue_payload(_no_part), do: nil
 
   defp blocker_label(%{issue_identifier: identifier, state: state}) do
     "#{identifier || "an unknown issue"} (#{state || "unknown state"})"
