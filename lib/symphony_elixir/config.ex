@@ -250,6 +250,30 @@ defmodule SymphonyElixir.Config do
   @spec qa_profile(Schema.t()) :: RunKind.profile()
   def qa_profile(%Schema{auto_review: config} = settings), do: own_run_profile(settings, :qa, config)
 
+  @doc """
+  The host's `auto_review.android` settings for Android QA. `sdk_root` falls back to
+  `$ANDROID_HOME`, then `$ANDROID_SDK_ROOT`, then `~/Library/Android/sdk`, and is expanded.
+  `avd` is nil when unset. `env` defaults to Symphony's own environment.
+  """
+  @spec auto_review_android(Schema.t(), %{optional(String.t()) => String.t()}) :: %{
+          avd: String.t() | nil,
+          sdk_root: Path.t(),
+          boot_timeout_ms: pos_integer(),
+          idle_timeout_ms: pos_integer()
+        }
+  def auto_review_android(%Schema{auto_review: %{android: android}}, env \\ System.get_env()) do
+    sdk_root =
+      [android.sdk_root, Map.get(env, "ANDROID_HOME"), Map.get(env, "ANDROID_SDK_ROOT")]
+      |> Enum.find("~/Library/Android/sdk", &(is_binary(&1) and String.trim(&1) != ""))
+
+    %{
+      avd: android.avd,
+      sdk_root: Path.expand(sdk_root),
+      boot_timeout_ms: android.boot_timeout_ms,
+      idle_timeout_ms: android.idle_timeout_ms
+    }
+  end
+
   defp own_run_profile(settings, kind, config) do
     fallback = run_profile(settings, kind)
     Map.merge(fallback, %{kind: kind, model: config.model || fallback.model, effort: config.effort || fallback.effort})
