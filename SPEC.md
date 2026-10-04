@@ -1201,9 +1201,14 @@ to the configured human-review escalation state (`pull_requests.checks.escalate_
 scheduling another orchestrator retry. If that tracker transition fails, Symphony SHOULD still release
 its local issue claim rather than leaving the issue stuck as running. Reviewer parse failures,
 turn-budget failures, or self-check paths that remove all findings SHOULD be classified as
-`review_agent_inconclusive`; Symphony SHOULD retry the reviewer once with a fresh reviewer session,
-then downgrade to `request_changes` with a non-convergence note instead of retrying the full executor
-run. When every finding stays unverifiable after the re-quote turn, Symphony SHOULD instead approve
+`review_agent_inconclusive`, and so SHOULD a `request_changes` verdict that arrives after the
+`max_iterations` correction rounds are spent. Symphony SHOULD retry the reviewer once with a fresh
+reviewer session. When that retry is inconclusive too, Symphony SHOULD let the push go ahead without
+reviewer approval rather than send the executor a `request_changes` with no finding to act on: the
+approval prompt names the non-convergence reason, asks the executor to record it in the workpad and
+the PR body, and carries the last pass's findings, if any, as advisory notes. Symphony SHOULD log the
+reviewer's last findings when the correction rounds run out, and record a `review_agent_inconclusive`
+audit event with the issue, the review round and the reason. When every finding stays unverifiable after the re-quote turn, Symphony SHOULD instead approve
 the push without spending a correction round, attach those findings to the approval prompt as
 advisory notes, and record a `review_agent_unverified` audit event with the issue, the review round
 and the number of findings dropped.

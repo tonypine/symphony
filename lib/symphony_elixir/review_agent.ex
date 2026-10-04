@@ -32,7 +32,9 @@ defmodule SymphonyElixir.ReviewAgent do
           required(:comments) => [String.t()],
           optional(:findings) => [finding()],
           optional(:reason) => String.t(),
-          optional(:source) => map()
+          optional(:source) => map(),
+          optional(:advisory_notes) => [String.t()],
+          optional(:inconclusive) => String.t()
         }
 
   @spec enabled?(Schema.ReviewAgent.t() | nil) :: boolean()
@@ -307,7 +309,7 @@ defmodule SymphonyElixir.ReviewAgent do
   @spec approval_prompt(result(), keyword()) :: String.t()
   def approval_prompt(result, opts) do
     """
-    Reviewer agent approved the committed diff.
+    #{approval_heading(result)}
     #{advisory_notes_section(result)}
     Continue the normal workflow push and PR handoff now. Use the validation evidence already
     collected for the reviewed diff. Do not stop at the reviewer-agent gate again unless code
@@ -317,7 +319,18 @@ defmodule SymphonyElixir.ReviewAgent do
     """
   end
 
-  defp advisory_notes_section(%{advisory_notes: [_note | _rest] = notes}) do
+  defp approval_heading(%{inconclusive: reason}) do
+    """
+    Reviewer agent stayed inconclusive twice on the committed diff (#{reason}).
+    Symphony lets the push go ahead without reviewer approval: CI, QA and the supervisor still
+    gate the PR. Record in the workpad Notes and in the PR body that the pre-push reviewer
+    was inconclusive, with that reason.\
+    """
+  end
+
+  defp approval_heading(_result), do: "Reviewer agent approved the committed diff."
+
+  defp advisory_notes_section(%{advisory_notes: [_note | _rest] = notes} = result) do
     body =
       notes
       |> Enum.with_index(1)
@@ -325,8 +338,7 @@ defmodule SymphonyElixir.ReviewAgent do
 
     """
 
-    The reviewer also raised the findings below, but their quoted lines could not be found in
-    the diff or the changed files. They are advisory notes: do not change code for them before
+    #{advisory_notes_intro(result)} They are advisory notes: do not change code for them before
     the push. Record any you judge real in the workpad Notes.
 
     #{body}
@@ -334,6 +346,17 @@ defmodule SymphonyElixir.ReviewAgent do
   end
 
   defp advisory_notes_section(_result), do: ""
+
+  defp advisory_notes_intro(%{inconclusive: _reason}) do
+    "The reviewer's last pass still raised the findings below after the correction rounds ran\nout."
+  end
+
+  defp advisory_notes_intro(_result) do
+    """
+    The reviewer also raised the findings below, but their quoted lines could not be found in
+    the diff or the changed files.\
+    """
+  end
 
   @doc false
   @spec approval_handoff_tool_guidance(Schema.t() | map() | nil) :: String.t()
