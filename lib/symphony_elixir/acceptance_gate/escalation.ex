@@ -48,6 +48,10 @@ defmodule SymphonyElixir.AcceptanceGate.Escalation do
 
   @type reason :: %{rule: rule(), detail: String.t()}
 
+  @doc "Whether `path` is a dependency manifest the `:dependency` rule reads (`mix.lock`, `package.json`)."
+  @spec manifest?(String.t()) :: boolean()
+  def manifest?(path) when is_binary(path), do: Path.basename(path) in @manifests
+
   @doc """
   The reasons `issue` and its PR's diff must go to a human, one per triggered rule. `busy_files`
   are the paths changed most often on the default branch lately; `rules` is the effective
@@ -112,7 +116,7 @@ defmodule SymphonyElixir.AcceptanceGate.Escalation do
 
   defp dependency_detail(files, mode) do
     files
-    |> Enum.filter(&(Path.basename(&1.path) in @manifests))
+    |> Enum.filter(&manifest?(&1.path))
     |> Enum.flat_map(&manifest_changes(&1, mode))
     |> join_or_nil(& &1)
   end

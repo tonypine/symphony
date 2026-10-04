@@ -1383,6 +1383,33 @@ When enabled:
 - Each pass rewrites one `## Symphony QA Report` issue comment (an exception to the
   single-workpad rule, written by Symphony only), records a run with `kind: "qa"`, tokens and
   runtime in the run store, and emits `qa_passed` or `qa_failed`.
+- Acceptance gate: Auto Review runs CI, then QA, then the gate. When the repository's
+  `auto_review.acceptance_gate.mode` is not `off`, a QA `pass`, `blocked` or skip MUST NOT move the
+  issue to `In Review` straight away: Symphony requests a gate pass on the PR head and moves the
+  issue once the gate has a verdict for that SHA. A QA `fail` behaves as without the gate. Gate
+  passes run in the background, at most `acceptance_gate.max_concurrent` at once and one per
+  issue, forced tickets first, and wait while the gate agent's provider is usage-limited. A pass
+  builds the gate context (the PR merged onto current main, busy files, overlapping open PRs),
+  checks the escalation rules, then runs the gate agent in a throwaway worktree at the merge result
+  with the read-only tool scope and a read-only sandbox: it MUST NOT push, edit files, or write to
+  Linear or GitHub. The agent judges each acceptance criterion (the checklist items under the
+  ticket's `Acceptance` / `Acceptance Criteria` headings and the workpad's `Acceptance Criteria`) as
+  `met`, `unmet` or `unclear` with `file:line` evidence, the overlaps with other open PRs, the
+  scope, and judgment calls for a human, not code style or bugs, and answers with JSON: `verdict`
+  (`approve`, `rework` or `escalate`), `criteria`, `overlaps`, `scope`, `escalation_reasons` and
+  `follow_ups`. An unreadable answer SHOULD get one follow-up turn. Any escalation rule that
+  triggers, and a QA `blocked` (reason `qa_blocked`), MUST make the final verdict `escalate`, with
+  the agent's verdict kept as `agent_verdict`; a PR that conflicts with current main is `rework`
+  without an agent run; an inconclusive pass records no verdict until the
+  `escalate.inconclusive_limit`-th on the same SHA, which escalates with reason `inconclusive`. The
+  verdict is stored per head SHA on the CI check record, and a green poll on a SHA that already has
+  one MUST apply it again without a new gate run. Each pass records a run with
+  `kind: "acceptance_gate"` and its tokens and rewrites one `## Symphony Acceptance Gate` issue
+  comment (mode, verdict, agent verdict, one row per criterion, overlaps, scope, escalation reasons,
+  proposed follow-ups, tokens, runtime); each verdict writes one `acceptance_gate_verdict` audit
+  event. In `shadow` mode the verdict is advisory: the issue moves to `In Review` as it would
+  without the gate, and follow-ups are listed, not filed. `enforce` currently behaves like
+  `shadow`. See `docs/acceptance_gate.md`.
 - Parent walkthrough: a run of kind `final_verification` on a local worker with the Linear tracker,
   for a ticket with a parent and no `qa:skip` label, MUST NOT start an executor agent. Symphony
   runs the QA agent instead, with no PR, in a fresh worktree at the head of
