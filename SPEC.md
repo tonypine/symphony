@@ -2469,8 +2469,8 @@ Part D: Stray processes
 - On the same tick, unless `watchdog.stray_process_cpu_minutes` is `null`, read the host's process
   table. Flag each process whose working folder or command line is under `workspace.root`,
   `/tmp/claude-<uid>/` or a Symphony temp folder, whose CPU time exceeds the threshold, and that
-  is outside the workspace, QA worktree, QA temp folder and Claude Code task folder of every
-  running agent or QA pass. Never flag the service itself or a process it still runs.
+  is outside the workspace, temp folder, QA worktree, QA temp folder and Claude Code task folder of
+  every running agent or QA pass. Never flag the service itself or a process it still runs.
 - Show the flagged processes (pid, command, working folder, CPU time) on the dashboard and log
   each one when it is first flagged and again when it is gone. Never signal them.
 - If the process table or the running workspaces can't be read, keep the previous warnings.
@@ -2744,10 +2744,15 @@ dispatching, it SHOULD stop recorded groups whose leader still has the recorded 
 signal a pid whose start time differs (the pid was reused), and SHOULD NOT dispatch issues in the
 workspace of a group it cannot confirm stopped until that group is gone, logging why.
 
+Each run on the local host SHOULD get a private temp folder of its own, named so that concurrent
+runs never share one (the Elixir implementation uses `/tmp/symphony-run-<hash of the workspace>`),
+passed to a Claude agent as `CLAUDE_CODE_TMPDIR` and to a Codex agent as `TMPDIR` and writable in
+its sandbox. It SHOULD be removed when the run succeeds and MAY be kept for debugging when it fails.
+
 A process an agent detaches (`&` with `nohup`, `setsid`, a double fork) leaves that group. When a
 run on the local host ends, after the `after_run` hook, the implementation SHOULD stop every process
-whose working directory, or a path on its command line, is under the run's workspace or the agent's
-temporary task directory (Claude Code: `/tmp/claude-<uid>/<workspace path, non-alphanumerics as
+whose working directory, or a path on its command line, is under the run's workspace, its temp
+folder or the agent's temporary task directory (Claude Code: `/tmp/claude-<uid>/<workspace path, non-alphanumerics as
 ->`), SIGTERM then SIGKILL, and log each one with its pid, command and CPU time. It MUST NOT signal
 itself or a process it started and still runs.
 

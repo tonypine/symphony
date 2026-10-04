@@ -7,6 +7,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   alias SymphonyElixir.{
     AgentLabels,
+    AgentTmpDir,
     AgentTools,
     AgentTools.Linear.CommentRegistry,
     AuditLog,
@@ -46,6 +47,7 @@ defmodule SymphonyElixir.AgentRunner do
   # `agent.codex_stdio_prompt_soft_limit` (see Config.Schema.Agent).
   @codex_stdio_prompt_soft_limit_fallback 65_536
   @terminal_agent_setup_error_marker "missing_required_mcp_tools"
+  @tmp_dir_prefix "symphony-run-"
 
   @type worker_host :: String.t() | nil
 
@@ -158,55 +160,61 @@ defmodule SymphonyElixir.AgentRunner do
         case workspace_for_issue(issue, codex_update_recipient, opts, worker_host) do
           {:ok, workspace} ->
             send_worker_runtime_info(codex_update_recipient, issue, worker_host, workspace)
+            tmp_dirs = run_tmp_dirs(workspace, worker_host, opts)
+            opts = put_agent_tmp_dir(opts, tmp_dirs, issue)
 
-            try do
-              with :ok <-
-                     Workspace.run_before_run_hook(workspace, issue, worker_host,
-                       env: verification_env,
-                       settings: settings,
-                       on_hook: workspace_hook_listener(codex_update_recipient, issue)
-                     ),
-                   {:ok, dev_server_pid} <-
-                     Verification.start_dev_server(verification, workspace, settings: settings) do
-                remember_verification_dev_server(dev_server_pid)
-                enriched_issue = enrich_issue_for_dispatch(issue, opts)
+            result =
+              try do
+                with :ok <-
+                       Workspace.run_before_run_hook(workspace, issue, worker_host,
+                         env: verification_env,
+                         settings: settings,
+                         on_hook: workspace_hook_listener(codex_update_recipient, issue)
+                       ),
+                     {:ok, dev_server_pid} <-
+                       Verification.start_dev_server(verification, workspace, settings: settings) do
+                  remember_verification_dev_server(dev_server_pid)
+                  enriched_issue = enrich_issue_for_dispatch(issue, opts)
 
-                # Start the comment registry before workpad bootstrap so the
-                # bootstrap comment is recorded as run-owned at creation time
-                # instead of relying on the post-hoc Linear re-query, which can
-                # miss a just-created comment (read lag).
-                with {:ok, linear_comment_registry} <- CommentRegistry.start_link([]),
-                     {:ok, bootstrapped_issue} <-
-                       Workpad.bootstrap(
-                         enriched_issue,
-                         workspace,
-                         opts
-                         |> Keyword.put(:worker_host, worker_host)
-                         |> Keyword.put(:comment_registry, linear_comment_registry)
-                       ) do
-                  try do
-                    run_issue(
-                      workspace,
-                      bootstrapped_issue,
-                      codex_update_recipient,
-                      Keyword.put(opts, :linear_comment_registry, linear_comment_registry),
-                      worker_host
-                    )
-                  after
-                    send_run_comment_ids(codex_update_recipient, issue, linear_comment_registry)
+                  # Start the comment registry before workpad bootstrap so the
+                  # bootstrap comment is recorded as run-owned at creation time
+                  # instead of relying on the post-hoc Linear re-query, which can
+                  # miss a just-created comment (read lag).
+                  with {:ok, linear_comment_registry} <- CommentRegistry.start_link([]),
+                       {:ok, bootstrapped_issue} <-
+                         Workpad.bootstrap(
+                           enriched_issue,
+                           workspace,
+                           opts
+                           |> Keyword.put(:worker_host, worker_host)
+                           |> Keyword.put(:comment_registry, linear_comment_registry)
+                         ) do
+                    try do
+                      run_issue(
+                        workspace,
+                        bootstrapped_issue,
+                        codex_update_recipient,
+                        Keyword.put(opts, :linear_comment_registry, linear_comment_registry),
+                        worker_host
+                      )
+                    after
+                      send_run_comment_ids(codex_update_recipient, issue, linear_comment_registry)
+                    end
                   end
                 end
-              end
-            after
-              Workspace.run_after_run_hook(workspace, issue, worker_host,
-                env: verification_env,
-                settings: settings
-              )
+              after
+                Workspace.run_after_run_hook(workspace, issue, worker_host,
+                  env: verification_env,
+                  settings: settings
+                )
 
-              stop_remembered_verification_dev_server()
-              stop_leftover_processes(workspace, issue, worker_host, opts)
-              Verification.release(verification, "after_run completed")
-            end
+                stop_remembered_verification_dev_server()
+                stop_leftover_processes(workspace, tmp_dirs, issue, worker_host, opts)
+                Verification.release(verification, "after_run completed")
+              end
+
+            finish_agent_tmp_dir(result, tmp_dirs, issue)
+            result
 
           {:error, {:branch_already_checked_out_elsewhere, details}} = error ->
             log_branch_collision(issue, worker_host, details)
@@ -233,17 +241,62 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  # Stops what the agent left running in its workspace, detached ones included
-  # (see `SymphonyElixir.LeftoverProcesses`). The process table is read on this
-  # host, so a remote worker's processes are left alone.
-  defp stop_leftover_processes(workspace, issue, nil, opts) do
-    leftover_opts = opts |> Keyword.get(:leftover_processes, []) |> Keyword.put(:log_context, issue_context(issue))
-    claude_task_dirs = LeftoverProcesses.claude_task_dirs(workspace, Keyword.get(opts, :claude_tmp_dir, "/tmp"))
-    LeftoverProcesses.stop_under([workspace | claude_task_dirs], leftover_opts)
+  @doc """
+  The temp folders a local run in `workspace` may use, one under each of `bases`: the run
+  takes the first one it can create (see `SymphonyElixir.AgentTmpDir`). Named after a short
+  hash of the workspace, so `SymphonyElixir.StrayProcesses` can name the folder of a run in
+  flight and the next run of the workspace removes one a failed run kept.
+  """
+  @spec tmp_dirs(Path.t(), [Path.t()]) :: [Path.t()]
+  def tmp_dirs(workspace, bases \\ tmp_bases()), do: AgentTmpDir.paths(@tmp_dir_prefix, workspace, bases)
+
+  # The test suite points runs at a folder of its own, so the folders failed runs keep stay out of `/tmp`.
+  defp tmp_bases, do: Application.get_env(:symphony_elixir, :agent_run_tmp_bases) || AgentTmpDir.default_bases()
+
+  # A remote worker's agent keeps its host's temp folder.
+  defp run_tmp_dirs(workspace, nil, opts), do: tmp_dirs(workspace, Keyword.get_lazy(opts, :agent_tmp_bases, &tmp_bases/0))
+  defp run_tmp_dirs(_workspace, _worker_host, _opts), do: []
+
+  # Every agent session of the run, the pre-push reviewer's included, gets the folder as its
+  # `$TMPDIR`, writable in its sandbox. A run that can't create one still runs, with the
+  # runtime's default temp folder.
+  defp put_agent_tmp_dir(opts, [], _issue), do: opts
+
+  defp put_agent_tmp_dir(opts, tmp_dirs, issue) do
+    case AgentTmpDir.create(tmp_dirs) do
+      {:ok, tmp_dir} ->
+        opts
+        |> Keyword.put(:agent_tmp_dir, tmp_dir)
+        |> Keyword.update!(:settings, &AgentTmpDir.allow_write(&1, tmp_dir))
+
+      :error ->
+        Logger.warning("Could not create a temp folder for #{issue_context(issue)}; the agent uses its runtime's default one paths=#{inspect(tmp_dirs)}")
+        opts
+    end
+  end
+
+  # Removed when the run succeeds, kept for debugging when it fails (until the workspace's next run).
+  defp finish_agent_tmp_dir(:ok, tmp_dirs, _issue), do: Enum.each(tmp_dirs, &File.rm_rf/1)
+
+  defp finish_agent_tmp_dir(_result, tmp_dirs, issue) do
+    for tmp_dir <- tmp_dirs, File.dir?(tmp_dir) do
+      Logger.info("Keeping the temp folder of a failed run for debugging #{issue_context(issue)} path=#{tmp_dir}")
+    end
+
     :ok
   end
 
-  defp stop_leftover_processes(_workspace, _issue, _worker_host, _opts), do: :ok
+  # Stops what the agent left running in its workspace or temp folder, detached ones
+  # included (see `SymphonyElixir.LeftoverProcesses`). The process table is read on this
+  # host, so a remote worker's processes are left alone.
+  defp stop_leftover_processes(workspace, tmp_dirs, issue, nil, opts) do
+    leftover_opts = opts |> Keyword.get(:leftover_processes, []) |> Keyword.put(:log_context, issue_context(issue))
+    claude_task_dirs = LeftoverProcesses.claude_task_dirs(workspace, Keyword.get(opts, :claude_tmp_dir, "/tmp"))
+    LeftoverProcesses.stop_under([workspace | tmp_dirs ++ claude_task_dirs], leftover_opts)
+    :ok
+  end
+
+  defp stop_leftover_processes(_workspace, _tmp_dirs, _issue, _worker_host, _opts), do: :ok
 
   defp enrich_issue_for_dispatch(issue, opts) do
     issue_enricher = Keyword.get(opts, :issue_enricher, &Tracker.enrich_issue/1)
@@ -569,9 +622,11 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp start_agent_session(agent_module, workspace, worker_host, issue, opts) do
+    settings = Keyword.fetch!(opts, :settings)
+
     agent_module.start_session(workspace,
       worker_host: worker_host,
-      settings: Keyword.fetch!(opts, :settings),
+      settings: settings,
       issue: issue,
       run_id: Keyword.get(opts, :run_id),
       run_profile: Keyword.fetch!(opts, :run_profile),
@@ -579,7 +634,8 @@ defmodule SymphonyElixir.AgentRunner do
       linear_comment_registry: Keyword.get(opts, :linear_comment_registry),
       dependency_audit_module: dependency_audit_module(opts),
       dependency_audit_base_ref: Keyword.get(opts, :dependency_audit_base_ref),
-      dependency_audit_command_runner: Keyword.get(opts, :dependency_audit_command_runner)
+      dependency_audit_command_runner: Keyword.get(opts, :dependency_audit_command_runner),
+      extra_env: AgentTmpDir.env(settings.agent.kind, Keyword.get(opts, :agent_tmp_dir))
     )
   end
 
@@ -1036,7 +1092,7 @@ defmodule SymphonyElixir.AgentRunner do
        }) do
     review_opts =
       opts
-      |> Keyword.take([:repo_key, :run_id, :reviewer_run_profile, :linear_comment_registry, :review_agent_module])
+      |> Keyword.take([:repo_key, :run_id, :reviewer_run_profile, :linear_comment_registry, :review_agent_module, :agent_tmp_dir])
       |> Keyword.put(:worker_host, worker_host)
       |> maybe_put_option(:base_branch, review_base_branch(opts))
       |> Keyword.put(:on_reviewer_message, reviewer_message_handler(codex_update_recipient, issue))
