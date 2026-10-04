@@ -89,10 +89,11 @@ You are working on a Linear ticket `{{ issue.identifier }}`
 - In sandboxed Elixir runs, `mix` commands need no Hex install or env
   overrides. Symphony passes the host's `MIX_HOME`,
   `MIX_ARCHIVES`, and `HEX_HOME` to the agent so Hex and Rebar resolve, and the
-  test suite keeps MCP socket dirs under a short writable `TMPDIR`. Only when
-  `TMPDIR` is long and `/tmp` is not writable, set `SYMPHONY_MCP_SOCKET_ROOT`
-  to a short writable path (the resulting `<root>/symphony-mcp-<id>/sock` must
-  fit the 104-byte Unix `sun_path` limit).
+  test suite keeps MCP socket dirs under a writable `TMPDIR`.
+- Your `$TMPDIR` is private to this run (`/tmp/symphony-run-<hash>`), so other
+  concurrent runs never write to it: use it directly for scratch files, without
+  ad-hoc subfolders to avoid collisions. Symphony removes it when the run
+  succeeds.
 - In the Claude sandbox, build and test a Swift package (`macos/`) with
   `swift build --disable-sandbox --build-system native` and
   `swift test --disable-sandbox --build-system native`.

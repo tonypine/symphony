@@ -267,12 +267,22 @@ the issue workspace, never the source repository. For SSH workers, configure `wo
 absolute path on the remote host; remote workspace validation rejects relative and `~` roots because
 they cannot be expanded safely on the orchestrator host.
 
+Each run on the local host gets a private temp folder, `/tmp/symphony-run-<hash of the workspace>`
+(Symphony's own temp folder when it can't write to `/tmp`), passed to a Claude agent as
+`CLAUDE_CODE_TMPDIR` and to a Codex agent as `TMPDIR`, and writable in its sandbox. The pre-push
+reviewer of the run gets it too. So the agent's `$TMPDIR` is the run's own, and concurrent runs no
+longer share the `/tmp/claude-<uid>` every Claude session uses or Symphony's own temp folder. The
+folder is removed when the run succeeds and kept, with a log line naming it, when the run fails, so
+you can look at what the agent left there; the issue's next run starts with an empty one. A run that
+can't create it logs a warning and keeps the runtime's default temp folder. Runs on a remote worker
+keep that host's temp folder.
+
 When a run on the local host ends, after the `after_run` hook, Symphony stops every process still
-running in the issue workspace or started from it (by working folder or a path on the command
-line), including ones the agent detached with `&`, `nohup` or `setsid`, and the ones tied to the
-agent's Claude Code task folder under `/tmp/claude-<uid>/`. It sends SIGTERM, then SIGKILL after a
-grace period, and logs each one with its pid, CPU time and command. Symphony itself, and commands it
-is still running, are never signalled.
+running in the issue workspace or the run's temp folder or started from either (by working folder
+or a path on the command line), including ones the agent detached with `&`, `nohup` or `setsid`,
+and the ones tied to the agent's Claude Code task folder under `/tmp/claude-<uid>/`. It sends
+SIGTERM, then SIGKILL after a grace period, and logs each one with its pid, CPU time and command.
+Symphony itself, and commands it is still running, are never signalled.
 
 **Storage inventory and cleanup planning** are read-only today. Use the dry-run task to inspect
 estimated storage use before deciding whether to archive or remove anything manually:
@@ -1626,7 +1636,7 @@ On every tick the watchdog also reads the host's process table and warns about s
 A stray process runs in, or names on its command line, a folder under `workspaces.root`,
 `/tmp/claude-<uid>/` or a Symphony temp folder (`symphony-*` under `$TMPDIR` or `/tmp`). It has
 used more than `stray_process_cpu_minutes` of CPU time, and no agent run or QA pass is running in
-its workspace. Examples are a process a remote worker run or an interactive Claude session left
+its workspace or temp folder. Examples are a process a remote worker run or an interactive Claude session left
 behind, or one that escaped the cleanup at the end of a run. The dashboard shows each one with
 its pid, command, working folder and CPU time, and the log records it once. The warning clears on
 the first tick after the process is gone. Symphony never signals these processes. Set

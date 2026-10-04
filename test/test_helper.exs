@@ -14,6 +14,10 @@ audit_dir = Path.join(System.tmp_dir!(), "symphony-elixir-test-audit-#{System.pi
 state_root = Path.join(System.tmp_dir!(), "symphony-elixir-test-state-#{System.pid()}-#{System.unique_integer([:positive])}")
 logs_root = Path.join(System.tmp_dir!(), "symphony-elixir-test-logs-#{System.pid()}-#{System.unique_integer([:positive])}")
 run_store_dir = Application.fetch_env!(:symphony_elixir, :run_store_dir)
+# Agent runs make their temp folders here, so the ones failed runs keep don't stay in `/tmp`.
+agent_run_tmp_root = Path.join(System.tmp_dir!(), "symphony-elixir-test-run-tmp-#{System.pid()}-#{System.unique_integer([:positive])}")
+File.mkdir_p!(agent_run_tmp_root)
+Application.put_env(:symphony_elixir, :agent_run_tmp_bases, [agent_run_tmp_root])
 Application.put_env(:symphony_elixir, :state_root, state_root)
 Application.put_env(:symphony_elixir, :logs_root, logs_root)
 Application.put_env(:symphony_elixir, :audit_log_dir, audit_dir)
@@ -41,14 +45,28 @@ case System.cmd("nice", ["-n", "1", "true"], stderr_to_stdout: true) do
 end
 
 # Sandboxed agent runs (Claude Code, SRT) deny writes to `/tmp` itself but
-# expose a short writable TMPDIR such as `/tmp/claude-501`. Keep MCP socket
-# dirs there so `<root>/symphony-mcp-<id>/sock` still fits the 104-byte Unix
-# `sun_path` limit; fall back to `/tmp` when TMPDIR is long (macOS
-# `/var/folders/...`). An explicit `SYMPHONY_MCP_SOCKET_ROOT` still wins.
+# expose a writable TMPDIR such as `/tmp/claude-501`, or a run's own
+# `/tmp/symphony-run-<hash>/claude-501`. Keep MCP socket dirs there when it is
+# short, so `<root>/symphony-mcp-<id>/sock` still fits the 104-byte Unix
+# `sun_path` limit; use `/tmp` when TMPDIR is long (macOS `/var/folders/...`)
+# and `/tmp` is writable, else TMPDIR, where sessions name their socket dir
+# after a short hash. An explicit `SYMPHONY_MCP_SOCKET_ROOT` still wins.
 mcp_test_socket_root =
   case System.tmp_dir!() |> String.trim_trailing("/") do
-    short when byte_size(short) <= 32 -> short
-    _long -> "/tmp"
+    short when byte_size(short) <= 32 ->
+      short
+
+    long ->
+      probe = Path.join("/tmp", "symphony-mcp-probe-#{System.pid()}")
+
+      case File.mkdir(probe) do
+        :ok ->
+          File.rmdir(probe)
+          "/tmp"
+
+        {:error, _reason} ->
+          long
+      end
   end
 
 Application.put_env(:symphony_elixir, :mcp_socket_root, mcp_test_socket_root)
@@ -61,4 +79,5 @@ System.at_exit(fn _status ->
   File.rm_rf(state_root)
   File.rm_rf(logs_root)
   File.rm_rf(run_store_dir)
+  File.rm_rf(agent_run_tmp_root)
 end)
