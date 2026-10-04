@@ -562,6 +562,57 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
       assert {:error, :invalid_pr_url} = PullRequest.enable_auto_merge("https://example.com/nope", @request, gh_runner: clean)
     end
 
+    test "list_open_pull_requests reads the repository's open PRs and their files in one query" do
+      pr_url = "https://github.com/org/repo/pull/42"
+      test_pid = self()
+
+      payload =
+        Jason.encode!(%{
+          "data" => %{
+            "repository" => %{
+              "pullRequests" => %{
+                "nodes" => [
+                  %{
+                    "number" => 7,
+                    "url" => "https://github.com/org/repo/pull/7",
+                    "title" => "Human change",
+                    "headRefOid" => "abc123",
+                    "files" => %{"nodes" => [%{"path" => "lib/app.ex"}, %{"path" => nil}, %{"path" => "README.md"}]}
+                  },
+                  %{"number" => "8", "url" => nil, "title" => nil, "headRefOid" => nil, "files" => nil},
+                  "not a node"
+                ]
+              }
+            }
+          }
+        })
+
+      runner = fn ["api", "graphql", "-f", "query=" <> query, "-f", "owner=org", "-f", "name=repo"], _opts ->
+        send(test_pid, {:query, query})
+        {payload, 0}
+      end
+
+      assert {:ok, [first, second]} = PullRequest.list_open_pull_requests(pr_url, gh_runner: runner)
+      assert first == %{number: 7, url: "https://github.com/org/repo/pull/7", title: "Human change", head_sha: "abc123", files: ["lib/app.ex", "README.md"]}
+      assert second == %{number: nil, url: nil, title: nil, head_sha: nil, files: []}
+      assert_received {:query, query}
+      assert query =~ "pullRequests(states: OPEN, first: 100"
+      assert query =~ "files(first: 100)"
+    end
+
+    test "list_open_pull_requests reports a bad URL, a gh failure and an unexpected answer" do
+      pr_url = "https://github.com/org/repo/pull/42"
+      answer = fn output -> fn ["api", "graphql" | _fields], _opts -> {output, 0} end end
+      denied = fn ["api", "graphql" | _fields], _opts -> {"gh: Resource not accessible by integration", 1} end
+
+      list = &PullRequest.list_open_pull_requests(pr_url, gh_runner: &1)
+
+      assert {:error, :invalid_pr_url} = PullRequest.list_open_pull_requests("https://example.com/nope", gh_runner: denied)
+      assert {:error, {:gh_failed, _args, 1, "gh: Resource not accessible" <> _}} = list.(denied)
+      assert {:error, {:invalid_open_pull_requests_payload, "not json"}} = list.(answer.("not json"))
+      assert {:error, :invalid_open_pull_requests_payload} = list.(answer.(~s({"data":{"repository":null}})))
+    end
+
     test "disable_auto_merge turns auto-merge off for the PR node, and reports failures as they are" do
       pr_url = "https://github.com/org/repo/pull/42"
 

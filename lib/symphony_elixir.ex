@@ -77,6 +77,7 @@ defmodule SymphonyElixir.Application do
           SymphonyElixir.Config.Cache,
           SymphonyElixir.Linear.Usage,
           SymphonyElixir.Repo.FetchLog,
+          SymphonyElixir.AcceptanceGate.OpenPrCache,
           SymphonyElixir.McpServer,
           {Registry, keys: :unique, name: SymphonyElixir.Repo.Registry},
           repo_supervisor_specs(system_config.repos),
