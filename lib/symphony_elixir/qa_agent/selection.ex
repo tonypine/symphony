@@ -158,17 +158,54 @@ defmodule SymphonyElixir.QaAgent.Selection do
   @doc "The enabled playbooks: built-ins with config overrides, plus config-defined kinds."
   @spec playbooks(map(), keyword()) :: [playbook()]
   def playbooks(auto_review, opts \\ []) do
-    host = %{dev_server?: Keyword.get(opts, :dev_server?, false), android_avd?: android_avd?(auto_review)}
-    overrides = stringify_keys(Map.get(auto_review, :playbooks) || %{})
+    {overrides, host} = playbook_inputs(auto_review, opts)
 
+    overrides
+    |> kinds()
+    |> Enum.flat_map(fn kind ->
+      override = override(overrides, kind)
+      if off_reason(kind, override, host), do: [], else: [build_playbook(kind, override)]
+    end)
+  end
+
+  @doc """
+  The playbooks that are off, each with why: `enabled: false`, or a setting it needs
+  that the repo's `WORKFLOW.md` or the host's `symphony.yml` does not set.
+  """
+  @spec unavailable(map(), keyword()) :: [{String.t(), String.t()}]
+  def unavailable(auto_review, opts \\ []) do
+    {overrides, host} = playbook_inputs(auto_review, opts)
+
+    overrides
+    |> kinds()
+    |> Enum.flat_map(fn kind ->
+      case off_reason(kind, override(overrides, kind), host) do
+        nil -> []
+        reason -> [{kind, reason}]
+      end
+    end)
+  end
+
+  defp playbook_inputs(auto_review, opts) do
+    host = %{dev_server?: Keyword.get(opts, :dev_server?, false), android_avd?: android_avd?(auto_review)}
+    {stringify_keys(Map.get(auto_review, :playbooks) || %{}), host}
+  end
+
+  defp kinds(overrides) do
     custom_kinds =
       overrides
       |> Map.keys()
       |> Enum.reject(&(&1 in @built_in_kinds))
       |> Enum.sort()
 
-    (@built_in_kinds ++ custom_kinds)
-    |> Enum.flat_map(&build_playbook(&1, Map.get(overrides, &1), host))
+    @built_in_kinds ++ custom_kinds
+  end
+
+  defp override(overrides, kind) do
+    case Map.get(overrides, kind) do
+      override when is_map(override) -> stringify_keys(override)
+      _unset -> %{}
+    end
   end
 
   defp android_avd?(auto_review) do
@@ -178,32 +215,37 @@ defmodule SymphonyElixir.QaAgent.Selection do
     end
   end
 
-  defp build_playbook(kind, override, host) do
-    override = if is_map(override), do: stringify_keys(override), else: %{}
-    prompt = string_value(Map.get(override, "prompt")) || Map.get(@built_in_prompts, kind)
-    paths = string_list(Map.get(override, "paths")) || Map.get(@built_in_paths, kind, [])
+  defp build_playbook(kind, override) do
+    put_host_settings(%{kind: kind, paths: paths(kind, override), prompt: prompt(kind, override)}, kind, override)
+  end
 
+  defp prompt(kind, override), do: string_value(Map.get(override, "prompt")) || Map.get(@built_in_prompts, kind)
+  defp paths(kind, override), do: string_list(Map.get(override, "paths")) || Map.get(@built_in_paths, kind, [])
+
+  defp off_reason(kind, override, host) do
     cond do
-      Map.get(override, "enabled") == false or is_nil(prompt) -> []
-      not required_settings?(kind, override, host) -> []
-      true -> [put_host_settings(%{kind: kind, paths: paths, prompt: prompt}, kind, override)]
+      Map.get(override, "enabled") == false -> "`enabled: false`"
+      is_nil(prompt(kind, override)) -> "no `prompt`"
+      (missing = missing_settings(kind, override, host)) != [] -> "needs " <> Enum.map_join(missing, ", ", &"`#{&1}`")
+      true -> nil
     end
   end
 
   # The `web` playbook drives the verification dev server, so it needs one configured.
-  defp required_settings?("web", _override, host), do: host.dev_server?
+  defp missing_settings("web", _override, host), do: if(host.dev_server?, do: [], else: ["verification.dev_server"])
 
   # The `android_app` playbook also needs the app's IDs and an emulator to run it on.
-  defp required_settings?("android_app", override, host) do
-    host.android_avd? and application_ids(override) != [] and named_settings?("android_app", override)
+  defp missing_settings("android_app", override, host) do
+    named = missing_named_settings("android_app", override)
+    ids = if application_ids(override) == [], do: ["auto_review.playbooks.android_app.application_ids"], else: []
+    avd = if host.android_avd?, do: [], else: ["auto_review.android.avd"]
+    named ++ ids ++ avd
   end
 
-  defp required_settings?(kind, override, _host), do: named_settings?(kind, override)
+  defp missing_settings(kind, override, _host), do: missing_named_settings(kind, override)
 
-  defp named_settings?(kind, override) do
-    @required_settings
-    |> Map.get(kind, [])
-    |> Enum.all?(&string_value(Map.get(override, &1)))
+  defp missing_named_settings(kind, override) do
+    for key <- Map.get(@required_settings, kind, []), is_nil(string_value(Map.get(override, key))), do: "auto_review.playbooks.#{kind}.#{key}"
   end
 
   defp application_ids(override) do
