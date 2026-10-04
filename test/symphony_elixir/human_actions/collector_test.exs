@@ -236,6 +236,21 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
            ] = actions(collected)
   end
 
+  test "lists no action for a QA report blocked by the provider's usage limit" do
+    usage_limited_report =
+      "## Symphony QA Report\n\n**Verdict:** blocked → TP-368 In Review\n\n" <>
+        "Reason: the QA agent could not finish: {:qa_agent_failed, {:usage_limited, %{scope: :all, source: :rate_limit_event, provider: \"anthropic\", window: \"five_hour\"}}}\n"
+
+    usage_limited =
+      node("MOT-56", %{"state" => %{"name" => "In Review"}, "comments" => comments([%{"id" => "c5", "body" => usage_limited_report, "createdAt" => "2026-10-04T13:08:00.000Z"}])})
+
+    blocked =
+      node("MOT-57", %{"state" => %{"name" => "In Review"}, "comments" => comments([%{"id" => "c6", "body" => "## Symphony QA Report\n\n**Verdict:** blocked → In Review\n"}])})
+
+    assert {:ok, collected} = collect([usage_limited, blocked])
+    assert [%Action{key: "qa:id-MOT-57"}] = actions(collected)
+  end
+
   defp walkthrough_report(identifier, verdict, target_state, attrs \\ %{}) do
     outcome = Map.merge(%{verdict: verdict, sha: "abc123", ref: "origin/main", target_issue: identifier, target_state: target_state}, attrs)
     %{"id" => "report-" <> identifier, "body" => Report.render(outcome), "createdAt" => "2026-10-03T10:00:00.000Z"}
@@ -337,6 +352,16 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
     ]
 
     assert {:ok, %{}} = collect(nodes)
+  end
+
+  test "lists nothing for a final verification whose walkthrough was blocked by the provider's usage limit" do
+    report =
+      walkthrough_report("MOT-79", :blocked, "In Review", %{
+        reason: "the QA agent could not finish: {:qa_agent_failed, {:usage_limited, %{scope: :all, provider: \"anthropic\"}}}"
+      })
+
+    assert {:ok, collected} = collect([verification("MOT-79", "In Review", report)])
+    assert collected == %{}
   end
 
   test "lists a final verification without a parent or reason against its own project" do
