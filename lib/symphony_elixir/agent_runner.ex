@@ -623,25 +623,18 @@ defmodule SymphonyElixir.AgentRunner do
       {:continue, refreshed_issue} ->
         run_context = track_turn_progress(run_context, refreshed_issue)
 
-        cond do
-          merging_ci_pending?(refreshed_issue, run_context) ->
-            :ok
-
-          rework_finished?(refreshed_issue, run_context) ->
-            hand_off_finished_rework(refreshed_issue, run_context)
-
-          idle_turn_limit_reached?(refreshed_issue, run_context) ->
-            forget_rework_base(refreshed_issue, opts)
-            park_idle_issue(refreshed_issue, opts)
-
-          turn_number < max_turns ->
+        case end_run_after_turn(refreshed_issue, run_context) do
+          :continue when turn_number < max_turns ->
             run_context = %{run_context | issue: refreshed_issue}
             continue_active_issue(agent_module, app_session, run_context, refreshed_issue, turn_number, max_turns)
 
-          true ->
+          :continue ->
             Logger.info("Reached agent.max_turns for #{issue_context(refreshed_issue)} with issue still active; returning control to orchestrator")
 
             :ok
+
+          result ->
+            result
         end
 
       {:done, refreshed_issue} ->
@@ -649,6 +642,27 @@ defmodule SymphonyElixir.AgentRunner do
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  # How a run whose issue is still active ends after a turn, or `:continue` to take another turn.
+  defp end_run_after_turn(%Issue{} = issue, run_context) do
+    cond do
+      merging_ci_pending?(issue, run_context) ->
+        :ok
+
+      rework_finished?(issue, run_context) ->
+        hand_off_finished_rework(issue, run_context)
+
+      pushed_head_ci_green?(issue, run_context) ->
+        hand_off_green_pushed_head(issue, run_context)
+
+      idle_turn_limit_reached?(issue, run_context) ->
+        forget_rework_base(issue, run_context.opts)
+        park_idle_issue(issue, run_context.opts)
+
+      true ->
+        :continue
     end
   end
 
@@ -1379,7 +1393,8 @@ defmodule SymphonyElixir.AgentRunner do
   defp initial_progress(workspace, worker_host, issue, opts) do
     head = read_workspace_head(workspace, worker_host, opts)
     fingerprint = progress_fingerprint(head, issue, initial_review_agent_state())
-    %{rework_base: rework_base(issue, head, opts), head: head, fingerprint: fingerprint, empty_turns: 0}
+    rework_base = rework_base(issue, head, opts)
+    %{rework_base: rework_base, start_head: head, head: head, fingerprint: fingerprint, empty_turns: 0}
   end
 
   # The head a Rework started from: recorded by the first run dispatched in Rework and reused by
@@ -1465,12 +1480,11 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp hand_off_finished_rework(%Issue{id: issue_id} = issue, run_context) do
-    post_pr_state = run_context.opts |> Keyword.fetch!(:settings) |> AutoReview.post_pr_state()
+  defp hand_off_finished_rework(%Issue{} = issue, run_context) do
+    post_pr_state = post_pr_state(run_context)
     Logger.info("Rework for #{issue_context(issue)} is pushed to its PR with no rework signal pending; moving to #{post_pr_state}")
-    move = fn -> Tracker.update_issue_state(issue_id, post_pr_state) end
 
-    case with_linear_retry(move, "moving #{issue_context(issue)} to #{post_pr_state} after rework", run_context.opts) do
+    case move_to_post_pr_state(issue, post_pr_state, "after rework", run_context) do
       :ok ->
         forget_rework_base(issue, run_context.opts)
         :ok
@@ -1478,6 +1492,36 @@ defmodule SymphonyElixir.AgentRunner do
       {:error, reason} ->
         {:error, {:rework_handoff_failed, reason}}
     end
+  end
+
+  # A run on an issue whose PR is already open (a conflict, CI, QA or review fix) never takes the
+  # post-PR stop: the signal that started it stays pending until the run ends. Once it has pushed
+  # a new head to that PR and CI on that head is green, there is nothing left to wait for, so it
+  # moves to the post-PR state instead of turning until the idle check parks it. `Rework` and
+  # `Merging` keep their own rules (`rework_finished?/2`, `merging_ci_pending?/2`).
+  defp pushed_head_ci_green?(%Issue{} = issue, %{progress: %{head: head, start_head: start_head}} = run_context)
+       when is_binary(head) and is_binary(start_head) do
+    head != start_head and !rework_state?(issue.state) and !merging_state?(issue.state) and
+      pushed_head_ci_action(issue, run_context) == :success
+  end
+
+  defp pushed_head_ci_green?(_issue, _run_context), do: false
+
+  defp hand_off_green_pushed_head(%Issue{} = issue, %{progress: %{head: head}} = run_context) do
+    post_pr_state = post_pr_state(run_context)
+    Logger.info("CI is green on #{issue_context(issue)}'s pushed head #{head} on its PR; moving to #{post_pr_state}")
+
+    case move_to_post_pr_state(issue, post_pr_state, "after its pushed head went green", run_context) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:pushed_head_handoff_failed, reason}}
+    end
+  end
+
+  defp post_pr_state(run_context), do: run_context.opts |> Keyword.fetch!(:settings) |> AutoReview.post_pr_state()
+
+  defp move_to_post_pr_state(%Issue{id: issue_id} = issue, post_pr_state, reason, run_context) do
+    move = fn -> Tracker.update_issue_state(issue_id, post_pr_state) end
+    with_linear_retry(move, "moving #{issue_context(issue)} to #{post_pr_state} #{reason}", run_context.opts)
   end
 
   # A landing run waits on CI through `merging_ci_pending?/2`, and parking it would drop the
@@ -1488,19 +1532,27 @@ defmodule SymphonyElixir.AgentRunner do
       !pushed_head_ci_pending?(issue, run_context)
   end
 
-  # A PR with no checks reported yet stays parkable, so a repo without CI never waits on it.
   defp pushed_head_ci_pending?(%Issue{} = issue, %{progress: %{head: head}} = run_context) do
+    if pushed_head_ci_action(issue, run_context) == :pending do
+      Logger.info("Not parking #{issue_context(issue)}; waiting for CI on its pushed head #{head}")
+      true
+    else
+      false
+    end
+  end
+
+  # The CI action for the workspace HEAD when it is the attached PR's head, or nil. A PR with no
+  # checks reported yet gives nil, so a repo without CI never waits on it and stays parkable.
+  defp pushed_head_ci_action(%Issue{} = issue, %{progress: %{head: head}} = run_context) do
     pr_url = URLUtils.pull_request_url(issue)
     github = Keyword.get(run_context.opts, :github, PullRequest)
 
     with true <- is_binary(pr_url),
          {:ok, %{commit_sha: ^head, checks: [_ | _]} = ci_status} <-
-           github.fetch_ci_status(pr_url, cwd: run_context.workspace),
-         :pending <- CiPoller.ci_action(ci_status) do
-      Logger.info("Not parking #{issue_context(issue)}; waiting for CI on its pushed head #{head}")
-      true
+           github.fetch_ci_status(pr_url, cwd: run_context.workspace) do
+      CiPoller.ci_action(ci_status)
     else
-      _ -> false
+      _ -> nil
     end
   end
 
