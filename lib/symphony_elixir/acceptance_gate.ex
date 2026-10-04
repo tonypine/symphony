@@ -183,7 +183,7 @@ defmodule SymphonyElixir.AcceptanceGate do
     })
 
     job = Map.merge(job, %{run_id: run_id, token_limit: settings.agent.max_tokens_per_issue})
-    result = Keyword.get(opts, :gate_run, &run/3).(job, settings, opts)
+    result = run(job, settings, opts)
     decision = decide(result, record, sha, settings)
     ended_at = DateTime.utc_now()
     runtime_seconds = max(DateTime.diff(ended_at, started_at), 0)
@@ -208,7 +208,15 @@ defmodule SymphonyElixir.AcceptanceGate do
       gate_updated_at: ended_at
     })
 
-    report = Report.render(Map.merge(result, %{decision: decision, sha: sha, mode: mode(settings), runtime_seconds: runtime_seconds, limit: inconclusive_limit(settings)}))
+    report_fields = %{
+      decision: decision,
+      sha: sha,
+      mode: mode(settings),
+      runtime_seconds: runtime_seconds,
+      limit: inconclusive_limit(settings)
+    }
+
+    report = Report.render(Map.merge(result, report_fields))
 
     case Report.publish(issue, report, [settings: settings] ++ Keyword.take(opts, [:linear_client])) do
       :ok -> :ok
