@@ -74,7 +74,12 @@ defmodule SymphonyElixir.ObservabilityPubSubTest do
       :ok = Registry.put_meta(SymphonyElixir.PubSub, :pubsub, original_pubsub_meta)
     end)
 
-    :ok = Registry.put_meta(SymphonyElixir.PubSub, :pubsub, {FailingPubSubAdapter, :failing_adapter})
+    failing_pubsub_meta =
+      original_pubsub_meta
+      |> put_elem(0, FailingPubSubAdapter)
+      |> put_elem(1, :failing_adapter)
+
+    :ok = Registry.put_meta(SymphonyElixir.PubSub, :pubsub, failing_pubsub_meta)
 
     log =
       capture_log(fn ->
