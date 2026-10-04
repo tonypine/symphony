@@ -8,6 +8,31 @@ Auto Review runs CI, then QA, then the gate. The gate runs in `shadow` mode: it 
 advisory verdict and the issue moves to In Review as before. `enforce` doesn't apply verdicts
 yet and behaves like `shadow`.
 
+## Who reviews what
+
+Each check reads the change for its own concerns. None of them re-reads the diff for another's.
+
+- **Pre-push reviewer:** code quality and bugs (correctness, tests for new branches, error
+  handling, the repo's code rules), inside the executor run, before the first push. It doesn't
+  judge acceptance criteria or ticket scope.
+- **CI:** format, lint, the full test suite, the coverage threshold and static analysis, on every
+  push.
+- **QA:** runs the change as a user would, against the ticket's walkthrough, after CI is green.
+- **Acceptance gate:** acceptance criteria, scope, and overlap with other open PRs, on every PR head
+  before merge. It skips code style and bugs unless one makes a criterion unmet.
+- **Human:** escalations and judgment calls, and the merge approval while the gate is in `shadow`.
+
+## Supervisor
+
+The supervisor watches Symphony's runs across tickets.
+
+- **In `shadow` mode,** the supervisor writes their own decision on a PR before reading the
+  `## Symphony Acceptance Gate` comment, then notes whether they agree with the gate. They no
+  longer re-read diffs for code quality: the pre-push reviewer and CI cover it.
+- **In `enforce` mode,** the supervisor works only the escalations in In Review, and reviews 1 in 5
+  gate-approved merges after the fact.
+- **In both modes,** they keep filing operational findings and findings across PRs as tickets.
+
 ## How a gate pass runs
 
 With `mode` other than `off`, a QA `pass`, `skip` or `blocked` doesn't move the issue to In Review
