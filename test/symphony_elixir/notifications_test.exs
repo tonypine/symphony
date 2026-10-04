@@ -311,7 +311,8 @@ defmodule SymphonyElixir.NotificationsTest do
              "usage_limit_resumed",
              "forced_waiting",
              "forced_human_gate",
-             "forced_stale"
+             "forced_stale",
+             "human_action_needed"
            ]
 
     assert Event.known_event?(" RUN_FAILED ")
@@ -539,6 +540,10 @@ defmodule SymphonyElixir.NotificationsTest do
     assert slack["text"] == "Forced ticket stale: ACME-4"
     assert [%{"color" => "warning"}] = slack["attachments"]
     assert Formatter.webhook_payload(stale)["reason"] == "forced for 3d 1h, past forced_stale_after_hours=72"
+
+    {:ok, action} = Event.new(:human_action_needed, %{issue_identifier: "ACME-5", reason: "Add the release signing secrets"})
+    assert Formatter.slack_payload(action)["text"] == "Action needed from you: ACME-5"
+    assert Formatter.webhook_payload(action)["reason"] == "Add the release signing secrets"
   end
 
   test "formatter includes reviewer feedback context for webhook and Slack payloads" do

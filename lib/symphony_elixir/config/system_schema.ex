@@ -18,6 +18,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   require Schema.Ci
   require Schema.Dependencies
   require Schema.GitHub
+  require Schema.HumanActions
   require Schema.Learnings
   require Schema.Notifications
   require Schema.Observability
@@ -35,7 +36,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   @primary_key false
   @allowed_keys ~w(
-    agent auto_review dashboard dependency_audit github issue_gate issues notifications poller pre_push_review pull_requests
+    agent auto_review dashboard dependency_audit github human_actions issue_gate issues notifications poller pre_push_review
+    pull_requests
     repositories verification watchdog workers workspaces
   )
 
@@ -342,6 +344,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     embeds_one(:auto_review, Schema.AutoReview, on_replace: :update, defaults_to_struct: true)
     embeds_one(:dependencies, Schema.Dependencies, on_replace: :update, defaults_to_struct: true)
     embeds_one(:notifications, Schema.Notifications, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:human_actions, Schema.HumanActions, on_replace: :update, defaults_to_struct: true)
     embeds_many(:repos, Repo, on_replace: :delete)
   end
 
@@ -386,7 +389,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
       "review_agent" => struct_to_map(system_config.review_agent),
       "auto_review" => struct_to_map(system_config.auto_review),
       "dependencies" => struct_to_map(system_config.dependencies),
-      "notifications" => notifications_to_map(system_config.notifications)
+      "notifications" => notifications_to_map(system_config.notifications),
+      "human_actions" => struct_to_map(system_config.human_actions)
     }
     |> drop_nil_values()
   end
@@ -449,6 +453,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     |> cast_embed(:auto_review, with: &Schema.AutoReview.changeset/2)
     |> cast_embed(:dependencies, with: &Schema.Dependencies.changeset/2)
     |> cast_embed(:notifications, with: &Schema.Notifications.changeset/2)
+    |> cast_embed(:human_actions, with: &Schema.HumanActions.changeset/2)
     |> Schema.validate_profile_command_flags()
     |> cast_embed(:repos, with: &Repo.changeset/2, required: true)
     |> validate_length(:repos, min: 1)
@@ -488,7 +493,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
          {:ok, poller} <- normalize_poller(Map.get(config, "poller", %{})),
          {:ok, issue_gate} <- normalize_issue_gate(Map.get(config, "issue_gate", %{})),
          {:ok, dependency_audit} <- normalize_dependency_audit(Map.get(config, "dependency_audit", %{})),
-         {:ok, dashboard} <- normalize_dashboard(Map.get(config, "dashboard", %{})) do
+         {:ok, dashboard} <- normalize_dashboard(Map.get(config, "dashboard", %{})),
+         {:ok, human_actions} <- normalize_human_actions(Map.get(config, "human_actions", %{})) do
       workspace = merge_section(workspace, "sandbox", Map.get(agent_config, "workspace_sandbox"))
 
       {:ok,
@@ -508,7 +514,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
        |> maybe_put("dependencies", dependency_audit)
        |> maybe_put("watchdog", Map.get(config, "watchdog"))
        |> merge_sections(dashboard)
-       |> maybe_put("notifications", Map.get(config, "notifications"))}
+       |> maybe_put("notifications", Map.get(config, "notifications"))
+       |> maybe_put("human_actions", human_actions)}
     end
   end
 
@@ -821,6 +828,13 @@ defmodule SymphonyElixir.Config.SystemSchema do
   defp normalize_dependency_audit(config) do
     with {:ok, config} <- section_map(config, "dependency_audit"),
          :ok <- reject_unknown_section_keys(config, ~w(allow_registries allow_git_sources allow_path_sources), "dependency_audit") do
+      {:ok, config}
+    end
+  end
+
+  defp normalize_human_actions(config) do
+    with {:ok, config} <- section_map(config, "human_actions"),
+         :ok <- reject_unknown_section_keys(config, ~w(enabled label interval_ms min_update_interval_ms), "human_actions") do
       {:ok, config}
     end
   end

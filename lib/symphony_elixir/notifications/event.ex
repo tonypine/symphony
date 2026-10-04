@@ -23,7 +23,8 @@ defmodule SymphonyElixir.Notifications.Event do
     "usage_limit_resumed",
     "forced_waiting",
     "forced_human_gate",
-    "forced_stale"
+    "forced_stale",
+    "human_action_needed"
   ]
   @max_string_value_length 1024
 

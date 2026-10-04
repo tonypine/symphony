@@ -12,7 +12,7 @@ defmodule SymphonyElixir.Config.RepoWorkflowSchema do
   require Schema.Verification
 
   @primary_key false
-  @allowed_keys ~w(hooks prompts verification validation)
+  @allowed_keys ~w(hooks prompts verification validation human_actions)
 
   embedded_schema do
     field(:configured_paths, :map, virtual: true, default: %{})
@@ -20,6 +20,8 @@ defmodule SymphonyElixir.Config.RepoWorkflowSchema do
     embeds_one(:verification, Schema.Verification, on_replace: :update, defaults_to_struct: true)
     field(:prompts, :map, default: %{})
     field(:validation, {:array, :string}, default: [])
+    # Only `enabled`: a repo can turn the human-action project updates off for its issues.
+    field(:human_actions, :map, default: %{})
   end
 
   @type t :: %__MODULE__{}
@@ -51,15 +53,25 @@ defmodule SymphonyElixir.Config.RepoWorkflowSchema do
     |> maybe_put("prompts", workflow.prompts)
     |> maybe_put("verification", configured_map(configured_paths, "verification", &verification_to_map(workflow.verification, &1)))
     |> maybe_put("validation", workflow.validation)
+    |> maybe_put("human_actions", workflow.human_actions)
   end
 
   defp changeset(attrs) do
     %__MODULE__{}
-    |> cast(attrs, [:prompts, :validation], empty_values: [])
+    |> cast(attrs, [:prompts, :validation, :human_actions], empty_values: [])
     |> cast_embed(:hooks, with: &Schema.Hooks.changeset/2)
     |> cast_embed(:verification, with: &Schema.Verification.changeset/2)
     |> validate_prompts()
     |> validate_string_list(:validation)
+    |> validate_human_actions()
+  end
+
+  defp validate_human_actions(changeset) do
+    validate_change(changeset, :human_actions, fn :human_actions, human_actions ->
+      if Map.keys(human_actions) -- ["enabled"] == [] and is_boolean(Map.get(human_actions, "enabled", true)),
+        do: [],
+        else: [human_actions: "supports only a boolean `enabled` key"]
+    end)
   end
 
   defp validate_prompts(changeset) do

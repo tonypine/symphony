@@ -14,7 +14,11 @@ auth/permissions that cannot be resolved in-session.
   sandbox/tooling startup blocks all required local work — post one short Linear
   blocker comment (an exception to the single-workpad rule) stating what is
   missing, why it blocks required acceptance/validation, and the exact human
-  action needed to unblock.
+  action needed to unblock. When a person can unblock it (a missing secret or
+  permission, an account to set up, a product decision, a check on a device),
+  post it with `linear_request_human_action` (title, why, exact steps, what it
+  unblocks; secret names only, never values) instead of `linear_add_comment`:
+  Symphony then lists it in the project's update for that person.
 - Record the blocker comment URL in the workpad, move the ticket to `Backlog` (so
   it does not look like a validated PR review), and stop.
 

@@ -2785,7 +2785,7 @@ Scoped Linear tool extension contract:
   `linear_get_parent_issue`, `linear_get_comments`, `linear_get_related_issues`,
   `linear_update_state`, `linear_add_comment`, `linear_update_comment`, `linear_delete_comment`,
   `linear_attach_url`, `linear_attach_file`, `linear_create_subissue`, `linear_add_blocked_by`,
-  and `linear_create_project_update`.
+  `linear_create_project_update`, and `linear_request_human_action`.
 - `linear_update_state` MUST refuse `Merging` as a target, whether given by name or by state id,
   with an error saying a human has to approve. Moving an issue to `Merging` is how a human approves
   a merge (see `github_merge_pull_request`), so an agent cannot approve its own merge. Humans keep
@@ -2815,6 +2815,15 @@ Scoped Linear tool extension contract:
   MUST pass the same secret scan as comments before any Linear call. Posting MUST be capped per run
   (the Elixir cap is 1) and refused when the run has no state to count against. The read-only
   reviewer scope MUST NOT advertise or execute it.
+- `linear_request_human_action` MUST only act on the current issue and MUST accept only `title`,
+  `why`, a non-empty `steps` list, an optional `unblocks` and an optional `est_minutes`. Every
+  field MUST pass the same secret scan as comments before any Linear call. It adds the configured
+  human-action label to the current issue (creating the team label when the workspace has none)
+  and posts an `## Action needed: <title>` comment that Symphony's human-action project updates
+  list. A request with the same title still open on the issue MUST NOT be posted again. Requests
+  MUST be capped per run (the Elixir cap is 5) and refused when the run has no state to count
+  against, or when the issue's repository turned human actions off. The read-only reviewer scope
+  MUST NOT advertise or execute it.
 - The standardized Linear tool surface does not include an assignee mutation tool. Implementations
   MUST NOT advertise removed legacy names such as `linear_set_assignee`.
 - Linear read tools SHOULD wrap issue/comment fields in prompt-safety boundary tags before

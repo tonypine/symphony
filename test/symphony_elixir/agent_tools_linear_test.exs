@@ -4,6 +4,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
   alias SymphonyElixir.AgentTools.Linear
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.PromptSafety
 
   describe "dynamic read output prompt safety" do
@@ -1092,6 +1093,231 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
         assert Agent.get(registry, & &1.project_updates) == 0
       after
         File.rm_rf(workspace)
+      end
+    end
+  end
+
+  describe "request_human_action/3" do
+    @human_action %{
+      "title" => "Add the release signing secrets",
+      "why" => "Every Release run on main fails without them.",
+      "steps" => ["Open Settings → Secrets and variables → Actions.", "Add `MACOS_CERTIFICATE`."],
+      "unblocks" => "the Release workflow on main",
+      "est_minutes" => 10
+    }
+
+    defp human_action_scope(attrs \\ %{}) do
+      issue =
+        Map.merge(
+          %{
+            "id" => "issue-24",
+            "team" => %{"id" => "team-1"},
+            "labels" => %{"nodes" => []},
+            "comments" => %{"nodes" => []},
+            "history" => %{"nodes" => []}
+          },
+          Map.get(attrs, :issue, %{})
+        )
+
+      %{"data" => %{"issue" => issue, "issueLabels" => %{"nodes" => Map.get(attrs, :labels, [%{"id" => "label-team", "team" => %{"id" => "team-1"}}])}}}
+    end
+
+    # Answers each query by name; `overrides` replaces an answer, `test_pid` gets every call.
+    defp human_action_client(test_pid, scope, overrides \\ %{}) do
+      fn query, variables, _opts ->
+        [_, name] = Regex.run(~r/(?:query|mutation) (\w+)/, query)
+        send(test_pid, {:linear_called, name, variables})
+
+        default =
+          case name do
+            "SymphonyAgentHumanActionScope" -> {:ok, scope}
+            "SymphonyAgentCreateLabel" -> {:ok, %{"data" => %{"issueLabelCreate" => %{"success" => true, "issueLabel" => %{"id" => "label-new"}}}}}
+            "SymphonyAgentAddLabel" -> {:ok, %{"data" => %{"issueAddLabel" => %{"success" => true}}}}
+            "SymphonyAgentAddComment" -> {:ok, %{"data" => %{"commentCreate" => %{"success" => true, "comment" => %{"id" => "comment-new", "url" => "https://linear.app/c"}}}}}
+          end
+
+        Map.get(overrides, name, default)
+      end
+    end
+
+    defp human_action_opts(client, extra \\ []) do
+      test_pid = self()
+
+      Keyword.merge(
+        [
+          linear_client: client,
+          settings: Config.settings!(),
+          refresh_human_actions: fn -> send(test_pid, :refreshed) end
+        ],
+        extra
+      )
+    end
+
+    defp request_human_action(context, scope, overrides \\ %{}, attrs \\ @human_action) do
+      Linear.request_human_action(context, attrs, human_action_opts(human_action_client(self(), scope, overrides)))
+    end
+
+    test "labels the issue, posts the request, and asks Symphony to list it" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      context = %{issue: %Issue{id: "issue-24", identifier: "MOT-24"}, comment_registry: registry}
+
+      assert {:ok, %{"requested" => true, "commentId" => "comment-new", "url" => "https://linear.app/c", "label" => "human-action"}} =
+               request_human_action(context, human_action_scope())
+
+      assert_received {:linear_called, "SymphonyAgentHumanActionScope", %{id: "issue-24", label: "human-action"}}
+      assert_received {:linear_called, "SymphonyAgentAddLabel", %{issueId: "issue-24", labelId: "label-team"}}
+      assert_received {:linear_called, "SymphonyAgentAddComment", %{issueId: "issue-24", body: body}}
+      assert_received :refreshed
+
+      assert %{
+               title: "Add the release signing secrets",
+               why: "Every Release run on main fails without them.",
+               unblocks: "the Release workflow on main",
+               est_minutes: 10,
+               steps: ["Open Settings → Secrets and variables → Actions.", "Add `MACOS_CERTIFICATE`."]
+             } = Request.parse(body)
+
+      assert Agent.get(registry, & &1.human_actions) == 1
+    end
+
+    test "does not post the same open request twice" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      body = Request.render(%{title: "add the release  signing secrets", why: "x", steps: ["y"]}, "human-action")
+
+      scope =
+        human_action_scope(%{
+          issue: %{
+            "labels" => %{"nodes" => [%{"id" => "label-team", "name" => "Human-Action"}]},
+            "comments" => %{"nodes" => [%{"id" => "comment-1", "body" => body, "createdAt" => "2026-10-04T10:00:00.000Z"}]},
+            "history" => %{"nodes" => [%{"createdAt" => "2026-10-04T10:05:00.000Z", "fromState" => %{"name" => "In Progress"}, "toState" => %{"name" => "Backlog"}}]}
+          }
+        })
+
+      assert {:ok, %{"requested" => false, "reason" => "already_open", "commentId" => "comment-1"}} =
+               request_human_action(%{issue_id: "issue-24", comment_registry: registry}, scope)
+
+      refute_received {:linear_called, "SymphonyAgentAddComment", _variables}
+      refute_received {:linear_called, "SymphonyAgentAddLabel", _variables}
+      refute_received :refreshed
+      assert Agent.get(registry, & &1.human_actions) == 0
+
+      # Once a person moved the issue on, the same title is a new request; the label is already there.
+      moved_on =
+        put_in(scope, ["data", "issue", "history", "nodes"], [
+          %{"createdAt" => "2026-10-04T12:00:00.000Z", "fromState" => %{"name" => "Backlog"}, "toState" => %{"name" => "Todo"}}
+        ])
+
+      assert {:ok, %{"requested" => true}} =
+               request_human_action(%{issue_id: "issue-24", comment_registry: registry}, moved_on)
+
+      refute_received {:linear_called, "SymphonyAgentAddLabel", _variables}
+      assert_received {:linear_called, "SymphonyAgentAddComment", _variables}
+    end
+
+    test "uses the workspace label, or creates the team label when there is none" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      context = %{issue_id: "issue-24", comment_registry: registry}
+      workspace_label = human_action_scope(%{labels: [%{"id" => "label-other-team", "team" => %{"id" => "team-2"}}, %{"id" => "label-workspace", "team" => nil}]})
+
+      assert {:ok, %{"requested" => true}} = request_human_action(context, workspace_label)
+      assert_received {:linear_called, "SymphonyAgentAddLabel", %{labelId: "label-workspace"}}
+
+      minimal = Map.take(@human_action, ["title", "why", "steps"])
+      assert {:ok, %{"requested" => true}} = request_human_action(context, human_action_scope(%{labels: []}), %{}, minimal)
+
+      assert_received {:linear_called, "SymphonyAgentCreateLabel", %{input: %{"name" => "human-action", "teamId" => "team-1"}}}
+      assert_received {:linear_called, "SymphonyAgentAddLabel", %{labelId: "label-new"}}
+    end
+
+    test "gives the slot back when Linear refuses any step" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      context = %{issue_id: "issue-24", comment_registry: registry}
+      scope = human_action_scope(%{labels: []})
+      refused = fn field -> {:ok, %{"data" => %{field => %{"success" => false}}}} end
+
+      for {overrides, expected} <- [
+            {%{"SymphonyAgentHumanActionScope" => {:error, :linear_down}}, {:error, :linear_down}},
+            {%{"SymphonyAgentHumanActionScope" => {:ok, %{"data" => %{"issue" => nil}}}}, {:error, :issue_not_found}},
+            {%{"SymphonyAgentCreateLabel" => refused.("issueLabelCreate")}, {:error, {:linear_mutation_failed, "issueLabelCreate", :_}}},
+            {%{"SymphonyAgentCreateLabel" => {:ok, %{"data" => %{"issueLabelCreate" => %{"success" => true}}}}}, {:error, :label_not_created}},
+            {%{"SymphonyAgentAddLabel" => refused.("issueAddLabel")}, {:error, {:linear_mutation_failed, "issueAddLabel", :_}}},
+            {%{"SymphonyAgentAddComment" => refused.("commentCreate")}, {:error, {:linear_mutation_failed, "commentCreate", :_}}}
+          ] do
+        result = request_human_action(context, scope, overrides)
+
+        case expected do
+          {:error, {:linear_mutation_failed, field, :_}} ->
+            assert {:error, {:linear_mutation_failed, ^field, _body}} = result
+
+          expected ->
+            assert result == expected
+        end
+      end
+
+      refute_received :refreshed
+      assert Agent.get(registry, & &1.human_actions) == 0
+    end
+
+    test "refuses secrets in any field, invalid input, a run past its cap, and a repository that turned it off" do
+      workspace = tmp_workspace!("linear-agent-human-action-secret")
+      audit_dir = Path.join(workspace, "audit")
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      context = workspace |> secret_context() |> Map.put(:comment_registry, registry)
+      no_linear = fn _query, _variables, _opts -> flunk("Linear should not be called") end
+      opts = human_action_opts(no_linear, dir: audit_dir)
+
+      try do
+        secret_fields = [
+          {"title", "Add " <> openai_fixture()},
+          {"why", openai_fixture()},
+          {"unblocks", openai_fixture()},
+          {"steps", ["Paste " <> openai_fixture()]}
+        ]
+
+        for {field, value} <- secret_fields do
+          assert {:error, :secret_pattern_detected} = Linear.request_human_action(context, Map.put(@human_action, field, value), opts)
+        end
+
+        assert [%{"tool" => "linear_request_human_action", "reason" => "secret_pattern_detected"} | _rest] = audit_events(audit_dir)
+        refute inspect(audit_events(audit_dir)) =~ openai_fixture()
+
+        for {attrs, message} <- [
+              {%{"title" => " "}, "`title` must be a non-blank string."},
+              {%{"title" => String.duplicate("a", 121)}, "`title` must be at most 120 characters."},
+              {%{"why" => nil}, "`why` must be a non-blank string."},
+              {%{"steps" => []}, "`steps` must list 1 to 15 non-blank strings."},
+              {%{"steps" => List.duplicate("x", 16)}, "`steps` must list 1 to 15 non-blank strings."},
+              {%{"steps" => ["ok", " "]}, "`steps` must list 1 to 15 non-blank strings."},
+              {%{"steps" => "one"}, "`steps` must list 1 to 15 non-blank strings."},
+              {%{"unblocks" => 3}, "`unblocks` must be a string."},
+              {%{"est_minutes" => 0}, "`est_minutes` must be an integer from 1 to 480."},
+              {%{"est_minutes" => 1.5}, "`est_minutes` must be an integer from 1 to 480."}
+            ] do
+          assert {:error, {:invalid_human_action, ^message}} = Linear.request_human_action(context, Map.merge(@human_action, attrs), opts)
+        end
+
+        assert {:error, :missing_current_issue} = Linear.request_human_action(%{}, @human_action, opts)
+
+        disabled = Config.settings!() |> then(&%{&1 | human_actions: %{&1.human_actions | enabled: false}})
+        assert {:error, :human_actions_disabled} = Linear.request_human_action(context, @human_action, Keyword.put(opts, :settings, disabled))
+
+        assert {:error, :human_action_registry_unavailable} =
+                 Linear.request_human_action(Map.delete(context, :comment_registry), @human_action, opts)
+
+        for _slot <- 1..5, do: Linear.CommentRegistry.reserve_human_action(registry, 5)
+        assert {:error, {:human_action_cap_reached, 5}} = Linear.request_human_action(context, @human_action, opts)
+      after
+        File.rm_rf(workspace)
+      end
+    end
+
+    test "reads the settings of the issue's repository when none are given" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      client = human_action_client(self(), human_action_scope())
+
+      for context <- [%{issue_id: "issue-24"}, %{issue: %Issue{id: "issue-24", repo_key: nil}}] do
+        assert {:ok, %{"requested" => true, "label" => "human-action"}} =
+                 Linear.request_human_action(Map.put(context, :comment_registry, registry), @human_action, linear_client: client)
       end
     end
   end

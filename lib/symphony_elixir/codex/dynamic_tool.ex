@@ -181,6 +181,29 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       }
     },
     %{
+      "name" => "linear_request_human_action",
+      "description" =>
+        "Record that the current issue needs something only a human can do: a missing secret or permission, a product decision, an account setup, a manual check on a device. Symphony lists it, with your steps, in a Linear project update for the human, and drops it once the issue moves on. Never put a secret value in any field. A request with the same title that is still open is not posted again. Then follow the blocked-access escape hatch as usual.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["title", "why", "steps"],
+        "properties" => %{
+          "title" => %{"type" => "string", "maxLength" => 120, "description" => "What the human must do, as an instruction: `Add the release signing secrets`."},
+          "why" => %{"type" => "string", "description" => "Why it is needed and what fails without it, in one or two sentences."},
+          "steps" => %{
+            "type" => "array",
+            "items" => %{"type" => "string"},
+            "minItems" => 1,
+            "maxItems" => 15,
+            "description" => "Exact steps, one instruction each, detailed enough to do from a phone without opening anything else. Name settings and secret names, never values."
+          },
+          "unblocks" => %{"type" => "string", "description" => "What becomes possible once it is done, e.g. `the Release workflow on main`."},
+          "est_minutes" => %{"type" => "integer", "minimum" => 1, "maximum" => 480, "description" => "Rough minutes the human needs."}
+        }
+      }
+    },
+    %{
       "name" => "github_get_pull_request",
       "description" => "Read the pull request for the current workspace branch in the configured origin repo.",
       "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
@@ -390,6 +413,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "linear_create_subissue" => ["title", "description", "priority", "blocked_by"],
     "linear_add_blocked_by" => ["blocked_by"],
     "linear_create_project_update" => ["body", "health"],
+    "linear_request_human_action" => ["title", "why", "steps", "unblocks", "est_minutes"],
     "github_get_pull_request" => [],
     "github_fetch_origin" => [],
     "github_create_pull_request" => ["title", "body", "draft"],
@@ -585,6 +609,10 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   defp execute_linear_tool("linear_create_project_update", context, args, opts) do
     Linear.create_project_update(context, args, opts)
+  end
+
+  defp execute_linear_tool("linear_request_human_action", context, args, opts) do
+    Linear.request_human_action(context, args, opts)
   end
 
   defp execute_github_tool("github_get_pull_request", context, _args, opts), do: GitHub.get_pull_request(context, opts)
@@ -969,6 +997,29 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       "error" => %{
         "code" => "project_update_registry_unavailable",
         "message" => "Symphony has no per-run tool state for this session, so it cannot enforce the project update cap and refused to post."
+      }
+    }
+  end
+
+  defp tool_error_payload({:invalid_human_action, message}) do
+    %{"error" => %{"code" => "invalid_human_action", "message" => "linear_request_human_action: " <> message}}
+  end
+
+  defp tool_error_payload({:human_action_cap_reached, cap}) do
+    %{
+      "error" => %{
+        "code" => "human_action_cap_reached",
+        "message" => "This run already requested #{cap} human actions, the per-run limit. Put anything else in the blocker comment.",
+        "cap" => cap
+      }
+    }
+  end
+
+  defp tool_error_payload(:human_actions_disabled) do
+    %{
+      "error" => %{
+        "code" => "human_actions_disabled",
+        "message" => "Human-action requests are turned off for this repository. Describe what the human must do in the blocker comment instead."
       }
     }
   end
