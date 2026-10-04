@@ -5000,6 +5000,8 @@ defmodule SymphonyElixir.CoreTest do
               assert_receive {:mcp_restart_run_turn, 1, %{session: 1}, _first_prompt}
               assert_receive {:linear_wait_slept, delay_ms}
               assert delay_ms == if(unquote(label) == :rate_limit, do: 30_000, else: 5_000)
+              # The orchestrator hears of the wait, so its watchdogs hold off until it ends.
+              assert_receive {:linear_wait, "issue-mcp-restart", ^delay_ms}
               assert_receive {:mcp_restart_run_turn, 2, %{session: 1}, _continuation_prompt}
               refute_receive {:mcp_restart_start_session, 2, _workspace, _opts}, 50
             end,

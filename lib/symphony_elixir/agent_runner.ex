@@ -71,7 +71,12 @@ defmodule SymphonyElixir.AgentRunner do
   def run(issue, codex_update_recipient \\ nil, opts \\ []) do
     repo_key = run_repo_key(issue, opts)
     settings = Config.settings_for_repo!(repo_key)
-    opts = opts |> Keyword.put(:repo_key, repo_key) |> Keyword.put(:settings, settings)
+
+    opts =
+      opts
+      |> Keyword.put(:repo_key, repo_key)
+      |> Keyword.put(:settings, settings)
+      |> put_linear_wait_notice(issue, codex_update_recipient)
 
     # The orchestrator owns host retries so one worker lifetime never hops machines.
     worker_host = selected_worker_host(Keyword.get(opts, :worker_host), settings.worker.ssh_hosts)
@@ -117,6 +122,15 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp terminal_tool_failure_circuit_breaker?({:tool_failure_circuit_breaker, _payload}), do: true
   defp terminal_tool_failure_circuit_breaker?(_reason), do: false
+
+  # Tells the orchestrator before each wait on Linear in this run, so its stall check and
+  # no-progress watchdog count the wait as activity instead of restarting the run.
+  defp put_linear_wait_notice(opts, %{id: issue_id}, recipient) when is_binary(issue_id) and is_pid(recipient) do
+    notify = fn _reason, delay_ms -> send(recipient, {:linear_wait, issue_id, delay_ms}) end
+    Keyword.update(opts, :linear_retry_opts, [on_wait: notify], &Keyword.put_new(&1, :on_wait, notify))
+  end
+
+  defp put_linear_wait_notice(opts, _issue, _recipient), do: opts
 
   # A step that still could not reach Linear once its wait ran out, such as
   # `{:idle_park_failed, {:linear_rate_limited, until_ms}}`, failed through no fault of the
@@ -1308,14 +1322,15 @@ defmodule SymphonyElixir.AgentRunner do
   # nothing about the run. Wait for Linear in this run and session instead of
   # failing the run and starting a new session.
   defp refresh_issue_state(%Issue{id: issue_id} = issue, issue_state_fetcher, opts) do
-    retry_opts =
-      opts
-      |> Keyword.get(:linear_retry_opts, [])
-      |> Keyword.put_new(:on_wait, fn reason, delay_ms ->
-        Logger.warning("Linear refresh after turn failed for #{issue_context(issue)}; retrying in #{delay_ms}ms in the same session reason=#{inspect(reason)}")
-      end)
+    retry_opts = Keyword.get(opts, :linear_retry_opts, [])
+    notify_wait = Keyword.get(retry_opts, :on_wait, fn _reason, _delay_ms -> :ok end)
 
-    TransientRetry.run(fn -> issue_state_fetcher.([issue_id]) end, retry_opts)
+    on_wait = fn reason, delay_ms ->
+      Logger.warning("Linear refresh after turn failed for #{issue_context(issue)}; retrying in #{delay_ms}ms in the same session reason=#{inspect(reason)}")
+      notify_wait.(reason, delay_ms)
+    end
+
+    TransientRetry.run(fn -> issue_state_fetcher.([issue_id]) end, Keyword.put(retry_opts, :on_wait, on_wait))
   end
 
   # Waits out a rate limit or a dropped connection on a Linear call the run makes, the

@@ -1198,7 +1198,9 @@ Discovery is automatic: on start the daemon writes `<state-root>/control_url` an
 
 ### `watchdog`
 
-Progress watchdog for stalled runs.
+Progress watchdog for stalled runs. A run waiting out a Linear rate limit or outage is not stalled:
+its no-progress clock (and the first-turn `agent.timeouts.stall_ms` clock) starts again when the
+wait ends.
 
 ```yaml
 watchdog:

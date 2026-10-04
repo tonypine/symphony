@@ -438,6 +438,19 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  # A run is waiting `delay_ms` on a Linear rate limit or outage; see after_linear_wait/2.
+  def handle_info({:linear_wait, issue_id, delay_ms}, %{running: running} = state)
+      when is_binary(issue_id) and is_integer(delay_ms) do
+    case Map.get(running, issue_id) do
+      nil ->
+        {:noreply, state}
+
+      running_entry ->
+        wait_until = DateTime.add(DateTime.utc_now(), delay_ms, :millisecond)
+        {:noreply, %{state | running: Map.put(running, issue_id, Map.put(running_entry, :linear_wait_until, wait_until))}}
+    end
+  end
+
   def handle_info(
         {:codex_worker_update, issue_id, %{event: _, timestamp: _} = update},
         %{running: running} = state
@@ -1973,6 +1986,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp first_turn_stall_elapsed_ms(running_entry, now) do
     running_entry
     |> first_turn_started_at()
+    |> after_linear_wait(running_entry)
     |> case do
       %DateTime{} = timestamp ->
         max(0, DateTime.diff(now, timestamp, :millisecond))
@@ -2036,12 +2050,21 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp watchdog_last_event_at(running_entry) when is_map(running_entry) do
-    Map.get(running_entry, :last_event_at) ||
-      Map.get(running_entry, :last_codex_timestamp) ||
-      Map.get(running_entry, :started_at)
+    (Map.get(running_entry, :last_event_at) ||
+       Map.get(running_entry, :last_codex_timestamp) ||
+       Map.get(running_entry, :started_at))
+    |> after_linear_wait(running_entry)
   end
 
   defp watchdog_last_event_at(_running_entry), do: nil
+
+  # A run waiting out a Linear rate limit or outage is neither stalled nor stuck: the stall
+  # and no-progress clocks start again when its latest wait ends.
+  defp after_linear_wait(%DateTime{} = timestamp, %{linear_wait_until: %DateTime{} = wait_until}) do
+    if DateTime.after?(wait_until, timestamp), do: wait_until, else: timestamp
+  end
+
+  defp after_linear_wait(timestamp, _running_entry), do: timestamp
 
   defp restart_stuck_issue(state, issue_id, running_entry, elapsed_ms) do
     identifier = Map.get(running_entry, :identifier, issue_id)

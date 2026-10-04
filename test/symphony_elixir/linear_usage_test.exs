@@ -82,7 +82,7 @@ defmodule SymphonyElixir.LinearUsageTest do
       assert_received {:on_wait, {:linear_api_status, 503, nil}, 5_000}
     end
 
-    test "logs a warning naming the call's label before each wait, unless an on_wait is given" do
+    test "logs a warning naming the call's label before each wait, and still calls on_wait" do
       rate_limited = {:error, {:linear_rate_limited, @now_ms + 42_000}}
       {fun, sleeps} = scripted([rate_limited, :ok])
 
@@ -107,7 +107,7 @@ defmodule SymphonyElixir.LinearUsageTest do
         end)
 
       assert_received {:on_wait, 42_000}
-      refute log =~ "Linear call failed"
+      assert log =~ "Linear call failed while moving TP-1 to In Progress; retrying in 42000ms"
     end
   end
 

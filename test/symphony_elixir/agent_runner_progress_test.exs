@@ -200,10 +200,15 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     test "a finished rework waits it out on its post-PR move instead of failing the run" do
       Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [@rate_limited])
 
-      log = capture_log(fn -> assert :ok = run_issue!("Rework", heads: ["sha-old", "sha-rework"], runner_opts: linear_wait_opts()) end)
+      log =
+        capture_log(fn ->
+          assert :ok = run_issue!("Rework", heads: ["sha-old", "sha-rework"], recipient: self(), runner_opts: linear_wait_opts())
+        end)
 
       assert turns() == 1
       assert_received {:linear_wait_slept, 30_000}
+      # The orchestrator hears of the wait, so its watchdogs hold off until it ends.
+      assert_received {:linear_wait, "issue-progress", 30_000}
       assert_received {:memory_tracker_state_update, "issue-progress", "Auto Review"}
       assert log =~ "Linear call failed while moving issue_id=issue-progress issue_identifier=TP-337 to Auto Review after rework"
       refute log =~ "Agent run failed"
@@ -270,7 +275,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     try do
       AgentRunner.run(
         issue,
-        nil,
+        Keyword.get(opts, :recipient),
         [
           workspace_path: workspace,
           agent_module: ProgressAgent,
