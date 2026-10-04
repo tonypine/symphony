@@ -36,5 +36,7 @@ if config_env() == :test do
     # :no_such_log aborts when one run's after_suite removes the shared dir).
     state_root: Path.join(System.tmp_dir!(), "symphony-elixir-test-state-#{System.pid()}-#{System.unique_integer([:positive])}"),
     logs_root: Path.join(System.tmp_dir!(), "symphony-elixir-test-logs-#{System.pid()}-#{System.unique_integer([:positive])}"),
-    run_store_dir: Path.join(System.tmp_dir!(), "symphony-elixir-test-run-store-#{System.pid()}-#{System.unique_integer([:positive])}")
+    run_store_dir: Path.join(System.tmp_dir!(), "symphony-elixir-test-run-store-#{System.pid()}-#{System.unique_integer([:positive])}"),
+    # A git fetch that fails on `cannot lock ref` is retried at once in tests.
+    repo_fetch_retry_delay_ms: 0
 end
