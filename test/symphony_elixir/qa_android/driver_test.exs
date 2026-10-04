@@ -175,6 +175,9 @@ defmodule SymphonyElixir.QaAndroid.DriverTest do
                ~w(qa_android_install qa_android_launch qa_android_stop qa_android_screenshot qa_android_ui_tree qa_android_tap qa_android_type qa_android_key qa_android_rotate qa_android_dark_mode qa_android_font_scale)
 
       assert error_code(Driver.call_tool(nil, "qa_android_install", %{})) == "qa_android_driver_unavailable"
+      assert {:error, {:qa_tool, _code, message}} = Driver.call_tool(nil, "qa_android_install", %{})
+      assert message =~ "Do not start an emulator or adb yourself"
+      assert message =~ ~s(`blocked` with "no Android QA playbook configured for this repo")
       assert Driver.stop(nil) == :ok
     end
 
@@ -272,6 +275,32 @@ defmodule SymphonyElixir.QaAndroid.DriverTest do
       Driver.stop(default)
       assert error_code(Driver.call_tool(default, "qa_android_stop", %{"application_id" => @app_id})) == "qa_android_driver_unavailable"
       assert Driver.stop(default) == :ok
+    end
+
+    # The driver traps exits, so every adb port it opens sends an `:EXIT` when it closes.
+    test "ignores the exit of a closed adb port", %{worktree: worktree} do
+      driver = start_driver(worktree)
+      port = Port.open({:spawn_executable, System.find_executable("true")}, [])
+      Port.close(port)
+
+      log =
+        capture_log(fn ->
+          send(driver, {:EXIT, port, :normal})
+          assert %{lease: %{}} = GenServer.call(driver, :config)
+        end)
+
+      refute log =~ "received unexpected message"
+      assert Process.alive?(driver)
+
+      # Any other message is still logged, and the driver stays up.
+      log =
+        capture_log(fn ->
+          send(driver, :unexpected)
+          assert %{lease: %{}} = GenServer.call(driver, :config)
+        end)
+
+      assert log =~ "Android QA driver received unexpected message=:unexpected"
+      assert Process.alive?(driver)
     end
   end
 
