@@ -20,12 +20,15 @@ defmodule SymphonyElixir.AcceptanceGate.Context do
       `SymphonyElixir.AcceptanceGate.OpenPrCache`, which gives only their changed paths;
     * names the functions both PRs change, from the `-U0` hunk headers. A temporary attributes
       file maps `*.ex` and `*.exs` to git's built-in `elixir` diff driver; other files use git's
-      default heuristic. An untracked PR's `functions` are always empty.
+      default heuristic. An untracked PR's `functions` are always empty;
+    * summarises the whole diff for the escalation rules (`diff_summary`): each changed file's
+      numstat and added lines, read before the diff is cut, and the content of a changed
+      `mix.lock` or `package.json` on the base tip and in the merge result.
   """
 
   require Logger
 
-  alias SymphonyElixir.AcceptanceGate.OpenPrCache
+  alias SymphonyElixir.AcceptanceGate.{Escalation, OpenPrCache}
   alias SymphonyElixir.{AutoReview, RunStore, Tracker, Workspace}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.GitHub.PullRequest
@@ -55,6 +58,7 @@ defmodule SymphonyElixir.AcceptanceGate.Context do
           diff: String.t(),
           diff_truncated?: boolean(),
           numstat: [file_stat()],
+          diff_summary: Escalation.diff_summary(),
           busy_files: [String.t()],
           overlaps: [overlap()]
         }
@@ -166,10 +170,44 @@ defmodule SymphonyElixir.AcceptanceGate.Context do
          merged_sha = String.trim(merged),
          {:ok, diff} <- run(git, ["diff", "--no-color", "--no-renames", base_sha, merged_sha], worktree),
          {:ok, numstat} <- run(git, ["diff", "--numstat", "--no-renames", base_sha, merged_sha], worktree) do
+      numstat = parse_numstat(numstat)
+      files = diff_summary_files(numstat, added_lines(diff), {base_sha, merged_sha}, worktree, git)
       {diff, truncated?} = cap_diff(diff)
-      {:ok, %{merged_sha: merged_sha, diff: diff, diff_truncated?: truncated?, numstat: parse_numstat(numstat)}}
+      summary = %{files: files}
+      {:ok, %{merged_sha: merged_sha, diff: diff, diff_truncated?: truncated?, numstat: numstat, diff_summary: summary}}
     end
   end
+
+  defp diff_summary_files(numstat, added_lines, {base_sha, merged_sha}, worktree, git) do
+    Enum.map(numstat, fn stat ->
+      file = Map.put(stat, :added_lines, Map.get(added_lines, stat.path, []))
+
+      if Escalation.manifest?(stat.path),
+        do: Map.merge(file, %{base: show(git, base_sha, stat.path, worktree), head: show(git, merged_sha, stat.path, worktree)}),
+        else: file
+    end)
+  end
+
+  # A file the commit doesn't have (added or removed by the PR) is nil.
+  defp show(git, revision, path, worktree) do
+    case git.(["show", "#{revision}:#{path}"], worktree) do
+      {content, 0} -> content
+      {_output, _status} -> nil
+    end
+  end
+
+  # Added lines per path, without the leading `+`. A path comes from the `+++` line between
+  # `diff --git` and the file's first hunk; a removed file (`+++ /dev/null`) adds none.
+  defp added_lines(diff) do
+    {_state, added} = diff |> String.split("\n") |> Enum.reduce({:between, %{}}, &added_line/2)
+    Map.new(added, fn {path, lines} -> {path, Enum.reverse(lines)} end)
+  end
+
+  defp added_line("diff --git " <> _rest, {_state, acc}), do: {{:header, nil}, acc}
+  defp added_line("+++ b/" <> path, {{:header, _old}, acc}), do: {{:header, path}, acc}
+  defp added_line("@@" <> _rest, {{:header, path}, acc}) when is_binary(path), do: {{:hunks, path}, acc}
+  defp added_line("+" <> line, {{:hunks, path}, acc}), do: {{:hunks, path}, Map.update(acc, path, [line], &[line | &1])}
+  defp added_line(_line, state), do: state
 
   defp cap_diff(diff) when byte_size(diff) <= @max_diff_bytes, do: {diff, false}
 

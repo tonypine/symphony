@@ -138,25 +138,27 @@ defmodule SymphonyElixir.QaAgent.Report do
 
   @doc """
   Creates the QA report comment, or rewrites the existing one in place on Linear.
-  Other trackers get a new comment.
+  Other trackers get a new comment. `opts[:heading]` names another Symphony-written comment
+  to rewrite the same way (the acceptance gate's).
   """
   @spec publish(Issue.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def publish(%Issue{id: issue_id} = issue, body, opts \\ []) when is_binary(issue_id) and is_binary(body) do
     settings = Keyword.get_lazy(opts, :settings, &Config.settings!/0)
+    heading = Keyword.get(opts, :heading, @heading)
 
     if settings.tracker.kind == "linear",
-      do: publish_linear(issue, body, Keyword.take(opts, [:linear_client, :settings])),
+      do: publish_linear(issue, body, heading, Keyword.take(opts, [:linear_client, :settings])),
       else: Tracker.create_comment(issue_id, body)
   end
 
-  defp publish_linear(issue, body, opts) do
+  defp publish_linear(issue, body, heading, opts) do
     {:ok, registry} = CommentRegistry.start_link()
 
     try do
       context = %{issue: issue, comment_registry: registry}
 
       with {:ok, comments} <- AgentTools.Linear.get_comments(context, @comment_limit, opts) do
-        case Enum.find(comments, &report_comment?/1) do
+        case Enum.find(comments, &report_comment?(&1, heading)) do
           %{"id" => comment_id} ->
             CommentRegistry.record(registry, comment_id)
             ok(AgentTools.Linear.update_comment(context, comment_id, body, opts))
@@ -173,13 +175,13 @@ defmodule SymphonyElixir.QaAgent.Report do
   defp ok({:ok, _response}), do: :ok
   defp ok({:error, reason}), do: {:error, reason}
 
-  defp report_comment?(%{"id" => id, "body" => body}) when is_binary(id) and is_binary(body) do
+  defp report_comment?(%{"id" => id, "body" => body}, heading) when is_binary(id) and is_binary(body) do
     body
     |> String.trim()
     |> String.replace_prefix("<linear_issue_comment_body>", "")
     |> String.trim_leading()
-    |> String.starts_with?(@heading)
+    |> String.starts_with?(heading)
   end
 
-  defp report_comment?(_comment), do: false
+  defp report_comment?(_comment, _heading), do: false
 end
