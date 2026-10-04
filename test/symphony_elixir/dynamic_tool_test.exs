@@ -973,6 +973,34 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
              Jason.decode!(response["output"])
   end
 
+  test "update_comment refuses a body copied from a truncated read" do
+    {:ok, registry} = CommentRegistry.start_link()
+    CommentRegistry.record(registry, "comment-owned")
+
+    truncated_read =
+      "## Symphony Workpad\n" <>
+        String.duplicate("a", 100) <>
+        "\n[... truncated by Symphony: linear_issue_comment_body exceeded 5000 characters ...]"
+
+    response =
+      DynamicTool.execute(
+        "linear_update_comment",
+        %{"comment_id" => "comment-owned", "body" => truncated_read},
+        issue: %Issue{id: "issue-current"},
+        comment_registry: registry,
+        linear_client: fn _query, _variables, _opts ->
+          flunk("linear client should not be called for a truncated comment body")
+        end
+      )
+
+    assert response["success"] == false
+
+    assert %{"error" => %{"code" => "truncated_comment_body", "message" => message}} =
+             Jason.decode!(response["output"])
+
+    assert message =~ "linear_get_comments"
+  end
+
   test "attach_file rejects paths outside the workspace before upload" do
     test_root = Path.join(System.tmp_dir!(), "linear-attach-file-#{System.unique_integer([:positive])}")
     workspace = Path.join(test_root, "workspace")
