@@ -1227,9 +1227,12 @@ Fields:
   repo root) and `build_timeout_ms` (default `900000`), and is off unless `build` and `app` are
   set. The built-in `web` kind also takes `browser_mcp` (an MCP server definition, the shape of
   an `agent.mcp.servers` entry) and is off unless `verification.enabled` is true and
-  `verification.dev_server.start_cmd` is set. A repository's `WORKFLOW.md` MAY set
-  `auto_review.playbooks` too; for that repository's QA passes each kind is merged over this map
-  key by key, the repository's value winning.
+  `verification.dev_server.start_cmd` is set. The built-in `android_app` kind also takes `build`
+  (shell command the QA agent runs in its own sandbox), `apk_path` (the APK it writes, relative to
+  the repo root) and `application_ids` (list of strings), and is off unless `build`, `apk_path`, a
+  non-empty `application_ids` and `auto_review.android.avd` are set. A repository's
+  `WORKFLOW.md` MAY set `auto_review.playbooks` too; for that repository's QA passes each kind is
+  merged over this map key by key, the repository's value winning.
 - `worker_host` (string, optional): an SSH host (`user@host` or `host:port`, the form
   `workers.ssh_hosts` uses) where the `macos_app` playbook's `qa_*` tools run instead of the
   Symphony host. It does not need to be, and should not be, listed in `workers.ssh_hosts`.
@@ -1280,9 +1283,11 @@ When enabled:
   `## User walkthrough` section in the issue. No selected playbook means skip. The built-in `cli`
   playbook triggers on `bin/**`, `lib/symphony_elixir/cli.ex` and `lib/mix/tasks/**`; the built-in
   `macos_app` playbook on `**/*.swift`, `**/Info.plist`, `**/*.xib`, `**/*.storyboard` and
-  `**/*.xcassets/**`; the built-in `web` playbook on `lib/*_web/**`, `lib/*_web.ex`,
-  `priv/static/**`, `assets/**` and `.heex`, `.html`, `.css`, `.scss`, `.jsx`, `.tsx`, `.vue` and
-  `.svelte` files.
+  `**/*.xcassets/**`; the built-in `android_app` playbook on `**/*.kt`, `**/*.java`,
+  `**/AndroidManifest.xml`, `**/src/main/res/**`, `**/*.gradle.kts` and `**/*.gradle`, with
+  `**/src/test/**` and `**/src/androidTest/**` counted as tests; the built-in `web` playbook on
+  `lib/*_web/**`, `lib/*_web.ex`, `priv/static/**`, `assets/**` and `.heex`, `.html`, `.css`,
+  `.scss`, `.jsx`, `.tsx`, `.vue` and `.svelte` files.
 - A pass that runs the `web` playbook MUST start `verification.dev_server` on a port from the
   verification port pool, from its own worktree at the PR head (never the agent's), before the
   agent starts, give the agent its URL, and stop it, release the port and remove that worktree
@@ -1334,7 +1339,8 @@ When enabled:
   uninstall the configured apps and every package installed in the pass, release the lease and
   remove its private directory. An emulator that cannot start MUST
   surface as `qa_android_unavailable`, telling the agent to answer `blocked`. Other tool scopes MUST
-  NOT list or run them.
+  NOT list or run them. The QA prompt MUST give the agent the playbook's `build`, `apk_path` and
+  `application_ids`.
 - With `worker_host` set, the worktree checks MUST stay on the Symphony host, and the build, the app,
   screenshots and accessibility calls MUST run on that host over SSH: `qa_build` ships the
   worktree's `HEAD` into a fresh build directory there, and screenshots are copied back into the
@@ -1411,8 +1417,9 @@ Rendering requirements:
 - Unknown filters MUST fail rendering.
 - Before the rendered issue template or PR template, prepend a managed Symphony runtime context.
   That context MUST cover workspace-only execution, untrusted Linear/GitHub/CI/tool-output
-  handling, scoped Linear/GitHub tool preference, workpad usage, obvious secret paths, and final
-  response expectations. Repo `WORKFLOW.md` templates SHOULD NOT be required to restate these
+  handling, scoped Linear/GitHub tool preference, workpad usage, obvious secret paths, never
+  launching an app or window on the host (UI screenshots come from offscreen rendering or the QA
+  pass), and final response expectations. Repo `WORKFLOW.md` templates SHOULD NOT be required to restate these
   Symphony-owned rules.
 
 Template input variables:
@@ -1767,8 +1774,8 @@ not require recognizing or validating extension fields unless that extension is 
 - `auto_review.max_fix_attempts`: integer, default `2`
 - `auto_review.run_on`: `every_push` or `first_pass`, default `every_push`
 - `auto_review.skip_globs`: list of strings, default `[]`
-- `auto_review.playbooks`: map, default `{}` (built-in kinds `cli`, `macos_app`, `web`); a
-  repository's `WORKFLOW.md` may override it per kind
+- `auto_review.playbooks`: map, default `{}` (built-in kinds `cli`, `macos_app`, `android_app`,
+  `web`); a repository's `WORKFLOW.md` may override it per kind
 - `auto_review.android.avd`: string, optional
 - `auto_review.android.sdk_root`: string, default `$ANDROID_HOME`, then `$ANDROID_SDK_ROOT`, then
   `~/Library/Android/sdk`
@@ -1975,7 +1982,10 @@ Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `
   the repository doesn't allow auto-merge), the poller MUST read the PR again: one already `MERGED`
   takes the merged path below, and an open one at the same head with `mergeStateStatus == "CLEAN"`
   and every check `SUCCESS`, `NEUTRAL` or `SKIPPED` (or no checks at all) is squash-merged directly
-  with the same `mergePullRequest` fields. The poller logs which path it took.
+  with the same `mergePullRequest` fields. The poller logs which path it took. A refusal because
+  the head moved since the poller read it (`expected head oid does not match`) is not a refusal:
+  the poller MUST keep the state and try again with the head the next poll reads, and fall back
+  only after 3 such refusals in a row.
 - When `mergeStateStatus` is `BEHIND`, the poller MUST call
   `PUT /repos/{owner}/{repo}/pulls/{number}/update-branch` with `expected_head_sha` at most once per
   head. A failed call other than a conflict is retried on the next poll.
@@ -1989,8 +1999,20 @@ Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `
   GitHub refuses, the poll records an error and the issue stays in `Merging` (a conflicting PR
   can't merge) until a later poll turns it off. Only a fresh move to `Merging` turns auto-merge on
   again, even when the head didn't change.
-- A red head takes the CI poller's CI-failure path. Auto-merge stays on, so GitHub merges the PR
-  once the fix is green, whatever state the issue is in by then.
+- A red head takes the CI poller's CI-failure path. A flaky-retry rerun of the same commit pushes
+  no code, so auto-merge stays on and GitHub merges the PR if the rerun is green. A CI-fix
+  dispatch can push code the approval never covered, so it gets the same review gate as a
+  conflict: before the CI poller moves a `Merging` issue (with auto-merge on for its repository)
+  to `In Progress`, it MUST turn auto-merge off when GitHub shows it on (`autoMergeRequest` in the
+  CI read), log it, write an `auto_merge_disabled` audit event with `reason: "ci_failure"`, and
+  comment on the issue why. It also records a `ci_failure` hold in the PR review record
+  (`disabled_at` when it turned auto-merge off, `enabled_head_sha` cleared), even when auto-merge
+  was already off. While held, the PR poller MUST NOT turn auto-merge on, at any head; it drops
+  the hold once it sees the issue out of `Merging`, so only a fresh move to `Merging` turns
+  auto-merge on again, even when the head didn't change. While GitHub refuses to turn it off or
+  the hold can't be stored, the poll records an error and the dispatch waits for the next poll (a
+  red head can't merge). Escalation (`ci.max_retries` reached) starts no fix run and leaves
+  auto-merge as it is.
 - When GitHub reports the PR `MERGED` and Symphony turned on auto-merge for it (or the issue is in
   `Merging`), the poller MUST move the issue to `Done` (already `Done` is fine) and then clean up as
   for any merged PR. A failed transition is retried on the next poll.
@@ -1999,11 +2021,11 @@ Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `
   auto-merge on and a green head past `checks.landing_wait_timeout_ms`, the poller MUST log an
   error, comment the reason on the issue, and fall back: the orchestrator then dispatches the
   landing agent. The fallback lasts until the issue leaves `Merging`.
-- The state (`enabled`, `updating_branch`, `merging`, `conflict`, `fallback`, `merged`) is kept in
+- The state (`enabled`, `updating_branch`, `merging`, `conflict`, `ci_failure`, `fallback`, `merged`) is kept in
   the PR review record, logged on every change, and listed under `auto_merge` in
   `/api/v1/state` and on the dashboard (for example "auto-merge on, waiting for CI on `abc1234`").
-- Apart from the conflict path, moving an issue out of `Merging` does not turn auto-merge off on
-  GitHub; disable it on the PR to stop the merge.
+- Apart from the conflict and CI-fix paths, moving an issue out of `Merging` does not turn
+  auto-merge off on GitHub; disable it on the PR to stop the merge.
 
 When a landing run (issue in `Merging` with an attached PR) finishes a turn while the PR head's
 checks are pending, the agent runner MUST end the run instead of starting another continuation
@@ -2943,6 +2965,14 @@ Scoped Linear tool extension contract:
   `linear_add_blocked_by`, `linear_create_project_update`, and `linear_request_human_action`.
 - `linear_add_comment` MAY take a `parent_id` naming a comment on the current issue; the comment is
   then posted as a reply under it. `linear_get_comments` SHOULD return each reply's parent id.
+- Reads whose issue descriptions and comments reach the agent (`linear_get_current_issue`,
+  `linear_get_comments`, `linear_get_subissues`, `linear_get_parent_issue`, and the dispatch
+  enrichment that supplies the prompt's description and comments) SHOULD ask Linear for pre-signed
+  upload URLs with the `public-file-urls-expire-in` header, so the agent can download attached
+  images and files from `uploads.linear.app` without a Linear credential. The Elixir
+  implementation signs for six hours, re-signs on every read, and lists `uploads.linear.app` in the
+  built-in network allowlist. Polls and writes stay unsigned, so Symphony never writes a signed URL
+  back into Linear.
 - `linear_update_state` MUST refuse `Merging` as a target, whether given by name or by state id,
   with an error saying a human has to approve. Moving an issue to `Merging` is how a human approves
   a merge (see `github_merge_pull_request`), so an agent cannot approve its own merge. Humans keep
@@ -4681,7 +4711,9 @@ infrastructure.
   configured repo `WORKFLOW.md` through the same validation the service runs at startup, without
   starting the runtime or contacting the tracker or GitHub. It exits `0` and prints
   `Config OK: <path>` when valid, and exits `1` with the error on stderr when the file is missing
-  or invalid. Errors name the file and key and never print secret values.
+  or invalid. Errors name the file and key and never print secret values. A `workspace.source`
+  repo whose clone does not exist yet is checked without its `WORKFLOW.md` (the service clones it
+  at startup before reading it), and the check prints a warning naming the repo.
 - CLI accepts `--config path-to-symphony.yml` to select an alternate operator config.
 - CLI defaults to `./symphony.yml` when `--config` is omitted.
 - CLI errors when the resolved `symphony.yml` (explicit or default) does not exist.

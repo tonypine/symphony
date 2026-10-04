@@ -231,6 +231,9 @@ repositories:
 - A failed clone or fetch fails that dispatch with an error naming the repo key, and the issue is
   retried; other repos keep running. A clone that cannot be made the first time Symphony starts
   stops startup, because the repo has no `WORKFLOW.md` to read yet.
+- `symphony check` does not clone. Before the first clone it checks the rest of the config, skips
+  the repo's `WORKFLOW.md` and prints a warning saying Symphony clones the repo when it starts, so a
+  repo added while Symphony runs can be applied with a restart.
 
 Symphony rejects `source` when it is not `owner/repo` or a github.com URL, and together with
 `workspace.repo`, `workspace.strategy: clone`, `workflow_source: local`, a `workflow` path outside
@@ -868,20 +871,25 @@ pull_requests:
     when the required checks pass, and Symphony moves the ticket to `Done`. When GitHub refuses
     auto-merge (the PR can already merge, no branch protection, or the repository doesn't allow
     it) and the PR is `CLEAN` with green checks or none, Symphony squash-merges it right away.
+    When the head moved between Symphony reading the PR and turning auto-merge on (a push or an
+    update-branch), Symphony tries again with the new head on the next poll; only a head that
+    moves 3 times in a row falls back to the landing agent.
   - A PR that is `BEHIND` the base branch gets one GitHub "Update branch" per head; CI runs on the
     merged code and auto-merge fires when it passes.
   - A merge conflict turns auto-merge off and moves the ticket to `In Progress` with the conflict
     context (an agent run). The approval covered the diff before the conflict, so the fix goes
     back through review, and moving the ticket to `Merging` again turns auto-merge back on. The
     audit log (`auto_merge_disabled`, `reason: conflict`) and a ticket comment record it.
-  - A red head goes through the CI-failure fix loop with auto-merge left on, so the PR merges once
-    the fix is green.
+  - A red head first gets one flaky rerun of the same commit (`ci.flaky_retry`), with auto-merge
+    left on. The CI-fix run after that turns auto-merge off before it starts, like a conflict: the
+    fix goes back through review, and moving the ticket to `Merging` again turns auto-merge back
+    on. The audit log (`auto_merge_disabled`, `reason: ci_failure`) and a ticket comment record it.
   - When auto-merge can't be used (GitHub refuses it and the PR isn't clean and green, a
     permission error, or the PR stays blocked on a green head), Symphony logs the error, comments
     the reason on the ticket, and falls back to the landing agent for that stay in `Merging`.
   - `/api/v1/state` (`auto_merge`) and the dashboard show each PR's status, for example
     "auto-merge on, waiting for CI on `abc1234`", "updating branch" or "blocked: conflict".
-  - Apart from a merge conflict, moving a ticket out of `Merging` does not turn auto-merge off;
+  - Apart from a merge conflict or a CI fix, moving a ticket out of `Merging` does not turn auto-merge off;
     disable it on the PR to stop the merge.
   - Repository requirements: **Allow auto-merge** on (`allow_auto_merge`), and branch protection on
     the base branch with required status checks. Requiring branches to be up to date before merging
@@ -971,6 +979,7 @@ Before any agent runs, Symphony decides whether the PR needs QA and which playbo
 | only docs, tests or `skip_globs` paths changed | skipped |
 | `## User walkthrough` in the ticket | `cli` playbook runs |
 | web paths changed and `verification.dev_server` configured | `web` playbook runs |
+| Android paths changed, `android_app` configured and `auto_review.android.avd` set | `android_app` playbook runs |
 | a playbook's trigger paths changed | that playbook runs |
 | nothing else | skipped (internal changes rely on tests and the pre-push review) |
 
@@ -1136,56 +1145,8 @@ auto_review:
 A non-string `avd` or `sdk_root`, or a timeout that is not a positive integer, fails `symphony
 check`.
 
-Symphony runs the emulator on the host, because the QA agent's sandbox cannot (it needs the
-hypervisor, Mach ports, adb sockets and a lot of memory). The agent sandbox does not change.
-
-- At most one emulator runs. A QA pass that needs it while another holds it waits its turn, and
-  gives up with a clear error after 30 minutes.
-- It boots `avd` with `-no-window -no-audio -no-boot-anim -read-only -no-snapshot-save`, so QA
-  never changes the AVD, and waits up to `boot_timeout_ms` for it to finish booting. An unset
-  `avd`, a missing `emulator/emulator` or `platform-tools/adb` under `sdk_root`, an AVD the
-  emulator does not list and a boot timeout each fail with their own message.
-- Symphony starts its own adb server on port `15037` and the emulator on console port `5600`
-  (serial `emulator-5600`), and sends every adb call there. Your own adb server (port `5037`),
-  emulators and phones are left alone, and your adb server does not see Symphony's emulator: it
-  only scans console ports 5554 to 5584.
-- It stops `idle_timeout_ms` after the last QA pass gives it back (or exits), and when Symphony
-  stops. An emulator that crashes is booted again by the next QA pass.
-- The emulator's and adb server's process ids are recorded in
-  `<state root>/qa-android/emulator-processes.json`. If Symphony crashes, its next start stops
-  those processes, only when they still run with the same start time.
-
-A QA pass that runs an `android_app` playbook takes the emulator when it starts and gets these
-tools. Symphony runs them on the host and checks every argument. The playbook names the `build`
-command, the `apk_path` it writes (relative to the repository root) and the app's
-`application_ids`. The QA agent runs `build` in its own sandbox: no `qa_android_*` tool runs the
-build, Gradle or any other repository command on the host; they only call Symphony's adb.
-
-| Tool | Does | Refuses |
-| --- | --- | --- |
-| `qa_android_install` | copies the APK at `apk_path` into a private directory, uninstalls every `application_ids` app (which wipes its data) and every package installed since the pass's first install, and runs `adb install -r` from the copy | a worktree with changes to tracked files outside `qa-evidence/`; an `apk_path` that resolves (symlinks included) outside the worktree, is a symlink, is not a file or is over 512 MB; an APK that installs or replaces a package not in `application_ids`, which is uninstalled again, as is anything a failed install left behind |
-| `qa_android_launch` | starts the app's launcher activity and waits until it is in the foreground; reports recent logcat when the app exits | an application ID not in `application_ids`, or not installed by `qa_android_install` in this pass |
-| `qa_android_stop` | force-stops the app | an application ID not in `application_ids` |
-| `qa_android_screenshot` | saves the screen to a new file `qa-evidence/<name>.png`, at most 50 per pass | a name that already exists (file or symlink) |
-| `qa_android_ui_tree` | reads the screen with `uiautomator dump` through `adb exec-out` as a flat list of nodes: a path such as `0.2.1`, class, text, content-desc, resource-id, bounds and the clickable, focused, enabled, checked and scrollable flags; filters by `text`, `resource_id` and `class`; caps the depth (`max_depth`, default 30), the nodes (`max_nodes`, default 300) and the JSON (100 KB) and says when nodes were left out; reports the foreground package and warns when it is not one of `application_ids` | |
-| `qa_android_tap` | taps the centre of a node `path` from the last tree, or a point `x`, `y` | a point off the display, a path not in the last tree's result |
-| `qa_android_type` | types `text` (up to 500 characters) into the focused field; a newline presses Enter. Each part is single-quoted for the device's shell, so no character can run a command | anything but printable ASCII and newlines |
-| `qa_android_key` | presses `back`, `enter`, `ime_action`, `tab`, `del`, `dpad_up`, `dpad_down`, `dpad_left`, `dpad_right` or `escape` | any other key |
-| `qa_android_rotate` | turns off auto-rotate and sets `portrait` or `landscape` | any other orientation |
-| `qa_android_dark_mode` | turns the night theme `on` or `off` (`cmd uimode night`) | |
-| `qa_android_font_scale` | sets the font scale to 0.85, 1.0, 1.15, 1.3, 1.5, 1.8 or 2.0 | any other scale |
-
-The last seven tools work only once `qa_android_install` installed one of the `application_ids`
-in this pass.
-
-When the pass ends, or crashes, Symphony resets what the pass changed (portrait with auto-rotate
-off, dark mode off, font scale 1.0), so the next pass starts clean on the same emulator, then
-uninstalls the `application_ids` apps and every package installed in the pass, gives the emulator back and removes the private directory. When the
-emulator cannot start, every tool fails with `qa_android_unavailable` and tells the agent to mark
-the Android steps `blocked`. Only QA agents see these tools; executor and reviewer sessions cannot
-list or call them.
-
-The `android_app` playbook cannot be configured yet; it comes in a later release.
+See [Android app QA](#android-app-qa) for the playbook, the emulator Symphony runs and the
+one-time host setup.
 
 #### Web app QA
 
@@ -1444,6 +1405,152 @@ last command should fail with `Permission denied` or `No such file or directory`
 Auto Review needs `pull_requests.enabled: true` and `pull_requests.checks.enabled: true`, because
 the CI poller is what moves issues out of the state. A PR with no CI checks stays in Auto Review.
 
+#### Android app QA
+
+The built-in `android_app` playbook tests an Android app on an emulator: the QA agent builds the
+APK in its own sandbox, Symphony installs it on an emulator it runs on the host, and the agent
+uses the app through the screen's UI tree, the way a user would. It is off until a repository
+names the build, the APK and the app's IDs, and `symphony.yml` names the emulator:
+
+```md
+---
+# the app repository's WORKFLOW.md
+auto_review:
+  playbooks:
+    android_app:
+      build: ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew :app:assembleDebug
+      apk_path: app/build/outputs/apk/debug/app-debug.apk   # relative to the repo root
+      application_ids: ["com.example.app"]
+      # paths: ["app/src/main/**"]   # optional, default below
+---
+```
+
+```yaml
+# symphony.yml
+auto_review:
+  android:
+    avd: Pixel_3a_API_34_extension_level_7_arm64-v8a   # the name `emulator -list-avds` prints
+```
+
+The playbook is on only when `build`, `apk_path`, a non-empty `application_ids` and
+`auto_review.android.avd` are all set (the [Android settings](#android-settings) hold the rest of
+the host side). It then triggers on `**/*.kt`, `**/*.java`, `**/AndroidManifest.xml`,
+`**/src/main/res/**`, `**/*.gradle.kts` and `**/*.gradle`, and a `qa:android_app` label forces
+it. A change only under `**/src/test/**` or `**/src/androidTest/**` counts as tests and is
+skipped. The QA prompt gives the agent the build command, the APK path and the application IDs.
+
+`build` runs in the QA agent's sandbox with the agent's scrubbed environment, so name what it
+needs in the command itself: `ANDROID_HOME` (or `ANDROID_SDK_ROOT`) and, when the JDK is not the
+one `/usr/libexec/java_home` finds, `JAVA_HOME`. Add `~/.gradle` to
+`permissions.filesystem.allow_write_paths` so the build can use Gradle's caches (see
+[`agent`](#agent)); Maven Central, Google's Maven and the Gradle plugin portal are
+in the built-in network allowlist. A fresh QA worktree has no `local.properties`.
+
+The agent follows the ticket's `## User walkthrough` and acceptance criteria. It lets each screen
+settle (a few seconds after every navigation) before it reads `qa_android_ui_tree`, and judges
+the tree: the controls and text the ticket describes are there, their bounds have a real size,
+nothing is clipped under the status bar, the navigation bar or the keyboard, and the app is still
+in the foreground. It checks back, the keyboard action, rotation and dark mode where the walkthrough
+touches them, takes a screenshot per judged step and after each action that changes the UI, and
+attaches them to the issue. A missing or broken component, or a crash (`qa_app_exited`), fails the
+step, with the tree excerpt and the screenshot.
+
+A pass that runs the playbook takes the emulator when it starts and gets these tools. Symphony
+runs them on the host and checks every argument. No `qa_android_*` tool runs the build, Gradle or
+any other repository command on the host; they only call Symphony's adb.
+
+| Tool | Does | Refuses |
+| --- | --- | --- |
+| `qa_android_install` | copies the APK at `apk_path` into a private directory, uninstalls every `application_ids` app (which wipes its data) and every package installed since the pass's first install, and runs `adb install -r` from the copy | a worktree with changes to tracked files outside `qa-evidence/`; an `apk_path` that resolves (symlinks included) outside the worktree, is a symlink, is not a file or is over 512 MB; an APK that installs or replaces a package not in `application_ids`, which is uninstalled again, as is anything a failed install left behind |
+| `qa_android_launch` | starts the app's launcher activity and waits until it is in the foreground; reports recent logcat when the app exits | an application ID not in `application_ids`, or not installed by `qa_android_install` in this pass |
+| `qa_android_stop` | force-stops the app | an application ID not in `application_ids` |
+| `qa_android_screenshot` | saves the screen to a new file `qa-evidence/<name>.png`, at most 50 per pass | a name that already exists (file or symlink) |
+| `qa_android_ui_tree` | reads the screen with `uiautomator dump` through `adb exec-out` as a flat list of nodes: a path such as `0.2.1`, class, text, content-desc, resource-id, bounds and the clickable, focused, enabled, checked and scrollable flags; filters by `text`, `resource_id` and `class`; caps the depth (`max_depth`, default 30), the nodes (`max_nodes`, default 300) and the JSON (100 KB) and says when nodes were left out; reports the foreground package and warns when it is not one of `application_ids` | |
+| `qa_android_tap` | taps the centre of a node `path` from the last tree, or a point `x`, `y` | a point off the display, a path not in the last tree's result |
+| `qa_android_type` | types `text` (up to 500 characters) into the focused field; a newline presses Enter. Each part is single-quoted for the device's shell, so no character can run a command | anything but printable ASCII and newlines |
+| `qa_android_key` | presses `back`, `enter`, `ime_action`, `tab`, `del`, `dpad_up`, `dpad_down`, `dpad_left`, `dpad_right` or `escape` | any other key |
+| `qa_android_rotate` | turns off auto-rotate and sets `portrait` or `landscape` | any other orientation |
+| `qa_android_dark_mode` | turns the night theme `on` or `off` (`cmd uimode night`) | |
+| `qa_android_font_scale` | sets the font scale to 0.85, 1.0, 1.15, 1.3, 1.5, 1.8 or 2.0 | any other scale |
+
+The last seven tools work only once `qa_android_install` installed one of the `application_ids`
+in this pass.
+
+When the pass ends, or crashes, Symphony resets what the pass changed (portrait with auto-rotate
+off, dark mode off, font scale 1.0), so the next pass starts clean on the same emulator, then
+uninstalls the `application_ids` apps and every package installed in the pass, gives the emulator back and removes the private directory. Only QA
+agents see these tools; executor and reviewer sessions cannot list or call them.
+
+When the emulator cannot start, every tool fails with `qa_android_unavailable`. The agent marks the
+app steps `blocked`, still runs the steps of the other playbooks offered (`cli`, `web`) and reports
+each as `pass` or `fail`, then answers `blocked` with the tool's message as the reason.
+
+##### The emulator
+
+Symphony runs the emulator on the host, because the QA agent's sandbox cannot (it needs the
+hypervisor, Mach ports, adb sockets and a lot of memory). The agent sandbox does not change.
+
+- At most one emulator runs. A QA pass that needs it while another holds it waits its turn, and
+  gives up with a clear error after 30 minutes.
+- It boots `avd` with `-no-window -no-audio -no-boot-anim -read-only -no-snapshot-save`, so QA
+  never changes the AVD, and waits up to `boot_timeout_ms` for it to finish booting. An unset
+  `avd`, a missing `emulator/emulator` or `platform-tools/adb` under `sdk_root`, an AVD the
+  emulator does not list and a boot timeout each fail with their own message.
+- Symphony starts its own adb server on port `15037` and the emulator on console port `5600`
+  (serial `emulator-5600`), and sends every adb call there. Your own adb server (port `5037`),
+  emulators and phones are left alone, and your adb server does not see Symphony's emulator: it
+  only scans console ports 5554 to 5584.
+- It stops `idle_timeout_ms` after the last QA pass gives it back (or exits), and when Symphony
+  stops. An emulator that crashes is booted again by the next QA pass.
+- The emulator's and adb server's process ids are recorded in
+  `<state root>/qa-android/emulator-processes.json`. If Symphony crashes, its next start stops
+  those processes, only when they still run with the same start time.
+
+##### One-time Android host setup
+
+1. Install the emulator and platform tools, with a system image. From Android Studio, use
+   **Settings → Languages & Frameworks → Android SDK → SDK Tools** and tick **Android Emulator**
+   and **Android SDK Platform-Tools**. Without Android Studio, use the command-line tools:
+
+   ```bash
+   sdkmanager "emulator" "platform-tools" "system-images;android-34;google_apis;arm64-v8a"
+   ```
+
+   Symphony looks for `emulator/emulator` and `platform-tools/adb` under `sdk_root` (default
+   `$ANDROID_HOME`, then `$ANDROID_SDK_ROOT`, then `~/Library/Android/sdk`).
+2. Create or choose an AVD. List the ones you have with
+   `~/Library/Android/sdk/emulator/emulator -list-avds` and put the exact name it prints in
+   `auto_review.android.avd`. Prefer a small phone image with Google APIs but no Play Store. On the
+   maintainer's Mac that is `Pixel_3a_API_34_extension_level_7_arm64-v8a` (API 34, 1.5 GB of guest
+   RAM, 4.3 GB on disk), not `Pixel_9` (API 36.1 with the Play Store, 2 GB of guest RAM, 9.9 GB on
+   disk). To create one:
+
+   ```bash
+   avdmanager create avd -n Pixel_3a_API_34 -d pixel_3a \
+     -k "system-images;android-34;google_apis;arm64-v8a"
+   ```
+
+3. Cold-boot it once by hand to check that it works, then close it:
+
+   ```bash
+   ~/Library/Android/sdk/emulator/emulator -avd Pixel_3a_API_34_extension_level_7_arm64-v8a -no-snapshot-load
+   ```
+
+   It should reach the home screen within a few minutes. When it does not boot by hand, Symphony
+   cannot boot it either; when it boots slowly, raise `boot_timeout_ms`. Close it before the first
+   QA pass.
+4. Plan the memory. While it runs, the emulator takes its guest RAM plus about 1 GB for itself
+   (2.5 to 3 GB for the Pixel 3a AVD above), on top of the QA agent and the Gradle build. It stops
+   `idle_timeout_ms` after the last pass; lower that on a Mac with little memory to spare.
+
+> [!WARNING]
+> Keep the emulator out of the agent sandbox. Do not add the Android SDK, `~/.android` (it holds
+> the AVDs and the key adb uses) or Symphony's state root to
+> `permissions.filesystem.allow_write_paths`, and do not give agents Mach-port or hypervisor
+> allowances to run an emulator themselves. Symphony runs the emulator and adb outside the sandbox
+> and checks every tool call; an agent that could write those paths could change the emulator or
+> the tools Symphony runs.
+
 #### Adding the Linear state
 
 Auto Review needs a workflow state with the configured name in every Linear team Symphony works in
@@ -1674,7 +1781,24 @@ lists:
 - an issue with the label and no such comment, as a task in itself (its description's list items
   become the steps);
 - a `breakdown` parent in `In Review`, waiting for its plan to be approved;
-- an issue in `In Review` whose `## Symphony QA Report` has the verdict `blocked`.
+- an issue in `In Review` whose `## Symphony QA Report` has the verdict `blocked`;
+- with `pull_requests.checks.enabled`, a GitHub Actions workflow on the repository's base branch
+  (`repositories[].base_branch`, default `main`) that keeps failing on a missing secret: its two
+  latest finished runs failed (cancelled and skipped runs aside), and the failed-step log of the
+  latest names a secret as missing, as an empty `${{ secrets.X }}` or a message such as
+  `secret X is not set`, `Missing secret: X` or `the X secret is empty`. Each secret named becomes
+  one action, "Add the `X` secret", with the steps to add it in the repository's Settings → Secrets
+  and variables → Actions, the failed run to re-run, and the workflow it unblocks. It belongs to no
+  issue, so it is listed in the update of every project the repository routes (its `projects`, else
+  `issues.linear.scope.project_slug`); a repository routed by team or label alone has no project to
+  post to, and its workflow runs are not read. Only the secret's name is taken from the log, never a
+  value.
+
+  Each read costs one `gh run list` per repository, plus one `gh run view --log-failed` per
+  workflow whose latest run is newly red twice in a row: a run's log is read once, as the CI poller
+  reads a PR's. Finding the repository's projects costs one Linear request per repository, the
+  first time one of its workflows fails this way. When GitHub or Linear cannot be read, the
+  repository's last actions stay listed.
 
 A supervisor or a person adds an action by hand the same way: put the label on the issue, and
 optionally a comment in the request format:
@@ -1697,7 +1821,8 @@ leaves a state a person moves it out of (anything but `issues.states.active`, th
 the Auto Review state), such as `Backlog` back to `Todo`. The agent's own move to `Backlog` keeps it
 open. Removing the label closes every action on the issue, and so does a terminal state. A plan
 review closes when the parent leaves `In Review`, and a blocked QA pass when the issue leaves
-`In Review` or its next QA report is not `blocked`. Closed actions drop out of the next update.
+`In Review` or its next QA report is not `blocked`. A missing secret closes when the next run of
+its workflow on the base branch is green. Closed actions drop out of the next update.
 
 **When Symphony posts.** A project gets an update only when its set of open actions differs from
 the set in the last update Symphony posted there, never just because a poll ran. When the last

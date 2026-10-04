@@ -75,6 +75,28 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
              ]
     end
 
+    test "reads that reach the agent ask Linear to sign upload URLs, and writes do not" do
+      context = %{issue_id: "issue-current", comment_registry: nil}
+      parent = self()
+
+      linear_client = fn query, _variables, opts ->
+        send(parent, {:linear_client_opts, query |> String.split(~r/[\s(]/, parts: 3) |> Enum.at(1), opts})
+        {:ok, %{"data" => %{"issue" => %{"id" => "issue-current"}, "commentCreate" => %{"success" => true}}}}
+      end
+
+      assert {:ok, _issue} = Linear.get_current_issue(context, linear_client: linear_client)
+      assert {:ok, []} = Linear.get_comments(context, 1, linear_client: linear_client)
+      assert {:ok, []} = Linear.get_subissues(context, linear_client: linear_client)
+      assert {:ok, _parent} = Linear.get_parent_issue(context, linear_client: linear_client)
+      assert {:ok, _response} = Linear.add_comment(context, "Read the screenshot", linear_client: linear_client)
+
+      for operation <- ~w(SymphonyAgentCurrentIssue SymphonyAgentIssueComments SymphonyAgentSubissues SymphonyAgentParentIssue) do
+        assert_receive {:linear_client_opts, ^operation, [sign_file_urls: true]}
+      end
+
+      assert_receive {:linear_client_opts, "SymphonyAgentAddComment", []}
+    end
+
     test "reads a workpad past the ordinary comment limit whole, so a rewrite keeps its tail" do
       {:ok, registry} = Linear.CommentRegistry.start_link()
       Linear.CommentRegistry.record(registry, "workpad")

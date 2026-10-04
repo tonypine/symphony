@@ -72,7 +72,7 @@ defmodule SymphonyElixir.HumanActions.Update do
 
   @doc "Actions in the order an update lists them: quickest first, then by issue."
   @spec sort([Action.t()]) :: [Action.t()]
-  def sort(actions), do: Enum.sort_by(actions, &{&1.est_minutes || 1_000_000, &1.issue.identifier, &1.key})
+  def sort(actions), do: Enum.sort_by(actions, &{&1.est_minutes || 1_000_000, &1.issue[:identifier], &1.key})
 
   defp header([]), do: "**Nothing needs you.** Every action from the last update is closed."
   defp header([_action]), do: "**1 action needs you.**"
@@ -94,6 +94,8 @@ defmodule SymphonyElixir.HumanActions.Update do
     time = if is_integer(action.est_minutes), do: "**~#{action.est_minutes} min** · "
     "#{time}#{issue_relation(action)}"
   end
+
+  defp issue_relation(%Action{issue: nil} = action), do: "Unblocks #{Request.one_line(action.unblocks)}"
 
   defp issue_relation(%Action{kind: :task} = action), do: "Tracked in #{issue_link(action.issue)}"
 

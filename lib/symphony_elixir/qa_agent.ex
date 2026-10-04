@@ -184,7 +184,7 @@ defmodule SymphonyElixir.QaAgent do
     Title: #{PromptSafety.linear_issue_title(issue.title || "")}
     Description (walkthrough and acceptance criteria):
     #{PromptSafety.linear_issue_body(issue.description || "")}
-    #{parent_section(parent)}#{verification_section(job)}#{dev_server_section(Map.get(job, :dev_server_url))}
+    #{parent_section(parent)}#{verification_section(job)}#{dev_server_section(Map.get(job, :dev_server_url))}#{android_section(job)}
     Playbooks to follow:
 
     #{Enum.map_join(job.playbooks, "\n\n", & &1.prompt)}
@@ -323,6 +323,23 @@ defmodule SymphonyElixir.QaAgent do
   end
 
   defp dev_server_section(_url), do: ""
+
+  # The agent runs the `android_app` build itself, so it needs the playbook's settings.
+  defp android_section(job) do
+    case Enum.find(job.playbooks, &(Map.get(&1, :kind) == "android_app")) do
+      %{build: build, apk_path: apk_path, application_ids: application_ids} ->
+        """
+
+        Android app:
+        Build command (run it in your shell from the worktree root): `#{build}`
+        APK path (relative to the worktree root): `#{apk_path}`
+        Application IDs: #{Enum.map_join(application_ids, ", ", &"`#{&1}`")}
+        """
+
+      _none ->
+        ""
+    end
+  end
 
   @doc "Parses the QA agent's answer."
   @spec parse_response(String.t() | nil) :: {:ok, result()} | {:error, term()}

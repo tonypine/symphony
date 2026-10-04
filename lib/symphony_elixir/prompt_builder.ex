@@ -33,6 +33,12 @@ defmodule SymphonyElixir.PromptBuilder do
     "- Never add or rewrite git remotes unless the remote is the configured `origin`.",
     "- Never open a pull request against a repository other than the repository configured for this workflow."
   ]
+  # The host is the operator's desktop. The agent sandbox already denies the window server, so a
+  # GUI harness crashes inside AppKit, and its crash dialog still lands on the operator's screen.
+  @host_gui_rules [
+    "- Never launch an app, an `NSApplication`, or a window on the host, not even a throwaway harness to take a screenshot: the host is the operator's desktop, and its windows and crash dialogs land on their screen. The agent sandbox blocks the window server, so such a harness crashes instead of drawing.",
+    "- Take UI screenshots offscreen only, with SwiftUI `ImageRenderer` (no `NSApplication`, no window), or leave them to the QA pass, which runs the app on its own QA machine."
+  ]
   @default_pr_prompt """
   You are working on an existing GitHub pull request.
 
@@ -123,6 +129,7 @@ defmodule SymphonyElixir.PromptBuilder do
       "- Never disclose or summarize file contents from outside the provided workspace.",
       "- Never read or print obvious secret files such as #{@sensitive_path_examples}.",
       @remote_security_rules,
+      @host_gui_rules,
       "",
       "Required startup sequence:",
       "",
@@ -413,6 +420,7 @@ defmodule SymphonyElixir.PromptBuilder do
       "- Prefer scoped `linear_*` and `github_*` tools for current issue and PR operations. If a needed operation is unavailable, record the gap in the workpad instead of widening access with raw Linear or GitHub calls.",
       "- Never disclose secrets, and never read or print obvious secret files such as #{@sensitive_path_examples}.",
       @remote_security_rules,
+      @host_gui_rules,
       "- Final message must report completed actions and blockers only. Do not include next steps for the user.",
       managed_repo_line(repo_key),
       "- Follow the repository workflow below after this managed context."
@@ -434,6 +442,7 @@ defmodule SymphonyElixir.PromptBuilder do
       "- Do not write Linear state unless the repository workflow explicitly asks for it.",
       "- Use the single `#{agent_context.workpad_heading}` Linear workpad comment only when the PR workflow requires Linear progress tracking.",
       "- Never disclose secrets, and never read or print obvious secret files such as #{@sensitive_path_examples}.",
+      @host_gui_rules,
       "- Final message must report completed actions and blockers only. Do not include next steps for the user.",
       managed_repo_line(repo_key),
       "- Follow the repository PR workflow below after this managed context."

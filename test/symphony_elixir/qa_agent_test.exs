@@ -296,6 +296,49 @@ defmodule SymphonyElixir.QaAgentTest do
       assert [_cli, %{kind: "macos_app", build_timeout_ms: nil}] = Selection.playbooks(odd_timeout)
     end
 
+    test "the android_app playbook runs only when the repo names its build, APK and app IDs and the host names an AVD" do
+      kotlin = ["app/src/main/java/com/example/app/LoginActivity.kt"]
+      android = %{"build" => "./gradlew :app:assembleDebug", "apk_path" => "app/build/outputs/apk/debug/app-debug.apk", "application_ids" => ["com.example.app"]}
+      config = %{android: %{avd: "Pixel_3a_API_34"}, playbooks: %{"android_app" => android}}
+
+      assert {:run, [%{kind: "android_app", prompt: prompt} = playbook]} = Selection.decide(issue(), kotlin, config)
+      assert %{build: "./gradlew :app:assembleDebug", apk_path: "app/build/outputs/apk/debug/app-debug.apk", application_ids: ["com.example.app"]} = playbook
+      assert prompt =~ "### Playbook: android_app"
+      assert prompt =~ "qa_android_unavailable"
+      assert prompt =~ "qa_app_exited"
+
+      for path <- ["app/src/main/AndroidManifest.xml", "app/src/main/res/layout/login.xml", "app/build.gradle.kts", "build.gradle", "lib/src/main/java/Util.java"] do
+        assert {:run, [%{kind: "android_app"}]} = Selection.decide(issue(), [path], config)
+      end
+
+      assert {:run, [%{kind: "android_app"}]} = Selection.decide(issue(%{labels: ["qa:android_app"]}), ["README.md"], config)
+
+      for path <- ["app/src/test/java/com/example/app/LoginTest.kt", "app/src/androidTest/java/com/example/app/LoginUiTest.kt"] do
+        assert {:skip, reason} = Selection.decide(issue(), [path], config)
+        assert reason =~ "only changes docs, tests"
+      end
+
+      assert {:skip, _reason} = Selection.decide(issue(), kotlin, %{android: %{avd: "Pixel_3a_API_34"}, playbooks: %{}})
+      assert {:skip, _reason} = Selection.decide(issue(), kotlin, %{playbooks: %{"android_app" => android}})
+
+      for android_settings <- [nil, %{avd: nil}, %{avd: " "}] do
+        assert {:skip, _reason} = Selection.decide(issue(), kotlin, %{config | android: android_settings})
+      end
+
+      for missing <- [
+            Map.delete(android, "build"),
+            Map.put(android, "apk_path", " "),
+            Map.put(android, "application_ids", []),
+            Map.put(android, "application_ids", "com.example.app"),
+            Map.put(android, "application_ids", [" ", 7])
+          ] do
+        assert [_cli] = Selection.playbooks(%{config | playbooks: %{"android_app" => missing}})
+      end
+
+      assert [_cli, %{kind: "android_app", application_ids: ["com.example.app"]}] =
+               Selection.playbooks(%{config | playbooks: %{android_app: %{android | "application_ids" => ["com.example.app", " ", 7]}}})
+    end
+
     test "the web playbook runs only when the verification dev server is configured" do
       dashboard = ["lib/symphony_elixir_web/live/dashboard_live.ex", "priv/static/dashboard.css"]
 
@@ -423,6 +466,28 @@ defmodule SymphonyElixir.QaAgentTest do
       refute prompt =~ "stop and answer `blocked`"
     end
 
+    test "an android_app pass gets the playbook, its build settings and the ticket's walkthrough" do
+      android = %{"build" => "./gradlew :app:assembleDebug", "apk_path" => "app/build/outputs/apk/debug/app-debug.apk", "application_ids" => ["com.example.app", "com.example.app.debug"]}
+
+      {:run, playbooks} =
+        Selection.decide(
+          issue(%{description: "## User walkthrough\n\n1. Open the app and tap Sign in.\n   The login form shows."}),
+          ["app/src/main/java/com/example/app/LoginActivity.kt"],
+          %{android: %{avd: "Pixel_3a_API_34"}, playbooks: %{"cli" => %{"enabled" => false}, "android_app" => android}}
+        )
+
+      prompt = QaAgent.prompt(job(%{issue: issue(%{description: "## User walkthrough\n\n1. Open the app and tap Sign in.\n   The login form shows."}), playbooks: playbooks}), nil)
+
+      assert prompt =~ "### Playbook: android_app"
+      assert prompt =~ "1. Open the app and tap Sign in."
+      assert prompt =~ "Build command (run it in your shell from the worktree root): `./gradlew :app:assembleDebug`"
+      assert prompt =~ "APK path (relative to the worktree root): `app/build/outputs/apk/debug/app-debug.apk`"
+      assert prompt =~ "Application IDs: `com.example.app`, `com.example.app.debug`"
+      assert prompt =~ ~r/wait 3 to 5 seconds after each\s+navigation or action/
+      assert prompt =~ "`make_public: false`"
+      refute QaAgent.prompt(job(), nil) =~ "Android app:"
+    end
+
     test "QA prompts and built-in playbooks leave the test suite to CI" do
       parent = issue(%{id: "issue-parent", identifier: "TP-243", title: "Parent", description: "- [ ] parent criterion"})
       verification = issue(%{id: "issue-fv", identifier: "TP-910", title: "Final verification: Parent", description: "- [ ] child criterion"})
@@ -436,8 +501,10 @@ defmodule SymphonyElixir.QaAgentTest do
       refute walkthrough =~ "ran them green on this PR head"
 
       macos_app = %{build: "make app", app: "build/App.app"}
-      built_ins = Selection.playbooks(%{playbooks: %{macos_app: macos_app}}, dev_server?: true)
-      assert Enum.map(built_ins, & &1.kind) == ["cli", "macos_app", "web"]
+      android_app = %{build: "./gradlew assembleDebug", apk_path: "app.apk", application_ids: ["com.example.app"]}
+      config = %{android: %{avd: "Pixel_3a_API_34"}, playbooks: %{macos_app: macos_app, android_app: android_app}}
+      built_ins = Selection.playbooks(config, dev_server?: true)
+      assert Enum.map(built_ins, & &1.kind) == ["cli", "macos_app", "android_app", "web"]
 
       for %{kind: kind, prompt: prompt} <- built_ins do
         assert prompt =~ ~r/Do not run the project's test suite, `make all`, coverage or (Dialyzer|static analysis): CI already\s+ran them/,

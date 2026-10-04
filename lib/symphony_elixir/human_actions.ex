@@ -3,8 +3,10 @@ defmodule SymphonyElixir.HumanActions do
   Posts a Linear project update listing everything only a human can do in a project.
 
   Every `human_actions.interval_ms`, `SymphonyElixir.HumanActions.Collector` reads the open
-  actions in the scope of each repository with `human_actions.enabled`. A project gets a new
-  update (`SymphonyElixir.HumanActions.Update`) only when its set of open actions differs from
+  actions in the scope of each repository with `human_actions.enabled`. With CI polling on
+  (`pull_requests.checks.enabled`), `SymphonyElixir.HumanActions.CiSecrets` adds the workflows on
+  each one's base branch that keep failing on a missing secret. A project gets a new update
+  (`SymphonyElixir.HumanActions.Update`) only when its set of open actions differs from
   the set in the last update Symphony posted to it, and at most once per
   `human_actions.min_update_interval_ms`; a change inside that window is posted once it passes.
   When the last action closes, one short "Nothing needs you" update says so, and nothing more is
@@ -27,7 +29,7 @@ defmodule SymphonyElixir.HumanActions do
   alias SymphonyElixir.AgentTools.SecretScanner
   alias SymphonyElixir.{Config, Notifications}
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.HumanActions.{Collector, Update}
+  alias SymphonyElixir.HumanActions.{CiSecrets, Collector, Update}
   alias SymphonyElixir.Linear.{Client, Usage}
 
   @initial_delay_ms 60_000
@@ -89,7 +91,7 @@ defmodule SymphonyElixir.HumanActions do
   def init(opts) do
     Usage.put_caller(:human_actions)
     timer = Process.send_after(self(), :tick, Keyword.get(opts, :initial_delay_ms, @initial_delay_ms))
-    {:ok, %{opts: opts, projects: %{}, timer: timer}}
+    {:ok, %{opts: opts, projects: %{}, ci: %{}, timer: timer}}
   end
 
   @impl true
@@ -114,6 +116,8 @@ defmodule SymphonyElixir.HumanActions do
 
     with {:ok, repos} <- enabled_repos(state),
          {:ok, collected} <- collect.(repos, collect_opts) do
+      {collected, state} = with_ci_actions(collected, repos, settings, state)
+
       collected
       |> Map.keys()
       |> Enum.concat(listed_project_ids(state))
@@ -125,6 +129,16 @@ defmodule SymphonyElixir.HumanActions do
         state
     end
   end
+
+  # Workflows failing on a missing secret, read only where the CI poller reads GitHub.
+  defp with_ci_actions(collected, repos, %Schema{ci: %{enabled: true}} = settings, state) do
+    ci_collect = Keyword.get(state.opts, :ci_collect, &CiSecrets.collect/3)
+    {ci_collected, cache} = ci_collect.(repos, state.ci, settings: settings, linear_client: linear_client(state))
+    merged = Map.merge(collected, ci_collected, fn _project_id, left, right -> %{left | actions: left.actions ++ right.actions} end)
+    {merged, %{state | ci: cache}}
+  end
+
+  defp with_ci_actions(collected, _repos, _settings, state), do: {collected, state}
 
   # Projects whose last update listed actions: they need a "Nothing needs you" update once their
   # last action closes, even when no issue of theirs is read anymore.
@@ -219,10 +233,10 @@ defmodule SymphonyElixir.HumanActions do
       {title, _patterns} = SecretScanner.redact(action.title)
 
       notify.(:human_action_needed, %{
-        issue_id: action.issue.id,
-        issue_identifier: action.issue.identifier,
-        issue_title: action.issue.title,
-        issue_url: action.issue.url,
+        issue_id: action.issue[:id],
+        issue_identifier: action.issue[:identifier],
+        issue_title: action.issue[:title],
+        issue_url: action.issue[:url],
         reason: title,
         metadata: %{"project" => action.project.name, "kind" => Atom.to_string(action.kind)}
       })

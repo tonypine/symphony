@@ -140,7 +140,8 @@ app opens" in Settings (see [Launch at Login](#launch-at-login)).
 - **Update to vX** downloads and verifies the release, waits for agent runs like Restart, then swaps the app
   and relaunches it. See [Install an update](#install-an-update).
 - **Repos…** opens the Repos window: one row per connected repo with its source, GitHub remote, Linear
-  routing, `WORKFLOW.md` status, last fetch and running agents. See [Repos](#repos).
+  routing, `WORKFLOW.md` status, last fetch and running agents, and **Add Repo…** to connect another.
+  See [Repos](#repos).
 - **Quit** stops Symphony first and asks before stopping active agent runs.
 
 The sections below describe each in detail.
@@ -209,10 +210,13 @@ set (or, in Development mode, no checkout folder).
   the Default row shows their values (for example "Opus 5.5, from command"), and the first save that sets a
   model or effort moves them out of the command (keeping the rest of the line and its comment) into
   `agent.model` / `agent.effort`, unless you set the Default row in the same save. In the same way, once a
-  save sets the Default row or the pre-push review row, `--model` / `--effort` in `pre_push_review.command`
-  move into `pre_push_review.model` / `pre_push_review.effort` (a key already there wins), and once it sets the
-  Default row or the QA row, those in `auto_review.command` move into `auto_review.model` /
-  `auto_review.effort`. A provider alone moves nothing. Higher effort and bigger models use the shared
+  save sets the Default row or the pre-push review row, `pre_push_review.model` / `pre_push_review.effort`, or
+  else `--model` / `--effort` in `pre_push_review.command`, move into the pre-push review row
+  (`agent.run_profiles.pre_push_review`), and once it sets the Default row or the QA row, those of
+  `auto_review` move into the QA row. Those section keys outrank the rows and name no provider, so left in
+  place they would hide the row's choice, and an OpenRouter Default row would make Symphony look their Claude
+  model up on OpenRouter. A moved model keeps the provider it ran on, and a value you change in that row in
+  the same save wins over the moved one. A provider alone moves nothing. Higher effort and bigger models use the shared
   5-hour usage limit faster. The next run picks the change up without a restart. The Codex runtime ignores
   these keys (see [Run profiles](../docs/configuration.md)).
 - `LINEAR_API_KEY` and any extra environment variables are stored only in
@@ -389,6 +393,50 @@ When Symphony is stopped, starting, or not answering, the window lists the repos
 set in Settings instead, and says why above them. Their source, GitHub repo (for a managed clone) and
 Linear routing come from the file; `WORKFLOW.md`, the last fetch, the agents and a local folder's GitHub
 remote show as `unavailable`. A Symphony too old to serve `GET /api/v1/repos` is shown the same way.
+
+### Add a repo
+
+**Add Repo…** at the top of the Repos window opens a sheet that adds an entry to `repositories:` in the
+`symphony.yml` set in Settings. Pick where the code comes from:
+
+- **GitHub URL:** paste `https://github.com/owner/repo` (a browser URL with more path after it works
+  too), `git@github.com:owner/repo.git` or `owner/repo`. The entry gets `workspace.source: owner/repo`:
+  Symphony keeps its own clone under `workspaces.clones_root` (`~/.local/share/symphony/repos` by
+  default), made when Symphony starts, and never touches a checkout of yours. Its `WORKFLOW.md` comes
+  from the repo.
+- **Local folder:** choose a folder in a git checkout. The checkout must have a GitHub `origin` remote
+  and a `WORKFLOW.md` at its top. The entry gets `workspace.strategy: worktree`, `workspace.repo` and
+  `workflow` set to the checkout's top folder and its `WORKFLOW.md`, and agents work in worktrees of it.
+
+Then:
+
+- **Repo key** is filled in from the repo name (in lower case, with `-2`, `-3`… when taken) until you
+  type one. It holds letters, digits, `.`, `_` and `-`, and must differ from every other key.
+- **Base branch** is `main` until you change it.
+- **Linear routing:** the sheet lists the projects and labels of the Linear workspace of the
+  `LINEAR_API_KEY` in Settings. Pick the project whose issues go to the repo, and optionally labels an
+  issue must all carry. The labels offered are the workspace's and those of the project's teams. A
+  missing key or a failed request shows the reason with **Retry**.
+
+Save stays disabled, with the reason under the form, while the input can't be saved: no folder chosen,
+a folder that isn't a GitHub checkout with a `WORKFLOW.md`, a URL that isn't a GitHub repo, a key that is
+empty, malformed or taken, an empty base branch, no project, or the same project and labels as another
+repo. Save changes only `repositories:`: comments and the other entries stay as they are. When the file
+has a single repo with no route, Save also marks it `default: true`, so it keeps the issues no route
+matches (Symphony refuses a second repo next to a repo with no route that isn't the default).
+
+Symphony reads a new route from `symphony.yml` while it runs, but sets up a repo's workflow and its own
+clone only when it starts. So after Save:
+
+- a Symphony the app started restarts as with **Restart Symphony** when no agent runs; while agents
+  run, the app asks first, and **Restart When Runs Finish** pauses dispatch and waits for them;
+- a stopped Symphony picks the repo up when it starts;
+- a Symphony the app didn't start needs a restart from where it was started.
+
+The message at the top of the window says which applies. A running Symphony lists the new repo at the
+next poll, as it reads the route right away; a GitHub URL repo shows `not cloned yet` and its
+`WORKFLOW.md` as `missing` until the restart clones it. With Symphony stopped, the list shows the repo
+from `symphony.yml`.
 
 ## Restart
 
