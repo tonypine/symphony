@@ -4,6 +4,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   @behaviour SymphonyElixir.AgentBehaviour
 
   require Logger
+  alias SymphonyElixir.AgentCaches
   alias SymphonyElixir.{AgentEnv, AgentMcp, AgentSandboxConfig, Config, DependencyGate, McpServer, PathSafety, SSH}
   alias SymphonyElixir.{AgentPriority, AgentProcesses}
   alias SymphonyElixir.ClaudeCode.McpConfig
@@ -685,10 +686,12 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   defp workspace_sandbox_allow_write_paths(_settings), do: []
 
   # The item replacement directory lives under the per-user temp dir of the host Claude runs on,
-  # which this host can't look up for an SSH worker.
+  # which this host can't look up for an SSH worker. A local agent also keeps its Hex,
+  # `elixir_make` and PLT caches in Symphony's folder (see `SymphonyElixir.AgentCaches`); an SSH
+  # worker keeps its own.
   defp host_allow_write_paths(nil) do
     opts = Application.get_env(:symphony_elixir, :claude_item_replacement_opts, [])
-    AgentSandboxConfig.item_replacement_write_paths(opts)
+    AgentSandboxConfig.item_replacement_write_paths(opts) ++ AgentCaches.write_paths()
   end
 
   defp host_allow_write_paths(_worker_host), do: []
@@ -870,7 +873,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
               line: @port_line_bytes,
               args: port_args,
               cd: String.to_charlist(workspace),
-              env: AgentEnv.build_with(Map.merge(AgentEnv.gradle_env(workspace), env))
+              env: AgentEnv.build_with(AgentCaches.env() |> Map.merge(AgentEnv.gradle_env(workspace)) |> Map.merge(env))
             ]
           )
 

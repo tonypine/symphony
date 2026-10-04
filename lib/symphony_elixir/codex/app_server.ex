@@ -6,6 +6,7 @@ defmodule SymphonyElixir.Codex.AppServer do
   @behaviour SymphonyElixir.AgentBehaviour
 
   require Logger
+  alias SymphonyElixir.AgentCaches
   alias SymphonyElixir.AgentEnv
   alias SymphonyElixir.AgentPriority
   alias SymphonyElixir.AgentProcesses
@@ -572,8 +573,8 @@ defmodule SymphonyElixir.Codex.AppServer do
   end
 
   defp local_env(workspace, codex_home, extra_env) do
-    workspace
-    |> AgentEnv.gradle_env()
+    AgentCaches.env()
+    |> Map.merge(AgentEnv.gradle_env(workspace))
     |> Map.put("CODEX_HOME", codex_home.home_path)
     |> Map.merge(extra_env)
   end
@@ -929,7 +930,7 @@ defmodule SymphonyElixir.Codex.AppServer do
              Schema.codex_effective_network_allowed_domains(settings),
              network_access.denied_domains,
              workspace_sandbox_allow_read_paths(settings),
-             allow_write_paths: srt_workspace_write_paths(settings, workspace),
+             allow_write_paths: srt_workspace_write_paths(settings, workspace) ++ AgentCaches.write_paths(),
              deny_write_paths: srt_workspace_deny_write_paths(settings, workspace),
              allow_unix_socket_paths: Keyword.get(opts, :srt_allow_unix_socket_paths, []),
              enable_weaker_network_isolation: runtime.enable_weaker_network_isolation
@@ -1135,7 +1136,10 @@ defmodule SymphonyElixir.Codex.AppServer do
 
   defp session_policies(workspace, nil, settings, tool_scope) do
     with {:ok, policies} <- Config.codex_runtime_settings(settings, workspace, []) do
-      {:ok, Map.put(policies, :tool_scope, tool_scope)}
+      {:ok,
+       policies
+       |> Map.update!(:turn_sandbox_policy, &allow_cache_writes/1)
+       |> Map.put(:tool_scope, tool_scope)}
     end
   end
 
@@ -1144,6 +1148,14 @@ defmodule SymphonyElixir.Codex.AppServer do
       {:ok, Map.put(policies, :tool_scope, tool_scope)}
     end
   end
+
+  # A local agent keeps its Hex, `elixir_make` and PLT caches in Symphony's folder (see
+  # `SymphonyElixir.AgentCaches`); an SSH worker keeps its own.
+  defp allow_cache_writes(%{"type" => "workspaceWrite", "writableRoots" => roots} = policy) when is_list(roots) do
+    %{policy | "writableRoots" => Enum.uniq(roots ++ AgentCaches.write_paths())}
+  end
+
+  defp allow_cache_writes(policy), do: policy
 
   defp do_start_session(port, workspace, session_policies, settings, stderr_tail) do
     case send_initialize(port, settings, session_policies, stderr_tail) do

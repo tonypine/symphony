@@ -25,7 +25,12 @@ struct ReposView: View {
                 Divider()
             }
             List(model.display.rows) { row in
-                RepoRowView(row: row)
+                RepoRowView(
+                    row: row,
+                    edit: { model.onEdit(row.key) },
+                    disconnect: { model.onDisconnect(row.key) },
+                    removeClone: { model.onRemoveClone(row.key) }
+                )
             }
         }
         .frame(minWidth: 480, idealWidth: Self.width, minHeight: 320)
@@ -37,8 +42,11 @@ struct ReposView: View {
     }
 }
 
-private struct RepoRowView: View {
+struct RepoRowView: View {
     let row: RepoRow
+    let edit: () -> Void
+    let disconnect: () -> Void
+    let removeClone: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -52,6 +60,9 @@ private struct RepoRowView: View {
                         .background(Capsule().fill(Color.secondary.opacity(0.2)))
                         .help(ReposList.defaultHelp)
                 }
+                Spacer()
+                HStack(spacing: 6) { actions }
+                    .controlSize(.small)
             }
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 3) {
                 ForEach(row.fields, id: \.label) { field in
@@ -74,8 +85,37 @@ private struct RepoRowView: View {
                     }
                 }
             }
+            ForEach(row.actions.notes, id: \.self) { note in
+                Text(note)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(.vertical, 6)
+    }
+
+    @ViewBuilder private var actions: some View {
+        Button(EditRepo.buttonTitle, action: edit)
+            .disabled(row.actions.editProblem != nil)
+            .help(row.actions.editProblem ?? "Change where the code comes from, the base branch and the Linear route.")
+        Button(DisconnectRepo.buttonTitle, action: disconnect)
+            .disabled(row.actions.disconnectProblem != nil)
+            .help(row.actions.disconnectProblem ?? "Remove the repo from symphony.yml. No folder is deleted.")
+        if let removal = row.actions.cloneRemoval {
+            Button(ManagedClones.buttonTitle, action: removeClone)
+                .disabled(removal.path == nil)
+                .help(cloneRemovalHelp(removal))
+        }
+    }
+
+    private func cloneRemovalHelp(_ removal: ManagedClones.Removal) -> String {
+        switch removal {
+        case let .allowed(path):
+            return "Delete Symphony's clone at \((path as NSString).abbreviatingWithTildeInPath)."
+        case let .blocked(reason):
+            return reason
+        }
     }
 
     private func color(_ tone: RepoField.Tone) -> Color {
