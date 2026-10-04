@@ -773,7 +773,7 @@ Fields:
 Fields:
 
 - `after_create` (multiline shell script string, OPTIONAL)
-  - Runs when a workspace directory is newly created, and again when a later run reuses a local
+  - Runs when a workspace directory is newly created, and again when a later run reuses a
     workspace whose `after_create` never succeeded.
   - Failure aborts workspace creation.
   - A timeout of a local hook is retried once, in the same workspace and the same attempt, before
@@ -2351,9 +2351,9 @@ Algorithm summary:
      otherwise refuse with a branch-collision error.
 6. Mark `created_now=true` only if the directory or worktree was created during this call; otherwise
    `created_now=false`.
-7. If `created_now=true`, run `hooks.after_create` if configured. Also run it for a reused local
+7. If `created_now=true`, run `hooks.after_create` if configured. Also run it for a reused
    workspace whose `after_create` has not yet succeeded (it failed or timed out), so the agent does
-   not start in a half-prepared workspace.
+   not start in a half-prepared workspace. This applies to SSH worker workspaces too.
 
 Notes:
 
@@ -2379,6 +2379,21 @@ Failure handling:
   prepared directory.
 - Reused workspaces SHOULD NOT be destructively reset on population failure unless that policy is
   explicitly chosen and documented.
+- A workspace whose `after_create` failed or timed out is kept, and recorded as not set up: a
+  pending marker, `.<workspace_key>.after_create_pending`, sits beside it in the repo's workspace
+  directory. It is written before `after_create` starts and removed once the hook succeeds. It lives
+  outside the workspace so a hook that clones into the empty workspace still can. The next run that
+  reuses a workspace with a marker runs `after_create` again before `before_run`.
+- Removing or trashing a workspace removes its marker too. The workspace sweep lists directories
+  only, so it never takes a marker for a workspace.
+- On an SSH worker the prepare step writes the marker, empty, in the same command that creates the
+  workspace, so a hook that never starts (its connection fails, or the run stops first) is still
+  run on the next run. The hook then keeps the marker itself and writes its shell's process id into
+  it. When
+  the marker names a process still alive (a hook an earlier run timed out on, still running on the
+  worker), workspace preparation fails (`workspace_after_create_still_running`) without touching
+  the workspace, and a later retry finds the hook finished. A marker naming a process that is gone
+  means the hook died before it succeeded, and the next run runs it again.
 
 ### 9.4 Workspace Hooks
 
@@ -2416,9 +2431,10 @@ Failure semantics:
 - `after_create` failure is fatal to workspace creation. A local hook's timeout is retried once in
   the workspace as the first try left it, within the same run attempt; a second timeout is fatal to
   workspace creation. An SSH worker hook's timeout is fatal at once, since the first try may still
-  be running on the worker. A failed local `after_create` leaves the workspace in place, and the
-  next run that reuses it runs `after_create` again before the agent starts. An SSH worker's
-  workspace is not, for the same reason as the retry.
+  be running on the worker. A failed `after_create`, local or on an SSH worker, leaves the
+  workspace in place, and the next run that reuses it runs `after_create` again before the agent
+  starts (Section 9.3). On an SSH worker, preparing the workspace fails while a timed-out hook is
+  still running there.
 - `before_run` failure or timeout is fatal to the current run attempt.
 - `after_run` failure or timeout is logged and ignored.
 - `before_remove` failure or timeout is logged and ignored.
@@ -3126,6 +3142,9 @@ SHOULD return:
 - `running` (list of running session rows)
 - each running row SHOULD include `turn_count`
 - each running row SHOULD include `repo_key`
+- each running row SHOULD include `linear_wait_until`: while the run waits out a Linear rate limit
+  or outage (Section 8.5), when that wait ends, otherwise null; dashboards show such a run as
+  waiting for Linear
 - `watching` (list of recently completed issues now in non-active, non-terminal states)
 - each watching row SHOULD include issue identifier, current state, issue URL, last-run time, and
   final transcript replay metadata while the watch remains open
@@ -3329,6 +3348,7 @@ Minimum endpoints:
           "turn_count": 7,
           "last_event": "turn_completed",
           "last_message": "",
+          "linear_wait_until": null,
           "started_at": "2026-02-24T20:10:12Z",
           "last_event_at": "2026-02-24T20:14:59Z",
           "forced": false,
@@ -3534,6 +3554,7 @@ Minimum endpoints:
         "started_at": "2026-02-24T20:10:12Z",
         "last_event": "notification",
         "last_message": "Working on tests",
+        "linear_wait_until": null,
         "last_event_at": "2026-02-24T20:14:59Z",
         "tokens": {
           "input_tokens": 1200,
@@ -4220,8 +4241,9 @@ infrastructure.
 - Existing non-directory path at workspace location is handled safely (replace or fail per
   implementation policy)
 - OPTIONAL workspace population/synchronization errors are surfaced
-- `after_create` hook runs on new workspace creation, and again on a reused local workspace whose
-  `after_create` has not yet succeeded
+- `after_create` hook runs on new workspace creation, and again on a reused workspace (local or on
+  an SSH worker) whose `after_create` has not yet succeeded; workspace removal removes its pending
+  marker
 - Local `after_create` timeout is retried once within the same attempt; a second timeout fails
   creation; an `after_create` timeout on an SSH worker fails creation without a retry
 - `before_run` hook runs before each attempt and failure/timeouts abort the current attempt
