@@ -47,6 +47,11 @@ exceptions when a repo legitimately needs something like `~/.npmrc`.
 runtime's `sandbox.filesystem.allowWrite` so the agent can write under specific host paths beyond
 the Claude Code default (workspace + `/tmp`). Codex/SRT already authors a broader writable set
 under `/tmp` and the workspace, so this knob only affects the Claude runtime today.
+On macOS, Symphony also adds the per-user `TemporaryItems` dir
+(`$(getconf DARWIN_USER_TEMP_DIR)TemporaryItems`) to a local Claude run's `allowWrite`.
+Foundation stages atomic file writes there in a sandboxed process, so `swift build` and
+`swift test` fail without it. The rest of the per-user temp dir stays read-only: Symphony keeps
+each session's Claude settings and the MCP shim there.
 
 ### No windows on the host desktop
 

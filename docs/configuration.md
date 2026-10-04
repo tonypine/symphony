@@ -405,6 +405,8 @@ agent:
 - `permissions.filesystem.allow_write_paths`: extra writable host paths emitted to the Claude
   runtime as `sandbox.filesystem.allowWrite`. Use it to broaden Claude Code's default writable
   set (workspace + `/tmp`) — e.g. to grant test runs access to a configured MCP socket root.
+  On macOS, Symphony also adds the per-user temp dir's `TemporaryItems` for local runs
+  (Foundation's atomic writes need it; see `docs/security.md`).
   For Gradle builds, add `~/.gradle` so builds share its caches. Daemons don't come with it:
   each local agent run in a Gradle project (`gradlew`, `settings.gradle` or
   `settings.gradle.kts` at the workspace root) starts with
