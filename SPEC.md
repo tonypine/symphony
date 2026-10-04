@@ -3656,6 +3656,80 @@ Minimum endpoints:
     }
     ```
 
+- `GET /api/v1/repos`
+  - Returns one entry per configured repository, in config order: its key, `default` and
+    `base_branch`, where its code comes from, its GitHub repository, its Linear routing, whether
+    its `WORKFLOW.md` loads, its last fetch before a dispatch, and the worktrees of its running
+    agents. Read-only and served like `/api/v1/state`.
+  - `source.kind` is `local` (with the checkout `path` worktrees are made from, else the repo's
+    `path`, else the folder holding its `WORKFLOW.md`) or `managed` (a `workspace.source` repo,
+    with `github`, `clone_path`, and `cloned` saying whether Symphony has made the clone yet).
+  - `github` is `owner/repo` (`host/owner/repo` on GitHub Enterprise): the configured source for a
+    managed repo, otherwise read from the checkout's `origin` remote; `null` when there is none or
+    it is not a GitHub remote.
+  - `workflow.status` is `valid`, `missing` or `invalid`, from the repo's workflow store (the
+    file is read directly for a repo with no running store); `found` is false only when missing,
+    and `error` carries the load error. A store keeps serving the last good workflow while its
+    file is missing or invalid.
+  - `last_fetch` is the last `git fetch origin` before a dispatch on this host (the worktree
+    source, Symphony's clone, or the checkout `WORKFLOW.md` is read from), with `result` `ok` or
+    `error`; `null` until the first one. SSH-worker fetches run inside the remote prepare script
+    and are not recorded.
+  - `worktrees` lists the running entries for the repo (an entry without a repo key belongs to
+    the primary repo).
+  - Error messages have tokens, API keys and URL credentials replaced, and remote URLs are reduced
+    to `owner/repo`, so the response carries no secret.
+  - When the orchestrator snapshot times out or is unavailable, the repos are still listed with
+    empty `worktrees`, next to an `error` object. When the config does not load, return `503` with
+    `{"error":{"code":"config_unavailable","message":"..."}}`.
+  - Suggested response shape:
+
+    ```json
+    {
+      "generated_at": "2026-02-24T20:15:30Z",
+      "repos": [
+        {
+          "key": "web",
+          "default": true,
+          "base_branch": "main",
+          "source": {"kind": "local", "path": "/Users/me/code/web"},
+          "github": "acme/web",
+          "routing": {"team": "ENG", "projects": ["web-platform"], "labels": ["frontend"], "assignee": "me"},
+          "workflow": {"path": "/Users/me/code/web/WORKFLOW.md", "found": true, "status": "valid", "error": null},
+          "last_fetch": {"at": "2026-02-24T20:10:00Z", "result": "ok", "error": null},
+          "worktrees": [
+            {"issue_id": "abc123", "issue_identifier": "MT-649", "path": "/tmp/symphony_workspaces/web/MT-649", "worker_host": null}
+          ]
+        },
+        {
+          "key": "api",
+          "default": false,
+          "base_branch": null,
+          "source": {
+            "kind": "managed",
+            "github": "acme/api",
+            "clone_path": "/Users/me/.local/share/symphony/repos/acme/api",
+            "cloned": true
+          },
+          "github": "acme/api",
+          "routing": {"team": null, "projects": ["api"], "labels": [], "assignee": null},
+          "workflow": {
+            "path": "/Users/me/.local/share/symphony/repos/acme/api/WORKFLOW.md",
+            "found": true,
+            "status": "invalid",
+            "error": "Failed to parse WORKFLOW.md: malformed yaml"
+          },
+          "last_fetch": {
+            "at": "2026-02-24T20:12:00Z",
+            "result": "error",
+            "error": "git fetch exited with status 128: fatal: Could not read from remote repository."
+          },
+          "worktrees": []
+        }
+      ]
+    }
+    ```
+
 - `GET /api/v1/<issue_identifier>`
   - Returns issue-specific runtime/debug details for the identified issue, including any information
     the implementation tracks that is useful for debugging.

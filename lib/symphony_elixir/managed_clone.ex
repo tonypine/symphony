@@ -95,9 +95,15 @@ defmodule SymphonyElixir.ManagedClone do
   @spec lock_id(Path.t()) :: {term(), pid()}
   def lock_id(clone_path), do: {{__MODULE__, Path.expand(clone_path)}, self()}
 
+  @doc """
+  Whether the clone at `clone_path` has been made.
+  """
+  @spec cloned?(Path.t()) :: boolean()
+  def cloned?(clone_path) when is_binary(clone_path), do: File.dir?(Path.join(Path.expand(clone_path), ".git"))
+
   defp sync_locked(repo_key, github, clone_path, fetch?) do
     cond do
-      not File.dir?(Path.join(clone_path, ".git")) -> clone(repo_key, github, clone_path)
+      not cloned?(clone_path) -> clone(repo_key, github, clone_path)
       fetch? -> fetch(repo_key, clone_path)
       true -> :ok
     end
