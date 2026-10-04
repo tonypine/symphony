@@ -1,8 +1,8 @@
 # Symphony menu bar app
 
 Symphony for macOS is a menu bar app, `Symphony.app`. Its menu shows Symphony's status, and has Start
-Symphony, Stop Symphony, Restart Symphony, Pause Dispatch, Resume Dispatch, Open Dashboard, Open Dashboard in
-Terminal, Open Logs, Check for Updates…, Settings… and Quit.
+Symphony, Stop Symphony, Restart Symphony, Pause Dispatch, Resume Dispatch, Force a ticket…, Open Dashboard,
+Open Dashboard in Terminal, Open Logs, Check for Updates…, Settings… and Quit.
 
 The app runs Symphony with your `symphony.yml`, the same as running it from a terminal. A release carries a
 self-contained Symphony binary at `Contents/Resources/symphony` (see [Releasing](../docs/releasing.md)), so
@@ -127,6 +127,9 @@ app opens" in Settings (see [Launch at Login](#launch-at-login)).
 - **Pause Dispatch** holds new dispatch: Symphony picks up no new issues, but agent runs already under way
   continue. The pause is kept across restarts.
 - **Resume Dispatch** lets Symphony pick up new issues again.
+- **Force a ticket…** asks for a Linear identifier and forces that ticket past the dispatch limits, like
+  `symphony force`. The forced tickets are listed above it, each with **Stop forcing**. See
+  [Forced tickets](#forced-tickets).
 - **Open Dashboard** opens the dashboard in the browser, and **Open Logs** opens Symphony's output log.
 - **Open Dashboard in Terminal** opens a Terminal window running `symphony dashboard`: the live terminal
   dashboard (running agents, retry queue, recent events) of the Symphony the app watches. It runs the same
@@ -338,6 +341,26 @@ The state root is found as Symphony finds it:
 - Otherwise `~/Library/Application Support/symphony` or, for the Burrito release build, its `release/`
   subdirectory. The app can't tell which build runs, so it uses the one whose `control_url` was written
   last, then the one holding a `control_token`.
+
+## Forced tickets
+
+Force a ticket… asks for a Linear identifier, for example `TP-123`, and calls `POST /api/v1/control/force`
+with `{"identifier":"TP-123"}`, like `symphony force TP-123`. Symphony adds its force label
+(`agent.concurrency.force_label`, `expedite` by default) to the ticket, which then skips the slot limits but
+still waits for its blockers, a pause, usage limits and its reviews. It is offered while Symphony answers,
+including while dispatch is paused. If Symphony refuses (the ticket isn't in Linear or is already done, the
+label doesn't exist in Linear, the control token is wrong), an alert says why.
+
+While any ticket is forced, a **Forced** heading lists them under Pause and Resume, in queue order, as
+`/api/v1/state` reports them under `forced`:
+
+- `⚡ TP-123 · implementation · running · forced 5m`: the identifier, what the ticket does and waits on,
+  as the dashboards word it, and how long it has been forced.
+- `⚡ TP-100 → TP-101 · waiting for a human · forced 3d 2h · stale`: a forced parent with the sub-ticket it
+  is on, forced for longer than `agent.concurrency.forced_stale_after_hours`.
+
+Each row's submenu has **Stop forcing TP-123**, which removes the force label (`symphony force --clear`).
+The menu follows within one poll. A Symphony too old to report forced tickets shows no Forced heading.
 
 ## Restart
 
@@ -555,12 +578,15 @@ Two more variables, read only in QA mode:
   that answers in the same format. An update in QA mode relaunches the app with its environment, so the new
   version is in QA mode too, with the same folders.
 - `SYMPHONY_BAR_QA_SCRIPTED=1` lets a script drive the app without Accessibility access. The app presses the
-  menu item whose title a file in `commands/` holds (files are taken in name order and deleted; a name
-  starting with `.` is skipped, so write one and rename it). As a click would, it presses only a visible,
-  enabled item. It keeps `status.json` current: its pid, version, build and bundle path, the pid of the
-  Symphony it runs, every visible menu item with whether it is enabled, the presses it handled (`pressed`,
-  `disabled` or `missing`) and the alerts it would have shown. It shows no alerts: it records them there,
-  and answers confirmations (Update, Quit) yes.
+  menu item whose title the first line of a file in `commands/` holds (files are taken in name order and
+  deleted; a name starting with `.` is skipped, so write one and rename it). As a click would, it presses
+  only a visible, enabled item; an item in a visible item's submenu, such as Stop forcing TP-123, counts.
+  It keeps `status.json` current: its pid, version, build and bundle path, the pid of the Symphony it runs,
+  every visible menu item (submenu items right after the item they open from) with whether it is enabled,
+  the presses it handled (`pressed`, `disabled` or `missing`) and the alerts it would have shown. It shows
+  no alerts: it records them there, and answers confirmations (Update, Quit) yes. A prompt, such as Force a
+  ticket…, is answered with the rest of the command file (`Force a ticket…` on the first line, `TP-123` on
+  the second), and cancelled when there is none.
 
 The [end-to-end test](Tests/e2e/README.md) uses all of this to test Update, Restart and rollback without
 touching the installed app.
