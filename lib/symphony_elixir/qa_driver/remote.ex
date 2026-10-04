@@ -7,8 +7,8 @@ defmodule SymphonyElixir.QaDriver.Remote do
   Every command runs on the QA host as `sh -c <script> sh <args...>`, with each
   argument shell-quoted. Symphony owns one `0700` run directory per pass under
   `~/.symphony-qa/runs/` there: the worktree's `HEAD` is unpacked into `src/`
-  for the build, bundle copies go to `builds/` and the app's QA root is
-  `app-root/`. The Swift helper is compiled into the run directory's `helper/`
+  for the build, bundle copies go to `builds/`, fixture files `qa_put_file`
+  copies go to `files/` and the app's QA root is `app-root/`. The Swift helper is compiled into the run directory's `helper/`
   on first use in each pass, never shared between passes: every pass's build
   runs as the QA user and could replace a shared binary, which answers the
   permission, window and accessibility calls of later passes.
@@ -30,6 +30,7 @@ defmodule SymphonyElixir.QaDriver.Remote do
   @compile_timeout_ms 300_000
   @read_limit 48_000_000
   @run_dir ~r{\A/.*/\.symphony-qa/runs/run\.[A-Za-z0-9]+\z}
+  @file_name ~r/\A[A-Za-z0-9][A-Za-z0-9._-]*\z/
 
   @prepare_script """
   operator_home=$1; canary=$2; found=""
@@ -71,6 +72,15 @@ defmodule SymphonyElixir.QaDriver.Remote do
   printf 'symphony-qa-file:'; base64 < "$1" | tr -d '\\n'; printf '\\n'; rm -f "$1"
   """
 
+  # Written under a temporary name first, so the app never reads half a file;
+  # `mv` would move it into a directory at the name, so that is refused.
+  @put_script """
+  umask 077
+  mkdir -p "$1/files" || exit 1
+  part="$1/files/.put.$$"; dest="$1/files/$2"
+  if [ ! -d "$dest" ] && cat > "$part" && mv -f "$part" "$dest"; then printf 'symphony-qa-put:%s\\n' "$dest"; else rm -f "$part"; exit 1; fi
+  """
+
   @kill_script """
   kill -TERM "$1" 2>/dev/null || exit 0
   i=0
@@ -80,7 +90,7 @@ defmodule SymphonyElixir.QaDriver.Remote do
 
   @doc """
   The `SymphonyElixir.QaDriver.host/0` functions for `ssh_host`, plus the
-  remote-only `prepare`, `ship` and `cleanup`.
+  remote-only `prepare`, `ship`, `put` and `cleanup`.
   """
   @spec host(String.t()) :: map()
   def host(ssh_host) do
@@ -93,6 +103,7 @@ defmodule SymphonyElixir.QaDriver.Remote do
       read: &read(ssh_host, &1),
       prepare: &prepare(ssh_host, &1, &2),
       ship: &ship(ssh_host, &1, &2),
+      put: &put(ssh_host, &1, &2, &3),
       cleanup: &cleanup(ssh_host, &1)
     }
   end
@@ -229,13 +240,27 @@ defmodule SymphonyElixir.QaDriver.Remote do
   @doc "Unpacks the tar archive at `tar` into a fresh `dest` directory on the QA host."
   @spec ship(String.t(), Path.t(), String.t()) :: :ok | {:error, String.t()}
   def ship(ssh_host, tar, dest) do
-    remote = remote_command(~s(rm -rf "$1" && mkdir "$1" && tar -x -f - -C "$1"), [dest])
-
-    with {:ok, ssh, args} <- SSH.command(ssh_host, remote),
-         {:ok, {_output, 0}} <- Host.cmd("/bin/sh", ["-c", ~s(f=$1; shift; exec "$@" < "$f"), "sh", tar, ssh | args], timeout_ms: @ship_timeout_ms) do
-      :ok
-    else
+    case pipe(ssh_host, tar, ~s(rm -rf "$1" && mkdir "$1" && tar -x -f - -C "$1"), [dest], @ship_timeout_ms) do
+      {:ok, {_output, 0}} -> :ok
       {:ok, {output, status}} -> {:error, "exit #{status}: #{tail(output, 500)}"}
+      {:error, reason} -> {:error, inspect(reason)}
+    end
+  end
+
+  @doc """
+  Copies the local file `file` to `files/<name>` in the run directory `dir` on
+  the QA host, replacing an earlier copy, and returns its path there.
+  """
+  @spec put(String.t(), Path.t(), String.t(), String.t()) :: {:ok, String.t()} | {:error, String.t()}
+  def put(ssh_host, file, dir, name) do
+    with true <- Regex.match?(@run_dir, dir) and Regex.match?(@file_name, name),
+         {:ok, {output, 0}} <- pipe(ssh_host, file, @put_script, [dir, name], @timeout_ms),
+         path when is_binary(path) <- marker(output, "symphony-qa-put") do
+      {:ok, path}
+    else
+      false -> {:error, "#{dir}/files/#{name} is not a file in a run directory"}
+      {:ok, {output, status}} -> {:error, "exit #{status}: #{tail(output, 500)}"}
+      nil -> {:error, "the QA host did not confirm the copy"}
       {:error, reason} -> {:error, inspect(reason)}
     end
   end
@@ -250,6 +275,13 @@ defmodule SymphonyElixir.QaDriver.Remote do
   defp run(ssh_host, script, args, opts) do
     with {:ok, ssh, ssh_args} <- SSH.command(ssh_host, remote_command(script, args)) do
       Host.cmd(ssh, ssh_args, Keyword.merge([timeout_ms: @timeout_ms, output_limit: @output_limit], opts))
+    end
+  end
+
+  # Runs `script` on the QA host with the local `file` as its stdin.
+  defp pipe(ssh_host, file, script, args, timeout_ms) do
+    with {:ok, ssh, ssh_args} <- SSH.command(ssh_host, remote_command(script, args)) do
+      Host.cmd("/bin/sh", ["-c", ~s(f=$1; shift; exec "$@" < "$f"), "sh", file, ssh | ssh_args], timeout_ms: timeout_ms)
     end
   end
 

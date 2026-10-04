@@ -26,7 +26,14 @@ defmodule SymphonyElixir.QaDriver do
     running;
   - screenshots land in `qa-evidence/` under the worktree, always as new files:
     a name that already exists, symlinks included, is refused rather than
-    followed or replaced.
+    followed or replaced;
+  - `qa_put_file` hands the app a fixture file the agent wrote (a test
+    `symphony.yml`, a `WORKFLOW.md`). It reads only a regular file of at most
+    1 MB that resolves inside the worktree or the pass's `$TMPDIR` (`:tmp_dir`),
+    and refuses a symlink, a file with other hard links, and a file swapped
+    between the check and the read. Locally it returns the file's path; on a QA
+    host it copies the checked bytes into the run directory's `files/` there and
+    returns that path.
 
   Screenshots and accessibility calls run in the helper app,
   `SymphonyQADriver.app` (see `SymphonyElixir.QaDriver.Host`), which holds the
@@ -49,7 +56,8 @@ defmodule SymphonyElixir.QaDriver do
   build directory on the QA host, copies the bundle into Symphony's run
   directory there and launches it from that copy. The agent cannot write on the
   QA host, so the copy is not checked again before launch. Screenshots are
-  captured there and copied back into `qa-evidence/`. A QA host that can reach
+  captured there and copied back into `qa-evidence/`, and `qa_put_file` copies
+  fixtures there, because the app cannot read the Symphony host's files. A QA host that can reach
   the operator's credentials or holds push credentials is refused at start,
   and every tool then fails with `qa_worker_unsafe`.
   """
@@ -74,6 +82,8 @@ defmodule SymphonyElixir.QaDriver do
   @value_limit 10_000
   @press_actions ~w(AXPress AXRaise AXShowMenu AXConfirm AXCancel AXIncrement AXDecrement AXPick)
   @element_path ~r/\A\d{1,4}(\.\d{1,4}){0,63}\z/
+  @put_file_limit 1_000_000
+  @put_file_name ~r/\A[A-Za-z0-9][A-Za-z0-9._-]{0,127}\z/
 
   # Checks and copies the bundle on a QA host: `$1` build dir, `$2` app path,
   # `$3` destination. The bundle must be a real `.app` directory inside the build
@@ -91,7 +101,7 @@ defmodule SymphonyElixir.QaDriver do
   printf 'symphony-qa-app:%s\\n' "$executable"
   """
 
-  @tools ~w(qa_build qa_launch_app qa_quit_app qa_screenshot qa_ax_tree qa_ax_press qa_ax_set_value)
+  @tools ~w(qa_build qa_launch_app qa_quit_app qa_screenshot qa_ax_tree qa_ax_press qa_ax_set_value qa_put_file)
 
   @type host :: %{
           required(:cmd) => (String.t(), [String.t()], keyword() -> {:ok, {String.t(), integer()}} | {:error, term()}),
@@ -103,6 +113,7 @@ defmodule SymphonyElixir.QaDriver do
           optional(:read) => (Path.t() -> {:ok, binary()} | {:error, term()}),
           optional(:prepare) => (Path.t(), Path.t() -> {:ok, String.t()} | {:error, {atom(), String.t()}}),
           optional(:ship) => (Path.t(), String.t() -> :ok | {:error, String.t()}),
+          optional(:put) => (Path.t(), String.t(), String.t() -> {:ok, String.t()} | {:error, String.t()}),
           optional(:cleanup) => (String.t() -> :ok)
         }
   @type helper_result :: {:ok, Path.t()} | {:error, term()}
@@ -117,9 +128,10 @@ defmodule SymphonyElixir.QaDriver do
   Starts a driver for one QA pass.
 
   Options: `:worktree` (required), `:playbook` (the selected `macos_app` playbook
-  with `build`, `app` and optional `build_timeout_ms`), `:worker_host` (the SSH
-  host QA runs on, default this host), `:host` (overrides for the OS boundary,
-  see `t:host/0`) and `:git` (a `fn args, cwd -> {output, status}`).
+  with `build`, `app` and optional `build_timeout_ms`), `:tmp_dir` (the pass's
+  `$TMPDIR`, where `qa_put_file` may read besides the worktree), `:worker_host`
+  (the SSH host QA runs on, default this host), `:host` (overrides for the OS
+  boundary, see `t:host/0`) and `:git` (a `fn args, cwd -> {output, status}`).
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
@@ -235,6 +247,14 @@ defmodule SymphonyElixir.QaDriver do
          {:ok, value} <- set_value(Map.get(args, "value")),
          {:ok, helper} <- helper(driver, config) do
       run_helper(config, helper, ["ax-set-value", Integer.to_string(pid), path, value])
+    end
+  end
+
+  defp run_tool("qa_put_file", _driver, config, args) do
+    with {:ok, local_path} <- local_path(Map.get(args, "local_path")),
+         {:ok, name} <- put_file_name(Map.get(args, "remote_name"), local_path),
+         {:ok, path, bytes} <- read_put_file(config, local_path) do
+      put_file(config, path, bytes, name)
     end
   end
 
@@ -531,6 +551,105 @@ defmodule SymphonyElixir.QaDriver do
     end
   end
 
+  # -- fixture files -----------------------------------------------------------
+
+  # Symphony reads files the agent's sandbox may not, so only a regular file the
+  # agent wrote itself passes: inside the worktree or its `$TMPDIR` once every
+  # link on the way is resolved, not a link itself, and with no other hard link,
+  # which could name a file elsewhere. The read goes through one descriptor that
+  # must be the file just checked, so a path swapped after the check is refused.
+  defp read_put_file(config, local_path) do
+    path = Path.expand(local_path, config.worktree)
+
+    with {:ok, _stat} <- put_file_lstat(path, local_path),
+         {:ok, canonical} <- inside_put_roots(config, path, local_path),
+         {:ok, stat} <- put_file_lstat(canonical, local_path),
+         :ok <- single_regular_file(stat, local_path),
+         {:ok, bytes} <- read_checked(canonical, stat, local_path) do
+      {:ok, canonical, bytes}
+    end
+  end
+
+  defp put_file_lstat(path, local_path) do
+    case File.lstat(path, time: :posix) do
+      {:ok, %File.Stat{type: :symlink}} -> put_file_refused("#{local_path} is a symlink. Pass the regular file itself.")
+      {:ok, stat} -> {:ok, stat}
+      {:error, reason} -> put_file_refused("#{local_path} could not be read: #{inspect(reason)}.")
+    end
+  end
+
+  defp inside_put_roots(config, path, local_path) do
+    with {:ok, canonical} <- PathSafety.canonicalize(path),
+         true <- Enum.any?(config.put_roots, &String.starts_with?(canonical, &1 <> "/")) do
+      {:ok, canonical}
+    else
+      _other ->
+        put_file_refused("#{local_path} is outside the QA worktree and $TMPDIR. Write the fixture under #{@evidence_dir}/ or $TMPDIR first.")
+    end
+  end
+
+  defp single_regular_file(%File.Stat{type: :regular, links: 1, size: size}, _local_path) when size <= @put_file_limit, do: :ok
+  defp single_regular_file(%File.Stat{type: :regular, links: 1}, local_path), do: put_file_refused("#{local_path} is over #{@put_file_limit} bytes.")
+  defp single_regular_file(%File.Stat{type: :regular}, local_path), do: put_file_refused("#{local_path} has other hard links. Write a fresh copy.")
+  defp single_regular_file(_stat, local_path), do: put_file_refused("#{local_path} is not a regular file.")
+
+  defp read_checked(path, stat, local_path) do
+    case :file.open(path, [:read, :binary, :raw]) do
+      {:ok, fd} ->
+        try do
+          read_opened(fd, path, stat, local_path)
+        after
+          :file.close(fd)
+        end
+
+      {:error, reason} ->
+        put_file_refused("#{local_path} could not be read: #{inspect(reason)}.")
+    end
+  end
+
+  defp read_opened(fd, path, stat, local_path) do
+    {:ok, info} = :file.read_file_info(fd, time: :posix)
+    opened = File.Stat.from_record(info)
+
+    bytes =
+      case :file.read(fd, @put_file_limit + 1) do
+        {:ok, bytes} -> bytes
+        :eof -> ""
+      end
+
+    same_file? = same_inode?(opened, stat) and opened.links == 1 and still_at?(path, opened)
+    complete? = byte_size(bytes) <= @put_file_limit
+    if same_file? and complete?, do: {:ok, bytes}, else: put_file_refused("#{local_path} changed while it was read; leave it alone during qa_put_file.")
+  end
+
+  defp same_inode?(a, b), do: {a.type, a.inode, a.major_device} == {b.type, b.inode, b.major_device}
+
+  # A folder on the way swapped for a link before the open makes the path
+  # resolve elsewhere afterwards, or name another file once it is swapped back.
+  defp still_at?(path, %File.Stat{type: type, inode: inode, major_device: device}) do
+    match?({:ok, ^path}, PathSafety.canonicalize(path)) and
+      match?({:ok, %File.Stat{type: ^type, inode: ^inode, major_device: ^device}}, File.lstat(path))
+  end
+
+  defp put_file(%{remote?: false}, path, bytes, _name), do: {:ok, %{"path" => path, "bytes" => byte_size(bytes)}}
+
+  # The checked bytes travel, not the path, which the agent can still change.
+  defp put_file(config, _path, bytes, name) do
+    local = Path.join(config.scratch_dir, "put-#{System.unique_integer([:positive])}")
+    File.write!(local, bytes, [:exclusive])
+
+    result =
+      case config.host.put.(local, config.host_dir, name) do
+        {:ok, remote_path} -> {:ok, %{"path" => remote_path, "bytes" => byte_size(bytes)}}
+        {:error, reason} -> tool_error("qa_put_file_failed", "The file could not be copied to the QA host: #{reason}")
+      end
+
+    File.rm(local)
+    result
+  end
+
+  defp put_file_refused(message), do: tool_error("qa_put_file_refused", message)
+
   # -- argument checks --------------------------------------------------------
 
   defp pid_argument(%{"pid" => pid}) when is_integer(pid) and pid > 0, do: {:ok, pid}
@@ -561,6 +680,22 @@ defmodule SymphonyElixir.QaDriver do
   end
 
   defp set_value(_value), do: tool_error("invalid_arguments", "`value` must be a string of at most #{@value_limit} bytes.")
+
+  defp local_path(path) when is_binary(path) and path != "" and byte_size(path) <= 4_096 do
+    if String.contains?(path, <<0>>), do: tool_error("invalid_arguments", "`local_path` must not contain NUL bytes."), else: {:ok, path}
+  end
+
+  defp local_path(_path), do: tool_error("invalid_arguments", "`local_path` is required: a file under #{@evidence_dir}/ or $TMPDIR.")
+
+  defp put_file_name(nil, local_path), do: put_file_name(Path.basename(local_path), local_path)
+
+  defp put_file_name(name, _local_path) do
+    if is_binary(name) and Regex.match?(@put_file_name, name) do
+      {:ok, name}
+    else
+      tool_error("invalid_arguments", "`remote_name` must be 1-128 characters of letters, digits, `.`, `_` or `-`, starting with a letter or digit.")
+    end
+  end
 
   defp optional_string(args, key, limit) do
     case Map.get(args, key) do
@@ -738,12 +873,21 @@ defmodule SymphonyElixir.QaDriver do
       app: Map.fetch!(playbook, :app),
       build_timeout_ms: Map.get(playbook, :build_timeout_ms) || @default_build_timeout_ms,
       scratch_dir: Checks.private_dir("qa-driver"),
+      put_roots: [worktree | put_tmp_root(Keyword.get(opts, :tmp_dir))],
       remote?: worker_host != nil,
       host: Map.merge(base_host, Map.new(Keyword.get(opts, :host, %{}))),
       git: Keyword.get(opts, :git, &default_git/2)
     }
 
     {:ok, %{config: host_dirs(config, worker_host), build: nil, ignored: %{}, apps: %{}, helper: nil}}
+  end
+
+  # `/tmp` is a link on macOS; the check compares resolved paths.
+  defp put_tmp_root(nil), do: []
+
+  defp put_tmp_root(tmp_dir) do
+    {:ok, canonical} = PathSafety.canonicalize(tmp_dir)
+    [canonical]
   end
 
   # `host_dir` holds the bundle copies, screenshot staging and the app's QA root

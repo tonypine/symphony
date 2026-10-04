@@ -1250,6 +1250,7 @@ tools for it on the host, outside the sandbox, and checks every argument:
 | `qa_screenshot` | saves the app's on-screen windows to new files `qa-evidence/<name>.png` | a PID it did not launch, a window of another app, a name that already exists (file or symlink) |
 | `qa_ax_tree` | reads the accessibility tree (role, title, value, frame), filtered by `role` or `text`, capped in depth, nodes and size | a PID it did not launch |
 | `qa_ax_press`, `qa_ax_set_value` | press an element (or `AXRaise` a window) and set a field's value | a PID it did not launch |
+| `qa_put_file` | puts a fixture file the agent wrote (a test `symphony.yml`, a `WORKFLOW.md`) where the app can open it and returns that path: the file's own path on this host, a copy in the run directory's `files/` on a `worker_host` | a file that resolves outside the worktree and the pass's `$TMPDIR`, a symlink, a directory or other non-regular file, a file with other hard links, a file over 1 MB, and a file replaced while it is read |
 
 At most three launched apps run at once, and every app still running is quit when the pass ends.
 Only QA agents see these tools; executor and reviewer sessions cannot list or call them.
@@ -1357,6 +1358,8 @@ host and the worktree checks still apply there. Then:
   no `SymphonyQADriver.app` is opened or granted;
 - screenshots are captured there and copied back into `qa-evidence/` in the local QA worktree, so
   the agent attaches them as before;
+- `qa_put_file` copies the fixture over SSH into the run directory's `files/` and returns that
+  path, since the app cannot read files on the Symphony host;
 - the run directory is removed when the pass ends. A build that times out is stopped on the
   Symphony side; on the QA host it may run until it finishes.
 
