@@ -9,8 +9,9 @@ defmodule SymphonyElixir.AutoMerge do
   moves the issue to `Done`. When GitHub refuses auto-merge (the PR can already merge, the
   branch has no protection, or the repository doesn't allow it) but the PR is `CLEAN` with
   green or no checks, it is squash-merged right away. Merge conflicts take the PR poller's
-  conflict path, with auto-merge turned off first (see `disable_for_conflict/5`), and red CI
-  takes the CI poller's fix path.
+  conflict path, with auto-merge turned off first (see `disable_for_conflict/5`). Red CI takes
+  the CI poller's fix path; a fix run that can push code turns auto-merge off first too (see
+  `disable_for_ci_fix/5`), while a flaky rerun of the same commit leaves it on.
 
   A head that moves between reading the PR and turning auto-merge on (a push, or an
   update-branch) is retried with the head the next poll reads; only a head that keeps moving
@@ -86,6 +87,14 @@ defmodule SymphonyElixir.AutoMerge do
   def fallback?(%{state: "fallback"}), do: true
   def fallback?(_auto_merge), do: false
 
+  @doc """
+  True while auto-merge is off for a CI-fix run (see `disable_for_ci_fix/5`). It stays off until
+  the issue leaves `Merging` and is approved into it again.
+  """
+  @spec held?(term()) :: boolean()
+  def held?(%{state: "ci_failure"}), do: true
+  def held?(_auto_merge), do: false
+
   @doc "True when Symphony turned auto-merge on (or merged) for this record, so a later merge moves the issue to `Done`."
   @spec armed?(term()) :: boolean()
   def armed?(%{state: state}) when state in ["enabled", "updating_branch", "merging", "conflict"], do: true
@@ -106,7 +115,7 @@ defmodule SymphonyElixir.AutoMerge do
 
     result =
       cond do
-        fallback?(current) -> {:ok, current}
+        fallback?(current) or held?(current) -> {:ok, current}
         not is_binary(head) or not is_binary(Map.get(activity, :pr_node_id)) -> {:ok, %{current | state: current.state || "waiting"}}
         true -> current |> ensure_enabled(record, activity, opts) |> continue(record, activity, settings, opts, now)
       end
@@ -133,8 +142,8 @@ defmodule SymphonyElixir.AutoMerge do
 
   defp for_head(_previous, head, now), do: %{empty(now) | head_sha: head}
 
-  # A new head starts over from "enabled". A fallback stays until the issue leaves `Merging`
-  # (the PR poller clears it then), so the landing agent's own pushes don't flip it back.
+  # A new head starts over from "enabled". A fallback or a CI-fix hold stays until the issue
+  # leaves `Merging` (the PR poller clears it then), so pushes during that stay don't flip it back.
   defp next_head_state(state) when state in ["conflict", "merging", "updating_branch"], do: "enabled"
   defp next_head_state(state), do: state
 
@@ -332,6 +341,7 @@ defmodule SymphonyElixir.AutoMerge do
   def describe(%{state: "merging", head_sha: head}), do: "merging #{short_sha(head)}"
   def describe(%{state: "conflict", head_sha: head, disabled_at: %DateTime{}}), do: "blocked: conflict on #{short_sha(head)}; auto-merge off until the fix is approved again"
   def describe(%{state: "conflict", head_sha: head}), do: "blocked: conflict on #{short_sha(head)}"
+  def describe(%{state: "ci_failure", head_sha: head}), do: "auto-merge off: CI failed on #{short_sha(head)}; the fix goes back through review"
   def describe(%{state: "fallback", reason: reason}), do: "fell back to the landing agent: #{reason}"
   def describe(%{state: "merged"}), do: "merged"
   def describe(%{state: "waiting"}), do: "waiting for the PR head"
@@ -357,6 +367,27 @@ defmodule SymphonyElixir.AutoMerge do
   """
   @spec disable_for_conflict(map(), map(), t(), keyword(), DateTime.t()) :: {:ok | :disabled, t()} | {:error, term()}
   def disable_for_conflict(record, activity, current, opts, %DateTime{} = now) do
+    turn_off(record, activity, current, opts, now)
+  end
+
+  @doc """
+  Turns GitHub auto-merge off for a `Merging` PR whose red head goes to a CI-fix run, before
+  that run starts. The fix can push code the approval never covered, so it goes back through
+  review. `ci_status` is the CI poller's read of the PR (`pr_node_id`, `auto_merge_enabled`).
+  The returned state is a `ci_failure` hold, which `step/5` never turns on again; the PR
+  poller drops it once the issue leaves `Merging`, so only a fresh move to `Merging` turns
+  auto-merge back on, even when the head didn't change. Results as for `disable_for_conflict/5`.
+  """
+  @spec disable_for_ci_fix(map(), map(), term(), keyword(), DateTime.t()) :: {:ok | :disabled, t()} | {:error, term()}
+  def disable_for_ci_fix(record, ci_status, previous, opts, %DateTime{} = now) do
+    head = Map.get(ci_status, :commit_sha)
+    current = %{for_head(previous, head, now) | state: "ci_failure", enabled_head_sha: nil, reason: "CI failed; the fix goes back through review"}
+    activity = %{pr_url: Map.get(ci_status, :pr_url), pr_node_id: Map.get(ci_status, :pr_node_id), auto_merge_enabled: Map.get(ci_status, :auto_merge_enabled)}
+
+    turn_off(record, activity, current, opts, now)
+  end
+
+  defp turn_off(record, activity, current, opts, now) do
     if auto_merge_on?(Map.get(record, :auto_merge), activity, current) do
       case disable(record, activity, opts) do
         :ok -> {:disabled, %{current | enabled_head_sha: nil, disabled_at: now, updated_at: now}}
@@ -390,6 +421,14 @@ defmodule SymphonyElixir.AutoMerge do
   def conflict_comment(pr_url) do
     "Symphony turned off GitHub auto-merge on #{pr_url || "this PR"} because it conflicts with the base branch. " <>
       "The approval covered the diff before the conflict, so the conflict fix goes back through review; " <>
+      "moving this ticket to Merging again turns auto-merge back on."
+  end
+
+  @doc "The Linear comment posted when auto-merge is turned off for a CI-fix run."
+  @spec ci_fix_comment(String.t() | nil) :: String.t()
+  def ci_fix_comment(pr_url) do
+    "Symphony turned off GitHub auto-merge on #{pr_url || "this PR"} because CI failed and a fix run may push new code. " <>
+      "The approval covered the diff before the fix, so the fix goes back through review; " <>
       "moving this ticket to Merging again turns auto-merge back on."
   end
 
