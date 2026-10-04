@@ -19,9 +19,18 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     /// Called after Save stored changed secrets, so a running Symphony restarts with them.
     var onSecretsChanged: () -> Void = {}
 
+    /// Today's tokens from the latest poll, nil while Symphony isn't answering. Shown under Agents.
+    var budget: StateSnapshot.Budget? {
+        didSet { model?.budget = budget }
+    }
+
+    private var model: SettingsViewModel?
+
     func show() {
         if window == nil {
             let model = SettingsViewModel(secrets: secrets, onSecretsChanged: { [weak self] in self?.onSecretsChanged() })
+            model.budget = budget
+            self.model = model
             let view = SettingsView(model: model) { [weak self] in self?.window?.close() }
             let hostingController = NSHostingController(rootView: view)
             // The default (.preferredContentSize) keeps resizing the window to SwiftUI's ideal size, which
@@ -45,5 +54,6 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         window = nil
+        model = nil
     }
 }

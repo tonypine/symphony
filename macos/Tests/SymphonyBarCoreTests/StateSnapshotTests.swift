@@ -21,10 +21,55 @@ final class StateSnapshotTests: XCTestCase {
         return try JSONSerialization.data(withJSONObject: object)
     }
 
+    /// The `budget` in the recorded state.
+    private let recordedBudget = StateSnapshot.Budget(
+        dailyLimit: 1_000_000_000,
+        dailyUsed: 156_465_114,
+        dailyRemaining: 843_534_886,
+        dailyPaused: false,
+        perIssueLimit: 100_000_000
+    )
+
     func testDecodesTheRecordedState() throws {
         XCTAssertEqual(
             SymphonyState.poll(data: try recordedState(), statusCode: 200),
-            .state(StateSnapshot(running: 1, retrying: 0, pause: nil))
+            .state(StateSnapshot(running: 1, retrying: 0, pause: nil, budget: recordedBudget))
+        )
+    }
+
+    func testDecodesABudgetPausedOnTheDailyCap() throws {
+        let data = try recordedState(replacing: "budget", with: [
+            "daily_limit": 1_000_000_000, "daily_used": 1_000_000_123, "daily_remaining": 0, "daily_paused": true,
+            "per_issue_limit": NSNull(),
+        ])
+
+        XCTAssertEqual(
+            SymphonyState.poll(data: data, statusCode: 200),
+            .state(
+                StateSnapshot(
+                    running: 1,
+                    budget: .init(dailyLimit: 1_000_000_000, dailyUsed: 1_000_000_123, dailyRemaining: 0, dailyPaused: true)
+                )
+            )
+        )
+    }
+
+    func testDecodesABudgetWithTheCapsOff() throws {
+        let data = try recordedState(replacing: "budget", with: [
+            "daily_limit": NSNull(), "daily_used": 42, "daily_remaining": NSNull(), "daily_paused": false,
+            "per_issue_limit": NSNull(),
+        ])
+
+        XCTAssertEqual(
+            SymphonyState.poll(data: data, statusCode: 200),
+            .state(StateSnapshot(running: 1, budget: .init(dailyUsed: 42)))
+        )
+    }
+
+    func testAnEmptyBudgetReadsAsNothingUsed() {
+        XCTAssertEqual(
+            SymphonyState.poll(data: Data(#"{"counts": {"running": 0}, "budget": {}}"#.utf8), statusCode: 200),
+            .state(StateSnapshot(budget: .init()))
         )
     }
 
@@ -37,7 +82,8 @@ final class StateSnapshotTests: XCTestCase {
                 StateSnapshot(
                     running: 1,
                     retrying: 0,
-                    pause: .init(reason: "deploy freeze", since: Date(timeIntervalSince1970: 1_790_943_362))
+                    pause: .init(reason: "deploy freeze", since: Date(timeIntervalSince1970: 1_790_943_362)),
+                    budget: recordedBudget
                 )
             )
         )
@@ -48,7 +94,7 @@ final class StateSnapshotTests: XCTestCase {
 
         XCTAssertEqual(
             SymphonyState.poll(data: data, statusCode: 200),
-            .state(StateSnapshot(running: 1, retrying: 0, pause: .init()))
+            .state(StateSnapshot(running: 1, retrying: 0, pause: .init(), budget: recordedBudget))
         )
     }
 
@@ -81,7 +127,8 @@ final class StateSnapshotTests: XCTestCase {
                         .init(scope: "opus", window: "seven_day_opus", phase: .canary),
                         .init(provider: "openai", phase: .headroom, utilization: 0.91),
                         .init(),
-                    ]
+                    ],
+                    budget: recordedBudget
                 )
             )
         )
