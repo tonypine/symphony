@@ -287,17 +287,54 @@ public struct RepoField: Equatable {
     }
 }
 
+/// What can be done to a repo from its row. A nil problem means the action is on.
+public struct RepoActions: Equatable {
+    /// Why Edit is off.
+    public var editProblem: String?
+    /// Why Disconnect is off.
+    public var disconnectProblem: String?
+    /// Whether Symphony's clone can be deleted, nil for a repo that isn't a managed clone.
+    public var cloneRemoval: ManagedClones.Removal?
+
+    public init(editProblem: String? = nil, disconnectProblem: String? = nil, cloneRemoval: ManagedClones.Removal? = nil) {
+        self.editProblem = editProblem
+        self.disconnectProblem = disconnectProblem
+        self.cloneRemoval = cloneRemoval
+    }
+
+    /// Why actions are off, each reason once, to show under the row.
+    public var notes: [String] {
+        var notes: [String] = []
+        for problem in [editProblem, disconnectProblem] {
+            if let problem, !notes.contains(problem) { notes.append(problem) }
+        }
+        if case let .blocked(reason)? = cloneRemoval { notes.append(reason) }
+        return notes
+    }
+}
+
 /// A row of the Repos window.
 public struct RepoRow: Equatable, Identifiable {
     public var id: String { key }
     public var key: String
     public var isDefault: Bool
     public var fields: [RepoField]
+    /// `owner/repo` of a managed clone, nil for a local folder.
+    public var managedGitHub: String?
+    public var actions: RepoActions
 
-    public init(key: String, isDefault: Bool, fields: [RepoField]) {
+    public init(
+        key: String,
+        isDefault: Bool,
+        fields: [RepoField],
+        managedGitHub: String? = nil,
+        actions: RepoActions = RepoActions()
+    ) {
         self.key = key
         self.isDefault = isDefault
         self.fields = fields
+        self.managedGitHub = managedGitHub
+        self.actions = actions
     }
 }
 
@@ -412,7 +449,9 @@ public enum ReposList {
 
     /// A repo as a running Symphony reports it.
     public static func row(_ repo: RepoStatus, now: Date = Date()) -> RepoRow {
-        RepoRow(
+        var managedGitHub: String?
+        if case let .managed(github, _, _) = repo.source { managedGitHub = github }
+        return RepoRow(
             key: repo.key,
             isDefault: repo.isDefault,
             fields: [
@@ -422,7 +461,8 @@ public enum ReposList {
                 workflowField(repo.workflow),
                 fetchField(repo.lastFetch, now: now),
                 agentsField(repo.worktrees),
-            ]
+            ],
+            managedGitHub: managedGitHub
         )
     }
 
@@ -430,10 +470,12 @@ public enum ReposList {
     public static func row(_ entry: RepositoryEntry) -> RepoRow {
         let source: RepoField
         let github: RepoField
+        var managedGitHub: String?
         if let managed = entry.workspace.source?.trimmingWhitespace(), !managed.isEmpty {
             let repo = gitHubRepo(managed)
             source = RepoField(sourceLabel, "Managed clone of \(repo)")
             github = RepoField(githubLabel, repo)
+            managedGitHub = repo
         } else {
             let path = entry.workspace.repo?.trimmingWhitespace()
             source = RepoField(sourceLabel, "Local folder", detail: path.flatMap { $0.isEmpty ? nil : $0 })
@@ -449,8 +491,33 @@ public enum ReposList {
                 RepoField(workflowLabel, unavailable, detail: entry.workflow ?? "WORKFLOW.md", tone: .unavailable),
                 RepoField(lastFetchLabel, unavailable, tone: .unavailable),
                 RepoField(agentsLabel, unavailable, tone: .unavailable),
-            ]
+            ],
+            managedGitHub: managedGitHub
         )
+    }
+
+    /// `display` with each row's actions: Edit and Disconnect need the repo in `symphony.yml`, read as `entries`,
+    /// and `cloneRemoval` says whether a managed repo's clone can be deleted.
+    public static func withActions(
+        _ display: ReposDisplay,
+        entries: Result<[RepositoryEntry], AddRepoProblem>,
+        cloneRemoval: (_ gitHub: String) -> ManagedClones.Removal
+    ) -> ReposDisplay {
+        var display = display
+        for index in display.rows.indices {
+            var row = display.rows[index]
+            switch entries {
+            case let .failure(problem):
+                row.actions.editProblem = problem.message
+                row.actions.disconnectProblem = problem.message
+            case let .success(entries):
+                row.actions.disconnectProblem = DisconnectRepo.problem(key: row.key, entries: entries)
+                row.actions.editProblem = entries.contains { $0.key == row.key } ? nil : row.actions.disconnectProblem
+            }
+            row.actions.cloneRemoval = row.managedGitHub.map(cloneRemoval)
+            display.rows[index] = row
+        }
+        return display
     }
 
     static func sourceField(_ source: RepoStatus.Source) -> RepoField {

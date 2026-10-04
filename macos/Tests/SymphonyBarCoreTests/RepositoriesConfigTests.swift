@@ -491,16 +491,110 @@ final class RepositoriesConfigTests: XCTestCase {
             """)
     }
 
-    func testRemovesTheFirstEntryKeepingTheCommentAboveIt() throws {
+    func testRemovesTheFirstEntryWithTheCommentAttachedAboveIt() throws {
         let updated = try RepositoriesConfig.removing("web", from: several)
         XCTAssertEqual(updated, several.replacingOccurrences(of: """
+              # Main app.
               - key: web
                 workflow: WORKFLOW.md
                 route:
                   projects: [web]
 
 
-            """, with: "\n"))
+            """, with: ""))
+    }
+
+    /// The shape of Tony's own config: entries separated by blank lines, an opt-in repo last with a comment
+    /// block attached above it, and a commented-out key under the entry before it.
+    func testRemovesAnEntryWithItsCommentBlockAndNoDoubledBlankLine() throws {
+        let tonys = """
+            repositories:
+              - key: symphony
+                default: true
+                workflow: WORKFLOW.md
+                route:
+                  projects: ["building-the-harness"]
+                workspace:
+                  repo: ~/Projects/symphony
+                  # source: tonypine/symphony
+
+              # Opt-in only: Job Search Hub tickets need the job-search label,
+              # so they never land in symphony.
+              - key: job-search-hub
+                route:
+                  labels: [job-search]
+                workspace:
+                  repo: ~/Projects/job-search-hub
+
+            # Unrelated comment above the next section.
+            workspaces:
+              root: ~/Projects/symphony-workspaces
+
+            """
+        let expected = """
+            repositories:
+              - key: symphony
+                default: true
+                workflow: WORKFLOW.md
+                route:
+                  projects: ["building-the-harness"]
+                workspace:
+                  repo: ~/Projects/symphony
+                  # source: tonypine/symphony
+
+            # Unrelated comment above the next section.
+            workspaces:
+              root: ~/Projects/symphony-workspaces
+
+            """
+        XCTAssertEqual(try RepositoriesConfig.removing("job-search-hub", from: tonys), expected)
+
+        // In the middle too: the comment block goes, one blank line separates the neighbours.
+        let middle = tonys.replacingOccurrences(of: "\n# Unrelated", with: """
+
+              - key: docs
+                route:
+                  team: DOCS
+
+            # Unrelated
+            """)
+        let removed = try RepositoriesConfig.removing("job-search-hub", from: middle)
+        XCTAssertFalse(removed.contains("Opt-in"))
+        XCTAssertFalse(removed.contains("\n\n\n"))
+        XCTAssertTrue(removed.contains("# source: tonypine/symphony\n\n  - key: docs\n"))
+        XCTAssertEqual(try RepositoriesConfig.entries(in: removed).map(\.key), ["symphony", "docs"])
+    }
+
+    func testKeepsCommentsSeparatedByABlankLineOrIndentedUnderThePreviousEntry() throws {
+        let yaml = """
+            repositories:
+              # About every repo.
+
+              - key: a
+                route:
+                  team: A
+                # trailing note on a
+              - key: b
+                route:
+                  team: B
+            """
+        XCTAssertEqual(try RepositoriesConfig.removing("b", from: yaml), """
+            repositories:
+              # About every repo.
+
+              - key: a
+                route:
+                  team: A
+                # trailing note on a
+            """)
+        XCTAssertEqual(try RepositoriesConfig.removing("a", from: yaml), """
+            repositories:
+              # About every repo.
+
+              - key: b
+                route:
+                  team: B
+            """)
     }
 
     func testRemovesTheLastEntry() throws {

@@ -298,12 +298,16 @@ public enum AddRepo {
 
     /// The alert asking before a restart that waits for `runs` agent runs.
     public static func restartQuestion(key: String, runs: Int) -> (title: String, message: String) {
-        let noun = runs == 1 ? "agent run is" : "agent runs are"
-        return (
+        (
             "Restart Symphony to connect \(key)?",
-            "\(runs) \(noun) active. Restart pauses dispatch, waits for them to finish, then starts Symphony again, "
+            "\(activeRuns(runs)) Restart pauses dispatch, waits for them to finish, then starts Symphony again, "
                 + "which sets up \(key) and, for a GitHub URL, clones it."
         )
+    }
+
+    /// "1 agent run is active." or "3 agent runs are active."
+    static func activeRuns(_ runs: Int) -> String {
+        "\(runs) \(runs == 1 ? "agent run is" : "agent runs are") active."
     }
 
     /// What the sheet says after saving, for how the repo reaches Symphony.
@@ -332,12 +336,12 @@ public enum AddRepo {
         String(key.map { isKeyCharacter($0) ? $0 : "_" })
     }
 
-    private static func isUnscoped(_ route: RepositoryRoute) -> Bool {
+    static func isUnscoped(_ route: RepositoryRoute) -> Bool {
         (route.team?.trimmingWhitespace() ?? "").isEmpty && (route.projects ?? []).isEmpty
             && (route.labels ?? []).isEmpty && (route.assignee?.trimmingWhitespace() ?? "").isEmpty
     }
 
-    private static func sameRoute(_ left: RepositoryRoute, _ right: RepositoryRoute) -> Bool {
+    static func sameRoute(_ left: RepositoryRoute, _ right: RepositoryRoute) -> Bool {
         func text(_ value: String?) -> String { value?.trimmingWhitespace() ?? "" }
         func set(_ values: [String]?) -> Set<String> { Set((values ?? []).map { $0.trimmingWhitespace() }) }
         return text(left.team) == text(right.team) && set(left.projects) == set(right.projects)
