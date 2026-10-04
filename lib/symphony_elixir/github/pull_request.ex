@@ -57,6 +57,9 @@ defmodule SymphonyElixir.GitHub.PullRequest do
           commit_sha: String.t() | nil,
           is_cross_repository: boolean() | nil,
           head_repository: map() | nil,
+          mergeable: String.t() | nil,
+          merge_state_status: String.t() | nil,
+          base_ref_name: String.t() | nil,
           checks: [ci_check()]
         }
 
@@ -70,6 +73,12 @@ defmodule SymphonyElixir.GitHub.PullRequest do
           optional(:commit_id) => String.t() | nil,
           optional(:submitted_at) => DateTime.t() | nil
         }
+
+  @doc "Whether a fetched PR conflicts with its base: `mergeable` is `CONFLICTING` or `mergeStateStatus` is `DIRTY`."
+  @spec conflicting?(map()) :: boolean()
+  def conflicting?(pr) when is_map(pr) do
+    upcase(Map.get(pr, :mergeable)) == "CONFLICTING" or upcase(Map.get(pr, :merge_state_status)) == "DIRTY"
+  end
 
   @spec fetch_activity(term(), keyword()) :: {:ok, activity()} | {:error, term()}
   def fetch_activity(pr_url, opts \\ []) do
@@ -419,7 +428,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
       "view",
       pr_url,
       "--json",
-      "number,state,title,url,headRefName,headRefOid,isCrossRepository,headRepository,statusCheckRollup"
+      "number,state,title,url,headRefName,headRefOid,baseRefName,isCrossRepository,headRepository,mergeable,mergeStateStatus,statusCheckRollup"
     ]
 
     with {:ok, _host, _owner, _repo, _number} <- parse_github_pr_url(pr_url, opts),
@@ -434,6 +443,9 @@ defmodule SymphonyElixir.GitHub.PullRequest do
          commit_sha: normalize_id(Map.get(pr, "headRefOid")),
          is_cross_repository: Map.get(pr, "isCrossRepository"),
          head_repository: Map.get(pr, "headRepository"),
+         mergeable: normalize_id(Map.get(pr, "mergeable")),
+         merge_state_status: normalize_id(Map.get(pr, "mergeStateStatus")),
+         base_ref_name: normalize_id(Map.get(pr, "baseRefName")),
          checks: normalize_status_check_rollup(Map.get(pr, "statusCheckRollup"))
        }}
     else
@@ -744,6 +756,9 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   defp normalize_id(value) when is_integer(value), do: Integer.to_string(value)
   defp normalize_id(value) when is_binary(value), do: value
   defp normalize_id(_value), do: nil
+
+  defp upcase(value) when is_binary(value), do: value |> String.trim() |> String.upcase()
+  defp upcase(_value), do: nil
 
   defp normalize_line(value) when is_integer(value), do: value
   defp normalize_line(_value), do: nil

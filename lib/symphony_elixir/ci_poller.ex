@@ -237,10 +237,38 @@ defmodule SymphonyElixir.CiPoller do
 
   defp poll_once_for_repos(opts) do
     with {:ok, repos} <- Config.repos() do
-      repos
-      |> Enum.map(&Map.get(&1, :name))
-      |> Enum.reject(&(&1 in [nil, ""]))
-      |> Enum.reduce_while({:ok, empty_poll_summary(:disabled)}, &poll_repo_and_merge(&1, &2, opts))
+      repo_keys = repos |> Enum.map(&Map.get(&1, :name)) |> Enum.reject(&(&1 in [nil, ""]))
+
+      with {:ok, opts} <- prefetch_watched_issues(repo_keys, opts) do
+        Enum.reduce_while(repo_keys, {:ok, empty_poll_summary(:disabled)}, &poll_repo_and_merge(&1, &2, opts))
+      end
+    end
+  end
+
+  # The tracker's state query already spans every repository, so one read of the states any
+  # repository watches serves them all this cycle; each repository keeps only the states its own
+  # settings watch.
+  defp prefetch_watched_issues(repo_keys, opts) do
+    tracker = Keyword.get(opts, :tracker, Tracker)
+
+    case repo_keys |> Enum.flat_map(&repo_watched_states/1) |> Enum.uniq() do
+      [] ->
+        {:ok, opts}
+
+      states ->
+        with {:ok, issues} <- tracker.fetch_issues_by_states(states) do
+          {:ok, Keyword.put(opts, :watched_issues, issues)}
+        end
+    end
+  end
+
+  # A repository whose settings fail to load reports that error from its own poll.
+  defp repo_watched_states(repo_key) do
+    with {:ok, settings} <- Config.settings_for_repo(repo_key),
+         true <- settings.ci.enabled and settings.pr_review.mode == "polling" do
+      watched_states(settings)
+    else
+      _skipped -> []
     end
   end
 
@@ -276,7 +304,7 @@ defmodule SymphonyElixir.CiPoller do
     repo_key = repo_key_from_opts(opts)
     tracker = Keyword.get(opts, :tracker, Tracker)
 
-    with {:ok, discovered, auto_review_issues} <- discover_ci_checks(settings, run_store, tracker, repo_key, now),
+    with {:ok, discovered, auto_review_issues} <- discover_ci_checks(settings, run_store, tracker, repo_key, now, opts),
          {:ok, checks} <- list_ci_checks(run_store, repo_key) do
       opts =
         opts
@@ -289,8 +317,8 @@ defmodule SymphonyElixir.CiPoller do
     end
   end
 
-  defp discover_ci_checks(settings, run_store, tracker, repo_key, now) do
-    with {:ok, issues} <- tracker.fetch_issues_by_states(watched_states(settings)),
+  defp discover_ci_checks(settings, run_store, tracker, repo_key, now, opts) do
+    with {:ok, issues} <- fetch_watched_issues(settings, tracker, opts),
          {:ok, runs} <- list_runs(run_store, repo_key),
          {:ok, existing} <- list_ci_checks(run_store, repo_key) do
       existing_by_issue = Map.new(existing, &{Map.get(&1, :issue_id), &1})
@@ -299,6 +327,13 @@ defmodule SymphonyElixir.CiPoller do
       discovered = Enum.count(issues, &persist_discovered_ci_check?(&1, runs, existing_by_issue, run_store, repo_key, now))
 
       {:ok, discovered, auto_review_issues(settings, issues)}
+    end
+  end
+
+  defp fetch_watched_issues(settings, tracker, opts) do
+    case Keyword.fetch(opts, :watched_issues) do
+      {:ok, issues} -> {:ok, Enum.filter(issues, &issue_in_states?(&1, watched_states(settings)))}
+      :error -> tracker.fetch_issues_by_states(watched_states(settings))
     end
   end
 
@@ -322,6 +357,11 @@ defmodule SymphonyElixir.CiPoller do
       %{}
     end
   end
+
+  defp issue_in_states?(%Issue{state: state}, states) when is_binary(state),
+    do: Enum.any?(states, &(normalize_state_name(&1) == normalize_state_name(state)))
+
+  defp issue_in_states?(_issue, _states), do: false
 
   defp normalize_state_name(state) when is_binary(state), do: state |> String.trim() |> String.downcase()
   defp normalize_state_name(_state), do: ""
@@ -409,7 +449,13 @@ defmodule SymphonyElixir.CiPoller do
         mark_ci_green(record, ci_status, settings, opts, now)
 
       :pending ->
-        complete_ci_update(opts, record, ci_status_attrs(record, ci_status, %{status: "watching"}, now), {:watching, Map.get(record, :issue_id)})
+        issue_id = Map.get(record, :issue_id)
+        attrs = ci_status_attrs(record, ci_status, %{status: "watching"}, now)
+
+        case complete_ci_update(opts, record, attrs, {:watching, issue_id}) do
+          {:watching, ^issue_id} = action -> maybe_send_auto_review_conflict(action, record, ci_status, opts)
+          other -> other
+        end
 
       {:failure, failed_checks} ->
         handle_ci_failure(record, ci_status, failed_checks, settings, opts, now)
@@ -809,6 +855,17 @@ defmodule SymphonyElixir.CiPoller do
     case Map.get(Keyword.get(opts, :auto_review_issues, %{}), issue_id) do
       %Issue{} = issue -> AutoReview.on_green(issue, record, ci_status, settings, opts)
       nil -> action
+    end
+  end
+
+  # GitHub runs no `pull_request` workflows on a PR that conflicts with its base, so an Auto Review
+  # issue whose PR conflicts and has no checks would wait forever (see AutoReview.on_conflict/4).
+  defp maybe_send_auto_review_conflict({:watching, issue_id} = action, record, ci_status, opts) do
+    with %Issue{} = issue <- Map.get(Keyword.get(opts, :auto_review_issues, %{}), issue_id),
+         true <- Map.get(ci_status, :checks) == [] and PullRequest.conflicting?(ci_status) do
+      AutoReview.on_conflict(issue, record, ci_status, opts)
+    else
+      _other -> action
     end
   end
 
