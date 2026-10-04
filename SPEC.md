@@ -1178,7 +1178,12 @@ later executor continuations in push/PR handoff mode rather than reintroducing t
 gate. `request_changes` and `block` verdicts SHOULD include evidence-backed findings with file,
 line range, quoted snippet, summary, and suggested fix; Symphony SHOULD reject verdicts whose
 findings cannot be verified against the reviewer diff/context, and SHOULD run one bounded
-self-check turn before accepting blocking findings. The reviewer prompt SHOULD tell the reviewer to
+self-check turn before accepting blocking findings. A finding SHOULD be grounded against every
+evidence source for the cited file (the diff, the full file contents and the adjacent windows): the
+cited range first, then the nearest place in the changed file the quote appears (within 10 lines of
+the cited range before anywhere else), moving the finding's line range to where the quote was found.
+When no finding can be grounded, Symphony SHOULD give the same reviewer session one re-quote turn
+that shows the text actually at the cited lines. The reviewer prompt SHOULD tell the reviewer to
 review the diff by reading it and not to run the test suite, coverage or static analysis, which CI
 runs after the push. Reviewer token usage SHOULD be tracked separately from the aggregate run token
 total.
@@ -1189,10 +1194,13 @@ dedicated `review_agent_blocked` exit, post the block reason/findings to the tra
 to the configured human-review escalation state (`pull_requests.checks.escalate_to_state`), and avoid
 scheduling another orchestrator retry. If that tracker transition fails, Symphony SHOULD still release
 its local issue claim rather than leaving the issue stuck as running. Reviewer parse failures,
-turn-budget failures, or validation/self-check paths that remove all findings SHOULD be classified as
+turn-budget failures, or self-check paths that remove all findings SHOULD be classified as
 `review_agent_inconclusive`; Symphony SHOULD retry the reviewer once with a fresh reviewer session,
 then downgrade to `request_changes` with a non-convergence note instead of retrying the full executor
-run.
+run. When every finding stays unverifiable after the re-quote turn, Symphony SHOULD instead approve
+the push without spending a correction round, attach those findings to the approval prompt as
+advisory notes, and record a `review_agent_unverified` audit event with the issue, the review round
+and the number of findings dropped.
 
 #### 5.4.17 `auto_review` (object)
 
@@ -2168,6 +2176,9 @@ Forced allowance:
 - A forced run is marked `forced: true` and is counted by none of `running_count`, the finishing
   count, the per-state counts or the epic lanes, so it never takes a normal slot. A run already
   going when the label is added stays a normal run, and a running agent is never pre-empted.
+  When an issue leaves the forced queue (or stops being a forced parent's part) while its forced
+  run is going, that run is no longer `forced`: it gives the forced allowance back, so an issue
+  still forced can take it, and goes on as a normal run.
 - A forced issue that finds `forced_max` forced runs running gets no extra slot. It still sorts
   first for a normal slot (and runs as a normal run if it gets one), shows its queue position in
   the `forced` snapshot and as its `slot_waiting` reason (`queued #2; forced slot taken by MT-1`),
@@ -4503,6 +4514,8 @@ infrastructure.
 - A forced issue dispatches first, on its own `forced_max` allowance, while `max_total`, the epic
   lanes, `finishing_max` and the per-state caps are full, on the poll and the retry path; its run
   takes no normal slot, and a second forced issue past `forced_max` waits and is noted once
+- A forced run whose issue is no longer forced gives the forced allowance back and goes on as a
+  normal run
 - The daily token budget and a usage-limit headroom hold do not stop a forced dispatch; the
   operator pause, blocked-by links and a `paused` usage-limit hold do
 - A forced `breakdown` parent waiting on its sub-issues forces one issue on its epic path at a

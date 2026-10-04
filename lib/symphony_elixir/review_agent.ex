@@ -68,8 +68,7 @@ defmodule SymphonyElixir.ReviewAgent do
 
     with true <- enabled?(config),
          {:ok, source} <- source_material(issue, workspace, settings, opts),
-         {:ok, verdict} <- run_reviewer_agent(issue, workspace, settings, source, opts),
-         {:ok, grounded_verdict} <- validate_findings(verdict, source) do
+         {:ok, grounded_verdict} <- run_reviewer_agent(issue, workspace, settings, source, opts) do
       finalize_verdict(grounded_verdict, source)
     else
       false -> {:ok, %{verdict: :approve, comments: [], reason: "review_agent disabled"}}
@@ -109,7 +108,8 @@ defmodule SymphonyElixir.ReviewAgent do
     |> split_valid_findings()
     |> case do
       {[], failures} ->
-        {:error, {:review_agent_inconclusive, {:review_agent_unverifiable, %{verdict: verdict, failures: failures}}}}
+        payload = %{verdict: verdict, failures: failures, comments: Map.get(result, :comments, [])}
+        {:error, {:review_agent_inconclusive, {:review_agent_unverifiable, payload}}}
 
       {valid_findings, _failures} ->
         {:ok, result |> Map.put(:findings, valid_findings) |> put_grounded_comments()}
@@ -119,17 +119,73 @@ defmodule SymphonyElixir.ReviewAgent do
   def validate_findings(result, _source), do: {:ok, result}
 
   defp validate_finding(finding, source) do
-    case Context.lookup_evidence(source, finding.file, finding.line_range) do
-      {:ok, evidence} ->
-        if snippet_matches?(finding.quoted_snippet, evidence.text) do
-          {:ok, finding}
-        else
-          {:error, %{finding: finding, reason: :quoted_snippet_not_found, evidence: evidence}}
-        end
-
-      {:error, reason} ->
-        {:error, %{finding: finding, reason: reason}}
+    case Context.grounding_evidence(source, finding.file, finding.line_range) do
+      {:ok, evidence} -> ground_finding(finding, evidence)
+      {:error, reason} -> {:error, %{finding: finding, reason: reason}}
     end
+  end
+
+  # The cited range is checked in every evidence source first. Otherwise the quote is
+  # looked up in the whole file and the finding moves to the nearest match, so a quote
+  # within 10 lines of the cited range wins over one further away.
+  defp ground_finding(finding, %{path: path, cited: cited, lines: lines}) do
+    cond do
+      Enum.any?(cited, &snippet_matches?(finding.quoted_snippet, &1.text)) ->
+        {:ok, finding}
+
+      line_range = locate_snippet(finding.quoted_snippet, lines, finding.line_range) ->
+        {:ok, %{finding | line_range: line_range}}
+
+      cited == [] ->
+        {:error, %{finding: finding, reason: {:line_range_not_found, path, finding.line_range}}}
+
+      true ->
+        {:error, %{finding: finding, reason: :quoted_snippet_not_found, evidence: hd(cited)}}
+    end
+  end
+
+  defp locate_snippet(snippet, numbered_lines, {start_line, end_line}) do
+    case snippet |> normalized_snippet_lines() |> Enum.map(&compact_evidence_text/1) do
+      [] ->
+        nil
+
+      snippet_lines ->
+        numbered_lines
+        |> searchable_lines()
+        |> Enum.chunk_every(length(snippet_lines), 1, :discard)
+        |> Enum.filter(&window_matches?(&1, snippet_lines))
+        |> Enum.map(fn [{first_line, _text} | _rest] = window -> {first_line, window |> List.last() |> elem(0)} end)
+        |> Enum.min_by(&distance_from_range(&1, start_line, end_line), fn -> nil end)
+    end
+  end
+
+  # Blank lines are skipped. A gap in the numbering (lines no evidence source covers)
+  # breaks a match, so a relocated quote never spans lines Symphony has not seen.
+  defp searchable_lines(numbered_lines) do
+    numbered_lines
+    |> Enum.reduce({nil, []}, fn {number, text}, {previous_number, acc} ->
+      acc = if is_integer(previous_number) and number != previous_number + 1, do: [:gap | acc], else: acc
+
+      case compact_evidence_text(text) do
+        "" -> {number, acc}
+        line -> {number, [{number, line} | acc]}
+      end
+    end)
+    |> elem(1)
+    |> Enum.reverse()
+  end
+
+  defp window_matches?(window, snippet_lines) do
+    window
+    |> Enum.zip(snippet_lines)
+    |> Enum.all?(fn
+      {{_number, line}, snippet_line} -> String.contains?(line, snippet_line)
+      {:gap, _snippet_line} -> false
+    end)
+  end
+
+  defp distance_from_range({first_line, last_line}, start_line, end_line) do
+    Enum.max([0, first_line - end_line, start_line - last_line])
   end
 
   defp split_valid_findings(results) do
@@ -226,6 +282,17 @@ defmodule SymphonyElixir.ReviewAgent do
     |> String.trim()
   end
 
+  @doc """
+  Advisory notes for findings whose quotes stayed unverifiable: one `[unverified]`
+  line per dropped finding, or the reviewer's comments when it gave no findings.
+  """
+  @spec unverified_notes(map()) :: [String.t()]
+  def unverified_notes(%{failures: [_failure | _rest] = failures}) do
+    Enum.map(failures, fn %{finding: finding} -> "[unverified] " <> finding_comment(finding) end)
+  end
+
+  def unverified_notes(payload) when is_map(payload), do: Map.get(payload, :comments, [])
+
   defp put_grounded_comments(%{findings: findings} = result) when is_list(findings) do
     Map.put(result, :comments, Enum.map(findings, &finding_comment/1))
   end
@@ -238,10 +305,10 @@ defmodule SymphonyElixir.ReviewAgent do
   def approval_prompt(result), do: approval_prompt(result, [])
 
   @spec approval_prompt(result(), keyword()) :: String.t()
-  def approval_prompt(_result, opts) do
+  def approval_prompt(result, opts) do
     """
     Reviewer agent approved the committed diff.
-
+    #{advisory_notes_section(result)}
     Continue the normal workflow push and PR handoff now. Use the validation evidence already
     collected for the reviewed diff. Do not stop at the reviewer-agent gate again unless code
     changes after this approval.
@@ -249,6 +316,24 @@ defmodule SymphonyElixir.ReviewAgent do
     #{approval_handoff_tool_guidance(Keyword.get(opts, :settings))}
     """
   end
+
+  defp advisory_notes_section(%{advisory_notes: [_note | _rest] = notes}) do
+    body =
+      notes
+      |> Enum.with_index(1)
+      |> Enum.map_join("\n", fn {note, index} -> "#{index}. #{note}" end)
+
+    """
+
+    The reviewer also raised the findings below, but their quoted lines could not be found in
+    the diff or the changed files. They are advisory notes: do not change code for them before
+    the push. Record any you judge real in the workpad Notes.
+
+    #{body}
+    """
+  end
+
+  defp advisory_notes_section(_result), do: ""
 
   @doc false
   @spec approval_handoff_tool_guidance(Schema.t() | map() | nil) :: String.t()
@@ -368,9 +453,9 @@ defmodule SymphonyElixir.ReviewAgent do
           turn_opts =
             reviewer_turn_opts(opts, reviewer_settings, on_message, linear_comment_registry: Keyword.get(opts, :linear_comment_registry))
 
-          case run_review_turn(agent_module, session, prompt, issue, message_collector, turn_opts) do
-            {:ok, verdict} -> self_check(agent_module, session, issue, verdict, message_collector, turn_opts)
-            {:error, reason} -> {:error, reason}
+          with {:ok, verdict} <- run_review_turn(agent_module, session, prompt, issue, message_collector, turn_opts),
+               {:ok, checked} <- self_check(agent_module, session, issue, verdict, message_collector, turn_opts) do
+            ground_findings(agent_module, session, issue, checked, source, message_collector, turn_opts)
           end
         after
           agent_module.stop_session(session)
@@ -450,6 +535,69 @@ defmodule SymphonyElixir.ReviewAgent do
       {:error, {:review_agent_inconclusive, _reason} = reason} ->
         {:error, reason}
     end
+  end
+
+  # When no finding can be grounded, the same session gets one turn to re-quote them
+  # against the text actually at the cited lines. If that turn fails, the original
+  # unverifiable findings stand.
+  defp ground_findings(agent_module, session, issue, result, source, message_collector, turn_opts) do
+    case validate_findings(result, source) do
+      {:error, {:review_agent_inconclusive, {:review_agent_unverifiable, %{failures: [_failure | _rest]} = payload}}} ->
+        requote(agent_module, session, issue, {result, payload}, source, message_collector, turn_opts)
+
+      other ->
+        other
+    end
+  end
+
+  defp requote(agent_module, session, issue, {result, payload}, source, message_collector, turn_opts) do
+    prompt = requote_prompt(result, payload)
+    turn_opts = Keyword.put(turn_opts, :max_iterations, @self_check_max_iterations)
+
+    case run_review_turn(agent_module, session, prompt, issue, message_collector, turn_opts) do
+      {:ok, requoted} ->
+        validate_findings(requoted, source)
+
+      {:error, reason} ->
+        Logger.info("Reviewer agent re-quote turn failed for #{issue.identifier || issue.id} reason=#{inspect(reason)}")
+        {:error, {:review_agent_inconclusive, {:review_agent_unverifiable, payload}}}
+    end
+  end
+
+  defp requote_prompt(result, %{failures: failures}) do
+    """
+    Symphony could not find the quoted snippet of these findings in the diff or the changed files:
+
+    #{Enum.map_join(failures, "\n\n", &requote_failure/1)}
+
+    For each finding, fix `quoted_snippet` and `line_range` so the snippet is copied exactly from the cited lines, or remove the finding from `findings` if it does not hold. Return the corrected JSON object.
+
+    Previous JSON:
+    #{Jason.encode!(review_json(result))}
+    """
+  end
+
+  defp requote_failure(%{finding: %{file: file, line_range: {start_line, end_line}} = finding} = failure) do
+    Enum.join(
+      [
+        "- #{file}:#{start_line}-#{end_line}: #{finding.summary}",
+        "  Quoted snippet:",
+        indent_block(finding.quoted_snippet),
+        "  Text at the cited lines:",
+        indent_block(cited_text(failure))
+      ],
+      "\n"
+    )
+  end
+
+  defp cited_text(%{evidence: %{text: text}}), do: text
+  defp cited_text(%{reason: {:file_not_in_review_context, _path}}), do: "(file is not in the diff or the review context)"
+  defp cited_text(_failure), do: "(no lines at this range in the diff or the changed file)"
+
+  defp indent_block(text) do
+    text
+    |> String.split("\n")
+    |> Enum.map_join("\n", &("    " <> &1))
   end
 
   defp self_check_prompt(result) do

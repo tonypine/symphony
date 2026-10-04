@@ -540,7 +540,9 @@ agent:
   landing, an Auto Review QA pass (see QA passes below) and a `Final verification:` parent
   walkthrough. Its run is marked `forced` (`/api/v1/state` `running[].forced`) and takes none of the
   normal slots; a run already going when the label is added stays a normal run, and no running
-  agent is stopped. A forced ticket past `forced_max` gets no extra slot: it still goes first for a
+  agent is stopped. Once the label is removed (or a forced parent's is), a forced run already
+  going gives the allowance back and goes on as a normal run, so a ticket still forced can take it.
+  A forced ticket past `forced_max` gets no extra slot: it still goes first for a
   normal one, waits as `queued #2; forced slot taken by MT-1` in `slot_waiting`, and Symphony logs a
   warning and sends one `forced_waiting` notification naming the forced run holding the allowance.
   The daily token budget and a usage-limit headroom hold don't stop a forced ticket (a warning is
