@@ -85,6 +85,26 @@ struct SettingsView: View {
                         }
                     }
                     .disabled(!model.canEditMaxConcurrentAgents)
+                    TokenLimitRow(toggleTitle: "Limit tokens per day", fieldTitle: "Tokens per day", field: $model.dailyTokenLimit)
+                        .disabled(!model.canEditTokenLimits)
+                    TokenLimitRow(
+                        toggleTitle: "Limit tokens per ticket",
+                        fieldTitle: "Tokens per ticket",
+                        field: $model.issueTokenLimit
+                    )
+                    .disabled(!model.canEditTokenLimits)
+                    if model.isCheckingTokenLimits {
+                        HStack {
+                            ProgressView().controlSize(.small)
+                            Text("Checking the token limits with symphony check…").foregroundStyle(.secondary)
+                        }
+                    }
+                    if let error = model.tokenLimitsError {
+                        Text(error).foregroundStyle(.red)
+                    }
+                    ForEach(TokenUsage.lines(model.budget, now: Date(), timeZone: .current), id: \.self) { line in
+                        Text(line).foregroundStyle(.secondary)
+                    }
                 } header: {
                     Text("Agents (saved in symphony.yml)")
                 } footer: {
@@ -92,7 +112,9 @@ struct SettingsView: View {
                         "Each epic under way keeps one of these agents for its sub-tickets; the rest take "
                             + "other work. Merges and QA runs don't count here: up to 2 more run on top. More "
                             + "agents use the Linear and GitHub API budgets faster. 2–3 is a safe range on a "
-                            + "personal Linear key. Applies within a minute, no restart needed."
+                            + "personal Linear key. The daily token cap pauses new runs once today's tokens (UTC) "
+                            + "reach it; the per-ticket cap stops a ticket that goes over it. Applies within a "
+                            + "minute, no restart needed."
                     )
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -241,6 +263,9 @@ struct SettingsView: View {
                 }
                 if model.configCheckError != nil {
                     Text("symphony check rejected the models; see Models.").foregroundStyle(.red)
+                }
+                if model.tokenLimitsError != nil {
+                    Text("symphony check rejected the token limits; see Agents.").foregroundStyle(.red)
                 }
                 if let loginItemError = model.loginItemError {
                     Text(loginItemError).foregroundStyle(.red)
@@ -453,6 +478,29 @@ private struct OpenRouterModelField: View {
     private func choose(_ id: String?) {
         selection = id
         isPicking = false
+    }
+}
+
+/// A switch for a token cap and, while it's on, the number of tokens with a hint such as "1,000,000,000 = 1B".
+private struct TokenLimitRow: View {
+    let toggleTitle: String
+    let fieldTitle: String
+    @Binding var field: TokenLimitField
+
+    var body: some View {
+        Toggle(toggleTitle, isOn: $field.isOn)
+        if field.isOn {
+            LabeledContent(fieldTitle) {
+                HStack {
+                    TextField(fieldTitle, text: $field.text, prompt: Text("1000000000"))
+                        .labelsHidden()
+                        .monospacedDigit()
+                        .frame(width: 160)
+                    Text(field.limit == nil ? field.hint : "tokens, \(field.hint)")
+                        .foregroundStyle(field.limit == nil ? .red : .secondary)
+                }
+            }
+        }
     }
 }
 

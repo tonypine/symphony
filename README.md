@@ -288,6 +288,11 @@ Forcing never changes a ticket's state: a ticket in `Backlog` stays there
 an active state. An unknown ticket, a missing or rejected control token, an unreachable Symphony and
 a Linear error each print a message and exit non-zero.
 
+The terminal and web dashboards list forced tickets in a "Forced" section above the running agents,
+with the phase each is in and what it waits on (`implementation · running`,
+`waiting for a human`, `implementation · waiting on blocker TP-12`), and mark forced rows elsewhere
+with ⚡. Once a forced ticket is done, Symphony removes the label.
+
 ### Priority vs expedite
 
 A ticket's Linear priority means how important it is. Symphony uses it only to order work that waits

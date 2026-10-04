@@ -1,7 +1,7 @@
 ```text
 ╭─ SYMPHONY STATUS
 │ Dispatch: active
-│ Agents: 2/10
+│ Agents: 2/10 · forced 0/1
 │ Throughput: 1,842 tps
 │ Runtime: 72m 1s
 │ Tokens: new 250,000 | cached 0 | created 0 | out 18,500
