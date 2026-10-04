@@ -13,6 +13,30 @@ defmodule SymphonyElixir.DependencyAudit.MixParser do
     end
   end
 
+  @doc """
+  Parses a `mix.lock` into `%{package => version}`. A Hex package's version is its locked
+  release (`"1.4.4"`); any other SCM's is `"<scm>:<ref>"` (`"git:0123abc"`). Atoms in the
+  file are read without creating any.
+  """
+  @spec parse_lock(String.t()) :: {:ok, %{String.t() => String.t()}} | {:error, term()}
+  def parse_lock(content) when is_binary(content) do
+    encode_atom = fn atom, _meta -> {:ok, {:atom, atom}} end
+
+    case Code.string_to_quoted(content, emit_warnings: false, static_atoms_encoder: encode_atom) do
+      {:ok, {:%{}, _meta, entries}} -> {:ok, Map.new(for {package, entry} <- entries, do: {lock_name(package), lock_version(entry)})}
+      {:ok, _ast} -> {:error, :lock_not_a_map}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp lock_version({:{}, _meta, [{:atom, "hex"}, _name, version | _rest]}) when is_binary(version), do: version
+  defp lock_version({:{}, _meta, [{:atom, scm}, _source, ref | _rest]}) when is_binary(ref), do: "#{scm}:#{ref}"
+  defp lock_version(_entry), do: "unknown"
+
+  defp lock_name({:atom, name}), do: name
+  defp lock_name(name) when is_binary(name), do: name
+  defp lock_name(name), do: Macro.to_string(name)
+
   defp deps_ast(ast) do
     {_ast, found} =
       Macro.prewalk(ast, nil, fn

@@ -1675,7 +1675,7 @@ not require recognizing or validating extension fields unless that extension is 
   run's model; `openrouter` requires a resolved model and `agent.runtime == "claude"`.
 - `agent.run_profiles`: map of run kind to `{model, effort, provider}`, default `{}`. Run kinds:
   `implementation`, `breakdown`, `close_out`, `final_verification`, `rework`, `landing`, `ci_fix`,
-  `review_feedback`, `pre_push_review`, `qa`. Each field resolves, for the issue's routed
+  `review_feedback`, `pre_push_review`, `qa`, `acceptance_gate`. Each field resolves, for the issue's routed
   repository, to `repositories[].agent.run_profiles.<kind>`, else `repositories[].agent.<field>`,
   else `agent.run_profiles.<kind>`, else `agent.model` / `agent.effort` / `agent.provider`, else
   null (nothing added) for model and effort and `anthropic` for provider. Repo workflow front
@@ -1775,6 +1775,17 @@ not require recognizing or validating extension fields unless that extension is 
   `~/Library/Android/sdk`
 - `auto_review.android.boot_timeout_ms`: integer, default `180000`
 - `auto_review.android.idle_timeout_ms`: integer, default `600000`
+- `auto_review.acceptance_gate.mode`: `off`, `shadow` or `enforce`, default `off`
+- `auto_review.acceptance_gate.runtime` / `.command`: optional; `.model` / `.effort`: default
+  `null`, else the `acceptance_gate` run profile
+- `auto_review.acceptance_gate.max_turns` / `.timeout_ms` / `.max_concurrent`: integers, defaults
+  `12`, `900000`, `2`
+- `auto_review.acceptance_gate.escalate`: `labels`, `ticket_patterns`, `paths`, `diff_patterns`
+  (lists added to built-in defaults that can't be removed), `dependencies` (`off`, `major` or
+  `any`, default `major`), `max_changed_lines` (default `1500`), `busy_files` (`top` `10`,
+  `window_days` `14`, `max_lines` `300`), `inconclusive_limit` (default `2`)
+- `repositories[].acceptance_gate`: `mode`, `max_turns`, `timeout_ms` and `escalate` for that
+  repository; scalars replace the global values, lists add to them. See `docs/acceptance_gate.md`.
 - `notifications.enabled`: boolean, default `false`
 - `notifications.redact_titles`: boolean, default `false`
 - `notifications.channels`: list of Slack/webhook channel configs, default `[]`
