@@ -381,6 +381,30 @@ defmodule SymphonyElixir.QaAgentTest do
       assert [_cli] = Selection.playbooks(%{playbooks: %{"web" => %{"enabled" => false}}}, dev_server?: true)
     end
 
+    test "unavailable/2 says why each playbook is off" do
+      assert Selection.unavailable(%{playbooks: %{}}) == [
+               {"macos_app", "needs `auto_review.playbooks.macos_app.build`, `auto_review.playbooks.macos_app.app`"},
+               {"android_app",
+                "needs `auto_review.playbooks.android_app.build`, `auto_review.playbooks.android_app.apk_path`, " <>
+                  "`auto_review.playbooks.android_app.application_ids`, `auto_review.android.avd`"},
+               {"web", "needs `verification.dev_server`"}
+             ]
+
+      config = %{
+        android: %{avd: "Pixel_3a_API_34"},
+        playbooks: %{
+          "cli" => %{"enabled" => false},
+          "macos_app" => %{"build" => "make app", "app" => "build/App.app"},
+          "android_app" => %{"build" => "./gradlew assembleDebug", "apk_path" => "app.apk", "application_ids" => ["com.example.app"]},
+          "api" => %{"paths" => ["api/**"]}
+        }
+      }
+
+      assert Selection.unavailable(config, dev_server?: true) == [{"cli", "`enabled: false`"}, {"api", "no `prompt`"}]
+      assert config |> Selection.playbooks(dev_server?: true) |> Enum.map(& &1.kind) == ["macos_app", "android_app", "web"]
+      assert Selection.unavailable(%{config | android: nil}, dev_server?: true) -- [{"cli", "`enabled: false`"}, {"api", "no `prompt`"}] == [{"android_app", "needs `auto_review.android.avd`"}]
+    end
+
     test "glob matching keeps single stars inside one directory" do
       assert Selection.glob_match?("lib/mix/tasks/a/b.ex", "lib/mix/tasks/**")
       assert Selection.glob_match?("a.md", "**/*.md")

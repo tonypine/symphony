@@ -169,10 +169,10 @@ repositories:
   - `ref` reads the file committed on the fetched remote base branch of the git checkout that
     contains `workflow` (`origin/<base_branch>`, or `origin/HEAD` then `origin/main` then
     `origin/master` when `base_branch` is unset). Uncommitted or unpulled edits in that checkout
-    never reach a run. Symphony reads the ref at startup and again on every dispatch, after the
+    never reach a run. Symphony reads the ref at startup, again on every dispatch after the
     pre-dispatch `git fetch origin` (it fetches the checkout itself when
     `fetch_before_dispatch` is on and the checkout is not the worktree source it already
-    fetched). The committed file is copied to `<state root>/workflows/<key>/`. If the file is
+    fetched), and before every Auto Review QA pass, after the same fetch. The committed file is copied to `<state root>/workflows/<key>/`. If the file is
     missing or invalid on the ref, Symphony logs an error and keeps the last good workflow.
     Until the ref has been read once (for example a local-only checkout with no `origin`
     remote, or an `origin` whose default branch is not `HEAD`, `main` or `master` while
@@ -1142,6 +1142,17 @@ auto_review:
 That repository's `macos_app` playbook builds with `make -C macos app` and triggers on
 `macos/Sources/**`; other repositories keep the default paths. A kind only one repository sets
 (`api` above, say) exists only for that repository.
+
+Each QA pass re-reads the repository's `WORKFLOW.md` from its base branch first, after a
+`git fetch origin` when `fetch_before_dispatch` is on, so a playbook merged since the last
+dispatch applies to the next pass. It logs its selection at info level in one line:
+
+```text
+QA selection issue_id=… issue_identifier=MOT-32 sha=… decision=run playbooks=android_app not_selected="cli: not triggered; macos_app: needs `auto_review.playbooks.macos_app.build`, `auto_review.playbooks.macos_app.app`; web: needs `verification.dev_server`" workflow_refresh=:ok
+```
+
+`not_selected` names each playbook that did not run: `not triggered` when none of its paths
+changed, otherwise the setting it is missing or `enabled: false`.
 
 #### Acceptance gate
 

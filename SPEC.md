@@ -1529,9 +1529,9 @@ Dynamic reload behavior:
 
 - The Elixir implementation polls repo `WORKFLOW.md` files and keeps each `WorkflowStore` on the
   last known good workflow when reload fails.
-- For `workflow_source: ref`, the workflow is re-read from the remote base branch at startup and
-  on every dispatch after the pre-dispatch fetch, so a change pushed to the base branch applies to
-  the next dispatch without restart. A missing or invalid workflow on the ref is logged and the
+- For `workflow_source: ref`, the workflow is re-read from the remote base branch at startup,
+  on every dispatch after the pre-dispatch fetch, and before every Auto Review QA pass, so a change
+  pushed to the base branch applies to the next dispatch or QA pass without restart. A missing or invalid workflow on the ref is logged and the
   last known good workflow is kept. Until the ref has been read once, the local file is read
   with a warning, and readers switch to the ref without restart once it resolves.
 - `symphony.yml` is re-read through the config layer during runtime operations such as dispatch,
