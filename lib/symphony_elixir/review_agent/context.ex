@@ -115,22 +115,79 @@ defmodule SymphonyElixir.ReviewAgent.Context do
     end
   end
 
-  @doc false
-  @spec lookup_evidence(map(), String.t(), line_range()) ::
-          {:ok, evidence_lookup()} | {:error, term()}
-  def lookup_evidence(source, path, {start_line, end_line})
+  @doc """
+  Returns every evidence source for a cited file: the cited range from each of the
+  diff, the full file and the adjacent windows, plus the file's numbered lines merged
+  from all three so a quote can be found outside the cited range.
+  """
+  @spec grounding_evidence(map(), String.t(), line_range()) ::
+          {:ok, %{path: String.t(), cited: [evidence_lookup()], lines: [{pos_integer(), String.t()}]}}
+          | {:error, term()}
+  def grounding_evidence(source, path, {start_line, end_line})
       when is_map(source) and is_binary(path) and is_integer(start_line) and is_integer(end_line) and start_line > 0 and
              end_line >= start_line do
     with {:ok, normalized_path} <- normalize_lookup_path(path),
          :ok <- path_known_to_context?(source, normalized_path) do
-      diff_evidence(source, normalized_path, start_line, end_line) ||
-        file_evidence(source, normalized_path, start_line, end_line) ||
-        adjacent_evidence(source, normalized_path, start_line, end_line) ||
-        {:error, {:line_range_not_found, normalized_path, {start_line, end_line}}}
+      cited =
+        [
+          diff_evidence(source, normalized_path, start_line, end_line),
+          file_evidence(source, normalized_path, start_line, end_line),
+          adjacent_evidence(source, normalized_path, start_line, end_line)
+        ]
+        |> Enum.flat_map(fn
+          {:ok, evidence} -> [evidence]
+          nil -> []
+        end)
+
+      {:ok, %{path: normalized_path, cited: cited, lines: numbered_lines(source, normalized_path)}}
     end
   end
 
-  def lookup_evidence(_source, _path, _line_range), do: {:error, :invalid_line_range}
+  def grounding_evidence(_source, _path, _line_range), do: {:error, :invalid_line_range}
+
+  defp numbered_lines(source, path) do
+    [
+      numbered_file_lines(source, path),
+      numbered_patch_lines(source, path),
+      numbered_adjacent_lines(source, path)
+    ]
+    |> List.flatten()
+    |> Enum.reduce(%{}, fn {number, text}, acc -> Map.put_new(acc, number, text) end)
+    |> Enum.sort_by(&elem(&1, 0))
+  end
+
+  defp numbered_file_lines(source, path) do
+    case source |> Map.get(:file_contents, %{}) |> Map.get(path) do
+      contents when is_binary(contents) ->
+        contents
+        |> String.split("\n", trim: false)
+        |> Enum.with_index(1)
+        |> Enum.map(fn {text, number} -> {number, text} end)
+
+      _contents ->
+        []
+    end
+  end
+
+  defp numbered_patch_lines(source, path) do
+    case Enum.find(Map.get(source, :changed_file_inventory, []), &(Map.get(&1, :path) == path)) do
+      %{patch: patch} when is_binary(patch) -> patch_numbered_lines(patch)
+      _file -> []
+    end
+  end
+
+  defp numbered_adjacent_lines(source, path) do
+    case get_in(source, [:context_pack, :adjacent_context, :windows]) do
+      windows when is_list(windows) ->
+        windows
+        |> Enum.filter(&(Map.get(&1, :path) == path and is_binary(Map.get(&1, :text))))
+        |> Enum.flat_map(&String.split(&1.text, "\n", trim: false))
+        |> Enum.flat_map(&adjacent_numbered_line/1)
+
+      _other ->
+        []
+    end
+  end
 
   defp normalize_lookup_path(path) do
     case String.trim(path) do
@@ -247,6 +304,12 @@ defmodule SymphonyElixir.ReviewAgent.Context do
 
   defp patch_lines_in_range(patch, start_line, end_line) do
     patch
+    |> patch_numbered_lines()
+    |> Enum.flat_map(fn {number, text} -> if number >= start_line and number <= end_line, do: [text], else: [] end)
+  end
+
+  defp patch_numbered_lines(patch) do
+    patch
     |> String.split("\n", trim: false)
     |> Enum.reduce({nil, []}, fn line, {next_line, acc} ->
       cond do
@@ -258,13 +321,10 @@ defmodule SymphonyElixir.ReviewAgent.Context do
           {next_line, acc}
 
         String.starts_with?(line, "+") and not String.starts_with?(line, "+++") ->
-          collect_new_line(line, next_line, start_line, end_line, acc)
+          {next_line + 1, [{next_line, String.slice(line, 1..-1//1)} | acc]}
 
         String.starts_with?(line, " ") ->
-          collect_new_line(line, next_line, start_line, end_line, acc)
-
-        String.starts_with?(line, "-") and not String.starts_with?(line, "---") ->
-          {next_line, acc}
+          {next_line + 1, [{next_line, String.slice(line, 1..-1//1)} | acc]}
 
         true ->
           {next_line, acc}
@@ -274,23 +334,11 @@ defmodule SymphonyElixir.ReviewAgent.Context do
     |> Enum.reverse()
   end
 
-  defp collect_new_line(line, current_line, start_line, end_line, acc) do
-    text = String.slice(line, 1..-1//1)
-
-    acc =
-      if current_line >= start_line and current_line <= end_line do
-        [text | acc]
-      else
-        acc
-      end
-
-    {current_line + 1, acc}
-  end
-
   defp adjacent_lines_in_range(text, start_line, end_line) do
     text
     |> String.split("\n", trim: false)
-    |> Enum.flat_map(&adjacent_line_in_range(&1, start_line, end_line))
+    |> Enum.flat_map(&adjacent_numbered_line/1)
+    |> Enum.flat_map(fn {number, line} -> if number >= start_line and number <= end_line, do: [line], else: [] end)
   end
 
   defp file_lines_in_range(contents, start_line, end_line) do
@@ -303,18 +351,10 @@ defmodule SymphonyElixir.ReviewAgent.Context do
     end
   end
 
-  defp adjacent_line_in_range(line, start_line, end_line) do
+  defp adjacent_numbered_line(line) do
     case Regex.run(~r/^(\d+): ?(.*)$/, line, capture: :all_but_first) do
-      [number, text] -> adjacent_line_text(parse_int(number), text, start_line, end_line)
+      [number, text] -> [{parse_int(number), text}]
       _no_line_number -> []
-    end
-  end
-
-  defp adjacent_line_text(line_number, text, start_line, end_line) do
-    if line_number >= start_line and line_number <= end_line do
-      [text]
-    else
-      []
     end
   end
 

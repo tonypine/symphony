@@ -34,7 +34,11 @@ defmodule SymphonyElixir.ReviewAgentTest do
   end
 
   defmodule SequenceReviewer do
-    def start_session(workspace, opts), do: {:ok, %{workspace: workspace, opts: opts}}
+    def start_session(workspace, opts) do
+      parent = Application.fetch_env!(:symphony_elixir, :review_agent_sequence_parent)
+      send(parent, :review_agent_sequence_session_started)
+      {:ok, %{workspace: workspace, opts: opts}}
+    end
 
     def run_turn(_session, prompt, _issue, opts) do
       parent = Application.fetch_env!(:symphony_elixir, :review_agent_sequence_parent)
@@ -291,6 +295,117 @@ defmodule SymphonyElixir.ReviewAgentTest do
       end
     end
 
+    test "relocates a finding whose snippet is cited 1 to 10 lines off" do
+      test_root = unique_tmp("symphony-elixir-review-agent-validate-relocate")
+      repo = git_repo_with_file_change!(test_root, numbered_lines(1..40), changed_line(numbered_lines(1..40), 20))
+
+      try do
+        source = source_for_repo!(repo)
+
+        for cited <- [{21, 21}, {10, 10}, {30, 30}, {25, 27}] do
+          finding = %{finding("changed line 20") | line_range: cited}
+          result = %{verdict: :request_changes, comments: [], findings: [finding]}
+
+          assert {:ok, %{findings: [kept], comments: [comment]}} = ReviewAgent.validate_findings(result, source)
+          assert kept.line_range == {20, 20}
+          assert comment =~ "(feature.txt:20-20)"
+        end
+      after
+        File.rm_rf(test_root)
+      end
+    end
+
+    test "relocates a finding that cites the hunk but quotes unchanged lines of the file" do
+      test_root = unique_tmp("symphony-elixir-review-agent-validate-unchanged")
+      repo = git_repo_with_file_change!(test_root, numbered_lines(1..60), changed_line(numbered_lines(1..60), 20))
+
+      try do
+        source = source_for_repo!(repo)
+        finding = %{finding("-line 45\n line 46") | line_range: {20, 20}}
+        result = %{verdict: :block, comments: [], findings: [finding], reason: "Unsafe."}
+
+        assert {:ok, %{findings: [kept]}} = ReviewAgent.validate_findings(result, source)
+        assert kept.line_range == {45, 46}
+      after
+        File.rm_rf(test_root)
+      end
+    end
+
+    test "moves a finding to the match nearest the cited range" do
+      test_root = unique_tmp("symphony-elixir-review-agent-validate-nearest")
+      original = numbered_lines(1..40)
+
+      modified =
+        original
+        |> String.replace("line 5\n", "repeated line\n")
+        |> String.replace("line 28\n", "repeated line\n")
+
+      repo = git_repo_with_file_change!(test_root, original, modified)
+
+      try do
+        source = source_for_repo!(repo)
+        result = %{verdict: :block, comments: [], findings: [%{finding("repeated line") | line_range: {24, 24}}], reason: "Unsafe."}
+
+        assert {:ok, %{findings: [%{line_range: {28, 28}}]}} = ReviewAgent.validate_findings(result, source)
+      after
+        File.rm_rf(test_root)
+      end
+    end
+
+    test "does not match a snippet across lines no evidence source covers" do
+      test_root = unique_tmp("symphony-elixir-review-agent-validate-gap")
+      original = numbered_lines(1..80)
+      modified = original |> changed_line(10) |> changed_line(60)
+      repo = git_repo_with_file_change!(test_root, original, modified)
+
+      try do
+        source = repo |> source_for_repo!() |> Map.put(:file_contents, %{})
+        finding = %{finding("line 17\nline 54") | line_range: {10, 10}}
+        result = %{verdict: :block, comments: [], findings: [finding], reason: "Unsafe."}
+
+        assert {:error, {:review_agent_inconclusive, {:review_agent_unverifiable, %{failures: [failure]}}}} =
+                 ReviewAgent.validate_findings(result, source)
+
+        assert %{reason: :quoted_snippet_not_found, evidence: %{text: "changed line 10"}} = failure
+      after
+        File.rm_rf(test_root)
+      end
+    end
+
+    test "rejects a snippet with nothing but diff headers" do
+      test_root = unique_tmp("symphony-elixir-review-agent-validate-header-only")
+      repo = git_repo_with_change!(test_root)
+
+      try do
+        source = source_for_repo!(repo)
+        result = %{verdict: :block, comments: [], findings: [finding("@@ -0,0 +1 @@")], reason: "Unsafe."}
+
+        assert {:error, {:review_agent_inconclusive, {:review_agent_unverifiable, %{failures: [failure]}}}} =
+                 ReviewAgent.validate_findings(result, source)
+
+        assert failure.reason == :quoted_snippet_not_found
+      after
+        File.rm_rf(test_root)
+      end
+    end
+
+    test "reports a missing line range when the snippet is nowhere in the file" do
+      test_root = unique_tmp("symphony-elixir-review-agent-validate-missing-range")
+      repo = git_repo_with_change!(test_root)
+
+      try do
+        source = source_for_repo!(repo)
+        result = %{verdict: :block, comments: [], findings: [%{finding("not here") | line_range: {50, 51}}], reason: "Unsafe."}
+
+        assert {:error, {:review_agent_inconclusive, {:review_agent_unverifiable, %{failures: [failure]}}}} =
+                 ReviewAgent.validate_findings(result, source)
+
+        assert failure.reason == {:line_range_not_found, "feature.txt", {50, 51}}
+      after
+        File.rm_rf(test_root)
+      end
+    end
+
     test "rejects request_changes when all findings fail validation" do
       test_root = unique_tmp("symphony-elixir-review-agent-validate-request-changes")
       repo = git_repo_with_change!(test_root)
@@ -307,7 +422,31 @@ defmodule SymphonyElixir.ReviewAgentTest do
     end
   end
 
+  describe "unverified_notes/1" do
+    test "lists each dropped finding as an unverified note" do
+      payload = %{failures: [%{finding: finding("missing"), reason: :quoted_snippet_not_found}], comments: ["ignored"]}
+
+      assert ReviewAgent.unverified_notes(payload) == [
+               "[unverified] Handle remote guides. (feature.txt:1-1) Suggested fix: Keep the evidence-backed change."
+             ]
+    end
+
+    test "falls back to the reviewer's comments when it gave no findings" do
+      assert ReviewAgent.unverified_notes(%{failures: [], comments: ["Consider a test."]}) == ["Consider a test."]
+      assert ReviewAgent.unverified_notes(%{failures: []}) == []
+    end
+  end
+
   describe "approval_prompt/2" do
+    test "lists advisory notes without asking for code changes" do
+      prompt = ReviewAgent.approval_prompt(%{verdict: :approve, comments: [], advisory_notes: ["[unverified] First.", "[unverified] Second."]})
+
+      assert prompt =~ "Reviewer agent approved the committed diff."
+      assert prompt =~ "advisory notes: do not change code for them before\nthe push"
+      assert prompt =~ "1. [unverified] First.\n2. [unverified] Second."
+      refute ReviewAgent.approval_prompt(%{verdict: :approve, comments: []}) =~ "advisory notes"
+    end
+
     test "uses bare scoped GitHub tools for Codex executors" do
       write_workflow_file!(Workflow.workflow_file_path(), agent_kind: "codex")
 
@@ -485,6 +624,114 @@ defmodule SymphonyElixir.ReviewAgentTest do
     end
   end
 
+  test "evaluate re-quotes unverifiable findings in the same session and accepts a corrected quote" do
+    test_root = unique_tmp("symphony-elixir-review-agent-requote-ok")
+
+    try do
+      repo = git_repo_with_change!(test_root)
+      bad_quote = finding_json(%{"quoted_snippet" => "a misremembered line"})
+      outside = finding_json(%{"file" => "other.txt", "summary" => "Outside the diff."})
+      past_end = finding_json(%{"quoted_snippet" => "beyond the file", "line_range" => [40, 41], "summary" => "Past the end."})
+      unverifiable = block_response([bad_quote, outside, past_end])
+      put_sequence_responses!([unverifiable, unverifiable, block_response([finding_json()])])
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        review_agent: %{enabled: true, kind: "codex", command: "codex app-server"}
+      )
+
+      assert {:error, {:review_agent_blocked, %{findings: [finding]}}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+
+      assert finding.quoted_snippet == "grounded evidence line"
+      assert_received :review_agent_sequence_session_started
+      refute_received :review_agent_sequence_session_started
+
+      assert_received {:review_agent_sequence_call, 3, requote_prompt, opts}
+      assert opts[:max_iterations] == 4
+      assert requote_prompt =~ "could not find the quoted snippet"
+      assert requote_prompt =~ "- feature.txt:1-1: Handle remote guides.\n  Quoted snippet:\n    a misremembered line"
+      assert requote_prompt =~ "  Text at the cited lines:\n    grounded evidence line"
+      assert requote_prompt =~ "- other.txt:1-1: Outside the diff."
+      assert requote_prompt =~ "(file is not in the diff or the review context)"
+      assert requote_prompt =~ "- feature.txt:40-41: Past the end."
+      assert requote_prompt =~ "(no lines at this range in the diff or the changed file)"
+      assert requote_prompt =~ "Previous JSON:"
+    after
+      clear_sequence_responses!()
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "evaluate stays unverifiable when the re-quoted findings still do not match" do
+    test_root = unique_tmp("symphony-elixir-review-agent-requote-still-bad")
+
+    try do
+      repo = git_repo_with_change!(test_root)
+      unverifiable = block_response([finding_json(%{"quoted_snippet" => "a misremembered line"})])
+      requoted = block_response([finding_json(%{"quoted_snippet" => "another wrong line"})])
+      put_sequence_responses!([unverifiable, unverifiable, requoted])
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        review_agent: %{enabled: true, kind: "codex", command: "codex app-server"}
+      )
+
+      assert {:error, {:review_agent_inconclusive, {:review_agent_unverifiable, %{failures: [failure]}}}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+
+      assert failure.finding.quoted_snippet == "another wrong line"
+      assert_received {:review_agent_sequence_call, 3, _prompt, _opts}
+    after
+      clear_sequence_responses!()
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "evaluate keeps the original unverifiable findings when the re-quote turn fails" do
+    test_root = unique_tmp("symphony-elixir-review-agent-requote-failed")
+
+    try do
+      repo = git_repo_with_change!(test_root)
+      unverifiable = block_response([finding_json(%{"quoted_snippet" => "a misremembered line"})])
+      put_sequence_responses!([unverifiable, unverifiable, {:error, {:turn_failed, "max_iterations reached"}}])
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        review_agent: %{enabled: true, kind: "codex", command: "codex app-server"}
+      )
+
+      assert {:error, {:review_agent_inconclusive, {:review_agent_unverifiable, %{failures: [failure]}}}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+
+      assert failure.finding.quoted_snippet == "a misremembered line"
+    after
+      clear_sequence_responses!()
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "evaluate does not re-quote a verdict that gave no findings" do
+    test_root = unique_tmp("symphony-elixir-review-agent-requote-no-findings")
+
+    try do
+      repo = git_repo_with_change!(test_root)
+      comments_only = ~s({"verdict":"request_changes","comments":["Consider a regression test."]})
+      put_sequence_responses!([comments_only, comments_only])
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        review_agent: %{enabled: true, kind: "codex", command: "codex app-server"}
+      )
+
+      assert {:error, {:review_agent_inconclusive, {:review_agent_unverifiable, payload}}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+
+      assert %{failures: [], comments: ["Consider a regression test."]} = payload
+      assert_received {:review_agent_sequence_call, 2, _prompt, _opts}
+      refute_received {:review_agent_sequence_call, 3, _prompt, _opts}
+    after
+      clear_sequence_responses!()
+      File.rm_rf(test_root)
+    end
+  end
+
   test "evaluate downgrades a block to inconclusive when self-check retracts all findings" do
     test_root = unique_tmp("symphony-elixir-review-agent-self-check-empty")
 
@@ -626,6 +873,21 @@ defmodule SymphonyElixir.ReviewAgentTest do
     git!(repo, ["commit", "-m", "feat: add grounded evidence"])
     repo
   end
+
+  defp git_repo_with_file_change!(test_root, original, modified) do
+    repo = git_repo!(test_root)
+    File.write!(Path.join(repo, "feature.txt"), original)
+    git!(repo, ["add", "feature.txt"])
+    git!(repo, ["commit", "-m", "add feature"])
+    git!(repo, ["update-ref", "refs/remotes/origin/main", "HEAD"])
+    File.write!(Path.join(repo, "feature.txt"), modified)
+    git!(repo, ["commit", "-am", "change feature"])
+    repo
+  end
+
+  defp numbered_lines(range), do: Enum.map_join(range, "", &"line #{&1}\n")
+
+  defp changed_line(text, number), do: String.replace(text, "line #{number}\n", "changed line #{number}\n")
 
   defp git_repo_with_origin_head_change!(test_root, branch) do
     repo = Path.join(test_root, "repo")
