@@ -141,6 +141,8 @@ defmodule SymphonyElixir.QaAgent do
     """
     #{intro(job)}
 
+    #{test_suite_rule(job)}
+
     Write every artifact (transcripts, logs, screenshots) under `#{@evidence_dir}/` in this worktree
     or under `$TMPDIR`. Attach the files reviewers need with `linear_attach_file` and list the
     returned URLs as evidence.
@@ -215,6 +217,25 @@ defmodule SymphonyElixir.QaAgent do
     user would and report what happened. You are in a fresh, disposable worktree checked out at the
     PR head `#{job.sha}`. Do not edit tracked files, commit, push, open PRs, move the issue, or post
     comments: Symphony moves the issue and writes the QA report from your answer.\
+    """
+  end
+
+  # QA tests behaviour, not the code: CI already ran the full suite (Auto Review starts only on
+  # green CI), and re-running it in the sandbox takes many times longer and loads the shared host.
+  defp test_suite_rule(%{verification_issue: %Issue{}} = job) do
+    """
+    Do not run the test suite, `make all`, coverage or static analysis such as Dialyzer: CI runs
+    them on every merge to `#{Map.get(job, :base_ref)}`. Mark a criterion that only asks for tests,
+    coverage or CI to pass `skipped`, with "covered by CI on #{Map.get(job, :base_ref)}" as the
+    reason. Build only what you need to use the feature, and judge it by what a user sees.\
+    """
+  end
+
+  defp test_suite_rule(_job) do
+    """
+    Do not run the test suite, `make all`, coverage or static analysis such as Dialyzer: CI already
+    ran them green on this PR head. Build only what you need to use the change, and judge it by what
+    a user sees.\
     """
   end
 

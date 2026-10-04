@@ -750,7 +750,11 @@ Each one falls back to the `pre_push_review` run profile (the routed repository'
 with none set the reviewer command is unchanged. They take the same values as `agent.model` /
 `agent.effort`, and `command` must not pass `--model` / `--effort` while any of them is set.
 
-When enabled, Symphony runs an executor/reviewer loop in the same workspace before push.
+When enabled, Symphony runs an executor/reviewer loop in the same workspace before push. The
+reviewer reads the committed diff; its prompt tells it not to run the test suite, coverage or
+Dialyzer, which CI runs after the push. Checks are split by cost: agents run cheap, targeted checks
+locally (format, compile, lint, the tests for the changed code; Symphony's own list is in its
+`WORKFLOW.md`), and the full suite, coverage and Dialyzer run only in CI.
 `run_on` defaults to `always`; set it to `first_push` to skip the reviewer on PR follow-up runs while keeping it enabled for initial issue runs.
 Follow-up runs include explicit PR dispatches (`symphony pr`) and automatic rework runs triggered by reviewer comments, CI failures, or PR conflicts; these also omit the review-agent gate from the prompt so the agent can push and exit in a single turn.
 
@@ -823,6 +827,11 @@ move the issue, comment, push or write to GitHub. The session stops at `timeout_
 or `agent.limits.tokens_per_issue`. An agent that ends its turn without the JSON verdict gets one
 follow-up turn in the same session asking for it, and the QA report notes "verdict after 1
 follow-up".
+
+QA never runs the test suite, `make all`, coverage or Dialyzer: a pass starts only once CI is green
+on the PR head, so the prompt and every built-in playbook tell the agent to rely on CI and to build
+only what it needs to use the change. A parent walkthrough marks a criterion that only asks for
+tests or CI to pass as `skipped`, covered by CI on the base branch.
 
 Symphony applies its verdict:
 

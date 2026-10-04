@@ -83,7 +83,9 @@ The steps below apply when it does not
 
 1. Do not open a PR. Check each requirement in the description against the default
    branch (code, tests, docs, behaviour) and record a requirement-by-requirement
-   checklist with evidence in the workpad.
+   checklist with evidence in the workpad. For test status, cite CI's latest green
+   run on the default branch; do not run the test suite, coverage or static analysis
+   such as Dialyzer yourself.
 2. If anything is missing, file each gap with `linear_create_subissue` (or find the
    existing ticket that covers it), mark this ticket blocked by every gap with
    `linear_add_blocked_by`, list them in the workpad, move this ticket to `Todo`, and

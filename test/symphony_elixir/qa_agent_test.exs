@@ -386,6 +386,28 @@ defmodule SymphonyElixir.QaAgentTest do
       assert QaAgent.prompt(job(), nil) =~ "so the executor can fix it"
     end
 
+    test "QA prompts and built-in playbooks leave the test suite to CI" do
+      parent = issue(%{id: "issue-parent", identifier: "TP-243", title: "Parent", description: "- [ ] parent criterion"})
+      verification = issue(%{id: "issue-fv", identifier: "TP-910", title: "Final verification: Parent", description: "- [ ] child criterion"})
+
+      pr_prompt = QaAgent.prompt(job(), nil)
+      assert pr_prompt =~ ~r/Do not run the test suite, `make all`, coverage or static analysis such as Dialyzer: CI already\s+ran them green on this PR head/
+
+      walkthrough = QaAgent.prompt(job(%{issue: parent, verification_issue: verification, base_ref: "origin/main"}), nil)
+      assert walkthrough =~ ~r/Do not run the test suite, `make all`, coverage or static analysis such as Dialyzer: CI runs\s+them on every merge to `origin\/main`/
+      assert walkthrough =~ ~s("covered by CI on origin/main")
+      refute walkthrough =~ "ran them green on this PR head"
+
+      macos_app = %{build: "make app", app: "build/App.app"}
+      built_ins = Selection.playbooks(%{playbooks: %{macos_app: macos_app}}, dev_server?: true)
+      assert Enum.map(built_ins, & &1.kind) == ["cli", "macos_app", "web"]
+
+      for %{kind: kind, prompt: prompt} <- built_ins do
+        assert prompt =~ ~r/Do not run the project's test suite, `make all`, coverage or (Dialyzer|static analysis): CI already\s+ran them/,
+               "#{kind} playbook must leave the test suite to CI"
+      end
+    end
+
     test "a parent walkthrough does not look up the parent of the parent" do
       write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "linear")
       linear_client = fn query, _variables, _opts -> flunk("unexpected Linear query: #{query}") end
