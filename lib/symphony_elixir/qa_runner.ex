@@ -12,12 +12,20 @@ defmodule SymphonyElixir.QaRunner do
   A request turned away because the runner is full leaves the issue queued until a pass
   starts for it or no request has come for it in 10 minutes. The orchestrator
   starts no fresh `Todo` work while a pass is queued.
+
+  A forced ticket's request (`job.forced`, see `agent.concurrency.force_label`) goes to the front
+  of the queue: while one is queued, a free slot is turned away from unforced requests, so the
+  forced ticket takes it on its next request. With every slot busy, a forced request starts on the
+  forced allowance instead, while fewer than `agent.concurrency.forced_max` forced runs (the
+  orchestrator's, read from its published snapshot, plus forced passes here) are going. A pass on
+  the allowance is marked `forced` and takes no QA slot. Forcing changes when a pass starts, never
+  its verdict.
   """
 
   use GenServer
   require Logger
 
-  alias SymphonyElixir.{AutoReview, QaAgent}
+  alias SymphonyElixir.{AutoReview, Orchestrator, QaAgent}
 
   @type request_result :: :started | :running | :busy | {:error, term()}
 
@@ -60,6 +68,18 @@ defmodule SymphonyElixir.QaRunner do
     end
   end
 
+  @doc """
+  The passes in flight and the queued requests, each with `issue_id`, `identifier` and `forced`
+  (a running pass also has `sha`), for the status snapshot.
+  """
+  @spec snapshot(GenServer.server()) :: %{running: [map()], queued: [map()]}
+  def snapshot(server \\ __MODULE__) do
+    case GenServer.whereis(server) do
+      nil -> %{running: [], queued: []}
+      pid -> GenServer.call(pid, :snapshot)
+    end
+  end
+
   @doc "Issue ids whose last request was turned away because the runner was full."
   @spec queued(GenServer.server()) :: [String.t()]
   def queued(server \\ __MODULE__) do
@@ -77,6 +97,7 @@ defmodule SymphonyElixir.QaRunner do
        queued: %{},
        queued_ttl_ms: Keyword.get(opts, :queued_ttl_ms, @queued_ttl_ms),
        run_fun: Keyword.get(opts, :run_fun, &AutoReview.run_qa/2),
+       forced_runs_fun: Keyword.get(opts, :forced_runs_fun, &orchestrator_forced_runs/0),
        task_supervisor: Keyword.get(opts, :task_supervisor, SymphonyElixir.TaskSupervisor)
      }}
   end
@@ -85,17 +106,23 @@ defmodule SymphonyElixir.QaRunner do
   def handle_call({:request, %{issue: %{id: issue_id}, sha: sha} = job, opts}, _from, state) do
     settings = Map.fetch!(job, :settings)
     max_passes = min(settings.auto_review.max_concurrent, settings.agent.finishing_max)
-    state = %{state | queued: state |> live_queued() |> Map.delete(issue_id)}
+    forced? = Map.get(job, :forced) == true
+    queued = state |> live_queued() |> Map.delete(issue_id)
+    state = %{state | queued: queued}
 
     cond do
       Map.has_key?(state.running, issue_id) ->
         {:reply, :running, state}
 
-      map_size(state.running) >= max_passes ->
-        {:reply, :busy, %{state | queued: Map.put(state.queued, issue_id, now_ms())}}
+      normal_passes(state) < max_passes and (forced? or not forced_queued?(queued)) ->
+        start_pass(state, issue_id, sha, job, opts, false)
+
+      forced? and forced_slot_free?(state, settings) ->
+        start_pass(state, issue_id, sha, job, opts, true)
 
       true ->
-        start_pass(state, issue_id, sha, job, opts)
+        entry = %{queued_at: now_ms(), identifier: issue_identifier(job), forced: forced?}
+        {:reply, :busy, %{state | queued: Map.put(queued, issue_id, entry)}}
     end
   end
 
@@ -105,6 +132,12 @@ defmodule SymphonyElixir.QaRunner do
 
   def handle_call(:workspaces, _from, state) do
     {:reply, Enum.flat_map(state.running, fn {_issue_id, entry} -> entry.paths end), state}
+  end
+
+  def handle_call(:snapshot, _from, state) do
+    running = for {issue_id, entry} <- state.running, do: %{issue_id: issue_id, identifier: entry.identifier, sha: entry.sha, forced: entry.forced}
+    queued = for {issue_id, entry} <- live_queued(state), do: %{issue_id: issue_id, identifier: entry.identifier, forced: entry.forced}
+    {:reply, %{running: Enum.sort_by(running, & &1.issue_id), queued: Enum.sort_by(queued, & &1.issue_id)}, state}
   end
 
   def handle_call(:queued, _from, state) do
@@ -127,18 +160,41 @@ defmodule SymphonyElixir.QaRunner do
 
   defp live_queued(state) do
     cutoff = now_ms() - state.queued_ttl_ms
-    Map.filter(state.queued, fn {_issue_id, queued_at} -> queued_at > cutoff end)
+    Map.filter(state.queued, fn {_issue_id, entry} -> entry.queued_at > cutoff end)
   end
+
+  defp forced_queued?(queued), do: Enum.any?(queued, fn {_issue_id, entry} -> entry.forced end)
+
+  defp normal_passes(state), do: Enum.count(state.running, fn {_issue_id, entry} -> not entry.forced end)
+
+  # The forced allowance is shared with the orchestrator's forced runs.
+  defp forced_slot_free?(state, settings) do
+    forced_passes = Enum.count(state.running, fn {_issue_id, entry} -> entry.forced end)
+    forced_passes + state.forced_runs_fun.() < settings.agent.forced_max
+  end
+
+  # The published snapshot is read from ETS: calling the orchestrator here could deadlock, since it
+  # calls this runner while it dispatches.
+  defp orchestrator_forced_runs do
+    case Orchestrator.snapshot_cache_entry() do
+      {:ok, %{snapshot: %{running: running}}} when is_list(running) -> Enum.count(running, &(Map.get(&1, :forced) == true))
+      _missing -> 0
+    end
+  end
+
+  defp issue_identifier(%{issue: issue}), do: Map.get(issue, :identifier)
 
   defp now_ms, do: System.monotonic_time(:millisecond)
 
-  defp start_pass(state, issue_id, sha, job, opts) do
+  defp start_pass(state, issue_id, sha, job, opts, forced?) do
     run_fun = state.run_fun
 
     case Task.Supervisor.start_child(state.task_supervisor, fn -> run_fun.(job, opts) end) do
       {:ok, pid} ->
         ref = Process.monitor(pid)
-        entry = %{sha: sha, ref: ref, paths: pass_paths(job, sha)}
+        identifier = issue_identifier(job)
+        if forced?, do: Logger.info("QA pass started on the forced allowance issue_id=#{issue_id} issue_identifier=#{identifier} sha=#{sha} forced=true")
+        entry = %{sha: sha, ref: ref, paths: pass_paths(job, sha), identifier: identifier, forced: forced?}
         {:reply, :started, %{state | running: Map.put(state.running, issue_id, entry)}}
 
       {:error, reason} ->

@@ -650,6 +650,10 @@ defmodule SymphonyElixir.ExtensionsTest do
                "used" => 1,
                "running" => [%{"issue_id" => "land-http", "identifier" => "MT-LAND", "state" => "Merging"}]
              },
+             "qa" => %{
+               "running" => [%{"issue_id" => "qa-forced-http", "identifier" => "MT-QA-F", "sha" => "abc1234def", "forced" => true}],
+               "queued" => [%{"issue_id" => "qa-queued-http", "identifier" => "MT-QA-Q", "forced" => false}]
+             },
              "auto_merge" => [
                %{
                  "issue_id" => "merge-http",
@@ -3437,6 +3441,10 @@ defmodule SymphonyElixir.ExtensionsTest do
         shared: %{slots: 1, used: 1}
       },
       finishing: %{slots: 2, used: 1, running: [%{issue_id: "land-http", identifier: "MT-LAND", state: "Merging"}]},
+      qa: %{
+        running: [%{issue_id: "qa-forced-http", identifier: "MT-QA-F", sha: "abc1234def", forced: true}],
+        queued: [%{issue_id: "qa-queued-http", identifier: "MT-QA-Q", forced: false}]
+      },
       auto_merge: [
         %{
           issue_id: "merge-http",

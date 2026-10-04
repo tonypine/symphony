@@ -71,6 +71,7 @@ defmodule SymphonyElixirWeb.Presenter do
           dispatch_state: normalize_dispatch_state(snapshot),
           epic_lanes: normalize_epic_lanes(Map.get(snapshot, :epic_lanes)),
           finishing: normalize_finishing(Map.get(snapshot, :finishing)),
+          qa: normalize_qa(Map.get(snapshot, :qa)),
           auto_merge: snapshot |> Map.get(:auto_merge, []) |> Enum.map(&auto_merge_payload/1),
           slot_waiting: snapshot |> Map.get(:slot_waiting, []) |> Enum.map(&slot_waiting_payload/1),
           blocked: snapshot |> Map.get(:blocked, []) |> Enum.map(&blocked_payload/1),
@@ -799,6 +800,9 @@ defmodule SymphonyElixirWeb.Presenter do
 
   defp normalize_finishing(%{slots: slots, used: used, running: running}), do: %{slots: slots, used: used, running: running}
   defp normalize_finishing(_finishing), do: %{slots: nil, used: 0, running: []}
+
+  defp normalize_qa(%{running: running, queued: queued}), do: %{running: running, queued: queued}
+  defp normalize_qa(_qa), do: %{running: [], queued: []}
 
   defp auto_merge_payload(entry) do
     %{

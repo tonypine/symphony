@@ -463,7 +463,8 @@ agent:
   `forced_max` forced runs are going it starts even when `max_total`, the epic lanes,
   `finishing_max`, `max_by_issue_state` are full or a finish is waiting, at the next poll. This
   covers every phase: implementation, `Rework`, CI-fix and review-feedback continuations and
-  landing. Its run is marked `forced` (`/api/v1/state` `running[].forced`) and takes none of the
+  landing, an Auto Review QA pass (see QA passes below) and a `Final verification:` parent
+  walkthrough. Its run is marked `forced` (`/api/v1/state` `running[].forced`) and takes none of the
   normal slots; a run already going when the label is added stays a normal run, and no running
   agent is stopped. A forced ticket past `forced_max` gets no extra slot: it still goes first for a
   normal one, waits as `queued #2; forced slot taken by MT-1` in `slot_waiting`, and Symphony logs a
@@ -905,6 +906,14 @@ available for `notifications.channels[].events`.
 Results are kept per PR head SHA. With `run_on: first_pass`, once a push has passed QA, later
 pushes on the PR skip it. `max_concurrent` caps how many QA passes run at once, and
 `agent.concurrency.finishing_max` caps it again. QA passes never use the agent slots.
+
+A forced ticket's pass (see `concurrency.force_label`) goes to the front of the queue: while it
+waits, a free QA slot is kept for it. When every QA slot is busy it starts on the forced
+allowance instead, as long as fewer than `concurrency.forced_max` forced runs and forced passes
+are going; such a pass takes no QA slot, counts toward `forced_max`, and is logged with
+`forced=true`. Past `forced_max` it waits at the front of the queue. The verdict is applied as for
+any pass: a failing pass still sends the ticket back for a fix. `/api/v1/state` lists the passes
+under `qa.running` and the waiting requests under `qa.queued`, each with `forced`.
 
 #### Parent walkthrough
 

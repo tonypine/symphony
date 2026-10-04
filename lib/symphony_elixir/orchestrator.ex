@@ -2982,7 +2982,8 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp forced_running_identifiers(%State{running: running}) do
-    Enum.sort(for {_issue_id, entry} <- running, forced_entry?(entry), do: entry.identifier)
+    qa_identifiers = for pass <- forced_qa_passes(), do: "#{pass.identifier} (QA)"
+    Enum.sort(for({_issue_id, entry} <- running, forced_entry?(entry), do: entry.identifier) ++ qa_identifiers)
   end
 
   # Forced tickets go first, in `forced_since` order; one the queue has not recorded yet follows
@@ -3295,7 +3296,17 @@ defmodule SymphonyElixir.Orchestrator do
   defp forced_slot_available?(%Issue{} = issue, %State{} = state), do: forced_issue?(issue) and forced_slot_free?(state)
 
   defp forced_slot_free?(%State{running: running}) do
-    Enum.count(running, fn {_issue_id, entry} -> forced_entry?(entry) end) < Config.settings!().agent.forced_max
+    forced_runs = Enum.count(running, fn {_issue_id, entry} -> forced_entry?(entry) end)
+    forced_runs + length(forced_qa_passes()) < Config.settings!().agent.forced_max
+  end
+
+  # Auto Review QA passes on the forced allowance count toward `forced_max` too.
+  defp forced_qa_passes, do: Enum.filter(qa_snapshot().running, & &1.forced)
+
+  defp qa_snapshot do
+    QaRunner.snapshot()
+  catch
+    :exit, _reason -> %{running: [], queued: []}
   end
 
   # With the normal slots full, a poll still runs the dispatch pass for a forced candidate the
@@ -6387,6 +6398,7 @@ defmodule SymphonyElixir.Orchestrator do
       forced: ForcedQueue.snapshot(state.forced),
       concurrency: concurrency_snapshot(state),
       finishing: finishing_snapshot(state.running),
+      qa: qa_snapshot(),
       auto_merge: PrReviewPoller.auto_merge_statuses(),
       slot_waiting: slot_waiting_snapshot(state.slot_waiting, state.forced) ++ merging_ci_waiting_snapshot(state.merging_ci_waits, state.forced),
       claimed: state.claimed |> MapSet.to_list() |> Enum.sort(),

@@ -2010,13 +2010,23 @@ Forced allowance:
 - Still respected: the operator pause, the Linear rate-limit pause, the workspace quota pause, the
   per-host worker cap, blocked-by links, setup-failure suppression, retry backoff, post-PR quiet,
   and the auto-merge / `Merging` CI waits.
+- A forced issue's Auto Review QA request goes to the front of the QA queue: while it is queued, a
+  free QA slot MUST be turned away from unforced requests. When every QA slot is busy, a forced
+  request starts its pass on the forced allowance if fewer than `forced_max` forced runs and forced
+  QA passes are going (the QA runner MAY read the orchestrator's forced runs from its published
+  snapshot, so the count can lag by one publish interval). A pass on the allowance takes no QA
+  slot and counts toward `forced_max` for the orchestrator's dispatch too; past `forced_max` the
+  request stays queued at the front and no extra pass starts. Forcing never skips QA or changes
+  its verdict. A forced `Final verification:` parent walkthrough is an ordinary dispatch and uses
+  the forced allowance like any other run.
 
 Finishing limit:
 
 - A landing run (an issue in `Merging` that is not a parent ticket) does not use `available_slots`
   or an epic lane. It needs `landing_running_count < finishing_max` instead.
 - Auto Review QA passes run outside the orchestrator's slots, at most
-  `min(auto_review.max_concurrent, finishing_max)` at once.
+  `min(auto_review.max_concurrent, finishing_max)` at once, not counting passes on the forced
+  allowance.
 
 Per-state limit:
 
@@ -3059,6 +3069,9 @@ SHOULD return:
 - each retry row SHOULD include `repo_key`
 - running, retry and `slot_waiting` rows SHOULD include `forced`: for a running row, whether it
   runs on the forced allowance; for the others, whether the issue is in the forced queue
+- `qa` (Auto Review QA passes): `running` rows (`issue_id`, `identifier`, `sha`, `forced`: whether
+  the pass runs on the forced allowance) and `queued` rows (`issue_id`, `identifier`, `forced`:
+  whether the request is a forced ticket's, at the front of the queue)
 - `repos` (list of repo keys observed in current snapshot rows)
 - `conflicts` (list of issues that matched multiple repo routes and are excluded from dispatch)
 - `awaiting_clarification` and `skipped` quality-gate rows when quality gating is enabled
@@ -3276,6 +3289,10 @@ Minimum endpoints:
         "slots": 2,
         "used": 1,
         "running": [{"issue_id": "jkl012", "identifier": "MT-652", "state": "Merging"}]
+      },
+      "qa": {
+        "running": [{"issue_id": "mno345", "identifier": "MT-653", "sha": "abc1234def", "forced": true}],
+        "queued": []
       },
       "auto_merge": [
         {
@@ -4159,6 +4176,8 @@ infrastructure.
   takes no normal slot, and a second forced issue past `forced_max` waits and is noted once
 - The daily token budget and a usage-limit headroom hold do not stop a forced dispatch; the
   operator pause, blocked-by links and a `paused` usage-limit hold do
+- A forced issue's QA request goes to the front of the QA queue and, with the QA slots full,
+  starts on the forced allowance while it has room; its verdict is applied as for any pass
 - No `Todo` issue is dispatched while a `Merging` issue waits for a finishing slot
 - A retry that finds no slot keeps its attempt, gets no backoff, and starts on the first poll after
   a slot frees
