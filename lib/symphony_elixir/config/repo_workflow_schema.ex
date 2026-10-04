@@ -9,14 +9,16 @@ defmodule SymphonyElixir.Config.RepoWorkflowSchema do
 
   # Recompile this schema when an embed's defaults change; see SystemSchema.
   require Schema.Hooks
+  require Schema.PushCheck
   require Schema.Verification
 
   @primary_key false
-  @allowed_keys ~w(hooks prompts verification validation auto_review human_actions)
+  @allowed_keys ~w(hooks prompts push_check verification validation auto_review human_actions)
 
   embedded_schema do
     field(:configured_paths, :map, virtual: true, default: %{})
     embeds_one(:hooks, Schema.Hooks, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:push_check, Schema.PushCheck, on_replace: :update, defaults_to_struct: true)
     embeds_one(:verification, Schema.Verification, on_replace: :update, defaults_to_struct: true)
     field(:prompts, :map, default: %{})
     field(:validation, {:array, :string}, default: [])
@@ -53,6 +55,7 @@ defmodule SymphonyElixir.Config.RepoWorkflowSchema do
     %{}
     |> maybe_put("hooks", configured_map(configured_paths, "hooks", &hooks_to_map(workflow.hooks, &1)))
     |> maybe_put("prompts", workflow.prompts)
+    |> maybe_put("push_check", configured_map(configured_paths, "push_check", fn _paths -> push_check_to_map(workflow.push_check) end))
     |> maybe_put("verification", configured_map(configured_paths, "verification", &verification_to_map(workflow.verification, &1)))
     |> maybe_put("validation", workflow.validation)
     |> maybe_put("auto_review", workflow.auto_review)
@@ -63,6 +66,7 @@ defmodule SymphonyElixir.Config.RepoWorkflowSchema do
     %__MODULE__{}
     |> cast(attrs, [:prompts, :validation, :auto_review, :human_actions], empty_values: [])
     |> cast_embed(:hooks, with: &Schema.Hooks.changeset/2)
+    |> cast_embed(:push_check, with: &Schema.PushCheck.changeset/2)
     |> cast_embed(:verification, with: &Schema.Verification.changeset/2)
     |> validate_prompts()
     |> validate_string_list(:validation)
@@ -162,6 +166,11 @@ defmodule SymphonyElixir.Config.RepoWorkflowSchema do
       "after_create_timeout_ms" => configured_value(paths, "after_create_timeout_ms", hooks.after_create_timeout_ms)
     }
     |> drop_nil_values()
+  end
+
+  # Repo-local only, so the whole section is passed on once WORKFLOW.md sets it.
+  defp push_check_to_map(%Schema.PushCheck{} = push_check) do
+    drop_nil_values(%{"command" => push_check.command, "result_file" => push_check.result_file, "paths" => push_check.paths})
   end
 
   defp verification_to_map(nil, _paths), do: nil

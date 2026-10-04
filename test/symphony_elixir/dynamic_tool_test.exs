@@ -1351,6 +1351,52 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     end
   end
 
+  test "github.push_branch refusals name the push check command and the recorded failures" do
+    workspace = tmp_workspace!("github-push-branch-push-check")
+    head = String.duplicate("a", 40)
+    recorded = String.duplicate("b", 40)
+
+    try do
+      git_runner = fn
+        ["branch", "--show-current"], _opts -> {"auto/ACME-3051\n", 0}
+        ["remote" | _rest], _opts -> {"git@github.com:acme/symphony.git\n", 0}
+        ["rev-parse", "--verify", "--quiet", _ref], _opts -> {head <> "\n", 0}
+        ["diff", "--name-only" | _rest], _opts -> {"lib/app.ex\n", 0}
+        ["push" | _rest], _opts -> flunk("the push should be refused")
+      end
+
+      settings = %Schema{push_check: %Schema.PushCheck{command: ".githooks/pre-push --head", result_file: "push-check"}}
+      opts = github_tool_opts(workspace, git_runner: git_runner, settings: settings)
+      push = fn -> "github_push_branch" |> DynamicTool.execute(%{}, opts) |> Map.fetch!("output") |> Jason.decode!() end
+
+      assert %{"error" => %{"code" => "push_check_required", "message" => message, "command" => ".githooks/pre-push --head", "head" => ^head}} =
+               push.()
+
+      assert message =~ "There is no `push-check`."
+      assert message =~ "run `.githooks/pre-push --head` in your shell"
+      assert message =~ "check has not passed for aaaaaaaaaaaa."
+
+      File.write!(Path.join(workspace, "push-check"), "#{recorded} pass\n")
+      assert %{"error" => %{"code" => "push_check_required", "message" => message}} = push.()
+      assert message =~ "`push-check` holds the result for bbbbbbbbbbbb, not for this commit."
+
+      File.write!(Path.join(workspace, "push-check"), "nonsense\n")
+      assert %{"error" => %{"code" => "push_check_required", "message" => message}} = push.()
+      assert message =~ "`push-check` is not a push check result."
+
+      File.write!(
+        Path.join(workspace, "push-check"),
+        "#{head} fail\nmix compile --warnings-as-errors failed. Fix: resolve the warnings or errors above, commit, and push again.\n"
+      )
+
+      assert %{"error" => %{"code" => "push_check_failed", "message" => message, "result_file" => "push-check"}} = push.()
+      assert message =~ "the repository's push check failed for aaaaaaaaaaaa:\nmix compile --warnings-as-errors failed."
+      assert message =~ "Run `.githooks/pre-push --head` in your shell to see each check's output."
+    after
+      File.rm_rf(workspace)
+    end
+  end
+
   test "github_merge_pull_request merges through the scoped GitHub tool" do
     workspace = tmp_workspace!("github-merge-pull-request")
 

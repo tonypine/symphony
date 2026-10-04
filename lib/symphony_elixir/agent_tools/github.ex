@@ -7,7 +7,7 @@ defmodule SymphonyElixir.AgentTools.GitHub do
   through tool arguments.
   """
 
-  alias SymphonyElixir.AgentTools.{Linear, SecretScanner}
+  alias SymphonyElixir.AgentTools.{Linear, PushCheck, SecretScanner}
   alias SymphonyElixir.CiPoller
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
@@ -122,6 +122,8 @@ defmodule SymphonyElixir.AgentTools.GitHub do
            {:ok, branch} <- current_branch(context, opts),
            :ok <- verify_current_origin(context, workspace, opts),
            :ok <- verify_push_urls(context, workspace, opts),
+           {:ok, push_check} <- push_check_settings(context, opts),
+           :ok <- PushCheck.verify(workspace, branch, push_check, &run_git(&1, workspace, opts)),
            {:ok, output} <- run_git(["push", "origin", branch], workspace, opts) do
         {:ok, %{"remote" => "origin", "branch" => branch, "output" => String.trim(output)}}
       end
@@ -437,6 +439,22 @@ defmodule SymphonyElixir.AgentTools.GitHub do
       _settings -> Config.settings!().github.open_pull_requests_as_draft
     end
   end
+
+  # The issue's repository's WORKFLOW.md owns `push_check`.
+  defp push_check_settings(context, opts) do
+    case Keyword.get(opts, :settings) do
+      %Schema{} = settings ->
+        {:ok, settings.push_check}
+
+      _settings ->
+        with {:ok, settings} <- Config.settings_for_repo(issue_repo_key(context)) do
+          {:ok, settings.push_check}
+        end
+    end
+  end
+
+  defp issue_repo_key(%{issue: %{repo_key: repo_key}}) when is_binary(repo_key), do: repo_key
+  defp issue_repo_key(_context), do: nil
 
   defp draft_args(true), do: ["--draft"]
   defp draft_args(false), do: []
