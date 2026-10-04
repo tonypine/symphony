@@ -112,6 +112,7 @@ defmodule SymphonyElixir.Orchestrator do
       blocked: [],
       forced: %{},
       forced_waiting_noted: MapSet.new(),
+      forced_touched: %{},
       slot_waiting: %{},
       setup_failed: %{},
       pause: %{paused: false, reason: nil, paused_at: nil},
@@ -558,6 +559,15 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp redispatch_slot_waiting(%State{} = state), do: state
+
+  # Polls now unless a poll is already running or due; true when it was.
+  defp request_poll(%State{} = state) do
+    if poll_tick_coalesced?(state, System.monotonic_time(:millisecond)) do
+      {true, state}
+    else
+      {false, schedule_tick(state, 0)}
+    end
+  end
 
   defp poll_tick_coalesced?(%State{} = state, now_ms) do
     already_due? = is_integer(state.next_poll_due_at_ms) and state.next_poll_due_at_ms <= now_ms
@@ -1136,7 +1146,7 @@ defmodule SymphonyElixir.Orchestrator do
       state
       |> apply_running_issue_states_result(running_ids, running_result)
       |> apply_watching_issue_states_result(watching_ids, watching_result)
-      |> apply_forced_poll_result(repo_result, forced_ids, forced_result)
+      |> apply_forced_poll_result(repo_result, forced_ids, forced_result, now_ms)
 
     case apply_repo_poll_result(state, repos, repo_result, now_ms) do
       {:ok, %{dispatchable: issues}, state} ->
@@ -1593,9 +1603,9 @@ defmodule SymphonyElixir.Orchestrator do
   def put_epic_lanes_for_test(%State{} = state, issues) when is_list(issues), do: put_epic_lanes(state, issues)
 
   @doc false
-  @spec apply_forced_poll_result_for_test(State.t(), term(), [String.t()], term()) :: State.t()
-  def apply_forced_poll_result_for_test(%State{} = state, repo_result, forced_ids, forced_result),
-    do: apply_forced_poll_result(state, repo_result, forced_ids, forced_result)
+  @spec apply_forced_poll_result_for_test(State.t(), term(), [String.t()], term(), integer()) :: State.t()
+  def apply_forced_poll_result_for_test(%State{} = state, repo_result, forced_ids, forced_result, poll_started_ms \\ System.monotonic_time(:millisecond)),
+    do: apply_forced_poll_result(state, repo_result, forced_ids, forced_result, poll_started_ms)
 
   @doc false
   @spec put_blocked_for_test(State.t(), [Issue.t()]) :: State.t()
@@ -3128,8 +3138,11 @@ defmodule SymphonyElixir.Orchestrator do
   # Forced tickets are found in the repo this poll fetched, which only holds active states. Each one
   # already queued is refreshed by id on every poll, so it stays queued while it sits outside the
   # active states (In Review, ...) and leaves only when its label goes, it is terminal, or Linear no
-  # longer returns it.
-  defp apply_forced_poll_result(%State{} = state, repo_result, forced_ids, forced_result) do
+  # longer returns it. A ticket `symphony force` changed after this poll started keeps what it
+  # recorded: the poll's view of that ticket is older.
+  defp apply_forced_poll_result(%State{} = state, repo_result, forced_ids, forced_result, poll_started_ms) do
+    touched = Map.filter(state.forced_touched, fn {_issue_id, touched_ms} -> touched_ms >= poll_started_ms end)
+
     discovered =
       case repo_result do
         {_repo_name, {:ok, issues}} when is_list(issues) -> issues
@@ -3146,14 +3159,71 @@ defmodule SymphonyElixir.Orchestrator do
           {[], []}
       end
 
-    {forced, changes} = ForcedQueue.reconcile(state.forced, discovered ++ refreshed, gone_ids, Config.settings!(), state.clock.())
+    observed = Enum.reject(discovered ++ refreshed, &match?(%Issue{id: issue_id} when is_map_key(touched, issue_id), &1))
+    gone_ids = Enum.reject(gone_ids, &is_map_key(touched, &1))
+    {forced, changes} = ForcedQueue.reconcile(state.forced, observed, gone_ids, Config.settings!(), state.clock.())
+    %{put_forced(state, forced, changes) | forced_touched: touched}
+  end
 
+  defp put_forced(%State{} = state, forced, changes) do
     if changes != [] do
       state.repo_key |> RunStore.put_forced(forced) |> log_run_store_error("persist forced tickets")
       Enum.each(changes, &record_forced_change(&1, state.repo_key))
     end
 
     %{state | forced: forced, forced_waiting_noted: MapSet.filter(state.forced_waiting_noted, &Map.has_key?(forced, &1))}
+  end
+
+  # Linear answers an unknown identifier with an "Entity not found" GraphQL error rather than a null issue.
+  defp fetch_issue_to_force(identifier) do
+    case Tracker.fetch_issue_by_identifier(identifier) do
+      {:error, {:linear_graphql_errors, errors}} = error ->
+        if Enum.any?(List.wrap(errors), &entity_not_found?/1), do: {:error, :issue_not_found}, else: error
+
+      result ->
+        result
+    end
+  end
+
+  defp entity_not_found?(%{"message" => message}) when is_binary(message), do: message =~ ~r/not found/i
+  defp entity_not_found?(_error), do: false
+
+  defp put_force_label(%Issue{labels: labels} = issue, false = _clear?, settings) do
+    label = settings.agent.force_label
+
+    cond do
+      terminal_issue_state?(issue.state, terminal_state_set()) -> {:error, {:issue_terminal, issue.state}}
+      Issue.forced?(issue, settings) -> {:ok, issue}
+      true -> with :ok <- Tracker.add_issue_label(issue.id, label), do: {:ok, %{issue | labels: labels ++ [label]}}
+    end
+  end
+
+  defp put_force_label(%Issue{labels: labels} = issue, true = _clear?, settings) do
+    label = settings.agent.force_label
+    {removed, kept} = Enum.split_with(labels, &(normalize_issue_state(&1) == normalize_issue_state(label)))
+
+    if removed == [] do
+      {:ok, issue}
+    else
+      with :ok <- Tracker.remove_issue_label(issue.id, label), do: {:ok, %{issue | labels: kept}}
+    end
+  end
+
+  # What `symphony force` reports: whether the ticket is forced now, its place in the queue (nil
+  # until it joins), and the tickets holding the `forced_max` slots.
+  defp force_result(%Issue{} = issue, forced, settings) do
+    queue = ForcedQueue.snapshot(forced)
+    forced_max = settings.agent.forced_max
+
+    %{
+      issue_id: issue.id,
+      issue_identifier: issue.identifier,
+      state: issue.state,
+      forced: Issue.forced?(issue, settings),
+      position: Enum.find_value(queue, &(&1.issue_id == issue.id and &1.position)),
+      forced_max: forced_max,
+      holders: for(%{position: position, identifier: identifier} <- queue, position <= forced_max, do: identifier)
+    }
   end
 
   defp record_forced_change({:start, issue_id, entry}, repo_key) do
@@ -5885,6 +5955,28 @@ defmodule SymphonyElixir.Orchestrator do
 
   def dispatch_pr(_server, _target, _opts), do: {:error, :invalid_pr_target}
 
+  @doc """
+  Adds `agent.concurrency.force_label` to the ticket, or removes it with `clear?`, and puts the change
+  into the forced queue at once, so a ticket forced before the next poll queues behind the one
+  forced first. The Linear calls run in the caller, not in the orchestrator.
+  """
+  @spec force_issue(String.t(), boolean()) :: {:ok, map()} | :unavailable | {:error, term()}
+  def force_issue(identifier, clear?), do: force_issue(__MODULE__, identifier, clear?)
+
+  @spec force_issue(GenServer.server(), String.t(), boolean()) :: {:ok, map()} | :unavailable | {:error, term()}
+  def force_issue(server, identifier, clear?) when is_binary(identifier) and is_boolean(clear?) do
+    if server_available?(server) do
+      settings = Config.settings!()
+
+      with {:ok, issue} <- fetch_issue_to_force(identifier),
+           {:ok, issue} <- put_force_label(issue, clear?, settings) do
+        GenServer.call(server, {:force_issue, issue})
+      end
+    else
+      :unavailable
+    end
+  end
+
   @spec snapshot() :: map() | :timeout | :unavailable
   def snapshot, do: snapshot(__MODULE__, 15_000)
 
@@ -6055,6 +6147,31 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  def handle_call({:force_issue, %Issue{} = issue}, _from, state) do
+    settings = Config.settings!()
+
+    # As in a poll, a ticket joins the queue only in an active state; one already queued is updated.
+    {forced, changes} =
+      if Map.has_key?(state.forced, issue.id) or active_issue_state?(issue.state) do
+        ForcedQueue.reconcile(state.forced, [issue], [], settings, state.clock.())
+      else
+        {state.forced, []}
+      end
+
+    state = put_forced(state, forced, changes)
+    state = %{state | forced_touched: Map.put(state.forced_touched, issue.id, System.monotonic_time(:millisecond))}
+    {_coalesced, state} = request_poll(state)
+    result = force_result(issue, forced, settings)
+
+    Logger.info(
+      "Operator #{if result.forced, do: "forced", else: "cleared the force label on"} issue_id=#{issue.id} " <>
+        "issue_identifier=#{issue.identifier} state=#{issue.state} position=#{inspect(result.position)}"
+    )
+
+    notify_dashboard()
+    {:reply, {:ok, result}, state}
+  end
+
   def handle_call({:stop_running, issue_id_or_identifier}, _from, state) do
     case find_running_issue(state.running, issue_id_or_identifier) do
       {issue_id, running_entry} ->
@@ -6085,9 +6202,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   def handle_call(:request_refresh, _from, state) do
-    now_ms = System.monotonic_time(:millisecond)
-    coalesced = poll_tick_coalesced?(state, now_ms)
-    state = if coalesced, do: state, else: schedule_tick(state, 0)
+    {coalesced, state} = request_poll(state)
 
     {:reply,
      %{

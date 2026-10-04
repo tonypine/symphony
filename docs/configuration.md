@@ -443,6 +443,8 @@ agent:
   queue `position`. A ticket leaves the list at the next poll after the label is removed, it
   reaches a terminal state, or Linear no longer returns it. The audit log records `forced_start` and `forced_end` (with
   `reason`: `label_removed`, `terminal` or `missing`).
+  `symphony force TP-123` adds the label through the running Symphony and `symphony force --clear TP-123`
+  removes it; either way the queue changes at once, without waiting for a poll (see the README).
 - `concurrency.forced_max` (default: `1`) is how many forced runs may run at once on their own
   allowance; `/api/v1/state` reports it under `concurrency`. Values below `1` fail
   `symphony check`. A forced ticket goes out first, in `forced_since` order, and while fewer than
