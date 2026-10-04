@@ -357,28 +357,35 @@ defmodule SymphonyElixir.Config do
 
   @doc """
   The config key that sets `field` (`:model` or `:effort`) for run kind `kind`, for messages that
-  tell the operator what to change: `pre_push_review.model`, `agent.run_profiles.landing.effort`,
-  or `agent.model` when no profile overrides it.
+  tell the operator what to change. Keys are tried in the order `run_profile/2` resolves them:
+  `pre_push_review.model`, `repositories[web].agent.run_profiles.landing.effort`,
+  `repositories[web].agent.model`, `agent.run_profiles.landing.effort`, then `agent.model`.
   """
   @spec run_profile_key(Schema.t(), atom() | String.t(), :model | :effort) :: String.t()
   def run_profile_key(%Schema{} = settings, kind, field) when field in [:model, :effort],
     do: profile_key(settings, to_string(kind), field)
 
   defp profile_key(settings, kind, field) do
-    with {section_key, section} <- own_profile_section(settings, kind),
-         value when not is_nil(value) <- Map.get(section, field) do
-      "#{section_key}.#{field}"
-    else
-      _agent_level ->
-        if Map.has_key?(Map.get(settings.agent.run_profiles, kind, %{}), Atom.to_string(field)),
-          do: "agent.run_profiles.#{kind}.#{field}",
-          else: "agent.#{field}"
-    end
+    repo_agent = settings.agent.repository
+    repo_path = repo_agent && "repositories[#{repo_agent.key}].agent"
+    name = Atom.to_string(field)
+
+    candidates = [
+      own_profile_setting(settings, kind, field),
+      repo_agent && {"#{repo_path}.run_profiles.#{kind}", Map.get(repo_agent.run_profiles, kind, %{})[name]},
+      repo_agent && {repo_path, Map.get(repo_agent, field)},
+      {"agent.run_profiles.#{kind}", Map.get(settings.agent.run_profiles, kind, %{})[name]}
+    ]
+
+    Enum.find_value(candidates, "agent.#{field}", fn
+      {section_key, value} when not is_nil(value) -> "#{section_key}.#{field}"
+      _unset -> nil
+    end)
   end
 
-  defp own_profile_section(settings, "pre_push_review"), do: {"pre_push_review", settings.review_agent}
-  defp own_profile_section(settings, "qa"), do: {"auto_review", settings.auto_review}
-  defp own_profile_section(_settings, _kind), do: nil
+  defp own_profile_setting(settings, "pre_push_review", field), do: {"pre_push_review", Map.get(settings.review_agent, field)}
+  defp own_profile_setting(settings, "qa", field), do: {"auto_review", Map.get(settings.auto_review, field)}
+  defp own_profile_setting(_settings, _kind, _field), do: nil
 
   @spec review_agent_blocked_state(String.t()) :: String.t()
   def review_agent_blocked_state(repo_key) when is_binary(repo_key) do
@@ -789,8 +796,9 @@ defmodule SymphonyElixir.Config do
 
   defp merge_repo_agent(config, %SystemSchema.Repo{agent: nil}), do: config
 
-  defp merge_repo_agent(config, %SystemSchema.Repo{agent: %Schema.RepoAgent{} = repo_agent}) do
-    put_in(config, ["agent", "repository"], repo_agent |> Map.from_struct() |> Map.new(fn {key, value} -> {to_string(key), value} end))
+  defp merge_repo_agent(config, %SystemSchema.Repo{name: name, agent: %Schema.RepoAgent{} = repo_agent}) do
+    repository = %{repo_agent | key: name} |> Map.from_struct() |> Map.new(fn {key, value} -> {to_string(key), value} end)
+    put_in(config, ["agent", "repository"], repository)
   end
 
   defp merge_repo_workspace(config, %SystemSchema.Repo{workspace: nil}), do: config
