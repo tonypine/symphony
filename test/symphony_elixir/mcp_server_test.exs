@@ -1393,8 +1393,15 @@ defmodule SymphonyElixir.McpServerTest do
     on_exit(fn -> McpServer.stop_session(session, server: server) end)
 
     config = SymphonyElixir.AgentMcp.symphony_claude_config(session, session.socket_path, session.shim_path)
-    env = Map.put(config["env"], "PATH", mise_shims <> ":/usr/bin:/bin")
-    port_env = Enum.map(env, fn {name, value} -> {String.to_charlist(name), String.to_charlist(value)} end)
+    assert Path.basename(config["command"]) == "erlexec"
+
+    # The test VM's own `erl` exported these; only the server's env may set them.
+    env =
+      %{"ROOTDIR" => false, "BINDIR" => false, "EMU" => false, "PROGNAME" => false}
+      |> Map.merge(config["env"])
+      |> Map.put("PATH", mise_shims <> ":/usr/bin:/bin")
+
+    port_env = Enum.map(env, fn {name, value} -> {String.to_charlist(name), value && String.to_charlist(value)} end)
 
     port =
       Port.open({:spawn_executable, config["command"]}, [

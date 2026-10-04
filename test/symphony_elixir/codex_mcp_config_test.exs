@@ -29,11 +29,13 @@ defmodule SymphonyElixir.Codex.McpConfigTest do
     assert {:ok, config} = build_config(settings, host_codex_home)
 
     assert config =~ "[mcp_servers.symphony]"
-    {erl, _args} = SymphonyElixir.McpShimCommand.build("/tmp/symphony-mcp-shim", [])
-    assert config =~ "command = #{Jason.encode!(erl)}"
+    {erlexec, _args, _env} = SymphonyElixir.McpShimCommand.build("/tmp/symphony-mcp-shim", [])
+    assert config =~ "command = #{Jason.encode!(erlexec)}"
     assert config =~ ~s("-extra", "/tmp/symphony-mcp-shim", "--socket", "/tmp/symphony-mcp.sock"])
     assert config =~ ~s(SYMPHONY_MCP_SESSION_TOKEN = "session-token")
     assert config =~ "PATH = "
+    assert config =~ ~s(BINDIR = )
+    assert config =~ ~s(EMU = "beam")
     refute config =~ "--session"
     refute config =~ "host-secret"
   end

@@ -8,46 +8,72 @@ defmodule SymphonyElixir.McpShimCommand do
   never starts. Running it with the ERTS and Elixir of the VM Symphony runs on
   needs neither PATH nor a version manager, from a checkout and from the
   release alike.
+
+  The command is ERTS's `erlexec`, the launcher `erl` wraps. A Burrito release
+  ships `erlexec` but no `erl` script, so `erlexec` gets the environment `erl`
+  would set: `ROOTDIR`, `BINDIR`, `EMU` and `PROGNAME`.
   """
 
+  require Logger
+
   @type vm :: %{
-          erl: Path.t(),
+          root: Path.t(),
+          erts_bin: Path.t(),
           elixir_ebin: Path.t(),
           boot: Path.t() | nil,
           boot_vars: [{String.t(), String.t()}]
         }
 
-  @doc """
-  Returns `{command, args}` that run `shim_path` with `shim_args`.
+  @type command :: {Path.t(), [String.t()], %{String.t() => String.t()}}
 
-  Falls back to running the shim itself when this VM's `erl` or Elixir code
-  path can't be found.
+  @doc """
+  Returns `{command, args, env}` that run `shim_path` with `shim_args`.
+
+  Falls back to running the shim itself, with a warning, when this VM's
+  `erlexec` or Elixir code path can't be found.
   """
-  @spec build(Path.t(), [String.t()]) :: {Path.t(), [String.t()]}
+  @spec build(Path.t(), [String.t()]) :: command()
   def build(shim_path, shim_args), do: build(shim_path, shim_args, vm())
 
-  @spec build(Path.t(), [String.t()], vm()) :: {Path.t(), [String.t()]}
-  def build(shim_path, shim_args, %{erl: erl, elixir_ebin: elixir_ebin} = vm) do
-    if File.regular?(erl) and File.dir?(elixir_ebin) do
-      {erl,
-       ["-noshell"] ++
-         boot_args(vm) ++
-         ["-pa", elixir_ebin, "-s", "elixir", "start_cli", "-extra", shim_path | shim_args]}
-    else
-      {shim_path, shim_args}
+  @spec build(Path.t(), [String.t()], vm()) :: command()
+  def build(shim_path, shim_args, %{erts_bin: erts_bin, elixir_ebin: elixir_ebin} = vm) do
+    erlexec = Path.join(erts_bin, "erlexec")
+
+    cond do
+      not File.regular?(erlexec) ->
+        shim_fallback(shim_path, shim_args, erlexec)
+
+      not File.dir?(elixir_ebin) ->
+        shim_fallback(shim_path, shim_args, elixir_ebin)
+
+      true ->
+        args =
+          ["-noshell"] ++
+            boot_args(vm) ++
+            ["-pa", elixir_ebin, "-s", "elixir", "start_cli", "-extra", shim_path | shim_args]
+
+        {erlexec, args, %{"ROOTDIR" => vm.root, "BINDIR" => erts_bin, "EMU" => "beam", "PROGNAME" => "erl"}}
     end
   end
 
+  defp shim_fallback(shim_path, shim_args, missing) do
+    Logger.warning("Symphony MCP shim falls back to the elixir on PATH; not found: #{missing} shim_path=#{shim_path}")
+    {shim_path, shim_args, %{}}
+  end
+
   @doc """
-  Describes the running VM. Options override what `:init` reports, for tests.
+  Describes the running VM. Options override what `:init` and `:code` report,
+  for tests.
   """
   @spec vm(keyword()) :: vm()
   def vm(opts \\ []) do
     root = Keyword.get_lazy(opts, :root_dir, fn -> to_string(:code.root_dir()) end)
+    elixir_lib = Keyword.get_lazy(opts, :elixir_lib_dir, fn -> to_string(:code.lib_dir(:elixir)) end)
 
     %{
-      erl: Path.join([root, "erts-#{:erlang.system_info(:version)}", "bin", "erl"]),
-      elixir_ebin: Path.join(to_string(:code.lib_dir(:elixir)), "ebin"),
+      root: root,
+      erts_bin: Path.join([root, "erts-#{:erlang.system_info(:version)}", "bin"]),
+      elixir_ebin: Path.join(elixir_lib, "ebin"),
       boot: opts |> Keyword.get_lazy(:boot, fn -> :init.get_argument(:boot) end) |> clean_boot(),
       boot_vars: opts |> Keyword.get_lazy(:boot_var, fn -> :init.get_argument(:boot_var) end) |> boot_vars()
     }

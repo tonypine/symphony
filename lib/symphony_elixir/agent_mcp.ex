@@ -94,26 +94,26 @@ defmodule SymphonyElixir.AgentMcp do
 
   @spec symphony_claude_config(map(), Path.t() | nil, Path.t()) :: map()
   def symphony_claude_config(mcp_session, socket_path, shim_path) do
-    {command, args} = symphony_shim_command(mcp_session, socket_path, shim_path)
+    {command, args, env} = symphony_shim_command(mcp_session, socket_path, shim_path)
 
     %{
       "command" => command,
       "args" => args,
-      "env" => symphony_shim_env(mcp_session),
+      "env" => Map.merge(symphony_shim_env(mcp_session), env),
       "alwaysLoad" => true
     }
   end
 
   @spec symphony_codex_toml_block(map(), Path.t() | nil, Path.t()) :: String.t()
   def symphony_codex_toml_block(mcp_session, socket_path, shim_path) do
-    {command, args} = symphony_shim_command(mcp_session, socket_path, shim_path)
+    {command, args, env} = symphony_shim_command(mcp_session, socket_path, shim_path)
 
     toml_table(
       ["mcp_servers", "symphony"],
       [
         {"command", command},
         {"args", args},
-        {"env", symphony_shim_env(mcp_session)}
+        {"env", Map.merge(symphony_shim_env(mcp_session), env)}
       ]
     )
   end
@@ -125,7 +125,7 @@ defmodule SymphonyElixir.AgentMcp do
   end
 
   defp symphony_shim_command(mcp_session, socket_path, shim_path) do
-    {shim_path, symphony_shim_args(mcp_session, socket_path)}
+    {shim_path, symphony_shim_args(mcp_session, socket_path), %{}}
   end
 
   defp symphony_shim_args(%{transport: :tcp, tcp_host: host, tcp_port: port}, _socket_path)

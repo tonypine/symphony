@@ -704,11 +704,15 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
 
         {:ok, mcp_config} = Jason.decode(File.read!(mcp_config_path))
 
-        assert {get_in(mcp_config, ["mcpServers", "symphony", "command"]), get_in(mcp_config, ["mcpServers", "symphony", "args"])} ==
-                 SymphonyElixir.McpShimCommand.build(
-                   session.mcp_session.shim_path,
-                   Enum.take(get_in(mcp_config, ["mcpServers", "symphony", "args"]), if(session.mcp_session.transport == :tcp, do: -4, else: -2))
-                 )
+        {shim_command, shim_args, shim_env} =
+          SymphonyElixir.McpShimCommand.build(
+            session.mcp_session.shim_path,
+            Enum.take(get_in(mcp_config, ["mcpServers", "symphony", "args"]), if(session.mcp_session.transport == :tcp, do: -4, else: -2))
+          )
+
+        assert get_in(mcp_config, ["mcpServers", "symphony", "command"]) == shim_command
+        assert get_in(mcp_config, ["mcpServers", "symphony", "args"]) == shim_args
+        assert Map.take(get_in(mcp_config, ["mcpServers", "symphony", "env"]), Map.keys(shim_env)) == shim_env
 
         assert_claude_mcp_config_matches_transport(mcp_config, session.mcp_session)
 
