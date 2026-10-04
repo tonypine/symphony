@@ -8,6 +8,8 @@ public struct StateSnapshot: Equatable {
     public var pause: Pause?
     /// Provider usage-limit holds, soonest resume first; empty when nothing is held.
     public var usageLimits: [UsageLimit]
+    /// Today's tokens against `agent.limits`, nil when Symphony didn't report them.
+    public var budget: Budget?
     /// Tickets held only until the running Symphony includes a fix that merged: updating releases them.
     public var updateUnblocks: Int
     /// Tickets forced past the dispatch limits, in queue order; empty when none is, or when Symphony predates them.
@@ -95,11 +97,36 @@ public struct StateSnapshot: Equatable {
         }
     }
 
+    /// Symphony's token counts for the UTC day and its token caps; a nil limit is a cap turned off.
+    public struct Budget: Equatable {
+        public var dailyLimit: Int?
+        public var dailyUsed: Int
+        public var dailyRemaining: Int?
+        /// True while the daily cap holds new runs.
+        public var dailyPaused: Bool
+        public var perIssueLimit: Int?
+
+        public init(
+            dailyLimit: Int? = nil,
+            dailyUsed: Int = 0,
+            dailyRemaining: Int? = nil,
+            dailyPaused: Bool = false,
+            perIssueLimit: Int? = nil
+        ) {
+            self.dailyLimit = dailyLimit
+            self.dailyUsed = dailyUsed
+            self.dailyRemaining = dailyRemaining
+            self.dailyPaused = dailyPaused
+            self.perIssueLimit = perIssueLimit
+        }
+    }
+
     public init(
         running: Int = 0,
         retrying: Int = 0,
         pause: Pause? = nil,
         usageLimits: [UsageLimit] = [],
+        budget: Budget? = nil,
         updateUnblocks: Int = 0,
         forced: [ForcedTicket] = []
     ) {
@@ -107,6 +134,7 @@ public struct StateSnapshot: Equatable {
         self.retrying = retrying
         self.pause = pause
         self.usageLimits = usageLimits
+        self.budget = budget
         self.updateUnblocks = updateUnblocks
         self.forced = forced
     }
@@ -183,6 +211,15 @@ public enum SymphonyState {
                 utilization: limit.utilization
             )
         }
+        snapshot.budget = payload.budget.map { budget in
+            StateSnapshot.Budget(
+                dailyLimit: budget.dailyLimit,
+                dailyUsed: budget.dailyUsed ?? 0,
+                dailyRemaining: budget.dailyRemaining,
+                dailyPaused: budget.dailyPaused ?? false,
+                perIssueLimit: budget.perIssueLimit
+            )
+        }
         snapshot.forced = (payload.forced ?? []).compactMap { ticket in
             guard let identifier = ticket.issueIdentifier ?? ticket.issueId else { return nil }
             return StateSnapshot.ForcedTicket(
@@ -247,6 +284,14 @@ public enum SymphonyState {
             let utilization: Double?
         }
 
+        struct Budget: Decodable {
+            let dailyLimit: Int?
+            let dailyUsed: Int?
+            let dailyRemaining: Int?
+            let dailyPaused: Bool?
+            let perIssueLimit: Int?
+        }
+
         struct AppUpdate: Decodable {
             let unblocks: Int?
         }
@@ -267,6 +312,7 @@ public enum SymphonyState {
 
         let counts: Counts?
         let pause: Pause?
+        let budget: Budget?
         let usageLimits: [UsageLimit]?
         let appUpdate: AppUpdate?
         /// Missing before Symphony reported forced tickets.

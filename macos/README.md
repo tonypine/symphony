@@ -167,6 +167,14 @@ set (or, in Development mode, no checkout folder).
   (`agent.concurrency.epic_lanes`, default every slot), so 3 agents can mean 3 epics at once, or 2 epics plus 1 for other work. Merge (landing) runs and
   Auto Review QA passes don't use these agents; up to `agent.concurrency.finishing_max` (default 2) of them
   run on top.
+- **Limit tokens per day** and **Limit tokens per ticket** are `agent.limits.tokens_per_day` and
+  `agent.limits.tokens_per_issue`, also in the `symphony.yml` itself. A switch turned off writes `null`, which
+  turns that cap off; turned on, it shows the number of tokens, with a hint such as `1,000,000,000 = 1B`. A
+  missing key shows Symphony's default (5,000,000 a day, 500,000 a ticket). While a changed value is entered,
+  the window runs `symphony check` on a copy of the file with it, shows the error inline when the check rejects
+  it (for example a negative number) and keeps Save off until it passes. Save writes only the changed lines and
+  keeps comments. Below them, today's usage comes from `/api/v1/state`'s `budget`: tokens used and left, when
+  the count resets (UTC midnight, shown in local time), and a line while the daily cap has paused new runs.
 - **Models** sets the provider, model and effort for each kind of run, also in the `symphony.yml` itself.
   The **Scope** picker chooses which `agent` block the rows edit: **All repositories** is the top-level
   `agent` section, and each `repositories[]` key edits that repository's `repositories[<key>].agent`
