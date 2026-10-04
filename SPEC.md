@@ -2325,6 +2325,12 @@ Subprocess launch parameters:
 - Working directory: workspace path
 - Transport/framing: the protocol transport required by the configured adapter
 
+A local agent subprocess SHOULD start at a lower CPU scheduling priority than Symphony (the Elixir
+implementation launches it through `nice -n 10`), so that it and everything it starts, which
+inherit that priority, cannot starve Symphony, QA passes or other runs on a shared host. When the OS
+refuses to lower the priority, the implementation SHOULD start the agent unchanged and log it. Each
+launch is logged with the agent's pid, command and run id.
+
 An agent subprocess MUST NOT outlive its session or the Symphony process. When the subprocess's
 transport closes, or Symphony stops (for example on SIGTERM), the implementation SHOULD send SIGTERM
 to the subprocess's process group and SIGKILL after a short grace period. Closing stdin alone is not
