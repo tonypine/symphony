@@ -51,8 +51,13 @@ defmodule SymphonyElixir.AutoMergeTest do
     @spec update_branch(String.t(), String.t(), keyword()) :: :ok | {:error, term()}
     def update_branch(pr_url, head_sha, _opts), do: reply(:update_branch, {:update_branch, pr_url, head_sha})
 
-    @spec fetch_ci_status(String.t(), keyword()) :: {:ok, map()}
-    def fetch_ci_status(_pr_url, _opts), do: {:ok, Application.fetch_env!(:symphony_elixir, :auto_merge_test_ci_status)}
+    @spec fetch_ci_status(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+    def fetch_ci_status(_pr_url, _opts) do
+      case Application.get_env(:symphony_elixir, :auto_merge_test_ci_status, {:error, :no_status}) do
+        %{} = status -> {:ok, status}
+        error -> error
+      end
+    end
 
     defp reply(call, message) do
       send(Application.fetch_env!(:symphony_elixir, :auto_merge_test_recipient), message)
@@ -115,19 +120,106 @@ defmodule SymphonyElixir.AutoMergeTest do
   test "a PR GitHub can already merge is squash-merged right away" do
     now = ~U[2026-10-03 12:00:00Z]
     put_run!(now)
-    track([issue("Merging")])
+    merging = issue("Merging")
+    track([merging])
     activity(head: "head-1", merge_state: "CLEAN")
+    ci_status(merge_state: "CLEAN", checks: [check("SUCCESS"), check("SKIPPED"), %{name: "lint", status: "SUCCESS", conclusion: "NEUTRAL"}])
     replies(%{enable_auto_merge: {:error, :clean_status}})
 
-    assert {:ok, %{actions: [{:auto_merge, @issue_id, "merging"}]}} = poll(now)
+    log = capture_log(fn -> assert {:ok, %{actions: [{:auto_merge, @issue_id, "merging"}]}} = poll(now) end)
     assert_received {:enable_auto_merge, @pr_url, %{head_sha: "head-1"}}
-    assert_received {:squash_merge, @pr_url, %{head_sha: "head-1"}}
+    assert_received {:squash_merge, @pr_url, request}
+    assert request == %{pr_node_id: "PR_node", head_sha: "head-1", pr_number: 1780, pr_title: "Ship it", pr_description: "PR body"}
+
+    assert log =~
+             "Auto-merge ACME-1780: GitHub refused auto-merge (the PR can already merge); squash-merging the clean PR directly pr_url=#{@pr_url} commit_sha=head-1"
+
+    refute_received {:issue_comment, _issue_id, _body}
+    # Auto-merge still owns it, so no landing agent is dispatched.
+    assert AutoMerge.owns_issue?(merging)
 
     # A later poll at the same head neither re-enables nor re-merges.
     assert {:ok, %{actions: [{:auto_merge, @issue_id, "merging"}]}} = poll(DateTime.add(now, 30))
     refute_received {:enable_auto_merge, _url, _request}
     refute_received {:squash_merge, _url, _request}
     assert AutoMerge.describe(PrReviewPoller.auto_merge(@issue_id)) == "merging `head-1`"
+
+    activity(head: "head-1", state: "MERGED")
+    assert {:ok, %{actions: [{:cleanup, @issue_id, "merged"}]}} = poll(DateTime.add(now, 60))
+    assert_received {:issue_state_update, @issue_id, "Done"}
+  end
+
+  test "a clean PR with no checks in a repository that doesn't allow auto-merge is squash-merged directly" do
+    now = ~U[2026-10-03 12:00:00Z]
+    put_run!(now)
+    merging = issue("Merging")
+    track([merging])
+    activity(head: "head-1", merge_state: "CLEAN")
+    ci_status(merge_state: "CLEAN", checks: [])
+
+    replies(%{
+      enable_auto_merge:
+        {:error,
+         {:gh_failed, ["api", "graphql"], 1, ~s(gh: {"data":{"enablePullRequestAutoMerge":null},"errors":[{"type":"UNPROCESSABLE","message":"Auto merge is not allowed for this repository"}]}\n)}}
+    })
+
+    log = capture_log(fn -> assert {:ok, %{actions: [{:auto_merge, @issue_id, "merging"}]}} = poll(now) end)
+
+    assert_received {:squash_merge, @pr_url, %{head_sha: "head-1", pr_title: "Ship it", pr_number: 1780}}
+    assert log =~ "Auto merge is not allowed for this repository"
+    assert log =~ "squash-merging the clean PR directly"
+    refute log =~ "fell back to the landing agent"
+    refute_received {:issue_comment, _issue_id, _body}
+    assert AutoMerge.owns_issue?(merging)
+  end
+
+  test "a PR that merged while auto-merge was refused takes the merged path, not the landing agent" do
+    now = ~U[2026-10-03 12:00:00Z]
+    put_run!(now)
+    merging = issue("Merging")
+    track([merging])
+    activity(head: "head-1", merge_state: "CLEAN")
+    ci_status(state: "MERGED", merge_state: "UNKNOWN", checks: [])
+    replies(%{enable_auto_merge: {:error, {:gh_failed, ["api", "graphql"], 1, "gh: Pull request is already merged"}}})
+
+    log = capture_log(fn -> assert {:ok, %{actions: [{:auto_merge, @issue_id, "merging"}]}} = poll(now) end)
+
+    refute_received {:squash_merge, _url, _request}
+    refute_received {:issue_comment, _issue_id, _body}
+    assert log =~ "Auto-merge ACME-1780: GitHub refused auto-merge (gh: Pull request is already merged (exit 1)); the PR is already merged"
+    assert AutoMerge.owns_issue?(merging)
+
+    activity(head: "head-1", state: "MERGED")
+    assert {:ok, %{actions: [{:cleanup, @issue_id, "merged"}]}} = poll(DateTime.add(now, 30))
+    assert_received {:issue_state_update, @issue_id, "Done"}
+  end
+
+  test "a refused PR that is red, pending, not clean, on another head or unreadable still goes to the landing agent" do
+    now = ~U[2026-10-03 12:00:00Z]
+    replies(%{enable_auto_merge: {:error, {:gh_failed, ["api", "graphql"], 1, "gh: Auto merge is not allowed for this repository"}}})
+
+    for status <- [
+          [merge_state: "CLEAN", checks: [check("SUCCESS"), check("FAILURE")]],
+          [merge_state: "CLEAN", checks: [%{name: "make-all", status: "IN_PROGRESS", conclusion: nil}]],
+          [merge_state: "UNSTABLE", checks: []],
+          [merge_state: "BEHIND", checks: [check("SUCCESS")]],
+          [merge_state: "CLEAN", state: "CLOSED", checks: []],
+          [merge_state: "CLEAN", commit_sha: "head-2", checks: []],
+          {:error, :timeout}
+        ] do
+      RunStore.delete_pr_review(@repo_key, @issue_id)
+      put_run!(now)
+      track([issue("Merging")])
+      activity(head: "head-1", merge_state: "CLEAN")
+      ci_status(status)
+
+      log = capture_log(fn -> assert {:ok, %{actions: [{:auto_merge, @issue_id, "fallback"}]}} = poll(now) end)
+
+      refute_received {:squash_merge, _url, _request}
+      assert_received {:issue_comment, @issue_id, comment}
+      assert comment =~ "enabling auto-merge failed: gh: Auto merge is not allowed for this repository"
+      assert log =~ "fell back to the landing agent"
+    end
   end
 
   test "a BEHIND PR gets one update-branch per head and lands once the new head is green" do
@@ -247,6 +339,7 @@ defmodule SymphonyElixir.AutoMergeTest do
     merging = issue("Merging")
     track([merging])
     activity(head: "head-1", merge_state: "BLOCKED")
+    ci_status(merge_state: "BLOCKED", checks: [check("SUCCESS")])
 
     replies(%{
       enable_auto_merge: {:error, {:gh_failed, ["api", "graphql"], 1, "gh: Auto merge is not allowed for this repository (enablePullRequestAutoMerge)\n"}}
@@ -280,6 +373,7 @@ defmodule SymphonyElixir.AutoMergeTest do
     put_run!(now)
     track([issue("Merging")])
     activity(head: "head-1", merge_state: "CLEAN")
+    ci_status(merge_state: "CLEAN", checks: [])
     replies(%{enable_auto_merge: {:error, :clean_status}, squash_merge: {:error, :timeout}})
     Application.put_env(:symphony_elixir, :auto_merge_test_comment_result, {:error, :linear_down})
 
@@ -468,6 +562,9 @@ defmodule SymphonyElixir.AutoMergeTest do
   defmodule LongErrorGitHub do
     @spec enable_auto_merge(String.t(), map(), keyword()) :: {:error, term()}
     def enable_auto_merge(_pr_url, _request, _opts), do: {:error, String.duplicate("x", 400)}
+
+    @spec fetch_ci_status(String.t(), keyword()) :: {:error, term()}
+    def fetch_ci_status(_pr_url, _opts), do: {:error, :timeout}
   end
 
   defp poll(now, opts \\ []),
@@ -521,6 +618,23 @@ defmodule SymphonyElixir.AutoMergeTest do
       updated_at: ~U[2026-10-03 11:00:00Z]
     }
   end
+
+  defp ci_status({:error, _reason} = error), do: Application.put_env(:symphony_elixir, :auto_merge_test_ci_status, error)
+
+  defp ci_status(opts) do
+    Application.put_env(:symphony_elixir, :auto_merge_test_ci_status, %{
+      pr_url: @pr_url,
+      pr_title: "Ship it",
+      state: Keyword.get(opts, :state, "OPEN"),
+      commit_sha: Keyword.get(opts, :commit_sha, "head-1"),
+      mergeable: "MERGEABLE",
+      merge_state_status: Keyword.fetch!(opts, :merge_state),
+      base_ref_name: "main",
+      checks: Keyword.fetch!(opts, :checks)
+    })
+  end
+
+  defp check(conclusion), do: %{name: "make-all-#{conclusion}", status: "COMPLETED", conclusion: conclusion}
 
   defp activity(opts), do: Application.put_env(:symphony_elixir, :auto_merge_test_activity, activity_map(opts))
 
