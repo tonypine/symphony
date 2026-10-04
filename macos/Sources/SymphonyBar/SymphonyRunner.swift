@@ -237,11 +237,9 @@ final class SymphonyRunner {
         return alert.runModal() == .alertFirstButtonReturn
     }
 
+    /// Brings the app in front of whichever app is active. The macOS 14 `NSApp.activate()` only asks, and the
+    /// system declines it while another app is frontmost, which is the usual case for a menu bar app.
     static func activateApp() {
-        if #available(macOS 14, *) {
-            NSApp.activate()
-        } else {
-            NSApp.activate(ignoringOtherApps: true)
-        }
+        NSApp.activate(ignoringOtherApps: true)
     }
 }

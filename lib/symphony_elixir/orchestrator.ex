@@ -464,6 +464,7 @@ defmodule SymphonyElixir.Orchestrator do
           |> put_running_entry(issue_id, updated_running_entry)
           |> enforce_issue_budget(issue_id)
           |> clear_usage_limit_on_allowed_canary(issue_id, update)
+          |> hold_for_usage_headroom(updated_running_entry, update)
 
         persist_running_entry(updated_running_entry)
         notify_transcript(running_repo_key(state, updated_running_entry), issue_id, update)
@@ -491,6 +492,7 @@ defmodule SymphonyElixir.Orchestrator do
     state =
       case Map.fetch(state.usage_limits, key) do
         {:ok, %{phase: :paused} = entry} -> maybe_resume_usage_limit(state, key, entry)
+        {:ok, %{phase: :headroom} = entry} -> maybe_clear_usage_headroom(state, key, entry)
         _canary_or_gone -> state
       end
 
@@ -3481,6 +3483,7 @@ defmodule SymphonyElixir.Orchestrator do
           workspace_path: Map.get(retry_entry, :workspace_path),
           reason: Map.get(retry_entry, :reason),
           elapsed_ms: Map.get(retry_entry, :elapsed_ms),
+          continuation: Map.get(retry_entry, :delay_type) == :continuation,
           repo_key: Map.get(retry_entry, :repo_key)
         }
 
@@ -4223,7 +4226,7 @@ defmodule SymphonyElixir.Orchestrator do
       operator_paused?(state) ->
         defer_retry_for_operator_pause(state, issue, attempt, metadata)
 
-      hold = usage_limit_hold(state, issue) ->
+      hold = usage_limit_hold(state, issue, metadata[:continuation] == true) ->
         hold_retry_for_usage_limit(state, issue, attempt, metadata, hold)
 
       workspace_quota_paused?(state) ->
@@ -6569,7 +6572,8 @@ defmodule SymphonyElixir.Orchestrator do
         issue_identifier: identifier
       )
 
-    if is_nil(existing), do: emit_usage_limit_event(:usage_limit_paused, entry, issue_identifier: identifier)
+    newly_paused? = is_nil(existing) or existing.phase == :headroom
+    if newly_paused?, do: emit_usage_limit_event(:usage_limit_paused, entry, issue_identifier: identifier)
 
     cond do
       match?(%{phase: :canary}, existing) ->
@@ -6578,7 +6582,7 @@ defmodule SymphonyElixir.Orchestrator do
             "next_resume_at=#{DateTime.to_iso8601(entry.resume_at)} issue_identifier=#{identifier}"
         )
 
-      is_nil(existing) or existing.resume_at != entry.resume_at ->
+      newly_paused? or existing.resume_at != entry.resume_at ->
         Logger.warning(
           "Usage limit pause provider=#{entry.provider} scope=#{UsageLimit.scope_label(entry.scope)} window=#{entry.window || "unknown"} " <>
             "resets_at=#{format_optional_datetime(entry.resets_at)} resume_at=#{DateTime.to_iso8601(entry.resume_at)} source=#{entry.source || "unknown"} issue_identifier=#{identifier}"
@@ -6592,6 +6596,66 @@ defmodule SymphonyElixir.Orchestrator do
     {arm_usage_limit_timer(state, key, entry), entry}
   end
 
+  # `agent.usage_limit.headroom_utilization`: an allowed_warning at or above it holds new runs of
+  # the provider until the window resets. A pause or canary already in place is left as it is.
+  defp hold_for_usage_headroom(%State{} = state, running_entry, %{usage_windows: %{} = windows}) do
+    case Config.settings!().agent.usage_limit.headroom_utilization do
+      threshold when is_number(threshold) ->
+        windows
+        |> UsageLimit.headroom_crossings(threshold, state.clock.())
+        |> Enum.reduce(state, &put_usage_headroom(&2, &1, threshold, running_entry.identifier))
+
+      nil ->
+        state
+    end
+  end
+
+  defp hold_for_usage_headroom(%State{} = state, _running_entry, _update), do: state
+
+  defp put_usage_headroom(%State{} = state, info, threshold, identifier) do
+    key = UsageLimit.key(info)
+
+    case Map.get(state.usage_limits, key) do
+      %{phase: phase} when phase != :headroom ->
+        state
+
+      existing ->
+        entry =
+          UsageLimit.put_headroom(existing, info,
+            now: state.clock.(),
+            config: Config.settings!().agent.usage_limit,
+            issue_identifier: identifier
+          )
+
+        if entry == existing, do: state, else: hold_new_runs_for_headroom(state, key, existing, entry, threshold)
+    end
+  end
+
+  defp hold_new_runs_for_headroom(%State{} = state, key, existing, entry, threshold) do
+    if is_nil(existing) do
+      emit_usage_limit_event(:usage_limit_headroom, entry, issue_identifier: entry.issue_identifier)
+    end
+
+    Logger.warning(
+      "Usage limit headroom hold provider=#{entry.provider} utilization=#{entry.utilization} threshold=#{threshold} " <>
+        "scope=#{UsageLimit.scope_label(entry.scope)} window=#{entry.window} resets_at=#{DateTime.to_iso8601(entry.resets_at)} " <>
+        "resume_at=#{DateTime.to_iso8601(entry.resume_at)} issue_identifier=#{entry.issue_identifier}"
+    )
+
+    state = put_usage_limits(state, Map.put(state.usage_limits, key, entry))
+    arm_usage_limit_timer(state, key, entry)
+  end
+
+  # A headroom hold clears at `resume_at` without a canary: runs that went on under it already
+  # showed the provider still serves requests.
+  defp maybe_clear_usage_headroom(%State{} = state, key, entry) do
+    if UsageLimit.remaining_ms(entry, state.clock.()) > 0 do
+      arm_usage_limit_timer(state, key, entry)
+    else
+      clear_usage_limit(state, key, entry)
+    end
+  end
+
   defp put_usage_limits(%State{} = state, usage_limits) do
     usage_limits
     |> RunStore.put_usage_limits()
@@ -6603,12 +6667,17 @@ defmodule SymphonyElixir.Orchestrator do
   # One event per hold transition: a new hold and its clearing. A refreshed hold, or a run
   # hitting a hold already in place, emits nothing.
   defp emit_usage_limit_event(event, entry, attrs \\ []) do
-    resume = if event == :usage_limit_paused, do: "; resumes at #{DateTime.to_iso8601(entry.resume_at)}", else: ""
+    reason =
+      case event do
+        :usage_limit_paused -> "#{UsageLimit.limit_label(entry)}; resumes at #{DateTime.to_iso8601(entry.resume_at)}"
+        :usage_limit_headroom -> "#{UsageLimit.limit_label(entry)} at #{round(entry.utilization * 100)}%; holding new runs until #{DateTime.to_iso8601(entry.resume_at)}"
+        :usage_limit_resumed -> UsageLimit.limit_label(entry)
+      end
 
     Notifications.emit_event(
       event,
       Map.merge(Map.new(attrs), %{
-        reason: UsageLimit.limit_label(entry) <> resume,
+        reason: reason,
         metadata: %{
           provider: entry.provider,
           scope: UsageLimit.scope_label(entry.scope),
@@ -6624,6 +6693,10 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp format_optional_datetime(%DateTime{} = datetime), do: DateTime.to_iso8601(datetime)
   defp format_optional_datetime(nil), do: "unknown"
+
+  defp usage_limit_error(%{phase: :headroom} = entry) do
+    "usage limit headroom hold (provider=#{entry.provider} scope=#{UsageLimit.scope_label(entry.scope)}); resuming at #{DateTime.to_iso8601(entry.resume_at)}"
+  end
 
   defp usage_limit_error(entry) do
     "usage limit reached (provider=#{entry.provider} scope=#{UsageLimit.scope_label(entry.scope)}); resuming at #{DateTime.to_iso8601(entry.resume_at)}"
@@ -6767,13 +6840,16 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  # The run's provider and model come from its run profile, resolved as at dispatch.
-  defp usage_limit_hold(%State{usage_limits: usage_limits}, _issue) when map_size(usage_limits) == 0, do: nil
+  # The run's provider and model come from its run profile, resolved as at dispatch. A
+  # continuation of a run that just ended is not a new run to a headroom hold.
+  defp usage_limit_hold(state, issue, continuation? \\ false)
 
-  defp usage_limit_hold(%State{usage_limits: usage_limits} = state, %Issue{} = issue) do
+  defp usage_limit_hold(%State{usage_limits: usage_limits}, _issue, _continuation?) when map_size(usage_limits) == 0, do: nil
+
+  defp usage_limit_hold(%State{usage_limits: usage_limits} = state, %Issue{} = issue, continuation?) do
     repo_key = dispatch_repo_key(state, issue)
     profile = AgentRunner.run_profile(issue, Config.settings_for_repo!(repo_key), repo_key: repo_key)
-    UsageLimit.holding(usage_limits, profile, issue.id)
+    UsageLimit.holding(usage_limits, Map.put(profile, :continuation, continuation?), issue.id)
   end
 
   defp remember_usage_windows(%State{} = state, %{usage_windows: %{} = windows}) do
@@ -6969,7 +7045,7 @@ defmodule SymphonyElixir.Orchestrator do
       for {:ok, repos} <- [Config.repos()], repo <- repos, {:ok, repo_settings} <- [Config.settings_for_repo(repo.name)], do: repo_settings
 
     for settings <- [settings | repo_settings], kind <- RunKind.names(), uniq: true do
-      settings |> Config.run_profile(kind) |> Map.take([:provider, :model])
+      settings |> Config.run_profile(kind) |> Map.take([:provider, :model]) |> Map.put(:kind, kind)
     end
   end
 

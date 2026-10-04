@@ -827,6 +827,9 @@ Fields:
   - Default: `120`. Added to the reported reset time before runs resume.
 - `usage_limit.unknown_reset_retry_seconds` (integer `>= 60`)
   - Default: `900`. How long the hold lasts when no reset time is known.
+- `usage_limit.headroom_utilization` (number in `(0, 1]` or null)
+  - Default: `null` (off). When set, an `allowed_warning` at or above it puts a headroom hold on
+    new runs of that provider until the window resets (Section 8.4.2).
 - `prompts.include_project_guides` (boolean)
   - Default: `true`.
   - When enabled, implementations MAY append a `## Project conventions` section to the rendered
@@ -1213,7 +1216,8 @@ Fields:
   - Webhook channels require `url` when notifications are enabled.
   - `events` is an OPTIONAL list drawn from: `pr_opened`, `awaiting_review`, `run_failed`,
     `issue_completed`, `budget_exceeded`, `reviewer_commented`, `rework_pushed`, `ci_failed`,
-    `ci_escalated`, `qa_passed`, `qa_failed`, `usage_limit_paused`, `usage_limit_resumed`.
+    `ci_escalated`, `qa_passed`, `qa_failed`, `usage_limit_paused`, `usage_limit_headroom`,
+    `usage_limit_resumed`.
   - `headers` is an OPTIONAL map of webhook headers.
 
 ### 5.5 Prompt Template Contract
@@ -1477,6 +1481,7 @@ not require recognizing or validating extension fields unless that extension is 
 - `agent.usage_limit.auto_pause`: boolean, default `true`
 - `agent.usage_limit.resume_margin_seconds`: integer `>= 0`, default `120`
 - `agent.usage_limit.unknown_reset_retry_seconds`: integer `>= 60`, default `900`
+- `agent.usage_limit.headroom_utilization`: number in `(0, 1]` or null, default `null`
 - `agent.runtime`: `codex` or `claude`, REQUIRED
 - `agent.command`: shell command string, REQUIRED
 - `agent.model`: model name string or null, default `null`
@@ -2005,6 +2010,33 @@ reached (for Claude, a used-up five-hour or weekly window; for Codex, an error w
   when the canary clears the hold, not when it starts. A hold restored on startup emits nothing.
 - Show each hold in the status surfaces (Section 13), for example
   `Paused: Claude 5-hour limit, resumes ~14:05` in local time.
+
+#### 8.4.2 Usage-Limit Headroom Holds
+
+When `agent.usage_limit.headroom_utilization` is set and a running Claude agent reports a
+`rate_limit_event` with status `allowed_warning` whose `utilization` is at or above it, for a
+window whose `resetsAt` is still ahead, Symphony leaves the rest of the limit to the operator's own
+sessions:
+
+- Create a hold as in Section 8.4.1, keyed by `{provider, scope}` for that window, with
+  `reason: "claude_usage_headroom"`, `phase: headroom`, the reported `utilization`, and
+  `resume_at = resetsAt + usage_limit.resume_margin_seconds`. A later warning for a window that
+  resets later moves `resume_at` out; a higher warning for the same window raises the held
+  `utilization`; an earlier window changes nothing. A `paused` or `canary` hold
+  already in place is left as it is, and a usage-limited run turns a headroom hold into a pause
+  (reported as a new pause).
+- The hold skips new dispatches on every path, as a pause does, and holds a retry that comes due
+  with its attempt. It does not hold runs in flight, their continuation turns, the continuation
+  run scheduled when a run ends with the issue still active, or landing runs (`kind: landing`).
+  `dispatch_state.active?` stays true while landing runs can still dispatch.
+- At `resume_at` the hold clears without a canary, and held retries return to normal candidate
+  selection. It is persisted and restored on startup as a headroom hold.
+- Log `Usage limit headroom hold provider=… utilization=… threshold=…` when the hold is created,
+  moved out or raised. Emit one `usage_limit_headroom` notification when it is created and one
+  `usage_limit_resumed` when it clears.
+- Show it in the status surfaces as `Holding new runs: Claude at 91%, resets ~14:05`.
+- The Claude CLI only reports utilization once it passes its own warning threshold (seen at
+  `0.75`), so a lower setting behaves as if set at that point.
 
 ### 8.5 Active Run Reconciliation
 
@@ -2860,13 +2892,16 @@ SHOULD return:
   - `total_tokens`
   - `seconds_running` (aggregate runtime seconds as of snapshot time, including active sessions)
 - `rate_limits` (latest coding-agent rate limit payload, if available; telemetry only)
-- `usage_limits` (provider usage-limit holds, Section 8.4.1; empty when nothing is held), each with
+- `usage_limits` (provider usage-limit and headroom holds, Sections 8.4.1 and 8.4.2; empty when
+  nothing is held), each with
   `provider`, `scope`, `reason`, `window`, `phase`, `since`, `resets_at`, `resume_at`, `source` and
-  `utilization` (the latest utilization seen for the window, or null)
+  `utilization` (the latest utilization seen for the window, else the one the hold recorded, or null)
+  and `banner` (the dashboard line for the hold, in Symphony's local time, which the menu bar shows)
 - `pause`, `budget`, `dispatch_state`, and `workspace_lifecycle` when those extensions are enabled.
   `pause` is the operator pause only. Each usage-limit hold adds a `dispatch_state.blockers` entry
   `{kind: "usage_limit", provider, scope, window, resets_at, resume_at, phase}`, but
-  `dispatch_state.active?` is false only when the holds cover every provider (and model) in use.
+  `dispatch_state.active?` is false only when the holds hold every provider (and model) and run kind
+  in use.
 
 Elixir implementation note: the current snapshot's `run_history` is read from the primary repo
 partition, while budget hydration reads runs across all repo partitions.
@@ -3153,7 +3188,8 @@ Minimum endpoints:
           "resume_at": "2026-02-24T21:02:00Z",
           "source": "rate_limit_event",
           "utilization": 1.0,
-          "issue_identifier": "MT-648"
+          "issue_identifier": "MT-648",
+          "banner": "Paused: Claude 5-hour limit, resumes ~18:02"
         }
       ],
       "linear_usage": {

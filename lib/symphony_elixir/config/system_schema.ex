@@ -662,7 +662,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
          :ok <-
            reject_unknown_section_keys(
              usage_limit,
-             ~w(auto_pause resume_margin_seconds unknown_reset_retry_seconds),
+             ~w(auto_pause resume_margin_seconds unknown_reset_retry_seconds headroom_utilization),
              "agent.usage_limit"
            ) do
       sandbox_runtime =

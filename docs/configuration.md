@@ -252,6 +252,7 @@ agent:
     auto_pause: true
     resume_margin_seconds: 120
     unknown_reset_retry_seconds: 900
+    headroom_utilization:
   prompts:
     include_project_guides: true
     project_guide_files: [AGENTS.md]
@@ -469,6 +470,19 @@ agent:
   `usage_limit` entry. The `usage_limit_paused` and `usage_limit_resumed` notifications go out once
   when a hold starts and once when it clears, not once per held run. A hold clears when the first
   run is accepted, not when it goes out, and a first run that hits the limit again sends nothing.
+- `usage_limit.headroom_utilization` (default `null`, off; else `> 0` and `<= 1`, for example
+  `0.9`): leaves the rest of the Claude limit for your own sessions. When a running Claude agent
+  reports an `allowed_warning` at or above this share of a window, Symphony holds new Claude runs
+  until that window resets (plus `resume_margin_seconds`); later warnings for the window raise the
+  percentage shown. Runs in flight and their continuations
+  keep going, and landing runs (`Merging`) still start. The hold is kept across restarts, logs
+  `Usage limit headroom hold provider=… utilization=… threshold=…`, shows on the dashboards as
+  `Holding new runs: Claude at 91%, resets ~14:05`, is listed under `usage_limits` with
+  `phase: headroom`, and sends one `usage_limit_headroom` notification when it starts and one
+  `usage_limit_resumed` when it clears. It clears at the reset time without a first run going
+  out alone. A real usage limit hit meanwhile turns it into the pause above.
+  - Limitation: the Claude CLI only reports utilization once it passes its own warning threshold
+    (seen at `0.75`), so a lower setting behaves as if it were set at that point.
 
 **Project guides:**
 
