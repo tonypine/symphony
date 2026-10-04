@@ -1964,7 +1964,10 @@ Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `
   the repository doesn't allow auto-merge), the poller MUST read the PR again: one already `MERGED`
   takes the merged path below, and an open one at the same head with `mergeStateStatus == "CLEAN"`
   and every check `SUCCESS`, `NEUTRAL` or `SKIPPED` (or no checks at all) is squash-merged directly
-  with the same `mergePullRequest` fields. The poller logs which path it took.
+  with the same `mergePullRequest` fields. The poller logs which path it took. A refusal because
+  the head moved since the poller read it (`expected head oid does not match`) is not a refusal:
+  the poller MUST keep the state and try again with the head the next poll reads, and fall back
+  only after 3 such refusals in a row.
 - When `mergeStateStatus` is `BEHIND`, the poller MUST call
   `PUT /repos/{owner}/{repo}/pulls/{number}/update-branch` with `expected_head_sha` at most once per
   head. A failed call other than a conflict is retried on the next poll.

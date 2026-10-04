@@ -240,13 +240,18 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   @doc """
   Turns on GitHub auto-merge (squash, PR title and body) for the head in `request`. GitHub
   refuses it for a PR that can already merge; that comes back as `{:error, :clean_status}`.
-  Other refusals (no branch protection, auto-merge not allowed) come back as the `gh` failure.
+  A head that moved since it was read comes back as `{:error, :head_moved}`. Other refusals
+  (no branch protection, auto-merge not allowed) come back as the `gh` failure.
   """
   @spec enable_auto_merge(String.t(), squash_request(), keyword()) :: :ok | {:error, term()}
   def enable_auto_merge(pr_url, request, opts \\ []) when is_binary(pr_url) and is_map(request) do
     case squash_mutation(pr_url, @enable_auto_merge_mutation, request, opts) do
       {:error, {:gh_failed, _args, _status, output}} = error ->
-        if clean_status_output?(output), do: {:error, :clean_status}, else: error
+        cond do
+          clean_status_output?(output) -> {:error, :clean_status}
+          head_moved_output?(output) -> {:error, :head_moved}
+          true -> error
+        end
 
       result ->
         result
@@ -333,6 +338,9 @@ defmodule SymphonyElixir.GitHub.PullRequest do
 
   defp clean_status_output?(output) when is_binary(output), do: output =~ ~r/clean status/i
   defp clean_status_output?(_output), do: false
+
+  defp head_moved_output?(output) when is_binary(output), do: output =~ ~r/expected head oid does not match/i
+  defp head_moved_output?(_output), do: false
 
   defp merge_conflict_output?(output) when is_binary(output), do: output =~ ~r/merge conflict/i
   defp merge_conflict_output?(_output), do: false
