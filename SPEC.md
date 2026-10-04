@@ -1841,10 +1841,13 @@ Important nuance:
   re-dispatched runs until the issue leaves `Rework`, so rework an earlier run pushed counts and a
   fresh `Rework` on an unchanged PR does not. Nothing else moves it out of `Rework`.
 - Outside `Rework` and `Merging`, an issue whose attached PR's head is the workspace `HEAD`, where
-  that `HEAD` differs from the one the run started on and every check on it has passed, MUST end
-  the run and move to the post-PR state, even while the review, CI, QA or conflict signal that
-  started the run is still pending. Such a signal is only cleared once the run ends, so without
-  this a fix run on an open PR never ends on its own.
+  that `HEAD` differs from the one the run started on and has checks that are still running or
+  have all passed, MUST end the run and move to the post-PR state, even while the review, CI, QA
+  or conflict signal that started the run is still pending. Such a signal is only cleared once the
+  run ends, so without this a fix run on an open PR never ends on its own. The CI poller then owns
+  that head: QA on green, a flaky re-run or a CI-fix run on red. A head with no checks reported yet
+  or a failed check does not end the run this way, nor does a head the pre-push reviewer applies to
+  and has not yet passed: the run continues so the reviewer runs on it first.
 - A run on an active issue with an attached PR and no pending review, CI, QA or conflict signal
   (outside `Rework` and `Merging`) MUST end after a turn only once its work is on the PR: the
   workspace `HEAD` is the PR head and, when the pre-push reviewer applies to the run, that head is
@@ -1854,8 +1857,9 @@ Important nuance:
 - When the workspace `HEAD` is readable, two consecutive turns with no new commit, no issue state
   change, no newly attached PR and no reviewer-agent verdict MUST end the run, move the issue to
   `Backlog` and post a comment saying why. This does not apply in `Merging`, nor while the attached
-  PR's head is the workspace `HEAD` and that head has checks still pending; such a run keeps
-  turning up to `agent.max_turns`.
+  PR's head is the workspace `HEAD` and that head has checks still pending; such a run (in
+  `Rework`, one that started on that head, or one whose pushed head awaits the pre-push reviewer)
+  keeps turning up to `agent.max_turns`.
 - The first turn SHOULD use the full rendered task prompt. Implementations MAY use a compact
   bootstrap prompt when the target agent transport cannot safely carry the full rendered prompt as a
   single startup message, provided the compact prompt preserves hard security rules and directs the
@@ -3269,7 +3273,7 @@ Orchestrator behavior on tracker errors:
   (until the pause ends, or 5 s doubling up to 60 s) and retries in the same run and session, for at
   most five minutes. This covers the issue enrichment and workpad bootstrap (the Todo → In Progress
   move, the workpad read and create), the post-turn issue refresh, the dependency-approval move, the
-  move after a finished rework or a green pushed head, the idle park and its note, and the parent
+  move after a finished rework or a pushed head with CI running or green, the idle park and its note, and the parent
   walkthrough's parent read, QA report, gap tickets and final state move (the verdict is kept while
   that move waits, for up to 30 minutes rather than five, since a lost verdict means running the
   whole QA walkthrough again and filing its gap tickets twice). The run tells the orchestrator how long each wait lasts,

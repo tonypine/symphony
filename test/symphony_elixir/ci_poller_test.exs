@@ -365,6 +365,30 @@ defmodule SymphonyElixir.CiPollerTest do
       refute_receive {:issue_state_update, "issue-2401", "In Review"}
     end
 
+    test "a CI-fix run handed to Auto Review while CI runs on its pushed head gets QA once that head is green" do
+      now = ~U[2026-05-06 09:00:00Z]
+      issue = %{in_review_issue() | state: "Auto Review"}
+      Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+      new_head_pending = %{pending_status() | commit_sha: "def456"}
+      Application.put_env(:symphony_elixir, :ci_test_statuses, [failed_status("abc123"), failed_status("abc123"), new_head_pending])
+      Application.put_env(:symphony_elixir, :ci_test_status, green_status("def456"))
+      put_run(issue, now)
+      poll = &CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, qa_runner: FakeQaRunner, now: DateTime.add(now, &1, :minute))
+
+      assert {:ok, %{actions: [{:rerun_requested, "issue-2401", "987"}]}} = poll.(0)
+      assert {:ok, %{actions: [{:state_transitioned, "issue-2401", :ci_failure, "In Progress"}]}} = poll.(1)
+      assert %{} = CiPoller.pending_ci_failure("issue-2401")
+
+      # The fix run pushed def456 and moved the issue back to Auto Review while its CI ran.
+      assert {:ok, %{actions: [{:watching, "issue-2401"}]}} = poll.(2)
+      assert {:ok, %{actions: [{:qa_started, "issue-2401", "def456"}]}} = poll.(3)
+
+      assert_receive {:qa_request, %{issue: %Issue{id: "issue-2401"}, sha: "def456"}}
+      assert CiPoller.pending_ci_failure("issue-2401") == nil
+      assert_receive {:issue_state_update, "issue-2401", "In Progress"}
+      refute_receive {:issue_state_update, "issue-2401", _state}
+    end
+
     test "green CI leaves an In Review issue where it is" do
       now = ~U[2026-05-06 09:00:00Z]
       issue = in_review_issue()
