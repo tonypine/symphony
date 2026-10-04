@@ -479,6 +479,11 @@ certificate, `SHORT_VERSION=` / `BUILD_NUMBER=` to set the versions in `Info.pli
 `MINISIGN_PUBLIC_KEY=` to embed the update key. `make install` replaces `~/Applications/Symphony.app`, so it
 replaces an installed release too; reinstall the release with the install script afterwards.
 
+Every build also carries `Contents/Helpers/SymphonyQADriver.app`, the helper that takes screenshots and reads
+the accessibility tree for Auto Review's `macos_app` QA. Grant Screen Recording and Accessibility to that helper,
+never to Symphony.app: macOS passes Symphony.app's grants to the agents it starts (see
+[One-time macOS permissions](../docs/configuration.md#one-time-macos-permissions)).
+
 A plain `make` build has no embedded Symphony, so it runs only in Development mode, and it can't update
 itself.
 
