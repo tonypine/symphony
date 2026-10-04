@@ -4,15 +4,16 @@ defmodule SymphonyElixir.AutoMerge do
   landing agent.
 
   The PR review poller calls `step/5` for every poll of a `Merging` issue's open PR. It turns
-  on auto-merge once per head (or squash-merges right away when GitHub says the PR can
-  already merge), and asks GitHub to merge the base branch in once per head when the PR is
-  `BEHIND`. GitHub merges the PR when the required checks pass; the poller then moves the
-  issue to `Done`. Merge conflicts take the PR poller's conflict path and red CI takes the
-  CI poller's fix path.
+  on auto-merge once per head, and asks GitHub to merge the base branch in once per head when
+  the PR is `BEHIND`. GitHub merges the PR when the required checks pass; the poller then
+  moves the issue to `Done`. When GitHub refuses auto-merge (the PR can already merge, the
+  branch has no protection, or the repository doesn't allow it) but the PR is `CLEAN` with
+  green or no checks, it is squash-merged right away. Merge conflicts take the PR poller's
+  conflict path and red CI takes the CI poller's fix path.
 
-  When auto-merge can't be used (the repository doesn't allow it, the PR has no required
-  checks, a permission error, or the PR stays blocked on a green head), the issue falls back
-  to the landing agent. The state lives under `:auto_merge` in the PR review record.
+  When auto-merge can't be used otherwise (a permission error, a refused PR that isn't clean
+  and green, or the PR stays blocked on a green head), the issue falls back to the landing
+  agent. The state lives under `:auto_merge` in the PR review record.
   """
 
   require Logger
@@ -24,6 +25,8 @@ defmodule SymphonyElixir.AutoMerge do
   @merging_state "merging"
   @behind_merge_state "BEHIND"
   @blocked_merge_state "BLOCKED"
+  @clean_merge_state "CLEAN"
+  @passing_conclusions ["success", "neutral", "skipped"]
   @green_conclusion "SUCCESS"
   @max_reason_length 300
 
@@ -168,16 +171,49 @@ defmodule SymphonyElixir.AutoMerge do
       :ok ->
         {:ok, %{current | state: "enabled", enabled_head_sha: current.head_sha}}
 
-      {:error, :clean_status} ->
-        # GitHub won't queue a PR that can already merge; merge it now instead.
-        case github.squash_merge(pr_url, request, gh_opts) do
-          :ok -> {:ok, %{current | state: "merging", enabled_head_sha: current.head_sha}}
-          {:error, reason} -> fallback(current, "squash merge failed: #{format_reason(reason)}")
+      {:error, reason} ->
+        refused(current, record, pr_url, request, format_reason(reason), github, gh_opts)
+    end
+  end
+
+  # GitHub refuses auto-merge for a PR that can already merge (`clean status`), on a branch
+  # without protection, or in a repository that doesn't allow it. Look at the PR again: one
+  # that merged meanwhile takes the merged path, and a clean one with green or no checks is
+  # squash-merged now. Anything else goes to the landing agent.
+  defp refused(current, record, pr_url, request, reason, github, gh_opts) do
+    head = current.head_sha
+
+    case github.fetch_ci_status(pr_url, gh_opts) do
+      {:ok, %{state: "MERGED"}} ->
+        Logger.info("Auto-merge #{identifier(record)}: GitHub refused auto-merge (#{reason}); the PR is already merged pr_url=#{pr_url}")
+        {:ok, %{current | state: "merging", enabled_head_sha: head}}
+
+      {:ok, %{commit_sha: ^head} = status} ->
+        if mergeable_now?(status) do
+          merge_now(current, record, pr_url, request, reason, github, gh_opts)
+        else
+          fallback(current, "enabling auto-merge failed: #{reason}")
         end
 
-      {:error, reason} ->
-        fallback(current, "enabling auto-merge failed: #{format_reason(reason)}")
+      _status ->
+        fallback(current, "enabling auto-merge failed: #{reason}")
     end
+  end
+
+  defp merge_now(current, record, pr_url, request, reason, github, gh_opts) do
+    Logger.info("Auto-merge #{identifier(record)}: GitHub refused auto-merge (#{reason}); squash-merging the clean PR directly pr_url=#{pr_url} commit_sha=#{current.head_sha}")
+
+    case github.squash_merge(pr_url, request, gh_opts) do
+      :ok -> {:ok, %{current | state: "merging", enabled_head_sha: current.head_sha}}
+      {:error, merge_reason} -> fallback(current, "squash merge failed: #{format_reason(merge_reason)}")
+    end
+  end
+
+  # An open PR GitHub calls CLEAN whose checks all passed. No checks at all counts too: a
+  # repository without CI has nothing to wait for.
+  defp mergeable_now?(status) do
+    Map.get(status, :state) == "OPEN" and merge_state(status) == @clean_merge_state and
+      Enum.all?(Map.get(status, :checks, []), &(normalize(Map.get(&1, :conclusion)) in @passing_conclusions))
   end
 
   defp squash_request(activity, head) do
@@ -309,6 +345,7 @@ defmodule SymphonyElixir.AutoMerge do
   defp short_sha(sha) when is_binary(sha), do: "`#{String.slice(sha, 0, 7)}`"
   defp short_sha(_sha), do: "an unknown head"
 
+  defp format_reason(:clean_status), do: "the PR can already merge"
   defp format_reason({:gh_failed, _args, status, output}) when is_binary(output), do: "#{String.trim(output)} (exit #{status})"
   defp format_reason(reason), do: inspect(reason)
 

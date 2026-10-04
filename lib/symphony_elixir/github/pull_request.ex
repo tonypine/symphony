@@ -206,6 +206,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   @doc """
   Turns on GitHub auto-merge (squash, PR title and body) for the head in `request`. GitHub
   refuses it for a PR that can already merge; that comes back as `{:error, :clean_status}`.
+  Other refusals (no branch protection, auto-merge not allowed) come back as the `gh` failure.
   """
   @spec enable_auto_merge(String.t(), squash_request(), keyword()) :: :ok | {:error, term()}
   def enable_auto_merge(pr_url, request, opts \\ []) when is_binary(pr_url) and is_map(request) do

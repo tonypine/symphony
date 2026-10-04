@@ -393,8 +393,10 @@ agent:
   config: an edit applies to the next dispatch without a restart. Every continuation turn of a run
   keeps its profile. A CI fix or review feedback re-activation is a new run with its own kind.
 - The run history record keeps `run_kind`, `model` and `effort`, and the dispatch log line shows
-  `run_kind=… model=… effort=…` (`default` when nothing is added). The pre-push reviewer runs
-  inside the run it reviews, so that run's record also keeps `reviewer_profile` next to
+  `run_kind=… model=… effort=…` (`default` when nothing is added). A `review_feedback` dispatch
+  also names the latest pending PR comment it answers: `trigger_comment_id=…
+  trigger_comment_author=… trigger_comment="<first line>" pending_comments=<n>`. The pre-push
+  reviewer runs inside the run it reviews, so that run's record also keeps `reviewer_profile` next to
   `reviewer_tokens`. A QA run's record keeps its own `run_kind: qa`, `model` and `effort`.
 - The web dashboard and the terminal status dashboard show the kind, model and effort of each
   running run (and its reviewer's, when the pre-push review is on) and of the recent runs.
@@ -557,6 +559,10 @@ An optional outer-sandbox wrapper using `@anthropic-ai/sandbox-runtime`.
 - Symphony prefers a managed Unix socket. If the OS denies that managed socket bind with `EPERM`,
   Symphony falls back to a random `127.0.0.1` loopback TCP port. Explicit socket paths remain
   strict and report the bind error.
+- Managed socket dirs live under `SYMPHONY_MCP_SOCKET_ROOT` when set, otherwise under `/tmp` when
+  Symphony can write there, otherwise under `TMPDIR` (for example a sandbox's `/tmp/claude-501`).
+  Symphony logs the root it chose at startup. When `<root>/symphony-mcp-<id>/sock` would not fit
+  the 104-byte Unix `sun_path` limit, the dir is named after a short hash of the session ID.
 - Symphony emits `enableWeakerNestedSandbox: true` for Linux/Docker compatibility.
   `enable_weaker_network_isolation` maps directly to the same SRT setting; keep it `false`
   unless required.
@@ -686,8 +692,10 @@ pull_requests:
 - `poll_interval_ms` is shared by PR review polling and CI polling when checks are enabled.
 - PR polling detects GitHub merge-conflict signals, deduplicates by head/base identity, and injects
   conflict-resolution context into the next prompt. The agent still owns the merge resolution.
-- `review_comments.ignored_reviewers` skips those accounts entirely. Comments from the PR author
-  and the current `gh` user still count as review feedback, so your own review comments on an
+- `review_comments.ignored_reviewers` skips those accounts entirely. The Linear GitHub
+  integration's linkback comment is always skipped: comments by `linear-code`, `linear-code[bot]`
+  or `linear[bot]`, and any comment whose body starts with `<!-- linear-linkback -->`. Comments
+  from the PR author and the current `gh` user still count as review feedback, so your own review comments on an
   agent PR send the issue back to work on the same PR. Symphony ends every PR comment it posts
   with a hidden `<!-- symphony:agent -->` marker and skips those.
 - `checks.retry_failed_once` retries one likely-flaky failure before escalating.
@@ -699,15 +707,16 @@ pull_requests:
   with auto-merge on and a green head for this long falls back to the landing agent.
 - `auto_merge` (default: `true`, needs `enabled: true`) lands `Merging` tickets with GitHub
   auto-merge instead of a landing agent, so they take no agent slot:
-  - Symphony turns on auto-merge (squash, the PR title and body) once per PR head, or squash-merges
-    right away when GitHub says the PR can already merge. GitHub merges it when the required checks
-    pass, and Symphony moves the ticket to `Done`.
+  - Symphony turns on auto-merge (squash, the PR title and body) once per PR head. GitHub merges it
+    when the required checks pass, and Symphony moves the ticket to `Done`. When GitHub refuses
+    auto-merge (the PR can already merge, no branch protection, or the repository doesn't allow
+    it) and the PR is `CLEAN` with green checks or none, Symphony squash-merges it right away.
   - A PR that is `BEHIND` the base branch gets one GitHub "Update branch" per head; CI runs on the
     merged code and auto-merge fires when it passes.
   - A merge conflict moves the ticket to `In Progress` with the conflict context (an agent run), and
     a red head goes through the CI-failure fix loop with auto-merge left on, so the PR merges once
     the fix is green.
-  - When auto-merge can't be used (the repository doesn't allow it, no required checks, a
+  - When auto-merge can't be used (GitHub refuses it and the PR isn't clean and green, a
     permission error, or the PR stays blocked on a green head), Symphony logs the error, comments
     the reason on the ticket, and falls back to the landing agent for that stay in `Merging`.
   - `/api/v1/state` (`auto_merge`) and the dashboard show each PR's status, for example

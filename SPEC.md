@@ -699,6 +699,9 @@ Fields:
     automated, non-actionable status (e.g. `github-actions[bot]`, `jp-launch-control[bot]`).
     Do not list review bots such as `copilot-pull-request-reviewer[bot]`, whose comments
     are actionable reviews.
+  - Comments from the Linear GitHub integration (`linear-code`, `linear-code[bot]`,
+    `linear[bot]`) and any comment whose body starts with `<!-- linear-linkback -->` are always
+    skipped, on top of this list.
   - The PR author returned by `gh pr view` and the auto-detected current `gh` user (when
     `gh api user` succeeds) are Symphony's own account, which on a solo setup is also the
     human reviewer. Their comments count as reviewer feedback unless they are blank or
@@ -1137,6 +1140,10 @@ When enabled:
   fails, Auto Review stays on.
 - The post-PR transition (an active issue whose completed run opened a PR and has no rework signal)
   MUST target `state` instead of `In Review`.
+- The post-PR transition is a state move, not an agent run: it MUST count a PR attached to the
+  issue when the continuation retry refetches it (the run that opens the PR was dispatched without
+  one), and MUST NOT wait for an agent slot. An issue already waiting for a slot whose PR shows up
+  later MUST be moved by the next poll instead of dispatched.
 - The post-PR transition MUST NOT apply to an issue in `Merging`: that state is a human's merge
   approval, so Symphony MUST keep the issue in `Merging` and leave it with the landing agent.
 - `linear_update_state` MUST refuse `In Review` from agent sessions with a clear error telling the
@@ -1566,8 +1573,9 @@ not require recognizing or validating extension fields unless that extension is 
 - `pull_requests.poll_interval_ms`: positive integer or null; falls back to `issues.poll_interval_ms`
 - `pull_requests.review_comments.rework_delay_minutes`: polling-mode integer, default `10`
 - `pull_requests.review_comments.stale_after_days`: polling-mode integer, default `7`
-- `pull_requests.review_comments.ignored_reviewers`: polling-mode list of strings, default `[]`; comments from
-  the auto-detected current `gh` user and PR author are skipped only when Symphony posted them
+- `pull_requests.review_comments.ignored_reviewers`: polling-mode list of strings, default `[]`, on top of
+  the always-skipped Linear integration linkback; comments from the auto-detected current `gh` user
+  and PR author are skipped only when Symphony posted them
 - `pull_requests.review_comments.reply_after_addressing`: polling-mode boolean, default `false`
 - `pull_requests.review_comments.request_review_after_push`: polling-mode boolean, default `false`
 - `pull_requests.checks.enabled`: boolean, default `false`
@@ -1785,8 +1793,11 @@ Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `
 - On each poll of an open `Merging` PR, the poller MUST turn on auto-merge (GraphQL
   `enablePullRequestAutoMerge`, `SQUASH`, the PR title as `<title> (#<number>)` and its body,
   `expectedHeadOid` = the observed head) at most once per head, and not at all when GitHub already
-  shows auto-merge on. When GitHub refuses because the PR can already merge (`clean status`), the
-  poller squash-merges that head directly.
+  shows auto-merge on. When GitHub refuses (the PR can already merge, the branch has no protection,
+  the repository doesn't allow auto-merge), the poller MUST read the PR again: one already `MERGED`
+  takes the merged path below, and an open one at the same head with `mergeStateStatus == "CLEAN"`
+  and every check `SUCCESS`, `NEUTRAL` or `SKIPPED` (or no checks at all) is squash-merged directly
+  with the same `mergePullRequest` fields. The poller logs which path it took.
 - When `mergeStateStatus` is `BEHIND`, the poller MUST call
   `PUT /repos/{owner}/{repo}/pulls/{number}/update-branch` with `expected_head_sha` at most once per
   head. A failed call other than a conflict is retried on the next poll.
@@ -1798,8 +1809,8 @@ Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `
 - When GitHub reports the PR `MERGED` and Symphony turned on auto-merge for it (or the issue is in
   `Merging`), the poller MUST move the issue to `Done` (already `Done` is fine) and then clean up as
   for any merged PR. A failed transition is retried on the next poll.
-- When auto-merge can't be turned on (the repository doesn't allow it, the PR has no required
-  checks so GitHub reports it `UNSTABLE`, a permission error) or a squash merge fails, or the PR stays `BLOCKED` with
+- When auto-merge can't be turned on and the PR isn't merged or clean and green (a red or pending
+  check, `UNSTABLE`, `BEHIND`, a permission error, the PR can't be read), or a squash merge fails, or the PR stays `BLOCKED` with
   auto-merge on and a green head past `checks.landing_wait_timeout_ms`, the poller MUST log an
   error, comment the reason on the issue, and fall back: the orchestrator then dispatches the
   landing agent. The fallback lasts until the issue leaves `Merging`.
@@ -2355,6 +2366,12 @@ Subprocess launch parameters:
 - Working directory: workspace path
 - Transport/framing: the protocol transport required by the configured adapter
 
+A local agent subprocess SHOULD start at a lower CPU scheduling priority than Symphony (the Elixir
+implementation launches it through `nice -n 10`), so that it and everything it starts, which
+inherit that priority, cannot starve Symphony, QA passes or other runs on a shared host. When the OS
+refuses to lower the priority, the implementation SHOULD start the agent unchanged and log it. Each
+launch is logged with the agent's pid, command and run id.
+
 An agent subprocess MUST NOT outlive its session or the Symphony process. When the subprocess's
 transport closes, or Symphony stops (for example on SIGTERM), the implementation SHOULD send SIGTERM
 to the subprocess's process group and SIGKILL after a short grace period. Closing stdin alone is not
@@ -2389,6 +2406,9 @@ Notes:
 - Codex local launch prefers a managed Unix socket for Symphony's implicit MCP server. If the OS
   denies managed Unix socket binding with `EPERM`, the implementation falls back to a random
   `127.0.0.1` TCP listener. Explicit Unix socket paths remain strict and surface the bind error.
+- Managed MCP socket dirs are created under `SYMPHONY_MCP_SOCKET_ROOT` when set, otherwise under
+  `/tmp` when it is writable, otherwise under the system temp dir (`TMPDIR`). A socket path that
+  would exceed the 104-byte `sun_path` limit uses a short hash of the session ID as its dir name.
 - The implicit MCP server logs transport/framing failures with method, tool, request ID, payload
   byte size, MCP session ID, and transport when available. Malformed newline-delimited JSON returns
   a structured JSON-RPC parse error when the request ID can be recovered, and response-send failures

@@ -5,7 +5,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
   require Logger
   alias SymphonyElixir.{AgentEnv, AgentMcp, AgentSandboxConfig, Config, DependencyGate, McpServer, PathSafety, SSH}
-  alias SymphonyElixir.AgentProcesses
+  alias SymphonyElixir.{AgentPriority, AgentProcesses}
   alias SymphonyElixir.ClaudeCode.McpConfig
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Agent
@@ -93,7 +93,10 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
     read_opts = [required_mcp_server: required_mcp_server, issue: issue, mcp_log_workspace: mcp_log_workspace]
     # `claude -p` starts a new conversation each turn unless told which one to resume.
-    session = Map.put(session, :resume_session_id, Keyword.get(opts, :resume_session_id))
+    session =
+      session
+      |> Map.put(:resume_session_id, Keyword.get(opts, :resume_session_id))
+      |> Map.put(:run_id, Keyword.get(opts, :run_id))
 
     with {:ok, prompt} <- ProjectGuidePrompt.append_to_prompt(prompt, workspace, settings, :claude),
          {:ok, port, prompt_cleanup_paths} <- start_port(workspace, command, prompt, worker_host, session) do
@@ -780,8 +783,9 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
       args = base_args ++ claude_stream_json_args(base_args) ++ run_profile_args(session) ++ resume_args(session)
 
       case open_local_prompt_port(executable, args, prompt_path, workspace, provider_env) do
-        {:ok, port} ->
+        {:ok, port, priority} ->
           :ok = AgentProcesses.track(port, workspace: workspace)
+          :ok = AgentPriority.log_started(port, command, Map.get(session, :run_id), priority)
           {:ok, port, [prompt_path]}
 
         {:error, reason} ->
@@ -834,19 +838,23 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
             | args
           ]
 
-        {:ok,
-         Port.open(
-           {:spawn_executable, String.to_charlist(shell)},
-           [
-             :binary,
-             :exit_status,
-             :stderr_to_stdout,
-             line: @port_line_bytes,
-             args: Enum.map(shell_args, &String.to_charlist/1),
-             cd: String.to_charlist(workspace),
-             env: AgentEnv.build_with(provider_env)
-           ]
-         )}
+        {port_executable, port_args, priority} = AgentPriority.command(shell, Enum.map(shell_args, &String.to_charlist/1))
+
+        port =
+          Port.open(
+            {:spawn_executable, port_executable},
+            [
+              :binary,
+              :exit_status,
+              :stderr_to_stdout,
+              line: @port_line_bytes,
+              args: port_args,
+              cd: String.to_charlist(workspace),
+              env: AgentEnv.build_with(provider_env)
+            ]
+          )
+
+        {:ok, port, priority}
     end
   rescue
     exception ->

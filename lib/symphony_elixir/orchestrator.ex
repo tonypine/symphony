@@ -2483,6 +2483,24 @@ defmodule SymphonyElixir.Orchestrator do
     finish_poll_cycle(state, System.monotonic_time(:millisecond))
   end
 
+  # A continuation stays a retry so its continuation flag reaches the headroom check; waiting for
+  # a slot would send it back through candidate selection, where a headroom hold sees a new run.
+  defp defer_dispatch_readiness_request(%State{} = state, {:active_retry, issue, attempt, %{continuation: true} = metadata}) do
+    Logger.debug("Deferring continuation retry dispatch: dispatch readiness task already in flight for #{issue_context(issue)}")
+
+    schedule_issue_retry(
+      state,
+      issue.id,
+      attempt,
+      Map.merge(metadata, %{
+        identifier: issue.identifier,
+        title: issue.title,
+        delay_type: :continuation,
+        error: "dispatch readiness task already in flight; deferred"
+      })
+    )
+  end
+
   defp defer_dispatch_readiness_request(%State{} = state, {:active_retry, issue, attempt, metadata}) do
     Logger.debug("Deferring active retry dispatch: dispatch readiness task already in flight for #{issue_context(issue)}")
     wait_for_slot(state, issue, attempt, metadata, "dispatch readiness task already in flight")
@@ -2814,6 +2832,12 @@ defmodule SymphonyElixir.Orchestrator do
     waiting = Map.get(previous_waiting, issue.id, %{})
 
     cond do
+      # Its PR showed up after its retry started waiting; the move takes no slot.
+      Map.has_key?(previous_waiting, issue.id) and post_pr_quiet_active_issue?(issue, state) ->
+        metadata = Map.take(waiting, [:repo_key, :worker_host])
+        {:noreply, state} = handle_post_pr_quiet_active_issue(state, issue, issue.id, Map.get(waiting, :attempt), metadata)
+        {state, finish_waiting?}
+
       not dispatch_eligible?(issue, state, active_states, terminal_states) ->
         {state, finish_waiting?}
 
@@ -3344,7 +3368,7 @@ defmodule SymphonyElixir.Orchestrator do
         slot = dispatch_slot_label(state, issue)
 
         Logger.info(
-          "Dispatching issue to agent: #{issue_context(issue)} pid=#{inspect(pid)} attempt=#{inspect(attempt)} worker_host=#{worker_host || "local"} slot=#{slot} #{run_profile_log_fields(run_profile)}"
+          "Dispatching issue to agent: #{issue_context(issue)} pid=#{inspect(pid)} attempt=#{inspect(attempt)} worker_host=#{worker_host || "local"} slot=#{slot} #{run_profile_log_fields(run_profile)}#{trigger_comment_log_fields(issue, run_profile, repo_key)}"
         )
 
         running_entry =
@@ -3437,6 +3461,14 @@ defmodule SymphonyElixir.Orchestrator do
   defp run_profile_log_fields(%{kind: kind, model: model, effort: effort}) do
     "run_kind=#{kind} model=#{model || "default"} effort=#{effort || "default"}"
   end
+
+  # Names the PR comment a review_feedback run answers, so a run started by a stray
+  # comment can be traced to it.
+  defp trigger_comment_log_fields(%Issue{id: issue_id}, %{kind: :review_feedback}, repo_key) do
+    " " <> PrReviewPoller.trigger_comment_log_fields(issue_id, repo_key_opt(repo_key))
+  end
+
+  defp trigger_comment_log_fields(_issue, _run_profile, _repo_key), do: ""
 
   defp state_reconcile_grace_until_ms do
     System.monotonic_time(:millisecond) + @fresh_dispatch_state_grace_ms
@@ -7179,11 +7211,14 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  # The run that opens the PR was dispatched without one, so the PR attached to the refetched
+  # issue counts too.
   defp post_pr_quiet_active_issue?(%Issue{id: issue_id} = issue, %State{} = state)
        when is_binary(issue_id) do
-    completed_metadata = Map.get(state.completed_run_metadata, issue_id, %{})
+    completed_metadata = Map.get(state.completed_run_metadata, issue_id)
 
-    completed_run_has_pr?(completed_metadata) and
+    is_map(completed_metadata) and
+      (completed_run_has_pr?(completed_metadata) or is_binary(URLUtils.pull_request_url(issue))) and
       active_issue_state?(issue.state) and
       !rework_state?(issue.state) and
       !merging_state?(issue.state) and
@@ -7195,8 +7230,6 @@ defmodule SymphonyElixir.Orchestrator do
   defp completed_run_has_pr?(completed_metadata) when is_map(completed_metadata) do
     is_binary(URLUtils.pull_request_url(completed_metadata))
   end
-
-  defp completed_run_has_pr?(_completed_metadata), do: false
 
   defp pending_rework_signal?(%Issue{} = issue, completed_metadata) do
     issue_updated_after_last_run?(issue, completed_metadata) or
