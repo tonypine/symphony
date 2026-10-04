@@ -9,7 +9,8 @@ defmodule SymphonyElixir.AgentTools.ProtectedPaths do
   outside the sandbox, so they refuse a branch that changes a protected path itself. Changes
   merged from the base branch don't count: the diff starts at the merge-base with it. Nor do files
   identical to the branch's remote copy: a person may have pushed them. So may an agent's shell
-  `git push`, which this check never sees; only a check on the pull request itself covers that.
+  `git push`, which this check never sees; `mix protected_paths.check`, run in CI on the pull
+  request, covers that.
   """
 
   alias SymphonyElixir.AgentSandboxConfig
