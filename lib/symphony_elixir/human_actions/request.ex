@@ -20,9 +20,13 @@ defmodule SymphonyElixir.HumanActions.Request do
   its issue moves on: after the request, the issue leaves a state outside `issues.states.active`
   (`Backlog` back to `Todo`, `In Review` to `Merging`). The requesting agent's own move to
   `Backlog` comes from an active state, so it keeps the request open.
+
+  A request is also closed once it is withdrawn: a reply under it that starts with
+  `## Action withdrawn`, which `linear_withdraw_human_action` posts with its reason.
   """
 
   @heading "## Action needed:"
+  @withdrawn_heading "## Action withdrawn"
   @field_pattern ~r/^\*\*(Why|Unblocks|Time):\*\*\s*(.*)$/i
   @steps_marker ~r/^\*\*Steps:\*\*\s*$/i
   @list_item ~r/^\s*(?:\d+[.)]|[-*])\s+(?:\[[ xX]\]\s+)?(.+)$/
@@ -73,6 +77,15 @@ defmodule SymphonyElixir.HumanActions.Request do
       "\n"
     )
   end
+
+  @doc "Renders the reply that withdraws a request, with the reason."
+  @spec render_withdrawal(String.t()) :: String.t()
+  def render_withdrawal(reason), do: "#{@withdrawn_heading}\n\n#{String.trim(reason)}"
+
+  @doc "Whether a comment body withdraws the request it replies to."
+  @spec withdrawal?(String.t() | nil) :: boolean()
+  def withdrawal?(body) when is_binary(body), do: body |> String.trim_leading() |> String.starts_with?(@withdrawn_heading)
+  def withdrawal?(_body), do: false
 
   @doc "Parses a comment body; nil unless it starts with the request heading."
   @spec parse(String.t() | nil) :: t() | nil
