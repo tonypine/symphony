@@ -1,9 +1,13 @@
 defmodule SymphonyElixir.Workpad do
   @moduledoc """
   Deterministic issue workpad bootstrap before the first agent turn.
+
+  Each Linear call waits out a rate limit or a dropped connection
+  (`SymphonyElixir.Linear.TransientRetry`, with the run's `:linear_retry_opts`)
+  instead of failing the run.
   """
 
-  alias SymphonyElixir.{AgentLabels, AgentTools, Config, Linear.Issue, Tracker}
+  alias SymphonyElixir.{AgentLabels, AgentTools, Config, Linear.Issue, Linear.TransientRetry, Tracker}
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
 
   @in_progress_state "In Progress"
@@ -20,7 +24,7 @@ defmodule SymphonyElixir.Workpad do
     if pr_mode?(opts) do
       {:ok, issue}
     else
-      with {:ok, issue} <- ensure_in_progress(issue) do
+      with {:ok, issue} <- ensure_in_progress(issue, opts) do
         ensure_workpad(issue, workspace, opts)
       end
     end
@@ -71,9 +75,11 @@ defmodule SymphonyElixir.Workpad do
 
   defp todo_state?(_state), do: false
 
-  defp ensure_in_progress(%Issue{id: issue_id, state: state} = issue) when is_binary(issue_id) do
+  defp ensure_in_progress(%Issue{id: issue_id, state: state} = issue, opts) when is_binary(issue_id) do
     if todo_state?(state) do
-      case Tracker.update_issue_state(issue_id, @in_progress_state) do
+      move = fn -> Tracker.update_issue_state(issue_id, @in_progress_state) end
+
+      case with_linear_retry(move, "moving #{issue_context(issue)} to #{@in_progress_state}", opts) do
         :ok ->
           {:ok, %{issue | state: @in_progress_state}}
 
@@ -85,7 +91,7 @@ defmodule SymphonyElixir.Workpad do
     end
   end
 
-  defp ensure_in_progress(%Issue{} = issue), do: {:ok, issue}
+  defp ensure_in_progress(%Issue{} = issue, _opts), do: {:ok, issue}
 
   defp ensure_workpad(%Issue{} = issue, workspace, opts) do
     settings = Keyword.get(opts, :settings) || Config.settings!()
@@ -103,20 +109,30 @@ defmodule SymphonyElixir.Workpad do
     end
   end
 
+  # The read and the create are retried together: a create that timed out after Linear
+  # saved the comment is found by the next read instead of posted twice.
   defp ensure_linear_workpad(issue, workspace, heading, opts) do
+    find_or_create = fn -> find_or_create_linear_workpad(issue, workspace, heading, opts) end
+
+    case with_linear_retry(find_or_create, "bootstrapping the workpad for #{issue_context(issue)}", opts) do
+      {:ok, issue} -> {:ok, issue}
+      {:error, reason} -> {:error, {:workpad_bootstrap_comment_failed, reason}}
+    end
+  end
+
+  defp find_or_create_linear_workpad(issue, workspace, heading, opts) do
     context = %{issue: issue, workspace: workspace}
 
     with {:ok, comments} <- AgentTools.Linear.get_comments(context, @comment_limit, linear_opts(opts)),
-         nil <- find_workpad_comment(comments),
-         {:ok, issue} <- create_linear_workpad(issue, workspace, heading, opts) do
-      {:ok, issue}
+         nil <- find_workpad_comment(comments) do
+      create_linear_workpad(issue, workspace, heading, opts)
     else
       workpad_comment when is_map(workpad_comment) ->
         record_workpad_comment(workpad_comment, opts)
         {:ok, put_existing_workpad_comment(issue, workpad_comment)}
 
-      {:error, reason} ->
-        {:error, {:workpad_bootstrap_comment_failed, reason}}
+      {:error, _reason} = error ->
+        error
     end
   end
 
@@ -145,8 +161,9 @@ defmodule SymphonyElixir.Workpad do
 
   defp create_tracker_workpad(%Issue{id: issue_id} = issue, workspace, heading, opts) when is_binary(issue_id) do
     body = bootstrap_body(heading, workspace, opts)
+    create = fn -> Tracker.create_comment(issue_id, body) end
 
-    case Tracker.create_comment(issue_id, body) do
+    case with_linear_retry(create, "posting the workpad for #{issue_context(issue)}", opts) do
       :ok ->
         {:ok, put_bootstrap_comment(issue, heading, body, opts)}
 
@@ -219,6 +236,12 @@ defmodule SymphonyElixir.Workpad do
   defp linear_opts(opts) do
     Keyword.take(opts, [:linear_client, :settings])
   end
+
+  defp with_linear_retry(fun, label, opts) do
+    TransientRetry.run(fun, opts |> Keyword.get(:linear_retry_opts, []) |> Keyword.put(:label, label))
+  end
+
+  defp issue_context(%Issue{id: issue_id, identifier: identifier}), do: "issue_id=#{issue_id} issue_identifier=#{identifier}"
 
   defp environment_stamp(workspace, opts) do
     "#{worker_host(opts)}:#{workspace_path(workspace, opts)}@#{short_sha(workspace, opts)}"
