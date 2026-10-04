@@ -220,35 +220,47 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       :ok = put_pending_conflict()
     end
 
-    test "moves to Auto Review instead of Backlog once CI on the head it pushed turns green" do
-      pending = {:ok, %{commit_sha: "sha-fixed", checks: @pending_checks}}
-      green = {:ok, %{commit_sha: "sha-fixed", checks: @green_checks}}
-      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:by_turn, [pending, pending, pending, green]})
+    test "moves to Auto Review as soon as CI runs on the head it pushed, instead of turning until it is parked" do
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-fixed", checks: @pending_checks}})
 
       log = capture_log(fn -> run_issue!("In Progress", heads: ["sha-dirty", "sha-fixed"], max_turns: 6) end)
 
-      assert turns() == 4
+      assert turns() == 1
       assert_received {:memory_tracker_state_update, "issue-progress", "Auto Review"}
       refute_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
-      assert log =~ "Not parking issue_id=issue-progress issue_identifier=TP-337; waiting for CI on its pushed head sha-fixed"
-      assert log =~ "CI is green on issue_id=issue-progress issue_identifier=TP-337's pushed head sha-fixed on its PR; moving to Auto Review"
+      assert log =~ "CI is running on issue_id=issue-progress issue_identifier=TP-337's pushed head sha-fixed on its PR; moving to Auto Review"
       refute log =~ "Parking"
+    end
+
+    test "waits a turn for the checks of the head it pushed to show up, then moves to Auto Review" do
+      no_checks = {:ok, %{commit_sha: "sha-fixed", checks: []}}
+      pending = {:ok, %{commit_sha: "sha-fixed", checks: @pending_checks}}
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:by_turn, [no_checks, pending]})
+
+      run_issue!("In Progress", heads: ["sha-dirty", "sha-fixed"], max_turns: 6)
+
+      assert turns() == 2
+      assert_received {:memory_tracker_state_update, "issue-progress", "Auto Review"}
+      refute_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
     end
 
     test "with Auto Review off moves to In Review as soon as its pushed head is green" do
       Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-fixed", checks: @green_checks}})
 
-      run_issue!("In Progress", heads: ["sha-dirty", "sha-fixed"], auto_review: nil)
+      log = capture_log(fn -> run_issue!("In Progress", heads: ["sha-dirty", "sha-fixed"], auto_review: nil) end)
 
       assert turns() == 1
       assert_received {:memory_tracker_state_update, "issue-progress", "In Review"}
+      assert log =~ "CI is green on issue_id=issue-progress issue_identifier=TP-337's pushed head sha-fixed on its PR; moving to In Review"
     end
 
-    test "is still parked when it pushed nothing, its head is red, or its head is not the PR head" do
+    test "is still parked when it pushed nothing, its head is red or has no checks, or its head is not the PR head" do
       for {heads, pr_head_result} <- [
             {["sha-same"], {:ok, %{commit_sha: "sha-same", checks: @green_checks}}},
             {["sha-dirty", "sha-fixed"], {:ok, %{commit_sha: "sha-fixed", checks: @red_checks}}},
+            {["sha-dirty", "sha-fixed"], {:ok, %{commit_sha: "sha-fixed", checks: []}}},
             {["sha-dirty", "sha-fixed"], {:ok, %{commit_sha: "sha-dirty", checks: @green_checks}}},
+            {["sha-dirty", "sha-fixed"], {:ok, %{commit_sha: "sha-dirty", checks: @pending_checks}}},
             {["sha-dirty", "sha-fixed"], {:error, :gh_unavailable}}
           ] do
         Application.put_env(:symphony_elixir, :progress_pr_head_result, pr_head_result)
