@@ -1999,7 +1999,7 @@ defmodule SymphonyElixir.Config.Schema do
     def changeset(schema, attrs) do
       schema
       |> cast(attrs, @fields, empty_values: [])
-      |> validate_required([:label])
+      |> Schema.validate_present([:label])
       |> validate_format(:label, ~r/\S/, message: "must not be blank")
       |> validate_number(:interval_ms, greater_than: 0)
       |> validate_number(:min_update_interval_ms, greater_than_or_equal_to: 0)
