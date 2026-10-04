@@ -381,7 +381,9 @@ Repos… opens the Repos window, with one row per entry of `repositories:` in co
   when it has none.
 - **Linear**: the route's team, projects, labels and assignee, or `no route`.
 - **WORKFLOW.md**: `found, valid`, `found, invalid` or `missing`, in red when it doesn't load, with
-  Symphony's error under it. Symphony keeps using the last good workflow until the file is fixed.
+  Symphony's error under it. Symphony keeps using the last good workflow until the file is fixed. With
+  the default `workflow_source: ref`, this is the file committed on the base branch, so a broken
+  `WORKFLOW.md` pushed there shows as invalid even though the last good one still runs.
 - **Last fetch**: how long ago Symphony last ran `git fetch origin` before a dispatch, `ok` or `failed`
   (in red, with git's error), or `none yet`.
 - **Agents**: the identifiers of the running agents on the repo, with their worktree paths under them, or

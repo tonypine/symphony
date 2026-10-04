@@ -6,6 +6,7 @@ defmodule SymphonyElixir.WorkflowSourceTest do
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.{Cache, SystemSchema}
   alias SymphonyElixir.{Paths, Workflow, WorkflowSource, Workspace}
+  alias SymphonyElixir.Repo.Status, as: RepoStatus
   alias SymphonyElixir.Repo.Supervisor, as: RepoSupervisor
 
   @git_env [
@@ -205,6 +206,35 @@ defmodule SymphonyElixir.WorkflowSourceTest do
       assert {:ok, %{prompt: "Good prompt"}} = Config.workflow_for_repo("app")
     end
 
+    test "an invalid workflow on the ref is reported until the ref loads again, across a restart", %{root: root} do
+      %{checkout: checkout, other: other} = git_repos!(root, "Good prompt")
+      write_symphony!(root, checkout)
+      {:ok, repo} = Config.repo("app")
+      assert WorkflowSource.refresh(repo) == :ok
+      assert WorkflowSource.ref_error(repo) == nil
+
+      push_workflow!(other, "---\nfoo: [\n---\nBad prompt\n")
+      capture_log(fn -> assert {:error, _reason} = WorkflowSource.refresh(repo, fetch: true) end)
+      assert {:workflow_parse_error, _reason} = WorkflowSource.ref_error(repo)
+
+      # A restart refreshes without fetching and reads the same broken ref.
+      capture_log(fn -> assert WorkflowSource.refresh_all(Config.system!()) == :ok end)
+
+      ensure_repo_registry_started!()
+      start_supervised!({RepoSupervisor, repo})
+      assert {:ok, %{prompt: "Good prompt"}} = RepoSupervisor.current_workflow("app")
+
+      assert {:ok, [%{workflow: workflow}]} = RepoStatus.list([])
+      assert %{found: true, status: "invalid", path: path, error: "WORKFLOW.md on the base branch does not load" <> message} = workflow
+      assert path == WorkflowSource.read_path(repo)
+      assert message =~ "Symphony keeps the last good workflow: Failed to parse WORKFLOW.md:"
+
+      push_workflow!(other, "Fixed prompt\n")
+      assert WorkflowSource.refresh(repo, fetch: true) == :ok
+      assert WorkflowSource.ref_error(repo) == nil
+      assert {:ok, [%{workflow: %{found: true, status: "valid", error: nil}}]} = RepoStatus.list([])
+    end
+
     test "a workflow missing on the ref keeps the last known good workflow", %{root: root} do
       %{checkout: checkout, other: other} = git_repos!(root, "Good prompt")
       repo = repo(checkout)
@@ -222,6 +252,45 @@ defmodule SymphonyElixir.WorkflowSourceTest do
 
       assert log =~ "Failed to load workflow from ref repo=app"
       assert File.read!(WorkflowSource.read_path(repo)) == "Good prompt\n"
+
+      write_symphony!(root, checkout)
+      assert {:ok, [%{workflow: workflow}]} = RepoStatus.list([])
+      assert %{found: false, status: "missing", error: message} = workflow
+
+      assert message =~ "keeps the last good workflow: git show origin/HEAD:WORKFLOW.md exited with status 128: fatal: path 'WORKFLOW.md'"
+    end
+
+    test "a base branch ref that disappears is reported as a missing workflow", %{root: root} do
+      %{checkout: checkout} = git_repos!(root, "Good prompt")
+      write_symphony!(root, checkout, base_branch: "main")
+      {:ok, repo} = Config.repo("app")
+      assert WorkflowSource.refresh(repo) == :ok
+
+      git!(checkout, ["update-ref", "-d", "refs/remotes/origin/main"])
+      capture_log(fn -> assert {:error, {:workflow_ref_not_found, ["origin/main"]}} = WorkflowSource.refresh(repo) end)
+
+      assert {:ok, [%{workflow: %{found: false, status: "missing", error: message}}]} = RepoStatus.list([])
+      assert message =~ "keeps the last good workflow: no origin/main ref in the checkout"
+    end
+
+    test "a ref error with no snapshot to keep, or that does not decode, is not reported", %{root: root} do
+      %{checkout: checkout, other: other} = git_repos!(root, "Good prompt")
+      repo = repo(checkout)
+      assert WorkflowSource.refresh(repo) == :ok
+
+      snapshot = WorkflowSource.read_path(repo)
+      push_workflow!(other, "---\nfoo: [\n---\nBad prompt\n")
+      capture_log(fn -> WorkflowSource.refresh(repo, fetch: true) end)
+      assert WorkflowSource.ref_error(repo) != nil
+
+      File.write!(snapshot <> ".ref-error", "not a term")
+      assert WorkflowSource.ref_error(repo) == nil
+
+      File.rm!(snapshot)
+      capture_log(fn -> WorkflowSource.refresh(repo) end)
+      refute File.exists?(snapshot <> ".ref-error")
+      assert WorkflowSource.ref_error(repo) == nil
+      assert WorkflowSource.ref_error(repo(checkout, workflow_source: "local")) == nil
     end
 
     test "a missing base branch ref is reported", %{root: root} do

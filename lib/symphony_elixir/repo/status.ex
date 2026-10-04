@@ -92,14 +92,39 @@ defmodule SymphonyElixir.Repo.Status do
         {:ok, status} -> status
         :unavailable -> load_workflow(repo)
       end
+      |> with_ref_error(repo)
 
     %{
       path: status.path,
       found: status.status != :missing,
       status: Atom.to_string(status.status),
-      error: status.error && status.error |> Config.format_error() |> safe_message()
+      error: status.error && status.error |> workflow_error() |> safe_message()
     }
   end
+
+  # The store reads the last good snapshot while the workflow on the base branch
+  # does not load, so it says valid: report the ref's error instead.
+  defp with_ref_error(%{status: :valid} = status, repo) do
+    case WorkflowSource.ref_error(repo) do
+      nil -> status
+      reason -> %{status | status: ref_status(reason), error: {:workflow_ref_error, reason}}
+    end
+  end
+
+  defp with_ref_error(status, _repo), do: status
+
+  defp ref_status({:git_failed, _args, _status, _output}), do: :missing
+  defp ref_status({:workflow_ref_not_found, _refs}), do: :missing
+  defp ref_status(_reason), do: :invalid
+
+  defp workflow_error({:workflow_ref_error, reason}),
+    do: "WORKFLOW.md on the base branch does not load, so Symphony keeps the last good workflow: #{ref_error(reason)}"
+
+  defp workflow_error(reason), do: Config.format_error(reason)
+
+  defp ref_error({:git_failed, _args, _status, _output} = reason), do: fetch_error(reason)
+  defp ref_error({:workflow_ref_not_found, refs}), do: "no #{Enum.join(refs, ", ")} ref in the checkout"
+  defp ref_error(reason), do: Config.format_error(reason)
 
   # A repo whose store is not running (it was added after startup) reads its file.
   defp load_workflow(repo) do

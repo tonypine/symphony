@@ -3818,7 +3818,10 @@ Minimum endpoints:
   - `workflow.status` is `valid`, `missing` or `invalid`, from the repo's workflow store (the
     file is read directly for a repo with no running store); `found` is false only when missing,
     and `error` carries the load error. A store keeps serving the last good workflow while its
-    file is missing or invalid.
+    file is missing or invalid. For `workflow_source: ref`, a `WORKFLOW.md` that is missing or
+    invalid on the base branch ref (or a ref that no longer resolves) is reported as `missing` or
+    `invalid` with that error while the last good snapshot is kept, until the ref loads again;
+    the error is kept next to the snapshot, so a restart still reports it.
   - `last_fetch` is the last `git fetch origin` before a dispatch on this host (the worktree
     source, Symphony's clone, or the checkout `WORKFLOW.md` is read from), with `result` `ok` or
     `error`; `null` until the first one. SSH-worker fetches run inside the remote prepare script
