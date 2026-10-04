@@ -8,6 +8,7 @@ defmodule SymphonyElixir.ConfigSplitTest do
   alias SymphonyElixir.Config.SystemSchema
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.PromptBuilder
+  alias SymphonyElixir.QaAgent.Selection
   alias SymphonyElixir.Repo.Supervisor, as: RepoSupervisor
 
   setup do
@@ -272,6 +273,98 @@ defmodule SymphonyElixir.ConfigSplitTest do
              RepoWorkflowSchema.parse(%{"push_check" => %{"command" => "check", "paths" => ["*.ex", " "]}})
 
     assert message =~ "push_check.paths must contain only non-empty strings"
+  end
+
+  test "repo workflow auto_review.playbooks merge per kind over operator playbooks for that repo only", %{root: root} do
+    mac_repo =
+      write_repo!(root, "mac", """
+      ---
+      auto_review:
+        playbooks:
+          macos_app:
+            paths: ["app/**"]
+          api:
+            paths: ["api/**"]
+            prompt: "### Playbook: api"
+      ---
+      Mac prompt
+      """)
+
+    other_repo = write_repo!(root, "other", "Other prompt\n")
+
+    write_symphony_text!(root, """
+    issues:
+      provider: memory
+    agent:
+      runtime: codex
+      command: codex app-server
+    auto_review:
+      enabled: true
+      playbooks:
+        macos_app:
+          build: make app
+          app: build/App.app
+        cli:
+          paths: ["bin/**"]
+    repositories:
+      - key: mac
+        workflow: #{Path.join(mac_repo.path, "WORKFLOW.md")}
+        route:
+          team: Test
+        default: true
+      - key: other
+        workflow: #{Path.join(other_repo.path, "WORKFLOW.md")}
+        route:
+          team: Test
+          labels:
+            - other
+    """)
+
+    SymphonyElixir.Workflow.set_symphony_file_path(Path.join(root, "symphony.yml"))
+
+    mac_settings = Config.settings_for_repo!("mac")
+    other_settings = Config.settings_for_repo!("other")
+
+    assert mac_settings.auto_review.enabled
+    assert mac_settings.auto_review.playbooks["macos_app"] == %{"build" => "make app", "app" => "build/App.app", "paths" => ["app/**"]}
+    assert mac_settings.auto_review.playbooks["cli"] == %{"paths" => ["bin/**"]}
+    assert other_settings.auto_review.playbooks == %{"macos_app" => %{"build" => "make app", "app" => "build/App.app"}, "cli" => %{"paths" => ["bin/**"]}}
+
+    mac_playbooks = Map.new(Selection.playbooks(mac_settings.auto_review), &{&1.kind, &1})
+    other_playbooks = Map.new(Selection.playbooks(other_settings.auto_review), &{&1.kind, &1})
+
+    assert %{paths: ["app/**"], build: "make app", app: "build/App.app"} = mac_playbooks["macos_app"]
+    assert %{paths: ["api/**"], prompt: "### Playbook: api"} = mac_playbooks["api"]
+    assert other_playbooks["macos_app"].paths != ["app/**"]
+    refute Map.has_key?(other_playbooks, "api")
+
+    issue = %Issue{id: "issue-1", identifier: "TP-1", title: "Change", labels: []}
+    assert {:run, [%{kind: "macos_app"}]} = Selection.decide(issue, ["app/Main.kt"], mac_settings.auto_review)
+    assert {:skip, _reason} = Selection.decide(issue, ["app/Main.kt"], other_settings.auto_review)
+  end
+
+  test "repo workflow auto_review accepts only playbooks maps", %{root: root} do
+    for {front_matter, expected} <- [
+          {"auto_review:\n  enabled: true", ~r/operator-level key `auto_review.enabled`.*only `auto_review.playbooks`.*symphony.yml/},
+          {"auto_review: true", ~r/auto_review must be a map/},
+          {"auto_review:\n  playbooks: [macos_app]", ~r/auto_review.playbooks must be a map of playbook kinds/},
+          {"auto_review:\n  playbooks:\n    macos_app: on", ~r/auto_review.playbooks.macos_app must be a map/}
+        ] do
+      repo = write_repo!(root, "app", "---\n#{front_matter}\n---\nRepo prompt\n")
+      write_symphony!(root, [repo])
+      SymphonyElixir.Workflow.set_symphony_file_path(Path.join(root, "symphony.yml"))
+      Cache.clear()
+
+      assert_raise ArgumentError, expected, fn -> Config.settings!() end
+    end
+
+    for front_matter <- ["auto_review:", "auto_review:\n  playbooks:", "auto_review:\n  playbooks:\n    macos_app:"] do
+      repo = write_repo!(root, "app", "---\n#{front_matter}\n---\nRepo prompt\n")
+      write_symphony!(root, [repo])
+      Cache.clear()
+
+      assert Config.settings!().auto_review.playbooks == %{}
+    end
   end
 
   test "system schema accepts operator-level verification defaults" do

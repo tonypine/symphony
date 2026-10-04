@@ -1924,6 +1924,39 @@ defmodule SymphonyElixir.Config.Schema do
 
     @type t :: %__MODULE__{}
 
+    defmodule Android do
+      @moduledoc false
+      use Ecto.Schema
+      import Ecto.Changeset
+
+      @type t :: %__MODULE__{}
+
+      @primary_key false
+      @fields [:avd, :sdk_root, :boot_timeout_ms, :idle_timeout_ms]
+
+      # Host settings for the Android emulator; the build command and APK path are per-repository
+      # playbook settings.
+      embedded_schema do
+        field(:avd, :string)
+        field(:sdk_root, :string)
+        field(:boot_timeout_ms, :integer, default: 180_000)
+        field(:idle_timeout_ms, :integer, default: 600_000)
+      end
+
+      @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+      def changeset(schema, attrs) do
+        schema
+        |> cast(attrs, @fields, empty_values: [], message: fn field, _meta -> cast_message(field) end)
+        |> validate_format(:avd, ~r/\A[A-Za-z0-9._-]+\z/, message: "must be an AVD name such as Pixel_3a_API_34")
+        |> validate_format(:sdk_root, ~r/\S/, message: "must not be blank")
+        |> validate_number(:boot_timeout_ms, greater_than: 0, message: "must be a positive integer")
+        |> validate_number(:idle_timeout_ms, greater_than: 0, message: "must be a positive integer")
+      end
+
+      defp cast_message(field) when field in [:avd, :sdk_root], do: "must be a string"
+      defp cast_message(_field), do: "must be a positive integer"
+    end
+
     @primary_key false
     @fields [
       :enabled,
@@ -1957,12 +1990,14 @@ defmodule SymphonyElixir.Config.Schema do
       field(:skip_globs, {:array, :string}, default: [])
       field(:playbooks, :map, default: %{})
       field(:worker_host, :string)
+      embeds_one(:android, Android, on_replace: :update, defaults_to_struct: true)
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
       schema
       |> cast(attrs, @fields, empty_values: [])
+      |> cast_embed(:android, with: &Android.changeset/2)
       |> Schema.validate_present([:state])
       |> validate_format(:worker_host, ~r/\A[^\s-]\S*\z/, message: "must be an SSH host such as qa@qa-vm.local or qa-vm:2222")
       |> validate_inclusion(:kind, ["codex", "claude"])
