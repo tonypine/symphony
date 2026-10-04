@@ -125,6 +125,38 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     assert_received {:memory_tracker_comment, "issue-progress", "Symphony parked this issue in Backlog" <> _note}
   end
 
+  test "empty Rework turns while CI on the pushed PR head is pending do not park the issue" do
+    pending = [%{name: "macos-e2e", status: "IN_PROGRESS", conclusion: nil}]
+    Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-pushed", checks: pending}})
+
+    run_issue!("Rework", heads: ["sha-pushed"], max_turns: 4)
+
+    assert turns() == 4
+    assert_received {:pr_head_fetched, @pr_url}
+    refute_received {:memory_tracker_state_update, _issue_id, _state}
+  end
+
+  test "empty Rework turns with no pending CI on the PR head still park the issue" do
+    pending = [%{name: "macos-e2e", status: "IN_PROGRESS", conclusion: nil}]
+    green = [%{name: "macos-e2e", status: "COMPLETED", conclusion: "SUCCESS"}]
+
+    for pr_head_result <- [
+          {:ok, %{commit_sha: "sha-pushed", checks: green}},
+          {:ok, %{commit_sha: "sha-pushed", checks: []}},
+          {:ok, %{commit_sha: "sha-other", checks: pending}},
+          {:error, :gh_unavailable}
+        ] do
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, pr_head_result)
+      Application.delete_env(:symphony_elixir, :progress_agent_turns)
+
+      run_issue!("Rework", heads: ["sha-pushed"], max_turns: 4)
+
+      assert turns() == 2
+      assert_received {:pr_head_fetched, @pr_url}
+      assert_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+    end
+  end
+
   test "a turn that adds a commit or follows a state change resets the empty-turn count" do
     run_issue!("In Progress",
       heads: ["sha-1", "sha-1", "sha-2", "sha-2", "sha-2"],
