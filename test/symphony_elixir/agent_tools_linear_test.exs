@@ -269,6 +269,22 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
   end
 
   describe "secret-prefix rejection" do
+    test "update_subissue rejects a secret in any text field before calling Linear" do
+      workspace = tmp_workspace!("linear-agent-update-subissue-secret")
+      context = secret_context(workspace)
+      token = "ghp_" <> String.duplicate("A", 24)
+      no_linear = fn _query, _variables, _opts -> flunk("Linear should not be called for secret-bearing fields") end
+
+      try do
+        for attrs <- [%{"title" => token}, %{"description" => "key " <> token}, %{"cancel_reason" => "leaked " <> token}] do
+          assert {:error, :secret_pattern_detected} =
+                   Linear.update_subissue(context, Map.put(attrs, "identifier", "TP-3"), dir: Path.join(workspace, "audit"), linear_client: no_linear)
+        end
+      after
+        File.rm_rf(workspace)
+      end
+    end
+
     test "add_comment rejects high-confidence secret prefixes and accepts normal body" do
       workspace = tmp_workspace!("linear-agent-comment-secret")
       audit_dir = Path.join(workspace, "audit")

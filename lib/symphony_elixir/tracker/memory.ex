@@ -139,6 +139,28 @@ defmodule SymphonyElixir.Tracker.Memory do
     end
   end
 
+  @spec fetch_plan_comments(String.t()) :: {:ok, SymphonyElixir.PlanComments.feedback()} | {:error, term()}
+  def fetch_plan_comments(issue_id) do
+    send_event({:memory_tracker_plan_comments, issue_id})
+
+    case Application.get_env(:symphony_elixir, :memory_tracker_plan_comments, %{}) do
+      {:error, _reason} = error -> error
+      feedback -> {:ok, Map.get(feedback, issue_id, %{state_changes: [], comments: []})}
+    end
+  end
+
+  @spec create_reply(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
+  def create_reply(issue_id, parent_comment_id, body) do
+    case next_result(:memory_tracker_create_comment_result) do
+      :ok ->
+        send_event({:memory_tracker_reply, issue_id, parent_comment_id, body})
+        :ok
+
+      error ->
+        error
+    end
+  end
+
   @spec workflow_state_exists?(String.t(), [String.t()]) :: {:ok, boolean()} | {:error, term()}
   def workflow_state_exists?(state_name, _teams) do
     case Application.get_env(:symphony_elixir, :memory_tracker_workflow_states) do

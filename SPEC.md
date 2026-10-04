@@ -2096,10 +2096,17 @@ An issue is dispatch-eligible only if all are true:
     checkout (no sha), and the `skip-update-hold` label on the held issue or on the blocker release
     the issue at once. A lookup that fails releases it too, as before.
 - Parent rule passes:
-  - If the issue has the `breakdown` label, do not dispatch while any sub-issue is non-terminal
-    (a sub-issue with an unknown state counts as non-terminal). The parent waits while its
-    sub-issues are worked and becomes eligible again for close-out once every sub-issue is
-    terminal. The same rule ends a running parent's continuation turns and its retries.
+  - If the issue has the `breakdown` label and its plan was approved, do not dispatch while any
+    sub-issue is non-terminal (a sub-issue with an unknown state counts as non-terminal and
+    approved). The parent waits while its sub-issues are worked and becomes eligible again for
+    close-out once every sub-issue is terminal. The same rule ends a running parent's
+    continuation turns and its retries.
+  - A plan is approved when a non-terminal sub-issue is outside `Backlog`, or a sub-issue is
+    `Done`: approval moves every `Backlog` sub-issue to `Todo` at once, and nothing else promotes
+    them. A `breakdown` parent whose non-terminal sub-issues are all in `Backlog` and none `Done`
+    was never approved: its breakdown run stopped midway, or its plan is under review. Outside the
+    waiting state it is not held, so in an active state it is dispatched as a `breakdown` run that
+    resumes the plan, keeps the sub-issues already filed and ends in `In Review`.
   - A `breakdown` parent in `Rework` is exempt: a human rejected its plan, so it is eligible for a
     re-plan (run kind `breakdown`) whatever its sub-issues' states, once its rejected sub-issues
     are cancelled (see the review rule below).
@@ -2107,8 +2114,9 @@ An issue is dispatch-eligible only if all are true:
   - An issue in the `issues.states.waiting_on_sub_issues` state is dispatched only when it is a
     `breakdown` parent with at least one sub-issue and every sub-issue is terminal (the close-out
     run). Any other issue in that state waits for a human.
-  - On each poll, a `breakdown` parent in `In Progress` with a non-terminal sub-issue that is not
-    running or claimed is moved to the waiting state, so `In Progress` only holds issues an agent
+  - On each poll, a `breakdown` parent in `In Progress` whose approved plan has a non-terminal
+    sub-issue, and that is not running or claimed, is moved to the waiting state (a never-approved
+    plan is not), so `In Progress` only holds issues an agent
     is working. The poll's candidates can be stale (a breakdown run that just moved its parent to
     `In Review` still shows `In Progress`), so the service reads the parent's state again just
     before the move and skips it unless it is still `In Progress`; a failed read skips every
@@ -2117,6 +2125,28 @@ An issue is dispatch-eligible only if all are true:
 - Plan review rule:
   - The breakdown run leaves its sub-issues in `Backlog` and moves the parent to `In Review`
     (`linear_update_state` allows `In Review` for a `breakdown` parent even with Auto Review on).
+  - Comments: a person's comment on a `breakdown` parent's plan is read on the poll that follows
+    it. Only comments with a user and no bot actor count, and not Symphony's own (the workpad, a
+    QA report, an `Action needed` request, a promote or cancel record, a run-failure note, its own
+    replies, and every comment its last run on the parent posted). The service and the reviewer
+    can share one Linear user, so the run's comments are told apart by id, which the run reports as
+    it ends, and the others by how they start. The service reads the parent's history and comments
+    only when the poll shows a comment newer than the last one it acted on.
+    - Plan under review (the parent in `In Review`, its plan not approved): the service moves the
+      parent to `In Progress`, where the resume rule dispatches a `breakdown` run that revises the
+      plan in place: it edits the artifact comments, updates, files or cancels `Backlog`
+      sub-issues only, replies under each comment, and moves the parent back to `In Review`. A
+      comment counts when it is newer than the start of the service's last run on the parent and
+      no later comment of that run answers it in its thread, so a comment made while the run
+      worked is acted on once the parent is back in `In Review`. When the run's comments are
+      unknown (a run from before a restart), a comment counts when it is newer than the parent's
+      latest move into `In Review` and than the end of that run.
+    - Approved plan (the parent in the waiting state, or in `In Review` with its plan approved):
+      nothing is dispatched and the plan is unchanged. Under each top-level comment newer than the
+      parent's latest move into its state, the end of the service's last run on it and the
+      service's start, the service replies once that if the comment asks for a plan change,
+      `Rework` re-plans it. Replies inside a thread get nothing.
+    - `Rework` keeps its meaning: a full re-plan.
   - Approval: on each poll, for a `breakdown` parent in the waiting state with a sub-issue in
     `Backlog` that is not running or claimed, the service reads the parent's state history. When
     its latest state change is `In Review` to the waiting state, every sub-issue that has been in
@@ -2239,8 +2269,13 @@ Forced allowance:
   orchestrator's forced runs from its published snapshot, so the count can lag by one publish
   interval). A pass on the allowance takes no QA slot and counts toward `forced_max` for the
   orchestrator's dispatch too; past `forced_max` the request stays queued at the front and no
-  extra pass starts. Forcing never skips QA or changes its verdict. A forced `Final verification:`
-  parent walkthrough is an ordinary dispatch and uses the forced allowance like any other run.
+  extra pass starts. When an issue leaves the forced queue (or stops being a forced parent's part)
+  while its pass on the allowance is going, the pass is no longer `forced`: it gives the allowance
+  back, so an issue still forced can take it, and goes on as a normal pass. A pass whose issue was
+  never in the forced queue (labelled while in an Auto Review state outside the active states,
+  which the poll does not fetch) keeps the allowance until it ends. Forcing never skips QA or
+  changes its verdict. A forced `Final verification:` parent walkthrough is an ordinary dispatch
+  and uses the forced allowance like any other run.
 
 Finishing limit:
 
@@ -2439,8 +2474,8 @@ Part D: Stray processes
 - On the same tick, unless `watchdog.stray_process_cpu_minutes` is `null`, read the host's process
   table. Flag each process whose working folder or command line is under `workspace.root`,
   `/tmp/claude-<uid>/` or a Symphony temp folder, whose CPU time exceeds the threshold, and that
-  is outside the workspace, QA worktree, QA temp folder and Claude Code task folder of every
-  running agent or QA pass. Never flag the service itself or a process it still runs.
+  is outside the workspace, temp folder, QA worktree, QA temp folder and Claude Code task folder of
+  every running agent or QA pass. Never flag the service itself or a process it still runs.
 - Show the flagged processes (pid, command, working folder, CPU time) on the dashboard and log
   each one when it is first flagged and again when it is gone. Never signal them.
 - If the process table or the running workspaces can't be read, keep the previous warnings.
@@ -2714,10 +2749,15 @@ dispatching, it SHOULD stop recorded groups whose leader still has the recorded 
 signal a pid whose start time differs (the pid was reused), and SHOULD NOT dispatch issues in the
 workspace of a group it cannot confirm stopped until that group is gone, logging why.
 
+Each run on the local host SHOULD get a private temp folder of its own, named so that concurrent
+runs never share one (the Elixir implementation uses `/tmp/symphony-run-<hash of the workspace>`),
+passed to a Claude agent as `CLAUDE_CODE_TMPDIR` and to a Codex agent as `TMPDIR` and writable in
+its sandbox. It SHOULD be removed when the run succeeds and MAY be kept for debugging when it fails.
+
 A process an agent detaches (`&` with `nohup`, `setsid`, a double fork) leaves that group. When a
 run on the local host ends, after the `after_run` hook, the implementation SHOULD stop every process
-whose working directory, or a path on its command line, is under the run's workspace or the agent's
-temporary task directory (Claude Code: `/tmp/claude-<uid>/<workspace path, non-alphanumerics as
+whose working directory, or a path on its command line, is under the run's workspace, its temp
+folder or the agent's temporary task directory (Claude Code: `/tmp/claude-<uid>/<workspace path, non-alphanumerics as
 ->`), SIGTERM then SIGKILL, and log each one with its pid, command and CPU time. It MUST NOT signal
 itself or a process it started and still runs.
 
@@ -2937,8 +2977,10 @@ Scoped Linear tool extension contract:
 - Suggested baseline tools: `linear_get_current_issue`, `linear_get_subissues`,
   `linear_get_parent_issue`, `linear_get_comments`, `linear_get_related_issues`,
   `linear_update_state`, `linear_add_comment`, `linear_update_comment`, `linear_delete_comment`,
-  `linear_attach_url`, `linear_attach_file`, `linear_create_subissue`, `linear_add_blocked_by`,
-  `linear_create_project_update`, and `linear_request_human_action`.
+  `linear_attach_url`, `linear_attach_file`, `linear_create_subissue`, `linear_update_subissue`,
+  `linear_add_blocked_by`, `linear_create_project_update`, and `linear_request_human_action`.
+- `linear_add_comment` MAY take a `parent_id` naming a comment on the current issue; the comment is
+  then posted as a reply under it. `linear_get_comments` SHOULD return each reply's parent id.
 - Reads whose issue descriptions and comments reach the agent (`linear_get_current_issue`,
   `linear_get_comments`, `linear_get_subissues`, `linear_get_parent_issue`, and the dispatch
   enrichment that supplies the prompt's description and comments) SHOULD ask Linear for pre-signed
@@ -2964,6 +3006,13 @@ Scoped Linear tool extension contract:
   comments before any Linear call. Creation MUST be capped per run (the Elixir cap is 10) with an
   explicit error past the cap, and MUST be refused when the run has no state to count against.
   The read-only reviewer scope MUST NOT advertise or execute it.
+- `linear_update_subissue` MUST only change a child of the current issue that is in `Backlog`; a
+  sub-issue in any other state, or an issue that is not a child, MUST fail with an explicit error
+  and change nothing. It accepts `identifier` and either `title`, `description` and a `blocked_by`
+  list (the complete set of sibling blockers: missing sibling links are created, sibling links
+  left out are removed, links to non-siblings stay), or `cancel_reason` alone, which is posted on
+  the sub-issue before it moves to the team's canceled state. Text fields MUST pass the same
+  secret scan as comments. The read-only reviewer scope MUST NOT advertise or execute it.
 - `linear_add_blocked_by` MUST only add relations to the current issue: it accepts only a
   non-empty `blocked_by` list of issue identifiers and creates one `blocks` relation from each to
   the current issue. Every identifier MUST be looked up before any relation is created; an unknown
@@ -3118,6 +3167,12 @@ An implementation that reviews `breakdown` plans (Section 8, plan review rule) a
    - Return the issue's state changes (time, from state, to state) and each sub-issue's id,
      identifier, state, creation time, and latest state-change time. The Linear adapter reads up to
      50 history entries of the parent and 20 of each of up to 50 sub-issues.
+5. `fetch_plan_comments(issue_id)`
+   - Return the issue's state changes and its comments (id, body, creation time, the thread's
+     first comment id for a reply, and whether an integration posted it). The Linear adapter reads
+     up to 50 history entries and the newest 50 comments.
+6. `create_reply(issue_id, comment_id, body)`
+   - Post `body` on the issue as a reply under `comment_id`.
 
 ### 11.2 Query Semantics (Linear)
 
@@ -4552,7 +4607,8 @@ infrastructure.
   time, in blocked-by order and without labelling it, then its close-out run; a forced parent in
   `In Review` is not moved
 - A forced issue's QA request goes to the front of the QA queue and, with the QA slots full,
-  starts on the forced allowance while it has room; its verdict is applied as for any pass
+  starts on the forced allowance while it has room; its verdict is applied as for any pass; once
+  the issue is no longer forced the pass gives the allowance back and goes on as a normal pass
 - The snapshot's `forced` rows report each forced issue's phase and what it waits on (an open
   blocker by identifier); a forced issue past `forced_stale_after_hours` is `stale` and notified
   once; a forced issue entering `In Review` is notified; a forced issue that reaches a terminal
@@ -4568,9 +4624,16 @@ infrastructure.
   sub-issue; a blocker shared by two epics runs once and holds one lane
 - `Todo` issue with non-terminal blockers is not eligible
 - `Todo` issue with terminal blockers is eligible
-- `breakdown` issue with a non-terminal sub-issue is not eligible; once every sub-issue is
-  terminal it is eligible
-- `breakdown` parent in `In Progress` with a non-terminal sub-issue moves to the waiting state;
+- `breakdown` issue with an approved non-terminal sub-issue is not eligible; once every sub-issue
+  is terminal it is eligible
+- `breakdown` parent in `Todo` or `In Progress` whose non-terminal sub-issues are all in `Backlog`
+  is eligible as a `breakdown` run and is not moved to the waiting state
+- a person's comment on a `breakdown` parent in `In Review` with an unapproved plan moves it to
+  `In Progress`; the service's own comments and integration bots' comments move nothing; a person's
+  comment made while the revision run worked moves it again once it is back in `In Review`; a
+  top-level comment on an approved plan gets one reply and moves nothing, and a reply inside a
+  thread or a comment from before the service started gets none
+- `breakdown` parent in `In Progress` with an approved non-terminal sub-issue moves to the waiting state;
   an issue in the waiting state is eligible only as a `breakdown` parent whose sub-issues are all
   terminal
 - `breakdown` parent moved from `In Review` to the waiting state has its `Backlog` sub-issues moved

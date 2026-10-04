@@ -111,11 +111,27 @@ issues:
   cancels the sub-tickets the rejected breakdown run created and re-plans. Each batch is listed
   in one comment on the parent. Agents cannot move an issue here
   (`linear_update_state` refuses it). On every poll Symphony also moves a `breakdown` parent it
-  finds `In Progress` with open sub-tickets here, so `In Progress` only holds issues an agent is
-  working, after a fresh read confirms it is still `In Progress`; that move is not an approval and
+  finds `In Progress` with open sub-tickets of an approved plan here (some sub-ticket left
+  `Backlog`), so `In Progress` only holds issues an agent is working, after a fresh read confirms it is still `In Progress`; that move is not an approval and
   promotes nothing, even if Symphony and the reviewer share one Linear user. Create it in Linear as a started state just
   after In Progress. At startup Symphony checks the configured teams have it; when it is missing,
   Symphony logs a warning and parents keep waiting `In Progress` until restart.
+
+  Three ways a plan moves forward besides approval, and when each applies:
+  - **Resume:** a parent in `Todo` or `In Progress` whose open sub-tickets are all still in
+    `Backlog` (and none `Done`) was never approved, so it is neither held nor moved here: it gets
+    a `breakdown` run that picks the plan up from its workpad, keeps every artifact and sub-ticket
+    already made, files what is left and moves the parent to `In Review`. Use it after a plan run
+    stopped midway, for example on Linear's usage limit.
+  - **Revise:** a person's comment on a parent in `In Review` whose plan is not approved moves it
+    to `In Progress`, and the `breakdown` run edits the plan in place: it rewrites the artifact
+    comments, updates, files or cancels `Backlog` sub-tickets (`linear_update_subissue` refuses
+    any other), replies under each comment and moves the parent back to `In Review`. Symphony's
+    own comments and integration bots' comments start nothing. A comment made while the run works
+    is picked up once the parent is back in `In Review`, unless the run answered it. A comment on
+    an approved plan changes nothing: under a new top-level comment Symphony replies once that, if
+    it asks for a plan change, `Rework` re-plans it.
+  - **Re-plan:** moving the parent to `Rework` makes the plan again from scratch, as above.
 
 For Linear, configure at least one global scope under `issues.linear.scope` or repo-level route
 selector under `repositories[].route`.
@@ -267,12 +283,22 @@ the issue workspace, never the source repository. For SSH workers, configure `wo
 absolute path on the remote host; remote workspace validation rejects relative and `~` roots because
 they cannot be expanded safely on the orchestrator host.
 
+Each run on the local host gets a private temp folder, `/tmp/symphony-run-<hash of the workspace>`
+(Symphony's own temp folder when it can't write to `/tmp`), passed to a Claude agent as
+`CLAUDE_CODE_TMPDIR` and to a Codex agent as `TMPDIR`, and writable in its sandbox. The pre-push
+reviewer of the run gets it too. So the agent's `$TMPDIR` is the run's own, and concurrent runs no
+longer share the `/tmp/claude-<uid>` every Claude session uses or Symphony's own temp folder. The
+folder is removed when the run succeeds and kept, with a log line naming it, when the run fails, so
+you can look at what the agent left there; the issue's next run starts with an empty one. A run that
+can't create it logs a warning and keeps the runtime's default temp folder. Runs on a remote worker
+keep that host's temp folder.
+
 When a run on the local host ends, after the `after_run` hook, Symphony stops every process still
-running in the issue workspace or started from it (by working folder or a path on the command
-line), including ones the agent detached with `&`, `nohup` or `setsid`, and the ones tied to the
-agent's Claude Code task folder under `/tmp/claude-<uid>/`. It sends SIGTERM, then SIGKILL after a
-grace period, and logs each one with its pid, CPU time and command. Symphony itself, and commands it
-is still running, are never signalled.
+running in the issue workspace or the run's temp folder or started from either (by working folder
+or a path on the command line), including ones the agent detached with `&`, `nohup` or `setsid`,
+and the ones tied to the agent's Claude Code task folder under `/tmp/claude-<uid>/`. It sends
+SIGTERM, then SIGKILL after a grace period, and logs each one with its pid, CPU time and command.
+Symphony itself, and commands it is still running, are never signalled.
 
 **Storage inventory and cleanup planning** are read-only today. Use the dry-run task to inspect
 estimated storage use before deciding whether to archive or remove anything manually:
@@ -379,6 +405,8 @@ agent:
 - `permissions.filesystem.allow_write_paths`: extra writable host paths emitted to the Claude
   runtime as `sandbox.filesystem.allowWrite`. Use it to broaden Claude Code's default writable
   set (workspace + `/tmp`) — e.g. to grant test runs access to a configured MCP socket root.
+  On macOS, Symphony also adds the per-user temp dir's `TemporaryItems` for local runs
+  (Foundation's atomic writes need it; see `docs/security.md`).
   For Gradle builds, add `~/.gradle` so builds share its caches. Daemons don't come with it:
   each local agent run in a Gradle project (`gradlew`, `settings.gradle` or
   `settings.gradle.kts` at the workspace root) starts with
@@ -449,7 +477,7 @@ agent:
 - `run_profiles.<kind>`: `model`, `effort` and/or `provider` for one kind of run. Kinds, first match wins:
   `final_verification` (title starts with `Final verification:`), `breakdown` (`breakdown` parent in
   `Rework`), `close_out` (`breakdown` parent whose sub-issues are all terminal), `breakdown` (other
-  `breakdown` parent), `landing` (`Merging`),
+  `breakdown` parent: a new, resumed or revised plan), `landing` (`Merging`),
   `rework` (`Rework`), `ci_fix` (continuation after red CI), `review_feedback` (continuation after
   PR review comments), and `implementation` (everything else). `pre_push_review`, `qa` and
   `acceptance_gate` name the pre-push reviewer, QA agent and acceptance gate runs.
@@ -544,7 +572,8 @@ agent:
   walkthrough. Its run is marked `forced` (`/api/v1/state` `running[].forced`) and takes none of the
   normal slots; a run already going when the label is added stays a normal run, and no running
   agent is stopped. Once the label is removed (or a forced parent's is), a forced run already
-  going gives the allowance back and goes on as a normal run, so a ticket still forced can take it.
+  going gives the allowance back and goes on as a normal run, so a ticket still forced can take it;
+  so does its Auto Review QA pass on the allowance.
   A forced ticket past `forced_max` gets no extra slot: it still goes first for a
   normal one, waits as `queued #2; forced slot taken by MT-1` in `slot_waiting`, and Symphony logs a
   warning and sends one `forced_waiting` notification naming the forced run holding the allowance.
@@ -1026,8 +1055,12 @@ no request has come for it in two CI poll intervals (it left Auto Review, or its
 pending), other tickets take free slots again. When every QA slot is busy it starts on the forced
 allowance instead, as long as fewer than `concurrency.forced_max` forced runs and forced passes
 are going; such a pass takes no QA slot, counts toward `forced_max`, and is logged with
-`forced=true`. Past `forced_max` it waits at the front of the queue. The verdict is applied as for
-any pass: a failing pass still sends the ticket back for a fix. `/api/v1/state` lists the passes
+`forced=true`. Once the label is removed (`symphony force --clear`, or the forced parent's), or the
+sub-ticket stops being the forced parent's current one, a pass on the allowance gives it back and
+goes on as a normal pass (`forced: false`), so a ticket still forced can take the allowance. A
+ticket labelled in Linear while it is in Auto Review (outside `active_states`) never joins the
+forced queue, so its pass keeps the allowance until it ends. Past `forced_max` a forced request
+waits at the front of the queue. The verdict is applied as for any pass: a failing pass still sends the ticket back for a fix. `/api/v1/state` lists the passes
 under `qa.running` and the waiting requests under `qa.queued`, each with `forced`.
 
 #### Parent walkthrough
@@ -1624,7 +1657,7 @@ On every tick the watchdog also reads the host's process table and warns about s
 A stray process runs in, or names on its command line, a folder under `workspaces.root`,
 `/tmp/claude-<uid>/` or a Symphony temp folder (`symphony-*` under `$TMPDIR` or `/tmp`). It has
 used more than `stray_process_cpu_minutes` of CPU time, and no agent run or QA pass is running in
-its workspace. Examples are a process a remote worker run or an interactive Claude session left
+its workspace or temp folder. Examples are a process a remote worker run or an interactive Claude session left
 behind, or one that escaped the cleanup at the end of a run. The dashboard shows each one with
 its pid, command, working folder and CPU time, and the log records it once. The warning clears on
 the first tick after the process is gone. Symphony never signals these processes. Set

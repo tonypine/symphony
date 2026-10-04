@@ -41,7 +41,7 @@ defmodule SymphonyElixir.AgentRunnerLeftoverProcessesTest do
     %{test_root: test_root, workspace: workspace}
   end
 
-  test "stops what the run left in its workspace or Claude task folder when the run ends", %{test_root: test_root, workspace: workspace} do
+  test "stops what the run left in its workspace, temp folder or Claude task folder when the run ends", %{test_root: test_root, workspace: workspace} do
     tmp_dir = Path.join(test_root, "tmp")
     task_dir = Path.join([tmp_dir, "claude-501", String.replace(workspace, ~r/[^a-zA-Z0-9]/, "-")])
     File.mkdir_p!(Path.join(task_dir, "tasks"))
@@ -49,6 +49,7 @@ defmodule SymphonyElixir.AgentRunnerLeftoverProcessesTest do
     in_workspace = process(4101, workspace, "yes")
     in_task_dir = process(4102, "/", "zsh -c until [ -f never ]; do :; done 2>#{task_dir}/tasks/b1.output")
     unrelated = process(4103, System.tmp_dir!(), "sleep 1000")
+    in_run_tmp_dir = process(4104, "/", "node #{hd(AgentRunner.tmp_dirs(workspace))}/server.js")
     test_pid = self()
 
     log =
@@ -56,14 +57,14 @@ defmodule SymphonyElixir.AgentRunnerLeftoverProcessesTest do
         run!(workspace,
           claude_tmp_dir: tmp_dir,
           leftover_processes: [
-            table: fn -> {:ok, [in_workspace, in_task_dir, unrelated]} end,
+            table: fn -> {:ok, [in_workspace, in_task_dir, unrelated, in_run_tmp_dir]} end,
             signal: fn pid, signal -> send(test_pid, {:signal, pid, signal}) end,
             grace_ms: 0
           ]
         )
       end)
 
-    for pid <- [4101, 4102], do: assert_received({:signal, ^pid, "TERM"})
+    for pid <- [4101, 4102, 4104], do: assert_received({:signal, ^pid, "TERM"})
     refute_received {:signal, 4103, _signal}
     assert log =~ "Stopping leftover process issue_id=issue-leftover issue_identifier=TP-367 pid=4101 cwd=#{workspace} cpu_time=165:01.23 command=\"yes\""
     assert log =~ "pid=4102 cwd=/"
