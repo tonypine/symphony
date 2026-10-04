@@ -12,9 +12,21 @@ description:
 ## Workflow
 
 1. Verify git status is clean or commit/stash changes before merging.
-2. Ensure rerere is enabled locally:
-   - `git config rerere.enabled true`
-   - `git config rerere.autoupdate true`
+2. Under Symphony, sync with the `github_sync_base` tool (no arguments; Claude
+   sees it as `mcp__symphony__github_sync_base`). It runs outside the agent
+   sandbox, so it can merge base-branch changes to write-protected files such
+   as `.ai/skills` or `WORKFLOW.md`, which a `git merge` in the sandbox cannot.
+   It fetches `origin`, fast-forwards to the branch's remote copy when that is
+   ahead, then merges the repo's base branch (e.g. `origin/main`) with rerere
+   and `zdiff3` conflict markers, without committing. Act on its `status`:
+   - `synced`: the branch already contains the base branch; nothing to commit.
+   - `merge_staged`: no conflicts; run `git commit --no-edit`.
+   - `conflicts`: resolve the listed files (see conflict guidance below),
+     `git add` them, then `git -c rerere.enabled=true commit --no-edit`.
+   - It refuses a branch that changes a write-protected path itself; drop that
+     change from the branch rather than working around the refusal.
+   Then go to step 8. Use the manual steps 3-7 only when the tool is not
+   available (for example on an SSH worker, or outside Symphony).
 3. Confirm remotes and branches:
    - Ensure the `origin` remote exists.
    - Ensure the current branch is the one to receive the merge.
@@ -32,13 +44,15 @@ description:
    - `git pull --ff-only origin $(git branch --show-current)`
    - This pulls branch updates made remotely (for example, a GitHub auto-commit)
      before merging the integration branch.
-6. Merge in order:
-   - Prefer `git -c merge.conflictstyle=zdiff3 merge origin/<integration-branch>`
-     for clearer conflict context (e.g. `origin/main` or `origin/trunk`,
-     depending on the repo).
+6. Merge in order, with rerere turned on for this command only (do not write
+   git config; the sandbox denies it):
+   - `git -c rerere.enabled=true -c rerere.autoupdate=true -c merge.conflictstyle=zdiff3 merge origin/<integration-branch>`
+     (e.g. `origin/main` or `origin/trunk`, depending on the repo).
 7. If conflicts appear, resolve them (see conflict guidance below), then:
    - `git add <files>`
-   - `git commit` (or `git merge --continue` if the merge is paused)
+   - `git -c rerere.enabled=true commit` (or
+     `git -c rerere.enabled=true merge --continue` if the merge is paused), so
+     rerere records the resolution.
 8. Verify with project checks (follow repo policy in `AGENTS.md`).
 9. Summarize the merge:
    - Call out the most challenging conflicts/files and how they were resolved.
