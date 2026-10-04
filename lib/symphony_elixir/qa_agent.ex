@@ -222,12 +222,30 @@ defmodule SymphonyElixir.QaAgent do
 
   # QA tests behaviour, not the code: CI already ran the full suite (Auto Review starts only on
   # green CI), and re-running it in the sandbox takes many times longer and loads the shared host.
+  # A parent walkthrough has no PR checks to lean on, so it cites CI's run on the base branch head
+  # instead: a red default branch must fail the verification, not pass as `skipped`.
   defp test_suite_rule(%{verification_issue: %Issue{}} = job) do
+    base_ref = Map.get(job, :base_ref)
+
     """
     Do not run the test suite, `make all`, coverage or static analysis such as Dialyzer: CI runs
-    them on every merge to `#{Map.get(job, :base_ref)}`. Mark a criterion that only asks for tests,
-    coverage or CI to pass `skipped`, with "covered by CI on #{Map.get(job, :base_ref)}" as the
-    reason. Build only what you need to use the feature, and judge it by what a user sees.\
+    them on every merge to `#{base_ref}`. Judge a criterion that asks for tests, coverage or CI to
+    pass by CI's runs on `#{job.sha}`, the commit you are on:
+
+    - Read the runs with `gh run list --commit #{job.sha} --json databaseId,workflowName,status,conclusion,url`
+      where `gh` is allowed, else through GitHub's public API:
+      `curl -fsS "https://api.github.com/repos/<owner>/<repo>/actions/runs?head_sha=#{job.sha}"`, with
+      `<owner>/<repo>` from `git remote get-url origin`.
+    - Every run completed with conclusion `success`: mark the criterion `pass` and put each run's URL
+      and conclusion in `details`.
+    - A run failed (any conclusion other than `success`, `skipped` or `neutral`): mark the criterion
+      `fail`, and in `details` and `findings` name the failing workflow and job (`gh run view <id>
+      --json jobs`, or the run's `jobs_url`) with the run URL. A red `#{base_ref}` is a defect.
+    - Mark it `skipped` only when no run can be read (the commands are refused, or CI has no run for
+      this commit) or a run is still in progress, and say which in `details`, with the run URL when
+      there is one.
+
+    Build only what you need to use the feature, and judge it by what a user sees.\
     """
   end
 
