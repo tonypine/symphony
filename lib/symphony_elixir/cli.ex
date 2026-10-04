@@ -130,7 +130,8 @@ defmodule SymphonyElixir.CLI do
     end
   end
 
-  # Loads symphony.yml and every repo WORKFLOW.md through the same validation the
+  # Loads symphony.yml and every repo WORKFLOW.md startup would read (the committed
+  # ref, see `WorkflowSource.load_for_check/1`) through the same validation the
   # application runs at boot, without starting the supervisor or touching the network.
   defp evaluate_check(args, deps) do
     case OptionParser.parse(args, strict: @check_switches) do

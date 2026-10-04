@@ -75,6 +75,24 @@ defmodule SymphonyElixir.WorkflowSource do
   end
 
   @doc """
+  Loads the workflow Symphony would use for `repo` at startup, without fetching or
+  writing the snapshot: the committed `WORKFLOW.md` on the remote base branch when
+  it parses, otherwise the file `read_path/1` returns (the last good snapshot, or
+  the configured file before the first one).
+  """
+  @spec load_for_check(SystemSchema.Repo.t()) :: {:ok, Workflow.loaded_workflow()} | {:error, term()}
+  def load_for_check(%SystemSchema.Repo{} = repo) do
+    local_path = SystemSchema.repo_workflow_path(repo)
+
+    with {:ok, checkout} <- ref_checkout(repo, local_path),
+         {:ok, _content, workflow} <- ref_workflow(repo, checkout, Path.relative_to(local_path, checkout)) do
+      {:ok, workflow}
+    else
+      _ -> Workflow.load(read_path(repo))
+    end
+  end
+
+  @doc """
   Refreshes every configured repo's snapshot without fetching, after cloning a
   `workspace.source` repo that has no clone yet.
 
@@ -154,17 +172,24 @@ defmodule SymphonyElixir.WorkflowSource do
     workflow_in_repo = Path.relative_to(local_path, checkout)
     snapshot = snapshot_path(repo, local_path)
 
-    with {:ok, ref} <- base_ref(repo, checkout),
-         {:ok, content} <- git(checkout, ["show", "#{ref}:#{workflow_in_repo}"]),
-         {:ok, _workflow} <- Workflow.parse_repo_workflow(content) do
-      first_snapshot? = not File.regular?(snapshot)
-      result = write_snapshot(snapshot, content)
-      if first_snapshot?, do: switch_primary_store_to_snapshot(repo, snapshot)
-      result
-    else
+    case ref_workflow(repo, checkout, workflow_in_repo) do
+      {:ok, content, _workflow} ->
+        first_snapshot? = not File.regular?(snapshot)
+        result = write_snapshot(snapshot, content)
+        if first_snapshot?, do: switch_primary_store_to_snapshot(repo, snapshot)
+        result
+
       {:error, reason} ->
         log_refresh_error(repo, checkout, workflow_in_repo, snapshot, reason)
         {:error, reason}
+    end
+  end
+
+  defp ref_workflow(repo, checkout, workflow_in_repo) do
+    with {:ok, ref} <- base_ref(repo, checkout),
+         {:ok, content} <- git(checkout, ["show", "#{ref}:#{workflow_in_repo}"]),
+         {:ok, workflow} <- Workflow.parse_repo_workflow(content) do
+      {:ok, content, workflow}
     end
   end
 
