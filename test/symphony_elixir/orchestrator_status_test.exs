@@ -4719,9 +4719,10 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       end_linear_wait(pid, issue)
       send(pid, :watchdog_tick)
 
+      # The retry is scheduled after the restart stops the session and the worker.
+      assert %{error: "stuck for " <> _} = wait_for_retry!(pid, issue)
       assert_receive :agent_stop_session_called
       assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}
-      assert %{error: "stuck for " <> _} = wait_for_retry!(pid, issue)
     end
 
     test "still restart a run with no agent event and no Linear wait" do
@@ -4748,8 +4749,8 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
       send(pid, :watchdog_tick)
 
-      assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}
       assert %{error: "stuck for " <> _} = wait_for_retry!(pid, issue)
+      assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}
     end
   end
 
