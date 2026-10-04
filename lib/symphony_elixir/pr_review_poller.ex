@@ -764,7 +764,7 @@ defmodule SymphonyElixir.PrReviewPoller do
     {attrs, latest_activity_at, unaddressed_comments} =
       review_activity_attrs(record, activity, ignored_users, now)
 
-    attrs = clear_auto_merge_fallback(attrs, record, opts)
+    attrs = clear_auto_merge_stay(attrs, record, opts)
 
     case review_action(record, activity, latest_activity_at, unaddressed_comments, ignored_users, settings, now) do
       :merged ->
@@ -861,10 +861,13 @@ defmodule SymphonyElixir.PrReviewPoller do
     MapSet.member?(Keyword.get(opts, :merging_issue_ids, MapSet.new()), Map.get(record, :issue_id))
   end
 
-  # A fallback hands one stay in `Merging` to the landing agent. Once the issue leaves
-  # `Merging`, the next approval tries auto-merge again.
-  defp clear_auto_merge_fallback(attrs, record, opts) do
-    if AutoMerge.fallback?(Map.get(record, :auto_merge)) and not auto_merge_issue?(record, opts),
+  # A fallback hands one stay in `Merging` to the landing agent, and a CI-fix hold keeps
+  # auto-merge off for the rest of that stay. Once the issue leaves `Merging`, the next approval
+  # tries auto-merge again.
+  defp clear_auto_merge_stay(attrs, record, opts) do
+    auto_merge = Map.get(record, :auto_merge)
+
+    if (AutoMerge.fallback?(auto_merge) or AutoMerge.held?(auto_merge)) and not auto_merge_issue?(record, opts),
       do: Map.put(attrs, :auto_merge, nil),
       else: attrs
   end

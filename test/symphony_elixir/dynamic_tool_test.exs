@@ -1928,7 +1928,8 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
              "baseRefName" => "main"
            }), 0}
 
-        ["pr", "view", ^pr_url, "--json", "number,state,title,url,headRefName,headRefOid,baseRefName,isCrossRepository,headRepository,mergeable,mergeStateStatus,statusCheckRollup"], opts ->
+        ["pr", "view", ^pr_url, "--json", "id,number,state,title,url,headRefName,headRefOid,baseRefName,isCrossRepository,headRepository,mergeable,mergeStateStatus,autoMergeRequest,statusCheckRollup"],
+        opts ->
           assert opts[:cd] == workspace
 
           {Jason.encode!(%{
@@ -2067,7 +2068,8 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
              "baseRefName" => "main"
            }), 0}
 
-        ["pr", "view", ^pr_url, "--json", "number,state,title,url,headRefName,headRefOid,baseRefName,isCrossRepository,headRepository,mergeable,mergeStateStatus,statusCheckRollup"], _opts ->
+        ["pr", "view", ^pr_url, "--json", "id,number,state,title,url,headRefName,headRefOid,baseRefName,isCrossRepository,headRepository,mergeable,mergeStateStatus,autoMergeRequest,statusCheckRollup"],
+        _opts ->
           {Jason.encode!(%{
              "number" => 3051,
              "state" => "OPEN",
@@ -2120,7 +2122,8 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
         ["pr", "view", "auto/ACME-3051", "--repo", "acme/symphony", "--json", _fields], _opts ->
           {Jason.encode!(%{"number" => 3051, "url" => pr_url}), 0}
 
-        ["pr", "view", ^pr_url, "--json", "number,state,title,url,headRefName,headRefOid,baseRefName,isCrossRepository,headRepository,mergeable,mergeStateStatus,statusCheckRollup"], _opts ->
+        ["pr", "view", ^pr_url, "--json", "id,number,state,title,url,headRefName,headRefOid,baseRefName,isCrossRepository,headRepository,mergeable,mergeStateStatus,autoMergeRequest,statusCheckRollup"],
+        _opts ->
           {Jason.encode!(%{
              "url" => pr_url,
              "statusCheckRollup" => [

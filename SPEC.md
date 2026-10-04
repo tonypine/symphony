@@ -1970,8 +1970,20 @@ Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `
   GitHub refuses, the poll records an error and the issue stays in `Merging` (a conflicting PR
   can't merge) until a later poll turns it off. Only a fresh move to `Merging` turns auto-merge on
   again, even when the head didn't change.
-- A red head takes the CI poller's CI-failure path. Auto-merge stays on, so GitHub merges the PR
-  once the fix is green, whatever state the issue is in by then.
+- A red head takes the CI poller's CI-failure path. A flaky-retry rerun of the same commit pushes
+  no code, so auto-merge stays on and GitHub merges the PR if the rerun is green. A CI-fix
+  dispatch can push code the approval never covered, so it gets the same review gate as a
+  conflict: before the CI poller moves a `Merging` issue (with auto-merge on for its repository)
+  to `In Progress`, it MUST turn auto-merge off when GitHub shows it on (`autoMergeRequest` in the
+  CI read), log it, write an `auto_merge_disabled` audit event with `reason: "ci_failure"`, and
+  comment on the issue why. It also records a `ci_failure` hold in the PR review record
+  (`disabled_at` when it turned auto-merge off, `enabled_head_sha` cleared), even when auto-merge
+  was already off. While held, the PR poller MUST NOT turn auto-merge on, at any head; it drops
+  the hold once it sees the issue out of `Merging`, so only a fresh move to `Merging` turns
+  auto-merge on again, even when the head didn't change. While GitHub refuses to turn it off or
+  the hold can't be stored, the poll records an error and the dispatch waits for the next poll (a
+  red head can't merge). Escalation (`ci.max_retries` reached) starts no fix run and leaves
+  auto-merge as it is.
 - When GitHub reports the PR `MERGED` and Symphony turned on auto-merge for it (or the issue is in
   `Merging`), the poller MUST move the issue to `Done` (already `Done` is fine) and then clean up as
   for any merged PR. A failed transition is retried on the next poll.
@@ -1980,11 +1992,11 @@ Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `
   auto-merge on and a green head past `checks.landing_wait_timeout_ms`, the poller MUST log an
   error, comment the reason on the issue, and fall back: the orchestrator then dispatches the
   landing agent. The fallback lasts until the issue leaves `Merging`.
-- The state (`enabled`, `updating_branch`, `merging`, `conflict`, `fallback`, `merged`) is kept in
+- The state (`enabled`, `updating_branch`, `merging`, `conflict`, `ci_failure`, `fallback`, `merged`) is kept in
   the PR review record, logged on every change, and listed under `auto_merge` in
   `/api/v1/state` and on the dashboard (for example "auto-merge on, waiting for CI on `abc1234`").
-- Apart from the conflict path, moving an issue out of `Merging` does not turn auto-merge off on
-  GitHub; disable it on the PR to stop the merge.
+- Apart from the conflict and CI-fix paths, moving an issue out of `Merging` does not turn
+  auto-merge off on GitHub; disable it on the PR to stop the merge.
 
 When a landing run (issue in `Merging` with an attached PR) finishes a turn while the PR head's
 checks are pending, the agent runner MUST end the run instead of starting another continuation

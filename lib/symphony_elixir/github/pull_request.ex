@@ -52,6 +52,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   @type ci_status :: %{
           pr_url: String.t(),
           pr_title: String.t() | nil,
+          pr_node_id: String.t() | nil,
           state: String.t() | nil,
           head_ref_name: String.t() | nil,
           commit_sha: String.t() | nil,
@@ -60,6 +61,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
           mergeable: String.t() | nil,
           merge_state_status: String.t() | nil,
           base_ref_name: String.t() | nil,
+          auto_merge_enabled: boolean(),
           checks: [ci_check()]
         }
 
@@ -483,7 +485,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
       "view",
       pr_url,
       "--json",
-      "number,state,title,url,headRefName,headRefOid,baseRefName,isCrossRepository,headRepository,mergeable,mergeStateStatus,statusCheckRollup"
+      "id,number,state,title,url,headRefName,headRefOid,baseRefName,isCrossRepository,headRepository,mergeable,mergeStateStatus,autoMergeRequest,statusCheckRollup"
     ]
 
     with {:ok, _host, _owner, _repo, _number} <- parse_github_pr_url(pr_url, opts),
@@ -493,6 +495,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
        %{
          pr_url: Map.get(pr, "url") || pr_url,
          pr_title: Map.get(pr, "title"),
+         pr_node_id: normalize_id(Map.get(pr, "id")),
          state: Map.get(pr, "state"),
          head_ref_name: normalize_id(Map.get(pr, "headRefName")),
          commit_sha: normalize_id(Map.get(pr, "headRefOid")),
@@ -501,6 +504,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
          mergeable: normalize_id(Map.get(pr, "mergeable")),
          merge_state_status: normalize_id(Map.get(pr, "mergeStateStatus")),
          base_ref_name: normalize_id(Map.get(pr, "baseRefName")),
+         auto_merge_enabled: is_map(Map.get(pr, "autoMergeRequest")),
          checks: normalize_status_check_rollup(Map.get(pr, "statusCheckRollup"))
        }}
     else
