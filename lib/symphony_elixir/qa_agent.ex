@@ -348,13 +348,15 @@ defmodule SymphonyElixir.QaAgent do
   # The agent runs the `android_app` build itself, so it needs the playbook's settings.
   defp android_section(job) do
     case Enum.find(job.playbooks, &(Map.get(&1, :kind) == "android_app")) do
-      %{build: build, apk_path: apk_path, application_ids: application_ids} ->
+      %{build: build, apk_paths: apk_paths, application_ids: application_ids} ->
         """
 
         Android app:
         Build command (run it in your shell from the worktree root): `#{build}`
-        APK path (relative to the worktree root): `#{apk_path}`
+        APK paths (relative to the worktree root), each one an `apk` that `qa_android_install` takes:
+        #{Enum.map_join(apk_paths, "\n", &"- `#{&1}`")}
         Application IDs: #{Enum.map_join(application_ids, ", ", &"`#{&1}`")}
+        `qa_android_install` reports the application IDs each APK installed: launch the one the step needs.
         """
 
       _none ->

@@ -1175,8 +1175,10 @@ Fields:
   - Default: `1`.
 
 When enabled, Symphony SHOULD run an executor + reviewer flow in the same workspace. The executor
-SHOULD stop before pushing, the reviewer SHOULD receive issue context plus the committed diff, and
-the reviewer MUST return a structured verdict of `approve`, `request_changes`, or `block`. Reviewer
+SHOULD stop before pushing, the reviewer SHOULD receive issue context plus the committed diff, the
+reviewer SHOULD judge code quality and bugs (correctness, tests for new branches, error handling,
+the repository's code rules) and not the issue's acceptance criteria or scope, and the reviewer
+MUST return a structured verdict of `approve`, `request_changes`, or `block`. Reviewer
 sessions SHOULD expose only read-only scoped Linear/GitHub tools. An `approve` verdict SHOULD keep
 later executor continuations in push/PR handoff mode rather than reintroducing the pre-push reviewer
 gate. `request_changes` and `block` verdicts SHOULD include evidence-backed findings with file,
@@ -1232,8 +1234,9 @@ Fields:
   set. The built-in `web` kind also takes `browser_mcp` (an MCP server definition, the shape of
   an `agent.mcp.servers` entry) and is off unless `verification.enabled` is true and
   `verification.dev_server.start_cmd` is set. The built-in `android_app` kind also takes `build`
-  (shell command the QA agent runs in its own sandbox), `apk_path` (the APK it writes, relative to
-  the repo root) and `application_ids` (list of strings), and is off unless `build`, `apk_path`, a
+  (shell command the QA agent runs in its own sandbox), `apk_paths` (list of the APKs it writes,
+  relative to the repo root; `apk_path`, one string, is a one-item list, and both may be set),
+  and `application_ids` (list of strings), and is off unless `build`, at least one APK path, a
   non-empty `application_ids` and `auto_review.android.avd` are set. A repository's
   `WORKFLOW.md` MAY set `auto_review.playbooks` too; for that repository's QA passes each kind is
   merged over this map key by key, the repository's value winning.
@@ -1333,11 +1336,14 @@ When enabled:
 - A pass that runs the `android_app` playbook takes the Android emulator's lease and gets host-side
   `qa_android_*` tools. The agent runs the playbook's `build` in its own sandbox; these tools MUST
   NOT run it, Gradle or any other repository command on the host, only adb against Symphony's
-  emulator. `qa_android_install` (refused when tracked files outside `qa-evidence/` changed, or
-  when `apk_path` resolves outside the worktree, is a symlink, is not a regular file or is over
-  the size cap) installs a private copy of the APK after uninstalling the configured
-  `application_ids`, and MUST uninstall and refuse a package outside `application_ids` that the
-  install added or replaced, including after an install that reported failure.
+  emulator. `qa_android_install` installs every APK path, or the one its optional `apk` argument
+  names (which MUST be a configured path). It is refused when tracked files outside
+  `qa-evidence/` changed, or when any APK path it installs resolves outside the worktree, is a
+  symlink, is not a regular file or is over the size cap; every path is checked before the device
+  changes. It installs a private copy of each APK in turn after uninstalling the configured
+  `application_ids`, reports the application IDs each APK installed, and MUST uninstall and refuse
+  a package outside `application_ids` that an install added or replaced, including after an
+  install that reported failure.
   `qa_android_launch` / `qa_android_stop` MUST refuse an application ID outside
   `application_ids`; `qa_android_screenshot` follows the `qa_screenshot` file rules.
   `qa_android_ui_tree`, `qa_android_tap`, `qa_android_type`, `qa_android_key`,
@@ -1352,8 +1358,8 @@ When enabled:
   uninstall the configured apps and every package installed in the pass, release the lease and
   remove its private directory. An emulator that cannot start MUST
   surface as `qa_android_unavailable`, telling the agent to answer `blocked`. Other tool scopes MUST
-  NOT list or run them. The QA prompt MUST give the agent the playbook's `build`, `apk_path` and
-  `application_ids`. Every QA prompt MUST tell the agent never to start an emulator, simulator or
+  NOT list or run them. The QA prompt MUST give the agent the playbook's `build`, every APK path and
+  the `application_ids`. Every QA prompt MUST tell the agent never to start an emulator, simulator or
   device tool itself, and to mark a step that needs an Android device `blocked` when no
   `android_app` playbook runs in the pass.
 - With `worker_host` set, the worktree checks MUST stay on the Symphony host, and the build, the app,

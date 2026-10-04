@@ -319,7 +319,8 @@ defmodule SymphonyElixir.QaAgentTest do
       config = %{android: %{avd: "Pixel_3a_API_34"}, playbooks: %{"android_app" => android}}
 
       assert {:run, [%{kind: "android_app", prompt: prompt} = playbook]} = Selection.decide(issue(), kotlin, config)
-      assert %{build: "./gradlew :app:assembleDebug", apk_path: "app/build/outputs/apk/debug/app-debug.apk", application_ids: ["com.example.app"]} = playbook
+      # `apk_path` alone is a one-item `apk_paths`.
+      assert %{build: "./gradlew :app:assembleDebug", apk_paths: ["app/build/outputs/apk/debug/app-debug.apk"], application_ids: ["com.example.app"]} = playbook
       assert prompt =~ "### Playbook: android_app"
       assert prompt =~ "qa_android_unavailable"
       assert prompt =~ "qa_app_exited"
@@ -345,6 +346,9 @@ defmodule SymphonyElixir.QaAgentTest do
       for missing <- [
             Map.delete(android, "build"),
             Map.put(android, "apk_path", " "),
+            android |> Map.delete("apk_path") |> Map.put("apk_paths", []),
+            android |> Map.delete("apk_path") |> Map.put("apk_paths", "app.apk"),
+            android |> Map.delete("apk_path") |> Map.put("apk_paths", [" ", 7]),
             Map.put(android, "application_ids", []),
             Map.put(android, "application_ids", "com.example.app"),
             Map.put(android, "application_ids", [" ", 7])
@@ -354,6 +358,18 @@ defmodule SymphonyElixir.QaAgentTest do
 
       assert [_cli, %{kind: "android_app", application_ids: ["com.example.app"]}] =
                Selection.playbooks(%{config | playbooks: %{android_app: %{android | "application_ids" => ["com.example.app", " ", 7]}}})
+
+      # `apk_paths` lists more than one APK, and `apk_path` joins it first, once.
+      catalog = "app-catalog/build/outputs/apk/debug/app-catalog-debug.apk"
+      apk = android["apk_path"]
+
+      for {settings, apk_paths} <- [
+            {android |> Map.delete("apk_path") |> Map.put("apk_paths", [apk, catalog]), [apk, catalog]},
+            {Map.put(android, "apk_paths", [catalog, apk, " ", 7]), [apk, catalog]}
+          ] do
+        playbooks = Selection.playbooks(%{config | playbooks: %{"android_app" => settings}})
+        assert [_cli, %{kind: "android_app", apk_paths: ^apk_paths}] = playbooks
+      end
     end
 
     test "the web playbook runs only when the verification dev server is configured" do
@@ -386,7 +402,7 @@ defmodule SymphonyElixir.QaAgentTest do
       assert Selection.unavailable(%{playbooks: %{}}) == [
                {"macos_app", "needs `auto_review.playbooks.macos_app.build`, `auto_review.playbooks.macos_app.app`"},
                {"android_app",
-                "needs `auto_review.playbooks.android_app.build`, `auto_review.playbooks.android_app.apk_path`, " <>
+                "needs `auto_review.playbooks.android_app.build`, `auto_review.playbooks.android_app.apk_path` or `auto_review.playbooks.android_app.apk_paths`, " <>
                   "`auto_review.playbooks.android_app.application_ids`, `auto_review.android.avd`"},
                {"web", "needs `verification.dev_server`"}
              ]
@@ -517,7 +533,11 @@ defmodule SymphonyElixir.QaAgentTest do
     end
 
     test "an android_app pass gets the playbook, its build settings and the ticket's walkthrough" do
-      android = %{"build" => "./gradlew :app:assembleDebug", "apk_path" => "app/build/outputs/apk/debug/app-debug.apk", "application_ids" => ["com.example.app", "com.example.app.debug"]}
+      android = %{
+        "build" => "./gradlew :app:assembleDebug :app-catalog:assembleDebug",
+        "apk_paths" => ["app/build/outputs/apk/debug/app-debug.apk", "app-catalog/build/outputs/apk/debug/app-catalog-debug.apk"],
+        "application_ids" => ["com.example.app", "com.example.app.catalog"]
+      }
 
       {:run, playbooks} =
         Selection.decide(
@@ -530,9 +550,15 @@ defmodule SymphonyElixir.QaAgentTest do
 
       assert prompt =~ "### Playbook: android_app"
       assert prompt =~ "1. Open the app and tap Sign in."
-      assert prompt =~ "Build command (run it in your shell from the worktree root): `./gradlew :app:assembleDebug`"
-      assert prompt =~ "APK path (relative to the worktree root): `app/build/outputs/apk/debug/app-debug.apk`"
-      assert prompt =~ "Application IDs: `com.example.app`, `com.example.app.debug`"
+      assert prompt =~ "Build command (run it in your shell from the worktree root): `./gradlew :app:assembleDebug :app-catalog:assembleDebug`"
+
+      assert prompt =~
+               "APK paths (relative to the worktree root), each one an `apk` that `qa_android_install` takes:\n" <>
+                 "- `app/build/outputs/apk/debug/app-debug.apk`\n- `app-catalog/build/outputs/apk/debug/app-catalog-debug.apk`\n" <>
+                 "Application IDs: `com.example.app`, `com.example.app.catalog`\n" <>
+                 "`qa_android_install` reports the application IDs each APK installed"
+
+      assert prompt =~ "Pass `apk` to install only one of them."
       assert prompt =~ ~r/wait 3 to 5 seconds after each\s+navigation or action/
       assert prompt =~ "`make_public: false`"
       refute QaAgent.prompt(job(), nil) =~ "Android app:"
@@ -541,7 +567,7 @@ defmodule SymphonyElixir.QaAgentTest do
     test "every QA prompt forbids starting an emulator or simulator and blocks device steps without the android_app playbook" do
       parent = issue(%{id: "issue-parent", identifier: "TP-243", title: "Parent", description: "- [ ] parent criterion"})
       verification = issue(%{id: "issue-fv", identifier: "TP-910", title: "Final verification: Parent", description: "- [ ] child criterion"})
-      android_app = %{kind: "android_app", paths: [], prompt: "Test the Android app.", build: "./gradlew assembleDebug", apk_path: "app.apk", application_ids: ["com.example.app"]}
+      android_app = %{kind: "android_app", paths: [], prompt: "Test the Android app.", build: "./gradlew assembleDebug", apk_paths: ["app.apk"], application_ids: ["com.example.app"]}
 
       for prompt <- [
             QaAgent.prompt(job(), nil),
@@ -888,7 +914,7 @@ defmodule SymphonyElixir.QaAgentTest do
     test "gives an android_app pass an Android QA driver and stops it when the pass ends" do
       test = self()
       lease = %{lease: make_ref(), serial: "emulator-5600", adb: "/sdk/platform-tools/adb", adb_server_port: 15_037}
-      android_app = %{kind: "android_app", paths: [], prompt: "Test the Android app.", build: "./gradlew assembleDebug", apk_path: "app.apk", application_ids: ["com.example.app"]}
+      android_app = %{kind: "android_app", paths: [], prompt: "Test the Android app.", build: "./gradlew assembleDebug", apk_paths: ["app.apk"], application_ids: ["com.example.app"]}
 
       assert {:ok, %{result: %{verdict: :pass}}} =
                QaAgent.run(job(%{playbooks: [android_app]}), Config.settings!(),

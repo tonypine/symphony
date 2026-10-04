@@ -809,18 +809,22 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
         assert %{"error" => %{"code" => "tool_scope_rejected", "tool" => ^tool}} = Jason.decode!(response["output"])
       end
 
-      # The macOS driver is not asked, even when it is there.
-      response =
-        DynamicTool.execute("qa_android_install", %{}, issue: %Issue{id: "issue-current"}, tool_scope: :qa, qa_driver: self())
-
-      assert %{"error" => %{"code" => "qa_android_driver_unavailable"}} = Jason.decode!(response["output"])
+      # The macOS driver is not asked, even when it is there; `apk` reaches the Android driver.
+      for args <- [%{}, %{"apk" => "app-catalog/build/outputs/apk/debug/app-catalog-debug.apk"}] do
+        response = DynamicTool.execute("qa_android_install", args, issue: %Issue{id: "issue-current"}, tool_scope: :qa, qa_driver: self())
+        assert %{"error" => %{"code" => "qa_android_driver_unavailable"}} = Jason.decode!(response["output"])
+      end
 
       response =
         DynamicTool.execute("qa_android_launch", %{"application_id" => "com.example.app", "pid" => 1}, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
 
       assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
 
-      for {tool, args} <- [{"qa_android_tap", %{"x" => 1, "y" => 1, "pid" => 1}}, {"qa_android_type", %{"text" => "a", "shell" => "id"}}] do
+      for {tool, args} <- [
+            {"qa_android_tap", %{"x" => 1, "y" => 1, "pid" => 1}},
+            {"qa_android_type", %{"text" => "a", "shell" => "id"}},
+            {"qa_android_install", %{"apk" => "app.apk", "apk_path" => "../outside.apk"}}
+          ] do
         response = DynamicTool.execute(tool, args, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
         assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
       end
