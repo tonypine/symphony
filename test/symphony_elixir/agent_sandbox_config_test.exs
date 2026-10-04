@@ -535,6 +535,17 @@ defmodule SymphonyElixir.AgentSandboxConfigTest do
     assert missing_path in settings["filesystem"]["allowWrite"]
   end
 
+  test "srt settings never opt into extra mach services, so the window server stays unreachable" do
+    assert {:ok, settings} =
+             AgentSandboxConfig.srt_settings("allowlist", ["github.com"], [], ["~/.npmrc"],
+               allow_unix_socket_paths: ["/tmp/symphony-mcp/sock"],
+               allow_write_paths: ["/opt/cache"]
+             )
+
+    refute Map.has_key?(settings["network"], "allowMachLookup")
+    refute Map.has_key?(settings, "allowMachLookup")
+  end
+
   test "srt settings emit both tilde and absolute forms of home-relative deny paths (defense-in-depth)" do
     assert {:ok, settings} = AgentSandboxConfig.srt_settings("allowlist", ["github.com"], [])
 
