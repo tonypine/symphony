@@ -479,6 +479,28 @@ defmodule SymphonyElixirWeb.DashboardLive do
           <% end %>
         </section>
 
+        <section class="section-card">
+          <div class="section-header">
+            <div>
+              <h2 class="section-title">Auto Review</h2>
+              <p class="section-copy">
+                Acceptance gate: <%= gate_runner_line(@payload.acceptance_gate) %>
+              </p>
+              <p :for={{repo_key, stats} <- Enum.sort(@payload.acceptance_gate.agreement)} class="section-copy">
+                <%= gate_agreement_line(repo_key, stats) %>
+              </p>
+            </div>
+          </div>
+
+          <%= if @payload.acceptance_gate.recent == [] do %>
+            <p class="empty-state">The acceptance gate has not judged a ticket yet.</p>
+          <% else %>
+            <p :for={entry <- @payload.acceptance_gate.recent} class="section-copy">
+              <%= gate_verdict_line(entry) %>
+            </p>
+          <% end %>
+        </section>
+
         <section :if={@payload.forced != []} class="section-card">
           <div class="section-header">
             <div>
@@ -1007,6 +1029,32 @@ defmodule SymphonyElixirWeb.DashboardLive do
     |> assign(:repo_filter, repo_filter)
     |> assign(:visible_payload, filter_payload(payload, repo_filter))
   end
+
+  defp gate_runner_line(%{running: running, queued: queued}) do
+    names = if running == [], do: "", else: " (#{Enum.map_join(running, ", ", & &1.identifier)})"
+    "#{length(running)} running#{names}, #{length(queued)} queued."
+  end
+
+  defp gate_verdict_line(entry) do
+    agent = if entry.agent_verdict in [nil, entry.verdict], do: "", else: " (agent: #{entry.agent_verdict})"
+    reasons = if entry.reasons == [], do: "", else: " · reasons: #{Enum.map_join(entry.reasons, ", ", & &1.rule)}"
+    %{met: met, unmet: unmet, unclear: unclear} = entry.criteria
+
+    "#{entry.issue_identifier}: #{entry.verdict}#{agent} · #{met} met, #{unmet} unmet, #{unclear} unclear#{reasons} · " <>
+      "#{entry.mode} · human: #{entry.human_decision || "waiting"}"
+  end
+
+  defp gate_agreement_line(repo_key, stats) do
+    readiness = if stats.ready_to_enforce, do: "ready to enforce", else: "not ready to enforce: #{stats.unmet_condition}"
+
+    "#{repo_key}: #{stats.judged} judged, #{stats.agreed} agreed (#{rate_label(stats.agreement_rate)}), " <>
+      "#{stats.unsafe_approvals} unsafe approvals, #{stats.false_reworks} false reworks, " <>
+      "#{stats.escalations} escalations (#{stats.escalations_merged_unchanged} merged unchanged), " <>
+      "gate tokens median #{stats.tokens.median || "n/a"}, p90 #{stats.tokens.p90 || "n/a"} · #{readiness}"
+  end
+
+  defp rate_label(nil), do: "n/a"
+  defp rate_label(rate), do: "#{round(rate * 100)}%"
 
   defp lane_status_label("running"), do: "Running"
   defp lane_status_label("yielded"), do: "Yielded"
