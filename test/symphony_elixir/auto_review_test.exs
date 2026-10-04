@@ -130,6 +130,63 @@ defmodule SymphonyElixir.AutoReviewTest do
       end
     end
 
+    test "parses auto_review.android with its defaults" do
+      assert %Schema.AutoReview.Android{avd: nil, sdk_root: nil, boot_timeout_ms: 180_000, idle_timeout_ms: 600_000} =
+               Config.settings!().auto_review.android
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        auto_review: %{android: %{avd: "Pixel_3a_API_34", sdk_root: "/opt/android-sdk", boot_timeout_ms: 1_000, idle_timeout_ms: 2_000}}
+      )
+
+      settings = Config.settings!()
+
+      assert %Schema.AutoReview.Android{avd: "Pixel_3a_API_34", sdk_root: "/opt/android-sdk", boot_timeout_ms: 1_000, idle_timeout_ms: 2_000} =
+               settings.auto_review.android
+
+      assert Config.auto_review_android(settings, %{"ANDROID_HOME" => "/env/home"}) == %{
+               avd: "Pixel_3a_API_34",
+               sdk_root: "/opt/android-sdk",
+               boot_timeout_ms: 1_000,
+               idle_timeout_ms: 2_000
+             }
+    end
+
+    test "auto_review_android/2 falls back to ANDROID_HOME, ANDROID_SDK_ROOT, then ~/Library/Android/sdk" do
+      write_workflow_file!(Workflow.workflow_file_path(), auto_review: %{android: %{avd: "Pixel_3a_API_34"}})
+      settings = Config.settings!()
+
+      assert %{avd: "Pixel_3a_API_34", sdk_root: "/env/home", boot_timeout_ms: 180_000, idle_timeout_ms: 600_000} =
+               Config.auto_review_android(settings, %{"ANDROID_HOME" => "/env/home", "ANDROID_SDK_ROOT" => "/env/sdk-root"})
+
+      assert Config.auto_review_android(settings, %{"ANDROID_HOME" => " ", "ANDROID_SDK_ROOT" => "/env/sdk-root"}).sdk_root == "/env/sdk-root"
+      assert Config.auto_review_android(settings, %{}).sdk_root == Path.expand("~/Library/Android/sdk")
+      assert is_binary(Config.auto_review_android(settings).sdk_root)
+
+      write_workflow_file!(Workflow.workflow_file_path(), auto_review: %{android: %{sdk_root: "~/sdk"}})
+      assert Config.auto_review_android(Config.settings!(), %{"ANDROID_HOME" => "/env/home"}).sdk_root == Path.expand("~/sdk")
+    end
+
+    test "rejects invalid auto_review.android values with clear messages" do
+      repositories = [%{"key" => "default", "workflow" => "WORKFLOW.md", "route" => %{"team" => "Test"}}]
+
+      for {android, expected} <- [
+            {%{"avd" => 34}, "auto_review.android.avd must be a string"},
+            {%{"avd" => "Pixel 3a; rm -rf"}, "auto_review.android.avd must be an AVD name such as Pixel_3a_API_34"},
+            {%{"sdk_root" => ["/opt"]}, "auto_review.android.sdk_root must be a string"},
+            {%{"sdk_root" => " "}, "auto_review.android.sdk_root must not be blank"},
+            {%{"boot_timeout_ms" => 0}, "auto_review.android.boot_timeout_ms must be a positive integer"},
+            {%{"idle_timeout_ms" => -1}, "auto_review.android.idle_timeout_ms must be a positive integer"},
+            {%{"boot_timeout_ms" => "slow"}, "auto_review.android.boot_timeout_ms must be a positive integer"},
+            {%{"emulator" => "x"}, "unknown symphony.yml key `auto_review.android.emulator`"},
+            {"Pixel_3a_API_34", "`auto_review.android` must be an object"}
+          ] do
+        assert {:error, {:invalid_symphony_config, message}} =
+                 SystemSchema.parse(%{"auto_review" => %{"android" => android}, "repositories" => repositories})
+
+        assert message =~ expected
+      end
+    end
+
     test "round-trips through the system config map" do
       assert {:ok, system_config} =
                SystemSchema.parse(%{

@@ -5,9 +5,11 @@ import Foundation
 ///
 /// - a test presses a menu item by writing its title to a file in `<QA root>/commands/`. The app takes the files in
 ///   name order, deletes each one, and presses the visible item with that title the way a click would: only when it
-///   is enabled;
+///   is enabled. An item in a visible item's submenu counts as visible. The lines after the title answer a text
+///   prompt the press shows, such as Force a ticket…;
 /// - the app keeps `<QA root>/status.json` current: its process, build, the Symphony it runs, every visible menu item
-///   with whether it is enabled, the alerts it would have shown and the presses it handled;
+///   (submenu items after the item they open from) with whether it is enabled, the alerts it would have shown and the
+///   presses it handled;
 /// - alerts are recorded in `status.json` instead of shown, and confirmations are answered yes.
 public enum QAScript {
     public static let commandsFolder = "commands"
@@ -19,10 +21,25 @@ public enum QAScript {
         public let file: URL
         /// The title of the menu item to press.
         public let title: String
+        /// The answer to a text prompt the press shows, nil when the file holds only the title.
+        public let input: String?
 
-        public init(file: URL, title: String) {
+        public init(file: URL, title: String, input: String? = nil) {
             self.file = file
             self.title = title
+            self.input = input
+        }
+
+        /// The command in a file's contents: the title on the first line, the prompt's answer on the lines after.
+        public init(file: URL, contents: String) {
+            let text = contents.trimmingWhitespace()
+            let lines = text.split(maxSplits: 1, omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+            let input = lines.count > 1 ? String(lines[1]).trimmingWhitespace() : ""
+            self.init(
+                file: file,
+                title: lines.first.map { String($0).trimmingWhitespace() } ?? "",
+                input: input.isEmpty ? nil : input
+            )
         }
     }
 
@@ -33,7 +50,7 @@ public enum QAScript {
         return names.filter { !$0.hasPrefix(".") }.sorted().compactMap { name in
             let file = folder.appendingPathComponent(name)
             guard let contents = try? String(contentsOf: file, encoding: .utf8) else { return nil }
-            return Command(file: file, title: contents.trimmingWhitespace())
+            return Command(file: file, contents: contents)
         }
     }
 
