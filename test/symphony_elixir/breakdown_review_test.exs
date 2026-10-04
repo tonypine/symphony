@@ -20,6 +20,10 @@ defmodule SymphonyElixir.BreakdownReviewTest do
     end
   end
 
+  defmodule UnreadableRunStore do
+    def get_own_state_move(_issue_id), do: {:error, :node_not_running}
+  end
+
   defmodule HistoryClient do
     def graphql(query, variables) do
       send(self(), {:graphql_called, query, variables})
@@ -263,10 +267,12 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       parent = parent(@waiting, [sub("c1", "Backlog")])
       put_history("parent", [approval()], [history_sub("c1", "Backlog")])
 
-      :stopped = :mnesia.stop()
-      on_exit(fn -> :ok = SymphonyElixir.TestSupport.clear_run_store!() end)
+      log =
+        capture_log(fn ->
+          state = Orchestrator.review_breakdown_parents_for_test([parent], orchestrator_state(), run_store: UnreadableRunStore)
+          assert state.breakdown_reviews == %{}
+        end)
 
-      log = capture_log(fn -> assert review([parent], orchestrator_state()).breakdown_reviews == %{} end)
       assert log =~ "Failed to read Symphony's own moves of breakdown parent"
       refute_received {:memory_tracker_state_update, _id, _state}
     end

@@ -1526,8 +1526,9 @@ defmodule SymphonyElixir.Orchestrator do
   def put_blocked_for_test(%State{} = state, issues) when is_list(issues), do: put_blocked(state, issues)
 
   @doc false
-  @spec review_breakdown_parents_for_test([Issue.t()], term()) :: term()
-  def review_breakdown_parents_for_test(issues, %State{} = state) when is_list(issues), do: review_breakdown_parents(issues, state)
+  @spec review_breakdown_parents_for_test([Issue.t()], term(), keyword()) :: term()
+  def review_breakdown_parents_for_test(issues, %State{} = state, opts \\ []) when is_list(issues),
+    do: review_breakdown_parents(issues, state, opts)
 
   @doc false
   @spec park_breakdown_parents_for_test([Issue.t()], term()) :: term()
@@ -2598,7 +2599,7 @@ defmodule SymphonyElixir.Orchestrator do
   # promotes its Backlog sub-issues to Todo, rejecting it (Rework) cancels them before the re-plan.
   # `breakdown_reviews` maps each parent to the Backlog sub-issues last acted on, so a re-poll
   # showing the same ones does not ask Linear again; a parent that needs nothing is dropped.
-  defp review_breakdown_parents(issues, %State{} = state) do
+  defp review_breakdown_parents(issues, %State{} = state, opts \\ []) do
     settings = Config.settings!()
 
     pending =
@@ -2617,7 +2618,7 @@ defmodule SymphonyElixir.Orchestrator do
 
         cond do
           issue_claimed_or_running?(state, issue_id) or Map.get(reviews, issue_id) == backlog -> reviews
-          review_breakdown_parent(issue, action, settings) -> Map.put(reviews, issue_id, backlog)
+          review_breakdown_parent(issue, action, settings, opts) -> Map.put(reviews, issue_id, backlog)
           true -> Map.delete(reviews, issue_id)
         end
       end)
@@ -2625,10 +2626,10 @@ defmodule SymphonyElixir.Orchestrator do
     %{state | breakdown_reviews: reviews}
   end
 
-  defp review_breakdown_parent(%Issue{id: issue_id} = issue, action, settings) do
+  defp review_breakdown_parent(%Issue{id: issue_id} = issue, action, settings, opts) do
     case Tracker.fetch_breakdown_history(issue_id) do
       {:ok, history} ->
-        review_breakdown_history(issue, action, history, settings)
+        review_breakdown_history(issue, action, history, settings, Keyword.get(opts, :run_store, RunStore))
 
       {:error, reason} ->
         Logger.warning("Failed to read breakdown parent history: #{issue_context(issue)} reason=#{inspect(reason)}")
@@ -2638,8 +2639,8 @@ defmodule SymphonyElixir.Orchestrator do
 
   # When Symphony last moved the parent itself, so its own move is not read as a person's approval.
   # Without that record nothing is moved; the next poll tries again.
-  defp review_breakdown_history(%Issue{id: issue_id} = issue, action, history, settings) do
-    case RunStore.get_own_state_move(issue_id) do
+  defp review_breakdown_history(%Issue{id: issue_id} = issue, action, history, settings, run_store) do
+    case run_store.get_own_state_move(issue_id) do
       {:error, reason} ->
         Logger.warning("Failed to read Symphony's own moves of breakdown parent: #{issue_context(issue)} reason=#{inspect(reason)}")
         false
