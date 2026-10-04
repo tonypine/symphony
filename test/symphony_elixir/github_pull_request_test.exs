@@ -149,10 +149,11 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
 
     runner = fn
       ["pr", "view", ^pr_url, "--json", fields], opts ->
-        assert fields == "number,state,title,url,headRefName,headRefOid,baseRefName,isCrossRepository,headRepository,mergeable,mergeStateStatus,statusCheckRollup"
+        assert fields == "id,number,state,title,url,headRefName,headRefOid,baseRefName,isCrossRepository,headRepository,mergeable,mergeStateStatus,autoMergeRequest,statusCheckRollup"
         assert opts[:stderr_to_stdout]
 
         {Jason.encode!(%{
+           "id" => "PR_kwDO17",
            "state" => "OPEN",
            "title" => "Fix CI",
            "url" => pr_url,
@@ -163,6 +164,7 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
            "baseRefName" => "main",
            "mergeable" => "CONFLICTING",
            "mergeStateStatus" => "DIRTY",
+           "autoMergeRequest" => %{"mergeMethod" => "SQUASH"},
            "statusCheckRollup" => [
              %{
                "name" => "test",
@@ -185,6 +187,8 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
     assert status.base_ref_name == "main"
     assert status.mergeable == "CONFLICTING"
     assert status.merge_state_status == "DIRTY"
+    assert status.pr_node_id == "PR_kwDO17"
+    assert status.auto_merge_enabled
     assert [%{name: "test", conclusion: "FAILURE", run_id: "987"}] = status.checks
   end
 
@@ -200,7 +204,14 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
   test "fetch_ci_status maps status context state into status and conclusion" do
     pr_url = "https://github.com/org/repo/pull/17"
 
-    runner = fn ["pr", "view", ^pr_url, "--json", "number,state,title,url,headRefName,headRefOid,baseRefName,isCrossRepository,headRepository,mergeable,mergeStateStatus,statusCheckRollup"], _opts ->
+    runner = fn [
+                  "pr",
+                  "view",
+                  ^pr_url,
+                  "--json",
+                  "id,number,state,title,url,headRefName,headRefOid,baseRefName,isCrossRepository,headRepository,mergeable,mergeStateStatus,autoMergeRequest,statusCheckRollup"
+                ],
+                _opts ->
       {Jason.encode!(%{
          "state" => "OPEN",
          "title" => "Fix legacy contexts",
@@ -216,6 +227,8 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
     end
 
     assert {:ok, status} = PullRequest.fetch_ci_status(pr_url, gh_runner: runner)
+    assert status.pr_node_id == nil
+    refute status.auto_merge_enabled
 
     assert [
              %{name: "ci/failure", status: "FAILURE", conclusion: "FAILURE", details_url: "https://ci.example.test/failure"},
