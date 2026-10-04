@@ -413,6 +413,22 @@ defmodule SymphonyElixir.PromptBuilderTest do
     refute PromptBuilder.build_prompt(%{issue | sub_issues: []}) =~ "Sub-issues:"
   end
 
+  test "prompt builder separates labels with commas through the issue_context partial" do
+    write_workflow_file!(Workflow.workflow_file_path(), prompt: ~s({% render "issue_context", issue: issue %}))
+
+    issue = %Issue{
+      identifier: "ACME-3307",
+      title: "Split into sub-tickets",
+      description: "Parent ticket",
+      state: "Todo",
+      url: "https://example.org/issues/ACME-3307",
+      labels: ["breakdown", "Feature"]
+    }
+
+    assert PromptBuilder.build_prompt(issue) =~ "Labels: breakdown, Feature\n"
+    assert PromptBuilder.build_prompt(%{issue | labels: []}) =~ "Labels: \n"
+  end
+
   test "prompt builder truncates oversized linked issue titles" do
     write_workflow_file!(
       Workflow.workflow_file_path(),
