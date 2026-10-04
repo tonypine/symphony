@@ -453,8 +453,10 @@ agent:
   `symphony check`.
 - Dispatch goes closest to done first: `Merging`, Auto Review, `Rework`, resumes such as
   `In Progress`, then `Todo`; priority and age only break ties within a stage. While a `Merging`
-  ticket waits for a finishing slot, or a QA pass is queued, no `Todo` ticket starts; `Rework` and
-  resumes still do. A ticket that finds no free slot is not retried with backoff: it keeps its
+  ticket waits for a finishing slot, or a QA pass is queued because `finishing_max` is below
+  `auto_review.max_concurrent`, no `Todo` ticket starts; `Rework` and resumes still do, and the
+  held ticket's reason names what it waits for (`QA pass for MT-3 is waiting for a finishing
+  slot`). A QA pass queued on `auto_review.max_concurrent` doesn't hold `Todo` tickets back. A ticket that finds no free slot is not retried with backoff: it keeps its
   attempt and starts on the first poll after a slot frees (a run ending triggers that poll). The
   dashboard and `/api/v1/state` show the landing runs (`finishing`) and what is waiting for a slot
   and why (`slot_waiting`). A `Merging` ticket held while CI runs on its head is listed there as
@@ -877,7 +879,9 @@ available for `notifications.channels[].events`.
 
 Results are kept per PR head SHA. With `run_on: first_pass`, once a push has passed QA, later
 pushes on the PR skip it. `max_concurrent` caps how many QA passes run at once, and
-`agent.concurrency.finishing_max` caps it again. QA passes never use the agent slots.
+`agent.concurrency.finishing_max` caps it again. QA passes never use the agent slots, so a pass
+queued on `max_concurrent` doesn't hold `Todo` tickets back; one queued because `finishing_max` is
+lower does.
 
 #### Parent walkthrough
 

@@ -2876,27 +2876,28 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # Candidates go out closest-to-done first, each epic lane's tickets nearest the epic first. Once
-  # a Merging or Auto Review issue is left waiting for a slot, no Todo issue starts in this pass.
+  # a Merging or Auto Review issue is left waiting for a slot, or a QA pass waits for a finishing
+  # slot, no Todo issue starts in this pass; its `slot_waiting` reason names the issue it waits for.
+  # A QA pass that waits only on `auto_review.max_concurrent` holds nothing back.
   # `slot_waiting` is rebuilt from the pass, keeping the attempt of any retry that was waiting for a slot.
   defp dispatch_chosen_issues(issues, state) do
     active_states = active_state_set()
     terminal_states = terminal_state_set()
     previous_waiting = state.slot_waiting || %{}
-    finish_waiting? = qa_pass_queued?()
     auto_review_state = Config.settings!() |> AutoReview.state() |> normalize_issue_state()
 
-    {state, _finish_waiting?} =
+    {state, _hold} =
       issues
       |> sort_issues_for_dispatch()
       |> then(&EpicLanes.order(state.epic_lanes, &1, fn issue -> stage_rank(issue.state, auto_review_state) end))
-      |> Enum.reduce({%{state | slot_waiting: %{}}, finish_waiting?}, fn issue, acc ->
+      |> Enum.reduce({%{state | slot_waiting: %{}}, qa_finishing_hold()}, fn issue, acc ->
         maybe_dispatch_chosen_issue(issue, acc, previous_waiting, active_states, terminal_states)
       end)
 
     recover_usage_limit_canaries(state)
   end
 
-  defp maybe_dispatch_chosen_issue(%Issue{} = issue, {state, finish_waiting?}, previous_waiting, active_states, terminal_states) do
+  defp maybe_dispatch_chosen_issue(%Issue{} = issue, {state, hold}, previous_waiting, active_states, terminal_states) do
     waiting = Map.get(previous_waiting, issue.id, %{})
 
     cond do
@@ -2904,20 +2905,20 @@ defmodule SymphonyElixir.Orchestrator do
       Map.has_key?(previous_waiting, issue.id) and post_pr_quiet_active_issue?(issue, state) ->
         metadata = Map.take(waiting, [:repo_key, :worker_host])
         {:noreply, state} = handle_post_pr_quiet_active_issue(state, issue, issue.id, Map.get(waiting, :attempt), metadata)
-        {state, finish_waiting?}
+        {state, hold}
 
       not dispatch_eligible?(issue, state, active_states, terminal_states) ->
-        {state, finish_waiting?}
+        {state, hold}
 
-      finish_waiting? and fresh_issue?(issue) ->
-        {put_slot_waiting(state, issue, waiting, "a Merging or Auto Review issue is waiting for a slot"), finish_waiting?}
+      is_binary(hold) and fresh_issue?(issue) ->
+        {put_slot_waiting(state, issue, waiting, hold), hold}
 
       issue_dispatch_slots_available?(issue, state) ->
-        {dispatch_waiting_issue(state, issue, waiting), finish_waiting?}
+        {dispatch_waiting_issue(state, issue, waiting), hold}
 
       true ->
         state = put_slot_waiting(state, issue, waiting, slot_wait_reason(issue))
-        {state, finish_waiting? or finishing_stage?(issue)}
+        {state, hold || finishing_hold(issue)}
     end
   end
 
@@ -2974,14 +2975,22 @@ defmodule SymphonyElixir.Orchestrator do
   defp fresh_issue?(%Issue{state: state_name}), do: stage_rank(state_name, nil) == 4
 
   # Merging and Auto Review: the issues "never start fresh work while a finish waits" protects.
-  defp finishing_stage?(%Issue{state: state_name}) do
-    stage_rank(state_name, Config.settings!() |> AutoReview.state() |> normalize_issue_state()) <= 1
+  defp finishing_hold(%Issue{state: state_name} = issue) do
+    if stage_rank(state_name, Config.settings!() |> AutoReview.state() |> normalize_issue_state()) <= 1 do
+      slot = if finishing_issue?(issue), do: "finishing", else: "work"
+      "#{issue.identifier} (#{state_name}) is waiting for a #{slot} slot"
+    end
   end
 
-  defp qa_pass_queued? do
-    QaRunner.queued() != []
+  # A QA pass held back by `auto_review.max_concurrent` would not start any sooner for an idle agent
+  # slot, so only one waiting on `finishing_max` holds Todo work back.
+  defp qa_finishing_hold do
+    case Enum.find(QaRunner.queued_passes(), &(&1.waiting_on == :finishing_max)) do
+      %{identifier: identifier} -> "QA pass for #{identifier} is waiting for a finishing slot"
+      nil -> nil
+    end
   catch
-    :exit, _reason -> false
+    :exit, _reason -> nil
   end
 
   defp priority_rank(priority) when is_integer(priority) and priority in 1..4, do: priority

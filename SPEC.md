@@ -1967,8 +1967,12 @@ Sorting order (stable intent), closest to done first:
 3. `created_at` oldest first
 4. `identifier` lexicographic tie-breaker
 
-While an issue in `Merging` or the Auto Review state is waiting for a slot (or an Auto Review QA
-pass is queued), no `Todo` issue is dispatched. `Rework` and resumes still are.
+While an issue in `Merging` or the Auto Review state is waiting for a slot, or an Auto Review QA
+pass is queued because `finishing_max` is below `auto_review.max_concurrent`, no `Todo` issue is
+dispatched. `Rework` and resumes still are. A QA pass queued on `auto_review.max_concurrent` holds
+nothing back: it would not start any sooner for an idle agent slot. The held `Todo` issue's
+`slot_waiting` reason names the issue it waits for (`MT-2 (Merging) is waiting for a finishing
+slot`, `QA pass for MT-3 is waiting for a finishing slot`).
 
 ### 8.3 Concurrency Control
 
@@ -3243,7 +3247,7 @@ Minimum endpoints:
           "issue_identifier": "MT-653",
           "title": "Add the export button",
           "state": "Todo",
-          "reason": "a Merging or Auto Review issue is waiting for a slot",
+          "reason": "QA pass for MT-655 is waiting for a finishing slot",
           "attempt": null,
           "since": "2026-02-24T20:15:30Z"
         }
@@ -4103,6 +4107,8 @@ infrastructure.
   then oldest creation time
 - A landing run starts while every `max_total` slot and epic lane is busy, up to `finishing_max`
 - No `Todo` issue is dispatched while a `Merging` issue waits for a finishing slot
+- A queued QA pass holds `Todo` issues back only when it waits on `finishing_max`, not on
+  `auto_review.max_concurrent`
 - A retry that finds no slot keeps its attempt, gets no backoff, and starts on the first poll after
   a slot frees
 - Each active epic reserves one lane out of `max_total`; a standalone issue cannot take a reserved

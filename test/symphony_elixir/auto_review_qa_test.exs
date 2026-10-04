@@ -524,7 +524,8 @@ defmodule SymphonyElixir.AutoReviewQaTest do
       assert_receive {:pass_started, "issue-qa-flow", pass_pid, [tracker: :fake]}
       assert QaRunner.running(name) == %{"issue-qa-flow" => @sha}
       assert :running = QaRunner.request(job, qa_runner_server: name)
-      assert :busy = QaRunner.request(%{job | issue: issue(%{id: "other"})}, qa_runner_server: name)
+      assert :busy = QaRunner.request(%{job | issue: issue(%{id: "other", identifier: "TP-902"})}, qa_runner_server: name)
+      assert QaRunner.queued_passes(name) == [%{issue_id: "other", identifier: "TP-902", waiting_on: :max_concurrent}]
 
       send(pass_pid, :finish)
       wait_until(fn -> QaRunner.running(name) == %{} end)
@@ -581,8 +582,9 @@ defmodule SymphonyElixir.AutoReviewQaTest do
 
       assert :started = QaRunner.request(job, qa_runner_server: name)
       assert_receive {:pass_started, "issue-qa-flow", pass_pid}
-      assert :busy = QaRunner.request(%{job | issue: issue(%{id: "other"})}, qa_runner_server: name)
+      assert :busy = QaRunner.request(%{job | issue: issue(%{id: "other", identifier: "TP-902"})}, qa_runner_server: name)
       assert QaRunner.queued(name) == ["other"]
+      assert QaRunner.queued_passes(name) == [%{issue_id: "other", identifier: "TP-902", waiting_on: :finishing_max}]
 
       send(pass_pid, :finish)
       wait_until(fn -> QaRunner.running(name) == %{} end)
@@ -594,7 +596,9 @@ defmodule SymphonyElixir.AutoReviewQaTest do
       assert :started = QaRunner.request(job, qa_runner_server: quiet)
       assert :busy = QaRunner.request(%{job | issue: issue(%{id: "other"})}, qa_runner_server: quiet)
       assert QaRunner.queued(quiet) == []
+      assert QaRunner.queued_passes(quiet) == []
       assert QaRunner.queued(:missing_qa_runner) == []
+      assert QaRunner.queued_passes(:missing_qa_runner) == []
     end
 
     test "reports an unavailable runner" do
