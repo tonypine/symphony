@@ -3126,6 +3126,9 @@ SHOULD return:
 - `running` (list of running session rows)
 - each running row SHOULD include `turn_count`
 - each running row SHOULD include `repo_key`
+- each running row SHOULD include `linear_wait_until`: while the run waits out a Linear rate limit
+  or outage (Section 8.5), when that wait ends, otherwise null; dashboards show such a run as
+  waiting for Linear
 - `watching` (list of recently completed issues now in non-active, non-terminal states)
 - each watching row SHOULD include issue identifier, current state, issue URL, last-run time, and
   final transcript replay metadata while the watch remains open
@@ -3329,6 +3332,7 @@ Minimum endpoints:
           "turn_count": 7,
           "last_event": "turn_completed",
           "last_message": "",
+          "linear_wait_until": null,
           "started_at": "2026-02-24T20:10:12Z",
           "last_event_at": "2026-02-24T20:14:59Z",
           "forced": false,
@@ -3534,6 +3538,7 @@ Minimum endpoints:
         "started_at": "2026-02-24T20:10:12Z",
         "last_event": "notification",
         "last_message": "Working on tests",
+        "linear_wait_until": null,
         "last_event_at": "2026-02-24T20:14:59Z",
         "tokens": {
           "input_tokens": 1200,
