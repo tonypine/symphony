@@ -302,6 +302,29 @@ defmodule SymphonyElixir.EpicLanesTest do
     end
   end
 
+  describe "members/2" do
+    test "finds the path of an epic with a lane, a queued one and a yielded one, and none for anything else" do
+      candidates = [
+        epic("E1", [{"a", "Todo"}]),
+        epic("E2", [{"b", "Todo"}], priority: 3),
+        epic("E3", [{"c", "In Review"}])
+      ]
+
+      plan = EpicLanes.plan(candidates, 1, nil, @terminal)
+
+      assert %{"a" => %{depth: 1}} = EpicLanes.members(plan, "E1")
+      assert %{"b" => %{depth: 1}} = EpicLanes.members(plan, "E2")
+      assert %{"c" => %{state: "In Review"}} = EpicLanes.members(plan, "E3")
+      assert EpicLanes.members(plan, "S1") == %{}
+      assert EpicLanes.members(nil, "E1") == %{}
+    end
+  end
+
+  test "human_gated_state?/1 is true for Backlog, Triage and In Review" do
+    assert Enum.all?(["Backlog", " triage", "In Review"], &EpicLanes.human_gated_state?/1)
+    refute Enum.any?(["Todo", "Merging", nil], &EpicLanes.human_gated_state?/1)
+  end
+
   describe "snapshot/2" do
     test "shows each lane's running or awaited part, the queued epics and the shared pool" do
       candidates = [

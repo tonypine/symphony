@@ -474,6 +474,16 @@ agent:
   links, a failed setup, retry backoff, the post-PR quiet period, auto-merge and `Merging` CI waits,
   and a usage-limit pause still hold it; when a usage-limit pause resumes, a held forced ticket
   goes out first.
+  A forced `breakdown` parent is one forced unit. Its breakdown, re-plan and close-out runs use the
+  allowance like any forced ticket. While it waits on its sub-tickets, one ticket on its epic path
+  at a time (its sub-tickets at any depth and their open blockers, picked in epic-lane order, so
+  blocked-by links keep their order; the `Final verification:` sub-ticket comes last) counts as
+  forced in the parent's place in the queue, without the label being written on it. It keeps that
+  until it leaves the path or stops running or waiting on a retry; the other sub-tickets use normal
+  slots and the epic lane. `/api/v1/state` shows it as the parent's `forced[].sub_issue`. Forcing
+  never approves a plan: a forced parent in `In Review` stays there, shown with
+  `forced[].waiting_on_human: true` (as is any forced ticket in `Backlog`, `Triage` or `In Review`).
+  Forcing a sub-ticket itself forces only that sub-ticket.
 - `concurrency.forced_stale_after_hours` (default: `72`) is how long a ticket may stay forced before
   it counts as stale. It is validated now but not reported yet. Values below `1` fail
   `symphony check`.
