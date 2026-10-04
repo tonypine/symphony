@@ -208,7 +208,8 @@ final class ReposListTests: XCTestCase {
                         tone: .problem
                     ),
                     RepoField("Agents", "none"),
-                ]
+                ],
+                managedGitHub: "acme/api"
             )
         )
     }
@@ -295,7 +296,8 @@ final class ReposListTests: XCTestCase {
                         RepoField("WORKFLOW.md", "unavailable", detail: "WORKFLOW.md", tone: .unavailable),
                         RepoField("Last fetch", "unavailable", tone: .unavailable),
                         RepoField("Agents", "unavailable", tone: .unavailable),
-                    ]
+                    ],
+                    managedGitHub: "acme/api"
                 ),
             ]
         )
@@ -404,5 +406,47 @@ final class ReposListTests: XCTestCase {
 
         XCTAssertEqual(shown.rows.map(\.key), ["symphony"])
         XCTAssertEqual(shown.rows.first?.fields[2], RepoField("Linear", "project building-the-harness"))
+    }
+
+    // MARK: Actions
+
+    func testRowsKnowTheirManagedSource() {
+        XCTAssertNil(ReposList.row(symphony).managedGitHub)
+        XCTAssertEqual(ReposList.row(api).managedGitHub, "acme/api")
+        XCTAssertEqual(ReposList.row(RepositoryEntry(key: "web", workspace: .init(source: "https://github.com/acme/web.git"))).managedGitHub, "acme/web")
+        XCTAssertNil(ReposList.row(RepositoryEntry(key: "web", workspace: .init(repo: "~/web"))).managedGitHub)
+    }
+
+    func testActionsFollowTheConfigAndTheClone() {
+        let display = ReposDisplay(rows: [ReposList.row(symphony), ReposList.row(api), ReposList.row(docs)])
+        let entries = [RepositoryEntry(key: "symphony", isDefault: true), RepositoryEntry(key: "api")]
+        var asked: [String] = []
+        let shown = ReposList.withActions(display, entries: .success(entries)) { gitHub in
+            asked.append(gitHub)
+            return .blocked("TP-1 runs in a worktree of this clone.")
+        }
+
+        XCTAssertEqual(asked, ["acme/api"])
+        XCTAssertEqual(shown.rows[0].actions, RepoActions())
+        XCTAssertEqual(shown.rows[1].actions, RepoActions(cloneRemoval: .blocked("TP-1 runs in a worktree of this clone.")))
+        XCTAssertEqual(shown.rows[1].actions.notes, ["TP-1 runs in a worktree of this clone."])
+        let missing = "symphony.yml has no repo `docs`. Symphony keeps it until it restarts."
+        XCTAssertEqual(shown.rows[2].actions, RepoActions(editProblem: missing, disconnectProblem: missing))
+        XCTAssertEqual(shown.rows[2].actions.notes, [missing])
+
+        let only = ReposList.withActions(ReposDisplay(rows: [ReposList.row(symphony)]), entries: .success([entries[0]])) { _ in
+            .allowed(path: "/x")
+        }
+        XCTAssertEqual(only.rows[0].actions, RepoActions(disconnectProblem: "symphony is the only repo, and Symphony needs at least one."))
+
+        let unreadable = ReposList.withActions(display, entries: .failure(AddRepoProblem("Couldn't read symphony.yml"))) { _ in
+            .allowed(path: "/clones/acme/api")
+        }
+        XCTAssertEqual(unreadable.rows[1].actions, RepoActions(
+            editProblem: "Couldn't read symphony.yml",
+            disconnectProblem: "Couldn't read symphony.yml",
+            cloneRemoval: .allowed(path: "/clones/acme/api")
+        ))
+        XCTAssertEqual(unreadable.rows[1].actions.notes, ["Couldn't read symphony.yml"])
     }
 }
