@@ -112,20 +112,13 @@ defmodule SymphonyElixir.McpServerTest do
     server = unique_server()
     start_supervised!({McpServer, name: server})
 
-    if tmp_root_writable?() do
-      assert_default_root_session(server)
-    else
-      # Sandboxed agent runs deny writes to `/tmp`; the default root must still
-      # be `/tmp` and surface the denial rather than silently relocating.
-      assert {:error, {:mcp_socket_dir_failed, "/tmp/symphony-mcp-" <> _id, :eperm}} =
-               McpServer.start_session(%{workspace: System.tmp_dir!()},
-                 server: server,
-                 shim_path: "/tmp/shim"
-               )
-    end
+    # Sandboxed agent runs deny writes to `/tmp` itself; sessions then live
+    # under the sandbox's own TMPDIR instead of failing with `:eperm`.
+    expected_root = if tmp_root_writable?(), do: "/tmp", else: System.tmp_dir!()
+    assert_default_root_session(server, expected_root)
   end
 
-  defp assert_default_root_session(server) do
+  defp assert_default_root_session(server, expected_root) do
     {:ok, session} =
       McpServer.start_session(%{workspace: System.tmp_dir!()},
         server: server,
@@ -136,7 +129,9 @@ defmodule SymphonyElixir.McpServerTest do
       case unix_socket_probe_case() do
         :supported ->
           assert session.transport == :unix
-          assert String.starts_with?(session.socket_dir, "/tmp/symphony-mcp-")
+          assert Path.dirname(session.socket_dir) == expected_root
+          assert String.starts_with?(Path.basename(session.socket_dir), "symphony-mcp-")
+          assert byte_size(session.socket_path) <= 103
           assert File.dir?(session.socket_dir)
           assert File.exists?(session.socket_path)
 
@@ -150,6 +145,107 @@ defmodule SymphonyElixir.McpServerTest do
     after
       McpServer.stop_session(session, server: server)
     end
+  end
+
+  test "sessions fall back to the next default root when /tmp is not writable" do
+    {unwritable_root, fallback_root} = unwritable_and_fallback_roots("f")
+
+    preserve_socket_root_overrides()
+    Application.delete_env(:symphony_elixir, :mcp_socket_root)
+    System.delete_env("SYMPHONY_MCP_SOCKET_ROOT")
+    orphan_dir = Path.join(fallback_root, "symphony-mcp-orphan")
+    File.mkdir_p!(orphan_dir)
+    File.write!(Path.join(orphan_dir, "sock"), "stale")
+
+    server = unique_server()
+
+    log =
+      capture_log(fn ->
+        start_supervised!({McpServer, name: server, default_socket_roots: [unwritable_root, fallback_root]})
+      end)
+
+    assert log =~ "MCP socket root=#{fallback_root}"
+    refute File.exists?(orphan_dir)
+
+    if_unix_socket_bind_supported(fn ->
+      {:ok, session} =
+        McpServer.start_session(%{workspace: System.tmp_dir!()},
+          server: server,
+          shim_path: "/tmp/shim"
+        )
+
+      try do
+        assert session.transport == :unix
+        assert Path.dirname(session.socket_dir) == fallback_root
+        assert byte_size(session.socket_path) <= 103
+        assert File.exists?(session.socket_path)
+      after
+        McpServer.stop_session(session, server: server)
+      end
+    end)
+  end
+
+  test "sessions use the last default root when none is writable" do
+    {unwritable_root, _fallback_root} = unwritable_and_fallback_roots("n")
+
+    preserve_socket_root_overrides()
+    Application.delete_env(:symphony_elixir, :mcp_socket_root)
+    System.delete_env("SYMPHONY_MCP_SOCKET_ROOT")
+    server = unique_server()
+    start_supervised!({McpServer, name: server, default_socket_roots: ["/nonexistent-symphony-root", unwritable_root]})
+
+    assert {:error, {:mcp_socket_dir_failed, dir, :enotdir}} =
+             McpServer.start_session(%{workspace: System.tmp_dir!()}, server: server, shim_path: "/tmp/shim")
+
+    assert Path.dirname(dir) == unwritable_root
+  end
+
+  test "sessions under a long socket root use a short hashed directory name" do
+    server = unique_server()
+    start_supervised!({McpServer, name: server})
+
+    long_root = padded_socket_root("h", 60)
+    File.mkdir_p!(long_root)
+    on_exit(fn -> File.rm_rf(long_root) end)
+
+    if_unix_socket_bind_supported(fn ->
+      {:ok, session} =
+        McpServer.start_session(%{workspace: System.tmp_dir!()},
+          server: server,
+          socket_root: long_root,
+          shim_path: "/tmp/shim"
+        )
+
+      try do
+        assert session.transport == :unix
+        assert Path.dirname(session.socket_dir) == long_root
+        assert Path.basename(session.socket_dir) =~ ~r/\Asymphony-mcp-[0-9a-f]{12}\z/
+        assert byte_size(session.socket_path) <= 103
+        assert File.exists?(session.socket_path)
+      after
+        McpServer.stop_session(session, server: server)
+      end
+
+      refute File.exists?(session.socket_dir)
+    end)
+  end
+
+  test "sessions refuse a socket root too long for the sun_path limit" do
+    server = unique_server()
+    start_supervised!({McpServer, name: server})
+
+    too_long_root = padded_socket_root("t", 80)
+    on_exit(fn -> File.rm_rf(too_long_root) end)
+
+    assert {:error, {:mcp_socket_path_too_long, path}} =
+             McpServer.start_session(%{workspace: System.tmp_dir!()},
+               server: server,
+               socket_root: too_long_root,
+               shim_path: "/tmp/shim"
+             )
+
+    assert byte_size(path) > 103
+    refute File.exists?(too_long_root)
   end
 
   test "sessions honor a custom :socket_root opt for sandboxed environments" do
@@ -1473,6 +1569,24 @@ defmodule SymphonyElixir.McpServerTest do
   # points `:mcp_socket_root` at a short writable dir for sandboxed runs.
   defp test_socket_root do
     System.get_env("SYMPHONY_MCP_SOCKET_ROOT") || Application.get_env(:symphony_elixir, :mcp_socket_root, "/tmp")
+  end
+
+  # A root under a regular file can never be created (`:enotdir`), standing in
+  # for a `/tmp` the sandbox denies writes to.
+  defp unwritable_and_fallback_roots(label) do
+    base = Path.join(test_socket_root(), "#{label}-#{System.unique_integer([:positive])}")
+    blocker = Path.join(base, "file")
+    fallback_root = Path.join(base, "ok")
+    File.mkdir_p!(fallback_root)
+    File.write!(blocker, "")
+    on_exit(fn -> File.rm_rf(base) end)
+
+    {Path.join(blocker, "tmp"), fallback_root}
+  end
+
+  defp padded_socket_root(label, length) do
+    prefix = Path.join(test_socket_root(), "#{label}-#{System.unique_integer([:positive])}-")
+    prefix <> String.duplicate("x", length - byte_size(prefix))
   end
 
   defp tmp_root_writable? do
