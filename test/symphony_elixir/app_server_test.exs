@@ -5929,12 +5929,12 @@ defmodule SymphonyElixir.AppServerTest do
 
   defp assert_codex_mcp_config_matches_transport(codex_config) do
     cond do
-      codex_config =~ ~s(args = ["--socket", ) ->
+      codex_config =~ ~s(symphony-mcp-shim", "--socket", ) ->
         refute codex_config =~ "--tcp-host"
         refute codex_config =~ "--tcp-port"
         :unix
 
-      codex_config =~ ~s(args = ["--tcp-host", "127.0.0.1", "--tcp-port", ) ->
+      codex_config =~ ~s(symphony-mcp-shim", "--tcp-host", "127.0.0.1", "--tcp-port", ) ->
         assert unix_socket_bind_probe() == {:error, :eperm}
         refute codex_config =~ "--socket"
         :tcp
