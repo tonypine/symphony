@@ -417,6 +417,20 @@ defmodule SymphonyElixir.Codex.DynamicTool do
           "value" => %{"type" => "string", "maxLength" => 10_000}
         }
       }
+    },
+    %{
+      "name" => "qa_put_file",
+      "description" =>
+        "Put a fixture file you wrote (a test config, a WORKFLOW.md) where the app can open it, and return the path to give the app. On a separate QA host the app cannot see your files, so always pass it this path. Only a regular file of at most 1 MB under the worktree or $TMPDIR; no symlinks.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["local_path"],
+        "properties" => %{
+          "local_path" => %{"type" => "string", "description" => "The file, absolute or relative to the worktree, e.g. qa-evidence/qa-config/symphony.yml."},
+          "remote_name" => %{"type" => "string", "description" => "File name on the QA host: letters, digits, `.`, `_`, `-`. Defaults to the local file name."}
+        }
+      }
     }
   ]
 
@@ -590,6 +604,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "qa_ax_tree" => ["pid", "role", "text", "max_depth", "max_nodes"],
     "qa_ax_press" => ["pid", "path", "action"],
     "qa_ax_set_value" => ["pid", "path", "value"],
+    "qa_put_file" => ["local_path", "remote_name"],
     "qa_android_install" => [],
     "qa_android_launch" => ["application_id"],
     "qa_android_stop" => ["application_id"],

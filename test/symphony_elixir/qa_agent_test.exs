@@ -62,6 +62,22 @@ defmodule SymphonyElixir.QaAgentTest do
     defp recipient, do: Application.fetch_env!(:symphony_elixir, :qa_test_recipient)
   end
 
+  # Writes a fixture under the pass's `$TMPDIR` and hands it to `qa_put_file`, as a
+  # macos_app QA agent does, then answers like `FakeSession`.
+  defmodule PutFileSession do
+    defdelegate start_session(workspace, opts), to: FakeSession
+    defdelegate stop_session(session), to: FakeSession
+
+    def run_turn(session, prompt, issue, opts) do
+      [tmp_dir] = Map.values(opts[:extra_env])
+      fixture = Path.join(tmp_dir, "symphony.yml")
+      File.write!(fixture, "repos: []\n")
+      result = SymphonyElixir.QaDriver.call_tool(opts[:qa_driver], "qa_put_file", %{"local_path" => fixture})
+      send(Application.fetch_env!(:symphony_elixir, :qa_test_recipient), {:put_file, tmp_dir, result})
+      FakeSession.run_turn(session, prompt, issue, opts)
+    end
+  end
+
   # Stands in for `SymphonyElixir.Verification` in web passes.
   defmodule FakeVerification do
     def start_qa_dev_server(issue, run_id, worktree, opts) do
@@ -363,6 +379,30 @@ defmodule SymphonyElixir.QaAgentTest do
                Selection.playbooks(glance, dev_server?: true)
 
       assert [_cli] = Selection.playbooks(%{playbooks: %{"web" => %{"enabled" => false}}}, dev_server?: true)
+    end
+
+    test "unavailable/2 says why each playbook is off" do
+      assert Selection.unavailable(%{playbooks: %{}}) == [
+               {"macos_app", "needs `auto_review.playbooks.macos_app.build`, `auto_review.playbooks.macos_app.app`"},
+               {"android_app",
+                "needs `auto_review.playbooks.android_app.build`, `auto_review.playbooks.android_app.apk_path`, " <>
+                  "`auto_review.playbooks.android_app.application_ids`, `auto_review.android.avd`"},
+               {"web", "needs `verification.dev_server`"}
+             ]
+
+      config = %{
+        android: %{avd: "Pixel_3a_API_34"},
+        playbooks: %{
+          "cli" => %{"enabled" => false},
+          "macos_app" => %{"build" => "make app", "app" => "build/App.app"},
+          "android_app" => %{"build" => "./gradlew assembleDebug", "apk_path" => "app.apk", "application_ids" => ["com.example.app"]},
+          "api" => %{"paths" => ["api/**"]}
+        }
+      }
+
+      assert Selection.unavailable(config, dev_server?: true) == [{"cli", "`enabled: false`"}, {"api", "no `prompt`"}]
+      assert config |> Selection.playbooks(dev_server?: true) |> Enum.map(& &1.kind) == ["macos_app", "android_app", "web"]
+      assert Selection.unavailable(%{config | android: nil}, dev_server?: true) -- [{"cli", "`enabled: false`"}, {"api", "no `prompt`"}] == [{"android_app", "needs `auto_review.android.avd`"}]
     end
 
     test "glob matching keeps single stars inside one directory" do
@@ -809,6 +849,22 @@ defmodule SymphonyElixir.QaAgentTest do
       assert {:ok, _result} = QaAgent.run(job(), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession)
       assert_receive {:qa_session_started, _worktree, cli_opts}
       assert cli_opts[:qa_driver] == nil
+    end
+
+    test "lets the QA driver read fixtures from the pass's own $TMPDIR" do
+      [macos_app] =
+        Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => %{"build" => "make app", "app" => "build/App.app"}}})
+
+      assert {:ok, %{result: %{verdict: :pass}}} =
+               QaAgent.run(job(%{playbooks: [macos_app]}), Config.settings!(),
+                 git: fake_git(),
+                 qa_agent_module: PutFileSession,
+                 qa_driver_opts: [host: %{kill: fn _pid -> :ok end}]
+               )
+
+      assert_receive {:put_file, tmp_dir, {:ok, %{"path" => path, "bytes" => 10}}}
+      {:ok, canonical_tmp_dir} = SymphonyElixir.PathSafety.canonicalize(tmp_dir)
+      assert path == Path.join(canonical_tmp_dir, "symphony.yml")
     end
 
     test "gives an android_app pass an Android QA driver and stops it when the pass ends" do
