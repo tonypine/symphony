@@ -202,6 +202,13 @@ the issue workspace, never the source repository. For SSH workers, configure `wo
 absolute path on the remote host; remote workspace validation rejects relative and `~` roots because
 they cannot be expanded safely on the orchestrator host.
 
+When a run on the local host ends, after the `after_run` hook, Symphony stops every process still
+running in the issue workspace or started from it (by working folder or a path on the command
+line), including ones the agent detached with `&`, `nohup` or `setsid`, and the ones tied to the
+agent's Claude Code task folder under `/tmp/claude-<uid>/`. It sends SIGTERM, then SIGKILL after a
+grace period, and logs each one with its pid, CPU time and command. Symphony itself, and commands it
+is still running, are never signalled.
+
 **Storage inventory and cleanup planning** are read-only today. Use the dry-run task to inspect
 estimated storage use before deciding whether to archive or remove anything manually:
 

@@ -2322,6 +2322,13 @@ dispatching, it SHOULD stop recorded groups whose leader still has the recorded 
 signal a pid whose start time differs (the pid was reused), and SHOULD NOT dispatch issues in the
 workspace of a group it cannot confirm stopped until that group is gone, logging why.
 
+A process an agent detaches (`&` with `nohup`, `setsid`, a double fork) leaves that group. When a
+run on the local host ends, after the `after_run` hook, the implementation SHOULD stop every process
+whose working directory, or a path on its command line, is under the run's workspace or the agent's
+temporary task directory (Claude Code: `/tmp/claude-<uid>/<workspace path, non-alphanumerics as
+->`), SIGTERM then SIGKILL, and log each one with its pid, command and CPU time. It MUST NOT signal
+itself or a process it started and still runs.
+
 Notes:
 
 - The Elixir implementation requires explicit `agent.runtime` and `agent.command`.
