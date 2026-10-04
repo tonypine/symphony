@@ -102,6 +102,7 @@ defmodule SymphonyElixir.QaDriverTest do
       QaDriver.start_link(
         worktree: worktree,
         playbook: playbook,
+        tmp_dir: Keyword.get(opts, :tmp_dir),
         host: Keyword.get(opts, :host, host()),
         git: Keyword.get(opts, :git, &clean_git/2)
       )
@@ -124,6 +125,7 @@ defmodule SymphonyElixir.QaDriverTest do
     test "lists the qa tools and needs a driver" do
       assert "qa_build" in QaDriver.tools()
       assert "qa_ax_set_value" in QaDriver.tools()
+      assert "qa_put_file" in QaDriver.tools()
       assert error_code(QaDriver.call_tool(nil, "qa_build", %{})) == "qa_driver_unavailable"
     end
 
@@ -732,6 +734,81 @@ defmodule SymphonyElixir.QaDriverTest do
     end
   end
 
+  describe "qa_put_file" do
+    defp put_file(driver, args), do: QaDriver.call_tool(driver, "qa_put_file", args)
+
+    defp write_fixture!(path, contents \\ "repos: []\n") do
+      File.mkdir_p!(Path.dirname(path))
+      File.write!(path, contents)
+      path
+    end
+
+    test "returns the path of a fixture in qa-evidence or $TMPDIR without copying it", %{root: root, worktree: worktree} do
+      tmp_real = Path.join(root, "tmp-real")
+      File.mkdir_p!(tmp_real)
+      tmp_link = Path.join(root, "tmp-link")
+      File.ln_s!(tmp_real, tmp_link)
+      driver = start_driver(worktree, tmp_dir: tmp_link)
+
+      fixture = write_fixture!(Path.join(worktree, "qa-evidence/qa-config/symphony.yml"))
+      assert {:ok, %{"path" => ^fixture, "bytes" => 10}} = put_file(driver, %{"local_path" => "qa-evidence/qa-config/symphony.yml"})
+      assert {:ok, %{"path" => ^fixture}} = put_file(driver, %{"local_path" => fixture, "remote_name" => "other.yml"})
+
+      write_fixture!(Path.join(tmp_real, "qa/WORKFLOW.md"), "")
+      expected = Path.join(tmp_real, "qa/WORKFLOW.md")
+      assert {:ok, %{"path" => ^expected, "bytes" => 0}} = put_file(driver, %{"local_path" => Path.join(tmp_link, "qa/WORKFLOW.md")})
+    end
+
+    test "refuses files outside the worktree and $TMPDIR, links, non-regular and oversized files", %{root: root, worktree: worktree} do
+      driver = start_driver(worktree)
+      outside = write_fixture!(Path.join(root, "outside/secret.yml"))
+      evidence = Path.join(worktree, "qa-evidence")
+      fixture = write_fixture!(Path.join(evidence, "symphony.yml"))
+      File.ln_s!(outside, Path.join(evidence, "link.yml"))
+      File.ln_s!(Path.dirname(outside), Path.join(evidence, "outside-dir"))
+      File.ln_s!("loop", Path.join(evidence, "loop"))
+      File.ln!(fixture, Path.join(evidence, "hard.yml"))
+      write_fixture!(Path.join(evidence, "big.yml"), String.duplicate("x", 1_000_001))
+      locked = write_fixture!(Path.join(evidence, "locked.yml"))
+      File.chmod!(locked, 0o000)
+
+      for {local_path, expected} <- [
+            {outside, "is outside the QA worktree and $TMPDIR"},
+            {"../outside/secret.yml", "is outside the QA worktree and $TMPDIR"},
+            {"qa-evidence/outside-dir/secret.yml", "is outside the QA worktree and $TMPDIR"},
+            {"qa-evidence/link.yml", "is a symlink"},
+            {"qa-evidence/loop/x.yml", "could not be read: :eloop"},
+            {"qa-evidence/missing.yml", "could not be read: :enoent"},
+            {"qa-evidence", "is not a regular file"},
+            {"qa-evidence/hard.yml", "has other hard links"},
+            {"qa-evidence/big.yml", "is over 1000000 bytes"},
+            {"qa-evidence/locked.yml", "could not be read: :eacces"}
+          ] do
+        assert {:error, {:qa_tool, "qa_put_file_refused", message}} = put_file(driver, %{"local_path" => local_path})
+        assert message =~ expected, "#{local_path}: #{message}"
+      end
+    end
+
+    test "refuses bad arguments", %{worktree: worktree} do
+      driver = start_driver(worktree)
+
+      for args <- [%{}, %{"local_path" => ""}, %{"local_path" => 7}, %{"local_path" => "a\0b"}] do
+        assert {:error, {:qa_tool, "invalid_arguments", message}} = put_file(driver, args)
+        assert message =~ "local_path"
+      end
+
+      for args <- [
+            %{"local_path" => "qa-evidence/a.yml", "remote_name" => "../a.yml"},
+            %{"local_path" => "qa-evidence/a.yml", "remote_name" => ".hidden"},
+            %{"local_path" => "qa-evidence/a.yml", "remote_name" => 5},
+            %{"local_path" => "qa-evidence/my config.yml"}
+          ] do
+        assert {:error, {:qa_tool, "invalid_arguments", message}} = put_file(driver, args)
+        assert message =~ "remote_name"
+      end
+    end
+  end
+
   describe "worker_host" do
     @run_dir "/Users/qa/.symphony-qa/runs/run.abc123"
 
@@ -755,6 +832,10 @@ defmodule SymphonyElixir.QaDriverTest do
         end,
         ship: fn tar, dest -> send(test, {:ship, tar, dest}) && Map.get(overrides, :ship, :ok) end,
         read: fn path -> send(test, {:read, path}) && Map.get(overrides, :read, {:ok, "png"}) end,
+        put: fn local, dir, name ->
+          send(test, {:put, local, File.read!(local), dir, name})
+          Map.get(overrides, :put, {:ok, "#{dir}/files/#{name}"})
+        end,
         helper: fn dir -> send(test, {:helper, dir}) && {:ok, @helper} end,
         cleanup: fn dir -> send(test, {:cleanup, dir}) && :ok end
       })
@@ -884,6 +965,36 @@ defmodule SymphonyElixir.QaDriverTest do
       assert {:error, {:qa_tool, "qa_permission_missing", message}} = QaDriver.call_tool(driver, "qa_screenshot", %{"pid" => pid, "name" => "x"})
       assert message =~ "SSH on the QA host has no Screen Recording permission"
       assert message =~ "/usr/libexec/sshd-keygen-wrapper on the QA host"
+    end
+
+    test "copies a checked fixture into the run directory", %{worktree: worktree} do
+      driver = remote_driver(worktree, remote_host())
+      %{scratch_dir: scratch_dir} = GenServer.call(driver, :config)
+      fixture = Path.join(worktree, "qa-evidence/qa-config/symphony.yml")
+      File.mkdir_p!(Path.dirname(fixture))
+      File.write!(fixture, "repos: []\n")
+
+      assert {:ok, %{"path" => @run_dir <> "/files/symphony.yml", "bytes" => 10}} =
+               QaDriver.call_tool(driver, "qa_put_file", %{"local_path" => "qa-evidence/qa-config/symphony.yml"})
+
+      assert_received {:put, local, "repos: []\n", @run_dir, "symphony.yml"}
+      assert String.starts_with?(local, scratch_dir <> "/")
+      refute File.exists?(local)
+
+      assert {:ok, %{"path" => @run_dir <> "/files/settings.yml"}} =
+               QaDriver.call_tool(driver, "qa_put_file", %{"local_path" => fixture, "remote_name" => "settings.yml"})
+
+      assert_received {:put, _local, _bytes, @run_dir, "settings.yml"}
+
+      driver = remote_driver(worktree, remote_host(%{put: {:error, "exit 1: disk full"}}))
+      assert {:error, {:qa_tool, "qa_put_file_failed", message}} = QaDriver.call_tool(driver, "qa_put_file", %{"local_path" => fixture})
+      assert message =~ "could not be copied to the QA host: exit 1: disk full"
+      assert_received {:put, local, _bytes, @run_dir, "symphony.yml"}
+      refute File.exists?(local)
+
+      driver = remote_driver(worktree, remote_host(%{prepare: {:error, {:unsafe, "has a forwarded SSH agent"}}}))
+      assert error_code(QaDriver.call_tool(driver, "qa_put_file", %{"local_path" => fixture})) == "qa_worker_unsafe"
+      refute_received {:put, _local, _bytes, _dir, _name}
     end
 
     test "reports a capture it cannot copy back", %{worktree: worktree} do
