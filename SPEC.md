@@ -1305,7 +1305,11 @@ When enabled:
   resolved inside the worktree, launched from a copy the last successful `qa_build` made in a
   directory the agent sandbox cannot write, refused under the same worktree check, always with
   `SYMPHONY_BAR_QA_ROOT` set to a private directory), `qa_screenshot` (new files in `qa-evidence/`, never replacing or following an existing entry), and
-  `qa_ax_tree`, `qa_ax_press`, `qa_ax_set_value`. Every tool that takes a PID MUST refuse a PID
+  `qa_ax_tree`, `qa_ax_press`, `qa_ax_set_value`, and `qa_put_file`, which returns a path the app
+  can open for a fixture file the agent wrote (on a separate QA host, a copy in the pass's run
+  directory there). `qa_put_file` MUST read only a regular file of bounded size that resolves inside
+  the QA worktree or the pass's temp folder, and MUST refuse symlinks and files with other hard
+  links. Every tool that takes a PID MUST refuse a PID
   the pass did not launch. Apps still running when the pass ends MUST be quit. A missing Screen
   Recording or Accessibility grant MUST surface as a `qa_permission_missing` tool error that tells
   the agent to mark the app steps `blocked`, finish the other playbooks' steps and answer
@@ -1552,9 +1556,9 @@ Dynamic reload behavior:
 
 - The Elixir implementation polls repo `WORKFLOW.md` files and keeps each `WorkflowStore` on the
   last known good workflow when reload fails.
-- For `workflow_source: ref`, the workflow is re-read from the remote base branch at startup and
-  on every dispatch after the pre-dispatch fetch, so a change pushed to the base branch applies to
-  the next dispatch without restart. A missing or invalid workflow on the ref is logged and the
+- For `workflow_source: ref`, the workflow is re-read from the remote base branch at startup,
+  on every dispatch after the pre-dispatch fetch, and before every Auto Review QA pass, so a change
+  pushed to the base branch applies to the next dispatch or QA pass without restart. A missing or invalid workflow on the ref is logged and the
   last known good workflow is kept. Until the ref has been read once, the local file is read
   with a warning, and readers switch to the ref without restart once it resolves.
 - `symphony.yml` is re-read through the config layer during runtime operations such as dispatch,

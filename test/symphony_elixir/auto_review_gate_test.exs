@@ -92,10 +92,17 @@ defmodule SymphonyElixir.AutoReviewGateTest do
     %{root: root}
   end
 
+  # `AutoReview.run_qa/2` re-reads the repo's workflow before QA, so the mode goes in the file.
   defp settings(mode, root) do
-    settings = Config.settings!()
-    settings = put_in(settings.workspace.root, root)
-    put_in(settings.auto_review.acceptance_gate.mode, mode)
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      pr_review_mode: "polling",
+      workspace_root: root,
+      ci: %{enabled: true},
+      auto_review: %{enabled: true, max_fix_attempts: 2, acceptance_gate: %{mode: mode}}
+    )
+
+    Config.settings!()
   end
 
   defp issue(attrs \\ %{}) do
