@@ -420,6 +420,17 @@ agent:
   it never writes outside the workspace. Local hooks run outside the sandbox and build without a daemon:
   Symphony appends `-Dorg.gradle.daemon=false` to the host's `GRADLE_OPTS`. Neither applies on SSH
   workers.
+  Elixir's tool caches need no entry here. Each local agent run may write one cache folder,
+  `~/Library/Caches/symphony/agent` on macOS (`$XDG_CACHE_HOME/symphony/agent` or
+  `~/.cache/symphony/agent` elsewhere), shared by all runs, and starts with `HEX_HOME=<folder>/hex`,
+  `ELIXIR_MAKE_CACHE_DIR=<folder>/elixir_make` and `SYMPHONY_AGENT_CACHE_DIR=<folder>` (for the
+  repo's own tools, such as Dialyxir's `plt_core_path`). Before each launch, Symphony copies into it
+  the Hex packages, Hex registry cache (`cache.ets`) and `elixir_make` archives the host's caches
+  hold and it lacks, so deps the host fetched resolve offline; the host's caches stay read-only, and
+  `hex.config` is never copied, so private Hex organizations resolve only from deps a hook fetched.
+  Symphony only writes plain directories in the folder, never through a link, and when the folder
+  itself is not a plain directory the run gets neither the env nor the write access. Hooks and SSH
+  workers keep their own env.
 - `permissions.outer_sandbox`: optional outer sandbox wrapper, currently used for Codex SRT.
 
 **Run profiles:**
@@ -572,7 +583,8 @@ agent:
   walkthrough. Its run is marked `forced` (`/api/v1/state` `running[].forced`) and takes none of the
   normal slots; a run already going when the label is added stays a normal run, and no running
   agent is stopped. Once the label is removed (or a forced parent's is), a forced run already
-  going gives the allowance back and goes on as a normal run, so a ticket still forced can take it.
+  going gives the allowance back and goes on as a normal run, so a ticket still forced can take it;
+  so does its Auto Review QA pass on the allowance.
   A forced ticket past `forced_max` gets no extra slot: it still goes first for a
   normal one, waits as `queued #2; forced slot taken by MT-1` in `slot_waiting`, and Symphony logs a
   warning and sends one `forced_waiting` notification naming the forced run holding the allowance.
@@ -1054,8 +1066,12 @@ no request has come for it in two CI poll intervals (it left Auto Review, or its
 pending), other tickets take free slots again. When every QA slot is busy it starts on the forced
 allowance instead, as long as fewer than `concurrency.forced_max` forced runs and forced passes
 are going; such a pass takes no QA slot, counts toward `forced_max`, and is logged with
-`forced=true`. Past `forced_max` it waits at the front of the queue. The verdict is applied as for
-any pass: a failing pass still sends the ticket back for a fix. `/api/v1/state` lists the passes
+`forced=true`. Once the label is removed (`symphony force --clear`, or the forced parent's), or the
+sub-ticket stops being the forced parent's current one, a pass on the allowance gives it back and
+goes on as a normal pass (`forced: false`), so a ticket still forced can take the allowance. A
+ticket labelled in Linear while it is in Auto Review (outside `active_states`) never joins the
+forced queue, so its pass keeps the allowance until it ends. Past `forced_max` a forced request
+waits at the front of the queue. The verdict is applied as for any pass: a failing pass still sends the ticket back for a fix. `/api/v1/state` lists the passes
 under `qa.running` and the waiting requests under `qa.queued`, each with `forced`.
 
 #### Parent walkthrough
