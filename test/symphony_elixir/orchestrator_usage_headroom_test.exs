@@ -293,6 +293,42 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
     refute Map.has_key?(state.retry_attempts, continuing.id)
   end
 
+  test "a continuation deferred behind a dispatch readiness task stays a continuation and runs under the hold", ctx do
+    write_headroom_workflow!(ctx, poll_interval_ms: 600_000)
+    continuing = issue("issue-headroom-deferred", "MT-DEFERRED")
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [continuing])
+    pid = start_orchestrator(ctx, :DeferredContinuationOrchestrator)
+    token = make_ref()
+
+    :sys.replace_state(pid, fn state ->
+      %{
+        state
+        | usage_limits: %{@anthropic => headroom_hold(ctx)},
+          dispatch_readiness_tasks: %{make_ref() => %{kind: :poll, issues: []}},
+          retry_attempts: %{
+            continuing.id => %{attempt: 1, retry_token: token, identifier: continuing.identifier, delay_type: :continuation, repo_key: Config.repo_key!()}
+          },
+          claimed: MapSet.new([continuing.id])
+      }
+    end)
+
+    capture_log(fn ->
+      send(pid, {:retry_issue, continuing.id, token})
+      state = :sys.get_state(pid)
+
+      assert %{attempt: 1, delay_type: :continuation, retry_token: rescheduled} = state.retry_attempts[continuing.id]
+      assert rescheduled != token
+      refute Map.has_key?(state.slot_waiting, continuing.id)
+      assert MapSet.member?(state.claimed, continuing.id)
+
+      :sys.replace_state(pid, &%{&1 | dispatch_readiness_tasks: %{}})
+      send(pid, {:retry_issue, continuing.id, rescheduled})
+
+      wait_until(fn -> Enum.any?(RunStore.list_runs(:all), &(&1.issue_id == continuing.id)) end)
+      assert %{phase: :headroom} = :sys.get_state(pid).usage_limits[@anthropic]
+    end)
+  end
+
   test "the hold clears at resetsAt plus the margin without a canary and releases held runs", ctx do
     write_headroom_workflow!(ctx)
     pid = start_orchestrator(ctx, :ClearOrchestrator)

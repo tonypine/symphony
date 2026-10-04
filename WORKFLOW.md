@@ -74,8 +74,16 @@ You are working on a Linear ticket `{{ issue.identifier }}`
   `TMPDIR` is long and `/tmp` is not writable, set `SYMPHONY_MCP_SOCKET_ROOT`
   to a short writable path (the resulting `<root>/symphony-mcp-<id>/sock` must
   fit the 104-byte Unix `sun_path` limit).
-- Don't leave background processes running: stop any server, watcher or load
-  generator (for example `yes > /dev/null` to reproduce a timing flake) before
+- Never run CPU, memory or disk load generators or stress tools on the host:
+  no `yes`, busy loops (one per core or otherwise), `stress`, or parallel test
+  floods. The machine is shared with other agent runs, QA passes and workspace
+  hooks; load slows all of them, and Symphony starts your process tree at a
+  lower CPU priority anyway. To reproduce a timing flake, make the race
+  deterministic instead: inject the delay or the message order, use the
+  injectable clock, and add explicit synchronisation (wait on a message or a
+  monitor, not a sleep). Then prove it stable with
+  `mix test <file>:<line> --repeat-until-failure N` on the targeted test only.
+- Don't leave background processes running: stop any server or watcher before
   ending the turn. Symphony kills whatever is still running in the workspace
   when the run ends.
 - Tests and hooks that start login shells (`sh -lc`, `bash -lc`) may print

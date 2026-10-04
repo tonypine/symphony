@@ -1777,8 +1777,11 @@ Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `
 - On each poll of an open `Merging` PR, the poller MUST turn on auto-merge (GraphQL
   `enablePullRequestAutoMerge`, `SQUASH`, the PR title as `<title> (#<number>)` and its body,
   `expectedHeadOid` = the observed head) at most once per head, and not at all when GitHub already
-  shows auto-merge on. When GitHub refuses because the PR can already merge (`clean status`), the
-  poller squash-merges that head directly.
+  shows auto-merge on. When GitHub refuses (the PR can already merge, the branch has no protection,
+  the repository doesn't allow auto-merge), the poller MUST read the PR again: one already `MERGED`
+  takes the merged path below, and an open one at the same head with `mergeStateStatus == "CLEAN"`
+  and every check `SUCCESS`, `NEUTRAL` or `SKIPPED` (or no checks at all) is squash-merged directly
+  with the same `mergePullRequest` fields. The poller logs which path it took.
 - When `mergeStateStatus` is `BEHIND`, the poller MUST call
   `PUT /repos/{owner}/{repo}/pulls/{number}/update-branch` with `expected_head_sha` at most once per
   head. A failed call other than a conflict is retried on the next poll.
@@ -1790,8 +1793,8 @@ Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `
 - When GitHub reports the PR `MERGED` and Symphony turned on auto-merge for it (or the issue is in
   `Merging`), the poller MUST move the issue to `Done` (already `Done` is fine) and then clean up as
   for any merged PR. A failed transition is retried on the next poll.
-- When auto-merge can't be turned on (the repository doesn't allow it, the PR has no required
-  checks so GitHub reports it `UNSTABLE`, a permission error) or a squash merge fails, or the PR stays `BLOCKED` with
+- When auto-merge can't be turned on and the PR isn't merged or clean and green (a red or pending
+  check, `UNSTABLE`, `BEHIND`, a permission error, the PR can't be read), or a squash merge fails, or the PR stays `BLOCKED` with
   auto-merge on and a green head past `checks.landing_wait_timeout_ms`, the poller MUST log an
   error, comment the reason on the issue, and fall back: the orchestrator then dispatches the
   landing agent. The fallback lasts until the issue leaves `Merging`.
@@ -2324,6 +2327,12 @@ Subprocess launch parameters:
 - Command: `agent.command`
 - Working directory: workspace path
 - Transport/framing: the protocol transport required by the configured adapter
+
+A local agent subprocess SHOULD start at a lower CPU scheduling priority than Symphony (the Elixir
+implementation launches it through `nice -n 10`), so that it and everything it starts, which
+inherit that priority, cannot starve Symphony, QA passes or other runs on a shared host. When the OS
+refuses to lower the priority, the implementation SHOULD start the agent unchanged and log it. Each
+launch is logged with the agent's pid, command and run id.
 
 An agent subprocess MUST NOT outlive its session or the Symphony process. When the subprocess's
 transport closes, or Symphony stops (for example on SIGTERM), the implementation SHOULD send SIGTERM
