@@ -112,6 +112,40 @@ defmodule SymphonyElixir.GitHub.PullRequest do
     end
   end
 
+  @doc "The commit a merged pull request landed as, or nil while it is not merged."
+  @spec merge_commit_sha(String.t(), keyword()) :: {:ok, String.t() | nil} | {:error, term()}
+  def merge_commit_sha(pr_url, opts \\ []) when is_binary(pr_url) do
+    with {:ok, host, owner, repo, number} <- parse_github_pr_url(pr_url, opts),
+         {:ok, output} <- run_gh(github_api_args(host, "repos/#{owner}/#{repo}/pulls/#{number}"), opts),
+         {:ok, %{} = pr} <- Jason.decode(output) do
+      {:ok, if(Map.get(pr, "merged") == true, do: normalize_id(Map.get(pr, "merge_commit_sha")))}
+    else
+      :error -> {:error, :invalid_pr_url}
+      {:ok, _decoded} -> {:error, :invalid_pr_payload}
+      {:error, %Jason.DecodeError{} = error} -> {:error, {:invalid_pr_payload, Exception.message(error)}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Whether `head_sha` includes `sha`, in the repository of the pull request at `pr_url`: true when
+  GitHub compares `sha...head_sha` as `ahead` or `identical`.
+  """
+  @spec commit_included?(String.t(), String.t(), String.t(), keyword()) :: {:ok, boolean()} | {:error, term()}
+  def commit_included?(pr_url, sha, head_sha, opts \\ []) when is_binary(pr_url) and is_binary(sha) and is_binary(head_sha) do
+    with {:ok, host, owner, repo, _number} <- parse_github_pr_url(pr_url, opts),
+         {:ok, output} <- run_gh(github_api_args(host, "repos/#{owner}/#{repo}/compare/#{sha}...#{head_sha}") ++ ["--jq", ".status"], opts) do
+      case String.trim(output) do
+        status when status in ["ahead", "identical"] -> {:ok, true}
+        status when status in ["behind", "diverged"] -> {:ok, false}
+        status -> {:error, {:unexpected_compare_status, status}}
+      end
+    else
+      :error -> {:error, :invalid_pr_url}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   def fetch_failed_log(run_id, opts \\ [])
 
   @spec fetch_failed_log(String.t() | integer(), keyword()) :: {:ok, String.t()} | {:error, term()}

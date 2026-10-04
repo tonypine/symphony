@@ -587,6 +587,10 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
       held = %{state | usage_limits: %{@anthropic => hold(:paused)}}
       assert %{waiting_on: :usage_limit} = Enum.find(snapshot_of(held).forced, &(&1.issue_id == "slot-1"))
 
+      # Held until the running app includes a merged blocker's fix, it waits on that blocker.
+      update_held = %{state | update_holds: %{"slot-1" => %{blockers: [%{identifier: "MT-Z", merge_sha: "def"}]}}}
+      assert %{waiting_on: :blocker, blockers: ["MT-Z"]} = Enum.find(snapshot_of(update_held).forced, &(&1.issue_id == "slot-1"))
+
       # Before a poll has seen it (just after a restart), what the queue recorded is used.
       restored = %{orchestrator_state(1) | forced: %{"slot-1" => queue_entry(%{waiting | state: "In Review"}, ~U[2026-10-04 06:00:00Z])}}
       assert [%{phase: :waiting_for_human, waiting_on: :human}] = snapshot_of(restored).forced

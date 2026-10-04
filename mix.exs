@@ -111,7 +111,18 @@ defmodule SymphonyElixir.MixProject do
     [
       mod: {SymphonyElixir.Application, []},
       extra_applications: [:logger],
-      included_applications: [:mnesia]
+      included_applications: [:mnesia],
+      env: [build: build_env()]
+    ]
+  end
+
+  # The release workflow sets these when it builds the binary, so the running app knows the
+  # commit it was built from (see `SymphonyElixir.BuildInfo`). A build from a checkout has none.
+  defp build_env do
+    [
+      sha: System.get_env("SYMPHONY_BUILD_SHA"),
+      repo: System.get_env("SYMPHONY_BUILD_REPO"),
+      number: System.get_env("SYMPHONY_BUILD_NUMBER")
     ]
   end
 
