@@ -14,6 +14,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     assert "linear_attach_file" in tool_names
     assert "github_get_pull_request" in tool_names
     assert "github_fetch_origin" in tool_names
+    assert "github_sync_base" in tool_names
     assert "github_create_pull_request" in tool_names
     assert "github_reply_to_review_comment" in tool_names
     assert "github_push_branch" in tool_names
@@ -1563,6 +1564,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
           {"github_create_pull_request", %{"title" => "Add tools", "body" => "Body", "head" => "owned"}},
           {"github_get_pull_request", %{"branch" => "owned"}},
           {"github_fetch_origin", %{"refspec" => "main:refs/heads/owned"}},
+          {"github_sync_base", %{"base" => "owned"}},
           {"github_add_pr_comment", %{"body" => "Looks good", "remote" => "evil"}},
           {"github_reply_to_review_comment", %{"comment_id" => 123, "body" => "Acked.", "repo" => "attacker/repo"}},
           {"github_get_pr_checks", %{"base" => "owned"}},
@@ -1614,6 +1616,9 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
           assert opts[:cd] == workspace
           {"git@github.com:acme/symphony.git\n", 0}
 
+        ["ls-remote" | _rest], _opts ->
+          {"", 0}
+
         ["push", "origin", "auto/ACME-3051"], opts ->
           assert opts[:cd] == workspace
           {"pushed\n", 0}
@@ -1642,6 +1647,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       git_runner = fn
         ["branch", "--show-current"], _opts -> {"auto/ACME-3051\n", 0}
         ["remote" | _rest], _opts -> {"git@github.com:acme/symphony.git\n", 0}
+        ["ls-remote" | _rest], _opts -> {"", 0}
         ["rev-parse", "--verify", "--quiet", _ref], _opts -> {head <> "\n", 0}
         ["diff", "--name-only" | _rest], _opts -> {"lib/app.ex\n", 0}
         ["push" | _rest], _opts -> flunk("the push should be refused")
@@ -1763,6 +1769,9 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
         ["remote", "get-url", "--push", "--all", "origin"], opts ->
           assert opts[:cd] == workspace
           {"git@github.com:acme/symphony.git\n", 0}
+
+        ["ls-remote" | _rest], _opts ->
+          {"", 0}
 
         ["push", "origin", "auto/ACME-3051"], opts ->
           assert opts[:cd] == workspace
@@ -1896,6 +1905,71 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
            } = Jason.decode!(response["output"])
 
     assert message =~ "github_push_branch is not supported for SSH worker sessions"
+  end
+
+  test "github_sync_base reports the merge result and names what it refuses" do
+    workspace = tmp_workspace!("github-sync-base")
+
+    try do
+      runner = fn scenario ->
+        fn
+          ["branch", "--show-current"], _opts -> {"auto/ACME-3051\n", 0}
+          ["remote", "get-url", "origin"], _opts -> {"git@github.com:acme/symphony.git\n", 0}
+          ["fetch", "origin"], _opts -> {"", 0}
+          ["ls-remote", "--symref", "origin", "HEAD"], _opts -> {"ref: refs/heads/main\tHEAD\n", 0}
+          ["ls-remote" | _rest], _opts -> remote_heads(scenario)
+          ["rev-parse", "--verify", "--quiet", "MERGE_HEAD"], _opts -> merge_head_status(scenario)
+          ["rev-parse", "HEAD"], _opts -> {"abc123\n", 0}
+          ["ls-tree" | _rest], _opts -> {"", 0}
+          ["diff", "--name-only", "--no-renames" | _rest], _opts -> protected_diff(scenario)
+          ["diff", "--name-only", "--diff-filter=U"], _opts -> {"", 0}
+          ["-c" | _rest], _opts -> merge_status(scenario)
+        end
+      end
+
+      sync = fn scenario ->
+        response = DynamicTool.execute("github_sync_base", %{}, github_tool_opts(workspace, git_runner: runner.(scenario)))
+        {response["success"], Jason.decode!(response["output"])}
+      end
+
+      assert {true, %{"status" => "synced", "base" => "origin/main", "head" => "abc123"}} = sync.(:clean)
+
+      assert {false, %{"error" => %{"code" => "base_branch_not_found", "base" => "origin/main", "message" => message}}} =
+               sync.(:no_base)
+
+      assert message =~ "The origin remote has no branch for origin/main"
+
+      assert {false, %{"error" => %{"code" => "merge_in_progress", "message" => message}}} = sync.(:merging)
+      assert message =~ "git commit --no-edit"
+
+      assert {false, %{"error" => %{"code" => "protected_paths_changed", "files" => [".ai/skills/push/SKILL.md"], "message" => message}}} =
+               sync.(:protected)
+
+      assert message =~ "changes write-protected files itself: .ai/skills/push/SKILL.md"
+      assert message =~ "linear_create_subissue"
+
+      assert {false, %{"error" => %{"code" => "git_merge_failed", "status" => 2, "output" => "local changes would be overwritten", "message" => message}}} =
+               sync.(:refused)
+
+      assert message =~ "left no merge in progress"
+    after
+      File.rm_rf(workspace)
+    end
+  end
+
+  test "github.sync_base returns a clear unsupported error for ssh workers" do
+    response =
+      DynamicTool.execute(
+        "github.sync_base",
+        %{},
+        workspace: "/remote/workspaces/MT-3187",
+        command_security: %{origin_repo: "acme/symphony", origin_url: "git@github.com:acme/symphony.git", worker_host: "worker-01"}
+      )
+
+    assert response["success"] == false
+
+    assert %{"error" => %{"code" => "unsupported_for_ssh_worker", "message" => message}} = Jason.decode!(response["output"])
+    assert message =~ "github_sync_base is not supported for SSH worker sessions"
   end
 
   test "github.fetch_origin returns a clear unsupported error for ssh workers" do
@@ -2472,6 +2546,18 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     |> github_tool_opts(git_runner: git_runner, gh_runner: gh_runner, linear_client: linear_client)
     |> Keyword.put(:issue_id, "issue-3051")
   end
+
+  defp remote_heads(:no_base), do: {"", 0}
+  defp remote_heads(_scenario), do: {"def456\trefs/heads/main\n", 0}
+
+  defp merge_head_status(:merging), do: {"fed789\n", 0}
+  defp merge_head_status(_scenario), do: {"", 1}
+
+  defp protected_diff(:protected), do: {".ai/skills/push/SKILL.md\n", 0}
+  defp protected_diff(_scenario), do: {"", 0}
+
+  defp merge_status(:refused), do: {"local changes would be overwritten", 2}
+  defp merge_status(_scenario), do: {"Already up to date.\n", 0}
 
   defp github_tool_opts(workspace, opts) do
     opts
