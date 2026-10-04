@@ -31,9 +31,10 @@ defmodule SymphonyElixir.AcceptanceGate do
   require Logger
 
   alias SymphonyElixir.AcceptanceGate.{Context, Escalation, Report}
-  alias SymphonyElixir.{AgentTelemetry, AgentTools, AuditLog, Config, LeftoverProcesses, PromptSafety, QaAgent}
+  alias SymphonyElixir.{AgentTelemetry, AgentTmpDir, AgentTools, AuditLog, Config, LeftoverProcesses, PromptSafety}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.QaAgent
   alias SymphonyElixir.ReviewAgent
   alias SymphonyElixir.RunStore
   alias SymphonyElixir.UsageLimit
@@ -46,6 +47,7 @@ defmodule SymphonyElixir.AcceptanceGate do
   @comment_limit 100
   @workpad_markers ["## Symphony Workpad", "## Codex Workpad", "## Claude Workpad"]
   @bootstrap_criterion "Derived from the Linear issue description and comments."
+  @tmp_dir_prefix "symphony-gate-"
 
   @type verdict :: String.t()
   @type reason :: %{rule: String.t(), detail: String.t()}
@@ -109,21 +111,30 @@ defmodule SymphonyElixir.AcceptanceGate do
 
   @doc """
   The options a gate session starts with: the `:read_only` tool scope (only the Linear and
-  GitHub read tools) and a read-only runtime sandbox.
+  GitHub read tools), a read-only runtime sandbox, and the pass's own temp folder (`job.tmp_dir`)
+  as the agent's `$TMPDIR`, its only writable path.
   """
   @spec session_opts(map(), Schema.t()) :: keyword()
   def session_opts(job, %Schema{} = settings) do
+    gate_settings = gate_settings(settings)
+    tmp_dir = Map.get(job, :tmp_dir)
+
     [
       worker_host: nil,
-      settings: gate_settings(settings),
+      settings: if(tmp_dir, do: AgentTmpDir.allow_write(gate_settings, tmp_dir), else: gate_settings),
       issue: job.issue,
       repo_key: Map.get(job.record, :repo_key),
       run_id: Map.get(job, :run_id),
       run_profile: Config.acceptance_gate_profile(settings),
       tool_scope: :read_only,
-      read_only: true
+      read_only: true,
+      extra_env: AgentTmpDir.env(gate_settings.agent.kind, tmp_dir)
     ]
   end
+
+  @doc "The temp folders a gate pass in `worktree` may use, one under each of `bases` (see `SymphonyElixir.AgentTmpDir`)."
+  @spec tmp_dirs(Path.t(), [Path.t()]) :: [Path.t()]
+  def tmp_dirs(worktree, bases \\ AgentTmpDir.default_bases()), do: AgentTmpDir.paths(@tmp_dir_prefix, worktree, bases)
 
   @doc "The throwaway worktree the gate agent reads, at the merge result."
   @spec worktree_path(Schema.t(), String.t() | nil, String.t() | nil, String.t()) :: Path.t()
@@ -325,16 +336,26 @@ defmodule SymphonyElixir.AcceptanceGate do
 
         case add_worktree(record.workspace_path, worktree, job.context.merged_sha, git) do
           :ok ->
+            tmp_dirs = tmp_dirs(worktree, Keyword.get_lazy(opts, :tmp_bases, &AgentTmpDir.default_bases/0))
+
             try do
-              run_session(Map.put(job, :worktree, worktree), settings, opts)
+              run_with_tmp_dir(Map.put(job, :worktree, worktree), tmp_dirs, settings, opts)
             after
-              stop_leftover_processes(job.issue, worktree, opts)
+              stop_leftover_processes(job.issue, [worktree | tmp_dirs], opts)
+              Enum.each(tmp_dirs, &File.rm_rf/1)
               remove_worktree(record.workspace_path, worktree, git)
             end
 
           {:error, reason} ->
             %{outcome: {:inconclusive, reason}}
         end
+    end
+  end
+
+  defp run_with_tmp_dir(job, tmp_dirs, settings, opts) do
+    case AgentTmpDir.create(tmp_dirs) do
+      {:ok, tmp_dir} -> run_session(Map.put(job, :tmp_dir, tmp_dir), settings, opts)
+      :error -> %{outcome: {:inconclusive, {:gate_tmp_dir_failed, tmp_dirs}}}
     end
   end
 
@@ -706,9 +727,9 @@ defmodule SymphonyElixir.AcceptanceGate do
     :ok
   end
 
-  defp stop_leftover_processes(issue, worktree, opts) do
+  defp stop_leftover_processes(issue, roots, opts) do
     context = "issue_id=#{issue.id} issue_identifier=#{issue.identifier}"
-    LeftoverProcesses.stop_under([worktree], Keyword.put(Keyword.get(opts, :leftover_processes, []), :log_context, context))
+    LeftoverProcesses.stop_under(roots, Keyword.put(Keyword.get(opts, :leftover_processes, []), :log_context, context))
   end
 
   defp default_git(args, cwd), do: Workspace.safe_git(["-C", cwd | args], stderr_to_stdout: true)

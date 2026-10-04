@@ -52,11 +52,9 @@ defmodule SymphonyElixir.AcceptanceGate.RunnerTest do
     assert :running = Runner.request(job(settings, "a"), gate_runner_server: name)
     assert :busy = Runner.request(job(settings, "b"), gate_runner_server: name)
 
-    assert Runner.workspaces(name) == [
-             "/workspaces/symphony/a",
-             Context.worktree_path(settings, "symphony", "TP-a", @sha),
-             AcceptanceGate.worktree_path(settings, "symphony", "TP-a", @sha)
-           ]
+    agent_worktree = AcceptanceGate.worktree_path(settings, "symphony", "TP-a", @sha)
+    context_worktree = Context.worktree_path(settings, "symphony", "TP-a", @sha)
+    assert Runner.workspaces(name) == ["/workspaces/symphony/a", context_worktree, agent_worktree | AcceptanceGate.tmp_dirs(agent_worktree)]
 
     assert %{running: [running], queued: [%{issue_id: "b", forced: false}]} = Runner.snapshot(name)
     assert running == %{issue_id: "a", identifier: "TP-a", sha: @sha, forced: false}

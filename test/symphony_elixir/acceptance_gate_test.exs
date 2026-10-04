@@ -88,6 +88,8 @@ defmodule SymphonyElixir.AcceptanceGateTest do
     settings = put_in(settings.auto_review.acceptance_gate.mode, "shadow")
 
     Process.put(:gate_context, {:ok, context()})
+    Process.put(:gate_root, root)
+    File.mkdir_p!(Path.join(root, "tmp"))
     %{settings: settings, root: root}
   end
 
@@ -144,11 +146,19 @@ defmodule SymphonyElixir.AcceptanceGateTest do
   end
 
   defp run_opts(extra \\ []) do
-    Keyword.merge([context: FakeContext, gate_agent_module: FakeSession, git: git(), leftover_processes: [table: fn -> {:ok, []} end]], extra)
+    defaults = [
+      context: FakeContext,
+      gate_agent_module: FakeSession,
+      git: git(),
+      leftover_processes: [table: fn -> {:ok, []} end],
+      tmp_bases: [Path.join(Process.get(:gate_root), "tmp")]
+    ]
+
+    Keyword.merge(defaults, extra)
   end
 
   describe "the gate session" do
-    test "runs read-only in a worktree at the merge result, with no write tool", %{settings: settings} do
+    test "runs read-only in a worktree at the merge result, with no write tool", %{settings: settings, root: root} do
       result = AcceptanceGate.run(job(), settings, run_opts())
 
       worktree = AcceptanceGate.worktree_path(settings, "default", "TP-950", @sha)
@@ -166,6 +176,12 @@ defmodule SymphonyElixir.AcceptanceGateTest do
       assert gate_settings.agent.turn_sandbox_policy == %{"type" => "readOnly"}
       assert gate_settings.agent.max_turns == settings.auto_review.acceptance_gate.max_turns
       assert gate_settings.agent.turn_timeout_ms == settings.auto_review.acceptance_gate.timeout_ms
+
+      # Its own temp folder is its `$TMPDIR` and its only writable path; it is removed afterwards.
+      [tmp_dir] = AcceptanceGate.tmp_dirs(worktree, [Path.join(root, "tmp")])
+      assert opts[:extra_env] == %{"TMPDIR" => tmp_dir}
+      assert List.last(gate_settings.workspace.sandbox.allow_write_paths) == tmp_dir
+      refute File.exists?(tmp_dir)
 
       # The `:read_only` scope lists only the Linear and GitHub read tools.
       names = DynamicTool.tool_specs(:read_only) |> Enum.map(& &1["name"]) |> Enum.sort()
@@ -284,6 +300,9 @@ defmodule SymphonyElixir.AcceptanceGateTest do
 
       assert %{outcome: {:inconclusive, {:unsupported_qa_agent_kind, "gpt"}}} =
                AcceptanceGate.run(job(), unsupported, Keyword.delete(run_opts(), :gate_agent_module))
+
+      assert %{outcome: {:inconclusive, {:gate_tmp_dir_failed, [_path]}}} =
+               AcceptanceGate.run(job(), settings, run_opts(tmp_bases: ["/nonexistent-symphony-test-dir"]))
 
       assert %{outcome: {:inconclusive, {:remote_worker_unsupported, "worker-1"}}} =
                AcceptanceGate.run(job(%{record: record(%{worker_host: "worker-1"})}), settings, run_opts())

@@ -21,8 +21,9 @@ In Progress as before and never reaches the gate.
 - **The pass** (`AcceptanceGate.run/3`) builds the context (below), checks the escalation rules,
   then runs the gate agent in a throwaway worktree at the merge result. The session is read-only:
   the read-only Linear and GitHub tools only, a read-only Codex sandbox, and for Claude no
-  file-editing tool and no shell write in its working directory. Pushing and the `gh` CLI stay
-  denied. A merge conflict with current main skips the agent.
+  file-editing tool and no shell write in its working directory. Its only writable path is a
+  private temp folder, its `$TMPDIR`. Pushing and the `gh` CLI stay denied. A merge conflict with
+  current main skips the agent.
 - **What the agent judges**, in this order: each acceptance criterion (the checklist items under
   the ticket's `Acceptance` or `Acceptance Criteria` headings, then the workpad's
   `### Acceptance Criteria`) as `met`, `unmet` or `unclear` with `file:line` evidence; conflicts and

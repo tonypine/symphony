@@ -47,7 +47,7 @@ defmodule SymphonyElixir.AcceptanceGate.Runner do
     end
   end
 
-  @doc "The issue workspace and gate worktrees of every pass in flight."
+  @doc "The issue workspace, gate worktrees and temp folders of every pass in flight."
   @spec workspaces(GenServer.server()) :: [Path.t()]
   def workspaces(server \\ __MODULE__) do
     case GenServer.whereis(server) do
@@ -165,6 +165,7 @@ defmodule SymphonyElixir.AcceptanceGate.Runner do
     identifier = Map.get(issue, :identifier)
     context_worktree = AcceptanceGate.Context.worktree_path(settings, repo_key, identifier, sha)
     agent_worktree = AcceptanceGate.worktree_path(settings, repo_key, identifier, sha)
-    Enum.filter([Map.get(record, :workspace_path), context_worktree, agent_worktree], &is_binary/1)
+    paths = [Map.get(record, :workspace_path), context_worktree, agent_worktree | AcceptanceGate.tmp_dirs(agent_worktree)]
+    Enum.filter(paths, &is_binary/1)
   end
 end

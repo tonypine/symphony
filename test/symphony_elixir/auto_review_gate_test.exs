@@ -163,6 +163,7 @@ defmodule SymphonyElixir.AutoReviewGateTest do
         gate_agent_module: FakeSession,
         git: git_with_paths([]),
         leftover_processes: [table: fn -> {:ok, []} end],
+        tmp_bases: [root],
         dir: Path.join(root, "audit")
       ],
       extra
