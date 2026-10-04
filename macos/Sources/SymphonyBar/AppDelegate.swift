@@ -443,6 +443,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     private func handle(_ event: StatusMachine.Event) {
         machine.handle(event)
+        switch machine.status {
+        case let .running(snapshot, _), let .paused(snapshot, _):
+            settingsWindow.budget = snapshot.budget
+        default:
+            settingsWindow.budget = nil
+        }
         switch event {
         case .started:
             // A Pause or Resume error was about the Symphony that was running before.
