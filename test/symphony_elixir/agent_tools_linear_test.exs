@@ -1507,10 +1507,12 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
              } = Request.parse(body)
 
       assert Agent.get(registry, & &1.human_actions) == 1
+      assert Linear.CommentRegistry.human_action_requested?(registry)
     end
 
     test "does not post the same open request twice" do
       {:ok, registry} = Linear.CommentRegistry.start_link()
+      refute Linear.CommentRegistry.human_action_requested?(registry)
       body = Request.render(%{title: "add the release  signing secrets", why: "x", steps: ["y"]}, "human-action")
 
       scope =
@@ -1529,6 +1531,8 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       refute_received {:linear_called, "SymphonyAgentAddLabel", _variables}
       refute_received :refreshed
       assert Agent.get(registry, & &1.human_actions) == 0
+      # The open request still waits on a person, so the issue goes to Human Review.
+      assert Linear.CommentRegistry.human_action_requested?(registry)
 
       # Once a person moved the issue on, the same title is a new request; the label is already there.
       moved_on =
@@ -1585,6 +1589,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
 
       refute_received :refreshed
       assert Agent.get(registry, & &1.human_actions) == 0
+      refute Linear.CommentRegistry.human_action_requested?(registry)
     end
 
     test "refuses secrets in any field, invalid input, a run past its cap, and a repository that turned it off" do

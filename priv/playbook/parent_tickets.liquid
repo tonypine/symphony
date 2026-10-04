@@ -15,8 +15,10 @@ Rules for every `breakdown` parent run:
 - Never create commits, push a branch, open a PR, or attach any other artifact for
   the parent. Its deliverables are its sub-tickets.
 - The plan is reviewed before any sub-ticket is worked. The breakdown run leaves
-  its sub-tickets in `Backlog` and moves the parent to `In Review`. A human
-  approves the plan by moving the parent to `Waiting on sub-tickets`, and Symphony
+  its sub-tickets in `Backlog` and moves the parent to `In Review` (Symphony puts
+  it in `Human Review` instead when the ticket says a human reviews the plan, such
+  as a `needs-human` label or "must not auto-approve"). A human
+  approves the plan by moving the parent from either state to `Waiting on sub-tickets`, and Symphony
   then moves every sub-ticket still in `Backlog` to `Todo` in one batch; blocked-by
   links keep the order. Never move the parent to `Waiting on sub-tickets` yourself:
   `linear_update_state` refuses it because that move is the approval.
@@ -140,4 +142,6 @@ The steps below apply when it does not
    If a gap cannot be linked, move this ticket to `Backlog` instead and say why in
    the workpad, so a human re-promotes it.
 3. When every requirement is met, move this ticket to `In Review` for a human to
-   sign off and move it to `Done`. The parent's close-out run follows.
+   sign off and move it to `Done`. When the requirements left can only be checked by a
+   person (a real key, a device, a hand check), move it to `Human Review` instead and
+   list those checks in the workpad. The parent's close-out run follows.

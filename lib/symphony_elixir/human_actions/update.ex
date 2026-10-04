@@ -11,7 +11,8 @@ defmodule SymphonyElixir.HumanActions.Update do
   - the why, then the steps as a numbered list, one instruction per line (no tables, which scroll
     sideways on a phone);
   - a closing **Done when** line, so it is clear how the action leaves the list;
-  - quickest actions first, so a short session clears the small ones;
+  - actions on issues in the Human Review state first, since those issues wait on nobody else, then
+    quickest first, so a short session clears the small ones;
   - a footer with the list id (a hash of the action keys), which lets Symphony recognise its own
     last update after a restart instead of posting the same list again.
 
@@ -70,13 +71,18 @@ defmodule SymphonyElixir.HumanActions.Update do
     |> SecretScanner.redact()
   end
 
-  @doc "Actions in the order an update lists them: quickest first, then by issue."
+  @doc "Actions in the order an update lists them: Human Review issues first, then quickest first, then by issue."
   @spec sort([Action.t()]) :: [Action.t()]
-  def sort(actions), do: Enum.sort_by(actions, &{&1.est_minutes || 1_000_000, &1.issue[:identifier], &1.key})
+  def sort(actions), do: Enum.sort_by(actions, &{not &1.human_review, &1.est_minutes || 1_000_000, &1.issue[:identifier], &1.key})
 
   defp header([]), do: "**Nothing needs you.** Every action from the last update is closed."
   defp header([_action]), do: "**1 action needs you.**"
-  defp header(actions), do: "**#{length(actions)} actions need you.** Quickest first."
+
+  defp header(actions) do
+    if Enum.any?(actions, & &1.human_review),
+      do: "**#{length(actions)} actions need you.** Human Review tickets first, then quickest first.",
+      else: "**#{length(actions)} actions need you.** Quickest first."
+  end
 
   defp action_section(%Action{} = action, index) do
     [
@@ -91,8 +97,9 @@ defmodule SymphonyElixir.HumanActions.Update do
   end
 
   defp meta_line(%Action{} = action) do
+    review = if action.human_review, do: "**#{action.issue.state}** · "
     time = if is_integer(action.est_minutes), do: "**~#{action.est_minutes} min** · "
-    "#{time}#{issue_relation(action)}"
+    "#{review}#{time}#{issue_relation(action)}"
   end
 
   defp issue_relation(%Action{issue: nil} = action), do: "Unblocks #{Request.one_line(action.unblocks)}"
