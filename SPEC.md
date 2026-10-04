@@ -1202,7 +1202,7 @@ Fields:
   - Webhook channels require `url` when notifications are enabled.
   - `events` is an OPTIONAL list drawn from: `pr_opened`, `awaiting_review`, `run_failed`,
     `issue_completed`, `budget_exceeded`, `reviewer_commented`, `rework_pushed`, `ci_failed`,
-    `ci_escalated`, `qa_passed`, `qa_failed`.
+    `ci_escalated`, `qa_passed`, `qa_failed`, `usage_limit_paused`, `usage_limit_resumed`.
   - `headers` is an OPTIONAL map of webhook headers.
 
 ### 5.5 Prompt Template Contract
@@ -1953,7 +1953,8 @@ Note:
 #### 8.4.1 Provider Usage-Limit Holds
 
 When `agent.usage_limit.auto_pause` is on and a run ends because the provider's usage limit is
-reached (for Claude, a used-up five-hour or weekly window):
+reached (for Claude, a used-up five-hour or weekly window; for Codex, an error with
+`codexErrorInfo: usageLimitExceeded`, timed from the rate-limit window at 100% or more):
 
 - Create or refresh a hold keyed by `{provider, scope}`. Scope is the whole plan, or a model family
   for a model-specific window (`seven_day_opus` holds only runs whose model is Opus). A hold
@@ -1967,13 +1968,30 @@ reached (for Claude, a used-up five-hour or weekly window):
 - Runs of the same provider already in flight are left alone; each one is handled the same way if
   it hits the limit.
 - While a hold covers a candidate's resolved run profile (`run_profiles.<kind>.provider`, else
-  `agent.provider`, and its model for a model scope), every dispatch path skips it: the poll,
+  `agent.provider`, and its model for a model scope; runs of `agent.kind: codex` are provider
+  `openai`), every dispatch path skips it: the poll,
   retries, operator PR runs and Auto Review QA passes. Other providers keep dispatching. Epic lanes
   stay reserved.
-- At `resume_at` the hold is cleared, an immediate poll tick runs, and held retries return to normal
-  candidate selection with their attempt, as a retry waiting for a slot does. Resuming never sets
-  or clears the operator pause; the daily budget, workspace quota and Linear rate-limit gates still
-  apply.
+- At `resume_at` the hold moves to `phase: canary` and exactly one held retry, the first in normal
+  dispatch order, is released as the canary; an immediate poll tick runs. The hold keeps covering
+  every other run of that provider, so slots freed by held runs are not filled with other work on
+  it. With nothing held, the hold is cleared and no canary runs.
+- When the canary's first `rate_limit_event` is `allowed` or `allowed_warning`, or the canary ends
+  any way other than this limit (success, another failure, which follows the normal failure path),
+  the hold is cleared and the other held retries return to normal candidate selection with their
+  attempt, as a retry waiting for a slot does.
+- When the canary ends on the same usage limit, the hold goes back to `phase: paused` with the new
+  `resume_at` (as above) and the canary's retry is held with its attempt. It is the same episode:
+  `since` is kept and no second pause is reported.
+- A canary that leaves the active states before it runs is replaced by the next held retry. A
+  canary hold restored on startup starts over from `phase: paused`.
+- Resuming never sets or clears the operator pause; the daily budget, workspace quota and Linear
+  rate-limit gates still apply.
+- Emit one `usage_limit_paused` notification when a hold is created (not when a held run refreshes
+  it or a canary re-pauses it) and one `usage_limit_resumed` when it clears, which for a canary is
+  when the canary clears the hold, not when it starts. A hold restored on startup emits nothing.
+- Show each hold in the status surfaces (Section 13), for example
+  `Paused: Claude 5-hour limit, resumes ~14:05` in local time.
 
 ### 8.5 Active Run Reconciliation
 
@@ -2828,8 +2846,14 @@ SHOULD return:
   - `output_tokens`
   - `total_tokens`
   - `seconds_running` (aggregate runtime seconds as of snapshot time, including active sessions)
-- `rate_limits` (latest coding-agent rate limit payload, if available)
-- `pause`, `budget`, `dispatch_state`, and `workspace_lifecycle` when those extensions are enabled
+- `rate_limits` (latest coding-agent rate limit payload, if available; telemetry only)
+- `usage_limits` (provider usage-limit holds, Section 8.4.1; empty when nothing is held), each with
+  `provider`, `scope`, `reason`, `window`, `phase`, `since`, `resets_at`, `resume_at`, `source` and
+  `utilization` (the latest utilization seen for the window, or null)
+- `pause`, `budget`, `dispatch_state`, and `workspace_lifecycle` when those extensions are enabled.
+  `pause` is the operator pause only. Each usage-limit hold adds a `dispatch_state.blockers` entry
+  `{kind: "usage_limit", provider, scope, window, resets_at, resume_at, phase}`, but
+  `dispatch_state.active?` is false only when the holds cover every provider (and model) in use.
 
 Elixir implementation note: the current snapshot's `run_history` is read from the primary repo
 partition, while budget hydration reads runs across all repo partitions.
@@ -3104,6 +3128,21 @@ Minimum endpoints:
         "daily_paused": false
       },
       "rate_limits": null,
+      "usage_limits": [
+        {
+          "provider": "anthropic",
+          "scope": "all",
+          "reason": "claude_usage_limit",
+          "window": "five_hour",
+          "phase": "paused",
+          "since": "2026-02-24T19:02:11Z",
+          "resets_at": "2026-02-24T21:00:00Z",
+          "resume_at": "2026-02-24T21:02:00Z",
+          "source": "rate_limit_event",
+          "utilization": 1.0,
+          "issue_identifier": "MT-648"
+        }
+      ],
       "linear_usage": {
         "window_ms": 3600000,
         "total": 412,

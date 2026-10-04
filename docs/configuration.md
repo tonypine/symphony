@@ -444,18 +444,28 @@ agent:
 
 **Usage limits:**
 
-- `usage_limit.auto_pause` (default `true`): when a run ends on the Claude usage limit, Symphony
+- `usage_limit.auto_pause` (default `true`): when a run ends on the Claude or Codex usage limit, Symphony
   holds new runs of that provider until the limit resets instead of failing the run. The retry
   keeps its attempt, gets no backoff and no `run_failed` notification, and the run is recorded as
   `usage_limited`. Runs on another provider (for example an `openrouter` run profile) keep
-  dispatching, and a weekly Opus limit holds only Opus runs. `false` keeps the old behaviour: the
+  dispatching, and a weekly Opus limit holds only Opus runs. Codex runs (`agent.kind: codex`) are
+  their own provider (`openai`): a Codex limit holds only Codex runs, and a Claude limit never
+  holds them. `false` keeps the old behaviour: the
   run fails and retries with the normal backoff.
-- `usage_limit.resume_margin_seconds` (default `120`, `>= 0`): added to the reset time Claude
+- `usage_limit.resume_margin_seconds` (default `120`, `>= 0`): added to the reset time the provider
   reports before runs resume.
 - `usage_limit.unknown_reset_retry_seconds` (default `900`, `>= 60`): how long the hold lasts when
   no reset time is known (neither in the rejection nor remembered for that window).
+- At the resume time one held run (the first in dispatch order) goes out alone. If Claude accepts
+  it, the other held runs follow; if it hits the limit again, the hold starts over from the new
+  reset time (or `unknown_reset_retry_seconds`). New Claude work stays held meanwhile.
 - The hold is kept across restarts and is separate from the operator pause: resuming never
   clears a pause you set.
+- While a hold is in place, the dashboards show `Paused: Claude 5-hour limit, resumes ~14:05`
+  (local time), `/api/v1/state` lists it under `usage_limits`, and `dispatch_state.blockers` has a
+  `usage_limit` entry. The `usage_limit_paused` and `usage_limit_resumed` notifications go out once
+  when a hold starts and once when it clears, not once per held run. A hold clears when the first
+  run is accepted, not when it goes out, and a first run that hits the limit again sends nothing.
 
 **Project guides:**
 

@@ -147,7 +147,7 @@ defmodule SymphonyElixir.Orchestrator do
     {retry_attempts, claimed} = hydrate_retry_attempts()
     codex_totals = persisted_codex_totals()
     pause = persisted_pause_state()
-    usage_limits = persisted_usage_limits()
+    usage_limits = persisted_usage_limits() |> Map.new(fn {key, entry} -> {key, UsageLimit.paused(entry)} end)
     quality_gate_cache = hydrate_quality_gate_cache()
     quality_gate_comment_keys = hydrate_quality_gate_comment_keys()
     budget_day_started_on = Date.utc_today()
@@ -463,6 +463,7 @@ defmodule SymphonyElixir.Orchestrator do
           |> remember_usage_windows(update)
           |> put_running_entry(issue_id, updated_running_entry)
           |> enforce_issue_budget(issue_id)
+          |> clear_usage_limit_on_allowed_canary(issue_id, update)
 
         persist_running_entry(updated_running_entry)
         notify_transcript(running_repo_key(state, updated_running_entry), issue_id, update)
@@ -489,8 +490,8 @@ defmodule SymphonyElixir.Orchestrator do
   def handle_info({:usage_limit_resume, key}, %State{} = state) do
     state =
       case Map.fetch(state.usage_limits, key) do
-        {:ok, entry} -> maybe_resume_usage_limit(state, key, entry)
-        :error -> state
+        {:ok, %{phase: :paused} = entry} -> maybe_resume_usage_limit(state, key, entry)
+        _canary_or_gone -> state
       end
 
     notify_dashboard()
@@ -524,6 +525,7 @@ defmodule SymphonyElixir.Orchestrator do
               handle_abnormal_agent_exit(state, issue_id, running_entry, session_id, reason)
           end
 
+        state = finish_usage_limit_canary(state, issue_id)
         notify_dashboard()
         {:noreply, redispatch_slot_waiting(state)}
     end
@@ -1502,6 +1504,12 @@ defmodule SymphonyElixir.Orchestrator do
   @doc false
   @spec dispatch_chosen_issues_for_test([Issue.t() | term()], State.t()) :: State.t()
   def dispatch_chosen_issues_for_test(issues, %State{} = state) when is_list(issues), do: dispatch_chosen_issues(issues, state)
+
+  @doc false
+  @spec start_usage_limit_canary_for_test(State.t(), UsageLimit.key(), ([String.t()] -> term())) :: State.t()
+  def start_usage_limit_canary_for_test(%State{} = state, key, issue_fetcher) when is_function(issue_fetcher, 1) do
+    start_usage_limit_canary(state, key, Map.fetch!(state.usage_limits, key), issue_fetcher)
+  end
 
   @doc false
   @spec release_merging_ci_waits_for_test(State.t(), [Issue.t()]) :: State.t()
@@ -2727,7 +2735,7 @@ defmodule SymphonyElixir.Orchestrator do
         maybe_dispatch_chosen_issue(issue, acc, previous_waiting, active_states, terminal_states)
       end)
 
-    state
+    recover_usage_limit_canaries(state)
   end
 
   defp maybe_dispatch_chosen_issue(%Issue{} = issue, {state, finish_waiting?}, previous_waiting, active_states, terminal_states) do
@@ -4282,10 +4290,15 @@ defmodule SymphonyElixir.Orchestrator do
         error: usage_limit_error(entry),
         delay_type: :usage_limit,
         usage_limit_key: {entry.provider, entry.scope},
-        usage_limit_delay_ms: UsageLimit.remaining_ms(entry, state.clock.())
+        usage_limit_delay_ms: held_retry_delay_ms(entry, state.clock.())
       })
     )
   end
+
+  # A canary hold has no time left, so a retry that comes due during the canary waits the
+  # unknown-reset interval; the canary's outcome releases it sooner.
+  defp held_retry_delay_ms(%{phase: :canary}, _now), do: Config.settings!().agent.usage_limit.unknown_reset_retry_seconds * 1000
+  defp held_retry_delay_ms(entry, now), do: UsageLimit.remaining_ms(entry, now)
 
   # Waiting for a slot is not a failure: the retry leaves the backoff queue with its attempt
   # unchanged, and the poll dispatches it in stage order as soon as a slot is free.
@@ -5885,6 +5898,7 @@ defmodule SymphonyElixir.Orchestrator do
       run_history: persisted_run_history(state.repo_key),
       codex_totals: state.codex_totals,
       rate_limits: Map.get(state, :rate_limits),
+      usage_limits: UsageLimit.snapshot(state.usage_limits, state.usage_windows),
       pause: state.pause || unpaused_state(),
       workspace_lifecycle: workspace_lifecycle_snapshot(state),
       budget: budget_snapshot(state),
@@ -6555,11 +6569,23 @@ defmodule SymphonyElixir.Orchestrator do
         issue_identifier: identifier
       )
 
-    if is_nil(existing) or existing.resume_at != entry.resume_at do
-      Logger.warning(
-        "Usage limit pause provider=#{entry.provider} scope=#{UsageLimit.scope_label(entry.scope)} window=#{entry.window || "unknown"} " <>
-          "resets_at=#{format_optional_datetime(entry.resets_at)} resume_at=#{DateTime.to_iso8601(entry.resume_at)} source=#{entry.source || "unknown"} issue_identifier=#{identifier}"
-      )
+    if is_nil(existing), do: emit_usage_limit_event(:usage_limit_paused, entry, issue_identifier: identifier)
+
+    cond do
+      match?(%{phase: :canary}, existing) ->
+        Logger.warning(
+          "Usage limit still active provider=#{entry.provider} scope=#{UsageLimit.scope_label(entry.scope)} " <>
+            "next_resume_at=#{DateTime.to_iso8601(entry.resume_at)} issue_identifier=#{identifier}"
+        )
+
+      is_nil(existing) or existing.resume_at != entry.resume_at ->
+        Logger.warning(
+          "Usage limit pause provider=#{entry.provider} scope=#{UsageLimit.scope_label(entry.scope)} window=#{entry.window || "unknown"} " <>
+            "resets_at=#{format_optional_datetime(entry.resets_at)} resume_at=#{DateTime.to_iso8601(entry.resume_at)} source=#{entry.source || "unknown"} issue_identifier=#{identifier}"
+        )
+
+      true ->
+        :ok
     end
 
     state = put_usage_limits(state, Map.put(state.usage_limits, key, entry))
@@ -6572,6 +6598,28 @@ defmodule SymphonyElixir.Orchestrator do
     |> log_run_store_error("persist usage limits")
 
     %{state | usage_limits: usage_limits}
+  end
+
+  # One event per hold transition: a new hold and its clearing. A refreshed hold, or a run
+  # hitting a hold already in place, emits nothing.
+  defp emit_usage_limit_event(event, entry, attrs \\ []) do
+    resume = if event == :usage_limit_paused, do: "; resumes at #{DateTime.to_iso8601(entry.resume_at)}", else: ""
+
+    Notifications.emit_event(
+      event,
+      Map.merge(Map.new(attrs), %{
+        reason: UsageLimit.limit_label(entry) <> resume,
+        metadata: %{
+          provider: entry.provider,
+          scope: UsageLimit.scope_label(entry.scope),
+          window: entry.window,
+          since: entry.since,
+          resets_at: entry.resets_at,
+          resume_at: entry.resume_at,
+          source: entry.source
+        }
+      })
+    )
   end
 
   defp format_optional_datetime(%DateTime{} = datetime), do: DateTime.to_iso8601(datetime)
@@ -6597,31 +6645,105 @@ defmodule SymphonyElixir.Orchestrator do
 
   # A timer that fires before `resume_at` (the hold was refreshed) is armed again.
   defp maybe_resume_usage_limit(%State{} = state, key, entry) do
-    now = state.clock.()
-
-    if UsageLimit.remaining_ms(entry, now) > 0 do
+    if UsageLimit.remaining_ms(entry, state.clock.()) > 0 do
       arm_usage_limit_timer(state, key, entry)
     else
-      resume_usage_limit(state, key, entry, now)
+      start_usage_limit_canary(state, key, entry, &Tracker.fetch_issue_states_by_ids/1)
     end
+  end
+
+  # At `resume_at` one held run goes out alone as the canary, first in dispatch order, while the
+  # hold keeps every other run of the provider back. With nothing held the hold just clears.
+  defp start_usage_limit_canary(%State{} = state, key, entry, issue_fetcher) do
+    state = %{state | usage_limit_timers: Map.delete(state.usage_limit_timers, key)}
+
+    case held_usage_limit_retries(state, key) do
+      [] ->
+        clear_usage_limit(state, key, entry)
+
+      held ->
+        {issue_id, retry} = pick_usage_limit_canary(held, issue_fetcher)
+        Logger.warning("Usage limit canary provider=#{entry.provider} scope=#{UsageLimit.scope_label(entry.scope)} issue_identifier=#{retry[:identifier]}")
+
+        state
+        |> put_usage_limits(Map.put(state.usage_limits, key, UsageLimit.canary(entry, issue_id)))
+        |> release_usage_limit_retry(issue_id, retry)
+        |> schedule_immediate_tick()
+    end
+  end
+
+  defp held_usage_limit_retries(%State{} = state, key) do
+    Enum.filter(state.retry_attempts, fn {_issue_id, retry} -> Map.get(retry, :usage_limit_key) == key end)
+  end
+
+  # Issues the tracker no longer returns sort last, by id.
+  defp pick_usage_limit_canary(held, issue_fetcher) do
+    held_by_id = Map.new(held)
+    issue_ids = held_by_id |> Map.keys() |> Enum.sort()
+
+    ordered_ids =
+      case issue_fetcher.(issue_ids) do
+        {:ok, issues} -> issues |> sort_issues_for_dispatch() |> Enum.map(& &1.id)
+        {:error, _reason} -> []
+      end
+
+    issue_id = Enum.find(ordered_ids ++ issue_ids, &Map.has_key?(held_by_id, &1))
+    {issue_id, Map.fetch!(held_by_id, issue_id)}
   end
 
   # Held retries go back to normal candidate selection with their attempt, as a retry waiting
   # for a slot does; the immediate tick dispatches them unless another gate still applies.
-  defp resume_usage_limit(%State{} = state, key, entry, now) do
-    Logger.warning("Usage limit resumed provider=#{entry.provider} scope=#{UsageLimit.scope_label(entry.scope)} paused_for_s=#{DateTime.diff(now, entry.since)}")
+  defp clear_usage_limit(%State{} = state, key, entry) do
+    Logger.warning("Usage limit resumed provider=#{entry.provider} scope=#{UsageLimit.scope_label(entry.scope)} paused_for_s=#{DateTime.diff(state.clock.(), entry.since)}")
+    emit_usage_limit_event(:usage_limit_resumed, entry)
 
     state =
       state
       |> put_usage_limits(Map.delete(state.usage_limits, key))
       |> Map.update!(:usage_limit_timers, &Map.delete(&1, key))
 
-    state =
-      state.retry_attempts
-      |> Enum.filter(fn {_issue_id, retry} -> Map.get(retry, :usage_limit_key) == key end)
-      |> Enum.reduce(state, fn {issue_id, retry}, acc -> release_usage_limit_retry(acc, issue_id, retry) end)
+    state
+    |> held_usage_limit_retries(key)
+    |> Enum.reduce(state, fn {issue_id, retry}, acc -> release_usage_limit_retry(acc, issue_id, retry) end)
+    |> schedule_immediate_tick()
+  end
 
+  defp schedule_immediate_tick(%State{} = state) do
     if poll_tick_coalesced?(state, System.monotonic_time(:millisecond)), do: state, else: schedule_tick(state, 0)
+  end
+
+  # The canary's first `rate_limit_event` came back allowed: only allowed events carry
+  # `usage_windows`. A rejection ends the run instead (see finish_usage_limit_canary/2).
+  defp clear_usage_limit_on_allowed_canary(%State{} = state, issue_id, %{usage_windows: %{} = windows}) when map_size(windows) > 0 do
+    clear_usage_limit_canaries(state, issue_id)
+  end
+
+  defp clear_usage_limit_on_allowed_canary(%State{} = state, _issue_id, _update), do: state
+
+  # A canary that hit the same limit was paused again by pause_for_usage_limit/5. Any other end
+  # (success, a non-limit failure, another window's limit) clears the hold it was probing; the
+  # run itself follows its normal path.
+  defp finish_usage_limit_canary(%State{} = state, issue_id), do: clear_usage_limit_canaries(state, issue_id)
+
+  defp clear_usage_limit_canaries(%State{} = state, issue_id) do
+    state.usage_limits
+    |> Enum.filter(fn {_key, entry} -> UsageLimit.canary?(entry, issue_id) end)
+    |> Enum.reduce(state, fn {key, entry}, acc -> clear_usage_limit(acc, key, entry) end)
+  end
+
+  # A canary that left the active states before it ran is replaced by the next held run.
+  defp recover_usage_limit_canaries(%State{} = state) do
+    state.usage_limits
+    |> Enum.filter(fn {_key, entry} -> entry.phase == :canary and not usage_limit_canary_alive?(state, entry.canary_issue_id) end)
+    |> Enum.reduce(state, fn {key, entry}, acc ->
+      Logger.info("Usage limit canary gone provider=#{entry.provider} scope=#{UsageLimit.scope_label(entry.scope)} issue_id=#{entry.canary_issue_id}; choosing another")
+      start_usage_limit_canary(acc, key, entry, &Tracker.fetch_issue_states_by_ids/1)
+    end)
+  end
+
+  defp usage_limit_canary_alive?(%State{} = state, issue_id) do
+    issue_claimed_or_running?(state, issue_id) or Map.has_key?(state.retry_attempts, issue_id) or
+      Map.has_key?(state.slot_waiting, issue_id)
   end
 
   defp release_usage_limit_retry(%State{} = state, issue_id, retry) do
@@ -6651,7 +6773,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp usage_limit_hold(%State{usage_limits: usage_limits} = state, %Issue{} = issue) do
     repo_key = dispatch_repo_key(state, issue)
     profile = AgentRunner.run_profile(issue, Config.settings_for_repo!(repo_key), repo_key: repo_key)
-    UsageLimit.holding(usage_limits, profile)
+    UsageLimit.holding(usage_limits, profile, issue.id)
   end
 
   defp remember_usage_windows(%State{} = state, %{usage_windows: %{} = windows}) do
@@ -6823,9 +6945,11 @@ defmodule SymphonyElixir.Orchestrator do
         pause: state.pause || unpaused_state(),
         budget_daily_used: state.budget_daily_used,
         budget_day_started_on: state.budget_day_started_on,
-        tracker_health: state.tracker_health
+        tracker_health: state.tracker_health,
+        usage_limits: UsageLimit.snapshot(state.usage_limits, state.usage_windows)
       },
       %{
+        run_profiles: run_profiles_in_use(state, settings),
         daily_limit: agent.max_tokens_per_day,
         quality_gate: settings.quality_gate,
         learnings: settings.learnings,
@@ -6834,6 +6958,19 @@ defmodule SymphonyElixir.Orchestrator do
       },
       System.get_env()
     )
+  end
+
+  # Every provider and model a run could resolve to, across run kinds and configured repos.
+  # Only needed (and only resolved) while a usage-limit hold is in place.
+  defp run_profiles_in_use(%State{usage_limits: usage_limits}, _settings) when map_size(usage_limits) == 0, do: []
+
+  defp run_profiles_in_use(%State{}, settings) do
+    repo_settings =
+      for {:ok, repos} <- [Config.repos()], repo <- repos, {:ok, repo_settings} <- [Config.settings_for_repo(repo.name)], do: repo_settings
+
+    for settings <- [settings | repo_settings], kind <- RunKind.names(), uniq: true do
+      settings |> Config.run_profile(kind) |> Map.take([:provider, :model])
+    end
   end
 
   defp budget_remaining(limit, used) when is_integer(limit) and limit > 0 do

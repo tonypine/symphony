@@ -18,8 +18,88 @@ defmodule SymphonyElixir.UsageLimitTest do
     )
   end
 
+  def three_hours_behind(utc), do: NaiveDateTime.add(utc, -3 * 3600)
+
   defp put(existing, info, opts \\ []) do
     UsageLimit.put(existing, info, Keyword.merge([now: @now, config: @config], opts))
+  end
+
+  test "limit labels name the provider and the window" do
+    assert UsageLimit.limit_label(%{provider: "anthropic", window: "five_hour"}) == "Claude 5-hour limit"
+    assert UsageLimit.limit_label(%{provider: "anthropic", window: "seven_day"}) == "Claude weekly limit"
+    assert UsageLimit.limit_label(%{provider: "anthropic", window: "seven_day_opus"}) == "Claude weekly Opus limit"
+    assert UsageLimit.limit_label(%{provider: "anthropic", window: "seven_day_sonnet"}) == "Claude weekly Sonnet limit"
+    assert UsageLimit.limit_label(%{window: nil}) == "Claude usage limit"
+    assert UsageLimit.limit_label(%{provider: "openrouter", window: "daily"}) == "OpenRouter daily limit"
+    assert UsageLimit.limit_label(%{provider: "openai", window: "five_hour"}) == "openai 5-hour limit"
+  end
+
+  describe "banner" do
+    # Local time three hours behind UTC, so the date can differ from the UTC one.
+    @to_local [to_local: &__MODULE__.three_hours_behind/1]
+
+    test "shows the local resume time alone when it is today" do
+      entry = %{provider: "anthropic", window: "five_hour", resume_at: ~U[2026-10-03 17:05:00Z]}
+
+      assert UsageLimit.banner(entry, ~U[2026-10-03 15:00:00Z], @to_local) == "Paused: Claude 5-hour limit, resumes ~14:05"
+    end
+
+    test "adds the local date when the resume is not today" do
+      entry = %{provider: "anthropic", window: "seven_day", resume_at: "2026-10-05T12:30:00Z"}
+
+      assert UsageLimit.banner(entry, ~U[2026-10-03 15:00:00Z], @to_local) == "Paused: Claude weekly limit, resumes ~Oct 5 09:30"
+    end
+
+    test "compares local dates, not UTC ones" do
+      # 01:30 UTC on the 4th is 22:30 on the 3rd locally, the same local day as 15:00 UTC on the 3rd.
+      entry = %{provider: "anthropic", window: "five_hour", resume_at: ~U[2026-10-04 01:30:00Z]}
+
+      assert UsageLimit.banner(entry, ~U[2026-10-03 15:00:00Z], @to_local) == "Paused: Claude 5-hour limit, resumes ~22:30"
+    end
+
+    test "uses the host time zone by default and drops an unreadable resume time" do
+      now = DateTime.utc_now()
+
+      local =
+        now
+        |> DateTime.to_naive()
+        |> NaiveDateTime.to_erl()
+        |> :calendar.universal_time_to_local_time()
+        |> NaiveDateTime.from_erl!()
+
+      expected = local |> NaiveDateTime.to_time() |> Calendar.strftime("%H:%M")
+
+      assert UsageLimit.banner(%{provider: "anthropic", window: "five_hour", resume_at: now}, now) ==
+               "Paused: Claude 5-hour limit, resumes ~#{expected}"
+
+      assert UsageLimit.banner(%{provider: "anthropic", window: "five_hour", resume_at: "soon"}, now) == "Paused: Claude 5-hour limit"
+      assert UsageLimit.banner(%{provider: "anthropic", window: "five_hour"}, now) == "Paused: Claude 5-hour limit"
+    end
+  end
+
+  test "snapshot lists holds soonest first with the window's utilization" do
+    later = put(nil, info(%{window: "seven_day", resets_at: ~U[2026-10-05 00:00:00Z]}))
+    sooner = put(nil, info(), issue_identifier: "TP-248")
+    windows = %{{"anthropic", "five_hour"} => %{resets_at: ~U[2026-10-03 05:00:00Z], utilization: 1.0}}
+
+    assert [first, second] = UsageLimit.snapshot(%{{"anthropic", :all} => later, {"anthropic", "x"} => sooner}, windows)
+
+    assert first == %{
+             provider: "anthropic",
+             scope: :all,
+             reason: "claude_usage_limit",
+             window: "five_hour",
+             phase: :paused,
+             since: @now,
+             resets_at: ~U[2026-10-03 05:00:00Z],
+             resume_at: ~U[2026-10-03 05:02:00Z],
+             source: :rate_limit_event,
+             issue_identifier: "TP-248",
+             utilization: 1.0
+           }
+
+    assert %{window: "seven_day", utilization: nil} = second
+    assert UsageLimit.snapshot(%{}, windows) == []
   end
 
   test "key defaults to the anthropic provider and the whole plan" do
@@ -42,6 +122,22 @@ defmodule SymphonyElixir.UsageLimitTest do
              phase: :paused,
              issue_identifier: "TP-248"
            } = entry
+  end
+
+  test "a Codex hold is keyed and named for the openai provider" do
+    entry = put(nil, info(%{provider: "openai", window: "primary", source: :codex_error}))
+
+    assert %{provider: "openai", scope: :all, reason: "codex_usage_limit", window: "primary"} = entry
+    assert UsageLimit.key(entry) == {"openai", :all}
+  end
+
+  test "for_agent_kind makes Codex runs openai and leaves other runs alone" do
+    profile = %{kind: :implementation, model: nil, effort: nil, provider: "anthropic"}
+
+    assert UsageLimit.for_agent_kind(profile, "codex").provider == "openai"
+    assert UsageLimit.for_agent_kind(profile, "claude") == profile
+    refute UsageLimit.covers?({"anthropic", :all}, UsageLimit.for_agent_kind(profile, "codex"))
+    assert UsageLimit.covers?({"openai", :all}, UsageLimit.for_agent_kind(profile, "codex"))
   end
 
   test "an unknown reset uses the remembered window, else the retry interval" do
@@ -168,5 +264,26 @@ defmodule SymphonyElixir.UsageLimitTest do
       assert %{paused: true} = RunStore.get_paused()
       assert {:error, :invalid_usage_limits} = RunStore.put_usage_limits(nil)
     end
+  end
+
+  test "a canary hold lets only its canary through, and a refresh pauses it again" do
+    canary = put(nil, info()) |> UsageLimit.canary("issue-canary")
+    profile = %{provider: "anthropic", model: "claude-opus-5-5"}
+
+    assert %{phase: :canary, canary_issue_id: "issue-canary"} = canary
+    assert UsageLimit.canary?(canary, "issue-canary")
+    refute UsageLimit.canary?(canary, "issue-other")
+    refute UsageLimit.canary?(put(nil, info()), nil)
+
+    assert UsageLimit.holding(%{{"anthropic", :all} => canary}, profile, "issue-other") == canary
+    assert UsageLimit.holding(%{{"anthropic", :all} => canary}, profile) == canary
+    assert UsageLimit.holding(%{{"anthropic", :all} => canary}, profile, "issue-canary") == nil
+
+    later = DateTime.add(@now, 4 * 3600)
+    repaused = put(canary, info(%{resets_at: nil, window: nil}), now: later)
+    assert %{phase: :paused, canary_issue_id: nil, since: @now, resume_at: resume_at} = repaused
+    assert resume_at == DateTime.add(later, 900)
+
+    assert %{phase: :paused, canary_issue_id: nil} = UsageLimit.paused(canary)
   end
 end

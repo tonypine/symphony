@@ -376,6 +376,18 @@ pre,
   background: #fffaf0;
 }
 
+.usage-limit-banner {
+  border: 1px solid #f1d8a6;
+  border-radius: 8px;
+  background: #fffaf0;
+  padding: 0.75rem 1.15rem;
+}
+
+.usage-limit-banner-line {
+  margin: 0;
+  font-weight: 600;
+}
+
 .ops-control-main {
   display: flex;
   justify-content: space-between;
