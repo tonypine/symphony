@@ -98,7 +98,8 @@ defmodule SymphonyElixir.HumanActions.CiSecrets do
          gh_repo when is_binary(gh_repo) <- Keyword.get(opts, :github_repo, &RepoStatus.github_repo/1).(repo),
          branch = Keyword.get(opts, :base_branch, &AutoReview.base_branch/1).(repo_key),
          {:ok, runs} <- github.list_branch_runs(gh_repo, branch, []),
-         {:ok, failing} <- read_logs(failing_workflows(runs), gh_repo, previous.logs, github),
+         {:ok, read} <- read_logs(failing_workflows(runs), gh_repo, previous.logs, github),
+         failing = Enum.reject(read, fn {_workflow, secrets} -> secrets == [] end),
          {:ok, projects, cache} <- projects(project_filter, failing, cache, opts) do
       target = %{repo: gh_repo, branch: branch}
 
@@ -107,7 +108,8 @@ defmodule SymphonyElixir.HumanActions.CiSecrets do
           action(target, workflow, secret, project)
         end
 
-      logs = Map.new(failing, fn {workflow, secrets} -> {workflow.latest.id, secrets} end)
+      # A log that names no secret is kept too, so it is not read again on the next poll.
+      logs = Map.new(read, fn {workflow, secrets} -> {workflow.latest.id, secrets} end)
       {actions, put_in(cache, [Access.key(:repos, %{}), repo_key], %{logs: logs, actions: actions})}
     else
       none when none in [nil, :none] ->
@@ -142,11 +144,10 @@ defmodule SymphonyElixir.HumanActions.CiSecrets do
     run.status == "COMPLETED" and run.conclusion not in ["CANCELLED", "SKIPPED"] and is_binary(run.workflow_name) and is_binary(run.id)
   end
 
-  # Keeps only the workflows whose log names a missing secret.
+  # Pairs each workflow with the secrets its latest log names, none included.
   defp read_logs(workflows, gh_repo, logs, github) do
     Enum.reduce_while(workflows, {:ok, []}, fn workflow, {:ok, acc} ->
       case secrets_of(workflow.latest.id, gh_repo, logs, github) do
-        {:ok, []} -> {:cont, {:ok, acc}}
         {:ok, secrets} -> {:cont, {:ok, acc ++ [{workflow, secrets}]}}
         {:error, reason} -> {:halt, {:error, {:failed_log_unavailable, workflow.latest.id, reason}}}
       end

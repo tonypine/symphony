@@ -148,10 +148,14 @@ defmodule SymphonyElixir.HumanActions.CiSecretsTest do
       Process.put(:runs, {:ok, [run("8", "Release", "FAILURE"), run("7", "Release", "FAILURE")]})
       Process.put({:log, "8"}, {:ok, "Error: test failed\n"})
 
-      assert {%{}, _cache} = collect(%{})
+      assert {%{}, cache} = collect(%{})
       assert_received {:list_runs, "acme/cycle", "main"}
       assert_received {:fetch_log, "8", "acme/cycle"}
       refute_received {:projects_query, _filter}
+
+      assert {%{}, ^cache} = collect(cache)
+      assert_received {:list_runs, "acme/cycle", "main"}
+      refute_received {:fetch_log, _run_id, _repo}
 
       assert {%{}, %{}} = collect(%{}, github_repo: fn _repo -> nil end)
       refute_received {:list_runs, _repo, _branch}
