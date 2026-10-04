@@ -1,8 +1,9 @@
 defmodule SymphonyElixirWeb.ControlApiController do
   @moduledoc """
-  HTTP control plane for the Symphony daemon: pause, resume, stop, and
-  PR dispatch. Used by `bin/symphony pr` and the `mix symphony.*` tasks
-  via `SymphonyElixir.ControlClient`.
+  HTTP control plane for the Symphony daemon: pause, resume, stop, PR
+  dispatch, and forcing a ticket. Used by `bin/symphony pr`,
+  `bin/symphony force` and the `mix symphony.*` tasks via
+  `SymphonyElixir.ControlClient`.
   """
 
   use Phoenix.Controller, formats: [:json]
@@ -47,6 +48,37 @@ defmodule SymphonyElixirWeb.ControlApiController do
   def dispatch_pr(conn, _params) do
     error_response(conn, 422, "invalid_request", "target is required")
   end
+
+  @spec force(Conn.t(), map()) :: Conn.t()
+  def force(conn, params) do
+    case string_param(params["identifier"]) do
+      nil ->
+        error_response(conn, 422, "invalid_request", "identifier is required")
+
+      identifier ->
+        result = Orchestrator.force_issue(orchestrator(conn), identifier, params["clear"] in [true, "true"])
+        respond_force(conn, identifier, result)
+    end
+  end
+
+  defp respond_force(conn, identifier, {:error, :issue_not_found}),
+    do: error_response(conn, 404, "issue_not_found", "#{identifier} was not found in Linear")
+
+  defp respond_force(conn, identifier, {:error, {:issue_terminal, state}}),
+    do: error_response(conn, 422, "issue_terminal", "#{identifier} is #{state}; only an open ticket can be forced")
+
+  defp respond_force(conn, _identifier, {:error, {:label_not_found, label}}),
+    do: error_response(conn, 422, "label_not_found", "Linear has no #{label} label; create it in Linear, then force again")
+
+  defp respond_force(conn, _identifier, {:error, {:linear_rate_limited, retry_ms}}) do
+    until = retry_ms |> DateTime.from_unix!(:millisecond) |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+    error_response(conn, 502, "linear_error", "Linear is rate-limiting Symphony until #{until}; try again then")
+  end
+
+  defp respond_force(conn, _identifier, {:error, reason}),
+    do: error_response(conn, 502, "linear_error", "Linear request failed: #{inspect(reason)}")
+
+  defp respond_force(conn, _identifier, result), do: respond(conn, result)
 
   defp respond(conn, {:ok, payload}) when is_map(payload), do: json(conn, payload)
 

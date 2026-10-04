@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.ControlClient do
   @moduledoc """
   Client for the Symphony daemon's operator controls: pause, resume, stop,
-  and PR dispatch. Talks to the HTTP control plane at
+  PR dispatch, and forcing a ticket. Talks to the HTTP control plane at
   `POST /api/v1/control/*` so the CLI does not need distributed Erlang. It also
   fetches the terminal dashboard frame (`GET /api/v1/state?format=terminal`)
   for `symphony dashboard`.
@@ -40,6 +40,12 @@ defmodule SymphonyElixir.ControlClient do
   def dispatch_pr(target, pr_opts \\ [], opts \\ [])
       when is_binary(target) and is_list(pr_opts) and is_list(opts) do
     invoke(:dispatch_pr, [target, pr_opts], "dispatch_pr", body_for_pr(target, pr_opts), opts)
+  end
+
+  @doc "Adds the force label to `identifier`, or removes it with `clear?`, through the running Symphony."
+  @spec force_issue(String.t(), boolean(), keyword()) :: control_result()
+  def force_issue(identifier, clear?, opts \\ []) when is_binary(identifier) and is_boolean(clear?) do
+    invoke(:force_issue, [identifier, clear?], "force", %{identifier: identifier, clear: clear?}, opts)
   end
 
   @doc """

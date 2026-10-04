@@ -85,6 +85,8 @@ defmodule SymphonyElixir.TestSupport do
           Application.delete_env(:symphony_elixir, :memory_tracker_fetch_issue_states_result)
           Application.delete_env(:symphony_elixir, :memory_tracker_create_comment_result)
           Application.delete_env(:symphony_elixir, :memory_tracker_breakdown_histories)
+          Application.delete_env(:symphony_elixir, :memory_tracker_add_issue_label_result)
+          Application.delete_env(:symphony_elixir, :memory_tracker_remove_issue_label_result)
           Application.delete_env(:symphony_elixir, :memory_tracker_fetch_candidate_sleep_ms)
           Application.delete_env(:symphony_elixir, :memory_tracker_fetch_states_sleep_ms)
           Application.delete_env(:symphony_elixir, :memory_tracker_create_comment_sleep_ms)

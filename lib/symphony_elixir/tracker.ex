@@ -33,6 +33,8 @@ defmodule SymphonyElixir.Tracker do
   @callback enrich_issue(Issue.t()) :: {:ok, Issue.t()} | {:error, term()}
   @callback create_comment(String.t(), String.t()) :: :ok | {:error, term()}
   @callback update_issue_state(String.t(), String.t()) :: :ok | {:error, term()}
+  @callback add_issue_label(String.t(), String.t()) :: :ok | {:error, term()}
+  @callback remove_issue_label(String.t(), String.t()) :: :ok | {:error, term()}
   @callback fetch_breakdown_history(String.t()) :: {:ok, breakdown_history()} | {:error, term()}
   @callback workflow_state_exists?(String.t(), [String.t()]) :: {:ok, boolean()} | {:error, term()}
 
@@ -74,6 +76,18 @@ defmodule SymphonyElixir.Tracker do
   @spec update_issue_state(String.t(), String.t()) :: :ok | {:error, term()}
   def update_issue_state(issue_id, state_name) do
     adapter().update_issue_state(issue_id, state_name)
+  end
+
+  @doc "Adds the label named `label_name` (matched ignoring case) to the issue."
+  @spec add_issue_label(String.t(), String.t()) :: :ok | {:error, term()}
+  def add_issue_label(issue_id, label_name) when is_binary(issue_id) and is_binary(label_name) do
+    adapter().add_issue_label(issue_id, label_name)
+  end
+
+  @doc "Removes every label named `label_name` (matched ignoring case) from the issue."
+  @spec remove_issue_label(String.t(), String.t()) :: :ok | {:error, term()}
+  def remove_issue_label(issue_id, label_name) when is_binary(issue_id) and is_binary(label_name) do
+    adapter().remove_issue_label(issue_id, label_name)
   end
 
   @spec fetch_breakdown_history(String.t()) :: {:ok, breakdown_history()} | {:error, term()}

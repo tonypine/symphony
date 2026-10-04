@@ -29,6 +29,7 @@ defmodule SymphonyElixir.CLI do
   ]
   @check_switches [config: :string]
   @dashboard_switches [url: :string]
+  @force_switches [clear: :boolean]
   @default_symphony_file "symphony.yml"
 
   @type ensure_started_result :: {:ok, [atom()]} | {:error, term()}
@@ -53,7 +54,8 @@ defmodule SymphonyElixir.CLI do
           ensure_all_started: (-> ensure_started_result()),
           run_one_shot: (String.t(), keyword() -> one_shot_result()),
           control_url: (-> String.t()),
-          run_dashboard: ((-> String.t()) -> :ok)
+          run_dashboard: ((-> String.t()) -> :ok),
+          force_issue: (String.t(), boolean() -> ControlClient.control_result())
         }
 
   @spec main([String.t()]) :: no_return()
@@ -85,6 +87,9 @@ defmodule SymphonyElixir.CLI do
       ["dashboard" | dashboard_args] ->
         evaluate_dashboard(dashboard_args, deps)
 
+      ["force" | force_args] ->
+        evaluate_force(force_args, deps)
+
       ["init" | init_args] ->
         evaluate_init(init_args, deps)
 
@@ -94,11 +99,8 @@ defmodule SymphonyElixir.CLI do
       ["run" | run_args] ->
         evaluate_run(run_args, deps)
 
-      ["workflow", "preview" | preview_args] ->
-        dispatch_workflow_preview(preview_args)
-
-      ["workflow" | _rest] ->
-        {:error, "Usage: symphony workflow preview [--file WORKFLOW.md] [--agent codex|claude]"}
+      ["workflow" | workflow_args] ->
+        evaluate_workflow(workflow_args)
 
       _args ->
         with :ok <- configure(args, deps) do
@@ -152,6 +154,57 @@ defmodule SymphonyElixir.CLI do
     end
   end
 
+  # Adds or clears the force label through the running Symphony's control API; no config needed.
+  defp evaluate_force(args, deps) do
+    with {opts, [identifier], []} <- OptionParser.parse(args, strict: @force_switches),
+         identifier when identifier != "" <- String.trim(identifier) do
+      identifier
+      |> deps.force_issue.(Keyword.get(opts, :clear, false))
+      |> force_result(identifier, deps)
+    else
+      _ -> {:error, force_usage_message()}
+    end
+  end
+
+  defp force_result({:ok, result}, identifier, _deps) do
+    IO.puts(force_message(Map.get(result, :issue_identifier) || identifier, result))
+    {:halt, 0}
+  end
+
+  defp force_result(:unavailable, _identifier, _deps),
+    do: {:error, "Symphony's orchestrator is unavailable; try again once it has started"}
+
+  defp force_result({:error, reason}, identifier, deps), do: {:error, force_error_message(reason, identifier, deps)}
+
+  defp force_message(identifier, %{forced: false}), do: "#{identifier} no longer forced"
+  defp force_message(identifier, %{position: nil, state: state}), do: "#{identifier} forced (it is in #{state}; forcing doesn't promote it)"
+  defp force_message(identifier, %{position: position, forced_max: forced_max}) when position <= forced_max, do: "#{identifier} forced (slot #{position} of #{forced_max})"
+  defp force_message(identifier, %{position: position, holders: holders}), do: "#{identifier} forced (queued ##{position}; #{holders_phrase(holders)})"
+
+  defp holders_phrase([holder]), do: "#{holder} holds the forced slot"
+
+  defp holders_phrase(holders) do
+    {others, [last]} = Enum.split(holders, -1)
+    "#{Enum.join(others, ", ")} and #{last} hold the forced slots"
+  end
+
+  defp force_error_message(:control_token_unavailable, _identifier, _deps),
+    do: "No control token: start Symphony first, or set SYMPHONY_CONTROL_TOKEN to the token in <state-root>/control_token"
+
+  defp force_error_message({:unauthorized, _payload}, _identifier, _deps),
+    do: "The running Symphony rejected the control token; check SYMPHONY_CONTROL_TOKEN"
+
+  defp force_error_message({:connection_failed, _reason}, _identifier, deps),
+    do: "Could not reach Symphony at #{deps.control_url.()}; is it running?"
+
+  defp force_error_message({:invalid_request, %{"error" => %{"message" => message}}}, _identifier, _deps) when is_binary(message),
+    do: message
+
+  defp force_error_message({:http_status, _status, %{"error" => %{"message" => message}}}, _identifier, _deps) when is_binary(message),
+    do: message
+
+  defp force_error_message(reason, identifier, _deps), do: "Could not force #{identifier}: #{inspect(reason)}"
+
   defp check_config(path, deps) do
     case deps.check_config.() do
       :ok ->
@@ -193,6 +246,11 @@ defmodule SymphonyElixir.CLI do
     end
   end
 
+  defp evaluate_workflow(["preview" | preview_args]), do: dispatch_workflow_preview(preview_args)
+
+  defp evaluate_workflow(_args),
+    do: {:error, "Usage: symphony workflow preview [--file WORKFLOW.md] [--agent codex|claude]"}
+
   defp dispatch_workflow_preview(args) do
     case OptionParser.parse(args, strict: [file: :string, agent: :string]) do
       {opts, [], []} ->
@@ -232,7 +290,7 @@ defmodule SymphonyElixir.CLI do
       :not_in_burrito ->
         :ok
 
-      [command | _args] = args when command in ["check", "dashboard"] ->
+      [command | _args] = args when command in ["check", "dashboard", "force"] ->
         args |> evaluate() |> halt()
 
       args ->
@@ -242,7 +300,7 @@ defmodule SymphonyElixir.CLI do
     end
   end
 
-  # Only the service takes the node name; `check` and `dashboard` above run
+  # Only the service takes the node name; `check`, `dashboard` and `force` above run
   # undistributed so they work next to a running Symphony.
   defp configure_service(args) do
     with :ok <- configure(args), do: ReleaseNode.start(ReleaseNode.runtime_deps())
@@ -371,6 +429,7 @@ defmodule SymphonyElixir.CLI do
     "Usage: symphony init [--force]\n" <>
       "       symphony check [--config <path-to-symphony.yml>]\n" <>
       "       symphony dashboard [--url <control-url>]\n" <>
+      "       symphony force [--clear] <issue-identifier>\n" <>
       "       symphony [--config <path-to-symphony.yml>] [--state-root <path>] [--logs-root <path>] [--host <host>] [--port <port>]\n" <>
       "       symphony pr <url-or-number> [--intent \"address review comments\"]\n" <>
       "       symphony run <issue-identifier> [--config <path-to-symphony.yml>] [--timeout <duration>] [--no-retry] [--state-root <path>] [--logs-root <path>]\n" <>
@@ -383,6 +442,10 @@ defmodule SymphonyElixir.CLI do
 
   defp dashboard_usage_message do
     "Usage: symphony dashboard [--url <control-url>]"
+  end
+
+  defp force_usage_message do
+    "Usage: symphony force [--clear] <issue-identifier>"
   end
 
   @spec run_usage_message() :: String.t()
@@ -407,7 +470,8 @@ defmodule SymphonyElixir.CLI do
       ensure_all_started: fn -> Application.ensure_all_started(:symphony_elixir) end,
       run_one_shot: &SymphonyElixir.OneShot.run/2,
       control_url: fn -> ControlClient.control_url() end,
-      run_dashboard: &run_dashboard/1
+      run_dashboard: &run_dashboard/1,
+      force_issue: &ControlClient.force_issue/2
     }
   end
 

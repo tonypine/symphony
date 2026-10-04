@@ -846,6 +846,10 @@ Fields:
     one when the label is removed, the issue is terminal, or the tracker no longer returns it. Forced issues are reported in the status snapshot
     (`forced`) and the audit log (`forced_start`, `forced_end`); dispatch does not treat them
     differently yet.
+  - Implementations MAY offer an operator control that adds or removes the label (this one has
+    `symphony force [--clear] <identifier>` over `POST /api/v1/control/force`). Such a control
+    SHOULD put the change into the queue at once rather than wait for the next poll, so tickets
+    forced in quick succession keep their order, and MUST NOT move the issue to another state.
 - `concurrency.forced_max` (positive integer)
   - Default: `1`.
   - Forced issues that may be worked at once (reported, not yet enforced). Values below `1` fail
