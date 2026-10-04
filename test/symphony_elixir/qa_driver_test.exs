@@ -3,7 +3,7 @@ defmodule SymphonyElixir.QaDriverTest do
 
   import ExUnit.CaptureLog
 
-  alias SymphonyElixir.{Paths, PathSafety, QaDriver}
+  alias SymphonyElixir.{AgentEnv, Paths, PathSafety, QaDriver}
   alias SymphonyElixir.QaDriver.Host
 
   @app "macos/build/Demo.app"
@@ -262,6 +262,40 @@ defmodule SymphonyElixir.QaDriverTest do
       File.write!(planted, "evil()")
       assert error_code(QaDriver.call_tool(fresh, "qa_launch_app", %{})) == "qa_worktree_modified"
       assert error_code(QaDriver.call_tool(fresh, "qa_build", %{})) == "qa_worktree_modified"
+    end
+
+    test "accepts the folders the QA agent's launch env creates, with or without Gradle", %{root: root} do
+      identity = ["-c", "user.name=QA", "-c", "user.email=qa@example.com"]
+      git = fn args, cwd -> System.cmd("git", ["-C", cwd | args], stderr_to_stdout: true) end
+
+      for {name, files} <- [plain: [".gitignore"], gradle: [".gitignore", "settings.gradle.kts"]] do
+        worktree = Path.join(root, Atom.to_string(name))
+        {_output, 0} = System.cmd("git", ["init", "--quiet", worktree])
+        Enum.each(files, &File.touch!(Path.join(worktree, &1)))
+        File.write!(Path.join(worktree, ".gitignore"), "macos/build/\nqa-evidence/\n")
+        {_output, 0} = System.cmd("git", ["-C", worktree, "add" | files])
+        {_output, 0} = System.cmd("git", ["-C", worktree | identity] ++ ["commit", "--quiet", "-m", "init"])
+
+        env = AgentEnv.gradle_env(worktree)
+        assert Map.has_key?(env, "GRADLE_OPTS") == (name == :gradle)
+        assert File.dir?(Path.join(worktree, ".gradle-daemons")) == (name == :gradle)
+
+        driver = start_driver(worktree, git: git)
+        assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+
+        # A daemon the QA agent started registers there after the build.
+        File.mkdir_p!(Path.join(worktree, ".gradle-daemons/9.8.0"))
+        File.write!(Path.join(worktree, ".gradle-daemons/9.8.0/registry.bin"), "daemons")
+        assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+      end
+
+      # A change to a tracked file there still counts.
+      git = fn _args, _cwd -> {" M .gradle-daemons/tracked.txt\0?? .gradle-daemons/new.txt\0!! .gradle-daemons/.gitignore\0", 0} end
+      driver = start_driver(Path.join(root, "plain"), git: git)
+      assert {:error, {:qa_tool, "qa_worktree_modified", message}} = QaDriver.call_tool(driver, "qa_build", %{})
+      assert message =~ ".gradle-daemons/tracked.txt"
+      refute message =~ "new.txt"
+      refute message =~ ".gitignore"
     end
 
     test "reports a failing build and forgets the previous one", %{worktree: worktree} do
