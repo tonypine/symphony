@@ -1,11 +1,11 @@
 defmodule SymphonyElixir.Linear.Usage do
   @moduledoc """
-  Counts Linear requests per caller over a rolling hour.
+  Counts Linear requests per caller, and per query, over a rolling hour.
 
   Polling, the CI and PR review pollers, Auto Review, post-PR transitions and
   every agent's Linear tool calls share one API key and its hourly budget.
   `SymphonyElixir.Linear.Client.graphql/3` calls `record/1` for each request it
-  sends, attributed to the calling process's tag (`put_caller/1`,
+  sends, with the GraphQL operation name, attributed to the calling process's tag (`put_caller/1`,
   `with_caller/2`). A process without a tag, such as a task, inherits the tag of
   the first process in its `$callers` that has one; anything else counts as
   `other`.
@@ -29,7 +29,8 @@ defmodule SymphonyElixir.Linear.Usage do
   @type snapshot :: %{
           window_ms: pos_integer(),
           total: non_neg_integer(),
-          callers: [%{caller: String.t(), requests: pos_integer()}]
+          callers: [%{caller: String.t(), requests: pos_integer()}],
+          queries: [%{query: String.t(), requests: pos_integer()}]
         }
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -68,10 +69,10 @@ defmodule SymphonyElixir.Linear.Usage do
     Process.get(@caller_key) || inherited_caller(Process.get(:"$callers", [])) || :other
   end
 
-  @doc "Counts one Linear request for the current caller."
-  @spec record(integer()) :: :ok
-  def record(now_ms \\ RateLimit.now_ms()) when is_integer(now_ms) do
-    key = {caller_label(current_caller()), div(now_ms, @bucket_ms)}
+  @doc "Counts one Linear request for the current caller and the query it sends (`nil` when unnamed)."
+  @spec record(String.t() | nil, integer()) :: :ok
+  def record(query \\ nil, now_ms \\ RateLimit.now_ms()) when is_integer(now_ms) do
+    key = {caller_label(current_caller()), query || "unnamed", div(now_ms, @bucket_ms)}
     :ets.update_counter(@table, key, 1, {key, 0})
     :ok
   rescue
@@ -79,24 +80,24 @@ defmodule SymphonyElixir.Linear.Usage do
   end
 
   @doc """
-  Requests per caller over the last hour, busiest first. Drops buckets that
-  have left the window.
+  Requests per caller and per query over the last hour, busiest first. Drops
+  buckets that have left the window.
   """
   @spec snapshot(integer()) :: snapshot()
   def snapshot(now_ms \\ RateLimit.now_ms()) when is_integer(now_ms) do
     oldest_bucket = div(now_ms, @bucket_ms) - @window_buckets + 1
-    :ets.select_delete(@table, [{{{:_, :"$1"}, :_}, [{:<, :"$1", oldest_bucket}], [true]}])
+    :ets.select_delete(@table, [{{{:_, :_, :"$1"}, :_}, [{:<, :"$1", oldest_bucket}], [true]}])
+    entries = :ets.tab2list(@table)
+    callers = totals(entries, :caller, fn {{caller, _query, _bucket}, _count} -> caller end)
 
-    callers =
-      @table
-      |> :ets.tab2list()
-      |> Enum.reduce(%{}, fn {{caller, _bucket}, count}, acc -> Map.update(acc, caller, count, &(&1 + count)) end)
-      |> Enum.map(fn {caller, requests} -> %{caller: caller, requests: requests} end)
-      |> Enum.sort_by(&{-&1.requests, &1.caller})
-
-    %{window_ms: @window_ms, total: callers |> Enum.map(& &1.requests) |> Enum.sum(), callers: callers}
+    %{
+      window_ms: @window_ms,
+      total: callers |> Enum.map(& &1.requests) |> Enum.sum(),
+      callers: callers,
+      queries: totals(entries, :query, fn {{_caller, query, _bucket}, _count} -> query end)
+    }
   rescue
-    ArgumentError -> %{window_ms: @window_ms, total: 0, callers: []}
+    ArgumentError -> %{window_ms: @window_ms, total: 0, callers: [], queries: []}
   end
 
   @doc false
@@ -113,6 +114,13 @@ defmodule SymphonyElixir.Linear.Usage do
   def caller_label({:agent, identifier}) when is_binary(identifier) and identifier != "", do: "agent:" <> identifier
   def caller_label({:agent, _identifier}), do: "agent:unknown"
   def caller_label(caller) when is_atom(caller), do: Atom.to_string(caller)
+
+  defp totals(entries, field, key_fun) do
+    entries
+    |> Enum.reduce(%{}, fn {_key, count} = entry, acc -> Map.update(acc, key_fun.(entry), count, &(&1 + count)) end)
+    |> Enum.map(fn {name, requests} -> %{field => name, requests: requests} end)
+    |> Enum.sort_by(&{-&1.requests, Map.fetch!(&1, field)})
+  end
 
   defp restore_caller(nil), do: Process.delete(@caller_key)
   defp restore_caller(previous), do: Process.put(@caller_key, previous)

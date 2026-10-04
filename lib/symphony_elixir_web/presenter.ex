@@ -275,12 +275,17 @@ defmodule SymphonyElixirWeb.Presenter do
 
   defp normalize_pollers(_pollers), do: %{ci: :unavailable, pr_review: :unavailable}
 
-  # Linear requests per caller over the last hour, busiest first.
-  defp normalize_linear_usage(%{window_ms: window_ms, total: total, callers: callers}) do
-    %{window_ms: window_ms, total: total, callers: Enum.map(callers, &Map.take(&1, [:caller, :requests]))}
+  # Linear requests per caller and per query over the last hour, busiest first.
+  defp normalize_linear_usage(%{window_ms: window_ms, total: total, callers: callers, queries: queries}) do
+    %{
+      window_ms: window_ms,
+      total: total,
+      callers: Enum.map(callers, &Map.take(&1, [:caller, :requests])),
+      queries: Enum.map(queries, &Map.take(&1, [:query, :requests]))
+    }
   end
 
-  defp normalize_linear_usage(_usage), do: %{window_ms: 3_600_000, total: 0, callers: []}
+  defp normalize_linear_usage(_usage), do: %{window_ms: 3_600_000, total: 0, callers: [], queries: []}
 
   defp normalize_poller_status(%{} = status) do
     %{

@@ -25,6 +25,10 @@ defmodule SymphonyElixir.AutoReview do
   that the CI poller is on. When either is missing, Auto Review is turned off for
   the life of the process and a warning is logged, so issues keep flowing to
   `In Review`.
+
+  GitHub runs no `pull_request` workflows on a PR that conflicts with its base, so a
+  conflicting PR with no checks goes to `Rework` with a comment (`on_conflict/4`)
+  instead of waiting for CI.
   """
 
   require Logger
@@ -37,6 +41,7 @@ defmodule SymphonyElixir.AutoReview do
 
   @review_state "In Review"
   @active_state "In Progress"
+  @rework_state "Rework"
 
   @doc "Whether Auto Review is configured on and the startup check did not turn it off."
   @spec enabled?(Schema.t() | term()) :: boolean()
@@ -185,6 +190,40 @@ defmodule SymphonyElixir.AutoReview do
 
       _other ->
         transition(issue, record, String.to_existing_atom(Map.get(record, :qa_verdict)), Map.get(record, :qa_target_state), opts)
+    end
+  end
+
+  @doc """
+  Handles an issue in Auto Review whose PR conflicts with its base and has no checks:
+  moves it to `Rework` and comments which branch to merge in. `ci_status` is the CI
+  poller's PR fetch.
+  """
+  @spec on_conflict(Issue.t(), map(), map(), keyword()) :: tuple()
+  def on_conflict(%Issue{} = issue, record, ci_status, opts) do
+    Usage.with_caller(:auto_review, fn -> send_to_rework(issue, record, ci_status, opts) end)
+  end
+
+  defp send_to_rework(issue, record, ci_status, opts) do
+    tracker = Keyword.get(opts, :tracker, Tracker)
+    base = Map.get(ci_status, :base_ref_name) || base_branch(Map.get(record, :repo_key))
+
+    case tracker.update_issue_state(issue.id, @rework_state) do
+      :ok ->
+        body =
+          "PR conflicts with `#{base}`; merge it and push. GitHub runs no CI on a conflicting PR, " <>
+            "so Auto Review moved this issue to #{@rework_state} instead of waiting for checks. " <>
+            "Keep the PR and its branch: only the conflict needs fixing."
+
+        case tracker.create_comment(issue.id, body) do
+          :ok -> :ok
+          {:error, reason} -> Logger.warning("Failed to comment on #{issue.identifier} about its conflicting PR: #{inspect(reason)}")
+        end
+
+        {:auto_review_conflict, issue.id, @rework_state}
+
+      {:error, reason} ->
+        Logger.warning("Failed to move #{issue.identifier} to #{@rework_state} after its PR conflicted: #{inspect(reason)}")
+        {:state_transition_error, issue.id, :auto_review_conflict, reason}
     end
   end
 
