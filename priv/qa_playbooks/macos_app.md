@@ -50,7 +50,10 @@ Verdicts for this playbook:
 - An empty or collapsed window, a missing control, or a control that does nothing is a
   failing step. In `details` quote the relevant part of the settled AX tree (the window and
   its direct children, with frames) and attach the screenshot of that window.
-- When a tool returns `qa_permission_missing`, stop and answer `blocked` with the tool's
-  message as `reason`. Do the same for `qa_helper_unavailable`.
+- When a tool returns `qa_permission_missing`, stop this playbook: mark each app step you
+  could not check `blocked` with the tool's message in `details`. Then continue with the
+  steps of the other playbooks offered to you (such as `cli` or `web`) and report each of
+  them as `pass` or `fail`. Answer `blocked` with the tool's message as `reason`. Do the same
+  for `qa_helper_unavailable`.
 - The app crashing or exiting (`qa_app_exited`) during the walkthrough is a failing step;
   quote its last output.

@@ -386,6 +386,22 @@ defmodule SymphonyElixir.QaAgentTest do
       assert QaAgent.prompt(job(), nil) =~ "so the executor can fix it"
     end
 
+    test "a walkthrough with cli and macos_app keeps running the CLI checks when the app part is blocked" do
+      config = %{playbooks: %{"macos_app" => %{"build" => "make -C macos app", "app" => "macos/build/Symphony.app"}}}
+      assert [%{kind: "cli"}, %{kind: "macos_app"}] = playbooks = Selection.playbooks(config)
+
+      verification = issue(%{id: "issue-fv", identifier: "TP-910", title: "Final verification: Parent", description: "- [ ] child criterion"})
+      parent = issue(%{id: "issue-parent", identifier: "TP-243", title: "Parent", description: "- [ ] parent criterion"})
+      prompt = QaAgent.prompt(job(%{issue: parent, verification_issue: verification, base_ref: "origin/main", playbooks: playbooks}), nil)
+
+      assert prompt =~ "### Playbook: cli"
+      assert prompt =~ ~r/When one playbook is blocked, mark its steps `blocked` and continue with the other playbooks'\s+steps: report `pass` or `fail` for every step that could run\./
+      assert prompt =~ ~r/The verdict stays `blocked` while\s+any step is blocked/
+      assert prompt =~ ~r/When a tool returns `qa_permission_missing`, stop this playbook: mark each app step you\s+could not check `blocked`/
+      assert prompt =~ ~r/continue with the\s+steps of the other playbooks offered to you \(such as `cli` or `web`\) and report each of\s+them as `pass` or `fail`/
+      refute prompt =~ "stop and answer `blocked`"
+    end
+
     test "QA prompts and built-in playbooks leave the test suite to CI" do
       parent = issue(%{id: "issue-parent", identifier: "TP-243", title: "Parent", description: "- [ ] parent criterion"})
       verification = issue(%{id: "issue-fv", identifier: "TP-910", title: "Final verification: Parent", description: "- [ ] child criterion"})
