@@ -12,6 +12,7 @@ defmodule SymphonyElixir.AgentTools.GitHub do
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.GitHub.{CommentMarker, PullRequest}
+  alias SymphonyElixir.Repo.Fetcher
   alias SymphonyElixir.Workspace
 
   @merging_state "Merging"
@@ -402,16 +403,19 @@ defmodule SymphonyElixir.AgentTools.GitHub do
     end
   end
 
+  # Under the per-repo fetch lock, which retries a fetch that fails on `cannot lock ref`.
   defp run_fetch_origin(workspace, opts) do
-    case run_git(["fetch", "origin"], workspace, opts) do
-      {:ok, output} ->
-        {:ok, output}
+    fetch = fn ->
+      case run_git(["fetch", "origin"], workspace, opts) do
+        {:error, {:git_failed, ["fetch", "origin"], status, output}} -> {output, status}
+        result -> result
+      end
+    end
 
-      {:error, {:git_failed, ["fetch", "origin"], status, output}} ->
-        {:error, {:git_fetch_failed, status, sanitize_git_output(output)}}
-
-      {:error, reason} ->
-        {:error, reason}
+    case Fetcher.fetch(workspace, fetch) do
+      {:ok, output} -> {:ok, output}
+      {:error, reason} -> {:error, reason}
+      {output, status} -> {:error, {:git_fetch_failed, status, sanitize_git_output(output)}}
     end
   end
 
