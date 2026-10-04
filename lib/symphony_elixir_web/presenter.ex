@@ -73,6 +73,8 @@ defmodule SymphonyElixirWeb.Presenter do
           auto_merge: snapshot |> Map.get(:auto_merge, []) |> Enum.map(&auto_merge_payload/1),
           slot_waiting: snapshot |> Map.get(:slot_waiting, []) |> Enum.map(&slot_waiting_payload/1),
           blocked: snapshot |> Map.get(:blocked, []) |> Enum.map(&blocked_payload/1),
+          forced: snapshot |> Map.get(:forced, []) |> Enum.map(&forced_payload/1),
+          concurrency: Map.get(snapshot, :concurrency),
           claimed: Map.get(snapshot, :claimed, []),
           rate_limits: snapshot.rate_limits,
           linear_usage: normalize_linear_usage(get_in(snapshot, [:polling, :linear, :usage]))
@@ -829,6 +831,17 @@ defmodule SymphonyElixirWeb.Presenter do
       state: entry.state,
       blocked_by: blockers,
       summary: "#{entry.identifier} waiting on " <> Enum.map_join(blockers, ", ", &blocker_label/1)
+    }
+  end
+
+  defp forced_payload(entry) do
+    %{
+      issue_id: entry.issue_id,
+      issue_identifier: entry.identifier,
+      title: entry.title,
+      state: entry.state,
+      forced_since: iso8601(entry.forced_since),
+      position: entry.position
     }
   end
 
