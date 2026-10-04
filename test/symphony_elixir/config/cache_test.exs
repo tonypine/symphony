@@ -113,11 +113,10 @@ defmodule SymphonyElixir.Config.CacheTest do
       File.write!(symphony_path, "tracker:\n  kind: memory\nfoo: 2\n")
       bump_mtime!(symphony_path)
 
-      cache_pid = Process.whereis(Cache)
-      assert is_pid(cache_pid)
+      cache = start_private_cache!()
 
-      send(cache_pid, {:file_event, self(), {symphony_path, [:modified]}})
-      :sys.get_state(cache_pid)
+      send(cache, {:file_event, self(), {symphony_path, [:modified]}})
+      :sys.get_state(cache)
 
       # Subsequent reads should see the new value via either the eager reload
       # (file_event branch) or the lazy stamp refresh.
@@ -132,10 +131,11 @@ defmodule SymphonyElixir.Config.CacheTest do
       Workflow.set_symphony_file_path(symphony_path)
 
       test_pid = self()
-      dir = Path.dirname(Path.expand(symphony_path))
+      symphony_path = Path.expand(symphony_path)
+      dir = Path.dirname(symphony_path)
 
-      # Accept every dir: the Cache calls this for any config read on the node,
-      # and a stub that only matches `dir` would crash it.
+      # Accept every dir: the app's Cache also calls this for any config read
+      # on the node, and a stub that only matches `dir` would crash it.
       Application.put_env(:symphony_elixir, :config_cache_watcher, fn watched_dir ->
         send(test_pid, {:watch_attempt, watched_dir})
         :ignore
@@ -146,29 +146,30 @@ defmodule SymphonyElixir.Config.CacheTest do
       other_path = Path.join([root, "other", "symphony.yml"])
       File.mkdir_p!(Path.dirname(other_path))
       File.write!(other_path, "tracker:\n  kind: memory\n")
+      other_dir = Path.dirname(other_path)
 
-      cache_pid = Process.whereis(Cache)
-      assert is_pid(cache_pid)
+      cache = start_private_cache!()
 
+      # Cast the watch requests a cache read sends, so each one reaches this
+      # instance even after the first marked `dir` as stat-only.
       ExUnit.CaptureLog.capture_log(fn ->
-        assert {:ok, _} = Cache.get_symphony(symphony_path)
-        :sys.get_state(cache_pid)
+        GenServer.cast(cache, {:watch, symphony_path})
+        :sys.get_state(cache)
 
-        assert {:ok, _} = Cache.get_symphony(other_path)
-        :sys.get_state(cache_pid)
+        GenServer.cast(cache, {:watch, other_path})
+        :sys.get_state(cache)
 
-        assert {:ok, _} = Cache.get_symphony(symphony_path)
-        :sys.get_state(cache_pid)
+        GenServer.cast(cache, {:watch, symphony_path})
+        :sys.get_state(cache)
       end)
 
-      # `:sys.get_state` above drains the cast handler synchronously, but use
-      # assert_receive/refute_receive with a small timeout so the assertion remains deterministic
-      # even if the cast pipeline grows an async hop in the future.
-      assert_receive {:watch_attempt, ^dir}, 100
-      refute_receive {:watch_attempt, ^dir}, 50
+      # `:sys.get_state` above drains each cast, so every watch attempt has
+      # already been delivered.
+      assert_received {:watch_attempt, ^dir}
+      assert_received {:watch_attempt, ^other_dir}
+      refute_received {:watch_attempt, ^dir}
 
-      assert Process.whereis(Cache) == cache_pid
-      state = :sys.get_state(cache_pid)
+      state = :sys.get_state(cache)
       refute Map.has_key?(state.watchers, dir)
     end
 
@@ -177,12 +178,10 @@ defmodule SymphonyElixir.Config.CacheTest do
       File.write!(symphony_path, "tracker:\n  kind: memory\n")
       Workflow.set_symphony_file_path(symphony_path)
 
-      # Warm the cache and trigger initial watch.
-      assert {:ok, _} = Cache.get_symphony(symphony_path)
-      cache_pid = Process.whereis(Cache)
-      :sys.get_state(cache_pid)
+      cache = start_private_cache!()
+      GenServer.cast(cache, {:watch, Path.expand(symphony_path)})
 
-      state = :sys.get_state(cache_pid)
+      state = :sys.get_state(cache)
       dir = Path.dirname(Path.expand(symphony_path))
 
       case Map.get(state.watchers, dir) do
@@ -193,11 +192,11 @@ defmodule SymphonyElixir.Config.CacheTest do
         watcher when is_pid(watcher) ->
           # Simulate the watcher sending its terminal :stop event.
           ExUnit.CaptureLog.capture_log(fn ->
-            send(cache_pid, {:file_event, watcher, :stop})
-            :sys.get_state(cache_pid)
+            send(cache, {:file_event, watcher, :stop})
+            :sys.get_state(cache)
           end)
 
-          new_state = :sys.get_state(cache_pid)
+          new_state = :sys.get_state(cache)
           refute Map.has_key?(new_state.watchers, dir)
       end
     end
@@ -209,11 +208,10 @@ defmodule SymphonyElixir.Config.CacheTest do
       File.write!(symphony_path, "tracker:\n  kind: memory\n")
       Workflow.set_symphony_file_path(symphony_path)
 
-      assert {:ok, _} = Cache.get_symphony(symphony_path)
-      cache_pid = Process.whereis(Cache)
-      :sys.get_state(cache_pid)
+      cache = start_private_cache!()
+      GenServer.cast(cache, {:watch, Path.expand(symphony_path)})
 
-      state = :sys.get_state(cache_pid)
+      state = :sys.get_state(cache)
       dir = Path.dirname(Path.expand(symphony_path))
 
       case Map.get(state.watchers, dir) do
@@ -223,10 +221,10 @@ defmodule SymphonyElixir.Config.CacheTest do
         watcher when is_pid(watcher) ->
           ExUnit.CaptureLog.capture_log(fn ->
             Process.exit(watcher, :kill)
-            :sys.get_state(cache_pid)
+            :sys.get_state(cache)
           end)
 
-          new_state = :sys.get_state(cache_pid)
+          new_state = :sys.get_state(cache)
           refute Map.has_key?(new_state.watchers, dir)
       end
     end
@@ -263,6 +261,16 @@ defmodule SymphonyElixir.Config.CacheTest do
       assert :ok = Cache.clear()
       assert Cache.status() == []
     end
+  end
+
+  # The app's named Cache is a child of `SymphonyElixir.Supervisor`, which also
+  # runs the orchestrator and other config readers. Other tests stop or restart
+  # that supervisor's children, which can replace the named Cache mid-test
+  # (TP-304, TP-382). An unnamed instance under the test supervisor lives
+  # exactly as long as the test. Watch state is shared through
+  # `:persistent_term`, which setup and `on_exit` clear.
+  defp start_private_cache! do
+    start_supervised!({Cache, name: nil})
   end
 
   defp restore_env(key, nil), do: Application.delete_env(:symphony_elixir, key)
