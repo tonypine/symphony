@@ -22,6 +22,16 @@ Application.put_env(:symphony_elixir, :state_root, state_root)
 Application.put_env(:symphony_elixir, :logs_root, logs_root)
 Application.put_env(:symphony_elixir, :audit_log_dir, audit_dir)
 
+# Agents launched in tests keep their tool caches here, seeded from host caches that don't
+# exist, so a test never writes the operator's cache folder or copies their Hex packages.
+agent_cache_dir = Path.join(System.tmp_dir!(), "symphony-elixir-test-agent-cache-#{System.pid()}-#{System.unique_integer([:positive])}")
+
+Application.put_env(:symphony_elixir, :agent_caches,
+  root: Path.join(agent_cache_dir, "agent"),
+  host_hex_home: Path.join(agent_cache_dir, "host-hex"),
+  host_elixir_make_cache: Path.join(agent_cache_dir, "host-elixir-make")
+)
+
 # Tests never reach openrouter.ai: a test that needs the models API stubs this itself.
 offline_models_request = fn _url, _opts -> {:error, :network_disabled_in_tests} end
 Application.put_env(:symphony_elixir, :openrouter_models_request, offline_models_request)
@@ -79,5 +89,6 @@ System.at_exit(fn _status ->
   File.rm_rf(state_root)
   File.rm_rf(logs_root)
   File.rm_rf(run_store_dir)
+  File.rm_rf(agent_cache_dir)
   File.rm_rf(agent_run_tmp_root)
 end)

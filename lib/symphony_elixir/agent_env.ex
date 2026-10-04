@@ -16,7 +16,9 @@ defmodule SymphonyElixir.AgentEnv do
 
   `MIX_HOME`, `MIX_ARCHIVES`, and `HEX_HOME` pass through so agent shells use
   the same Hex and Rebar install as the host (for example the per-version
-  `MIX_HOME` that `mise` exports) instead of prompting to install Hex.
+  `MIX_HOME` that `mise` exports) instead of prompting to install Hex. A local
+  agent's `HEX_HOME` then points at a cache folder its sandbox may write (see
+  `SymphonyElixir.AgentCaches`).
 
   A local agent in a Gradle project also gets its own Gradle daemon registry in
   its workspace (see `gradle_env/1`).
