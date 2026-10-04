@@ -5017,6 +5017,56 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     end)
   end
 
+  test "remote after_create whose ssh connection failed before it ran runs on the next run" do
+    with_real_exec_fake_ssh(fn ctx ->
+      workspace_root = Path.join(ctx.test_root, "wsroot")
+      workspace_path = Path.join([workspace_root, "default", "MT-SSH-DROP"])
+      pending_marker = Path.join([workspace_root, "default", ".MT-SSH-DROP.after_create_pending"])
+      runs_file = Path.join(ctx.test_root, "after_create.runs")
+      ssh_down = Path.join(ctx.test_root, "ssh-down")
+
+      # The connection for the hook drops (ssh exits 255) while `ssh-down` exists.
+      write_real_exec_fake_ssh!(Path.join(ctx.test_root, "ssh-real"))
+
+      File.write!(Path.join(ctx.test_root, "ssh"), """
+      #!/usr/bin/env bash
+      case "${@: -1}" in
+        *after_create_status*) [ -f #{ssh_down} ] && exit 255 ;;
+      esac
+      exec #{Path.join(ctx.test_root, "ssh-real")} "$@"
+      """)
+
+      File.write!(ssh_down, "")
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        worker_ssh_hosts: ["worker-01"],
+        hook_after_create: "echo run >> #{runs_file}"
+      )
+
+      capture_log(fn ->
+        assert {:error, {:workspace_hook_failed, "after_create", 255, _output}} =
+                 Workspace.create_for_issue("MT-SSH-DROP", "worker-01")
+      end)
+
+      # The prepare script marked the workspace it created; the hook never ran.
+      assert File.dir?(workspace_path)
+      assert File.read!(pending_marker) == ""
+      refute File.exists?(runs_file)
+
+      File.rm!(ssh_down)
+
+      log =
+        capture_log(fn ->
+          assert {:ok, ^workspace_path} = Workspace.create_for_issue("MT-SSH-DROP", "worker-01")
+        end)
+
+      assert log =~ "Running workspace hook an earlier run left unfinished hook=after_create"
+      assert File.read!(runs_file) == "run\n"
+      refute File.exists?(pending_marker)
+    end)
+  end
+
   test "remote workspace setup waits for an after_create still running on the worker" do
     with_real_exec_fake_ssh(fn ctx ->
       workspace_root = Path.join(ctx.test_root, "wsroot")

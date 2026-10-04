@@ -197,6 +197,7 @@ defmodule SymphonyElixir.Workspace do
         "  mkdir -p \"$workspace\"",
         "  created=1",
         "fi",
+        remote_after_create_pending_mark_command(settings),
         "cd \"$workspace\"",
         "physical_workspace=$(pwd -P)",
         remote_workspace_containment_check(),
@@ -300,6 +301,7 @@ defmodule SymphonyElixir.Workspace do
         "  #{remote_worktree_add_command()}",
         "  created=1",
         "fi",
+        remote_after_create_pending_mark_command(settings),
         "cd \"$workspace\"",
         "physical_workspace=$(pwd -P)",
         remote_workspace_containment_check(),
@@ -1567,8 +1569,9 @@ defmodule SymphonyElixir.Workspace do
   # runs it again there rather than starting the agent in a half-set-up
   # workspace. The marker sits beside the workspace, not in it, so a hook that
   # clones into the empty workspace still can, and it goes when the workspace is
-  # removed or trashed. On an SSH worker the hook keeps the marker itself (see
-  # `after_create_command/3`), and the prepare script reads it.
+  # removed or trashed. On an SSH worker the prepare script writes the marker for
+  # a workspace it creates, the hook keeps it (see `after_create_command/3`), and
+  # the next prepare script reads it.
   defp after_create_pending_marker(workspace) do
     Path.join(Path.dirname(workspace), ".#{Path.basename(workspace)}.after_create_pending")
   end
@@ -1621,6 +1624,16 @@ defmodule SymphonyElixir.Workspace do
       fi
     fi\
     """
+  end
+
+  # Marks a workspace the prepare script just created, in the same command, so
+  # one whose hook never starts (its `ssh` fails, or the run stops first) is set
+  # up on the next run. An empty marker names no process, so it reads as pending,
+  # not running; the hook overwrites it with its pid.
+  defp remote_after_create_pending_mark_command(%{hooks: %Hooks{after_create: nil}}), do: ""
+
+  defp remote_after_create_pending_mark_command(_settings) do
+    ~s(if [ "$created" = 1 ]; then : > "$after_create_marker"; fi)
   end
 
   defp remote_after_create_marker_remove_command do

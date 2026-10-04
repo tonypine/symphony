@@ -2376,7 +2376,10 @@ Failure handling:
   reuses a workspace with a marker runs `after_create` again before `before_run`.
 - Removing or trashing a workspace removes its marker too. The workspace sweep lists directories
   only, so it never takes a marker for a workspace.
-- On an SSH worker the hook keeps the marker itself and writes its shell's process id into it. When
+- On an SSH worker the prepare step writes the marker, empty, in the same command that creates the
+  workspace, so a hook that never starts (its connection fails, or the run stops first) is still
+  run on the next run. The hook then keeps the marker itself and writes its shell's process id into
+  it. When
   the marker names a process still alive (a hook an earlier run timed out on, still running on the
   worker), workspace preparation fails (`workspace_after_create_still_running`) without touching
   the workspace, and a later retry finds the hook finished. A marker naming a process that is gone
