@@ -109,11 +109,14 @@ defmodule SymphonyElixir.ParentWalkthroughTest do
       send(recipient, {:git, args, cwd})
 
       case args do
-        ["fetch" | _rest] -> Map.get(overrides, :fetch, {"", 0})
+        ["fetch" | _rest] -> fetch_result(Map.get(overrides, :fetch, {"", 0}))
         ["rev-parse" | _rest] -> Map.get(overrides, :rev_parse, {@sha <> "\n", 0})
       end
     end
   end
+
+  defp fetch_result(fetch) when is_function(fetch, 0), do: fetch.()
+  defp fetch_result(result), do: result
 
   # Answers the parent lookup, the QA report comments, sub-issue creation and blocked-by links.
   defp linear_client(opts \\ []) do
@@ -506,6 +509,17 @@ defmodule SymphonyElixir.ParentWalkthroughTest do
       assert [{"issue-parent", report}, _ticket] = comments_posted()
       assert report =~ ~s(Reason: could not read the head of origin/main: {:git_failed, 128, "fatal: unreachable"})
       refute_received {:qa_agent_run, _job, _settings, _opts}
+    end
+
+    test "the base branch fetch runs once more after cannot lock ref" do
+      lock_error = "error: cannot lock ref 'refs/remotes/origin/main': is at 784f59f4 but expected a2d3de89\n"
+      {:ok, fetches} = Agent.start_link(fn -> [{lock_error, 1}, {"fatal: unreachable", 128}] end)
+      fetch = fn -> Agent.get_and_update(fetches, fn [result | rest] -> {result, rest} end) end
+
+      assert :ok = run(verification(), git: git(%{fetch: fetch}))
+      assert [{"issue-parent", report}, _ticket] = comments_posted()
+      assert report =~ ~s(Reason: could not read the head of origin/main: {:git_failed, 128, "fatal: unreachable"})
+      assert Agent.get(fetches, & &1) == []
     end
 
     test "a QA agent that hits the usage limit writes no report, keeps the ticket's state and returns the limit" do
