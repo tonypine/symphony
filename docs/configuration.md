@@ -699,15 +699,16 @@ pull_requests:
   with auto-merge on and a green head for this long falls back to the landing agent.
 - `auto_merge` (default: `true`, needs `enabled: true`) lands `Merging` tickets with GitHub
   auto-merge instead of a landing agent, so they take no agent slot:
-  - Symphony turns on auto-merge (squash, the PR title and body) once per PR head, or squash-merges
-    right away when GitHub says the PR can already merge. GitHub merges it when the required checks
-    pass, and Symphony moves the ticket to `Done`.
+  - Symphony turns on auto-merge (squash, the PR title and body) once per PR head. GitHub merges it
+    when the required checks pass, and Symphony moves the ticket to `Done`. When GitHub refuses
+    auto-merge (the PR can already merge, no branch protection, or the repository doesn't allow
+    it) and the PR is `CLEAN` with green checks or none, Symphony squash-merges it right away.
   - A PR that is `BEHIND` the base branch gets one GitHub "Update branch" per head; CI runs on the
     merged code and auto-merge fires when it passes.
   - A merge conflict moves the ticket to `In Progress` with the conflict context (an agent run), and
     a red head goes through the CI-failure fix loop with auto-merge left on, so the PR merges once
     the fix is green.
-  - When auto-merge can't be used (the repository doesn't allow it, no required checks, a
+  - When auto-merge can't be used (GitHub refuses it and the PR isn't clean and green, a
     permission error, or the PR stays blocked on a green head), Symphony logs the error, comments
     the reason on the ticket, and falls back to the landing agent for that stay in `Merging`.
   - `/api/v1/state` (`auto_merge`) and the dashboard show each PR's status, for example
