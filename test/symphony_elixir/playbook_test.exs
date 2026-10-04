@@ -61,6 +61,16 @@ defmodule SymphonyElixir.PlaybookTest do
     assert flat =~ "**Re-plan:** the parent is in `Rework`."
   end
 
+  test "escape_hatches checks a CI job's UTC age before asking a human, and withdraws a request not needed" do
+    assert {:ok, body} = Playbook.fetch("escape_hatches")
+    flat = String.replace(body, ~r/\s+/, " ")
+
+    assert flat =~ "Before requesting a human action for slow or stuck CI, compute the job's age from the API's UTC timestamps"
+    assert flat =~ "against the current UTC time (`date -u`), never against local time"
+    assert flat =~ "When the job is under 30 minutes old, wait for the CI poller's flaky re-run instead of asking a human."
+    assert flat =~ "withdraw it with `linear_withdraw_human_action`"
+  end
+
   test "fetch/1 returns :error for an unknown partial" do
     assert Playbook.fetch("does_not_exist") == :error
   end
