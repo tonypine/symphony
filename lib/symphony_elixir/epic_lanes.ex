@@ -13,16 +13,24 @@ defmodule SymphonyElixir.EpicLanes do
   a blocker or sub-ticket of it, and so on; priority and age only break ties. A ticket on the path
   of two epics runs in whichever lane is free first and holds only one of them.
 
-  A lane stays reserved while nothing on its path can run, so the next part starts there as soon as
-  it is unblocked. The slots left over form the shared pool, dispatched by priority then age as
-  before; it also takes an epic's extra parallel tickets and the tickets of epics still waiting for
-  a lane.
+  A lane stays reserved while its path waits on Symphony, for example on a part that is landing, so
+  the next part starts there as soon as it is unblocked. An epic whose path only waits on people
+  yields its lane to the next queued epic or the shared pool: every open ticket on the path is in
+  review, not yet approved, a `breakdown` parent waiting on its own sub-tickets, or a `Todo` held by
+  open blockers. Lanes are planned again on every poll, so the epic takes a lane back once a ticket
+  on its path can run.
+
+  The slots left over form the shared pool, dispatched by priority then age as before; it also takes
+  an epic's extra parallel tickets and the tickets of epics still waiting for a lane.
   """
 
   alias SymphonyElixir.Linear.Issue
 
   # Linear states a sub-ticket sits in before a human approves it into Todo.
   @not_approved_states MapSet.new(["backlog", "triage"])
+
+  # States in which a ticket on the path waits for a person rather than for Symphony.
+  @human_gated_states MapSet.union(@not_approved_states, MapSet.new(["in review"]))
 
   @type epic :: %{
           id: String.t(),
@@ -31,7 +39,8 @@ defmodule SymphonyElixir.EpicLanes do
           url: String.t() | nil,
           sub_issues: [map()],
           open_parts: [map()],
-          members: %{optional(String.t()) => member()}
+          members: %{optional(String.t()) => member()},
+          yield_reason: String.t() | nil
         }
 
   @typedoc "A ticket on the epic's path: how far from the epic, and the ticket it blocks or is a sub-ticket of."
@@ -42,7 +51,13 @@ defmodule SymphonyElixir.EpicLanes do
           via: %{relation: String.t(), identifier: String.t() | nil} | nil
         }
 
-  @type t :: %{max_total: non_neg_integer(), shared: non_neg_integer(), lanes: [epic()], queued: [epic()]}
+  @type t :: %{
+          max_total: non_neg_integer(),
+          shared: non_neg_integer(),
+          lanes: [epic()],
+          queued: [epic()],
+          yielded: [epic()]
+        }
 
   @type running :: %{
           optional(String.t()) => %{optional(:identifier) => String.t() | nil, optional(:state) => String.t() | nil}
@@ -50,7 +65,8 @@ defmodule SymphonyElixir.EpicLanes do
 
   @doc """
   Plans the lanes for one poll from the candidate issues. `epic_lanes` nil means every slot can be
-  a lane; a value above `max_total` is capped there.
+  a lane; a value above `max_total` is capped there. Active epics with nothing on their path that
+  can run are `yielded` and take no lane.
   """
   @spec plan([Issue.t() | term()], non_neg_integer(), non_neg_integer() | nil, Enumerable.t(String.t())) :: t()
   def plan(candidates, max_total, epic_lanes, terminal_states) when is_list(candidates) and is_integer(max_total) do
@@ -59,15 +75,17 @@ defmodule SymphonyElixir.EpicLanes do
 
     by_id = for %Issue{id: id} = issue <- candidates, is_binary(id), into: %{}, do: {id, issue}
 
-    {lanes, queued} =
+    {waiting, yielded} =
       candidates
       |> Enum.filter(&active_epic?(&1, terminal_states))
       |> Enum.uniq_by(& &1.id)
       |> Enum.sort_by(&epic_sort_key/1)
       |> Enum.map(&epic(&1, by_id, terminal_states))
-      |> Enum.split(lane_count)
+      |> Enum.split_with(&is_nil(&1.yield_reason))
 
-    %{max_total: max_total, shared: max_total - length(lanes), lanes: lanes, queued: queued}
+    {lanes, queued} = Enum.split(waiting, lane_count)
+
+    %{max_total: max_total, shared: max_total - length(lanes), lanes: lanes, queued: queued, yielded: yielded}
   end
 
   @doc """
@@ -162,19 +180,20 @@ defmodule SymphonyElixir.EpicLanes do
 
   @doc """
   The lanes and shared pool for the dashboard and `/api/v1/state`. Each lane shows its epic and
-  either the running part or the part it is waiting on.
+  either the running part or the part it is waiting on. Yielded epics follow the lanes, with
+  `status: "yielded"`, the part they wait on and the `reason` nothing on their path can run.
   """
   @spec snapshot(t() | nil, running()) :: map()
   def snapshot(nil, running) when is_map(running) do
     %{max_total: nil, lanes: [], queued_epics: [], shared: %{slots: nil, used: map_size(running)}}
   end
 
-  def snapshot(%{lanes: lanes, queued: queued, shared: shared, max_total: max_total}, running) when is_map(running) do
+  def snapshot(%{lanes: lanes, queued: queued, yielded: yielded, shared: shared, max_total: max_total}, running) when is_map(running) do
     occupancy = occupancy(lanes, Map.keys(running))
 
     %{
       max_total: max_total,
-      lanes: Enum.map(lanes, &lane_snapshot(&1, Map.get(occupancy, &1.id), running)),
+      lanes: Enum.map(lanes, &lane_snapshot(&1, Map.get(occupancy, &1.id), running)) ++ Enum.map(yielded, &yielded_snapshot/1),
       queued_epics: Enum.map(queued, &epic_summary/1),
       shared: %{slots: shared, used: map_size(running) - map_size(occupancy)}
     }
@@ -190,6 +209,10 @@ defmodule SymphonyElixir.EpicLanes do
     part = %{issue_id: issue_id, identifier: member.identifier, state: Map.get(entry, :state) || member.state}
 
     epic |> epic_summary() |> Map.merge(%{status: "running", sub_issue: Map.put(part, :via, member.via)})
+  end
+
+  defp yielded_snapshot(epic) do
+    epic |> epic_summary() |> Map.merge(%{status: "yielded", reason: epic.yield_reason, sub_issue: waiting_part(epic)})
   end
 
   # Each running ticket holds at most one lane, of those whose path it is on: tickets with fewer
@@ -240,6 +263,8 @@ defmodule SymphonyElixir.EpicLanes do
         %{id: id, identifier: Map.get(sub_issue, :identifier), state: Map.get(sub_issue, :state)}
       end
 
+    members = walk(path_links(issue, terminal_states, nil), 1, MapSet.new([issue.id]), %{}, by_id, terminal_states)
+
     %{
       id: issue.id,
       identifier: issue.identifier,
@@ -247,8 +272,50 @@ defmodule SymphonyElixir.EpicLanes do
       url: issue.url,
       sub_issues: sub_issues,
       open_parts: Enum.filter(sub_issues, &under_way?(&1.state, terminal_states)),
-      members: walk(path_links(issue, terminal_states, nil), 1, MapSet.new([issue.id]), %{}, by_id, terminal_states)
+      members: members,
+      yield_reason: yield_reason(members, by_id, terminal_states)
     }
+  end
+
+  # Nil while a ticket on the path can run; otherwise each open ticket on it and what it waits on.
+  defp yield_reason(members, by_id, terminal_states) do
+    held = Enum.map(members, fn {id, member} -> {member, held_by(member, Map.get(by_id, id), terminal_states)} end)
+
+    if Enum.all?(held, &elem(&1, 1)) do
+      waits =
+        held
+        |> Enum.sort_by(fn {member, _held_by} -> {member.depth, member.identifier || ""} end)
+        |> Enum.map_join(", ", fn {member, held_by} -> "#{member.identifier} (#{held_by})" end)
+
+      "Nothing on its path can run: " <> waits
+    end
+  end
+
+  # What keeps a ticket on the path from running, or nil when Symphony can run it. A ticket Symphony
+  # did not fetch is judged by its state alone. A blocked ticket's blockers are on the path too, so
+  # the lane stays while one of them can run.
+  defp held_by(member, issue, terminal_states) do
+    state = fetched_state(issue) || member.state
+
+    cond do
+      not is_binary(state) -> "state unknown"
+      MapSet.member?(@human_gated_states, normalize_state(state)) -> state
+      waiting_parent?(issue, terminal_states) -> "#{state}, waiting on its sub-tickets"
+      Issue.blocked?(issue, terminal_states) -> "#{state}, blocked by #{blocker_names(issue, terminal_states)}"
+      true -> nil
+    end
+  end
+
+  defp fetched_state(%Issue{state: state}) when is_binary(state), do: state
+  defp fetched_state(_not_fetched), do: nil
+
+  defp waiting_parent?(%Issue{} = issue, terminal_states),
+    do: Issue.waiting_on_sub_issues?(issue, terminal_states) and not Issue.replanning?(issue)
+
+  defp waiting_parent?(_not_fetched, _terminal_states), do: false
+
+  defp blocker_names(issue, terminal_states) do
+    issue |> Issue.open_blockers(terminal_states) |> Enum.map_join(", ", &(Map.get(&1, :identifier) || "an unnamed ticket"))
   end
 
   # Breadth-first from the epic's sub-tickets, so each ticket keeps its shortest distance to the epic.
