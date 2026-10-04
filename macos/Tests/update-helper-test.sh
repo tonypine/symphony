@@ -135,6 +135,27 @@ expect "$current" 1
 [ ! -e "$previous" ] || fail "the previous app was created"
 expect_opened "$current"
 
+# QA mode: the helper runs the new app's binary itself, with the QA
+# environment, instead of `open`, which would drop it.
+setup qa-mode
+make_app "$current" 1
+make_app "$new" 2
+mkdir -p "$new/Contents/MacOS"
+printf '#!/bin/sh\necho "$SYMPHONY_BAR_QA_ROOT" > "%s"\n' "$dir/qa-launched" > "$new/Contents/MacOS/SymphonyBar"
+chmod +x "$new/Contents/MacOS/SymphonyBar"
+SYMPHONY_BAR_QA_ROOT="$dir/qa" SYMPHONY_UPDATE_WAIT_SECONDS=10 \
+  sh "$helper" "$pid" "$current" "$new" "$previous" > "$dir/log" 2>&1
+status=$?
+expect_status 0
+expect "$current" 2
+waited=0
+while [ ! -s "$dir/qa-launched" ] && [ "$waited" -lt 50 ]; do
+  sleep 0.1
+  waited=$((waited + 1))
+done
+[ "$(cat "$dir/qa-launched" 2> /dev/null)" = "$dir/qa" ] || fail "the new app wasn't started with the QA root: $(cat "$dir/log")"
+[ ! -e "$opened" ] || fail "the helper used open in QA mode"
+
 if [ "$failures" -gt 0 ]; then
   echo "$failures update helper check(s) failed"
   exit 1

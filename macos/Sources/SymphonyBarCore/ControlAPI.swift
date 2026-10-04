@@ -52,12 +52,16 @@ public enum ControlAPI {
     public typealias Transport = (URLRequest) async throws -> (Data, URLResponse)
 
     /// Sends `action` to the control URL in `stateRoot`, with the bearer token from the same directory.
+    /// `fallback` is the control URL used while Symphony hasn't written one.
     public static func send(
         _ action: ControlAction,
         stateRoot: URL,
+        fallback: URL? = SymphonyState.defaultBaseURL,
         transport: Transport = { try await URLSession.shared.data(for: $0) }
     ) async -> ControlResult {
-        let base = StateRoot.controlURL(in: stateRoot)
+        guard let base = StateRoot.controlURL(in: stateRoot, fallback: fallback) else {
+            return missingControlURL(action, file: stateRoot.appendingPathComponent(StateRoot.controlURLFileName))
+        }
         guard let token = StateRoot.controlToken(in: stateRoot) else {
             return missingToken(action, tokenFile: StateRoot.controlTokenFile(in: stateRoot))
         }
@@ -87,6 +91,12 @@ public enum ControlAPI {
     public static func missingToken(_ action: ControlAction, tokenFile: URL) -> ControlResult {
         let path = (tokenFile.path as NSString).abbreviatingWithTildeInPath
         return .failed("Couldn't \(action.verb) Symphony: no control token in \(path)")
+    }
+
+    /// Message for when the state directory holds no control URL and there is no default to try.
+    public static func missingControlURL(_ action: ControlAction, file: URL) -> ControlResult {
+        let path = (file.path as NSString).abbreviatingWithTildeInPath
+        return .failed("Couldn't \(action.verb) Symphony: no control URL in \(path)")
     }
 
     /// Message for when nothing answered on the control URL.

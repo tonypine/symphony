@@ -1,12 +1,45 @@
 #!/bin/sh
-# Zig 0.15.2 (pinned by Burrito 1.5.0) cannot link against the macOS 26 SDK's
-# libSystem.tbd, which declares only arm64e-macos targets. ld64 substitutes
-# silently; Zig's linker reports undefined symbols (_abort, _bzero, ...).
-# When the macOS 15 SDK is present, redirect Zig's SDK lookup there.
+# Zig 0.15.2 (pinned by Burrito 1.5.0) cannot link against the macOS 26 and
+# later SDKs' libSystem.tbd, which declares only arm64e-macos targets. ld64
+# substitutes silently; Zig's linker reports undefined symbols (_abort, _bzero, ...).
+#
+# When the macOS 15 SDK is present, redirect Zig's SDK lookup there. Otherwise,
+# when the active SDK's libSystem.tbd lacks arm64-macos, redirect it to a copy
+# of that SDK whose .tbd stubs list arm64-macos next to arm64e-macos: the
+# libraries they describe load arm64 code. The copy symlinks everything but
+# usr/lib (about 25 MB) and is made once, under
+# ${SYMPHONY_ZIG_SDK_CACHE:-~/Library/Caches/symphony/zig-sdk}.
 if [ "$1" = "--sdk" ] && [ "$2" = "macosx" ] && [ "$3" = "--show-sdk-path" ]; then
     if [ -d /Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk ]; then
         echo /Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk
         exit 0
     fi
+    sdk="$(/usr/bin/xcrun "$@")" || exit $?
+    # The first document's targets, before its install-name, are libSystem's own.
+    if sed -n '1,/^install-name/p' "$sdk/usr/lib/libSystem.tbd" 2> /dev/null | grep -q 'arm64-macos'; then
+        echo "$sdk"
+        exit 0
+    fi
+    cache="${SYMPHONY_ZIG_SDK_CACHE:-$HOME/Library/Caches/symphony/zig-sdk}"
+    copy="$cache/$(basename "$sdk" .sdk)-arm64.sdk"
+    if [ ! -d "$copy" ]; then
+        mkdir -p "$cache" || exit 1
+        staging="$(mktemp -d "$cache/staging.XXXXXX")" || exit 1
+        mkdir -p "$staging/sdk/usr"
+        for entry in "$sdk"/*; do
+            [ "$(basename "$entry")" = usr ] || ln -s "$entry" "$staging/sdk/"
+        done
+        for entry in "$sdk"/usr/*; do
+            [ "$(basename "$entry")" = lib ] || ln -s "$entry" "$staging/sdk/usr/"
+        done
+        cp -R "$sdk/usr/lib" "$staging/sdk/usr/lib" &&
+            find "$staging/sdk/usr/lib" -type f -name '*.tbd' \
+                -exec sed -i '' 's/arm64e-macos/arm64-macos, arm64e-macos/g' {} + &&
+            { [ -d "$copy" ] || mv "$staging/sdk" "$copy"; }
+        rm -rf "$staging"
+        [ -d "$copy" ] || exit 1
+    fi
+    echo "$copy"
+    exit 0
 fi
 exec /usr/bin/xcrun "$@"

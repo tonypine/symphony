@@ -13,7 +13,7 @@ final class UpdatePoller {
     )
     private(set) var isChecking = false
 
-    private let checker = UpdateChecker()
+    private let checker = UpdateChecker(url: AppStores.current.updateURL)
     private var timer: Timer?
 
     func start() {

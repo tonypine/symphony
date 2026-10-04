@@ -1437,6 +1437,8 @@ not require recognizing or validating extension fields unless that extension is 
 - `issues.linear.scope.team`: optional Linear team key or team ID
 - `issues.linear.scope.labels`: optional list of Linear label names
 - At least one issue-level or repository route selector is REQUIRED when provider is linear.
+- `issues.memory.issues_file`: optional path, relative to `symphony.yml`, of a JSON list of issues
+  the memory provider reads on every fetch
 - `issues.linear.assignee`: optional string or `$VAR`, canonical env `LINEAR_ASSIGNEE`;
   `"me"` resolves the current Linear viewer
 - `issues.states.active`: list of strings, default `["Todo", "In Progress"]`

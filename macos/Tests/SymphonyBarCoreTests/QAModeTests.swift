@@ -45,14 +45,40 @@ final class QAModeTests: XCTestCase {
         )
     }
 
+    func testQAModeReadsScriptedAndTheUpdateURL() {
+        let plain = QAMode.detect(environment: [QAMode.environmentKey: "/tmp/qa"])
+        XCTAssertEqual(plain?.scripted, false)
+        XCTAssertNil(plain?.updateURL)
+
+        let scripted = QAMode.detect(environment: [
+            QAMode.environmentKey: "/tmp/qa",
+            QAMode.scriptedKey: " 1 ",
+            QAMode.updateURLKey: " http://127.0.0.1:8123/releases/latest\n",
+        ])
+        XCTAssertEqual(scripted?.scripted, true)
+        XCTAssertEqual(scripted?.updateURL?.absoluteString, "http://127.0.0.1:8123/releases/latest")
+
+        let ignored = QAMode.detect(environment: [
+            QAMode.environmentKey: "/tmp/qa",
+            QAMode.scriptedKey: "yes",
+            QAMode.updateURLKey: "file:///tmp/latest.json",
+        ])
+        XCTAssertEqual(ignored?.scripted, false)
+        XCTAssertNil(ignored?.updateURL)
+    }
+
     func testQAPathsAreUnderTheRoot() {
         let qa = QAMode(root: URL(fileURLWithPath: "/tmp/qa", isDirectory: true))
 
         XCTAssertEqual(qa.settingsFile.path, "/tmp/qa/settings.plist")
         XCTAssertEqual(qa.secretsFile.path, "/tmp/qa/secrets.json")
         XCTAssertEqual(qa.logDirectory.path, "/tmp/qa/logs")
+        XCTAssertEqual(qa.symphonyLogsRoot.path, "/tmp/qa/symphony-logs")
         XCTAssertEqual(qa.updateCacheDirectory.path, "/tmp/qa/updates")
         XCTAssertEqual(qa.stateRoot.path, "/tmp/qa/state")
+        XCTAssertEqual(qa.burritoInstallDirectory.path, "/tmp/qa/burrito")
+        XCTAssertEqual(qa.commandsFolder.path, "/tmp/qa/commands")
+        XCTAssertEqual(qa.statusFile.path, "/tmp/qa/status.json")
     }
 
     // MARK: - Store selection
@@ -68,7 +94,10 @@ final class QAModeTests: XCTestCase {
         XCTAssertTrue(stores.loginItem is MainAppLoginItem)
         XCTAssertEqual(stores.logDirectory, ChildLog.defaultDirectory(home: home))
         XCTAssertNil(stores.updateCacheDirectory)
+        XCTAssertEqual(stores.updateURL, UpdateChecker.latestReleaseURL)
+        XCTAssertEqual(stores.controlURLFallback, SymphonyState.defaultBaseURL)
         XCTAssertEqual(stores.environment, ["HOME": "/Users/me"])
+        XCTAssertEqual(stores.updateHelperEnvironment, ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"])
     }
 
     func testQAModeUsesFilesUnderTheRoot() {
@@ -80,6 +109,34 @@ final class QAModeTests: XCTestCase {
         XCTAssertTrue(stores.loginItem is FileLoginItem)
         XCTAssertEqual(stores.logDirectory, stores.qaMode?.logDirectory)
         XCTAssertEqual(stores.updateCacheDirectory, stores.qaMode?.updateCacheDirectory)
+        // Never the Symphony a normal launch runs on the default port.
+        XCTAssertNil(stores.controlURLFallback)
+        XCTAssertEqual(stores.updateURL, UpdateChecker.latestReleaseURL)
+        XCTAssertEqual(
+            qaStores([QAMode.updateURLKey: "http://127.0.0.1:8123/releases/latest"]).updateURL.absoluteString,
+            "http://127.0.0.1:8123/releases/latest"
+        )
+    }
+
+    func testQAModeKeepsSymphonysLogsAndUnpackedReleaseUnderTheRootUnlessSet() {
+        let path = root.standardizedFileURL.path
+        let environment = qaStores(["PATH": "/opt/bin"]).environment
+        XCTAssertEqual(environment[QAMode.symphonyLogsRootKey], path + "/symphony-logs")
+        XCTAssertEqual(environment[QAMode.burritoInstallDirectoryKey], path + "/burrito")
+
+        let given = qaStores([QAMode.symphonyLogsRootKey: "/srv/logs", QAMode.burritoInstallDirectoryKey: "/srv/burrito"])
+        XCTAssertEqual(given.environment[QAMode.symphonyLogsRootKey], "/srv/logs")
+        XCTAssertEqual(given.environment[QAMode.burritoInstallDirectoryKey], "/srv/burrito")
+        XCTAssertEqual(qaStores([QAMode.burritoInstallDirectoryKey: " "]).environment[QAMode.burritoInstallDirectoryKey], path + "/burrito")
+    }
+
+    func testTheUpdateHelperGetsTheQAEnvironment() {
+        // So the app it relaunches is in QA mode too, with the same folders.
+        let helper = qaStores(["PATH": "/opt/bin:/usr/bin", "HOME": "/Users/me"]).updateHelperEnvironment
+        XCTAssertEqual(helper[QAMode.environmentKey], root.path)
+        XCTAssertEqual(helper["PATH"], "/opt/bin:/usr/bin")
+        XCTAssertEqual(helper[QAMode.burritoInstallDirectoryKey], root.standardizedFileURL.path + "/burrito")
+        XCTAssertEqual(qaStores().updateHelperEnvironment["PATH"], "/usr/bin:/bin:/usr/sbin:/sbin")
     }
 
     func testQAModePointsSymphonyStateAtTheRootUnlessSet() {
@@ -230,36 +287,22 @@ final class QAModeTests: XCTestCase {
         XCTAssertEqual(item.status, .notRegistered)
     }
 
-    // MARK: - Launch guard
+    // MARK: - Embedded Symphony
 
-    func testQAModeStartsOnlyACheckout() throws {
-        let files = StubFileChecker(files: ["/src/symphony/bin/symphony", "/app/symphony"])
-        let secrets = SecretSettings(linearAPIKey: "lin_api_QA")
-
-        func build(developmentMode: Bool, qaMode: Bool) throws -> ChildLaunch {
-            try ChildLaunchBuilder.build(
-                settings: AppSettings(
-                    checkoutPath: "/src/symphony",
-                    configPath: "/src/symphony/symphony.yml",
-                    developmentMode: developmentMode
-                ),
-                secrets: secrets,
-                baseEnvironment: [:],
-                embeddedSymphonyPath: "/app/symphony",
-                qaMode: qaMode,
-                files: files
-            )
-        }
-
-        XCTAssertThrowsError(try build(developmentMode: false, qaMode: true)) { error in
-            XCTAssertEqual(error as? LaunchProblem, .qaModeNeedsCheckout)
-        }
-        XCTAssertTrue(LaunchProblem.qaModeNeedsCheckout.isFixedInSettings)
-        XCTAssertEqual(
-            LaunchProblem.qaModeNeedsCheckout.message,
-            "QA mode runs only a checkout's Symphony; turn on Development mode in Settings."
+    func testQAModeStartsTheEmbeddedSymphonyWithItsFoldersUnderTheRoot() throws {
+        let files = StubFileChecker(files: ["/app/symphony"])
+        let launch = try ChildLaunchBuilder.build(
+            settings: AppSettings(configPath: "/qa/symphony.yml", developmentMode: false),
+            secrets: SecretSettings(linearAPIKey: "lin_api_QA"),
+            baseEnvironment: qaStores().environment,
+            embeddedSymphonyPath: "/app/symphony",
+            files: files
         )
-        XCTAssertEqual(try build(developmentMode: true, qaMode: true).workingDirectory, "/src/symphony")
-        XCTAssertEqual(try build(developmentMode: false, qaMode: false).executable, "/app/symphony")
+
+        let path = root.standardizedFileURL.path
+        XCTAssertEqual(launch.executable, "/app/symphony")
+        XCTAssertEqual(launch.environment[StateRoot.environmentKey], path + "/state")
+        XCTAssertEqual(launch.environment[QAMode.symphonyLogsRootKey], path + "/symphony-logs")
+        XCTAssertEqual(launch.environment[QAMode.burritoInstallDirectoryKey], path + "/burrito")
     }
 }
