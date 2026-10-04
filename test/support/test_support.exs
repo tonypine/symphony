@@ -85,6 +85,8 @@ defmodule SymphonyElixir.TestSupport do
           Application.delete_env(:symphony_elixir, :memory_tracker_fetch_issue_states_result)
           Application.delete_env(:symphony_elixir, :memory_tracker_create_comment_result)
           Application.delete_env(:symphony_elixir, :memory_tracker_breakdown_histories)
+          Application.delete_env(:symphony_elixir, :memory_tracker_add_issue_label_result)
+          Application.delete_env(:symphony_elixir, :memory_tracker_remove_issue_label_result)
           Application.delete_env(:symphony_elixir, :memory_tracker_fetch_candidate_sleep_ms)
           Application.delete_env(:symphony_elixir, :memory_tracker_fetch_states_sleep_ms)
           Application.delete_env(:symphony_elixir, :memory_tracker_create_comment_sleep_ms)
@@ -988,8 +990,12 @@ defmodule SymphonyElixir.TestSupport do
       "watchdog:",
       "  enabled: #{yaml_value(Map.get(config, :enabled))}",
       "  tick_interval_ms: #{yaml_value(Map.get(config, :tick_interval_ms))}",
-      "  no_progress_threshold_ms: #{yaml_value(Map.get(config, :no_progress_threshold_ms))}"
+      "  no_progress_threshold_ms: #{yaml_value(Map.get(config, :no_progress_threshold_ms))}",
+      if(Map.has_key?(config, :stray_process_cpu_minutes),
+        do: "  stray_process_cpu_minutes: #{yaml_value(config.stray_process_cpu_minutes)}"
+      )
     ]
+    |> Enum.reject(&is_nil/1)
     |> Enum.join("\n")
   end
 

@@ -272,6 +272,22 @@ Work an existing PR:
 ./bin/symphony pr 123 --intent "address review comments"
 ```
 
+Force a ticket, or stop forcing it. `symphony force` adds the `agent.concurrency.force_label` label
+(default `expedite`) to the ticket in Linear through the running Symphony's control API
+(`POST /api/v1/control/force`, with the token in `<state-root>/control_token` or
+`SYMPHONY_CONTROL_TOKEN`), and prints the ticket's place in the forced queue:
+
+```bash
+./bin/symphony force TP-123          # TP-123 forced (slot 1 of 1)
+./bin/symphony force TP-124          # TP-124 forced (queued #2; TP-123 holds the forced slot)
+./bin/symphony force --clear TP-124  # TP-124 no longer forced
+```
+
+Forcing never changes a ticket's state: a ticket in `Backlog` stays there
+(`TP-125 forced (it is in Backlog; forcing doesn't promote it)`) and joins the queue once it moves to
+an active state. An unknown ticket, a missing or rejected control token, an unreachable Symphony and
+a Linear error each print a message and exit non-zero.
+
 ### Preview the assembled prompt
 
 `symphony workflow preview` renders the exact base-issue prompt the agent would receive for the

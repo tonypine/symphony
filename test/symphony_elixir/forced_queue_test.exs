@@ -222,6 +222,30 @@ defmodule SymphonyElixir.ForcedQueueTest do
     end
   end
 
+  describe "a poll that started before symphony force changed a ticket" do
+    test "keeps what force recorded until a later poll sees the ticket" do
+      queued = %{identifier: "MT-F1", title: "Ticket MT-F1", state: "Todo", repo_key: nil, forced_since: @now}
+
+      state = %Orchestrator.State{
+        repo_key: Config.repo_key!(),
+        clock: fn -> @now end,
+        forced: %{"forced-1" => queued},
+        forced_touched: %{"forced-1" => 100, "cleared-1" => 100, "older-1" => 10}
+      }
+
+      # Fetched before the label was added to MT-F1 and removed from MT-C1.
+      stale = {"app", {:ok, [issue("forced-1", "MT-F1", "Todo", []), issue("cleared-1", "MT-C1", "Todo", ["expedite"])]}}
+
+      state = Orchestrator.apply_forced_poll_result_for_test(state, stale, ["forced-1"], {:ok, []}, 50)
+      assert state.forced == %{"forced-1" => queued}
+      assert state.forced_touched == %{"forced-1" => 100, "cleared-1" => 100}
+
+      state = Orchestrator.apply_forced_poll_result_for_test(state, stale, ["forced-1"], {:ok, []}, 150)
+      assert Map.keys(state.forced) == ["cleared-1"]
+      assert state.forced_touched == %{}
+    end
+  end
+
   defp start_orchestrator(ctx, name) do
     name = Module.concat(__MODULE__, name)
     clock = ctx.clock

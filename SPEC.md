@@ -846,6 +846,10 @@ Fields:
     one when the label is removed, the issue is terminal, or the tracker no longer returns it. Forced issues are reported in the status snapshot
     (`forced`) and the audit log (`forced_start`, `forced_end`); dispatch does not treat them
     differently yet.
+  - Implementations MAY offer an operator control that adds or removes the label (this one has
+    `symphony force [--clear] <identifier>` over `POST /api/v1/control/force`). Such a control
+    SHOULD put the change into the queue at once rather than wait for the next poll, so tickets
+    forced in quick succession keep their order, and MUST NOT move the issue to another state.
 - `concurrency.forced_max` (positive integer)
   - Default: `1`.
   - Forced issues that may be worked at once (reported, not yet enforced). Values below `1` fail
@@ -992,6 +996,10 @@ Fields:
   - If a running agent has not emitted a transcript event since this threshold, terminate the
     agent session, run `after_run`, record the run as timed out, emit a `run_stuck` semantic event,
     and schedule retry through the normal retry queue/backoff.
+- `stray_process_cpu_minutes` (positive integer or `null`)
+  - Default: `10`
+  - CPU time a process under a workspace or Symphony temp folder may use with no run attached
+    before the dashboard warns about it (Section 8.5, Part D). `null` turns the check off.
 
 #### 5.4.11 `workers` (object)
 
@@ -1587,6 +1595,7 @@ not require recognizing or validating extension fields unless that extension is 
 - `watchdog.enabled`: boolean, default `true`
 - `watchdog.tick_interval_ms`: integer, default `60000`
 - `watchdog.no_progress_threshold_ms`: integer, default `600000`
+- `watchdog.stray_process_cpu_minutes`: integer or `null`, default `10`
 - `workers.ssh_hosts`: list of strings, default `[]`
 - `workers.max_concurrent_agents_per_host`: positive integer or null
 - `dashboard.enabled`: boolean, default `true`; turns the terminal dashboard on or off. It does not stop
@@ -2162,6 +2171,17 @@ Part C: No-progress watchdog
 - If `elapsed_ms >= watchdog.no_progress_threshold_ms`, terminate the agent session, run
   `after_run`, record the run as `timeout`, emit `run_stuck`, and queue a retry through the normal
   retry helper/backoff path.
+
+Part D: Stray processes
+
+- On the same tick, unless `watchdog.stray_process_cpu_minutes` is `null`, read the host's process
+  table. Flag each process whose working folder or command line is under `workspace.root`,
+  `/tmp/claude-<uid>/` or a Symphony temp folder, whose CPU time exceeds the threshold, and that
+  is outside the workspace, QA worktree and Claude Code task folder of every running agent or QA
+  pass. Never flag the service itself or a process it still runs.
+- Show the flagged processes (pid, command, working folder, CPU time) on the dashboard and log
+  each one when it is first flagged and again when it is gone. Never signal them.
+- If the process table or the running workspaces can't be read, keep the previous warnings.
 
 ### 8.6 Startup Terminal Workspace Cleanup
 

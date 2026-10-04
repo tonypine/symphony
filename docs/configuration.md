@@ -444,6 +444,8 @@ agent:
   queue `position`. A ticket leaves the list at the next poll after the label is removed, it
   reaches a terminal state, or Linear no longer returns it. The audit log records `forced_start` and `forced_end` (with
   `reason`: `label_removed`, `terminal` or `missing`). Forcing doesn't change dispatch yet.
+  `symphony force TP-123` adds the label through the running Symphony and `symphony force --clear TP-123`
+  removes it; either way the queue changes at once, without waiting for a poll (see the README).
 - `concurrency.forced_max` (default: `1`) is how many forced tickets may be worked at once, once
   forcing changes dispatch; `/api/v1/state` reports it under `concurrency`. Values below `1` fail
   `symphony check`.
@@ -1252,7 +1254,19 @@ watchdog:
   enabled: true
   tick_interval_ms: 60000
   no_progress_threshold_ms: 600000
+  stray_process_cpu_minutes: 10
 ```
+
+On every tick the watchdog also reads the host's process table and warns about stray processes.
+A stray process runs in, or names on its command line, a folder under `workspaces.root`,
+`/tmp/claude-<uid>/` or a Symphony temp folder (`symphony-*` under `$TMPDIR` or `/tmp`). It has
+used more than `stray_process_cpu_minutes` of CPU time, and no agent run or QA pass is running in
+its workspace. Examples are a process a remote worker run or an interactive Claude session left
+behind, or one that escaped the cleanup at the end of a run. The dashboard shows each one with
+its pid, command, working folder and CPU time, and the log records it once. The warning clears on
+the first tick after the process is gone. Symphony never signals these processes. Set
+`stray_process_cpu_minutes: null` to turn the check off. `enabled: false` only stops the
+watchdog from restarting stuck runs.
 
 ### `dependency_audit`
 

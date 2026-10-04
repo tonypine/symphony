@@ -5,7 +5,7 @@ defmodule SymphonyElixir.ExtensionsTest do
   import Phoenix.LiveViewTest
 
   alias Mix.Tasks.Symphony.Audit
-  alias SymphonyElixir.AuditLog
+  alias SymphonyElixir.{AuditLog, StrayProcesses}
   alias SymphonyElixir.Linear.{Adapter, Client, Usage}
   alias SymphonyElixir.Tracker.Memory
   alias SymphonyElixirWeb.ObservabilityPubSub
@@ -612,6 +612,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                "paused_at" => nil
              },
              "usage_limits" => [],
+             "stray_processes" => [],
              "budget" => %{
                "per_issue_limit" => 500,
                "daily_limit" => 1_000,
@@ -2014,6 +2015,44 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "Claude weekly limit headroom: holding new runs"
     assert html =~ "resumes at #{DateTime.to_iso8601(now)}"
     assert html =~ "ops-control-blocker-usage_limit"
+  end
+
+  test "dashboard liveview warns about stray processes until they are gone" do
+    orchestrator_name = Module.concat(__MODULE__, :StrayProcessDashboardOrchestrator)
+    stray_name = Module.concat(__MODULE__, :StrayProcesses)
+    idle = Path.join([Path.expand(Config.settings!().workspace.root), "default", "MT-IDLE"])
+    yes = %{pid: 4242, ppid: 1, start_time: "Sun Oct  4 08:00:00 2026", cpu_time: "10:01.00", command: "yes", cwd: idle}
+    spin = %{yes | pid: 4243, cpu_time: "20:00.00", command: "#{idle}/bin/spin", cwd: nil}
+    {:ok, table} = Agent.start_link(fn -> {:ok, [yes, spin]} end)
+
+    start_supervised!(
+      {StrayProcesses, name: stray_name, own_pid: 999_999, claude_tmp_dir: "/nonexistent", tmp_dirs: [], running_workspaces: fn -> {:ok, []} end, table: fn -> Agent.get(table, & &1) end}
+    )
+
+    capture_log(fn -> assert [_, _] = StrayProcesses.check(stray_name) end)
+    {:ok, _orchestrator_pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: static_snapshot())
+    start_test_endpoint(orchestrator: orchestrator_name, stray_processes: stray_name, snapshot_timeout_ms: 50)
+
+    {:ok, view, html} = live(build_conn(), "/")
+
+    assert html =~ "Processes using CPU with no run attached"
+    assert html =~ "pid 4242"
+    assert html =~ ~s(<code class="stray-process-command">yes</code>)
+    assert html =~ "in #{idle}"
+    assert html =~ "10m 1s CPU"
+    assert html =~ "pid 4243"
+    assert html =~ "in an unknown folder"
+    assert html =~ "20m 0s CPU"
+
+    assert json_response(get(build_conn(), "/api/v1/state"), 200)["stray_processes"] == [
+             %{"pid" => 4243, "command" => "#{idle}/bin/spin", "cwd" => nil, "cpu_time" => "20:00.00", "cpu_seconds" => 1_200},
+             %{"pid" => 4242, "command" => "yes", "cwd" => idle, "cpu_time" => "10:01.00", "cpu_seconds" => 601}
+           ]
+
+    Agent.update(table, fn _entries -> {:ok, []} end)
+    capture_log(fn -> assert [] = StrayProcesses.check(stray_name) end)
+
+    refute render_async(view, 500) =~ "stray-process-banner"
   end
 
   test "state API lists usage-limit holds and the usage_limit dispatch blocker" do

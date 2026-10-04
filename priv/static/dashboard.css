@@ -388,6 +388,37 @@ pre,
   font-weight: 600;
 }
 
+.stray-process-banner {
+  border: 1px solid #f1d8a6;
+  border-radius: 8px;
+  background: #fffaf0;
+  padding: 0.75rem 1.15rem;
+}
+
+.stray-process-banner-title {
+  margin: 0 0 0.4rem;
+  font-weight: 600;
+}
+
+.stray-process-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.stray-process-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+.stray-process-command {
+  overflow-wrap: anywhere;
+}
+
 .ops-control-main {
   display: flex;
   justify-content: space-between;

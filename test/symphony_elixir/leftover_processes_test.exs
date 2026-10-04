@@ -189,6 +189,18 @@ defmodule SymphonyElixir.LeftoverProcessesTest do
       assert Table.parse_lsof(output) == %{1 => "/", 3726 => "/private/tmp/qa283"}
     end
 
+    test "reads CPU time in seconds from macOS and Linux ps formats" do
+      assert Table.cpu_seconds("165:01.23") == 9_901
+      assert Table.cpu_seconds("0:05.99") == 5
+      assert Table.cpu_seconds("02:45:01") == 9_901
+      assert Table.cpu_seconds("1-00:00:30") == 86_430
+      assert Table.cpu_seconds("42") == 42
+
+      for invalid <- ["bad", "1:2:3:4", "x-00:01", "a:01", "1:b:01", nil] do
+        assert Table.cpu_seconds(invalid) == nil
+      end
+    end
+
     test "reports a ps failure" do
       assert {:error, {:ps_failed, 1, "operation not permitted"}} = Table.read(fn _ps, _args, _opts -> {"operation not permitted\n", 1} end)
       assert {:error, "boom"} = Table.read(fn _ps, _args, _opts -> raise "boom" end)
