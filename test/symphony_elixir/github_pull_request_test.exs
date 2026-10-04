@@ -550,4 +550,60 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
       assert {:error, :invalid_pr_url} = PullRequest.update_branch("https://github.com/org/repo/issues/42", "head-1", gh_runner: ok)
     end
   end
+
+  describe "merge_commit_sha/2" do
+    test "returns the merge commit of a merged pull request and nil for an open one" do
+      runner = fn
+        ["api", "repos/acme/symphony/pulls/132"], _opts -> {~s({"merged": true, "merge_commit_sha": "9f54098b96666e6e"}), 0}
+        ["api", "repos/acme/symphony/pulls/133"], _opts -> {~s({"merged": false, "merge_commit_sha": "abc"}), 0}
+        ["api", "--hostname", "ghe.example.com", "repos/acme/symphony/pulls/7"], _opts -> {~s({"merged": true, "merge_commit_sha": "def"}), 0}
+      end
+
+      assert {:ok, "9f54098b96666e6e"} = PullRequest.merge_commit_sha("https://github.com/acme/symphony/pull/132", gh_runner: runner)
+      assert {:ok, nil} = PullRequest.merge_commit_sha("https://github.com/acme/symphony/pull/133", gh_runner: runner)
+
+      assert {:ok, "def"} =
+               PullRequest.merge_commit_sha("https://ghe.example.com/acme/symphony/pull/7", gh_runner: runner, github_enterprise_hosts: ["ghe.example.com"])
+    end
+
+    test "reports a bad URL, payload or gh failure" do
+      pr_url = "https://github.com/a/b/pull/1"
+      answer = fn output, status -> [gh_runner: fn _args, _opts -> {output, status} end] end
+
+      assert {:error, :invalid_pr_url} = PullRequest.merge_commit_sha("https://github.com/acme/symphony", answer.("", 0))
+      assert {:error, :invalid_pr_payload} = PullRequest.merge_commit_sha(pr_url, answer.("[]", 0))
+      assert {:error, {:invalid_pr_payload, _message}} = PullRequest.merge_commit_sha(pr_url, answer.("nope", 0))
+      assert {:error, {:gh_failed, _args, 1, "boom"}} = PullRequest.merge_commit_sha(pr_url, answer.("boom", 1))
+    end
+  end
+
+  describe "commit_included?/4" do
+    test "compares the commit with the head in the pull request's repository" do
+      pr_url = "https://github.com/acme/symphony/pull/132"
+
+      runner = fn args, _opts ->
+        assert ["api", "repos/acme/symphony/compare/" <> range, "--jq", ".status"] = args
+
+        case range do
+          "m1...b" -> {"ahead\n", 0}
+          "m2...b" -> {"identical\n", 0}
+          "m3...b" -> {"behind\n", 0}
+          "m4...b" -> {"diverged\n", 0}
+          "m5...b" -> {"sideways\n", 0}
+          "m6...b" -> {"Not Found", 1}
+        end
+      end
+
+      assert {:ok, true} = PullRequest.commit_included?(pr_url, "m1", "b", gh_runner: runner)
+      assert {:ok, true} = PullRequest.commit_included?(pr_url, "m2", "b", gh_runner: runner)
+      assert {:ok, false} = PullRequest.commit_included?(pr_url, "m3", "b", gh_runner: runner)
+      assert {:ok, false} = PullRequest.commit_included?(pr_url, "m4", "b", gh_runner: runner)
+
+      assert {:error, {:unexpected_compare_status, "sideways"}} =
+               PullRequest.commit_included?(pr_url, "m5", "b", gh_runner: runner)
+
+      assert {:error, {:gh_failed, _args, 1, "Not Found"}} = PullRequest.commit_included?(pr_url, "m6", "b", gh_runner: runner)
+      assert {:error, :invalid_pr_url} = PullRequest.commit_included?("not a url", "m1", "b", gh_runner: runner)
+    end
+  end
 end

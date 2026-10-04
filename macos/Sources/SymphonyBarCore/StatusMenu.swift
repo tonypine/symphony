@@ -51,9 +51,10 @@ public enum StatusMenu {
         case .stopped, .starting:
             lines = []
         case let .running(snapshot, _), let .paused(snapshot, _):
-            // The operator pause first, then the usage-limit holds.
+            // The operator pause first, then the usage-limit holds, then what an update would release.
             lines = [countsLine(snapshot)] + (snapshot.pause.map { [pauseLine($0, now: now, timeZone: timeZone)] } ?? [])
                 + snapshot.usageLimits.map { usageLimitLine($0, now: now, timeZone: timeZone) }
+                + (updateUnblocksLine(snapshot.updateUnblocks).map { [$0] } ?? [])
         case let .error(message):
             lines = [message]
         }
@@ -71,6 +72,19 @@ public enum StatusMenu {
         guard embeddedAvailable else { return "No embedded Symphony: turn on Development mode" }
         guard let version = appVersion?.trimmingWhitespace(), !version.isEmpty else { return "Symphony (embedded)" }
         return "Symphony v\(version) (embedded)"
+    }
+
+    /// "Update to unblock 2 tickets" while tickets wait only for the running Symphony to include a merged fix,
+    /// nil when none does.
+    public static func updateUnblocksLine(_ count: Int) -> String? {
+        switch count {
+        case ...0:
+            return nil
+        case 1:
+            return "Update to unblock 1 ticket"
+        default:
+            return "Update to unblock \(count) tickets"
+        }
     }
 
     /// For example "2 running · 1 retrying".
