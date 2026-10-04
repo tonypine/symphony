@@ -70,7 +70,8 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
   defp await_boot_poll(pid) do
     wait_until(fn ->
       state = :sys.get_state(pid)
-      not state.poll_check_in_progress and is_nil(state.repo_poll_task_ref) and is_nil(state.startup_workspace_lifecycle_task_ref)
+      poll_idle? = not state.poll_check_in_progress and is_nil(state.repo_poll_task_ref)
+      poll_idle? and is_nil(state.startup_workspace_lifecycle_task_ref)
     end)
   end
 
