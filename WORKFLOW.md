@@ -245,6 +245,9 @@ You are working on a Linear ticket `{{ issue.identifier }}`
     - Do not add a test plan to the PR body; keep validation evidence in the workpad.
     - Validate the body with `mix pr_body.check --file <path>` before creating or updating the PR.
     - For UI-touching changes, capture before/after screenshots or a recording and attach them to the Linear issue with `linear_attach_file`. Do not embed them in the PR body.
+      - Never launch an app, an `NSApplication`, or a window on the host to get them, not even a throwaway harness. The host is the operator's desktop: windows and "quit unexpectedly" dialogs land on their screen. The agent sandbox also blocks the window server, so such a harness crashes inside AppKit instead of drawing.
+      - Render SwiftUI views offscreen with `ImageRenderer` instead (no `NSApplication`, no window), write the PNG with ImageIO, and attach that. Compile it with plain `swiftc -module-cache-path <workspace dir>`.
+      - When a view can't be rendered offscreen, or the ticket wants the running app, leave the screenshots to the QA pass, which runs the app on the QA VM, and say so in the workpad.
 9.  Merge latest `origin/main` into branch, resolve conflicts, and rerun checks.
 10. Update the workpad comment with final checklist status and validation notes.
     - Mark completed plan/acceptance/validation checklist items as checked.
