@@ -6,6 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private var statusItem: NSStatusItem?
     private let runner = SymphonyRunner()
     private lazy var settingsWindow = SettingsWindowController(secrets: runner.secrets)
+    private let reposWindow = ReposWindowController()
     private let poller = StatusPoller()
     private lazy var restarter = RestartController(runner: runner, poller: poller)
     private var machine = StatusMachine()
@@ -88,6 +89,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         menu.addItem(menuItem(UpdateMenu.checkTitle, action: #selector(checkForUpdates(_:))))
         menu.addItem(updateResultItem)
         menu.addItem(.separator())
+        menu.addItem(menuItem(ReposList.menuTitle, action: #selector(openRepos(_:))))
         menu.addItem(
             menuItem(
                 StatusMenu.settingsTitle,
@@ -122,6 +124,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         poller.stateRoot = { [weak self] in
             self?.runner.stateRoot ?? StateRoot.locate(environment: AppStores.current.environment)
         }
+        reposWindow.stateRoot = poller.stateRoot
         poller.onPoll = { [weak self] poll in
             guard let self else { return StatusMachine.pollInterval }
             handle(.polled(poll))
@@ -346,6 +349,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         }
     }
 
+    @objc private func openRepos(_ sender: Any?) {
+        reposWindow.show(status: machine.status)
+    }
+
     @objc private func openSettings(_ sender: Any?) {
         settingsWindow.show()
     }
@@ -508,6 +515,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         default:
             settingsWindow.budget = nil
         }
+        // An open Repos window refreshes with each poll.
+        reposWindow.update(status: machine.status)
         switch event {
         case .started:
             // A Pause or Resume error was about the Symphony that was running before.
