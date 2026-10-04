@@ -4656,19 +4656,107 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     Process.exit(worker_pid, :shutdown)
   end
 
-  test "a run waiting on Linear is not restarted as stalled or stuck until the wait ends" do
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
-      tracker_api_token: nil,
-      agent_stall_timeout_ms: 1_000,
-      watchdog: %{enabled: true, tick_interval_ms: 60_000, no_progress_threshold_ms: 1_000}
-    )
+  @stall_check_only [agent_stall_timeout_ms: 1_000, watchdog: %{enabled: false}]
 
-    issue = %Issue{id: "issue-linear-wait", identifier: "MT-LINEAR-WAIT", title: "Linear wait", state: "In Progress"}
-    Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+  describe "the stall check and the no-progress watchdog" do
+    test "do not restart as stalled a run whose workpad bootstrap waits on Linear past the stall timeout" do
+      pid = start_linear_wait_orchestrator!(:LinearWaitStallOrchestrator, @stall_check_only)
+      issue = linear_wait_issue("issue-linear-wait-bootstrap")
+      {worker_pid, worker_ref} = start_blocked_worker()
+      stale_at = DateTime.add(DateTime.utc_now(), -5, :second)
 
-    orchestrator_name = Module.concat(__MODULE__, :LinearWaitOrchestrator)
-    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+      # No agent event yet: the workpad bootstrap is waiting on a rate-limited Linear call.
+      put_running_entry(pid, issue, linear_wait_running_entry(issue, worker_pid, worker_ref, stale_at))
+      wait_sent_at = DateTime.utc_now()
+      send(pid, {:linear_wait, issue.id, 60_000})
+      send(pid, {:linear_wait, "issue-not-running", 60_000})
+      state = run_stall_check(pid)
+
+      assert %{linear_wait_until: %DateTime{} = wait_until} = state.running[issue.id]
+      assert DateTime.diff(wait_until, wait_sent_at, :millisecond) >= 60_000
+      refute Map.has_key?(state.running, "issue-not-running")
+      refute Map.has_key?(state.retry_attempts, issue.id)
+      assert Process.alive?(worker_pid)
+      assert %{running: [%{linear_wait_until: ^wait_until}]} = GenServer.call(pid, :snapshot)
+
+      # The stall check stays on for the rest of the run: once the wait ends, the clock runs from there.
+      end_linear_wait(pid, issue)
+      run_stall_check(pid)
+
+      assert_receive :agent_stop_session_called
+      assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}
+      assert %{error: "stalled for " <> _} = wait_for_retry!(pid, issue)
+    end
+
+    test "do not restart as stuck a run waiting on Linear between turns past the no-progress threshold" do
+      pid =
+        start_linear_wait_orchestrator!(:LinearWaitWatchdogOrchestrator,
+          agent_stall_timeout_ms: 1_000,
+          watchdog: %{enabled: true, tick_interval_ms: 60_000, no_progress_threshold_ms: 1_000}
+        )
+
+      issue = linear_wait_issue("issue-linear-wait-between-turns")
+      {worker_pid, worker_ref} = start_blocked_worker()
+      stale_at = DateTime.add(DateTime.utc_now(), -5, :second)
+
+      # The last turn ended long ago; the post-turn refresh is waiting on Linear.
+      running_entry =
+        linear_wait_running_entry(issue, worker_pid, worker_ref, stale_at, %{
+          last_codex_timestamp: stale_at,
+          last_codex_event: :turn_completed,
+          turn_count: 1
+        })
+
+      put_running_entry(pid, issue, running_entry)
+      send(pid, {:linear_wait, issue.id, 60_000})
+      send(pid, :watchdog_tick)
+      state = run_stall_check(pid)
+
+      assert %{linear_wait_until: %DateTime{}} = state.running[issue.id]
+      refute Map.has_key?(state.retry_attempts, issue.id)
+      assert Process.alive?(worker_pid)
+
+      end_linear_wait(pid, issue)
+      send(pid, :watchdog_tick)
+
+      assert_receive :agent_stop_session_called
+      assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}
+      assert %{error: "stuck for " <> _} = wait_for_retry!(pid, issue)
+    end
+
+    test "still restart a run with no agent event and no Linear wait" do
+      pid = start_linear_wait_orchestrator!(:LinearNoWaitStallOrchestrator, @stall_check_only)
+      issue = linear_wait_issue("issue-no-linear-wait-stall")
+      {worker_pid, worker_ref} = start_blocked_worker()
+      put_running_entry(pid, issue, linear_wait_running_entry(issue, worker_pid, worker_ref, DateTime.add(DateTime.utc_now(), -5, :second)))
+      assert %{running: [%{linear_wait_until: nil}]} = GenServer.call(pid, :snapshot)
+
+      run_stall_check(pid)
+
+      assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}
+      assert %{error: "stalled for " <> _} = wait_for_retry!(pid, issue)
+
+      pid =
+        start_linear_wait_orchestrator!(:LinearNoWaitWatchdogOrchestrator,
+          agent_stall_timeout_ms: 0,
+          watchdog: %{enabled: true, tick_interval_ms: 60_000, no_progress_threshold_ms: 1_000}
+        )
+
+      issue = linear_wait_issue("issue-no-linear-wait-stuck")
+      {worker_pid, worker_ref} = start_blocked_worker()
+      put_running_entry(pid, issue, linear_wait_running_entry(issue, worker_pid, worker_ref, DateTime.add(DateTime.utc_now(), -5, :second)))
+
+      send(pid, :watchdog_tick)
+
+      assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}
+      assert %{error: "stuck for " <> _} = wait_for_retry!(pid, issue)
+    end
+  end
+
+  defp start_linear_wait_orchestrator!(name, workflow_overrides) do
+    workflow = [tracker_kind: "memory", tracker_api_token: nil] ++ workflow_overrides
+    write_workflow_file!(Workflow.workflow_file_path(), workflow)
+    {:ok, pid} = Orchestrator.start_link(name: Module.concat(__MODULE__, name))
 
     on_exit(fn ->
       if Process.alive?(pid) do
@@ -4676,41 +4764,35 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       end
     end)
 
-    {worker_pid, worker_ref} = start_blocked_worker()
-    stale_at = DateTime.add(DateTime.utc_now(), -5, :second)
+    pid
+  end
 
-    # No agent event yet, as while the workpad bootstrap waits on a rate-limited state move.
-    running_entry =
-      running_entry(issue, worker_pid, worker_ref, "run-linear-wait", stale_at, %{
-        last_event_at: stale_at,
-        agent_module: StopSessionAgent,
-        agent_session: %{recipient: self()}
-      })
+  defp linear_wait_issue(issue_id) do
+    issue = %Issue{id: issue_id, identifier: "MT-LINEAR-WAIT", title: "Linear wait", state: "In Progress"}
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+    issue
+  end
 
-    put_running_entry(pid, issue, running_entry)
-    wait_sent_at = DateTime.utc_now()
-    send(pid, {:linear_wait, issue.id, 60_000})
-    send(pid, {:linear_wait, "issue-not-running", 60_000})
-    run_stall_check(pid)
-    send(pid, :watchdog_tick)
+  defp linear_wait_running_entry(issue, worker_pid, worker_ref, stale_at, attrs \\ %{}) do
+    running_entry(
+      issue,
+      worker_pid,
+      worker_ref,
+      "run-" <> issue.id,
+      stale_at,
+      Map.merge(%{last_event_at: stale_at, agent_module: StopSessionAgent, agent_session: %{recipient: self()}}, attrs)
+    )
+  end
 
-    state = get_orchestrator_state(pid)
-    assert %{linear_wait_until: %DateTime{} = wait_until} = state.running[issue.id]
-    assert DateTime.diff(wait_until, wait_sent_at, :millisecond) >= 60_000
-    refute Map.has_key?(state.running, "issue-not-running")
-    refute Map.has_key?(state.retry_attempts, issue.id)
-    assert Process.alive?(worker_pid)
-
-    # A wait that ended before the run's last activity holds nothing off.
+  # The wait ended two seconds ago, after the run's last activity but past the 1s thresholds.
+  defp end_linear_wait(pid, issue) do
     :sys.replace_state(pid, fn state ->
-      put_in(state.running[issue.id][:linear_wait_until], DateTime.add(stale_at, -5, :second))
+      put_in(state.running[issue.id][:linear_wait_until], DateTime.add(DateTime.utc_now(), -2, :second))
     end)
+  end
 
-    send(pid, :watchdog_tick)
-
-    assert_receive :agent_stop_session_called
-    assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}
-    assert %{error: "stuck for " <> _} = wait_for_orchestrator_state(pid, &Map.has_key?(&1.retry_attempts, issue.id), 1_000).retry_attempts[issue.id]
+  defp wait_for_retry!(pid, issue) do
+    wait_for_orchestrator_state(pid, &Map.has_key?(&1.retry_attempts, issue.id), 1_000).retry_attempts[issue.id]
   end
 
   test "status dashboard renders offline marker to terminal" do
@@ -5479,6 +5561,27 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert plain =~ "cmd: RED after line"
     refute plain =~ <<27>>
     refute plain =~ <<0>>
+  end
+
+  test "status dashboard shows a run waiting on Linear in place of its last message" do
+    row =
+      Renderer.format_running_summary(
+        %{
+          identifier: "MT-899",
+          state: "running",
+          session_id: "thread-1234567890",
+          codex_app_server_pid: "4242",
+          codex_total_tokens: 12,
+          runtime_seconds: 15,
+          last_codex_event: :notification,
+          last_codex_message: "older agent message",
+          linear_wait_until: DateTime.add(DateTime.utc_now(), 30, :second)
+        },
+        Renderer.running_event_width(nil)
+      )
+
+    assert row =~ "waiting for Linear"
+    refute row =~ "older agent message"
   end
 
   test "status dashboard expands running row to requested terminal width" do
