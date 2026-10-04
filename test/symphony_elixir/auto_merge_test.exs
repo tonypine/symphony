@@ -283,6 +283,69 @@ defmodule SymphonyElixir.AutoMergeTest do
     assert_received {:update_branch, @pr_url, "head-1"}
   end
 
+  test "a head that moved under the enable call is retried with the new head, not handed to the landing agent" do
+    now = ~U[2026-10-03 12:00:00Z]
+    put_run!(now)
+    merging = issue("Merging")
+    track([merging])
+    activity(head: "head-1", merge_state: "BEHIND")
+    # The re-read in the refused path would see the new head and fall back: it must not run.
+    ci_status(merge_state: "BLOCKED", commit_sha: "head-2", checks: [])
+    replies(%{enable_auto_merge: {:error, :head_moved}})
+
+    log = capture_log(fn -> assert {:ok, %{actions: [{:auto_merge, @issue_id, "waiting"}]}} = poll(now) end)
+
+    assert_received {:enable_auto_merge, @pr_url, %{head_sha: "head-1"}}
+    # Nothing else acts on the stale head this poll.
+    refute_received {:update_branch, _url, _head}
+    assert log =~ "Auto-merge ACME-1780: the PR head moved from `head-1` before auto-merge could be enabled; retrying on the next poll commit_sha=head-1"
+
+    assert %{state: "waiting", enabled_head_sha: nil, head_moved_retries: 1, reason: "the PR head moved from `head-1` before auto-merge could be enabled"} =
+             PrReviewPoller.auto_merge(@issue_id)
+
+    assert AutoMerge.owns_issue?(merging)
+
+    replies(%{})
+    activity(head: "head-2", merge_state: "BLOCKED")
+    assert {:ok, %{actions: [{:auto_merge, @issue_id, "enabled"}]}} = poll(DateTime.add(now, 30))
+    assert_received {:enable_auto_merge, @pr_url, %{head_sha: "head-2"}}
+    assert %{state: "enabled", enabled_head_sha: "head-2", head_moved_retries: 0, reason: nil} = PrReviewPoller.auto_merge(@issue_id)
+    assert AutoMerge.owns_issue?(merging)
+    refute_received {:issue_comment, @issue_id, _body}
+  end
+
+  test "a head that keeps moving under the enable call falls back after three tries in a row" do
+    now = ~U[2026-10-03 12:00:00Z]
+    put_run!(now)
+    track([issue("Merging")])
+    replies(%{enable_auto_merge: {:error, :head_moved}})
+
+    for {head, offset} <- [{"head-1", 0}, {"head-2", 30}] do
+      activity(head: head, merge_state: "BLOCKED")
+      capture_log(fn -> assert {:ok, %{actions: [{:auto_merge, @issue_id, "waiting"}]}} = poll(DateTime.add(now, offset)) end)
+    end
+
+    activity(head: "head-3", merge_state: "BLOCKED")
+    log = capture_log(fn -> assert {:ok, %{actions: [{:auto_merge, @issue_id, "fallback"}]}} = poll(DateTime.add(now, 60)) end)
+
+    assert log =~ "fell back to the landing agent: the PR head moved 3 times in a row before auto-merge could be enabled"
+    assert_received {:issue_comment, @issue_id, comment}
+    assert comment =~ "the PR head moved 3 times in a row"
+    assert %{state: "fallback", head_moved_retries: 3} = PrReviewPoller.auto_merge(@issue_id)
+  end
+
+  test "a PR GitHub already shows auto-merge on for is recorded as enabled without an enable call" do
+    now = ~U[2026-10-03 12:00:00Z]
+    put_run!(now)
+    track([issue("Merging")])
+    activity(head: "head-1", merge_state: "BLOCKED", auto_merge_enabled: true)
+
+    assert {:ok, %{actions: [{:auto_merge, @issue_id, "enabled"}]}} = poll(now)
+
+    refute_received {:enable_auto_merge, _url, _request}
+    assert %{state: "enabled", enabled_head_sha: "head-1", head_moved_retries: 0} = PrReviewPoller.auto_merge(@issue_id)
+  end
+
   test "a CONFLICTING PR has auto-merge turned off before the conflict-fix run, and lands only after a fresh approval" do
     now = ~U[2026-10-03 12:00:00Z]
     put_run!(now)

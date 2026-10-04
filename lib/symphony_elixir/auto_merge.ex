@@ -13,6 +13,10 @@ defmodule SymphonyElixir.AutoMerge do
   the CI poller's fix path; a fix run that can push code turns auto-merge off first too (see
   `disable_for_ci_fix/5`), while a flaky rerun of the same commit leaves it on.
 
+  A head that moves between reading the PR and turning auto-merge on (a push, or an
+  update-branch) is retried with the head the next poll reads; only a head that keeps moving
+  falls back.
+
   When auto-merge can't be used otherwise (a permission error, a refused PR that isn't clean
   and green, or the PR stays blocked on a green head), the issue falls back to the landing
   agent. The state lives under `:auto_merge` in the PR review record.
@@ -31,6 +35,7 @@ defmodule SymphonyElixir.AutoMerge do
   @passing_conclusions ["success", "neutral", "skipped"]
   @green_conclusion "SUCCESS"
   @max_reason_length 300
+  @max_head_moved_retries 3
 
   @type state :: String.t()
   @type t :: %{
@@ -39,6 +44,7 @@ defmodule SymphonyElixir.AutoMerge do
           enabled_head_sha: String.t() | nil,
           update_branch_head_sha: String.t() | nil,
           stalled_since: DateTime.t() | nil,
+          head_moved_retries: non_neg_integer(),
           disabled_at: DateTime.t() | nil,
           reason: String.t() | nil,
           updated_at: DateTime.t() | nil
@@ -119,6 +125,8 @@ defmodule SymphonyElixir.AutoMerge do
   end
 
   defp continue({:ok, %{state: "merging"}} = result, _record, _activity, _settings, _opts, _now), do: result
+  # The head moved under the enable call: nothing else acts on the stale head this poll.
+  defp continue({:retry, current}, _record, _activity, _settings, _opts, _now), do: {:ok, current}
   defp continue({:ok, current}, record, activity, settings, opts, now), do: keep_up_to_date(current, record, activity, settings, opts, now)
   defp continue(result, _record, _activity, _settings, _opts, _now), do: result
 
@@ -146,6 +154,7 @@ defmodule SymphonyElixir.AutoMerge do
       enabled_head_sha: nil,
       update_branch_head_sha: nil,
       stalled_since: nil,
+      head_moved_retries: 0,
       disabled_at: nil,
       reason: nil,
       updated_at: now
@@ -159,7 +168,7 @@ defmodule SymphonyElixir.AutoMerge do
 
     cond do
       Map.get(activity, :auto_merge_enabled) == true ->
-        {:ok, %{current | state: enabled_state(current.state), enabled_head_sha: current.enabled_head_sha || head, disabled_at: nil}}
+        {:ok, %{current | state: enabled_state(current.state), enabled_head_sha: current.enabled_head_sha || head, head_moved_retries: 0, disabled_at: nil}}
 
       current.enabled_head_sha == head ->
         {:ok, %{current | state: enabled_state(current.state)}}
@@ -181,10 +190,28 @@ defmodule SymphonyElixir.AutoMerge do
 
     case github.enable_auto_merge(pr_url, request, gh_opts) do
       :ok ->
-        {:ok, %{current | state: "enabled", enabled_head_sha: current.head_sha, disabled_at: nil}}
+        {:ok, %{current | state: "enabled", enabled_head_sha: current.head_sha, head_moved_retries: 0, disabled_at: nil}}
+
+      {:error, :head_moved} ->
+        head_moved(current, record)
 
       {:error, reason} ->
         refused(current, record, pr_url, request, format_reason(reason), github, gh_opts)
+    end
+  end
+
+  # The head moved between reading the PR and this call (a push, or an update-branch; auto-merge
+  # may even be on already). Keep the record as it is and try again with the head the next
+  # poll reads. Only a head that keeps moving goes to the landing agent.
+  defp head_moved(current, record) do
+    retries = current.head_moved_retries + 1
+
+    if retries >= @max_head_moved_retries do
+      fallback(%{current | head_moved_retries: retries}, "the PR head moved #{retries} times in a row before auto-merge could be enabled")
+    else
+      reason = "the PR head moved from #{short_sha(current.head_sha)} before auto-merge could be enabled"
+      Logger.warning("Auto-merge #{identifier(record)}: #{reason}; retrying on the next poll commit_sha=#{current.head_sha}")
+      {:retry, %{current | state: current.state || "waiting", head_moved_retries: retries, reason: reason}}
     end
   end
 

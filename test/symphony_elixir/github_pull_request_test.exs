@@ -550,6 +550,12 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
 
       assert {:error, :clean_status} = PullRequest.enable_auto_merge(pr_url, @request, gh_runner: clean)
 
+      moved = fn ["api", "graphql" | _fields], _opts ->
+        {~s(gh: Failed to add PR #164: expected head oid does not match the current head oid \(enablePullRequestAutoMerge\)), 1}
+      end
+
+      assert {:error, :head_moved} = PullRequest.enable_auto_merge(pr_url, @request, gh_runner: moved)
+
       assert {:error, {:gh_failed, _args, 1, "gh: Auto merge is not allowed" <> _}} =
                PullRequest.enable_auto_merge(pr_url, @request, gh_runner: denied)
 

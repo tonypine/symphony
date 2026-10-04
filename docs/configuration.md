@@ -857,6 +857,9 @@ pull_requests:
     when the required checks pass, and Symphony moves the ticket to `Done`. When GitHub refuses
     auto-merge (the PR can already merge, no branch protection, or the repository doesn't allow
     it) and the PR is `CLEAN` with green checks or none, Symphony squash-merges it right away.
+    When the head moved between Symphony reading the PR and turning auto-merge on (a push or an
+    update-branch), Symphony tries again with the new head on the next poll; only a head that
+    moves 3 times in a row falls back to the landing agent.
   - A PR that is `BEHIND` the base branch gets one GitHub "Update branch" per head; CI runs on the
     merged code and auto-merge fires when it passes.
   - A merge conflict turns auto-merge off and moves the ticket to `In Progress` with the conflict
