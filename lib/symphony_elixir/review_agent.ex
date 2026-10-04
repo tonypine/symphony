@@ -434,7 +434,7 @@ defmodule SymphonyElixir.ReviewAgent do
 
     with {:ok, agent_module} <- resolve_agent_module(opts, config) do
       reviewer_settings = reviewer_settings(settings, config)
-      prompt = reviewer_prompt(issue, source, opts)
+      prompt = reviewer_prompt(issue, source)
       message_collector = Keyword.get(opts, :review_agent_message_collector, self())
       on_message = reviewer_on_message(message_collector, Keyword.get(opts, :on_reviewer_message))
 
@@ -650,24 +650,26 @@ defmodule SymphonyElixir.ReviewAgent do
   defp agent_module("claude"), do: {:ok, SymphonyElixir.ClaudeCode.AppServer}
   defp agent_module(other), do: {:error, {:unsupported_review_agent_kind, other}}
 
-  defp reviewer_prompt(issue, source, opts) do
-    workflow_prompt =
-      opts
-      |> Keyword.get(:repo_key)
-      |> Config.workflow_prompt()
-
+  # The pre-push reviewer covers code quality and bugs only. Acceptance criteria, ticket scope and
+  # overlap with other open PRs belong to the acceptance gate (`docs/acceptance_gate.md`).
+  defp reviewer_prompt(issue, source) do
     """
     You are the reviewer agent in an executor + reviewer Symphony run.
 
     Review the executor's committed diff for this Linear issue. You may inspect files and use read-only scoped Linear/GitHub tools, but you must not modify files, write Linear/GitHub data, push, or open a PR.
 
-    Review the diff by reading it. Do not run the test suite, `make all`, coverage or static analysis such as Dialyzer, even when the workflow below asks the executor to: CI runs them after the push.
+    Review the diff by reading it. Do not run the test suite, `make all`, coverage or static analysis such as Dialyzer: CI runs them after the push.
 
-    Issue:
+    Issue (context for what the diff is for):
     #{present_issue(issue)}
 
-    Workflow review criteria:
-    #{workflow_prompt}
+    Review criteria. Review the code, not the ticket:
+    - Correctness: bugs in the changed code, such as wrong conditions, unhandled cases, broken callers, races and resource leaks.
+    - Tests: each new branch, error path and edge case the diff adds has a test that exercises it, and changed behaviour has its tests updated.
+    - Error handling: errors are handled or returned, not swallowed, and failures leave no half-done state.
+    - The repo's code rules: read the repo's agent instructions (`AGENTS.md`, `CLAUDE.md`) for its rules, such as required specs, style and module patterns. Narrow scope is a code rule: flag unrelated refactors, stray debug code and dead code left in the diff.
+
+    Do not judge whether the diff meets the ticket's acceptance criteria or matches the ticket's scope, and do not ask for work the ticket describes but the diff does not touch: the acceptance gate checks that after CI and QA.
 
     Diff context:
     #{truncate(source.diff, @max_diff_prompt_bytes)}
