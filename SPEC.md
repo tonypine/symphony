@@ -2046,15 +2046,18 @@ Forced allowance:
 - A forced `breakdown` parent is one forced unit; its breakdown, re-plan and close-out runs are
   forced runs. While it waits on its sub-issues (and is not re-planning), its current part is
   forced too, without the service writing the label on it: the first issue on its epic path
-  (see Epic lanes below) that is dispatch-eligible, in epic-lane order (stage, then nearest the epic, then
-  dispatch order), so a blocked sub-issue waits for its blocker and the `Final verification:`
-  sub-issue comes once it is unblocked. The part keeps its parent's place in the forced queue, and
-  stays the parent's while it is on the path and running, claimed or waiting on a retry, so at
-  most one of the parent's issues runs on the forced allowance at a time. The parent's other
+  (see Epic lanes below) that is dispatch-eligible or in the Auto Review state, in epic-lane order
+  (stage, then nearest the epic, then dispatch order), so a blocked sub-issue waits for its
+  blocker and the `Final verification:` sub-issue comes once it is unblocked. The part keeps its
+  parent's place in the forced queue, and stays the parent's while it is on the path and running,
+  claimed, waiting on a retry or in Auto Review, so at most one of the parent's issues runs on the
+  forced allowance at a time. The parent's other
   sub-issues use normal slots and the epic lane. Forcing a sub-issue forces only that sub-issue.
 - Forcing never moves an issue or approves a plan: a forced parent in `In Review` stays there until
   a human moves it.
-- A forced issue's Auto Review QA request goes to the front of the QA queue: while it is queued, a
+- A forced issue's Auto Review QA request goes to the front of the QA queue; a forced parent's
+  current part counts as forced here too (the service MAY read it from the orchestrator's
+  published snapshot). While a forced request is queued, a
   free QA slot MUST be turned away from unforced requests. A queued forced request holds the slot
   only while it is refreshed: once no request has come for it in two CI poll intervals (the issue
   left Auto Review or its CI is no longer green), unforced requests MUST take free slots again.
