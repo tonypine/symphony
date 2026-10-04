@@ -146,9 +146,8 @@ defmodule SymphonyElixir.Codex.AppServer do
        ) do
     tool_scope = Keyword.get(opts, :tool_scope)
     process_tree_module = Keyword.get(opts, :process_tree_module, ProcessTree)
-    run_id = Keyword.get(opts, :run_id)
 
-    case start_port(workspace, worker_host, settings, mcp_session, remote_socket_path, remote_shim_path, run_id) do
+    case start_port(workspace, worker_host, settings, mcp_session, remote_socket_path, remote_shim_path, opts) do
       {:ok, port, stdout_pump, codex_home, launch_cleanup_paths, remote_codex_home, stderr_tail} ->
         launch_context = %{
           codex_home: codex_home,
@@ -495,7 +494,10 @@ defmodule SymphonyElixir.Codex.AppServer do
 
   defp validate_remote_launch_preconditions(_worker_host, _settings), do: :ok
 
-  defp start_port(workspace, nil, settings, mcp_session, _remote_socket_path, _remote_shim_path, run_id) do
+  # `:extra_env` (a QA pass's own `TMPDIR`) applies on the local host only.
+  defp start_port(workspace, nil, settings, mcp_session, _remote_socket_path, _remote_shim_path, opts) do
+    run_id = Keyword.get(opts, :run_id)
+
     with {:ok, executable} <- bash_executable(),
          {:ok, codex_home} <- McpConfig.write_home(settings, mcp_session),
          {:ok, command, launch_cleanup_paths} <-
@@ -515,7 +517,7 @@ defmodule SymphonyElixir.Codex.AppServer do
             :exit_status,
             args: port_args,
             cd: String.to_charlist(workspace),
-            env: AgentEnv.build_with(Map.put(AgentEnv.gradle_env(workspace), "CODEX_HOME", codex_home.home_path)),
+            env: AgentEnv.build_with(local_env(workspace, codex_home, Keyword.get(opts, :extra_env, %{}))),
             line: @port_line_bytes
           ]
         )
@@ -543,7 +545,7 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
-  defp start_port(workspace, worker_host, settings, mcp_session, remote_socket_path, remote_shim_path, _run_id)
+  defp start_port(workspace, worker_host, settings, mcp_session, remote_socket_path, remote_shim_path, _opts)
        when is_binary(worker_host) do
     with {:ok, remote_command, remote_codex_home, remote_stderr_path} <-
            remote_launch_command(workspace, settings, mcp_session, remote_socket_path, remote_shim_path),
@@ -567,6 +569,13 @@ defmodule SymphonyElixir.Codex.AppServer do
           {:error, reason}
       end
     end
+  end
+
+  defp local_env(workspace, codex_home, extra_env) do
+    workspace
+    |> AgentEnv.gradle_env()
+    |> Map.put("CODEX_HOME", codex_home.home_path)
+    |> Map.merge(extra_env)
   end
 
   defp bash_executable do

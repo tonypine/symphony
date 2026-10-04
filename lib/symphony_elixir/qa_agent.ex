@@ -19,9 +19,12 @@ defmodule SymphonyElixir.QaAgent do
   worktree at the PR head (a server that fails its health check makes the pass
   `blocked`), and its session alone gets a `browser` MCP server: headless Playwright
   limited to the dev server's localhost origins, or the playbook's `browser_mcp`.
-  Processes the agent
-  left running under the worktree, even detached ones, are stopped before the
-  worktree is removed (see `SymphonyElixir.LeftoverProcesses`).
+  Each pass also gets a private temp folder of its own (see `tmp_dirs/2`), which a Claude
+  session gets as `CLAUDE_CODE_TMPDIR` and a Codex session as `TMPDIR`, so the agent's
+  `$TMPDIR` is in it rather than in the `/tmp/claude-<uid>` every Claude session shares or
+  Symphony's own temp folder. Processes the agent left running under the
+  worktree or that folder, even detached ones, are stopped before both are removed (see
+  `SymphonyElixir.LeftoverProcesses`).
   """
 
   require Logger
@@ -35,6 +38,7 @@ defmodule SymphonyElixir.QaAgent do
 
   @evidence_dir "qa-evidence"
   @worktree_dir ".qa"
+  @tmp_dir_prefix "symphony-qa-"
   @token_keys [:uncached_input, :cached_input, :cache_creation_input, :output, :total]
   @step_statuses ["pass", "fail", "blocked", "skipped"]
   @max_verdict_follow_ups 1
@@ -90,10 +94,13 @@ defmodule SymphonyElixir.QaAgent do
       _job ->
         case create_worktree(job, settings, git) do
           {:ok, worktree} ->
+            tmp_dirs = tmp_dirs(worktree, Keyword.get_lazy(opts, :tmp_bases, &default_tmp_bases/0))
+
             try do
-              run_in_worktree(job, worktree, settings, opts)
+              run_with_tmp_dir(job, worktree, tmp_dirs, settings, opts)
             after
-              stop_leftover_processes(job, worktree, opts)
+              stop_leftover_processes(job, [worktree | tmp_dirs], opts)
+              Enum.each(tmp_dirs, &File.rm_rf/1)
               remove_worktree(job.workspace_path, worktree, git)
             end
 
@@ -113,6 +120,21 @@ defmodule SymphonyElixir.QaAgent do
       "#{Workspace.safe_identifier(identifier || "issue")}-#{String.slice(sha, 0, 12)}"
     ])
   end
+
+  @doc """
+  The temp folders a QA pass in `worktree` may use, one under each of `bases`: the pass takes
+  the first one it can create. Named after a short hash of the worktree, so the path stays
+  short (Claude Code keeps sockets under it) and `SymphonyElixir.QaRunner` can name the
+  folders of a pass in flight. `/tmp` comes first; a sandboxed Symphony that can't write there
+  falls back to its own temp folder.
+  """
+  @spec tmp_dirs(Path.t(), [Path.t()]) :: [Path.t()]
+  def tmp_dirs(worktree, bases \\ default_tmp_bases()) do
+    id = :sha256 |> :crypto.hash(worktree) |> binary_part(0, 6) |> Base.encode16(case: :lower)
+    Enum.map(bases, &Path.join(&1, @tmp_dir_prefix <> id))
+  end
+
+  defp default_tmp_bases, do: Enum.uniq(["/tmp", System.tmp_dir!()])
 
   @doc "The agent settings for a QA session: `auto_review` runtime, command, turns and timeout."
   @spec qa_settings(Schema.t()) :: Schema.t()
@@ -150,8 +172,8 @@ defmodule SymphonyElixir.QaAgent do
     Stop every process you start before you answer. Where you can, run servers and other
     long-running commands in the foreground with a time limit (the command's own timeout option, or
     `timeout` where it is installed) instead of `nohup`, `setsid` or `&`: the sandbox may not let you
-    stop a detached process later. Symphony stops anything still running from this worktree when the
-    pass ends.
+    stop a detached process later. Symphony stops anything still running from this worktree or
+    `$TMPDIR` when the pass ends.
 
     Issue:
     Identifier: #{issue.identifier}
@@ -375,6 +397,22 @@ defmodule SymphonyElixir.QaAgent do
     for %{status: "fail"} = step <- steps, do: String.trim("#{step.name}: #{step.details}")
   end
 
+  defp run_with_tmp_dir(job, worktree, tmp_dirs, settings, opts) do
+    case create_tmp_dir(tmp_dirs) do
+      {:ok, tmp_dir} -> run_in_worktree(job, worktree, settings, Keyword.put(opts, :qa_tmp_dir, tmp_dir))
+      :error -> {:error, {:qa_tmp_dir_failed, tmp_dirs}, empty_tokens()}
+    end
+  end
+
+  # Private, as Claude Code requires of `CLAUDE_CODE_TMPDIR`. A folder left by an
+  # interrupted pass is removed first, so it never carries over.
+  defp create_tmp_dir(tmp_dirs) do
+    Enum.find_value(tmp_dirs, :error, fn tmp_dir ->
+      File.rm_rf(tmp_dir)
+      if File.mkdir(tmp_dir) == :ok and File.chmod(tmp_dir, 0o700) == :ok, do: {:ok, tmp_dir}
+    end)
+  end
+
   defp run_in_worktree(job, worktree, settings, opts) do
     File.mkdir_p!(Path.join(worktree, @evidence_dir))
     qa_settings = qa_settings(settings)
@@ -421,7 +459,7 @@ defmodule SymphonyElixir.QaAgent do
           try do
             run_dev_server(job, server_worktree, settings, opts, fun)
           after
-            stop_leftover_processes(job, server_worktree, opts)
+            stop_leftover_processes(job, [server_worktree], opts)
             remove_worktree(job.workspace_path, server_worktree, git)
           end
 
@@ -560,6 +598,11 @@ defmodule SymphonyElixir.QaAgent do
   end
 
   defp run_session(agent_module, job, worktree, qa_settings, prompt, tracker, opts) do
+    tmp_dir = Keyword.fetch!(opts, :qa_tmp_dir)
+    # The agent's `$TMPDIR` is under the temp folder, so its sandbox writes there whatever
+    # the runtime's own default writable set is.
+    qa_settings = update_in(qa_settings.workspace.sandbox.allow_write_paths, &(&1 ++ [tmp_dir]))
+
     session_opts = [
       worker_host: nil,
       settings: qa_settings,
@@ -568,7 +611,8 @@ defmodule SymphonyElixir.QaAgent do
       run_id: Map.get(job, :run_id),
       run_profile: Map.get_lazy(job, :run_profile, fn -> SymphonyElixir.Config.qa_profile(qa_settings) end),
       tool_scope: :qa,
-      qa_driver: Keyword.get(opts, :qa_driver)
+      qa_driver: Keyword.get(opts, :qa_driver),
+      extra_env: tmp_dir_env(qa_settings.agent.kind, tmp_dir)
     ]
 
     case agent_module.start_session(worktree, session_opts) do
@@ -580,6 +624,11 @@ defmodule SymphonyElixir.QaAgent do
         {:error, {:qa_agent_failed, reason}}
     end
   end
+
+  # Claude Code puts the `$TMPDIR` of the commands it runs under `CLAUDE_CODE_TMPDIR`; Codex
+  # passes its own `TMPDIR` on to them.
+  defp tmp_dir_env("claude", tmp_dir), do: %{"CLAUDE_CODE_TMPDIR" => tmp_dir}
+  defp tmp_dir_env(_kind, tmp_dir), do: %{"TMPDIR" => tmp_dir}
 
   defp run_turn(agent_module, session, prompt, issue, turn_opts, tracker) do
     run_turns(agent_module, session, prompt, issue, turn_opts, tracker, 0)
@@ -780,9 +829,9 @@ defmodule SymphonyElixir.QaAgent do
     end
   end
 
-  defp stop_leftover_processes(job, worktree, opts) do
+  defp stop_leftover_processes(job, roots, opts) do
     context = "issue_id=#{job.issue.id} issue_identifier=#{job.issue.identifier}"
-    LeftoverProcesses.stop_under([worktree], Keyword.put(Keyword.get(opts, :leftover_processes, []), :log_context, context))
+    LeftoverProcesses.stop_under(roots, Keyword.put(Keyword.get(opts, :leftover_processes, []), :log_context, context))
   end
 
   defp ensure_commit(workspace, sha, git) do
