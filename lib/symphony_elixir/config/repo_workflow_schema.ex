@@ -12,7 +12,7 @@ defmodule SymphonyElixir.Config.RepoWorkflowSchema do
   require Schema.Verification
 
   @primary_key false
-  @allowed_keys ~w(hooks prompts verification validation)
+  @allowed_keys ~w(hooks prompts verification validation auto_review)
 
   embedded_schema do
     field(:configured_paths, :map, virtual: true, default: %{})
@@ -20,6 +20,7 @@ defmodule SymphonyElixir.Config.RepoWorkflowSchema do
     embeds_one(:verification, Schema.Verification, on_replace: :update, defaults_to_struct: true)
     field(:prompts, :map, default: %{})
     field(:validation, {:array, :string}, default: [])
+    field(:auto_review, :map, default: %{})
   end
 
   @type t :: %__MODULE__{}
@@ -30,7 +31,8 @@ defmodule SymphonyElixir.Config.RepoWorkflowSchema do
     configured_paths = configured_paths(config)
 
     with :ok <- reject_removed_keys(config),
-         :ok <- reject_unknown_keys(config) do
+         :ok <- reject_unknown_keys(config),
+         :ok <- validate_auto_review(Map.get(config, "auto_review")) do
       config
       |> drop_nil_values()
       |> changeset()
@@ -51,11 +53,12 @@ defmodule SymphonyElixir.Config.RepoWorkflowSchema do
     |> maybe_put("prompts", workflow.prompts)
     |> maybe_put("verification", configured_map(configured_paths, "verification", &verification_to_map(workflow.verification, &1)))
     |> maybe_put("validation", workflow.validation)
+    |> maybe_put("auto_review", workflow.auto_review)
   end
 
   defp changeset(attrs) do
     %__MODULE__{}
-    |> cast(attrs, [:prompts, :validation], empty_values: [])
+    |> cast(attrs, [:prompts, :validation, :auto_review], empty_values: [])
     |> cast_embed(:hooks, with: &Schema.Hooks.changeset/2)
     |> cast_embed(:verification, with: &Schema.Verification.changeset/2)
     |> validate_prompts()
@@ -91,6 +94,33 @@ defmodule SymphonyElixir.Config.RepoWorkflowSchema do
         {:error, {:invalid_repo_workflow_config, "WORKFLOW.md contains operator-level key `#{key}`; move operator-owned configuration to symphony.yml"}}
     end
   end
+
+  # A repository sets only its own QA playbook settings (build command, paths); the rest of
+  # `auto_review` is the operator's.
+  defp validate_auto_review(nil), do: :ok
+
+  defp validate_auto_review(auto_review) when is_map(auto_review) do
+    case Map.keys(auto_review) -- ["playbooks"] do
+      [] ->
+        validate_playbooks(Map.get(auto_review, "playbooks"))
+
+      [key | _rest] ->
+        {:error, {:invalid_repo_workflow_config, "WORKFLOW.md contains operator-level key `auto_review.#{key}`; only `auto_review.playbooks` belongs in WORKFLOW.md, move the rest to symphony.yml"}}
+    end
+  end
+
+  defp validate_auto_review(_auto_review), do: {:error, {:invalid_repo_workflow_config, "auto_review must be a map"}}
+
+  defp validate_playbooks(nil), do: :ok
+
+  defp validate_playbooks(playbooks) when is_map(playbooks) do
+    case Enum.find(playbooks, fn {_kind, playbook} -> not (is_nil(playbook) or is_map(playbook)) end) do
+      nil -> :ok
+      {kind, _playbook} -> {:error, {:invalid_repo_workflow_config, "auto_review.playbooks.#{kind} must be a map"}}
+    end
+  end
+
+  defp validate_playbooks(_playbooks), do: {:error, {:invalid_repo_workflow_config, "auto_review.playbooks must be a map of playbook kinds"}}
 
   defp reject_removed_keys(config) do
     if Map.has_key?(config, "self_review") do

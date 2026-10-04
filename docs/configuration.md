@@ -55,7 +55,8 @@ agent:
 pollers, gates, dashboard, notifications, and worker hosts.
 
 Each repository listed in `repositories` has a `WORKFLOW.md`. That file owns repo-local prompt text
-and optional front-matter keys for `hooks`, `prompts`, and `verification` overrides.
+and optional front-matter keys for `hooks`, `prompts`, `verification`, `validation`, and
+`auto_review.playbooks` overrides.
 
 Relative repository workflow paths resolve from the directory containing `symphony.yml`.
 
@@ -859,6 +860,8 @@ auto_review:
   skip_globs: []
   playbooks: {}
   # worker_host: qa@qa-vm.local   # optional: run macos_app QA on another macOS host
+  # android:                      # optional: the emulator for Android QA
+  #   avd: Pixel_3a_API_34
 ```
 
 `model` and `effort` (optional) set the QA agent's `--model` / `--effort` with the Claude runtime,
@@ -988,6 +991,59 @@ auto_review:
 ```
 
 Set `enabled: false` on a kind to turn it off.
+
+A repository's `WORKFLOW.md` can set `auto_review.playbooks` too, for settings that differ per
+repository, such as a build command or trigger paths. It is the only `auto_review` key allowed
+there; any other one fails the repository's workflow with an error pointing at `symphony.yml`.
+For that repository's QA passes (and parent walkthroughs), each kind is merged over
+`symphony.yml`'s `auto_review.playbooks` key by key, and the repository's value wins:
+
+```yaml
+# symphony.yml
+auto_review:
+  playbooks:
+    macos_app:
+      build: make -C macos app
+      app: macos/build/App.app
+```
+
+```md
+---
+# the repository's WORKFLOW.md
+auto_review:
+  playbooks:
+    macos_app:
+      paths: ["macos/Sources/**"]
+---
+```
+
+That repository's `macos_app` playbook builds with `make -C macos app` and triggers on
+`macos/Sources/**`; other repositories keep the default paths. A kind only one repository sets
+(`api` above, say) exists only for that repository.
+
+#### Android settings
+
+`auto_review.android` holds the host-side settings for Android QA. They are host settings, so they
+live only in `symphony.yml`; the build command and APK path go in a repository's playbook.
+
+```yaml
+auto_review:
+  android:
+    avd: Pixel_3a_API_34          # the emulator to boot; required for Android QA
+    sdk_root: ~/Library/Android/sdk
+    boot_timeout_ms: 180000
+    idle_timeout_ms: 600000
+```
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `avd` | none | Name of the Android Virtual Device to boot (letters, digits, `.`, `_`, `-`). |
+| `sdk_root` | `$ANDROID_HOME`, then `$ANDROID_SDK_ROOT`, then `~/Library/Android/sdk` | Android SDK directory; `~` is expanded. |
+| `boot_timeout_ms` | `180000` (3 minutes) | How long the emulator may take to boot. |
+| `idle_timeout_ms` | `600000` (10 minutes) | How long an idle emulator stays up. |
+
+A non-string `avd` or `sdk_root`, or a timeout that is not a positive integer, fails `symphony
+check`. Nothing uses these settings yet; the Android QA tools come in a later release.
 
 #### Web app QA
 
@@ -1446,10 +1502,21 @@ verification:
   dev_server:
     start_cmd: "pnpm dev --port $SYMPHONY_VERIFICATION_PORT"
     health_check_url: "http://localhost:${SYMPHONY_VERIFICATION_PORT}/healthz"
+validation:
+  - mix test
+auto_review:
+  playbooks:
+    macos_app:
+      paths: ["macos/Sources/**"]
 ---
 
 You are working on {{ issue.identifier }}.
 ```
+
+The front matter accepts only `hooks`, `prompts`, `verification`, `validation` and
+`auto_review.playbooks`; any other key fails the repository's workflow. `hooks`, `verification`
+and `auto_review.playbooks` are merged over `symphony.yml` key by key, with the repository's value
+winning (see [`auto_review`](#auto_review) for playbooks).
 
 The body is the repo-specific issue prompt template. `prompts.pr` is used for explicit PR runs.
 Before either rendered template, Symphony injects a managed runtime context with workspace,
