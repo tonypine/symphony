@@ -30,6 +30,12 @@ defmodule SymphonyElixir.PrReviewPoller do
   # PR cannot grow the record without bound.
   @max_replied_comment_ids 500
   @status_table :pr_review_poller_status
+  # Integrations that comment on every PR without reviewing it, skipped on top of
+  # `ignored_reviewers`. The Linear GitHub integration posts its linkback as
+  # `linear-code` (`linear[bot]` over the REST API) and opens it with this marker.
+  @integration_authors ["linear-code", "linear-code[bot]", "linear[bot]"]
+  @linear_linkback_marker "<!-- linear-linkback -->"
+  @trigger_comment_line_limit 120
 
   defmodule State do
     @moduledoc false
@@ -116,6 +122,33 @@ defmodule SymphonyElixir.PrReviewPoller do
     now = Keyword.get(opts, :now, DateTime.utc_now())
 
     pending_reviewer_comments(issue_id, run_store, repo_keys, now)
+  end
+
+  @doc """
+  Log fields naming the review comment that starts a `review_feedback` run: the latest
+  pending comment's author, id and first line, and how many comments are pending.
+  """
+  @spec trigger_comment_log_fields(String.t(), keyword()) :: String.t()
+  def trigger_comment_log_fields(issue_id, opts \\ []) do
+    comments = pending_reviewer_comments(issue_id, opts)
+
+    case List.last(comments) do
+      nil ->
+        "trigger_comment=none"
+
+      comment ->
+        "trigger_comment_id=#{Map.get(comment, :id)} trigger_comment_author=#{Map.get(comment, :author) || "unknown"} " <>
+          "trigger_comment=#{inspect(comment_first_line(comment))} pending_comments=#{length(comments)}"
+    end
+  end
+
+  defp comment_first_line(comment) do
+    comment
+    |> Map.get(:body, "")
+    |> String.split("\n")
+    |> Enum.map(&String.trim/1)
+    |> Enum.find("", &(&1 != ""))
+    |> String.slice(0, @trigger_comment_line_limit)
   end
 
   defp pending_reviewer_comments(issue_id, run_store, repo_keys, now) when is_binary(issue_id) do
@@ -1771,11 +1804,13 @@ defmodule SymphonyElixir.PrReviewPoller do
   # current `gh` user are the account Symphony posts with, which on a solo setup
   # is also the human reviewer: their comments count as reviewer feedback unless
   # Symphony posted them (marked) or they carry no text, such as the empty review
-  # GitHub wraps around a reply.
+  # GitHub wraps around a reply. A Linear linkback is never review feedback,
+  # whoever posted it.
   defp ignored_comment?(comment, %{ignored: ignored, self: self_users}) do
     author = normalize_user(Map.get(comment, :author))
 
     cond do
+      linear_linkback?(comment) -> true
       author == nil -> false
       author in ignored -> true
       author in self_users -> not operator_feedback?(comment)
@@ -1789,8 +1824,14 @@ defmodule SymphonyElixir.PrReviewPoller do
     is_binary(body) and String.trim(body) != "" and not CommentMarker.symphony_authored?(body)
   end
 
+  defp linear_linkback?(comment) do
+    body = Map.get(comment, :body)
+
+    is_binary(body) and body |> String.trim_leading() |> String.starts_with?(@linear_linkback_marker)
+  end
+
   defp ignored_review_users(settings, activity, current_gh_user) do
-    ignored = settings |> configured_ignored_users() |> normalize_users()
+    ignored = normalize_users(configured_ignored_users(settings) ++ @integration_authors)
     self_users = normalize_users([Map.get(activity || %{}, :pr_author), current_gh_user])
 
     %{ignored: ignored, self: self_users -- ignored}

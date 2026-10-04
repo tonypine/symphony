@@ -393,8 +393,10 @@ agent:
   config: an edit applies to the next dispatch without a restart. Every continuation turn of a run
   keeps its profile. A CI fix or review feedback re-activation is a new run with its own kind.
 - The run history record keeps `run_kind`, `model` and `effort`, and the dispatch log line shows
-  `run_kind=… model=… effort=…` (`default` when nothing is added). The pre-push reviewer runs
-  inside the run it reviews, so that run's record also keeps `reviewer_profile` next to
+  `run_kind=… model=… effort=…` (`default` when nothing is added). A `review_feedback` dispatch
+  also names the latest pending PR comment it answers: `trigger_comment_id=…
+  trigger_comment_author=… trigger_comment="<first line>" pending_comments=<n>`. The pre-push
+  reviewer runs inside the run it reviews, so that run's record also keeps `reviewer_profile` next to
   `reviewer_tokens`. A QA run's record keeps its own `run_kind: qa`, `model` and `effort`.
 - The web dashboard and the terminal status dashboard show the kind, model and effort of each
   running run (and its reviewer's, when the pre-push review is on) and of the recent runs.
@@ -686,8 +688,10 @@ pull_requests:
 - `poll_interval_ms` is shared by PR review polling and CI polling when checks are enabled.
 - PR polling detects GitHub merge-conflict signals, deduplicates by head/base identity, and injects
   conflict-resolution context into the next prompt. The agent still owns the merge resolution.
-- `review_comments.ignored_reviewers` skips those accounts entirely. Comments from the PR author
-  and the current `gh` user still count as review feedback, so your own review comments on an
+- `review_comments.ignored_reviewers` skips those accounts entirely. The Linear GitHub
+  integration's linkback comment is always skipped: comments by `linear-code`, `linear-code[bot]`
+  or `linear[bot]`, and any comment whose body starts with `<!-- linear-linkback -->`. Comments
+  from the PR author and the current `gh` user still count as review feedback, so your own review comments on an
   agent PR send the issue back to work on the same PR. Symphony ends every PR comment it posts
   with a hidden `<!-- symphony:agent -->` marker and skips those.
 - `checks.retry_failed_once` retries one likely-flaky failure before escalating.
