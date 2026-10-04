@@ -553,6 +553,36 @@ defmodule SymphonyElixir.ReviewAgentTest do
     end
   end
 
+  test "evaluate prompt reviews code quality and bugs, not the ticket's acceptance criteria or scope" do
+    test_root = unique_tmp("symphony-elixir-review-agent-rubric")
+
+    try do
+      repo = git_repo_with_change!(test_root)
+      put_sequence_responses!([~s({"verdict":"approve","comments":[]})])
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        review_agent: %{enabled: true, kind: "codex", command: "codex app-server"},
+        prompt: "Executor workflow: check every acceptance criterion and move the issue to In Review."
+      )
+
+      assert {:ok, %{verdict: :approve}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+
+      assert_receive {:review_agent_sequence_call, 1, prompt, _opts}
+      assert prompt =~ "Correctness: bugs in the changed code"
+      assert prompt =~ "Tests: each new branch, error path and edge case the diff adds has a test"
+      assert prompt =~ "Error handling:"
+      assert prompt =~ "The repo's code rules: read the repo's agent instructions (`AGENTS.md`, `CLAUDE.md`)"
+      assert prompt =~ "Narrow scope is a code rule"
+      assert prompt =~ "Do not judge whether the diff meets the ticket's acceptance criteria or matches the ticket's scope"
+      refute prompt =~ "Workflow review criteria"
+      refute prompt =~ "Executor workflow"
+    after
+      clear_sequence_responses!()
+      File.rm_rf(test_root)
+    end
+  end
+
   test "evaluate gives the reviewer the executor run's temp folder as its $TMPDIR" do
     test_root = unique_tmp("symphony-elixir-review-agent-tmp-dir")
 
