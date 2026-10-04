@@ -2823,6 +2823,12 @@ defmodule SymphonyElixir.Orchestrator do
     waiting = Map.get(previous_waiting, issue.id, %{})
 
     cond do
+      # Its PR showed up after its retry started waiting; the move takes no slot.
+      Map.has_key?(previous_waiting, issue.id) and post_pr_quiet_active_issue?(issue, state) ->
+        metadata = Map.take(waiting, [:repo_key, :worker_host])
+        {:noreply, state} = handle_post_pr_quiet_active_issue(state, issue, issue.id, Map.get(waiting, :attempt), metadata)
+        {state, finish_waiting?}
+
       not dispatch_eligible?(issue, state, active_states, terminal_states) ->
         {state, finish_waiting?}
 
@@ -7186,11 +7192,14 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  # The run that opens the PR was dispatched without one, so the PR attached to the refetched
+  # issue counts too.
   defp post_pr_quiet_active_issue?(%Issue{id: issue_id} = issue, %State{} = state)
        when is_binary(issue_id) do
-    completed_metadata = Map.get(state.completed_run_metadata, issue_id, %{})
+    completed_metadata = Map.get(state.completed_run_metadata, issue_id)
 
-    completed_run_has_pr?(completed_metadata) and
+    is_map(completed_metadata) and
+      (completed_run_has_pr?(completed_metadata) or is_binary(URLUtils.pull_request_url(issue))) and
       active_issue_state?(issue.state) and
       !rework_state?(issue.state) and
       !merging_state?(issue.state) and
@@ -7202,8 +7211,6 @@ defmodule SymphonyElixir.Orchestrator do
   defp completed_run_has_pr?(completed_metadata) when is_map(completed_metadata) do
     is_binary(URLUtils.pull_request_url(completed_metadata))
   end
-
-  defp completed_run_has_pr?(_completed_metadata), do: false
 
   defp pending_rework_signal?(%Issue{} = issue, completed_metadata) do
     issue_updated_after_last_run?(issue, completed_metadata) or
