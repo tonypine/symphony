@@ -341,6 +341,26 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
     end
   end
 
+  test "fetch_origin runs the fetch once more after cannot lock ref" do
+    workspace = tmp_workspace!("github-agent-fetch-origin-lock")
+    lock_error = "error: cannot lock ref 'refs/remotes/origin/main': is at 784f59f4 but expected a2d3de89\n"
+    {:ok, fetches} = Agent.start_link(fn -> [{lock_error, 1}, {"From github.com:acme/symphony\n", 0}] end)
+
+    try do
+      git_runner = fn
+        ["remote", "get-url", "origin"], _opts -> {"git@github.com:acme/symphony.git\n", 0}
+        ["fetch", "origin"], _opts -> Agent.get_and_update(fetches, fn [result | rest] -> {result, rest} end)
+      end
+
+      assert {:ok, %{"remote" => "origin", "output" => "From github.com:acme/symphony"}} =
+               GitHub.fetch_origin(scoped_context(workspace), git_runner: git_runner)
+
+      assert Agent.get(fetches, & &1) == []
+    after
+      File.rm_rf(workspace)
+    end
+  end
+
   test "fetch_origin surfaces git runner errors" do
     workspace = tmp_workspace!("github-agent-fetch-origin-runner-error")
 

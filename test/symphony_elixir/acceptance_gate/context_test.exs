@@ -323,6 +323,32 @@ defmodule SymphonyElixir.AcceptanceGate.ContextTest do
     assert context.numstat == [%{path: "priv/big.txt", additions: 20_000, deletions: 0}]
   end
 
+  test "runs the base and commit fetches once more after cannot lock ref", ctx do
+    fixture = fixture!(ctx.root)
+    gated = branch!(fixture.author, "pr-1", "main", %{"lib/new.ex" => "# new\n"})
+    ctx = Map.merge(ctx, fixture)
+    {:ok, failed} = Agent.start_link(fn -> MapSet.new() end)
+    test_pid = self()
+
+    # Each fetch fails once, as when another fetch of the repo holds the ref lock.
+    git = fn args, cwd ->
+      first? = "fetch" in args and Agent.get_and_update(failed, &{not MapSet.member?(&1, args), MapSet.put(&1, args)})
+      send(test_pid, {:git, args, first?})
+
+      if first?,
+        do: {"error: cannot lock ref 'refs/remotes/origin/main': is at 784f59f4 but expected a2d3de89\n", 1},
+        else: Workspace.safe_git(["-C", cwd | args], stderr_to_stdout: true)
+    end
+
+    assert {:ok, context} = build(ctx, gated, git: git)
+    assert context.base_branch == "main"
+
+    for args <- [["fetch", "--quiet", "origin", "+refs/heads/main:refs/remotes/origin/main"], ["fetch", "--quiet", "origin", gated]] do
+      assert_received {:git, ^args, true}
+      assert_received {:git, ^args, false}
+    end
+  end
+
   test "reports a missing workspace, base branch or PR head, and a failed merge", ctx do
     fixture = fixture!(ctx.root)
     gated = branch!(fixture.author, "pr-1", "main", %{"lib/new.ex" => "# new\n"})
