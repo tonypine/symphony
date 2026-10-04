@@ -793,11 +793,53 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
           workspace_sandbox: %{allow_write_paths: ["/private/tmp/symphony-mcp", "/opt/cache"]}
         )
 
+        Application.put_env(:symphony_elixir, :claude_item_replacement_opts, os_type: {:unix, :linux})
+        on_exit(fn -> Application.delete_env(:symphony_elixir, :claude_item_replacement_opts) end)
+
         assert {:ok, session} = AppServer.start_session(workspace)
         {:ok, contents} = Jason.decode(File.read!(session.settings_path))
 
         assert get_in(contents, ["sandbox", "filesystem", "allowWrite"]) ==
                  ["/private/tmp/symphony-mcp", "/opt/cache" | SymphonyElixir.AgentCaches.write_paths()]
+
+        assert :ok = AppServer.stop_session(session)
+      after
+        File.rm_rf(test_root)
+      end
+    end
+
+    test "lets a local macOS session write Foundation's item replacement directory" do
+      test_root =
+        Path.join(
+          System.tmp_dir!(),
+          "symphony-elixir-claude-code-item-replacement-#{System.unique_integer([:positive])}"
+        )
+
+      try do
+        workspace_root = Path.join(test_root, "workspaces")
+        workspace = Path.join(workspace_root, "TEST-ITEM-REPLACEMENT")
+        user_temp_dir = Path.join(test_root, "T")
+        getconf = Path.join(test_root, "getconf")
+        File.mkdir_p!(workspace)
+        File.write!(getconf, "#!/bin/sh\necho '#{user_temp_dir}/'\n")
+        File.chmod!(getconf, 0o755)
+
+        write_workflow_file!(Workflow.workflow_file_path(),
+          workspace_root: workspace_root,
+          agent_kind: "claude",
+          workspace_sandbox: %{allow_write_paths: ["/opt/cache"]}
+        )
+
+        item_replacement_opts = [os_type: {:unix, :darwin}, getconf: getconf]
+        Application.put_env(:symphony_elixir, :claude_item_replacement_opts, item_replacement_opts)
+        on_exit(fn -> Application.delete_env(:symphony_elixir, :claude_item_replacement_opts) end)
+
+        assert {:ok, session} = AppServer.start_session(workspace)
+        {:ok, contents} = Jason.decode(File.read!(session.settings_path))
+
+        allow_write = get_in(contents, ["sandbox", "filesystem", "allowWrite"])
+        assert ["/opt/cache", item_replacement_dir | _canonical] = allow_write
+        assert item_replacement_dir == Path.join(user_temp_dir, "TemporaryItems")
 
         assert :ok = AppServer.stop_session(session)
       after
