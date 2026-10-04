@@ -390,7 +390,14 @@ defmodule SymphonyElixir.QaAgentTest do
       assert {:ok, %{findings: ["exit status is 0"], steps: []} = result} = QaAgent.parse_response(with_findings)
       assert QaAgent.failure_findings(result) == ["exit status is 0"]
 
-      assert {:ok, %{verdict: :blocked, reason: "mix is missing"}} = QaAgent.parse_response(~s({"verdict":"blocked","reason":" mix is missing "}))
+      assert {:ok, %{verdict: :blocked, reason: "mix is missing"} = blocked} = QaAgent.parse_response(~s({"verdict":"blocked","reason":" mix is missing "}))
+      refute Map.has_key?(blocked, :needs_person)
+
+      assert {:ok, %{verdict: :blocked, reason: "no API key", needs_person: true}} =
+               QaAgent.parse_response(~s({"verdict":"blocked","reason":"no API key","needs_person":true}))
+
+      assert {:ok, blocked} = QaAgent.parse_response(~s({"verdict":"blocked","reason":"no simulator","needs_person":"yes"}))
+      refute Map.has_key?(blocked, :needs_person)
     end
 
     test "rejects answers that do not follow the contract" do
@@ -424,6 +431,8 @@ defmodule SymphonyElixir.QaAgentTest do
       assert prompt =~ "### Playbook: cli"
       assert prompt =~ @sha
       assert prompt =~ ~s("verdict": "pass" | "fail" | "blocked")
+      assert prompt =~ ~s("needs_person": true | false)
+      assert prompt =~ "Set `needs_person` to true when only a person can do what is left"
       assert prompt =~ "Ending your turn ends the session"
       assert prompt =~ ~r/Do not leave\s+work running in the background/
 

@@ -21,6 +21,7 @@ defmodule SymphonyElixir.Orchestrator do
     EpicLanes,
     ForcedQueue,
     ForcedStatus,
+    HumanReview,
     Notifications,
     PlanComments,
     PrReviewPoller,
@@ -3382,7 +3383,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp note_forced_human_gate(entry, %Issue{} = issue, now) do
-    in_review? = normalize_issue_state(entry.state || "") == "in review"
+    in_review? = in_review_state?(entry.state)
     notified? = not is_nil(Map.get(entry, :human_gate_notified_at))
 
     cond do
@@ -3759,6 +3760,7 @@ defmodule SymphonyElixir.Orchestrator do
           qa: forced_qa_status(issue_id, context.qa),
           state: issue.state,
           auto_review_state: AutoReview.state(settings),
+          human_review_state: HumanReview.state(settings),
           kind: AgentRunner.run_profile(issue, Config.settings_for_repo!(repo_key), repo_key: repo_key).kind,
           merging_ci_wait?: Map.has_key?(state.merging_ci_waits, issue_id),
           auto_merge?: merging_state?(issue.state) and MapSet.member?(context.auto_merge_ids, issue_id),
@@ -4605,9 +4607,10 @@ defmodule SymphonyElixir.Orchestrator do
         teams = AutoReview.configured_teams(settings, repos)
         AutoReview.check_tracker_state(settings, teams)
         SubIssueWait.check_tracker_state(settings, teams)
+        HumanReview.check_tracker_state(settings, teams)
 
       {:error, reason} ->
-        Logger.warning("Skipping the Auto Review and waiting-on-sub-issues state checks; failed to load repositories: #{inspect(reason)}")
+        Logger.warning("Skipping the Auto Review, waiting-on-sub-issues and human review state checks; failed to load repositories: #{inspect(reason)}")
     end
   end
 
@@ -5142,7 +5145,9 @@ defmodule SymphonyElixir.Orchestrator do
     Notifications.emit_issue_event(event, issue, attrs)
   end
 
-  defp in_review_state?(state_name) when is_binary(state_name), do: normalize_issue_state(state_name) == "in review"
+  defp in_review_state?(state_name) when is_binary(state_name),
+    do: normalize_issue_state(state_name) == "in review" or HumanReview.in_state?(state_name)
+
   defp in_review_state?(_state_name), do: false
 
   defp done_state?(state_name) when is_binary(state_name), do: normalize_issue_state(state_name) == "done"

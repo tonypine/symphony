@@ -18,6 +18,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.HumanActions
   alias SymphonyElixir.HumanActions.Collector, as: HumanActionsCollector
   alias SymphonyElixir.HumanActions.Request
+  alias SymphonyElixir.HumanReview
   alias SymphonyElixir.Linear.{Client, Issue, TransientRetry}
   alias SymphonyElixir.PathSafety
   alias SymphonyElixir.PromptSafety
@@ -147,6 +148,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   query SymphonyAgentIssueTeamStates($id: String!) {
     issue(id: $id) {
       title
+      description
       labels {
         nodes {
           name
@@ -501,7 +503,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @spec update_state(context(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def update_state(context, state_name_or_id, opts) when is_binary(state_name_or_id) do
     with {:ok, issue_id} <- current_issue_id(context),
-         {:ok, state_id} <- resolve_state_id(issue_id, state_name_or_id, opts),
+         {:ok, state_id} <- resolve_state_id(issue_id, state_name_or_id, CommentRegistry.human_action_requested?(Map.get(context, :comment_registry)), opts),
          {:ok, response} <- graphql(@update_issue_state_mutation, %{id: issue_id, stateId: state_id}, opts) do
       check_mutation_success(response, "issueUpdate")
     end
@@ -982,7 +984,13 @@ defmodule SymphonyElixir.AgentTools.Linear do
          :ok <- CommentRegistry.reserve_human_action(registry, @human_action_cap_per_run) do
       case post_human_action(issue_id, request, settings, opts) do
         {:ok, %{"requested" => true}} = result ->
+          CommentRegistry.record_human_action_request(registry)
           Keyword.get(opts, :refresh_human_actions, &HumanActions.refresh/0).()
+          result
+
+        {:ok, %{"reason" => "already_open"}} = result ->
+          CommentRegistry.release_human_action(registry)
+          CommentRegistry.record_human_action_request(registry)
           result
 
         other ->
@@ -1219,7 +1227,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
     |> Map.reject(fn {_key, value} -> is_nil(value) end)
   end
 
-  defp resolve_state_id(issue_id, state_name_or_id, opts) do
+  defp resolve_state_id(issue_id, state_name_or_id, human_action_requested?, opts) do
     normalized = String.trim(state_name_or_id)
 
     if normalized == "" do
@@ -1227,9 +1235,10 @@ defmodule SymphonyElixir.AgentTools.Linear do
     else
       settings = Keyword.get_lazy(opts, :settings, &Config.settings!/0)
 
-      with {:ok, state, pr_less?} <- lookup_team_state(issue_id, normalized, opts),
+      with {:ok, state, issue, states} <- lookup_team_state(issue_id, normalized, opts),
+           state = human_review_redirect(state, issue, states, human_action_requested?, settings),
            {:ok, state_id} <- refuse_human_only_state(state),
-           {:ok, state_id} <- refuse_auto_review_handoff_state(state, state_id, pr_less?, settings) do
+           {:ok, state_id} <- refuse_auto_review_handoff_state(state, state_id, pr_less_issue?(issue), settings) do
         refuse_waiting_on_sub_issues_state(state, state_id, settings)
       end
     end
@@ -1247,13 +1256,45 @@ defmodule SymphonyElixir.AgentTools.Linear do
          {:ok, states} <- fetch_path(body, ["data", "issue", "team", "states", "nodes"], []) do
       case Enum.find(states, matches?) do
         %{"id" => _} = state ->
-          {:ok, state, pr_less_issue?(get_in(body, ["data", "issue"]))}
+          {:ok, state, get_in(body, ["data", "issue"]), states}
 
         _ ->
           available = states |> Enum.map(& &1["name"]) |> Enum.reject(&is_nil/1)
           {:error, {:state_not_found, available}}
       end
     end
+  end
+
+  # An issue only a person can move on goes to the Human Review state instead of `In Review`, apart
+  # from the supervisor's queue: a `breakdown` plan whose ticket says a person reviews it, and the
+  # issue of a run that asked a person for something (which also goes there instead of `Backlog`).
+  defp human_review_redirect(state, issue, states, human_action_requested?, settings) do
+    with true <- HumanReview.enabled?(settings),
+         true <- needs_person?(state, issue, human_action_requested?, settings),
+         %{"id" => _} = human_review <- Enum.find(states, &state_name_matches?(&1, HumanReview.state(settings))) do
+      human_review
+    else
+      _keep -> state
+    end
+  end
+
+  defp needs_person?(state, issue, human_action_requested?, settings) do
+    cond do
+      state_name_matches?(state, @backlog_state) ->
+        human_action_requested?
+
+      state_name_matches?(state, AutoReview.review_state()) ->
+        human_action_requested? or human_reviewed_plan?(issue, settings)
+
+      true ->
+        false
+    end
+  end
+
+  defp human_reviewed_plan?(issue, settings) do
+    labels = issue |> get_in(["labels", "nodes"]) |> List.wrap() |> Enum.map(&label_name/1) |> Enum.filter(&is_binary/1)
+    plan = %Issue{title: issue["title"], description: issue["description"], labels: labels}
+    Issue.breakdown?(plan) and HumanReview.requested_by_ticket?(plan, settings)
   end
 
   defp refuse_human_only_state(%{"id" => state_id} = state) do

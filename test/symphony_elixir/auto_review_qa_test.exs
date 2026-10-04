@@ -327,6 +327,57 @@ defmodule SymphonyElixir.AutoReviewQaTest do
       assert report =~ "only changes docs, tests"
     end
 
+    test "a blocked verdict only a person can clear goes to Human Review, one an agent can fix to In Review" do
+      blocked = fn needs_person ->
+        result = %{verdict: :blocked, summary: "No OpenRouter key.", steps: [], findings: [], reason: "OPENROUTER_API_KEY is not set"}
+        result = if needs_person, do: Map.put(result, :needs_person, true), else: result
+        {:ok, %{result: result, tokens: QaAgent.empty_tokens()}}
+      end
+
+      Application.put_env(:symphony_elixir, :qa_flow_agent_result, blocked.(true))
+      record = put_record()
+
+      assert {:auto_review_qa, "issue-qa-flow", :blocked, "Human Review"} =
+               AutoReview.run_qa(job(record), git: git_with_paths(["bin/symphony"]), qa_agent: FakeQaAgent)
+
+      assert_receive {:memory_tracker_comment, "issue-qa-flow", report}
+      assert report =~ "**Verdict:** blocked → Human Review"
+      assert_receive {:memory_tracker_state_update, "issue-qa-flow", "Human Review"}
+      assert %{qa_verdict: "blocked", qa_target_state: "Human Review", qa_applied: true} = stored_record()
+
+      Application.put_env(:symphony_elixir, :qa_flow_agent_result, blocked.(false))
+      record = put_record()
+
+      assert {:auto_review_qa, "issue-qa-flow", :blocked, "In Review"} =
+               AutoReview.run_qa(job(record), git: git_with_paths(["bin/symphony"]), qa_agent: FakeQaAgent)
+
+      # A pass that names a person is still the supervisor's to review.
+      {:ok, %{result: result} = run} = pass_result()
+      Application.put_env(:symphony_elixir, :qa_flow_agent_result, {:ok, %{run | result: Map.put(result, :needs_person, true)}})
+      record = put_record()
+
+      assert {:auto_review_qa, "issue-qa-flow", :pass, "In Review"} =
+               AutoReview.run_qa(job(record), git: git_with_paths(["bin/symphony"]), qa_agent: FakeQaAgent)
+    end
+
+    test "with human_review: null, a blocked verdict that needs a person goes to In Review" do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        tracker_human_review_state: nil,
+        pr_review_mode: "polling",
+        ci: %{enabled: true},
+        auto_review: %{enabled: true, max_fix_attempts: 2}
+      )
+
+      result = %{verdict: :blocked, summary: "", steps: [], findings: [], reason: "no key", needs_person: true}
+      run = %{result: result, tokens: QaAgent.empty_tokens()}
+      Application.put_env(:symphony_elixir, :qa_flow_agent_result, {:ok, run})
+      record = put_record()
+
+      assert {:auto_review_qa, "issue-qa-flow", :blocked, "In Review"} =
+               AutoReview.run_qa(job(record), git: git_with_paths(["bin/symphony"]), qa_agent: FakeQaAgent)
+    end
+
     test "agent errors and unreadable diffs are reported as blocked" do
       for {error, text} <- [
             {{:qa_token_limit, 600, 500}, "per-issue token limit (600 of 500 tokens)"},

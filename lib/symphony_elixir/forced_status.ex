@@ -10,7 +10,7 @@ defmodule SymphonyElixir.ForcedStatus do
       `review_feedback`, `ci_fix`, `landing`, `breakdown`, `close_out`, `final_verification`) and
       waits on nothing; a running Auto Review QA pass gives `auto_review`;
     * a `Merging` ticket held while CI runs on its head is `waiting_on_ci` (`ci`);
-    * a ticket in `In Review` is `waiting_for_human` (`human`);
+    * a ticket in `In Review` or the Human Review state is `waiting_for_human` (`human`);
     * a ticket in `Backlog` or `Triage` keeps the phase its next run would have and waits on
       `backlog`;
     * a ticket in the Auto Review state is `auto_review`, waiting on a `slot` while its pass is
@@ -40,6 +40,7 @@ defmodule SymphonyElixir.ForcedStatus do
           optional(:qa) => :running | :queued | nil,
           optional(:state) => String.t() | nil,
           optional(:auto_review_state) => String.t() | nil,
+          optional(:human_review_state) => String.t() | nil,
           optional(:kind) => atom() | nil,
           optional(:merging_ci_wait?) => boolean(),
           optional(:auto_merge?) => boolean(),
@@ -153,9 +154,12 @@ defmodule SymphonyElixir.ForcedStatus do
   defp classify(signals, state) when state in @backlog_states, do: {next_phase(signals), false, :backlog}
 
   defp classify(signals, state) do
-    if state != nil and state == normalize(Map.get(signals, :auto_review_state)),
-      do: {:auto_review, false, if(Map.get(signals, :qa) == :queued, do: :slot)},
-      else: {next_phase(signals), false, waiting_on(signals)}
+    cond do
+      state == nil -> {next_phase(signals), false, waiting_on(signals)}
+      state == normalize(Map.get(signals, :human_review_state)) -> {:waiting_for_human, false, :human}
+      state == normalize(Map.get(signals, :auto_review_state)) -> {:auto_review, false, if(Map.get(signals, :qa) == :queued, do: :slot)}
+      true -> {next_phase(signals), false, waiting_on(signals)}
+    end
   end
 
   defp next_phase(signals), do: signals |> Map.get(:kind) |> run_phase()

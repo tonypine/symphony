@@ -152,6 +152,7 @@ You are working on a Linear ticket `{{ issue.identifier }}`
    - `Waiting on sub-tickets` -> a `breakdown` parent waiting on its sub-tickets; do nothing and stop while any sub-ticket is open. Once every sub-ticket is terminal, run the close-out in `Parent tickets` below.
    - `Auto Review` -> Symphony is testing the PR as a user; do not change the issue or PR, stop and wait.
    - `In Review` -> wait and poll for decision/review updates.
+   - `Human Review` -> waiting on the operator only; do not change the issue or PR, stop and wait.
    - `Merging` -> Symphony normally lands the PR with GitHub auto-merge and does not start an agent. If you are running in `Merging`, auto-merge could not be used: open and follow `.ai/skills/land/SKILL.md`; do not call `gh pr merge` directly.
    - `Rework` -> run rework flow (for a `breakdown` parent, the re-plan run in `Parent tickets` below).
    - `Done` -> do nothing and shut down.

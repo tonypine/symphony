@@ -10,7 +10,8 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
 
   - the `## Symphony QA Report` is written on the parent and on the verification ticket;
   - `pass` (or `blocked` with no failing step) moves the verification ticket to `In Review` for a
-    human to sign off;
+    human to sign off, or to the Human Review state (`SymphonyElixir.HumanReview`) when the QA agent
+    says only a person can do the steps left (`needs_person`);
   - `fail` (or `blocked` with a failing step, such as the macOS app part blocked while a CLI check
     failed) files each failing step (or, without failing steps, each finding) as a Backlog child of
     the verification ticket that names the step and holds its details and evidence, marks the
@@ -34,7 +35,7 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
 
   require Logger
 
-  alias SymphonyElixir.{AgentTools, AutoReview, Config, QaAgent, RunKind, Tracker, Verification, Workspace}
+  alias SymphonyElixir.{AgentTools, AutoReview, Config, HumanReview, QaAgent, RunKind, Tracker, Verification, Workspace}
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.{Issue, TransientRetry}
@@ -180,8 +181,8 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
     {target_state, filed} =
       case outcome.verdict do
         :fail -> fail_target(file_failures(issue, parent, outcome, opts))
-        :blocked -> blocked_target(issue, parent, outcome, opts)
-        _verdict -> {@review_state, []}
+        :blocked -> blocked_target(issue, parent, outcome, settings, opts)
+        _verdict -> {review_target(outcome, settings), []}
       end
 
     report =
@@ -212,11 +213,15 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
 
   # A blocked playbook (the macOS app without its grants) does not hide the other playbooks'
   # failing steps: they are filed as gaps, as for `fail`. Without one, a human takes over.
-  defp blocked_target(issue, parent, outcome, opts) do
+  defp blocked_target(issue, parent, outcome, settings, opts) do
     if Enum.any?(Map.get(outcome, :steps, []), &(&1.status == "fail")),
       do: fail_target(file_failures(issue, parent, outcome, opts)),
-      else: {@review_state, []}
+      else: {review_target(outcome, settings), []}
   end
+
+  # Steps only a person can do (a secret, a check on a device) leave the sign-off with that person.
+  defp review_target(%{needs_person: true}, settings), do: HumanReview.target_state(settings)
+  defp review_target(_outcome, _settings), do: @review_state
 
   defp publish(target, report, settings, opts) do
     post = fn -> Report.publish(target, report, Keyword.put(linear_opts(opts), :settings, settings)) end

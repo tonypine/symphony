@@ -58,7 +58,7 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
     Enum.sort_by(actions, & &1.key)
   end
 
-  test "queries the route's scope for labelled or in-review issues that are not terminal" do
+  test "queries the route's scope for labelled, In Review or Human Review issues that are not terminal" do
     assert {:ok, %{}} = collect([])
 
     assert_received {:query, query, variables}
@@ -71,7 +71,8 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
                %{
                  "or" => [
                    %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => "human-action"}}}},
-                   %{"state" => %{"name" => %{"eqIgnoreCase" => "In Review"}}}
+                   %{"state" => %{"name" => %{"eqIgnoreCase" => "In Review"}}},
+                   %{"state" => %{"name" => %{"eqIgnoreCase" => "Human Review"}}}
                  ]
                },
                %{"state" => %{"name" => %{"nin" => ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]}}}
@@ -204,6 +205,59 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
              },
              %Action{key: "qa:id-MOT-53", why: "Auto Review could not test the PR: see the QA report on MOT-53"}
            ] = actions(collected)
+  end
+
+  test "lists every issue in Human Review, marked so the update puts it first" do
+    plan = node("MOT-60", %{"state" => %{"name" => "Human Review"}, "labels" => labels(["breakdown"])})
+
+    blocked =
+      node("MOT-61", %{
+        "state" => %{"name" => "Human Review"},
+        "comments" =>
+          comments([
+            %{"id" => "c1", "body" => "## Symphony QA Report\n\n**Verdict:** blocked → Human Review\n\nReason: no OpenRouter key\n", "createdAt" => "2026-10-03T10:00:00.000Z"}
+          ])
+      })
+
+    requested =
+      node("MOT-62", %{
+        "state" => %{"name" => "Human Review"},
+        "labels" => labels(["human-action"]),
+        "comments" => comments([request_comment("comment-1", "Add the OpenRouter key", "2026-10-03T10:00:00.000Z")]),
+        "history" => history([%{"createdAt" => "2026-10-03T10:05:00.000Z", "fromState" => %{"name" => "In Progress"}, "toState" => %{"name" => "Human Review"}}])
+      })
+
+    plain = node("MOT-63", %{"state" => %{"name" => "Human Review"}})
+    in_review = node("MOT-64", %{"state" => %{"name" => "In Review"}, "labels" => labels(["breakdown"])})
+
+    assert {:ok, collected} = collect([plan, blocked, requested, plain, in_review])
+
+    assert [
+             %Action{key: "plan:id-MOT-60", kind: :plan_review, human_review: true, done_when: "MOT-60 leaves Human Review."},
+             %Action{key: "plan:id-MOT-64", kind: :plan_review, human_review: false},
+             %Action{key: "qa:id-MOT-61", kind: :qa_blocked, human_review: true, done_when: "MOT-61 leaves Human Review, or its next QA report is not blocked."},
+             %Action{key: "request:comment-1", kind: :request, human_review: true},
+             %Action{
+               key: "review:id-MOT-63",
+               kind: :human_review,
+               human_review: true,
+               title: "Review MOT-63",
+               why: "MOT-63 waits in Human Review: only you can move it on.",
+               est_minutes: 10,
+               steps: [_read, "Move MOT-63 to `Merging` to approve its PR, to `Rework` to send it back, or to `Done` to sign off a final verification."],
+               done_when: "MOT-63 leaves Human Review."
+             }
+           ] = actions(collected)
+  end
+
+  test "with human_review: null, queries and lists only In Review as before" do
+    no_human_review = %Schema{tracker: %{settings().tracker | human_review_state: nil}}
+
+    assert {:ok, collected} = collect([node("MOT-63", %{"state" => %{"name" => "Human Review"}})], settings: no_human_review)
+    assert collected == %{}
+
+    assert_received {:query, _query, %{filter: %{"and" => [_scope, %{"or" => [_label, in_review]}, _terminal]}}}
+    assert in_review == %{"state" => %{"name" => %{"eqIgnoreCase" => "In Review"}}}
   end
 
   test "skips issues outside a project and merges what several routes return" do

@@ -13,7 +13,9 @@ defmodule SymphonyElixir.AutoReview do
     `In Review` with a note;
   - `SymphonyElixir.QaAgent` runs the QA agent in a throwaway worktree at the PR head;
   - `pass` and `blocked` go to `In Review` (a `web` pass whose dev server fails its
-    health check is `blocked`); `fail` goes back to `In Progress` with the
+    health check is `blocked`), except a `blocked` the QA agent says only a person can clear
+    (`needs_person`: a missing secret or key, a check by hand), which goes to the Human Review
+    state (`SymphonyElixir.HumanReview`); `fail` goes back to `In Progress` with the
     findings as continuation context, and to `In Review` once
     `auto_review.max_fix_attempts` is used up.
 
@@ -35,6 +37,7 @@ defmodule SymphonyElixir.AutoReview do
 
   alias SymphonyElixir.{Config, Notifications, QaAgent, QaRunner, RunStore, Tracker, UsageLimit, Verification}
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.HumanReview
   alias SymphonyElixir.Linear.{Issue, Usage}
   alias SymphonyElixir.Orchestrator
   alias SymphonyElixir.QaAgent.{Report, Selection}
@@ -393,7 +396,7 @@ defmodule SymphonyElixir.AutoReview do
     result = Map.get(outcome, :result, %{})
     verdict = outcome.verdict
     fix_attempts = Map.get(record, :qa_fix_attempts, 0)
-    {target_state, escalated?} = target(verdict, fix_attempts, config.max_fix_attempts)
+    {target_state, escalated?} = target(verdict, result, fix_attempts, config.max_fix_attempts, settings)
 
     attrs =
       %{
@@ -429,9 +432,10 @@ defmodule SymphonyElixir.AutoReview do
     transition(issue, Map.merge(record, attrs), verdict, target_state, opts)
   end
 
-  defp target(:fail, fix_attempts, max_fix_attempts) when fix_attempts < max_fix_attempts, do: {@active_state, false}
-  defp target(:fail, _fix_attempts, _max_fix_attempts), do: {@review_state, true}
-  defp target(_verdict, _fix_attempts, _max_fix_attempts), do: {@review_state, false}
+  defp target(:fail, _result, fix_attempts, max_fix_attempts, _settings) when fix_attempts < max_fix_attempts, do: {@active_state, false}
+  defp target(:fail, _result, _fix_attempts, _max_fix_attempts, _settings), do: {@review_state, true}
+  defp target(:blocked, %{needs_person: true}, _fix_attempts, _max_fix_attempts, settings), do: {HumanReview.target_state(settings), false}
+  defp target(_verdict, _result, _fix_attempts, _max_fix_attempts, _settings), do: {@review_state, false}
 
   defp verdict_attrs(:pass, _escalated?, _fix_attempts, _sha, _result), do: %{qa_passed: true, qa_fix_attempts: 0, qa_failure: nil}
 

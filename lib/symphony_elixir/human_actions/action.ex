@@ -9,14 +9,18 @@ defmodule SymphonyElixir.HumanActions.Action do
   - `:task`: an issue carrying the `human_actions.label` label with no request comment;
   - `:plan_review`: a `breakdown` parent waiting in `In Review` for its plan to be approved;
   - `:qa_blocked`: an issue whose latest QA report says Auto Review was `blocked`;
+  - `:human_review`: an issue waiting in the Human Review state with no other action;
   - `:ci_secret`: a workflow on a repository's base branch that keeps failing on a missing secret
     (see `SymphonyElixir.HumanActions.CiSecrets`). It belongs to no issue, so its `issue` is nil.
+
+  `human_review` is true when the action's issue sits in the Human Review state
+  (`SymphonyElixir.HumanReview`): the update lists those first.
   """
 
   @enforce_keys [:key, :kind, :title, :issue, :project]
-  defstruct [:key, :kind, :title, :why, :unblocks, :est_minutes, :done_when, :issue, :project, steps: []]
+  defstruct @enforce_keys ++ [:why, :unblocks, :est_minutes, :done_when, steps: [], human_review: false]
 
-  @type kind :: :request | :task | :plan_review | :qa_blocked | :ci_secret
+  @type kind :: :request | :task | :plan_review | :qa_blocked | :human_review | :ci_secret
   @type t :: %__MODULE__{
           key: String.t(),
           kind: kind(),
@@ -26,6 +30,7 @@ defmodule SymphonyElixir.HumanActions.Action do
           est_minutes: pos_integer() | nil,
           done_when: String.t() | nil,
           steps: [String.t()],
+          human_review: boolean(),
           issue:
             %{
               id: String.t(),
