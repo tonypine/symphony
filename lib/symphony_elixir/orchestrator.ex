@@ -21,6 +21,7 @@ defmodule SymphonyElixir.Orchestrator do
     EpicLanes,
     ForcedQueue,
     ForcedStatus,
+    HumanReview,
     Notifications,
     PlanComments,
     PrReviewPoller,
@@ -3057,7 +3058,15 @@ defmodule SymphonyElixir.Orchestrator do
             {state, hold}
         end
 
-      not dispatch_eligible?(issue, state, active_states, terminal_states) ->
+      not dispatch_gates_open?(issue, state, active_states, terminal_states) ->
+        {state, hold}
+
+      # A retry that started waiting for a slot while a dispatch readiness task ran is held again
+      # with its attempt, as a retry that comes due during the hold is.
+      waiting_retry_held?(waiting, issue, state) ->
+        {hold_waiting_retry_for_usage_limit(state, issue, waiting), hold}
+
+      usage_limit_held?(issue, state) ->
         {state, hold}
 
       true ->
@@ -3229,6 +3238,11 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp dispatch_eligible?(%Issue{} = issue, %State{} = state, active_states, terminal_states) do
+    dispatch_gates_open?(issue, state, active_states, terminal_states) and !usage_limit_held?(issue, state)
+  end
+
+  # Every dispatch gate but the usage limit.
+  defp dispatch_gates_open?(%Issue{} = issue, %State{} = state, active_states, terminal_states) do
     candidate_issue?(issue, active_states, terminal_states) and
       !issue_held?(issue, terminal_states) and
       !Map.has_key?(state.update_holds, issue.id) and
@@ -3236,8 +3250,7 @@ defmodule SymphonyElixir.Orchestrator do
       !post_pr_quiet_active_issue?(issue, state) and
       !landing_held?(issue, state) and
       !issue_taken?(issue, state) and
-      !setup_failed_suppressed?(state.setup_failed, issue) and
-      !usage_limit_held?(issue, state)
+      !setup_failed_suppressed?(state.setup_failed, issue)
   end
 
   defp issue_taken?(%Issue{id: issue_id}, %State{} = state) do
@@ -3382,7 +3395,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp note_forced_human_gate(entry, %Issue{} = issue, now) do
-    in_review? = normalize_issue_state(entry.state || "") == "in review"
+    in_review? = in_review_state?(entry.state)
     notified? = not is_nil(Map.get(entry, :human_gate_notified_at))
 
     cond do
@@ -3759,6 +3772,7 @@ defmodule SymphonyElixir.Orchestrator do
           qa: forced_qa_status(issue_id, context.qa),
           state: issue.state,
           auto_review_state: AutoReview.state(settings),
+          human_review_state: HumanReview.state(settings),
           kind: AgentRunner.run_profile(issue, Config.settings_for_repo!(repo_key), repo_key: repo_key).kind,
           merging_ci_wait?: Map.has_key?(state.merging_ci_waits, issue_id),
           auto_merge?: merging_state?(issue.state) and MapSet.member?(context.auto_merge_ids, issue_id),
@@ -4605,9 +4619,10 @@ defmodule SymphonyElixir.Orchestrator do
         teams = AutoReview.configured_teams(settings, repos)
         AutoReview.check_tracker_state(settings, teams)
         SubIssueWait.check_tracker_state(settings, teams)
+        HumanReview.check_tracker_state(settings, teams)
 
       {:error, reason} ->
-        Logger.warning("Skipping the Auto Review and waiting-on-sub-issues state checks; failed to load repositories: #{inspect(reason)}")
+        Logger.warning("Skipping the Auto Review, waiting-on-sub-issues and human review state checks; failed to load repositories: #{inspect(reason)}")
     end
   end
 
@@ -5142,7 +5157,9 @@ defmodule SymphonyElixir.Orchestrator do
     Notifications.emit_issue_event(event, issue, attrs)
   end
 
-  defp in_review_state?(state_name) when is_binary(state_name), do: normalize_issue_state(state_name) == "in review"
+  defp in_review_state?(state_name) when is_binary(state_name),
+    do: normalize_issue_state(state_name) == "in review" or HumanReview.in_state?(state_name)
+
   defp in_review_state?(_state_name), do: false
 
   defp done_state?(state_name) when is_binary(state_name), do: normalize_issue_state(state_name) == "done"
@@ -6431,6 +6448,22 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  @doc """
+  Holds the provider's runs for a usage-limit `info` hit outside an agent run (an Auto Review QA
+  pass), as if a run of `identifier` had hit it. Returns the hold.
+  """
+  @spec hold_for_usage_limit(map(), String.t() | nil) :: {:ok, UsageLimit.entry()} | :unavailable
+  def hold_for_usage_limit(info, identifier), do: hold_for_usage_limit(__MODULE__, info, identifier)
+
+  @spec hold_for_usage_limit(GenServer.server(), map(), String.t() | nil) :: {:ok, UsageLimit.entry()} | :unavailable
+  def hold_for_usage_limit(server, info, identifier) when is_map(info) do
+    if server_available?(server) do
+      GenServer.call(server, {:hold_for_usage_limit, info, identifier})
+    else
+      :unavailable
+    end
+  end
+
   @spec stop_running(String.t()) :: {:ok, map()} | :unavailable | {:error, term()}
   def stop_running(issue_id_or_identifier) do
     stop_running(__MODULE__, issue_id_or_identifier)
@@ -6636,6 +6669,12 @@ defmodule SymphonyElixir.Orchestrator do
       {:error, reason} ->
         {:reply, {:error, reason}, state}
     end
+  end
+
+  def handle_call({:hold_for_usage_limit, info, identifier}, _from, state) do
+    {state, entry} = put_usage_limit(state, info, identifier)
+    notify_dashboard()
+    {:reply, {:ok, entry}, state}
   end
 
   def handle_call(:pause_status, _from, state) do
@@ -7825,6 +7864,18 @@ defmodule SymphonyElixir.Orchestrator do
   defp usage_limit_canary_alive?(%State{} = state, issue_id) do
     issue_claimed_or_running?(state, issue_id) or Map.has_key?(state.retry_attempts, issue_id) or
       Map.has_key?(state.slot_waiting, issue_id)
+  end
+
+  defp waiting_retry_held?(waiting, %Issue{} = issue, %State{} = state) do
+    retry_attempt?(Map.get(waiting, :attempt)) and not is_nil(usage_limit_hold(state, issue))
+  end
+
+  # The retry takes its claim back, as a held retry keeps it, so no poll dispatches it afresh.
+  defp hold_waiting_retry_for_usage_limit(%State{} = state, %Issue{} = issue, waiting) do
+    metadata = Map.take(waiting, [:repo_key, :worker_host])
+
+    %{state | claimed: MapSet.put(state.claimed, issue.id)}
+    |> hold_retry_for_usage_limit(issue, waiting.attempt, metadata, usage_limit_hold(state, issue))
   end
 
   defp release_usage_limit_retry(%State{} = state, issue_id, retry) do

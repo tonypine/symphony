@@ -48,6 +48,10 @@ defmodule SymphonyElixir.AcceptanceGate.Escalation do
 
   @type reason :: %{rule: rule(), detail: String.t()}
 
+  @doc "Whether `path` is a dependency manifest the `:dependency` rule reads (`mix.lock`, `package.json`)."
+  @spec manifest?(String.t()) :: boolean()
+  def manifest?(path) when is_binary(path), do: Path.basename(path) in @manifests
+
   @doc """
   The reasons `issue` and its PR's diff must go to a human, one per triggered rule. `busy_files`
   are the paths changed most often on the default branch lately; `rules` is the effective
@@ -64,6 +68,17 @@ defmodule SymphonyElixir.AcceptanceGate.Escalation do
       {:size, size_detail(files, rules.max_changed_lines)},
       {:busy_file, busy_file_detail(files, busy_files, rules.busy_files.max_lines)}
     ]
+    |> Enum.reject(fn {_rule, detail} -> is_nil(detail) end)
+    |> Enum.map(fn {rule, detail} -> %{rule: rule, detail: detail} end)
+  end
+
+  @doc """
+  The reasons the ticket alone (its labels, title and description) must go to a human: the
+  `:label` and `:ticket_pattern` rules of `check/4`, which need no diff.
+  """
+  @spec ticket_reasons(Issue.t(), Escalate.t()) :: [reason()]
+  def ticket_reasons(%Issue{} = issue, %Escalate{} = rules) do
+    [{:label, label_detail(issue, rules.labels)}, {:ticket_pattern, ticket_pattern_detail(issue, rules.ticket_patterns)}]
     |> Enum.reject(fn {_rule, detail} -> is_nil(detail) end)
     |> Enum.map(fn {rule, detail} -> %{rule: rule, detail: detail} end)
   end
@@ -112,7 +127,7 @@ defmodule SymphonyElixir.AcceptanceGate.Escalation do
 
   defp dependency_detail(files, mode) do
     files
-    |> Enum.filter(&(Path.basename(&1.path) in @manifests))
+    |> Enum.filter(&manifest?(&1.path))
     |> Enum.flat_map(&manifest_changes(&1, mode))
     |> join_or_nil(& &1)
   end

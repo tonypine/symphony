@@ -10,7 +10,8 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
 
   - the `## Symphony QA Report` is written on the parent and on the verification ticket;
   - `pass` (or `blocked` with no failing step) moves the verification ticket to `In Review` for a
-    human to sign off;
+    human to sign off, or to the Human Review state (`SymphonyElixir.HumanReview`) when the QA agent
+    says only a person can do the steps left (`needs_person`);
   - `fail` (or `blocked` with a failing step, such as the macOS app part blocked while a CLI check
     failed) files each failing step (or, without failing steps, each finding) as a Backlog child of
     the verification ticket that names the step and holds its details and evidence, marks the
@@ -18,6 +19,13 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
     verification finds. Symphony's blocked-by gate holds it there and dispatches it again once every
     gap is terminal. When a gap could not be filed or linked, the ticket goes to `Backlog` for a
     human instead, since nothing would hold it.
+
+  A `blocked` verdict also puts the ticket in the parent project's human-action update (see
+  `SymphonyElixir.HumanActions.Collector`), since only a person can provide what QA was missing.
+
+  A QA agent that runs into the provider's usage limit gets no verdict: no report is written, the
+  ticket keeps its state, and `run/3` returns `{:error, {:usage_limited, info}}`, so the
+  orchestrator holds the run and starts it again once the limit resets, as for any agent run.
 
   Each Linear call waits out a rate limit or a dropped connection
   (`SymphonyElixir.Linear.TransientRetry`) instead of failing the run; the verdict is kept while the
@@ -34,7 +42,7 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
 
   require Logger
 
-  alias SymphonyElixir.{AgentTools, AutoReview, Config, QaAgent, RunKind, Tracker, Verification, Workspace}
+  alias SymphonyElixir.{AgentTools, AutoReview, Config, HumanReview, QaAgent, RunKind, Tracker, Verification, Workspace}
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.{Issue, TransientRetry}
@@ -54,7 +62,8 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
   @doc """
   Runs the parent walkthrough for `issue` in its `workspace` when it applies, applies the outcome
   and returns `:ok`. Returns `:skip` when the ticket should get the executor run instead, and
-  `{:error, reason}` when the parent could not be read or the ticket could not be moved.
+  `{:error, reason}` when the parent could not be read or the ticket could not be moved, and
+  `{:error, {:usage_limited, info}}` when the QA agent hit the provider's usage limit.
 
   Options: `:settings` (required), `:repo_key`, `:run_id`, `:worker_host`, `:on_message`
   (forwarded agent messages), `:linear_retry_opts` (`TransientRetry.run/2` options), and
@@ -120,7 +129,14 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
           %{verdict: :blocked, sha: nil, reason: "could not read the head of #{base_ref}: #{inspect(reason)}"}
       end
 
-    apply_outcome(issue, parent, Map.put(outcome, :ref, base_ref), settings, opts)
+    case outcome do
+      %{usage_limit: info} ->
+        Logger.info("Parent walkthrough for #{parent.identifier} hit the usage limit; #{issue.identifier} keeps its state and runs again once the hold lifts")
+        {:error, {:usage_limited, info}}
+
+      _outcome ->
+        apply_outcome(issue, parent, Map.put(outcome, :ref, base_ref), settings, opts)
+    end
   end
 
   defp base_commit(workspace, branch, git) do
@@ -154,7 +170,7 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
     outcome =
       case Keyword.get(opts, :qa_agent, QaAgent).run(job, settings, agent_opts) do
         {:ok, %{result: result, tokens: tokens}} -> Map.put(result, :tokens, tokens)
-        {:error, reason, tokens} -> %{verdict: :blocked, reason: AutoReview.blocked_reason(reason), tokens: tokens}
+        {:error, reason, tokens} -> error_outcome(reason, tokens)
       end
 
     Map.merge(outcome, %{
@@ -162,6 +178,13 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
       playbooks: Enum.map(playbooks, & &1.kind),
       runtime_seconds: System.monotonic_time(:second) - started_at
     })
+  end
+
+  defp error_outcome(reason, tokens) do
+    case AutoReview.usage_limit(reason) do
+      %{} = info -> %{usage_limit: info}
+      nil -> %{verdict: :blocked, reason: AutoReview.blocked_reason(reason), tokens: tokens}
+    end
   end
 
   defp playbooks(issue, parent, settings) do
@@ -180,8 +203,8 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
     {target_state, filed} =
       case outcome.verdict do
         :fail -> fail_target(file_failures(issue, parent, outcome, opts))
-        :blocked -> blocked_target(issue, parent, outcome, opts)
-        _verdict -> {@review_state, []}
+        :blocked -> blocked_target(issue, parent, outcome, settings, opts)
+        _verdict -> {review_target(outcome, settings), []}
       end
 
     report =
@@ -212,11 +235,15 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
 
   # A blocked playbook (the macOS app without its grants) does not hide the other playbooks'
   # failing steps: they are filed as gaps, as for `fail`. Without one, a human takes over.
-  defp blocked_target(issue, parent, outcome, opts) do
+  defp blocked_target(issue, parent, outcome, settings, opts) do
     if Enum.any?(Map.get(outcome, :steps, []), &(&1.status == "fail")),
       do: fail_target(file_failures(issue, parent, outcome, opts)),
-      else: {@review_state, []}
+      else: {review_target(outcome, settings), []}
   end
+
+  # Steps only a person can do (a secret, a check on a device) leave the sign-off with that person.
+  defp review_target(%{needs_person: true}, settings), do: HumanReview.target_state(settings)
+  defp review_target(_outcome, _settings), do: @review_state
 
   defp publish(target, report, settings, opts) do
     post = fn -> Report.publish(target, report, Keyword.put(linear_opts(opts), :settings, settings)) end

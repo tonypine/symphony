@@ -39,13 +39,29 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     },
     %{
       "name" => "linear_get_related_issues",
-      "description" => "Read blocks and blocked-by issue summaries for the current Linear issue.",
-      "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
+      "description" =>
+        "Without arguments, list the current Linear issue's family as summaries: the issues it blocks and is blocked by, its parent, its siblings (the parent's other sub-issues) and its sub-issues. Pass `identifier` to read one of them in full, with its description, state, labels and comments (newest first), such as a sibling's QA report or the parent's workpad. Any other issue is refused.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "properties" => %{
+          "identifier" => %{
+            "type" => "string",
+            "description" => "Identifier (e.g. TP-12) of the parent, a sibling, a sub-issue or a blocker (either direction) to read in full."
+          },
+          "comment_limit" => %{
+            "type" => "integer",
+            "minimum" => 1,
+            "maximum" => 100,
+            "description" => "How many of its latest comments to read with `identifier` (default 50)."
+          }
+        }
+      }
     },
     %{
       "name" => "linear_update_state",
       "description" =>
-        "Move the current Linear issue to a state in its team's workflow. Moving it to Merging is refused: only a human can approve a merge. With Auto Review on, moving it to In Review is refused too: Symphony moves the issue once the PR is open.",
+        "Move the current Linear issue to a state in its team's workflow. Moving it to Merging is refused: only a human can approve a merge. With Auto Review on, moving it to In Review is refused too: Symphony moves the issue once the PR is open. When the issue needs a person (a breakdown plan its ticket says a human reviews, or after linear_request_human_action), a move to In Review or Backlog lands in Human Review instead when that state is on; the response names the state.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -212,7 +228,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "linear_request_human_action",
       "description" =>
-        "Record that the current issue needs something only a human can do: a missing secret or permission, a product decision, an account setup, a manual check on a device. Symphony lists it, with your steps, in a Linear project update for the human, and drops it once the issue moves on. Never put a secret value in any field. A request with the same title that is still open is not posted again. Before asking about slow or stuck CI, compute the job's age from the API's UTC timestamps against the current UTC time (`date -u`), never local time; under 30 minutes old, wait for the CI poller's re-run instead. Then follow the blocked-access escape hatch as usual.",
+        "Record that the current issue needs something only a human can do: a missing secret or permission, a product decision, an account setup, a manual check on a device. Symphony lists it, with your steps, in a Linear project update for the human, and drops it once the issue moves on. Never put a secret value in any field. A request with the same title that is still open is not posted again. Before asking about slow or stuck CI, compute the job's age from the API's UTC timestamps against the current UTC time (`date -u`), never local time; under 30 minutes old, wait for the CI poller's re-run instead. Then follow the blocked-access escape hatch as usual: its move to Backlog lands in Human Review when that state is on, where the human finds it.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -593,7 +609,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "linear_get_subissues" => [],
     "linear_get_parent_issue" => [],
     "linear_get_comments" => ["limit"],
-    "linear_get_related_issues" => [],
+    "linear_get_related_issues" => ["identifier", "comment_limit"],
     "linear_update_state" => ["state_name_or_id"],
     "linear_add_comment" => ["body", "parent_id"],
     "linear_update_comment" => ["comment_id", "body"],
@@ -774,7 +790,11 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   defp execute_linear_tool("linear_get_current_issue", context, _args, opts), do: Linear.get_current_issue(context, opts)
   defp execute_linear_tool("linear_get_subissues", context, _args, opts), do: Linear.get_subissues(context, opts)
   defp execute_linear_tool("linear_get_parent_issue", context, _args, opts), do: Linear.get_parent_issue(context, opts)
-  defp execute_linear_tool("linear_get_related_issues", context, _args, opts), do: Linear.get_related_issues(context, opts)
+  defp execute_linear_tool("linear_get_related_issues", context, args, opts) when map_size(args) == 0, do: Linear.get_related_issues(context, opts)
+
+  defp execute_linear_tool("linear_get_related_issues", context, args, opts) do
+    Linear.get_related_issue(context, Map.get(args, "identifier"), Map.get(args, "comment_limit"), opts)
+  end
 
   defp execute_linear_tool("linear_get_comments", context, args, opts) do
     Linear.get_comments(context, Map.get(args, "limit"), opts)
@@ -1419,6 +1439,30 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         "message" => "Could not mark the current issue blocked by #{blocker}; it and any later `blocked_by` links are missing. Retry, or record them in the workpad for a human to add.",
         "blocker" => blocker,
         "reason" => inspect(reason)
+      }
+    }
+  end
+
+  defp tool_error_payload(:invalid_related_issue_identifier) do
+    %{
+      "error" => %{
+        "code" => "invalid_related_issue_identifier",
+        "message" => "linear_get_related_issues `identifier` must be an issue identifier such as TP-12. Call it without arguments to list the issues it can read."
+      }
+    }
+  end
+
+  defp tool_error_payload(:invalid_limit) do
+    %{"error" => %{"code" => "invalid_limit", "message" => "The comment limit must be a positive integer."}}
+  end
+
+  defp tool_error_payload({:issue_outside_family, identifier, related_issues}) do
+    %{
+      "error" => %{
+        "code" => "issue_outside_family",
+        "message" =>
+          "#{identifier} is not the parent, a sibling, a sub-issue or a blocker of the current issue, so linear_get_related_issues does not read it. It reads only the issues listed in `related_issues`.",
+        "related_issues" => related_issues
       }
     }
   end

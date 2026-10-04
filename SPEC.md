@@ -517,6 +517,10 @@ Fields:
     clone used for `git worktree add`.
   - `fetch_before_dispatch` controls whether the primary clone fetches `origin` before worktree
     creation.
+  - Symphony runs one `git fetch origin` per repo at a time (worktree source, managed clone, or
+    workflow checkout). A fetch asked for while another fetch of the same repo runs waits for it
+    and reuses its result. A fetch that fails with `cannot lock ref` is retried once after a short
+    delay.
   - `source` (string) OPTIONAL: a GitHub repository, as `owner/repo` or a github.com URL, that
     Symphony clones and manages itself instead of using a local checkout.
     - The clone lives at `<workspaces.clones_root>/<owner>/<repo>` and is made without a working
@@ -1267,10 +1271,12 @@ When enabled:
   log it, keep the issue in its active state and dispatch it again, so the next run reviews and
   pushes those commits. A workspace it cannot read (an SSH worker, no git checkout) does not block
   the transition.
-- `linear_update_state` MUST refuse `In Review` from agent sessions with a clear error telling the
-  agent that Symphony moves the issue once the PR is open, rather than redirecting the target
-  state. A `breakdown` parent and a ticket whose title starts with `Final verification:` open no
-  PR, so they MAY move to `In Review`.
+- `linear_update_state` MUST refuse `In Review`, and the `issues.states.human_review` state, from
+  agent sessions with a clear error telling the agent that Symphony moves the issue once the PR is
+  open, rather than redirecting the target state. The refusal applies before the human review
+  redirect, so a run that posted a `linear_request_human_action` request cannot skip QA; its blocked
+  PR reaches the human review state through the QA verdict. A `breakdown` parent and a ticket whose
+  title starts with `Final verification:` open no PR, so they MAY move to either state.
 - The CI poller MUST discover issues in `state` as well as `In Review`. Red CI follows the normal
   `In Progress` fix loop and escalation. Green CI on an issue in `state` starts a QA pass for the
   PR head SHA, at most one per issue and `max_concurrent` overall. GitHub runs no `pull_request`
@@ -1383,6 +1389,33 @@ When enabled:
 - Each pass rewrites one `## Symphony QA Report` issue comment (an exception to the
   single-workpad rule, written by Symphony only), records a run with `kind: "qa"`, tokens and
   runtime in the run store, and emits `qa_passed` or `qa_failed`.
+- Acceptance gate: Auto Review runs CI, then QA, then the gate. When the repository's
+  `auto_review.acceptance_gate.mode` is not `off`, a QA `pass`, `blocked` or skip MUST NOT move the
+  issue to `In Review` straight away: Symphony requests a gate pass on the PR head and moves the
+  issue once the gate has a verdict for that SHA. A QA `fail` behaves as without the gate. Gate
+  passes run in the background, at most `acceptance_gate.max_concurrent` at once and one per
+  issue, forced tickets first, and wait while the gate agent's provider is usage-limited. A pass
+  builds the gate context (the PR merged onto current main, busy files, overlapping open PRs),
+  checks the escalation rules, then runs the gate agent in a throwaway worktree at the merge result
+  with the read-only tool scope and a read-only sandbox: it MUST NOT push, edit files, or write to
+  Linear or GitHub. The agent judges each acceptance criterion (the checklist items under the
+  ticket's `Acceptance` / `Acceptance Criteria` headings and the workpad's `Acceptance Criteria`) as
+  `met`, `unmet` or `unclear` with `file:line` evidence, the overlaps with other open PRs, the
+  scope, and judgment calls for a human, not code style or bugs, and answers with JSON: `verdict`
+  (`approve`, `rework` or `escalate`), `criteria`, `overlaps`, `scope`, `escalation_reasons` and
+  `follow_ups`. An unreadable answer SHOULD get one follow-up turn. Any escalation rule that
+  triggers, and a QA `blocked` (reason `qa_blocked`), MUST make the final verdict `escalate`, with
+  the agent's verdict kept as `agent_verdict`; a PR that conflicts with current main is `rework`
+  without an agent run; an inconclusive pass records no verdict until the
+  `escalate.inconclusive_limit`-th on the same SHA, which escalates with reason `inconclusive`. The
+  verdict is stored per head SHA on the CI check record, and a green poll on a SHA that already has
+  one MUST apply it again without a new gate run. Each pass records a run with
+  `kind: "acceptance_gate"` and its tokens and rewrites one `## Symphony Acceptance Gate` issue
+  comment (mode, verdict, agent verdict, one row per criterion, overlaps, scope, escalation reasons,
+  proposed follow-ups, tokens, runtime); each verdict writes one `acceptance_gate_verdict` audit
+  event. In `shadow` mode the verdict is advisory: the issue moves to `In Review` as it would
+  without the gate, and follow-ups are listed, not filed. `enforce` currently behaves like
+  `shadow`. See `docs/acceptance_gate.md`.
 - Parent walkthrough: a run of kind `final_verification` on a local worker with the Linear tracker,
   for a ticket with a parent and no `qa:skip` label, MUST NOT start an executor agent. Symphony
   runs the QA agent instead, with no PR, in a fresh worktree at the head of
@@ -1645,6 +1678,8 @@ not require recognizing or validating extension fields unless that extension is 
 - `issues.states.terminal`: list of strings, default `["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]`
 - `issues.states.waiting_on_sub_issues`: string or null, default `Waiting on sub-tickets`; added to
   the active states when set
+- `issues.states.human_review`: string or null, default `Human Review`; null turns it off. It MUST
+  NOT be one of the active states (see the human review rule)
 - `issues.poll_interval_ms`: integer, default `30000`
 - `poller.backoff_base_ms`: positive integer or null; null uses the effective poll interval
 - `poller.max_backoff_ms`: positive integer, default `300000`
@@ -2140,9 +2175,29 @@ An issue is dispatch-eligible only if all are true:
     before the move and skips it unless it is still `In Progress`; a failed read skips every
     parent until the next poll. Agents cannot move an issue there: `linear_update_state` refuses the state,
     because a human moving a parent there approves its plan (next rule).
+- Human review rule:
+  - An issue in the `issues.states.human_review` state waits for a person only; it is never
+    dispatched. The CI and PR review pollers watch its PR as in `In Review`, and wherever a
+    person's move out of `In Review` means something (a plan approval or rejection, a plan comment),
+    a move out of the human review state means the same. Merging, Rework and Done read only the
+    state moved to, so they behave the same from either.
+  - The service puts an issue there instead of `In Review` when only a person can move it on: an
+    Auto Review QA verdict `blocked` whose answer sets `needs_person`; a `Final verification:`
+    parent walkthrough that passes, or is blocked with no failing step, with `needs_person` set;
+    `linear_update_state` to `In Review` for a `breakdown` parent whose ticket has an
+    `auto_review.acceptance_gate.escalate` label other than `breakdown` or matches one of its
+    ticket patterns; and `linear_update_state` to `Backlog` or `In Review` from a run that posted
+    (or found open) a `linear_request_human_action` request (with Auto Review on, only `Backlog`
+    or a PR-less issue: the Auto Review rule refuses the rest). The tool's answer names the state.
+  - When the state is null, or the startup check finds a configured team without it (the state is
+    then off until restart, with a warning), those issues go to `In Review` as before.
+  - The human-action update lists issues in the state first, the state API reports
+    `counts.human_review` and a `human_review` list of watched issues in it, and a supervisor never
+    moves an issue out of it on the operator's behalf.
 - Plan review rule:
   - The breakdown run leaves its sub-issues in `Backlog` and moves the parent to `In Review`
-    (`linear_update_state` allows `In Review` for a `breakdown` parent even with Auto Review on).
+    (`linear_update_state` allows `In Review` for a `breakdown` parent even with Auto Review on),
+    or to the human review state when the ticket asks for a human review (human review rule).
   - Comments: a person's comment on a `breakdown` parent's plan is read on the poll that follows
     it. Only comments with a user and no bot actor count, and not Symphony's own (the workpad, a
     QA report, an `Action needed` request, a promote or cancel record, a run-failure note, its own
@@ -2167,7 +2222,7 @@ An issue is dispatch-eligible only if all are true:
     - `Rework` keeps its meaning: a full re-plan.
   - Approval: on each poll, for a `breakdown` parent in the waiting state with a sub-issue in
     `Backlog` that is not running or claimed, the service reads the parent's state history. When
-    its latest state change is `In Review` to the waiting state, every sub-issue that has been in
+    its latest state change is `In Review` (or the human review state) to the waiting state, every sub-issue that has been in
     `Backlog` since before that change (created before it, no state change after it) moves to
     `Todo` in one batch. Blocked-by links keep the order. A parent the service parked from
     `In Progress` was not approved, so nothing moves. Only a person's move approves: the service
@@ -2392,6 +2447,10 @@ reached (for Claude, a used-up five-hour or weekly window; for Codex, an error w
   and any Linear rate-limit pause.
 - Runs of the same provider already in flight are left alone; each one is handled the same way if
   it hits the limit.
+- An Auto Review QA pass whose agent hits the limit creates or refreshes the hold the same way. It
+  records no verdict, writes no QA report and leaves the issue's state alone; a PR-head pass is
+  requested again by the first green CI poll after the hold clears, and a `Final verification:`
+  walkthrough is held and retried as its run.
 - While a hold covers a candidate's resolved run profile (`run_profiles.<kind>.provider`, else
   `agent.provider`, and its model for a model scope; runs of `agent.kind: codex` are provider
   `openai`), every dispatch path skips it: the poll,
@@ -3000,8 +3059,17 @@ Scoped Linear tool extension contract:
   `linear_withdraw_human_action`.
 - `linear_add_comment` MAY take a `parent_id` naming a comment on the current issue; the comment is
   then posted as a reply under it. `linear_get_comments` SHOULD return each reply's parent id.
+- `linear_get_related_issues` MAY read beyond the current issue, but only inside its family: the
+  issues it blocks or is blocked by, its parent, its siblings (the parent's other children) and its
+  sub-issues. Without arguments it lists them as summaries. With an `identifier` (and an optional
+  `comment_limit`) it reads that one issue's title, description, state, labels and comments,
+  wrapped, truncated and secret-redacted like the current issue's reads, so a final verification
+  can read its siblings' QA reports and a sub-issue its parent's workpad. Any other identifier MUST
+  fail with an explicit error that lists the family, before the issue is read. It stays read-only
+  and is available to the read-only reviewer and QA scopes.
 - Reads whose issue descriptions and comments reach the agent (`linear_get_current_issue`,
-  `linear_get_comments`, `linear_get_subissues`, `linear_get_parent_issue`, and the dispatch
+  `linear_get_comments`, `linear_get_subissues`, `linear_get_parent_issue`, a
+  `linear_get_related_issues` read by `identifier`, and the dispatch
   enrichment that supplies the prompt's description and comments) SHOULD ask Linear for pre-signed
   upload URLs with the `public-file-urls-expire-in` header, so the agent can download attached
   images and files from `uploads.linear.app` without a Linear credential. The Elixir
@@ -3835,7 +3903,10 @@ Minimum endpoints:
   - `workflow.status` is `valid`, `missing` or `invalid`, from the repo's workflow store (the
     file is read directly for a repo with no running store); `found` is false only when missing,
     and `error` carries the load error. A store keeps serving the last good workflow while its
-    file is missing or invalid.
+    file is missing or invalid. For `workflow_source: ref`, a `WORKFLOW.md` that is missing or
+    invalid on the base branch ref (or a ref that no longer resolves) is reported as `missing` or
+    `invalid` with that error while the last good snapshot is kept, until the ref loads again;
+    the error is kept next to the snapshot, so a restart still reports it.
   - `last_fetch` is the last `git fetch origin` before a dispatch on this host (the worktree
     source, Symphony's clone, or the checkout `WORKFLOW.md` is read from), with `result` `ok` or
     `error`; `null` until the first one. SSH-worker fetches run inside the remote prepare script
@@ -4780,7 +4851,10 @@ infrastructure.
   configured repo `WORKFLOW.md` through the same validation the service runs at startup, without
   starting the runtime or contacting the tracker or GitHub. It exits `0` and prints
   `Config OK: <path>` when valid, and exits `1` with the error on stderr when the file is missing
-  or invalid. Errors name the file and key and never print secret values. A `workspace.source`
+  or invalid. For a `workflow_source: ref` repo it validates the `WORKFLOW.md` startup would use:
+  the file committed on the base branch ref when it parses (as last fetched; `check` does not fetch
+  or write the snapshot), otherwise the last good snapshot or the file on disk. Errors name the
+  file and key and never print secret values. A `workspace.source`
   repo whose clone does not exist yet is checked without its `WORKFLOW.md` (the service clones it
   at startup before reading it), and the check prints a warning naming the repo.
 - CLI accepts `--config path-to-symphony.yml` to select an alternate operator config.

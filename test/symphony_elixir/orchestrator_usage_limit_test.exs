@@ -385,6 +385,54 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
     Process.cancel_timer(state.retry_attempts[issue.id].timer_ref)
   end
 
+  test "a retry deferred behind a dispatch readiness task during the hold keeps its attempt through the dispatch pass", ctx do
+    write_usage_workflow!(ctx)
+    pid = start_orchestrator(ctx, :DeferredRetryHoldOrchestrator)
+    issue = issue("issue-usage-deferred", "MT-DEFERRED")
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+    token = make_ref()
+
+    :sys.replace_state(pid, fn state ->
+      %{
+        state
+        | usage_limits: %{@anthropic => hold(ctx)},
+          dispatch_readiness_tasks: %{make_ref() => %{kind: :poll, issues: []}},
+          retry_attempts: %{issue.id => %{attempt: 2, retry_token: token, identifier: issue.identifier, repo_key: Config.repo_key!()}},
+          claimed: MapSet.new([issue.id])
+      }
+    end)
+
+    state = deliver(pid, {:retry_issue, issue.id, token})
+    assert %{attempt: 2, reason: "dispatch readiness task already in flight"} = state.slot_waiting[issue.id]
+
+    # The readiness result's dispatch pass finds the hold: the retry is held again, not dropped.
+    state = Orchestrator.dispatch_chosen_issues_for_test([issue], %{state | dispatch_readiness_tasks: %{}})
+
+    assert %{attempt: 2, delay_type: :usage_limit, usage_limit_key: @anthropic} = state.retry_attempts[issue.id]
+    assert MapSet.member?(state.claimed, issue.id)
+    refute Map.has_key?(state.slot_waiting, issue.id)
+    refute Map.has_key?(state.running, issue.id)
+
+    # At resume_at it goes out as the canary with the same attempt.
+    state = Orchestrator.start_usage_limit_canary_for_test(state, @anthropic, fn _ids -> {:ok, [issue]} end)
+    assert %{phase: :canary, canary_issue_id: "issue-usage-deferred"} = state.usage_limits[@anthropic]
+
+    state = Orchestrator.dispatch_chosen_issues_for_test([issue], state)
+    assert %{retry_attempt: 2} = state.running[issue.id]
+  end
+
+  test "a slot waiter with no attempt that the hold skips is dropped from the pass as before", ctx do
+    write_usage_workflow!(ctx)
+    issue = issue("issue-usage-fresh-wait", "MT-FRESH-WAIT")
+    waiting = %{identifier: issue.identifier, title: issue.title, state: issue.state, reason: "work slots full", since: DateTime.utc_now()}
+    state = %{orchestrator_state() | usage_limits: %{@anthropic => hold(ctx)}, slot_waiting: %{issue.id => waiting}}
+
+    state = Orchestrator.dispatch_chosen_issues_for_test([issue], state)
+
+    assert state.slot_waiting == %{}
+    assert state.retry_attempts == %{}
+  end
+
   test "the resume timer dispatches the held issue as the canary with the same attempt, and its clean exit clears the hold", ctx do
     write_usage_workflow!(ctx)
     pid = start_orchestrator(ctx, :ResumeOrchestrator)
@@ -732,6 +780,27 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
     end
   end
 
+  test "a QA pass that hits the usage limit holds the provider until resume_at, then the hold clears", ctx do
+    write_usage_workflow!(ctx)
+    name = Module.concat(__MODULE__, :QaHoldOrchestrator)
+    assert Orchestrator.hold_for_usage_limit(name, usage_info(ctx), "MT-QA") == :unavailable
+
+    pid = start_orchestrator(ctx, :QaHoldOrchestrator)
+
+    assert {:ok, %{provider: "anthropic", scope: :all, phase: :paused, issue_identifier: "MT-QA"} = entry} =
+             Orchestrator.hold_for_usage_limit(name, usage_info(ctx), "MT-QA")
+
+    assert entry.resume_at == DateTime.add(ctx.now, 3600 + Config.settings!().agent.usage_limit.resume_margin_seconds)
+    assert %{@anthropic => ^entry} = RunStore.get_usage_limits()
+    assert UsageLimit.persisted_holding(%{provider: "anthropic", model: "claude-opus-5-5"})
+
+    set_clock(ctx, entry.resume_at)
+    send(pid, {:usage_limit_resume, @anthropic})
+
+    assert :sys.get_state(pid).usage_limits == %{}
+    assert RunStore.get_usage_limits() == %{}
+  end
+
   test "with nothing held at resume_at the hold clears without a canary", ctx do
     write_usage_workflow!(ctx)
     pid = start_orchestrator(ctx, :CanaryEmptyOrchestrator)
@@ -905,6 +974,27 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
              )
 
     assert resets_at == DateTime.from_unix!(1_790_000_000)
+  end
+
+  defmodule LimitedWalkthrough do
+    def run(_issue, _workspace, _opts), do: {:error, {:usage_limited, %{provider: "anthropic", scope: :all, window: "five_hour"}}}
+  end
+
+  test "AgentRunner exits with the usage limit a final verification's QA agent hit", ctx do
+    write_usage_workflow!(ctx)
+    workspace = Path.join([ctx.test_root, "workspaces", "MT-FV"])
+    File.mkdir_p!(workspace)
+    run_issue = issue("issue-fv", "MT-FV", %{title: "Final verification: Hold on the usage limit"})
+
+    assert {:usage_limited, %{provider: "anthropic", window: "five_hour"}} =
+             catch_exit(
+               AgentRunner.run(run_issue, nil,
+                 workspace_path: workspace,
+                 parent_walkthrough: LimitedWalkthrough,
+                 issue_state_fetcher: fn _ids -> {:ok, [run_issue]} end,
+                 issue_enricher: fn issue -> {:ok, issue} end
+               )
+             )
   end
 
   test "AgentRunner exits with the Codex usage limit instead of raising", ctx do

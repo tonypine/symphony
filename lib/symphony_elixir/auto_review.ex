@@ -15,15 +15,27 @@ defmodule SymphonyElixir.AutoReview do
     `In Review` with a note;
   - `SymphonyElixir.QaAgent` runs the QA agent in a throwaway worktree at the PR head;
   - `pass` and `blocked` go to `In Review` (a `web` pass whose dev server fails its
-    health check is `blocked`); `fail` goes back to `In Progress` with the
+    health check is `blocked`), except a `blocked` the QA agent says only a person can clear
+    (`needs_person`: a missing secret or key, a check by hand), which goes to the Human Review
+    state (`SymphonyElixir.HumanReview`); `fail` goes back to `In Progress` with the
     findings as continuation context, and to `In Review` once
     `auto_review.max_fix_attempts` is used up;
+  - a pass whose QA agent runs into the provider's usage limit gets no verdict: the
+    issue stays in Auto Review, the orchestrator holds the provider's runs until the
+    limit resets (`agent.usage_limit.auto_pause`), and the pass runs again after that;
   - a pass that ends after its issue left Auto Review, its PR merged or closed, or its
     head moved on writes its report but leaves the issue where it is.
 
   Results are kept per PR head SHA on the CI check record, every pass rewrites the
   `## Symphony QA Report` comment, and each agent run is stored in the run store
   with `kind: "qa"`.
+
+  When the repository's `auto_review.acceptance_gate.mode` isn't `off`, a QA `pass`, `skip` or
+  `blocked` doesn't move the issue straight to `In Review`: it asks
+  `SymphonyElixir.AcceptanceGate.Runner` for a gate pass on the PR head (`run_gate/2`, see
+  `SymphonyElixir.AcceptanceGate`), and the issue moves on once the gate has a verdict. The
+  order is CI, then QA, then the gate. In `shadow` mode the verdict is advisory and the issue
+  goes to `In Review` as before; a QA `fail` never reaches the gate.
 
   At startup Symphony checks that the Linear team has the Auto Review state and
   that the CI poller is on. When either is missing, Auto Review is turned off for
@@ -37,11 +49,13 @@ defmodule SymphonyElixir.AutoReview do
 
   require Logger
 
-  alias SymphonyElixir.{Config, Notifications, QaAgent, QaRunner, RunStore, Tracker, UsageLimit, Verification}
+  alias SymphonyElixir.{AcceptanceGate, Config, Notifications, QaAgent, QaRunner, RunStore, Tracker, UsageLimit}
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.HumanReview
   alias SymphonyElixir.Linear.{Issue, Usage}
   alias SymphonyElixir.Orchestrator
   alias SymphonyElixir.QaAgent.{Report, Selection}
+  alias SymphonyElixir.Verification
   alias SymphonyElixir.{WorkflowSource, Workspace}
 
   @review_state "In Review"
@@ -137,6 +151,11 @@ defmodule SymphonyElixir.AutoReview do
   failed move is retried, and an issue back in Auto Review on the same SHA after a
   `fail` counts as another failed fix attempt. Otherwise a QA pass is requested from
   the runner (`opts[:qa_runner]`, default `SymphonyElixir.QaRunner`).
+
+  With the acceptance gate on, a stored QA `pass`, `skip` or `blocked` applies the gate's
+  stored verdict for the SHA, or asks the gate runner (`opts[:gate_runner]`, default
+  `SymphonyElixir.AcceptanceGate.Runner`) for a pass when it has none. A judged SHA never
+  starts another gate run.
   """
   @spec on_green(Issue.t(), map(), map(), Schema.t(), keyword()) :: tuple()
   def on_green(%Issue{} = issue, record, ci_status, %Schema{} = settings, opts) do
@@ -204,8 +223,82 @@ defmodule SymphonyElixir.AutoReview do
         outcome = %{verdict: :fail, result: result, reason: reason}
         apply_outcome(issue, record, Map.get(record, :qa_sha), outcome, settings, opts)
 
-      _other ->
-        transition(issue, record, String.to_existing_atom(Map.get(record, :qa_verdict)), Map.get(record, :qa_target_state), opts)
+      {qa_verdict, _applied} ->
+        verdict = String.to_existing_atom(qa_verdict)
+
+        if gate_after_qa?(verdict, settings),
+          do: gate_outcome(issue, record, Map.get(record, :qa_sha), settings, opts),
+          else: transition(issue, record, verdict, Map.get(record, :qa_target_state), opts)
+    end
+  end
+
+  # A QA `fail` (also with its fix attempts used up) never reaches the gate.
+  defp gate_after_qa?(verdict, settings), do: verdict in [:pass, :skip, :blocked] and AcceptanceGate.enabled?(settings)
+
+  defp gate_outcome(issue, record, sha, settings, opts) do
+    if Map.get(record, :gate_sha) == sha and is_binary(Map.get(record, :gate_verdict)),
+      do: apply_gate_verdict(issue, record, opts),
+      else: request_gate(issue, record, sha, settings, opts)
+  end
+
+  defp request_gate(%Issue{id: issue_id} = issue, record, sha, settings, opts) do
+    job = %{
+      issue: issue,
+      record: record,
+      sha: sha,
+      settings: settings,
+      qa: %{verdict: String.to_existing_atom(Map.get(record, :qa_verdict)), reason: Map.get(record, :qa_reason)},
+      forced: Issue.forced?(issue, settings) or forced_part?(issue_id)
+    }
+
+    case Keyword.get(opts, :gate_runner, AcceptanceGate.Runner).request(job, Keyword.take(opts, [:tracker, :run_store])) do
+      :started -> {:gate_started, issue_id, sha}
+      :running -> {:gate_running, issue_id}
+      :busy -> {:gate_queued, issue_id}
+      :usage_limited -> {:gate_waiting, issue_id, :usage_limited}
+      {:error, reason} -> {:gate_request_error, issue_id, reason}
+    end
+  end
+
+  @doc """
+  Runs one acceptance gate pass for a job built by Auto Review and applies its verdict. Runs in a
+  `SymphonyElixir.AcceptanceGate.Runner` task. An inconclusive pass below the limit leaves the
+  issue in Auto Review, and the next green poll asks for another pass. A verdict that comes after
+  the issue left Auto Review, or after its PR merged, closed or moved on, is kept but moves nothing.
+  """
+  @spec run_gate(map(), keyword()) :: tuple()
+  def run_gate(%{issue: issue, record: record, sha: sha, settings: settings} = job, opts) do
+    Usage.put_caller(:auto_review)
+
+    case Keyword.get(opts, :acceptance_gate, AcceptanceGate).judge(job, opts) do
+      {:ok, %{verdict: nil}} ->
+        {:gate_inconclusive, issue.id, sha}
+
+      {:ok, decision} ->
+        record = Map.merge(record, %{gate_sha: sha, gate_verdict: decision.verdict})
+
+        case moved_on(issue, record, sha, settings, opts) do
+          nil -> apply_gate_verdict(issue, record, opts)
+          reason -> gate_unapplied(issue, sha, decision.verdict, reason)
+        end
+    end
+  end
+
+  defp gate_unapplied(issue, sha, verdict, reason) do
+    Logger.info(
+      "Acceptance gate outcome not applied: #{reason} issue_id=#{issue.id} issue_identifier=#{issue.identifier} " <>
+        "verdict=#{verdict} sha=#{sha}"
+    )
+
+    {:auto_review_gate_not_applied, issue.id, verdict, reason}
+  end
+
+  # `shadow` (and `enforce` until it is applied) only records the verdict: the issue moves where
+  # QA sent it, as it did before the gate.
+  defp apply_gate_verdict(issue, record, opts) do
+    case transition(issue, record, String.to_existing_atom(Map.get(record, :qa_verdict)), Map.get(record, :qa_target_state), opts) do
+      {:auto_review_qa, issue_id, _qa_verdict, target_state} -> {:auto_review_gate, issue_id, Map.get(record, :gate_verdict), target_state}
+      error -> error
     end
   end
 
@@ -262,9 +355,34 @@ defmodule SymphonyElixir.AutoReview do
         {:run, playbooks} -> run_agent(job, playbooks, opts)
       end
 
+    case outcome do
+      %{verdict: :usage_limited} -> hold_pass(issue, sha, outcome, opts)
+      _verdict -> apply_or_report(issue, record, sha, outcome, settings, opts)
+    end
+  end
+
+  defp apply_or_report(issue, record, sha, outcome, settings, opts) do
     case moved_on(issue, record, sha, settings, opts) do
       nil -> apply_outcome(issue, record, sha, outcome, settings, opts)
       reason -> report_unapplied(issue, sha, outcome, reason, opts)
+    end
+  end
+
+  # A pass that ran into the provider's usage limit says nothing about the PR: it stores no
+  # verdict, writes no QA report and leaves the issue in Auto Review. The orchestrator holds the
+  # provider's runs until the limit resets, as for an agent run, and the first green CI poll after
+  # that asks for the same pass again (see `handle_green/5`).
+  defp hold_pass(issue, sha, outcome, opts) do
+    hold = Keyword.get(opts, :usage_limit_hold, &Orchestrator.hold_for_usage_limit/2)
+
+    case hold.(outcome.usage_limit, issue.identifier) do
+      {:ok, %{resume_at: resume_at}} ->
+        Logger.info("QA pass hit the usage limit for #{issue.identifier} sha=#{sha}; no verdict, running it again after #{DateTime.to_iso8601(resume_at)}")
+        {:qa_usage_limited, issue.id, resume_at}
+
+      other ->
+        Logger.warning("QA pass hit the usage limit for #{issue.identifier} sha=#{sha}; no verdict, but the hold was not recorded: #{inspect(other)}")
+        {:qa_usage_limited, issue.id, nil}
     end
   end
 
@@ -441,7 +559,7 @@ defmodule SymphonyElixir.AutoReview do
     {outcome, tokens} =
       case Keyword.get(opts, :qa_agent, QaAgent).run(agent_job, settings, opts) do
         {:ok, %{result: result, tokens: tokens}} -> {%{verdict: result.verdict, result: result}, tokens}
-        {:error, reason, tokens} -> {%{verdict: :blocked, reason: blocked_reason(reason)}, tokens}
+        {:error, reason, tokens} -> {error_outcome(reason, settings), tokens}
       end
 
     ended_at = DateTime.utc_now()
@@ -458,6 +576,24 @@ defmodule SymphonyElixir.AutoReview do
 
     Map.merge(outcome, %{playbooks: kinds, tokens: tokens, runtime_seconds: runtime_seconds, run_id: run_id})
   end
+
+  # With `agent.usage_limit.auto_pause` off, a usage limit is `blocked` like any other error, as
+  # an agent run that hits it fails.
+  defp error_outcome(reason, settings) do
+    case usage_limit(reason) do
+      %{} = info when settings.agent.usage_limit.auto_pause ->
+        %{verdict: :usage_limited, usage_limit: info, reason: "the QA agent hit the #{UsageLimit.limit_label(info)}"}
+
+      _other ->
+        %{verdict: :blocked, reason: blocked_reason(reason)}
+    end
+  end
+
+  @doc "The usage-limit info of a `SymphonyElixir.QaAgent.run/3` error caused by a provider usage limit, else nil."
+  @spec usage_limit(term()) :: map() | nil
+  def usage_limit({:qa_agent_failed, reason}), do: usage_limit(reason)
+  def usage_limit({:usage_limited, %{} = info}), do: info
+  def usage_limit(_reason), do: nil
 
   @doc "The `blocked` reason the QA report gives for a `SymphonyElixir.QaAgent.run/3` error."
   @spec blocked_reason(term()) :: String.t()
@@ -489,12 +625,13 @@ defmodule SymphonyElixir.AutoReview do
     result = Map.get(outcome, :result, %{})
     verdict = outcome.verdict
     fix_attempts = Map.get(record, :qa_fix_attempts, 0)
-    {target_state, escalated?} = target(verdict, fix_attempts, config.max_fix_attempts)
+    {target_state, escalated?} = target(verdict, result, fix_attempts, config.max_fix_attempts, settings)
 
     attrs =
       %{
         qa_sha: sha,
         qa_verdict: Atom.to_string(verdict),
+        qa_reason: Map.get(outcome, :reason) || Map.get(result, :reason),
         qa_target_state: target_state,
         qa_applied: false,
         qa_run_id: Map.get(outcome, :run_id),
@@ -518,7 +655,10 @@ defmodule SymphonyElixir.AutoReview do
     )
 
     notify(issue, record, verdict, target_state, outcome)
-    transition(issue, Map.merge(record, attrs), verdict, target_state, opts)
+
+    if gate_after_qa?(verdict, settings),
+      do: request_gate(issue, Map.merge(record, attrs), sha, settings, opts),
+      else: transition(issue, Map.merge(record, attrs), verdict, target_state, opts)
   end
 
   defp publish_report(issue, sha, outcome, attrs, opts) do
@@ -534,9 +674,10 @@ defmodule SymphonyElixir.AutoReview do
     end
   end
 
-  defp target(:fail, fix_attempts, max_fix_attempts) when fix_attempts < max_fix_attempts, do: {@active_state, false}
-  defp target(:fail, _fix_attempts, _max_fix_attempts), do: {@review_state, true}
-  defp target(_verdict, _fix_attempts, _max_fix_attempts), do: {@review_state, false}
+  defp target(:fail, _result, fix_attempts, max_fix_attempts, _settings) when fix_attempts < max_fix_attempts, do: {@active_state, false}
+  defp target(:fail, _result, _fix_attempts, _max_fix_attempts, _settings), do: {@review_state, true}
+  defp target(:blocked, %{needs_person: true}, _fix_attempts, _max_fix_attempts, settings), do: {HumanReview.target_state(settings), false}
+  defp target(_verdict, _result, _fix_attempts, _max_fix_attempts, _settings), do: {@review_state, false}
 
   defp verdict_attrs(:pass, _escalated?, _fix_attempts, _sha, _result), do: %{qa_passed: true, qa_fix_attempts: 0, qa_failure: nil}
 
