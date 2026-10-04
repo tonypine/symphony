@@ -357,6 +357,8 @@ implementation detail. Tickets with no user-facing change can leave the section 
 - [docs/security.md](docs/security.md) — threat model, built-in protections, and best practices.
 - [docs/development.md](docs/development.md) — toolchain, testing, packaging, and fork notes.
 - [docs/releasing.md](docs/releasing.md) — how to version and publish a release.
+- [docs/github-webhooks.md](docs/github-webhooks.md) — relay GitHub check results to Symphony on
+  macOS so CI results land in seconds.
 - [macos/README.md](macos/README.md) — the macOS menu bar app: install, first run, controls, update,
   rollback, development mode, and troubleshooting.
 - [docs/logging.md](docs/logging.md),

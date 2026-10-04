@@ -57,6 +57,11 @@ defmodule SymphonyElixir.Paths do
     Path.join(state_root(), "control_token")
   end
 
+  @spec github_webhook_secret_file() :: Path.t()
+  def github_webhook_secret_file do
+    Path.join(state_root(), "github_webhook_secret")
+  end
+
   @spec control_url_file() :: Path.t()
   def control_url_file do
     Path.join(state_root(), "control_url")

@@ -1255,7 +1255,24 @@ github:
   # draft. A human reviewer marks it ready. Set to false to open PRs ready for
   # review by default. An explicit draft argument from the agent always wins.
   open_pull_requests_as_draft: true
+  # GitHub webhooks through a relay; they speed up the CI poll, which stays on.
+  webhooks:
+    enabled: false
+    relay: smee # smee | cloudflare_tunnel | gh_webhook_forward
+    secret: $GITHUB_WEBHOOK_SECRET # unset: read <state-root>/github_webhook_secret
+    events: [check_suite, check_run, workflow_run, pull_request]
 ```
+
+`webhooks` lets GitHub tell Symphony that a pull request's checks finished, so a CI result lands in
+seconds instead of up to one `pull_requests.poll_interval_ms`. Symphony listens on
+`127.0.0.1`, so the deliveries come through a relay to `POST /api/v1/github/webhook` on the
+dashboard port. A delivery about a PR the CI poller already watches runs the CI poll for that
+repository at once, and a `ping` (sent when a hook is created) runs a full poll. Deliveries whose
+`X-Hub-Signature-256` does not verify get `401` and are logged without their payload. The timed
+poll keeps running and catches up on anything the relay drops while the Mac sleeps or Symphony
+restarts. The dashboard's GitHub webhooks card shows whether webhooks are on, when the last
+delivery arrived, and how many CI results came through the relay and how many by polling. See
+[github-webhooks.md](github-webhooks.md) for relay setup on macOS.
 
 ### `notifications`
 

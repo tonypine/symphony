@@ -55,6 +55,11 @@ workspaces:
 # github:
 #   enterprise_hosts: []
 #   failed_run_log_max_bytes: 65536
+#   # CI results through a webhook relay; see docs/github-webhooks.md. Needs a fixed dashboard.port.
+#   webhooks:
+#     enabled: false
+#     relay: smee   # smee | cloudflare_tunnel | gh_webhook_forward
+#     secret: $GITHUB_WEBHOOK_SECRET
 
 agent:
   runtime: codex
