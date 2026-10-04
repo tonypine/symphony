@@ -1849,7 +1849,16 @@ defmodule SymphonyElixir.ExtensionsTest do
       lane("e2", "MT-E2", "waiting", %{issue_id: "p2", identifier: "MT-P2", state: "In Review"}),
       lane("e5", "MT-E5", "running", %{issue_id: "b5", identifier: "MT-B5", state: "In Progress", via: %{relation: "blocks", identifier: "MT-P5"}}),
       lane("e6", "MT-E6", "running", %{issue_id: "g6", identifier: "MT-G6", state: "Todo", via: %{relation: "sub_ticket_of", identifier: "MT-P6"}}),
-      %{issue_id: "e3", identifier: "MT-E3", title: "Epic three", url: nil, status: "waiting", sub_issue: nil}
+      %{issue_id: "e3", identifier: "MT-E3", title: "Epic three", url: nil, status: "waiting", sub_issue: nil},
+      %{
+        issue_id: "e7",
+        identifier: "MT-E7",
+        title: "Epic seven",
+        url: nil,
+        status: "yielded",
+        reason: "Nothing on its path can run: MT-P7 (In Review)",
+        sub_issue: %{issue_id: "p7", identifier: "MT-P7", state: "In Review"}
+      }
     ]
 
     snapshot =
@@ -1873,6 +1882,8 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "Waiting on MT-P2 (In Review)"
     assert html =~ "Waiting for its next sub-ticket"
     assert html =~ "Idle, reserved"
+    assert html =~ "Yielded"
+    assert html =~ "Nothing on its path can run: MT-P7 (In Review)"
     assert html =~ "Waiting for a lane: MT-E4"
     refute html =~ "No active epics"
 
