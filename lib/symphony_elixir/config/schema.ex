@@ -5,6 +5,7 @@ defmodule SymphonyElixir.Config.Schema do
 
   import Ecto.Changeset
 
+  alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.{PathSafety, RunKind, Secret}
 
   require Logger
@@ -764,7 +765,7 @@ defmodule SymphonyElixir.Config.Schema do
       def changeset(schema, attrs) do
         schema
         |> cast(attrs, [:mode, :allowed_domains, :denied_domains], empty_values: [])
-        |> validate_required([:mode])
+        |> Schema.validate_present([:mode])
         |> validate_inclusion(:mode, @modes)
       end
     end
@@ -789,14 +790,14 @@ defmodule SymphonyElixir.Config.Schema do
       def changeset(schema, attrs) do
         schema
         |> cast(attrs, [:kind, :command, :enable_weaker_network_isolation], empty_values: [])
-        |> validate_required([:kind])
+        |> Schema.validate_present([:kind])
         |> validate_inclusion(:kind, @kinds)
         |> validate_command_when_enabled()
       end
 
       defp validate_command_when_enabled(changeset) do
         case get_field(changeset, :kind) do
-          "srt" -> validate_required(changeset, [:command])
+          "srt" -> Schema.validate_present(changeset, [:command])
           _kind -> changeset
         end
       end
@@ -824,7 +825,7 @@ defmodule SymphonyElixir.Config.Schema do
       def changeset(schema, attrs) do
         schema
         |> cast(attrs, @fields, empty_values: [])
-        |> validate_required([:auto_pause, :resume_margin_seconds, :unknown_reset_retry_seconds])
+        |> Schema.validate_present([:auto_pause, :resume_margin_seconds, :unknown_reset_retry_seconds])
         |> validate_number(:resume_margin_seconds, greater_than_or_equal_to: 0)
         |> validate_number(:unknown_reset_retry_seconds, greater_than_or_equal_to: 60)
         |> validate_number(:headroom_utilization, greater_than: 0, less_than_or_equal_to: 1)
@@ -868,7 +869,7 @@ defmodule SymphonyElixir.Config.Schema do
         def changeset(schema, attrs) do
           schema
           |> cast(attrs, [:name, :transport, :command, :args, :env, :url, :headers, :runtimes], empty_values: [])
-          |> validate_required([:name, :transport])
+          |> Schema.validate_present([:name, :transport])
           |> validate_inclusion(:transport, @transports)
           |> normalize_string_list(:args)
           |> normalize_string_list(:runtimes)
@@ -924,8 +925,8 @@ defmodule SymphonyElixir.Config.Schema do
 
         defp validate_transport_requirements(changeset) do
           case get_field(changeset, :transport) do
-            "stdio" -> validate_required(changeset, [:command])
-            transport when transport in ["http", "sse"] -> validate_required(changeset, [:url])
+            "stdio" -> Schema.validate_present(changeset, [:command])
+            transport when transport in ["http", "sse"] -> Schema.validate_present(changeset, [:url])
             _transport -> changeset
           end
         end
@@ -956,7 +957,7 @@ defmodule SymphonyElixir.Config.Schema do
       def changeset(schema, attrs) do
         schema
         |> cast(attrs, [:inherit, :allowed_servers, :servers], empty_values: [])
-        |> validate_required([:inherit])
+        |> Schema.validate_present([:inherit])
         |> validate_inclusion(:inherit, @inherit_modes)
         |> normalize_string_list(:allowed_servers)
         |> validate_allowlist_servers()
@@ -1117,7 +1118,7 @@ defmodule SymphonyElixir.Config.Schema do
         ],
         empty_values: []
       )
-      |> validate_required([:kind, :command, :force_label])
+      |> Schema.validate_present([:kind, :command, :force_label])
       |> validate_inclusion(:kind, ["codex", "claude"])
       |> validate_number(:max_concurrent_agents, greater_than: 0)
       |> validate_epic_lanes()
@@ -1467,7 +1468,7 @@ defmodule SymphonyElixir.Config.Schema do
       )
       |> put_polling_defaults()
       |> normalize_ignored_users()
-      |> validate_required([:mode])
+      |> Schema.validate_present([:mode])
       |> validate_inclusion(:mode, @modes)
       |> validate_polling_options()
     end
@@ -1530,7 +1531,7 @@ defmodule SymphonyElixir.Config.Schema do
     defp validate_polling_options(changeset) do
       if get_field(changeset, :mode) == "polling" do
         changeset
-        |> validate_required([:cooldown_minutes, :stale_days])
+        |> Schema.validate_present([:cooldown_minutes, :stale_days])
         |> validate_number(:poll_interval_ms, greater_than: 0)
         |> validate_number(:cooldown_minutes, greater_than: 0)
         |> validate_number(:stale_days, greater_than: 0)
@@ -1620,7 +1621,7 @@ defmodule SymphonyElixir.Config.Schema do
       def changeset(schema, attrs) do
         schema
         |> cast(attrs, [:range], empty_values: [])
-        |> validate_required([:range])
+        |> Schema.validate_present([:range])
         |> validate_range()
       end
 
@@ -1829,7 +1830,7 @@ defmodule SymphonyElixir.Config.Schema do
     defp validate_required_when_enabled(changeset) do
       if get_field(changeset, :enabled) do
         changeset
-        |> validate_required([:provider, :model],
+        |> Schema.validate_present([:provider, :model],
           message: "is required when quality_gate.enabled is true"
         )
       else
@@ -1869,7 +1870,7 @@ defmodule SymphonyElixir.Config.Schema do
 
     defp validate_required_when_enabled(changeset) do
       if get_field(changeset, :enabled) do
-        validate_required(changeset, [:provider, :model, :max_total_per_repo, :max_per_run], message: "is required when learnings.enabled is true")
+        Schema.validate_present(changeset, [:provider, :model, :max_total_per_repo, :max_per_run], message: "is required when learnings.enabled is true")
       else
         changeset
       end
@@ -1909,7 +1910,7 @@ defmodule SymphonyElixir.Config.Schema do
 
     defp validate_required_when_enabled(changeset) do
       if get_field(changeset, :enabled) do
-        validate_required(changeset, [:kind, :command, :max_iterations], message: "is required when review_agent.enabled is true")
+        Schema.validate_present(changeset, [:kind, :command, :max_iterations], message: "is required when review_agent.enabled is true")
       else
         changeset
       end
@@ -1962,7 +1963,7 @@ defmodule SymphonyElixir.Config.Schema do
     def changeset(schema, attrs) do
       schema
       |> cast(attrs, @fields, empty_values: [])
-      |> validate_required([:state])
+      |> Schema.validate_present([:state])
       |> validate_format(:worker_host, ~r/\A[^\s-]\S*\z/, message: "must be an SSH host such as qa@qa-vm.local or qa-vm:2222")
       |> validate_inclusion(:kind, ["codex", "claude"])
       |> validate_inclusion(:run_on, ["every_push", "first_pass"])
@@ -2068,7 +2069,7 @@ defmodule SymphonyElixir.Config.Schema do
         |> update_change(:kind, &normalize_string/1)
         |> update_change(:events, &normalize_events/1)
         |> update_change(:headers, &normalize_headers/1)
-        |> validate_required([:kind])
+        |> Schema.validate_present([:kind])
         |> validate_inclusion(:kind, @kinds)
         |> validate_event_names()
         |> validate_webhook_url_field(:webhook_url)
@@ -2366,6 +2367,18 @@ defmodule SymphonyElixir.Config.Schema do
     Enum.reduce(limits, %{}, fn {state_name, limit}, acc ->
       Map.put(acc, normalize_issue_state(to_string(state_name)), limit)
     end)
+  end
+
+  # Config changesets cast with `empty_values: []` so a blank string reaches the
+  # validators as itself. Since Ecto 3.14, `validate_required/3` only counts the
+  # changeset's `empty_values` as missing, so it is run with `""` empty here to
+  # keep reporting a blank required string as "can't be blank".
+  @doc false
+  @spec validate_present(Ecto.Changeset.t(), atom() | [atom()], keyword()) :: Ecto.Changeset.t()
+  def validate_present(%Ecto.Changeset{empty_values: empty_values} = changeset, fields, opts \\ []) do
+    %{changeset | empty_values: [""]}
+    |> validate_required(fields, opts)
+    |> Map.put(:empty_values, empty_values)
   end
 
   @doc false
