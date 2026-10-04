@@ -754,6 +754,72 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
              ] = Enum.sort_by(snapshot_of(state).forced, & &1.issue_id)
     end
 
+    test "a cleared ticket's QA pass gives the allowance back, and a ticket still forced takes it", ctx do
+      write_forced_workflow!(ctx, max_concurrent_agents: 1)
+      start_supervised!({QaRunner, run_fun: fn _job, _opts -> Process.sleep(:infinity) end, forced_runs_fun: fn -> 0 end})
+      settings = Config.settings!()
+      settings = %{settings | auto_review: %{settings.auto_review | max_concurrent: 1}}
+      in_review = issue("qa-forced", "MT-QAF", "Auto Review", forced: true)
+      waiting = issue("forced-1", "MT-F1", "Todo", forced: true)
+      tracked([in_review, waiting])
+
+      qa_job = fn issue, forced? -> %{issue: issue, record: %{}, sha: "abc", settings: settings, forced: forced?} end
+
+      assert :started = QaRunner.request(qa_job.(%{id: "qa-1", identifier: "MT-QA1"}, false))
+      assert :started = QaRunner.request(qa_job.(in_review, true))
+
+      queue = %{
+        "qa-forced" => queue_entry(in_review, ~U[2026-10-04 06:00:00Z]),
+        "forced-1" => queue_entry(waiting, ~U[2026-10-04 07:00:00Z])
+      }
+
+      state = run(%{orchestrator_state(1) | forced: queue}, issue("impl-1", "MT-1", "In Progress"), :implementation)
+
+      # `symphony force --clear MT-QAF` while its QA pass is going.
+      clear = {:force_issue, %{in_review | labels: []}}
+
+      log =
+        capture_log(fn ->
+          send(self(), {:reply, Orchestrator.handle_call(clear, {self(), make_ref()}, state)})
+          QaRunner.snapshot()
+        end)
+
+      assert_received {:reply, {:reply, {:ok, %{forced: false}}, state}}
+      assert log =~ "QA pass released the forced allowance issue_id=qa-forced issue_identifier=MT-QAF sha=abc"
+      assert %{qa: %{running: [%{issue_id: "qa-1", forced: false}, %{issue_id: "qa-forced", forced: false}]}} = snapshot_of(state)
+
+      {state, log} = dispatch_with_log([waiting], state)
+
+      assert %{forced: true} = state.running["forced-1"]
+      assert log =~ ~r/issue_id=forced-1 .* slot=forced forced=true/
+      refute log =~ "Forced ticket waiting"
+    end
+
+    test "a forced parent's part leaving gives its QA pass's allowance back; a pass the queue never had keeps it", ctx do
+      write_forced_workflow!(ctx, forced_max: 2)
+      start_supervised!({QaRunner, run_fun: fn _job, _opts -> Process.sleep(:infinity) end, forced_runs_fun: fn -> 0 end})
+      settings = Config.settings!()
+      settings = %{settings | auto_review: %{settings.auto_review | max_concurrent: 1}}
+
+      qa_job = fn id, identifier, forced? ->
+        %{issue: %{id: id, identifier: identifier}, record: %{}, sha: "abc", settings: settings, forced: forced?}
+      end
+
+      assert :started = QaRunner.request(qa_job.("qa-1", "MT-QA1", false))
+      assert :started = QaRunner.request(qa_job.("part-1", "MT-P1", true))
+      # Labelled while in Auto Review: the poll never put it in the forced queue.
+      assert :started = QaRunner.request(qa_job.("qa-labelled", "MT-QAL", true))
+
+      state = %{orchestrator_state(1) | forced_parts: %{"epic-1" => %{issue_id: "part-1", identifier: "MT-P1", state: "Auto Review"}}}
+
+      # The parent left the poll, so it has no part any more.
+      state = Orchestrator.put_forced_parts_for_test(state, [])
+      assert state.forced_parts == %{}
+
+      assert %{running: running} = QaRunner.snapshot()
+      assert [%{issue_id: "part-1", forced: false}, %{issue_id: "qa-1", forced: false}, %{issue_id: "qa-labelled", forced: true}] = running
+    end
+
     test "an unreachable QA runner counts no forced passes" do
       dying = spawn(fn -> receive do: (_message -> exit(:boom)) end)
       Process.register(dying, QaRunner)

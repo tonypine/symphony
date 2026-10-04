@@ -572,7 +572,8 @@ agent:
   walkthrough. Its run is marked `forced` (`/api/v1/state` `running[].forced`) and takes none of the
   normal slots; a run already going when the label is added stays a normal run, and no running
   agent is stopped. Once the label is removed (or a forced parent's is), a forced run already
-  going gives the allowance back and goes on as a normal run, so a ticket still forced can take it.
+  going gives the allowance back and goes on as a normal run, so a ticket still forced can take it;
+  so does its Auto Review QA pass on the allowance.
   A forced ticket past `forced_max` gets no extra slot: it still goes first for a
   normal one, waits as `queued #2; forced slot taken by MT-1` in `slot_waiting`, and Symphony logs a
   warning and sends one `forced_waiting` notification naming the forced run holding the allowance.
@@ -1054,8 +1055,12 @@ no request has come for it in two CI poll intervals (it left Auto Review, or its
 pending), other tickets take free slots again. When every QA slot is busy it starts on the forced
 allowance instead, as long as fewer than `concurrency.forced_max` forced runs and forced passes
 are going; such a pass takes no QA slot, counts toward `forced_max`, and is logged with
-`forced=true`. Past `forced_max` it waits at the front of the queue. The verdict is applied as for
-any pass: a failing pass still sends the ticket back for a fix. `/api/v1/state` lists the passes
+`forced=true`. Once the label is removed (`symphony force --clear`, or the forced parent's), or the
+sub-ticket stops being the forced parent's current one, a pass on the allowance gives it back and
+goes on as a normal pass (`forced: false`), so a ticket still forced can take the allowance. A
+ticket labelled in Linear while it is in Auto Review (outside `active_states`) never joins the
+forced queue, so its pass keeps the allowance until it ends. Past `forced_max` a forced request
+waits at the front of the queue. The verdict is applied as for any pass: a failing pass still sends the ticket back for a fix. `/api/v1/state` lists the passes
 under `qa.running` and the waiting requests under `qa.queued`, each with `forced`.
 
 #### Parent walkthrough

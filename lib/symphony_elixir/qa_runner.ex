@@ -23,7 +23,9 @@ defmodule SymphonyElixir.QaRunner do
   slot busy, a forced request starts on the forced allowance instead, while fewer than
   `agent.concurrency.forced_max` forced runs (the orchestrator's, read from its published snapshot,
   plus forced passes here) are going. A pass on the allowance is marked `forced` and takes no QA
-  slot. Forcing changes when a pass starts, never its verdict.
+  slot. Once its ticket is no longer forced (the orchestrator calls `release_forced/2`), a pass on
+  the allowance gives it back and goes on as a normal pass. Forcing changes when a pass starts,
+  never its verdict.
   """
 
   use GenServer
@@ -103,6 +105,13 @@ defmodule SymphonyElixir.QaRunner do
     end
   end
 
+  @doc """
+  Gives the forced allowance back for the passes of `issue_ids`, issues that are no longer forced:
+  each such pass goes on as a normal pass and stops counting toward `forced_max`.
+  """
+  @spec release_forced([String.t()], GenServer.server()) :: :ok
+  def release_forced(issue_ids, server \\ __MODULE__) when is_list(issue_ids), do: GenServer.cast(server, {:release_forced, issue_ids})
+
   @impl true
   def init(opts) do
     {:ok,
@@ -171,6 +180,17 @@ defmodule SymphonyElixir.QaRunner do
       |> Enum.map(fn {issue_id, entry} -> %{issue_id: issue_id, identifier: entry.identifier, waiting_on: entry.waiting_on} end)
 
     {:reply, passes, state}
+  end
+
+  @impl true
+  def handle_cast({:release_forced, issue_ids}, state) do
+    released =
+      for {issue_id, %{forced: true} = entry} <- state.running, issue_id in issue_ids, into: %{} do
+        Logger.info("QA pass released the forced allowance issue_id=#{issue_id} issue_identifier=#{entry.identifier} sha=#{entry.sha}; no longer forced, running on as a normal pass")
+        {issue_id, %{entry | forced: false}}
+      end
+
+    {:noreply, %{state | running: Map.merge(state.running, released)}}
   end
 
   @impl true
