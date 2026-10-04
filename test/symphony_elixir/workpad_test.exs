@@ -249,7 +249,7 @@ defmodule SymphonyElixir.WorkpadTest do
                    "nodes" => [
                      %{
                        "id" => "comment-workpad",
-                       "body" => "## Codex Workpad\nExisting notes with <pending> & follow-up",
+                       "body" => "## Codex Workpad\nExisting notes with <pending> & follow-up, &lt;kept&gt; and a quoted </linear_issue_comment_body>",
                        "createdAt" => "2026-05-21T04:00:00Z",
                        "updatedAt" => "2026-05-21T04:00:00Z",
                        "user" => %{"id" => "user-1", "name" => "Codex"}
@@ -275,7 +275,7 @@ defmodule SymphonyElixir.WorkpadTest do
     assert query =~ "SymphonyAgentIssueComments"
 
     assert [
-             %{author: "Codex", body: "## Codex Workpad\nExisting notes with <pending> & follow-up", created_at: nil},
+             %{author: "Codex", body: "## Codex Workpad\nExisting notes with <pending> & follow-up, &lt;kept&gt; and a quoted </linear_issue_comment_body>", created_at: nil},
              %{author: "Reporter", body: "Recent context", created_at: nil}
            ] = updated_issue.comments
   end
