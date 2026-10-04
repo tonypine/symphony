@@ -1339,7 +1339,8 @@ When enabled:
   `qa_android_install` has installed a configured app in the pass. The tree MUST be read through
   `adb exec-out`, never from a file on the device, and capped in depth, nodes and bytes, saying when
   nodes were left out; tap MUST refuse a point off the display and a path that is not in the last
-  tree; keys, orientations, night modes and font scales MUST come from fixed allowlists; and typed
+  tree; keys, orientations, night modes and font scales MUST come from fixed allowlists; rotate MUST
+  report success only once the display has turned, and `qa_android_rotate_failed` otherwise; and typed
   text MUST reach the device's shell quoted so that no character in it can run a command. When the
   pass ends or crashes, Symphony MUST reset the rotation, dark mode and font scale the pass changed,
   uninstall the configured apps and every package installed in the pass, release the lease and

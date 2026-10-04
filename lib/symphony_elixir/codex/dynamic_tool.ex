@@ -551,7 +551,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     },
     %{
       "name" => "qa_android_rotate",
-      "description" => "Turn off auto-rotate and rotate the emulator. Reset to portrait when the QA pass ends.",
+      "description" => "Turn off auto-rotate and rotate the emulator; fails with qa_android_rotate_failed when the display does not turn. Reset to portrait when the QA pass ends.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
