@@ -2561,7 +2561,9 @@ defmodule SymphonyElixir.Orchestrator do
 
   # A `breakdown` parent left `In Progress` with open sub-issues moves to the waiting state, so
   # `In Progress` only holds issues an agent is working. Candidates come from the repo poll cache,
-  # so a parent stays in `parked_parents` until the cache stops showing it `In Progress`.
+  # so a parent stays in `parked_parents` until the cache stops showing it `In Progress`. The cache
+  # can still show `In Progress` for a parent whose breakdown run just moved it to `In Review`, so
+  # each one is read again first: moving it on from `In Review` would read as approving its plan.
   defp park_breakdown_parents(issues, %State{} = state) do
     settings = Config.settings!()
     terminal_states = terminal_state_set()
@@ -2571,10 +2573,25 @@ defmodule SymphonyElixir.Orchestrator do
     parked =
       parkable
       |> Enum.reject(&(MapSet.member?(already_parked, &1.id) or issue_claimed_or_running?(state, &1.id)))
+      |> still_parkable()
       |> Enum.filter(&park_breakdown_parent(&1, SubIssueWait.state(settings)))
       |> MapSet.new(& &1.id)
 
     %{state | parked_parents: MapSet.union(already_parked, parked)}
+  end
+
+  defp still_parkable([]), do: []
+
+  defp still_parkable(issues) do
+    case Tracker.fetch_issue_states_by_ids(Enum.map(issues, & &1.id)) do
+      {:ok, fresh_issues} ->
+        in_progress = for %Issue{id: id} = fresh <- fresh_issues, SubIssueWait.parked_from?(fresh), into: MapSet.new(), do: id
+        Enum.filter(issues, &MapSet.member?(in_progress, &1.id))
+
+      {:error, reason} ->
+        Logger.warning("Failed to refresh breakdown parents before parking; retrying next poll reason=#{inspect(reason)}")
+        []
+    end
   end
 
   # A human's review of a `breakdown` parent's plan: approving it (In Review to the waiting state)
@@ -2611,14 +2628,27 @@ defmodule SymphonyElixir.Orchestrator do
   defp review_breakdown_parent(%Issue{id: issue_id} = issue, action, settings) do
     case Tracker.fetch_breakdown_history(issue_id) do
       {:ok, history} ->
-        action
-        |> BreakdownReview.sub_issues_to_move(history, settings)
-        |> Enum.map(&move_breakdown_sub_issue(issue, action, &1))
-        |> log_breakdown_review(issue, action)
+        review_breakdown_history(issue, action, history, settings)
 
       {:error, reason} ->
         Logger.warning("Failed to read breakdown parent history: #{issue_context(issue)} reason=#{inspect(reason)}")
         false
+    end
+  end
+
+  # When Symphony last moved the parent itself, so its own move is not read as a person's approval.
+  # Without that record nothing is moved; the next poll tries again.
+  defp review_breakdown_history(%Issue{id: issue_id} = issue, action, history, settings) do
+    case RunStore.get_own_state_move(issue_id) do
+      {:error, reason} ->
+        Logger.warning("Failed to read Symphony's own moves of breakdown parent: #{issue_context(issue)} reason=#{inspect(reason)}")
+        false
+
+      own_move_at ->
+        action
+        |> BreakdownReview.sub_issues_to_move(history, settings, own_move_at)
+        |> Enum.map(&move_breakdown_sub_issue(issue, action, &1))
+        |> log_breakdown_review(issue, action)
     end
   end
 
@@ -2707,7 +2737,11 @@ defmodule SymphonyElixir.Orchestrator do
     MapSet.member?(state.claimed, issue_id) or Map.has_key?(state.running, issue_id)
   end
 
+  # The move is recorded before it is made, so a review reading the parent's history never sees
+  # it without the record that marks it as Symphony's.
   defp park_breakdown_parent(%Issue{id: issue_id} = issue, waiting_state) do
+    issue_id |> RunStore.put_own_state_move(DateTime.utc_now()) |> log_run_store_error("record breakdown parent move")
+
     case Tracker.update_issue_state(issue_id, waiting_state) do
       :ok ->
         Logger.info("Moved breakdown parent to #{waiting_state} while its sub-issues are open: #{issue_context(issue)}")

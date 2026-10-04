@@ -1845,7 +1845,10 @@ An issue is dispatch-eligible only if all are true:
     run). Any other issue in that state waits for a human.
   - On each poll, a `breakdown` parent in `In Progress` with a non-terminal sub-issue that is not
     running or claimed is moved to the waiting state, so `In Progress` only holds issues an agent
-    is working. Agents cannot move an issue there: `linear_update_state` refuses the state,
+    is working. The poll's candidates can be stale (a breakdown run that just moved its parent to
+    `In Review` still shows `In Progress`), so the service reads the parent's state again just
+    before the move and skips it unless it is still `In Progress`; a failed read skips every
+    parent until the next poll. Agents cannot move an issue there: `linear_update_state` refuses the state,
     because a human moving a parent there approves its plan (next rule).
 - Plan review rule:
   - The breakdown run leaves its sub-issues in `Backlog` and moves the parent to `In Review`
@@ -1855,7 +1858,10 @@ An issue is dispatch-eligible only if all are true:
     its latest state change is `In Review` to the waiting state, every sub-issue that has been in
     `Backlog` since before that change (created before it, no state change after it) moves to
     `Todo` in one batch. Blocked-by links keep the order. A parent the service parked from
-    `In Progress` was not approved, so nothing moves.
+    `In Progress` was not approved, so nothing moves. Only a person's move approves: the service
+    and the reviewer can share one Linear user, so the service durably records when it moves a
+    parent to the waiting state itself (before the move), and a change within 60 seconds of that
+    record is not an approval. While that record cannot be read nothing moves.
   - Rejection: for a `breakdown` parent in `Rework` with a sub-issue in `Backlog`, the rejected
     plan's sub-issues in `Backlog` since the parent's latest move to `Rework` are cancelled
     (`Canceled`, else `Cancelled`) before the re-plan is dispatched; until that succeeds the
@@ -3961,6 +3967,9 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
   to `Todo` within one poll; sub-issues in other states, or moved back to `Backlog` after the
   approval, are left alone, and a re-poll moves nothing
 - `breakdown` parent parked from `In Progress` to the waiting state has nothing promoted
+- `breakdown` parent the poll cache shows `In Progress` but a fresh read shows `In Review` is not
+  moved, and its `Backlog` sub-issues stay there
+- a waiting-state move the service made itself is never an approval, even from `In Review`
 - `breakdown` parent in `Rework` has the rejected plan's pre-`Rework` `Backlog` sub-issues
   cancelled, leaves a `Backlog` sub-issue a person created outside that run alone, is not held
   by its open sub-issues, and is not dispatched until the cancel succeeds
