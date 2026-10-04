@@ -2791,11 +2791,13 @@ Orchestrator behavior on tracker errors:
   most five minutes. This covers the issue enrichment and workpad bootstrap (the Todo → In Progress
   move, the workpad read and create), the post-turn issue refresh, the dependency-approval move, the
   move after a finished rework, the idle park and its note, and the parent walkthrough's parent
-  read, QA report, gap tickets and final state move (the verdict is kept while that move waits). A
-  run that still fails on one once the wait runs out keeps its attempt and is retried after 5 s (or
-  when the pause ends) instead of the failure backoff, as are a post-PR move to Auto Review or In
-  Review, a retry's issue refresh, and a retry's dispatch refresh that hit one. A retry whose
-  dispatch refresh fails for any reason is scheduled again rather than dropped.
+  read, QA report, gap tickets and final state move (the verdict is kept while that move waits, for
+  up to 30 minutes rather than five, since a lost verdict means running the whole QA walkthrough
+  again and filing its gap tickets twice). A run that still fails on one once the wait runs out
+  keeps its attempt and is retried after 5 s (or when the pause ends) instead of the failure
+  backoff, as are a post-PR move to Auto Review or In Review, a retry's issue refresh, and a retry's
+  dispatch refresh that hit one. A retry whose dispatch refresh fails for any reason is scheduled
+  again rather than dropped.
 - Usage by caller: count every Linear request against its caller (orchestrator, CI poller, PR review
   poller, Auto Review, post-PR transition, `agent:<identifier>` for an agent run and its tools) over
   a rolling hour, and by query (the GraphQL operation name, `unnamed` without one), and show the

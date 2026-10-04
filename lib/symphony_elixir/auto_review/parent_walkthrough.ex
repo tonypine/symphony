@@ -19,7 +19,8 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
 
   Each Linear call waits out a rate limit or a dropped connection
   (`SymphonyElixir.Linear.TransientRetry`) instead of failing the run; the verdict is kept while the
-  final state move waits, so a finished QA pass is not thrown away.
+  final state move waits, for up to 30 minutes rather than the default five, so a finished QA pass is
+  not thrown away.
 
   Playbooks come from `qa:<kind>` labels on the verification ticket or the parent; without one,
   every enabled playbook is offered, since there is no diff to select from.
@@ -44,6 +45,9 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
   @label_prefix "qa:"
   @title_limit 120
   @details_limit 4_000
+  # Longer than the QA run a lost verdict would redo, so a rate limit that outlasts the default
+  # five-minute wait does not throw the verdict away.
+  @verdict_move_max_wait_ms 30 * 60_000
 
   @doc """
   Runs the parent walkthrough for `issue` in its `workspace` when it applies, applies the outcome
@@ -184,8 +188,9 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
 
     Enum.each([parent, issue], &publish(&1, report, settings, opts))
     move = fn -> Keyword.get(opts, :tracker, Tracker).update_issue_state(issue.id, target_state) end
+    move_label = "moving #{issue.identifier} to #{target_state} after the parent walkthrough"
 
-    case with_linear_retry(move, "moving #{issue.identifier} to #{target_state} after the parent walkthrough", opts) do
+    case with_linear_retry(move, move_label, verdict_move_opts(opts)) do
       :ok ->
         Logger.info("Parent walkthrough for #{parent.identifier} ended #{outcome.verdict}; moved #{issue.identifier} to #{target_state}")
         :ok
@@ -326,6 +331,16 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
   defp title(text), do: text |> String.slice(0, @title_limit) |> String.trim()
 
   defp linear_opts(opts), do: Keyword.take(opts, [:linear_client])
+
+  # A caller's own `:max_wait_ms` still wins.
+  defp verdict_move_opts(opts) do
+    Keyword.update(
+      opts,
+      :linear_retry_opts,
+      [max_wait_ms: @verdict_move_max_wait_ms],
+      &Keyword.put_new(&1, :max_wait_ms, @verdict_move_max_wait_ms)
+    )
+  end
 
   defp with_linear_retry(fun, label, opts) do
     TransientRetry.run(fun, opts |> Keyword.get(:linear_retry_opts, []) |> Keyword.put(:label, label))

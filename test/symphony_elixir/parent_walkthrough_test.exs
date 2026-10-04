@@ -167,6 +167,27 @@ defmodule SymphonyElixir.ParentWalkthroughTest do
     [now_ms_fun: fn -> @now_ms end, sleep_fun: &send(parent, {:linear_wait_slept, &1})]
   end
 
+  # A clock that each wait moves forward.
+  defp clocked_linear_retry_opts do
+    parent = self()
+    Process.put(:walkthrough_now_ms, @now_ms)
+
+    [
+      now_ms_fun: fn -> Process.get(:walkthrough_now_ms) end,
+      sleep_fun: fn delay_ms ->
+        Process.put(:walkthrough_now_ms, Process.get(:walkthrough_now_ms) + delay_ms)
+        send(parent, {:linear_wait_slept, delay_ms})
+      end
+    ]
+  end
+
+  # Linear's pause grows 1 → 2 → 4 → 5 minutes; the move goes through 12 minutes in.
+  defp growing_rate_limit do
+    Enum.map([60_000, 180_000, 420_000, 720_000], &{:error, {:linear_rate_limited, @now_ms + &1}})
+  end
+
+  defp waits(messages), do: for({:linear_wait_slept, delay_ms} <- messages, do: delay_ms)
+
   defp run_opts do
     [
       settings: Config.settings!(),
@@ -444,6 +465,33 @@ defmodule SymphonyElixir.ParentWalkthroughTest do
       assert [_gap] = created_subissues(messages)
       assert log =~ "Linear call failed while moving TP-910 to Todo after the parent walkthrough; retrying in 30000ms"
       assert log =~ "Parent walkthrough for TP-900 ended fail; moved TP-910 to Todo"
+    end
+
+    test "a final state move rate-limited past five minutes still applies the verdict" do
+      agent_result(:fail, %{findings: ["The About tab is missing"]})
+      Application.put_env(:symphony_elixir, :walkthrough_state_result, growing_rate_limit())
+
+      log = capture_log(fn -> assert :ok = run(verification(), linear_retry_opts: clocked_linear_retry_opts()) end)
+
+      messages = receive_all()
+      assert [{:qa_agent_run, _job, _settings, _opts}] = Enum.filter(messages, &match?({:qa_agent_run, _, _, _}, &1))
+      assert List.duplicate({:state_update, "issue-fv", "Todo"}, 5) == Enum.filter(messages, &match?({:state_update, _, _}, &1))
+      assert [60_000, 120_000, 240_000, 300_000] = waits(messages)
+      assert [_gap] = created_subissues(messages)
+      assert log =~ "Parent walkthrough for TP-900 ended fail; moved TP-910 to Todo"
+    end
+
+    test "a caller's wait budget still bounds the final state move" do
+      agent_result(:pass, %{})
+      Application.put_env(:symphony_elixir, :walkthrough_state_result, growing_rate_limit())
+      retry_opts = [max_wait_ms: 300_000] ++ clocked_linear_retry_opts()
+
+      capture_log(fn ->
+        assert {:error, {:parent_walkthrough_state_update_failed, "In Review", {:linear_rate_limited, _until_ms}}} =
+                 run(verification(), linear_retry_opts: retry_opts)
+      end)
+
+      assert [60_000, 120_000, 120_000] = waits(receive_all())
     end
 
     test "a rate-limited QA report is posted after the wait" do
