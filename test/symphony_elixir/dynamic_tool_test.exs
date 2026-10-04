@@ -1333,7 +1333,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
       assert %{"error" => %{"code" => "push_check_failed", "message" => message, "result_file" => "push-check"}} = push.()
       assert message =~ "the repository's push check failed for aaaaaaaaaaaa:\nmix compile --warnings-as-errors failed."
-      assert message =~ "Fix what it names, commit, run `.githooks/pre-push --head` again"
+      assert message =~ "Run `.githooks/pre-push --head` in your shell to see each check's output."
     after
       File.rm_rf(workspace)
     end

@@ -1203,7 +1203,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         "code" => "push_check_failed",
         "message" =>
           "Push refused: the repository's push check failed for #{short_sha(head)}:\n#{output}\n" <>
-            "Fix what it names, commit, run `#{command}` again, then call github_push_branch again.",
+            "Run `#{command}` in your shell to see each check's output. Fix what it names, commit, run the " <>
+            "command again, then call github_push_branch again.",
         "command" => command,
         "result_file" => result_file,
         "head" => head
