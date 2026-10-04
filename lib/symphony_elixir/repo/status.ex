@@ -34,6 +34,13 @@ defmodule SymphonyElixir.Repo.Status do
     end
   end
 
+  @doc """
+  The GitHub repository of a configured repo as `list/1` reports it (`owner/repo`, or
+  `host/owner/repo` off github.com), or nil when it has none.
+  """
+  @spec github_repo(SystemSchema.Repo.t()) :: String.t() | nil
+  def github_repo(%SystemSchema.Repo{} = repo), do: github(repo, Config.system!())
+
   defp entry(%SystemSchema.Repo{} = repo, system_config, running) do
     %{
       key: repo.name,
