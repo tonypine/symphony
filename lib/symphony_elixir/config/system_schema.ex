@@ -1074,6 +1074,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     do: true
 
   defp preserve_explicit_nil_path?(["tracker", "waiting_on_sub_issues_state"]), do: true
+  defp preserve_explicit_nil_path?(["watchdog", "stray_process_cpu_minutes"]), do: true
   defp preserve_explicit_nil_path?(_path), do: false
 
   defp format_errors(changeset) do

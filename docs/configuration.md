@@ -1264,7 +1264,19 @@ watchdog:
   enabled: true
   tick_interval_ms: 60000
   no_progress_threshold_ms: 600000
+  stray_process_cpu_minutes: 10
 ```
+
+On every tick the watchdog also reads the host's process table and warns about stray processes.
+A stray process runs in, or names on its command line, a folder under `workspaces.root`,
+`/tmp/claude-<uid>/` or a Symphony temp folder (`symphony-*` under `$TMPDIR` or `/tmp`). It has
+used more than `stray_process_cpu_minutes` of CPU time, and no agent run or QA pass is running in
+its workspace. Examples are a process a remote worker run or an interactive Claude session left
+behind, or one that escaped the cleanup at the end of a run. The dashboard shows each one with
+its pid, command, working folder and CPU time, and the log records it once. The warning clears on
+the first tick after the process is gone. Symphony never signals these processes. Set
+`stray_process_cpu_minutes: null` to turn the check off. `enabled: false` only stops the
+watchdog from restarting stuck runs.
 
 ### `dependency_audit`
 

@@ -234,23 +234,12 @@ defmodule SymphonyElixir.AgentRunner do
   # host, so a remote worker's processes are left alone.
   defp stop_leftover_processes(workspace, issue, nil, opts) do
     leftover_opts = opts |> Keyword.get(:leftover_processes, []) |> Keyword.put(:log_context, issue_context(issue))
-    LeftoverProcesses.stop_under([workspace | claude_task_dirs(workspace, opts)], leftover_opts)
+    claude_task_dirs = LeftoverProcesses.claude_task_dirs(workspace, Keyword.get(opts, :claude_tmp_dir, "/tmp"))
+    LeftoverProcesses.stop_under([workspace | claude_task_dirs], leftover_opts)
     :ok
   end
 
   defp stop_leftover_processes(_workspace, _issue, _worker_host, _opts), do: :ok
-
-  # Claude Code keeps a session's background task output under
-  # `/tmp/claude-<uid>/<workspace path with every non-alphanumeric as ->/`.
-  defp claude_task_dirs(workspace, opts) do
-    slug = String.replace(workspace, ~r/[^a-zA-Z0-9]/, "-")
-
-    opts
-    |> Keyword.get(:claude_tmp_dir, "/tmp")
-    |> Path.join("claude-*")
-    |> Path.join(slug)
-    |> Path.wildcard()
-  end
 
   defp enrich_issue_for_dispatch(issue, opts) do
     issue_enricher = Keyword.get(opts, :issue_enricher, &Tracker.enrich_issue/1)
