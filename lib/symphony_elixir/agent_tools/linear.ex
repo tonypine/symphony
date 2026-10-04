@@ -14,6 +14,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Workspace.Attachments
+  alias SymphonyElixir.HumanActions
+  alias SymphonyElixir.HumanActions.Collector, as: HumanActionsCollector
+  alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Linear.{Client, Issue, TransientRetry}
   alias SymphonyElixir.PathSafety
   alias SymphonyElixir.PromptSafety
@@ -36,6 +39,10 @@ defmodule SymphonyElixir.AgentTools.Linear do
   # A project update notifies everyone following the project, so a run may post only one.
   @project_update_cap_per_run 1
   @project_update_healths ["onTrack", "atRisk", "offTrack"]
+  # Requests for a human are deduplicated by title, so this only bounds a run that loops.
+  @human_action_cap_per_run 5
+  @human_action_max_steps 15
+  @human_action_max_minutes 480
 
   @uuid_pattern ~r/\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i
 
@@ -323,6 +330,42 @@ defmodule SymphonyElixir.AgentTools.Linear do
         url
         health
       }
+    }
+  }
+  """
+
+  @human_action_scope_query """
+  query SymphonyAgentHumanActionScope($id: String!, $label: String!) {
+    issue(id: $id) {
+      id
+      team { id }
+      labels { nodes { id name } }
+      comments(last: 50, orderBy: createdAt) {
+        nodes { id body createdAt }
+      }
+      history(first: 50) {
+        nodes { createdAt fromState { name } toState { name } }
+      }
+    }
+    issueLabels(filter: {name: {eqIgnoreCase: $label}}, first: 50) {
+      nodes { id team { id } }
+    }
+  }
+  """
+
+  @create_label_mutation """
+  mutation SymphonyAgentCreateLabel($input: IssueLabelCreateInput!) {
+    issueLabelCreate(input: $input) {
+      success
+      issueLabel { id }
+    }
+  }
+  """
+
+  @add_label_mutation """
+  mutation SymphonyAgentAddLabel($issueId: String!, $labelId: String!) {
+    issueAddLabel(id: $issueId, labelId: $labelId) {
+      success
     }
   }
   """
@@ -669,6 +712,135 @@ defmodule SymphonyElixir.AgentTools.Linear do
           CommentRegistry.release_project_update(registry)
           error
       end
+    end
+  end
+
+  @doc """
+  Records that the current issue needs something only a human can do: adds the
+  `human_actions.label` label to the issue and posts an `## Action needed:` comment
+  (`SymphonyElixir.HumanActions.Request`), which Symphony lists in the project's human-action
+  update. A request with the same title still open on the issue is not posted again. Every field
+  is refused when it holds a secret pattern. At most #{@human_action_cap_per_run} per run.
+  """
+  @spec request_human_action(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
+  def request_human_action(context, attrs, opts \\ []) when is_map(attrs) do
+    registry = Map.get(context, :comment_registry)
+
+    with {:ok, issue_id} <- current_issue_id(context),
+         {:ok, request} <- validate_human_action(attrs),
+         :ok <- reject_human_action_secrets(request, context, opts),
+         {:ok, settings} <- human_actions_settings(context, opts),
+         :ok <- CommentRegistry.reserve_human_action(registry, @human_action_cap_per_run) do
+      case post_human_action(issue_id, request, settings, opts) do
+        {:ok, %{"requested" => true}} = result ->
+          Keyword.get(opts, :refresh_human_actions, &HumanActions.refresh/0).()
+          result
+
+        other ->
+          CommentRegistry.release_human_action(registry)
+          other
+      end
+    end
+  end
+
+  defp validate_human_action(attrs) do
+    %{"title" => title, "why" => why, "steps" => steps, "unblocks" => unblocks, "est_minutes" => est_minutes} =
+      Map.merge(%{"title" => nil, "why" => nil, "steps" => nil, "unblocks" => nil, "est_minutes" => nil}, attrs)
+
+    case Enum.find(human_action_checks(title, why, steps, unblocks, est_minutes), fn {valid?, _message} -> not valid? end) do
+      {false, message} ->
+        {:error, {:invalid_human_action, message}}
+
+      nil ->
+        unblocks = if non_blank?(unblocks), do: unblocks
+        {:ok, %{title: Request.one_line(title), why: why, steps: steps, unblocks: unblocks, est_minutes: est_minutes}}
+    end
+  end
+
+  # In order: a later check may rely on an earlier one having passed.
+  defp human_action_checks(title, why, steps, unblocks, est_minutes) do
+    [
+      {non_blank?(title), "`title` must be a non-blank string."},
+      {non_blank?(title) and String.length(Request.one_line(title)) <= @title_max_length, "`title` must be at most #{@title_max_length} characters."},
+      {non_blank?(why), "`why` must be a non-blank string."},
+      {valid_steps?(steps), "`steps` must list 1 to #{@human_action_max_steps} non-blank strings."},
+      {is_nil(unblocks) or is_binary(unblocks), "`unblocks` must be a string."},
+      {is_nil(est_minutes) or est_minutes in 1..@human_action_max_minutes, "`est_minutes` must be an integer from 1 to #{@human_action_max_minutes}."}
+    ]
+  end
+
+  defp non_blank?(value), do: is_binary(value) and String.trim(value) != ""
+
+  defp valid_steps?(steps), do: is_list(steps) and length(steps) in 1..@human_action_max_steps and Enum.all?(steps, &non_blank?/1)
+
+  defp reject_human_action_secrets(request, context, opts) do
+    fields = [title: request.title, why: request.why, unblocks: request.unblocks, steps: Enum.join(request.steps, "\n")]
+    SecretScanner.reject_fields_if_secret_pattern(fields, context, "linear_request_human_action", opts)
+  end
+
+  defp human_actions_settings(context, opts) do
+    settings = Keyword.get_lazy(opts, :settings, fn -> Config.settings_for_repo!(issue_repo_key(context)) end)
+
+    if settings.human_actions.enabled,
+      do: {:ok, settings},
+      else: {:error, :human_actions_disabled}
+  end
+
+  defp issue_repo_key(%{issue: %{repo_key: repo_key}}), do: repo_key
+  defp issue_repo_key(_context), do: nil
+
+  defp post_human_action(issue_id, request, settings, opts) do
+    label = settings.human_actions.label
+
+    with {:ok, body} <- graphql(@human_action_scope_query, %{id: issue_id, label: label}, opts),
+         {:ok, issue} <- fetch_path(body, ["data", "issue"], :issue_not_found) do
+      labelled? = Enum.any?(get_in(issue, ["labels", "nodes"]) || [], &(String.downcase(to_string(&1["name"])) == String.downcase(label)))
+
+      case duplicate_request(issue, request, labelled?, settings) do
+        {comment_id, _request} -> {:ok, %{"requested" => false, "reason" => "already_open", "commentId" => comment_id, "label" => label}}
+        nil -> create_human_action(issue, body, request, label, labelled?, opts)
+      end
+    end
+  end
+
+  # Without the label, an earlier request is closed (a person removed the label), so a new one is
+  # posted.
+  defp duplicate_request(_issue, _request, false, _settings), do: nil
+
+  defp duplicate_request(issue, request, true, settings) do
+    title = Request.normalize_title(request.title)
+    Enum.find(HumanActionsCollector.open_requests(issue, settings), fn {_comment_id, open} -> Request.normalize_title(open.title) == title end)
+  end
+
+  defp create_human_action(issue, body, request, label, labelled?, opts) do
+    with :ok <- ensure_human_action_label(issue, body, label, labelled?, opts),
+         {:ok, response} <- graphql(@add_comment_mutation, %{issueId: issue["id"], body: Request.render(request, label)}, opts),
+         {:ok, response} <- check_mutation_success(response, "commentCreate") do
+      comment = get_in(response, ["data", "commentCreate", "comment"]) || %{}
+      {:ok, %{"requested" => true, "commentId" => comment["id"], "url" => comment["url"], "label" => label}}
+    end
+  end
+
+  defp ensure_human_action_label(_issue, _body, _label, true, _opts), do: :ok
+
+  defp ensure_human_action_label(issue, body, label, false, opts) do
+    team_id = get_in(issue, ["team", "id"])
+    labels = get_in(body, ["data", "issueLabels", "nodes"]) || []
+    existing = Enum.find(labels, &(get_in(&1, ["team", "id"]) == team_id)) || Enum.find(labels, &is_nil(&1["team"]))
+
+    with {:ok, label_id} <- human_action_label_id(existing, label, team_id, opts),
+         {:ok, response} <- graphql(@add_label_mutation, %{issueId: issue["id"], labelId: label_id}, opts),
+         {:ok, _response} <- check_mutation_success(response, "issueAddLabel") do
+      :ok
+    end
+  end
+
+  defp human_action_label_id(%{"id" => label_id}, _label, _team_id, _opts), do: {:ok, label_id}
+
+  defp human_action_label_id(nil, label, team_id, opts) do
+    with {:ok, response} <- graphql(@create_label_mutation, %{input: %{"name" => label, "teamId" => team_id}}, opts),
+         {:ok, response} <- check_mutation_success(response, "issueLabelCreate") do
+      fetch_path(response, ["data", "issueLabelCreate", "issueLabel", "id"], :label_not_created)
     end
   end
 

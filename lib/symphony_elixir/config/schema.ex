@@ -2056,6 +2056,34 @@ defmodule SymphonyElixir.Config.Schema do
     end
   end
 
+  defmodule HumanActions do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @type t :: %__MODULE__{}
+
+    @primary_key false
+    @fields [:enabled, :label, :interval_ms, :min_update_interval_ms]
+
+    embedded_schema do
+      field(:enabled, :boolean, default: true)
+      field(:label, :string, default: "human-action")
+      field(:interval_ms, :integer, default: 300_000)
+      field(:min_update_interval_ms, :integer, default: 900_000)
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, @fields, empty_values: [])
+      |> Schema.validate_present([:label])
+      |> validate_format(:label, ~r/\S/, message: "must not be blank")
+      |> validate_number(:interval_ms, greater_than: 0)
+      |> validate_number(:min_update_interval_ms, greater_than_or_equal_to: 0)
+    end
+  end
+
   defmodule Notifications do
     @moduledoc false
     use Ecto.Schema
@@ -2091,7 +2119,8 @@ defmodule SymphonyElixir.Config.Schema do
         "usage_limit_resumed",
         "forced_waiting",
         "forced_human_gate",
-        "forced_stale"
+        "forced_stale",
+        "human_action_needed"
       ]
 
       embedded_schema do
@@ -2270,6 +2299,7 @@ defmodule SymphonyElixir.Config.Schema do
     embeds_one(:auto_review, AutoReview, on_replace: :update, defaults_to_struct: true)
     embeds_one(:dependencies, Dependencies, on_replace: :update, defaults_to_struct: true)
     embeds_one(:notifications, Notifications, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:human_actions, HumanActions, on_replace: :update, defaults_to_struct: true)
   end
 
   @spec parse(map()) :: {:ok, %__MODULE__{}} | {:error, {:invalid_workflow_config, String.t()}}
@@ -2465,6 +2495,7 @@ defmodule SymphonyElixir.Config.Schema do
     |> cast_embed(:auto_review, with: &AutoReview.changeset/2)
     |> cast_embed(:dependencies, with: &Dependencies.changeset/2)
     |> cast_embed(:notifications, with: &Notifications.changeset/2)
+    |> cast_embed(:human_actions, with: &HumanActions.changeset/2)
     |> validate_profile_command_flags()
   end
 

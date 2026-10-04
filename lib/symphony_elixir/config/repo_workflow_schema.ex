@@ -13,7 +13,7 @@ defmodule SymphonyElixir.Config.RepoWorkflowSchema do
   require Schema.Verification
 
   @primary_key false
-  @allowed_keys ~w(hooks prompts push_check verification validation auto_review)
+  @allowed_keys ~w(hooks prompts push_check verification validation auto_review human_actions)
 
   embedded_schema do
     field(:configured_paths, :map, virtual: true, default: %{})
@@ -23,6 +23,8 @@ defmodule SymphonyElixir.Config.RepoWorkflowSchema do
     field(:prompts, :map, default: %{})
     field(:validation, {:array, :string}, default: [])
     field(:auto_review, :map, default: %{})
+    # Only `enabled`: a repo can turn the human-action project updates off for its issues.
+    field(:human_actions, :map, default: %{})
   end
 
   @type t :: %__MODULE__{}
@@ -57,16 +59,26 @@ defmodule SymphonyElixir.Config.RepoWorkflowSchema do
     |> maybe_put("verification", configured_map(configured_paths, "verification", &verification_to_map(workflow.verification, &1)))
     |> maybe_put("validation", workflow.validation)
     |> maybe_put("auto_review", workflow.auto_review)
+    |> maybe_put("human_actions", workflow.human_actions)
   end
 
   defp changeset(attrs) do
     %__MODULE__{}
-    |> cast(attrs, [:prompts, :validation, :auto_review], empty_values: [])
+    |> cast(attrs, [:prompts, :validation, :auto_review, :human_actions], empty_values: [])
     |> cast_embed(:hooks, with: &Schema.Hooks.changeset/2)
     |> cast_embed(:push_check, with: &Schema.PushCheck.changeset/2)
     |> cast_embed(:verification, with: &Schema.Verification.changeset/2)
     |> validate_prompts()
     |> validate_string_list(:validation)
+    |> validate_human_actions()
+  end
+
+  defp validate_human_actions(changeset) do
+    validate_change(changeset, :human_actions, fn :human_actions, human_actions ->
+      if Map.keys(human_actions) -- ["enabled"] == [] and is_boolean(Map.get(human_actions, "enabled", true)),
+        do: [],
+        else: [human_actions: "supports only a boolean `enabled` key"]
+    end)
   end
 
   defp validate_prompts(changeset) do

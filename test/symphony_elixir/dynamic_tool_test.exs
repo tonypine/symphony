@@ -731,6 +731,64 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     end
   end
 
+  describe "linear_request_human_action" do
+    @request %{"title" => "Add the release signing secrets", "why" => "Release fails.", "steps" => ["Add the secret."]}
+
+    test "is advertised with its fields and hidden from the read-only scope" do
+      assert %{"inputSchema" => %{"properties" => properties, "required" => ["title", "why", "steps"]}} =
+               Enum.find(DynamicTool.tool_specs(), &(&1["name"] == "linear_request_human_action"))
+
+      assert properties |> Map.keys() |> Enum.sort() == ["est_minutes", "steps", "title", "unblocks", "why"]
+      refute "linear_request_human_action" in Enum.map(DynamicTool.tool_specs(:read_only), & &1["name"])
+
+      response =
+        DynamicTool.execute("linear_request_human_action", Map.put(@request, "issue_id", "issue-other"),
+          issue: %Issue{id: "issue-current"},
+          linear_client: fn _query, _variables, _opts -> flunk("smuggled issue must not reach Linear") end
+        )
+
+      assert %{"error" => %{"code" => "scope_argument_rejected"}} = Jason.decode!(response["output"])
+    end
+
+    test "records the request and returns explicit error payloads" do
+      {:ok, registry} = CommentRegistry.start_link()
+
+      client = fn query, _variables, _opts ->
+        cond do
+          query =~ "SymphonyAgentHumanActionScope" ->
+            {:ok,
+             %{
+               "data" => %{
+                 "issue" => %{"id" => "issue-current", "team" => %{"id" => "team-1"}, "labels" => %{"nodes" => [%{"id" => "l1", "name" => "human-action"}]}},
+                 "issueLabels" => %{"nodes" => []}
+               }
+             }}
+
+          query =~ "SymphonyAgentAddComment" ->
+            {:ok, %{"data" => %{"commentCreate" => %{"success" => true, "comment" => %{"id" => "comment-1"}}}}}
+        end
+      end
+
+      opts = [issue: %Issue{id: "issue-current", identifier: "MOT-24"}, comment_registry: registry, linear_client: client]
+
+      response = DynamicTool.execute("linear_request_human_action", @request, opts)
+      assert response["success"] == true
+      assert %{"requested" => true, "commentId" => "comment-1"} = Jason.decode!(response["output"])
+
+      response = DynamicTool.execute("linear_request_human_action", Map.put(@request, "steps", []), opts)
+      assert %{"error" => %{"code" => "invalid_human_action", "message" => "linear_request_human_action: `steps`" <> _rest}} = Jason.decode!(response["output"])
+
+      disabled = Config.settings!() |> then(&%{&1 | human_actions: %{&1.human_actions | enabled: false}})
+      response = DynamicTool.execute("linear_request_human_action", @request, Keyword.put(opts, :settings, disabled))
+      assert %{"error" => %{"code" => "human_actions_disabled", "message" => message}} = Jason.decode!(response["output"])
+      assert message =~ "blocker comment"
+
+      for _slot <- 1..5, do: CommentRegistry.reserve_human_action(registry, 5)
+      response = DynamicTool.execute("linear_request_human_action", @request, opts)
+      assert %{"error" => %{"code" => "human_action_cap_reached", "cap" => 5}} = Jason.decode!(response["output"])
+    end
+  end
+
   test "legacy dotted tool aliases are accepted but still reject smuggled issue ids" do
     response =
       DynamicTool.execute(

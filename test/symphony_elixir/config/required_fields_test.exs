@@ -28,6 +28,7 @@ defmodule SymphonyElixir.Config.RequiredFieldsTest do
     {Schema.ReviewAgent, %{"enabled" => true}, :command, "is required when review_agent.enabled is true"},
     {Schema.AutoReview, %{}, :state, "can't be blank"},
     {Schema.Notifications.Channel, %{}, :kind, "can't be blank"},
+    {Schema.HumanActions, %{}, :label, "can't be blank"},
     {SystemSchema.Repo, %{}, :name, "can't be blank"},
     {SystemSchema.Repo, %{}, :workflow, "can't be blank"}
   ]
