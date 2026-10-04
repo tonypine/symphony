@@ -400,7 +400,7 @@ func enterText(_ app: AXUIElement, _ pid: pid_t, _ element: AXUIElement, role: S
     let expected = value.utf16.count
     let landed = waitUntil(2) {
         secure ? characterCount(element).map { $0 == expected } ?? true
-            : (attribute(element, kAXValueAttribute as String) as? String) == value
+            : (attribute(element, kAXValueAttribute as String) as? String ?? "") == value
     }
 
     guard landed else {
