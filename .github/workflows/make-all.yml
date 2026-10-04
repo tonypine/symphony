@@ -27,6 +27,37 @@ jobs:
       - name: Check formatting
         run: time mix format --check-formatted
 
+  audit:
+    name: audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up mise tools
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+        with:
+          install: true
+          cache: true
+
+      - name: Cache deps and build
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-${{ hashFiles('mix.lock', 'mix.exs', 'mise.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-
+
+      - name: Install dependencies
+        run: time mix deps.get
+
+      # A restored deps cache lets `mix deps.get` pass without checking advisories.
+      - name: Audit dependencies
+        run: time mix hex.audit
+
   lint:
     name: lint
     runs-on: ubuntu-latest
@@ -214,6 +245,7 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - format
+      - audit
       - lint
       - build
       - coverage-report
@@ -224,19 +256,21 @@ jobs:
       - name: Summarize gate results
         env:
           FORMAT_RESULT: ${{ needs.format.result }}
+          AUDIT_RESULT: ${{ needs.audit.result }}
           LINT_RESULT: ${{ needs.lint.result }}
           BUILD_RESULT: ${{ needs.build.result }}
           COVERAGE_RESULT: ${{ needs.coverage-report.result }}
           DIALYZER_RESULT: ${{ needs.dialyzer.result }}
         run: |
           echo "format: $FORMAT_RESULT"
+          echo "audit: $AUDIT_RESULT"
           echo "lint: $LINT_RESULT"
           echo "build: $BUILD_RESULT"
           echo "coverage report: $COVERAGE_RESULT"
           echo "dialyzer: $DIALYZER_RESULT"
 
           failed=0
-          for result in "$FORMAT_RESULT" "$LINT_RESULT" "$BUILD_RESULT" "$COVERAGE_RESULT" "$DIALYZER_RESULT"; do
+          for result in "$FORMAT_RESULT" "$AUDIT_RESULT" "$LINT_RESULT" "$BUILD_RESULT" "$COVERAGE_RESULT" "$DIALYZER_RESULT"; do
             if [ "$result" != "success" ]; then
               failed=1
             fi
