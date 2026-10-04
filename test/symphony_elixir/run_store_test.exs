@@ -315,6 +315,25 @@ defmodule SymphonyElixir.RunStoreTest do
     restart_run_store()
   end
 
+  test "persists Symphony's own state moves across run store restart" do
+    moved_at = ~U[2026-10-04 00:23:15Z]
+
+    assert RunStore.get_own_state_move("issue-own") == nil
+    assert :ok = RunStore.put_own_state_move("issue-own", moved_at)
+    assert :ok = RunStore.put_own_state_move("issue-own", DateTime.add(moved_at, 60))
+
+    restarted_pid = restart_run_store()
+
+    assert RunStore.get_own_state_move("issue-own") == DateTime.add(moved_at, 60)
+    assert RunStore.get_own_state_move("issue-other") == nil
+    assert {:error, :invalid_own_state_move} = RunStore.put_own_state_move("issue-own", "2026-10-04")
+    assert {:error, :invalid_own_state_move} = RunStore.put_own_state_move(nil, moved_at)
+    assert {:error, :invalid_issue_id} = RunStore.get_own_state_move(nil)
+
+    if Process.alive?(restarted_pid), do: GenServer.stop(restarted_pid)
+    restart_run_store()
+  end
+
   test "interrupt_running_runs marks stale running records as failures" do
     now = DateTime.utc_now()
 

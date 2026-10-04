@@ -109,7 +109,8 @@ issues:
   in one comment on the parent. Agents cannot move an issue here
   (`linear_update_state` refuses it). On every poll Symphony also moves a `breakdown` parent it
   finds `In Progress` with open sub-tickets here, so `In Progress` only holds issues an agent is
-  working; that move is not an approval and promotes nothing. Create it in Linear as a started state just
+  working, after a fresh read confirms it is still `In Progress`; that move is not an approval and
+  promotes nothing, even if Symphony and the reviewer share one Linear user. Create it in Linear as a started state just
   after In Progress. At startup Symphony checks the configured teams have it; when it is missing,
   Symphony logs a warning and parents keep waiting `In Progress` until restart.
 

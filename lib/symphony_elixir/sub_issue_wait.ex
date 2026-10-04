@@ -3,9 +3,10 @@ defmodule SymphonyElixir.SubIssueWait do
   The state a `breakdown` parent waits in while its sub-issues are worked
   (`issues.states.waiting_on_sub_issues`, default `Waiting on sub-tickets`).
 
-  The breakdown run ends by moving the parent there, and on every poll Symphony
+  A human approving the breakdown plan moves the parent there, and on every poll Symphony
   moves a `breakdown` parent it finds `In Progress` with open sub-issues there too,
-  so `In Progress` only holds issues an agent is working. The state is active but
+  so `In Progress` only holds issues an agent is working. The poll's candidates can be
+  stale, so the parent's state is read again just before the move. The state is active but
   held: an issue in it is dispatched only for the close-out run, once it is a
   `breakdown` parent whose sub-issues are all terminal.
 
@@ -95,12 +96,20 @@ defmodule SymphonyElixir.SubIssueWait do
 
   @doc "True when Symphony should move `issue` from `In Progress` to the waiting state."
   @spec park?(Issue.t() | term(), Enumerable.t(String.t()), Schema.t() | term()) :: boolean()
-  def park?(%Issue{state: issue_state} = issue, terminal_states, settings) when is_binary(issue_state) do
-    enabled?(settings) and normalize(issue_state) == normalize(@parked_from_state) and
-      Issue.waiting_on_sub_issues?(issue, terminal_states)
+  def park?(%Issue{} = issue, terminal_states, settings) do
+    enabled?(settings) and parked_from?(issue) and Issue.waiting_on_sub_issues?(issue, terminal_states)
   end
 
   def park?(_issue, _terminal_states, _settings), do: false
+
+  @doc """
+  True when `issue` sits in the state Symphony parks parents from (`In Progress`). Symphony checks
+  it again on a fresh read just before parking: a parent in `In Review` waits there for a human's
+  review of its plan, and moving it on would read as that approval.
+  """
+  @spec parked_from?(Issue.t() | term()) :: boolean()
+  def parked_from?(%Issue{state: issue_state}) when is_binary(issue_state), do: normalize(issue_state) == normalize(@parked_from_state)
+  def parked_from?(_issue), do: false
 
   @doc false
   @spec reset_for_test(String.t()) :: :ok

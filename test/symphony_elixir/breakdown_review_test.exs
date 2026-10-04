@@ -3,7 +3,7 @@ defmodule SymphonyElixir.BreakdownReviewTest do
 
   import ExUnit.CaptureLog
 
-  alias SymphonyElixir.{BreakdownReview, SubIssueWait}
+  alias SymphonyElixir.{BreakdownReview, RunStore, SubIssueWait}
   alias SymphonyElixir.Linear.Adapter
 
   @waiting "Waiting on sub-tickets"
@@ -18,6 +18,10 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       send(self(), {:cancel_attempt, issue_id, state})
       Map.get(Process.get(:cancel_results, %{}), state, :ok)
     end
+  end
+
+  defmodule UnreadableRunStore do
+    def get_own_state_move(_issue_id), do: {:error, :node_not_running}
   end
 
   defmodule HistoryClient do
@@ -87,6 +91,26 @@ defmodule SymphonyElixir.BreakdownReviewTest do
 
       no_waiting_state = %{settings | tracker: %{settings.tracker | waiting_on_sub_issues_state: nil}}
       assert BreakdownReview.sub_issues_to_move(:promote, history([approval()], subs), no_waiting_state) == []
+    end
+
+    test "a move Symphony made itself is never an approval" do
+      settings = Config.settings!()
+      subs = [history_sub("c1", "Backlog")]
+      approved = history([approval()], subs)
+
+      # Symphony parking a parent that was already In Review leaves the same history entry a person's approval does.
+      assert BreakdownReview.sub_issues_to_move(:promote, approved, settings, @approved) == []
+      assert BreakdownReview.sub_issues_to_move(:promote, approved, settings, DateTime.add(@approved, -60)) == []
+      assert BreakdownReview.sub_issues_to_move(:promote, approved, settings, DateTime.add(@approved, 60)) == []
+
+      # A person's approval at another time still promotes.
+      assert ids(BreakdownReview.sub_issues_to_move(:promote, approved, settings, DateTime.add(@approved, -61))) == ["c1"]
+      assert ids(BreakdownReview.sub_issues_to_move(:promote, approved, settings, nil)) == ["c1"]
+      assert ids(BreakdownReview.sub_issues_to_move(:promote, approved, settings)) == ["c1"]
+
+      # A rejection is never Symphony's move; its own record does not affect it.
+      rejected = history(rejection(), [history_sub("c1", "Backlog")])
+      assert ids(BreakdownReview.sub_issues_to_move(:replace, rejected, settings, @approved)) == ["c1"]
     end
 
     test "a rejection replaces the rejected plan's sub-issues in Backlog since before the move to Rework" do
@@ -212,6 +236,45 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       claimed = %{orchestrator_state() | claimed: MapSet.new(["parent"]), breakdown_reviews: %{"parent" => []}}
       assert review([parked], claimed).breakdown_reviews == %{"parent" => []}
       refute_received {:memory_tracker_breakdown_history, _id}
+    end
+
+    test "Symphony's own move to the waiting state promotes nothing; a person's later approval does" do
+      parent = parent(@waiting, [sub("c1", "Backlog"), sub("c2", "Backlog")])
+      subs = [history_sub("c1", "Backlog"), history_sub("c2", "Backlog")]
+
+      # Linear records Symphony's park of an In Review parent as In Review to the waiting state.
+      :ok = RunStore.put_own_state_move("parent", DateTime.add(@approved, 2))
+      put_history("parent", [approval()], subs)
+
+      state = review([parent], orchestrator_state())
+      assert_received {:memory_tracker_breakdown_history, "parent"}
+      refute_received {:memory_tracker_state_update, _id, _state}
+      refute_received {:memory_tracker_comment, _id, _body}
+      assert state.breakdown_reviews == %{"parent" => ["c1", "c2"]}
+
+      # After a restart it is read again, and still promotes nothing.
+      assert review([parent], orchestrator_state()).breakdown_reviews == %{"parent" => ["c1", "c2"]}
+      refute_received {:memory_tracker_state_update, _id, _state}
+
+      # The human sends it back to In Review and approves it.
+      put_history("parent", [approval(), change(@waiting, "In Review", @later), approval(DateTime.add(@later, 300))], subs)
+      review([parent], orchestrator_state())
+      assert_received {:memory_tracker_state_update, "c1", "Todo"}
+      assert_received {:memory_tracker_state_update, "c2", "Todo"}
+    end
+
+    test "nothing is promoted while Symphony's own moves cannot be read" do
+      parent = parent(@waiting, [sub("c1", "Backlog")])
+      put_history("parent", [approval()], [history_sub("c1", "Backlog")])
+
+      log =
+        capture_log(fn ->
+          state = review([parent], orchestrator_state(), run_store: UnreadableRunStore)
+          assert state.breakdown_reviews == %{}
+        end)
+
+      assert log =~ "Failed to read Symphony's own moves of breakdown parent"
+      refute_received {:memory_tracker_state_update, _id, _state}
     end
 
     test "a failed read or move is retried on the next poll" do
@@ -385,7 +448,7 @@ defmodule SymphonyElixir.BreakdownReviewTest do
     end
   end
 
-  defp review(issues, state), do: Orchestrator.review_breakdown_parents_for_test(issues, state)
+  defp review(issues, state, opts \\ []), do: Orchestrator.review_breakdown_parents_for_test(issues, state, opts)
 
   defp parent(state, sub_issues) do
     %Issue{id: "parent", identifier: "MT-1", title: "Groom into sub-tickets", state: state, labels: ["breakdown"], sub_issues: sub_issues}

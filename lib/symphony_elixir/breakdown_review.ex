@@ -11,11 +11,13 @@ defmodule SymphonyElixir.BreakdownReview do
   sub-issue a person added under the parent before or after that run, such as a parked
   `Final verification`, is left alone.
 
-  Symphony only polls, so it reads the parent's state history to see the move. A sub-issue is
-  acted on only when it has sat in `Backlog` since before that move, which keeps both actions
-  idempotent across polls and restarts: a sub-issue a human (or a final verification run) moves
-  back to `Backlog` later is left alone, and so is one created after the move, such as the
-  sub-issues of the re-planned breakdown.
+  Symphony only polls, so it reads the parent's state history to see the move. Only a person's
+  move approves: Symphony records each time it moves a parent to the waiting state itself, and a
+  move within a minute of that is not read as approval, since Symphony and the reviewer can share
+  one Linear user. A sub-issue is acted on only when it has sat in `Backlog` since before that
+  move, which keeps both actions idempotent across polls and restarts: a sub-issue a human (or a
+  final verification run) moves back to `Backlog` later is left alone, and so is one created after
+  the move, such as the sub-issues of the re-planned breakdown.
   """
 
   alias SymphonyElixir.AutoReview
@@ -26,6 +28,8 @@ defmodule SymphonyElixir.BreakdownReview do
   @backlog_state "Backlog"
   @todo_state "Todo"
   @rework_state "Rework"
+  # How far a Linear history entry's time may sit from Symphony's own record of the move it made.
+  @own_move_tolerance_s 60
   # Linear names the canceled state either way; the first one the team has is used.
   @canceled_states ["Canceled", "Cancelled"]
 
@@ -63,11 +67,12 @@ defmodule SymphonyElixir.BreakdownReview do
   and for `:replace` only those created by the rejected plan's run, between the parent's state
   change before its latest move to `In Review` and that move. With no such move as the parent's
   latest state change (for example a parent Symphony parked from `In Progress`, which nobody
-  approved), or no move to `In Review` before a rejection, there are none.
+  approved), or no move to `In Review` before a rejection, there are none. `own_move_at` is when
+  Symphony itself last moved the parent; an approval at that time is Symphony's, and approves nothing.
   """
-  @spec sub_issues_to_move(action(), Tracker.breakdown_history(), term()) :: [map()]
-  def sub_issues_to_move(action, %{state_changes: changes, sub_issues: sub_issues}, settings) do
-    with %DateTime{} = at <- decided_at(action, latest(changes), settings),
+  @spec sub_issues_to_move(action(), Tracker.breakdown_history(), term(), DateTime.t() | nil) :: [map()]
+  def sub_issues_to_move(action, %{state_changes: changes, sub_issues: sub_issues}, settings, own_move_at \\ nil) do
+    with %DateTime{} = at <- decided_at(action, latest(changes), settings, own_move_at),
          {from, to} <- plan_window(action, changes, at) do
       Enum.filter(sub_issues, &(backlog_since?(&1, at) and created_in?(&1, from, to)))
     else
@@ -100,15 +105,20 @@ defmodule SymphonyElixir.BreakdownReview do
   def comment(:replace, identifiers),
     do: "Cancelled for re-plan: #{Enum.join(identifiers, ", ")} (restore from #{target(:replace)} if needed)"
 
-  defp decided_at(:promote, %{from: from, to: to, at: at}, settings) do
-    if state_matches?(from, AutoReview.review_state()) and state_matches?(to, SubIssueWait.state(settings)), do: at
+  defp decided_at(:promote, %{from: from, to: to, at: at}, settings, own_move_at) do
+    if state_matches?(from, AutoReview.review_state()) and state_matches?(to, SubIssueWait.state(settings)) and
+         not own_move?(at, own_move_at),
+       do: at
   end
 
-  defp decided_at(:replace, %{to: to, at: at}, _settings) do
+  defp decided_at(:replace, %{to: to, at: at}, _settings, _own_move_at) do
     if state_matches?(to, @rework_state), do: at
   end
 
-  defp decided_at(_action, nil, _settings), do: nil
+  defp decided_at(_action, nil, _settings, _own_move_at), do: nil
+
+  defp own_move?(at, %DateTime{} = own_move_at), do: abs(DateTime.diff(at, own_move_at)) <= @own_move_tolerance_s
+  defp own_move?(_at, nil), do: false
 
   # When the plan's sub-issues were created: `:promote` takes every sub-issue from before the
   # approval, `:replace` only the run that moved the parent to `In Review` before the rejection.
