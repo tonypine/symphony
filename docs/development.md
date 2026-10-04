@@ -57,6 +57,8 @@ green without extra setup:
   Claude Code's `/tmp/claude-501`) and under `/tmp` otherwise. If neither is writable, set
   `SYMPHONY_MCP_SOCKET_ROOT` to a short writable path; the resulting
   `<root>/symphony-mcp-<id>/sock` must fit the 104-byte Unix `sun_path` limit.
+- `bin/symphony` itself needs no setting there: when it cannot write to `/tmp`, it keeps MCP
+  socket dirs under `TMPDIR` and logs `MCP socket root=<path>` at startup.
 - Workspace hooks keep running under a login shell (`sh -lc`) on the unsandboxed host, where they
   rely on profile-provided `PATH` setup such as `mise`. When tests start login shells inside the
   sandbox, `~/.profile: Operation not permitted` on stderr is expected and harmless.

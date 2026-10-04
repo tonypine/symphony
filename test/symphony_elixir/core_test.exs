@@ -1672,6 +1672,136 @@ defmodule SymphonyElixir.CoreTest do
     assert %{state: "In Review"} = retry_post_pr_issue("issue-post-pr-auto-review-missing", :PostPrAutoReviewMissingOrchestrator, "In Review")
   end
 
+  test "a run that opened its PR moves to Auto Review without waiting for a busy slot" do
+    write_post_pr_auto_review_workflow!()
+    issue_id = "issue-pr-opened-busy-slots"
+    pr_url = "https://github.com/example/repo/pull/385"
+    pid = end_run_with_busy_slots(issue_id, :PrOpenedBusySlotsOrchestrator, pr_url)
+
+    assert_receive {:memory_tracker_state_update, ^issue_id, "Auto Review"}, 500
+
+    state =
+      wait_for_orchestrator_state(pid, fn state ->
+        match?(%{state: "Auto Review", pull_request_url: ^pr_url}, state.watching[issue_id])
+      end)
+
+    refute Map.has_key?(state.slot_waiting, issue_id)
+    refute Map.has_key?(state.running, issue_id)
+    refute Map.has_key?(state.retry_attempts, issue_id)
+    refute MapSet.member?(state.claimed, issue_id)
+  end
+
+  test "a run that ended without a PR still waits for a slot to continue" do
+    write_post_pr_auto_review_workflow!()
+    issue_id = "issue-no-pr-busy-slots"
+    pid = end_run_with_busy_slots(issue_id, :NoPrBusySlotsOrchestrator, nil)
+
+    state = wait_for_orchestrator_state(pid, &Map.has_key?(&1.slot_waiting, issue_id), 2_000)
+
+    assert %{attempt: 1} = state.slot_waiting[issue_id]
+    refute Map.has_key?(state.running, issue_id)
+    refute Map.has_key?(state.watching, issue_id)
+    refute_received {:memory_tracker_state_update, ^issue_id, _state}
+  end
+
+  test "the poll moves a slot-waiting issue whose PR showed up after it started waiting" do
+    write_post_pr_auto_review_workflow!()
+    Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+    on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_recipient) end)
+
+    issue_id = "issue-pr-after-slot-wait"
+    pr_url = "https://github.com/example/repo/pull/386"
+    last_ran_at = DateTime.utc_now()
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-386",
+      title: "PR attached late",
+      state: "In Progress",
+      pull_request_url: pr_url,
+      updated_at: DateTime.add(last_ran_at, -10, :second)
+    }
+
+    state = %Orchestrator.State{
+      running: %{},
+      claimed: MapSet.new(),
+      budget_exhausted: MapSet.new(),
+      max_concurrent_agents: 0,
+      completed_run_metadata: %{issue_id => %{identifier: "MT-386", last_ran_at: last_ran_at}},
+      slot_waiting: %{issue_id => %{attempt: 1, since: DateTime.utc_now(), state: "In Progress"}}
+    }
+
+    state = Orchestrator.dispatch_chosen_issues_for_test([issue], state)
+
+    assert_received {:memory_tracker_state_update, ^issue_id, "Auto Review"}
+    assert state.slot_waiting == %{}
+    assert %{state: "Auto Review", pull_request_url: ^pr_url} = state.watching[issue_id]
+  end
+
+  defp write_post_pr_auto_review_workflow! do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      quality_gate: %{enabled: false},
+      tracker_active_states: ["Todo", "In Progress", "Rework"],
+      tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
+      pr_review_mode: "polling",
+      ci: %{enabled: true},
+      auto_review: %{enabled: true}
+    )
+  end
+
+  # Ends a run that was dispatched without a PR while another run holds the only slot, then
+  # fires its continuation retry. `pr_url` is the PR the refetched issue has attached.
+  defp end_run_with_busy_slots(issue_id, name, pr_url) do
+    last_ran_at = DateTime.utc_now()
+    dispatched = %Issue{id: issue_id, identifier: "MT-385", title: "Open a PR", state: "In Progress"}
+    busy = %Issue{id: "issue-busy-slot", identifier: "MT-BUSY", title: "Busy", state: "In Progress"}
+
+    Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [
+      %{dispatched | pull_request_url: pr_url, updated_at: DateTime.add(last_ran_at, -10, :second)}
+    ])
+
+    on_exit(fn ->
+      Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
+      Application.delete_env(:symphony_elixir, :memory_tracker_issues)
+    end)
+
+    {:ok, pid} = Orchestrator.start_link(name: Module.concat(__MODULE__, name))
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    ref = make_ref()
+    initial_state = :sys.get_state(pid)
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:max_concurrent_agents, 1)
+      |> Map.put(:running, %{
+        issue_id => %{pid: self(), ref: ref, identifier: "MT-385", issue: dispatched, started_at: DateTime.utc_now()},
+        busy.id => %{pid: self(), ref: make_ref(), identifier: "MT-BUSY", issue: busy, started_at: DateTime.utc_now()}
+      })
+      |> Map.put(:claimed, MapSet.new([issue_id, busy.id]))
+      |> Map.put(:retry_attempts, %{})
+    end)
+
+    send(pid, {:DOWN, ref, :process, self(), :normal})
+
+    %{retry_token: retry_token} =
+      pid
+      |> wait_for_orchestrator_state(&Map.has_key?(&1.retry_attempts, issue_id))
+      |> Map.fetch!(:retry_attempts)
+      |> Map.fetch!(issue_id)
+
+    send(pid, {:retry_issue, issue_id, retry_token})
+    pid
+  end
+
   test "retry for a Merging issue with a completed PR re-dispatches it instead of moving it back to review" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
@@ -2115,6 +2245,49 @@ defmodule SymphonyElixir.CoreTest do
              state.retry_attempts[issue_id]
 
     assert_due_in_range(due_at_ms, 39_000, 40_500)
+  end
+
+  test "a worker that exits still waiting for Linear keeps its retry attempt and waits for Linear" do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [])
+    issue_id = "issue-linear-wait-exit"
+    ref = make_ref()
+    orchestrator_name = Module.concat(__MODULE__, :LinearWaitExitOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    initial_state = :sys.get_state(pid)
+
+    running_entry = %{
+      pid: self(),
+      ref: ref,
+      repo_key: "api",
+      identifier: "MT-LINEAR-WAIT",
+      retry_attempt: 2,
+      issue: %Issue{id: issue_id, identifier: "MT-LINEAR-WAIT", state: "Todo", repo_key: "api"},
+      started_at: DateTime.utc_now()
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.new([issue_id]))
+      |> Map.put(:retry_attempts, %{})
+    end)
+
+    reason = {:linear_unavailable, {:workpad_bootstrap_state_update_failed, {:linear_rate_limited, 1_791_000_030_000}}}
+    send(pid, {:DOWN, ref, :process, self(), reason})
+    Process.sleep(50)
+    state = :sys.get_state(pid)
+
+    assert %{attempt: 2, due_at_ms: due_at_ms, delay_type: :linear_wait, error: error} = state.retry_attempts[issue_id]
+    assert error == "agent exited: waiting for Linear: {:workpad_bootstrap_state_update_failed, {:linear_rate_limited, 1791000030000}}"
+    assert_due_in_range(due_at_ms, 4_000, 5_500)
   end
 
   test "worker exception exits store concise retry errors" do
@@ -4957,6 +5130,8 @@ defmodule SymphonyElixir.CoreTest do
               assert_receive {:mcp_restart_run_turn, 1, %{session: 1}, _first_prompt}
               assert_receive {:linear_wait_slept, delay_ms}
               assert delay_ms == if(unquote(label) == :rate_limit, do: 30_000, else: 5_000)
+              # The orchestrator hears of the wait, so its watchdogs hold off until it ends.
+              assert_receive {:linear_wait, "issue-mcp-restart", ^delay_ms}
               assert_receive {:mcp_restart_run_turn, 2, %{session: 1}, _continuation_prompt}
               refute_receive {:mcp_restart_start_session, 2, _workspace, _opts}, 50
             end,

@@ -4,9 +4,16 @@ defmodule SymphonyElixir.WorkpadTest do
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
   alias SymphonyElixir.Workpad
 
+  @now_ms 1_791_000_000_000
+
   defmodule FailingCreateCommentClient do
     @spec graphql(String.t(), map()) :: {:error, :comment_failed}
     def graphql(_query, _variables), do: {:error, :comment_failed}
+  end
+
+  defp linear_retry_opts do
+    parent = self()
+    [now_ms_fun: fn -> @now_ms end, sleep_fun: &send(parent, {:linear_wait_slept, &1})]
   end
 
   test "bootstrap two-arity reuses existing workpad comments" do
@@ -68,6 +75,75 @@ defmodule SymphonyElixir.WorkpadTest do
 
     assert {:error, {:workpad_bootstrap_state_update_failed, :rate_limited}} =
              Workpad.bootstrap(issue, System.tmp_dir!(), settings: Config.settings!())
+  end
+
+  test "bootstrap waits out a Linear rate limit on the Todo state move and the workpad comment" do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", agent_kind: "claude")
+    Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+    rate_limited = {:error, {:linear_rate_limited, @now_ms + 30_000}}
+    Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [rate_limited])
+    Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, [rate_limited])
+
+    issue = %Issue{id: "issue-workpad-rate-limited", identifier: "MT-RATE", title: "Rate limited", state: "Todo"}
+
+    log =
+      capture_log(fn ->
+        assert {:ok, updated_issue} =
+                 Workpad.bootstrap(issue, System.tmp_dir!(),
+                   settings: Config.settings!(),
+                   linear_retry_opts: linear_retry_opts()
+                 )
+
+        assert updated_issue.state == "In Progress"
+        assert [%{author: "Symphony"}] = updated_issue.comments
+      end)
+
+    assert_received {:linear_wait_slept, 30_000}
+    assert_received {:linear_wait_slept, 30_000}
+    assert_received {:memory_tracker_state_update, "issue-workpad-rate-limited", "In Progress"}
+    assert_received {:memory_tracker_comment, "issue-workpad-rate-limited", _body}
+    assert log =~ "Linear call failed while moving issue_id=issue-workpad-rate-limited issue_identifier=MT-RATE to In Progress; retrying in 30000ms"
+    assert log =~ "Linear call failed while posting the workpad for issue_id=issue-workpad-rate-limited issue_identifier=MT-RATE"
+  end
+
+  test "bootstrap reads the comments again before creating a Linear workpad whose create timed out" do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "linear", agent_kind: "claude")
+    {:ok, registry} = CommentRegistry.start_link([])
+    issue = %Issue{id: "issue-workpad-timeout", identifier: "MT-TIMEOUT", title: "Create timed out", state: "In Progress"}
+    saved_workpad = %{"id" => "comment-saved", "body" => "## Symphony Workpad\nSaved", "user" => %{"name" => "Symphony"}}
+
+    # The first create times out after Linear saved the comment; the next read sees it.
+    linear_client = fn query, _variables, _opts ->
+      cond do
+        String.contains?(query, "SymphonyAgentIssueComments") ->
+          nodes = if Process.get(:workpad_create_timed_out), do: [saved_workpad], else: []
+          {:ok, %{"data" => %{"issue" => %{"comments" => %{"nodes" => nodes}}}}}
+
+        String.contains?(query, "SymphonyAgentAddComment") ->
+          send(self(), :linear_add_comment)
+          Process.put(:workpad_create_timed_out, true)
+          {:error, {:linear_api_request, %Req.TransportError{reason: :timeout}}}
+      end
+    end
+
+    log =
+      capture_log(fn ->
+        assert {:ok, updated_issue} =
+                 Workpad.bootstrap(issue, System.tmp_dir!(),
+                   settings: Config.settings!(),
+                   linear_client: linear_client,
+                   comment_registry: registry,
+                   linear_retry_opts: linear_retry_opts()
+                 )
+
+        assert [%{body: "## Symphony Workpad\nSaved"}] = updated_issue.comments
+      end)
+
+    assert_received :linear_add_comment
+    refute_received :linear_add_comment
+    assert_received {:linear_wait_slept, 5_000}
+    assert CommentRegistry.owned?(registry, "comment-saved")
+    assert log =~ "Linear call failed while bootstrapping the workpad for issue_id=issue-workpad-timeout issue_identifier=MT-TIMEOUT"
   end
 
   test "bootstrap handles fallback settings and sparse issue comments" do
