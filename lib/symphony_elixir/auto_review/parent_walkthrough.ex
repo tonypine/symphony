@@ -20,6 +20,9 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
     gap is terminal. When a gap could not be filed or linked, the ticket goes to `Backlog` for a
     human instead, since nothing would hold it.
 
+  A `blocked` verdict also puts the ticket in the parent project's human-action update (see
+  `SymphonyElixir.HumanActions.Collector`), since only a person can provide what QA was missing.
+
   Each Linear call waits out a rate limit or a dropped connection
   (`SymphonyElixir.Linear.TransientRetry`) instead of failing the run; the verdict is kept while the
   final state move waits, for up to 30 minutes rather than the default five, so a finished QA pass is

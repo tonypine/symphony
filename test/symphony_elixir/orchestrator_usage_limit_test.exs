@@ -385,6 +385,54 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
     Process.cancel_timer(state.retry_attempts[issue.id].timer_ref)
   end
 
+  test "a retry deferred behind a dispatch readiness task during the hold keeps its attempt through the dispatch pass", ctx do
+    write_usage_workflow!(ctx)
+    pid = start_orchestrator(ctx, :DeferredRetryHoldOrchestrator)
+    issue = issue("issue-usage-deferred", "MT-DEFERRED")
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+    token = make_ref()
+
+    :sys.replace_state(pid, fn state ->
+      %{
+        state
+        | usage_limits: %{@anthropic => hold(ctx)},
+          dispatch_readiness_tasks: %{make_ref() => %{kind: :poll, issues: []}},
+          retry_attempts: %{issue.id => %{attempt: 2, retry_token: token, identifier: issue.identifier, repo_key: Config.repo_key!()}},
+          claimed: MapSet.new([issue.id])
+      }
+    end)
+
+    state = deliver(pid, {:retry_issue, issue.id, token})
+    assert %{attempt: 2, reason: "dispatch readiness task already in flight"} = state.slot_waiting[issue.id]
+
+    # The readiness result's dispatch pass finds the hold: the retry is held again, not dropped.
+    state = Orchestrator.dispatch_chosen_issues_for_test([issue], %{state | dispatch_readiness_tasks: %{}})
+
+    assert %{attempt: 2, delay_type: :usage_limit, usage_limit_key: @anthropic} = state.retry_attempts[issue.id]
+    assert MapSet.member?(state.claimed, issue.id)
+    refute Map.has_key?(state.slot_waiting, issue.id)
+    refute Map.has_key?(state.running, issue.id)
+
+    # At resume_at it goes out as the canary with the same attempt.
+    state = Orchestrator.start_usage_limit_canary_for_test(state, @anthropic, fn _ids -> {:ok, [issue]} end)
+    assert %{phase: :canary, canary_issue_id: "issue-usage-deferred"} = state.usage_limits[@anthropic]
+
+    state = Orchestrator.dispatch_chosen_issues_for_test([issue], state)
+    assert %{retry_attempt: 2} = state.running[issue.id]
+  end
+
+  test "a slot waiter with no attempt that the hold skips is dropped from the pass as before", ctx do
+    write_usage_workflow!(ctx)
+    issue = issue("issue-usage-fresh-wait", "MT-FRESH-WAIT")
+    waiting = %{identifier: issue.identifier, title: issue.title, state: issue.state, reason: "work slots full", since: DateTime.utc_now()}
+    state = %{orchestrator_state() | usage_limits: %{@anthropic => hold(ctx)}, slot_waiting: %{issue.id => waiting}}
+
+    state = Orchestrator.dispatch_chosen_issues_for_test([issue], state)
+
+    assert state.slot_waiting == %{}
+    assert state.retry_attempts == %{}
+  end
+
   test "the resume timer dispatches the held issue as the canary with the same attempt, and its clean exit clears the hold", ctx do
     write_usage_workflow!(ctx)
     pid = start_orchestrator(ctx, :ResumeOrchestrator)

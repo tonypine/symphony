@@ -3,14 +3,18 @@ defmodule SymphonyElixir.HumanActions.Collector do
   Reads the open human actions in Symphony's scope from Linear, grouped by project.
 
   One query per repository route, in the scope that route polls, returns every non-terminal issue
-  that carries the `human_actions.label` label or sits in `In Review` or the Human Review state
-  (`SymphonyElixir.HumanReview`). From those:
+  that carries the `human_actions.label` label, sits in `In Review` or the Human Review state
+  (`SymphonyElixir.HumanReview`), or is a `Final verification:` ticket. From those:
 
   - each open `## Action needed:` comment on a labelled issue is a `:request`
     (see `SymphonyElixir.HumanActions.Request`); a withdrawn one is not listed;
   - a labelled issue with no request comment is itself a `:task`;
   - a `breakdown` parent in a review state is a `:plan_review`;
-  - an issue in a review state whose `## Symphony QA Report` says `blocked` is a `:qa_blocked`;
+  - an issue in a review state whose `## Symphony QA Report` says `blocked` is a `:qa_blocked`,
+    unless it is a `Final verification:` ticket;
+  - a `Final verification:` ticket, in any state, whose parent walkthrough report says `blocked`
+    is a `:verification_blocked` on its parent's project, while the ticket stays in the state the
+    walkthrough moved it to;
   - an issue in the Human Review state with none of the above is a `:human_review`.
 
   Every action on an issue in the Human Review state is marked `human_review`, so the update lists
@@ -21,7 +25,7 @@ defmodule SymphonyElixir.HumanActions.Collector do
 
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.HumanActions.{Action, Request}
-  alias SymphonyElixir.{HumanReview, SubIssueWait}
+  alias SymphonyElixir.{HumanReview, RunKind, SubIssueWait}
   alias SymphonyElixir.Linear.{Client, Issue}
   alias SymphonyElixir.QaAgent.Report
 
@@ -33,6 +37,11 @@ defmodule SymphonyElixir.HumanActions.Collector do
   @human_review_minutes 10
   @verdict_pattern ~r/^\*\*Verdict:\*\*\s*(\w+)/m
   @reason_pattern ~r/^Reason:\s*(.+)$/m
+  # A parent walkthrough's report names the verification ticket and the state it moved it to.
+  @walkthrough_target_pattern ~r/^\*\*Verdict:\*\*\s*\w+\s*→\s*(\S+)\s+(.+?)\s*$/m
+  @blocked_step_pattern ~r/^- \*\*blocked\*\* (.+?)(?: \(evidence: .*\))?$/m
+  @permission_pattern ~r/permission|privacy & security|screen recording/i
+  @gap_state "Todo"
 
   @query """
   query SymphonyHumanActions($filter: IssueFilter!, $first: Int!, $after: String, $commentLast: Int!, $historyFirst: Int!) {
@@ -45,6 +54,7 @@ defmodule SymphonyElixir.HumanActions.Collector do
         url
         state { name }
         project { id name }
+        parent { identifier project { id name } }
         labels { nodes { name } }
         comments(last: $commentLast, orderBy: createdAt) {
           nodes { id body createdAt parent { id } }
@@ -131,12 +141,10 @@ defmodule SymphonyElixir.HumanActions.Collector do
   defp issue_page(body), do: {:error, {:human_actions_query_failed, body}}
 
   defp filter(scope, settings) do
-    wanted = %{
-      "or" => [
-        %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => settings.human_actions.label}}}}
-        | Enum.map(HumanReview.review_states(settings), &%{"state" => %{"name" => %{"eqIgnoreCase" => &1}}})
-      ]
-    }
+    labelled = %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => settings.human_actions.label}}}}
+    in_review = Enum.map(HumanReview.review_states(settings), &%{"state" => %{"name" => %{"eqIgnoreCase" => &1}}})
+    final_verification = %{"title" => %{"startsWith" => RunKind.final_verification_prefix()}}
+    wanted = %{"or" => [labelled | in_review] ++ [final_verification]}
 
     %{"and" => [scope, wanted, %{"state" => %{"name" => %{"nin" => settings.tracker.terminal_states}}}]}
   end
@@ -161,11 +169,13 @@ defmodule SymphonyElixir.HumanActions.Collector do
     labels = node |> get_in(["labels", "nodes"]) |> List.wrap() |> Enum.map(&String.downcase(to_string(&1["name"])))
     in_review? = HumanReview.review_state?(issue.state, settings)
     human_review? = HumanReview.in_state?(issue.state, settings)
+    final_verification? = RunKind.classify(%Issue{title: issue.title}) == :final_verification
 
     actions =
       labelled_actions(context, String.downcase(settings.human_actions.label) in labels) ++
         plan_review_actions(context, in_review? and Enum.any?(labels, &Issue.breakdown_label?/1)) ++
-        qa_blocked_actions(context, in_review?)
+        qa_blocked_actions(context, in_review? and not final_verification?) ++
+        verification_blocked_actions(context, final_verification?)
 
     actions
     |> human_review_actions(context, human_review?)
@@ -306,13 +316,65 @@ defmodule SymphonyElixir.HumanActions.Collector do
 
   defp human_review_actions(actions, _context, _human_review?), do: actions
 
+  defp verification_blocked_actions(_context, false), do: []
+
+  # The verdict line says where the walkthrough left the ticket: `In Review`, or `Todo` when the
+  # failing steps it could run were filed as gap tickets.
+  defp verification_blocked_actions(%{issue: issue} = context, true) do
+    with %{verdict: "blocked", body: body} = report <- latest_qa_report(context.node),
+         [_, target, target_state] <- Regex.run(@walkthrough_target_pattern, body),
+         true <- target == issue.identifier and state_is?(issue.state, target_state) do
+      [verification_blocked_action(context, report, target_state)]
+    else
+      _not_blocked -> []
+    end
+  end
+
+  defp verification_blocked_action(%{issue: issue, node: node} = context, report, target_state) do
+    parent = node["parent"] || %{}
+    of_parent = "the final verification of #{parent["identifier"] || issue.identifier}"
+    blocked_steps = @blocked_step_pattern |> Regex.scan(report.body, capture: :all_but_first) |> List.flatten()
+    permissions? = Regex.match?(@permission_pattern, Enum.join([report.reason || "" | blocked_steps], "\n"))
+
+    {title, fix} =
+      if permissions?,
+        do:
+          {"Grant the QA host's permissions for #{of_parent}",
+           "On the QA host, open System Settings > Privacy & Security and grant Screen Recording and Accessibility to the app the reason above names."},
+        else: {"Unblock #{of_parent}", "Fix the cause above, on the machine QA runs on."}
+
+    rerun =
+      if state_is?(target_state, @gap_state),
+        do: "#{issue.identifier} runs the walkthrough again by itself once the gap tickets that block it are done.",
+        else: "Then move #{issue.identifier} to `#{@gap_state}` so the walkthrough runs again."
+
+    project =
+      case parent["project"] do
+        %{"id" => project_id} = project when is_binary(project_id) -> %{id: project_id, name: project["name"]}
+        _no_project -> context.project
+      end
+
+    action(%{context | project: project}, %{
+      key: "verification:#{issue.id}",
+      kind: :verification_blocked,
+      title: title,
+      why: "The Auto Review walkthrough could not test everything: #{report.reason || "see the QA report on #{issue.identifier}"}#{blocked_steps_text(blocked_steps)}",
+      unblocks: of_parent,
+      steps: [fix, rerun],
+      done_when: "#{issue.identifier} leaves #{target_state}, or its next walkthrough is not blocked."
+    })
+  end
+
+  defp blocked_steps_text([]), do: ""
+  defp blocked_steps_text(steps), do: " Blocked steps: #{Enum.join(steps, "; ")}."
+
   defp latest_qa_report(node) do
     node
     |> comments()
     |> Enum.filter(&(is_binary(&1["body"]) and String.starts_with?(String.trim(&1["body"]), Report.heading())))
     |> Enum.max_by(&(&1["createdAt"] || ""), fn -> nil end)
     |> case do
-      %{"body" => body} -> %{verdict: capture(@verdict_pattern, body), reason: capture(@reason_pattern, body)}
+      %{"body" => body} -> %{verdict: capture(@verdict_pattern, body), reason: capture(@reason_pattern, body), body: body}
       nil -> nil
     end
   end
@@ -341,6 +403,9 @@ defmodule SymphonyElixir.HumanActions.Collector do
     [SubIssueWait.state(settings), settings.auto_review.state | settings.tracker.active_states]
     |> Enum.filter(&is_binary/1)
   end
+
+  defp state_is?(state, expected) when is_binary(state), do: String.downcase(String.trim(state)) == String.downcase(expected)
+  defp state_is?(_state, _expected), do: false
 
   defp parse_datetime(value) when is_binary(value) do
     case DateTime.from_iso8601(value) do

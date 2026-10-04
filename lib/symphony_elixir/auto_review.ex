@@ -27,6 +27,13 @@ defmodule SymphonyElixir.AutoReview do
   `## Symphony QA Report` comment, and each agent run is stored in the run store
   with `kind: "qa"`.
 
+  When the repository's `auto_review.acceptance_gate.mode` isn't `off`, a QA `pass`, `skip` or
+  `blocked` doesn't move the issue straight to `In Review`: it asks
+  `SymphonyElixir.AcceptanceGate.Runner` for a gate pass on the PR head (`run_gate/2`, see
+  `SymphonyElixir.AcceptanceGate`), and the issue moves on once the gate has a verdict. The
+  order is CI, then QA, then the gate. In `shadow` mode the verdict is advisory and the issue
+  goes to `In Review` as before; a QA `fail` never reaches the gate.
+
   At startup Symphony checks that the Linear team has the Auto Review state and
   that the CI poller is on. When either is missing, Auto Review is turned off for
   the life of the process and a warning is logged, so issues keep flowing to
@@ -39,12 +46,13 @@ defmodule SymphonyElixir.AutoReview do
 
   require Logger
 
-  alias SymphonyElixir.{Config, Notifications, QaAgent, QaRunner, RunStore, Tracker, UsageLimit, Verification}
+  alias SymphonyElixir.{AcceptanceGate, Config, Notifications, QaAgent, QaRunner, RunStore, Tracker, UsageLimit}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.HumanReview
   alias SymphonyElixir.Linear.{Issue, Usage}
   alias SymphonyElixir.Orchestrator
   alias SymphonyElixir.QaAgent.{Report, Selection}
+  alias SymphonyElixir.Verification
   alias SymphonyElixir.{WorkflowSource, Workspace}
 
   @review_state "In Review"
@@ -140,6 +148,11 @@ defmodule SymphonyElixir.AutoReview do
   failed move is retried, and an issue back in Auto Review on the same SHA after a
   `fail` counts as another failed fix attempt. Otherwise a QA pass is requested from
   the runner (`opts[:qa_runner]`, default `SymphonyElixir.QaRunner`).
+
+  With the acceptance gate on, a stored QA `pass`, `skip` or `blocked` applies the gate's
+  stored verdict for the SHA, or asks the gate runner (`opts[:gate_runner]`, default
+  `SymphonyElixir.AcceptanceGate.Runner`) for a pass when it has none. A judged SHA never
+  starts another gate run.
   """
   @spec on_green(Issue.t(), map(), map(), Schema.t(), keyword()) :: tuple()
   def on_green(%Issue{} = issue, record, ci_status, %Schema{} = settings, opts) do
@@ -207,8 +220,82 @@ defmodule SymphonyElixir.AutoReview do
         outcome = %{verdict: :fail, result: result, reason: reason}
         apply_outcome(issue, record, Map.get(record, :qa_sha), outcome, settings, opts)
 
-      _other ->
-        transition(issue, record, String.to_existing_atom(Map.get(record, :qa_verdict)), Map.get(record, :qa_target_state), opts)
+      {qa_verdict, _applied} ->
+        verdict = String.to_existing_atom(qa_verdict)
+
+        if gate_after_qa?(verdict, settings),
+          do: gate_outcome(issue, record, Map.get(record, :qa_sha), settings, opts),
+          else: transition(issue, record, verdict, Map.get(record, :qa_target_state), opts)
+    end
+  end
+
+  # A QA `fail` (also with its fix attempts used up) never reaches the gate.
+  defp gate_after_qa?(verdict, settings), do: verdict in [:pass, :skip, :blocked] and AcceptanceGate.enabled?(settings)
+
+  defp gate_outcome(issue, record, sha, settings, opts) do
+    if Map.get(record, :gate_sha) == sha and is_binary(Map.get(record, :gate_verdict)),
+      do: apply_gate_verdict(issue, record, opts),
+      else: request_gate(issue, record, sha, settings, opts)
+  end
+
+  defp request_gate(%Issue{id: issue_id} = issue, record, sha, settings, opts) do
+    job = %{
+      issue: issue,
+      record: record,
+      sha: sha,
+      settings: settings,
+      qa: %{verdict: String.to_existing_atom(Map.get(record, :qa_verdict)), reason: Map.get(record, :qa_reason)},
+      forced: Issue.forced?(issue, settings) or forced_part?(issue_id)
+    }
+
+    case Keyword.get(opts, :gate_runner, AcceptanceGate.Runner).request(job, Keyword.take(opts, [:tracker, :run_store])) do
+      :started -> {:gate_started, issue_id, sha}
+      :running -> {:gate_running, issue_id}
+      :busy -> {:gate_queued, issue_id}
+      :usage_limited -> {:gate_waiting, issue_id, :usage_limited}
+      {:error, reason} -> {:gate_request_error, issue_id, reason}
+    end
+  end
+
+  @doc """
+  Runs one acceptance gate pass for a job built by Auto Review and applies its verdict. Runs in a
+  `SymphonyElixir.AcceptanceGate.Runner` task. An inconclusive pass below the limit leaves the
+  issue in Auto Review, and the next green poll asks for another pass. A verdict that comes after
+  the issue left Auto Review, or after its PR merged, closed or moved on, is kept but moves nothing.
+  """
+  @spec run_gate(map(), keyword()) :: tuple()
+  def run_gate(%{issue: issue, record: record, sha: sha, settings: settings} = job, opts) do
+    Usage.put_caller(:auto_review)
+
+    case Keyword.get(opts, :acceptance_gate, AcceptanceGate).judge(job, opts) do
+      {:ok, %{verdict: nil}} ->
+        {:gate_inconclusive, issue.id, sha}
+
+      {:ok, decision} ->
+        record = Map.merge(record, %{gate_sha: sha, gate_verdict: decision.verdict})
+
+        case moved_on(issue, record, sha, settings, opts) do
+          nil -> apply_gate_verdict(issue, record, opts)
+          reason -> gate_unapplied(issue, sha, decision.verdict, reason)
+        end
+    end
+  end
+
+  defp gate_unapplied(issue, sha, verdict, reason) do
+    Logger.info(
+      "Acceptance gate outcome not applied: #{reason} issue_id=#{issue.id} issue_identifier=#{issue.identifier} " <>
+        "verdict=#{verdict} sha=#{sha}"
+    )
+
+    {:auto_review_gate_not_applied, issue.id, verdict, reason}
+  end
+
+  # `shadow` (and `enforce` until it is applied) only records the verdict: the issue moves where
+  # QA sent it, as it did before the gate.
+  defp apply_gate_verdict(issue, record, opts) do
+    case transition(issue, record, String.to_existing_atom(Map.get(record, :qa_verdict)), Map.get(record, :qa_target_state), opts) do
+      {:auto_review_qa, issue_id, _qa_verdict, target_state} -> {:auto_review_gate, issue_id, Map.get(record, :gate_verdict), target_state}
+      error -> error
     end
   end
 
@@ -498,6 +585,7 @@ defmodule SymphonyElixir.AutoReview do
       %{
         qa_sha: sha,
         qa_verdict: Atom.to_string(verdict),
+        qa_reason: Map.get(outcome, :reason) || Map.get(result, :reason),
         qa_target_state: target_state,
         qa_applied: false,
         qa_run_id: Map.get(outcome, :run_id),
@@ -521,7 +609,10 @@ defmodule SymphonyElixir.AutoReview do
     )
 
     notify(issue, record, verdict, target_state, outcome)
-    transition(issue, Map.merge(record, attrs), verdict, target_state, opts)
+
+    if gate_after_qa?(verdict, settings),
+      do: request_gate(issue, Map.merge(record, attrs), sha, settings, opts),
+      else: transition(issue, Map.merge(record, attrs), verdict, target_state, opts)
   end
 
   defp publish_report(issue, sha, outcome, attrs, opts) do

@@ -182,6 +182,10 @@ defmodule SymphonyElixir.AcceptanceGate.ContextTest do
       refute context.diff =~ ~r/^[-+]Intro/m
       refute context.diff_truncated?
 
+      assert %{path: "lib/app.ex", additions: 1, deletions: 1, added_lines: ["    |> step_one(:fast)"]} = Enum.find(context.diff_summary.files, &(&1.path == "lib/app.ex"))
+      assert %{added_lines: []} = Enum.find(context.diff_summary.files, &(&1.path == "logo.png"))
+      refute Enum.any?(context.diff_summary.files, &Map.has_key?(&1, :base))
+
       assert_no_worktree(ctx, ctx.gated)
     end
 
@@ -274,6 +278,36 @@ defmodule SymphonyElixir.AcceptanceGate.ContextTest do
     branch!(fixture.author, "main", "main", %{"README.md" => "# Moved\n"})
     assert {:ok, _context} = build(ctx, gated, cache: cache)
     assert_received {:open_pull_requests, _pr_url, _opts}
+  end
+
+  test "summarises the whole diff for the escalation rules, with the manifests on both sides", ctx do
+    fixture = fixture!(ctx.root)
+    branch!(fixture.author, "main", "main", %{"mix.lock" => ~s(%{"jason": {:hex, :jason, "1.4.0"}}\n), "old.txt" => "old\n"})
+    big = Enum.map_join(1..20_000, &"generated line #{&1}\n")
+    git!(fixture.author, ["rm", "--quiet", "old.txt"])
+
+    gated =
+      branch!(fixture.author, "pr-1", "main", %{
+        "mix.lock" => ~s(%{"jason": {:hex, :jason, "2.0.0"}}\n),
+        "assets/package.json" => ~s({"dependencies": {"left-pad": "^1.0.0"}}\n),
+        "priv/big.txt" => big,
+        "lib/tail.ex" => "+++ b/not-a-path\n"
+      })
+
+    git!(fixture.workspace, ["fetch", "--quiet", "origin", "pr-1"])
+
+    assert {:ok, context} = build(Map.merge(ctx, fixture), gated)
+    assert context.diff_truncated?
+    files = Map.new(context.diff_summary.files, &{&1.path, &1})
+
+    assert files["mix.lock"].base == ~s(%{"jason": {:hex, :jason, "1.4.0"}}\n)
+    assert files["mix.lock"].head == ~s(%{"jason": {:hex, :jason, "2.0.0"}}\n)
+    assert files["assets/package.json"].base == nil
+    assert files["assets/package.json"].head =~ "left-pad"
+    assert files["old.txt"] == %{path: "old.txt", additions: 0, deletions: 1, added_lines: []}
+    # Read before the diff is cut: every added line of the big file is there.
+    assert length(files["priv/big.txt"].added_lines) == 20_000
+    assert files["lib/tail.ex"].added_lines == ["+++ b/not-a-path"]
   end
 
   test "caps the diff at 120 KB and keeps the numstat whole", ctx do

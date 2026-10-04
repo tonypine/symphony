@@ -10,6 +10,8 @@ defmodule SymphonyElixir.HumanActions.Action do
   - `:plan_review`: a `breakdown` parent waiting in `In Review` for its plan to be approved;
   - `:qa_blocked`: an issue whose latest QA report says Auto Review was `blocked`;
   - `:human_review`: an issue waiting in the Human Review state with no other action;
+  - `:verification_blocked`: a `Final verification:` ticket whose Auto Review parent walkthrough
+    was `blocked` (a QA host without its macOS permissions), listed on the parent's project;
   - `:ci_secret`: a workflow on a repository's base branch that keeps failing on a missing secret
     (see `SymphonyElixir.HumanActions.CiSecrets`). It belongs to no issue, so its `issue` is nil.
 
@@ -20,7 +22,8 @@ defmodule SymphonyElixir.HumanActions.Action do
   @enforce_keys [:key, :kind, :title, :issue, :project]
   defstruct @enforce_keys ++ [:why, :unblocks, :est_minutes, :done_when, steps: [], human_review: false]
 
-  @type kind :: :request | :task | :plan_review | :qa_blocked | :human_review | :ci_secret
+  @type kind ::
+          :request | :task | :plan_review | :qa_blocked | :human_review | :verification_blocked | :ci_secret
   @type t :: %__MODULE__{
           key: String.t(),
           kind: kind(),

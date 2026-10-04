@@ -1124,6 +1124,9 @@ one.
   blocked by each one and stays in `Todo`. Symphony holds it there and runs the walkthrough again
   once every gap is `Done` (or cancelled), with no human step. When a gap could not be filed or
   linked, the ticket goes to `Backlog` for a human instead. There is no fix loop.
+- `blocked` in either case also lists the ticket in the parent project's human-action update
+  (see `human_actions`), with the reason and the blocked steps, since only a person can provide
+  what QA was missing.
 
 The ticket gets the usual executor run when the tracker is not Linear, the run is on a remote
 worker, it has the `qa:skip` label, or it has no parent.
@@ -1189,8 +1192,9 @@ changed, otherwise the setting it is missing or `enabled: false`.
 `auto_review.acceptance_gate` configures the acceptance gate: its kill switch (`mode`, default
 `off`), the gate agent's run settings and the escalation rules that send a PR to a human. It is
 operator config only: a repository's `WORKFLOW.md` can't set it, and `repositories[].acceptance_gate`
-can only add rules. Nothing runs the gate yet. Every key, the built-in rules and example blocks are
-in [`docs/acceptance_gate.md`](acceptance_gate.md).
+can only add rules. With `mode: shadow`, Auto Review runs a gate pass after QA, writes an advisory
+`## Symphony Acceptance Gate` comment, and moves the issue to In Review as before. Every key, the
+built-in rules and example blocks are in [`docs/acceptance_gate.md`](acceptance_gate.md).
 
 #### Android settings
 
@@ -1866,6 +1870,15 @@ lists:
   become the steps);
 - a `breakdown` parent in `In Review` or `Human Review`, waiting for its plan to be approved;
 - an issue in `In Review` or `Human Review` whose `## Symphony QA Report` has the verdict `blocked`;
+- a `Final verification:` ticket whose Auto Review parent walkthrough had the verdict `blocked`,
+  such as a QA host without the macOS app's Screen Recording and Accessibility permissions. It is
+  listed in the update of the parent's project, as "Grant the QA host's permissions for the final
+  verification of <parent>" when the report's reason or blocked steps name a permission (with the
+  System Settings steps) and "Unblock the final verification of <parent>" otherwise, with the
+  reason and the blocked steps from the QA report, and how the walkthrough runs again. Failing
+  steps the walkthrough could still run are filed as gap tickets as before; a walkthrough that
+  fails on defects alone (verdict `fail`) adds no action. Reading these tickets adds them to the
+  same query, at no extra request;
 - any other issue in `Human Review`, as "Review <issue>", with the moves that approve it, send it
   back or sign it off;
 - with `pull_requests.checks.enabled`, a GitHub Actions workflow on the repository's base branch
@@ -1907,8 +1920,11 @@ leaves a state a person moves it out of (anything but `issues.states.active`, th
 the Auto Review state), such as `Backlog` back to `Todo`. The agent's own move to `Backlog` keeps it
 open. Removing the label closes every action on the issue, and so does a terminal state. A plan
 review closes when the parent leaves its review state, and a blocked QA pass when the issue leaves
-its review state or its next QA report is not `blocked`. A Human Review action closes when the
-issue leaves `Human Review`. A missing secret closes when the next run of
+its review state or its next QA report is not `blocked`. A blocked final verification closes when
+its next walkthrough is not `blocked`, or when the ticket leaves the state the walkthrough moved it
+to (`In Review`, `Human Review` when only a person can do the steps left, or `Todo` while gap
+tickets for its failing steps block it). A Human Review action closes when the issue leaves
+`Human Review`. A missing secret closes when the next run of
 its workflow on the base branch is green. Closed actions drop out of the next update.
 
 **When Symphony posts.** A project gets an update only when its set of open actions differs from

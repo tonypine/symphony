@@ -3058,7 +3058,15 @@ defmodule SymphonyElixir.Orchestrator do
             {state, hold}
         end
 
-      not dispatch_eligible?(issue, state, active_states, terminal_states) ->
+      not dispatch_gates_open?(issue, state, active_states, terminal_states) ->
+        {state, hold}
+
+      # A retry that started waiting for a slot while a dispatch readiness task ran is held again
+      # with its attempt, as a retry that comes due during the hold is.
+      waiting_retry_held?(waiting, issue, state) ->
+        {hold_waiting_retry_for_usage_limit(state, issue, waiting), hold}
+
+      usage_limit_held?(issue, state) ->
         {state, hold}
 
       true ->
@@ -3230,6 +3238,11 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp dispatch_eligible?(%Issue{} = issue, %State{} = state, active_states, terminal_states) do
+    dispatch_gates_open?(issue, state, active_states, terminal_states) and !usage_limit_held?(issue, state)
+  end
+
+  # Every dispatch gate but the usage limit.
+  defp dispatch_gates_open?(%Issue{} = issue, %State{} = state, active_states, terminal_states) do
     candidate_issue?(issue, active_states, terminal_states) and
       !issue_held?(issue, terminal_states) and
       !Map.has_key?(state.update_holds, issue.id) and
@@ -3237,8 +3250,7 @@ defmodule SymphonyElixir.Orchestrator do
       !post_pr_quiet_active_issue?(issue, state) and
       !landing_held?(issue, state) and
       !issue_taken?(issue, state) and
-      !setup_failed_suppressed?(state.setup_failed, issue) and
-      !usage_limit_held?(issue, state)
+      !setup_failed_suppressed?(state.setup_failed, issue)
   end
 
   defp issue_taken?(%Issue{id: issue_id}, %State{} = state) do
@@ -7830,6 +7842,18 @@ defmodule SymphonyElixir.Orchestrator do
   defp usage_limit_canary_alive?(%State{} = state, issue_id) do
     issue_claimed_or_running?(state, issue_id) or Map.has_key?(state.retry_attempts, issue_id) or
       Map.has_key?(state.slot_waiting, issue_id)
+  end
+
+  defp waiting_retry_held?(waiting, %Issue{} = issue, %State{} = state) do
+    retry_attempt?(Map.get(waiting, :attempt)) and not is_nil(usage_limit_hold(state, issue))
+  end
+
+  # The retry takes its claim back, as a held retry keeps it, so no poll dispatches it afresh.
+  defp hold_waiting_retry_for_usage_limit(%State{} = state, %Issue{} = issue, waiting) do
+    metadata = Map.take(waiting, [:repo_key, :worker_host])
+
+    %{state | claimed: MapSet.put(state.claimed, issue.id)}
+    |> hold_retry_for_usage_limit(issue, waiting.attempt, metadata, usage_limit_hold(state, issue))
   end
 
   defp release_usage_limit_retry(%State{} = state, issue_id, retry) do
