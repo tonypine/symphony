@@ -524,7 +524,8 @@ defmodule SymphonyElixirWeb.Presenter do
       transcript_path: Map.get(entry, :transcript_path),
       turn_count: Map.get(entry, :turn_count, 0),
       last_event: entry.last_codex_event,
-      last_message: summarize_message(entry.last_codex_message),
+      last_message: running_message(entry),
+      linear_wait_until: entry |> Map.get(:linear_wait_until) |> iso8601(),
       started_at: iso8601(entry.started_at),
       last_event_at: iso8601(Map.get(entry, :last_event_at) || entry.last_codex_timestamp),
       forced: Map.get(entry, :forced, false),
@@ -620,7 +621,8 @@ defmodule SymphonyElixirWeb.Presenter do
       state: running.state,
       started_at: iso8601(running.started_at),
       last_event: running.last_codex_event,
-      last_message: summarize_message(running.last_codex_message),
+      last_message: running_message(running),
+      linear_wait_until: running |> Map.get(:linear_wait_until) |> iso8601(),
       last_event_at: iso8601(Map.get(running, :last_event_at) || running.last_codex_timestamp),
       tokens: %{
         input_tokens: entry_input_tokens(running),
@@ -1187,6 +1189,10 @@ defmodule SymphonyElixirWeb.Presenter do
   defp repo_key_matches?(entry, repo_key), do: Map.get(entry, :repo_key) == repo_key
 
   defp current_repo_key, do: Config.repo_key_or_nil()
+
+  # A run waiting out a Linear rate limit or outage has no new agent message to show.
+  defp running_message(%{linear_wait_until: %DateTime{}}), do: "waiting for Linear"
+  defp running_message(running), do: summarize_message(running.last_codex_message)
 
   defp summarize_message(nil), do: nil
   defp summarize_message(message), do: MessageHumanizer.humanize(message)

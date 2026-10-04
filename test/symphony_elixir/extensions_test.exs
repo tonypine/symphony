@@ -484,6 +484,20 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert {:error, :issue_update_failed} = Adapter.update_issue_state("issue-1", "Odd")
   end
 
+  test "phoenix observability api shows a run waiting on Linear" do
+    wait_until = ~U[2026-10-04 12:30:00Z]
+    snapshot = update_in(static_snapshot().running, fn [running] -> [Map.put(running, :linear_wait_until, wait_until)] end)
+    orchestrator_name = Module.concat(__MODULE__, :LinearWaitApiOrchestrator)
+    {:ok, _pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: snapshot)
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    assert %{"running" => [%{"last_message" => "waiting for Linear", "linear_wait_until" => "2026-10-04T12:30:00Z"}]} =
+             json_response(get(build_conn(), "/api/v1/state"), 200)
+
+    assert %{"running" => %{"last_message" => "waiting for Linear", "linear_wait_until" => "2026-10-04T12:30:00Z"}} =
+             json_response(get(build_conn(), "/api/v1/MT-HTTP"), 200)
+  end
+
   test "phoenix observability api preserves state, issue, and refresh responses" do
     snapshot = static_snapshot()
     orchestrator_name = Module.concat(__MODULE__, :ObservabilityApiOrchestrator)
@@ -528,6 +542,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "turn_count" => 7,
                  "last_event" => "notification",
                  "last_message" => "rendered",
+                 "linear_wait_until" => nil,
                  "started_at" => state_payload["running"] |> List.first() |> Map.fetch!("started_at"),
                  "last_event_at" => nil,
                  "forced" => false,
@@ -742,6 +757,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                "started_at" => issue_payload["running"]["started_at"],
                "last_event" => "notification",
                "last_message" => "rendered",
+               "linear_wait_until" => nil,
                "last_event_at" => nil,
                "tokens" => %{
                  "input_tokens" => 4,

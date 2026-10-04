@@ -214,6 +214,23 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       refute log =~ "Agent run failed"
     end
 
+    test "a workpad bootstrap tells the orchestrator it is waiting before the first turn" do
+      Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, [@rate_limited])
+
+      capture_log(fn ->
+        assert :ok = run_issue!("Rework", heads: ["sha-old", "sha-rework"], recipient: self(), runner_opts: linear_wait_opts())
+      end)
+
+      # The orchestrator hears of the wait before any agent event, so its first-turn stall
+      # check holds off until it ends.
+      {:messages, messages} = Process.info(self(), :messages)
+      wait_at = Enum.find_index(messages, &match?({:linear_wait, "issue-progress", 30_000}, &1))
+      assert is_integer(wait_at)
+      assert wait_at < Enum.find_index(messages, &match?({:progress_turn, 1}, &1))
+      assert_received {:linear_wait_slept, 30_000}
+      assert_received {:memory_tracker_comment, "issue-progress", "## Symphony Workpad" <> _}
+    end
+
     test "an idle park waits it out on its state move and its note instead of failing the run" do
       Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [@rate_limited])
       # The first comment is the workpad bootstrap's; the second is the park note.
