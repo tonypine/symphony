@@ -74,6 +74,17 @@ defmodule SymphonyElixir.GitHub.PullRequest do
           optional(:submitted_at) => DateTime.t() | nil
         }
 
+  @type workflow_run :: %{
+          id: String.t() | nil,
+          workflow_name: String.t() | nil,
+          status: String.t() | nil,
+          conclusion: String.t() | nil,
+          url: String.t() | nil,
+          created_at: DateTime.t() | nil
+        }
+
+  @run_fields "databaseId,workflowName,status,conclusion,url,createdAt"
+
   @doc "Whether a fetched PR conflicts with its base: `mergeable` is `CONFLICTING` or `mergeStateStatus` is `DIRTY`."
   @spec conflicting?(map()) :: boolean()
   def conflicting?(pr) when is_map(pr) do
@@ -148,12 +159,50 @@ defmodule SymphonyElixir.GitHub.PullRequest do
 
   def fetch_failed_log(run_id, opts \\ [])
 
+  @doc """
+  The failed-step log of a workflow run. The repository is the checkout in `:cwd`, or `:repo`
+  (`owner/repo` or `host/owner/repo`) when given.
+  """
   @spec fetch_failed_log(String.t() | integer(), keyword()) :: {:ok, String.t()} | {:error, term()}
   def fetch_failed_log(run_id, opts) when (is_binary(run_id) or is_integer(run_id)) and is_list(opts) do
-    run_gh(["run", "view", to_string(run_id), "--log-failed"], opts)
+    run_gh(["run", "view", to_string(run_id), "--log-failed"] ++ repo_args(opts), opts)
   end
 
   def fetch_failed_log(_run_id, _opts), do: {:error, :invalid_run_id}
+
+  @doc """
+  The latest workflow runs on `branch` of `repo` (`owner/repo` or `host/owner/repo`), newest
+  first, in one request: at most `:limit` runs (default 50).
+  """
+  @spec list_branch_runs(String.t(), String.t(), keyword()) :: {:ok, [workflow_run()]} | {:error, term()}
+  def list_branch_runs(repo, branch, opts \\ []) when is_binary(repo) and is_binary(branch) and is_list(opts) do
+    args = ["run", "list", "-R", repo, "--branch", branch, "--limit", to_string(Keyword.get(opts, :limit, 50)), "--json", @run_fields]
+
+    with {:ok, output} <- run_gh(args, opts) do
+      case Jason.decode(output) do
+        {:ok, runs} when is_list(runs) -> {:ok, runs |> Enum.filter(&is_map/1) |> Enum.map(&normalize_workflow_run/1)}
+        _other -> {:error, :invalid_workflow_runs_payload}
+      end
+    end
+  end
+
+  defp normalize_workflow_run(run) do
+    %{
+      id: normalize_id(run["databaseId"]),
+      workflow_name: run["workflowName"],
+      status: upcase(run["status"]),
+      conclusion: upcase(run["conclusion"]),
+      url: run["url"],
+      created_at: parse_datetime(run["createdAt"])
+    }
+  end
+
+  defp repo_args(opts) do
+    case Keyword.get(opts, :repo) do
+      repo when is_binary(repo) and repo != "" -> ["-R", repo]
+      _none -> []
+    end
+  end
 
   def fetch_pr_comments(pr_url, opts \\ [])
 

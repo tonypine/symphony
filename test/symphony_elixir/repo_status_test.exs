@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.RepoStatusTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.Repo.FetchLog
+  alias SymphonyElixir.Repo.{FetchLog, Status}
 
   @git_env [
     {"GIT_AUTHOR_NAME", "Symphony Test"},
@@ -81,6 +81,15 @@ defmodule SymphonyElixir.RepoStatusTest do
     test "is unavailable when the store is not running" do
       assert WorkflowStore.status({:via, Registry, {SymphonyElixir.Repo.Registry, {:workflow_store, "nowhere"}}}) == :unavailable
     end
+  end
+
+  test "names the GitHub repository of a repo from its checkout's origin", %{root: root} do
+    checkout = checkout!(root)
+    git!(checkout, ["remote", "set-url", "origin", "git@github.com:acme/cycle.git"])
+    write_workflow_file!(Workflow.workflow_file_path(), workspace_repo: checkout)
+
+    {:ok, [repo]} = Config.repos()
+    assert Status.github_repo(repo) == "acme/cycle"
   end
 
   describe "fetch before dispatch" do

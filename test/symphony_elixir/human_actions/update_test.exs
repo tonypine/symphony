@@ -146,6 +146,34 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
     assert Update.health([]) == "onTrack"
   end
 
+  test "renders a workflow failing on a missing secret, which belongs to no issue" do
+    ci_secret = %Action{
+      key: "ci_secret:acme/cycle:Release:SIGNING_KEY",
+      kind: :ci_secret,
+      title: "Add the `SIGNING_KEY` secret",
+      unblocks: "the `Release` workflow on `main` in acme/cycle",
+      est_minutes: 5,
+      steps: ["Open https://github.com/acme/cycle/settings/secrets/actions."],
+      done_when: "the next run of `Release` on `main` is green.",
+      issue: nil,
+      project: @project
+    }
+
+    {body, []} = Update.render(example_actions() ++ [ci_secret], "human-action")
+
+    assert body =~ """
+           ### 1. Add the `SIGNING_KEY` secret
+
+           **~5 min** · Unblocks the `Release` workflow on `main` in acme/cycle
+
+           1. Open https://github.com/acme/cycle/settings/secrets/actions.
+
+           **Done when:** the next run of `Release` on `main` is green.
+
+           ### 2. Add the release signing secrets
+           """
+  end
+
   test "lists at most 25 actions and points to the label for the rest" do
     [request | _rest] = example_actions()
     actions = for index <- 1..27, do: %{request | key: "request:#{index}", title: "Action #{index}"}
