@@ -33,6 +33,8 @@ defmodule SymphonyElixir.PlanCommentsTest do
       assert PlanComments.action(%{parent | sub_issues: []}, @terminal, settings) == :revise
       assert PlanComments.action(%{parent | sub_issues: [%{id: "c1", identifier: "MT-2", state: "Todo"}]}, @terminal, settings) == :answer
       assert PlanComments.action(%{parent | state: @waiting}, @terminal, settings) == :answer
+      assert PlanComments.action(%{parent | state: "Human Review"}, @terminal, settings) == :revise
+      refute PlanComments.action(%{parent | state: "Human Review"}, @terminal, %{settings | tracker: %{settings.tracker | human_review_state: nil}})
 
       # Close-out, other states, other issues: nothing.
       refute PlanComments.action(%{parent | sub_issues: [%{id: "c1", identifier: "MT-2", state: "Done"}]}, @terminal, settings)

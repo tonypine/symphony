@@ -196,6 +196,18 @@ final class StateSnapshotTests: XCTestCase {
         XCTAssertEqual(SymphonyState.poll(data: empty, statusCode: 200), .state(StateSnapshot(running: 1, budget: recordedBudget)))
     }
 
+    func testDecodesTheHumanReviewCount() throws {
+        // The recorded state predates the Human Review count, which then reads as none.
+        XCTAssertEqual(
+            SymphonyState.poll(data: Data(#"{"counts": {"running": 2, "retrying": 1, "human_review": 3}}"#.utf8), statusCode: 200),
+            .state(StateSnapshot(running: 2, retrying: 1, humanReview: 3))
+        )
+        XCTAssertEqual(
+            SymphonyState.poll(data: try recordedState(), statusCode: 200),
+            .state(StateSnapshot(running: 1, budget: recordedBudget, humanReview: 0))
+        )
+    }
+
     func testRetryingDefaultsToZero() {
         XCTAssertEqual(
             SymphonyState.poll(data: Data(#"{"counts": {"running": 2}}"#.utf8), statusCode: 200),

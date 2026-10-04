@@ -29,14 +29,14 @@ defmodule SymphonyElixir.AcceptanceGate.Context do
   require Logger
 
   alias SymphonyElixir.AcceptanceGate.{Escalation, OpenPrCache}
-  alias SymphonyElixir.{AutoReview, RunStore, Tracker, Workspace}
+  alias SymphonyElixir.{AutoReview, HumanReview, RunStore, Tracker, Workspace}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.GitHub.PullRequest
   alias SymphonyElixir.Linear.Issue
 
   @worktree_dir ".acceptance-gate"
   @max_diff_bytes 120_000
-  @review_states ["In Review", "Merging"]
+  @merging_state "Merging"
   @closed_pr_states ["CLOSED", "MERGED"]
   @attributes "*.ex diff=elixir\n*.exs diff=elixir\n"
   @merge_identity ["-c", "user.name=Symphony", "-c", "user.email=symphony@localhost", "-c", "commit.gpgSign=false"]
@@ -301,7 +301,7 @@ defmodule SymphonyElixir.AcceptanceGate.Context do
   defp in_review([], _settings, _tracker), do: {:ok, []}
 
   defp in_review(prs, settings, tracker) do
-    states = [AutoReview.state(settings) | @review_states]
+    states = [AutoReview.state(settings), @merging_state | HumanReview.review_states(settings)]
 
     case tracker.fetch_issue_states_by_ids(Enum.map(prs, & &1.issue_id)) do
       {:ok, issues} ->

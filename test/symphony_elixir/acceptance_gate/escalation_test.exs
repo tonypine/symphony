@@ -35,6 +35,15 @@ defmodule SymphonyElixir.AcceptanceGate.EscalationTest do
 
   defp package_json(deps), do: Jason.encode!(%{"name" => "web", "dependencies" => deps})
 
+  test "ticket_reasons/2 checks only the ticket's label and pattern rules" do
+    assert Escalation.ticket_reasons(issue(), @rules) == []
+
+    assert [%{rule: :label}, %{rule: :ticket_pattern, detail: detail}] =
+             Escalation.ticket_reasons(issue(labels: ["needs-human"], description: "Needs a manual review."), @rules)
+
+    assert detail =~ "manual"
+  end
+
   test "a clean diff returns no reasons" do
     assert check([]) == []
     assert Escalation.check(issue(), diff([]), [], @rules) == []

@@ -72,6 +72,17 @@ defmodule SymphonyElixir.AcceptanceGate.Escalation do
     |> Enum.map(fn {rule, detail} -> %{rule: rule, detail: detail} end)
   end
 
+  @doc """
+  The reasons the ticket alone (its labels, title and description) must go to a human: the
+  `:label` and `:ticket_pattern` rules of `check/4`, which need no diff.
+  """
+  @spec ticket_reasons(Issue.t(), Escalate.t()) :: [reason()]
+  def ticket_reasons(%Issue{} = issue, %Escalate{} = rules) do
+    [{:label, label_detail(issue, rules.labels)}, {:ticket_pattern, ticket_pattern_detail(issue, rules.ticket_patterns)}]
+    |> Enum.reject(fn {_rule, detail} -> is_nil(detail) end)
+    |> Enum.map(fn {rule, detail} -> %{rule: rule, detail: detail} end)
+  end
+
   defp label_detail(%Issue{labels: labels}, escalate_labels) do
     wanted = MapSet.new(escalate_labels, &normalize_label/1)
 

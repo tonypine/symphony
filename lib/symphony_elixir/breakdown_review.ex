@@ -2,9 +2,9 @@ defmodule SymphonyElixir.BreakdownReview do
   @moduledoc """
   Acts on a human's review of a `breakdown` parent's plan.
 
-  A breakdown run leaves its sub-issues in `Backlog` and the parent in `In Review`. The human
-  approves the plan with one move of the parent, `In Review` to the waiting state
-  (`Waiting on sub-tickets`), and Symphony then moves every sub-issue still in `Backlog` to
+  A breakdown run leaves its sub-issues in `Backlog` and the parent in `In Review` (or the Human
+  Review state, when its ticket says a person reviews it). The human approves the plan with one
+  move of the parent, from either review state to the waiting state (`Waiting on sub-tickets`), and Symphony then moves every sub-issue still in `Backlog` to
   `Todo` in one batch; blocked-by links keep the order. Moving the parent to `Rework` rejects
   the plan: Symphony cancels the plan's sub-issues still in `Backlog` and runs the breakdown again.
   The plan's sub-issues are the ones created while the parent was worked into `In Review`, so a
@@ -20,7 +20,7 @@ defmodule SymphonyElixir.BreakdownReview do
   the move, such as the sub-issues of the re-planned breakdown.
   """
 
-  alias SymphonyElixir.AutoReview
+  alias SymphonyElixir.HumanReview
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.SubIssueWait
   alias SymphonyElixir.Tracker
@@ -73,7 +73,7 @@ defmodule SymphonyElixir.BreakdownReview do
   @spec sub_issues_to_move(action(), Tracker.breakdown_history(), term(), DateTime.t() | nil) :: [map()]
   def sub_issues_to_move(action, %{state_changes: changes, sub_issues: sub_issues}, settings, own_move_at \\ nil) do
     with %DateTime{} = at <- decided_at(action, latest(changes), settings, own_move_at),
-         {from, to} <- plan_window(action, changes, at) do
+         {from, to} <- plan_window(action, changes, at, settings) do
       Enum.filter(sub_issues, &(backlog_since?(&1, at) and created_in?(&1, from, to)))
     else
       nil -> []
@@ -110,7 +110,7 @@ defmodule SymphonyElixir.BreakdownReview do
   def comment_openers, do: ["Promoted to #{@todo_state}:", "Cancelled for re-plan:"]
 
   defp decided_at(:promote, %{from: from, to: to, at: at}, settings, own_move_at) do
-    if state_matches?(from, AutoReview.review_state()) and state_matches?(to, SubIssueWait.state(settings)) and
+    if HumanReview.review_state?(from, settings) and state_matches?(to, SubIssueWait.state(settings)) and
          not own_move?(at, own_move_at),
        do: at
   end
@@ -125,16 +125,14 @@ defmodule SymphonyElixir.BreakdownReview do
   defp own_move?(_at, nil), do: false
 
   # When the plan's sub-issues were created: `:promote` takes every sub-issue from before the
-  # approval, `:replace` only the run that moved the parent to `In Review` before the rejection.
-  defp plan_window(:promote, _changes, at), do: {nil, at}
+  # approval, `:replace` only the run that moved the parent to a review state before the rejection.
+  defp plan_window(:promote, _changes, at, _settings), do: {nil, at}
 
-  defp plan_window(:replace, changes, at) do
-    review_state = AutoReview.review_state()
-
+  defp plan_window(:replace, changes, at, settings) do
     changes
     |> Enum.filter(&(DateTime.compare(&1.at, at) == :lt))
     |> Enum.sort_by(& &1.at, {:desc, DateTime})
-    |> Enum.drop_while(&(not state_matches?(&1.to, review_state)))
+    |> Enum.drop_while(&(not HumanReview.review_state?(&1.to, settings)))
     |> case do
       [review, previous | _] -> {previous.at, review.at}
       [review] -> {nil, review.at}
