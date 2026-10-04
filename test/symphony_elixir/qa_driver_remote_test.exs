@@ -154,6 +154,14 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
       assert {:ok, %{"quit" => true, "output" => app_output}} = QaDriver.call_tool(driver, "qa_quit_app", %{"pid" => pid})
       assert app_output =~ "qa root #{run_dir}/app-root secret none"
 
+      # A fixture the agent wrote on the Symphony host becomes a file the QA user opens.
+      fixture = Path.join(worktree, "qa-evidence/qa-config/symphony.yml")
+      File.mkdir_p!(Path.dirname(fixture))
+      File.write!(fixture, "repos: []\n")
+      assert {:ok, %{"path" => remote_path}} = QaDriver.call_tool(driver, "qa_put_file", %{"local_path" => "qa-evidence/qa-config/symphony.yml"})
+      assert remote_path == Path.join(run_dir, "files/symphony.yml")
+      assert {:ok, {"repos: []\n", 0}} = Remote.cmd(ssh_host, "/bin/sh", ["-c", ~s(test -f "$1" && cat "$1"), "sh", remote_path], [])
+
       QaDriver.stop(driver)
       refute File.exists?(run_dir)
       refute File.exists?(scratch_dir)
@@ -284,6 +292,44 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
 
       System.put_env("PATH", Path.join(root, "empty"))
       assert {:error, ":ssh_not_found"} = Remote.ship(ssh_host, tar, dest)
+    end
+
+    test "put writes a file into the run directory's files/ and replaces an earlier copy", %{root: root, ssh_host: ssh_host} do
+      {:ok, dir} = Remote.prepare(ssh_host, Path.join(root, "operator"), Path.join(root, "no-canary"))
+      file = Path.join(root, "fixture")
+      bytes = :crypto.strong_rand_bytes(100_000)
+      File.write!(file, bytes)
+
+      assert {:ok, path} = Remote.put(ssh_host, file, dir, "symphony.yml")
+      assert path == Path.join(dir, "files/symphony.yml")
+      assert File.read!(path) == bytes
+      assert File.stat!(path).mode |> Bitwise.band(0o777) == 0o600
+
+      File.write!(file, "v2")
+      %{put: put} = Remote.host(ssh_host)
+      assert {:ok, ^path} = put.(file, dir, "symphony.yml")
+      assert File.read!(path) == "v2"
+      assert File.ls!(Path.join(dir, "files")) == ["symphony.yml"]
+
+      assert {:error, "/tmp/elsewhere/files/a is not a file in a run directory"} = Remote.put(ssh_host, file, "/tmp/elsewhere", "a")
+      assert {:error, _message} = Remote.put(ssh_host, file, dir, "../escape")
+
+      # The local shell's status for a failed redirect differs: 1 in bash, 2 in dash.
+      assert {:error, "exit " <> rest} = Remote.put(ssh_host, Path.join(root, "missing"), dir, "missing.yml")
+      assert rest =~ "No such file"
+      refute File.exists?(Path.join(dir, "files/missing.yml"))
+
+      File.mkdir_p!(Path.join(dir, "files/taken"))
+      File.write!(Path.join(dir, "files/taken/x"), "")
+      assert {:error, "exit 1: " <> _rest} = Remote.put(ssh_host, file, dir, "taken")
+      assert File.ls!(Path.join(dir, "files")) |> Enum.sort() == ["symphony.yml", "taken"]
+
+      System.put_env("QA_FAKE_SSH_MODE", "output")
+      System.put_env("QA_FAKE_SSH_OUTPUT", "nothing useful\n")
+      assert {:error, "the QA host did not confirm the copy"} = Remote.put(ssh_host, file, dir, "a.yml")
+
+      System.put_env("PATH", Path.join(root, "empty"))
+      assert {:error, ":ssh_not_found"} = Remote.put(ssh_host, file, dir, "a.yml")
     end
 
     test "helper compiles into each run directory and reports failures", %{root: root, ssh_host: ssh_host} do
