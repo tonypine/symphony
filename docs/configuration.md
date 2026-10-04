@@ -202,7 +202,9 @@ repositories:
     pre-dispatch `git fetch origin` (it fetches the checkout itself when
     `fetch_before_dispatch` is on and the checkout is not the worktree source it already
     fetched), and before every Auto Review QA pass, after the same fetch. The committed file is copied to `<state root>/workflows/<key>/`. If the file is
-    missing or invalid on the ref, Symphony logs an error and keeps the last good workflow.
+    missing or invalid on the ref, Symphony logs an error and keeps the last good workflow, and
+    `GET /api/v1/repos` reports the workflow as `missing` or `invalid` with that error until the
+    ref loads again.
     Until the ref has been read once (for example a local-only checkout with no `origin`
     remote, or an `origin` whose default branch is not `HEAD`, `main` or `master` while
     `base_branch` is unset), Symphony logs a warning and reads `workflow` from disk instead, then
