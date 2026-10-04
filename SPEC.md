@@ -1309,7 +1309,9 @@ When enabled:
   can open for a fixture file the agent wrote (on a separate QA host, a copy in the pass's run
   directory there). `qa_put_file` MUST read only a regular file of bounded size that resolves inside
   the QA worktree or the pass's temp folder, and MUST refuse symlinks and files with other hard
-  links. Every tool that takes a PID MUST refuse a PID
+  links. `qa_ax_set_value` MUST enter a text field's value so the app registers the edit, with key
+  events sent to that app alone, and the tools MUST NOT return a secure field's value. Every tool that
+  takes a PID MUST refuse a PID
   the pass did not launch. Apps still running when the pass ends MUST be quit. A missing Screen
   Recording or Accessibility grant MUST surface as a `qa_permission_missing` tool error that tells
   the agent to mark the app steps `blocked`, finish the other playbooks' steps and answer
