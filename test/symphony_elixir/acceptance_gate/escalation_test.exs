@@ -144,6 +144,32 @@ defmodule SymphonyElixir.AcceptanceGate.EscalationTest do
                )
     end
 
+    test "a changed git ref, URL or path counts as a major change even when its first digits match" do
+      git_lock = fn ref -> ~s(%{\n  "foo": {:git, "https://github.com/o/foo.git", "#{ref}", [branch: "main"]}\n}\n) end
+      mix_lock = file("mix.lock", base: git_lock.("3f2a0c1"), head: git_lock.("3e9b7d4"))
+
+      assert check(files: [mix_lock]) == [%{rule: :dependency, detail: "mix.lock: foo git:3f2a0c1 -> git:3e9b7d4"}]
+
+      json =
+        file("package.json",
+          base: package_json(%{"a" => "github:o/a#1f00", "b" => "https://npm.example.com/b-1.0.0.tgz", "c" => "file:../c1"}),
+          head: package_json(%{"a" => "github:o/a#1abc", "b" => "https://npm.example.com/b-1.2.0.tgz", "c" => "file:../c1-new"})
+        )
+
+      assert check(files: [json]) == [
+               %{
+                 rule: :dependency,
+                 detail:
+                   "package.json: a github:o/a#1f00 -> github:o/a#1abc; " <>
+                     "package.json: b https://npm.example.com/b-1.0.0.tgz -> https://npm.example.com/b-1.2.0.tgz; " <>
+                     "package.json: c file:../c1 -> file:../c1-new"
+               }
+             ]
+
+      ranges = file("package.json", base: package_json(%{"a" => ">=1.0.0 <2.0.0", "b" => "v2.1.0"}), head: package_json(%{"a" => ">= 1.5.0", "b" => "v2.3.0"}))
+      assert check(files: [ranges]) == []
+    end
+
     test "a manifest that can't be parsed escalates" do
       assert check(files: [file("package.json", base: package_json(%{}), head: "{not json")]) == [%{rule: :dependency, detail: "package.json could not be parsed"}]
       assert check(files: [file("mix.lock", base: "%{", head: lock(jason: "1.4.4"))]) == [%{rule: :dependency, detail: "mix.lock could not be parsed"}]

@@ -16,8 +16,9 @@ defmodule SymphonyElixir.AcceptanceGate.Escalation do
 
   Docs and tests are the globs QA selection skips (`QaAgent.Selection.docs_or_test?/1`).
   A version's major is its first number, or its first two when the first is `0`, so `0.4` to
-  `0.5` counts as a major bump; a version without a number (`latest`, a git ref) counts as a
-  major bump whenever it changes.
+  `0.5` counts as a major bump. Only a leading version is read, after any `^`, `~`, `>`, `=`,
+  `<` or `v`: a value that doesn't start with one (`latest`, a git ref, a URL, a path) counts as
+  a major bump whenever it changes.
   """
 
   alias SymphonyElixir.AcceptanceGate.Settings.Escalate
@@ -162,7 +163,7 @@ defmodule SymphonyElixir.AcceptanceGate.Escalation do
   end
 
   defp major(version) do
-    case Regex.run(~r/(\d+)(?:\.(\d+))?/, version) do
+    case Regex.run(~r/\A[\^~>=<v\s]*(\d+)(?:\.(\d+))?/, version) do
       [_match, "0", minor] -> {0, minor}
       [_match, major | _minor] -> {major}
       nil -> nil

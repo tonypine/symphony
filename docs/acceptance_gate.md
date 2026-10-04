@@ -126,8 +126,9 @@ checked in this order:
 | `:busy_file` | more than `escalate.busy_files.max_lines` lines change in one busy file. |
 
 A version's major is its first number. When that number is `0`, the first two numbers count,
-so `0.4.0` to `0.5.0` is a major change. A version with no number in it (`latest`, a git ref)
-counts as a major change whenever it changes. `mix.lock` is read with
+so `0.4.0` to `0.5.0` is a major change. Only a leading version is read, after any `^`, `~`,
+`>`, `=`, `<` or `v`: a value that doesn't start with one (`latest`, a git ref such as
+`git:3f2a…`, a URL, a `file:` path) counts as a major change whenever it changes. `mix.lock` is read with
 `DependencyAudit.MixParser.parse_lock/1` and `package.json` with `DependencyAudit.NpmParser`
 (`dependencies` and `devDependencies`).
 
