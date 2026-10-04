@@ -12,6 +12,9 @@ defmodule SymphonyElixir.QaAndroid.DriverTest do
   @adb_prefix ["-P", "15037", "-s", "emulator-5600"]
   @build "./gradlew :app:assembleDebug"
   @png <<0x89, "PNG", 0x0D, 0x0A, 0x1A, 0x0A, "image">>
+  @dump File.read!(Path.expand("../../fixtures/qa_android/uiautomator_dump.txt", __DIR__))
+  @dump_args ["exec-out", "uiautomator", "dump", "/dev/tty"]
+  @display_args ["shell", "dumpsys", "window", "displays"]
 
   setup do
     File.mkdir_p!(System.tmp_dir!())
@@ -55,7 +58,12 @@ defmodule SymphonyElixir.QaAndroid.DriverTest do
   defp command(["shell", "am", "start" | _rest]), do: :am_start
   defp command(["shell", "am", "force-stop" | _rest]), do: :force_stop
   defp command(["shell", "pidof" | _rest]), do: :pidof
+  defp command(["shell", "dumpsys", "window" | _rest]), do: :display
   defp command(["shell", "dumpsys" | _rest]), do: :dumpsys
+  defp command(["shell", "input" | _rest]), do: :input
+  defp command(["shell", "settings" | _rest]), do: :settings
+  defp command(["shell", "cmd", "uimode" | _rest]), do: :uimode
+  defp command(["exec-out", "uiautomator" | _rest]), do: :ui_dump
   defp command(["exec-out" | _rest]), do: :screencap
   defp command(["logcat" | _rest]), do: :logcat
 
@@ -82,10 +90,14 @@ defmodule SymphonyElixir.QaAndroid.DriverTest do
 
   defp default_reply(["shell", "pidof", _id], _packages, _apk_package), do: {:ok, {"4242\n", 0}}
 
+  defp default_reply(["shell", "dumpsys", "window", "displays"], _packages, _apk_package),
+    do: {:ok, {"Display: mDisplayId=0\n  init=1080x2400 420dpi base=1080x2400 420dpi cur=1080x2400 app=1080x2337 rng=1080x1017-2337x2337\n", 0}}
+
   defp default_reply(["shell", "dumpsys" | _rest], _packages, _apk_package),
     do: {:ok, {"  mResumedActivity: ActivityRecord{1f u0 #{@app_id}/.MainActivity t7}\n", 0}}
 
   defp default_reply(["exec-out", "screencap", "-p"], _packages, _apk_package), do: {:ok, {@png, 0}}
+  defp default_reply(["exec-out", "uiautomator", "dump", "/dev/tty"], _packages, _apk_package), do: {:ok, {@dump, 0}}
   defp default_reply(["logcat" | _rest], _packages, _apk_package), do: {:ok, {"E AndroidRuntime: FATAL EXCEPTION: main\n", 0}}
   defp default_reply(_args, _packages, _apk_package), do: {:ok, {"", 0}}
 
@@ -159,7 +171,9 @@ defmodule SymphonyElixir.QaAndroid.DriverTest do
 
   describe "tools" do
     test "lists the qa_android tools and needs a driver" do
-      assert Driver.tools() == ~w(qa_android_install qa_android_launch qa_android_stop qa_android_screenshot)
+      assert Driver.tools() ==
+               ~w(qa_android_install qa_android_launch qa_android_stop qa_android_screenshot qa_android_ui_tree qa_android_tap qa_android_type qa_android_key qa_android_rotate qa_android_dark_mode qa_android_font_scale)
+
       assert error_code(Driver.call_tool(nil, "qa_android_install", %{})) == "qa_android_driver_unavailable"
       assert Driver.stop(nil) == :ok
     end
@@ -544,6 +558,400 @@ defmodule SymphonyElixir.QaAndroid.DriverTest do
 
       assert error_code(call(driver, "qa_android_screenshot", %{"name" => "step-51"})) == "qa_too_many_screenshots"
     end
+  end
+
+  describe "screen tools" do
+    test "act only once a configured app is installed in this pass", %{worktree: worktree} do
+      driver = start_driver(worktree)
+
+      for {tool, args} <- [
+            {"qa_android_ui_tree", %{}},
+            {"qa_android_tap", %{"x" => 1, "y" => 1}},
+            {"qa_android_type", %{"text" => "a"}},
+            {"qa_android_key", %{"key" => "back"}},
+            {"qa_android_rotate", %{"orientation" => "landscape"}},
+            {"qa_android_dark_mode", %{"mode" => "on"}},
+            {"qa_android_font_scale", %{"scale" => 1.3}}
+          ] do
+        assert {:error, {:qa_tool, "qa_android_not_installed", message}} = call(driver, tool, args)
+        assert message =~ "Run qa_android_install first"
+      end
+
+      assert adb_calls() == []
+
+      # An APK that installed nothing configured leaves them unavailable too.
+      nothing = installed_nothing(worktree)
+      assert error_code(call(nothing, "qa_android_ui_tree")) == "qa_android_not_installed"
+    end
+  end
+
+  describe "qa_android_ui_tree" do
+    test "parses a uiautomator dump read through exec-out into flat nodes", %{worktree: worktree} do
+      driver = installed_driver(worktree)
+      adb_calls()
+
+      assert {:ok, tree} = call(driver, "qa_android_ui_tree")
+      assert_received {:adb, @dump_args, opts}
+      assert opts[:output_limit] == 2_000_001
+      assert adb_calls() == []
+
+      assert %{"foreground_package" => @app_id, "node_count" => 14, "truncated" => false, "nodes" => nodes} = tree
+      refute Map.has_key?(tree, "note")
+      refute Map.has_key?(tree, "foreground_warning")
+
+      assert Enum.map(nodes, & &1["path"]) ==
+               ~w(0 0.0 0.0.0 0.0.0.0 0.0.0.0.0 0.0.0.0.1 0.0.0.0.2 0.0.0.0.3 0.0.0.0.4 0.0.0.0.5 0.0.0.0.5.0 0.0.0.0.5.1 0.0.0.0.5.2 0.0.0.0.6)
+
+      by_path = Map.new(nodes, &{&1["path"], &1})
+
+      assert by_path["0.0.0.0.1"] == %{
+               "path" => "0.0.0.0.1",
+               "class" => "android.widget.EditText",
+               "text" => "ana@example.com",
+               "resource-id" => "com.example.app:id/email",
+               "bounds" => %{"left" => 42, "top" => 252, "right" => 1038, "bottom" => 378},
+               "clickable" => true,
+               "focused" => true,
+               "enabled" => true,
+               "checked" => false,
+               "scrollable" => false
+             }
+
+      assert by_path["0"] |> Map.take(["text", "content-desc", "resource-id"]) == %{}
+      assert by_path["0.0.0.0.0"]["text"] == "Sign in to Orders & Billing"
+      assert by_path["0.0.0.0.3"]["checked"]
+      assert by_path["0.0.0.0.5"]["scrollable"]
+      assert by_path["0.0.0.0.5.2"]["text"] == "Order #3"
+      assert %{"content-desc" => "Help \"FAQ\"\nand support", "enabled" => false} = by_path["0.0.0.0.6"]
+    end
+
+    test "filters by text, resource ID and class", %{worktree: worktree} do
+      driver = installed_driver(worktree)
+
+      for {args, paths} <- [
+            {%{"text" => "sign in"}, ["0.0.0.0.0", "0.0.0.0.4"]},
+            {%{"text" => "faq"}, ["0.0.0.0.6"]},
+            {%{"resource_id" => "email"}, ["0.0.0.0.1"]},
+            {%{"resource_id" => "com.example.app:id/order_title"}, ["0.0.0.0.5.0", "0.0.0.0.5.1", "0.0.0.0.5.2"]},
+            {%{"class" => "Button"}, ["0.0.0.0.4"]},
+            {%{"class" => "android.widget.ImageButton"}, ["0.0.0.0.6"]},
+            {%{"class" => "EditText", "resource_id" => "password"}, ["0.0.0.0.2"]},
+            {%{"text" => "order", "resource_id" => "title"}, ["0.0.0.0.0"]},
+            {%{"text" => "nothing like this"}, []}
+          ] do
+        assert {:ok, %{"nodes" => nodes, "node_count" => 14, "truncated" => false}} = call(driver, "qa_android_ui_tree", args)
+        assert Enum.map(nodes, & &1["path"]) == paths, inspect(args)
+      end
+
+      bad = [%{"text" => ""}, %{"class" => 7}, %{"resource_id" => String.duplicate("a", 201)}, %{"max_depth" => 0}, %{"max_nodes" => 1001}]
+
+      for args <- [%{"max_depth" => "3"} | bad] do
+        assert error_code(call(driver, "qa_android_ui_tree", args)) == "invalid_arguments"
+      end
+    end
+
+    test "caps depth, nodes and bytes and says what it left out", %{worktree: worktree} do
+      driver = installed_driver(worktree)
+
+      assert {:ok, %{"nodes" => nodes, "truncated" => true, "note" => note}} = call(driver, "qa_android_ui_tree", %{"max_depth" => 3})
+      assert Enum.map(nodes, & &1["path"]) == ~w(0 0.0 0.0.0)
+      assert note =~ "Not every node is shown: 11 nodes deeper than max_depth 3."
+
+      assert {:ok, %{"nodes" => nodes, "truncated" => true, "note" => note}} = call(driver, "qa_android_ui_tree", %{"max_depth" => 5, "max_nodes" => 2})
+      assert length(nodes) == 2
+      assert note =~ "3 nodes deeper than max_depth 5; 9 more nodes after max_nodes 2."
+
+      # Long texts: the JSON stays under 100 KB.
+      rows = Enum.map_join(0..999, fn index -> row(index, String.duplicate("x", 300)) end)
+      big = installed_driver(worktree, cmd: device(%{ui_dump: {:ok, {hierarchy(rows), 0}}}))
+      assert {:ok, %{"nodes" => nodes, "truncated" => true, "note" => note}} = call(big, "qa_android_ui_tree", %{"max_nodes" => 1000})
+      assert byte_size(Jason.encode!(nodes)) <= 100_000
+      assert note =~ "#{1000 - length(nodes)} more nodes over the 100000-byte limit"
+    end
+
+    test "warns when a configured app is not in the foreground", %{worktree: worktree} do
+      launcher = String.replace(@dump, ~s(package="com.example.app"), ~s(package="com.android.launcher3"))
+      driver = installed_driver(worktree, cmd: device(%{ui_dump: {:ok, {launcher, 0}}}))
+      assert {:ok, %{"foreground_package" => "com.android.launcher3", "foreground_warning" => warning}} = call(driver, "qa_android_ui_tree")
+      assert warning =~ "com.android.launcher3 is in the foreground, not one of the configured application_ids (com.example.app)"
+      assert warning =~ "qa_android_launch"
+
+      empty = installed_driver(worktree, cmd: device(%{ui_dump: {:ok, {hierarchy(""), 0}}}))
+      assert {:ok, %{"foreground_package" => nil, "nodes" => [], "foreground_warning" => "Nothing is in the foreground" <> _rest}} = call(empty, "qa_android_ui_tree")
+    end
+
+    test "reports a dump that failed, has no hierarchy or is too large", %{worktree: worktree} do
+      for {reply, text} <- [
+            {{:ok, {"ERROR: could not get idle state.\n", 0}}, "returned no UI hierarchy: ERROR: could not get idle state."},
+            {{:ok, {"error: device offline", 1}}, "exit status 1: error: device offline"},
+            {{:error, :timeout}, "uiautomator dump failed: :timeout"},
+            {{:ok, {String.duplicate("x", 2_000_001), 0}}, "over 2000000 bytes"}
+          ] do
+        driver = installed_driver(worktree, cmd: device(%{ui_dump: reply}))
+        assert {:error, {:qa_tool, "qa_android_ui_tree_failed", message}} = call(driver, "qa_android_ui_tree")
+        assert message =~ text
+      end
+    end
+  end
+
+  describe "qa_android_tap" do
+    test "taps the centre of a node from the last tree or a point on the display", %{worktree: worktree} do
+      driver = installed_driver(worktree)
+      assert {:ok, _tree} = call(driver, "qa_android_ui_tree")
+      adb_calls()
+
+      assert {:ok, %{"x" => 540, "y" => 819}} = call(driver, "qa_android_tap", %{"path" => "0.0.0.0.4"})
+      assert adb_calls() == [@display_args, ["shell", "input", "tap", "540", "819"]]
+
+      assert {:ok, %{"x" => 0, "y" => 2399}} = call(driver, "qa_android_tap", %{"x" => 0, "y" => 2399})
+      assert ["shell", "input", "tap", "0", "2399"] in adb_calls()
+
+      # In landscape the display is wider than it is tall.
+      landscape = {:ok, {"  init=1080x2400 420dpi cur=2400x1080 app=2400x1017\n", 0}}
+      rotated = installed_driver(worktree, cmd: device(%{display: landscape}))
+      assert {:ok, %{"x" => 2000}} = call(rotated, "qa_android_tap", %{"x" => 2000, "y" => 500})
+    end
+
+    test "rejects off-screen points, unknown paths and bad arguments", %{worktree: worktree} do
+      driver = installed_driver(worktree)
+      assert {:error, {:qa_tool, "qa_android_unknown_path", message}} = call(driver, "qa_android_tap", %{"path" => "0.0.0.0.4"})
+      assert message =~ "not a node path in the last qa_android_ui_tree result"
+
+      # Only the nodes the last tree returned count.
+      assert {:ok, _tree} = call(driver, "qa_android_ui_tree", %{"resource_id" => "email"})
+      assert error_code(call(driver, "qa_android_tap", %{"path" => "0.0.0.0.4"})) == "qa_android_unknown_path"
+      assert {:ok, _result} = call(driver, "qa_android_tap", %{"path" => "0.0.0.0.1"})
+
+      for {x, y} <- [{1080, 10}, {10, 2400}, {-1, 10}, {10, -5}, {99_999, 99_999}] do
+        assert {:error, {:qa_tool, "qa_android_tap_off_screen", message}} = call(driver, "qa_android_tap", %{"x" => x, "y" => y})
+        assert message =~ "(#{x}, #{y}) is outside the 1080x2400 display."
+      end
+
+      for args <- [%{}, %{"x" => 1}, %{"x" => 1.5, "y" => 2}, %{"path" => "0", "x" => 1, "y" => 1}, %{"path" => 0}] do
+        assert {:error, {:qa_tool, "invalid_arguments", message}} = call(driver, "qa_android_tap", args)
+        assert message =~ "either `path`"
+      end
+
+      refute Enum.any?(adb_calls(), &match?(["shell", "input", "tap", x, _y] when x != "540", &1))
+    end
+
+    test "refuses a node without area or off the display", %{worktree: worktree} do
+      rows = row(0, "empty", "[0,0][0,0]") <> row(1, "unbounded", nil) <> row(2, "below", "[0,2500][1080,2700]")
+      driver = installed_driver(worktree, cmd: device(%{ui_dump: {:ok, {hierarchy(rows), 0}}}))
+      assert {:ok, _tree} = call(driver, "qa_android_ui_tree")
+
+      assert {:error, {:qa_tool, "qa_android_tap_off_screen", "Node 0 has no area on screen to tap."}} = call(driver, "qa_android_tap", %{"path" => "0"})
+      assert {:error, {:qa_tool, "qa_android_tap_off_screen", "Node 1 has no area on screen to tap."}} = call(driver, "qa_android_tap", %{"path" => "1"})
+      assert {:error, {:qa_tool, "qa_android_tap_off_screen", message}} = call(driver, "qa_android_tap", %{"path" => "2"})
+      assert message =~ "The centre of node 2 is outside the 1080x2400 display."
+      refute Enum.any?(adb_calls(), &match?(["shell", "input" | _rest], &1))
+    end
+
+    test "reports a display size it cannot read and a failed tap", %{worktree: worktree} do
+      for reply <- [{:ok, {"WINDOW MANAGER DISPLAY CONTENTS\n", 0}}, {:error, :timeout}] do
+        driver = installed_driver(worktree, cmd: device(%{display: reply}))
+        assert {:error, {:qa_tool, "qa_android_adb_failed", message}} = call(driver, "qa_android_tap", %{"x" => 1, "y" => 1})
+        assert message =~ "dumpsys window displays"
+      end
+
+      driver = installed_driver(worktree, cmd: device(%{input: {:ok, {"error: closed", 1}}}))
+      assert {:error, {:qa_tool, "qa_android_adb_failed", message}} = call(driver, "qa_android_tap", %{"x" => 1, "y" => 1})
+      assert message =~ "adb shell input tap 1 1 failed"
+    end
+  end
+
+  describe "qa_android_type" do
+    test "shell metacharacters reach the device as literal text", %{worktree: worktree, root: root} do
+      canary = Path.join(root, "canary")
+
+      text =
+        "a;b && reboot | cat > /x `id` $(touch #{canary}) ${HOME} 'single' \"double\" \\back !bang #hash ~ * ? [x] (y) {z} < & 100%s sure %%s 50%\nnext line\n"
+
+      driver = installed_driver(worktree)
+      adb_calls()
+      assert {:ok, %{"typed" => typed}} = call(driver, "qa_android_type", %{"text" => text})
+      assert typed == String.length(text)
+
+      commands = adb_calls()
+
+      assert commands == [
+               ["shell", "input", "text", "'a;b && reboot | cat > /x `id` $(touch #{canary}) ${HOME} '\\''single'\\'' \"double\" \\back !bang #hash ~ * ? [x] (y) {z} < & 100%'"],
+               ["shell", "input", "text", "'s sure %%'"],
+               ["shell", "input", "text", "'s 50%'"],
+               ["shell", "input", "keyevent", "KEYCODE_ENTER"],
+               ["shell", "input", "text", "'next line'"],
+               ["shell", "input", "keyevent", "KEYCODE_ENTER"]
+             ]
+
+      # The device's shell reads `input text <argument>`: a POSIX shell gives
+      # `input` each chunk back verbatim and runs nothing, and `input text`
+      # turns no literal `%s` into a space.
+      assert Enum.map_join(commands, &device_types/1) == text
+      refute File.exists?(canary)
+    end
+
+    test "rejects text adb cannot type, empty and long text", %{worktree: worktree} do
+      driver = installed_driver(worktree)
+      adb_calls()
+
+      for text <- ["café", "emoji 😀", "tab\there", "bell\a", "cr\r\n"] do
+        assert {:error, {:qa_tool, "qa_android_text_unsupported", message}} = call(driver, "qa_android_type", %{"text" => text})
+        assert message =~ "printable ASCII and newlines only"
+      end
+
+      assert {:error, {:qa_tool, "invalid_arguments", message}} = call(driver, "qa_android_type", %{"text" => String.duplicate("a", 501)})
+      assert message =~ "over 500 characters"
+      assert {:ok, _result} = call(driver, "qa_android_type", %{"text" => String.duplicate("a", 500)})
+
+      for args <- [%{}, %{"text" => ""}, %{"text" => 5}] do
+        assert {:error, {:qa_tool, "invalid_arguments", "`text` must be a non-empty string."}} = call(driver, "qa_android_type", args)
+      end
+
+      assert adb_calls() == [["shell", "input", "text", "'#{String.duplicate("a", 500)}'"]]
+    end
+
+    test "presses Enter for a newline and stops at the first failure", %{worktree: worktree} do
+      driver = installed_driver(worktree)
+      adb_calls()
+      assert {:ok, %{"typed" => 1}} = call(driver, "qa_android_type", %{"text" => "\n"})
+      assert adb_calls() == [["shell", "input", "keyevent", "KEYCODE_ENTER"]]
+
+      failing = installed_driver(worktree, cmd: device(%{input: {:error, :timeout}}))
+      adb_calls()
+      assert error_code(call(failing, "qa_android_type", %{"text" => "one\ntwo"})) == "qa_android_adb_failed"
+      assert adb_calls() == [["shell", "input", "text", "'one'"]]
+    end
+  end
+
+  describe "qa_android_key" do
+    test "presses only allowlisted keys", %{worktree: worktree} do
+      driver = installed_driver(worktree)
+      adb_calls()
+
+      for {key, keycode} <- [
+            {"back", "KEYCODE_BACK"},
+            {"enter", "KEYCODE_ENTER"},
+            {"ime_action", "KEYCODE_NUMPAD_ENTER"},
+            {"tab", "KEYCODE_TAB"},
+            {"del", "KEYCODE_DEL"},
+            {"dpad_up", "KEYCODE_DPAD_UP"},
+            {"dpad_down", "KEYCODE_DPAD_DOWN"},
+            {"dpad_left", "KEYCODE_DPAD_LEFT"},
+            {"dpad_right", "KEYCODE_DPAD_RIGHT"},
+            {"escape", "KEYCODE_ESCAPE"}
+          ] do
+        assert {:ok, %{"key" => ^key, "keycode" => ^keycode}} = call(driver, "qa_android_key", %{"key" => key})
+        assert adb_calls() == [["shell", "input", "keyevent", keycode]]
+      end
+
+      for args <- [%{"key" => "home"}, %{"key" => "KEYCODE_POWER"}, %{"key" => "26"}, %{"key" => "back; reboot"}, %{}] do
+        assert {:error, {:qa_tool, "invalid_arguments", message}} = call(driver, "qa_android_key", args)
+        assert message == "`key` must be one of back, enter, ime_action, tab, del, dpad_up, dpad_down, dpad_left, dpad_right, escape."
+      end
+
+      assert adb_calls() == []
+
+      failing = installed_driver(worktree, cmd: device(%{input: {:error, :timeout}}))
+      assert error_code(call(failing, "qa_android_key", %{"key" => "back"})) == "qa_android_adb_failed"
+    end
+  end
+
+  describe "qa_android_rotate, qa_android_dark_mode and qa_android_font_scale" do
+    test "change the setting and reset what the pass changed when it ends", %{worktree: worktree} do
+      driver = installed_driver(worktree)
+      adb_calls()
+
+      assert {:ok, %{"orientation" => "landscape"}} = call(driver, "qa_android_rotate", %{"orientation" => "landscape"})
+      assert {:ok, %{"orientation" => "portrait"}} = call(driver, "qa_android_rotate", %{"orientation" => "portrait"})
+      assert {:ok, %{"dark_mode" => "on"}} = call(driver, "qa_android_dark_mode", %{"mode" => "on"})
+      assert {:ok, %{"font_scale" => 1.3}} = call(driver, "qa_android_font_scale", %{"scale" => 1.3})
+      assert {:ok, %{"font_scale" => 2.0}} = call(driver, "qa_android_font_scale", %{"scale" => 2})
+
+      assert adb_calls() == [
+               ["shell", "settings", "put", "system", "accelerometer_rotation", "0"],
+               ["shell", "settings", "put", "system", "user_rotation", "1"],
+               ["shell", "settings", "put", "system", "accelerometer_rotation", "0"],
+               ["shell", "settings", "put", "system", "user_rotation", "0"],
+               ["shell", "cmd", "uimode", "night", "yes"],
+               ["shell", "settings", "put", "system", "font_scale", "1.3"],
+               ["shell", "settings", "put", "system", "font_scale", "2.0"]
+             ]
+
+      assert Driver.stop(driver) == :ok
+
+      assert [
+               ["shell", "settings", "put", "system", "user_rotation", "0"],
+               ["shell", "cmd", "uimode", "night", "no"],
+               ["shell", "settings", "put", "system", "font_scale", "1.0"],
+               ["shell", "pm", "list", "packages", "-3", "-f"],
+               ["uninstall", @app_id]
+             ] = adb_calls()
+    end
+
+    test "reset only the settings the pass changed, even when the change failed", %{worktree: worktree} do
+      driver = installed_driver(worktree)
+      assert {:ok, %{"dark_mode" => "off"}} = call(driver, "qa_android_dark_mode", %{"mode" => "off"})
+      Driver.stop(driver)
+      calls = adb_calls()
+      assert ["shell", "cmd", "uimode", "night", "no"] in calls
+      refute Enum.any?(calls, &match?(["shell", "settings" | _rest], &1))
+
+      failing = installed_driver(worktree, cmd: device(%{settings: {:ok, {"Security exception", 255}}}))
+      assert error_code(call(failing, "qa_android_rotate", %{"orientation" => "landscape"})) == "qa_android_adb_failed"
+      assert error_code(call(failing, "qa_android_font_scale", %{"scale" => 0.85})) == "qa_android_adb_failed"
+      adb_calls()
+      Driver.stop(failing)
+      calls = adb_calls()
+      assert ["shell", "settings", "put", "system", "user_rotation", "0"] in calls
+      assert ["shell", "settings", "put", "system", "font_scale", "1.0"] in calls
+      refute ["shell", "cmd", "uimode", "night", "no"] in calls
+
+      untouched = installed_driver(worktree)
+      adb_calls()
+      Driver.stop(untouched)
+      refute Enum.any?(adb_calls(), &match?(["shell", setting | _rest] when setting in ["settings", "cmd"], &1))
+    end
+
+    test "refuse values outside their allowlists", %{worktree: worktree} do
+      driver = installed_driver(worktree)
+      adb_calls()
+
+      for scale <- [1.25, 3, 0, "1.3", nil] do
+        assert {:error, {:qa_tool, "invalid_arguments", message}} = call(driver, "qa_android_font_scale", %{"scale" => scale})
+        assert message == "`scale` must be one of 0.85, 1.0, 1.15, 1.3, 1.5, 1.8, 2.0."
+      end
+
+      assert {:error, {:qa_tool, "invalid_arguments", "`orientation` must be one of portrait, landscape."}} =
+               call(driver, "qa_android_rotate", %{"orientation" => "reverse_landscape"})
+
+      assert {:error, {:qa_tool, "invalid_arguments", "`mode` must be one of on, off."}} = call(driver, "qa_android_dark_mode", %{"mode" => "auto"})
+
+      Driver.stop(driver)
+      refute Enum.any?(adb_calls(), &match?(["shell", setting | _rest] when setting in ["settings", "cmd"], &1))
+    end
+  end
+
+  defp installed_nothing(worktree) do
+    driver = start_driver(worktree, cmd: device(%{install: {:ok, {"Success\n", 0}}}))
+    assert error_code(call(driver, "qa_android_install")) == "qa_apk_package_not_configured"
+    driver
+  end
+
+  defp hierarchy(nodes), do: ~s(<?xml version='1.0' encoding='UTF-8' standalone='yes' ?><hierarchy rotation="0">#{nodes}</hierarchy>UI hierchary dumped to: /dev/tty\n)
+
+  defp row(index, text, bounds \\ "[0,0][1080,200]") do
+    bounds = if bounds, do: ~s( bounds="#{bounds}"), else: ""
+    ~s(<node index="#{index}" text="#{text}" class="android.widget.TextView" package="#{@app_id}" clickable="true"#{bounds} />)
+  end
+
+  # What the device types for one adb command: its shell parses the command
+  # line (`printf %s` stands in for `input text`), then `input text` turns `%s`
+  # into a space, as Android's InputShellCommand does.
+  defp device_types(["shell", "input", "keyevent", "KEYCODE_ENTER"]), do: "\n"
+
+  defp device_types(["shell", "input", "text", argument]) do
+    {parsed, 0} = System.cmd("sh", ["-c", "printf %s " <> argument])
+    String.replace(parsed, "%s", " ")
   end
 
   defp collect_commands do

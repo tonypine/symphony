@@ -1151,9 +1151,20 @@ build, Gradle or any other repository command on the host; they only call Sympho
 | `qa_android_launch` | starts the app's launcher activity and waits until it is in the foreground; reports recent logcat when the app exits | an application ID not in `application_ids`, or not installed by `qa_android_install` in this pass |
 | `qa_android_stop` | force-stops the app | an application ID not in `application_ids` |
 | `qa_android_screenshot` | saves the screen to a new file `qa-evidence/<name>.png`, at most 50 per pass | a name that already exists (file or symlink) |
+| `qa_android_ui_tree` | reads the screen with `uiautomator dump` through `adb exec-out` as a flat list of nodes: a path such as `0.2.1`, class, text, content-desc, resource-id, bounds and the clickable, focused, enabled, checked and scrollable flags; filters by `text`, `resource_id` and `class`; caps the depth (`max_depth`, default 30), the nodes (`max_nodes`, default 300) and the JSON (100 KB) and says when nodes were left out; reports the foreground package and warns when it is not one of `application_ids` | |
+| `qa_android_tap` | taps the centre of a node `path` from the last tree, or a point `x`, `y` | a point off the display, a path not in the last tree's result |
+| `qa_android_type` | types `text` (up to 500 characters) into the focused field; a newline presses Enter. Each part is single-quoted for the device's shell, so no character can run a command | anything but printable ASCII and newlines |
+| `qa_android_key` | presses `back`, `enter`, `ime_action`, `tab`, `del`, `dpad_up`, `dpad_down`, `dpad_left`, `dpad_right` or `escape` | any other key |
+| `qa_android_rotate` | turns off auto-rotate and sets `portrait` or `landscape` | any other orientation |
+| `qa_android_dark_mode` | turns the night theme `on` or `off` (`cmd uimode night`) | |
+| `qa_android_font_scale` | sets the font scale to 0.85, 1.0, 1.15, 1.3, 1.5, 1.8 or 2.0 | any other scale |
 
-When the pass ends, or crashes, Symphony uninstalls the `application_ids` apps and every package
-installed in the pass, gives the emulator back and removes the private directory. When the
+The last seven tools work only once `qa_android_install` installed one of the `application_ids`
+in this pass.
+
+When the pass ends, or crashes, Symphony resets what the pass changed (portrait with auto-rotate
+off, dark mode off, font scale 1.0), so the next pass starts clean on the same emulator, then
+uninstalls the `application_ids` apps and every package installed in the pass, gives the emulator back and removes the private directory. When the
 emulator cannot start, every tool fails with `qa_android_unavailable` and tells the agent to mark
 the Android steps `blocked`. Only QA agents see these tools; executor and reviewer sessions cannot
 list or call them.
