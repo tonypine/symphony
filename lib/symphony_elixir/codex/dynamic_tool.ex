@@ -7,6 +7,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   alias SymphonyElixir.AgentTools.{GitHub, Linear}
   alias SymphonyElixir.Linear.Usage, as: LinearUsage
+  alias SymphonyElixir.QaAndroid.Driver, as: QaAndroidDriver
   alias SymphonyElixir.QaDriver
 
   @tool_schemas [
@@ -391,6 +392,51 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     }
   ]
 
+  # Host-side Android app tools (`SymphonyElixir.QaAndroid.Driver`), listed and
+  # allowed only in the `:qa` scope.
+  @application_id_property %{"type" => "string", "description" => "One of the android_app playbook's application_ids."}
+
+  @qa_android_tool_schemas [
+    %{
+      "name" => "qa_android_install",
+      "description" =>
+        "Install the APK at the android_app playbook's apk_path, which you build in your sandbox with the playbook's build command, on Symphony's emulator, with fresh app data. Takes no arguments; fails when tracked files in the worktree changed.",
+      "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
+    },
+    %{
+      "name" => "qa_android_launch",
+      "description" => "Launch an installed app's launcher activity on the emulator and wait until it is in the foreground. Reports recent logcat when the app exits.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["application_id"],
+        "properties" => %{"application_id" => @application_id_property}
+      }
+    },
+    %{
+      "name" => "qa_android_stop",
+      "description" => "Force-stop an app on the emulator.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["application_id"],
+        "properties" => %{"application_id" => @application_id_property}
+      }
+    },
+    %{
+      "name" => "qa_android_screenshot",
+      "description" => "Capture the emulator's screen to qa-evidence/<name>.png. Each name can be used once.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["name"],
+        "properties" => %{
+          "name" => %{"type" => "string", "description" => "File name without extension: letters, digits, `.`, `_`, `-`."}
+        }
+      }
+    }
+  ]
+
   @tool_names Enum.map(@tool_schemas, & &1["name"])
   @invalid_tool_names Enum.reject(@tool_names, fn name -> Regex.match?(~r/^[a-zA-Z0-9_-]+$/, name) end)
 
@@ -433,7 +479,11 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "qa_screenshot" => ["pid", "name", "window_id"],
     "qa_ax_tree" => ["pid", "role", "text", "max_depth", "max_nodes"],
     "qa_ax_press" => ["pid", "path", "action"],
-    "qa_ax_set_value" => ["pid", "path", "value"]
+    "qa_ax_set_value" => ["pid", "path", "value"],
+    "qa_android_install" => [],
+    "qa_android_launch" => ["application_id"],
+    "qa_android_stop" => ["application_id"],
+    "qa_android_screenshot" => ["name"]
   }
   @legacy_tool_aliases %{
     "linear.get_current_issue" => "linear_get_current_issue",
@@ -506,7 +556,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   @spec tool_specs(:default | :read_only | :qa | nil) :: [map()]
   def tool_specs(:read_only), do: Enum.filter(@tool_schemas, &(Map.get(&1, "name") in @read_only_tools))
-  def tool_specs(:qa), do: Enum.filter(@tool_schemas, &(Map.get(&1, "name") in @qa_tools)) ++ @qa_tool_schemas
+  def tool_specs(:qa), do: Enum.filter(@tool_schemas, &(Map.get(&1, "name") in @qa_tools)) ++ @qa_tool_schemas ++ @qa_android_tool_schemas
   def tool_specs(_scope), do: tool_specs()
 
   defp tool_context(opts) do
@@ -532,6 +582,10 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   defp execute_tool("linear_" <> _rest = tool, context, args, opts), do: execute_linear_tool(tool, context, args, opts)
   defp execute_tool("github_" <> _rest = tool, context, args, opts), do: execute_github_tool(tool, context, args, opts)
+
+  defp execute_tool("qa_android_" <> _rest = tool, _context, args, opts),
+    do: QaAndroidDriver.call_tool(Keyword.get(opts, :qa_android_driver), tool, args)
+
   defp execute_tool("qa_" <> _rest = tool, _context, args, opts), do: QaDriver.call_tool(Keyword.get(opts, :qa_driver), tool, args)
 
   defp execute_authorized_tool(tool, context, args, opts) do
@@ -883,6 +937,16 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         "message" => "The QA tool scope reads the issue and PR and attaches evidence files; #{tool} is not available. Report findings in your JSON verdict instead.",
         "tool" => tool,
         "scope" => "qa"
+      }
+    }
+  end
+
+  defp tool_error_payload({:tool_scope_rejected, _scope, "qa_android_" <> _rest = tool}) do
+    %{
+      "error" => %{
+        "code" => "tool_scope_rejected",
+        "message" => "#{tool} drives an Android app on Symphony's emulator for Auto Review QA and is only available to the QA agent.",
+        "tool" => tool
       }
     }
   end

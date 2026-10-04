@@ -735,6 +735,37 @@ defmodule SymphonyElixir.QaAgentTest do
       assert cli_opts[:qa_driver] == nil
     end
 
+    test "gives an android_app pass an Android QA driver and stops it when the pass ends" do
+      test = self()
+      lease = %{lease: make_ref(), serial: "emulator-5600", adb: "/sdk/platform-tools/adb", adb_server_port: 15_037}
+      android_app = %{kind: "android_app", paths: [], prompt: "Test the Android app.", build: "./gradlew assembleDebug", apk_path: "app.apk", application_ids: ["com.example.app"]}
+
+      assert {:ok, %{result: %{verdict: :pass}}} =
+               QaAgent.run(job(%{playbooks: [android_app]}), Config.settings!(),
+                 git: fake_git(),
+                 qa_agent_module: FakeSession,
+                 qa_android_driver_opts: [
+                   checkout: fn -> {:ok, lease} end,
+                   checkin: fn lease -> send(test, {:checked_in, lease}) && :ok end,
+                   cmd: fn executable, args, _opts -> send(test, {:cmd, executable, args}) && {:ok, {"Success", 0}} end
+                 ]
+               )
+
+      assert_receive {:qa_session_started, _worktree, session_opts}
+      driver = session_opts[:qa_android_driver]
+      assert is_pid(driver)
+      assert session_opts[:qa_driver] == nil
+      assert_receive {:qa_turn, _session, _prompt, _issue, turn_opts}
+      assert turn_opts[:qa_android_driver] == driver
+      refute Process.alive?(driver)
+      assert_received {:checked_in, ^lease}
+      assert_received {:cmd, "/sdk/platform-tools/adb", [_port_flag, _port, "-s", "emulator-5600", "uninstall", "com.example.app"]}
+
+      assert {:ok, _result} = QaAgent.run(job(), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession)
+      assert_receive {:qa_session_started, _worktree, cli_opts}
+      assert cli_opts[:qa_android_driver] == nil
+    end
+
     test "gives a web pass the dev server and a browser MCP server limited to localhost, then stops the server" do
       [web] = Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false}}}, dev_server?: true)
       settings = Config.settings!()
