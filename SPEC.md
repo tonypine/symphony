@@ -517,6 +517,10 @@ Fields:
     clone used for `git worktree add`.
   - `fetch_before_dispatch` controls whether the primary clone fetches `origin` before worktree
     creation.
+  - Symphony runs one `git fetch origin` per repo at a time (worktree source, managed clone, or
+    workflow checkout). A fetch asked for while another fetch of the same repo runs waits for it
+    and reuses its result. A fetch that fails with `cannot lock ref` is retried once after a short
+    delay.
   - `source` (string) OPTIONAL: a GitHub repository, as `owner/repo` or a github.com URL, that
     Symphony clones and manages itself instead of using a local checkout.
     - The clone lives at `<workspaces.clones_root>/<owner>/<repo>` and is made without a working

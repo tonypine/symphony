@@ -27,7 +27,7 @@ defmodule SymphonyElixir.WorkflowSource do
 
   alias SymphonyElixir.Config.{Cache, SystemSchema}
   alias SymphonyElixir.{ManagedClone, Paths, Workflow, Workspace}
-  alias SymphonyElixir.Repo.FetchLog
+  alias SymphonyElixir.Repo.{Fetcher, FetchLog}
 
   @default_branch_refs ["origin/HEAD", "origin/main", "origin/master"]
 
@@ -139,7 +139,7 @@ defmodule SymphonyElixir.WorkflowSource do
     fetched_repo = Keyword.get(opts, :fetched_repo)
 
     if Keyword.get(opts, :fetch, false) and not same_checkout?(checkout, fetched_repo) do
-      case FetchLog.record(repo.name, git(checkout, ["fetch", "origin"])) do
+      case FetchLog.record(repo.name, git_result(Fetcher.fetch_origin(checkout), ["fetch", "origin"])) do
         {:ok, _output} ->
           :ok
 
@@ -236,10 +236,8 @@ defmodule SymphonyElixir.WorkflowSource do
     end
   end
 
-  defp git(checkout, args) do
-    case Workspace.safe_git(["-C", checkout | args]) do
-      {output, 0} -> {:ok, output}
-      {output, status} -> {:error, {:git_failed, args, status, String.trim(output)}}
-    end
-  end
+  defp git(checkout, args), do: git_result(Workspace.safe_git(["-C", checkout | args]), args)
+
+  defp git_result({output, 0}, _args), do: {:ok, output}
+  defp git_result({output, status}, args), do: {:error, {:git_failed, args, status, String.trim(output)}}
 end
