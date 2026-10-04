@@ -85,6 +85,14 @@ defmodule SymphonyElixir.GitHub.PullRequest do
           created_at: DateTime.t() | nil
         }
 
+  @type open_pull_request :: %{
+          number: non_neg_integer() | nil,
+          url: String.t() | nil,
+          title: String.t() | nil,
+          head_sha: String.t() | nil,
+          files: [String.t()]
+        }
+
   @run_fields "databaseId,workflowName,status,conclusion,url,createdAt"
 
   @doc "Whether a fetched PR conflicts with its base: `mergeable` is `CONFLICTING` or `mergeStateStatus` is `DIRTY`."
@@ -157,6 +165,47 @@ defmodule SymphonyElixir.GitHub.PullRequest do
       :error -> {:error, :invalid_pr_url}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  @open_pull_requests_query """
+  query($owner: String!, $name: String!) {
+    repository(owner: $owner, name: $name) {
+      pullRequests(states: OPEN, first: 100, orderBy: {field: UPDATED_AT, direction: DESC}) {
+        nodes { number url title headRefOid files(first: 100) { nodes { path } } }
+      }
+    }
+  }
+  """
+
+  @doc """
+  The open pull requests of the repository `pr_url` belongs to, in one GraphQL query: the 100
+  most recently updated, each with its first 100 changed paths.
+  """
+  @spec list_open_pull_requests(String.t(), keyword()) :: {:ok, [open_pull_request()]} | {:error, term()}
+  def list_open_pull_requests(pr_url, opts \\ []) when is_binary(pr_url) and is_list(opts) do
+    with {:ok, host, owner, repo, _number} <- parse_github_pr_url(pr_url, opts),
+         args = github_api_args(host, "graphql") ++ ["-f", "query=#{@open_pull_requests_query}", "-f", "owner=#{owner}", "-f", "name=#{repo}"],
+         {:ok, output} <- run_gh(args, opts),
+         {:ok, %{"data" => %{"repository" => %{"pullRequests" => %{"nodes" => nodes}}}}} when is_list(nodes) <- Jason.decode(output) do
+      {:ok, nodes |> Enum.filter(&is_map/1) |> Enum.map(&normalize_open_pull_request/1)}
+    else
+      :error -> {:error, :invalid_pr_url}
+      {:error, %Jason.DecodeError{} = error} -> {:error, {:invalid_open_pull_requests_payload, error.data}}
+      {:error, reason} -> {:error, reason}
+      {:ok, _decoded} -> {:error, :invalid_open_pull_requests_payload}
+    end
+  end
+
+  defp normalize_open_pull_request(node) do
+    files = get_in(node, ["files", "nodes"])
+
+    %{
+      number: if(is_integer(node["number"]), do: node["number"]),
+      url: node["url"],
+      title: node["title"],
+      head_sha: node["headRefOid"],
+      files: if(is_list(files), do: for(%{"path" => path} when is_binary(path) <- files, do: path), else: [])
+    }
   end
 
   def fetch_failed_log(run_id, opts \\ [])
