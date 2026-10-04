@@ -1843,7 +1843,14 @@ Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `
   head. A failed call other than a conflict is retried on the next poll.
 - A conflict (`mergeable == "CONFLICTING"`, `mergeStateStatus == "DIRTY"`, or an update-branch
   `merge conflict` reply) takes the conflict path above: the issue moves to `In Progress` with the
-  conflict context, and the fix returns through review.
+  conflict context, and the fix returns through review. The approval covered the diff before the
+  conflict, so before that move the poller MUST turn auto-merge off (GraphQL
+  `disablePullRequestAutoMerge`) when GitHub shows it on or the poller turned it on for this head
+  on the same poll. It records `disabled_at` in the PR review record, logs it, writes an
+  `auto_merge_disabled` audit event with `reason: "conflict"`, and comments on the issue why. While
+  GitHub refuses, the poll records an error and the issue stays in `Merging` (a conflicting PR
+  can't merge) until a later poll turns it off. Only a fresh move to `Merging` turns auto-merge on
+  again, even when the head didn't change.
 - A red head takes the CI poller's CI-failure path. Auto-merge stays on, so GitHub merges the PR
   once the fix is green, whatever state the issue is in by then.
 - When GitHub reports the PR `MERGED` and Symphony turned on auto-merge for it (or the issue is in
@@ -1857,8 +1864,8 @@ Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `
 - The state (`enabled`, `updating_branch`, `merging`, `conflict`, `fallback`, `merged`) is kept in
   the PR review record, logged on every change, and listed under `auto_merge` in
   `/api/v1/state` and on the dashboard (for example "auto-merge on, waiting for CI on `abc1234`").
-- Moving an issue out of `Merging` does not turn auto-merge off on GitHub; disable it on the PR to
-  stop the merge.
+- Apart from the conflict path, moving an issue out of `Merging` does not turn auto-merge off on
+  GitHub; disable it on the PR to stop the merge.
 
 When a landing run (issue in `Merging` with an attached PR) finishes a turn while the PR head's
 checks are pending, the agent runner MUST end the run instead of starting another continuation
