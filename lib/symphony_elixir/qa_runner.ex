@@ -10,8 +10,10 @@ defmodule SymphonyElixir.QaRunner do
   no-op, so a slow pass is never started twice.
 
   A request turned away because the runner is full leaves the issue queued until a pass
-  starts for it or no request has come for it in 10 minutes. The orchestrator
-  starts no fresh `Todo` work while a pass is queued.
+  starts for it or no request has come for it in 10 minutes. The runner remembers which
+  cap turned it away: `finishing_max` when it is below `auto_review.max_concurrent`,
+  otherwise `max_concurrent`. The orchestrator starts no fresh `Todo` work while a pass
+  waits on `finishing_max`; a pass waiting on `max_concurrent` holds nothing back.
 
   A forced ticket's request (`job.forced`, see `agent.concurrency.force_label`) goes to the front
   of the queue: while one is queued, a free slot is turned away from unforced requests, so the
@@ -28,6 +30,7 @@ defmodule SymphonyElixir.QaRunner do
   alias SymphonyElixir.{AutoReview, Orchestrator, QaAgent}
 
   @type request_result :: :started | :running | :busy | {:error, term()}
+  @type queued_pass :: %{issue_id: String.t(), identifier: String.t(), waiting_on: :finishing_max | :max_concurrent}
 
   @queued_ttl_ms 10 * 60_000
 
@@ -89,6 +92,15 @@ defmodule SymphonyElixir.QaRunner do
     end
   end
 
+  @doc "The queued passes, longest queued first, with the issue identifier and the cap each waits on."
+  @spec queued_passes(GenServer.server()) :: [queued_pass()]
+  def queued_passes(server \\ __MODULE__) do
+    case GenServer.whereis(server) do
+      nil -> []
+      pid -> GenServer.call(pid, :queued_passes)
+    end
+  end
+
   @impl true
   def init(opts) do
     {:ok,
@@ -103,9 +115,9 @@ defmodule SymphonyElixir.QaRunner do
   end
 
   @impl true
-  def handle_call({:request, %{issue: %{id: issue_id}, sha: sha} = job, opts}, _from, state) do
+  def handle_call({:request, %{issue: %{id: issue_id} = issue, sha: sha} = job, opts}, _from, state) do
     settings = Map.fetch!(job, :settings)
-    max_passes = min(settings.auto_review.max_concurrent, settings.agent.finishing_max)
+    %{auto_review: %{max_concurrent: max_concurrent}, agent: %{finishing_max: finishing_max}} = settings
     forced? = Map.get(job, :forced) == true
     queued = state |> live_queued() |> Map.delete(issue_id)
     state = %{state | queued: queued}
@@ -114,14 +126,15 @@ defmodule SymphonyElixir.QaRunner do
       Map.has_key?(state.running, issue_id) ->
         {:reply, :running, state}
 
-      normal_passes(state) < max_passes and (forced? or not forced_queued?(queued)) ->
+      normal_passes(state) < min(max_concurrent, finishing_max) and (forced? or not forced_queued?(queued)) ->
         start_pass(state, issue_id, sha, job, opts, false)
 
       forced? and forced_slot_free?(state, settings) ->
         start_pass(state, issue_id, sha, job, opts, true)
 
       true ->
-        entry = %{queued_at: now_ms(), identifier: issue_identifier(job), forced: forced?}
+        waiting_on = if finishing_max < max_concurrent, do: :finishing_max, else: :max_concurrent
+        entry = %{at: now_ms(), identifier: Map.get(issue, :identifier) || issue_id, waiting_on: waiting_on, forced: forced?}
         {:reply, :busy, %{state | queued: Map.put(queued, issue_id, entry)}}
     end
   end
@@ -136,12 +149,28 @@ defmodule SymphonyElixir.QaRunner do
 
   def handle_call(:snapshot, _from, state) do
     running = for {issue_id, entry} <- state.running, do: %{issue_id: issue_id, identifier: entry.identifier, sha: entry.sha, forced: entry.forced}
-    queued = for {issue_id, entry} <- live_queued(state), do: %{issue_id: issue_id, identifier: entry.identifier, forced: entry.forced}
-    {:reply, %{running: Enum.sort_by(running, & &1.issue_id), queued: Enum.sort_by(queued, & &1.issue_id)}, state}
+
+    queued =
+      state
+      |> live_queued()
+      |> Enum.sort_by(fn {issue_id, entry} -> {not entry.forced, entry.at, issue_id} end)
+      |> Enum.map(fn {issue_id, entry} -> %{issue_id: issue_id, identifier: entry.identifier, forced: entry.forced} end)
+
+    {:reply, %{running: Enum.sort_by(running, & &1.issue_id), queued: queued}, state}
   end
 
   def handle_call(:queued, _from, state) do
     {:reply, state |> live_queued() |> Map.keys() |> Enum.sort(), state}
+  end
+
+  def handle_call(:queued_passes, _from, state) do
+    passes =
+      state
+      |> live_queued()
+      |> Enum.sort_by(fn {issue_id, entry} -> {entry.at, issue_id} end)
+      |> Enum.map(fn {issue_id, entry} -> %{issue_id: issue_id, identifier: entry.identifier, waiting_on: entry.waiting_on} end)
+
+    {:reply, passes, state}
   end
 
   @impl true
@@ -160,7 +189,7 @@ defmodule SymphonyElixir.QaRunner do
 
   defp live_queued(state) do
     cutoff = now_ms() - state.queued_ttl_ms
-    Map.filter(state.queued, fn {_issue_id, entry} -> entry.queued_at > cutoff end)
+    Map.filter(state.queued, fn {_issue_id, %{at: queued_at}} -> queued_at > cutoff end)
   end
 
   defp forced_queued?(queued), do: Enum.any?(queued, fn {_issue_id, entry} -> entry.forced end)
@@ -182,7 +211,7 @@ defmodule SymphonyElixir.QaRunner do
     end
   end
 
-  defp issue_identifier(%{issue: issue}), do: Map.get(issue, :identifier)
+  defp issue_identifier(%{issue: issue}, issue_id), do: Map.get(issue, :identifier) || issue_id
 
   defp now_ms, do: System.monotonic_time(:millisecond)
 
@@ -192,7 +221,7 @@ defmodule SymphonyElixir.QaRunner do
     case Task.Supervisor.start_child(state.task_supervisor, fn -> run_fun.(job, opts) end) do
       {:ok, pid} ->
         ref = Process.monitor(pid)
-        identifier = issue_identifier(job)
+        identifier = issue_identifier(job, issue_id)
         if forced?, do: Logger.info("QA pass started on the forced allowance issue_id=#{issue_id} issue_identifier=#{identifier} sha=#{sha} forced=true")
         entry = %{sha: sha, ref: ref, paths: pass_paths(job, sha), identifier: identifier, forced: forced?}
         {:reply, :started, %{state | running: Map.put(state.running, issue_id, entry)}}

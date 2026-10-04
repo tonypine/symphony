@@ -122,7 +122,7 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
 
       assert Enum.sort(Map.keys(state.running)) == ["forced-1", "land-1"]
       assert %{reason: "finishing slots full"} = state.slot_waiting["land-2"]
-      assert %{reason: "a Merging or Auto Review issue is waiting for a slot"} = state.slot_waiting["todo-1"]
+      assert %{reason: "MT-LAND-2 (Merging) is waiting for a finishing slot"} = state.slot_waiting["todo-1"]
     end
 
     test "a second forced ticket waits as queued #2, is noted once, and starts on the allowance when the first ends", ctx do

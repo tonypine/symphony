@@ -1974,9 +1974,13 @@ Sorting order (stable intent), forced first, then closest to done first:
 4. `created_at` oldest first
 5. `identifier` lexicographic tie-breaker
 
-While an issue in `Merging` or the Auto Review state is waiting for a slot (or an Auto Review QA
-pass is queued), no `Todo` issue is dispatched. `Rework` and resumes still are, and so is a forced
-`Todo` on the forced allowance.
+While an issue in `Merging` or the Auto Review state is waiting for a slot, or an Auto Review QA
+pass is queued because `finishing_max` is below `auto_review.max_concurrent`, no `Todo` issue is
+dispatched. `Rework` and resumes still are, and so is a forced `Todo` on the forced allowance. A QA
+pass queued on `auto_review.max_concurrent` holds nothing back: it would not start any sooner for
+an idle agent slot. The held `Todo` issue's `slot_waiting` reason names the issue it waits for
+(`MT-2 (Merging) is waiting for a finishing slot`, `QA pass for MT-3 is waiting for a finishing
+slot`).
 
 ### 8.3 Concurrency Control
 
@@ -3311,7 +3315,7 @@ Minimum endpoints:
           "issue_identifier": "MT-653",
           "title": "Add the export button",
           "state": "Todo",
-          "reason": "a Merging or Auto Review issue is waiting for a slot",
+          "reason": "QA pass for MT-655 is waiting for a finishing slot",
           "attempt": null,
           "since": "2026-02-24T20:15:30Z",
           "forced": false
@@ -4179,6 +4183,8 @@ infrastructure.
 - A forced issue's QA request goes to the front of the QA queue and, with the QA slots full,
   starts on the forced allowance while it has room; its verdict is applied as for any pass
 - No `Todo` issue is dispatched while a `Merging` issue waits for a finishing slot
+- A queued QA pass holds `Todo` issues back only when it waits on `finishing_max`, not on
+  `auto_review.max_concurrent`
 - A retry that finds no slot keeps its attempt, gets no backoff, and starts on the first poll after
   a slot frees
 - Each active epic reserves one lane out of `max_total`; a standalone issue cannot take a reserved
