@@ -29,7 +29,7 @@ When logging Codex execution lifecycle events, include:
 ## Scope Guidance
 
 - `AgentRunner`: log start/completion/failure with issue context, plus `session_id` when known.
-- `Orchestrator`: log dispatch, retry, terminal/non-active transitions, and worker exits with issue context. Include `session_id` whenever running-entry data has it.
+- `Orchestrator`: log dispatch, retry, terminal/non-active transitions, and worker exits with issue context. Include `session_id` whenever running-entry data has it. Dispatch lines carry `slot=` and `forced=true|false` (whether the run uses the forced allowance).
 - `Codex.AppServer`: log session start/completion/error with issue context and `session_id`.
 - `McpServer`: log JSON decode/framing failures, handler crashes, and response-send failures with MCP method, tool name, request ID, MCP session ID, payload byte size, and transport when available. Raw payload logging must stay redacted and preview-limited.
 

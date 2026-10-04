@@ -78,7 +78,7 @@ agent:
     # epic_lanes: 9   # slots in-progress epics may reserve (default: max_total)
     # finishing_max: 2   # landing runs allowed on top of max_total (default: 2)
     # force_label: expedite   # label that forces a ticket through every phase (default: expedite)
-    # forced_max: 1   # forced tickets worked at once (default: 1)
+    # forced_max: 1   # forced runs at once, outside max_total and the other caps (default: 1)
     # forced_stale_after_hours: 72   # hours before a forced ticket counts as stale (default: 72)
     # max_by_issue_state:
     #   rework: 2

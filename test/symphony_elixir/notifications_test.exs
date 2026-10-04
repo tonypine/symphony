@@ -308,7 +308,8 @@ defmodule SymphonyElixir.NotificationsTest do
              "qa_failed",
              "usage_limit_paused",
              "usage_limit_headroom",
-             "usage_limit_resumed"
+             "usage_limit_resumed",
+             "forced_waiting"
            ]
 
     assert Event.known_event?(" RUN_FAILED ")
@@ -496,6 +497,23 @@ defmodule SymphonyElixir.NotificationsTest do
     assert Formatter.slack_payload(headroom)["text"] == "Usage limit headroom hold: Claude 5-hour limit at 92%; holding new runs until 2026-05-06T14:05:00Z"
     assert [%{"color" => "warning"}] = Formatter.slack_payload(headroom)["attachments"]
     assert Formatter.webhook_payload(headroom)["event"] == "usage_limit_headroom"
+  end
+
+  test "formatter names the forced run a waiting forced ticket is queued behind" do
+    {:ok, event} =
+      Event.new(:forced_waiting, %{
+        issue_id: "issue-2",
+        issue_identifier: "ACME-2",
+        issue_title: "Second forced ticket",
+        reason: "queued #2; forced slot taken by ACME-1",
+        timestamp: ~U[2026-10-04 08:00:00Z]
+      })
+
+    slack = Formatter.slack_payload(event)
+    assert slack["text"] =~ "Forced ticket waiting"
+    assert [%{"color" => "warning", "blocks" => [headline | _]}] = slack["attachments"]
+    assert headline["text"]["text"] =~ "*Forced ticket waiting*"
+    assert Formatter.webhook_payload(event)["reason"] == "queued #2; forced slot taken by ACME-1"
   end
 
   test "formatter includes reviewer feedback context for webhook and Slack payloads" do
