@@ -8,7 +8,8 @@ defmodule SymphonyElixir.DispatchState do
 
   A provider usage-limit hold (`:usage_limit`) is listed for every hold, but only makes
   dispatch inactive when the holds cover every run profile in use (`config.run_profiles`,
-  each a `provider` and `model`): runs on another provider or model still dispatch.
+  each a `provider`, `model` and run `kind`): runs on another provider or model still dispatch,
+  and so do landing runs under a headroom hold (see `UsageLimit.holds?/2`).
   """
 
   alias SymphonyElixir.UsageLimit
@@ -79,7 +80,7 @@ defmodule SymphonyElixir.DispatchState do
   defp every_profile_held?(holds, config) do
     config
     |> Map.get(:run_profiles, [])
-    |> Enum.all?(fn profile -> Enum.any?(holds, &UsageLimit.covers?(&1, profile)) end)
+    |> Enum.all?(fn profile -> Enum.any?(holds, &UsageLimit.holds?(&1, profile)) end)
   end
 
   defp usage_limit_blocker(hold) do

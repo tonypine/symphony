@@ -672,7 +672,8 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
   end
 
   defp format_blocker_line(%{kind: :usage_limit, resume_at: resume_at} = blocker) do
-    "#{UsageLimit.limit_label(blocker)} reached (resumes #{DateTime.to_iso8601(resume_at)})"
+    state = if UsageLimit.headroom?(blocker), do: "headroom: holding new runs", else: "reached"
+    "#{UsageLimit.limit_label(blocker)} #{state} (resumes #{DateTime.to_iso8601(resume_at)})"
   end
 
   defp format_blocker_line(%{kind: kind}), do: "blocked: #{kind}"

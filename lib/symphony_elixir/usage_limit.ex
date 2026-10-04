@@ -13,6 +13,11 @@ defmodule SymphonyElixir.UsageLimit do
   hold keeps covering every other run, and the canary's outcome decides whether the hold
   clears or pauses again.
 
+  With `headroom_utilization` set, an `allowed_warning` at or above it puts a hold in
+  `phase: :headroom` on new runs of the provider until the window resets, so the rest of the
+  limit is left for interactive sessions. It holds no landing run and no continuation, and
+  clears at `resume_at` without a canary.
+
   The orchestrator owns the holds and persists them with `RunStore.put_usage_limits/1`;
   this module builds and matches them.
   """
@@ -30,9 +35,10 @@ defmodule SymphonyElixir.UsageLimit do
           resets_at: DateTime.t() | nil,
           resume_at: DateTime.t(),
           source: atom() | nil,
-          phase: :paused | :canary,
+          phase: :paused | :canary | :headroom,
           canary_issue_id: String.t() | nil,
-          issue_identifier: String.t() | nil
+          issue_identifier: String.t() | nil,
+          utilization: number() | nil
         }
 
   @typedoc "The latest reset time and utilization seen per `{provider, window}`."
@@ -82,9 +88,62 @@ defmodule SymphonyElixir.UsageLimit do
       source: Map.get(info, :source),
       phase: :paused,
       canary_issue_id: nil,
-      issue_identifier: Keyword.get(opts, :issue_identifier)
+      issue_identifier: Keyword.get(opts, :issue_identifier),
+      utilization: Map.get(info, :utilization)
     }
   end
+
+  @doc """
+  The windows in a worker update's `usage_windows` that report `allowed_warning` at or above
+  `threshold` (`headroom_utilization`) and reset after `now`, as hold infos for `put_headroom/3`.
+  """
+  @spec headroom_crossings(map(), number(), DateTime.t()) :: [map()]
+  def headroom_crossings(usage_windows, threshold, %DateTime{} = now) when is_map(usage_windows) and is_number(threshold) do
+    for {window, %{status: "allowed_warning", utilization: utilization, resets_at: %DateTime{} = resets_at}} <-
+          Enum.sort(usage_windows),
+        is_number(utilization) and utilization >= threshold and DateTime.compare(resets_at, now) == :gt do
+      %{
+        provider: "anthropic",
+        window: window,
+        scope: scope_for_window(window),
+        resets_at: resets_at,
+        utilization: utilization,
+        source: :rate_limit_event
+      }
+    end
+  end
+
+  @doc """
+  Creates the headroom hold for `info` from `headroom_crossings/3`, or refreshes the headroom
+  hold `existing` when `info` resumes later. A crossing of the same window that resumes no
+  later only raises the held utilization; an earlier window leaves `existing` as it is.
+  """
+  @spec put_headroom(entry() | nil, map(), keyword()) :: entry()
+  def put_headroom(existing, info, opts) when is_map(info) do
+    entry = nil |> put(info, opts) |> Map.merge(%{reason: "claude_usage_headroom", phase: :headroom})
+
+    case existing do
+      %{phase: :headroom} = existing ->
+        cond do
+          DateTime.compare(entry.resume_at, existing.resume_at) == :gt -> %{entry | since: existing.since}
+          entry.window == existing.window -> %{existing | utilization: max(existing.utilization || 0, entry.utilization)}
+          true -> existing
+        end
+
+      nil ->
+        entry
+    end
+  end
+
+  @doc "The hold scope a usage window limits: the weekly model windows hold only that model family."
+  @spec scope_for_window(String.t() | nil) :: String.t() | :all
+  def scope_for_window("seven_day_opus"), do: "opus"
+  def scope_for_window("seven_day_sonnet"), do: "sonnet"
+  def scope_for_window(_window), do: :all
+
+  @doc "Whether `entry` is a headroom hold; `phase` may be an atom or, from the state API, a string."
+  @spec headroom?(map()) :: boolean()
+  def headroom?(entry) when is_map(entry), do: Map.get(entry, :phase) in [:headroom, "headroom"]
 
   defp reason("openai"), do: "codex_usage_limit"
   defp reason(_provider), do: "claude_usage_limit"
@@ -149,6 +208,17 @@ defmodule SymphonyElixir.UsageLimit do
   defp scope_matches?(scope, model) when is_binary(scope) and is_binary(model), do: String.contains?(String.downcase(model), scope)
   defp scope_matches?(_scope, _model), do: false
 
+  @doc """
+  Whether `entry` holds a run with `profile`. A headroom hold only holds new runs: a landing
+  run (`kind`) and a continuation (`continuation: true`) still go out.
+  """
+  @spec holds?(entry(), map()) :: boolean()
+  def holds?(entry, profile) when is_map(entry) and is_map(profile) do
+    covers?(entry, profile) and not (headroom?(entry) and headroom_exempt?(profile))
+  end
+
+  defp headroom_exempt?(profile), do: to_string(Map.get(profile, :kind)) == "landing" or Map.get(profile, :continuation) == true
+
   @doc "Moves `entry` to the canary phase with `issue_id` as the one run let through."
   @spec canary(entry(), String.t()) :: entry()
   def canary(entry, issue_id) when is_binary(issue_id), do: Map.merge(entry, %{phase: :canary, canary_issue_id: issue_id})
@@ -157,19 +227,20 @@ defmodule SymphonyElixir.UsageLimit do
   @spec canary?(entry(), String.t() | nil) :: boolean()
   def canary?(entry, issue_id), do: Map.get(entry, :phase) == :canary and Map.get(entry, :canary_issue_id) == issue_id
 
-  @doc "`entry` back in the paused phase; a canary restored after a restart is chosen again."
+  @doc "`entry` back in the paused phase; a canary restored after a restart is chosen again. A headroom hold stays as it is."
   @spec paused(entry()) :: entry()
+  def paused(%{phase: :headroom} = entry), do: entry
   def paused(entry), do: Map.merge(entry, %{phase: :paused, canary_issue_id: nil})
 
   @doc """
-  The first hold in `usage_limits` that covers `profile`, or nil. A hold in the canary
-  phase does not hold its own canary, `issue_id`.
+  The first hold in `usage_limits` that holds `profile` (see `holds?/2`), or nil. A hold in
+  the canary phase does not hold its own canary, `issue_id`.
   """
   @spec holding(map(), map(), String.t() | nil) :: entry() | nil
   def holding(usage_limits, profile, issue_id \\ nil) when is_map(usage_limits) and is_map(profile) do
     usage_limits
     |> Enum.sort_by(fn {_key, entry} -> DateTime.to_unix(entry.resume_at) end, :desc)
-    |> Enum.find_value(fn {_key, entry} -> if covers?(entry, profile) and not canary?(entry, issue_id), do: entry end)
+    |> Enum.find_value(fn {_key, entry} -> if holds?(entry, profile) and not canary?(entry, issue_id), do: entry end)
   end
 
   @doc "The persisted hold that covers `profile`, or nil; for dispatch paths outside the orchestrator."
@@ -208,27 +279,39 @@ defmodule SymphonyElixir.UsageLimit do
   defp window_label(window), do: "#{window} limit"
 
   @doc """
-  The dashboard banner for a hold: `Paused: Claude 5-hour limit, resumes ~14:05`. The resume
-  time is in local time, with the date when it is not today. `resume_at` may be a
-  `DateTime` or an ISO 8601 string. `opts[:to_local]` converts a UTC `NaiveDateTime` to local
-  time (default: the host's time zone).
+  The dashboard banner for a hold: `Paused: Claude 5-hour limit, resumes ~14:05`, or for a
+  headroom hold `Holding new runs: Claude at 91%, resets ~14:05`. The time is in local time,
+  with the date when it is not today. `resume_at` and `resets_at` may be `DateTime`s or ISO
+  8601 strings. `opts[:to_local]` converts a UTC `NaiveDateTime` to local time (default: the
+  host's time zone).
   """
   @spec banner(map(), DateTime.t(), keyword()) :: String.t()
   def banner(entry, %DateTime{} = now, opts \\ []) when is_map(entry) do
-    "Paused: #{limit_label(entry)}" <> resume_suffix(datetime(Map.get(entry, :resume_at)), now, opts)
+    if headroom?(entry) do
+      "Holding new runs: #{headroom_label(entry)}" <> time_suffix("resets", datetime(Map.get(entry, :resets_at)), now, opts)
+    else
+      "Paused: #{limit_label(entry)}" <> time_suffix("resumes", datetime(Map.get(entry, :resume_at)), now, opts)
+    end
   end
 
-  defp resume_suffix(nil, _now, _opts), do: ""
+  defp headroom_label(entry) do
+    case Map.get(entry, :utilization) do
+      utilization when is_number(utilization) -> "#{provider_label(Map.get(entry, :provider))} at #{round(utilization * 100)}%"
+      _unknown -> limit_label(entry)
+    end
+  end
 
-  defp resume_suffix(%DateTime{} = resume_at, now, opts) do
+  defp time_suffix(_verb, nil, _now, _opts), do: ""
+
+  defp time_suffix(verb, %DateTime{} = at, now, opts) do
     to_local = Keyword.get(opts, :to_local, &host_local_time/1)
-    local = to_local.(DateTime.to_naive(resume_at))
+    local = to_local.(DateTime.to_naive(at))
     time = local |> NaiveDateTime.to_time() |> Calendar.strftime("%H:%M")
 
     if NaiveDateTime.to_date(local) == NaiveDateTime.to_date(to_local.(DateTime.to_naive(now))) do
-      ", resumes ~#{time}"
+      ", #{verb} ~#{time}"
     else
-      ", resumes ~#{Calendar.strftime(local, "%b %-d")} #{time}"
+      ", #{verb} ~#{Calendar.strftime(local, "%b %-d")} #{time}"
     end
   end
 
@@ -264,7 +347,7 @@ defmodule SymphonyElixir.UsageLimit do
 
       entry
       |> Map.take([:provider, :scope, :reason, :window, :phase, :since, :resets_at, :resume_at, :source, :issue_identifier])
-      |> Map.put(:utilization, Map.get(seen, :utilization))
+      |> Map.put(:utilization, Map.get(seen, :utilization) || Map.get(entry, :utilization))
     end)
   end
 end

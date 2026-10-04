@@ -307,6 +307,7 @@ defmodule SymphonyElixir.NotificationsTest do
              "qa_passed",
              "qa_failed",
              "usage_limit_paused",
+             "usage_limit_headroom",
              "usage_limit_resumed"
            ]
 
@@ -488,6 +489,13 @@ defmodule SymphonyElixir.NotificationsTest do
     assert webhook["metadata"] == metadata
     assert Jason.decode!(Jason.encode!(webhook))["metadata"]["resume_at"] == "2026-05-06T14:05:00Z"
     assert Formatter.webhook_payload(resumed)["event"] == "usage_limit_resumed"
+
+    {:ok, headroom} =
+      Event.new(:usage_limit_headroom, %{reason: "Claude 5-hour limit at 92%; holding new runs until 2026-05-06T14:05:00Z", metadata: metadata})
+
+    assert Formatter.slack_payload(headroom)["text"] == "Usage limit headroom hold: Claude 5-hour limit at 92%; holding new runs until 2026-05-06T14:05:00Z"
+    assert [%{"color" => "warning"}] = Formatter.slack_payload(headroom)["attachments"]
+    assert Formatter.webhook_payload(headroom)["event"] == "usage_limit_headroom"
   end
 
   test "formatter includes reviewer feedback context for webhook and Slack payloads" do
