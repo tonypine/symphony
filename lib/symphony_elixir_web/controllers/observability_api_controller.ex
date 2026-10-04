@@ -26,7 +26,7 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   end
 
   def state(conn, _params) do
-    json(conn, Presenter.state_payload(orchestrator(), snapshot_timeout_ms()))
+    json(conn, Presenter.state_payload(orchestrator(), snapshot_timeout_ms(), stray_processes()))
   end
 
   @spec issue(Conn.t(), map()) :: Conn.t()
@@ -140,6 +140,10 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
 
   defp orchestrator do
     Endpoint.config(:orchestrator) || SymphonyElixir.Orchestrator
+  end
+
+  defp stray_processes do
+    Endpoint.config(:stray_processes) || SymphonyElixir.StrayProcesses
   end
 
   defp snapshot_timeout_ms do

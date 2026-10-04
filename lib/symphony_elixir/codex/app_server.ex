@@ -515,7 +515,7 @@ defmodule SymphonyElixir.Codex.AppServer do
             :exit_status,
             args: port_args,
             cd: String.to_charlist(workspace),
-            env: AgentEnv.build_with(%{"CODEX_HOME" => codex_home.home_path}),
+            env: AgentEnv.build_with(Map.put(AgentEnv.gradle_env(workspace), "CODEX_HOME", codex_home.home_path)),
             line: @port_line_bytes
           ]
         )

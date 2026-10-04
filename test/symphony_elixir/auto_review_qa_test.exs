@@ -518,16 +518,18 @@ defmodule SymphonyElixir.AutoReviewQaTest do
 
       start_supervised!({QaRunner, name: name, run_fun: run_fun})
       settings = Config.settings!()
-      job = %{issue: issue(), record: %{}, sha: @sha, settings: settings}
+      job = %{issue: issue(), record: %{workspace_path: "/workspaces/symphony/TP-901", repo_key: "symphony"}, sha: @sha, settings: settings}
 
       assert :started = QaRunner.request(job, qa_runner_server: name, tracker: :fake)
       assert_receive {:pass_started, "issue-qa-flow", pass_pid, [tracker: :fake]}
       assert QaRunner.running(name) == %{"issue-qa-flow" => @sha}
+      assert QaRunner.workspaces(name) == ["/workspaces/symphony/TP-901", QaAgent.worktree_path(settings, "symphony", "TP-901", @sha)]
       assert :running = QaRunner.request(job, qa_runner_server: name)
       assert :busy = QaRunner.request(%{job | issue: issue(%{id: "other"})}, qa_runner_server: name)
 
       send(pass_pid, :finish)
       wait_until(fn -> QaRunner.running(name) == %{} end)
+      assert QaRunner.workspaces(name) == []
 
       log =
         capture_log(fn ->
@@ -549,6 +551,7 @@ defmodule SymphonyElixir.AutoReviewQaTest do
 
       assert {:error, :qa_runner_unavailable} = QaRunner.request(job)
       assert QaRunner.running() == %{}
+      assert QaRunner.workspaces() == []
 
       {:ok, pid} = QaRunner.start_link()
       assert QaRunner.running() == %{}

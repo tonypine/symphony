@@ -17,7 +17,7 @@ defmodule SymphonyElixir.QaRunner do
   use GenServer
   require Logger
 
-  alias SymphonyElixir.AutoReview
+  alias SymphonyElixir.{AutoReview, QaAgent}
 
   @type request_result :: :started | :running | :busy | {:error, term()}
 
@@ -48,6 +48,15 @@ defmodule SymphonyElixir.QaRunner do
     case GenServer.whereis(server) do
       nil -> %{}
       pid -> GenServer.call(pid, :running)
+    end
+  end
+
+  @doc "The issue workspace and QA worktree of every pass in flight."
+  @spec workspaces(GenServer.server()) :: [Path.t()]
+  def workspaces(server \\ __MODULE__) do
+    case GenServer.whereis(server) do
+      nil -> []
+      pid -> GenServer.call(pid, :workspaces)
     end
   end
 
@@ -94,6 +103,10 @@ defmodule SymphonyElixir.QaRunner do
     {:reply, Map.new(state.running, fn {issue_id, %{sha: sha}} -> {issue_id, sha} end), state}
   end
 
+  def handle_call(:workspaces, _from, state) do
+    {:reply, Enum.flat_map(state.running, fn {_issue_id, entry} -> entry.paths end), state}
+  end
+
   def handle_call(:queued, _from, state) do
     {:reply, state |> live_queued() |> Map.keys() |> Enum.sort(), state}
   end
@@ -125,10 +138,17 @@ defmodule SymphonyElixir.QaRunner do
     case Task.Supervisor.start_child(state.task_supervisor, fn -> run_fun.(job, opts) end) do
       {:ok, pid} ->
         ref = Process.monitor(pid)
-        {:reply, :started, %{state | running: Map.put(state.running, issue_id, %{sha: sha, ref: ref})}}
+        entry = %{sha: sha, ref: ref, paths: pass_paths(job, sha)}
+        {:reply, :started, %{state | running: Map.put(state.running, issue_id, entry)}}
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}
     end
+  end
+
+  # The pass works in a worktree of the issue workspace (see `QaAgent.run/3`).
+  defp pass_paths(%{issue: issue, record: record, settings: settings}, sha) do
+    worktree = QaAgent.worktree_path(settings, Map.get(record, :repo_key), Map.get(issue, :identifier), sha)
+    Enum.filter([Map.get(record, :workspace_path), worktree], &is_binary/1)
   end
 end

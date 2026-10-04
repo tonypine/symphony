@@ -6,6 +6,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
   alias SymphonyElixir.Config.Schema.Verification.DevServer, as: DevServerConfig
   alias SymphonyElixir.Config.Schema.Workspace.Attachments
   alias SymphonyElixir.Config.Schema.Workspace.Lifecycle, as: WorkspaceLifecycle
+  alias SymphonyElixir.Config.SystemSchema
   alias SymphonyElixir.GitHub.Hosts
   alias SymphonyElixir.Linear.Client
   alias SymphonyElixir.Secret
@@ -587,6 +588,34 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
       assert {:ok, workspace} = Workspace.create_for_issue(issue)
       assert File.read!(Path.join(workspace, "branch.txt")) == "feature/pr-hook"
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "local hooks run Gradle without a daemon and keep the host's GRADLE_OPTS" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-workspace-gradle-hook-#{System.unique_integer([:positive])}"
+      )
+
+    previous_gradle_opts = System.get_env("GRADLE_OPTS")
+    on_exit(fn -> restore_env("GRADLE_OPTS", previous_gradle_opts) end)
+
+    try do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: Path.join(test_root, "workspaces"),
+        hook_after_create: "printf '%s' \"$GRADLE_OPTS\" > gradle_opts.txt"
+      )
+
+      System.delete_env("GRADLE_OPTS")
+      assert {:ok, workspace} = Workspace.create_for_issue("GRADLE-1")
+      assert File.read!(Path.join(workspace, "gradle_opts.txt")) == "-Dorg.gradle.daemon=false"
+
+      System.put_env("GRADLE_OPTS", "-Xmx64m")
+      assert {:ok, workspace} = Workspace.create_for_issue("GRADLE-2")
+      assert File.read!(Path.join(workspace, "gradle_opts.txt")) == "-Xmx64m -Dorg.gradle.daemon=false"
     after
       File.rm_rf(test_root)
     end
@@ -2980,6 +3009,19 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     end
   end
 
+  test "symphony.yml can turn the stray process check off with a null threshold" do
+    assert {:ok, system_config} =
+             SystemSchema.parse(%{
+               "watchdog" => %{"stray_process_cpu_minutes" => nil},
+               "repositories" => [%{"key" => "default", "workflow" => "WORKFLOW.md"}]
+             })
+
+    assert system_config.watchdog.stray_process_cpu_minutes == nil
+    watchdog = SystemSchema.to_config_map(system_config)["watchdog"]
+    assert {:ok, %Schema{watchdog: parsed}} = Schema.parse(%{"watchdog" => watchdog})
+    assert parsed.stray_process_cpu_minutes == nil
+  end
+
   test "config reads defaults for optional settings" do
     previous_linear_api_key = System.get_env("LINEAR_API_KEY")
     on_exit(fn -> restore_env("LINEAR_API_KEY", previous_linear_api_key) end)
@@ -3059,6 +3101,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert config.watchdog.enabled
     assert config.watchdog.tick_interval_ms == 60_000
     assert config.watchdog.no_progress_threshold_ms == 600_000
+    assert config.watchdog.stray_process_cpu_minutes == 10
     assert config.server.port == nil
     assert config.server.host == "127.0.0.1"
     assert Config.server_port() == 0
@@ -3309,12 +3352,24 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert message =~ "agent.timeouts.command_ms"
 
     write_workflow_file!(Workflow.workflow_file_path(),
-      watchdog: %{enabled: true, tick_interval_ms: 0, no_progress_threshold_ms: "bad"}
+      watchdog: %{enabled: true, tick_interval_ms: 0, no_progress_threshold_ms: "bad", stray_process_cpu_minutes: 0}
     )
 
     assert {:error, {:invalid_workflow_config, message}} = Config.validate_repo_workflows()
     assert message =~ "watchdog.tick_interval_ms"
     assert message =~ "watchdog.no_progress_threshold_ms"
+    assert message =~ "watchdog.stray_process_cpu_minutes"
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      watchdog: %{
+        enabled: true,
+        tick_interval_ms: 60_000,
+        no_progress_threshold_ms: 600_000,
+        stray_process_cpu_minutes: nil
+      }
+    )
+
+    assert Config.settings!().watchdog.stray_process_cpu_minutes == nil
 
     write_workflow_file!(Workflow.workflow_file_path(), workspace_strategy: "bad")
     assert {:error, {:invalid_workflow_config, message}} = Config.validate_repo_workflows()
