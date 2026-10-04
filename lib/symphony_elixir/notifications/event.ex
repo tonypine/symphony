@@ -20,7 +20,8 @@ defmodule SymphonyElixir.Notifications.Event do
     "qa_failed",
     "usage_limit_paused",
     "usage_limit_headroom",
-    "usage_limit_resumed"
+    "usage_limit_resumed",
+    "forced_waiting"
   ]
   @max_string_value_length 1024
 

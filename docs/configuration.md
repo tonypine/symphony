@@ -440,7 +440,7 @@ agent:
   turn lanes off. Values outside `0..max_total` fail `symphony check`. The dashboard and
   `/api/v1/state` (`epic_lanes`) show each lane and the shared pool, with the ticket a lane runs
   and why when it is not the epic's own sub-ticket (`MT-30 (In Progress), blocks MT-12`; `via` in
-  the API), and each yielded epic with why (`status: "yielded"` and `reason` in the API). The dispatch log line ends with `slot=lane:<epic>`, `slot=shared` or `slot=finishing`.
+  the API), and each yielded epic with why (`status: "yielded"` and `reason` in the API). The dispatch log line carries `slot=lane:<epic>`, `slot=shared`, `slot=finishing` or `slot=forced`, and `forced=true|false`.
 - `concurrency.finishing_max` (default: `2`) caps landing runs (tickets in `Merging`; with
   `pull_requests.auto_merge` on, only the ones that fell back to the landing agent). They only
   finish approved work, so they don't use `max_total` slots or epic lanes and start as soon as one
@@ -454,17 +454,31 @@ agent:
   `Merging`, ...). `/api/v1/state` lists the forced tickets (`forced`), earliest first with their
   queue `position`. A ticket leaves the list at the next poll after the label is removed, it
   reaches a terminal state, or Linear no longer returns it. The audit log records `forced_start` and `forced_end` (with
-  `reason`: `label_removed`, `terminal` or `missing`). Forcing doesn't change dispatch yet.
+  `reason`: `label_removed`, `terminal` or `missing`).
   `symphony force TP-123` adds the label through the running Symphony and `symphony force --clear TP-123`
   removes it; either way the queue changes at once, without waiting for a poll (see the README).
-- `concurrency.forced_max` (default: `1`) is how many forced tickets may be worked at once, once
-  forcing changes dispatch; `/api/v1/state` reports it under `concurrency`. Values below `1` fail
-  `symphony check`.
+- `concurrency.forced_max` (default: `1`) is how many forced runs may run at once on their own
+  allowance; `/api/v1/state` reports it under `concurrency`. Values below `1` fail
+  `symphony check`. A forced ticket goes out first, in `forced_since` order, and while fewer than
+  `forced_max` forced runs are going it starts even when `max_total`, the epic lanes,
+  `finishing_max`, `max_by_issue_state` are full or a finish is waiting, at the next poll. This
+  covers every phase: implementation, `Rework`, CI-fix and review-feedback continuations and
+  landing. Its run is marked `forced` (`/api/v1/state` `running[].forced`) and takes none of the
+  normal slots; a run already going when the label is added stays a normal run, and no running
+  agent is stopped. A forced ticket past `forced_max` gets no extra slot: it still goes first for a
+  normal one, waits as `queued #2; forced slot taken by MT-1` in `slot_waiting`, and Symphony logs a
+  warning and sends one `forced_waiting` notification naming the forced run holding the allowance.
+  The daily token budget and a usage-limit headroom hold don't stop a forced ticket (a warning is
+  logged when the budget would have); the per-issue token cap still does. The operator Pause, the
+  Linear rate-limit pause, the workspace quota pause, `max_concurrent_agents_per_host`, blocked-by
+  links, a failed setup, retry backoff, the post-PR quiet period, auto-merge and `Merging` CI waits,
+  and a usage-limit pause still hold it; when a usage-limit pause resumes, a held forced ticket
+  goes out first.
 - `concurrency.forced_stale_after_hours` (default: `72`) is how long a ticket may stay forced before
   it counts as stale. It is validated now but not reported yet. Values below `1` fail
   `symphony check`.
-- Dispatch goes closest to done first: `Merging`, Auto Review, `Rework`, resumes such as
-  `In Progress`, then `Todo`; priority and age only break ties within a stage. While a `Merging`
+- Dispatch goes forced tickets first, then closest to done: `Merging`, Auto Review, `Rework`,
+  resumes such as `In Progress`, then `Todo`; priority and age only break ties within a stage. While a `Merging`
   ticket waits for a finishing slot, or a QA pass is queued, no `Todo` ticket starts; `Rework` and
   resumes still do. A ticket that finds no free slot is not retried with backoff: it keeps its
   attempt and starts on the first poll after a slot frees (a run ending triggers that poll). The
@@ -486,7 +500,8 @@ agent:
   UTC-aligned) are guardrails. Raise either to a larger positive integer, or set to `null` to
   disable.
 - The per-issue cap stops only the over-budget issue without retrying; the daily cap pauses new
-  dispatch for the day while already-running agents continue.
+  dispatch for the day while already-running agents continue. Forced tickets
+  (`concurrency.force_label`) still dispatch past the daily cap, with a warning in the log.
 - Codex app-server and Claude stream-json usage events are normalized into uncached input, cached
   input, cache-creation input, and output buckets. Symphony warns if a budget is active with a
   command that may not report token usage.
@@ -522,7 +537,7 @@ agent:
   reports an `allowed_warning` at or above this share of a window, Symphony holds new Claude runs
   until that window resets (plus `resume_margin_seconds`); later warnings for the window raise the
   percentage shown. Runs in flight and their continuations
-  keep going, and landing runs (`Merging`) still start. The hold is kept across restarts, logs
+  keep going, and landing runs (`Merging`) and forced tickets still start. The hold is kept across restarts, logs
   `Usage limit headroom hold provider=… utilization=… threshold=…`, shows on the dashboards as
   `Holding new runs: Claude at 91%, resets ~14:05`, is listed under `usage_limits` with
   `phase: headroom`, and sends one `usage_limit_headroom` notification when it starts and one

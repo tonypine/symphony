@@ -2009,7 +2009,8 @@ defmodule SymphonyElixir.Config.Schema do
         "qa_failed",
         "usage_limit_paused",
         "usage_limit_headroom",
-        "usage_limit_resumed"
+        "usage_limit_resumed",
+        "forced_waiting"
       ]
 
       embedded_schema do

@@ -15,8 +15,8 @@ defmodule SymphonyElixir.UsageLimit do
 
   With `headroom_utilization` set, an `allowed_warning` at or above it puts a hold in
   `phase: :headroom` on new runs of the provider until the window resets, so the rest of the
-  limit is left for interactive sessions. It holds no landing run and no continuation, and
-  clears at `resume_at` without a canary.
+  limit is left for interactive sessions. It holds no landing run, no continuation and no forced
+  ticket's run, and clears at `resume_at` without a canary.
 
   The orchestrator owns the holds and persists them with `RunStore.put_usage_limits/1`;
   this module builds and matches them.
@@ -210,14 +210,17 @@ defmodule SymphonyElixir.UsageLimit do
 
   @doc """
   Whether `entry` holds a run with `profile`. A headroom hold only holds new runs: a landing
-  run (`kind`) and a continuation (`continuation: true`) still go out.
+  run (`kind`), a continuation (`continuation: true`) and a forced ticket's run (`forced: true`)
+  still go out.
   """
   @spec holds?(entry(), map()) :: boolean()
   def holds?(entry, profile) when is_map(entry) and is_map(profile) do
     covers?(entry, profile) and not (headroom?(entry) and headroom_exempt?(profile))
   end
 
-  defp headroom_exempt?(profile), do: to_string(Map.get(profile, :kind)) == "landing" or Map.get(profile, :continuation) == true
+  defp headroom_exempt?(profile) do
+    to_string(Map.get(profile, :kind)) == "landing" or Map.get(profile, :continuation) == true or Map.get(profile, :forced) == true
+  end
 
   @doc "Moves `entry` to the canary phase with `issue_id` as the one run let through."
   @spec canary(entry(), String.t()) :: entry()
