@@ -148,6 +148,14 @@ defmodule SymphonyElixir.WorkflowSourceTest do
       assert :ok = Config.validate_repo_workflows()
     end
 
+    test "a warning git prints on stderr stays out of the snapshot", %{root: root} do
+      %{checkout: checkout} = git_repos!(root, "Committed prompt")
+      repo = repo(checkout)
+      with_noisy_git!(root, fn -> assert WorkflowSource.refresh(repo) == :ok end)
+
+      assert File.read!(WorkflowSource.read_path(repo)) == File.read!(Path.join(checkout, "WORKFLOW.md"))
+    end
+
     test "a change pushed to the base branch takes effect on the next dispatch", %{root: root} do
       %{checkout: checkout, other: other} = git_repos!(root, "First prompt")
       write_symphony!(root, checkout, base_branch: "main")
@@ -413,6 +421,29 @@ defmodule SymphonyElixir.WorkflowSourceTest do
     File.write!(Path.join(clone, "WORKFLOW.md"), content)
     git!(clone, ["commit", "-q", "-am", "update workflow"])
     git!(clone, ["push", "-q", "origin", "main"])
+  end
+
+  # Puts a `git` first on PATH that prints a warning on stderr before running the
+  # real git, like the xcrun shim of `/usr/bin/git` in the agent sandbox.
+  defp with_noisy_git!(root, fun) do
+    bin = Path.join(root, "noisy-bin")
+    File.mkdir_p!(bin)
+
+    File.write!(Path.join(bin, "git"), """
+    #!/bin/sh
+    echo "warning: noisy git shim" >&2
+    exec "#{System.find_executable("git")}" "$@"
+    """)
+
+    File.chmod!(Path.join(bin, "git"), 0o755)
+    original_path = System.get_env("PATH")
+    System.put_env("PATH", bin <> ":" <> original_path)
+
+    try do
+      fun.()
+    after
+      System.put_env("PATH", original_path)
+    end
   end
 
   defp git!(dir, args) do
