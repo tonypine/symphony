@@ -420,6 +420,17 @@ agent:
   it never writes outside the workspace. Local hooks run outside the sandbox and build without a daemon:
   Symphony appends `-Dorg.gradle.daemon=false` to the host's `GRADLE_OPTS`. Neither applies on SSH
   workers.
+  Elixir's tool caches need no entry here. Each local agent run may write one cache folder,
+  `~/Library/Caches/symphony/agent` on macOS (`$XDG_CACHE_HOME/symphony/agent` or
+  `~/.cache/symphony/agent` elsewhere), shared by all runs, and starts with `HEX_HOME=<folder>/hex`,
+  `ELIXIR_MAKE_CACHE_DIR=<folder>/elixir_make` and `SYMPHONY_AGENT_CACHE_DIR=<folder>` (for the
+  repo's own tools, such as Dialyxir's `plt_core_path`). Before each launch, Symphony copies into it
+  the Hex packages, Hex registry cache (`cache.ets`) and `elixir_make` archives the host's caches
+  hold and it lacks, so deps the host fetched resolve offline; the host's caches stay read-only, and
+  `hex.config` is never copied, so private Hex organizations resolve only from deps a hook fetched.
+  Symphony only writes plain directories in the folder, never through a link, and when the folder
+  itself is not a plain directory the run gets neither the env nor the write access. Hooks and SSH
+  workers keep their own env.
 - `permissions.outer_sandbox`: optional outer sandbox wrapper, currently used for Codex SRT.
 
 **Run profiles:**
