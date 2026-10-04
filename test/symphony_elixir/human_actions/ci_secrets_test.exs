@@ -156,9 +156,8 @@ defmodule SymphonyElixir.HumanActions.CiSecretsTest do
       assert {%{}, %{}} = collect(%{}, github_repo: fn _repo -> nil end)
       refute_received {:list_runs, _repo, _branch}
 
-      Process.put({:log, "8"}, {:ok, "secret SIGNING_KEY is not set"})
-      assert {%{}, _cache} = collect(%{}, settings: settings(nil))
-      refute_received {:projects_query, _filter}
+      assert {%{}, %{}} = collect(%{}, settings: settings(nil))
+      refute_received {:list_runs, _repo, _branch}
     end
 
     test "keeps a repository's last actions when GitHub or Linear cannot be read" do

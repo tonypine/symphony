@@ -93,11 +93,13 @@ defmodule SymphonyElixir.HumanActions.CiSecrets do
     repo_key = repo.name
     previous = get_in(cache, [:repos, repo_key]) || %{logs: %{}, actions: []}
 
-    with gh_repo when is_binary(gh_repo) <- Keyword.get(opts, :github_repo, &RepoStatus.github_repo/1).(repo),
+    # A repository routed to no project has no update to list its actions in: GitHub is not read.
+    with {:ok, project_filter} <- Client.repo_project_filter(repo, Keyword.fetch!(opts, :settings).tracker),
+         gh_repo when is_binary(gh_repo) <- Keyword.get(opts, :github_repo, &RepoStatus.github_repo/1).(repo),
          branch = Keyword.get(opts, :base_branch, &AutoReview.base_branch/1).(repo_key),
          {:ok, runs} <- github.list_branch_runs(gh_repo, branch, []),
          {:ok, failing} <- read_logs(failing_workflows(runs), gh_repo, previous.logs, github),
-         {:ok, projects, cache} <- projects(repo, failing, cache, opts) do
+         {:ok, projects, cache} <- projects(project_filter, failing, cache, opts) do
       target = %{repo: gh_repo, branch: branch}
 
       actions =
@@ -108,7 +110,7 @@ defmodule SymphonyElixir.HumanActions.CiSecrets do
       logs = Map.new(failing, fn {workflow, secrets} -> {workflow.latest.id, secrets} end)
       {actions, put_in(cache, [Access.key(:repos, %{}), repo_key], %{logs: logs, actions: actions})}
     else
-      nil ->
+      none when none in [nil, :none] ->
         {[], cache}
 
       {:error, reason} ->
@@ -177,18 +179,9 @@ defmodule SymphonyElixir.HumanActions.CiSecrets do
     |> Enum.take(@max_secrets_per_run)
   end
 
-  defp projects(_repo, [], cache, _opts), do: {:ok, [], cache}
+  defp projects(_filter, [], cache, _opts), do: {:ok, [], cache}
 
-  defp projects(repo, _failing, cache, opts) do
-    settings = Keyword.fetch!(opts, :settings)
-
-    case Client.repo_project_filter(repo, settings.tracker) do
-      {:ok, filter} -> cached_projects(filter, cache, opts)
-      :none -> {:ok, [], cache}
-    end
-  end
-
-  defp cached_projects(filter, cache, opts) do
+  defp projects(filter, _failing, cache, opts) do
     case get_in(cache, [:projects, filter]) do
       projects when is_list(projects) -> {:ok, projects, cache}
       nil -> fetch_projects(filter, cache, opts)

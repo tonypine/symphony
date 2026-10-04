@@ -1659,7 +1659,7 @@ lists:
   and variables → Actions, the failed run to re-run, and the workflow it unblocks. It belongs to no
   issue, so it is listed in the update of every project the repository routes (its `projects`, else
   `issues.linear.scope.project_slug`); a repository routed by team or label alone has no project to
-  post to, and its workflows are not read. Only the secret's name is taken from the log, never a
+  post to, and its workflow runs are not read. Only the secret's name is taken from the log, never a
   value.
 
   Each read costs one `gh run list` per repository, plus one `gh run view --log-failed` per
