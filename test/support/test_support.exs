@@ -93,6 +93,8 @@ defmodule SymphonyElixir.TestSupport do
           Application.delete_env(:symphony_elixir, :memory_tracker_create_comment_sleep_ms)
           Application.delete_env(:symphony_elixir, :config_cache_file_reader)
           Application.delete_env(:symphony_elixir, :config_cache_watch)
+          # An orchestrator started against a tracker without the state turns it off for the VM.
+          SymphonyElixir.HumanReview.reset_for_test("Human Review")
           Cache.clear()
           File.rm_rf(workflow_root)
         end)
@@ -690,6 +692,7 @@ defmodule SymphonyElixir.TestSupport do
       [
         "---",
         issues_yaml(%{
+          human_review: Keyword.fetch(config, :tracker_human_review_state),
           kind: tracker_kind,
           endpoint: tracker_endpoint,
           memory_issues_file: tracker_memory_issues_file,
@@ -832,6 +835,9 @@ defmodule SymphonyElixir.TestSupport do
     |> Enum.join("\n")
   end
 
+  defp human_review_yaml({:ok, state}), do: "    human_review: #{yaml_value(state)}"
+  defp human_review_yaml(:error), do: nil
+
   defp issues_yaml(config) do
     [
       "issues:",
@@ -848,7 +854,8 @@ defmodule SymphonyElixir.TestSupport do
       config.memory_issues_file && "  memory:\n    issues_file: #{yaml_value(config.memory_issues_file)}",
       "  states:",
       "    active: #{yaml_value(config.active_states)}",
-      "    terminal: #{yaml_value(config.terminal_states)}"
+      "    terminal: #{yaml_value(config.terminal_states)}",
+      human_review_yaml(config.human_review)
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.join("\n")

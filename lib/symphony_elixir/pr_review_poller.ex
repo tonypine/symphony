@@ -6,7 +6,7 @@ defmodule SymphonyElixir.PrReviewPoller do
   use GenServer
   require Logger
 
-  alias SymphonyElixir.{AuditLog, AutoMerge, CiPoller, Config, Notifications, RunStore, Tracker, Workspace}
+  alias SymphonyElixir.{AuditLog, AutoMerge, CiPoller, Config, HumanReview, Notifications, RunStore, Tracker, Workspace}
   alias SymphonyElixir.GitHub.{CommentMarker, PullRequest}
   alias SymphonyElixir.Learnings.Reflection
   alias SymphonyElixir.Linear.{Issue, Usage}
@@ -574,7 +574,8 @@ defmodule SymphonyElixir.PrReviewPoller do
   defp issue_in_repo?(%Issue{}, repo_key), do: repo_key == Config.repo_key_or_nil()
 
   defp watched_states(settings) do
-    if AutoMerge.enabled?(settings), do: [@in_review_state, @merging_state], else: [@in_review_state]
+    review_states = HumanReview.review_states(settings)
+    if AutoMerge.enabled?(settings), do: review_states ++ [@merging_state], else: review_states
   end
 
   defp fetch_watched_issues(settings, tracker, opts) do

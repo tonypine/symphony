@@ -84,6 +84,7 @@ issues:
     active: [Todo, In Progress]
     terminal: [Closed, Cancelled, Canceled, Duplicate, Done]
     waiting_on_sub_issues: Waiting on sub-tickets
+    human_review: Human Review
 ```
 
 - `provider`: `linear` or `memory`. `memory` is a fake Linear for tests: it reads its issues from
@@ -132,6 +133,34 @@ issues:
     an approved plan changes nothing: under a new top-level comment Symphony replies once that, if
     it asks for a plan change, `Rework` re-plans it.
   - **Re-plan:** moving the parent to `Rework` makes the plan again from scratch, as above.
+
+- `states.human_review`: the state a ticket waits in when only a person can move it on, default
+  `Human Review`; `null` turns it off, and every such ticket goes to `In Review` as before. It
+  keeps those tickets apart from the supervisor's `In Review` queue. Create it in Linear as a
+  started state just after In Review; at startup Symphony checks the configured teams have it, and
+  when it is missing logs a warning and sends those tickets to `In Review` until restart. It must
+  not be one of `states.active`: Symphony never dispatches a ticket in it. The CI and PR review
+  pollers watch its PR as they do in `In Review`, and a person's move out of it counts like one out
+  of `In Review`: to `Merging` (approve), `Rework`, `states.waiting_on_sub_issues` (approve a
+  plan) or `Done` (sign off a final verification). Symphony puts a ticket there instead of
+  `In Review` when:
+  - Auto Review QA is `blocked` and the QA agent says only a person can clear it
+    (`needs_person`: a missing secret or key, a check by hand or on a device); a block the
+    factory can fix (a tool missing on the QA host, a dev server that fails) still goes to
+    `In Review`;
+  - a `Final verification:` parent walkthrough passes, or is blocked with no failing step, and the
+    QA agent says the checks left are manual;
+  - an agent moves a `breakdown` parent to `In Review` and its ticket says a human reviews the plan:
+    an `auto_review.acceptance_gate.escalate.labels` label other than `breakdown` (`needs-human`)
+    or a title or description matching one of its `ticket_patterns` ("must not auto-approve",
+    "human review");
+  - an agent that posted a `linear_request_human_action` request (or found it still open) moves
+    its issue to `Backlog` or `In Review`, as the blocked-access escape hatch does.
+
+  The dashboard, `/api/v1/state` (`counts.human_review` and a `human_review` list of the watched
+  tickets in it) and the menu bar show how many tickets wait there, and the human-action update
+  lists them first. A supervisor moves a ticket there when it needs the operator, and never moves
+  one out of it on the operator's behalf.
 
 For Linear, configure at least one global scope under `issues.linear.scope` or repo-level route
 selector under `repositories[].route`.
@@ -996,7 +1025,8 @@ instead of `In Review`, and the CI poller watches it there:
 - a PR that conflicts with its base and has no checks (GitHub runs no CI on it) goes to `Rework`
   with a comment saying which branch to merge in.
 
-Agents can no longer move the issue to `In Review` themselves: `linear_update_state("In Review")`
+Agents can no longer move the issue to `In Review` or `Human Review` themselves (a `breakdown` plan
+or a `Final verification:` ticket, which open no PR, still can): `linear_update_state("In Review")`
 returns "Symphony moves the issue to Auto Review once the PR is open; leave the state as it is."
 
 #### QA passes
@@ -1843,14 +1873,15 @@ lists:
   `linear_request_human_action` (`title`, `why`, `steps`, optional `unblocks` and `est_minutes`)
   when they hit something only a person can do: a missing secret or permission, an account to set
   up, a product decision, a check on a device. Then they follow the blocked-access escape hatch as
-  usual. A request whose title matches one still open on the issue is not posted again. An agent
-  that finds its request is not needed after all withdraws it with `linear_withdraw_human_action`
-  (`reason`, optional `title`): Symphony replies `## Action withdrawn` with the reason under the
-  request, which closes it, and removes the label once no open request is left on the issue;
+  usual, and its move to `Backlog` lands in `issues.states.human_review`. A request whose title
+  matches one still open on the issue is not posted again. An agent that finds its request is not
+  needed after all withdraws it with `linear_withdraw_human_action` (`reason`, optional `title`):
+  Symphony replies `## Action withdrawn` with the reason under the request, which closes it, and
+  removes the label once no open request is left on the issue;
 - an issue with the label and no such comment, as a task in itself (its description's list items
   become the steps);
-- a `breakdown` parent in `In Review`, waiting for its plan to be approved;
-- an issue in `In Review` whose `## Symphony QA Report` has the verdict `blocked`;
+- a `breakdown` parent in `In Review` or `Human Review`, waiting for its plan to be approved;
+- an issue in `In Review` or `Human Review` whose `## Symphony QA Report` has the verdict `blocked`;
 - a `Final verification:` ticket whose Auto Review parent walkthrough had the verdict `blocked`,
   such as a QA host without the macOS app's Screen Recording and Accessibility permissions. It is
   listed in the update of the parent's project, as "Grant the QA host's permissions for the final
@@ -1860,6 +1891,8 @@ lists:
   steps the walkthrough could still run are filed as gap tickets as before; a walkthrough that
   fails on defects alone (verdict `fail`) adds no action. Reading these tickets adds them to the
   same query, at no extra request;
+- any other issue in `Human Review`, as "Review <issue>", with the moves that approve it, send it
+  back or sign it off;
 - with `pull_requests.checks.enabled`, a GitHub Actions workflow on the repository's base branch
   (`repositories[].base_branch`, default `main`) that keeps failing on a missing secret: its two
   latest finished runs failed (cancelled and skipped runs aside), and the failed-step log of the
@@ -1898,10 +1931,12 @@ Only the heading is required.
 leaves a state a person moves it out of (anything but `issues.states.active`, the waiting state and
 the Auto Review state), such as `Backlog` back to `Todo`. The agent's own move to `Backlog` keeps it
 open. Removing the label closes every action on the issue, and so does a terminal state. A plan
-review closes when the parent leaves `In Review`, and a blocked QA pass when the issue leaves
-`In Review` or its next QA report is not `blocked`. A blocked final verification closes when its
-next walkthrough is not `blocked`, or when the ticket leaves the state the walkthrough moved it to
-(`In Review`, or `Todo` while gap tickets for its failing steps block it). A missing secret closes when the next run of
+review closes when the parent leaves its review state, and a blocked QA pass when the issue leaves
+its review state or its next QA report is not `blocked`. A blocked final verification closes when
+its next walkthrough is not `blocked`, or when the ticket leaves the state the walkthrough moved it
+to (`In Review`, `Human Review` when only a person can do the steps left, or `Todo` while gap
+tickets for its failing steps block it). A Human Review action closes when the issue leaves
+`Human Review`. A missing secret closes when the next run of
 its workflow on the base branch is green. Closed actions drop out of the next update.
 
 **When Symphony posts.** A project gets an update only when its set of open actions differs from
@@ -1919,7 +1954,8 @@ closed while Symphony was stopped keeps its last update until a new action opens
 - the why, then the steps as a numbered list, one instruction per line (no tables, which scroll
   sideways on a phone);
 - a closing **Done when** line, saying how the action leaves the list;
-- quickest actions first, so a short session clears the small ones;
+- actions on tickets in `Human Review` first, marked with the state, since only the reader can move
+  those on; then quickest first, so a short session clears the small ones;
 - a footer with the list id, which is how Symphony recognises its own last update.
 
 The update sets the project health: `atRisk` while any action is open, `onTrack` when none is.

@@ -524,7 +524,7 @@ defmodule SymphonyElixir.ExtensionsTest do
              "generated_at" => state_payload["generated_at"],
              "build" => %{"version" => "0.0.1.168", "sha" => "d3d301b0123456789abcdef0123456789abcdef0"},
              "repos" => ["default"],
-             "counts" => %{"running" => 1, "watching" => 1, "conflicts" => 0, "retrying" => 1, "claimed" => 2, "forced" => 2},
+             "counts" => %{"running" => 1, "watching" => 1, "human_review" => 0, "conflicts" => 0, "retrying" => 1, "claimed" => 2, "forced" => 2},
              "running" => [
                %{
                  "issue_id" => "issue-http",
@@ -571,6 +571,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "seconds_since_last_run" => 3_600
                }
              ],
+             "human_review" => [],
              "conflicts" => [],
              "retrying" => [
                %{
@@ -980,7 +981,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     refute_received :request_refresh_called
 
     state_payload = json_response(get(build_conn(), "/api/v1/state"), 200)
-    assert state_payload["counts"] == %{"running" => 1, "watching" => 1, "conflicts" => 0, "retrying" => 1, "claimed" => 2, "forced" => 2}
+    assert state_payload["counts"] == %{"running" => 1, "watching" => 1, "human_review" => 0, "conflicts" => 0, "retrying" => 1, "claimed" => 2, "forced" => 2}
   end
 
   test "phoenix observability api allows configured origins to refresh" do
@@ -1375,6 +1376,38 @@ defmodule SymphonyElixir.ExtensionsTest do
       response(get(build_conn(), "/vendor/phoenix_live_view/phoenix_live_view.js"), 200)
 
     assert live_view_js =~ "var LiveView = (() => {"
+  end
+
+  test "the state api and the dashboard list tickets waiting in Human Review" do
+    human_review = %{
+      issue_id: "issue-human",
+      repo_key: "default",
+      identifier: "MT-HUMAN",
+      state: "Human Review",
+      url: "https://linear.app/example/issue/MT-HUMAN",
+      last_ran_at: DateTime.add(DateTime.utc_now(), -60, :second),
+      seconds_since_last_run: 60
+    }
+
+    snapshot = Map.update!(static_snapshot(), :watching, &(&1 ++ [human_review]))
+    orchestrator_name = Module.concat(__MODULE__, :HumanReviewOrchestrator)
+
+    {:ok, _pid} =
+      StaticOrchestrator.start_link(
+        name: orchestrator_name,
+        snapshot: snapshot,
+        refresh: %{queued: true, coalesced: false, requested_at: DateTime.utc_now(), operations: ["poll"]}
+      )
+
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    state_payload = json_response(get(build_conn(), "/api/v1/state"), 200)
+    assert %{"watching" => 2, "human_review" => 1} = state_payload["counts"]
+    assert [%{"issue_identifier" => "MT-HUMAN", "state" => "Human Review", "url" => "https://linear.app/example/issue/MT-HUMAN"}] = state_payload["human_review"]
+
+    {:ok, _view, html} = live(build_conn(), "/")
+    assert html =~ "Human Review"
+    assert html =~ "needs you"
   end
 
   test "dashboard liveview renders and refreshes over pubsub" do
@@ -3324,7 +3357,7 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     response = Req.get!("http://127.0.0.1:#{port}/api/v1/state")
     assert response.status == 200
-    assert response.body["counts"] == %{"running" => 1, "watching" => 1, "conflicts" => 0, "retrying" => 1, "claimed" => 2, "forced" => 2}
+    assert response.body["counts"] == %{"running" => 1, "watching" => 1, "human_review" => 0, "conflicts" => 0, "retrying" => 1, "claimed" => 2, "forced" => 2}
 
     dashboard_css = Req.get!("http://127.0.0.1:#{port}/dashboard.css")
     assert dashboard_css.status == 200

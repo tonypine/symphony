@@ -15,7 +15,7 @@ defmodule SymphonyElixir.PlanComments do
   reviewer can share one Linear user.
   """
 
-  alias SymphonyElixir.{AgentLabels, AutoReview, BreakdownReview, SubIssueWait, Tracker}
+  alias SymphonyElixir.{AgentLabels, BreakdownReview, HumanReview, SubIssueWait, Tracker}
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaAgent.Report
@@ -54,7 +54,7 @@ defmodule SymphonyElixir.PlanComments do
   @type last_run :: %{started_at: DateTime.t() | nil, ended_at: DateTime.t() | nil, comment_ids: [String.t()] | nil}
 
   @doc """
-  What a new comment on `issue` asks of Symphony: `:revise` for a `breakdown` parent in `In Review`
+  What a new comment on `issue` asks of Symphony: `:revise` for a `breakdown` parent in `In Review` (or Human Review)
   whose plan was not approved, `:answer` for one whose plan was (in the waiting state, or back in
   `In Review` with sub-issues under way), nil otherwise. A parent whose sub-issues are all terminal
   is left to its close-out.
@@ -64,7 +64,7 @@ defmodule SymphonyElixir.PlanComments do
     cond do
       not Issue.breakdown?(issue) or Issue.close_out_ready?(issue, terminal_states) -> nil
       SubIssueWait.in_state?(issue, settings) -> :answer
-      not state_matches?(state, AutoReview.review_state()) -> nil
+      not HumanReview.review_state?(state, settings) -> nil
       Issue.waiting_on_sub_issues?(issue, terminal_states) -> :answer
       true -> :revise
     end

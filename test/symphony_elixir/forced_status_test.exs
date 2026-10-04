@@ -27,9 +27,16 @@ defmodule SymphonyElixir.ForcedStatusTest do
                ForcedStatus.describe(%{state: " auto review ", auto_review_state: "Auto Review"})
     end
 
-    test "human gates: In Review waits on a human, Backlog and Triage on the backlog" do
+    test "human gates: In Review and Human Review wait on a human, Backlog and Triage on the backlog" do
       assert %{phase: :waiting_for_human, waiting_on: :human} =
                ForcedStatus.describe(%{state: "In Review", kind: :implementation})
+
+      assert %{phase: :waiting_for_human, waiting_on: :human} =
+               ForcedStatus.describe(%{state: " human review", human_review_state: "Human Review", auto_review_state: "Auto Review"})
+
+      # With the state turned off, a ticket in a state of that name is not held for a human.
+      assert %{phase: :implementation, waiting_on: nil} =
+               ForcedStatus.describe(%{state: "Human Review", human_review_state: nil, kind: :implementation})
 
       assert %{phase: :breakdown, waiting_on: :backlog} = ForcedStatus.describe(%{state: "Backlog", kind: :breakdown})
 
