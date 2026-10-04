@@ -3771,6 +3771,91 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
+  test "agent runner sets up again a workspace whose after_create failed on the run before, then starts the agent" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-elixir-agent-runner-hook-rerun-#{System.unique_integer([:positive])}")
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+      codex_binary = Path.join(test_root, "fake-codex")
+      hook_runs = Path.join(test_root, "after_create.runs")
+      agent_launches = Path.join(test_root, "agent.launches")
+      setup_ready = Path.join(test_root, "setup-ready")
+
+      File.mkdir_p!(workspace_root)
+
+      File.write!(codex_binary, """
+      #!/bin/sh
+      echo launch >> #{agent_launches}
+      count=0
+      while IFS= read -r line; do
+        count=$((count + 1))
+        case "$count" in
+          1)
+            printf '%s\\n' '{\"id\":1,\"result\":{}}'
+            ;;
+          3)
+            printf '%s\\n' '{\"id\":2,\"result\":{\"thread\":{\"id\":\"thread-1\"}}}'
+            ;;
+          4)
+            printf '%s\\n' '{\"id\":3,\"result\":{\"turn\":{\"id\":\"turn-1\",\"status\":\"inProgress\",\"items\":[]}}}'
+            printf '%s\\n' '{\"method\":\"turn/completed\"}'
+            exit 0
+            ;;
+          *)
+            ;;
+        esac
+      done
+      """)
+
+      File.chmod!(codex_binary, 0o755)
+
+      # Fails until setup-ready exists, like an install with the registry down.
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        workspace_root: workspace_root,
+        hook_after_create: """
+        echo run >> #{hook_runs}
+        test -f #{setup_ready} && echo installed > deps.txt
+        """,
+        agent_command: "#{codex_binary} app-server"
+      )
+
+      issue = %Issue{
+        id: "issue-s-378",
+        identifier: "S-378",
+        title: "Setup failed",
+        description: "after_create fails once",
+        state: "In Progress",
+        url: "https://example.org/issues/S-378",
+        labels: []
+      }
+
+      capture_log(fn ->
+        assert_raise RuntimeError, ~r/workspace_hook_failed/, fn ->
+          AgentRunner.run(issue, self(), issue_enricher: &{:ok, &1})
+        end
+      end)
+
+      assert File.read!(hook_runs) == "run\n"
+      refute File.exists?(agent_launches)
+
+      File.write!(setup_ready, "")
+
+      log =
+        capture_log(fn ->
+          assert :ok = AgentRunner.run(issue, self(), issue_enricher: &{:ok, &1})
+        end)
+
+      # The kept workspace is set up before the agent starts in it.
+      assert File.read!(hook_runs) == "run\nrun\n"
+      assert File.read!(Path.join([workspace_root, "default", "S-378", "deps.txt"])) == "installed\n"
+      assert File.read!(agent_launches) == "launch\n"
+      assert log =~ "Running workspace hook an earlier run left unfinished hook=after_create"
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "agent runner compacts oversized Codex first-turn prompts before app-server send" do
     test_root =
       Path.join(

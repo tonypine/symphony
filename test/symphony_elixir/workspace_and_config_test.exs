@@ -1586,6 +1586,26 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     end
   end
 
+  test "the workspace sweep does not take an after_create pending marker for a workspace" do
+    workspace_root = Path.join(System.tmp_dir!(), "symphony-elixir-workspace-hook-sweep-#{System.unique_integer([:positive])}")
+
+    try do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        hook_after_create: "exit 3"
+      )
+
+      capture_log(fn ->
+        assert {:error, {:workspace_hook_failed, "after_create", 3, _output}} = Workspace.create_for_issue("MT-SWEEP")
+      end)
+
+      assert File.exists?(Path.join([workspace_root, "default", ".MT-SWEEP.after_create_pending"]))
+      assert {:ok, [%{name: "MT-SWEEP"}]} = Workspace.local_workspace_entries()
+    after
+      File.rm_rf(workspace_root)
+    end
+  end
+
   test "workspace reports each hook run to on_hook, with the hook's timeout" do
     workspace_root = Path.join(System.tmp_dir!(), "symphony-elixir-workspace-on-hook-#{System.unique_integer([:positive])}")
     test_pid = self()
@@ -4954,6 +4974,187 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
                Workspace.create_for_issue("MT-BAD-ROOT", "worker-01")
 
       assert output =~ "workspace_root_unreadable: #{workspace_root}"
+    end)
+  end
+
+  test "remote after_create that failed runs again on the next run, and not once it has succeeded" do
+    with_real_exec_fake_ssh(fn ctx ->
+      workspace_root = Path.join(ctx.test_root, "wsroot")
+      workspace_path = Path.join([workspace_root, "default", "MT-SSH-AC"])
+      pending_marker = Path.join([workspace_root, "default", ".MT-SSH-AC.after_create_pending"])
+      runs_file = Path.join(ctx.test_root, "after_create.runs")
+      setup_ready = Path.join(ctx.test_root, "setup-ready")
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        worker_ssh_hosts: ["worker-01"],
+        hook_after_create: "echo run >> #{runs_file}\ntest -f #{setup_ready}"
+      )
+
+      capture_log(fn ->
+        assert {:error, {:workspace_hook_failed, "after_create", 1, _output}} =
+                 Workspace.create_for_issue("MT-SSH-AC", "worker-01")
+      end)
+
+      # The hook's shell left its pid in the marker beside the workspace, and is gone.
+      assert File.dir?(workspace_path)
+      assert File.read!(pending_marker) =~ ~r/^\d+\n$/
+
+      File.write!(setup_ready, "")
+
+      log =
+        capture_log(fn ->
+          assert {:ok, ^workspace_path} = Workspace.create_for_issue("MT-SSH-AC", "worker-01")
+        end)
+
+      assert log =~ "Running workspace hook an earlier run left unfinished hook=after_create"
+      assert log =~ "worker_host=worker-01"
+      assert File.read!(runs_file) == "run\nrun\n"
+      refute File.exists?(pending_marker)
+
+      assert {:ok, ^workspace_path} = Workspace.create_for_issue("MT-SSH-AC", "worker-01")
+      assert File.read!(runs_file) == "run\nrun\n"
+    end)
+  end
+
+  test "remote after_create whose ssh connection failed before it ran runs on the next run" do
+    with_real_exec_fake_ssh(fn ctx ->
+      workspace_root = Path.join(ctx.test_root, "wsroot")
+      workspace_path = Path.join([workspace_root, "default", "MT-SSH-DROP"])
+      pending_marker = Path.join([workspace_root, "default", ".MT-SSH-DROP.after_create_pending"])
+      runs_file = Path.join(ctx.test_root, "after_create.runs")
+      ssh_down = Path.join(ctx.test_root, "ssh-down")
+
+      # The connection for the hook drops (ssh exits 255) while `ssh-down` exists.
+      write_real_exec_fake_ssh!(Path.join(ctx.test_root, "ssh-real"))
+
+      File.write!(Path.join(ctx.test_root, "ssh"), """
+      #!/usr/bin/env bash
+      case "${@: -1}" in
+        *after_create_status*) [ -f #{ssh_down} ] && exit 255 ;;
+      esac
+      exec #{Path.join(ctx.test_root, "ssh-real")} "$@"
+      """)
+
+      File.write!(ssh_down, "")
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        worker_ssh_hosts: ["worker-01"],
+        hook_after_create: "echo run >> #{runs_file}"
+      )
+
+      capture_log(fn ->
+        assert {:error, {:workspace_hook_failed, "after_create", 255, _output}} =
+                 Workspace.create_for_issue("MT-SSH-DROP", "worker-01")
+      end)
+
+      # The prepare script marked the workspace it created; the hook never ran.
+      assert File.dir?(workspace_path)
+      assert File.read!(pending_marker) == ""
+      refute File.exists?(runs_file)
+
+      File.rm!(ssh_down)
+
+      log =
+        capture_log(fn ->
+          assert {:ok, ^workspace_path} = Workspace.create_for_issue("MT-SSH-DROP", "worker-01")
+        end)
+
+      assert log =~ "Running workspace hook an earlier run left unfinished hook=after_create"
+      assert File.read!(runs_file) == "run\n"
+      refute File.exists?(pending_marker)
+    end)
+  end
+
+  test "remote workspace setup waits for an after_create still running on the worker" do
+    with_real_exec_fake_ssh(fn ctx ->
+      workspace_root = Path.join(ctx.test_root, "wsroot")
+      workspace_path = Path.join([workspace_root, "default", "MT-SSH-BUSY"])
+      pending_marker = Path.join([workspace_root, "default", ".MT-SSH-BUSY.after_create_pending"])
+      runs_file = Path.join(ctx.test_root, "after_create.runs")
+
+      # A hook an earlier run timed out on, still running: this VM stands in for its shell.
+      File.mkdir_p!(workspace_path)
+      File.write!(pending_marker, "#{System.pid()}\n")
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        worker_ssh_hosts: ["worker-01"],
+        hook_after_create: "echo run >> #{runs_file}"
+      )
+
+      assert {:error, {:workspace_prepare_failed, "worker-01", 46, output}} =
+               Workspace.create_for_issue("MT-SSH-BUSY", "worker-01")
+
+      assert output =~ "workspace_after_create_still_running: pid #{System.pid()}"
+      refute File.exists?(runs_file)
+      assert File.exists?(pending_marker)
+    end)
+  end
+
+  test "removing a remote workspace whose after_create failed removes its pending marker too" do
+    with_real_exec_fake_ssh(fn ctx ->
+      workspace_root = Path.join(ctx.test_root, "wsroot")
+      workspace_path = Path.join([workspace_root, "default", "MT-SSH-RM"])
+      pending_marker = Path.join([workspace_root, "default", ".MT-SSH-RM.after_create_pending"])
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        worker_ssh_hosts: ["worker-01"],
+        hook_after_create: "exit 3"
+      )
+
+      capture_log(fn ->
+        assert {:error, {:workspace_hook_failed, "after_create", 3, _output}} =
+                 Workspace.create_for_issue("MT-SSH-RM", "worker-01")
+      end)
+
+      assert File.exists?(pending_marker)
+      assert {:ok, []} = Workspace.remove(workspace_path, "worker-01")
+      refute File.exists?(workspace_path)
+      refute File.exists?(pending_marker)
+    end)
+  end
+
+  test "remote worktree after_create that failed runs again on reuse, and removal takes its marker" do
+    with_real_exec_fake_ssh(fn ctx ->
+      workspace_root = Path.join(ctx.test_root, "wsroot")
+      primary_repo = Path.join(ctx.test_root, "primary")
+      workspace_path = Path.join([workspace_root, "default", "MT-WT-AC"])
+      pending_marker = Path.join([workspace_root, "default", ".MT-WT-AC.after_create_pending"])
+      setup_ready = Path.join(ctx.test_root, "setup-ready")
+
+      create_primary_repo!(primary_repo)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        workspace_fetch_before_dispatch: false,
+        worker_ssh_hosts: ["worker-01"],
+        hook_after_create: "test -f #{setup_ready} && echo set-up > setup.txt"
+      )
+
+      capture_log(fn ->
+        assert {:error, {:workspace_hook_failed, "after_create", 1, _output}} =
+                 Workspace.create_for_issue("MT-WT-AC", "worker-01")
+      end)
+
+      assert File.exists?(pending_marker)
+      File.write!(setup_ready, "")
+
+      capture_log(fn ->
+        assert {:ok, ^workspace_path} = Workspace.create_for_issue("MT-WT-AC", "worker-01")
+      end)
+
+      assert File.read!(Path.join(workspace_path, "setup.txt")) == "set-up\n"
+      refute File.exists?(pending_marker)
+
+      File.write!(pending_marker, "")
+      assert {:ok, []} = Workspace.remove(workspace_path, "worker-01")
+      refute File.exists?(workspace_path)
+      refute File.exists?(pending_marker)
     end)
   end
 
