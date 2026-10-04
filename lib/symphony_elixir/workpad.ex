@@ -7,7 +7,7 @@ defmodule SymphonyElixir.Workpad do
   instead of failing the run.
   """
 
-  alias SymphonyElixir.{AgentLabels, AgentTools, Config, Linear.Issue, Linear.TransientRetry, Tracker}
+  alias SymphonyElixir.{AgentLabels, AgentTools, Config, Linear.Issue, Linear.TransientRetry, PromptSafety, Tracker}
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
 
   @in_progress_state "In Progress"
@@ -216,9 +216,7 @@ defmodule SymphonyElixir.Workpad do
     |> String.trim()
     |> String.replace_prefix("<linear_issue_comment_body>\n", "")
     |> String.replace_suffix("\n</linear_issue_comment_body>", "")
-    |> String.replace("&lt;", "<")
-    |> String.replace("&gt;", ">")
-    |> String.replace("&amp;", "&")
+    |> PromptSafety.unescape_comment_body()
   end
 
   defp workpad_body?(body) when is_binary(body) do
