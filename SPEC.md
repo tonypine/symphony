@@ -1189,6 +1189,11 @@ When enabled:
   later MUST be moved by the next poll instead of dispatched.
 - The post-PR transition MUST NOT apply to an issue in `Merging`: that state is a human's merge
   approval, so Symphony MUST keep the issue in `Merging` and leave it with the landing agent.
+- The post-PR transition MUST NOT apply while the workspace of the run that last worked on the
+  issue has commits no remote-tracking branch has: the PR is still on its old head. Symphony MUST
+  log it, keep the issue in its active state and dispatch it again, so the next run reviews and
+  pushes those commits. A workspace it cannot read (an SSH worker, no git checkout) does not block
+  the transition.
 - `linear_update_state` MUST refuse `In Review` from agent sessions with a clear error telling the
   agent that Symphony moves the issue once the PR is open, rather than redirecting the target
   state. A `breakdown` parent and a ticket whose title starts with `Final verification:` open no
@@ -1730,6 +1735,12 @@ Important nuance:
   the run and move to the post-PR state, even while the review, CI, QA or conflict signal that
   started the run is still pending. Such a signal is only cleared once the run ends, so without
   this a fix run on an open PR never ends on its own.
+- A run on an active issue with an attached PR and no pending review, CI, QA or conflict signal
+  (outside `Rework` and `Merging`) MUST end after a turn only once its work is on the PR: the
+  workspace `HEAD` is the PR head and, when the pre-push reviewer applies to the run, that head is
+  the one the run started on or has passed the reviewer. Otherwise it MUST log why and continue, so
+  the reviewer runs and the agent pushes. When the workspace `HEAD` or the PR head cannot be read,
+  the run ends as before and the post-PR transition's workspace check applies.
 - When the workspace `HEAD` is readable, two consecutive turns with no new commit, no issue state
   change, no newly attached PR and no reviewer-agent verdict MUST end the run, move the issue to
   `Backlog` and post a comment saying why. This does not apply in `Merging`, nor while the attached

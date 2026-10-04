@@ -36,6 +36,17 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
+  defmodule UnpushedFixGitHub do
+    # Stands in for GitHub.PullRequest.fetch_ci_status/2 on a follow-up run whose fix is committed
+    # as `sha-fix`: the PR stays on `sha-old` until the reviewer has run and the executor pushes,
+    # or is on `sha-fix` from the start when `:unpushed_fix_pr_head` is `:pushed`.
+    def fetch_ci_status(_pr_url, _opts) do
+      reviewed? = Application.get_env(:symphony_elixir, :agent_runner_review_agent_count, 0) > 0
+      pushed? = Application.get_env(:symphony_elixir, :unpushed_fix_pr_head) == :pushed
+      {:ok, %{commit_sha: if(reviewed? or pushed?, do: "sha-fix", else: "sha-old"), checks: []}}
+    end
+  end
+
   defmodule ReviewAgentSequenceAppServer do
     def start_session(workspace, opts) do
       recipient = Application.fetch_env!(:symphony_elixir, :agent_runner_review_agent_recipient)
@@ -1737,6 +1748,67 @@ defmodule SymphonyElixir.CoreTest do
     assert %{state: "Auto Review", pull_request_url: ^pr_url} = state.watching[issue_id]
   end
 
+  test "a run that ended with commits its PR does not have stays active instead of moving to Auto Review" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-elixir-unpushed-post-pr-#{System.unique_integer([:positive])}")
+    on_exit(fn -> File.rm_rf(test_root) end)
+    repo = review_agent_repo!(test_root)
+    {head, 0} = System.cmd("git", ["-C", repo, "rev-parse", "HEAD"])
+    head = String.trim(head)
+    issue_id = "issue-unpushed-busy-slots"
+
+    log =
+      capture_log(fn ->
+        pid = end_run_with_busy_slots(issue_id, :UnpushedBusySlotsOrchestrator, "https://github.com/example/repo/pull/461", workspace_path: repo)
+        state = wait_for_orchestrator_state(pid, &Map.has_key?(&1.slot_waiting, issue_id), 2_000)
+
+        assert %{attempt: 1} = state.slot_waiting[issue_id]
+        assert %{unpushed_head: ^head, workspace_path: ^repo} = state.completed_run_metadata[issue_id]
+        refute Map.has_key?(state.watching, issue_id)
+        refute_received {:memory_tracker_state_update, ^issue_id, _state}
+      end)
+
+    assert log =~ "Not moving issue_id=#{issue_id} issue_identifier=MT-385 to Auto Review: its workspace HEAD #{head} has commits its PR does not; keeping it in In Progress"
+    refute log =~ "moving to Auto Review"
+  end
+
+  test "the poll keeps a slot-waiting issue with unpushed commits waiting instead of moving it" do
+    write_post_pr_auto_review_workflow!()
+    Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+    on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_recipient) end)
+
+    test_root = Path.join(System.tmp_dir!(), "symphony-elixir-unpushed-slot-wait-#{System.unique_integer([:positive])}")
+    on_exit(fn -> File.rm_rf(test_root) end)
+    repo = review_agent_repo!(test_root)
+    issue_id = "issue-unpushed-slot-wait"
+    last_ran_at = DateTime.utc_now()
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-461",
+      title: "Unpushed fix",
+      state: "In Progress",
+      pull_request_url: "https://github.com/example/repo/pull/461",
+      updated_at: DateTime.add(last_ran_at, -10, :second)
+    }
+
+    state = %Orchestrator.State{
+      running: %{},
+      claimed: MapSet.new(),
+      budget_exhausted: MapSet.new(),
+      max_concurrent_agents: 0,
+      completed_run_metadata: %{issue_id => %{identifier: "MT-461", last_ran_at: last_ran_at, workspace_path: repo}},
+      slot_waiting: %{issue_id => %{attempt: 1, since: DateTime.utc_now(), state: "In Progress"}}
+    }
+
+    log = capture_log(fn -> send(self(), {:state, Orchestrator.dispatch_chosen_issues_for_test([issue], state)}) end)
+    assert_received {:state, state}
+
+    refute_received {:memory_tracker_state_update, ^issue_id, _state}
+    assert Map.has_key?(state.slot_waiting, issue_id)
+    assert is_binary(state.completed_run_metadata[issue_id].unpushed_head)
+    assert log =~ "Not moving issue_id=#{issue_id} issue_identifier=MT-461 to Auto Review"
+  end
+
   defp write_post_pr_auto_review_workflow!(overrides \\ []) do
     write_workflow_file!(
       Workflow.workflow_file_path(),
@@ -1753,13 +1825,14 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   # Ends a run that was dispatched without a PR while another run holds the only slot, then
-  # fires its continuation retry. `pr_url` is the PR the refetched issue has attached.
+  # fires its continuation retry. `pr_url` is the PR the refetched issue has attached, and
+  # `run_opts[:workspace_path]` the workspace the run worked in.
   #
   # The orchestrator polls once on startup; the runs and their issues go in only after that poll
   # has passed over an empty tracker, and the next one is a poll interval away. A poll that does
   # come (one a state move requests) finds the busy issue in the tracker and keeps its slot taken.
   # Both runs point at a stand-in worker, not the test process: stopping a run sends `:shutdown`.
-  defp end_run_with_busy_slots(issue_id, name, pr_url) do
+  defp end_run_with_busy_slots(issue_id, name, pr_url, run_opts \\ []) do
     write_post_pr_auto_review_workflow!(max_concurrent_agents: 1)
     last_ran_at = DateTime.utc_now()
     dispatched = %Issue{id: issue_id, identifier: "MT-385", title: "Open a PR", state: "In Progress"}
@@ -1799,7 +1872,7 @@ defmodule SymphonyElixir.CoreTest do
     :sys.replace_state(pid, fn state ->
       state
       |> Map.put(:running, %{
-        issue_id => Map.merge(run, %{ref: ref, identifier: "MT-385", issue: dispatched}),
+        issue_id => Map.merge(run, %{ref: ref, identifier: "MT-385", issue: dispatched, workspace_path: run_opts[:workspace_path]}),
         busy.id => Map.merge(run, %{ref: make_ref(), identifier: "MT-BUSY", issue: busy})
       })
       |> Map.put(:claimed, MapSet.new([issue_id, busy.id]))
@@ -5555,6 +5628,71 @@ defmodule SymphonyElixir.CoreTest do
     after
       clear_review_agent_env!()
       File.rm_rf(test_root)
+    end
+  end
+
+  test "agent runner reviews a follow-up run's unpushed fix and keeps going until its PR has it" do
+    for pr_head <- [:old, :pushed] do
+      test_root =
+        Path.join(
+          System.tmp_dir!(),
+          "symphony-elixir-agent-runner-unpushed-fix-#{System.unique_integer([:positive])}"
+        )
+
+      try do
+        repo = review_agent_repo!(test_root)
+        codex_binary = Path.join(test_root, "fake-codex")
+        trace_file = Path.join(test_root, "codex.trace")
+        pr_url = "https://github.com/example/repo/pull/461"
+        issue = %{review_agent_issue() | pull_request_url: pr_url}
+
+        write_review_agent_fake_codex!(codex_binary, trace_file)
+        write_review_agent_workflow!(codex_binary, max_turns: 4)
+        put_review_agent_responses!([~s({"verdict":"approve","comments":[]})])
+        Application.put_env(:symphony_elixir, :unpushed_fix_pr_head, pr_head)
+        Process.delete(:unpushed_fix_fetches)
+
+        # The run starts on the PR's old head; its first turn commits the fix.
+        head_reader = fn ^repo, nil -> if Process.get(:unpushed_fix_fetches, 0) == 0, do: "sha-old", else: "sha-fix" end
+
+        state_fetcher = fn [_issue_id] ->
+          Process.put(:unpushed_fix_fetches, Process.get(:unpushed_fix_fetches, 0) + 1)
+          {:ok, [issue]}
+        end
+
+        log =
+          capture_log(fn ->
+            assert :ok =
+                     AgentRunner.run(issue, self(),
+                       workspace_path: repo,
+                       issue_state_fetcher: state_fetcher,
+                       issue_enricher: no_op_issue_enricher(),
+                       review_agent_module: ReviewAgentSequenceAppServer,
+                       github: UnpushedFixGitHub,
+                       workspace_head_reader: head_reader
+                     )
+          end)
+
+        assert_receive {:review_agent_call, 1, _session, _review_prompt, _issue, _opts}
+        refute_receive {:review_agent_call, 2, _session, _prompt, _issue, _opts}, 50
+
+        turn_texts = review_agent_turn_texts!(trace_file)
+        assert length(turn_texts) == 2
+        assert Enum.at(turn_texts, 1) =~ "Reviewer agent approved the committed diff"
+
+        not_stopped =
+          case pr_head do
+            :old -> "workspace HEAD sha-fix is not its PR head sha-old"
+            :pushed -> "its PR head sha-fix has not passed the pre-push reviewer"
+          end
+
+        assert log =~ "Not stopping agent run for issue_id=issue-review-agent-runner issue_identifier=MT-SR-RUNNER after PR opened; #{not_stopped}"
+        assert log =~ "Stopping agent run for issue_id=issue-review-agent-runner issue_identifier=MT-SR-RUNNER after PR opened"
+      after
+        clear_review_agent_env!()
+        Application.delete_env(:symphony_elixir, :unpushed_fix_pr_head)
+        File.rm_rf(test_root)
+      end
     end
   end
 

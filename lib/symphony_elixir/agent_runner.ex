@@ -619,7 +619,7 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp continue_after_completed_turn(issue, issue_state_fetcher, opts, run_context, agent_module, app_session, turn_number, max_turns) do
-    case continue_with_issue?(issue, issue_state_fetcher, opts) do
+    case continue_with_issue?(issue, issue_state_fetcher, opts, run_context) do
       {:continue, refreshed_issue} ->
         run_context = track_turn_progress(run_context, refreshed_issue)
 
@@ -1305,13 +1305,13 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp continue_with_issue?(%Issue{id: issue_id} = issue, issue_state_fetcher, opts) when is_binary(issue_id) do
+  defp continue_with_issue?(%Issue{id: issue_id} = issue, issue_state_fetcher, opts, run_context) when is_binary(issue_id) do
     case refresh_issue_state(issue, issue_state_fetcher, opts) do
       {:ok, [%Issue{} = refreshed_issue | _]} ->
         audit_linear_state_transition(issue, refreshed_issue, Keyword.get(opts, :run_id), opts)
 
         cond do
-          post_pr_quiet_continuation?(issue, refreshed_issue, opts) ->
+          post_pr_quiet_continuation?(issue, refreshed_issue, run_context) ->
             Logger.info("Stopping agent run for #{issue_context(refreshed_issue)} after PR opened; waiting for review, CI, or manual rework signal")
             {:done, refreshed_issue}
 
@@ -1338,7 +1338,7 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp continue_with_issue?(issue, _issue_state_fetcher, _opts), do: {:done, issue}
+  defp continue_with_issue?(issue, _issue_state_fetcher, _opts, _run_context), do: {:done, issue}
 
   # The turn is done; a rate limit or a dropped connection on this refresh says
   # nothing about the run. Wait for Linear in this run and session instead of
@@ -1368,15 +1368,54 @@ defmodule SymphonyElixir.AgentRunner do
     Issue.waiting_on_sub_issues?(issue, terminal_states) or SubIssueWait.held?(issue, terminal_states, settings)
   end
 
-  defp post_pr_quiet_continuation?(%Issue{} = previous_issue, %Issue{} = refreshed_issue, opts) do
-    if attached_pr?(previous_issue) or attached_pr?(refreshed_issue) do
-      active_issue_state?(refreshed_issue.state) and
-        !rework_state?(refreshed_issue.state) and
-        !merging_state?(refreshed_issue.state) and
-        no_pending_rework_signal?(refreshed_issue, opts)
-    else
-      false
+  defp post_pr_quiet_continuation?(%Issue{} = previous_issue, %Issue{} = refreshed_issue, run_context) do
+    case URLUtils.pull_request_url(refreshed_issue) || URLUtils.pull_request_url(previous_issue) do
+      pr_url when is_binary(pr_url) ->
+        active_issue_state?(refreshed_issue.state) and
+          !rework_state?(refreshed_issue.state) and
+          !merging_state?(refreshed_issue.state) and
+          no_pending_rework_signal?(refreshed_issue, run_context.opts) and
+          work_on_pr?(refreshed_issue, pr_url, run_context)
+
+      nil ->
+        false
     end
+  end
+
+  # The run's work is on its PR once the workspace HEAD is the PR head and that head has passed the
+  # pre-push reviewer, when the reviewer applies to the run. A commit the run has not pushed, or
+  # pushed without a review, keeps the run going: the next turn runs the reviewer and the agent
+  # pushes. An unreadable HEAD or PR head stops the run as before; the orchestrator checks the
+  # workspace for unpushed commits before it moves the issue on.
+  defp work_on_pr?(%Issue{} = issue, pr_url, run_context) do
+    head = read_workspace_head(run_context.workspace, run_context.worker_host, run_context.opts)
+    github = Keyword.get(run_context.opts, :github, PullRequest)
+
+    with true <- is_binary(head),
+         {:ok, %{commit_sha: pr_head}} when is_binary(pr_head) <-
+           github.fetch_ci_status(pr_url, cwd: run_context.workspace) do
+      cond do
+        pr_head != head ->
+          Logger.info("Not stopping agent run for #{issue_context(issue)} after PR opened; workspace HEAD #{head} is not its PR head #{pr_head}, continuing so it is reviewed and pushed")
+          false
+
+        not head_reviewed?(head, run_context) ->
+          Logger.info("Not stopping agent run for #{issue_context(issue)} after PR opened; its PR head #{head} has not passed the pre-push reviewer, continuing")
+          false
+
+        true ->
+          true
+      end
+    else
+      _unknown -> true
+    end
+  end
+
+  defp head_reviewed?(head, %{progress: progress, review_agent: review_agent, opts: opts}) do
+    config = opts |> Keyword.fetch!(:settings) |> Map.fetch!(:review_agent)
+
+    head == progress.start_head or review_agent.phase == :complete or
+      not ReviewAgent.enabled?(config) or ReviewAgent.skip_for_run?(config, opts)
   end
 
   defp no_pending_rework_signal?(%Issue{} = issue, opts) do

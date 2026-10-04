@@ -37,7 +37,8 @@ defmodule SymphonyElixir.Orchestrator do
     URLUtils,
     UsageLimit,
     Verification,
-    Workspace
+    Workspace,
+    WorkspaceHead
   }
 
   alias SymphonyElixir.Linear.{Client, Issue, RateLimit, TransientRetry, Usage}
@@ -2946,8 +2947,15 @@ defmodule SymphonyElixir.Orchestrator do
       # Its PR showed up after its retry started waiting; the move takes no slot.
       Map.has_key?(previous_waiting, issue.id) and post_pr_quiet_active_issue?(issue, state) ->
         metadata = Map.take(waiting, [:repo_key, :worker_host])
-        {:noreply, state} = handle_post_pr_quiet_active_issue(state, issue, issue.id, Map.get(waiting, :attempt), metadata)
-        {state, hold}
+
+        case keep_unpushed_issue_active(state, issue, metadata) do
+          {:unpushed, state} ->
+            maybe_dispatch_chosen_issue(issue, {state, hold}, previous_waiting, active_states, terminal_states)
+
+          :pushed ->
+            {:noreply, state} = handle_post_pr_quiet_active_issue(state, issue, issue.id, Map.get(waiting, :attempt), metadata)
+            {state, hold}
+        end
 
       not dispatch_eligible?(issue, state, active_states, terminal_states) ->
         {state, hold}
@@ -4334,7 +4342,10 @@ defmodule SymphonyElixir.Orchestrator do
         {:noreply, state |> forget_completed_issue(issue_id) |> release_issue_claim(issue_id)}
 
       post_pr_quiet_active_issue?(issue, state) ->
-        handle_post_pr_quiet_active_issue(state, issue, issue_id, attempt, metadata)
+        case keep_unpushed_issue_active(state, issue, metadata) do
+          {:unpushed, state} -> handle_retry_issue_lookup(issue, state, issue_id, attempt, metadata)
+          :pushed -> handle_post_pr_quiet_active_issue(state, issue, issue_id, attempt, metadata)
+        end
 
       active_retry_issue?(issue, terminal_states) ->
         issue = freeze_issue_repo_key(issue, retry_repo_key(state, metadata, %{}))
@@ -4357,6 +4368,27 @@ defmodule SymphonyElixir.Orchestrator do
   defp handle_retry_issue_lookup(nil, state, issue_id, _attempt, _metadata) do
     Logger.debug("Issue no longer visible, removing claim issue_id=#{issue_id}")
     {:noreply, state |> forget_completed_issue(issue_id) |> release_issue_claim(issue_id)}
+  end
+
+  # The run that last worked on the PR ended with commits in its workspace that no remote has, so
+  # the PR is still on its old head. Moving on would put that old head through review, so the
+  # issue stays active, and the marker on its completed run lets it be dispatched again to review
+  # and push them. The next run's completion replaces the marker.
+  defp keep_unpushed_issue_active(%State{} = state, %Issue{id: issue_id} = issue, metadata) do
+    completed_metadata = Map.get(state.completed_run_metadata, issue_id, %{})
+    workspace = metadata[:workspace_path] || Map.get(completed_metadata, :workspace_path)
+    worker_host = metadata[:worker_host] || Map.get(completed_metadata, :worker_host)
+
+    case WorkspaceHead.unpushed_head(workspace, worker_host) do
+      nil ->
+        :pushed
+
+      head ->
+        post_pr_state = AutoReview.post_pr_state(Config.settings!())
+        Logger.warning("Not moving #{issue_context(issue)} to #{post_pr_state}: its workspace HEAD #{head} has commits its PR does not; keeping it in #{issue.state}")
+        completed_metadata = Map.put(completed_metadata, :unpushed_head, head)
+        {:unpushed, %{state | completed_run_metadata: Map.put(state.completed_run_metadata, issue_id, completed_metadata)}}
+    end
   end
 
   defp handle_post_pr_quiet_active_issue(%State{} = state, %Issue{} = issue, issue_id, attempt, metadata) do
@@ -7195,7 +7227,9 @@ defmodule SymphonyElixir.Orchestrator do
       review_agent_enabled: Map.get(running_entry, :review_agent_enabled, false),
       transcript_path: Map.get(running_entry, :transcript_path),
       transcript_buffer: transcript_buffer_list(running_entry),
-      transcript_buffer_size: transcript_buffer_size(running_entry)
+      transcript_buffer_size: transcript_buffer_size(running_entry),
+      worker_host: Map.get(running_entry, :worker_host),
+      workspace_path: Map.get(running_entry, :workspace_path)
     }
   end
 
@@ -7934,6 +7968,7 @@ defmodule SymphonyElixir.Orchestrator do
     completed_metadata = Map.get(state.completed_run_metadata, issue_id)
 
     is_map(completed_metadata) and
+      is_nil(Map.get(completed_metadata, :unpushed_head)) and
       (completed_run_has_pr?(completed_metadata) or is_binary(URLUtils.pull_request_url(issue))) and
       active_issue_state?(issue.state) and
       !rework_state?(issue.state) and
