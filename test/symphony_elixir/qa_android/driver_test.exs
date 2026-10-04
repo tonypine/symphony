@@ -8,6 +8,8 @@ defmodule SymphonyElixir.QaAndroid.DriverTest do
 
   @apk "app/build/outputs/apk/debug/app-debug.apk"
   @app_id "com.example.app"
+  @catalog_apk "app-catalog/build/outputs/apk/debug/app-catalog-debug.apk"
+  @catalog_id "com.example.app.catalog"
   @adb "/sdk/platform-tools/adb"
   @adb_prefix ["-P", "15037", "-s", "emulator-5600"]
   @build "./gradlew :app:assembleDebug"
@@ -23,6 +25,8 @@ defmodule SymphonyElixir.QaAndroid.DriverTest do
     worktree = Path.join(root, "worktree")
     File.mkdir_p!(Path.join(worktree, Path.dirname(@apk)))
     File.write!(Path.join(worktree, @apk), "apk-bytes")
+    File.mkdir_p!(Path.join(worktree, Path.dirname(@catalog_apk)))
+    File.write!(Path.join(worktree, @catalog_apk), "catalog-bytes")
     on_exit(fn -> File.rm_rf(root) end)
     %{root: root, worktree: worktree}
   end
@@ -117,6 +121,31 @@ defmodule SymphonyElixir.QaAndroid.DriverTest do
     end
   end
 
+  defp two_apps, do: %{apk_paths: [@apk, @catalog_apk], application_ids: [@app_id, @catalog_id]}
+
+  # Installs the app APK as the app, and the catalog APK as `catalog_package`
+  # (nothing when `nil`).
+  defp catalog_install(catalog_package \\ @catalog_id) do
+    fn ["install", "-r", copy], packages ->
+      case File.read!(copy) do
+        "apk-bytes" -> Agent.update(packages, &Map.put(&1, @app_id, code_path(@app_id)))
+        "catalog-bytes" when catalog_package != nil -> Agent.update(packages, &Map.put(&1, catalog_package, code_path(catalog_package)))
+        "catalog-bytes" -> :ok
+      end
+
+      {:ok, {"Success\n", 0}}
+    end
+  end
+
+  # Both apps install, launch and come to the foreground.
+  defp two_app_device, do: device(%{install: catalog_install(), resolve: &resolved/1, dumpsys: both_resumed()})
+
+  defp resolved(args), do: {:ok, {"#{List.last(args)}/.MainActivity\n", 0}}
+
+  defp both_resumed do
+    {:ok, {"  mResumedActivity: ActivityRecord{1f u0 #{@app_id}/.MainActivity t7}\n  ResumedActivity: ActivityRecord{2a u0 #{@catalog_id}/.MainActivity t8}\n", 0}}
+  end
+
   defp lease, do: %{lease: make_ref(), serial: "emulator-5600", adb: @adb, adb_server_port: 15_037}
 
   defp clean_git(_args, _cwd), do: {"", 0}
@@ -124,7 +153,7 @@ defmodule SymphonyElixir.QaAndroid.DriverTest do
   # `nil` drops an option, so the driver uses its default.
   defp driver_opts(worktree, opts \\ []) do
     test = self()
-    playbook = Map.merge(%{kind: "android_app", build: @build, apk_path: @apk, application_ids: [@app_id]}, Keyword.get(opts, :playbook, %{}))
+    playbook = Map.merge(%{kind: "android_app", build: @build, apk_paths: [@apk], application_ids: [@app_id]}, Keyword.get(opts, :playbook, %{}))
 
     [
       worktree: worktree,
@@ -357,7 +386,7 @@ defmodule SymphonyElixir.QaAndroid.DriverTest do
             {"app/alias.apk", "qa_apk_unsafe"},
             {"app/missing.apk", "qa_apk_missing"}
           ] do
-        driver = start_driver(worktree, playbook: %{apk_path: apk_path})
+        driver = start_driver(worktree, playbook: %{apk_paths: [apk_path]})
         assert {:error, {:qa_tool, ^code, message}} = call(driver, "qa_android_install")
         assert message =~ apk_path
       end
@@ -427,7 +456,7 @@ defmodule SymphonyElixir.QaAndroid.DriverTest do
       initial = %{"com.other.app" => code_path("com.other.app"), "com.keep.app" => code_path("com.keep.app"), @app_id => code_path(@app_id)}
       driver = start_driver(worktree, cmd: device(%{}, "com.other.app", initial))
       assert {:error, {:qa_tool, "qa_apk_package_not_configured", message}} = call(driver, "qa_android_install")
-      assert message =~ "The APK installed com.other.app,"
+      assert message =~ "#{@apk} installed com.other.app,"
       calls = adb_calls()
       assert ["uninstall", "com.other.app"] in calls
       refute ["uninstall", "com.keep.app"] in calls
@@ -486,6 +515,91 @@ defmodule SymphonyElixir.QaAndroid.DriverTest do
         assert {:error, {:qa_tool, "qa_android_adb_failed", message}} = call(driver, "qa_android_install")
         assert message =~ "adb shell pm list packages -3 -f failed: #{text}"
       end
+    end
+
+    test "installs every configured APK, each with the IDs it installed, and launches either app", %{worktree: worktree} do
+      driver = start_driver(worktree, playbook: two_apps(), cmd: two_app_device())
+      %{scratch_dir: scratch_dir} = GenServer.call(driver, :config)
+
+      assert {:ok, %{"installed" => [@app_id, @catalog_id], "apks" => apks}} = call(driver, "qa_android_install")
+      assert apks == [%{"apk" => @apk, "application_ids" => [@app_id]}, %{"apk" => @catalog_apk, "application_ids" => [@catalog_id]}]
+
+      # Both configured apps are wiped once, then each copy installs in turn.
+      list = ["shell", "pm", "list", "packages", "-3", "-f"]
+      assert [^list, ^list, ["uninstall", @app_id], ["uninstall", @catalog_id] | installs] = adb_calls()
+      assert [["install", "-r", app_copy], ^list, ["install", "-r", catalog_copy], ^list] = installs
+      assert Enum.all?([app_copy, catalog_copy], &String.starts_with?(&1, scratch_dir <> "/"))
+      assert File.ls!(scratch_dir) == []
+
+      for id <- [@app_id, @catalog_id] do
+        assert {:ok, %{"application_id" => ^id, "activity" => activity}} = call(driver, "qa_android_launch", %{"application_id" => id})
+        assert activity == "#{id}/.MainActivity"
+        assert {:ok, %{"stopped" => true}} = call(driver, "qa_android_stop", %{"application_id" => id})
+      end
+
+      Driver.stop(driver)
+      calls = adb_calls()
+      assert ["uninstall", @app_id] in calls
+      assert ["uninstall", @catalog_id] in calls
+    end
+
+    test "installs only the APK `apk` names, after wiping every configured app", %{worktree: worktree} do
+      driver = start_driver(worktree, playbook: two_apps(), cmd: two_app_device())
+      assert {:ok, %{"installed" => [@app_id, @catalog_id]}} = call(driver, "qa_android_install")
+      adb_calls()
+
+      assert {:ok, %{"installed" => [@catalog_id], "apks" => [%{"apk" => @catalog_apk}]}} = call(driver, "qa_android_install", %{"apk" => @catalog_apk})
+      calls = adb_calls()
+      assert ["uninstall", @app_id] in calls
+      assert [["install", "-r", _copy]] = Enum.filter(calls, &match?(["install" | _rest], &1))
+      assert {:ok, _launched} = call(driver, "qa_android_launch", %{"application_id" => @catalog_id})
+      assert error_code(call(driver, "qa_android_launch", %{"application_id" => @app_id})) == "qa_android_not_installed"
+      adb_calls()
+
+      # Only a configured path, as a string, is taken, and nothing reaches the device.
+      assert {:error, {:qa_tool, "qa_apk_not_configured", message}} = call(driver, "qa_android_install", %{"apk" => "../outside/app.apk"})
+      assert message =~ "(#{@apk}, #{@catalog_apk})"
+      assert {:error, {:qa_tool, "invalid_arguments", message}} = call(driver, "qa_android_install", %{"apk" => 7})
+      assert message =~ @catalog_apk
+      assert adb_calls() == []
+    end
+
+    test "checks every APK path before the device changes", %{worktree: worktree} do
+      File.ln_s!(Path.join(worktree, @apk), Path.join(worktree, "app/alias.apk"))
+
+      for {apks, code, text} <- [
+            {[@apk, "app/alias.apk"], "qa_apk_unsafe", "app/alias.apk is a symlink"},
+            {[@apk, "../outside.apk"], "qa_apk_outside_worktree", "../outside.apk"},
+            {[@apk, "app/missing.apk"], "qa_apk_missing", "app/missing.apk could not be read"}
+          ] do
+        driver = start_driver(worktree, playbook: %{apk_paths: apks})
+        assert {:error, {:qa_tool, ^code, message}} = call(driver, "qa_android_install")
+        assert message =~ text
+        # The first APK's copy is removed too.
+        assert File.ls!(GenServer.call(driver, :config).scratch_dir) == []
+      end
+
+      File.write!(Path.join(worktree, @catalog_apk), String.duplicate("x", 10))
+      oversized = start_driver(worktree, playbook: two_apps(), max_apk_bytes: 9)
+      assert {:error, {:qa_tool, "qa_apk_too_large", message}} = call(oversized, "qa_android_install")
+      assert message =~ "#{@catalog_apk} is 10 bytes"
+      refute Enum.any?(adb_calls(), &match?(["install" | _rest], &1))
+    end
+
+    test "refuses a later APK that installs an unconfigured package or nothing, and uninstalls what the earlier ones installed", %{worktree: worktree} do
+      evil = catalog_install("com.evil.app")
+      driver = start_driver(worktree, playbook: two_apps(), cmd: device(%{install: evil}))
+      assert {:error, {:qa_tool, "qa_apk_package_not_configured", message}} = call(driver, "qa_android_install")
+      assert message =~ "#{@catalog_apk} installed com.evil.app,"
+      # The app the first APK installed is uninstalled after the refusal.
+      assert {_before, [["uninstall", "com.evil.app"] | after_refusal]} = Enum.split_while(adb_calls(), &(&1 != ["uninstall", "com.evil.app"]))
+      assert ["uninstall", @app_id] in after_refusal
+      assert error_code(call(driver, "qa_android_launch", %{"application_id" => @app_id})) == "qa_android_not_installed"
+
+      nothing = start_driver(worktree, playbook: two_apps(), cmd: device(%{install: catalog_install(nil)}))
+      assert {:error, {:qa_tool, "qa_apk_package_not_configured", message}} = call(nothing, "qa_android_install")
+      assert message =~ "#{@catalog_apk} installed none of the configured application_ids (#{@app_id}, #{@catalog_id})"
+      assert ["uninstall", @app_id] in adb_calls()
     end
   end
 

@@ -6,7 +6,10 @@ You build the APK yourself, in your own sandbox, with the build command under "A
 below. Your sandbox cannot run the emulator, so Symphony runs it on the host and gives you these
 tools. They only act on Symphony's emulator and on the application IDs listed below:
 
-- `qa_android_install`: installs the APK the build wrote at the APK path, with fresh app data.
+- `qa_android_install`: installs the APKs the build wrote at the APK paths, with fresh app data,
+  and reports the application IDs each one installed. Pass `apk` to install only one of them.
+  Every install first uninstalls every configured app, so when the walkthrough uses more than
+  one app (say the app and a catalog), install them all at once.
 - `qa_android_launch` and `qa_android_stop`: start an app (and wait until it is in the
   foreground) and force-stop it, by `application_id`.
 - `qa_android_ui_tree`: what is on screen, as a flat list of nodes with a `path` (like `0.2.1`),
@@ -27,7 +30,8 @@ build's own outputs (gitignored files) are fine.
    limit. A build that fails on a change that should build is a failing step; quote the end of
    the output. A build that cannot start (no JDK, no Android SDK, dependencies that cannot
    download) is `blocked`, with the error as the reason.
-2. Run `qa_android_install`, then `qa_android_launch` with the app's application ID.
+2. Run `qa_android_install`, then `qa_android_launch` with the application ID of the app the
+   walkthrough step uses (the install result says which APK installed which ID).
 3. Follow the ticket's `## User walkthrough` step by step, then check the acceptance criteria.
    When there is no walkthrough, open each screen the change touches (from the acceptance
    criteria and the changed files) and use the controls it adds or changes. Find nodes with
