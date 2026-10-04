@@ -166,7 +166,8 @@ defmodule SymphonyElixir.AutoReview do
       record: record,
       sha: sha,
       pr_url: Map.get(ci_status, :pr_url) || Map.get(record, :pr_url),
-      settings: settings
+      settings: settings,
+      forced: Issue.forced?(issue, settings)
     }
 
     case Keyword.get(opts, :qa_runner, QaRunner).request(job, Keyword.take(opts, [:tracker, :run_store])) do

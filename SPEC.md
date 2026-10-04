@@ -2025,13 +2025,25 @@ Forced allowance:
   sub-issues use normal slots and the epic lane. Forcing a sub-issue forces only that sub-issue.
 - Forcing never moves an issue or approves a plan: a forced parent in `In Review` stays there until
   a human moves it.
+- A forced issue's Auto Review QA request goes to the front of the QA queue: while it is queued, a
+  free QA slot MUST be turned away from unforced requests. A queued forced request holds the slot
+  only while it is refreshed: once no request has come for it in two CI poll intervals (the issue
+  left Auto Review or its CI is no longer green), unforced requests MUST take free slots again.
+  When every QA slot is busy, a forced request starts its pass on the forced allowance if fewer
+  than `forced_max` forced runs and forced QA passes are going (the QA runner MAY read the
+  orchestrator's forced runs from its published snapshot, so the count can lag by one publish
+  interval). A pass on the allowance takes no QA slot and counts toward `forced_max` for the
+  orchestrator's dispatch too; past `forced_max` the request stays queued at the front and no
+  extra pass starts. Forcing never skips QA or changes its verdict. A forced `Final verification:`
+  parent walkthrough is an ordinary dispatch and uses the forced allowance like any other run.
 
 Finishing limit:
 
 - A landing run (an issue in `Merging` that is not a parent ticket) does not use `available_slots`
   or an epic lane. It needs `landing_running_count < finishing_max` instead.
 - Auto Review QA passes run outside the orchestrator's slots, at most
-  `min(auto_review.max_concurrent, finishing_max)` at once.
+  `min(auto_review.max_concurrent, finishing_max)` at once, not counting passes on the forced
+  allowance.
 
 Per-state limit:
 
@@ -3077,6 +3089,9 @@ SHOULD return:
   forced parent's current part
 - `forced` rows SHOULD include `sub_issue` (a forced `breakdown` parent's current part, or null)
   and `waiting_on_human` (the issue is in `Backlog`, `Triage` or `In Review`)
+- `qa` (Auto Review QA passes): `running` rows (`issue_id`, `identifier`, `sha`, `forced`: whether
+  the pass runs on the forced allowance) and `queued` rows (`issue_id`, `identifier`, `forced`:
+  whether the request is a forced ticket's, at the front of the queue)
 - `repos` (list of repo keys observed in current snapshot rows)
 - `conflicts` (list of issues that matched multiple repo routes and are excluded from dispatch)
 - `awaiting_clarification` and `skipped` quality-gate rows when quality gating is enabled
@@ -3294,6 +3309,10 @@ Minimum endpoints:
         "slots": 2,
         "used": 1,
         "running": [{"issue_id": "jkl012", "identifier": "MT-652", "state": "Merging"}]
+      },
+      "qa": {
+        "running": [{"issue_id": "mno345", "identifier": "MT-653", "sha": "abc1234def", "forced": true}],
+        "queued": []
       },
       "auto_merge": [
         {
@@ -4182,6 +4201,8 @@ infrastructure.
 - A forced `breakdown` parent waiting on its sub-issues forces one issue on its epic path at a
   time, in blocked-by order and without labelling it, then its close-out run; a forced parent in
   `In Review` is not moved
+- A forced issue's QA request goes to the front of the QA queue and, with the QA slots full,
+  starts on the forced allowance while it has room; its verdict is applied as for any pass
 - No `Todo` issue is dispatched while a `Merging` issue waits for a finishing slot
 - A queued QA pass holds `Todo` issues back only when it waits on `finishing_max`, not on
   `auto_review.max_concurrent`
