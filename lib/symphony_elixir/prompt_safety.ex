@@ -6,6 +6,10 @@ defmodule SymphonyElixir.PromptSafety do
   @title_limit 500
   @description_limit 10_000
   @comment_limit 5_000
+  # Symphony's own workpad is read back and rewritten whole by the agent, so a cut here
+  # deletes the tail from Linear on the next update.
+  @workpad_comment_limit 50_000
+  @truncation_marker_pattern ~r/\[\.\.\. truncated by Symphony: \w+ exceeded \d+ characters \.\.\.\]/
   @state_limit 100
   @acceptance_criteria_limit 10_000
   @ci_log_excerpt_limit 20_000
@@ -28,6 +32,20 @@ defmodule SymphonyElixir.PromptSafety do
 
   @spec linear_issue_comment_body(String.t()) :: String.t()
   def linear_issue_comment_body(value), do: linear_block(value, "linear_issue_comment_body", @comment_limit)
+
+  @doc """
+  Wraps a workpad comment like `linear_issue_comment_body/1`, with a limit large enough
+  that the agent reads the whole workpad before rewriting it.
+  """
+  @spec linear_workpad_comment_body(String.t()) :: String.t()
+  def linear_workpad_comment_body(value), do: linear_block(value, "linear_issue_comment_body", @workpad_comment_limit)
+
+  @doc """
+  True when `value` carries the marker `truncate_linear_text/3` appends, i.e. it was copied
+  from a cut read.
+  """
+  @spec truncated?(String.t()) :: boolean()
+  def truncated?(value) when is_binary(value), do: Regex.match?(@truncation_marker_pattern, value)
 
   @spec linear_issue_state(String.t()) :: String.t()
   def linear_issue_state(value), do: linear_block(value, "linear_linked_issue_state", @state_limit)

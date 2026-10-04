@@ -312,6 +312,7 @@ for the same kind of normal slot: after the stage (`Merging`, Auto Review, `Rewo
 are full, and a board full of Urgents stops saying which work matters. To have a ticket worked now,
 force it: add the `expedite` label (`agent.concurrency.force_label`) or run `symphony force TP-123`.
 Remove the label (`symphony force --clear TP-123`) to stop; it also ends when the ticket is done.
+A run already going then finishes as a normal run and gives the forced slot to the next forced ticket.
 
 | Forcing bypasses | Forcing still respects |
 | --- | --- |

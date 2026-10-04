@@ -1492,6 +1492,16 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     }
   end
 
+  defp tool_error_payload(:truncated_comment_body) do
+    %{
+      "error" => %{
+        "code" => "truncated_comment_body",
+        "message" =>
+          "The comment body contains Symphony's `[... truncated by Symphony: ... exceeded N characters ...]` marker, so it was copied from a cut read and would delete the text past the cut. Read the comment again with `linear_get_comments` and send its full text."
+      }
+    }
+  end
+
   defp tool_error_payload(:invalid_comment_id) do
     %{
       "error" => %{
