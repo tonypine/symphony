@@ -24,14 +24,15 @@ defmodule SymphonyElixir.QaAndroid.DriverTest do
     %{root: root, worktree: worktree}
   end
 
-  # A fake emulator: the device's third-party packages live in an Agent, and the
-  # APK installs `:apk_package`. Every adb call reaches the test as
-  # `{:adb, args, opts}`, and every command as `{:cmd, executable, args}`.
-  # `replies` overrides a command (keyed as in `command/1`) with a result or a
-  # `fn args -> result end`.
-  defp device(replies \\ %{}, apk_package \\ @app_id) do
+  # A fake emulator: the device's third-party packages (ID to code path) live in
+  # an Agent, starting with `initial`, and the APK installs `apk_package` at a
+  # new code path. Every adb call reaches the test as `{:adb, args, opts}`, and
+  # every command as `{:cmd, executable, args}`. `replies` overrides a command
+  # (keyed as in `command/1`) with a result, a `fn args -> result end` or a
+  # `fn args, packages -> result end`.
+  defp device(replies \\ %{}, apk_package \\ @app_id, initial \\ %{}) do
     test = self()
-    {:ok, packages} = Agent.start_link(fn -> MapSet.new() end)
+    {:ok, packages} = Agent.start_link(fn -> initial end)
 
     fn executable, args, opts ->
       send(test, {:cmd, executable, args})
@@ -40,6 +41,7 @@ defmodule SymphonyElixir.QaAndroid.DriverTest do
 
       case Map.fetch(replies, command(adb_args)) do
         {:ok, reply} when is_function(reply, 1) -> reply.(adb_args)
+        {:ok, reply} when is_function(reply, 2) -> reply.(adb_args, packages)
         {:ok, reply} -> reply
         :error -> default_reply(adb_args, packages, apk_package)
       end
@@ -58,18 +60,18 @@ defmodule SymphonyElixir.QaAndroid.DriverTest do
   defp command(["logcat" | _rest]), do: :logcat
 
   defp default_reply(["uninstall", id], packages, _apk_package) do
-    Agent.update(packages, &MapSet.delete(&1, id))
+    Agent.update(packages, &Map.delete(&1, id))
     {:ok, {"Success\n", 0}}
   end
 
   defp default_reply(["install", "-r", path], packages, apk_package) do
     "apk-bytes" = File.read!(path)
-    Agent.update(packages, &MapSet.put(&1, apk_package))
+    Agent.update(packages, &Map.put(&1, apk_package, code_path(apk_package)))
     {:ok, {"Performing Streamed Install\nSuccess\n", 0}}
   end
 
-  defp default_reply(["shell", "pm", "list", "packages", "-3"], packages, _apk_package) do
-    {:ok, {packages |> Agent.get(& &1) |> Enum.map_join(&"package:#{&1}\n"), 0}}
+  defp default_reply(["shell", "pm", "list", "packages", "-3", "-f"], packages, _apk_package) do
+    {:ok, {packages |> Agent.get(& &1) |> Enum.map_join(fn {id, path} -> "package:#{path}=#{id}\n" end), 0}}
   end
 
   defp default_reply(["shell", "cmd", "package", "resolve-activity" | _rest], _packages, _apk_package),
@@ -86,6 +88,21 @@ defmodule SymphonyElixir.QaAndroid.DriverTest do
   defp default_reply(["exec-out", "screencap", "-p"], _packages, _apk_package), do: {:ok, {@png, 0}}
   defp default_reply(["logcat" | _rest], _packages, _apk_package), do: {:ok, {"E AndroidRuntime: FATAL EXCEPTION: main\n", 0}}
   defp default_reply(_args, _packages, _apk_package), do: {:ok, {"", 0}}
+
+  defp code_path(id), do: "/data/app/~~#{System.unique_integer([:positive])}==/#{id}-1/base.apk"
+
+  # Replies with each of `replies` in turn, then as the device does; `:device`
+  # replies as the device does.
+  defp replies_in_turn(replies) do
+    {:ok, pending} = Agent.start_link(fn -> replies end)
+
+    fn args, packages ->
+      case Agent.get_and_update(pending, &Enum.split(&1, 1)) do
+        [reply] when reply != :device -> reply
+        _device -> default_reply(args, packages, @app_id)
+      end
+    end
+  end
 
   defp lease, do: %{lease: make_ref(), serial: "emulator-5600", adb: @adb, adb_server_port: 15_037}
 
@@ -156,9 +173,10 @@ defmodule SymphonyElixir.QaAndroid.DriverTest do
       assert String.starts_with?(scratch_dir, Path.join(state_root, "qa-android/runs") <> "/")
       assert File.stat!(scratch_dir).mode |> Bitwise.band(0o777) == 0o700
 
-      # The configured app is wiped before the install, which runs from a private copy.
-      assert [["uninstall", @app_id], ["shell", "pm", "list", "packages", "-3"], ["install", "-r", copy], ["shell", "pm", "list", "packages", "-3"]] =
-               adb_calls()
+      # The device's packages are listed once as the baseline, the configured app
+      # is wiped before the install, and the install runs from a private copy.
+      list = ["shell", "pm", "list", "packages", "-3", "-f"]
+      assert [^list, ^list, ["uninstall", @app_id], ["install", "-r", copy], ^list] = adb_calls()
 
       assert String.starts_with?(copy, scratch_dir <> "/")
       refute File.exists?(copy)
@@ -303,8 +321,21 @@ defmodule SymphonyElixir.QaAndroid.DriverTest do
       oversized = start_driver(worktree, max_apk_bytes: 4)
       assert {:error, {:qa_tool, "qa_apk_too_large", message}} = call(oversized, "qa_android_install")
       assert message =~ "9 bytes"
-
       refute Enum.any?(adb_calls(), &match?(["install" | _rest], &1))
+
+      # A file cut under the cap after its path was checked: only the size the
+      # cap was checked on is copied.
+      test = self()
+
+      truncate = fn path ->
+        File.write!(path, "apk")
+        :file.open(path, [:read, :raw, :binary])
+      end
+
+      install = fn ["install", "-r", copy] -> send(test, {:copied, File.read!(copy)}) && {:ok, {"Success\n", 0}} end
+      truncated = start_driver(worktree, max_apk_bytes: 5, open: truncate, cmd: device(%{install: install}))
+      assert error_code(call(truncated, "qa_android_install")) == "qa_apk_package_not_configured"
+      assert_received {:copied, "apk"}
     end
 
     test "refuses an APK that changes while it is opened or copied", %{root: root, worktree: worktree} do
@@ -342,10 +373,54 @@ defmodule SymphonyElixir.QaAndroid.DriverTest do
       assert ["uninstall", "com.evil.app"] in adb_calls()
       assert error_code(call(driver, "qa_android_launch", %{"application_id" => @app_id})) == "qa_android_not_installed"
 
-      # An install that adds nothing (it replaced a package already there) is refused too.
-      preinstalled = start_driver(worktree, cmd: device(%{pm_list: {:ok, {"package:com.other.app\n", 0}}}))
-      assert {:error, {:qa_tool, "qa_apk_package_not_configured", message}} = call(preinstalled, "qa_android_install")
+      # An install that adds nothing is refused too.
+      nothing = start_driver(worktree, cmd: device(%{install: {:ok, {"Success\n", 0}}}))
+      assert {:error, {:qa_tool, "qa_apk_package_not_configured", message}} = call(nothing, "qa_android_install")
       assert message =~ "installed none of the configured application_ids (com.example.app)"
+    end
+
+    test "refuses and uninstalls a package the install replaced, but leaves the others alone", %{worktree: worktree} do
+      initial = %{"com.other.app" => code_path("com.other.app"), "com.keep.app" => code_path("com.keep.app"), @app_id => code_path(@app_id)}
+      driver = start_driver(worktree, cmd: device(%{}, "com.other.app", initial))
+      assert {:error, {:qa_tool, "qa_apk_package_not_configured", message}} = call(driver, "qa_android_install")
+      assert message =~ "The APK installed com.other.app,"
+      calls = adb_calls()
+      assert ["uninstall", "com.other.app"] in calls
+      refute ["uninstall", "com.keep.app"] in calls
+
+      # A configured app that was on the device before counts as installed again.
+      configured = start_driver(worktree, cmd: device(%{}, @app_id, initial))
+      assert {:ok, %{"installed" => [@app_id]}} = call(configured, "qa_android_install")
+      assert {:ok, %{"installed" => [@app_id]}} = call(configured, "qa_android_install")
+      Driver.stop(configured)
+      refute Enum.any?(adb_calls(), &match?(["uninstall", id] when id != @app_id, &1))
+    end
+
+    test "uninstalls what an install that failed still installed", %{worktree: worktree} do
+      timed_out = fn args, packages ->
+        default_reply(args, packages, "com.evil.app")
+        {:error, :timeout}
+      end
+
+      driver = start_driver(worktree, cmd: device(%{install: timed_out}))
+      assert {:error, {:qa_tool, "qa_android_install_failed", message}} = call(driver, "qa_android_install")
+      assert message =~ ":timeout"
+      assert ["uninstall", "com.evil.app"] in adb_calls()
+
+      # The listing after the install failed: the next listing finds the package.
+      offline = {:ok, {"error: device offline", 1}}
+      driver = start_driver(worktree, cmd: device(%{pm_list: replies_in_turn([:device, :device, offline])}, "com.evil.app"))
+      assert error_code(call(driver, "qa_android_install")) == "qa_android_adb_failed"
+      assert ["uninstall", "com.evil.app"] in adb_calls()
+
+      # The device could not list them again either: the driver uninstalls the
+      # package when it stops.
+      pm_list = replies_in_turn([:device, :device, offline, offline])
+      driver = start_driver(worktree, cmd: device(%{pm_list: pm_list}, "com.evil.app"))
+      assert error_code(call(driver, "qa_android_install")) == "qa_android_adb_failed"
+      refute ["uninstall", "com.evil.app"] in adb_calls()
+      Driver.stop(driver)
+      assert ["uninstall", "com.evil.app"] in adb_calls()
     end
 
     test "reports install and adb failures", %{worktree: worktree} do
@@ -365,7 +440,7 @@ defmodule SymphonyElixir.QaAndroid.DriverTest do
       for {reply, text} <- [{{:ok, {"error: device offline", 1}}, "exit status 1: error: device offline"}, {{:error, :enoent}, ":enoent"}] do
         driver = start_driver(worktree, cmd: device(%{pm_list: reply}))
         assert {:error, {:qa_tool, "qa_android_adb_failed", message}} = call(driver, "qa_android_install")
-        assert message =~ "adb shell pm list packages -3 failed: #{text}"
+        assert message =~ "adb shell pm list packages -3 -f failed: #{text}"
       end
     end
   end

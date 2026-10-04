@@ -1131,15 +1131,16 @@ build, Gradle or any other repository command on the host; they only call Sympho
 
 | Tool | Does | Refuses |
 | --- | --- | --- |
-| `qa_android_install` | copies the APK at `apk_path` into a private directory, uninstalls every `application_ids` app (which wipes its data) and runs `adb install -r` from the copy | a worktree with changes to tracked files outside `qa-evidence/`; an `apk_path` that resolves (symlinks included) outside the worktree, is a symlink, is not a file or is over 512 MB; an APK that installs a package not in `application_ids`, which is uninstalled again |
+| `qa_android_install` | copies the APK at `apk_path` into a private directory, uninstalls every `application_ids` app (which wipes its data) and every package installed since the pass's first install, and runs `adb install -r` from the copy | a worktree with changes to tracked files outside `qa-evidence/`; an `apk_path` that resolves (symlinks included) outside the worktree, is a symlink, is not a file or is over 512 MB; an APK that installs or replaces a package not in `application_ids`, which is uninstalled again, as is anything a failed install left behind |
 | `qa_android_launch` | starts the app's launcher activity and waits until it is in the foreground; reports recent logcat when the app exits | an application ID not in `application_ids`, or not installed by `qa_android_install` in this pass |
 | `qa_android_stop` | force-stops the app | an application ID not in `application_ids` |
 | `qa_android_screenshot` | saves the screen to a new file `qa-evidence/<name>.png`, at most 50 per pass | a name that already exists (file or symlink) |
 
-When the pass ends, or crashes, Symphony uninstalls the `application_ids` apps, gives the emulator
-back and removes the private directory. When the emulator cannot start, every tool fails with
-`qa_android_unavailable` and tells the agent to mark the Android steps `blocked`. Only QA agents
-see these tools; executor and reviewer sessions cannot list or call them.
+When the pass ends, or crashes, Symphony uninstalls the `application_ids` apps and every package
+installed in the pass, gives the emulator back and removes the private directory. When the
+emulator cannot start, every tool fails with `qa_android_unavailable` and tells the agent to mark
+the Android steps `blocked`. Only QA agents see these tools; executor and reviewer sessions cannot
+list or call them.
 
 The `android_app` playbook cannot be configured yet; it comes in a later release.
 

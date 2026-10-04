@@ -1311,12 +1311,14 @@ When enabled:
   emulator. `qa_android_install` (refused when tracked files outside `qa-evidence/` changed, or
   when `apk_path` resolves outside the worktree, is a symlink, is not a regular file or is over
   the size cap) installs a private copy of the APK after uninstalling the configured
-  `application_ids`, and MUST uninstall and refuse a package outside `application_ids`.
+  `application_ids`, and MUST uninstall and refuse a package outside `application_ids` that the
+  install added or replaced, including after an install that reported failure.
   `qa_android_launch` / `qa_android_stop` MUST refuse an application ID outside
   `application_ids`; `qa_android_screenshot` follows the `qa_screenshot` file rules. When the
-  pass ends or crashes, Symphony MUST uninstall the configured apps, release the lease and remove
-  its private directory. An emulator that cannot start MUST surface as `qa_android_unavailable`,
-  telling the agent to answer `blocked`. Other tool scopes MUST NOT list or run them.
+  pass ends or crashes, Symphony MUST uninstall the configured apps and every package installed in
+  the pass, release the lease and remove its private directory. An emulator that cannot start MUST
+  surface as `qa_android_unavailable`, telling the agent to answer `blocked`. Other tool scopes MUST
+  NOT list or run them.
 - With `worker_host` set, the worktree checks MUST stay on the Symphony host, and the build, the app,
   screenshots and accessibility calls MUST run on that host over SSH: `qa_build` ships the
   worktree's `HEAD` into a fresh build directory there, and screenshots are copied back into the
