@@ -5,7 +5,6 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
   alias SymphonyElixir.QaRunner
 
   @active_states ["Todo", "In Progress", "Merging", "Rework", "Auto Review", "Waiting on sub-tickets"]
-  @hold_reason "a Merging or Auto Review issue is waiting for a slot"
 
   setup do
     test_root = Path.join(System.tmp_dir!(), "symphony-finishing-#{System.unique_integer([:positive])}")
@@ -64,11 +63,12 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
 
     state = Orchestrator.dispatch_chosen_issues_for_test([todo, second_landing, :not_an_issue], state)
 
+    hold_reason = "MT-LAND-2 (Merging) is waiting for a finishing slot"
     assert Map.keys(state.running) == ["land-1"]
     assert %{reason: "finishing slots full", state: "Merging"} = state.slot_waiting["land-2"]
-    assert %{reason: @hold_reason, state: "Todo"} = state.slot_waiting["todo-1"]
+    assert %{reason: ^hold_reason, state: "Todo"} = state.slot_waiting["todo-1"]
 
-    assert [%{issue_id: "land-2", reason: "finishing slots full"}, %{issue_id: "todo-1", reason: @hold_reason}] =
+    assert [%{issue_id: "land-2", reason: "finishing slots full"}, %{issue_id: "todo-1", reason: ^hold_reason}] =
              state |> snapshot_of() |> Map.fetch!(:slot_waiting) |> Enum.sort_by(& &1.issue_id)
 
     # The landing run ends: the second landing starts, and only then the Todo ticket.
@@ -272,8 +272,55 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
     assert %{epic_lanes: %{shared: %{used: 0}}, finishing: %{used: 1}} = snapshot_of(state)
   end
 
-  test "a queued QA pass holds Todo work back but not resumes", ctx do
+  test "an Auto Review ticket waiting for a work slot holds Todo work back and is named", ctx do
+    write_finishing_workflow!(ctx, max_concurrent_agents: 1)
+    review = issue("review-1", "MT-REVIEW", "Auto Review")
+    todo = issue("todo-1", "MT-TODO", "Todo", priority: 1)
+    tracked([review, todo])
+
+    state = run(orchestrator_state(1), issue("impl-1", "MT-1", "In Progress"), :implementation)
+    state = Orchestrator.dispatch_chosen_issues_for_test([todo, review], state)
+
+    assert Map.keys(state.running) == ["impl-1"]
+    assert %{reason: "work slots full"} = state.slot_waiting["review-1"]
+    assert %{reason: "MT-REVIEW (Auto Review) is waiting for a work slot"} = state.slot_waiting["todo-1"]
+  end
+
+  test "QA passes queued on auto_review.max_concurrent leave free agent slots to Todo work", ctx do
     write_finishing_workflow!(ctx)
+    job = start_qa_passes!(max_concurrent: 1, finishing_max: 2)
+    assert :busy = QaRunner.request(%{job | issue: %{id: "review-2", identifier: "MT-REVIEW-2"}})
+    assert :busy = QaRunner.request(%{job | issue: %{id: "review-3", identifier: "MT-REVIEW-3"}})
+    assert QaRunner.queued() == ["review-2", "review-3"]
+
+    todo = issue("todo-1", "MT-TODO", "Todo", priority: 1)
+    second_todo = issue("todo-2", "MT-TODO-2", "Todo")
+    tracked([todo, second_todo])
+
+    state = Orchestrator.dispatch_chosen_issues_for_test([todo, second_todo], orchestrator_state(3))
+
+    assert Enum.sort(Map.keys(state.running)) == ["todo-1", "todo-2"]
+    assert state.slot_waiting == %{}
+  end
+
+  test "a QA pass queued on finishing_max holds Todo work back, names the issue, and lets resumes run", ctx do
+    write_finishing_workflow!(ctx)
+    job = start_qa_passes!(max_concurrent: 3, finishing_max: 1)
+    assert :busy = QaRunner.request(%{job | issue: %{id: "review-2", identifier: "MT-REVIEW-2"}})
+    assert QaRunner.queued() == ["review-2"]
+
+    todo = issue("todo-1", "MT-TODO", "Todo", priority: 1)
+    resume = issue("resume-1", "MT-RESUME", "In Progress")
+    tracked([todo, resume])
+
+    state = Orchestrator.dispatch_chosen_issues_for_test([todo, resume], orchestrator_state(3))
+
+    assert Map.keys(state.running) == ["resume-1"]
+    assert %{reason: "QA pass for MT-REVIEW-2 is waiting for a finishing slot"} = state.slot_waiting["todo-1"]
+  end
+
+  # Starts a QaRunner with these caps and one pass running; returns the job to queue more with.
+  defp start_qa_passes!(max_concurrent: max_concurrent, finishing_max: finishing_max) do
     test_pid = self()
 
     start_supervised!(
@@ -285,19 +332,10 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
     )
 
     settings = Config.settings!()
-    job = %{issue: %{id: "review-1"}, record: %{}, sha: "abc", settings: put_in(settings.auto_review.max_concurrent, 1)}
+    settings = %{settings | auto_review: %{settings.auto_review | max_concurrent: max_concurrent}, agent: %{settings.agent | finishing_max: finishing_max}}
+    job = %{issue: %{id: "review-1"}, record: %{}, sha: "abc", settings: settings}
     assert :started = QaRunner.request(job)
-    assert :busy = QaRunner.request(%{job | issue: %{id: "review-2"}})
-    assert QaRunner.queued() == ["review-2"]
-
-    todo = issue("todo-1", "MT-TODO", "Todo", priority: 1)
-    resume = issue("resume-1", "MT-RESUME", "In Progress")
-    tracked([todo, resume])
-
-    state = Orchestrator.dispatch_chosen_issues_for_test([todo, resume], orchestrator_state(3))
-
-    assert Map.keys(state.running) == ["resume-1"]
-    assert %{reason: @hold_reason} = state.slot_waiting["todo-1"]
+    job
   end
 
   test "finishing_max must be at least 1", ctx do
