@@ -65,7 +65,7 @@ defmodule SymphonyElixir.HumanActions do
         }
 
   @spec start_link(keyword()) :: GenServer.on_start()
-  def start_link(opts \\ []) do
+  def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
   end
 

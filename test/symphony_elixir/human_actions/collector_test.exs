@@ -98,7 +98,8 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
             %{"createdAt" => "2026-10-03T11:00:00.000Z", "fromState" => %{"name" => "Auto Review"}, "toState" => %{"name" => "Backlog"}},
             # Entries that are not state changes, or carry no time, are ignored.
             %{"createdAt" => "2026-10-03T12:00:00.000Z", "fromState" => nil, "toState" => nil},
-            %{"createdAt" => "not a time", "fromState" => %{"name" => "Backlog"}, "toState" => %{"name" => "Todo"}}
+            %{"createdAt" => "not a time", "fromState" => %{"name" => "Backlog"}, "toState" => %{"name" => "Todo"}},
+            %{"fromState" => %{"name" => "Backlog"}, "toState" => %{"name" => "Todo"}}
           ])
       })
 
