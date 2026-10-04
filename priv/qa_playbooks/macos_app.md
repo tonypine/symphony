@@ -1,6 +1,7 @@
 ### Playbook: macos_app
 
 Use the macOS app the way a user would and judge what is on screen, not what the code says.
+Do not run the project's test suite, `make all`, coverage or static analysis: CI already ran them.
 Your sandbox cannot build Swift, launch apps or read the screen, so Symphony runs these tools
 for you on the host. They only act on this worktree's configured app and on apps you launched:
 

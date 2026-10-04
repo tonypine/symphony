@@ -1086,8 +1086,10 @@ later executor continuations in push/PR handoff mode rather than reintroducing t
 gate. `request_changes` and `block` verdicts SHOULD include evidence-backed findings with file,
 line range, quoted snippet, summary, and suggested fix; Symphony SHOULD reject verdicts whose
 findings cannot be verified against the reviewer diff/context, and SHOULD run one bounded
-self-check turn before accepting blocking findings. Reviewer token usage SHOULD be tracked
-separately from the aggregate run token total.
+self-check turn before accepting blocking findings. The reviewer prompt SHOULD tell the reviewer to
+review the diff by reading it and not to run the test suite, coverage or static analysis, which CI
+runs after the push. Reviewer token usage SHOULD be tracked separately from the aggregate run token
+total.
 
 Reviewer outcome handling MUST distinguish terminal blocks from inconclusive reviewer runs.
 Verified `block` verdicts with at least one grounded finding SHOULD terminate the worker with a
@@ -1210,6 +1212,10 @@ When enabled:
   `steps` (`name`, `status`, `details`, `evidence`), `findings`, and `reason`. An answer with no
   verdict object SHOULD get one follow-up turn in the same session asking for it. A run error or
   an answer still unreadable after that counts as `blocked`. The session stops at `agent.limits.tokens_per_issue`.
+- The QA prompt and the built-in playbooks MUST tell the agent not to run the test suite, `make all`,
+  coverage or static analysis such as Dialyzer: a pass starts only on green CI for the PR head, and a
+  parent walkthrough marks a criterion that only asks for tests or CI to pass `skipped` as covered
+  by CI on the base branch. QA exercises the change the way a user would.
 - Symphony applies the verdict: `pass`, `blocked` and skip move the issue to `In Review`; `fail`
   moves it to `In Progress` with the findings in the next run's prompt, or to `In Review` once
   `max_fix_attempts` failures were sent back. Results are stored per head SHA; a failed move is
@@ -3980,6 +3986,13 @@ Validation profiles:
 
 Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bullets that begin with
 `If ... is implemented` are `Extension Conformance`.
+
+Where checks run is split by cost, not by kind. Agents (executor, rework and CI-fix runs) run cheap,
+targeted checks locally before each push: format, compile with warnings as errors, lint, and the
+tests for the changed code. The full test suite, the coverage threshold and Dialyzer run only in
+CI, which is the merge gate; the pre-push reviewer and the Auto Review QA agent run no test suites
+at all. A repository workflow MAY let an agent run the full gate locally for a change to shared
+infrastructure.
 
 ### 17.1 Workflow and Config Parsing
 

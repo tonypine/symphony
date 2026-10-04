@@ -48,27 +48,36 @@ You are working on a Linear ticket `{{ issue.identifier }}`
 
 ## Command and output hygiene
 
-- For long-running validation commands (`make all`, `mix test`, `mix dialyzer`,
-  dependency installs), use longer tool waits such as `yield_time_ms: 30000` to
-  `60000`. Avoid tight `write_stdin` polling; if a command is still running,
-  wait at least 30 seconds before polling again unless there is a specific
-  reason to expect immediate failure output.
-- Match the test command to the loop:
-  - During iteration, prefer `mix test` (or `mix test --stale`, or a targeted
-    file/line) without `--cover`. Use `make check` when you want the fast local
-    gate: format check, lint, escript build, and plain tests. It is not a CI
-    replacement because it skips coverage and Dialyzer.
-  - Coverage instrumentation recompiles every module with tracing and roughly
-    doubles CPU and wall time, which is wasted when re-running a focused subset.
-  - When CPU pressure matters, pass lower values such as
-    `TEST_MAX_CASES=2 BEAM_SCHEDULERS=2` to `make test`, `make coverage`, or
-    `make check`.
+- For long-running commands (dependency installs, an optional `make all`), use
+  longer tool waits such as `yield_time_ms: 30000` to `60000`. Avoid tight
+  `write_stdin` polling; if a command is still running, wait at least 30
+  seconds before polling again unless there is a specific reason to expect
+  immediate failure output.
+- Split checks by cost, not by kind. CI is the gate: it runs the full test
+  suite, the 100% coverage report and Dialyzer on every push.
+  - Cheap checks run locally, in any phase: `mix format --check-formatted`,
+    `mix compile --warnings-as-errors`, `mix specs.check`,
+    `mix credo --strict <changed files>`, and the test files you added or
+    changed plus the test files of the modules you changed (`mix test <file>`
+    or `<file>:<line>`).
+  - Slow, compute-heavy checks never run locally: the full `mix test`,
+    `make check` and `make test` (both run the whole suite), `mix test --stale`
+    (a workspace has no stale manifest on its first run, so it runs all 2,400+
+    tests, about 2.5 minutes timed on 2026-10-04), `make coverage`
+    (coverage instrumentation recompiles every module and roughly doubles CPU
+    and wall time), and Dialyzer. They are several times slower in the
+    sandbox than in CI, CI runs them again anyway, and several agents running
+    them at once overload the shared host.
+  - `make all` stays available as an optional extra for a change to shared
+    infrastructure (the config schema, orchestrator core) when you judge a
+    full local run worth it. Run it with `TEST_MAX_CASES=2 BEAM_SCHEDULERS=2`
+    and record why in the workpad.
+  - When a check's cost is unclear, time it once and add it to the right list
+    here.
   - Use `make test-profile`, `make coverage-profile`, or `make dialyzer-profile`
-    to collect slow-command data before optimizing tests or gate behavior.
-  - Reserve `make all` and `make coverage` for the pre-push gate, not the inner
-    edit/test loop.
-- In sandboxed Elixir runs, run plain `make all` for the full gate; no Hex
-  install or env overrides are needed. Symphony passes the host's `MIX_HOME`,
+    only when a ticket asks you to optimize slow tests or gate behavior.
+- In sandboxed Elixir runs, `mix` commands need no Hex install or env
+  overrides. Symphony passes the host's `MIX_HOME`,
   `MIX_ARCHIVES`, and `HEX_HOME` to the agent so Hex and Rebar resolve, and the
   test suite keeps MCP socket dirs under a short writable `TMPDIR`. Only when
   `TMPDIR` is long and `/tmp` is not writable, set `SYMPHONY_MCP_SOCKET_ROOT`
@@ -169,7 +178,7 @@ You are working on a Linear ticket `{{ issue.identifier }}`
     - all known callers of those functions, using grep/search results where applicable,
     - existing test coverage for the affected code,
     - estimated blast radius (`narrow`, `moderate`, or `wide`) with justification.
-    - new branches and error/edge paths introduced by the change, and the exact test that will exercise each. The repo enforces a 100% coverage threshold; an unexercised branch will fail the CI `coverage report` job. If a path is genuinely unreachable from tests (boundary I/O shim), call it out here and plan to extend `mix.exs` `test_coverage` `ignore_modules` rather than skipping the gate.
+    - new branches and error/edge paths introduced by the change, and the exact test that will exercise each. The repo enforces a 100% coverage threshold in CI; an unexercised branch will fail the CI `coverage report` job, so plan the test now rather than measuring coverage locally. If a path is genuinely unreachable from tests (boundary I/O shim), call it out here and plan to extend `mix.exs` `test_coverage` `ignore_modules` rather than skipping the gate.
     - Do not write the first code edit until this analysis is recorded.
 11. Compact context and proceed to execution.
 
@@ -197,22 +206,23 @@ You are working on a Linear ticket `{{ issue.identifier }}`
 5.  Run validation/tests required for the scope.
     - Mandatory gate: execute all ticket-provided `Validation`/`Test Plan`/ `Testing` requirements when present; treat unmet items as incomplete work.
     - Prefer a targeted proof that directly demonstrates the behavior you changed.
-    - For the full Elixir gate in a sandboxed workspace, run plain `make all` (see `Command and output hygiene`).
+    - Run the cheap, targeted checks from `Command and output hygiene`, not the full suite: CI runs the full test suite, coverage and Dialyzer.
     - For long-running validation, use long waits and sparse polling so progress-only terminal output does not create many tiny transcript events.
     - Keep terminal output fed back into the model small: preserve failing command, exit code, and the most relevant error lines; summarize successful or repetitive output instead of pasting complete logs.
     - You may make temporary local proof edits to validate assumptions (for example: tweak a local build input for `make`, or hardcode a UI account / response path) when this increases confidence.
     - Revert every temporary proof edit before commit/push.
     - Document these temporary proof steps and outcomes in the workpad `Validation`/`Notes` sections so reviewers can follow the evidence.
 6.  Re-check all acceptance criteria and close any gaps.
-7.  Before every `git push` attempt, run the required validation for your scope and confirm it passes; if it fails, address issues and rerun until green.
-    - If a prior push's CI checks are still failing, follow the `CI failure triage protocol` before re-pushing.
-    - Coverage threshold is a hard gate. Run `make coverage` (or `make all`) and confirm the final summary reports `Coverage: 100.00%` against `Threshold: 100.00%`. If it reports anything lower (for example `99.89%`), the CI `coverage report` job will fail — add tests that exercise the missing branches, or extend `mix.exs` `test_coverage` `ignore_modules` only for genuinely untestable I/O shims, then rerun. Never push with coverage below the threshold expecting CI to be different.
+7.  Before every `git push` attempt, run the targeted pre-push checks for your scope and confirm they pass; if one fails, address it and rerun until green.
+    - Targeted pre-push checks: `mix format --check-formatted`, `mix compile --warnings-as-errors`, `mix specs.check`, `mix credo --strict <changed files>`, and every new or changed test file plus the test files of the modules you changed.
+    - Do not run `make all`, `make check`, `make coverage`, the full `mix test`, `mix test --stale` or Dialyzer before a push (see `Command and output hygiene` for the optional `make all` on shared infrastructure). CI is the gate for the full suite, the 100% coverage report and Dialyzer.
+    - If a prior push's CI checks are still failing, follow the `CI failure triage protocol` before re-pushing. A CI coverage gap is a red check like any other: add tests that exercise the missing branches, or extend `mix.exs` `test_coverage` `ignore_modules` only for genuinely untestable I/O shims.
     - After staging/committing changes and before pushing, run `git diff origin/main..HEAD` to review committed-only diff for:
       - stray debug statements, `console.log`, hardcoded test values, or temporary proof edits,
       - unintended file changes outside the ticket's scope,
       - incomplete hunks, half-finished removals, or reverted-only placeholders.
     - Only push after this review is clean.
-    - Record `coverage 100.00% — green` and `diff reviewed — clean` in the workpad before each push.
+    - Record the targeted checks you ran with their results (for example `format, compile, specs, credo — clean; test/foo_test.exs test/bar_test.exs — 42 tests, 0 failures`) and `diff reviewed — clean` in the workpad before each push.
 8.  Attach PR URL to the issue (prefer attachment; use the workpad comment only if attachment is unavailable).
     - Ensure the GitHub PR has label `symphony` (add it if missing).
     - Ensure the PR body is reviewer-facing and follows `.github/pull_request_template.md`:
