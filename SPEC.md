@@ -1215,7 +1215,8 @@ When enabled:
   `qa_ax_tree`, `qa_ax_press`, `qa_ax_set_value`. Every tool that takes a PID MUST refuse a PID
   the pass did not launch. Apps still running when the pass ends MUST be quit. A missing Screen
   Recording or Accessibility grant MUST surface as a `qa_permission_missing` tool error that tells
-  the agent to answer `blocked`. On the Symphony host, screenshots and accessibility calls MUST run in a separate helper
+  the agent to mark the app steps `blocked`, finish the other playbooks' steps and answer
+  `blocked`. On the Symphony host, screenshots and accessibility calls MUST run in a separate helper
   app that Symphony opens through LaunchServices, so that grants made to it are never inherited by
   Symphony or the agents it spawns. The helper MUST answer only the Symphony process that opened
   it, MUST NOT accept an owner that another Symphony process started, and MUST NOT run a screenshot
@@ -1258,13 +1259,14 @@ When enabled:
   `origin/<base_branch>`, with the parent as the issue under test and the verification ticket's
   description as an extra checklist. Playbooks come from `qa:<kind>` labels on the ticket or the
   parent, else every enabled playbook. The `## Symphony QA Report` is written on the parent and on
-  the verification ticket. `pass` and `blocked` move the verification ticket to `In Review`;
-  `fail` creates one `Backlog` child of the verification ticket per failing step (per finding when
-  no step failed), naming the step and holding its details and evidence, marks the verification
-  ticket blocked by each one, lists them in the report, and moves the verification ticket to
-  `Todo`, where the blocker rule holds it until every gap is terminal. When no gap could be filed
-  and linked, it moves the verification ticket to `Backlog` instead. There is no fix loop. Any
-  other final verification ticket gets the executor run.
+  the verification ticket. `pass` (or `blocked` with no failing step) moves the verification
+  ticket to `In Review`; `fail` (or `blocked` with a failing step) creates one `Backlog` child of
+  the verification ticket per failing step (per finding when no step failed), naming the step and
+  holding its details and evidence, marks the verification ticket blocked by each one, lists them
+  in the report, and moves the verification ticket to `Todo`, where the blocker rule holds it until
+  every gap is terminal. When no gap could be filed and linked, it moves the verification ticket to
+  `Backlog` instead. There is no fix loop. Any other final verification ticket gets the executor
+  run.
 
 When disabled, behaviour is unchanged.
 
