@@ -18,13 +18,14 @@ defmodule SymphonyElixir.AgentEnv do
   the same Hex and Rebar install as the host (for example the per-version
   `MIX_HOME` that `mise` exports) instead of prompting to install Hex.
 
-  A local agent also gets its own Gradle daemon registry in its workspace (see
-  `gradle_env/1`).
+  A local agent in a Gradle project also gets its own Gradle daemon registry in
+  its workspace (see `gradle_env/1`).
   """
 
   @agent_runtime_env "SYMPHONY_AGENT_RUNTIME"
   @agent_runtime_env_value "1"
   @gradle_daemon_dir ".gradle-daemons"
+  @gradle_markers ~w(gradlew settings.gradle settings.gradle.kts)
 
   @passthrough ~w(
     PATH
@@ -58,6 +59,14 @@ defmodule SymphonyElixir.AgentEnv do
   def runtime_marker_value, do: @agent_runtime_env_value
 
   @doc """
+  Folders Symphony itself may create in an agent's workspace. Git ignores
+  them, and the QA worktree's clean check skips what is in them (see
+  `SymphonyElixir.QaDriver`).
+  """
+  @spec owned_dirs() :: [String.t()]
+  def owned_dirs, do: [@gradle_daemon_dir]
+
+  @doc """
   The env that keeps an agent's Gradle builds on daemons of its own.
 
   Gradle daemons detach, outlive the build and are shared through the
@@ -68,7 +77,11 @@ defmodule SymphonyElixir.AgentEnv do
   folder, `<registry>/<version>`, is in the workspace, so the run's end stops it
   (see `SymphonyElixir.LeftoverProcesses`).
 
-  Creates the folder with a `.gitignore` of `*`, so git never lists it.
+  Only a Gradle project gets a registry: a workspace with `gradlew`,
+  `settings.gradle` or `settings.gradle.kts` at its root. Any other workspace,
+  such as a QA worktree of a repo without Gradle, gets an empty env and no
+  folder. In a Gradle project the folder is created with a `.gitignore` of `*`,
+  so git never lists it.
 
   Symphony runs outside the sandbox, so it never writes through a link the
   workspace holds: the `.gitignore` is only created, never overwritten, and when
@@ -79,7 +92,7 @@ defmodule SymphonyElixir.AgentEnv do
   def gradle_env(workspace) when is_binary(workspace) do
     registry = Path.join(workspace, @gradle_daemon_dir)
 
-    if plain_directory?(registry) do
+    if gradle_project?(workspace) and plain_directory?(registry) do
       # `:exclusive` fails on any existing path, a symlink included.
       _ = File.write(Path.join(registry, ".gitignore"), "*\n", [:exclusive])
 
@@ -88,6 +101,10 @@ defmodule SymphonyElixir.AgentEnv do
     else
       %{}
     end
+  end
+
+  defp gradle_project?(workspace) do
+    Enum.any?(@gradle_markers, &File.exists?(Path.join(workspace, &1)))
   end
 
   defp plain_directory?(path) do

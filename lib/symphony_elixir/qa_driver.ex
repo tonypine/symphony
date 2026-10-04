@@ -8,8 +8,9 @@ defmodule SymphonyElixir.QaDriver do
 
   - `qa_build` runs only the configured `build` command, in the QA worktree, with
     the agent's scrubbed environment, and refuses a worktree with edits outside
-    `qa-evidence/`. Gitignored files count too (the build reads caches such as
-    SwiftPM's `.build/`): none may exist before the first build, and after a
+    `qa-evidence/` and the folders Symphony itself creates there (see
+    `SymphonyElixir.AgentEnv.owned_dirs/0`). Gitignored files count too (the
+    build reads caches such as SwiftPM's `.build/`): none may exist before the first build, and after a
     build none may appear or change until the next one;
   - a successful `qa_build` copies the configured `app` bundle, which must
     resolve (symlinks included) inside the worktree, into the driver's private
@@ -274,7 +275,7 @@ defmodule SymphonyElixir.QaDriver do
           output
           |> to_string()
           |> String.split(<<0>>, trim: true)
-          |> Enum.reject(&String.starts_with?(String.slice(&1, 3..-1//1), @evidence_dir <> "/"))
+          |> Enum.reject(&skipped?/1)
           |> Enum.split_with(&String.starts_with?(&1, "!! "))
 
         {:ok, Enum.map(ignored, &String.slice(&1, 3..-1//1)), Enum.map(dirty, &String.slice(&1, 3..-1//1))}
@@ -282,6 +283,17 @@ defmodule SymphonyElixir.QaDriver do
       {output, status} ->
         tool_error("qa_git_failed", "git status failed (exit #{status}): #{tail(to_string(output), 500)}")
     end
+  end
+
+  # `qa-evidence/` is the agent's to write. Symphony itself writes folders such
+  # as `.gradle-daemons/` into the QA agent's workspace (see
+  # `SymphonyElixir.AgentEnv.owned_dirs/0`); the build does not read them, so new
+  # files there do not count either, but a change to a tracked file there does.
+  defp skipped?(entry) do
+    {status, path} = String.split_at(entry, 3)
+
+    String.starts_with?(path, @evidence_dir <> "/") or
+      (status in ["?? ", "!! "] and Enum.any?(AgentEnv.owned_dirs(), &String.starts_with?(path, &1 <> "/")))
   end
 
   # ctime and inode cannot be set back by an unprivileged process, so a rewrite
