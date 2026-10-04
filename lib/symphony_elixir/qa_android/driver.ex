@@ -78,6 +78,7 @@ defmodule SymphonyElixir.QaAndroid.Driver do
   @dump_limit 2_000_000
   @tree_bytes_limit 100_000
   @default_max_depth 30
+  @no_playbook_reason "no Android QA playbook configured for this repo"
   @default_max_nodes 300
   @filter_limit 200
   @type_limit 500
@@ -110,6 +111,10 @@ defmodule SymphonyElixir.QaAndroid.Driver do
   @doc "The `qa_android_*` tool names this driver serves."
   @spec tools() :: [String.t()]
   def tools, do: @tools
+
+  @doc "The `blocked` reason for a step that needs an Android device in a pass without the android_app playbook."
+  @spec no_playbook_reason() :: String.t()
+  def no_playbook_reason, do: @no_playbook_reason
 
   @doc """
   Starts a driver for one QA pass and takes the emulator's lease.
@@ -147,7 +152,9 @@ defmodule SymphonyElixir.QaAndroid.Driver do
   def call_tool(nil, _tool, _args) do
     tool_error(
       "qa_android_driver_unavailable",
-      "The qa_android_* tools drive an Android app and are only available when the android_app playbook runs in this QA pass."
+      "The qa_android_* tools drive an Android app and are only available when the android_app playbook runs in this QA pass. " <>
+        "Do not start an emulator or adb yourself: your sandbox cannot run them. " <>
+        "Mark each step that needs an Android device `blocked` with \"#{@no_playbook_reason}\" in `details`."
     )
   end
 
@@ -848,6 +855,16 @@ defmodule SymphonyElixir.QaAndroid.Driver do
 
   # Recorded before the setting is changed, so a change that half went through is reset too.
   def handle_call({:changed, setting}, _from, state), do: {:reply, :ok, %{state | changed: Enum.uniq([setting | state.changed])}}
+
+  # The driver traps exits, so every adb port it opens sends an `:EXIT` when it closes.
+  # The QA pass that owns the driver is its parent: GenServer stops on its exit itself.
+  @impl true
+  def handle_info({:EXIT, port, _reason}, state) when is_port(port), do: {:noreply, state}
+
+  def handle_info(message, state) do
+    Logger.error("Android QA driver received unexpected message=#{inspect(message)}")
+    {:noreply, state}
+  end
 
   @impl true
   def terminate(_reason, %{config: config} = state) do
