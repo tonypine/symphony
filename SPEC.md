@@ -1201,9 +1201,10 @@ Fields:
   `~/Library/Android/sdk`), `boot_timeout_ms` (positive integer, default `180000`) and
   `idle_timeout_ms` (positive integer, default `600000`). Symphony runs at most one headless,
   read-only emulator of `avd` on its host, on its own adb server (port `15037`) and console port
-  (`5584`), shared by QA passes one at a time. It stops the emulator `idle_timeout_ms` after the
-  last pass releases it and when Symphony stops, and records the emulator's and adb server's
-  process ids under the state root so that the next start stops them after a crash.
+  (`5600`, outside the ports other adb servers scan), shared by QA passes one at a time. It stops
+  the emulator `idle_timeout_ms` after the last pass releases it and when Symphony stops, and
+  records the emulator's and adb server's process ids under the state root so that the next start
+  stops them after a crash.
 
 When enabled:
 

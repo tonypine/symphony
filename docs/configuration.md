@@ -1070,9 +1070,10 @@ hypervisor, Mach ports, adb sockets and a lot of memory). The agent sandbox does
   never changes the AVD, and waits up to `boot_timeout_ms` for it to finish booting. An unset
   `avd`, a missing `emulator/emulator` or `platform-tools/adb` under `sdk_root`, an AVD the
   emulator does not list and a boot timeout each fail with their own message.
-- Symphony starts its own adb server on port `15037` and the emulator on console port `5584`
-  (serial `emulator-5584`), and sends every adb call there. Your own adb server (port `5037`),
-  emulators and phones are left alone.
+- Symphony starts its own adb server on port `15037` and the emulator on console port `5600`
+  (serial `emulator-5600`), and sends every adb call there. Your own adb server (port `5037`),
+  emulators and phones are left alone, and your adb server does not see Symphony's emulator: it
+  only scans console ports 5554 to 5584.
 - It stops `idle_timeout_ms` after the last QA pass gives it back (or exits), and when Symphony
   stops. An emulator that crashes is booted again by the next QA pass.
 - The emulator's and adb server's process ids are recorded in

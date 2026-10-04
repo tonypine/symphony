@@ -6,7 +6,7 @@ defmodule SymphonyElixir.QaAndroid.EmulatorTest do
   alias SymphonyElixir.QaAndroid.Emulator
 
   @avd "Pixel_Test"
-  @adb_prefix ["-P", "15037", "-s", "emulator-5584"]
+  @adb_prefix ["-P", "15037", "-s", "emulator-5600"]
   @adb_env [{~c"ANDROID_ADB_SERVER_PORT", ~c"15037"}]
 
   setup do
@@ -100,7 +100,7 @@ defmodule SymphonyElixir.QaAndroid.EmulatorTest do
 
   defp emulator_processes do
     [
-      entry(4242, 1, "Sun Oct  4 10:00:00 2026", "/sdk/emulator/emulator -avd #{@avd} -port 5584"),
+      entry(4242, 1, "Sun Oct  4 10:00:00 2026", "/sdk/emulator/emulator -avd #{@avd} -port 5600"),
       entry(4243, 4242, "Sun Oct  4 10:00:01 2026", "/sdk/emulator/qemu/darwin-aarch64/qemu-system-aarch64 -avd #{@avd}"),
       entry(4250, 1, "Sun Oct  4 09:59:59 2026", "adb -L tcp:15037 fork-server server --reply-fd 4"),
       entry(4260, 1, "Sun Oct  4 08:00:00 2026", "adb -L tcp:5037 fork-server server --reply-fd 4"),
@@ -139,7 +139,7 @@ defmodule SymphonyElixir.QaAndroid.EmulatorTest do
 
       first = spawn_holder(server)
       assert_receive {:checkout, ^first, {:ok, lease}}
-      assert lease.serial == "emulator-5584"
+      assert lease.serial == "emulator-5600"
       assert lease.adb_server_port == 15_037
       assert lease.adb == Path.join([ctx.sdk, "platform-tools", "adb"])
 
@@ -225,7 +225,7 @@ defmodule SymphonyElixir.QaAndroid.EmulatorTest do
       assert list_opts[:env] == [{~c"ANDROID_ADB_SERVER_PORT", ~c"15037"}, {~c"ANDROID_HOME", sdk_root}, {~c"ANDROID_SDK_ROOT", sdk_root}]
 
       assert_received {:launch, ^emulator, args, env, _port}
-      assert args == ~w(-avd Pixel_Test -port 5584 -no-window -no-audio -no-boot-anim -read-only -no-snapshot-save)
+      assert args == ~w(-avd Pixel_Test -port 5600 -no-window -no-audio -no-boot-anim -read-only -no-snapshot-save)
       assert env == list_opts[:env]
 
       assert :ok = Emulator.checkin(server, lease)
@@ -467,7 +467,7 @@ defmodule SymphonyElixir.QaAndroid.EmulatorTest do
         assert %{status: :down, holder: nil} = :sys.get_state(server)
       end)
 
-      assert [_start_server, _getprop, {["-P", "15037", "-s", "emulator-5584", "emu", "kill"], _opts}, _kill_server] = adb_commands()
+      assert [_start_server, _getprop, {["-P", "15037", "-s", "emulator-5600", "emu", "kill"], _opts}, _kill_server] = adb_commands()
       assert stopped_signals() == [{4242, "KILL"}]
     end
 
@@ -503,6 +503,45 @@ defmodule SymphonyElixir.QaAndroid.EmulatorTest do
       assert Enum.drop(kill_server, 4) == ["kill-server"]
 
       assert {:ok, _lease} = Emulator.checkout(server)
+      assert launches() == 1
+    end
+
+    test "a checkin that hands a crashed emulator to a waiter returns before the new boot", ctx do
+      test = self()
+      {:ok, avd_lists} = Agent.start_link(fn -> 0 end)
+
+      # The second `-list-avds`, the waiter's preflight, blocks until the test answers.
+      responder = fn
+        "emulator", ["-list-avds"] = args ->
+          if Agent.get_and_update(avd_lists, &{&1, &1 + 1}) > 0 do
+            send(test, {:preflight, self()})
+
+            receive do
+              :continue -> respond("emulator", args)
+            end
+          else
+            respond("emulator", args)
+          end
+
+        executable, args ->
+          respond(executable, args)
+      end
+
+      server = start_emulator(ctx, responder: responder)
+      holder = spawn_holder(server)
+      assert_receive {:checkout, ^holder, {:ok, _lease}}
+      assert_received {:launch, _executable, _args, _env, port}
+      waiter = spawn_holder(server)
+      assert_receive {:timer, ^server, {:wait_timeout, _token}, _wait_ms}
+
+      capture_log(fn -> send(server, {port, {:exit_status, 139}}) && :sys.get_state(server) end)
+      send(holder, :checkin)
+      assert_receive {:preflight, preflight}
+      assert_receive {:checkin, ^holder, :ok}
+      refute_received {:checkout, ^waiter, _result}
+
+      send(preflight, :continue)
+      assert_receive {:checkout, ^waiter, {:ok, _lease}}
       assert launches() == 1
     end
 

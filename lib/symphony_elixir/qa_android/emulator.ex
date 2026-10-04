@@ -18,7 +18,7 @@ defmodule SymphonyElixir.QaAndroid.Emulator do
     and a boot timeout each return their own error (see `t:error/0` and
     `error_message/1`).
   - Symphony's own adb server listens on a private port (`ANDROID_ADB_SERVER_PORT`,
-    default #{15_037}) and the emulator on a fixed console port (default 5584).
+    default #{15_037}) and the emulator on a fixed console port (default 5600).
     Every adb call goes to that server and `-s emulator-<port>` (see
     `adb_command/2`), so the operator's adb server and devices are never touched.
   - The emulator stops `idle_timeout_ms` after the last checkin, and when
@@ -42,7 +42,9 @@ defmodule SymphonyElixir.QaAndroid.Emulator do
   alias SymphonyElixir.{Config, LeftoverProcesses, Paths}
   alias SymphonyElixir.QaDriver.Host
 
-  @console_port 5584
+  # Outside 5554-5585, the range every adb server scans for emulators, so the
+  # operator's adb server never picks this one up.
+  @console_port 5600
   @adb_server_port 15_037
   @default_wait_ms 30 * 60_000
   @command_timeout_ms 30_000
@@ -103,7 +105,7 @@ defmodule SymphonyElixir.QaAndroid.Emulator do
   def checkin(server \\ __MODULE__, %{lease: lease}) do
     case GenServer.whereis(server) do
       nil -> :ok
-      pid -> GenServer.call(pid, {:checkin, lease})
+      pid -> GenServer.call(pid, {:checkin, lease}, :infinity)
     end
   end
 
@@ -210,11 +212,13 @@ defmodule SymphonyElixir.QaAndroid.Emulator do
     end
   end
 
-  def handle_call({:checkin, lease}, _from, state) do
+  def handle_call({:checkin, lease}, from, state) do
     case state.holder do
       %{lease: ^lease, monitor: monitor} ->
         Process.demonitor(monitor, [:flush])
-        {:reply, :ok, next(%{state | holder: nil})}
+        # Handing the emulator to a waiter can boot it; the holder does not wait for that.
+        GenServer.reply(from, :ok)
+        {:noreply, next(%{state | holder: nil})}
 
       _other ->
         {:reply, :ok, state}
