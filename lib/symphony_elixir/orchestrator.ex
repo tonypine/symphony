@@ -18,6 +18,7 @@ defmodule SymphonyElixir.Orchestrator do
     CiPoller,
     Config,
     EpicLanes,
+    ForcedQueue,
     Notifications,
     PrReviewPoller,
     PrRun,
@@ -109,6 +110,7 @@ defmodule SymphonyElixir.Orchestrator do
       merging_ci_waits: %{},
       epic_lanes: nil,
       blocked: [],
+      forced: %{},
       slot_waiting: %{},
       setup_failed: %{},
       pause: %{paused: false, reason: nil, paused_at: nil},
@@ -148,6 +150,7 @@ defmodule SymphonyElixir.Orchestrator do
     codex_totals = persisted_codex_totals()
     pause = persisted_pause_state()
     usage_limits = persisted_usage_limits() |> Map.new(fn {key, entry} -> {key, UsageLimit.paused(entry)} end)
+    forced = persisted_forced(repo_key)
     quality_gate_cache = hydrate_quality_gate_cache()
     quality_gate_comment_keys = hydrate_quality_gate_comment_keys()
     budget_day_started_on = Date.utc_today()
@@ -181,6 +184,7 @@ defmodule SymphonyElixir.Orchestrator do
       quality_gate_cache: quality_gate_cache,
       quality_gate_comment_keys: quality_gate_comment_keys,
       usage_limits: usage_limits,
+      forced: forced,
       clock: Keyword.get(opts, :clock, &DateTime.utc_now/0)
     }
 
@@ -1047,6 +1051,7 @@ defmodule SymphonyElixir.Orchestrator do
     due_repo = next_due_repo(state, repos, now_ms)
     running_ids = Map.keys(state.running)
     watching_ids = watching_issue_ids(state)
+    forced_ids = Map.keys(state.forced)
 
     case start_async_task(fn ->
            {:repo_poll_result,
@@ -1057,6 +1062,8 @@ defmodule SymphonyElixir.Orchestrator do
               running_result: fetch_issue_states_if_needed(running_ids),
               watching_ids: watching_ids,
               watching_result: fetch_issue_states_if_needed(watching_ids),
+              forced_ids: forced_ids,
+              forced_result: fetch_issue_states_if_needed(forced_ids),
               repo_result: fetch_due_repo_if_needed(due_repo)
             }}
          end) do
@@ -1086,12 +1093,15 @@ defmodule SymphonyElixir.Orchestrator do
          running_result: running_result,
          watching_ids: watching_ids,
          watching_result: watching_result,
+         forced_ids: forced_ids,
+         forced_result: forced_result,
          repo_result: repo_result
        }) do
     state =
       state
       |> apply_running_issue_states_result(running_ids, running_result)
       |> apply_watching_issue_states_result(watching_ids, watching_result)
+      |> apply_forced_poll_result(repo_result, forced_ids, forced_result)
 
     case apply_repo_poll_result(state, repos, repo_result, now_ms) do
       {:ok, %{dispatchable: issues}, state} ->
@@ -1546,6 +1556,11 @@ defmodule SymphonyElixir.Orchestrator do
   @doc false
   @spec put_epic_lanes_for_test(State.t(), [Issue.t()]) :: State.t()
   def put_epic_lanes_for_test(%State{} = state, issues) when is_list(issues), do: put_epic_lanes(state, issues)
+
+  @doc false
+  @spec apply_forced_poll_result_for_test(State.t(), term(), [String.t()], term()) :: State.t()
+  def apply_forced_poll_result_for_test(%State{} = state, repo_result, forced_ids, forced_result),
+    do: apply_forced_poll_result(state, repo_result, forced_ids, forced_result)
 
   @doc false
   @spec put_blocked_for_test(State.t(), [Issue.t()]) :: State.t()
@@ -2970,6 +2985,74 @@ defmodule SymphonyElixir.Orchestrator do
       end
 
     %{state | blocked: Enum.sort_by(blocked, & &1.identifier)}
+  end
+
+  # Forced tickets are found in the repo this poll fetched. Each one already queued is refreshed by
+  # id on every poll, so it stays queued while it sits outside the active states (In Review, ...)
+  # and leaves only when its label goes, it is terminal, or Linear no longer returns it.
+  defp apply_forced_poll_result(%State{} = state, repo_result, forced_ids, forced_result) do
+    discovered =
+      case repo_result do
+        {_repo_name, {:ok, issues}} when is_list(issues) -> issues
+        _not_polled -> []
+      end
+
+    {refreshed, gone_ids} =
+      case forced_result do
+        {:ok, issues} when is_list(issues) ->
+          {issues, forced_ids -- for(%Issue{id: issue_id} <- issues, do: issue_id)}
+
+        {:error, reason} ->
+          Logger.warning("Failed to refresh forced tickets; keeping them queued: #{inspect(reason)}")
+          {[], []}
+      end
+
+    {forced, changes} = ForcedQueue.reconcile(state.forced, discovered ++ refreshed, gone_ids, Config.settings!(), state.clock.())
+
+    if changes != [] do
+      state.repo_key |> RunStore.put_forced(forced) |> log_run_store_error("persist forced tickets")
+      Enum.each(changes, &record_forced_change(&1, state.repo_key))
+    end
+
+    %{state | forced: forced}
+  end
+
+  defp record_forced_change({:start, issue_id, entry}, repo_key) do
+    Logger.info("Forced ticket queued: issue_id=#{issue_id} issue_identifier=#{entry.identifier} state=#{entry.state}")
+    record_forced_audit("forced_start", issue_id, entry, repo_key, %{})
+  end
+
+  defp record_forced_change({:end, issue_id, entry, reason}, repo_key) do
+    Logger.info("Forced ticket left the queue: issue_id=#{issue_id} issue_identifier=#{entry.identifier} reason=#{reason}")
+    record_forced_audit("forced_end", issue_id, entry, repo_key, %{reason: Atom.to_string(reason)})
+  end
+
+  defp record_forced_audit(event_type, issue_id, entry, repo_key, attrs) do
+    %{
+      event_type: event_type,
+      repo_key: entry.repo_key || repo_key,
+      issue_id: issue_id,
+      issue_identifier: entry.identifier,
+      state: entry.state,
+      forced_since: DateTime.to_iso8601(entry.forced_since)
+    }
+    |> Map.merge(attrs)
+    |> AuditLog.record()
+    |> case do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("Failed to record #{event_type} audit event: issue_id=#{issue_id} reason=#{inspect(reason)}")
+    end
+  end
+
+  defp persisted_forced(repo_key) do
+    case RunStore.get_forced(repo_key) do
+      %{} = forced ->
+        forced
+
+      {:error, reason} ->
+        Logger.warning("Failed to restore forced tickets from run store: #{inspect(reason)}")
+        %{}
+    end
   end
 
   defp blocker_snapshot(%{} = blocker), do: %{identifier: Map.get(blocker, :identifier), state: Map.get(blocker, :state)}
@@ -6002,6 +6085,8 @@ defmodule SymphonyElixir.Orchestrator do
       dispatch_state: dispatch_state_snapshot(state),
       epic_lanes: EpicLanes.snapshot(state.epic_lanes, epic_lane_running(state.running)),
       blocked: state.blocked || [],
+      forced: ForcedQueue.snapshot(state.forced),
+      concurrency: concurrency_snapshot(state),
       finishing: finishing_snapshot(state.running),
       auto_merge: PrReviewPoller.auto_merge_statuses(),
       slot_waiting: slot_waiting_snapshot(state.slot_waiting) ++ merging_ci_waiting_snapshot(state.merging_ci_waits),
@@ -6013,6 +6098,16 @@ defmodule SymphonyElixir.Orchestrator do
         poll_interval_ms: state.poll_interval_ms,
         linear: linear_rate_limit_snapshot(state)
       }
+    }
+  end
+
+  defp concurrency_snapshot(%State{} = state) do
+    agent = Config.settings!().agent
+
+    %{
+      max_total: state.max_concurrent_agents || agent.max_concurrent_agents,
+      finishing_max: agent.finishing_max,
+      forced_max: agent.forced_max
     }
   end
 

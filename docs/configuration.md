@@ -249,6 +249,9 @@ agent:
     max_total: 10
     epic_lanes:
     finishing_max: 2
+    force_label: expedite
+    forced_max: 1
+    forced_stale_after_hours: 72
     max_by_issue_state:
       rework: 2
   limits:
@@ -428,6 +431,19 @@ agent:
   finish approved work, so they don't use `max_total` slots or epic lanes and start as soon as one
   of these is free. Auto Review QA passes are capped by it too, on top of
   `auto_review.max_concurrent`. Values below `1` fail `symphony check`.
+- `concurrency.force_label` (default: `expedite`) is the label a human puts on a ticket to have it
+  worked now, through to Done (matched case-insensitively). Symphony records when a poll first
+  sees a ticket carry it outside a terminal state (`forced_since`, kept across restarts) and lists
+  the forced tickets in `/api/v1/state` (`forced`), earliest first with their queue `position`. A
+  ticket leaves the list at the next poll after the label is removed, it reaches a terminal state,
+  or Linear no longer returns it. The audit log records `forced_start` and `forced_end` (with
+  `reason`: `label_removed`, `terminal` or `missing`). Forcing doesn't change dispatch yet.
+- `concurrency.forced_max` (default: `1`) is how many forced tickets may be worked at once, once
+  forcing changes dispatch; `/api/v1/state` reports it under `concurrency`. Values below `1` fail
+  `symphony check`.
+- `concurrency.forced_stale_after_hours` (default: `72`) is how long a ticket may stay forced before
+  it counts as stale. It is validated now but not reported yet. Values below `1` fail
+  `symphony check`.
 - Dispatch goes closest to done first: `Merging`, Auto Review, `Rework`, resumes such as
   `In Progress`, then `Todo`; priority and age only break ties within a stage. While a `Merging`
   ticket waits for a finishing slot, or a QA pass is queued, no `Todo` ticket starts; `Rework` and

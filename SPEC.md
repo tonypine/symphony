@@ -823,6 +823,22 @@ Fields:
   - Landing runs (issues in `Merging`) that may run at once outside `max_total` and the epic lanes
     (Section 8.3). Auto Review QA passes are also capped by it. Values below `1` fail configuration
     validation.
+- `concurrency.force_label` (string)
+  - Default: `expedite`.
+  - A non-terminal issue carrying this label (case-insensitive) is forced. The orchestrator records
+    when it first saw each forced issue (`forced_since`, persisted across restarts), refreshes the
+    known ones by id on every poll, and drops one when the label is removed, the issue is terminal,
+    or the tracker no longer returns it. Forced issues are reported in the status snapshot
+    (`forced`) and the audit log (`forced_start`, `forced_end`); dispatch does not treat them
+    differently yet.
+- `concurrency.forced_max` (positive integer)
+  - Default: `1`.
+  - Forced issues that may be worked at once (reported, not yet enforced). Values below `1` fail
+    configuration validation.
+- `concurrency.forced_stale_after_hours` (positive integer)
+  - Default: `72`.
+  - How long an issue may stay forced before it counts as stale (not reported yet). Values below
+    `1` fail configuration validation.
 - `concurrency.max_by_issue_state` (map `state_name -> positive integer`)
   - Default: empty map.
   - State keys are normalized (`lowercase`) for lookup.
@@ -1488,6 +1504,9 @@ not require recognizing or validating extension fields unless that extension is 
 - `agent.concurrency.max_by_issue_state`: map of positive integers, default `{}`
 - `agent.concurrency.epic_lanes`: integer between `0` and `max_total`, default `max_total`
 - `agent.concurrency.finishing_max`: integer `>= 1`, default `2`
+- `agent.concurrency.force_label`: string, default `expedite`
+- `agent.concurrency.forced_max`: integer `>= 1`, default `1`
+- `agent.concurrency.forced_stale_after_hours`: integer `>= 1`, default `72`
 - `agent.limits.max_turns`: integer, default `20`
 - `agent.limits.retry_backoff_max_ms`: integer, default `300000` (5m)
 - `agent.limits.max_consecutive_identical_tool_failures`: integer, default `5`; `0` disables
@@ -3169,6 +3188,17 @@ Minimum endpoints:
           "summary": "MT-655 waiting on MT-656 (In Progress)"
         }
       ],
+      "forced": [
+        {
+          "issue_id": "vwx234",
+          "issue_identifier": "MT-657",
+          "title": "Fix the release build",
+          "state": "In Progress",
+          "forced_since": "2026-02-24T19:00:00Z",
+          "position": 1
+        }
+      ],
+      "concurrency": {"max_total": 10, "finishing_max": 2, "forced_max": 1},
       "watching": [
         {
           "repo_key": "web",
