@@ -5,7 +5,8 @@ defmodule SymphonyElixir.ForcedQueue do
 
   A ticket joins the queue the first time a poll sees it carry the label outside a terminal state.
   It keeps its `forced_since`, and so its place in the queue, until the label goes, the ticket
-  reaches a terminal state, or Linear no longer returns it. The earliest `forced_since` is first.
+  reaches a terminal state (`done`), or Linear no longer returns it. The earliest `forced_since` is
+  first. The orchestrator also keeps in an entry when it sent the stale and human-gate notices.
   """
 
   alias SymphonyElixir.Linear.Issue
@@ -19,7 +20,7 @@ defmodule SymphonyElixir.ForcedQueue do
         }
 
   @type entries :: %{optional(String.t()) => entry()}
-  @type end_reason :: :label_removed | :terminal | :missing
+  @type end_reason :: :label_removed | :done | :missing
   @type change :: {:start, String.t(), entry()} | {:end, String.t(), entry(), end_reason()}
 
   @doc """
@@ -72,7 +73,7 @@ defmodule SymphonyElixir.ForcedQueue do
   defp known_entry(entry, %Issue{} = issue, _gone?, settings) do
     cond do
       Issue.forced?(issue, settings) -> {:keep, Map.merge(entry, issue_fields(issue))}
-      terminal?(issue, settings) -> {:end, :terminal}
+      terminal?(issue, settings) -> {:end, :done}
       true -> {:end, :label_removed}
     end
   end

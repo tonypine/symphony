@@ -20,6 +20,7 @@ defmodule SymphonyElixir.Orchestrator do
     Config,
     EpicLanes,
     ForcedQueue,
+    ForcedStatus,
     Notifications,
     PrReviewPoller,
     PrRun,
@@ -118,6 +119,7 @@ defmodule SymphonyElixir.Orchestrator do
       forced_waiting_noted: MapSet.new(),
       forced_parts: %{},
       forced_touched: %{},
+      forced_issues: %{},
       slot_waiting: %{},
       setup_failed: %{},
       pause: %{paused: false, reason: nil, paused_at: nil},
@@ -1176,6 +1178,7 @@ defmodule SymphonyElixir.Orchestrator do
           |> clear_running_quality_gate_cache_entries()
           |> put_epic_lanes(issues)
           |> put_forced_parts(issues)
+          |> remember_forced_issues(issues)
           |> put_blocked(issues)
           |> release_merging_ci_waits(issues)
 
@@ -3223,7 +3226,77 @@ defmodule SymphonyElixir.Orchestrator do
     observed = Enum.reject(discovered ++ refreshed, &match?(%Issue{id: issue_id} when is_map_key(touched, issue_id), &1))
     gone_ids = Enum.reject(gone_ids, &is_map_key(touched, &1))
     {forced, changes} = ForcedQueue.reconcile(state.forced, observed, gone_ids, Config.settings!(), state.clock.())
+
     %{put_forced(state, forced, changes) | forced_touched: touched}
+    |> remember_forced_issues(observed)
+    |> note_forced_milestones()
+  end
+
+  # The latest issue seen for each forced ticket and forced parent's part, from the poll's
+  # candidates, the by-id refresh and `symphony force`, so the snapshot can work out its phase.
+  defp remember_forced_issues(%State{} = state, issues) do
+    seen = for %Issue{id: issue_id} = issue <- issues, forced_queued?(issue_id, state), into: %{}, do: {issue_id, issue}
+    known = Map.merge(state.forced_issues, seen)
+    %{state | forced_issues: Map.filter(known, fn {issue_id, _issue} -> forced_queued?(issue_id, state) end)}
+  end
+
+  # Once per forced ticket, a warning and a `forced_stale` notice when it has been forced past
+  # `forced_stale_after_hours`; and a `forced_human_gate` notice each time it enters `In Review`.
+  # When each was sent is kept in the queue entry, so a restart does not send it again.
+  defp note_forced_milestones(%State{forced: forced} = state) do
+    now = state.clock.()
+    stale_after_hours = Config.settings!().agent.forced_stale_after_hours
+
+    noted =
+      Map.new(forced, fn {issue_id, entry} ->
+        issue = forced_notice_issue(issue_id, entry, state)
+        {issue_id, entry |> note_forced_stale(issue, now, stale_after_hours) |> note_forced_human_gate(issue, now)}
+      end)
+
+    if noted != forced do
+      state.repo_key |> RunStore.put_forced(noted) |> log_run_store_error("persist forced tickets")
+    end
+
+    %{state | forced: noted}
+  end
+
+  defp note_forced_stale(entry, %Issue{} = issue, now, stale_after_hours) do
+    forced_for = ForcedStatus.forced_for_seconds(entry.forced_since, now)
+
+    if ForcedStatus.stale?(forced_for, stale_after_hours) and is_nil(Map.get(entry, :stale_notified_at)) do
+      reason = "forced for #{ForcedStatus.duration_label(forced_for)}, past forced_stale_after_hours=#{stale_after_hours}"
+      Logger.warning("Forced ticket stale: #{issue_context(issue)} forced_since=#{DateTime.to_iso8601(entry.forced_since)}; #{reason}")
+      Notifications.emit_issue_event(:forced_stale, issue, %{reason: reason})
+      Map.put(entry, :stale_notified_at, now)
+    else
+      entry
+    end
+  end
+
+  defp note_forced_human_gate(entry, %Issue{} = issue, now) do
+    in_review? = normalize_issue_state(entry.state || "") == "in review"
+    notified? = not is_nil(Map.get(entry, :human_gate_notified_at))
+
+    cond do
+      in_review? and not notified? ->
+        reason = if Issue.breakdown?(issue), do: "#{issue.identifier}'s plan is waiting for your review", else: "#{issue.identifier} is waiting for your review"
+        Logger.info("Forced ticket at a human gate: #{issue_context(issue)}; #{reason}")
+        Notifications.emit_issue_event(:forced_human_gate, issue, %{reason: reason})
+        Map.put(entry, :human_gate_notified_at, now)
+
+      not in_review? and notified? ->
+        Map.delete(entry, :human_gate_notified_at)
+
+      true ->
+        entry
+    end
+  end
+
+  defp forced_notice_issue(issue_id, entry, %State{forced_issues: issues}) do
+    case Map.get(issues, issue_id) do
+      %Issue{} = issue -> %{issue | state: entry.state}
+      nil -> %Issue{id: issue_id, identifier: entry.identifier, title: entry.title, state: entry.state, repo_key: entry.repo_key}
+    end
   end
 
   defp put_forced(%State{} = state, forced, changes) do
@@ -3296,6 +3369,25 @@ defmodule SymphonyElixir.Orchestrator do
   defp record_forced_change({:end, issue_id, entry, reason}, repo_key) do
     Logger.info("Forced ticket left the queue: issue_id=#{issue_id} issue_identifier=#{entry.identifier} reason=#{reason}")
     record_forced_audit("forced_end", issue_id, entry, repo_key, %{reason: Atom.to_string(reason)})
+    if reason == :done, do: remove_force_label(issue_id, entry)
+  end
+
+  # A ticket forced through to a terminal state is done with: its force label comes off, so it
+  # doesn't read as forced on the board. The Linear call runs outside the orchestrator.
+  defp remove_force_label(issue_id, entry) do
+    label = Config.settings!().agent.force_label
+
+    remove = fn ->
+      case Tracker.remove_issue_label(issue_id, label) do
+        :ok -> Logger.info("Removed the force label from a done ticket: issue_id=#{issue_id} issue_identifier=#{entry.identifier} label=#{label}")
+        {:error, reason} -> Logger.warning("Failed to remove the force label from a done ticket: issue_id=#{issue_id} issue_identifier=#{entry.identifier} reason=#{inspect(reason)}")
+      end
+    end
+
+    case start_task_supervisor_child(remove) do
+      {:ok, _pid} -> :ok
+      {:error, reason} -> Logger.warning("Failed to start removing the force label: issue_id=#{issue_id} issue_identifier=#{entry.identifier} reason=#{inspect(reason)}")
+    end
   end
 
   defp record_forced_audit(event_type, issue_id, entry, repo_key, attrs) do
@@ -3472,13 +3564,87 @@ defmodule SymphonyElixir.Orchestrator do
       else: Enum.find_value(parts, issue_id, fn {parent_id, part} -> part.issue_id == issue_id && parent_id end)
   end
 
-  # The forced queue for the snapshot: each forced parent with its current part, and whether the
-  # ticket waits for a person (not yet approved, or In Review) rather than for Symphony.
-  defp forced_snapshot(%State{} = state) do
+  # The forced queue for the snapshot: each forced parent with its current part, whether the
+  # ticket waits for a person (not yet approved, or In Review) rather than for Symphony, its phase
+  # and what it waits on (worked out on the part when a forced parent has one), and how long it has
+  # been forced.
+  defp forced_snapshot(%State{forced: forced}, _qa, _auto_merge) when map_size(forced) == 0, do: []
+
+  defp forced_snapshot(%State{} = state, qa, auto_merge) do
+    now = state.clock.()
+    stale_after_hours = Config.settings!().agent.forced_stale_after_hours
+    context = %{qa: qa, auto_merge_ids: MapSet.new(auto_merge, & &1.issue_id)}
+
     for entry <- ForcedQueue.snapshot(state.forced) do
-      Map.merge(entry, %{sub_issue: Map.get(state.forced_parts, entry.issue_id), waiting_on_human: EpicLanes.human_gated_state?(entry.state)})
+      part = Map.get(state.forced_parts, entry.issue_id)
+      forced_for = ForcedStatus.forced_for_seconds(entry.forced_since, now)
+
+      entry
+      |> Map.merge(%{
+        sub_issue: part,
+        waiting_on_human: EpicLanes.human_gated_state?(entry.state),
+        forced_for_seconds: forced_for,
+        stale: ForcedStatus.stale?(forced_for, stale_after_hours)
+      })
+      |> Map.merge(ForcedStatus.describe(forced_signals(forced_subject(entry, part, state), state, context)))
     end
   end
+
+  # The issue a forced entry's phase is worked out on: its part, else the ticket itself; the latest
+  # one a poll saw, else what the queue recorded.
+  defp forced_subject(entry, part, %State{forced_issues: issues}) do
+    {issue_id, identifier, issue_state} =
+      case part do
+        %{issue_id: part_id} -> {part_id, part.identifier, part.state}
+        nil -> {entry.issue_id, entry.identifier, entry.state}
+      end
+
+    Map.get(issues, issue_id) || %Issue{id: issue_id, identifier: identifier, title: entry.title, state: issue_state}
+  end
+
+  defp forced_signals(%Issue{id: issue_id} = issue, %State{} = state, context) do
+    case Map.get(state.running, issue_id) do
+      %{} = running_entry ->
+        %{running_kind: get_in(running_entry, [:run_profile, :kind]) || :implementation}
+
+      nil ->
+        settings = Config.settings!()
+        terminal_states = settings.tracker.terminal_states
+        repo_key = dispatch_repo_key(state, issue)
+
+        %{
+          qa: forced_qa_status(issue_id, context.qa),
+          state: issue.state,
+          auto_review_state: AutoReview.state(settings),
+          kind: AgentRunner.run_profile(issue, Config.settings_for_repo!(repo_key), repo_key: repo_key).kind,
+          merging_ci_wait?: Map.has_key?(state.merging_ci_waits, issue_id),
+          auto_merge?: merging_state?(issue.state) and MapSet.member?(context.auto_merge_ids, issue_id),
+          blockers: forced_blockers(issue, state, terminal_states),
+          paused?: match?(%{paused: true}, state.pause),
+          usage_limit?: not is_nil(usage_limit_hold(state, issue)),
+          slot_waiting?: Map.has_key?(state.slot_waiting, issue_id)
+        }
+    end
+  end
+
+  # Its open blockers, else the merged blockers whose fix the running app does not include yet.
+  defp forced_blockers(%Issue{} = issue, %State{} = state, terminal_states) do
+    if Issue.blocked?(issue, terminal_states) do
+      issue |> Issue.open_blockers(terminal_states) |> Enum.map(&blocker_label/1)
+    else
+      state.update_holds |> Map.get(issue.id, %{blockers: []}) |> Map.fetch!(:blockers) |> Enum.map(&blocker_label/1)
+    end
+  end
+
+  defp forced_qa_status(issue_id, %{running: running, queued: queued}) do
+    cond do
+      Enum.any?(running, &(&1.issue_id == issue_id)) -> :running
+      Enum.any?(queued, &(&1.issue_id == issue_id)) -> :queued
+      true -> nil
+    end
+  end
+
+  defp blocker_label(blocker), do: Map.get(blocker, :identifier) || "an unknown issue"
 
   defp work_running_ids(running) when is_map(running) do
     for {issue_id, entry} <- running, not finishing_entry?(entry), not forced_entry?(entry), do: issue_id
@@ -6331,7 +6497,7 @@ defmodule SymphonyElixir.Orchestrator do
         {state.forced, []}
       end
 
-    state = put_forced(state, forced, changes)
+    state = state |> put_forced(forced, changes) |> remember_forced_issues([issue])
     state = %{state | forced_touched: Map.put(state.forced_touched, issue.id, System.monotonic_time(:millisecond))}
     {_coalesced, state} = request_poll(state)
     result = force_result(issue, forced, settings)
@@ -6535,6 +6701,9 @@ defmodule SymphonyElixir.Orchestrator do
 
     skipped = error_skipped ++ cached_skipped
 
+    qa = qa_snapshot()
+    auto_merge = PrReviewPoller.auto_merge_statuses()
+
     awaiting_clarification =
       quality_gate_cache
       |> QualityGate.awaiting_clarification_from_cache()
@@ -6558,11 +6727,11 @@ defmodule SymphonyElixir.Orchestrator do
       dispatch_state: dispatch_state_snapshot(state),
       epic_lanes: EpicLanes.snapshot(state.epic_lanes, epic_lane_running(state.running)),
       blocked: state.blocked || [],
-      forced: forced_snapshot(state),
+      forced: forced_snapshot(state, qa, auto_merge),
       concurrency: concurrency_snapshot(state),
       finishing: finishing_snapshot(state.running),
-      qa: qa_snapshot(),
-      auto_merge: PrReviewPoller.auto_merge_statuses(),
+      qa: qa,
+      auto_merge: auto_merge,
       slot_waiting: slot_waiting_snapshot(state.slot_waiting, state) ++ merging_ci_waiting_snapshot(state),
       claimed: state.claimed |> MapSet.to_list() |> Enum.sort(),
       pollers: poller_status_snapshot(),

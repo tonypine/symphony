@@ -7,6 +7,7 @@ defmodule SymphonyElixirWeb.Presenter do
     AuditLog,
     BuildInfo,
     Config,
+    ForcedStatus,
     Orchestrator,
     Quality,
     RunKind,
@@ -60,7 +61,8 @@ defmodule SymphonyElixirWeb.Presenter do
             watching: length(Map.get(snapshot, :watching, [])),
             conflicts: length(Map.get(snapshot, :conflicts, [])),
             retrying: length(snapshot.retrying),
-            claimed: length(Map.get(snapshot, :claimed, []))
+            claimed: length(Map.get(snapshot, :claimed, [])),
+            forced: length(Map.get(snapshot, :forced, []))
           },
           running: Enum.map(snapshot.running, &running_entry_payload/1),
           watching: snapshot |> Map.get(:watching, []) |> Enum.map(&watching_entry_payload/1),
@@ -871,16 +873,27 @@ defmodule SymphonyElixirWeb.Presenter do
   end
 
   defp forced_payload(entry) do
+    status = %{
+      phase: Map.get(entry, :phase),
+      running: Map.get(entry, :running, false),
+      waiting_on: Map.get(entry, :waiting_on),
+      blockers: Map.get(entry, :blockers, [])
+    }
+
     %{
       issue_id: entry.issue_id,
       issue_identifier: entry.identifier,
       title: entry.title,
       state: entry.state,
       forced_since: iso8601(entry.forced_since),
+      forced_for_seconds: Map.get(entry, :forced_for_seconds),
+      stale: Map.get(entry, :stale, false),
       position: entry.position,
       waiting_on_human: Map.get(entry, :waiting_on_human, false),
       sub_issue: forced_sub_issue_payload(Map.get(entry, :sub_issue))
     }
+    |> Map.merge(status)
+    |> Map.put(:summary, if(status.phase, do: ForcedStatus.summary(status)))
   end
 
   defp forced_sub_issue_payload(%{issue_id: issue_id} = part),

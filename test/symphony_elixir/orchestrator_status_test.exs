@@ -4936,6 +4936,57 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert length(String.split(log, "snapshot stale")) == 2
   end
 
+  test "status dashboard frame keeps the forced tickets from the live snapshot" do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", forced_max: 1)
+
+    {:ok, orchestrator_pid} = Orchestrator.start_link()
+    dashboard_name = Module.concat(__MODULE__, :ForcedSnapshotDashboard)
+
+    :ets.insert(
+      @snapshot_table,
+      {:current,
+       %{
+         running: [],
+         watching: [],
+         retrying: [],
+         forced: [
+           %{
+             issue_id: "issue-forced",
+             identifier: "MT-902",
+             title: "Forced",
+             state: "Todo",
+             position: 1,
+             phase: :implementation,
+             running: false,
+             waiting_on: :blocker,
+             blockers: ["MT-901"],
+             forced_for_seconds: 300,
+             stale: false,
+             sub_issue: nil
+           }
+         ],
+         codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+         rate_limits: nil,
+         polling: %{next_poll_in_ms: 5_000}
+       }, System.monotonic_time(:millisecond), System.system_time(:millisecond)}
+    )
+
+    {:ok, dashboard_pid} =
+      StatusDashboard.start_link(name: dashboard_name, enabled: false, refresh_ms: 60_000, render_interval_ms: 1)
+
+    on_exit(fn ->
+      if Process.alive?(orchestrator_pid), do: stop_process(orchestrator_pid)
+      if Process.alive?(dashboard_pid), do: stop_process(dashboard_pid)
+    end)
+
+    assert {:ok, frame} = StatusDashboard.frame(140, dashboard_name)
+    plain = Regex.replace(~r/\e\[[0-9;]*m/, frame, "")
+
+    assert plain =~ "forced 1/1"
+    assert plain =~ "├─ Forced"
+    assert plain =~ ~r/MT-902\s+implementation\s+blocker MT-901/
+  end
+
   test "status dashboard renders startup pending before the first snapshot grace expires" do
     dashboard_name = Module.concat(__MODULE__, :StartupPendingDashboard)
     parent = self()

@@ -309,7 +309,9 @@ defmodule SymphonyElixir.NotificationsTest do
              "usage_limit_paused",
              "usage_limit_headroom",
              "usage_limit_resumed",
-             "forced_waiting"
+             "forced_waiting",
+             "forced_human_gate",
+             "forced_stale"
            ]
 
     assert Event.known_event?(" RUN_FAILED ")
@@ -514,6 +516,29 @@ defmodule SymphonyElixir.NotificationsTest do
     assert [%{"color" => "warning", "blocks" => [headline | _]}] = slack["attachments"]
     assert headline["text"]["text"] =~ "*Forced ticket waiting*"
     assert Formatter.webhook_payload(event)["reason"] == "queued #2; forced slot taken by ACME-1"
+  end
+
+  test "formatter titles the forced human-gate and stale notices" do
+    {:ok, gate} =
+      Event.new(:forced_human_gate, %{
+        issue_identifier: "ACME-3",
+        issue_url: "https://linear.test/ACME-3",
+        pr_url: "https://github.test/org/repo/pull/3",
+        reason: "ACME-3 is waiting for your review",
+        timestamp: ~U[2026-10-04 08:00:00Z]
+      })
+
+    slack = Formatter.slack_payload(gate)
+    assert slack["text"] == "Forced ticket waiting for your review: ACME-3"
+    assert [%{"color" => "#2f80ed", "blocks" => [headline | _]}] = slack["attachments"]
+    assert headline["text"]["text"] =~ "*Forced ticket waiting for your review*"
+    assert Formatter.state_url(gate) == "https://github.test/org/repo/pull/3"
+
+    {:ok, stale} = Event.new(:forced_stale, %{issue_identifier: "ACME-4", reason: "forced for 3d 1h, past forced_stale_after_hours=72"})
+    slack = Formatter.slack_payload(stale)
+    assert slack["text"] == "Forced ticket stale: ACME-4"
+    assert [%{"color" => "warning"}] = slack["attachments"]
+    assert Formatter.webhook_payload(stale)["reason"] == "forced for 3d 1h, past forced_stale_after_hours=72"
   end
 
   test "formatter includes reviewer feedback context for webhook and Slack payloads" do
