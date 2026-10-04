@@ -2521,6 +2521,25 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert log =~ "Variable \\\"$ids\\\" got invalid value"
   end
 
+  test "linear client asks Linear to pre-sign upload URLs only when a read opts in" do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_api_token: "linear-token", tracker_project_slug: "project")
+    parent = self()
+
+    request_fun = fn _payload, headers ->
+      send(parent, {:linear_headers, headers})
+      {:ok, %{status: 200, body: %{"data" => %{}}}}
+    end
+
+    assert {:ok, _body} = Client.graphql("query Viewer { viewer { id } }", %{}, sign_file_urls: true, request_fun: request_fun)
+    assert_receive {:linear_headers, signed_headers}
+    assert {"public-file-urls-expire-in", "21600"} in signed_headers
+    assert {"Authorization", "linear-token"} in signed_headers
+
+    assert {:ok, _body} = Client.graphql("query Viewer { viewer { id } }", %{}, request_fun: request_fun)
+    assert_receive {:linear_headers, plain_headers}
+    refute List.keymember?(plain_headers, "public-file-urls-expire-in", 0)
+  end
+
   test "linear client redacts configured secrets from graphql request error logs" do
     token = "linear-secret-token"
 
@@ -3868,7 +3887,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert "github.com" in built_in_domains
     assert "registry.npmjs.org" in built_in_domains
 
-    for domain <- ["dl.google.com", "maven.google.com", "release-assets.githubusercontent.com"] do
+    for domain <- ["dl.google.com", "maven.google.com", "release-assets.githubusercontent.com", "uploads.linear.app"] do
       assert domain in built_in_domains
       assert domain in Schema.claude_built_in_network_allowed_domains()
     end
