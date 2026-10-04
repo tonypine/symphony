@@ -3,6 +3,7 @@ defmodule SymphonyElixir.ConfigSplitTest do
 
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Cache
+  alias SymphonyElixir.Config.{RepoWorkflowSchema, Schema}
   alias SymphonyElixir.Config.Schema.Hooks
   alias SymphonyElixir.Config.SystemSchema
   alias SymphonyElixir.Linear.Issue
@@ -228,6 +229,49 @@ defmodule SymphonyElixir.ConfigSplitTest do
     assert settings.tracker.kind == "memory"
     assert settings.hooks.after_create == "echo setup"
     assert settings.verification.enabled == true
+    assert settings.push_check == %Schema.PushCheck{}
+  end
+
+  test "repo workflow configures the push check", %{root: root} do
+    repo =
+      write_repo!(root, "app", """
+      ---
+      push_check:
+        command: .githooks/pre-push --head
+        paths: ["*.ex", "mix.lock"]
+      ---
+      Repo prompt
+      """)
+
+    write_symphony!(root, [repo])
+    SymphonyElixir.Workflow.set_symphony_file_path(Path.join(root, "symphony.yml"))
+
+    assert {:ok, settings} = Config.settings()
+
+    assert settings.push_check == %Schema.PushCheck{
+             command: ".githooks/pre-push --head",
+             result_file: "tmp/push-check",
+             paths: ["*.ex", "mix.lock"]
+           }
+  end
+
+  test "repo workflow rejects a push check result file outside the workspace and blank paths" do
+    for result_file <- ["/tmp/push-check", "../push-check", "tmp/../../push-check"] do
+      assert {:error, {:invalid_repo_workflow_config, message}} =
+               RepoWorkflowSchema.parse(%{"push_check" => %{"command" => "check", "result_file" => result_file}})
+
+      assert message =~ "push_check.result_file must be a path inside the workspace"
+    end
+
+    assert {:error, {:invalid_repo_workflow_config, message}} =
+             RepoWorkflowSchema.parse(%{"push_check" => %{"command" => "check", "result_file" => ""}})
+
+    assert message =~ "push_check.result_file can't be blank"
+
+    assert {:error, {:invalid_repo_workflow_config, message}} =
+             RepoWorkflowSchema.parse(%{"push_check" => %{"command" => "check", "paths" => ["*.ex", " "]}})
+
+    assert message =~ "push_check.paths must contain only non-empty strings"
   end
 
   test "system schema accepts operator-level verification defaults" do

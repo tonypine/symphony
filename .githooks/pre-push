@@ -8,6 +8,12 @@
 # `after_create` for Symphony workspaces). Never bypass it with `git push --no-verify`:
 # fix what it reports and push again.
 #
+# `.githooks/pre-push --head` runs the same checks on what HEAD would push (everything
+# since the merge-base with origin/main) and records the result in tmp/push-check as
+# `<HEAD sha> pass` or `<HEAD sha> fail` plus the failures. Symphony's
+# `github_push_branch` tool pushes with repo hooks off, so it reads that file instead
+# (WORKFLOW.md `push_check`). Commit first: uncommitted Elixir changes fail this mode.
+#
 # Timed 2026-10-04 on a warm workspace (Mac, Elixir 1.19): about 2 s with Elixir
 # changes; a push with no Elixir change skips in about 0.05 s. When the project isn't
 # compiled yet (a fresh workspace), the compile step adds about 35 s.
@@ -18,6 +24,11 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 base_branch="origin/main"
+result_file="tmp/push-check"
+head_mode=false
+if [ "${1:-}" = "--head" ]; then
+  head_mode=true
+fi
 
 all_zeros() {
   [[ "$1" =~ ^0+$ ]]
@@ -42,18 +53,44 @@ changed_files() {
   fi
 }
 
+# Records this mode's result for the commit it checked, then exits with `status`.
+record_result() {
+  local status="$1"
+  shift
+  mkdir -p "$(dirname "$result_file")"
+  {
+    printf '%s %s\n' "$head_sha" "$status"
+    for line in "$@"; do
+      printf '%s\n' "$line"
+    done
+  } >"$result_file.tmp"
+  mv "$result_file.tmp" "$result_file"
+}
+
 changed=""
-while read -r local_ref local_sha remote_ref remote_sha; do
-  [ -n "${local_sha:-}" ] || continue
-  # A deleted ref pushes no files.
-  all_zeros "$local_sha" && continue
-  changed="${changed}$(changed_files "$local_sha" "$remote_sha")"$'\n'
-done
+if [ "$head_mode" = true ]; then
+  head_sha="$(git rev-parse HEAD)"
+  if [ -n "$(git status --porcelain -- '*.ex' '*.exs' '*.heex' '*.eex' 'mix.lock')" ]; then
+    message="the working tree has uncommitted Elixir changes, so the result would not match HEAD. Fix: commit them, then run \`.githooks/pre-push --head\` again."
+    record_result fail "$message"
+    echo "pre-push: $message" >&2
+    exit 1
+  fi
+  changed="$(changed_files "$head_sha" 0)"
+else
+  while read -r local_ref local_sha remote_ref remote_sha; do
+    [ -n "${local_sha:-}" ] || continue
+    # A deleted ref pushes no files.
+    all_zeros "$local_sha" && continue
+    changed="${changed}$(changed_files "$local_sha" "$remote_sha")"$'\n'
+  done
+fi
 
 elixir_files="$(printf '%s' "$changed" | grep -E '\.(ex|exs|heex|eex)$|(^|/)mix\.lock$' | sort -u || true)"
 
 if [ -z "$elixir_files" ]; then
   echo "pre-push: no Elixir file changed; skipping format, compile and credo checks."
+  [ "$head_mode" = false ] || record_result pass
   exit 0
 fi
 
@@ -75,7 +112,7 @@ done <<EOF
 $elixir_files
 EOF
 
-if [ -n "$(git status --porcelain -- '*.ex' '*.exs' '*.heex' '*.eex' 'mix.lock')" ]; then
+if [ "$head_mode" = false ] && [ -n "$(git status --porcelain -- '*.ex' '*.exs' '*.heex' '*.eex' 'mix.lock')" ]; then
   echo "pre-push: note: the working tree has uncommitted Elixir changes; the checks run on the working tree."
 fi
 
@@ -99,6 +136,7 @@ if [ "${#credo_files[@]}" -gt 0 ]; then
 fi
 
 if [ "${#failures[@]}" -gt 0 ]; then
+  [ "$head_mode" = false ] || record_result fail "${failures[@]}"
   echo >&2
   for failure in "${failures[@]}"; do
     echo "pre-push: $failure" >&2
@@ -107,4 +145,5 @@ if [ "${#failures[@]}" -gt 0 ]; then
   exit 1
 fi
 
+[ "$head_mode" = false ] || record_result pass
 echo "pre-push: format, compile and credo checks passed."
