@@ -12,6 +12,12 @@ SWIFT_FLAGS ?=
 # `-` signs ad hoc, so local builds need no certificate. CI passes the
 # release signing identity.
 SIGNING_IDENTITY ?= -
+# Extra codesign options, such as `--keychain <file>` for an identity in a
+# keychain that isn't in the search list.
+CODESIGN_FLAGS ?=
+# A SymphonyBar executable built already (`swift build -c release`), copied
+# instead of building one, so several bundles can share one build.
+PREBUILT_EXECUTABLE ?=
 # Inputs for `make bundle`: the Burrito-built Symphony binary to embed, and the
 # versions to write into Info.plist (left as in Info.plist when unset).
 SYMPHONY_BIN ?=
@@ -21,7 +27,7 @@ BUILD_NUMBER ?=
 # against, written into Info.plist. Without it the app's Update item is off.
 MINISIGN_PUBLIC_KEY ?=
 
-.PHONY: all app bundle install run test clean
+.PHONY: all app bundle install run test e2e clean
 
 all: app
 
@@ -29,10 +35,11 @@ all: app
 # DYLD_INSERT_LIBRARIES and no other code runs with its Accessibility and Screen
 # Recording grants. It needs no entitlements: both are TCC grants.
 app:
-	swift build $(SWIFT_FLAGS) -c $(CONFIG) --product $(EXECUTABLE)
+	@if [ -z "$(PREBUILT_EXECUTABLE)" ]; then swift build $(SWIFT_FLAGS) -c $(CONFIG) --product $(EXECUTABLE); fi
 	rm -rf "$(APP)"
 	mkdir -p "$(APP)/Contents/MacOS"
-	cp "$$(swift build $(SWIFT_FLAGS) -c $(CONFIG) --show-bin-path)/$(EXECUTABLE)" "$(APP)/Contents/MacOS/$(EXECUTABLE)"
+	@if [ -n "$(PREBUILT_EXECUTABLE)" ]; then cp "$(PREBUILT_EXECUTABLE)" "$(APP)/Contents/MacOS/$(EXECUTABLE)"; \
+	else cp "$$(swift build $(SWIFT_FLAGS) -c $(CONFIG) --show-bin-path)/$(EXECUTABLE)" "$(APP)/Contents/MacOS/$(EXECUTABLE)"; fi
 	cp Info.plist "$(APP)/Contents/Info.plist"
 	mkdir -p "$(APP)/Contents/Resources"
 	cp Resources/update-helper.sh "$(APP)/Contents/Resources/update-helper.sh"
@@ -40,8 +47,8 @@ app:
 	mkdir -p "$(QA_DRIVER_APP)/Contents/MacOS"
 	swiftc -O -o "$(QA_DRIVER_APP)/Contents/MacOS/symphony-qa-driver" "$(QA_DRIVER_SOURCE)/symphony-qa-driver.swift"
 	cp "$(QA_DRIVER_SOURCE)/Info.plist" "$(QA_DRIVER_APP)/Contents/Info.plist"
-	codesign --force --options runtime --sign "$(SIGNING_IDENTITY)" "$(QA_DRIVER_APP)"
-	codesign --force --sign "$(SIGNING_IDENTITY)" "$(APP)"
+	codesign --force --options runtime --sign "$(SIGNING_IDENTITY)" $(CODESIGN_FLAGS) "$(QA_DRIVER_APP)"
+	codesign --force --sign "$(SIGNING_IDENTITY)" $(CODESIGN_FLAGS) "$(APP)"
 	codesign --verify --strict "$(QA_DRIVER_APP)"
 	codesign --verify --strict "$(APP)"
 
@@ -56,8 +63,8 @@ bundle: app
 	chmod 755 "$(APP)/Contents/Resources/symphony"
 	@if [ -n "$(SHORT_VERSION)" ]; then plutil -replace CFBundleShortVersionString -string "$(SHORT_VERSION)" "$(APP)/Contents/Info.plist"; fi
 	@if [ -n "$(BUILD_NUMBER)" ]; then plutil -replace CFBundleVersion -string "$(BUILD_NUMBER)" "$(APP)/Contents/Info.plist"; fi
-	codesign --force --sign "$(SIGNING_IDENTITY)" "$(APP)/Contents/Resources/symphony"
-	codesign --force --sign "$(SIGNING_IDENTITY)" "$(APP)"
+	codesign --force --sign "$(SIGNING_IDENTITY)" $(CODESIGN_FLAGS) "$(APP)/Contents/Resources/symphony"
+	codesign --force --sign "$(SIGNING_IDENTITY)" $(CODESIGN_FLAGS) "$(APP)"
 	codesign --verify --strict "$(APP)/Contents/Resources/symphony"
 	codesign --verify --strict "$(QA_DRIVER_APP)"
 	codesign --verify --strict "$(APP)"
@@ -74,6 +81,11 @@ run: app
 test:
 	swift test $(SWIFT_FLAGS)
 	sh Tests/update-helper-test.sh
+
+# Builds releases N and N+1 from this checkout and tests Update, Restart and
+# rollback end to end in an isolated instance. See Tests/e2e/README.md.
+e2e:
+	python3 Tests/e2e/update_restart_e2e.py
 
 clean:
 	rm -rf $(BUILD_DIR) .build

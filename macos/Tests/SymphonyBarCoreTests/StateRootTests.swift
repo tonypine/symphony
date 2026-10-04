@@ -54,7 +54,7 @@ final class StateRootTests: XCTestCase {
 
         let root = StateRoot.locate(environment: [:], home: home)
         XCTAssertEqual(root, release)
-        XCTAssertEqual(StateRoot.controlURL(in: root).absoluteString, "http://127.0.0.1:4001")
+        XCTAssertEqual(StateRoot.controlURL(in: root)?.absoluteString, "http://127.0.0.1:4001")
     }
 
     func testPicksTheDefaultDirectoryWhenItsControlURLIsNewer() throws {
@@ -72,6 +72,18 @@ final class StateRootTests: XCTestCase {
 
     func testControlURLDefaultsWhenTheFileIsMissing() {
         XCTAssertEqual(StateRoot.controlURL(in: base), SymphonyState.defaultBaseURL)
+    }
+
+    func testControlURLUsesTheGivenFallback() throws {
+        let fallback = URL(string: "http://127.0.0.1:4999")!
+        XCTAssertNil(StateRoot.controlURL(in: base, fallback: nil))
+        XCTAssertEqual(StateRoot.controlURL(in: base, fallback: fallback), fallback)
+
+        try write("not a url\n", to: "control_url", in: base)
+        XCTAssertNil(StateRoot.controlURL(in: base, fallback: nil))
+
+        try write("http://127.0.0.1:4000\n", to: "control_url", in: base)
+        XCTAssertEqual(StateRoot.controlURL(in: base, fallback: nil)?.absoluteString, "http://127.0.0.1:4000")
     }
 
     func testReadsTheControlToken() throws {

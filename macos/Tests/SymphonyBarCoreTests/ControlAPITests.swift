@@ -107,6 +107,31 @@ final class ControlAPITests: XCTestCase {
         XCTAssertTrue(message.hasSuffix("/control_token"), message)
     }
 
+    func testSendWithoutAFallbackNeedsTheControlURLFile() async throws {
+        // QA mode: the token alone must not send the request to the default port.
+        try "0123abcd".write(to: root.appendingPathComponent("control_token"), atomically: false, encoding: .utf8)
+        var called = false
+
+        let result = await ControlAPI.send(.pause, stateRoot: root, fallback: nil) { request in
+            called = true
+            return self.response(200, for: request)
+        }
+
+        XCTAssertFalse(called)
+        guard case let .failed(message) = result else { return XCTFail("expected a failure, got \(result)") }
+        XCTAssertTrue(message.hasPrefix("Couldn't pause Symphony: no control URL in "), message)
+        XCTAssertTrue(message.hasSuffix("/control_url"), message)
+
+        try "http://127.0.0.1:4010\n".write(to: root.appendingPathComponent("control_url"), atomically: false, encoding: .utf8)
+        var sent: URLRequest?
+        let sentResult = await ControlAPI.send(.pause, stateRoot: root, fallback: nil) { request in
+            sent = request
+            return self.response(200, for: request)
+        }
+        XCTAssertEqual(sentResult, .done)
+        XCTAssertEqual(sent?.url?.absoluteString, "http://127.0.0.1:4010/api/v1/control/pause")
+    }
+
     func testSendReportsAnUnreachableSymphony() async throws {
         try "0123abcd".write(to: root.appendingPathComponent("control_token"), atomically: false, encoding: .utf8)
 

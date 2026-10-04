@@ -514,8 +514,10 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   defp normalize_issues(config) do
     with {:ok, config} <- section_map(config, "issues"),
-         :ok <- reject_unknown_section_keys(config, ~w(provider poll_interval_ms linear states), "issues"),
+         :ok <- reject_unknown_section_keys(config, ~w(provider poll_interval_ms linear memory states), "issues"),
          {:ok, linear} <- section_map(Map.get(config, "linear", %{}), "issues.linear"),
+         {:ok, memory} <- section_map(Map.get(config, "memory", %{}), "issues.memory"),
+         :ok <- reject_unknown_section_keys(memory, ~w(issues_file), "issues.memory"),
          :ok <- reject_unknown_section_keys(linear, ~w(endpoint api_key assignee scope), "issues.linear"),
          {:ok, scope} <- section_map(Map.get(linear, "scope", %{}), "issues.linear.scope"),
          :ok <- reject_unknown_section_keys(scope, ~w(project_slug team labels), "issues.linear.scope"),
@@ -530,6 +532,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
         |> maybe_put("project_slug", Map.get(scope, "project_slug"))
         |> maybe_put("team", Map.get(scope, "team"))
         |> maybe_put("labels", Map.get(scope, "labels"))
+        |> maybe_put("memory_issues_file", memory_issues_file(Map.get(memory, "issues_file")))
         |> maybe_put("active_states", Map.get(states, "active"))
         |> maybe_put("terminal_states", Map.get(states, "terminal"))
         |> maybe_put_configured("waiting_on_sub_issues_state", Map.get(states, "waiting_on_sub_issues"), Map.has_key?(states, "waiting_on_sub_issues"))
@@ -539,6 +542,10 @@ defmodule SymphonyElixir.Config.SystemSchema do
       {:ok, %{} |> maybe_put("tracker", tracker) |> maybe_put("polling", polling)}
     end
   end
+
+  # Relative to the folder holding symphony.yml, like a repository's workflow.
+  defp memory_issues_file(path) when is_binary(path), do: workflow_path_from_symphony_file(path)
+  defp memory_issues_file(value), do: value
 
   defp normalize_repositories(nil), do: {:ok, nil}
 
