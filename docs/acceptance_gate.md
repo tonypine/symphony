@@ -4,8 +4,9 @@ The acceptance gate is a step in Auto Review, after QA. It decides whether a PR 
 a human. A gate agent reads the ticket and the PR. Before the agent's verdict counts, fixed
 escalation rules check the ticket and the diff, and any rule that triggers sends the PR to a human.
 
-So far Symphony has only the gate's config, its kill switch and its escalation rules
-(`SymphonyElixir.AcceptanceGate.Escalation`). Nothing runs the gate yet, so every `mode` behaves
+So far Symphony has only the gate's config, its kill switch, its escalation rules
+(`SymphonyElixir.AcceptanceGate.Escalation`) and the context the gate agent will read
+(`SymphonyElixir.AcceptanceGate.Context`). Nothing runs the gate yet, so every `mode` behaves
 like `off` for now.
 
 ## Where it is configured
@@ -131,6 +132,31 @@ so `0.4.0` to `0.5.0` is a major change. Only a leading version is read, after a
 `git:3f2a…`, a URL, a `file:` path) counts as a major change whenever it changes. `mix.lock` is read with
 `DependencyAudit.MixParser.parse_lock/1` and `package.json` with `DependencyAudit.NpmParser`
 (`dependencies` and `devDependencies`).
+
+## What the gate agent reads
+
+`Context.build(issue, record, sha, settings, opts)` prepares the gate agent's input, so the agent
+doesn't spend turns collecting it. `record` is the issue's CI check record and `sha` the PR head.
+
+- **The PR merged onto current main.** Symphony fetches the base branch (`repositories[].base_branch`,
+  else `main`) from `origin` once per build, checks it out in a throwaway worktree under
+  `<workspace.root>/.acceptance-gate/<repo>/`, and merges the PR head into it without committing.
+  A conflict returns `{:conflict, files}` and the gate doesn't run. Otherwise the merge result is
+  kept as a commit (`merged_sha`) that no branch points to, and the diff is the merge result against
+  the base tip, not against the merge-base. The diff is cut at 120 KB, like the reviewer's; the
+  per-file numstat is always whole. The worktree is removed after the build, also on error.
+- **Busy files.** The `escalate.busy_files.top` paths with the most commits on the base branch over
+  the last `escalate.busy_files.window_days` days, most commits first. The `:busy_file` rule uses them.
+- **Overlap with other open PRs.** The open PRs Symphony tracks come from its CI check and PR review
+  records, for issues in Auto Review, In Review and Merging. Their changed files and hunks are read
+  from the local object database, which worktree workspaces share; a head missing locally is
+  fetched. The open PRs Symphony doesn't track, such as a human's, come from one GitHub GraphQL
+  query per build (the 100 most recently updated, with their first 100 paths), cached by the base
+  tip and the PR head, so a build on the same heads doesn't ask again. Each overlap is
+  `%{pr_url, issue_identifier, files, functions}`: the files both PRs change, and the functions
+  both change, named from git's hunk headers. `*.ex` and `*.exs` use git's built-in `elixir` diff
+  driver and other files git's default heuristic. An untracked PR gives only its paths, so its
+  `functions` list is always empty.
 
 ## Example blocks
 
