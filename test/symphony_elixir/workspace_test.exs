@@ -222,6 +222,53 @@ defmodule SymphonyElixir.WorkspaceTest do
     end
   end
 
+  test "worktree preparations of one repo at once share a single fetch" do
+    test_root = unique_tmp("workspace-concurrent-fetch")
+    primary_repo = Path.join(test_root, "primary")
+    origin_repo = Path.join(test_root, "origin.git")
+    upload_pack = Path.join(test_root, "upload-pack")
+    uploads = Path.join(test_root, "uploads")
+    release = Path.join(test_root, "release")
+    workspace_root = Path.join(test_root, "workspaces")
+
+    try do
+      create_primary_repo!(primary_repo)
+      git!(test_root, ["clone", "--quiet", "--bare", primary_repo, origin_repo])
+      git!(primary_repo, ["remote", "add", "origin", origin_repo])
+
+      # Each fetch runs this upload-pack once, which waits until the test lets it go.
+      File.write!(upload_pack, """
+      #!/bin/sh
+      printf 'upload\\n' >> #{shell_quote(uploads)}
+      i=0
+      while [ ! -f #{shell_quote(release)} ] && [ "$i" -lt 500 ]; do
+        sleep 0.02
+        i=$((i + 1))
+      done
+      exec git upload-pack "$@"
+      """)
+
+      File.chmod!(upload_pack, 0o755)
+      git!(primary_repo, ["config", "remote.origin.uploadpack", upload_pack])
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        workspace_fetch_before_dispatch: true
+      )
+
+      tasks = for identifier <- ["RSM-F1", "RSM-F2", "RSM-F3"], do: Task.async(fn -> Workspace.create_for_issue(identifier) end)
+      wait_for_fetch_waiters(Path.expand(primary_repo), 3)
+      File.write!(release, "")
+
+      assert [{:ok, _workspace1}, {:ok, _workspace2}, {:ok, _workspace3}] = Enum.map(tasks, &Task.await(&1, 10_000))
+      assert File.read!(uploads) == "upload\n"
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "worktree excludes the agent skip-comments file from version control" do
     test_root = unique_tmp("workspace-skip-exclude")
     primary_repo = Path.join(test_root, "primary")
@@ -279,6 +326,17 @@ defmodule SymphonyElixir.WorkspaceTest do
     |> git!(["worktree", "list", "--porcelain"])
     |> String.split("\n", trim: true)
     |> Enum.count(&(&1 == "worktree #{workspace}"))
+  end
+
+  defp wait_for_fetch_waiters(repo, count, attempts \\ 500) do
+    case :sys.get_state(SymphonyElixir.Repo.Fetcher) do
+      %{^repo => {_ref, waiters}} when length(waiters) == count ->
+        :ok
+
+      _fetches when attempts > 0 ->
+        Process.sleep(10)
+        wait_for_fetch_waiters(repo, count, attempts - 1)
+    end
   end
 
   defp shell_quote(value) do

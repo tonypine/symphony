@@ -19,6 +19,7 @@ defmodule SymphonyElixir.ManagedClone do
   require Logger
 
   alias SymphonyElixir.GitHub.Repo, as: GitHubRepo
+  alias SymphonyElixir.Repo.Fetcher
   alias SymphonyElixir.Workspace
 
   @default_root "~/.local/share/symphony/repos"
@@ -132,9 +133,9 @@ defmodule SymphonyElixir.ManagedClone do
   end
 
   defp fetch(repo_key, clone_path) do
-    case git(["-C", clone_path, "fetch", "--quiet", "origin"]) do
-      :ok -> :ok
-      {:error, reason} -> failure(repo_key, :fetch, clone_path, reason)
+    case Fetcher.fetch_origin(clone_path) do
+      {_output, 0} -> :ok
+      {output, status} -> failure(repo_key, :fetch, clone_path, {:git_failed, status, output_tail(output)})
     end
   end
 
