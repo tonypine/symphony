@@ -3,6 +3,7 @@ defmodule SymphonyElixir.ConfigSplitTest do
 
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Cache
+  alias SymphonyElixir.Config.Schema.Hooks
   alias SymphonyElixir.Config.SystemSchema
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.PromptBuilder
@@ -646,6 +647,7 @@ defmodule SymphonyElixir.ConfigSplitTest do
       ---
       hooks:
         before_run: echo api
+        after_create_timeout_ms: 900000
       verification:
         enabled: true
         port_allocation:
@@ -685,6 +687,8 @@ defmodule SymphonyElixir.ConfigSplitTest do
     assert Config.settings_for_repo!("web").hooks.before_run == "echo web"
     assert Config.settings_for_repo!("api").hooks.before_run == "echo api"
     assert Config.settings_for_repo!("api").verification.port_allocation.range == [4300, 4301]
+    assert Hooks.after_create_timeout_ms(Config.settings_for_repo!("web").hooks) == 600_000
+    assert Hooks.after_create_timeout_ms(Config.settings_for_repo!("api").hooks) == 900_000
 
     issue = %SymphonyElixir.Linear.Issue{
       id: "issue-api",

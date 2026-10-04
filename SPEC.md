@@ -269,7 +269,12 @@ Fields:
 - `last_codex_timestamp` (timestamp or null)
 - `last_event_at` (timestamp or null)
   - Updated for every transcript event and initialized when runtime dispatch metadata is received.
+  - Also updated when a workspace hook starts or ends.
   - Used by no-progress watchdog detection.
+- `workspace_hook` (object or null)
+  - The `after_create` or `before_run` hook the worker is running: `name`, and `deadline`, when the
+    hook's own timeout ends it. Null when no hook runs.
+  - Used by stall detection and the watchdog (Section 8.5).
 - `last_codex_message` (summarized payload)
 - `input_tokens` (integer, legacy total input bucket)
 - `uncached_input_tokens` (integer)
@@ -765,8 +770,12 @@ Fields:
 Fields:
 
 - `after_create` (multiline shell script string, OPTIONAL)
-  - Runs only when a workspace directory is newly created.
+  - Runs when a workspace directory is newly created, and again when a later run reuses a local
+    workspace whose `after_create` never succeeded.
   - Failure aborts workspace creation.
+  - A timeout of a local hook is retried once, in the same workspace and the same attempt, before
+    it aborts workspace creation, so the script should be safe to run again. A timeout on an SSH
+    worker is not retried.
 - `before_run` (multiline shell script string, OPTIONAL)
   - Runs before each agent attempt after workspace preparation and before launching the coding
     agent.
@@ -780,9 +789,14 @@ Fields:
   - Failure is logged but ignored; cleanup still proceeds.
 - `timeout_ms` (integer, OPTIONAL)
   - Default: `60000`
-  - Applies to all workspace hooks.
+  - Applies to all workspace hooks except `after_create` when `after_create_timeout_ms` is set.
   - Invalid values fail configuration validation.
   - Changes SHOULD be re-applied at runtime for future hook executions.
+- `after_create_timeout_ms` (integer or null, OPTIONAL)
+  - Default: `null`, which gives `after_create` the larger of `timeout_ms` and `600000` (10
+    minutes), since it usually installs dependencies.
+  - Applies to `after_create` only, and to each try.
+  - Invalid values fail configuration validation.
 
 #### 5.4.8 `agent` (object)
 
@@ -1072,8 +1086,10 @@ later executor continuations in push/PR handoff mode rather than reintroducing t
 gate. `request_changes` and `block` verdicts SHOULD include evidence-backed findings with file,
 line range, quoted snippet, summary, and suggested fix; Symphony SHOULD reject verdicts whose
 findings cannot be verified against the reviewer diff/context, and SHOULD run one bounded
-self-check turn before accepting blocking findings. Reviewer token usage SHOULD be tracked
-separately from the aggregate run token total.
+self-check turn before accepting blocking findings. The reviewer prompt SHOULD tell the reviewer to
+review the diff by reading it and not to run the test suite, coverage or static analysis, which CI
+runs after the push. Reviewer token usage SHOULD be tracked separately from the aggregate run token
+total.
 
 Reviewer outcome handling MUST distinguish terminal blocks from inconclusive reviewer runs.
 Verified `block` verdicts with at least one grounded finding SHOULD terminate the worker with a
@@ -1196,6 +1212,10 @@ When enabled:
   `steps` (`name`, `status`, `details`, `evidence`), `findings`, and `reason`. An answer with no
   verdict object SHOULD get one follow-up turn in the same session asking for it. A run error or
   an answer still unreadable after that counts as `blocked`. The session stops at `agent.limits.tokens_per_issue`.
+- The QA prompt and the built-in playbooks MUST tell the agent not to run the test suite, `make all`,
+  coverage or static analysis such as Dialyzer: a pass starts only on green CI for the PR head, and a
+  parent walkthrough marks a criterion that only asks for tests or CI to pass `skipped` as covered
+  by CI on the base branch. QA exercises the change the way a user would.
 - Symphony applies the verdict: `pass`, `blocked` and skip move the issue to `In Review`; `fail`
   moves it to `In Progress` with the findings in the next run's prompt, or to `In Review` once
   `max_fix_attempts` failures were sent back. Results are stored per head SHA; a failed move is
@@ -1488,6 +1508,8 @@ not require recognizing or validating extension fields unless that extension is 
 - `hooks.after_run`: shell script or null
 - `hooks.before_remove`: shell script or null
 - `hooks.timeout_ms`: integer, default `60000`
+- `hooks.after_create_timeout_ms`: integer or null, default `null` (the larger of `hooks.timeout_ms`
+  and `600000`)
 - `agent.concurrency.max_total`: integer, default `10`
 - `agent.concurrency.max_by_issue_state`: map of positive integers, default `{}`
 - `agent.concurrency.epic_lanes`: integer between `0` and `max_total`, default `max_total`
@@ -2088,7 +2110,10 @@ tick.
 Part A: First-turn stall detection
 
 - For each running issue that has not emitted any coding-agent event, compute `elapsed_ms` since
-  `started_at`, or since the end of the run's latest wait on Linear when that is later.
+  the latest of `started_at`, the end of its last workspace hook (`after_create`, `before_run`), and
+  the end of the run's latest wait on Linear.
+- While a workspace hook runs, compute `elapsed_ms` since the hook's deadline instead. The hook is
+  bounded by its own timeout (Section 9.4), which can be longer than `stall_timeout_ms`.
 - If `elapsed_ms > agent.stall_timeout_ms`, terminate the worker and queue a retry.
 - If `stall_timeout_ms <= 0`, skip stall detection entirely.
 
@@ -2111,8 +2136,9 @@ Part C: No-progress watchdog
 
 - Independently of the poll tick, a watchdog tick runs every `watchdog.tick_interval_ms`.
 - If `watchdog.enabled == false`, the tick performs no session termination.
-- For each running issue, compute `elapsed_ms` since `last_event_at`, or since the end of the run's
-  latest wait on Linear when that is later.
+- For each running issue, compute `elapsed_ms` since `last_event_at`, where a workspace hook's start
+  and end count as events, or since the end of the run's latest wait on Linear when that is later.
+  While a workspace hook runs, compute it since the hook's deadline, as in Part A.
 - If `elapsed_ms >= watchdog.no_progress_threshold_ms`, terminate the agent session, run
   `after_run`, record the run as `timeout`, emit `run_stuck`, and queue a retry through the normal
   retry helper/backoff path.
@@ -2181,7 +2207,9 @@ Algorithm summary:
      otherwise refuse with a branch-collision error.
 6. Mark `created_now=true` only if the directory or worktree was created during this call; otherwise
    `created_now=false`.
-7. If `created_now=true`, run `hooks.after_create` if configured.
+7. If `created_now=true`, run `hooks.after_create` if configured. Also run it for a reused local
+   workspace whose `after_create` has not yet succeeded (it failed or timed out), so the agent does
+   not start in a half-prepared workspace.
 
 Notes:
 
@@ -2226,12 +2254,27 @@ Execution contract:
 - When verification is enabled for the run, `hooks.before_run` and `hooks.after_run` receive
   `SYMPHONY_VERIFICATION_PORT` in their environment. If a project starts its dev server from a hook
   instead of `verification.dev_server.start_cmd`, it is responsible for backgrounding and cleanup.
-- Hook timeout uses `hooks.timeout_ms`; default: `60000 ms`.
-- Log hook start, failures, and timeouts.
+- Hook timeout uses `hooks.timeout_ms`; default: `60000 ms`. `after_create` uses
+  `hooks.after_create_timeout_ms`, or the larger of `hooks.timeout_ms` and `600000 ms` when unset.
+- On a timeout of a local hook, stop the hook's process and what it started, at once, so the hook
+  cannot start its next command. For a hook on an SSH worker, close the SSH session; the hook may
+  keep running on the worker.
+- Log hook start, failures, and timeouts. A timeout log includes the hook's last output lines, so a
+  hang can be told apart from a slow hook.
+- The worker reports each `after_create` and `before_run` run to the orchestrator as it starts, with
+  the deadline its timeout sets, and as it ends, so stall detection and the watchdog (Section 8.5)
+  wait for the hook's own timeout.
+- When the run that started a local hook is stopped, stop the hook and what it started, as on a
+  timeout.
 
 Failure semantics:
 
-- `after_create` failure or timeout is fatal to workspace creation.
+- `after_create` failure is fatal to workspace creation. A local hook's timeout is retried once in
+  the workspace as the first try left it, within the same run attempt; a second timeout is fatal to
+  workspace creation. An SSH worker hook's timeout is fatal at once, since the first try may still
+  be running on the worker. A failed local `after_create` leaves the workspace in place, and the
+  next run that reuses it runs `after_create` again before the agent starts. An SSH worker's
+  workspace is not, for the same reason as the retry.
 - `before_run` failure or timeout is fatal to the current run attempt.
 - `after_run` failure or timeout is logged and ignored.
 - `before_remove` failure or timeout is logged and ignored.
@@ -3690,7 +3733,10 @@ function watchdog_tick(state):
     return state
 
   for each (issue_id, running_entry) in state.running:
-    elapsed_ms = now_utc() - running_entry.last_event_at
+    if running_entry.workspace_hook is not null:
+      elapsed_ms = now_utc() - running_entry.workspace_hook.deadline
+    else:
+      elapsed_ms = now_utc() - running_entry.last_event_at
     if elapsed_ms >= watchdog.no_progress_threshold_ms:
       agent.stop_session(running_entry.agent_session)
       run_hook_best_effort("after_run", running_entry.workspace_path)
@@ -3941,6 +3987,13 @@ Validation profiles:
 Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bullets that begin with
 `If ... is implemented` are `Extension Conformance`.
 
+Where checks run is split by cost, not by kind. Agents (executor, rework and CI-fix runs) run cheap,
+targeted checks locally before each push: format, compile with warnings as errors, lint, and the
+tests for the changed code. The full test suite, the coverage threshold and Dialyzer run only in
+CI, which is the merge gate; the pre-push reviewer and the Auto Review QA agent run no test suites
+at all. A repository workflow MAY let an agent run the full gate locally for a change to shared
+infrastructure.
+
 ### 17.1 Workflow and Config Parsing
 
 - Operator config path precedence:
@@ -3980,7 +4033,10 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Existing non-directory path at workspace location is handled safely (replace or fail per
   implementation policy)
 - OPTIONAL workspace population/synchronization errors are surfaced
-- `after_create` hook runs only on new workspace creation
+- `after_create` hook runs on new workspace creation, and again on a reused local workspace whose
+  `after_create` has not yet succeeded
+- Local `after_create` timeout is retried once within the same attempt; a second timeout fails
+  creation; an `after_create` timeout on an SSH worker fails creation without a retry
 - `before_run` hook runs before each attempt and failure/timeouts abort the current attempt
 - `after_run` hook runs after each attempt and failure/timeouts are logged and ignored
 - `before_remove` hook runs on cleanup and failures/timeouts are ignored
@@ -4047,6 +4103,7 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Completed issues in non-active, non-terminal states appear as watching rows
 - Terminal completed issues are removed from watching rows
 - First-turn stall detection kills never-started sessions and schedules retry
+- Stall detection and the watchdog wait for a running workspace hook's deadline
 - Watchdog no-progress detection stops stuck sessions, runs `after_run`, emits `run_stuck`, and
   schedules retry
 - Slot exhaustion requeues retries with explicit error reason
@@ -4173,7 +4230,8 @@ Use the same validation profiles as Section 17:
 - Issue tracker client with candidate fetch + state refresh + terminal fetch
 - Workspace manager with sanitized per-issue workspaces
 - Workspace lifecycle hooks (`after_create`, `before_run`, `after_run`, `before_remove`)
-- Hook timeout config (`hooks.timeout_ms`, default `60000`)
+- Hook timeout config (`hooks.timeout_ms`, default `60000`; `hooks.after_create_timeout_ms`,
+  default the larger of `hooks.timeout_ms` and `600000`)
 - Coding-agent adapter client for configured `agent.runtime`
 - Agent launch command config (`agent.runtime`, `agent.command`)
 - Strict prompt rendering with `issue`, `attempt`, `agent`, and `repo_key` variables

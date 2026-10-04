@@ -404,6 +404,9 @@ defmodule SymphonyElixir.ReviewAgentTest do
       assert prompt =~ ~s("findings")
       assert prompt =~ ~s("line_range": [1, 2])
       assert prompt =~ ~s("quoted_snippet")
+      assert prompt =~ "Review the diff by reading it."
+      assert prompt =~ "Do not run the test suite, `make all`, coverage or static analysis such as Dialyzer"
+      assert prompt =~ "CI runs them after the push."
     after
       clear_sequence_responses!()
       File.rm_rf(test_root)

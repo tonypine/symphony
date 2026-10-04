@@ -6,8 +6,9 @@ This repository contains the Elixir agent orchestration service that polls Linea
 
 - Elixir: `1.19.x` (OTP 28) via `mise`.
 - Install deps: `mix setup`.
-- Fast local gate: `make check` (format check, lint, build, plain tests).
-- Main quality gate: `make all` (format check, lint, coverage, dialyzer).
+- Local pre-push checks: format, compile with warnings as errors, lint, and targeted tests
+  (see below).
+- CI gate: `make all` (format check, lint, full test suite with 100% coverage, Dialyzer).
 
 
 ## Codebase-Specific Conventions
@@ -27,17 +28,21 @@ This repository contains the Elixir agent orchestration service that polls Linea
 
 ## Tests and Validation
 
-Run targeted tests while iterating, then use the fast local gate before the full pre-push gate.
+Split checks by cost. Cheap checks run locally before every push; the full test suite, the
+coverage report and Dialyzer run in CI, which is the gate.
 
 ```bash
-make check
+mix format --check-formatted
+mix compile --warnings-as-errors
+mix specs.check
+mix credo --strict <changed files>
+mix test <new or changed test files, and the test files of changed modules>
 ```
 
-Before push/handoff, run the full gate or at least the required coverage and Dialyzer gates.
-
-```bash
-make all
-```
+Do not run `make all`, `make check`, `make coverage`, the full `mix test`, `mix test --stale` (it
+runs the whole suite in a fresh workspace) or Dialyzer locally;
+`make all` is an optional extra for changes to shared infrastructure (config schema, orchestrator
+core). A coverage gap CI reports is fixed like any other red check.
 
 To profile slow validation work before optimizing tests, use:
 
