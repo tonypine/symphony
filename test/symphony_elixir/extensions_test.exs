@@ -485,6 +485,7 @@ defmodule SymphonyElixir.ExtensionsTest do
   end
 
   test "phoenix observability api preserves state, issue, and refresh responses" do
+    put_build(sha: "D3D301B0123456789ABCDEF0123456789ABCDEF0", repo: "https://github.com/acme/symphony", number: "168")
     snapshot = static_snapshot()
     orchestrator_name = Module.concat(__MODULE__, :ObservabilityApiOrchestrator)
 
@@ -507,6 +508,7 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     assert state_payload == %{
              "generated_at" => state_payload["generated_at"],
+             "build" => %{"version" => "0.0.1.168", "sha" => "d3d301b0123456789abcdef0123456789abcdef0"},
              "repos" => ["default"],
              "counts" => %{"running" => 1, "watching" => 1, "conflicts" => 0, "retrying" => 1, "claimed" => 2},
              "running" => [
@@ -683,13 +685,26 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "issue_identifier" => "MT-VERIFY",
                  "title" => "Final verification: Export",
                  "state" => "Todo",
+                 "kind" => "blockers",
+                 "reason" => nil,
                  "blocked_by" => [
                    %{"issue_identifier" => "MT-GAP", "state" => "In Progress"},
                    %{"issue_identifier" => nil, "state" => nil}
                  ],
                  "summary" => "MT-VERIFY waiting on MT-GAP (In Progress), an unknown issue (unknown state)"
+               },
+               %{
+                 "issue_id" => "update-http",
+                 "issue_identifier" => "MT-UPDATE",
+                 "title" => "Final verification: Pause",
+                 "state" => "Todo",
+                 "kind" => "app_update",
+                 "reason" => "waiting for an app update: MT-FIX merged in `9f54098`, running `d3d301b`",
+                 "blocked_by" => [%{"issue_identifier" => "MT-FIX", "state" => "merged in 9f54098"}],
+                 "summary" => "MT-UPDATE waiting for an app update: MT-FIX merged in `9f54098`, running `d3d301b`"
                }
              ],
+             "app_update" => %{"unblocks" => 1, "issue_identifiers" => ["MT-UPDATE"]},
              "forced" => [
                %{
                  "issue_id" => "forced-http",
@@ -1915,6 +1930,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     refute html =~ "Nothing is waiting to start."
     assert html =~ "Waiting on blockers"
     assert html =~ "MT-VERIFY waiting on MT-GAP (In Progress)"
+    assert html =~ "MT-UPDATE waiting for an app update: MT-FIX merged in `9f54098`, running `d3d301b`"
   end
 
   test "dashboard liveview shows every slot as shared with no active epics" do
@@ -3364,6 +3380,18 @@ defmodule SymphonyElixir.ExtensionsTest do
     )
   end
 
+  defp put_build(build) do
+    previous = Application.fetch_env(:symphony_elixir, :build)
+    Application.put_env(:symphony_elixir, :build, build)
+
+    on_exit(fn ->
+      case previous do
+        {:ok, value} -> Application.put_env(:symphony_elixir, :build, value)
+        :error -> Application.delete_env(:symphony_elixir, :build)
+      end
+    end)
+  end
+
   defp static_snapshot do
     %{
       running: [
@@ -3487,6 +3515,15 @@ defmodule SymphonyElixir.ExtensionsTest do
           title: "Final verification: Export",
           state: "Todo",
           blockers: [%{identifier: "MT-GAP", state: "In Progress"}, %{identifier: nil, state: nil}]
+        },
+        %{
+          issue_id: "update-http",
+          identifier: "MT-UPDATE",
+          title: "Final verification: Pause",
+          state: "Todo",
+          kind: :app_update,
+          reason: "waiting for an app update: MT-FIX merged in `9f54098`, running `d3d301b`",
+          blockers: [%{identifier: "MT-FIX", state: "merged in 9f54098"}]
         }
       ],
       forced: [

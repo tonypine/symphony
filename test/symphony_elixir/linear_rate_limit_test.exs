@@ -14,7 +14,11 @@ defmodule SymphonyElixir.LinearRateLimitTest do
     ]
   }
 
+  # The rate limit is process-wide. A task an earlier test's orchestrator left
+  # running calls Linear on the real clock, so it would claim a probe against
+  # this module's fixed-clock pauses: stop such tasks before resetting.
   setup do
+    terminate_task_supervisor_children()
     RateLimit.reset()
     on_exit(&RateLimit.reset/0)
 
@@ -304,6 +308,10 @@ defmodule SymphonyElixir.LinearRateLimitTest do
         if Process.alive?(pid), do: stop_process(pid)
       end)
 
+      # The startup workspace lifecycle task outlives the orchestrator and calls
+      # Linear on the real clock: let it finish while Linear is still paused.
+      wait_for_state(pid, &is_nil(&1.startup_workspace_lifecycle_task_ref))
+
       requests_before = RateLimit.requests_total()
 
       snapshot =
@@ -539,6 +547,31 @@ defmodule SymphonyElixir.LinearRateLimitTest do
   end
 
   defp strip_ansi(content), do: Regex.replace(~r/\e\[[0-9;]*m/, content, "")
+
+  defp terminate_task_supervisor_children do
+    SymphonyElixir.TaskSupervisor
+    |> Task.Supervisor.children()
+    |> Enum.each(&Task.Supervisor.terminate_child(SymphonyElixir.TaskSupervisor, &1))
+  end
+
+  defp wait_for_state(pid, predicate, timeout_ms \\ 5_000) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_for_state(pid, predicate, deadline)
+  end
+
+  defp do_wait_for_state(pid, predicate, deadline) do
+    cond do
+      predicate.(:sys.get_state(pid)) ->
+        :ok
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        flunk("orchestrator state never matched")
+
+      true ->
+        Process.sleep(10)
+        do_wait_for_state(pid, predicate, deadline)
+    end
+  end
 
   defp wait_for_snapshot(pid, predicate, timeout_ms \\ 2_000) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms

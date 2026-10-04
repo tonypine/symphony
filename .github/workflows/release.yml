@@ -94,6 +94,10 @@ jobs:
         env:
           BURRITO_TARGET: macos_arm64
           SYMPHONY_BUILD_NUMBER: ${{ steps.version.outputs.build }}
+          # The commit and repository the app is built from: Symphony holds a ticket blocked by
+          # a fix in this repository until the running app includes the fix's merge commit.
+          SYMPHONY_BUILD_SHA: ${{ github.sha }}
+          SYMPHONY_BUILD_REPO: ${{ github.server_url }}/${{ github.repository }}
         run: |
           make package
           test -x burrito_out/symphony-macos-arm64
