@@ -74,6 +74,17 @@ defmodule SymphonyElixir.HumanActions.RequestTest do
     assert Request.parse(nil) == nil
   end
 
+  test "renders and recognises the reply that withdraws a request" do
+    body = Request.render_withdrawal("  The CI run had only just started.\n")
+
+    assert body == "## Action withdrawn\n\nThe CI run had only just started."
+    assert Request.withdrawal?(body)
+    assert Request.withdrawal?("\n## Action withdrawn")
+    refute Request.withdrawal?("The request above is no longer needed.")
+    refute Request.withdrawal?(nil)
+    assert Request.parse(body) == nil
+  end
+
   test "reads steps from free text such as a task description" do
     assert Request.text_steps("Context.\n\n1. Create the key\n2) Paste it into 1Password") == ["Create the key", "Paste it into 1Password"]
     assert Request.text_steps("Just do it.") == ["Just do it."]

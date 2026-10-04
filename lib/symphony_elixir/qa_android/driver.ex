@@ -36,7 +36,9 @@ defmodule SymphonyElixir.QaAndroid.Driver do
     last tree or coordinates on the display; keys, orientations, night modes and
     font scales come from fixed allowlists; typed text is printable ASCII and
     newlines only, and every chunk is single-quoted for the device's shell, so no
-    character in it can run a command.
+    character in it can run a command. Rotate locks the rotation through the
+    window manager and succeeds only once the display has turned, or fails with
+    `qa_android_rotate_failed`.
 
   The driver takes the emulator's lease when it starts. When the emulator cannot
   run (a missing SDK or AVD, a boot timeout), every tool fails with
@@ -78,6 +80,7 @@ defmodule SymphonyElixir.QaAndroid.Driver do
   @dump_limit 2_000_000
   @tree_bytes_limit 100_000
   @default_max_depth 30
+  @no_playbook_reason "no Android QA playbook configured for this repo"
   @default_max_nodes 300
   @filter_limit 200
   @type_limit 500
@@ -96,9 +99,12 @@ defmodule SymphonyElixir.QaAndroid.Driver do
   @orientations [{"portrait", "0"}, {"landscape", "1"}]
   @night_modes [{"on", "yes"}, {"off", "no"}]
   @font_scales [{0.85, "0.85"}, {1.0, "1.0"}, {1.15, "1.15"}, {1.3, "1.3"}, {1.5, "1.5"}, {1.8, "1.8"}, {2.0, "2.0"}]
-  # What a pass that changed a setting puts back when it ends.
+  @rotation_attempts 10
+  @rotation_poll_ms 500
+  # What a pass that changed a setting puts back when it ends: the rotation to
+  # lock, or the adb command to run.
   @setting_resets [
-    rotation: ["shell", "settings", "put", "system", "user_rotation", "0"],
+    rotation: {:rotation, "0"},
     dark_mode: ["shell", "cmd", "uimode", "night", "no"],
     font_scale: ["shell", "settings", "put", "system", "font_scale", "1.0"]
   ]
@@ -110,6 +116,10 @@ defmodule SymphonyElixir.QaAndroid.Driver do
   @doc "The `qa_android_*` tool names this driver serves."
   @spec tools() :: [String.t()]
   def tools, do: @tools
+
+  @doc "The `blocked` reason for a step that needs an Android device in a pass without the android_app playbook."
+  @spec no_playbook_reason() :: String.t()
+  def no_playbook_reason, do: @no_playbook_reason
 
   @doc """
   Starts a driver for one QA pass and takes the emulator's lease.
@@ -147,7 +157,9 @@ defmodule SymphonyElixir.QaAndroid.Driver do
   def call_tool(nil, _tool, _args) do
     tool_error(
       "qa_android_driver_unavailable",
-      "The qa_android_* tools drive an Android app and are only available when the android_app playbook runs in this QA pass."
+      "The qa_android_* tools drive an Android app and are only available when the android_app playbook runs in this QA pass. " <>
+        "Do not start an emulator or adb yourself: your sandbox cannot run them. " <>
+        "Mark each step that needs an Android device `blocked` with \"#{@no_playbook_reason}\" in `details`."
     )
   end
 
@@ -249,12 +261,14 @@ defmodule SymphonyElixir.QaAndroid.Driver do
     with :ok <- GenServer.call(driver, :app_installed),
          {:ok, orientation, rotation} <- choice(args, "orientation", @orientations),
          :ok <- GenServer.call(driver, {:changed, :rotation}),
-         :ok <-
-           run_all(config, [
-             ["shell", "settings", "put", "system", "accelerometer_rotation", "0"],
-             ["shell", "settings", "put", "system", "user_rotation", rotation]
-           ]) do
-      {:ok, %{"orientation" => orientation, "note" => "Auto-rotate is off. Read qa_android_ui_tree again: the layout and node bounds change."}}
+         :ok <- lock_rotation(config, rotation),
+         {:ok, {width, height}} <- await_orientation(config, orientation, @rotation_attempts) do
+      {:ok,
+       %{
+         "orientation" => orientation,
+         "display" => "#{width}x#{height}",
+         "note" => "Auto-rotate is off. Read qa_android_ui_tree again: the layout and node bounds change."
+       }}
     end
   end
 
@@ -647,6 +661,58 @@ defmodule SymphonyElixir.QaAndroid.Driver do
     end
   end
 
+  # `cmd window user-rotation` (Android 10 and later) has the window manager turn
+  # the display; a headless emulator may ignore a write to the `user_rotation`
+  # setting, so the setting is only the fallback for older devices.
+  defp lock_rotation(config, rotation) do
+    args = ["shell", "cmd", "window", "user-rotation", "lock", rotation]
+
+    case adb(config, args, @adb_timeout_ms) do
+      {:ok, {output, status}} ->
+        cond do
+          output =~ ~r/unknown command/i ->
+            run_all(config, [
+              ["shell", "settings", "put", "system", "accelerometer_rotation", "0"],
+              ["shell", "settings", "put", "system", "user_rotation", rotation]
+            ])
+
+          status == 0 ->
+            :ok
+
+          true ->
+            adb_failed(args, "exit status #{status}: #{tail(String.trim(output), 1_000)}")
+        end
+
+      {:error, reason} ->
+        adb_failed(args, inspect(reason))
+    end
+  end
+
+  # Success means the display turned, not that the device took the command.
+  defp await_orientation(config, orientation, attempts) do
+    with {:ok, {width, height} = size} <- display_size(config) do
+      cond do
+        orientation?(orientation, width, height) ->
+          {:ok, size}
+
+        attempts <= 1 ->
+          tool_error(
+            "qa_android_rotate_failed",
+            "The display is still #{width}x#{height}, not #{orientation}, #{@rotation_attempts * @rotation_poll_ms} ms after the rotation. " <>
+              "If the app locks its orientation (android:screenOrientation in its manifest), that is what it does; " <>
+              "otherwise mark the #{orientation} checks `blocked` with this reason."
+          )
+
+        true ->
+          config.sleep.(@rotation_poll_ms)
+          await_orientation(config, orientation, attempts - 1)
+      end
+    end
+  end
+
+  defp orientation?("landscape", width, height), do: width > height
+  defp orientation?("portrait", width, height), do: height >= width
+
   defp on_screen(x, y, width, height, _target) when x in 0..(width - 1)//1 and y in 0..(height - 1)//1, do: :ok
   defp on_screen(_x, _y, width, height, target), do: tool_error("qa_android_tap_off_screen", "#{target} is outside the #{width}x#{height} display.")
 
@@ -849,10 +915,20 @@ defmodule SymphonyElixir.QaAndroid.Driver do
   # Recorded before the setting is changed, so a change that half went through is reset too.
   def handle_call({:changed, setting}, _from, state), do: {:reply, :ok, %{state | changed: Enum.uniq([setting | state.changed])}}
 
+  # The driver traps exits, so every adb port it opens sends an `:EXIT` when it closes.
+  # The QA pass that owns the driver is its parent: GenServer stops on its exit itself.
+  @impl true
+  def handle_info({:EXIT, port, _reason}, state) when is_port(port), do: {:noreply, state}
+
+  def handle_info(message, state) do
+    Logger.error("Android QA driver received unexpected message=#{inspect(message)}")
+    {:noreply, state}
+  end
+
   @impl true
   def terminate(_reason, %{config: config} = state) do
     if config.lease do
-      for {setting, args} <- @setting_resets, setting in state.changed, do: adb(config, args, @adb_timeout_ms)
+      for {setting, reset} <- @setting_resets, setting in state.changed, do: reset_setting(config, reset)
       remove_installed(config, state.baseline)
       config.checkin.(config.lease)
     end
@@ -860,6 +936,9 @@ defmodule SymphonyElixir.QaAndroid.Driver do
     if config.scratch_dir, do: File.rm_rf(config.scratch_dir)
     :ok
   end
+
+  defp reset_setting(config, {:rotation, rotation}), do: lock_rotation(config, rotation)
+  defp reset_setting(config, args), do: adb(config, args, @adb_timeout_ms)
 
   defp default_git(args, cwd), do: Workspace.safe_git(["-C", cwd | args], stderr_to_stdout: true)
 end

@@ -63,6 +63,7 @@ defmodule SymphonyElixir.QaAndroid.DriverTest do
   defp command(["shell", "input" | _rest]), do: :input
   defp command(["shell", "settings" | _rest]), do: :settings
   defp command(["shell", "cmd", "uimode" | _rest]), do: :uimode
+  defp command(["shell", "cmd", "window", "user-rotation" | _rest]), do: :user_rotation
   defp command(["exec-out", "uiautomator" | _rest]), do: :ui_dump
   defp command(["exec-out" | _rest]), do: :screencap
   defp command(["logcat" | _rest]), do: :logcat
@@ -175,6 +176,9 @@ defmodule SymphonyElixir.QaAndroid.DriverTest do
                ~w(qa_android_install qa_android_launch qa_android_stop qa_android_screenshot qa_android_ui_tree qa_android_tap qa_android_type qa_android_key qa_android_rotate qa_android_dark_mode qa_android_font_scale)
 
       assert error_code(Driver.call_tool(nil, "qa_android_install", %{})) == "qa_android_driver_unavailable"
+      assert {:error, {:qa_tool, _code, message}} = Driver.call_tool(nil, "qa_android_install", %{})
+      assert message =~ "Do not start an emulator or adb yourself"
+      assert message =~ ~s(`blocked` with "no Android QA playbook configured for this repo")
       assert Driver.stop(nil) == :ok
     end
 
@@ -272,6 +276,32 @@ defmodule SymphonyElixir.QaAndroid.DriverTest do
       Driver.stop(default)
       assert error_code(Driver.call_tool(default, "qa_android_stop", %{"application_id" => @app_id})) == "qa_android_driver_unavailable"
       assert Driver.stop(default) == :ok
+    end
+
+    # The driver traps exits, so every adb port it opens sends an `:EXIT` when it closes.
+    test "ignores the exit of a closed adb port", %{worktree: worktree} do
+      driver = start_driver(worktree)
+      port = Port.open({:spawn_executable, System.find_executable("true")}, [])
+      Port.close(port)
+
+      log =
+        capture_log(fn ->
+          send(driver, {:EXIT, port, :normal})
+          assert %{lease: %{}} = GenServer.call(driver, :config)
+        end)
+
+      refute log =~ "received unexpected message"
+      assert Process.alive?(driver)
+
+      # Any other message is still logged, and the driver stays up.
+      log =
+        capture_log(fn ->
+          send(driver, :unexpected)
+          assert %{lease: %{}} = GenServer.call(driver, :config)
+        end)
+
+      assert log =~ "Android QA driver received unexpected message=:unexpected"
+      assert Process.alive?(driver)
     end
   end
 
@@ -858,33 +888,89 @@ defmodule SymphonyElixir.QaAndroid.DriverTest do
 
   describe "qa_android_rotate, qa_android_dark_mode and qa_android_font_scale" do
     test "change the setting and reset what the pass changed when it ends", %{worktree: worktree} do
-      driver = installed_driver(worktree)
+      driver = installed_driver(worktree, cmd: rotating_device())
       adb_calls()
 
-      assert {:ok, %{"orientation" => "landscape"}} = call(driver, "qa_android_rotate", %{"orientation" => "landscape"})
-      assert {:ok, %{"orientation" => "portrait"}} = call(driver, "qa_android_rotate", %{"orientation" => "portrait"})
+      assert {:ok, %{"orientation" => "landscape", "display" => "2400x1080"}} = call(driver, "qa_android_rotate", %{"orientation" => "landscape"})
+      assert {:ok, %{"orientation" => "portrait", "display" => "1080x2400"}} = call(driver, "qa_android_rotate", %{"orientation" => "portrait"})
       assert {:ok, %{"dark_mode" => "on"}} = call(driver, "qa_android_dark_mode", %{"mode" => "on"})
       assert {:ok, %{"font_scale" => 1.3}} = call(driver, "qa_android_font_scale", %{"scale" => 1.3})
       assert {:ok, %{"font_scale" => 2.0}} = call(driver, "qa_android_font_scale", %{"scale" => 2})
 
       assert adb_calls() == [
-               ["shell", "settings", "put", "system", "accelerometer_rotation", "0"],
-               ["shell", "settings", "put", "system", "user_rotation", "1"],
-               ["shell", "settings", "put", "system", "accelerometer_rotation", "0"],
-               ["shell", "settings", "put", "system", "user_rotation", "0"],
+               ["shell", "cmd", "window", "user-rotation", "lock", "1"],
+               @display_args,
+               ["shell", "cmd", "window", "user-rotation", "lock", "0"],
+               @display_args,
                ["shell", "cmd", "uimode", "night", "yes"],
                ["shell", "settings", "put", "system", "font_scale", "1.3"],
                ["shell", "settings", "put", "system", "font_scale", "2.0"]
              ]
 
+      refute_received {:slept, _ms}
       assert Driver.stop(driver) == :ok
 
       assert [
-               ["shell", "settings", "put", "system", "user_rotation", "0"],
+               ["shell", "cmd", "window", "user-rotation", "lock", "0"],
                ["shell", "cmd", "uimode", "night", "no"],
                ["shell", "settings", "put", "system", "font_scale", "1.0"],
                ["shell", "pm", "list", "packages", "-3", "-f"],
                ["uninstall", @app_id]
+             ] = adb_calls()
+    end
+
+    test "rotate waits for the display to turn and fails when it does not", %{worktree: worktree} do
+      turning = replies_in_turn([display("1080x2400"), display("1080x2400"), display("2400x1080")])
+      slow = installed_driver(worktree, cmd: device(%{display: turning}))
+      adb_calls()
+      assert {:ok, %{"display" => "2400x1080"}} = call(slow, "qa_android_rotate", %{"orientation" => "landscape"})
+      assert adb_calls() == [["shell", "cmd", "window", "user-rotation", "lock", "1"], @display_args, @display_args, @display_args]
+      assert_received {:slept, 500}
+      assert_received {:slept, 500}
+      refute_received {:slept, _ms}
+
+      # The default display stays portrait, as an emulator that ignores the lock does.
+      stuck = installed_driver(worktree)
+      adb_calls()
+      assert {:error, {:qa_tool, "qa_android_rotate_failed", message}} = call(stuck, "qa_android_rotate", %{"orientation" => "landscape"})
+      assert message =~ "The display is still 1080x2400, not landscape, 5000 ms after the rotation."
+      assert message =~ "android:screenOrientation"
+      assert message =~ "mark the landscape checks `blocked`"
+      assert [["shell", "cmd", "window", "user-rotation", "lock", "1"] | reads] = adb_calls()
+      assert reads == List.duplicate(@display_args, 10)
+
+      for _attempt <- 1..9, do: assert_received({:slept, 500})
+      refute_received {:slept, _ms}
+
+      # It still resets the rotation it tried to change.
+      Driver.stop(stuck)
+      assert ["shell", "cmd", "window", "user-rotation", "lock", "0"] in adb_calls()
+
+      unreadable = installed_driver(worktree, cmd: device(%{display: {:ok, {"Permission denial", 255}}}))
+      assert {:error, {:qa_tool, "qa_android_adb_failed", message}} = call(unreadable, "qa_android_rotate", %{"orientation" => "landscape"})
+      assert message =~ "dumpsys window displays"
+    end
+
+    test "rotate falls back to the settings when the window manager has no user-rotation", %{worktree: worktree} do
+      unknown = {:ok, {"Unknown command: user-rotation\n", 255}}
+      driver = installed_driver(worktree, cmd: device(%{user_rotation: unknown, display: display("2400x1080")}))
+      adb_calls()
+
+      assert {:ok, %{"orientation" => "landscape"}} = call(driver, "qa_android_rotate", %{"orientation" => "landscape"})
+
+      assert adb_calls() == [
+               ["shell", "cmd", "window", "user-rotation", "lock", "1"],
+               ["shell", "settings", "put", "system", "accelerometer_rotation", "0"],
+               ["shell", "settings", "put", "system", "user_rotation", "1"],
+               @display_args
+             ]
+
+      Driver.stop(driver)
+
+      assert [
+               ["shell", "cmd", "window", "user-rotation", "lock", "0"],
+               ["shell", "settings", "put", "system", "accelerometer_rotation", "0"],
+               ["shell", "settings", "put", "system", "user_rotation", "0"] | _uninstall
              ] = adb_calls()
     end
 
@@ -895,16 +981,29 @@ defmodule SymphonyElixir.QaAndroid.DriverTest do
       calls = adb_calls()
       assert ["shell", "cmd", "uimode", "night", "no"] in calls
       refute Enum.any?(calls, &match?(["shell", "settings" | _rest], &1))
+      refute Enum.any?(calls, &match?(["shell", "cmd", "window" | _rest], &1))
 
-      failing = installed_driver(worktree, cmd: device(%{settings: {:ok, {"Security exception", 255}}}))
-      assert error_code(call(failing, "qa_android_rotate", %{"orientation" => "landscape"})) == "qa_android_adb_failed"
+      failing =
+        installed_driver(worktree, cmd: device(%{user_rotation: {:ok, {"Security exception", 255}}, settings: {:ok, {"Security exception", 255}}}))
+
+      assert {:error, {:qa_tool, "qa_android_adb_failed", message}} = call(failing, "qa_android_rotate", %{"orientation" => "landscape"})
+      assert message == "adb shell cmd window user-rotation lock 1 failed: exit status 255: Security exception"
       assert error_code(call(failing, "qa_android_font_scale", %{"scale" => 0.85})) == "qa_android_adb_failed"
       adb_calls()
       Driver.stop(failing)
       calls = adb_calls()
-      assert ["shell", "settings", "put", "system", "user_rotation", "0"] in calls
+      assert ["shell", "cmd", "window", "user-rotation", "lock", "0"] in calls
       assert ["shell", "settings", "put", "system", "font_scale", "1.0"] in calls
       refute ["shell", "cmd", "uimode", "night", "no"] in calls
+
+      no_user_rotation = %{user_rotation: {:ok, {"Unknown command: user-rotation", 255}}, settings: {:ok, {"Security exception", 255}}}
+      fallback_fails = installed_driver(worktree, cmd: device(no_user_rotation))
+      assert {:error, {:qa_tool, "qa_android_adb_failed", message}} = call(fallback_fails, "qa_android_rotate", %{"orientation" => "landscape"})
+      assert message =~ "adb shell settings put system accelerometer_rotation 0 failed"
+
+      unreachable = installed_driver(worktree, cmd: device(%{user_rotation: {:error, :timeout}}))
+      assert {:error, {:qa_tool, "qa_android_adb_failed", message}} = call(unreachable, "qa_android_rotate", %{"orientation" => "portrait"})
+      assert message == "adb shell cmd window user-rotation lock 0 failed: :timeout"
 
       untouched = installed_driver(worktree)
       adb_calls()
@@ -929,6 +1028,21 @@ defmodule SymphonyElixir.QaAndroid.DriverTest do
       Driver.stop(driver)
       refute Enum.any?(adb_calls(), &match?(["shell", setting | _rest] when setting in ["settings", "cmd"], &1))
     end
+  end
+
+  defp display(size), do: {:ok, {"Display: mDisplayId=0\n  init=1080x2400 420dpi base=1080x2400 420dpi cur=#{size} app=#{size}\n", 0}}
+
+  # A display that turns as the rotation is locked: 1 is landscape.
+  defp rotating_device do
+    {:ok, rotation} = Agent.start_link(fn -> "0" end)
+
+    device(%{
+      user_rotation: fn ["shell", "cmd", "window", "user-rotation", "lock", value] ->
+        Agent.update(rotation, fn _rotation -> value end)
+        {:ok, {"", 0}}
+      end,
+      display: fn _args -> display(if Agent.get(rotation, & &1) == "1", do: "2400x1080", else: "1080x2400") end
+    })
   end
 
   defp installed_nothing(worktree) do
