@@ -4,6 +4,9 @@
 # agent receives it. This comment lives in front matter so it never renders.
 hooks:
   after_create: |
+    # Runs .githooks/pre-push on every push. The setting lands in the shared repo config,
+    # and the relative path resolves in each worktree.
+    git config core.hooksPath .githooks
     if command -v mise >/dev/null 2>&1; then
       mise trust && mise exec -- mix deps.get
     fi
@@ -216,6 +219,7 @@ You are working on a Linear ticket `{{ issue.identifier }}`
 7.  Before every `git push` attempt, run the targeted pre-push checks for your scope and confirm they pass; if one fails, address it and rerun until green.
     - Targeted pre-push checks: `mix format --check-formatted`, `mix compile --warnings-as-errors`, `mix specs.check`, `mix credo --strict <changed files>`, and every new or changed test file plus the test files of the modules you changed.
     - Do not run `make all`, `make check`, `make coverage`, the full `mix test`, `mix test --stale` or Dialyzer before a push (see `Command and output hygiene` for the optional `make all` on shared infrastructure). CI is the gate for the full suite, the 100% coverage report and Dialyzer.
+    - `git push` runs the repo's `.githooks/pre-push` hook, which reruns the format, compile and credo checks on the Elixir files the push changes and rejects the push when one fails. Never use `git push --no-verify`. When the hook fails, fix the issue it names (it prints the fixing command, such as `mix format`), commit, and push again.
     - If a prior push's CI checks are still failing, follow the `CI failure triage protocol` before re-pushing. A CI coverage gap is a red check like any other: add tests that exercise the missing branches, or extend `mix.exs` `test_coverage` `ignore_modules` only for genuinely untestable I/O shims.
     - After staging/committing changes and before pushing, run `git diff origin/main..HEAD` to review committed-only diff for:
       - stray debug statements, `console.log`, hardcoded test values, or temporary proof edits,
@@ -284,6 +288,13 @@ You are working on a Linear ticket `{{ issue.identifier }}`
 - When changing packages/dependencies, follow the dependency-change guardrail below; the lock file for this repo is `mix.lock`.
 
 {% render "out_of_scope_backlog" %}
+
+## Priority vs expedite
+
+- A ticket's priority means how important it is, not its place in the queue. Symphony uses it only to order tickets waiting for a normal slot.
+- Never raise a ticket's priority (this ticket, a sub-ticket or a blocker) to get it picked sooner. Set a new sub-ticket's `priority` by importance only.
+- Jumping the queue is a person's call: they add the `expedite` label or run `symphony force <ticket>`. Do not add or remove that label yourself. A forced ticket skips the slot limits (`max_total`, per-state caps, epic lanes, `finishing_max`, the daily token budget) but still waits for the operator's Pause, the Linear rate-limit and usage-limit pauses, its blocked-by links and the per-issue token cap.
+- Forcing never moves a ticket or skips a review. `Backlog` -> `Todo`, `In Review` -> `Merging`, approving a `breakdown` plan, `Rework` and signing off a `Final verification:` stay with a person, and the review-agent verdict and Auto Review QA still apply: follow the status map as usual.
 
 {% render "dependency_guardrail", lockfile: "mix.lock" %}
 

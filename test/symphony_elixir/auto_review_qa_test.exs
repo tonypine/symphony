@@ -469,6 +469,74 @@ defmodule SymphonyElixir.AutoReviewQaTest do
                AutoReview.on_green(issue(%{labels: ["Expedite"]}), record, %{commit_sha: @sha}, settings, qa_runner: FakeRunner)
 
       assert_receive {:qa_runner_request, %{forced: true}, _runner_opts}
+    end
+
+    test "a forced parent's current sub-ticket waits at the front, then starts on the forced allowance with every QA slot busy" do
+      test_pid = self()
+
+      # The orchestrator's published snapshot names the issue as a forced parent's current part.
+      owner =
+        spawn(fn ->
+          :ets.new(:symphony_orchestrator_snapshot, [:named_table, :public, read_concurrency: true])
+
+          snapshot = %{
+            running: [],
+            forced: [
+              %{issue_id: "epic-other", sub_issue: nil},
+              %{issue_id: "epic-1", sub_issue: %{issue_id: "issue-qa-flow", identifier: "TP-901", state: "Auto Review"}}
+            ]
+          }
+
+          :ets.insert(:symphony_orchestrator_snapshot, {:current, snapshot, System.monotonic_time(:millisecond), System.system_time(:millisecond)})
+          Process.register(self(), SymphonyElixir.Orchestrator)
+          send(test_pid, :snapshot_published)
+
+          receive do
+            :stop -> :ok
+          end
+        end)
+
+      assert_receive :snapshot_published
+
+      on_exit(fn ->
+        ref = Process.monitor(owner)
+        send(owner, :stop)
+        assert_receive {:DOWN, ^ref, :process, ^owner, _reason}
+      end)
+
+      run_fun = fn job, _opts ->
+        send(test_pid, {:pass_started, job.issue.id, self()})
+
+        receive do
+          :finish -> :ok
+        end
+      end
+
+      start_supervised!({QaRunner, run_fun: run_fun})
+      record = put_record()
+      settings = Config.settings!()
+      settings = %{settings | auto_review: %{settings.auto_review | max_concurrent: 1}, agent: %{settings.agent | forced_max: 0}}
+
+      normal = %{issue: issue(%{id: "normal", identifier: "TP-902"}), record: record, sha: @sha, settings: settings}
+      assert :started = QaRunner.request(normal)
+      assert_receive {:pass_started, "normal", normal_pid}
+
+      # No forced allowance left: the pass waits at the front of the queue.
+      assert {:qa_queued, "issue-qa-flow"} = AutoReview.on_green(issue(), record, %{commit_sha: @sha}, settings, [])
+      assert %{queued: [%{issue_id: "issue-qa-flow", forced: true}]} = QaRunner.snapshot()
+
+      settings = %{settings | agent: %{settings.agent | forced_max: 1}}
+
+      log =
+        capture_log(fn ->
+          assert {:qa_started, "issue-qa-flow", @sha} = AutoReview.on_green(issue(), record, %{commit_sha: @sha}, settings, [])
+        end)
+
+      assert_receive {:pass_started, "issue-qa-flow", forced_pid}
+      assert log =~ "QA pass started on the forced allowance issue_id=issue-qa-flow issue_identifier=TP-901 sha=#{@sha} forced=true"
+      assert %{running: [%{issue_id: "issue-qa-flow", forced: true}, %{issue_id: "normal", forced: false}]} = QaRunner.snapshot()
+
+      for pid <- [normal_pid, forced_pid], do: send(pid, :finish)
 
       assert {:qa_waiting, "issue-qa-flow", :missing_head_sha} =
                AutoReview.on_green(issue(), record, %{commit_sha: nil}, settings, [])

@@ -171,6 +171,9 @@ Fields:
 - `description` (string or null)
 - `priority` (integer or null)
   - Lower numbers are higher priority in dispatch sorting.
+  - Priority means importance, not queue position: it only orders issues within a dispatch stage
+    (Section 8.2) and never gets an issue a slot past a limit. Forcing (`concurrency.force_label`,
+    Section 8.3) is the way to have an issue worked ahead of the queue.
 - `state` (string)
   - Current tracker state name.
 - `team` (object or null)
@@ -1212,7 +1215,8 @@ When enabled:
   `qa_ax_tree`, `qa_ax_press`, `qa_ax_set_value`. Every tool that takes a PID MUST refuse a PID
   the pass did not launch. Apps still running when the pass ends MUST be quit. A missing Screen
   Recording or Accessibility grant MUST surface as a `qa_permission_missing` tool error that tells
-  the agent to answer `blocked`. On the Symphony host, screenshots and accessibility calls MUST run in a separate helper
+  the agent to mark the app steps `blocked`, finish the other playbooks' steps and answer
+  `blocked`. On the Symphony host, screenshots and accessibility calls MUST run in a separate helper
   app that Symphony opens through LaunchServices, so that grants made to it are never inherited by
   Symphony or the agents it spawns. The helper MUST answer only the Symphony process that opened
   it, MUST NOT accept an owner that another Symphony process started, and MUST NOT run a screenshot
@@ -1255,13 +1259,14 @@ When enabled:
   `origin/<base_branch>`, with the parent as the issue under test and the verification ticket's
   description as an extra checklist. Playbooks come from `qa:<kind>` labels on the ticket or the
   parent, else every enabled playbook. The `## Symphony QA Report` is written on the parent and on
-  the verification ticket. `pass` and `blocked` move the verification ticket to `In Review`;
-  `fail` creates one `Backlog` child of the verification ticket per failing step (per finding when
-  no step failed), naming the step and holding its details and evidence, marks the verification
-  ticket blocked by each one, lists them in the report, and moves the verification ticket to
-  `Todo`, where the blocker rule holds it until every gap is terminal. When no gap could be filed
-  and linked, it moves the verification ticket to `Backlog` instead. There is no fix loop. Any
-  other final verification ticket gets the executor run.
+  the verification ticket. `pass` (or `blocked` with no failing step) moves the verification
+  ticket to `In Review`; `fail` (or `blocked` with a failing step) creates one `Backlog` child of
+  the verification ticket per failing step (per finding when no step failed), naming the step and
+  holding its details and evidence, marks the verification ticket blocked by each one, lists them
+  in the report, and moves the verification ticket to `Todo`, where the blocker rule holds it until
+  every gap is terminal. When no gap could be filed and linked, it moves the verification ticket to
+  `Backlog` instead. There is no fix loop. Any other final verification ticket gets the executor
+  run.
 
 When disabled, behaviour is unchanged.
 
@@ -1989,6 +1994,23 @@ an idle agent slot. The held `Todo` issue's `slot_waiting` reason names the issu
 (`MT-2 (Merging) is waiting for a finishing slot`, `QA pass for MT-3 is waiting for a finishing
 slot`).
 
+Priority vs expedite: `priority` means importance and only orders issues waiting for normal slots,
+after the stage. Raising it never gets an issue past `max_total`, a per-state cap, the epic lanes
+or `finishing_max`. To have an issue worked now, a person forces it with the
+`concurrency.force_label` label (default `expedite`, or `symphony force <identifier>`); Section 8.3
+lists what forcing bypasses and what it respects. Forcing only removes the wait for a slot. These
+transitions stay with a person, forced or not:
+
+| Transition | Who |
+| --- | --- |
+| `Backlog` -> `Todo` | a person promotes the issue; forcing does not |
+| `In Review` -> `Merging` | a person approves the PR |
+| `In Review` -> the waiting state (default `Waiting on sub-tickets`) | a person approves a `breakdown` plan |
+| any state -> `Rework` | a person rejects the approach |
+| `Final verification:` `In Review` -> `Done` | a person signs it off |
+
+The review-agent verdict and the Auto Review QA verdict are still required for a forced issue.
+
 ### 8.3 Concurrency Control
 
 Global limit:
@@ -2024,15 +2046,18 @@ Forced allowance:
 - A forced `breakdown` parent is one forced unit; its breakdown, re-plan and close-out runs are
   forced runs. While it waits on its sub-issues (and is not re-planning), its current part is
   forced too, without the service writing the label on it: the first issue on its epic path
-  (see Epic lanes below) that is dispatch-eligible, in epic-lane order (stage, then nearest the epic, then
-  dispatch order), so a blocked sub-issue waits for its blocker and the `Final verification:`
-  sub-issue comes once it is unblocked. The part keeps its parent's place in the forced queue, and
-  stays the parent's while it is on the path and running, claimed or waiting on a retry, so at
-  most one of the parent's issues runs on the forced allowance at a time. The parent's other
+  (see Epic lanes below) that is dispatch-eligible or in the Auto Review state, in epic-lane order
+  (stage, then nearest the epic, then dispatch order), so a blocked sub-issue waits for its
+  blocker and the `Final verification:` sub-issue comes once it is unblocked. The part keeps its
+  parent's place in the forced queue, and stays the parent's while it is on the path and running,
+  claimed, waiting on a retry or in Auto Review, so at most one of the parent's issues runs on the
+  forced allowance at a time. The parent's other
   sub-issues use normal slots and the epic lane. Forcing a sub-issue forces only that sub-issue.
 - Forcing never moves an issue or approves a plan: a forced parent in `In Review` stays there until
   a human moves it.
-- A forced issue's Auto Review QA request goes to the front of the QA queue: while it is queued, a
+- A forced issue's Auto Review QA request goes to the front of the QA queue; a forced parent's
+  current part counts as forced here too (the service MAY read it from the orchestrator's
+  published snapshot). While a forced request is queued, a
   free QA slot MUST be turned away from unforced requests. A queued forced request holds the slot
   only while it is refreshed: once no request has come for it in two CI poll intervals (the issue
   left Auto Review or its CI is no longer green), unforced requests MUST take free slots again.
