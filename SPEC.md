@@ -1344,7 +1344,9 @@ When enabled:
   remove its private directory. An emulator that cannot start MUST
   surface as `qa_android_unavailable`, telling the agent to answer `blocked`. Other tool scopes MUST
   NOT list or run them. The QA prompt MUST give the agent the playbook's `build`, `apk_path` and
-  `application_ids`.
+  `application_ids`. Every QA prompt MUST tell the agent never to start an emulator, simulator or
+  device tool itself, and to mark a step that needs an Android device `blocked` when no
+  `android_app` playbook runs in the pass.
 - With `worker_host` set, the worktree checks MUST stay on the Symphony host, and the build, the app,
   screenshots and accessibility calls MUST run on that host over SSH: `qa_build` ships the
   worktree's `HEAD` into a fresh build directory there, and screenshots are copied back into the
@@ -2972,7 +2974,7 @@ Optional client-side tool extension:
 - Current standardized optional tools: scoped Linear tools whose protocol-facing names match
   `^[a-zA-Z0-9_-]+$`, such as `linear_get_current_issue`, `linear_get_comments`, and
   `linear_update_state`, and scoped GitHub tools such as `github_get_pull_request`,
-  `github_fetch_origin`, `github_push_branch`, and `github_merge_pull_request`.
+  `github_fetch_origin`, `github_sync_base`, `github_push_branch`, and `github_merge_pull_request`.
 - If implemented, supported tools SHOULD be advertised to the agent session during startup using the
   protocol mechanism supported by the configured adapter.
 - Unsupported tool names SHOULD still return a failure result using the targeted protocol and
@@ -3083,6 +3085,24 @@ Scoped GitHub tool extension contract:
 - `github_fetch_origin`, if exposed, MUST fetch only the verified `origin`
   remote for the current workspace and MUST NOT accept prompt-supplied refspecs
   or remote names.
+- `github_sync_base`, if exposed, MUST fetch the verified `origin`, then merge
+  only the repository's base branch (the configured `base_branch`, else the
+  remote's `HEAD` branch) into the checked-out workspace branch, after
+  fast-forwarding to that branch's `origin` copy when it is ahead. It runs
+  outside the agent sandbox so the merge can update write-protected workspace
+  paths; it MUST run with repo hooks off, MUST NOT create the merge commit (the
+  agent commits or resolves conflicts in its sandbox), and MUST refuse a branch
+  whose own changes since the merge-base touch a write-protected path.
+- `github_push_branch`, if exposed, MUST refuse a push whose branch changes a
+  write-protected workspace path itself, except files identical to the
+  branch's `origin` copy.
+- For both, a write-protected path includes the files a symlink inside one
+  points at (`.ai/skills/pull -> ../../priv/skills/pull` protects
+  `priv/skills/pull`). Both MUST read the base and branch heads from the remote
+  (`git ls-remote`), not from local remote-tracking refs, which the agent can
+  rewrite.
+- These checks bind only the scoped tools. A `git push` from the agent's shell
+  skips them, and what it pushed then counts as the branch's `origin` copy.
 - `github_merge_pull_request`, if exposed, MUST merge only the current
   workspace branch's pull request, MUST refuse unless the current issue is in
   the human-approved `Merging` state, MUST refuse while any check is failing or
