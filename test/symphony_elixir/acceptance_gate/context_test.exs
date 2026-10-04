@@ -296,6 +296,7 @@ defmodule SymphonyElixir.AcceptanceGate.ContextTest do
     ctx = Map.merge(ctx, fixture)
 
     assert {:error, :missing_workspace_path} = build(%{ctx | record: %{}}, gated)
+    assert {:error, :missing_workspace_path} = Context.build(issue(), %{}, gated, ctx.settings)
 
     lone = Path.join(ctx.root, "lone")
     File.mkdir_p!(lone)
