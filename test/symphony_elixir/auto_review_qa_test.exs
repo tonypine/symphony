@@ -31,9 +31,12 @@ defmodule SymphonyElixir.AutoReviewQaTest do
       send(Application.fetch_env!(:symphony_elixir, :qa_flow_recipient), {:failed_state_update, issue_id, state})
       {:error, :linear_down}
     end
+
+    def fetch_issue_states_by_ids(_issue_ids), do: {:error, :linear_down}
   end
 
   defmodule FailingStore do
+    def list_ci_checks(_repo_key), do: {:error, :disk_full}
     def put_run(_record), do: {:error, :disk_full}
     def update_run(_repo_key, _run_id, _attrs), do: {:error, :disk_full}
     def update_ci_check(_repo_key, _issue_id, _attrs), do: {:error, :disk_full}
@@ -51,7 +54,9 @@ defmodule SymphonyElixir.AutoReviewQaTest do
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
     on_exit(fn ->
-      for key <- [:qa_flow_recipient, :qa_flow_agent_result, :qa_flow_runner_result, :memory_tracker_recipient] do
+      keys = ~w(qa_flow_recipient qa_flow_agent_result qa_flow_runner_result memory_tracker_recipient memory_tracker_issues)a
+
+      for key <- keys do
         Application.delete_env(:symphony_elixir, key)
       end
     end)
@@ -442,6 +447,65 @@ defmodule SymphonyElixir.AutoReviewQaTest do
       assert log =~ "Failed to publish the QA report for TP-901"
       assert log =~ "Failed to move TP-901 to In Review after QA"
       assert_receive {:failed_state_update, "issue-qa-flow", "In Review"}
+    end
+
+    test "a pass that ends after its issue moved to Merging or Done writes its report and leaves the state alone" do
+      for state <- ["Merging", "Done"] do
+        record = put_record(%{last_observed_sha: @sha, pr_state: "OPEN"})
+        Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue(%{state: state})])
+        Application.put_env(:symphony_elixir, :qa_flow_agent_result, {:error, :adb_offline, QaAgent.empty_tokens()})
+
+        log =
+          capture_log([level: :info], fn ->
+            assert {:auto_review_qa_not_applied, "issue-qa-flow", :blocked, reason} =
+                     AutoReview.run_qa(job(record), git: git_with_paths(["bin/symphony"]), qa_agent: FakeQaAgent)
+
+            assert reason == "the issue moved to #{state}"
+          end)
+
+        assert log =~ "QA outcome not applied: the issue moved to #{state} issue_id=issue-qa-flow issue_identifier=TP-901 verdict=blocked"
+        assert_receive {:memory_tracker_comment, "issue-qa-flow", report}
+        assert report =~ "**Verdict:** blocked → no move (the issue moved to #{state})"
+        assert report =~ ":adb_offline"
+        refute_received {:memory_tracker_state_update, _issue_id, _state}
+        refute Map.has_key?(stored_record(), :qa_verdict)
+        assert Enum.any?(RunStore.list_runs(@repo_key, :all), &(&1.status == "qa_blocked"))
+      end
+    end
+
+    test "a pass whose PR merged, closed or got a new head while it ran leaves the state alone" do
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue()])
+      Application.put_env(:symphony_elixir, :qa_flow_agent_result, fail_result())
+
+      for {attrs, reason} <- [
+            {%{pr_state: "MERGED"}, "the PR is merged"},
+            {%{pr_state: "closed"}, "the PR is closed"},
+            {%{pr_state: "OPEN", last_observed_sha: "0123456789abcdef0123"}, "the PR head moved to `0123456789ab`"}
+          ] do
+        record = put_record(attrs)
+
+        assert {:auto_review_qa_not_applied, "issue-qa-flow", :fail, ^reason} =
+                 AutoReview.run_qa(job(record), git: git_with_paths(["bin/symphony"]), qa_agent: FakeQaAgent)
+
+        assert_receive {:memory_tracker_comment, "issue-qa-flow", report}
+        assert report =~ "**Verdict:** fail → no move (#{reason})"
+        refute_received {:memory_tracker_state_update, _issue_id, _state}
+        refute Map.has_key?(stored_record(), :qa_failure)
+      end
+    end
+
+    test "a pass on an issue still in Auto Review on the tested head applies its outcome as before" do
+      record = put_record(%{last_observed_sha: @sha, pr_state: "OPEN"})
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue(%{state: " auto review "})])
+      Application.put_env(:symphony_elixir, :qa_flow_agent_result, fail_result())
+
+      assert {:auto_review_qa, "issue-qa-flow", :fail, "In Progress"} =
+               AutoReview.run_qa(job(record), git: git_with_paths(["bin/symphony"]), qa_agent: FakeQaAgent)
+
+      assert_receive {:memory_tracker_comment, "issue-qa-flow", report}
+      assert report =~ "**Verdict:** fail (fix attempt 1 of 2) → In Progress"
+      assert_receive {:memory_tracker_state_update, "issue-qa-flow", "In Progress"}
+      assert %{qa_sha: @sha, qa_verdict: "fail", qa_applied: true, qa_fix_attempts: 1} = stored_record()
     end
   end
 
