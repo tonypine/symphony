@@ -412,6 +412,8 @@ Loader behavior:
   file is read from disk. With `ref`, the file is also read from disk, with a warning, until the
   ref has been read once (for example a checkout with no `origin` remote or no resolvable base
   branch ref).
+- For a repo with `workspace.source`, `workflow` is a path inside the repository and is always read
+  from the fetched ref of Symphony's own clone, which has no working tree.
 - The application selects a primary repo as the one marked `default: true`, otherwise the first
   repo in `repositories:`.
 
@@ -502,6 +504,7 @@ Fields:
 - `workflow` (path string)
   - Default: `WORKFLOW.md`.
   - Resolved relative to the directory containing `symphony.yml`, unless absolute.
+  - With `workspace.source`, it is a relative path inside the repository instead.
 - `workflow_source` (string)
   - Default: `ref`. Allowed: `ref`, `local`.
   - `ref` reads the committed workflow from the fetched remote base branch; `local` reads the
@@ -512,6 +515,24 @@ Fields:
   - `repo` is REQUIRED when the effective strategy is `worktree`; it points at that repo's primary
     clone used for `git worktree add`.
   - `fetch_before_dispatch` controls whether the primary clone fetches `origin` before worktree
+    creation.
+  - `source` (string) OPTIONAL: a GitHub repository, as `owner/repo` or a github.com URL, that
+    Symphony clones and manages itself instead of using a local checkout.
+    - The clone lives at `<workspaces.clones_root>/<owner>/<repo>` and is made without a working
+      tree. It MUST be readable and writable from the agent sandbox, because an agent worktree's
+      `.git` points into it; the default root is outside every sandbox deny list.
+    - Symphony clones over SSH (`git@github.com:<owner>/<repo>.git`) whatever URL form is given.
+    - The clone is made at startup when missing (and again on the next dispatch if it disappears)
+      and fetched before every dispatch when `fetch_before_dispatch` is on. Clone and fetch are
+      serialized per clone, so concurrent dispatches for the same repo never race.
+    - Agent worktrees and their `auto/<issue>` branches are created from the clone, as with
+      `strategy: worktree`. Without `base_branch`, a fresh worktree branches off the fetched
+      `origin/HEAD`.
+    - The workflow is read from the clone's fetched ref (Section 5.1).
+    - A clone or fetch failure fails that dispatch with an error naming the repo key; other repos
+      are unaffected. A clone that cannot be made at the first startup stops startup, since the
+      repo has no workflow to read yet.
+    - The engineer's own checkout of the repo is never read or written.
 - `route` (object)
   - OPTIONAL Linear selectors for this repo route.
   - `team`: Linear team key or team ID.
@@ -536,6 +557,9 @@ Validation:
 - More than one default repo for the same team is rejected.
 - With multiple repos, a global `workspaces.strategy: worktree` is invalid unless every repo
   provides an explicit `repositories[].workspace.strategy` override.
+- `workspace.source` MUST be `owner/repo` or a github.com URL. It is rejected together with
+  `workspace.repo`, `workspace.strategy: clone`, `workflow_source: local`, a `workflow` path outside
+  the repository, or `workers.ssh_hosts`.
 
 #### 5.4.2 `issues` (object)
 
@@ -593,6 +617,10 @@ Fields:
   - For SSH workers, `root` SHOULD be an absolute path on the remote host; orchestrator-side remote
     path validation MUST reject relative and `~` roots because their expansion would occur on a
     different host.
+- `clones_root` (path string)
+  - Default: `~/.local/share/symphony/repos`.
+  - Where Symphony keeps its clones of `repositories[].workspace.source` repos. It MUST stay outside
+    the agent sandbox's denied paths (for example not under `~/Library/Application Support`).
 - `strategy`, `repo`, `fetch_before_dispatch`
   - Defaults for `repositories[].workspace`.
   - Multi-repo configs SHOULD set worktree population under each repo instead of globally.

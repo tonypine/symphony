@@ -57,8 +57,9 @@ branch instead of opening a second one. If a claimed issue moves to a terminal s
 - **Run**: one attempt to make progress on a Linear issue.
 - **Workspace**: the isolated checkout or worktree for a run.
 - **Tracker**: the system Symphony polls for work, currently Linear.
-- **Repo route**: an entry under `repositories:` in `symphony.yml` that pairs a local checkout with its
-  `WORKFLOW.md` and optional Linear selectors. One Symphony process can supervise many repo routes.
+- **Repo route**: an entry under `repositories:` in `symphony.yml` that pairs a repo (a local checkout,
+  or a GitHub repo Symphony clones itself) with its `WORKFLOW.md` and optional Linear selectors. One
+  Symphony process can supervise many repo routes.
 - **Quality gate**: the optional pre-dispatch check that decides whether an issue is clear enough
   for an agent.
 - **Harness engineering**: the practice of preparing a codebase with scripts, tests, docs, and
@@ -175,6 +176,10 @@ Symphony reads two files:
   template. Each repo under `repositories:` has its own. Symphony reads the version committed on
   the repo's fetched base branch (`origin/<base_branch>`), so edit it by pushing. Set
   `workflow_source: local` on the repo to read the file on disk while you develop a workflow.
+- **No local checkout needed.** Set `workspace.source: owner/repo` (or a github.com URL) on a repo
+  and Symphony keeps its own clone under `~/.local/share/symphony/repos`, fetches it before each
+  dispatch, and makes agent worktrees from it. Your own checkout, if you have one, is never touched.
+  See [docs/configuration.md](docs/configuration.md#a-repo-symphony-clones-itself).
 
 Minimal `symphony.yml`:
 

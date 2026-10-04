@@ -17,12 +17,16 @@ defmodule SymphonyElixir.WorkflowSource do
   a checkout with no `origin` remote or no resolvable base branch ref. Once the ref
   resolves and the first snapshot is written, the repo's workflow store switches to
   the snapshot without a restart.
+
+  A repo with `workspace.source` has no checkout of the engineer's: its workflow is
+  read from Symphony's own clone (see `SymphonyElixir.ManagedClone`), which
+  `refresh_all/1` makes at startup when it is missing.
   """
 
   require Logger
 
   alias SymphonyElixir.Config.{Cache, SystemSchema}
-  alias SymphonyElixir.{Paths, Workflow, Workspace}
+  alias SymphonyElixir.{ManagedClone, Paths, Workflow, Workspace}
 
   @default_branch_refs ["origin/HEAD", "origin/main", "origin/master"]
 
@@ -70,14 +74,28 @@ defmodule SymphonyElixir.WorkflowSource do
   end
 
   @doc """
-  Refreshes every configured repo's snapshot without fetching.
+  Refreshes every configured repo's snapshot without fetching, after cloning a
+  `workspace.source` repo that has no clone yet.
   """
   @spec refresh_all(SystemSchema.t()) :: :ok
   def refresh_all(%SystemSchema{repos: repos}) do
-    Enum.each(repos, &refresh/1)
+    Enum.each(repos, fn repo ->
+      clone_managed_repo(repo)
+      refresh(repo)
+    end)
   end
 
+  defp clone_managed_repo(%SystemSchema.Repo{name: name, workspace: %{github: github, repo: clone}}) when is_binary(github) do
+    ManagedClone.sync(name, github, clone, fetch: false)
+  end
+
+  defp clone_managed_repo(_repo), do: :ok
+
   defp ref_checkout(%SystemSchema.Repo{workflow_source: "local"}, _local_path), do: :local
+
+  # Never look above Symphony's own clone for a checkout, even before it exists.
+  defp ref_checkout(%SystemSchema.Repo{workspace: %{github: github, repo: clone}}, _local_path) when is_binary(github),
+    do: {:ok, clone}
 
   defp ref_checkout(%SystemSchema.Repo{}, local_path) do
     case git_checkout_root(Path.dirname(local_path)) do
