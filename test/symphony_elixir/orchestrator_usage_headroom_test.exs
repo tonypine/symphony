@@ -329,6 +329,69 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
     end)
   end
 
+  test "a continuation deferred behind a quality gate task stays a continuation and runs under the hold", ctx do
+    write_headroom_workflow!(ctx, poll_interval_ms: 600_000)
+    continuing = issue("issue-headroom-gate-deferred", "MT-GATE-DEFERRED")
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [continuing])
+    pid = start_orchestrator(ctx, :GateDeferredContinuationOrchestrator)
+    token = make_ref()
+
+    :sys.replace_state(pid, fn state ->
+      %{
+        state
+        | usage_limits: %{@anthropic => headroom_hold(ctx)},
+          quality_gate_tasks: %{make_ref() => :poll},
+          retry_attempts: %{
+            continuing.id => %{attempt: 1, retry_token: token, identifier: continuing.identifier, delay_type: :continuation, repo_key: Config.repo_key!()}
+          },
+          claimed: MapSet.new([continuing.id])
+      }
+    end)
+
+    capture_log(fn ->
+      send(pid, {:retry_issue, continuing.id, token})
+      state = :sys.get_state(pid)
+
+      assert %{attempt: 1, delay_type: :continuation, retry_token: rescheduled, error: "quality gate task already in flight; deferred"} =
+               state.retry_attempts[continuing.id]
+
+      assert rescheduled != token
+      assert MapSet.member?(state.claimed, continuing.id)
+
+      :sys.replace_state(pid, &%{&1 | quality_gate_tasks: %{}})
+      send(pid, {:retry_issue, continuing.id, rescheduled})
+
+      wait_until(fn -> Enum.any?(RunStore.list_runs(:all), &(&1.issue_id == continuing.id)) end)
+      assert %{phase: :headroom} = :sys.get_state(pid).usage_limits[@anthropic]
+    end)
+  end
+
+  test "a failure retry deferred behind a quality gate task does not become a continuation", ctx do
+    write_headroom_workflow!(ctx, poll_interval_ms: 600_000)
+    failed = issue("issue-headroom-gate-failure", "MT-GATE-FAILURE")
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [failed])
+    pid = start_orchestrator(ctx, :GateDeferredFailureOrchestrator)
+    token = make_ref()
+
+    :sys.replace_state(pid, fn state ->
+      %{
+        state
+        | quality_gate_tasks: %{make_ref() => :poll},
+          retry_attempts: %{failed.id => %{attempt: 2, retry_token: token, identifier: failed.identifier, repo_key: Config.repo_key!()}},
+          claimed: MapSet.new([failed.id])
+      }
+    end)
+
+    capture_log(fn ->
+      send(pid, {:retry_issue, failed.id, token})
+
+      assert %{attempt: 2, delay_type: nil, retry_token: rescheduled, error: "quality gate task already in flight; deferred"} =
+               :sys.get_state(pid).retry_attempts[failed.id]
+
+      assert rescheduled != token
+    end)
+  end
+
   test "the hold clears at resetsAt plus the margin without a canary and releases held runs", ctx do
     write_headroom_workflow!(ctx)
     pid = start_orchestrator(ctx, :ClearOrchestrator)
