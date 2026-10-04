@@ -139,6 +139,8 @@ app opens" in Settings (see [Launch at Login](#launch-at-login)).
   **Update available: vX (N changes)**, **Update to vX** and **Release Notes…**.
 - **Update to vX** downloads and verifies the release, waits for agent runs like Restart, then swaps the app
   and relaunches it. See [Install an update](#install-an-update).
+- **Repos…** opens the Repos window: one row per connected repo with its source, GitHub remote, Linear
+  routing, `WORKFLOW.md` status, last fetch and running agents. See [Repos](#repos).
 - **Quit** stops Symphony first and asks before stopping active agent runs.
 
 The sections below describe each in detail.
@@ -361,6 +363,32 @@ While any ticket is forced, a **Forced** heading lists them under Pause and Resu
 
 Each row's submenu has **Stop forcing TP-123**, which removes the force label (`symphony force --clear`).
 The menu follows within one poll. A Symphony too old to report forced tickets shows no Forced heading.
+
+## Repos
+
+Repos… opens the Repos window, with one row per entry of `repositories:` in config order, as Symphony's
+`GET /api/v1/repos` reports them:
+
+- The key, marked `default` for the repo that takes the issues no other repo's route matches.
+- **Source**: `Local folder` with the checkout agent worktrees are made from, or `Managed clone of owner/repo`
+  for a `workspace.source` repo, with the clone's path or `not cloned yet`.
+- **GitHub**: the `owner/repo` of the source, or of the checkout's `origin` remote; `no GitHub remote`
+  when it has none.
+- **Linear**: the route's team, projects, labels and assignee, or `no route`.
+- **WORKFLOW.md**: `found, valid`, `found, invalid` or `missing`, in red when it doesn't load, with
+  Symphony's error under it. Symphony keeps using the last good workflow until the file is fixed.
+- **Last fetch**: how long ago Symphony last ran `git fetch origin` before a dispatch, `ok` or `failed`
+  (in red, with git's error), or `none yet`.
+- **Agents**: the identifiers of the running agents on the repo, with their worktree paths under them, or
+  `none`.
+
+Hover over a field to see its full detail. While the window is open it refreshes with each status poll,
+so an agent run that starts shows up within a few seconds.
+
+When Symphony is stopped, starting, or not answering, the window lists the repos in the `symphony.yml`
+set in Settings instead, and says why above them. Their source, GitHub repo (for a managed clone) and
+Linear routing come from the file; `WORKFLOW.md`, the last fetch, the agents and a local folder's GitHub
+remote show as `unavailable`. A Symphony too old to serve `GET /api/v1/repos` is shown the same way.
 
 ## Restart
 
