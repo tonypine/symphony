@@ -1,18 +1,27 @@
 ```text
 ╭─ SYMPHONY STATUS
 │ Dispatch: active
-│ Agents: 1/10 · forced 0/1
-│ Throughput: 15 tps
-│ Runtime: 45m 0s
-│ Tokens: new 18,000 | cached 0 | created 0 | out 2,200
-│ Rate Limits: gpt-5 | primary 0/20,000 reset 95s | secondary 0/60 reset 45s | credits none
+│ Agents: 2/10 · forced 4/1
+│ Throughput: 3 tps
+│ Runtime: 10m 0s
+│ Tokens: new 1,000 | cached 0 | created 0 | out 200
+│ Rate Limits: unavailable
 │ Repos: default
 │ Next refresh: n/a
+├─ Forced
+│
+│   ID       PHASE                WAITING ON               FORCED FOR
+│ ⚡MT-F1    implementation       running                  2h 3m
+│ ⚡MT-F2    implementation       blocker MT-9, MT-10      5m
+│ ⚡MT-F3    waiting for a human  human                    3d 3h stale
+│ ⚡MT-EPIC  CI fix               slot                     42s → MT-P1
+│
 ├─ Running
 │
 │   ID       STAGE          PID      AGE / TURN   TOKENS     SESSION        EVENT
 │   ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
-│ ● MT-638   retrying       4242     20m 25s / 7      14,200 thre...567890  agent message streaming: waiting on ...
+│ ● MT-2     In Progress    4242     0m 0s / 1             0 thre...567890  agent message streaming: reading the...
+│ ⚡MT-F1    In Progress    4242     0m 0s / 1             0 thre...567890  agent message streaming: writing the...
 │
 ├─ Watching
 │
@@ -22,10 +31,7 @@
 │
 ├─ Backoff queue
 │
-│  ↻ MT-450 attempt=4 in 1.250s error=rate limit exhausted
-│  ↻ MT-451 attempt=2 in 3.900s error=retrying after API timeout with jitter
-│  ↻ MT-452 attempt=6 in 8.100s error=worker crashed restarting cleanly
-│  ↻ MT-453 attempt=1 in 11.000s error=fourth queued retry should also render after removing the top-three limit
+│  ↻ MT-F4 ⚡ attempt=2 in 4.000s error=worker crashed
 │
 ├─ Awaiting clarification
 │

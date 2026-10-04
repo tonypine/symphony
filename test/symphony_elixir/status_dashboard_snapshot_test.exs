@@ -187,6 +187,46 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
     Snapshot.assert_dashboard_snapshot!("backoff_queue", render_snapshot(snapshot_data, 15.4))
   end
 
+  test "snapshot fixture: forced tickets above the running agents" do
+    snapshot_data =
+      {:ok,
+       %{
+         running: [
+           running_entry(%{identifier: "MT-F1", state: "In Progress", forced: true, last_codex_message: agent_message_delta("writing the fix")}),
+           running_entry(%{identifier: "MT-2", state: "In Progress", last_codex_message: agent_message_delta("reading the code")})
+         ],
+         retrying: [retry_entry(%{identifier: "MT-F4", attempt: 2, due_in_ms: 4_000, error: "worker crashed", forced: true})],
+         forced: [
+           forced_entry(%{identifier: "MT-F1", phase: :implementation, running: true, forced_for_seconds: 7_380}),
+           forced_entry(%{
+             identifier: "MT-F2",
+             phase: :implementation,
+             waiting_on: :blocker,
+             blockers: ["MT-9", "MT-10"],
+             forced_for_seconds: 300
+           }),
+           forced_entry(%{
+             identifier: "MT-F3",
+             phase: :waiting_for_human,
+             waiting_on: :human,
+             forced_for_seconds: 270_000,
+             stale: true
+           }),
+           forced_entry(%{
+             identifier: "MT-EPIC",
+             phase: :ci_fix,
+             waiting_on: :slot,
+             forced_for_seconds: 42,
+             sub_issue: %{issue_id: "part-1", identifier: "MT-P1", state: "In Progress"}
+           })
+         ],
+         codex_totals: %{input_tokens: 1_000, output_tokens: 200, total_tokens: 1_200, seconds_running: 600},
+         rate_limits: nil
+       }}
+
+    Snapshot.assert_dashboard_snapshot!("forced_tickets", render_snapshot(snapshot_data, 3.0))
+  end
+
   test "dashboard renders continuation retries as follow-up checks" do
     snapshot_data =
       {:ok,
@@ -627,6 +667,23 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
         attempt: 1,
         due_in_ms: 1_000,
         error: "retry scheduled"
+      },
+      overrides
+    )
+  end
+
+  defp forced_entry(overrides) do
+    Map.merge(
+      %{
+        issue_id: "issue-" <> overrides.identifier,
+        title: "Forced",
+        state: "In Progress",
+        position: 1,
+        running: false,
+        waiting_on: nil,
+        blockers: [],
+        stale: false,
+        sub_issue: nil
       },
       overrides
     )

@@ -471,6 +471,157 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
     end
   end
 
+  describe "the forced snapshot" do
+    test "a forced Todo started with every slot busy shows implementation · running, then waits for a human in In Review", ctx do
+      write_forced_workflow!(ctx, max_concurrent_agents: 1)
+      :ok = Notifications.subscribe()
+      forced = issue("forced-1", "MT-F1", "Todo", forced: true)
+      tracked([forced])
+
+      state = run(orchestrator_state(1), issue("impl-1", "MT-1", "In Progress"), :implementation)
+      state = Orchestrator.apply_forced_poll_result_for_test(state, {"default", {:ok, [forced]}}, [], {:ok, []})
+      state = Orchestrator.dispatch_chosen_issues_for_test([forced], state)
+
+      snapshot = snapshot_of(state)
+      assert [%{issue_id: "forced-1", phase: :implementation, running: true, waiting_on: nil, blockers: [], stale: false}] = snapshot.forced
+      assert %{forced: true} = Enum.find(snapshot.running, &(&1.issue_id == "forced-1"))
+
+      # The run opens its PR and the ticket reaches In Review: a human gate, noticed once.
+      in_review = %{forced | state: "In Review"}
+      state = %{state | running: Map.delete(state.running, "forced-1")}
+      state = refresh(state, [in_review])
+
+      assert [%{phase: :waiting_for_human, running: false, waiting_on: :human, waiting_on_human: true}] =
+               snapshot_of(state).forced
+
+      assert_receive {:notification_event, %Notifications.Event{event: "forced_human_gate", issue_identifier: "MT-F1", reason: "MT-F1 is waiting for your review"}}
+      assert %{human_gate_notified_at: %DateTime{}} = RunStore.get_forced("default")["forced-1"]
+
+      state = refresh(state, [in_review])
+      refute_receive {:notification_event, %Notifications.Event{event: "forced_human_gate"}}, 50
+
+      # Sent back for rework, it is noticed again the next time it reaches In Review.
+      state = refresh(state, [%{forced | state: "Rework"}])
+      assert [%{phase: :rework, waiting_on: nil}] = snapshot_of(state).forced
+      refute Map.has_key?(state.forced["forced-1"], :human_gate_notified_at)
+
+      refresh(state, [in_review])
+      assert_receive {:notification_event, %Notifications.Event{event: "forced_human_gate", issue_identifier: "MT-F1"}}
+    end
+
+    test "says what each waiting forced ticket waits on", ctx do
+      write_forced_workflow!(ctx)
+      blockers = [%{id: "b", identifier: "MT-X", state: "In Progress"}, %{id: "c", identifier: nil, state: nil}]
+      blocked = %{issue("blocked-1", "MT-B1", "Todo", forced: true) | blocked_by: blockers}
+      backlog = issue("backlog-1", "MT-BL", "Backlog", forced: true)
+      waiting = issue("slot-1", "MT-S1", "Todo", forced: true)
+      merging = issue("merge-1", "MT-M1", "Merging", forced: true)
+      reviewing = issue("qa-1", "MT-Q1", "Auto Review", forced: true)
+      issues = [blocked, backlog, waiting, merging, reviewing]
+      tracked(issues)
+
+      queue = issues |> Enum.with_index() |> Map.new(fn {issue, index} -> {issue.id, queue_entry(issue, DateTime.add(~U[2026-10-04 06:00:00Z], index))} end)
+
+      state =
+        %{
+          orchestrator_state(1)
+          | forced: queue,
+            slot_waiting: %{
+              "slot-1" => %{identifier: "MT-S1", title: "Slot", state: "Todo", reason: "work slots full", attempt: nil, since: DateTime.utc_now()}
+            },
+            merging_ci_waits: %{
+              "merge-1" => %{
+                identifier: "MT-M1",
+                title: "Land",
+                repo_key: nil,
+                pull_request_url: nil,
+                commit_sha: "abc",
+                since: DateTime.utc_now()
+              }
+            }
+        }
+        |> refresh(issues)
+
+      assert [
+               %{issue_id: "blocked-1", phase: :implementation, waiting_on: :blocker, blockers: ["MT-X", "an unknown issue"]},
+               %{issue_id: "backlog-1", phase: :implementation, waiting_on: :backlog, waiting_on_human: true},
+               %{issue_id: "slot-1", phase: :implementation, waiting_on: :slot},
+               %{issue_id: "merge-1", phase: :waiting_on_ci, waiting_on: :ci},
+               %{issue_id: "qa-1", phase: :auto_review, waiting_on: nil}
+             ] = snapshot_of(state).forced
+
+      paused = %{state | pause: %{paused: true, reason: "maintenance", paused_at: DateTime.utc_now()}}
+      assert %{waiting_on: :paused} = Enum.find(snapshot_of(paused).forced, &(&1.issue_id == "slot-1"))
+
+      held = %{state | usage_limits: %{@anthropic => hold(:paused)}}
+      assert %{waiting_on: :usage_limit} = Enum.find(snapshot_of(held).forced, &(&1.issue_id == "slot-1"))
+
+      # Before a poll has seen it (just after a restart), what the queue recorded is used.
+      restored = %{orchestrator_state(1) | forced: %{"slot-1" => queue_entry(%{waiting | state: "In Review"}, ~U[2026-10-04 06:00:00Z])}}
+      assert [%{phase: :waiting_for_human, waiting_on: :human}] = snapshot_of(restored).forced
+    end
+
+    test "a forced parent's phase is its current part's", ctx do
+      write_forced_workflow!(ctx, max_concurrent_agents: 1)
+      part = issue("part-1", "MT-P1", "Todo")
+      parent = parent([part])
+      candidates = [parent, part]
+      tracked(candidates)
+
+      state = %{orchestrator_state(1) | forced: %{"epic-1" => queue_entry(parent, ~U[2026-10-04 06:00:00Z])}} |> plan_poll(candidates)
+      state = Orchestrator.apply_forced_poll_result_for_test(state, {"default", {:ok, candidates}}, ["epic-1"], {:ok, [parent]})
+      assert Map.keys(state.forced_issues) |> Enum.sort() == ["epic-1", "part-1"]
+
+      assert [%{issue_id: "epic-1", sub_issue: %{issue_id: "part-1"}, phase: :implementation, running: false, waiting_on: nil}] =
+               snapshot_of(state).forced
+
+      state = run(state, part, :review_feedback, forced: true)
+      assert [%{phase: :review_feedback, running: true}] = snapshot_of(state).forced
+    end
+  end
+
+  describe "forced notices" do
+    test "a ticket forced past forced_stale_after_hours is marked stale and noticed once", ctx do
+      write_forced_workflow!(ctx, forced_stale_after_hours: 72)
+      :ok = Notifications.subscribe()
+      now = ~U[2026-10-04 06:00:00Z]
+      forced = issue("forced-1", "MT-F1", "In Progress", forced: true)
+      queue = %{"forced-1" => queue_entry(forced, DateTime.add(now, -71 * 3_600))}
+      state = %{orchestrator_state(1) | forced: queue, clock: fn -> now end}
+
+      # Not yet stale; the ticket is not observed by this poll, so the queue's record is used.
+      state = Orchestrator.apply_forced_poll_result_for_test(state, :not_due, [], {:ok, []})
+      assert [%{stale: false}] = snapshot_of(state).forced
+      refute_receive {:notification_event, %Notifications.Event{event: "forced_stale"}}, 50
+
+      state = %{state | clock: fn -> DateTime.add(now, 3_600 + 60) end}
+
+      log =
+        capture_log(fn ->
+          send(self(), {:state, Orchestrator.apply_forced_poll_result_for_test(state, :not_due, [], {:ok, []})})
+        end)
+
+      assert_received {:state, state}
+      assert log =~ "Forced ticket stale: issue_id=forced-1 issue_identifier=MT-F1"
+      assert_receive {:notification_event, %Notifications.Event{event: "forced_stale", issue_identifier: "MT-F1", reason: "forced for 3d 0h, past forced_stale_after_hours=72"}}
+      assert [%{stale: true, forced_for_seconds: 259_260}] = snapshot_of(state).forced
+      assert %{stale_notified_at: %DateTime{}} = RunStore.get_forced("default")["forced-1"]
+
+      Orchestrator.apply_forced_poll_result_for_test(state, :not_due, ["forced-1"], {:ok, [forced]})
+      refute_receive {:notification_event, %Notifications.Event{event: "forced_stale"}}, 50
+    end
+
+    test "a forced parent whose plan reaches In Review is noticed as waiting for review", ctx do
+      write_forced_workflow!(ctx)
+      :ok = Notifications.subscribe()
+      parent = %{parent([issue("part-1", "MT-P1", "Backlog")]) | state: "In Review"}
+      state = %{orchestrator_state(1) | forced: %{"epic-1" => queue_entry(%{parent | state: "Todo"}, DateTime.utc_now())}}
+
+      refresh(state, [parent])
+      assert_receive {:notification_event, %Notifications.Event{event: "forced_human_gate", issue_identifier: "MT-EPIC", reason: "MT-EPIC's plan is waiting for your review"}}
+    end
+  end
+
   describe "Auto Review QA passes" do
     test "a forced QA pass holds the forced allowance, shows as forced, and a forced ticket waits behind it", ctx do
       write_forced_workflow!(ctx, max_concurrent_agents: 1)
@@ -501,6 +652,16 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
                  queued: []
                }
              } = snapshot_of(state)
+
+      # In the forced section the running pass is Auto Review, running; a queued one waits on a slot.
+      assert :busy = QaRunner.request(qa_job.("qa-2", "MT-QA2", false))
+      in_auto_review = fn id, identifier -> queue_entry(issue(id, identifier, "Auto Review"), ~U[2026-10-04 06:00:00Z]) end
+      state = %{state | forced: %{"qa-forced" => in_auto_review.("qa-forced", "MT-QAF"), "qa-2" => in_auto_review.("qa-2", "MT-QA2")}}
+
+      assert [
+               %{issue_id: "qa-2", phase: :auto_review, running: false, waiting_on: :slot},
+               %{issue_id: "qa-forced", phase: :auto_review, running: true}
+             ] = Enum.sort_by(snapshot_of(state).forced, & &1.issue_id)
     end
 
     test "an unreachable QA runner counts no forced passes" do
@@ -648,6 +809,9 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
   end
 
   defp link(%Issue{} = issue), do: %{id: issue.id, identifier: issue.identifier, state: issue.state}
+
+  # A poll that refreshes the queued forced tickets by id.
+  defp refresh(state, issues), do: Orchestrator.apply_forced_poll_result_for_test(state, :not_due, Map.keys(state.forced), {:ok, issues})
 
   defp plan_poll(state, candidates) do
     state

@@ -107,7 +107,7 @@ defmodule SymphonyElixir.ForcedQueueTest do
           later
         )
 
-      assert [{:end, "a", %{identifier: "MT-1"}, :terminal}, {:end, "b", _b, :label_removed}, {:end, "d", _d, :missing}] =
+      assert [{:end, "a", %{identifier: "MT-1"}, :done}, {:end, "b", _b, :label_removed}, {:end, "d", _d, :missing}] =
                changes
 
       assert entries == %{}
@@ -222,6 +222,48 @@ defmodule SymphonyElixir.ForcedQueueTest do
     end
   end
 
+  describe "a forced ticket that reaches a terminal state" do
+    setup do
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_remove_issue_label_result) end)
+      queued = %{identifier: "MT-F1", title: "Ticket MT-F1", state: "Merging", repo_key: nil, forced_since: @now}
+      %{state: %Orchestrator.State{repo_key: Config.repo_key!(), clock: fn -> @now end, forced: %{"forced-1" => queued}}}
+    end
+
+    test "leaves the queue with reason done and has its force label removed", %{state: state} do
+      done = issue("forced-1", "MT-F1", "Done", ["bug", "Expedite"])
+      tracked([done])
+
+      state = Orchestrator.apply_forced_poll_result_for_test(state, :not_due, ["forced-1"], {:ok, [done]})
+
+      assert state.forced == %{}
+      assert state.forced_issues == %{}
+      assert_receive {:memory_tracker_label_removed, "forced-1", "expedite"}, 5_000
+      assert [%{labels: ["bug"]}] = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+
+      assert {:ok, events} = AuditLog.query(event_type: "forced_end")
+      assert [%{"issue_identifier" => "MT-F1", "reason" => "done"}] = Enum.to_list(events)
+    end
+
+    test "logs a label Linear refuses to remove, or a removal that cannot start", %{state: state} do
+      done = issue("forced-1", "MT-F1", "Done", ["expedite"])
+      Application.put_env(:symphony_elixir, :memory_tracker_remove_issue_label_result, {:error, :boom})
+
+      log =
+        capture_log(fn ->
+          await_new_tasks(fn ->
+            Orchestrator.apply_forced_poll_result_for_test(state, :not_due, ["forced-1"], {:ok, [done]})
+          end)
+        end)
+
+      assert log =~ "Failed to remove the force label from a done ticket: issue_id=forced-1 issue_identifier=MT-F1 reason=:boom"
+
+      assert :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, SymphonyElixir.TaskSupervisor)
+      log = capture_log(fn -> Orchestrator.apply_forced_poll_result_for_test(state, :not_due, ["forced-1"], {:ok, [done]}) end)
+      assert log =~ "Failed to start removing the force label: issue_id=forced-1 issue_identifier=MT-F1 reason=:task_supervisor_unavailable"
+    end
+  end
+
   describe "a poll that started before symphony force changed a ticket" do
     test "keeps what force recorded until a later poll sees the ticket" do
       queued = %{identifier: "MT-F1", title: "Ticket MT-F1", state: "Todo", repo_key: nil, forced_since: @now}
@@ -280,6 +322,17 @@ defmodule SymphonyElixir.ForcedQueueTest do
       if System.monotonic_time(:millisecond) > deadline, do: flunk("condition not met in time")
       Process.sleep(25)
       do_wait_until(fun, deadline)
+    end
+  end
+
+  # Runs `fun` and waits for the tasks it started under the task supervisor to finish.
+  defp await_new_tasks(fun) do
+    before = Task.Supervisor.children(SymphonyElixir.TaskSupervisor)
+    fun.()
+
+    for pid <- Task.Supervisor.children(SymphonyElixir.TaskSupervisor) -- before do
+      ref = Process.monitor(pid)
+      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 5_000
     end
   end
 
