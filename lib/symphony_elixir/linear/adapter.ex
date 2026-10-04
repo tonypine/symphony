@@ -24,6 +24,47 @@ defmodule SymphonyElixir.Linear.Adapter do
   }
   """
 
+  # The issue's own labels with this name, and every label with this name that the issue's team or
+  # the whole workspace defines.
+  @issue_label_lookup_query """
+  query SymphonyResolveIssueLabel($issueId: String!, $labelName: String!) {
+    issue(id: $issueId) {
+      team {
+        id
+      }
+      labels(filter: {name: {eqIgnoreCase: $labelName}}) {
+        nodes {
+          id
+        }
+      }
+    }
+    issueLabels(filter: {name: {eqIgnoreCase: $labelName}}, first: 50) {
+      nodes {
+        id
+        team {
+          id
+        }
+      }
+    }
+  }
+  """
+
+  @add_label_mutation """
+  mutation SymphonyAddIssueLabel($issueId: String!, $labelId: String!) {
+    issueAddLabel(id: $issueId, labelId: $labelId) {
+      success
+    }
+  }
+  """
+
+  @remove_label_mutation """
+  mutation SymphonyRemoveIssueLabel($issueId: String!, $labelId: String!) {
+    issueRemoveLabel(id: $issueId, labelId: $labelId) {
+      success
+    }
+  }
+  """
+
   @state_lookup_query """
   query SymphonyResolveStateId($issueId: String!, $stateName: String!) {
     issue(id: $issueId) {
@@ -135,6 +176,38 @@ defmodule SymphonyElixir.Linear.Adapter do
     end
   end
 
+  @doc """
+  Adds the label named `label_name` to the issue: the issue's team label when there is one,
+  otherwise the workspace label. Does nothing when the issue already carries it.
+  """
+  @spec add_issue_label(String.t(), String.t()) :: :ok | {:error, term()}
+  def add_issue_label(issue_id, label_name) when is_binary(issue_id) and is_binary(label_name) do
+    with {:ok, lookup} <- lookup_issue_label(issue_id, label_name) do
+      case lookup do
+        %{on_issue: [_ | _]} -> :ok
+        %{label_id: nil} -> {:error, {:label_not_found, label_name}}
+        %{label_id: label_id} -> mutate_label(@add_label_mutation, "issueAddLabel", issue_id, label_id)
+      end
+    end
+  end
+
+  @doc "Removes every label named `label_name` from the issue. Does nothing when it carries none."
+  @spec remove_issue_label(String.t(), String.t()) :: :ok | {:error, term()}
+  def remove_issue_label(issue_id, label_name) when is_binary(issue_id) and is_binary(label_name) do
+    with {:ok, %{on_issue: label_ids}} <- lookup_issue_label(issue_id, label_name) do
+      Enum.reduce_while(label_ids, :ok, fn label_id, :ok ->
+        remove_label_id(issue_id, label_id)
+      end)
+    end
+  end
+
+  defp remove_label_id(issue_id, label_id) do
+    case mutate_label(@remove_label_mutation, "issueRemoveLabel", issue_id, label_id) do
+      :ok -> {:cont, :ok}
+      error -> {:halt, error}
+    end
+  end
+
   @spec fetch_breakdown_history(String.t()) :: {:ok, Tracker.breakdown_history()} | {:error, term()}
   def fetch_breakdown_history(issue_id) when is_binary(issue_id) do
     with {:ok, response} <- client_module().graphql(@breakdown_history_query, %{id: issue_id}),
@@ -200,6 +273,37 @@ defmodule SymphonyElixir.Linear.Adapter do
 
   defp client_module do
     Application.get_env(:symphony_elixir, :linear_client_module, Client)
+  end
+
+  defp lookup_issue_label(issue_id, label_name) do
+    variables = %{issueId: issue_id, labelName: label_name}
+
+    with {:ok, response} <- client_module().graphql(@issue_label_lookup_query, variables),
+         %{} = issue <- get_in(response, ["data", "issue"]) do
+      team_id = get_in(issue, ["team", "id"])
+      labels = response |> get_in(["data", "issueLabels", "nodes"]) |> List.wrap()
+      team_label = Enum.find(labels, &(is_binary(team_id) and get_in(&1, ["team", "id"]) == team_id))
+      workspace_label = Enum.find(labels, &is_nil(&1["team"]))
+
+      {:ok,
+       %{
+         on_issue: issue |> get_in(["labels", "nodes"]) |> List.wrap() |> Enum.map(& &1["id"]),
+         label_id: (team_label || workspace_label || %{})["id"]
+       }}
+    else
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :issue_label_lookup_failed}
+    end
+  end
+
+  defp mutate_label(mutation, field, issue_id, label_id) do
+    case client_module().graphql(mutation, %{issueId: issue_id, labelId: label_id}) do
+      {:ok, response} ->
+        if get_in(response, ["data", field, "success"]) == true, do: :ok, else: {:error, :issue_label_update_failed}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   defp resolve_state_id(issue_id, state_name) do

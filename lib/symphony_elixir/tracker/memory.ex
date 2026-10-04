@@ -111,6 +111,24 @@ defmodule SymphonyElixir.Tracker.Memory do
     end
   end
 
+  @spec add_issue_label(String.t(), String.t()) :: :ok | {:error, term()}
+  def add_issue_label(issue_id, label_name) do
+    event = {:memory_tracker_label_added, issue_id, label_name}
+
+    update_issue_labels(:memory_tracker_add_issue_label_result, event, issue_id, fn labels ->
+      if Enum.any?(labels, &same_label?(&1, label_name)), do: labels, else: labels ++ [label_name]
+    end)
+  end
+
+  @spec remove_issue_label(String.t(), String.t()) :: :ok | {:error, term()}
+  def remove_issue_label(issue_id, label_name) do
+    event = {:memory_tracker_label_removed, issue_id, label_name}
+
+    update_issue_labels(:memory_tracker_remove_issue_label_result, event, issue_id, fn labels ->
+      Enum.reject(labels, &same_label?(&1, label_name))
+    end)
+  end
+
   @spec fetch_breakdown_history(String.t()) :: {:ok, SymphonyElixir.Tracker.breakdown_history()} | {:error, term()}
   def fetch_breakdown_history(issue_id) do
     send_event({:memory_tracker_breakdown_history, issue_id})
@@ -129,6 +147,52 @@ defmodule SymphonyElixir.Tracker.Memory do
       states when is_list(states) -> {:ok, normalize_state(state_name) in Enum.map(states, &normalize_state/1)}
     end
   end
+
+  # Edits the labels where the issues come from, `:memory_tracker_issues` or the issues file, so the
+  # next fetch sees them.
+  defp update_issue_labels(result_key, event, issue_id, update) do
+    case next_result(result_key) do
+      :ok ->
+        put_issue_labels(issue_id, update)
+        send_event(event)
+        :ok
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp put_issue_labels(issue_id, update) do
+    case Application.fetch_env(:symphony_elixir, :memory_tracker_issues) do
+      {:ok, issues} ->
+        issues = Enum.map(issues, &update_labels(&1, issue_id, update))
+        Application.put_env(:symphony_elixir, :memory_tracker_issues, issues)
+
+      :error ->
+        put_file_issue_labels(issue_id, update)
+    end
+  end
+
+  defp put_file_issue_labels(issue_id, update) do
+    with {:ok, %{tracker: %{memory_issues_file: path}}} when is_binary(path) <- Config.settings(),
+         {:ok, body} <- File.read(path),
+         {:ok, entries} when is_list(entries) <- Jason.decode(body) do
+      entries =
+        Enum.map(entries, fn
+          %{"id" => ^issue_id} = entry -> Map.put(entry, "labels", update.(Enum.filter(List.wrap(entry["labels"]), &is_binary/1)))
+          entry -> entry
+        end)
+
+      File.write!(path, Jason.encode!(entries, pretty: true))
+    end
+
+    :ok
+  end
+
+  defp update_labels(%Issue{id: issue_id, labels: labels} = issue, issue_id, update), do: %{issue | labels: update.(labels)}
+  defp update_labels(issue, _issue_id, _update), do: issue
+
+  defp same_label?(label, label_name), do: normalize_state(label) == normalize_state(label_name)
 
   # A list of results answers one call each, then `:ok`, so a test can script a failure
   # followed by a success.
