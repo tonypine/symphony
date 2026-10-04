@@ -18,3 +18,10 @@ arguments — Symphony injects the scope server-side. To refresh remote refs, us
 rather than reading SSH config or credential files from the sandbox.
 
 Do not craft raw Linear GraphQL from prompts.
+
+Images and files attached to the ticket appear in the description and comments as
+`https://uploads.linear.app/...` links that Symphony has pre-signed, so they download
+without a Linear key: save one with `curl -sSfL -o "$TMPDIR/<name>" '<link>'` and open
+the saved file (an image reads like any other file). A link expires after six hours;
+read the issue or comments again with `linear_get_current_issue` or `linear_get_comments`
+for a fresh one. Do not copy these links into comments or the workpad: they stop working.

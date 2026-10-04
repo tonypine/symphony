@@ -2802,7 +2802,8 @@ defmodule SymphonyElixir.CoreTest do
   test "linear client enriches issue comments and linked issues" do
     long_body = String.duplicate("x", 805)
 
-    issue = %Issue{id: "issue-1", identifier: "MT-1", state: "In Progress"}
+    issue = %Issue{id: "issue-1", identifier: "MT-1", state: "In Progress", description: "Polled body"}
+    signed_description = "Screenshot: ![shot](https://uploads.linear.app/org/file/shot.png?signature=fresh)"
 
     graphql_fun = fn query, variables ->
       send(self(), {:enrichment_query, query, variables})
@@ -2811,6 +2812,7 @@ defmodule SymphonyElixir.CoreTest do
        %{
          "data" => %{
            "issue" => %{
+             "description" => signed_description,
              "comments" => %{
                "nodes" => [
                  %{
@@ -2873,6 +2875,7 @@ defmodule SymphonyElixir.CoreTest do
     assert_receive {:enrichment_query, query, %{id: "issue-1", commentLast: comment_last, relationFirst: relation_first}}
 
     assert query =~ "SymphonyLinearIssueEnrichment"
+    assert query =~ "description"
     assert query =~ "comments(last: $commentLast, orderBy: createdAt)"
     assert query =~ "relations(first: $relationFirst)"
     assert comment_last == 20
@@ -2886,6 +2889,7 @@ defmodule SymphonyElixir.CoreTest do
 
     assert String.starts_with?(workpad_body, "## Codex Workpad\n")
     assert String.length(workpad_body) == 800
+    assert enriched_issue.description == signed_description
 
     assert enriched_issue.linked_issues == [
              %{relation: "related", identifier: "MT-2", title: "Related context", state: "Todo"},
@@ -2896,7 +2900,7 @@ defmodule SymphonyElixir.CoreTest do
   test "linear client pins claude workpad comment alongside recent comments" do
     long_body = String.duplicate("x", 805)
 
-    issue = %Issue{id: "issue-claude", identifier: "MT-CLAUDE", state: "In Progress"}
+    issue = %Issue{id: "issue-claude", identifier: "MT-CLAUDE", state: "In Progress", description: "Polled body"}
 
     graphql_fun = fn _query, _variables ->
       {:ok,
@@ -2942,6 +2946,7 @@ defmodule SymphonyElixir.CoreTest do
            ] = enriched_issue.comments
 
     assert String.starts_with?(workpad_body, "## Claude Workpad\n")
+    assert enriched_issue.description == "Polled body"
   end
 
   test "linear client reports enrichment errors without changing issue fetchers" do
@@ -3623,6 +3628,7 @@ defmodule SymphonyElixir.CoreTest do
     # `{% render %}`; confirm they still appear in the composed prompt.
     assert prompt =~ "## Default posture"
     assert prompt =~ "## Prerequisite: scoped Linear and GitHub tools are available"
+    assert prompt =~ "`https://uploads.linear.app/...` links that Symphony has pre-signed"
     assert prompt =~ "## Status map"
     assert prompt =~ "`Auto Review` -> Symphony is testing the PR as a user"
     assert prompt =~ "## PR feedback sweep protocol (required)"
