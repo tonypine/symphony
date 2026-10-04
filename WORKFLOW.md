@@ -74,6 +74,10 @@ You are working on a Linear ticket `{{ issue.identifier }}`
   `TMPDIR` is long and `/tmp` is not writable, set `SYMPHONY_MCP_SOCKET_ROOT`
   to a short writable path (the resulting `<root>/symphony-mcp-<id>/sock` must
   fit the 104-byte Unix `sun_path` limit).
+- Don't leave background processes running: stop any server, watcher or load
+  generator (for example `yes > /dev/null` to reproduce a timing flake) before
+  ending the turn. Symphony kills whatever is still running in the workspace
+  when the run ends.
 - Tests and hooks that start login shells (`sh -lc`, `bash -lc`) may print
   `~/.profile: Operation not permitted` inside the sandbox. That is benign: the
   sandbox denies reading shell startup files and the command still runs. Do not

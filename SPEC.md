@@ -1613,7 +1613,11 @@ claim state.
 
 2. `Claimed`
    - Orchestrator has reserved the issue to prevent duplicate dispatch.
-   - In practice, claimed issues are either `Running` or `RetryQueued`.
+   - In practice, claimed issues are either `Running` or `RetryQueued` (or a retry whose async
+     dispatch checks are in flight). A dispatch that starts nothing, such as a retry whose refresh
+     finds the issue no longer active, MUST release the claim. At the end of each poll cycle the
+     orchestrator releases, and logs, any claim with no running agent, retry, slot wait or in-flight
+     retry check, so a dropped claim cannot keep an issue from being dispatched until a restart.
 
 3. `Running`
    - Worker task exists and the issue is tracked in `running` map.
@@ -2323,6 +2327,13 @@ process group id, its leader's start time, and its workspace durably. On startup
 dispatching, it SHOULD stop recorded groups whose leader still has the recorded start time, MUST NOT
 signal a pid whose start time differs (the pid was reused), and SHOULD NOT dispatch issues in the
 workspace of a group it cannot confirm stopped until that group is gone, logging why.
+
+A process an agent detaches (`&` with `nohup`, `setsid`, a double fork) leaves that group. When a
+run on the local host ends, after the `after_run` hook, the implementation SHOULD stop every process
+whose working directory, or a path on its command line, is under the run's workspace or the agent's
+temporary task directory (Claude Code: `/tmp/claude-<uid>/<workspace path, non-alphanumerics as
+->`), SIGTERM then SIGKILL, and log each one with its pid, command and CPU time. It MUST NOT signal
+itself or a process it started and still runs.
 
 Notes:
 

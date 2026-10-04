@@ -1121,6 +1121,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp finish_poll_cycle(%State{} = state, now_ms) do
     requests_total = RateLimit.requests_total()
+    state = release_orphaned_claims(state)
 
     %{
       state
@@ -1129,6 +1130,31 @@ defmodule SymphonyElixir.Orchestrator do
     }
     |> schedule_tick(max(next_repo_poll_delay_ms(state, now_ms), RateLimit.remaining_pause_ms()))
     |> Map.put(:poll_check_in_progress, false)
+  end
+
+  # A claim is only held by a running agent, a queued retry, or a retry whose async quality
+  # gate or dispatch readiness check is in flight. Any other claim is orphaned: the poll skips
+  # claimed issues, so release it rather than leave the issue undispatchable until a restart.
+  defp release_orphaned_claims(%State{} = state) do
+    held = claim_holders(state)
+
+    state.claimed
+    |> Enum.reject(&MapSet.member?(held, &1))
+    |> Enum.reduce(state, fn issue_id, state ->
+      Logger.warning("Releasing orphaned claim with no running agent, retry or slot wait: issue_id=#{issue_id}")
+      release_issue_claim(state, issue_id)
+    end)
+  end
+
+  defp claim_holders(%State{} = state) do
+    in_flight_retries =
+      Map.values(state.quality_gate_tasks) ++ Enum.map(Map.values(state.dispatch_readiness_tasks), & &1.kind)
+
+    for({:active_retry, %Issue{id: issue_id}, _attempt, _metadata} <- in_flight_retries, do: issue_id)
+    |> Enum.concat(Map.keys(state.running))
+    |> Enum.concat(Map.keys(state.retry_attempts))
+    |> Enum.concat(Map.keys(state.slot_waiting))
+    |> MapSet.new()
   end
 
   defp log_poll_error(:missing_linear_api_token), do: Logger.error("Linear API token missing in WORKFLOW.md")
@@ -3065,18 +3091,25 @@ defmodule SymphonyElixir.Orchestrator do
 
       {:skip, :missing} ->
         Logger.info("Skipping dispatch; issue no longer active or visible: #{issue_context(issue)}")
-        state
+        release_undispatched_claim(state, issue.id)
 
       {:skip, %Issue{} = refreshed_issue} ->
         Logger.info(
           "Skipping stale dispatch after issue refresh: #{issue_context(refreshed_issue)} state=#{inspect(refreshed_issue.state)} blocked_by=#{length(refreshed_issue.blocked_by)} sub_issues=#{length(refreshed_issue.sub_issues)}"
         )
 
-        state
+        release_undispatched_claim(state, issue.id)
 
       {:error, reason} ->
         skip_dispatch_after_refresh_failure(state, issue, attempt, preferred_worker_host, repo_key, reason)
     end
+  end
+
+  # A retry reaches dispatch with its retry entry already popped and its claim
+  # still held. When dispatch starts nothing, release the claim, or the poll skips
+  # the issue as claimed until a restart even after it returns to an active state.
+  defp release_undispatched_claim(%State{} = state, issue_id) do
+    if MapSet.member?(state.claimed, issue_id), do: release_issue_claim(state, issue_id), else: state
   end
 
   # A retry that skips dispatch here has already left the retry queue while its
@@ -3202,7 +3235,7 @@ defmodule SymphonyElixir.Orchestrator do
     case select_worker_host(state, preferred_worker_host) do
       :no_worker_capacity ->
         Logger.debug("No SSH worker slots available for #{issue_context(issue)} preferred_worker_host=#{inspect(preferred_worker_host)}")
-        state
+        release_undispatched_claim(state, issue.id)
 
       worker_host ->
         spawn_issue_on_worker_host(state, issue, attempt, recipient, worker_host, repo_key)
@@ -5946,6 +5979,7 @@ defmodule SymphonyElixir.Orchestrator do
       finishing: finishing_snapshot(state.running),
       auto_merge: PrReviewPoller.auto_merge_statuses(),
       slot_waiting: slot_waiting_snapshot(state.slot_waiting) ++ merging_ci_waiting_snapshot(state.merging_ci_waits),
+      claimed: state.claimed |> MapSet.to_list() |> Enum.sort(),
       pollers: poller_status_snapshot(),
       polling: %{
         checking?: state.poll_check_in_progress == true,

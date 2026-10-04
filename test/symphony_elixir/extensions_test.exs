@@ -508,7 +508,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert state_payload == %{
              "generated_at" => state_payload["generated_at"],
              "repos" => ["default"],
-             "counts" => %{"running" => 1, "watching" => 1, "conflicts" => 0, "retrying" => 1},
+             "counts" => %{"running" => 1, "watching" => 1, "conflicts" => 0, "retrying" => 1, "claimed" => 2},
              "running" => [
                %{
                  "issue_id" => "issue-http",
@@ -682,6 +682,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "summary" => "MT-VERIFY waiting on MT-GAP (In Progress), an unknown issue (unknown state)"
                }
              ],
+             "claimed" => ["issue-http", "retry-http"],
              "rate_limits" => %{"primary" => %{"remaining" => 11}},
              "linear_usage" => %{"window_ms" => 3_600_000, "total" => 0, "callers" => [], "queries" => []}
            }
@@ -903,7 +904,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     refute_received :request_refresh_called
 
     state_payload = json_response(get(build_conn(), "/api/v1/state"), 200)
-    assert state_payload["counts"] == %{"running" => 1, "watching" => 1, "conflicts" => 0, "retrying" => 1}
+    assert state_payload["counts"] == %{"running" => 1, "watching" => 1, "conflicts" => 0, "retrying" => 1, "claimed" => 2}
   end
 
   test "phoenix observability api allows configured origins to refresh" do
@@ -3155,7 +3156,7 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     response = Req.get!("http://127.0.0.1:#{port}/api/v1/state")
     assert response.status == 200
-    assert response.body["counts"] == %{"running" => 1, "watching" => 1, "conflicts" => 0, "retrying" => 1}
+    assert response.body["counts"] == %{"running" => 1, "watching" => 1, "conflicts" => 0, "retrying" => 1, "claimed" => 2}
 
     dashboard_css = Req.get!("http://127.0.0.1:#{port}/dashboard.css")
     assert dashboard_css.status == 200
@@ -3383,6 +3384,7 @@ defmodule SymphonyElixir.ExtensionsTest do
           updated_at: ~U[2026-10-03 06:00:00Z]
         }
       ],
+      claimed: ["issue-http", "retry-http"],
       slot_waiting: [
         %{
           issue_id: "wait-http",
