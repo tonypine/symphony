@@ -189,7 +189,7 @@ final class SymphonyRunner {
     }
 
     /// Posts a notification, or shows an alert when notifications aren't allowed. Scripted QA mode records it.
-    private func notify(title: String, body: String) {
+    func notify(title: String, body: String) {
         if let script = QAScriptDriver.shared {
             script.record(alertTitle: title, message: body)
             return
