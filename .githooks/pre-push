@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# Runs the cheap static checks on the Elixir files a push changes, so a bad push
+# fails here in seconds instead of a CI round trip: `mix format --check-formatted`,
+# `mix compile --warnings-as-errors` and `mix credo --strict <changed files>`.
+# Tests, coverage and Dialyzer stay in CI.
+#
+# Turned on by `git config core.hooksPath .githooks` (`make setup`, and WORKFLOW.md's
+# `after_create` for Symphony workspaces). Never bypass it with `git push --no-verify`:
+# fix what it reports and push again.
+#
+# Timed 2026-10-04 on a warm workspace (Mac, Elixir 1.19): about 2 s with Elixir
+# changes; a push with no Elixir change skips in about 0.05 s. When the project isn't
+# compiled yet (a fresh workspace), the compile step adds about 35 s.
+#
+# Written for bash 3.2, the macOS system bash.
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+base_branch="origin/main"
+
+all_zeros() {
+  [[ "$1" =~ ^0+$ ]]
+}
+
+# The files one pushed ref changes: the pushed range when the remote's commit is
+# known here, else everything since the merge-base with origin/main (a new branch,
+# or a remote commit this clone hasn't fetched).
+changed_files() {
+  local local_sha="$1" remote_sha="$2" base=""
+
+  if ! all_zeros "$remote_sha" && git cat-file -e "${remote_sha}^{commit}" 2>/dev/null; then
+    base="$remote_sha"
+  else
+    base="$(git merge-base "$local_sha" "$base_branch" 2>/dev/null || true)"
+  fi
+
+  if [ -n "$base" ]; then
+    git diff --name-only --diff-filter=ACMR "$base" "$local_sha"
+  else
+    git ls-tree -r --name-only "$local_sha"
+  fi
+}
+
+changed=""
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ -n "${local_sha:-}" ] || continue
+  # A deleted ref pushes no files.
+  all_zeros "$local_sha" && continue
+  changed="${changed}$(changed_files "$local_sha" "$remote_sha")"$'\n'
+done
+
+elixir_files="$(printf '%s' "$changed" | grep -E '\.(ex|exs|heex|eex)$|(^|/)mix\.lock$' | sort -u || true)"
+
+if [ -z "$elixir_files" ]; then
+  echo "pre-push: no Elixir file changed; skipping format, compile and credo checks."
+  exit 0
+fi
+
+if command -v mix >/dev/null 2>&1; then
+  mix_cmd=(mix)
+elif command -v mise >/dev/null 2>&1; then
+  mix_cmd=(mise exec -- mix)
+else
+  echo "pre-push: mix is not on PATH and mise is not installed; install the toolchain (see docs/development.md) and push again." >&2
+  exit 1
+fi
+
+credo_files=()
+while IFS= read -r file; do
+  case "$file" in
+    *.ex | *.exs) [ -f "$file" ] && credo_files+=("$file") ;;
+  esac
+done <<EOF
+$elixir_files
+EOF
+
+if [ -n "$(git status --porcelain -- '*.ex' '*.exs' '*.heex' '*.eex' 'mix.lock')" ]; then
+  echo "pre-push: note: the working tree has uncommitted Elixir changes; the checks run on the working tree."
+fi
+
+failures=()
+
+echo "pre-push: mix format --check-formatted"
+if ! "${mix_cmd[@]}" format --check-formatted; then
+  failures+=("mix format --check-formatted failed for the files listed above. Fix: run \`mix format\`, commit, and push again.")
+fi
+
+echo "pre-push: mix compile --warnings-as-errors"
+if ! "${mix_cmd[@]}" compile --warnings-as-errors; then
+  failures+=("mix compile --warnings-as-errors failed. Fix: resolve the warnings or errors above, commit, and push again.")
+fi
+
+if [ "${#credo_files[@]}" -gt 0 ]; then
+  echo "pre-push: mix credo --strict on ${#credo_files[@]} changed file(s)"
+  if ! "${mix_cmd[@]}" credo --strict "${credo_files[@]}"; then
+    failures+=("mix credo --strict failed for the issues listed above. Fix them (\`mix credo --strict <file>\` to recheck), commit, and push again.")
+  fi
+fi
+
+if [ "${#failures[@]}" -gt 0 ]; then
+  echo >&2
+  for failure in "${failures[@]}"; do
+    echo "pre-push: $failure" >&2
+  done
+  echo "pre-push: push rejected. Do not bypass this hook with \`git push --no-verify\`." >&2
+  exit 1
+fi
+
+echo "pre-push: format, compile and credo checks passed."

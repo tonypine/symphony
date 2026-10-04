@@ -316,9 +316,11 @@ agent:
   runtime as `sandbox.filesystem.allowWrite`. Use it to broaden Claude Code's default writable
   set (workspace + `/tmp`) — e.g. to grant test runs access to a configured MCP socket root.
   For Gradle builds, add `~/.gradle` so builds share its caches. Daemons don't come with it:
-  each local agent run starts with
+  each local agent run in a Gradle project (`gradlew`, `settings.gradle` or
+  `settings.gradle.kts` at the workspace root) starts with
   `GRADLE_OPTS="-Dorg.gradle.daemon.registry.base=<workspace>/.gradle-daemons"`, so its Gradle
-  daemons register in its own workspace (git ignores the folder) rather than in
+  daemons register in its own workspace (git ignores the folder, and the Auto Review `qa_build`
+  clean check skips it) rather than in
   `~/.gradle/daemon`, where a daemon started in one agent's sandbox would serve, and fail, builds
   in another workspace. A daemon's working folder is in that registry, so the run's end stops it
   (see `workspaces` above). If `.gradle-daemons` is a symlink or a file, the run gets no
@@ -960,13 +962,14 @@ labels on the ticket or the parent choose the playbooks, and every enabled playb
 one.
 
 - the `## Symphony QA Report` is written on the parent and on the verification ticket;
-- `pass` and `blocked` → the verification ticket goes to `In Review` for a human to sign off;
-- `fail` → each failing step (or each finding, when no step failed) is filed as a `Backlog`
-  sub-ticket of the verification ticket that names the step and holds its details and evidence,
-  the report lists them, and the verification ticket is marked blocked by each one and stays in
-  `Todo`. Symphony holds it there and runs the walkthrough again once every gap is `Done` (or
-  cancelled), with no human step. When a gap could not be filed or linked, the ticket goes to
-  `Backlog` for a human instead. There is no fix loop.
+- `pass` (or `blocked` with no failing step) → the verification ticket goes to `In Review` for a
+  human to sign off;
+- `fail` (or `blocked` with a failing step) → each failing step (or each finding, when no step
+  failed) is filed as a `Backlog` sub-ticket of the verification ticket that names the step and
+  holds its details and evidence, the report lists them, and the verification ticket is marked
+  blocked by each one and stays in `Todo`. Symphony holds it there and runs the walkthrough again
+  once every gap is `Done` (or cancelled), with no human step. When a gap could not be filed or
+  linked, the ticket goes to `Backlog` for a human instead. There is no fix loop.
 
 The ticket gets the usual executor run when the tracker is not Linear, the run is on a remote
 worker, it has the `qa:skip` label, or it has no parent.
@@ -1069,7 +1072,7 @@ tools for it on the host, outside the sandbox, and checks every argument:
 
 | Tool | Does | Refuses |
 | --- | --- | --- |
-| `qa_build` | runs `build` in the QA worktree with the agent's scrubbed environment, then copies the `app` bundle into a private directory | a worktree with changes outside `qa-evidence/`, gitignored files included: none may exist before the first build, and none may appear or change after a build; a bundle that resolves (symlinks included) outside the worktree, or that holds an absolute symlink or one with `..` |
+| `qa_build` | runs `build` in the QA worktree with the agent's scrubbed environment, then copies the `app` bundle into a private directory | a worktree with changes outside `qa-evidence/` and `.gradle-daemons/` (Symphony's own), gitignored files included: none may exist before the first build, and none may appear or change after a build; a bundle that resolves (symlinks included) outside the worktree, or that holds an absolute symlink or one with `..` |
 | `qa_launch_app` | starts the private copy of the bundle with `SYMPHONY_BAR_QA_ROOT` set to a private directory ([QA mode](../macos/README.md#qa-mode)), and returns its PID | an executable that changed since the last `qa_build`, or a worktree `qa_build` would refuse |
 | `qa_quit_app` | quits a launched app and returns its recent output | a PID it did not launch |
 | `qa_screenshot` | saves the app's on-screen windows to new files `qa-evidence/<name>.png` | a PID it did not launch, a window of another app, a name that already exists (file or symlink) |
@@ -1148,9 +1151,11 @@ signed ad hoc: macOS asks again after each rebuild, and after each Symphony vers
 the helper. Both are signed with the hardened runtime, so code injected with
 `DYLD_INSERT_LIBRARIES` does not load into the helper and can't use its grants.
 
-Without a grant the tools return `qa_permission_missing`, the QA agent answers `blocked` with the
-missing permission as the reason, and the issue goes to `In Review` with that reason in the QA
-report.
+Without a grant the tools return `qa_permission_missing`. The QA agent marks the app steps
+`blocked`, still runs the steps of the other playbooks offered (`cli`, `web`) and reports each as
+`pass` or `fail`, then answers `blocked` with the missing permission as the reason. The issue goes
+to `In Review` with that reason in the QA report; in a parent walkthrough, a failing step from the
+other playbooks is filed as a gap as usual.
 
 ##### Running QA on a separate macOS host
 

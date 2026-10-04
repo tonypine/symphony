@@ -173,6 +173,10 @@ defmodule SymphonyElixir.QaAgent do
     - `blocked`: you could not test the change (it does not build, a tool is missing, the
       environment refuses). Put the cause in `reason`.
 
+    When one playbook is blocked, mark its steps `blocked` and continue with the other playbooks'
+    steps: report `pass` or `fail` for every step that could run. The verdict stays `blocked` while
+    any step is blocked, with each failing step's defect in `details`.
+
     Ending your turn ends the session: you cannot come back later to check on anything. Do not leave
     work running in the background. Run each command in the foreground with a timeout, or poll it
     until it finishes, before you answer.

@@ -8,8 +8,9 @@ defmodule SymphonyElixir.QaDriver do
 
   - `qa_build` runs only the configured `build` command, in the QA worktree, with
     the agent's scrubbed environment, and refuses a worktree with edits outside
-    `qa-evidence/`. Gitignored files count too (the build reads caches such as
-    SwiftPM's `.build/`): none may exist before the first build, and after a
+    `qa-evidence/` and the folders Symphony itself creates there (see
+    `SymphonyElixir.AgentEnv.owned_dirs/0`). Gitignored files count too (the
+    build reads caches such as SwiftPM's `.build/`): none may exist before the first build, and after a
     build none may appear or change until the next one;
   - a successful `qa_build` copies the configured `app` bundle, which must
     resolve (symlinks included) inside the worktree, into the driver's private
@@ -31,7 +32,8 @@ defmodule SymphonyElixir.QaDriver do
   `SymphonyQADriver.app` (see `SymphonyElixir.QaDriver.Host`), which holds the
   Screen Recording and Accessibility grants so that Symphony and the agents it
   spawns never do. Without them the tools fail with `qa_permission_missing` and
-  tell the agent to answer `blocked`.
+  tell the agent to mark the app steps `blocked`, finish the other playbooks' steps
+  and answer `blocked`.
 
   The private directory (bundle copies, screenshot staging and the app's QA
   root) is a `0700` directory under Symphony's state root, outside every path
@@ -69,6 +71,9 @@ defmodule SymphonyElixir.QaDriver do
   @tree_bytes_limit 100_000
   @max_running_apps 3
   @max_screenshots 8
+  # Every tool error that stops the macOS app part says this, so the other playbooks still run.
+  @blocked_hint "Mark the app steps you could not check `blocked` with this reason, finish the other playbooks' steps " <>
+                  "(pass or fail), then answer with verdict `blocked` and this reason."
   @value_limit 10_000
   @press_actions ~w(AXPress AXRaise AXShowMenu AXConfirm AXCancel AXIncrement AXDecrement AXPick)
   @screenshot_name ~r/\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\z/
@@ -274,7 +279,7 @@ defmodule SymphonyElixir.QaDriver do
           output
           |> to_string()
           |> String.split(<<0>>, trim: true)
-          |> Enum.reject(&String.starts_with?(String.slice(&1, 3..-1//1), @evidence_dir <> "/"))
+          |> Enum.reject(&skipped?/1)
           |> Enum.split_with(&String.starts_with?(&1, "!! "))
 
         {:ok, Enum.map(ignored, &String.slice(&1, 3..-1//1)), Enum.map(dirty, &String.slice(&1, 3..-1//1))}
@@ -282,6 +287,17 @@ defmodule SymphonyElixir.QaDriver do
       {output, status} ->
         tool_error("qa_git_failed", "git status failed (exit #{status}): #{tail(to_string(output), 500)}")
     end
+  end
+
+  # `qa-evidence/` is the agent's to write. Symphony itself writes folders such
+  # as `.gradle-daemons/` into the QA agent's workspace (see
+  # `SymphonyElixir.AgentEnv.owned_dirs/0`); the build does not read them, so new
+  # files there do not count either, but a change to a tracked file there does.
+  defp skipped?(entry) do
+    {status, path} = String.split_at(entry, 3)
+
+    String.starts_with?(path, @evidence_dir <> "/") or
+      (status in ["?? ", "!! "] and Enum.any?(AgentEnv.owned_dirs(), &String.starts_with?(path, &1 <> "/")))
   end
 
   # ctime and inode cannot be set back by an unprivileged process, so a rewrite
@@ -682,7 +698,7 @@ defmodule SymphonyElixir.QaDriver do
     tool_error(
       "qa_permission_missing",
       "#{holder} has no #{grant} permission, so QA cannot see the app. " <>
-        "Answer with verdict `blocked` and this reason; an operator grants Screen Recording and Accessibility to #{grantee} " <>
+        "#{@blocked_hint} An operator grants Screen Recording and Accessibility to #{grantee} " <>
         "once in System Settings > Privacy & Security (see docs/configuration.md, Auto Review macOS app QA)."
     )
   end
@@ -835,12 +851,12 @@ defmodule SymphonyElixir.QaDriver do
           config,
           "qa_worker_unsafe",
           "The QA host #{worker_host} #{problems}. QA must not run where PR code can reach push credentials. " <>
-            "Answer with verdict `blocked` and this reason; an operator fixes the QA host (see docs/configuration.md, Auto Review macOS app QA)."
+            "#{@blocked_hint} An operator fixes the QA host (see docs/configuration.md, Auto Review macOS app QA)."
         )
 
       {:error, {:unreachable, reason}} ->
         Logger.warning("QA driver could not reach worker_host=#{worker_host}: #{reason}")
-        unavailable(config, "qa_worker_unreachable", "The QA host #{worker_host} could not be prepared: #{reason}. Answer with verdict `blocked` and this reason.")
+        unavailable(config, "qa_worker_unreachable", "The QA host #{worker_host} could not be prepared: #{reason}. #{@blocked_hint}")
     end
   end
 

@@ -448,6 +448,7 @@ defmodule SymphonyElixir.CoreTest do
 
     hooks = Map.get(config, "hooks", %{})
     assert is_map(hooks)
+    assert Map.get(hooks, "after_create") =~ "git config core.hooksPath .githooks"
     assert Map.get(hooks, "after_create") =~ "mise trust"
     assert Map.get(hooks, "after_create") =~ "mise exec -- mix deps.get"
     assert Map.get(hooks, "before_remove") =~ "mise exec -- mix workspace.before_remove"
@@ -1673,7 +1674,6 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "a run that opened its PR moves to Auto Review without waiting for a busy slot" do
-    write_post_pr_auto_review_workflow!()
     issue_id = "issue-pr-opened-busy-slots"
     pr_url = "https://github.com/example/repo/pull/385"
     pid = end_run_with_busy_slots(issue_id, :PrOpenedBusySlotsOrchestrator, pr_url)
@@ -1692,7 +1692,6 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "a run that ended without a PR still waits for a slot to continue" do
-    write_post_pr_auto_review_workflow!()
     issue_id = "issue-no-pr-busy-slots"
     pid = end_run_with_busy_slots(issue_id, :NoPrBusySlotsOrchestrator, nil)
 
@@ -1738,30 +1737,36 @@ defmodule SymphonyElixir.CoreTest do
     assert %{state: "Auto Review", pull_request_url: ^pr_url} = state.watching[issue_id]
   end
 
-  defp write_post_pr_auto_review_workflow! do
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "memory",
-      quality_gate: %{enabled: false},
-      tracker_active_states: ["Todo", "In Progress", "Rework"],
-      tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
-      pr_review_mode: "polling",
-      ci: %{enabled: true},
-      auto_review: %{enabled: true}
+  defp write_post_pr_auto_review_workflow!(overrides \\ []) do
+    write_workflow_file!(
+      Workflow.workflow_file_path(),
+      [
+        tracker_kind: "memory",
+        quality_gate: %{enabled: false},
+        tracker_active_states: ["Todo", "In Progress", "Rework"],
+        tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
+        pr_review_mode: "polling",
+        ci: %{enabled: true},
+        auto_review: %{enabled: true}
+      ] ++ overrides
     )
   end
 
   # Ends a run that was dispatched without a PR while another run holds the only slot, then
   # fires its continuation retry. `pr_url` is the PR the refetched issue has attached.
+  #
+  # The orchestrator polls once on startup; the runs and their issues go in only after that poll
+  # has passed over an empty tracker, and the next one is a poll interval away. A poll that does
+  # come (one a state move requests) finds the busy issue in the tracker and keeps its slot taken.
+  # Both runs point at a stand-in worker, not the test process: stopping a run sends `:shutdown`.
   defp end_run_with_busy_slots(issue_id, name, pr_url) do
+    write_post_pr_auto_review_workflow!(max_concurrent_agents: 1)
     last_ran_at = DateTime.utc_now()
     dispatched = %Issue{id: issue_id, identifier: "MT-385", title: "Open a PR", state: "In Progress"}
     busy = %Issue{id: "issue-busy-slot", identifier: "MT-BUSY", title: "Busy", state: "In Progress"}
 
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
-
-    Application.put_env(:symphony_elixir, :memory_tracker_issues, [
-      %{dispatched | pull_request_url: pr_url, updated_at: DateTime.add(last_ran_at, -10, :second)}
-    ])
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [])
 
     on_exit(fn ->
       Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
@@ -1776,21 +1781,37 @@ defmodule SymphonyElixir.CoreTest do
       end
     end)
 
-    ref = make_ref()
-    initial_state = :sys.get_state(pid)
+    wait_for_orchestrator_state(pid, &(not &1.poll_check_in_progress), 2_000)
 
-    :sys.replace_state(pid, fn _ ->
-      initial_state
-      |> Map.put(:max_concurrent_agents, 1)
+    worker = spawn(fn -> Process.sleep(:infinity) end)
+    on_exit(fn -> Process.exit(worker, :kill) end)
+
+    ref = make_ref()
+    # The periodic snapshot reads the last-event fields of every run, so they must be present.
+    run = %{
+      pid: worker,
+      started_at: DateTime.utc_now(),
+      last_codex_timestamp: nil,
+      last_codex_message: nil,
+      last_codex_event: nil
+    }
+
+    :sys.replace_state(pid, fn state ->
+      state
       |> Map.put(:running, %{
-        issue_id => %{pid: self(), ref: ref, identifier: "MT-385", issue: dispatched, started_at: DateTime.utc_now()},
-        busy.id => %{pid: self(), ref: make_ref(), identifier: "MT-BUSY", issue: busy, started_at: DateTime.utc_now()}
+        issue_id => Map.merge(run, %{ref: ref, identifier: "MT-385", issue: dispatched}),
+        busy.id => Map.merge(run, %{ref: make_ref(), identifier: "MT-BUSY", issue: busy})
       })
       |> Map.put(:claimed, MapSet.new([issue_id, busy.id]))
       |> Map.put(:retry_attempts, %{})
     end)
 
-    send(pid, {:DOWN, ref, :process, self(), :normal})
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [
+      %{dispatched | pull_request_url: pr_url, updated_at: DateTime.add(last_ran_at, -10, :second)},
+      busy
+    ])
+
+    send(pid, {:DOWN, ref, :process, worker, :normal})
 
     %{retry_token: retry_token} =
       pid

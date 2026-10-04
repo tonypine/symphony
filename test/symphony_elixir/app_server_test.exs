@@ -1849,6 +1849,7 @@ defmodule SymphonyElixir.AppServerTest do
       codex_binary = Path.join(test_root, "fake-codex")
       trace_file = Path.join(test_root, "codex-env-strip.trace")
       File.mkdir_p!(workspace)
+      File.write!(Path.join(workspace, "settings.gradle.kts"), "")
 
       File.write!(codex_binary, """
       #!/bin/sh

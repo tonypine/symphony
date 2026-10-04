@@ -293,6 +293,43 @@ with the phase each is in and what it waits on (`implementation · running`,
 `waiting for a human`, `implementation · waiting on blocker TP-12`), and mark forced rows elsewhere
 with ⚡. Once a forced ticket is done, Symphony removes the label.
 
+### Priority vs expedite
+
+A ticket's Linear priority means how important it is. Symphony uses it only to order work that waits
+for the same kind of normal slot: after the stage (`Merging`, Auto Review, `Rework`, a resume,
+`Todo`) and before age. Raising a ticket to Urgent does not get it a slot any sooner when the slots
+are full, and a board full of Urgents stops saying which work matters. To have a ticket worked now,
+force it: add the `expedite` label (`agent.concurrency.force_label`) or run `symphony force TP-123`.
+Remove the label (`symphony force --clear TP-123`) to stop; it also ends when the ticket is done.
+
+| Forcing bypasses | Forcing still respects |
+| --- | --- |
+| `max_total` and the per-state caps (`max_by_issue_state`) | the operator's **Pause** |
+| the epic lanes | the Linear rate-limit pause and the workspace quota pause |
+| `finishing_max`, and the hold on `Todo` while a finish waits | a Claude or Codex usage-limit pause (the runs would just fail) |
+| priority and age ordering (forced tickets go first, oldest forced first) | blocked-by links: a blocked ticket waits for its blocker |
+| the daily token budget (with a warning) and a usage-limit headroom hold | the per-issue token cap and the per-host worker cap |
+| the Auto Review QA queue (its pass goes first) | a failed setup, retry backoff, post-PR quiet, and the CI waits before merging |
+
+`agent.concurrency.forced_max` (default `1`) forced runs go at once, on top of the normal slots. A
+second forced ticket queues behind the first, shows `queued #2` on the dashboard, and sends one
+`forced_waiting` notification. Forcing never stops a running agent. Forcing a `breakdown` parent
+forces its sub-tickets one at a time, in blocked-by order. See `concurrency.force_label` in
+[docs/configuration.md](docs/configuration.md) for the details.
+
+Forcing only removes the wait for a slot. These transitions stay with a person:
+
+| Transition | Who |
+| --- | --- |
+| `Backlog` → `Todo` | a person promotes the ticket; forcing doesn't |
+| `In Review` → `Merging` | a person approves the PR |
+| `In Review` → `Waiting on sub-tickets` | a person approves a `breakdown` plan |
+| any state → `Rework` | a person rejects the approach |
+| `Final verification:` `In Review` → `Done` | a person signs it off |
+
+The review-agent verdict and the Auto Review QA verdict are still required: forcing never skips or
+changes them.
+
 ### Preview the assembled prompt
 
 `symphony workflow preview` renders the exact base-issue prompt the agent would receive for the
