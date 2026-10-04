@@ -24,7 +24,7 @@ Identify the real commands for:
 - targeted or fast local validation for iteration
 - tests
 - lint/format checks
-- the full pre-handoff validation gate
+- the full validation gate that CI runs
 - any profiling command that exposes slow tests or checks
 - any hook that should run after Symphony creates a fresh workspace
 
@@ -33,6 +33,15 @@ choose `make all`, `pnpm test:unit`, or `bundle exec rspec` when the repo
 declares those commands; do not guess `mix test`, `npm test`, `pytest`,
 `go test ./...`, `cargo test`, or `bundle exec rake test` unless repo evidence
 points there.
+
+Split the checks by cost, not by kind. Cheap ones (format, compile or type
+check, lint, and the tests of the changed code) run locally before every push.
+Slow, compute-heavy ones (the full test suite, the global coverage report,
+static analysis such as Dialyzer, full builds of every module) run only in CI,
+which is the gate. The generated `WORKFLOW.md` should list the cheap checks as
+the pre-push step and name the CI gate, rather than asking agents to run the
+full gate locally. If a check's cost is unclear, time it once and put it on the
+right side of the line.
 
 ## 2. Resolve Ambiguity
 
@@ -145,13 +154,16 @@ mix run -e 'SymphonyElixir.Workflow.set_workflow_file_path(Path.expand("WORKFLOW
 ```
 
 Also run the discovered targeted or fast local validation when it is practical
-for the current change. Reserve full gates for handoff or push-readiness when
-the repo documents them as expensive.
+for the current change. Leave the full gate to CI.
 
 ## Manual Check For This Repo
 
-In the Symphony repository, `Makefile` declares `make check` as the fast local
-validation gate and `make all` as the full pre-push gate. A correct
-`WORKFLOW.md` for this repo should teach both commands, plus the profiling
-targets (`make test-profile`, `make coverage-profile`, `make dialyzer-profile`),
-instead of guessing a generic `mix test` command.
+In the Symphony repository, `make all` is CI's full gate: the whole suite, the
+100% coverage report and Dialyzer. `make check` runs the whole suite too. A
+correct `WORKFLOW.md` for this repo teaches the targeted pre-push checks
+(`mix format --check-formatted`, `mix compile --warnings-as-errors`,
+`mix specs.check`, `mix credo --strict <changed files>`, and the test files of
+the changed code). It names `make all` as CI's gate, and as an optional local
+run only for shared-infrastructure changes. It points at the profiling targets
+(`make test-profile`, `make coverage-profile`, `make dialyzer-profile`) for
+work on slow tests, instead of guessing a generic `mix test` command.

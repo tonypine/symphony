@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.OrchestratorForcedTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Notifications, UsageLimit}
+  alias SymphonyElixir.{Notifications, QaRunner, UsageLimit}
 
   @active_states ["Todo", "In Progress", "Merging", "Rework", "Auto Review", "Waiting on sub-tickets"]
   @waiting "Waiting on sub-tickets"
@@ -468,6 +468,59 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
 
       assert %{phase: :canary, canary_issue_id: "forced-1"} = state.usage_limits[@anthropic]
       assert Map.has_key?(state.slot_waiting, "forced-1")
+    end
+  end
+
+  describe "Auto Review QA passes" do
+    test "a forced QA pass holds the forced allowance, shows as forced, and a forced ticket waits behind it", ctx do
+      write_forced_workflow!(ctx, max_concurrent_agents: 1)
+      start_supervised!({QaRunner, run_fun: fn _job, _opts -> Process.sleep(:infinity) end, forced_runs_fun: fn -> 0 end})
+      settings = Config.settings!()
+      settings = %{settings | auto_review: %{settings.auto_review | max_concurrent: 1}}
+
+      qa_job = fn id, identifier, forced? ->
+        %{issue: %{id: id, identifier: identifier}, record: %{}, sha: "abc", settings: settings, forced: forced?}
+      end
+
+      assert :started = QaRunner.request(qa_job.("qa-1", "MT-QA1", false))
+      assert :started = QaRunner.request(qa_job.("qa-forced", "MT-QAF", true))
+
+      forced = issue("forced-1", "MT-F1", "Todo", forced: true)
+      tracked([forced])
+      state = run(orchestrator_state(1), issue("impl-1", "MT-1", "In Progress"), :implementation)
+
+      {state, log} = dispatch_with_log([forced], state)
+
+      refute Map.has_key?(state.running, "forced-1")
+      assert %{reason: "forced slot taken by MT-QAF (QA)"} = state.slot_waiting["forced-1"]
+      assert log =~ "Forced ticket waiting: issue_id=forced-1 issue_identifier=MT-F1 forced=true forced_max=1 held_by=MT-QAF (QA)"
+
+      assert %{
+               qa: %{
+                 running: [%{issue_id: "qa-1", forced: false}, %{issue_id: "qa-forced", identifier: "MT-QAF", sha: "abc", forced: true}],
+                 queued: []
+               }
+             } = snapshot_of(state)
+    end
+
+    test "an unreachable QA runner counts no forced passes" do
+      dying = spawn(fn -> receive do: (_message -> exit(:boom)) end)
+      Process.register(dying, QaRunner)
+
+      assert %{qa: %{running: [], queued: []}} = snapshot_of(orchestrator_state(1))
+      refute Process.alive?(dying)
+    end
+
+    test "a forced Final verification walkthrough starts on the forced allowance with the slots full", ctx do
+      write_forced_workflow!(ctx, max_concurrent_agents: 1)
+      verify = issue("verify-1", "MT-V", "Todo", forced: true, title: "Final verification: Export")
+      tracked([verify])
+      state = run(orchestrator_state(1), issue("impl-1", "MT-1", "In Progress"), :implementation)
+
+      {state, log} = dispatch_with_log([verify], state)
+
+      assert %{forced: true} = state.running["verify-1"]
+      assert log =~ ~r/Dispatching issue to agent: issue_id=verify-1 .* slot=forced forced=true/
     end
   end
 

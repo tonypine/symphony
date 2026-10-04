@@ -223,6 +223,20 @@ defmodule SymphonyElixir.AutoReviewQaTest do
       refute prompt =~ "No findings were recorded."
     end
 
+    test "a forced ticket that fails QA comes back for a fix exactly as an unforced one does" do
+      record = put_record()
+      Application.put_env(:symphony_elixir, :qa_flow_agent_result, fail_result())
+      forced_job = job(record, %{issue: issue(%{labels: ["expedite"]}), forced: true})
+
+      assert {:auto_review_qa, "issue-qa-flow", :fail, "In Progress"} =
+               AutoReview.run_qa(forced_job, git: git_with_paths(["lib/symphony_elixir/cli.ex"]), qa_agent: FakeQaAgent)
+
+      assert_receive {:memory_tracker_comment, "issue-qa-flow", report}
+      assert report =~ "fail (fix attempt 1 of 2) → In Progress"
+      assert_receive {:memory_tracker_state_update, "issue-qa-flow", "In Progress"}
+      assert %{qa_fix_attempts: 1, qa_failure: %{commit_sha: @sha, findings: [_finding]}} = stored_record()
+    end
+
     test "a failure after max_fix_attempts escalates to In Review" do
       record = put_record(%{qa_fix_attempts: 2})
       Application.put_env(:symphony_elixir, :qa_flow_agent_result, fail_result())
@@ -445,9 +459,16 @@ defmodule SymphonyElixir.AutoReviewQaTest do
         Application.put_env(:symphony_elixir, :qa_flow_runner_result, answer)
         ci_status = %{commit_sha: @sha, pr_url: nil}
         assert AutoReview.on_green(issue(), record, ci_status, settings, qa_runner: FakeRunner, now: 1) == action
-        assert_receive {:qa_runner_request, %{sha: @sha, pr_url: "https://github.com/example/repo/pull/901"}, runner_opts}
+        assert_receive {:qa_runner_request, %{sha: @sha, pr_url: "https://github.com/example/repo/pull/901", forced: false}, runner_opts}
         refute Keyword.has_key?(runner_opts, :now)
       end
+
+      Application.put_env(:symphony_elixir, :qa_flow_runner_result, :busy)
+
+      assert {:qa_queued, "issue-qa-flow"} =
+               AutoReview.on_green(issue(%{labels: ["Expedite"]}), record, %{commit_sha: @sha}, settings, qa_runner: FakeRunner)
+
+      assert_receive {:qa_runner_request, %{forced: true}, _runner_opts}
 
       assert {:qa_waiting, "issue-qa-flow", :missing_head_sha} =
                AutoReview.on_green(issue(), record, %{commit_sha: nil}, settings, [])
@@ -602,6 +623,152 @@ defmodule SymphonyElixir.AutoReviewQaTest do
       assert QaRunner.queued_passes(quiet) == []
       assert QaRunner.queued(:missing_qa_runner) == []
       assert QaRunner.queued_passes(:missing_qa_runner) == []
+    end
+
+    test "with every slot busy a forced pass starts on the forced allowance and the next forced one goes to the front" do
+      test_pid = self()
+      name = :"qa_runner_#{System.unique_integer([:positive])}"
+
+      run_fun = fn job, _opts ->
+        send(test_pid, {:pass_started, job.issue.id, self()})
+
+        receive do
+          :finish -> :ok
+        end
+      end
+
+      start_supervised!({QaRunner, name: name, run_fun: run_fun})
+      settings = Config.settings!()
+      settings = %{settings | auto_review: %{settings.auto_review | max_concurrent: 1}, agent: %{settings.agent | finishing_max: 2, forced_max: 1}}
+      job = fn id, forced? -> %{issue: issue(%{id: id, identifier: String.upcase(id)}), record: %{}, sha: @sha, settings: settings, forced: forced?} end
+
+      assert :started = QaRunner.request(job.("normal", false), qa_runner_server: name)
+      assert_receive {:pass_started, "normal", normal_pid}
+      assert :busy = QaRunner.request(job.("waiting", false), qa_runner_server: name)
+
+      log =
+        capture_log(fn ->
+          assert :started = QaRunner.request(job.("forced", true), qa_runner_server: name)
+        end)
+
+      assert_receive {:pass_started, "forced", _forced_pid}
+      assert log =~ "QA pass started on the forced allowance issue_id=forced issue_identifier=FORCED sha=#{@sha} forced=true"
+      assert Process.alive?(normal_pid)
+      assert %{running: [%{issue_id: "forced", forced: true}, %{issue_id: "normal", forced: false}]} = QaRunner.snapshot(name)
+
+      # The allowance is taken: a second forced ticket gets no extra pass, but goes to the front.
+      assert :busy = QaRunner.request(job.("forced-2", true), qa_runner_server: name)
+
+      assert QaRunner.snapshot(name) == %{
+               running: [
+                 %{issue_id: "forced", identifier: "FORCED", sha: @sha, forced: true},
+                 %{issue_id: "normal", identifier: "NORMAL", sha: @sha, forced: false}
+               ],
+               queued: [
+                 %{issue_id: "forced-2", identifier: "FORCED-2", forced: true},
+                 %{issue_id: "waiting", identifier: "WAITING", forced: false}
+               ]
+             }
+
+      send(normal_pid, :finish)
+      wait_until(fn -> map_size(QaRunner.running(name)) == 1 end)
+
+      assert :busy = QaRunner.request(job.("waiting", false), qa_runner_server: name)
+      assert :started = QaRunner.request(job.("forced-2", true), qa_runner_server: name)
+      assert_receive {:pass_started, "forced-2", _pid}
+      assert %{running: [%{issue_id: "forced", forced: true}, %{issue_id: "forced-2", forced: false}]} = QaRunner.snapshot(name)
+      assert QaRunner.queued(name) == ["waiting"]
+      assert QaRunner.snapshot(:missing_qa_runner) == %{running: [], queued: []}
+    end
+
+    test "a forced pass waits at the front when the orchestrator's forced runs use forced_max" do
+      test_pid = self()
+      name = :"qa_runner_#{System.unique_integer([:positive])}"
+
+      run_fun = fn job, _opts ->
+        send(test_pid, {:pass_started, job.issue.id, self()})
+
+        receive do
+          :finish -> :ok
+        end
+      end
+
+      # The orchestrator's published snapshot shows one forced run.
+      owner =
+        spawn(fn ->
+          :ets.new(:symphony_orchestrator_snapshot, [:named_table, :public, read_concurrency: true])
+          snapshot = %{running: [%{issue_id: "forced-agent", forced: true}, %{issue_id: "agent", forced: false}]}
+          :ets.insert(:symphony_orchestrator_snapshot, {:current, snapshot, System.monotonic_time(:millisecond), System.system_time(:millisecond)})
+          Process.register(self(), SymphonyElixir.Orchestrator)
+          send(test_pid, :snapshot_published)
+
+          receive do
+            :stop -> :ok
+          end
+        end)
+
+      assert_receive :snapshot_published
+
+      on_exit(fn ->
+        ref = Process.monitor(owner)
+        send(owner, :stop)
+        assert_receive {:DOWN, ^ref, :process, ^owner, _reason}
+      end)
+
+      start_supervised!({QaRunner, name: name, run_fun: run_fun})
+      settings = Config.settings!()
+      settings = %{settings | auto_review: %{settings.auto_review | max_concurrent: 1}, agent: %{settings.agent | forced_max: 1}}
+
+      job = fn id, forced? ->
+        %{issue: issue(%{id: id}), record: %{}, sha: @sha, settings: settings, forced: forced?}
+      end
+
+      assert :started = QaRunner.request(job.("normal", false), qa_runner_server: name)
+      assert_receive {:pass_started, "normal", normal_pid}
+      assert :busy = QaRunner.request(job.("forced", true), qa_runner_server: name)
+      assert QaRunner.running(name) == %{"normal" => @sha}
+      assert %{queued: [%{issue_id: "forced", forced: true}]} = QaRunner.snapshot(name)
+
+      send(normal_pid, :finish)
+      wait_until(fn -> QaRunner.running(name) == %{} end)
+
+      assert :busy = QaRunner.request(job.("other", false), qa_runner_server: name)
+      assert :started = QaRunner.request(job.("forced", true), qa_runner_server: name)
+      assert_receive {:pass_started, "forced", _pid}
+      assert %{running: [%{issue_id: "forced", forced: false}]} = QaRunner.snapshot(name)
+    end
+
+    test "a forced request that stopped asking no longer holds a free slot" do
+      test_pid = self()
+      name = :"qa_runner_#{System.unique_integer([:positive])}"
+
+      run_fun = fn job, _opts ->
+        send(test_pid, {:pass_started, job.issue.id, self()})
+
+        receive do
+          :finish -> :ok
+        end
+      end
+
+      start_supervised!({QaRunner, name: name, run_fun: run_fun, forced_hold_ms: 0, forced_runs_fun: fn -> 0 end})
+      settings = Config.settings!()
+      settings = %{settings | auto_review: %{settings.auto_review | max_concurrent: 1}, agent: %{settings.agent | forced_max: 0}}
+
+      job = fn id, forced? ->
+        %{issue: issue(%{id: id}), record: %{}, sha: @sha, settings: settings, forced: forced?}
+      end
+
+      assert :started = QaRunner.request(job.("normal", false), qa_runner_server: name)
+      assert_receive {:pass_started, "normal", normal_pid}
+      assert :busy = QaRunner.request(job.("forced", true), qa_runner_server: name)
+
+      send(normal_pid, :finish)
+      wait_until(fn -> QaRunner.running(name) == %{} end)
+
+      # The forced ticket has not asked again within the hold, so the free slot goes to the next request.
+      assert :started = QaRunner.request(job.("other", false), qa_runner_server: name)
+      assert_receive {:pass_started, "other", _pid}
+      assert %{queued: [%{issue_id: "forced", forced: true}]} = QaRunner.snapshot(name)
     end
 
     test "reports an unavailable runner" do
