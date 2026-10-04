@@ -39,6 +39,10 @@ Before pushing, run the full gate:
 make all
 ```
 
+`make all` also runs `make audit` (`mix hex.audit`), which fails when a locked dependency is
+retired or has a security advisory. Update the package with `mix deps.update <package>` rather
+than ignoring the advisory.
+
 To find slow validation work before optimizing tests, use the profiling targets:
 
 ```bash
