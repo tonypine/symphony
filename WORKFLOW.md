@@ -7,8 +7,10 @@ hooks:
     # Runs .githooks/pre-push on every push. The setting lands in the shared repo config,
     # and the relative path resolves in each worktree.
     git config core.hooksPath .githooks
+    # Test deps compile here, outside the sandbox: `lazy_html` downloads its precompiled NIF,
+    # and the sandbox's proxy refuses `elixir_make`'s download (no proxy credentials).
     if command -v mise >/dev/null 2>&1; then
-      mise trust && mise exec -- mix deps.get
+      mise trust && mise exec -- mix deps.get && MIX_ENV=test mise exec -- mix deps.compile
     fi
   before_remove: |
     mise exec -- mix workspace.before_remove
@@ -86,9 +88,11 @@ You are working on a Linear ticket `{{ issue.identifier }}`
     here.
   - Use `make test-profile`, `make coverage-profile`, or `make dialyzer-profile`
     only when a ticket asks you to optimize slow tests or gate behavior.
-- In sandboxed Elixir runs, `mix` commands need no Hex install or env
-  overrides. Symphony passes the host's `MIX_HOME`,
-  `MIX_ARCHIVES`, and `HEX_HOME` to the agent so Hex and Rebar resolve, and the
+- In sandboxed Elixir runs, `mix` commands (and `make all`) need no Hex
+  install or env overrides. Symphony passes the host's `MIX_HOME` and
+  `MIX_ARCHIVES` to the agent so Hex and Rebar resolve, and points `HEX_HOME`,
+  `ELIXIR_MAKE_CACHE_DIR` and Dialyzer's core PLTs at a cache folder your
+  sandbox may write (`SYMPHONY_AGENT_CACHE_DIR`). Don't set them yourself. The
   test suite keeps MCP socket dirs under a writable `TMPDIR`.
 - Your `$TMPDIR` is private to this run (`/tmp/symphony-run-<hash>`), so other
   concurrent runs never write to it: use it directly for scratch files, without

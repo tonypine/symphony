@@ -97,7 +97,10 @@ defmodule SymphonyElixir.MixProject do
         "test/support/test_support.exs"
       ],
       dialyzer: [
-        plt_add_apps: [:mix, :mnesia]
+        plt_add_apps: [:mix, :mnesia],
+        # A Symphony agent's sandbox can't write the host's MIX_HOME, where Dialyxir keeps its
+        # core PLTs by default, so an agent keeps them in its cache folder.
+        plt_core_path: System.get_env("SYMPHONY_AGENT_CACHE_DIR")
       ],
       escript: escript(),
       releases: releases(),
