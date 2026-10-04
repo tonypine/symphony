@@ -265,4 +265,25 @@ defmodule SymphonyElixir.UsageLimitTest do
       assert {:error, :invalid_usage_limits} = RunStore.put_usage_limits(nil)
     end
   end
+
+  test "a canary hold lets only its canary through, and a refresh pauses it again" do
+    canary = put(nil, info()) |> UsageLimit.canary("issue-canary")
+    profile = %{provider: "anthropic", model: "claude-opus-5-5"}
+
+    assert %{phase: :canary, canary_issue_id: "issue-canary"} = canary
+    assert UsageLimit.canary?(canary, "issue-canary")
+    refute UsageLimit.canary?(canary, "issue-other")
+    refute UsageLimit.canary?(put(nil, info()), nil)
+
+    assert UsageLimit.holding(%{{"anthropic", :all} => canary}, profile, "issue-other") == canary
+    assert UsageLimit.holding(%{{"anthropic", :all} => canary}, profile) == canary
+    assert UsageLimit.holding(%{{"anthropic", :all} => canary}, profile, "issue-canary") == nil
+
+    later = DateTime.add(@now, 4 * 3600)
+    repaused = put(canary, info(%{resets_at: nil, window: nil}), now: later)
+    assert %{phase: :paused, canary_issue_id: nil, since: @now, resume_at: resume_at} = repaused
+    assert resume_at == DateTime.add(later, 900)
+
+    assert %{phase: :paused, canary_issue_id: nil} = UsageLimit.paused(canary)
+  end
 end

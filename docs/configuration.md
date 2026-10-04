@@ -456,12 +456,16 @@ agent:
   reports before runs resume.
 - `usage_limit.unknown_reset_retry_seconds` (default `900`, `>= 60`): how long the hold lasts when
   no reset time is known (neither in the rejection nor remembered for that window).
+- At the resume time one held run (the first in dispatch order) goes out alone. If Claude accepts
+  it, the other held runs follow; if it hits the limit again, the hold starts over from the new
+  reset time (or `unknown_reset_retry_seconds`). New Claude work stays held meanwhile.
 - The hold is kept across restarts and is separate from the operator pause: resuming never
   clears a pause you set.
 - While a hold is in place, the dashboards show `Paused: Claude 5-hour limit, resumes ~14:05`
   (local time), `/api/v1/state` lists it under `usage_limits`, and `dispatch_state.blockers` has a
   `usage_limit` entry. The `usage_limit_paused` and `usage_limit_resumed` notifications go out once
-  when a hold starts and once when it clears, not once per held run.
+  when a hold starts and once when it clears, not once per held run. A hold clears when the first
+  run is accepted, not when it goes out, and a first run that hits the limit again sends nothing.
 
 **Project guides:**
 
