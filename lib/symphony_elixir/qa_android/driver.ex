@@ -27,7 +27,16 @@ defmodule SymphonyElixir.QaAndroid.Driver do
   - `qa_android_screenshot` saves `adb exec-out screencap -p` to a new
     `qa-evidence/<name>.png`, with the name, never-overwrite and symlink rules of
     `qa_screenshot` (see `SymphonyElixir.QaDriver.Checks`), at most 50 times
-    per pass.
+    per pass;
+  - `qa_android_ui_tree`, `qa_android_tap`, `qa_android_type`, `qa_android_key`,
+    `qa_android_rotate`, `qa_android_dark_mode` and `qa_android_font_scale` act
+    only while `qa_android_install` has installed a configured app in this pass.
+    The tree is `uiautomator dump` read back through `adb exec-out`, parsed by
+    `SymphonyElixir.QaAndroid.UiTree` and capped; tap takes a node path from the
+    last tree or coordinates on the display; keys, orientations, night modes and
+    font scales come from fixed allowlists; typed text is printable ASCII and
+    newlines only, and every chunk is single-quoted for the device's shell, so no
+    character in it can run a command.
 
   The driver takes the emulator's lease when it starts. When the emulator cannot
   run (a missing SDK or AVD, a boot timeout), every tool fails with
@@ -44,10 +53,12 @@ defmodule SymphonyElixir.QaAndroid.Driver do
   require Logger
 
   alias SymphonyElixir.{PathSafety, Workspace}
-  alias SymphonyElixir.QaAndroid.Emulator
+  alias SymphonyElixir.QaAndroid.{Emulator, UiTree}
   alias SymphonyElixir.QaDriver.{Checks, Host}
 
-  @tools ~w(qa_android_install qa_android_launch qa_android_stop qa_android_screenshot)
+  @tools ~w(qa_android_install qa_android_launch qa_android_stop qa_android_screenshot
+             qa_android_ui_tree qa_android_tap qa_android_type qa_android_key qa_android_rotate
+             qa_android_dark_mode qa_android_font_scale)
   @max_apk_bytes 512 * 1024 * 1024
   @max_screenshots 50
   @adb_timeout_ms 30_000
@@ -64,6 +75,33 @@ defmodule SymphonyElixir.QaAndroid.Driver do
   @logcat_lines "200"
   @png_magic <<0x89, "PNG", 0x0D, 0x0A, 0x1A, 0x0A>>
   @launcher_intent ["-a", "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER"]
+  @dump_limit 2_000_000
+  @tree_bytes_limit 100_000
+  @default_max_depth 30
+  @default_max_nodes 300
+  @filter_limit 200
+  @type_limit 500
+  @keys [
+    {"back", "KEYCODE_BACK"},
+    {"enter", "KEYCODE_ENTER"},
+    {"ime_action", "KEYCODE_NUMPAD_ENTER"},
+    {"tab", "KEYCODE_TAB"},
+    {"del", "KEYCODE_DEL"},
+    {"dpad_up", "KEYCODE_DPAD_UP"},
+    {"dpad_down", "KEYCODE_DPAD_DOWN"},
+    {"dpad_left", "KEYCODE_DPAD_LEFT"},
+    {"dpad_right", "KEYCODE_DPAD_RIGHT"},
+    {"escape", "KEYCODE_ESCAPE"}
+  ]
+  @orientations [{"portrait", "0"}, {"landscape", "1"}]
+  @night_modes [{"on", "yes"}, {"off", "no"}]
+  @font_scales [{0.85, "0.85"}, {1.0, "1.0"}, {1.15, "1.15"}, {1.3, "1.3"}, {1.5, "1.5"}, {1.8, "1.8"}, {2.0, "2.0"}]
+  # What a pass that changed a setting puts back when it ends.
+  @setting_resets [
+    rotation: ["shell", "settings", "put", "system", "user_rotation", "0"],
+    dark_mode: ["shell", "cmd", "uimode", "night", "no"],
+    font_scale: ["shell", "settings", "put", "system", "font_scale", "1.0"]
+  ]
   @application_id ~r/\A[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+\z/
 
   @type cmd :: (String.t(), [String.t()], keyword() -> {:ok, {String.t(), integer()}} | {:error, term()})
@@ -163,6 +201,78 @@ defmodule SymphonyElixir.QaAndroid.Driver do
          :ok <- Checks.write_evidence(Path.join(evidence, file), png, file) do
       GenServer.call(driver, :screenshot_taken)
       {:ok, %{"path" => Path.join(Checks.evidence_dir(), file)}}
+    end
+  end
+
+  defp run_tool("qa_android_ui_tree", driver, config, args) do
+    with :ok <- GenServer.call(driver, :app_installed),
+         {:ok, text} <- optional_string(args, "text"),
+         {:ok, resource_id} <- optional_string(args, "resource_id"),
+         {:ok, class} <- optional_string(args, "class"),
+         {:ok, max_depth} <- optional_integer(args, "max_depth", 100, @default_max_depth),
+         {:ok, max_nodes} <- optional_integer(args, "max_nodes", 1_000, @default_max_nodes),
+         {:ok, entries} <- ui_dump(config) do
+      filters = %{text: text, resource_id: resource_id, class: class}
+      {nodes, notes} = UiTree.select(entries, filters, max_depth, max_nodes, @tree_bytes_limit)
+      GenServer.call(driver, {:tree, Map.new(nodes, &{&1["path"], &1["bounds"]})})
+      {:ok, tree_payload(config, entries, nodes, notes)}
+    end
+  end
+
+  defp run_tool("qa_android_tap", driver, config, args) do
+    with :ok <- GenServer.call(driver, :app_installed),
+         {:ok, {x, y, target}} <- tap_target(driver, args),
+         {:ok, {width, height}} <- display_size(config),
+         :ok <- on_screen(x, y, width, height, target),
+         {:ok, _output} <- adb_ok(config, ["shell", "input", "tap", Integer.to_string(x), Integer.to_string(y)], @adb_timeout_ms) do
+      {:ok, %{"x" => x, "y" => y, "note" => "Read qa_android_ui_tree again to see the result; node paths may have changed."}}
+    end
+  end
+
+  defp run_tool("qa_android_type", driver, config, args) do
+    with :ok <- GenServer.call(driver, :app_installed),
+         {:ok, text} <- type_text(Map.get(args, "text")),
+         :ok <- run_all(config, type_commands(text)) do
+      {:ok, %{"typed" => String.length(text)}}
+    end
+  end
+
+  defp run_tool("qa_android_key", driver, config, args) do
+    with :ok <- GenServer.call(driver, :app_installed),
+         {:ok, key, keycode} <- choice(args, "key", @keys),
+         {:ok, _output} <- adb_ok(config, ["shell", "input", "keyevent", keycode], @adb_timeout_ms) do
+      {:ok, %{"key" => key, "keycode" => keycode}}
+    end
+  end
+
+  defp run_tool("qa_android_rotate", driver, config, args) do
+    with :ok <- GenServer.call(driver, :app_installed),
+         {:ok, orientation, rotation} <- choice(args, "orientation", @orientations),
+         :ok <- GenServer.call(driver, {:changed, :rotation}),
+         :ok <-
+           run_all(config, [
+             ["shell", "settings", "put", "system", "accelerometer_rotation", "0"],
+             ["shell", "settings", "put", "system", "user_rotation", rotation]
+           ]) do
+      {:ok, %{"orientation" => orientation, "note" => "Auto-rotate is off. Read qa_android_ui_tree again: the layout and node bounds change."}}
+    end
+  end
+
+  defp run_tool("qa_android_dark_mode", driver, config, args) do
+    with :ok <- GenServer.call(driver, :app_installed),
+         {:ok, mode, night} <- choice(args, "mode", @night_modes),
+         :ok <- GenServer.call(driver, {:changed, :dark_mode}),
+         {:ok, _output} <- adb_ok(config, ["shell", "cmd", "uimode", "night", night], @adb_timeout_ms) do
+      {:ok, %{"dark_mode" => mode}}
+    end
+  end
+
+  defp run_tool("qa_android_font_scale", driver, config, args) do
+    with :ok <- GenServer.call(driver, :app_installed),
+         {:ok, scale} <- font_scale(Map.get(args, "scale")),
+         :ok <- GenServer.call(driver, {:changed, :font_scale}),
+         {:ok, _output} <- adb_ok(config, ["shell", "settings", "put", "system", "font_scale", scale], @adb_timeout_ms) do
+      {:ok, %{"font_scale" => String.to_float(scale)}}
     end
   end
 
@@ -467,6 +577,166 @@ defmodule SymphonyElixir.QaAndroid.Driver do
     end
   end
 
+  # -- UI tree and input --------------------------------------------------------
+
+  # The dump goes to the adb connection, never to a file on the device.
+  defp ui_dump(config) do
+    case adb(config, ["exec-out", "uiautomator", "dump", "/dev/tty"], @adb_timeout_ms, @dump_limit + 1) do
+      {:ok, {output, _status}} when byte_size(output) > @dump_limit ->
+        tool_error("qa_android_ui_tree_failed", "The UI dump is over #{@dump_limit} bytes. Take a qa_android_screenshot instead.")
+
+      {:ok, {output, 0}} ->
+        case UiTree.parse(output) do
+          {:ok, entries} -> {:ok, entries}
+          :error -> tool_error("qa_android_ui_tree_failed", "uiautomator dump returned no UI hierarchy: #{tail(String.trim(output), 500)}")
+        end
+
+      {:ok, {output, status}} ->
+        tool_error("qa_android_ui_tree_failed", "uiautomator dump failed with exit status #{status}: #{tail(String.trim(output), 500)}")
+
+      {:error, reason} ->
+        tool_error("qa_android_ui_tree_failed", "uiautomator dump failed: #{inspect(reason)}")
+    end
+  end
+
+  defp tree_payload(config, entries, nodes, notes) do
+    foreground =
+      case entries do
+        [{_depth, package, _node} | _rest] -> package
+        [] -> nil
+      end
+
+    %{"foreground_package" => foreground, "node_count" => length(entries), "nodes" => nodes, "truncated" => notes != []}
+    |> put_if(notes != [], "note", "Not every node is shown: #{Enum.join(notes, "; ")}. Narrow it with text, resource_id or class, or raise max_depth or max_nodes.")
+    |> put_if(
+      foreground not in config.application_ids,
+      "foreground_warning",
+      "#{foreground || "Nothing"} is in the foreground, not one of the configured application_ids (#{Enum.join(config.application_ids, ", ")}). The app may have crashed or left the screen: check with qa_android_screenshot and relaunch it with qa_android_launch."
+    )
+  end
+
+  defp put_if(map, true, key, value), do: Map.put(map, key, value)
+  defp put_if(map, false, _key, _value), do: map
+
+  defp tap_target(driver, %{"path" => path} = args) when is_binary(path) and not is_map_key(args, "x") and not is_map_key(args, "y") do
+    case GenServer.call(driver, {:tree_node, path}) do
+      {:ok, %{"left" => left, "top" => top, "right" => right, "bottom" => bottom}} when right > left and bottom > top ->
+        {:ok, {div(left + right, 2), div(top + bottom, 2), "The centre of node #{path}"}}
+
+      {:ok, _bounds} ->
+        tool_error("qa_android_tap_off_screen", "Node #{path} has no area on screen to tap.")
+
+      :error ->
+        tool_error("qa_android_unknown_path", "#{inspect(path)} is not a node path in the last qa_android_ui_tree result. Read the tree again and use one of its paths.")
+    end
+  end
+
+  defp tap_target(_driver, %{"x" => x, "y" => y} = args) when is_integer(x) and is_integer(y) and not is_map_key(args, "path"),
+    do: {:ok, {x, y, "(#{x}, #{y})"}}
+
+  defp tap_target(_driver, _args),
+    do: tool_error("invalid_arguments", "Pass either `path`, a node path from the last qa_android_ui_tree, or integer `x` and `y`.")
+
+  # `cur=` is the display size in its current rotation.
+  defp display_size(config) do
+    with {:ok, output} <- adb_ok(config, ["shell", "dumpsys", "window", "displays"], @adb_timeout_ms, @dumpsys_limit) do
+      case Regex.run(~r/\bcur=(\d+)x(\d+)/, output, capture: :all_but_first) do
+        [width, height] -> {:ok, {String.to_integer(width), String.to_integer(height)}}
+        nil -> tool_error("qa_android_adb_failed", "adb shell dumpsys window displays did not report the display size.")
+      end
+    end
+  end
+
+  defp on_screen(x, y, width, height, _target) when x in 0..(width - 1)//1 and y in 0..(height - 1)//1, do: :ok
+  defp on_screen(_x, _y, width, height, target), do: tool_error("qa_android_tap_off_screen", "#{target} is outside the #{width}x#{height} display.")
+
+  defp type_text(text) when is_binary(text) and text != "" do
+    cond do
+      String.length(text) > @type_limit ->
+        tool_error("invalid_arguments", "`text` is over #{@type_limit} characters; type it in parts.")
+
+      not Regex.match?(~r/\A[\x20-\x7E\n]*\z/, text) ->
+        tool_error(
+          "qa_android_text_unsupported",
+          "qa_android_type types printable ASCII and newlines only: adb's `input text` cannot type other characters. Type the ASCII parts and report non-ASCII input as untested."
+        )
+
+      true ->
+        {:ok, text}
+    end
+  end
+
+  defp type_text(_text), do: tool_error("invalid_arguments", "`text` must be a non-empty string.")
+
+  # `adb shell` hands its arguments to the device's shell as one command line, so
+  # each chunk is single-quoted: nothing inside single quotes is special to the
+  # shell but the quote itself, which ends the quoting, is escaped and reopens it.
+  # A newline is the Enter key. `input text` turns `%s` into a space, so a
+  # literal `%s` is split across two calls.
+  defp type_commands(text) do
+    text
+    |> String.split("\n")
+    |> Enum.map(&text_chunks/1)
+    |> Enum.intersperse([:enter])
+    |> List.flatten()
+    |> Enum.map(fn
+      :enter -> ["shell", "input", "keyevent", "KEYCODE_ENTER"]
+      chunk -> ["shell", "input", "text", "'" <> String.replace(chunk, "'", "'\\''") <> "'"]
+    end)
+  end
+
+  defp text_chunks(line) do
+    pieces = String.split(line, "%s")
+    last = length(pieces) - 1
+
+    pieces
+    |> Enum.with_index()
+    |> Enum.map(fn {piece, index} -> if(index > 0, do: "s", else: "") <> piece <> if(index < last, do: "%", else: "") end)
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  defp run_all(config, commands) do
+    Enum.reduce_while(commands, :ok, fn args, :ok ->
+      case adb_ok(config, args, @adb_timeout_ms) do
+        {:ok, _output} -> {:cont, :ok}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp choice(args, key, choices) do
+    value = Map.get(args, key)
+
+    case List.keyfind(choices, value, 0) do
+      {^value, mapped} -> {:ok, value, mapped}
+      nil -> tool_error("invalid_arguments", "`#{key}` must be one of #{Enum.map_join(choices, ", ", &elem(&1, 0))}.")
+    end
+  end
+
+  defp font_scale(scale) when is_number(scale) do
+    case Enum.find(@font_scales, fn {allowed, _setting} -> allowed == scale end) do
+      {_allowed, setting} -> {:ok, setting}
+      nil -> font_scale(nil)
+    end
+  end
+
+  defp font_scale(_scale), do: tool_error("invalid_arguments", "`scale` must be one of #{Enum.map_join(@font_scales, ", ", &elem(&1, 1))}.")
+
+  defp optional_string(args, key) do
+    case Map.get(args, key) do
+      nil -> {:ok, nil}
+      value when is_binary(value) and value != "" and byte_size(value) <= @filter_limit -> {:ok, value}
+      _value -> tool_error("invalid_arguments", "`#{key}` must be a non-empty string of at most #{@filter_limit} bytes.")
+    end
+  end
+
+  defp optional_integer(args, key, max, default) do
+    case Map.get(args, key, default) do
+      value when is_integer(value) and value >= 1 and value <= max -> {:ok, value}
+      _value -> tool_error("invalid_arguments", "`#{key}` must be an integer from 1 to #{max}.")
+    end
+  end
+
   # -- adb --------------------------------------------------------------------
 
   # The only commands the driver runs: adb, against the leased emulator.
@@ -514,7 +784,8 @@ defmodule SymphonyElixir.QaAndroid.Driver do
       scratch_dir: nil
     }
 
-    {:ok, %{config: config, baseline: nil, installed: [], screenshots: 0}, {:continue, :checkout}}
+    state = %{config: config, baseline: nil, installed: [], screenshots: 0, tree: %{}, changed: []}
+    {:ok, state, {:continue, :checkout}}
   end
 
   # Booting can take minutes; tool calls wait for it, the session does not.
@@ -568,9 +839,20 @@ defmodule SymphonyElixir.QaAndroid.Driver do
 
   def handle_call(:screenshot_taken, _from, state), do: {:reply, :ok, %{state | screenshots: state.screenshots + 1}}
 
+  def handle_call(:app_installed, _from, %{installed: []} = state),
+    do: {:reply, tool_error("qa_android_not_installed", "No configured app is installed in this QA pass. Run qa_android_install first."), state}
+
+  def handle_call(:app_installed, _from, state), do: {:reply, :ok, state}
+  def handle_call({:tree, tree}, _from, state), do: {:reply, :ok, %{state | tree: tree}}
+  def handle_call({:tree_node, path}, _from, state), do: {:reply, Map.fetch(state.tree, path), state}
+
+  # Recorded before the setting is changed, so a change that half went through is reset too.
+  def handle_call({:changed, setting}, _from, state), do: {:reply, :ok, %{state | changed: Enum.uniq([setting | state.changed])}}
+
   @impl true
   def terminate(_reason, %{config: config} = state) do
     if config.lease do
+      for {setting, args} <- @setting_resets, setting in state.changed, do: adb(config, args, @adb_timeout_ms)
       remove_installed(config, state.baseline)
       config.checkin.(config.lease)
     end
