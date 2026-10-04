@@ -97,6 +97,19 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       assert get_in(result, ["sandbox", "network"]) == %{"allowLocalBinding" => true}
     end
 
+    # Claude Code's Seatbelt profile allowlists mach services and leaves the window server out, so a
+    # GUI program an agent starts can't put a window on the operator's desktop. These keys would
+    # widen that allowlist.
+    test "never opts into extra mach services or Apple Events, so the window server stays unreachable" do
+      for mode <- ["allowlist", "block", "open"] do
+        network_access = %Agent.NetworkAccess{mode: mode, allowed_domains: ["example.com"], denied_domains: []}
+        sandbox = network_access |> AppServer.build_sandbox_settings(["~/.npmrc"], ["/opt/cache"]) |> Map.fetch!("sandbox")
+
+        refute Map.has_key?(sandbox, "allowAppleEvents")
+        refute Map.has_key?(sandbox["network"], "allowMachLookup")
+      end
+    end
+
     test "operator allow_read_paths drops entries from sandbox denyRead" do
       network_access = %Agent.NetworkAccess{
         mode: "allowlist",
