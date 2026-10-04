@@ -111,6 +111,7 @@ defmodule SymphonyElixir.Config.Schema do
       field(:active_states, {:array, :string}, default: ["Todo", "In Progress"])
       field(:terminal_states, {:array, :string}, default: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"])
       field(:waiting_on_sub_issues_state, :string, default: "Waiting on sub-tickets")
+      field(:human_review_state, :string, default: "Human Review")
     end
 
     @fields [
@@ -124,7 +125,8 @@ defmodule SymphonyElixir.Config.Schema do
       :memory_issues_file,
       :active_states,
       :terminal_states,
-      :waiting_on_sub_issues_state
+      :waiting_on_sub_issues_state,
+      :human_review_state
     ]
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
@@ -136,6 +138,18 @@ defmodule SymphonyElixir.Config.Schema do
       |> normalize_string_list(:labels)
       |> normalize_optional_string(:waiting_on_sub_issues_state)
       |> put_waiting_on_sub_issues_state_active()
+      |> normalize_optional_string(:human_review_state)
+      |> validate_human_review_state_inactive()
+    end
+
+    # Symphony never dispatches an issue waiting on a person's review.
+    defp validate_human_review_state_inactive(changeset) do
+      active_states = get_field(changeset, :active_states) || []
+      state = get_field(changeset, :human_review_state)
+
+      if is_binary(state) and Enum.any?(active_states, &(is_binary(&1) and String.downcase(String.trim(&1)) == String.downcase(state))),
+        do: add_error(changeset, :human_review_state, "must not be an active state"),
+        else: changeset
     end
 
     # Breakdown parents wait in this state and are dispatched from it for close-out, so it is active.
@@ -2827,6 +2841,7 @@ defmodule SymphonyElixir.Config.Schema do
     do: true
 
   defp preserve_explicit_nil_path?(["tracker", "waiting_on_sub_issues_state"]), do: true
+  defp preserve_explicit_nil_path?(["tracker", "human_review_state"]), do: true
   defp preserve_explicit_nil_path?(["watchdog", "stray_process_cpu_minutes"]), do: true
   defp preserve_explicit_nil_path?(_path), do: false
 
