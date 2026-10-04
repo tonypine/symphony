@@ -8,6 +8,8 @@ defmodule SymphonyElixir.Linear.Issue do
   @breakdown_label "breakdown"
   @rework_state "rework"
   @todo_state "todo"
+  @backlog_state "backlog"
+  @done_state "done"
 
   defstruct [
     :id,
@@ -78,28 +80,37 @@ defmodule SymphonyElixir.Linear.Issue do
   end
 
   @doc """
-  True when the issue is a `breakdown` parent with at least one sub-issue outside `terminal_states`;
-  such a parent waits in its active state instead of being dispatched. A sub-issue without a known
-  state counts as open.
+  True when the issue is a `breakdown` parent whose plan was approved and is being worked: it has a
+  sub-issue outside `terminal_states` and the plan is not `unapproved_plan?/2`. Such a parent waits
+  instead of being dispatched. A sub-issue without a known state counts as approved and open.
   """
   @spec waiting_on_sub_issues?(t(), Enumerable.t(String.t())) :: boolean()
-  def waiting_on_sub_issues?(%__MODULE__{labels: labels, sub_issues: sub_issues}, terminal_states)
-      when is_list(labels) and is_list(sub_issues) do
-    terminal_states = MapSet.new(terminal_states, &normalize_state/1)
-
-    Enum.any?(labels, &breakdown_label?/1) and
-      Enum.any?(sub_issues, fn
-        %{state: state} when is_binary(state) -> !MapSet.member?(terminal_states, normalize_state(state))
-        _sub_issue -> true
-      end)
+  def waiting_on_sub_issues?(%__MODULE__{} = issue, terminal_states) do
+    breakdown?(issue) and open_sub_issues(issue, terminal_states) != [] and not unapproved_plan?(issue, terminal_states)
   end
 
   def waiting_on_sub_issues?(_issue, _terminal_states), do: false
 
+  @doc """
+  True when the issue is a `breakdown` parent with open sub-issues, every one of them in `Backlog`,
+  and none `Done`. Approving a plan moves all its `Backlog` sub-issues to `Todo` at once, so none was
+  approved: the breakdown run stopped before handing the plan over for review, or the plan is still
+  under review. A `Backlog` sub-issue a person adds once others are `Done` follows an approved plan.
+  """
+  @spec unapproved_plan?(t(), Enumerable.t(String.t())) :: boolean()
+  def unapproved_plan?(%__MODULE__{sub_issues: sub_issues} = issue, terminal_states) when is_list(sub_issues) do
+    open = open_sub_issues(issue, terminal_states)
+
+    breakdown?(issue) and open != [] and Enum.all?(open, &in_state?(&1, @backlog_state)) and
+      not Enum.any?(sub_issues, &in_state?(&1, @done_state))
+  end
+
+  def unapproved_plan?(_issue, _terminal_states), do: false
+
   @doc "True when the issue is a `breakdown` parent with sub-issues, every one of them in `terminal_states`."
   @spec close_out_ready?(t(), Enumerable.t(String.t())) :: boolean()
-  def close_out_ready?(%__MODULE__{labels: labels, sub_issues: [_ | _]} = issue, terminal_states) when is_list(labels) do
-    breakdown?(issue) and not waiting_on_sub_issues?(issue, terminal_states)
+  def close_out_ready?(%__MODULE__{sub_issues: [_ | _]} = issue, terminal_states) do
+    breakdown?(issue) and open_sub_issues(issue, terminal_states) == []
   end
 
   def close_out_ready?(_issue, _terminal_states), do: false
@@ -166,6 +177,21 @@ defmodule SymphonyElixir.Linear.Issue do
   @spec breakdown_label?(term()) :: boolean()
   def breakdown_label?(label) when is_binary(label), do: normalize_state(label) == @breakdown_label
   def breakdown_label?(_label), do: false
+
+  # The sub-issues outside `terminal_states`; one without a known state counts as open.
+  defp open_sub_issues(%__MODULE__{sub_issues: sub_issues}, terminal_states) when is_list(sub_issues) do
+    terminal_states = MapSet.new(terminal_states, &normalize_state/1)
+
+    Enum.reject(sub_issues, fn
+      %{state: state} when is_binary(state) -> MapSet.member?(terminal_states, normalize_state(state))
+      _sub_issue -> false
+    end)
+  end
+
+  defp open_sub_issues(_issue, _terminal_states), do: []
+
+  defp in_state?(%{state: state}, expected) when is_binary(state), do: normalize_state(state) == expected
+  defp in_state?(_sub_issue, _expected), do: false
 
   defp normalize_state(state), do: state |> String.trim() |> String.downcase()
 end

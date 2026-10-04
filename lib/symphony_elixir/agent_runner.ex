@@ -189,13 +189,17 @@ defmodule SymphonyElixir.AgentRunner do
                            |> Keyword.put(:worker_host, worker_host)
                            |> Keyword.put(:comment_registry, linear_comment_registry)
                          ) do
-                    run_issue(
-                      workspace,
-                      bootstrapped_issue,
-                      codex_update_recipient,
-                      Keyword.put(opts, :linear_comment_registry, linear_comment_registry),
-                      worker_host
-                    )
+                    try do
+                      run_issue(
+                        workspace,
+                        bootstrapped_issue,
+                        codex_update_recipient,
+                        Keyword.put(opts, :linear_comment_registry, linear_comment_registry),
+                        worker_host
+                      )
+                    after
+                      send_run_comment_ids(codex_update_recipient, issue, linear_comment_registry)
+                    end
                   end
                 end
               after
@@ -470,6 +474,16 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp send_worker_runtime_info(_recipient, _issue, _worker_host, _workspace), do: :ok
+
+  # The comments the run posted, so the orchestrator can tell them from people's comments on a
+  # breakdown parent's plan (see `SymphonyElixir.PlanComments`).
+  defp send_run_comment_ids(recipient, %Issue{id: issue_id}, registry)
+       when is_binary(issue_id) and is_pid(recipient) and is_pid(registry) do
+    send(recipient, {:worker_runtime_info, issue_id, %{comment_ids: CommentRegistry.comment_ids(registry)}})
+    :ok
+  end
+
+  defp send_run_comment_ids(_recipient, _issue, _registry), do: :ok
 
   defp send_agent_session_info(recipient, %Issue{id: issue_id}, agent_module, session)
        when is_binary(issue_id) and is_pid(recipient) and is_atom(agent_module) do
