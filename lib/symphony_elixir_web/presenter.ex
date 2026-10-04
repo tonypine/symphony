@@ -3,7 +3,7 @@ defmodule SymphonyElixirWeb.Presenter do
   Shared projections for the observability API and dashboard.
   """
 
-  alias SymphonyElixir.{AuditLog, Config, Orchestrator, Quality, RunKind, URLUtils, UsageLimit}
+  alias SymphonyElixir.{AuditLog, Config, Orchestrator, Quality, RunKind, StrayProcesses, URLUtils, UsageLimit}
   alias SymphonyElixir.Codex.MessageHumanizer
 
   @audit_page_size 200
@@ -30,8 +30,8 @@ defmodule SymphonyElixirWeb.Presenter do
     seconds_running: 0
   }
 
-  @spec state_payload(GenServer.name(), timeout()) :: map()
-  def state_payload(orchestrator, snapshot_timeout_ms) do
+  @spec state_payload(GenServer.name(), timeout(), GenServer.server()) :: map()
+  def state_payload(orchestrator, snapshot_timeout_ms, stray_processes \\ StrayProcesses) do
     now = DateTime.utc_now()
     generated_at = now |> DateTime.truncate(:second) |> DateTime.to_iso8601()
 
@@ -66,6 +66,7 @@ defmodule SymphonyElixirWeb.Presenter do
           pollers: normalize_pollers(Map.get(snapshot, :pollers)),
           pause: normalize_pause(Map.get(snapshot, :pause)),
           usage_limits: snapshot |> Map.get(:usage_limits, []) |> Enum.map(&usage_limit_payload(&1, now)),
+          stray_processes: stray_processes |> StrayProcesses.warnings() |> Enum.map(&Map.delete(&1, :start_time)),
           budget: normalize_budget(Map.get(snapshot, :budget)),
           dispatch_state: normalize_dispatch_state(snapshot),
           epic_lanes: normalize_epic_lanes(Map.get(snapshot, :epic_lanes)),

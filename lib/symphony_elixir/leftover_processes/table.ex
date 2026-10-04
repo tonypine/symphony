@@ -62,6 +62,45 @@ defmodule SymphonyElixir.LeftoverProcesses.Table do
     end)
   end
 
+  @doc """
+  A `ps` CPU time in whole seconds: `MMM:SS.ss` on macOS, `[DD-]HH:MM:SS` on
+  Linux. `nil` when it can't be read.
+  """
+  @spec cpu_seconds(String.t() | nil) :: non_neg_integer() | nil
+  def cpu_seconds(cpu_time) when is_binary(cpu_time) do
+    {days, clock} =
+      case String.split(cpu_time, "-", parts: 2) do
+        [days, clock] -> {days, clock}
+        [clock] -> {"0", clock}
+      end
+
+    [seconds | units] = clock |> String.split(":") |> Enum.reverse()
+
+    with {days, ""} <- Integer.parse(days),
+         {seconds, ""} <- Float.parse(seconds),
+         {:ok, minutes} <- clock_minutes(units) do
+      days * 86_400 + minutes * 60 + trunc(seconds)
+    else
+      _invalid -> nil
+    end
+  end
+
+  def cpu_seconds(_cpu_time), do: nil
+
+  # The minutes and, on Linux, hours before the seconds, smallest first.
+  defp clock_minutes(units) when length(units) <= 2 do
+    units
+    |> Enum.zip([1, 60])
+    |> Enum.reduce_while({:ok, 0}, fn {unit, factor}, {:ok, minutes} ->
+      case Integer.parse(unit) do
+        {value, ""} -> {:cont, {:ok, minutes + value * factor}}
+        _invalid -> {:halt, :error}
+      end
+    end)
+  end
+
+  defp clock_minutes(_units), do: :error
+
   @doc "Parses `lsof -Fpn -d cwd` output into a map of pid to working folder."
   @spec parse_lsof(String.t()) :: %{pos_integer() => String.t()}
   def parse_lsof(output) do

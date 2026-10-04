@@ -226,14 +226,20 @@ defmodule SymphonyElixir.Config.Schema do
       field(:enabled, :boolean, default: true)
       field(:tick_interval_ms, :integer, default: 60_000)
       field(:no_progress_threshold_ms, :integer, default: 600_000)
+      # CPU time a process under a workspace or Symphony temp folder may use with no run
+      # attached before the dashboard warns about it; `nil` turns the check off.
+      field(:stray_process_cpu_minutes, :integer, default: 10)
     end
+
+    @fields [:enabled, :tick_interval_ms, :no_progress_threshold_ms, :stray_process_cpu_minutes]
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
       schema
-      |> cast(attrs, [:enabled, :tick_interval_ms, :no_progress_threshold_ms], empty_values: [])
+      |> cast(attrs, @fields, empty_values: [])
       |> validate_number(:tick_interval_ms, greater_than: 0)
       |> validate_number(:no_progress_threshold_ms, greater_than: 0)
+      |> validate_number(:stray_process_cpu_minutes, greater_than: 0)
     end
   end
 
@@ -2675,6 +2681,7 @@ defmodule SymphonyElixir.Config.Schema do
     do: true
 
   defp preserve_explicit_nil_path?(["tracker", "waiting_on_sub_issues_state"]), do: true
+  defp preserve_explicit_nil_path?(["watchdog", "stray_process_cpu_minutes"]), do: true
   defp preserve_explicit_nil_path?(_path), do: false
 
   defp resolve_secret_setting(nil, fallback), do: normalize_secret_value(fallback)
