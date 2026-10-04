@@ -382,7 +382,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @spec get_current_issue(context(), keyword()) :: {:ok, map()} | {:error, term()}
   def get_current_issue(context, opts \\ []) do
     with {:ok, issue_id} <- current_issue_id(context),
-         {:ok, body} <- graphql(@current_issue_query, %{id: issue_id}, opts) do
+         {:ok, body} <- signed_graphql(@current_issue_query, %{id: issue_id}, opts) do
       with {:ok, issue} <- fetch_path(body, ["data", "issue"], :issue_not_found) do
         {:ok, wrap_issue(issue)}
       end
@@ -392,7 +392,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @spec get_subissues(context(), keyword()) :: {:ok, [map()]} | {:error, term()}
   def get_subissues(context, opts \\ []) do
     with {:ok, issue_id} <- current_issue_id(context),
-         {:ok, body} <- graphql(@subissues_query, %{id: issue_id, first: @related_issue_first}, opts) do
+         {:ok, body} <- signed_graphql(@subissues_query, %{id: issue_id, first: @related_issue_first}, opts) do
       with {:ok, nodes} <- fetch_path(body, ["data", "issue", "children", "nodes"], []) do
         {:ok, Enum.map(nodes, &wrap_issue_summary/1)}
       end
@@ -402,7 +402,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @spec get_parent_issue(context(), keyword()) :: {:ok, map() | nil} | {:error, term()}
   def get_parent_issue(context, opts \\ []) do
     with {:ok, issue_id} <- current_issue_id(context),
-         {:ok, body} <- graphql(@parent_issue_query, %{id: issue_id}, opts) do
+         {:ok, body} <- signed_graphql(@parent_issue_query, %{id: issue_id}, opts) do
       {:ok, wrap_issue_summary(get_in(body, ["data", "issue", "parent"]))}
     end
   end
@@ -411,7 +411,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   def get_comments(context, limit \\ @comment_limit_default, opts \\ []) do
     with {:ok, issue_id} <- current_issue_id(context),
          {:ok, normalized_limit} <- normalize_limit(limit),
-         {:ok, body} <- graphql(@comments_query, %{id: issue_id, limit: normalized_limit}, opts),
+         {:ok, body} <- signed_graphql(@comments_query, %{id: issue_id, limit: normalized_limit}, opts),
          {:ok, nodes} <- fetch_path(body, ["data", "issue", "comments", "nodes"], []) do
       {:ok, nodes |> Enum.reverse() |> Enum.map(&wrap_comment(&1, context, opts))}
     end
@@ -1432,10 +1432,14 @@ defmodule SymphonyElixir.AgentTools.Linear do
   defp workspace(%{workspace: workspace}) when is_binary(workspace) and workspace != "", do: {:ok, workspace}
   defp workspace(_context), do: {:error, :missing_workspace}
 
-  defp graphql(query, variables, opts) do
+  # Reads whose descriptions and comments reach the agent get pre-signed upload URLs, so the
+  # agent can download attached images and files without Linear's key. Each read signs afresh.
+  defp signed_graphql(query, variables, opts), do: graphql(query, variables, opts, sign_file_urls: true)
+
+  defp graphql(query, variables, opts, client_opts \\ []) do
     linear_client = Keyword.get(opts, :linear_client, &Client.graphql/3)
 
-    with {:ok, body} <- linear_client.(query, variables, []) do
+    with {:ok, body} <- linear_client.(query, variables, client_opts) do
       case body do
         %{"errors" => errors} when is_list(errors) and errors != [] -> {:error, {:linear_graphql_errors, errors}}
         %{errors: errors} when is_list(errors) and errors != [] -> {:error, {:linear_graphql_errors, errors}}

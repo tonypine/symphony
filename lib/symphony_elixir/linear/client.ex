@@ -18,6 +18,9 @@ defmodule SymphonyElixir.Linear.Client do
   @enrichment_comment_body_limit 800
   @workpad_markers AgentLabels.known_workpad_markers()
   @max_error_body_log_bytes 1_000
+  # Upload URLs in descriptions and comments need Linear's key unless the response signs them.
+  # Six hours outlasts a run (the default turn timeout is one hour); agent reads re-sign each time.
+  @signed_file_url_ttl_seconds 21_600
   @team_id_pattern ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
   @operation_name_pattern ~r/^\s*(?:query|mutation)\s+([A-Za-z_][A-Za-z0-9_]*)/
 
@@ -261,6 +264,7 @@ defmodule SymphonyElixir.Linear.Client do
   @enrichment_query """
   query SymphonyLinearIssueEnrichment($id: String!, $commentLast: Int!, $relationFirst: Int!) {
     issue(id: $id) {
+      description
       comments(last: $commentLast, orderBy: createdAt) {
         nodes {
           body
@@ -339,11 +343,18 @@ defmodule SymphonyElixir.Linear.Client do
 
   @spec fetch_issue_enrichment(Issue.t()) :: {:ok, Issue.t()} | {:error, term()}
   def fetch_issue_enrichment(%Issue{} = issue) do
-    do_fetch_issue_enrichment(issue, &graphql/2)
+    do_fetch_issue_enrichment(issue, &graphql(&1, &2, sign_file_urls: true))
   end
 
   def fetch_issue_enrichment(_issue), do: {:error, :invalid_issue}
 
+  @doc """
+  Runs a Linear GraphQL request with Symphony's key.
+
+  `sign_file_urls: true` asks Linear to pre-sign the upload URLs in the response, so an agent
+  without the key can download the images and files in a description or comment. Only reads
+  that feed an agent set it: a signed URL written back into Linear would stop working.
+  """
   @spec graphql(String.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def graphql(query, variables \\ %{}, opts \\ [])
       when is_binary(query) and is_map(variables) and is_list(opts) do
@@ -352,7 +363,7 @@ defmodule SymphonyElixir.Linear.Client do
     now_ms_fun = Keyword.get(opts, :now_ms_fun, &RateLimit.now_ms/0)
 
     with gate when gate in [:ok, :probe] <- RateLimit.check(now_ms_fun.()),
-         {:ok, headers} <- graphql_headers() do
+         {:ok, headers} <- graphql_headers(Keyword.get(opts, :sign_file_urls, false)) do
       RateLimit.record_request()
       Usage.record(Map.get(payload, "operationName") || operation_name(query))
 
@@ -884,7 +895,8 @@ defmodule SymphonyElixir.Linear.Client do
           {:ok,
            %{
              issue
-             | comments: extract_comments(enrichment),
+             | description: Map.get(enrichment, "description", issue.description),
+               comments: extract_comments(enrichment),
                linked_issues: extract_linked_issues(enrichment)
            }}
         end
@@ -999,7 +1011,7 @@ defmodule SymphonyElixir.Linear.Client do
     end
   end
 
-  defp graphql_headers do
+  defp graphql_headers(sign_file_urls?) do
     case Config.settings!().tracker.api_key |> Secret.unwrap() do
       nil ->
         {:error, :missing_linear_api_token}
@@ -1009,9 +1021,13 @@ defmodule SymphonyElixir.Linear.Client do
          [
            {"Authorization", token},
            {"Content-Type", "application/json"}
+           | signed_file_url_headers(sign_file_urls?)
          ]}
     end
   end
+
+  defp signed_file_url_headers(true), do: [{"public-file-urls-expire-in", Integer.to_string(@signed_file_url_ttl_seconds)}]
+  defp signed_file_url_headers(_sign_file_urls?), do: []
 
   defp post_graphql_request(payload, headers) do
     Req.post(Config.settings!().tracker.endpoint,
