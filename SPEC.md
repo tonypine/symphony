@@ -847,8 +847,11 @@ Fields:
     that time (`forced_since`, persisted across restarts), refreshes the queued issues by id on
     every poll so they stay queued in any non-terminal state (In Review, Merging, ...), and drops
     one when the label is removed, the issue is terminal, or the tracker no longer returns it. Forced issues are reported in the status snapshot
-    (`forced`) and the audit log (`forced_start`, `forced_end`), and dispatch on their own
-    allowance (Section 8.3).
+    (`forced`) and the audit log (`forced_start`, `forced_end` with `reason` `label_removed`,
+    `done` or `missing`), and dispatch on their own allowance (Section 8.3).
+  - When a forced issue reaches a terminal state the service SHOULD remove the label from it.
+  - When a forced issue enters `In Review` the service SHOULD emit a `forced_human_gate`
+    notification, once per entry into `In Review`.
   - Implementations MAY offer an operator control that adds or removes the label (this one has
     `symphony force [--clear] <identifier>` over `POST /api/v1/control/force`). Such a control
     SHOULD put the change into the queue at once rather than wait for the next poll, so tickets
@@ -859,8 +862,10 @@ Fields:
     `max_by_issue_state` (Section 8.3). Values below `1` fail configuration validation.
 - `concurrency.forced_stale_after_hours` (positive integer)
   - Default: `72`.
-  - How long an issue may stay forced before it counts as stale (not reported yet). Values below
-    `1` fail configuration validation.
+  - How long an issue may stay forced before it counts as stale. A stale issue is reported as
+    `stale` in the snapshot's `forced` rows, and the service SHOULD log a warning and emit one
+    `forced_stale` notification per forced issue, kept across restarts. Values below `1` fail
+    configuration validation.
 - `concurrency.max_by_issue_state` (map `state_name -> positive integer`)
   - Default: empty map.
   - State keys are normalized (`lowercase`) for lookup.
@@ -1286,7 +1291,7 @@ Fields:
   - `events` is an OPTIONAL list drawn from: `pr_opened`, `awaiting_review`, `run_failed`,
     `issue_completed`, `budget_exceeded`, `reviewer_commented`, `rework_pushed`, `ci_failed`,
     `ci_escalated`, `qa_passed`, `qa_failed`, `usage_limit_paused`, `usage_limit_headroom`,
-    `usage_limit_resumed`, `forced_waiting`.
+    `usage_limit_resumed`, `forced_waiting`, `forced_human_gate`, `forced_stale`.
   - `headers` is an OPTIONAL map of webhook headers.
 
 ### 5.5 Prompt Template Contract
@@ -3155,6 +3160,14 @@ SHOULD return:
   forced parent's current part
 - `forced` rows SHOULD include `sub_issue` (a forced `breakdown` parent's current part, or null)
   and `waiting_on_human` (the issue is in `Backlog`, `Triage` or `In Review`)
+- `forced` rows SHOULD include `forced_for_seconds`, `stale` (forced for at least
+  `concurrency.forced_stale_after_hours`), `phase` (one of `implementation`, `rework`,
+  `review_feedback`, `ci_fix`, `waiting_on_ci`, `auto_review`, `waiting_for_human`, `landing`,
+  `breakdown`, `close_out`, `final_verification`), `running` (an agent run or QA pass is going for
+  it), `waiting_on` (one of `slot`, `human`, `ci`, `blocker`, `usage_limit`, `paused`, `backlog`,
+  or null), `blockers` (the open blockers' identifiers when `waiting_on` is `blocker`) and a
+  one-line `summary`; for a forced `breakdown` parent with a current part, the phase and what it
+  waits on are the part's
 - `qa` (Auto Review QA passes): `running` rows (`issue_id`, `identifier`, `sha`, `forced`: whether
   the pass runs on the forced allowance) and `queued` rows (`issue_id`, `identifier`, `forced`:
   whether the request is a forced ticket's, at the front of the queue)
@@ -3335,7 +3348,8 @@ Minimum endpoints:
         "running": 2,
         "watching": 1,
         "conflicts": 0,
-        "retrying": 1
+        "retrying": 1,
+        "forced": 1
       },
       "repos": ["web", "api"],
       "running": [
@@ -3435,9 +3449,16 @@ Minimum endpoints:
           "title": "Fix the release build",
           "state": "In Progress",
           "forced_since": "2026-02-24T19:00:00Z",
+          "forced_for_seconds": 7380,
+          "stale": false,
           "position": 1,
           "waiting_on_human": false,
-          "sub_issue": null
+          "sub_issue": null,
+          "phase": "implementation",
+          "running": true,
+          "waiting_on": null,
+          "blockers": [],
+          "summary": "implementation · running"
         }
       ],
       "concurrency": {"max_total": 10, "finishing_max": 2, "forced_max": 1},
@@ -4286,6 +4307,10 @@ infrastructure.
   `In Review` is not moved
 - A forced issue's QA request goes to the front of the QA queue and, with the QA slots full,
   starts on the forced allowance while it has room; its verdict is applied as for any pass
+- The snapshot's `forced` rows report each forced issue's phase and what it waits on (an open
+  blocker by identifier); a forced issue past `forced_stale_after_hours` is `stale` and notified
+  once; a forced issue entering `In Review` is notified; a forced issue that reaches a terminal
+  state leaves the queue with reason `done` and loses its label
 - No `Todo` issue is dispatched while a `Merging` issue waits for a finishing slot
 - A queued QA pass holds `Todo` issues back only when it waits on `finishing_max`, not on
   `auto_review.max_concurrent`

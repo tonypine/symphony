@@ -1,7 +1,7 @@
 ```text
 ╭─ SYMPHONY STATUS
 │ Dispatch: active
-│ Agents: 0/10
+│ Agents: 0/10 · forced 0/1
 │ Throughput: 0 tps
 │ Runtime: 0m 0s
 │ Tokens: new 0 | cached 0 | created 0 | out 0
