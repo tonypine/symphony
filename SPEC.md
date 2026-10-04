@@ -1599,7 +1599,11 @@ claim state.
 
 2. `Claimed`
    - Orchestrator has reserved the issue to prevent duplicate dispatch.
-   - In practice, claimed issues are either `Running` or `RetryQueued`.
+   - In practice, claimed issues are either `Running` or `RetryQueued` (or a retry whose async
+     dispatch checks are in flight). A dispatch that starts nothing, such as a retry whose refresh
+     finds the issue no longer active, MUST release the claim. At the end of each poll cycle the
+     orchestrator releases, and logs, any claim with no running agent, retry, slot wait or in-flight
+     retry check, so a dropped claim cannot keep an issue from being dispatched until a restart.
 
 3. `Running`
    - Worker task exists and the issue is tracked in `running` map.

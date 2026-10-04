@@ -46,7 +46,8 @@ defmodule SymphonyElixirWeb.Presenter do
             running: length(snapshot.running),
             watching: length(Map.get(snapshot, :watching, [])),
             conflicts: length(Map.get(snapshot, :conflicts, [])),
-            retrying: length(snapshot.retrying)
+            retrying: length(snapshot.retrying),
+            claimed: length(Map.get(snapshot, :claimed, []))
           },
           running: Enum.map(snapshot.running, &running_entry_payload/1),
           watching: snapshot |> Map.get(:watching, []) |> Enum.map(&watching_entry_payload/1),
@@ -72,6 +73,7 @@ defmodule SymphonyElixirWeb.Presenter do
           auto_merge: snapshot |> Map.get(:auto_merge, []) |> Enum.map(&auto_merge_payload/1),
           slot_waiting: snapshot |> Map.get(:slot_waiting, []) |> Enum.map(&slot_waiting_payload/1),
           blocked: snapshot |> Map.get(:blocked, []) |> Enum.map(&blocked_payload/1),
+          claimed: Map.get(snapshot, :claimed, []),
           rate_limits: snapshot.rate_limits,
           linear_usage: normalize_linear_usage(get_in(snapshot, [:polling, :linear, :usage]))
         }
