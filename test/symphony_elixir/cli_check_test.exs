@@ -237,6 +237,58 @@ defmodule SymphonyElixir.CLICheckTest do
                 "Warning: auto_review.effort: OpenRouter model `acme/tools-only` does not support reasoning; its runs start without --effort low\n"}
     end
 
+    test "names the repository key that set the model", %{root: root} do
+      System.put_env("OPENROUTER_API_KEY", "sk-or-v1-check-secret")
+      stub_models_api()
+
+      content =
+        String.replace(valid_symphony(root), "  runtime: codex\n  command: codex app-server\n", """
+          runtime: claude
+          command: claude
+          model: claude-opus-5-5
+          run_profiles:
+            ci_fix: { model: anthropic/claude-haiku-4.5 }
+        """) <>
+          """
+              agent:
+                provider: openrouter
+                model: acme/chat-only
+          """
+
+      path = write_symphony!(root, content)
+
+      assert check(["--config", path]) ==
+               {{:error, "Config error in #{path}: repositories[app].agent.model: OpenRouter model `acme/chat-only` does not support tools; Symphony runs need tool use"}, ""}
+    end
+
+    test "names the repository run profile key that set the model or effort", %{root: root} do
+      System.put_env("OPENROUTER_API_KEY", "sk-or-v1-check-secret")
+      stub_models_api()
+
+      content =
+        String.replace(valid_symphony(root), "  runtime: codex\n  command: codex app-server\n", """
+          runtime: claude
+          command: claude
+          provider: openrouter
+          model: anthropic/claude-haiku-4.5
+          run_profiles:
+            landing: { model: acme/tools-only }
+        """) <>
+          """
+              agent:
+                effort: high
+                run_profiles:
+                  landing: { model: acme/chat-only }
+                  ci_fix: { model: acme/tools-only }
+          """
+
+      path = write_symphony!(root, content)
+
+      assert check(["--config", path]) ==
+               {{:error, "Config error in #{path}: repositories[app].agent.run_profiles.landing.model: OpenRouter model `acme/chat-only` does not support tools; Symphony runs need tool use"},
+                "Warning: repositories[app].agent.effort: OpenRouter model `acme/tools-only` does not support reasoning; its runs start without --effort high\n"}
+    end
+
     test "only warns when the models API cannot be reached", %{root: root} do
       System.put_env("OPENROUTER_API_KEY", "sk-or-v1-check-secret")
       unreachable = fn _url, _opts -> {:error, %Req.TransportError{reason: :nxdomain}} end
