@@ -2247,6 +2247,49 @@ defmodule SymphonyElixir.CoreTest do
     assert_due_in_range(due_at_ms, 39_000, 40_500)
   end
 
+  test "a worker that exits still waiting for Linear keeps its retry attempt and waits for Linear" do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [])
+    issue_id = "issue-linear-wait-exit"
+    ref = make_ref()
+    orchestrator_name = Module.concat(__MODULE__, :LinearWaitExitOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    initial_state = :sys.get_state(pid)
+
+    running_entry = %{
+      pid: self(),
+      ref: ref,
+      repo_key: "api",
+      identifier: "MT-LINEAR-WAIT",
+      retry_attempt: 2,
+      issue: %Issue{id: issue_id, identifier: "MT-LINEAR-WAIT", state: "Todo", repo_key: "api"},
+      started_at: DateTime.utc_now()
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.new([issue_id]))
+      |> Map.put(:retry_attempts, %{})
+    end)
+
+    reason = {:linear_unavailable, {:workpad_bootstrap_state_update_failed, {:linear_rate_limited, 1_791_000_030_000}}}
+    send(pid, {:DOWN, ref, :process, self(), reason})
+    Process.sleep(50)
+    state = :sys.get_state(pid)
+
+    assert %{attempt: 2, due_at_ms: due_at_ms, delay_type: :linear_wait, error: error} = state.retry_attempts[issue_id]
+    assert error == "agent exited: waiting for Linear: {:workpad_bootstrap_state_update_failed, {:linear_rate_limited, 1791000030000}}"
+    assert_due_in_range(due_at_ms, 4_000, 5_500)
+  end
+
   test "worker exception exits store concise retry errors" do
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [])
@@ -5168,6 +5211,8 @@ defmodule SymphonyElixir.CoreTest do
               assert_receive {:mcp_restart_run_turn, 1, %{session: 1}, _first_prompt}
               assert_receive {:linear_wait_slept, delay_ms}
               assert delay_ms == if(unquote(label) == :rate_limit, do: 30_000, else: 5_000)
+              # The orchestrator hears of the wait, so its watchdogs hold off until it ends.
+              assert_receive {:linear_wait, "issue-mcp-restart", ^delay_ms}
               assert_receive {:mcp_restart_run_turn, 2, %{session: 1}, _continuation_prompt}
               refute_receive {:mcp_restart_start_session, 2, _workspace, _opts}, 50
             end,

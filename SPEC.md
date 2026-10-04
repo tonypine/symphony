@@ -1965,9 +1965,12 @@ Epic lanes:
 
 - An active epic is a `breakdown` parent waiting on its sub-issues with at least one sub-issue
   approved and not finished (any state other than `Backlog`, `Triage` or a terminal state).
-- Active epics are ordered by the parent's priority, then the parent's creation time. The first
-  `min(epic_lanes, max_concurrent_agents)` of them each reserve one slot (a lane); the rest wait
-  for a lane. `epic_lanes` defaults to `max_concurrent_agents`.
+- An active epic yields while nothing on its path can run: every open issue on the path is in
+  `In Review`, `Backlog` or `Triage`, has no known state, is a `breakdown` parent waiting on its
+  sub-issues (outside `Rework`), or is a `Todo` with open blockers. A yielded epic takes no lane.
+- The other active epics are ordered by the parent's priority, then the parent's creation time. The
+  first `min(epic_lanes, max_concurrent_agents)` of them each reserve one slot (a lane); the rest
+  wait for a lane. `epic_lanes` defaults to `max_concurrent_agents`.
 - `shared_slots = max_concurrent_agents - lane_count`.
 - An epic's path is its non-terminal sub-issues, their sub-issues at any depth, and the
   non-terminal blockers (`blocked_by`) of any of those, transitively. The walk follows the
@@ -1979,11 +1982,15 @@ Epic lanes:
 - Within a dispatch stage, a lane's issues go nearest the epic first: the epic's next part, then a
   blocker or sub-issue of it, and so on. They swap only among the places they already hold in the
   dispatch order, so priority and age only break ties between them.
-- A lane with nothing running stays reserved, so the next issue on the epic's path starts there as
-  soon as its blocker merges, even when the shared slots are full.
+- A lane with nothing running stays reserved while an issue on its path can run, for example a
+  blocker that is landing, so the next issue on the epic's path starts there as soon as its blocker
+  merges, even when the shared slots are full.
 - The `epic_lanes` snapshot shows, for a running lane, the issue it runs and, when that is not one
-  of the epic's own sub-issues, the issue it blocks or is a sub-issue of (`via`).
-- Lanes are recomputed from the candidate issues on every poll tick.
+  of the epic's own sub-issues, the issue it blocks or is a sub-issue of (`via`). Yielded epics
+  follow the lanes with `status: "yielded"` and a `reason` naming each open issue on the path and
+  what it waits on.
+- Lanes are recomputed from the candidate issues on every poll tick, so a yielded epic takes a lane
+  again once an issue on its path can run.
 
 ### 8.4 Retry and Backoff
 
@@ -2097,8 +2104,8 @@ tick.
 Part A: First-turn stall detection
 
 - For each running issue that has not emitted any coding-agent event, compute `elapsed_ms` since
-  `started_at`, or since its last workspace hook (`after_create`, `before_run`) ended when that is
-  later.
+  the latest of `started_at`, the end of its last workspace hook (`after_create`, `before_run`), and
+  the end of the run's latest wait on Linear.
 - While a workspace hook runs, compute `elapsed_ms` since the hook's deadline instead. The hook is
   bounded by its own timeout (Section 9.4), which can be longer than `stall_timeout_ms`.
 - If `elapsed_ms > agent.stall_timeout_ms`, terminate the worker and queue a retry.
@@ -2124,8 +2131,8 @@ Part C: No-progress watchdog
 - Independently of the poll tick, a watchdog tick runs every `watchdog.tick_interval_ms`.
 - If `watchdog.enabled == false`, the tick performs no session termination.
 - For each running issue, compute `elapsed_ms` since `last_event_at`, where a workspace hook's start
-  and end count as events. While a workspace hook runs, compute it since the hook's deadline, as in
-  Part A.
+  and end count as events, or since the end of the run's latest wait on Linear when that is later.
+  While a workspace hook runs, compute it since the hook's deadline, as in Part A.
 - If `elapsed_ms >= watchdog.no_progress_threshold_ms`, terminate the agent session, run
   `after_run`, record the run as `timeout`, emit `run_stuck`, and queue a retry through the normal
   retry helper/backoff path.
@@ -2844,12 +2851,19 @@ Orchestrator behavior on tracker errors:
 - Soft brake: record `x-ratelimit-requests-remaining` from every response and stretch the issue-poll
   interval 2x below 10% of `x-ratelimit-requests-limit` (4x below 5%) until the budget recovers.
 - Transient errors (a rate limit, a transport error such as a timeout or refused connection, or an
-  HTTP 429/5xx answer) after a finished agent turn do not fail the run: the post-turn issue refresh
-  waits for Linear (until the pause ends, or 5 s doubling up to 60 s) and retries in the same run
-  and session, for at most five minutes. A post-PR move to Auto Review or In Review, a retry's
-  issue refresh, and a retry's dispatch refresh that hit one keep the retry's attempt and retry
-  after 5 s (or when the pause ends) instead of the failure backoff. A retry whose dispatch refresh
-  fails for any reason is scheduled again rather than dropped.
+  HTTP 429/5xx answer) on a Linear call a run makes do not fail the run: the call waits for Linear
+  (until the pause ends, or 5 s doubling up to 60 s) and retries in the same run and session, for at
+  most five minutes. This covers the issue enrichment and workpad bootstrap (the Todo → In Progress
+  move, the workpad read and create), the post-turn issue refresh, the dependency-approval move, the
+  move after a finished rework, the idle park and its note, and the parent walkthrough's parent
+  read, QA report, gap tickets and final state move (the verdict is kept while that move waits, for
+  up to 30 minutes rather than five, since a lost verdict means running the whole QA walkthrough
+  again and filing its gap tickets twice). The run tells the orchestrator how long each wait lasts,
+  and the first-turn stall check and the no-progress watchdog do not restart it before that wait
+  ends. A run that still fails on one once the wait runs out keeps its attempt and is retried after
+  5 s (or when the pause ends) instead of the failure backoff, as are a post-PR move to Auto Review
+  or In Review, a retry's issue refresh, and a retry's dispatch refresh that hit one. A retry whose
+  dispatch refresh fails for any reason is scheduled again rather than dropped.
 - Usage by caller: count every Linear request against its caller (orchestrator, CI poller, PR review
   poller, Auto Review, post-PR transition, `agent:<identifier>` for an agent run and its tools) over
   a rolling hour, and by query (the GraphQL operation name, `unnamed` without one), and show the

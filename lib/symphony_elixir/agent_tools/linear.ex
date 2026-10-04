@@ -14,7 +14,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Workspace.Attachments
-  alias SymphonyElixir.Linear.{Client, Issue}
+  alias SymphonyElixir.Linear.{Client, Issue, TransientRetry}
   alias SymphonyElixir.PathSafety
   alias SymphonyElixir.PromptSafety
   alias SymphonyElixir.RunKind
@@ -463,7 +463,10 @@ defmodule SymphonyElixir.AgentTools.Linear do
 
   @spec recover_comment_registry_seeds(map(), String.t() | atom() | nil, keyword()) :: [String.t()]
   def recover_comment_registry_seeds(issue, "linear", opts) do
-    case list_own_comment_ids(%{issue: issue}, opts) do
+    label = "seeding the comment registry for issue_id=#{Map.get(issue, :id)} issue_identifier=#{Map.get(issue, :identifier)}"
+    retry_opts = opts |> Keyword.get(:linear_retry_opts, []) |> Keyword.put(:label, label)
+
+    case TransientRetry.run(fn -> list_own_comment_ids(%{issue: issue}, opts) end, retry_opts) do
       {:ok, ids} ->
         ids
 

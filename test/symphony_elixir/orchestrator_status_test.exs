@@ -4657,6 +4657,63 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     Process.exit(worker_pid, :shutdown)
   end
 
+  test "a run waiting on Linear is not restarted as stalled or stuck until the wait ends" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_api_token: nil,
+      agent_stall_timeout_ms: 1_000,
+      watchdog: %{enabled: true, tick_interval_ms: 60_000, no_progress_threshold_ms: 1_000}
+    )
+
+    issue = %Issue{id: "issue-linear-wait", identifier: "MT-LINEAR-WAIT", title: "Linear wait", state: "In Progress"}
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+
+    orchestrator_name = Module.concat(__MODULE__, :LinearWaitOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        stop_process(pid)
+      end
+    end)
+
+    {worker_pid, worker_ref} = start_blocked_worker()
+    stale_at = DateTime.add(DateTime.utc_now(), -5, :second)
+
+    # No agent event yet, as while the workpad bootstrap waits on a rate-limited state move.
+    running_entry =
+      running_entry(issue, worker_pid, worker_ref, "run-linear-wait", stale_at, %{
+        last_event_at: stale_at,
+        agent_module: StopSessionAgent,
+        agent_session: %{recipient: self()}
+      })
+
+    put_running_entry(pid, issue, running_entry)
+    send(pid, {:linear_wait, issue.id, 60_000})
+    send(pid, {:linear_wait, "issue-not-running", 60_000})
+    send(pid, :tick)
+    send(pid, :watchdog_tick)
+    Process.sleep(100)
+
+    state = get_orchestrator_state(pid)
+    assert %{linear_wait_until: %DateTime{} = wait_until} = state.running[issue.id]
+    assert DateTime.diff(wait_until, DateTime.utc_now(), :millisecond) > 55_000
+    refute Map.has_key?(state.running, "issue-not-running")
+    refute Map.has_key?(state.retry_attempts, issue.id)
+    assert Process.alive?(worker_pid)
+
+    # A wait that ended before the run's last activity holds nothing off.
+    :sys.replace_state(pid, fn state ->
+      put_in(state.running[issue.id][:linear_wait_until], DateTime.add(stale_at, -5, :second))
+    end)
+
+    send(pid, :watchdog_tick)
+
+    assert_receive :agent_stop_session_called
+    assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}
+    assert %{error: "stuck for " <> _} = wait_for_orchestrator_state(pid, &Map.has_key?(&1.retry_attempts, issue.id), 1_000).retry_attempts[issue.id]
+  end
+
   test "status dashboard renders offline marker to terminal" do
     rendered =
       ExUnit.CaptureIO.capture_io(fn ->

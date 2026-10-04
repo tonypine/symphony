@@ -8,6 +8,8 @@ defmodule SymphonyElixir.ParentWalkthroughTest do
   alias SymphonyElixir.QaAgent
 
   @sha "c0ffee00112233445566778899aabbccddeeff00"
+  @now_ms 1_791_000_000_000
+  @rate_limited {:error, {:linear_rate_limited, 1_791_000_030_000}}
   @workspace "/tmp/workspaces/TP-910"
   @env_keys [:walkthrough_recipient, :walkthrough_agent_result, :walkthrough_state_result, :walkthrough_parent_result]
 
@@ -24,9 +26,21 @@ defmodule SymphonyElixir.ParentWalkthroughTest do
       Application.fetch_env!(:symphony_elixir, :walkthrough_parent_result)
     end
 
+    # A list of results answers one move each, then `:ok`.
     def update_issue_state(issue_id, state) do
       send(Application.fetch_env!(:symphony_elixir, :walkthrough_recipient), {:state_update, issue_id, state})
-      Application.get_env(:symphony_elixir, :walkthrough_state_result, :ok)
+
+      case Application.get_env(:symphony_elixir, :walkthrough_state_result, :ok) do
+        [result | rest] ->
+          Application.put_env(:symphony_elixir, :walkthrough_state_result, rest)
+          result
+
+        [] ->
+          :ok
+
+        result ->
+          result
+      end
     end
   end
 
@@ -147,6 +161,32 @@ defmodule SymphonyElixir.ParentWalkthroughTest do
   end
 
   defp run(issue, opts \\ []), do: ParentWalkthrough.run(issue, @workspace, Keyword.merge(run_opts(), opts))
+
+  defp linear_retry_opts do
+    parent = self()
+    [now_ms_fun: fn -> @now_ms end, sleep_fun: &send(parent, {:linear_wait_slept, &1})]
+  end
+
+  # A clock that each wait moves forward.
+  defp clocked_linear_retry_opts do
+    parent = self()
+    Process.put(:walkthrough_now_ms, @now_ms)
+
+    [
+      now_ms_fun: fn -> Process.get(:walkthrough_now_ms) end,
+      sleep_fun: fn delay_ms ->
+        Process.put(:walkthrough_now_ms, Process.get(:walkthrough_now_ms) + delay_ms)
+        send(parent, {:linear_wait_slept, delay_ms})
+      end
+    ]
+  end
+
+  # Linear's pause grows 1 → 2 → 4 → 5 minutes; the move goes through 12 minutes in.
+  defp growing_rate_limit do
+    Enum.map([60_000, 180_000, 420_000, 720_000], &{:error, {:linear_rate_limited, @now_ms + &1}})
+  end
+
+  defp waits(messages), do: for({:linear_wait_slept, delay_ms} <- messages, do: delay_ms)
 
   defp run_opts do
     [
@@ -410,6 +450,72 @@ defmodule SymphonyElixir.ParentWalkthroughTest do
       assert [{"issue-parent", report}, _ticket] = comments_posted()
       assert report =~ ~s(Reason: could not read the head of origin/main: {:git_failed, 128, "fatal: unreachable"})
       refute_received {:qa_agent_run, _job, _settings, _opts}
+    end
+
+    test "a rate-limited final state move keeps the verdict and applies it after the wait" do
+      agent_result(:fail, %{findings: ["The About tab is missing"]})
+      Application.put_env(:symphony_elixir, :walkthrough_state_result, [@rate_limited])
+
+      log = capture_log(fn -> assert :ok = run(verification(), linear_retry_opts: linear_retry_opts()) end)
+
+      messages = receive_all()
+      assert [{:qa_agent_run, _job, _settings, _opts}] = Enum.filter(messages, &match?({:qa_agent_run, _, _, _}, &1))
+      assert [{:state_update, "issue-fv", "Todo"}, {:state_update, "issue-fv", "Todo"}] = Enum.filter(messages, &match?({:state_update, _, _}, &1))
+      assert {:linear_wait_slept, 30_000} in messages
+      assert [_gap] = created_subissues(messages)
+      assert log =~ "Linear call failed while moving TP-910 to Todo after the parent walkthrough; retrying in 30000ms"
+      assert log =~ "Parent walkthrough for TP-900 ended fail; moved TP-910 to Todo"
+    end
+
+    test "a final state move rate-limited past five minutes still applies the verdict" do
+      agent_result(:fail, %{findings: ["The About tab is missing"]})
+      Application.put_env(:symphony_elixir, :walkthrough_state_result, growing_rate_limit())
+
+      log = capture_log(fn -> assert :ok = run(verification(), linear_retry_opts: clocked_linear_retry_opts()) end)
+
+      messages = receive_all()
+      assert [{:qa_agent_run, _job, _settings, _opts}] = Enum.filter(messages, &match?({:qa_agent_run, _, _, _}, &1))
+      assert List.duplicate({:state_update, "issue-fv", "Todo"}, 5) == Enum.filter(messages, &match?({:state_update, _, _}, &1))
+      assert [60_000, 120_000, 240_000, 300_000] = waits(messages)
+      assert [_gap] = created_subissues(messages)
+      assert log =~ "Parent walkthrough for TP-900 ended fail; moved TP-910 to Todo"
+    end
+
+    test "a caller's wait budget still bounds the final state move" do
+      agent_result(:pass, %{})
+      Application.put_env(:symphony_elixir, :walkthrough_state_result, growing_rate_limit())
+      retry_opts = [max_wait_ms: 300_000] ++ clocked_linear_retry_opts()
+
+      capture_log(fn ->
+        assert {:error, {:parent_walkthrough_state_update_failed, "In Review", {:linear_rate_limited, _until_ms}}} =
+                 run(verification(), linear_retry_opts: retry_opts)
+      end)
+
+      assert [60_000, 120_000, 120_000] = waits(receive_all())
+    end
+
+    test "a rate-limited QA report is posted after the wait" do
+      agent_result(:pass, %{})
+      client = linear_client()
+
+      rate_limited_once = fn query, variables, opts ->
+        if query =~ "SymphonyAgentAddComment" and !Process.put(:walkthrough_comment_rate_limited, true) do
+          {:error, {:linear_rate_limited, 1_791_000_030_000}}
+        else
+          client.(query, variables, opts)
+        end
+      end
+
+      log =
+        capture_log(fn ->
+          assert :ok = run(verification(), linear_client: rate_limited_once, linear_retry_opts: linear_retry_opts())
+        end)
+
+      assert_received {:linear_wait_slept, 30_000}
+      assert [{"issue-parent", report}, {"issue-fv", report}] = comments_posted()
+      assert report =~ "**Verdict:** pass → TP-910 In Review"
+      assert log =~ "Linear call failed while publishing the parent walkthrough QA report on TP-900"
+      refute log =~ "Failed to publish"
     end
 
     test "a report that cannot be posted is logged and a failed move is an error" do
