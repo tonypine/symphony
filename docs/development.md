@@ -74,7 +74,9 @@ green without extra setup:
   sandboxed `mix` uses the Hex and Rebar already installed for the host (for example in the
   per-version `MIX_HOME` that `mise` exports).
 - `test/test_helper.exs` keeps MCP socket dirs under `TMPDIR` when it is short (for example
-  Claude Code's `/tmp/claude-501`) and under `/tmp` otherwise. If neither is writable, set
+  Claude Code's `/tmp/claude-501`), under `/tmp` otherwise, and under a long `TMPDIR` (such as a
+  run's own `/tmp/symphony-run-<hash>/claude-501`) when `/tmp` is not writable, where sessions
+  name their socket dirs after a short hash. If none is writable, set
   `SYMPHONY_MCP_SOCKET_ROOT` to a short writable path; the resulting
   `<root>/symphony-mcp-<id>/sock` must fit the 104-byte Unix `sun_path` limit.
 - `bin/symphony` itself needs no setting there: when it cannot write to `/tmp`, it keeps MCP

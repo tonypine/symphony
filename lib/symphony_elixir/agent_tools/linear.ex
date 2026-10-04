@@ -37,6 +37,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   # Sub-issues land in Backlog so an agent cannot start other agents; a human promotes them.
   @backlog_state "Backlog"
   @subissue_cap_per_run 10
+  @subissue_update_fields [{"title", :title}, {"description", :description}, {"blocked_by", :blocked_by}, {"cancel_reason", :cancel_reason}]
   # A project update notifies everyone following the project, so a run may post only one.
   @project_update_cap_per_run 1
   @project_update_healths ["onTrack", "atRisk", "offTrack"]
@@ -108,6 +109,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
           createdAt
           updatedAt
           user { id name }
+          parent { id }
         }
       }
     }
@@ -187,6 +189,19 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @add_comment_mutation """
   mutation SymphonyAgentAddComment($issueId: String!, $body: String!) {
     commentCreate(input: { issueId: $issueId, body: $body }) {
+      success
+      comment {
+        id
+        body
+        url
+      }
+    }
+  }
+  """
+
+  @add_reply_mutation """
+  mutation SymphonyAgentAddReply($issueId: String!, $parentId: String!, $body: String!) {
+    commentCreate(input: { issueId: $issueId, parentId: $parentId, body: $body }) {
       success
       comment {
         id
@@ -300,6 +315,60 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @create_issue_relation_mutation """
   mutation SymphonyAgentCreateIssueRelation($input: IssueRelationCreateInput!) {
     issueRelationCreate(input: $input) {
+      success
+    }
+  }
+  """
+
+  # A sub-issue's blocked-by links are its inverse `blocks` relations.
+  @subissue_update_scope_query """
+  query SymphonyAgentSubissueUpdateScope($id: String!, $first: Int!) {
+    issue(id: $id) {
+      id
+      team {
+        states {
+          nodes {
+            id
+            name
+            type
+          }
+        }
+      }
+      children(first: $first) {
+        nodes {
+          id
+          identifier
+          state { name type }
+          inverseRelations(first: $first) {
+            nodes {
+              id
+              type
+              issue { id identifier }
+            }
+          }
+        }
+      }
+    }
+  }
+  """
+
+  @update_subissue_mutation """
+  mutation SymphonyAgentUpdateSubissue($id: String!, $input: IssueUpdateInput!) {
+    issueUpdate(id: $id, input: $input) {
+      success
+      issue {
+        id
+        identifier
+        url
+        state { name }
+      }
+    }
+  }
+  """
+
+  @delete_issue_relation_mutation """
+  mutation SymphonyAgentDeleteIssueRelation($id: String!) {
+    issueRelationDelete(id: $id) {
       success
     }
   }
@@ -446,8 +515,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @spec add_comment(context(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def add_comment(context, body, opts) when is_binary(body) do
     with {:ok, issue_id} <- current_issue_id(context),
+         {:ok, mutation, variables} <- comment_create(issue_id, body, Keyword.get(opts, :parent_id)),
          :ok <- SecretScanner.reject_fields_if_secret_pattern([body: body], context, "linear_add_comment", opts),
-         {:ok, response} <- graphql(@add_comment_mutation, %{issueId: issue_id, body: body}, opts),
+         {:ok, response} <- graphql(mutation, variables, opts),
          {:ok, response} <- check_mutation_success(response, "commentCreate") do
       comment_id = get_in(response, ["data", "commentCreate", "comment", "id"])
       CommentRegistry.record(Map.get(context, :comment_registry), comment_id)
@@ -456,6 +526,17 @@ defmodule SymphonyElixir.AgentTools.Linear do
   end
 
   def add_comment(_context, _body, _opts), do: {:error, :invalid_comment_body}
+
+  # With `parent_id` the comment is a reply under that comment on the current issue.
+  defp comment_create(issue_id, body, nil), do: {:ok, @add_comment_mutation, %{issueId: issue_id, body: body}}
+
+  defp comment_create(issue_id, body, parent_id) when is_binary(parent_id) do
+    if String.trim(parent_id) == "",
+      do: {:error, :invalid_comment_parent},
+      else: {:ok, @add_reply_mutation, %{issueId: issue_id, parentId: String.trim(parent_id), body: body}}
+  end
+
+  defp comment_create(_issue_id, _body, _parent_id), do: {:error, :invalid_comment_parent}
 
   @spec update_comment(context(), String.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def update_comment(context, comment_id, body), do: update_comment(context, comment_id, body, [])
@@ -614,6 +695,172 @@ defmodule SymphonyElixir.AgentTools.Linear do
           CommentRegistry.release_subissue(registry)
           error
       end
+    end
+  end
+
+  @doc """
+  Changes a `Backlog` child of the current issue, so a breakdown run can bring its plan in line
+  with review comments. `identifier` names the sub-issue; then either `title` and/or `description`
+  replace its fields and `blocked_by` sets the complete list of sibling sub-issues that block it
+  (links to siblings left out are removed, links to other issues stay), or `cancel_reason` cancels
+  it after posting the reason on it. A sub-issue outside `Backlog` was promoted by a person and is
+  refused, as is any issue that is not a child of the current one.
+  """
+  @spec update_subissue(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
+  def update_subissue(context, attrs, opts \\ []) when is_map(attrs) do
+    with {:ok, issue_id} <- current_issue_id(context),
+         {:ok, identifier, change} <- validate_subissue_update(attrs),
+         :ok <-
+           SecretScanner.reject_fields_if_secret_pattern(
+             change |> Map.take([:title, :description, :cancel_reason]) |> Enum.to_list(),
+             context,
+             "linear_update_subissue",
+             opts
+           ),
+         {:ok, body} <- graphql(@subissue_update_scope_query, %{id: issue_id, first: @related_issue_first}, opts),
+         {:ok, parent} <- fetch_path(body, ["data", "issue"], :issue_not_found),
+         {:ok, children} <- fetch_path(parent, ["children", "nodes"], []),
+         {:ok, child} <- backlog_child(children, identifier) do
+      apply_subissue_change(parent, children, child, change, opts)
+    end
+  end
+
+  defp validate_subissue_update(attrs) do
+    identifier = Map.get(attrs, "identifier")
+    change = for {key, field} <- @subissue_update_fields, Map.has_key?(attrs, key), into: %{}, do: {field, attrs[key]}
+
+    with :ok <- check_subissue_identifier(identifier),
+         :ok <- check_subissue_change(change) do
+      {:ok, identifier |> String.trim() |> String.upcase(), normalize_subissue_change(change)}
+    end
+  end
+
+  defp check_subissue_identifier(identifier),
+    do: if(non_blank?(identifier), do: :ok, else: {:error, :invalid_subissue_identifier})
+
+  # A cancel stands alone: it would drop any edit made with it.
+  defp check_subissue_change(change) when map_size(change) == 0, do: {:error, :invalid_subissue_update}
+  defp check_subissue_change(%{cancel_reason: _reason} = change) when map_size(change) > 1, do: {:error, :invalid_subissue_update}
+
+  defp check_subissue_change(change) do
+    Enum.find_value(change, :ok, fn {field, value} ->
+      if valid_subissue_field?(field, value), do: nil, else: {:error, subissue_field_error(field)}
+    end)
+  end
+
+  defp valid_subissue_field?(:description, value), do: is_binary(value)
+  defp valid_subissue_field?(:blocked_by, value), do: valid_blocked_by?(value)
+  defp valid_subissue_field?(_title_or_cancel_reason, value), do: non_blank?(value)
+
+  defp subissue_field_error(:title), do: :invalid_subissue_title
+  defp subissue_field_error(:description), do: :invalid_subissue_description
+  defp subissue_field_error(:blocked_by), do: :invalid_subissue_blocked_by
+  defp subissue_field_error(:cancel_reason), do: :invalid_subissue_cancel_reason
+
+  defp normalize_subissue_change(change) do
+    change
+    |> Map.update(:title, nil, &String.trim/1)
+    |> Map.update(:blocked_by, nil, &normalize_identifiers/1)
+    |> Map.reject(fn {_key, value} -> is_nil(value) end)
+  end
+
+  defp backlog_child(children, identifier) do
+    case Enum.find(children, &(&1["identifier"] == identifier)) do
+      nil ->
+        {:error, {:not_a_subissue, identifier, children |> Enum.map(& &1["identifier"]) |> Enum.sort()}}
+
+      child ->
+        if state_name_matches?(child["state"] || %{}, @backlog_state),
+          do: {:ok, child},
+          else: {:error, {:subissue_not_in_backlog, identifier, get_in(child, ["state", "name"])}}
+    end
+  end
+
+  defp apply_subissue_change(parent, _children, child, %{cancel_reason: reason}, opts) do
+    with {:ok, state_id} <- canceled_state_id(get_in(parent, ["team", "states", "nodes"]) || []),
+         {:ok, response} <- graphql(@add_comment_mutation, %{issueId: child["id"], body: reason}, opts),
+         {:ok, _response} <- check_mutation_success(response, "commentCreate"),
+         {:ok, response} <- graphql(@update_subissue_mutation, %{id: child["id"], input: %{"stateId" => state_id}}, opts),
+         {:ok, _response} <- check_mutation_success(response, "issueUpdate") do
+      {:ok, %{"identifier" => child["identifier"], "canceled" => true}}
+    end
+  end
+
+  defp apply_subissue_change(_parent, children, child, change, opts) do
+    input = change |> Map.take([:title, :description]) |> Map.new(fn {key, value} -> {Atom.to_string(key), value} end)
+
+    with :ok <- update_subissue_fields(child, input, opts),
+         :ok <- set_sibling_blockers(children, child, Map.get(change, :blocked_by), opts) do
+      {:ok, Map.merge(%{"identifier" => child["identifier"], "updated" => Map.keys(input) |> Enum.sort()}, blocked_by_result(change))}
+    end
+  end
+
+  defp blocked_by_result(%{blocked_by: blocked_by}), do: %{"blockedBy" => blocked_by}
+  defp blocked_by_result(_change), do: %{}
+
+  defp update_subissue_fields(_child, input, _opts) when map_size(input) == 0, do: :ok
+
+  defp update_subissue_fields(child, input, opts) do
+    with {:ok, response} <- graphql(@update_subissue_mutation, %{id: child["id"], input: input}, opts),
+         {:ok, _response} <- check_mutation_success(response, "issueUpdate") do
+      :ok
+    end
+  end
+
+  defp set_sibling_blockers(_children, _child, nil, _opts), do: :ok
+
+  defp set_sibling_blockers(children, child, blocked_by, opts) do
+    siblings = children |> Enum.reject(&(&1["id"] == child["id"])) |> Map.new(&{&1["identifier"], &1["id"]})
+
+    case Enum.reject(blocked_by, &Map.has_key?(siblings, &1)) do
+      [] ->
+        current = sibling_blocker_relations(child, siblings)
+        add = Enum.reject(blocked_by, &Map.has_key?(current, &1))
+        remove = current |> Map.drop(blocked_by) |> Map.values()
+
+        case link_blockers_to(child["id"], Enum.map(add, &{&1, Map.fetch!(siblings, &1)}), opts) do
+          :ok ->
+            unlink_blockers(remove, opts)
+
+          {:error, {:add_blocked_by_failed, blocker, reason}} ->
+            {:error, {:subissue_blocked_by_failed, child["identifier"], blocker, reason}}
+        end
+
+      unknown ->
+        {:error, {:subissue_blocked_by_not_sibling, unknown, siblings |> Map.keys() |> Enum.sort()}}
+    end
+  end
+
+  # The child's `blocks` relations from its siblings, by the blocking sibling's identifier.
+  defp sibling_blocker_relations(child, siblings) do
+    sibling_ids = siblings |> Map.values() |> MapSet.new()
+
+    child
+    |> get_in(["inverseRelations", "nodes"])
+    |> List.wrap()
+    |> Enum.filter(&(&1["type"] == "blocks" and MapSet.member?(sibling_ids, get_in(&1, ["issue", "id"]))))
+    |> Map.new(&{get_in(&1, ["issue", "identifier"]), &1["id"]})
+  end
+
+  defp unlink_blockers(relation_ids, opts) do
+    Enum.reduce_while(relation_ids, :ok, fn relation_id, :ok ->
+      with {:ok, body} <- graphql(@delete_issue_relation_mutation, %{id: relation_id}, opts),
+           {:ok, _body} <- check_mutation_success(body, "issueRelationDelete") do
+        {:cont, :ok}
+      else
+        {:error, reason} -> {:halt, {:error, {:remove_blocked_by_failed, reason}}}
+      end
+    end)
+  end
+
+  defp canceled_state_id(states) do
+    state =
+      Enum.find(states, &(state_name_matches?(&1, "Canceled") or state_name_matches?(&1, "Cancelled"))) ||
+        Enum.find(states, &(&1["type"] == "canceled"))
+
+    case state do
+      %{"id" => state_id} -> {:ok, state_id}
+      _ -> {:error, {:canceled_state_not_found, states |> Enum.map(& &1["name"]) |> Enum.reject(&is_nil/1)}}
     end
   end
 

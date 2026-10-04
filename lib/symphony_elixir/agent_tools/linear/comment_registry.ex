@@ -34,6 +34,10 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
 
   def owned?(_pid, _comment_id), do: false
 
+  @doc "The ids of the comments this run created or owns."
+  @spec comment_ids(pid()) :: [String.t()]
+  def comment_ids(pid) when is_pid(pid), do: Agent.get(pid, &MapSet.to_list(&1.comments))
+
   @spec remove(pid() | nil, String.t()) :: :ok
   def remove(pid, comment_id) when is_pid(pid) and is_binary(comment_id) do
     Agent.update(pid, fn state -> %{state | comments: MapSet.delete(state.comments, comment_id)} end)

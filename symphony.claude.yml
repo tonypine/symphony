@@ -84,8 +84,8 @@ agent:
     tokens_per_day: 1000000000
   permissions:
     filesystem:
-      # Claude Code's sandbox can write the workspace and its own short TMPDIR
-      # (for example /tmp/claude-501), not /tmp itself. Symphony's own test suite
+      # Claude Code's sandbox can write the workspace and its own TMPDIR (the
+      # run's /tmp/symphony-run-<hash>), not /tmp itself. Symphony's own test suite
       # keeps MCP socket dirs under that TMPDIR, so `make all` needs no extra
       # write paths. Add one only if agents set SYMPHONY_MCP_SOCKET_ROOT
       # elsewhere (see docs/development.md).

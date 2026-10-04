@@ -653,7 +653,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   defp write_claude_runtime_files(_workspace, worker_host, settings, mcp_session, {socket_path, remote_shim_path}, read_only?) do
     network_access = settings.agent.network_access
     allow_read_paths = workspace_sandbox_allow_read_paths(settings)
-    allow_write_paths = workspace_sandbox_allow_write_paths(settings)
+    allow_write_paths = workspace_sandbox_allow_write_paths(settings) ++ host_allow_write_paths(worker_host)
     effective_shim_path = effective_shim_path(mcp_session, remote_shim_path)
     effective_socket_path = socket_path || mcp_session.socket_path
 
@@ -691,6 +691,15 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     do: paths
 
   defp workspace_sandbox_allow_write_paths(_settings), do: []
+
+  # The item replacement directory lives under the per-user temp dir of the host Claude runs on,
+  # which this host can't look up for an SSH worker.
+  defp host_allow_write_paths(nil) do
+    opts = Application.get_env(:symphony_elixir, :claude_item_replacement_opts, [])
+    AgentSandboxConfig.item_replacement_write_paths(opts)
+  end
+
+  defp host_allow_write_paths(_worker_host), do: []
 
   defp claude_settings_dir(nil, %{id: id}) when is_binary(id) do
     Path.join(System.tmp_dir!(), "#{@settings_dir_prefix}#{id}")

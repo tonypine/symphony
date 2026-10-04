@@ -32,7 +32,7 @@ defmodule SymphonyElixir.QaAgent do
 
   require Logger
 
-  alias SymphonyElixir.{AgentTelemetry, AgentTools, LeftoverProcesses, PromptSafety, QaDriver, ReviewAgent}
+  alias SymphonyElixir.{AgentTelemetry, AgentTmpDir, AgentTools, LeftoverProcesses, PromptSafety, QaDriver, ReviewAgent}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Agent.Mcp.Server, as: McpServer
   alias SymphonyElixir.Linear.Issue
@@ -98,7 +98,7 @@ defmodule SymphonyElixir.QaAgent do
       _job ->
         case create_worktree(job, settings, git) do
           {:ok, worktree} ->
-            tmp_dirs = tmp_dirs(worktree, Keyword.get_lazy(opts, :tmp_bases, &default_tmp_bases/0))
+            tmp_dirs = tmp_dirs(worktree, Keyword.get_lazy(opts, :tmp_bases, &AgentTmpDir.default_bases/0))
 
             try do
               run_with_tmp_dir(job, worktree, tmp_dirs, settings, opts)
@@ -133,12 +133,9 @@ defmodule SymphonyElixir.QaAgent do
   falls back to its own temp folder.
   """
   @spec tmp_dirs(Path.t(), [Path.t()]) :: [Path.t()]
-  def tmp_dirs(worktree, bases \\ default_tmp_bases()) do
-    id = :sha256 |> :crypto.hash(worktree) |> binary_part(0, 6) |> Base.encode16(case: :lower)
-    Enum.map(bases, &Path.join(&1, @tmp_dir_prefix <> id))
+  def tmp_dirs(worktree, bases \\ AgentTmpDir.default_bases()) do
+    AgentTmpDir.paths(@tmp_dir_prefix, worktree, bases)
   end
-
-  defp default_tmp_bases, do: Enum.uniq(["/tmp", System.tmp_dir!()])
 
   @doc "The agent settings for a QA session: `auto_review` runtime, command, turns and timeout."
   @spec qa_settings(Schema.t()) :: Schema.t()
@@ -419,19 +416,10 @@ defmodule SymphonyElixir.QaAgent do
   end
 
   defp run_with_tmp_dir(job, worktree, tmp_dirs, settings, opts) do
-    case create_tmp_dir(tmp_dirs) do
+    case AgentTmpDir.create(tmp_dirs) do
       {:ok, tmp_dir} -> run_in_worktree(job, worktree, settings, Keyword.put(opts, :qa_tmp_dir, tmp_dir))
       :error -> {:error, {:qa_tmp_dir_failed, tmp_dirs}, empty_tokens()}
     end
-  end
-
-  # Private, as Claude Code requires of `CLAUDE_CODE_TMPDIR`. A folder left by an
-  # interrupted pass is removed first, so it never carries over.
-  defp create_tmp_dir(tmp_dirs) do
-    Enum.find_value(tmp_dirs, :error, fn tmp_dir ->
-      File.rm_rf(tmp_dir)
-      if File.mkdir(tmp_dir) == :ok and File.chmod(tmp_dir, 0o700) == :ok, do: {:ok, tmp_dir}
-    end)
   end
 
   defp run_in_worktree(job, worktree, settings, opts) do
@@ -623,9 +611,7 @@ defmodule SymphonyElixir.QaAgent do
 
   defp run_session(agent_module, job, worktree, qa_settings, prompt, tracker, opts) do
     tmp_dir = Keyword.fetch!(opts, :qa_tmp_dir)
-    # The agent's `$TMPDIR` is under the temp folder, so its sandbox writes there whatever
-    # the runtime's own default writable set is.
-    qa_settings = update_in(qa_settings.workspace.sandbox.allow_write_paths, &(&1 ++ [tmp_dir]))
+    qa_settings = AgentTmpDir.allow_write(qa_settings, tmp_dir)
 
     session_opts = [
       worker_host: nil,
@@ -637,7 +623,7 @@ defmodule SymphonyElixir.QaAgent do
       tool_scope: :qa,
       qa_driver: Keyword.get(opts, :qa_driver),
       qa_android_driver: Keyword.get(opts, :qa_android_driver),
-      extra_env: tmp_dir_env(qa_settings.agent.kind, tmp_dir)
+      extra_env: AgentTmpDir.env(qa_settings.agent.kind, tmp_dir)
     ]
 
     case agent_module.start_session(worktree, session_opts) do
@@ -649,11 +635,6 @@ defmodule SymphonyElixir.QaAgent do
         {:error, {:qa_agent_failed, reason}}
     end
   end
-
-  # Claude Code puts the `$TMPDIR` of the commands it runs under `CLAUDE_CODE_TMPDIR`; Codex
-  # passes its own `TMPDIR` on to them.
-  defp tmp_dir_env("claude", tmp_dir), do: %{"CLAUDE_CODE_TMPDIR" => tmp_dir}
-  defp tmp_dir_env(_kind, tmp_dir), do: %{"TMPDIR" => tmp_dir}
 
   defp run_turn(agent_module, session, prompt, issue, turn_opts, tracker) do
     run_turns(agent_module, session, prompt, issue, turn_opts, tracker, 0)

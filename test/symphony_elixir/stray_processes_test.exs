@@ -196,10 +196,18 @@ defmodule SymphonyElixir.StrayProcessesTest do
     assert length(String.split(log, "Could not check for stray processes")) == 2
     assert log =~ "{:orchestrator_snapshot, :unavailable}"
 
+    # A run's temp folder is attached with its workspace.
+    run_tmp_dir = ctx.running |> AgentRunner.tmp_dirs([ctx.tmp_dir]) |> hd()
+    File.mkdir_p!(run_tmp_dir)
+    run_bases = Application.get_env(:symphony_elixir, :agent_run_tmp_bases)
+    Application.put_env(:symphony_elixir, :agent_run_tmp_bases, [ctx.tmp_dir])
+    on_exit(fn -> Application.put_env(:symphony_elixir, :agent_run_tmp_bases, run_bases) end)
+    in_run_tmp_dir = entry(104, command: "yes", cwd: run_tmp_dir, cpu_time: "11:00.00")
+
     orchestrator = :"fake_orchestrator_#{System.unique_integer([:positive])}"
     snapshot = %{running: [%{workspace_path: ctx.running}, %{workspace_path: nil}]}
     start_supervised!({FakeOrchestrator, name: orchestrator, snapshot: snapshot})
-    server = start_server(ctx, Keyword.merge(opts, table: fn -> {:ok, [over, attached]} end, orchestrator: orchestrator))
+    server = start_server(ctx, Keyword.merge(opts, table: fn -> {:ok, [over, attached, in_run_tmp_dir]} end, orchestrator: orchestrator))
 
     assert [%{pid: 101}] = StrayProcesses.check(server)
   end
