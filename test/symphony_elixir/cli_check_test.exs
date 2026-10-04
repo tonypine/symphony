@@ -64,6 +64,31 @@ defmodule SymphonyElixir.CLICheckTest do
     assert message =~ "forced_max"
   end
 
+  describe "a workspace.source repo" do
+    test "passes with a warning before Symphony has cloned it", %{root: root} do
+      path = write_symphony!(root, managed_symphony(root))
+      clone = Path.join([root, "clones", "octo", "hello"])
+
+      {result, output} = check(["--config", path])
+
+      assert result == {:halt, 0}
+
+      assert output ==
+               "Config OK: #{path}\nWarning: repo hello is not cloned yet: Symphony clones octo/hello into #{clone} when it starts, then reads its WORKFLOW.md\n"
+
+      # Symphony's own boot check still needs the clone, which it makes first.
+      assert {:error, {:missing_workflow_file, _path, :enoent}} = Config.validate_repo_workflows()
+    end
+
+    test "reads WORKFLOW.md from the clone once it exists", %{root: root} do
+      path = write_symphony!(root, managed_symphony(root))
+      File.mkdir_p!(Path.join([root, "clones", "octo", "hello", ".git"]))
+
+      assert {{:error, message}, ""} = check(["--config", path])
+      assert message =~ "Missing WORKFLOW.md at #{Path.join([root, "clones", "octo", "hello", "WORKFLOW.md"])}"
+    end
+  end
+
   test "reports invalid YAML with its location", %{root: root} do
     path = write_symphony!(root, "issues: [unclosed\n")
 
@@ -417,7 +442,7 @@ defmodule SymphonyElixir.CLICheckTest do
 
     deps =
       %{
-        check_config: &Config.validate_repo_workflows/0,
+        check_config: &Config.check_repo_workflows/0,
         check_findings: &Config.check_findings/0,
         file_regular?: &File.regular?/1,
         init: fn _args -> flunk("init called") end,
@@ -467,6 +492,19 @@ defmodule SymphonyElixir.CLICheckTest do
         route:
           team: Test
     """
+  end
+
+  defp managed_symphony(root) do
+    valid_symphony(root) <>
+      """
+        - key: hello
+          route:
+            team: Other
+          workspace:
+            source: https://github.com/octo/hello
+      workspaces:
+        clones_root: #{Path.join(root, "clones")}
+      """
   end
 
   defp restore_app_env(key, nil), do: Application.delete_env(:symphony_elixir, key)

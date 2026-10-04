@@ -8,6 +8,7 @@ defmodule SymphonyElixir.Config do
   alias SymphonyElixir.Config.Cache
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.SystemSchema
+  alias SymphonyElixir.ManagedClone
   alias SymphonyElixir.OpenRouter.Models, as: OpenRouterModels
   alias SymphonyElixir.Routing.Resolver, as: RoutingResolver
   alias SymphonyElixir.RunKind
@@ -320,15 +321,28 @@ defmodule SymphonyElixir.Config do
   @spec check_findings(keyword()) :: %{errors: [String.t()], warnings: [String.t()]}
   def check_findings(opts \\ []) do
     with {:ok, system_config} <- system(),
-         {:ok, repo_settings} <- repo_runtime_settings(system_config, source: :file) do
+         {:ok, repo_settings} <- repo_runtime_settings(system_config, source: :check) do
       repo_settings
       |> Enum.flat_map(fn {_repo, settings} -> openrouter_profiles(settings) end)
       |> Enum.uniq()
       |> openrouter_findings(openrouter_api_key(), opts)
+      |> Map.update!(:warnings, &(uncloned_repo_warnings(system_config.repos) ++ &1))
     else
       {:error, _reason} -> %{errors: [], warnings: []}
     end
   end
+
+  defp uncloned_repo_warnings(repos) do
+    for %SystemSchema.Repo{name: name, path: clone, workspace: %{github: github}} = repo <- repos,
+        uncloned_managed_repo?(repo) do
+      "repo #{name} is not cloned yet: Symphony clones #{github} into #{clone} when it starts, then reads its WORKFLOW.md"
+    end
+  end
+
+  defp uncloned_managed_repo?(%SystemSchema.Repo{path: clone, workspace: %{github: github}}) when is_binary(github),
+    do: not ManagedClone.cloned?(clone)
+
+  defp uncloned_managed_repo?(_repo), do: false
 
   defp openrouter_findings([], _key, _opts), do: %{errors: [], warnings: []}
 
@@ -493,9 +507,20 @@ defmodule SymphonyElixir.Config do
   end
 
   @spec validate_repo_workflows() :: :ok | {:error, term()}
-  def validate_repo_workflows do
+  def validate_repo_workflows, do: validate_repo_workflows(:file)
+
+  @doc """
+  What `symphony check` validates: the same as `validate_repo_workflows/0`, except that
+  a `workspace.source` repo Symphony has not cloned yet is checked without its
+  `WORKFLOW.md`, since Symphony clones it at start and only then reads the file.
+  `check_findings/1` warns about each such repo.
+  """
+  @spec check_repo_workflows() :: :ok | {:error, term()}
+  def check_repo_workflows, do: validate_repo_workflows(:check)
+
+  defp validate_repo_workflows(source) do
     with {:ok, system_config} <- system(),
-         {:ok, _repo_settings} <- repo_runtime_settings(system_config, source: :file) do
+         {:ok, _repo_settings} <- repo_runtime_settings(system_config, source: source) do
       :ok
     else
       {:error, {:invalid_symphony_config, message}} ->
@@ -812,6 +837,12 @@ defmodule SymphonyElixir.Config do
   end
 
   defp load_repo_workflow(repo, source \\ :store)
+
+  defp load_repo_workflow(%SystemSchema.Repo{} = repo, :check) do
+    if uncloned_managed_repo?(repo),
+      do: {:ok, %{config: %{}, prompt: "", prompt_template: ""}},
+      else: load_repo_workflow(repo, :file)
+  end
 
   defp load_repo_workflow(%SystemSchema.Repo{} = repo, :file) do
     Workflow.load(WorkflowSource.read_path(repo))
