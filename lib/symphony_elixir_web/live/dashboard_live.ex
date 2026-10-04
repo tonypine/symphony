@@ -5,7 +5,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   use Phoenix.LiveView, layout: {SymphonyElixirWeb.Layouts, :app}
 
-  alias SymphonyElixir.{Config, URLUtils, UsageLimit}
+  alias SymphonyElixir.{Config, ForcedStatus, URLUtils, UsageLimit}
   alias SymphonyElixirWeb.{Endpoint, ObservabilityPubSub, Presenter}
   @runtime_tick_ms 1_000
   @dashboard_reload_task :dashboard_reload
@@ -257,6 +257,12 @@ defmodule SymphonyElixirWeb.DashboardLive do
           </article>
 
           <article class="metric-card">
+            <p class="metric-label">Forced</p>
+            <p class="metric-value numeric"><%= @payload.counts.forced %>/<%= forced_max(@payload) %></p>
+            <p class="metric-detail">forced_max</p>
+          </article>
+
+          <article class="metric-card">
             <p class="metric-label">Daily tokens</p>
             <p class="metric-value numeric"><%= format_budget_usage(@payload.budget.daily_used, @payload.budget.daily_limit) %></p>
             <p class="metric-detail"><%= daily_budget_detail(@payload.budget) %></p>
@@ -437,7 +443,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
                 </thead>
                 <tbody>
                   <tr :for={entry <- @payload.slot_waiting}>
-                    <td><span class="issue-id"><%= entry.issue_identifier %></span></td>
+                    <td><.forced_marker forced={entry.forced} /><span class="issue-id"><%= entry.issue_identifier %></span></td>
                     <td><%= entry.state %></td>
                     <td><%= entry.reason %></td>
                     <td class="numeric"><%= entry.attempt || "-" %></td>
@@ -465,6 +471,46 @@ defmodule SymphonyElixirWeb.DashboardLive do
               </table>
             </div>
           <% end %>
+        </section>
+
+        <section :if={@payload.forced != []} class="section-card">
+          <div class="section-header">
+            <div>
+              <h2 class="section-title">Forced</h2>
+              <p class="section-copy">
+                Tickets a human forced through to Done, earliest first. Up to <span class="numeric"><%= forced_max(@payload) %></span> run at once on the forced allowance, outside the agent slots.
+              </p>
+            </div>
+          </div>
+
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Issue</th>
+                  <th>Phase</th>
+                  <th>Waiting on</th>
+                  <th>Forced for</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr :for={entry <- @payload.forced}>
+                  <td>
+                    <div class="issue-stack">
+                      <span class="issue-id" title={entry.title}><.forced_marker forced={true} /><%= entry.issue_identifier %></span>
+                      <span :if={entry.sub_issue} class="muted">now <%= entry.sub_issue.issue_identifier %> (<%= entry.sub_issue.state %>)</span>
+                    </div>
+                  </td>
+                  <td><%= ForcedStatus.phase_label(entry.phase) %></td>
+                  <td><%= ForcedStatus.waiting_label(entry) %></td>
+                  <td>
+                    <span class="numeric"><%= ForcedStatus.duration_label(entry.forced_for_seconds) %></span>
+                    <span :if={entry.stale} class="state-badge state-badge-danger">Stale</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </section>
 
         <section class="section-card">
@@ -507,9 +553,9 @@ defmodule SymphonyElixirWeb.DashboardLive do
                     <td>
                       <div class="issue-stack">
                         <%= if entry.url do %>
-                          <a class="issue-id" href={entry.url} target="_blank" rel="noreferrer" title={entry.title}><%= entry.issue_identifier %></a>
+                          <a class="issue-id" href={entry.url} target="_blank" rel="noreferrer" title={entry.title}><.forced_marker forced={entry.forced} /><%= entry.issue_identifier %></a>
                         <% else %>
-                          <span class="issue-id" title={entry.title}><%= entry.issue_identifier %></span>
+                          <span class="issue-id" title={entry.title}><.forced_marker forced={entry.forced} /><%= entry.issue_identifier %></span>
                         <% end %>
                         <.repo_chip repo={repo_label(entry)} />
                         <span :if={entry.run_kind == :pr || entry.run_kind == "pr"} class="repo-chip repo-chip-pr">
@@ -798,7 +844,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
                   <tr :for={entry <- @visible_payload.retrying}>
                     <td>
                       <div class="issue-stack">
-                        <span class="issue-id" title={entry.title}><%= entry.issue_identifier %></span>
+                        <span class="issue-id" title={entry.title}><.forced_marker forced={entry.forced} /><%= entry.issue_identifier %></span>
                         <.repo_chip repo={repo_label(entry)} />
                         <a class="issue-link" href={"/api/v1/#{entry.issue_identifier}"}>JSON details</a>
                       </div>
@@ -1031,6 +1077,15 @@ defmodule SymphonyElixirWeb.DashboardLive do
     </span>
     """
   end
+
+  defp forced_marker(assigns) do
+    ~H"""
+    <span :if={@forced} class="forced-marker" title="Forced" aria-label="Forced">⚡</span>
+    """
+  end
+
+  defp forced_max(%{concurrency: %{forced_max: forced_max}}), do: forced_max
+  defp forced_max(_payload), do: Config.settings!().agent.forced_max
 
   defp conflict_repos(%{repo_keys: repos}) when is_list(repos), do: repos
   defp conflict_repos(_entry), do: []

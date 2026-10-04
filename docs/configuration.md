@@ -464,9 +464,20 @@ agent:
   restarts); a ticket labelled in another state, such as `Backlog` or `In Review`, joins once it
   moves into an active state. Once queued it stays listed in any non-terminal state (`In Review`,
   `Merging`, ...). `/api/v1/state` lists the forced tickets (`forced`), earliest first with their
-  queue `position`. A ticket leaves the list at the next poll after the label is removed, it
-  reaches a terminal state, or Linear no longer returns it. The audit log records `forced_start` and `forced_end` (with
-  `reason`: `label_removed`, `terminal` or `missing`).
+  queue `position`, `forced_for_seconds`, `stale`, a `phase` (`implementation`, `rework`,
+  `review_feedback`, `ci_fix`, `waiting_on_ci`, `auto_review`, `waiting_for_human`, `landing`,
+  `breakdown`, `close_out`, `final_verification`), whether an agent or QA pass is `running` for it,
+  what it `waiting_on` (`slot`, `human`, `ci`, `blocker` with the open `blockers`' identifiers,
+  `usage_limit`, `paused`, `backlog`, or null) and a one-line `summary` such as
+  `implementation · running` or `implementation · waiting on blocker TP-12`. A forced `breakdown`
+  parent's phase is its current part's. The terminal and web dashboards show a "Forced" section
+  above the running agents (identifier, phase, waiting on, forced for), a ⚡ on forced rows elsewhere,
+  and the forced count over `forced_max` in the header. When a forced ticket enters `In Review`
+  (for a `breakdown` parent, its plan), Symphony sends a `forced_human_gate` notification saying it
+  is waiting for your review, again each time it comes back to `In Review`. A ticket leaves the list
+  at the next poll after the label is removed, it reaches a terminal state, or Linear no longer
+  returns it; one that reaches a terminal state has the label removed by Symphony. The audit log
+  records `forced_start` and `forced_end` (with `reason`: `label_removed`, `done` or `missing`).
   `symphony force TP-123` adds the label through the running Symphony and `symphony force --clear TP-123`
   removes it; either way the queue changes at once, without waiting for a poll (see the README).
 - `concurrency.forced_max` (default: `1`) is how many forced runs may run at once on their own
@@ -499,8 +510,9 @@ agent:
   `forced[].waiting_on_human: true` (as is any forced ticket in `Backlog`, `Triage` or `In Review`).
   Forcing a sub-ticket itself forces only that sub-ticket.
 - `concurrency.forced_stale_after_hours` (default: `72`) is how long a ticket may stay forced before
-  it counts as stale. It is validated now but not reported yet. Values below `1` fail
-  `symphony check`.
+  it counts as stale: `/api/v1/state` marks it `stale: true`, the dashboards flag it, and Symphony
+  logs a warning and sends one `forced_stale` notification (once per forced ticket, also across
+  restarts). Values below `1` fail `symphony check`.
 - Dispatch goes forced tickets first, then closest to done: `Merging`, Auto Review, `Rework`,
   resumes such as `In Progress`, then `Todo`; priority and age only break ties within a stage.
   While a `Merging` ticket waits for a finishing slot, or a QA pass is queued because
