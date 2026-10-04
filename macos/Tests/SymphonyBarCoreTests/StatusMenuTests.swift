@@ -75,6 +75,18 @@ final class StatusMenuTests: XCTestCase {
         XCTAssertEqual(StatusMenu.detailLines(.error("Symphony exited with status 1")), ["Symphony exited with status 1"])
     }
 
+    func testDetailLinesSayHowManyTicketsAnUpdateWouldUnblock() {
+        let held = StateSnapshot(running: 2, retrying: 1, updateUnblocks: 2)
+
+        XCTAssertEqual(
+            StatusMenu.detailLines(.running(held, external: false)),
+            ["2 running · 1 retrying", "Update to unblock 2 tickets"]
+        )
+        XCTAssertEqual(StatusMenu.updateUnblocksLine(1), "Update to unblock 1 ticket")
+        XCTAssertNil(StatusMenu.updateUnblocksLine(0))
+        XCTAssertNil(StatusMenu.updateUnblocksLine(-1))
+    }
+
     func testDetailLinesEndWithTheControlError() {
         XCTAssertEqual(
             StatusMenu.detailLines(.running(snapshot, external: false), controlError: "Couldn't pause Symphony: HTTP 500"),
