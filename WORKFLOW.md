@@ -93,10 +93,11 @@ You are working on a Linear ticket `{{ issue.identifier }}`
   `MIX_ARCHIVES` to the agent so Hex and Rebar resolve, and points `HEX_HOME`,
   `ELIXIR_MAKE_CACHE_DIR` and Dialyzer's core PLTs at a cache folder your
   sandbox may write (`SYMPHONY_AGENT_CACHE_DIR`). Don't set them yourself. The
-  test suite keeps MCP socket dirs under a short writable `TMPDIR`. Only when
-  `TMPDIR` is long and `/tmp` is not writable, set `SYMPHONY_MCP_SOCKET_ROOT`
-  to a short writable path (the resulting `<root>/symphony-mcp-<id>/sock` must
-  fit the 104-byte Unix `sun_path` limit).
+  test suite keeps MCP socket dirs under a writable `TMPDIR`.
+- Your `$TMPDIR` is private to this run (`/tmp/symphony-run-<hash>`), so other
+  concurrent runs never write to it: use it directly for scratch files, without
+  ad-hoc subfolders to avoid collisions. Symphony removes it when the run
+  succeeds.
 - Never run CPU, memory or disk load generators or stress tools on the host:
   no `yes`, busy loops (one per core or otherwise), `stress`, or parallel test
   floods. The machine is shared with other agent runs, QA passes and workspace
