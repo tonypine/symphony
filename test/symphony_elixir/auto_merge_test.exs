@@ -51,6 +51,9 @@ defmodule SymphonyElixir.AutoMergeTest do
     @spec update_branch(String.t(), String.t(), keyword()) :: :ok | {:error, term()}
     def update_branch(pr_url, head_sha, _opts), do: reply(:update_branch, {:update_branch, pr_url, head_sha})
 
+    @spec disable_auto_merge(String.t(), String.t(), keyword()) :: :ok | {:error, term()}
+    def disable_auto_merge(pr_url, pr_node_id, _opts), do: reply(:disable_auto_merge, {:disable_auto_merge, pr_url, pr_node_id})
+
     @spec fetch_ci_status(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
     def fetch_ci_status(_pr_url, _opts) do
       case Application.get_env(:symphony_elixir, :auto_merge_test_ci_status, {:error, :no_status}) do
@@ -81,6 +84,15 @@ defmodule SymphonyElixir.AutoMergeTest do
           ] do
         Application.delete_env(:symphony_elixir, key)
       end
+    end)
+
+    previous_audit_dir = Application.get_env(:symphony_elixir, :audit_log_dir)
+    audit_dir = Path.join(System.tmp_dir!(), "symphony-auto-merge-audit-#{System.unique_integer([:positive])}")
+    Application.put_env(:symphony_elixir, :audit_log_dir, audit_dir)
+
+    on_exit(fn ->
+      Application.put_env(:symphony_elixir, :audit_log_dir, previous_audit_dir)
+      File.rm_rf(audit_dir)
     end)
 
     write_auto_merge_workflow!()
@@ -268,35 +280,115 @@ defmodule SymphonyElixir.AutoMergeTest do
     assert_received {:update_branch, @pr_url, "head-1"}
   end
 
-  test "a CONFLICTING PR goes to In Progress through the conflict path" do
+  test "a CONFLICTING PR has auto-merge turned off before the conflict-fix run, and lands only after a fresh approval" do
+    now = ~U[2026-10-03 12:00:00Z]
+    put_run!(now)
+    track([issue("Merging")])
+    activity(head: "head-1", merge_state: "BLOCKED")
+    assert {:ok, %{actions: [{:auto_merge, @issue_id, "enabled"}]}} = poll(now)
+    assert_received {:enable_auto_merge, @pr_url, %{head_sha: "head-1"}}
+
+    activity(head: "head-1", mergeable: "CONFLICTING", merge_state: "DIRTY", auto_merge_enabled: true)
+
+    log = capture_log(fn -> assert {:ok, %{actions: [{:state_transitioned, @issue_id, :conflict, "In Progress"}]}} = poll(DateTime.add(now, 30)) end)
+
+    # Auto-merge goes off, and the ticket hears why, before the move to In Progress dispatches the fix run.
+    assert [
+             {:disable_auto_merge, @pr_url, "PR_node"},
+             {:issue_comment, @issue_id, comment},
+             {:issue_state_update, @issue_id, "In Progress"}
+           ] = mailbox()
+
+    assert comment =~ "turned off GitHub auto-merge on #{@pr_url} because it conflicts with the base branch"
+    assert comment =~ "moving this ticket to Merging again turns auto-merge back on"
+    assert log =~ "Auto-merge ACME-1780: turned GitHub auto-merge off because the PR conflicts with the base branch"
+    assert log =~ "Auto-merge ACME-1780: blocked: conflict on `head-1`; auto-merge off until the fix is approved again"
+    assert %{head_sha: "head-1", conflict_key: "head-1|base-1"} = PrReviewPoller.pending_pr_conflict(@issue_id)
+    assert %{state: "conflict", enabled_head_sha: nil, disabled_at: disabled_at} = PrReviewPoller.auto_merge(@issue_id)
+    assert DateTime.compare(disabled_at, DateTime.add(now, 30)) == :eq
+
+    assert [%{"reason" => "conflict", "head_sha" => "head-1", "pr_url" => @pr_url, "issue_identifier" => "ACME-1780"}] =
+             audit_events("auto_merge_disabled")
+
+    # The fix run pushes head-2, CI goes green and the ticket is back in review: nothing turns auto-merge on.
+    track([issue("In Review")])
+    activity(head: "head-2", merge_state: "BLOCKED")
+    assert {:ok, %{actions: [{:watching, @issue_id}]}} = poll(DateTime.add(now, 60))
+    assert mailbox() == []
+
+    # A fresh approval into Merging turns it on again for the reviewed head.
+    track([issue("Merging")])
+    assert {:ok, %{actions: [{:auto_merge, @issue_id, "enabled"}]}} = poll(DateTime.add(now, 90))
+    assert_received {:enable_auto_merge, @pr_url, %{head_sha: "head-2"}}
+    assert %{state: "enabled", enabled_head_sha: "head-2", disabled_at: nil} = PrReviewPoller.auto_merge(@issue_id)
+  end
+
+  test "a conflicting Merging PR with auto-merge already off gets no disable call or comment" do
+    now = ~U[2026-10-03 12:00:00Z]
+    put_run!(now)
+    track([issue("Merging")])
+    activity(head: "head-1", mergeable: "CONFLICTING", merge_state: "DIRTY")
+
+    assert {:ok, %{actions: [{:state_transitioned, @issue_id, :conflict, "In Progress"}]}} = poll(now)
+    assert [{:issue_state_update, @issue_id, "In Progress"}] = mailbox()
+    assert %{state: "conflict", disabled_at: nil} = PrReviewPoller.auto_merge(@issue_id)
+    assert audit_events("auto_merge_disabled") == []
+  end
+
+  test "while auto-merge can't be turned off the conflict-fix run waits, and a failed comment doesn't hold it" do
     now = ~U[2026-10-03 12:00:00Z]
     put_run!(now)
     track([issue("Merging")])
     activity(head: "head-1", mergeable: "CONFLICTING", merge_state: "DIRTY", auto_merge_enabled: true)
+    replies(%{disable_auto_merge: {:error, :forbidden}})
 
-    log = capture_log(fn -> assert {:ok, %{actions: [{:state_transitioned, @issue_id, :conflict, "In Progress"}]}} = poll(now) end)
+    log =
+      capture_log(fn ->
+        assert {:ok, %{actions: [{:poll_error, @issue_id, {:disable_auto_merge_failed, :forbidden}}]}} = poll(now)
+      end)
 
-    assert_received {:issue_state_update, @issue_id, "In Progress"}
-    refute_received {:update_branch, _url, _head}
-    assert log =~ "Auto-merge ACME-1780: blocked: conflict on `head-1`"
-    assert %{head_sha: "head-1", conflict_key: "head-1|base-1"} = PrReviewPoller.pending_pr_conflict(@issue_id)
-    assert %{state: "conflict"} = PrReviewPoller.auto_merge(@issue_id)
+    assert [{:disable_auto_merge, @pr_url, "PR_node"}] = mailbox()
+    assert log =~ "turning GitHub auto-merge off for the merge conflict failed; the conflict fix waits until it is off"
+    assert PrReviewPoller.pending_pr_conflict(@issue_id) == nil
+
+    replies(%{})
+    Application.put_env(:symphony_elixir, :auto_merge_test_comment_result, {:error, :linear_down})
+
+    log = capture_log(fn -> assert {:ok, %{actions: [{:state_transitioned, @issue_id, :conflict, "In Progress"}]}} = poll(DateTime.add(now, 30)) end)
+
+    assert [
+             {:disable_auto_merge, @pr_url, "PR_node"},
+             {:issue_comment, @issue_id, _comment},
+             {:issue_state_update, @issue_id, "In Progress"}
+           ] = mailbox()
+
+    assert log =~ "Failed to comment that auto-merge was turned off for a conflict"
   end
 
-  test "an update-branch conflict goes to In Progress through the conflict path" do
+  test "an update-branch conflict turns off the auto-merge this poll turned on, then goes to In Progress" do
     now = ~U[2026-10-03 12:00:00Z]
     put_run!(now)
     track([issue("Merging")])
-    activity(head: "head-1", merge_state: "BEHIND", auto_merge_enabled: true)
+    activity(head: "head-1", merge_state: "BEHIND")
     replies(%{update_branch: {:error, :conflict}})
 
     assert {:ok, %{actions: [{:state_transitioned, @issue_id, :conflict, "In Progress"}]}} = poll(now)
-    assert_received {:issue_state_update, @issue_id, "In Progress"}
-    assert %{mergeable: "CONFLICTING", conflict_key: "head-1|base-1"} = PrReviewPoller.pending_pr_conflict(@issue_id)
-    assert %{state: "conflict", update_branch_head_sha: "head-1"} = PrReviewPoller.auto_merge(@issue_id)
 
-    # The same conflict was already sent to an agent: the record only notes it.
-    assert {:ok, %{actions: [{:auto_merge, @issue_id, "conflict"}]}} = poll(DateTime.add(now, 30))
+    assert [
+             {:enable_auto_merge, @pr_url, %{head_sha: "head-1"}},
+             {:update_branch, @pr_url, "head-1"},
+             {:disable_auto_merge, @pr_url, "PR_node"},
+             {:issue_comment, @issue_id, _comment},
+             {:issue_state_update, @issue_id, "In Progress"}
+           ] = mailbox()
+
+    assert %{mergeable: "CONFLICTING", conflict_key: "head-1|base-1"} = PrReviewPoller.pending_pr_conflict(@issue_id)
+    assert %{state: "conflict", update_branch_head_sha: "head-1", enabled_head_sha: nil} = PrReviewPoller.auto_merge(@issue_id)
+
+    # The fix run owns it now: the poller only watches.
+    track([issue("In Progress")])
+    assert {:ok, %{actions: [{:watching, @issue_id}]}} = poll(DateTime.add(now, 30))
+    assert mailbox() == []
   end
 
   test "a red head takes the CI-fix path with auto-merge still on and lands after the fix" do
@@ -521,6 +613,12 @@ defmodule SymphonyElixir.AutoMergeTest do
 
     assert AutoMerge.describe(%{state: "fallback", reason: "nope"}) == "fell back to the landing agent: nope"
     assert AutoMerge.describe(%{state: "conflict", head_sha: nil}) == "blocked: conflict on an unknown head"
+    assert AutoMerge.conflict_comment(nil) =~ "turned off GitHub auto-merge on this PR"
+
+    # GitHub shows auto-merge on, but the activity has no PR node id to turn it off with.
+    assert {:error, :missing_pr_node_id} =
+             AutoMerge.disable_for_conflict(%{}, %{auto_merge_enabled: true}, AutoMerge.conflict(nil, "h", now), [], now)
+
     assert AutoMerge.describe(nil) == nil
     assert AutoMerge.fallback_comment(nil, %{reason: "nope"}) =~ "couldn't land this PR"
     assert %{state: "merged", head_sha: nil} = AutoMerge.merged(nil, now)
@@ -602,6 +700,17 @@ defmodule SymphonyElixir.AutoMergeTest do
       last_observed_sha: "head-1",
       last_observed_conclusion: conclusion
     })
+  end
+
+  defp mailbox do
+    {:messages, messages} = Process.info(self(), :messages)
+    Enum.each(messages, fn message -> receive do: (^message -> :ok) end)
+    messages
+  end
+
+  defp audit_events(event_type) do
+    {:ok, events} = SymphonyElixir.AuditLog.query(event_type: event_type)
+    Enum.filter(events, &(&1["issue_id"] == @issue_id))
   end
 
   defp track(issues), do: Application.put_env(:symphony_elixir, :auto_merge_test_issues, issues)
