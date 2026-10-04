@@ -92,6 +92,11 @@ branch instead of opening a second one. If a claimed issue moves to a terminal s
   With Auto Review on, the final verification ticket is a QA pass over the merged parent: the report
   goes on the parent and each failing step becomes a new ticket that blocks the verification
   ticket, which waits in `Todo` and runs again once those tickets are done.
+- **Actions for a human** — when work waits on something only a person can do (a missing secret, a
+  plan to approve, a QA pass blocked on a permission, an issue labelled `human-action`), Symphony
+  posts a Linear project update listing each one with its steps, and posts again only when that list
+  changes. Agents add requests with `linear_request_human_action`; see `human_actions` in
+  [docs/configuration.md](docs/configuration.md).
 - **Executor + reviewer runs** — an optional read-only reviewer agent gates the executor's push.
 - **Docker runner** — host Symphony with mounted repos, state, logs, and agent credentials.
 - **macOS menu bar app** — start, stop, pause, and resume Symphony from the menu bar, with its status in

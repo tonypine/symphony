@@ -554,22 +554,36 @@ defmodule SymphonyElixir.Linear.Client do
   defp do_fetch_repo_by_states(repo, state_names, tracker, opts \\ []) do
     graphql_fun = Keyword.get(opts, :graphql_fun, &graphql/2)
 
+    with {:ok, filter} <- repo_issue_filter(repo, tracker, state_names, graphql_fun) do
+      do_fetch_by_states_page(filter, nil, [], graphql_fun)
+    end
+  end
+
+  @doc """
+  The issue filter a repo route polls with (team, project, labels and assignee), without a state
+  clause, for callers that query the same scope with their own conditions.
+  """
+  @spec repo_scope_filter(term()) :: {:ok, map()} | {:error, term()}
+  def repo_scope_filter(repo) do
+    with {:ok, context} <- repo_poll_context() do
+      repo_issue_filter(repo, context.tracker, nil, &graphql/2)
+    end
+  end
+
+  defp repo_issue_filter(repo, tracker, state_names, graphql_fun) do
     with {:ok, assignee_filter} <- repo_assignee_filter(repo, tracker, graphql_fun) do
-      assignee_ids = assignee_filter_ids(assignee_filter)
       {labels, label_mode} = effective_labels(repo, tracker)
 
-      filter =
-        build_issue_filter(
-          state_names: state_names,
-          project_slug: effective_project_slug(repo, tracker),
-          projects: repo_projects(repo),
-          team: effective_team(repo, tracker),
-          labels: labels,
-          label_mode: label_mode,
-          assignee_ids: assignee_ids
-        )
-
-      do_fetch_by_states_page(filter, nil, [], graphql_fun)
+      {:ok,
+       build_issue_filter(
+         state_names: state_names,
+         project_slug: effective_project_slug(repo, tracker),
+         projects: repo_projects(repo),
+         team: effective_team(repo, tracker),
+         labels: labels,
+         label_mode: label_mode,
+         assignee_ids: assignee_filter_ids(assignee_filter)
+       )}
     end
   end
 

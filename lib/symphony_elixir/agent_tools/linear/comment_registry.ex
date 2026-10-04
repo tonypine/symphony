@@ -79,6 +79,20 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
   @spec release_project_update(pid()) :: :ok
   def release_project_update(pid) when is_pid(pid), do: release(pid, :project_updates)
 
+  @doc """
+  Atomically claims one of the run's `cap` human-action request slots, refusing without a registry
+  like `reserve_subissue/2`.
+  """
+  @spec reserve_human_action(pid() | nil, pos_integer()) :: :ok | {:error, term()}
+  def reserve_human_action(pid, cap) when is_pid(pid) and is_integer(cap),
+    do: reserve(pid, :human_actions, cap, :human_action_cap_reached)
+
+  def reserve_human_action(_pid, _cap), do: {:error, :human_action_registry_unavailable}
+
+  @doc "Gives back a slot claimed by `reserve_human_action/2` when no request was posted."
+  @spec release_human_action(pid()) :: :ok
+  def release_human_action(pid) when is_pid(pid), do: release(pid, :human_actions)
+
   defp reserve(pid, counter, cap, cap_error) do
     Agent.get_and_update(pid, fn state ->
       count = Map.get(state, counter, 0)
