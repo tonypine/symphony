@@ -435,6 +435,10 @@ defmodule SymphonyElixir.Config.Schema do
       field(:strategy, :string, default: "clone")
       field(:repo, :string)
       field(:fetch_before_dispatch, :boolean, default: true)
+      # `owner/repo` of a repo Symphony clones itself (`repositories[].workspace.source`);
+      # `repo` then points at that clone under `clones_root`.
+      field(:github, :string)
+      field(:clones_root, :string)
       embeds_one(:attachments, Attachments, on_replace: :update, defaults_to_struct: true)
       embeds_one(:sandbox, Sandbox, on_replace: :update, defaults_to_struct: true)
       embeds_one(:lifecycle, Lifecycle, on_replace: :update, defaults_to_struct: true)
@@ -443,7 +447,7 @@ defmodule SymphonyElixir.Config.Schema do
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
       schema
-      |> cast(attrs, [:root, :strategy, :repo, :fetch_before_dispatch], empty_values: [])
+      |> cast(attrs, [:root, :strategy, :repo, :fetch_before_dispatch, :github, :clones_root], empty_values: [])
       |> cast_embed(:attachments, with: &Attachments.changeset/2)
       |> cast_embed(:sandbox, with: &Sandbox.changeset/2)
       |> cast_embed(:lifecycle, with: &Lifecycle.changeset/2)

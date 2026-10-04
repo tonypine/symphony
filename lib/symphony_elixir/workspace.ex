@@ -4,7 +4,7 @@ defmodule SymphonyElixir.Workspace do
   """
 
   require Logger
-  alias SymphonyElixir.{Config, PathSafety, ProcessTree, SSH, WorkflowSource}
+  alias SymphonyElixir.{Config, ManagedClone, PathSafety, ProcessTree, SSH, WorkflowSource}
   alias SymphonyElixir.Config.Schema.Hooks
   alias SymphonyElixir.GitHub.Repo, as: GitHubRepo
 
@@ -224,10 +224,11 @@ defmodule SymphonyElixir.Workspace do
 
   defp ensure_worktree_workspace(workspace, issue_context, nil, settings) do
     with {:ok, repo} <- local_worktree_repo(settings),
-         :ok <- maybe_fetch_worktree_repo(repo, settings),
+         :ok <- prepare_worktree_repo(repo, issue_context, settings),
          branch = worktree_branch(issue_context),
          base_ref = worktree_base_ref(issue_context),
          create_base_ref = worktree_create_base_ref(repo, issue_context, base_ref),
+         create_base_ref = create_base_ref || managed_clone_base_ref(repo, branch, settings),
          active_workspaces = issue_context.active_workspaces,
          {:ok, created?} <-
            add_or_reuse_local_worktree(repo, workspace, branch, base_ref, create_base_ref, active_workspaces) do
@@ -341,6 +342,23 @@ defmodule SymphonyElixir.Workspace do
       {:error, :missing_workspace_repo}
     end
   end
+
+  # A `workspace.source` repo is Symphony's own clone: it is made again if it is
+  # missing and fetched (when `fetch_before_dispatch` is on), under a per-clone lock.
+  defp prepare_worktree_repo(repo, issue_context, %{workspace: %{github: github} = workspace}) when is_binary(github) do
+    ManagedClone.sync(issue_context.repo_key, github, repo, fetch: workspace.fetch_before_dispatch)
+  end
+
+  defp prepare_worktree_repo(repo, _issue_context, settings), do: maybe_fetch_worktree_repo(repo, settings)
+
+  # The clone's local default branch is never updated by a fetch, so with no
+  # `base_branch` a new branch starts from the fetched `origin/HEAD`. An existing
+  # branch is checked out as it is, as for a local checkout.
+  defp managed_clone_base_ref(repo, branch, %{workspace: %{github: github}}) when is_binary(github) do
+    if not git_branch_exists?(repo, branch) and git_ref_exists?(repo, "origin/HEAD"), do: "origin/HEAD"
+  end
+
+  defp managed_clone_base_ref(_repo, _branch, _settings), do: nil
 
   defp maybe_fetch_worktree_repo(repo, settings) do
     case settings.workspace.fetch_before_dispatch do
