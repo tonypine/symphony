@@ -474,6 +474,7 @@ Allowed repo-local front matter keys:
 - `verification`
 - `validation`
 - `auto_review`, with only its `playbooks` key
+- `human_actions`, with only its `enabled` key
 
 Unknown repo workflow keys, and `auto_review` keys other than `playbooks`, are rejected with an
 error that directs the operator to move operator-owned configuration to `symphony.yml`.
@@ -482,7 +483,7 @@ error that directs the operator to move operator-owned configuration to `symphon
 
 Unless explicitly called out as repo-local, fields in this section live in `symphony.yml` and become
 part of the merged runtime config. Repo-local front matter contributes `hooks`, `push_check`,
-`verification` and `auto_review.playbooks` values to the runtime settings for that repo. Nested
+`verification`, `auto_review.playbooks` and `human_actions.enabled` values to the runtime settings for that repo. Nested
 repo-local maps are merged over the operator config so repos can override only their dev-server
 command while inheriting process-wide verification defaults such as port allocation, or only one
 playbook's settings while inheriting the operator's other playbooks.
