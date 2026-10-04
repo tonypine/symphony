@@ -66,20 +66,26 @@ defmodule SymphonyElixir.CLI do
     end
   end
 
-  @spec halt({:halt, non_neg_integer()} | {:error, String.t()} | {:error, String.t(), non_neg_integer()}) ::
-          no_return()
-  defp halt({:halt, code}) do
+  defp halt(result), do: result |> finish() |> System.halt()
+
+  @doc """
+  Prints the error of a command that ended, writes out the log file, and
+  returns the exit status for `System.halt/1`.
+  """
+  @spec finish({:halt, non_neg_integer()} | {:error, String.t()} | {:error, String.t(), non_neg_integer()}) ::
+          non_neg_integer()
+  def finish({:halt, code}) do
     LogFile.flush()
-    System.halt(code)
+    code
   end
 
-  defp halt({:error, message, code}) do
+  def finish({:error, message, code}) do
     IO.puts(:stderr, message)
     LogFile.flush()
-    System.halt(code)
+    code
   end
 
-  defp halt({:error, message}), do: halt({:error, message, 1})
+  def finish({:error, message}), do: finish({:error, message, 1})
 
   @spec evaluate([String.t()], deps()) ::
           :ok | {:halt, non_neg_integer()} | {:error, String.t()} | {:error, String.t(), non_neg_integer()}

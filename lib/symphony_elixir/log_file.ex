@@ -37,6 +37,10 @@ defmodule SymphonyElixir.LogFile do
   def flush do
     _ = :logger_disk_log_h.filesync(@handler_id)
     :ok
+  catch
+    # `filesync` exits with `noproc` when the handler is not installed, as in
+    # `symphony check` and `symphony init`, which never set up the log file.
+    :exit, _reason -> :ok
   end
 
   defp setup_disk_handler(log_file, max_bytes, max_files) do
