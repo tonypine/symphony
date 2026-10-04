@@ -915,6 +915,16 @@ defmodule SymphonyElixir.QaAndroid.Driver do
   # Recorded before the setting is changed, so a change that half went through is reset too.
   def handle_call({:changed, setting}, _from, state), do: {:reply, :ok, %{state | changed: Enum.uniq([setting | state.changed])}}
 
+  # The driver traps exits, so every adb port it opens sends an `:EXIT` when it closes.
+  # The QA pass that owns the driver is its parent: GenServer stops on its exit itself.
+  @impl true
+  def handle_info({:EXIT, port, _reason}, state) when is_port(port), do: {:noreply, state}
+
+  def handle_info(message, state) do
+    Logger.error("Android QA driver received unexpected message=#{inspect(message)}")
+    {:noreply, state}
+  end
+
   @impl true
   def terminate(_reason, %{config: config} = state) do
     if config.lease do
