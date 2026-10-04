@@ -2858,15 +2858,13 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     put_running_run!(issue, run_id, started_at, %{session_id: "thread-stop-turn-slow"})
     put_running_entry(pid, issue, running_entry)
 
-    started_ms = System.monotonic_time(:millisecond)
-
     assert {:ok, %{stopped: true}} = Orchestrator.stop_running(orchestrator_name, issue.identifier)
 
-    elapsed_ms = System.monotonic_time(:millisecond) - started_ms
-    assert elapsed_ms < 1_000
-    assert_receive {:slow_stop_session_started, cleanup_pid}
+    # The cleanup is still waiting for its release, so stop_running did not wait on it.
+    assert_receive {:slow_stop_session_started, cleanup_pid}, 5_000
+    assert {:current_function, {SlowStopSessionAgent, :stop_session, 1}} = Process.info(cleanup_pid, :current_function)
     send(cleanup_pid, :release_slow_stop_session)
-    assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}
+    assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}, 5_000
 
     assert [%{run_id: ^run_id, status: "stopped", error: "agent stopped by operator"}] =
              RunStore.list_runs()
@@ -3917,15 +3915,17 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       if Process.alive?(restarted_pid), do: stop_process(restarted_pid)
     end)
 
+    # Let the boot poll cycle finish, then run one more to its end. The orchestrator
+    # emits notifications while it applies a poll's result, before this returns.
+    wait_for_poll_cycle_idle(restarted_pid)
     send(restarted_pid, :run_poll_cycle)
-    Process.sleep(50)
+    wait_for_poll_cycle_idle(restarted_pid)
 
-    refute_receive {:notification_event,
-                    %SymphonyElixir.Notifications.Event{
-                      event: "issue_completed",
-                      issue_identifier: ^issue_identifier
-                    }},
-                   100
+    refute_received {:notification_event,
+                     %SymphonyElixir.Notifications.Event{
+                       event: "issue_completed",
+                       issue_identifier: ^issue_identifier
+                     }}
 
     state = get_orchestrator_state(restarted_pid)
     refute Map.has_key?(state.completed_run_metadata, issue_id)
@@ -4235,12 +4235,15 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       )
 
     marker = Path.join(workspace_root, "after_run.marker")
+    release = Path.join(workspace_root, "after_run.release")
 
+    # The hook runs until the test creates the release file (or on_exit removes the
+    # workspace root), so the test, not the clock, decides how long cleanup takes.
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_api_token: nil,
       workspace_root: workspace_root,
       agent_stall_timeout_ms: 0,
-      hook_after_run: "sleep 1; printf after >> #{marker}",
+      hook_after_run: "while [ -d #{workspace_root} ] && [ ! -e #{release} ]; do sleep 0.1; done; printf after >> #{marker}",
       watchdog: %{enabled: true, tick_interval_ms: 60_000, no_progress_threshold_ms: 1_000}
     )
 
@@ -4296,17 +4299,22 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert :ok = SymphonyElixir.Notifications.subscribe()
 
     send(pid, :watchdog_tick)
-    snapshot_started_at_ms = System.monotonic_time(:millisecond)
 
-    assert_receive :agent_stop_session_called
-    assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}
+    assert_receive :agent_stop_session_called, 5_000
+    assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}, 5_000
 
     assert %{running: [], retrying: [%{issue_id: "issue-watchdog-stuck"}]} =
-             wait_for_snapshot(pid, fn snapshot ->
-               snapshot.running == [] and length(snapshot.retrying) == 1
-             end)
+             wait_for_snapshot(
+               pid,
+               fn snapshot ->
+                 snapshot.running == [] and length(snapshot.retrying) == 1
+               end,
+               5_000
+             )
 
-    assert System.monotonic_time(:millisecond) - snapshot_started_at_ms < 800
+    # The after_run hook is still waiting for its release, so the restart did not wait on it.
+    refute File.exists?(marker)
+    File.write!(release, "")
 
     state = get_orchestrator_state(pid)
 
@@ -4319,7 +4327,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
            } = state.retry_attempts[issue.id]
 
     assert elapsed_ms >= 1_000
-    assert wait_for_file_contents(marker, "after", 1_500)
+    assert wait_for_file_contents(marker, "after", 10_000)
 
     assert %{status: "timeout", error: "stuck for " <> _} =
              wait_for_run_record(&(&1.run_id == run_id))
@@ -4342,7 +4350,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       tracker_kind: "memory",
       tracker_api_token: nil,
       agent_stall_timeout_ms: 0,
-      watchdog: %{enabled: true, tick_interval_ms: 60_000, no_progress_threshold_ms: 1_000}
+      watchdog: %{enabled: true, tick_interval_ms: 60_000, no_progress_threshold_ms: 60_000}
     )
 
     issue = %Issue{
@@ -4365,8 +4373,8 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     end)
 
     {worker_pid, worker_ref} = start_blocked_worker()
-    started_at = DateTime.add(DateTime.utc_now(), -5, :second)
-    old_event_at = DateTime.add(DateTime.utc_now(), -5, :second)
+    started_at = DateTime.add(DateTime.utc_now(), -120, :second)
+    old_event_at = DateTime.add(DateTime.utc_now(), -120, :second)
     run_id = "run-watchdog-fresh"
 
     running_entry =
@@ -4387,8 +4395,8 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     send(pid, {:codex_worker_update, issue.id, update})
     send(pid, :watchdog_tick)
-    Process.sleep(50)
 
+    # The orchestrator handles both messages before it answers this.
     state = get_orchestrator_state(pid)
     assert Map.has_key?(state.running, issue.id)
     refute Map.has_key?(state.retry_attempts, issue.id)
@@ -4438,8 +4446,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     put_running_entry(pid, issue, running_entry)
 
     send(pid, :watchdog_tick)
-    Process.sleep(50)
-
     state = get_orchestrator_state(pid)
     assert Map.has_key?(state.running, issue.id)
     refute Map.has_key?(state.retry_attempts, issue.id)
@@ -4499,13 +4505,12 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       |> Map.put(:claimed, MapSet.put(initial_state.claimed, issue_id))
     end)
 
-    tick_sent_at_ms = System.monotonic_time(:millisecond)
-    send(pid, :tick)
-    Process.sleep(100)
-    state = get_orchestrator_state(pid)
+    checked_from_ms = System.monotonic_time(:millisecond)
+    state = run_stall_check(pid)
+    checked_by_ms = System.monotonic_time(:millisecond)
 
     refute Process.alive?(worker_pid)
-    assert_receive :agent_stop_session_called
+    assert_receive :agent_stop_session_called, 5_000
     refute Map.has_key?(state.running, issue_id)
 
     assert %{
@@ -4515,21 +4520,21 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
              error: "stalled for " <> _
            } = state.retry_attempts[issue_id]
 
+    # The first failure retry backs off 10 s from when the stall check ran.
     assert is_integer(due_at_ms)
-    assert due_at_ms >= tick_sent_at_ms + 9_000
-    assert due_at_ms <= tick_sent_at_ms + 10_500
+    assert (due_at_ms - 10_000) in checked_from_ms..checked_by_ms
 
     send(pid, :watchdog_tick)
-    Process.sleep(50)
 
     assert %{attempt: 1, error: "stalled for " <> _} = get_orchestrator_state(pid).retry_attempts[issue_id]
   end
 
   test "a workspace hook holds the first-turn stall check and the watchdog until its own deadline" do
+    # A minute on both clocks, so a check that runs late still sees a hook that just ended as recent.
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_api_token: nil,
-      agent_stall_timeout_ms: 1_000,
-      watchdog: %{enabled: true, tick_interval_ms: 60_000, no_progress_threshold_ms: 1_000}
+      agent_stall_timeout_ms: 60_000,
+      watchdog: %{enabled: true, tick_interval_ms: 60_000, no_progress_threshold_ms: 60_000}
     )
 
     issue_id = "issue-hook-stall"
@@ -4543,7 +4548,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     end)
 
     {worker_pid, worker_ref} = start_blocked_worker()
-    dispatched_at = DateTime.add(DateTime.utc_now(), -5, :second)
+    dispatched_at = DateTime.add(DateTime.utc_now(), -120, :second)
     initial_state = get_orchestrator_state(pid)
 
     running_entry = %{
@@ -4570,9 +4575,8 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     end)
 
     reconcile = fn ->
-      send(pid, :tick)
+      run_stall_check(pid)
       send(pid, :watchdog_tick)
-      Process.sleep(100)
       get_orchestrator_state(pid)
     end
 
@@ -4594,11 +4598,9 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert Process.alive?(worker_pid)
 
     # A hook still running well past its own deadline is a stall.
-    overdue_hook = %{name: "after_create", deadline: DateTime.add(DateTime.utc_now(), -5, :second)}
+    overdue_hook = %{name: "after_create", deadline: DateTime.add(DateTime.utc_now(), -120, :second)}
     send(pid, {:worker_runtime_info, issue_id, %{workspace_hook: overdue_hook}})
-    send(pid, :tick)
-    Process.sleep(100)
-    state = get_orchestrator_state(pid)
+    state = run_stall_check(pid)
 
     refute Map.has_key?(state.running, issue_id)
     refute Process.alive?(worker_pid)
@@ -4646,7 +4648,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     put_running_entry(pid, issue, running_entry)
 
     send(pid, :watchdog_tick)
-    Process.sleep(50)
 
     assert Map.has_key?(get_orchestrator_state(pid).running, issue.id)
     assert Process.alive?(worker_pid)
@@ -4687,15 +4688,15 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       })
 
     put_running_entry(pid, issue, running_entry)
+    wait_sent_at = DateTime.utc_now()
     send(pid, {:linear_wait, issue.id, 60_000})
     send(pid, {:linear_wait, "issue-not-running", 60_000})
-    send(pid, :tick)
+    run_stall_check(pid)
     send(pid, :watchdog_tick)
-    Process.sleep(100)
 
     state = get_orchestrator_state(pid)
     assert %{linear_wait_until: %DateTime{} = wait_until} = state.running[issue.id]
-    assert DateTime.diff(wait_until, DateTime.utc_now(), :millisecond) > 55_000
+    assert DateTime.diff(wait_until, wait_sent_at, :millisecond) >= 60_000
     refute Map.has_key?(state.running, "issue-not-running")
     refute Map.has_key?(state.retry_attempts, issue.id)
     assert Process.alive?(worker_pid)
@@ -4835,7 +4836,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
         refute plain =~ "Orchestrator snapshot unavailable"
 
         StatusDashboard.notify_update(dashboard_name)
-        Process.sleep(25)
 
         # `symphony dashboard` gets the same view through the control API.
         assert {:ok, frame} = StatusDashboard.frame(140, dashboard_name)
@@ -6116,6 +6116,19 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
   end
 
   defp get_orchestrator_state(pid), do: :sys.get_state(pid, 15_000)
+
+  # Runs one poll cycle's first-turn stall check and returns the state right after it.
+  # `:tick` sends `:run_poll_cycle` only after a timer, and a cycle skips the check while
+  # an earlier cycle's repo poll is in flight, so wait that out and send the message here.
+  defp run_stall_check(pid) do
+    wait_for_poll_cycle_idle(pid)
+    send(pid, :run_poll_cycle)
+    get_orchestrator_state(pid)
+  end
+
+  defp wait_for_poll_cycle_idle(pid) do
+    wait_for_orchestrator_state(pid, &(is_nil(&1.repo_poll_task_ref) and not &1.poll_check_in_progress), 5_000)
+  end
 
   defp wait_for_orchestrator_state(pid, predicate, timeout_ms) when is_function(predicate, 1) do
     deadline_ms = System.monotonic_time(:millisecond) + timeout_ms
