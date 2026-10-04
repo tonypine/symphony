@@ -254,6 +254,47 @@ defmodule SymphonyElixir.AgentSandboxConfigTest do
     refute Map.has_key?(defaults, "allowWrite")
   end
 
+  describe "item_replacement_write_paths/1" do
+    setup do
+      root = Path.join(System.tmp_dir!(), "agent-sandbox-item-replacement-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(root)
+      on_exit(fn -> File.rm_rf(root) end)
+      %{root: root}
+    end
+
+    test "grants the TemporaryItems dir under the macOS per-user temp dir, in both path forms", %{root: root} do
+      real_temp_dir = Path.join(root, "private-T")
+      linked_temp_dir = Path.join(root, "T")
+      File.mkdir_p!(real_temp_dir)
+      File.ln_s!(real_temp_dir, linked_temp_dir)
+      getconf = fake_getconf!(root, "echo '#{linked_temp_dir}/'")
+
+      {:ok, canonical_temp_dir} = PathSafety.canonicalize(real_temp_dir)
+
+      assert AgentSandboxConfig.item_replacement_write_paths(os_type: {:unix, :darwin}, getconf: getconf) == [
+               Path.join(linked_temp_dir, "TemporaryItems"),
+               Path.join(canonical_temp_dir, "TemporaryItems")
+             ]
+    end
+
+    test "grants nothing when getconf fails", %{root: root} do
+      getconf = fake_getconf!(root, "echo 'getconf: no such configuration parameter' >&2; exit 1")
+
+      assert AgentSandboxConfig.item_replacement_write_paths(os_type: {:unix, :darwin}, getconf: getconf) == []
+    end
+
+    test "grants nothing off macOS" do
+      assert AgentSandboxConfig.item_replacement_write_paths(os_type: {:unix, :linux}) == []
+    end
+  end
+
+  defp fake_getconf!(root, body) do
+    path = Path.join(root, "getconf")
+    File.write!(path, "#!/bin/sh\n[ \"$1\" = DARWIN_USER_TEMP_DIR ] || exit 2\n#{body}\n")
+    File.chmod!(path, 0o755)
+    path
+  end
+
   test "Codex allowlist config denies sensitive reads and protects workflow files from writes" do
     workspace = "/repo/workspace"
     overrides = AgentSandboxConfig.codex_config_overrides("allowlist", ["github.com", "api.openai.com"], [], [], workspace: workspace)

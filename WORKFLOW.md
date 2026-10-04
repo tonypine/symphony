@@ -93,6 +93,17 @@ You are working on a Linear ticket `{{ issue.identifier }}`
   `TMPDIR` is long and `/tmp` is not writable, set `SYMPHONY_MCP_SOCKET_ROOT`
   to a short writable path (the resulting `<root>/symphony-mcp-<id>/sock` must
   fit the 104-byte Unix `sun_path` limit).
+- In the Claude sandbox, build and test a Swift package (`macos/`) with
+  `swift build --disable-sandbox --build-system native` and
+  `swift test --disable-sandbox --build-system native`.
+  `--disable-sandbox` skips SwiftPM's own `sandbox-exec`, which can't nest
+  inside the agent sandbox. `--build-system native` keeps `TMPDIR` for the
+  link step: the default Swift Build drops it there and fails with
+  `error: permissionDenied`. Symphony lets the sandbox write the per-user
+  `TemporaryItems` dir, where Foundation's atomic writes go. Ignore the
+  warnings about `~/Library/org.swift.swiftpm` caches and the
+  `--build-system native` deprecation. Plain `swiftc` still needs
+  `-module-cache-path <workspace dir>`.
 - Never run CPU, memory or disk load generators or stress tools on the host:
   no `yes`, busy loops (one per core or otherwise), `stress`, or parallel test
   floods. The machine is shared with other agent runs, QA passes and workspace
