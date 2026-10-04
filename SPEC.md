@@ -1208,10 +1208,11 @@ reviewer approval rather than send the executor a `request_changes` with no find
 approval prompt names the non-convergence reason, asks the executor to record it in the workpad and
 the PR body, and carries the last pass's findings, if any, as advisory notes. Symphony SHOULD log the
 reviewer's last findings when the correction rounds run out, and record a `review_agent_inconclusive`
-audit event with the issue, the review round and the reason. When every finding stays unverifiable after the re-quote turn, Symphony SHOULD instead approve
-the push without spending a correction round, attach those findings to the approval prompt as
-advisory notes, and record a `review_agent_unverified` audit event with the issue, the review round
-and the number of findings dropped.
+audit event with the issue, the review round and the reason. When every finding stays unverifiable
+after the re-quote turn, Symphony SHOULD instead approve the push without spending a correction
+round, attach those findings to the approval prompt as advisory notes, and record a
+`review_agent_unverified` audit event with the issue, the review round and the number of findings
+dropped.
 
 #### 5.4.17 `auto_review` (object)
 
