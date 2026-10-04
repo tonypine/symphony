@@ -116,6 +116,30 @@ defmodule SymphonyElixir.WorkspaceSafeGitTest do
     refute File.exists?(proof)
   end
 
+  test "safe_git_stdout returns stdout and stderr apart, with the safe overrides", %{test_root: test_root} do
+    repo = Path.join(test_root, "repo")
+    proof = Path.join(test_root, "SYMPHONY_STDOUT_PWNED")
+
+    File.mkdir_p!(repo)
+    git!(repo, ["init", "-b", "main"])
+    git!(repo, ["config", "user.name", "Test User"])
+    git!(repo, ["config", "user.email", "test@example.com"])
+    File.write!(Path.join(repo, "README.md"), "safe git\n")
+    git!(repo, ["add", "README.md"])
+    git!(repo, ["commit", "-m", "initial"])
+    git!(repo, ["config", "core.fsmonitor", "sh -c 'touch \"#{proof}\"'"])
+
+    File.rm(proof)
+
+    assert {"safe git\n", 0, ""} = Workspace.safe_git_stdout(["-C", repo, "show", "HEAD:README.md"])
+    assert {"", status, stderr} = Workspace.safe_git_stdout(["-C", repo, "show", "HEAD:missing.md"])
+    assert status != 0
+    assert stderr =~ "fatal: path 'missing.md' does not exist in 'HEAD'"
+
+    assert {_stdout, 0, _stderr} = Workspace.safe_git_stdout(["-C", repo, "status", "--short"])
+    refute File.exists?(proof)
+  end
+
   defp git!(repo, args) do
     case System.cmd("git", args, cd: repo, stderr_to_stdout: true) do
       {output, 0} -> output
