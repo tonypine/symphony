@@ -85,6 +85,9 @@ defmodule SymphonyElixir.AgentSandboxConfigTest do
              "./.claude/agents",
              "./.claude/commands",
              "./.claude/hooks",
+             "./.ai/skills",
+             "./.claude/skills",
+             "./.codex/skills",
              "./.git",
              "./mise.toml",
              "./.tool-versions",
@@ -121,6 +124,67 @@ defmodule SymphonyElixir.AgentSandboxConfigTest do
              "denyRead" => expand_home_paths(AgentSandboxConfig.deny_read_paths()),
              "denyWrite" => expand_home_paths(AgentSandboxConfig.deny_write_paths())
            }
+  end
+
+  test "workspace protected paths are the repo-relative deny-write paths without .git" do
+    assert AgentSandboxConfig.workspace_protected_paths() == [
+             "WORKFLOW.md",
+             "symphony.yml",
+             "symphony.local.yml",
+             ".claude/settings.json",
+             ".claude/settings.local.json",
+             ".claude/CLAUDE.md",
+             ".claude/agents",
+             ".claude/commands",
+             ".claude/hooks",
+             ".ai/skills",
+             ".claude/skills",
+             ".codex/skills",
+             "mise.toml",
+             ".tool-versions"
+           ]
+  end
+
+  test "workspace link targets follow symlinks in protected paths to the workspace files behind them" do
+    workspace = Path.join(System.tmp_dir!(), "agent-sandbox-link-targets-#{System.unique_integer([:positive])}")
+
+    try do
+      for dir <- [".ai/skills/push", ".ai/skills/empty", ".claude", "priv/skills/pull", "lib"], do: File.mkdir_p!(Path.join(workspace, dir))
+      File.write!(Path.join(workspace, ".ai/skills/push/SKILL.md"), "push\n")
+      File.write!(Path.join(workspace, "priv/skills/pull/SKILL.md"), "pull\n")
+
+      for {link, target} <- [
+            {".claude/skills", "../.ai/skills"},
+            {".ai/skills/pull", "../../priv/skills/pull"},
+            # A link inside a link target is followed too.
+            {"priv/skills/pull/scripts", "../../../lib/./scripts"},
+            {".ai/skills/outside", "../../../outside"},
+            {".ai/skills/absolute", "/etc"},
+            {".ai/skills/root", "../.."},
+            {".ai/skills/git", "../../.git/hooks"}
+          ] do
+        File.ln_s!(target, Path.join(workspace, link))
+      end
+
+      assert AgentSandboxConfig.workspace_link_targets(workspace) == ["priv/skills/pull", "lib/scripts"]
+      assert AgentSandboxConfig.workspace_link_targets(Path.join(workspace, "missing")) == []
+    after
+      File.rm_rf(workspace)
+    end
+  end
+
+  test "link targets stop at the first error listing links" do
+    assert AgentSandboxConfig.link_targets([".ai/skills"], fn _paths -> {:error, :boom} end) == {:error, :boom}
+  end
+
+  test "sandbox settings deny writes to extra workspace paths such as skill link targets" do
+    assert "./priv/skills/pull" in AgentSandboxConfig.claude_filesystem_settings([], [], ["./priv/skills/pull"])["denyWrite"]
+
+    workspace = "/repo/workspace"
+    overrides = AgentSandboxConfig.codex_config_overrides("allowlist", [], [], [], workspace: workspace, deny_write_paths: ["priv/skills/pull"])
+    filesystem = Enum.find(overrides, &String.starts_with?(&1, "permissions.workspace_write.filesystem="))
+
+    assert filesystem =~ ~s("#{Path.join(workspace, "priv/skills/pull")}"="read")
   end
 
   test "Claude filesystem settings deny writes to Claude Code persistence files (auto-loaded across sessions)" do
@@ -307,6 +371,9 @@ defmodule SymphonyElixir.AgentSandboxConfigTest do
     assert filesystem =~ ~s("#{Path.join(workspace, "WORKFLOW.md")}"="read")
     assert filesystem =~ ~s("#{Path.join(workspace, ".claude/settings.json")}"="read")
     assert filesystem =~ ~s("#{Path.join(workspace, ".git")}"="read")
+    # An agent must not rewrite its own skills; `github_sync_base` merges the base branch's changes.
+    assert filesystem =~ ~s("#{Path.join(workspace, ".ai/skills")}"="read")
+    assert filesystem =~ ~s("#{Path.join(workspace, ".codex/skills")}"="read")
     assert filesystem =~ ~s("/Volumes"="none")
     assert filesystem =~ ~s("~/.ssh"="none")
     assert filesystem =~ ~s("~/.claude/.credentials.json"="none")
