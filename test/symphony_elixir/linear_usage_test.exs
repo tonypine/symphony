@@ -81,6 +81,34 @@ defmodule SymphonyElixir.LinearUsageTest do
       refute_received {:slept, _delay_ms}
       assert_received {:on_wait, {:linear_api_status, 503, nil}, 5_000}
     end
+
+    test "logs a warning naming the call's label before each wait, and still calls on_wait" do
+      rate_limited = {:error, {:linear_rate_limited, @now_ms + 42_000}}
+      {fun, sleeps} = scripted([rate_limited, :ok])
+
+      log =
+        capture_log(fn ->
+          assert TransientRetry.run(fun, label: "moving TP-1 to In Progress", now_ms_fun: fn -> @now_ms end, sleep_fun: sleeps) == :ok
+        end)
+
+      assert log =~ "Linear call failed while moving TP-1 to In Progress; retrying in 42000ms reason={:linear_rate_limited, #{@now_ms + 42_000}}"
+
+      {fun, sleeps} = scripted([rate_limited, :ok])
+      parent = self()
+
+      log =
+        capture_log(fn ->
+          assert TransientRetry.run(fun,
+                   label: "moving TP-1 to In Progress",
+                   on_wait: fn _reason, delay_ms -> send(parent, {:on_wait, delay_ms}) end,
+                   now_ms_fun: fn -> @now_ms end,
+                   sleep_fun: sleeps
+                 ) == :ok
+        end)
+
+      assert_received {:on_wait, 42_000}
+      assert log =~ "Linear call failed while moving TP-1 to In Progress; retrying in 42000ms"
+    end
   end
 
   describe "Usage callers" do

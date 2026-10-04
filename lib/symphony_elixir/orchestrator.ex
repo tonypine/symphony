@@ -438,6 +438,19 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  # A run is waiting `delay_ms` on a Linear rate limit or outage; see after_linear_wait/2.
+  def handle_info({:linear_wait, issue_id, delay_ms}, %{running: running} = state)
+      when is_binary(issue_id) and is_integer(delay_ms) do
+    case Map.get(running, issue_id) do
+      nil ->
+        {:noreply, state}
+
+      running_entry ->
+        wait_until = DateTime.add(DateTime.utc_now(), delay_ms, :millisecond)
+        {:noreply, %{state | running: Map.put(running, issue_id, Map.put(running_entry, :linear_wait_until, wait_until))}}
+    end
+  end
+
   def handle_info(
         {:codex_worker_update, issue_id, %{event: _, timestamp: _} = update},
         %{running: running} = state
@@ -662,19 +675,35 @@ defmodule SymphonyElixir.Orchestrator do
       true ->
         Logger.warning("Agent task exited for issue_id=#{issue_id} session_id=#{session_id} reason=#{inspect(reason)}; scheduling retry")
 
-        next_attempt = next_retry_attempt_from_running(running_entry)
+        {next_attempt, retry_metadata} = failed_run_retry(running_entry, reason)
         emit_run_failed(running_entry, error, next_attempt)
 
-        schedule_issue_retry(state, issue_id, next_attempt, %{
-          repo_key: running_entry_repo_key(running_entry),
-          identifier: running_entry.identifier,
-          title: running_entry_title(running_entry),
-          error: error,
-          worker_host: Map.get(running_entry, :worker_host),
-          workspace_path: Map.get(running_entry, :workspace_path)
-        })
+        schedule_issue_retry(
+          state,
+          issue_id,
+          next_attempt,
+          Map.merge(
+            %{
+              repo_key: running_entry_repo_key(running_entry),
+              identifier: running_entry.identifier,
+              title: running_entry_title(running_entry),
+              error: error,
+              worker_host: Map.get(running_entry, :worker_host),
+              workspace_path: Map.get(running_entry, :workspace_path)
+            },
+            retry_metadata
+          )
+        )
     end
   end
+
+  # The run waited for Linear as long as it may and Linear was still rate-limited or
+  # unreachable. That is not the issue's fault: keep its attempt and let
+  # schedule_issue_retry/4 wait for Linear instead of backing off.
+  defp failed_run_retry(running_entry, {:linear_unavailable, _reason}),
+    do: {retry_attempt(Map.get(running_entry, :retry_attempt)), %{delay_type: :linear_wait}}
+
+  defp failed_run_retry(running_entry, _reason), do: {next_retry_attempt_from_running(running_entry), %{}}
 
   # Not the issue's fault: the attempt stays, no backoff is added and no `run_failed` goes
   # out. The retry is held until the provider's limit resets, keeping the workspace.
@@ -707,6 +736,10 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp agent_exit_reason_summary({:review_agent_blocked, payload}) do
     "review_agent blocked: #{review_agent_block_reason(payload)}"
+  end
+
+  defp agent_exit_reason_summary({:linear_unavailable, reason}) do
+    "waiting for Linear: #{inspect(reason)}"
   end
 
   defp agent_exit_reason_summary({:tool_failure_circuit_breaker, payload}) do
@@ -1953,6 +1986,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp first_turn_stall_elapsed_ms(running_entry, now) do
     running_entry
     |> first_turn_started_at()
+    |> after_linear_wait(running_entry)
     |> case do
       %DateTime{} = timestamp ->
         max(0, DateTime.diff(now, timestamp, :millisecond))
@@ -2016,12 +2050,21 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp watchdog_last_event_at(running_entry) when is_map(running_entry) do
-    Map.get(running_entry, :last_event_at) ||
-      Map.get(running_entry, :last_codex_timestamp) ||
-      Map.get(running_entry, :started_at)
+    (Map.get(running_entry, :last_event_at) ||
+       Map.get(running_entry, :last_codex_timestamp) ||
+       Map.get(running_entry, :started_at))
+    |> after_linear_wait(running_entry)
   end
 
   defp watchdog_last_event_at(_running_entry), do: nil
+
+  # A run waiting out a Linear rate limit or outage is neither stalled nor stuck: the stall
+  # and no-progress clocks start again when its latest wait ends.
+  defp after_linear_wait(%DateTime{} = timestamp, %{linear_wait_until: %DateTime{} = wait_until}) do
+    if DateTime.after?(wait_until, timestamp), do: wait_until, else: timestamp
+  end
+
+  defp after_linear_wait(timestamp, _running_entry), do: timestamp
 
   defp restart_stuck_issue(state, issue_id, running_entry, elapsed_ms) do
     identifier = Map.get(running_entry, :identifier, issue_id)

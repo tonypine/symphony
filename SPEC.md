@@ -2081,7 +2081,7 @@ tick.
 Part A: First-turn stall detection
 
 - For each running issue that has not emitted any coding-agent event, compute `elapsed_ms` since
-  `started_at`.
+  `started_at`, or since the end of the run's latest wait on Linear when that is later.
 - If `elapsed_ms > agent.stall_timeout_ms`, terminate the worker and queue a retry.
 - If `stall_timeout_ms <= 0`, skip stall detection entirely.
 
@@ -2104,7 +2104,8 @@ Part C: No-progress watchdog
 
 - Independently of the poll tick, a watchdog tick runs every `watchdog.tick_interval_ms`.
 - If `watchdog.enabled == false`, the tick performs no session termination.
-- For each running issue, compute `elapsed_ms` since `last_event_at`.
+- For each running issue, compute `elapsed_ms` since `last_event_at`, or since the end of the run's
+  latest wait on Linear when that is later.
 - If `elapsed_ms >= watchdog.no_progress_threshold_ms`, terminate the agent session, run
   `after_run`, record the run as `timeout`, emit `run_stuck`, and queue a retry through the normal
   retry helper/backoff path.
@@ -2806,12 +2807,19 @@ Orchestrator behavior on tracker errors:
 - Soft brake: record `x-ratelimit-requests-remaining` from every response and stretch the issue-poll
   interval 2x below 10% of `x-ratelimit-requests-limit` (4x below 5%) until the budget recovers.
 - Transient errors (a rate limit, a transport error such as a timeout or refused connection, or an
-  HTTP 429/5xx answer) after a finished agent turn do not fail the run: the post-turn issue refresh
-  waits for Linear (until the pause ends, or 5 s doubling up to 60 s) and retries in the same run
-  and session, for at most five minutes. A post-PR move to Auto Review or In Review, a retry's
-  issue refresh, and a retry's dispatch refresh that hit one keep the retry's attempt and retry
-  after 5 s (or when the pause ends) instead of the failure backoff. A retry whose dispatch refresh
-  fails for any reason is scheduled again rather than dropped.
+  HTTP 429/5xx answer) on a Linear call a run makes do not fail the run: the call waits for Linear
+  (until the pause ends, or 5 s doubling up to 60 s) and retries in the same run and session, for at
+  most five minutes. This covers the issue enrichment and workpad bootstrap (the Todo → In Progress
+  move, the workpad read and create), the post-turn issue refresh, the dependency-approval move, the
+  move after a finished rework, the idle park and its note, and the parent walkthrough's parent
+  read, QA report, gap tickets and final state move (the verdict is kept while that move waits, for
+  up to 30 minutes rather than five, since a lost verdict means running the whole QA walkthrough
+  again and filing its gap tickets twice). The run tells the orchestrator how long each wait lasts,
+  and the first-turn stall check and the no-progress watchdog do not restart it before that wait
+  ends. A run that still fails on one once the wait runs out keeps its attempt and is retried after
+  5 s (or when the pause ends) instead of the failure backoff, as are a post-PR move to Auto Review
+  or In Review, a retry's issue refresh, and a retry's dispatch refresh that hit one. A retry whose
+  dispatch refresh fails for any reason is scheduled again rather than dropped.
 - Usage by caller: count every Linear request against its caller (orchestrator, CI poller, PR review
   poller, Auto Review, post-PR transition, `agent:<identifier>` for an agent run and its tools) over
   a rolling hour, and by query (the GraphQL operation name, `unnamed` without one), and show the
