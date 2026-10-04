@@ -434,6 +434,87 @@ defmodule SymphonyElixir.Codex.DynamicTool do
           "name" => %{"type" => "string", "description" => "File name without extension: letters, digits, `.`, `_`, `-`."}
         }
       }
+    },
+    %{
+      "name" => "qa_android_ui_tree",
+      "description" =>
+        "Read what is on the emulator's screen (uiautomator dump) as a flat list of nodes: path (like `0.2.1`), class, text, content-desc, resource-id, bounds and the clickable, focused, enabled, checked and scrollable flags, plus the foreground package. Filters keep only matching nodes. Size-capped; says when nodes were left out.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "properties" => %{
+          "text" => %{"type" => "string", "maxLength" => 200, "description" => "Only nodes whose text or content-desc contains this, ignoring case."},
+          "resource_id" => %{"type" => "string", "maxLength" => 200, "description" => "Only nodes with this resource-id, full (`com.example.app:id/login`) or after the `/` (`login`)."},
+          "class" => %{"type" => "string", "maxLength" => 200, "description" => "Only nodes of this class, full (`android.widget.Button`) or simple (`Button`)."},
+          "max_depth" => %{"type" => "integer", "minimum" => 1, "maximum" => 100, "default" => 30},
+          "max_nodes" => %{"type" => "integer", "minimum" => 1, "maximum" => 1000, "default" => 300}
+        }
+      }
+    },
+    %{
+      "name" => "qa_android_tap",
+      "description" => "Tap the centre of a node from the last qa_android_ui_tree result, or a point on the display.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "properties" => %{
+          "path" => %{"type" => "string", "description" => "A node path from the last qa_android_ui_tree result, like `0.2.1`."},
+          "x" => %{"type" => "integer", "minimum" => 0, "description" => "With y, instead of path: a point in display pixels."},
+          "y" => %{"type" => "integer", "minimum" => 0}
+        }
+      }
+    },
+    %{
+      "name" => "qa_android_type",
+      "description" => "Type text into the focused field on the emulator. Printable ASCII only; a newline presses Enter.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["text"],
+        "properties" => %{"text" => %{"type" => "string", "minLength" => 1, "maxLength" => 500}}
+      }
+    },
+    %{
+      "name" => "qa_android_key",
+      "description" => "Press a key on the emulator. ime_action is the Enter a single-line field treats as its keyboard action.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["key"],
+        "properties" => %{
+          "key" => %{"type" => "string", "enum" => ~w(back enter ime_action tab del dpad_up dpad_down dpad_left dpad_right escape)}
+        }
+      }
+    },
+    %{
+      "name" => "qa_android_rotate",
+      "description" => "Turn off auto-rotate and rotate the emulator. Reset to portrait when the QA pass ends.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["orientation"],
+        "properties" => %{"orientation" => %{"type" => "string", "enum" => ["portrait", "landscape"]}}
+      }
+    },
+    %{
+      "name" => "qa_android_dark_mode",
+      "description" => "Turn the emulator's dark theme on or off. Turned off when the QA pass ends.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["mode"],
+        "properties" => %{"mode" => %{"type" => "string", "enum" => ["on", "off"]}}
+      }
+    },
+    %{
+      "name" => "qa_android_font_scale",
+      "description" => "Set the emulator's font size scale. Reset to 1.0 when the QA pass ends.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["scale"],
+        "properties" => %{"scale" => %{"type" => "number", "enum" => [0.85, 1.0, 1.15, 1.3, 1.5, 1.8, 2.0]}}
+      }
     }
   ]
 
@@ -483,7 +564,14 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "qa_android_install" => [],
     "qa_android_launch" => ["application_id"],
     "qa_android_stop" => ["application_id"],
-    "qa_android_screenshot" => ["name"]
+    "qa_android_screenshot" => ["name"],
+    "qa_android_ui_tree" => ["text", "resource_id", "class", "max_depth", "max_nodes"],
+    "qa_android_tap" => ["path", "x", "y"],
+    "qa_android_type" => ["text"],
+    "qa_android_key" => ["key"],
+    "qa_android_rotate" => ["orientation"],
+    "qa_android_dark_mode" => ["mode"],
+    "qa_android_font_scale" => ["scale"]
   }
   @legacy_tool_aliases %{
     "linear.get_current_issue" => "linear_get_current_issue",
