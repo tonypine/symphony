@@ -297,7 +297,7 @@ struct Document {
 }
 
 /// The text after `key:`, split into spacing, value and an optional `# comment`.
-private struct ValueLine {
+struct ValueLine {
     let leadingSpace: Substring
     let value: String
     /// Spacing between the value and the comment, then the comment itself.

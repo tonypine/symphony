@@ -140,7 +140,8 @@ app opens" in Settings (see [Launch at Login](#launch-at-login)).
 - **Update to vX** downloads and verifies the release, waits for agent runs like Restart, then swaps the app
   and relaunches it. See [Install an update](#install-an-update).
 - **Repos…** opens the Repos window: one row per connected repo with its source, GitHub remote, Linear
-  routing, `WORKFLOW.md` status, last fetch and running agents, and **Add Repo…** to connect another.
+  routing, `WORKFLOW.md` status, last fetch and running agents, **Add Repo…** to connect another, and
+  per repo **Edit…**, **Disconnect…** and, for a managed clone, **Remove Clone…**.
   See [Repos](#repos).
 - **Quit** stops Symphony first and asks before stopping active agent runs.
 
@@ -437,6 +438,34 @@ The message at the top of the window says which applies. A running Symphony list
 next poll, as it reads the route right away; a GitHub URL repo shows `not cloned yet` and its
 `WORKFLOW.md` as `missing` until the restart clones it. With Symphony stopped, the list shows the repo
 from `symphony.yml`.
+
+### Edit, disconnect or remove a clone
+
+Each row has buttons for the repo. Edit and Disconnect are disabled, with the reason under the row,
+while `symphony.yml` can't be read or no longer has the repo.
+
+- **Edit…** opens the Add Repo sheet on the repo. Switch between **GitHub URL** and **Local folder**
+  (in either direction), change the base branch (empty uses `origin`'s default branch), and pick
+  another Linear project or labels; **No project** is allowed while labels, a team or an assignee still
+  route issues, or for the default repo. The key can't change. A local repo keeps its folder until you
+  choose another. Save rewrites only that entry: comments, the other entries, the route's team and
+  assignee, `default` and `fetch_before_dispatch` stay. Switching to a GitHub URL drops `repo`,
+  `strategy` and `workflow` (Symphony reads `WORKFLOW.md` from its clone); switching to a folder sets
+  them as Add Repo does. A new route applies to the next dispatch without a restart; a new source,
+  workflow or base branch restarts Symphony as Add Repo does, asking first while agents run.
+- **Disconnect…** asks first, then removes the entry from `repositories:` together with the comment
+  lines right above it (with no blank line between), and leaves one blank line between its neighbours.
+  It never deletes a folder: a local checkout and its branches stay as they are, and a managed clone
+  stays until you remove it. It is disabled for the only repo. For the `default: true` repo, the alert
+  asks which repo becomes the default. Symphony then restarts as after Add Repo.
+- **Remove Clone…** (managed repos only) deletes Symphony's clone under `workspaces.clones_root`
+  after you confirm; the repo stays connected and Symphony clones it again when it starts or on its
+  next dispatch. It is disabled, with the reason under the row, while an agent runs in a worktree of
+  the clone (any repo with the same source), while Symphony is starting or doesn't list its running
+  agents, and before the first clone. The app asks Symphony again after you confirm, and deletes the
+  folder only when, with symlinks resolved, it is inside the clones folder: `clones_root` with `~`
+  expanded and a relative path taken from the folder of `symphony.yml`, or
+  `~/.local/share/symphony/repos`.
 
 ## Restart
 
