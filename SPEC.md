@@ -3118,8 +3118,8 @@ Scoped GitHub tool extension contract:
   CI SHOULD therefore fail a pull request from a Symphony branch whose own
   commits since the merge-base with the base branch change a write-protected
   path (Symphony's `protected-paths` workflow runs
-  `mix protected_paths.check`), unless a person other than the pull
-  request's author waives it.
+  `mix protected_paths.check`), unless a person with write access other than
+  the pull request's author waives it.
 - `github_merge_pull_request`, if exposed, MUST merge only the current
   workspace branch's pull request, MUST refuse unless the current issue is in
   the human-approved `Merging` state, MUST refuse while any check is failing or

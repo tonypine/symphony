@@ -74,8 +74,9 @@ from the base branch pass. It runs only on `pull_request_target`, so the workflo
 come from the base branch and the pull request can't change them. A person who made such a change
 on purpose waives it in one of two ways. The `protected-paths-approved` label counts only when a
 person other than the pull request's author added it, since an agent may act as the author. An
-approving review of the current head commit counts too, but a review doesn't start a run, so after
-approving, re-run the job. Bots count for neither.
+approving review of the current head commit counts too, but only from a reviewer with write access
+(an owner, member or collaborator), since anyone who can read the repository can approve. A review
+doesn't start a run, so after approving, re-run the job. Bots count for neither.
 
 Every local agent may also write one per-user cache folder, `~/Library/Caches/symphony/agent` on
 macOS, which holds its Hex home, its `elixir_make` cache and Dialyxir's core PLTs (see

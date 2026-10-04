@@ -33,7 +33,8 @@ jobs:
       # A person who changed a protected path on the agent's branch on purpose waives the check
       # with the label, or with an approving review of the current head commit. The label counts
       # only when its last adder is a person other than the pull request's author, since the
-      # agent may push and label as the author.
+      # agent may push and label as the author. The review counts only from an owner, member or
+      # collaborator, since anyone who can read the repository can approve.
       - name: Look for a person's waiver
         id: waiver
         env:
@@ -60,7 +61,7 @@ jobs:
           fi
 
           approvers=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/reviews" \
-            --jq ".[] | select(.state == \"APPROVED\" and .commit_id == \"$HEAD_SHA\" and .user.type != \"Bot\") | .user.login")
+            --jq ".[] | select(.state == \"APPROVED\" and .commit_id == \"$HEAD_SHA\" and .user.type != \"Bot\" and (.author_association == \"OWNER\" or .author_association == \"MEMBER\" or .author_association == \"COLLABORATOR\")) | .user.login")
 
           if [ -n "$approvers" ]; then
             echo "Waived by the approving review of $(echo $approvers | tr ' ' ',')."
@@ -112,6 +113,6 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           if ! mix protected_paths.check --repo pull-request --base "origin/$BASE_REF" --head "$HEAD_SHA"; then
-            echo "::error::This pull request's own commits change paths an agent must not edit (its skills, WORKFLOW.md, sandbox settings). Revert them, or, if a person made the change on purpose, have a person other than the author add the $WAIVER_LABEL label, or approve the pull request and re-run this job."
+            echo "::error::This pull request's own commits change paths an agent must not edit (its skills, WORKFLOW.md, sandbox settings). Revert them, or, if a person made the change on purpose, have a person other than the author add the $WAIVER_LABEL label, or have a person with write access approve the pull request and re-run this job."
             exit 1
           fi
