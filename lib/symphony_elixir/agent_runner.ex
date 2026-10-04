@@ -860,6 +860,27 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
+  # Findings nobody could ground do not earn a correction round: the push goes ahead
+  # and they ride along on the approval prompt as advisory notes.
+  defp handle_review_agent_inconclusive(run_context, config, round, {:review_agent_unverifiable, payload}) do
+    notes = ReviewAgent.unverified_notes(payload)
+    dropped = payload |> Map.get(:failures, []) |> length()
+
+    Logger.warning("Reviewer agent findings stayed unverifiable for #{issue_context(run_context.issue)} round=#{round} dropped=#{dropped}; approving with advisory notes")
+
+    audit_review_agent_unverified(run_context, round, dropped)
+
+    result = %{
+      verdict: :approve,
+      comments: notes,
+      reason: "reviewer findings unverifiable; approved with #{dropped} advisory note(s)",
+      advisory_notes: notes
+    }
+
+    emit_review_agent_verdict(run_context, result, round, config.max_iterations)
+    handle_review_agent_result(result, run_context, config)
+  end
+
   defp handle_review_agent_inconclusive(run_context, config, round, reason) do
     if review_agent_inconclusive_retry_available?(run_context) do
       Logger.info("Reviewer agent was inconclusive for #{issue_context(run_context.issue)} reason=#{inspect(reason)}; retrying reviewer once with a fresh session")
@@ -875,7 +896,7 @@ defmodule SymphonyElixir.AgentRunner do
 
       result = %{
         verdict: :request_changes,
-        comments: review_agent_inconclusive_comments(reason, reason_text),
+        comments: [reason_text],
         reason: reason_text
       }
 
@@ -891,51 +912,9 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp review_agent_inconclusive_comments({:review_agent_unverifiable, %{failures: failures}}, reason_text) when is_list(failures) do
-    comments = Enum.flat_map(failures, &review_agent_unverified_finding_comments/1)
-    [reason_text | comments]
-  end
-
-  defp review_agent_inconclusive_comments(_reason, reason_text), do: [reason_text]
-
-  defp review_agent_unverified_finding_comments(%{finding: finding}) when is_map(finding) do
-    summary = finding |> Map.get(:summary) |> normalize_review_agent_finding_text()
-    suggested_fix = finding |> Map.get(:suggested_fix) |> normalize_review_agent_finding_text()
-
-    if summary == nil and suggested_fix == nil do
-      []
-    else
-      ["[unverified] #{unverified_finding_summary(summary)}#{review_agent_finding_comment_location(finding)}#{unverified_finding_fix(suggested_fix)}"]
-    end
-  end
-
-  defp review_agent_unverified_finding_comments(_failure), do: []
-
-  defp normalize_review_agent_finding_text(text) when is_binary(text) do
-    case String.trim(text) do
-      "" -> nil
-      normalized -> normalized
-    end
-  end
-
-  defp normalize_review_agent_finding_text(_text), do: nil
-
-  defp unverified_finding_summary(nil), do: "Reviewer finding"
-  defp unverified_finding_summary(summary), do: summary
-
-  defp unverified_finding_fix(nil), do: ""
-  defp unverified_finding_fix(suggested_fix), do: " Suggested fix: #{suggested_fix}"
-
   defp review_agent_inconclusive_summary(:review_agent_max_iterations_reached), do: "request-change limit reached"
   defp review_agent_inconclusive_summary({:max_iterations, _reason}), do: "review turn reached max iterations"
   defp review_agent_inconclusive_summary({:self_check_max_iterations, _reason}), do: "self-check reached max iterations"
-
-  defp review_agent_inconclusive_summary({:review_agent_unverifiable, %{failures: [failure | _]}}) do
-    location = review_agent_finding_location(Map.get(failure, :finding))
-    reason = review_agent_verification_reason(Map.get(failure, :reason))
-
-    "unverifiable finding#{location}: #{reason}"
-  end
 
   defp review_agent_inconclusive_summary({:malformed_review_agent_response, reason}) do
     "malformed response #{limited_inspect(reason)}"
@@ -946,36 +925,6 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp review_agent_inconclusive_summary(_reason), do: nil
-
-  defp review_agent_finding_location(%{file: file, line_range: {start_line, end_line}})
-       when is_binary(file) and is_integer(start_line) and is_integer(end_line) do
-    " at #{file}:#{start_line}-#{end_line}"
-  end
-
-  defp review_agent_finding_location(%{file: file}) when is_binary(file), do: " at #{file}"
-  defp review_agent_finding_location(_finding), do: ""
-
-  defp review_agent_finding_comment_location(%{file: file, line_range: {start_line, end_line}})
-       when is_binary(file) and is_integer(start_line) and is_integer(end_line) do
-    " (#{file}:#{start_line}-#{end_line})"
-  end
-
-  defp review_agent_finding_comment_location(%{file: file}) when is_binary(file), do: " (#{file})"
-  defp review_agent_finding_comment_location(_finding), do: ""
-
-  defp review_agent_verification_reason(:quoted_snippet_not_found), do: "quoted snippet not found"
-  defp review_agent_verification_reason({:file_not_in_review_context, path}) when is_binary(path), do: "file not in review context"
-
-  defp review_agent_verification_reason({:line_range_not_found, path, {start_line, end_line}})
-       when is_binary(path) and is_integer(start_line) and is_integer(end_line) do
-    "line range not found at #{path}:#{start_line}-#{end_line}"
-  end
-
-  defp review_agent_verification_reason(reason) when is_atom(reason) do
-    reason |> Atom.to_string() |> String.replace("_", " ")
-  end
-
-  defp review_agent_verification_reason(reason), do: limited_inspect(reason)
 
   defp limited_inspect(term) do
     term
@@ -1234,6 +1183,19 @@ defmodule SymphonyElixir.AgentRunner do
       )
     )
     |> log_audit_error("record prompt_sent")
+  end
+
+  defp audit_review_agent_unverified(%{issue: issue, opts: opts}, round, dropped) do
+    %{
+      event_type: "review_agent_unverified",
+      issue_id: issue.id,
+      issue_identifier: issue.identifier,
+      run_id: Keyword.get(opts, :run_id),
+      round: round,
+      findings_dropped: dropped
+    }
+    |> AuditLog.record(audit_opts(opts))
+    |> log_audit_error("record review_agent_unverified")
   end
 
   defp audit_opts(opts, extra \\ []) do

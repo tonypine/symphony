@@ -67,20 +67,27 @@ defmodule SymphonyElixir.ReviewAgent.ContextTest do
                Context.build(issue(), "/tmp/anywhere", "origin/main..HEAD", [], failing_git)
     end
 
-    test "looks up evidence at a changed file line range without shelling out again" do
+    test "returns the cited range from every evidence source without shelling out again" do
       repo = changed_repo!("feature.txt", "quoted context line\n")
 
       assert {:ok, source} =
                Context.build(issue(), repo, "origin/main..HEAD", [], git_fun(repo))
 
-      assert {:ok, %{path: "feature.txt", line_range: {1, 1}, text: "quoted context line", source: :diff}} =
-               Context.lookup_evidence(source, "feature.txt", {1, 1})
+      assert {:ok, %{path: "feature.txt", cited: cited, lines: lines}} =
+               Context.grounding_evidence(source, " feature.txt ", {1, 1})
+
+      assert [%{line_range: {1, 1}, text: "quoted context line", source: :diff}, %{source: :file} | _adjacent] = cited
+      assert {1, "quoted context line"} in lines
 
       assert {:error, {:file_not_in_review_context, "missing.txt"}} =
-               Context.lookup_evidence(source, "missing.txt", {1, 1})
+               Context.grounding_evidence(source, "missing.txt", {1, 1})
+
+      assert {:error, :absolute_file_not_allowed} = Context.grounding_evidence(source, "/etc/passwd", {1, 1})
+      assert {:error, :invalid_file} = Context.grounding_evidence(source, " ", {1, 1})
+      assert {:error, :invalid_line_range} = Context.grounding_evidence(source, "feature.txt", {2, 1})
     end
 
-    test "looks up full changed file evidence when a line range extends beyond the diff hunk" do
+    test "returns full changed file evidence when a line range extends beyond the diff hunk" do
       original = numbered_lines(1..100)
       modified = numbered_lines(1..49) <> "changed line 50\n" <> numbered_lines(51..100)
       repo = changed_existing_repo!("feature.txt", original, modified)
@@ -88,12 +95,39 @@ defmodule SymphonyElixir.ReviewAgent.ContextTest do
       assert {:ok, source} =
                Context.build(issue(), repo, "origin/main..HEAD", [], git_fun(repo))
 
-      assert {:ok, %{path: "feature.txt", line_range: {10, 90}, source: :file, text: text}} =
-               Context.lookup_evidence(source, "feature.txt", {10, 90})
+      assert {:ok, %{cited: [%{line_range: {10, 90}, source: :file, text: text}], lines: lines}} =
+               Context.grounding_evidence(source, "feature.txt", {10, 90})
 
       assert text =~ "line 10"
       assert text =~ "changed line 50"
       assert text =~ "line 90"
+      assert length(lines) == 101
+    end
+
+    test "returns no evidence for a changed path with no diff, file or window lines" do
+      assert {:ok, %{path: "notes.txt", cited: [], lines: []}} =
+               Context.grounding_evidence(%{changed_paths: ["notes.txt"]}, "notes.txt", {1, 1})
+    end
+
+    test "merges diff and adjacent window lines when the full file is not available" do
+      original = numbered_lines(1..100)
+      modified = numbered_lines(1..49) <> "changed line 50\n" <> numbered_lines(51..100)
+      repo = changed_existing_repo!("feature.txt", original, modified)
+
+      assert {:ok, source} =
+               Context.build(issue(), repo, "origin/main..HEAD", [], git_fun(repo))
+
+      source = Map.put(source, :file_contents, %{})
+
+      assert {:ok, %{cited: [%{source: :diff}, %{source: :adjacent_context}], lines: lines}} =
+               Context.grounding_evidence(source, "feature.txt", {50, 50})
+
+      numbers = Enum.map(lines, &elem(&1, 0))
+      assert {50, "changed line 50"} in lines
+      assert Enum.min(numbers) == 44
+      assert Enum.max(numbers) == 57
+
+      assert {:ok, %{cited: [], lines: ^lines}} = Context.grounding_evidence(source, "feature.txt", {90, 95})
     end
   end
 
