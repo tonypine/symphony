@@ -1640,6 +1640,91 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       end
     end
 
+    test "logs the pid, command and run id of the Claude process it starts" do
+      test_root =
+        Path.join(
+          System.tmp_dir!(),
+          "symphony-elixir-claude-code-priority-#{System.unique_integer([:positive])}"
+        )
+
+      try do
+        workspace_root = Path.join(test_root, "workspaces")
+        workspace = Path.join(workspace_root, "ACME-1")
+        fake_claude = Path.join(test_root, "fake-claude")
+        File.mkdir_p!(workspace)
+
+        File.write!(fake_claude, """
+        #!/bin/sh
+        printf '%s\\n' '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"result":"Done.","session_id":"sess-nice","usage":{"input_tokens":1,"output_tokens":1}}'
+        exit 0
+        """)
+
+        File.chmod!(fake_claude, 0o755)
+
+        write_workflow_file!(Workflow.workflow_file_path(),
+          workspace_root: workspace_root,
+          agent_kind: "claude",
+          agent_command: fake_claude
+        )
+
+        {:ok, session} = AppServer.start_session(workspace)
+
+        log =
+          capture_log(fn ->
+            assert {:ok, _result} = AppServer.run_turn(session, "do the thing", %{}, run_id: "run-claude-nice")
+          end)
+
+        # Sandboxed test runs can't lower the priority, so either message is logged.
+        assert log =~ ~r/Started agent (below|at) Symphony's CPU priority.* pid=\d+ run_id=run-claude-nice command="#{fake_claude}"/
+      after
+        File.rm_rf(test_root)
+      end
+    end
+
+    @tag :process_table
+    @tag :setpriority
+    test "Claude and the processes it starts run below Symphony's CPU priority" do
+      test_root =
+        Path.join(
+          System.tmp_dir!(),
+          "symphony-elixir-claude-code-niceness-#{System.unique_integer([:positive])}"
+        )
+
+      try do
+        workspace_root = Path.join(test_root, "workspaces")
+        workspace = Path.join(workspace_root, "ACME-1")
+        fake_claude = Path.join(test_root, "fake-claude")
+        trace = Path.join(test_root, "niceness.trace")
+        File.mkdir_p!(workspace)
+
+        File.write!(fake_claude, """
+        #!/bin/sh
+        ps -o nice= -p $$ > "#{trace}"
+        sh -c 'ps -o nice= -p $$' >> "#{trace}"
+        printf '%s\\n' '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"result":"Done.","session_id":"sess-nice","usage":{"input_tokens":1,"output_tokens":1}}'
+        exit 0
+        """)
+
+        File.chmod!(fake_claude, 0o755)
+
+        write_workflow_file!(Workflow.workflow_file_path(),
+          workspace_root: workspace_root,
+          agent_kind: "claude",
+          agent_command: fake_claude
+        )
+
+        {:ok, session} = AppServer.start_session(workspace)
+        assert {:ok, _result} = AppServer.run_turn(session, "do the thing", %{}, [])
+
+        {symphony, 0} = System.cmd("ps", ["-o", "nice=", "-p", System.pid()])
+        assert [agent, child] = trace |> File.read!() |> String.split() |> Enum.map(&String.to_integer/1)
+        assert agent > String.to_integer(String.trim(symphony))
+        assert child == agent
+      after
+        File.rm_rf(test_root)
+      end
+    end
+
     test "returns a typed usage limit when Claude rejects the five-hour window" do
       test_root =
         Path.join(

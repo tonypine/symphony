@@ -79,6 +79,8 @@ branch instead of opening a second one. If a claimed issue moves to a terminal s
 - **Durable run store** — run history, retry backoff, captured learnings, token totals, and
   notification dedupe.
 - **Workspace guardrails** — age-based cleanup, startup orphan removal, and disk free-space pauses.
+- **Shared-host CPU priority** — local agents and everything they start run at a lower CPU priority
+  (`nice -n 10`) than Symphony, so one run's busy loop can't starve Symphony, QA passes, or other runs.
 - **Scoped agent tools** — current-issue Linear updates, GitHub PR evidence, and attachment handling.
 - **Quality gate** — optionally scores issue clarity before dispatch so unclear work is held back.
 - **Parent tickets** — label a large ticket `breakdown` and the agent splits it into sub-tickets plus a
