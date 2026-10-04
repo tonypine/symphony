@@ -533,6 +533,8 @@ defmodule SymphonyElixir.Config.Schema do
     use Ecto.Schema
     import Ecto.Changeset
 
+    alias SymphonyElixir.Config.Schema
+
     @type t :: %__MODULE__{}
 
     @primary_key false
@@ -546,7 +548,7 @@ defmodule SymphonyElixir.Config.Schema do
     def changeset(schema, attrs) do
       schema
       |> cast(attrs, [:command, :result_file, :paths], empty_values: [])
-      |> validate_required([:result_file])
+      |> Schema.validate_present([:result_file])
       |> validate_change(:result_file, &validate_result_file/2)
       |> validate_change(:paths, fn :paths, paths ->
         if Enum.all?(paths, &(String.trim(&1) != "")), do: [], else: [paths: "must contain only non-empty strings"]
