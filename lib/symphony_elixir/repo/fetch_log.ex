@@ -20,7 +20,7 @@ defmodule SymphonyElixir.Repo.FetchLog do
   @type entry :: %{at: DateTime.t(), result: :ok | {:error, term()}}
 
   @spec start_link(keyword()) :: GenServer.on_start()
-  def start_link(opts \\ []) do
+  def start_link(opts) do
     GenServer.start_link(__MODULE__, :ok, Keyword.put_new(opts, :name, __MODULE__))
   end
 
