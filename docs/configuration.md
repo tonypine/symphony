@@ -316,9 +316,11 @@ agent:
   runtime as `sandbox.filesystem.allowWrite`. Use it to broaden Claude Code's default writable
   set (workspace + `/tmp`) — e.g. to grant test runs access to a configured MCP socket root.
   For Gradle builds, add `~/.gradle` so builds share its caches. Daemons don't come with it:
-  each local agent run starts with
+  each local agent run in a Gradle project (`gradlew`, `settings.gradle` or
+  `settings.gradle.kts` at the workspace root) starts with
   `GRADLE_OPTS="-Dorg.gradle.daemon.registry.base=<workspace>/.gradle-daemons"`, so its Gradle
-  daemons register in its own workspace (git ignores the folder) rather than in
+  daemons register in its own workspace (git ignores the folder, and the Auto Review `qa_build`
+  clean check skips it) rather than in
   `~/.gradle/daemon`, where a daemon started in one agent's sandbox would serve, and fail, builds
   in another workspace. A daemon's working folder is in that registry, so the run's end stops it
   (see `workspaces` above). If `.gradle-daemons` is a symlink or a file, the run gets no
@@ -1058,7 +1060,7 @@ tools for it on the host, outside the sandbox, and checks every argument:
 
 | Tool | Does | Refuses |
 | --- | --- | --- |
-| `qa_build` | runs `build` in the QA worktree with the agent's scrubbed environment, then copies the `app` bundle into a private directory | a worktree with changes outside `qa-evidence/`, gitignored files included: none may exist before the first build, and none may appear or change after a build; a bundle that resolves (symlinks included) outside the worktree, or that holds an absolute symlink or one with `..` |
+| `qa_build` | runs `build` in the QA worktree with the agent's scrubbed environment, then copies the `app` bundle into a private directory | a worktree with changes outside `qa-evidence/` and `.gradle-daemons/` (Symphony's own), gitignored files included: none may exist before the first build, and none may appear or change after a build; a bundle that resolves (symlinks included) outside the worktree, or that holds an absolute symlink or one with `..` |
 | `qa_launch_app` | starts the private copy of the bundle with `SYMPHONY_BAR_QA_ROOT` set to a private directory ([QA mode](../macos/README.md#qa-mode)), and returns its PID | an executable that changed since the last `qa_build`, or a worktree `qa_build` would refuse |
 | `qa_quit_app` | quits a launched app and returns its recent output | a PID it did not launch |
 | `qa_screenshot` | saves the app's on-screen windows to new files `qa-evidence/<name>.png` | a PID it did not launch, a window of another app, a name that already exists (file or symlink) |
