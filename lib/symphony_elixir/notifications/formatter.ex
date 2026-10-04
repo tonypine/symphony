@@ -189,6 +189,7 @@ defmodule SymphonyElixir.Notifications.Formatter do
   defp event_title("usage_limit_paused"), do: "Usage limit paused"
   defp event_title("usage_limit_headroom"), do: "Usage limit headroom hold"
   defp event_title("usage_limit_resumed"), do: "Usage limit resumed"
+  defp event_title("forced_waiting"), do: "Forced ticket waiting"
   defp event_title(event), do: event
 
   defp event_color("run_failed"), do: "danger"
@@ -203,6 +204,7 @@ defmodule SymphonyElixir.Notifications.Formatter do
   defp event_color("usage_limit_paused"), do: "warning"
   defp event_color("usage_limit_headroom"), do: "warning"
   defp event_color("usage_limit_resumed"), do: "good"
+  defp event_color("forced_waiting"), do: "warning"
   defp event_color(_event), do: "#2f80ed"
 
   defp blank?(value), do: value in [nil, ""]

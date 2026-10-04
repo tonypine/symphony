@@ -844,12 +844,12 @@ Fields:
     that time (`forced_since`, persisted across restarts), refreshes the queued issues by id on
     every poll so they stay queued in any non-terminal state (In Review, Merging, ...), and drops
     one when the label is removed, the issue is terminal, or the tracker no longer returns it. Forced issues are reported in the status snapshot
-    (`forced`) and the audit log (`forced_start`, `forced_end`); dispatch does not treat them
-    differently yet.
+    (`forced`) and the audit log (`forced_start`, `forced_end`), and dispatch on their own
+    allowance (Section 8.3).
 - `concurrency.forced_max` (positive integer)
   - Default: `1`.
-  - Forced issues that may be worked at once (reported, not yet enforced). Values below `1` fail
-    configuration validation.
+  - Forced runs that may run at once outside `max_total`, the epic lanes, `finishing_max` and
+    `max_by_issue_state` (Section 8.3). Values below `1` fail configuration validation.
 - `concurrency.forced_stale_after_hours` (positive integer)
   - Default: `72`.
   - How long an issue may stay forced before it counts as stale (not reported yet). Values below
@@ -1273,7 +1273,7 @@ Fields:
   - `events` is an OPTIONAL list drawn from: `pr_opened`, `awaiting_review`, `run_failed`,
     `issue_completed`, `budget_exceeded`, `reviewer_commented`, `rework_pushed`, `ci_failed`,
     `ci_escalated`, `qa_passed`, `qa_failed`, `usage_limit_paused`, `usage_limit_headroom`,
-    `usage_limit_resumed`.
+    `usage_limit_resumed`, `forced_waiting`.
   - `headers` is an OPTIONAL map of webhook headers.
 
 ### 5.5 Prompt Template Contract
@@ -1955,23 +1955,52 @@ An issue is dispatch-eligible only if all are true:
     missing, it logs a warning and stops moving parents there until restart; parents then wait in
     `In Progress` as before. When the check itself fails, the state stays on.
 
-Sorting order (stable intent), closest to done first:
+Sorting order (stable intent), forced first, then closest to done first:
 
-1. stage: `Merging`, then the Auto Review state, then `Rework`, then any other active state
+1. forced issues (Section 8.3), earliest `forced_since` first; a forced issue the queue has not
+   recorded yet follows the queued ones. This applies after the epic-lane ordering.
+2. stage: `Merging`, then the Auto Review state, then `Rework`, then any other active state
    (a resume, such as `In Progress`), then `Todo`
-2. `priority` ascending (1..4 are preferred; null/unknown sorts last)
-3. `created_at` oldest first
-4. `identifier` lexicographic tie-breaker
+3. `priority` ascending (1..4 are preferred; null/unknown sorts last)
+4. `created_at` oldest first
+5. `identifier` lexicographic tie-breaker
 
 While an issue in `Merging` or the Auto Review state is waiting for a slot (or an Auto Review QA
-pass is queued), no `Todo` issue is dispatched. `Rework` and resumes still are.
+pass is queued), no `Todo` issue is dispatched. `Rework` and resumes still are, and so is a forced
+`Todo` on the forced allowance.
 
 ### 8.3 Concurrency Control
 
 Global limit:
 
 - `available_slots = max(max_concurrent_agents - running_count, 0)`, where `running_count`
-  leaves out landing runs.
+  leaves out landing runs and forced runs.
+
+Forced allowance:
+
+- An issue carrying `concurrency.force_label` outside a terminal state is forced. While fewer than
+  `forced_max` forced runs are running, a forced issue dispatches as a forced run: it skips
+  `max_total`, the epic lanes, `finishing_max`, `max_by_issue_state` and the "no `Todo` while a
+  finish waits" rule. The poll and the retry path (continuations such as `ci_fix` and
+  `review_feedback`, and landing runs) both apply it.
+- A forced run is marked `forced: true` and is counted by none of `running_count`, the finishing
+  count, the per-state counts or the epic lanes, so it never takes a normal slot. A run already
+  going when the label is added stays a normal run, and a running agent is never pre-empted.
+- A forced issue that finds `forced_max` forced runs running gets no extra slot. It still sorts
+  first for a normal slot (and runs as a normal run if it gets one), shows its queue position in
+  the `forced` snapshot and as its `slot_waiting` reason (`queued #2; forced slot taken by MT-1`),
+  and the service logs a warning and emits one `forced_waiting` notification naming the forced
+  runs holding the allowance, once per wait.
+- When every normal and finishing slot is full, a poll still runs its dispatch pass for a forced
+  candidate the allowance can take, or that has not been noted as waiting yet.
+- The daily token budget (`max_tokens_per_day`) does not stop a forced dispatch: when it is
+  exhausted only forced candidates dispatch, with a warning, and other waiting issues keep their
+  place. The per-issue cap (`max_tokens_per_issue`) still applies.
+- A usage-limit headroom hold (Section 8.4.2) does not hold a forced issue's run. A `paused` or
+  `canary` hold still does, and when a hold resumes a held forced retry is chosen as the canary.
+- Still respected: the operator pause, the Linear rate-limit pause, the workspace quota pause, the
+  per-host worker cap, blocked-by links, setup-failure suppression, retry backoff, post-PR quiet,
+  and the auto-merge / `Merging` CI waits.
 
 Finishing limit:
 
@@ -2075,7 +2104,7 @@ reached (for Claude, a used-up five-hour or weekly window; for Codex, an error w
   retries, operator PR runs and Auto Review QA passes. Other providers keep dispatching. Epic lanes
   stay reserved.
 - At `resume_at` the hold moves to `phase: canary` and exactly one held retry, the first in normal
-  dispatch order, is released as the canary; an immediate poll tick runs. The hold keeps covering
+  dispatch order (a forced issue first), is released as the canary; an immediate poll tick runs. The hold keeps covering
   every other run of that provider, so slots freed by held runs are not filled with other work on
   it. With nothing held, the hold is cleared and no canary runs.
 - When the canary's first `rate_limit_event` is `allowed` or `allowed_warning`, or the canary ends
@@ -2111,7 +2140,8 @@ sessions:
   (reported as a new pause).
 - The hold skips new dispatches on every path, as a pause does, and holds a retry that comes due
   with its attempt. It does not hold runs in flight, their continuation turns, the continuation
-  run scheduled when a run ends with the issue still active, or landing runs (`kind: landing`).
+  run scheduled when a run ends with the issue still active, landing runs (`kind: landing`), or a
+  forced issue's run (Section 8.3).
   `dispatch_state.active?` stays true while landing runs can still dispatch.
 - At `resume_at` the hold clears without a canary, and held retries return to normal candidate
   selection. It is persisted and restored on startup as a headroom hold.
@@ -3007,6 +3037,8 @@ SHOULD return:
   final transcript replay metadata while the watch remains open
 - `retrying` (list of retry queue rows)
 - each retry row SHOULD include `repo_key`
+- running, retry and `slot_waiting` rows SHOULD include `forced`: for a running row, whether it
+  runs on the forced allowance; for the others, whether the issue is in the forced queue
 - `repos` (list of repo keys observed in current snapshot rows)
 - `conflicts` (list of issues that matched multiple repo routes and are excluded from dispatch)
 - `awaiting_clarification` and `skipped` quality-gate rows when quality gating is enabled
@@ -3109,6 +3141,7 @@ The Elixir implementation supports token budget limits under `agent` in `symphon
   - Default: `5000000`.
   - Explicit `null` disables the daily cap.
   - When configured, new dispatch SHOULD pause once the UTC-day token total reaches the limit.
+    Forced issues (Section 8.3) still dispatch, with a warning.
   - Already-running agents SHOULD continue; the daily guardrail only gates new dispatch.
   - Daily usage SHOULD reset at the UTC day boundary.
   - The Elixir implementation rehydrates the current UTC day usage from durable runs across every
@@ -3197,6 +3230,7 @@ Minimum endpoints:
           "last_message": "",
           "started_at": "2026-02-24T20:10:12Z",
           "last_event_at": "2026-02-24T20:14:59Z",
+          "forced": false,
           "tokens": {
             "input_tokens": 1200,
             "uncached_input_tokens": 900,
@@ -3214,7 +3248,8 @@ Minimum endpoints:
           "issue_identifier": "MT-650",
           "attempt": 3,
           "due_at": "2026-02-24T20:16:00Z",
-          "error": "agent exited: turn timeout"
+          "error": "agent exited: turn timeout",
+          "forced": false
         }
       ],
       "finishing": {
@@ -3241,7 +3276,8 @@ Minimum endpoints:
           "state": "Todo",
           "reason": "a Merging or Auto Review issue is waiting for a slot",
           "attempt": null,
-          "since": "2026-02-24T20:15:30Z"
+          "since": "2026-02-24T20:15:30Z",
+          "forced": false
         }
       ],
       "blocked": [
@@ -4098,6 +4134,11 @@ infrastructure.
 - Dispatch sort order is stage (`Merging`, Auto Review, `Rework`, resume, `Todo`), then priority,
   then oldest creation time
 - A landing run starts while every `max_total` slot and epic lane is busy, up to `finishing_max`
+- A forced issue dispatches first, on its own `forced_max` allowance, while `max_total`, the epic
+  lanes, `finishing_max` and the per-state caps are full, on the poll and the retry path; its run
+  takes no normal slot, and a second forced issue past `forced_max` waits and is noted once
+- The daily token budget and a usage-limit headroom hold do not stop a forced dispatch; the
+  operator pause, blocked-by links and a `paused` usage-limit hold do
 - No `Todo` issue is dispatched while a `Merging` issue waits for a finishing slot
 - A retry that finds no slot keeps its attempt, gets no backoff, and starts on the first poll after
   a slot frees

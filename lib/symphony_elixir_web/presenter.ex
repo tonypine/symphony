@@ -525,6 +525,7 @@ defmodule SymphonyElixirWeb.Presenter do
       last_message: summarize_message(entry.last_codex_message),
       started_at: iso8601(entry.started_at),
       last_event_at: iso8601(Map.get(entry, :last_event_at) || entry.last_codex_timestamp),
+      forced: Map.get(entry, :forced, false),
       tokens: %{
         input_tokens: entry_input_tokens(entry),
         uncached_input_tokens: entry_uncached_input_tokens(entry),
@@ -572,7 +573,8 @@ defmodule SymphonyElixirWeb.Presenter do
       due_at: due_at_iso8601(entry.due_in_ms),
       error: entry.error,
       worker_host: Map.get(entry, :worker_host),
-      workspace_path: Map.get(entry, :workspace_path)
+      workspace_path: Map.get(entry, :workspace_path),
+      forced: Map.get(entry, :forced, false)
     }
   end
 
@@ -817,7 +819,8 @@ defmodule SymphonyElixirWeb.Presenter do
       state: entry.state,
       reason: entry.reason,
       attempt: Map.get(entry, :attempt),
-      since: iso8601(Map.get(entry, :since))
+      since: iso8601(Map.get(entry, :since)),
+      forced: Map.get(entry, :forced, false)
     }
   end
 

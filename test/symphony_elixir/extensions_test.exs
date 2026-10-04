@@ -530,6 +530,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "last_message" => "rendered",
                  "started_at" => state_payload["running"] |> List.first() |> Map.fetch!("started_at"),
                  "last_event_at" => nil,
+                 "forced" => false,
                  "tokens" => %{
                    "input_tokens" => 4,
                    "uncached_input_tokens" => 4,
@@ -564,7 +565,8 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "due_at" => state_payload["retrying"] |> List.first() |> Map.fetch!("due_at"),
                  "error" => "boom",
                  "worker_host" => nil,
-                 "workspace_path" => nil
+                 "workspace_path" => nil,
+                 "forced" => false
                }
              ],
              "awaiting_clarification" => [],
@@ -666,7 +668,8 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "state" => "Todo",
                  "reason" => "a Merging or Auto Review issue is waiting for a slot",
                  "attempt" => nil,
-                 "since" => "2026-10-03T06:00:00Z"
+                 "since" => "2026-10-03T06:00:00Z",
+                 "forced" => false
                }
              ],
              "blocked" => [
