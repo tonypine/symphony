@@ -382,6 +382,7 @@ defmodule SymphonyElixir.StatusDashboard do
            %{
              running: running,
              watching: Map.get(snapshot, :watching, []),
+             forced: Map.get(snapshot, :forced, []),
              retrying: retrying,
              awaiting_clarification: Map.get(snapshot, :awaiting_clarification, []),
              skipped: Map.get(snapshot, :skipped, []),
@@ -443,6 +444,7 @@ defmodule SymphonyElixir.StatusDashboard do
          %{
            running: running,
            watching: Map.get(snapshot, :watching, []),
+           forced: Map.get(snapshot, :forced, []),
            retrying: retrying,
            awaiting_clarification: Map.get(snapshot, :awaiting_clarification, []),
            skipped: Map.get(snapshot, :skipped, []),

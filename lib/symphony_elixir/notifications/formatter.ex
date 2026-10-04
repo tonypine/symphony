@@ -14,7 +14,8 @@ defmodule SymphonyElixir.Notifications.Formatter do
     "ci_failed",
     "ci_escalated",
     "qa_passed",
-    "qa_failed"
+    "qa_failed",
+    "forced_human_gate"
   ]
 
   # Not about one issue: the headline and text carry the reason (which limit, when it resumes).
@@ -190,6 +191,8 @@ defmodule SymphonyElixir.Notifications.Formatter do
   defp event_title("usage_limit_headroom"), do: "Usage limit headroom hold"
   defp event_title("usage_limit_resumed"), do: "Usage limit resumed"
   defp event_title("forced_waiting"), do: "Forced ticket waiting"
+  defp event_title("forced_human_gate"), do: "Forced ticket waiting for your review"
+  defp event_title("forced_stale"), do: "Forced ticket stale"
   defp event_title(event), do: event
 
   defp event_color("run_failed"), do: "danger"
@@ -205,6 +208,7 @@ defmodule SymphonyElixir.Notifications.Formatter do
   defp event_color("usage_limit_headroom"), do: "warning"
   defp event_color("usage_limit_resumed"), do: "good"
   defp event_color("forced_waiting"), do: "warning"
+  defp event_color("forced_stale"), do: "warning"
   defp event_color(_event), do: "#2f80ed"
 
   defp blank?(value), do: value in [nil, ""]

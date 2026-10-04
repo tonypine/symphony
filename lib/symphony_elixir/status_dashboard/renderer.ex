@@ -10,7 +10,7 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
   """
 
   alias SymphonyElixir.Codex.MessageHumanizer
-  alias SymphonyElixir.{Config, Format, HttpServer, RunKind, URLUtils, UsageLimit}
+  alias SymphonyElixir.{Config, ForcedStatus, Format, HttpServer, RunKind, URLUtils, UsageLimit}
 
   @throughput_window_ms 5_000
   @throughput_graph_window_ms 10 * 60 * 1000
@@ -25,6 +25,9 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
   @running_event_default_width 44
   @running_event_min_width 12
   @running_row_chrome_width 10
+  @forced_phase_width 20
+  @forced_waiting_width 24
+  @forced_marker "⚡"
   @watching_id_width 8
   @watching_state_width 14
   @watching_age_width 12
@@ -74,6 +77,8 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
         codex_seconds_running = Map.get(codex_totals, :seconds_running, 0)
         agent_count = length(running)
         max_agents = Config.settings!().agent.max_concurrent_agents
+        forced = Map.get(snapshot, :forced, [])
+        forced_rows = format_forced_section(forced)
         running_event_width = running_event_width(terminal_columns_override)
         running_rows = format_running_rows(running, running_event_width)
         running_to_watching_spacer = if(running == [], do: [], else: ["│"])
@@ -106,7 +111,11 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
              colorize("│ Agents: ", @ansi_bold) <>
                colorize("#{agent_count}", @ansi_green) <>
                colorize("/", @ansi_gray) <>
-               colorize("#{max_agents}", @ansi_gray),
+               colorize("#{max_agents}", @ansi_gray) <>
+               colorize(" · forced ", @ansi_gray) <>
+               colorize("#{length(forced)}", @ansi_yellow) <>
+               colorize("/", @ansi_gray) <>
+               colorize("#{Config.settings!().agent.forced_max}", @ansi_gray),
              colorize("│ Throughput: ", @ansi_bold) <> colorize("#{format_tps(tps)} tps", @ansi_cyan),
              colorize("│ Runtime: ", @ansi_bold) <>
                colorize(format_runtime_seconds(codex_seconds_running), @ansi_magenta),
@@ -122,6 +131,7 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
              workspace_lifecycle_lines,
              scope_link_lines,
              refresh_line,
+             forced_rows,
              colorize("├─ Running", @ansi_bold),
              "│",
              running_table_header_row(running_event_width),
@@ -213,8 +223,7 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
 
     [
       "│ ",
-      status_dot(status_color),
-      " ",
+      running_marker(running_entry, status_color),
       colorize(issue, @ansi_cyan),
       " ",
       colorize(state_display, status_color),
@@ -893,6 +902,7 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
     "│  #{colorize("↻", @ansi_orange)} " <>
       colorize("#{identifier}", @ansi_red) <>
       " " <>
+      forced_suffix(retry_entry) <>
       colorize("attempt=#{attempt}", @ansi_yellow) <>
       colorize(" in ", @ansi_dim) <>
       colorize(next_in_words(due_in_ms), @ansi_cyan) <>
@@ -1257,6 +1267,55 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
   defp status_dot(color_code) do
     colorize("●", color_code)
   end
+
+  # A forced run's ⚡ takes the place of the status dot and its space: both are two columns wide.
+  defp running_marker(%{forced: true}, _status_color), do: @forced_marker
+  defp running_marker(_running_entry, status_color), do: status_dot(status_color) <> " "
+
+  defp forced_suffix(%{forced: true}), do: @forced_marker <> " "
+  defp forced_suffix(_entry), do: ""
+
+  # The forced tickets, above the running agents, only while there are some: identifier (a forced
+  # parent with its current part), phase, what it waits on, and how long it has been forced.
+  defp format_forced_section([]), do: []
+
+  defp format_forced_section(forced) when is_list(forced) do
+    header =
+      [
+        format_cell("ID", @running_id_width),
+        format_cell("PHASE", @forced_phase_width),
+        format_cell("WAITING ON", @forced_waiting_width),
+        "FORCED FOR"
+      ]
+      |> Enum.join(" ")
+
+    [colorize("├─ Forced", @ansi_bold), "│", "│   " <> colorize(header, @ansi_gray)] ++ Enum.map(forced, &format_forced_row/1) ++ ["│"]
+  end
+
+  defp format_forced_row(entry) do
+    identifier = format_cell(entry.identifier || entry.issue_id || "unknown", @running_id_width)
+    phase = format_cell(ForcedStatus.phase_label(Map.get(entry, :phase)), @forced_phase_width)
+    waiting = format_cell(ForcedStatus.waiting_label(entry), @forced_waiting_width)
+    forced_for = ForcedStatus.duration_label(Map.get(entry, :forced_for_seconds))
+
+    [
+      "│ ",
+      @forced_marker,
+      colorize(identifier, @ansi_cyan),
+      " ",
+      colorize(phase, @ansi_magenta),
+      " ",
+      colorize(waiting, if(Map.get(entry, :running), do: @ansi_green, else: @ansi_yellow)),
+      " ",
+      colorize(forced_for, @ansi_gray),
+      if(Map.get(entry, :stale), do: " " <> colorize("stale", @ansi_red), else: ""),
+      forced_part_label(Map.get(entry, :sub_issue))
+    ]
+    |> Enum.join("")
+  end
+
+  defp forced_part_label(%{identifier: identifier}) when is_binary(identifier), do: colorize(" → #{identifier}", @ansi_gray)
+  defp forced_part_label(_part), do: ""
 
   defp codex_totals_uncached_input_tokens(codex_totals) when is_map(codex_totals) do
     case codex_totals_token(codex_totals, :uncached_input_tokens, nil) do
