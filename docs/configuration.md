@@ -751,7 +751,9 @@ When enabled, Symphony moves an issue whose run opened a PR to `state` (default 
 instead of `In Review`, and the CI poller watches it there:
 
 - red CI sends the issue back to `In Progress` through the usual CI fix loop;
-- green CI starts a QA pass on the PR head.
+- green CI starts a QA pass on the PR head;
+- a PR that conflicts with its base and has no checks (GitHub runs no CI on it) goes to `Rework`
+  with a comment saying which branch to merge in.
 
 Agents can no longer move the issue to `In Review` themselves: `linear_update_state("In Review")`
 returns "Symphony moves the issue to Auto Review once the PR is open; leave the state as it is."
@@ -940,22 +942,69 @@ opens, changes focus once, and then checks the sizes of the content and scroll a
 accessibility tree, not just the window frame. A window that opens at full height and collapses
 seconds later fails, with the AX tree quoted and a screenshot attached.
 
-The screenshot and accessibility tools use a small Swift helper that Symphony compiles once with
-`swiftc` (Xcode or the Command Line Tools) into `<state root>/qa-driver/`. Bundle copies,
-screenshot staging and the app's QA root live in a `0700` directory per pass under
-`<state root>/qa-driver/runs/`, outside every path the agent sandbox may write, and are removed
-when the pass ends.
+The screenshot and accessibility tools run in a small helper app, `SymphonyQADriver.app`, which
+holds the Screen Recording and Accessibility grants. Symphony opens it through LaunchServices
+(`open -a`) and talks to it over a Unix socket in one fixed `0700` directory,
+`~/Library/Application Support/symphony/qa-driver/run/`, whatever the state root. The helper
+answers only the Symphony process that opened it, only for apps that process launched, and quits
+when Symphony does.
+
+The helper does not trust the process tree to tell Symphony from an agent: an agent can leave it,
+for example with a double fork or `nohup … &`. Before it opens the helper, Symphony leaves an
+owner file, `qa-<pid>.owner`, in the run directory. The helper serves only an owner whose file it
+finds there and that is under 30 seconds old (it removes the file; an older one, left by a Symphony
+that crashed, names no one), only on that owner's socket in the same directory, and only an
+Erlang VM (`beam.smp`) that no other Erlang VM started. Agent sandboxes cannot write the run
+directory, so an agent cannot make itself the owner, nor put its own socket where Symphony
+connects. This holds only while the run directory stays out of the sandbox's writable paths: do
+not add it, or a parent of it, to `permissions.filesystem.allow_write_paths`, and do not run agents
+without a sandbox on a Mac where the helper has its grants. When the run directory path is longer
+than a Unix socket path allows (a very long home directory), the QA tools fail with
+`socket_path_too_long`.
+
+The helper also refuses its screenshot and accessibility commands when it is opened with them directly,
+for example `open -a SymphonyQADriver.app --args screenshot …`: it runs them only for its own
+`serve` process. `Symphony.app` ships it signed at
+`Symphony.app/Contents/Helpers/SymphonyQADriver.app`. When Symphony runs from a terminal, it
+compiles the helper once with `swiftc` (Xcode or the Command Line Tools) and signs it ad hoc at
+`<state root>/qa-driver/<hash>/SymphonyQADriver.app`. Bundle copies, screenshot staging and the
+app's QA root live in a `0700` directory per pass under `<state root>/qa-driver/runs/`, outside
+every path the agent sandbox may write, and are removed when the pass ends.
 
 ##### One-time macOS permissions
 
-Screenshots need **Screen Recording** and the accessibility tools need **Accessibility**, both
-granted to the process that runs Symphony: `Symphony.app` when the menu bar app runs it, or the
-terminal app you start `symphony` from. Grant them once:
+Screenshots need **Screen Recording** and the accessibility tools need **Accessibility**. Grant
+both to **Symphony QA Driver** (`SymphonyQADriver.app`) and to nothing else.
 
-1. Open **System Settings → Privacy & Security → Screen & System Audio Recording** and turn on
-   Symphony.app (or your terminal). Use **+** to add it when it is not listed.
-2. Open **System Settings → Privacy & Security → Accessibility** and do the same.
-3. Restart Symphony (and the terminal, when Symphony runs from one) so the grants apply.
+> [!WARNING]
+> Do not grant Screen Recording or Accessibility to `Symphony.app`, or to the terminal you run
+> `symphony` from. macOS passes an app's grants to every process it starts, and Symphony starts
+> the coding agents, which run with `--dangerously-skip-permissions`. With such a grant, any agent
+> could run `screencapture` or an AppleScript to read your screen (mail, browser, password
+> prompts) and drive any app, including clicking "Always Allow" on a Keychain prompt. Symphony
+> opens the helper through LaunchServices, so the helper's grants stay with the helper. If you
+> already granted `Symphony.app` or your terminal, turn those grants off.
+
+1. Open the helper once so macOS lists it. With the menu bar app:
+
+   ```bash
+   open ~/Applications/Symphony.app/Contents/Helpers/SymphonyQADriver.app
+   ```
+
+   When Symphony runs from a terminal, the helper only exists after the first QA pass builds it.
+   Open it from `<state root>/qa-driver/<hash>/SymphonyQADriver.app` instead. macOS asks for
+   Accessibility and Screen Recording.
+2. Open **System Settings → Privacy & Security → Screen & System Audio Recording** and turn on
+   Symphony QA Driver. Use **+** to add `SymphonyQADriver.app` when it is not listed.
+3. Open **System Settings → Privacy & Security → Accessibility** and do the same.
+4. Check that `Symphony.app` and your terminal are off in both lists.
+
+Symphony opens the helper again for the next QA pass, so you don't need to restart anything. A
+release `Symphony.app` signs the helper with the same certificate every time, so the grants survive
+app updates. A locally built app (`make` in `macos/`) and the helper built from a terminal are
+signed ad hoc: macOS asks again after each rebuild, and after each Symphony version that changes
+the helper. Both are signed with the hardened runtime, so code injected with
+`DYLD_INSERT_LIBRARIES` does not load into the helper and can't use its grants.
 
 Without a grant the tools return `qa_permission_missing`, the QA agent answers `blocked` with the
 missing permission as the reason, and the issue goes to `In Review` with that reason in the QA
@@ -984,7 +1033,9 @@ host and the worktree checks still apply there. Then:
 - `qa_launch_app` starts that copy with only `SYMPHONY_BAR_QA_ROOT` set;
 - the Swift helper is compiled there with `swiftc` on first use in each pass, into the run
   directory's `helper/`. Passes never share it: each PR's build runs as the QA user, and a helper
-  it replaced could answer the permission, window and accessibility calls of later passes;
+  it replaced could answer the permission, window and accessibility calls of later passes. There it
+  runs its commands directly over SSH, with the grant on `sshd-keygen-wrapper` (step 4 below), and
+  no `SymphonyQADriver.app` is opened or granted;
 - screenshots are captured there and copied back into `qa-evidence/` in the local QA worktree, so
   the agent attaches them as before;
 - the run directory is removed when the pass ends. A build that times out is stopped on the

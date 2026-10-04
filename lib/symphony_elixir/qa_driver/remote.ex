@@ -60,7 +60,7 @@ defmodule SymphonyElixir.QaDriver.Remote do
     umask 077
     mkdir -p "$dir" || exit 1
     printf %s "$2" | base64 --decode > "$dir/symphony-qa-driver.swift" || exit 1
-    swiftc -O -o "$bin.$$" "$dir/symphony-qa-driver.swift" || exit 1
+    swiftc -O -D SYMPHONY_QA_SSH -o "$bin.$$" "$dir/symphony-qa-driver.swift" || exit 1
     mv "$bin.$$" "$bin" || exit 1
   fi
   printf 'symphony-qa-helper:%s\\n' "$bin"
@@ -89,6 +89,7 @@ defmodule SymphonyElixir.QaDriver.Remote do
       launch: &launch(ssh_host, &1, &2),
       kill: &kill(ssh_host, &1),
       helper: &helper(ssh_host, &1),
+      call_helper: &call_helper(ssh_host, &1, &2, &3),
       read: &read(ssh_host, &1),
       prepare: &prepare(ssh_host, &1, &2),
       ship: &ship(ssh_host, &1, &2),
@@ -202,6 +203,15 @@ defmodule SymphonyElixir.QaDriver.Remote do
         {:error, reason}
     end
   end
+
+  @doc """
+  Runs one helper command on the QA host. The helper there is compiled with
+  `SYMPHONY_QA_SSH`, so it runs its commands directly instead of only for its
+  own `serve` process: it holds no grant of its own, and commands started over
+  SSH use the grant on `sshd-keygen-wrapper`.
+  """
+  @spec call_helper(String.t(), String.t(), [String.t()], keyword()) :: SymphonyElixir.QaDriver.cmd_result()
+  def call_helper(ssh_host, helper, args, opts), do: cmd(ssh_host, helper, args, opts)
 
   @doc "Copies a regular file from the QA host and removes it there."
   @spec read(String.t(), String.t()) :: {:ok, binary()} | {:error, term()}

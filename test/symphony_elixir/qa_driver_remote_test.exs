@@ -58,24 +58,29 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
     HOME="$QA_FAKE_HOME" XDG_CONFIG_HOME="$QA_FAKE_HOME/.config" SSH_AUTH_SOCK="${QA_FAKE_AUTH_SOCK:-}" PATH="$QA_FAKE_BIN:$PATH" exec sh -c "$3"
     """)
 
-    # QA host tools: swiftc builds a helper that answers like the real one.
+    # QA host tools: swiftc builds a helper that answers like the real one, and
+    # only when it is built to run its commands directly over SSH.
     write_script!(Path.join(qa_bin, "swiftc"), """
     #!/bin/sh
     if [ -n "$QA_FAKE_SWIFTC_FAIL" ]; then echo "error: no such module"; exit 1; fi
-    out=$3
+    while [ $# -gt 0 ]; do
+      case "$1" in -o) out=$2; shift ;; -D) defines="$defines $2"; shift ;; esac
+      shift
+    done
+    case "$defines" in *SYMPHONY_QA_SSH*) ;; *) echo "error: not built with SYMPHONY_QA_SSH"; exit 1 ;; esac
     cat > "$out" <<'HELPER'
     #!/bin/sh
     case "$1" in
       permissions) echo '{"accessibility":true,"screen_recording":true}' ;;
       windows) echo '{"windows":[{"id":11,"title":"Settings","layer":0,"onscreen":true,"frame":{"x":0,"y":0,"w":548,"h":420}}]}' ;;
       ax-tree) echo '{"root":{"path":"","role":"AXApplication","children":[{"path":"0","role":"AXWindow","title":"Settings"}]},"nodes":2,"truncated":false}' ;;
+      screenshot) printf 'png-from-qa-host' > "$4"; echo '{"ok":true}' ;;
     esac
     HELPER
     chmod +x "$out"
     """)
 
     write_script!(Path.join(qa_bin, "plutil"), "#!/bin/sh\nprintf 'Demo\\n'\n")
-    write_script!(Path.join(qa_bin, "screencapture"), "#!/bin/sh\nfor last; do :; done\nprintf 'png-from-qa-host' > \"$last\"\n")
   end
 
   defp write_script!(path, body) do
@@ -110,12 +115,6 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
     test "builds, launches, reads and captures the app on the QA host", %{root: root, qa_home: qa_home, ssh_host: ssh_host} do
       worktree = git_worktree!(root)
 
-      # screencapture lives in /usr/sbin on macOS; the fake QA host has it on PATH.
-      cmd = fn
-        "/usr/sbin/screencapture", args, opts -> Remote.cmd(ssh_host, "screencapture", args, opts)
-        executable, args, opts -> Remote.cmd(ssh_host, executable, args, opts)
-      end
-
       # The fake QA host runs as this user; point the isolation checks elsewhere.
       prepare = fn _operator_home, _canary -> Remote.prepare(ssh_host, Path.join(root, "operator"), Path.join(root, "no-canary")) end
 
@@ -124,7 +123,7 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
           worktree: worktree,
           worker_host: ssh_host,
           playbook: %{kind: "macos_app", build: "sh build.sh", app: @app},
-          host: %{cmd: cmd, prepare: prepare}
+          host: %{prepare: prepare}
         )
 
       %{host_dir: run_dir, scratch_dir: scratch_dir} = GenServer.call(driver, :config)

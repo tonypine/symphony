@@ -21,6 +21,7 @@ final class SymphonyRunner {
 
     /// Where this build's embedded Symphony is, at `Contents/Resources/symphony`.
     nonisolated static let embeddedSymphonyPath = EmbeddedSymphony.path(resourcesPath: Bundle.main.resourcePath)
+    nonisolated static let qaDriverAppPath = QADriverApp.path(bundlePath: Bundle.main.bundlePath)
 
     /// True when this build carries an embedded Symphony.
     nonisolated static var hasEmbeddedSymphony: Bool { EmbeddedSymphony.isAvailable(at: embeddedSymphonyPath) }
@@ -137,6 +138,7 @@ final class SymphonyRunner {
             secrets: secrets,
             baseEnvironment: AppStores.current.environment,
             embeddedSymphonyPath: Self.embeddedSymphonyPath,
+            qaDriverAppPath: Self.qaDriverAppPath,
             subcommand: subcommand,
             qaMode: AppStores.current.isQAMode
         )
@@ -188,7 +190,7 @@ final class SymphonyRunner {
     }
 
     /// Posts a notification, or shows an alert when notifications aren't allowed.
-    private func notify(title: String, body: String) {
+    func notify(title: String, body: String) {
         // UNUserNotificationCenter needs an app bundle; `swift run` has none.
         guard Bundle.main.bundleIdentifier != nil else {
             Self.showAlert(title: title, body: body)

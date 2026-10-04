@@ -3,15 +3,15 @@ import Foundation
 /// Pure description of the menu bar item, kept free of AppKit so it can be unit tested.
 public enum StatusMenu {
     /// SF Symbol shown in the menu bar for each status. Rendered as a template image so it follows
-    /// light and dark menu bars.
+    /// light and dark menu bars. A usage-limit hold shows as paused too.
     public static func iconSymbolName(for status: SymphonyStatus) -> String {
         switch status {
         case .stopped:
             return "stop.circle"
         case .starting:
             return "hourglass"
-        case .running:
-            return "music.note.list"
+        case let .running(snapshot, _):
+            return snapshot.usageLimits.isEmpty ? "music.note.list" : "pause.circle"
         case .paused:
             return "pause.circle"
         case .error:
@@ -50,10 +50,10 @@ public enum StatusMenu {
         switch status {
         case .stopped, .starting:
             lines = []
-        case let .running(snapshot, _):
-            lines = [countsLine(snapshot)]
-        case let .paused(snapshot, _):
+        case let .running(snapshot, _), let .paused(snapshot, _):
+            // The operator pause first, then the usage-limit holds.
             lines = [countsLine(snapshot)] + (snapshot.pause.map { [pauseLine($0, now: now, timeZone: timeZone)] } ?? [])
+                + snapshot.usageLimits.map { usageLimitLine($0, now: now, timeZone: timeZone) }
         case let .error(message):
             lines = [message]
         }
@@ -82,18 +82,78 @@ public enum StatusMenu {
     public static func pauseLine(_ pause: StateSnapshot.Pause, now: Date, timeZone: TimeZone) -> String {
         var line = "Paused"
         if let since = pause.since {
-            var calendar = Calendar(identifier: .gregorian)
-            calendar.timeZone = timeZone
-            let formatter = DateFormatter()
-            formatter.locale = Locale(identifier: "en_US_POSIX")
-            formatter.timeZone = timeZone
-            formatter.dateFormat = calendar.isDate(since, inSameDayAs: now) ? "HH:mm" : "MMM d, HH:mm"
-            line += " since \(formatter.string(from: since))"
+            line += " since \(clockTime(since, now: now, timeZone: timeZone, dateFormat: "MMM d, HH:mm"))"
         }
         if let reason = pause.reason?.trimmingWhitespace(), !reason.isEmpty {
             line += ": \(reason)"
         }
         return line
+    }
+
+    /// For example "Paused: Claude limit, resumes ~14:05", "Resuming: checking Claude limit…" or
+    /// "Holding new runs: Claude at 91%, resets ~14:05". Times are local, with the date when not today.
+    public static func usageLimitLine(_ limit: StateSnapshot.UsageLimit, now: Date, timeZone: TimeZone) -> String {
+        let provider = providerName(limit.provider)
+        switch limit.phase {
+        case .paused:
+            return "Paused: \(provider) limit" + approximateTime(", resumes", limit.resumeAt, now: now, timeZone: timeZone)
+        case .canary:
+            return "Resuming: checking \(provider) limit…"
+        case .headroom:
+            let used = limit.utilization.map { " at \(Int(($0 * 100).rounded()))%" } ?? ""
+            return "Holding new runs: \(provider)\(used)" + approximateTime(", resets", limit.resetsAt, now: now, timeZone: timeZone)
+        }
+    }
+
+    /// The limit a hold is on, as Symphony's dashboards name it: "Claude 5-hour limit".
+    public static func limitName(_ limit: StateSnapshot.UsageLimit) -> String {
+        let window: String
+        switch limit.window {
+        case "five_hour"?:
+            window = "5-hour limit"
+        case "seven_day"?:
+            window = "weekly limit"
+        case "seven_day_opus"?:
+            window = "weekly Opus limit"
+        case "seven_day_sonnet"?:
+            window = "weekly Sonnet limit"
+        case let other?:
+            window = "\(other) limit"
+        case nil:
+            window = "usage limit"
+        }
+        return "\(providerName(limit.provider)) \(window)"
+    }
+
+    /// How people name a provider: "Claude" for `anthropic`.
+    public static func providerName(_ provider: String) -> String {
+        switch provider {
+        case "anthropic":
+            return "Claude"
+        case "openai":
+            return "Codex"
+        case "openrouter":
+            return "OpenRouter"
+        default:
+            return provider
+        }
+    }
+
+    /// For example ", resumes ~14:05", or "" without a time.
+    static func approximateTime(_ prefix: String, _ date: Date?, now: Date, timeZone: TimeZone) -> String {
+        guard let date else { return "" }
+        return "\(prefix) ~\(clockTime(date, now: now, timeZone: timeZone, dateFormat: "MMM d HH:mm"))"
+    }
+
+    /// "14:05" on the day of `now`, otherwise `dateFormat`, for example "Oct 4 14:05".
+    private static func clockTime(_ date: Date, now: Date, timeZone: TimeZone, dateFormat: String) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = timeZone
+        formatter.dateFormat = calendar.isDate(date, inSameDayAs: now) ? "HH:mm" : dateFormat
+        return formatter.string(from: date)
     }
 
     private static func statusWord(_ status: SymphonyStatus) -> String {
@@ -102,6 +162,8 @@ public enum StatusMenu {
             return "stopped"
         case .starting:
             return "starting…"
+        case let .running(snapshot, external) where !snapshot.usageLimits.isEmpty:
+            return external ? "paused (external)" : "paused"
         case let .running(_, external):
             return external ? "running (external)" : "running"
         case let .paused(_, external):

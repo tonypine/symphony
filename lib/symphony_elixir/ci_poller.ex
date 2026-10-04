@@ -449,7 +449,13 @@ defmodule SymphonyElixir.CiPoller do
         mark_ci_green(record, ci_status, settings, opts, now)
 
       :pending ->
-        complete_ci_update(opts, record, ci_status_attrs(record, ci_status, %{status: "watching"}, now), {:watching, Map.get(record, :issue_id)})
+        issue_id = Map.get(record, :issue_id)
+        attrs = ci_status_attrs(record, ci_status, %{status: "watching"}, now)
+
+        case complete_ci_update(opts, record, attrs, {:watching, issue_id}) do
+          {:watching, ^issue_id} = action -> maybe_send_auto_review_conflict(action, record, ci_status, opts)
+          other -> other
+        end
 
       {:failure, failed_checks} ->
         handle_ci_failure(record, ci_status, failed_checks, settings, opts, now)
@@ -849,6 +855,17 @@ defmodule SymphonyElixir.CiPoller do
     case Map.get(Keyword.get(opts, :auto_review_issues, %{}), issue_id) do
       %Issue{} = issue -> AutoReview.on_green(issue, record, ci_status, settings, opts)
       nil -> action
+    end
+  end
+
+  # GitHub runs no `pull_request` workflows on a PR that conflicts with its base, so an Auto Review
+  # issue whose PR conflicts and has no checks would wait forever (see AutoReview.on_conflict/4).
+  defp maybe_send_auto_review_conflict({:watching, issue_id} = action, record, ci_status, opts) do
+    with %Issue{} = issue <- Map.get(Keyword.get(opts, :auto_review_issues, %{}), issue_id),
+         true <- Map.get(ci_status, :checks) == [] and PullRequest.conflicting?(ci_status) do
+      AutoReview.on_conflict(issue, record, ci_status, opts)
+    else
+      _other -> action
     end
   end
 

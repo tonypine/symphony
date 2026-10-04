@@ -31,6 +31,11 @@ defmodule SymphonyElixir.CiPollerTest do
       send(recipient, {:issue_state_update, issue_id, state_name})
       :ok
     end
+
+    def create_comment(issue_id, body) do
+      send(Application.fetch_env!(:symphony_elixir, :ci_test_recipient), {:issue_comment, issue_id, body})
+      :ok
+    end
   end
 
   defmodule FakeGitHub do
@@ -181,6 +186,16 @@ defmodule SymphonyElixir.CiPollerTest do
 
     def update_issue_state(issue_id, state_name) do
       send(Application.fetch_env!(:symphony_elixir, :ci_test_recipient), {:issue_state_update, issue_id, state_name})
+      {:error, :linear_unavailable}
+    end
+  end
+
+  defmodule FailingCommentTracker do
+    def fetch_issues_by_states(states), do: FakeTracker.fetch_issues_by_states(states)
+    def update_issue_state(issue_id, state_name), do: FakeTracker.update_issue_state(issue_id, state_name)
+
+    def create_comment(issue_id, body) do
+      send(Application.fetch_env!(:symphony_elixir, :ci_test_recipient), {:issue_comment, issue_id, body})
       {:error, :linear_unavailable}
     end
   end
@@ -412,6 +427,107 @@ defmodule SymphonyElixir.CiPollerTest do
 
       assert {:error, :store_down} =
                CiPoller.complete_pending_qa_failure("issue-2401", repo_key: @repo_key, run_store: QaFailureStore)
+    end
+
+    test "a conflicting PR with no checks goes to Rework with a comment" do
+      now = ~U[2026-05-06 09:00:00Z]
+      issue = %{in_review_issue() | state: "Auto Review"}
+      Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+      Application.put_env(:symphony_elixir, :ci_test_status, conflicting_status())
+      put_run(issue, now)
+
+      assert {:ok, %{actions: [{:auto_review_conflict, "issue-2401", "Rework"}]}} =
+               CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, qa_runner: FakeQaRunner, now: now)
+
+      assert_receive {:issue_state_update, "issue-2401", "Rework"}
+      assert_receive {:issue_comment, "issue-2401", body}
+      assert body =~ "PR conflicts with `develop`; merge it and push."
+      refute_receive {:qa_request, _job}
+    end
+
+    test "a conflicting PR without a base branch names the repository's base branch" do
+      now = ~U[2026-05-06 09:00:00Z]
+      issue = %{in_review_issue() | state: "Auto Review"}
+      Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+      status = %{conflicting_status() | base_ref_name: nil, merge_state_status: nil}
+      Application.put_env(:symphony_elixir, :ci_test_status, status)
+      put_run(issue, now)
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %{actions: [{:auto_review_conflict, "issue-2401", "Rework"}]}} =
+                   CiPoller.poll_once(tracker: FailingCommentTracker, github: FakeGitHub, now: now)
+        end)
+
+      assert_receive {:issue_state_update, "issue-2401", "Rework"}
+      assert_receive {:issue_comment, "issue-2401", body}
+      assert body =~ "PR conflicts with `main`; merge it and push."
+      assert log =~ "Failed to comment on ACME-2401 about its conflicting PR"
+    end
+
+    test "a failed move to Rework is retried on the next poll without commenting" do
+      now = ~U[2026-05-06 09:00:00Z]
+      issue = %{in_review_issue() | state: "Auto Review"}
+      Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+      Application.put_env(:symphony_elixir, :ci_test_status, conflicting_status())
+      put_run(issue, now)
+
+      capture_log(fn ->
+        assert {:ok, %{actions: [{:state_transition_error, "issue-2401", :auto_review_conflict, :linear_unavailable}]}} =
+                 CiPoller.poll_once(tracker: FailingAutoReviewTracker, github: FakeGitHub, now: now)
+      end)
+
+      refute_receive {:issue_comment, _issue_id, _body}
+
+      assert {:ok, %{actions: [{:auto_review_conflict, "issue-2401", "Rework"}]}} =
+               CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: DateTime.add(now, 1, :minute))
+    end
+
+    test "a clean PR with pending checks keeps waiting" do
+      now = ~U[2026-05-06 09:00:00Z]
+      issue = %{in_review_issue() | state: "Auto Review"}
+      Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+
+      Application.put_env(:symphony_elixir, :ci_test_status, %{
+        conflicting_status()
+        | mergeable: "MERGEABLE",
+          merge_state_status: "BLOCKED",
+          checks: [%{name: "specs", status: "IN_PROGRESS", conclusion: nil, run_id: "987"}]
+      })
+
+      put_run(issue, now)
+
+      assert {:ok, %{actions: [{:watching, "issue-2401"}]}} =
+               CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+      refute_receive {:issue_state_update, _issue_id, _state}
+      refute_receive {:issue_comment, _issue_id, _body}
+      assert [%{status: "watching"}] = RunStore.list_ci_checks()
+    end
+
+    test "a conflicting PR that has checks, or is not in Auto Review, keeps waiting" do
+      now = ~U[2026-05-06 09:00:00Z]
+      issue = %{in_review_issue() | state: "Auto Review"}
+      Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+
+      Application.put_env(:symphony_elixir, :ci_test_status, %{
+        conflicting_status()
+        | checks: [%{name: "specs", status: "QUEUED", conclusion: nil, run_id: "987"}]
+      })
+
+      put_run(issue, now)
+
+      assert {:ok, %{actions: [{:watching, "issue-2401"}]}} =
+               CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+      Application.put_env(:symphony_elixir, :ci_test_issues, [in_review_issue()])
+      Application.put_env(:symphony_elixir, :ci_test_status, conflicting_status())
+
+      assert {:ok, %{actions: [{:watching, "issue-2401"}]}} =
+               CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: DateTime.add(now, 1, :minute))
+
+      refute_receive {:issue_state_update, _issue_id, _state}
+      refute_receive {:issue_comment, _issue_id, _body}
     end
 
     test "an issue with no state is not treated as in Auto Review" do
@@ -1579,6 +1695,14 @@ defmodule SymphonyElixir.CiPollerTest do
       %{key: @repo_key, workflow: Workflow.workflow_file_path(), default: true, team: "Test"},
       %{key: "secondary", workflow: Workflow.workflow_file_path(), team: "PIN4WOO", labels: ["Bug"]}
     ]
+  end
+
+  defp conflicting_status do
+    %{
+      green_status()
+      | checks: []
+    }
+    |> Map.merge(%{mergeable: "CONFLICTING", merge_state_status: "DIRTY", base_ref_name: "develop"})
   end
 
   defp green_status(sha \\ "abc123") do
