@@ -4,6 +4,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   @behaviour SymphonyElixir.AgentBehaviour
 
   require Logger
+  alias SymphonyElixir.AgentCaches
   alias SymphonyElixir.{AgentEnv, AgentMcp, AgentSandboxConfig, Config, DependencyGate, McpServer, PathSafety, SSH}
   alias SymphonyElixir.{AgentPriority, AgentProcesses}
   alias SymphonyElixir.ClaudeCode.McpConfig
@@ -644,7 +645,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   defp write_claude_runtime_files(_workspace, worker_host, settings, mcp_session, socket_path, remote_shim_path) do
     network_access = settings.agent.network_access
     allow_read_paths = workspace_sandbox_allow_read_paths(settings)
-    allow_write_paths = workspace_sandbox_allow_write_paths(settings)
+    allow_write_paths = workspace_sandbox_allow_write_paths(settings) ++ cache_write_paths(worker_host)
     effective_shim_path = effective_shim_path(mcp_session, remote_shim_path)
     effective_socket_path = socket_path || mcp_session.socket_path
 
@@ -682,6 +683,11 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     do: paths
 
   defp workspace_sandbox_allow_write_paths(_settings), do: []
+
+  # A local agent keeps its Hex, `elixir_make` and PLT caches in Symphony's folder (see
+  # `SymphonyElixir.AgentCaches`); an SSH worker keeps its own.
+  defp cache_write_paths(nil), do: AgentCaches.write_paths()
+  defp cache_write_paths(_worker_host), do: []
 
   defp claude_settings_dir(nil, %{id: id}) when is_binary(id) do
     Path.join(System.tmp_dir!(), "#{@settings_dir_prefix}#{id}")
@@ -852,7 +858,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
               line: @port_line_bytes,
               args: port_args,
               cd: String.to_charlist(workspace),
-              env: AgentEnv.build_with(Map.merge(AgentEnv.gradle_env(workspace), env))
+              env: AgentEnv.build_with(AgentCaches.env() |> Map.merge(AgentEnv.gradle_env(workspace)) |> Map.merge(env))
             ]
           )
 

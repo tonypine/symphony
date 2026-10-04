@@ -70,9 +70,16 @@ make dialyzer-profile
 Inside Symphony's agent sandboxes (Claude Code or SRT-wrapped Codex), plain `make all` runs
 green without extra setup:
 
-- Symphony passes the host's `MIX_HOME`, `MIX_ARCHIVES`, and `HEX_HOME` through to the agent, so
-  sandboxed `mix` uses the Hex and Rebar already installed for the host (for example in the
-  per-version `MIX_HOME` that `mise` exports).
+- Symphony passes the host's `MIX_HOME` and `MIX_ARCHIVES` through to the agent, so sandboxed
+  `mix` uses the Hex and Rebar already installed for the host (for example in the per-version
+  `MIX_HOME` that `mise` exports).
+- The sandbox can't write `~/.hex`, `~/Library/Caches/elixir_make` or the core PLTs in `MIX_HOME`,
+  so a local agent gets a cache folder it may write, `~/Library/Caches/symphony/agent`:
+  `HEX_HOME` and `ELIXIR_MAKE_CACHE_DIR` point into it, and `mix.exs` keeps Dialyxir's core PLTs
+  in it through `SYMPHONY_AGENT_CACHE_DIR`. Symphony copies the host's Hex packages, Hex registry
+  cache and `elixir_make` archives into it first (see `SymphonyElixir.AgentCaches`).
+- The `after_create` hook compiles the test deps on the host, because `elixir_make` can't
+  download `lazy_html`'s precompiled NIF through the sandbox's proxy.
 - `test/test_helper.exs` keeps MCP socket dirs under `TMPDIR` when it is short (for example
   Claude Code's `/tmp/claude-501`) and under `/tmp` otherwise. If neither is writable, set
   `SYMPHONY_MCP_SOCKET_ROOT` to a short writable path; the resulting

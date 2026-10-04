@@ -797,7 +797,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
         {:ok, contents} = Jason.decode(File.read!(session.settings_path))
 
         assert get_in(contents, ["sandbox", "filesystem", "allowWrite"]) ==
-                 ["/private/tmp/symphony-mcp", "/opt/cache"]
+                 ["/private/tmp/symphony-mcp", "/opt/cache" | SymphonyElixir.AgentCaches.write_paths()]
 
         assert :ok = AppServer.stop_session(session)
       after
@@ -1270,6 +1270,8 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
         assert traced_command =~ "mkdir -p"
         assert traced_command =~ ".claude-plugin/plugin.json"
         assert traced_command =~ "SKILL.md"
+        # A worker keeps its own tool caches: this host's cache folder is not writable there.
+        refute traced_command =~ SymphonyElixir.AgentCaches.config().root
       after
         File.rm_rf(test_root)
       end
@@ -2061,6 +2063,9 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
         printf 'SSH_AUTH_SOCK=%s\\n' "${SSH_AUTH_SOCK-<unset>}" >> "$trace_file"
         printf 'RUNTIME=%s\\n' "${SYMPHONY_AGENT_RUNTIME-<unset>}" >> "$trace_file"
         printf 'GRADLE_OPTS=%s\\n' "${GRADLE_OPTS-<unset>}" >> "$trace_file"
+        printf 'HEX_HOME=%s\\n' "${HEX_HOME-<unset>}" >> "$trace_file"
+        printf 'ELIXIR_MAKE_CACHE_DIR=%s\\n' "${ELIXIR_MAKE_CACHE_DIR-<unset>}" >> "$trace_file"
+        printf 'SYMPHONY_AGENT_CACHE_DIR=%s\\n' "${SYMPHONY_AGENT_CACHE_DIR-<unset>}" >> "$trace_file"
         printf 'CLAUDE_CODE_TMPDIR=%s\\n' "${CLAUDE_CODE_TMPDIR-<unset>}" >> "$trace_file"
         printf '%s\\n' '{"type":"system","subtype":"init","session_id":"sess-env-strip","cwd":"/tmp","tools":[],"mcp_servers":[],"model":"claude-opus-4-5","permissionMode":"default","apiKeySource":"env"}'
         printf '%s\\n' '{"type":"result","subtype":"success","duration_ms":500,"duration_api_ms":400,"is_error":false,"num_turns":1,"result":"Done.","session_id":"sess-env-strip","total_cost_usd":0.001,"usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"server_tool_use":{"web_search_requests":0}}}'
@@ -2088,6 +2093,10 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
         assert trace =~ "SSH_AUTH_SOCK=<unset>"
         assert trace =~ "RUNTIME=1"
         assert trace =~ ~r/^GRADLE_OPTS="-Dorg.gradle.daemon.registry.base=\S*\/workspaces\/[A-Z]+-ENVSTRIP\/.gradle-daemons"$/m
+        cache_root = SymphonyElixir.AgentCaches.config().root
+        assert trace =~ "HEX_HOME=#{cache_root}/hex\n"
+        assert trace =~ "ELIXIR_MAKE_CACHE_DIR=#{cache_root}/elixir_make\n"
+        assert trace =~ "SYMPHONY_AGENT_CACHE_DIR=#{cache_root}\n"
         assert trace =~ "CLAUDE_CODE_TMPDIR=<unset>"
 
         # A QA pass gives its session a temp folder of its own.

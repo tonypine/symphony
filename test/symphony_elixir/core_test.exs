@@ -6455,7 +6455,7 @@ defmodule SymphonyElixir.CoreTest do
 
       expected_turn_sandbox_policy = %{
         "type" => "workspaceWrite",
-        "writableRoots" => [canonical_workspace, canonical_workspace_git],
+        "writableRoots" => [canonical_workspace, canonical_workspace_git | SymphonyElixir.AgentCaches.write_paths()],
         "readOnlyAccess" => %{"type" => "fullAccess"},
         "networkAccess" => true,
         "excludeTmpdirEnvVar" => false,
@@ -6664,9 +6664,11 @@ defmodule SymphonyElixir.CoreTest do
       assert {:ok, canonical_workspace_cache} =
                SymphonyElixir.PathSafety.canonicalize(workspace_cache)
 
+      agent_cache_write_paths = SymphonyElixir.AgentCaches.write_paths()
+
       expected_turn_policy = %{
         "type" => "workspaceWrite",
-        "writableRoots" => [canonical_workspace, canonical_workspace_git, canonical_workspace_cache],
+        "writableRoots" => [canonical_workspace, canonical_workspace_git, canonical_workspace_cache | agent_cache_write_paths],
         "networkAccess" => true
       }
 

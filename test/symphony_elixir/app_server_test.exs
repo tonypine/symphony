@@ -564,7 +564,11 @@ defmodule SymphonyElixir.AppServerTest do
         expected_policy =
           case configured_policy do
             %{"type" => "workspaceWrite"} ->
-              Map.put(configured_policy, "writableRoots", [canonical_workspace, canonical_workspace_git, "relative/path"])
+              Map.put(
+                configured_policy,
+                "writableRoots",
+                [canonical_workspace, canonical_workspace_git, "relative/path" | SymphonyElixir.AgentCaches.write_paths()]
+              )
 
             _ ->
               configured_policy
@@ -1564,6 +1568,8 @@ defmodule SymphonyElixir.AppServerTest do
       assert "~/.codex" in settings["filesystem"]["allowWrite"]
       assert git_dir in settings["filesystem"]["allowWrite"]
       assert git_common_dir in settings["filesystem"]["allowWrite"]
+      assert [cache_root] = SymphonyElixir.AgentCaches.write_paths()
+      assert cache_root in settings["filesystem"]["allowWrite"]
       assert "./WORKFLOW.md" in settings["filesystem"]["denyWrite"]
 
       for root <- [git_dir, git_common_dir] do
@@ -1862,6 +1868,9 @@ defmodule SymphonyElixir.AppServerTest do
       printf 'SSH_AUTH_SOCK=%s\\n' "${SSH_AUTH_SOCK-<unset>}" >> "$trace_file"
       printf 'RUNTIME=%s\\n' "${SYMPHONY_AGENT_RUNTIME-<unset>}" >> "$trace_file"
       printf 'GRADLE_OPTS=%s\\n' "${GRADLE_OPTS-<unset>}" >> "$trace_file"
+      printf 'HEX_HOME=%s\\n' "${HEX_HOME-<unset>}" >> "$trace_file"
+      printf 'ELIXIR_MAKE_CACHE_DIR=%s\\n' "${ELIXIR_MAKE_CACHE_DIR-<unset>}" >> "$trace_file"
+      printf 'SYMPHONY_AGENT_CACHE_DIR=%s\\n' "${SYMPHONY_AGENT_CACHE_DIR-<unset>}" >> "$trace_file"
       printf 'TMPDIR=%s\\n' "${TMPDIR-<unset>}" >> "$trace_file"
 
       count=0
@@ -1906,6 +1915,10 @@ defmodule SymphonyElixir.AppServerTest do
       assert trace =~ "SSH_AUTH_SOCK=<unset>"
       assert trace =~ "RUNTIME=1"
       assert trace =~ ~r/^GRADLE_OPTS="-Dorg.gradle.daemon.registry.base=\S*\/workspaces\/[A-Z]+-ENVSTRIP\/.gradle-daemons"$/m
+      cache_root = SymphonyElixir.AgentCaches.config().root
+      assert trace =~ "HEX_HOME=#{cache_root}/hex\n"
+      assert trace =~ "ELIXIR_MAKE_CACHE_DIR=#{cache_root}/elixir_make\n"
+      assert trace =~ "SYMPHONY_AGENT_CACHE_DIR=#{cache_root}\n"
 
       Enum.each(secret_vars, fn {_name, value} ->
         refute trace =~ value, "secret value leaked into agent subprocess: #{value}"

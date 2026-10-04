@@ -48,6 +48,14 @@ runtime's `sandbox.filesystem.allowWrite` so the agent can write under specific 
 the Claude Code default (workspace + `/tmp`). Codex/SRT already authors a broader writable set
 under `/tmp` and the workspace, so this knob only affects the Claude runtime today.
 
+Every local agent may also write one per-user cache folder, `~/Library/Caches/symphony/agent` on
+macOS, which holds its Hex home, its `elixir_make` cache and Dialyxir's core PLTs (see
+`permissions.filesystem.allow_write_paths` in [configuration](configuration.md)). Runs share it,
+so one run can change what a later run reads: Hex checks each package tarball against the checksums
+in `mix.lock`, and `elixir_make` checks each precompiled archive against the package's checksum
+file, before using it. The host's own `~/.hex` and `~/Library/Caches` stay read-only, and the
+folder never holds `hex.config`, which can hold Hex API and repo keys.
+
 ### No windows on the host desktop
 
 On a macOS host, agents run on the operator's desktop, so a GUI program an agent starts puts its
