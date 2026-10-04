@@ -179,6 +179,12 @@ defmodule SymphonyElixir.AgentEnvTest do
       refute {~c"CODEX_HOME", false} in result
       assert {~c"SECRET", false} in result
     end
+
+    test "an override of a whitelisted var replaces it rather than listing it twice" do
+      result = AgentEnv.build(%{"TMPDIR" => "/var/folders/T/"}, %{"TMPDIR" => "/tmp/symphony-qa-0123456789ab"})
+
+      assert Enum.filter(result, &match?({~c"TMPDIR", _value}, &1)) == [{~c"TMPDIR", ~c"/tmp/symphony-qa-0123456789ab"}]
+    end
   end
 
   describe "runtime marker accessors" do
