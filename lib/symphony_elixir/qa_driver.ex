@@ -27,9 +27,11 @@ defmodule SymphonyElixir.QaDriver do
     a name that already exists, symlinks included, is refused rather than
     followed or replaced.
 
-  Screenshots and accessibility calls need the Screen Recording and Accessibility
-  grants of the process that runs Symphony. Without them the tools fail with
-  `qa_permission_missing` and tell the agent to answer `blocked`.
+  Screenshots and accessibility calls run in the helper app,
+  `SymphonyQADriver.app` (see `SymphonyElixir.QaDriver.Host`), which holds the
+  Screen Recording and Accessibility grants so that Symphony and the agents it
+  spawns never do. Without them the tools fail with `qa_permission_missing` and
+  tell the agent to answer `blocked`.
 
   The private directory (bundle copies, screenshot staging and the app's QA
   root) is a `0700` directory under Symphony's state root, outside every path
@@ -96,12 +98,14 @@ defmodule SymphonyElixir.QaDriver do
           required(:kill) => (pos_integer() -> :ok),
           # A QA host's helper takes the pass's run directory.
           required(:helper) => (-> helper_result()) | (String.t() -> helper_result()),
+          required(:call_helper) => (Path.t(), [String.t()], keyword() -> cmd_result()),
           optional(:read) => (Path.t() -> {:ok, binary()} | {:error, term()}),
           optional(:prepare) => (Path.t(), Path.t() -> {:ok, String.t()} | {:error, {atom(), String.t()}}),
           optional(:ship) => (Path.t(), String.t() -> :ok | {:error, String.t()}),
           optional(:cleanup) => (String.t() -> :ok)
         }
   @type helper_result :: {:ok, Path.t()} | {:error, term()}
+  @type cmd_result :: {:ok, {String.t(), integer()}} | {:error, term()}
   @type tool_error :: {:qa_tool, String.t(), String.t()}
 
   @doc "The `qa_*` tool names this driver serves."
@@ -184,7 +188,7 @@ defmodule SymphonyElixir.QaDriver do
          {:ok, %{"windows" => windows}} <- run_helper(config, helper, ["windows", Integer.to_string(pid)]),
          {:ok, targets} <- screenshot_targets(windows, window_id),
          {:ok, evidence} <- evidence_dir(config) do
-      capture(config, targets, name, evidence)
+      capture(config, helper, pid, targets, name, evidence)
     end
   end
 
@@ -622,14 +626,14 @@ defmodule SymphonyElixir.QaDriver do
         {:ok, path}
 
       {:error, reason} ->
-        tool_error("qa_helper_unavailable", "Symphony could not build its macOS QA helper with swiftc: #{inspect(reason)}")
+        tool_error("qa_helper_unavailable", "Symphony could not find or build its macOS QA helper: #{inspect(reason)}")
     end
   end
 
   defp require_screen_recording(config, helper) do
     case run_helper(config, helper, ["permissions"]) do
       {:ok, %{"screen_recording" => true}} -> :ok
-      {:ok, _permissions} -> permission_missing("Screen Recording")
+      {:ok, _permissions} -> permission_missing(config, "Screen Recording")
       {:error, _reason} = error -> error
     end
   end
@@ -641,9 +645,9 @@ defmodule SymphonyElixir.QaDriver do
   end
 
   defp run_helper_raw(config, helper, args) do
-    case config.host.cmd.(helper, args, timeout_ms: @helper_timeout_ms, output_limit: @tree_bytes_limit + 1) do
+    case config.host.call_helper.(helper, args, timeout_ms: @helper_timeout_ms, output_limit: @tree_bytes_limit + 1) do
       {:ok, {output, 0}} -> {:ok, output}
-      {:ok, {output, _status}} -> helper_error(output)
+      {:ok, {output, _status}} -> helper_error(config, output)
       {:error, :timeout} -> tool_error("qa_helper_timeout", "The app did not answer the accessibility request within #{@helper_timeout_ms} ms.")
       {:error, reason} -> tool_error("qa_helper_failed", "The QA helper could not run: #{inspect(reason)}")
     end
@@ -656,10 +660,10 @@ defmodule SymphonyElixir.QaDriver do
     end
   end
 
-  defp helper_error(output) do
+  defp helper_error(config, output) do
     case Jason.decode(output) do
       {:ok, %{"error" => %{"code" => "accessibility_permission_missing"}}} ->
-        permission_missing("Accessibility")
+        permission_missing(config, "Accessibility")
 
       {:ok, %{"error" => %{"code" => code, "message" => message}}} when is_binary(code) and is_binary(message) ->
         tool_error("qa_" <> code, message)
@@ -669,12 +673,17 @@ defmodule SymphonyElixir.QaDriver do
     end
   end
 
-  defp permission_missing(grant) do
+  defp permission_missing(config, grant) do
+    {holder, grantee} =
+      if config.remote?,
+        do: {"SSH on the QA host", "/usr/libexec/sshd-keygen-wrapper on the QA host"},
+        else: {"The Symphony QA Driver helper app", "SymphonyQADriver.app"}
+
     tool_error(
       "qa_permission_missing",
-      "The process that runs Symphony has no #{grant} permission, so QA cannot see the app. " <>
-        "Answer with verdict `blocked` and this reason; an operator grants Screen Recording and Accessibility once in " <>
-        "System Settings > Privacy & Security (see docs/configuration.md, Auto Review macOS app QA)."
+      "#{holder} has no #{grant} permission, so QA cannot see the app. " <>
+        "Answer with verdict `blocked` and this reason; an operator grants Screen Recording and Accessibility to #{grantee} " <>
+        "once in System Settings > Privacy & Security (see docs/configuration.md, Auto Review macOS app QA)."
     )
   end
 
@@ -715,7 +724,7 @@ defmodule SymphonyElixir.QaDriver do
     end
   end
 
-  defp capture(config, targets, name, evidence) do
+  defp capture(config, helper, pid, targets, name, evidence) do
     numbered = length(targets) > 1
 
     targets
@@ -723,7 +732,7 @@ defmodule SymphonyElixir.QaDriver do
     |> Enum.reduce_while({:ok, []}, fn {window, index}, {:ok, files} ->
       file = if numbered, do: "#{name}-#{index}.png", else: "#{name}.png"
 
-      case capture_window(config, window, evidence, file) do
+      case capture_window(config, helper, pid, window, evidence, file) do
         :ok ->
           entry = %{"path" => Path.join(@evidence_dir, file), "window_id" => window["id"], "title" => window["title"], "frame" => window["frame"]}
           {:cont, {:ok, [entry | files]}}
@@ -740,11 +749,11 @@ defmodule SymphonyElixir.QaDriver do
 
   # The host's `read` removes the capture, so a later capture of the same window
   # never finds a stale file.
-  defp capture_window(config, window, evidence, file) do
+  defp capture_window(config, helper, pid, window, evidence, file) do
     scratch = Path.join(config.host_dir, "window-#{window["id"]}.png")
-    args = ["-x", "-o", "-l", Integer.to_string(window["id"]), scratch]
+    args = ["screenshot", Integer.to_string(pid), Integer.to_string(window["id"]), scratch]
 
-    with {:ok, {_output, 0}} <- config.host.cmd.("/usr/sbin/screencapture", args, timeout_ms: @screenshot_timeout_ms, output_limit: @output_limit),
+    with {:ok, {_output, 0}} <- config.host.call_helper.(helper, args, timeout_ms: @screenshot_timeout_ms, output_limit: @output_limit),
          {:ok, png} <- config.host.read.(scratch) do
       write_evidence(Path.join(evidence, file), png, file)
     else

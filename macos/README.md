@@ -285,7 +285,7 @@ It keeps App Nap off so the poll keeps that pace in the background.
 | `stop.circle` | stopped: nothing answers |
 | `hourglass` | starting: the app started Symphony and it hasn't answered yet |
 | `music.note.list` | running |
-| `pause.circle` | paused, for example from the dashboard |
+| `pause.circle` | paused, for example from the dashboard, or holding runs for a provider usage limit |
 | `exclamationmark.triangle` | error: Symphony exited unexpectedly, stopped answering, or answered with an error |
 
 While Symphony answers, the menu shows `N running · M retrying`, and while dispatch is paused, the pause
@@ -293,6 +293,26 @@ reason and since when. If a Symphony the app didn't start (for example one start
 the app attaches to it as "running (external)": Start, Stop and Restart stay disabled, so the app neither
 starts a second Symphony nor stops one it doesn't own. Open Dashboard opens the control URL in the browser; Open Logs
 opens `menubar-child.log`.
+
+## Usage-limit pause
+
+When Symphony holds runs for a provider usage limit (for example Claude's 5-hour window), it lists the hold
+under `usage_limits` in `/api/v1/state`, and the menu adds a line for each hold, in local time with the date
+when it isn't today:
+
+- `Paused: Claude limit, resumes ~14:05` while new runs wait for the reset.
+- `Resuming: checking Claude limit…` while one canary run checks the limit after the reset.
+- `Holding new runs: Claude at 91%, resets ~14:05` while Symphony leaves headroom before the limit runs out.
+
+The icon shows `pause.circle` and the title reads "paused" while any hold is in place. When you have also
+paused dispatch, your pause is listed first. Pause Dispatch and Resume Dispatch only control your pause:
+Symphony lifts a usage-limit hold on its own.
+
+The app posts a notification when a hold starts, for example "Symphony paused: Claude 5-hour limit, resumes
+~14:05", and when a provider's last hold clears, "Symphony resumed: Claude limit reset". It posts each once,
+not on every poll. A headroom hold or a canary posts nothing, and nothing is posted for a hold already in
+place when the app opens or when Symphony starts answering again. While your pause is on, the resume
+notification is skipped, since dispatch stays paused.
 
 ## Pause and Resume
 
@@ -458,6 +478,11 @@ make bundle SYMPHONY_BIN=../burrito_out/symphony-macos-arm64   # embeds a Sympho
 certificate, `SHORT_VERSION=` / `BUILD_NUMBER=` to set the versions in `Info.plist`, and
 `MINISIGN_PUBLIC_KEY=` to embed the update key. `make install` replaces `~/Applications/Symphony.app`, so it
 replaces an installed release too; reinstall the release with the install script afterwards.
+
+Every build also carries `Contents/Helpers/SymphonyQADriver.app`, the helper that takes screenshots and reads
+the accessibility tree for Auto Review's `macos_app` QA. Grant Screen Recording and Accessibility to that helper,
+never to Symphony.app: macOS passes Symphony.app's grants to the agents it starts (see
+[One-time macOS permissions](../docs/configuration.md#one-time-macos-permissions)).
 
 A plain `make` build has no embedded Symphony, so it runs only in Development mode, and it can't update
 itself.

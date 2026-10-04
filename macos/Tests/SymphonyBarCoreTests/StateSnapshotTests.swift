@@ -12,8 +12,12 @@ final class StateSnapshotTests: XCTestCase {
 
     /// The recorded state with its `pause` object replaced, as Symphony reports it after a dashboard pause.
     private func recordedState(pause: [String: Any]) throws -> Data {
+        try recordedState(replacing: "pause", with: pause)
+    }
+
+    private func recordedState(replacing key: String, with value: Any) throws -> Data {
         var object = try XCTUnwrap(JSONSerialization.jsonObject(with: recordedState()) as? [String: Any])
-        object["pause"] = pause
+        object[key] = value
         return try JSONSerialization.data(withJSONObject: object)
     }
 
@@ -45,6 +49,41 @@ final class StateSnapshotTests: XCTestCase {
         XCTAssertEqual(
             SymphonyState.poll(data: data, statusCode: 200),
             .state(StateSnapshot(running: 1, retrying: 0, pause: .init()))
+        )
+    }
+
+    func testDecodesUsageLimits() throws {
+        let data = try recordedState(replacing: "usage_limits", with: [
+            [
+                "provider": "anthropic", "scope": "all", "reason": "claude_usage_limit", "window": "five_hour",
+                "phase": "paused", "since": "2026-10-02T12:00:00Z", "resets_at": "2026-10-02T12:16:02Z",
+                "resume_at": "2026-10-02T12:18:02Z", "source": "rate_limit_event", "utilization": 1.0,
+                "issue_identifier": "TP-1",
+            ],
+            ["provider": "anthropic", "scope": "opus", "window": "seven_day_opus", "phase": "canary", "resume_at": NSNull()],
+            ["provider": "openai", "scope": "all", "phase": "headroom", "utilization": 0.91],
+            ["phase": "something_new"],
+        ])
+
+        XCTAssertEqual(
+            SymphonyState.poll(data: data, statusCode: 200),
+            .state(
+                StateSnapshot(
+                    running: 1,
+                    usageLimits: [
+                        .init(
+                            window: "five_hour",
+                            phase: .paused,
+                            resetsAt: Date(timeIntervalSince1970: 1_790_943_362),
+                            resumeAt: Date(timeIntervalSince1970: 1_790_943_482),
+                            utilization: 1
+                        ),
+                        .init(scope: "opus", window: "seven_day_opus", phase: .canary),
+                        .init(provider: "openai", phase: .headroom, utilization: 0.91),
+                        .init(),
+                    ]
+                )
+            )
         )
     }
 
