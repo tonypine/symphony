@@ -48,7 +48,9 @@ defmodule SymphonyElixir.Config.Schema do
     "rubygems.org",
     "services.gradle.org",
     "static.crates.io",
-    "sum.golang.org"
+    "sum.golang.org",
+    # Images and files attached to Linear issues; the agent fetches them with pre-signed URLs.
+    "uploads.linear.app"
   ]
 
   @codex_built_in_network_allowed_domains @shared_built_in_network_allowed_domains ++

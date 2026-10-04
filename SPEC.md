@@ -2906,6 +2906,14 @@ Scoped Linear tool extension contract:
   `linear_update_state`, `linear_add_comment`, `linear_update_comment`, `linear_delete_comment`,
   `linear_attach_url`, `linear_attach_file`, `linear_create_subissue`, `linear_add_blocked_by`,
   `linear_create_project_update`, and `linear_request_human_action`.
+- Reads whose issue descriptions and comments reach the agent (`linear_get_current_issue`,
+  `linear_get_comments`, `linear_get_subissues`, `linear_get_parent_issue`, and the dispatch
+  enrichment that supplies the prompt's description and comments) SHOULD ask Linear for pre-signed
+  upload URLs with the `public-file-urls-expire-in` header, so the agent can download attached
+  images and files from `uploads.linear.app` without a Linear credential. The Elixir
+  implementation signs for six hours, re-signs on every read, and lists `uploads.linear.app` in the
+  built-in network allowlist. Polls and writes stay unsigned, so Symphony never writes a signed URL
+  back into Linear.
 - `linear_update_state` MUST refuse `Merging` as a target, whether given by name or by state id,
   with an error saying a human has to approve. Moving an issue to `Merging` is how a human approves
   a merge (see `github_merge_pull_request`), so an agent cannot approve its own merge. Humans keep
