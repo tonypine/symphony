@@ -40,18 +40,18 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     end
   end
 
+  # Stays in flight until it receives `:release_quality_gate`, so the test, not
+  # the clock, decides how long the evaluation runs.
   defmodule SlowQualityGateProvider do
     @behaviour SymphonyElixir.QualityGate.Provider
 
     @impl true
     def score(_issue, _settings) do
-      case Application.get_env(:symphony_elixir, :slow_quality_gate_recipient) do
-        pid when is_pid(pid) -> send(pid, :slow_quality_gate_started)
-        _ -> :ok
-      end
+      send(Application.fetch_env!(:symphony_elixir, :slow_quality_gate_recipient), {:slow_quality_gate_started, self()})
 
-      Process.sleep(Application.get_env(:symphony_elixir, :slow_quality_gate_sleep_ms, 0))
-      {:ok, %{score: 9, reason: "ready"}}
+      receive do
+        :release_quality_gate -> {:ok, %{score: 9, reason: "ready"}}
+      end
     end
   end
 
@@ -90,30 +90,30 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       if Process.alive?(pid) do
         stop_process(pid)
       end
+
+      terminate_task_supervisor_children()
     end)
 
-    wait_for_snapshot(pid, &(&1.polling.checking? == false), 1_000)
-    Application.put_env(:symphony_elixir, :memory_tracker_fetch_candidate_sleep_ms, 2_000)
+    wait_for_orchestrator_state(pid, &(is_nil(&1.repo_poll_task_ref) and not &1.poll_check_in_progress), 5_000)
+    # Far longer than any snapshot below may take; on_exit stops the poll task.
+    Application.put_env(:symphony_elixir, :memory_tracker_fetch_candidate_sleep_ms, 30_000)
+    # Make the repo due again, so this poll fetches it whenever the boot poll ran.
+    :sys.replace_state(pid, &%{&1 | repo_poll_cache: %{}, repo_poll_due_at_ms: %{}})
     send(pid, :run_poll_cycle)
-    wait_for_orchestrator_state(pid, &is_reference(&1.repo_poll_task_ref), 500)
+    wait_for_orchestrator_state(pid, &is_reference(&1.repo_poll_task_ref), 5_000)
+    %{repo_poll_task_ref: poll_ref} = get_orchestrator_state(pid)
 
-    started_at = System.monotonic_time(:millisecond)
-    assert %{} = Orchestrator.snapshot(pid, 1_000)
-    elapsed_ms = System.monotonic_time(:millisecond) - started_at
-
-    assert elapsed_ms < 100
-
-    concurrent_started_at = System.monotonic_time(:millisecond)
+    assert %{} = Orchestrator.snapshot(pid, 5_000)
 
     snapshots =
       1..5
-      |> Enum.map(fn _ -> Task.async(fn -> Orchestrator.snapshot(pid, 1_000) end) end)
-      |> Enum.map(&Task.await(&1, 1_000))
-
-    concurrent_elapsed_ms = System.monotonic_time(:millisecond) - concurrent_started_at
+      |> Enum.map(fn _ -> Task.async(fn -> Orchestrator.snapshot(pid, 5_000) end) end)
+      |> Enum.map(&Task.await(&1, 10_000))
 
     assert Enum.all?(snapshots, &is_map/1)
-    assert concurrent_elapsed_ms < 100
+
+    # The same poll is still fetching, so no snapshot waited for it.
+    assert %{repo_poll_task_ref: ^poll_ref} = get_orchestrator_state(pid)
   end
 
   test "orchestrator publishes snapshots to ETS on configured cadence" do
@@ -169,13 +169,11 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     System.put_env("ANTHROPIC_API_KEY", "test-anthropic-key")
     Application.put_env(:symphony_elixir, :quality_gate_anthropic_module, SlowQualityGateProvider)
     Application.put_env(:symphony_elixir, :slow_quality_gate_recipient, self())
-    Application.put_env(:symphony_elixir, :slow_quality_gate_sleep_ms, 3_000)
 
     on_exit(fn ->
       System.delete_env("ANTHROPIC_API_KEY")
       Application.delete_env(:symphony_elixir, :quality_gate_anthropic_module)
       Application.delete_env(:symphony_elixir, :slow_quality_gate_recipient)
-      Application.delete_env(:symphony_elixir, :slow_quality_gate_sleep_ms)
     end)
 
     gated_issue = %Issue{
@@ -260,12 +258,11 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     end)
 
     send(pid, :run_poll_cycle)
-    assert_receive :slow_quality_gate_started, 1_000
+    assert_receive {:slow_quality_gate_started, gate_pid}, 5_000
+    on_exit(fn -> Process.exit(gate_pid, :kill) end)
 
     now = DateTime.utc_now()
     update = %{event: :session_started, session_id: "thread-during-quality-gate", timestamp: now}
-
-    update_started_at = System.monotonic_time(:millisecond)
     send(pid, {:codex_worker_update, running_issue.id, update})
 
     snapshot =
@@ -275,14 +272,15 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
           %{running: [%{session_id: "thread-during-quality-gate"}]} -> true
           _ -> false
         end,
-        100
+        5_000
       )
 
-    elapsed_ms = System.monotonic_time(:millisecond) - update_started_at
-
-    assert elapsed_ms < 100
     assert [%{issue_id: "issue-live-during-quality-gate"}] = snapshot.running
-    assert %{} = Orchestrator.snapshot(pid, 100)
+    assert %{} = Orchestrator.snapshot(pid, 5_000)
+
+    # The gate is still waiting for its release, so the orchestrator applied the
+    # update and answered both snapshots without waiting on the evaluation.
+    assert {:current_function, {SlowQualityGateProvider, :score, 2}} = Process.info(gate_pid, :current_function)
   end
 
   test "orchestrator snapshot reflects last codex update and session id" do

@@ -15,6 +15,7 @@ defmodule SymphonyElixir.Orchestrator do
     AutoMerge,
     AutoReview,
     BreakdownReview,
+    BuildInfo,
     CiPoller,
     Config,
     EpicLanes,
@@ -31,6 +32,7 @@ defmodule SymphonyElixir.Orchestrator do
     StatusDashboard,
     SubIssueWait,
     Tracker,
+    UpdateHold,
     URLUtils,
     UsageLimit,
     Verification,
@@ -110,6 +112,8 @@ defmodule SymphonyElixir.Orchestrator do
       merging_ci_waits: %{},
       epic_lanes: nil,
       blocked: [],
+      update_hold_cache: %{blockers: %{}, included: %{}},
+      update_holds: %{},
       forced: %{},
       forced_waiting_noted: MapSet.new(),
       forced_parts: %{},
@@ -1098,8 +1102,11 @@ defmodule SymphonyElixir.Orchestrator do
     running_ids = Map.keys(state.running)
     watching_ids = watching_issue_ids(state)
     forced_ids = Map.keys(state.forced)
+    update_hold_cache = state.update_hold_cache
 
     case start_async_task(fn ->
+           repo_result = fetch_due_repo_if_needed(due_repo)
+
            {:repo_poll_result,
             %{
               repos: repos,
@@ -1110,7 +1117,8 @@ defmodule SymphonyElixir.Orchestrator do
               watching_result: fetch_issue_states_if_needed(watching_ids),
               forced_ids: forced_ids,
               forced_result: fetch_issue_states_if_needed(forced_ids),
-              repo_result: fetch_due_repo_if_needed(due_repo)
+              repo_result: repo_result,
+              update_hold_cache: resolve_update_holds(repo_result, update_hold_cache)
             }}
          end) do
       {:ok, task} ->
@@ -1132,19 +1140,30 @@ defmodule SymphonyElixir.Orchestrator do
     {repo_name, Tracker.fetch_candidate_issues_for_repo(repo)}
   end
 
-  defp apply_repo_poll_task_result(%State{} = state, %{
-         repos: repos,
-         now_ms: now_ms,
-         running_ids: running_ids,
-         running_result: running_result,
-         watching_ids: watching_ids,
-         watching_result: watching_result,
-         forced_ids: forced_ids,
-         forced_result: forced_result,
-         repo_result: repo_result
-       }) do
+  # Runs in the poll task: looks up the blockers of the polled repo's Todo tickets that
+  # `UpdateHold.hold/4` needs. Tickets of repos not polled this cycle were looked up when they were.
+  defp resolve_update_holds({_repo_name, {:ok, issues}}, cache) when is_list(issues) do
+    UpdateHold.resolve(issues, BuildInfo.current(), cache, Config.settings!().tracker.terminal_states, [])
+  end
+
+  defp resolve_update_holds(_repo_result, cache), do: cache
+
+  defp apply_repo_poll_task_result(
+         %State{} = state,
+         %{
+           repos: repos,
+           now_ms: now_ms,
+           running_ids: running_ids,
+           running_result: running_result,
+           watching_ids: watching_ids,
+           watching_result: watching_result,
+           forced_ids: forced_ids,
+           forced_result: forced_result,
+           repo_result: repo_result
+         } = result
+       ) do
     state =
-      state
+      %{state | update_hold_cache: Map.get(result, :update_hold_cache, state.update_hold_cache)}
       |> apply_running_issue_states_result(running_ids, running_result)
       |> apply_watching_issue_states_result(watching_ids, watching_result)
       |> apply_forced_poll_result(repo_result, forced_ids, forced_result, now_ms)
@@ -3113,6 +3132,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp dispatch_eligible?(%Issue{} = issue, %State{} = state, active_states, terminal_states) do
     candidate_issue?(issue, active_states, terminal_states) and
       !issue_held?(issue, terminal_states) and
+      !Map.has_key?(state.update_holds, issue.id) and
       !replan_pending?(issue, state) and
       !post_pr_quiet_active_issue?(issue, state) and
       !landing_held?(issue, state) and
@@ -3135,9 +3155,11 @@ defmodule SymphonyElixir.Orchestrator do
     %{state | epic_lanes: EpicLanes.plan(issues, max_total, Config.settings!().agent.epic_lanes, terminal_state_set())}
   end
 
-  # Candidates held in `Todo` by open blockers, recomputed on every poll tick for the snapshot.
+  # Candidates held in `Todo` by open blockers, or by a blocker's fix the running app does not include
+  # yet (`UpdateHold`), recomputed on every poll tick for the snapshot.
   defp put_blocked(%State{} = state, issues) do
     terminal_states = Config.settings!().tracker.terminal_states
+    build = BuildInfo.current()
 
     blocked =
       for %Issue{} = issue <- issues, Issue.blocked?(issue, terminal_states) do
@@ -3150,7 +3172,40 @@ defmodule SymphonyElixir.Orchestrator do
         }
       end
 
-    %{state | blocked: Enum.sort_by(blocked, & &1.identifier)}
+    update_holds =
+      for %Issue{} = issue <- issues,
+          hold = UpdateHold.hold(issue, build, state.update_hold_cache, terminal_states),
+          into: %{},
+          do: {issue.id, Map.merge(hold, %{identifier: issue.identifier, title: issue.title, state: issue.state})}
+
+    log_update_hold_changes(state.update_holds, update_holds)
+
+    update_blocked =
+      for {issue_id, hold} <- update_holds do
+        %{
+          issue_id: issue_id,
+          identifier: hold.identifier,
+          title: hold.title,
+          state: hold.state,
+          kind: :app_update,
+          reason: hold.reason,
+          blockers: for(blocker <- hold.blockers, do: %{identifier: blocker.identifier, state: "merged in #{BuildInfo.short_sha(blocker.merge_sha)}"})
+        }
+      end
+
+    %{state | blocked: Enum.sort_by(blocked ++ update_blocked, & &1.identifier), update_holds: update_holds}
+  end
+
+  defp log_update_hold_changes(previous, current) do
+    for {issue_id, hold} <- current, not Map.has_key?(previous, issue_id) do
+      Logger.info("Holding for an app update: issue_id=#{issue_id} issue_identifier=#{hold.identifier}; #{hold.reason}")
+    end
+
+    for {issue_id, hold} <- previous, not Map.has_key?(current, issue_id) do
+      Logger.info("Released from the app update hold: issue_id=#{issue_id} issue_identifier=#{hold.identifier}")
+    end
+
+    :ok
   end
 
   # Forced tickets are found in the repo this poll fetched, which only holds active states. Each one

@@ -13,7 +13,10 @@ defmodule SymphonyElixirWeb.Plugs.BearerTokenTest do
     def value, do: "secret-token-value"
   end
 
+  # The plug caches the default token for the BEAM's lifetime, so an earlier
+  # test that sent a request through the router leaves its own token cached.
   setup do
+    :persistent_term.erase(BearerToken)
     on_exit(fn -> :persistent_term.erase(BearerToken) end)
     :ok
   end

@@ -18,6 +18,13 @@ Every release has a monotonic, machine-comparable version:
 | Release tag | `v<short version>` | `v0.0.1.42` |
 | Elixir release version (`SYMPHONY_BUILD_NUMBER`) | `<mix.exs version>-<run number>` | `0.0.1-42` |
 
+The binary also records the commit and repository it is built from
+(`SYMPHONY_BUILD_SHA`, `SYMPHONY_BUILD_REPO`); `/api/v1/state` reports them as
+`build: {version, sha}`. A ticket blocked by a fix merged in that repository stays
+held until the running app includes the fix's merge commit, and the menu bar
+shows "Update to unblock N tickets" while any are held. A build without them, such
+as one from a checkout, holds nothing.
+
 A pushed `v*` tag is released under its own name with the same versions.
 Compare `build` to tell which release is newer. Bump `@version` in `mix.exs`
 for a new major, minor or patch version.
