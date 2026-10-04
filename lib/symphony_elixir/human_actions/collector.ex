@@ -7,7 +7,7 @@ defmodule SymphonyElixir.HumanActions.Collector do
   (`SymphonyElixir.HumanReview`). From those:
 
   - each open `## Action needed:` comment on a labelled issue is a `:request`
-    (see `SymphonyElixir.HumanActions.Request`);
+    (see `SymphonyElixir.HumanActions.Request`); a withdrawn one is not listed;
   - a labelled issue with no request comment is itself a `:task`;
   - a `breakdown` parent in a review state is a `:plan_review`;
   - an issue in a review state whose `## Symphony QA Report` says `blocked` is a `:qa_blocked`;
@@ -47,7 +47,7 @@ defmodule SymphonyElixir.HumanActions.Collector do
         project { id name }
         labels { nodes { name } }
         comments(last: $commentLast, orderBy: createdAt) {
-          nodes { id body createdAt }
+          nodes { id body createdAt parent { id } }
         }
         history(first: $historyFirst) {
           nodes { createdAt fromState { name } toState { name } }
@@ -185,13 +185,22 @@ defmodule SymphonyElixir.HumanActions.Collector do
 
   @doc """
   The open `## Action needed:` comments of an issue as read from Linear (its `comments` with
-  `id`, `body` and `createdAt`, and its state `history`), as `{comment_id, request}`.
+  `id`, `body`, `createdAt` and `parent`, and its state `history`), as `{comment_id, request}`.
+  A request with an `## Action withdrawn` reply under it is closed.
   """
   @spec open_requests(map(), Schema.t()) :: [{String.t(), Request.t()}]
   def open_requests(node, settings) do
     changes = state_changes(node)
     owned = owned_states(settings)
-    Enum.filter(requests(node), fn {_comment_id, request} -> Request.open?(request, changes, owned) end)
+    withdrawn = withdrawn_ids(node)
+
+    Enum.filter(requests(node), fn {comment_id, request} ->
+      not MapSet.member?(withdrawn, comment_id) and Request.open?(request, changes, owned)
+    end)
+  end
+
+  defp withdrawn_ids(node) do
+    for %{"parent" => %{"id" => parent_id}} = comment <- comments(node), Request.withdrawal?(comment["body"]), into: MapSet.new(), do: parent_id
   end
 
   defp requests(node) do

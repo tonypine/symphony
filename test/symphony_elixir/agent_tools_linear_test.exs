@@ -4,6 +4,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
   alias SymphonyElixir.AgentTools.Linear
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.HumanActions.Collector, as: HumanActionsCollector
   alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.PromptSafety
 
@@ -1226,6 +1227,8 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
             "SymphonyAgentCreateLabel" -> {:ok, %{"data" => %{"issueLabelCreate" => %{"success" => true, "issueLabel" => %{"id" => "label-new"}}}}}
             "SymphonyAgentAddLabel" -> {:ok, %{"data" => %{"issueAddLabel" => %{"success" => true}}}}
             "SymphonyAgentAddComment" -> {:ok, %{"data" => %{"commentCreate" => %{"success" => true, "comment" => %{"id" => "comment-new", "url" => "https://linear.app/c"}}}}}
+            "SymphonyAgentAddReply" -> {:ok, %{"data" => %{"commentCreate" => %{"success" => true, "comment" => %{"id" => "reply-to-" <> variables.parentId}}}}}
+            "SymphonyAgentRemoveLabel" -> {:ok, %{"data" => %{"issueRemoveLabel" => %{"success" => true}}}}
           end
 
         Map.get(overrides, name, default)
@@ -1415,6 +1418,146 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       for context <- [%{issue_id: "issue-24"}, %{issue: %Issue{id: "issue-24", repo_key: nil}}] do
         assert {:ok, %{"requested" => true, "label" => "human-action"}} =
                  Linear.request_human_action(Map.put(context, :comment_registry, registry), @human_action, linear_client: client)
+      end
+    end
+  end
+
+  describe "withdraw_human_action/3" do
+    @withdrawal %{"reason" => "The dialyzer run had started minutes earlier, not 11 hours ago."}
+
+    defp request_node(id, title, created_at) do
+      %{"id" => id, "body" => Request.render(%{title: title, why: "x", steps: ["y"]}, "human-action"), "createdAt" => created_at}
+    end
+
+    defp withdrawal_scope(comments, labels \\ [%{"id" => "label-on-issue", "name" => "Human-Action"}]) do
+      human_action_scope(%{issue: %{"labels" => %{"nodes" => labels}, "comments" => %{"nodes" => comments}}})
+    end
+
+    defp withdraw_human_action(context, scope, overrides \\ %{}, attrs \\ @withdrawal) do
+      Linear.withdraw_human_action(context, attrs, human_action_opts(human_action_client(self(), scope, overrides)))
+    end
+
+    test "replies with the reason under the request, removes the label, and drops it from the next update" do
+      requests = [request_node("comment-1", "Re-run the stuck dialyzer job", "2026-10-04T18:57:27.000Z")]
+      scope = withdrawal_scope(requests)
+
+      assert {:ok,
+              %{
+                "withdrawn" => true,
+                "requestCommentIds" => ["comment-1"],
+                "replyCommentIds" => ["reply-to-comment-1"],
+                "labelRemoved" => true,
+                "label" => "human-action"
+              }} = withdraw_human_action(%{issue: %Issue{id: "MOT-24", identifier: "MOT-24"}}, scope)
+
+      assert_received {:linear_called, "SymphonyAgentHumanActionScope", %{id: "MOT-24", label: "human-action"}}
+      assert_received {:linear_called, "SymphonyAgentAddReply", %{issueId: "issue-24", parentId: "comment-1", body: reply}}
+      assert_received {:linear_called, "SymphonyAgentRemoveLabel", %{issueId: "issue-24", labelId: "label-on-issue"}}
+      assert_received :refreshed
+      assert reply == "## Action withdrawn\n\nThe dialyzer run had started minutes earlier, not 11 hours ago."
+
+      # The next update reads the reply under the request and leaves it out.
+      after_withdrawal = scope["data"]["issue"] |> put_in(["comments", "nodes"], requests ++ [%{"id" => "r", "body" => reply, "parent" => %{"id" => "comment-1"}}])
+      assert HumanActionsCollector.open_requests(after_withdrawal, Config.settings!()) == []
+
+      # A withdrawn request no longer blocks asking again under the same title.
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      again = put_in(scope, ["data", "issue"], after_withdrawal)
+
+      assert {:ok, %{"requested" => true}} =
+               request_human_action(%{issue_id: "issue-24", comment_registry: registry}, again, %{}, %{
+                 "title" => "Re-run the stuck dialyzer job",
+                 "why" => "x",
+                 "steps" => ["y"]
+               })
+    end
+
+    test "withdraws only the request named by title, and keeps the label for the others" do
+      scope =
+        withdrawal_scope([
+          request_node("comment-1", "Re-run the stuck dialyzer job", "2026-10-04T18:57:00.000Z"),
+          request_node("comment-2", "Add the release signing secrets", "2026-10-04T18:58:00.000Z")
+        ])
+
+      assert {:ok, %{"withdrawn" => true, "requestCommentIds" => ["comment-1"], "labelRemoved" => false}} =
+               withdraw_human_action(%{issue_id: "issue-24"}, scope, %{}, Map.put(@withdrawal, "title", " re-run the stuck  DIALYZER job "))
+
+      assert_received {:linear_called, "SymphonyAgentAddReply", %{parentId: "comment-1"}}
+      refute_received {:linear_called, "SymphonyAgentAddReply", %{parentId: "comment-2"}}
+      refute_received {:linear_called, "SymphonyAgentRemoveLabel", _variables}
+
+      # Without a title, every open request goes, and the label with them.
+      assert {:ok, %{"requestCommentIds" => ["comment-1", "comment-2"], "replyCommentIds" => ["reply-to-comment-1", "reply-to-comment-2"], "labelRemoved" => true}} =
+               withdraw_human_action(%{issue_id: "issue-24"}, scope)
+    end
+
+    test "changes nothing when no open request matches" do
+      open = request_node("comment-1", "Re-run the stuck dialyzer job", "2026-10-04T18:57:00.000Z")
+      withdrawn = %{"id" => "reply-1", "body" => Request.render_withdrawal("Not needed."), "parent" => %{"id" => "comment-1"}}
+
+      for {scope, attrs} <- [
+            {withdrawal_scope([open], []), @withdrawal},
+            {withdrawal_scope([open, withdrawn]), @withdrawal},
+            {withdrawal_scope([]), @withdrawal},
+            {withdrawal_scope([open]), Map.put(@withdrawal, "title", "Something else")}
+          ] do
+        assert {:ok, %{"withdrawn" => false, "reason" => "no_open_request", "label" => "human-action"}} =
+                 withdraw_human_action(%{issue_id: "issue-24"}, scope, %{}, attrs)
+      end
+
+      refute_received {:linear_called, "SymphonyAgentAddReply", _variables}
+      refute_received {:linear_called, "SymphonyAgentRemoveLabel", _variables}
+      refute_received :refreshed
+    end
+
+    test "returns Linear's error when a step fails" do
+      scope = withdrawal_scope([request_node("comment-1", "Re-run CI", "2026-10-04T18:57:00.000Z")])
+      refused = fn field -> {:ok, %{"data" => %{field => %{"success" => false}}}} end
+
+      assert {:error, :linear_down} = withdraw_human_action(%{issue_id: "issue-24"}, scope, %{"SymphonyAgentHumanActionScope" => {:error, :linear_down}})
+
+      assert {:error, :issue_not_found} =
+               withdraw_human_action(%{issue_id: "issue-24"}, scope, %{"SymphonyAgentHumanActionScope" => {:ok, %{"data" => %{"issue" => nil}}}})
+
+      assert {:error, {:linear_mutation_failed, "commentCreate", _body}} =
+               withdraw_human_action(%{issue_id: "issue-24"}, scope, %{"SymphonyAgentAddReply" => refused.("commentCreate")})
+
+      refute_received {:linear_called, "SymphonyAgentRemoveLabel", _variables}
+
+      assert {:error, {:linear_mutation_failed, "issueRemoveLabel", _body}} =
+               withdraw_human_action(%{issue_id: "issue-24"}, scope, %{"SymphonyAgentRemoveLabel" => refused.("issueRemoveLabel")})
+
+      refute_received :refreshed
+    end
+
+    test "refuses a secret in the reason, invalid input, and a repository that turned human actions off" do
+      workspace = tmp_workspace!("linear-agent-human-action-withdraw-secret")
+      audit_dir = Path.join(workspace, "audit")
+      context = secret_context(workspace)
+      no_linear = fn _query, _variables, _opts -> flunk("Linear should not be called") end
+      opts = human_action_opts(no_linear, dir: audit_dir)
+
+      try do
+        leaked = %{"reason" => "Leaked " <> openai_fixture()}
+        assert {:error, :secret_pattern_detected} = Linear.withdraw_human_action(context, leaked, opts)
+        assert [%{"tool" => "linear_withdraw_human_action", "reason" => "secret_pattern_detected"} | _rest] = audit_events(audit_dir)
+
+        for {attrs, message} <- [
+              {%{}, "`reason` must be a non-blank string."},
+              {%{"reason" => " "}, "`reason` must be a non-blank string."},
+              {%{"reason" => "ok", "title" => " "}, "`title` must be a non-blank string when given."},
+              {%{"reason" => "ok", "title" => 3}, "`title` must be a non-blank string when given."}
+            ] do
+          assert {:error, {:invalid_human_action_withdrawal, ^message}} =
+                   Linear.withdraw_human_action(context, attrs, opts)
+        end
+
+        assert {:error, :missing_current_issue} = Linear.withdraw_human_action(%{}, @withdrawal, opts)
+
+        disabled = Config.settings!() |> then(&%{&1 | human_actions: %{&1.human_actions | enabled: false}})
+        assert {:error, :human_actions_disabled} = Linear.withdraw_human_action(context, @withdrawal, Keyword.put(opts, :settings, disabled))
+      after
+        File.rm_rf(workspace)
       end
     end
   end

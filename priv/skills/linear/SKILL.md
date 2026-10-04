@@ -65,6 +65,11 @@ arguments from prompts.
   posts an update to the current issue's project. `health` is optional
   (`onTrack`, `atRisk`, `offTrack`). The body is secret-scanned. At most one per
   run. Use it when a `breakdown` parent ticket closes out.
+- `linear_withdraw_human_action` with `{"reason": "...", "title": "..."}`:
+  withdraws a human-action request that is no longer needed. It replies with the
+  reason under the request and removes the human-action label once no open
+  request is left, so the next project update drops it. `title` is optional;
+  without it every open request on the issue is withdrawn.
 
 ## Rules
 

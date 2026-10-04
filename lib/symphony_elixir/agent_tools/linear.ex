@@ -413,7 +413,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
       team { id }
       labels { nodes { id name } }
       comments(last: 50, orderBy: createdAt) {
-        nodes { id body createdAt }
+        nodes { id body createdAt parent { id } }
       }
       history(first: 50) {
         nodes { createdAt fromState { name } toState { name } }
@@ -437,6 +437,14 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @add_label_mutation """
   mutation SymphonyAgentAddLabel($issueId: String!, $labelId: String!) {
     issueAddLabel(id: $issueId, labelId: $labelId) {
+      success
+    }
+  }
+  """
+
+  @remove_label_mutation """
+  mutation SymphonyAgentRemoveLabel($issueId: String!, $labelId: String!) {
+    issueRemoveLabel(id: $issueId, labelId: $labelId) {
       success
     }
   }
@@ -1098,6 +1106,99 @@ defmodule SymphonyElixir.AgentTools.Linear do
     with {:ok, response} <- graphql(@create_label_mutation, %{input: %{"name" => label, "teamId" => team_id}}, opts),
          {:ok, response} <- check_mutation_success(response, "issueLabelCreate") do
       fetch_path(response, ["data", "issueLabelCreate", "issueLabel", "id"], :label_not_created)
+    end
+  end
+
+  @doc """
+  Withdraws open human-action requests on the current issue that are no longer needed: replies
+  `## Action withdrawn` with `reason` under each one (or only under the one titled `title`), and
+  removes the `human_actions.label` label once no open request is left, so the next human-action
+  update drops them. An issue with no open request is left as it is. The reason is refused when it
+  holds a secret pattern.
+  """
+  @spec withdraw_human_action(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
+  def withdraw_human_action(context, attrs, opts \\ []) when is_map(attrs) do
+    with {:ok, issue_id} <- current_issue_id(context),
+         {:ok, reason, title} <- validate_withdrawal(attrs),
+         :ok <- SecretScanner.reject_fields_if_secret_pattern([reason: reason], context, "linear_withdraw_human_action", opts),
+         {:ok, settings} <- human_actions_settings(context, opts) do
+      case post_withdrawal(issue_id, reason, title, settings, opts) do
+        {:ok, %{"withdrawn" => true}} = result ->
+          Keyword.get(opts, :refresh_human_actions, &HumanActions.refresh/0).()
+          result
+
+        other ->
+          other
+      end
+    end
+  end
+
+  defp validate_withdrawal(attrs) do
+    reason = Map.get(attrs, "reason")
+    title = Map.get(attrs, "title")
+
+    cond do
+      not non_blank?(reason) -> {:error, {:invalid_human_action_withdrawal, "`reason` must be a non-blank string."}}
+      not (is_nil(title) or non_blank?(title)) -> {:error, {:invalid_human_action_withdrawal, "`title` must be a non-blank string when given."}}
+      true -> {:ok, reason, title}
+    end
+  end
+
+  defp post_withdrawal(issue_id, reason, title, settings, opts) do
+    label = settings.human_actions.label
+
+    with {:ok, body} <- graphql(@human_action_scope_query, %{id: issue_id, label: label}, opts),
+         {:ok, issue} <- fetch_path(body, ["data", "issue"], :issue_not_found) do
+      issue_label = Enum.find(get_in(issue, ["labels", "nodes"]) || [], &(String.downcase(to_string(&1["name"])) == String.downcase(label)))
+      open = if issue_label, do: HumanActionsCollector.open_requests(issue, settings), else: []
+      {withdrawing, remaining} = Enum.split_with(open, &withdrawing?(&1, title))
+
+      if withdrawing == [] do
+        {:ok, %{"withdrawn" => false, "reason" => "no_open_request", "label" => label}}
+      else
+        withdraw_requests(issue["id"], issue_label, withdrawing, remaining, reason, label, opts)
+      end
+    end
+  end
+
+  defp withdrawing?(_request, nil), do: true
+  defp withdrawing?({_comment_id, request}, title), do: Request.normalize_title(request.title) == Request.normalize_title(title)
+
+  # Replies first: a withdrawn request stays out of the update even if removing the label fails.
+  defp withdraw_requests(issue_id, issue_label, withdrawing, remaining, reason, label, opts) do
+    with {:ok, reply_ids} <- reply_withdrawals(issue_id, withdrawing, reason, opts),
+         {:ok, label_removed?} <- remove_human_action_label(issue_id, issue_label, remaining, opts) do
+      {:ok,
+       %{
+         "withdrawn" => true,
+         "requestCommentIds" => Enum.map(withdrawing, fn {comment_id, _request} -> comment_id end),
+         "replyCommentIds" => reply_ids,
+         "labelRemoved" => label_removed?,
+         "label" => label
+       }}
+    end
+  end
+
+  defp reply_withdrawals(issue_id, withdrawing, reason, opts) do
+    Enum.reduce_while(withdrawing, {:ok, []}, fn {comment_id, _request}, {:ok, ids} ->
+      variables = %{issueId: issue_id, parentId: comment_id, body: Request.render_withdrawal(reason)}
+
+      with {:ok, response} <- graphql(@add_reply_mutation, variables, opts),
+           {:ok, response} <- check_mutation_success(response, "commentCreate") do
+        {:cont, {:ok, ids ++ [get_in(response, ["data", "commentCreate", "comment", "id"])]}}
+      else
+        error -> {:halt, error}
+      end
+    end)
+  end
+
+  # Another open request on the issue still needs the label.
+  defp remove_human_action_label(_issue_id, _issue_label, [_open | _rest], _opts), do: {:ok, false}
+
+  defp remove_human_action_label(issue_id, %{"id" => label_id}, [], opts) do
+    with {:ok, response} <- graphql(@remove_label_mutation, %{issueId: issue_id, labelId: label_id}, opts),
+         {:ok, _response} <- check_mutation_success(response, "issueRemoveLabel") do
+      {:ok, true}
     end
   end
 
