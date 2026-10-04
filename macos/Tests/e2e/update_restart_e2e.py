@@ -272,6 +272,7 @@ class Signing:
 
 
 def build_symphony(build, out):
+    out.parent.mkdir(parents=True, exist_ok=True)
     prebuilt = os.environ.get(f"SYMPHONY_E2E_SYMPHONY_BIN_{'N1' if build == BUILD_N1 else 'N'}")
     if prebuilt:
         shutil.copy(prebuilt, out)
@@ -281,7 +282,12 @@ def build_symphony(build, out):
     env = dict(os.environ, SYMPHONY_BUILD_NUMBER=str(build), BURRITO_TARGET="macos_arm64")
     env.pop("SYMPHONY_AGENT_RUNTIME", None)
     run(["make", "package"], cwd=REPO, env=env, capture=False)
-    shutil.copy(REPO / "burrito_out" / "symphony-macos-arm64", out)
+    # `make package` renames Burrito's symphony_macos_arm64 to the name release.yml ships.
+    built = REPO / "burrito_out" / "symphony-macos-arm64"
+    if not built.is_file():
+        found = sorted(p.name for p in (REPO / "burrito_out").glob("*")) if (REPO / "burrito_out").is_dir() else []
+        raise SystemExit(f"make package didn't produce {built}; burrito_out/ holds {found or 'nothing'}")
+    shutil.copy(built, out)
 
 
 def build_app_executable():
