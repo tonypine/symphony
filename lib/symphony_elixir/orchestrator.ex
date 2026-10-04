@@ -423,6 +423,7 @@ defmodule SymphonyElixir.Orchestrator do
           |> maybe_put_runtime_value(:agent_module, runtime_info[:agent_module])
           |> maybe_put_runtime_value(:agent_session, runtime_info[:agent_session])
           |> Map.put(:last_event_at, last_event_at)
+          |> maybe_put_workspace_hook(runtime_info)
 
         persist_running_entry(updated_running_entry)
         notify_dashboard()
@@ -1996,8 +1997,12 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  # A workspace hook (`after_create` can take minutes) runs under its own timeout, so
+  # while one runs the clock starts at its deadline, and once it has ended, at its end.
+  defp first_turn_started_at(%{workspace_hook: %{deadline: %DateTime{} = deadline}}), do: deadline
+
   defp first_turn_started_at(running_entry) when is_map(running_entry) do
-    Map.get(running_entry, :started_at)
+    Map.get(running_entry, :last_event_at) || Map.get(running_entry, :started_at)
   end
 
   defp first_turn_started_at(_running_entry), do: nil
@@ -2039,7 +2044,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp watchdog_elapsed_ms(running_entry, now) do
     running_entry
-    |> watchdog_last_event_at()
+    |> watchdog_clock_started_at()
     |> case do
       %DateTime{} = timestamp ->
         max(0, DateTime.diff(now, timestamp, :millisecond))
@@ -2048,6 +2053,10 @@ defmodule SymphonyElixir.Orchestrator do
         nil
     end
   end
+
+  # As for the first-turn stall check, a running workspace hook's clock starts at its deadline.
+  defp watchdog_clock_started_at(%{workspace_hook: %{deadline: %DateTime{} = deadline}}), do: deadline
+  defp watchdog_clock_started_at(running_entry), do: watchdog_last_event_at(running_entry)
 
   defp watchdog_last_event_at(running_entry) when is_map(running_entry) do
     (Map.get(running_entry, :last_event_at) ||
@@ -4560,6 +4569,16 @@ defmodule SymphonyElixir.Orchestrator do
   defp pick_retry_workspace_path(previous_retry, metadata) do
     metadata[:workspace_path] || Map.get(previous_retry, :workspace_path)
   end
+
+  # The runner reports a workspace hook as it starts, with the deadline of the hook's
+  # own timeout, and as it ends (`nil`). Both count as activity.
+  defp maybe_put_workspace_hook(running_entry, %{workspace_hook: workspace_hook}) do
+    running_entry
+    |> Map.put(:workspace_hook, workspace_hook)
+    |> Map.put(:last_event_at, DateTime.utc_now())
+  end
+
+  defp maybe_put_workspace_hook(running_entry, _runtime_info), do: running_entry
 
   defp maybe_put_runtime_value(running_entry, _key, nil), do: running_entry
 

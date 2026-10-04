@@ -1316,20 +1316,35 @@ defmodule SymphonyElixir.Config.Schema do
     @primary_key false
     @type t :: %__MODULE__{}
 
+    @fields [:after_create, :before_run, :after_run, :before_remove, :timeout_ms, :after_create_timeout_ms]
+    # `after_create` usually installs dependencies, which a cold cache or a loaded
+    # machine can stretch well past the other hooks' minute.
+    @default_after_create_timeout_ms 600_000
+
     embedded_schema do
       field(:after_create, :string)
       field(:before_run, :string)
       field(:after_run, :string)
       field(:before_remove, :string)
       field(:timeout_ms, :integer, default: 60_000)
+      field(:after_create_timeout_ms, :integer)
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
       schema
-      |> cast(attrs, [:after_create, :before_run, :after_run, :before_remove, :timeout_ms], empty_values: [])
+      |> cast(attrs, @fields, empty_values: [])
       |> validate_number(:timeout_ms, greater_than: 0)
+      |> validate_number(:after_create_timeout_ms, greater_than: 0)
     end
+
+    @doc """
+    How long `after_create` may run: `after_create_timeout_ms` when set, else the
+    larger of `timeout_ms` and 10 minutes.
+    """
+    @spec after_create_timeout_ms(t()) :: pos_integer()
+    def after_create_timeout_ms(%__MODULE__{after_create_timeout_ms: timeout_ms}) when is_integer(timeout_ms), do: timeout_ms
+    def after_create_timeout_ms(%__MODULE__{timeout_ms: timeout_ms}), do: max(timeout_ms, @default_after_create_timeout_ms)
   end
 
   defmodule Observability do
