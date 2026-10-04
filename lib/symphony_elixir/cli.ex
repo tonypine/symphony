@@ -66,6 +66,8 @@ defmodule SymphonyElixir.CLI do
     end
   end
 
+  @spec halt({:halt, non_neg_integer()} | {:error, String.t()} | {:error, String.t(), non_neg_integer()}) ::
+          no_return()
   defp halt(result), do: result |> finish() |> System.halt()
 
   @doc """
