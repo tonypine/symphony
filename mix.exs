@@ -140,7 +140,7 @@ defmodule SymphonyElixir.MixProject do
       {:file_system, "~> 1.1"},
       {:yaml_elixir, "~> 2.12"},
       {:solid, "~> 1.3"},
-      {:ecto, "~> 3.13"},
+      {:ecto, "~> 3.14"},
       {:burrito, "~> 1.5", only: :prod, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev], runtime: false}
