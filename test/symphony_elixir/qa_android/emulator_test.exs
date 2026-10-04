@@ -94,6 +94,20 @@ defmodule SymphonyElixir.QaAndroid.EmulatorTest do
     end)
   end
 
+  defp await_state(server, fun, deadline \\ System.monotonic_time(:millisecond) + 5_000) do
+    cond do
+      fun.(:sys.get_state(server)) ->
+        :ok
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        flunk("emulator manager state never matched: #{inspect(:sys.get_state(server))}")
+
+      true ->
+        Process.sleep(5)
+        await_state(server, fun, deadline)
+    end
+  end
+
   defp entry(pid, ppid, start_time, command) do
     %{pid: pid, ppid: ppid, start_time: start_time, cpu_time: "0:01.00", command: command, cwd: nil}
   end
@@ -186,12 +200,12 @@ defmodule SymphonyElixir.QaAndroid.EmulatorTest do
       waiter = spawn(fn -> Emulator.checkout(server) end)
       assert_receive {:timer, ^server, {:wait_timeout, _token}, 1_800_000}
       Process.exit(waiter, :kill)
+      # The manager drops the waiter on its :DOWN, which nothing orders before the holder's checkin.
+      await_state(server, &(&1.waiters == []))
 
       send(holder, :checkin)
       assert_receive {:checkin, ^holder, :ok}
-      state = :sys.get_state(server)
-      assert state.waiters == []
-      assert state.holder == nil
+      assert :sys.get_state(server).holder == nil
     end
 
     test "checking in a lease that is not held changes nothing", ctx do
