@@ -149,6 +149,7 @@ defmodule SymphonyElixir.AgentEnv do
         ]
   def build(env_source, extra_env) when is_map(env_source) and is_map(extra_env) do
     {pass, strip} = Map.split(env_source, @passthrough)
+    pass = Map.drop(pass, Map.keys(extra_env))
 
     strip_entries =
       strip

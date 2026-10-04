@@ -19,9 +19,10 @@ defmodule SymphonyElixir.QaAgent do
   worktree at the PR head (a server that fails its health check makes the pass
   `blocked`), and its session alone gets a `browser` MCP server: headless Playwright
   limited to the dev server's localhost origins, or the playbook's `browser_mcp`.
-  Each pass also gets a private temp folder of its own (see `tmp_dirs/2`), which the agent
-  session gets as `CLAUDE_CODE_TMPDIR`, so the agent's `$TMPDIR` is in it rather than in the
-  `/tmp/claude-<uid>` every Claude session shares. Processes the agent left running under the
+  Each pass also gets a private temp folder of its own (see `tmp_dirs/2`), which a Claude
+  session gets as `CLAUDE_CODE_TMPDIR` and a Codex session as `TMPDIR`, so the agent's
+  `$TMPDIR` is in it rather than in the `/tmp/claude-<uid>` every Claude session shares or
+  Symphony's own temp folder. Processes the agent left running under the
   worktree or that folder, even detached ones, are stopped before both are removed (see
   `SymphonyElixir.LeftoverProcesses`).
   """
@@ -599,7 +600,7 @@ defmodule SymphonyElixir.QaAgent do
   defp run_session(agent_module, job, worktree, qa_settings, prompt, tracker, opts) do
     tmp_dir = Keyword.fetch!(opts, :qa_tmp_dir)
     # The agent's `$TMPDIR` is under the temp folder, so its sandbox writes there whatever
-    # Claude Code's own default writable set is.
+    # the runtime's own default writable set is.
     qa_settings = update_in(qa_settings.workspace.sandbox.allow_write_paths, &(&1 ++ [tmp_dir]))
 
     session_opts = [
@@ -611,7 +612,7 @@ defmodule SymphonyElixir.QaAgent do
       run_profile: Map.get_lazy(job, :run_profile, fn -> SymphonyElixir.Config.qa_profile(qa_settings) end),
       tool_scope: :qa,
       qa_driver: Keyword.get(opts, :qa_driver),
-      extra_env: %{"CLAUDE_CODE_TMPDIR" => tmp_dir}
+      extra_env: tmp_dir_env(qa_settings.agent.kind, tmp_dir)
     ]
 
     case agent_module.start_session(worktree, session_opts) do
@@ -623,6 +624,11 @@ defmodule SymphonyElixir.QaAgent do
         {:error, {:qa_agent_failed, reason}}
     end
   end
+
+  # Claude Code puts the `$TMPDIR` of the commands it runs under `CLAUDE_CODE_TMPDIR`; Codex
+  # passes its own `TMPDIR` on to them.
+  defp tmp_dir_env("claude", tmp_dir), do: %{"CLAUDE_CODE_TMPDIR" => tmp_dir}
+  defp tmp_dir_env(_kind, tmp_dir), do: %{"TMPDIR" => tmp_dir}
 
   defp run_turn(agent_module, session, prompt, issue, turn_opts, tracker) do
     run_turns(agent_module, session, prompt, issue, turn_opts, tracker, 0)

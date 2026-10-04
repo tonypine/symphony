@@ -97,8 +97,8 @@ defmodule SymphonyElixir.QaAgentTest do
   # worktree, as the TP-413 pass did with `./bin/symphony`.
   defmodule TmpDirDetachingSession do
     def start_session(workspace, opts) do
-      tmp_dir = Path.join(Map.fetch!(opts[:extra_env], "CLAUDE_CODE_TMPDIR"), "claude-501")
-      checkout = Path.join(tmp_dir, "qa/checkout")
+      tmp_dir = Path.join(Map.fetch!(opts[:extra_env], "TMPDIR"), "qa")
+      checkout = Path.join(tmp_dir, "checkout")
       File.mkdir_p!(checkout)
       pid = SymphonyElixir.QaAgentTest.detached_sleep(checkout)
       send(Application.fetch_env!(:symphony_elixir, :qa_test_recipient), {:detached, pid, checkout})
@@ -633,7 +633,7 @@ defmodule SymphonyElixir.QaAgentTest do
       # A folder left by an interrupted pass doesn't carry over.
       File.mkdir_p!(Path.join(tmp_dir, "stale"))
       test_pid = self()
-      left = %{pid: 4242, start_time: "Sun Oct  4 08:00:00 2026", command: "./bin/symphony --port 47413", cwd: Path.join(tmp_dir, "claude-501/qa/checkout")}
+      left = %{pid: 4242, start_time: "Sun Oct  4 08:00:00 2026", command: "./bin/symphony --port 47413", cwd: Path.join(tmp_dir, "qa/checkout")}
       shared = %{left | pid: 4343, cwd: Path.join(System.tmp_dir!(), "qa/checkout")}
       {:ok, reads} = Agent.start_link(fn -> [{:ok, [left, shared]}, {:ok, [shared]}] end)
 
@@ -646,7 +646,7 @@ defmodule SymphonyElixir.QaAgentTest do
                QaAgent.run(job(), settings, git: fake_git(), qa_agent_module: FakeSession, tmp_bases: [base], leftover_processes: leftover_processes)
 
       assert_received {:qa_session_started, ^worktree, session_opts}
-      assert session_opts[:extra_env] == %{"CLAUDE_CODE_TMPDIR" => tmp_dir}
+      assert session_opts[:extra_env] == %{"TMPDIR" => tmp_dir}
       assert List.last(session_opts[:settings].workspace.sandbox.allow_write_paths) == tmp_dir
       assert String.length(tmp_dir) == String.length(base) + String.length("/symphony-qa-") + 12
       assert_received {:signal, 4242, "TERM"}
@@ -676,10 +676,25 @@ defmodule SymphonyElixir.QaAgentTest do
                )
 
       assert_received {:qa_session_started, _worktree, session_opts}
-      assert %{"CLAUDE_CODE_TMPDIR" => tmp_dir} = session_opts[:extra_env]
+      assert %{"TMPDIR" => tmp_dir} = session_opts[:extra_env]
       assert Path.dirname(tmp_dir) == base
       assert_received {:mode, mode}
       assert Bitwise.band(mode, 0o777) == 0o700
+    end
+
+    test "gives a Claude pass its temp folder as CLAUDE_CODE_TMPDIR" do
+      write_workflow_file!(Workflow.workflow_file_path(), auto_review: %{runtime: "claude"})
+      base = Path.join(System.tmp_dir!(), "qa-agent-test-tmp-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(base)
+      on_exit(fn -> File.rm_rf(base) end)
+
+      assert {:ok, _result} =
+               QaAgent.run(job(), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession, tmp_bases: [base], leftover_processes: [table: fn -> {:ok, []} end])
+
+      assert_received {:qa_session_started, _worktree, session_opts}
+      assert %{"CLAUDE_CODE_TMPDIR" => tmp_dir} = session_opts[:extra_env]
+      refute Map.has_key?(session_opts[:extra_env], "TMPDIR")
+      assert Path.dirname(tmp_dir) == base
     end
 
     test "is blocked without starting the agent when no temp folder can be made" do
