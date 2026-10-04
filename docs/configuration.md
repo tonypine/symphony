@@ -1282,8 +1282,8 @@ tools for it on the host, outside the sandbox, and checks every argument:
 | `qa_launch_app` | starts the private copy of the bundle with `SYMPHONY_BAR_QA_ROOT` set to a private directory ([QA mode](../macos/README.md#qa-mode)), and returns its PID | an executable that changed since the last `qa_build`, or a worktree `qa_build` would refuse |
 | `qa_quit_app` | quits a launched app and returns its recent output | a PID it did not launch |
 | `qa_screenshot` | saves the app's on-screen windows to new files `qa-evidence/<name>.png` | a PID it did not launch, a window of another app, a name that already exists (file or symlink) |
-| `qa_ax_tree` | reads the accessibility tree (role, title, value, frame), filtered by `role` or `text`, capped in depth, nodes and size | a PID it did not launch |
-| `qa_ax_press`, `qa_ax_set_value` | press an element (or `AXRaise` a window) and set a field's value | a PID it did not launch |
+| `qa_ax_tree` | reads the accessibility tree (role, title, value, frame; never a secure field's value), filtered by `role` or `text`, capped in depth, nodes and size | a PID it did not launch |
+| `qa_ax_press`, `qa_ax_set_value` | press an element (or `AXRaise` a window) and set a field's value: a text field gets it typed in with key events sent to the app alone (brought to the front, focused, text selected, then Tab), so the app sees the edit; other controls get `AXValue` set | a PID it did not launch, a tab or line break for a single-line field |
 | `qa_put_file` | puts a fixture file the agent wrote (a test `symphony.yml`, a `WORKFLOW.md`) where the app can open it and returns that path: the file's own path on this host, a copy in the run directory's `files/` on a `worker_host` | a file that resolves outside the worktree and the pass's `$TMPDIR`, a symlink, a directory or other non-regular file, a file with other hard links, a file over 1 MB, and a file replaced while it is read |
 
 At most three launched apps run at once, and every app still running is quit when the pass ends.

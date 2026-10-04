@@ -34,6 +34,9 @@
 //   ax-press <pid> <path> <action>
 //   ax-set-value <pid> <path> <value>
 //
+// `ax-set-value` types into a text field the way a person does (see
+// `enterText`), and sets `AXValue` directly only on other controls.
+//
 // Opened with no arguments (by hand, from Finder or `open`), it asks for both
 // permissions, so that it is listed in System Settings.
 
@@ -104,7 +107,10 @@ func describe(_ element: AXUIElement, path: String) -> [String: Any] {
     node["role"] = text(attribute(element, kAXRoleAttribute as String))
     node["subrole"] = text(attribute(element, kAXSubroleAttribute as String))
     node["title"] = text(attribute(element, kAXTitleAttribute as String))
-    node["value"] = text(attribute(element, kAXValueAttribute as String))
+    // A secure field's value never leaves the helper, not even as bullets.
+    if node["subrole"] as? String != kAXSecureTextFieldSubrole as String {
+        node["value"] = text(attribute(element, kAXValueAttribute as String))
+    }
     node["description"] = text(attribute(element, kAXDescriptionAttribute as String))
     node["identifier"] = text(attribute(element, kAXIdentifierAttribute as String))
 
@@ -276,6 +282,138 @@ func screenshot(_ pid: pid_t, _ windowArgument: String, _ path: String) {
     }
 
     emit(["ok": true])
+}
+
+// -- text entry -----------------------------------------------------------------
+
+// Setting `AXValue` on a text field changes what it shows but sends no editing
+// notification, so a SwiftUI binding never sees the value and the app saves the
+// old one. Text fields get the value typed in instead: focus the field, select
+// its text, type over it with key events and commit with Tab. Return would also
+// commit, but it presses a form's default button (Save) too.
+let textRoles: Set<String> = [kAXTextFieldRole as String, kAXTextAreaRole as String, kAXComboBoxRole as String]
+let singleLineRoles: Set<String> = [kAXTextFieldRole as String, kAXComboBoxRole as String]
+let keyTab: CGKeyCode = 48
+let keyDelete: CGKeyCode = 51
+let keyDownArrow: CGKeyCode = 125
+let keyUpArrow: CGKeyCode = 126
+// `CGEventKeyboardSetUnicodeString` keeps at most 20 UTF-16 units per event.
+let unicodeChunk = 20
+let keyPause: useconds_t = 2_000
+// A private source, so keys the operator holds down never mix into the events.
+let keySource = CGEventSource(stateID: .privateState)
+
+// Events go to the app's PID only, never to whatever app is frontmost.
+func postKey(_ pid: pid_t, _ code: CGKeyCode, flags: CGEventFlags = [], text: [UniChar] = []) {
+    for down in [true, false] {
+        guard let event = CGEvent(keyboardEventSource: keySource, virtualKey: code, keyDown: down) else {
+            fail("typing_failed", "Could not create a key event.")
+        }
+        event.flags = flags
+        if !text.isEmpty { event.keyboardSetUnicodeString(stringLength: text.count, unicodeString: text) }
+        event.postToPid(pid)
+        usleep(keyPause)
+    }
+}
+
+// Splits on Unicode scalars, so no surrogate pair is cut in two.
+func unicodeChunks(_ value: String) -> [[UniChar]] {
+    var chunks: [[UniChar]] = []
+    var current: [UniChar] = []
+
+    for scalar in value.unicodeScalars {
+        let units = Array(String(scalar).utf16)
+        if current.count + units.count > unicodeChunk {
+            chunks.append(current)
+            current = []
+        }
+        current += units
+    }
+
+    if !current.isEmpty { chunks.append(current) }
+    return chunks
+}
+
+func waitUntil(_ seconds: TimeInterval, _ condition: () -> Bool) -> Bool {
+    let deadline = Date().addingTimeInterval(seconds)
+
+    while !condition() {
+        if Date() >= deadline { return false }
+        usleep(20_000)
+    }
+
+    return true
+}
+
+func characterCount(_ element: AXUIElement) -> Int? {
+    if let count = attribute(element, kAXNumberOfCharactersAttribute as String) as? Int { return count }
+    return (attribute(element, kAXValueAttribute as String) as? String)?.utf16.count
+}
+
+func setFlag(_ element: AXUIElement, _ name: String) -> AXError {
+    AXUIElementSetAttributeValue(element, name as CFString, kCFBooleanTrue)
+}
+
+// Selects the field's text, so typing replaces it.
+func selectAll(_ pid: pid_t, _ element: AXUIElement) {
+    guard let count = characterCount(element), count > 0 else { return }
+    var range = CFRange(location: 0, length: count)
+
+    if let all = AXValueCreate(.cfRange, &range),
+       AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, all) == .success {
+        return
+    }
+
+    // A menu bar app has no Edit menu, so Cmd-A may do nothing; these are text
+    // key bindings: move to the end, then select back to the start.
+    let arrow: CGEventFlags = [.maskSecondaryFn, .maskNumericPad]
+    postKey(pid, keyDownArrow, flags: arrow.union(.maskCommand))
+    postKey(pid, keyUpArrow, flags: arrow.union([.maskCommand, .maskShift]))
+}
+
+func enterText(_ app: AXUIElement, _ pid: pid_t, _ element: AXUIElement, role: String, path: String, value: String) {
+    let secure = (attribute(element, kAXSubroleAttribute as String) as? String) == kAXSecureTextFieldSubrole as String
+
+    if singleLineRoles.contains(role), value.contains(where: { $0 == "\t" || $0.isNewline }) {
+        fail("invalid_value", "A single-line text field cannot take a tab or line break: typing one moves focus or presses the default button.")
+    }
+
+    // Key events reach only the key window of the active app.
+    if (attribute(app, kAXFrontmostAttribute as String) as? Bool) != true { _ = setFlag(app, kAXFrontmostAttribute as String) }
+    if let window = attribute(element, kAXWindowAttribute as String), CFGetTypeID(window) == AXUIElementGetTypeID() {
+        _ = setFlag(window as! AXUIElement, kAXMainAttribute as String)
+    }
+
+    let focused = setFlag(element, kAXFocusedAttribute as String)
+    if focused != .success { axFailure(focused, "focusing the field") }
+
+    guard waitUntil(2, { (attribute(element, kAXFocusedAttribute as String) as? Bool) == true }) else {
+        fail("not_focused", "The field did not take keyboard focus. Raise its window with qa_ax_press and AXRaise, then try again.")
+    }
+
+    selectAll(pid, element)
+    if value.isEmpty { postKey(pid, keyDelete) }
+    for chunk in unicodeChunks(value) { postKey(pid, 0, text: chunk) }
+
+    // Check the typed text landed before committing it; a secure field is
+    // checked by length only.
+    let expected = value.utf16.count
+    let landed = waitUntil(2) {
+        secure ? characterCount(element).map { $0 == expected } ?? true
+            : (attribute(element, kAXValueAttribute as String) as? String ?? "") == value
+    }
+
+    guard landed else {
+        let shown = characterCount(element).map(String.init) ?? "unknown"
+        fail("text_not_entered", "After typing, the field holds \(shown) characters, not the \(expected) typed. The app may have lost focus or changed the text.")
+    }
+
+    if singleLineRoles.contains(role) {
+        postKey(pid, keyTab)
+        usleep(100_000)
+    }
+
+    emit(["ok": true, "typed": true, "element": describe(element, path: path)])
 }
 
 // -- server ---------------------------------------------------------------------
@@ -544,10 +682,17 @@ case "ax-press" where args.count == 4:
 case "ax-set-value" where args.count == 4:
     requireAccessibility()
     let pid = pidArgument(args[1])
-    let element = resolve(application(pid), args[2])
-    let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, args[3] as CFString)
-    if result != .success { axFailure(result, "setting AXValue") }
-    emit(["ok": true, "element": describe(element, path: args[2])])
+    let app = application(pid)
+    let element = resolve(app, args[2])
+    let role = attribute(element, kAXRoleAttribute as String) as? String ?? ""
+
+    if textRoles.contains(role) {
+        enterText(app, pid, element, role: role, path: args[2], value: args[3])
+    } else {
+        let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, args[3] as CFString)
+        if result != .success { axFailure(result, "setting AXValue") }
+        emit(["ok": true, "element": describe(element, path: args[2])])
+    }
 
 default:
     fail("usage", "Unknown command or wrong number of arguments.")
