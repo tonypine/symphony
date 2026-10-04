@@ -334,8 +334,7 @@ final class SettingsViewModel: ObservableObject {
                 secrets: secrets,
                 baseEnvironment: AppStores.current.environment,
                 embeddedSymphonyPath: SymphonyRunner.embeddedSymphonyPath,
-                subcommand: ["check"],
-                qaMode: AppStores.current.isQAMode
+                subcommand: ["check"]
             )
             return await ConfigCheck.run(launch)
         } catch {

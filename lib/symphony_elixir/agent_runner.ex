@@ -1412,9 +1412,27 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   # A landing run waits on CI through `merging_ci_pending?/2`, and parking it would drop the
-  # human's merge approval.
-  defp idle_turn_limit_reached?(%Issue{} = issue, %{progress: progress}) do
-    progress.empty_turns >= @max_empty_turns and !merging_state?(issue.state)
+  # human's merge approval. A run that pushed its HEAD to the PR and waits on that head's checks
+  # is not idle either; it keeps turning, up to `agent.max_turns`, until CI settles.
+  defp idle_turn_limit_reached?(%Issue{} = issue, %{progress: progress} = run_context) do
+    progress.empty_turns >= @max_empty_turns and !merging_state?(issue.state) and
+      !pushed_head_ci_pending?(issue, run_context)
+  end
+
+  # A PR with no checks reported yet stays parkable, so a repo without CI never waits on it.
+  defp pushed_head_ci_pending?(%Issue{} = issue, %{progress: %{head: head}} = run_context) do
+    pr_url = URLUtils.pull_request_url(issue)
+    github = Keyword.get(run_context.opts, :github, PullRequest)
+
+    with true <- is_binary(pr_url),
+         {:ok, %{commit_sha: ^head, checks: [_ | _]} = ci_status} <-
+           github.fetch_ci_status(pr_url, cwd: run_context.workspace),
+         :pending <- CiPoller.ci_action(ci_status) do
+      Logger.info("Not parking #{issue_context(issue)}; waiting for CI on its pushed head #{head}")
+      true
+    else
+      _ -> false
+    end
   end
 
   defp park_idle_issue(%Issue{id: issue_id} = issue) do

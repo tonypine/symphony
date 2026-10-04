@@ -69,7 +69,6 @@ public enum LaunchProblem: LocalizedError, Equatable {
     case linearAPIKeyMissing
     case symphonyBinaryMissing(String)
     case embeddedSymphonyMissing
-    case qaModeNeedsCheckout
 
     public var message: String {
         switch self {
@@ -85,8 +84,6 @@ public enum LaunchProblem: LocalizedError, Equatable {
             return "\(path) was not found. Build it with `mise exec -- mix build` in the checkout."
         case .embeddedSymphonyMissing:
             return EmbeddedSymphony.missingMessage
-        case .qaModeNeedsCheckout:
-            return "QA mode runs only a checkout's Symphony; turn on Development mode in Settings."
         }
     }
 
@@ -103,9 +100,8 @@ public enum LaunchProblem: LocalizedError, Equatable {
 public enum ChildLaunchBuilder {
     /// Runs the embedded Symphony directly, or in Development mode the checkout's `bin/symphony` through a login
     /// shell. `embeddedSymphonyPath` is where the app's embedded binary would be. `subcommand`, for example
-    /// `["check"]`, goes before `--config`. In QA mode only Development mode runs, so a test launch never starts
-    /// the embedded Symphony. `qaDriverAppPath` is where the bundled QA driver helper would be; Symphony gets it in
-    /// `SYMPHONY_QA_DRIVER_APP` when it is there.
+    /// `["check"]`, goes before `--config`. `qaDriverAppPath` is where the bundled QA driver helper would be;
+    /// Symphony gets it in `SYMPHONY_QA_DRIVER_APP` when it is there.
     public static func build(
         settings: AppSettings,
         secrets: SecretSettings,
@@ -113,14 +109,12 @@ public enum ChildLaunchBuilder {
         embeddedSymphonyPath: String? = nil,
         qaDriverAppPath: String? = nil,
         subcommand: [String] = [],
-        qaMode: Bool = false,
         files: FileChecker = LocalFileChecker()
     ) throws -> ChildLaunch {
         let settings = settings.trimmed()
         let secrets = secrets.trimmed()
 
         guard settings.developmentMode else {
-            if qaMode { throw LaunchProblem.qaModeNeedsCheckout }
             return try buildEmbedded(
                 settings: settings,
                 secrets: secrets,

@@ -377,6 +377,24 @@ defmodule SymphonyElixir.ConfigSplitTest do
     assert default_message =~ "repositories can include at most one default repo"
   end
 
+  test "system schema reads issues.memory.issues_file relative to symphony.yml and rejects other keys" do
+    assert {:ok, %{tracker: %{memory_issues_file: "/abs/issues.json"}}} =
+             SystemSchema.parse(system_config(%{"issues" => %{"provider" => "memory", "memory" => %{"issues_file" => "/abs/issues.json"}}}))
+
+    assert {:ok, %{tracker: %{memory_issues_file: relative}}} =
+             SystemSchema.parse(system_config(%{"issues" => %{"provider" => "memory", "memory" => %{"issues_file" => "issues.json"}}}))
+
+    assert relative == Path.join(Path.dirname(SymphonyElixir.Workflow.symphony_file_path()), "issues.json")
+
+    assert {:error, {:invalid_symphony_config, message}} =
+             SystemSchema.parse(system_config(%{"issues" => %{"provider" => "memory", "memory" => %{"issues_path" => "x"}}}))
+
+    assert message =~ "issues.memory"
+
+    assert {:error, {:invalid_symphony_config, "`issues.memory` must be an object"}} =
+             SystemSchema.parse(system_config(%{"issues" => %{"provider" => "memory", "memory" => "issues.json"}}))
+  end
+
   test "system schema rejects unknown top-level keys and empty repos" do
     assert {:error, {:invalid_symphony_config, "unknown symphony.yml key `unknown`"}} =
              SystemSchema.parse(system_config(%{"unknown" => true}))

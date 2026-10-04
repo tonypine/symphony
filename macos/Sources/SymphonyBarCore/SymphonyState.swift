@@ -85,16 +85,26 @@ public enum SymphonyState {
 
     /// The URL in the control URL file's contents, or the default when they are empty or not a URL.
     public static func baseURL(controlURLContents: String?) -> URL {
+        baseURL(controlURLContents: controlURLContents, fallback: defaultBaseURL) ?? defaultBaseURL
+    }
+
+    /// The URL in the control URL file's contents, or `fallback` when they are empty or not a URL.
+    public static func baseURL(controlURLContents: String?, fallback: URL?) -> URL? {
         let text = controlURLContents?.trimmingWhitespace() ?? ""
         guard let url = URL(string: text), let scheme = url.scheme, ["http", "https"].contains(scheme),
             url.host != nil
-        else { return defaultBaseURL }
+        else { return fallback }
         return url
     }
 
     /// The URL in the control URL file, or the default when the file is missing or holds no URL.
     public static func baseURL(controlURLFile file: URL) -> URL {
-        baseURL(controlURLContents: try? String(contentsOf: file, encoding: .utf8))
+        baseURL(controlURLFile: file, fallback: defaultBaseURL) ?? defaultBaseURL
+    }
+
+    /// The URL in the control URL file, or `fallback` when the file is missing or holds no URL.
+    public static func baseURL(controlURLFile file: URL, fallback: URL?) -> URL? {
+        baseURL(controlURLContents: try? String(contentsOf: file, encoding: .utf8), fallback: fallback)
     }
 
     public static func stateURL(base: URL) -> URL {
