@@ -784,7 +784,9 @@ defmodule SymphonyElixir.PrReviewPoller do
         maybe_transition_rework(record, attrs, settings, opts, now)
 
       :conflict ->
-        maybe_transition_conflict(record, put_auto_merge_conflict(attrs, record, activity, opts, now), opts, now)
+        with {:ok, attrs} <- put_auto_merge_conflict(attrs, record, activity, opts, now) do
+          maybe_transition_conflict(record, attrs, opts, now)
+        end
 
       action when action in [:approved, :stale, :watching] ->
         if auto_merge_issue?(record, opts),
@@ -872,10 +874,71 @@ defmodule SymphonyElixir.PrReviewPoller do
 
     if auto_merge_issue?(record, opts) or AutoMerge.armed?(previous) do
       auto_merge = AutoMerge.conflict(previous, Map.get(activity, :head_ref_oid), now)
-      AutoMerge.log_transition(record, previous, auto_merge)
-      Map.put(attrs, :auto_merge, auto_merge)
+
+      with {:ok, attrs} <- disable_auto_merge_for_conflict(attrs, record, activity, auto_merge, opts, now) do
+        AutoMerge.log_transition(record, previous, attrs.auto_merge)
+        {:ok, attrs}
+      end
     else
-      attrs
+      {:ok, attrs}
+    end
+  end
+
+  # Before a conflict-fix run: turn GitHub auto-merge off, so the fix is reviewed and approved
+  # into `Merging` again before it lands. While GitHub won't turn it off, the conflict waits
+  # for the next poll (a conflicting PR can't merge meanwhile).
+  defp disable_auto_merge_for_conflict(attrs, record, activity, auto_merge, opts, now) do
+    case AutoMerge.disable_for_conflict(record, activity, auto_merge, opts, now) do
+      {:ok, auto_merge} ->
+        {:ok, Map.put(attrs, :auto_merge, auto_merge)}
+
+      {:disabled, auto_merge} ->
+        Logger.info(
+          "Auto-merge #{Map.get(record, :issue_identifier)}: turned GitHub auto-merge off because the PR conflicts with the base branch; the fix goes back through review issue_id=#{Map.get(record, :issue_id)} pr_url=#{Map.get(record, :pr_url)} commit_sha=#{auto_merge.head_sha}"
+        )
+
+        record_auto_merge_disabled(record, auto_merge)
+        comment_auto_merge_disabled(record, opts)
+        {:ok, Map.put(attrs, :auto_merge, auto_merge)}
+
+      {:error, reason} ->
+        Logger.warning(
+          "Auto-merge #{Map.get(record, :issue_identifier)}: turning GitHub auto-merge off for the merge conflict failed; the conflict fix waits until it is off issue_id=#{Map.get(record, :issue_id)} pr_url=#{Map.get(record, :pr_url)}: #{inspect(reason)}"
+        )
+
+        record_poll_error(record, {:disable_auto_merge_failed, reason}, opts, now)
+    end
+  end
+
+  defp record_auto_merge_disabled(record, auto_merge) do
+    %{
+      event_type: "auto_merge_disabled",
+      repo_key: Map.get(record, :repo_key),
+      issue_id: Map.get(record, :issue_id),
+      issue_identifier: Map.get(record, :issue_identifier),
+      pr_url: Map.get(record, :pr_url),
+      head_sha: auto_merge.head_sha,
+      reason: "conflict",
+      detail: "GitHub auto-merge turned off because the PR conflicts with the base branch; the conflict fix goes back through review"
+    }
+    |> AuditLog.record()
+    |> case do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("Failed to record auto_merge_disabled audit event issue_id=#{Map.get(record, :issue_id)}: #{inspect(reason)}")
+    end
+  end
+
+  defp comment_auto_merge_disabled(record, opts) do
+    tracker = Keyword.get(opts, :tracker, Tracker)
+    issue_id = Map.get(record, :issue_id)
+
+    case tracker.create_comment(issue_id, AutoMerge.conflict_comment(Map.get(record, :pr_url))) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Failed to comment that auto-merge was turned off for a conflict issue_id=#{issue_id}: #{inspect(reason)}")
+        :ok
     end
   end
 
@@ -889,15 +952,11 @@ defmodule SymphonyElixir.PrReviewPoller do
       {:conflict, auto_merge} ->
         # GitHub couldn't merge the base branch in: same path as a conflict GitHub reports.
         conflicted = Map.merge(activity, %{mergeable: @conflicting_mergeable, merge_state_status: @dirty_merge_state})
-
-        attrs =
-          attrs
-          |> maybe_put_conflict_attrs(record, conflicted, now)
-          |> Map.put(:auto_merge, auto_merge)
+        attrs = maybe_put_conflict_attrs(attrs, record, conflicted, now)
 
         case conflict_review_action(record, conflicted) do
-          :conflict -> maybe_transition_conflict(record, attrs, opts, now)
-          _watching -> complete_review_update(opts, record, attrs, {:auto_merge, issue_id, auto_merge.state})
+          :conflict -> transition_auto_merge_conflict(record, attrs, activity, auto_merge, opts, now)
+          _watching -> complete_review_update(opts, record, Map.put(attrs, :auto_merge, auto_merge), {:auto_merge, issue_id, auto_merge.state})
         end
 
       {:fallback, auto_merge} ->
@@ -909,6 +968,12 @@ defmodule SymphonyElixir.PrReviewPoller do
           comment_auto_merge_fallback(record, auto_merge, opts)
           action
         end
+    end
+  end
+
+  defp transition_auto_merge_conflict(record, attrs, activity, auto_merge, opts, now) do
+    with {:ok, attrs} <- disable_auto_merge_for_conflict(attrs, record, activity, auto_merge, opts, now) do
+      maybe_transition_conflict(record, attrs, opts, now)
     end
   end
 

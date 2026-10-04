@@ -500,6 +500,21 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
       assert {:error, :invalid_pr_url} = PullRequest.enable_auto_merge("https://example.com/nope", @request, gh_runner: clean)
     end
 
+    test "disable_auto_merge turns auto-merge off for the PR node, and reports failures as they are" do
+      pr_url = "https://github.com/org/repo/pull/42"
+
+      runner = fn ["api", "graphql", "-f", "query=" <> query, "-f", "pullRequestId=PR_node"], _opts ->
+        assert query =~ "disablePullRequestAutoMerge"
+        {~s({"data":{}}), 0}
+      end
+
+      denied = fn ["api", "graphql" | _fields], _opts -> {"gh: Resource not accessible by integration", 1} end
+
+      assert :ok = PullRequest.disable_auto_merge(pr_url, "PR_node", gh_runner: runner)
+      assert {:error, {:gh_failed, _args, 1, "gh: Resource not accessible" <> _}} = PullRequest.disable_auto_merge(pr_url, "PR_node", gh_runner: denied)
+      assert {:error, :invalid_pr_url} = PullRequest.disable_auto_merge("https://example.com/nope", "PR_node", gh_runner: runner)
+    end
+
     test "squash_merge merges the observed head and falls back to the bare title or an empty headline" do
       pr_url = "https://github.com/org/repo/pull/42"
       test_pid = self()

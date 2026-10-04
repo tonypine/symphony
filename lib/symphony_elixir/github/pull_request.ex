@@ -219,6 +219,26 @@ defmodule SymphonyElixir.GitHub.PullRequest do
     end
   end
 
+  @disable_auto_merge_mutation """
+  mutation($pullRequestId: ID!) {
+    disablePullRequestAutoMerge(input: {pullRequestId: $pullRequestId}) {
+      clientMutationId
+    }
+  }
+  """
+
+  @doc "Turns GitHub auto-merge off for the PR with GraphQL node id `pr_node_id`."
+  @spec disable_auto_merge(String.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  def disable_auto_merge(pr_url, pr_node_id, opts \\ []) when is_binary(pr_url) and is_binary(pr_node_id) do
+    with {:ok, host, _owner, _repo, _number} <- parse_github_pr_url(pr_url, opts),
+         {:ok, _output} <- run_gh(github_api_args(host, "graphql") ++ ["-f", "query=#{@disable_auto_merge_mutation}", "-f", "pullRequestId=#{pr_node_id}"], opts) do
+      :ok
+    else
+      :error -> {:error, :invalid_pr_url}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   @doc "Squash-merges the PR now, only if its head is still the one in `request`."
   @spec squash_merge(String.t(), squash_request(), keyword()) :: :ok | {:error, term()}
   def squash_merge(pr_url, request, opts \\ []) when is_binary(pr_url) and is_map(request) do
