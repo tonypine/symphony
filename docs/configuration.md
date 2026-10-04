@@ -1536,6 +1536,12 @@ When the emulator cannot start, every tool fails with `qa_android_unavailable`. 
 app steps `blocked`, still runs the steps of the other playbooks offered (`cli`, `web`) and reports
 each as `pass` or `fail`, then answers `blocked` with the tool's message as the reason.
 
+Every QA prompt tells the agent never to start an emulator, a simulator or a device tool itself
+(`emulator`, `qemu-*`, `xcrun simctl boot`, `adb start-server`): its sandbox cannot run them, and
+each attempt leaves crash reports on the host. In a pass without the `android_app` playbook, the
+`qa_android_*` tools fail with `qa_android_driver_unavailable`, and the agent marks each step that
+needs an Android device `blocked` with "no Android QA playbook configured for this repo".
+
 ##### The emulator
 
 Symphony runs the emulator on the host, because the QA agent's sandbox cannot (it needs the
