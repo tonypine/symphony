@@ -595,9 +595,16 @@ class Instance:
             return ""
 
     def beam_pids(self, build):
-        """Processes running from the build's unpacked release, which may be deleted already."""
+        """The build's Symphony BEAMs, whose unpacked release may be deleted already.
+
+        Only `beam.smp` counts: the release's `epmd -daemon` also runs from the unpacked folder,
+        but it is detached and outlives the node by design, so it isn't a running Symphony.
+        """
         root = str(self.qa / "burrito" / ".burrito") + "/"
-        return [pid for pid, cmd in processes() if root in cmd and f"_0.0.1-{build}/" in cmd]
+        return [
+            pid for pid, cmd in processes()
+            if root in cmd and f"_0.0.1-{build}/" in cmd and "/bin/beam.smp" in cmd
+        ]
 
     # -- teardown -----------------------------------------------------------
 
