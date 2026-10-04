@@ -187,7 +187,7 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
           wait_until(fn -> Enum.find(RunStore.list_runs(), &(&1.issue_id == "issue-profile-sub")) end)
         end)
 
-      assert log =~ ~r/Dispatching issue to agent: issue_id=issue-profile-sub .* run_kind=implementation model=default effort=low/
+      assert log =~ ~r/Dispatching issue to agent: issue_id=issue-profile-sub .* run_kind=implementation model=default effort=low\n/
 
       assert %{
                run_kind: "implementation",
@@ -195,6 +195,39 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
                effort: "low",
                reviewer_profile: %{run_kind: "pre_push_review", model: "claude-sonnet-5-5", effort: "medium"}
              } = Enum.find(RunStore.list_runs(), &(&1.issue_id == "issue-profile-sub"))
+    end
+
+    test "names the PR comment a review_feedback run answers", ctx do
+      write_profile_workflow!(ctx)
+      issue = issue("issue-profile-review", "MT-PROFILE-3", %{state: "In Progress"})
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+
+      :ok =
+        RunStore.put_pr_review(%{
+          repo_key: Config.repo_key!(),
+          issue_id: issue.id,
+          issue_identifier: issue.identifier,
+          pr_url: "https://github.com/example/repo/pull/3",
+          status: "rework_requested",
+          pending_reviewer_comments: [
+            %{id: "c-1", kind: "comment", author: "reviewer", body: "\nRename this helper.\nIt reads oddly.", created_at: ~U[2026-10-04 04:30:00Z]}
+          ]
+        })
+
+      orchestrator_name = Module.concat(__MODULE__, :ReviewFeedbackOrchestrator)
+      {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+      on_exit(fn -> stop_process(pid) end)
+
+      log =
+        capture_log(fn ->
+          send(pid, :run_poll_cycle)
+          assert [_first | _rest] = wait_for_argv_lines(ctx.argv_trace, 1)
+          wait_until(fn -> RunStore.list_runs() != [] end)
+        end)
+
+      assert log =~
+               ~s(run_kind=review_feedback model=claude-opus-5-5 effort=medium trigger_comment_id=c-1 trigger_comment_author=reviewer trigger_comment="Rename this helper." pending_comments=1)
     end
   end
 
