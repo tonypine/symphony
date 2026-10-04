@@ -64,7 +64,8 @@ defmodule SymphonyElixir.AgentPriorityTest do
     port = Port.open({:spawn_executable, ~c"/bin/sh"}, [:binary, args: [~c"-c", ~c"sleep 5"]])
     Port.close(port)
 
-    assert capture_log(fn -> assert :ok = AgentPriority.log_started(port, "claude -p", "run-123", :lowered) end) == ""
+    # capture_log sees every process's logs, so another async test's lines can land here.
+    refute capture_log(fn -> assert :ok = AgentPriority.log_started(port, "claude -p", "run-123", :lowered) end) =~ "Started agent"
   end
 
   defp collect_output(port, acc) do
