@@ -3,18 +3,22 @@ defmodule SymphonyElixir.HumanActions.Collector do
   Reads the open human actions in Symphony's scope from Linear, grouped by project.
 
   One query per repository route, in the scope that route polls, returns every non-terminal issue
-  that carries the `human_actions.label` label, sits in `In Review`, or is a `Final verification:`
-  ticket. From those:
+  that carries the `human_actions.label` label, sits in `In Review` or the Human Review state
+  (`SymphonyElixir.HumanReview`), or is a `Final verification:` ticket. From those:
 
   - each open `## Action needed:` comment on a labelled issue is a `:request`
     (see `SymphonyElixir.HumanActions.Request`); a withdrawn one is not listed;
   - a labelled issue with no request comment is itself a `:task`;
-  - a `breakdown` parent in `In Review` is a `:plan_review`;
-  - an issue in `In Review` whose `## Symphony QA Report` says `blocked` is a `:qa_blocked`, unless
-    it is a `Final verification:` ticket;
+  - a `breakdown` parent in a review state is a `:plan_review`;
+  - an issue in a review state whose `## Symphony QA Report` says `blocked` is a `:qa_blocked`,
+    unless it is a `Final verification:` ticket;
   - a `Final verification:` ticket, in any state, whose parent walkthrough report says `blocked`
     is a `:verification_blocked` on its parent's project, while the ticket stays in the state the
-    walkthrough moved it to.
+    walkthrough moved it to;
+  - an issue in the Human Review state with none of the above is a `:human_review`.
+
+  Every action on an issue in the Human Review state is marked `human_review`, so the update lists
+  it first.
 
   Neither lists a `blocked` verdict whose QA agent was stopped by the provider's usage limit: that
   pass runs again once the limit resets.
@@ -22,9 +26,9 @@ defmodule SymphonyElixir.HumanActions.Collector do
   Issues outside a project are skipped: there is no project to post the update to.
   """
 
-  alias SymphonyElixir.{AutoReview, RunKind, SubIssueWait}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.HumanActions.{Action, Request}
+  alias SymphonyElixir.{HumanReview, RunKind, SubIssueWait}
   alias SymphonyElixir.Linear.{Client, Issue}
   alias SymphonyElixir.QaAgent.Report
 
@@ -33,6 +37,7 @@ defmodule SymphonyElixir.HumanActions.Collector do
   @history_first 50
   @max_task_steps 12
   @plan_review_minutes 10
+  @human_review_minutes 10
   @verdict_pattern ~r/^\*\*Verdict:\*\*\s*(\w+)/m
   @reason_pattern ~r/^Reason:\s*(.+)$/m
   # The `blocked` reason of a QA agent that hit the provider's usage limit, as older QA reports
@@ -142,13 +147,10 @@ defmodule SymphonyElixir.HumanActions.Collector do
   defp issue_page(body), do: {:error, {:human_actions_query_failed, body}}
 
   defp filter(scope, settings) do
-    wanted = %{
-      "or" => [
-        %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => settings.human_actions.label}}}},
-        %{"state" => %{"name" => %{"eqIgnoreCase" => AutoReview.review_state()}}},
-        %{"title" => %{"startsWith" => RunKind.final_verification_prefix()}}
-      ]
-    }
+    labelled = %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => settings.human_actions.label}}}}
+    in_review = Enum.map(HumanReview.review_states(settings), &%{"state" => %{"name" => %{"eqIgnoreCase" => &1}}})
+    final_verification = %{"title" => %{"startsWith" => RunKind.final_verification_prefix()}}
+    wanted = %{"or" => [labelled | in_review] ++ [final_verification]}
 
     %{"and" => [scope, wanted, %{"state" => %{"name" => %{"nin" => settings.tracker.terminal_states}}}]}
   end
@@ -171,13 +173,19 @@ defmodule SymphonyElixir.HumanActions.Collector do
 
     context = %{node: node, issue: issue, project: %{id: project_id, name: project["name"]}, settings: settings}
     labels = node |> get_in(["labels", "nodes"]) |> List.wrap() |> Enum.map(&String.downcase(to_string(&1["name"])))
-    in_review? = state_is?(issue.state, AutoReview.review_state())
+    in_review? = HumanReview.review_state?(issue.state, settings)
+    human_review? = HumanReview.in_state?(issue.state, settings)
     final_verification? = RunKind.classify(%Issue{title: issue.title}) == :final_verification
 
-    labelled_actions(context, String.downcase(settings.human_actions.label) in labels) ++
-      plan_review_actions(context, in_review? and Enum.any?(labels, &Issue.breakdown_label?/1)) ++
-      qa_blocked_actions(context, in_review? and not final_verification?) ++
-      verification_blocked_actions(context, final_verification?)
+    actions =
+      labelled_actions(context, String.downcase(settings.human_actions.label) in labels) ++
+        plan_review_actions(context, in_review? and Enum.any?(labels, &Issue.breakdown_label?/1)) ++
+        qa_blocked_actions(context, in_review? and not final_verification?) ++
+        verification_blocked_actions(context, final_verification?)
+
+    actions
+    |> human_review_actions(context, human_review?)
+    |> Enum.map(&%{&1 | human_review: human_review?})
   end
 
   defp issue_actions(_node, _settings), do: []
@@ -263,7 +271,7 @@ defmodule SymphonyElixir.HumanActions.Collector do
           approve,
           "To reject it, comment what to change and move #{issue.identifier} to `Rework`."
         ],
-        done_when: "#{issue.identifier} leaves #{AutoReview.review_state()}."
+        done_when: "#{issue.identifier} leaves #{issue.state}."
       })
     ]
   end
@@ -285,7 +293,7 @@ defmodule SymphonyElixir.HumanActions.Collector do
               "Fix the cause above, on the machine QA runs on.",
               "Then test the PR yourself and move #{issue.identifier} to `Merging` to approve it, or to `Rework` to send it back."
             ],
-            done_when: "#{issue.identifier} leaves #{AutoReview.review_state()}, or its next QA report is not blocked."
+            done_when: "#{issue.identifier} leaves #{issue.state}, or its next QA report is not blocked."
           })
         ]
 
@@ -293,6 +301,27 @@ defmodule SymphonyElixir.HumanActions.Collector do
         []
     end
   end
+
+  # An issue in the Human Review state is waiting on a person even when nothing else names what for.
+  defp human_review_actions([], %{issue: issue} = context, true) do
+    [
+      action(context, %{
+        key: "review:#{issue.id}",
+        kind: :human_review,
+        title: "Review #{issue.identifier}",
+        why: "#{issue.identifier} waits in #{issue.state}: only you can move it on.",
+        est_minutes: @human_review_minutes,
+        steps: [
+          "Read the `## Symphony Workpad` comment and the latest QA report on #{issue.identifier}, and its PR if it has one.",
+          "Move #{issue.identifier} to `Merging` to approve its PR, to `Rework` to send it back, " <>
+            "or to `Done` to sign off a final verification."
+        ],
+        done_when: "#{issue.identifier} leaves #{issue.state}."
+      })
+    ]
+  end
+
+  defp human_review_actions(actions, _context, _human_review?), do: actions
 
   defp verification_blocked_actions(_context, false), do: []
 

@@ -424,6 +424,26 @@ defmodule SymphonyElixir.ParentWalkthroughTest do
       assert [] = created_subissues()
     end
 
+    test "manual steps left after a pass or a blocked pass hand the sign-off to Human Review" do
+      manual = %{name: "Call OpenRouter with a real key", status: "skipped", details: "No key on the QA host.", evidence: []}
+
+      agent_result(:pass, %{needs_person: true, steps: [manual]})
+      assert :ok = run(verification())
+      assert_received {:state_update, "issue-fv", "Human Review"}
+      assert [{"issue-parent", report}, {"issue-fv", report}] = comments_posted()
+      assert report =~ "**Verdict:** pass → TP-910 Human Review"
+
+      agent_result(:blocked, %{reason: "OPENROUTER_API_KEY is not set", needs_person: true, steps: [%{manual | status: "blocked"}]})
+      assert :ok = run(verification())
+      assert_received {:state_update, "issue-fv", "Human Review"}
+
+      settings = Config.settings!()
+      off = %{settings | tracker: %{settings.tracker | human_review_state: nil}}
+      agent_result(:pass, %{needs_person: true, steps: [manual]})
+      assert :ok = run(verification(), settings: off)
+      assert_received {:state_update, "issue-fv", "In Review"}
+    end
+
     test "findings without a failing step are filed one per finding, and a failed create is logged" do
       long = String.duplicate("y", 200)
 
