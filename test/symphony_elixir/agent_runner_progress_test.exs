@@ -218,6 +218,15 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       end
     end
 
+    test "keeps turning when its workspace HEAD is unreadable" do
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: nil, checks: @green_checks}})
+
+      run_issue!("In Progress", heads: [nil], max_turns: 3)
+
+      assert turns() == 3
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+    end
+
     test "landing on a green pushed head is left to the Merging flow" do
       Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-fixed", checks: @green_checks}})
 
