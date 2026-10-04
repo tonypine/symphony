@@ -194,7 +194,7 @@ defmodule SymphonyElixir.WorkflowSource do
 
   defp ref_workflow(repo, checkout, workflow_in_repo) do
     with {:ok, ref} <- base_ref(repo, checkout),
-         {:ok, content} <- git(checkout, ["show", "#{ref}:#{workflow_in_repo}"]),
+         {:ok, content} <- git_show(checkout, "#{ref}:#{workflow_in_repo}"),
          {:ok, workflow} <- Workflow.parse_repo_workflow(content) do
       {:ok, content, workflow}
     end
@@ -263,6 +263,16 @@ defmodule SymphonyElixir.WorkflowSource do
   end
 
   defp git(checkout, args), do: git_result(Workspace.safe_git(["-C", checkout | args]), args)
+
+  # The output becomes the snapshot, so it is stdout only; git's stderr goes in the error.
+  defp git_show(checkout, object) do
+    args = ["show", object]
+
+    case Workspace.safe_git_stdout(["-C", checkout | args]) do
+      {content, 0, _stderr} -> {:ok, content}
+      {_content, status, stderr} -> git_result({stderr, status}, args)
+    end
+  end
 
   defp git_result({output, 0}, _args), do: {:ok, output}
   defp git_result({output, status}, args), do: {:error, {:git_failed, args, status, String.trim(output)}}

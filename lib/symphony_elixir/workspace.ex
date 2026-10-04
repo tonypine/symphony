@@ -75,6 +75,25 @@ defmodule SymphonyElixir.Workspace do
     System.cmd(command, safe_git_args(args), safe_git_opts(opts))
   end
 
+  # Runs git like `safe_git/1` but keeps stderr out of the output, for content reads
+  # such as `git show <ref>:<path>`: a warning git prints (a config notice, the xcrun
+  # shim's cache warning) would otherwise land in the file content. The shell sends
+  # stderr to a temp file, so it never reaches the BEAM's own stderr either.
+  @spec safe_git_stdout([String.t()]) :: {String.t(), non_neg_integer(), String.t()}
+  def safe_git_stdout(args) when is_list(args) do
+    stderr_path = Path.join(System.tmp_dir!(), "symphony-git-stderr-#{System.unique_integer([:positive])}")
+    File.write!(stderr_path, "")
+
+    try do
+      {stdout, status} =
+        System.cmd("/bin/sh", ["-c", ~s(exec "$@" 2>"$0"), stderr_path, "git" | safe_git_args(args)], put_safe_git_env([]))
+
+      {stdout, status, File.read!(stderr_path)}
+    after
+      File.rm(stderr_path)
+    end
+  end
+
   # `opts`:
   #   * `:active_workspace_identifiers` - identifiers (or workspace basenames) of
   #     other issues a running or retrying agent owns. Their worktrees are never
