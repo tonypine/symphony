@@ -9,7 +9,11 @@ and checks what TP-272 used to leave to a person on the live app:
    `Symphony (previous).app`. If N's unpacked release disappears while N's Symphony still runs (the
    [TP-339](https://linear.app/tonypine/issue/TP-339) failure: the new binary ran before the old Symphony
    stopped), the test fails.
-2. **Restart** while a run is active: it waits for the run, restarts, and dispatch resumes.
+2. **Restart** while a run is active: it waits for the run, restarts, and dispatch resumes. The test pauses
+   dispatch from the menu, resumes it through the control API and presses Restart before the app polls again, so
+   the app still thinks dispatch is paused: the restart must pause it itself (Symphony's log shows its
+   `POST /api/v1/control/pause`) instead of waiting forever for a pause
+   ([TP-435](https://linear.app/tonypine/issue/TP-435)).
 3. **Restart with a broken `symphony.yml`**: refused with "Symphony wasn't restarted" and the config error,
    and the running Symphony keeps its pid and keeps dispatching.
 4. **Rollback**: Quit, swap `Symphony (previous).app` back in as in [Rollback](../../README.md#rollback), open

@@ -41,7 +41,11 @@ description:
    change to shared infrastructure (the config schema, orchestrator core); run
    it with `TEST_MAX_CASES=2 BEAM_SCHEDULERS=2` and record why in the workpad.
 3. Push branch to `origin` with upstream tracking if needed, using whatever
-   remote URL is already configured.
+   remote URL is already configured. `git push` runs the repo's
+   `.githooks/pre-push` hook (format, compile and credo on the Elixir files the
+   push changes). Never use `git push --no-verify`: when the hook rejects the
+   push, fix the issue it names (it prints the fixing command, such as
+   `mix format`), commit, and push again.
 4. If push is not clean/rejected:
    - If the failure is a non-fast-forward or sync problem, run the `pull`
      skill to merge `origin/main`, resolve conflicts, and rerun validation.

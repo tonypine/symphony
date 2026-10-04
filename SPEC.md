@@ -1706,6 +1706,11 @@ Important nuance:
   from. That start head MUST be recorded by the first run dispatched in `Rework` and kept across
   re-dispatched runs until the issue leaves `Rework`, so rework an earlier run pushed counts and a
   fresh `Rework` on an unchanged PR does not. Nothing else moves it out of `Rework`.
+- Outside `Rework` and `Merging`, an issue whose attached PR's head is the workspace `HEAD`, where
+  that `HEAD` differs from the one the run started on and every check on it has passed, MUST end
+  the run and move to the post-PR state, even while the review, CI, QA or conflict signal that
+  started the run is still pending. Such a signal is only cleared once the run ends, so without
+  this a fix run on an open PR never ends on its own.
 - When the workspace `HEAD` is readable, two consecutive turns with no new commit, no issue state
   change, no newly attached PR and no reviewer-agent verdict MUST end the run, move the issue to
   `Backlog` and post a comment saying why. This does not apply in `Merging`, nor while the attached
@@ -2056,15 +2061,18 @@ Forced allowance:
 - A forced `breakdown` parent is one forced unit; its breakdown, re-plan and close-out runs are
   forced runs. While it waits on its sub-issues (and is not re-planning), its current part is
   forced too, without the service writing the label on it: the first issue on its epic path
-  (see Epic lanes below) that is dispatch-eligible, in epic-lane order (stage, then nearest the epic, then
-  dispatch order), so a blocked sub-issue waits for its blocker and the `Final verification:`
-  sub-issue comes once it is unblocked. The part keeps its parent's place in the forced queue, and
-  stays the parent's while it is on the path and running, claimed or waiting on a retry, so at
-  most one of the parent's issues runs on the forced allowance at a time. The parent's other
+  (see Epic lanes below) that is dispatch-eligible or in the Auto Review state, in epic-lane order
+  (stage, then nearest the epic, then dispatch order), so a blocked sub-issue waits for its
+  blocker and the `Final verification:` sub-issue comes once it is unblocked. The part keeps its
+  parent's place in the forced queue, and stays the parent's while it is on the path and running,
+  claimed, waiting on a retry or in Auto Review, so at most one of the parent's issues runs on the
+  forced allowance at a time. The parent's other
   sub-issues use normal slots and the epic lane. Forcing a sub-issue forces only that sub-issue.
 - Forcing never moves an issue or approves a plan: a forced parent in `In Review` stays there until
   a human moves it.
-- A forced issue's Auto Review QA request goes to the front of the QA queue: while it is queued, a
+- A forced issue's Auto Review QA request goes to the front of the QA queue; a forced parent's
+  current part counts as forced here too (the service MAY read it from the orchestrator's
+  published snapshot). While a forced request is queued, a
   free QA slot MUST be turned away from unforced requests. A queued forced request holds the slot
   only while it is refreshed: once no request has come for it in two CI poll intervals (the issue
   left Auto Review or its CI is no longer green), unforced requests MUST take free slots again.
@@ -2997,10 +3005,10 @@ Orchestrator behavior on tracker errors:
   (until the pause ends, or 5 s doubling up to 60 s) and retries in the same run and session, for at
   most five minutes. This covers the issue enrichment and workpad bootstrap (the Todo → In Progress
   move, the workpad read and create), the post-turn issue refresh, the dependency-approval move, the
-  move after a finished rework, the idle park and its note, and the parent walkthrough's parent
-  read, QA report, gap tickets and final state move (the verdict is kept while that move waits, for
-  up to 30 minutes rather than five, since a lost verdict means running the whole QA walkthrough
-  again and filing its gap tickets twice). The run tells the orchestrator how long each wait lasts,
+  move after a finished rework or a green pushed head, the idle park and its note, and the parent
+  walkthrough's parent read, QA report, gap tickets and final state move (the verdict is kept while
+  that move waits, for up to 30 minutes rather than five, since a lost verdict means running the
+  whole QA walkthrough again and filing its gap tickets twice). The run tells the orchestrator how long each wait lasts,
   and the first-turn stall check and the no-progress watchdog do not restart it before that wait
   ends. A run that still fails on one once the wait runs out keeps its attempt and is retried after
   5 s (or when the pause ends) instead of the failure backoff, as are a post-PR move to Auto Review
