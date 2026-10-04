@@ -6,6 +6,11 @@ import SymphonyBarCore
 @MainActor
 final class ReposViewModel: ObservableObject {
     @Published var display = ReposDisplay()
+    /// The open Add Repo sheet, nil while none is.
+    @Published var addRepo: AddRepoViewModel?
+    /// What the last Add Repo did, shown above the rows.
+    @Published var message: String?
+    var onAddRepo: () -> Void = {}
 }
 
 /// Owns the single Repos window. While it is open, each status poll refreshes it: from Symphony's
@@ -16,6 +21,15 @@ final class ReposWindowController: NSObject, NSWindowDelegate {
 
     /// Symphony's state directory, looked up before each request since Symphony rewrites its control URL on start.
     var stateRoot: () -> URL = { StateRoot.locate(environment: AppStores.current.environment) }
+    /// Restarts the app's Symphony gracefully, so it sets up a repo just added.
+    var restart: () -> Void = {}
+
+    private let secrets: SecretsReader
+
+    /// `secrets` is shared with Start, so the Add Repo sheet and Start can't each put up a Keychain prompt.
+    init(secrets: SecretsReader) {
+        self.secrets = secrets
+    }
 
     private var window: NSWindow?
     private var model: ReposViewModel?
@@ -27,6 +41,7 @@ final class ReposWindowController: NSObject, NSWindowDelegate {
     func show(status: SymphonyStatus) {
         if window == nil {
             let model = ReposViewModel()
+            model.onAddRepo = { [weak self] in self?.showAddRepo() }
             self.model = model
             let hostingController = NSHostingController(rootView: ReposView(model: model))
             hostingController.sizingOptions = [.minSize, .maxSize]
@@ -72,6 +87,49 @@ final class ReposWindowController: NSObject, NSWindowDelegate {
             configPath: AppStores.current.settingsStore().loadSettings().configPath,
             readConfig: { try SymphonyConfigFile(path: $0).readRepositories() }
         )
+    }
+
+    private func showAddRepo() {
+        guard let model, model.addRepo == nil else { return }
+        model.message = nil
+        model.addRepo = AddRepoViewModel(
+            configPath: AppStores.current.settingsStore().loadSettings().configPath,
+            secrets: secrets
+        ) { [weak self] key, madeDefault in
+            self?.added(key, madeDefault: madeDefault)
+        }
+    }
+
+    /// Closes the sheet, shows the repo from the file, and gets Symphony to set it up: Symphony reads new routes
+    /// while it runs, but makes a repo's workflow store and its own clone only when it starts.
+    private func added(_ key: String, madeDefault: String?) {
+        let apply = AddRepo.apply(status: status)
+        model?.addRepo = nil
+        model?.message = AddRepo.savedMessage(key: key, apply: apply, madeDefault: madeDefault)
+        update(status: status)
+        switch apply {
+        case .restart:
+            restart()
+        case let .askToRestart(runs):
+            // After the sheet has closed, so the alert sits on the window.
+            DispatchQueue.main.async { [weak self] in self?.askToRestart(key: key, runs: runs) }
+        case .onNextStart, .restartManually:
+            break
+        }
+    }
+
+    private func askToRestart(key: String, runs: Int) {
+        let question = AddRepo.restartQuestion(key: key, runs: runs)
+        let alert = NSAlert()
+        alert.messageText = question.title
+        alert.informativeText = question.message
+        alert.addButton(withTitle: "Restart When Runs Finish")
+        alert.addButton(withTitle: "Later")
+        if alert.runModal() == .alertFirstButtonReturn {
+            restart()
+        } else {
+            model?.message = "Added \(key). Restart Symphony from the menu to connect it."
+        }
     }
 
     func windowWillClose(_ notification: Notification) {

@@ -6,7 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private var statusItem: NSStatusItem?
     private let runner = SymphonyRunner()
     private lazy var settingsWindow = SettingsWindowController(secrets: runner.secrets)
-    private let reposWindow = ReposWindowController()
+    private lazy var reposWindow = ReposWindowController(secrets: runner.secrets)
     private let poller = StatusPoller()
     private lazy var restarter = RestartController(runner: runner, poller: poller)
     private var machine = StatusMachine()
@@ -125,6 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             self?.runner.stateRoot ?? StateRoot.locate(environment: AppStores.current.environment)
         }
         reposWindow.stateRoot = poller.stateRoot
+        reposWindow.restart = { [weak self] in self?.restart() }
         poller.onPoll = { [weak self] poll in
             guard let self else { return StatusMachine.pollInterval }
             handle(.polled(poll))

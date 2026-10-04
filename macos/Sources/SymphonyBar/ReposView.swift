@@ -9,6 +9,14 @@ struct ReposView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(model.message ?? "")
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                Button(AddRepo.buttonTitle) { model.onAddRepo() }
+            }
+            .padding(12)
+            Divider()
             if let notice = model.display.notice {
                 Text(notice)
                     .foregroundStyle(.secondary)
@@ -21,6 +29,11 @@ struct ReposView: View {
             }
         }
         .frame(minWidth: 480, idealWidth: Self.width, minHeight: 320)
+        .sheet(isPresented: Binding(get: { model.addRepo != nil }, set: { if !$0 { model.addRepo = nil } })) {
+            if let addRepo = model.addRepo {
+                AddRepoView(model: addRepo) { model.addRepo = nil }
+            }
+        }
     }
 }
 
