@@ -612,7 +612,8 @@ defmodule SymphonyElixir.AutoReviewQaTest do
       assert :started = QaRunner.request(job, qa_runner_server: name, tracker: :fake)
       assert_receive {:pass_started, "issue-qa-flow", pass_pid, [tracker: :fake]}
       assert QaRunner.running(name) == %{"issue-qa-flow" => @sha}
-      assert QaRunner.workspaces(name) == ["/workspaces/symphony/TP-901", QaAgent.worktree_path(settings, "symphony", "TP-901", @sha)]
+      worktree = QaAgent.worktree_path(settings, "symphony", "TP-901", @sha)
+      assert QaRunner.workspaces(name) == ["/workspaces/symphony/TP-901", worktree | QaAgent.tmp_dirs(worktree)]
       assert :running = QaRunner.request(job, qa_runner_server: name)
       assert :busy = QaRunner.request(%{job | issue: issue(%{id: "other", identifier: "TP-902"})}, qa_runner_server: name)
       assert QaRunner.queued_passes(name) == [%{issue_id: "other", identifier: "TP-902", waiting_on: :max_concurrent}]

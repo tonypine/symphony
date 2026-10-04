@@ -48,7 +48,8 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
           mcp_session: McpServer.session() | nil,
           mcp_remote_socket_path: Path.t() | nil,
           mcp_remote_shim_path: Path.t() | nil,
-          run_profile: SymphonyElixir.RunKind.profile() | nil
+          run_profile: SymphonyElixir.RunKind.profile() | nil,
+          extra_env: %{optional(String.t()) => String.t()}
         }
 
   # --- AgentBehaviour callbacks ---
@@ -73,8 +74,9 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
              remote_socket_path,
              remote_shim_path
            ) do
-      # Every turn of the session starts Claude with the profile chosen at dispatch.
-      {:ok, Map.put(session, :run_profile, run_profile)}
+      # Every turn of the session starts Claude with the profile chosen at dispatch, and with
+      # the caller's `:extra_env` (a QA pass's own `CLAUDE_CODE_TMPDIR`) on the local host.
+      {:ok, Map.merge(session, %{run_profile: run_profile, extra_env: Keyword.get(opts, :extra_env, %{})})}
     end
   end
 
@@ -782,7 +784,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
       base_args = command_args ++ claude_settings_args(session)
       args = base_args ++ claude_stream_json_args(base_args) ++ run_profile_args(session) ++ resume_args(session)
 
-      case open_local_prompt_port(executable, args, prompt_path, workspace, provider_env) do
+      case open_local_prompt_port(executable, args, prompt_path, workspace, Map.merge(Map.get(session, :extra_env, %{}), provider_env)) do
         {:ok, port, priority} ->
           :ok = AgentProcesses.track(port, workspace: workspace)
           :ok = AgentPriority.log_started(port, command, Map.get(session, :run_id), priority)
@@ -819,14 +821,14 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     end
   end
 
-  defp open_local_prompt_port(executable, args, prompt_path, workspace, provider_env) do
+  defp open_local_prompt_port(executable, args, prompt_path, workspace, env) do
     case System.find_executable("sh") do
       nil ->
         {:error, :shell_not_found}
 
       shell ->
         # `Port.open/2` unsets a variable whose value is empty, so the shell sets those itself.
-        empty_exports = for {name, ""} <- provider_env, do: "export #{name}=; "
+        empty_exports = for {name, ""} <- env, do: "export #{name}=; "
 
         shell_args =
           [
@@ -850,7 +852,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
               line: @port_line_bytes,
               args: port_args,
               cd: String.to_charlist(workspace),
-              env: AgentEnv.build_with(Map.merge(AgentEnv.gradle_env(workspace), provider_env))
+              env: AgentEnv.build_with(Map.merge(AgentEnv.gradle_env(workspace), env))
             ]
           )
 
