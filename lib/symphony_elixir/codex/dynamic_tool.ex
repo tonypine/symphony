@@ -212,7 +212,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "linear_request_human_action",
       "description" =>
-        "Record that the current issue needs something only a human can do: a missing secret or permission, a product decision, an account setup, a manual check on a device. Symphony lists it, with your steps, in a Linear project update for the human, and drops it once the issue moves on. Never put a secret value in any field. A request with the same title that is still open is not posted again. Then follow the blocked-access escape hatch as usual.",
+        "Record that the current issue needs something only a human can do: a missing secret or permission, a product decision, an account setup, a manual check on a device. Symphony lists it, with your steps, in a Linear project update for the human, and drops it once the issue moves on. Never put a secret value in any field. A request with the same title that is still open is not posted again. Before asking about slow or stuck CI, compute the job's age from the API's UTC timestamps against the current UTC time (`date -u`), never local time; under 30 minutes old, wait for the CI poller's re-run instead. Then follow the blocked-access escape hatch as usual.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -229,6 +229,20 @@ defmodule SymphonyElixir.Codex.DynamicTool do
           },
           "unblocks" => %{"type" => "string", "description" => "What becomes possible once it is done, e.g. `the Release workflow on main`."},
           "est_minutes" => %{"type" => "integer", "minimum" => 1, "maximum" => 480, "description" => "Rough minutes the human needs."}
+        }
+      }
+    },
+    %{
+      "name" => "linear_withdraw_human_action",
+      "description" =>
+        "Withdraw a human-action request on the current Linear issue that is no longer needed, such as one sent by mistake. Replies with the reason under the request and, once no open request is left, removes the human-action label, so the next project update no longer lists it. A comment saying the request is not needed does not take it off the list; this does.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["reason"],
+        "properties" => %{
+          "reason" => %{"type" => "string", "description" => "Why the request is no longer needed, posted under it."},
+          "title" => %{"type" => "string", "description" => "Title of the request to withdraw. Omit it to withdraw every open request on the issue."}
         }
       }
     },
@@ -584,6 +598,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "linear_add_blocked_by" => ["blocked_by"],
     "linear_create_project_update" => ["body", "health"],
     "linear_request_human_action" => ["title", "why", "steps", "unblocks", "est_minutes"],
+    "linear_withdraw_human_action" => ["reason", "title"],
     "github_get_pull_request" => [],
     "github_fetch_origin" => [],
     "github_create_pull_request" => ["title", "body", "draft"],
@@ -805,6 +820,10 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   defp execute_linear_tool("linear_request_human_action", context, args, opts) do
     Linear.request_human_action(context, args, opts)
+  end
+
+  defp execute_linear_tool("linear_withdraw_human_action", context, args, opts) do
+    Linear.withdraw_human_action(context, args, opts)
   end
 
   defp execute_github_tool("github_get_pull_request", context, _args, opts), do: GitHub.get_pull_request(context, opts)
@@ -1205,6 +1224,10 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   defp tool_error_payload({:invalid_human_action, message}) do
     %{"error" => %{"code" => "invalid_human_action", "message" => "linear_request_human_action: " <> message}}
+  end
+
+  defp tool_error_payload({:invalid_human_action_withdrawal, message}) do
+    %{"error" => %{"code" => "invalid_human_action_withdrawal", "message" => "linear_withdraw_human_action: " <> message}}
   end
 
   defp tool_error_payload({:human_action_cap_reached, cap}) do
