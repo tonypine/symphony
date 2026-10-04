@@ -9,7 +9,8 @@ defmodule SymphonyElixir.HumanActions.Collector do
     (see `SymphonyElixir.HumanActions.Request`);
   - a labelled issue with no request comment is itself a `:task`;
   - a `breakdown` parent in `In Review` is a `:plan_review`;
-  - an issue in `In Review` whose `## Symphony QA Report` says `blocked` is a `:qa_blocked`.
+  - an issue in `In Review` whose `## Symphony QA Report` says `blocked` is a `:qa_blocked`,
+    unless the QA agent was blocked by the provider's usage limit.
 
   Issues outside a project are skipped: there is no project to post the update to.
   """
@@ -27,6 +28,9 @@ defmodule SymphonyElixir.HumanActions.Collector do
   @plan_review_minutes 10
   @verdict_pattern ~r/^\*\*Verdict:\*\*\s*(\w+)/m
   @reason_pattern ~r/^Reason:\s*(.+)$/m
+  # The `blocked` reason of a QA agent that hit the provider's usage limit, as older QA reports
+  # wrote it: `the QA agent could not finish: {:qa_agent_failed, {:usage_limited, ...}}`.
+  @usage_limit_pattern ~r/:usage_limited\b/
 
   @query """
   query SymphonyHumanActions($filter: IssueFilter!, $first: Int!, $after: String, $commentLast: Int!, $historyFirst: Int!) {
@@ -243,7 +247,8 @@ defmodule SymphonyElixir.HumanActions.Collector do
 
   defp qa_blocked_actions(%{issue: issue} = context, true) do
     case latest_qa_report(context.node) do
-      %{verdict: "blocked", reason: reason} ->
+      # A pass that hit the usage limit runs again once the limit resets: nobody needs to unblock it.
+      %{verdict: "blocked", reason: reason, usage_limited?: false} ->
         [
           action(context, %{
             key: "qa:#{issue.id}",
@@ -270,8 +275,12 @@ defmodule SymphonyElixir.HumanActions.Collector do
     |> Enum.filter(&(is_binary(&1["body"]) and String.starts_with?(String.trim(&1["body"]), Report.heading())))
     |> Enum.max_by(&(&1["createdAt"] || ""), fn -> nil end)
     |> case do
-      %{"body" => body} -> %{verdict: capture(@verdict_pattern, body), reason: capture(@reason_pattern, body)}
-      nil -> nil
+      %{"body" => body} ->
+        reason = capture(@reason_pattern, body)
+        %{verdict: capture(@verdict_pattern, body), reason: reason, usage_limited?: is_binary(reason) and Regex.match?(@usage_limit_pattern, reason)}
+
+      nil ->
+        nil
     end
   end
 

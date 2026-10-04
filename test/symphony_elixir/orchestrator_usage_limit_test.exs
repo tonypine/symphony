@@ -732,6 +732,27 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
     end
   end
 
+  test "a QA pass that hits the usage limit holds the provider until resume_at, then the hold clears", ctx do
+    write_usage_workflow!(ctx)
+    name = Module.concat(__MODULE__, :QaHoldOrchestrator)
+    assert Orchestrator.hold_for_usage_limit(name, usage_info(ctx), "MT-QA") == :unavailable
+
+    pid = start_orchestrator(ctx, :QaHoldOrchestrator)
+
+    assert {:ok, %{provider: "anthropic", scope: :all, phase: :paused, issue_identifier: "MT-QA"} = entry} =
+             Orchestrator.hold_for_usage_limit(name, usage_info(ctx), "MT-QA")
+
+    assert entry.resume_at == DateTime.add(ctx.now, 3600 + Config.settings!().agent.usage_limit.resume_margin_seconds)
+    assert %{@anthropic => ^entry} = RunStore.get_usage_limits()
+    assert UsageLimit.persisted_holding(%{provider: "anthropic", model: "claude-opus-5-5"})
+
+    set_clock(ctx, entry.resume_at)
+    send(pid, {:usage_limit_resume, @anthropic})
+
+    assert :sys.get_state(pid).usage_limits == %{}
+    assert RunStore.get_usage_limits() == %{}
+  end
+
   test "with nothing held at resume_at the hold clears without a canary", ctx do
     write_usage_workflow!(ctx)
     pid = start_orchestrator(ctx, :CanaryEmptyOrchestrator)
@@ -905,6 +926,27 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
              )
 
     assert resets_at == DateTime.from_unix!(1_790_000_000)
+  end
+
+  defmodule LimitedWalkthrough do
+    def run(_issue, _workspace, _opts), do: {:error, {:usage_limited, %{provider: "anthropic", scope: :all, window: "five_hour"}}}
+  end
+
+  test "AgentRunner exits with the usage limit a final verification's QA agent hit", ctx do
+    write_usage_workflow!(ctx)
+    workspace = Path.join([ctx.test_root, "workspaces", "MT-FV"])
+    File.mkdir_p!(workspace)
+    run_issue = issue("issue-fv", "MT-FV", %{title: "Final verification: Hold on the usage limit"})
+
+    assert {:usage_limited, %{provider: "anthropic", window: "five_hour"}} =
+             catch_exit(
+               AgentRunner.run(run_issue, nil,
+                 workspace_path: workspace,
+                 parent_walkthrough: LimitedWalkthrough,
+                 issue_state_fetcher: fn _ids -> {:ok, [run_issue]} end,
+                 issue_enricher: fn issue -> {:ok, issue} end
+               )
+             )
   end
 
   test "AgentRunner exits with the Codex usage limit instead of raising", ctx do

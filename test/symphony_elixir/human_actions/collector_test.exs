@@ -206,6 +206,21 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
            ] = actions(collected)
   end
 
+  test "lists no action for a QA report blocked by the provider's usage limit" do
+    usage_limited_report =
+      "## Symphony QA Report\n\n**Verdict:** blocked → TP-368 In Review\n\n" <>
+        "Reason: the QA agent could not finish: {:qa_agent_failed, {:usage_limited, %{scope: :all, source: :rate_limit_event, provider: \"anthropic\", window: \"five_hour\"}}}\n"
+
+    usage_limited =
+      node("MOT-56", %{"state" => %{"name" => "In Review"}, "comments" => comments([%{"id" => "c5", "body" => usage_limited_report, "createdAt" => "2026-10-04T13:08:00.000Z"}])})
+
+    blocked =
+      node("MOT-57", %{"state" => %{"name" => "In Review"}, "comments" => comments([%{"id" => "c6", "body" => "## Symphony QA Report\n\n**Verdict:** blocked → In Review\n"}])})
+
+    assert {:ok, collected} = collect([usage_limited, blocked])
+    assert [%Action{key: "qa:id-MOT-57"}] = actions(collected)
+  end
+
   test "skips issues outside a project and merges what several routes return" do
     task = node("MOT-31", %{"labels" => labels(["human-action"])})
     other_project = node("ENG-1", %{"labels" => labels(["human-action"]), "project" => %{"id" => "project-2", "name" => nil}})

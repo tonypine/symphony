@@ -6431,6 +6431,22 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  @doc """
+  Holds the provider's runs for a usage-limit `info` hit outside an agent run (an Auto Review QA
+  pass), as if a run of `identifier` had hit it. Returns the hold.
+  """
+  @spec hold_for_usage_limit(map(), String.t() | nil) :: {:ok, UsageLimit.entry()} | :unavailable
+  def hold_for_usage_limit(info, identifier), do: hold_for_usage_limit(__MODULE__, info, identifier)
+
+  @spec hold_for_usage_limit(GenServer.server(), map(), String.t() | nil) :: {:ok, UsageLimit.entry()} | :unavailable
+  def hold_for_usage_limit(server, info, identifier) when is_map(info) do
+    if server_available?(server) do
+      GenServer.call(server, {:hold_for_usage_limit, info, identifier})
+    else
+      :unavailable
+    end
+  end
+
   @spec stop_running(String.t()) :: {:ok, map()} | :unavailable | {:error, term()}
   def stop_running(issue_id_or_identifier) do
     stop_running(__MODULE__, issue_id_or_identifier)
@@ -6636,6 +6652,12 @@ defmodule SymphonyElixir.Orchestrator do
       {:error, reason} ->
         {:reply, {:error, reason}, state}
     end
+  end
+
+  def handle_call({:hold_for_usage_limit, info, identifier}, _from, state) do
+    {state, entry} = put_usage_limit(state, info, identifier)
+    notify_dashboard()
+    {:reply, {:ok, entry}, state}
   end
 
   def handle_call(:pause_status, _from, state) do
