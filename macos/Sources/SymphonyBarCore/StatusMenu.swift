@@ -36,8 +36,8 @@ public enum StatusMenu {
     /// Shown while Start, Restart, Update or Settings waits to read the Keychain, which is usually a password prompt.
     public static let keychainWaitingLine = "Waiting for Keychain access…"
 
-    /// Lines shown under the status title, then the Keychain wait, the restart's progress or error and the last
-    /// Pause or Resume error when there are any.
+    /// Lines shown under the status title, with any usage-limit holds, then the Keychain wait, the restart's
+    /// progress or error and the last Pause or Resume error when there are any.
     public static func detailLines(
         _ status: SymphonyStatus,
         waitingForKeychain: Bool = false,
@@ -51,9 +51,10 @@ public enum StatusMenu {
         case .stopped, .starting:
             lines = []
         case let .running(snapshot, _):
-            lines = [countsLine(snapshot)]
+            lines = [countsLine(snapshot)] + snapshot.usageLimits
         case let .paused(snapshot, _):
             lines = [countsLine(snapshot)] + (snapshot.pause.map { [pauseLine($0, now: now, timeZone: timeZone)] } ?? [])
+                + snapshot.usageLimits
         case let .error(message):
             lines = [message]
         }

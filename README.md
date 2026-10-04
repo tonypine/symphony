@@ -316,6 +316,13 @@ every provider in use is held. Slack and webhook channels get one `usage_limit_p
 the hold starts and one `usage_limit_resumed` message when it clears, which is once Claude accepts
 the first run, not when it starts.
 
+To leave part of the Claude limit for your own sessions, set
+`agent.usage_limit.headroom_utilization` (for example `0.9`; off by default). Once Claude reports
+that share of a window used, Symphony holds new Claude runs until the window resets, while runs in
+flight finish and landing runs still start. The dashboards show
+`Holding new runs: Claude at 91%, resets ~14:05`. Claude only reports utilization from about 75%,
+so a lower setting acts as if set there.
+
 ### Docker
 
 The Docker runtime mounts your operator config, repositories, credentials, and agent command into

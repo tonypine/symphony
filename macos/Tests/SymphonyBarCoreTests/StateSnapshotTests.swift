@@ -48,6 +48,20 @@ final class StateSnapshotTests: XCTestCase {
         )
     }
 
+    func testDecodesUsageLimitBanners() throws {
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: recordedState()) as? [String: Any])
+        object["usage_limits"] = [
+            ["provider": "anthropic", "phase": "headroom", "banner": "Holding new runs: Claude at 92%, resets ~14:05"],
+            ["provider": "openai", "phase": "paused"],
+        ]
+        let data = try JSONSerialization.data(withJSONObject: object)
+
+        XCTAssertEqual(
+            SymphonyState.poll(data: data, statusCode: 200),
+            .state(StateSnapshot(running: 1, retrying: 0, usageLimits: ["Holding new runs: Claude at 92%, resets ~14:05"]))
+        )
+    }
+
     func testRetryingDefaultsToZero() {
         XCTAssertEqual(
             SymphonyState.poll(data: Data(#"{"counts": {"running": 2}}"#.utf8), statusCode: 200),

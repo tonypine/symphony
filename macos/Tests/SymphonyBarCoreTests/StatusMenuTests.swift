@@ -72,6 +72,18 @@ final class StatusMenuTests: XCTestCase {
             ["2 running · 1 retrying", "Paused since 12:16: deploy freeze"]
         )
         XCTAssertEqual(StatusMenu.detailLines(.paused(snapshot, external: false)), ["2 running · 1 retrying"])
+
+        var held = snapshot
+        held.usageLimits = ["Holding new runs: Claude at 92%, resets ~14:05"]
+        XCTAssertEqual(
+            StatusMenu.detailLines(.running(held, external: false)),
+            ["2 running · 1 retrying", "Holding new runs: Claude at 92%, resets ~14:05"]
+        )
+        held.pause = paused.pause
+        XCTAssertEqual(
+            StatusMenu.detailLines(.paused(held, external: false), now: now, timeZone: utc),
+            ["2 running · 1 retrying", "Paused since 12:16: deploy freeze", "Holding new runs: Claude at 92%, resets ~14:05"]
+        )
         XCTAssertEqual(StatusMenu.detailLines(.error("Symphony exited with status 1")), ["Symphony exited with status 1"])
     }
 

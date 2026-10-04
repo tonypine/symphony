@@ -98,7 +98,8 @@ defmodule SymphonyElixir.UsageLimitTest do
              utilization: 1.0
            }
 
-    assert %{window: "seven_day", utilization: nil} = second
+    # Without a window seen since (after a restart), the hold's own utilization stands.
+    assert %{window: "seven_day", utilization: 1.0} = second
     assert UsageLimit.snapshot(%{}, windows) == []
   end
 
@@ -230,8 +231,25 @@ defmodule SymphonyElixir.UsageLimitTest do
                Config.settings!().agent.usage_limit
     end
 
+    test "headroom_utilization is off by default and takes a share in (0, 1]" do
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+      assert %UsageLimitConfig{headroom_utilization: nil} = Config.settings!().agent.usage_limit
+
+      for value <- [0.9, 1] do
+        write_workflow_file!(Workflow.workflow_file_path(),
+          tracker_kind: "memory",
+          agent_usage_limit: %{headroom_utilization: value}
+        )
+
+        assert Config.settings!().agent.usage_limit.headroom_utilization == value / 1
+      end
+    end
+
     test "rejects invalid values and unknown keys" do
       for {usage_limit, key} <- [
+            {%{headroom_utilization: 0}, "agent.usage_limit.headroom_utilization"},
+            {%{headroom_utilization: 1.5}, "agent.usage_limit.headroom_utilization"},
+            {%{headroom_utilization: "high"}, "agent.usage_limit.headroom_utilization"},
             {%{auto_pause: "sometimes"}, "agent.usage_limit.auto_pause"},
             {%{resume_margin_seconds: -1}, "agent.usage_limit.resume_margin_seconds"},
             {%{unknown_reset_retry_seconds: 59}, "agent.usage_limit.unknown_reset_retry_seconds"},
@@ -285,5 +303,93 @@ defmodule SymphonyElixir.UsageLimitTest do
     assert resume_at == DateTime.add(later, 900)
 
     assert %{phase: :paused, canary_issue_id: nil} = UsageLimit.paused(canary)
+  end
+
+  describe "headroom" do
+    defp warning(utilization, resets_at \\ ~U[2026-10-03 05:00:00Z]),
+      do: %{status: "allowed_warning", utilization: utilization, resets_at: resets_at}
+
+    defp headroom(existing, info), do: UsageLimit.put_headroom(existing, info, now: @now, config: @config, issue_identifier: "TP-330")
+
+    test "crossings are the allowed_warning windows at or above the threshold that reset later" do
+      windows = %{
+        "five_hour" => warning(0.9),
+        "seven_day_opus" => warning(0.95, ~U[2026-10-08 00:00:00Z]),
+        "seven_day" => warning(0.89),
+        "seven_day_sonnet" => %{warning(0.99) | status: "allowed"},
+        "overage" => warning(0.99, @now),
+        "other" => warning(nil)
+      }
+
+      assert [
+               %{provider: "anthropic", window: "five_hour", scope: :all, resets_at: ~U[2026-10-03 05:00:00Z], utilization: 0.9, source: :rate_limit_event},
+               %{window: "seven_day_opus", scope: "opus", utilization: 0.95}
+             ] = UsageLimit.headroom_crossings(windows, 0.9, @now)
+
+      assert UsageLimit.headroom_crossings(windows, 1.0, @now) == []
+    end
+
+    test "a headroom hold lasts until the reset plus the margin, a later window refreshes it and the same window raises its utilization" do
+      [info] = UsageLimit.headroom_crossings(%{"five_hour" => warning(0.92)}, 0.9, @now)
+      entry = headroom(nil, info)
+
+      assert %{
+               reason: "claude_usage_headroom",
+               phase: :headroom,
+               window: "five_hour",
+               since: @now,
+               resets_at: ~U[2026-10-03 05:00:00Z],
+               resume_at: ~U[2026-10-03 05:02:00Z],
+               utilization: 0.92,
+               issue_identifier: "TP-330"
+             } = entry
+
+      assert headroom(entry, %{info | utilization: 0.97}) == %{entry | utilization: 0.97}
+      assert headroom(%{entry | utilization: 0.97}, info) == %{entry | utilization: 0.97}
+      assert headroom(entry, %{info | window: "seven_day", utilization: 0.99, resets_at: ~U[2026-10-03 04:00:00Z]}) == entry
+
+      later = headroom(entry, %{info | window: "seven_day", resets_at: ~U[2026-10-05 00:00:00Z]})
+      assert %{window: "seven_day", since: @now, resume_at: ~U[2026-10-05 00:02:00Z]} = later
+      assert UsageLimit.paused(later) == later
+    end
+
+    test "a headroom hold holds new runs but not landing runs or continuations" do
+      [info] = UsageLimit.headroom_crossings(%{"five_hour" => warning(0.92)}, 0.9, @now)
+      entry = headroom(nil, info)
+      limits = %{{"anthropic", :all} => entry}
+      paused = put(nil, info())
+
+      assert UsageLimit.headroom?(entry)
+      assert UsageLimit.headroom?(%{phase: "headroom"})
+      refute UsageLimit.headroom?(paused)
+
+      assert UsageLimit.holding(limits, %{provider: "anthropic", kind: :implementation}) == entry
+      assert UsageLimit.holding(limits, %{provider: "anthropic", kind: :landing}) == nil
+      assert UsageLimit.holding(limits, %{provider: "anthropic", kind: "landing"}) == nil
+      assert UsageLimit.holding(limits, %{provider: "anthropic", kind: :implementation, continuation: true}) == nil
+      refute UsageLimit.holds?(entry, %{provider: "openrouter", kind: :implementation})
+
+      assert UsageLimit.holds?(paused, %{provider: "anthropic", kind: :landing})
+      assert UsageLimit.holds?(paused, %{provider: "anthropic", continuation: true})
+    end
+
+    test "scope_for_window holds the weekly model windows to their model family" do
+      assert UsageLimit.scope_for_window("seven_day_opus") == "opus"
+      assert UsageLimit.scope_for_window("seven_day_sonnet") == "sonnet"
+      assert UsageLimit.scope_for_window("five_hour") == :all
+      assert UsageLimit.scope_for_window(nil) == :all
+    end
+
+    test "the banner names the utilization and the local reset time" do
+      to_local = [to_local: &__MODULE__.three_hours_behind/1]
+      hold = %{provider: "anthropic", window: "five_hour", phase: :headroom, utilization: 0.914, resets_at: ~U[2026-10-03 17:05:00Z], resume_at: ~U[2026-10-03 17:07:00Z]}
+
+      assert UsageLimit.banner(hold, ~U[2026-10-03 12:00:00Z], to_local) == "Holding new runs: Claude at 91%, resets ~14:05"
+
+      assert UsageLimit.banner(%{hold | phase: "headroom", resets_at: "2026-10-04T17:05:00Z"}, ~U[2026-10-03 12:00:00Z], to_local) ==
+               "Holding new runs: Claude at 91%, resets ~Oct 4 14:05"
+
+      assert UsageLimit.banner(%{provider: "anthropic", window: "five_hour", phase: "headroom"}, @now) == "Holding new runs: Claude 5-hour limit"
+    end
   end
 end

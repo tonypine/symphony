@@ -733,15 +733,19 @@ defmodule SymphonyElixir.Config.Schema do
         field(:auto_pause, :boolean, default: true)
         field(:resume_margin_seconds, :integer, default: 120)
         field(:unknown_reset_retry_seconds, :integer, default: 900)
+        field(:headroom_utilization, :float)
       end
+
+      @fields [:auto_pause, :resume_margin_seconds, :unknown_reset_retry_seconds, :headroom_utilization]
 
       @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
       def changeset(schema, attrs) do
         schema
-        |> cast(attrs, [:auto_pause, :resume_margin_seconds, :unknown_reset_retry_seconds], empty_values: [])
+        |> cast(attrs, @fields, empty_values: [])
         |> validate_required([:auto_pause, :resume_margin_seconds, :unknown_reset_retry_seconds])
         |> validate_number(:resume_margin_seconds, greater_than_or_equal_to: 0)
         |> validate_number(:unknown_reset_retry_seconds, greater_than_or_equal_to: 60)
+        |> validate_number(:headroom_utilization, greater_than: 0, less_than_or_equal_to: 1)
       end
     end
 
@@ -1936,6 +1940,7 @@ defmodule SymphonyElixir.Config.Schema do
         "qa_passed",
         "qa_failed",
         "usage_limit_paused",
+        "usage_limit_headroom",
         "usage_limit_resumed"
       ]
 

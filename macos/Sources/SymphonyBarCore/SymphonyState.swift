@@ -6,6 +6,8 @@ public struct StateSnapshot: Equatable {
     public var retrying: Int
     /// Set while dispatch is paused, nil otherwise.
     public var pause: Pause?
+    /// One line per provider usage-limit hold, for example "Holding new runs: Claude at 91%, resets ~14:05".
+    public var usageLimits: [String]
 
     public struct Pause: Equatable {
         public var reason: String?
@@ -17,10 +19,11 @@ public struct StateSnapshot: Equatable {
         }
     }
 
-    public init(running: Int = 0, retrying: Int = 0, pause: Pause? = nil) {
+    public init(running: Int = 0, retrying: Int = 0, pause: Pause? = nil, usageLimits: [String] = []) {
         self.running = running
         self.retrying = retrying
         self.pause = pause
+        self.usageLimits = usageLimits
     }
 }
 
@@ -68,7 +71,11 @@ public enum SymphonyState {
         }
         guard let counts = payload.counts else { return .failed("Symphony's state couldn't be read") }
 
-        var snapshot = StateSnapshot(running: counts.running, retrying: counts.retrying ?? 0)
+        var snapshot = StateSnapshot(
+            running: counts.running,
+            retrying: counts.retrying ?? 0,
+            usageLimits: (payload.usageLimits ?? []).compactMap(\.banner)
+        )
         if let pause = payload.pause, pause.paused {
             snapshot.pause = .init(reason: pause.reason, since: pause.pausedAt.flatMap(parseDate))
         }
@@ -103,8 +110,13 @@ public enum SymphonyState {
             let message: String?
         }
 
+        struct UsageLimit: Decodable {
+            let banner: String?
+        }
+
         let counts: Counts?
         let pause: Pause?
+        let usageLimits: [UsageLimit]?
         let error: Failure?
     }
 }
