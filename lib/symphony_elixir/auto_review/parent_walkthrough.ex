@@ -19,6 +19,9 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
     gap is terminal. When a gap could not be filed or linked, the ticket goes to `Backlog` for a
     human instead, since nothing would hold it.
 
+  A `blocked` verdict also puts the ticket in the parent project's human-action update (see
+  `SymphonyElixir.HumanActions.Collector`), since only a person can provide what QA was missing.
+
   A QA agent that runs into the provider's usage limit gets no verdict: no report is written, the
   ticket keeps its state, and `run/3` returns `{:error, {:usage_limited, info}}`, so the
   orchestrator holds the run and starts it again once the limit resets, as for any agent run.

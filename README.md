@@ -97,10 +97,10 @@ branch instead of opening a second one. If a claimed issue moves to a terminal s
   goes on the parent and each failing step becomes a new ticket that blocks the verification
   ticket, which waits in `Todo` and runs again once those tickets are done.
 - **Actions for a human** — when work waits on something only a person can do (a missing secret, a
-  plan to approve, a QA pass blocked on a permission, an issue labelled `human-action`), Symphony
-  posts a Linear project update listing each one with its steps, and posts again only when that list
-  changes. Agents add requests with `linear_request_human_action` and withdraw them with
-  `linear_withdraw_human_action`; see `human_actions` in
+  plan to approve, a QA pass or a final verification blocked on a permission, an issue labelled
+  `human-action`), Symphony posts a Linear project update listing each one with its steps, and posts
+  again only when that list changes. Agents add requests with `linear_request_human_action` and
+  withdraw them with `linear_withdraw_human_action`; see `human_actions` in
   [docs/configuration.md](docs/configuration.md).
 - **Executor + reviewer runs** — an optional read-only reviewer agent gates the executor's push.
 - **Auto Review** — an optional QA agent uses each PR the way a user would before human review, with
@@ -260,7 +260,9 @@ Start the service from a directory containing `symphony.yml` (or pass `--config`
 ```
 
 Validate `symphony.yml` and every repo `WORKFLOW.md` it points at without starting the service
-(exit 0 with `Config OK: <path>`, or exit 1 with the error on stderr). A `workspace.source` repo
+(exit 0 with `Config OK: <path>`, or exit 1 with the error on stderr). It checks the same
+`WORKFLOW.md` startup reads: with `workflow_source: ref`, the committed copy on the last fetched
+base branch, not uncommitted edits. A `workspace.source` repo
 Symphony hasn't cloned yet passes with a warning, as Symphony clones it when it starts:
 
 ```bash

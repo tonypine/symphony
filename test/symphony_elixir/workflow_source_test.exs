@@ -242,6 +242,55 @@ defmodule SymphonyElixir.WorkflowSourceTest do
     end
   end
 
+  describe "load_for_check/1" do
+    test "validates the committed workflow, not a broken working copy, without writing the snapshot", %{root: root} do
+      %{checkout: checkout} = git_repos!(root, "Committed prompt")
+      File.write!(Path.join(checkout, "WORKFLOW.md"), "---\ntracker: [unclosed\n---\nBroken prompt\n")
+      write_symphony!(root, checkout)
+      {:ok, repo} = Config.repo("app")
+
+      assert {:ok, %{prompt: "Committed prompt"}} = WorkflowSource.load_for_check(repo)
+      assert Config.check_repo_workflows() == :ok
+      assert WorkflowSource.read_path(repo) == Path.join(checkout, "WORKFLOW.md")
+    end
+
+    test "reads a newer ref over a stale snapshot", %{root: root} do
+      %{checkout: checkout, other: other} = git_repos!(root, "First prompt")
+      repo = repo(checkout)
+      assert WorkflowSource.refresh(repo) == :ok
+
+      push_workflow!(other, "Second prompt\n")
+      git!(checkout, ["fetch", "-q", "origin"])
+
+      assert {:ok, %{prompt: "Second prompt"}} = WorkflowSource.load_for_check(repo)
+      assert File.read!(WorkflowSource.read_path(repo)) == "First prompt\n"
+    end
+
+    test "reads the last good snapshot when the workflow on the ref is invalid", %{root: root} do
+      %{checkout: checkout, other: other} = git_repos!(root, "Good prompt")
+      repo = repo(checkout)
+      assert WorkflowSource.refresh(repo) == :ok
+
+      push_workflow!(other, "---\nunknown_key: true\n---\nBad prompt\n")
+      git!(checkout, ["fetch", "-q", "origin"])
+
+      assert {:ok, %{prompt: "Good prompt"}} = WorkflowSource.load_for_check(repo)
+    end
+
+    test "reads the local file when the ref does not resolve and no snapshot exists", %{root: root} do
+      checkout = local_only_checkout!(root, "Local prompt")
+
+      assert {:ok, %{prompt: "Local prompt"}} = WorkflowSource.load_for_check(repo(checkout))
+    end
+
+    test "reads the local file for workflow_source: local", %{root: root} do
+      %{checkout: checkout} = git_repos!(root, "Committed prompt")
+      File.write!(Path.join(checkout, "WORKFLOW.md"), "Local prompt\n")
+
+      assert {:ok, %{prompt: "Local prompt"}} = WorkflowSource.load_for_check(repo(checkout, workflow_source: "local"))
+    end
+  end
+
   test "rejects an unknown workflow_source" do
     assert {:error, {:invalid_symphony_config, message}} =
              SystemSchema.parse(%{
