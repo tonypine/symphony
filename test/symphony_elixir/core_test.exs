@@ -5994,12 +5994,15 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
-  test "agent runner preserves unverifiable finding details when downgrading review-agent verdict" do
+  test "agent runner approves with advisory notes when every review-agent finding stays unverifiable" do
     test_root =
       Path.join(
         System.tmp_dir!(),
         "symphony-elixir-agent-runner-review-agent-unverifiable-#{System.unique_integer([:positive])}"
       )
+
+    previous_audit_dir = Application.get_env(:symphony_elixir, :audit_log_dir)
+    Application.put_env(:symphony_elixir, :audit_log_dir, Path.join(test_root, "audit"))
 
     try do
       repo = review_agent_repo!(test_root)
@@ -6014,47 +6017,62 @@ defmodule SymphonyElixir.CoreTest do
           "quoted_snippet" => "not present in cited evidence"
         })
 
-      put_review_agent_responses!([unverifiable, unverifiable, unverifiable, unverifiable])
+      put_review_agent_responses!([unverifiable, unverifiable, unverifiable])
 
       assert :ok =
                AgentRunner.run(review_agent_issue(), self(),
                  workspace_path: repo,
                  issue_state_fetcher: review_agent_state_fetcher(self(), 3),
                  issue_enricher: no_op_issue_enricher(),
-                 review_agent_module: ReviewAgentSequenceAppServer
+                 review_agent_module: ReviewAgentSequenceAppServer,
+                 run_id: "run-review-agent-unverified"
                )
 
+      assert_receive {:review_agent_start_session, _workspace, _opts}
       assert_receive {:review_agent_call, 1, _session, _prompt, _issue, _opts}
       assert_receive {:review_agent_call, 2, _session, _prompt, _issue, _opts}
-      assert_receive {:review_agent_call, 3, _session, _prompt, _issue, _opts}
-      assert_receive {:review_agent_call, 4, _session, _prompt, _issue, _opts}
+      assert_receive {:review_agent_call, 3, _session, requote_prompt, _issue, _opts}
+      assert requote_prompt =~ "Text at the cited lines:\n    grounded evidence line"
 
-      reason = "reviewer did not converge: unverifiable finding at feature.txt:1-1: quoted snippet not found"
+      note = "[unverified] Preserve the finding content. (feature.txt:1-1) Suggested fix: Keep the evidence-backed change."
 
       assert_receive {:codex_worker_update, "issue-review-agent-runner",
                       %{
                         event: :review_agent_verdict,
                         agent_phase: :reviewer,
                         payload: %{
-                          verdict: :request_changes,
+                          verdict: :approve,
                           round: 1,
                           max_iterations: 1,
-                          reason: ^reason,
-                          comments: [
-                            ^reason,
-                            "[unverified] Preserve the finding content. (feature.txt:1-1) Suggested fix: Keep the evidence-backed change."
-                          ]
+                          reason: "reviewer findings unverifiable; approved with 1 advisory note(s)",
+                          comments: [^note]
                         }
                       }}
 
-      refute_receive {:review_agent_call, 5, _session, _prompt, _issue, _opts}, 50
+      refute_receive {:review_agent_call, 4, _session, _prompt, _issue, _opts}, 50
+      refute_received {:review_agent_start_session, _workspace, _opts}
 
       turn_texts = review_agent_turn_texts!(trace_file)
       assert length(turn_texts) == 2
-      assert Enum.at(turn_texts, 1) =~ reason
-      assert Enum.at(turn_texts, 1) =~ "[unverified] Preserve the finding content."
-      assert Enum.at(turn_texts, 1) =~ "Suggested fix: Keep the evidence-backed change."
+      assert Enum.at(turn_texts, 1) =~ "Reviewer agent approved the committed diff"
+      assert Enum.at(turn_texts, 1) =~ note
+      refute Enum.any?(turn_texts, &String.contains?(&1, "Reviewer agent requested changes"))
+
+      assert {:ok, events} = SymphonyElixir.AuditLog.query(event_type: "review_agent_unverified")
+
+      assert [
+               %{
+                 "issue_id" => "issue-review-agent-runner",
+                 "issue_identifier" => issue_identifier,
+                 "run_id" => "run-review-agent-unverified",
+                 "round" => 1,
+                 "findings_dropped" => 1
+               }
+             ] = Enum.to_list(events)
+
+      assert issue_identifier == review_agent_issue().identifier
     after
+      Application.put_env(:symphony_elixir, :audit_log_dir, previous_audit_dir)
       clear_review_agent_env!()
       File.rm_rf(test_root)
     end
