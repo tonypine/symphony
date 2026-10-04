@@ -18,7 +18,7 @@ defmodule SymphonyElixir.Notifications.Formatter do
   ]
 
   # Not about one issue: the headline and text carry the reason (which limit, when it resumes).
-  @usage_limit_events ["usage_limit_paused", "usage_limit_resumed"]
+  @usage_limit_events ["usage_limit_paused", "usage_limit_headroom", "usage_limit_resumed"]
 
   @spec webhook_payload(Event.t(), keyword()) :: map()
   def webhook_payload(%Event{} = event, opts \\ []) do
@@ -187,6 +187,7 @@ defmodule SymphonyElixir.Notifications.Formatter do
   defp event_title("reviewer_commented"), do: "Reviewer commented"
   defp event_title("rework_pushed"), do: "Rework pushed"
   defp event_title("usage_limit_paused"), do: "Usage limit paused"
+  defp event_title("usage_limit_headroom"), do: "Usage limit headroom hold"
   defp event_title("usage_limit_resumed"), do: "Usage limit resumed"
   defp event_title(event), do: event
 
@@ -200,6 +201,7 @@ defmodule SymphonyElixir.Notifications.Formatter do
   defp event_color("dependency_pending_approval"), do: "warning"
   defp event_color("issue_completed"), do: "good"
   defp event_color("usage_limit_paused"), do: "warning"
+  defp event_color("usage_limit_headroom"), do: "warning"
   defp event_color("usage_limit_resumed"), do: "good"
   defp event_color(_event), do: "#2f80ed"
 
