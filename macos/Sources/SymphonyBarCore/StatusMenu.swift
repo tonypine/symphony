@@ -221,6 +221,78 @@ public enum StatusMenu {
         return false
     }
 
+    /// Heading of the forced tickets, shown only while there are some.
+    public static let forcedTitle = "Forced"
+
+    /// Title of the menu item that asks for a ticket to force, and its title while the request is under way.
+    public static let forceTitle = "Force a ticket…"
+    public static func forcingTitle(_ identifier: String) -> String { "Forcing \(identifier)…" }
+
+    /// Text of the prompt Force a ticket… shows, and its buttons.
+    public static let forcePromptTitle = "Force a ticket"
+    public static let forcePromptMessage = """
+        Enter a Linear identifier, for example TP-123. Symphony adds its force label, so the ticket skips the \
+        dispatch limits. It still waits for its blockers, a pause and usage limits, and its reviews still apply.
+        """
+    public static let forcePromptButton = "Force"
+    public static let forcePromptPlaceholder = "TP-123"
+
+    /// Force is offered while Symphony answers, whether or not dispatch is paused: a forced ticket waits out a pause.
+    public static func canForce(_ status: SymphonyStatus) -> Bool {
+        switch status {
+        case .running, .paused:
+            return true
+        case .stopped, .starting, .error:
+            return false
+        }
+    }
+
+    /// The identifier typed into the prompt, nil when nothing was.
+    public static func forceIdentifier(_ input: String) -> String? {
+        let identifier = input.trimmingWhitespace()
+        return identifier.isEmpty ? nil : identifier
+    }
+
+    /// The forced tickets the menu lists, none while Symphony doesn't answer.
+    public static func forcedTickets(_ status: SymphonyStatus) -> [StateSnapshot.ForcedTicket] {
+        switch status {
+        case let .running(snapshot, _), let .paused(snapshot, _):
+            return snapshot.forced
+        case .stopped, .starting, .error:
+            return []
+        }
+    }
+
+    /// One forced ticket, for example "⚡ TP-123 · implementation · running · forced 3h 5m", or
+    /// "⚡ TP-100 → TP-101 · waiting for a human · forced 3d 2h · stale" for a forced parent past the stale age.
+    public static func forcedLine(_ ticket: StateSnapshot.ForcedTicket) -> String {
+        let name = ticket.part.map { "\(ticket.identifier) → \($0)" } ?? ticket.identifier
+        let parts = [
+            "⚡ \(name)",
+            ticket.summary ?? ticket.state,
+            ticket.forcedForSeconds.map { "forced \(durationLabel($0))" },
+            ticket.stale ? "stale" : nil,
+        ]
+        return parts.compactMap { $0 }.joined(separator: " · ")
+    }
+
+    /// Title of the action on a forced ticket's row that removes its force label.
+    public static func stopForcingTitle(_ identifier: String) -> String { "Stop forcing \(identifier)" }
+
+    /// A duration in its two largest units, as Symphony's dashboards show it: "45s", "12m", "3h 5m", "2d 4h".
+    public static func durationLabel(_ seconds: Int) -> String {
+        switch seconds {
+        case ..<60:
+            return "\(max(seconds, 0))s"
+        case ..<3_600:
+            return "\(seconds / 60)m"
+        case ..<86_400:
+            return "\(seconds / 3_600)h \(seconds % 3_600 / 60)m"
+        default:
+            return "\(seconds / 86_400)d \(seconds % 86_400 / 3_600)h"
+        }
+    }
+
     /// Title of the menu item that restarts Symphony gracefully, and its title while a restart is under way.
     public static let restartTitle = "Restart Symphony"
     public static let restartingTitle = "Restarting Symphony…"
