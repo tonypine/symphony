@@ -3313,10 +3313,12 @@ defmodule SymphonyElixir.Orchestrator do
       Enum.each(changes, &record_forced_change(&1, state.repo_key))
     end
 
+    previously_forced = forced_ids(state)
     state = %{state | forced: forced}
 
     %{state | forced_waiting_noted: MapSet.filter(state.forced_waiting_noted, &forced_queued?(&1, state))}
     |> release_unforced_runs()
+    |> release_unforced_qa_passes(previously_forced)
   end
 
   # A run on the forced allowance gives it back once its ticket is no longer forced (its label was
@@ -3331,6 +3333,20 @@ defmodule SymphonyElixir.Orchestrator do
 
     %{state | running: Map.merge(running, released)}
   end
+
+  # An Auto Review QA pass on the forced allowance gives it back the same way. Only the tickets that
+  # just left the forced queue (or stopped being a forced parent's part) are released: a ticket
+  # labelled while in Auto Review is not in the queue, and its pass keeps the allowance.
+  defp release_unforced_qa_passes(%State{} = state, previously_forced) do
+    case Enum.reject(previously_forced, &forced_queued?(&1, state)) do
+      [] -> :ok
+      issue_ids -> QaRunner.release_forced(issue_ids)
+    end
+
+    state
+  end
+
+  defp forced_ids(%State{forced: forced, forced_parts: parts}), do: Map.keys(forced) ++ for({_parent_id, part} <- parts, do: part.issue_id)
 
   # Linear answers an unknown identifier with an "Entity not found" GraphQL error rather than a null issue.
   defp fetch_issue_to_force(identifier) do
@@ -3521,10 +3537,12 @@ defmodule SymphonyElixir.Orchestrator do
       end)
       |> Map.new()
 
+    previously_forced = forced_ids(state)
     state = %{state | forced_parts: parts}
 
     %{state | forced_waiting_noted: MapSet.filter(state.forced_waiting_noted, &forced_queued?(&1, state))}
     |> release_unforced_runs()
+    |> release_unforced_qa_passes(previously_forced)
   end
 
   defp forced_waiting_parent?(%Issue{} = issue, settings, terminal_states) do
