@@ -1425,7 +1425,11 @@ When enabled:
   proposed follow-ups, tokens, runtime); each verdict writes one `acceptance_gate_verdict` audit
   event. In `shadow` mode the verdict is advisory: the issue moves to `In Review` as it would
   without the gate, and follow-ups are listed, not filed. `enforce` currently behaves like
-  `shadow`. See `docs/acceptance_gate.md`.
+  `shadow`. When a judged issue leaves `In Review`, the human's decision at that SHA SHOULD be
+  recorded on the gate run (a move to `Merging` is `approve`; a move to `Rework`, or back to
+  `In Progress` with PR review comments, is `rework`) with one `acceptance_gate_agreement` audit
+  event, and `/api/v1/state` SHOULD list the latest verdict per judged issue and each repository's
+  agreement over its last 50 decisions (`acceptance_gate`). See `docs/acceptance_gate.md`.
 - Parent walkthrough: a run of kind `final_verification` on a local worker with the Linear tracker,
   for a ticket with a parent and no `qa:skip` label, MUST NOT start an executor agent. Symphony
   runs the QA agent instead, with no PR, in a fresh worktree at the head of
