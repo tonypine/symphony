@@ -274,7 +274,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
       schema
       |> cast(attrs, @fields, empty_values: [])
       |> cast_embed(:workspace, with: &Workspace.changeset/2)
-      |> validate_required([:name, :workflow])
+      |> Schema.validate_present([:name, :workflow])
       |> validate_string(:name)
       |> validate_optional_string(:path)
       |> validate_string(:workflow)

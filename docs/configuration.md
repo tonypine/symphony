@@ -912,10 +912,14 @@ state under `$TMPDIR`, and attaches a command transcript. A CLI pass typically c
 and 50–150k tokens.
 
 The QA agent (`runtime` and `command`, defaulting to `agent.runtime` and `agent.command`) runs in
-a fresh worktree at the PR head under `<workspaces.root>/.qa/`, removed afterwards. Before it
-removes the worktree, Symphony stops every process still running in it or started from it (by
-working folder or a path on the command line), including ones detached with `nohup` or `setsid`,
-and logs each one. It can read
+a fresh worktree at the PR head under `<workspaces.root>/.qa/`, removed afterwards. Each pass
+also gets a private temp folder, `/tmp/symphony-qa-<hash>` (Symphony's own temp folder when it
+can't write to `/tmp`), passed to a Claude agent as `CLAUDE_CODE_TMPDIR` and to a Codex agent as
+`TMPDIR`, and writable in its sandbox, so the agent's `$TMPDIR` is the pass's own and not the
+`/tmp/claude-<uid>` every Claude session shares or Symphony's own temp folder. Before it removes the worktree and the temp folder, Symphony stops every process still
+running in either or started from either (by working folder or a path on the command line),
+including ones detached with `nohup` or `setsid`, such as a server the agent started from a copy
+of the PR under `$TMPDIR`, and logs each one. It can read
 the issue, its parent and the PR, and attach evidence files with `linear_attach_file`; it cannot
 move the issue, comment, push or write to GitHub. The session stops at `timeout_ms`, `max_turns`,
 or `agent.limits.tokens_per_issue`. An agent that ends its turn without the JSON verdict gets one

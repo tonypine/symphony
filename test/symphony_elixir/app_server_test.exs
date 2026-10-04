@@ -1862,6 +1862,7 @@ defmodule SymphonyElixir.AppServerTest do
       printf 'SSH_AUTH_SOCK=%s\\n' "${SSH_AUTH_SOCK-<unset>}" >> "$trace_file"
       printf 'RUNTIME=%s\\n' "${SYMPHONY_AGENT_RUNTIME-<unset>}" >> "$trace_file"
       printf 'GRADLE_OPTS=%s\\n' "${GRADLE_OPTS-<unset>}" >> "$trace_file"
+      printf 'TMPDIR=%s\\n' "${TMPDIR-<unset>}" >> "$trace_file"
 
       count=0
       while IFS= read -r _line; do
@@ -1909,6 +1910,13 @@ defmodule SymphonyElixir.AppServerTest do
       Enum.each(secret_vars, fn {_name, value} ->
         refute trace =~ value, "secret value leaked into agent subprocess: #{value}"
       end)
+
+      # A QA pass gives its session a temp folder of its own.
+      File.rm!(trace_file)
+      assert {:ok, _result} = AppServer.run(workspace, "Confirm env strip", issue, extra_env: %{"TMPDIR" => "/tmp/symphony-qa-0123456789ab"})
+      qa_trace = File.read!(trace_file)
+      assert qa_trace =~ "TMPDIR=/tmp/symphony-qa-0123456789ab\n"
+      assert qa_trace =~ "LINEAR=<unset>"
     after
       File.rm_rf(test_root)
     end
