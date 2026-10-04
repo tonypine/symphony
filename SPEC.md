@@ -1711,6 +1711,11 @@ Important nuance:
   from. That start head MUST be recorded by the first run dispatched in `Rework` and kept across
   re-dispatched runs until the issue leaves `Rework`, so rework an earlier run pushed counts and a
   fresh `Rework` on an unchanged PR does not. Nothing else moves it out of `Rework`.
+- Outside `Rework` and `Merging`, an issue whose attached PR's head is the workspace `HEAD`, where
+  that `HEAD` differs from the one the run started on and every check on it has passed, MUST end
+  the run and move to the post-PR state, even while the review, CI, QA or conflict signal that
+  started the run is still pending. Such a signal is only cleared once the run ends, so without
+  this a fix run on an open PR never ends on its own.
 - When the workspace `HEAD` is readable, two consecutive turns with no new commit, no issue state
   change, no newly attached PR and no reviewer-agent verdict MUST end the run, move the issue to
   `Backlog` and post a comment saying why. This does not apply in `Merging`, nor while the attached
@@ -2995,10 +3000,10 @@ Orchestrator behavior on tracker errors:
   (until the pause ends, or 5 s doubling up to 60 s) and retries in the same run and session, for at
   most five minutes. This covers the issue enrichment and workpad bootstrap (the Todo → In Progress
   move, the workpad read and create), the post-turn issue refresh, the dependency-approval move, the
-  move after a finished rework, the idle park and its note, and the parent walkthrough's parent
-  read, QA report, gap tickets and final state move (the verdict is kept while that move waits, for
-  up to 30 minutes rather than five, since a lost verdict means running the whole QA walkthrough
-  again and filing its gap tickets twice). The run tells the orchestrator how long each wait lasts,
+  move after a finished rework or a green pushed head, the idle park and its note, and the parent
+  walkthrough's parent read, QA report, gap tickets and final state move (the verdict is kept while
+  that move waits, for up to 30 minutes rather than five, since a lost verdict means running the
+  whole QA walkthrough again and filing its gap tickets twice). The run tells the orchestrator how long each wait lasts,
   and the first-turn stall check and the no-progress watchdog do not restart it before that wait
   ends. A run that still fails on one once the wait runs out keeps its attempt and is retried after
   5 s (or when the pause ends) instead of the failure backoff, as are a post-PR move to Auto Review
