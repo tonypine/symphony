@@ -778,16 +778,19 @@ pull_requests:
     it) and the PR is `CLEAN` with green checks or none, Symphony squash-merges it right away.
   - A PR that is `BEHIND` the base branch gets one GitHub "Update branch" per head; CI runs on the
     merged code and auto-merge fires when it passes.
-  - A merge conflict moves the ticket to `In Progress` with the conflict context (an agent run), and
-    a red head goes through the CI-failure fix loop with auto-merge left on, so the PR merges once
+  - A merge conflict turns auto-merge off and moves the ticket to `In Progress` with the conflict
+    context (an agent run). The approval covered the diff before the conflict, so the fix goes
+    back through review, and moving the ticket to `Merging` again turns auto-merge back on. The
+    audit log (`auto_merge_disabled`, `reason: conflict`) and a ticket comment record it.
+  - A red head goes through the CI-failure fix loop with auto-merge left on, so the PR merges once
     the fix is green.
   - When auto-merge can't be used (GitHub refuses it and the PR isn't clean and green, a
     permission error, or the PR stays blocked on a green head), Symphony logs the error, comments
     the reason on the ticket, and falls back to the landing agent for that stay in `Merging`.
   - `/api/v1/state` (`auto_merge`) and the dashboard show each PR's status, for example
     "auto-merge on, waiting for CI on `abc1234`", "updating branch" or "blocked: conflict".
-  - Moving a ticket out of `Merging` does not turn auto-merge off; disable it on the PR to stop the
-    merge.
+  - Apart from a merge conflict, moving a ticket out of `Merging` does not turn auto-merge off;
+    disable it on the PR to stop the merge.
   - Repository requirements: **Allow auto-merge** on (`allow_auto_merge`), and branch protection on
     the base branch with required status checks. Requiring branches to be up to date before merging
     (`strict`) is recommended, so GitHub never merges stale code; Symphony keeps the branch updated.
