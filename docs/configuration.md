@@ -977,8 +977,11 @@ with none set the reviewer command is unchanged. They take the same values as `a
 `agent.effort`, and `command` must not pass `--model` / `--effort` while any of them is set.
 
 When enabled, Symphony runs an executor/reviewer loop in the same workspace before push. The
-reviewer reads the committed diff; its prompt tells it not to run the test suite, coverage or
-Dialyzer, which CI runs after the push. Checks are split by cost: agents run cheap, targeted checks
+reviewer reads the committed diff for code quality and bugs: correctness, tests for new branches,
+error handling, and the repo's code rules from its `AGENTS.md` / `CLAUDE.md`. It doesn't judge the
+ticket's acceptance criteria or scope; the acceptance gate does (see
+[`acceptance_gate.md`](acceptance_gate.md#who-reviews-what)). Its prompt tells it not to run the
+test suite, coverage or Dialyzer, which CI runs after the push. Checks are split by cost: agents run cheap, targeted checks
 locally (format, compile, lint, the tests for the changed code; Symphony's own list is in its
 `WORKFLOW.md`), and the full suite, coverage and Dialyzer run only in CI.
 `run_on` defaults to `always`; set it to `first_push` to skip the reviewer on PR follow-up runs while keeping it enabled for initial issue runs.
@@ -1513,6 +1516,22 @@ auto_review:
 ---
 ```
 
+A repository that ships more than one app, say the product and a design-system catalog, lists
+every APK in `apk_paths` and every app in `application_ids`, and builds them all in one `build`:
+
+```yaml
+auto_review:
+  playbooks:
+    android_app:
+      build: ANDROID_HOME="$HOME/Library/Android/sdk" ./gradlew --no-daemon :app:assembleDebug :app-catalog:assembleDebug
+      apk_paths:
+        - app/build/outputs/apk/debug/app-debug.apk
+        - app-catalog/build/outputs/apk/debug/app-catalog-debug.apk
+      application_ids: ["com.example.app", "com.example.app.catalog"]
+```
+
+`apk_path` is a one-item `apk_paths`; a playbook may set both, and `apk_path` comes first.
+
 ```yaml
 # symphony.yml
 auto_review:
@@ -1520,12 +1539,12 @@ auto_review:
     avd: Pixel_3a_API_34_extension_level_7_arm64-v8a   # the name `emulator -list-avds` prints
 ```
 
-The playbook is on only when `build`, `apk_path`, a non-empty `application_ids` and
+The playbook is on only when `build`, `apk_path` or a non-empty `apk_paths`, a non-empty `application_ids` and
 `auto_review.android.avd` are all set (the [Android settings](#android-settings) hold the rest of
 the host side). It then triggers on `**/*.kt`, `**/*.java`, `**/AndroidManifest.xml`,
 `**/src/main/res/**`, `**/*.gradle.kts` and `**/*.gradle`, and a `qa:android_app` label forces
 it. A change only under `**/src/test/**` or `**/src/androidTest/**` counts as tests and is
-skipped. The QA prompt gives the agent the build command, the APK path and the application IDs.
+skipped. The QA prompt gives the agent the build command, every APK path and the application IDs.
 
 `build` runs in the QA agent's sandbox with the agent's scrubbed environment, so name what it
 needs in the command itself: `ANDROID_HOME` (or `ANDROID_SDK_ROOT`) and, when the JDK is not the
@@ -1549,7 +1568,7 @@ any other repository command on the host; they only call Symphony's adb.
 
 | Tool | Does | Refuses |
 | --- | --- | --- |
-| `qa_android_install` | copies the APK at `apk_path` into a private directory, uninstalls every `application_ids` app (which wipes its data) and every package installed since the pass's first install, and runs `adb install -r` from the copy | a worktree with changes to tracked files outside `qa-evidence/`; an `apk_path` that resolves (symlinks included) outside the worktree, is a symlink, is not a file or is over 512 MB; an APK that installs or replaces a package not in `application_ids`, which is uninstalled again, as is anything a failed install left behind |
+| `qa_android_install` | copies every APK in `apk_paths`, or only the one its optional `apk` argument names, into a private directory, uninstalls every `application_ids` app (which wipes its data) and every package installed since the pass's first install, runs `adb install -r` from each copy in turn and reports the application IDs each APK installed. Each install starts from no configured app, so a walkthrough that uses two apps installs both at once | an `apk` that is not one of the APK paths; a worktree with changes to tracked files outside `qa-evidence/`; an APK path that resolves (symlinks included) outside the worktree, is a symlink, is not a file or is over 512 MB, checked for every APK before the device changes; an APK that installs or replaces a package not in `application_ids`, which is uninstalled again, as is anything a failed install left behind |
 | `qa_android_launch` | starts the app's launcher activity and waits until it is in the foreground; reports recent logcat when the app exits | an application ID not in `application_ids`, or not installed by `qa_android_install` in this pass |
 | `qa_android_stop` | force-stops the app | an application ID not in `application_ids` |
 | `qa_android_screenshot` | saves the screen to a new file `qa-evidence/<name>.png`, at most 50 per pass | a name that already exists (file or symlink) |

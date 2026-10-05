@@ -517,10 +517,14 @@ Fields:
     clone used for `git worktree add`.
   - `fetch_before_dispatch` controls whether the primary clone fetches `origin` before worktree
     creation.
-  - Symphony runs one `git fetch origin` per repo at a time (worktree source, managed clone, or
-    workflow checkout). A fetch asked for while another fetch of the same repo runs waits for it
-    and reuses its result. A fetch that fails with `cannot lock ref` is retried once after a short
-    delay.
+  - Symphony runs one `git fetch` per repo at a time, keyed by the repo's git common dir so a
+    worktree and its source checkout share the lock. That covers the full `git fetch origin`
+    (worktree source, managed clone, or workflow checkout) and the targeted fetches of one branch
+    or commit inside a worktree (acceptance gate, QA pass, parent walkthrough, the
+    `github_fetch_origin` agent tool). A full fetch asked for while another full fetch of the same
+    repo runs or waits joins it and reuses its result; a targeted fetch waits its turn. A fetch
+    that fails with `cannot lock ref` is retried once after a short delay. On a remote worker the
+    dispatch script's `git fetch origin` is not locked, only retried once.
   - `source` (string) OPTIONAL: a GitHub repository, as `owner/repo` or a github.com URL, that
     Symphony clones and manages itself instead of using a local checkout.
     - The clone lives at `<workspaces.clones_root>/<owner>/<repo>` and is made without a working
@@ -1175,8 +1179,10 @@ Fields:
   - Default: `1`.
 
 When enabled, Symphony SHOULD run an executor + reviewer flow in the same workspace. The executor
-SHOULD stop before pushing, the reviewer SHOULD receive issue context plus the committed diff, and
-the reviewer MUST return a structured verdict of `approve`, `request_changes`, or `block`. Reviewer
+SHOULD stop before pushing, the reviewer SHOULD receive issue context plus the committed diff, the
+reviewer SHOULD judge code quality and bugs (correctness, tests for new branches, error handling,
+the repository's code rules) and not the issue's acceptance criteria or scope, and the reviewer
+MUST return a structured verdict of `approve`, `request_changes`, or `block`. Reviewer
 sessions SHOULD expose only read-only scoped Linear/GitHub tools. An `approve` verdict SHOULD keep
 later executor continuations in push/PR handoff mode rather than reintroducing the pre-push reviewer
 gate. `request_changes` and `block` verdicts SHOULD include evidence-backed findings with file,
@@ -1199,12 +1205,18 @@ to the configured human-review escalation state (`pull_requests.checks.escalate_
 scheduling another orchestrator retry. If that tracker transition fails, Symphony SHOULD still release
 its local issue claim rather than leaving the issue stuck as running. Reviewer parse failures,
 turn-budget failures, or self-check paths that remove all findings SHOULD be classified as
-`review_agent_inconclusive`; Symphony SHOULD retry the reviewer once with a fresh reviewer session,
-then downgrade to `request_changes` with a non-convergence note instead of retrying the full executor
-run. When every finding stays unverifiable after the re-quote turn, Symphony SHOULD instead approve
-the push without spending a correction round, attach those findings to the approval prompt as
-advisory notes, and record a `review_agent_unverified` audit event with the issue, the review round
-and the number of findings dropped.
+`review_agent_inconclusive`, and so SHOULD a `request_changes` verdict that arrives after the
+`max_iterations` correction rounds are spent. Symphony SHOULD retry the reviewer once with a fresh
+reviewer session. When that retry is inconclusive too, Symphony SHOULD let the push go ahead without
+reviewer approval rather than send the executor a `request_changes` with no finding to act on: the
+approval prompt names the non-convergence reason, asks the executor to record it in the workpad and
+the PR body, and carries the last pass's findings, if any, as advisory notes. Symphony SHOULD log the
+reviewer's last findings when the correction rounds run out, and record a `review_agent_inconclusive`
+audit event with the issue, the review round and the reason. When every finding stays unverifiable
+after the re-quote turn, Symphony SHOULD instead approve the push without spending a correction
+round, attach those findings to the approval prompt as advisory notes, and record a
+`review_agent_unverified` audit event with the issue, the review round and the number of findings
+dropped.
 
 #### 5.4.17 `auto_review` (object)
 
@@ -1232,8 +1244,9 @@ Fields:
   set. The built-in `web` kind also takes `browser_mcp` (an MCP server definition, the shape of
   an `agent.mcp.servers` entry) and is off unless `verification.enabled` is true and
   `verification.dev_server.start_cmd` is set. The built-in `android_app` kind also takes `build`
-  (shell command the QA agent runs in its own sandbox), `apk_path` (the APK it writes, relative to
-  the repo root) and `application_ids` (list of strings), and is off unless `build`, `apk_path`, a
+  (shell command the QA agent runs in its own sandbox), `apk_paths` (list of the APKs it writes,
+  relative to the repo root; `apk_path`, one string, is a one-item list, and both may be set),
+  and `application_ids` (list of strings), and is off unless `build`, at least one APK path, a
   non-empty `application_ids` and `auto_review.android.avd` are set. A repository's
   `WORKFLOW.md` MAY set `auto_review.playbooks` too; for that repository's QA passes each kind is
   merged over this map key by key, the repository's value winning.
@@ -1333,11 +1346,14 @@ When enabled:
 - A pass that runs the `android_app` playbook takes the Android emulator's lease and gets host-side
   `qa_android_*` tools. The agent runs the playbook's `build` in its own sandbox; these tools MUST
   NOT run it, Gradle or any other repository command on the host, only adb against Symphony's
-  emulator. `qa_android_install` (refused when tracked files outside `qa-evidence/` changed, or
-  when `apk_path` resolves outside the worktree, is a symlink, is not a regular file or is over
-  the size cap) installs a private copy of the APK after uninstalling the configured
-  `application_ids`, and MUST uninstall and refuse a package outside `application_ids` that the
-  install added or replaced, including after an install that reported failure.
+  emulator. `qa_android_install` installs every APK path, or the one its optional `apk` argument
+  names (which MUST be a configured path). It is refused when tracked files outside
+  `qa-evidence/` changed, or when any APK path it installs resolves outside the worktree, is a
+  symlink, is not a regular file or is over the size cap; every path is checked before the device
+  changes. It installs a private copy of each APK in turn after uninstalling the configured
+  `application_ids`, reports the application IDs each APK installed, and MUST uninstall and refuse
+  a package outside `application_ids` that an install added or replaced, including after an
+  install that reported failure.
   `qa_android_launch` / `qa_android_stop` MUST refuse an application ID outside
   `application_ids`; `qa_android_screenshot` follows the `qa_screenshot` file rules.
   `qa_android_ui_tree`, `qa_android_tap`, `qa_android_type`, `qa_android_key`,
@@ -1352,8 +1368,8 @@ When enabled:
   uninstall the configured apps and every package installed in the pass, release the lease and
   remove its private directory. An emulator that cannot start MUST
   surface as `qa_android_unavailable`, telling the agent to answer `blocked`. Other tool scopes MUST
-  NOT list or run them. The QA prompt MUST give the agent the playbook's `build`, `apk_path` and
-  `application_ids`. Every QA prompt MUST tell the agent never to start an emulator, simulator or
+  NOT list or run them. The QA prompt MUST give the agent the playbook's `build`, every APK path and
+  the `application_ids`. Every QA prompt MUST tell the agent never to start an emulator, simulator or
   device tool itself, and to mark a step that needs an Android device `blocked` when no
   `android_app` playbook runs in the pass.
 - With `worker_host` set, the worktree checks MUST stay on the Symphony host, and the build, the app,
@@ -1415,7 +1431,11 @@ When enabled:
   proposed follow-ups, tokens, runtime); each verdict writes one `acceptance_gate_verdict` audit
   event. In `shadow` mode the verdict is advisory: the issue moves to `In Review` as it would
   without the gate, and follow-ups are listed, not filed. `enforce` currently behaves like
-  `shadow`. See `docs/acceptance_gate.md`.
+  `shadow`. When a judged issue leaves `In Review`, the human's decision at that SHA SHOULD be
+  recorded on the gate run (a move to `Merging` is `approve`; a move to `Rework`, or back to
+  `In Progress` with PR review comments, is `rework`) with one `acceptance_gate_agreement` audit
+  event, and `/api/v1/state` SHOULD list the latest verdict per judged issue and each repository's
+  agreement over its last 50 decisions (`acceptance_gate`). See `docs/acceptance_gate.md`.
 - Parent walkthrough: a run of kind `final_verification` on a local worker with the Linear tracker,
   for a ticket with a parent and no `qa:skip` label, MUST NOT start an executor agent. Symphony
   runs the QA agent instead, with no PR, in a fresh worktree at the head of
@@ -3183,6 +3203,11 @@ Scoped GitHub tool extension contract:
   rewrite.
 - These checks bind only the scoped tools. A `git push` from the agent's shell
   skips them, and what it pushed then counts as the branch's `origin` copy.
+  CI SHOULD therefore fail a pull request from a Symphony branch whose own
+  commits since the merge-base with the base branch change a write-protected
+  path (Symphony's `protected-paths` workflow runs
+  `mix protected_paths.check`), unless a person with write access other than
+  the pull request's author waives it.
 - `github_merge_pull_request`, if exposed, MUST merge only the current
   workspace branch's pull request, MUST refuse unless the current issue is in
   the human-approved `Merging` state, MUST refuse while any check is failing or

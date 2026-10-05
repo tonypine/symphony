@@ -227,6 +227,14 @@ defmodule SymphonyElixir.AcceptanceGateTest do
       refute prompt =~ "cut at 120 KB"
     end
 
+    test "the prompt leaves code style and bugs to the pre-push reviewer unless one makes a criterion unmet", %{settings: settings} do
+      AcceptanceGate.run(job(), settings, run_opts())
+
+      assert_received {:gate_turn, _session, prompt, _issue, _opts}
+      assert prompt =~ "Do not review code style or look for bugs: the pre-push reviewer did."
+      assert prompt =~ "A bug counts only when it\nmakes an acceptance criterion unmet."
+    end
+
     test "a bare context and a ticket without criteria get placeholders in the prompt", %{settings: settings} do
       Process.put(
         :gate_context,
@@ -480,7 +488,22 @@ defmodule SymphonyElixir.AcceptanceGateTest do
       assert %{gate_sha: @sha, gate_verdict: "approve", gate_agent_verdict: "approve", gate_reasons: [], gate_mode: "shadow"} = stored
       assert "gate-TP-950-" <> _rest = stored.gate_run_id
 
-      assert [%{kind: "acceptance_gate", run_kind: "acceptance_gate", status: "gate_approve", head_sha: @sha, mode: "shadow"}] = RunStore.list_runs("default", :all)
+      assert [
+               %{
+                 kind: "acceptance_gate",
+                 run_kind: "acceptance_gate",
+                 status: "gate_approve",
+                 head_sha: @sha,
+                 mode: "shadow",
+                 pr_url: "https://github.com/org/app/pull/1",
+                 verdict: "approve",
+                 agent_verdict: "approve",
+                 reasons: [],
+                 criteria: %{met: 1, unmet: 0, unclear: 1},
+                 judged_at: %DateTime{}
+               }
+             ] = RunStore.list_runs("default", :all)
+
       assert_received {:memory_tracker_comment, "issue-gate", body}
       assert body =~ "## Symphony Acceptance Gate"
       assert [%{"verdict" => "approve"}] = audit_events(root)
@@ -492,7 +515,18 @@ defmodule SymphonyElixir.AcceptanceGateTest do
 
       assert {:ok, %{verdict: nil, inconclusive: 1}} = AcceptanceGate.judge(judge_job(settings), run_opts(dir: Path.join(root, "audit")))
       assert %{gate_verdict: nil, gate_inconclusive: 1} = Enum.find(RunStore.list_ci_checks(), &(&1.issue_id == "issue-gate"))
-      assert [%{status: "gate_inconclusive", error: "{:gate_agent_failed, :port_exit}"}] = RunStore.list_runs("default", :all)
+
+      assert [
+               %{
+                 status: "gate_inconclusive",
+                 error: "{:gate_agent_failed, :port_exit}",
+                 verdict: nil,
+                 agent_verdict: "inconclusive",
+                 criteria: %{met: 0, unmet: 0, unclear: 0},
+                 judged_at: nil
+               }
+             ] = RunStore.list_runs("default", :all)
+
       assert audit_events(root) == []
     end
 

@@ -38,6 +38,7 @@ defmodule SymphonyElixir.QaAgent do
   alias SymphonyElixir.Config.Schema.Agent.Mcp.Server, as: McpServer
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaAndroid.Driver, as: AndroidDriver
+  alias SymphonyElixir.Repo.Fetcher
   alias SymphonyElixir.Verification
   alias SymphonyElixir.Workspace
 
@@ -348,13 +349,15 @@ defmodule SymphonyElixir.QaAgent do
   # The agent runs the `android_app` build itself, so it needs the playbook's settings.
   defp android_section(job) do
     case Enum.find(job.playbooks, &(Map.get(&1, :kind) == "android_app")) do
-      %{build: build, apk_path: apk_path, application_ids: application_ids} ->
+      %{build: build, apk_paths: apk_paths, application_ids: application_ids} ->
         """
 
         Android app:
         Build command (run it in your shell from the worktree root): `#{build}`
-        APK path (relative to the worktree root): `#{apk_path}`
+        APK paths (relative to the worktree root), each one an `apk` that `qa_android_install` takes:
+        #{Enum.map_join(apk_paths, "\n", &"- `#{&1}`")}
         Application IDs: #{Enum.map_join(application_ids, ", ", &"`#{&1}`")}
+        `qa_android_install` reports the application IDs each APK installed: launch the one the step needs.
         """
 
       _none ->
@@ -881,9 +884,11 @@ defmodule SymphonyElixir.QaAgent do
     LeftoverProcesses.stop_under(roots, Keyword.put(Keyword.get(opts, :leftover_processes, []), :log_context, context))
   end
 
+  # The fetch runs under the per-repo fetch lock: the workspace shares its `.git`
+  # with the source checkout and every other worktree of it.
   defp ensure_commit(workspace, sha, git) do
     with {_output, status} when status != 0 <- git.(["cat-file", "-e", sha <> "^{commit}"], workspace),
-         {output, status} when status != 0 <- git.(["fetch", "--quiet", "origin", sha], workspace) do
+         {output, status} when status != 0 <- Fetcher.fetch(workspace, fn -> git.(["fetch", "--quiet", "origin", sha], workspace) end) do
       {:error, {:qa_commit_unavailable, sha, status, String.trim(output)}}
     else
       {_output, 0} -> :ok

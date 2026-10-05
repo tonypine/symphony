@@ -278,6 +278,43 @@ defmodule SymphonyElixir.CiPollerTest do
     refute_receive {:memory_tracker_comment, _, _}
   end
 
+  test "a judged issue moved from In Review to Merging records the human's approve on its gate run", %{audit_dir: audit_dir} do
+    now = ~U[2026-05-06 09:00:00Z]
+    issue = in_review_issue()
+    Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+    Application.put_env(:symphony_elixir, :ci_test_status, green_status())
+    put_run(issue, now)
+
+    :ok =
+      RunStore.put_run(%{
+        repo_key: @repo_key,
+        run_id: "gate-ACME-2401",
+        kind: "acceptance_gate",
+        issue_id: issue.id,
+        issue_identifier: issue.identifier,
+        head_sha: "abc123",
+        mode: "shadow",
+        verdict: "approve",
+        agent_verdict: "approve",
+        started_at: DateTime.add(now, -3, :minute),
+        judged_at: DateTime.add(now, -3, :minute)
+      })
+
+    gate_run = fn -> Enum.find(RunStore.list_runs(@repo_key, :all), &(&1.run_id == "gate-ACME-2401")) end
+
+    assert {:ok, %{actions: [{:green, "issue-2401"}]}} = CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+    refute Map.has_key?(gate_run.(), :human_decision)
+
+    Application.put_env(:symphony_elixir, :ci_test_issues, [%{issue | state: "Merging"}])
+    assert {:ok, _summary} = CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: DateTime.add(now, 1, :minute))
+
+    assert %{human_decision: "approve", human_decision_state: "Merging", human_decision_sha: "abc123"} = gate_run.()
+    assert %{unchanged: true, agreed: true} = gate_run.()
+
+    {:ok, events} = SymphonyElixir.AuditLog.query(event_type: "acceptance_gate_agreement", dir: audit_dir)
+    assert [%{"issue_identifier" => "ACME-2401", "verdict" => "approve", "decision" => "approve"}] = Enum.to_list(events)
+  end
+
   test "with Auto Review off In Review, Human Review and Merging issues are watched" do
     now = ~U[2026-05-06 09:00:00Z]
     Application.put_env(:symphony_elixir, :ci_test_issues, [])

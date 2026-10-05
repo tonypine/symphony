@@ -32,7 +32,9 @@ defmodule SymphonyElixir.ReviewAgent do
           required(:comments) => [String.t()],
           optional(:findings) => [finding()],
           optional(:reason) => String.t(),
-          optional(:source) => map()
+          optional(:source) => map(),
+          optional(:advisory_notes) => [String.t()],
+          optional(:inconclusive) => String.t()
         }
 
   @spec enabled?(Schema.ReviewAgent.t() | nil) :: boolean()
@@ -307,7 +309,7 @@ defmodule SymphonyElixir.ReviewAgent do
   @spec approval_prompt(result(), keyword()) :: String.t()
   def approval_prompt(result, opts) do
     """
-    Reviewer agent approved the committed diff.
+    #{approval_heading(result)}
     #{advisory_notes_section(result)}
     Continue the normal workflow push and PR handoff now. Use the validation evidence already
     collected for the reviewed diff. Do not stop at the reviewer-agent gate again unless code
@@ -317,7 +319,18 @@ defmodule SymphonyElixir.ReviewAgent do
     """
   end
 
-  defp advisory_notes_section(%{advisory_notes: [_note | _rest] = notes}) do
+  defp approval_heading(%{inconclusive: reason}) do
+    """
+    Reviewer agent stayed inconclusive twice on the committed diff (#{reason}).
+    Symphony lets the push go ahead without reviewer approval: CI, QA and the supervisor still
+    gate the PR. Record in the workpad Notes and in the PR body that the pre-push reviewer
+    was inconclusive, with that reason.\
+    """
+  end
+
+  defp approval_heading(_result), do: "Reviewer agent approved the committed diff."
+
+  defp advisory_notes_section(%{advisory_notes: [_note | _rest] = notes} = result) do
     body =
       notes
       |> Enum.with_index(1)
@@ -325,8 +338,7 @@ defmodule SymphonyElixir.ReviewAgent do
 
     """
 
-    The reviewer also raised the findings below, but their quoted lines could not be found in
-    the diff or the changed files. They are advisory notes: do not change code for them before
+    #{advisory_notes_intro(result)} They are advisory notes: do not change code for them before
     the push. Record any you judge real in the workpad Notes.
 
     #{body}
@@ -334,6 +346,17 @@ defmodule SymphonyElixir.ReviewAgent do
   end
 
   defp advisory_notes_section(_result), do: ""
+
+  defp advisory_notes_intro(%{inconclusive: _reason}) do
+    "The reviewer's last pass still raised the findings below after the correction rounds ran\nout."
+  end
+
+  defp advisory_notes_intro(_result) do
+    """
+    The reviewer also raised the findings below, but their quoted lines could not be found in
+    the diff or the changed files.\
+    """
+  end
 
   @doc false
   @spec approval_handoff_tool_guidance(Schema.t() | map() | nil) :: String.t()
@@ -434,7 +457,7 @@ defmodule SymphonyElixir.ReviewAgent do
 
     with {:ok, agent_module} <- resolve_agent_module(opts, config) do
       reviewer_settings = reviewer_settings(settings, config)
-      prompt = reviewer_prompt(issue, source, opts)
+      prompt = reviewer_prompt(issue, source)
       message_collector = Keyword.get(opts, :review_agent_message_collector, self())
       on_message = reviewer_on_message(message_collector, Keyword.get(opts, :on_reviewer_message))
 
@@ -650,24 +673,26 @@ defmodule SymphonyElixir.ReviewAgent do
   defp agent_module("claude"), do: {:ok, SymphonyElixir.ClaudeCode.AppServer}
   defp agent_module(other), do: {:error, {:unsupported_review_agent_kind, other}}
 
-  defp reviewer_prompt(issue, source, opts) do
-    workflow_prompt =
-      opts
-      |> Keyword.get(:repo_key)
-      |> Config.workflow_prompt()
-
+  # The pre-push reviewer covers code quality and bugs only. Acceptance criteria, ticket scope and
+  # overlap with other open PRs belong to the acceptance gate (`docs/acceptance_gate.md`).
+  defp reviewer_prompt(issue, source) do
     """
     You are the reviewer agent in an executor + reviewer Symphony run.
 
     Review the executor's committed diff for this Linear issue. You may inspect files and use read-only scoped Linear/GitHub tools, but you must not modify files, write Linear/GitHub data, push, or open a PR.
 
-    Review the diff by reading it. Do not run the test suite, `make all`, coverage or static analysis such as Dialyzer, even when the workflow below asks the executor to: CI runs them after the push.
+    Review the diff by reading it. Do not run the test suite, `make all`, coverage or static analysis such as Dialyzer: CI runs them after the push.
 
-    Issue:
+    Issue (context for what the diff is for):
     #{present_issue(issue)}
 
-    Workflow review criteria:
-    #{workflow_prompt}
+    Review criteria. Review the code, not the ticket:
+    - Correctness: bugs in the changed code, such as wrong conditions, unhandled cases, broken callers, races and resource leaks.
+    - Tests: each new branch, error path and edge case the diff adds has a test that exercises it, and changed behaviour has its tests updated.
+    - Error handling: errors are handled or returned, not swallowed, and failures leave no half-done state.
+    - The repo's code rules: read the repo's agent instructions (`AGENTS.md`, `CLAUDE.md`) for its rules, such as required specs, style and module patterns. Narrow scope is a code rule: flag unrelated refactors, stray debug code and dead code left in the diff.
+
+    Do not judge whether the diff meets the ticket's acceptance criteria or matches the ticket's scope, and do not ask for work the ticket describes but the diff does not touch: the acceptance gate checks that after CI and QA.
 
     Diff context:
     #{truncate(source.diff, @max_diff_prompt_bytes)}

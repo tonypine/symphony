@@ -5916,12 +5916,15 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
-  test "agent runner retries reviewer once and downgrades when review-agent max iterations is reached" do
+  test "agent runner lets the push go ahead when the reviewer hits the request-change limit twice on the same commit" do
     test_root =
       Path.join(
         System.tmp_dir!(),
         "symphony-elixir-agent-runner-review-agent-max-iterations-#{System.unique_integer([:positive])}"
       )
+
+    previous_audit_dir = Application.get_env(:symphony_elixir, :audit_log_dir)
+    Application.put_env(:symphony_elixir, :audit_log_dir, Path.join(test_root, "audit"))
 
     try do
       repo = review_agent_repo!(test_root)
@@ -5943,20 +5946,19 @@ defmodule SymphonyElixir.CoreTest do
         second_correction
       ])
 
-      assert :ok =
-               AgentRunner.run(review_agent_issue(), self(),
-                 workspace_path: repo,
-                 issue_state_fetcher: review_agent_state_fetcher(self(), 4),
-                 issue_enricher: no_op_issue_enricher(),
-                 review_agent_module: ReviewAgentSequenceAppServer
-               )
+      log =
+        capture_log(fn ->
+          assert :ok =
+                   AgentRunner.run(review_agent_issue(), self(),
+                     workspace_path: repo,
+                     issue_state_fetcher: review_agent_state_fetcher(self(), 4),
+                     issue_enricher: no_op_issue_enricher(),
+                     review_agent_module: ReviewAgentSequenceAppServer,
+                     run_id: "run-review-agent-inconclusive"
+                   )
+        end)
 
-      assert_receive {:review_agent_call, 1, _session, _prompt, _issue, _opts}
-      assert_receive {:review_agent_call, 2, _session, _prompt, _issue, _opts}
-      assert_receive {:review_agent_call, 3, _session, _prompt, _issue, _opts}
-      assert_receive {:review_agent_call, 4, _session, _prompt, _issue, _opts}
-      assert_receive {:review_agent_call, 5, _session, _prompt, _issue, _opts}
-      assert_receive {:review_agent_call, 6, _session, _prompt, _issue, _opts}
+      for call <- 1..6, do: assert_receive({:review_agent_call, ^call, _session, _prompt, _issue, _opts})
 
       assert_receive {:codex_worker_update, "issue-review-agent-runner",
                       %{
@@ -5965,16 +5967,13 @@ defmodule SymphonyElixir.CoreTest do
                         payload: %{verdict: :request_changes, round: 1, max_iterations: 1}
                       }}
 
+      note = "Still not acceptable. (feature.txt:1-1) Suggested fix: Keep the evidence-backed change."
+
       assert_receive {:codex_worker_update, "issue-review-agent-runner",
                       %{
                         event: :review_agent_verdict,
                         agent_phase: :reviewer,
-                        payload: %{
-                          verdict: :request_changes,
-                          round: 2,
-                          max_iterations: 1,
-                          reason: "Still not acceptable. (feature.txt:1-1) Suggested fix: Keep the evidence-backed change."
-                        }
+                        payload: %{verdict: :request_changes, round: 2, max_iterations: 1, reason: ^note}
                       }}
 
       assert_receive {:codex_worker_update, "issue-review-agent-runner",
@@ -5982,11 +5981,11 @@ defmodule SymphonyElixir.CoreTest do
                         event: :review_agent_verdict,
                         agent_phase: :reviewer,
                         payload: %{
-                          verdict: :request_changes,
+                          verdict: :approve,
                           round: 2,
                           max_iterations: 1,
-                          reason: "reviewer did not converge: request-change limit reached",
-                          comments: ["reviewer did not converge: request-change limit reached"]
+                          reason: "reviewer did not converge: request-change limit reached; push allowed without reviewer approval",
+                          comments: [^note]
                         }
                       }}
 
@@ -5994,9 +5993,84 @@ defmodule SymphonyElixir.CoreTest do
 
       turn_texts = review_agent_turn_texts!(trace_file)
       assert length(turn_texts) == 3
-      assert Enum.at(turn_texts, 2) =~ "reviewer did not converge"
-      refute Enum.any?(turn_texts, &String.contains?(&1, "Reviewer agent approved"))
+      assert Enum.at(turn_texts, 1) =~ "First correction."
+      assert Enum.at(turn_texts, 2) =~ "Reviewer agent stayed inconclusive twice on the committed diff"
+      assert Enum.at(turn_texts, 2) =~ "CI, QA and the supervisor still"
+      assert Enum.at(turn_texts, 2) =~ "Continue the normal workflow push and PR handoff now."
+      assert Enum.at(turn_texts, 2) =~ note
+      refute Enum.at(turn_texts, 2) =~ "Reviewer agent requested changes"
+
+      assert log =~ "Reviewer agent hit the request-change limit"
+      assert log =~ "Still not acceptable."
+      assert log =~ "letting the push go ahead without reviewer approval"
+
+      assert {:ok, events} = SymphonyElixir.AuditLog.query(event_type: "review_agent_inconclusive")
+
+      assert [
+               %{
+                 "issue_id" => "issue-review-agent-runner",
+                 "run_id" => "run-review-agent-inconclusive",
+                 "round" => 2,
+                 "reason" => "reviewer did not converge: request-change limit reached"
+               }
+             ] = Enum.to_list(events)
     after
+      Application.put_env(:symphony_elixir, :audit_log_dir, previous_audit_dir)
+      clear_review_agent_env!()
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "agent runner lets the push go ahead without notes when the reviewer answers malformed twice" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-agent-runner-review-agent-malformed-#{System.unique_integer([:positive])}"
+      )
+
+    previous_audit_dir = Application.get_env(:symphony_elixir, :audit_log_dir)
+    Application.put_env(:symphony_elixir, :audit_log_dir, Path.join(test_root, "audit"))
+
+    try do
+      repo = review_agent_repo!(test_root)
+      codex_binary = Path.join(test_root, "fake-codex")
+      trace_file = Path.join(test_root, "codex.trace")
+
+      write_review_agent_fake_codex!(codex_binary, trace_file)
+      write_review_agent_workflow!(codex_binary, max_turns: 2, max_iterations: 1)
+
+      put_review_agent_responses!([""])
+
+      capture_log(fn ->
+        assert :ok =
+                 AgentRunner.run(review_agent_issue(), self(),
+                   workspace_path: repo,
+                   issue_state_fetcher: review_agent_state_fetcher(self(), 3),
+                   issue_enricher: no_op_issue_enricher(),
+                   review_agent_module: ReviewAgentSequenceAppServer
+                 )
+      end)
+
+      assert_receive {:review_agent_call, 1, _session, _prompt, _issue, _opts}
+      assert_receive {:review_agent_call, 2, _session, _prompt, _issue, _opts}
+      refute_receive {:review_agent_call, 3, _session, _prompt, _issue, _opts}, 50
+
+      assert_receive {:codex_worker_update, "issue-review-agent-runner",
+                      %{
+                        event: :review_agent_verdict,
+                        agent_phase: :reviewer,
+                        payload: %{verdict: :approve, round: 1, comments: [], reason: reason}
+                      }}
+
+      assert reason =~ "reviewer did not converge: malformed response"
+
+      turn_texts = review_agent_turn_texts!(trace_file)
+      assert length(turn_texts) == 2
+      assert Enum.at(turn_texts, 1) =~ "Reviewer agent stayed inconclusive twice on the committed diff"
+      refute Enum.at(turn_texts, 1) =~ "advisory notes"
+      refute Enum.any?(turn_texts, &String.contains?(&1, "Reviewer agent requested changes"))
+    after
+      Application.put_env(:symphony_elixir, :audit_log_dir, previous_audit_dir)
       clear_review_agent_env!()
       File.rm_rf(test_root)
     end

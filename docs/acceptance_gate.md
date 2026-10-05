@@ -8,6 +8,31 @@ Auto Review runs CI, then QA, then the gate. The gate runs in `shadow` mode: it 
 advisory verdict and the issue moves to In Review as before. `enforce` doesn't apply verdicts
 yet and behaves like `shadow`.
 
+## Who reviews what
+
+Each check reads the change for its own concerns. None of them re-reads the diff for another's.
+
+- **Pre-push reviewer:** code quality and bugs (correctness, tests for new branches, error
+  handling, the repo's code rules), inside the executor run, before the first push. It doesn't
+  judge acceptance criteria or ticket scope.
+- **CI:** format, lint, the full test suite, the coverage threshold and static analysis, on every
+  push.
+- **QA:** runs the change as a user would, against the ticket's walkthrough, after CI is green.
+- **Acceptance gate:** acceptance criteria, scope, and overlap with other open PRs, on every PR head
+  before merge. It skips code style and bugs unless one makes a criterion unmet.
+- **Human:** escalations and judgment calls, and the merge approval while the gate is in `shadow`.
+
+## Supervisor
+
+The supervisor watches Symphony's runs across tickets.
+
+- **In `shadow` mode,** the supervisor writes their own decision on a PR before reading the
+  `## Symphony Acceptance Gate` comment, then notes whether they agree with the gate. They no
+  longer re-read diffs for code quality: the pre-push reviewer and CI cover it.
+- **In `enforce` mode,** the supervisor works only the escalations in In Review, and reviews 1 in 5
+  gate-approved merges after the fact.
+- **In both modes,** they keep filing operational findings and findings across PRs as tickets.
+
 ## How a gate pass runs
 
 With `mode` other than `off`, a QA `pass`, `skip` or `blocked` doesn't move the issue to In Review
@@ -43,8 +68,12 @@ it is, as for a late QA pass.
   reason `inconclusive`.
 - **Storage.** The verdict is stored per head SHA on the issue's CI check record: `gate_sha`,
   `gate_verdict`, `gate_agent_verdict`, `gate_reasons`, `gate_run_id` (and `gate_mode`,
-  `gate_inconclusive`). The run is stored with `kind: "acceptance_gate"` and its tokens. A green
-  poll on a SHA that already has a verdict applies it again and starts no new run.
+  `gate_inconclusive`). The run is stored with `kind: "acceptance_gate"`, its tokens and the
+  verdict: `verdict`, `agent_verdict`, `reasons`, `criteria` (how many criteria are `met`, `unmet`
+  and `unclear`), `pr_url`, `head_sha` and `judged_at`. The CI check record goes when the PR
+  closes; the run stays, and it is where the human's decision is recorded (see
+  [Agreement](#agreement-with-the-human-reviewer)). A green poll on a SHA that already has a
+  verdict applies it again and starts no new run.
 - **Visibility.** Each pass rewrites one `## Symphony Acceptance Gate` comment on the Linear issue,
   as the QA report is rewritten. It shows the mode (advisory in `shadow`), the verdict, the agent's
   verdict, a table with one row per acceptance criterion (criterion, result, evidence), the
@@ -52,6 +81,70 @@ it is, as for a late QA pass.
   filed), the tokens and the runtime.
 - **Audit log.** Each verdict writes one `acceptance_gate_verdict` event with the issue, the SHA,
   the mode, the verdict, the agent's verdict, the reasons, the run id and the tokens.
+
+## Agreement with the human reviewer
+
+In `shadow` mode a human still reviews every PR the gate judged, so each review measures the gate.
+The CI poller watches the issue after the verdict, and once the issue leaves In Review (or Human
+Review, where a ticket that needs a person waits) it records the human's decision on the gate run:
+
+| The issue moves to | Decision |
+| --- | --- |
+| Merging, or straight to Done | `approve` |
+| Rework | `rework` |
+| In Progress, after a PR review comment or a change request that came after the verdict | `rework` |
+| In Progress without one (a red CI head, a merge conflict) | none yet: the poller keeps watching |
+| In Review, Human Review or Auto Review | none yet |
+| any other state (Backlog, Canceled, ...) | `none`: the verdict doesn't count |
+
+The PR review comment comes from the PR review poller: a change request or a review comment
+moves the issue back to In Progress and stores `last_action: "rework"` on its PR review record. The decision is checked on every CI poll, before the
+poll processes the PR, so a PR merged since the last poll still has the head the human merged.
+Only each issue's latest verdict is watched: a new verdict on a new push replaces the old one.
+
+The gate run then gets `human_decision`, `human_decision_state` (the Linear state),
+`human_decision_sha` (the PR head the poller last saw), `unchanged` (that head is the SHA the gate
+judged), `agreed` and `human_decided_at`. An `approve` or `rework` writes one
+`acceptance_gate_agreement` audit event with the issue, both SHAs, the mode, the verdict, the
+agent's verdict, the decision, the state, `agreed`, `unchanged` and the run id.
+
+### The stats
+
+Each repository's stats cover its last 50 decisions (`approve` or `rework`), newest decision
+first. Each decision on a judged SHA counts once, so a ticket the gate judged again after a fix
+counts once per decision, and an unsafe approval on its first push stays counted.
+
+| Stat | Counts |
+| --- | --- |
+| `judged` | decisions in the window. |
+| `agreed`, `agreement_rate` | verdicts the gate didn't escalate where the decision is the gate's verdict, and their share of those verdicts. |
+| `unsafe_approvals` | the gate said `approve` and the human sent the PR back. |
+| `false_reworks` | the gate said `rework` and the human merged the PR unchanged (on the judged SHA). |
+| `escalations`, `escalations_merged_unchanged` | the gate escalated, and of those, how many the human merged unchanged. |
+| `tokens.median`, `tokens.p90` | the gate run's total tokens per verdict, nearest rank. |
+
+### Ready to enforce
+
+`ready_to_enforce` is `true` when the stats meet all of these, checked in this order:
+
+1. at least 20 judged tickets;
+2. no unsafe approval;
+3. false reworks at 10% or less of the judged tickets;
+4. at least 90% agreement on the tickets the gate didn't escalate (none counts as unmet).
+
+Otherwise it is `false` and `unmet_condition` names the first condition that fails, for example
+`at least 20 judged tickets (12 so far)`.
+
+### Where to see it
+
+- `/api/v1/state` has an `acceptance_gate` block: `running` and `queued` (the gate runner's
+  passes), `recent` (the latest verdict of the 20 most recently judged issues, newest first, each
+  with `issue_identifier`, `pr_url`, `head_sha`, `mode`, `verdict`, `agent_verdict`, `reasons`,
+  `criteria` counts, `judged_at` and the human's decision once there is one) and `agreement` (the
+  stats per repository key). `/api/v1/<issue_identifier>` has the issue's latest verdict under
+  `acceptance_gate`.
+- The dashboard's Auto Review section shows the gate passes, one line per recent verdict, and one
+  agreement line per repository, ending in `ready to enforce` or the condition still unmet.
 
 ## Where it is configured
 
