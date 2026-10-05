@@ -236,6 +236,14 @@ the command runs on. Every host-side git call:
   `submodule.recurse=false` keeps `checkout` and `reset` out, and the orphan backup's `add -A`
   starts from an empty index.
 
+On an SSH worker, the scripts Symphony runs over SSH to fetch, create, reuse, back up and remove a
+worktree, and to put a worktree on the base branch for `after_create`, run git as the worker's
+operator account with the same protections. They define a `symphony_git` shell function that sets
+the same environment and `-c` overrides, and lists and blanks the filter drivers in the worker
+repo's `config`, its `config.worktree` and every file they include before each command that can
+read or write work-tree files. It also refuses to run git when an include path holds a newline,
+since the shell reads the list line by line.
+
 Limits:
 
 - The drivers are listed just before the command runs, so one written to the config in between
@@ -244,10 +252,9 @@ Limits:
   Symphony gives native Codex no such deny list yet
   ([TP-534](https://linear.app/tonypine/issue/TP-534)).
 - Only filter drivers are blanked. Host-side `git diff` and `git merge` (reviews, the acceptance
-  gate, `github_sync_base`) still run a diff or merge driver the config defines, and `git fetch`
-  still honors `remote.<name>.uploadpack` ([TP-533](https://linear.app/tonypine/issue/TP-533)).
-- The scripts that create and reset worktrees on an SSH worker run plain git
-  ([TP-535](https://linear.app/tonypine/issue/TP-535)).
+  gate, `github_sync_base`) still run a diff or merge driver the config defines, and `git fetch`,
+  on the host or on an SSH worker, still honors `remote.<name>.uploadpack`
+  ([TP-533](https://linear.app/tonypine/issue/TP-533)).
 
 ### Network access controls
 
