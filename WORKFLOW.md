@@ -69,7 +69,8 @@ You are working on a Linear ticket `{{ issue.identifier }}`
   suite, the 100% coverage report and Dialyzer on every push.
   - Cheap checks run locally, in any phase: `mix format --check-formatted`,
     `mix compile --warnings-as-errors`, `mix specs.check`,
-    `mix credo --strict <changed files>`, and the test files you added or
+    `mix credo --strict <changed files>`, `mix cover.changed` (line coverage
+    of the `lib/` modules you changed), and the test files you added or
     changed plus the test files of the modules you changed (`mix test <file>`
     or `<file>:<line>`).
   - Slow, compute-heavy checks never run locally: the full `mix test`,
@@ -205,7 +206,7 @@ You are working on a Linear ticket `{{ issue.identifier }}`
     - all known callers of those functions, using grep/search results where applicable,
     - existing test coverage for the affected code,
     - estimated blast radius (`narrow`, `moderate`, or `wide`) with justification.
-    - new branches and error/edge paths introduced by the change, and the exact test that will exercise each. The repo enforces a 100% coverage threshold in CI; an unexercised branch will fail the CI `coverage report` job, so plan the test now rather than measuring coverage locally. If a path is genuinely unreachable from tests (boundary I/O shim), call it out here and plan to extend `mix.exs` `test_coverage` `ignore_modules` rather than skipping the gate.
+    - new branches and error/edge paths introduced by the change, and the exact test that will exercise each. The repo enforces a 100% coverage threshold in CI; an unexercised branch will fail the CI `coverage report` job, so plan the test now and check it before push with `mix cover.changed`. If a path is genuinely unreachable from tests (boundary I/O shim), call it out here and plan to extend `mix.exs` `test_coverage` `ignore_modules` rather than skipping the gate.
     - Do not write the first code edit until this analysis is recorded.
 11. Compact context and proceed to execution.
 
@@ -241,7 +242,7 @@ You are working on a Linear ticket `{{ issue.identifier }}`
     - Document these temporary proof steps and outcomes in the workpad `Validation`/`Notes` sections so reviewers can follow the evidence.
 6.  Re-check all acceptance criteria and close any gaps.
 7.  Before every `git push` attempt, run the targeted pre-push checks for your scope and confirm they pass; if one fails, address it and rerun until green.
-    - Targeted pre-push checks: `mix format --check-formatted`, `mix compile --warnings-as-errors`, `mix specs.check`, `mix credo --strict <changed files>`, and every new or changed test file plus the test files of the modules you changed.
+    - Targeted pre-push checks: `mix format --check-formatted`, `mix compile --warnings-as-errors`, `mix specs.check`, `mix credo --strict <changed files>`, `mix cover.changed`, and every new or changed test file plus the test files of the modules you changed.
     - Do not run `make all`, `make check`, `make coverage`, the full `mix test`, `mix test --stale` or Dialyzer before a push (see `Command and output hygiene` for the optional `make all` on shared infrastructure). CI is the gate for the full suite, the 100% coverage report and Dialyzer.
     - `git push` runs the repo's `.githooks/pre-push` hook, which reruns the format, compile and credo checks on the Elixir files the push changes and rejects the push when one fails. Never use `git push --no-verify`. When the hook fails, fix the issue it names (it prints the fixing command, such as `mix format`), commit, and push again.
     - `github_push_branch` skips repo hooks, so when the push changes an Elixir file it needs the result of `.githooks/pre-push --head` for the commit it pushes. Run that command in your shell after your last commit: it runs the same checks in your sandbox and records the result in `tmp/push-check`. The tool refuses the push when the result is missing, is for another commit, or names a failed check; fix what it names, commit, run the command again and push. A push that changes no Elixir file needs no result.
@@ -293,7 +294,7 @@ You are working on a Linear ticket `{{ issue.identifier }}`
 1. When the issue is in `In Review`, do not code or change ticket content.
 2. Poll for updates as needed, including GitHub PR review comments from humans and bots.
 3. Review comments on the PR (including the operator's own, when Symphony posts with the same GitHub account) are handled by Symphony: it moves the issue back to `In Progress` and re-activates you with the comments. Address them on the same PR and branch with the PR feedback sweep protocol, push, and return to `In Review`. Do not close the PR or reset the branch for review comments.
-4. If approved, human moves the issue to `Merging`.
+4. If approved, a human moves the issue to `Merging`. With the acceptance gate in `enforce` mode, Symphony moves an approved PR from `Auto Review` to `Merging` itself, and sends a gate `rework` back as `In Progress` on the same PR (see `PR feedback and CI delivery`).
 5. When the issue is in `Merging`, Symphony turns on GitHub auto-merge for the PR, updates the branch when it falls behind the base branch, and moves the issue to `Done` once GitHub merges it; no agent runs. A merge conflict comes back as `In Progress` with the conflict context and auto-merge turned off: your resolution goes back through review, and a fresh move to `Merging` turns auto-merge back on. A red head comes back as a CI-failure run with auto-merge turned off too: your fix goes back through review, and a fresh move to `Merging` turns auto-merge back on (a flaky rerun of the same commit keeps it on). Only when auto-merge can't be used does Symphony dispatch you in `Merging` (with a comment on the issue saying why): then open and follow `.ai/skills/land/SKILL.md`, and run the `land` skill in a loop until the PR is merged. Do not call `gh pr merge` directly; merge with the scoped `github_merge_pull_request` tool.
    - When checks are still pending, and your runtime allows `gh` (Claude sessions deny it), wait for them inside the turn with one foreground `gh pr checks <pr-number> --watch` call that finishes under the 10-minute tool limit; waiting in a tool call costs no tokens. If they are still pending after that, or you cannot run `gh`, end the turn. Do not rely on `ScheduleWakeup`, `sleep` loops, or other in-session timers; they do nothing in unattended runs. Symphony keeps the issue in `Merging`, holds it until CI on the PR head settles, and then resumes the landing agent so it can merge without a second approval.
 6. After merge is complete, move the issue to `Done`.
