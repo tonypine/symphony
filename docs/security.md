@@ -60,6 +60,26 @@ also covers the files a symlink in one of those points at: Symphony's own `.ai/s
 to `priv/skills/pull`, so `priv/skills/pull` is read-only to the agent. An SSH worker's workspace
 gets the plain list.
 
+The sandbox binds only the commands an agent runs. Claude's file tools (`Edit`, `Write`,
+`NotebookEdit`) run in the Claude process itself, so each Claude session's settings also carry an
+`Edit(<path>)` deny rule for every one of those paths and every symlink target. Claude Code applies
+an `Edit` rule to all three tools, and still applies it under `--dangerously-skip-permissions`.
+It checks a symlink's real path, which is why the targets need their own rules.
+
+Each layer covers a different way to write one of those paths:
+
+| Write | Refused by |
+| --- | --- |
+| A shell command (`sed -i`, `git merge`, a script) | The sandbox: Claude's `sandbox.filesystem.denyWrite`, Codex's filesystem permissions |
+| Claude's `Edit`, `Write` or `NotebookEdit` | `Edit(<path>)` rules in the session's `permissions.deny` |
+| Codex's `apply_patch` | Codex's filesystem permissions, if `apply_patch` runs under them; not yet checked with a real session ([TP-530](https://linear.app/tonypine/issue/TP-530)) |
+| A branch pushed with `github_push_branch`, or merged with `github_sync_base` | The tools, which refuse a branch that changes one of the paths |
+| A `git push` from the agent's shell | Claude's `Bash(git push:*)` deny rule, then CI |
+| A pull request that changes one of the paths | The `protected-paths` CI job, until a person waives it |
+
+The first three stop the write in the workspace, so a later session there can't load it. The others
+only stop the change from reaching the base branch.
+
 A `git merge` in the sandbox therefore fails when the base branch changed one of them, so agents
 merge the base branch with `github_sync_base`, which merges outside the sandbox with repo hooks off
 and leaves the commit to the agent. It and `github_push_branch` refuse a branch that changes one of

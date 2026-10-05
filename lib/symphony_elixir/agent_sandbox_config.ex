@@ -4,9 +4,9 @@ defmodule SymphonyElixir.AgentSandboxConfig do
   @moduledoc """
   Shared sandbox defaults for agent runtimes.
 
-  Produces Claude Code `sandbox.filesystem` settings and Codex
-  `permissions.workspace_write.*` `--config` overrides from a single deny
-  list so both adapters stay in sync. Operator-supplied
+  Produces Claude Code `sandbox.filesystem` settings, Claude Code `Edit(<path>)`
+  deny rules for its file tools, and Codex `permissions.workspace_write.*`
+  `--config` overrides from a single deny list so both adapters stay in sync. Operator-supplied
   `workspace.sandbox.allow_read_paths` entries are subtracted from the
   shared `denyRead` set for both runtimes. Operator-supplied
   `workspace.sandbox.allow_write_paths` entries are emitted as
@@ -251,6 +251,26 @@ defmodule SymphonyElixir.AgentSandboxConfig do
       paths -> Map.put(base, "allowWrite", paths)
     end
   end
+
+  @doc """
+  Claude Code `permissions.deny` rules that refuse its file tools on every write-protected path.
+
+  `sandbox.filesystem.denyWrite` binds shell commands only; `Edit`, `Write` and `NotebookEdit`
+  run in the Claude process. Claude Code applies an `Edit(<path>)` rule to all three and
+  ignores a `Write(<path>)` or `NotebookEdit(<path>)` rule (checked with Claude Code 2.1.289).
+  A directory rule covers the files under it. Claude matches a symlink's real path, so the
+  link targets in `extra_deny_write_paths` need their own rules. `./` is relative to the
+  session's working directory and `~/` to the home directory; an absolute path needs `//`.
+  """
+  @spec claude_edit_deny_rules([String.t()]) :: [String.t()]
+  def claude_edit_deny_rules(extra_deny_write_paths \\ []) do
+    (@deny_write_paths ++ normalize_sandbox_paths(extra_deny_write_paths))
+    |> Enum.uniq()
+    |> Enum.map(&"Edit(#{claude_rule_path(&1)})")
+  end
+
+  defp claude_rule_path("/" <> _absolute = path), do: "/" <> path
+  defp claude_rule_path(path), do: path
 
   @doc """
   Writable paths a sandboxed macOS process needs for Foundation's atomic writes.
