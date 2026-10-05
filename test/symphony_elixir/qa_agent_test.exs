@@ -461,6 +461,16 @@ defmodule SymphonyElixir.QaAgentTest do
       refute Map.has_key?(blocked, :needs_person)
     end
 
+    test "marks the steps a parent walkthrough reports for its verification checklist" do
+      text =
+        ~s({"verdict":"pass","steps":[{"name":"UC1","status":"pass","checklist":true},{"name":"Open Settings","status":"pass","checklist":"yes"},{"name":"Quit","status":"pass"}]})
+
+      assert {:ok, %{steps: [row, walkthrough, plain]}} = QaAgent.parse_response(text)
+      assert row == %{name: "UC1", status: "pass", details: "", evidence: [], checklist: true}
+      refute Map.has_key?(walkthrough, :checklist)
+      refute Map.has_key?(plain, :checklist)
+    end
+
     test "rejects answers that do not follow the contract" do
       for {text, reason} <- [
             {"no json here", :no_verdict_object},
@@ -512,6 +522,14 @@ defmodule SymphonyElixir.QaAgentTest do
       assert prompt =~ "Verification checklist (TP-910, the parent's final verification sub-ticket)"
       assert prompt =~ ~r/<linear_issue_body>\s*- \[ \] child criterion\s*<\/linear_issue_body>/
       assert prompt =~ "so a follow-up ticket can fix it"
+      flat = String.replace(prompt, ~r/\s+/, " ")
+      assert flat =~ ~s(Every row of this checklist is a required step. Report each row as its own step with `"checklist": true`)
+      assert flat =~ ~s(Expand a row that groups several IDs \(such as "UC1 to UC8", or a range of sub-tickets\) into one step per ID, named after the ID)
+      assert flat =~ "is a gap: mark it `fail` and put the gap in `findings`"
+      assert flat =~ "Mark a row `skipped` only for a reason you state in `details`"
+      assert flat =~ "Symphony does not accept `pass` when no checklist row is reported or most of them are skipped"
+      assert prompt =~ ~s("evidence": ["<linear_attach_file URL or qa-evidence/ path>"],\n      "checklist": true | false\n    })
+      refute QaAgent.prompt(job(), nil) =~ ~s("checklist")
       refute prompt =~ "The executor agent opened a PR"
       refute prompt =~ "Parent issue (this is a sub-ticket"
 
