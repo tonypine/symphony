@@ -779,7 +779,11 @@ Fields:
 
 Review-comment options are ignored when `enabled` is not `true`. CI failure dispatch is driven only
 by failed status checks and ignores comment authorship; the ignored reviewer set above does not
-affect CI escalation.
+affect CI escalation. A head whose only failed check is `protected paths` gets no
+flaky re-run, no CI-fix run and no escalation, and uses no fix attempt: only a person clears that
+check, with the `protected-paths-approved` label, so the issue stays where it is until the check
+passes. When another check fails beside it, the CI-fix run's prompt names `protected paths` as not
+the agent's to fix.
 
 #### 5.4.7 `github` (object)
 
@@ -2027,7 +2031,13 @@ The poller:
 
 - discovers issues in `In Review` with attached GitHub PR URLs (attachments whose Linear metadata
   reports the PR as `closed` or `merged` do not count as an attached PR anywhere in Symphony, so a
-  reopened issue whose only PR was closed runs the normal pre-PR flow);
+  reopened issue whose only PR was closed runs the normal pre-PR flow; whenever the first page of an
+  issue's attachments is full, Symphony reads the remaining pages (up to 10 more), so it sees every
+  attachment and many others, such as QA screenshots, do not hide the PR; a rate limit, transport
+  failure, or 429/5xx response on one of those pages fails the whole issue read, so callers retry it
+  as they retry the first page, rather than seeing the issue without its PR; an issue the CI poller watches a PR
+  for, or an agent run whose issue had a PR at dispatch, logs a warning naming the issue when its
+  attachments show no PR);
 - records each PR URL, issue id, and workspace path in the durable run store;
 - polls GitHub for review decisions and PR closure;
 - waits `pull_requests.review_comments.rework_delay_minutes` after requested-change activity before moving the issue
@@ -2675,6 +2685,9 @@ Algorithm summary:
 7. If `created_now=true`, run `hooks.after_create` if configured. Also run it for a reused
    workspace whose `after_create` has not yet succeeded (it failed or timed out), so the agent does
    not start in a half-prepared workspace. This applies to SSH worker workspaces too.
+   Hooks run outside the agent sandbox, so a `worktree` workspace, local or on an SSH worker, runs
+   `after_create` detached at the base commit and is checked out on its branch again afterwards. The worktree's ignored files are removed before the hook; one with uncommitted
+   changes, or no base commit, skips the hook with a warning and keeps its pending marker.
 
 Notes:
 

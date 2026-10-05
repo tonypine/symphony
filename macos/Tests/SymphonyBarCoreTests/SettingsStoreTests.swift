@@ -9,6 +9,47 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(store.loadSettings().stopTimeoutSeconds, AppSettings.defaultStopTimeoutSeconds)
         XCTAssertEqual(store.loadSettings().restartTimeoutMinutes, 30)
         XCTAssertFalse(store.loadSettings().startOnLaunch)
+        XCTAssertEqual(store.loadSettings().updateMode, .manual)
+        XCTAssertEqual(store.loadSettings().updateTime, TimeOfDay(hour: 3, minute: 0))
+    }
+
+    func testAnExistingInstallWithoutUpdateSettingsGetsManual() {
+        let defaults = MemoryKeyValueStore()
+        defaults.values[SettingsStore.Key.configPath] = "/src/symphony/symphony.yml"
+        defaults.values[SettingsStore.Key.startOnLaunch] = true
+
+        let settings = SettingsStore(defaults: defaults, secrets: MemorySecretStore()).loadSettings()
+
+        XCTAssertEqual(settings.updateMode, .manual)
+        XCTAssertEqual(settings.updateTime, .defaultUpdateTime)
+    }
+
+    func testUpdateModeAndTimeRoundTripThroughANewStore() {
+        let defaults = MemoryKeyValueStore()
+        var settings = AppSettings()
+        settings.updateMode = .atTime
+        settings.updateTime = TimeOfDay(hour: 22, minute: 30)
+
+        SettingsStore(defaults: defaults, secrets: MemorySecretStore()).saveSettings(settings)
+        let reopened = SettingsStore(defaults: defaults, secrets: MemorySecretStore()).loadSettings()
+
+        XCTAssertEqual(reopened.updateMode, .atTime)
+        XCTAssertEqual(reopened.updateTime, TimeOfDay(hour: 22, minute: 30))
+        XCTAssertEqual(defaults.values[SettingsStore.Key.updateMode] as? String, "atTime")
+        XCTAssertEqual(defaults.values[SettingsStore.Key.updateTime] as? Int, 22 * 60 + 30)
+    }
+
+    func testUnreadableUpdateSettingsFallBackToTheDefaults() {
+        for (mode, time) in [("hourly", 1440), ("", -5)] as [(Any, Any)] + [(3, "03:00")] {
+            let defaults = MemoryKeyValueStore()
+            defaults.values[SettingsStore.Key.updateMode] = mode
+            defaults.values[SettingsStore.Key.updateTime] = time
+
+            let settings = SettingsStore(defaults: defaults, secrets: MemorySecretStore()).loadSettings()
+
+            XCTAssertEqual(settings.updateMode, .manual, "\(mode)")
+            XCTAssertEqual(settings.updateTime, .defaultUpdateTime, "\(time)")
+        }
     }
 
     func testCommandPrefixDefaultsToMiseUntilSavedEvenWhenCleared() {
@@ -30,13 +71,16 @@ final class SettingsStoreTests: XCTestCase {
             stopTimeoutSeconds: 45,
             restartTimeoutMinutes: 5,
             startOnLaunch: true,
-            developmentMode: true
+            developmentMode: true,
+            updateMode: .whenIdle,
+            updateTime: TimeOfDay(hour: 4, minute: 15)
         )
 
         SettingsStore(defaults: defaults, secrets: MemorySecretStore()).saveSettings(settings)
         let reopened = SettingsStore(defaults: defaults, secrets: MemorySecretStore())
 
         XCTAssertEqual(reopened.loadSettings(), settings)
+        XCTAssertEqual(settings.trimmed(), settings, "trimming keeps every setting")
     }
 
     func testDevelopmentModeIsOffUntilSaved() {
@@ -221,6 +265,8 @@ final class SettingsStoreTests: XCTestCase {
                 SettingsStore.Key.restartTimeoutMinutes,
                 SettingsStore.Key.startOnLaunch,
                 SettingsStore.Key.developmentMode,
+                SettingsStore.Key.updateMode,
+                SettingsStore.Key.updateTime,
             ]
         )
         for value in defaults.values.values {

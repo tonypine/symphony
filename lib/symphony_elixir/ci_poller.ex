@@ -32,6 +32,10 @@ defmodule SymphonyElixir.CiPoller do
   # Coalesces the burst of deliveries a CI run sends (one per check run and suite) into one poll.
   @webhook_debounce_ms 1_000
   @settled_conclusions ["SUCCESS", "FAILURE"]
+  # Checks only a person can clear: the `protected-paths` workflow's job fails a PR whose own
+  # commits change an agent-protected path until a person adds the waiver label.
+  @human_only_checks ["protected paths"]
+  @waiver_label "protected-paths-approved"
 
   defmodule State do
     @moduledoc false
@@ -470,6 +474,7 @@ defmodule SymphonyElixir.CiPoller do
          {:ok, existing} <- list_ci_checks(run_store, repo_key) do
       existing_by_issue = Map.new(existing, &{Map.get(&1, :issue_id), &1})
       issues = Enum.filter(issues, &match?(%Issue{}, &1))
+      Enum.each(issues, &warn_if_pr_url_lost(&1, Map.get(existing_by_issue, &1.id)))
 
       discovered = Enum.count(issues, &persist_discovered_ci_check?(&1, runs, existing_by_issue, run_store, repo_key, now))
       observe_gate_decisions(settings, repo_key, issues, runs, existing, opts)
@@ -477,6 +482,21 @@ defmodule SymphonyElixir.CiPoller do
       {:ok, discovered, auto_review_issues(settings, issues), auto_merge_issue_ids(settings, issues)}
     end
   end
+
+  # An issue the poller watches a PR for whose Linear attachments now show none (many other
+  # attachments once pushed it out of the page read): the agent runner reads the PR from the issue,
+  # so its CI and review checks would skip it. Issues that never had a PR, such as a final
+  # verification ticket, have no CI check record and stay quiet.
+  defp warn_if_pr_url_lost(%Issue{} = issue, %{pr_url: pr_url}) when is_binary(pr_url) do
+    if is_nil(first_pr_url(issue)) do
+      Logger.warning(
+        "issue_id=#{issue.id} issue_identifier=#{issue.identifier} is in #{issue.state} with no PR URL on its Linear attachments; " <>
+          "Symphony still watches CI on #{pr_url} for it"
+      )
+    end
+  end
+
+  defp warn_if_pr_url_lost(_issue, _existing), do: :ok
 
   # Records the human's decision on gate verdicts whose issue left In Review (or Human Review). It
   # runs before the checks are processed, so the CI check record of a PR merged since the last
@@ -637,6 +657,9 @@ defmodule SymphonyElixir.CiPoller do
     record = reset_for_new_sha(record, commit_sha, opts, now)
 
     cond do
+      Enum.all?(failed_checks, &human_only_check?/1) ->
+        await_waiver(record, ci_status, failed_checks, opts, now)
+
       flaky_retry?(settings) and not rerun_attempted_for_sha?(record, commit_sha) ->
         rerun_failed_ci(record, ci_status, failed_checks, settings, opts, now)
 
@@ -658,6 +681,25 @@ defmodule SymphonyElixir.CiPoller do
       true ->
         dispatch_ci_failure(record, ci_status, failed_checks, settings, opts, now)
     end
+  end
+
+  # A fix run can't clear a human-only check, so the issue stays where it is (the agent that
+  # changed the protected path handed it to a person) and no fix attempt is spent. The next
+  # green poll resumes the normal flow. A failure stored for an earlier head's fix run is
+  # cleared, so it isn't read as pending rework or put into a later prompt.
+  defp await_waiver(record, ci_status, failed_checks, opts, now) do
+    issue_id = Map.get(record, :issue_id)
+    commit_sha = Map.get(ci_status, :commit_sha)
+
+    unless Map.get(record, :status) == "awaiting_waiver" and Map.get(record, :last_observed_sha) == commit_sha do
+      Logger.info(
+        "CI #{Map.get(record, :issue_identifier)}: only #{Enum.map_join(failed_checks, ", ", &Map.get(&1, :name))} failed; waiting for a person to add the #{@waiver_label} label, no CI-fix run issue_id=#{issue_id} pr_url=#{Map.get(record, :pr_url)} commit_sha=#{commit_sha}"
+      )
+    end
+
+    waiting = %{status: "awaiting_waiver", failed_checks: failed_checks, ci_failure: nil, log_excerpt: nil}
+    attrs = ci_status_attrs(record, ci_status, waiting, now)
+    complete_ci_update(opts, record, attrs, {:awaiting_waiver, issue_id, commit_sha})
   end
 
   # On a new head SHA, the previous SHA's dispatch/rerun history no longer applies:
@@ -1361,6 +1403,14 @@ defmodule SymphonyElixir.CiPoller do
         :pending
     end
   end
+
+  @doc "Whether only a person can clear this failed check, so a CI-fix run must leave it alone."
+  @spec human_only_check?(map()) :: boolean()
+  def human_only_check?(check) when is_map(check), do: Map.get(check, :name) in @human_only_checks
+
+  @doc "The label a person adds to waive the `protected paths` check."
+  @spec waiver_label() :: String.t()
+  def waiver_label, do: @waiver_label
 
   defp failed_checks(ci_status) do
     ci_status
