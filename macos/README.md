@@ -511,7 +511,9 @@ runs.
 
 When a newer release is out, the menu shows **Update available: vX (N changes)**. Choose **Update to vX**:
 the app downloads and verifies it, lets agent runs finish, swaps itself for the new version and relaunches,
-with Symphony running again. The steps are under [Install an update](#install-an-update). The app can also
+with Symphony running again. The steps are under [Install an update](#install-an-update). The relaunched
+app then [checks that Symphony is healthy](#health-check-and-automatic-rollback) on the new version and puts
+the previous version back by itself when it isn't. The app can also
 [install updates by itself](#install-updates-automatically) when idle or at a set time. You can also
 update by running the [install script](#with-the-install-script) again after quitting the app.
 
@@ -544,6 +546,9 @@ release's build as skipped in UserDefaults (`skippedReleases`), so it stays skip
 - Installing it by hand with Update to vX clears the skip.
 - A skip covers that one build. A newer release is offered as usual, with its own Skip This Version.
 
+A release an update [rolled back](#health-check-and-automatic-rollback) is recorded the same way, with the
+reason "rolled back": the line reads **Update rolled back: vX**, and **Retry vX** replaces Update to vX.
+
 ### Install an update
 
 **Update to vX** shows under Update available. After you confirm, the line under it shows each step:
@@ -566,9 +571,10 @@ release's build as skipped in UserDefaults (`skippedReleases`), so it stays skip
    `Symphony (previous).app` next to it (replacing an older one), moves the new app into place, and opens
    it. If a move fails, it puts the old app back and opens that instead. Its log is
    `~/Library/Caches/com.tonypine.symphony.bar/update-helper.log`.
-6. **Bring Symphony back:** the relaunched app starts Symphony from its new embedded binary, which removes
-   the old version's unpacked release, and, once it answers, resumes dispatch if the update paused it. A
-   pause you made before the update stays. If the helper had to put the old app back, an alert says so.
+6. **Bring Symphony back:** the relaunched app runs the [health check](#health-check-and-automatic-rollback):
+   it checks `symphony.yml` with its new embedded binary, starts Symphony from it, which removes the old
+   version's unpacked release, and, once it answers, resumes dispatch if the update paused it. A pause you
+   made before the update stays. If the helper had to put the old app back, an alert says so.
 
 Update is disabled, with the reason under it, when:
 
@@ -583,6 +589,50 @@ release with the [install script](#with-the-install-script) instead; it keeps th
 `Symphony (previous).app` too.
 
 To undo an update, see [Rollback](#rollback).
+
+### Health check and automatic rollback
+
+After every update, by hand or automatic, the relaunched app checks that Symphony works on the new version.
+The line under the update items shows "Checking vX: …" while it does:
+
+1. **Config check:** `symphony check --config <symphony.yml>` with the new embedded binary must pass, so a
+   config error such as `workspaces.repo does not exist` is caught. Symphony starts only once it passes.
+2. **Answer:** when the app starts Symphony after the update (it ran before the update, or "Start Symphony
+   when the app opens" is on), Symphony must answer on its control URL within 2 minutes of starting. When
+   it doesn't start Symphony, only the config check runs.
+3. **No crash loop:** for 10 minutes after the update, an unexpected exit of Symphony starts it again (each
+   start must answer within 2 minutes), and the third unexpected exit in those 10 minutes fails the check.
+   A Stop you choose doesn't count. Outside those 10 minutes the app doesn't start Symphony again after an
+   unexpected exit, as before.
+
+If any of these fails, the app rolls back by itself:
+
+1. It **pins** the new version: the build is recorded in the [skip list](#skip-a-release) as rolled back,
+   before anything moves.
+2. It stops Symphony if it runs, starts the update helper in reverse and quits. The helper moves the new
+   version aside as `Symphony (rolled back).app`, out of the previous version's place, moves
+   `Symphony (previous).app` back to `Symphony.app`, and opens it. Its log is
+   `~/Library/Caches/com.tonypine.symphony.bar/rollback-helper.log`.
+3. The restored app starts Symphony if it ran before the update and resumes dispatch if the update paused
+   it. The line under the update items says which version was rolled back and why, for example
+   "v0.0.1.43 was rolled back: symphony check failed: …", naming Symphony's log when Symphony didn't
+   answer or kept exiting. The restored app doesn't check itself, so a rollback can't loop.
+
+The pinned version shows as **Update rolled back: vX** and is never installed by itself; a newer release
+is, as usual. **Retry vX** takes the place of Update to vX: after the same confirmation it clears the pin
+and installs vX again, health check included. Installing it by hand any other way clears the pin too.
+
+When there is no `Symphony (previous).app`, or the helper can't start or can't swap the apps, the app
+doesn't roll back. The line under the update items says so, with how to do it by hand (see
+[Rollback](#rollback)), and leaves Symphony as it is. A failed swap relaunches the new version, which says
+so and doesn't start Symphony unless "Start Symphony when the app opens" is on. The version stays pinned.
+
+Automatic rollback only fully protects an update from a version that already has it: the version put back
+must read the pin and what the failed version recorded. A version from before it is still put back, but it
+doesn't say why, doesn't bring Symphony and dispatch back as they were, and may offer the rolled-back release
+as a normal update again.
+
+`Symphony (previous).app` is never deleted by an update or a health check, whether it passes or not.
 
 ### Install updates automatically
 
@@ -606,7 +656,8 @@ itself through the same steps as [Install an update](#install-an-update), withou
 
 In both modes:
 
-- A release you [skip](#skip-a-release) is never installed by itself. A newer release is.
+- A release you [skip](#skip-a-release), or one an update [rolled back](#health-check-and-automatic-rollback),
+  is never installed by itself. A newer release is.
 - Nothing installs while Update is disabled (a development build, Development mode, no update signing key,
   or an app folder you can't write to).
 - A pause you made before the update stays after it, as with Update to vX. Cancel Update stops waiting.
@@ -619,7 +670,8 @@ In both modes:
 
 Each update, and each install over an older version, keeps the version it replaced next to the app as
 `Symphony (previous).app`, for example `~/Applications/Symphony (previous).app`. Only one previous version is
-kept. To go back to it:
+kept. When an update fails its [health check](#health-check-and-automatic-rollback) the app goes back to it by
+itself, moving the failed version aside as `Symphony (rolled back).app`. To go back to it by hand:
 
 1. Choose **Quit** from the menu (this stops Symphony).
 2. Swap the two apps, in Finder or a terminal:
@@ -635,8 +687,9 @@ kept. To go back to it:
    copied into the file, so a variable changed in Settings since then has its old value there. Delete
    `Symphony (rolled back).app` once you no longer need it.
 
-The app then offers the newer release again as an update; choose **Skip This Version** to stop offering it
-(see [Skip a release](#skip-a-release)). To install an older release than the previous
+After a manual rollback the app offers the newer release again as an update; choose **Skip This Version** to
+stop offering it (see [Skip a release](#skip-a-release)). After an automatic one it is already pinned, with
+**Retry vX** to install it again. To install an older release than the previous
 one, quit the app and run the install script with `SYMPHONY_RELEASE_TAG` set to that release's tag (see
 [With the install script](#with-the-install-script)).
 

@@ -42,6 +42,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private let updateLineItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     /// Set when the app started Symphony after an update: resume dispatch once it answers.
     private var resumeWhenAnswering = false
+    /// True until the dispatch an update paused is resumed: kept across the health check's restarts of Symphony.
+    private var resumeAfterUpdate = false
+    /// Checks Symphony on the build an update relaunched, and asks for a rollback when it isn't healthy.
+    private var health = UpdateHealthCheck()
+    /// The update the health check is about.
+    private var checkedUpdate: PendingUpdate?
     /// Decides when Automatically when idle or Automatically at a set time installs a release.
     private var autoUpdater = AutoUpdater()
     /// Fires at the set time, so the attempt doesn't wait for the next status poll.
@@ -138,15 +144,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             return machine.nextPollInterval
         }
 
-        // After an update, bring Symphony back as it was before the app quit.
-        let pendingUpdate = updater.pending.take()
-        if let pendingUpdate {
-            updater.removeDownloads()
-            if !pendingUpdate.succeeded(runningBuild: updates.current.build) {
-                let message = UpdateMenu.rolledBackMessage(pendingUpdate, logPath: updater.helperLogPath)
-                DispatchQueue.main.async { SymphonyRunner.showAlert(title: UpdateMenu.failedTitle, body: message) }
-            }
-        }
+        // After an update or a rollback, bring Symphony back as it was before the app quit.
+        let startAfterUpdate = relaunched(
+            UpdateRelaunch(
+                pending: updater.pending.take(),
+                rollback: updater.rollbacks.take(),
+                runningBuild: updates.current.build
+            )
+        )
 
         // First run: nothing to start yet, so ask for settings. Reads only the settings, not the secrets.
         let store = AppStores.current.settingsStore()
@@ -154,10 +159,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         let settings = store.loadSettings()
         if settings.needsSetup {
             settingsWindow.show()
-        } else if settings.startOnLaunch || pendingUpdate?.startSymphony == true {
+        } else if let checkedUpdate {
+            // Check the new build before Symphony starts on it; the check starts it once symphony.yml passes.
+            performHealth(
+                health.begin(version: checkedUpdate.version, startsSymphony: settings.startOnLaunch || startAfterUpdate)
+            )
+        } else if settings.startOnLaunch || startAfterUpdate {
             // Wait for the first poll, so a Symphony already running from the CLI is attached to, not started twice.
             startWhenStopped = true
-            resumeWhenAnswering = pendingUpdate?.resumeDispatch == true
+            resumeWhenAnswering = resumeAfterUpdate
         }
         poller.start()
 
@@ -165,6 +175,105 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         showUpdate(nil, manual: false)
         updates.start()
         QAScriptDriver.startIfScripted(menu: menu) { [weak self] in self?.runner.pid }
+    }
+
+    /// Acts on what the quitting app recorded before an update or a rollback, and returns whether Symphony ran before
+    /// the update, so the app starts it.
+    private func relaunched(_ relaunch: UpdateRelaunch) -> Bool {
+        switch relaunch {
+        case .none:
+            return false
+        case let .notReplaced(pending):
+            updater.removeDownloads()
+            let message = UpdateMenu.rolledBackMessage(pending, logPath: updater.helperLogPath)
+            DispatchQueue.main.async { SymphonyRunner.showAlert(title: UpdateMenu.failedTitle, body: message) }
+            resumeAfterUpdate = pending.resumeDispatch
+            return pending.startSymphony
+        case let .checkHealth(pending):
+            updater.removeDownloads()
+            checkedUpdate = pending
+            resumeAfterUpdate = pending.resumeDispatch
+            return pending.startSymphony
+        case let .rolledBack(record):
+            updater.notice = UpdateMenu.rolledBackLine(record)
+            resumeAfterUpdate = record.resumeDispatch
+            return record.startSymphony
+        case let .rollbackFailed(record):
+            // Still the build that failed its check: say how to roll back by hand, and don't start Symphony for the
+            // update. Start Symphony at launch still applies.
+            updater.notice = UpdateMenu.rollbackFailedLine(
+                version: record.version,
+                reason: record.reason,
+                problem: .swapFailed(logPath: updater.rollbackLogPath)
+            )
+            return false
+        }
+    }
+
+    private func handleHealth(_ event: UpdateHealthCheck.Event) {
+        let phase = health.phase
+        let effects = health.handle(event)
+        // Most polls change nothing; only a new step or an effect refreshes the update items.
+        guard health.phase != phase || !effects.isEmpty else { return }
+        performHealth(effects)
+    }
+
+    /// Carries out what the update's health check asks for.
+    private func performHealth(_ effects: [UpdateHealthCheck.Effect]) {
+        for effect in effects {
+            switch effect {
+            case .checkConfig:
+                runner.checkLaunch { [weak self] launch in
+                    switch launch {
+                    case let .success(launch):
+                        Task { self?.handleHealth(.configChecked(await ConfigCheck.run(launch))) }
+                    case let .failure(error):
+                        self?.handleHealth(.configChecked(.failed(error.localizedDescription)))
+                    }
+                }
+            case .start:
+                // On the next poll, so a Symphony already running from the CLI is attached to, not started twice.
+                startWhenStopped = true
+                resumeWhenAnswering = resumeAfterUpdate
+                poller.pollNow()
+            case let .rollBack(failure):
+                rollBack(failure)
+            }
+        }
+        showUpdateItems()
+    }
+
+    /// The updated build isn't healthy: pins it, stops Symphony and hands over to the helper, which puts
+    /// `Symphony (previous).app` back and relaunches it. Without a previous app, or when the helper can't start, the
+    /// menu says how to roll back by hand.
+    private func rollBack(_ failure: UpdateHealthFailure) {
+        guard let update = checkedUpdate else { return }
+        let record = RollbackRecord(
+            build: update.toBuild,
+            version: update.version,
+            reason: failure.reason(logPath: runner.logPath),
+            startSymphony: update.startSymphony,
+            resumeDispatch: resumeAfterUpdate
+        )
+        startWhenStopped = false
+        resumeWhenAnswering = false
+        guard updater.hasPreviousApp else {
+            rollbackFailed(record, .noPreviousApp)
+            return
+        }
+        runner.stop { [weak self] in
+            guard let self else { return }
+            if let problem = updater.rollBack(record) {
+                rollbackFailed(record, problem)
+            } else {
+                NSApp.terminate(nil)
+            }
+        }
+    }
+
+    private func rollbackFailed(_ record: RollbackRecord, _ problem: RollbackProblem) {
+        updater.pin(record)
+        updater.notice = UpdateMenu.rollbackFailedLine(version: record.version, reason: record.reason, problem: problem)
     }
 
     /// Quitting stops an owned Symphony first, after confirming when agent runs are active.
@@ -257,6 +366,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         runner.start { [weak self] error in
             guard let self, let error else { return }
             resumeWhenAnswering = false
+            handleHealth(.notStarted)
             SymphonyRunner.showAlert(title: "Couldn't start Symphony", body: error.localizedDescription)
             if (error as? LaunchProblem)?.isFixedInSettings == true {
                 settingsWindow.show()
@@ -505,7 +615,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private var autoUpdateContext: AutoUpdater.Context {
         let settings = AppStores.current.settingsStore().loadSettings()
         let busy = restarting || updater.isUpdating || runner.isStarting || runner.isStopping || startWhenStopped
-            || resumeWhenAnswering || controlInFlight != nil
+            || resumeWhenAnswering || controlInFlight != nil || health.isChecking
         return AutoUpdater.Context(
             mode: settings.updateMode,
             time: settings.updateTime,
@@ -559,14 +669,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         let offer = release.map { UpdateOffer($0, skips: updater.skips) }
         if let offer {
             updateAvailableItem.title = offer.title(current: updates.current)
-            installUpdateItem.title = updater.isUpdating ? UpdateMenu.installingTitle : UpdateMenu.installTitle(offer.release)
+            installUpdateItem.title = updater.isUpdating ? UpdateMenu.installingTitle : offer.installTitle
         }
         updateAvailableItem.isHidden = release == nil
         installUpdateItem.isHidden = release == nil
         skipUpdateItem.isHidden = offer?.offersSkip != true
         releaseNotesItem.isHidden = release == nil
 
-        let line = updater.menuLine ?? (release == nil ? nil : updateBlocker)
+        let line = updater.menuLine ?? health.menuLine ?? (release == nil ? nil : updateBlocker)
         updateLineItem.title = line ?? ""
         updateLineItem.isHidden = line == nil
         updateResultItem.isHidden = updateResultItem.title.isEmpty
@@ -580,6 +690,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private func resumeIfAnswering(_ poll: StatusPoll) {
         guard resumeWhenAnswering, runner.isRunning, case .state = poll else { return }
         resumeWhenAnswering = false
+        resumeAfterUpdate = false
         if StatusMenu.canResume(machine.status) { send(.resume) }
     }
 
@@ -597,11 +708,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         case .started:
             // A Pause or Resume error was about the Symphony that was running before.
             controlError = nil
-        case let .exited(exit, _):
+            handleHealth(.started)
+        case let .exited(exit, requested):
             controlError = nil
             // Before the restart machine sees the exit, which may start Symphony again for a failed update.
             resumeWhenAnswering = false
             restarter.handle(.exited(exit))
+            // Within the window after an update, an unexpected exit starts Symphony again, or rolls back.
+            handleHealth(.exited(requested: requested))
         case let .polled(poll):
             restarter.handle(.polled(poll))
             for notice in usageLimitNotices.notices(for: poll) {
@@ -613,6 +727,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         switch event {
         case let .polled(poll):
             // Before a start below, so a poll taken before Symphony started can't count as its answer.
+            handleHealth(.polled(poll))
             resumeIfAnswering(poll)
             if startWhenStopped {
                 startWhenStopped = false
@@ -620,6 +735,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                     startSymphony(nil)
                 } else {
                     resumeWhenAnswering = false
+                    handleHealth(.notStarted)
                 }
             }
             autoUpdateTick()
