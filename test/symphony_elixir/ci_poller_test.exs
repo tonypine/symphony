@@ -852,6 +852,17 @@ defmodule SymphonyElixir.CiPollerTest do
 
     assert prompt =~
              "`protected paths` is not yours to fix: it fails because this PR's own commits change an agent-protected path, and only a person clears it by adding the `protected-paths-approved` label. Do not edit or revert the protected change; fix only the other failed checks."
+
+    # The fix run pushes a head where only protected paths still fails: the old failure is no
+    # longer pending, so nothing reads it as rework or puts it into a later prompt.
+    Application.put_env(:symphony_elixir, :ci_test_status, protected_paths_failed_status("def456"))
+
+    assert {:ok, %{actions: [{:awaiting_waiver, "issue-2401", "def456"}]}} =
+             CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: DateTime.add(now, 10, :minute))
+
+    assert CiPoller.pending_ci_failure("issue-2401") == nil
+    assert [%{status: "awaiting_waiver"} = record] = RunStore.list_ci_checks()
+    refute Map.get(record, :log_excerpt)
   end
 
   test "pending ci failure normalizes persisted string-key metadata" do

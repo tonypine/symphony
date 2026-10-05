@@ -669,7 +669,8 @@ defmodule SymphonyElixir.CiPoller do
 
   # A fix run can't clear a human-only check, so the issue stays where it is (the agent that
   # changed the protected path handed it to a person) and no fix attempt is spent. The next
-  # green poll resumes the normal flow.
+  # green poll resumes the normal flow. A failure stored for an earlier head's fix run is
+  # cleared, so it isn't read as pending rework or put into a later prompt.
   defp await_waiver(record, ci_status, failed_checks, opts, now) do
     issue_id = Map.get(record, :issue_id)
     commit_sha = Map.get(ci_status, :commit_sha)
@@ -680,7 +681,8 @@ defmodule SymphonyElixir.CiPoller do
       )
     end
 
-    attrs = ci_status_attrs(record, ci_status, %{status: "awaiting_waiver", failed_checks: failed_checks}, now)
+    waiting = %{status: "awaiting_waiver", failed_checks: failed_checks, ci_failure: nil, log_excerpt: nil}
+    attrs = ci_status_attrs(record, ci_status, waiting, now)
     complete_ci_update(opts, record, attrs, {:awaiting_waiver, issue_id, commit_sha})
   end
 
