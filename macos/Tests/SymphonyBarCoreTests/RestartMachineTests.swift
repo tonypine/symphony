@@ -348,12 +348,16 @@ final class RestartMachineTests: XCTestCase {
 
     // MARK: Update
 
-    private func beginUpdate(alreadyPaused: Bool = false) -> (RestartMachine, [Effect]) {
+    private func beginUpdate(
+        alreadyPaused: Bool = false,
+        purpose: RestartMachine.Purpose = .update,
+        runsTimeout: TimeInterval? = nil
+    ) -> (RestartMachine, [Effect]) {
         var machine = RestartMachine()
         let effects = machine.begin(
             alreadyPaused: alreadyPaused,
-            purpose: .update,
-            runsTimeout: runsTimeout,
+            purpose: purpose,
+            runsTimeout: runsTimeout ?? self.runsTimeout,
             logPath: log,
             now: began
         )
@@ -450,5 +454,112 @@ final class RestartMachineTests: XCTestCase {
         XCTAssertEqual(machine.handle(.exited(.exited(1)), now: began), [])
         XCTAssertFalse(machine.isRestarting)
         XCTAssertEqual(machine.menuLine, "Update cancelled: Symphony \(ChildExit.exited(1).summary)")
+    }
+
+    // MARK: Automatic update
+
+    /// An automatic update that paused dispatch and is waiting for agent runs.
+    private func waitingAutomatic(alreadyPaused: Bool = false, runsTimeout: TimeInterval? = nil) -> RestartMachine {
+        var (machine, _) = beginUpdate(alreadyPaused: alreadyPaused, purpose: .automaticUpdate, runsTimeout: runsTimeout)
+        _ = machine.handle(.configChecked(.passed), now: began)
+        if !alreadyPaused { _ = machine.handle(.controlFinished(.pause, .done), now: began) }
+        return machine
+    }
+
+    func testAutomaticUpdateDrainsThenStopsLikeAnUpdate() {
+        var machine = waitingAutomatic()
+        XCTAssertTrue(machine.purpose.isUpdate)
+        XCTAssertEqual(machine.handle(.polled(pausedPoll(running: 1)), now: began.addingTimeInterval(60)), [])
+        XCTAssertEqual(machine.menuLine, "Waiting for 1 agent run…")
+        XCTAssertEqual(machine.handle(.polled(pausedPoll(running: 0)), now: began.addingTimeInterval(120)), [.stop])
+        XCTAssertEqual(machine.menuLine, "Updating: stopping Symphony…")
+
+        XCTAssertEqual(machine.handle(.exited(.signaled(15)), now: began), [.stopped])
+        XCTAssertTrue(machine.pausedByRestart, "the relaunched app resumes the dispatch the update paused")
+        XCTAssertFalse(machine.postponed)
+    }
+
+    func testAutomaticUpdateNeverOffersUpdateNowAnyway() {
+        var machine = waitingAutomatic()
+        // A poll that may predate the pause, then the timeout passes while dispatch isn't shown paused.
+        _ = machine.handle(.polled(.unreachable), now: began.addingTimeInterval(runsTimeout * 2))
+        XCTAssertFalse(machine.offersRestartNow)
+
+        XCTAssertEqual(machine.handle(.restartNow, now: began.addingTimeInterval(runsTimeout * 2)), [])
+        XCTAssertTrue(machine.canCancel, "it still waits, and Cancel Update stays")
+    }
+
+    func testAutomaticUpdateGivesUpAfterTheTimeoutAndResumesTheDispatchItPaused() {
+        var machine = waitingAutomatic()
+        XCTAssertEqual(machine.handle(.polled(pausedPoll(running: 2)), now: began.addingTimeInterval(runsTimeout - 1)), [])
+
+        let effects = machine.handle(.polled(pausedPoll(running: 2)), now: began.addingTimeInterval(runsTimeout))
+
+        XCTAssertEqual(effects, [.send(.resume)], "no stop: the runs are never interrupted")
+        XCTAssertTrue(machine.postponed)
+        XCTAssertEqual(machine.menuLine, "Updating: resuming dispatch…")
+        XCTAssertEqual(machine.handle(.controlFinished(.resume, .done), now: began.addingTimeInterval(runsTimeout)), [])
+        XCTAssertFalse(machine.isRestarting)
+        XCTAssertEqual(machine.menuLine, "Update postponed: agent runs didn't finish within 30 minutes")
+    }
+
+    func testAutomaticUpdateGivingUpKeepsAPauseTheUserMade() {
+        var machine = waitingAutomatic(alreadyPaused: true)
+
+        let effects = machine.handle(.polled(pausedPoll(running: 1)), now: began.addingTimeInterval(runsTimeout))
+
+        XCTAssertEqual(effects, [], "dispatch the user paused stays paused")
+        XCTAssertFalse(machine.isRestarting)
+        XCTAssertTrue(machine.postponed)
+        XCTAssertFalse(machine.pausedByRestart)
+    }
+
+    func testAutomaticUpdateWithoutTimeoutGivesUpAsSoonAsARunIsActive() {
+        var machine = waitingAutomatic(runsTimeout: 0)
+        // The first poll may predate the pause: it doesn't count.
+        XCTAssertEqual(machine.handle(.polled(dispatchingPoll(running: 1)), now: began), [])
+
+        XCTAssertEqual(machine.handle(.polled(pausedPoll(running: 1)), now: began), [.send(.resume)])
+        XCTAssertTrue(machine.postponed)
+        _ = machine.handle(.controlFinished(.resume, .done), now: began)
+        XCTAssertEqual(machine.menuLine, "Update postponed: an agent run is active")
+    }
+
+    func testAutomaticUpdateTimeoutOfOneMinuteIsSingular() {
+        var machine = waitingAutomatic(alreadyPaused: true, runsTimeout: 60)
+
+        _ = machine.handle(.polled(pausedPoll(running: 1)), now: began.addingTimeInterval(60))
+
+        XCTAssertEqual(machine.menuLine, "Update postponed: agent runs didn't finish within 1 minute")
+    }
+
+    func testAutomaticUpdateFailuresShowNoAlert() {
+        var (machine, _) = beginUpdate(purpose: .automaticUpdate)
+        XCTAssertEqual(machine.handle(.configChecked(.failed("Config error: unknown key")), now: began), [])
+        XCTAssertFalse(machine.isRestarting)
+        XCTAssertEqual(machine.menuLine, "Config error: unknown key")
+        XCTAssertFalse(machine.postponed)
+
+        (machine, _) = beginUpdate(purpose: .automaticUpdate)
+        _ = machine.handle(.configChecked(.passed), now: began)
+        XCTAssertEqual(machine.handle(.controlFinished(.pause, .failed("HTTP 500")), now: began), [])
+        XCTAssertEqual(machine.menuLine, "HTTP 500")
+    }
+
+    func testABeginAfterAPostponedUpdateStartsAfresh() {
+        var machine = waitingAutomatic(alreadyPaused: true, runsTimeout: 0)
+        _ = machine.handle(.polled(pausedPoll(running: 1)), now: began)
+        XCTAssertTrue(machine.postponed)
+
+        _ = machine.begin(alreadyPaused: true, purpose: .automaticUpdate, runsTimeout: 0, logPath: log, now: began)
+
+        XCTAssertFalse(machine.postponed)
+        XCTAssertNil(machine.error)
+    }
+
+    func testOnlyRestartIsNotAnUpdate() {
+        XCTAssertFalse(RestartMachine.Purpose.restart.isUpdate)
+        XCTAssertTrue(RestartMachine.Purpose.update.isUpdate)
+        XCTAssertTrue(RestartMachine.Purpose.automaticUpdate.isUpdate)
     }
 }
