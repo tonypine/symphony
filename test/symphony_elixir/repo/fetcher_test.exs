@@ -24,7 +24,7 @@ defmodule SymphonyElixir.Repo.FetcherTest do
 
     assert Fetcher.fetch_origin(repo, server: server, git: git) == {"From origin\n", 0}
     assert [call] = calls(root)
-    assert call =~ "-C #{repo} fetch origin"
+    assert call =~ "-C #{repo} fetch --upload-pack=git-upload-pack origin"
   end
 
   test "a fetch asked for while one of the same repo runs waits for it and gets its result", %{

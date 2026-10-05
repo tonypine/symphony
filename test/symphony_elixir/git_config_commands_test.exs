@@ -1,10 +1,10 @@
-defmodule SymphonyElixir.GitFilterDriversTest do
+defmodule SymphonyElixir.GitConfigCommandsTest do
   use ExUnit.Case, async: true
 
-  alias SymphonyElixir.GitFilterDrivers
+  alias SymphonyElixir.GitConfigCommands
 
   setup do
-    root = Path.join(System.tmp_dir!(), "symphony-git-filter-drivers-#{System.unique_integer([:positive])}")
+    root = Path.join(System.tmp_dir!(), "symphony-git-config-commands-#{System.unique_integer([:positive])}")
     File.mkdir_p!(root)
     on_exit(fn -> File.rm_rf(root) end)
     {:ok, root: root}
@@ -39,7 +39,7 @@ defmodule SymphonyElixir.GitFilterDriversTest do
         "local\0file:.git/config\0filter.lfs.required\0" <>
         entry("file:.git/config", "core.bare", "false")
 
-    assert GitFilterDrivers.config_args(["-C", "/repo", "status"], [], reader({config, 0, ""})) ==
+    assert GitConfigCommands.config_args(["-C", "/repo", "status"], [], reader({config, 0, ""})) ==
              {:ok, driver_args("Odd Name.v2") ++ driver_args("lfs")}
 
     assert_received {:git, ["-C", "/repo", "config", "-z", "--show-scope", "--show-origin", "--get-regexp", _pattern], []}
@@ -47,34 +47,66 @@ defmodule SymphonyElixir.GitFilterDriversTest do
     refute_received {:git, _args, _opts}
   end
 
+  test "replaces every merge driver the config defines with git's own merge" do
+    config =
+      entry("file:.git/config", "merge.ours.driver", "touch /tmp/pwned") <>
+        entry("file:.git/config", "merge.ours.name", "keep ours") <>
+        entry("file:.git/config", "filter.lfs.smudge", "git-lfs smudge -- %f")
+
+    assert GitConfigCommands.config_args(["-C", "/repo", "merge", "--no-commit", "main"], [], reader({config, 0, ""})) ==
+             {:ok, driver_args("lfs") ++ ["-c", "merge.ours.driver=git merge-file --marker-size=%L -L %X -L %S -L %Y %A %O %B"]}
+
+    config = entry("file:.git/config", "merge.a=b.driver", "touch /tmp/pwned")
+    assert {:error, message, 128} = GitConfigCommands.config_args(["merge", "main"], [], reader({config, 0, ""}))
+    assert message =~ ~s(merge driver "a=b")
+  end
+
+  test "turns off diff drivers and the config's pack commands right after the subcommand" do
+    no_diff_drivers = ["--no-ext-diff", "--no-textconv"]
+
+    assert GitConfigCommands.subcommand_args(["-C", "/repo", "-c", "a.b=c", "--no-pager", "diff", "--stat", "x"]) ==
+             ["-C", "/repo", "-c", "a.b=c", "--no-pager", "diff"] ++ no_diff_drivers ++ ["--stat", "x"]
+
+    assert GitConfigCommands.subcommand_args(["log", "-p"]) == ["log" | no_diff_drivers] ++ ["-p"]
+    assert GitConfigCommands.subcommand_args(["show", "HEAD"]) == ["show" | no_diff_drivers] ++ ["HEAD"]
+    assert GitConfigCommands.subcommand_args(["fetch", "origin"]) == ["fetch", "--upload-pack=git-upload-pack", "origin"]
+    assert GitConfigCommands.subcommand_args(["ls-remote", "origin"]) == ["ls-remote", "--upload-pack=git-upload-pack", "origin"]
+    assert GitConfigCommands.subcommand_args(["pull"]) == ["pull", "--upload-pack=git-upload-pack"]
+    assert GitConfigCommands.subcommand_args(["push", "origin", "b"]) == ["push", "--receive-pack=git-receive-pack", "origin", "b"]
+
+    for args <- [["-C", "/repo", "status"], ["-C", "/repo"], [], ["merge", "diff"]] do
+      assert GitConfigCommands.subcommand_args(args) == args
+    end
+  end
+
   test "reads the config with the command's global options and options" do
     args = ["-c", "user.name=x", "--no-pager", "--work-tree", "/tree", "-C", "/repo", "checkout", "-f"]
-    assert GitFilterDrivers.config_args(args, [cd: "/", env: [{"GIT_INDEX_FILE", "/i"}]], reader({"", 1, ""})) == {:ok, []}
+    assert GitConfigCommands.config_args(args, [cd: "/", env: [{"GIT_INDEX_FILE", "/i"}]], reader({"", 1, ""})) == {:ok, []}
 
     assert_received {:git, ["-c", "user.name=x", "--no-pager", "--work-tree", "/tree", "-C", "/repo", "config" | _rest], [cd: "/", env: [{"GIT_INDEX_FILE", "/i"}]]}
 
     # No subcommand: git prints its usage, and the scan still reads the config first.
-    assert GitFilterDrivers.config_args(["-C", "/repo"], [], reader({"", 1, ""})) == {:ok, []}
+    assert GitConfigCommands.config_args(["-C", "/repo"], [], reader({"", 1, ""})) == {:ok, []}
     assert_received {:git, ["-C", "/repo", "config" | _rest], []}
   end
 
   test "reads no config for a subcommand that never touches work-tree content" do
     for args <- [["-C", "/repo", "rev-parse", "HEAD"], ["fetch", "origin"], ["show", "HEAD:README.md"]] do
-      assert GitFilterDrivers.config_args(args, [], reader({"", 128, ""})) == {:ok, []}
+      assert GitConfigCommands.config_args(args, [], reader({"", 128, ""})) == {:ok, []}
     end
 
     refute_received {:git, _args, _opts}
   end
 
   test "refuses the command when the config can't be read" do
-    assert GitFilterDrivers.config_args(["-C", "/missing", "status"], [], reader({"", 128, "fatal: cannot change to '/missing'\n"})) ==
+    assert GitConfigCommands.config_args(["-C", "/missing", "status"], [], reader({"", 128, "fatal: cannot change to '/missing'\n"})) ==
              {:error, "symphony: refusing to run git, reading its config failed: fatal: cannot change to '/missing'\n", 128}
   end
 
   test "refuses the command when a driver name holds `=`, which -c would split on" do
     config = entry("file:.git/config", "filter.a=b.smudge", "touch /tmp/pwned")
 
-    assert {:error, message, 128} = GitFilterDrivers.config_args(["status"], [], reader({config, 0, ""}))
+    assert {:error, message, 128} = GitConfigCommands.config_args(["status"], [], reader({config, 0, ""}))
     assert message =~ ~s(filter driver "a=b")
   end
 
@@ -99,7 +131,7 @@ defmodule SymphonyElixir.GitFilterDriversTest do
 
     read = reader({config, 0, ""}, files, {"#{root}/repo/.git\n#{root}/repo/.git\n", 0, ""})
 
-    assert GitFilterDrivers.config_args(["-C", "repo", "worktree", "add", "/w", "b"], [cd: root], read) ==
+    assert GitConfigCommands.config_args(["-C", "repo", "worktree", "add", "/w", "b"], [cd: root], read) ==
              {:ok, driver_args("deeper") ++ driver_args("hidden")}
 
     # Each file is read once, without its own includes, and only files that exist are read.
@@ -130,7 +162,7 @@ defmodule SymphonyElixir.GitFilterDriversTest do
     args = ["-c", "user.name=x", "-C", "/repo/sub", "status"]
     read = reader({config, 0, ""}, files, {"#{common_dir}\n#{git_dir}\n", 0, ""})
 
-    assert GitFilterDrivers.config_args(args, [cd: "/"], read) == {:ok, driver_args("local") ++ driver_args("worktree")}
+    assert GitConfigCommands.config_args(args, [cd: "/"], read) == {:ok, driver_args("local") ++ driver_args("worktree")}
 
     assert_received {:git, ["-c", "user.name=x", "-C", "/repo/sub", "rev-parse", "--path-format=absolute", "--git-common-dir", "--git-dir"], [cd: "/"]}
   end
@@ -138,11 +170,11 @@ defmodule SymphonyElixir.GitFilterDriversTest do
   test "refuses the command when git can't say where its config files are" do
     config = entry("local", "file:.git/config", "include.path", "local.cfg")
 
-    assert GitFilterDrivers.config_args(["status"], [], reader({config, 0, ""}, %{}, {"", 128, "fatal: not a git repository\n"})) ==
+    assert GitConfigCommands.config_args(["status"], [], reader({config, 0, ""}, %{}, {"", 128, "fatal: not a git repository\n"})) ==
              {:error, "symphony: refusing to run git, reading its config failed: fatal: not a git repository\n", 128}
 
     # A directory name holding a newline leaves the lines ambiguous.
-    assert {:error, message, 128} = GitFilterDrivers.config_args(["status"], [], reader({config, 0, ""}, %{}, {"/a\nb\n/c\n", 0, ""}))
+    assert {:error, message, 128} = GitConfigCommands.config_args(["status"], [], reader({config, 0, ""}, %{}, {"/a\nb\n/c\n", 0, ""}))
     assert message =~ "no config directories"
   end
 
@@ -160,7 +192,7 @@ defmodule SymphonyElixir.GitFilterDriversTest do
 
     config = entry("command", "command line:", "include.path", hd(paths))
 
-    assert {:ok, args} = GitFilterDrivers.config_args(["status"], [], reader({config, 0, ""}, files))
+    assert {:ok, args} = GitConfigCommands.config_args(["status"], [], reader({config, 0, ""}, files))
     assert args == Enum.flat_map(Enum.sort(for(i <- 1..10, do: "d#{i}")), &driver_args/1)
   end
 end
