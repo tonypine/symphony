@@ -462,11 +462,73 @@ defmodule SymphonyElixir.CoreTest do
     assert Map.get(hooks, "after_create") =~ "git config core.hooksPath .githooks"
     assert Map.get(hooks, "after_create") =~ "mise trust"
     assert Map.get(hooks, "after_create") =~ "mise exec -- mix deps.get"
-    assert Map.get(hooks, "before_remove") =~ "mise exec -- mix workspace.before_remove"
+    assert Map.get(hooks, "before_remove") =~ "gh pr close"
+    refute Map.get(hooks, "before_remove") =~ "mix"
+    refute Map.get(hooks, "before_remove") =~ "mise"
 
     assert String.trim(prompt) != ""
     assert is_binary(Config.workflow_prompt())
     assert Config.workflow_prompt() == prompt
+  end
+
+  test "current WORKFLOW.md before_remove closes the branch's open PRs from outside the checkout" do
+    original_workflow_path = Workflow.workflow_file_path()
+    test_root = Path.join(System.tmp_dir!(), "symphony-elixir-before-remove-hook-#{System.unique_integer([:positive])}")
+
+    on_exit(fn ->
+      Workflow.set_workflow_file_path(original_workflow_path)
+      File.rm_rf(test_root)
+    end)
+
+    Workflow.set_workflow_file_path(Path.expand("../../WORKFLOW.md", __DIR__))
+    assert {:ok, %{config: %{"hooks" => %{"before_remove" => hook}}}} = Workflow.load()
+
+    bin_dir = Path.join(test_root, "bin")
+    workspace = Path.join(test_root, "TP-1")
+    log_path = Path.join(test_root, "calls.log")
+    File.mkdir_p!(bin_dir)
+    File.mkdir_p!(workspace)
+
+    # `gh` logs where it ran and its arguments, and lists two open PRs; `mix` and `mise` log a
+    # call the test refuses.
+    fake_tools = %{
+      "gh" => """
+      #!/bin/sh
+      printf 'gh cwd=%s args=%s\\n' "$PWD" "$*" >> "$CALL_LOG"
+      if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
+        printf '101\\n102\\n'
+      fi
+      """,
+      "mix" => "#!/bin/sh\necho mix >> \"$CALL_LOG\"\n",
+      "mise" => "#!/bin/sh\necho mise >> \"$CALL_LOG\"\n"
+    }
+
+    for {name, script} <- fake_tools do
+      path = Path.join(bin_dir, name)
+      File.write!(path, script)
+      File.chmod!(path, 0o755)
+    end
+
+    env = [{"PATH", bin_dir <> ":" <> System.get_env("PATH")}, {"CALL_LOG", log_path}]
+
+    assert {_output, 0} =
+             System.cmd("sh", ["-c", hook],
+               cd: workspace,
+               env: env ++ [{"SYMPHONY_REPO", "acme/widgets"}, {"SYMPHONY_BRANCH", "auto/TP-1"}]
+             )
+
+    comment = "Closing because the Linear issue for branch auto/TP-1 entered a terminal state without merge."
+
+    assert File.read!(log_path) ==
+             """
+             gh cwd=/ args=pr list --repo acme/widgets --head auto/TP-1 --state open --json number --jq .[].number
+             gh cwd=/ args=pr close 101 --repo acme/widgets --comment #{comment}
+             gh cwd=/ args=pr close 102 --repo acme/widgets --comment #{comment}
+             """
+
+    File.rm!(log_path)
+    assert {_output, 0} = System.cmd("sh", ["-c", hook], cd: workspace, env: env ++ [{"SYMPHONY_REPO", ""}, {"SYMPHONY_BRANCH", "auto/TP-1"}])
+    refute File.exists?(log_path)
   end
 
   test "linear api token resolves from LINEAR_API_KEY env var" do

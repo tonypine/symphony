@@ -12,8 +12,18 @@ hooks:
     if command -v mise >/dev/null 2>&1; then
       mise trust && mise exec -- mix deps.get && MIX_ENV=test mise exec -- mix deps.compile
     fi
+  # Closes the branch's open PRs. It runs in the agent's checkout, so it runs nothing from it:
+  # no `mix` or `mise`, which would evaluate the agent's `mix.exs`, `deps/`, `_build/` or mise
+  # config, and it leaves the checkout before calling `gh`.
   before_remove: |
-    mise exec -- mix workspace.before_remove
+    cd / || exit 0
+    if [ -n "${SYMPHONY_REPO:-}" ] && [ -n "${SYMPHONY_BRANCH:-}" ] && command -v gh >/dev/null 2>&1; then
+      gh pr list --repo "$SYMPHONY_REPO" --head "$SYMPHONY_BRANCH" --state open --json number --jq '.[].number' |
+        while read -r number; do
+          gh pr close "$number" --repo "$SYMPHONY_REPO" \
+            --comment "Closing because the Linear issue for branch $SYMPHONY_BRANCH entered a terminal state without merge."
+        done
+    fi
 # `github_push_branch` pushes with repo hooks off, so it refuses a push that changes one of
 # `paths` until `command`, run by the agent in its sandbox, records a pass for that commit in
 # `result_file`. Symphony only reads the file; it never runs the command.

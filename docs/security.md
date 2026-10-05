@@ -91,6 +91,19 @@ in `mix.lock`, and `elixir_make` checks each precompiled archive against the pac
 file, before using it. The host's own `~/.hex` and `~/Library/Caches` stay read-only, and the
 folder never holds `hex.config`, which can hold Hex API and repo keys.
 
+### Workspace hooks run on the host
+
+A repo's `WORKFLOW.md` hooks run on the host, outside the agent sandbox, with the workspace as
+their working directory. A step that runs a tool which reads the checkout (`mix` evaluates
+`mix.exs`, `config/*.exs`, `deps/` and `_build/`; `mise` reads the checkout's mise config) runs
+whatever the agent put there. Symphony's own `WORKFLOW.md` runs these host-side steps:
+
+| Hook | Step | What it runs from the checkout |
+| --- | --- | --- |
+| `after_create` | `git config core.hooksPath .githooks` | Nothing; it sets the path pre-push hooks run from. |
+| `after_create` | `mise trust`, `mix deps.get`, `MIX_ENV=test mix deps.compile` | The checkout's mise config, `mix.exs`, `mix.lock` and the deps' build scripts. |
+| `before_remove` | `cd /`, then `gh pr list` and `gh pr close` on `SYMPHONY_REPO` and `SYMPHONY_BRANCH` | Nothing. Symphony sets both variables itself, and the step leaves the checkout before calling `gh`. |
+
 ### No windows on the host desktop
 
 On a macOS host, agents run on the operator's desktop, so a GUI program an agent starts puts its
