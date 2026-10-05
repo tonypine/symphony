@@ -49,6 +49,11 @@ defmodule SymphonyElixir.WorkspaceSafeGitTest do
     assert output =~ "-c protocol.file.allow=user"
     assert output =~ "-c diff.ignoreSubmodules=dirty"
     assert output =~ "-c submodule.recurse=false"
+    assert output =~ "-c core.alternateRefsCommand=true"
+    assert output =~ "-c protocol.git.allow=never"
+    assert output =~ "-c log.showSignature=false"
+    assert output =~ "-c merge.verifySignatures=false"
+    assert output =~ "-c push.gpgSign=false"
     assert output =~ "ARGV:"
     assert output =~ " status"
     assert output =~ "GIT_CONFIG_GLOBAL:/dev/null"
@@ -225,6 +230,158 @@ defmodule SymphonyElixir.WorkspaceSafeGitTest do
     assert File.exists?(proof), "plain git runs the driver, so the setup above is a real attack"
   end
 
+  test "safe_git diffs run no diff driver the repo config sets", %{test_root: test_root} do
+    repo = init_repo!(Path.join(test_root, "repo"))
+    proof = Path.join(test_root, "SYMPHONY_DIFF_PWNED")
+
+    File.write!(Path.join(repo, ".gitattributes"), "notes.txt diff=evil\n")
+    File.write!(Path.join(repo, "notes.txt"), "one\n")
+    git!(repo, ["add", ".gitattributes", "notes.txt"])
+    git!(repo, ["commit", "-m", "notes"])
+    File.write!(Path.join(repo, "notes.txt"), "two\n")
+    git!(repo, ["commit", "-am", "change notes"])
+
+    for {key, command} <- [
+          {"diff.evil.command", "touch '#{proof}'; true"},
+          {"diff.evil.textconv", "touch '#{proof}'; cat"},
+          {"diff.external", "touch '#{proof}'; true"}
+        ] do
+      git!(repo, ["config", key, command])
+      File.rm(proof)
+
+      assert {diff, 0} = Workspace.safe_git(["-C", repo, "diff", "HEAD~1", "HEAD"])
+      assert diff =~ "-one\n+two"
+      assert {_output, 0} = Workspace.safe_git(["-C", repo, "log", "-p", "-1"])
+      assert {_output, 0} = Workspace.safe_git(["-C", repo, "show", "HEAD"])
+      assert {_stdout, 0, _stderr} = Workspace.safe_git_stdout(["-C", repo, "show", "HEAD"])
+      refute File.exists?(proof), "safe_git ran #{key}"
+
+      git!(repo, ["diff", "HEAD~1", "HEAD"])
+      git!(repo, ["show", "HEAD"])
+      assert File.exists?(proof), "plain git runs #{key}, so the setup above is a real attack"
+      git!(repo, ["config", "--unset", key])
+    end
+  end
+
+  test "safe_git merges run no merge driver the repo config sets, and merge as git does without one", %{test_root: test_root} do
+    repo = init_repo!(Path.join(test_root, "repo"))
+    proof = Path.join(test_root, "SYMPHONY_MERGE_PWNED")
+
+    File.write!(Path.join(repo, ".gitattributes"), "notes.txt merge=evil\n")
+    File.write!(Path.join(repo, "notes.txt"), "a\nb\nc\nd\ne\n")
+    git!(repo, ["add", ".gitattributes", "notes.txt"])
+    git!(repo, ["commit", "-m", "notes"])
+    git!(repo, ["checkout", "-b", "side"])
+    File.write!(Path.join(repo, "notes.txt"), "a\nB\nc\nd\ne\n")
+    git!(repo, ["commit", "-am", "side"])
+    git!(repo, ["checkout", "main"])
+    File.write!(Path.join(repo, "notes.txt"), "a\nb\nc\nd\nE\n")
+    git!(repo, ["commit", "-am", "main"])
+    git!(repo, ["checkout", "-b", "conflict", "main~1"])
+    File.write!(Path.join(repo, "notes.txt"), "a\nb\nc\nd\nX\n")
+    git!(repo, ["commit", "-am", "conflict"])
+    git!(repo, ["checkout", "main"])
+    git!(repo, ["config", "merge.evil.driver", "touch '#{proof}'; exit 0"])
+
+    assert {_output, 0} = Workspace.safe_git(["-C", repo, "merge", "--no-commit", "--no-ff", "side"])
+    assert File.read!(Path.join(repo, "notes.txt")) == "a\nB\nc\nd\nE\n"
+    git!(repo, ["merge", "--abort"])
+
+    assert {_output, 1} = Workspace.safe_git(["-C", repo, "merge", "--no-commit", "--no-ff", "conflict"])
+    assert File.read!(Path.join(repo, "notes.txt")) =~ ~r/\Aa\nb\nc\nd\n<<<<<<< .*\nE\n=======\nX\n>>>>>>> .*\n\z/s
+    assert {"notes.txt\n", 0} = Workspace.safe_git(["-C", repo, "diff", "--name-only", "--diff-filter=U"])
+    git!(repo, ["merge", "--abort"])
+    refute File.exists?(proof)
+
+    git!(repo, ["merge", "--no-commit", "--no-ff", "side"])
+    assert File.exists?(proof), "plain git runs the driver, so the setup above is a real attack"
+  end
+
+  test "safe_git fetches and pushes run no pack, alternate refs or signing command the repo config sets", %{test_root: test_root} do
+    origin = Path.join(test_root, "origin.git")
+    source = init_repo!(Path.join(test_root, "source"))
+    git!(test_root, ["clone", "--bare", source, origin])
+    # The origin takes signed pushes, so a push signs when the repo config asks it to.
+    git!(origin, ["config", "receive.certNonceSeed", "seed"])
+    repo = Path.join(test_root, "repo")
+    git!(test_root, ["clone", origin, repo])
+    git!(repo, ["config", "user.name", "Test User"])
+    git!(repo, ["config", "user.email", "test@example.com"])
+    proof = Path.join(test_root, "SYMPHONY_TRANSPORT_PWNED")
+
+    git!(repo, ["config", "remote.origin.uploadpack", "touch '#{proof}'; git-upload-pack"])
+    git!(repo, ["config", "remote.origin.receivepack", "touch '#{proof}'; git-receive-pack"])
+    git!(repo, ["config", "core.alternateRefsCommand", "touch '#{proof}'; true"])
+    git!(repo, ["config", "push.gpgSign", "true"])
+    git!(repo, ["config", "gpg.program", proof_script!(test_root, proof)])
+    File.write!(Path.join([repo, ".git", "objects", "info", "alternates"]), Path.join([source, ".git", "objects"]) <> "\n")
+
+    git!(source, ["commit", "--allow-empty", "-m", "upstream"])
+    git!(origin, ["fetch", source, "main:main"])
+    File.rm(proof)
+
+    assert {_output, 0} = Workspace.safe_git(["-C", repo, "fetch", "origin"])
+    assert git!(repo, ["rev-parse", "origin/main"]) == git!(source, ["rev-parse", "HEAD"])
+    assert {_output, 0} = Workspace.safe_git(["-C", repo, "ls-remote", "origin", "main"])
+    git!(repo, ["commit", "--allow-empty", "-m", "agent"])
+    assert {_output, 0} = Workspace.safe_git(["-C", repo, "push", "origin", "HEAD:refs/heads/agent"])
+    assert git!(origin, ["rev-parse", "agent"]) == git!(repo, ["rev-parse", "HEAD"])
+    refute File.exists?(proof)
+
+    git!(repo, ["ls-remote", "origin", "main"])
+    assert File.exists?(proof), "plain git runs the config's upload pack, so the setup above is a real attack"
+    File.rm(proof)
+    git!(repo, ["config", "--unset", "remote.origin.receivepack"])
+    System.cmd("git", ["-C", repo, "push", "origin", "HEAD:refs/heads/signed"], stderr_to_stdout: true)
+    assert File.exists?(proof), "plain git signs the push with gpg.program, so the setup above is a real attack"
+  end
+
+  test "safe_git checks no signature with the repo config's gpg.program", %{test_root: test_root} do
+    repo = init_repo!(Path.join(test_root, "repo"))
+    proof = Path.join(test_root, "SYMPHONY_GPG_PWNED")
+
+    # An agent can commit a signature without a key: git hands it to `gpg.program` to check.
+    git!(repo, ["checkout", "-b", "signed"])
+    git!(repo, ["-c", "gpg.program=#{proof_script!(test_root, Path.join(test_root, "signed"))}", "commit", "-S", "--allow-empty", "-m", "signed"])
+    git!(repo, ["checkout", "main"])
+    git!(repo, ["config", "gpg.program", proof_script!(test_root, proof)])
+    git!(repo, ["config", "log.showSignature", "true"])
+    git!(repo, ["config", "merge.verifySignatures", "true"])
+
+    assert {_output, 0} = Workspace.safe_git(["-C", repo, "log", "-1", "--format=%H", "signed"])
+    assert {_output, 0} = Workspace.safe_git(["-C", repo, "show", "signed"])
+    assert {_output, 0} = Workspace.safe_git(["-C", repo, "merge", "--no-commit", "--no-ff", "signed"])
+    refute File.exists?(proof)
+
+    git!(repo, ["log", "-1", "--format=%H", "signed"])
+    assert File.exists?(proof), "plain git checks the signature, so the setup above is a real attack"
+  end
+
+  test "safe_git reaches no git:// remote, which would run the config's core.gitProxy", %{test_root: test_root} do
+    repo = init_repo!(Path.join(test_root, "repo"))
+    proof = Path.join(test_root, "SYMPHONY_PROXY_PWNED")
+
+    git!(repo, ["remote", "add", "origin", "https://example.invalid/repo.git"])
+    git!(repo, ["config", "url.git://example.invalid/.insteadOf", "https://example.invalid/"])
+    git!(repo, ["config", "core.gitProxy", proof_script!(test_root, proof)])
+
+    assert {output, status} = Workspace.safe_git(["-C", repo, "ls-remote", "origin"])
+    assert status != 0
+    assert output =~ "transport 'git' not allowed"
+    refute File.exists?(proof)
+
+    System.cmd("git", ["-C", repo, "ls-remote", "origin"], stderr_to_stdout: true)
+    assert File.exists?(proof), "plain git runs the proxy, so the setup above is a real attack"
+  end
+
+  test "safe_git refuses to run git when a merge driver's name holds `=`", %{test_root: test_root} do
+    repo = init_repo!(Path.join(test_root, "repo"))
+    git!(repo, ["config", "merge.a=b.driver", "touch '#{Path.join(test_root, "pwned")}'"])
+
+    assert {message, 128} = Workspace.safe_git(["-C", repo, "merge", "main"])
+    assert message =~ ~s(merge driver "a=b")
+  end
+
   test "safe_git raises like System.cmd/3 when git is missing", %{test_root: test_root} do
     missing = Path.join(test_root, "missing-git")
     assert_raise ErlangError, fn -> Workspace.safe_git(missing, ["-C", test_root, "status"]) end
@@ -244,7 +401,7 @@ defmodule SymphonyElixir.WorkspaceSafeGitTest do
     setup %{test_root: test_root} do
       {listener, port} = silent_remote!()
       repo = init_repo!(Path.join(test_root, "repo"))
-      git!(repo, ["remote", "add", "origin", "git://127.0.0.1:#{port}/stalled.git"])
+      git!(repo, ["remote", "add", "origin", "http://127.0.0.1:#{port}/stalled.git"])
 
       %{repo: repo, listener: listener}
     end
@@ -300,6 +457,21 @@ defmodule SymphonyElixir.WorkspaceSafeGitTest do
   # The client's request comes first; the connection closes once git is stopped.
   defp drain({:ok, _request}, connection), do: connection |> :gen_tcp.recv(0, 5_000) |> drain(connection)
   defp drain(result, _connection), do: result
+
+  # A command that leaves `proof` behind and acts as a signing `gpg.program` would.
+  defp proof_script!(dir, proof) do
+    script = Path.join(dir, "proof-#{System.unique_integer([:positive])}")
+
+    File.write!(script, """
+    #!/bin/sh
+    touch '#{proof}'
+    echo '[GNUPG:] SIG_CREATED ' >&2
+    printf -- '-----BEGIN PGP SIGNATURE-----\\nx\\n-----END PGP SIGNATURE-----\\n'
+    """)
+
+    File.chmod!(script, 0o755)
+    script
+  end
 
   defp init_repo!(repo) do
     File.mkdir_p!(repo)
