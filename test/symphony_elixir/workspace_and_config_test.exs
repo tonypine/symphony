@@ -201,6 +201,112 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     end
   end
 
+  test "after_create in a reused worktree doesn't see the ignored files an agent wrote there" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-workspace-ignored-hook-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      primary_repo = Path.join(test_root, "primary")
+      workspace_root = Path.join(test_root, "workspaces")
+
+      create_primary_repo!(primary_repo)
+      File.write!(Path.join(primary_repo, ".gitignore"), "/deps/\n/hook.saw\n")
+      git!(primary_repo, ["add", ".gitignore"])
+      git!(primary_repo, ["commit", "-m", "ignore deps"])
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        workspace_fetch_before_dispatch: false
+      )
+
+      # MT-AHEAD's branch has an agent commit, MT-EVEN's is still at the base commit.
+      assert {:ok, ahead} = Workspace.create_for_issue("MT-AHEAD")
+      assert {:ok, even} = Workspace.create_for_issue("MT-EVEN")
+      configure_git_user!(ahead)
+      File.write!(Path.join(ahead, "agent.txt"), "agent\n")
+      git!(ahead, ["add", "agent.txt"])
+      git!(ahead, ["commit", "-m", "agent edit"])
+
+      for {workspace, identifier} <- [{ahead, "MT-AHEAD"}, {even, "MT-EVEN"}] do
+        File.mkdir_p!(Path.join(workspace, "deps/evil"))
+        File.write!(Path.join(workspace, "deps/evil/mix.exs"), "agent code\n")
+        File.write!(Path.join([workspace_root, "default", ".#{identifier}.after_create_pending"]), "")
+      end
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        workspace_fetch_before_dispatch: false,
+        hook_after_create: "if [ -e deps/evil/mix.exs ]; then echo saw; else echo clean; fi > hook.saw"
+      )
+
+      capture_log(fn ->
+        assert {:ok, ^ahead} = Workspace.create_for_issue("MT-AHEAD")
+        assert {:ok, ^even} = Workspace.create_for_issue("MT-EVEN")
+      end)
+
+      for {workspace, identifier} <- [{ahead, "MT-AHEAD"}, {even, "MT-EVEN"}] do
+        assert File.read!(Path.join(workspace, "hook.saw")) == "clean\n"
+        refute File.exists?(Path.join(workspace, "deps/evil/mix.exs"))
+        refute File.exists?(Path.join([workspace_root, "default", ".#{identifier}.after_create_pending"]))
+      end
+
+      assert File.read!(Path.join(ahead, "agent.txt")) == "agent\n"
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "after_create is skipped, with a warning, on a base tree worktree that has changes of its own" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-workspace-even-dirty-hook-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      primary_repo = Path.join(test_root, "primary")
+      workspace_root = Path.join(test_root, "workspaces")
+      pending_marker = Path.join([workspace_root, "default", ".MT-EVENDIRTY.after_create_pending"])
+
+      create_primary_repo!(primary_repo)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        workspace_fetch_before_dispatch: false
+      )
+
+      assert {:ok, workspace} = Workspace.create_for_issue("MT-EVENDIRTY")
+      File.write!(Path.join(workspace, "mix.exs"), "uncommitted agent project\n")
+      File.write!(pending_marker, "")
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        workspace_fetch_before_dispatch: false,
+        hook_after_create: "echo ran > hook.saw"
+      )
+
+      log = capture_log(fn -> assert {:ok, ^workspace} = Workspace.create_for_issue("MT-EVENDIRTY") end)
+
+      assert log =~ "reason=uncommitted_changes"
+      refute File.exists?(Path.join(workspace, "hook.saw"))
+      assert File.read!(Path.join(workspace, "mix.exs")) == "uncommitted agent project\n"
+      assert File.exists?(pending_marker)
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "after_create is skipped, with a warning, when the base branch can't be resolved" do
     test_root =
       Path.join(

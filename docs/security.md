@@ -105,8 +105,10 @@ runs whatever code the checkout holds: any `mix` command evaluates `mix.exs`, an
   workspace is made again on its existing `auto/<issue>` branch. When the worktree's tree differs
   from the base commit (the repository's `base_branch`, else a `workspace.source` clone's
   `origin/HEAD`, else the source repo's `HEAD`), Symphony detaches the worktree at the base commit,
-  runs the hook, and checks the branch out again. A worktree with uncommitted changes, or one whose
-  base commit can't be resolved, skips the hook with a warning and keeps its pending marker. The
+  runs the hook, and checks the branch out again. Before the hook, Symphony removes the ignored
+  files in the worktree (`git clean -ffdx`), so a reused worktree's hook never loads the `deps/` or
+  `_build/` an agent wrote there. A worktree with uncommitted changes, or one whose base commit
+  can't be resolved, skips the hook with a warning and keeps its pending marker. The
   hook installs the base branch's dependencies, so a branch that changes its lock file runs on
   them until the agent fetches its own.
 - **`after_create` on an SSH worker, or in a `clone`-strategy workspace,** runs on whatever the

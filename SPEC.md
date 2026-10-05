@@ -2653,8 +2653,8 @@ Algorithm summary:
    not start in a half-prepared workspace. This applies to SSH worker workspaces too.
    Hooks run outside the agent sandbox, so a local `worktree` workspace whose tree differs from the
    base commit runs `after_create` detached at that commit and is checked out on its branch again
-   afterwards; one with uncommitted changes, or no base commit, skips the hook with a warning and
-   keeps its pending marker.
+   afterwards. The worktree's ignored files are removed before the hook; one with uncommitted
+   changes, or no base commit, skips the hook with a warning and keeps its pending marker.
 
 Notes:
 
