@@ -21,7 +21,9 @@ defmodule SymphonyElixir.UsageLimit do
   A run whose agent could not reach the model API at all (`source: :api_unreachable`, reason
   `model_api_unreachable`) holds the provider the same way, with a canary as the probe: the
   first one goes out after 60 seconds, and each canary that still can't reach the API doubles
-  the wait, up to `unknown_reset_retry_seconds`.
+  the wait, up to `unknown_reset_retry_seconds`. With no run held on it (QA, the acceptance gate,
+  a PR run) the hold is released at `resume_at` and remembered for `outage_memory_seconds/1`, so
+  the next run finding the outage again doubles the wait as a canary would.
 
   The orchestrator owns the holds and persists them with `RunStore.put_usage_limits/1`;
   this module builds and matches them.
@@ -33,6 +35,7 @@ defmodule SymphonyElixir.UsageLimit do
 
   @api_unreachable_reason "model_api_unreachable"
   @api_unreachable_first_retry_seconds 60
+  @api_outage_min_memory_seconds 600
 
   @type entry :: %{
           optional(:error) => String.t(),
@@ -112,16 +115,24 @@ defmodule SymphonyElixir.UsageLimit do
     }
   end
 
-  # Only a canary that still couldn't reach the API doubles the wait to the next probe.
+  # A canary that still couldn't reach the API doubles the wait to the next probe, and so does a
+  # run that finds the outage again soon after its hold was released with no run held on it
+  # (`opts[:last_outage]`, see `outage_memory_seconds/1`).
   defp put_api_unreachable(existing, info, opts) do
     now = Keyword.fetch!(opts, :now)
     config = Keyword.fetch!(opts, :config)
     {provider, scope} = key(info)
 
-    {since, retry_seconds} =
+    previous =
       case existing do
-        %{phase: :canary, reason: @api_unreachable_reason, retry_seconds: seconds} when is_integer(seconds) ->
-          {existing.since, min(seconds * 2, config.unknown_reset_retry_seconds)}
+        %{phase: :canary, reason: @api_unreachable_reason} -> existing
+        _other -> recent_outage(Keyword.get(opts, :last_outage), now, config)
+      end
+
+    {since, retry_seconds} =
+      case previous do
+        %{retry_seconds: seconds} when is_integer(seconds) ->
+          {previous.since, min(seconds * 2, config.unknown_reset_retry_seconds)}
 
         _new_outage ->
           {now, @api_unreachable_first_retry_seconds}
@@ -144,6 +155,21 @@ defmodule SymphonyElixir.UsageLimit do
       retry_seconds: retry_seconds
     }
   end
+
+  defp recent_outage(%{reason: @api_unreachable_reason, resume_at: %DateTime{} = released_at} = outage, now, config) do
+    if DateTime.diff(now, released_at) < outage_memory_seconds(config), do: outage
+  end
+
+  defp recent_outage(_outage, _now, _config), do: nil
+
+  @doc """
+  How long an unreachable-API hold released with no run held on it is remembered: a run that
+  finds the outage again within it continues the outage (its `since` and backoff) instead of
+  starting a new one. `unknown_reset_retry_seconds`, and at least 10 minutes, since an agent
+  retries the API for a few minutes before its turn ends.
+  """
+  @spec outage_memory_seconds(map()) :: pos_integer()
+  def outage_memory_seconds(config), do: max(config.unknown_reset_retry_seconds, @api_outage_min_memory_seconds)
 
   @doc "Whether `entry` (a hold, or the agent's info for one) is for a model API that could not be reached."
   @spec api_unreachable?(map()) :: boolean()

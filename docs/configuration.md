@@ -692,7 +692,8 @@ agent:
   no reset time is known (neither in the rejection nor remembered for that window). It also caps
   the wait between probes while Claude can't reach its API (a network or DNS outage): that hold
   starts whatever `auto_pause` says, probes after 60 seconds and doubles the wait after each
-  failed probe.
+  failed probe. A released outage hold is remembered this long (at least 10 minutes), so a QA or
+  acceptance-gate pass that finds the outage again keeps the backoff.
 - At the resume time one held run (the first in dispatch order) goes out alone. If Claude accepts
   it, the other held runs follow; if it hits the limit again, the hold starts over from the new
   reset time (or `unknown_reset_retry_seconds`). New Claude work stays held meanwhile.

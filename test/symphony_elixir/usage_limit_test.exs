@@ -75,6 +75,26 @@ defmodule SymphonyElixir.UsageLimitTest do
       assert put(UsageLimit.canary(%{second | retry_seconds: 900}, "issue-canary"), outage(), now: later).retry_seconds == 900
     end
 
+    test "a run that finds a recently released outage again continues it, doubling the wait" do
+      first = put(nil, outage())
+      released_at = first.resume_at
+      soon = DateTime.add(released_at, 899)
+
+      again = put(nil, outage(), now: soon, last_outage: first)
+      assert %{retry_seconds: 120, since: @now, phase: :paused} = again
+      assert again.resume_at == DateTime.add(soon, 120)
+      assert put(nil, outage(), now: soon, last_outage: %{again | retry_seconds: 900}).retry_seconds == 900
+
+      # Long after the release, or with no outage remembered, it is a new outage.
+      late = DateTime.add(released_at, 900)
+      assert %{retry_seconds: 60, since: ^late} = put(nil, outage(), now: late, last_outage: first)
+      assert %{retry_seconds: 60, since: ^soon} = put(nil, outage(), now: soon, last_outage: nil)
+
+      # The memory is `unknown_reset_retry_seconds`, and at least ten minutes.
+      assert UsageLimit.outage_memory_seconds(@config) == 900
+      assert UsageLimit.outage_memory_seconds(%{@config | unknown_reset_retry_seconds: 60}) == 600
+    end
+
     test "another run finding the same outage, or a usage limit still in force, leaves the hold as it is" do
       first = put(nil, outage())
       assert put(first, outage(%{error: "ECONNREFUSED"}), now: DateTime.add(@now, 30)) == first

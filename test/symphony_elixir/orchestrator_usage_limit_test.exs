@@ -930,6 +930,80 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
     assert RunStore.get_usage_limits() == %{}
   end
 
+  # TP-555: QA, the acceptance gate and PR runs hold no retry, so an outage hold has no canary.
+  test "an outage found again after its hold was released continues it: backoff, one pause and one resume", ctx do
+    write_usage_workflow!(ctx)
+    name = Module.concat(__MODULE__, :ReleasedOutageOrchestrator)
+    pid = start_orchestrator(ctx, :ReleasedOutageOrchestrator)
+    :ok = Notifications.subscribe()
+    outage = usage_info(ctx, %{window: nil, resets_at: nil, utilization: nil, source: :api_unreachable, error: "ENOTFOUND"})
+
+    log =
+      capture_log(fn ->
+        assert {:ok, first} = Orchestrator.hold_for_usage_limit(name, outage, "MT-QA")
+        assert %{retry_seconds: 60, resume_at: first_probe} = first
+
+        # Nothing is held on it: at resume_at the hold is released for the next run to probe.
+        set_clock(ctx, first_probe)
+        send(pid, {:usage_limit_resume, @anthropic})
+        state = :sys.get_state(pid)
+        assert state.usage_limits == %{}
+        assert state.api_outages == %{@anthropic => first}
+
+        # The next QA pass finds it again: the wait doubles and `since` stays.
+        found_again = DateTime.add(first_probe, 200)
+        set_clock(ctx, found_again)
+        assert {:ok, %{retry_seconds: 120, since: since} = second} = Orchestrator.hold_for_usage_limit(name, outage, "MT-QA")
+        assert since == ctx.now
+        assert second.resume_at == DateTime.add(found_again, 120)
+        assert :sys.get_state(pid).api_outages == %{}
+
+        # A late timer for the outage it continued does nothing.
+        send(pid, {:api_outage_over, @anthropic, since})
+        assert :sys.get_state(pid).usage_limits[@anthropic] == second
+
+        set_clock(ctx, second.resume_at)
+        send(pid, {:usage_limit_resume, @anthropic})
+        assert :sys.get_state(pid).api_outages == %{@anthropic => second}
+
+        # A run that finds the outage while a usage-limit hold is in force keeps it remembered.
+        limit = UsageLimit.put(nil, usage_info(ctx), now: second.resume_at, config: Config.settings!().agent.usage_limit)
+        :sys.replace_state(pid, &%{&1 | usage_limits: %{@anthropic => limit}})
+        assert {:ok, ^limit} = Orchestrator.hold_for_usage_limit(name, outage, "MT-QA")
+        assert :sys.get_state(pid).api_outages == %{@anthropic => second}
+        :sys.replace_state(pid, &%{&1 | usage_limits: %{}})
+
+        # No run finds it again: the outage ends with one resumed event.
+        send(pid, {:api_outage_over, @anthropic, since})
+        assert :sys.get_state(pid).api_outages == %{}
+      end)
+
+    assert_received {:notification_event, %Notifications.Event{event: "usage_limit_paused", reason: "Claude API unreachable; resumes at " <> _}}
+    refute_received {:notification_event, %Notifications.Event{event: "usage_limit_paused"}}
+    assert_received {:notification_event, %Notifications.Event{event: "usage_limit_resumed", reason: "Claude API unreachable"}}
+    refute_received {:notification_event, %Notifications.Event{event: "usage_limit_resumed"}}
+    assert length(Regex.scan(~r/Model API unreachable \(ENOTFOUND\); holding dispatch/, log)) == 1
+    assert log =~ "Model API still unreachable (ENOTFOUND) provider=anthropic next_probe_at=#{DateTime.to_iso8601(DateTime.add(ctx.now, 380))}"
+    assert length(Regex.scan(~r/Model API hold released provider=anthropic/, log)) == 2
+    assert length(Regex.scan(~r/Usage limit resumed provider=anthropic scope=all paused_for_s=380/, log)) == 1
+  end
+
+  test "a usage limit from the API ends a released outage before it pauses", ctx do
+    write_usage_workflow!(ctx)
+    name = Module.concat(__MODULE__, :OutageThenLimitOrchestrator)
+    pid = start_orchestrator(ctx, :OutageThenLimitOrchestrator)
+    outage = usage_info(ctx, %{window: nil, resets_at: nil, utilization: nil, source: :api_unreachable, error: "ENOTFOUND"})
+    assert {:ok, %{resume_at: first_probe}} = Orchestrator.hold_for_usage_limit(name, outage, "MT-QA")
+    set_clock(ctx, first_probe)
+    send(pid, {:usage_limit_resume, @anthropic})
+    :ok = Notifications.subscribe()
+
+    assert {:ok, %{reason: "claude_usage_limit"}} = Orchestrator.hold_for_usage_limit(name, usage_info(ctx), "MT-QA")
+    assert :sys.get_state(pid).api_outages == %{}
+    assert_received {:notification_event, %Notifications.Event{event: "usage_limit_resumed", reason: "Claude API unreachable"}}
+    assert_received {:notification_event, %Notifications.Event{event: "usage_limit_paused", reason: "Claude 5-hour limit; resumes at " <> _}}
+  end
+
   test "with nothing held at resume_at the hold clears without a canary", ctx do
     write_usage_workflow!(ctx)
     pid = start_orchestrator(ctx, :CanaryEmptyOrchestrator)

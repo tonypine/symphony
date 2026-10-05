@@ -2596,6 +2596,12 @@ an outage and keeps its normal path.
   still cannot reach the API doubles the wait, up to `usage_limit.unknown_reset_retry_seconds`,
   keeping `since`. A run that finds the outage while a hold is already `paused` leaves it as it is,
   so a usage-limit pause is not shortened.
+- A hold with no run held on it (only QA, gate or PR runs found the outage) has no canary: at
+  `resume_at` it is released so the next run probes the API, and remembered for
+  `usage_limit.unknown_reset_retry_seconds` (at least 10 minutes). A run that finds the outage
+  again within that time continues it as a failed canary would: same `since`, doubled wait, no new
+  `usage_limit_paused` event. The outage ends, with one `usage_limit_resumed` event, when no run
+  has found it again for that time, or as soon as the API answers with a usage limit.
 - Log `Model API unreachable (ENOTFOUND); holding dispatch provider=… probe_at=…` once per outage
   and `Model API still unreachable (…) … next_probe_at=…` per failed probe. Show the hold in the
   status surfaces as `Paused: Claude API unreachable (ENOTFOUND), retries ~14:05`, and in
