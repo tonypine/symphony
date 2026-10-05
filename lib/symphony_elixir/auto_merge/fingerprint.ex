@@ -3,11 +3,13 @@ defmodule SymphonyElixir.AutoMerge.Fingerprint do
   A fingerprint of a pull request's own diff, so `SymphonyElixir.AutoMerge` can tell whether a
   head pushed after approval changes what was approved.
 
-  The fingerprint is `git patch-id --stable` over `git diff <merge-base(base, head)> head`, read
+  The fingerprint is `git patch-id --verbatim` over `git diff <merge-base(base, head)> head`, read
   in the issue's workspace. Merging the base branch in (Symphony's update-branch) or a clean
   rebase moves the merge-base along with the head, so the PR's own diff, and its fingerprint,
-  stay the same. A commit that changes the PR's code changes it. The patch-id ignores
-  whitespace and line numbers, but not the context lines around each change.
+  stay the same. A commit that changes the PR's code changes it, down to whitespace (`--stable`
+  would drop the whitespace inside a line, so `rm -rf /tmp/x` and `rm -rf / tmp/x` would match).
+  The patch-id ignores line numbers and the order of files, but not the context lines around
+  each change.
 
   The base branch is fetched from `origin` first, under the per-repo fetch lock, so the
   merge-base is read against the current base tip; the head is fetched only when it is missing.
@@ -91,5 +93,5 @@ defmodule SymphonyElixir.AutoMerge.Fingerprint do
 
   defp default_git(args, cwd), do: Workspace.safe_git(["-C", cwd | args], stderr_to_stdout: true)
 
-  defp default_patch_id(diff), do: System.cmd("/bin/sh", ["-c", ~s(exec git patch-id --stable < "$0"), diff], stderr_to_stdout: true)
+  defp default_patch_id(diff), do: System.cmd("/bin/sh", ["-c", ~s(exec git patch-id --verbatim < "$0"), diff], stderr_to_stdout: true)
 end

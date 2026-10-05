@@ -2096,8 +2096,8 @@ Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `
 - When the repository's acceptance gate is in `enforce` mode and Auto Review is on, a push after
   approval MUST be judged again before it lands. On the first poll of a `Merging` stay the poller
   records the approved head (`approved_head_sha`) and a fingerprint of the PR's own diff
-  (`approved_fingerprint`: `git patch-id --stable` over `git diff <merge-base(base, head)> head`) in
-  the PR review record's `auto_merge`. The approved head is the one the gate approved (`gate_sha`
+  (`approved_fingerprint`: `git patch-id --verbatim` over `git diff <merge-base(base, head)> head`)
+  in the PR review record's `auto_merge`. The approved head is the one the gate approved (`gate_sha`
   with `gate_verdict: "approve"` on the CI check record), or the current head when the gate gave no
   `approve` (a person's move); the current head is then compared with it like any later head. Coming
   back from a re-review, or out of `Merging`, starts a new stay. A conflict keeps the approval until

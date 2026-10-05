@@ -196,7 +196,7 @@ With `mode: enforce`, set globally or for one repository, Auto Review applies th
 - **Re-review in Merging.** A push after approval is judged again before it lands
   (`AutoMerge.step/5`). The first PR poll of a Merging stay, whether the gate or a person moved the
   issue there, records the approved head and a fingerprint of the PR's own diff on the PR review
-  record (`auto_merge.approved_head_sha`, `approved_fingerprint`): `git patch-id --stable` over
+  record (`auto_merge.approved_head_sha`, `approved_fingerprint`): `git patch-id --verbatim` over
   `git diff <merge-base(base, head)> head`, read in the issue's workspace (`AutoMerge.Fingerprint`).
   The approved head is the one the gate approved (`gate_sha` on the CI check record), so a push between
   the gate's approve and that poll is judged too; after a person's move with no gate `approve` it is

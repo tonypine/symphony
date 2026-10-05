@@ -64,6 +64,17 @@ defmodule SymphonyElixir.AutoMerge.FingerprintTest do
     refute other == approved
   end
 
+  test "a change to the whitespace inside a line changes the fingerprint", %{author: author, record: record} do
+    git!(author, ["checkout", "--quiet", "pr"])
+    approved_head = commit!(author, %{"bin/clean.sh" => "rm -rf /tmp/x\n"})
+    pushed = commit!(author, %{"bin/clean.sh" => "rm -rf / tmp/x\n"})
+    git!(author, ["push", "--quiet", "origin", "pr"])
+
+    assert {:ok, approved} = Fingerprint.compute(record, approved_head)
+    assert {:ok, other} = Fingerprint.compute(record, pushed)
+    refute other == approved
+  end
+
   test "a head with no diff of its own has the empty fingerprint", %{workspace: workspace, record: record} do
     main = git!(workspace, ["rev-parse", "origin/main"])
     assert Fingerprint.compute(record, main) == {:ok, "empty"}
