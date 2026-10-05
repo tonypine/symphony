@@ -3630,7 +3630,7 @@ defmodule SymphonyElixir.CoreTest do
     assert prompt =~ "## Prerequisite: scoped Linear and GitHub tools are available"
     assert prompt =~ "`https://uploads.linear.app/...` links that Symphony has pre-signed"
     assert prompt =~ "## Status map"
-    assert prompt =~ "`Auto Review` -> Symphony is testing the PR as a user"
+    assert prompt =~ "`Auto Review` -> Symphony is testing the PR as a user and, with the acceptance gate on, judging it"
     assert prompt =~ "## PR feedback sweep protocol (required)"
     assert prompt =~ "## CI failure triage protocol (required when checks are red)"
     assert prompt =~ "## Blocked-access escape hatch (required behavior)"
