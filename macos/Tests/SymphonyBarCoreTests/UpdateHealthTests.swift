@@ -221,10 +221,19 @@ final class UpdateHealthTests: XCTestCase {
         XCTAssertEqual(UpdateRelaunch(pending: pending, rollback: nil, runningBuild: 42), .notReplaced(pending))
         XCTAssertEqual(UpdateRelaunch(pending: nil, rollback: record, runningBuild: 42), .rolledBack(record))
         XCTAssertEqual(UpdateRelaunch(pending: nil, rollback: record, runningBuild: 43), .rollbackFailed(record))
+
+        // A version from before automatic rollback was put back and never read the record, then updated again.
+        let newer = PendingUpdate(fromBuild: 42, toBuild: 44, version: "0.0.1.44", startSymphony: true, resumeDispatch: true)
+        XCTAssertEqual(
+            UpdateRelaunch(pending: newer, rollback: record, runningBuild: 44),
+            .checkHealth(newer),
+            "a stale rollback record doesn't stop the next update's health check"
+        )
+        XCTAssertEqual(UpdateRelaunch(pending: newer, rollback: record, runningBuild: 42), .notReplaced(newer))
         XCTAssertEqual(
             UpdateRelaunch(pending: pending, rollback: record, runningBuild: 42),
             .rolledBack(record),
-            "the restored build never checks itself, so a rollback can't loop"
+            "a pending update no newer than the rolled-back build never makes the restored build check itself"
         )
     }
 

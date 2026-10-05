@@ -269,8 +269,11 @@ public enum UpdateRelaunch: Equatable {
     /// The rollback's swap failed, so this is still the build that failed its health check.
     case rollbackFailed(RollbackRecord)
 
+    /// A failed build takes the pending update before it records its rollback, so a pending update to a newer build
+    /// than the record means the record is stale: a version from before automatic rollback was put back, never read
+    /// it, and has since started this update.
     public init(pending: PendingUpdate?, rollback: RollbackRecord?, runningBuild: Int) {
-        if let rollback {
+        if let rollback, pending.map({ $0.toBuild <= rollback.build }) ?? true {
             self = rollback.succeeded(runningBuild: runningBuild) ? .rolledBack(rollback) : .rollbackFailed(rollback)
         } else if let pending {
             self = pending.succeeded(runningBuild: runningBuild) ? .checkHealth(pending) : .notReplaced(pending)
