@@ -14,6 +14,13 @@ public struct RestartMachine: Equatable {
         case restart
         /// Stop Symphony for an update instead of starting it again.
         case update
+        /// An update the app started by itself: it never offers Update Now Anyway, and gives up once dispatch is
+        /// paused and agent runs are still active after `runsTimeout`, resuming the dispatch it paused. Its failures
+        /// show in the menu only, without an alert.
+        case automaticUpdate
+
+        /// True for both kinds of update.
+        public var isUpdate: Bool { self != .restart }
     }
 
     public enum Phase: Equatable {
@@ -70,8 +77,10 @@ public struct RestartMachine: Equatable {
     /// True once the restart paused dispatch, so only it resumes; a pause the user made survives the restart, unless
     /// dispatch is resumed while the restart waits and the restart pauses it again.
     public private(set) var pausedByRestart = false
-    /// True once the wait for agent runs has outlasted its timeout.
+    /// True once the wait for agent runs has outlasted its timeout. Never for an automatic update.
     public private(set) var offersRestartNow = false
+    /// True once an automatic update gave up because agent runs were still active.
+    public private(set) var postponed = false
     /// Why the last restart failed, shown in the menu until the next restart.
     public private(set) var error: String?
 
@@ -94,8 +103,8 @@ public struct RestartMachine: Equatable {
 
     /// Starts a restart. `alreadyPaused` is whether dispatch is paused now, as the app's last poll saw it; the next
     /// poll can show it resumed since, and then the restart pauses it. After `runsTimeout` seconds of waiting
-    /// for agent runs the restart also offers Restart Now Anyway. An `.update` ends with `.stopped` instead of
-    /// starting Symphony.
+    /// for agent runs the restart also offers Restart Now Anyway, or an `.automaticUpdate` gives up. An update ends
+    /// with `.stopped` instead of starting Symphony.
     /// Does nothing while a restart is under way.
     public mutating func begin(
         alreadyPaused: Bool,
@@ -144,7 +153,7 @@ public struct RestartMachine: Equatable {
             return [.send(.resume)]
 
         case (.stopping, .exited):
-            if purpose == .update {
+            if purpose.isUpdate {
                 enter(.idle, now: now)
                 return [.stopped]
             }
@@ -186,7 +195,7 @@ public struct RestartMachine: Equatable {
         case let (.checkingConfig, .exited(exit)), let (.pausing, .exited(exit)), let (.waitingForRuns, .exited(exit)):
             // Symphony went away on its own; there is nothing left to restart gracefully.
             enter(.idle, now: now)
-            error = "\(purpose == .update ? "Update" : "Restart") cancelled: Symphony \(exit.summary)"
+            error = "\(purpose.isUpdate ? "Update" : "Restart") cancelled: Symphony \(exit.summary)"
             return []
 
         default:
@@ -196,7 +205,7 @@ public struct RestartMachine: Equatable {
 
     /// The line the menu shows for the restart: its progress, or why it failed.
     public var menuLine: String? {
-        let doing = purpose == .update ? "Updating" : "Restarting"
+        let doing = purpose.isUpdate ? "Updating" : "Restarting"
         switch phase {
         case .idle:
             return error
@@ -241,6 +250,9 @@ public struct RestartMachine: Equatable {
                     return [.stop]
                 }
                 phase = .waitingForRuns(running: snapshot.running)
+                if purpose == .automaticUpdate, now.timeIntervalSince(phaseStart) >= runsTimeout {
+                    return postpone(now: now)
+                }
             } else if !mayPredatePause {
                 // Dispatch was resumed after the poll the restart began with, or while it waits. Pause it, so the
                 // restart resumes it afterwards instead of waiting forever for a pause.
@@ -248,14 +260,31 @@ public struct RestartMachine: Equatable {
                 return [.send(.pause)]
             }
         }
-        if now.timeIntervalSince(phaseStart) >= runsTimeout { offersRestartNow = true }
+        if purpose != .automaticUpdate, now.timeIntervalSince(phaseStart) >= runsTimeout { offersRestartNow = true }
         return []
+    }
+
+    /// An automatic update gives up on agent runs that are still active: it resumes the dispatch it paused and leaves
+    /// Symphony running.
+    private mutating func postpone(now: Date) -> [Effect] {
+        postponed = true
+        let minutes = Int(runsTimeout / 60)
+        let within = minutes == 1 ? "1 minute" : "\(minutes) minutes"
+        error = runsTimeout > 0
+            ? "Update postponed: agent runs didn't finish within \(within)"
+            : "Update postponed: an agent run is active"
+        guard pausedByRestart else {
+            enter(.idle, now: now)
+            return []
+        }
+        enter(.resuming, now: now)
+        return [.send(.resume)]
     }
 
     private mutating func fail(_ title: String, _ message: String, now: Date) -> [Effect] {
         enter(.idle, now: now)
         error = message.components(separatedBy: "\n").first
-        return [.alert(title: title, message: message)]
+        return purpose == .automaticUpdate ? [] : [.alert(title: title, message: message)]
     }
 
     private mutating func enter(_ phase: Phase, now: Date) {
@@ -266,7 +295,7 @@ public struct RestartMachine: Equatable {
 
     /// Before Symphony is stopped, a failed restart or update leaves it running.
     private var notDoneTitle: String {
-        purpose == .update ? Self.notUpdatedTitle : Self.notRestartedTitle
+        purpose.isUpdate ? Self.notUpdatedTitle : Self.notRestartedTitle
     }
 
     /// Added to failures after the stop: a pause the restart made is kept by Symphony, so say so.

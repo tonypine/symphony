@@ -33,15 +33,20 @@ final class RestartController {
 
     /// Drains Symphony for an update like a restart, but stops it instead of starting it again. symphony.yml is
     /// checked with the running Symphony, not the new one: see `RestartMachine`. `finished` is called once the
-    /// drain stops Symphony or ends early.
-    func drainForUpdate(alreadyPaused: Bool, finished: @escaping (_ stopped: Bool, _ pausedByUpdate: Bool) -> Void) {
+    /// drain stops Symphony or ends early. An automatic update passes `automaticRunsTimeout`: it gives up once agent
+    /// runs outlast it, instead of offering Update Now Anyway after the restart timeout.
+    func drainForUpdate(
+        alreadyPaused: Bool,
+        automaticRunsTimeout: TimeInterval? = nil,
+        finished: @escaping (_ stopped: Bool, _ pausedByUpdate: Bool) -> Void
+    ) {
         guard !machine.isRestarting else { return }
         updateFinished = finished
         perform(
             machine.begin(
                 alreadyPaused: alreadyPaused,
-                purpose: .update,
-                runsTimeout: TimeInterval(runner.restartTimeoutMinutes * 60),
+                purpose: automaticRunsTimeout == nil ? .update : .automaticUpdate,
+                runsTimeout: automaticRunsTimeout ?? TimeInterval(runner.restartTimeoutMinutes * 60),
                 logPath: runner.logPath
             )
         )
