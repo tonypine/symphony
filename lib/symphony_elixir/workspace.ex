@@ -1613,8 +1613,7 @@ defmodule SymphonyElixir.Workspace do
   defp run_on_base_tree(_workspace, _issue_context, _worker_host, run), do: run.()
 
   defp run_on_local_base_tree(workspace, issue_context, settings, run) do
-    {:ok, repo} = local_worktree_repo(settings)
-    base_commit = trusted_base_commit(repo, issue_context, settings)
+    base_commit = trusted_base_commit(issue_context, settings)
     branch = worktree_branch(issue_context)
 
     cond do
@@ -1647,13 +1646,15 @@ defmodule SymphonyElixir.Workspace do
   end
 
   # The commit a new branch starts from: the configured base branch, a managed
-  # clone's `origin/HEAD`, or else the source repo's own `HEAD`.
-  defp trusted_base_commit(repo, issue_context, settings) do
-    ref = worktree_create_base_ref(repo, issue_context, nil) || managed_clone_default_ref(repo, settings) || "HEAD"
-
-    case resolve_git_commit(repo, ref) do
-      {:ok, commit} -> commit
-      {:error, _reason, _output} -> nil
+  # clone's `origin/HEAD`, or else the source repo's own `HEAD`. Nil when it can't
+  # be resolved, or the repo setting is gone after the workflow refresh.
+  defp trusted_base_commit(issue_context, settings) do
+    with {:ok, repo} <- local_worktree_repo(settings),
+         ref = worktree_create_base_ref(repo, issue_context, nil) || managed_clone_default_ref(repo, settings) || "HEAD",
+         {:ok, commit} <- resolve_git_commit(repo, ref) do
+      commit
+    else
+      _error -> nil
     end
   end
 

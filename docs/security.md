@@ -102,10 +102,9 @@ runs whatever code the checkout holds: any `mix` command evaluates `mix.exs`, an
 
 - **`after_create` in a local worktree runs on the base branch's tree.** A worktree can be created
   on a branch an agent already pushed to: a rework or PR run checks out the PR head, and a removed
-  workspace is made again on its existing `auto/<issue>` branch. When the worktree's tree differs
-  from the base commit (the repository's `base_branch`, else a `workspace.source` clone's
-  `origin/HEAD`, else the source repo's `HEAD`), Symphony detaches the worktree at the base commit,
-  runs the hook, and checks the branch out again. Before the hook, Symphony removes the ignored
+  workspace is made again on its existing `auto/<issue>` branch. So Symphony detaches the worktree
+  at the base commit (the repository's `base_branch`, else a `workspace.source` clone's
+  `origin/HEAD`, else the source repo's `HEAD`), runs the hook, and checks the branch out again. Before the hook, Symphony removes the ignored
   files in the worktree (`git clean -ffdx`), so a reused worktree's hook never loads the `deps/` or
   `_build/` an agent wrote there. A worktree with uncommitted changes, or one whose base commit
   can't be resolved, skips the hook with a warning and keeps its pending marker. The
