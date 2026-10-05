@@ -2102,8 +2102,9 @@ Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `
   gate gave no `approve` (a person's move); the current head is then compared with it like any later
   head. Coming back from a re-review, or out of `Merging`, starts a new stay. A conflict keeps the
   approval until the conflict path has moved the issue out of `Merging`, so a fix pushed while it
-  is still there (an active run, the retry limit) is compared too. A later head with the same fingerprint keeps the
-  approval and auto-merge. Any other head, or one whose fingerprint can't be read, MUST NOT have
+  is still there (an active run, the retry limit) is compared too. An approved fingerprint that
+  couldn't be read at the start of the stay is read again before a new head is compared with it. A
+  later head with the same fingerprint keeps the approval and auto-merge. Any other head, or one whose fingerprint can't be read, MUST NOT have
   auto-merge turned on: the poller turns it off when it is on, moves the issue to the Auto Review
   state, and only then stores a `rereview` state, writes one `acceptance_gate_rereview` audit event
   (`old_head_sha`, `new_head_sha`, `auto_merge_disabled`) and comments on the issue. A failure

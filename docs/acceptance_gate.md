@@ -202,8 +202,9 @@ With `mode: enforce`, set globally or for one repository, Auto Review applies th
   check record), so a push between the gate's approve and that poll is judged too; after a
   person's move with no gate `approve` it is the current head. A conflict keeps the approval
   until the conflict path moves the issue out of Merging, so a fix pushed while it is still there
-  (an active run, the retry limit) is judged too. A later head with the same fingerprint, such as Symphony's
-  update-branch merge of the base or a clean rebase, keeps the approval and auto-merge. Any other
+  (an active run, the retry limit) is judged too. An approved diff that couldn't be read then (a
+  failed fetch) is read again before a new head is compared with it. A later head with the same
+  fingerprint, such as Symphony's update-branch merge of the base or a clean rebase, keeps the approval and auto-merge. Any other
   head (a CI fix, a conflict fix, a landing agent's commit, a person's push), or one whose
   fingerprint can't be read, turns GitHub auto-merge off and moves the issue back to Auto Review,
   where CI, QA and the gate judge the new head; an `approve` moves it back to Merging and

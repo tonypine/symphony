@@ -185,7 +185,10 @@ defmodule SymphonyElixir.AutoMerge do
         %{current | approved_head_sha: approved, approved_fingerprint: nil}
 
       {:error, reason} ->
-        Logger.warning("Auto-merge #{identifier(record)}: could not fingerprint the approved diff; a new head will be re-reviewed commit_sha=#{approved}: #{inspect(reason)}")
+        Logger.warning(
+          "Auto-merge #{identifier(record)}: could not fingerprint the approved diff; it is read again when a new head comes, and that head is re-reviewed if it still can't be commit_sha=#{approved}: #{inspect(reason)}"
+        )
+
         %{current | approved_head_sha: approved, approved_fingerprint: nil}
     end
   end
@@ -206,20 +209,37 @@ defmodule SymphonyElixir.AutoMerge do
 
   defp compare(current, record, opts) do
     case fingerprint(record, current.head_sha, opts) do
-      {:ok, fingerprint} when fingerprint == current.approved_fingerprint ->
-        Logger.info("Auto-merge #{identifier(record)}: #{short_sha(current.head_sha)} keeps the approved diff of #{short_sha(current.approved_head_sha)}; auto-merge stays on")
-        {:ok, %{current | approved_head_sha: current.head_sha}}
-
       {:error, :no_workspace} ->
         {:ok, current}
 
-      {:ok, _fingerprint} ->
-        rereview(current, "#{short_sha(current.head_sha)} changes the diff approved at #{short_sha(current.approved_head_sha)}")
-
       {:error, reason} ->
         rereview(current, "the diff of #{short_sha(current.head_sha)} could not be compared with the approved one: #{format_reason(reason)}")
+
+      {:ok, fingerprint} ->
+        case approved_fingerprint(current, record, opts) do
+          ^fingerprint ->
+            Logger.info("Auto-merge #{identifier(record)}: #{short_sha(current.head_sha)} keeps the approved diff of #{short_sha(current.approved_head_sha)}; auto-merge stays on")
+            {:ok, %{current | approved_head_sha: current.head_sha, approved_fingerprint: fingerprint}}
+
+          nil ->
+            rereview(current, "the diff approved at #{short_sha(current.approved_head_sha)} could not be read to compare with #{short_sha(current.head_sha)}")
+
+          _other ->
+            rereview(current, "#{short_sha(current.head_sha)} changes the diff approved at #{short_sha(current.approved_head_sha)}")
+        end
     end
   end
+
+  # An approved diff that couldn't be read when the stay began (a failed fetch) is read again
+  # before a new head is judged against it, so a passing failure doesn't force a re-review.
+  defp approved_fingerprint(%{approved_fingerprint: nil} = current, record, opts) do
+    case fingerprint(record, current.approved_head_sha, opts) do
+      {:ok, fingerprint} -> fingerprint
+      {:error, _reason} -> nil
+    end
+  end
+
+  defp approved_fingerprint(current, _record, _opts), do: current.approved_fingerprint
 
   defp rereview(current, reason), do: {:rereview, %{current | state: "rereview", reason: truncate(reason)}}
 
@@ -502,11 +522,16 @@ defmodule SymphonyElixir.AutoMerge do
   @doc """
   Turns GitHub auto-merge off for a `Merging` PR whose new head changes the approved diff (see
   `step/5`), before the issue goes back to Auto Review. `current` is the `rereview` state
-  `step/5` returned. Results as for `disable_for_conflict/5`.
+  `step/5` returned. Results as for `disable_for_conflict/5`. Either way auto-merge is off
+  afterwards, so the head it was last turned on for is forgotten: coming back to `Merging`,
+  even on that head, turns it on again.
   """
   @spec disable_for_rereview(map(), map(), t(), keyword(), DateTime.t()) :: {:ok | :disabled, t()} | {:error, term()}
   def disable_for_rereview(record, activity, current, opts, %DateTime{} = now) do
-    turn_off(record, activity, current, opts, now)
+    case turn_off(record, activity, current, opts, now) do
+      {:ok, current} -> {:ok, %{current | enabled_head_sha: nil}}
+      result -> result
+    end
   end
 
   defp turn_off(record, activity, current, opts, now) do
