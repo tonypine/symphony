@@ -596,7 +596,8 @@ defmodule SymphonyElixir.PromptBuilder do
       "PR feedback and CI delivery:",
       "",
       pr_feedback_protocol_line(pr_polling?),
-      ci_feedback_protocol_line(ci_polling?)
+      ci_feedback_protocol_line(ci_polling?),
+      "- An acceptance gate `rework` in `enforce` mode comes back as `In Progress` on the same PR, with an `Auto Review acceptance gate rework` continuation section listing the unmet criteria. Handle it like a QA failure: fix it on the same branch and push. Do not treat it as `Rework`, which still means closing the PR and starting over."
     ]
     |> Enum.join("\n")
   end

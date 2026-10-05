@@ -6,10 +6,11 @@ defmodule SymphonyElixir.PrReviewPoller do
   use GenServer
   require Logger
 
-  alias SymphonyElixir.{AuditLog, AutoMerge, CiPoller, Config, HumanReview, Notifications, RunStore, Tracker, Workspace}
+  alias SymphonyElixir.{AuditLog, AutoMerge, AutoReview, CiPoller, Config, HumanReview, Notifications, RunStore}
   alias SymphonyElixir.GitHub.{CommentMarker, PullRequest}
   alias SymphonyElixir.Learnings.Reflection
   alias SymphonyElixir.Linear.{Issue, Usage}
+  alias SymphonyElixir.{Tracker, Workspace}
 
   @in_review_state "In Review"
   @merging_state "Merging"
@@ -785,7 +786,7 @@ defmodule SymphonyElixir.PrReviewPoller do
         maybe_transition_rework(record, attrs, settings, opts, now)
 
       :conflict ->
-        with {:ok, attrs} <- put_auto_merge_conflict(attrs, record, activity, opts, now) do
+        with {:ok, attrs} <- put_auto_merge_conflict(attrs, record, activity, settings, opts, now) do
           maybe_transition_conflict(record, attrs, opts, now)
         end
 
@@ -864,22 +865,26 @@ defmodule SymphonyElixir.PrReviewPoller do
 
   # A fallback hands one stay in `Merging` to the landing agent, and a CI-fix hold keeps
   # auto-merge off for the rest of that stay. Once the issue leaves `Merging`, the next approval
-  # tries auto-merge again.
+  # tries auto-merge again. The approved diff (see AutoMerge.step/5) belongs to one stay too, so
+  # the next approval records its own.
   defp clear_auto_merge_stay(attrs, record, opts) do
     auto_merge = Map.get(record, :auto_merge)
 
-    if (AutoMerge.fallback?(auto_merge) or AutoMerge.held?(auto_merge)) and not auto_merge_issue?(record, opts),
-      do: Map.put(attrs, :auto_merge, nil),
-      else: attrs
+    cond do
+      auto_merge_issue?(record, opts) -> attrs
+      AutoMerge.fallback?(auto_merge) or AutoMerge.held?(auto_merge) -> Map.put(attrs, :auto_merge, nil)
+      is_binary(Map.get(auto_merge || %{}, :approved_head_sha)) -> Map.put(attrs, :auto_merge, AutoMerge.drop_approval(auto_merge))
+      true -> attrs
+    end
   end
 
-  defp put_auto_merge_conflict(attrs, record, activity, opts, now) do
+  defp put_auto_merge_conflict(attrs, record, activity, settings, opts, now) do
     previous = Map.get(record, :auto_merge)
 
     if auto_merge_issue?(record, opts) or AutoMerge.armed?(previous) do
       auto_merge = AutoMerge.conflict(previous, Map.get(activity, :head_ref_oid), now)
 
-      with {:ok, attrs} <- disable_auto_merge_for_conflict(attrs, record, activity, auto_merge, opts, now) do
+      with {:ok, attrs} <- disable_auto_merge_for_conflict(attrs, record, activity, auto_merge, settings, opts, now) do
         AutoMerge.log_transition(record, previous, attrs.auto_merge)
         {:ok, attrs}
       end
@@ -891,7 +896,7 @@ defmodule SymphonyElixir.PrReviewPoller do
   # Before a conflict-fix run: turn GitHub auto-merge off, so the fix is reviewed and approved
   # into `Merging` again before it lands. While GitHub won't turn it off, the conflict waits
   # for the next poll (a conflicting PR can't merge meanwhile).
-  defp disable_auto_merge_for_conflict(attrs, record, activity, auto_merge, opts, now) do
+  defp disable_auto_merge_for_conflict(attrs, record, activity, auto_merge, settings, opts, now) do
     case AutoMerge.disable_for_conflict(record, activity, auto_merge, opts, now) do
       {:ok, auto_merge} ->
         {:ok, Map.put(attrs, :auto_merge, auto_merge)}
@@ -902,7 +907,7 @@ defmodule SymphonyElixir.PrReviewPoller do
         )
 
         record_auto_merge_disabled(record, auto_merge)
-        comment_auto_merge_disabled(record, opts)
+        comment_auto_merge_disabled(record, settings, opts)
         {:ok, Map.put(attrs, :auto_merge, auto_merge)}
 
       {:error, reason} ->
@@ -932,11 +937,11 @@ defmodule SymphonyElixir.PrReviewPoller do
     end
   end
 
-  defp comment_auto_merge_disabled(record, opts) do
+  defp comment_auto_merge_disabled(record, settings, opts) do
     tracker = Keyword.get(opts, :tracker, Tracker)
     issue_id = Map.get(record, :issue_id)
 
-    case tracker.create_comment(issue_id, AutoMerge.conflict_comment(Map.get(record, :pr_url))) do
+    case tracker.create_comment(issue_id, AutoMerge.conflict_comment(Map.get(record, :pr_url), AutoMerge.rereview?(settings))) do
       :ok ->
         :ok
 
@@ -959,7 +964,7 @@ defmodule SymphonyElixir.PrReviewPoller do
         attrs = maybe_put_conflict_attrs(attrs, record, conflicted, now)
 
         case conflict_review_action(record, conflicted) do
-          :conflict -> transition_auto_merge_conflict(record, attrs, activity, auto_merge, opts, now)
+          :conflict -> transition_auto_merge_conflict(record, attrs, activity, auto_merge, settings, opts, now)
           _watching -> complete_review_update(opts, record, Map.put(attrs, :auto_merge, auto_merge), {:auto_merge, issue_id, auto_merge.state})
         end
 
@@ -972,12 +977,101 @@ defmodule SymphonyElixir.PrReviewPoller do
           comment_auto_merge_fallback(record, auto_merge, opts)
           action
         end
+
+      {:rereview, auto_merge} ->
+        rereview(record, attrs, activity, auto_merge, settings, opts, now)
     end
   end
 
-  defp transition_auto_merge_conflict(record, attrs, activity, auto_merge, opts, now) do
-    with {:ok, attrs} <- disable_auto_merge_for_conflict(attrs, record, activity, auto_merge, opts, now) do
+  defp transition_auto_merge_conflict(record, attrs, activity, auto_merge, settings, opts, now) do
+    with {:ok, attrs} <- disable_auto_merge_for_conflict(attrs, record, activity, auto_merge, settings, opts, now) do
       maybe_transition_conflict(record, attrs, opts, now)
+    end
+  end
+
+  # In `enforce` mode a head that changes the approved diff goes back to Auto Review, where CI, QA
+  # and the acceptance gate judge it (see AutoMerge.step/5). Auto-merge goes off first, so the new
+  # head can't land meanwhile, then the issue moves; the `rereview` state is stored only after the
+  # move, so a failure at either step is tried again on the next poll.
+  defp rereview(record, attrs, activity, auto_merge, settings, opts, now) do
+    issue_id = Map.get(record, :issue_id)
+    target_state = AutoReview.state(settings)
+
+    with {:ok, auto_merge, disabled?} <- disable_auto_merge_for_rereview(record, activity, auto_merge, opts, now),
+         :ok <- move_for_rereview(record, auto_merge, target_state, opts) do
+      Logger.info(
+        "Acceptance gate re-review for #{Map.get(record, :issue_identifier)}: #{auto_merge.reason}; moved to #{target_state} issue_id=#{issue_id} pr_url=#{Map.get(record, :pr_url)} commit_sha=#{auto_merge.head_sha} approved_sha=#{auto_merge.approved_head_sha}"
+      )
+
+      record_rereview(record, auto_merge, disabled?)
+      comment_rereview(record, auto_merge, target_state, opts)
+      complete_review_update(opts, record, Map.put(attrs, :auto_merge, auto_merge), {:acceptance_gate_rereview, issue_id, auto_merge.head_sha})
+    else
+      {:error, reason} -> record_poll_error(record, reason, opts, now)
+    end
+  end
+
+  defp disable_auto_merge_for_rereview(record, activity, auto_merge, opts, now) do
+    case AutoMerge.disable_for_rereview(record, activity, auto_merge, opts, now) do
+      {:ok, auto_merge} ->
+        {:ok, auto_merge, false}
+
+      {:disabled, auto_merge} ->
+        Logger.info(
+          "Auto-merge #{Map.get(record, :issue_identifier)}: turned GitHub auto-merge off because #{auto_merge.reason} issue_id=#{Map.get(record, :issue_id)} pr_url=#{Map.get(record, :pr_url)} commit_sha=#{auto_merge.head_sha}"
+        )
+
+        {:ok, auto_merge, true}
+
+      {:error, reason} ->
+        Logger.warning(
+          "Auto-merge #{Map.get(record, :issue_identifier)}: turning GitHub auto-merge off for the re-review failed; the issue stays in Merging until it is off issue_id=#{Map.get(record, :issue_id)} pr_url=#{Map.get(record, :pr_url)}: #{inspect(reason)}"
+        )
+
+        {:error, {:disable_auto_merge_failed, reason}}
+    end
+  end
+
+  defp move_for_rereview(record, auto_merge, target_state, opts) do
+    case Keyword.get(opts, :tracker, Tracker).update_issue_state(Map.get(record, :issue_id), target_state) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "Failed to move #{Map.get(record, :issue_identifier)} to #{target_state} for the acceptance gate re-review; auto-merge stays off and the move is tried again on the next poll issue_id=#{Map.get(record, :issue_id)} commit_sha=#{auto_merge.head_sha}: #{inspect(reason)}"
+        )
+
+        {:error, {:rereview_transition_failed, reason}}
+    end
+  end
+
+  defp record_rereview(record, auto_merge, disabled?) do
+    %{
+      event_type: "acceptance_gate_rereview",
+      repo_key: Map.get(record, :repo_key),
+      issue_id: Map.get(record, :issue_id),
+      issue_identifier: Map.get(record, :issue_identifier),
+      pr_url: Map.get(record, :pr_url),
+      old_head_sha: auto_merge.approved_head_sha,
+      new_head_sha: auto_merge.head_sha,
+      auto_merge_disabled: disabled?,
+      detail: auto_merge.reason
+    }
+    |> AuditLog.record()
+    |> case do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("Failed to record acceptance_gate_rereview audit event issue_id=#{Map.get(record, :issue_id)}: #{inspect(reason)}")
+    end
+  end
+
+  defp comment_rereview(record, auto_merge, target_state, opts) do
+    tracker = Keyword.get(opts, :tracker, Tracker)
+    issue_id = Map.get(record, :issue_id)
+
+    case tracker.create_comment(issue_id, AutoMerge.rereview_comment(Map.get(record, :pr_url), auto_merge, target_state)) do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("Failed to comment on the acceptance gate re-review issue_id=#{issue_id}: #{inspect(reason)}")
     end
   end
 
@@ -1471,9 +1565,19 @@ defmodule SymphonyElixir.PrReviewPoller do
     |> Map.put(:conflict_retry_count, conflict_retry_count(record) + 1)
     |> Map.put(:dispatched_conflict_keys, append_string(Map.get(record, :dispatched_conflict_keys, []), conflict_key))
     |> Map.put(:error, nil)
+    |> drop_conflict_approval(Map.get(pending_attrs, :auto_merge))
   end
 
   defp maybe_mark_conflict_dispatched(attrs, _record, _pending_attrs, _action), do: attrs
+
+  # The issue has left `Merging` for the conflict fix, which comes back through review, so the
+  # stay's approval goes (see AutoMerge.step/5). While it stays in `Merging` (an active run, the
+  # retry limit, a paused dispatch or a failed move) the approval holds, and a fix pushed then is
+  # re-reviewed.
+  defp drop_conflict_approval(attrs, %{approved_head_sha: approved} = auto_merge) when is_binary(approved),
+    do: Map.put(attrs, :auto_merge, AutoMerge.drop_approval(auto_merge))
+
+  defp drop_conflict_approval(attrs, _auto_merge), do: attrs
 
   defp cleanup_review(record, opts, now, reason) do
     workspace = Keyword.get(opts, :workspace, Workspace)
