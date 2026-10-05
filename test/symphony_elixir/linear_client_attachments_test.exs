@@ -135,6 +135,37 @@ defmodule SymphonyElixir.LinearClientAttachmentsTest do
     end
   end
 
+  test "a rate limit, transport failure or 429/5xx on an attachment page fails the read so callers retry it" do
+    issue = raw_issue("issue-a", "MOT-40", screenshots(1..20), next_cursor: "a-1")
+    second = raw_issue("issue-b", "MOT-41", screenshots(1..5), next_cursor: nil)
+
+    for reason <- [
+          {:linear_rate_limited, 1_000},
+          {:linear_api_request, %RuntimeError{message: "closed"}},
+          {:linear_api_status, 429, %{}},
+          {:linear_api_status, 503, %{}}
+        ] do
+      graphql_fun =
+        graphql(
+          %{
+            "SymphonyLinearPoll" => poll_response([issue, second]),
+            "SymphonyLinearIssuesById" => %{"data" => %{"issues" => %{"nodes" => [issue, second]}}},
+            "SymphonyLinearIssueByIdentifier" => %{"data" => %{"issue" => issue}}
+          },
+          %{{"issue-a", "a-1"} => {:error, reason}}
+        )
+
+      log =
+        capture_log([level: :warning], fn ->
+          assert {:error, ^reason} = Client.fetch_issue_states_by_ids_for_test(["issue-a", "issue-b"], graphql_fun)
+          assert {:error, {:repo_poll_failed, [{"default", ^reason}]}} = Client.fetch_candidate_issues_for_test(graphql_fun)
+          assert {:error, ^reason} = Client.fetch_issue_by_identifier_for_test("MOT-40", graphql_fun)
+        end)
+
+      refute log =~ "Could not read more Linear attachments"
+    end
+  end
+
   test "stops reading attachment pages after ten more pages and says later ones were not read" do
     issue = raw_issue("issue-a", "MOT-40", screenshots(1..20), next_cursor: "a-0")
 

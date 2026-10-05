@@ -2033,7 +2033,9 @@ The poller:
   reports the PR as `closed` or `merged` do not count as an attached PR anywhere in Symphony, so a
   reopened issue whose only PR was closed runs the normal pre-PR flow; whenever the first page of an
   issue's attachments is full, Symphony reads the remaining pages (up to 10 more), so it sees every
-  attachment and many others, such as QA screenshots, do not hide the PR; an issue the CI poller watches a PR
+  attachment and many others, such as QA screenshots, do not hide the PR; a rate limit, transport
+  failure, or 429/5xx response on one of those pages fails the whole issue read, so callers retry it
+  as they retry the first page, rather than seeing the issue without its PR; an issue the CI poller watches a PR
   for, or an agent run whose issue had a PR at dispatch, logs a warning naming the issue when its
   attachments show no PR);
 - records each PR URL, issue id, and workspace path in the durable run store;
