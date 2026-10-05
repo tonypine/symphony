@@ -372,7 +372,7 @@ defmodule SymphonyElixir.AutoReviewQaTest do
       assert_receive {:memory_tracker_comment, "issue-qa-flow", report}
       assert report =~ "**Verdict:** blocked → Human Review"
       assert_receive {:memory_tracker_state_update, "issue-qa-flow", "Human Review"}
-      assert %{qa_verdict: "blocked", qa_target_state: "Human Review", qa_applied: true} = stored_record()
+      assert %{qa_verdict: "blocked", qa_target_state: "Human Review", qa_applied: true, qa_infra_blocked: false} = stored_record()
 
       Application.put_env(:symphony_elixir, :qa_flow_agent_result, blocked.(false))
       record = put_record()
@@ -422,6 +422,7 @@ defmodule SymphonyElixir.AutoReviewQaTest do
 
         assert_receive {:memory_tracker_comment, _issue_id, report}
         assert report =~ text
+        assert %{qa_verdict: "blocked", qa_infra_blocked: true} = stored_record()
       end
 
       record = put_record()
@@ -432,6 +433,7 @@ defmodule SymphonyElixir.AutoReviewQaTest do
 
       assert_receive {:memory_tracker_comment, _issue_id, report}
       assert report =~ "could not list the PR's changed files"
+      assert %{qa_infra_blocked: true} = stored_record()
     end
 
     test "a pass that hits the usage limit stores no verdict, keeps the issue in Auto Review and runs again once the hold lifts" do
@@ -783,6 +785,59 @@ defmodule SymphonyElixir.AutoReviewQaTest do
 
       assert {:qa_started, "issue-qa-flow", @sha} =
                AutoReview.on_green(issue(), record, %{commit_sha: @sha, pr_url: nil}, settings, qa_runner: FakeRunner)
+    end
+
+    test "an issue back after an infrastructure block gets a fresh pass, once a usage-limit hold lifts" do
+      settings = Config.settings!()
+      ci_status = %{commit_sha: @sha, pr_url: nil}
+      poll = fn record -> AutoReview.on_green(issue(), record, ci_status, settings, qa_runner: FakeRunner) end
+      on_exit(fn -> RunStore.put_usage_limits(%{}) end)
+      blocked = %{qa_sha: @sha, qa_verdict: "blocked", qa_target_state: "In Review", qa_infra_blocked: true}
+      Application.put_env(:symphony_elixir, :qa_flow_runner_result, :started)
+
+      # Not moved on yet: the stored verdict's move is retried, as for any verdict.
+      record = put_record(Map.put(blocked, :qa_applied, false))
+      assert {:auto_review_qa, "issue-qa-flow", :blocked, "In Review"} = poll.(record)
+      refute_received {:qa_runner_request, _job, _opts}
+
+      # Back in Auto Review while the QA provider is held: the verdict is dropped and the pass waits.
+      resume_at = DateTime.add(DateTime.utc_now(), 3600)
+      :ok = RunStore.put_usage_limits(%{{"openai", :all} => %{provider: "openai", scope: :all, resume_at: resume_at}})
+      record = put_record(Map.put(blocked, :qa_applied, true))
+
+      capture_log(fn ->
+        assert {:qa_waiting, "issue-qa-flow", :usage_limited} = poll.(record)
+      end)
+
+      refute_received {:qa_runner_request, _job, _opts}
+      assert %{qa_verdict: nil, qa_applied: nil} = stored_record()
+
+      :ok = RunStore.put_usage_limits(%{})
+      assert {:qa_started, "issue-qa-flow", @sha} = poll.(stored_record())
+      assert_receive {:qa_runner_request, %{sha: @sha}, _opts}
+    end
+
+    test "an issue back after the agent's own blocked verdict keeps it" do
+      settings = Config.settings!()
+      ci_status = %{commit_sha: @sha, pr_url: nil}
+
+      for {infra_blocked, needs_person_state} <- [{false, "Human Review"}, {nil, "In Review"}] do
+        record =
+          put_record(%{
+            qa_sha: @sha,
+            qa_verdict: "blocked",
+            qa_target_state: needs_person_state,
+            qa_applied: true,
+            qa_infra_blocked: infra_blocked
+          })
+
+        assert {:auto_review_qa, "issue-qa-flow", :blocked, ^needs_person_state} =
+                 AutoReview.on_green(issue(), record, ci_status, settings, qa_runner: FakeRunner)
+
+        assert_receive {:memory_tracker_state_update, "issue-qa-flow", ^needs_person_state}
+        refute_received {:qa_runner_request, _job, _opts}
+        assert %{qa_verdict: "blocked"} = stored_record()
+      end
     end
 
     test "re-applies a stored verdict and counts a return without a new commit as another failed attempt" do
