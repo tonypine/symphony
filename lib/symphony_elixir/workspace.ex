@@ -1582,9 +1582,104 @@ defmodule SymphonyElixir.Workspace do
 
   defp run_after_create_hook(hooks, workspace, issue_context, worker_host) do
     mark_after_create_pending(workspace, worker_host)
+    run = fn -> run_after_create_hook_with_retry(hooks, workspace, issue_context, worker_host) end
 
-    with :ok <- run_after_create_hook_with_retry(hooks, workspace, issue_context, worker_host) do
-      clear_after_create_pending(workspace, worker_host)
+    case run_on_base_tree(workspace, issue_context, worker_host, run) do
+      :ok -> clear_after_create_pending(workspace, worker_host)
+      :skipped -> :ok
+      error -> error
+    end
+  end
+
+  # `after_create` runs on the host, outside the agent sandbox, and usually runs the
+  # repo's own build tool (`mix deps.get` evaluates `mix.exs`). A local worktree can
+  # be created on a branch an agent already pushed to (a rework, a PR run, a
+  # workspace removed and made again), so the hook runs on the tree of the base
+  # branch instead: the worktree is detached at the base commit for the hook and put
+  # back on its branch afterwards. That runs on the base tree too, so a worktree an
+  # earlier hook left detached goes back on its branch. Ignored files (`deps/`,
+  # `_build/`) an agent wrote in a reused worktree are removed first: the hook
+  # installs them again. A worktree with changes of its own can't be switched, so
+  # its hook is skipped, and its pending marker kept.
+  defp run_on_base_tree(workspace, issue_context, nil, run) do
+    settings = settings_for_issue_context(issue_context)
+
+    case settings.workspace.strategy do
+      "worktree" -> run_on_local_base_tree(workspace, issue_context, settings, run)
+      _strategy -> run.()
+    end
+  end
+
+  defp run_on_base_tree(_workspace, _issue_context, _worker_host, run), do: run.()
+
+  defp run_on_local_base_tree(workspace, issue_context, settings, run) do
+    base_commit = trusted_base_commit(issue_context, settings)
+    branch = worktree_branch(issue_context)
+
+    cond do
+      is_nil(base_commit) ->
+        skip_base_tree_hook(workspace, issue_context, branch, "no_base_commit")
+
+      not worktree_clean?(workspace) ->
+        skip_base_tree_hook(workspace, issue_context, branch, "uncommitted_changes")
+
+      true ->
+        unless same_tree?(workspace, base_commit) do
+          Logger.info("Running workspace hook on the base branch tree hook=after_create #{issue_log_context(issue_context)} workspace=#{workspace} branch=#{branch} base_commit=#{base_commit}")
+        end
+
+        run_detached_at(workspace, base_commit, branch, run)
+    end
+  end
+
+  defp skip_base_tree_hook(workspace, issue_context, branch, reason) do
+    Logger.warning("Skipping workspace hook: it can't run on the base branch tree hook=after_create #{issue_log_context(issue_context)} workspace=#{workspace} branch=#{branch} reason=#{reason}")
+
+    :skipped
+  end
+
+  defp run_detached_at(workspace, commit, branch, run) do
+    with :ok <- checkout(workspace, ["--detach", commit]) do
+      result = with :ok <- git_step(workspace, ["clean", "-ffdxq"]), do: run.()
+      with :ok <- checkout(workspace, ["--force", branch]), do: result
+    end
+  end
+
+  # The commit a new branch starts from: the configured base branch, a managed
+  # clone's `origin/HEAD`, or else the source repo's own `HEAD`. Nil when it can't
+  # be resolved, or the repo setting is gone after the workflow refresh.
+  defp trusted_base_commit(issue_context, settings) do
+    with {:ok, repo} <- local_worktree_repo(settings),
+         ref = worktree_create_base_ref(repo, issue_context, nil) || managed_clone_default_ref(repo, settings) || "HEAD",
+         {:ok, commit} <- resolve_git_commit(repo, ref) do
+      commit
+    else
+      _error -> nil
+    end
+  end
+
+  defp managed_clone_default_ref(repo, %{workspace: %{github: github}}) when is_binary(github) do
+    if git_ref_exists?(repo, "origin/HEAD"), do: "origin/HEAD"
+  end
+
+  defp managed_clone_default_ref(_repo, _settings), do: nil
+
+  # Failures name the ref they couldn't resolve, so they never compare equal.
+  defp same_tree?(workspace, commit) do
+    git_output(workspace, ["rev-parse", "--verify", "HEAD^{tree}"]) ==
+      git_output(workspace, ["rev-parse", "--verify", "#{commit}^{tree}"])
+  end
+
+  defp worktree_clean?(workspace) do
+    git_output(workspace, ["status", "--porcelain=v1", "--untracked-files=all"]) == {:ok, ""}
+  end
+
+  defp checkout(workspace, args), do: git_step(workspace, ["checkout", "--quiet" | args])
+
+  defp git_step(workspace, args) do
+    case run_git(workspace, args) do
+      :ok -> :ok
+      {:error, reason, _output} -> {:error, reason}
     end
   end
 
