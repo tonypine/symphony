@@ -1,41 +1,67 @@
-defmodule SymphonyElixir.GitFilterDrivers do
+defmodule SymphonyElixir.GitConfigCommands do
   @moduledoc """
-  Turns off the filter drivers a repo's git config defines, for Symphony's host-side git.
+  Keeps Symphony's host-side git from running the commands a repo's git config names.
 
-  A filter driver (`filter.<name>.clean`, `.smudge` or `.process`) is a shell command git runs
-  as the operator when it writes a work-tree file whose attributes name the driver, or reads one
-  back: `worktree add`, `checkout`, `reset`, `status`, `add`. Agents commit in the repo, so its
-  config may hold a driver they wrote, and a branch's `.gitattributes` picks it. `config_args/3`
-  returns `-c` overrides that blank the commands of every driver the command could load and turn
-  off `required`, so git keeps those files as the repo stores them.
+  Agents commit in the repo, so its config may hold a command they wrote, and a branch's
+  `.gitattributes` picks the files it runs on. Git runs these as the operator:
 
-  It lists the drivers in the config the command reads, and in every file that config includes,
-  whatever the include's condition: an `includeIf "gitdir:..."` can apply only in the worktree
-  `worktree add` creates.
+    * a filter driver (`filter.<name>.clean`, `.smudge` or `.process`) when it writes a work-tree
+      file whose attributes name the driver, or reads one back: `worktree add`, `checkout`,
+      `reset`, `status`, `add`. `config_args/3` blanks its commands and turns off `required`, so
+      git keeps those files as the repo stores them;
+    * a merge driver (`merge.<name>.driver`) when `merge` merges such a file. `config_args/3`
+      replaces it with `git merge-file`, which merges the file as git does when no driver is set;
+    * a diff driver (`diff.external`, `diff.<name>.command` and `.textconv`) when `diff`, `log` or
+      `show` print a patch, and the config's `remote.<name>.uploadpack` or `.receivepack` when
+      `fetch`, `ls-remote`, `pull` or `push` reach a remote on the same machine.
+      `subcommand_args/1` passes the options that turn these off: the config's value wins over a
+      `-c` one for the two remote keys, and an empty diff driver makes git fail.
 
-  `shell_functions/0` does the same in the scripts Symphony runs on an SSH worker.
+  `config_args/3` lists the drivers in the config the command reads, and in every file that
+  config includes, whatever the include's condition: an `includeIf "gitdir:..."` can apply only
+  in the worktree `worktree add` creates.
+
+  `shell_functions/0` blanks the filter drivers the same way in the scripts Symphony runs on an
+  SSH worker.
   """
 
   @typedoc "Runs git with the given arguments and options, returning stdout, exit status and stderr."
   @type reader :: ([String.t()], keyword() -> {String.t(), non_neg_integer(), String.t()})
 
-  # Subcommands that never read or write a work-tree file's content, so no filter runs.
+  # Subcommands that never read or write a work-tree file's content, so no filter or merge driver
+  # runs.
   @no_filter_subcommands ~w(branch config fetch for-each-ref log ls-remote ls-tree merge-base remote
                             rev-list rev-parse show show-ref symbolic-ref update-ref)
   # Global options that take their value as the next argument.
   @global_options_with_value ~w(-C -c --git-dir --work-tree --namespace --config-env --attr-source)
-  @config_keys "^(filter\\..*\\.(clean|smudge|process|required)|include\\.path|includeif\\..*\\.path)$"
-  @driver_keys "^filter\\..*\\.(clean|smudge|process|required)$"
-  @include_keys "^(include|includeif\\..*)\\.path$"
+  @config_keys "^(filter\\..*\\.(clean|smudge|process|required)|merge\\..*\\.driver|include\\.path|includeif\\..*\\.path)$"
+  @shell_filter_keys "^filter\\..*\\.(clean|smudge|process|required)$"
+  @shell_include_keys "^(include|includeif\\..*)\\.path$"
   @list_args ["-z", "--show-scope", "--show-origin", "--get-regexp", @config_keys]
   @config_dirs_args ["rev-parse", "--path-format=absolute", "--git-common-dir", "--git-dir"]
-  @driver_key ~r/\Afilter\.(.*)\.(?:clean|smudge|process|required)\z/s
+  @driver_keys [
+    filter: ~r/\Afilter\.(.*)\.(?:clean|smudge|process|required)\z/s,
+    merge: ~r/\Amerge\.(.*)\.driver\z/s
+  ]
   @include_key ~r/\A(?:include|includeif\..*)\.path\z/s
   # Git refuses to follow includes deeper than this.
   @max_include_depth 10
+  # Git's own three-way merge of the temp files git hands a merge driver, with the marker size and
+  # labels git would use; it exits non-zero when the file conflicts, as a driver must.
+  @merge_file_driver "git merge-file --marker-size=%L -L %X -L %S -L %Y %A %O %B"
+  @no_diff_drivers ["--no-ext-diff", "--no-textconv"]
+  @subcommand_options %{
+    "diff" => @no_diff_drivers,
+    "log" => @no_diff_drivers,
+    "show" => @no_diff_drivers,
+    "fetch" => ["--upload-pack=git-upload-pack"],
+    "ls-remote" => ["--upload-pack=git-upload-pack"],
+    "pull" => ["--upload-pack=git-upload-pack"],
+    "push" => ["--receive-pack=git-receive-pack"]
+  }
 
   @doc """
-  The `-c` overrides that turn off every filter driver git could load for `args`.
+  The `-c` overrides that turn off every filter and merge driver git could load for `args`.
 
   `read` runs git with Symphony's safe config and env. Returns an error, and the command must not
   run, when the config can't be read or names a driver `-c` can't address (a name with `=`).
@@ -61,8 +87,25 @@ defmodule SymphonyElixir.GitFilterDrivers do
   end
 
   @doc """
+  `args` with the options that keep its subcommand from running a diff driver or the config's
+  upload or receive pack command, right after the subcommand.
+  """
+  @spec subcommand_args([String.t()]) :: [String.t()]
+  def subcommand_args(args) when is_list(args) do
+    case split_global_args(args, []) do
+      {global_options, subcommand} when is_map_key(@subcommand_options, subcommand) ->
+        {global_args, [^subcommand | rest]} = Enum.split(args, length(Enum.concat(global_options)))
+        global_args ++ [subcommand | Map.fetch!(@subcommand_options, subcommand)] ++ rest
+
+      _other ->
+        args
+    end
+  end
+
+  @doc """
   Shell functions for the scripts Symphony runs on an SSH worker, which give them
-  `symphony_git <dir> <args>`: git `-C <dir>` with the overrides of `config_args/3`.
+  `symphony_git <dir> <args>`: git `-C <dir>` with the filter driver overrides of
+  `config_args/3`.
 
   The script defines `symphony_git_raw`, which runs git with Symphony's safe config and env, before
   it calls `symphony_git`. A subcommand that can read or write a work-tree file first lists the
@@ -100,7 +143,7 @@ defmodule SymphonyElixir.GitFilterDrivers do
     symphony_git_filter_keys() {
       symphony_git_dirs=$(symphony_git_raw -C "$1" rev-parse --git-common-dir --git-dir) ||
         { symphony_git_refuse "git printed no config directories in $1"; return; }
-      symphony_git_keys=$(symphony_git_config -C "$1" config -z --name-only --get-regexp '#{@driver_keys}') ||
+      symphony_git_keys=$(symphony_git_config -C "$1" config -z --name-only --get-regexp '#{@shell_filter_keys}') ||
         { symphony_git_refuse "reading its config failed"; return; }
       symphony_git_common=${symphony_git_dirs%%"$symphony_git_nl"*}
       symphony_git_gitdir=${symphony_git_dirs#*"$symphony_git_nl"}
@@ -116,8 +159,8 @@ defmodule SymphonyElixir.GitFilterDrivers do
           case $symphony_git_seen in *"$symphony_git_nl$symphony_git_file$symphony_git_nl"*) continue ;; esac
           symphony_git_seen=$symphony_git_seen$symphony_git_file$symphony_git_nl
           [ -f "$symphony_git_file" ] || continue
-          if symphony_git_found=$(symphony_git_config config --file "$symphony_git_file" --no-includes -z --name-only --get-regexp '#{@driver_keys}' 2>/dev/null) &&
-            symphony_git_includes=$(symphony_git_config config --file "$symphony_git_file" --no-includes -z --get-regexp '#{@include_keys}' 2>/dev/null); then
+          if symphony_git_found=$(symphony_git_config config --file "$symphony_git_file" --no-includes -z --name-only --get-regexp '#{@shell_filter_keys}' 2>/dev/null) &&
+            symphony_git_includes=$(symphony_git_config config --file "$symphony_git_file" --no-includes -z --get-regexp '#{@shell_include_keys}' 2>/dev/null); then
             symphony_git_keys=$symphony_git_keys$symphony_git_nl$symphony_git_found
           elif [ "$symphony_git_depth" -eq 0 ]; then
             symphony_git_refuse "reading $symphony_git_file failed"
@@ -270,7 +313,10 @@ defmodule SymphonyElixir.GitFilterDrivers do
   end
 
   defp driver_names(entries) do
-    for {_scope, _origin, key, _value} <- entries, [_key, name] <- [Regex.run(@driver_key, key)], do: name
+    for {_scope, _origin, key, _value} <- entries,
+        {kind, pattern} <- @driver_keys,
+        [_key, name] <- [Regex.run(pattern, key)],
+        do: {kind, name}
   end
 
   # Git reads a relative include path from the directory of the file that includes it.
@@ -304,16 +350,18 @@ defmodule SymphonyElixir.GitFilterDrivers do
   end
 
   defp override_args(names) do
-    case Enum.find(names, &String.contains?(&1, "=")) do
+    case Enum.find(names, fn {_kind, name} -> String.contains?(name, "=") end) do
       nil ->
         {:ok, names |> Enum.uniq() |> Enum.sort() |> Enum.flat_map(&driver_args/1)}
 
-      name ->
-        {:error, refusal("the repo config defines filter driver #{inspect(name)}, which -c can't turn off"), 128}
+      {kind, name} ->
+        {:error, refusal("the repo config defines #{kind} driver #{inspect(name)}, which -c can't turn off"), 128}
     end
   end
 
-  defp driver_args(name) do
+  defp driver_args({:filter, name}) do
     Enum.flat_map(["clean=", "smudge=", "process=", "required=false"], &["-c", "filter.#{name}.#{&1}"])
   end
+
+  defp driver_args({:merge, name}), do: ["-c", "merge.#{name}.driver=#{@merge_file_driver}"]
 end

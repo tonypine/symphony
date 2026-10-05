@@ -24,7 +24,7 @@ defmodule SymphonyElixir.Repo.FetcherTest do
 
     assert Fetcher.fetch_origin(repo, server: server, git: git) == {"From origin\n", 0}
     assert [call] = calls(root)
-    assert call =~ "-C #{repo} fetch origin"
+    assert call =~ "-C #{repo} fetch --upload-pack=git-upload-pack origin"
   end
 
   test "a fetch asked for while one of the same repo runs waits for it and gets its result", %{
@@ -262,7 +262,7 @@ defmodule SymphonyElixir.Repo.FetcherTest do
     test "fetches origin in $repo with Symphony's safe git config", %{root: root, repo: repo, bin: bin} do
       assert {_output, 0} = run_remote_script(bin, repo)
       assert [call] = calls(root)
-      assert String.ends_with?(call, " -C #{repo} fetch origin")
+      assert String.ends_with?(call, " -C #{repo} fetch --upload-pack=git-upload-pack origin")
       assert call =~ "-c core.sshCommand=ssh "
       assert call =~ "-c credential.helper= "
     end

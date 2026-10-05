@@ -4,7 +4,7 @@ defmodule SymphonyElixir.Workspace do
   """
 
   require Logger
-  alias SymphonyElixir.{Config, GitFilterDrivers, ManagedClone, PathSafety, ProcessTree, SSH, WorkflowSource}
+  alias SymphonyElixir.{Config, GitConfigCommands, ManagedClone, PathSafety, ProcessTree, SSH, WorkflowSource}
   alias SymphonyElixir.Config.Schema.Hooks
   alias SymphonyElixir.GitHub.Repo, as: GitHubRepo
   alias SymphonyElixir.Repo.{Fetcher, FetchLog}
@@ -20,6 +20,9 @@ defmodule SymphonyElixir.Workspace do
   # config, which the agent writes, so `status` must not run git in it to see whether it is dirty,
   # nor `checkout` or `reset` recurse into it. (`add` ignores `diff.ignoreSubmodules`; the orphan
   # backup's `add -A` starts from an empty index, which lists no nested repo to check.)
+  # The last five keep git from running a command the config names: a fetch lists no refs of the
+  # repo's alternate object stores (`core.alternateRefsCommand`), no `git://` remote goes through
+  # `core.gitProxy`, and nothing checks or makes a signature with `gpg.program`.
   @safe_git_config_overrides [
     "core.sshCommand=ssh",
     "core.fsmonitor=",
@@ -28,7 +31,12 @@ defmodule SymphonyElixir.Workspace do
     "diff.ignoreSubmodules=dirty",
     "protocol.ext.allow=never",
     "protocol.file.allow=user",
-    "submodule.recurse=false"
+    "submodule.recurse=false",
+    "core.alternateRefsCommand=true",
+    "protocol.git.allow=never",
+    "log.showSignature=false",
+    "merge.verifySignatures=false",
+    "push.gpgSign=false"
   ]
   # Exit status and output line of an SSH worker's `after_create` wrapper that
   # skipped the hook because it can't run on the base branch tree.
@@ -80,8 +88,9 @@ defmodule SymphonyElixir.Workspace do
     safe_git(command, args, [])
   end
 
-  # Every call also blanks the filter drivers the repo's config defines (see
-  # `SymphonyElixir.GitFilterDrivers`), and refuses to run git when it can't. The scan runs git
+  # Every call also turns off the filter and merge drivers the repo's config defines, and the
+  # diff drivers and upload or receive pack commands it names (see
+  # `SymphonyElixir.GitConfigCommands`), and refuses to run git when it can't. The scan runs git
   # through `/bin/sh`, so a missing git raises first, as `System.cmd/3` does.
   @spec safe_git(String.t(), [String.t()], keyword()) :: {Collectable.t(), non_neg_integer()}
   def safe_git(command, args, opts) when is_binary(command) and is_list(args) and is_list(opts) do
@@ -89,16 +98,19 @@ defmodule SymphonyElixir.Workspace do
       :erlang.error(:enoent, [command, args, opts])
     end
 
-    case GitFilterDrivers.config_args(args, opts, &read_git(command, &1, &2)) do
-      {:ok, filter_args} -> System.cmd(command, safe_git_args(filter_args ++ args), safe_git_opts(opts))
-      {:error, message, status} -> {message, status}
+    case GitConfigCommands.config_args(args, opts, &read_git(command, &1, &2)) do
+      {:ok, driver_args} ->
+        System.cmd(command, safe_git_args(driver_args ++ GitConfigCommands.subcommand_args(args)), safe_git_opts(opts))
+
+      {:error, message, status} ->
+        {message, status}
     end
   end
 
   # The shell functions an SSH worker's script defines to run git as `safe_git/3` does:
   # `symphony_git <dir> <args>` runs `git -C <dir> <args>` with the same env and `-c` overrides,
   # and blanks the filter drivers the repo's config defines (see
-  # `SymphonyElixir.GitFilterDrivers.shell_functions/0`).
+  # `SymphonyElixir.GitConfigCommands.shell_functions/0`).
   @spec remote_safe_git_functions() :: String.t()
   def remote_safe_git_functions do
     env = Enum.map_join(@safe_git_env, " ", fn {key, value} -> "#{key}=#{shell_escape(value)}" end)
@@ -106,7 +118,7 @@ defmodule SymphonyElixir.Workspace do
 
     """
     symphony_git_raw() { #{env} git #{overrides} "$@"; }
-    #{GitFilterDrivers.shell_functions()}\
+    #{GitConfigCommands.shell_functions()}\
     """
   end
 
@@ -115,8 +127,8 @@ defmodule SymphonyElixir.Workspace do
   # shim's cache warning) would otherwise land in the file content.
   @spec safe_git_stdout([String.t()]) :: {String.t(), non_neg_integer(), String.t()}
   def safe_git_stdout(args) when is_list(args) do
-    case GitFilterDrivers.config_args(args, [], &read_git("git", &1, &2)) do
-      {:ok, filter_args} -> read_git("git", filter_args ++ args, [])
+    case GitConfigCommands.config_args(args, [], &read_git("git", &1, &2)) do
+      {:ok, driver_args} -> read_git("git", driver_args ++ GitConfigCommands.subcommand_args(args), [])
       {:error, message, status} -> {"", status, message}
     end
   end
