@@ -1139,6 +1139,13 @@ issue stays in Auto Review, Symphony holds that provider's runs until the limit 
 agent run, see `agent.usage_limit`), and the next green CI poll after that runs the pass again on
 the same PR head. With `agent.usage_limit.auto_pause: false` it is `blocked` instead.
 
+A `blocked` the QA agent didn't decide itself (it crashed, hit the usage limit with `auto_pause`
+off, or its dev server, emulator or browser didn't start) isn't kept for the PR head: when the
+issue is moved back to Auto Review on the same head, QA runs again before the acceptance gate
+judges it, after the usage limit resets if one still holds. A `blocked` verdict from the agent
+(a missing secret, a step only a person can do) is kept, and goes to the gate or human review
+again as it did the first time.
+
 Every pass rewrites one `## Symphony QA Report` comment on the issue (Symphony's only comment
 besides the agent workpad) and records a run with `kind: "qa"`, its tokens and wall time in the
 run store, which the dashboard's run history shows. `qa_passed` and `qa_failed` notifications are

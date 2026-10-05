@@ -23,6 +23,9 @@ defmodule SymphonyElixir.AutoReview do
   - a pass whose QA agent runs into the provider's usage limit gets no verdict: the
     issue stays in Auto Review, the orchestrator holds the provider's runs until the
     limit resets (`agent.usage_limit.auto_pause`), and the pass runs again after that;
+  - a `blocked` the QA agent didn't decide itself (it crashed, its dev server or emulator
+    didn't start) is not kept for the head once it moved the issue on: an issue moved back
+    to Auto Review on the same head gets a fresh pass instead of the old verdict;
   - a pass that ends after its issue left Auto Review, its PR merged or closed, or its
     head moved on writes its report but leaves the issue where it is.
 
@@ -155,8 +158,9 @@ defmodule SymphonyElixir.AutoReview do
 
   When the PR head already has a QA result, the stored outcome is applied again: a
   failed move is retried, and an issue back in Auto Review on the same SHA after a
-  `fail` counts as another failed fix attempt. Otherwise a QA pass is requested from
-  the runner (`opts[:qa_runner]`, default `SymphonyElixir.QaRunner`).
+  `fail` counts as another failed fix attempt, while one back after a `blocked` the QA
+  agent didn't decide gets a fresh pass. Otherwise a QA pass is requested from the
+  runner (`opts[:qa_runner]`, default `SymphonyElixir.QaRunner`).
 
   With the acceptance gate on, a stored QA `pass`, `skip` or `blocked` applies the gate's
   stored verdict for the SHA, or asks the gate runner (`opts[:gate_runner]`, default
@@ -175,6 +179,9 @@ defmodule SymphonyElixir.AutoReview do
       not is_binary(sha) or sha == "" ->
         {:qa_waiting, issue_id, :missing_head_sha}
 
+      rerun_on_return?(record, sha) ->
+        rerun_qa(issue, record, ci_status, settings, opts)
+
       Map.get(record, :qa_sha) == sha and is_binary(Map.get(record, :qa_verdict)) ->
         reapply_outcome(issue, record, settings, opts)
 
@@ -185,6 +192,30 @@ defmodule SymphonyElixir.AutoReview do
       true ->
         request_qa(issue, record, sha, ci_status, settings, opts)
     end
+  end
+
+  # A `blocked` the QA agent didn't decide (it crashed, hit a usage limit with `auto_pause` off, its
+  # dev server, emulator or browser didn't start, or git failed) says nothing about the PR. Once it
+  # moved the issue on, a return to Auto Review on the same head runs the pass again instead of
+  # handing the old verdict to the gate.
+  defp rerun_on_return?(record, sha) do
+    Map.get(record, :qa_sha) == sha and Map.get(record, :qa_verdict) == "blocked" and
+      Map.get(record, :qa_infra_blocked) == true and Map.get(record, :qa_applied) == true
+  end
+
+  # The gate's verdict for the head went with the old QA verdict, so it is dropped too: the fresh
+  # pass asks the gate again.
+  defp rerun_qa(issue, record, ci_status, settings, opts) do
+    qa_attrs = Map.new(~w(qa_sha qa_verdict qa_reason qa_target_state qa_applied qa_infra_blocked)a, &{&1, nil})
+    attrs = Map.merge(qa_attrs, %{gate_sha: nil, gate_verdict: nil})
+    update_ci_check(Keyword.get(opts, :run_store, RunStore), record, attrs)
+
+    Logger.info(
+      "QA pass runs again: #{issue.identifier} came back to #{state(settings)} after an infrastructure block " <>
+        "issue_id=#{issue.id} sha=#{Map.get(record, :qa_sha)}"
+    )
+
+    handle_green(issue, Map.merge(record, attrs), ci_status, settings, opts)
   end
 
   # The QA agent runs on `auto_review.kind` (else `agent.kind`), so a Codex QA agent waits on the Codex limit.
@@ -733,7 +764,9 @@ defmodule SymphonyElixir.AutoReview do
         qa_target_state: target_state,
         qa_applied: false,
         qa_run_id: Map.get(outcome, :run_id),
-        qa_updated_at: DateTime.utc_now()
+        qa_updated_at: DateTime.utc_now(),
+        # A `blocked` with no agent result is an error, not the QA agent's verdict.
+        qa_infra_blocked: verdict == :blocked and not Map.has_key?(outcome, :result)
       }
       |> Map.merge(verdict_attrs(verdict, escalated?, fix_attempts, sha, result))
       |> keep_fix_attempts(issue, settings)

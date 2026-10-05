@@ -21,6 +21,13 @@ defmodule SymphonyElixir.AutoReviewGateTest do
     end
   end
 
+  defmodule FakeQaRunner do
+    def request(job, _opts) do
+      send(Application.fetch_env!(:symphony_elixir, :gate_flow_recipient), {:qa_request, job})
+      :started
+    end
+  end
+
   defmodule FakeContext do
     def build(_issue, _record, _sha, _settings, _opts) do
       {:ok,
@@ -567,6 +574,41 @@ defmodule SymphonyElixir.AutoReviewGateTest do
       assert %{qa_fix_attempts: 0, gate_applied: true} = stored_record()
       assert [run] = RunStore.list_runs(@repo_key, :all)
       refute Map.has_key?(run, :moved_by_gate)
+    end
+
+    test "an issue back in Auto Review after an infrastructure block gets a fresh QA pass before the gate", %{root: root} do
+      settings = settings("enforce", root)
+      crash = {:error, {:qa_agent_failed, :port_exit}, QaAgent.empty_tokens()}
+      Application.put_env(:symphony_elixir, :gate_flow_qa_result, crash)
+
+      assert {:gate_started, "issue-gate-flow", @sha} = AutoReview.run_qa(qa_job(put_record(), settings), qa_opts(["lib/symphony_elixir/cli.ex"]))
+      assert_receive {:gate_request, %{qa: %{verdict: :blocked}} = job, _opts}
+      assert %{qa_verdict: "blocked", qa_infra_blocked: true} = stored_record()
+
+      # The gate escalates on the block, and the issue goes to In Review.
+      assert {:auto_review_gate, "issue-gate-flow", "escalate", "In Review"} = AutoReview.run_gate(job, gate_opts(root))
+      assert_receive {:memory_tracker_state_update, "issue-gate-flow", "In Review"}
+      assert %{qa_applied: true, gate_sha: @sha, gate_verdict: "escalate"} = stored_record()
+
+      # A person moves it back to Auto Review on the same head: QA runs again, the old verdicts go.
+      poll_opts = [gate_runner: FakeGateRunner, qa_runner: FakeQaRunner]
+
+      log =
+        capture_log(fn ->
+          assert {:qa_started, "issue-gate-flow", @sha} =
+                   AutoReview.on_green(issue(), stored_record(), %{commit_sha: @sha}, settings, poll_opts)
+        end)
+
+      assert log =~ "QA pass runs again: TP-960 came back to Auto Review after an infrastructure block"
+      assert_receive {:qa_request, %{sha: @sha, record: rerun_record}}
+      refute_received {:gate_request, _job, _opts}
+      assert %{qa_sha: nil, qa_verdict: nil, gate_sha: nil, gate_verdict: nil} = stored_record()
+
+      # The fresh pass reaches the gate with its own verdict.
+      Application.put_env(:symphony_elixir, :gate_flow_qa_result, qa_pass())
+      assert {:gate_started, "issue-gate-flow", @sha} = AutoReview.run_qa(qa_job(rerun_record, settings), qa_opts(["lib/symphony_elixir/cli.ex"]))
+      assert_receive {:gate_request, %{qa: %{verdict: :pass}}, _opts}
+      assert %{qa_verdict: "pass", qa_infra_blocked: false} = stored_record()
     end
 
     test "the gate never moves a breakdown parent or a Final verification ticket", %{root: root} do

@@ -223,6 +223,22 @@ The gate is configured in `symphony.yml`, the operator config: a global
 A repository's `WORKFLOW.md` can't set it. Its only allowed `auto_review` key is `playbooks`, and
 anything else fails that workflow. A PR can't change the rules that gate it.
 
+### From the macOS app
+
+The menu bar app changes `mode` without a text editor, through the same comment-keeping `symphony.yml` line
+editor as its other settings (see [the app's Settings](../macos/README.md#settings)):
+
+- **Settings → Acceptance gate** sets `auto_review.acceptance_gate.mode` (Off, Shadow or Enforce, each with
+  one line on what it does). Choosing Enforce asks first. Save runs `symphony check` first. Under the picker,
+  each repository's agreement line from [The stats](#the-stats), or "Start Symphony to see the gate's
+  record." while Symphony isn't running.
+- **Repos → Edit…** sets `repositories[<key>].acceptance_gate.mode`: Inherit removes the key, Off, Shadow
+  and Enforce write it. The repository's row shows **Gate: <mode>** while it differs from the global mode.
+- **The status menu** lists **Acceptance gate: Enforce (<key>)** (or Shadow) for each repository the gate
+  runs on, with a submenu that switches it to Shadow or Off at once. It writes the repository's key without
+  running `symphony check`, so the kill switch never waits on it, and Symphony stops the moves on its next
+  poll (see [Enforce mode](#enforce-mode), Kill switch).
+
 ## The block
 
 Every key is optional. These are the defaults:
