@@ -127,7 +127,7 @@ struct SettingsView: View {
                         }
                     }
                     if let error = model.tokenLimitsError {
-                        Text(error).foregroundStyle(.red)
+                        CheckErrorText(message: error)
                     }
                     ForEach(TokenUsage.lines(model.budget, now: Date(), timeZone: .current), id: \.self) { line in
                         Text(line).foregroundStyle(.secondary)
@@ -175,7 +175,7 @@ struct SettingsView: View {
                     }
                     .disabled(!model.canEditRunProfiles)
                     if let error = model.configCheckError {
-                        Text(error).foregroundStyle(.red)
+                        CheckErrorText(message: error)
                     }
                     if model.commandProfile != RunProfile() {
                         Text(
@@ -198,6 +198,37 @@ struct SettingsView: View {
                             + "implementation, and use Sonnet or Haiku with low effort for landing and CI fixes. "
                             + "OpenRouter models must support tools. Claude runtime only. Save checks "
                             + "symphony.yml with symphony check first; changes apply to the next run."
+                    )
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                }
+
+                Section {
+                    AcceptanceGatePicker(
+                        choice: Binding(
+                            get: { .mode(model.acceptanceGateMode) },
+                            set: { if case let .mode(mode) = $0 { model.acceptanceGateMode = mode } }
+                        ),
+                        pending: $model.pendingAcceptanceGate,
+                        choices: AcceptanceGateMode.allCases.map { .mode($0) },
+                        inherited: model.acceptanceGateMode
+                    )
+                    .disabled(!model.canEditAcceptanceGate)
+                    if let error = model.acceptanceGateError {
+                        Text(error).foregroundStyle(.red)
+                    }
+                    ForEach(model.acceptanceGateLines, id: \.self) { line in
+                        Text(line).foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text(AcceptanceGate.sectionTitle)
+                } footer: {
+                    Text(
+                        "The gate judges each PR against its ticket after QA. Each repository's Edit… sheet in "
+                            + "Repos… can set its own mode, and the status menu switches an enforced repository to "
+                            + "Shadow or Off at once. Save checks symphony.yml with symphony check first; Symphony "
+                            + "reads the mode on its next poll, no restart needed. The stats cover each repository's "
+                            + "last 50 verdicts a person decided."
                     )
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -295,6 +326,9 @@ struct SettingsView: View {
                 if model.tokenLimitsError != nil {
                     Text("symphony check rejected the token limits; see Agents.").foregroundStyle(.red)
                 }
+                if model.acceptanceGateError != nil {
+                    Text("symphony check rejected the acceptance gate's mode; see Acceptance gate.").foregroundStyle(.red)
+                }
                 if let loginItemError = model.loginItemError {
                     Text(loginItemError).foregroundStyle(.red)
                 }
@@ -320,7 +354,7 @@ struct SettingsView: View {
         .frame(width: SettingsView.width)
     }
 
-    static let width: CGFloat = 780
+    static let width: CGFloat = 840
 }
 
 /// Provider, model and effort pickers for one kind of run, or the Default row for a nil kind. `inherited` holds
@@ -352,7 +386,7 @@ private struct RunProfileRow: View {
         LabeledContent(kind?.title ?? "Default") {
             HStack {
                 picker("Provider", providerSelection, RunProfilesConfig.providers, inherited: inherited.provider, source: providerSource)
-                    .frame(width: 150)
+                    .frame(width: 180)
                 Group {
                     if isOpenRouter {
                         OpenRouterModelField(
@@ -374,7 +408,7 @@ private struct RunProfileRow: View {
                     picker("Effort", $profile.effort, RunProfilesConfig.efforts, inherited: inherited.effort)
                         .disabled(effortNote != nil)
                 }
-                .frame(width: 130)
+                .frame(width: 150)
                 .help(effortNote ?? "Effort for this kind of run")
                 if canReset {
                     Button {
@@ -444,10 +478,11 @@ private struct OpenRouterModelField: View {
                 Text("Loading models…").foregroundStyle(.secondary)
             }
         case .failure(let failure)?:
-            HStack {
+            // Wraps in the narrow column, with Retry under it, so the whole reason shows.
+            VStack(alignment: .leading, spacing: 2) {
                 Text(failure.message)
                     .foregroundStyle(.red)
-                    .lineLimit(1)
+                    .fixedSize(horizontal: false, vertical: true)
                     .help(failure.message)
                 Button("Retry", action: retry)
                     .buttonStyle(.borderless)
@@ -506,6 +541,19 @@ private struct OpenRouterModelField: View {
     private func choose(_ id: String?) {
         selection = id
         isPicking = false
+    }
+}
+
+/// A `symphony check` failure shown in full: it wraps rather than cutting off the reason, and can be copied.
+private struct CheckErrorText: View {
+    let message: String
+
+    var body: some View {
+        Text(message)
+            .foregroundStyle(.red)
+            .fixedSize(horizontal: false, vertical: true)
+            .textSelection(.enabled)
+            .help(message)
     }
 }
 

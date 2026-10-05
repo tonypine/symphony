@@ -2504,6 +2504,10 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
                    "AUTH_TOKEN=#{key}",
                    "API_KEY=",
                    "SUBAGENT_MODEL=anthropic/claude-haiku-4.5",
+                   "DEFAULT_HAIKU_MODEL=anthropic/claude-haiku-4.5",
+                   "DEFAULT_SONNET_MODEL=anthropic/claude-haiku-4.5",
+                   "DEFAULT_OPUS_MODEL=anthropic/claude-haiku-4.5",
+                   "SMALL_FAST_MODEL=anthropic/claude-haiku-4.5",
                    "OPENROUTER_API_KEY=<unset>"
                  ]
 
@@ -2527,6 +2531,10 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
                    "AUTH_TOKEN=<unset>",
                    "API_KEY=<unset>",
                    "SUBAGENT_MODEL=<unset>",
+                   "DEFAULT_HAIKU_MODEL=<unset>",
+                   "DEFAULT_SONNET_MODEL=<unset>",
+                   "DEFAULT_OPUS_MODEL=<unset>",
+                   "SMALL_FAST_MODEL=<unset>",
                    "OPENROUTER_API_KEY=<unset>"
                  ]
 
@@ -4004,6 +4012,10 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
         printf 'AUTH_TOKEN=%s\\n' "${ANTHROPIC_AUTH_TOKEN-<unset>}"
         printf 'API_KEY=%s\\n' "${ANTHROPIC_API_KEY-<unset>}"
         printf 'SUBAGENT_MODEL=%s\\n' "${CLAUDE_CODE_SUBAGENT_MODEL-<unset>}"
+        printf 'DEFAULT_HAIKU_MODEL=%s\\n' "${ANTHROPIC_DEFAULT_HAIKU_MODEL-<unset>}"
+        printf 'DEFAULT_SONNET_MODEL=%s\\n' "${ANTHROPIC_DEFAULT_SONNET_MODEL-<unset>}"
+        printf 'DEFAULT_OPUS_MODEL=%s\\n' "${ANTHROPIC_DEFAULT_OPUS_MODEL-<unset>}"
+        printf 'SMALL_FAST_MODEL=%s\\n' "${ANTHROPIC_SMALL_FAST_MODEL-<unset>}"
         printf 'OPENROUTER_API_KEY=%s\\n' "${OPENROUTER_API_KEY-<unset>}"
       } > "$PWD/provider-env.trace"
       #{argv_tracing_fake_claude_script("sess-provider") |> String.replace("#!/bin/sh\n", "")}

@@ -220,34 +220,64 @@ agent would put a command for that git to run, and a branch's `.gitattributes` p
 the command runs on. Every host-side git call:
 
 - reads no global or system config (`GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` are `/dev/null`)
-  and runs no hook, file-system monitor or credential helper, nor an `ext::` remote;
+  and runs no hook, file-system monitor or credential helper, nor an `ext::` or `git://` remote;
 - still reads the repo's local config, which holds the remotes and branches Symphony works with.
   Before a command that can read or write work-tree files (anything but `rev-parse`, `fetch`,
   `log`, `show` and a few other read-only commands), Symphony lists the filter drivers
-  (`filter.<name>.clean`, `.smudge` and `.process`) defined in that config and in every file it
-  includes, whatever the include's condition. It blanks each one with `-c` and sets its
-  `required` to `false`, so git writes and reads files as the repo stores them. In a repo that uses
-  Git LFS the worktree gets the pointer files, and an agent that needs the content runs
-  `git lfs pull` in its sandbox;
+  (`filter.<name>.clean`, `.smudge` and `.process`) and merge drivers (`merge.<name>.driver`)
+  defined in that config and in every file it includes, whatever the include's condition. It
+  blanks each filter driver with `-c` and sets its `required` to `false`, so git writes and reads
+  files as the repo stores them. In a repo that uses Git LFS the worktree gets the pointer files,
+  and an agent that needs the content runs `git lfs pull` in its sandbox. It replaces each merge
+  driver with `git merge-file`, so `merge` (the acceptance gate, `github_sync_base`) merges those
+  files as git does when no driver is set, conflict markers included;
 - doesn't run, and returns an error, when that config can't be read or names a driver with `=` in
   its name, which `-c` can't address;
+- runs `diff`, `log` and `show` with `--no-ext-diff --no-textconv`, so the diffs of reviews, the
+  acceptance gate and the auto-merge fingerprint run no `diff.external`, `diff.<name>.command` or
+  `diff.<name>.textconv`, and show the files as the repo stores them;
+- runs `fetch`, `ls-remote` and `pull` with `--upload-pack=git-upload-pack` and `push` with
+  `--receive-pack=git-receive-pack`: the config's `remote.<name>.uploadpack` and `.receivepack`
+  would run as the operator for a remote on the same machine, and a `-c` can't override them.
+  `core.alternateRefsCommand=true` keeps a fetch from running the config's command for an
+  alternate object store;
+- checks and makes no signature: `log.showSignature`, `merge.verifySignatures` and `push.gpgSign`
+  are off, so the config's `gpg.program` doesn't run on a commit an agent signed;
 - leaves nested repos alone: a nested repo in a workspace keeps its own config, which the agent
   writes. `diff.ignoreSubmodules=dirty` keeps `status` from running git inside one,
   `submodule.recurse=false` keeps `checkout` and `reset` out, and the orphan backup's `add -A`
   starts from an empty index.
 
+Host-side git still honors these keys of the repo's local config that can lead it to run a command:
+
+- `remote.<name>.url`, `.pushurl`, `.vcs` and `url.<base>.insteadOf` (or `.pushInsteadOf`) can
+  point a fetch or push at another repo. A `<helper>::<address>` URL runs `git-remote-<helper>`,
+  which git looks up in its own folder and on `PATH`, not in the repo.
+- `core.askPass` runs when an HTTPS fetch or push needs credentials git doesn't have.
+- `gpg.program` (and `gpg.<format>.program`, `gpg.ssh.defaultKeyCommand`) runs only when git signs
+  or checks a signature, which host-side git doesn't do (see above).
+- `core.editor`, `sequence.editor`, `core.pager` and `pager.<command>` run only when git talks to a
+  terminal, which Symphony's git never does.
+
+On an SSH worker, the scripts Symphony runs over SSH to fetch, create, reuse, back up and remove a
+worktree, and to put a worktree on the base branch for `after_create`, run git as the worker's
+operator account with the same protections. They define a `symphony_git` shell function that sets
+the same environment and `-c` overrides, and lists and blanks the filter drivers in the worker
+repo's `config`, its `config.worktree` and every file they include before each command that can
+read or write work-tree files. It also refuses to run git when an include path holds a newline,
+since the shell reads the list line by line. Their `fetch origin` gets
+`--upload-pack=git-upload-pack` as on the host. They replace no merge driver and pass no
+`--no-ext-diff --no-textconv`: they never merge or print a diff.
+
 Limits:
 
 - The drivers are listed just before the command runs, so one written to the config in between
-  still runs. In the Claude runtime, Claude Code write-protects the shared repo's `.git/config`,
-  `config.worktree` and hooks, and SRT denies writes to them (see the Git write model above).
-  Symphony gives native Codex no such deny list yet
-  ([TP-534](https://linear.app/tonypine/issue/TP-534)).
-- Only filter drivers are blanked. Host-side `git diff` and `git merge` (reviews, the acceptance
-  gate, `github_sync_base`) still run a diff or merge driver the config defines, and `git fetch`
-  still honors `remote.<name>.uploadpack` ([TP-533](https://linear.app/tonypine/issue/TP-533)).
-- The scripts that create and reset worktrees on an SSH worker run plain git
-  ([TP-535](https://linear.app/tonypine/issue/TP-535)).
+  still runs. Every local runtime denies agent writes to the repo's config files (see the Git
+  write model above), but native Codex may drop those entries.
+- Only `diff`, `log` and `show` get `--no-ext-diff --no-textconv`. Symphony runs no other command
+  that prints a diff, such as `blame`, `format-patch` or `range-diff`, on the host.
+- The review agent's diffs of a workspace on an SSH worker run plain git over SSH, so a diff
+  driver or fsmonitor in the worker repo's config still runs there.
 
 ### Network access controls
 

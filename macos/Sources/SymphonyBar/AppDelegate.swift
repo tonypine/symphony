@@ -28,6 +28,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private var forcedItems: [NSMenuItem] = []
     /// The force or stop-forcing request under way, if any.
     private var forceInFlight: ControlAction?
+    /// The acceptance gate's kill switch: a row for each repository the gate runs on, under Pause and Resume.
+    private var gateItems: [NSMenuItem] = []
     private let updates = UpdatePoller()
     /// The newer release, while there is one.
     private var availableRelease: Release?
@@ -574,6 +576,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         showUpdateItems()
+        showGateItems(in: menu)
+    }
+
+    /// Shows a row for each repository whose acceptance gate runs, read from symphony.yml each time the menu opens,
+    /// with a submenu to switch it to Shadow or Off. Nothing shows when the file can't be read.
+    private func showGateItems(in menu: NSMenu) {
+        gateItems.forEach(menu.removeItem)
+        let file = SymphonyConfigFile(path: configPath)
+        guard let global = try? file.readAcceptanceGateMode(), let entries = try? file.readRepositories() else {
+            gateItems = []
+            return
+        }
+        gateItems = AcceptanceGate.menuItems(global: global, entries: entries).map { gate in
+            let submenu = NSMenu()
+            for mode in AcceptanceGate.MenuItem.choices {
+                let item = menuItem(mode.title, action: #selector(switchAcceptanceGate(_:)))
+                item.representedObject = GateSwitch(key: gate.key, mode: mode)
+                item.state = gate.mode == mode ? .on : .off
+                submenu.addItem(item)
+            }
+            let item = NSMenuItem(title: gate.title, action: nil, keyEquivalent: "")
+            item.submenu = submenu
+            return item
+        }
+        guard let resume = menu.items.firstIndex(where: { $0.action == #selector(resumeDispatch(_:)) }) else { return }
+        for (offset, item) in gateItems.enumerated() {
+            menu.insertItem(item, at: resume + 1 + offset)
+        }
+    }
+
+    /// The repository, or the global mode for a nil key, and the mode a kill switch item sets.
+    private struct GateSwitch {
+        let key: String?
+        let mode: AcceptanceGateMode
+    }
+
+    /// Writes the mode to symphony.yml straight away, without `symphony check`, so the kill switch can't wait on or
+    /// be refused by it. Symphony reads the mode again on its next poll.
+    @objc private func switchAcceptanceGate(_ sender: NSMenuItem) {
+        guard let target = sender.representedObject as? GateSwitch else { return }
+        let file = SymphonyConfigFile(path: configPath)
+        do {
+            if let key = target.key {
+                try file.writeRepositoryAcceptanceGateMode(.mode(target.mode), of: key)
+            } else {
+                try file.writeAcceptanceGateMode(target.mode)
+            }
+        } catch {
+            SymphonyRunner.showAlert(title: "Couldn't switch the acceptance gate", body: error.localizedDescription)
+        }
+        reposWindow.update(status: machine.status)
+    }
+
+    private var configPath: String {
+        AppStores.current.settingsStore().loadSettings().configPath.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// After an update, resumes the dispatch the update paused once the new Symphony answers.
@@ -588,8 +645,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         switch machine.status {
         case let .running(snapshot, _), let .paused(snapshot, _):
             settingsWindow.budget = snapshot.budget
+            settingsWindow.state = snapshot
         default:
             settingsWindow.budget = nil
+            settingsWindow.state = nil
         }
         // An open Repos window refreshes with each poll.
         reposWindow.update(status: machine.status)
