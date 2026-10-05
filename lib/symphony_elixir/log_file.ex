@@ -29,6 +29,20 @@ defmodule SymphonyElixir.LogFile do
     setup_disk_handler(log_file, max_bytes, max_files)
   end
 
+  @doc """
+  Writes the log entries the log file handler still holds to disk, so they are
+  kept when the VM halts right after. Does nothing when the handler is not set up.
+  """
+  @spec flush() :: :ok
+  def flush do
+    _ = :logger_disk_log_h.filesync(@handler_id)
+    :ok
+  catch
+    # `filesync` exits with `noproc` when the handler is not installed, as in
+    # `symphony check` and `symphony init`, which never set up the log file.
+    :exit, _reason -> :ok
+  end
+
   defp setup_disk_handler(log_file, max_bytes, max_files) do
     expanded_path = Path.expand(log_file)
     :ok = File.mkdir_p(Path.dirname(expanded_path))

@@ -62,7 +62,7 @@ defmodule SymphonyElixir.Application do
 
     try do
       validate_runtime_modules!()
-      SymphonyElixir.WorkflowSource.refresh_all(system_config)
+      refresh_workflows!(system_config)
       validate_runtime_config!()
       Application.put_env(:symphony_elixir, :primary_repo_name, primary_repo.name)
       SymphonyElixir.Workflow.set_workflow_file_path(SymphonyElixir.WorkflowSource.read_path(primary_repo))
@@ -142,6 +142,13 @@ defmodule SymphonyElixir.Application do
     end)
 
     :ok
+  end
+
+  defp refresh_workflows!(system_config) do
+    case SymphonyElixir.WorkflowSource.refresh_all(system_config) do
+      :ok -> :ok
+      {:error, message} -> raise ArgumentError, message: message
+    end
   end
 
   defp validate_runtime_config! do
