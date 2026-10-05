@@ -897,9 +897,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp review_agent_next_turn(_run_context, _config), do: :normal_continuation
 
-  defp handle_review_agent_result(result, run_context, config), do: handle_review_agent_result(result, run_context, config, [])
-
-  defp handle_review_agent_result(%{verdict: :approve} = result, run_context, _config, _opts) do
+  defp handle_review_agent_result(%{verdict: :approve} = result, run_context, _config) do
     {:review_agent_turn,
      %{
        run_context
@@ -912,8 +910,8 @@ defmodule SymphonyElixir.AgentRunner do
      }}
   end
 
-  defp handle_review_agent_result(%{verdict: :request_changes} = result, run_context, config, opts) do
-    if review_agent_correction_round_available?(run_context, config) or Keyword.get(opts, :force_request_changes, false) do
+  defp handle_review_agent_result(%{verdict: :request_changes} = result, run_context, config) do
+    if review_agent_correction_round_available?(run_context, config) do
       {:review_agent_turn,
        %{
          run_context
@@ -926,7 +924,11 @@ defmodule SymphonyElixir.AgentRunner do
            next_prompt: ReviewAgent.request_changes_prompt(result)
        }}
     else
-      {:error, {:review_agent_inconclusive, :review_agent_max_iterations_reached}}
+      rounds = review_agent_request_change_rounds(run_context)
+
+      Logger.warning("Reviewer agent hit the request-change limit for #{issue_context(run_context.issue)} rounds=#{rounds} last_comments=#{inspect(result.comments)}")
+
+      {:error, {:review_agent_inconclusive, {:review_agent_max_iterations_reached, result.comments}}}
     end
   end
 
@@ -960,20 +962,30 @@ defmodule SymphonyElixir.AgentRunner do
 
       review_agent_next_turn(run_context, config)
     else
-      Logger.warning("Reviewer agent remained inconclusive for #{issue_context(run_context.issue)} reason=#{inspect(reason)}; downgrading to request_changes")
+      # A second inconclusive pass on the same commit gives the executor nothing to act on, so
+      # the push goes ahead: CI, QA and the supervisor still gate the PR.
+      Logger.warning("Reviewer agent remained inconclusive for #{issue_context(run_context.issue)} reason=#{inspect(reason)}; letting the push go ahead without reviewer approval")
 
       reason_text = review_agent_non_convergence_reason(reason)
+      notes = review_agent_inconclusive_notes(reason)
+
+      audit_review_agent_inconclusive(run_context, round, reason_text)
 
       result = %{
-        verdict: :request_changes,
-        comments: [reason_text],
-        reason: reason_text
+        verdict: :approve,
+        comments: notes,
+        reason: "#{reason_text}; push allowed without reviewer approval",
+        inconclusive: reason_text,
+        advisory_notes: notes
       }
 
       emit_review_agent_verdict(run_context, result, round, config.max_iterations)
-      handle_review_agent_result(result, run_context, config, force_request_changes: true)
+      handle_review_agent_result(result, run_context, config)
     end
   end
+
+  defp review_agent_inconclusive_notes({:review_agent_max_iterations_reached, comments}), do: comments
+  defp review_agent_inconclusive_notes(_reason), do: []
 
   defp review_agent_non_convergence_reason(reason) do
     case review_agent_inconclusive_summary(reason) do
@@ -982,7 +994,7 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp review_agent_inconclusive_summary(:review_agent_max_iterations_reached), do: "request-change limit reached"
+  defp review_agent_inconclusive_summary({:review_agent_max_iterations_reached, _comments}), do: "request-change limit reached"
   defp review_agent_inconclusive_summary({:max_iterations, _reason}), do: "review turn reached max iterations"
   defp review_agent_inconclusive_summary({:self_check_max_iterations, _reason}), do: "self-check reached max iterations"
 
@@ -1266,6 +1278,19 @@ defmodule SymphonyElixir.AgentRunner do
     }
     |> AuditLog.record(audit_opts(opts))
     |> log_audit_error("record review_agent_unverified")
+  end
+
+  defp audit_review_agent_inconclusive(%{issue: issue, opts: opts}, round, reason) do
+    %{
+      event_type: "review_agent_inconclusive",
+      issue_id: issue.id,
+      issue_identifier: issue.identifier,
+      run_id: Keyword.get(opts, :run_id),
+      round: round,
+      reason: reason
+    }
+    |> AuditLog.record(audit_opts(opts))
+    |> log_audit_error("record review_agent_inconclusive")
   end
 
   defp audit_opts(opts, extra \\ []) do
