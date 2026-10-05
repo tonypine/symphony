@@ -136,7 +136,9 @@ app opens" in Settings (see [Launch at Login](#launch-at-login)).
   binary as Start (`bin/symphony` from the checkout in Development mode). Press `q` or Ctrl-C, or close the
   window, to quit; Symphony keeps running.
 - **Check for Updates…** looks for a newer Symphony release. When there is one, the menu shows
-  **Update available: vX (N changes)**, **Update to vX** and **Release Notes…**.
+  **Update available: vX (N changes)**, **Update to vX**, **Skip This Version** and **Release Notes…**.
+- **Skip This Version** stops offering that release as available: the menu shows **Update skipped: vX**
+  instead, and Update to vX still installs it. See [Skip a release](#skip-a-release).
 - **Update to vX** downloads and verifies the release, waits for agent runs like Restart, then swaps the app
   and relaunches it. See [Install an update](#install-an-update).
 - **Repos…** opens the Repos window: one row per connected repo with its source, GitHub remote, Linear
@@ -160,8 +162,20 @@ set (or, in Development mode, no checkout folder).
   running their checkout.
 - **Restart timeout** (1–1440 minutes, 30 by default) is how long Restart Symphony waits for agent runs
   before it also offers Restart Now Anyway.
+- **Update mode** (in **Updates**) is how the app installs a newer release:
+  - **Manual** (the default, and what an install from before this setting gets): the menu shows the
+    release and you install it with Update to vX. See [Update](#update).
+  - **Automatically when idle** will install a new release by itself once no agent runs are active.
+  - **Automatically at a set time** will install a new release by itself each day at the **Time** shown under
+    it (03:00 by default, in the Mac's time zone), waiting for agent runs like Update to vX. The time shows
+    only for this mode, and is kept when you choose another.
+
+  The two automatic modes are saved and shown, but they don't install anything yet; a later version turns
+  them on. Until then the text under the picker says so, and updates install only from the menu.
 - `symphony.yml` path, Development mode, checkout folder, command prefix (`mise exec --` until you change
-  it), stop timeout, restart timeout and "Start Symphony when the app opens" are stored in UserDefaults (`defaults read com.tonypine.symphony.bar`).
+  it), stop timeout, restart timeout, "Start Symphony when the app opens", update mode (`updateMode`) and
+  update time (`updateTime`, minutes after midnight) are stored in UserDefaults
+  (`defaults read com.tonypine.symphony.bar`).
 - Max concurrent agents (1–10) is `agent.concurrency.max_total` in the `symphony.yml` itself. The window
   reads it from the file each time it opens (10, Symphony's default, when the key is missing). Save changes
   only that line and keeps comments and indentation, adding the key when it is missing. Symphony
@@ -519,6 +533,16 @@ of `Info.plist`, so it usually sees every release as newer.
 Background checks fail silently. When you choose Check for Updates, the result shows under it: "Symphony
 is up to date (vX)" or why the check failed, for example GitHub's rate limit.
 
+### Skip a release
+
+To stay on your version, choose **Skip This Version** while the menu offers a release. The app records that
+release's build as skipped in UserDefaults (`skippedReleases`), so it stays skipped across relaunches:
+
+- The menu no longer shows it as available: the line reads **Update skipped: vX (N changes)**, and Skip This
+  Version hides. **Update to vX** and **Release Notes…** stay, so you can still install it by hand.
+- Installing it by hand with Update to vX clears the skip.
+- A skip covers that one build. A newer release is offered as usual, with its own Skip This Version.
+
 ### Install an update
 
 **Update to vX** shows under Update available. After you confirm, the line under it shows each step:
@@ -579,7 +603,8 @@ kept. To go back to it:
    copied into the file, so a variable changed in Settings since then has its old value there. Delete
    `Symphony (rolled back).app` once you no longer need it.
 
-The app then offers the newer release again as an update. To install an older release than the previous
+The app then offers the newer release again as an update; choose **Skip This Version** to stop offering it
+(see [Skip a release](#skip-a-release)). To install an older release than the previous
 one, quit the app and run the install script with `SYMPHONY_RELEASE_TAG` set to that release's tag (see
 [With the install script](#with-the-install-script)).
 
