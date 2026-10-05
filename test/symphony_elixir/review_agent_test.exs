@@ -448,6 +448,21 @@ defmodule SymphonyElixir.ReviewAgentTest do
       refute ReviewAgent.approval_prompt(%{verdict: :approve, comments: []}) =~ "advisory notes"
     end
 
+    test "says the push goes ahead without reviewer approval when the reviewer stayed inconclusive" do
+      inconclusive = %{verdict: :approve, comments: [], inconclusive: "reviewer did not converge: request-change limit reached"}
+      prompt = ReviewAgent.approval_prompt(Map.put(inconclusive, :advisory_notes, ["Still not acceptable."]))
+
+      assert prompt =~ "Reviewer agent stayed inconclusive twice on the committed diff (reviewer did not converge: request-change limit reached)."
+      assert prompt =~ "CI, QA and the supervisor still\ngate the PR"
+      assert prompt =~ "in the PR body that the pre-push reviewer"
+      assert prompt =~ "The reviewer's last pass still raised the findings below"
+      assert prompt =~ "1. Still not acceptable."
+      refute prompt =~ "Reviewer agent approved the committed diff."
+      refute prompt =~ "quoted lines could not be found"
+
+      refute ReviewAgent.approval_prompt(inconclusive) =~ "advisory notes"
+    end
+
     test "uses bare scoped GitHub tools for Codex executors" do
       write_workflow_file!(Workflow.workflow_file_path(), agent_kind: "codex")
 
