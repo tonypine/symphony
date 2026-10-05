@@ -18,6 +18,11 @@ defmodule SymphonyElixir.UsageLimit do
   limit is left for interactive sessions. It holds no landing run, no continuation and no forced
   ticket's run, and clears at `resume_at` without a canary.
 
+  A run whose agent could not reach the model API at all (`source: :api_unreachable`, reason
+  `model_api_unreachable`) holds the provider the same way, with a canary as the probe: the
+  first one goes out after 60 seconds, and each canary that still can't reach the API doubles
+  the wait, up to `unknown_reset_retry_seconds`.
+
   The orchestrator owns the holds and persists them with `RunStore.put_usage_limits/1`;
   this module builds and matches them.
   """
@@ -26,7 +31,12 @@ defmodule SymphonyElixir.UsageLimit do
 
   @type key :: {String.t(), String.t() | :all}
 
+  @api_unreachable_reason "model_api_unreachable"
+  @api_unreachable_first_retry_seconds 60
+
   @type entry :: %{
+          optional(:error) => String.t(),
+          optional(:retry_seconds) => pos_integer(),
           provider: String.t(),
           scope: String.t() | :all,
           reason: String.t(),
@@ -58,6 +68,15 @@ defmodule SymphonyElixir.UsageLimit do
   `:paused`.
   """
   @spec put(entry() | nil, map(), keyword()) :: entry()
+  def put(existing, %{source: :api_unreachable} = info, opts) do
+    case existing do
+      # Another run already found the outage, or a usage limit holds the provider for longer
+      # (its canary will find the outage): the hold stays as it is.
+      %{phase: :paused} = existing -> existing
+      _canary_headroom_or_none -> put_api_unreachable(existing, info, opts)
+    end
+  end
+
   def put(existing, info, opts) when is_map(info) do
     now = Keyword.fetch!(opts, :now)
     config = Keyword.fetch!(opts, :config)
@@ -91,6 +110,45 @@ defmodule SymphonyElixir.UsageLimit do
       issue_identifier: Keyword.get(opts, :issue_identifier),
       utilization: Map.get(info, :utilization)
     }
+  end
+
+  # Only a canary that still couldn't reach the API doubles the wait to the next probe.
+  defp put_api_unreachable(existing, info, opts) do
+    now = Keyword.fetch!(opts, :now)
+    config = Keyword.fetch!(opts, :config)
+    {provider, scope} = key(info)
+
+    {since, retry_seconds} =
+      case existing do
+        %{phase: :canary, reason: @api_unreachable_reason, retry_seconds: seconds} when is_integer(seconds) ->
+          {existing.since, min(seconds * 2, config.unknown_reset_retry_seconds)}
+
+        _new_outage ->
+          {now, @api_unreachable_first_retry_seconds}
+      end
+
+    %{
+      provider: provider,
+      scope: scope,
+      reason: @api_unreachable_reason,
+      window: nil,
+      since: since,
+      resets_at: nil,
+      resume_at: DateTime.add(now, retry_seconds),
+      source: :api_unreachable,
+      phase: :paused,
+      canary_issue_id: nil,
+      issue_identifier: Keyword.get(opts, :issue_identifier),
+      utilization: nil,
+      error: Map.get(info, :error) || "connection error",
+      retry_seconds: retry_seconds
+    }
+  end
+
+  @doc "Whether `entry` (a hold, or the agent's info for one) is for a model API that could not be reached."
+  @spec api_unreachable?(map()) :: boolean()
+  def api_unreachable?(entry) when is_map(entry) do
+    Map.get(entry, :reason) == @api_unreachable_reason or Map.get(entry, :source) in [:api_unreachable, "api_unreachable"]
   end
 
   @doc """
@@ -264,10 +322,27 @@ defmodule SymphonyElixir.UsageLimit do
   def scope_label(:all), do: "all"
   def scope_label(scope) when is_binary(scope), do: scope
 
-  @doc "The limit a hold is on, as people read it: `Claude 5-hour limit`."
+  @doc "The limit a hold is on, as people read it: `Claude 5-hour limit`, or `Claude API unreachable`."
   @spec limit_label(map()) :: String.t()
   def limit_label(entry) when is_map(entry) do
-    "#{provider_label(Map.get(entry, :provider))} #{window_label(Map.get(entry, :window))}"
+    if api_unreachable?(entry) do
+      "#{provider_label(Map.get(entry, :provider))} API unreachable"
+    else
+      "#{provider_label(Map.get(entry, :provider))} #{window_label(Map.get(entry, :window))}"
+    end
+  end
+
+  @doc """
+  A hold as a blocker line reads: `Claude 5-hour limit reached`, `Claude weekly limit headroom:
+  holding new runs` or `Claude API unreachable`.
+  """
+  @spec hold_label(map()) :: String.t()
+  def hold_label(entry) when is_map(entry) do
+    cond do
+      headroom?(entry) -> "#{limit_label(entry)} headroom: holding new runs"
+      api_unreachable?(entry) -> limit_label(entry)
+      true -> "#{limit_label(entry)} reached"
+    end
   end
 
   defp provider_label(provider) when provider in [nil, "anthropic"], do: "Claude"
@@ -282,18 +357,31 @@ defmodule SymphonyElixir.UsageLimit do
   defp window_label(window), do: "#{window} limit"
 
   @doc """
-  The dashboard banner for a hold: `Paused: Claude 5-hour limit, resumes ~14:05`, or for a
-  headroom hold `Holding new runs: Claude at 91%, resets ~14:05`. The time is in local time,
+  The dashboard banner for a hold: `Paused: Claude 5-hour limit, resumes ~14:05`, for a
+  headroom hold `Holding new runs: Claude at 91%, resets ~14:05`, and for an unreachable API
+  `Paused: Claude API unreachable (ENOTFOUND), retries ~14:05`. The time is in local time,
   with the date when it is not today. `resume_at` and `resets_at` may be `DateTime`s or ISO
   8601 strings. `opts[:to_local]` converts a UTC `NaiveDateTime` to local time (default: the
   host's time zone).
   """
   @spec banner(map(), DateTime.t(), keyword()) :: String.t()
   def banner(entry, %DateTime{} = now, opts \\ []) when is_map(entry) do
-    if headroom?(entry) do
-      "Holding new runs: #{headroom_label(entry)}" <> time_suffix("resets", datetime(Map.get(entry, :resets_at)), now, opts)
-    else
-      "Paused: #{limit_label(entry)}" <> time_suffix("resumes", datetime(Map.get(entry, :resume_at)), now, opts)
+    cond do
+      headroom?(entry) ->
+        "Holding new runs: #{headroom_label(entry)}" <> time_suffix("resets", datetime(Map.get(entry, :resets_at)), now, opts)
+
+      api_unreachable?(entry) ->
+        "Paused: #{limit_label(entry)}#{error_suffix(entry)}" <> time_suffix("retries", datetime(Map.get(entry, :resume_at)), now, opts)
+
+      true ->
+        "Paused: #{limit_label(entry)}" <> time_suffix("resumes", datetime(Map.get(entry, :resume_at)), now, opts)
+    end
+  end
+
+  defp error_suffix(entry) do
+    case Map.get(entry, :error) do
+      error when is_binary(error) -> " (#{error})"
+      _none -> ""
     end
   end
 
@@ -349,7 +437,7 @@ defmodule SymphonyElixir.UsageLimit do
       seen = Map.get(windows, {entry.provider, entry.window}, %{})
 
       entry
-      |> Map.take([:provider, :scope, :reason, :window, :phase, :since, :resets_at, :resume_at, :source, :issue_identifier])
+      |> Map.take([:provider, :scope, :reason, :window, :phase, :since, :resets_at, :resume_at, :source, :issue_identifier, :error])
       |> Map.put(:utilization, Map.get(seen, :utilization) || Map.get(entry, :utilization))
     end)
   end

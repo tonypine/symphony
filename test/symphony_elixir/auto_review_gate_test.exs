@@ -3,8 +3,8 @@ defmodule SymphonyElixir.AutoReviewGateTest do
 
   import ExUnit.CaptureLog
 
+  alias SymphonyElixir.{AcceptanceGate, AutoReview, CiPoller, PromptBuilder, QaAgent}
   alias SymphonyElixir.AcceptanceGate.Agreement
-  alias SymphonyElixir.{AutoReview, CiPoller, PromptBuilder, QaAgent}
 
   @sha "feedface00112233445566778899aabbccddeeff"
   @repo_key "default"
@@ -390,6 +390,47 @@ defmodule SymphonyElixir.AutoReviewGateTest do
       assert [%{rule: "inconclusive"}] = stored_record().gate_reasons
       assert [%{"verdict" => "escalate", "reasons" => [%{"rule" => "inconclusive"}]}] = audit_events(root)
       assert_receive {:memory_tracker_state_update, "issue-gate-flow", "In Review"}
+    end
+
+    test "a pass whose agent can't reach the model API records nothing and waits for the hold, then runs again", %{root: root} do
+      settings = settings("shadow", root)
+      on_exit(fn -> RunStore.put_usage_limits(%{}) end)
+      info = %{provider: "anthropic", scope: :all, window: nil, resets_at: nil, source: :api_unreachable, error: "ENOTFOUND"}
+      Application.put_env(:symphony_elixir, :gate_flow_turn_result, {:error, {:model_api_unreachable, info}})
+      put_record(%{qa_sha: @sha, qa_verdict: "pass", qa_target_state: "In Review"})
+      test_pid = self()
+      provider = Map.get(AcceptanceGate.usage_profile(settings), :provider, "anthropic")
+
+      hold = fn held_info, identifier ->
+        send(test_pid, {:usage_limit_hold, held_info, identifier})
+        entry = %{provider: provider, scope: :all, reason: "model_api_unreachable", resume_at: DateTime.add(DateTime.utc_now(), 60)}
+        :ok = RunStore.put_usage_limits(%{{provider, :all} => entry})
+        {:ok, entry}
+      end
+
+      log =
+        capture_log(fn ->
+          assert {:gate_waiting, "issue-gate-flow", :model_api_unreachable} =
+                   AutoReview.run_gate(gate_job(stored_record(), settings), gate_opts(root, usage_limit_hold: hold))
+        end)
+
+      assert_receive {:usage_limit_hold, ^info, "TP-960"}
+      assert log =~ "Acceptance gate agent could not reach the model API (ENOTFOUND) for TP-960 sha=#{@sha}; no verdict"
+
+      # No verdict, no inconclusive pass counted, no comment, no audit event, no move.
+      record = stored_record()
+      refute Map.get(record, :gate_verdict)
+      refute Map.get(record, :gate_inconclusive)
+      refute Map.get(record, :gate_sha)
+      refute_received {:memory_tracker_comment, _issue_id, _body}
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+      assert audit_events(root) == []
+      assert [%{status: "gate_unavailable", error: "model API unreachable (ENOTFOUND)"}] = Enum.filter(RunStore.list_runs(:all), &(&1.kind == "acceptance_gate"))
+
+      # While the hold lasts the runner turns the request away; once it lifts, the pass runs again.
+      assert :usage_limited = AcceptanceGate.Runner.request(gate_job(record, settings), [])
+      :ok = RunStore.put_usage_limits(%{})
+      assert {:gate_started, "issue-gate-flow", @sha} = green_poll(record, settings)
     end
 
     test "a repeat green poll on a judged SHA reapplies the verdict without a new run", %{root: root} do

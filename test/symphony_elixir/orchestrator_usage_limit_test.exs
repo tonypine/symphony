@@ -292,6 +292,37 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
     assert RunStore.get_usage_limits() == %{}
   end
 
+  test "runs that find the same outage share one hold, logged once, and a PR run is not retried", ctx do
+    write_usage_workflow!(ctx)
+    pid = start_orchestrator(ctx, :SharedOutageOrchestrator)
+    first = issue("issue-outage-first", "MT-OUTAGE-1")
+    second = issue("issue-outage-second", "MT-OUTAGE-2")
+    pr = issue("pr:default:9", "PR-9")
+    {first_pid, first_ref, _run_id} = start_run!(pid, first)
+    {second_pid, second_ref, _run_id} = start_run!(pid, second)
+    {pr_pid, pr_ref, pr_run_id} = start_run!(pid, pr, %{run_kind: :pr})
+    info = usage_info(ctx, %{window: nil, resets_at: nil, utilization: nil, source: :api_unreachable, error: "ENOTFOUND"})
+
+    log =
+      capture_log(fn ->
+        send(pid, {:DOWN, first_ref, :process, first_pid, {:model_api_unreachable, info}})
+        send(pid, {:DOWN, second_ref, :process, second_pid, {:model_api_unreachable, %{info | error: "ECONNREFUSED"}}})
+        send(pid, {:DOWN, pr_ref, :process, pr_pid, {:model_api_unreachable, info}})
+        :sys.get_state(pid)
+      end)
+
+    state = :sys.get_state(pid)
+    assert %{issue_identifier: "MT-OUTAGE-1", error: "ENOTFOUND", resume_at: resume_at} = state.usage_limits[@anthropic]
+    assert resume_at == DateTime.add(ctx.now, 60)
+    assert %{attempt: 3, usage_limit_key: @anthropic} = state.retry_attempts[first.id]
+    assert %{attempt: 3, usage_limit_key: @anthropic} = state.retry_attempts[second.id]
+    refute Map.has_key?(state.retry_attempts, pr.id)
+    assert %{status: "model_api_unreachable", error: "agent exited: model API unreachable (ENOTFOUND)"} = run_record(pr_run_id)
+    assert length(Regex.scan(~r/Model API unreachable/, log)) == 1
+    assert log =~ "Agent task could not reach the model API for issue_id=issue-outage-first"
+    assert log =~ "PR agent task could not reach the model API for issue_id=pr:default:9"
+  end
+
   test "a PR run that hits the usage limit creates the hold and is not retried", ctx do
     write_usage_workflow!(ctx)
     pid = start_orchestrator(ctx, :PrRunOrchestrator)
@@ -513,6 +544,7 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
              kind: :usage_limit,
              provider: "anthropic",
              scope: :all,
+             reason: "claude_usage_limit",
              window: "five_hour",
              resets_at: resets_at,
              resume_at: resume_at,
@@ -597,6 +629,102 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
     assert_receive {:notification_event, %Notifications.Event{event: "usage_limit_paused", issue_identifier: "MT-WALK"}}, 1_000
     assert_receive {:notification_event, %Notifications.Event{event: "usage_limit_resumed"}}, 1_000
     refute_receive {:notification_event, %Notifications.Event{event: "usage_limit_" <> _}}, 200
+  end
+
+  # TP-555: during a network outage Claude ends each turn on `API Error: Can't reach the API
+  # server … (ENOTFOUND)` with nothing used. A fake `claude` does that for its first two runs.
+  test "a turn that can't reach the model API holds the provider, probes with backoff and never parks the issue", ctx do
+    runs = Path.join(ctx.test_root, "outage-runs")
+    fake_claude = Path.join(ctx.test_root, "fake-claude-outage")
+    # Quoted for the single-quoted shell strings below.
+    api_error = String.replace("API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)", "'", ~S('"'"'))
+
+    File.write!(fake_claude, """
+    #!/bin/sh
+    cat > /dev/null
+    echo run >> #{runs}
+    if [ "$(wc -l < #{runs})" -le 2 ]; then
+      printf '%s\\n' '{"type":"system","subtype":"init","session_id":"sess-outage","cwd":"/tmp","tools":[],"mcp_servers":[{"name":"symphony","status":"connected"}],"model":"claude-opus-5-5","permissionMode":"default","apiKeySource":"env"}'
+      printf '%s\\n' '{"type":"system","subtype":"api_error","level":"error","error":{"cause":{"code":"ENOTFOUND"}},"retryInMs":500,"retryAttempt":10,"maxRetries":10,"session_id":"sess-outage"}'
+      printf '%s\\n' '{"type":"assistant","message":{"id":"msg-outage","type":"message","role":"assistant","model":"<synthetic>","content":[{"type":"text","text":"#{api_error}"}],"usage":{"input_tokens":0,"output_tokens":0}},"session_id":"sess-outage"}'
+      printf '%s\\n' '{"type":"result","subtype":"success","is_error":true,"duration_ms":180000,"num_turns":1,"result":"#{api_error}","session_id":"sess-outage","total_cost_usd":0,"usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}'
+      exit 1
+    fi
+    exec #{ctx.fake_claude}
+    """)
+
+    File.chmod!(fake_claude, 0o755)
+
+    # `auto_pause` is about usage limits: an unreachable API is held either way.
+    write_usage_workflow!(%{ctx | fake_claude: fake_claude},
+      agent_usage_limit: %{auto_pause: false},
+      tracker_active_states: ["Todo"]
+    )
+
+    issue = issue("issue-outage", "MT-OUTAGE", %{state: "Todo"})
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+    Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+    on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_recipient) end)
+    :ok = Notifications.subscribe()
+    name = Module.concat(__MODULE__, :OutageOrchestrator)
+    outage_runs = fn -> Enum.filter(RunStore.list_runs(:all), &(&1.issue_id == issue.id and &1.status == "model_api_unreachable")) end
+
+    log =
+      capture_log(fn ->
+        pid = start_orchestrator(ctx, :OutageOrchestrator)
+
+        # 1. The run ends on the outage, not as a completed turn: its retry is held on the
+        # provider hold with its attempt, and the first probe is a minute away.
+        wait_until(fn -> length(outage_runs.()) == 1 end)
+        state = wait_until(fn -> (state = :sys.get_state(pid)) && state.usage_limits[@anthropic] && state end)
+        first_probe = DateTime.add(ctx.now, 60)
+
+        assert %{reason: "model_api_unreachable", source: :api_unreachable, error: "ENOTFOUND", retry_seconds: 60, resume_at: ^first_probe} =
+                 state.usage_limits[@anthropic]
+
+        assert %{attempt: attempt, delay_type: :usage_limit, usage_limit_key: @anthropic, error: error} = state.retry_attempts[issue.id]
+        assert error == "model API unreachable (provider=anthropic error=ENOTFOUND); probing again at #{DateTime.to_iso8601(first_probe)}"
+
+        # 2. The state API shows the hold while it lasts.
+        payload =
+          wait_until(fn ->
+            payload = SymphonyElixirWeb.Presenter.state_payload(name, 1_000)
+            payload.usage_limits != [] and payload
+          end)
+
+        assert [%{reason: "model_api_unreachable", source: "api_unreachable", error: "ENOTFOUND", banner: _banner} = hold] = payload.usage_limits
+        assert [%{kind: :usage_limit, reason: "model_api_unreachable"}] = payload.dispatch_state.blockers
+        assert payload.dispatch_state.active? == false
+        assert UsageLimit.banner(hold, ctx.now, to_local: & &1) == "Paused: Claude API unreachable (ENOTFOUND), retries ~12:01"
+
+        # 3. The probe still can't reach the API: the wait doubles, the attempt stays.
+        set_clock(ctx, first_probe)
+        send(pid, {:usage_limit_resume, @anthropic})
+        wait_until(fn -> length(outage_runs.()) == 2 end)
+        second_probe = DateTime.add(first_probe, 120)
+
+        wait_until(fn ->
+          match?(%{phase: :paused, retry_seconds: 120}, :sys.get_state(pid).usage_limits[@anthropic])
+        end)
+
+        state = :sys.get_state(pid)
+        assert %{resume_at: ^second_probe, since: since} = state.usage_limits[@anthropic]
+        assert since == ctx.now
+        assert %{attempt: ^attempt, delay_type: :usage_limit} = state.retry_attempts[issue.id]
+
+        # 4. The API is back: the next probe runs normally and the hold clears.
+        set_clock(ctx, second_probe)
+        send(pid, {:usage_limit_resume, @anthropic})
+        wait_until(fn -> Enum.find(RunStore.list_runs(:all), &(&1.issue_id == issue.id and &1.status == "success")) end)
+        wait_until(fn -> SymphonyElixirWeb.Presenter.state_payload(name, 1_000).usage_limits == [] end)
+      end)
+
+    assert length(Regex.scan(~r/Model API unreachable \(ENOTFOUND\); holding dispatch provider=anthropic/, log)) == 1
+    assert log =~ "Model API still unreachable (ENOTFOUND) provider=anthropic next_probe_at=#{DateTime.to_iso8601(DateTime.add(ctx.now, 180))}"
+    refute log =~ "Parking"
+    refute_received {:memory_tracker_state_update, "issue-outage", "Backlog"}
+    refute_received {:notification_event, %Notifications.Event{event: "run_failed"}}
+    assert_received {:notification_event, %Notifications.Event{event: "usage_limit_paused", reason: "Claude API unreachable; resumes at " <> _}}
   end
 
   test "a partial hold is listed but leaves dispatch active for the other provider", ctx do
@@ -992,6 +1120,27 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
                AgentRunner.run(run_issue, nil,
                  workspace_path: workspace,
                  parent_walkthrough: LimitedWalkthrough,
+                 issue_state_fetcher: fn _ids -> {:ok, [run_issue]} end,
+                 issue_enricher: fn issue -> {:ok, issue} end
+               )
+             )
+  end
+
+  defmodule UnreachableWalkthrough do
+    def run(_issue, _workspace, _opts), do: {:error, {:usage_limited, %{provider: "anthropic", scope: :all, source: :api_unreachable, error: "ENOTFOUND"}}}
+  end
+
+  test "AgentRunner exits on the unreachable model API a final verification's QA agent hit", ctx do
+    write_usage_workflow!(ctx)
+    workspace = Path.join([ctx.test_root, "workspaces", "MT-FV-OUTAGE"])
+    File.mkdir_p!(workspace)
+    run_issue = issue("issue-fv-outage", "MT-FV-OUTAGE", %{title: "Final verification: Hold on the outage"})
+
+    assert {:model_api_unreachable, %{source: :api_unreachable, error: "ENOTFOUND"}} =
+             catch_exit(
+               AgentRunner.run(run_issue, nil,
+                 workspace_path: workspace,
+                 parent_walkthrough: UnreachableWalkthrough,
                  issue_state_fetcher: fn _ids -> {:ok, [run_issue]} end,
                  issue_enricher: fn issue -> {:ok, issue} end
                )

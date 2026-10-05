@@ -34,6 +34,85 @@ defmodule SymphonyElixir.UsageLimitTest do
     assert UsageLimit.limit_label(%{provider: "openai", window: "five_hour"}) == "openai 5-hour limit"
   end
 
+  describe "an unreachable model API" do
+    defp outage(attrs \\ %{}),
+      do: Map.merge(%{provider: "anthropic", window: nil, scope: :all, resets_at: nil, utilization: nil, source: :api_unreachable, error: "ENOTFOUND"}, attrs)
+
+    test "holds the provider for a first probe a minute away, ignoring remembered windows" do
+      windows = %{{"anthropic", "five_hour"} => %{resets_at: ~U[2026-10-03 05:00:00Z], utilization: 0.99}}
+
+      entry = put(nil, outage(), windows: windows, issue_identifier: "TP-540")
+
+      assert entry == %{
+               provider: "anthropic",
+               scope: :all,
+               reason: "model_api_unreachable",
+               window: nil,
+               since: @now,
+               resets_at: nil,
+               resume_at: DateTime.add(@now, 60),
+               source: :api_unreachable,
+               phase: :paused,
+               canary_issue_id: nil,
+               issue_identifier: "TP-540",
+               utilization: nil,
+               error: "ENOTFOUND",
+               retry_seconds: 60
+             }
+
+      assert put(nil, Map.delete(outage(), :error)).error == "connection error"
+    end
+
+    test "each canary that still can't reach the API doubles the wait, up to the unknown-reset interval" do
+      first = put(nil, outage())
+      later = DateTime.add(@now, 60)
+
+      second = put(UsageLimit.canary(first, "issue-canary"), outage(), now: later)
+      assert %{retry_seconds: 120, since: @now, phase: :paused, canary_issue_id: nil} = second
+      assert second.resume_at == DateTime.add(later, 120)
+
+      assert put(UsageLimit.canary(%{second | retry_seconds: 600}, "issue-canary"), outage(), now: later).retry_seconds == 900
+      assert put(UsageLimit.canary(%{second | retry_seconds: 900}, "issue-canary"), outage(), now: later).retry_seconds == 900
+    end
+
+    test "another run finding the same outage, or a usage limit still in force, leaves the hold as it is" do
+      first = put(nil, outage())
+      assert put(first, outage(%{error: "ECONNREFUSED"}), now: DateTime.add(@now, 30)) == first
+
+      limited = put(nil, info())
+      assert put(limited, outage()) == limited
+    end
+
+    test "replaces a usage-limit canary and a headroom hold with a fresh outage hold" do
+      limit_canary = nil |> put(info()) |> UsageLimit.canary("issue-canary")
+      assert %{reason: "model_api_unreachable", retry_seconds: 60, since: @now} = put(limit_canary, outage(), now: @now)
+
+      headroom = %{put(nil, info()) | phase: :headroom, reason: "claude_usage_headroom"}
+      assert %{reason: "model_api_unreachable", phase: :paused, resume_at: resume_at} = put(headroom, outage())
+      assert resume_at == DateTime.add(@now, 60)
+    end
+
+    test "reads as `Claude API unreachable` in labels, banners, blockers and the snapshot" do
+      entry = put(nil, outage())
+
+      assert UsageLimit.api_unreachable?(entry)
+      assert UsageLimit.api_unreachable?(outage())
+      assert UsageLimit.api_unreachable?(%{reason: "claude_usage_limit", source: "api_unreachable"})
+      refute UsageLimit.api_unreachable?(put(nil, info()))
+
+      assert UsageLimit.limit_label(entry) == "Claude API unreachable"
+      assert UsageLimit.hold_label(entry) == "Claude API unreachable"
+      assert UsageLimit.hold_label(%{provider: "anthropic", window: "five_hour"}) == "Claude 5-hour limit reached"
+      assert UsageLimit.hold_label(%{provider: "anthropic", window: "seven_day", phase: "headroom"}) == "Claude weekly limit headroom: holding new runs"
+
+      to_local = [to_local: & &1]
+      assert UsageLimit.banner(entry, @now, to_local) == "Paused: Claude API unreachable (ENOTFOUND), retries ~03:47"
+      assert UsageLimit.banner(Map.delete(entry, :error), @now, to_local) == "Paused: Claude API unreachable, retries ~03:47"
+
+      assert [%{reason: "model_api_unreachable", error: "ENOTFOUND", source: :api_unreachable}] = UsageLimit.snapshot(%{{"anthropic", :all} => entry}, %{})
+    end
+  end
+
   describe "banner" do
     # Local time three hours behind UTC, so the date can differ from the UTC one.
     @to_local [to_local: &__MODULE__.three_hours_behind/1]

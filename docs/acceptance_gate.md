@@ -52,7 +52,9 @@ it is, as for a late QA pass.
 
 - **The runner.** Like the QA runner, it runs passes in the background, one per issue and at most
   `max_concurrent` at once. A forced ticket goes first. While the gate agent's provider is held by
-  a usage limit, nothing starts; the next green CI poll asks again.
+  a usage limit, nothing starts; the next green CI poll asks again. A pass whose agent can't reach
+  its model API (a network or DNS outage) records nothing, not even an inconclusive pass: it holds
+  the provider the same way, and the pass runs again once the hold clears.
 - **The pass** (`AcceptanceGate.run/3`) builds the context (below), checks the escalation rules,
   then runs the gate agent in a throwaway worktree at the merge result. The session is read-only:
   the read-only Linear and GitHub tools only, a read-only Codex sandbox, and for Claude no

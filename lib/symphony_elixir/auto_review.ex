@@ -280,6 +280,9 @@ defmodule SymphonyElixir.AutoReview do
     settings = current_settings(Map.get(record, :repo_key), job.settings)
 
     case Keyword.get(opts, :acceptance_gate, AcceptanceGate).judge(%{job | settings: settings}, opts) do
+      {:ok, %{unavailable: %{}}} ->
+        {:gate_waiting, issue.id, :model_api_unreachable}
+
       {:ok, %{verdict: nil}} ->
         {:gate_inconclusive, issue.id, sha}
 
@@ -466,20 +469,22 @@ defmodule SymphonyElixir.AutoReview do
     end
   end
 
-  # A pass that ran into the provider's usage limit says nothing about the PR: it stores no
-  # verdict, writes no QA report and leaves the issue in Auto Review. The orchestrator holds the
-  # provider's runs until the limit resets, as for an agent run, and the first green CI poll after
-  # that asks for the same pass again (see `handle_green/5`).
+  # A pass that ran into the provider's usage limit, or couldn't reach the model API, says nothing
+  # about the PR: it stores no verdict, writes no QA report and leaves the issue in Auto Review.
+  # The orchestrator holds the provider's runs until the limit resets (or a probe reaches the
+  # API), as for an agent run, and the first green CI poll after that asks for the same pass
+  # again (see `handle_green/5`).
   defp hold_pass(issue, sha, outcome, opts) do
     hold = Keyword.get(opts, :usage_limit_hold, &Orchestrator.hold_for_usage_limit/2)
+    cause = if UsageLimit.api_unreachable?(outcome.usage_limit), do: "could not reach the model API", else: "hit the usage limit"
 
     case hold.(outcome.usage_limit, issue.identifier) do
       {:ok, %{resume_at: resume_at}} ->
-        Logger.info("QA pass hit the usage limit for #{issue.identifier} sha=#{sha}; no verdict, running it again after #{DateTime.to_iso8601(resume_at)}")
+        Logger.info("QA pass #{cause} for #{issue.identifier} sha=#{sha}; no verdict, running it again after #{DateTime.to_iso8601(resume_at)}")
         {:qa_usage_limited, issue.id, resume_at}
 
       other ->
-        Logger.warning("QA pass hit the usage limit for #{issue.identifier} sha=#{sha}; no verdict, but the hold was not recorded: #{inspect(other)}")
+        Logger.warning("QA pass #{cause} for #{issue.identifier} sha=#{sha}; no verdict, but the hold was not recorded: #{inspect(other)}")
         {:qa_usage_limited, issue.id, nil}
     end
   end
@@ -676,21 +681,36 @@ defmodule SymphonyElixir.AutoReview do
   end
 
   # With `agent.usage_limit.auto_pause` off, a usage limit is `blocked` like any other error, as
-  # an agent run that hits it fails.
+  # an agent run that hits it fails. A model API the agent couldn't reach is held either way: it
+  # says nothing about the PR.
   defp error_outcome(reason, settings) do
     case usage_limit(reason) do
-      %{} = info when settings.agent.usage_limit.auto_pause ->
-        %{verdict: :usage_limited, usage_limit: info, reason: "the QA agent hit the #{UsageLimit.limit_label(info)}"}
+      %{} = info ->
+        if UsageLimit.api_unreachable?(info) do
+          %{verdict: :usage_limited, usage_limit: info, reason: "the QA agent could not reach the model API (#{info.error})"}
+        else
+          usage_limit_outcome(reason, info, settings)
+        end
 
-      _other ->
+      nil ->
         %{verdict: :blocked, reason: blocked_reason(reason)}
     end
   end
 
-  @doc "The usage-limit info of a `SymphonyElixir.QaAgent.run/3` error caused by a provider usage limit, else nil."
+  defp usage_limit_outcome(reason, info, settings) do
+    if settings.agent.usage_limit.auto_pause,
+      do: %{verdict: :usage_limited, usage_limit: info, reason: "the QA agent hit the #{UsageLimit.limit_label(info)}"},
+      else: %{verdict: :blocked, reason: blocked_reason(reason)}
+  end
+
+  @doc """
+  The hold info of a `SymphonyElixir.QaAgent.run/3` error caused by a provider usage limit, or by
+  a model API the agent couldn't reach (`source: :api_unreachable`), else nil.
+  """
   @spec usage_limit(term()) :: map() | nil
   def usage_limit({:qa_agent_failed, reason}), do: usage_limit(reason)
   def usage_limit({:usage_limited, %{} = info}), do: info
+  def usage_limit({:model_api_unreachable, %{} = info}), do: info
   def usage_limit(_reason), do: nil
 
   @doc "The `blocked` reason the QA report gives for a `SymphonyElixir.QaAgent.run/3` error."
