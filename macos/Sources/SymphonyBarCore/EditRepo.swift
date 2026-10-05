@@ -109,6 +109,18 @@ public enum EditRepo {
         original.acceptanceGateMode != entry.acceptanceGateMode
     }
 
+    /// `yaml` with the repo `original.key` rewritten to `entry`. When the sheet leaves the acceptance gate mode as
+    /// it was, the entry keeps the mode `yaml` holds now, so a Save doesn't undo a mode set elsewhere, such as the
+    /// status menu's kill switch, while the sheet was open.
+    public static func updating(_ original: RepositoryEntry, to entry: RepositoryEntry, in yaml: String) throws -> String {
+        var entry = entry
+        if !changesAcceptanceGate(from: original, to: entry),
+           let current = try RepositoriesConfig.entries(in: yaml).first(where: { $0.key == original.key }) {
+            entry.acceptanceGateMode = current.acceptanceGateMode
+        }
+        return try RepositoriesConfig.updating(original.key, to: entry, in: yaml)
+    }
+
     /// How the change reaches Symphony: nil when Symphony reads it from `symphony.yml` without a restart.
     public static func apply(status: SymphonyStatus, from original: RepositoryEntry, to entry: RepositoryEntry) -> AddRepoApply? {
         needsRestart(from: original, to: entry) ? AddRepo.apply(status: status) : nil
@@ -218,6 +230,10 @@ public enum DisconnectRepo {
 /// Edits and disconnects a repo in a `symphony.yml` on disk. Each one writes atomically, and leaves the file
 /// untouched when it throws.
 extension SymphonyConfigFile {
+    public func editRepository(_ original: RepositoryEntry, to entry: RepositoryEntry) throws {
+        try rewrite { try EditRepo.updating(original, to: entry, in: $0) }
+    }
+
     public func disconnectRepository(_ key: String, newDefault: String?) throws {
         try rewrite { try DisconnectRepo.removing(key, newDefault: newDefault, from: $0) }
     }

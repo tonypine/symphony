@@ -213,7 +213,7 @@ final class AddRepoViewModel: ObservableObject {
         do {
             let file = SymphonyConfigFile(path: configPath)
             if let editing {
-                try file.updateRepository(editing.key, to: entry)
+                try file.editRepository(editing, to: entry)
                 saveError = nil
                 onSaved(.edited(from: editing, to: entry))
             } else {
@@ -244,7 +244,7 @@ final class AddRepoViewModel: ObservableObject {
             Task {
                 do {
                     let result = try await file.rewrite(
-                        { try RepositoriesConfig.updating(editing.key, to: entry, in: $0) },
+                        { try EditRepo.updating(editing, to: entry, in: $0) },
                         checkingWith: { await check($0, settings, secrets.trimmed()) }
                     )
                     self.isSaving = false

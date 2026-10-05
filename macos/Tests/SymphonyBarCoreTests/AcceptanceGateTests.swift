@@ -227,7 +227,56 @@ final class AcceptanceGateTests: XCTestCase {
         XCTAssertFalse(EditRepo.changesAcceptanceGate(from: entries[0], to: entry))
     }
 
+    func testTheEditSheetKeepsAModeSetWhileItWasOpen() throws {
+        let entries = try RepositoriesConfig.entries(in: config)
+        let symphony = entries[0]
+        var draft = EditRepo.draft(for: symphony)
+        draft.labels = ["api"]
+        guard case let .success(entry) = EditRepo.entry(for: draft, editing: symphony, existing: entries) else {
+            return XCTFail("expected an entry")
+        }
+        XCTAssertEqual(entry.acceptanceGateMode, "enforce")
+
+        let killed = try AcceptanceGate.settingRepositoryMode(.mode(.off), of: "symphony", in: config)
+        let saved = try EditRepo.updating(symphony, to: entry, in: killed)
+        XCTAssertEqual(try RepositoriesConfig.entries(in: saved).first?.acceptanceGateMode, "off")
+        XCTAssertEqual(try RepositoriesConfig.entries(in: saved).first?.route.labels, ["api"])
+
+        let inherited = try AcceptanceGate.settingRepositoryMode(.inherit, of: "symphony", in: config)
+        XCTAssertNil(try RepositoriesConfig.entries(in: EditRepo.updating(symphony, to: entry, in: inherited)).first?.acceptanceGateMode)
+
+        // A mode picked in the sheet still replaces the file's.
+        draft.acceptanceGate = .mode(.shadow)
+        guard case let .success(shadow) = EditRepo.entry(for: draft, editing: symphony, existing: entries) else {
+            return XCTFail("expected an entry")
+        }
+        let picked = try EditRepo.updating(symphony, to: shadow, in: killed)
+        XCTAssertEqual(try RepositoriesConfig.entries(in: picked).first?.acceptanceGateMode, "shadow")
+    }
+
     // MARK: Files
+
+    func testEditingARepositoryKeepsTheModeTheFileHoldsNow() throws {
+        let directory = uniqueTemporaryDirectory("gate-edit")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("symphony.yml")
+        try Data(config.utf8).write(to: url)
+        let file = SymphonyConfigFile(path: url.path)
+
+        let entries = try file.readRepositories()
+        var draft = EditRepo.draft(for: entries[0])
+        draft.baseBranch = "develop"
+        guard case let .success(entry) = EditRepo.entry(for: draft, editing: entries[0], existing: entries) else {
+            return XCTFail("expected an entry")
+        }
+        try file.writeRepositoryAcceptanceGateMode(.mode(.off), of: "symphony")
+        try file.editRepository(entries[0], to: entry)
+
+        let saved = try file.readRepositories()[0]
+        XCTAssertEqual(saved.acceptanceGateMode, "off")
+        XCTAssertEqual(saved.baseBranch, "develop")
+    }
 
     func testWritesTheFileKeepingItsComments() async throws {
         let directory = uniqueTemporaryDirectory("gate")
