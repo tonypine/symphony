@@ -84,6 +84,8 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
                ~s{(allow network-inbound (local ip "localhost:*"))},
                ~s{(allow network-outbound (remote ip "localhost:*"))},
                ~s{(allow network-outbound\n  (literal "/private/var/run/mDNSResponder"))},
+               "(deny mach-lookup)",
+               "(allow mach-lookup\n  " <> allow_mach_lookup,
                "(deny appleevent-send)",
                "(deny lsopen)",
                "(deny job-creation)",
@@ -107,6 +109,23 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
                """
 
       assert deny_write == ~s{(subpath "#{real(workspace)}/.git"))}
+
+      assert allow_mach_lookup ==
+               """
+               (global-name "com.apple.system.opendirectoryd.libinfo")
+                 (global-name "com.apple.system.opendirectoryd.membership")
+                 (global-name "com.apple.system.notification_center")
+                 (global-name "com.apple.system.logger")
+                 (global-name "com.apple.logd")
+                 (global-name "com.apple.bsd.dirhelper")
+                 (global-name "com.apple.SecurityServer")
+                 (global-name "com.apple.securityd.xpc")
+                 (global-name "com.apple.trustd")
+                 (global-name "com.apple.trustd.agent"))\
+               """
+
+      refute allow_mach_lookup =~ "windowserver"
+      refute allow_mach_lookup =~ "pasteboard"
 
       assert deny_mach_lookup ==
                """
@@ -228,6 +247,40 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
 
       Process.sleep(1_000)
       refute File.exists?(marker)
+    end
+
+    test "a command gets no window server and no pasteboard, but still checks TLS certificates", %{workspace: workspace, tmp_dir: tmp_dir, home: home} do
+      profile = DevServerSandbox.profile(workspace, [workspace, tmp_dir], [], home)
+      clipboard = "symphony-clipboard-#{System.unique_integer([:positive])}"
+      {previous_clipboard, 0} = System.cmd("/usr/bin/pbpaste", [])
+      on_exit(fn -> System.cmd("/bin/sh", ["-c", "printf %s \"$1\" | /usr/bin/pbcopy", "sh", previous_clipboard]) end)
+      {_output, 0} = System.cmd("/bin/sh", ["-c", "printf %s \"$1\" | /usr/bin/pbcopy", "sh", clipboard])
+
+      assert {output, _status} = seatbelt(profile, workspace, "/usr/bin/pbpaste")
+      refute output =~ clipboard
+
+      lookup = fn service ->
+        python = """
+        import ctypes
+        libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
+        port = ctypes.c_uint(0)
+        bootstrap = ctypes.c_uint.in_dll(libc, "bootstrap_port").value
+        print(libc.bootstrap_look_up(bootstrap, b"#{service}", ctypes.byref(port)))
+        """
+
+        seatbelt(profile, workspace, "python3 -c '#{python}'")
+      end
+
+      # 1100 is BOOTSTRAP_NOT_PRIVILEGED: the sandbox refused the lookup.
+      assert {"1100\n", 0} = lookup.("com.apple.windowserver.active")
+      assert {"1100\n", 0} = lookup.("com.apple.pasteboard.1")
+      assert {"0\n", 0} = lookup.("com.apple.trustd.agent")
+
+      proxy = start_supervised!({EgressProxy, allowed_domains: ["repo.hex.pm"]})
+      curl = "curl -sS -o /dev/null -w %{http_code} --proxy http://127.0.0.1:#{EgressProxy.port(proxy)} https://repo.hex.pm/"
+
+      assert {code, 0} = seatbelt(profile, workspace, curl)
+      assert code =~ ~r/^[234]\d\d$/
     end
 
     test "a command can't listen on a non-loopback address", %{workspace: workspace, tmp_dir: tmp_dir, home: home} do

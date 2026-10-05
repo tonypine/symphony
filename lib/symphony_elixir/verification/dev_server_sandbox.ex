@@ -16,6 +16,9 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
     * the network, but for listening and connecting on loopback and DNS lookups through
       mDNSResponder. It reaches the dependency hosts through
       `SymphonyElixir.Verification.EgressProxy` on loopback;
+    * every mach service but a fixed list, like the agent profiles: the agent's list without
+      its window, font, sound, power and LaunchServices services, plus `trustd` for TLS. So no
+      window server (no windows or dialogs on the operator's desktop) and no pasteboard;
     * the ways to have a process started outside the sandbox: Apple Events, LaunchServices
       (`open`), launchd jobs (`launchctl submit`), and running `open`, `osascript` and
       `launchctl` at all.
@@ -33,6 +36,22 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
   @dev_write_paths ~w(/dev/null /dev/zero /dev/tty /dev/stdout /dev/stderr /dev/dtracehelper /dev/autofs_nowait)
   @dev_write_subpaths ~w(/dev/fd)
   @dns_socket "/private/var/run/mDNSResponder"
+  # The mach services the Claude Code and SRT agent profiles allow, without the window, font,
+  # sound, power and LaunchServices ones, plus trustd for tools that check TLS certificates with
+  # Security.framework. SecurityServer is the keychain daemon: the agent profiles allow it too,
+  # and `mix` needs it to read the system's root certificates.
+  @mach_services ~w(
+    com.apple.system.opendirectoryd.libinfo
+    com.apple.system.opendirectoryd.membership
+    com.apple.system.notification_center
+    com.apple.system.logger
+    com.apple.logd
+    com.apple.bsd.dirhelper
+    com.apple.SecurityServer
+    com.apple.securityd.xpc
+    com.apple.trustd
+    com.apple.trustd.agent
+  )
   # launchd starts what these ask for as the operator, outside the sandbox.
   @launch_services ~w(com.apple.coreservices.launchservicesd com.apple.coreservices.appleevents)
   @launch_services_prefixes ~w(com.apple.lsd.)
@@ -71,7 +90,8 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
   @doc """
   The Seatbelt profile: writable in `write_paths` but the `protected_paths` of `workspace`
   (relative to it), unreadable in the agent's denied read paths under `home`, with
-  loopback-only network and no way to have launchd start a process outside it.
+  loopback-only network, an allowlist of mach services and no way to have launchd start a
+  process outside it.
   """
   @spec profile(Path.t(), [Path.t()], [String.t()], Path.t()) :: String.t()
   def profile(workspace, write_paths, protected_paths, home \\ System.user_home!()) do
@@ -101,6 +121,8 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
       ~s{(allow network-inbound (local ip "localhost:*"))},
       ~s{(allow network-outbound (remote ip "localhost:*"))},
       rule("allow network-outbound", [literal(@dns_socket)]),
+      "(deny mach-lookup)",
+      rule("allow mach-lookup", Enum.map(@mach_services, &"(global-name #{sb_string(&1)})")),
       "(deny appleevent-send)",
       "(deny lsopen)",
       "(deny job-creation)",
