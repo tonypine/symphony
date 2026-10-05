@@ -704,7 +704,9 @@ never to Symphony.app: macOS passes Symphony.app's grants to the agents it start
 [One-time macOS permissions](../docs/configuration.md#one-time-macos-permissions)).
 
 A plain `make` build has no embedded Symphony, so it runs only in Development mode, and it can't update
-itself.
+itself. `make qa-app` builds this checkout's Symphony (an escript, so it needs the checkout's Erlang and
+Elixir) and embeds it as `make bundle` does, for Auto Review's `macos_app` QA (see
+[macOS app QA](../docs/configuration.md#macos-app-qa)). It sets no update key, so it can't update itself either.
 
 ### Run a checkout
 
@@ -757,6 +759,9 @@ Symphony unpacks under `burrito/`, so it never removes the installed app's unpac
 build removes older builds' unpacked releases from its folder). It still takes the Erlang node name
 `symphony@127.0.0.1`, so while another Symphony release runs, start the app with its own `ERL_EPMD_PORT`, for
 example `ERL_EPMD_PORT=24369`, and use a `symphony.yml` whose `dashboard.port` is free (`0` picks one).
+
+Each `symphony check` the app runs (on Save in Settings, and before Restart) goes to the app's stderr in QA
+mode: its exit status and output, which start with the build that checked, `Symphony <version> (<commit>)`.
 
 Two more variables, read only in QA mode:
 
