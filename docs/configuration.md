@@ -520,10 +520,17 @@ agent:
 - `provider`: default provider that serves the model: `anthropic` (default) or `openrouter`.
   `openrouter` needs a model for every run it serves (an OpenRouter model id such as
   `anthropic/claude-haiku-4.5`) and works only with `runtime: claude`. An `openrouter` run
-  starts `claude` with `ANTHROPIC_BASE_URL=https://openrouter.ai/api`,
-  `ANTHROPIC_AUTH_TOKEN=<OPENROUTER_API_KEY>`, an empty `ANTHROPIC_API_KEY`, `--model <id>`, and
-  `CLAUDE_CODE_SUBAGENT_MODEL=<id>` so subagents use the same model. `anthropic` runs start as
-  before.
+  starts `claude` with `--model <id>` and this env:
+  - `ANTHROPIC_BASE_URL=https://openrouter.ai/api`;
+  - `ANTHROPIC_AUTH_TOKEN=<OPENROUTER_API_KEY>`;
+  - `ANTHROPIC_API_KEY=` (empty);
+  - `CLAUDE_CODE_SUBAGENT_MODEL=<id>`, so subagents use the same model;
+  - `ANTHROPIC_DEFAULT_HAIKU_MODEL=<id>`, `ANTHROPIC_DEFAULT_SONNET_MODEL=<id>`,
+    `ANTHROPIC_DEFAULT_OPUS_MODEL=<id>` and `ANTHROPIC_SMALL_FAST_MODEL=<id>`, so Claude Code's
+    background calls (titles, summaries) and model aliases use the same model instead of
+    Anthropic's own ids, which OpenRouter does not know.
+
+  `anthropic` runs start as before: Symphony sets none of these.
 - `OPENROUTER_API_KEY` (environment variable, read from Symphony's own environment): the
   OpenRouter API key. It is never written to `symphony.yml` and reaches the agent only through
   the subprocess env, as `ANTHROPIC_AUTH_TOKEN`. When it is unset, an `openrouter` run fails
