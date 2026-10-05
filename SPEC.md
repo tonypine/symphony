@@ -779,7 +779,11 @@ Fields:
 
 Review-comment options are ignored when `enabled` is not `true`. CI failure dispatch is driven only
 by failed status checks and ignores comment authorship; the ignored reviewer set above does not
-affect CI escalation.
+affect CI escalation. A head whose only failed check is `protected paths` gets no
+flaky re-run, no CI-fix run and no escalation, and uses no fix attempt: only a person clears that
+check, with the `protected-paths-approved` label, so the issue stays where it is until the check
+passes. When another check fails beside it, the CI-fix run's prompt names `protected paths` as not
+the agent's to fix.
 
 #### 5.4.7 `github` (object)
 

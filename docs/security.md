@@ -60,6 +60,26 @@ also covers the files a symlink in one of those points at: Symphony's own `.ai/s
 to `priv/skills/pull`, so `priv/skills/pull` is read-only to the agent. An SSH worker's workspace
 gets the plain list.
 
+The sandbox binds only the commands an agent runs. Claude's file tools (`Edit`, `Write`,
+`NotebookEdit`) run in the Claude process itself, so each Claude session's settings also carry an
+`Edit(<path>)` deny rule for every one of those paths and every symlink target. Claude Code applies
+an `Edit` rule to all three tools, and still applies it under `--dangerously-skip-permissions`.
+It checks a symlink's real path, which is why the targets need their own rules.
+
+Each layer covers a different way to write one of those paths:
+
+| Write | Refused by |
+| --- | --- |
+| A shell command (`sed -i`, `git merge`, a script) | The sandbox: Claude's `sandbox.filesystem.denyWrite`, Codex's filesystem permissions |
+| Claude's `Edit`, `Write` or `NotebookEdit` | `Edit(<path>)` rules in the session's `permissions.deny` |
+| Codex's `apply_patch` | Codex's filesystem permissions, if `apply_patch` runs under them; not yet checked with a real session ([TP-530](https://linear.app/tonypine/issue/TP-530)) |
+| A branch pushed with `github_push_branch`, or merged with `github_sync_base` | The tools, which refuse a branch that changes one of the paths |
+| A `git push` from the agent's shell | Claude's `Bash(git push:*)` deny rule, then CI |
+| A pull request that changes one of the paths | The `protected-paths` CI job, until a person waives it |
+
+The first three stop the write in the workspace, so a later session there can't load it. The others
+only stop the change from reaching the base branch.
+
 A `git merge` in the sandbox therefore fails when the base branch changed one of them, so agents
 merge the base branch with `github_sync_base`, which merges outside the sandbox with repo hooks off
 and leaves the commit to the agent. It and `github_push_branch` refuse a branch that changes one of
@@ -78,10 +98,11 @@ moment; to waive a later head, remove and re-add it. It counts only when a perso
 pull request's author adds it, since an agent may act as the author. An approving review of the
 current head commit counts too, but only from a reviewer with write access (an owner, member or
 collaborator), since anyone who can read the repository can approve. A review doesn't start a run,
-so after approving, re-run the job. Bots count for neither. The workflow tells Symphony's pull
-requests apart only by the `auto/` branch prefix. So it skips the case where a person's own open
-pull request on another branch is attached to the issue, and Symphony keeps working on that
-branch.
+so after approving, re-run the job. Bots count for neither. Since no agent can clear this check,
+Symphony's CI poller dispatches no CI-fix run and spends no fix attempt while it is the only red
+check; the issue waits for the waiver. The workflow tells Symphony's pull requests apart only by
+the `auto/` branch prefix. So it skips the case where a person's own open pull request on another
+branch is attached to the issue, and Symphony keeps working on that branch.
 
 Every local agent may also write one per-user cache folder, `~/Library/Caches/symphony/agent` on
 macOS, which holds its Hex home, its `elixir_make` cache and Dialyxir's core PLTs (see
@@ -211,6 +232,28 @@ separately in [quality_gate_security.md](quality_gate_security.md), including it
 surface, the `on_error: pass` failure mode, and the lack of in-process network restrictions on
 provider calls.
 
+### Verification dev server runs on the host
+
+`verification.dev_server.start_cmd` is not sandboxed. Symphony starts it itself, on the host as
+the operator's user, with the operator's environment, keychain, SSH agent and tokens, outside the
+agent sandbox and its network allowlist. It runs from the checkout under test:
+
+- in an agent run, from the agent's own workspace, before the first turn and for the whole run;
+- in an Auto Review `web` pass, from a second worktree at the PR head.
+
+The command usually runs files from that checkout: a script such as Symphony's own
+`scripts/qa-dashboard-server.sh`, and the repo's build tool (`mix`, `npm`, `pnpm`), which runs the
+project's code and build config. The agent can change all of these. `WORKFLOW.md` itself is
+write-protected, but the script it names and the code it builds are not. So an agent's edit,
+pushed or left in the workspace, runs as the operator at the next start. A dev server that reloads
+code runs it straight away.
+
+The dev server is off by default. It starts only when `verification.enabled` is `true` and
+`verification.dev_server.start_cmd` is set. A repo's `WORKFLOW.md` can set both, and its values
+override `symphony.yml`. To turn it off, leave `verification.enabled` unset (or `false`) in
+`symphony.yml` and in every repo's `WORKFLOW.md`, or remove `start_cmd` from them. Without a dev
+server, Auto Review skips the `web` playbook ("needs `verification.dev_server`").
+
 ### Tamper-evident audit log
 
 Side-effect events (prompt sends, tool calls, file changes, PR actions, Linear state/comment
@@ -267,6 +310,10 @@ read from environment variables. The quality gate explicitly ignores credentials
   like `/private/tmp`.
 - Keep `agent.network_access.mode: allowlist`. Use `denied_domains` to override anything in the
   built-in dev allow list you do not want the agent to reach.
+- Turn on `verification.enabled` only on a host where running the agent's code as your own user
+  is acceptable, such as a dedicated machine or user account without your personal credentials.
+  The dev server runs the checkout's code outside the sandbox (see
+  [Verification dev server runs on the host](#verification-dev-server-runs-on-the-host)).
 
 ### Secrets and credentials
 

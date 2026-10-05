@@ -303,6 +303,22 @@ defmodule SymphonyElixir.AgentSandboxConfigTest do
            ]
   end
 
+  test "Claude Edit deny rules cover every write-protected path in the form Claude Code matches" do
+    rules = AgentSandboxConfig.claude_edit_deny_rules()
+
+    assert rules == Enum.map(AgentSandboxConfig.deny_write_paths(), &"Edit(#{&1})")
+    assert "Edit(./WORKFLOW.md)" in rules
+    assert "Edit(./.claude/hooks)" in rules
+    assert "Edit(~/.claude/settings.json)" in rules
+  end
+
+  test "Claude Edit deny rules add extra paths such as skill link targets, absolute ones with //" do
+    rules = AgentSandboxConfig.claude_edit_deny_rules([" ./priv/skills/pull ", "/opt/protected", "", :bad, "./WORKFLOW.md"])
+
+    assert rules -- AgentSandboxConfig.claude_edit_deny_rules() == ["Edit(./priv/skills/pull)", "Edit(//opt/protected)"]
+    assert AgentSandboxConfig.claude_edit_deny_rules(:bad) == AgentSandboxConfig.claude_edit_deny_rules()
+  end
+
   test "Claude filesystem settings omit allowWrite when allow_write_paths empty" do
     settings = AgentSandboxConfig.claude_filesystem_settings()
 

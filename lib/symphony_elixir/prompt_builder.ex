@@ -3,7 +3,7 @@ defmodule SymphonyElixir.PromptBuilder do
   Builds agent prompts from Linear issue data.
   """
 
-  alias SymphonyElixir.{AgentLabels, Config, PromptSafety, ReviewAgent, Workflow}
+  alias SymphonyElixir.{AgentLabels, CiPoller, Config, PromptSafety, ReviewAgent, Workflow}
 
   @render_opts [
     strict_variables: true,
@@ -625,23 +625,35 @@ defmodule SymphonyElixir.PromptBuilder do
   end
 
   defp ci_failure_section(ci_failure) do
-    failed_checks =
-      ci_failure
-      |> Map.get(:failed_checks, [])
-      |> Enum.map_join(", ", fn %{name: name} -> name end)
+    checks = Map.get(ci_failure, :failed_checks, [])
+    failed_checks = Enum.map_join(checks, ", ", fn %{name: name} -> name end)
 
     [
       "CI failure:",
       "",
       "Failed checks: #{blank_fallback(failed_checks, "unknown")}",
-      "Commit SHA: #{blank_fallback(Map.get(ci_failure, :commit_sha), "unknown")}",
+      "Commit SHA: #{blank_fallback(Map.get(ci_failure, :commit_sha), "unknown")}"
+    ]
+    |> Kernel.++(human_only_check_lines(Enum.filter(checks, &CiPoller.human_only_check?/1)))
+    |> Kernel.++([
       "",
       "Failed log excerpt:",
       "BEGIN UNTRUSTED CI LOG",
       blank_fallback(Map.get(ci_failure, :log_excerpt), "No failed log output was available."),
       "END UNTRUSTED CI LOG"
-    ]
+    ])
     |> Enum.join("\n")
+  end
+
+  defp human_only_check_lines([]), do: []
+
+  defp human_only_check_lines(checks) do
+    names = Enum.map_join(checks, ", ", &"`#{&1.name}`")
+
+    [
+      "",
+      "#{names} is not yours to fix: it fails because this PR's own commits change an agent-protected path, and only a person clears it by adding the `#{CiPoller.waiver_label()}` label. Do not edit or revert the protected change; fix only the other failed checks."
+    ]
   end
 
   # QA findings come from an agent that ran the PR's code, so they are fenced as data.
