@@ -4,9 +4,16 @@ The acceptance gate is a step in Auto Review, after QA. It decides whether a PR 
 a human. A gate agent reads the ticket and the PR. Before the agent's verdict counts, fixed
 escalation rules check the ticket and the diff, and any rule that triggers sends the PR to a human.
 
-Auto Review runs CI, then QA, then the gate. The gate runs in `shadow` mode: it records an
-advisory verdict and the issue moves to In Review as before. `enforce` doesn't apply verdicts
-yet and behaves like `shadow`.
+Auto Review runs CI, then QA, then the gate. In `shadow` mode the gate records an advisory
+verdict and the issue moves to In Review as before. In `enforce` mode the verdict moves the issue:
+`approve` to Merging, `rework` back to In Progress, `escalate` to In Review (see
+[Enforce mode](#enforce-mode)).
+
+What the review states mean depends on the mode:
+
+- **In Review** holds the escalations when the gate is enforced, and every PR when the gate is
+  `off` or in `shadow`.
+- **Merging** means approved, by a person or by the gate.
 
 ## Who reviews what
 
@@ -20,7 +27,8 @@ Each check reads the change for its own concerns. None of them re-reads the diff
 - **QA:** runs the change as a user would, against the ticket's walkthrough, after CI is green.
 - **Acceptance gate:** acceptance criteria, scope, and overlap with other open PRs, on every PR head
   before merge. It skips code style and bugs unless one makes a criterion unmet.
-- **Human:** escalations and judgment calls, and the merge approval while the gate is in `shadow`.
+- **Human:** escalations and judgment calls, and the merge approval while the gate is `off` or in
+  `shadow`.
 
 ## Supervisor
 
@@ -68,7 +76,8 @@ it is, as for a late QA pass.
   reason `inconclusive`.
 - **Storage.** The verdict is stored per head SHA on the issue's CI check record: `gate_sha`,
   `gate_verdict`, `gate_agent_verdict`, `gate_reasons`, `gate_run_id` (and `gate_mode`,
-  `gate_inconclusive`). The run is stored with `kind: "acceptance_gate"`, its tokens and the
+  `gate_inconclusive`, and `gate_findings`, what a `rework` sends back). An enforced verdict adds
+  `gate_target_state` and `gate_applied` once Auto Review applies it. The run is stored with `kind: "acceptance_gate"`, its tokens and the
   verdict: `verdict`, `agent_verdict`, `reasons`, `criteria` (how many criteria are `met`, `unmet`
   and `unclear`), `pr_url`, `head_sha` and `judged_at`. The CI check record goes when the PR
   closes; the run stays, and it is where the human's decision is recorded (see
@@ -77,8 +86,10 @@ it is, as for a late QA pass.
 - **Visibility.** Each pass rewrites one `## Symphony Acceptance Gate` comment on the Linear issue,
   as the QA report is rewritten. It shows the mode (advisory in `shadow`), the verdict, the agent's
   verdict, a table with one row per acceptance criterion (criterion, result, evidence), the
-  overlaps, the scope findings, the escalation reasons, the proposed follow-ups (listed, not
-  filed), the tokens and the runtime.
+  overlaps, the scope findings, the escalation reasons, the follow-ups, the tokens and the
+  runtime. In `enforce` mode the mode line says where the verdict moves the issue, an `escalate`
+  verdict opens the comment with its escalation reasons, and each follow-up says whether it was
+  filed. In `shadow` mode the follow-ups are listed, not filed.
 - **Audit log.** Each verdict writes one `acceptance_gate_verdict` event with the issue, the SHA,
   the mode, the verdict, the agent's verdict, the reasons, the run id and the tokens.
 
@@ -101,6 +112,10 @@ The PR review comment comes from the PR review poller: a change request or a rev
 moves the issue back to In Progress and stores `last_action: "rework"` on its PR review record. The decision is checked on every CI poll, before the
 poll processes the PR, so a PR merged since the last poll still has the head the human merged.
 Only each issue's latest verdict is watched: a new verdict on a new push replaces the old one.
+A verdict the gate applied itself in `enforce` mode (a move to Merging, or back to In Progress) has
+no human decision: the run gets `moved_by_gate` (the state) and the poller doesn't watch it, so
+Symphony's own move to Merging never counts as a person's `approve`. An enforced `escalate` is
+watched as before, since a person decides it.
 
 The gate run then gets `human_decision`, `human_decision_state` (the Linear state),
 `human_decision_sha` (the PR head the poller last saw), `unchanged` (that head is the SHA the gate
@@ -146,6 +161,37 @@ Otherwise it is `false` and `unmet_condition` names the first condition that fai
 - The dashboard's Auto Review section shows the gate passes, one line per recent verdict, and one
   agreement line per repository, ending in `ready to enforce` or the condition still unmet.
 
+## Enforce mode
+
+With `mode: enforce`, set globally or for one repository, Auto Review applies the gate's verdict
+(`AcceptanceGate.enforced_target/4`):
+
+| Verdict | The issue moves to |
+| --- | --- |
+| `approve` | Merging. The PR review poller turns GitHub auto-merge on at its next poll, and the issue ends in Done once GitHub merges the PR. |
+| `rework` | In Progress, on the same PR, with the unmet criteria, the missing scope and the reasons (such as a conflict) as continuation context, like a QA `fail`. |
+| `escalate` | In Review (or the Human Review state, when QA was blocked on something only a person can do). The gate comment opens with the escalation reasons. |
+
+- **Fix attempts.** A `rework` counts against `auto_review.max_fix_attempts`, with QA fails, on the
+  CI check record's `qa_fix_attempts`. While the gate is enforced, a QA `pass` doesn't reset the
+  count; an `approve` or `escalate` does. The `rework` past the limit goes to In Review instead, and
+  the comment says the attempts are used up. A `rework` goes to In Progress, not to `Rework`: in
+  this workflow `Rework` means the approach is wrong, the PR is closed and the work starts over.
+- **Follow-ups.** The answer's `follow_ups` are filed as Backlog sub-issues of the ticket
+  (`AcceptanceGate.FollowUps`, through `AgentTools.Linear.create_subissue/3`), at most 3 per
+  verdict. A title the ticket already has among its sub-issues (compared without case), or one the
+  answer repeats, is not filed again. When the sub-issues can't be read, none is filed. The gate
+  comment lists each follow-up as filed (with its identifier), already a sub-issue, over the cap,
+  or not filed and why. Only a Linear tracker files them.
+- **Moves.** The target is stored on the CI check record before the move. A move that fails is
+  tried again on the next green poll without counting another attempt. An issue back in Auto Review
+  on the same SHA after a `rework`, because its fix run pushed nothing, counts another attempt.
+- **Kill switch.** The mode is read again on every CI poll and when a gate pass ends, so switching a
+  repository to `shadow` or `off` stops the moves on the next poll, without a restart: a verdict
+  not applied yet moves the issue where QA sent it. An issue already in Merging stays there.
+- **Guard.** The gate never moves a `breakdown` parent or a `Final verification:` ticket: their
+  verdicts stay advisory, and the issue goes where QA sent it.
+
 ## Where it is configured
 
 The gate is configured in `symphony.yml`, the operator config: a global
@@ -190,7 +236,7 @@ Quote regular expressions with single quotes in YAML, so a backslash stays a bac
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `mode` | `off` | The kill switch. `off`: the gate doesn't run. `shadow`: the gate runs and records its verdict, and the PR goes to a human as usual. `enforce`: the gate's verdict counts (not applied yet: it behaves like `shadow`). |
+| `mode` | `off` | The kill switch. `off`: the gate doesn't run. `shadow`: the gate runs and records its verdict, and the PR goes to a human as usual. `enforce`: the gate's verdict moves the issue (see [Enforce mode](#enforce-mode)). A change takes effect on the next poll, with no restart. |
 | `runtime` | `null` | The gate agent's runtime, `codex` or `claude`. The key is `runtime`, as in `auto_review.runtime`. `kind` is rejected, and the error points at `runtime`. |
 | `command` | `null` | The gate agent's command. |
 | `model` | `null` | The gate agent's model. Unset, it falls back to the `acceptance_gate` run profile: `repositories[].agent.run_profiles.acceptance_gate`, `repositories[].agent.model`, `agent.run_profiles.acceptance_gate`, then `agent.model` (`Config.acceptance_gate_profile/1`). |
@@ -309,7 +355,7 @@ that receives outside input:
 repositories:
   - key: symphony
     acceptance_gate:
-      mode: shadow
+      mode: shadow     # enforce once the agreement stats say ready to enforce
       escalate:
         paths:
           # the gate, Auto Review, auto-merge and the pre-push reviewer

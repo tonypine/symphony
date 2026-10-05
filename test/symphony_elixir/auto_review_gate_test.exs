@@ -3,7 +3,8 @@ defmodule SymphonyElixir.AutoReviewGateTest do
 
   import ExUnit.CaptureLog
 
-  alias SymphonyElixir.{AutoReview, QaAgent}
+  alias SymphonyElixir.AcceptanceGate.Agreement
+  alias SymphonyElixir.{AutoReview, CiPoller, PromptBuilder, QaAgent}
 
   @sha "feedface00112233445566778899aabbccddeeff"
   @repo_key "default"
@@ -63,8 +64,19 @@ defmodule SymphonyElixir.AutoReviewGateTest do
     end
   end
 
+  # The run store, except that marking a gate run fails.
+  defmodule MarkFailingStore do
+    defdelegate put_run(record), to: SymphonyElixir.RunStore
+    defdelegate list_ci_checks(repo_key), to: SymphonyElixir.RunStore
+    defdelegate update_ci_check(repo_key, issue_id, attrs), to: SymphonyElixir.RunStore
+
+    def update_run(_repo_key, _run_id, %{moved_by_gate: _state}), do: {:error, :disk_full}
+    def update_run(repo_key, run_id, attrs), do: SymphonyElixir.RunStore.update_run(repo_key, run_id, attrs)
+  end
+
   defmodule FailingTracker do
     def update_issue_state(_issue_id, _state), do: {:error, :linear_down}
+    def fetch_issue_states_by_ids(_issue_ids), do: {:ok, []}
   end
 
   setup do
@@ -409,6 +421,218 @@ defmodule SymphonyElixir.AutoReviewGateTest do
         end)
 
       assert log =~ "Failed to move TP-960 to In Review after QA"
+    end
+  end
+
+  describe "mode enforce" do
+    defp rework_answer do
+      Jason.encode!(%{
+        verdict: "rework",
+        summary: "The docs are missing.",
+        criteria: [
+          %{id: "C1", criterion: "Adds the command", status: "met", evidence: "lib/app.ex:3"},
+          %{id: "C2", criterion: "Documents it", status: "unmet", evidence: "README.md unchanged"}
+        ]
+      })
+    end
+
+    # Drops the comments earlier passes posted, so the next assertion reads the latest one.
+    defp flush_comments do
+      receive do
+        {:memory_tracker_comment, _issue_id, _body} -> flush_comments()
+      after
+        0 -> :ok
+      end
+    end
+
+    defp judged(attrs \\ %{}), do: put_record(Map.merge(%{qa_sha: @sha, qa_verdict: "pass", qa_target_state: "In Review", qa_applied: false}, attrs))
+
+    test "an approve moves the issue to Merging, and the move isn't counted as a human approval", %{root: root} do
+      settings = settings("enforce", root)
+
+      assert {:auto_review_gate, "issue-gate-flow", "approve", "Merging"} = AutoReview.run_gate(gate_job(judged(), settings), gate_opts(root))
+
+      assert_receive {:memory_tracker_state_update, "issue-gate-flow", "Merging"}
+      assert_receive {:memory_tracker_comment, "issue-gate-flow", body}
+      assert body =~ "**Mode:** enforce. Symphony applies this verdict: the issue moves to Merging"
+      assert body =~ "- not filed (:tracker_not_linear): **Add a --json flag**"
+
+      assert %{gate_verdict: "approve", gate_target_state: "Merging", gate_applied: true, qa_fix_attempts: 0} = stored_record()
+      assert %{qa_applied: true} = stored_record()
+      assert [%{moved_by_gate: "Merging"} = run] = RunStore.list_runs(@repo_key, :all)
+
+      log =
+        capture_log(fn ->
+          assert {:auto_review_gate, "issue-gate-flow", "approve", "Merging"} =
+                   AutoReview.run_gate(gate_job(judged(), settings), gate_opts(root, run_store: MarkFailingStore))
+        end)
+
+      assert log =~ ~r/Failed to mark the acceptance gate run run_id=gate-TP-960-\w+-\d+: :disk_full/
+
+      # The CI poller's agreement watch sees the issue in Merging and records no human decision.
+      merging = issue(%{state: "Merging"})
+      assert Agreement.observe(@repo_key, [merging], [run], [], tracker: SymphonyElixir.Tracker.Memory) == []
+
+      assert Agreement.observe(@repo_key, [merging], [Map.delete(run, :moved_by_gate)], [], tracker: SymphonyElixir.Tracker.Memory, audit_dir: Path.join(root, "audit")) == [
+               {"issue-gate-flow", "approve"}
+             ]
+    end
+
+    test "a rework goes back to In Progress with the unmet criteria, sharing the fix count with QA fails", %{root: root} do
+      settings = settings("enforce", root)
+      Application.put_env(:symphony_elixir, :gate_flow_turn_result, {:ok, %{result: rework_answer()}})
+
+      assert {:auto_review_gate, "issue-gate-flow", "rework", "In Progress"} = AutoReview.run_gate(gate_job(judged(), settings), gate_opts(root))
+
+      assert_receive {:memory_tracker_state_update, "issue-gate-flow", "In Progress"}
+      assert %{qa_fix_attempts: 1, gate_target_state: "In Progress", gate_applied: true} = stored_record()
+      assert [%{moved_by_gate: "In Progress"}] = RunStore.list_runs(@repo_key, :all)
+
+      # The fix run gets the unmet criteria as continuation context, like a QA fail.
+      failure = CiPoller.pending_qa_failure("issue-gate-flow")
+      assert %{source: "acceptance_gate", commit_sha: @sha} = failure
+      assert "Criterion unmet: Documents it (README.md unchanged)" in failure.findings
+
+      prompt = PromptBuilder.build_prompt(issue(%{state: "In Progress"}), qa_failure: failure)
+      assert prompt =~ "Auto Review acceptance gate rework:"
+      assert prompt =~ "The acceptance gate judged commit #{@sha} against the ticket and sent it back"
+      assert prompt =~ "- Criterion unmet: Documents it (README.md unchanged)"
+      refute prompt =~ "Auto Review QA failure:"
+
+      # The next QA pass keeps the count: only the gate's verdict ends the fix loop.
+      Application.put_env(:symphony_elixir, :gate_flow_qa_result, qa_pass())
+      assert {:gate_started, "issue-gate-flow", @sha} = AutoReview.run_qa(qa_job(stored_record(), settings), qa_opts(["lib/symphony_elixir/cli.ex"]))
+      assert %{qa_fix_attempts: 1, qa_passed: true} = stored_record()
+
+      # The rework past `max_fix_attempts` (2) escalates to In Review instead.
+      record = judged(%{qa_fix_attempts: 2})
+      flush_comments()
+
+      assert {:auto_review_gate, "issue-gate-flow", "rework", "In Review"} = AutoReview.run_gate(gate_job(record, settings), gate_opts(root))
+      assert_receive {:memory_tracker_state_update, "issue-gate-flow", "In Review"}
+      assert_receive {:memory_tracker_comment, "issue-gate-flow", body}
+      assert body =~ "The fix attempts are used up (2 of 2), so this rework goes to a person: the issue moves to In Review."
+      assert %{qa_fix_attempts: 2, qa_failure: nil, gate_target_state: "In Review"} = stored_record()
+    end
+
+    test "a failed move is retried without counting, and a rework back without a commit counts again", %{root: root} do
+      settings = settings("enforce", root)
+      Application.put_env(:symphony_elixir, :gate_flow_turn_result, {:ok, %{result: rework_answer()}})
+
+      log =
+        capture_log(fn ->
+          assert {:state_transition_error, "issue-gate-flow", :acceptance_gate, :linear_down} =
+                   AutoReview.run_gate(gate_job(judged(), settings), gate_opts(root, tracker: FailingTracker))
+        end)
+
+      assert log =~ "Failed to move TP-960 to In Progress after the acceptance gate: :linear_down"
+      assert %{qa_fix_attempts: 1, gate_target_state: "In Progress", gate_applied: false} = stored_record()
+
+      assert {:auto_review_gate, "issue-gate-flow", "rework", "In Progress"} = green_poll(stored_record(), settings)
+      assert_receive {:memory_tracker_state_update, "issue-gate-flow", "In Progress"}
+      assert %{qa_fix_attempts: 1, gate_applied: true} = stored_record()
+
+      # Back in Auto Review on the same SHA: the fix run pushed nothing.
+      assert {:auto_review_gate, "issue-gate-flow", "rework", "In Progress"} = green_poll(stored_record(), settings)
+      assert %{qa_fix_attempts: 2, qa_failure: %{findings: [returned | _rest]}} = stored_record()
+      assert returned =~ "The fix run ended without pushing a commit"
+      refute_received {:gate_request, _job, _opts}
+
+      # The third time is past the limit.
+      assert {:auto_review_gate, "issue-gate-flow", "rework", "In Review"} = green_poll(stored_record(), settings)
+    end
+
+    test "an escalate moves the issue to In Review, and the comment opens with the reasons", %{root: root} do
+      settings = settings("enforce", root)
+      job = gate_job(judged(%{qa_fix_attempts: 1}), settings, %{issue: issue(%{labels: ["needs-human"]})})
+
+      assert {:auto_review_gate, "issue-gate-flow", "escalate", "In Review"} = AutoReview.run_gate(job, gate_opts(root))
+
+      assert_receive {:memory_tracker_state_update, "issue-gate-flow", "In Review"}
+      assert_receive {:memory_tracker_comment, "issue-gate-flow", body}
+      assert String.starts_with?(body, "## Symphony Acceptance Gate\n\n### Escalation reasons\n\n- `label`: the issue is labelled `needs-human`\n")
+      assert body =~ "**Mode:** enforce. Symphony applies this verdict: the issue moves to In Review for a person to decide."
+      assert %{qa_fix_attempts: 0, gate_applied: true} = stored_record()
+      assert [run] = RunStore.list_runs(@repo_key, :all)
+      refute Map.has_key?(run, :moved_by_gate)
+    end
+
+    test "the gate never moves a breakdown parent or a Final verification ticket", %{root: root} do
+      settings = settings("enforce", root)
+      job = gate_job(judged(), settings, %{issue: issue(%{title: "Final verification: Add `app check`"})})
+
+      assert {:auto_review_gate, "issue-gate-flow", "approve", "In Review"} = AutoReview.run_gate(job, gate_opts(root))
+      assert_receive {:memory_tracker_state_update, "issue-gate-flow", "In Review"}
+      assert_receive {:memory_tracker_comment, "issue-gate-flow", body}
+      assert body =~ "**Mode:** enforce, but the gate never moves a `breakdown` parent"
+      refute_received {:memory_tracker_state_update, _issue_id, "Merging"}
+    end
+
+    test "a repository in enforce and one in shadow behave differently in the same process", %{root: root} do
+      workflow = Workflow.workflow_file_path()
+
+      repo = fn key, mode ->
+        %{
+          "name" => key,
+          "path" => Path.dirname(workflow),
+          "workflow" => Path.basename(workflow),
+          "team" => "Test",
+          "labels" => [key],
+          "acceptance_gate" => %{"mode" => mode}
+        }
+      end
+
+      write_workflow_file!(workflow,
+        tracker_kind: "memory",
+        pr_review_mode: "polling",
+        workspace_root: root,
+        ci: %{enabled: true},
+        auto_review: %{enabled: true, max_fix_attempts: 2},
+        repos: [repo.("app", "enforce"), repo.("web", "shadow")]
+      )
+
+      for {repo_key, target} <- [{"app", "Merging"}, {"web", "In Review"}] do
+        issue_id = "issue-#{repo_key}"
+        record = judged(%{repo_key: repo_key, issue_id: issue_id})
+        job = gate_job(record, Config.settings_for_repo!(repo_key), %{issue: issue(%{id: issue_id})})
+
+        assert {:auto_review_gate, ^issue_id, "approve", ^target} = AutoReview.run_gate(job, gate_opts(root))
+        assert_receive {:memory_tracker_state_update, ^issue_id, ^target}
+      end
+    end
+
+    test "switching the mode back stops the moves on the next poll, without a restart", %{root: root} do
+      settings = settings("enforce", root)
+
+      capture_log(fn ->
+        assert {:state_transition_error, "issue-gate-flow", :acceptance_gate, :linear_down} =
+                 AutoReview.run_gate(gate_job(judged(), settings), gate_opts(root, tracker: FailingTracker))
+      end)
+
+      assert %{gate_target_state: "Merging", gate_applied: false} = stored_record()
+
+      # The workflow reload turns the gate to shadow: the next green poll moves the issue where QA sent it.
+      settings = settings("shadow", root)
+      assert {:auto_review_gate, "issue-gate-flow", "approve", "In Review"} = green_poll(stored_record(), settings)
+      assert_receive {:memory_tracker_state_update, "issue-gate-flow", "In Review"}
+      refute_received {:memory_tracker_state_update, _issue_id, "Merging"}
+
+      # A pass requested in enforce mode that ends after the switch to off applies nothing either.
+      enforce = settings("enforce", root)
+      settings("off", root)
+      flush_comments()
+
+      assert {:auto_review_gate, "issue-gate-flow", "approve", "In Review"} = AutoReview.run_gate(gate_job(judged(), enforce), gate_opts(root))
+      assert_receive {:memory_tracker_comment, "issue-gate-flow", body}
+      assert body =~ "**Mode:** off. The gate was turned off during this pass"
+      assert_receive {:memory_tracker_state_update, "issue-gate-flow", "In Review"}
+
+      # Settings that can't be read again keep the job's.
+      record = put_record(%{repo_key: "gone", qa_sha: @sha, qa_verdict: "pass", qa_target_state: "In Review"})
+
+      capture_log(fn ->
+        assert {:auto_review_gate, "issue-gate-flow", "approve", "Merging"} = AutoReview.run_gate(gate_job(record, enforce), gate_opts(root))
+      end)
     end
   end
 end

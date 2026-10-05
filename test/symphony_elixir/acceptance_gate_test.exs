@@ -551,6 +551,175 @@ defmodule SymphonyElixir.AcceptanceGateTest do
     end
   end
 
+  describe "enforced verdicts" do
+    # Answers the workpad and report comments, the issue's sub-issues and sub-issue creation.
+    defp follow_up_client(opts) do
+      recipient = self()
+      children = Keyword.get(opts, :children, [])
+
+      fn query, variables, _opts ->
+        cond do
+          query =~ "SymphonyAgentIssueComments" ->
+            {:ok, %{"data" => %{"issue" => %{"comments" => %{"nodes" => []}}}}}
+
+          query =~ "SymphonyAgentAddComment" ->
+            send(recipient, {:gate_comment, variables.body})
+            {:ok, %{"data" => %{"commentCreate" => %{"success" => true, "comment" => %{"id" => "c-1"}}}}}
+
+          query =~ "SymphonyAgentSubissueScope" ->
+            team = %{"id" => "team-1", "states" => %{"nodes" => [%{"id" => "state-backlog", "name" => "Backlog", "type" => "backlog"}]}}
+            {:ok, %{"data" => %{"issue" => %{"id" => "issue-gate", "team" => team, "children" => %{"nodes" => []}}}}}
+
+          query =~ "SymphonyAgentSubissues" ->
+            Keyword.get(opts, :children_result, {:ok, %{"data" => %{"issue" => %{"children" => %{"nodes" => children}}}}})
+
+          query =~ "SymphonyAgentCreateSubissue" ->
+            send(recipient, {:create_subissue, variables.input})
+            n = System.unique_integer([:positive])
+            Keyword.get(opts, :create, {:ok, %{"data" => %{"issueCreate" => %{"success" => true, "issue" => %{"id" => "new-#{n}", "identifier" => "TP-#{n}"}}}}})
+        end
+      end
+    end
+
+    defp enforced(settings) do
+      settings = put_in(settings.auto_review.acceptance_gate.mode, "enforce")
+      put_in(settings.tracker.kind, "linear")
+    end
+
+    defp follow_ups(titles), do: Enum.map(titles, &%{title: &1, detail: "gap #{&1}"})
+
+    test "files up to 3 follow-ups as Backlog sub-issues, never a title twice, and lists each one", %{settings: settings} do
+      titles = ["Already filed", "One", "one ", "Two"]
+      answer = FakeSession.answer_json(%{follow_ups: follow_ups(titles) ++ [%{title: "Three"}, %{title: "Four", detail: "gap Four"}]})
+      Process.put(:gate_turn_results, [{:ok, %{result: answer}}])
+      children = [%{"id" => "child-1", "identifier" => "TP-5", "title" => "already FILED"}, %{"id" => "child-2", "identifier" => "TP-6"}]
+      :ok = RunStore.put_ci_check(record())
+
+      assert {:ok, %{verdict: "approve", target: %{state: "Merging", escalated: false}, run_id: "gate-TP-950-" <> _id, findings: []}} =
+               AcceptanceGate.judge(judge_job(enforced(settings)), run_opts(linear_client: follow_up_client(children: children)))
+
+      for title <- ["One", "Two", "Three"] do
+        assert_received {:create_subissue, %{"title" => ^title, "description" => description, "stateId" => "state-backlog", "parentId" => "issue-gate"}}
+        # A follow-up without a detail is described by its title.
+        assert String.starts_with?(description, if(title == "Three", do: "Three\n", else: "gap #{title}\n"))
+        assert description =~ "Symphony's acceptance gate found this gap outside TP-950 while judging its PR head `feedface0011`"
+      end
+
+      refute_received {:create_subissue, _input}
+      assert_received {:gate_comment, body}
+      assert body =~ "**Mode:** enforce. Symphony applies this verdict: the issue moves to Merging"
+      assert body =~ "- already a sub-issue, not filed again: **Already filed**: gap Already filed"
+      assert body =~ ~r/- filed as TP-\d+: \*\*One\*\*: gap One/
+      assert body =~ "- already a sub-issue, not filed again: **one**: gap one"
+      assert body =~ ~r/- filed as TP-\d+: \*\*Three\*\*/
+      assert body =~ "- not filed (3 per verdict): **Four**: gap Four"
+    end
+
+    test "files nothing when the sub-issues can't be read, and doesn't count a failed filing", %{settings: settings} do
+      Process.put(:gate_turn_results, [{:ok, %{result: FakeSession.answer_json(%{follow_ups: follow_ups(["One", "Two"])})}}])
+      down = follow_up_client(children_result: {:error, :linear_down})
+
+      log = capture_log(fn -> assert {:ok, %{verdict: "approve"}} = AcceptanceGate.judge(judge_job(enforced(settings)), run_opts(linear_client: down)) end)
+
+      assert log =~ "Acceptance gate could not read the sub-issues of TP-950, so it filed no follow-up: :linear_down"
+      refute_received {:create_subissue, _input}
+      assert_received {:gate_comment, body}
+      assert body =~ "- not filed (:linear_down): **One**"
+
+      failing = follow_up_client(create: {:error, :linear_down})
+      titles = ["One", "Two", "Three", "Four", ""]
+      Process.put(:gate_turn_results, [{:ok, %{result: FakeSession.answer_json(%{follow_ups: follow_ups(titles)})}}])
+
+      log = capture_log(fn -> AcceptanceGate.judge(judge_job(enforced(settings)), run_opts(linear_client: failing)) end)
+      assert log =~ "Acceptance gate could not file a follow-up under TP-950"
+      # Each failed filing leaves the cap untouched, so all four are tried; the blank title isn't.
+      for _title <- 1..4, do: assert_received({:create_subissue, _input})
+      refute_received {:create_subissue, _input}
+    end
+
+    test "a tracker other than Linear files nothing, and an advisory verdict only proposes", %{settings: settings} do
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_recipient) end)
+      enforce = put_in(settings.auto_review.acceptance_gate.mode, "enforce")
+
+      assert {:ok, %{target: %{state: "Merging"}}} = AcceptanceGate.judge(judge_job(enforce), run_opts())
+      assert_received {:memory_tracker_comment, "issue-gate", body}
+      assert body =~ "- not filed (:tracker_not_linear): **Add a --json flag**"
+
+      assert {:ok, %{target: nil}} = AcceptanceGate.judge(judge_job(settings), run_opts())
+      assert_received {:memory_tracker_comment, "issue-gate", body}
+      assert body =~ "### Proposed follow-ups (not filed)"
+
+      # An enforced verdict without follow-ups lists none.
+      Process.put(:gate_turn_results, [{:ok, %{result: FakeSession.answer_json(%{follow_ups: []})}}])
+      assert {:ok, %{target: %{state: "Merging"}}} = AcceptanceGate.judge(judge_job(enforce), run_opts())
+      assert_received {:memory_tracker_comment, "issue-gate", body}
+      refute body =~ "follow-ups"
+    end
+
+    test "a rework stores the unmet criteria, the missing scope and the reasons as findings", %{settings: settings} do
+      :ok = RunStore.put_ci_check(record(%{qa_fix_attempts: 1}))
+
+      answer =
+        FakeSession.answer_json(%{
+          verdict: "rework",
+          summary: "The docs are missing.",
+          criteria: [
+            %{id: "C1", criterion: "Adds the command", status: "met", evidence: "lib/app.ex:3"},
+            %{id: "C2", criterion: "Documents it", status: "unmet", evidence: "README.md unchanged"}
+          ],
+          scope: [%{kind: "missing", detail: "the --help text"}, %{kind: "unrelated", detail: "reformats README"}],
+          follow_ups: []
+        })
+
+      Process.put(:gate_turn_results, [{:ok, %{result: answer}}])
+      enforce = put_in(settings.auto_review.acceptance_gate.mode, "enforce")
+
+      assert {:ok, %{verdict: "rework", target: %{state: "In Progress", escalated: false}, findings: findings}} =
+               AcceptanceGate.judge(judge_job(enforce, %{record: record(%{qa_fix_attempts: 1})}), run_opts())
+
+      assert findings == [
+               "Criterion unmet: Documents it (README.md unchanged)",
+               "Missing from the PR: the --help text",
+               "Gate summary: The docs are missing."
+             ]
+
+      assert %{gate_findings: ^findings, gate_target_state: nil, gate_applied: false} = Enum.find(RunStore.list_ci_checks(), &(&1.issue_id == "issue-gate"))
+
+      # A PR that conflicts with current main is sent back with the conflict.
+      Process.put(:gate_context, {:conflict, ["README.md"]})
+
+      assert {:ok, %{verdict: "rework", findings: ["conflict: the PR conflicts with current main in README.md"]}} =
+               AcceptanceGate.judge(judge_job(enforce, %{record: record(%{qa_fix_attempts: 1})}), run_opts())
+
+      Process.put(:gate_context, {:ok, context()})
+
+      # Without a summary, the findings are the criteria alone.
+      Process.put(:gate_turn_results, [{:ok, %{result: FakeSession.answer_json(%{verdict: "rework", summary: "", scope: [], follow_ups: []})}}])
+
+      assert {:ok, %{findings: ["Criterion unclear: Documents it (no doc change)"]}} =
+               AcceptanceGate.judge(judge_job(enforce, %{record: record(%{qa_fix_attempts: 1})}), run_opts())
+
+      # The rework past `max_fix_attempts` (2) goes to a person.
+      assert {:ok, %{target: %{state: "In Review", escalated: true}}} =
+               AcceptanceGate.judge(judge_job(enforce, %{record: record(%{qa_fix_attempts: 2})}), run_opts())
+    end
+
+    test "enforced_target/4 never moves a breakdown parent or a Final verification ticket, and keeps QA's review state", %{settings: settings} do
+      enforce = put_in(settings.auto_review.acceptance_gate.mode, "enforce")
+
+      assert AcceptanceGate.enforced_target(issue(), record(), "escalate", enforce) == %{state: "In Review", escalated: false}
+      human = record(%{qa_target_state: "Human Review"})
+      assert AcceptanceGate.enforced_target(issue(), human, "escalate", enforce) == %{state: "Human Review", escalated: false}
+      assert AcceptanceGate.enforced_target(issue(), record(), nil, enforce) == nil
+      assert AcceptanceGate.enforced_target(issue(), record(), "approve", settings) == nil
+      assert AcceptanceGate.enforced_target(issue(%{labels: ["breakdown"]}), record(), "approve", enforce) == nil
+      assert AcceptanceGate.enforced_target(issue(%{title: "Final verification: Ship it"}), record(), "approve", enforce) == nil
+      refute AcceptanceGate.enforces?(issue(%{labels: ["Breakdown"]}), enforce)
+      assert AcceptanceGate.enforces?(issue(), enforce)
+    end
+  end
+
   describe "Report" do
     defp report(attrs) do
       Map.merge(
@@ -612,15 +781,70 @@ defmodule SymphonyElixir.AcceptanceGateTest do
           mode: "enforce",
           criteria: [],
           context: context(%{overlaps: [%{pr_url: "https://github.com/org/app/pull/9", issue_identifier: nil, files: ["a.ex"], functions: []}]}),
-          decision: %{verdict: "rework", agent_verdict: nil, reasons: [%{rule: "conflict", detail: "conflicts"}], inconclusive: 0}
+          decision: %{verdict: "rework", agent_verdict: nil, reasons: [%{rule: "conflict", detail: "conflicts"}], inconclusive: 0},
+          target: %{state: "In Progress", escalated: false},
+          fix_attempts: 0,
+          max_fix_attempts: 2
         })
 
       body = Report.render(conflict)
-      assert body =~ "**Mode:** enforce. Symphony doesn't apply gate verdicts yet"
+      assert body =~ "**Mode:** enforce. Symphony applies this verdict: the issue goes back to In Progress with the unmet criteria (fix attempt 1 of 2)."
       assert body =~ "**Agent verdict:** none (the agent didn't run)"
       assert body =~ "The PR conflicts with current main, so the gate agent didn't run."
       assert body =~ "- https://github.com/org/app/pull/9: `a.ex`\n"
       refute body =~ "### Acceptance criteria"
+    end
+
+    test "says where an enforced verdict moves the issue, opens an escalation with its reasons, and lists the filed follow-ups" do
+      enforce = fn attrs -> report(Map.merge(%{mode: "enforce", fix_attempts: 2, max_fix_attempts: 2}, attrs)) end
+      approve = %{verdict: "approve", agent_verdict: "approve", reasons: [], inconclusive: 0}
+      rework = %{approve | verdict: "rework", agent_verdict: "rework"}
+
+      body = Report.render(enforce.(%{decision: approve, target: %{state: "Merging", escalated: false}}))
+      assert body =~ "**Mode:** enforce. Symphony applies this verdict: the issue moves to Merging, and GitHub auto-merge lands the PR once its checks pass."
+
+      body = Report.render(enforce.(%{decision: rework, target: %{state: "In Review", escalated: true}}))
+      assert body =~ "**Mode:** enforce. The fix attempts are used up (2 of 2), so this rework goes to a person: the issue moves to In Review."
+
+      body = Report.render(enforce.(%{target: %{state: "In Review", escalated: false}}))
+
+      assert body =~
+               "## Symphony Acceptance Gate\n\n### Escalation reasons\n\n- `label`: the issue is labelled `needs-human`\n\n**Mode:** enforce. Symphony applies this verdict: the issue moves to In Review for a person to decide."
+
+      # The reasons open the comment once, not again further down.
+      assert body |> String.split("### Escalation reasons") |> length() == 2
+
+      body = Report.render(enforce.(%{decision: %{approve | verdict: nil}, target: nil}))
+      assert body =~ "**Mode:** enforce.\n"
+
+      body = Report.render(enforce.(%{decision: approve, target: nil}))
+      assert body =~ "**Mode:** enforce, but the gate never moves a `breakdown` parent or a `Final verification:` ticket"
+
+      body = Report.render(report(%{mode: "off", decision: approve}))
+      assert body =~ "**Mode:** off. The gate was turned off during this pass: this verdict is advisory"
+
+      filed = [
+        %{title: "Add a --json flag", detail: "out of scope here", status: {:filed, "TP-77"}},
+        %{title: "Untitled id", detail: "", status: {:filed, nil}},
+        %{title: "Cache it", detail: "", status: :duplicate},
+        %{title: "Fourth", detail: "", status: :over_cap},
+        %{title: "Broken", detail: "", status: {:failed, :linear_down}}
+      ]
+
+      body = Report.render(enforce.(%{decision: approve, target: %{state: "Merging", escalated: false}, filed_follow_ups: filed}))
+
+      assert body =~
+               """
+               ### Follow-ups
+
+               - filed as TP-77: **Add a --json flag**: out of scope here
+               - filed as a sub-issue: **Untitled id**
+               - already a sub-issue, not filed again: **Cache it**
+               - not filed (3 per verdict): **Fourth**
+               - not filed (:linear_down): **Broken**
+               """
+
+      refute body =~ "Proposed follow-ups"
     end
 
     test "uses the agent's criteria when Symphony listed none, and cuts long cells" do

@@ -13,6 +13,9 @@ defmodule SymphonyElixir.AcceptanceGate.Agreement do
       waiting;
     * any other state is `none`: no decision, and the verdict doesn't count.
 
+  A verdict the gate applied itself in `enforce` mode (the run's `moved_by_gate`: Merging, or back
+  to In Progress) has no human decision to record: Symphony's own move is never read as one.
+
   An `approve` or `rework` writes one `acceptance_gate_agreement` audit event. `stats/1` sums the
   last 50 decisions of a repository and `ready_to_enforce/1` checks them against the threshold.
   """
@@ -87,7 +90,7 @@ defmodule SymphonyElixir.AcceptanceGate.Agreement do
   """
   @spec observe(String.t(), [Issue.t()], [map()], [map()], keyword()) :: [{String.t(), String.t()}]
   def observe(repo_key, issues, runs, ci_checks, opts) do
-    case runs |> latest_per_issue() |> Enum.filter(&is_nil(Map.get(&1, :human_decision))) do
+    case runs |> latest_per_issue() |> Enum.filter(&(is_nil(Map.get(&1, :human_decision)) and is_nil(Map.get(&1, :moved_by_gate)))) do
       [] -> []
       pending -> decide_pending(repo_key, pending, issues, ci_checks, opts)
     end
