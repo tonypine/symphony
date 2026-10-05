@@ -288,9 +288,26 @@ public enum UpdateMenu {
         "The update to v\(pending.version) couldn't replace the app, so this version was put back. See \(logPath)."
     }
 
+    /// Records the available release's build as skipped.
+    public static let skipTitle = "Skip This Version"
+
     /// For example "Update available: v0.0.1.42 (12 changes)", labelled for a development build.
     public static func availableTitle(_ release: Release, current: AppBuild) -> String {
-        var title = "Update available: v\(release.version)"
+        releaseTitle("Update available", release, current: current)
+    }
+
+    /// For example "Update skipped: v0.0.1.42 (12 changes)", for a release you skipped or an update rolled back.
+    public static func skippedTitle(_ release: Release, reason: SkippedRelease.Reason, current: AppBuild) -> String {
+        switch reason {
+        case .skipped:
+            return releaseTitle("Update skipped", release, current: current)
+        case .rolledBack:
+            return releaseTitle("Update rolled back", release, current: current)
+        }
+    }
+
+    private static func releaseTitle(_ prefix: String, _ release: Release, current: AppBuild) -> String {
+        var title = "\(prefix): v\(release.version)"
         switch release.changes {
         case 1?:
             title += " (1 change)"
