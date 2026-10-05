@@ -12,7 +12,12 @@ defmodule SymphonyElixir.AcceptanceGate.Escalation do
     * `:dependency` - `mix.lock` or `package.json` adds a dependency or bumps a major version
       (`escalate.dependencies: major`), changes any dependency (`any`), or can't be parsed;
     * `:size` - more than `escalate.max_changed_lines` lines change outside docs and tests;
-    * `:busy_file` - more than `escalate.busy_files.max_lines` lines change in one busy file.
+    * `:busy_file` - more than `escalate.busy_files.max_lines` lines change in one busy file;
+    * `:settings_ui` - Symphony's own config schema gains a line declaring a setting (`field(`,
+      `embeds_one(`, `embeds_many(` or a `~w(` key list) and the macOS app's settings manifest
+      doesn't change. A new `symphony.yml` setting needs a control in the app; an exemption needs
+      a person anyway (see `SymphonyElixir.SettingsUICoverage`). Other repositories don't have
+      these files, so the rule never triggers there.
 
   Docs and tests are the globs QA selection skips (`QaAgent.Selection.docs_or_test?/1`).
   A version's major is its first number, or its first two when the first is `0`, so `0.4` to
@@ -25,6 +30,7 @@ defmodule SymphonyElixir.AcceptanceGate.Escalation do
   alias SymphonyElixir.DependencyAudit.{MixParser, NpmParser}
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaAgent.Selection
+  alias SymphonyElixir.SettingsUICoverage
 
   @manifests ["mix.lock", "package.json"]
 
@@ -44,7 +50,7 @@ defmodule SymphonyElixir.AcceptanceGate.Escalation do
 
   @type diff_summary :: %{files: [changed_file()]}
 
-  @type rule :: :label | :ticket_pattern | :path | :diff_pattern | :dependency | :size | :busy_file
+  @type rule :: :label | :ticket_pattern | :path | :diff_pattern | :dependency | :size | :busy_file | :settings_ui
 
   @type reason :: %{rule: rule(), detail: String.t()}
 
@@ -66,7 +72,8 @@ defmodule SymphonyElixir.AcceptanceGate.Escalation do
       {:diff_pattern, diff_pattern_detail(files, rules.diff_patterns)},
       {:dependency, dependency_detail(files, rules.dependencies)},
       {:size, size_detail(files, rules.max_changed_lines)},
-      {:busy_file, busy_file_detail(files, busy_files, rules.busy_files.max_lines)}
+      {:busy_file, busy_file_detail(files, busy_files, rules.busy_files.max_lines)},
+      {:settings_ui, settings_ui_detail(files)}
     ]
     |> Enum.reject(fn {_rule, detail} -> is_nil(detail) end)
     |> Enum.map(fn {rule, detail} -> %{rule: rule, detail: detail} end)
@@ -197,6 +204,26 @@ defmodule SymphonyElixir.AcceptanceGate.Escalation do
     files
     |> Enum.filter(&(MapSet.member?(busy, &1.path) and changed_lines(&1) > limit))
     |> join_or_nil(&"#{&1.path} is a busy file and #{changed_lines(&1)} of its lines change (limit #{limit})")
+  end
+
+  defp settings_ui_detail(files) do
+    manifest = SettingsUICoverage.manifest_path()
+
+    if Enum.any?(files, &(&1.path == manifest)) do
+      nil
+    else
+      files
+      |> Enum.filter(&(&1.path in SettingsUICoverage.schema_paths()))
+      |> Enum.flat_map(&setting_lines/1)
+      |> join_or_nil(&"#{&1.path} declares a setting without a change to #{manifest}: #{excerpt(&1.line)}")
+    end
+  end
+
+  defp setting_lines(file) do
+    case Enum.find(Map.get(file, :added_lines, []), &Regex.match?(~r/^\s*(field|embeds_one|embeds_many)\(|~w\(/, &1)) do
+      nil -> []
+      line -> [%{path: file.path, line: line}]
+    end
   end
 
   defp changed_lines(%{additions: additions, deletions: deletions}), do: additions + deletions

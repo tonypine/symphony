@@ -348,6 +348,7 @@ checked in this order:
 | `:dependency` | `mix.lock` or a `package.json` adds a dependency or changes a major version (`major`), or changes any dependency (`any`). A manifest that can't be parsed also escalates. |
 | `:size` | more than `escalate.max_changed_lines` lines change outside docs and tests. |
 | `:busy_file` | more than `escalate.busy_files.max_lines` lines change in one busy file. |
+| `:settings_ui` | an added line in Symphony's own config schema (`lib/symphony_elixir/config/schema.ex` or `system_schema.ex`) declares a setting (`field(`, `embeds_one(`, `embeds_many(` or a `~w(` key list) and the PR doesn't change the macOS app's settings manifest. Other repositories don't have these files. See [Settings in the macOS app](configuration.md#settings-in-the-macos-app). |
 
 A version's major is its first number. When that number is `0`, the first two numbers count,
 so `0.4.0` to `0.5.0` is a major change. Only a leading version is read, after any `^`, `~`,
