@@ -2482,6 +2482,10 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
                }
              ]
            }), 0}
+
+        ["api", "repos/acme/symphony/actions/runs?head_sha=abc123&per_page=100"], opts ->
+          assert opts[:cd] == workspace
+          {Jason.encode!(%{"workflow_runs" => [%{"id" => 1, "status" => "completed", "conclusion" => "success"}]}), 0}
       end
 
       response =
@@ -2496,7 +2500,8 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       assert %{
                "pr_url" => ^pr_url,
                "commit_sha" => "abc123",
-               "checks" => [%{"name" => "mix test", "conclusion" => "SUCCESS"}]
+               "checks" => [%{"name" => "mix test", "conclusion" => "SUCCESS"}],
+               "workflow_runs" => [%{"id" => "1", "status" => "COMPLETED"}]
              } = Jason.decode!(response["output"])
     after
       File.rm_rf(workspace)

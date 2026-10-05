@@ -50,6 +50,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
         }
 
   @type ci_status :: %{
+          optional(:workflow_runs) => [head_run()],
           pr_url: String.t(),
           pr_title: String.t() | nil,
           pr_node_id: String.t() | nil,
@@ -64,6 +65,8 @@ defmodule SymphonyElixir.GitHub.PullRequest do
           auto_merge_enabled: boolean(),
           checks: [ci_check()]
         }
+
+  @type head_run :: %{id: String.t() | nil, status: String.t() | nil, conclusion: String.t() | nil}
 
   @type review :: %{
           optional(:id) => String.t() | nil,
@@ -594,31 +597,67 @@ defmodule SymphonyElixir.GitHub.PullRequest do
       "id,number,state,title,url,headRefName,headRefOid,baseRefName,isCrossRepository,headRepository,mergeable,mergeStateStatus,autoMergeRequest,statusCheckRollup"
     ]
 
-    with {:ok, _host, _owner, _repo, _number} <- parse_github_pr_url(pr_url, opts),
+    with {:ok, host, owner, repo, _number} <- parse_github_pr_url(pr_url, opts),
          {:ok, output} <- run_gh(args, opts),
          {:ok, pr} when is_map(pr) <- Jason.decode(output) do
-      {:ok,
-       %{
-         pr_url: Map.get(pr, "url") || pr_url,
-         pr_title: Map.get(pr, "title"),
-         pr_node_id: normalize_id(Map.get(pr, "id")),
-         state: Map.get(pr, "state"),
-         head_ref_name: normalize_id(Map.get(pr, "headRefName")),
-         commit_sha: normalize_id(Map.get(pr, "headRefOid")),
-         is_cross_repository: Map.get(pr, "isCrossRepository"),
-         head_repository: Map.get(pr, "headRepository"),
-         mergeable: normalize_id(Map.get(pr, "mergeable")),
-         merge_state_status: normalize_id(Map.get(pr, "mergeStateStatus")),
-         base_ref_name: normalize_id(Map.get(pr, "baseRefName")),
-         auto_merge_enabled: is_map(Map.get(pr, "autoMergeRequest")),
-         checks: normalize_status_check_rollup(Map.get(pr, "statusCheckRollup"))
-       }}
+      %{
+        pr_url: Map.get(pr, "url") || pr_url,
+        pr_title: Map.get(pr, "title"),
+        pr_node_id: normalize_id(Map.get(pr, "id")),
+        state: Map.get(pr, "state"),
+        head_ref_name: normalize_id(Map.get(pr, "headRefName")),
+        commit_sha: normalize_id(Map.get(pr, "headRefOid")),
+        is_cross_repository: Map.get(pr, "isCrossRepository"),
+        head_repository: Map.get(pr, "headRepository"),
+        mergeable: normalize_id(Map.get(pr, "mergeable")),
+        merge_state_status: normalize_id(Map.get(pr, "mergeStateStatus")),
+        base_ref_name: normalize_id(Map.get(pr, "baseRefName")),
+        auto_merge_enabled: is_map(Map.get(pr, "autoMergeRequest")),
+        checks: normalize_status_check_rollup(Map.get(pr, "statusCheckRollup"))
+      }
+      |> put_head_runs({host, owner, repo}, opts)
     else
       :error -> {:error, :invalid_pr_url}
       {:ok, _decoded} -> {:error, :invalid_pr_payload}
       {:error, %Jason.DecodeError{} = error} -> {:error, {:invalid_pr_payload, Exception.message(error)}}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  # Every check reported can have passed while a workflow run that reported them has not finished:
+  # a rerun of its failed jobs drops those checks from the rollup until the new attempt queues
+  # them, and a job with `needs:` has no check until it starts. So a rollup that reads green also
+  # carries the head's workflow runs, read in one request, for `CiPoller.ci_action/1` to check.
+  # A rollup with a pending or failed check, or no GitHub Actions check, needs no extra call.
+  defp put_head_runs(%{commit_sha: sha, checks: checks} = ci_status, repo, opts) do
+    if is_binary(sha) and passing_actions_rollup?(checks) do
+      with {:ok, runs} <- list_head_runs(repo, sha, opts), do: {:ok, Map.put(ci_status, :workflow_runs, runs)}
+    else
+      {:ok, ci_status}
+    end
+  end
+
+  defp passing_actions_rollup?(checks) do
+    Enum.any?(checks, &is_binary(Map.get(&1, :run_id))) and
+      Enum.all?(checks, &(upcase(Map.get(&1, :conclusion)) in ["SUCCESS", "NEUTRAL", "SKIPPED"]))
+  end
+
+  defp list_head_runs({host, owner, repo}, sha, opts) do
+    endpoint = "repos/#{owner}/#{repo}/actions/runs?head_sha=#{URI.encode_www_form(sha)}&per_page=100"
+
+    with {:ok, output} <- run_gh(github_api_args(host, endpoint), opts) do
+      case Jason.decode(output) do
+        {:ok, %{"workflow_runs" => runs}} when is_list(runs) ->
+          {:ok, for(run when is_map(run) <- runs, do: normalize_head_run(run))}
+
+        _other ->
+          {:error, :invalid_workflow_runs_payload}
+      end
+    end
+  end
+
+  defp normalize_head_run(run) do
+    %{id: normalize_id(run["id"]), status: upcase(run["status"]), conclusion: upcase(run["conclusion"])}
   end
 
   defp view_pr(pr_url, opts) do
