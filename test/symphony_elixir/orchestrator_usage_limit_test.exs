@@ -21,7 +21,8 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
 
     File.chmod!(fake_claude, 0o755)
 
-    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    # A fixed instant, so a reset an hour ahead stays on the same day whatever the wall clock says.
+    now = ~U[2026-10-03 12:00:00Z]
     {:ok, clock} = Agent.start_link(fn -> now end)
 
     on_exit(fn ->
@@ -583,7 +584,7 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
       assert [%{provider: "anthropic", window: "five_hour", resume_at: ^expected_resume_at} = hold] = payload.usage_limits
       assert [%{kind: :usage_limit, provider: "anthropic", window: "five_hour"}] = payload.dispatch_state.blockers
       assert payload.dispatch_state.active? == false
-      assert UsageLimit.banner(hold, DateTime.utc_now()) =~ ~r/^Paused: Claude 5-hour limit, resumes ~(?:[A-Z][a-z]{2} \d{1,2} )?\d{2}:\d{2}$/
+      assert UsageLimit.banner(hold, ctx.now, to_local: & &1) == "Paused: Claude 5-hour limit, resumes ~13:00"
 
       # 4. Past resume_at the hold clears and the issue runs again.
       set_clock(ctx, resume_at)
