@@ -1,7 +1,6 @@
 import Foundation
 
-/// How the app installs a newer release. Only Manual installs anything yet: the automatic modes are saved and
-/// shown, and a later version makes them install.
+/// How the app installs a newer release. The automatic modes install through `AutoUpdater`.
 public enum UpdateMode: String, CaseIterable, Identifiable {
     /// The menu shows a newer release; you install it with Update to vX.
     case manual
@@ -19,22 +18,23 @@ public enum UpdateMode: String, CaseIterable, Identifiable {
         }
     }
 
-    /// What the mode does, under the picker. The automatic modes say what they will do, and that they don't yet.
+    /// What the mode does, under the picker.
     public var explanation: String {
         switch self {
         case .manual:
             return "Symphony checks for a new release every 6 hours and shows it in the menu. You install it with "
                 + "Update to vX."
         case .whenIdle:
-            return "Will install a new release by itself once no agent runs are active. "
-                + UpdateMode.notActiveYet
+            return "Symphony installs a new release by itself as soon as no agent runs are active. It never pauses "
+                + "dispatch or interrupts a run to get there. " + UpdateMode.skipNote
         case .atTime:
-            return "Will install a new release by itself each day at this time, waiting for agent runs like "
-                + "Update to vX. " + UpdateMode.notActiveYet
+            return "Each day at this time Symphony checks for a new release and installs it: it pauses dispatch, "
+                + "waits for agent runs to finish, updates, and resumes dispatch. If the runs outlast the restart "
+                + "timeout it resumes dispatch and tries again the next day. " + UpdateMode.skipNote
         }
     }
 
-    private static let notActiveYet = "Not active yet: until a later version turns it on, install updates from the menu."
+    private static let skipNote = "A release you skip is never installed by itself."
 }
 
 /// A time of day, to the minute, in the Mac's time zone.
@@ -72,6 +72,14 @@ public struct TimeOfDay: Equatable {
     /// clocks skip it.
     public func date(on day: Date, calendar: Calendar) -> Date {
         calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day) ?? day
+    }
+
+    /// The first time after `now` that the clock shows this time in `calendar`'s time zone: today's if it is still
+    /// ahead, otherwise tomorrow's. On a day the clocks skip it, the first moment after the gap.
+    public func nextDate(after now: Date, calendar: Calendar) -> Date {
+        let parts = DateComponents(hour: hour, minute: minute, second: 0)
+        return calendar.nextDate(after: now, matching: parts, matchingPolicy: .nextTime)
+            ?? now.addingTimeInterval(TimeInterval(Self.minutesPerDay * 60))
     }
 
     /// For example "03:00".

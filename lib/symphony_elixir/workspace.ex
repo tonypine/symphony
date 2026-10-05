@@ -107,6 +107,21 @@ defmodule SymphonyElixir.Workspace do
     end
   end
 
+  # The shell functions an SSH worker's script defines to run git as `safe_git/3` does:
+  # `symphony_git <dir> <args>` runs `git -C <dir> <args>` with the same env and `-c` overrides,
+  # and blanks the filter drivers the repo's config defines (see
+  # `SymphonyElixir.GitConfigCommands.shell_functions/0`).
+  @spec remote_safe_git_functions() :: String.t()
+  def remote_safe_git_functions do
+    env = Enum.map_join(@safe_git_env, " ", fn {key, value} -> "#{key}=#{shell_escape(value)}" end)
+    overrides = Enum.map_join(@safe_git_config_overrides, " ", &"-c #{shell_escape(&1)}")
+
+    """
+    symphony_git_raw() { #{env} git #{overrides} "$@"; }
+    #{GitConfigCommands.shell_functions()}\
+    """
+  end
+
   # Runs git like `safe_git/1` but keeps stderr out of the output, for content reads
   # such as `git show <ref>:<path>`: a warning git prints (a config notice, the xcrun
   # shim's cache warning) would otherwise land in the file content.
@@ -316,6 +331,7 @@ defmodule SymphonyElixir.Workspace do
     script =
       [
         "set -eu",
+        remote_safe_git_functions(),
         remote_shell_assign("root", settings.workspace.root),
         remote_shell_assign("repo", settings.workspace.repo || ""),
         remote_shell_assign("workspace", workspace),
@@ -330,12 +346,12 @@ defmodule SymphonyElixir.Workspace do
         "  echo \"workspace_repo_missing: $repo\"",
         "  exit 41",
         "fi",
-        "git -C \"$repo\" rev-parse --git-dir >/dev/null",
+        "symphony_git \"$repo\" rev-parse --git-dir >/dev/null",
         remote_fetch_before_dispatch_command(settings),
         remote_workspace_parent_containment_preamble(),
         remote_after_create_running_check(),
         "if [ -d \"$workspace\" ]; then",
-        "  if ! worktrees=$(git -C \"$repo\" worktree list --porcelain); then",
+        "  if ! worktrees=$(symphony_git \"$repo\" worktree list --porcelain); then",
         "    echo \"workspace_worktree_list_failed: $repo\"",
         "    exit 43",
         "  fi",
@@ -345,7 +361,7 @@ defmodule SymphonyElixir.Workspace do
         "    exit 42",
         "  fi",
         "  if [ -n \"$reset_base_ref\" ]; then",
-        "    reset_base_sha=$(git -C \"$repo\" rev-parse --verify --end-of-options \"$reset_base_ref^{commit}\")",
+        "    reset_base_sha=$(symphony_git \"$repo\" rev-parse --verify --end-of-options \"$reset_base_ref^{commit}\")",
         remote_worktree_branch_owner_command(),
         "    if [ -n \"$branch_owner\" ] && [ \"$branch_owner\" != \"$workspace\" ]; then",
         "      printf '%s\\t%s\\t%s\\t%s\\n' 'workspace_branch_already_checked_out_elsewhere' \\",
@@ -353,8 +369,8 @@ defmodule SymphonyElixir.Workspace do
         "      exit 45",
         "    fi",
         remote_worktree_reset_backup_lines(),
-        "    git -C \"$workspace\" reset --hard",
-        "    git -C \"$workspace\" checkout -f -B \"$branch\" \"$reset_base_sha\"",
+        "    symphony_git \"$workspace\" reset --hard",
+        "    symphony_git \"$workspace\" checkout -f -B \"$branch\" \"$reset_base_sha\"",
         "  fi",
         "  created=0",
         "elif [ -e \"$workspace\" ]; then",
@@ -728,7 +744,7 @@ defmodule SymphonyElixir.Workspace do
   end
 
   defp remote_worktree_add_command do
-    "branch_owner=$(git -C \"$repo\" worktree list --porcelain | awk -v b=\"$branch\" 'BEGIN { wt = \"\" } /^worktree / { wt = substr($0, 10); next } $0 == \"branch refs/heads/\" b { print wt; exit }'); if [ -n \"$branch_owner\" ] && [ \"$branch_owner\" != \"$workspace\" ]; then printf 'workspace_branch_already_checked_out_elsewhere\\t%s\\t%s\\t%s\\n' \"$branch\" \"$branch_owner\" \"$workspace\"; exit 45; fi; if [ \"$base_ref\" != \"HEAD\" ]; then git -C \"$repo\" worktree add -B \"$branch\" \"$workspace\" \"$base_ref\"; elif git -C \"$repo\" rev-parse --verify \"refs/heads/$branch\" >/dev/null 2>&1; then git -C \"$repo\" worktree add \"$workspace\" \"$branch\"; else git -C \"$repo\" worktree add -b \"$branch\" \"$workspace\" HEAD; fi"
+    "branch_owner=$(symphony_git \"$repo\" worktree list --porcelain | awk -v b=\"$branch\" 'BEGIN { wt = \"\" } /^worktree / { wt = substr($0, 10); next } $0 == \"branch refs/heads/\" b { print wt; exit }'); if [ -n \"$branch_owner\" ] && [ \"$branch_owner\" != \"$workspace\" ]; then printf 'workspace_branch_already_checked_out_elsewhere\\t%s\\t%s\\t%s\\n' \"$branch\" \"$branch_owner\" \"$workspace\"; exit 45; fi; if [ \"$base_ref\" != \"HEAD\" ]; then symphony_git \"$repo\" worktree add -B \"$branch\" \"$workspace\" \"$base_ref\"; elif symphony_git \"$repo\" rev-parse --verify \"refs/heads/$branch\" >/dev/null 2>&1; then symphony_git \"$repo\" worktree add \"$workspace\" \"$branch\"; else symphony_git \"$repo\" worktree add -b \"$branch\" \"$workspace\" HEAD; fi"
   end
 
   # Mirror `snapshot_orphaned_work/2` for remote workers: snapshot a crashed run's
@@ -739,17 +755,19 @@ defmodule SymphonyElixir.Workspace do
   # never abort the `set -eu` script before the reset runs.
   defp remote_worktree_reset_backup_lines do
     [
-      "    ( reset_head_sha=$(git -C \"$workspace\" rev-parse HEAD 2>/dev/null) || exit 0",
+      "    ( reset_head_sha=$(symphony_git \"$workspace\" rev-parse HEAD 2>/dev/null) || exit 0",
       "      [ -n \"$reset_head_sha\" ] || exit 0",
-      "      reset_dirty=$(git -C \"$workspace\" status --porcelain=v1 --untracked-files=all)",
-      "      reset_unpushed=$(git -C \"$workspace\" rev-list --max-count=1 HEAD --not --remotes)",
+      "      reset_dirty=$(symphony_git \"$workspace\" status --porcelain=v1 --untracked-files=all)",
+      "      reset_unpushed=$(symphony_git \"$workspace\" rev-list --max-count=1 HEAD --not --remotes)",
       "      [ -n \"$reset_dirty\" ] || [ -n \"$reset_unpushed\" ] || exit 0",
       "      reset_index=$(mktemp -u \"${TMPDIR:-/tmp}/symphony-orphan.XXXXXX\")",
-      "      GIT_INDEX_FILE=\"$reset_index\" git -C \"$workspace\" add -A",
-      "      reset_tree=$(GIT_INDEX_FILE=\"$reset_index\" git -C \"$workspace\" write-tree)",
+      "      export GIT_INDEX_FILE=\"$reset_index\"",
+      "      symphony_git \"$workspace\" add -A",
+      "      reset_tree=$(symphony_git \"$workspace\" write-tree)",
+      "      unset GIT_INDEX_FILE",
       "      rm -f \"$reset_index\"",
-      "      reset_backup=$(git -C \"$workspace\" -c user.name=#{@orphan_backup_identity} -c user.email=#{@orphan_backup_email} commit-tree \"$reset_tree\" -p \"$reset_head_sha\" -m '#{@orphan_backup_message}')",
-      "      git -C \"$workspace\" update-ref \"refs/symphony/orphaned/$reset_head_sha\" \"$reset_backup\" ) || true"
+      "      reset_backup=$(symphony_git \"$workspace\" -c user.name=#{@orphan_backup_identity} -c user.email=#{@orphan_backup_email} commit-tree \"$reset_tree\" -p \"$reset_head_sha\" -m '#{@orphan_backup_message}')",
+      "      symphony_git \"$workspace\" update-ref \"refs/symphony/orphaned/$reset_head_sha\" \"$reset_backup\" ) || true"
     ]
   end
 
@@ -1016,6 +1034,7 @@ defmodule SymphonyElixir.Workspace do
       script =
         [
           "set -eu",
+          remote_safe_git_functions(),
           remote_shell_assign("root", settings.workspace.root),
           remote_shell_assign("repo", settings.workspace.repo || ""),
           remote_shell_assign("workspace", workspace),
@@ -1028,22 +1047,22 @@ defmodule SymphonyElixir.Workspace do
           "  echo \"workspace_repo_missing: $repo\"",
           "  exit 41",
           "fi",
-          "git -C \"$repo\" rev-parse --git-dir >/dev/null",
+          "symphony_git \"$repo\" rev-parse --git-dir >/dev/null",
           remote_workspace_mutation_containment_preamble(),
-          "if ! worktrees=$(git -C \"$repo\" worktree list --porcelain); then",
+          "if ! worktrees=$(symphony_git \"$repo\" worktree list --porcelain); then",
           "  echo \"workspace_worktree_list_failed: $repo\"",
           "  exit 43",
           "fi",
           "registered=$(printf '%s\\n' \"$worktrees\" | awk '/^worktree / {print substr($0, 10)}' | grep -Fx \"$workspace\" || true)",
           "if [ -n \"$registered\" ]; then",
-          "  git -C \"$repo\" worktree remove --force \"$workspace\"",
+          "  symphony_git \"$repo\" worktree remove --force \"$workspace\"",
           "elif [ -e \"$workspace\" ]; then",
           "  echo \"workspace_not_registered_worktree: $workspace\"",
           "  exit 42",
           "fi",
           remote_after_create_marker_remove_command(),
-          "if git -C \"$repo\" rev-parse --verify \"refs/heads/$branch\" >/dev/null 2>&1; then",
-          "  if ! branch_delete_output=$(git -C \"$repo\" branch -D \"$branch\" 2>&1); then",
+          "if symphony_git \"$repo\" rev-parse --verify \"refs/heads/$branch\" >/dev/null 2>&1; then",
+          "  if ! branch_delete_output=$(symphony_git \"$repo\" branch -D \"$branch\" 2>&1); then",
           "    case \"$branch_delete_output\" in",
           "      *\"checked out at\"*|*\"is checked out\"*)",
           "        printf '%s\\n' \"workspace_branch_delete_skipped: $branch checked out elsewhere\"",
@@ -1807,12 +1826,11 @@ defmodule SymphonyElixir.Workspace do
   # the skip line and exits 47, which `run_hook/7` logs as a skip rather than a
   # failure.
   defp remote_base_tree_lines(%{workspace: %{strategy: "worktree", repo: repo}}, issue_context, marker) do
-    git = Enum.map_join(@safe_git_config_overrides, " ", &"-c #{shell_escape(&1)}")
     base_refs = Enum.map_join(List.wrap(remote_worktree_create_base_ref(issue_context, nil)) ++ ["HEAD"], " ", &shell_escape/1)
     branch = shell_escape(worktree_branch(issue_context))
 
     detach = """
-    after_create_git() { git #{git} "$@"; }
+    #{remote_safe_git_functions()}
     after_create_skip() {
       : > #{marker}
       printf '#{@remote_after_create_skipped_line}\\t%s\\n' "$1"
@@ -1822,18 +1840,18 @@ defmodule SymphonyElixir.Workspace do
     after_create_base=
     if [ -n "$after_create_repo" ]; then
       for after_create_ref in #{base_refs}; do
-        after_create_base=$(after_create_git -C "$after_create_repo" rev-parse --verify --quiet --end-of-options "$after_create_ref^{commit}") && break
+        after_create_base=$(symphony_git "$after_create_repo" rev-parse --verify --quiet --end-of-options "$after_create_ref^{commit}") && break
         after_create_base=
       done
     fi
     [ -n "$after_create_base" ] || after_create_skip no_base_commit
-    after_create_changes=$(after_create_git status --porcelain=v1 --untracked-files=all) || after_create_skip uncommitted_changes
+    after_create_changes=$(symphony_git . status --porcelain=v1 --untracked-files=all) || after_create_skip uncommitted_changes
     [ -z "$after_create_changes" ] || after_create_skip uncommitted_changes
-    after_create_git checkout --quiet --detach "$after_create_base" || exit 1
-    after_create_git clean -ffdxq || { after_create_git checkout --quiet --force #{branch}; exit 1; }\
+    symphony_git . checkout --quiet --detach "$after_create_base" || exit 1
+    symphony_git . clean -ffdxq || { symphony_git . checkout --quiet --force #{branch}; exit 1; }\
     """
 
-    restore = ~s(after_create_git checkout --quiet --force #{branch} || { [ "$after_create_status" -ne 0 ] || after_create_status=1; })
+    restore = ~s(symphony_git . checkout --quiet --force #{branch} || { [ "$after_create_status" -ne 0 ] || after_create_status=1; })
 
     {detach, restore}
   end

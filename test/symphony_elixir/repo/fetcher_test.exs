@@ -259,9 +259,12 @@ defmodule SymphonyElixir.Repo.FetcherTest do
       %{bin: bin}
     end
 
-    test "fetches origin in $repo", %{root: root, repo: repo, bin: bin} do
+    test "fetches origin in $repo with Symphony's safe git config", %{root: root, repo: repo, bin: bin} do
       assert {_output, 0} = run_remote_script(bin, repo)
-      assert calls(root) == ["-C #{repo} fetch origin"]
+      assert [call] = calls(root)
+      assert String.ends_with?(call, " -C #{repo} fetch --upload-pack=git-upload-pack origin")
+      assert call =~ "-c core.sshCommand=ssh "
+      assert call =~ "-c credential.helper= "
     end
 
     test "runs the fetch once more after cannot lock ref", %{root: root, repo: repo, bin: bin} do
@@ -283,7 +286,9 @@ defmodule SymphonyElixir.Repo.FetcherTest do
   end
 
   defp run_remote_script(bin, repo) do
-    script = Enum.join(["set -eu", "repo=#{repo}", Fetcher.remote_fetch_origin_script()], "\n")
+    script =
+      Enum.join(["set -eu", Workspace.remote_safe_git_functions(), "repo=#{repo}", Fetcher.remote_fetch_origin_script()], "\n")
+
     System.cmd("sh", ["-c", script], env: [{"PATH", bin <> ":" <> System.get_env("PATH")}], stderr_to_stdout: true)
   end
 

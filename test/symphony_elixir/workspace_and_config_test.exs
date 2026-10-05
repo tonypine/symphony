@@ -5127,9 +5127,10 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       trace = File.read!(trace_file)
       assert trace =~ "~/primary-clone"
       assert trace =~ "${repo#~/}"
-      assert trace =~ "git -C \"$repo\" fetch origin"
-      assert trace =~ "*\"cannot lock ref\"*) sleep 1; git -C \"$repo\" fetch origin ;;"
-      assert trace =~ "git -C \"$repo\" worktree add"
+      assert trace =~ "symphony_git_raw() { GIT_CONFIG_GLOBAL="
+      assert trace =~ "symphony_git \"$repo\" fetch --upload-pack=git-upload-pack origin"
+      assert trace =~ "*\"cannot lock ref\"*) sleep 1; symphony_git \"$repo\" fetch --upload-pack=git-upload-pack origin ;;"
+      assert trace =~ "symphony_git \"$repo\" worktree add"
       assert trace =~ "export SYMPHONY_BRANCH="
       assert trace =~ "auto/MT-SSH-WT"
       assert trace =~ "symphony_configured_repo="
@@ -5137,7 +5138,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       assert trace =~ "git -C \"$symphony_configured_repo\" remote get-url origin"
       assert trace =~ "workspace_worktree_list_failed"
       assert trace =~ "auto/MT-SSH-WT"
-      assert trace =~ "git -C \"$repo\" worktree remove --force"
+      assert trace =~ "symphony_git \"$repo\" worktree remove --force"
       assert trace =~ "workspace_branch_delete_skipped"
       refute trace =~ "git clone"
     after
@@ -5809,6 +5810,131 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       assert {:ok, ^workspace_path} = Workspace.create_for_issue("MT-WT-OK", "worker-01")
       assert File.read!(Path.join(workspace_path, "README.md")) == "local progress\n"
       assert git_branch_exists?(primary_repo, "auto/MT-WT-OK")
+    end)
+  end
+
+  test "remote worktree creation, reuse and removal run no filter driver or hook from the repo's config" do
+    with_real_exec_fake_ssh(fn ctx ->
+      workspace_root = Path.join(ctx.test_root, "wsroot")
+      primary_repo = Path.join(ctx.test_root, "primary")
+      workspace_path = Path.join([workspace_root, "default", "MT-WT-FILTER"])
+      proof = Path.join(ctx.test_root, "SYMPHONY_FILTER_PWNED")
+      hook_proof = Path.join(ctx.test_root, "SYMPHONY_HOOK_PWNED")
+
+      create_primary_repo!(primary_repo)
+      git!(primary_repo, ["checkout", "-b", "agent/filter"])
+      File.write!(Path.join(primary_repo, ".gitattributes"), "*.txt filter=evil\n*.md filter=included\n")
+      File.write!(Path.join(primary_repo, "notes.txt"), "stored\n")
+      File.write!(Path.join(primary_repo, "notes.md"), "stored\n")
+      git!(primary_repo, ["add", ".gitattributes", "notes.txt", "notes.md"])
+      git!(primary_repo, ["commit", "-m", "agent attributes"])
+      git!(primary_repo, ["checkout", "main"])
+
+      # Drivers an agent's branch picks, set where agents commit: the shared repo's config, and a
+      # file it includes only on the agent's branch, by a path relative to the config.
+      git!(primary_repo, ["config", "filter.evil.smudge", "touch '#{proof}'; cat"])
+      git!(primary_repo, ["config", "filter.evil.clean", "touch '#{proof}'; cat"])
+      git!(primary_repo, ["config", "filter.evil.required", "true"])
+      File.write!(Path.join([primary_repo, ".git", "drivers"]), "[filter \"included\"]\n\tsmudge = touch '#{proof}'; cat\n")
+      git!(primary_repo, ["config", "includeIf.onbranch:agent/**.path", "drivers"])
+
+      hook = Path.join([primary_repo, ".git", "hooks", "post-checkout"])
+      File.write!(hook, "#!/bin/sh\ntouch '#{hook_proof}'\n")
+      File.chmod!(hook, 0o755)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        workspace_fetch_before_dispatch: false,
+        worker_ssh_hosts: ["worker-01"]
+      )
+
+      issue = %Issue{identifier: "MT-WT-FILTER", workspace_branch: "agent/filter", workspace_base_ref: "agent/filter"}
+
+      assert {:ok, ^workspace_path} = Workspace.create_for_issue(issue, "worker-01")
+      assert File.read!(Path.join(workspace_path, "notes.txt")) == "stored\n"
+      assert File.read!(Path.join(workspace_path, "notes.md")) == "stored\n"
+      refute File.exists?(proof)
+      refute File.exists?(hook_proof)
+
+      # Reusing a dirty worktree backs it up (`status`, `add -A`) before `reset --hard` and `checkout`.
+      head = String.trim(git!(workspace_path, ["rev-parse", "HEAD"]))
+      File.write!(Path.join(workspace_path, "notes.txt"), "agent edit\n")
+
+      assert {:ok, ^workspace_path} = Workspace.create_for_issue(issue, "worker-01")
+      assert File.read!(Path.join(workspace_path, "notes.txt")) == "stored\n"
+      assert git!(workspace_path, ["show", "refs/symphony/orphaned/#{head}:notes.txt"]) == "agent edit\n"
+      refute File.exists?(proof)
+      refute File.exists?(hook_proof)
+
+      File.rm!(Path.join(workspace_path, "notes.md"))
+      assert {_output, 0} = System.cmd("git", ["-C", workspace_path, "checkout", "--", "notes.md"], stderr_to_stdout: true)
+      assert File.exists?(proof), "plain git runs the included driver, so the setup above is a real attack"
+      File.rm!(proof)
+
+      assert :ok = Workspace.remove_issue_workspaces("MT-WT-FILTER", "worker-01")
+      refute File.exists?(workspace_path)
+      refute File.exists?(proof)
+    end)
+  end
+
+  test "remote worktree setup refuses to run git when the repo config names a driver -c can't turn off" do
+    with_real_exec_fake_ssh(fn ctx ->
+      workspace_root = Path.join(ctx.test_root, "wsroot")
+      primary_repo = Path.join(ctx.test_root, "primary")
+      workspace_path = Path.join([workspace_root, "default", "MT-WT-EQUALS"])
+
+      create_primary_repo!(primary_repo)
+      git!(primary_repo, ["config", "filter.a=b.smudge", "cat"])
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        workspace_fetch_before_dispatch: false,
+        worker_ssh_hosts: ["worker-01"]
+      )
+
+      assert {:error, {:workspace_prepare_failed, "worker-01", 128, output}} =
+               Workspace.create_for_issue("MT-WT-EQUALS", "worker-01")
+
+      assert output =~ ~s(symphony: refusing to run git, the repo config defines filter driver "a=b")
+      refute File.exists?(workspace_path)
+    end)
+  end
+
+  test "remote worktree setup reads no global git config on the worker" do
+    with_real_exec_fake_ssh(fn ctx ->
+      workspace_root = Path.join(ctx.test_root, "wsroot")
+      primary_repo = Path.join(ctx.test_root, "primary")
+      origin_repo = Path.join(ctx.test_root, "origin.git")
+      global_config = Path.join(ctx.test_root, "global.gitconfig")
+      upload_pack = Path.join(ctx.test_root, "upload-pack")
+      proof = Path.join(ctx.test_root, "SYMPHONY_GLOBAL_CONFIG_READ")
+      previous_global = System.get_env("GIT_CONFIG_GLOBAL")
+      on_exit(fn -> restore_env("GIT_CONFIG_GLOBAL", previous_global) end)
+
+      create_primary_repo!(primary_repo, origin_repo)
+      File.write!(upload_pack, "#!/bin/sh\ntouch '#{proof}'\nexec git upload-pack \"$@\"\n")
+      File.chmod!(upload_pack, 0o755)
+      File.write!(global_config, "[remote \"origin\"]\n\tuploadpack = #{upload_pack}\n")
+      # The worker's script inherits this env through the fake `ssh`.
+      System.put_env("GIT_CONFIG_GLOBAL", global_config)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        workspace_fetch_before_dispatch: true,
+        worker_ssh_hosts: ["worker-01"]
+      )
+
+      assert {:ok, _workspace} = Workspace.create_for_issue("MT-WT-GLOBAL", "worker-01")
+      refute File.exists?(proof)
+
+      assert {_output, 0} = System.cmd("git", ["-C", primary_repo, "fetch", "origin"], stderr_to_stdout: true)
+      assert File.exists?(proof), "plain git reads the global config, so the setup above is a real attack"
     end)
   end
 

@@ -631,6 +631,8 @@ defmodule SymphonyElixir.CiPoller do
   end
 
   defp handle_ci_status(record, ci_status, settings, opts, now) do
+    ci_status = if rerun_pending?(record, ci_status), do: Map.put(ci_status, :rerun_pending, true), else: ci_status
+
     case ci_action(ci_status) do
       :closed ->
         cleanup_ci(record, opts, now, "closed")
@@ -640,7 +642,8 @@ defmodule SymphonyElixir.CiPoller do
 
       :pending ->
         issue_id = Map.get(record, :issue_id)
-        attrs = ci_status_attrs(record, ci_status, %{status: "watching"}, now)
+        status = if Map.get(ci_status, :rerun_pending), do: "rerun_requested", else: "watching"
+        attrs = ci_status_attrs(record, ci_status, %{status: status}, now)
 
         case complete_ci_update(opts, record, attrs, {:watching, issue_id}) do
           {:watching, ^issue_id} = action -> maybe_send_auto_review_conflict(action, record, ci_status, opts)
@@ -1393,7 +1396,7 @@ defmodule SymphonyElixir.CiPoller do
       failed_checks(ci_status) != [] ->
         {:failure, failed_checks(ci_status)}
 
-      pending_checks?(ci_status) ->
+      pending_checks?(ci_status) or Map.get(ci_status, :rerun_pending) == true or unfinished_run?(ci_status) ->
         :pending
 
       success_checks?(ci_status) ->
@@ -1403,6 +1406,33 @@ defmodule SymphonyElixir.CiPoller do
         :pending
     end
   end
+
+  @doc """
+  Marks `ci_status` `rerun_pending`, which `ci_action/1` reads as `:pending`, while the poller's
+  rerun of the failed jobs on this head has not reported yet. Until GitHub's new attempt queues
+  them, the rerun checks drop out of the rollup and only the checks that passed are left, so the
+  head would read green. The mark holds while the record is `rerun_requested` for this head and
+  a check it reran is missing from the rollup.
+  """
+  @spec put_rerun_pending(map(), String.t() | nil, keyword()) :: map()
+  def put_rerun_pending(ci_status, issue_id, opts \\ []) when is_map(ci_status) do
+    run_store = Keyword.get(opts, :run_store, RunStore)
+
+    record =
+      if is_binary(issue_id), do: Enum.find_value(repo_keys_from_opts(opts), &find_ci_check(run_store, &1, issue_id))
+
+    if rerun_pending?(record, ci_status), do: Map.put(ci_status, :rerun_pending, true), else: ci_status
+  end
+
+  defp rerun_pending?(%{status: "rerun_requested"} = record, ci_status) do
+    commit_sha = Map.get(ci_status, :commit_sha)
+    reported = ci_status |> Map.get(:checks, []) |> MapSet.new(&Map.get(&1, :name))
+
+    is_binary(commit_sha) and commit_sha == Map.get(record, :last_observed_sha) and
+      record |> Map.get(:failed_checks, []) |> Enum.any?(&(not MapSet.member?(reported, Map.get(&1, :name))))
+  end
+
+  defp rerun_pending?(_record, _ci_status), do: false
 
   @doc "Whether only a person can clear this failed check, so a CI-fix run must leave it alone."
   @spec human_only_check?(map()) :: boolean()
@@ -1436,6 +1466,17 @@ defmodule SymphonyElixir.CiPoller do
 
       status not in ["COMPLETED", "SUCCESS", "FAILURE", "ERROR"] or conclusion in [nil, ""]
     end)
+  end
+
+  # A workflow run that reported checks to the rollup but has not completed (a rerun's new
+  # attempt, a job with `needs:` not created yet) can still fail. Runs with no check in the rollup
+  # (an environment approval, another event's run) are left out, so they can't hold a head forever.
+  defp unfinished_run?(ci_status) do
+    run_ids = ci_status |> Map.get(:checks, []) |> MapSet.new(&Map.get(&1, :run_id))
+
+    ci_status
+    |> Map.get(:workflow_runs, [])
+    |> Enum.any?(&(MapSet.member?(run_ids, Map.get(&1, :id)) and Map.get(&1, :status) != "COMPLETED"))
   end
 
   defp success_checks?(ci_status) do
