@@ -51,6 +51,10 @@ else
   _unavailable -> ExUnit.configure(exclude: [:seatbelt | Keyword.get(ExUnit.configuration(), :exclude, [])])
 end
 
+# The qa-dashboard end-to-end test fetches deps and builds this checkout; it runs only on
+# `mix test --include qa_dashboard_e2e`.
+ExUnit.configure(exclude: [:qa_dashboard_e2e | Keyword.get(ExUnit.configuration(), :exclude, [])])
+
 # Tests never reach openrouter.ai: a test that needs the models API stubs this itself.
 offline_models_request = fn _url, _opts -> {:error, :network_disabled_in_tests} end
 Application.put_env(:symphony_elixir, :openrouter_models_request, offline_models_request)

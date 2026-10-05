@@ -100,6 +100,39 @@ defmodule SymphonyElixir.Verification.EgressProxyTest do
     assert {:error, :econnrefused} = :gen_tcp.connect(~c"127.0.0.1", port, [:binary])
   end
 
+  test "closes an established tunnel when stopped" do
+    {upstream_port, upstream} = start_echo_server()
+    {:ok, proxy} = EgressProxy.start_link(allowed_domains: ["localhost"])
+    client = connect(proxy)
+
+    :ok = :gen_tcp.send(client, "CONNECT localhost:#{upstream_port} HTTP/1.1\r\n\r\nhello")
+    assert recv_exactly(client, byte_size(established())) == established()
+    assert recv_exactly(client, 5) == "hello"
+
+    assert :ok = EgressProxy.stop(proxy)
+    assert {:error, :closed} = :gen_tcp.recv(client, 0, 1_000)
+    assert_receive {:upstream_closed, ^upstream}, 1_000
+  end
+
+  test "goes down when it can't accept a connection" do
+    Process.flag(:trap_exit, true)
+    test = self()
+
+    accept = fn _listen ->
+      send(test, {:accepting, self()})
+
+      receive do
+        :fail -> {:error, :emfile}
+      end
+    end
+
+    {:ok, proxy} = EgressProxy.start_link(allowed_domains: [], accept: accept)
+    assert_receive {:accepting, acceptor}
+    send(acceptor, :fail)
+
+    assert_receive {:EXIT, ^proxy, {:egress_proxy_accept_failed, :emfile}}, 1_000
+  end
+
   test "matches hosts by name and by wildcard subdomain" do
     allowed = ["hex.pm", "*.githubusercontent.com"]
 

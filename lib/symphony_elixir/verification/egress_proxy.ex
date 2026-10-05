@@ -51,36 +51,53 @@ defmodule SymphonyElixir.Verification.EgressProxy do
       idle_timeout_ms: Keyword.get(opts, :idle_timeout_ms, @idle_timeout_ms)
     }
 
+    accept = Keyword.get(opts, :accept, &:gen_tcp.accept/1)
     {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}, reuseaddr: true])
     {:ok, port} = :inet.port(listen)
-    spawn_link(fn -> accept_loop(listen, config) end)
-    {:ok, %{listen: listen, port: port}}
+    {:ok, clients} = Task.Supervisor.start_link()
+    acceptor = spawn_link(fn -> accept_loop(listen, accept, clients, config) end)
+    {:ok, %{listen: listen, port: port, acceptor: acceptor, clients: clients}}
   end
 
   @impl true
   def handle_call(:port, _from, state), do: {:reply, state.port, state}
 
+  # The tunnels go with the proxy: a client that is still connected, or that left the dev
+  # server's process group, loses its tunnel when the dev server stops. The acceptor ends on
+  # the closed socket; unlinked, it can't take the proxy down if it loses the race with the
+  # stopped supervisor.
   @impl true
-  def terminate(_reason, %{listen: listen}) do
+  def terminate(_reason, %{listen: listen, acceptor: acceptor, clients: clients}) do
+    Process.unlink(acceptor)
     :gen_tcp.close(listen)
+    Supervisor.stop(clients)
   end
 
-  defp accept_loop(listen, config) do
-    case :gen_tcp.accept(listen) do
+  # Any accept error but a closed socket (`emfile`, `system_limit`) takes the proxy down, so
+  # the dev server that owns it stops instead of serving with no way out.
+  defp accept_loop(listen, accept, clients, config) do
+    case accept.(listen) do
       {:ok, client} ->
-        pid =
-          spawn(fn ->
-            receive do
-              :serve -> serve(client, config)
-            end
-          end)
+        {:ok, pid} =
+          Task.Supervisor.start_child(
+            clients,
+            fn ->
+              receive do
+                :serve -> serve(client, config)
+              end
+            end,
+            shutdown: :brutal_kill
+          )
 
         :ok = :gen_tcp.controlling_process(client, pid)
         send(pid, :serve)
-        accept_loop(listen, config)
+        accept_loop(listen, accept, clients, config)
 
-      {:error, _closed} ->
+      {:error, :closed} ->
         :ok
+
+      {:error, reason} ->
+        exit({:egress_proxy_accept_failed, reason})
     end
   end
 

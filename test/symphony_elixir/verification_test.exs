@@ -295,6 +295,31 @@ defmodule SymphonyElixir.VerificationTest do
       assert {:error, :econnrefused} = :gen_tcp.connect(~c"127.0.0.1", String.to_integer(proxy_port), [])
     end
 
+    test "stops when its egress proxy goes down", %{workspace: workspace, config: config, port: port} do
+      assert {:ok, pid} =
+               DevServer.start(
+                 run_id: "proxy-down-run",
+                 port: port,
+                 workspace: workspace,
+                 config: config,
+                 env: Verification.env(%{port: port}),
+                 owner: self()
+               )
+
+      ref = Process.monitor(pid)
+      %DevServer{proxy: proxy, tmp_dir: tmp_dir} = :sys.get_state(pid)
+
+      log =
+        capture_log(fn ->
+          Process.exit(proxy, :kill)
+          assert_receive {:DOWN, ^ref, :process, ^pid, {:egress_proxy_down, :killed}}, 5_000
+        end)
+
+      assert log =~ "Verification dev server egress proxy exited run_id=proxy-down-run reason=:killed"
+      refute File.exists?(tmp_dir)
+      refute http_ok?("http://127.0.0.1:#{port}/")
+    end
+
     test "does not start the command when there is no sandbox", %{workspace: workspace, config: config, port: port} do
       assert {:error, {:verification_failed, {:dev_server_sandbox_unavailable, {:unix, :linux}}}} =
                DevServer.start(
@@ -341,9 +366,11 @@ defmodule SymphonyElixir.VerificationTest do
       assert :ok = DevServer.stop(pid)
     end
 
-    # Builds this checkout with `mix build` (in `_build/dev` and `bin/`) before it serves, as
-    # an Auto Review `web` pass does, so it can take minutes.
+    # Builds this checkout with `mix build` (in `_build/dev` and `bin/`), fetching its deps, before
+    # it serves, as an Auto Review `web` pass does, so it can take minutes. A plain `mix test`
+    # skips it; `--include qa_dashboard_e2e` or `--only seatbelt` runs it.
     @tag :seatbelt
+    @tag :qa_dashboard_e2e
     @tag timeout: 900_000
     test "serves the dashboard with scripts/qa-dashboard-server.sh from inside the real sandbox", %{port: port} do
       config = %DevServerConfig{

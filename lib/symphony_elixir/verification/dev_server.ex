@@ -166,6 +166,12 @@ defmodule SymphonyElixir.Verification.DevServer do
     {:stop, {:dev_server_exit, status}, %{state | port_handle: nil, os_pid: nil, pgid: nil}}
   end
 
+  # Without its proxy the dev server can't fetch a dependency, so it stops too.
+  def handle_info({:EXIT, proxy, reason}, %{proxy: proxy} = state) do
+    Logger.warning("Verification dev server egress proxy exited run_id=#{state.run_id} reason=#{inspect(reason)}")
+    {:stop, {:egress_proxy_down, reason}, state}
+  end
+
   def handle_info({_port_handle, {:data, _data}}, state), do: {:noreply, state}
   def handle_info(_message, state), do: {:noreply, state}
 
