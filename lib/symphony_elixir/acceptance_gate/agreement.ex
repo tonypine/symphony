@@ -271,27 +271,44 @@ defmodule SymphonyElixir.AcceptanceGate.Agreement do
   @doc """
   The gate for `/api/v1/state`: the passes running and queued, the latest verdict of the
   #{@recent_limit} most recently judged issues, and the agreement stats of each repository with a
-  verdict.
+  verdict. The verdicts and stats are worked out once per gate run written, not on every call.
 
   Options: `:run_store`, `:runner` (the gate runner server).
   """
   @spec snapshot(keyword()) :: map()
   def snapshot(opts \\ []) do
-    runs =
-      case Keyword.get(opts, :run_store, RunStore).list_all_runs(:all) do
-        runs when is_list(runs) -> verdicts(runs)
-        {:error, _reason} -> []
+    run_store = Keyword.get(opts, :run_store, RunStore)
+
+    judged =
+      case memoize(run_store, :snapshot, fn -> judged_snapshot(run_store) end) do
+        {:ok, judged} -> judged
+        {:error, _reason} -> %{recent: [], agreement: %{}}
       end
 
     runner = runner_snapshot(Keyword.get(opts, :runner, Runner))
-
-    %{
-      running: runner.running,
-      queued: runner.queued,
-      recent: runs |> latest_per_issue() |> Enum.take(@recent_limit),
-      agreement: runs |> Enum.group_by(&Map.get(&1, :repo_key)) |> Map.new(fn {repo_key, repo_runs} -> {repo_key, stats(repo_runs)} end)
-    }
+    Map.merge(%{running: runner.running, queued: runner.queued}, judged)
   end
+
+  defp judged_snapshot(run_store) do
+    with {:ok, runs} <- verdict_runs(run_store) do
+      {:ok,
+       %{
+         recent: runs |> latest_per_issue() |> Enum.take(@recent_limit),
+         agreement: runs |> Enum.group_by(&Map.get(&1, :repo_key)) |> Map.new(fn {repo_key, repo_runs} -> {repo_key, stats(repo_runs)} end)
+       }}
+    end
+  end
+
+  defp verdict_runs(run_store) do
+    case run_store.list_all_runs(:all) do
+      runs when is_list(runs) -> {:ok, verdicts(runs)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # Gate runs are written a few times per ticket, the snapshot is read every second.
+  defp memoize(RunStore, key, fun), do: RunStore.memoize_runs({__MODULE__, key}, "acceptance_gate", fun)
+  defp memoize(_run_store, _key, fun), do: fun.()
 
   defp runner_snapshot(runner) do
     Runner.snapshot(runner)
@@ -302,9 +319,11 @@ defmodule SymphonyElixir.AcceptanceGate.Agreement do
   @doc "The latest gate verdict on issue `issue_id` of repository `repo_key`, or nil."
   @spec latest(String.t() | nil, String.t() | nil, keyword()) :: map() | nil
   def latest(repo_key, issue_id, opts \\ []) do
+    run_store = Keyword.get(opts, :run_store, RunStore)
+
     with true <- is_binary(repo_key) and is_binary(issue_id),
-         runs when is_list(runs) <- Keyword.get(opts, :run_store, RunStore).list_runs(repo_key, :all) do
-      runs |> verdicts() |> Enum.find(&(Map.get(&1, :issue_id) == issue_id))
+         {:ok, runs} <- memoize(run_store, :verdicts, fn -> verdict_runs(run_store) end) do
+      Enum.find(runs, &(Map.get(&1, :repo_key) == repo_key and Map.get(&1, :issue_id) == issue_id))
     else
       _missing -> nil
     end

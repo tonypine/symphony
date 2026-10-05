@@ -102,7 +102,8 @@ defmodule SymphonyElixirWeb.Presenter do
           concurrency: Map.get(snapshot, :concurrency),
           claimed: Map.get(snapshot, :claimed, []),
           rate_limits: snapshot.rate_limits,
-          linear_usage: normalize_linear_usage(get_in(snapshot, [:polling, :linear, :usage]))
+          linear_usage: normalize_linear_usage(get_in(snapshot, [:polling, :linear, :usage])),
+          orchestrator: Orchestrator.diagnostics(orchestrator)
         }
 
       :timeout ->

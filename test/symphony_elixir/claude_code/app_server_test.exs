@@ -262,6 +262,13 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       assert {:malformed, ^line} = AppServer.parse_event(line)
     end
 
+    test "parses tool_progress heartbeats" do
+      line =
+        ~s({"type":"tool_progress","tool_use_id":"toolu_1","tool_name":"Bash","parent_tool_use_id":null,"elapsed_time_seconds":12,"uuid":"u-1","session_id":"sess-1"})
+
+      assert {:tool_progress, "Bash"} = AppServer.parse_event(line)
+    end
+
     test "returns malformed for valid JSON with unrecognized shape" do
       line = ~s({"type":"unknown_event","data":"something"})
 
@@ -1905,6 +1912,51 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
         assert log =~ ~s(rate_limit_info=%{)
         assert log =~ ~s("status" => "rejected")
         assert length(String.split(log, "Claude rate_limit_event not allowed")) == 2
+      after
+        File.rm_rf(test_root)
+      end
+    end
+
+    test "drops tool_progress heartbeats without forwarding or logging them" do
+      test_root = Path.join(System.tmp_dir!(), "symphony-elixir-claude-code-tool-progress-#{System.unique_integer([:positive])}")
+
+      try do
+        workspace_root = Path.join(test_root, "workspaces")
+        workspace = Path.join(workspace_root, "ACME-PROGRESS")
+        fake_claude = Path.join(test_root, "fake-claude")
+        File.mkdir_p!(workspace)
+
+        File.write!(fake_claude, """
+        #!/bin/sh
+        printf '%s\\n' '{"type":"system","subtype":"init","session_id":"sess-progress","cwd":"/tmp","tools":[],"mcp_servers":[],"model":"claude-opus-4-5","permissionMode":"default","apiKeySource":"none"}'
+        printf '%s\\n' '{"type":"tool_progress","tool_use_id":"toolu_1","tool_name":"Bash","parent_tool_use_id":null,"elapsed_time_seconds":3,"uuid":"u-1","session_id":"sess-progress"}'
+        printf '%s\\n' '{"type":"tool_progress","tool_use_id":"toolu_1","tool_name":"Bash","parent_tool_use_id":null,"elapsed_time_seconds":6,"uuid":"u-2","session_id":"sess-progress"}'
+        printf '%s\\n' '{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"sess-progress","usage":{}}'
+        """)
+
+        File.chmod!(fake_claude, 0o755)
+
+        write_workflow_file!(Workflow.workflow_file_path(),
+          workspace_root: workspace_root,
+          agent_kind: "claude",
+          agent_command: fake_claude
+        )
+
+        session = local_session(workspace, test_root)
+        test_pid = self()
+        on_message = fn msg -> send(test_pid, {:turn_msg, msg}) end
+        issue = %{id: "issue-progress", identifier: "ACME-PROGRESS"}
+
+        log =
+          ExUnit.CaptureLog.capture_log(fn ->
+            send(test_pid, {:result, AppServer.run_turn(session, "do the thing", issue, on_message: on_message)})
+          end)
+
+        assert_received {:result, {:ok, _result}}
+        assert_received {:turn_msg, {:session_started, "sess-progress"}}
+        refute_received {:turn_msg, {:tool_progress, _tool_name}}
+        refute_received {:turn_msg, {:notification, _text}}
+        refute log =~ "unparseable"
       after
         File.rm_rf(test_root)
       end
