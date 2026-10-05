@@ -144,6 +144,8 @@ public struct AddRepoDraft: Equatable {
     /// The name of the Linear project picked.
     public var project: String?
     public var labels: [String]
+    /// The repo's acceptance gate mode, which only the Edit sheet shows.
+    public var acceptanceGate: AcceptanceGateChoice
 
     public init(
         mode: Mode = .gitHub,
@@ -152,7 +154,8 @@ public struct AddRepoDraft: Equatable {
         key: String = "",
         baseBranch: String = AddRepo.defaultBaseBranch,
         project: String? = nil,
-        labels: [String] = []
+        labels: [String] = [],
+        acceptanceGate: AcceptanceGateChoice = .inherit
     ) {
         self.mode = mode
         self.gitHubInput = gitHubInput
@@ -161,6 +164,7 @@ public struct AddRepoDraft: Equatable {
         self.baseBranch = baseBranch
         self.project = project
         self.labels = labels
+        self.acceptanceGate = acceptanceGate
     }
 
     /// `owner/repo` of the source the draft names, nil while it names none.
