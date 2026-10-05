@@ -218,7 +218,7 @@ final class EditRepoTests: XCTestCase {
 
         XCTAssertEqual(
             EditRepo.savedMessage(key: "web", apply: nil),
-            "Saved web. Symphony reads the new route from symphony.yml, so the next dispatch uses it."
+            "Saved web. Symphony reads the change from symphony.yml, so its next poll uses it."
         )
         XCTAssertEqual(EditRepo.savedMessage(key: "web", apply: .restart), "Saved web. Symphony restarts to apply it.")
         XCTAssertEqual(EditRepo.savedMessage(key: "web", apply: .askToRestart(runs: 1)), "Saved web. Symphony restarts to apply it.")

@@ -19,13 +19,15 @@ public enum EditRepo {
             key: entry.key,
             baseBranch: entry.baseBranch ?? "",
             project: entry.route.projects?.first,
-            labels: entry.route.labels ?? []
+            labels: entry.route.labels ?? [],
+            acceptanceGate: AcceptanceGateChoice(override: entry.acceptanceGateMode)
         )
     }
 
     /// `original` changed as the draft says, or the first thing that stops it. Only what the sheet edits changes:
     /// the key, the default flag, the route's team and assignee, `fetch_before_dispatch` and keys the app doesn't
-    /// know stay. An unchanged source keeps the entry's workspace and workflow as they are. `existing` is the
+    /// know stay. The acceptance gate mode changes only when its picker moved, so a value Symphony rejects stays
+    /// until another one is picked; Inherit removes it. An unchanged source keeps the entry's workspace and workflow as they are. `existing` is the
     /// `repositories:` list now, with `original` in it.
     public static func entry(
         for draft: AddRepoDraft,
@@ -78,6 +80,10 @@ public enum EditRepo {
             entry.route.labels = labels.isEmpty ? nil : labels
         }
 
+        if draft.acceptanceGate != AcceptanceGateChoice(override: original.acceptanceGateMode) {
+            entry.acceptanceGateMode = draft.acceptanceGate.override
+        }
+
         let others = existing.filter { $0.key != original.key }
         if AddRepo.isUnscoped(entry.route), entry.isDefault != true, !others.isEmpty {
             return .failure(AddRepoProblem(
@@ -98,6 +104,23 @@ public enum EditRepo {
         original.workspace != entry.workspace || original.workflow != entry.workflow || original.baseBranch != entry.baseBranch
     }
 
+    /// True when Save changes the repo's acceptance gate mode, so it runs `symphony check` first.
+    public static func changesAcceptanceGate(from original: RepositoryEntry, to entry: RepositoryEntry) -> Bool {
+        original.acceptanceGateMode != entry.acceptanceGateMode
+    }
+
+    /// `yaml` with the repo `original.key` rewritten to `entry`. When the sheet leaves the acceptance gate mode as
+    /// it was, the entry keeps the mode `yaml` holds now, so a Save doesn't undo a mode set elsewhere, such as the
+    /// status menu's kill switch, while the sheet was open.
+    public static func updating(_ original: RepositoryEntry, to entry: RepositoryEntry, in yaml: String) throws -> String {
+        var entry = entry
+        if !changesAcceptanceGate(from: original, to: entry),
+           let current = try RepositoriesConfig.entries(in: yaml).first(where: { $0.key == original.key }) {
+            entry.acceptanceGateMode = current.acceptanceGateMode
+        }
+        return try RepositoriesConfig.updating(original.key, to: entry, in: yaml)
+    }
+
     /// How the change reaches Symphony: nil when Symphony reads it from `symphony.yml` without a restart.
     public static func apply(status: SymphonyStatus, from original: RepositoryEntry, to entry: RepositoryEntry) -> AddRepoApply? {
         needsRestart(from: original, to: entry) ? AddRepo.apply(status: status) : nil
@@ -116,7 +139,7 @@ public enum EditRepo {
     public static func savedMessage(key: String, apply: AddRepoApply?) -> String {
         switch apply {
         case nil:
-            return "Saved \(key). Symphony reads the new route from symphony.yml, so the next dispatch uses it."
+            return "Saved \(key). Symphony reads the change from symphony.yml, so its next poll uses it."
         case .restart?, .askToRestart?:
             return "Saved \(key). Symphony restarts to apply it."
         case .onNextStart?:
@@ -207,6 +230,10 @@ public enum DisconnectRepo {
 /// Edits and disconnects a repo in a `symphony.yml` on disk. Each one writes atomically, and leaves the file
 /// untouched when it throws.
 extension SymphonyConfigFile {
+    public func editRepository(_ original: RepositoryEntry, to entry: RepositoryEntry) throws {
+        try rewrite { try EditRepo.updating(original, to: entry, in: $0) }
+    }
+
     public func disconnectRepository(_ key: String, newDefault: String?) throws {
         try rewrite { try DisconnectRepo.removing(key, newDefault: newDefault, from: $0) }
     }
