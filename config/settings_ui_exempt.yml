@@ -1,0 +1,305 @@
+# symphony.yml settings with no control in the macOS app, each with the reason.
+#
+# `mix settings.ui_coverage` (in `mix lint`, so in `make all` and CI) fails for a setting that is
+# neither listed in macos/Sources/SymphonyBarCore/SettingsUIManifest.swift nor exempt here. A new
+# setting gets a control in the app; only a person exempts one. Agents can't write this file, and
+# a Symphony PR that changes it fails `protected paths` until a person adds the
+# `protected-paths-approved` label. See docs/configuration.md, "Settings in the macOS app".
+#
+# Each entry has a `reason`, an optional `ticket` for the planned control, and a `key` or a `keys`
+# list. A key is a dotted path (`repositories[].route.team` for a key of every repository). A
+# `prefix.*` key exempts every setting under the prefix, including ones added later, so list
+# keys one by one unless the whole section stays out of the app.
+
+exemptions:
+  # agent.runtime
+  - reason: Which agent CLI runs (Claude Code or Codex), chosen when Symphony is set up. No control in the app yet.
+    keys:
+      - agent.runtime
+
+  # agent.concurrency
+  - reason: Epic lanes, finishing and forced-run slots, beyond the app's max concurrent agents control. No control in the app yet.
+    keys:
+      - agent.concurrency.epic_lanes
+      - agent.concurrency.finishing_max
+      - agent.concurrency.force_label
+      - agent.concurrency.forced_max
+      - agent.concurrency.forced_stale_after_hours
+      - agent.concurrency.max_by_issue_state
+
+  # agent.limits and agent.timeouts
+  - reason: Turn, retry, tool-failure and timeout tuning, beyond the app's token limits. No control in the app yet.
+    keys:
+      - agent.limits.max_consecutive_identical_tool_failures
+      - agent.limits.max_turns
+      - agent.limits.retry_backoff_max_ms
+      - agent.timeouts.command_ms
+      - agent.timeouts.read_ms
+      - agent.timeouts.stall_ms
+      - agent.timeouts.turn_ms
+
+  # agent.prompts
+  - reason: How the prompt is assembled. No control in the app yet.
+    keys:
+      - agent.prompts.codex_stdio_soft_limit_bytes
+      - agent.prompts.include_project_guides
+      - agent.prompts.project_guide_files
+
+  # agent.permissions
+  - reason: The agent's sandbox and network policy. Security settings, edited by hand in symphony.yml.
+    keys:
+      - agent.permissions.approval_policy
+      - agent.permissions.filesystem.allow_read_paths
+      - agent.permissions.filesystem.allow_write_paths
+      - agent.permissions.filesystem.sandbox
+      - agent.permissions.filesystem.turn_policy
+      - agent.permissions.network.allowed_domains
+      - agent.permissions.network.denied_domains
+      - agent.permissions.network.mode
+      - agent.permissions.outer_sandbox.command
+      - agent.permissions.outer_sandbox.enable_weaker_network_isolation
+      - agent.permissions.outer_sandbox.runtime
+
+  # agent.mcp
+  - reason: Which MCP servers agents get. No control in the app yet.
+    keys:
+      - agent.mcp.allowed_servers
+      - agent.mcp.inherit
+      - agent.mcp.servers
+
+  # agent.usage_limit
+  - reason: How Symphony pauses and resumes around provider usage limits. No control in the app yet.
+    keys:
+      - agent.usage_limit.auto_pause
+      - agent.usage_limit.headroom_utilization
+      - agent.usage_limit.resume_margin_seconds
+      - agent.usage_limit.unknown_reset_retry_seconds
+
+  # auto_review.acceptance_gate.mode
+  - reason: The acceptance gate's mode; its control is planned.
+    ticket: TP-547
+    keys:
+      - auto_review.acceptance_gate.mode
+      - repositories[].acceptance_gate.mode
+
+  # auto_review.acceptance_gate
+  - reason: The acceptance gate agent's runtime, limits and escalation rules. No control in the app yet.
+    keys:
+      - auto_review.acceptance_gate.command
+      - auto_review.acceptance_gate.effort
+      - auto_review.acceptance_gate.escalate.busy_files.max_lines
+      - auto_review.acceptance_gate.escalate.busy_files.top
+      - auto_review.acceptance_gate.escalate.busy_files.window_days
+      - auto_review.acceptance_gate.escalate.dependencies
+      - auto_review.acceptance_gate.escalate.diff_patterns
+      - auto_review.acceptance_gate.escalate.inconclusive_limit
+      - auto_review.acceptance_gate.escalate.labels
+      - auto_review.acceptance_gate.escalate.max_changed_lines
+      - auto_review.acceptance_gate.escalate.paths
+      - auto_review.acceptance_gate.escalate.ticket_patterns
+      - auto_review.acceptance_gate.max_concurrent
+      - auto_review.acceptance_gate.max_turns
+      - auto_review.acceptance_gate.model
+      - auto_review.acceptance_gate.runtime
+      - auto_review.acceptance_gate.timeout_ms
+      - repositories[].acceptance_gate.escalate.busy_files.max_lines
+      - repositories[].acceptance_gate.escalate.busy_files.top
+      - repositories[].acceptance_gate.escalate.busy_files.window_days
+      - repositories[].acceptance_gate.escalate.dependencies
+      - repositories[].acceptance_gate.escalate.diff_patterns
+      - repositories[].acceptance_gate.escalate.inconclusive_limit
+      - repositories[].acceptance_gate.escalate.labels
+      - repositories[].acceptance_gate.escalate.max_changed_lines
+      - repositories[].acceptance_gate.escalate.paths
+      - repositories[].acceptance_gate.escalate.ticket_patterns
+      - repositories[].acceptance_gate.max_turns
+      - repositories[].acceptance_gate.timeout_ms
+
+  # auto_review.android
+  - reason: The Android emulator QA passes use. No control in the app yet.
+    keys:
+      - auto_review.android.avd
+      - auto_review.android.boot_timeout_ms
+      - auto_review.android.idle_timeout_ms
+      - auto_review.android.sdk_root
+
+  # auto_review
+  - reason: When Auto Review QA passes run, and their agent and limits. No control in the app yet.
+    keys:
+      - auto_review.enabled
+      - auto_review.max_concurrent
+      - auto_review.max_fix_attempts
+      - auto_review.max_turns
+      - auto_review.playbooks
+      - auto_review.run_on
+      - auto_review.runtime
+      - auto_review.skip_globs
+      - auto_review.state
+      - auto_review.timeout_ms
+      - auto_review.worker_host
+
+  # repositories[].workflow_source
+  - reason: Reads a repository's workflow from its working tree instead of the fetched ref, for developing Symphony itself. No control in the app yet.
+    keys:
+      - repositories[].workflow_source
+
+  # issues.linear.api_key
+  - reason: The app's Settings keeps the Linear API key in the keychain and passes it as LINEAR_API_KEY, which this key defaults to.
+    keys:
+      - issues.linear.api_key
+
+  # issues
+  - reason: The tracker connection, scope and workflow states, set when Symphony is set up. No control in the app yet.
+    keys:
+      - issues.linear.assignee
+      - issues.linear.endpoint
+      - issues.linear.scope.labels
+      - issues.linear.scope.project_slug
+      - issues.linear.scope.team
+      - issues.memory.issues_file
+      - issues.poll_interval_ms
+      - issues.provider
+      - issues.states.active
+      - issues.states.human_review
+      - issues.states.terminal
+      - issues.states.waiting_on_sub_issues
+
+  # pre_push_review
+  - reason: Whether and when the pre-push review agent runs, beyond the model and effort the app's Models section sets. No control in the app yet.
+    keys:
+      - pre_push_review.enabled
+      - pre_push_review.max_iterations
+      - pre_push_review.run_on
+      - pre_push_review.runtime
+
+  # pull_requests
+  - reason: PR polling, review comment, CI fix and learnings behaviour. No control in the app yet.
+    keys:
+      - pull_requests.auto_merge
+      - pull_requests.checks.enabled
+      - pull_requests.checks.escalate_to_state
+      - pull_requests.checks.landing_wait_timeout_ms
+      - pull_requests.checks.log_excerpt_lines
+      - pull_requests.checks.max_fix_attempts
+      - pull_requests.checks.retry_failed_once
+      - pull_requests.enabled
+      - pull_requests.learnings.enabled
+      - pull_requests.learnings.max_per_run
+      - pull_requests.learnings.max_total_per_repo
+      - pull_requests.learnings.model
+      - pull_requests.learnings.provider
+      - pull_requests.poll_interval_ms
+      - pull_requests.review_comments.ignored_reviewers
+      - pull_requests.review_comments.reply_after_addressing
+      - pull_requests.review_comments.request_review_after_push
+      - pull_requests.review_comments.rework_delay_minutes
+      - pull_requests.review_comments.stale_after_days
+
+  # issue_gate
+  - reason: The ticket quality gate. No control in the app yet.
+    keys:
+      - issue_gate.clarification_floor
+      - issue_gate.enabled
+      - issue_gate.max_clarification_rounds
+      - issue_gate.model
+      - issue_gate.on_error
+      - issue_gate.pass_threshold
+      - issue_gate.provider
+
+  # dashboard
+  - reason: The web dashboard's address and refresh rates. No control in the app yet.
+    keys:
+      - dashboard.enabled
+      - dashboard.host
+      - dashboard.port
+      - dashboard.refresh_ms
+      - dashboard.render_interval_ms
+      - dashboard.snapshot_publish_ms
+      - dashboard.transcript_buffer_size
+
+  # dependency_audit
+  - reason: Which dependency sources agents may add. Security settings, edited by hand in symphony.yml.
+    keys:
+      - dependency_audit.allow_git_sources
+      - dependency_audit.allow_path_sources
+      - dependency_audit.allow_registries
+
+  # github
+  - reason: GitHub Enterprise hosts, draft PRs, CI log size and webhooks. No control in the app yet.
+    keys:
+      - github.enterprise_hosts
+      - github.failed_run_log_max_bytes
+      - github.open_pull_requests_as_draft
+      - github.webhooks.enabled
+      - github.webhooks.events
+      - github.webhooks.relay
+      - github.webhooks.secret
+
+  # human_actions
+  - reason: Human action requests in project updates. No control in the app yet.
+    keys:
+      - human_actions.enabled
+      - human_actions.interval_ms
+      - human_actions.label
+      - human_actions.min_update_interval_ms
+
+  # notifications
+  - reason: Notification channels and their webhooks. No control in the app yet.
+    keys:
+      - notifications.channels[].allow_private
+      - notifications.channels[].events
+      - notifications.channels[].headers
+      - notifications.channels[].kind
+      - notifications.channels[].url
+      - notifications.channels[].webhook_url
+      - notifications.enabled
+      - notifications.redact_titles
+
+  # poller
+  - reason: Linear polling backoff. No control in the app yet.
+    keys:
+      - poller.backoff_base_ms
+      - poller.degraded_threshold
+      - poller.max_backoff_ms
+
+  # verification
+  - reason: Dev server and port allocation for verification. No control in the app yet.
+    keys:
+      - verification.dev_server.health_check_url
+      - verification.dev_server.health_timeout_ms
+      - verification.dev_server.start_cmd
+      - verification.dev_server.stop_signal
+      - verification.dev_server.stop_timeout_ms
+      - verification.enabled
+      - verification.port_allocation.range
+
+  # watchdog
+  - reason: Stalled-run and stray-process detection. No control in the app yet.
+    keys:
+      - watchdog.enabled
+      - watchdog.no_progress_threshold_ms
+      - watchdog.stray_process_cpu_minutes
+      - watchdog.tick_interval_ms
+
+  # workers
+  - reason: SSH worker hosts. No control in the app yet.
+    keys:
+      - workers.max_concurrent_agents_per_host
+      - workers.ssh_hosts
+
+  # workspaces
+  - reason: Where workspaces and clones live, and their cleanup and attachments. No control in the app yet.
+    keys:
+      - workspaces.attachments.allowed_hosts
+      - workspaces.attachments.public_upload_extensions
+      - workspaces.cleanup.enabled
+      - workspaces.cleanup.interval_ms
+      - workspaces.cleanup.max_age_days
+      - workspaces.cleanup.min_free_bytes
+      - workspaces.cleanup.orphan_action
+      - workspaces.cleanup.trash_dir
+      - workspaces.clones_root
+      - workspaces.fetch_before_dispatch
+      - workspaces.repo
+      - workspaces.root
+      - workspaces.strategy

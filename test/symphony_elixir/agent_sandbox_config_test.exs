@@ -91,6 +91,7 @@ defmodule SymphonyElixir.AgentSandboxConfigTest do
              "./.git",
              "./mise.toml",
              "./.tool-versions",
+             "./config/settings_ui_exempt.yml",
              "~/.zshrc",
              "~/.zshenv",
              "~/.zprofile",
@@ -141,7 +142,8 @@ defmodule SymphonyElixir.AgentSandboxConfigTest do
              ".claude/skills",
              ".codex/skills",
              "mise.toml",
-             ".tool-versions"
+             ".tool-versions",
+             "config/settings_ui_exempt.yml"
            ]
   end
 
