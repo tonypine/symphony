@@ -474,6 +474,7 @@ defmodule SymphonyElixir.CiPoller do
          {:ok, existing} <- list_ci_checks(run_store, repo_key) do
       existing_by_issue = Map.new(existing, &{Map.get(&1, :issue_id), &1})
       issues = Enum.filter(issues, &match?(%Issue{}, &1))
+      Enum.each(issues, &warn_if_pr_url_lost(&1, Map.get(existing_by_issue, &1.id)))
 
       discovered = Enum.count(issues, &persist_discovered_ci_check?(&1, runs, existing_by_issue, run_store, repo_key, now))
       observe_gate_decisions(settings, repo_key, issues, runs, existing, opts)
@@ -481,6 +482,21 @@ defmodule SymphonyElixir.CiPoller do
       {:ok, discovered, auto_review_issues(settings, issues), auto_merge_issue_ids(settings, issues)}
     end
   end
+
+  # An issue the poller watches a PR for whose Linear attachments now show none (many other
+  # attachments once pushed it out of the page read): the agent runner reads the PR from the issue,
+  # so its CI and review checks would skip it. Issues that never had a PR, such as a final
+  # verification ticket, have no CI check record and stay quiet.
+  defp warn_if_pr_url_lost(%Issue{} = issue, %{pr_url: pr_url}) when is_binary(pr_url) do
+    if is_nil(first_pr_url(issue)) do
+      Logger.warning(
+        "issue_id=#{issue.id} issue_identifier=#{issue.identifier} is in #{issue.state} with no PR URL on its Linear attachments; " <>
+          "Symphony still watches CI on #{pr_url} for it"
+      )
+    end
+  end
+
+  defp warn_if_pr_url_lost(_issue, _existing), do: :ok
 
   # Records the human's decision on gate verdicts whose issue left In Review (or Human Review). It
   # runs before the checks are processed, so the CI check record of a PR merged since the last
