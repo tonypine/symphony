@@ -1808,6 +1808,9 @@ port range.
 Auto Review's `web` playbook starts the same dev server, from a worktree at the PR head, for each web QA pass
 (see [Web app QA](#web-app-qa)).
 
+`start_cmd` runs on the host as your user, outside the agent sandbox, and usually runs files the
+agent can change (see [security](security.md#verification-dev-server-runs-on-the-host)).
+
 ### `workers`
 
 Remote worker host settings. Runs whose provider is `openrouter` start on the local host only, so

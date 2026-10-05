@@ -191,6 +191,28 @@ separately in [quality_gate_security.md](quality_gate_security.md), including it
 surface, the `on_error: pass` failure mode, and the lack of in-process network restrictions on
 provider calls.
 
+### Verification dev server runs on the host
+
+`verification.dev_server.start_cmd` is not sandboxed. Symphony starts it itself, on the host as
+the operator's user, with the operator's environment, keychain, SSH agent and tokens, outside the
+agent sandbox and its network allowlist. It runs from the checkout under test:
+
+- in an agent run, from the agent's own workspace, before the first turn and for the whole run;
+- in an Auto Review `web` pass, from a second worktree at the PR head.
+
+The command usually runs files from that checkout: a script such as Symphony's own
+`scripts/qa-dashboard-server.sh`, and the repo's build tool (`mix`, `npm`, `pnpm`), which runs the
+project's code and build config. The agent can change all of these. `WORKFLOW.md` itself is
+write-protected, but the script it names and the code it builds are not. So an agent's edit,
+pushed or left in the workspace, runs as the operator at the next start. A dev server that reloads
+code runs it straight away.
+
+The dev server is off by default. It starts only when `verification.enabled` is `true` and
+`verification.dev_server.start_cmd` is set. A repo's `WORKFLOW.md` can set both, and its values
+override `symphony.yml`. To turn it off, leave `verification.enabled` unset (or `false`) in
+`symphony.yml` and in every repo's `WORKFLOW.md`, or remove `start_cmd` from them. Without a dev
+server, Auto Review skips the `web` playbook ("needs `verification.dev_server`").
+
 ### Tamper-evident audit log
 
 Side-effect events (prompt sends, tool calls, file changes, PR actions, Linear state/comment
@@ -247,6 +269,10 @@ read from environment variables. The quality gate explicitly ignores credentials
   like `/private/tmp`.
 - Keep `agent.network_access.mode: allowlist`. Use `denied_domains` to override anything in the
   built-in dev allow list you do not want the agent to reach.
+- Turn on `verification.enabled` only on a host where running the agent's code as your own user
+  is acceptable, such as a dedicated machine or user account without your personal credentials.
+  The dev server runs the checkout's code outside the sandbox (see
+  [Verification dev server runs on the host](#verification-dev-server-runs-on-the-host)).
 
 ### Secrets and credentials
 
