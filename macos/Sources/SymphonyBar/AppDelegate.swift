@@ -42,6 +42,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private let updateLineItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     /// Set when the app started Symphony after an update: resume dispatch once it answers.
     private var resumeWhenAnswering = false
+    /// Decides when Automatically when idle or Automatically at a set time installs a release.
+    private var autoUpdater = AutoUpdater()
+    /// Fires at the set time, so the attempt doesn't wait for the next status poll.
+    private var setTimeTimer: Timer?
     /// Stops an owned Symphony before the app exits on SIGTERM, SIGINT or SIGHUP.
     private var terminationSignals: TerminationSignals?
     private var exitingOnSignal = false
@@ -432,8 +436,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     }
 
     /// Pauses dispatch, waits for agent runs and stops Symphony, then hands over. A Symphony the app doesn't run
-    /// is left alone.
-    private func drainForUpdate(_ update: PreparedUpdate) {
+    /// is left alone. An automatic update passes `automaticRunsTimeout`: see `RestartController.drainForUpdate`.
+    private func drainForUpdate(_ update: PreparedUpdate, automaticRunsTimeout: TimeInterval? = nil) {
         guard !runner.isStarting else {
             updater.fail("Symphony is starting, stopping or restarting; try again once it runs.")
             return
@@ -447,10 +451,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             return
         }
         let alreadyPaused = StatusMenu.canResume(machine.status)
-        restarter.drainForUpdate(alreadyPaused: alreadyPaused) { [weak self] stopped, pausedByUpdate in
+        restarter.drainForUpdate(alreadyPaused: alreadyPaused, automaticRunsTimeout: automaticRunsTimeout) {
+            [weak self] stopped, pausedByUpdate in
             guard let self else { return }
             guard stopped else {
                 updater.cancel()
+                if restarter.machine.postponed { autoUpdater.postponed() }
                 return
             }
             handOff(update, symphonyStopped: true, resumeDispatch: pausedByUpdate)
@@ -491,6 +497,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             updateResultItem.title = result.flatMap(UpdateMenu.manualResultLine) ?? ""
         }
         showUpdateItems()
+        if let result { performAutoUpdate(autoUpdater.checked(result, autoUpdateContext)) }
+    }
+
+    /// What `AutoUpdater` decides from: the update settings, the release the last check found, and what Symphony is
+    /// doing.
+    private var autoUpdateContext: AutoUpdater.Context {
+        let settings = AppStores.current.settingsStore().loadSettings()
+        let busy = restarting || updater.isUpdating || runner.isStarting || runner.isStopping || startWhenStopped
+            || resumeWhenAnswering || controlInFlight != nil
+        return AutoUpdater.Context(
+            mode: settings.updateMode,
+            time: settings.updateTime,
+            offer: availableRelease.map { UpdateOffer($0, skips: updater.skips) },
+            blocker: updater.blocker(developmentMode: settings.developmentMode),
+            activity: SymphonyActivity(status: machine.status, symphonyRunning: runner.isRunning, busy: busy),
+            runsTimeout: TimeInterval(runner.restartTimeoutMinutes * 60)
+        )
+    }
+
+    /// Lets the automatic update modes act, on each status poll and at the set time, then sets the timer for the next
+    /// set time.
+    private func autoUpdateTick() {
+        let action = autoUpdater.tick(autoUpdateContext, now: Date(), calendar: .current)
+        scheduleSetTimeTimer()
+        performAutoUpdate(action)
+    }
+
+    private func scheduleSetTimeTimer() {
+        let next = autoUpdater.nextSetTime
+        guard setTimeTimer?.isValid != true || setTimeTimer?.fireDate != next else { return }
+        setTimeTimer?.invalidate()
+        setTimeTimer = nil
+        guard let next else { return }
+        let timer = Timer(fire: next, interval: 0, repeats: false) { _ in
+            MainActor.assumeIsolated { self.autoUpdateTick() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        setTimeTimer = timer
+    }
+
+    private func performAutoUpdate(_ action: AutoUpdater.Action?) {
+        switch action {
+        case .check?:
+            updates.check(manual: false)
+        case let .install(release, runsTimeout)?:
+            // No confirmation: a failure shows on the update line, not in an alert.
+            guard !updater.isUpdating, !restarting else { return }
+            controlError = nil
+            updater.prepare(release, automatic: true) { [weak self] update in
+                self?.drainForUpdate(update, automaticRunsTimeout: runsTimeout)
+            }
+        case nil:
+            break
+        }
     }
 
     /// Shows or hides the update items.
@@ -562,6 +622,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                     resumeWhenAnswering = false
                 }
             }
+            autoUpdateTick()
         case .started, .exited:
             // Check straight away instead of waiting out the interval.
             poller.pollNow()
@@ -584,7 +645,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         sourceItem.title = runner.sourceLine
         guard let menu = statusTitleItem.menu else { return }
         detailItems.forEach(menu.removeItem)
-        let updating = restarter.machine.purpose == .update
+        let updating = restarter.machine.purpose.isUpdate
         restartNowItem.title = updating ? UpdateMenu.updateNowTitle : StatusMenu.restartNowTitle
         cancelRestartItem.title = updating ? UpdateMenu.cancelUpdateTitle : StatusMenu.cancelRestartTitle
         restartNowItem.isHidden = !restarter.machine.offersRestartNow

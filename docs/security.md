@@ -211,6 +211,44 @@ write; see [Git metadata](#git-metadata) for the list and for the other runtimes
 failure occurs before the frame reaches Symphony. Disable SRT for Codex on stability-sensitive runs
 until the Codex/SRT stdio behavior is hardened.
 
+### Host-side git
+
+Symphony runs git on the host, outside every agent sandbox and as the operator, to create, reuse
+and back up worktrees and to read branches for reviews and gates. Agents commit in the shared repo,
+so its local config (`.git/config`, a `config.worktree`, and the files they include) is where an
+agent would put a command for that git to run, and a branch's `.gitattributes` picks which files
+the command runs on. Every host-side git call:
+
+- reads no global or system config (`GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` are `/dev/null`)
+  and runs no hook, file-system monitor or credential helper, nor an `ext::` remote;
+- still reads the repo's local config, which holds the remotes and branches Symphony works with.
+  Before a command that can read or write work-tree files (anything but `rev-parse`, `fetch`,
+  `log`, `show` and a few other read-only commands), Symphony lists the filter drivers
+  (`filter.<name>.clean`, `.smudge` and `.process`) defined in that config and in every file it
+  includes, whatever the include's condition. It blanks each one with `-c` and sets its
+  `required` to `false`, so git writes and reads files as the repo stores them. In a repo that uses
+  Git LFS the worktree gets the pointer files, and an agent that needs the content runs
+  `git lfs pull` in its sandbox;
+- doesn't run, and returns an error, when that config can't be read or names a driver with `=` in
+  its name, which `-c` can't address;
+- leaves nested repos alone: a nested repo in a workspace keeps its own config, which the agent
+  writes. `diff.ignoreSubmodules=dirty` keeps `status` from running git inside one,
+  `submodule.recurse=false` keeps `checkout` and `reset` out, and the orphan backup's `add -A`
+  starts from an empty index.
+
+Limits:
+
+- The drivers are listed just before the command runs, so one written to the config in between
+  still runs. In the Claude runtime, Claude Code write-protects the shared repo's `.git/config`,
+  `config.worktree` and hooks, and SRT denies writes to them (see the Git write model above).
+  Symphony gives native Codex no such deny list yet
+  ([TP-534](https://linear.app/tonypine/issue/TP-534)).
+- Only filter drivers are blanked. Host-side `git diff` and `git merge` (reviews, the acceptance
+  gate, `github_sync_base`) still run a diff or merge driver the config defines, and `git fetch`
+  still honors `remote.<name>.uploadpack` ([TP-533](https://linear.app/tonypine/issue/TP-533)).
+- The scripts that create and reset worktrees on an SSH worker run plain git
+  ([TP-535](https://linear.app/tonypine/issue/TP-535)).
+
 ### Network access controls
 
 `agent.network_access` supports `allowlist`, `block`, and `open`. `denied_domains` always

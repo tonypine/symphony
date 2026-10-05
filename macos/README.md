@@ -161,17 +161,17 @@ set (or, in Development mode, no checkout folder).
   on if a checkout folder is already set and the app has no embedded Symphony, so existing setups keep
   running their checkout.
 - **Restart timeout** (1–1440 minutes, 30 by default) is how long Restart Symphony waits for agent runs
-  before it also offers Restart Now Anyway.
+  before it also offers Restart Now Anyway, and how long Automatically at a set time waits for them before it
+  tries again the next day.
 - **Update mode** (in **Updates**) is how the app installs a newer release:
   - **Manual** (the default, and what an install from before this setting gets): the menu shows the
     release and you install it with Update to vX. See [Update](#update).
-  - **Automatically when idle** will install a new release by itself once no agent runs are active.
-  - **Automatically at a set time** will install a new release by itself each day at the **Time** shown under
+  - **Automatically when idle** installs a new release by itself as soon as no agent runs are active.
+  - **Automatically at a set time** installs a new release by itself each day at the **Time** shown under
     it (03:00 by default, in the Mac's time zone), waiting for agent runs like Update to vX. The time shows
     only for this mode, and is kept when you choose another.
 
-  The two automatic modes are saved and shown, but they don't install anything yet; a later version turns
-  them on. Until then the text under the picker says so, and updates install only from the menu.
+  See [Install updates automatically](#install-updates-automatically).
 - `symphony.yml` path, Development mode, checkout folder, command prefix (`mise exec --` until you change
   it), stop timeout, restart timeout, "Start Symphony when the app opens", update mode (`updateMode`) and
   update time (`updateTime`, minutes after midnight) are stored in UserDefaults
@@ -511,7 +511,8 @@ runs.
 
 When a newer release is out, the menu shows **Update available: vX (N changes)**. Choose **Update to vX**:
 the app downloads and verifies it, lets agent runs finish, swaps itself for the new version and relaunches,
-with Symphony running again. The steps are under [Install an update](#install-an-update). You can also
+with Symphony running again. The steps are under [Install an update](#install-an-update). The app can also
+[install updates by itself](#install-updates-automatically) when idle or at a set time. You can also
 update by running the [install script](#with-the-install-script) again after quitting the app.
 
 The app checks the latest release at
@@ -582,6 +583,37 @@ release with the [install script](#with-the-install-script) instead; it keeps th
 `Symphony (previous).app` too.
 
 To undo an update, see [Rollback](#rollback).
+
+### Install updates automatically
+
+With **Update mode** set to one of the automatic modes in Settings, the app installs a newer release by
+itself through the same steps as [Install an update](#install-an-update), without the confirmation:
+
+- **Automatically when idle**: when a check finds a release, the app installs it as soon as Symphony has
+  no active agent runs. Idle means `0 running` in Symphony's state, whether dispatch is paused or not, so
+  paused dispatch with runs still active is not idle; with Symphony stopped the app counts as idle. The app
+  never pauses dispatch to get there: while runs are active the menu shows the release as available, and
+  the app looks again on each status poll (every 5 seconds) and installs at the first idle moment. If a run
+  starts just as the update pauses dispatch, the update gives up, resumes dispatch, and waits for the next
+  idle moment.
+- **Automatically at a set time**: each day at the set time the app checks for a release. If there is one,
+  it pauses dispatch, waits for the active agent runs to finish without interrupting them (there is no
+  Update Now Anyway), installs, and the relaunched app resumes dispatch. If the runs are still active after
+  the **Restart timeout** (30 minutes by default), it resumes dispatch, installs nothing, and the menu says
+  "Update postponed"; the next attempt is the next day's time. A time missed while the Mac slept or the app
+  was closed (more than 10 minutes late) waits for the next day's time too, so dispatch isn't paused in the
+  middle of the day. A release found by another check waits for the set time.
+
+In both modes:
+
+- A release you [skip](#skip-a-release) is never installed by itself. A newer release is.
+- Nothing installs while Update is disabled (a development build, Development mode, no update signing key,
+  or an app folder you can't write to).
+- A pause you made before the update stays after it, as with Update to vX. Cancel Update stops waiting.
+- A failure shows on the line under the update items, with no alert: a failed download or verification,
+  for example. When idle, the app tries again after the next check (every 6 hours, or Check for Updates); at
+  a set time, the next day.
+- **Manual** installs nothing by itself.
 
 ## Rollback
 

@@ -1464,8 +1464,12 @@ When enabled:
   holding its details and evidence, marks the verification ticket blocked by each one, lists them
   in the report, and moves the verification ticket to `Todo`, where the blocker rule holds it until
   every gap is terminal. When no gap could be filed and linked, it moves the verification ticket to
-  `Backlog` instead. There is no fix loop. Any other final verification ticket gets the executor
-  run.
+  `Backlog` instead. There is no fix loop. The QA agent MUST report each row of the verification
+  checklist as its own step marked `checklist` (one step per ID for a row that groups several), and
+  a `pass` whose verification ticket lists rows but that reports no `checklist` step, or leaves more
+  than half of them `skipped` or `blocked`, MUST NOT move the ticket to `In Review`: Symphony
+  reports it as `blocked`, naming the unchecked rows, and moves the ticket to `Backlog`. Any other
+  final verification ticket gets the executor run.
 
 When disabled, behaviour is unchanged.
 
@@ -2031,7 +2035,13 @@ The poller:
 
 - discovers issues in `In Review` with attached GitHub PR URLs (attachments whose Linear metadata
   reports the PR as `closed` or `merged` do not count as an attached PR anywhere in Symphony, so a
-  reopened issue whose only PR was closed runs the normal pre-PR flow);
+  reopened issue whose only PR was closed runs the normal pre-PR flow; whenever the first page of an
+  issue's attachments is full, Symphony reads the remaining pages (up to 10 more), so it sees every
+  attachment and many others, such as QA screenshots, do not hide the PR; a rate limit, transport
+  failure, or 429/5xx response on one of those pages fails the whole issue read, so callers retry it
+  as they retry the first page, rather than seeing the issue without its PR; an issue the CI poller watches a PR
+  for, or an agent run whose issue had a PR at dispatch, logs a warning naming the issue when its
+  attachments show no PR);
 - records each PR URL, issue id, and workspace path in the durable run store;
 - polls GitHub for review decisions and PR closure;
 - waits `pull_requests.review_comments.rework_delay_minutes` after requested-change activity before moving the issue

@@ -39,7 +39,10 @@ struct SettingsView: View {
                             Text("minutes")
                         }
                     }
-                    .help("How long Restart Symphony waits for agent runs before it also offers Restart Now Anyway.")
+                    .help(
+                        "How long Restart Symphony waits for agent runs before it also offers Restart Now Anyway, "
+                            + "and how long an update at a set time waits for them before it tries the next day."
+                    )
                     Toggle("Start Symphony when the app opens", isOn: $model.settings.startOnLaunch)
                     Toggle(LoginItem.toggleTitle, isOn: $model.launchAtLogin)
                     if let note = model.loginItemNote {

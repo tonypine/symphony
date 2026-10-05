@@ -453,6 +453,33 @@ defmodule SymphonyElixir.CiPollerTest do
       refute_receive {:issue_state_update, "issue-2401", _state}
     end
 
+    test "an issue whose PR URL went missing from its attachments is named in a warning; one that never had a PR is not" do
+      now = ~U[2026-05-06 09:00:00Z]
+      issue = %{in_review_issue() | state: "Auto Review"}
+      verification = %Issue{id: "issue-2402", identifier: "ACME-2402", title: "Final verification", state: "In Review", pr_urls: []}
+      Application.put_env(:symphony_elixir, :ci_test_issues, [issue, verification])
+      Application.put_env(:symphony_elixir, :ci_test_status, pending_status())
+      put_run(issue, now)
+
+      poll = &CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: DateTime.add(now, &1, :minute))
+
+      assert {:ok, %{actions: [{:watching, "issue-2401"}]}} = poll.(0)
+
+      # QA screenshots pushed the PR attachment out of the page Linear returned.
+      Application.put_env(:symphony_elixir, :ci_test_issues, [%{issue | pr_urls: []}, verification])
+
+      log =
+        capture_log([level: :warning], fn ->
+          assert {:ok, %{actions: [{:watching, "issue-2401"}]}} = poll.(1)
+        end)
+
+      assert log =~
+               "issue_id=issue-2401 issue_identifier=ACME-2401 is in Auto Review with no PR URL on its Linear attachments; " <>
+                 "Symphony still watches CI on https://github.com/example/repo/pull/2401 for it"
+
+      refute log =~ "ACME-2402"
+    end
+
     test "green CI leaves an In Review issue where it is" do
       now = ~U[2026-05-06 09:00:00Z]
       issue = in_review_issue()

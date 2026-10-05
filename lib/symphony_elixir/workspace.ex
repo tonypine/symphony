@@ -4,7 +4,7 @@ defmodule SymphonyElixir.Workspace do
   """
 
   require Logger
-  alias SymphonyElixir.{Config, ManagedClone, PathSafety, ProcessTree, SSH, WorkflowSource}
+  alias SymphonyElixir.{Config, GitFilterDrivers, ManagedClone, PathSafety, ProcessTree, SSH, WorkflowSource}
   alias SymphonyElixir.Config.Schema.Hooks
   alias SymphonyElixir.GitHub.Repo, as: GitHubRepo
   alias SymphonyElixir.Repo.{Fetcher, FetchLog}
@@ -16,13 +16,19 @@ defmodule SymphonyElixir.Workspace do
   @orphan_backup_identity "symphony"
   @orphan_backup_email "symphony@localhost"
   @orphan_backup_message "symphony: orphaned worktree state before PR reset"
+  # `diff.ignoreSubmodules` and `submodule.recurse`: a nested repo in a workspace keeps its own
+  # config, which the agent writes, so `status` must not run git in it to see whether it is dirty,
+  # nor `checkout` or `reset` recurse into it. (`add` ignores `diff.ignoreSubmodules`; the orphan
+  # backup's `add -A` starts from an empty index, which lists no nested repo to check.)
   @safe_git_config_overrides [
     "core.sshCommand=ssh",
     "core.fsmonitor=",
     "core.hooksPath=",
     "credential.helper=",
+    "diff.ignoreSubmodules=dirty",
     "protocol.ext.allow=never",
-    "protocol.file.allow=user"
+    "protocol.file.allow=user",
+    "submodule.recurse=false"
   ]
   # Exit status and output line of an SSH worker's `after_create` wrapper that
   # skipped the hook because it can't run on the base branch tree.
@@ -74,23 +80,44 @@ defmodule SymphonyElixir.Workspace do
     safe_git(command, args, [])
   end
 
+  # Every call also blanks the filter drivers the repo's config defines (see
+  # `SymphonyElixir.GitFilterDrivers`), and refuses to run git when it can't. The scan runs git
+  # through `/bin/sh`, so a missing git raises first, as `System.cmd/3` does.
   @spec safe_git(String.t(), [String.t()], keyword()) :: {Collectable.t(), non_neg_integer()}
   def safe_git(command, args, opts) when is_binary(command) and is_list(args) and is_list(opts) do
-    System.cmd(command, safe_git_args(args), safe_git_opts(opts))
+    unless System.find_executable(command) do
+      :erlang.error(:enoent, [command, args, opts])
+    end
+
+    case GitFilterDrivers.config_args(args, opts, &read_git(command, &1, &2)) do
+      {:ok, filter_args} -> System.cmd(command, safe_git_args(filter_args ++ args), safe_git_opts(opts))
+      {:error, message, status} -> {message, status}
+    end
   end
 
   # Runs git like `safe_git/1` but keeps stderr out of the output, for content reads
   # such as `git show <ref>:<path>`: a warning git prints (a config notice, the xcrun
-  # shim's cache warning) would otherwise land in the file content. The shell sends
-  # stderr to a temp file, so it never reaches the BEAM's own stderr either.
+  # shim's cache warning) would otherwise land in the file content.
   @spec safe_git_stdout([String.t()]) :: {String.t(), non_neg_integer(), String.t()}
   def safe_git_stdout(args) when is_list(args) do
+    case GitFilterDrivers.config_args(args, [], &read_git("git", &1, &2)) do
+      {:ok, filter_args} -> read_git("git", filter_args ++ args, [])
+      {:error, message, status} -> {"", status, message}
+    end
+  end
+
+  # The shell sends stderr to a temp file, so it never reaches the BEAM's own stderr either.
+  defp read_git(command, args, opts) do
     stderr_path = Path.join(System.tmp_dir!(), "symphony-git-stderr-#{System.unique_integer([:positive])}")
     File.write!(stderr_path, "")
 
     try do
       {stdout, status} =
-        System.cmd("/bin/sh", ["-c", ~s(exec "$@" 2>"$0"), stderr_path, "git" | safe_git_args(args)], put_safe_git_env([]))
+        System.cmd(
+          "/bin/sh",
+          ["-c", ~s(exec "$@" 2>"$0"), stderr_path, command | safe_git_args(args)],
+          opts |> Keyword.take([:cd, :env]) |> put_safe_git_env()
+        )
 
       {stdout, status, File.read!(stderr_path)}
     after
