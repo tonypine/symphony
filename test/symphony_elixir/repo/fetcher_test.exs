@@ -93,7 +93,7 @@ defmodule SymphonyElixir.Repo.FetcherTest do
     missing_git = Path.join(root, "missing-git")
 
     capture_log(fn ->
-      assert {:enoent, [{:erlang, :open_port, _args, _info} | _stacktrace]} =
+      assert {:enoent, [{SymphonyElixir.Workspace, :safe_git, _args, _info} | _stacktrace]} =
                catch_exit(Fetcher.fetch_origin(repo, server: server, git: missing_git))
     end)
 
