@@ -41,6 +41,21 @@ final class ConfigCheckTests: XCTestCase {
         XCTAssertEqual(result, .failed(String(repeating: "x", count: ConfigCheck.maxMessageLength) + "…"))
     }
 
+    func testAConfigErrorReadsWithTheReasonAndKeyBeforeThePath() {
+        XCTAssertEqual(
+            ConfigCheck.reasonFirst("Config error in /Users/me/ops/symphony.yml: invalid agent.run_profiles.qa.effort: \"huge\""),
+            "invalid agent.run_profiles.qa.effort: \"huge\" (in /Users/me/ops/symphony.yml)"
+        )
+    }
+
+    func testOtherMessagesStayAsTheyAre() {
+        let missing = "/opt/symphony/bin/symphony was not found. Build it with `mise exec -- mix build` in the checkout."
+        XCTAssertEqual(ConfigCheck.reasonFirst(missing), missing)
+        XCTAssertEqual(ConfigCheck.reasonFirst("Config error in /ops/symphony.yml"), "Config error in /ops/symphony.yml")
+        XCTAssertEqual(ConfigCheck.reasonFirst("Config error in : bad"), "Config error in : bad")
+        XCTAssertEqual(ConfigCheck.reasonFirst("Config error in /ops/symphony.yml:  "), "Config error in /ops/symphony.yml:  ")
+    }
+
     func testRunPassesWithTheLaunchEnvironmentAndFailsWithTheOutput() async {
         let passed = await ConfigCheck.run(shell("test \"$CHECK_WORD\" = from-env"))
         XCTAssertEqual(passed, .passed)

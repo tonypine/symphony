@@ -228,7 +228,7 @@ final class SettingsViewModel: ObservableObject {
             }
             guard !Task.isCancelled else { return }
             isCheckingTokenLimits = false
-            if case .failed(let message) = result { tokenLimitsError = "symphony check rejects this: \(message)" }
+            if case .failed(let message) = result { tokenLimitsError = "symphony check rejects this: \(ConfigCheck.reasonFirst(message))" }
         }
     }
 
@@ -443,7 +443,7 @@ final class SettingsViewModel: ObservableObject {
             return false
         }
         if case .failed(let message) = result {
-            configCheckError = "symphony check rejected these models, so nothing was saved: \(message)"
+            configCheckError = "symphony check rejected these models, so nothing was saved: \(ConfigCheck.reasonFirst(message))"
             return false
         }
         configFileError = nil
@@ -469,7 +469,7 @@ final class SettingsViewModel: ObservableObject {
             return false
         }
         if case .failed(let message) = result {
-            tokenLimitsError = "symphony check rejected these token limits, so nothing was saved: \(message)"
+            tokenLimitsError = "symphony check rejected these token limits, so nothing was saved: \(ConfigCheck.reasonFirst(message))"
             return false
         }
         configFileError = nil

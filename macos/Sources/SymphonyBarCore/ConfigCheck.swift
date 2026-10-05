@@ -101,6 +101,19 @@ public enum ConfigCheck {
         return .failed(String(message.prefix(maxMessageLength)) + "…")
     }
 
+    /// `message` with what is wrong first: "Config error in <path>: <reason>" reads "<reason> (in <path>)", so the
+    /// key at fault isn't behind a long path. Other messages are returned as they are.
+    public static func reasonFirst(_ message: String) -> String {
+        let prefix = "Config error in "
+        guard message.hasPrefix(prefix) else { return message }
+        let rest = message.dropFirst(prefix.count)
+        guard let colon = rest.range(of: ": ") else { return message }
+        let path = rest[..<colon.lowerBound]
+        let reason = String(rest[colon.upperBound...]).trimmingWhitespace()
+        guard !path.isEmpty, !reason.isEmpty else { return message }
+        return "\(reason) (in \(path))"
+    }
+
     private final class OutputBuffer {
         var data = Data()
     }

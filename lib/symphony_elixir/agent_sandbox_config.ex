@@ -111,6 +111,8 @@ defmodule SymphonyElixir.AgentSandboxConfig do
     "./.git",
     "./mise.toml",
     "./.tool-versions",
+    # Only a person exempts a symphony.yml setting from having a control in the macOS app.
+    "./config/settings_ui_exempt.yml",
     "~/.zshrc",
     "~/.zshenv",
     "~/.zprofile",

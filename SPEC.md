@@ -1786,7 +1786,9 @@ not require recognizing or validating extension fields unless that extension is 
   ignores both and logs a warning. A Claude run whose provider is `openrouter` also starts with
   `ANTHROPIC_BASE_URL=https://openrouter.ai/api`, `ANTHROPIC_AUTH_TOKEN` set from the
   `OPENROUTER_API_KEY` environment variable of the Symphony process, an empty
-  `ANTHROPIC_API_KEY`, and `CLAUDE_CODE_SUBAGENT_MODEL=<model>`. If `OPENROUTER_API_KEY` is unset
+  `ANTHROPIC_API_KEY`, and `CLAUDE_CODE_SUBAGENT_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`,
+  `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_OPUS_MODEL` and
+  `ANTHROPIC_SMALL_FAST_MODEL` all set to `<model>`. If `OPENROUTER_API_KEY` is unset
   or blank, the run fails before the agent starts with an error naming the run kind and the
   variable. The key MUST NOT be written to config, logs, the audit log, the run store, or
   transcripts. Before an OpenRouter run starts, the implementation looks the model up in
@@ -2825,7 +2827,8 @@ Current Elixir sandbox behavior:
   startup files, and shell or REPL history files.
 - Shared write denies protect workflow and runtime guardrail files such as `WORKFLOW.md`,
   `symphony.yml`, `symphony.local.yml`, `.claude/settings.json`, `.git`, `mise.toml`,
-  `.tool-versions`, shell startup files, `~/.gitconfig`, and macOS launch agent roots.
+  `.tool-versions`, `config/settings_ui_exempt.yml`, shell startup files, `~/.gitconfig`, and
+  macOS launch agent roots.
 - Rendered Claude, SRT, and Codex native sandbox settings include both tilde and expanded absolute
   forms for home-relative deny paths as defense in depth.
 - Codex native `workspace_write` config renders command-sandbox read denies for
