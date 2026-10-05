@@ -72,6 +72,30 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    Picker("Update mode", selection: $model.settings.updateMode) {
+                        ForEach(UpdateMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                    if model.settings.updateMode == .atTime {
+                        DatePicker(
+                            "Time",
+                            selection: Binding(
+                                get: { model.settings.updateTime.date(on: Date(), calendar: .current) },
+                                set: { model.settings.updateTime = TimeOfDay(date: $0, calendar: .current) }
+                            ),
+                            displayedComponents: .hourAndMinute
+                        )
+                    }
+                } header: {
+                    Text("Updates")
+                } footer: {
+                    Text(model.settings.updateMode.explanation)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section {
                     LabeledContent("Max concurrent agents") {
                         HStack {
                             Text("\(model.maxConcurrentAgents)")

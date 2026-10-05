@@ -36,6 +36,12 @@ public struct AppSettings: Equatable {
     /// Run `bin/symphony` from the checkout instead of the Symphony embedded in the app.
     public var developmentMode: Bool
 
+    /// How the app installs a newer release.
+    public var updateMode: UpdateMode
+
+    /// The daily time Automatically at a set time installs at, kept while another mode is chosen.
+    public var updateTime: TimeOfDay
+
     public init(
         checkoutPath: String = "",
         configPath: String = "",
@@ -43,7 +49,9 @@ public struct AppSettings: Equatable {
         stopTimeoutSeconds: Int = AppSettings.defaultStopTimeoutSeconds,
         restartTimeoutMinutes: Int = AppSettings.defaultRestartTimeoutMinutes,
         startOnLaunch: Bool = false,
-        developmentMode: Bool = false
+        developmentMode: Bool = false,
+        updateMode: UpdateMode = .manual,
+        updateTime: TimeOfDay = .defaultUpdateTime
     ) {
         self.checkoutPath = checkoutPath
         self.configPath = configPath
@@ -52,6 +60,8 @@ public struct AppSettings: Equatable {
         self.restartTimeoutMinutes = restartTimeoutMinutes
         self.startOnLaunch = startOnLaunch
         self.developmentMode = developmentMode
+        self.updateMode = updateMode
+        self.updateTime = updateTime
     }
 
     /// True while a path Start needs is still unset, so the app opens Settings at launch.
@@ -70,7 +80,9 @@ public struct AppSettings: Equatable {
             stopTimeoutSeconds: stopTimeoutSeconds,
             restartTimeoutMinutes: restartTimeoutMinutes,
             startOnLaunch: startOnLaunch,
-            developmentMode: developmentMode
+            developmentMode: developmentMode,
+            updateMode: updateMode,
+            updateTime: updateTime
         )
     }
 }
