@@ -873,7 +873,7 @@ defmodule SymphonyElixir.PrReviewPoller do
     cond do
       auto_merge_issue?(record, opts) -> attrs
       AutoMerge.fallback?(auto_merge) or AutoMerge.held?(auto_merge) -> Map.put(attrs, :auto_merge, nil)
-      is_binary(Map.get(auto_merge || %{}, :approved_head_sha)) -> Map.put(attrs, :auto_merge, %{auto_merge | approved_head_sha: nil, approved_fingerprint: nil})
+      is_binary(Map.get(auto_merge || %{}, :approved_head_sha)) -> Map.put(attrs, :auto_merge, AutoMerge.drop_approval(auto_merge))
       true -> attrs
     end
   end
@@ -1565,9 +1565,19 @@ defmodule SymphonyElixir.PrReviewPoller do
     |> Map.put(:conflict_retry_count, conflict_retry_count(record) + 1)
     |> Map.put(:dispatched_conflict_keys, append_string(Map.get(record, :dispatched_conflict_keys, []), conflict_key))
     |> Map.put(:error, nil)
+    |> drop_conflict_approval(Map.get(pending_attrs, :auto_merge))
   end
 
   defp maybe_mark_conflict_dispatched(attrs, _record, _pending_attrs, _action), do: attrs
+
+  # The issue has left `Merging` for the conflict fix, which comes back through review, so the
+  # stay's approval goes (see AutoMerge.step/5). While it stays in `Merging` (an active run, the
+  # retry limit, a paused dispatch or a failed move) the approval holds, and a fix pushed then is
+  # re-reviewed.
+  defp drop_conflict_approval(attrs, %{approved_head_sha: approved} = auto_merge) when is_binary(approved),
+    do: Map.put(attrs, :auto_merge, AutoMerge.drop_approval(auto_merge))
+
+  defp drop_conflict_approval(attrs, _auto_merge), do: attrs
 
   defp cleanup_review(record, opts, now, reason) do
     workspace = Keyword.get(opts, :workspace, Workspace)

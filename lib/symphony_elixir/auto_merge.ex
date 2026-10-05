@@ -23,7 +23,11 @@ defmodule SymphonyElixir.AutoMerge do
 
   With the acceptance gate in `enforce` mode (and Auto Review on), a push after approval is
   re-reviewed. The first poll of a `Merging` stay records the approved head and a fingerprint
-  of the PR's own diff (`SymphonyElixir.AutoMerge.Fingerprint`). A later head with the same
+  of the PR's own diff (`SymphonyElixir.AutoMerge.Fingerprint`). The approved head is the one
+  the gate approved (`gate_sha` on the CI check record), so a push between the gate's verdict
+  and that poll is judged too; with no gate `approve` (a person's move) it is the current head.
+  The approval lasts the whole stay, through a conflict, until the issue leaves `Merging`
+  (see `drop_approval/1`). A later head with the same
   fingerprint (Symphony's update-branch merge of the base, a clean rebase) keeps the approval
   and auto-merge. Any other head (a CI fix, a landing agent's commit, a human's push) returns
   `{:rereview, auto_merge}` before auto-merge is touched: the PR poller turns auto-merge off
@@ -34,7 +38,7 @@ defmodule SymphonyElixir.AutoMerge do
 
   require Logger
 
-  alias SymphonyElixir.{AcceptanceGate, AutoReview, CiPoller, Config}
+  alias SymphonyElixir.{AcceptanceGate, AutoReview, CiPoller, Config, RunStore}
   alias SymphonyElixir.AutoMerge.Fingerprint
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.GitHub.PullRequest
@@ -158,28 +162,47 @@ defmodule SymphonyElixir.AutoMerge do
   defp check_approval(current, record, settings, opts) do
     cond do
       not rereview?(settings) -> {:ok, current}
-      is_nil(current.approved_head_sha) or current.state == "rereview" -> {:ok, approve(current, record, opts)}
-      current.approved_head_sha == current.head_sha -> {:ok, current}
-      true -> compare(current, record, opts)
+      is_nil(current.approved_head_sha) or current.state == "rereview" -> current |> approve(record, opts) |> check_head(record, opts)
+      true -> check_head(current, record, opts)
     end
   end
 
+  defp check_head(%{approved_head_sha: head, head_sha: head} = current, _record, _opts), do: {:ok, current}
+  defp check_head(current, record, opts), do: compare(current, record, opts)
+
+  # The gate approved one head and moved the issue to `Merging`; a push since then is not
+  # covered. Without a gate `approve` a person moved it, and the current head is approved.
   defp approve(current, record, opts) do
     current = if current.state == "rereview", do: %{current | state: nil, reason: nil}, else: current
+    approved = gate_approved_sha(record, opts) || current.head_sha
 
-    case fingerprint(record, current.head_sha, opts) do
+    case fingerprint(record, approved, opts) do
       {:ok, fingerprint} ->
-        %{current | approved_head_sha: current.head_sha, approved_fingerprint: fingerprint}
+        %{current | approved_head_sha: approved, approved_fingerprint: fingerprint}
 
       # Nothing to read the diff in, now or later: `compare/3` leaves such a head alone.
       {:error, :no_workspace} ->
-        %{current | approved_head_sha: current.head_sha, approved_fingerprint: nil}
+        %{current | approved_head_sha: approved, approved_fingerprint: nil}
 
       {:error, reason} ->
-        Logger.warning("Auto-merge #{identifier(record)}: could not fingerprint the approved diff; a new head will be re-reviewed commit_sha=#{current.head_sha}: #{inspect(reason)}")
-        %{current | approved_head_sha: current.head_sha, approved_fingerprint: nil}
+        Logger.warning("Auto-merge #{identifier(record)}: could not fingerprint the approved diff; a new head will be re-reviewed commit_sha=#{approved}: #{inspect(reason)}")
+        %{current | approved_head_sha: approved, approved_fingerprint: nil}
     end
   end
+
+  defp gate_approved_sha(record, opts) do
+    case Keyword.get(opts, :run_store, RunStore).list_ci_checks(Map.get(record, :repo_key)) do
+      checks when is_list(checks) ->
+        Enum.find_value(checks, &approved_by_gate(&1, Map.get(record, :issue_id)))
+
+      {:error, reason} ->
+        Logger.warning("Auto-merge #{identifier(record)}: could not read the acceptance gate's verdict; the current head is approved: #{inspect(reason)}")
+        nil
+    end
+  end
+
+  defp approved_by_gate(%{issue_id: issue_id, gate_verdict: "approve", gate_sha: sha}, issue_id), do: sha
+  defp approved_by_gate(_check, _issue_id), do: nil
 
   defp compare(current, record, opts) do
     case fingerprint(record, current.head_sha, opts) do
@@ -431,8 +454,16 @@ defmodule SymphonyElixir.AutoMerge do
   @doc "Marks the state when the PR poller sends a conflicting PR down the conflict path."
   @spec conflict(term(), String.t() | nil, DateTime.t()) :: t()
   def conflict(previous, head, %DateTime{} = now) do
-    %{for_head(previous, head, now) | state: "conflict", reason: "the PR conflicts with the base branch", approved_head_sha: nil, approved_fingerprint: nil}
+    %{for_head(previous, head, now) | state: "conflict", reason: "the PR conflicts with the base branch"}
   end
+
+  @doc """
+  Drops the approval recorded for a `Merging` stay (see `step/5`), once the issue has left
+  `Merging`: the next stay records its own. Until then a conflict keeps it, so a fix pushed while
+  the issue is still in `Merging` is re-reviewed.
+  """
+  @spec drop_approval(t()) :: t()
+  def drop_approval(auto_merge), do: %{auto_merge | approved_head_sha: nil, approved_fingerprint: nil}
 
   @doc """
   Turns GitHub auto-merge off for a PR going down the conflict path, before the conflict-fix

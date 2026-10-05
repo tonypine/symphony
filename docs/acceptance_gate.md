@@ -195,10 +195,14 @@ With `mode: enforce`, set globally or for one repository, Auto Review applies th
   verdicts stay advisory, and the issue goes where QA sent it.
 - **Re-review in Merging.** A push after approval is judged again before it lands
   (`AutoMerge.step/5`). The first PR poll of a Merging stay, whether the gate or a person moved the
-  issue there, records the head and a fingerprint of the PR's own diff on the PR review record
-  (`auto_merge.approved_head_sha`, `approved_fingerprint`): `git patch-id --stable` over
+  issue there, records the approved head and a fingerprint of the PR's own diff on the PR review
+  record (`auto_merge.approved_head_sha`, `approved_fingerprint`): `git patch-id --stable` over
   `git diff <merge-base(base, head)> head`, read in the issue's workspace
-  (`AutoMerge.Fingerprint`). A later head with the same fingerprint, such as Symphony's
+  (`AutoMerge.Fingerprint`). The approved head is the one the gate approved (`gate_sha` on the CI
+  check record), so a push between the gate's approve and that poll is judged too; after a
+  person's move with no gate `approve` it is the current head. A conflict keeps the approval
+  until the conflict path moves the issue out of Merging, so a fix pushed while it is still there
+  (an active run, the retry limit) is judged too. A later head with the same fingerprint, such as Symphony's
   update-branch merge of the base or a clean rebase, keeps the approval and auto-merge. Any other
   head (a CI fix, a conflict fix, a landing agent's commit, a person's push), or one whose
   fingerprint can't be read, turns GitHub auto-merge off and moves the issue back to Auto Review,
