@@ -151,6 +151,10 @@ defmodule SymphonyElixir.AgentSandboxConfig do
   def deny_read_paths, do: @deny_read_paths
 
   @doc false
+  @spec codex_runtime_deny_read_paths() :: [String.t()]
+  def codex_runtime_deny_read_paths, do: @codex_runtime_deny_read_paths
+
+  @doc false
   @spec deny_write_paths() :: [String.t()]
   def deny_write_paths, do: @deny_write_paths
 

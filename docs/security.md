@@ -246,7 +246,9 @@ under macOS Seatbelt (`sandbox-exec`), with limits like the agent's sandbox:
 
 - **Reads.** The credential and config stores the agent can't read are denied too (`~/.ssh`,
   `~/.aws`, `~/.config/gh`, the keychains, shell startup and history files, and the rest of the
-  read-deny list in [Sandbox defaults](#sandbox-defaults-for-the-agent-process)).
+  read-deny list in [Sandbox defaults](#sandbox-defaults-for-the-agent-process)), and so are
+  the Codex files a Codex agent can't read (`~/.codex/auth.json`, `~/.codex/config.toml`) and
+  every per-run `CODEX_HOME` Symphony writes for a Codex agent.
   `workspace.sandbox.allow_read_paths` does not apply to it.
 - **Writes.** Only the checkout, a temp folder of its own (`$TMPDIR`, removed when the server
   stops), the agent cache folder, the per-user `TemporaryItems` dir and the `/dev` sinks are
@@ -258,6 +260,11 @@ under macOS Seatbelt (`sandbox-exec`), with limits like the agent's sandbox:
   built-in dependency hosts plus `agent.permissions.network.allowed_domains`, less
   `denied_domains`, and to none with `mode: block`. The model provider hosts are left out. Any
   other host gets a 403.
+- **Processes outside the sandbox.** A process launchd starts is not in the sandbox, so the
+  ways to ask it for one are denied: Apple Events (`osascript -e 'tell application "Terminal"
+  to do script ...'`), LaunchServices (`open -a Terminal x.command`) and launchd jobs
+  (`launchctl submit`). `/usr/bin/open`, `/usr/bin/osascript` and `/bin/launchctl` can't run at
+  all.
 - **Environment.** The server gets the agent's environment, not the operator's: no
   `LINEAR_API_KEY`, provider keys, GitHub tokens or `SSH_AUTH_SOCK`. Hex and `elixir_make` use
   the agent cache folder.

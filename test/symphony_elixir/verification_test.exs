@@ -340,6 +340,34 @@ defmodule SymphonyElixir.VerificationTest do
       assert http_ok?("http://127.0.0.1:#{port}/")
       assert :ok = DevServer.stop(pid)
     end
+
+    # Builds this checkout with `mix build` (in `_build/dev` and `bin/`) before it serves, as
+    # an Auto Review `web` pass does, so it can take minutes.
+    @tag :seatbelt
+    @tag timeout: 900_000
+    test "serves the dashboard with scripts/qa-dashboard-server.sh from inside the real sandbox", %{port: port} do
+      config = %DevServerConfig{
+        start_cmd: "scripts/qa-dashboard-server.sh",
+        health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/api/v1/state",
+        health_timeout_ms: 600_000,
+        stop_signal: "TERM",
+        stop_timeout_ms: 5_000
+      }
+
+      assert {:ok, pid} =
+               DevServer.start(
+                 run_id: "qa-dashboard-seatbelt-run",
+                 port: port,
+                 workspace: File.cwd!(),
+                 config: config,
+                 env: Verification.env(%{port: port}),
+                 owner: self(),
+                 sandbox: []
+               )
+
+      assert http_ok?("http://127.0.0.1:#{port}/")
+      assert :ok = DevServer.stop(pid)
+    end
   end
 
   test "a dev server reaches the agent's dependency hosts, without the model providers" do

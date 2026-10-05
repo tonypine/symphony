@@ -59,12 +59,14 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
       profile = DevServerSandbox.profile(workspace, [workspace], [], home)
       deny_read = profile |> String.split(~r/\n(?=\()/) |> Enum.find(&String.starts_with?(&1, "(deny file-read*"))
 
-      for path <- AgentSandboxConfig.deny_read_paths() do
+      for path <- AgentSandboxConfig.deny_read_paths() ++ AgentSandboxConfig.codex_runtime_deny_read_paths() do
         expected = String.replace_prefix(path, "~", real(home))
         assert deny_read =~ ~s{(subpath "#{expected}")}
       end
 
       assert deny_read =~ ~s{(subpath "#{real(home)}/.ssh")}
+      assert deny_read =~ ~s{(subpath "#{real(home)}/.codex/auth.json")}
+      assert deny_read =~ ~s{(prefix "#{real(System.tmp_dir!())}/symphony-codex-home-")}
     end
 
     test "allows writes only to the given paths and the /dev sinks, then takes the protected paths back", %{workspace: workspace, tmp_dir: tmp_dir, home: home} do
@@ -81,7 +83,12 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
                ~s{(allow network-bind (local ip "localhost:*"))},
                ~s{(allow network-inbound (local ip "localhost:*"))},
                ~s{(allow network-outbound (remote ip "localhost:*"))},
-               ~s{(allow network-outbound\n  (literal "/private/var/run/mDNSResponder"))}
+               ~s{(allow network-outbound\n  (literal "/private/var/run/mDNSResponder"))},
+               "(deny appleevent-send)",
+               "(deny lsopen)",
+               "(deny job-creation)",
+               "(deny mach-lookup\n  " <> deny_mach_lookup,
+               "(deny process-exec\n  " <> deny_exec
              ] = String.split(profile, ~r/\n(?=\()/)
 
       assert allow_write ==
@@ -100,6 +107,15 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
                """
 
       assert deny_write == ~s{(subpath "#{real(workspace)}/.git"))}
+
+      assert deny_mach_lookup ==
+               """
+               (global-name "com.apple.coreservices.launchservicesd")
+                 (global-name "com.apple.coreservices.appleevents")
+                 (global-name-prefix "com.apple.lsd."))\
+               """
+
+      assert deny_exec == ~s{(literal "/usr/bin/open")\n  (literal "/usr/bin/osascript")\n  (literal "/bin/launchctl"))}
     end
 
     test "gives paths with their links resolved and quotes them", %{root: root, home: home} do
@@ -179,6 +195,39 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
       assert {"HTTP/1.1 403 Forbidden: example.com is not on" <> _rest, 0} = connect_through_proxy.("example.com")
 
       :gen_tcp.close(listen)
+    end
+
+    test "a command can't have launchd start a process outside the sandbox", %{workspace: workspace, tmp_dir: tmp_dir, home: home} do
+      profile = DevServerSandbox.profile(workspace, [workspace, tmp_dir], [], home)
+      marker = Path.join(home, "escaped")
+      File.write!(Path.join(workspace, "x.command"), "#!/bin/sh\ntouch #{marker}\n")
+      File.chmod!(Path.join(workspace, "x.command"), 0o755)
+      label = "symphony.dev-server-sandbox-test.#{System.unique_integer([:positive])}"
+      on_exit(fn -> System.cmd("/bin/launchctl", ["remove", label], stderr_to_stdout: true) end)
+
+      open = ~s{open -g -a Terminal ./x.command}
+      apple_event = ~s{osascript -e 'tell application "Terminal" to do script "touch #{marker}"'}
+      launchd_job = ~s{launchctl submit -l #{label} -- /usr/bin/touch #{marker}}
+
+      # The tools themselves can't run.
+      for script <- [open, apple_event, launchd_job] do
+        assert {output, status} = seatbelt(profile, workspace, script)
+        assert status != 0
+        assert output =~ "Operation not permitted"
+      end
+
+      # Copies of them can, but LaunchServices, Apple Events and launchd job creation are denied.
+      for tool <- ~w(/usr/bin/open /usr/bin/osascript /bin/launchctl) do
+        File.cp!(tool, Path.join(tmp_dir, Path.basename(tool)))
+      end
+
+      for script <- [open, apple_event, launchd_job] do
+        assert {_output, status} = seatbelt(profile, workspace, "PATH=#{tmp_dir}:$PATH; #{script}")
+        assert status != 0
+      end
+
+      Process.sleep(1_000)
+      refute File.exists?(marker)
     end
 
     test "a command can't listen on a non-loopback address", %{workspace: workspace, tmp_dir: tmp_dir, home: home} do

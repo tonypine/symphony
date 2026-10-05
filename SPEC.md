@@ -702,8 +702,8 @@ Fields:
   - The command runs the workspace's code, which the agent can change, so the implementation MUST
     run it in an OS sandbox no weaker than the agent's: the agent's credential read-deny list,
     writes limited to the workspace and folders of its own, the agent's environment without host
-    secrets, and network limited to loopback plus an egress proxy that only reaches allowlisted
-    dependency hosts. Where no such sandbox is available, the run fails with `verification_failed`
+    secrets, network limited to loopback plus an egress proxy that only reaches allowlisted
+    dependency hosts, and no way to have the OS start a process outside the sandbox. Where no such sandbox is available, the run fails with `verification_failed`
     instead of starting the command unsandboxed.
 - `dev_server.health_check_url` (string, REQUIRED when `start_cmd` is set)
   - Supports `$SYMPHONY_VERIFICATION_PORT` and `${SYMPHONY_VERIFICATION_PORT}` substitution.

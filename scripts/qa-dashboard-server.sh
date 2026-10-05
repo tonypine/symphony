@@ -25,8 +25,10 @@ EOF
 cd "$repo"
 set --
 if command -v mise >/dev/null 2>&1; then
-  # The dev server's sandbox can't write mise's trust store, which `mise trust` and an untrusted
-  # `mise exec` both need, so this checkout's config is trusted for this process only.
+  # The dev server's sandbox can't write mise's state and cache folders in the home folder, so
+  # mise keeps them in this run's temp folder, and this checkout's config is trusted for this
+  # process only (an untrusted `mise exec` would write the trust store).
+  export MISE_STATE_DIR="$root/mise-state" MISE_CACHE_DIR="$root/mise-cache"
   export MISE_TRUSTED_CONFIG_PATHS="$repo${MISE_TRUSTED_CONFIG_PATHS:+:$MISE_TRUSTED_CONFIG_PATHS}"
   set -- mise exec --
 fi
