@@ -2675,8 +2675,8 @@ Algorithm summary:
 7. If `created_now=true`, run `hooks.after_create` if configured. Also run it for a reused
    workspace whose `after_create` has not yet succeeded (it failed or timed out), so the agent does
    not start in a half-prepared workspace. This applies to SSH worker workspaces too.
-   Hooks run outside the agent sandbox, so a local `worktree` workspace runs `after_create` detached
-   at the base commit and is checked out on its branch again afterwards. The worktree's ignored files are removed before the hook; one with uncommitted
+   Hooks run outside the agent sandbox, so a `worktree` workspace, local or on an SSH worker, runs
+   `after_create` detached at the base commit and is checked out on its branch again afterwards. The worktree's ignored files are removed before the hook; one with uncommitted
    changes, or no base commit, skips the hook with a warning and keeps its pending marker.
 
 Notes:

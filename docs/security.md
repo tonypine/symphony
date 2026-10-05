@@ -100,19 +100,19 @@ the agent's checkout. But a hook that runs the repo's build tool (`mix`, `npm`, 
 runs whatever code the checkout holds: any `mix` command evaluates `mix.exs`, and
 `mix deps.compile` runs the dependencies' build scripts.
 
-- **`after_create` in a local worktree runs on the base branch's tree.** A worktree can be created
-  on a branch an agent already pushed to: a rework or PR run checks out the PR head, and a removed
-  workspace is made again on its existing `auto/<issue>` branch. So Symphony detaches the worktree
-  at the base commit (the repository's `base_branch`, else a `workspace.source` clone's
-  `origin/HEAD`, else the source repo's `HEAD`), runs the hook, and checks the branch out again. Before the hook, Symphony removes the ignored
+- **`after_create` in a worktree runs on the base branch's tree,** on this machine and on an SSH
+  worker. A worktree can be created on a branch an agent already pushed to: a rework or PR run
+  checks out the PR head, and a removed workspace is made again on its existing `auto/<issue>`
+  branch. So Symphony detaches the worktree at the base commit (the repository's `base_branch`, else a `workspace.source` clone's
+  `origin/HEAD`, else the source repo's `HEAD`; on an SSH worker, `origin/<base_branch>`, else the
+  worker repo's `HEAD`), runs the hook, and checks the branch out again, with repo hooks off. Before the hook, Symphony removes the ignored
   files in the worktree (`git clean -ffdx`), so a reused worktree's hook never loads the `deps/` or
   `_build/` an agent wrote there. A worktree with uncommitted changes, or one whose base commit
   can't be resolved, skips the hook with a warning and keeps its pending marker. The
   hook installs the base branch's dependencies, so a branch that changes its lock file runs on
   them until the agent fetches its own.
-- **`after_create` on an SSH worker, or in a `clone`-strategy workspace,** runs on whatever the
-  workspace holds (TP-524 covers SSH workers). A hook that clones the repo itself should install
-  dependencies before it checks out an agent's branch.
+- **`after_create` in a `clone`-strategy workspace** runs on whatever the workspace holds. A hook
+  that clones the repo itself should install dependencies before it checks out an agent's branch.
 - **`before_run`, `after_run` and `before_remove` run in the agent's checkout,** after the agent
   has written to it: a branch's files, and also ignored ones such as `deps/` and `_build/`. They
   should run nothing from the checkout: no build tool, no script from the repo, and no

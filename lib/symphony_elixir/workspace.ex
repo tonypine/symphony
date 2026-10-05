@@ -24,6 +24,10 @@ defmodule SymphonyElixir.Workspace do
     "protocol.ext.allow=never",
     "protocol.file.allow=user"
   ]
+  # Exit status and output line of an SSH worker's `after_create` wrapper that
+  # skipped the hook because it can't run on the base branch tree.
+  @remote_after_create_skipped_status 47
+  @remote_after_create_skipped_line "workspace_after_create_skipped"
   @safe_git_env [
     {"GIT_CONFIG_GLOBAL", "/dev/null"},
     {"GIT_CONFIG_SYSTEM", "/dev/null"},
@@ -1600,7 +1604,8 @@ defmodule SymphonyElixir.Workspace do
   # earlier hook left detached goes back on its branch. Ignored files (`deps/`,
   # `_build/`) an agent wrote in a reused worktree are removed first: the hook
   # installs them again. A worktree with changes of its own can't be switched, so
-  # its hook is skipped, and its pending marker kept.
+  # its hook is skipped, and its pending marker kept. On an SSH worker the hook's
+  # wrapper script does the same (see `remote_base_tree_lines/3`).
   defp run_on_base_tree(workspace, issue_context, nil, run) do
     settings = settings_for_issue_context(issue_context)
 
@@ -1690,7 +1695,7 @@ defmodule SymphonyElixir.Workspace do
   defp run_after_create_hook_with_retry(%Hooks{after_create: command} = hooks, workspace, issue_context, worker_host) do
     timeout_ms = Hooks.after_create_timeout_ms(hooks)
     env = workspace_ref_hook_env(issue_context)
-    command = after_create_command(command, workspace, worker_host)
+    command = after_create_command(command, workspace, issue_context, worker_host)
     run = fn -> run_hook(command, workspace, issue_context, "after_create", worker_host, timeout_ms, env) end
 
     case run.() do
@@ -1711,7 +1716,7 @@ defmodule SymphonyElixir.Workspace do
   # workspace. The marker sits beside the workspace, not in it, so a hook that
   # clones into the empty workspace still can, and it goes when the workspace is
   # removed or trashed. On an SSH worker the prepare script writes the marker for
-  # a workspace it creates, the hook keeps it (see `after_create_command/3`), and
+  # a workspace it creates, the hook keeps it (see `after_create_command/4`), and
   # the next prepare script reads it.
   defp after_create_pending_marker(workspace) do
     Path.join(Path.dirname(workspace), ".#{Path.basename(workspace)}.after_create_pending")
@@ -1732,23 +1737,69 @@ defmodule SymphonyElixir.Workspace do
   # still be running on the worker, and still finish there: the pid lets the next
   # run's prepare script tell such a hook from one that died, and wait for it
   # rather than start a second copy beside it.
-  defp after_create_command(command, _workspace, nil), do: command
+  defp after_create_command(command, _workspace, _issue_context, nil), do: command
 
-  defp after_create_command(command, workspace, _worker_host) do
+  defp after_create_command(command, workspace, issue_context, _worker_host) do
     marker = shell_escape(after_create_pending_marker(workspace))
+    {detach, restore} = remote_base_tree_lines(settings_for_issue_context(issue_context), issue_context, marker)
 
-    """
-    {
-    printf '%s\\n' "$$" > #{marker} || exit 1
-    (
-    #{command}
-    )
-    after_create_status=$?
-    if [ "$after_create_status" -eq 0 ]; then rm -f #{marker}; fi
-    exit "$after_create_status"
-    }\
-    """
+    [
+      "{",
+      ~s(printf '%s\\n' "$$" > #{marker} || exit 1),
+      detach,
+      "(",
+      command,
+      ")",
+      "after_create_status=$?",
+      restore,
+      ~s(if [ "$after_create_status" -eq 0 ]; then rm -f #{marker}; fi),
+      ~s(exit "$after_create_status"),
+      "}"
+    ]
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join("\n")
   end
+
+  # The remote side of `run_on_base_tree/4`: shell lines around a worktree's hook
+  # that detach it at the base commit (`origin/<base_branch>`, else the worker
+  # repo's `HEAD`) and put it back on its branch afterwards, with repo hooks off.
+  # A worktree with changes of its own, or no base commit, skips the hook: the
+  # wrapper empties the marker, so it reads as pending rather than running, prints
+  # the skip line and exits 47, which `run_hook/7` logs as a skip rather than a
+  # failure.
+  defp remote_base_tree_lines(%{workspace: %{strategy: "worktree", repo: repo}}, issue_context, marker) do
+    git = Enum.map_join(@safe_git_config_overrides, " ", &"-c #{shell_escape(&1)}")
+    base_refs = Enum.map_join(List.wrap(remote_worktree_create_base_ref(issue_context, nil)) ++ ["HEAD"], " ", &shell_escape/1)
+    branch = shell_escape(worktree_branch(issue_context))
+
+    detach = """
+    after_create_git() { git #{git} "$@"; }
+    after_create_skip() {
+      : > #{marker}
+      printf '#{@remote_after_create_skipped_line}\\t%s\\n' "$1"
+      exit #{@remote_after_create_skipped_status}
+    }
+    #{remote_shell_assign("after_create_repo", repo || "")}
+    after_create_base=
+    if [ -n "$after_create_repo" ]; then
+      for after_create_ref in #{base_refs}; do
+        after_create_base=$(after_create_git -C "$after_create_repo" rev-parse --verify --quiet --end-of-options "$after_create_ref^{commit}") && break
+        after_create_base=
+      done
+    fi
+    [ -n "$after_create_base" ] || after_create_skip no_base_commit
+    after_create_changes=$(after_create_git status --porcelain=v1 --untracked-files=all) || after_create_skip uncommitted_changes
+    [ -z "$after_create_changes" ] || after_create_skip uncommitted_changes
+    after_create_git checkout --quiet --detach "$after_create_base" || exit 1
+    after_create_git clean -ffdxq || { after_create_git checkout --quiet --force #{branch}; exit 1; }\
+    """
+
+    restore = ~s(after_create_git checkout --quiet --force #{branch} || { [ "$after_create_status" -ne 0 ] || after_create_status=1; })
+
+    {detach, restore}
+  end
+
+  defp remote_base_tree_lines(_settings, _issue_context, _marker), do: {"", ""}
 
   # Shell lines for the remote prepare scripts. The marker path matches
   # `after_create_pending_marker/1`. A marker naming a live process is a hook an
@@ -2006,6 +2057,9 @@ defmodule SymphonyElixir.Workspace do
     notify_hook(issue_context, {:finished, hook_name})
 
     case result do
+      {:ok, cmd_result} when hook_name == "after_create" and is_binary(worker_host) ->
+        handle_remote_after_create_result(cmd_result, workspace, issue_context)
+
       {:ok, cmd_result} ->
         handle_hook_command_result(cmd_result, workspace, issue_context, hook_name)
 
@@ -2020,6 +2074,22 @@ defmodule SymphonyElixir.Workspace do
         {:error, reason}
     end
   end
+
+  defp handle_remote_after_create_result(cmd_result, workspace, issue_context) do
+    case remote_after_create_skip_reason(cmd_result) do
+      nil -> handle_hook_command_result(cmd_result, workspace, issue_context, "after_create")
+      reason -> skip_base_tree_hook(workspace, issue_context, worktree_branch(issue_context), reason)
+    end
+  end
+
+  defp remote_after_create_skip_reason({output, @remote_after_create_skipped_status}) do
+    case Regex.run(~r/^#{@remote_after_create_skipped_line}\t(\w+)$/m, output) do
+      [_line, reason] -> reason
+      nil -> nil
+    end
+  end
+
+  defp remote_after_create_skip_reason(_cmd_result), do: nil
 
   # A hook runs under its own timeout, so the run's owner (the orchestrator) holds its
   # stall and watchdog clocks while one runs.

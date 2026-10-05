@@ -2130,9 +2130,9 @@ hooks:
   minutes) and the watchdog (`watchdog.no_progress_threshold_ms`) wait for the hook's own timeout,
   so a long install isn't ended as a stalled run. Their clocks start again when the hook ends.
 - A run that is stopped while a hook runs on this machine stops the hook too.
-- Hooks run outside the agent sandbox, so a local worktree's `after_create` runs on the base
-  branch's tree: even when the worktree is created on a branch an agent already pushed to (a
-  rework, a PR run, a workspace made again), Symphony detaches it at the base commit for the hook
+- Hooks run outside the agent sandbox, so a worktree's `after_create`, on this machine or an SSH
+  worker, runs on the base branch's tree: even when the worktree is created on a branch an agent
+  already pushed to (a rework, a PR run, a workspace made again), Symphony detaches it at the base commit for the hook
   and checks the branch out again afterwards. The worktree's ignored files (`deps/`, `_build/`) are
   removed before the hook, which installs them again. A worktree with uncommitted changes skips the
   hook with a warning. `before_run`, `after_run` and `before_remove` run in the agent's checkout, so
