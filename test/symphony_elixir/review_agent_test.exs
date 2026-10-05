@@ -786,6 +786,38 @@ defmodule SymphonyElixir.ReviewAgentTest do
     end
   end
 
+  # An unreachable model API is the reviewer being unavailable: never inconclusive, never a
+  # failed review, whichever turn it hits.
+  test "evaluate reports an unreachable model API from the review, self-check or re-quote turn as it is" do
+    test_root = unique_tmp("symphony-elixir-review-agent-api-unreachable")
+    unreachable = {:error, {:model_api_unreachable, %{provider: "anthropic", source: :api_unreachable, error: "ENOTFOUND"}}}
+
+    try do
+      repo = git_repo_with_change!(test_root)
+      unverifiable = block_response([finding_json(%{"quoted_snippet" => "a misremembered line"})])
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        review_agent: %{enabled: true, kind: "codex", command: "codex app-server"}
+      )
+
+      review = [unreachable]
+      self_check = [block_response([finding_json()]), unreachable]
+      requote = [unverifiable, unverifiable, unreachable]
+
+      for responses <- [review, self_check, requote] do
+        put_sequence_responses!(responses)
+
+        result = ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+        assert result == unreachable
+        # The unreachable turn is the last one taken.
+        assert Application.fetch_env!(:symphony_elixir, :review_agent_sequence_count) == length(responses)
+      end
+    after
+      clear_sequence_responses!()
+      File.rm_rf(test_root)
+    end
+  end
+
   test "evaluate does not re-quote a verdict that gave no findings" do
     test_root = unique_tmp("symphony-elixir-review-agent-requote-no-findings")
 

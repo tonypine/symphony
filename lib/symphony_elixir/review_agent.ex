@@ -508,6 +508,9 @@ defmodule SymphonyElixir.ReviewAgent do
         |> pick_review_response()
         |> classify_review_turn_result()
 
+      {:error, {:model_api_unreachable, _info} = reason} ->
+        {:error, reason}
+
       {:error, reason} ->
         {:error, classify_review_turn_failure(reason)}
     end
@@ -559,6 +562,9 @@ defmodule SymphonyElixir.ReviewAgent do
 
       {:error, {:review_agent_inconclusive, _reason} = reason} ->
         {:error, reason}
+
+      {:error, {:model_api_unreachable, _info}} = unreachable ->
+        unreachable
     end
   end
 
@@ -582,6 +588,9 @@ defmodule SymphonyElixir.ReviewAgent do
     case run_review_turn(agent_module, session, prompt, issue, message_collector, turn_opts) do
       {:ok, requoted} ->
         validate_findings(requoted, source)
+
+      {:error, {:model_api_unreachable, _info}} = unreachable ->
+        unreachable
 
       {:error, reason} ->
         Logger.info("Reviewer agent re-quote turn failed for #{issue.identifier || issue.id} reason=#{inspect(reason)}")

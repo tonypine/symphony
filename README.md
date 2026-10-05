@@ -414,6 +414,16 @@ every provider in use is held. Slack and webhook channels get one `usage_limit_p
 the hold starts and one `usage_limit_resumed` message when it clears, which is once Claude accepts
 the first run, not when it starts.
 
+When Claude can't reach its API at all (the network or DNS is down, so a turn ends on
+`API Error: Can't reach the API server … (ENOTFOUND)`), Symphony holds Claude runs the same way,
+`auto_pause` or not, instead of reading the turn as finished: no idle turn is counted and no issue
+is parked. The pre-push reviewer, QA and the acceptance gate hold too, so a push never goes ahead
+without a review and no verdict is recorded. One held run probes the API after a minute, then after
+twice as long each time it still fails (up to `unknown_reset_retry_seconds`). The log says
+`Model API unreachable (ENOTFOUND); holding dispatch` once, and the dashboards show
+`Paused: Claude API unreachable (ENOTFOUND), retries ~14:05`; `/api/v1/state` lists the hold
+under `usage_limits` with `reason: model_api_unreachable`.
+
 To leave part of the Claude limit for your own sessions, set
 `agent.usage_limit.headroom_utilization` (for example `0.9`; off by default). Once Claude reports
 that share of a window used, Symphony holds new Claude runs until the window resets, while runs in
