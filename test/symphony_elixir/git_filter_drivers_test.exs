@@ -163,4 +163,99 @@ defmodule SymphonyElixir.GitFilterDriversTest do
     assert {:ok, args} = GitFilterDrivers.config_args(["status"], [], reader({config, 0, ""}, files))
     assert args == Enum.flat_map(Enum.sort(for(i <- 1..10, do: "d#{i}")), &driver_args/1)
   end
+
+  describe "shell_functions/0" do
+    setup %{root: root} do
+      repo = Path.join(root, "repo")
+      File.mkdir_p!(repo)
+      git!(repo, ["init", "-q", "-b", "main"])
+      git!(repo, ["config", "user.name", "Test User"])
+      git!(repo, ["config", "user.email", "test@example.com"])
+      File.write!(Path.join(repo, ".gitattributes"), "*.txt filter=deep\n*.md filter=home\n")
+      File.write!(Path.join(repo, "notes.txt"), "stored\n")
+      File.write!(Path.join(repo, "notes.md"), "stored\n")
+      git!(repo, ["add", "."])
+      git!(repo, ["commit", "-q", "-m", "attributes"])
+      File.mkdir_p!(Path.join([repo, ".git", "inc"]))
+      %{repo: repo, proof: Path.join(root, "SYMPHONY_FILTER_PWNED")}
+    end
+
+    test "blanks the drivers of every file the repo config includes, whatever the condition", %{root: root, repo: repo, proof: proof} do
+      home = Path.join(root, "home")
+      File.mkdir_p!(home)
+      inc = Path.join([repo, ".git", "inc"])
+
+      # `a` includes itself by another spelling, and `b` through a relative path; neither applies here.
+      File.write!(Path.join(inc, "a"), "[filter \"once\"]\n\tclean = cat\n[include]\n\tpath = ../inc/./a\n\tpath = b\n")
+      File.write!(Path.join(inc, "b"), "[filter \"deep\"]\n\tsmudge = touch '#{proof}'; cat\n\trequired = true\n")
+      File.write!(Path.join(home, "drivers"), "[filter \"home\"]\n\tsmudge = touch '#{proof}'; cat\n")
+      git!(repo, ["config", "includeIf.gitdir:/nowhere/.path", "inc/a"])
+      git!(repo, ["config", "includeIf.onbranch:nowhere.path", "~/drivers"])
+
+      File.rm!(Path.join(repo, "notes.txt"))
+      File.rm!(Path.join(repo, "notes.md"))
+
+      assert {output, 0} =
+               run_shell(~s(symphony_git_filter_keys "$repo"; symphony_git "$repo" checkout -- notes.txt notes.md), repo, home)
+
+      assert output |> String.split("\n", trim: true) |> Enum.sort() ==
+               ["filter.deep.required", "filter.deep.smudge", "filter.home.smudge", "filter.once.clean"]
+
+      assert File.read!(Path.join(repo, "notes.txt")) == "stored\n"
+      assert File.read!(Path.join(repo, "notes.md")) == "stored\n"
+      refute File.exists?(proof)
+    end
+
+    test "refuses the command when an include path holds a newline", %{repo: repo, proof: proof} do
+      git!(repo, ["config", "filter.deep.smudge", "touch '#{proof}'; cat"])
+      git!(repo, ["config", "includeIf.gitdir:/nowhere/.path", "a\nb"])
+
+      assert {output, 128} = run_shell(~s(symphony_git "$repo" status 2>&1), repo)
+      assert output =~ "symphony: refusing to run git, "
+      assert output =~ "includes a path it can't be sure of"
+
+      # Subcommands that touch no work-tree file skip the scan.
+      assert {_output, 0} = run_shell(~s(symphony_git "$repo" rev-parse HEAD), repo)
+      refute File.exists?(proof)
+    end
+
+    test "refuses the command when one of the repo's own config files can't be read", %{repo: repo} do
+      # Git reads `config.worktree` only with `extensions.worktreeConfig`; the scan reads it anyway.
+      File.write!(Path.join([repo, ".git", "config.worktree"]), "[broken\n")
+
+      assert {output, 128} = run_shell(~s(symphony_git "$repo" status 2>&1), repo)
+      assert output =~ ~r/symphony: refusing to run git, reading .*config\.worktree failed/
+    end
+
+    test "an included file git can't read adds no driver", %{repo: repo} do
+      File.write!(Path.join([repo, ".git", "inc", "broken"]), "[broken\n")
+      git!(repo, ["config", "includeIf.gitdir:/nowhere/.path", "inc/broken"])
+
+      assert {"", 0} = run_shell(~s(symphony_git_filter_keys "$repo" | grep . || true; symphony_git "$repo" status --porcelain), repo)
+    end
+
+    test "stops following includes at git's depth limit", %{repo: repo} do
+      inc = Path.join([repo, ".git", "inc"])
+
+      for i <- 1..12 do
+        File.write!(Path.join(inc, "#{i}"), "[filter \"d#{i}\"]\n\tsmudge = cat\n[include]\n\tpath = #{i + 1}\n")
+      end
+
+      git!(repo, ["config", "includeIf.gitdir:/nowhere/.path", "inc/1"])
+
+      assert {output, 0} = run_shell(~s(symphony_git_filter_keys "$repo"), repo)
+      assert output |> String.split("\n", trim: true) |> Enum.sort() == Enum.sort(for i <- 1..10, do: "filter.d#{i}.smudge")
+    end
+  end
+
+  defp run_shell(body, repo, home \\ System.user_home!()) do
+    script = Enum.join(["set -eu", SymphonyElixir.Workspace.remote_safe_git_functions(), body], "\n")
+    # stderr stays out of the output: the macOS git shim's cache warnings land there in a sandbox.
+    System.cmd("sh", ["-c", script], env: [{"repo", repo}, {"HOME", home}])
+  end
+
+  defp git!(repo, args) do
+    {output, 0} = System.cmd("git", ["-C", repo | args], stderr_to_stdout: true)
+    output
+  end
 end
