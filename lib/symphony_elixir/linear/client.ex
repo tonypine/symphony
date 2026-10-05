@@ -1137,10 +1137,10 @@ defmodule SymphonyElixir.Linear.Client do
 
   defp decode_issue_enrichment_response(_unknown), do: {:error, :linear_unknown_payload}
 
-  # The issue reads load one page of attachments (`@attachment_page_size`). For each issue whose loaded
-  # attachments hold no in-flight PR but have more pages, read the next pages until one does, so a
-  # PR attachment pushed past the first page (by QA screenshots, say) still gives the issue its PR
-  # URL. An issue whose PR is on the first page, or that has no more pages, costs no request.
+  # The issue reads load one page of attachments (`@attachment_page_size`). For each issue whose page is
+  # full (`hasNextPage`), read the remaining pages, at most `@attachment_follow_up_max_pages` of them,
+  # so every attachment is seen and a PR attachment pushed past the first page (by QA screenshots,
+  # say) still gives the issue its PR URL. An issue with no more pages costs no request.
   defp complete_pull_request_attachments(%{"data" => %{"issues" => %{"nodes" => nodes}}} = body, graphql_fun)
        when is_list(nodes) do
     put_in(body, ["data", "issues", "nodes"], Enum.map(nodes, &complete_issue_attachments(&1, graphql_fun)))
@@ -1153,19 +1153,20 @@ defmodule SymphonyElixir.Linear.Client do
   defp complete_pull_request_attachments(body, _graphql_fun), do: body
 
   defp complete_issue_attachments(issue, graphql_fun, pages_left \\ @attachment_follow_up_max_pages) do
-    with %{"id" => id, "attachments" => %{"nodes" => nodes, "pageInfo" => %{"hasNextPage" => true, "endCursor" => cursor}}}
-         when is_binary(id) and is_list(nodes) and is_binary(cursor) <- issue,
-         false <- Enum.any?(nodes, &in_flight_pull_request_attachment?/1) do
-      read_next_attachment_page(issue, cursor, graphql_fun, pages_left)
-    else
-      _complete -> issue
+    case issue do
+      %{"id" => id, "attachments" => %{"nodes" => nodes, "pageInfo" => %{"hasNextPage" => true, "endCursor" => cursor}}}
+      when is_binary(id) and is_list(nodes) and is_binary(cursor) ->
+        read_next_attachment_page(issue, cursor, graphql_fun, pages_left)
+
+      _complete ->
+        issue
     end
   end
 
   defp read_next_attachment_page(issue, _cursor, _graphql_fun, 0) do
     Logger.warning(
       "Stopped reading Linear attachments for #{attachment_issue_context(issue)} after " <>
-        "#{@attachment_follow_up_max_pages} more pages without finding a PR attachment"
+        "#{@attachment_follow_up_max_pages} more pages; later attachments were not read"
     )
 
     issue
@@ -1378,13 +1379,6 @@ defmodule SymphonyElixir.Linear.Client do
   end
 
   defp finished_pull_request_attachment?(_attachment), do: false
-
-  # Whether `extract_pr_urls/1` would read a PR URL from this attachment, without its warning.
-  defp in_flight_pull_request_attachment?(%{"url" => url} = attachment) when is_binary(url) do
-    !finished_pull_request_attachment?(attachment) and github_pull_request_url(url) == :ok
-  end
-
-  defp in_flight_pull_request_attachment?(_attachment), do: false
 
   defp pull_request_attachment_url(%{"url" => url} = attachment) when is_binary(url) do
     case github_pull_request_url(url) do

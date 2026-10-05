@@ -2031,9 +2031,9 @@ The poller:
 
 - discovers issues in `In Review` with attached GitHub PR URLs (attachments whose Linear metadata
   reports the PR as `closed` or `merged` do not count as an attached PR anywhere in Symphony, so a
-  reopened issue whose only PR was closed runs the normal pre-PR flow; when the first page of an
-  issue's attachments holds no attached PR, Symphony reads the next pages until one does, so many
-  other attachments, such as QA screenshots, do not hide it; an issue the CI poller watches a PR
+  reopened issue whose only PR was closed runs the normal pre-PR flow; whenever the first page of an
+  issue's attachments is full, Symphony reads the remaining pages (up to 10 more), so it sees every
+  attachment and many others, such as QA screenshots, do not hide the PR; an issue the CI poller watches a PR
   for, or an agent run whose issue had a PR at dispatch, logs a warning naming the issue when its
   attachments show no PR);
 - records each PR URL, issue id, and workspace path in the durable run store;

@@ -2,6 +2,7 @@ defmodule SymphonyElixir.LinearClientAttachmentsTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.Linear.Client
+  alias SymphonyElixir.URLUtils
 
   @pr_url "https://github.com/example/repo/pull/37"
 
@@ -11,31 +12,42 @@ defmodule SymphonyElixir.LinearClientAttachmentsTest do
   end
 
   describe "an issue whose PR attachment is past the first page of attachments" do
-    test "still gets its PR URL from a poll, reading the next pages only until the PR shows up" do
+    test "still gets its PR URL from a poll, reading every remaining page" do
       # MOT-40: 19 QA screenshots and a notes file pushed the PR attachment to 21st.
       past_first_page = raw_issue("issue-a", "MOT-40", screenshots(1..20), next_cursor: "a-1")
-      on_first_page = raw_issue("issue-b", "MOT-41", [pr_attachment(41) | screenshots(1..19)], next_cursor: "b-1")
 
       graphql_fun =
         graphql(
-          %{"SymphonyLinearPoll" => poll_response([past_first_page, on_first_page])},
+          %{"SymphonyLinearPoll" => poll_response([past_first_page])},
           %{
-            {"issue-a", "a-1"} => {screenshots(21..70), "a-2"},
-            {"issue-a", "a-2"} => {[pr_attachment(37) | screenshots(71..72)], nil}
+            {"issue-a", "a-1"} => {screenshots(21..45), "a-2"},
+            {"issue-a", "a-2"} => {[pr_attachment(37) | screenshots(46..47)], nil}
           }
         )
 
-      assert {:ok, issues} = Client.fetch_candidate_issues_for_test(graphql_fun)
+      assert {:ok, [issue]} = Client.fetch_candidate_issues_for_test(graphql_fun)
 
-      assert [%{identifier: "MOT-40", pull_request_url: @pr_url}, %{identifier: "MOT-41", pull_request_url: pr_41}] = issues
-      assert pr_41 == "https://github.com/example/repo/pull/41"
+      assert %{identifier: "MOT-40", pull_request_url: @pr_url, pr_urls: [@pr_url]} = issue
+      assert URLUtils.pull_request_url(issue) == @pr_url
 
       assert_received {:linear_query, "SymphonyLinearPoll", query, %{attachmentFirst: 20}}
       assert query =~ ~r/attachments\(first: \$attachmentFirst\) \{.*?pageInfo \{\s*hasNextPage\s*endCursor/s
       assert_received {:linear_query, "SymphonyLinearIssueAttachments", query, %{id: "issue-a", first: 50, after: "a-1"}}
       assert query =~ "attachments(first: $first, after: $after)"
       assert_received {:linear_query, "SymphonyLinearIssueAttachments", _query, %{id: "issue-a", first: 50, after: "a-2"}}
-      refute_received {:linear_query, "SymphonyLinearIssueAttachments", _query, %{id: "issue-b"}}
+    end
+
+    test "reads the remaining pages of a full first page that already holds a PR" do
+      # An older PR left open on page 1 must not hide the current one on page 2.
+      issue = raw_issue("issue-b", "MOT-41", [pr_attachment(12) | screenshots(1..19)], next_cursor: "b-1")
+      pages = %{{"issue-b", "b-1"} => {[pr_attachment(41) | screenshots(20..24)], nil}}
+      graphql_fun = graphql(%{"SymphonyLinearPoll" => poll_response([issue])}, pages)
+
+      assert {:ok, [%{pr_urls: pr_urls}]} = Client.fetch_candidate_issues_for_test(graphql_fun)
+
+      assert "https://github.com/example/repo/pull/41" in pr_urls
+      assert "https://github.com/example/repo/pull/12" in pr_urls
+      assert_received {:linear_query, "SymphonyLinearIssueAttachments", _query, %{id: "issue-b", after: "b-1"}}
     end
 
     test "still gets its PR URL when refreshed by id or read by identifier" do
@@ -123,7 +135,7 @@ defmodule SymphonyElixir.LinearClientAttachmentsTest do
     end
   end
 
-  test "stops reading attachment pages after ten more pages without a PR" do
+  test "stops reading attachment pages after ten more pages and says later ones were not read" do
     issue = raw_issue("issue-a", "MOT-40", screenshots(1..20), next_cursor: "a-0")
 
     pages =
@@ -138,7 +150,7 @@ defmodule SymphonyElixir.LinearClientAttachmentsTest do
         assert {:ok, [%{pull_request_url: nil}]} = Client.fetch_candidate_issues_for_test(graphql_fun)
       end)
 
-    assert log =~ "Stopped reading Linear attachments for issue_id=issue-a issue_identifier=MOT-40 after 10 more pages without finding a PR attachment"
+    assert log =~ "Stopped reading Linear attachments for issue_id=issue-a issue_identifier=MOT-40 after 10 more pages; later attachments were not read"
 
     for page <- 0..9 do
       cursor = "a-#{page}"
