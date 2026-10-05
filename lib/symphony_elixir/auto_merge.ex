@@ -20,11 +20,23 @@ defmodule SymphonyElixir.AutoMerge do
   When auto-merge can't be used otherwise (a permission error, a refused PR that isn't clean
   and green, or the PR stays blocked on a green head), the issue falls back to the landing
   agent. The state lives under `:auto_merge` in the PR review record.
+
+  With the acceptance gate in `enforce` mode (and Auto Review on), a push after approval is
+  re-reviewed. The first poll of a `Merging` stay records the approved head and a fingerprint
+  of the PR's own diff (`SymphonyElixir.AutoMerge.Fingerprint`). A later head with the same
+  fingerprint (Symphony's update-branch merge of the base, a clean rebase) keeps the approval
+  and auto-merge. Any other head (a CI fix, a landing agent's commit, a human's push) returns
+  `{:rereview, auto_merge}` before auto-merge is touched: the PR poller turns auto-merge off
+  (`disable_for_rereview/5`) and moves the issue back to Auto Review, where CI, QA and the gate
+  judge the new head. A head whose fingerprint can't be read is re-reviewed too; a record with
+  no local workspace to read it in is not.
   """
 
   require Logger
 
-  alias SymphonyElixir.{CiPoller, Config}
+  alias SymphonyElixir.{AcceptanceGate, AutoReview, CiPoller, Config}
+  alias SymphonyElixir.AutoMerge.Fingerprint
+  alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.GitHub.PullRequest
   alias SymphonyElixir.Linear.Issue
 
@@ -46,6 +58,8 @@ defmodule SymphonyElixir.AutoMerge do
           stalled_since: DateTime.t() | nil,
           head_moved_retries: non_neg_integer(),
           disabled_at: DateTime.t() | nil,
+          approved_head_sha: String.t() | nil,
+          approved_fingerprint: String.t() | nil,
           reason: String.t() | nil,
           updated_at: DateTime.t() | nil
         }
@@ -97,7 +111,7 @@ defmodule SymphonyElixir.AutoMerge do
 
   @doc "True when Symphony turned auto-merge on (or merged) for this record, so a later merge moves the issue to `Done`."
   @spec armed?(term()) :: boolean()
-  def armed?(%{state: state}) when state in ["enabled", "updating_branch", "merging", "conflict"], do: true
+  def armed?(%{state: state}) when state in ["enabled", "updating_branch", "merging", "conflict", "rereview"], do: true
   def armed?(_auto_merge), do: false
 
   @doc """
@@ -106,8 +120,14 @@ defmodule SymphonyElixir.AutoMerge do
     * `{:ok, auto_merge}`: nothing more to do this poll.
     * `{:conflict, auto_merge}`: GitHub couldn't merge the base branch in; take the conflict path.
     * `{:fallback, auto_merge}`: auto-merge can't land it; the landing agent takes over.
+    * `{:rereview, auto_merge}`: in `enforce` mode, the head changes the approved diff; turn
+      auto-merge off and send the issue back to Auto Review. `auto_merge` is in the `rereview`
+      state, with `approved_head_sha` still naming the head the approval covered.
+
+  Option `:fingerprint` (`(record, head_sha) -> {:ok, fingerprint} | {:error, reason}`) replaces
+  `SymphonyElixir.AutoMerge.Fingerprint.compute/2`.
   """
-  @spec step(map(), map(), map(), keyword(), DateTime.t()) :: {:ok | :conflict | :fallback, t()}
+  @spec step(map(), map(), map(), keyword(), DateTime.t()) :: {:ok | :conflict | :fallback | :rereview, t()}
   def step(record, activity, settings, opts, %DateTime{} = now) do
     previous = Map.get(record, :auto_merge)
     head = Map.get(activity, :head_ref_oid)
@@ -115,14 +135,72 @@ defmodule SymphonyElixir.AutoMerge do
 
     result =
       cond do
-        fallback?(current) or held?(current) -> {:ok, current}
+        held?(current) -> {:ok, current}
         not is_binary(head) or not is_binary(Map.get(activity, :pr_node_id)) -> {:ok, %{current | state: current.state || "waiting"}}
-        true -> current |> ensure_enabled(record, activity, opts) |> continue(record, activity, settings, opts, now)
+        true -> current |> check_approval(record, settings, opts) |> land(record, activity, settings, opts, now)
       end
 
     log_transition(record, previous, result)
     result
   end
+
+  defp land({:ok, %{state: "fallback"} = current}, _record, _activity, _settings, _opts, _now), do: {:ok, current}
+  defp land({:ok, current}, record, activity, settings, opts, now), do: current |> ensure_enabled(record, activity, opts) |> continue(record, activity, settings, opts, now)
+  defp land(rereview, _record, _activity, _settings, _opts, _now), do: rereview
+
+  @doc "True when pushes after approval are re-reviewed: Auto Review is on and the acceptance gate is in `enforce` mode."
+  @spec rereview?(term()) :: boolean()
+  def rereview?(%Schema{} = settings), do: AutoReview.enabled?(settings) and AcceptanceGate.mode(settings) == "enforce"
+  def rereview?(_settings), do: false
+
+  # The first poll of a `Merging` stay records what was approved; coming back from a re-review
+  # starts a new stay. A later head keeps the approval only with the same fingerprint.
+  defp check_approval(current, record, settings, opts) do
+    cond do
+      not rereview?(settings) -> {:ok, current}
+      is_nil(current.approved_head_sha) or current.state == "rereview" -> {:ok, approve(current, record, opts)}
+      current.approved_head_sha == current.head_sha -> {:ok, current}
+      true -> compare(current, record, opts)
+    end
+  end
+
+  defp approve(current, record, opts) do
+    current = if current.state == "rereview", do: %{current | state: nil, reason: nil}, else: current
+
+    case fingerprint(record, current.head_sha, opts) do
+      {:ok, fingerprint} ->
+        %{current | approved_head_sha: current.head_sha, approved_fingerprint: fingerprint}
+
+      # Nothing to read the diff in, now or later: `compare/3` leaves such a head alone.
+      {:error, :no_workspace} ->
+        %{current | approved_head_sha: current.head_sha, approved_fingerprint: nil}
+
+      {:error, reason} ->
+        Logger.warning("Auto-merge #{identifier(record)}: could not fingerprint the approved diff; a new head will be re-reviewed commit_sha=#{current.head_sha}: #{inspect(reason)}")
+        %{current | approved_head_sha: current.head_sha, approved_fingerprint: nil}
+    end
+  end
+
+  defp compare(current, record, opts) do
+    case fingerprint(record, current.head_sha, opts) do
+      {:ok, fingerprint} when fingerprint == current.approved_fingerprint ->
+        Logger.info("Auto-merge #{identifier(record)}: #{short_sha(current.head_sha)} keeps the approved diff of #{short_sha(current.approved_head_sha)}; auto-merge stays on")
+        {:ok, %{current | approved_head_sha: current.head_sha}}
+
+      {:error, :no_workspace} ->
+        {:ok, current}
+
+      {:ok, _fingerprint} ->
+        rereview(current, "#{short_sha(current.head_sha)} changes the diff approved at #{short_sha(current.approved_head_sha)}")
+
+      {:error, reason} ->
+        rereview(current, "the diff of #{short_sha(current.head_sha)} could not be compared with the approved one: #{format_reason(reason)}")
+    end
+  end
+
+  defp rereview(current, reason), do: {:rereview, %{current | state: "rereview", reason: truncate(reason)}}
+
+  defp fingerprint(record, head, opts), do: Keyword.get(opts, :fingerprint, &Fingerprint.compute/2).(record, head)
 
   defp continue({:ok, %{state: "merging"}} = result, _record, _activity, _settings, _opts, _now), do: result
   # The head moved under the enable call: nothing else acts on the stale head this poll.
@@ -156,6 +234,8 @@ defmodule SymphonyElixir.AutoMerge do
       stalled_since: nil,
       head_moved_retries: 0,
       disabled_at: nil,
+      approved_head_sha: nil,
+      approved_fingerprint: nil,
       reason: nil,
       updated_at: now
     }
@@ -342,6 +422,7 @@ defmodule SymphonyElixir.AutoMerge do
   def describe(%{state: "conflict", head_sha: head, disabled_at: %DateTime{}}), do: "blocked: conflict on #{short_sha(head)}; auto-merge off until the fix is approved again"
   def describe(%{state: "conflict", head_sha: head}), do: "blocked: conflict on #{short_sha(head)}"
   def describe(%{state: "ci_failure", head_sha: head}), do: "auto-merge off: CI failed on #{short_sha(head)}; the fix goes back through review"
+  def describe(%{state: "rereview", head_sha: head}), do: "auto-merge off: #{short_sha(head)} changed the approved diff; back in Auto Review for the acceptance gate"
   def describe(%{state: "fallback", reason: reason}), do: "fell back to the landing agent: #{reason}"
   def describe(%{state: "merged"}), do: "merged"
   def describe(%{state: "waiting"}), do: "waiting for the PR head"
@@ -350,7 +431,7 @@ defmodule SymphonyElixir.AutoMerge do
   @doc "Marks the state when the PR poller sends a conflicting PR down the conflict path."
   @spec conflict(term(), String.t() | nil, DateTime.t()) :: t()
   def conflict(previous, head, %DateTime{} = now) do
-    %{for_head(previous, head, now) | state: "conflict", reason: "the PR conflicts with the base branch"}
+    %{for_head(previous, head, now) | state: "conflict", reason: "the PR conflicts with the base branch", approved_head_sha: nil, approved_fingerprint: nil}
   end
 
   @doc """
@@ -387,6 +468,16 @@ defmodule SymphonyElixir.AutoMerge do
     turn_off(record, activity, current, opts, now)
   end
 
+  @doc """
+  Turns GitHub auto-merge off for a `Merging` PR whose new head changes the approved diff (see
+  `step/5`), before the issue goes back to Auto Review. `current` is the `rereview` state
+  `step/5` returned. Results as for `disable_for_conflict/5`.
+  """
+  @spec disable_for_rereview(map(), map(), t(), keyword(), DateTime.t()) :: {:ok | :disabled, t()} | {:error, term()}
+  def disable_for_rereview(record, activity, current, opts, %DateTime{} = now) do
+    turn_off(record, activity, current, opts, now)
+  end
+
   defp turn_off(record, activity, current, opts, now) do
     if auto_merge_on?(Map.get(record, :auto_merge), activity, current) do
       case disable(record, activity, opts) do
@@ -416,20 +507,34 @@ defmodule SymphonyElixir.AutoMerge do
     end
   end
 
-  @doc "The Linear comment posted when auto-merge is turned off for a merge conflict."
-  @spec conflict_comment(String.t() | nil) :: String.t()
-  def conflict_comment(pr_url) do
+  @doc """
+  The Linear comment posted when auto-merge is turned off for a merge conflict. With `rereview?`
+  (see `rereview?/1`) the acceptance gate, not a person, moves the fix back to Merging.
+  """
+  @spec conflict_comment(String.t() | nil, boolean()) :: String.t()
+  def conflict_comment(pr_url, rereview? \\ false) do
     "Symphony turned off GitHub auto-merge on #{pr_url || "this PR"} because it conflicts with the base branch. " <>
       "The approval covered the diff before the conflict, so the conflict fix goes back through review; " <>
-      "moving this ticket to Merging again turns auto-merge back on."
+      back_to_merging(rereview?)
   end
 
-  @doc "The Linear comment posted when auto-merge is turned off for a CI-fix run."
-  @spec ci_fix_comment(String.t() | nil) :: String.t()
-  def ci_fix_comment(pr_url) do
+  @doc "The Linear comment posted when auto-merge is turned off for a CI-fix run. `rereview?` as for `conflict_comment/2`."
+  @spec ci_fix_comment(String.t() | nil, boolean()) :: String.t()
+  def ci_fix_comment(pr_url, rereview? \\ false) do
     "Symphony turned off GitHub auto-merge on #{pr_url || "this PR"} because CI failed and a fix run may push new code. " <>
       "The approval covered the diff before the fix, so the fix goes back through review; " <>
-      "moving this ticket to Merging again turns auto-merge back on."
+      back_to_merging(rereview?)
+  end
+
+  defp back_to_merging(true), do: "the acceptance gate judges it in Auto Review, and its approve moves this ticket back to Merging and turns auto-merge back on."
+  defp back_to_merging(false), do: "moving this ticket to Merging again turns auto-merge back on."
+
+  @doc "The Linear comment posted when a push after approval sends the issue back to Auto Review (see `step/5`)."
+  @spec rereview_comment(String.t() | nil, t(), String.t()) :: String.t()
+  def rereview_comment(pr_url, %{reason: reason}, auto_review_state) do
+    "Symphony turned off GitHub auto-merge on #{pr_url || "this PR"} and moved this ticket back to #{auto_review_state}: #{reason}. " <>
+      "The approval covered the earlier diff, so CI, QA and the acceptance gate judge the new head; " <>
+      "the gate's approve moves this ticket back to Merging and turns auto-merge back on."
   end
 
   @doc "Marks the state once GitHub reports the PR merged."

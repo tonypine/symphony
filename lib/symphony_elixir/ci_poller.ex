@@ -810,7 +810,7 @@ defmodule SymphonyElixir.CiPoller do
     issue_id = Map.get(record, :issue_id)
 
     with {:ok, log_excerpt} <- failed_log_excerpt(record, failed_checks, settings, opts),
-         :ok <- hold_auto_merge_for_fix(record, ci_status, opts, now) do
+         :ok <- hold_auto_merge_for_fix(record, ci_status, settings, opts, now) do
       persist_and_dispatch_ci_failure(record, ci_status, failed_checks, opts, now, tracker, issue_id, log_excerpt)
     else
       {:error, reason} -> record_poll_error(record, reason, opts, now)
@@ -821,7 +821,7 @@ defmodule SymphonyElixir.CiPoller do
   # so turn GitHub auto-merge off and hold it off until the issue is approved into `Merging`
   # again. While GitHub won't turn it off, the fix waits for the next poll (a red head can't
   # merge meanwhile).
-  defp hold_auto_merge_for_fix(record, ci_status, opts, now) do
+  defp hold_auto_merge_for_fix(record, ci_status, settings, opts, now) do
     issue_id = Map.get(record, :issue_id)
 
     if MapSet.member?(Keyword.get(opts, :merging_issue_ids, MapSet.new()), issue_id) do
@@ -840,7 +840,7 @@ defmodule SymphonyElixir.CiPoller do
           )
 
           record_auto_merge_disabled(record, auto_merge)
-          comment_auto_merge_disabled(record, opts)
+          comment_auto_merge_disabled(record, settings, opts)
           store_auto_merge_hold(run_store, repo_key, review, record, previous, auto_merge)
 
         {:error, reason} ->
@@ -891,11 +891,11 @@ defmodule SymphonyElixir.CiPoller do
     end
   end
 
-  defp comment_auto_merge_disabled(record, opts) do
+  defp comment_auto_merge_disabled(record, settings, opts) do
     tracker = Keyword.get(opts, :tracker, Tracker)
     issue_id = Map.get(record, :issue_id)
 
-    case tracker.create_comment(issue_id, AutoMerge.ci_fix_comment(Map.get(record, :pr_url))) do
+    case tracker.create_comment(issue_id, AutoMerge.ci_fix_comment(Map.get(record, :pr_url), AutoMerge.rereview?(settings))) do
       :ok -> :ok
       {:error, reason} -> Logger.warning("Failed to comment that auto-merge was turned off for a CI fix issue_id=#{issue_id}: #{inspect(reason)}")
     end
