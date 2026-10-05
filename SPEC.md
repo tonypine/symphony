@@ -2031,7 +2031,9 @@ The poller:
 
 - discovers issues in `In Review` with attached GitHub PR URLs (attachments whose Linear metadata
   reports the PR as `closed` or `merged` do not count as an attached PR anywhere in Symphony, so a
-  reopened issue whose only PR was closed runs the normal pre-PR flow);
+  reopened issue whose only PR was closed runs the normal pre-PR flow; when the first page of an
+  issue's attachments holds no attached PR, Symphony reads the next pages until one does, so many
+  other attachments, such as QA screenshots, do not hide it);
 - records each PR URL, issue id, and workspace path in the durable run store;
 - polls GitHub for review decisions and PR closure;
 - waits `pull_requests.review_comments.rework_delay_minutes` after requested-change activity before moving the issue

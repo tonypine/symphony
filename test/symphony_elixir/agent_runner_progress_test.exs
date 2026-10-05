@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.AgentRunnerProgressTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.Linear.Client
   alias SymphonyElixir.WorkspaceHead
 
   @pr_url "https://github.com/example/repo/pull/337"
@@ -146,6 +147,20 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     assert_received {:memory_tracker_comment, "issue-progress", "Symphony parked this issue in Backlog" <> _note}
   end
 
+  test "an issue with many attachments and no PR is still parked, saying it has no PR" do
+    fetcher = linear_issue_fetcher(screenshot_attachments(21..30))
+
+    log = capture_log(fn -> run_issue!("In Progress", heads: ["sha-same"], pr_url: nil, max_turns: 5, issue_state_fetcher: fetcher) end)
+
+    assert turns() == 2
+    assert_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+    refute_received {:pr_head_fetched, _pr_url}
+
+    assert log =~
+             "Parking issue_id=issue-progress issue_identifier=TP-337 in Backlog after 2 turns with no new commit or state change; " <>
+               "it has no attached PR, so CI on its head was not checked"
+  end
+
   test "empty Rework turns while CI on the pushed PR head is pending do not park the issue" do
     pending = [%{name: "macos-e2e", status: "IN_PROGRESS", conclusion: nil}]
     Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-pushed", checks: pending}})
@@ -243,6 +258,23 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       refute_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
       assert log =~ "CI is running on issue_id=issue-progress issue_identifier=TP-337's pushed head sha-fixed on its PR; moving to Auto Review"
       refute log =~ "Parking"
+    end
+
+    test "finds its PR past the first page of attachments, so CI running on the head it pushed moves it to Auto Review" do
+      # MOT-40: QA screenshots pushed the PR attachment past the first 20 attachments Linear returns.
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-fixed", checks: @pending_checks}})
+      fetcher = linear_issue_fetcher([pr_attachment() | screenshot_attachments(21..22)])
+
+      log =
+        capture_log(fn ->
+          run_issue!("In Progress", heads: ["sha-dirty", "sha-fixed"], pr_url: nil, max_turns: 6, issue_state_fetcher: fetcher)
+        end)
+
+      assert turns() == 1
+      assert_received {:pr_head_fetched, @pr_url}
+      assert_received {:memory_tracker_state_update, "issue-progress", "Auto Review"}
+      refute_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+      assert log =~ "CI is running on issue_id=issue-progress issue_identifier=TP-337's pushed head sha-fixed on its PR; moving to Auto Review"
     end
 
     test "lets the pre-push reviewer review the head it pushed before moving to Auto Review" do
@@ -491,7 +523,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
           agent_module: ProgressAgent,
           github: ProgressGitHub,
           workspace_head_reader: fn ^workspace, nil -> at_turn(heads) end,
-          issue_state_fetcher: fn _ids -> {:ok, [%{issue | state: at_turn(states, -1)}]} end,
+          issue_state_fetcher: Keyword.get(opts, :issue_state_fetcher, fn _ids -> {:ok, [%{issue | state: at_turn(states, -1)}]} end),
           issue_enricher: &{:ok, &1},
           review_agent_module: ProgressReviewer
         ] ++ Keyword.get(opts, :runner_opts, [])
@@ -515,6 +547,38 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     git.(["add", "fix.txt"])
     git.(["commit", "-m", "fix: resolve the conflict"])
   end
+
+  # Refreshes the issue through the Linear client, as the runner does in production: Linear returns
+  # 20 screenshot attachments first and `next_page` after them.
+  defp linear_issue_fetcher(next_page) do
+    attachments = fn nodes, next_cursor ->
+      %{"nodes" => nodes, "pageInfo" => %{"hasNextPage" => is_binary(next_cursor), "endCursor" => next_cursor}}
+    end
+
+    graphql_fun = fn
+      "query SymphonyLinearIssuesById" <> _query, %{ids: ["issue-progress"]} ->
+        issue = %{
+          "id" => "issue-progress",
+          "identifier" => "TP-337",
+          "title" => "Leave Rework",
+          "state" => %{"name" => "In Progress"},
+          "attachments" => attachments.(screenshot_attachments(1..20), "after-20")
+        }
+
+        {:ok, %{"data" => %{"issues" => %{"nodes" => [issue]}}}}
+
+      "query SymphonyLinearIssueAttachments" <> _query, %{id: "issue-progress", after: "after-20"} ->
+        {:ok, %{"data" => %{"issue" => %{"attachments" => attachments.(next_page, nil)}}}}
+    end
+
+    &Client.fetch_issue_states_by_ids_for_test(&1, graphql_fun)
+  end
+
+  defp screenshot_attachments(range) do
+    Enum.map(range, &%{"title" => "Screenshot #{&1}", "url" => "https://uploads.linear.app/qa/#{&1}.png", "sourceType" => "upload"})
+  end
+
+  defp pr_attachment, do: %{"title" => "PR #337", "url" => @pr_url, "sourceType" => "github", "metadata" => %{"status" => "open"}}
 
   defp at_turn(values, offset \\ 0) do
     Enum.at(values, turns() + offset) || List.last(values)

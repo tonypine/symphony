@@ -1665,7 +1665,11 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp park_idle_issue(%Issue{id: issue_id} = issue, opts) do
-    Logger.warning("Parking #{issue_context(issue)} in #{@idle_park_state} after #{@max_empty_turns} turns with no new commit or state change")
+    Logger.warning(
+      "Parking #{issue_context(issue)} in #{@idle_park_state} after #{@max_empty_turns} turns with no new commit or state change" <>
+        idle_park_pr_note(issue)
+    )
+
     label = "parking #{issue_context(issue)} in #{@idle_park_state}"
 
     with :ok <- with_linear_retry(fn -> Tracker.update_issue_state(issue_id, @idle_park_state) end, label, opts),
@@ -1674,6 +1678,12 @@ defmodule SymphonyElixir.AgentRunner do
     else
       {:error, reason} -> {:error, {:idle_park_failed, reason}}
     end
+  end
+
+  # The CI checks that keep a run that pushed from being parked read the issue's PR URL. Saying
+  # when there is none shows a lost PR link instead of parking without a trace.
+  defp idle_park_pr_note(%Issue{} = issue) do
+    if attached_pr?(issue), do: "", else: "; it has no attached PR, so CI on its head was not checked"
   end
 
   defp idle_park_note do
