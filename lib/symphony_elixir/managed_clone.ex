@@ -102,6 +102,16 @@ defmodule SymphonyElixir.ManagedClone do
   @spec cloned?(Path.t()) :: boolean()
   def cloned?(clone_path) when is_binary(clone_path), do: File.dir?(Path.join(Path.expand(clone_path), ".git"))
 
+  @doc """
+  Says in plain words why a clone or fetch failed, from the reason in a `sync/4`
+  failure.
+  """
+  @spec describe_reason(term()) :: String.t()
+  def describe_reason({:git_failed, status, ""}), do: "git exited with status #{status}"
+  def describe_reason({:git_failed, status, output}), do: "git exited with status #{status}: #{output}"
+  def describe_reason({:mkdir_failed, dir, reason}), do: "cannot create #{dir}: #{:file.format_error(reason)}"
+  def describe_reason({:rename_failed, path, reason}), do: "cannot move the new clone to #{path}: #{:file.format_error(reason)}"
+
   defp sync_locked(repo_key, github, clone_path, fetch?) do
     cond do
       not cloned?(clone_path) -> clone(repo_key, github, clone_path)

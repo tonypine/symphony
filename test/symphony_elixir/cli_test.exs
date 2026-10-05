@@ -397,6 +397,15 @@ defmodule SymphonyElixir.CLITest do
     assert message =~ ":boom"
   end
 
+  test "prints the message of an exception raised while the app starts" do
+    exit = {:EXIT, {%ArgumentError{message: "Could not clone repo web"}, []}}
+    reason = {:symphony_elixir, {:bad_return, {{SymphonyElixir.Application, :start, [:normal, []]}, exit}}}
+
+    deps = base_deps(%{ensure_all_started: fn -> {:error, reason} end})
+
+    assert CLI.evaluate([], deps) == {:error, "Failed to start Symphony: Could not clone repo web"}
+  end
+
   test "returns ok when symphony.yml exists and the app starts" do
     assert :ok = CLI.evaluate([], base_deps())
   end

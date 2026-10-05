@@ -115,17 +115,33 @@ defmodule SymphonyElixir.WorkflowSource do
   @doc """
   Refreshes every configured repo's snapshot without fetching, after cloning a
   `workspace.source` repo that has no clone yet.
+
+  Returns `{:error, message}` naming the repo and git's error when such a clone
+  cannot be made: the repo then has no `WORKFLOW.md` to read. The other repos are
+  still refreshed.
   """
-  @spec refresh_all(SystemSchema.t()) :: :ok
+  @spec refresh_all(SystemSchema.t()) :: :ok | {:error, String.t()}
   def refresh_all(%SystemSchema{repos: repos}) do
-    Enum.each(repos, fn repo ->
-      clone_managed_repo(repo)
-      refresh(repo)
+    repos
+    |> Enum.map(fn repo ->
+      with :ok <- clone_managed_repo(repo) do
+        refresh(repo)
+        :ok
+      end
     end)
+    |> Enum.find(:ok, &match?({:error, _message}, &1))
   end
 
   defp clone_managed_repo(%SystemSchema.Repo{name: name, workspace: %{github: github, repo: clone}}) when is_binary(github) do
-    ManagedClone.sync(name, github, clone, fetch: false)
+    case ManagedClone.sync(name, github, clone, fetch: false) do
+      :ok ->
+        :ok
+
+      {:error, {:managed_clone_failed, _repo_key, {_step, reason}}} ->
+        {:error,
+         "Could not clone repo #{name} from #{ManagedClone.clone_url(github)} into #{clone}: " <>
+           "#{ManagedClone.describe_reason(reason)}\nSymphony reads the repo's WORKFLOW.md from this clone, so it cannot start without it."}
+    end
   end
 
   defp clone_managed_repo(_repo), do: :ok

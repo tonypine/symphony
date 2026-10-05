@@ -375,6 +375,34 @@ defmodule SymphonyElixir.ManagedCloneTest do
     end
   end
 
+  describe "startup without a clone" do
+    test "a first clone that fails stops startup with the repo and git's error", %{root: root, clones_root: clones_root} do
+      write_symphony!(root)
+      {:ok, system_config} = Config.system()
+      clone = Path.join(clones_root, "acme/web")
+      url = ManagedClone.clone_url("acme/web")
+
+      log =
+        capture_log(fn ->
+          assert {:error, message} = WorkflowSource.refresh_all(system_config)
+          assert message =~ "Could not clone repo web from #{url} into #{clone}: git exited with status 128: "
+          assert message =~ "Symphony reads the repo's WORKFLOW.md from this clone, so it cannot start without it."
+
+          assert_raise ArgumentError, message, fn -> SymphonyElixir.Application.child_specs_for_runtime(%{}) end
+        end)
+
+      assert log =~ "Managed clone clone failed repo=web"
+      refute File.exists?(clone)
+    end
+
+    test "describes each clone failure in plain words" do
+      assert ManagedClone.describe_reason({:git_failed, 128, ""}) == "git exited with status 128"
+      assert ManagedClone.describe_reason({:git_failed, 128, "fatal: no"}) == "git exited with status 128: fatal: no"
+      assert ManagedClone.describe_reason({:mkdir_failed, "/x", :enotdir}) == "cannot create /x: not a directory"
+      assert ManagedClone.describe_reason({:rename_failed, "/x/web", :eexist}) == "cannot move the new clone to /x/web: file already exists"
+    end
+  end
+
   defp parse(repo, workspaces \\ %{}) do
     SystemSchema.parse(%{
       "repositories" => [Map.merge(%{"key" => "web"}, repo)],
