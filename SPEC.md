@@ -1430,11 +1430,18 @@ When enabled:
   comment (mode, verdict, agent verdict, one row per criterion, overlaps, scope, escalation reasons,
   proposed follow-ups, tokens, runtime); each verdict writes one `acceptance_gate_verdict` audit
   event. In `shadow` mode the verdict is advisory: the issue moves to `In Review` as it would
-  without the gate, and follow-ups are listed, not filed. `enforce` currently behaves like
-  `shadow`. When a judged issue leaves `In Review`, the human's decision at that SHA SHOULD be
-  recorded on the gate run (a move to `Merging` is `approve`; a move to `Rework`, or back to
-  `In Progress` with PR review comments, is `rework`) with one `acceptance_gate_agreement` audit
-  event, and `/api/v1/state` SHOULD list the latest verdict per judged issue and each repository's
+  without the gate, and follow-ups are listed, not filed. In `enforce` mode the verdict MUST move
+  the issue: `approve` to `Merging` (where auto-merge lands the PR), `rework` back to `In Progress`
+  with the unmet criteria as continuation context, counted against `auto_review.max_fix_attempts`
+  with QA fails (the `rework` past it goes to `In Review`), and `escalate` to `In Review`, with the
+  comment opening on the escalation reasons; up to 3 follow-ups per verdict are filed as Backlog
+  sub-issues, never twice with the same title. The mode is read on every poll, so a switch back to
+  `shadow` or `off` stops the moves without a restart. The gate MUST NOT move a `breakdown` parent or
+  a `Final verification:` ticket. When a judged issue leaves `In Review`, the human's decision at
+  that SHA SHOULD be recorded on the gate run (a move to `Merging` is `approve`; a move to `Rework`,
+  or back to `In Progress` with PR review comments, is `rework`) with one
+  `acceptance_gate_agreement` audit event; the gate's own enforced moves MUST NOT be recorded as a
+  human decision, and `/api/v1/state` SHOULD list the latest verdict per judged issue and each repository's
   agreement over its last 50 decisions (`acceptance_gate`). See `docs/acceptance_gate.md`.
 - Parent walkthrough: a run of kind `final_verification` on a local worker with the Linear tracker,
   for a ticket with a parent and no `qa:skip` label, MUST NOT start an executor agent. Symphony
