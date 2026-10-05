@@ -2425,6 +2425,26 @@ defmodule SymphonyElixir.Config.Schema do
     |> Enum.reject(&MapSet.member?(denied_domains, &1))
   end
 
+  @doc """
+  The hosts a sandboxed verification dev server may reach through its egress proxy: the
+  agent's built-in dependency hosts, without the model providers, plus
+  `agent.permissions.network.allowed_domains`, less `denied_domains`. None with `mode: block`.
+  """
+  @spec dev_server_network_allowed_domains(%__MODULE__{}) :: [String.t()]
+  def dev_server_network_allowed_domains(%__MODULE__{} = settings) do
+    case codex_network_access(settings.agent.network_access) do
+      %{mode: "block"} ->
+        []
+
+      network_access ->
+        denied_domains = network_access.denied_domains |> normalize_domain_list() |> MapSet.new()
+
+        (@shared_built_in_network_allowed_domains ++ normalize_domain_list(network_access.allowed_domains))
+        |> normalize_domain_list()
+        |> Enum.reject(&MapSet.member?(denied_domains, &1))
+    end
+  end
+
   @doc false
   @spec resolve_codex_thread_config(%__MODULE__{}) :: map() | nil
   def resolve_codex_thread_config(%__MODULE__{} = settings) do

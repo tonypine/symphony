@@ -699,6 +699,12 @@ Fields:
   - The supervised process-group launcher requires `python3` or `python` so the child command can
     be started via `setsid()`; if no Python executable is available, the run fails with
     `verification_failed` before the first agent turn.
+  - The command runs the workspace's code, which the agent can change, so the implementation MUST
+    run it in an OS sandbox no weaker than the agent's: the agent's credential read-deny list,
+    writes limited to the workspace and folders of its own, the agent's environment without host
+    secrets, and network limited to loopback plus an egress proxy that only reaches allowlisted
+    dependency hosts. Where no such sandbox is available, the run fails with `verification_failed`
+    instead of starting the command unsandboxed.
 - `dev_server.health_check_url` (string, REQUIRED when `start_cmd` is set)
   - Supports `$SYMPHONY_VERIFICATION_PORT` and `${SYMPHONY_VERIFICATION_PORT}` substitution.
   - The dev server is considered healthy only on HTTP `200`.

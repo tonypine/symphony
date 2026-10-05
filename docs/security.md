@@ -191,21 +191,43 @@ separately in [quality_gate_security.md](quality_gate_security.md), including it
 surface, the `on_error: pass` failure mode, and the lack of in-process network restrictions on
 provider calls.
 
-### Verification dev server runs on the host
+### Verification dev server runs in a sandbox
 
-`verification.dev_server.start_cmd` is not sandboxed. Symphony starts it itself, on the host as
-the operator's user, with the operator's environment, keychain, SSH agent and tokens, outside the
-agent sandbox and its network allowlist. It runs from the checkout under test:
+Symphony starts `verification.dev_server.start_cmd` itself, from the checkout under test:
 
 - in an agent run, from the agent's own workspace, before the first turn and for the whole run;
 - in an Auto Review `web` pass, from a second worktree at the PR head.
 
 The command usually runs files from that checkout: a script such as Symphony's own
 `scripts/qa-dashboard-server.sh`, and the repo's build tool (`mix`, `npm`, `pnpm`), which runs the
-project's code and build config. The agent can change all of these. `WORKFLOW.md` itself is
-write-protected, but the script it names and the code it builds are not. So an agent's edit,
-pushed or left in the workspace, runs as the operator at the next start. A dev server that reloads
-code runs it straight away.
+project's code and build config. The agent can change all of these, so Symphony runs the command
+under macOS Seatbelt (`sandbox-exec`), with limits like the agent's sandbox:
+
+- **Reads.** The credential and config stores the agent can't read are denied too (`~/.ssh`,
+  `~/.aws`, `~/.config/gh`, the keychains, shell startup and history files, and the rest of the
+  read-deny list in [Sandbox defaults](#sandbox-defaults-for-the-agent-process)).
+  `workspace.sandbox.allow_read_paths` does not apply to it.
+- **Writes.** Only the checkout, a temp folder of its own (`$TMPDIR`, removed when the server
+  stops), the agent cache folder, the per-user `TemporaryItems` dir and the `/dev` sinks are
+  writable. Inside the checkout, the paths the agent may not write stay read-only: `.git`,
+  `WORKFLOW.md`, the skills and the other agent-protected paths.
+- **Network.** The server may listen and connect on loopback only, so it can't serve on another
+  interface. It reaches the dependency hosts through a proxy on loopback that Symphony runs for
+  it (`HTTPS_PROXY` and `HTTP_PROXY`): the proxy only tunnels HTTPS (`CONNECT`) to the agent's
+  built-in dependency hosts plus `agent.permissions.network.allowed_domains`, less
+  `denied_domains`, and to none with `mode: block`. The model provider hosts are left out. Any
+  other host gets a 403.
+- **Environment.** The server gets the agent's environment, not the operator's: no
+  `LINEAR_API_KEY`, provider keys, GitHub tokens or `SSH_AUTH_SOCK`. Hex and `elixir_make` use
+  the agent cache folder.
+
+Loopback stays open, so the server can still reach other services on the host's loopback, such
+as Symphony's own dashboard and API, which have no authentication (see
+[Local-only dashboard bind](#local-only-dashboard-bind)).
+
+Seatbelt exists on macOS only. Elsewhere, and when `/usr/bin/sandbox-exec` is missing, the dev
+server does not start: an agent run fails with `verification_failed` before its first turn, and
+an Auto Review `web` pass is `blocked`.
 
 The dev server is off by default. It starts only when `verification.enabled` is `true` and
 `verification.dev_server.start_cmd` is set. A repo's `WORKFLOW.md` can set both, and its values
@@ -269,10 +291,11 @@ read from environment variables. The quality gate explicitly ignores credentials
   like `/private/tmp`.
 - Keep `agent.network_access.mode: allowlist`. Use `denied_domains` to override anything in the
   built-in dev allow list you do not want the agent to reach.
-- Turn on `verification.enabled` only on a host where running the agent's code as your own user
-  is acceptable, such as a dedicated machine or user account without your personal credentials.
-  The dev server runs the checkout's code outside the sandbox (see
-  [Verification dev server runs on the host](#verification-dev-server-runs-on-the-host)).
+- `verification.enabled` runs the checkout's code as your user, inside a Seatbelt sandbox like
+  the agent's (see
+  [Verification dev server runs in a sandbox](#verification-dev-server-runs-in-a-sandbox)). Like
+  the agent, it can still reach services on the host's loopback, so keep the dashboard's API on a
+  host where that is acceptable.
 
 ### Secrets and credentials
 

@@ -32,6 +32,25 @@ Application.put_env(:symphony_elixir, :agent_caches,
   host_elixir_make_cache: Path.join(agent_cache_dir, "host-elixir-make")
 )
 
+# Verification dev servers in tests start through a stand-in for `sandbox-exec` that drops the
+# profile and runs the command, so they also start on Linux and inside the agent sandbox, where
+# Seatbelt can't nest. The `:seatbelt` tests use the real one, and only run where it works.
+fake_sandbox_exec = Path.join(agent_run_tmp_root, "fake-sandbox-exec")
+File.write!(fake_sandbox_exec, "#!/bin/sh\n# Drops `-p <profile>` and runs the command unsandboxed.\nshift 2\nexec \"$@\"\n")
+File.chmod!(fake_sandbox_exec, 0o755)
+
+Application.put_env(:symphony_elixir, :verification_dev_server_sandbox,
+  os_type: {:unix, :darwin},
+  executable: fake_sandbox_exec
+)
+
+with true <- File.exists?("/usr/bin/sandbox-exec"),
+     {_output, 0} <- System.cmd("/usr/bin/sandbox-exec", ["-p", "(version 1)(allow default)", "/usr/bin/true"], stderr_to_stdout: true) do
+  :ok
+else
+  _unavailable -> ExUnit.configure(exclude: [:seatbelt | Keyword.get(ExUnit.configuration(), :exclude, [])])
+end
+
 # Tests never reach openrouter.ai: a test that needs the models API stubs this itself.
 offline_models_request = fn _url, _opts -> {:error, :network_disabled_in_tests} end
 Application.put_env(:symphony_elixir, :openrouter_models_request, offline_models_request)

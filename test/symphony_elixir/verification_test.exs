@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.VerificationTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Verification.DevServer, as: DevServerConfig
   alias SymphonyElixir.Verification
   alias SymphonyElixir.Verification.{DevServer, PortPool}
@@ -231,6 +232,130 @@ defmodule SymphonyElixir.VerificationTest do
                owner: self(),
                launcher: fn -> {:error, :python_not_found} end
              )
+  end
+
+  describe "dev server sandbox" do
+    setup do
+      root = Path.join(System.tmp_dir!(), "dev-server-sandbox-#{System.unique_integer([:positive])}")
+      workspace = Path.join(root, "workspace")
+      File.mkdir_p!(workspace)
+      previous_key = System.get_env("LINEAR_API_KEY")
+      System.put_env("LINEAR_API_KEY", "lin-dev-server-test-secret")
+
+      on_exit(fn ->
+        if previous_key, do: System.put_env("LINEAR_API_KEY", previous_key), else: System.delete_env("LINEAR_API_KEY")
+        File.rm_rf(root)
+      end)
+
+      config = %DevServerConfig{
+        start_cmd: "env > dev-server-env.txt; exec python3 -m http.server $SYMPHONY_VERIFICATION_PORT --bind 127.0.0.1",
+        health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/",
+        health_timeout_ms: 5_000,
+        stop_signal: "TERM",
+        stop_timeout_ms: 1_000
+      }
+
+      %{root: root, workspace: workspace, config: config, port: free_tcp_port()}
+    end
+
+    test "spawns the start command through sandbox-exec, with the agent's env and the egress proxy", %{root: root, workspace: workspace, config: config, port: port} do
+      record = Path.join(root, "sandbox-exec-argv")
+      sandbox_exec = Path.join(root, "sandbox-exec")
+      File.write!(sandbox_exec, "#!/bin/sh\nprintf '%s\\0' \"$@\" > '#{record}'\nshift 2\nexec \"$@\"\n")
+      File.chmod!(sandbox_exec, 0o755)
+
+      assert {:ok, pid} =
+               DevServer.start(
+                 run_id: "sandboxed-run",
+                 port: port,
+                 workspace: workspace,
+                 config: config,
+                 env: Verification.env(%{port: port}),
+                 owner: self(),
+                 sandbox: [os_type: {:unix, :darwin}, executable: sandbox_exec]
+               )
+
+      assert ["-p", profile, "/bin/sh", "-lc", start_cmd, ""] = record |> File.read!() |> String.split("\0")
+      assert start_cmd == config.start_cmd
+      assert profile =~ "(deny file-read*"
+      assert profile =~ ~s{(subpath "#{Path.join(System.user_home!(), ".ssh")}")}
+      assert profile =~ "(deny network*)"
+
+      env = File.read!(Path.join(workspace, "dev-server-env.txt"))
+      assert env =~ "SYMPHONY_VERIFICATION_PORT=#{port}\n"
+      assert [_line, proxy_port] = Regex.run(~r/^HTTPS_PROXY=http:\/\/127\.0\.0\.1:(\d+)$/m, env)
+      assert env =~ "NO_PROXY=localhost,127.0.0.1,::1\n"
+      assert [_line, tmp_dir] = Regex.run(~r/^TMPDIR=(.+)$/m, env)
+      assert File.dir?(tmp_dir)
+      refute env =~ "lin-dev-server-test-secret"
+      refute env =~ "SYMPHONY_DEV_SERVER_ARGV"
+
+      assert :ok = DevServer.stop(pid)
+      refute File.exists?(tmp_dir)
+      assert {:error, :econnrefused} = :gen_tcp.connect(~c"127.0.0.1", String.to_integer(proxy_port), [])
+    end
+
+    test "does not start the command when there is no sandbox", %{workspace: workspace, config: config, port: port} do
+      assert {:error, {:verification_failed, {:dev_server_sandbox_unavailable, {:unix, :linux}}}} =
+               DevServer.start(
+                 run_id: "unsandboxed-run",
+                 port: port,
+                 workspace: workspace,
+                 config: config,
+                 env: Verification.env(%{port: port}),
+                 sandbox: [os_type: {:unix, :linux}]
+               )
+
+      refute File.exists?(Path.join(workspace, "dev-server-env.txt"))
+    end
+
+    test "does not start without a temp folder of its own", %{root: root, workspace: workspace, config: config, port: port} do
+      file = Path.join(root, "not-a-dir")
+      File.write!(file, "")
+
+      assert {:error, {:verification_failed, :dev_server_tmp_dir_unavailable}} =
+               DevServer.start(
+                 run_id: "no-tmp-run",
+                 port: port,
+                 workspace: workspace,
+                 config: config,
+                 env: Verification.env(%{port: port}),
+                 tmp_bases: [file]
+               )
+    end
+
+    @tag :seatbelt
+    test "serves from inside the real sandbox", %{workspace: workspace, config: config, port: port} do
+      assert {:ok, pid} =
+               DevServer.start(
+                 run_id: "seatbelt-run",
+                 port: port,
+                 workspace: workspace,
+                 config: config,
+                 env: Verification.env(%{port: port}),
+                 owner: self(),
+                 sandbox: []
+               )
+
+      assert http_ok?("http://127.0.0.1:#{port}/")
+      assert :ok = DevServer.stop(pid)
+    end
+  end
+
+  test "a dev server reaches the agent's dependency hosts, without the model providers" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      agent_network_access: %{mode: "allowlist", allowed_domains: ["Internal.Example.com"], denied_domains: ["hex.pm"]}
+    )
+
+    domains = Schema.dev_server_network_allowed_domains(Config.settings!())
+    assert "repo.hex.pm" in domains
+    assert "internal.example.com" in domains
+    refute "hex.pm" in domains
+    refute "api.anthropic.com" in domains
+    refute "api.openai.com" in domains
+
+    write_workflow_file!(Workflow.workflow_file_path(), agent_network_access: %{mode: "block", allowed_domains: ["internal.example.com"]})
+    assert Schema.dev_server_network_allowed_domains(Config.settings!()) == []
   end
 
   test "agent runner aborts before first turn when verification health check fails" do
