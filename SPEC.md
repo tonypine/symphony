@@ -2067,6 +2067,12 @@ The poller:
   and starts a QA pass on green CI (see `auto_review`). It also tracks PRs of issues in
   `Merging`, so a held landing run (below) sees its head settle and a red head takes the normal
   CI-failure dispatch.
+- reads a PR head as green only once its CI has finished, not merely when every reported check
+  passed: a GitHub Actions workflow run that reported a check for the head and has not completed
+  (a rerun's new attempt, whose failed checks leave the rollup until it queues them, or a job with
+  `needs:` not created yet) reads as pending, and so does a head the poller asked to rerun until
+  every check it reran reports again. This holds for every reader of the head's CI: the poller's
+  QA start, the agent run's pushed-head handoff, the `Merging` wait and the merge tool.
 
 Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `enabled: true`):
 

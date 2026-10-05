@@ -1662,7 +1662,8 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   # The CI action for the workspace HEAD when it is the attached PR's head, or nil. A PR with no
-  # checks reported yet gives nil, so a repo without CI never waits on it and stays parkable.
+  # checks reported yet gives nil, so a repo without CI never waits on it and stays parkable. A
+  # rerun the CI poller started on that head reads as running until its checks report again.
   defp pushed_head_ci_action(%Issue{} = issue, %{progress: %{head: head}} = run_context) do
     pr_url = URLUtils.pull_request_url(issue)
     github = Keyword.get(run_context.opts, :github, PullRequest)
@@ -1670,7 +1671,9 @@ defmodule SymphonyElixir.AgentRunner do
     with true <- is_binary(pr_url),
          {:ok, %{commit_sha: ^head, checks: [_ | _]} = ci_status} <-
            github.fetch_ci_status(pr_url, cwd: run_context.workspace) do
-      CiPoller.ci_action(ci_status)
+      ci_status
+      |> CiPoller.put_rerun_pending(issue.id, pending_lookup_opts(issue, run_context.opts))
+      |> CiPoller.ci_action()
     else
       _ -> nil
     end
@@ -1743,6 +1746,8 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp maybe_wait_for_merging_ci(issue, pr_url, ci_status, run_context) do
+    ci_status = CiPoller.put_rerun_pending(ci_status, issue.id, pending_lookup_opts(issue, run_context.opts))
+
     if CiPoller.ci_action(ci_status) == :pending do
       commit_sha = Map.get(ci_status, :commit_sha)
       Logger.info("Stopping landing run for #{issue_context(issue)}; waiting for CI on #{commit_sha}")

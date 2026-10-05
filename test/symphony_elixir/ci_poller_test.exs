@@ -685,6 +685,61 @@ defmodule SymphonyElixir.CiPollerTest do
              RunStore.list_ci_checks()
   end
 
+  test "a rerun whose failed checks left the rollup reads pending, not green, until they report again" do
+    now = ~U[2026-05-06 09:00:00Z]
+    issue = in_review_issue()
+    lint = %{name: "lint", status: "COMPLETED", conclusion: "SUCCESS", run_id: "987"}
+    failed = %{failed_status("abc123") | checks: [lint | failed_status("abc123").checks]}
+    # GitHub dropped the failed `specs` check while the rerun's new attempt queues its jobs.
+    rerun_starting = %{green_status() | checks: [lint]}
+    rerun_running = %{rerun_starting | checks: [lint, %{name: "specs", status: "QUEUED", conclusion: nil, run_id: "987"}]}
+    rerun_green = %{green_status() | checks: [lint | green_status().checks]}
+
+    Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+    Application.put_env(:symphony_elixir, :ci_test_statuses, [failed, rerun_starting, rerun_running, rerun_green])
+    put_run(issue, now)
+    poll = fn minutes -> CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: DateTime.add(now, minutes, :minute)) end
+
+    assert {:ok, %{actions: [{:rerun_requested, "issue-2401", "987"}]}} = poll.(0)
+
+    # Every other reader of the head's CI sees the same rerun as pending.
+    assert rerun_starting |> CiPoller.put_rerun_pending("issue-2401") |> CiPoller.ci_action() == :pending
+    assert rerun_running |> CiPoller.put_rerun_pending("issue-2401") |> CiPoller.ci_action() == :pending
+    assert rerun_green |> CiPoller.put_rerun_pending("issue-2401") |> CiPoller.ci_action() == :success
+    assert %{rerun_starting | commit_sha: "def456"} |> CiPoller.put_rerun_pending("issue-2401") |> CiPoller.ci_action() == :success
+    assert rerun_starting |> CiPoller.put_rerun_pending("issue-other") |> CiPoller.ci_action() == :success
+    assert rerun_starting |> CiPoller.put_rerun_pending(nil) |> CiPoller.ci_action() == :success
+
+    assert {:ok, %{actions: [{:watching, "issue-2401"}]}} = poll.(1)
+    assert [%{status: "rerun_requested", last_observed_conclusion: "IN_PROGRESS"}] = RunStore.list_ci_checks()
+
+    assert {:ok, %{actions: [{:watching, "issue-2401"}]}} = poll.(2)
+    assert [%{status: "watching"}] = RunStore.list_ci_checks()
+
+    assert {:ok, %{actions: [{:green, "issue-2401"}]}} = poll.(3)
+    refute_receive {:issue_state_update, _, _}
+  end
+
+  test "ci_action reads a head green only once the workflow runs that reported its checks finished" do
+    lint = %{name: "lint", status: "COMPLETED", conclusion: "SUCCESS", run_id: "987"}
+    status = %{green_status() | checks: [lint | green_status().checks]}
+
+    # Required checks all present and green, with no workflow runs read: green as before.
+    assert CiPoller.ci_action(status) == :success
+    assert CiPoller.ci_action(Map.put(status, :workflow_runs, [%{id: "987", status: "COMPLETED", conclusion: "SUCCESS"}])) == :success
+
+    # The rerun's new attempt is queued, or a job with `needs:` hasn't been created yet.
+    assert CiPoller.ci_action(Map.put(status, :workflow_runs, [%{id: "987", status: "QUEUED", conclusion: nil}])) == :pending
+    assert CiPoller.ci_action(Map.put(status, :workflow_runs, [%{id: "987", status: "IN_PROGRESS", conclusion: nil}])) == :pending
+
+    # A run that reported no check to the rollup (a deployment waiting on approval) doesn't hold the head.
+    assert CiPoller.ci_action(Map.put(status, :workflow_runs, [%{id: "555", status: "WAITING", conclusion: nil}])) == :success
+
+    # A failed check still reads as a failure.
+    failed = Map.put(failed_status("abc123"), :workflow_runs, [%{id: "987", status: "IN_PROGRESS", conclusion: nil}])
+    assert {:failure, [%{name: "specs"}]} = CiPoller.ci_action(failed)
+  end
+
   test "startup failure conclusion follows failure path instead of pending" do
     now = ~U[2026-05-06 09:00:00Z]
     issue = in_review_issue()
