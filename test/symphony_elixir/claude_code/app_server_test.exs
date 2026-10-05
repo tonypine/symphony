@@ -826,6 +826,56 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       end
     end
 
+    test "denies a worktree session writes to the shared repo's git config files, from the shell and the file tools" do
+      test_root =
+        Path.join(
+          System.tmp_dir!(),
+          "symphony-elixir-claude-code-git-metadata-#{System.unique_integer([:positive])}"
+        )
+
+      try do
+        workspace_root = Path.join(test_root, "workspaces")
+        workspace = Path.join(workspace_root, "TEST-GITMETA")
+        primary_repo = Path.join(test_root, "primary")
+        File.mkdir_p!(workspace_root)
+        File.mkdir_p!(primary_repo)
+
+        assert {_output, 0} = System.cmd("git", ["init", "-b", "main"], cd: primary_repo, stderr_to_stdout: true)
+
+        assert {_output, 0} =
+                 System.cmd("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "initial"],
+                   cd: primary_repo,
+                   stderr_to_stdout: true
+                 )
+
+        assert {_output, 0} = System.cmd("git", ["worktree", "add", "-b", "auto/TEST-GITMETA", workspace], cd: primary_repo, stderr_to_stdout: true)
+        {:ok, common_dir} = SymphonyElixir.PathSafety.canonicalize(Path.join(primary_repo, ".git"))
+
+        write_workflow_file!(Workflow.workflow_file_path(),
+          workspace_root: workspace_root,
+          agent_kind: "claude"
+        )
+
+        assert {:ok, session} = AppServer.start_session(workspace)
+        {:ok, contents} = Jason.decode(File.read!(session.settings_path))
+        deny_write = get_in(contents, ["sandbox", "filesystem", "denyWrite"])
+        deny = get_in(contents, ["permissions", "deny"])
+
+        for entry <- ["config", "config.worktree", "info", "hooks", "worktrees/*/config.worktree", "modules/**/config"] do
+          path = Path.join(common_dir, entry)
+          assert path in deny_write
+          assert "Edit(/#{path})" in deny
+        end
+
+        assert Path.join([common_dir, "worktrees", "TEST-GITMETA", "config.worktree"]) in deny_write
+        refute Path.join(common_dir, "objects") in deny_write
+
+        assert :ok = AppServer.stop_session(session)
+      after
+        File.rm_rf(test_root)
+      end
+    end
+
     test "lets a local macOS session write Foundation's item replacement directory" do
       test_root =
         Path.join(
