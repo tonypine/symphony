@@ -1392,6 +1392,11 @@ When enabled:
   coverage or static analysis such as Dialyzer: a pass starts only on green CI for the PR head, and a
   parent walkthrough marks a criterion that only asks for tests or CI to pass `skipped` as covered
   by CI on the base branch. QA exercises the change the way a user would.
+- The PR QA prompt MUST list the agent-protected paths (`WORKFLOW.md`, `.ai/skills`, the project
+  `.claude` settings and the rest an agent's sandbox denies writes to) and tell the agent to mark a
+  criterion that only a change to one of them can meet `skipped`, naming the follow-up ticket, when
+  a sub-issue or the workpad hands it to a person. A criterion a change elsewhere could meet, such as
+  under `docs/`, MUST NOT be skipped this way.
 - Symphony applies the verdict: `pass`, `blocked` and skip move the issue to `In Review`; `fail`
   moves it to `In Progress` with the findings in the next run's prompt, or to `In Review` once
   `max_fix_attempts` failures were sent back. Results are stored per head SHA; a failed move is
