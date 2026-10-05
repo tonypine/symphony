@@ -37,6 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private let updateResultItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private lazy var updater = UpdateController(current: updates.current)
     private lazy var installUpdateItem = menuItem("", action: #selector(installUpdate(_:)))
+    private lazy var skipUpdateItem = menuItem(UpdateMenu.skipTitle, action: #selector(skipUpdate(_:)))
     /// Under Update to vX: the update's progress, why it failed, or why Update is off.
     private let updateLineItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     /// Set when the app started Symphony after an update: resume dispatch once it answers.
@@ -85,6 +86,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         menu.addItem(updateAvailableItem)
         menu.addItem(installUpdateItem)
         menu.addItem(updateLineItem)
+        menu.addItem(skipUpdateItem)
         menu.addItem(releaseNotesItem)
         menu.addItem(menuItem(UpdateMenu.checkTitle, action: #selector(checkForUpdates(_:))))
         menu.addItem(updateResultItem)
@@ -236,6 +238,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             return !updates.isChecking
         case #selector(showReleaseNotes(_:)):
             return availableRelease != nil
+        case #selector(skipUpdate(_:)):
+            return availableRelease != nil && !updater.isUpdating
         case #selector(installUpdate(_:)):
             return availableRelease != nil && !updater.isUpdating && !restarting && !runner.isStarting
                 && !runner.isStopping
@@ -403,6 +407,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         UpdatePoller.showReleaseNotes(release)
     }
 
+    /// Records the available release as skipped: the menu shows it as skipped, and Update to vX still installs it.
+    @objc private func skipUpdate(_ sender: Any?) {
+        guard let release = availableRelease, !updater.isUpdating else { return }
+        updater.skips.record(SkippedRelease(release, reason: .skipped))
+        showUpdateItems()
+    }
+
     /// Asks to confirm, then downloads and verifies the release, drains and stops Symphony, and hands over to the
     /// update helper, which swaps the app and relaunches it.
     @objc private func installUpdate(_ sender: Any?) {
@@ -415,6 +426,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         guard SymphonyRunner.confirm(alert) else { return }
 
         controlError = nil
+        // Installing by hand overrides Skip This Version for this build.
+        updater.skips.clear(build: release.build)
         updater.prepare(release) { [weak self] update in self?.drainForUpdate(update) }
     }
 
@@ -483,12 +496,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     /// Shows or hides the update items.
     private func showUpdateItems() {
         let release = availableRelease
-        if let release {
-            updateAvailableItem.title = UpdateMenu.availableTitle(release, current: updates.current)
-            installUpdateItem.title = updater.isUpdating ? UpdateMenu.installingTitle : UpdateMenu.installTitle(release)
+        let offer = release.map { UpdateOffer($0, skips: updater.skips) }
+        if let offer {
+            updateAvailableItem.title = offer.title(current: updates.current)
+            installUpdateItem.title = updater.isUpdating ? UpdateMenu.installingTitle : UpdateMenu.installTitle(offer.release)
         }
         updateAvailableItem.isHidden = release == nil
         installUpdateItem.isHidden = release == nil
+        skipUpdateItem.isHidden = offer?.offersSkip != true
         releaseNotesItem.isHidden = release == nil
 
         let line = updater.menuLine ?? (release == nil ? nil : updateBlocker)

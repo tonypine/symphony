@@ -16,6 +16,8 @@ final class UpdateController {
     private(set) var error: String?
 
     let pending = PendingUpdateStore(defaults: AppStores.current.defaults)
+    /// The builds Skip This Version recorded, which the menu shows as skipped rather than available.
+    let skips = SkippedReleaseStore(defaults: AppStores.current.defaults)
     let cacheDirectory: URL
     private let current: AppBuild
     private let publicKey: MinisignPublicKey?
