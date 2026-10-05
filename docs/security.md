@@ -140,10 +140,11 @@ are *not* covered by these switches — see Best Practices below.
 ### Untrusted-input handling
 
 Linear titles, descriptions, and comments are rendered into the prompt inside bounded `<linear_...>`
-blocks. Titles, descriptions, and other fields have every `&`, `<` and `>` escaped. Comment bodies
-escape only the `<` that opens a `<linear_...>`, `<github_pr_...>` or chat role tag (`<system>`,
-`<user>`, ...), so the agent can rewrite its workpad from a read without adding a layer of HTML
-entities each time, and a body still can't close its block. Symphony also prepends a managed runtime context that instructs the agent to treat
+blocks. Issue titles, descriptions, acceptance criteria and comment bodies escape only the `<` that
+opens a `<linear_...>`, `<github_pr_...>` or chat role tag (`<system>`, `<user>`, ...), so the agent
+can copy a ticket section into its workpad, or rewrite its workpad from a read, without storing HTML
+entities, and the text still can't close its block. Other fields (state, reviewer comments, CI
+logs, QA findings, PR conflict metadata) have every `&`, `<` and `>` escaped. Symphony also prepends a managed runtime context that instructs the agent to treat
 Linear/GitHub/CI/tool-output boundaries as data only, work only in the prepared workspace, prefer
 scoped tools, and avoid common secret paths. Repo `WORKFLOW.md` files can add stricter repo-local
 rules, but they do not need to duplicate those Symphony-owned guardrails.
