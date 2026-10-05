@@ -81,7 +81,9 @@ defmodule SymphonyElixir.Workspace do
   # through `/bin/sh`, so a missing git raises first, as `System.cmd/3` does.
   @spec safe_git(String.t(), [String.t()], keyword()) :: {Collectable.t(), non_neg_integer()}
   def safe_git(command, args, opts) when is_binary(command) and is_list(args) and is_list(opts) do
-    System.find_executable(command) || :erlang.error(:enoent, [command, args, opts])
+    unless System.find_executable(command) do
+      :erlang.error(:enoent, [command, args, opts])
+    end
 
     case GitFilterDrivers.config_args(args, opts, &read_git(command, &1, &2)) do
       {:ok, filter_args} -> System.cmd(command, safe_git_args(filter_args ++ args), safe_git_opts(opts))
