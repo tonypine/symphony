@@ -6,10 +6,12 @@ defmodule SymphonyElixir.Linear.Client do
   require Logger
   alias SymphonyElixir.{AgentLabels, AuditLog, Config, Linear.Issue, Secret}
   alias SymphonyElixir.GitHub.Hosts
-  alias SymphonyElixir.Linear.{RateLimit, Usage}
+  alias SymphonyElixir.Linear.{RateLimit, TransientRetry, Usage}
 
   @issue_page_size 50
   @attachment_page_size 20
+  @attachment_follow_up_page_size 50
+  @attachment_follow_up_max_pages 10
   # Kept small: every polled issue pays for this nested connection in Linear query complexity.
   @sub_issue_page_size 20
   @enrichment_comment_last 20
@@ -52,6 +54,10 @@ defmodule SymphonyElixir.Linear.Client do
             url
             sourceType
             metadata
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
           }
         }
         assignee {
@@ -132,6 +138,10 @@ defmodule SymphonyElixir.Linear.Client do
             sourceType
             metadata
           }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
         }
         assignee {
           id
@@ -206,6 +216,10 @@ defmodule SymphonyElixir.Linear.Client do
           sourceType
           metadata
         }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
       }
       assignee {
         id
@@ -247,6 +261,27 @@ defmodule SymphonyElixir.Linear.Client do
       }
       createdAt
       updatedAt
+    }
+  }
+  """
+
+  # The issue reads above load one page of attachments, so a PR attachment past it (QA uploads
+  # one attachment per screenshot) would be missed. This reads the pages after it.
+  @attachments_query """
+  query SymphonyLinearIssueAttachments($id: String!, $first: Int!, $after: String) {
+    issue(id: $id) {
+      attachments(first: $first, after: $after) {
+        nodes {
+          title
+          url
+          sourceType
+          metadata
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
     }
   }
   """
@@ -621,6 +656,7 @@ defmodule SymphonyElixir.Linear.Client do
              commentLast: @enrichment_comment_last,
              after: after_cursor
            }),
+         {:ok, body} <- complete_pull_request_attachments(body, graphql_fun),
          {:ok, issues, page_info} <- decode_linear_page_response(body, nil) do
       updated_acc = prepend_page_issues(issues, acc_issues)
 
@@ -860,21 +896,18 @@ defmodule SymphonyElixir.Linear.Client do
   defp do_fetch_issue_states_page(ids, assignee_filter, graphql_fun, acc_issues, issue_order_index) do
     {batch_ids, rest_ids} = Enum.split(ids, @issue_page_size)
 
-    case graphql_fun.(@query_by_ids, %{
-           ids: batch_ids,
-           first: length(batch_ids),
-           relationFirst: @issue_page_size,
-           attachmentFirst: @attachment_page_size,
-           commentLast: @enrichment_comment_last
-         }) do
-      {:ok, body} ->
-        with {:ok, issues} <- decode_linear_response(body, assignee_filter) do
-          updated_acc = prepend_page_issues(issues, acc_issues)
-          do_fetch_issue_states_page(rest_ids, assignee_filter, graphql_fun, updated_acc, issue_order_index)
-        end
-
-      {:error, reason} ->
-        {:error, reason}
+    with {:ok, body} <-
+           graphql_fun.(@query_by_ids, %{
+             ids: batch_ids,
+             first: length(batch_ids),
+             relationFirst: @issue_page_size,
+             attachmentFirst: @attachment_page_size,
+             commentLast: @enrichment_comment_last
+           }),
+         {:ok, body} <- complete_pull_request_attachments(body, graphql_fun),
+         {:ok, issues} <- decode_linear_response(body, assignee_filter) do
+      updated_acc = prepend_page_issues(issues, acc_issues)
+      do_fetch_issue_states_page(rest_ids, assignee_filter, graphql_fun, updated_acc, issue_order_index)
     end
   end
 
@@ -910,14 +943,15 @@ defmodule SymphonyElixir.Linear.Client do
         {:error, :missing_issue_identifier}
 
       id ->
-        case graphql_fun.(@query_by_identifier, %{
-               id: id,
-               relationFirst: @issue_page_size,
-               attachmentFirst: @attachment_page_size,
-               commentLast: @enrichment_comment_last
-             }) do
-          {:ok, body} -> decode_linear_issue_response(body, nil)
-          {:error, reason} -> {:error, reason}
+        with {:ok, body} <-
+               graphql_fun.(@query_by_identifier, %{
+                 id: id,
+                 relationFirst: @issue_page_size,
+                 attachmentFirst: @attachment_page_size,
+                 commentLast: @enrichment_comment_last
+               }),
+             {:ok, body} <- complete_pull_request_attachments(body, graphql_fun) do
+          decode_linear_issue_response(body, nil)
         end
     end
   end
@@ -1098,6 +1132,84 @@ defmodule SymphonyElixir.Linear.Client do
   end
 
   defp decode_issue_enrichment_response(_unknown), do: {:error, :linear_unknown_payload}
+
+  # The issue reads load one page of attachments (`@attachment_page_size`). For each issue whose page is
+  # full (`hasNextPage`), read the remaining pages, at most `@attachment_follow_up_max_pages` of them,
+  # so every attachment is seen and a PR attachment pushed past the first page (by QA screenshots,
+  # say) still gives the issue its PR URL. An issue with no more pages costs no request.
+  # A transient failure (rate limit, transport, 429/5xx) on a follow-up page fails the whole read, so
+  # callers that retry transient errors wait it out instead of getting an issue without its PR URL.
+  defp complete_pull_request_attachments(%{"data" => %{"issues" => %{"nodes" => nodes}}} = body, graphql_fun)
+       when is_list(nodes) do
+    nodes
+    |> Enum.reduce_while({:ok, []}, fn node, {:ok, acc} ->
+      case complete_issue_attachments(node, graphql_fun) do
+        {:ok, node} -> {:cont, {:ok, [node | acc]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, completed} -> {:ok, put_in(body, ["data", "issues", "nodes"], Enum.reverse(completed))}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp complete_pull_request_attachments(%{"data" => %{"issue" => issue}} = body, graphql_fun) when is_map(issue) do
+    with {:ok, issue} <- complete_issue_attachments(issue, graphql_fun) do
+      {:ok, put_in(body, ["data", "issue"], issue)}
+    end
+  end
+
+  defp complete_pull_request_attachments(body, _graphql_fun), do: {:ok, body}
+
+  defp complete_issue_attachments(issue, graphql_fun, pages_left \\ @attachment_follow_up_max_pages) do
+    case issue do
+      %{"id" => id, "attachments" => %{"nodes" => nodes, "pageInfo" => %{"hasNextPage" => true, "endCursor" => cursor}}}
+      when is_binary(id) and is_list(nodes) and is_binary(cursor) ->
+        read_next_attachment_page(issue, cursor, graphql_fun, pages_left)
+
+      _complete ->
+        {:ok, issue}
+    end
+  end
+
+  defp read_next_attachment_page(issue, _cursor, _graphql_fun, 0) do
+    Logger.warning(
+      "Stopped reading Linear attachments for #{attachment_issue_context(issue)} after " <>
+        "#{@attachment_follow_up_max_pages} more pages; later attachments were not read"
+    )
+
+    {:ok, issue}
+  end
+
+  defp read_next_attachment_page(%{"id" => id, "attachments" => %{"nodes" => nodes}} = issue, cursor, graphql_fun, pages_left) do
+    case graphql_fun.(@attachments_query, %{id: id, first: @attachment_follow_up_page_size, after: cursor}) do
+      {:ok, %{"data" => %{"issue" => %{"attachments" => %{"nodes" => more} = attachments}}}} when is_list(more) ->
+        issue
+        |> Map.put("attachments", %{attachments | "nodes" => nodes ++ more})
+        |> complete_issue_attachments(graphql_fun, pages_left - 1)
+
+      response ->
+        reason = attachment_page_error(response)
+
+        if TransientRetry.transient?(reason) do
+          {:error, reason}
+        else
+          Logger.warning(
+            "Could not read more Linear attachments for #{attachment_issue_context(issue)}; " <>
+              "its PR URL may be missing reason=#{inspect(reason)}"
+          )
+
+          {:ok, issue}
+        end
+    end
+  end
+
+  defp attachment_page_error({:error, reason}), do: reason
+  defp attachment_page_error({:ok, %{"errors" => errors}}), do: {:linear_graphql_errors, errors}
+  defp attachment_page_error(_response), do: :linear_unknown_payload
+
+  defp attachment_issue_context(issue), do: "issue_id=#{issue["id"]} issue_identifier=#{issue["identifier"]}"
 
   defp next_page_cursor(%{has_next_page: true, end_cursor: end_cursor})
        when is_binary(end_cursor) and byte_size(end_cursor) > 0 do
