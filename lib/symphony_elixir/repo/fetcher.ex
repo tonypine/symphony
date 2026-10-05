@@ -46,6 +46,9 @@ defmodule SymphonyElixir.Repo.Fetcher do
   `opts`:
     * `:server` - the server to ask (default `#{inspect(__MODULE__)}`).
     * `:git` - the git executable (default `"git"`).
+    * `:network_timeout_ms` - how long the fetch may run before it is stopped
+      (see `SymphonyElixir.Workspace.safe_git/3`). A stopped fetch hands the
+      lock on like any other.
     * `:retry_delay_ms` - the wait before the retry after `cannot lock ref`
       (default #{@default_retry_delay_ms}, or the `:repo_fetch_retry_delay_ms`
       application env).
@@ -54,7 +57,8 @@ defmodule SymphonyElixir.Repo.Fetcher do
   def fetch_origin(repo, opts \\ []) when is_binary(repo) and is_list(opts) do
     repo = Path.expand(repo)
     git = Keyword.get(opts, :git, "git")
-    fetch = fn -> with_retry(repo, fn -> Workspace.safe_git(git, ["-C", repo, "fetch", "origin"]) end, opts) end
+    git_opts = Keyword.take(opts, [:network_timeout_ms])
+    fetch = fn -> with_retry(repo, fn -> Workspace.safe_git(git, ["-C", repo, "fetch", "origin"], git_opts) end, opts) end
 
     case server(opts) do
       nil -> fetch.()

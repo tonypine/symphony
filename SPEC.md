@@ -525,6 +525,12 @@ Fields:
     repo runs or waits joins it and reuses its result; a targeted fetch waits its turn. A fetch
     that fails with `cannot lock ref` is retried once after a short delay. On a remote worker the
     dispatch script's `git fetch origin` is not locked, only retried once.
+  - Every git call Symphony makes runs SSH with keepalives, so a connection that stops answering
+    is dropped after about a minute. A host-side `fetch`, `pull`, `push` or `ls-remote` also has
+    a wall-clock limit (5 minutes by default, the `:git_network_timeout_ms` application env): at
+    the limit Symphony stops git and the `ssh` it started, logs an error naming the repo and
+    command, and the call fails with status 124, so the fetch lock passes to the next call. Each
+    such call logs its status and duration.
   - `source` (string) OPTIONAL: a GitHub repository, as `owner/repo` or a github.com URL, that
     Symphony clones and manages itself instead of using a local checkout.
     - The clone lives at `<workspaces.clones_root>/<owner>/<repo>` and is made without a working
@@ -2980,6 +2986,10 @@ Notes:
   byte size, MCP session ID, and transport when available. Malformed newline-delimited JSON returns
   a structured JSON-RPC parse error when the request ID can be recovered, and response-send failures
   are logged instead of silently closing the connection.
+- A connection serves one request at a time. A call of one of Symphony's own tools (`linear_*`,
+  `github_*`) that runs longer than 10 minutes (the `:mcp_tool_timeout_ms` application env) is
+  stopped and answered with a `tool_timeout` tool error, so later calls on the connection are not
+  held behind it. QA tools keep their drivers' own timeouts.
 - Codex launch preserves the configured command while injecting `--config` overrides for
   `default_permissions="workspace_write"` and the generated `permissions.workspace_write.*`
   profile. Runtime launch paths render workspace-local filesystem entries with the validated
