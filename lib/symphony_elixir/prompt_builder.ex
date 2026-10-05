@@ -653,16 +653,38 @@ defmodule SymphonyElixir.PromptBuilder do
       |> Enum.map_join("\n", &("- " <> &1))
 
     [
-      "Auto Review QA failure:",
-      "",
-      "The QA agent tested commit #{blank_fallback(string_field(qa_failure, :commit_sha), "unknown")} and found the behaviour below.",
-      "Fix it on the same branch and PR, then push. Symphony runs QA again once CI is green.",
+      qa_failure_intro(string_field(qa_failure, :source), blank_fallback(string_field(qa_failure, :commit_sha), "unknown")),
       "",
       "BEGIN UNTRUSTED QA FINDINGS",
       PromptSafety.linear_block(qa_findings_text(findings, qa_failure), "qa_findings", @qa_findings_limit),
       "END UNTRUSTED QA FINDINGS"
     ]
     |> Enum.join("\n")
+  end
+
+  # An enforced acceptance gate `rework` comes back through the same continuation as a QA fail.
+  defp qa_failure_intro("acceptance_gate", commit_sha) do
+    Enum.join(
+      [
+        "Auto Review acceptance gate rework:",
+        "",
+        "The acceptance gate judged commit #{commit_sha} against the ticket and sent it back: the acceptance criteria or the scope below are not met yet.",
+        "Fix them on the same branch and PR, then push. Symphony runs QA and the gate again once CI is green."
+      ],
+      "\n"
+    )
+  end
+
+  defp qa_failure_intro(_source, commit_sha) do
+    Enum.join(
+      [
+        "Auto Review QA failure:",
+        "",
+        "The QA agent tested commit #{commit_sha} and found the behaviour below.",
+        "Fix it on the same branch and PR, then push. Symphony runs QA again once CI is green."
+      ],
+      "\n"
+    )
   end
 
   defp qa_findings_text(findings, qa_failure) do

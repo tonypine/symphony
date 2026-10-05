@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.AutoMergeTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{AutoMerge, CiPoller, PrReviewPoller}
+  alias SymphonyElixir.{AutoMerge, AutoReview, CiPoller, PrReviewPoller}
   alias SymphonyElixir.Linear.Issue
 
   @repo_key "default"
@@ -130,6 +130,27 @@ defmodule SymphonyElixir.AutoMergeTest do
     assert_received {:issue_state_update, @issue_id, "Done"}
     assert log =~ "Auto-merge ACME-1780: merged"
     assert RunStore.list_pr_reviews(@repo_key) == []
+  end
+
+  test "an issue the acceptance gate approved in enforce mode gets auto-merge on the next poll" do
+    write_auto_merge_workflow!(ci: %{enabled: true}, auto_review: %{enabled: true, acceptance_gate: %{mode: "enforce"}})
+    now = ~U[2026-10-03 12:00:00Z]
+    put_run!(now)
+
+    record = %{repo_key: @repo_key, issue_id: @issue_id, pr_url: @pr_url, qa_sha: "head-1", qa_verdict: "pass"}
+    record = Map.merge(record, %{qa_target_state: "In Review", gate_sha: "head-1", gate_verdict: "approve"})
+    :ok = RunStore.put_ci_check(record)
+
+    assert {:auto_review_gate, @issue_id, "approve", "Merging"} =
+             AutoReview.on_green(issue("Auto Review"), record, %{commit_sha: "head-1"}, Config.settings!(), tracker: FakeTracker)
+
+    assert_received {:issue_state_update, @issue_id, "Merging"}
+
+    track([issue("Merging")])
+    activity(head: "head-1", merge_state: "BLOCKED")
+
+    capture_log(fn -> assert {:ok, %{actions: [{:auto_merge, @issue_id, "enabled"}]}} = poll(now) end)
+    assert_received {:enable_auto_merge, @pr_url, %{head_sha: "head-1"}}
   end
 
   test "a PR GitHub can already merge is squash-merged right away" do

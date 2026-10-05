@@ -35,7 +35,12 @@ defmodule SymphonyElixir.AutoReview do
   `SymphonyElixir.AcceptanceGate.Runner` for a gate pass on the PR head (`run_gate/2`, see
   `SymphonyElixir.AcceptanceGate`), and the issue moves on once the gate has a verdict. The
   order is CI, then QA, then the gate. In `shadow` mode the verdict is advisory and the issue
-  goes to `In Review` as before; a QA `fail` never reaches the gate.
+  goes to `In Review` as before; a QA `fail` never reaches the gate. In `enforce` mode the
+  verdict moves the issue (`SymphonyElixir.AcceptanceGate.enforced_target/4`): `approve` to
+  `Merging`, where GitHub auto-merge lands the PR; `rework` back to `In Progress` with the unmet
+  criteria as continuation context, sharing `auto_review.max_fix_attempts` with QA fails (the
+  rework past it goes to `In Review`); `escalate` to `In Review`. The mode is read again on every
+  poll and when a gate pass ends, so switching it off stops the moves without a restart.
 
   At startup Symphony checks that the Linear team has the Auto Review state and
   that the CI poller is on. When either is missing, Auto Review is turned off for
@@ -61,6 +66,7 @@ defmodule SymphonyElixir.AutoReview do
   @review_state "In Review"
   @active_state "In Progress"
   @rework_state "Rework"
+  @merging_state "Merging"
 
   @doc "Whether Auto Review is configured on and the startup check did not turn it off."
   @spec enabled?(Schema.t() | term()) :: boolean()
@@ -237,7 +243,7 @@ defmodule SymphonyElixir.AutoReview do
 
   defp gate_outcome(issue, record, sha, settings, opts) do
     if Map.get(record, :gate_sha) == sha and is_binary(Map.get(record, :gate_verdict)),
-      do: apply_gate_verdict(issue, record, opts),
+      do: apply_gate_verdict(issue, record, settings, opts),
       else: request_gate(issue, record, sha, settings, opts)
   end
 
@@ -265,22 +271,40 @@ defmodule SymphonyElixir.AutoReview do
   `SymphonyElixir.AcceptanceGate.Runner` task. An inconclusive pass below the limit leaves the
   issue in Auto Review, and the next green poll asks for another pass. A verdict that comes after
   the issue left Auto Review, or after its PR merged, closed or moved on, is kept but moves nothing.
+
+  The repository's settings are read again first, so a mode changed since the request applies.
   """
   @spec run_gate(map(), keyword()) :: tuple()
-  def run_gate(%{issue: issue, record: record, sha: sha, settings: settings} = job, opts) do
+  def run_gate(%{issue: issue, record: record, sha: sha} = job, opts) do
     Usage.put_caller(:auto_review)
+    settings = current_settings(Map.get(record, :repo_key), job.settings)
 
-    case Keyword.get(opts, :acceptance_gate, AcceptanceGate).judge(job, opts) do
+    case Keyword.get(opts, :acceptance_gate, AcceptanceGate).judge(%{job | settings: settings}, opts) do
       {:ok, %{verdict: nil}} ->
         {:gate_inconclusive, issue.id, sha}
 
       {:ok, decision} ->
-        record = Map.merge(record, %{gate_sha: sha, gate_verdict: decision.verdict})
+        record =
+          Map.merge(record, %{
+            gate_sha: sha,
+            gate_verdict: decision.verdict,
+            gate_run_id: Map.get(decision, :run_id),
+            gate_findings: Map.get(decision, :findings, []),
+            gate_target_state: nil,
+            gate_applied: false
+          })
 
         case moved_on(issue, record, sha, settings, opts) do
-          nil -> apply_gate_verdict(issue, record, opts)
+          nil -> apply_gate_verdict(issue, record, settings, opts)
           reason -> gate_unapplied(issue, sha, decision.verdict, reason)
         end
+    end
+  end
+
+  defp current_settings(repo_key, settings) do
+    case Config.settings_for_repo(repo_key) do
+      {:ok, current} -> current
+      {:error, _reason} -> settings
     end
   end
 
@@ -293,14 +317,88 @@ defmodule SymphonyElixir.AutoReview do
     {:auto_review_gate_not_applied, issue.id, verdict, reason}
   end
 
-  # `shadow` (and `enforce` until it is applied) only records the verdict: the issue moves where
-  # QA sent it, as it did before the gate.
-  defp apply_gate_verdict(issue, record, opts) do
+  defp apply_gate_verdict(issue, record, settings, opts) do
+    case AcceptanceGate.enforced_target(issue, record, Map.get(record, :gate_verdict), settings) do
+      nil -> advise(issue, record, opts)
+      target -> enforce(issue, record, target, opts)
+    end
+  end
+
+  # An advisory verdict (`shadow`, or a ticket the gate never moves) is only recorded: the issue
+  # moves where QA sent it, as it did before the gate.
+  defp advise(issue, record, opts) do
     case transition(issue, record, String.to_existing_atom(Map.get(record, :qa_verdict)), Map.get(record, :qa_target_state), opts) do
       {:auto_review_qa, issue_id, _qa_verdict, target_state} -> {:auto_review_gate, issue_id, Map.get(record, :gate_verdict), target_state}
       error -> error
     end
   end
+
+  # The target and what the move needs (the rework findings, the shared fix count) are stored
+  # before the move, as for a QA outcome, so a run the move dispatches already sees them. A move
+  # that failed is tried again on the next poll without counting another attempt; a rework whose
+  # fix run ended without a new commit, back on the same SHA, counts one.
+  defp enforce(issue, record, target, opts) do
+    if Map.get(record, :gate_applied) == false and is_binary(Map.get(record, :gate_target_state)) do
+      gate_transition(issue, record, Map.get(record, :gate_target_state), opts)
+    else
+      attrs = Map.put(enforce_attrs(record, target), :gate_target_state, target.state)
+      update_ci_check(Keyword.get(opts, :run_store, RunStore), record, Map.put(attrs, :gate_applied, false))
+      gate_transition(issue, Map.merge(record, attrs), target.state, opts)
+    end
+  end
+
+  defp enforce_attrs(record, %{state: @active_state}) do
+    returned? = Map.get(record, :gate_applied) == true
+    previous = if returned?, do: ["The fix run ended without pushing a commit, so the gate's findings below still apply."], else: []
+    findings = previous ++ List.wrap(Map.get(record, :gate_findings))
+    failure = %{summary: "The acceptance gate sent the PR back.", findings: findings, source: "acceptance_gate"}
+
+    %{
+      qa_fix_attempts: AcceptanceGate.fix_attempts(record) + 1,
+      qa_failure: Map.put(failure, :commit_sha, Map.get(record, :gate_sha)),
+      qa_last_failure: failure
+    }
+  end
+
+  defp enforce_attrs(_record, %{escalated: true}), do: %{qa_failure: nil}
+  # An approve or an escalate ends the fix loop, so the next one starts a fresh count.
+  defp enforce_attrs(_record, _target), do: %{qa_fix_attempts: 0, qa_failure: nil}
+
+  defp gate_transition(issue, record, target_state, opts) do
+    tracker = Keyword.get(opts, :tracker, Tracker)
+    run_store = Keyword.get(opts, :run_store, RunStore)
+    verdict = Map.get(record, :gate_verdict)
+
+    with :ok <- mark_moved_by_gate(run_store, record, target_state),
+         :ok <- tracker.update_issue_state(issue.id, target_state) do
+      update_ci_check(run_store, record, %{qa_applied: true, gate_applied: true})
+      Logger.info("Acceptance gate moved #{issue.identifier} to #{target_state} issue_id=#{issue.id} verdict=#{verdict} sha=#{Map.get(record, :gate_sha)}")
+      {:auto_review_gate, issue.id, verdict, target_state}
+    else
+      {:error, {:mark_failed, reason}} ->
+        Logger.warning("Acceptance gate left #{issue.identifier} in place: the gate run could not be marked before the move to #{target_state}: #{inspect(reason)}")
+        {:state_transition_error, issue.id, :acceptance_gate, reason}
+
+      {:error, reason} ->
+        Logger.warning("Failed to move #{issue.identifier} to #{target_state} after the acceptance gate: #{inspect(reason)}")
+        {:state_transition_error, issue.id, :acceptance_gate, reason}
+    end
+  end
+
+  # The gate's own move to Merging or back to In Progress is no human decision: the agreement
+  # stats skip the run (see `SymphonyElixir.AcceptanceGate.Agreement`). The mark goes on before
+  # the move, so no CI poll ever sees the issue moved and the run unmarked; without it the issue
+  # stays put and the next poll tries again. A failed move keeps the mark, since the move may have
+  # gone through anyway.
+  defp mark_moved_by_gate(run_store, %{gate_run_id: run_id} = record, target_state)
+       when is_binary(run_id) and target_state in [@merging_state, @active_state] do
+    case run_store.update_run(Map.get(record, :repo_key), run_id, %{moved_by_gate: target_state}) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:mark_failed, reason}}
+    end
+  end
+
+  defp mark_moved_by_gate(_run_store, _record, _target_state), do: :ok
 
   @doc """
   Handles an issue in Auto Review whose PR conflicts with its base and has no checks:
@@ -638,6 +736,7 @@ defmodule SymphonyElixir.AutoReview do
         qa_updated_at: DateTime.utc_now()
       }
       |> Map.merge(verdict_attrs(verdict, escalated?, fix_attempts, sha, result))
+      |> keep_fix_attempts(issue, settings)
 
     update_ci_check(Keyword.get(opts, :run_store, RunStore), record, attrs)
 
@@ -691,6 +790,14 @@ defmodule SymphonyElixir.AutoReview do
   end
 
   defp verdict_attrs(_verdict, _escalated?, _fix_attempts, _sha, _result), do: %{qa_failure: nil}
+
+  # While the gate enforces, a QA pass doesn't end the fix loop: the gate's verdict does, and its
+  # reworks share the count with QA fails.
+  defp keep_fix_attempts(%{qa_passed: true} = attrs, issue, settings) do
+    if AcceptanceGate.enforces?(issue, settings), do: Map.delete(attrs, :qa_fix_attempts), else: attrs
+  end
+
+  defp keep_fix_attempts(attrs, _issue, _settings), do: attrs
 
   defp notify(issue, record, verdict, target_state, outcome) when verdict in [:pass, :fail] do
     Notifications.emit_event(if(verdict == :pass, do: :qa_passed, else: :qa_failed), %{

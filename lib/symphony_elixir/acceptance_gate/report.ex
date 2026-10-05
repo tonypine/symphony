@@ -3,12 +3,14 @@ defmodule SymphonyElixir.AcceptanceGate.Report do
   Renders and publishes the `## Symphony Acceptance Gate` Linear comment.
 
   Like the QA report (`SymphonyElixir.QaAgent.Report`), Symphony keeps one gate comment per
-  issue and rewrites it for each PR head the gate judges. It shows the mode, the verdict and
-  the agent's own verdict, one row per acceptance criterion, the overlaps with other open PRs,
-  the scope findings, the escalation reasons, the proposed follow-ups (listed, never filed),
-  and the run's tokens and runtime.
+  issue and rewrites it for each PR head the gate judges. It shows the mode (and, in `enforce`
+  mode, where the verdict moves the issue), the verdict and the agent's own verdict, one row per
+  acceptance criterion, the overlaps with other open PRs, the scope findings, the escalation
+  reasons (first, for an `escalate` verdict), the follow-ups (listed in `shadow` mode, filed in
+  `enforce` mode), and the run's tokens and runtime.
   """
 
+  alias SymphonyElixir.AcceptanceGate.FollowUps
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaAgent.Report, as: QaReport
 
@@ -22,15 +24,21 @@ defmodule SymphonyElixir.AcceptanceGate.Report do
   @doc """
   Renders the comment for a gate run (`SymphonyElixir.AcceptanceGate.run/3`'s result) merged
   with `:decision`, `:sha`, `:mode`, `:runtime_seconds` and `:limit` (the inconclusive limit).
+  An enforced verdict adds `:target` (`SymphonyElixir.AcceptanceGate.enforced_target/4`),
+  `:fix_attempts`, `:max_fix_attempts` and `:filed_follow_ups` (`FollowUps.file/5`'s results).
   """
   @spec render(map()) :: String.t()
   def render(report) when is_map(report) do
     answer = answer(report.outcome)
+    reasons = list_block("Escalation reasons", Enum.map(report.decision.reasons, &"`#{&1.rule}`: #{&1.detail}") ++ Enum.map(Map.get(answer, :escalation_reasons, []), &"agent: #{&1}"))
+    escalate? = report.decision.verdict == "escalate"
 
     [
       @heading,
       "",
-      mode_line(report.mode),
+      # An escalation opens with why a person has to look.
+      if(escalate?, do: reasons),
+      mode_line(report),
       "",
       "**Verdict:** #{verdict_label(report)} · **Agent verdict:** #{report.decision.agent_verdict || "none (the agent didn't run)"}",
       head_line(report),
@@ -38,8 +46,8 @@ defmodule SymphonyElixir.AcceptanceGate.Report do
       criteria_block(rows(report.criteria, answer)),
       overlaps_block(context_overlaps(report), Map.get(answer, :overlaps, [])),
       list_block("Scope", Enum.map(Map.get(answer, :scope, []), &"#{&1.kind}: #{&1.detail}")),
-      list_block("Escalation reasons", Enum.map(report.decision.reasons, &"`#{&1.rule}`: #{&1.detail}") ++ Enum.map(Map.get(answer, :escalation_reasons, []), &"agent: #{&1}")),
-      list_block("Proposed follow-ups (not filed)", Enum.map(Map.get(answer, :follow_ups, []), &follow_up_line/1)),
+      if(not escalate?, do: reasons),
+      follow_ups_block(Map.get(report, :filed_follow_ups), Map.get(answer, :follow_ups, [])),
       "_Symphony rewrites this comment for each PR head the gate judges._"
     ]
     |> Enum.reject(&is_nil/1)
@@ -69,10 +77,26 @@ defmodule SymphonyElixir.AcceptanceGate.Report do
   defp answer({:answer, answer}), do: answer
   defp answer(_outcome), do: %{}
 
-  defp mode_line("shadow"),
+  defp mode_line(%{mode: "shadow"}),
     do: "**Mode:** shadow. This verdict is advisory: Symphony records it, and the issue moves to In Review as before. Nothing merges on its own."
 
-  defp mode_line(mode), do: "**Mode:** #{mode}. Symphony doesn't apply gate verdicts yet: this one is advisory, and the issue moves to In Review as before."
+  defp mode_line(%{mode: "enforce", target: %{state: "Merging"}}),
+    do: "**Mode:** enforce. Symphony applies this verdict: the issue moves to Merging, and GitHub auto-merge lands the PR once its checks pass."
+
+  defp mode_line(%{mode: "enforce", target: %{state: state, escalated: true}} = report),
+    do: "**Mode:** enforce. The fix attempts are used up (#{report.fix_attempts} of #{report.max_fix_attempts}), so this rework goes to a person: the issue moves to #{state}."
+
+  defp mode_line(%{mode: "enforce", target: %{state: state}, decision: %{verdict: "rework"}} = report),
+    do: "**Mode:** enforce. Symphony applies this verdict: the issue goes back to #{state} with the unmet criteria (fix attempt #{report.fix_attempts + 1} of #{report.max_fix_attempts})."
+
+  defp mode_line(%{mode: "enforce", target: %{state: state}}), do: "**Mode:** enforce. Symphony applies this verdict: the issue moves to #{state} for a person to decide."
+
+  defp mode_line(%{mode: "enforce", decision: %{verdict: nil}}), do: "**Mode:** enforce."
+
+  defp mode_line(%{mode: "enforce"}),
+    do: "**Mode:** enforce, but the gate never moves a `breakdown` parent or a `Final verification:` ticket: this verdict is advisory, and the issue moves to In Review as before."
+
+  defp mode_line(%{mode: mode}), do: "**Mode:** #{mode}. The gate was turned off during this pass: this verdict is advisory, and the issue moves to In Review as before."
 
   defp verdict_label(%{decision: %{verdict: nil, inconclusive: count}, limit: limit}),
     do: "inconclusive (#{count} of #{limit}); Symphony runs the gate again on the next green CI poll"
@@ -125,6 +149,14 @@ defmodule SymphonyElixir.AcceptanceGate.Report do
 
     list_block("Overlaps with open PRs", lines)
   end
+
+  defp follow_ups_block(nil, proposed), do: list_block("Proposed follow-ups (not filed)", Enum.map(proposed, &follow_up_line/1))
+  defp follow_ups_block(filed, _proposed), do: list_block("Follow-ups", Enum.map(filed, &filed_line/1))
+
+  defp filed_line(%{status: {:filed, identifier}} = follow_up), do: "filed as #{identifier || "a sub-issue"}: #{follow_up_line(follow_up)}"
+  defp filed_line(%{status: :duplicate} = follow_up), do: "already a sub-issue, not filed again: #{follow_up_line(follow_up)}"
+  defp filed_line(%{status: :over_cap} = follow_up), do: "not filed (#{FollowUps.max_per_verdict()} per verdict): #{follow_up_line(follow_up)}"
+  defp filed_line(%{status: {:failed, reason}} = follow_up), do: "not filed (#{inspect(reason)}): #{follow_up_line(follow_up)}"
 
   defp follow_up_line(%{title: title, detail: ""}), do: "**#{title}**"
   defp follow_up_line(%{title: title, detail: detail}), do: "**#{title}**: #{detail}"
