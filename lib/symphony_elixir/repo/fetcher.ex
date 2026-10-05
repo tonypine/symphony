@@ -24,10 +24,11 @@ defmodule SymphonyElixir.Repo.Fetcher do
 
   require Logger
 
-  alias SymphonyElixir.{PathSafety, Workspace}
+  alias SymphonyElixir.{GitConfigCommands, PathSafety, Workspace}
 
   @default_retry_delay_ms 1_000
   @lock_failure "cannot lock ref"
+  @remote_fetch_args Enum.join(GitConfigCommands.subcommand_args(["fetch", "origin"]), " ")
 
   @type result :: {String.t(), non_neg_integer()}
 
@@ -45,6 +46,9 @@ defmodule SymphonyElixir.Repo.Fetcher do
   `opts`:
     * `:server` - the server to ask (default `#{inspect(__MODULE__)}`).
     * `:git` - the git executable (default `"git"`).
+    * `:network_timeout_ms` - how long the fetch may run before it is stopped
+      (see `SymphonyElixir.Workspace.safe_git/3`). A stopped fetch hands the
+      lock on like any other.
     * `:retry_delay_ms` - the wait before the retry after `cannot lock ref`
       (default #{@default_retry_delay_ms}, or the `:repo_fetch_retry_delay_ms`
       application env).
@@ -53,7 +57,8 @@ defmodule SymphonyElixir.Repo.Fetcher do
   def fetch_origin(repo, opts \\ []) when is_binary(repo) and is_list(opts) do
     repo = Path.expand(repo)
     git = Keyword.get(opts, :git, "git")
-    fetch = fn -> with_retry(repo, fn -> Workspace.safe_git(git, ["-C", repo, "fetch", "origin"]) end, opts) end
+    git_opts = Keyword.take(opts, [:network_timeout_ms])
+    fetch = fn -> with_retry(repo, fn -> Workspace.safe_git(git, ["-C", repo, "fetch", "origin"], git_opts) end, opts) end
 
     case server(opts) do
       nil -> fetch.()
@@ -92,7 +97,8 @@ defmodule SymphonyElixir.Repo.Fetcher do
   @doc """
   The shell commands a remote worker's dispatch script runs to fetch `origin` in
   `$repo`, under `set -e`, with the `symphony_git` the script defines
-  (`SymphonyElixir.Workspace.remote_safe_git_functions/0`). The lock lives in this
+  (`SymphonyElixir.Workspace.remote_safe_git_functions/0`) and the options of
+  `SymphonyElixir.GitConfigCommands.subcommand_args/1`. The lock lives in this
   node, so on the worker host a fetch that fails with `cannot lock ref` is only run
   once more, a second later.
   """
@@ -100,11 +106,11 @@ defmodule SymphonyElixir.Repo.Fetcher do
   def remote_fetch_origin_script do
     """
     symphony_fetch_status=0
-    symphony_fetch_output=$(symphony_git "$repo" fetch origin 2>&1) || symphony_fetch_status=$?
+    symphony_fetch_output=$(symphony_git "$repo" #{@remote_fetch_args} 2>&1) || symphony_fetch_status=$?
     if [ "$symphony_fetch_status" -ne 0 ]; then
       printf '%s\\n' "$symphony_fetch_output" >&2
       case "$symphony_fetch_output" in
-        *"#{@lock_failure}"*) sleep 1; symphony_git "$repo" fetch origin ;;
+        *"#{@lock_failure}"*) sleep 1; symphony_git "$repo" #{@remote_fetch_args} ;;
         *) exit "$symphony_fetch_status" ;;
       esac
     fi\

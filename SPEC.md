@@ -525,6 +525,12 @@ Fields:
     repo runs or waits joins it and reuses its result; a targeted fetch waits its turn. A fetch
     that fails with `cannot lock ref` is retried once after a short delay. On a remote worker the
     dispatch script's `git fetch origin` is not locked, only retried once.
+  - Every git call Symphony makes runs SSH with keepalives, so a connection that stops answering
+    is dropped after about a minute. A host-side `fetch`, `pull`, `push` or `ls-remote` also has
+    a wall-clock limit (5 minutes by default, the `:git_network_timeout_ms` application env): at
+    the limit Symphony stops git and the `ssh` it started, logs an error naming the repo and
+    command, and the call fails with status 124, so the fetch lock passes to the next call. Each
+    such call logs its status and duration.
   - `source` (string) OPTIONAL: a GitHub repository, as `owner/repo` or a github.com URL, that
     Symphony clones and manages itself instead of using a local checkout.
     - The clone lives at `<workspaces.clones_root>/<owner>/<repo>` and is made without a working
@@ -1786,7 +1792,9 @@ not require recognizing or validating extension fields unless that extension is 
   ignores both and logs a warning. A Claude run whose provider is `openrouter` also starts with
   `ANTHROPIC_BASE_URL=https://openrouter.ai/api`, `ANTHROPIC_AUTH_TOKEN` set from the
   `OPENROUTER_API_KEY` environment variable of the Symphony process, an empty
-  `ANTHROPIC_API_KEY`, and `CLAUDE_CODE_SUBAGENT_MODEL=<model>`. If `OPENROUTER_API_KEY` is unset
+  `ANTHROPIC_API_KEY`, and `CLAUDE_CODE_SUBAGENT_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`,
+  `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_OPUS_MODEL` and
+  `ANTHROPIC_SMALL_FAST_MODEL` all set to `<model>`. If `OPENROUTER_API_KEY` is unset
   or blank, the run fails before the agent starts with an error naming the run kind and the
   variable. The key MUST NOT be written to config, logs, the audit log, the run store, or
   transcripts. Before an OpenRouter run starts, the implementation looks the model up in
@@ -2947,6 +2955,10 @@ Notes:
   byte size, MCP session ID, and transport when available. Malformed newline-delimited JSON returns
   a structured JSON-RPC parse error when the request ID can be recovered, and response-send failures
   are logged instead of silently closing the connection.
+- A connection serves one request at a time. A call of one of Symphony's own tools (`linear_*`,
+  `github_*`) that runs longer than 10 minutes (the `:mcp_tool_timeout_ms` application env) is
+  stopped and answered with a `tool_timeout` tool error, so later calls on the connection are not
+  held behind it. QA tools keep their drivers' own timeouts.
 - Codex launch preserves the configured command while injecting `--config` overrides for
   `default_permissions="workspace_write"` and the generated `permissions.workspace_write.*`
   profile. Runtime launch paths render workspace-local filesystem entries with the validated
@@ -4952,7 +4964,8 @@ infrastructure.
   configured repo `WORKFLOW.md` through the same validation the service runs at startup, without
   starting the runtime or contacting the tracker or GitHub. It exits `0` and prints
   `Config OK: <path>` when valid, and exits `1` with the error on stderr when the file is missing
-  or invalid. For a `workflow_source: ref` repo it validates the `WORKFLOW.md` startup would use:
+  or invalid. It first prints its build on stderr, `Symphony <version>` and the short commit in
+  parentheses when the build records one. For a `workflow_source: ref` repo it validates the `WORKFLOW.md` startup would use:
   the file committed on the base branch ref when it parses (as last fetched; `check` does not fetch
   or write the snapshot), otherwise the last good snapshot or the file on disk. Errors name the
   file and key and never print secret values. A `workspace.source`

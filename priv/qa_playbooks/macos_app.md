@@ -51,7 +51,8 @@ Do not edit files in the worktree, gitignored ones included (such as build cache
    and give the app the `path` it returns, never your own path: the app may run on a
    separate QA machine that cannot see your files. Type that path into the field rather
    than browsing for it in a file picker.
-8. Run `qa_quit_app` when you are done.
+8. Run `qa_quit_app` when you are done. It returns what the app wrote to its output; quote
+   the lines that bear on a step in that step's `details`.
 9. Attach the screenshots that show each step's result with `linear_attach_file`
    (`make_public: false`) and list the returned URLs in that step's `evidence`.
 

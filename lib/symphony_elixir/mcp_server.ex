@@ -19,6 +19,10 @@ defmodule SymphonyElixir.McpServer do
   @max_socket_path_bytes 103
   @shim_prefix "symphony-mcp-shim-"
   @orphaned_socket_dir_grace_seconds 5
+  # How long one of Symphony's own tools (`linear_*`, `github_*`) may run before the call returns
+  # an error. A connection serves one request at a time, so a call that never ends would hold
+  # every later call on it, the ones its client gave up on included.
+  @default_tool_timeout_ms 600_000
 
   @type session :: %{
           id: String.t(),
@@ -692,12 +696,12 @@ defmodule SymphonyElixir.McpServer do
   end
 
   # The per-connection serve loop runs in a bare `spawn/1` (see `accept_loop/2`),
-  # so an unhandled exception in `handle_payload/2` would silently kill the
+  # so an unhandled exception in `handle_payload/3` would silently kill the
   # connection — the client sees "MCP error -32000: Connection closed" with no
   # trace in the symphony log. Catch and log so the real cause is recoverable
   # and the connection survives.
   defp safe_handle_payload(payload, context, request_meta) do
-    handle_payload(payload, context)
+    handle_payload(payload, context, request_meta)
   rescue
     error ->
       stacktrace = __STACKTRACE__
@@ -793,7 +797,7 @@ defmodule SymphonyElixir.McpServer do
     end
   end
 
-  defp handle_payload(%{"id" => id, "method" => "initialize"} = payload, _context) do
+  defp handle_payload(%{"id" => id, "method" => "initialize"} = payload, _context, _request_meta) do
     protocol_version = get_in(payload, ["params", "protocolVersion"]) || @protocol_version
 
     response(id, %{
@@ -803,28 +807,80 @@ defmodule SymphonyElixir.McpServer do
     })
   end
 
-  defp handle_payload(%{"method" => "notifications/" <> _rest}, _context), do: nil
+  defp handle_payload(%{"method" => "notifications/" <> _rest}, _context, _request_meta), do: nil
 
-  defp handle_payload(%{"id" => id, "method" => "tools/list"}, context) do
+  defp handle_payload(%{"id" => id, "method" => "tools/list"}, context, _request_meta) do
     response(id, %{"tools" => tool_specs_for_context(context)})
   end
 
-  defp handle_payload(%{"id" => id, "method" => "tools/call", "params" => params}, context) do
+  defp handle_payload(%{"id" => id, "method" => "tools/call", "params" => params}, context, request_meta) do
     tool = Map.get(params, "name")
     arguments = Map.get(params, "arguments", %{})
-    result = execute_tool(tool, arguments, context)
 
-    response(id, %{
-      "content" => [%{"type" => "text", "text" => Map.get(result, "output", "")}],
-      "isError" => Map.get(result, "success") != true
-    })
+    case run_tool(tool, arguments, context, request_meta) do
+      {:ok, result} -> tool_response(id, Map.get(result, "output", ""), Map.get(result, "success") != true)
+      {:timeout, timeout_ms} -> tool_response(id, tool_timeout_output(tool, timeout_ms), true)
+    end
   end
 
-  defp handle_payload(%{"id" => id, "method" => method}, _context) do
+  defp handle_payload(%{"id" => id, "method" => method}, _context, _request_meta) do
     error_response(id, -32_601, "Unsupported MCP method: #{method}")
   end
 
-  defp handle_payload(_payload, _context), do: nil
+  defp handle_payload(_payload, _context, _request_meta), do: nil
+
+  # The tool runs in a task killed at the timeout (see `tool_timeout_ms/2`). What it raises or
+  # exits with is raised again here, for `safe_handle_payload/3` to log and answer.
+  defp run_tool(tool, arguments, context, request_meta) do
+    timeout_ms = tool_timeout_ms(tool, context)
+
+    task =
+      Task.async(fn ->
+        try do
+          {:ok, execute_tool(tool, arguments, context)}
+        catch
+          kind, reason -> {:raised, kind, reason, __STACKTRACE__}
+        end
+      end)
+
+    case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      {:ok, {:ok, result}} ->
+        {:ok, result}
+
+      {:ok, {:raised, kind, reason, stacktrace}} ->
+        :erlang.raise(kind, reason, stacktrace)
+
+      nil ->
+        Logger.error("MCP tool call timed out #{format_request_meta(request_meta)} timeout_ms=#{timeout_ms}; stopped it")
+
+        {:timeout, timeout_ms}
+    end
+  end
+
+  # QA tools keep the timeouts their drivers set: a `qa_build` runs as long as its playbook allows.
+  defp tool_timeout_ms("qa_" <> _rest, _context), do: :infinity
+
+  defp tool_timeout_ms(_tool, context) do
+    Map.get_lazy(context, :mcp_tool_timeout_ms, fn ->
+      Application.get_env(:symphony_elixir, :mcp_tool_timeout_ms, @default_tool_timeout_ms)
+    end)
+  end
+
+  defp tool_timeout_output(tool, timeout_ms) do
+    Jason.encode!(
+      %{
+        "error" => %{
+          "code" => "tool_timeout",
+          "message" => "#{tool} did not finish within #{timeout_ms} ms, so Symphony stopped it. Calling it again starts it afresh."
+        }
+      },
+      pretty: true
+    )
+  end
+
+  defp tool_response(id, text, error?) do
+    response(id, %{"content" => [%{"type" => "text", "text" => text}], "isError" => error?})
+  end
 
   defp response(id, result), do: %{"jsonrpc" => "2.0", "id" => id, "result" => result}
 

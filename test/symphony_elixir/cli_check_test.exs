@@ -42,6 +42,19 @@ defmodule SymphonyElixir.CLICheckTest do
     refute_received :runtime_started
   end
 
+  test "prints the build it runs on stderr, with its commit when the build has one", %{root: root} do
+    path = write_symphony!(root, valid_symphony(root))
+    original_build = Application.get_env(:symphony_elixir, :build)
+    on_exit(fn -> restore_app_env(:build, original_build) end)
+    version = :symphony_elixir |> Application.spec(:vsn) |> to_string()
+
+    Application.put_env(:symphony_elixir, :build, [])
+    assert check_io(["--config", path]) == {{:halt, 0}, "Config OK: #{path}\n", "Symphony #{version}\n"}
+
+    Application.put_env(:symphony_elixir, :build, sha: "ABCDEF1234567890abcdef1234567890abcdef12")
+    assert check_io(["--config", path]) == {{:halt, 0}, "Config OK: #{path}\n", "Symphony #{version} (abcdef1)\n"}
+  end
+
   test "defaults to symphony.yml in the current folder", %{root: root} do
     path = write_symphony!(root, valid_symphony(root))
 
@@ -438,6 +451,12 @@ defmodule SymphonyElixir.CLICheckTest do
   end
 
   defp check(args, overrides \\ []) do
+    {result, output, _stderr} = check_io(args, overrides)
+    {result, output}
+  end
+
+  # Also returns what the check printed on stderr: the build line, then any error.
+  defp check_io(args, overrides \\ []) do
     parent = self()
 
     deps =
@@ -464,9 +483,9 @@ defmodule SymphonyElixir.CLICheckTest do
       }
       |> Map.merge(Map.new(overrides))
 
-    {result, output} = with_io(fn -> CLI.evaluate(["check" | args], deps) end)
+    {{result, output}, stderr} = with_io(:stderr, fn -> with_io(fn -> CLI.evaluate(["check" | args], deps) end) end)
     refute_received :runtime_started
-    {result, output}
+    {result, output, stderr}
   end
 
   defp write_symphony!(root, content) do

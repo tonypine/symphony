@@ -518,7 +518,7 @@ final class SettingsViewModel: ObservableObject {
                 embeddedSymphonyPath: SymphonyRunner.embeddedSymphonyPath,
                 subcommand: ["check"]
             )
-            return await ConfigCheck.run(launch)
+            return await ConfigCheck.run(launch, log: ConfigCheck.qaLog(AppStores.current.qaMode))
         } catch {
             return .failed(error.localizedDescription)
         }

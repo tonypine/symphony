@@ -64,6 +64,27 @@ final class ConfigCheckTests: XCTestCase {
         XCTAssertEqual(failed, .failed("Config error in /ops/symphony.yml: bad"))
     }
 
+    func testRunLogsTheStatusAndOutput() async {
+        let entries = LogEntries()
+        let result = await ConfigCheck.run(shell("echo 'Symphony 0.0.1 (abc1234)' >&2; echo 'Config OK: /ops/symphony.yml'"), log: entries.append)
+
+        XCTAssertEqual(result, .passed)
+        XCTAssertEqual(entries.all, ["symphony check exited with status 0:\n  Symphony 0.0.1 (abc1234)\n  Config OK: /ops/symphony.yml\n"])
+    }
+
+    func testTheLogEntryIndentsTheOutputAndSkipsBlankLines() {
+        XCTAssertEqual(
+            ConfigCheck.logEntry(status: 1, output: "Symphony 0.0.1\n\nConfig error in /ops/symphony.yml: bad\n"),
+            "symphony check exited with status 1:\n  Symphony 0.0.1\n  Config error in /ops/symphony.yml: bad\n"
+        )
+        XCTAssertEqual(ConfigCheck.logEntry(status: -9, output: ""), "symphony check exited with status -9:\n")
+    }
+
+    func testOnlyQAModeLogs() {
+        XCTAssertNil(ConfigCheck.qaLog(nil))
+        XCTAssertNotNil(ConfigCheck.qaLog(QAMode(root: URL(fileURLWithPath: NSTemporaryDirectory()))))
+    }
+
     func testRunGivesUpAfterTheTimeout() async {
         let result = await ConfigCheck.run(shell("sleep 30"), timeout: 2)
 
@@ -75,5 +96,17 @@ final class ConfigCheckTests: XCTestCase {
 
         guard case let .failed(message) = await ConfigCheck.run(launch) else { return XCTFail("expected a failure") }
         XCTAssertTrue(message.hasPrefix("Couldn't run symphony check: "), message)
+    }
+}
+
+/// Collects the entries `ConfigCheck.run` logs, from whichever thread it logs on.
+private final class LogEntries: @unchecked Sendable {
+    private let lock = NSLock()
+    private var entries: [String] = []
+
+    var all: [String] { lock.withLock { entries } }
+
+    func append(_ entry: String) {
+        lock.withLock { entries.append(entry) }
     }
 }

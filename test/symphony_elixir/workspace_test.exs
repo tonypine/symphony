@@ -226,18 +226,24 @@ defmodule SymphonyElixir.WorkspaceTest do
     test_root = unique_tmp("workspace-concurrent-fetch")
     primary_repo = Path.join(test_root, "primary")
     origin_repo = Path.join(test_root, "origin.git")
-    upload_pack = Path.join(test_root, "upload-pack")
+    bin = Path.join(test_root, "bin")
     uploads = Path.join(test_root, "uploads")
     release = Path.join(test_root, "release")
     workspace_root = Path.join(test_root, "workspaces")
+    previous_path = System.get_env("PATH")
+
+    on_exit(fn -> restore_env("PATH", previous_path) end)
 
     try do
       create_primary_repo!(primary_repo)
       git!(test_root, ["clone", "--quiet", "--bare", primary_repo, origin_repo])
-      git!(primary_repo, ["remote", "add", "origin", origin_repo])
+      git!(primary_repo, ["remote", "add", "origin", "slowfetch::" <> origin_repo])
 
-      # Each fetch runs this upload-pack once, which waits until the test lets it go.
-      File.write!(upload_pack, """
+      # Each fetch runs this remote helper once, which waits until the test lets it go and then
+      # connects git to the origin repo's upload-pack.
+      File.mkdir_p!(bin)
+
+      File.write!(Path.join(bin, "git-remote-slowfetch"), """
       #!/bin/sh
       printf 'upload\\n' >> #{shell_quote(uploads)}
       i=0
@@ -245,11 +251,17 @@ defmodule SymphonyElixir.WorkspaceTest do
         sleep 0.02
         i=$((i + 1))
       done
-      exec git upload-pack "$@"
+      while read -r line; do
+        case "$line" in
+          capabilities) printf 'connect\\n\\n' ;;
+          "connect git-"*) printf '\\n'; exec git "${line#connect git-}" "$2" ;;
+          *) exit 1 ;;
+        esac
+      done
       """)
 
-      File.chmod!(upload_pack, 0o755)
-      git!(primary_repo, ["config", "remote.origin.uploadpack", upload_pack])
+      File.chmod!(Path.join(bin, "git-remote-slowfetch"), 0o755)
+      System.put_env("PATH", bin <> ":" <> (previous_path || ""))
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
