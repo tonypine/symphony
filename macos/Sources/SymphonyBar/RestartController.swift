@@ -100,7 +100,8 @@ final class RestartController {
         runner.checkLaunch { [weak self] launch in
             switch launch {
             case let .success(launch):
-                Task { self?.handle(.configChecked(await ConfigCheck.run(launch))) }
+                let log = ConfigCheck.qaLog(AppStores.current.qaMode)
+                Task { self?.handle(.configChecked(await ConfigCheck.run(launch, log: log))) }
             case let .failure(error):
                 self?.handle(.configChecked(.failed(error.localizedDescription)))
             }

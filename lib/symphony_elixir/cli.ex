@@ -3,7 +3,7 @@ defmodule SymphonyElixir.CLI do
   Escript entrypoint for running Symphony with an operator `symphony.yml`.
   """
 
-  alias SymphonyElixir.{Config, ControlClient, LogFile, Paths, ReleaseNode, TerminalDashboard}
+  alias SymphonyElixir.{BuildInfo, Config, ControlClient, LogFile, Paths, ReleaseNode, TerminalDashboard}
 
   # Retained so existing scripts (Docker, ops runbooks) that still pass the long
   # flag keep parsing — its value is ignored.
@@ -135,9 +135,15 @@ defmodule SymphonyElixir.CLI do
   # Loads symphony.yml and every repo WORKFLOW.md startup would read (the committed
   # ref, see `WorkflowSource.load_for_check/1`) through the same validation the
   # application runs at boot, without starting the supervisor or touching the network.
+  # The build goes to stderr first, so the menu bar app's QA log shows which Symphony
+  # checked, and stdout stays `Config OK: <path>` for scripts. The escript has not loaded
+  # the application yet, and its version and build come from the application's spec.
   defp evaluate_check(args, deps) do
     case OptionParser.parse(args, strict: @check_switches) do
       {opts, [], []} ->
+        _loaded = Application.load(:symphony_elixir)
+        IO.puts(:stderr, build_line(BuildInfo.current()))
+
         with :ok <- set_symphony_config(opts, deps) do
           check_config(symphony_config_path(opts), deps)
         end
@@ -233,6 +239,9 @@ defmodule SymphonyElixir.CLI do
 
   defp check_result(_path, []), do: {:halt, 0}
   defp check_result(path, errors), do: {:error, "Config error in #{path}: #{Enum.join(errors, "; ")}"}
+
+  defp build_line(%{version: version, sha: nil}), do: "Symphony #{version}"
+  defp build_line(%{version: version, sha: sha}), do: "Symphony #{version} (#{BuildInfo.short_sha(sha)})"
 
   defp dispatch_pr(args) do
     case OptionParser.parse(args, strict: [intent: :string]) do
