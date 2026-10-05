@@ -23,7 +23,8 @@ defmodule SymphonyElixir.GitFilterDrivers do
   # Global options that take their value as the next argument.
   @global_options_with_value ~w(-C -c --git-dir --work-tree --namespace --config-env --attr-source)
   @config_keys "^(filter\\..*\\.(clean|smudge|process|required)|include\\.path|includeif\\..*\\.path)$"
-  @list_args ["-z", "--show-origin", "--get-regexp", @config_keys]
+  @list_args ["-z", "--show-scope", "--show-origin", "--get-regexp", @config_keys]
+  @config_dirs_args ["rev-parse", "--path-format=absolute", "--git-common-dir", "--git-dir"]
   @driver_key ~r/\Afilter\.(.*)\.(?:clean|smudge|process|required)\z/s
   @include_key ~r/\A(?:include|includeif\..*)\.path\z/s
   # Git refuses to follow includes deeper than this.
@@ -43,11 +44,12 @@ defmodule SymphonyElixir.GitFilterDrivers do
     if subcommand in @no_filter_subcommands do
       {:ok, []}
     else
-      with {:ok, entries} <- read_entries(read, Enum.concat(global_options) ++ ["config" | @list_args], opts) do
-        cwd = git_cwd(global_options, opts)
+      global_args = Enum.concat(global_options)
 
+      with {:ok, entries} <- read_entries(read, global_args ++ ["config" | @list_args], opts),
+           {:ok, config_dirs} <- config_dirs(entries, global_args, read, opts) do
         entries
-        |> includes(cwd, 1)
+        |> includes(config_dirs, 1)
         |> walk_includes(driver_names(entries), MapSet.new(), read, opts)
         |> override_args()
       end
@@ -61,12 +63,31 @@ defmodule SymphonyElixir.GitFilterDrivers do
   defp split_global_args([subcommand | _rest], acc), do: {Enum.reverse(acc), subcommand}
   defp split_global_args([], acc), do: {Enum.reverse(acc), nil}
 
-  # `git config` prints each origin path relative to the directory git ends up in.
-  defp git_cwd(global_options, opts) do
-    Enum.reduce(global_options, Path.expand(Keyword.get(opts, :cd, ".")), fn
-      ["-C", dir], cwd -> Path.expand(dir, cwd)
-      _option, cwd -> cwd
-    end)
+  # `git config` prints the path of the repo's own config files relative to the directory git
+  # moves to, such as the top of the work tree, which can be neither `-C` nor `:cd`. So git
+  # names the directories that hold them: the repo config's (scope `local`) and the worktree
+  # config's (scope `worktree`).
+  defp config_dirs(entries, global_args, read, opts) do
+    if Enum.any?(entries, &relative_include?/1) do
+      case read.(global_args ++ @config_dirs_args, opts) do
+        {stdout, 0, _stderr} -> parse_config_dirs(stdout)
+        {_stdout, status, stderr} -> {:error, refusal("reading its config failed: #{String.trim(stderr)}"), status}
+      end
+    else
+      {:ok, %{}}
+    end
+  end
+
+  defp relative_include?({_scope, "file:" <> path, key, _value}),
+    do: Regex.match?(@include_key, key) and Path.type(path) != :absolute
+
+  defp relative_include?(_entry), do: false
+
+  defp parse_config_dirs(stdout) do
+    case String.split(stdout, "\n") do
+      [common_dir, git_dir, ""] -> {:ok, %{"local" => common_dir, "worktree" => git_dir}}
+      _lines -> {:error, refusal("git printed no config directories it can be sure of: #{inspect(stdout)}"), 128}
+    end
   end
 
   defp walk_includes([], names, _seen, _read, _opts), do: names
@@ -83,7 +104,7 @@ defmodule SymphonyElixir.GitFilterDrivers do
         end
 
       walk_includes(
-        rest ++ includes(entries, Path.dirname(path), depth + 1),
+        rest ++ includes(entries, %{}, depth + 1),
         MapSet.union(names, driver_names(entries)),
         MapSet.put(seen, path),
         read,
@@ -102,38 +123,46 @@ defmodule SymphonyElixir.GitFilterDrivers do
         {:ok, []}
 
       {_stdout, status, stderr} ->
-        {:error, "symphony: refusing to run git, reading its config failed: #{String.trim(stderr)}\n", status}
+        {:error, refusal("reading its config failed: #{String.trim(stderr)}"), status}
     end
   end
 
-  # `-z --show-origin` prints `<origin>\0<key>\n<value>\0` per entry, and `<origin>\0<key>\0`
-  # for a key set without a value.
+  defp refusal(reason), do: "symphony: refusing to run git, #{reason}\n"
+
+  # `-z --show-scope --show-origin` prints `<scope>\0<origin>\0<key>\n<value>\0` per entry, and
+  # `<scope>\0<origin>\0<key>\0` for a key set without a value.
   defp parse_entries(stdout) do
     stdout
     |> String.split("\0")
-    |> Enum.chunk_every(2, 2, :discard)
-    |> Enum.map(fn [origin, key_value] ->
+    |> Enum.chunk_every(3, 3, :discard)
+    |> Enum.map(fn [scope, origin, key_value] ->
       case String.split(key_value, "\n", parts: 2) do
-        [key, value] -> {origin, key, value}
-        [key] -> {origin, key, nil}
+        [key, value] -> {scope, origin, key, value}
+        [key] -> {scope, origin, key, nil}
       end
     end)
   end
 
   defp driver_names(entries) do
-    for {_origin, key, _value} <- entries, [_key, name] <- [Regex.run(@driver_key, key)], into: MapSet.new(), do: name
+    for {_scope, _origin, key, _value} <- entries, [_key, name] <- [Regex.run(@driver_key, key)], into: MapSet.new(), do: name
   end
 
   # Git reads a relative include path from the directory of the file that includes it.
-  defp includes(entries, cwd, depth) do
-    for {origin, key, path} <- entries,
+  defp includes(entries, config_dirs, depth) do
+    for {scope, origin, key, path} <- entries,
         is_binary(path) and Regex.match?(@include_key, key),
-        resolved = resolve_include(path, origin_dir(origin, cwd)),
+        resolved = resolve_include(path, origin_dir(scope, origin, config_dirs)),
         do: {resolved, depth}
   end
 
-  defp origin_dir("file:" <> path, cwd), do: path |> Path.expand(cwd) |> Path.dirname()
-  defp origin_dir(_origin, _cwd), do: nil
+  defp origin_dir(scope, "file:" <> path, config_dirs) do
+    case Path.type(path) do
+      :absolute -> Path.dirname(path)
+      _relative -> Map.get(config_dirs, scope)
+    end
+  end
+
+  defp origin_dir(_scope, _origin, _config_dirs), do: nil
 
   defp resolve_include("~/" <> path, _dir), do: Path.join(System.user_home!(), path)
 
@@ -154,7 +183,7 @@ defmodule SymphonyElixir.GitFilterDrivers do
         {:ok, names |> Enum.sort() |> Enum.flat_map(&driver_args/1)}
 
       name ->
-        {:error, "symphony: refusing to run git, the repo config defines filter driver #{inspect(name)}, which -c can't turn off\n", 128}
+        {:error, refusal("the repo config defines filter driver #{inspect(name)}, which -c can't turn off"), 128}
     end
   end
 

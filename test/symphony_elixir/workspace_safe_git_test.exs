@@ -195,6 +195,42 @@ defmodule SymphonyElixir.WorkspaceSafeGitTest do
     assert File.exists?(proof), "plain git runs the driver, so the setup above is a real attack"
   end
 
+  test "safe_git runs no filter driver a new worktree's relative include loads, run from a subdirectory", %{test_root: test_root} do
+    repo = init_repo!(Path.join(test_root, "repo"))
+    sub = Path.join(repo, "sub")
+    proof = Path.join(test_root, "SYMPHONY_RELATIVE_INCLUDE_PWNED")
+
+    File.mkdir_p!(sub)
+    File.write!(Path.join(sub, "kept.txt"), "kept\n")
+    git!(repo, ["add", "sub/kept.txt"])
+    git!(repo, ["commit", "-m", "subdirectory"])
+    git!(repo, ["checkout", "-b", "agent"])
+    File.write!(Path.join(repo, ".gitattributes"), "notes.txt filter=hidden\n")
+    File.write!(Path.join(repo, "notes.txt"), "stored\n")
+    git!(repo, ["add", ".gitattributes", "notes.txt"])
+    git!(repo, ["commit", "-m", "agent attributes"])
+    git!(repo, ["checkout", "main"])
+
+    # Git reads the relative include from `.git/`, next to the config that names it, whatever
+    # directory the command starts in.
+    File.write!(Path.join([repo, ".git", "worktree-only.cfg"]), "[filter \"hidden\"]\n\tsmudge = touch '#{proof}'; cat\n")
+    git!(repo, ["config", "includeIf.gitdir:**/worktrees/**.path", "worktree-only.cfg"])
+
+    worktree = Path.join(test_root, "worktree")
+    assert {_output, 0} = Workspace.safe_git(["-C", sub, "worktree", "add", worktree, "agent"])
+    assert File.read!(Path.join(worktree, "notes.txt")) == "stored\n"
+    refute File.exists?(proof)
+
+    git!(sub, ["worktree", "add", Path.join(test_root, "plain-worktree"), "-b", "plain", "agent"])
+    assert File.exists?(proof), "plain git runs the driver, so the setup above is a real attack"
+  end
+
+  test "safe_git raises like System.cmd/3 when git is missing", %{test_root: test_root} do
+    missing = Path.join(test_root, "missing-git")
+    assert_raise ErlangError, fn -> Workspace.safe_git(missing, ["-C", test_root, "status"]) end
+    assert_raise ErlangError, fn -> Workspace.safe_git("symphony-no-such-git", ["status"]) end
+  end
+
   test "safe_git refuses to run git when a filter driver's name holds `=`", %{test_root: test_root} do
     repo = init_repo!(Path.join(test_root, "repo"))
     git!(repo, ["config", "filter.a=b.smudge", "touch '#{Path.join(test_root, "pwned")}'"])

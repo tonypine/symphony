@@ -77,9 +77,12 @@ defmodule SymphonyElixir.Workspace do
   end
 
   # Every call also blanks the filter drivers the repo's config defines (see
-  # `SymphonyElixir.GitFilterDrivers`), and refuses to run git when it can't.
+  # `SymphonyElixir.GitFilterDrivers`), and refuses to run git when it can't. The scan runs git
+  # through `/bin/sh`, so a missing git raises first, as `System.cmd/3` does.
   @spec safe_git(String.t(), [String.t()], keyword()) :: {Collectable.t(), non_neg_integer()}
   def safe_git(command, args, opts) when is_binary(command) and is_list(args) and is_list(opts) do
+    System.find_executable(command) || :erlang.error(:enoent, [command, args, opts])
+
     case GitFilterDrivers.config_args(args, opts, &read_git(command, &1, &2)) do
       {:ok, filter_args} -> System.cmd(command, safe_git_args(filter_args ++ args), safe_git_opts(opts))
       {:error, message, status} -> {message, status}
