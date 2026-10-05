@@ -3152,8 +3152,9 @@ Scoped Linear tool extension contract:
   non-blank `reason` and an optional `title`. The reason MUST pass the same secret scan as comments
   before any Linear call. It replies `## Action withdrawn` with the reason under each open request
   on the issue (only the one whose title matches, when `title` is given), and removes the
-  human-action label once no open request is left. A request with such a reply MUST NOT be listed
-  in a human-action project update, and MUST NOT block a new request with the same title. With no
+  human-action label once no open request is left. Once no open request is left, the run's later
+  moves to `Backlog` or `In Review` MUST NOT go to the Human Review state on account of its
+  requests. A request with such a reply MUST NOT be listed in a human-action project update, and MUST NOT block a new request with the same title. With no
   open request to withdraw it MUST change nothing. The read-only reviewer scope MUST NOT advertise
   or execute it.
 - The standardized Linear tool surface does not include an assignee mutation tool. Implementations

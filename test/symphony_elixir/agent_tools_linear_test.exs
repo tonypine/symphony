@@ -1725,6 +1725,57 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
                withdraw_human_action(%{issue_id: "issue-24"}, scope)
     end
 
+    # Moves the issue to Backlog through `update_state/3` and returns the state it landed in.
+    defp move_to_backlog(context) do
+      test_pid = self()
+      states = [%{"id" => "state-backlog", "name" => "Backlog"}, %{"id" => "state-human", "name" => "Human Review"}]
+
+      client = fn query, variables, _opts ->
+        if query =~ "SymphonyAgentIssueTeamStates" do
+          {:ok, %{"data" => %{"issue" => %{"team" => %{"states" => %{"nodes" => states}}}}}}
+        else
+          send(test_pid, {:moved_to, variables.stateId})
+          {:ok, %{"data" => %{"issueUpdate" => %{"success" => true}}}}
+        end
+      end
+
+      assert {:ok, _response} = Linear.update_state(context, "Backlog", linear_client: client, settings: Config.settings!())
+      assert_received {:moved_to, state_id}
+      state_id
+    end
+
+    test "after withdrawing its only request, the run's move to Backlog lands in Backlog, not Human Review" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      context = %{issue_id: "issue-24", comment_registry: registry}
+
+      assert {:ok, %{"requested" => true}} = request_human_action(context, human_action_scope())
+      assert move_to_backlog(context) == "state-human"
+
+      scope = withdrawal_scope([request_node("comment-1", "Add the release signing secrets", "2026-10-04T18:57:00.000Z")])
+      assert {:ok, %{"withdrawn" => true, "labelRemoved" => true}} = withdraw_human_action(context, scope)
+
+      refute Linear.CommentRegistry.human_action_requested?(registry)
+      assert move_to_backlog(context) == "state-backlog"
+    end
+
+    test "withdrawing one of two open requests keeps the move to Human Review" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      context = %{issue_id: "issue-24", comment_registry: registry}
+      Linear.CommentRegistry.record_human_action_request(registry)
+
+      scope =
+        withdrawal_scope([
+          request_node("comment-1", "Re-run the stuck dialyzer job", "2026-10-04T18:57:00.000Z"),
+          request_node("comment-2", "Add the release signing secrets", "2026-10-04T18:58:00.000Z")
+        ])
+
+      assert {:ok, %{"withdrawn" => true, "labelRemoved" => false}} =
+               withdraw_human_action(context, scope, %{}, Map.put(@withdrawal, "title", "Re-run the stuck dialyzer job"))
+
+      assert Linear.CommentRegistry.human_action_requested?(registry)
+      assert move_to_backlog(context) == "state-human"
+    end
+
     test "changes nothing when no open request matches" do
       open = request_node("comment-1", "Re-run the stuck dialyzer job", "2026-10-04T18:57:00.000Z")
       withdrawn = %{"id" => "reply-1", "body" => Request.render_withdrawal("Not needed."), "parent" => %{"id" => "comment-1"}}

@@ -114,6 +114,11 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
   def human_action_requested?(pid) when is_pid(pid), do: Agent.get(pid, &Map.get(&1, :human_action_requested, false))
   def human_action_requested?(_pid), do: false
 
+  @doc "Records that the run withdrew its issue's last open human-action request."
+  @spec clear_human_action_request(pid() | nil) :: :ok
+  def clear_human_action_request(pid) when is_pid(pid), do: Agent.update(pid, &Map.put(&1, :human_action_requested, false))
+  def clear_human_action_request(_pid), do: :ok
+
   defp reserve(pid, counter, cap, cap_error) do
     Agent.get_and_update(pid, fn state ->
       count = Map.get(state, counter, 0)
