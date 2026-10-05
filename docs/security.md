@@ -78,10 +78,11 @@ moment; to waive a later head, remove and re-add it. It counts only when a perso
 pull request's author adds it, since an agent may act as the author. An approving review of the
 current head commit counts too, but only from a reviewer with write access (an owner, member or
 collaborator), since anyone who can read the repository can approve. A review doesn't start a run,
-so after approving, re-run the job. Bots count for neither. The workflow tells Symphony's pull
-requests apart only by the `auto/` branch prefix. So it skips the case where a person's own open
-pull request on another branch is attached to the issue, and Symphony keeps working on that
-branch.
+so after approving, re-run the job. Bots count for neither. Since no agent can clear this check,
+Symphony's CI poller dispatches no CI-fix run and spends no fix attempt while it is the only red
+check; the issue waits for the waiver. The workflow tells Symphony's pull requests apart only by
+the `auto/` branch prefix. So it skips the case where a person's own open pull request on another
+branch is attached to the issue, and Symphony keeps working on that branch.
 
 Every local agent may also write one per-user cache folder, `~/Library/Caches/symphony/agent` on
 macOS, which holds its Hex home, its `elixir_make` cache and Dialyxir's core PLTs (see

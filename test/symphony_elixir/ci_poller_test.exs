@@ -781,6 +781,79 @@ defmodule SymphonyElixir.CiPollerTest do
     refute_receive {:issue_state_update, _, _}
   end
 
+  test "a PR whose only failing check is protected paths waits for the waiver label without a fix run" do
+    now = ~U[2026-05-06 09:00:00Z]
+    issue = in_review_issue()
+    Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+
+    Application.put_env(:symphony_elixir, :ci_test_statuses, [
+      protected_paths_failed_status("abc123"),
+      protected_paths_failed_status("abc123"),
+      protected_paths_failed_status("def456"),
+      %{green_status("def456") | checks: [protected_paths_check("SUCCESS") | green_status("def456").checks]}
+    ])
+
+    put_run(issue, now)
+
+    log =
+      capture_log([level: :info], fn ->
+        assert {:ok, %{actions: [{:awaiting_waiver, "issue-2401", "abc123"}]}} =
+                 CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+        # The agent that changed the protected path parked the issue for a person.
+        Application.put_env(:symphony_elixir, :ci_test_issues, [%{issue | state: "Backlog"}])
+
+        assert {:ok, %{actions: [{:awaiting_waiver, "issue-2401", "abc123"}]}} =
+                 CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: DateTime.add(now, 5, :minute))
+      end)
+
+    assert [_once] = String.split(log, "waiting for a person to add the protected-paths-approved label") |> tl()
+    assert log =~ "only protected paths failed"
+    refute_receive {:rerun_failed, _run_id}
+    refute_receive {:fetch_failed_log, _run_id}
+    refute_receive {:issue_state_update, _issue_id, _state}
+    assert [%{status: "awaiting_waiver", ci_retry_count: 0, failed_checks: [%{name: "protected paths"}]} = record] = RunStore.list_ci_checks()
+    refute Map.get(record, :ci_failure)
+    refute CiPoller.ci_owned_issue?("issue-2401")
+
+    # A new head that still changes the protected path waits again, and says so once more.
+    assert capture_log([level: :info], fn ->
+             assert {:ok, %{actions: [{:awaiting_waiver, "issue-2401", "def456"}]}} =
+                      CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: DateTime.add(now, 10, :minute))
+           end) =~ "commit_sha=def456"
+
+    # A person adds the label, the check re-runs green, and the normal flow resumes.
+    assert {:ok, %{actions: [{:green, "issue-2401"}]}} =
+             CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: DateTime.add(now, 15, :minute))
+
+    assert [%{status: "green", ci_retry_count: 0, failed_checks: []}] = RunStore.list_ci_checks()
+    refute_receive {:issue_state_update, _issue_id, _state}
+  end
+
+  test "protected paths failing beside another check dispatches a fix run that leaves the protected change alone" do
+    now = ~U[2026-05-06 09:00:00Z]
+    issue = in_review_issue()
+    status = %{failed_status("abc123") | checks: [protected_paths_check("FAILURE") | failed_status("abc123").checks]}
+    Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+    Application.put_env(:symphony_elixir, :ci_test_status, status)
+    put_run(issue, now)
+
+    assert {:ok, %{actions: [{:rerun_requested, "issue-2401", ["321", "987"]}]}} =
+             CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+
+    assert {:ok, %{actions: [{:state_transitioned, "issue-2401", :ci_failure, "In Progress"}]}} =
+             CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: DateTime.add(now, 1, :minute))
+
+    assert_receive {:issue_state_update, "issue-2401", "In Progress"}
+    assert [%{status: "dispatch_requested", ci_retry_count: 1}] = RunStore.list_ci_checks()
+
+    prompt = PromptBuilder.build_prompt(issue, ci_failure: CiPoller.pending_ci_failure("issue-2401"))
+    assert prompt =~ "Failed checks: protected paths, specs"
+
+    assert prompt =~
+             "`protected paths` is not yours to fix: it fails because this PR's own commits change an agent-protected path, and only a person clears it by adding the `protected-paths-approved` label. Do not edit or revert the protected change; fix only the other failed checks."
+  end
+
   test "pending ci failure normalizes persisted string-key metadata" do
     assert :ok =
              RunStore.put_ci_check(%{
@@ -2064,6 +2137,12 @@ defmodule SymphonyElixir.CiPollerTest do
         %{name: "specs", status: "COMPLETED", conclusion: "FAILURE", run_id: "987"}
       ]
     }
+  end
+
+  defp protected_paths_failed_status(sha), do: %{green_status(sha) | checks: [protected_paths_check("FAILURE") | green_status(sha).checks]}
+
+  defp protected_paths_check(conclusion) do
+    %{name: "protected paths", status: "COMPLETED", conclusion: conclusion, workflow_name: "protected-paths", run_id: "321"}
   end
 
   defp startup_failure_status(sha) do
