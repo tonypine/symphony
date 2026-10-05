@@ -127,6 +127,9 @@ app opens" in Settings (see [Launch at Login](#launch-at-login)).
 - **Pause Dispatch** holds new dispatch: Symphony picks up no new issues, but agent runs already under way
   continue. The pause is kept across restarts.
 - **Resume Dispatch** lets Symphony pick up new issues again.
+- **Acceptance gate: Enforce (repo)** (one row per repo whose acceptance gate runs, in Shadow or Enforce) is
+  the gate's kill switch: its submenu switches that repo to **Shadow** or **Off** at once. See
+  [Settings](#settings).
 - **Force a ticket…** asks for a Linear identifier and forces that ticket past the dispatch limits, like
   `symphony force`. The forced tickets are listed above it, each with **Stop forcing**. See
   [Forced tickets](#forced-tickets).
@@ -234,6 +237,20 @@ set (or, in Development mode, no checkout folder).
   the same save wins over the moved one. A provider alone moves nothing. Higher effort and bigger models use the shared
   5-hour usage limit faster. The next run picks the change up without a restart. The Codex runtime ignores
   these keys (see [Run profiles](../docs/configuration.md)).
+- **Acceptance gate (saved in symphony.yml)** sets `auto_review.acceptance_gate.mode`, the gate's kill switch
+  (see [the acceptance gate](../docs/acceptance_gate.md)). Each mode shows a line under it: **Off** never
+  runs the gate; **Shadow** records a verdict and moves nothing; **Enforce** approves to Merging, sends back
+  to In Progress and escalates to In Review. Choosing Enforce asks first ("PRs the gate approves merge
+  without a person reviewing them"), and Cancel leaves the mode as it was. A missing key shows Off,
+  Symphony's default. Save runs `symphony check` on a copy of the changed file first, as for Models, then
+  rewrites only that value, keeping its comment, or inserts `mode:`, `acceptance_gate:` and `auto_review:`
+  when they are missing. An `off` is written quoted (`mode: "off"`), which Symphony reads the same as `off`.
+  Symphony reads the mode on its next poll, without a restart. Under the picker, one line per repo shows the
+  gate's agreement stats from `/api/v1/state`'s `acceptance_gate.agreement`, for example
+  `symphony: 12 judged · 92% agreement · 0 unsafe approvals · not ready: at least 20 judged tickets (12 so
+  far)`, ending in `ready to enforce` once the stats say so. While Symphony isn't running the line reads
+  "Start Symphony to see the gate's record." A repo's own mode is set in its **Edit…** sheet (see
+  [Repos](#repos)), and the status menu's **Acceptance gate** rows switch a repo to Shadow or Off at once.
 - `LINEAR_API_KEY` and any extra environment variables are stored only in
   `~/Library/Application Support/symphony/release/secrets.json`, next to Symphony's `control_token`, as a
   JSON object of variable name to value. The file is readable only by you (`0600`), and agents' sandboxes
@@ -469,6 +486,11 @@ while `symphony.yml` can't be read or no longer has the repo.
   `strategy` and `workflow` (Symphony reads `WORKFLOW.md` from its clone); switching to a folder sets
   them as Add Repo does. A new route applies to the next dispatch without a restart; a new source,
   workflow or base branch restarts Symphony as Add Repo does, asking first while agents run.
+  The **Acceptance gate** picker sets `repositories[<key>].acceptance_gate.mode`: **Inherit** (the mode in
+  Settings, named in brackets) removes the key, and an `acceptance_gate:` block it leaves empty; **Off**,
+  **Shadow** and **Enforce** write it, and Enforce asks first as in Settings. Under it, the repo's agreement
+  line shows as in Settings. A Save that changes the gate runs `symphony check` first and saves nothing when
+  it fails. The row then shows **Gate** with the repo's mode while it differs from the one in Settings.
 - **Disconnect…** asks first, then removes the entry from `repositories:` together with the comment
   lines right above it (with no blank line between), and leaves one blank line between its neighbours.
   It never deletes a folder: a local checkout and its branches stay as they are, and a managed clone

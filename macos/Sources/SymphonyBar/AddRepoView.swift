@@ -27,12 +27,21 @@ final class AddRepoViewModel: ObservableObject {
     @Published private(set) var isInspectingFolder = false
     /// Why the last Save failed.
     @Published private(set) var saveError: String?
+    /// True while Save waits for `symphony check` on a changed acceptance gate mode.
+    @Published private(set) var isSaving = false
+    /// Enforce, while its confirmation is open.
+    @Published var pendingAcceptanceGate: AcceptanceGateChoice?
 
     /// Why the sheet can't add a repo at all: no `symphony.yml` is set, or its repos can't be read.
     let configProblem: String?
     let configPath: String
     /// The repo the sheet edits, as `symphony.yml` has it; nil while adding one.
     let editing: RepositoryEntry?
+    /// `auto_review.acceptance_gate.mode`, which the repo's Inherit follows.
+    let globalGateMode: AcceptanceGateMode
+    /// Symphony's state when the sheet opened, for the repo's gate stats; nil while Symphony isn't answering.
+    let state: StateSnapshot?
+    private let configCheck: SettingsConfigCheck
     private let existing: [RepositoryEntry]
     private let secrets: SecretsReader
     /// True once the key was typed, so picking another source no longer replaces it.
@@ -45,13 +54,18 @@ final class AddRepoViewModel: ObservableObject {
         configPath: String,
         secrets: SecretsReader,
         editing key: String? = nil,
+        state: StateSnapshot? = nil,
         linearClient: @escaping (_ apiKey: String) -> LinearClient = { LinearClient(apiKey: $0) },
+        configCheck: @escaping SettingsConfigCheck = SettingsViewModel.runConfigCheck,
         onSaved: @escaping (Saved) -> Void
     ) {
         self.configPath = configPath.trimmingCharacters(in: .whitespacesAndNewlines)
         self.secrets = secrets
+        self.state = state
         self.linearClient = linearClient
+        self.configCheck = configCheck
         self.onSaved = onSaved
+        globalGateMode = (try? SymphonyConfigFile(path: self.configPath).readAcceptanceGateMode()) ?? .off
         var existing: [RepositoryEntry] = []
         var configProblem: String?
         if self.configPath.isEmpty {
@@ -90,8 +104,13 @@ final class AddRepoViewModel: ObservableObject {
     }
 
     var canSave: Bool {
-        if case .success = validation { return !isInspectingFolder }
+        if case .success = validation { return !isInspectingFolder && !isSaving }
         return false
+    }
+
+    /// The repo's gate stats from Symphony, or why they don't show.
+    var gateAgreementLine: String {
+        AcceptanceGate.agreementLine(for: editing?.key ?? draft.key, in: state)
     }
 
     /// The labels an issue in the picked project can carry, and those the edited repo's route has already.
@@ -187,6 +206,10 @@ final class AddRepoViewModel: ObservableObject {
 
     func save() {
         guard canSave, case let .success(entry) = validation else { return }
+        if let editing, EditRepo.changesAcceptanceGate(from: editing, to: entry) {
+            saveChecked(editing, to: entry)
+            return
+        }
         do {
             let file = SymphonyConfigFile(path: configPath)
             if let editing {
@@ -200,6 +223,41 @@ final class AddRepoViewModel: ObservableObject {
             }
         } catch {
             saveError = "Couldn't save symphony.yml: \(error.localizedDescription)"
+        }
+    }
+
+    /// Writes the edit once `symphony check` passes on the result, as Settings does, since it changes the
+    /// acceptance gate's mode. The check runs with the app's settings and stored secrets, like Start.
+    private func saveChecked(_ editing: RepositoryEntry, to entry: RepositoryEntry) {
+        isSaving = true
+        saveError = nil
+        let file = SymphonyConfigFile(path: configPath)
+        let check = configCheck
+        secrets.read { [weak self] result in
+            guard let self else { return }
+            guard case let .success(secrets) = result else {
+                self.isSaving = false
+                self.saveError = "Couldn't read the app's secrets to run symphony check."
+                return
+            }
+            let settings = AppStores.current.settingsStore().loadSettings().trimmed()
+            Task {
+                do {
+                    let result = try await file.rewrite(
+                        { try RepositoriesConfig.updating(editing.key, to: entry, in: $0) },
+                        checkingWith: { await check($0, settings, secrets.trimmed()) }
+                    )
+                    self.isSaving = false
+                    if case let .failed(message) = result {
+                        self.saveError = "symphony check rejected this, so nothing was saved: \(message)"
+                        return
+                    }
+                    self.onSaved(.edited(from: editing, to: entry))
+                } catch {
+                    self.isSaving = false
+                    self.saveError = "Couldn't save symphony.yml: \(error.localizedDescription)"
+                }
+            }
         }
     }
 
@@ -240,6 +298,19 @@ struct AddRepoView: View {
                 Section("Linear routing") {
                     linear
                 }
+                if model.editing != nil {
+                    Section(AcceptanceGate.pickerTitle) {
+                        AcceptanceGatePicker(
+                            choice: $model.draft.acceptanceGate,
+                            pending: $model.pendingAcceptanceGate,
+                            choices: AcceptanceGateChoice.allCases,
+                            inherited: model.globalGateMode
+                        )
+                        Text(model.gateAgreementLine)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
             .formStyle(.grouped)
 
@@ -247,6 +318,10 @@ struct AddRepoView: View {
             HStack(alignment: .firstTextBaseline) {
                 status
                 Spacer()
+                if model.isSaving {
+                    ProgressView().controlSize(.small)
+                    Text("Checking symphony.yml…").foregroundStyle(.secondary)
+                }
                 Button("Cancel", role: .cancel, action: cancel)
                     .keyboardShortcut(.cancelAction)
                 Button("Save", action: model.save)
@@ -255,7 +330,7 @@ struct AddRepoView: View {
             }
             .padding(12)
         }
-        .frame(width: 520, height: 600)
+        .frame(width: 520, height: model.editing == nil ? 600 : 760)
     }
 
     @ViewBuilder private var source: some View {

@@ -71,6 +71,8 @@ public struct RepositoryEntry: Equatable {
     public var workflow: String?
     public var route: RepositoryRoute
     public var workspace: RepositoryWorkspace
+    /// `acceptance_gate.mode`, the repository's own acceptance gate mode, as written; nil inherits the global one.
+    public var acceptanceGateMode: String?
 
     public init(
         key: String,
@@ -78,7 +80,8 @@ public struct RepositoryEntry: Equatable {
         baseBranch: String? = nil,
         workflow: String? = nil,
         route: RepositoryRoute = RepositoryRoute(),
-        workspace: RepositoryWorkspace = RepositoryWorkspace()
+        workspace: RepositoryWorkspace = RepositoryWorkspace(),
+        acceptanceGateMode: String? = nil
     ) {
         self.key = key
         self.isDefault = isDefault
@@ -86,6 +89,7 @@ public struct RepositoryEntry: Equatable {
         self.workflow = workflow
         self.route = route
         self.workspace = workspace
+        self.acceptanceGateMode = acceptanceGateMode
     }
 }
 
@@ -193,8 +197,8 @@ public enum RepositoriesConfig {
     // MARK: Fields
 
     /// Keys of an entry in the order new ones are written.
-    static let entryOrder = ["key", "default", "base_branch", "workflow", "route", "workspace"]
-    static let groups = ["route", "workspace"]
+    static let entryOrder = ["key", "default", "base_branch", "workflow", "route", "workspace", "acceptance_gate"]
+    static let groups = ["route", "workspace", "acceptance_gate"]
 
     /// The fields the model knows, in the order they are written. Fields of one group stay together.
     fileprivate static let fields: [Field] = [
@@ -209,6 +213,7 @@ public enum RepositoriesConfig {
         .string(["workspace", "repo"], \.workspace.repo),
         .string(["workspace", "source"], \.workspace.source),
         .bool(["workspace", "fetch_before_dispatch"], \.workspace.fetchBeforeDispatch),
+        .string(["acceptance_gate", "mode"], \.acceptanceGateMode),
     ]
 
     private static func validate(_ entry: RepositoryEntry) throws {
