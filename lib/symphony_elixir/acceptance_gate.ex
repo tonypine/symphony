@@ -26,18 +26,22 @@ defmodule SymphonyElixir.AcceptanceGate do
       is rewritten, and each verdict writes one `acceptance_gate_verdict` audit event.
 
   In `shadow` mode the verdict is advisory: Auto Review moves the issue to In Review as it did
-  before, and the proposed follow-ups are listed, not filed. `enforce` isn't applied yet and
-  behaves like `shadow`.
+  before, and the proposed follow-ups are listed, not filed. In `enforce` mode the verdict moves
+  the issue (`enforced_target/4`): `approve` to Merging, `rework` back to In Progress, `escalate`
+  to In Review; and up to 3 follow-ups are filed as Backlog sub-issues
+  (`SymphonyElixir.AcceptanceGate.FollowUps`). The gate never moves a `breakdown` parent or a
+  `Final verification:` ticket (`enforces?/2`).
   """
 
   require Logger
 
-  alias SymphonyElixir.AcceptanceGate.{Context, Escalation, Report}
+  alias SymphonyElixir.AcceptanceGate.{Context, Escalation, FollowUps, Report}
   alias SymphonyElixir.{AgentTelemetry, AgentTmpDir, AgentTools, AuditLog, Config, LeftoverProcesses, PromptSafety}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.QaAgent
   alias SymphonyElixir.ReviewAgent
+  alias SymphonyElixir.RunKind
   alias SymphonyElixir.RunStore
   alias SymphonyElixir.UsageLimit
   alias SymphonyElixir.Workspace
@@ -50,6 +54,11 @@ defmodule SymphonyElixir.AcceptanceGate do
   @workpad_markers ["## Symphony Workpad", "## Codex Workpad", "## Claude Workpad"]
   @bootstrap_criterion "Derived from the Linear issue description and comments."
   @tmp_dir_prefix "symphony-gate-"
+  @merging_state "Merging"
+  @active_state "In Progress"
+  @review_state "In Review"
+  # The tickets the gate never moves: their review stays with a person.
+  @guarded_kinds [:breakdown, :close_out, :final_verification]
 
   @type verdict :: String.t()
   @type reason :: %{rule: String.t(), detail: String.t()}
@@ -78,6 +87,7 @@ defmodule SymphonyElixir.AcceptanceGate do
           reasons: [reason()],
           inconclusive: non_neg_integer()
         }
+  @type target :: %{state: String.t(), escalated: boolean()}
 
   @doc "The gate's mode for the repository `settings` belong to: `off`, `shadow` or `enforce`."
   @spec mode(Schema.t()) :: String.t()
@@ -86,6 +96,40 @@ defmodule SymphonyElixir.AcceptanceGate do
   @doc "Whether Auto Review runs the gate after QA."
   @spec enabled?(Schema.t()) :: boolean()
   def enabled?(%Schema{} = settings), do: mode(settings) != "off"
+
+  @doc """
+  Whether the gate's verdict moves `issue`: the mode is `enforce`, and the issue isn't a
+  `breakdown` parent or a `Final verification:` ticket, whose review stays with a person.
+  """
+  @spec enforces?(Issue.t(), Schema.t()) :: boolean()
+  def enforces?(%Issue{} = issue, %Schema{} = settings), do: mode(settings) == "enforce" and RunKind.classify(issue) not in @guarded_kinds
+
+  @doc """
+  Where an enforced `verdict` moves `issue`, or nil when the verdict is advisory (see
+  `enforces?/2`) or there is none. `record` is the CI check record:
+
+    * `approve` goes to Merging, where GitHub auto-merge lands the PR;
+    * `rework` goes back to In Progress while `qa_fix_attempts` (shared with QA fails) is below
+      `auto_review.max_fix_attempts`; past it, it goes where `escalate` goes, with `escalated: true`;
+    * `escalate` goes to the state QA picked for human review (`qa_target_state`): In Review, or
+      the Human Review state for a QA block only a person can clear.
+  """
+  @spec enforced_target(Issue.t(), map(), verdict() | nil, Schema.t()) :: target() | nil
+  def enforced_target(%Issue{} = issue, record, verdict, %Schema{} = settings) do
+    cond do
+      verdict not in @verdicts or not enforces?(issue, settings) -> nil
+      verdict == "approve" -> %{state: @merging_state, escalated: false}
+      verdict == "escalate" -> %{state: human_review_state(record), escalated: false}
+      fix_attempts(record) < settings.auto_review.max_fix_attempts -> %{state: @active_state, escalated: false}
+      true -> %{state: human_review_state(record), escalated: true}
+    end
+  end
+
+  @doc "The fix attempts the issue used on its PR: QA fails and enforced gate reworks."
+  @spec fix_attempts(map()) :: non_neg_integer()
+  def fix_attempts(record), do: Map.get(record, :qa_fix_attempts) || 0
+
+  defp human_review_state(record), do: Map.get(record, :qa_target_state) || @review_state
 
   @doc """
   The settings a gate session runs with: the gate's runtime, command, turns and timeout, and a
@@ -150,8 +194,13 @@ defmodule SymphonyElixir.AcceptanceGate do
 
   `job` carries `issue`, `record` (the CI check record), `sha`, `settings` and `qa` (the QA
   verdict and reason it follows).
+
+  The decision also carries the gate `run_id`, the `findings` a `rework` sends back to the
+  executor, and the enforced `target` (`enforced_target/4`, nil when the verdict is advisory).
+  An enforced verdict files the answer's follow-ups first (`SymphonyElixir.AcceptanceGate.FollowUps`),
+  so the comment lists them.
   """
-  @spec judge(map(), keyword()) :: {:ok, decision()}
+  @spec judge(map(), keyword()) :: {:ok, map()}
   def judge(%{issue: issue, record: record, sha: sha, settings: settings} = job, opts) do
     run_store = Keyword.get(opts, :run_store, RunStore)
     repo_key = Map.get(record, :repo_key)
@@ -188,6 +237,9 @@ defmodule SymphonyElixir.AcceptanceGate do
     job = Map.merge(job, %{run_id: run_id, token_limit: settings.agent.max_tokens_per_issue})
     result = run(job, settings, opts)
     decision = decide(result, record, sha, settings)
+    findings = rework_findings(result, decision)
+    target = enforced_target(issue, record, decision.verdict, settings)
+    follow_ups = if target, do: FollowUps.file(issue, answer_follow_ups(result.outcome), sha, settings, opts)
     ended_at = DateTime.utc_now()
     runtime_seconds = max(DateTime.diff(ended_at, started_at), 0)
 
@@ -213,6 +265,10 @@ defmodule SymphonyElixir.AcceptanceGate do
       gate_run_id: run_id,
       gate_mode: mode(settings),
       gate_inconclusive: decision.inconclusive,
+      gate_findings: findings,
+      # A new verdict hasn't moved the issue yet (see `SymphonyElixir.AutoReview`).
+      gate_target_state: nil,
+      gate_applied: false,
       gate_updated_at: ended_at
     })
 
@@ -220,6 +276,10 @@ defmodule SymphonyElixir.AcceptanceGate do
       decision: decision,
       sha: sha,
       mode: mode(settings),
+      target: target,
+      fix_attempts: fix_attempts(record),
+      max_fix_attempts: settings.auto_review.max_fix_attempts,
+      filed_follow_ups: follow_ups,
       runtime_seconds: runtime_seconds,
       limit: inconclusive_limit(settings)
     }
@@ -233,8 +293,27 @@ defmodule SymphonyElixir.AcceptanceGate do
 
     if decision.verdict, do: audit(issue, record, sha, settings, decision, run_id, result.tokens, opts)
 
-    {:ok, decision}
+    {:ok, Map.merge(decision, %{run_id: run_id, findings: findings, target: target})}
   end
+
+  defp outcome_answer({:answer, answer}), do: answer
+  defp outcome_answer(_outcome), do: %{}
+
+  defp answer_follow_ups(outcome), do: outcome |> outcome_answer() |> Map.get(:follow_ups, [])
+
+  # What a `rework` sends back to the executor: the criteria the agent didn't find met, what the
+  # PR is missing, and the reasons (a conflict with current main, where the agent didn't run).
+  defp rework_findings(%{outcome: {:answer, answer}, criteria: criteria}, %{verdict: "rework", reasons: reasons}) do
+    unmet = for %{status: status} = row <- Report.rows(criteria, answer), status != "met", do: "Criterion #{status}: #{row.criterion} (#{row.evidence})"
+    missing = for %{kind: "missing", detail: detail} <- answer.scope, do: "Missing from the PR: #{detail}"
+    summary = if answer.summary != "", do: ["Gate summary: #{answer.summary}"], else: []
+    unmet ++ missing ++ reason_lines(reasons) ++ summary
+  end
+
+  defp rework_findings(_result, %{verdict: "rework", reasons: reasons}), do: reason_lines(reasons)
+  defp rework_findings(_result, _decision), do: []
+
+  defp reason_lines(reasons), do: Enum.map(reasons, &"#{&1.rule}: #{&1.detail}")
 
   defp criteria_counts(outcome) do
     statuses = for {:answer, %{criteria: criteria}} <- [outcome], criterion <- criteria, do: criterion.status
@@ -532,7 +611,8 @@ defmodule SymphonyElixir.AcceptanceGate do
     - `rework`: a criterion is unmet or something the ticket asks for is missing; the executor can fix it.
     - `escalate`: a human must decide (see 4), or you can't tell.
 
-    Put gaps that are real but outside this ticket in `follow_ups`. Symphony lists them; it doesn't file them.
+    Put gaps that are real but outside this ticket in `follow_ups`. Symphony lists them, and when
+    your verdict is enforced it files up to 3 of them as Backlog sub-issues.
 
     #{escalations_section(job.reasons)}Open PRs that change the same files:
     #{overlap_lines(context.overlaps)}

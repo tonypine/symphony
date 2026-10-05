@@ -13,8 +13,8 @@ professional work.
 **Direction:** run agents from more than one model provider (Claude already runs alongside Codex),
 bring in improvements from community forks, and shape the workflow to fit how I work.
 
-**Changes so far:** once a human moves an issue to `Merging`, Symphony lands its PR with GitHub
-auto-merge, without an agent. When auto-merge can't be used, an agent merges it through the scoped
+**Changes so far:** once a human, or the acceptance gate in `enforce` mode, moves an issue to
+`Merging`, Symphony lands its PR with GitHub auto-merge, without an agent. When auto-merge can't be used, an agent merges it through the scoped
 `github_merge_pull_request` tool.
 
 Symphony runs coding agents (Codex or Claude) on your Linear issues and GitHub pull requests, so
@@ -112,6 +112,13 @@ branch instead of opening a second one. If a claimed issue moves to a terminal s
   built-in playbooks for CLIs (`cli`), web apps in a headless browser (`web`), macOS apps through
   accessibility (`macos_app`) and Android apps on a host-side emulator (`android_app`). See
   [`auto_review`](docs/configuration.md#auto_review).
+- **Acceptance gate** — after QA, an optional read-only agent checks the PR against the ticket's
+  acceptance criteria, scope and other open PRs, and fixed rules send risky changes to a person. In
+  `shadow` mode its verdict is advisory. In `enforce` mode, set per repository in `symphony.yml`, the
+  verdict moves the issue: `approve` to `Merging`, where auto-merge lands the PR; `rework` back to
+  `In Progress`; `escalate` to `In Review`. With the gate enforced, `In Review` holds the escalations
+  and `Merging` means approved by a person or by the gate. With it off or in `shadow`, every PR waits
+  in `In Review` as before. See [docs/acceptance_gate.md](docs/acceptance_gate.md).
 - **Docker runner** — host Symphony with mounted repos, state, logs, and agent credentials.
 - **macOS menu bar app** — start, stop, pause, and resume Symphony from the menu bar, with its status in
   the icon, the Linear key in a file only you can read, optional launch at login, and updates from the menu. See
@@ -350,7 +357,7 @@ Forcing only removes the wait for a slot. These transitions stay with a person:
 | Transition | Who |
 | --- | --- |
 | `Backlog` → `Todo` | a person promotes the ticket; forcing doesn't |
-| `In Review` or `Human Review` → `Merging` | a person approves the PR |
+| `In Review` or `Human Review` → `Merging` | a person approves the PR (an enforced acceptance gate moves its approvals from Auto Review itself) |
 | `In Review` or `Human Review` → `Waiting on sub-tickets` | a person approves a `breakdown` plan |
 | any state → `Rework` | a person rejects the approach |
 | `Final verification:` `In Review` or `Human Review` → `Done` | a person signs it off |
