@@ -294,6 +294,56 @@ defmodule SymphonyElixir.WorkspaceTest do
     end
   end
 
+  test "worktree creation and reuse run no filter driver from the repo's local config" do
+    test_root = unique_tmp("workspace-filter-driver")
+    primary_repo = Path.join(test_root, "primary")
+    workspace_root = Path.join(test_root, "workspaces")
+    proof = Path.join(test_root, "SYMPHONY_FILTER_PWNED")
+
+    try do
+      create_primary_repo!(primary_repo)
+      git!(primary_repo, ["checkout", "-b", "agent/filter"])
+      File.write!(Path.join(primary_repo, ".gitattributes"), "*.txt filter=evil\n")
+      File.write!(Path.join(primary_repo, "notes.txt"), "stored\n")
+      git!(primary_repo, ["add", ".gitattributes", "notes.txt"])
+      git!(primary_repo, ["commit", "-m", "agent attributes"])
+      git!(primary_repo, ["checkout", "main"])
+
+      # The driver an agent's branch picks, set where agents commit: the shared repo's config.
+      git!(primary_repo, ["config", "filter.evil.smudge", "touch '#{proof}'; cat"])
+      git!(primary_repo, ["config", "filter.evil.clean", "touch '#{proof}'; cat"])
+      git!(primary_repo, ["config", "filter.evil.required", "true"])
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        workspace_fetch_before_dispatch: false
+      )
+
+      issue = %Issue{identifier: "RSM-FILTER", workspace_branch: "agent/filter", workspace_base_ref: "agent/filter"}
+
+      assert {:ok, workspace} = Workspace.create_for_issue(issue)
+      assert File.read!(Path.join(workspace, "notes.txt")) == "stored\n"
+      refute File.exists?(proof)
+
+      # Reusing a dirty worktree backs it up (`status`, `add -A`) before `reset --hard` and `checkout`.
+      head = git!(workspace, ["rev-parse", "HEAD"])
+      File.write!(Path.join(workspace, "notes.txt"), "agent edit\n")
+
+      assert {:ok, ^workspace} = Workspace.create_for_issue(issue)
+      assert File.read!(Path.join(workspace, "notes.txt")) == "stored\n"
+      assert git!(workspace, ["show", "refs/symphony/orphaned/#{head}:notes.txt"]) == "agent edit"
+      refute File.exists?(proof)
+
+      File.rm!(Path.join(workspace, "notes.txt"))
+      assert {_output, 0} = System.cmd("git", ["-C", workspace, "checkout", "--", "notes.txt"], stderr_to_stdout: true)
+      assert File.exists?(proof), "plain git runs the driver, so the setup above is a real attack"
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   defp unique_tmp(name) do
     Path.join(System.tmp_dir!(), "symphony-elixir-#{name}-#{System.unique_integer([:positive])}")
   end
