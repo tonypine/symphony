@@ -71,6 +71,31 @@ defmodule SymphonyElixir.LinearClientAttachmentsTest do
     end
   end
 
+  test "an issue whose attachments fit in one page costs one request on each read" do
+    issue = raw_issue("issue-a", "MOT-42", screenshots(1..5), next_cursor: nil)
+
+    graphql_fun =
+      graphql(
+        %{
+          "SymphonyLinearPoll" => poll_response([issue]),
+          "SymphonyLinearIssuesById" => %{"data" => %{"issues" => %{"nodes" => [issue]}}},
+          "SymphonyLinearIssueByIdentifier" => %{"data" => %{"issue" => issue}}
+        },
+        %{}
+      )
+
+    assert {:ok, [%{identifier: "MOT-42", pull_request_url: nil}]} = Client.fetch_candidate_issues_for_test(graphql_fun)
+    assert {:ok, [%{identifier: "MOT-42"}]} = Client.fetch_issue_states_by_ids_for_test(["issue-a"], graphql_fun)
+    assert {:ok, %{identifier: "MOT-42"}} = Client.fetch_issue_by_identifier_for_test("MOT-42", graphql_fun)
+
+    for operation <- ["SymphonyLinearPoll", "SymphonyLinearIssuesById", "SymphonyLinearIssueByIdentifier"] do
+      assert_received {:linear_query, ^operation, _query, _variables}
+      refute_received {:linear_query, ^operation, _query, _variables}
+    end
+
+    refute_received {:linear_query, "SymphonyLinearIssueAttachments", _query, _variables}
+  end
+
   test "an issue with no PR reads all its attachment pages and still has no PR URL" do
     issue = raw_issue("issue-a", "MOT-40", screenshots(1..20), next_cursor: "a-1")
     graphql_fun = graphql(%{"SymphonyLinearPoll" => poll_response([issue])}, %{{"issue-a", "a-1"} => {screenshots(21..25), nil}})

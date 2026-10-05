@@ -159,6 +159,30 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     assert log =~
              "Parking issue_id=issue-progress issue_identifier=TP-337 in Backlog after 2 turns with no new commit or state change; " <>
                "it has no attached PR, so CI on its head was not checked"
+
+    refute log =~ "at dispatch"
+  end
+
+  test "a run whose issue had a PR at dispatch warns after each refresh that shows no PR" do
+    fetcher = linear_issue_fetcher(screenshot_attachments(21..30))
+
+    log = capture_log(fn -> run_issue!("In Progress", heads: ["sha-same"], max_turns: 5, issue_state_fetcher: fetcher) end)
+
+    warning =
+      "issue_id=issue-progress issue_identifier=TP-337 had PR #{@pr_url} at dispatch, " <>
+        "but its refreshed Linear attachments show no PR; checks on its PR will not run"
+
+    # The PR URL dropping out of the first refresh counts as a change, so the run parks after three turns.
+    assert turns() == 3
+    assert log |> String.split(warning) |> length() == turns() + 1
+    assert_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+  end
+
+  test "a run whose refreshed issue still has its PR does not warn about a lost PR" do
+    log = capture_log(fn -> run_issue!("In Progress", heads: ["sha-same"], max_turns: 5) end)
+
+    assert turns() == 2
+    refute log =~ "at dispatch"
   end
 
   test "empty Rework turns while CI on the pushed PR head is pending do not park the issue" do
