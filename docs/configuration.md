@@ -1081,6 +1081,16 @@ and it is `skipped` only when no run can be read or a run is still in progress. 
 `api.github.com`, which is not in the built-in network allowlist; add it to
 `agent.permissions.network.allowed_domains` for the fallback to work.
 
+An agent cannot change the agent-protected paths (`WORKFLOW.md`, `symphony.yml`, `.ai/skills`, the
+project `.claude` settings, hooks and skills, `mise.toml`, `.tool-versions`): its sandbox denies the
+writes and the `protected-paths` CI job fails a PR whose own commits touch them. The executor hands
+a criterion that only such a change can meet to a person, in a sub-issue or a follow-up ticket
+named in its workpad. The PR QA prompt lists these paths, and the agent marks such a handed-off
+criterion `skipped` with the follow-up ticket's identifier instead of failing the PR on it. Without
+a hand-off it is still `fail`, and a criterion a change elsewhere could meet (under `docs/`, in
+`README.md`) is never skipped this way. A parent walkthrough still fails a missing change to these
+paths, since it tests the merged result.
+
 Symphony applies its verdict:
 
 - `pass` → `In Review`;
