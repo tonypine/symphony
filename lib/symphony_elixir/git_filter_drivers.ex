@@ -50,7 +50,7 @@ defmodule SymphonyElixir.GitFilterDrivers do
            {:ok, config_dirs} <- config_dirs(entries, global_args, read, opts) do
         entries
         |> includes(config_dirs, 1)
-        |> walk_includes(driver_names(entries), MapSet.new(), read, opts)
+        |> walk_includes(driver_names(entries), %{}, read, opts)
         |> override_args()
       end
     end
@@ -90,17 +90,10 @@ defmodule SymphonyElixir.GitFilterDrivers do
     end
   end
 
-  @spec walk_includes(
-          [{String.t(), non_neg_integer()}],
-          MapSet.t(),
-          MapSet.t(),
-          reader(),
-          keyword()
-        ) :: MapSet.t()
   defp walk_includes([], names, _seen, _read, _opts), do: names
 
   defp walk_includes([{path, depth} | rest], names, seen, read, opts) do
-    if depth > @max_include_depth or MapSet.member?(seen, path) or not File.regular?(path) do
+    if depth > @max_include_depth or Map.has_key?(seen, path) or not File.regular?(path) do
       walk_includes(rest, names, seen, read, opts)
     else
       # A file git can't parse defines no driver git could load, so a failed read adds nothing.
@@ -112,8 +105,8 @@ defmodule SymphonyElixir.GitFilterDrivers do
 
       walk_includes(
         rest ++ includes(entries, %{}, depth + 1),
-        MapSet.union(names, driver_names(entries)),
-        MapSet.put(seen, path),
+        driver_names(entries) ++ names,
+        Map.put(seen, path, true),
         read,
         opts
       )
@@ -150,9 +143,8 @@ defmodule SymphonyElixir.GitFilterDrivers do
     end)
   end
 
-  @spec driver_names([{String.t(), String.t(), String.t(), String.t() | nil}]) :: MapSet.t()
   defp driver_names(entries) do
-    for {_scope, _origin, key, _value} <- entries, [_key, name] <- [Regex.run(@driver_key, key)], into: MapSet.new(), do: name
+    for {_scope, _origin, key, _value} <- entries, [_key, name] <- [Regex.run(@driver_key, key)], do: name
   end
 
   # Git reads a relative include path from the directory of the file that includes it.
@@ -188,7 +180,7 @@ defmodule SymphonyElixir.GitFilterDrivers do
   defp override_args(names) do
     case Enum.find(names, &String.contains?(&1, "=")) do
       nil ->
-        {:ok, names |> Enum.sort() |> Enum.flat_map(&driver_args/1)}
+        {:ok, names |> Enum.uniq() |> Enum.sort() |> Enum.flat_map(&driver_args/1)}
 
       name ->
         {:error, refusal("the repo config defines filter driver #{inspect(name)}, which -c can't turn off"), 128}
