@@ -12,6 +12,8 @@ defmodule SymphonyElixir.GitFilterDrivers do
   It lists the drivers in the config the command reads, and in every file that config includes,
   whatever the include's condition: an `includeIf "gitdir:..."` can apply only in the worktree
   `worktree add` creates.
+
+  `shell_functions/0` does the same in the scripts Symphony runs on an SSH worker.
   """
 
   @typedoc "Runs git with the given arguments and options, returning stdout, exit status and stderr."
@@ -23,6 +25,8 @@ defmodule SymphonyElixir.GitFilterDrivers do
   # Global options that take their value as the next argument.
   @global_options_with_value ~w(-C -c --git-dir --work-tree --namespace --config-env --attr-source)
   @config_keys "^(filter\\..*\\.(clean|smudge|process|required)|include\\.path|includeif\\..*\\.path)$"
+  @driver_keys "^filter\\..*\\.(clean|smudge|process|required)$"
+  @include_keys "^(include|includeif\\..*)\\.path$"
   @list_args ["-z", "--show-scope", "--show-origin", "--get-regexp", @config_keys]
   @config_dirs_args ["rev-parse", "--path-format=absolute", "--git-common-dir", "--git-dir"]
   @driver_key ~r/\Afilter\.(.*)\.(?:clean|smudge|process|required)\z/s
@@ -54,6 +58,128 @@ defmodule SymphonyElixir.GitFilterDrivers do
         |> override_args()
       end
     end
+  end
+
+  @doc """
+  Shell functions for the scripts Symphony runs on an SSH worker, which give them
+  `symphony_git <dir> <args>`: git `-C <dir>` with the overrides of `config_args/3`.
+
+  The script defines `symphony_git_raw`, which runs git with Symphony's safe config and env, before
+  it calls `symphony_git`. A subcommand that can read or write a work-tree file first lists the
+  drivers in the merged config of `<dir>`, in its repo's `config` and `config.worktree` files, and
+  in every file those include, whatever the condition; a file included from them that git can't
+  read adds nothing. As in `config_args/3`, git doesn't run, and the call fails with 128, when the
+  config can't be read or names a driver with `=` in its name. It also refuses an include path that
+  holds a newline (or `\\x01`, the byte the scan reads a newline as), rather than guess the file.
+
+  `<dir>` is the top of a work tree (or a bare repo), so the paths `rev-parse` prints relative to
+  it need no `--path-format`, which workers with git older than 2.31 lack. Included paths are
+  resolved to their physical directory, so a symlinked loop of includes reads each file once.
+  """
+  @spec shell_functions() :: String.t()
+  def shell_functions do
+    """
+    symphony_git_nl='
+    '
+    symphony_git_soh=$(printf '\\001')
+    symphony_git_refuse() {
+      printf 'symphony: refusing to run git, %s\\n' "$1" >&2
+      return 128
+    }
+    symphony_git_config() {
+      symphony_git_out=$({ if symphony_git_raw "$@" </dev/null; then symphony_git_status=0; else symphony_git_status=$?; fi; printf '\\000%s' "$symphony_git_status"; } | tr '\\n\\000' '\\001\\n')
+      symphony_git_status=${symphony_git_out##*"$symphony_git_nl"}
+      printf '%s' "${symphony_git_out%"$symphony_git_nl"*}"
+      [ "$symphony_git_status" -le 1 ] || return "$symphony_git_status"
+    }
+    symphony_git_physical() {
+      symphony_git_parent=${1%/*}
+      symphony_git_parent=$(cd -P -- "${symphony_git_parent:-/}" 2>/dev/null && pwd -P) || return
+      printf '%s/%s' "${symphony_git_parent%/}" "${1##*/}"
+    }
+    symphony_git_filter_keys() {
+      symphony_git_dirs=$(symphony_git_raw -C "$1" rev-parse --git-common-dir --git-dir) ||
+        { symphony_git_refuse "git printed no config directories in $1"; return; }
+      symphony_git_keys=$(symphony_git_config -C "$1" config -z --name-only --get-regexp '#{@driver_keys}') ||
+        { symphony_git_refuse "reading its config failed"; return; }
+      symphony_git_common=${symphony_git_dirs%%"$symphony_git_nl"*}
+      symphony_git_gitdir=${symphony_git_dirs#*"$symphony_git_nl"}
+      case $symphony_git_common in /*) ;; *) symphony_git_common=$1/$symphony_git_common ;; esac
+      case $symphony_git_gitdir in /*) ;; *) symphony_git_gitdir=$1/$symphony_git_gitdir ;; esac
+      symphony_git_files=$symphony_git_common/config$symphony_git_nl$symphony_git_gitdir/config.worktree
+      symphony_git_seen=$symphony_git_nl
+      symphony_git_depth=0
+      while [ -n "$symphony_git_files" ] && [ "$symphony_git_depth" -le #{@max_include_depth} ]; do
+        symphony_git_next=
+        while IFS= read -r symphony_git_file; do
+          symphony_git_file=$(symphony_git_physical "$symphony_git_file") || continue
+          case $symphony_git_seen in *"$symphony_git_nl$symphony_git_file$symphony_git_nl"*) continue ;; esac
+          symphony_git_seen=$symphony_git_seen$symphony_git_file$symphony_git_nl
+          [ -f "$symphony_git_file" ] || continue
+          if symphony_git_found=$(symphony_git_config config --file "$symphony_git_file" --no-includes -z --name-only --get-regexp '#{@driver_keys}' 2>/dev/null) &&
+            symphony_git_includes=$(symphony_git_config config --file "$symphony_git_file" --no-includes -z --get-regexp '#{@include_keys}' 2>/dev/null); then
+            symphony_git_keys=$symphony_git_keys$symphony_git_nl$symphony_git_found
+          elif [ "$symphony_git_depth" -eq 0 ]; then
+            symphony_git_refuse "reading $symphony_git_file failed"
+            return
+          else
+            continue
+          fi
+          while IFS= read -r symphony_git_line; do
+            case $symphony_git_line in
+              *"$symphony_git_soh"*"$symphony_git_soh"*)
+                symphony_git_refuse "$symphony_git_file includes a path it can't be sure of"
+                return
+                ;;
+              *"$symphony_git_soh") continue ;;
+              *"$symphony_git_soh"*) symphony_git_path=${symphony_git_line#*"$symphony_git_soh"} ;;
+              *) continue ;;
+            esac
+            case $symphony_git_path in
+              /*) ;;
+              "~/"*) symphony_git_path=${HOME:-}/${symphony_git_path#"~/"} ;;
+              *) symphony_git_path=${symphony_git_file%/*}/$symphony_git_path ;;
+            esac
+            symphony_git_next=$symphony_git_next$symphony_git_path$symphony_git_nl
+          done <<SYMPHONY_GIT_EOF
+    $symphony_git_includes
+    SYMPHONY_GIT_EOF
+        done <<SYMPHONY_GIT_EOF
+    $symphony_git_files
+    SYMPHONY_GIT_EOF
+        symphony_git_files=$symphony_git_next
+        symphony_git_depth=$((symphony_git_depth + 1))
+      done
+      printf '%s\\n' "$symphony_git_keys"
+    }
+    symphony_git() {
+      case ${2-} in
+        #{Enum.join(@no_filter_subcommands, "|")}) symphony_git_raw -C "$@"; return ;;
+      esac
+      symphony_git_drivers=$(symphony_git_filter_keys "$1") || return
+      symphony_git_dir=$1
+      shift
+      symphony_git_set=$symphony_git_nl
+      while IFS= read -r symphony_git_name; do
+        [ -n "$symphony_git_name" ] || continue
+        symphony_git_name=${symphony_git_name#filter.}
+        symphony_git_name=${symphony_git_name%.*}
+        case $symphony_git_set in *"$symphony_git_nl$symphony_git_name$symphony_git_nl"*) continue ;; esac
+        symphony_git_set=$symphony_git_set$symphony_git_name$symphony_git_nl
+        case $symphony_git_name in
+          *=*)
+            symphony_git_refuse "the repo config defines filter driver \\"$symphony_git_name\\", which -c can't turn off"
+            return
+            ;;
+        esac
+        set -- -c "filter.$symphony_git_name.clean=" -c "filter.$symphony_git_name.smudge=" \\
+          -c "filter.$symphony_git_name.process=" -c "filter.$symphony_git_name.required=false" "$@"
+      done <<SYMPHONY_GIT_EOF
+    $symphony_git_drivers
+    SYMPHONY_GIT_EOF
+      symphony_git_raw -C "$symphony_git_dir" "$@"
+    }\\
+    """
   end
 
   defp split_global_args([option, value | rest], acc) when option in @global_options_with_value,

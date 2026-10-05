@@ -91,18 +91,20 @@ defmodule SymphonyElixir.Repo.Fetcher do
 
   @doc """
   The shell commands a remote worker's dispatch script runs to fetch `origin` in
-  `$repo`, under `set -e`. The lock lives in this node, so on the worker host a
-  fetch that fails with `cannot lock ref` is only run once more, a second later.
+  `$repo`, under `set -e`, with the `symphony_git` the script defines
+  (`SymphonyElixir.Workspace.remote_safe_git_functions/0`). The lock lives in this
+  node, so on the worker host a fetch that fails with `cannot lock ref` is only run
+  once more, a second later.
   """
   @spec remote_fetch_origin_script() :: String.t()
   def remote_fetch_origin_script do
     """
     symphony_fetch_status=0
-    symphony_fetch_output=$(git -C "$repo" fetch origin 2>&1) || symphony_fetch_status=$?
+    symphony_fetch_output=$(symphony_git "$repo" fetch origin 2>&1) || symphony_fetch_status=$?
     if [ "$symphony_fetch_status" -ne 0 ]; then
       printf '%s\\n' "$symphony_fetch_output" >&2
       case "$symphony_fetch_output" in
-        *"#{@lock_failure}"*) sleep 1; git -C "$repo" fetch origin ;;
+        *"#{@lock_failure}"*) sleep 1; symphony_git "$repo" fetch origin ;;
         *) exit "$symphony_fetch_status" ;;
       esac
     fi\
