@@ -785,7 +785,11 @@ Fields:
 
 Review-comment options are ignored when `enabled` is not `true`. CI failure dispatch is driven only
 by failed status checks and ignores comment authorship; the ignored reviewer set above does not
-affect CI escalation.
+affect CI escalation. A head whose only failed check is `protected paths` gets no
+flaky re-run, no CI-fix run and no escalation, and uses no fix attempt: only a person clears that
+check, with the `protected-paths-approved` label, so the issue stays where it is until the check
+passes. When another check fails beside it, the CI-fix run's prompt names `protected paths` as not
+the agent's to fix.
 
 #### 5.4.7 `github` (object)
 
@@ -2681,6 +2685,9 @@ Algorithm summary:
 7. If `created_now=true`, run `hooks.after_create` if configured. Also run it for a reused
    workspace whose `after_create` has not yet succeeded (it failed or timed out), so the agent does
    not start in a half-prepared workspace. This applies to SSH worker workspaces too.
+   Hooks run outside the agent sandbox, so a `worktree` workspace, local or on an SSH worker, runs
+   `after_create` detached at the base commit and is checked out on its branch again afterwards. The worktree's ignored files are removed before the hook; one with uncommitted
+   changes, or no base commit, skips the hook with a warning and keeps its pending marker.
 
 Notes:
 

@@ -338,6 +338,28 @@ defmodule SymphonyElixir.ManagedCloneTest do
       assert rev!(workspace, "HEAD") == local_work
     end
 
+    test "a worktree re-created on an existing branch runs after_create on origin/HEAD's tree", %{
+      root: root,
+      remote: remote,
+      clones_root: clones_root
+    } do
+      push!(root, remote, "---\nhooks:\n  after_create: cat change.txt > hook.saw || echo absent > hook.saw\n---\nHooked prompt")
+      start!(root)
+      clone = Path.join(clones_root, "acme/web")
+
+      assert {:ok, workspace} = Workspace.create_for_issue("TP-1", nil, "web")
+      File.write!(Path.join(workspace, "change.txt"), "agent change\n")
+      git!(workspace, ["add", "change.txt"])
+      git!(workspace, ["commit", "-q", "-m", "agent work"])
+      agent_work = rev!(workspace, "HEAD")
+      git!(clone, ["worktree", "remove", "--force", workspace])
+
+      assert {:ok, ^workspace} = Workspace.create_for_issue("TP-1", nil, "web")
+      assert File.read!(Path.join(workspace, "hook.saw")) == "absent\n"
+      assert rev!(workspace, "HEAD") == agent_work
+      assert File.read!(Path.join(workspace, "change.txt")) == "agent change\n"
+    end
+
     test "without origin/HEAD a fresh worktree branches off the clone's HEAD", %{root: root, clones_root: clones_root} do
       start!(root, workspace: "      fetch_before_dispatch: false\n")
       clone = Path.join(clones_root, "acme/web")
