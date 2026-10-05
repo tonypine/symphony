@@ -826,6 +826,9 @@ defmodule SymphonyElixir.Codex.AppServer do
     network_access = settings.agent.network_access || %Schema.Agent.NetworkAccess{}
     extra_deny_read_paths = Keyword.get(opts, :extra_deny_read_paths, [])
 
+    deny_write_paths =
+      workspace_link_targets(workspace, opts) ++ codex_git_metadata_deny_write_paths(settings, workspace, opts)
+
     overrides =
       network_access.mode
       |> AgentSandboxConfig.codex_config_overrides(
@@ -833,7 +836,7 @@ defmodule SymphonyElixir.Codex.AppServer do
         workspace_sandbox_allow_read_paths(settings),
         extra_deny_read_paths,
         workspace: workspace,
-        deny_write_paths: workspace_link_targets(workspace, opts)
+        deny_write_paths: deny_write_paths
       )
 
     with {:ok, command} <- inject_config_overrides(command, overrides) do
@@ -986,24 +989,25 @@ defmodule SymphonyElixir.Codex.AppServer do
   # allowing object writes for both clone workspaces and linked worktrees.
   @doc false
   @spec git_metadata_deny_write_paths(Path.t() | term(), Path.t() | term()) :: [Path.t()]
-  def git_metadata_deny_write_paths(path, workspace) when is_binary(path) do
-    if is_binary(workspace) and Enum.any?(Path.split(path), &(&1 == ".git")) do
-      [
-        "config",
-        "config.worktree",
-        "hooks",
-        "info",
-        "packed-refs",
-        Path.join(["worktrees", "*", "config"]),
-        Path.join(["worktrees", "*", "config.worktree"])
-      ]
-      |> Enum.map(&Path.join(path, &1))
-    else
-      []
-    end
-  end
+  def git_metadata_deny_write_paths(path, workspace) when is_binary(path) and is_binary(workspace),
+    do: AgentSandboxConfig.git_metadata_deny_write_paths([path])
 
   def git_metadata_deny_write_paths(_path, _workspace), do: []
+
+  # Codex's own `workspaceWrite` policy protects a `.git` inside each writable root, but the git
+  # dirs are writable roots themselves. Its permission profile takes literal paths, so the globs
+  # become the files there now. An SSH worker's git dirs aren't on this host.
+  defp codex_git_metadata_deny_write_paths(settings, workspace, opts) do
+    if Keyword.get(opts, :remote, false) do
+      []
+    else
+      settings
+      |> Schema.runtime_workspace_write_roots(workspace)
+      |> Enum.filter(&File.dir?/1)
+      |> AgentSandboxConfig.git_metadata_deny_write_paths()
+      |> AgentSandboxConfig.literal_paths()
+    end
+  end
 
   defp inject_config_overrides(command, overrides) do
     case shell_words(command) do

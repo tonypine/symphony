@@ -43,6 +43,10 @@ defmodule SymphonyElixir.AgentSandboxConfig do
       and for a local workspace the files a symlink in a protected path points at
       (`workspace_link_targets/1`)
     * shell startup files, `~/.gitconfig`, and macOS launch agent roots
+    * in each git dir the agent may write (the shared repo's common dir for a worktree), the
+      files that change what git runs: `config`, `config.worktree`, `hooks`, `info`,
+      `packed-refs`, every worktree's `config(.worktree)` and every submodule's `config`
+      (`git_metadata_deny_write_paths/1`)
   """
 
   @codex_profile "workspace_write"
@@ -127,6 +131,20 @@ defmodule SymphonyElixir.AgentSandboxConfig do
     "~/.claude/plugins",
     "~/.claude/skills",
     "~/.mcp.json"
+  ]
+
+  # Relative to a git dir. The agent writes objects and refs there to commit, but these change
+  # what git runs, the agent's and Symphony's host-side git alike: config (filter drivers,
+  # `core.fsmonitor`, `core.hooksPath`), hooks and `info/attributes`.
+  @git_metadata_deny_write_entries [
+    "config",
+    "config.worktree",
+    "hooks",
+    "info",
+    "packed-refs",
+    "worktrees/*/config",
+    "worktrees/*/config.worktree",
+    "modules/**/config"
   ]
 
   @srt_codex_runtime_write_paths [
@@ -235,6 +253,33 @@ defmodule SymphonyElixir.AgentSandboxConfig do
           {:error, _not_a_directory} -> []
         end
     end
+  end
+
+  @doc """
+  The write-protected git metadata under each git dir in `git_dirs`, such as the git dir and
+  the shared common dir of a linked worktree. Paths without a `.git` segment are skipped.
+
+  Some entries are globs (`worktrees/*/config`, `modules/**/config`), which the Claude Code and
+  SRT sandboxes match; `literal_paths/1` expands them for a runtime that takes literal paths.
+  """
+  @spec git_metadata_deny_write_paths([Path.t()]) :: [Path.t()]
+  def git_metadata_deny_write_paths(git_dirs) do
+    for git_dir <- git_dirs,
+        is_binary(git_dir),
+        ".git" in Path.split(git_dir),
+        entry <- @git_metadata_deny_write_entries,
+        uniq: true,
+        do: Path.join(git_dir, entry)
+  end
+
+  @doc """
+  Replaces each glob in `paths` with the files on disk it matches now, and keeps the others.
+  """
+  @spec literal_paths([Path.t()]) :: [Path.t()]
+  def literal_paths(paths) do
+    Enum.flat_map(paths, fn path ->
+      if String.contains?(path, "*"), do: Path.wildcard(path, match_dot: true), else: [path]
+    end)
   end
 
   @doc false
@@ -378,10 +423,11 @@ defmodule SymphonyElixir.AgentSandboxConfig do
     # "read" here would create a duplicate TOML key whose later value silently
     # downgrades the protection to read-allowed.
     external_write_protect_entries =
-      @deny_write_paths
+      (@deny_write_paths ++ normalize_sandbox_paths(Keyword.get(opts, :deny_write_paths, [])))
       |> Enum.reject(&project_relative_sandbox_path?/1)
       |> expand_home_paths()
       |> Enum.reject(&MapSet.member?(deny_read_set, &1))
+      |> Enum.uniq()
       |> Enum.map(&{&1, "read"})
 
     deny_read_paths

@@ -2067,6 +2067,12 @@ The poller:
   and starts a QA pass on green CI (see `auto_review`). It also tracks PRs of issues in
   `Merging`, so a held landing run (below) sees its head settle and a red head takes the normal
   CI-failure dispatch.
+- reads a PR head as green only once its CI has finished, not merely when every reported check
+  passed: a GitHub Actions workflow run that reported a check for the head and has not completed
+  (a rerun's new attempt, whose failed checks leave the rollup until it queues them, or a job with
+  `needs:` not created yet) reads as pending, and so does a head the poller asked to rerun until
+  every check it reran reports again. This holds for every reader of the head's CI: the poller's
+  QA start, the agent run's pushed-head handoff, the `Merging` wait and the merge tool.
 
 Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `enabled: true`):
 
@@ -2826,11 +2832,16 @@ Current Elixir sandbox behavior:
   deny-write the sensitive/static Codex files `auth.json`, `config.toml`, and `AGENTS.md`.
   Shell startup files are also read-denied and write-denied; non-fatal PATH update warnings from
   Codex MUST NOT be resolved by granting access to those files.
-- SRT Git write model:
+- Git write model:
   - For each writable Git metadata root (workspace `.git`, plus any discovered linked-worktree
     `--git-dir` / `--git-common-dir`), SRT settings MUST deny writes to `config`,
-    `config.worktree`, `hooks`, `info`, `packed-refs`, and the per-worktree `worktrees/*/config`
-    and `worktrees/*/config.worktree` patterns. These deny rules apply regardless of layout.
+    `config.worktree`, `hooks`, `info`, `packed-refs`, the per-worktree `worktrees/*/config`
+    and `worktrees/*/config.worktree` patterns, and the submodule `modules/**/config` pattern.
+    These deny rules apply regardless of layout.
+  - A local Claude session's settings MUST deny the same paths for each of those roots that
+    exists, in `sandbox.filesystem.denyWrite` and as file-tool `Edit` deny rules. A local native
+    Codex session's managed permission profile MUST deny them too, with the patterns expanded to
+    the files that exist at launch; its enforcement is best-effort like the rest of that profile.
   - SRT settings MUST allow writes to `<git_dir>/objects` for clone workspaces and linked
     worktrees. This keeps `git add`, `git commit`, and similar staging operations working under
     SRT. Under the default linked-worktree layout (`workspaces.strategy: worktree`,

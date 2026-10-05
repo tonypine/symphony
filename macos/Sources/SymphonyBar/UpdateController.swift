@@ -14,6 +14,8 @@ final class UpdateController {
     private(set) var prepared: PreparedUpdate?
     /// Why the last update failed, shown in the menu until the next one.
     private(set) var error: String?
+    /// True while the update under way was started by the app itself: its failures show in the menu only.
+    private var automatic = false
 
     let pending = PendingUpdateStore(defaults: AppStores.current.defaults)
     /// The builds Skip This Version recorded, which the menu shows as skipped rather than available.
@@ -64,10 +66,12 @@ final class UpdateController {
         )
     }
 
-    /// Downloads and verifies `release`, then calls `ready` with it. A failure is shown in an alert.
-    func prepare(_ release: Release, ready: @escaping (PreparedUpdate) -> Void) {
+    /// Downloads and verifies `release`, then calls `ready` with it. A failure is shown in the menu, and in an alert
+    /// unless the update is `automatic`.
+    func prepare(_ release: Release, automatic: Bool = false, ready: @escaping (PreparedUpdate) -> Void) {
         guard !isUpdating else { return }
         error = nil
+        self.automatic = automatic
         preparing = release
         onChange?()
         Task {
@@ -87,16 +91,21 @@ final class UpdateController {
     /// The drain didn't stop Symphony, so the update is called off; the restart machine said why.
     func cancel() {
         prepared = nil
+        automatic = false
         installer.removeStaging()
         onChange?()
     }
 
-    /// Calls the update off with an alert that says why.
+    /// Calls the update off, saying why in the menu, and in an alert unless the update is automatic.
     func fail(_ reason: String) {
         prepared = nil
         installer.removeStaging()
         error = "\(UpdateMenu.failedTitle): \(reason)"
         onChange?()
+        guard !automatic else {
+            automatic = false
+            return
+        }
         let body = reason.prefix(1).uppercased() + reason.dropFirst()
         // Shown after this turn, so the menu is settled before the modal alert runs.
         DispatchQueue.main.async { SymphonyRunner.showAlert(title: UpdateMenu.failedTitle, body: body) }

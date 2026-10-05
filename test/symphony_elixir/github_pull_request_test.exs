@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.GitHub.PullRequestTest do
   use ExUnit.Case, async: true
 
+  alias SymphonyElixir.CiPoller
   alias SymphonyElixir.GitHub.Hosts
   alias SymphonyElixir.GitHub.PullRequest
 
@@ -236,6 +237,43 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
              %{name: "ci/pending", status: "PENDING", conclusion: "PENDING", details_url: "https://ci.example.test/pending"},
              %{name: "ci/success", status: "SUCCESS", conclusion: "SUCCESS", details_url: "https://ci.example.test/success"}
            ] = status.checks
+  end
+
+  test "fetch_ci_status reads the head's workflow runs when every check reported passed" do
+    pr_url = "https://github.com/org/repo/pull/17"
+    runs_endpoint = "repos/org/repo/actions/runs?head_sha=abc123&per_page=100"
+
+    runner = fn runs_response ->
+      fn
+        ["pr", "view", ^pr_url, "--json", _fields], _opts ->
+          {Jason.encode!(%{
+             "state" => "OPEN",
+             "url" => pr_url,
+             "headRefOid" => "abc123",
+             "statusCheckRollup" => [
+               %{"name" => "lint", "status" => "COMPLETED", "conclusion" => "SUCCESS", "detailsUrl" => "https://github.com/org/repo/actions/runs/987/job/1"}
+             ]
+           }), 0}
+
+        ["api", ^runs_endpoint], _opts ->
+          runs_response
+      end
+    end
+
+    # The failed jobs of run 987 are being rerun: they left the rollup, and the run's new attempt is queued.
+    rerunning = {Jason.encode!(%{"workflow_runs" => [%{"id" => 987, "status" => "queued", "conclusion" => nil}, "ignored"]}), 0}
+    assert {:ok, status} = PullRequest.fetch_ci_status(pr_url, gh_runner: runner.(rerunning))
+    assert status.workflow_runs == [%{id: "987", status: "QUEUED", conclusion: nil}]
+    assert CiPoller.ci_action(status) == :pending
+
+    finished = {Jason.encode!(%{"workflow_runs" => [%{"id" => 987, "status" => "completed", "conclusion" => "success"}]}), 0}
+    assert {:ok, status} = PullRequest.fetch_ci_status(pr_url, gh_runner: runner.(finished))
+    assert CiPoller.ci_action(status) == :success
+
+    assert {:error, :invalid_workflow_runs_payload} = PullRequest.fetch_ci_status(pr_url, gh_runner: runner.({"[]", 0}))
+
+    assert {:error, {:gh_failed, ["api", ^runs_endpoint], 1, "HTTP 502"}} =
+             PullRequest.fetch_ci_status(pr_url, gh_runner: runner.({"HTTP 502", 1}))
   end
 
   test "fetch_failed_log and rerun_failed use gh run commands" do

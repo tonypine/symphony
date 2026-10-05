@@ -658,7 +658,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     effective_shim_path = effective_shim_path(mcp_session, remote_shim_path)
     effective_socket_path = socket_path || mcp_session.socket_path
 
-    deny_write_paths = host_deny_write_paths(workspace, worker_host)
+    deny_write_paths = host_deny_write_paths(settings, workspace, worker_host)
 
     settings_json =
       build_claude_settings(network_access, allow_read_paths, allow_write_paths, deny_write_paths, read_only?)
@@ -708,13 +708,18 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
   defp host_allow_write_paths(_worker_host), do: []
 
-  # The real files behind symlinked skills (`.ai/skills/pull -> ../../priv/skills/pull`). An SSH
-  # worker's workspace isn't on this host, so it keeps the plain deny list.
-  defp host_deny_write_paths(workspace, nil) when is_binary(workspace) do
-    for path <- AgentSandboxConfig.workspace_link_targets(workspace), do: "./" <> path
+  # The real files behind symlinked skills (`.ai/skills/pull -> ../../priv/skills/pull`), and the
+  # config, hooks and attributes in the workspace's git dirs: Claude Code lets a worktree's
+  # session write the shared repo's `.git` and protects only part of it. An SSH worker's
+  # workspace isn't on this host, so it keeps the plain deny list.
+  defp host_deny_write_paths(settings, workspace, nil) when is_binary(workspace) do
+    link_targets = for path <- AgentSandboxConfig.workspace_link_targets(workspace), do: "./" <> path
+    git_dirs = settings |> Schema.runtime_workspace_write_roots(workspace) |> Enum.filter(&File.dir?/1)
+
+    link_targets ++ AgentSandboxConfig.git_metadata_deny_write_paths(git_dirs)
   end
 
-  defp host_deny_write_paths(_workspace, _worker_host), do: []
+  defp host_deny_write_paths(_settings, _workspace, _worker_host), do: []
 
   defp claude_settings_dir(nil, %{id: id}) when is_binary(id) do
     Path.join(System.tmp_dir!(), "#{@settings_dir_prefix}#{id}")

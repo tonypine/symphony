@@ -338,6 +338,40 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       assert log =~ "CI is green on issue_id=issue-progress issue_identifier=TP-337's pushed head sha-fixed on its PR; moving to In Review"
     end
 
+    test "hands off as CI running, not green, while a rerun of its pushed head's failed jobs is starting" do
+      # TP-546: the failed checks leave the rollup until the rerun's new attempt queues them, so
+      # only the checks that passed are left.
+      passed = [%{name: "make-all", status: "COMPLETED", conclusion: "SUCCESS", run_id: "987"}]
+      run_not_finished = %{commit_sha: "sha-fixed", checks: passed, workflow_runs: [%{id: "987", status: "QUEUED", conclusion: nil}]}
+
+      # The head's workflow run is not finished; then, with that run unread, the CI poller's record
+      # of the rerun it requested on this head.
+      for {ci_status, ci_check} <- [
+            {run_not_finished, nil},
+            {%{commit_sha: "sha-fixed", checks: passed},
+             %{
+               repo_key: "default",
+               issue_id: "issue-progress",
+               issue_identifier: "TP-337",
+               pr_url: @pr_url,
+               status: "rerun_requested",
+               last_observed_sha: "sha-fixed",
+               failed_checks: [%{name: "dialyzer", status: "COMPLETED", conclusion: "FAILURE", run_id: "987"}]
+             }}
+          ] do
+        if ci_check, do: RunStore.put_ci_check(ci_check)
+        Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, ci_status})
+        Application.delete_env(:symphony_elixir, :progress_agent_turns)
+
+        log = capture_log(fn -> run_issue!("In Progress", heads: ["sha-dirty", "sha-fixed"], auto_review: nil) end)
+
+        assert turns() == 1
+        assert_received {:memory_tracker_state_update, "issue-progress", "In Review"}
+        assert log =~ "CI is running on issue_id=issue-progress issue_identifier=TP-337's pushed head sha-fixed on its PR; moving to In Review"
+        refute log =~ "CI is green"
+      end
+    end
+
     test "is still parked when it pushed nothing, its head is red or has no checks, or its head is not the PR head" do
       for {heads, pr_head_result} <- [
             {["sha-same"], {:ok, %{commit_sha: "sha-same", checks: @green_checks}}},

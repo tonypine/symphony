@@ -112,6 +112,31 @@ in `mix.lock`, and `elixir_make` checks each precompiled archive against the pac
 file, before using it. The host's own `~/.hex` and `~/Library/Caches` stay read-only, and the
 folder never holds `hex.config`, which can hold Hex API and repo keys.
 
+### Git metadata
+
+A local agent commits in its workspace, so it may write the workspace's git dir and, for a
+worktree (`workspace.strategy: worktree`), the shared repo's `.git`. Some files there change what
+git runs, in the agent's own `git` commands and in Symphony's on the host: the config (filter
+drivers, `core.fsmonitor`, `core.hooksPath`), the hooks and `info/attributes`. In each of those git
+dirs, every local runtime denies writes to:
+
+- `config`, `config.worktree`, `hooks`, `info` and `packed-refs`,
+- every worktree's `worktrees/<id>/config` and `worktrees/<id>/config.worktree`,
+- every submodule's `modules/<name>/config`, at any depth.
+
+Objects and refs stay writable, so `git add`, `git commit` and `git fetch` work. In a worktree
+those objects land in the shared `<repo>/.git/objects` and outlive the workspace until git
+collects them.
+
+| Runtime | How the git metadata is write-protected |
+| --- | --- |
+| Claude | `sandbox.filesystem.denyWrite` entries, globs for the worktree and submodule files, and an `Edit` rule for each one, which refuses the file tools too. Claude Code itself lets a worktree's session write the shared `.git` and protects only its `config`, the session's own `config.worktree` and `hooks`. |
+| Codex with SRT | SRT `denyWrite` entries, globs for the worktree and submodule files. |
+| Native Codex | A read-only entry for each path in the managed permission profile. The profile takes literal paths, so the worktree and submodule globs become the files that exist when the session starts. Codex itself protects a `.git` inside each writable root, but not the git dirs Symphony adds as writable roots. Codex may drop the profile's entries (see [configuration](configuration.md)), so use SRT when they must hold. |
+
+An SSH worker's workspace gets none of these entries: its git dirs aren't on this host. Its
+workspace `.git` stays write-protected with the other protected paths.
+
 ### Workspace hooks run outside the sandbox
 
 A repository's `hooks` run on the host (or the SSH worker) as the operator, outside the agent
@@ -177,14 +202,8 @@ on the credential paths, allow-writes scoped to the issue workspace, and an `ext
 policy so SRT — not nested `sandbox-exec` — owns command enforcement. Use this when native Codex
 deny-list enforcement is not enough.
 
-**Git write model.** SRT settings always deny writes to the high-risk Git metadata files
-`config`, `config.worktree`, `hooks`, `info`, `packed-refs`, and any `worktrees/*/config(.worktree)`
-entries on every discovered Git metadata root. Writes to `.git/objects` remain allowed so `git add`
-and `git commit` work in both clone workspaces and linked worktrees. For linked worktrees
-(`workspace.strategy: worktree`, `workspace.repo: <source>`), those object writes target the
-shared `<source>/.git/objects` database; this is an intentional cleanup/blast-radius tradeoff so
-SRT-wrapped Codex can commit normally while config, hooks, packed refs, and other high-risk Git
-metadata stay write-protected.
+**Git write model.** SRT denies writes to the git config files on every git dir the agent may
+write; see [Git metadata](#git-metadata) for the list and for the other runtimes.
 
 **Known issue.** Codex app-server sessions wrapped by SRT can fail while writing stdout with
 `Resource temporarily unavailable (os error 35)`, surfaced by Symphony as
@@ -217,6 +236,14 @@ the command runs on. Every host-side git call:
   `submodule.recurse=false` keeps `checkout` and `reset` out, and the orphan backup's `add -A`
   starts from an empty index.
 
+On an SSH worker, the scripts Symphony runs over SSH to fetch, create, reuse, back up and remove a
+worktree, and to put a worktree on the base branch for `after_create`, run git as the worker's
+operator account with the same protections. They define a `symphony_git` shell function that sets
+the same environment and `-c` overrides, and lists and blanks the filter drivers in the worker
+repo's `config`, its `config.worktree` and every file they include before each command that can
+read or write work-tree files. It also refuses to run git when an include path holds a newline,
+since the shell reads the list line by line.
+
 Limits:
 
 - The drivers are listed just before the command runs, so one written to the config in between
@@ -225,10 +252,9 @@ Limits:
   Symphony gives native Codex no such deny list yet
   ([TP-534](https://linear.app/tonypine/issue/TP-534)).
 - Only filter drivers are blanked. Host-side `git diff` and `git merge` (reviews, the acceptance
-  gate, `github_sync_base`) still run a diff or merge driver the config defines, and `git fetch`
-  still honors `remote.<name>.uploadpack` ([TP-533](https://linear.app/tonypine/issue/TP-533)).
-- The scripts that create and reset worktrees on an SSH worker run plain git
-  ([TP-535](https://linear.app/tonypine/issue/TP-535)).
+  gate, `github_sync_base`) still run a diff or merge driver the config defines, and `git fetch`,
+  on the host or on an SSH worker, still honors `remote.<name>.uploadpack`
+  ([TP-533](https://linear.app/tonypine/issue/TP-533)).
 
 ### Network access controls
 
