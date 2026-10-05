@@ -1068,7 +1068,9 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   defp drop_unsupported_effort(profile), do: profile
 
   # The env that points `claude` at the run's provider, read at each launch so the key never
-  # sits in the session. Anthropic runs add nothing.
+  # sits in the session. Anthropic runs add nothing. Every model id `claude` can pick on its own
+  # (subagents, the small fast model for background calls, the alias defaults) points at the
+  # profile's model, since OpenRouter does not know Anthropic's own ids.
   defp provider_env(%{provider: "openrouter"} = profile) do
     case Config.openrouter_api_key() do
       nil ->
@@ -1077,12 +1079,18 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
         {:error, {:missing_provider_env, Config.openrouter_api_key_env(), kind}}
 
       api_key ->
+        model = Map.get(profile, :model)
+
         {:ok,
          %{
            "ANTHROPIC_BASE_URL" => @openrouter_base_url,
            "ANTHROPIC_AUTH_TOKEN" => Secret.unwrap(api_key),
            "ANTHROPIC_API_KEY" => "",
-           "CLAUDE_CODE_SUBAGENT_MODEL" => Map.get(profile, :model)
+           "CLAUDE_CODE_SUBAGENT_MODEL" => model,
+           "ANTHROPIC_DEFAULT_HAIKU_MODEL" => model,
+           "ANTHROPIC_DEFAULT_SONNET_MODEL" => model,
+           "ANTHROPIC_DEFAULT_OPUS_MODEL" => model,
+           "ANTHROPIC_SMALL_FAST_MODEL" => model
          }}
     end
   end
