@@ -1145,6 +1145,14 @@ one.
 - the `## Symphony QA Report` is written on the parent and on the verification ticket;
 - `pass` (or `blocked` with no failing step) → the verification ticket goes to `In Review` for a
   human to sign off;
+- the QA agent reports each row of the verification ticket's checklist as its own step marked
+  `"checklist": true`, with `pass` or `fail` (a gap) and the evidence, and splits a row that groups
+  several IDs ("UC1 to UC8") into one step per ID. It may skip a row only for a reason it states,
+  such as a check only a person or a device the QA host lacks can do. A `pass` that reports no
+  checklist row while the ticket lists some, or skipped (or was blocked on) more than half of them,
+  is not accepted: the report says `blocked`, names the unchecked rows, and the verification ticket
+  goes to `Backlog` for a human instead of `In Review`, where it would look verified. Check the
+  rows, or move it back to `Todo` to run the walkthrough again;
 - `fail` (or `blocked` with a failing step) → each failing step (or each finding, when no step
   failed) is filed as a `Backlog` sub-ticket of the verification ticket that names the step and
   holds its details and evidence, the report lists them, and the verification ticket is marked

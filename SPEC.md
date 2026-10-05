@@ -1464,8 +1464,12 @@ When enabled:
   holding its details and evidence, marks the verification ticket blocked by each one, lists them
   in the report, and moves the verification ticket to `Todo`, where the blocker rule holds it until
   every gap is terminal. When no gap could be filed and linked, it moves the verification ticket to
-  `Backlog` instead. There is no fix loop. Any other final verification ticket gets the executor
-  run.
+  `Backlog` instead. There is no fix loop. The QA agent MUST report each row of the verification
+  checklist as its own step marked `checklist` (one step per ID for a row that groups several), and
+  a `pass` whose verification ticket lists rows but that reports no `checklist` step, or leaves more
+  than half of them `skipped` or `blocked`, MUST NOT move the ticket to `In Review`: Symphony
+  reports it as `blocked`, naming the unchecked rows, and moves the ticket to `Backlog`. Any other
+  final verification ticket gets the executor run.
 
 When disabled, behaviour is unchanged.
 
