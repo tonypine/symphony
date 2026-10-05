@@ -34,6 +34,20 @@ since the result would not describe `HEAD`.
 
 ## Testing
 
+CI fails a push when any module is below 100% line coverage. Before pushing, check the `lib/`
+modules your branch changes:
+
+```bash
+mix cover.changed
+```
+
+It runs the changed test files, the `test/<path>_test.exs` of each changed `lib/<path>.ex` and the
+test files that name a changed module, once with `--cover`, then prints each changed module's
+coverage with its uncovered lines and fails when one is below 100%. Changes count from the
+merge-base with `origin/main` (`--base <ref>` for another branch), uncommitted and untracked files
+included. Modules in `mix.exs`'s `test_coverage` `ignore_modules` are skipped, as in CI. When the
+tests that cover a module don't name it, pass them: `mix cover.changed <test files>`.
+
 Use the fast local gate while iterating:
 
 ```bash

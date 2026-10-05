@@ -6,8 +6,8 @@ This repository contains the Elixir agent orchestration service that polls Linea
 
 - Elixir: `1.19.x` (OTP 28) via `mise`.
 - Install deps: `mix setup`.
-- Local pre-push checks: format, compile with warnings as errors, lint, and targeted tests
-  (see below).
+- Local pre-push checks: format, compile with warnings as errors, lint, targeted tests, and
+  the coverage of the changed modules (see below).
 - CI gate: `make all` (format check, lint, full test suite with 100% coverage, Dialyzer).
 
 
@@ -37,7 +37,17 @@ mix compile --warnings-as-errors
 mix specs.check
 mix credo --strict <changed files>
 mix test <new or changed test files, and the test files of changed modules>
+mix cover.changed
 ```
+
+CI fails a push when any module is below 100% line coverage, so check the modules you changed
+before pushing: `mix cover.changed` runs the tests for the `lib/` modules changed since
+`origin/main` once with `--cover` and fails, naming the uncovered lines, when one of them is below
+100%. It skips `mix.exs`'s `ignore_modules`, as CI does. It picks the changed test files, the
+`test/<path>_test.exs` of each changed `lib/<path>.ex` and the test files that name a changed
+module; when the tests that cover a module don't name it, pass them:
+`mix cover.changed <test files>`. It cover-compiles every module, so it takes a few seconds more
+than the same `mix test`.
 
 Do not run `make all`, `make check`, `make coverage`, the full `mix test`, `mix test --stale` (it
 runs the whole suite in a fresh workspace) or Dialyzer locally;
