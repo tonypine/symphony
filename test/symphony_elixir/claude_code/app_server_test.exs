@@ -149,6 +149,23 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
     end
   end
 
+  describe "build_claude_settings/5" do
+    test "denies the file tools on every write-protected path and on the extra deny paths" do
+      network_access = %Agent.NetworkAccess{mode: "allowlist", allowed_domains: [], denied_domains: []}
+
+      deny = AppServer.build_claude_settings(network_access, [], [], ["./priv/skills/pull"]) |> get_in(["permissions", "deny"])
+
+      for path <- AgentSandboxConfig.deny_write_paths() ++ ["./priv/skills/pull"] do
+        assert "Edit(#{path})" in deny
+      end
+
+      assert "Edit(./WORKFLOW.md)" in deny
+      assert "Edit(./.claude/hooks)" in deny
+      assert "Bash(git push:*)" in deny
+      refute "Edit" in deny
+    end
+  end
+
   describe "parse_event/1" do
     test "parses system event and returns session_started tuple" do
       line =
@@ -735,13 +752,14 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
         assert get_in(mcp_config, ["mcpServers", "symphony", "env", "PATH"]) == System.get_env("PATH")
         assert get_in(mcp_config, ["mcpServers", "symphony", "alwaysLoad"]) == true
 
-        assert get_in(contents, ["permissions", "deny"]) == [
-                 "Bash(gh:*)",
-                 "Bash(ghe:*)",
-                 "Bash(git push:*)",
-                 "Bash(git remote add:*)",
-                 "Bash(git remote set-url:*)"
-               ]
+        assert get_in(contents, ["permissions", "deny"]) ==
+                 [
+                   "Bash(gh:*)",
+                   "Bash(ghe:*)",
+                   "Bash(git push:*)",
+                   "Bash(git remote add:*)",
+                   "Bash(git remote set-url:*)"
+                 ] ++ AgentSandboxConfig.claude_edit_deny_rules()
 
         if session.mcp_session.transport == :unix do
           assert File.exists?(session.mcp_session.socket_path)
