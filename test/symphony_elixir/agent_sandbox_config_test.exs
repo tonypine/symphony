@@ -187,6 +187,62 @@ defmodule SymphonyElixir.AgentSandboxConfigTest do
     assert filesystem =~ ~s("#{Path.join(workspace, "priv/skills/pull")}"="read")
   end
 
+  test "git metadata deny paths cover each git dir's config, hooks and attributes but not its objects" do
+    assert AgentSandboxConfig.git_metadata_deny_write_paths(["/repo/.git", "/repo/.git/worktrees/MT-1", "/workspaces/MT-1", :not_a_path, "/repo/.git"]) ==
+             [
+               "/repo/.git/config",
+               "/repo/.git/config.worktree",
+               "/repo/.git/hooks",
+               "/repo/.git/info",
+               "/repo/.git/packed-refs",
+               "/repo/.git/worktrees/*/config",
+               "/repo/.git/worktrees/*/config.worktree",
+               "/repo/.git/modules/**/config",
+               "/repo/.git/worktrees/MT-1/config",
+               "/repo/.git/worktrees/MT-1/config.worktree",
+               "/repo/.git/worktrees/MT-1/hooks",
+               "/repo/.git/worktrees/MT-1/info",
+               "/repo/.git/worktrees/MT-1/packed-refs",
+               "/repo/.git/worktrees/MT-1/worktrees/*/config",
+               "/repo/.git/worktrees/MT-1/worktrees/*/config.worktree",
+               "/repo/.git/worktrees/MT-1/modules/**/config"
+             ]
+  end
+
+  test "literal paths expand globs to the files on disk and keep plain paths" do
+    root = Path.join(System.tmp_dir!(), "symphony-literal-paths-#{System.unique_integer([:positive])}")
+    on_exit(fn -> File.rm_rf(root) end)
+
+    for path <- ["worktrees/MT-1/config.worktree", "worktrees/.hidden/config.worktree", "modules/a/config", "modules/a/modules/b/config"] do
+      File.mkdir_p!(Path.dirname(Path.join(root, path)))
+      File.write!(Path.join(root, path), "")
+    end
+
+    paths = [Path.join(root, "config"), Path.join(root, "worktrees/*/config.worktree"), Path.join(root, "modules/**/config"), Path.join(root, "hooks/*")]
+
+    assert Enum.sort(AgentSandboxConfig.literal_paths(paths)) ==
+             Enum.sort(
+               Enum.map(
+                 ["config", "worktrees/MT-1/config.worktree", "worktrees/.hidden/config.worktree", "modules/a/config", "modules/a/modules/b/config"],
+                 &Path.join(root, &1)
+               )
+             )
+  end
+
+  test "Codex permission profile write-protects absolute extra deny paths once" do
+    overrides =
+      AgentSandboxConfig.codex_config_overrides("allowlist", [], [], [],
+        workspace: "/repo/workspace",
+        deny_write_paths: ["/repo/.git/config", "/repo/.git/config", "priv/skills/pull"]
+      )
+
+    filesystem = Enum.find(overrides, &String.starts_with?(&1, "permissions.workspace_write.filesystem="))
+
+    assert length(String.split(filesystem, ~s("/repo/.git/config"="read"))) == 2
+    assert filesystem =~ ~s("/repo/workspace/priv/skills/pull"="read")
+    refute filesystem =~ ~s("/repo/workspace/repo/.git/config")
+  end
+
   test "Claude filesystem settings deny writes to Claude Code persistence files (auto-loaded across sessions)" do
     settings = AgentSandboxConfig.claude_filesystem_settings()
 
