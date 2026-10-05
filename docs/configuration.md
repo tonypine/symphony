@@ -1893,7 +1893,8 @@ lists:
   matches one still open on the issue is not posted again. An agent that finds its request is not
   needed after all withdraws it with `linear_withdraw_human_action` (`reason`, optional `title`):
   Symphony replies `## Action withdrawn` with the reason under the request, which closes it, and
-  removes the label once no open request is left on the issue;
+  removes the label once no open request is left on the issue, and then the run's move to
+  `Backlog` stays in `Backlog`;
 - an issue with the label and no such comment, as a task in itself (its description's list items
   become the steps);
 - a `breakdown` parent in `In Review` or `Human Review`, waiting for its plan to be approved;
