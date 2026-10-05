@@ -99,8 +99,23 @@ final class ReposWindowController: NSObject, NSWindowDelegate {
             readConfig: { try SymphonyConfigFile(path: $0).readRepositories() }
         )
         let root = clonesRoot(configPath)
-        model?.display = ReposList.withActions(display, entries: readEntries(configPath)) { [status, poll] gitHub in
+        let entries = readEntries(configPath)
+        var shown = ReposList.withActions(display, entries: entries) { [status, poll] gitHub in
             ManagedClones.removal(gitHub: gitHub, root: root, status: status, poll: poll)
+        }
+        if case let .success(entries) = entries, let global = try? SymphonyConfigFile(path: configPath).readAcceptanceGateMode() {
+            shown = AcceptanceGate.withGateFields(shown, entries: entries, global: global)
+        }
+        model?.display = shown
+    }
+
+    /// Symphony's state while it answers, for the Edit sheet's gate stats.
+    private var state: StateSnapshot? {
+        switch status {
+        case let .running(snapshot, _), let .paused(snapshot, _):
+            return snapshot
+        case .stopped, .starting, .error:
+            return nil
         }
     }
 
@@ -122,7 +137,7 @@ final class ReposWindowController: NSObject, NSWindowDelegate {
     private func showSheet(editing key: String?) {
         guard let model, model.addRepo == nil else { return }
         model.message = nil
-        model.addRepo = AddRepoViewModel(configPath: configPath, secrets: secrets, editing: key) { [weak self] saved in
+        model.addRepo = AddRepoViewModel(configPath: configPath, secrets: secrets, editing: key, state: state) { [weak self] saved in
             self?.saved(saved)
         }
     }

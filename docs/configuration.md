@@ -62,6 +62,39 @@ that repository.
 
 Relative repository workflow paths resolve from the directory containing `symphony.yml`.
 
+## Settings in the macOS app
+
+Every `symphony.yml` setting gets a control in the macOS app, or a person's exemption. When a
+ticket adds a setting, its plan includes the control: in the same PR, or in a sub-ticket that
+blocks the parent's final verification, with a `## User walkthrough` for the new control.
+
+CI enforces it. `mix settings.ui_coverage`, part of `mix lint` (so of `make all` and the `lint`
+job), lists every setting as a dotted key path from the config schema
+(`SystemSchema.operator_key_paths/0`), such as `auto_review.acceptance_gate.mode` or
+`repositories[].route.team` for a key of every repository. It fails, naming each key, when a key is
+in neither of these:
+
+- **The app's manifest**, `SettingsUIManifest.keyPaths` in
+  `macos/Sources/SymphonyBarCore/SettingsUIManifest.swift`: the keys the Settings, Models and
+  Repos sections read and write, one string literal per line. A key holding a free-form map, such
+  as `agent.run_profiles`, covers everything under it. A Swift test runs every line-editor write
+  and fails when one writes a key the manifest doesn't list, or the manifest lists a key no editor
+  writes. The task also fails when the manifest lists a key that is not a setting.
+- **The exemption file**, `config/settings_ui_exempt.yml`: entries with a `key` (a key path, or
+  `prefix.*` for every key under the prefix, including later ones) or a `keys` list, a `reason`,
+  and an optional `ticket` for the planned control. The task warns about an exemption that matches
+  no setting or covers a key the manifest now lists, so a person can remove it.
+
+Only a person can exempt a setting. The exemption file is an agent-protected path: the agent
+sandbox denies writing it, and the `protected paths` check fails a Symphony PR whose own commits
+change it until a person other than the author adds the `protected-paths-approved` label. The
+acceptance gate's `:settings_ui` rule also sends a PR to a person when it adds a field to the config
+schema without changing the manifest (see `docs/acceptance_gate.md`).
+
+To add a setting: add its control to the app, list its key in the manifest, and extend the line
+editor and its tests. To exempt one, a person adds it to the exemption file with the reason, in the
+same PR, and labels the PR. `WORKFLOW.md` front matter (repo-owned settings) is not covered.
+
 ## Top-Level Sections
 
 ### `issues`
@@ -1082,7 +1115,8 @@ and it is `skipped` only when no run can be read or a run is still in progress. 
 `agent.permissions.network.allowed_domains` for the fallback to work.
 
 An agent cannot change the agent-protected paths (`WORKFLOW.md`, `symphony.yml`, `.ai/skills`, the
-project `.claude` settings, hooks and skills, `mise.toml`, `.tool-versions`): its sandbox denies the
+project `.claude` settings, hooks and skills, `mise.toml`, `.tool-versions`,
+`config/settings_ui_exempt.yml`): its sandbox denies the
 writes and the `protected-paths` CI job fails a PR whose own commits touch them. The executor hands
 a criterion that only such a change can meet to a person, in a sub-issue or a follow-up ticket
 named in its workpad. The PR QA prompt lists these paths, and the agent marks such a handed-off
@@ -1104,6 +1138,13 @@ A pass whose QA agent runs into the Claude or Codex usage limit gets no verdict 
 issue stays in Auto Review, Symphony holds that provider's runs until the limit resets (as for an
 agent run, see `agent.usage_limit`), and the next green CI poll after that runs the pass again on
 the same PR head. With `agent.usage_limit.auto_pause: false` it is `blocked` instead.
+
+A `blocked` the QA agent didn't decide itself (it crashed, hit the usage limit with `auto_pause`
+off, or its dev server, emulator or browser didn't start) isn't kept for the PR head: when the
+issue is moved back to Auto Review on the same head, QA runs again before the acceptance gate
+judges it, after the usage limit resets if one still holds. A `blocked` verdict from the agent
+(a missing secret, a step only a person can do) is kept, and goes to the gate or human review
+again as it did the first time.
 
 Every pass rewrites one `## Symphony QA Report` comment on the issue (Symphony's only comment
 besides the agent workpad) and records a run with `kind: "qa"`, its tokens and wall time in the

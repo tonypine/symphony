@@ -161,7 +161,7 @@ defmodule SymphonyElixir.MixProject do
       setup: ["deps.get"],
       build: ["escript.build"],
       "audit.run_store": ["cmd elixir scripts/audit_run_store_repo_key.exs"],
-      lint: ["specs.check", "audit.run_store", "credo --strict"],
+      lint: ["specs.check", "audit.run_store", "settings.ui_coverage", "credo --strict"],
       # Compiling prunes OTP apps the project doesn't depend on from the code path, and Dialyxir looks
       # `plt_add_apps` up there, so `:tools` (`:cover`, for `mix cover.changed`) goes back first.
       dialyzer: ["compile", fn _args -> Mix.ensure_application!(:tools) end, "dialyzer"]

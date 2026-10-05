@@ -1300,6 +1300,12 @@ When enabled:
   workflows on a PR that conflicts with its base, so an issue in `state` whose PR has no checks
   and is `CONFLICTING` (or `DIRTY`) MUST move to `Rework` with a comment naming the base branch to
   merge in, instead of waiting for CI.
+- A QA `blocked` the QA agent did not give itself (an agent error or crash, a dev server, emulator
+  or browser that did not start, a usage limit with `agent.usage_limit.auto_pause` off) MUST NOT be
+  applied again once it moved the issue on: when the issue returns to `state` on the same head SHA,
+  Symphony MUST drop that QA verdict and the acceptance gate's verdict for the SHA and run a fresh
+  QA pass before the gate judges it. A `blocked` verdict from the QA agent is applied again as
+  before.
 - QA selection is deterministic and runs before any agent: a `qa:skip` label skips; a
   `qa:<kind>` label selects that playbook; a diff that only touches docs, tests or `skip_globs`
   skips; otherwise playbooks are selected by their trigger paths, and the `cli` playbook also by a
@@ -2819,7 +2825,8 @@ Current Elixir sandbox behavior:
   startup files, and shell or REPL history files.
 - Shared write denies protect workflow and runtime guardrail files such as `WORKFLOW.md`,
   `symphony.yml`, `symphony.local.yml`, `.claude/settings.json`, `.git`, `mise.toml`,
-  `.tool-versions`, shell startup files, `~/.gitconfig`, and macOS launch agent roots.
+  `.tool-versions`, `config/settings_ui_exempt.yml`, shell startup files, `~/.gitconfig`, and
+  macOS launch agent roots.
 - Rendered Claude, SRT, and Codex native sandbox settings include both tilde and expanded absolute
   forms for home-relative deny paths as defense in depth.
 - Codex native `workspace_write` config renders command-sandbox read denies for

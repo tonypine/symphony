@@ -73,6 +73,14 @@ final class SettingsViewModel: ObservableObject {
     @Published private(set) var isCheckingTokenLimits = false
     /// Today's tokens from Symphony's latest state, nil while it isn't answering.
     @Published var budget: StateSnapshot.Budget?
+    /// `auto_review.acceptance_gate.mode` in the configured symphony.yml.
+    @Published var acceptanceGateMode = AcceptanceGateMode.off
+    /// Enforce, while its confirmation is open.
+    @Published var pendingAcceptanceGate: AcceptanceGateChoice?
+    /// Symphony's latest state, for the acceptance gate's agreement stats; nil while it isn't answering.
+    @Published var state: StateSnapshot?
+    /// Why `symphony check` rejected the changed acceptance gate mode, shown in its section.
+    @Published private(set) var acceptanceGateError: String?
     /// True while Save waits for `symphony check`.
     @Published private(set) var isSaving = false
 
@@ -87,6 +95,9 @@ final class SettingsViewModel: ObservableObject {
     /// The limits read from symphony.yml, or nil when they couldn't be read. Only limits changed from these
     /// are written.
     private var loadedTokenLimits: TokenLimits?
+
+    /// The gate mode read from symphony.yml, or nil when it couldn't be read. Written only when it changed.
+    private var loadedAcceptanceGateMode: AcceptanceGateMode?
 
     /// The pending or running `symphony check` on the changed token limits.
     private var tokenLimitsCheck: Task<Void, Never>?
@@ -131,6 +142,7 @@ final class SettingsViewModel: ObservableObject {
         loadMaxConcurrentAgents()
         loadTokenLimits()
         loadRunProfiles()
+        loadAcceptanceGateMode()
         // Off the main thread, so a Keychain prompt can't freeze the app while Settings opens.
         self.secrets.read { [weak self] result in self?.showSecrets(result) }
     }
@@ -244,6 +256,26 @@ final class SettingsViewModel: ObservableObject {
         }
     }
 
+    /// The gate picker is off until a symphony.yml has been read, and while Save checks it.
+    var canEditAcceptanceGate: Bool { loadedAcceptanceGateMode != nil && !isSaving }
+
+    /// The agreement stats under the gate picker: one line per repository, or why there are none.
+    var acceptanceGateLines: [String] {
+        AcceptanceGate.agreementLines(keys: repositoryKeys, in: state)
+    }
+
+    private func loadAcceptanceGateMode() {
+        let path = settings.trimmed().configPath
+        guard !path.isEmpty else { return }
+        do {
+            let mode = try SymphonyConfigFile(path: path).readAcceptanceGateMode()
+            acceptanceGateMode = mode
+            loadedAcceptanceGateMode = mode
+        } catch {
+            configFileError = "Could not read the acceptance gate's mode from symphony.yml: \(error.localizedDescription)"
+        }
+    }
+
     /// Loads OpenRouter's model list for the Models pickers. The list needs no key, but the pickers only offer
     /// OpenRouter models once a key is entered.
     /// Retried from a failed list in the Models section.
@@ -334,7 +366,10 @@ final class SettingsViewModel: ObservableObject {
         let loadedProfiles = loadedRunProfiles.flatMap { $0 != profiles ? $0 : nil }
         let limits = formTokenLimits
         let loadedLimits = loadedTokenLimits.flatMap { $0 != limits ? $0 : nil }
-        guard loadedProfiles != nil || loadedLimits != nil else {
+        acceptanceGateError = nil
+        let gateMode = acceptanceGateMode
+        let gateChanged = loadedAcceptanceGateMode.map { $0 != gateMode } ?? false
+        guard loadedProfiles != nil || loadedLimits != nil || gateChanged else {
             if saveRest(settings, secrets) { onSaved() }
             return
         }
@@ -346,6 +381,9 @@ final class SettingsViewModel: ObservableObject {
             }
             if saved, let limits, let loadedLimits {
                 saved = await saveTokenLimits(limits, from: loadedLimits, settings: settings, secrets: secrets)
+            }
+            if saved, gateChanged {
+                saved = await saveAcceptanceGateMode(gateMode, settings: settings, secrets: secrets)
             }
             isSaving = false
             if saved && saveRest(settings, secrets) { onSaved() }
@@ -436,6 +474,31 @@ final class SettingsViewModel: ObservableObject {
         }
         configFileError = nil
         loadedTokenLimits = limits
+        return true
+    }
+
+    /// Writes `auto_review.acceptance_gate.mode` to symphony.yml once `symphony check` passes on the result.
+    private func saveAcceptanceGateMode(
+        _ mode: AcceptanceGateMode,
+        settings: AppSettings,
+        secrets: SecretSettings
+    ) async -> Bool {
+        let check = configCheck
+        let result: ConfigCheckResult
+        do {
+            result = try await SymphonyConfigFile(path: settings.configPath).writeAcceptanceGateMode(mode) { path in
+                await check(path, settings, secrets)
+            }
+        } catch {
+            configFileError = "Could not save the acceptance gate's mode to symphony.yml: \(error.localizedDescription)"
+            return false
+        }
+        if case .failed(let message) = result {
+            acceptanceGateError = "symphony check rejected this mode, so nothing was saved: \(message)"
+            return false
+        }
+        configFileError = nil
+        loadedAcceptanceGateMode = mode
         return true
     }
 

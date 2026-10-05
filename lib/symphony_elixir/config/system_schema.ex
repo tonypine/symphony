@@ -50,6 +50,62 @@ defmodule SymphonyElixir.Config.SystemSchema do
   @acceptance_gate_escalate_keys ~w(labels ticket_patterns paths diff_patterns dependencies max_changed_lines busy_files inconclusive_limit)
   @acceptance_gate_busy_files_keys ~w(top window_days max_lines)
 
+  # The keys each section of symphony.yml accepts, by dotted path; `repositories[]` is an item of
+  # the `repositories` list. A key that is itself a path here is a nested section. The parser
+  # rejects any other key, and `operator_key_paths/0` lists the leaves.
+  @operator_sections %{
+    "issues" => ~w(provider poll_interval_ms linear memory states),
+    "issues.memory" => ~w(issues_file),
+    "issues.linear" => ~w(endpoint api_key assignee scope),
+    "issues.linear.scope" => ~w(project_slug team labels),
+    "issues.states" => ~w(active terminal waiting_on_sub_issues human_review),
+    "repositories[]" => ~w(key workflow workflow_source base_branch route workspace default agent acceptance_gate),
+    "repositories[].route" => ~w(team projects labels assignee),
+    "repositories[].workspace" => ~w(strategy repo fetch_before_dispatch source),
+    "repositories[].agent" => ~w(provider model effort run_profiles),
+    "repositories[].acceptance_gate" => @repo_acceptance_gate_keys,
+    "repositories[].acceptance_gate.escalate" => @acceptance_gate_escalate_keys,
+    "repositories[].acceptance_gate.escalate.busy_files" => @acceptance_gate_busy_files_keys,
+    "workspaces" => ~w(root clones_root strategy repo fetch_before_dispatch cleanup attachments),
+    "workspaces.cleanup" => ~w(enabled max_age_days interval_ms min_free_bytes orphan_action trash_dir),
+    "workspaces.attachments" => ~w(allowed_hosts public_upload_extensions),
+    "agent" => ~w(runtime command model effort provider run_profiles concurrency limits timeouts prompts permissions mcp usage_limit),
+    "agent.concurrency" => ~w(max_total max_by_issue_state epic_lanes finishing_max force_label forced_max forced_stale_after_hours),
+    "agent.limits" => ~w(max_turns retry_backoff_max_ms tokens_per_issue tokens_per_day max_consecutive_identical_tool_failures),
+    "agent.timeouts" => ~w(turn_ms read_ms stall_ms command_ms),
+    "agent.prompts" => ~w(include_project_guides project_guide_files codex_stdio_soft_limit_bytes),
+    "agent.permissions" => ~w(approval_policy filesystem network outer_sandbox),
+    "agent.permissions.filesystem" => ~w(sandbox turn_policy allow_read_paths allow_write_paths),
+    "agent.permissions.network" => ~w(mode allowed_domains denied_domains),
+    "agent.permissions.outer_sandbox" => ~w(runtime command enable_weaker_network_isolation),
+    "agent.mcp" => ~w(inherit allowed_servers servers),
+    "agent.usage_limit" => ~w(auto_pause resume_margin_seconds unknown_reset_retry_seconds headroom_utilization),
+    "workers" => ~w(ssh_hosts max_concurrent_agents_per_host),
+    "pre_push_review" => ~w(enabled runtime command model effort max_iterations run_on),
+    "auto_review" => ~w(enabled state runtime command model effort max_turns timeout_ms max_concurrent max_fix_attempts run_on skip_globs playbooks worker_host android acceptance_gate),
+    "auto_review.android" => ~w(avd sdk_root boot_timeout_ms idle_timeout_ms),
+    "auto_review.acceptance_gate" => @acceptance_gate_keys,
+    "auto_review.acceptance_gate.escalate" => @acceptance_gate_escalate_keys,
+    "auto_review.acceptance_gate.escalate.busy_files" => @acceptance_gate_busy_files_keys,
+    "pull_requests" => ~w(enabled poll_interval_ms auto_merge review_comments checks learnings),
+    "pull_requests.review_comments" => ~w(rework_delay_minutes stale_after_days ignored_reviewers reply_after_addressing request_review_after_push),
+    "pull_requests.checks" => ~w(enabled log_excerpt_lines retry_failed_once max_fix_attempts escalate_to_state landing_wait_timeout_ms),
+    "pull_requests.learnings" => ~w(enabled provider model max_total_per_repo max_per_run),
+    "poller" => ~w(backoff_base_ms max_backoff_ms degraded_threshold),
+    "issue_gate" => ~w(enabled provider model pass_threshold clarification_floor max_clarification_rounds on_error),
+    "dependency_audit" => ~w(allow_registries allow_git_sources allow_path_sources),
+    "human_actions" => ~w(enabled label interval_ms min_update_interval_ms),
+    "dashboard" => ~w(enabled host port refresh_ms render_interval_ms snapshot_publish_ms transcript_buffer_size)
+  }
+
+  # The sections passed to their `Config.Schema` embed as they are: their keys are its fields.
+  @schema_sections %{
+    "github" => Schema.GitHub,
+    "notifications" => Schema.Notifications,
+    "verification" => Schema.Verification,
+    "watchdog" => Schema.Watchdog
+  }
+
   @removed_top_level_keys %{
     "ci" => "use `pull_requests.checks`",
     "dependencies" => "use `dependency_audit`",
@@ -393,6 +449,35 @@ defmodule SymphonyElixir.Config.SystemSchema do
     end
   end
 
+  @doc """
+  Every setting `symphony.yml` accepts, as a sorted dotted key path such as
+  `auto_review.acceptance_gate.mode`. An item of a list adds `[]`: `repositories[].route.team`.
+  A key that holds a free-form map (`agent.run_profiles`) is one setting.
+  """
+  @spec operator_key_paths() :: [String.t()]
+  def operator_key_paths do
+    @allowed_keys |> Enum.flat_map(&operator_key_paths/1) |> Enum.sort()
+  end
+
+  defp operator_key_paths(path) do
+    cond do
+      Map.has_key?(@operator_sections, path) -> Enum.flat_map(@operator_sections[path], &operator_key_paths("#{path}.#{&1}"))
+      Map.has_key?(@operator_sections, path <> "[]") -> operator_key_paths(path <> "[]")
+      Map.has_key?(@schema_sections, path) -> schema_key_paths(@schema_sections[path], path)
+      true -> [path]
+    end
+  end
+
+  defp schema_key_paths(schema, path) do
+    Enum.flat_map(schema.__schema__(:fields), fn field ->
+      case schema.__schema__(:embed, field) do
+        nil -> ["#{path}.#{field}"]
+        %{cardinality: :one, related: related} -> schema_key_paths(related, "#{path}.#{field}")
+        %{cardinality: :many, related: related} -> schema_key_paths(related, "#{path}.#{field}[]")
+      end
+    end)
+  end
+
   @spec to_config_map(t()) :: map()
   def to_config_map(%__MODULE__{} = system_config) do
     %{
@@ -547,15 +632,15 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   defp normalize_issues(config) do
     with {:ok, config} <- section_map(config, "issues"),
-         :ok <- reject_unknown_section_keys(config, ~w(provider poll_interval_ms linear memory states), "issues"),
+         :ok <- reject_unknown_section_keys(config, section_keys("issues"), "issues"),
          {:ok, linear} <- section_map(Map.get(config, "linear", %{}), "issues.linear"),
          {:ok, memory} <- section_map(Map.get(config, "memory", %{}), "issues.memory"),
-         :ok <- reject_unknown_section_keys(memory, ~w(issues_file), "issues.memory"),
-         :ok <- reject_unknown_section_keys(linear, ~w(endpoint api_key assignee scope), "issues.linear"),
+         :ok <- reject_unknown_section_keys(memory, section_keys("issues.memory"), "issues.memory"),
+         :ok <- reject_unknown_section_keys(linear, section_keys("issues.linear"), "issues.linear"),
          {:ok, scope} <- section_map(Map.get(linear, "scope", %{}), "issues.linear.scope"),
-         :ok <- reject_unknown_section_keys(scope, ~w(project_slug team labels), "issues.linear.scope"),
+         :ok <- reject_unknown_section_keys(scope, section_keys("issues.linear.scope"), "issues.linear.scope"),
          {:ok, states} <- section_map(Map.get(config, "states", %{}), "issues.states"),
-         :ok <- reject_unknown_section_keys(states, ~w(active terminal waiting_on_sub_issues human_review), "issues.states") do
+         :ok <- reject_unknown_section_keys(states, section_keys("issues.states"), "issues.states") do
       tracker =
         %{}
         |> maybe_put("kind", Map.get(config, "provider"))
@@ -604,16 +689,16 @@ defmodule SymphonyElixir.Config.SystemSchema do
     path = "repositories[#{index}]"
 
     with {:ok, repo} <- section_map(repo, path),
-         :ok <- reject_unknown_section_keys(repo, ~w(key workflow workflow_source base_branch route workspace default agent acceptance_gate), path),
+         :ok <- reject_unknown_section_keys(repo, section_keys("repositories[]"), path),
          {:ok, route} <- section_map(Map.get(repo, "route", %{}), path <> ".route"),
-         :ok <- reject_unknown_section_keys(route, ~w(team projects labels assignee), path <> ".route"),
+         :ok <- reject_unknown_section_keys(route, section_keys("repositories[].route"), path <> ".route"),
          {:ok, workspace} <- optional_section_map(Map.get(repo, "workspace"), path <> ".workspace"),
-         :ok <- reject_unknown_section_keys(workspace || %{}, ~w(strategy repo fetch_before_dispatch source), path <> ".workspace"),
+         :ok <- reject_unknown_section_keys(workspace || %{}, section_keys("repositories[].workspace"), path <> ".workspace"),
          {:ok, workspace} <- normalize_repo_source(repo, workspace, repo_path(Map.get(repo, "key"), index)),
          {:ok, agent} <- section_map(Map.get(repo, "agent"), repo_agent_path(Map.get(repo, "key"), index)),
-         :ok <- reject_unknown_section_keys(agent, ~w(provider model effort run_profiles), repo_agent_path(Map.get(repo, "key"), index)),
+         :ok <- reject_unknown_section_keys(agent, section_keys("repositories[].agent"), repo_agent_path(Map.get(repo, "key"), index)),
          {:ok, acceptance_gate} <-
-           normalize_acceptance_gate(Map.get(repo, "acceptance_gate"), repo_path(Map.get(repo, "key"), index) <> ".acceptance_gate", @repo_acceptance_gate_keys) do
+           normalize_acceptance_gate(Map.get(repo, "acceptance_gate"), repo_path(Map.get(repo, "key"), index) <> ".acceptance_gate", section_keys("repositories[].acceptance_gate")) do
       normalized =
         %{}
         |> maybe_put("name", Map.get(repo, "key"))
@@ -702,11 +787,11 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   defp normalize_workspaces(config) do
     with {:ok, config} <- section_map(config, "workspaces"),
-         :ok <- reject_unknown_section_keys(config, ~w(root clones_root strategy repo fetch_before_dispatch cleanup attachments), "workspaces"),
+         :ok <- reject_unknown_section_keys(config, section_keys("workspaces"), "workspaces"),
          {:ok, cleanup} <- section_map(Map.get(config, "cleanup", %{}), "workspaces.cleanup"),
-         :ok <- reject_unknown_section_keys(cleanup, ~w(enabled max_age_days interval_ms min_free_bytes orphan_action trash_dir), "workspaces.cleanup"),
+         :ok <- reject_unknown_section_keys(cleanup, section_keys("workspaces.cleanup"), "workspaces.cleanup"),
          {:ok, attachments} <- section_map(Map.get(config, "attachments", %{}), "workspaces.attachments"),
-         :ok <- reject_unknown_section_keys(attachments, ~w(allowed_hosts public_upload_extensions), "workspaces.attachments") do
+         :ok <- reject_unknown_section_keys(attachments, section_keys("workspaces.attachments"), "workspaces.attachments") do
       lifecycle =
         %{}
         |> maybe_put("age_gc_enabled", Map.get(cleanup, "enabled"))
@@ -732,42 +817,30 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   defp normalize_agent(config) do
     with {:ok, config} <- section_map(config, "agent"),
-         :ok <- reject_unknown_section_keys(config, ~w(runtime command model effort provider run_profiles concurrency limits timeouts prompts permissions mcp usage_limit), "agent"),
+         :ok <- reject_unknown_section_keys(config, section_keys("agent"), "agent"),
          {:ok, concurrency} <- section_map(Map.get(config, "concurrency", %{}), "agent.concurrency"),
-         :ok <- reject_unknown_section_keys(concurrency, ~w(max_total max_by_issue_state epic_lanes finishing_max force_label forced_max forced_stale_after_hours), "agent.concurrency"),
+         :ok <- reject_unknown_section_keys(concurrency, section_keys("agent.concurrency"), "agent.concurrency"),
          {:ok, limits} <- section_map(Map.get(config, "limits", %{}), "agent.limits"),
          :ok <-
-           reject_unknown_section_keys(
-             limits,
-             ~w(max_turns retry_backoff_max_ms tokens_per_issue tokens_per_day max_consecutive_identical_tool_failures),
-             "agent.limits"
-           ),
+           reject_unknown_section_keys(limits, section_keys("agent.limits"), "agent.limits"),
          {:ok, timeouts} <- section_map(Map.get(config, "timeouts", %{}), "agent.timeouts"),
-         :ok <- reject_unknown_section_keys(timeouts, ~w(turn_ms read_ms stall_ms command_ms), "agent.timeouts"),
+         :ok <- reject_unknown_section_keys(timeouts, section_keys("agent.timeouts"), "agent.timeouts"),
          {:ok, prompts} <- section_map(Map.get(config, "prompts", %{}), "agent.prompts"),
          :ok <-
-           reject_unknown_section_keys(
-             prompts,
-             ~w(include_project_guides project_guide_files codex_stdio_soft_limit_bytes),
-             "agent.prompts"
-           ),
+           reject_unknown_section_keys(prompts, section_keys("agent.prompts"), "agent.prompts"),
          {:ok, permissions} <- section_map(Map.get(config, "permissions", %{}), "agent.permissions"),
-         :ok <- reject_unknown_section_keys(permissions, ~w(approval_policy filesystem network outer_sandbox), "agent.permissions"),
+         :ok <- reject_unknown_section_keys(permissions, section_keys("agent.permissions"), "agent.permissions"),
          {:ok, filesystem} <- section_map(Map.get(permissions, "filesystem", %{}), "agent.permissions.filesystem"),
-         :ok <- reject_unknown_section_keys(filesystem, ~w(sandbox turn_policy allow_read_paths allow_write_paths), "agent.permissions.filesystem"),
+         :ok <- reject_unknown_section_keys(filesystem, section_keys("agent.permissions.filesystem"), "agent.permissions.filesystem"),
          {:ok, network} <- section_map(Map.get(permissions, "network", %{}), "agent.permissions.network"),
-         :ok <- reject_unknown_section_keys(network, ~w(mode allowed_domains denied_domains), "agent.permissions.network"),
+         :ok <- reject_unknown_section_keys(network, section_keys("agent.permissions.network"), "agent.permissions.network"),
          {:ok, outer_sandbox} <- section_map(Map.get(permissions, "outer_sandbox", %{}), "agent.permissions.outer_sandbox"),
-         :ok <- reject_unknown_section_keys(outer_sandbox, ~w(runtime command enable_weaker_network_isolation), "agent.permissions.outer_sandbox"),
+         :ok <- reject_unknown_section_keys(outer_sandbox, section_keys("agent.permissions.outer_sandbox"), "agent.permissions.outer_sandbox"),
          {:ok, mcp} <- section_map(Map.get(config, "mcp", %{}), "agent.mcp"),
-         :ok <- reject_unknown_section_keys(mcp, ~w(inherit allowed_servers servers), "agent.mcp"),
+         :ok <- reject_unknown_section_keys(mcp, section_keys("agent.mcp"), "agent.mcp"),
          {:ok, usage_limit} <- section_map(Map.get(config, "usage_limit", %{}), "agent.usage_limit"),
          :ok <-
-           reject_unknown_section_keys(
-             usage_limit,
-             ~w(auto_pause resume_margin_seconds unknown_reset_retry_seconds headroom_utilization),
-             "agent.usage_limit"
-           ) do
+           reject_unknown_section_keys(usage_limit, section_keys("agent.usage_limit"), "agent.usage_limit") do
       sandbox_runtime =
         %{}
         |> maybe_put("kind", Map.get(outer_sandbox, "runtime"))
@@ -820,14 +893,14 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   defp normalize_workers(config) do
     with {:ok, config} <- section_map(config, "workers"),
-         :ok <- reject_unknown_section_keys(config, ~w(ssh_hosts max_concurrent_agents_per_host), "workers") do
+         :ok <- reject_unknown_section_keys(config, section_keys("workers"), "workers") do
       {:ok, config}
     end
   end
 
   defp normalize_pre_push_review(config) do
     with {:ok, config} <- section_map(config, "pre_push_review"),
-         :ok <- reject_unknown_section_keys(config, ~w(enabled runtime command model effort max_iterations run_on), "pre_push_review") do
+         :ok <- reject_unknown_section_keys(config, section_keys("pre_push_review"), "pre_push_review") do
       {:ok,
        %{}
        |> maybe_put("enabled", Map.get(config, "enabled"))
@@ -843,14 +916,10 @@ defmodule SymphonyElixir.Config.SystemSchema do
   defp normalize_auto_review(config) do
     with {:ok, config} <- section_map(config, "auto_review"),
          :ok <-
-           reject_unknown_section_keys(
-             config,
-             ~w(enabled state runtime command model effort max_turns timeout_ms max_concurrent max_fix_attempts run_on skip_globs playbooks worker_host android acceptance_gate),
-             "auto_review"
-           ),
+           reject_unknown_section_keys(config, section_keys("auto_review"), "auto_review"),
          {:ok, android} <- section_map(Map.get(config, "android"), "auto_review.android"),
-         :ok <- reject_unknown_section_keys(android, ~w(avd sdk_root boot_timeout_ms idle_timeout_ms), "auto_review.android"),
-         {:ok, acceptance_gate} <- normalize_acceptance_gate(Map.get(config, "acceptance_gate"), "auto_review.acceptance_gate", @acceptance_gate_keys) do
+         :ok <- reject_unknown_section_keys(android, section_keys("auto_review.android"), "auto_review.android"),
+         {:ok, acceptance_gate} <- normalize_acceptance_gate(Map.get(config, "acceptance_gate"), "auto_review.acceptance_gate", section_keys("auto_review.acceptance_gate")) do
       {:ok,
        config
        |> Map.drop(["runtime", "acceptance_gate"])
@@ -890,18 +959,14 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   defp normalize_pull_requests(config) do
     with {:ok, config} <- section_map(config, "pull_requests"),
-         :ok <- reject_unknown_section_keys(config, ~w(enabled poll_interval_ms auto_merge review_comments checks learnings), "pull_requests"),
+         :ok <- reject_unknown_section_keys(config, section_keys("pull_requests"), "pull_requests"),
          {:ok, review_comments} <- section_map(Map.get(config, "review_comments", %{}), "pull_requests.review_comments"),
          :ok <-
-           reject_unknown_section_keys(
-             review_comments,
-             ~w(rework_delay_minutes stale_after_days ignored_reviewers reply_after_addressing request_review_after_push),
-             "pull_requests.review_comments"
-           ),
+           reject_unknown_section_keys(review_comments, section_keys("pull_requests.review_comments"), "pull_requests.review_comments"),
          {:ok, checks} <- section_map(Map.get(config, "checks", %{}), "pull_requests.checks"),
-         :ok <- reject_unknown_section_keys(checks, ~w(enabled log_excerpt_lines retry_failed_once max_fix_attempts escalate_to_state landing_wait_timeout_ms), "pull_requests.checks"),
+         :ok <- reject_unknown_section_keys(checks, section_keys("pull_requests.checks"), "pull_requests.checks"),
          {:ok, learnings} <- section_map(Map.get(config, "learnings", %{}), "pull_requests.learnings"),
-         :ok <- reject_unknown_section_keys(learnings, ~w(enabled provider model max_total_per_repo max_per_run), "pull_requests.learnings"),
+         :ok <- reject_unknown_section_keys(learnings, section_keys("pull_requests.learnings"), "pull_requests.learnings"),
          {:ok, mode} <- pr_review_mode(Map.get(config, "enabled")) do
       pr_enabled = mode
 
@@ -942,35 +1007,35 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   defp normalize_poller(config) do
     with {:ok, config} <- section_map(config, "poller"),
-         :ok <- reject_unknown_section_keys(config, ~w(backoff_base_ms max_backoff_ms degraded_threshold), "poller") do
+         :ok <- reject_unknown_section_keys(config, section_keys("poller"), "poller") do
       {:ok, config}
     end
   end
 
   defp normalize_issue_gate(config) do
     with {:ok, config} <- section_map(config, "issue_gate"),
-         :ok <- reject_unknown_section_keys(config, ~w(enabled provider model pass_threshold clarification_floor max_clarification_rounds on_error), "issue_gate") do
+         :ok <- reject_unknown_section_keys(config, section_keys("issue_gate"), "issue_gate") do
       {:ok, config}
     end
   end
 
   defp normalize_dependency_audit(config) do
     with {:ok, config} <- section_map(config, "dependency_audit"),
-         :ok <- reject_unknown_section_keys(config, ~w(allow_registries allow_git_sources allow_path_sources), "dependency_audit") do
+         :ok <- reject_unknown_section_keys(config, section_keys("dependency_audit"), "dependency_audit") do
       {:ok, config}
     end
   end
 
   defp normalize_human_actions(config) do
     with {:ok, config} <- section_map(config, "human_actions"),
-         :ok <- reject_unknown_section_keys(config, ~w(enabled label interval_ms min_update_interval_ms), "human_actions") do
+         :ok <- reject_unknown_section_keys(config, section_keys("human_actions"), "human_actions") do
       {:ok, config}
     end
   end
 
   defp normalize_dashboard(config) do
     with {:ok, config} <- section_map(config, "dashboard"),
-         :ok <- reject_unknown_section_keys(config, ~w(enabled host port refresh_ms render_interval_ms snapshot_publish_ms transcript_buffer_size), "dashboard") do
+         :ok <- reject_unknown_section_keys(config, section_keys("dashboard"), "dashboard") do
       observability =
         %{}
         |> maybe_put("dashboard_enabled", Map.get(config, "enabled"))
@@ -994,6 +1059,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   defp optional_section_map(nil, _path), do: {:ok, nil}
   defp optional_section_map(value, path), do: section_map(value, path)
+
+  defp section_keys(path), do: Map.fetch!(@operator_sections, path)
 
   defp reject_unknown_section_keys(map, allowed_keys, path) do
     unknown_keys = Map.keys(map) -- allowed_keys
