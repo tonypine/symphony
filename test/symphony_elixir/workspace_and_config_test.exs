@@ -263,6 +263,56 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     end
   end
 
+  test "an unfinished after_create in a worktree an earlier hook left detached puts it back on its branch" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-workspace-detached-hook-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      primary_repo = Path.join(test_root, "primary")
+      workspace_root = Path.join(test_root, "workspaces")
+      pending_marker = Path.join([workspace_root, "default", ".MT-DETACHED.after_create_pending"])
+
+      create_primary_repo!(primary_repo)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        workspace_fetch_before_dispatch: false
+      )
+
+      # A run stopped mid-hook leaves the worktree detached at the base commit.
+      assert {:ok, workspace} = Workspace.create_for_issue("MT-DETACHED")
+      configure_git_user!(workspace)
+      File.write!(Path.join(workspace, "agent.txt"), "agent\n")
+      git!(workspace, ["add", "agent.txt"])
+      git!(workspace, ["commit", "-m", "agent edit"])
+      agent_commit = String.trim(git!(workspace, ["rev-parse", "HEAD"]))
+      git!(workspace, ["checkout", "--quiet", "--detach", "main"])
+      File.write!(pending_marker, "")
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        workspace_fetch_before_dispatch: false,
+        hook_after_create: "echo ran > hook.saw"
+      )
+
+      capture_log(fn -> assert {:ok, ^workspace} = Workspace.create_for_issue("MT-DETACHED") end)
+
+      assert File.read!(Path.join(workspace, "hook.saw")) == "ran\n"
+      assert String.trim(git!(workspace, ["branch", "--show-current"])) == "auto/MT-DETACHED"
+      assert String.trim(git!(workspace, ["rev-parse", "HEAD"])) == agent_commit
+      refute File.exists?(pending_marker)
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "after_create is skipped, with a warning, on a base tree worktree that has changes of its own" do
     test_root =
       Path.join(
