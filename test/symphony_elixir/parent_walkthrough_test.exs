@@ -11,6 +11,8 @@ defmodule SymphonyElixir.ParentWalkthroughTest do
   @now_ms 1_791_000_000_000
   @rate_limited {:error, {:linear_rate_limited, 1_791_000_030_000}}
   @workspace "/tmp/workspaces/TP-910"
+  # The verification ticket's checklist row, checked.
+  @checked_row %{name: "Settings shows the API key field", status: "pass", details: "Seen in Settings.", evidence: [], checklist: true}
   @env_keys [:walkthrough_recipient, :walkthrough_agent_result, :walkthrough_state_result, :walkthrough_parent_result]
 
   defmodule FakeQaAgent do
@@ -205,7 +207,7 @@ defmodule SymphonyElixir.ParentWalkthroughTest do
   end
 
   defp agent_result(verdict, attrs) do
-    result = Map.merge(%{verdict: verdict, summary: "", steps: [], findings: []}, attrs)
+    result = Map.merge(%{verdict: verdict, summary: "", steps: [@checked_row], findings: []}, attrs)
     tokens = %{QaAgent.empty_tokens() | total_tokens: 1_200}
     Application.put_env(:symphony_elixir, :walkthrough_agent_result, {:ok, %{result: result, tokens: tokens}})
   end
@@ -284,7 +286,10 @@ defmodule SymphonyElixir.ParentWalkthroughTest do
     test "a pass tests the parent at the base branch head, reports on the parent and hands the ticket to a human" do
       agent_result(:pass, %{
         summary: "Settings shows the API key field.",
-        steps: [%{name: "Open Settings", status: "pass", details: "The window lists the API key field.", evidence: ["https://uploads.linear.test/settings.png"]}]
+        steps: [
+          %{name: "Open Settings", status: "pass", details: "The window lists the API key field.", evidence: ["https://uploads.linear.test/settings.png"]},
+          @checked_row
+        ]
       })
 
       on_message = fn _message -> :ok end
@@ -314,6 +319,78 @@ defmodule SymphonyElixir.ParentWalkthroughTest do
       assert report =~ "playbooks: cli, api"
       assert report =~ "1200 tokens"
       assert report =~ "- **pass** Open Settings (evidence: https://uploads.linear.test/settings.png)"
+    end
+
+    test "a pass that skipped every checklist row is blocked and goes to Backlog, not In Review" do
+      checklist = verification(%{description: "- [ ] Parent requirements: UC1 to UC8\n- [ ] Sub-ticket acceptance criteria"})
+
+      agent_result(:pass, %{
+        summary: "The walkthrough passes.",
+        steps: [
+          %{name: "Open Settings", status: "pass", details: "", evidence: []},
+          %{name: "Parent requirements", status: "skipped", details: "I didn't walk them item by item.", evidence: [], checklist: true},
+          %{name: "Sub-ticket acceptance criteria", status: "skipped", details: "I didn't re-check each.", evidence: [], checklist: true}
+        ]
+      })
+
+      log = capture_log(fn -> assert :ok = run(checklist) end)
+      assert log =~ "Parent walkthrough for TP-900 ended blocked; moved TP-910 to Backlog"
+      assert_received {:state_update, "issue-fv", "Backlog"}
+      refute_received {:state_update, "issue-fv", "In Review"}
+
+      messages = receive_all()
+      assert [] = created_subissues(messages)
+      assert [{"issue-parent", report}, {"issue-fv", report}] = comments_posted(messages)
+      assert report =~ "**Verdict:** blocked → TP-910 Backlog"
+
+      assert report =~
+               "Reason: The QA agent answered pass but did not check 2 of the 2 rows of TP-910's checklist: " <>
+                 "Parent requirements; Sub-ticket acceptance criteria. A final verification passes only once its checklist rows are checked"
+
+      assert report =~ "- **skipped** Parent requirements"
+      refute report =~ "The walkthrough passes."
+
+      rows =
+        for {id, status} <- Enum.zip(~w(UC1 UC2 UC3 UC4 UC5 UC6 UC7 UC8), ~w(pass skipped skipped blocked skipped skipped skipped skipped)),
+            do: %{name: id, status: status, details: "", evidence: [], checklist: true}
+
+      agent_result(:pass, %{steps: rows})
+      assert :ok = run(checklist)
+      assert_received {:state_update, "issue-fv", "Backlog"}
+      assert [{"issue-parent", report}, _verification] = comments_posted()
+      assert report =~ "did not check 7 of the 8 rows of TP-910's checklist: UC2; UC3; UC4; UC5; UC6 and 2 more."
+    end
+
+    test "a pass that reports no checklist row is blocked when the verification ticket lists rows" do
+      agent_result(:pass, %{needs_person: true, steps: [%{name: "Open Settings", status: "pass", details: "", evidence: []}]})
+
+      assert :ok = run(verification())
+      assert_received {:state_update, "issue-fv", "Backlog"}
+      assert [{"issue-parent", report}, _verification] = comments_posted()
+      assert report =~ "**Verdict:** blocked → TP-910 Backlog"
+      assert report =~ "Reason: The QA agent answered pass without a verdict on any row of TP-910's checklist."
+
+      for description <- [nil, "Promote this ticket once every other sub-ticket is Done."] do
+        agent_result(:pass, %{steps: [%{name: "Open Settings", status: "pass", details: "", evidence: []}]})
+        assert :ok = run(verification(%{description: description}))
+        assert_received {:state_update, "issue-fv", "In Review"}
+      end
+    end
+
+    test "a pass with every checklist row checked, or only a few skipped for a stated reason, still goes to In Review" do
+      checklist = verification(%{description: "- [ ] UC1 to UC3\n1. Open Settings"})
+      row = fn id, status -> %{name: id, status: status, details: "Covered by test/settings_test.exs.", evidence: [], checklist: true} end
+
+      agent_result(:pass, %{steps: [row.("UC1", "pass"), row.("UC2", "pass"), row.("UC3", "pass")]})
+      assert :ok = run(checklist)
+      assert_received {:state_update, "issue-fv", "In Review"}
+      assert [{"issue-parent", report}, _verification] = comments_posted()
+      assert report =~ "**Verdict:** pass → TP-910 In Review"
+      assert report =~ "- **pass** UC3"
+
+      agent_result(:pass, %{steps: [row.("UC1", "pass"), row.("UC2", "pass"), row.("UC3", "skipped")]})
+      assert :ok = run(checklist)
+      assert_received {:state_update, "issue-fv", "In Review"}
     end
 
     test "reads the base branch head from a real clone" do
@@ -430,7 +507,7 @@ defmodule SymphonyElixir.ParentWalkthroughTest do
     test "manual steps left after a pass or a blocked pass hand the sign-off to Human Review" do
       manual = %{name: "Call OpenRouter with a real key", status: "skipped", details: "No key on the QA host.", evidence: []}
 
-      agent_result(:pass, %{needs_person: true, steps: [manual]})
+      agent_result(:pass, %{needs_person: true, steps: [manual, @checked_row]})
       assert :ok = run(verification())
       assert_received {:state_update, "issue-fv", "Human Review"}
       assert [{"issue-parent", report}, {"issue-fv", report}] = comments_posted()
@@ -442,7 +519,7 @@ defmodule SymphonyElixir.ParentWalkthroughTest do
 
       settings = Config.settings!()
       off = %{settings | tracker: %{settings.tracker | human_review_state: nil}}
-      agent_result(:pass, %{needs_person: true, steps: [manual]})
+      agent_result(:pass, %{needs_person: true, steps: [manual, @checked_row]})
       assert :ok = run(verification(), settings: off)
       assert_received {:state_update, "issue-fv", "In Review"}
     end

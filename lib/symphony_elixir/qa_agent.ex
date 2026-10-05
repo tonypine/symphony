@@ -58,7 +58,13 @@ defmodule SymphonyElixir.QaAgent do
   @playwright_mcp_package "@playwright/mcp@0.0.83"
 
   @type verdict :: :pass | :fail | :blocked
-  @type step :: %{name: String.t(), status: String.t(), details: String.t(), evidence: [String.t()]}
+  @type step :: %{
+          required(:name) => String.t(),
+          required(:status) => String.t(),
+          required(:details) => String.t(),
+          required(:evidence) => [String.t()],
+          optional(:checklist) => true
+        }
   @type result :: %{
           required(:verdict) => verdict(),
           required(:summary) => String.t(),
@@ -223,7 +229,7 @@ defmodule SymphonyElixir.QaAgent do
           "name": "<what you checked>",
           "status": "pass" | "fail" | "blocked" | "skipped",
           "details": "<command and the relevant output, or what you saw>",
-          "evidence": ["<linear_attach_file URL or qa-evidence/ path>"]
+          "evidence": ["<linear_attach_file URL or qa-evidence/ path>"]#{checklist_field(job)}
         }
       ],
       "findings": ["<required for fail: one actionable defect per entry>"],
@@ -334,16 +340,35 @@ defmodule SymphonyElixir.QaAgent do
     """
   end
 
-  defp verification_section(%{verification_issue: %Issue{} = verification}) do
+  # The checklist is the verification ticket's whole purpose, so a `pass` that skipped its rows
+  # is not accepted (TP-545): `SymphonyElixir.AutoReview.ParentWalkthrough` counts the
+  # `checklist` steps.
+  defp verification_section(%{verification_issue: %Issue{} = verification} = job) do
     """
 
     Verification checklist (#{verification.identifier}, the parent's final verification sub-ticket):
     #{PromptSafety.linear_issue_title(verification.title || "")}
     #{PromptSafety.linear_issue_body(verification.description || "")}
+
+    Every row of this checklist is a required step. Report each row as its own step with
+    `"checklist": true` and the status `pass` or `fail`, with the evidence in `details`. A row the
+    merged result does not meet on `#{Map.get(job, :base_ref)}` is a gap: mark it `fail` and put the
+    gap in `findings`. Expand a row that groups several IDs (such as "UC1 to UC8", or a range of
+    sub-tickets) into one step per ID, named after the ID, with its own verdict. Reuse the evidence
+    that already exists: the merged sub-tickets (`linear_get_subissues`) and their commits in
+    `git log`, the tests that cover the row, and the code. Mark a row `skipped` only for a reason
+    you state in `details` that this QA host cannot get past, such as a check only a person or a
+    device this host lacks can do, and set `needs_person` when that is why. The number of rows, or
+    not having walked them one by one, is not a reason. Symphony does not accept `pass` when no
+    checklist row is reported or most of them are skipped: it reports the walkthrough as `blocked`
+    and hands the ticket to a person.
     """
   end
 
   defp verification_section(_job), do: ""
+
+  defp checklist_field(%{verification_issue: %Issue{}}), do: ~s(,\n      "checklist": true | false)
+  defp checklist_field(_job), do: ""
 
   defp fixer(%{verification_issue: %Issue{}}), do: "a follow-up ticket"
   defp fixer(_job), do: "the executor"
@@ -445,12 +470,14 @@ defmodule SymphonyElixir.QaAgent do
   defp valid_step?(_step), do: false
 
   defp coerce_step(step) do
-    %{
+    coerced = %{
       name: String.trim(step["name"]),
       status: step["status"],
       details: trimmed(Map.get(step, "details")) || "",
       evidence: string_list(Map.get(step, "evidence"))
     }
+
+    if Map.get(step, "checklist") == true, do: Map.put(coerced, :checklist, true), else: coerced
   end
 
   defp validate_verdict(:fail, steps, findings, _reason) do

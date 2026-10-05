@@ -18,7 +18,12 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
     verification ticket blocked by each one, and leaves it in `Todo`, as for any gap a final
     verification finds. Symphony's blocked-by gate holds it there and dispatches it again once every
     gap is terminal. When a gap could not be filed or linked, the ticket goes to `Backlog` for a
-    human instead, since nothing would hold it.
+    human instead, since nothing would hold it;
+  - `pass` is not accepted when the verification ticket's description lists rows but the QA agent
+    reported none of them as `checklist` steps, or left more than half of them `skipped` or
+    `blocked`: the checklist is the ticket's purpose. The verdict becomes `blocked`, with the
+    unchecked rows in the reason, and the ticket goes to `Backlog` for a human rather than to
+    `In Review`, where it would look verified.
 
   A `blocked` verdict also puts the ticket in the parent project's human-action update (see
   `SymphonyElixir.HumanActions.Collector`), since only a person can provide what QA was missing.
@@ -56,6 +61,10 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
   @label_prefix "qa:"
   @title_limit 120
   @details_limit 4_000
+  # A list item (`- [ ] …`, `* …`, `1. …`) in the verification ticket's description: a checklist row.
+  @list_row ~r/^\s*(?:[-*+]|\d+[.)])\s+\S/m
+  @unchecked_statuses ["skipped", "blocked"]
+  @named_rows_limit 5
   # Longer than the QA run a lost verdict would redo, so a rate limit that outlasts the default
   # five-minute wait does not throw the verdict away.
   @verdict_move_max_wait_ms 30 * 60_000
@@ -201,11 +210,14 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
   defp labels(issue), do: issue |> Issue.label_names() |> Enum.map(&(&1 |> String.trim() |> String.downcase()))
 
   defp apply_outcome(issue, parent, outcome, settings, opts) do
+    outcome = check_checklist(outcome, issue)
+
     {target_state, filed} =
-      case outcome.verdict do
-        :fail -> fail_target(file_failures(issue, parent, outcome, opts))
-        :blocked -> blocked_target(issue, parent, outcome, settings, opts)
-        _verdict -> {review_target(outcome, settings), []}
+      case outcome do
+        %{verdict: :fail} -> fail_target(file_failures(issue, parent, outcome, opts))
+        %{verdict: :blocked, unchecked_checklist: true} -> {@unlinked_gap_state, []}
+        %{verdict: :blocked} -> blocked_target(issue, parent, outcome, settings, opts)
+        _outcome -> {review_target(outcome, settings), []}
       end
 
     report =
@@ -225,6 +237,42 @@ defmodule SymphonyElixir.AutoReview.ParentWalkthrough do
       {:error, reason} ->
         {:error, {:parent_walkthrough_state_update_failed, target_state, reason}}
     end
+  end
+
+  # The checklist is what the verification ticket is for, so a `pass` that reports none of its rows,
+  # or skipped most of them, verified nothing (TP-545). It goes to a person as `blocked`, in
+  # `Backlog` rather than `In Review`, so it cannot be signed off as verified.
+  defp check_checklist(%{verdict: :pass} = outcome, issue) do
+    rows = outcome |> Map.get(:steps, []) |> Enum.filter(&Map.get(&1, :checklist, false))
+    unchecked = Enum.filter(rows, &(&1.status in @unchecked_statuses))
+
+    cond do
+      not checklist?(issue) -> outcome
+      rows == [] -> unchecked_checklist(outcome, "The QA agent answered pass without a verdict on any row of #{issue.identifier}'s checklist")
+      length(unchecked) * 2 > length(rows) -> unchecked_checklist(outcome, skipped_rows_reason(issue, rows, unchecked))
+      true -> outcome
+    end
+  end
+
+  defp check_checklist(outcome, _issue), do: outcome
+
+  defp checklist?(%Issue{description: description}) when is_binary(description), do: description =~ @list_row
+  defp checklist?(_issue), do: false
+
+  defp skipped_rows_reason(issue, rows, unchecked) do
+    {named, rest} = Enum.split(unchecked, @named_rows_limit)
+    more = if rest == [], do: "", else: " and #{length(rest)} more"
+
+    "The QA agent answered pass but did not check #{length(unchecked)} of the #{length(rows)} rows of " <>
+      "#{issue.identifier}'s checklist: #{Enum.map_join(named, "; ", & &1.name)}#{more}"
+  end
+
+  defp unchecked_checklist(outcome, reason) do
+    reason =
+      reason <>
+        ". A final verification passes only once its checklist rows are checked: check them, or send the ticket back to `Todo` to run the walkthrough again."
+
+    Map.merge(outcome, %{verdict: :blocked, reason: reason, unchecked_checklist: true})
   end
 
   # Only gaps that block the ticket bring it back; without them it would start again at once.
