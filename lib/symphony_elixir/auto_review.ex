@@ -369,12 +369,15 @@ defmodule SymphonyElixir.AutoReview do
     run_store = Keyword.get(opts, :run_store, RunStore)
     verdict = Map.get(record, :gate_verdict)
 
-    case tracker.update_issue_state(issue.id, target_state) do
-      :ok ->
-        update_ci_check(run_store, record, %{qa_applied: true, gate_applied: true})
-        mark_moved_by_gate(run_store, record, target_state)
-        Logger.info("Acceptance gate moved #{issue.identifier} to #{target_state} issue_id=#{issue.id} verdict=#{verdict} sha=#{Map.get(record, :gate_sha)}")
-        {:auto_review_gate, issue.id, verdict, target_state}
+    with :ok <- mark_moved_by_gate(run_store, record, target_state),
+         :ok <- tracker.update_issue_state(issue.id, target_state) do
+      update_ci_check(run_store, record, %{qa_applied: true, gate_applied: true})
+      Logger.info("Acceptance gate moved #{issue.identifier} to #{target_state} issue_id=#{issue.id} verdict=#{verdict} sha=#{Map.get(record, :gate_sha)}")
+      {:auto_review_gate, issue.id, verdict, target_state}
+    else
+      {:error, {:mark_failed, reason}} ->
+        Logger.warning("Acceptance gate left #{issue.identifier} in place: the gate run could not be marked before the move to #{target_state}: #{inspect(reason)}")
+        {:state_transition_error, issue.id, :acceptance_gate, reason}
 
       {:error, reason} ->
         Logger.warning("Failed to move #{issue.identifier} to #{target_state} after the acceptance gate: #{inspect(reason)}")
@@ -383,12 +386,15 @@ defmodule SymphonyElixir.AutoReview do
   end
 
   # The gate's own move to Merging or back to In Progress is no human decision: the agreement
-  # stats skip the run (see `SymphonyElixir.AcceptanceGate.Agreement`).
+  # stats skip the run (see `SymphonyElixir.AcceptanceGate.Agreement`). The mark goes on before
+  # the move, so no CI poll ever sees the issue moved and the run unmarked; without it the issue
+  # stays put and the next poll tries again. A failed move keeps the mark, since the move may have
+  # gone through anyway.
   defp mark_moved_by_gate(run_store, %{gate_run_id: run_id} = record, target_state)
        when is_binary(run_id) and target_state in [@merging_state, @active_state] do
     case run_store.update_run(Map.get(record, :repo_key), run_id, %{moved_by_gate: target_state}) do
       :ok -> :ok
-      {:error, reason} -> Logger.warning("Failed to mark the acceptance gate run run_id=#{run_id}: #{inspect(reason)}")
+      {:error, reason} -> {:error, {:mark_failed, reason}}
     end
   end
 

@@ -450,6 +450,26 @@ defmodule SymphonyElixir.AutoReviewGateTest do
     test "an approve moves the issue to Merging, and the move isn't counted as a human approval", %{root: root} do
       settings = settings("enforce", root)
 
+      # Without the mark on the gate run the issue stays in Auto Review, so no CI poll can read the
+      # gate's own move as a human approval; the next green poll tries again.
+      log =
+        capture_log(fn ->
+          assert {:state_transition_error, "issue-gate-flow", :acceptance_gate, :disk_full} =
+                   AutoReview.run_gate(gate_job(judged(), settings), gate_opts(root, run_store: MarkFailingStore))
+        end)
+
+      assert log =~ "Acceptance gate left TP-960 in place: the gate run could not be marked before the move to Merging: :disk_full"
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+      assert %{gate_target_state: "Merging", gate_applied: false} = stored_record()
+      assert [unmarked] = RunStore.list_runs(@repo_key, :all)
+      refute Map.has_key?(unmarked, :moved_by_gate)
+      assert Agreement.observe(@repo_key, [issue()], [unmarked], [], tracker: SymphonyElixir.Tracker.Memory) == []
+
+      assert {:auto_review_gate, "issue-gate-flow", "approve", "Merging"} = green_poll(stored_record(), settings)
+      assert_receive {:memory_tracker_state_update, "issue-gate-flow", "Merging"}
+      assert [%{moved_by_gate: "Merging"}] = RunStore.list_runs(@repo_key, :all)
+      flush_comments()
+
       assert {:auto_review_gate, "issue-gate-flow", "approve", "Merging"} = AutoReview.run_gate(gate_job(judged(), settings), gate_opts(root))
 
       assert_receive {:memory_tracker_state_update, "issue-gate-flow", "Merging"}
@@ -459,15 +479,7 @@ defmodule SymphonyElixir.AutoReviewGateTest do
 
       assert %{gate_verdict: "approve", gate_target_state: "Merging", gate_applied: true, qa_fix_attempts: 0} = stored_record()
       assert %{qa_applied: true} = stored_record()
-      assert [%{moved_by_gate: "Merging"} = run] = RunStore.list_runs(@repo_key, :all)
-
-      log =
-        capture_log(fn ->
-          assert {:auto_review_gate, "issue-gate-flow", "approve", "Merging"} =
-                   AutoReview.run_gate(gate_job(judged(), settings), gate_opts(root, run_store: MarkFailingStore))
-        end)
-
-      assert log =~ ~r/Failed to mark the acceptance gate run run_id=gate-TP-960-\w+-\d+: :disk_full/
+      assert %{moved_by_gate: "Merging"} = run = Enum.find(RunStore.list_runs(@repo_key, :all), &(&1.run_id == stored_record().gate_run_id))
 
       # The CI poller's agreement watch sees the issue in Merging and records no human decision.
       merging = issue(%{state: "Merging"})

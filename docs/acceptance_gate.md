@@ -114,7 +114,9 @@ poll processes the PR, so a PR merged since the last poll still has the head the
 Only each issue's latest verdict is watched: a new verdict on a new push replaces the old one.
 A verdict the gate applied itself in `enforce` mode (a move to Merging, or back to In Progress) has
 no human decision: the run gets `moved_by_gate` (the state) and the poller doesn't watch it, so
-Symphony's own move to Merging never counts as a person's `approve`. An enforced `escalate` is
+Symphony's own move to Merging never counts as a person's `approve`. The mark goes on before the
+move: if it can't be stored, the issue stays in Auto Review and the next green poll tries again, so
+no poll ever sees the gate's move on an unmarked run. A failed move keeps the mark. An enforced `escalate` is
 watched as before, since a person decides it.
 
 The gate run then gets `human_decision`, `human_decision_state` (the Linear state),
