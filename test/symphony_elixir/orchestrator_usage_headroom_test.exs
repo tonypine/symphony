@@ -20,7 +20,8 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
 
     File.chmod!(fake_claude, 0o755)
 
-    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    # A fixed instant, so a reset an hour ahead stays on the same day whatever the wall clock says.
+    now = ~U[2026-10-03 12:00:00Z]
     {:ok, clock} = Agent.start_link(fn -> now end)
 
     on_exit(fn ->
@@ -217,7 +218,7 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
     assert [%{phase: :headroom, utilization: 0.93}] = snapshot.usage_limits
     assert %{active?: true, blockers: [blocker]} = snapshot.dispatch_state
     assert %{kind: :usage_limit, phase: :headroom, resume_at: ^resume_at} = blocker
-    assert UsageLimit.banner(hd(snapshot.usage_limits), ctx.now) =~ ~r/^Holding new runs: Claude at 93%, resets ~(?:[A-Z][a-z]{2} \d{1,2} )?\d{2}:\d{2}$/
+    assert UsageLimit.banner(hd(snapshot.usage_limits), ctx.now, to_local: & &1) == "Holding new runs: Claude at 93%, resets ~13:00"
   end
 
   test "below the threshold, a plain allowed window or headroom_utilization null holds nothing", ctx do
@@ -478,7 +479,7 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
       # 2. The state API carries the banner; the issue's continuation runs while new work waits.
       payload = SymphonyElixirWeb.Presenter.state_payload(name, 1_000)
       assert [%{phase: "headroom", reason: "claude_usage_headroom", utilization: 0.92} = hold] = payload.usage_limits
-      assert UsageLimit.banner(hold, DateTime.utc_now()) =~ ~r/^Holding new runs: Claude at 92%, resets ~(?:[A-Z][a-z]{2} \d{1,2} )?\d{2}:\d{2}$/
+      assert UsageLimit.banner(hold, ctx.now, to_local: & &1) == "Holding new runs: Claude at 92%, resets ~13:00"
       assert payload.dispatch_state.active? == true
 
       wait_until(fn -> length(runs_for.(first.id)) >= 2 end)

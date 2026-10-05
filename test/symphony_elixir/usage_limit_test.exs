@@ -57,6 +57,16 @@ defmodule SymphonyElixir.UsageLimitTest do
       assert UsageLimit.banner(entry, ~U[2026-10-03 15:00:00Z], @to_local) == "Paused: Claude 5-hour limit, resumes ~22:30"
     end
 
+    test "adds the date when a reset an hour ahead falls after midnight" do
+      # The last hour before midnight on a host in UTC, as on CI.
+      now = ~U[2026-10-04 23:03:00Z]
+      paused = %{provider: "anthropic", window: "five_hour", resume_at: ~U[2026-10-05 00:03:00Z]}
+      headroom = %{provider: "anthropic", window: "five_hour", phase: :headroom, utilization: 0.92, resets_at: ~U[2026-10-05 00:03:00Z]}
+
+      assert UsageLimit.banner(paused, now, to_local: & &1) == "Paused: Claude 5-hour limit, resumes ~Oct 5 00:03"
+      assert UsageLimit.banner(headroom, now, to_local: & &1) == "Holding new runs: Claude at 92%, resets ~Oct 5 00:03"
+    end
+
     test "uses the host time zone by default and drops an unreadable resume time" do
       now = DateTime.utc_now()
 
