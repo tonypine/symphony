@@ -101,6 +101,180 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     end
   end
 
+  test "a worktree re-created on an agent branch runs after_create on the base branch tree" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-workspace-base-tree-hook-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      primary_repo = Path.join(test_root, "primary")
+      origin_repo = Path.join(test_root, "origin.git")
+      workspace_root = Path.join(test_root, "workspaces")
+
+      create_primary_repo!(primary_repo, origin_repo)
+      File.write!(Path.join(primary_repo, "mix.exs"), "base project\n")
+      git!(primary_repo, ["add", "mix.exs"])
+      git!(primary_repo, ["commit", "-m", "base project"])
+      git!(primary_repo, ["push", "origin", "main"])
+
+      # The agent's branch survives its removed workspace, with its own `mix.exs`.
+      git!(primary_repo, ["checkout", "-b", "auto/MT-BASE"])
+      File.write!(Path.join(primary_repo, "mix.exs"), "agent project\n")
+      git!(primary_repo, ["commit", "-am", "agent edit"])
+      agent_commit = String.trim(git!(primary_repo, ["rev-parse", "HEAD"]))
+      git!(primary_repo, ["checkout", "main"])
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        workspace_fetch_before_dispatch: false,
+        hook_after_create: "cat mix.exs > hook.saw"
+      )
+
+      log =
+        capture_log(fn ->
+          assert {:ok, workspace} = Workspace.create_for_issue("MT-BASE")
+          send(self(), {:workspace, workspace})
+        end)
+
+      assert_received {:workspace, workspace}
+      assert File.read!(Path.join(workspace, "hook.saw")) == "base project\n"
+      assert log =~ "Running workspace hook on the base branch tree hook=after_create"
+      assert String.trim(git!(workspace, ["rev-parse", "HEAD"])) == agent_commit
+      assert String.trim(git!(workspace, ["branch", "--show-current"])) == "auto/MT-BASE"
+      assert File.read!(Path.join(workspace, "mix.exs")) == "agent project\n"
+      refute File.exists?(Path.join([workspace_root, "default", ".MT-BASE.after_create_pending"]))
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "after_create is skipped, with a warning, on an agent branch worktree that has changes of its own" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-workspace-dirty-hook-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      primary_repo = Path.join(test_root, "primary")
+      workspace_root = Path.join(test_root, "workspaces")
+      pending_marker = Path.join([workspace_root, "default", ".MT-DIRTY.after_create_pending"])
+
+      create_primary_repo!(primary_repo)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        workspace_fetch_before_dispatch: false
+      )
+
+      assert {:ok, workspace} = Workspace.create_for_issue("MT-DIRTY")
+      configure_git_user!(workspace)
+      File.write!(Path.join(workspace, "mix.exs"), "agent project\n")
+      git!(workspace, ["add", "mix.exs"])
+      git!(workspace, ["commit", "-m", "agent edit"])
+      File.write!(Path.join(workspace, "mix.exs"), "uncommitted agent project\n")
+      File.write!(pending_marker, "")
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        workspace_fetch_before_dispatch: false,
+        hook_after_create: "echo ran > hook.saw"
+      )
+
+      log = capture_log(fn -> assert {:ok, ^workspace} = Workspace.create_for_issue("MT-DIRTY") end)
+
+      assert log =~ "Skipping workspace hook: it can't run on the base branch tree hook=after_create"
+      assert log =~ "reason=uncommitted_changes"
+      refute File.exists?(Path.join(workspace, "hook.saw"))
+      assert File.read!(Path.join(workspace, "mix.exs")) == "uncommitted agent project\n"
+      assert File.exists?(pending_marker)
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "after_create is skipped, with a warning, when the base branch can't be resolved" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-workspace-no-base-hook-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      primary_repo = Path.join(test_root, "primary")
+      workspace_root = Path.join(test_root, "workspaces")
+
+      create_primary_repo!(primary_repo)
+      git!(primary_repo, ["branch", "auto/MT-NOBASE"])
+      git!(primary_repo, ["checkout", "--orphan", "unborn"])
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        workspace_fetch_before_dispatch: false,
+        hook_after_create: "echo ran > hook.saw"
+      )
+
+      log =
+        capture_log(fn ->
+          assert {:ok, workspace} = Workspace.create_for_issue("MT-NOBASE")
+          refute File.exists?(Path.join(workspace, "hook.saw"))
+        end)
+
+      assert log =~ "Skipping workspace hook: it can't run on the base branch tree hook=after_create"
+      assert log =~ "reason=no_base_commit"
+      assert File.exists?(Path.join([workspace_root, "default", ".MT-NOBASE.after_create_pending"]))
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "after_create on the base branch tree fails when the worktree can't go back to its branch" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-workspace-restore-fail-hook-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      primary_repo = Path.join(test_root, "primary")
+      workspace_root = Path.join(test_root, "workspaces")
+
+      create_primary_repo!(primary_repo)
+      git!(primary_repo, ["checkout", "-b", "auto/MT-LOST"])
+      File.write!(Path.join(primary_repo, "agent.txt"), "agent\n")
+      git!(primary_repo, ["add", "agent.txt"])
+      git!(primary_repo, ["commit", "-m", "agent edit"])
+      git!(primary_repo, ["checkout", "main"])
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        workspace_fetch_before_dispatch: false,
+        hook_after_create: "git branch -D auto/MT-LOST"
+      )
+
+      capture_log(fn ->
+        assert {:error, {:git_failed, _workspace, ["checkout", "--quiet", "--force", "auto/MT-LOST"], _status}} =
+                 Workspace.create_for_issue("MT-LOST")
+      end)
+
+      assert File.exists?(Path.join([workspace_root, "default", ".MT-LOST.after_create_pending"]))
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "worktree removal skips branch deletion when another worktree has the branch checked out" do
     test_root =
       Path.join(

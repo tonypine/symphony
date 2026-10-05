@@ -2111,6 +2111,12 @@ hooks:
   minutes) and the watchdog (`watchdog.no_progress_threshold_ms`) wait for the hook's own timeout,
   so a long install isn't ended as a stalled run. Their clocks start again when the hook ends.
 - A run that is stopped while a hook runs on this machine stops the hook too.
+- Hooks run outside the agent sandbox, so a local worktree's `after_create` runs on the base
+  branch's tree: when the worktree is created on a branch that differs from the base commit (a
+  rework, a PR run, a workspace made again), Symphony detaches it at the base commit for the hook
+  and checks the branch out again afterwards. A worktree with uncommitted changes skips the hook
+  with a warning. `before_run`, `after_run` and `before_remove` run in the agent's checkout, so they
+  should run nothing from it. See [security](security.md#workspace-hooks-run-outside-the-sandbox).
 - A hook on this machine runs Gradle without a daemon: Symphony appends `-Dorg.gradle.daemon=false`
   to the host's `GRADLE_OPTS`. Gradle then never hands the hook's build to a daemon an agent
   started inside its sandbox, and the hook leaves no daemon behind.

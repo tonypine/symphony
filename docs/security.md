@@ -91,6 +91,45 @@ in `mix.lock`, and `elixir_make` checks each precompiled archive against the pac
 file, before using it. The host's own `~/.hex` and `~/Library/Caches` stay read-only, and the
 folder never holds `hex.config`, which can hold Hex API and repo keys.
 
+### Workspace hooks run outside the sandbox
+
+A repository's `hooks` run on the host (or the SSH worker) as the operator, outside the agent
+sandbox: they can reach the Keychain, SSH keys and the tokens in Symphony's environment. Symphony
+reads the hook scripts from the `WORKFLOW.md` committed on the fetched base branch, never from
+the agent's checkout. But a hook that runs the repo's build tool (`mix`, `npm`, `gradle`, `make`)
+runs whatever code the checkout holds: any `mix` command evaluates `mix.exs`, and
+`mix deps.compile` runs the dependencies' build scripts.
+
+- **`after_create` in a local worktree runs on the base branch's tree.** A worktree can be created
+  on a branch an agent already pushed to: a rework or PR run checks out the PR head, and a removed
+  workspace is made again on its existing `auto/<issue>` branch. When the worktree's tree differs
+  from the base commit (the repository's `base_branch`, else a `workspace.source` clone's
+  `origin/HEAD`, else the source repo's `HEAD`), Symphony detaches the worktree at the base commit,
+  runs the hook, and checks the branch out again. A worktree with uncommitted changes, or one whose
+  base commit can't be resolved, skips the hook with a warning and keeps its pending marker. The
+  hook installs the base branch's dependencies, so a branch that changes its lock file runs on
+  them until the agent fetches its own.
+- **`after_create` on an SSH worker, or in a `clone`-strategy workspace,** runs on whatever the
+  workspace holds (TP-524 covers SSH workers). A hook that clones the repo itself should install
+  dependencies before it checks out an agent's branch.
+- **`before_run`, `after_run` and `before_remove` run in the agent's checkout,** after the agent
+  has written to it: a branch's files, and also ignored ones such as `deps/` and `_build/`. They
+  should run nothing from the checkout: no build tool, no script from the repo, and no
+  `mise exec`, which reads the checkout's mise config. `before_remove` gets the repo and branch
+  from `SYMPHONY_REPO` and `SYMPHONY_BRANCH`.
+- Symphony's own git commands in a workspace run with repo hooks and `core.fsmonitor` off, and a
+  local hook runs Gradle without a daemon (see [configuration](configuration.md#workspace-hooks)).
+
+Host-side steps of Symphony's own `WORKFLOW.md` hooks:
+
+| Hook | Step | Why it runs on the host |
+| --- | --- | --- |
+| `after_create` | `git config core.hooksPath .githooks` | Writes the shared repo config, which the sandbox can't. The hooks then run in the agent's own `git` commands, inside its sandbox; Symphony's git turns them off. |
+| `after_create` | `mise trust` | Trusts the base branch's mise config for the workspace path, so `mise exec` reads it. |
+| `after_create` | `mise exec -- mix deps.get` | Fetches the base branch's Hex dependencies, on the base branch's tree. |
+| `after_create` | `MIX_ENV=test mise exec -- mix deps.compile` | `lazy_html` downloads its precompiled NIF, which the sandbox's proxy refuses. Runs on the base branch's tree. |
+| `before_remove` | `mise exec -- mix workspace.before_remove` | Closes the branch's open pull requests with the operator's `gh` login. It still evaluates the agent's checkout (`mix.exs`, `deps/`, `_build/`, the mise config trusted above); TP-523 replaces it with plain `gh` calls. |
+
 ### No windows on the host desktop
 
 On a macOS host, agents run on the operator's desktop, so a GUI program an agent starts puts its
