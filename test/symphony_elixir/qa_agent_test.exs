@@ -3,6 +3,7 @@ defmodule SymphonyElixir.QaAgentTest do
 
   import ExUnit.CaptureLog
 
+  alias SymphonyElixir.AgentSandboxConfig
   alias SymphonyElixir.LeftoverProcesses.Table
   alias SymphonyElixir.QaAgent
   alias SymphonyElixir.QaAgent.{Report, Selection}
@@ -639,6 +640,43 @@ defmodule SymphonyElixir.QaAgentTest do
              """
 
       refute QaAgent.prompt(job(), nil) =~ "actions/runs"
+    end
+
+    test "a PR pass skips a criterion only an agent-protected path can meet once it is handed off, and fails a missing unprotected change" do
+      ticket = issue(%{description: "- [ ] WORKFLOW.md Step 3 describes the re-review\n- [ ] docs/configuration.md describes the re-review"})
+      prompt = QaAgent.prompt(job(%{issue: ticket}), nil)
+
+      assert prompt =~ ~r/Agents cannot change these paths: the sandbox denies the writes and CI fails a PR whose own\s+commits touch them: `WORKFLOW.md`, /
+      assert prompt =~ "`.ai/skills`"
+      assert prompt =~ "`.claude/settings.json`"
+      assert prompt =~ ~r/it files a sub-issue \(read them with `linear_get_subissues`\)/
+
+      assert prompt =~
+               ~r/When\s+such a hand-off exists, the criterion is out of this PR's scope: mark its step `skipped`, name the\s+follow-up ticket's identifier in `details`, and do not fail the verdict on it\./
+
+      assert prompt =~ ~r/Without a hand-off,\s+mark it `fail`/
+      assert prompt =~ ~r/Never skip a criterion that a\s+change outside these paths could meet, such as one under `docs\/` or to `README.md`: a missing\s+change there is `fail`\./
+
+      for path <- AgentSandboxConfig.workspace_protected_paths(), do: assert(prompt =~ "`#{path}`")
+
+      verification = issue(%{id: "issue-fv", identifier: "TP-910", title: "Final verification: Parent", description: "- [ ] child criterion"})
+      refute QaAgent.prompt(job(%{issue: ticket, verification_issue: verification, base_ref: "origin/main"}), nil) =~ "Agents cannot change these paths"
+
+      handed_off = %{"name" => "Docs: WORKFLOW.md Step 3 describes the re-review", "status" => "skipped", "details" => "Protected path; handed off to TP-521."}
+      docs = %{"name" => "Docs: docs/configuration.md describes the re-review", "status" => "pass", "details" => "git diff shows the paragraph"}
+
+      assert {:ok, %{verdict: :pass, steps: [%{status: "skipped", details: "Protected path; handed off to TP-521."}, %{status: "pass"}]} = passed} =
+               QaAgent.parse_response(Jason.encode!(%{"verdict" => "pass", "steps" => [handed_off, docs]}))
+
+      assert QaAgent.failure_findings(passed) == []
+
+      missing_docs = %{docs | "status" => "fail", "details" => "git diff --quiet origin/main HEAD -- docs/ shows no change"}
+
+      assert {:ok, %{verdict: :fail} = failed} = QaAgent.parse_response(Jason.encode!(%{"verdict" => "fail", "steps" => [handed_off, missing_docs]}))
+
+      assert QaAgent.failure_findings(failed) == [
+               "Docs: docs/configuration.md describes the re-review: git diff --quiet origin/main HEAD -- docs/ shows no change"
+             ]
     end
 
     test "a parent walkthrough does not look up the parent of the parent" do
