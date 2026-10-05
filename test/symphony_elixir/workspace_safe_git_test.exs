@@ -47,6 +47,8 @@ defmodule SymphonyElixir.WorkspaceSafeGitTest do
     assert output =~ "-c core.hooksPath="
     assert output =~ "-c protocol.ext.allow=never"
     assert output =~ "-c protocol.file.allow=user"
+    assert output =~ "-c diff.ignoreSubmodules=dirty"
+    assert output =~ "-c submodule.recurse=false"
     assert output =~ "ARGV:"
     assert output =~ " status"
     assert output =~ "GIT_CONFIG_GLOBAL:/dev/null"
@@ -138,6 +140,79 @@ defmodule SymphonyElixir.WorkspaceSafeGitTest do
 
     assert {_stdout, 0, _stderr} = Workspace.safe_git_stdout(["-C", repo, "status", "--short"])
     refute File.exists?(proof)
+  end
+
+  test "safe_git runs no filter driver that only a new worktree's include loads", %{test_root: test_root} do
+    repo = init_repo!(Path.join(test_root, "repo"))
+    included = Path.join(test_root, "worktree-only.cfg")
+    proof = Path.join(test_root, "SYMPHONY_INCLUDE_PWNED")
+
+    git!(repo, ["checkout", "-b", "agent"])
+    File.write!(Path.join(repo, ".gitattributes"), "notes.txt filter=hidden\n")
+    File.write!(Path.join(repo, "notes.txt"), "stored\n")
+    git!(repo, ["add", ".gitattributes", "notes.txt"])
+    git!(repo, ["commit", "-m", "agent attributes"])
+    git!(repo, ["checkout", "main"])
+
+    # The driver applies only in a linked worktree, so the repo's own config shows none.
+    File.write!(included, "[filter \"hidden\"]\n\tsmudge = touch '#{proof}'; cat\n")
+    git!(repo, ["config", "includeIf.gitdir:**/worktrees/**.path", included])
+
+    worktree = Path.join(test_root, "worktree")
+    assert {_output, 0} = Workspace.safe_git(["-C", repo, "worktree", "add", worktree, "agent"])
+    assert File.read!(Path.join(worktree, "notes.txt")) == "stored\n"
+    refute File.exists?(proof)
+
+    git!(repo, ["worktree", "add", Path.join(test_root, "plain-worktree"), "-b", "plain", "agent"])
+    assert File.exists?(proof), "plain git runs the driver, so the setup above is a real attack"
+  end
+
+  test "safe_git runs no filter driver from a nested repo's own config", %{test_root: test_root} do
+    repo = init_repo!(Path.join(test_root, "repo"))
+    nested = init_repo!(Path.join(repo, "nested"))
+    proof = Path.join(test_root, "SYMPHONY_NESTED_PWNED")
+
+    File.write!(Path.join(nested, ".gitattributes"), "notes.txt filter=evil\n")
+    File.write!(Path.join(nested, "notes.txt"), "stored\n")
+    git!(nested, ["add", ".gitattributes", "notes.txt"])
+    git!(nested, ["commit", "-m", "nested attributes"])
+    git!(repo, ["add", "nested"])
+    git!(repo, ["commit", "-m", "nested repo"])
+    git!(nested, ["config", "filter.evil.clean", "touch '#{proof}'; cat"])
+
+    # A new mtime makes git read the file back through its clean filter to see whether it changed.
+    stale = fn -> File.touch!(Path.join(nested, "notes.txt"), System.os_time(:second) + 60) end
+    stale.()
+
+    assert {_output, 0} = Workspace.safe_git(["-C", repo, "status", "--porcelain"])
+    # The orphan backup's `add -A` starts from an empty index, like this one.
+    index_env = [{"GIT_INDEX_FILE", Path.join(test_root, "backup.index")}]
+    assert {_output, 0} = Workspace.safe_git(["-C", repo, "add", "-A"], env: index_env)
+    refute File.exists?(proof)
+
+    stale.()
+    git!(repo, ["status", "--porcelain"])
+    assert File.exists?(proof), "plain git runs the driver, so the setup above is a real attack"
+  end
+
+  test "safe_git refuses to run git when a filter driver's name holds `=`", %{test_root: test_root} do
+    repo = init_repo!(Path.join(test_root, "repo"))
+    git!(repo, ["config", "filter.a=b.smudge", "touch '#{Path.join(test_root, "pwned")}'"])
+
+    assert {message, 128} = Workspace.safe_git(["-C", repo, "status"])
+    assert message =~ ~s(filter driver "a=b")
+    assert {"", 128, ^message} = Workspace.safe_git_stdout(["-C", repo, "status"])
+  end
+
+  defp init_repo!(repo) do
+    File.mkdir_p!(repo)
+    git!(repo, ["init", "-b", "main"])
+    git!(repo, ["config", "user.name", "Test User"])
+    git!(repo, ["config", "user.email", "test@example.com"])
+    File.write!(Path.join(repo, "README.md"), "safe git\n")
+    git!(repo, ["add", "README.md"])
+    git!(repo, ["commit", "-m", "initial"])
+    repo
   end
 
   defp git!(repo, args) do
