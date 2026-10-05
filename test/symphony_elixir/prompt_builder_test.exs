@@ -156,6 +156,8 @@ defmodule SymphonyElixir.PromptBuilderTest do
     assert prompt =~ "PR feedback and CI delivery:"
     assert prompt =~ "PR review feedback is delivered by Symphony re-activating you"
     assert prompt =~ "CI failures are delivered by Symphony re-activating you"
+    assert prompt =~ "An acceptance gate `rework` in `enforce` mode comes back as `In Progress` on the same PR"
+    assert prompt =~ "Do not treat it as `Rework`"
     refute prompt =~ "gather it yourself"
     refute prompt =~ "check it yourself"
   end

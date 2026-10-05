@@ -1392,6 +1392,11 @@ When enabled:
   coverage or static analysis such as Dialyzer: a pass starts only on green CI for the PR head, and a
   parent walkthrough marks a criterion that only asks for tests or CI to pass `skipped` as covered
   by CI on the base branch. QA exercises the change the way a user would.
+- The PR QA prompt MUST list the agent-protected paths (`WORKFLOW.md`, `.ai/skills`, the project
+  `.claude` settings and the rest an agent's sandbox denies writes to) and tell the agent to mark a
+  criterion that only a change to one of them can meet `skipped`, naming the follow-up ticket, when
+  a sub-issue or the workpad hands it to a person. A criterion a change elsewhere could meet, such as
+  under `docs/`, MUST NOT be skipped this way.
 - Symphony applies the verdict: `pass`, `blocked` and skip move the issue to `In Review`; `fail`
   moves it to `In Progress` with the findings in the next run's prompt, or to `In Review` once
   `max_fix_attempts` failures were sent back. Results are stored per head SHA; a failed move is
@@ -2093,6 +2098,25 @@ Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `
   the hold can't be stored, the poll records an error and the dispatch waits for the next poll (a
   red head can't merge). Escalation (`ci.max_retries` reached) starts no fix run and leaves
   auto-merge as it is.
+- When the repository's acceptance gate is in `enforce` mode and Auto Review is on, a push after
+  approval MUST be judged again before it lands. On the first poll of a `Merging` stay the poller
+  records the approved head (`approved_head_sha`) and a fingerprint of the PR's own diff
+  (`approved_fingerprint`: `git patch-id --verbatim` over `git diff <merge-base(base, head)> head`)
+  in the PR review record's `auto_merge`. The approved head is the one the gate approved (`gate_sha`
+  with `gate_verdict: "approve"` on the CI check record), or the current head when the gate gave no
+  `approve` (a person's move); the current head is then compared with it like any later head. Coming
+  back from a re-review, or out of `Merging`, starts a new stay. A conflict keeps the approval until
+  the conflict path has moved the issue out of `Merging`, so a fix pushed while it is still there
+  (an active run, the retry limit) is compared too. An approved fingerprint that couldn't be read at
+  the start of the stay is read again before a new head is compared with it. A later head with the
+  same fingerprint keeps the approval and auto-merge. Any other head, or one whose fingerprint can't
+  be read, MUST NOT have auto-merge turned on: the poller turns it off when it is on, moves the
+  issue to the Auto Review state, and only then stores a `rereview` state, writes one
+  `acceptance_gate_rereview` audit event (`old_head_sha`, `new_head_sha`, `auto_merge_disabled`) and
+  comments on the issue. A failure turning it off or moving the issue records a poll error, and the
+  next poll tries again. This applies in a landing-agent fallback too, but not during a CI-fix hold.
+  A record with no local workspace is not re-reviewed. In `shadow` and `off` modes nothing is
+  fingerprinted.
 - When GitHub reports the PR `MERGED` and Symphony turned on auto-merge for it (or the issue is in
   `Merging`), the poller MUST move the issue to `Done` (already `Done` is fine) and then clean up as
   for any merged PR. A failed transition is retried on the next poll.

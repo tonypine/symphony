@@ -947,7 +947,13 @@ pull_requests:
     the reason on the ticket, and falls back to the landing agent for that stay in `Merging`.
   - `/api/v1/state` (`auto_merge`) and the dashboard show each PR's status, for example
     "auto-merge on, waiting for CI on `abc1234`", "updating branch" or "blocked: conflict".
-  - Apart from a merge conflict or a CI fix, moving a ticket out of `Merging` does not turn auto-merge off;
+  - With the acceptance gate in `enforce` mode (Auto Review on), a push to a `Merging` PR that
+    changes its own diff (`git patch-id` of the diff against the merge-base) turns auto-merge off
+    and moves the ticket back to Auto Review, where the gate judges the new head; Symphony's own
+    update-branch keeps it. The conflict and CI-fix comments then say the gate's approve, not a
+    person, moves the fix back to `Merging`. The audit log (`acceptance_gate_rereview`, with the
+    old and new head) and a ticket comment record it. See `docs/acceptance_gate.md`.
+  - Apart from a merge conflict, a CI fix or a re-review, moving a ticket out of `Merging` does not turn auto-merge off;
     disable it on the PR to stop the merge.
   - Repository requirements: **Allow auto-merge** on (`allow_auto_merge`), and branch protection on
     the base branch with required status checks. Requiring branches to be up to date before merging
@@ -1074,6 +1080,16 @@ run URLs, a failed run makes it `fail` naming the failing job and the run (so it
 and it is `skipped` only when no run can be read or a run is still in progress. The public API is
 `api.github.com`, which is not in the built-in network allowlist; add it to
 `agent.permissions.network.allowed_domains` for the fallback to work.
+
+An agent cannot change the agent-protected paths (`WORKFLOW.md`, `symphony.yml`, `.ai/skills`, the
+project `.claude` settings, hooks and skills, `mise.toml`, `.tool-versions`): its sandbox denies the
+writes and the `protected-paths` CI job fails a PR whose own commits touch them. The executor hands
+a criterion that only such a change can meet to a person, in a sub-issue or a follow-up ticket
+named in its workpad. The PR QA prompt lists these paths, and the agent marks such a handed-off
+criterion `skipped` with the follow-up ticket's identifier instead of failing the PR on it. Without
+a hand-off it is still `fail`, and a criterion a change elsewhere could meet (under `docs/`, in
+`README.md`) is never skipped this way. A parent walkthrough still fails a missing change to these
+paths, since it tests the merged result.
 
 Symphony applies its verdict:
 
