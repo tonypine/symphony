@@ -89,6 +89,48 @@ defmodule SymphonyElixir.CLICheckTest do
     end
   end
 
+  describe "a strategy: worktree repo" do
+    test "fails when its workspace repo does not exist", %{root: root} do
+      missing = Path.join(root, "does-not-exist")
+      path = write_symphony!(root, worktree_symphony(root, missing))
+
+      assert {{:error, message}, ""} = check(["--config", path])
+      assert message == "Config error in #{path}: Invalid merged Symphony config: repo app: workspaces.repo does not exist: #{missing}"
+    end
+
+    test "fails when its workspace repo is not a git repository", %{root: root} do
+      plain = Path.join(root, "plain")
+      File.mkdir_p!(plain)
+      path = write_symphony!(root, worktree_symphony(root, plain))
+
+      assert {{:error, message}, ""} = check(["--config", path])
+      assert message =~ "repo app: workspaces.repo is not a valid git repository: #{plain}"
+    end
+
+    test "passes when its workspace repo is a git repository", %{root: root} do
+      primary = Path.join(root, "primary")
+      File.mkdir_p!(primary)
+      {_output, 0} = System.cmd("git", ["init", "-q", primary])
+      path = write_symphony!(root, worktree_symphony(root, primary))
+
+      assert check(["--config", path]) == {{:halt, 0}, "Config OK: #{path}\n"}
+    end
+
+    test "fails a global worktree strategy shared by several repos", %{root: root} do
+      config =
+        managed_symphony(root) <>
+          """
+            strategy: worktree
+            repo: #{root}
+          """
+
+      path = write_symphony!(root, config)
+
+      assert {{:error, message}, ""} = check(["--config", path])
+      assert message =~ "workspaces.strategy is global but repositories is multi-repo"
+    end
+  end
+
   test "reports invalid YAML with its location", %{root: root} do
     path = write_symphony!(root, "issues: [unclosed\n")
 
@@ -492,6 +534,15 @@ defmodule SymphonyElixir.CLICheckTest do
         route:
           team: Test
     """
+  end
+
+  defp worktree_symphony(root, repo) do
+    valid_symphony(root) <>
+      """
+          workspace:
+            strategy: worktree
+            repo: #{repo}
+      """
   end
 
   defp managed_symphony(root) do

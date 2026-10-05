@@ -274,7 +274,8 @@ Start the service from a directory containing `symphony.yml` (or pass `--config`
 Validate `symphony.yml` and every repo `WORKFLOW.md` it points at without starting the service
 (exit 0 with `Config OK: <path>`, or exit 1 with the error on stderr). It checks the same
 `WORKFLOW.md` startup reads: with `workflow_source: ref`, the committed copy on the last fetched
-base branch, not uncommitted edits. A `workspace.source` repo
+base branch, not uncommitted edits. A `strategy: worktree` repo
+fails when its `workspaces.repo` is missing or isn't a git repository. A `workspace.source` repo
 Symphony hasn't cloned yet passes with a warning, as Symphony clones it when it starts:
 
 ```bash
