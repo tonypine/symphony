@@ -16,6 +16,8 @@ public struct StateSnapshot: Equatable {
     public var forced: [ForcedTicket]
     /// Tickets waiting in Human Review, which only the operator can move on; 0 when Symphony predates it.
     public var humanReview: Int
+    /// The acceptance gate's agreement stats per repository key; nil when Symphony predates them.
+    public var gateAgreement: [String: GateAgreement]?
 
     public struct Pause: Equatable {
         public var reason: String?
@@ -123,6 +125,41 @@ public struct StateSnapshot: Equatable {
         }
     }
 
+    /// How far a repository's acceptance gate verdicts agree with the person who decided them, over its last 50
+    /// decisions (`acceptance_gate.agreement` in `/api/v1/state`).
+    public struct GateAgreement: Equatable {
+        public var judged: Int
+        public var agreed: Int
+        /// From 0 to 1, nil while no verdict the gate didn't escalate has been decided.
+        public var agreementRate: Double?
+        public var unsafeApprovals: Int
+        public var falseReworks: Int
+        public var escalations: Int
+        public var readyToEnforce: Bool
+        /// The first condition for `enforce` still unmet, for example "at least 20 judged tickets (12 so far)".
+        public var unmetCondition: String?
+
+        public init(
+            judged: Int = 0,
+            agreed: Int = 0,
+            agreementRate: Double? = nil,
+            unsafeApprovals: Int = 0,
+            falseReworks: Int = 0,
+            escalations: Int = 0,
+            readyToEnforce: Bool = false,
+            unmetCondition: String? = nil
+        ) {
+            self.judged = judged
+            self.agreed = agreed
+            self.agreementRate = agreementRate
+            self.unsafeApprovals = unsafeApprovals
+            self.falseReworks = falseReworks
+            self.escalations = escalations
+            self.readyToEnforce = readyToEnforce
+            self.unmetCondition = unmetCondition
+        }
+    }
+
     public init(
         running: Int = 0,
         retrying: Int = 0,
@@ -131,7 +168,8 @@ public struct StateSnapshot: Equatable {
         budget: Budget? = nil,
         updateUnblocks: Int = 0,
         forced: [ForcedTicket] = [],
-        humanReview: Int = 0
+        humanReview: Int = 0,
+        gateAgreement: [String: GateAgreement]? = nil
     ) {
         self.running = running
         self.retrying = retrying
@@ -141,6 +179,7 @@ public struct StateSnapshot: Equatable {
         self.updateUnblocks = updateUnblocks
         self.forced = forced
         self.humanReview = humanReview
+        self.gateAgreement = gateAgreement
     }
 }
 
@@ -236,7 +275,59 @@ public enum SymphonyState {
                 part: ticket.subIssue?.issueIdentifier
             )
         }
+        snapshot.gateAgreement = gateAgreement(data)
         return .state(snapshot)
+    }
+
+    /// `acceptance_gate.agreement`, read without `convertFromSnakeCase`, which would rewrite repository keys such
+    /// as `my_repo` into `myRepo`. Nil when the state has none.
+    private static func gateAgreement(_ data: Data) -> [String: StateSnapshot.GateAgreement]? {
+        guard let payload = try? JSONDecoder().decode(GatePayload.self, from: data),
+              let agreement = payload.acceptanceGate?.agreement else { return nil }
+        return agreement.mapValues { stats in
+            StateSnapshot.GateAgreement(
+                judged: stats.judged ?? 0,
+                agreed: stats.agreed ?? 0,
+                agreementRate: stats.agreementRate,
+                unsafeApprovals: stats.unsafeApprovals ?? 0,
+                falseReworks: stats.falseReworks ?? 0,
+                escalations: stats.escalations ?? 0,
+                readyToEnforce: stats.readyToEnforce ?? false,
+                unmetCondition: stats.unmetCondition
+            )
+        }
+    }
+
+    private struct GatePayload: Decodable {
+        struct Gate: Decodable {
+            let agreement: [String: Stats]?
+        }
+
+        struct Stats: Decodable {
+            let judged: Int?
+            let agreed: Int?
+            let agreementRate: Double?
+            let unsafeApprovals: Int?
+            let falseReworks: Int?
+            let escalations: Int?
+            let readyToEnforce: Bool?
+            let unmetCondition: String?
+
+            enum CodingKeys: String, CodingKey {
+                case judged, agreed, escalations
+                case agreementRate = "agreement_rate"
+                case unsafeApprovals = "unsafe_approvals"
+                case falseReworks = "false_reworks"
+                case readyToEnforce = "ready_to_enforce"
+                case unmetCondition = "unmet_condition"
+            }
+        }
+
+        let acceptanceGate: Gate?
+
+        enum CodingKeys: String, CodingKey {
+            case acceptanceGate = "acceptance_gate"
+        }
     }
 
     private static let decoder: JSONDecoder = {
