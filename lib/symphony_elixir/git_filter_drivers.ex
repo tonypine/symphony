@@ -92,11 +92,11 @@ defmodule SymphonyElixir.GitFilterDrivers do
 
   @spec walk_includes(
           [{String.t(), non_neg_integer()}],
-          MapSet.t(String.t()),
-          MapSet.t(String.t()),
+          MapSet.t(),
+          MapSet.t(),
           reader(),
           keyword()
-        ) :: MapSet.t(String.t())
+        ) :: MapSet.t()
   defp walk_includes([], names, _seen, _read, _opts), do: names
 
   defp walk_includes([{path, depth} | rest], names, seen, read, opts) do
@@ -150,7 +150,7 @@ defmodule SymphonyElixir.GitFilterDrivers do
     end)
   end
 
-  @spec driver_names([{String.t(), String.t(), String.t(), String.t() | nil}]) :: MapSet.t(String.t())
+  @spec driver_names([{String.t(), String.t(), String.t(), String.t() | nil}]) :: MapSet.t()
   defp driver_names(entries) do
     for {_scope, _origin, key, _value} <- entries, [_key, name] <- [Regex.run(@driver_key, key)], into: MapSet.new(), do: name
   end
