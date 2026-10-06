@@ -114,6 +114,13 @@ defmodule SymphonyElixir.Verification.EgressProxyTest do
     assert_receive {:upstream_closed, ^upstream}, 1_000
   end
 
+  test "does not start when it can't listen" do
+    Process.flag(:trap_exit, true)
+    listen = fn 0, _options -> {:error, :emfile} end
+
+    assert {:error, :emfile} = EgressProxy.start_link(allowed_domains: [], listen: listen)
+  end
+
   test "goes down when it can't accept a connection" do
     Process.flag(:trap_exit, true)
     test = self()

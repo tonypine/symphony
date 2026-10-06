@@ -96,22 +96,35 @@ defmodule SymphonyElixir.Verification.DevServer do
 
     case AgentTmpDir.create(AgentTmpDir.paths(@tmp_dir_prefix, run_id, tmp_bases)) do
       {:ok, tmp_dir} ->
-        {:ok, proxy} = EgressProxy.start_link(allowed_domains: Keyword.get(opts, :allowed_domains, []), run_id: run_id)
-
         state = %__MODULE__{
           run_id: run_id,
           port: port,
           workspace: workspace,
           config: config,
           owner_ref: owner_ref,
-          tmp_dir: tmp_dir,
-          proxy: proxy
+          tmp_dir: tmp_dir
         }
 
-        start_dev_server(state, env, launcher, sandbox)
+        proxy_opts = [allowed_domains: Keyword.get(opts, :allowed_domains, []), run_id: run_id] ++ Keyword.get(opts, :egress_proxy, [])
+
+        with {:ok, state} <- start_egress_proxy(state, proxy_opts) do
+          start_dev_server(state, env, launcher, sandbox)
+        end
 
       :error ->
         {:stop, {:verification_failed, :dev_server_tmp_dir_unavailable}}
+    end
+  end
+
+  defp start_egress_proxy(state, proxy_opts) do
+    case EgressProxy.start_link(proxy_opts) do
+      {:ok, proxy} ->
+        {:ok, %{state | proxy: proxy}}
+
+      {:error, reason} ->
+        Logger.warning("Verification dev server egress proxy unavailable run_id=#{state.run_id} reason=#{inspect(reason)}")
+        File.rm_rf(state.tmp_dir)
+        {:stop, {:verification_failed, {:egress_proxy_unavailable, reason}}}
     end
   end
 

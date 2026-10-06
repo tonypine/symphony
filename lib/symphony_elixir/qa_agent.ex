@@ -547,7 +547,10 @@ defmodule SymphonyElixir.QaAgent do
             {:ok, host_ports} ->
               job = Map.put(job, :host_ports, host_ports)
               prompt = prompt(job, fetch_parent(job, worktree, settings, opts))
-              run_tracked_session(agent_module, job, worktree, qa_settings, prompt, opts)
+
+              agent_module
+              |> run_tracked_session(job, worktree, qa_settings, prompt, opts)
+              |> limit_wide_pass(QaDriver.wide_pass(driver))
 
             {:error, reason} ->
               {:error, {:qa_host_tunnel_failed, reason}, empty_tokens()}
@@ -560,6 +563,30 @@ defmodule SymphonyElixir.QaAgent do
       {:error, reason} ->
         {:error, reason, empty_tokens()}
     end
+  end
+
+  # The `macos_app` playbook's wide pass catches layout crashes that only happen in wide
+  # windows (TP-701). On a QA screen too small for it the pass proves nothing about them, so
+  # a `pass` there is `blocked`, and that or the `blocked` the playbook asks for goes to a
+  # person, since only one can enlarge the screen.
+  defp limit_wide_pass({:ok, %{result: %{verdict: :pass} = result} = run}, %{limited: true} = wide_pass) do
+    {:ok, %{run | result: Map.merge(result, %{verdict: :blocked, reason: limited_reason(wide_pass), needs_person: true})}}
+  end
+
+  defp limit_wide_pass({:ok, %{result: %{verdict: :blocked, reason: reason} = result} = run}, %{limited: true} = wide_pass) do
+    {:ok, %{run | result: Map.merge(result, %{reason: reason <> "; " <> limited_reason(wide_pass), needs_person: true})}}
+  end
+
+  defp limit_wide_pass(run, _wide_pass), do: run
+
+  defp limited_reason(wide_pass) do
+    {sw, sh} = wide_pass.screen
+    {vw, vh} = wide_pass.visible
+    {ww, wh} = wide_pass.window
+
+    "the wide pass was limited: the QA screen is #{sw}×#{sh} pt (#{vw}×#{vh} pt usable), so the app's window reached only " <>
+      "#{ww}×#{wh} pt, under the 1400×900 pt the wide pass needs, and layouts wider than that were not checked. " <>
+      "An operator enlarges the QA machine's display (for the tart VM, `tart set <vm> --display 1920x1200`) and QA runs again"
   end
 
   # Only a pass that runs the `web` playbook starts the dev server. It runs from its own

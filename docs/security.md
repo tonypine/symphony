@@ -360,6 +360,9 @@ agent's sandbox:
   to do script ...'`), LaunchServices (`open -a Terminal x.command`) and launchd jobs
   (`launchctl submit`). `/usr/bin/open`, `/usr/bin/osascript` and `/bin/launchctl` can't run at
   all.
+- **Other processes** (macOS). The server may look into and signal only processes in its own
+  sandbox (`process-info*` and `signal` limited to `same-sandbox`). So `ps eww` can't read the
+  environment of Symphony's BEAM or any other process outside it, and `kill` can't stop them.
 - **Mach services** (macOS). Like the agent profiles, the server may look up only a fixed list of mach
   services: the agent's list without its window, font, sound, power and LaunchServices services,
   plus `trustd`, which checks TLS certificates for tools that use Security.framework. So there
@@ -367,6 +370,9 @@ agent's sandbox:
   draw windows or dialogs on the operator's desktop. There is no pasteboard either, so `pbpaste`
   can't read the operator's clipboard. The keychain daemon (`com.apple.SecurityServer`) stays on
   the list, as it does for agents: `mix` reads the system's root certificates through it.
+  The list is derived from a record of the agent profiles' list
+  (`DevServerSandbox.mach_services/0`), and the `agent-profile` workflow checks that record
+  against the latest SRT release every week, so the two don't drift apart.
 - **Environment.** The server gets the agent's environment, not the operator's: no
   `LINEAR_API_KEY`, provider keys, GitHub tokens or `SSH_AUTH_SOCK`. Hex and `elixir_make` use
   the agent cache folder.
