@@ -20,8 +20,10 @@ auth/permissions that cannot be resolved in-session.
   unblocks; secret names only, never values) instead of `linear_add_comment`:
   Symphony then lists it in the project's update for that person. The tool moves
   the ticket to `Human Review` (`In Review` when the team has no such state) and
-  adds no label, and the move ends the run shortly after: record the blocker in
-  the workpad before you call it. Never add a label to say a person must act.
+  adds no label, and the move ends the run shortly after: first push your
+  committed work (open or update the PR if the rest of the ticket is done) and
+  record the blocker in the workpad, then call it, so the person finds the PR
+  waiting with the ticket. Never add a label to say a person must act.
 - Before requesting a human action for slow or stuck CI, compute the job's age
   from the API's UTC timestamps (`startedAt`, `createdAt`) against the current
   UTC time (`date -u`), never against local time. When the job is under 30

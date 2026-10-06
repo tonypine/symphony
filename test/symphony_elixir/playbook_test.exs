@@ -91,6 +91,11 @@ defmodule SymphonyElixir.PlaybookTest do
     assert flat =~ "against the current UTC time (`date -u`), never against local time"
     assert flat =~ "When the job is under 30 minutes old, wait for the CI poller's flaky re-run instead of asking a human."
     assert flat =~ "withdraw it with `linear_withdraw_human_action`"
+
+    assert flat =~
+             "the move ends the run shortly after: first push your committed work (open or update the PR if the rest of the ticket is done) and record the blocker in the workpad, then call it, so the person finds the PR waiting with the ticket."
+
+    assert flat =~ "Never add a label to say a person must act."
   end
 
   test "scoped_tools lists the document tools for a ticket's long-lived artifacts" do

@@ -2132,8 +2132,9 @@ lists:
   (`title`, `why`, `steps`, optional `unblocks` and `est_minutes`) when they hit something only a
   person can do: a missing secret or permission, an account to set up, a product decision, a check
   on a device. The tool moves the issue to `issues.states.human_review` (`In Review` when that
-  state is off) and adds no label; the move ends the run shortly after, so the agent updates its
-  workpad first. A request whose title matches one still open on the issue is not posted again,
+  state is off) and adds no label; the move ends the run shortly after, so the agent first pushes
+  its committed work (and opens or updates the PR when the rest of the ticket is done) and updates
+  its workpad. A request whose title matches one still open on the issue is not posted again,
   and the issue still moves. An agent that finds its request is not needed after all withdraws it
   with `linear_withdraw_human_action` (`reason`, optional `title`): Symphony replies
   `## Action withdrawn` with the reason under the request, which closes it. Once no open request
