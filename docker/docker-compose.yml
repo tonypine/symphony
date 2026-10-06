@@ -20,11 +20,6 @@ services:
       - /workspace/symphony.yml
     ports:
       - "127.0.0.1:4000:4000"
-    # Let `bwrap` sandbox the verification dev server: see "Verification dev server" in README.md.
-    security_opt:
-      - seccomp=seccomp-bwrap.json
-      - systempaths=unconfined
-      - apparmor=unconfined
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GH_TOKEN: ${GH_TOKEN:-}
