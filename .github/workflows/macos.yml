@@ -81,6 +81,26 @@ jobs:
         working-directory: macos
         run: time swift test
 
+      # An agent's sandbox can't write the per-user temp dir, where a sandboxed Foundation stages
+      # its atomic writes, so a plain `swift build` fails there. Symphony gives a local macOS
+      # Claude session the env that routes them elsewhere (`SymphonyElixir.AgentTmpDir.env/3`);
+      # this builds and tests with that env in a sandbox that also denies those writes.
+      - name: Build and test in a sandbox like an agent's
+        working-directory: macos
+        run: |
+          profile='(version 1)(allow default)(deny file-write* (subpath "/private/var/folders"))'
+          scratch="$RUNNER_TEMP/agent-sandbox"
+          mkdir -p "$scratch/tmp"
+          export TMPDIR="$scratch/tmp" SWIFTPM_MODULECACHE_OVERRIDE="$scratch/tmp/swiftpm-module-cache"
+          if sandbox-exec -p "$profile" swift build --disable-sandbox --build-system native --scratch-path "$scratch/build" > "$scratch/without-env.log" 2>&1; then
+            echo "swift build passed in the sandbox without DIRHELPER_USER_DIR_SUFFIX, so the sandbox no longer stands in for an agent's"
+            exit 1
+          fi
+          tail -n 3 "$scratch/without-env.log"
+          export DIRHELPER_USER_DIR_SUFFIX=symphony/none
+          time sandbox-exec -p "$profile" swift build --disable-sandbox --build-system native --scratch-path "$scratch/build"
+          time sandbox-exec -p "$profile" swift test --disable-sandbox --build-system native --scratch-path "$scratch/build"
+
       - name: Test the update helper
         working-directory: macos
         run: time sh Tests/update-helper-test.sh
