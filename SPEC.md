@@ -826,8 +826,8 @@ passes. When another check fails beside it, the CI-fix run's prompt names `prote
 the agent's to fix. A red head on an issue parked for a person, in the
 `issues.states.human_review` state, or outside `tracker.active_states` with `needs-human`, a
 deprecated request label (`human_actions.label`, or `human-action` in the escalate labels) or
-another `auto_review.acceptance_gate.escalate.labels` label other than `plan` and `breakdown`, gets
-the same: no re-run, CI-fix run, escalation or state move, and no fix attempt used. The normal flow
+another `auto_review.acceptance_gate.escalate.labels` label other than `plan` and `breakdown`, or,
+while that state is off, in `In Review` with an open `## Action needed:` request, gets the same: no re-run, CI-fix run, escalation or state move, and no fix attempt used. The normal flow
 resumes once a person moves the issue on or removes the label, or the head turns green.
 
 #### 5.4.7 `github` (object)
@@ -2166,7 +2166,8 @@ The poller:
   `mergeStateStatus == "DIRTY"`), deduplicates by head/base identity, stores conflict context,
   and moves the issue back to `In Progress` for agent-owned conflict resolution; a conflict on an
   issue parked for a person (in the `issues.states.human_review` state, or outside
-  `tracker.active_states` with a label that asks for one, as for a red head in the CI poller) is
+  `tracker.active_states` with a label that asks for one, or with that state off in `In Review`
+  with an open request, as for a red head in the CI poller) is
   recorded as `conflict_awaiting_human_action` with no state move, conflict-fix run or escalation
   and no retry used, until a person moves the issue on or removes the label;
 - moves the issue back to `In Progress` when GitHub reports approval so the orchestrator starts

@@ -1011,7 +1011,8 @@ pull_requests:
   conflict-resolution context into the next prompt. The agent still owns the merge resolution.
   A conflict on an issue that waits on a person (in `Human Review`, or outside
   `tracker.active_states` with `needs-human`, a deprecated `human_actions.label` label or another
-  `auto_review.acceptance_gate.escalate.labels` label other than `plan` and `breakdown`) gets no
+  `auto_review.acceptance_gate.escalate.labels` label other than `plan` and `breakdown`, or, while
+  the Human Review state is off, in `In Review` with an open `## Action needed:` request) gets no
   state move, conflict-fix run or escalation, and uses no retry, until a person moves the issue on
   or removes the label.
 - `review_comments.ignored_reviewers` skips those accounts entirely. The Linear GitHub
@@ -1024,7 +1025,8 @@ pull_requests:
 - `checks.max_fix_attempts` bounds automated CI rework.
 - A red head on an issue that waits on a person (in `Human Review`, or outside
   `tracker.active_states` with `needs-human`, a deprecated `human_actions.label` label or another
-  `auto_review.acceptance_gate.escalate.labels` label other than `plan` and `breakdown`) gets no
+  `auto_review.acceptance_gate.escalate.labels` label other than `plan` and `breakdown`, or, while
+  the Human Review state is off, in `In Review` with an open `## Action needed:` request) gets no
   re-run, CI-fix run, escalation or state move, and uses no fix attempt. The normal CI flow resumes
   once a person moves the issue on or removes the label, or the head turns green.
 - `checks.landing_wait_timeout_ms` bounds how long a `Merging` issue waits for CI. When a landing

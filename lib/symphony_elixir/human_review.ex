@@ -30,6 +30,7 @@ defmodule SymphonyElixir.HumanReview do
   require Logger
 
   alias SymphonyElixir.AcceptanceGate.Escalation
+  alias SymphonyElixir.AgentTools.Linear, as: AgentLinear
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Issue
@@ -41,9 +42,10 @@ defmodule SymphonyElixir.HumanReview do
   # The retired label that marked an open human-action request (see `legacy_request_labels/1`).
   @legacy_request_label "human-action"
   # A plan ticket whose author says they review it: "I only want to review and validate the
-  # artifacts", "we'll approve the plan", "I want to sign off".
+  # artifacts", "we’ll approve the plan", "I need to sign off on the split". The verb's object must
+  # be the plan or what it produces, so "we need to review the current importer" doesn't count.
   @plan_review_patterns [
-    ~r/\b(?:i|we)(?:\s+(?:only|just|first))?(?:\s+(?:want|need|would like|wish|have)\s+to|\s+will|'ll|\s+must)(?:\s+(?:only|just|first))?\s+(?:review|validate|approve|sign off)\b/iu
+    ~r/\b(?:i|we)(?:\s+(?:only|just|first))?(?:\s+(?:want|need|would like|wish|have)\s+to|\s+will|['’]ll|\s+must)(?:\s+(?:only|just|first))?\s+(?:review|validate|approve|sign off)(?:\s+and\s+(?:review|validate|approve))?(?:\s+on)?\s+(?:(?:the|this|these|each|every|all(?:\s+the)?)\s+)?(?:plan|artifacts?|breakdown|split|sub-?tickets?|sub-?issues?|it|them|this)\b/iu
   ]
 
   @doc "The configured state name, or nil when it is turned off in config."
@@ -140,6 +142,36 @@ defmodule SymphonyElixir.HumanReview do
 
     not active_state?(issue_state, settings) and
       (in_state?(issue_state, settings) or Enum.any?(labels || [], &(is_binary(&1) and MapSet.member?(wanted, normalize(&1)))))
+  end
+
+  @doc """
+  `parked_for_person?/2`, and, while this state is off (`enabled?/1` false), an issue in
+  `In Review` with an open `## Action needed:` request: `linear_request_human_action` moves such an
+  issue to `In Review` and adds no label, so only the request says a person must act. The requests
+  are read from Linear (`SymphonyElixir.AgentTools.Linear.open_human_action_requests/3`, with the
+  `:linear_client` option); `{:error, reason}` when that read fails.
+  """
+  @spec parked_for_person(Issue.t(), Schema.t(), keyword()) :: {:ok, boolean()} | {:error, term()}
+  def parked_for_person(%Issue{} = issue, %Schema{} = settings, opts) do
+    cond do
+      parked_for_person?(issue, settings) ->
+        {:ok, true}
+
+      request_parks_in_review?(issue, settings) ->
+        context = %{issue_id: issue.id}
+
+        with {:ok, requests} <- AgentLinear.open_human_action_requests(context, settings, Keyword.take(opts, [:linear_client])) do
+          {:ok, requests != []}
+        end
+
+      true ->
+        {:ok, false}
+    end
+  end
+
+  defp request_parks_in_review?(%Issue{state: issue_state}, settings) do
+    settings.human_actions.enabled and not enabled?(settings) and is_binary(issue_state) and
+      normalize(issue_state) == normalize(@review_state) and not active_state?(issue_state, settings)
   end
 
   @doc """

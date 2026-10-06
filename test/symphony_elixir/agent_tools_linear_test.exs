@@ -1854,6 +1854,38 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       assert_received {:linear_called, "SymphonyAgentUpdateIssueState", %{stateId: "state-human"}}
     end
 
+    test "moves an issue in Backlog before posting, so the request stays open" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      context = %{issue_id: "issue-24", comment_registry: registry}
+      settings = Config.settings!()
+      scope = human_action_scope(%{issue: %{"state" => %{"name" => "Backlog"}}})
+
+      assert {:ok, %{"requested" => true, "state" => "Human Review"}} = request_human_action(context, scope)
+
+      # The move comes first: a move out of Backlog after the comment would close the request.
+      assert_received {:linear_called, "SymphonyAgentHumanActionScope", _variables}
+      assert [{"SymphonyAgentUpdateIssueState", %{stateId: "state-human"}}, {"SymphonyAgentAddComment", %{body: body}}] = linear_calls()
+
+      posted =
+        scope
+        |> put_in(["data", "issue", "state"], %{"name" => "Human Review"})
+        |> put_in(["data", "issue", "history", "nodes"], [
+          %{"createdAt" => "2026-10-04T10:00:00.000Z", "fromState" => %{"name" => "Backlog"}, "toState" => %{"name" => "Human Review"}}
+        ])
+        |> put_in(["data", "issue", "comments", "nodes"], [%{"id" => "comment-new", "body" => body, "createdAt" => "2026-10-04T10:00:01.000Z"}])
+
+      assert {:ok, [{"comment-new", %{title: "Add the release signing secrets"}}]} =
+               Linear.open_human_action_requests(context, settings, linear_client: human_action_client(self(), posted))
+    end
+
+    defp linear_calls(acc \\ []) do
+      receive do
+        {:linear_called, name, variables} -> linear_calls([{name, variables} | acc])
+      after
+        0 -> Enum.reverse(acc)
+      end
+    end
+
     test "moves the issue to In Review when the Human Review state is off, and fails when the team has no such state" do
       {:ok, registry} = Linear.CommentRegistry.start_link()
       context = %{issue_id: "issue-24", comment_registry: registry}

@@ -1471,6 +1471,44 @@ defmodule SymphonyElixir.CiPollerTest do
     refute_receive {:issue_state_update, _issue_id, _state}
   end
 
+  test "with human_review: null an In Review issue with an open request waits for the person" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_human_review_state: nil,
+      pr_review_mode: "polling",
+      ci: %{enabled: true, log_excerpt_lines: 3, max_retries: 3}
+    )
+
+    now = ~U[2026-05-06 09:00:00Z]
+    issue = %{in_review_issue() | labels: []}
+    Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+    Application.put_env(:symphony_elixir, :ci_test_status, failed_status("abc123"))
+    put_run(issue, now)
+
+    # The request moved the issue to In Review and added no label: only the comment says it waits.
+    request = %{"id" => "c1", "body" => "## Action needed: Add the signing secrets", "createdAt" => "2026-05-06T08:00:00.000Z"}
+
+    linear_client = fn query, %{id: issue_id}, _opts ->
+      assert query =~ "SymphonyAgentHumanActionScope"
+      issue_node = %{"id" => issue_id, "comments" => %{"nodes" => [request]}, "history" => %{"nodes" => []}}
+      {:ok, %{"data" => %{"issue" => issue_node}}}
+    end
+
+    poll_opts = [tracker: StateFilteringTracker, github: FakeGitHub, linear_client: linear_client, now: now]
+    assert {:ok, %{actions: [{:awaiting_human_action, "issue-2401", "abc123"}]}} = CiPoller.poll_once(poll_opts)
+
+    refute_receive {:rerun_failed, _run_id}
+    refute_receive {:issue_state_update, _issue_id, _state}
+
+    # The requests can't be read: nothing moves the issue until they can.
+    failing = fn _query, _variables, _opts -> {:error, :linear_unavailable} end
+
+    assert {:ok, %{actions: [{:poll_error, "issue-2401", {:issue_read_failed, :linear_unavailable}}]}} =
+             CiPoller.poll_once(tracker: StateFilteringTracker, github: FakeGitHub, linear_client: failing, now: DateTime.add(now, 5, :minute))
+
+    refute_receive {:issue_state_update, _issue_id, _state}
+  end
+
   test "an issue in an active state with a person's label still gets the normal CI flow" do
     now = ~U[2026-05-06 09:00:00Z]
     issue = %{in_review_issue() | state: "In Progress", labels: ["needs-human", "breakdown"]}

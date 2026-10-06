@@ -18,8 +18,9 @@ defmodule SymphonyElixir.HumanActions.Request do
 
   Only the heading is required; `parse/1` reads whatever else is there. A request stays open until
   its issue moves on: after the request, the issue leaves a state outside `issues.states.active`
-  (`Human Review` to `Merging`, `Rework` or `Done`, `Backlog` back to `Todo`). The request's own
-  move to Human Review comes from an active state, so it keeps the request open.
+  (`Human Review` to `Merging`, `Rework` or `Done`, `Backlog` back to `Todo`). The tool moves the issue to
+  Human Review before it posts the comment, so that move keeps the request open whatever state the
+  issue came from.
 
   A request is also closed once it is withdrawn: a reply under it that starts with
   `## Action withdrawn`, which `linear_withdraw_human_action` posts with its reason.

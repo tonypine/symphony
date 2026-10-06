@@ -1213,30 +1213,35 @@ defmodule SymphonyElixir.AgentTools.Linear do
     end
   end
 
+  # The issue moves before the comment is posted: a move out of a state Symphony doesn't own
+  # (`Backlog`) after the comment would read as a person moving it on and close the request.
   defp post_human_action(issue_id, request, settings, opts) do
     target = HumanReview.target_state(settings)
 
     with {:ok, body} <- graphql(@human_action_scope_query, %{id: issue_id}, opts),
-         {:ok, issue} <- fetch_path(body, ["data", "issue"], :issue_not_found),
-         {:ok, result} <- post_request(issue, request, target, settings, opts),
-         {:ok, state} <- move_issue(issue, target, opts) do
-      {:ok, Map.put(result, "state", state)}
+         {:ok, issue} <- fetch_path(body, ["data", "issue"], :issue_not_found) do
+      open = open_request_titled(issue, request.title, settings)
+
+      with {:ok, state} <- move_issue(issue, target, opts),
+           {:ok, result} <- post_request(issue, open, request, target, opts) do
+        {:ok, Map.put(result, "state", state)}
+      end
     end
   end
 
-  defp post_request(issue, request, target, settings, opts) do
-    title = Request.normalize_title(request.title)
+  defp open_request_titled(issue, title, settings) do
+    title = Request.normalize_title(title)
+    Enum.find(HumanActionsCollector.open_requests(issue, settings), fn {_comment_id, open} -> Request.normalize_title(open.title) == title end)
+  end
 
-    case Enum.find(HumanActionsCollector.open_requests(issue, settings), fn {_comment_id, open} -> Request.normalize_title(open.title) == title end) do
-      {comment_id, _request} ->
-        {:ok, %{"requested" => false, "reason" => "already_open", "commentId" => comment_id}}
+  defp post_request(_issue, {comment_id, _open}, _request, _target, _opts),
+    do: {:ok, %{"requested" => false, "reason" => "already_open", "commentId" => comment_id}}
 
-      nil ->
-        with {:ok, response} <- graphql(@add_comment_mutation, %{issueId: issue["id"], body: Request.render(request, target)}, opts),
-             {:ok, response} <- check_mutation_success(response, "commentCreate") do
-          comment = get_in(response, ["data", "commentCreate", "comment"]) || %{}
-          {:ok, %{"requested" => true, "commentId" => comment["id"], "url" => comment["url"]}}
-        end
+  defp post_request(issue, nil, request, target, opts) do
+    with {:ok, response} <- graphql(@add_comment_mutation, %{issueId: issue["id"], body: Request.render(request, target)}, opts),
+         {:ok, response} <- check_mutation_success(response, "commentCreate") do
+      comment = get_in(response, ["data", "commentCreate", "comment"]) || %{}
+      {:ok, %{"requested" => true, "commentId" => comment["id"], "url" => comment["url"]}}
     end
   end
 
