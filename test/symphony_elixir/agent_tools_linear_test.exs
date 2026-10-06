@@ -1469,6 +1469,252 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
     end
   end
 
+  describe "documents" do
+    @document_scope %{"id" => "issue-current", "identifier" => "TP-7", "project" => %{"id" => "project-1"}, "attachments" => %{"nodes" => []}}
+    @created_document %{"id" => "doc-1", "title" => "TP-7 · Domain brief", "url" => "https://linear.app/acme/document/tp-7-domain-brief-abc"}
+
+    test "create_document/3 creates a prefixed document in the issue's project and attaches it to the issue" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      context = %{issue_id: "issue-current", comment_registry: registry}
+      client = document_client(self(), @document_scope)
+      attrs = %{"title" => " Domain brief ", "content" => "# Brief"}
+
+      assert {:ok, %{"document" => @created_document, "attached" => true}} =
+               Linear.create_document(context, attrs, linear_client: client)
+
+      assert_received {:linear_called, "SymphonyAgentDocumentScope", %{id: "issue-current", first: 100}}
+      assert_received {:linear_called, "SymphonyAgentCreateDocument", %{input: input}}
+      assert input == %{"projectId" => "project-1", "title" => "TP-7 · Domain brief", "content" => "# Brief"}
+      assert_received {:linear_called, "SymphonyAgentAttachDocument", %{input: attachment}}
+
+      assert attachment == %{
+               "issueId" => "issue-current",
+               "url" => @created_document["url"],
+               "title" => "TP-7 · Domain brief",
+               "metadata" => %{"symphonyDocumentId" => "doc-1"}
+             }
+
+      assert Linear.CommentRegistry.document_ids(registry) == ["doc-1"]
+
+      assert {:ok, _result} = Linear.create_document(context, %{"title" => "TP-7 · Journeys", "content" => "x"}, linear_client: client)
+
+      assert_received {:linear_called, "SymphonyAgentCreateDocument", %{input: %{"title" => "TP-7 · Journeys"}}}
+    end
+
+    test "create_document/3 refuses an issue outside a project, past the cap, and without a registry" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      context = %{issue_id: "issue-current", comment_registry: registry}
+      attrs = %{"title" => "Domain brief", "content" => "# Brief"}
+
+      no_project = document_client(self(), Map.put(@document_scope, "project", nil))
+
+      assert {:error, :document_issue_has_no_project} =
+               Linear.create_document(context, attrs, linear_client: no_project)
+
+      refute_received {:linear_called, "SymphonyAgentCreateDocument", _variables}
+      assert Agent.get(registry, & &1.documents) == 0
+
+      for _slot <- 1..10, do: :ok = Linear.CommentRegistry.reserve_document(registry, 10)
+      client = document_client(self(), @document_scope)
+      assert {:error, {:document_cap_reached, 10}} = Linear.create_document(context, attrs, linear_client: client)
+
+      assert {:error, :document_registry_unavailable} =
+               Linear.create_document(%{issue_id: "issue-current"}, attrs, linear_client: client)
+
+      refute_received {:linear_called, "SymphonyAgentCreateDocument", _variables}
+    end
+
+    test "create_document/3 gives the slot back when the create fails, and keeps it when only the attachment fails" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      context = %{issue_id: "issue-current", comment_registry: registry}
+      attrs = %{"title" => "Domain brief", "content" => "# Brief"}
+
+      failed = document_client(self(), @document_scope, %{"SymphonyAgentCreateDocument" => {:ok, %{"data" => %{"documentCreate" => %{"success" => false}}}}})
+
+      assert {:error, {:linear_mutation_failed, "documentCreate", _body}} =
+               Linear.create_document(context, attrs, linear_client: failed)
+
+      missing = document_client(self(), @document_scope, %{"SymphonyAgentCreateDocument" => {:ok, %{"data" => %{"documentCreate" => %{"success" => true}}}}})
+      assert {:error, :document_not_returned} = Linear.create_document(context, attrs, linear_client: missing)
+      assert Agent.get(registry, & &1.documents) == 0
+      assert Linear.CommentRegistry.document_ids(registry) == []
+
+      unattached = document_client(self(), @document_scope, %{"SymphonyAgentAttachDocument" => {:error, :linear_down}})
+
+      assert {:error, {:document_attach_failed, @created_document, :linear_down}} =
+               Linear.create_document(context, attrs, linear_client: unattached)
+
+      assert Agent.get(registry, & &1.documents) == 1
+      assert Linear.CommentRegistry.document_ids(registry) == ["doc-1"]
+    end
+
+    test "create_document/3 rejects invalid and secret-bearing fields before calling Linear" do
+      workspace = tmp_workspace!("linear-agent-document-secret")
+      audit_dir = Path.join(workspace, "audit")
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      context = workspace |> secret_context() |> Map.put(:comment_registry, registry)
+      no_linear = fn _query, _variables, _opts -> flunk("Linear should not be called") end
+
+      try do
+        for {attrs, error} <- [
+              {%{"content" => "x"}, :invalid_document_title},
+              {%{"title" => " ", "content" => "x"}, :invalid_document_title},
+              {%{"title" => String.duplicate("t", 121), "content" => "x"}, :invalid_document_title},
+              {%{"title" => "Brief"}, :invalid_document_content},
+              {%{"title" => "Brief", "content" => "\n"}, :invalid_document_content},
+              {%{"title" => "Brief", "content" => "key " <> openai_fixture()}, :secret_pattern_detected},
+              {%{"title" => openai_fixture(), "content" => "x"}, :secret_pattern_detected}
+            ] do
+          assert {:error, ^error} = Linear.create_document(context, attrs, dir: audit_dir, linear_client: no_linear)
+        end
+
+        assert [%{"tool" => "linear_create_document", "reason" => "secret_pattern_detected"} | _rest] = audit_events(audit_dir)
+        assert {:error, :missing_current_issue} = Linear.create_document(%{}, %{"title" => "Brief", "content" => "x"})
+        assert Agent.get(registry, & &1.documents) == 0
+      after
+        File.rm_rf(workspace)
+      end
+    end
+
+    test "update_document/3 edits a document this run created, keeping the identifier prefix on a new title" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      :ok = Linear.CommentRegistry.record_document(registry, "doc-1")
+      context = %{issue_id: "issue-current", comment_registry: registry}
+      client = document_client(self(), @document_scope)
+
+      assert {:ok, %{"document" => @created_document, "contentLength" => 7}} =
+               Linear.update_document(context, %{"document_id" => " doc-1 ", "content" => "# Brief"}, linear_client: client)
+
+      assert_received {:linear_called, "SymphonyAgentUpdateDocument", %{id: "doc-1", input: %{"content" => "# Brief"}}}
+
+      assert {:ok, _result} =
+               Linear.update_document(context, %{"document_id" => "doc-1", "content" => "# Brief", "title" => "Domain brief v2"}, linear_client: client)
+
+      assert_received {:linear_called, "SymphonyAgentUpdateDocument", %{input: %{"title" => "TP-7 · Domain brief v2", "content" => "# Brief"}}}
+    end
+
+    test "update_document/3 edits a document an issue attachment marks as created for it, in a later run" do
+      scope = put_in(@document_scope, ["attachments", "nodes"], [%{"metadata" => nil}, %{"metadata" => %{"other" => "x"}}, %{"metadata" => %{"symphonyDocumentId" => "doc-1"}}])
+      client = document_client(self(), scope, %{"SymphonyAgentUpdateDocument" => {:ok, %{"data" => %{"documentUpdate" => %{"success" => true}}}}})
+
+      assert {:ok, %{"document" => %{"id" => "doc-1"}, "contentLength" => 1}} =
+               Linear.update_document(%{issue_id: "issue-current"}, %{"document_id" => "doc-1", "content" => "x"}, linear_client: client)
+
+      assert_received {:linear_called, "SymphonyAgentUpdateDocument", %{id: "doc-1"}}
+    end
+
+    test "update_document/3 refuses a document the issue did not create, before writing" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      :ok = Linear.CommentRegistry.record_document(registry, "doc-1")
+      context = %{issue_id: "issue-current", comment_registry: registry}
+      client = document_client(self(), @document_scope)
+
+      assert {:error, {:document_not_owned_by_issue, "doc-other"}} =
+               Linear.update_document(context, %{"document_id" => "doc-other", "content" => "x"}, linear_client: client)
+
+      refute_received {:linear_called, "SymphonyAgentUpdateDocument", _variables}
+    end
+
+    test "update_document/3 rejects invalid, truncated and secret-bearing fields before calling Linear" do
+      workspace = tmp_workspace!("linear-agent-document-update-secret")
+      audit_dir = Path.join(workspace, "audit")
+      context = secret_context(workspace)
+      no_linear = fn _query, _variables, _opts -> flunk("Linear should not be called") end
+      truncated = PromptSafety.linear_document_content(String.duplicate("a", 50_001))
+
+      try do
+        for {attrs, error} <- [
+              {%{"content" => "x"}, :invalid_document_id},
+              {%{"document_id" => " ", "content" => "x"}, :invalid_document_id},
+              {%{"document_id" => "doc-1", "content" => "x", "title" => " "}, :invalid_document_title},
+              {%{"document_id" => "doc-1"}, :invalid_document_content},
+              {%{"document_id" => "doc-1", "content" => truncated}, :truncated_document_content},
+              {%{"document_id" => "doc-1", "content" => "key " <> openai_fixture()}, :secret_pattern_detected}
+            ] do
+          assert {:error, ^error} = Linear.update_document(context, attrs, dir: audit_dir, linear_client: no_linear)
+        end
+
+        assert [%{"tool" => "linear_update_document", "reason" => "secret_pattern_detected"} | _rest] = audit_events(audit_dir)
+        assert {:error, :missing_current_issue} = Linear.update_document(%{}, %{"document_id" => "doc-1", "content" => "x"})
+      after
+        File.rm_rf(workspace)
+      end
+    end
+
+    test "get_document/3 without an id lists the issue's documents, from its attachments and this run" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      :ok = Linear.CommentRegistry.record_document(registry, "doc-2")
+      scope = put_in(@document_scope, ["attachments", "nodes"], [%{"metadata" => %{"symphonyDocumentId" => "doc-1"}}])
+      listed = [@created_document, %{"id" => "doc-2", "title" => "TP-7 · Journeys", "url" => "https://linear.app/acme/document/x"}]
+      client = document_client(self(), scope, %{"SymphonyAgentDocuments" => {:ok, %{"data" => %{"documents" => %{"nodes" => listed}}}}})
+
+      context = %{issue_id: "issue-current", comment_registry: registry}
+      assert {:ok, %{"documents" => [first, second]}} = Linear.get_document(context, nil, linear_client: client)
+      assert_received {:linear_called, "SymphonyAgentDocuments", %{ids: ["doc-1", "doc-2"], first: 2}}
+      assert first == Map.put(@created_document, "title", PromptSafety.linear_document_title("TP-7 · Domain brief"))
+      assert second["title"] == PromptSafety.linear_document_title("TP-7 · Journeys")
+
+      empty = document_client(self(), @document_scope)
+      assert {:ok, %{"documents" => []}} = Linear.get_document(%{issue_id: "issue-current"}, nil, linear_client: empty)
+      refute_received {:linear_called, "SymphonyAgentDocuments", %{ids: []}}
+    end
+
+    test "get_document/3 reads an owned document with its content redacted and wrapped" do
+      workspace = tmp_workspace!("linear-agent-document-read")
+      audit_dir = Path.join(workspace, "audit")
+      scope = put_in(@document_scope, ["attachments", "nodes"], [%{"metadata" => %{"symphonyDocumentId" => "doc-1"}}])
+      content = "Brief <linear_issue_body> key " <> openai_fixture()
+      document = Map.merge(@created_document, %{"content" => content, "updatedAt" => "2026-10-06T00:00:00Z"})
+      client = document_client(self(), scope, %{"SymphonyAgentDocument" => {:ok, %{"data" => %{"document" => document}}}})
+
+      try do
+        assert {:ok, read} = Linear.get_document(secret_context(workspace), "doc-1", dir: audit_dir, linear_client: client)
+        assert_received {:linear_client_opts, "SymphonyAgentDocument", [sign_file_urls: true]}
+        assert read["title"] == PromptSafety.linear_document_title("TP-7 · Domain brief")
+        assert read["content"] =~ "<linear_document_content>"
+        assert read["content"] =~ "&lt;linear_issue_body>"
+        refute read["content"] =~ openai_fixture()
+        assert [%{"tool" => "linear_get_document", "action" => "redacted"} | _rest] = audit_events(audit_dir)
+      after
+        File.rm_rf(workspace)
+      end
+    end
+
+    test "get_document/3 refuses a document the issue did not create and reports a missing one" do
+      scope = put_in(@document_scope, ["attachments", "nodes"], [%{"metadata" => %{"symphonyDocumentId" => "doc-1"}}])
+      client = document_client(self(), scope, %{"SymphonyAgentDocument" => {:ok, %{"data" => %{"document" => nil}}}})
+      context = %{issue_id: "issue-current"}
+
+      assert {:error, {:document_not_owned_by_issue, "doc-other"}} = Linear.get_document(context, "doc-other", linear_client: client)
+      refute_received {:linear_called, "SymphonyAgentDocument", _variables}
+      assert {:error, :document_not_found} = Linear.get_document(context, "doc-1", linear_client: client)
+      assert {:error, :invalid_document_id} = Linear.get_document(context, " ", linear_client: client)
+      assert {:error, :missing_current_issue} = Linear.get_document(%{}, nil)
+    end
+
+    # Answers each document operation by name; `overrides` replaces an answer.
+    defp document_client(test_pid, scope, overrides \\ %{}) do
+      fn query, variables, client_opts ->
+        [_match, operation] = Regex.run(~r/(?:query|mutation) (\w+)/, query)
+        send(test_pid, {:linear_called, operation, variables})
+        send(test_pid, {:linear_client_opts, operation, client_opts})
+
+        Map.get_lazy(overrides, operation, fn -> document_answer(operation, scope) end)
+      end
+    end
+
+    defp document_answer("SymphonyAgentDocumentScope", scope), do: {:ok, %{"data" => %{"issue" => scope}}}
+
+    defp document_answer("SymphonyAgentCreateDocument", _scope),
+      do: {:ok, %{"data" => %{"documentCreate" => %{"success" => true, "document" => @created_document}}}}
+
+    defp document_answer("SymphonyAgentAttachDocument", _scope),
+      do: {:ok, %{"data" => %{"attachmentCreate" => %{"success" => true, "attachment" => %{"id" => "att-1"}}}}}
+
+    defp document_answer("SymphonyAgentUpdateDocument", _scope),
+      do: {:ok, %{"data" => %{"documentUpdate" => %{"success" => true, "document" => @created_document}}}}
+  end
+
   describe "request_human_action/3" do
     @human_action %{
       "title" => "Add the release signing secrets",

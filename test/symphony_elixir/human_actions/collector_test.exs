@@ -188,7 +188,7 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
              %Action{
                key: "plan:id-MOT-40",
                kind: :plan_review,
-               title: "Approve the breakdown plan for MOT-40",
+               title: "Approve the plan for MOT-40",
                est_minutes: 10,
                steps: [
                  "Read the plan in the `## Symphony Workpad` comment on MOT-40.",

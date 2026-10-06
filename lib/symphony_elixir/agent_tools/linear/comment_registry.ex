@@ -3,8 +3,10 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
 
   # Per-run state for the scoped Linear tools: the comment ids this run created (so it may only
   # edit its own comments) and how many sub-issues it has created (so it stays under the cap), with
-  # their ids by identifier (so a later sub-issue may be blocked by an earlier one), and whether it
-  # asked a person for something (so its issue waits for that person in the Human Review state).
+  # their ids by identifier (so a later sub-issue may be blocked by an earlier one), the documents it
+  # created (so it may edit them before Linear lists their attachments, and stays under the cap), and
+  # whether it asked a person for something (so its issue waits for that person in the Human Review
+  # state).
 
   use Agent
 
@@ -22,6 +24,8 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
       subissues: 0,
       created_subissues: %{},
       project_updates: 0,
+      documents: 0,
+      created_documents: MapSet.new(),
       human_action_requested: false
     }
 
@@ -90,6 +94,31 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
   @doc "Gives back a slot claimed by `reserve_project_update/2` when the post did not go through."
   @spec release_project_update(pid()) :: :ok
   def release_project_update(pid) when is_pid(pid), do: release(pid, :project_updates)
+
+  @doc """
+  Atomically claims one of the run's `cap` document slots, refusing without a registry like
+  `reserve_subissue/2`.
+  """
+  @spec reserve_document(pid() | nil, pos_integer()) :: :ok | {:error, term()}
+  def reserve_document(pid, cap) when is_pid(pid) and is_integer(cap),
+    do: reserve(pid, :documents, cap, :document_cap_reached)
+
+  def reserve_document(_pid, _cap), do: {:error, :document_registry_unavailable}
+
+  @doc "Gives back a slot claimed by `reserve_document/2` when no document was created."
+  @spec release_document(pid()) :: :ok
+  def release_document(pid) when is_pid(pid), do: release(pid, :documents)
+
+  @doc "Records a document this run created, by id."
+  @spec record_document(pid(), String.t()) :: :ok
+  def record_document(pid, document_id) when is_pid(pid) and is_binary(document_id) do
+    Agent.update(pid, fn state -> %{state | created_documents: MapSet.put(state.created_documents, document_id)} end)
+  end
+
+  @doc "The ids of the documents this run created; none without a registry."
+  @spec document_ids(pid() | nil) :: [String.t()]
+  def document_ids(pid) when is_pid(pid), do: Agent.get(pid, &MapSet.to_list(&1.created_documents))
+  def document_ids(_pid), do: []
 
   @doc """
   Atomically claims one of the run's `cap` human-action request slots, refusing without a registry

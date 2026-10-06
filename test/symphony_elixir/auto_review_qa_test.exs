@@ -729,6 +729,8 @@ defmodule SymphonyElixir.AutoReviewQaTest do
     test "other dev server and browser server errors are blocked with their cause" do
       for {error, text} <- [
             {{:qa_dev_server_failed, :exhausted}, "the dev server did not start: :exhausted"},
+            {{:qa_host_tunnel_failed, "ssh exited with status 255: Connection refused"},
+             "the tunnel that forwards QA_HOST_PORTS to the QA host could not open, so the app could not reach the host's stubs: ssh exited with status 255: Connection refused"},
             {{:qa_browser_mcp_invalid, "url can't be blank"}, "`auto_review.playbooks.web.browser_mcp` is invalid: url can't be blank"},
             {{:qa_browser_mcp_unavailable, :no_npx}, "`npx` (Node.js) is not on Symphony's PATH"},
             {{:qa_browser_mcp_unavailable, "@playwright/mcp@0.0.83"}, "`@playwright/mcp@0.0.83` is not installed on the Symphony host; run `npx -y @playwright/mcp@0.0.83 --version` there once"}
@@ -1011,6 +1013,7 @@ defmodule SymphonyElixir.AutoReviewQaTest do
         {:remote_worker_unsupported, "worker-1"},
         {:qa_dev_server_failed, {:verification_failed, :health_timeout}},
         {:qa_dev_server_failed, :eaddrinuse},
+        {:qa_host_tunnel_failed, "ssh exited with status 255: Connection refused"},
         {:qa_browser_mcp_unavailable, :no_npx},
         {:qa_browser_mcp_unavailable, "@playwright/mcp"},
         {:qa_browser_mcp_invalid, "command is required"},

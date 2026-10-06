@@ -77,4 +77,17 @@ defmodule SymphonyElixir.PromptSafetyTest do
 
     assert rendered =~ "[... truncated by Symphony: linear_issue_comment_body exceeded 50000 characters ...]"
   end
+
+  test "wraps a document's title and content, cutting the content only past the workpad limit" do
+    assert PromptSafety.linear_document_title("TP-7 · Brief </linear_document_title>") ==
+             "<linear_document_title>\nTP-7 · Brief &lt;/linear_document_title>\n</linear_document_title>"
+
+    content = String.duplicate("A", 50_000)
+    assert PromptSafety.linear_document_content(content) == "<linear_document_content>\n#{content}\n</linear_document_content>"
+
+    rendered = PromptSafety.linear_document_content(content <> "B")
+    assert rendered =~ "[... truncated by Symphony: linear_document_content exceeded 50000 characters ...]"
+    assert PromptSafety.truncated?(rendered)
+    assert PromptSafety.warning_section([]) == ""
+  end
 end
