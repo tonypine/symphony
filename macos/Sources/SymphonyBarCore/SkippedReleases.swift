@@ -84,6 +84,12 @@ public enum UpdateOffer: Equatable {
         }
     }
 
+    /// The install item: "Retry vX" for a release an update rolled back, otherwise "Update to vX".
+    public var installTitle: String {
+        if case let .skipped(release, .rolledBack) = self { return UpdateMenu.retryTitle(release) }
+        return UpdateMenu.installTitle(release)
+    }
+
     /// True while Skip This Version shows: the release is available and not skipped yet.
     public var offersSkip: Bool {
         if case .available = self { return true }

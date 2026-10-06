@@ -237,6 +237,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
            | {:api_unreachable, api_unreachable_info()}
            | {:usage_window, String.t(), usage_window()}
            | {:rate_limit_info, map()}
+           | {:tool_progress, String.t() | nil}
            | {:malformed, String.t()}
 
   @typedoc "A Claude usage-limit hit: a plan window (five-hour or weekly) is used up."
@@ -312,6 +313,8 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   end
 
   defp parse_decoded_event(%{"type" => "tool_use", "name" => name}, _line), do: {:tool_use, name}
+
+  defp parse_decoded_event(%{"type" => "tool_progress"} = event, _line), do: {:tool_progress, Map.get(event, "tool_name")}
 
   defp parse_decoded_event(%{"type" => "rate_limit_event", "rate_limit_info" => info}, _line),
     do: classify_rate_limit_event(info)
@@ -1883,6 +1886,10 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
     acc
   end
+
+  # Claude Code sends one every few seconds while a tool runs. The tool's own `tool_use` and
+  # `tool_result` already reach the orchestrator, so the heartbeat is dropped, not forwarded.
+  defp apply_event({:tool_progress, _tool_name}, _on_message, acc), do: acc
 
   defp apply_event({:malformed, raw}, _on_message, acc) do
     Logger.debug("ClaudeCode unparseable line: #{inspect(raw)}")

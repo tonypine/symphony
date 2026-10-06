@@ -821,7 +821,13 @@ defmodule SymphonyElixir.ExtensionsTest do
              "concurrency" => %{"max_total" => 10, "finishing_max" => 2, "forced_max" => 1},
              "claimed" => ["issue-http", "retry-http"],
              "rate_limits" => %{"primary" => %{"remaining" => 11}},
-             "linear_usage" => %{"window_ms" => 3_600_000, "total" => 0, "callers" => [], "queries" => []}
+             "linear_usage" => %{"window_ms" => 3_600_000, "total" => 0, "callers" => [], "queries" => []},
+             "orchestrator" => %{
+               "message_queue_len" => 0,
+               "snapshot_age_ms" => nil,
+               "snapshot_build_ms" => nil,
+               "snapshot_parts_ms" => %{}
+             }
            }
 
     conn = get(build_conn(), "/api/v1/MT-HTTP")
