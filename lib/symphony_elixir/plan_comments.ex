@@ -14,9 +14,10 @@ defmodule SymphonyElixir.PlanComments do
 
   Only a person's comment counts. Integration bots are skipped, and so are Symphony's own comments:
   the ones its last run posted, by id, and the others by how they start, because Symphony and the
-  reviewer can share one Linear user. A supervisor's notes (`Supervisor review:`, `Supervisor note:`)
-  are skipped the same way: the supervisor posts as the operator, and plan approval stays the
-  operator's call.
+  reviewer can share one Linear user. The review brief (`## Review brief`) is one of them: a run
+  edits it in place at each handoff, so it is never a person's comment. A supervisor's notes
+  (`Supervisor review:`, `Supervisor note:`) are skipped the same way: the supervisor posts as the
+  operator, and plan approval stays the operator's call.
   """
 
   alias SymphonyElixir.{AgentLabels, BreakdownReview, HumanReview, SubIssueWait, Tracker}
@@ -25,9 +26,10 @@ defmodule SymphonyElixir.PlanComments do
   alias SymphonyElixir.QaAgent.Report
 
   @reply_opener "If this asks for a change to the plan: Symphony doesn't change an approved plan from comments"
-  # How the comments Symphony posts itself start: run failures, landing notes, quality gate
-  # results and its own replies.
+  # How the comments Symphony posts itself start: the review brief, run failures, landing notes,
+  # quality gate results and its own replies.
   @symphony_openers [
+    "## Review brief",
     "Symphony stopped ",
     "Symphony parked ",
     "Symphony couldn't ",

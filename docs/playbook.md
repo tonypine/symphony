@@ -50,6 +50,7 @@ This catalog is kept in sync with `priv/playbook/` by
 | `parent_tickets` | — | Parent tickets labeled breakdown are groomed into sub-tickets; breakdown (new, resumed, revised, re-planned), final verification, and close-out runs never open a PR. |
 | `pr_feedback_sweep` | — | Required sweep of all PR feedback channels; every actionable comment must be resolved or answered before In Review. |
 | `reproduce_and_blast_radius` | — | Capture a reproduction/acceptance signal and a blast-radius analysis before the first code edit. |
+| `review_brief` | — | One human-facing review brief per ticket, edited in place at every handoff: what to review, what changed, the decisions needed and the move that approves, changes or rejects. |
 | `scoped_tools` | — | How to discover and use the scoped linear_* and github_* tools Symphony injects for the current issue. |
 | `status_map` | — | Canonical Symphony issue state machine and what each state means for the agent. |
 | `workpad_bootstrap` | `agent` | Find, reuse, or create the single persistent Linear workpad comment and reconcile it before new work. |
@@ -59,6 +60,11 @@ The breakdown flow in `parent_tickets` (plan run, single plan review, approval
 through `Waiting on sub-tickets`, close-out) is the base of the Director workflow:
 [ADR 0001](adr/0001-director-workflow.md) records the ticket types, the plan stages
 and where a plan's artifacts live.
+
+`parent_tickets`, `escape_hatches`, `completion_bar` and `default_posture` ask for the
+review brief at their handoffs, so render `review_brief` in any workflow that renders
+them. The brief is the one comment written for the person reviewing; the workpad stays
+the agent's log.
 
 ## Recommended composition
 
@@ -91,6 +97,7 @@ You are working on a Linear ticket `{{ issue.identifier }}`
 <!-- repo-authored: extra guardrails, e.g. lock-file rule -->
 
 {% render "parent_tickets" %}
+{% render "review_brief" %}
 {% render "out_of_scope_backlog" %}
 {% render "dependency_guardrail", lockfile: "<your-lock-file>" %}
 {% render "workpad_template", agent: agent %}

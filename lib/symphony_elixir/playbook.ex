@@ -28,6 +28,7 @@ defmodule SymphonyElixir.Playbook do
     parent_tickets
     pr_feedback_sweep
     reproduce_and_blast_radius
+    review_brief
     scoped_tools
     status_map
     workpad_bootstrap

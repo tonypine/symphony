@@ -1,0 +1,87 @@
+{% comment %}
+name: review_brief
+description: One human-facing review brief per ticket, edited in place at every handoff: what to review, what changed, the decisions needed and the move that approves, changes or rejects.
+vars: []
+{% endcomment %}## Review brief
+
+The workpad is the agent's log, and the person reviewing never needs to read it. At
+every handoff to a person, leave one comment written for them, headed `## Review brief`.
+The handoffs are: a plan moved to `In Review` or `Human Review`, a PR moved to
+`In Review` (or left for Symphony to move to `Auto Review`), a `Final verification:`
+ticket moved to `In Review` or `Human Review`, and a `linear_request_human_action`
+request.
+
+- One brief per ticket. Before writing, look for a comment starting `## Review brief`
+  with `linear_get_comments`. When one exists, edit it in place with
+  `linear_update_comment`, never post a second brief. Only the first handoff creates
+  it, with `linear_add_comment`.
+- Write it before the state move that hands the ticket over.
+- Write for a person who has not read the workpad, the PR or the logs: short, plain
+  words, and links instead of pasted content. Never paste a secret, a log or an
+  `uploads.linear.app` link.
+- Rewrite the whole brief at each handoff so it describes the ticket as it is now. On
+  a revision (a plan revised from comments, review comments addressed, a re-plan),
+  fill in `What changed since the last brief`; leave that part out of the first brief.
+- A plan's brief covers the whole plan in one review: link every artifact (each
+  document or artifact comment, the HTML screens), list every sub-ticket with its
+  identifier and one line on what it delivers (the `Final verification:` one too), and
+  put every decision the plan leaves open under `Decisions needed`, so the person
+  reviews everything at once.
+- A PR's brief links the PR and says what to check: the behaviour to try, the parts
+  that carry the risk, and the QA report when there is one.
+
+Use this exact format:
+
+````md
+## Review brief
+
+**What to review:** <one line: what this handoff asks the person to look at>
+
+- <link: the PR, each artifact document or comment, the HTML screens, each sub-ticket>
+
+**What changed since the last brief:**
+
+- <on a revision only: one line per change, naming the comment it answers>
+
+**Decisions needed:**
+
+1. <question>
+   - Options: <A>; <B>
+   - Recommendation: <the option Symphony recommends, and why in one line>
+
+**How to approve / change / reject:**
+
+- Approve: <the exact move>
+- Change: <the exact comment or move>
+- Reject: <the exact move>
+````
+
+Write `None.` under `Decisions needed` when nothing is open. Fill in
+`How to approve / change / reject` with the moves for the ticket's kind:
+
+- **Plan review** (a `breakdown` parent in `In Review` or `Human Review`):
+  - Approve: move the parent to `Waiting on sub-tickets`; Symphony promotes its
+    `Backlog` sub-tickets to `Todo`.
+  - Change: comment on any part of the plan; a revision run edits it in place and
+    updates this brief. A parent in `Human Review` needs moving back to `In Review`
+    first.
+  - Reject: move the parent to `Rework`; Symphony cancels its `Backlog` sub-tickets
+    and plans again.
+- **PR review** (a PR in `In Review`):
+  - Approve: move the ticket to `Merging`; Symphony merges the PR.
+  - Change: leave review comments on the PR; Symphony brings the ticket back to
+    `In Progress` to address them on the same PR.
+  - Reject: move the ticket to `Rework`; the PR is closed and the work starts over.
+- **Human Review** (a ticket waiting on a `linear_request_human_action` request; a
+  plan, PR or final verification in `Human Review` uses its own kind's moves):
+  - Approve: do the steps in the `## Action needed:` comment, then move the ticket to
+    `Todo`; the next run carries on.
+  - Change: reply under the request with what to do instead, then move the ticket to
+    `Todo`.
+  - Reject: move the ticket to `Canceled` to drop the work.
+- **Final verification** (a `Final verification:` ticket in `In Review` or
+  `Human Review`):
+  - Approve: move the ticket to `Done`; the parent's close-out run follows.
+  - Change: comment naming what is missing and move the ticket to `Todo`; the next
+    verification run files the gap and checks again.
+  - Reject: move the parent to `Rework` to plan what is left again.
