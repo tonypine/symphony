@@ -233,6 +233,24 @@ defmodule SymphonyElixir.Config.CacheTest do
     end
   end
 
+  describe "workflow instruction files" do
+    test "an edit to an instruction file alone reloads the workflow", %{root: root} do
+      path = Path.join(root, "WORKFLOW.md")
+      rules = Path.join(root, ".symphony/instructions/045-rules.md")
+      File.write!(path, "Intro\n{% render \"playbook\" %}\n")
+      File.mkdir_p!(Path.dirname(rules))
+      File.write!(rules, "## First rules\n")
+
+      assert {:ok, %{prompt: prompt}} = Cache.get_workflow(path)
+      assert prompt =~ "## First rules"
+
+      File.write!(rules, "## Second, longer rules\n")
+      assert {:ok, %{prompt: prompt}} = Cache.get_workflow(path)
+      assert prompt =~ "## Second, longer rules"
+      assert {:ok, %{prompt: ^prompt}} = Cache.get_workflow(path)
+    end
+  end
+
   describe "missing file after warm cache" do
     test "returns last known good value when file disappears", %{root: root} do
       symphony_path = Path.join(root, "symphony.yml")

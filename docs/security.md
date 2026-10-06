@@ -59,9 +59,11 @@ either, so `SWIFTPM_MODULECACHE_OVERRIDE` points SwiftPM's module cache at the r
 The per-user temp dir stays read-only: Symphony keeps each session's Claude settings and the MCP
 shim there.
 
-Both runtimes also deny writes to the workspace's own instructions and workflow files:
-`WORKFLOW.md`, `symphony.yml`, the project `.claude/` settings, agents, commands and hooks, and the
-skill directories `.ai/skills`, `.claude/skills` and `.codex/skills`. In a local workspace the deny
+Both runtimes also deny writes to the workspace's workflow and guardrail files: `WORKFLOW.md`,
+`symphony.yml`, the project `.claude/` settings, agents, commands and hooks, the skill directories
+`.ai/skills`, `.claude/skills` and `.codex/skills`, `mise.toml`, `.tool-versions` and
+`config/settings_ui_exempt.yml`. The agent instruction files in `.symphony/instructions/` are left
+writable on purpose; see [Workflow and instruction files](#workflow-and-instruction-files). In a local workspace the deny
 also covers the files a symlink in one of those points at: Symphony's own `.ai/skills/pull` links
 to `priv/skills/pull`, so `priv/skills/pull` is read-only to the agent. An SSH worker's workspace
 gets the plain list.
@@ -117,6 +119,38 @@ so one run can change what a later run reads: Hex checks each package tarball ag
 in `mix.lock`, and `elixir_make` checks each precompiled archive against the package's checksum
 file, before using it. The host's own `~/.hex` and `~/Library/Caches` stay read-only, and the
 folder never holds `hex.config`, which can hold Hex API and repo keys.
+
+### Workflow and instruction files
+
+A repo's prompt is assembled from three parts, each from a place the run can't change:
+
+- **`WORKFLOW.md`**, write-protected. Its front matter holds what runs or is decided outside the
+  agent's reach: the workspace hooks, which run on the host outside the sandbox, the push check,
+  the verification dev server, the `prompts.pr` template, and the `playbook` settings that place
+  and drop the playbook partials. Its body can be just `{% render "playbook" %}`.
+- **Symphony's playbook partials**, built into Symphony.
+- **The repo's instruction files**, `.symphony/instructions/NNN-name.md` by default: the repo's own
+  prose (command hygiene, the numbered steps and so on), placed between the partials by number.
+  See [playbook](playbook.md#the-whole-playbook-in-one-line).
+
+The instruction files are not write-protected, so changing how agents work is an ordinary pull
+request. That is safe because Symphony never reads them from a run's workspace: with
+`workflow_source: ref` (the default) it reads them, like `WORKFLOW.md`, from the fetched base
+branch, `origin/<base_branch>`, and runs from a snapshot of the expanded text. An agent can propose
+an instruction change on its branch, but the change reaches a prompt only after its pull request
+passes CI, the acceptance gate and review and is merged, and it never changes the prompt of the run
+that made it. The files hold prompt text only: nothing in them runs on the host. The config (hooks,
+push check, `playbook` settings) is read from `WORKFLOW.md`'s own front matter before the playbook
+line expands, never from the expanded text, and the snapshot keeps that front matter first, an empty
+`---`/`---` block when there is none, so a file that opens with a YAML block stays prompt text when
+the snapshot is loaded again. Only regular
+files count (a symlink or a directory with an instruction file's name is skipped, on the ref and on
+disk alike, so a link cannot pull a host file into the prompt), and moving or dropping a Symphony
+partial still takes a `WORKFLOW.md` edit.
+
+With `workflow_source: local`, Symphony reads `WORKFLOW.md` and the instruction files from the
+operator's checkout on disk, never from an agent's workspace, and reloads the workflow when either
+changes.
 
 ### Git metadata
 

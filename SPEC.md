@@ -421,6 +421,10 @@ Loader behavior:
   file is read from disk. With `ref`, the file is also read from disk, with a warning, until the
   ref has been read once (for example a checkout with no `origin` remote or no resolvable base
   branch ref).
+- The instruction files a workflow's `{% render "playbook" %}` line pulls in (Section 5.5) are read
+  from the same place as the workflow: from the same ref with `ref`, and from disk next to the
+  workflow file otherwise. With `ref`, the snapshot of the workflow holds the expanded text, so a
+  change to an instruction file applies once it is on the ref, like a change to `WORKFLOW.md`.
 - For a repo with `workspace.source`, `workflow` is a path inside the repository and is always read
   from the fetched ref of Symphony's own clone, which has no working tree.
 - The application selects a primary repo as the one marked `default: true`, otherwise the first
@@ -486,6 +490,8 @@ Allowed repo-local front matter keys:
 - `validation`
 - `auto_review`, with only its `playbooks` key
 - `human_actions`, with only its `enabled` key
+- `playbook`, with `instructions`, `lockfile` and `partials` (Section 5.5). It shapes the prompt
+  only and is not part of the returned `config`.
 
 Unknown repo workflow keys, and `auto_review` keys other than `playbooks`, are rejected with an
 error that directs the operator to move operator-owned configuration to `symphony.yml`.
@@ -1588,6 +1594,40 @@ Rendering requirements:
   pass), and final response expectations. Repo `WORKFLOW.md` templates SHOULD NOT be required to restate these
   Symphony-owned rules.
 
+Playbook line:
+
+- A body line that is exactly `{% render "playbook" %}`, apart from surrounding whitespace, MUST be
+  expanded when the workflow is loaded, before the template is parsed. It becomes Symphony's
+  playbook partials, each as a `{% render %}` line on its slot (continuation_context 10,
+  issue_context 20, default_posture 30, scoped_tools 40, status_map 50, pr_feedback_sweep 60,
+  ci_triage 70, escape_hatches 80, parent_tickets 90, completion_bar 100, guardrails 110,
+  out_of_scope_backlog 120, dependency_guardrail 130, workpad_template 140), merged with the repo's
+  instruction files, ordered by number. Sections are joined with a blank line.
+- Instruction files are the files named `<digits>-<name>.md` in the directory
+  `playbook.instructions` names, relative to the workflow file (default `.symphony/instructions`).
+  A file's number is its slot; on a tie the partial comes first, and files with the same number
+  sort by name. Other files are ignored, and only regular files count: a symlink or directory with
+  such a name is skipped, on a git ref as on disk. Each file's trimmed text goes in as written, so
+  it renders with the same variables as the rest of the body. A file holding the playbook line is
+  an error, as is a directory or file that cannot be read; a missing directory has no files.
+- A partial's render line passes each variable its header's `vars` list names under the same name,
+  except `lockfile`, which takes the string `playbook.lockfile`. Without `playbook.lockfile`, a
+  partial taking `lockfile` (`dependency_guardrail`) is left out.
+- `playbook.partials` maps a partial name to a slot number, to move a listed partial or add another
+  shipped one, or to `false`, to drop it. An unknown partial name, a slot that is not a
+  non-negative integer or `false`, an absolute `instructions` path or one with `..`, and a
+  `lockfile` with quotes or braces are configuration errors.
+- A body without the line MUST render unchanged, and the front matter is never changed by the
+  expansion.
+- The config MUST come from the workflow file's own front matter, split off before the expansion;
+  no instruction file text may reach it. Expanded text kept for a later load (the `ref` snapshot)
+  MUST start with that front matter, or an empty `---`/`---` block when the file has none, so that
+  instruction text opening with `---` stays in the body.
+- Instruction files are not agent-protected (Section 9.6). They reach a run only from the
+  workflow's source (`workflow_source`, Section 5.1): with `ref`, the fetched base branch, so a
+  run's own branch or checkout never changes its prompt. `symphony workflow preview` renders the
+  expansion with the files next to the workflow it previews.
+
 Template input variables:
 
 - `issue` (object)
@@ -1690,7 +1730,8 @@ Value coercion semantics:
 Dynamic reload behavior:
 
 - The Elixir implementation polls repo `WORKFLOW.md` files and keeps each `WorkflowStore` on the
-  last known good workflow when reload fails.
+  last known good workflow when reload fails. A workflow read from disk with a playbook line
+  (Section 5.5) also reloads when one of its instruction files is added, removed or changed.
 - For `workflow_source: ref`, the workflow is re-read from the remote base branch at startup,
   on every dispatch after the pre-dispatch fetch, and before every Auto Review QA pass, so a change
   pushed to the base branch applies to the next dispatch or QA pass without restart. A missing or invalid workflow on the ref is logged and the
@@ -3043,6 +3084,11 @@ Current Elixir sandbox behavior:
   `symphony.yml`, `symphony.local.yml`, `.claude/settings.json`, `.git`, `mise.toml`,
   `.tool-versions`, `config/settings_ui_exempt.yml`, shell startup files, `~/.gitconfig`, and
   macOS launch agent roots.
+- The instruction files a `WORKFLOW.md` playbook line pulls in (`.symphony/instructions/` by
+  default, Section 5.5) are not write-protected: they are read only from the workflow's source,
+  so an agent's edit reaches a run only through a merged pull request. Their placement and the
+  playbook partials (`playbook` in the front matter) stay in the protected `WORKFLOW.md`, with the
+  hooks and the push check.
 - Rendered Claude, SRT, and Codex native sandbox settings include both tilde and expanded absolute
   forms for home-relative deny paths as defense in depth.
 - Codex native `workspace_write` config renders command-sandbox read denies for
