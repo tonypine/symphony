@@ -145,6 +145,7 @@ defmodule SymphonyElixir.Orchestrator do
       quality_gate_tasks: %{},
       dispatch_readiness_tasks: %{},
       tracker_tasks: %{},
+      dispatch_refresh: nil,
       usage_limits: %{},
       usage_limit_timers: %{},
       usage_windows: %{},
@@ -2752,6 +2753,7 @@ defmodule SymphonyElixir.Orchestrator do
       repo_keys: configured_repo_keys(state.repo_key),
       active_workspace_identifiers_by_repo: active_workspace_identifiers_by_repo(state),
       run_age_gc?: workspace_age_gc_due?(state, now_ms),
+      dispatch_refresh_ids: dispatch_refresh_ids(state, issues, context),
       now_ms: now_ms
     }
 
@@ -2768,14 +2770,31 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  # The issues dispatch may start are read from Linear here, in the readiness task, rather than one
+  # by one in `dispatch_issue/4`, which runs inside the orchestrator's callback. A poll reads only
+  # the candidates whose dispatch gates are open now; a retry reads its own issue.
+  defp dispatch_refresh_ids(_state, _issues, {:active_retry, %Issue{id: issue_id}, _attempt, _metadata}), do: [issue_id]
+
+  defp dispatch_refresh_ids(%State{} = state, issues, :poll) do
+    active_states = active_state_set()
+    terminal_states = terminal_state_set()
+
+    for %Issue{id: issue_id} = issue <- issues,
+        is_binary(issue_id),
+        dispatch_gates_open?(issue, state, active_states, terminal_states),
+        do: issue_id
+  end
+
   defp run_dispatch_readiness_checks(%{
          repo_keys: repo_keys,
          active_workspace_identifiers_by_repo: active_identifiers_by_repo,
          run_age_gc?: run_age_gc?,
+         dispatch_refresh_ids: dispatch_refresh_ids,
          now_ms: now_ms
        }) do
     %{
       now_ms: now_ms,
+      dispatch_refresh: prefetch_dispatch_issues(dispatch_refresh_ids),
       age_gc_result:
         if(run_age_gc?,
           do: {:ran, workspace_age_gc_result(repo_keys, active_identifiers_by_repo)},
@@ -2785,11 +2804,15 @@ defmodule SymphonyElixir.Orchestrator do
     }
   end
 
+  defp prefetch_dispatch_issues([]), do: nil
+  defp prefetch_dispatch_issues(issue_ids), do: %{ids: MapSet.new(issue_ids), result: Tracker.fetch_issue_states_by_ids(issue_ids)}
+
   defp handle_dispatch_readiness_result(%State{} = state, %{kind: context, issues: issues}, result) do
     state =
       state
       |> apply_dispatch_readiness_result(result)
       |> continue_after_dispatch_readiness(context, issues)
+      |> Map.put(:dispatch_refresh, nil)
 
     notify_dashboard()
     state
@@ -2812,8 +2835,8 @@ defmodule SymphonyElixir.Orchestrator do
     state
   end
 
-  defp apply_dispatch_readiness_result(%State{} = state, %{now_ms: now_ms, age_gc_result: age_gc_result, quota: quota}) do
-    state
+  defp apply_dispatch_readiness_result(%State{} = state, %{now_ms: now_ms, age_gc_result: age_gc_result, quota: quota} = result) do
+    %{state | dispatch_refresh: Map.get(result, :dispatch_refresh)}
     |> apply_workspace_age_gc_result(age_gc_result, now_ms)
     |> apply_workspace_quota_result(quota)
   end
@@ -4122,7 +4145,7 @@ defmodule SymphonyElixir.Orchestrator do
     repo_key = dispatch_repo_key(state, issue)
     sticky_route? = retry_attempt?(attempt)
     terminal_states = terminal_state_set()
-    issue_fetcher = &Tracker.fetch_issue_states_by_ids/1
+    issue_fetcher = dispatch_issue_fetcher(state)
 
     case revalidate_issue_for_dispatch(issue, issue_fetcher, terminal_states, sticky_route?: sticky_route?) do
       {:ok, %Issue{} = refreshed_issue} ->
@@ -4144,6 +4167,21 @@ defmodule SymphonyElixir.Orchestrator do
         skip_dispatch_after_refresh_failure(state, issue, attempt, preferred_worker_host, repo_key, reason)
     end
   end
+
+  # Dispatch after a readiness task revalidates with the issues that task read; an issue it did not
+  # read (its gates opened in between, or no readiness task ran) is read from Linear here.
+  defp dispatch_issue_fetcher(%State{dispatch_refresh: %{ids: prefetched_ids, result: result}}) do
+    fn [issue_id] = issue_ids ->
+      if MapSet.member?(prefetched_ids, issue_id),
+        do: prefetched_dispatch_issue(result, issue_id),
+        else: Tracker.fetch_issue_states_by_ids(issue_ids)
+    end
+  end
+
+  defp dispatch_issue_fetcher(_state), do: &Tracker.fetch_issue_states_by_ids/1
+
+  defp prefetched_dispatch_issue({:ok, issues}, issue_id), do: {:ok, Enum.filter(issues, &match?(%Issue{id: ^issue_id}, &1))}
+  defp prefetched_dispatch_issue({:error, _reason} = error, _issue_id), do: error
 
   # A retry reaches dispatch with its retry entry already popped and its claim
   # still held. When dispatch starts nothing, release the claim, or the poll skips

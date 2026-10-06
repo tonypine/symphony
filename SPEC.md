@@ -2054,7 +2054,9 @@ Distinct terminal reasons are important because retry logic and logs differ.
 - Tracker calls the orchestrator waits on (a retry's issue refresh, the post-PR and blocked-state
   moves, breakdown-parent parking, reviews, closes and plan comments) SHOULD run outside the
   orchestrator's message loop, with the result delivered back as a message. A claimed issue's claim
-  stays held until the result is handled, so no poll dispatches it meanwhile.
+  stays held until the result is handled, so no poll dispatches it meanwhile. The pre-dispatch
+  refresh of the issues a dispatch pass may start is read the same way, in the task that checks
+  dispatch readiness, and the pass decides with that answer.
 - Reconciliation runs before dispatch on every tick.
 - Restart recovery is tracker-driven and filesystem-driven (without a durable orchestrator DB).
 - Startup terminal cleanup removes stale workspaces for issues already in terminal states.

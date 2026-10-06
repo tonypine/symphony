@@ -284,6 +284,98 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert get_orchestrator_state(pid).retry_attempts == state.retry_attempts
   end
 
+  test "a poll's dispatch revalidation reads Linear in the readiness task, so the orchestrator answers while it is in flight" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      quality_gate: %{enabled: false},
+      observability_snapshot_publish_ms: 25
+    )
+
+    issue = %Issue{id: "issue-slow-dispatch-refresh", identifier: "MT-SLOW-DISPATCH", title: "Slow dispatch refresh", state: "Todo", team: %{key: "Test"}}
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+    # Far longer than the test; the read is stopped below.
+    Application.put_env(:symphony_elixir, :memory_tracker_fetch_states_sleep_ms, 60_000)
+
+    tasks_before = Task.Supervisor.children(SymphonyElixir.TaskSupervisor)
+    {:ok, pid} = Orchestrator.start_link(name: Module.concat(__MODULE__, :SlowDispatchRefreshOrchestrator))
+
+    on_exit(fn ->
+      Application.delete_env(:symphony_elixir, :memory_tracker_fetch_states_sleep_ms)
+      if Process.alive?(pid), do: stop_process(pid)
+      terminate_task_supervisor_children()
+    end)
+
+    state = wait_for_orchestrator_state(pid, &(map_size(&1.dispatch_readiness_tasks) == 1), 5_000)
+    assert [%{kind: :poll, issues: [%Issue{id: "issue-slow-dispatch-refresh"}]}] = Map.values(state.dispatch_readiness_tasks)
+
+    # While Linear has not answered, the orchestrator answers snapshot calls and keeps publishing.
+    assert %{running: []} = GenServer.call(pid, :snapshot, 1_000)
+    %{system_ms: published_ms} = wait_for_snapshot_cache(pid, &is_map(&1.snapshot), 1_000)
+    wait_for_snapshot_cache(pid, &(&1.system_ms > published_ms), 1_000)
+    assert map_size(get_orchestrator_state(pid).dispatch_readiness_tasks) == 1
+
+    [task_pid] =
+      (Task.Supervisor.children(SymphonyElixir.TaskSupervisor) -- tasks_before)
+      |> Enum.filter(&dispatch_prefetch_task?/1)
+
+    log =
+      capture_log(fn ->
+        Process.exit(task_pid, :kill)
+        wait_for_orchestrator_state(pid, &(&1.dispatch_readiness_tasks == %{}), 1_000)
+      end)
+
+    assert log =~ "Skipping dispatch after readiness task failure: :killed"
+    assert %{running: running, claimed: claimed} = get_orchestrator_state(pid)
+    assert running == %{}
+    assert claimed == MapSet.new()
+  end
+
+  test "dispatch after a readiness task uses the issues that task read, and reads Linear only for the ones it did not" do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory", quality_gate: %{enabled: false})
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [])
+    {:ok, pid} = Orchestrator.start_link(name: Module.concat(__MODULE__, :PrefetchedDispatchOrchestrator))
+
+    on_exit(fn ->
+      Application.delete_env(:symphony_elixir, :memory_tracker_fetch_states_sleep_ms)
+      if Process.alive?(pid), do: stop_process(pid)
+    end)
+
+    wait_for_orchestrator_state(pid, &(is_nil(&1.repo_poll_task_ref) and not &1.poll_check_in_progress), 5_000)
+    prefetched = %Issue{id: "issue-prefetched", identifier: "MT-PREFETCHED", title: "Prefetched", state: "Todo"}
+    unread = %Issue{id: "issue-unread", identifier: "MT-UNREAD", title: "Unread", state: "Todo"}
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [prefetched, %{unread | state: "Backlog"}])
+
+    send_readiness_result = fn issues, dispatch_refresh ->
+      ref = make_ref()
+      :sys.replace_state(pid, &%{&1 | dispatch_readiness_tasks: %{ref => %{kind: :poll, issues: issues}}})
+      result = %{now_ms: System.monotonic_time(:millisecond), age_gc_result: :skipped, quota: nil}
+      send(pid, {ref, {:dispatch_readiness_result, Map.put(result, :dispatch_refresh, dispatch_refresh)}})
+      get_orchestrator_state(pid)
+    end
+
+    # The task read the issue parked: dispatch skips it without asking Linear, which would hang here.
+    Application.put_env(:symphony_elixir, :memory_tracker_fetch_states_sleep_ms, 60_000)
+
+    log =
+      capture_log(fn ->
+        state = send_readiness_result.([prefetched], %{ids: MapSet.new([prefetched.id]), result: {:ok, [%{prefetched | state: "Backlog"}]}})
+        assert state.running == %{}
+        assert state.dispatch_refresh == nil
+      end)
+
+    assert log =~ ~s(Skipping stale dispatch after issue refresh: issue_id=issue-prefetched issue_identifier=MT-PREFETCHED state="Backlog")
+
+    # A failed read skips the dispatch as a failed refresh does.
+    log = capture_log(fn -> send_readiness_result.([prefetched], %{ids: MapSet.new([prefetched.id]), result: {:error, :linear_down}}) end)
+    assert log =~ "Skipping dispatch; issue refresh failed for issue_id=issue-prefetched issue_identifier=MT-PREFETCHED: :linear_down"
+
+    # An issue the task did not read is read from Linear at dispatch.
+    Application.put_env(:symphony_elixir, :memory_tracker_fetch_states_sleep_ms, 0)
+    log = capture_log(fn -> send_readiness_result.([unread], %{ids: MapSet.new([prefetched.id]), result: {:ok, [prefetched]}}) end)
+    assert log =~ ~s(Skipping stale dispatch after issue refresh: issue_id=issue-unread issue_identifier=MT-UNREAD state="Backlog")
+    assert get_orchestrator_state(pid).running == %{}
+  end
+
   test "an agent's stream of events writes its run's metadata to the run store a bounded number of times" do
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
     Application.put_env(:symphony_elixir, :orchestrator_running_metadata_persist_ms, 60_000)
@@ -6740,6 +6832,13 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     end
 
     :ok
+  end
+
+  defp dispatch_prefetch_task?(pid) do
+    case Process.info(pid, :current_stacktrace) do
+      {:current_stacktrace, stacktrace} -> Enum.any?(stacktrace, &match?({Orchestrator, :prefetch_dispatch_issues, 1, _location}, &1))
+      nil -> false
+    end
   end
 
   defp terminate_task_supervisor_children do
