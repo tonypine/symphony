@@ -133,6 +133,21 @@ defmodule SymphonyElixir.RunStore do
     end
   end
 
+  @doc """
+  Every run of issue `issue_id` in `repo_key`, newest first, read through the run index, so a
+  poller that reads the runs of the issues it watches doesn't scan the whole store each cycle.
+  """
+  @spec list_issue_runs(String.t(), String.t()) :: [map()] | {:error, term()}
+  def list_issue_runs(repo_key, issue_id) when is_binary(issue_id) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      case RunIndex.take_issue(repo_key, issue_id) do
+        {:ok, keys} -> read_runs(keys)
+        :unavailable -> repo_key |> list_runs(:all) |> issue_runs(issue_id)
+      end
+    end
+  end
+
   @spec list_all_runs() :: [map()] | {:error, term()}
   def list_all_runs, do: list_all_runs(:all)
 
@@ -1016,6 +1031,9 @@ defmodule SymphonyElixir.RunStore do
 
   defp take_runs(runs, limit) when is_list(runs), do: Enum.take(runs, limit)
   defp take_runs({:error, reason}, _limit), do: {:error, reason}
+
+  defp issue_runs(runs, issue_id) when is_list(runs), do: Enum.filter(runs, &(Map.get(&1, :issue_id) == issue_id))
+  defp issue_runs({:error, reason}, _issue_id), do: {:error, reason}
 
   defp update_pr_review_record(repo_key, issue_id, attrs) do
     durable_transaction(fn ->

@@ -549,7 +549,6 @@ defmodule SymphonyElixir.PrReviewPoller do
   # With auto-merge on, `Merging` issues are watched too: this poller lands them (see AutoMerge).
   defp discover_reviews(settings, run_store, tracker, repo_key, now, opts) do
     with {:ok, issues} <- fetch_watched_issues(settings, tracker, opts),
-         {:ok, runs} <- list_runs(run_store, repo_key),
          {:ok, existing} <- list_pr_reviews(run_store, repo_key) do
       existing_by_issue = Map.new(existing, &{Map.get(&1, :issue_id), &1})
       issues = Enum.filter(issues, &match?(%Issue{}, &1))
@@ -560,7 +559,7 @@ defmodule SymphonyElixir.PrReviewPoller do
           else: MapSet.new()
 
       discovered =
-        Enum.count(issues, &persist_discovered_review?(&1, runs, existing_by_issue, merging_issue_ids, run_store, repo_key, now))
+        Enum.count(issues, &persist_discovered_review?(&1, existing_by_issue, merging_issue_ids, run_store, repo_key, now))
 
       {:ok, discovered, merging_issue_ids}
     end
@@ -593,11 +592,11 @@ defmodule SymphonyElixir.PrReviewPoller do
 
   defp normalize_state_name(state), do: state |> String.trim() |> String.downcase()
 
-  defp persist_discovered_review?(%Issue{} = issue, runs, existing_by_issue, merging_issue_ids, run_store, repo_key, now) do
+  defp persist_discovered_review?(%Issue{} = issue, existing_by_issue, merging_issue_ids, run_store, repo_key, now) do
     existing = Map.get(existing_by_issue, issue.id)
 
     record =
-      discover_review_record(issue, runs, existing, now) ||
+      discover_review_record(issue, run_store, repo_key, existing, now) ||
         discover_auto_merge_record(issue, existing, merging_issue_ids, now)
 
     case record do
@@ -617,12 +616,12 @@ defmodule SymphonyElixir.PrReviewPoller do
     end
   end
 
-  defp discover_review_record(%Issue{} = issue, runs, %{workspace_path: workspace_path} = existing, now)
+  defp discover_review_record(%Issue{} = issue, run_store, repo_key, %{workspace_path: workspace_path} = existing, now)
        when is_binary(workspace_path) and workspace_path != "" do
     attrs =
       existing
       |> missing_review_detail_attrs(issue)
-      |> missing_run_detail_attrs(existing, latest_run_for_issue(runs, issue.id))
+      |> missing_run_detail_attrs(existing, latest_run_for_issue(run_store, repo_key, issue.id))
       |> maybe_put_updated_at(now)
 
     if map_size(attrs) > 0 do
@@ -630,10 +629,10 @@ defmodule SymphonyElixir.PrReviewPoller do
     end
   end
 
-  defp discover_review_record(%Issue{} = issue, runs, existing, now) when is_list(runs) do
+  defp discover_review_record(%Issue{} = issue, run_store, repo_key, existing, now) do
     with pr_url when is_binary(pr_url) <- first_pr_url(issue),
          %{workspace_path: workspace_path} = run when is_binary(workspace_path) <-
-           latest_run_for_issue(runs, issue.id) do
+           latest_run_for_issue(run_store, repo_key, issue.id) do
       base = %{
         issue_id: issue.id,
         issue_identifier: issue.identifier,
@@ -659,8 +658,6 @@ defmodule SymphonyElixir.PrReviewPoller do
         nil
     end
   end
-
-  defp discover_review_record(_issue, _runs, _existing, _now), do: nil
 
   # Auto-merge owns every `Merging` issue with a PR (see AutoMerge.owns_issue?/2), so the
   # poller must watch it even without a run to take the workspace from (run history reset,
@@ -1392,8 +1389,8 @@ defmodule SymphonyElixir.PrReviewPoller do
     run_store = Keyword.get(opts, :run_store, RunStore)
     repo_key = repo_key_from_opts(opts)
 
-    case list_runs(run_store, repo_key) do
-      {:ok, runs} -> Enum.any?(runs, &(Map.get(&1, :issue_id) == issue_id and Map.get(&1, :status) == "running"))
+    case list_issue_runs(run_store, repo_key, issue_id) do
+      {:ok, runs} -> Enum.any?(runs, &(Map.get(&1, :status) == "running"))
       {:error, _reason} -> false
     end
   end
@@ -1843,17 +1840,16 @@ defmodule SymphonyElixir.PrReviewPoller do
   defp first_pr_url(%Issue{pr_urls: [url | _rest]}) when is_binary(url), do: url
   defp first_pr_url(_issue), do: nil
 
-  defp latest_run_for_issue(runs, issue_id) when is_list(runs) and is_binary(issue_id) do
-    runs
-    |> Enum.filter(&review_run_for_issue?(&1, issue_id))
-    |> Enum.max_by(&run_started_at_sort_key/1, fn -> nil end)
+  # The issue's newest finished run, or `{:error, reason}` when its runs can't be read.
+  defp latest_run_for_issue(run_store, repo_key, issue_id) do
+    with {:ok, runs} <- list_issue_runs(run_store, repo_key, issue_id) do
+      runs
+      |> Enum.filter(&review_run?/1)
+      |> Enum.max_by(&run_started_at_sort_key/1, fn -> nil end)
+    end
   end
 
-  defp review_run_for_issue?(run, issue_id) do
-    Map.get(run, :issue_id) == issue_id and
-      Map.get(run, :status) in ["success", "stopped"] and
-      is_binary(Map.get(run, :workspace_path))
-  end
+  defp review_run?(run), do: Map.get(run, :status) in ["success", "stopped"] and is_binary(Map.get(run, :workspace_path))
 
   defp run_started_at_sort_key(run) do
     case Map.get(run, :started_at) do
@@ -2198,10 +2194,14 @@ defmodule SymphonyElixir.PrReviewPoller do
 
   defp normalize_decision(_value), do: nil
 
-  defp list_runs(run_store, repo_key) do
-    case list_run_records(run_store, repo_key) do
-      runs when is_list(runs) -> {:ok, runs}
-      {:error, reason} -> {:error, reason}
+  defp list_issue_runs(run_store, repo_key, issue_id) do
+    if function_exported?(run_store, :list_issue_runs, 2) do
+      case run_store.list_issue_runs(repo_key, issue_id) do
+        runs when is_list(runs) -> {:ok, runs}
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      {:error, :runs_unsupported}
     end
   end
 
@@ -2209,19 +2209,6 @@ defmodule SymphonyElixir.PrReviewPoller do
     case list_pr_review_records(run_store, repo_key) do
       reviews when is_list(reviews) -> {:ok, reviews}
       {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp list_run_records(run_store, repo_key) do
-    cond do
-      function_exported?(run_store, :list_runs, 2) ->
-        run_store.list_runs(repo_key, :all)
-
-      function_exported?(run_store, :list_runs, 1) ->
-        run_store.list_runs(:all)
-
-      true ->
-        {:error, :runs_unsupported}
     end
   end
 
@@ -2484,7 +2471,8 @@ defmodule SymphonyElixir.PrReviewPoller do
     |> maybe_put_missing(:pr_url, record, first_pr_url(issue))
   end
 
-  defp missing_run_detail_attrs(attrs, _record, nil), do: attrs
+  # No finished run, or its runs couldn't be read.
+  defp missing_run_detail_attrs(attrs, _record, run) when not is_map(run), do: attrs
 
   defp missing_run_detail_attrs(attrs, record, run) when is_map(run) do
     attrs

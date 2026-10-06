@@ -198,16 +198,17 @@ defmodule SymphonyElixir.PrReviewPollerTest do
   end
 
   defmodule RaisingRunStore do
-    @spec list_runs(:all) :: no_return()
-    def list_runs(:all), do: raise("poll exploded")
-
-    @spec list_pr_reviews() :: [map()]
-    def list_pr_reviews, do: []
+    @spec list_pr_reviews() :: no_return()
+    def list_pr_reviews, do: raise("poll exploded")
   end
 
   defmodule StatefulRunStore do
-    @spec list_runs(:all) :: [map()]
-    def list_runs(:all), do: Application.get_env(:symphony_elixir, :pr_review_test_runs, [])
+    @spec list_issue_runs(String.t(), String.t()) :: [map()]
+    def list_issue_runs(_repo_key, issue_id) do
+      :symphony_elixir
+      |> Application.get_env(:pr_review_test_runs, [])
+      |> Enum.filter(&(&1.issue_id == issue_id))
+    end
 
     @spec list_pr_reviews() :: [map()]
     def list_pr_reviews do
@@ -394,6 +395,35 @@ defmodule SymphonyElixir.PrReviewPollerTest do
                status: "watching"
              }
            ] = RunStore.list_pr_reviews()
+  end
+
+  test "a poll's run-store cost doesn't grow with the store" do
+    now = ~U[2026-05-01 09:00:00Z]
+    issue = in_review_issue(updated_at: now)
+    Application.put_env(:symphony_elixir, :pr_review_test_issues, [issue])
+    activity = open_activity(now, mergeable: "CONFLICTING", head_ref_oid: "head-sha", base_ref_oid: "base-sha")
+    Application.put_env(:symphony_elixir, :pr_review_test_activity, activity)
+
+    for {run_id, status, minutes} <- [{"run-1", "success", -10}, {"run-2", "running", -1}] do
+      run = %{repo_key: @repo_key, run_id: run_id, issue_id: issue.id, status: status, workspace_path: "/tmp/workspaces/ACME-1780"}
+      assert :ok = RunStore.put_run(Map.put(run, :started_at, DateTime.add(now, minutes, :minute)))
+    end
+
+    poll = fn ->
+      assert {:ok, %{actions: [{:active_run, "issue-1780", :conflict}]}} =
+               PrReviewPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+    end
+
+    small = reductions(poll)
+
+    for n <- 1..2_000 do
+      run = %{repo_key: @repo_key, run_id: "other-#{n}", issue_id: "other-#{n}", status: "success", workspace_path: "/tmp/other"}
+      assert :ok = RunStore.put_run(Map.put(run, :started_at, DateTime.add(now, -n, :hour)))
+    end
+
+    large = reductions(poll)
+
+    assert large < small * 1.5, "a PR review poll took #{large} reductions over 2002 runs, #{small} over 2"
   end
 
   test "each repository keeps only the states it watches from the shared read" do
@@ -3922,5 +3952,14 @@ defmodule SymphonyElixir.PrReviewPollerTest do
     Enum.any?(events, fn event ->
       event["poller"] == poller and event["status"] == status
     end)
+  end
+
+  # The reductions of `fun`'s second call, so both measure a warm cycle.
+  defp reductions(fun) do
+    fun.()
+    {:reductions, before} = Process.info(self(), :reductions)
+    fun.()
+    {:reductions, later} = Process.info(self(), :reductions)
+    later - before
   end
 end
