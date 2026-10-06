@@ -35,7 +35,7 @@ final class UpdateHealthTests: XCTestCase {
     /// A check whose Symphony answered at 30 seconds.
     private func watching() -> Health {
         var health = started()
-        XCTAssertEqual(health.handle(.polled(answered), now: at(30)), [])
+        XCTAssertEqual(health.handle(.polled(answered), now: at(30)), [.healthy])
         XCTAssertEqual(health.phase, .watching)
         return health
     }
@@ -59,7 +59,7 @@ final class UpdateHealthTests: XCTestCase {
         var health = Health()
         _ = health.begin(version: "0.0.1.43", startsSymphony: false, now: updated)
 
-        XCTAssertEqual(health.handle(.configChecked(.passed), now: at(3)), [])
+        XCTAssertEqual(health.handle(.configChecked(.passed), now: at(3)), [.healthy])
         XCTAssertEqual(health.phase, .passed)
         XCTAssertFalse(health.isActive)
         XCTAssertEqual(health.handle(.exited(requested: false), now: at(60)), [], "no restart once the check passed")
@@ -69,7 +69,7 @@ final class UpdateHealthTests: XCTestCase {
         var health = started()
         XCTAssertEqual(health.menuLine, "Checking v0.0.1.43: waiting for Symphony to answer…")
         XCTAssertEqual(health.handle(.polled(.unreachable), now: at(60)), [])
-        XCTAssertEqual(health.handle(.polled(answered), now: at(70)), [])
+        XCTAssertEqual(health.handle(.polled(answered), now: at(70)), [.healthy], "healthy once Symphony answers")
         XCTAssertEqual(health.phase, .watching)
         XCTAssertFalse(health.isChecking, "automatic updates may go ahead once Symphony answers")
         XCTAssertTrue(health.isActive)
@@ -121,7 +121,7 @@ final class UpdateHealthTests: XCTestCase {
         var health = watching()
         XCTAssertEqual(health.handle(.exited(requested: false), now: at(60)), [.start])
         XCTAssertEqual(health.handle(.started, now: at(65)), [])
-        XCTAssertEqual(health.handle(.polled(answered), now: at(70)), [])
+        XCTAssertEqual(health.handle(.polled(answered), now: at(70)), [], "the update is reported healthy only once")
 
         XCTAssertEqual(health.handle(.exited(requested: false), now: at(Health.crashWindow)), [])
         XCTAssertEqual(health.phase, .passed)
@@ -136,7 +136,7 @@ final class UpdateHealthTests: XCTestCase {
 
         // Stopped before it answered: nothing is left to wait for.
         var stopped = started()
-        XCTAssertEqual(stopped.handle(.exited(requested: true), now: at(10)), [])
+        XCTAssertEqual(stopped.handle(.exited(requested: true), now: at(10)), [.healthy])
         XCTAssertEqual(stopped.phase, .watching)
         XCTAssertEqual(stopped.handle(.polled(.unreachable), now: at(200)), [])
     }
@@ -146,7 +146,7 @@ final class UpdateHealthTests: XCTestCase {
         _ = health.begin(version: "0.0.1.43", startsSymphony: true, now: updated)
         XCTAssertEqual(health.handle(.configChecked(.passed), now: at(2)), [.start])
 
-        XCTAssertEqual(health.handle(.notStarted, now: at(5)), [])
+        XCTAssertEqual(health.handle(.notStarted, now: at(5)), [.healthy])
         XCTAssertEqual(health.phase, .watching)
         XCTAssertEqual(health.handle(.polled(.unreachable), now: at(300)), [])
     }
@@ -198,6 +198,22 @@ final class UpdateHealthTests: XCTestCase {
         XCTAssertEqual(restored.take(), record)
         XCTAssertNil(defaults.values[RollbackStore.key])
         XCTAssertNil(restored.take())
+    }
+
+    func testRollbackRecordKeepsTheFailedReleasesNotes() {
+        let defaults = MemoryKeyValueStore()
+        var withNotes = record
+        withNotes.details = ReleaseDetails(Self.release(build: 43))
+        withNotes.details.notes = "12 changes since v0.0.1.42:\n- Fix"
+        withNotes.details.changes = 12
+        RollbackStore(defaults: defaults).save(withNotes)
+
+        let restored = RollbackStore(defaults: defaults).take()
+        XCTAssertEqual(restored, withNotes)
+        XCTAssertEqual(
+            restored?.details.release(version: "0.0.1.43", build: 43)?.notes,
+            "12 changes since v0.0.1.42:\n- Fix"
+        )
     }
 
     func testUnreadableRollbackRecordIsDropped() {
