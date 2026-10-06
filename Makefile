@@ -1,4 +1,4 @@
-.PHONY: help all setup deps audit build package fmt fmt-check lint test test-profile coverage coverage-profile check ci dialyzer dialyzer-profile e2e
+.PHONY: help all setup deps audit build smoke package fmt fmt-check lint test test-profile coverage coverage-profile check ci dialyzer dialyzer-profile e2e
 
 MIX ?= mix
 TEST_MAX_CASES ?= 4
@@ -7,7 +7,7 @@ TEST_ENV := ELIXIR_ERL_OPTIONS="+S $(BEAM_SCHEDULERS):$(BEAM_SCHEDULERS)"
 TEST_ARGS := --max-cases $(TEST_MAX_CASES)
 
 help:
-	@echo "Targets: setup, deps, audit, fmt, fmt-check, lint, test, test-profile, coverage, coverage-profile, check, dialyzer, dialyzer-profile, e2e, ci"
+	@echo "Targets: setup, deps, audit, build, smoke, fmt, fmt-check, lint, test, test-profile, coverage, coverage-profile, check, dialyzer, dialyzer-profile, e2e, ci"
 
 # Turns on .githooks/pre-push (format, compile and credo on the files a push changes)
 # for this clone and all its worktrees.
@@ -24,6 +24,11 @@ audit:
 
 build:
 	$(MIX) build
+
+# The release smoke test, run on the escript: `symphony check` must pass on the
+# sample symphony.yml, as it must for the release binary.
+smoke: build
+	scripts/release/smoke_test.sh bin/symphony symphony.yml
 
 # Zig 0.15.2 (pinned by Burrito 1.5.0) can't link against the macOS 26 and later
 # SDKs' libSystem.tbd. The shim dir holds an xcrun wrapper that redirects Zig to
@@ -78,7 +83,7 @@ check:
 ci:
 	$(MAKE) setup
 	$(MAKE) audit
-	$(MAKE) build
+	$(MAKE) smoke
 	$(MAKE) fmt-check
 	$(MAKE) lint
 	$(MAKE) coverage

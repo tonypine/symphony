@@ -1325,7 +1325,8 @@ When enabled:
   applied again once it moved the issue on: when the issue returns to `state` on the same head SHA,
   Symphony MUST drop that QA verdict and the acceptance gate's verdict for the SHA and run a fresh
   QA pass before the gate judges it. A `blocked` verdict from the QA agent is applied again as
-  before.
+  before. A `blocked` stored before Symphony recorded which kind it was is classified by its
+  reason: one of Symphony's own error reasons counts as not given by the QA agent.
 - QA selection is deterministic and runs before any agent: a `qa:skip` label skips; a
   `qa:<kind>` label selects that playbook; a diff that only touches docs, tests or `skip_globs`
   skips; otherwise playbooks are selected by their trigger paths, and the `cli` playbook also by a
@@ -3034,7 +3035,10 @@ Notes:
 - A connection serves one request at a time. A call of one of Symphony's own tools (`linear_*`,
   `github_*`) that runs longer than 10 minutes (the `:mcp_tool_timeout_ms` application env) is
   stopped and answered with a `tool_timeout` tool error, so later calls on the connection are not
-  held behind it. QA tools keep their drivers' own timeouts.
+  held behind it. QA tools keep their drivers' own timeouts. While a tool runs, the server still
+  reads the connection: a `notifications/cancelled` for the call stops the tool at once and leaves
+  the call unanswered, and a closed connection stops the tool too. A cancel for a call that already
+  finished changes nothing, and other requests sent meanwhile are answered after the call.
 - The implicit MCP server tells the orchestrator as each tool call starts (tool name, start time,
   and the deadline its timeout sets) and ends, so the run's `pending_tool_calls` stay current.
 - Codex launch preserves the configured command while injecting `--config` overrides for

@@ -200,7 +200,16 @@ defmodule SymphonyElixir.AutoReview do
   # handing the old verdict to the gate.
   defp rerun_on_return?(record, sha) do
     Map.get(record, :qa_sha) == sha and Map.get(record, :qa_verdict) == "blocked" and
-      Map.get(record, :qa_infra_blocked) == true and Map.get(record, :qa_applied) == true
+      infra_blocked?(record) and Map.get(record, :qa_applied) == true
+  end
+
+  # A record stored before `qa_infra_blocked` existed has no flag: its reason tells, as an error's
+  # reason is one of Symphony's own texts and the agent's is its free text.
+  defp infra_blocked?(record) do
+    case Map.get(record, :qa_infra_blocked) do
+      nil -> error_blocked_reason?(Map.get(record, :qa_reason))
+      flag -> flag == true
+    end
   end
 
   # The gate's verdict for the head went with the old QA verdict, so it is dropped too: the fresh
@@ -743,6 +752,24 @@ defmodule SymphonyElixir.AutoReview do
   def usage_limit({:usage_limited, %{} = info}), do: info
   def usage_limit({:model_api_unreachable, %{} = info}), do: info
   def usage_limit(_reason), do: nil
+
+  # How every `blocked` reason an error gives starts: `blocked_reason/1`'s, and `select/5`'s when the
+  # PR's changed files can't be listed. Keep it in step with both.
+  @error_blocked_reasons [
+    "the QA agent reached the per-issue token limit ",
+    "QA does not run on remote workers yet ",
+    "the dev server ",
+    "`npx` (Node.js) is not on Symphony's PATH",
+    "`auto_review.playbooks.web.browser_mcp` is invalid: ",
+    "the QA agent's answer could not be read: ",
+    "the QA agent could not finish: ",
+    "could not list the PR's changed files: "
+  ]
+
+  defp error_blocked_reason?(reason) when is_binary(reason),
+    do: String.starts_with?(reason, @error_blocked_reasons) or String.contains?(reason, "` is not installed on the Symphony host; ")
+
+  defp error_blocked_reason?(_reason), do: false
 
   @doc "The `blocked` reason the QA report gives for a `SymphonyElixir.QaAgent.run/3` error."
   @spec blocked_reason(term()) :: String.t()
