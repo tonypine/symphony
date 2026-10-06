@@ -124,14 +124,15 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
   end
 
   # Only Seatbelt refusing the bind proves the confinement: a bind that works, or a probe that
-  # can't run, leaves the dev server unstarted.
+  # can't run, leaves the dev server unstarted. `sandbox-exec` that can't apply the profile also
+  # says "Operation not permitted", so the refusal must come from the bind.
   defp probe_confinement(executable, profile) do
     case System.cmd(executable, ["-p", profile | @confinement_probe], stderr_to_stdout: true) do
       {_output, 0} ->
         {:error, {:dev_server_sandbox_unconfined, :non_loopback_bind_allowed}}
 
       {output, status} ->
-        if output =~ "Operation not permitted",
+        if output =~ "bind: Operation not permitted",
           do: :ok,
           else: {:error, {:dev_server_sandbox_unconfined, {:probe_failed, status, String.trim(output)}}}
     end

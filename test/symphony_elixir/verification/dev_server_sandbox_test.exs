@@ -99,6 +99,13 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
       assert File.read!(calls) == "call\ncall\n"
     end
 
+    test "doesn't take sandbox-exec failing to apply the profile for a refused bind", %{root: root, workspace: workspace, tmp_dir: tmp_dir} do
+      executable = fake_sandbox_exec(root, "echo 'sandbox-exec: sandbox_apply: Operation not permitted' >&2\nexit 71")
+
+      assert {:error, {:dev_server_sandbox_unconfined, {:probe_failed, 71, "sandbox-exec: sandbox_apply: Operation not permitted"}}} =
+               command(workspace, tmp_dir, executable)
+    end
+
     test "fails when sandbox-exec is missing", %{root: root, workspace: workspace, tmp_dir: tmp_dir} do
       executable = Path.join(root, "missing-sandbox-exec")
 

@@ -82,3 +82,20 @@ jobs:
 
       - name: Run the Seatbelt tests
         run: time mix test --only seatbelt
+
+      # Whether the dev server runs confined on this image or refuses to start: the tests pass
+      # either way, so the run says which as an annotation.
+      - name: Report the confinement verdict
+        if: ${{ !cancelled() }}
+        env:
+          MIX_ENV: test
+        run: |
+          mix run --no-start -e '
+            dir = Path.join(System.tmp_dir!(), "seatbelt-verdict")
+            File.mkdir_p!(dir)
+
+            case SymphonyElixir.Verification.DevServerSandbox.command("true", dir, dir, []) do
+              {:ok, _argv} -> IO.puts("::notice title=Seatbelt confinement::the profile refuses a bind on 0.0.0.0, so the dev server runs confined")
+              {:error, reason} -> IO.puts("::warning title=Seatbelt confinement::the dev server refuses to start: #{inspect(reason)}")
+            end
+          '
