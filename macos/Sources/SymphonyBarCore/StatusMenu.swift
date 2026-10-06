@@ -119,10 +119,17 @@ public enum StatusMenu {
     }
 
     /// For example "Paused: Claude limit, resumes ~14:05", "Resuming: checking Claude limit…" or
-    /// "Holding new runs: Claude at 91%, resets ~14:05". Times are local, with the date when not today.
+    /// "Holding new runs: Claude at 91%, resets ~14:05". While the API can't be reached: "Paused: Claude API
+    /// unreachable (ENOTFOUND), retries ~14:05" or "Resuming: checking Claude API…". Times are local, with the
+    /// date when not today.
     public static func usageLimitLine(_ limit: StateSnapshot.UsageLimit, now: Date, timeZone: TimeZone) -> String {
         let provider = providerName(limit.provider)
         switch limit.phase {
+        case .paused where limit.isAPIUnreachable:
+            return "Paused: \(apiUnreachableName(limit))" + (limit.error.map { " (\($0))" } ?? "")
+                + approximateTime(", retries", limit.resumeAt, now: now, timeZone: timeZone)
+        case .canary where limit.isAPIUnreachable:
+            return "Resuming: checking \(provider) API…"
         case .paused:
             return "Paused: \(provider) limit" + approximateTime(", resumes", limit.resumeAt, now: now, timeZone: timeZone)
         case .canary:
@@ -151,6 +158,11 @@ public enum StatusMenu {
             window = "usage limit"
         }
         return "\(providerName(limit.provider)) \(window)"
+    }
+
+    /// What an outage hold is on: "Claude API unreachable".
+    public static func apiUnreachableName(_ limit: StateSnapshot.UsageLimit) -> String {
+        "\(providerName(limit.provider)) API unreachable"
     }
 
     /// How people name a provider: "Claude" for `anthropic`.
