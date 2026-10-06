@@ -152,6 +152,9 @@ defmodule SymphonyElixir.CLI do
           IO.puts(openrouter_stub_message(port))
           :serve
 
+        {:error, :eaddrinuse} ->
+          {:error, "Could not start the OpenRouter QA stub: port #{port} is already in use"}
+
         {:error, reason} ->
           {:error, "Could not start the OpenRouter QA stub: #{inspect(reason)}"}
       end
@@ -550,11 +553,22 @@ defmodule SymphonyElixir.CLI do
     }
   end
 
-  # The escript has not started the application, so Bandit's own is started here.
+  # The escript has not started the application, so Bandit's own is started here. Bandit also
+  # logs a port it can't bind to; the command's own error says it once, so the start logs nothing.
   defp start_openrouter_stub(port) do
     with {:ok, _started} <- Application.ensure_all_started(:bandit),
-         {:ok, _pid, port} <- OpenRouter.Stub.start_link(port: port, log: &IO.puts/1) do
+         {:ok, _pid, port} <- start_openrouter_stub_quietly(port) do
       {:ok, port}
+    end
+  end
+
+  defp start_openrouter_stub_quietly(port) do
+    Logger.put_process_level(self(), :none)
+
+    try do
+      OpenRouter.Stub.start_link(port: port, log: &IO.puts/1)
+    after
+      Logger.delete_process_level(self())
     end
   end
 

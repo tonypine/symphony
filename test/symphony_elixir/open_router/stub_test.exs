@@ -84,6 +84,23 @@ defmodule SymphonyElixir.OpenRouter.StubTest do
     assert_receive {:stub_log, "OpenRouter stub: GET /api/v1/credits key=accepted status=404"}, 1_000
   end
 
+  test "returns :eaddrinuse for a port that is taken, without killing the caller" do
+    {:ok, socket} = :gen_tcp.listen(0, ip: {127, 0, 0, 1})
+    {:ok, port} = :inet.port(socket)
+
+    log = capture_log(fn -> assert {:error, :eaddrinuse} = Stub.start_link(port: port) end)
+    assert log =~ "port #{port} already in use"
+    assert {:trap_exit, false} = Process.info(self(), :trap_exit)
+
+    # A caller that traps exits keeps trapping them and gets no exit message from the start.
+    Process.flag(:trap_exit, true)
+    capture_log(fn -> assert {:error, :eaddrinuse} = Stub.start_link(port: port) end)
+    assert {:trap_exit, true} = Process.info(self(), :trap_exit)
+    refute_received {:EXIT, _pid, _reason}
+
+    :gen_tcp.close(socket)
+  end
+
   test "logs through Logger by default and stops", %{pid: pid} do
     assert :ok = Stub.stop(pid)
     assert :ok = Stub.stop(pid)
