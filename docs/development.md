@@ -125,13 +125,21 @@ them on a Mac outside any sandbox with:
 mix test --only seatbelt
 ```
 
-Where a macOS version lets a command under the profile listen beyond loopback, the dev server
-refuses to start, and the tests that serve a page assert that refusal instead.
+The tests that serve a page start a dev server that listens on its unix socket, and check the page
+on `127.0.0.1:<port>` through Symphony's loopback bridge, and that a connection to the Mac's own
+non-loopback addresses on that port is refused. For the manual check from another host on the
+network, start one under the real sandbox and connect from that host to `<this Mac's LAN
+address>:<port>`: it must be refused, while `curl http://127.0.0.1:<port>/` on the Mac gets the
+page.
+
+The tests tagged `:unix_socket` listen on a unix socket in the temp folder, as the dev server does
+on macOS. The agent sandbox refuses that bind, so `test/test_helper.exs` skips them there too; CI
+runs them.
 
 The [`seatbelt` workflow](../.github/workflows/seatbelt.yml) runs the same command on the newest
 macOS runner image, on pull requests and pushes to `main` that change `lib/symphony_elixir/verification/`,
-`lib/symphony_elixir/agent_sandbox_config.ex`, `scripts/qa-dashboard-server.sh` or the tests
-themselves. It is not a required check.
+`lib/symphony_elixir/agent_sandbox_config.ex`, `lib/symphony_elixir/http_server.ex`,
+`scripts/qa-dashboard-server.sh` or the tests themselves. It is not a required check.
 
 ## Required checks
 

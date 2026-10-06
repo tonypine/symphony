@@ -372,8 +372,10 @@ Symphony starts `verification.dev_server.start_cmd` itself, from the checkout un
 - in an Auto Review `web` pass, from a second worktree at the PR head.
 
 The command usually runs files from that checkout: a script such as Symphony's own
-`scripts/qa-dashboard-server.sh`, and the repo's build tool (`mix`, `npm`, `pnpm`), which runs the
-project's code and build config. The agent can change all of these, so Symphony runs the command
+`scripts/qa-dashboard-server.sh`, and the repo's build or runtime tool (`npm`, `pnpm`, or an
+Elixir escript or release built outside the sandbox; Mix itself can't run under the macOS profile,
+see [below](#macos-the-dev-server-listens-on-a-unix-socket)), which runs the project's code and
+build config. The agent can change all of these, so Symphony runs the command
 under macOS Seatbelt (`sandbox-exec`), or bubblewrap (`bwrap`) on Linux, with limits like the
 agent's sandbox:
 
@@ -387,8 +389,9 @@ agent's sandbox:
   stops), the agent cache folder, the per-user `TemporaryItems` dir (macOS) and the `/dev` sinks
   are writable. Inside the checkout, the paths the agent may not write stay read-only: `.git`,
   `WORKFLOW.md`, the skills and the other agent-protected paths.
-- **Network.** The server may listen and connect on loopback only, so it can't serve on another
-  interface. It reaches the dependency hosts through a proxy on loopback that Symphony runs for
+- **Network.** The server may connect only to loopback, and can't serve on any interface the
+  network reaches (see [below](#macos-the-dev-server-listens-on-a-unix-socket) for how macOS does
+  it). It reaches the dependency hosts through a proxy on loopback that Symphony runs for
   it (`HTTPS_PROXY` and `HTTP_PROXY`): the proxy only tunnels HTTPS (`CONNECT`) to the agent's
   built-in dependency hosts plus `agent.permissions.network.allowed_domains`, less
   `denied_domains`, and to none with `mode: block`. The model provider hosts are left out. Any
@@ -415,8 +418,36 @@ agent's sandbox:
   `LINEAR_API_KEY`, provider keys, GitHub tokens or `SSH_AUTH_SOCK`. Hex and `elixir_make` use
   the agent cache folder.
 
-On macOS loopback stays open, so the server can still reach other services on the host's
-loopback, such as Symphony's own dashboard and API, which have no authentication (see
+#### macOS: the dev server listens on a unix socket
+
+Seatbelt can't keep a TCP listener on loopback. A rule on the listener's local address
+(`(local ip "localhost:*")`) also lets it bind `0.0.0.0` and the LAN address, where any other host
+on the network connects to it and reads what it serves (measured on macOS 15 and macOS 27, and on
+GitHub's `macos-14`, `macos-26` and `xcode-27` images). A rule on the remote address makes even
+`listen()` fail, since that is checked against the local address. So on macOS:
+
+- The profile allows the server no TCP or UDP listener at all, on any address: `bind` fails with
+  `Operation not permitted`. It may bind, listen on and connect to unix sockets in its own
+  `$TMPDIR` only.
+- No Mix task runs inside the sandbox. Loading deps starts `Mix.PubSub`, which listens on an
+  ephemeral `127.0.0.1` port, and Mix's build lock takes one too; both are refused here. An Elixir
+  dev server runs a prebuilt artifact (an escript or a release), built outside the sandbox with
+  `mix build` before verification, never `mix run` or `mix phx.server`.
+- The server listens on the unix socket `$SYMPHONY_VERIFICATION_SOCKET` (`serve.sock` in its
+  `$TMPDIR`) instead of `$SYMPHONY_VERIFICATION_PORT`. A unix socket can't be reached from
+  another host.
+- Symphony, outside the sandbox, listens on `127.0.0.1:$SYMPHONY_VERIFICATION_PORT` and copies
+  each connection to and from that socket (`SymphonyElixir.Verification.LoopbackBridge`), as the
+  `socat` bridges do on Linux. The page is at `http://127.0.0.1:<port>`; nothing listens on the
+  port on any other address. The bridge goes with the server: when it stops, the server stops,
+  and the other way round.
+- A server that can only listen on a TCP port can't start under the profile. When its health
+  check times out and nothing is at the socket, the error says so
+  (`dev_server_not_on_socket`), and an Auto Review `web` pass is `blocked` with that reason. It
+  never runs without the sandbox.
+
+Connections out stay open to the host's loopback, so the server can still reach other services
+there, such as Symphony's own dashboard and API, which have no authentication (see
 [Local-only dashboard bind](#local-only-dashboard-bind)).
 
 On Linux, `bwrap` builds the same limits from mounts and namespaces:
@@ -451,11 +482,12 @@ unprivileged user namespaces, or Docker's default seccomp profile, see
 [docker/README.md](../docker/README.md#verification-dev-server)). An agent run then fails with
 `verification_failed` before its first turn, and an Auto Review `web` pass is `blocked`.
 
-Not every macOS version keeps the listener on loopback: on macOS 15 the rule that lets the server
-accept connections on loopback also lets it bind `0.0.0.0` and the LAN address. So before the
-first dev server starts, Symphony binds `0.0.0.0` under the profile with `/usr/bin/perl`, and
-unless Seatbelt refuses it the dev server does not start either
-(`dev_server_sandbox_unconfined`), the same way. The result holds until Symphony restarts.
+Before the first dev server starts on macOS, Symphony checks the profile on this Mac with
+`/usr/bin/perl`: a process under it must be refused a TCP bind on `0.0.0.0` and on `127.0.0.1`,
+and must be able to listen on a unix socket in its `$TMPDIR`. Unless all three hold, the dev
+server does not start either (`dev_server_sandbox_unconfined`), the same way. A refused or allowed
+bind holds until Symphony restarts; a check that couldn't run is tried again next time. The
+health check that follows, on `127.0.0.1:<port>` through the bridge, shows the page is served.
 
 The dev server is off by default. It starts only when `verification.enabled` is `true` and
 `verification.dev_server.start_cmd` is set. A repo's `WORKFLOW.md` can set both, and its values
