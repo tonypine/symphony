@@ -5,6 +5,8 @@
 # server's sandbox, so it can write only this checkout, $TMPDIR and the agent cache folder.
 # On macOS that sandbox allows no TCP listener: the dashboard listens on the unix socket
 # $SYMPHONY_VERIFICATION_SOCKET instead, which Symphony serves on 127.0.0.1:$SYMPHONY_VERIFICATION_PORT.
+# It runs no Mix: Mix loads deps through a TCP listener (see the guard below), so it serves the
+# escript built outside the sandbox with `mix build`.
 set -eu
 
 port="${SYMPHONY_VERIFICATION_PORT:?SYMPHONY_VERIFICATION_PORT is not set}"
@@ -30,9 +32,17 @@ agent:
 EOF
 
 cd "$repo"
-# The dev server's sandbox forbids every TCP listener, and Mix's build lock takes one on an
-# ephemeral 127.0.0.1 port (`Mix.Sync.Lock`), which would fail `mix` with :eperm. Skip it.
-export MIX_OS_CONCURRENCY_LOCK=0
+
+# The dev server's sandbox allows no TCP listener at all, and Mix can't run without one: every
+# task that loads deps starts `Mix.PubSub` (`Mix.Sync.PubSub.subscribe/1`) on an ephemeral
+# 127.0.0.1 port, and Mix's build lock takes one too. So no Mix task can run here. Serve the
+# escript this checkout built outside the sandbox with `mix build`.
+if [ ! -x ./bin/symphony ]; then
+  echo "scripts/qa-dashboard-server.sh: ./bin/symphony is missing." >&2
+  echo "Build it first with \`mix build\`. Mix can't run inside the dev server sandbox on macOS: it opens TCP listeners for its build lock and pub/sub." >&2
+  exit 1
+fi
+
 set --
 if command -v mise >/dev/null 2>&1; then
   # The dev server's sandbox can't write mise's state and cache folders in the home folder, so
@@ -42,16 +52,6 @@ if command -v mise >/dev/null 2>&1; then
   export MISE_TRUSTED_CONFIG_PATHS="$repo${MISE_TRUSTED_CONFIG_PATHS:+:$MISE_TRUSTED_CONFIG_PATHS}"
   set -- mise exec --
 fi
-
-# The sandbox reaches the Hex registry only through the run's egress proxy, and only for hosts
-# the run allows. This checkout's deps are normally fetched outside the sandbox already, by the
-# agent or the CI job, so fetch them here only when they are missing: `mix deps.get` resolves
-# against the registry even with every dep present, which a run whose allowlist refuses the
-# registry would fail on.
-if [ ! -d deps ] || [ -z "$(ls -A deps 2>/dev/null)" ]; then
-  "$@" mix deps.get >&2
-fi
-"$@" mix build >&2
 
 # A Symphony agent environment turns the orchestrator and its HTTP server off.
 unset SYMPHONY_AGENT_RUNTIME SYMPHONY_DISABLE_ORCHESTRATOR

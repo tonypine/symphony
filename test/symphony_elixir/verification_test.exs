@@ -608,13 +608,17 @@ defmodule SymphonyElixir.VerificationTest do
       assert :ok = DevServer.stop(pid)
     end
 
-    # Builds this checkout with `mix build` (in `_build/dev` and `bin/`), fetching its deps, before
-    # it serves, as an Auto Review `web` pass does, so it can take minutes. A plain `mix test`
-    # skips it; `--include qa_dashboard_e2e` or `--only seatbelt` runs it.
+    # Builds this checkout's escript with `mix build` (in `_build/dev` and `bin/`) outside the
+    # sandbox before it serves, as an Auto Review `web` pass does, so it can take minutes. The
+    # command then runs in a sandbox that allows no TCP listener, and Mix needs one to load deps
+    # (see the guard in `scripts/qa-dashboard-server.sh`), so the build can't happen there. A plain
+    # `mix test` skips it; `--include qa_dashboard_e2e` or `--only seatbelt` runs it.
     @tag :seatbelt
     @tag :qa_dashboard_e2e
     @tag timeout: 900_000
     test "serves the dashboard with scripts/qa-dashboard-server.sh from inside the real sandbox", %{port: port} do
+      build_escript!()
+
       config = %DevServerConfig{
         start_cmd: "scripts/qa-dashboard-server.sh",
         health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/api/v1/state",
@@ -871,6 +875,15 @@ defmodule SymphonyElixir.VerificationTest do
     File.write!(socat, "#!/bin/sh\nexit 0\n")
     Enum.each([bwrap, socat], &File.chmod!(&1, 0o755))
     [os_type: {:unix, :linux}, bwrap: bwrap, socat: socat]
+  end
+
+  # The dev server's sandbox allows no TCP listener, and Mix loads deps through one
+  # (`Mix.PubSub`, and Mix's build lock), so no Mix task can run inside it. Build the escript the
+  # dashboard script serves here, outside the sandbox, as the CI job and an Auto Review `web` pass
+  # do before they start the server.
+  defp build_escript! do
+    {output, status} = System.cmd("mix", ["build"], stderr_to_stdout: true, env: [{"MIX_ENV", "dev"}])
+    assert status == 0, "mix build failed:\n#{output}"
   end
 
   defp real_path(path) do

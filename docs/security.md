@@ -334,8 +334,10 @@ Symphony starts `verification.dev_server.start_cmd` itself, from the checkout un
 - in an Auto Review `web` pass, from a second worktree at the PR head.
 
 The command usually runs files from that checkout: a script such as Symphony's own
-`scripts/qa-dashboard-server.sh`, and the repo's build tool (`mix`, `npm`, `pnpm`), which runs the
-project's code and build config. The agent can change all of these, so Symphony runs the command
+`scripts/qa-dashboard-server.sh`, and the repo's build or runtime tool (`npm`, `pnpm`, or an
+Elixir escript or release built outside the sandbox; Mix itself can't run under the macOS profile,
+see [below](#macos-the-dev-server-listens-on-a-unix-socket)), which runs the project's code and
+build config. The agent can change all of these, so Symphony runs the command
 under macOS Seatbelt (`sandbox-exec`), or bubblewrap (`bwrap`) on Linux, with limits like the
 agent's sandbox:
 
@@ -389,6 +391,10 @@ GitHub's `macos-14`, `macos-26` and `xcode-27` images). A rule on the remote add
 - The profile allows the server no TCP or UDP listener at all, on any address: `bind` fails with
   `Operation not permitted`. It may bind, listen on and connect to unix sockets in its own
   `$TMPDIR` only.
+- No Mix task runs inside the sandbox. Loading deps starts `Mix.PubSub`, which listens on an
+  ephemeral `127.0.0.1` port, and Mix's build lock takes one too; both are refused here. An Elixir
+  dev server runs a prebuilt artifact (an escript or a release), built outside the sandbox with
+  `mix build` before verification, never `mix run` or `mix phx.server`.
 - The server listens on the unix socket `$SYMPHONY_VERIFICATION_SOCKET` (`serve.sock` in its
   `$TMPDIR`) instead of `$SYMPHONY_VERIFICATION_PORT`. A unix socket can't be reached from
   another host.

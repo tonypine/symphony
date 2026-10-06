@@ -54,7 +54,8 @@ jobs:
   seatbelt:
     name: seatbelt tests
     runs-on: macos-26
-    # One test builds this checkout with `scripts/qa-dashboard-server.sh` before it serves.
+    # One test builds this checkout's escript (`mix build`, outside the sandbox) before the
+    # dashboard dev server serves it: the sandbox allows no TCP listener, so Mix can't run there.
     timeout-minutes: 45
 
     steps:

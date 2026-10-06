@@ -2016,12 +2016,11 @@ command can serve both ways:
 
 A server that can only listen on a TCP port does not run on macOS: when its health check times out
 with nothing at the socket, the run fails with `dev_server_not_on_socket`, and an Auto Review
-`web` pass is `blocked` with that reason. An Elixir dev server must also set
-`MIX_OS_CONCURRENCY_LOCK=0` on macOS, so Mix's build lock, which listens on an ephemeral
-`127.0.0.1` port, does not fail with `:eperm` against the no-TCP-listener sandbox, and must fetch
-its dependencies only when they are missing: the sandbox reaches the Hex registry only through the
-run's egress proxy, so a `mix deps.get` that resolves against a checkout whose deps are already
-fetched fails when the run's network allowlist does not carry the registry.
+`web` pass is `blocked` with that reason. An Elixir dev server can't run Mix inside the sandbox at
+all: every task that loads deps starts `Mix.PubSub` on an ephemeral `127.0.0.1` port, and Mix's
+build lock takes one too, both refused by the no-TCP-listener profile. Build the escript or release
+outside the sandbox first (`mix build`) and point `start_cmd` at that prebuilt artifact, so the
+sandbox only starts the artifact and never Mix (`scripts/qa-dashboard-server.sh` does this).
 
 Auto Review's `web` playbook starts the same dev server, from a worktree at the PR head, for each web QA pass
 (see [Web app QA](#web-app-qa)).
