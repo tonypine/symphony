@@ -101,11 +101,13 @@ defmodule SymphonyElixir.OpenRouter.Stub do
     :exit, _reason -> :ok
   end
 
+  # Plug's `opts` type has no function, so the logger stays inside the keyword list.
   @impl Plug
-  def init(opts), do: Keyword.fetch!(opts, :log)
+  def init(opts), do: [log: Keyword.fetch!(opts, :log)]
 
   @impl Plug
-  def call(conn, log) do
+  def call(conn, opts) do
+    log = Keyword.fetch!(opts, :log)
     accepted? = valid_key?(conn)
     {conn, status, model} = route(conn, conn.method, conn.path_info, accepted?)
     model_note = if model, do: " model=#{model}", else: ""
