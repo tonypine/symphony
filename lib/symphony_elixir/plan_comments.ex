@@ -5,14 +5,18 @@ defmodule SymphonyElixir.PlanComments do
   A plan under review (the parent in `In Review`, none of its open sub-issues promoted out of
   `Backlog`) is revised in place: a person's new comment sends the parent back to `In Progress`,
   where the breakdown run picks it up, edits the plan, answers the comment and returns the parent
-  to `In Review` (see `SymphonyElixir.Linear.Issue.unapproved_plan?/2`). An approved plan (the parent
+  to `In Review` (see `SymphonyElixir.Linear.Issue.unapproved_plan?/2`). A plan in the human review
+  state waits for the operator: Symphony never moves a parent out of it, so a comment there revises
+  nothing (the operator moves it to `Rework` or back to `In Review` for that). An approved plan (the parent
   in the waiting state, or in `In Review` with sub-issues already promoted) is not changed from
   comments: under each new top-level comment Symphony replies once that, if it asks for a plan
   change, the change goes through `Rework`. Replies inside a thread get nothing.
 
   Only a person's comment counts. Integration bots are skipped, and so are Symphony's own comments:
   the ones its last run posted, by id, and the others by how they start, because Symphony and the
-  reviewer can share one Linear user.
+  reviewer can share one Linear user. A supervisor's notes (`Supervisor review:`, `Supervisor note:`)
+  are skipped the same way: the supervisor posts as the operator, and plan approval stays the
+  operator's call.
   """
 
   alias SymphonyElixir.{AgentLabels, BreakdownReview, HumanReview, SubIssueWait, Tracker}
@@ -31,6 +35,8 @@ defmodule SymphonyElixir.PlanComments do
     "Symphony quality gate",
     @reply_opener
   ]
+  # How a supervisor's notes start. The supervisor posts as the operator's Linear user.
+  @supervisor_openers ["Supervisor review:", "Supervisor note:"]
 
   @typedoc "A comment on the parent: `parent_id` names the thread's first comment for a reply, `bot?` an integration's."
   @type comment :: %{
@@ -54,10 +60,11 @@ defmodule SymphonyElixir.PlanComments do
   @type last_run :: %{started_at: DateTime.t() | nil, ended_at: DateTime.t() | nil, comment_ids: [String.t()] | nil}
 
   @doc """
-  What a new comment on `issue` asks of Symphony: `:revise` for a `breakdown` parent in `In Review` (or Human Review)
+  What a new comment on `issue` asks of Symphony: `:revise` for a `breakdown` parent in `In Review`
   whose plan was not approved, `:answer` for one whose plan was (in the waiting state, or back in
-  `In Review` with sub-issues under way), nil otherwise. A parent whose sub-issues are all terminal
-  is left to its close-out.
+  `In Review` or the human review state with sub-issues under way), nil otherwise. A parent in the
+  human review state with its plan not approved waits for the operator, and one whose sub-issues
+  are all terminal is left to its close-out.
   """
   @spec action(Issue.t() | term(), Enumerable.t(String.t()), term()) :: action() | nil
   def action(%Issue{state: state} = issue, terminal_states, settings) when is_binary(state) do
@@ -66,6 +73,7 @@ defmodule SymphonyElixir.PlanComments do
       SubIssueWait.in_state?(issue, settings) -> :answer
       not HumanReview.review_state?(state, settings) -> nil
       Issue.waiting_on_sub_issues?(issue, terminal_states) -> :answer
+      HumanReview.in_state?(state, settings) -> nil
       true -> :revise
     end
   end
@@ -99,7 +107,7 @@ defmodule SymphonyElixir.PlanComments do
     end
   end
 
-  @doc "True when a person wrote `comment`: not an integration bot, and not one of Symphony's own comments."
+  @doc "True when a person wrote `comment`: not an integration bot, not one of Symphony's own comments and not a supervisor's note."
   @spec human?(comment() | term()) :: boolean()
   def human?(%{bot?: false, body: body}) when is_binary(body), do: not symphony_comment?(body)
   def human?(_comment), do: false
@@ -159,7 +167,7 @@ defmodule SymphonyElixir.PlanComments do
       Enum.any?(openers(), &String.starts_with?(trimmed, &1))
   end
 
-  defp openers, do: [Report.heading(), Request.heading() | BreakdownReview.comment_openers()] ++ @symphony_openers
+  defp openers, do: [Report.heading(), Request.heading() | BreakdownReview.comment_openers()] ++ @symphony_openers ++ @supervisor_openers
 
   defp entered_at(changes, state) do
     changes

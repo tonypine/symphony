@@ -86,10 +86,23 @@ When a person comments on a `breakdown` parent in `In Review` whose plan is not
 approved yet, Symphony moves it to `In Progress` and starts this run. It changes the
 plan in place; it is not a re-plan.
 
+What triggers it:
+
+- State: only `In Review`. A comment on a parent in `Human Review` starts nothing,
+  because Symphony never moves a ticket out of it; to have that plan revised, a
+  person moves the parent to `Rework` or back to `In Review`.
+- Openers: a comment starting with `Supervisor review:` or `Supervisor note:` never
+  triggers a run, in any state, like Symphony's own comments (the workpad, QA
+  reports, `Action needed` requests, the promote and cancel lists, and notes starting
+  `Symphony stopped`, `Symphony parked`, `Symphony couldn't`, `Symphony turned off`
+  or `Symphony quality gate`). The supervisor posts as the operator, and plan
+  approval stays the operator's call.
+
 1. Read every comment since the plan was handed over for review (newest first with
    `linear_get_comments`). Only people's comments count: skip the workpad, QA
-   reports, `Action needed` requests, Symphony's promote and cancel lists, and
-   integration bots. List in the workpad what each comment asks.
+   reports, `Action needed` requests, Symphony's promote and cancel lists, supervisor
+   notes (`Supervisor review:`, `Supervisor note:`), and integration bots. List in
+   the workpad what each comment asks.
 2. Edit the existing artifact comments (use cases, features, journeys and so on) with
    `linear_update_comment` instead of posting new copies. Start each edited comment
    with a short note of what changed.
