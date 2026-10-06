@@ -922,7 +922,7 @@ defmodule SymphonyElixir.AcceptanceGateTest do
       assert body =~ "**Mode:** enforce.\n"
 
       body = Report.render(enforce.(%{decision: approve, target: nil}))
-      assert body =~ "**Mode:** enforce, but the gate never moves a `breakdown` parent or a `Final verification:` ticket"
+      assert body =~ "**Mode:** enforce, but the gate never moves a plan parent or a `Final verification:` ticket"
 
       body = Report.render(report(%{mode: "off", decision: approve}))
       assert body =~ "**Mode:** off. The gate was turned off during this pass: this verdict is advisory"

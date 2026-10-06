@@ -89,8 +89,9 @@ branch instead of opening a second one. If a claimed issue moves to a terminal s
   verification with manual checks left) wait in `Human Review` instead of `In Review`, so the board,
   the dashboard and the menu bar show what waits on you apart from the supervisor's queue. Set
   `issues.states.human_review: null` to keep them in `In Review`.
-- **Parent tickets** — label a large ticket `breakdown` and the agent splits it into sub-tickets plus a
-  final verification ticket instead of opening a PR, then moves the parent to `In Review`. Approve the
+- **Parent tickets** — label a large ticket `plan` (`breakdown`, the label's older name, still works)
+  and the agent splits this plan ticket into sub-tickets plus a final verification ticket instead of
+  opening a PR, then moves the parent to `In Review`. Approve the
   plan by moving the parent to `Waiting on sub-tickets` and Symphony promotes every `Backlog`
   sub-ticket to `Todo`; comment on the plan while it is `In Review` to have it revised in place
   (artifact comments edited, `Backlog` sub-tickets updated, each comment answered); move it to
@@ -107,6 +108,10 @@ branch instead of opening a second one. If a claimed issue moves to a terminal s
   is moving to (bug, feature and `plan` ticket types, one review of a whole plan, artifacts in
   Linear documents) is recorded in
   [ADR 0001: the Director workflow](docs/adr/0001-director-workflow.md).
+
+  To move a workspace from `breakdown` to `plan`, rename the `breakdown` label to `plan` in Linear
+  (Settings → Labels). Linear renames it on every ticket, so parents already in flight keep their
+  state and Symphony starts no new run for them.
 - **Actions for a human** — when work waits on something only a person can do (a missing secret, a
   plan to approve, a QA pass or a final verification blocked on a permission, an issue labelled
   `human-action`), Symphony posts a Linear project update listing each one with its steps, and posts
@@ -365,7 +370,7 @@ A run already going then finishes as a normal run and gives the forced slot to t
 
 `agent.concurrency.forced_max` (default `1`) forced runs go at once, on top of the normal slots. A
 second forced ticket queues behind the first, shows `queued #2` on the dashboard, and sends one
-`forced_waiting` notification. Forcing never stops a running agent. Forcing a `breakdown` parent
+`forced_waiting` notification. Forcing never stops a running agent. Forcing a plan ticket
 forces its sub-tickets one at a time, in blocked-by order. See `concurrency.force_label` in
 [docs/configuration.md](docs/configuration.md) for the details.
 
@@ -375,7 +380,7 @@ Forcing only removes the wait for a slot. These transitions stay with a person:
 | --- | --- |
 | `Backlog` → `Todo` | a person promotes the ticket; forcing doesn't |
 | `In Review` or `Human Review` → `Merging` | a person approves the PR (an enforced acceptance gate moves its approvals from Auto Review itself) |
-| `In Review` or `Human Review` → `Waiting on sub-tickets` | a person approves a `breakdown` plan |
+| `In Review` or `Human Review` → `Waiting on sub-tickets` | a person approves a plan |
 | any state → `Rework` | a person rejects the approach |
 | `Final verification:` `In Review` or `Human Review` → `Done` | a person signs it off |
 

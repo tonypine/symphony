@@ -11,7 +11,7 @@ defmodule SymphonyElixir.HumanReview do
   - an Auto Review QA verdict `blocked` that the QA agent says needs a person (a missing secret or
     key, a check on a real device), as opposed to a tooling gap the factory can fix;
   - a parent walkthrough (`Final verification:`) whose remaining steps are manual;
-  - a `breakdown` plan whose ticket says a human reviews it (`requested_by_ticket?/2`);
+  - a plan whose ticket says a human reviews it (`requested_by_ticket?/2`);
   - an issue whose run posted a `linear_request_human_action` request.
 
   At startup Symphony checks that the Linear team has the state. When it is missing, the state is
@@ -89,7 +89,7 @@ defmodule SymphonyElixir.HumanReview do
 
   @doc """
   True when the ticket says a person reviews it: an `auto_review.acceptance_gate.escalate` label
-  other than `breakdown` (every plan has that one), or a title or description matching one of its
+  other than `plan` and `breakdown` (every plan has one), or a title or description matching one of its
   `ticket_patterns` ("must not auto-approve", "needs human", "human review"), where naming this
   state doesn't count (`Escalation.ticket_reasons/3`).
   """
