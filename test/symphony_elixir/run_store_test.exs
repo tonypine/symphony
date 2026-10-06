@@ -336,6 +336,25 @@ defmodule SymphonyElixir.RunStoreTest do
     restart_run_store()
   end
 
+  test "persists the issues a merge moved to the waiting state across run store restart" do
+    refute RunStore.merged_wait?("issue-merged")
+    assert :ok = RunStore.put_merged_wait("issue-merged")
+    assert :ok = RunStore.put_merged_wait("issue-merged")
+
+    restarted_pid = restart_run_store()
+
+    assert RunStore.merged_wait?("issue-merged")
+    refute RunStore.merged_wait?("issue-other")
+    assert :ok = RunStore.delete_merged_wait("issue-merged")
+    refute RunStore.merged_wait?("issue-merged")
+    assert {:error, :invalid_issue_id} = RunStore.put_merged_wait(nil)
+    assert {:error, :invalid_issue_id} = RunStore.merged_wait?(nil)
+    assert {:error, :invalid_issue_id} = RunStore.delete_merged_wait(nil)
+
+    if Process.alive?(restarted_pid), do: GenServer.stop(restarted_pid)
+    restart_run_store()
+  end
+
   test "interrupt_running_runs marks stale running records as failures" do
     now = DateTime.utc_now()
 
