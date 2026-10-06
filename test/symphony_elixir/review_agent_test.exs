@@ -568,6 +568,61 @@ defmodule SymphonyElixir.ReviewAgentTest do
     end
   end
 
+  test "evaluate on a worker host runs git through symphony_git with the repo's diff drivers off" do
+    test_root = unique_tmp("symphony-elixir-review-agent-worker-git")
+    previous_path = System.get_env("PATH")
+    on_exit(fn -> restore_env("PATH", previous_path) end)
+
+    try do
+      repo = git_repo_with_change!(test_root)
+      bin = Path.join(test_root, "bin")
+      trace = Path.join(test_root, "ssh.trace")
+      marker = Path.join(test_root, "diff-driver-ran")
+      driver = Path.join(test_root, "diff-driver")
+      File.mkdir_p!(bin)
+      File.write!(driver, "#!/bin/sh\ntouch '#{marker}'\n")
+      File.chmod!(driver, 0o755)
+      git!(repo, ["config", "diff.external", driver])
+
+      # Records the script `ssh` gets for `bash -lc` and runs it here, without a login shell.
+      File.write!(Path.join(bin, "ssh"), """
+      #!/bin/sh
+      for last; do :; done
+      eval "set -- $last"
+      printf '%s\\n' "$3" >> '#{trace}'
+      exec bash -c "$3"
+      """)
+
+      File.chmod!(Path.join(bin, "ssh"), 0o755)
+      System.put_env("PATH", bin <> ":" <> (previous_path || ""))
+      put_sequence_responses!([~s({"verdict":"approve","comments":[]})])
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        review_agent: %{enabled: true, kind: "codex", command: "codex app-server"}
+      )
+
+      assert {:ok, %{verdict: :approve}} =
+               ReviewAgent.evaluate(issue(), repo, Config.settings!(),
+                 review_agent_module: SequenceReviewer,
+                 worker_host: "worker-01"
+               )
+
+      assert_receive {:review_agent_sequence_call, 1, prompt, _opts}
+      assert prompt =~ "grounded evidence line"
+      refute File.exists?(marker)
+
+      script = File.read!(trace)
+      assert script =~ "symphony_git_raw() {"
+      assert script =~ "symphony_git '#{repo}' 'merge-base' 'origin/main' 'HEAD'"
+      assert script =~ ~r/symphony_git '#{Regex.escape(repo)}' 'diff' '--no-ext-diff' '--no-textconv' '[0-9a-f]{40}\.\.HEAD'/
+      assert script =~ "symphony_git '#{repo}' 'log' '--no-ext-diff' '--no-textconv' '--reverse'"
+      refute script =~ "'git' '-C'"
+    after
+      clear_sequence_responses!()
+      File.rm_rf(test_root)
+    end
+  end
+
   test "evaluate prompt reviews code quality and bugs, not the ticket's acceptance criteria or scope" do
     test_root = unique_tmp("symphony-elixir-review-agent-rubric")
 

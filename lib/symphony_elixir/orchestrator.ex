@@ -1720,6 +1720,10 @@ defmodule SymphonyElixir.Orchestrator do
   def act_on_plan_comments_for_test(%State{} = state, issues) when is_list(issues), do: act_on_plan_comments(state, issues)
 
   @doc false
+  @spec close_finished_parents_for_test([Issue.t()], term()) :: term()
+  def close_finished_parents_for_test(issues, %State{} = state) when is_list(issues), do: close_finished_parents(state, issues)
+
+  @doc false
   @spec park_breakdown_parents_for_test([Issue.t()], term()) :: term()
   def park_breakdown_parents_for_test(issues, %State{} = state) when is_list(issues), do: park_breakdown_parents(issues, state)
 
@@ -2811,6 +2815,7 @@ defmodule SymphonyElixir.Orchestrator do
       issues
       |> park_breakdown_parents(state)
       |> then(&review_breakdown_parents(issues, &1))
+      |> close_finished_parents(issues)
       |> act_on_plan_comments(issues)
 
     state =
@@ -2867,6 +2872,38 @@ defmodule SymphonyElixir.Orchestrator do
       {:error, reason} ->
         Logger.warning("Failed to refresh breakdown parents before parking; retrying next poll reason=#{inspect(reason)}")
         []
+    end
+  end
+
+  # An issue that waits on its sub-issues after its PR merged (not a `breakdown` parent) moves to
+  # Done once every sub-issue is terminal; its PR is merged, so no run is needed. Candidates come
+  # from the repo poll cache, so each one is read again first: a sub-issue filed meanwhile keeps it
+  # waiting, and a person may have moved it on.
+  defp close_finished_parents(%State{} = state, issues) do
+    settings = Config.settings!()
+    terminal_states = terminal_state_set()
+
+    case Enum.filter(issues, &(SubIssueWait.close?(&1, terminal_states, settings) and not issue_claimed_or_running?(state, &1.id))) do
+      [] -> :ok
+      closeable -> closeable |> Enum.map(& &1.id) |> close_finished_parents_fresh(terminal_states, settings)
+    end
+
+    state
+  end
+
+  defp close_finished_parents_fresh(issue_ids, terminal_states, settings) do
+    case Tracker.fetch_issue_states_by_ids(issue_ids) do
+      {:ok, fresh_issues} ->
+        for %Issue{} = issue <- fresh_issues, SubIssueWait.close?(issue, terminal_states, settings), do: close_finished_parent(issue)
+
+      {:error, reason} ->
+        Logger.warning("Failed to refresh issues waiting on sub-issues before closing them; retrying next poll reason=#{inspect(reason)}")
+    end
+  end
+
+  defp close_finished_parent(%Issue{} = issue) do
+    with {:error, reason} <- SubIssueWait.close(issue, Tracker.adapter()) do
+      Logger.warning("Failed to move an issue whose sub-issues are finished to Done; retrying next poll: #{issue_context(issue)} reason=#{inspect(reason)}")
     end
   end
 

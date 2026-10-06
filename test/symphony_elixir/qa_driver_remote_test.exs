@@ -99,7 +99,7 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
     #!/bin/sh
     mkdir -p macos/build/Demo.app/Contents/MacOS
     printf '<plist/>' > macos/build/Demo.app/Contents/Info.plist
-    printf '#!/bin/sh\\necho "qa root $SYMPHONY_BAR_QA_ROOT secret ${LINEAR_API_KEY:-none}"\\nexec sleep 30\\n' > macos/build/Demo.app/Contents/MacOS/Demo
+    printf '#!/bin/sh\\necho "qa root $SYMPHONY_BAR_QA_ROOT secret ${LINEAR_API_KEY:-none} openrouter $SYMPHONY_QA_OPENROUTER_URL"\\nexec sleep 30\\n' > macos/build/Demo.app/Contents/MacOS/Demo
     chmod +x macos/build/Demo.app/Contents/MacOS/Demo
     echo "built on $HOME"
     """)
@@ -152,7 +152,12 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
       refute File.exists?(Path.join(run_dir, "window-11.png"))
 
       assert {:ok, %{"quit" => true, "output" => app_output}} = QaDriver.call_tool(driver, "qa_quit_app", %{"pid" => pid})
-      assert app_output =~ "qa root #{run_dir}/app-root secret none"
+      assert app_output =~ "qa root #{run_dir}/app-root secret none openrouter http://127.0.0.1:"
+
+      # The app's SSH session forwards the URL's port on the QA host back to the stub.
+      [_line, remote_port] = Regex.run(~r{openrouter http://127\.0\.0\.1:(\d+)/api}, app_output)
+      %{stub: %{port: stub_port}} = :sys.get_state(driver)
+      assert trace() =~ "-R 127.0.0.1:#{remote_port}:127.0.0.1:#{stub_port} -o BatchMode=yes -o LogLevel=ERROR -o ExitOnForwardFailure=yes -T"
 
       # A fixture the agent wrote on the Symphony host becomes a file the QA user opens.
       fixture = Path.join(worktree, "qa-evidence/qa-config/symphony.yml")

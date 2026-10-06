@@ -35,11 +35,13 @@ defmodule SymphonyElixir.SSH do
   end
 
   # For callers that run the command themselves and parse its output: ssh never
-  # prompts and keeps its own warnings out of the output.
-  @spec command(String.t(), String.t()) :: {:ok, String.t(), [String.t()]} | {:error, term()}
-  def command(host, command) when is_binary(host) and is_binary(command) do
+  # prompts and keeps its own warnings out of the output. `:reverse_forwards` and
+  # `:options` add to the arguments as for `run/3`.
+  @spec command(String.t(), String.t(), keyword()) :: {:ok, String.t(), [String.t()]} | {:error, term()}
+  def command(host, command, opts \\ []) when is_binary(host) and is_binary(command) do
     with {:ok, executable} <- ssh_executable() do
-      {:ok, executable, ssh_args(host, command, options: ["-o", "BatchMode=yes", "-o", "LogLevel=ERROR"])}
+      options = ["-o", "BatchMode=yes", "-o", "LogLevel=ERROR" | Keyword.get(opts, :options, [])]
+      {:ok, executable, ssh_args(host, command, Keyword.put(opts, :options, options))}
     end
   end
 
