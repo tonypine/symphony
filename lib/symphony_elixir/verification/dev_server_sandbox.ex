@@ -67,9 +67,9 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
     executable = Keyword.get(opts, :executable, @sandbox_exec)
 
     case Keyword.get_lazy(opts, :os_type, &:os.type/0) do
-      {:unix, :darwin} = os_type ->
+      {:unix, :darwin} ->
         if File.regular?(executable) do
-          write_paths = [workspace, tmp_dir] ++ AgentCaches.write_paths() ++ item_replacement_paths(os_type, opts)
+          write_paths = [workspace, tmp_dir] ++ AgentCaches.write_paths() ++ item_replacement_paths(opts)
           profile = profile(workspace, write_paths, protected_paths(workspace))
           {:ok, [executable, "-p", profile, "/bin/sh", "-lc", start_cmd]}
         else
@@ -81,8 +81,14 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
     end
   end
 
-  defp item_replacement_paths(os_type, opts),
-    do: AgentSandboxConfig.item_replacement_write_paths(os_type: os_type, getconf: Keyword.get(opts, :getconf, "getconf"))
+  # Foundation stages a sandboxed process's atomic writes in
+  # `<DARWIN_USER_TEMP_DIR>/TemporaryItems`, whatever `TMPDIR` says.
+  defp item_replacement_paths(opts) do
+    case System.cmd(Keyword.get(opts, :getconf, "getconf"), ["DARWIN_USER_TEMP_DIR"], stderr_to_stdout: true) do
+      {user_temp_dir, 0} -> [Path.join(String.trim(user_temp_dir), "TemporaryItems")]
+      {_output, _status} -> []
+    end
+  end
 
   defp protected_paths(workspace),
     do: AgentSandboxConfig.workspace_protected_paths() ++ [".git" | AgentSandboxConfig.workspace_link_targets(workspace)]

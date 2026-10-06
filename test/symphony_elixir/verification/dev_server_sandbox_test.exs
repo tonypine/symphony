@@ -41,6 +41,25 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
       end
     end
 
+    test "lets the server write Foundation's item replacement folder", %{root: root, workspace: workspace, tmp_dir: tmp_dir} do
+      executable = Path.join(root, "sandbox-exec")
+      File.write!(executable, "")
+      user_temp_dir = Path.join(root, "user-temp")
+      getconf = Path.join(root, "getconf")
+      File.write!(getconf, "#!/bin/sh\necho #{user_temp_dir}/\n")
+      File.chmod!(getconf, 0o755)
+
+      assert {:ok, [^executable, "-p", profile | _argv]} =
+               DevServerSandbox.command("mix phx.server", workspace, tmp_dir,
+                 os_type: {:unix, :darwin},
+                 executable: executable,
+                 getconf: getconf
+               )
+
+      assert profile =~ ~s{(subpath "#{Path.join(real(root), "user-temp/TemporaryItems")}")}
+      refute profile =~ ~s{(subpath "#{real(user_temp_dir)}")}
+    end
+
     test "fails off macOS, where there is no Seatbelt", %{workspace: workspace, tmp_dir: tmp_dir} do
       assert {:error, {:dev_server_sandbox_unavailable, {:unix, :linux}}} =
                DevServerSandbox.command("mix phx.server", workspace, tmp_dir, os_type: {:unix, :linux})
