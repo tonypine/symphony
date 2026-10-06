@@ -186,6 +186,23 @@ final class StatusMenuTests: XCTestCase {
         )
     }
 
+    func testDetailLinesSaySymphonyIsSlowToAnswerUnderItsLastAnswer() {
+        XCTAssertEqual(
+            StatusMenu.detailLines(
+                .running(snapshot, external: false),
+                slowToAnswer: true,
+                waitingForKeychain: true,
+                controlError: "Couldn't pause Symphony: HTTP 500"
+            ),
+            [
+                "2 running · 1 retrying", "Symphony is slow to answer", "Waiting for Keychain access…",
+                "Couldn't pause Symphony: HTTP 500",
+            ]
+        )
+        // Still running, not a problem.
+        XCTAssertEqual(StatusMenu.statusTitle(.running(snapshot, external: false)), "Symphony is running")
+    }
+
     func testDetailLinesShowTheKeychainWaitBeforeTheRestart() {
         XCTAssertEqual(StatusMenu.detailLines(.stopped, waitingForKeychain: true), ["Waiting for Keychain access…"])
         XCTAssertEqual(
