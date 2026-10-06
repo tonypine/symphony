@@ -175,7 +175,9 @@ pre_push_review:
 #   playbooks: {}
 #   # Acceptance gate (docs/acceptance_gate.md): after QA, decides whether a PR
 #   # can merge without a human; escalation rules send it to one regardless.
-#   # Nothing runs it yet. Configured lists add to the built-in rules.
+#   # off never runs it; shadow comments a verdict and moves nothing; enforce
+#   # approves to Merging, reworks to In Progress and escalates to In Review.
+#   # Configured lists add to the built-in rules.
 #   acceptance_gate:
 #     mode: off              # off | shadow | enforce (the kill switch)
 #     runtime: claude
