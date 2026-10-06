@@ -946,9 +946,12 @@ defmodule SymphonyElixir.CiPoller do
     end
   end
 
+  # A failure on an approved (`Merging`) PR is marked `approved`, so a fix run that finds a flake
+  # and pushes nothing can hand the PR back to `Merging` once its head is green.
   defp persist_and_dispatch_ci_failure(record, ci_status, failed_checks, opts, now, tracker, issue_id, log_excerpt) do
     retry_count = ci_retry_count(record) + 1
-    ci_failure = ci_failure_context(ci_status, failed_checks, log_excerpt)
+    approved? = MapSet.member?(Keyword.get(opts, :merging_issue_ids, MapSet.new()), issue_id)
+    ci_failure = ci_status |> ci_failure_context(failed_checks, log_excerpt) |> Map.put(:approved, approved?)
 
     attrs =
       ci_status_attrs(
@@ -1570,7 +1573,8 @@ defmodule SymphonyElixir.CiPoller do
         is_cross_repository: ci_failure_value(ci_failure, :is_cross_repository),
         head_repository: ci_failure_value(ci_failure, :head_repository),
         failed_checks: failed_checks,
-        log_excerpt: log_excerpt
+        log_excerpt: log_excerpt,
+        approved: ci_failure_value(ci_failure, :approved) == true
       }
     end
   end

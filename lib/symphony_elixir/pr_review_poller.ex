@@ -825,6 +825,26 @@ defmodule SymphonyElixir.PrReviewPoller do
     end)
   end
 
+  @doc """
+  Drops the CI-fix hold (see `AutoMerge.held?/1`) on the issue's PR, so its next `Merging` stay
+  turns auto-merge on again. A CI-fix run that pushed nothing calls it before it moves the issue
+  back to `Merging`, which this poller may not have seen it leave. Failing to drop it is logged:
+  auto-merge then stays off for that stay, as for any CI-fix hold.
+  """
+  @spec release_auto_merge_hold(String.t(), keyword()) :: :ok
+  def release_auto_merge_hold(issue_id, opts \\ []) when is_binary(issue_id) do
+    run_store = Keyword.get(opts, :run_store, RunStore)
+
+    Enum.each(repo_keys_from_opts(opts), fn repo_key ->
+      with {:ok, records} <- list_pr_reviews(run_store, repo_key),
+           %{auto_merge: auto_merge} <- Enum.find(records, &(Map.get(&1, :issue_id) == issue_id)),
+           true <- AutoMerge.held?(auto_merge),
+           {:error, reason} <- run_store.update_pr_review(repo_key, issue_id, %{auto_merge: nil}) do
+        Logger.warning("Failed to drop the CI-fix auto-merge hold issue_id=#{issue_id}: #{inspect(reason)}")
+      end
+    end)
+  end
+
   @doc "Every PR the poller is landing with auto-merge, with a short status for the dashboard."
   @spec auto_merge_statuses(keyword()) :: [map()]
   def auto_merge_statuses(opts \\ []) do
