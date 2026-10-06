@@ -37,6 +37,8 @@ defmodule SymphonyElixir.CiPoller do
   # commits change an agent-protected path until a person adds the waiver label.
   @human_only_checks ["protected paths"]
   @waiver_label "protected-paths-approved"
+  # Asks for a person whatever the acceptance gate's `escalate.labels` say (see `await_human_action/6`).
+  @needs_human_label "needs-human"
   # How long a `Merging` head waits on checks its base branch doesn't require before it may land
   # without them (see `track_landing_wait/4`).
   @landing_fallback_ms 15 * 60_000
@@ -447,12 +449,13 @@ defmodule SymphonyElixir.CiPoller do
     repo_key = repo_key_from_opts(opts)
     tracker = Keyword.get(opts, :tracker, Tracker)
 
-    with {:ok, discovered, auto_review_issues, merging_issue_ids, landing_issue_ids} <-
+    with {:ok, discovered, watched_issues, auto_review_issues, merging_issue_ids, landing_issue_ids} <-
            discover_ci_checks(settings, run_store, tracker, repo_key, now, opts),
          {:ok, checks} <- list_ci_checks(run_store, repo_key) do
       opts =
         opts
         |> put_prefetched_rework_sources(run_store, repo_key, checks)
+        |> Keyword.put(:watched_issues_by_id, Map.new(watched_issues, &{&1.id, &1}))
         |> Keyword.put(:auto_review_issues, auto_review_issues)
         |> Keyword.put(:merging_issue_ids, merging_issue_ids)
         |> Keyword.put(:landing_issue_ids, landing_issue_ids)
@@ -494,7 +497,7 @@ defmodule SymphonyElixir.CiPoller do
       observe_gate_decisions(settings, repo_key, issues, existing, opts)
 
       merging_issue_ids = auto_merge_issue_ids(settings, issues)
-      {:ok, discovered, auto_review_issues(settings, issues), merging_issue_ids, landing_issue_ids(issues)}
+      {:ok, discovered, issues, auto_review_issues(settings, issues), merging_issue_ids, landing_issue_ids(issues)}
     end
   end
 
@@ -691,11 +694,8 @@ defmodule SymphonyElixir.CiPoller do
       Enum.all?(failed_checks, &human_only_check?/1) ->
         await_waiver(record, ci_status, failed_checks, opts, now)
 
-      flaky_retry?(settings) and not rerun_attempted_for_sha?(record, commit_sha) ->
-        rerun_failed_ci(record, ci_status, failed_checks, settings, opts, now)
-
-      escalate_ci_failure?(record, settings, commit_sha, opts, now) ->
-        escalate_ci_failure(record, ci_status, failed_checks, settings, opts, now)
+      acts_on_failure?(record, commit_sha, settings, opts, now) ->
+        act_on_failure(record, ci_status, failed_checks, settings, opts, now)
 
       Map.get(record, :status) == "escalated" ->
         attrs =
@@ -703,15 +703,104 @@ defmodule SymphonyElixir.CiPoller do
 
         complete_ci_update(opts, record, attrs, {:already_handled, Map.get(record, :issue_id), commit_sha})
 
-      dispatched_for_sha?(record, commit_sha) ->
+      true ->
         attrs =
           ci_status_attrs(record, ci_status, %{status: "failure_already_handled", failed_checks: failed_checks}, now)
 
         complete_ci_update(opts, record, attrs, {:already_handled, Map.get(record, :issue_id), commit_sha})
-
-      true ->
-        dispatch_ci_failure(record, ci_status, failed_checks, settings, opts, now)
     end
+  end
+
+  # The poller acts on a red head (a rerun, an escalation, a fix run) only when it hasn't rerun,
+  # dispatched or escalated it yet, or when the retries ran out. The issue is read only then, so a
+  # head a fix run is already working on costs no Linear request per poll.
+  defp acts_on_failure?(record, commit_sha, settings, opts, now) do
+    (flaky_retry?(settings) and not rerun_attempted_for_sha?(record, commit_sha)) or
+      escalate_ci_failure?(record, settings, commit_sha, opts, now) or
+      not (Map.get(record, :status) == "escalated" or dispatched_for_sha?(record, commit_sha))
+  end
+
+  defp act_on_failure(record, ci_status, failed_checks, settings, opts, now) do
+    commit_sha = Map.get(ci_status, :commit_sha)
+
+    case parked_for_person(record, settings, opts) do
+      {:error, reason} ->
+        record_poll_error(record, {:issue_read_failed, reason}, opts, now)
+
+      {:parked, issue} ->
+        await_human_action(record, issue, ci_status, failed_checks, opts, now)
+
+      :not_parked ->
+        cond do
+          flaky_retry?(settings) and not rerun_attempted_for_sha?(record, commit_sha) ->
+            rerun_failed_ci(record, ci_status, failed_checks, settings, opts, now)
+
+          escalate_ci_failure?(record, settings, commit_sha, opts, now) ->
+            escalate_ci_failure(record, ci_status, failed_checks, settings, opts, now)
+
+          true ->
+            dispatch_ci_failure(record, ci_status, failed_checks, settings, opts, now)
+        end
+    end
+  end
+
+  # An agent that needs a person parks its issue outside the active states with a label that
+  # asks for one (`human_actions.label`, or a label the acceptance gate escalates on). A fix run
+  # can't do what the person must: it would only merge the base branch, push a new head and park
+  # the issue again. The issue stays where it is, with no rerun, fix run or escalation and no fix
+  # attempt spent, until a person removes the label, moves the issue to an active state, or the
+  # head turns green.
+  defp await_human_action(record, %Issue{} = issue, ci_status, failed_checks, opts, now) do
+    issue_id = Map.get(record, :issue_id)
+    commit_sha = Map.get(ci_status, :commit_sha)
+
+    unless Map.get(record, :status) == "awaiting_human_action" and Map.get(record, :last_observed_sha) == commit_sha do
+      Logger.info(
+        "CI #{Map.get(record, :issue_identifier)}: #{Enum.map_join(failed_checks, ", ", &Map.get(&1, :name))} failed while the issue waits in #{issue.state} for a person; no CI-fix run issue_id=#{issue_id} pr_url=#{Map.get(record, :pr_url)} commit_sha=#{commit_sha}"
+      )
+    end
+
+    waiting = %{status: "awaiting_human_action", failed_checks: failed_checks, ci_failure: nil, log_excerpt: nil}
+    attrs = ci_status_attrs(record, ci_status, waiting, now)
+    complete_ci_update(opts, record, attrs, {:awaiting_human_action, issue_id, commit_sha})
+  end
+
+  # This poll's read of the watched states has the issue when it sits in one; any other issue
+  # (`Backlog`, an active state) is read by id.
+  defp parked_for_person(record, settings, opts) do
+    issue_id = Map.get(record, :issue_id)
+
+    case read_issue(issue_id, opts) do
+      {:ok, %Issue{} = issue} -> if parked_issue?(issue, settings), do: {:parked, issue}, else: :not_parked
+      {:ok, nil} -> :not_parked
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp read_issue(issue_id, opts) do
+    case Map.fetch(Keyword.get(opts, :watched_issues_by_id, %{}), issue_id) do
+      {:ok, issue} ->
+        {:ok, issue}
+
+      :error ->
+        with {:ok, issues} <- Keyword.get(opts, :tracker, Tracker).fetch_issue_states_by_ids([issue_id]) do
+          {:ok, Enum.find(issues, &match?(%Issue{id: ^issue_id}, &1))}
+        end
+    end
+  end
+
+  defp parked_issue?(%Issue{labels: labels} = issue, settings) do
+    wanted = MapSet.new(person_labels(settings), &normalize_state_name/1)
+
+    not issue_in_states?(issue, settings.tracker.active_states) and
+      Enum.any?(labels || [], &(is_binary(&1) and MapSet.member?(wanted, normalize_state_name(&1))))
+  end
+
+  # `plan` and `breakdown` are acceptance gate labels every plan carries, not a request for a
+  # person (see `HumanReview.requested_by_ticket?/2`).
+  defp person_labels(settings) do
+    [settings.human_actions.label, @needs_human_label | settings.auto_review.acceptance_gate.escalate.labels]
+    |> Enum.reject(&Issue.breakdown_label?/1)
   end
 
   # A fix run can't clear a human-only check, so the issue stays where it is (the agent that
