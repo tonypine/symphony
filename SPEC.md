@@ -2164,6 +2164,15 @@ The poller:
   <branch>; waiting on every check`), the landing waits on every check as above. The poller
   records the head it last saw ready to land for each `Merging` issue, and the orchestrator
   releases a held landing run on it as on a green head.
+- times how long a `Merging` head has waited on its checks: consecutive landing reads of the same
+  head that are still waiting keep the wait, and a new head, a failed check, a ready head or a read
+  outside `Merging` ends it. After 15 minutes, a head whose base branch was read as requiring no
+  check, with none failed, no rerun of a failed job starting and at least one check passed, is
+  ready to land without the checks still pending: the landing run's CI wait and the merge tool
+  read that mark for the same head, and a check that failed since still holds it. The first time a
+  wait lets a head past, the poller logs `Landing without the checks still pending after <n> min in
+  Merging; the base branch requires none` with the skipped checks, and comments once on the issue
+  naming them. A base branch whose required checks can't be read never takes this path.
 
 Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `enabled: true`):
 
