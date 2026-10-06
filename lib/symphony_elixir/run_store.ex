@@ -1187,7 +1187,6 @@ defmodule SymphonyElixir.RunStore do
       {:cont, :ok}
     else
       {:error, reason} -> {:halt, {:error, reason}}
-      other -> {:halt, {:error, other}}
     end
   end
 
