@@ -39,16 +39,26 @@ defmodule SymphonyElixir.QaAndroid.Driver do
     newlines only, and every chunk is single-quoted for the device's shell, so no
     character in it can run a command. Rotate locks the rotation through the
     window manager and succeeds only once the display has turned, or fails with
-    `qa_android_rotate_failed`.
+    `qa_android_rotate_failed`;
+  - `qa_android_put_file` puts a fixture file the agent wrote into the
+    emulator's shared `Download/` folder, the only place it may write, so the
+    system file picker offers it to an import. The file passes the checks of
+    `qa_put_file` (see `SymphonyElixir.QaDriver.Checks.read_fixture/4`): a
+    regular file of at most 1 MB that resolves inside the worktree or the
+    pass's `$TMPDIR` (`:tmp_dir`), with no other hard link. The destination is
+    `Download/<name>`, a name of letters, digits, `.`, `_` and `-`. The checked
+    bytes are copied into the private directory, `adb push`ed to
+    `/sdcard/Download/<name>` and handed to the media scanner. A reinstall
+    wipes app data, not Downloads, so the file stays until the pass ends.
 
   The driver takes the emulator's lease when it starts. When the emulator cannot
   run (a missing SDK or AVD, a boot timeout), every tool fails with
   `qa_android_unavailable` and tells the agent to mark the Android steps
-  `blocked`. When the driver stops (the QA pass ends or crashes) it uninstalls
-  the configured apps and every package installed in the pass, gives the lease
-  back and removes its private directory, a
-  `0700` directory under Symphony's state root, outside every path the agent
-  sandbox may write.
+  `blocked`. When the driver stops (the QA pass ends or crashes) it removes the
+  files it put in Downloads, uninstalls the configured apps and every package
+  installed in the pass, gives the lease back and removes its private
+  directory, a `0700` directory under Symphony's state root, outside every path
+  the agent sandbox may write.
   """
 
   use GenServer
@@ -61,7 +71,7 @@ defmodule SymphonyElixir.QaAndroid.Driver do
 
   @tools ~w(qa_android_install qa_android_launch qa_android_stop qa_android_screenshot
              qa_android_ui_tree qa_android_tap qa_android_type qa_android_key qa_android_rotate
-             qa_android_dark_mode qa_android_font_scale)
+             qa_android_dark_mode qa_android_font_scale qa_android_put_file)
   @max_apk_bytes 512 * 1024 * 1024
   @max_screenshots 50
   @adb_timeout_ms 30_000
@@ -109,6 +119,7 @@ defmodule SymphonyElixir.QaAndroid.Driver do
     dark_mode: ["shell", "cmd", "uimode", "night", "no"],
     font_scale: ["shell", "settings", "put", "system", "font_scale", "1.0"]
   ]
+  @downloads "/sdcard/Download/"
   @application_id ~r/\A[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+\z/
 
   @type cmd :: (String.t(), [String.t()], keyword() -> {:ok, {String.t(), integer()}} | {:error, term()})
@@ -126,7 +137,8 @@ defmodule SymphonyElixir.QaAndroid.Driver do
   Starts a driver for one QA pass and takes the emulator's lease.
 
   Options: `:worktree` (required), `:playbook` (the `android_app` playbook with
-  `apk_paths` and `application_ids`), `:git` (a `fn args, cwd -> {output, status}`),
+  `apk_paths` and `application_ids`), `:tmp_dir` (the pass's `$TMPDIR`, where
+  `qa_android_put_file` may read besides the worktree), `:git` (a `fn args, cwd -> {output, status}`),
   and, for tests, `:cmd` (runs an adb command, as
   `SymphonyElixir.QaDriver.Host.cmd/3`), `:checkout` and `:checkin` (as
   `SymphonyElixir.QaAndroid.Emulator.checkout/2` and `checkin/2`), `:open`
@@ -289,6 +301,22 @@ defmodule SymphonyElixir.QaAndroid.Driver do
          :ok <- GenServer.call(driver, {:changed, :font_scale}),
          {:ok, _output} <- adb_ok(config, ["shell", "settings", "put", "system", "font_scale", scale], @adb_timeout_ms) do
       {:ok, %{"font_scale" => String.to_float(scale)}}
+    end
+  end
+
+  defp run_tool("qa_android_put_file", driver, config, args) do
+    with {:ok, local_path} <- Checks.fixture_path(Map.get(args, "local_path")),
+         {:ok, name} <- download_name(Map.get(args, "dest"), local_path),
+         {:ok, _path, bytes} <- Checks.read_fixture(config.fixture_roots, config.worktree, local_path, "qa_android_put_file"),
+         :ok <- GenServer.call(driver, {:pushed, name}),
+         :ok <- push_download(config, bytes, name),
+         {:ok, _output} <- adb_ok(config, ["shell", "am", "broadcast", "-a", "android.intent.action.MEDIA_SCANNER_SCAN_FILE", "-d", "file://" <> @downloads <> name], @adb_timeout_ms) do
+      {:ok,
+       %{
+         "path" => "Download/" <> name,
+         "bytes" => byte_size(bytes),
+         "note" => "The system file picker lists it under Downloads. qa_android_install wipes app data, not Downloads, so the file stays there until the QA pass ends."
+       }}
     end
   end
 
@@ -538,6 +566,33 @@ defmodule SymphonyElixir.QaAndroid.Driver do
   end
 
   defp install_failed(output), do: tool_error("qa_android_install_failed", "adb install failed: #{tail(String.trim(output), 2_000)}")
+
+  # -- fixture files ------------------------------------------------------------
+
+  defp download_name(nil, local_path), do: download_name("Download/" <> Path.basename(local_path), local_path)
+
+  defp download_name("Download/" <> name, _local_path) do
+    if Checks.fixture_name?(name), do: {:ok, name}, else: download_name(:invalid, nil)
+  end
+
+  defp download_name(_dest, _local_path) do
+    tool_error(
+      "invalid_arguments",
+      "`dest` must be `Download/<name>`, a name of 1-128 letters, digits, `.`, `_` or `-` starting with a letter or digit; QA puts files only in the emulator's Downloads."
+    )
+  end
+
+  # The checked bytes travel, not the path, which the agent can still change.
+  defp push_download(config, bytes, name) do
+    copy = Path.join(config.scratch_dir, "put-#{System.unique_integer([:positive])}")
+    File.write!(copy, bytes, [:exclusive])
+
+    try do
+      with {:ok, _output} <- adb_ok(config, ["push", copy, @downloads <> name], @adb_timeout_ms), do: :ok
+    after
+      File.rm(copy)
+    end
+  end
 
   # -- launch -----------------------------------------------------------------
 
@@ -888,6 +943,7 @@ defmodule SymphonyElixir.QaAndroid.Driver do
       apk_paths: Map.fetch!(playbook, :apk_paths),
       # They are passed to `adb shell`, which runs them through the device's shell.
       application_ids: playbook |> Map.fetch!(:application_ids) |> Enum.filter(&(is_binary(&1) and Regex.match?(@application_id, &1))),
+      fixture_roots: Checks.fixture_roots(worktree, Keyword.get(opts, :tmp_dir)),
       git: Keyword.get(opts, :git, &default_git/2),
       cmd: Keyword.get(opts, :cmd, &Host.cmd/3),
       checkout: Keyword.get(opts, :checkout, fn -> Emulator.checkout() end),
@@ -899,7 +955,7 @@ defmodule SymphonyElixir.QaAndroid.Driver do
       scratch_dir: nil
     }
 
-    state = %{config: config, baseline: nil, installed: [], screenshots: 0, tree: %{}, changed: []}
+    state = %{config: config, baseline: nil, installed: [], screenshots: 0, tree: %{}, changed: [], pushed: []}
     {:ok, state, {:continue, :checkout}}
   end
 
@@ -964,6 +1020,9 @@ defmodule SymphonyElixir.QaAndroid.Driver do
   # Recorded before the setting is changed, so a change that half went through is reset too.
   def handle_call({:changed, setting}, _from, state), do: {:reply, :ok, %{state | changed: Enum.uniq([setting | state.changed])}}
 
+  # Recorded before the push too, so a file that half arrived is removed.
+  def handle_call({:pushed, name}, _from, state), do: {:reply, :ok, %{state | pushed: Enum.uniq([name | state.pushed])}}
+
   # The driver traps exits, so every adb port it opens sends an `:EXIT` when it closes.
   # The QA pass that owns the driver is its parent: GenServer stops on its exit itself.
   @impl true
@@ -978,6 +1037,7 @@ defmodule SymphonyElixir.QaAndroid.Driver do
   def terminate(_reason, %{config: config} = state) do
     if config.lease do
       for {setting, reset} <- @setting_resets, setting in state.changed, do: reset_setting(config, reset)
+      if state.pushed != [], do: adb(config, ["shell", "rm", "-f" | Enum.map(state.pushed, &(@downloads <> &1))], @adb_timeout_ms)
       remove_installed(config, state.baseline)
       config.checkin.(config.lease)
     end

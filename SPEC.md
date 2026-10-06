@@ -272,12 +272,17 @@ Fields:
 - `last_codex_timestamp` (timestamp or null)
 - `last_event_at` (timestamp or null)
   - Updated for every transcript event and initialized when runtime dispatch metadata is received.
-  - Also updated when a workspace hook starts or ends.
+  - Also updated when a workspace hook starts or ends, and when a call of one of Symphony's own
+    MCP tools ends.
   - Used by no-progress watchdog detection.
 - `workspace_hook` (object or null)
   - The `after_create` or `before_run` hook the worker is running: `name`, and `deadline`, when the
     hook's own timeout ends it. Null when no hook runs.
   - Used by stall detection and the watchdog (Section 8.5).
+- `pending_tool_calls` (map)
+  - The calls of Symphony's own MCP tools the run's agent is waiting on, each with `name`,
+    `started_at`, and `deadline`, when the tool timeout stops it (null for QA tools).
+  - Used by the watchdog (Section 8.5) and the runtime snapshot (Section 13.4).
 - `last_codex_message` (summarized payload)
 - `input_tokens` (integer, legacy total input bucket)
 - `uncached_input_tokens` (integer)
@@ -357,6 +362,10 @@ are repo-scoped by default, with selected aggregate helpers for cross-repo accou
 
 Live scheduler state still owns dispatch decisions. Durable records are used for restart recovery
 and observability, not as a second concurrent scheduler.
+
+A running run's record MAY be written on a bounded cadence rather than on every agent event. The
+Elixir implementation writes it when the run's session, PR, workspace, worker host or turn changes,
+and otherwise at most every 5 s; the run's completion writes the final record.
 
 ### 4.2 Stable Identifiers and Normalization Rules
 
@@ -525,6 +534,28 @@ Fields:
     repo runs or waits joins it and reuses its result; a targeted fetch waits its turn. A fetch
     that fails with `cannot lock ref` is retried once after a short delay. On a remote worker the
     dispatch script's `git fetch origin` is not locked, only retried once.
+  - A host-side `git worktree add` for a dispatch takes the same per-repo lock, so the
+    dispatches of one repo add their worktrees one at a time. A new branch made from a base ref
+    is added with `--no-track`: no upstream config goes into the shared `.git/config`, whose
+    lock parallel adds would otherwise race for (the loser exits 255, its branch made but no
+    worktree). A failed add logs git's output. A host-side `git worktree remove` takes the lock
+    too, whether it removes an issue workspace (with the branch delete after it) or the
+    throwaway worktree of an acceptance gate run or a QA pass. So does the `git worktree add
+    --detach` of each throwaway worktree: the acceptance gate's merge onto the base branch and
+    its checkout of the merged commit, and a QA pass's checkouts of the PR head.
+  - On a remote worker the dispatch script's `git worktree add` takes a per-repo lock on the
+    worker host: a `symphony-worktree-add.lock` directory in the repo's git common dir, holding
+    the script's pid, so parallel dispatches to one remote repo add their worktrees one at a
+    time. The script waits up to half the hook timeout (at least 1 second) for it, then fails
+    with status 47 and `workspace_worktree_lock_timeout: <lock>`. It drops the lock after the
+    add and on any exit or hangup; a lock whose holder process is gone is taken over.
+  - Every git call Symphony makes runs SSH with keepalives, so a connection that stops answering
+    is dropped after about a minute. A host-side `fetch`, `pull`, `push` or `ls-remote` also has
+    a wall-clock limit (`workspaces.git_network_timeout_ms`, 5 minutes by default; unset, the
+    `:git_network_timeout_ms` application env applies first): at
+    the limit Symphony stops git and the `ssh` it started, logs an error naming the repo and
+    command, and the call fails with status 124, so the fetch lock passes to the next call. Each
+    such call logs its status and duration.
   - `source` (string) OPTIONAL: a GitHub repository, as `owner/repo` or a github.com URL, that
     Symphony clones and manages itself instead of using a local checkout.
     - The clone lives at `<workspaces.clones_root>/<owner>/<repo>` and is made without a working
@@ -634,6 +665,9 @@ Fields:
   - Defaults for `repositories[].workspace`.
   - Multi-repo configs SHOULD set worktree population under each repo instead of globally.
   - `strategy` defaults to `clone`; `fetch_before_dispatch` defaults to `true`.
+- `git_network_timeout_ms` (positive integer)
+  - Default: `300000`.
+  - The wall-clock limit of each host-side git `fetch`, `pull`, `push` or `ls-remote`.
 - `cleanup` (object)
   - Optional workspace lifecycle guardrails.
   - `enabled` defaults to `true`.
@@ -1306,6 +1340,13 @@ When enabled:
   workflows on a PR that conflicts with its base, so an issue in `state` whose PR has no checks
   and is `CONFLICTING` (or `DIRTY`) MUST move to `Rework` with a comment naming the base branch to
   merge in, instead of waiting for CI.
+- A QA `blocked` the QA agent did not give itself (an agent error or crash, a dev server, emulator
+  or browser that did not start, a usage limit with `agent.usage_limit.auto_pause` off) MUST NOT be
+  applied again once it moved the issue on: when the issue returns to `state` on the same head SHA,
+  Symphony MUST drop that QA verdict and the acceptance gate's verdict for the SHA and run a fresh
+  QA pass before the gate judges it. A `blocked` verdict from the QA agent is applied again as
+  before. A `blocked` stored before Symphony recorded which kind it was is classified by its
+  reason: one of Symphony's own error reasons counts as not given by the QA agent.
 - QA selection is deterministic and runs before any agent: a `qa:skip` label skips; a
   `qa:<kind>` label selects that playbook; a diff that only touches docs, tests or `skip_globs`
   skips; otherwise playbooks are selected by their trigger paths, and the `cli` playbook also by a
@@ -1373,9 +1414,13 @@ When enabled:
   nodes were left out; tap MUST refuse a point off the display and a path that is not in the last
   tree; keys, orientations, night modes and font scales MUST come from fixed allowlists; rotate MUST
   report success only once the display has turned, and `qa_android_rotate_failed` otherwise; and typed
-  text MUST reach the device's shell quoted so that no character in it can run a command. When the
+  text MUST reach the device's shell quoted so that no character in it can run a command.
+  `qa_android_put_file` MUST read its file under the `qa_put_file` rules (a regular file of bounded
+  size inside the worktree or the pass's `$TMPDIR`, no symlink, no other hard link, not swapped
+  while read) and MUST write only to `Download/<name>` on the device's shared storage, with a name
+  of letters, digits, `.`, `_` and `-`, then have the media scanner index it. When the
   pass ends or crashes, Symphony MUST reset the rotation, dark mode and font scale the pass changed,
-  uninstall the configured apps and every package installed in the pass, release the lease and
+  remove the files it put in Downloads, uninstall the configured apps and every package installed in the pass, release the lease and
   remove its private directory. An emulator that cannot start MUST
   surface as `qa_android_unavailable`, telling the agent to answer `blocked`. Other tool scopes MUST
   NOT list or run them. The QA prompt MUST give the agent the playbook's `build`, every APK path and
@@ -1450,7 +1495,9 @@ When enabled:
   with the unmet criteria as continuation context, counted against `auto_review.max_fix_attempts`
   with QA fails (the `rework` past it goes to `In Review`), and `escalate` to `In Review`, with the
   comment opening on the escalation reasons; up to 3 follow-ups per verdict are filed as Backlog
-  sub-issues, never twice with the same title. The mode is read on every poll, so a switch back to
+  sub-issues, never twice with the same title, never for a gap an existing ticket of the issue's
+  family covers (named in the comment instead), and only with an acceptance criterion that does
+  not restate the title. The mode is read on every poll, so a switch back to
   `shadow` or `off` stops the moves without a restart. The gate MUST NOT move a `breakdown` parent or
   a `Final verification:` ticket. When a judged issue leaves `In Review`, the human's decision at
   that SHA SHOULD be recorded on the gate run (a move to `Merging` is `approve`; a move to `Rework`,
@@ -1786,15 +1833,26 @@ not require recognizing or validating extension fields unless that extension is 
   ignores both and logs a warning. A Claude run whose provider is `openrouter` also starts with
   `ANTHROPIC_BASE_URL=https://openrouter.ai/api`, `ANTHROPIC_AUTH_TOKEN` set from the
   `OPENROUTER_API_KEY` environment variable of the Symphony process, an empty
-  `ANTHROPIC_API_KEY`, and `CLAUDE_CODE_SUBAGENT_MODEL=<model>`. If `OPENROUTER_API_KEY` is unset
-  or blank, the run fails before the agent starts with an error naming the run kind and the
-  variable. The key MUST NOT be written to config, logs, the audit log, the run store, or
+  `ANTHROPIC_API_KEY`, `CLAUDE_CODE_SUBAGENT_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL` and
+  `ANTHROPIC_DEFAULT_OPUS_MODEL` set to `<model>`, and `ANTHROPIC_DEFAULT_HAIKU_MODEL` and
+  `ANTHROPIC_SMALL_FAST_MODEL` set to `agent.small_model` when it is set, else `<model>`. If
+  `OPENROUTER_API_KEY` is unset or blank, the run fails before the agent starts with an error
+  naming the run kind and the variable. The key MUST NOT be written to config, logs, the audit log, the run store, or
   transcripts. Before an OpenRouter run starts, the implementation looks the model up in
   OpenRouter's models catalog (`GET https://openrouter.ai/api/v1/models`, cached in process with
   a TTL). A model whose `supported_parameters` lacks `tools` fails the run before the agent starts,
   with an error naming the model, the run kind, and the missing capability. A model without
   `reasoning` starts without `--effort`, with a warning logged once per model. If the catalog
-  cannot be read, or does not list the model, the run starts and a warning is logged.
+  cannot be read, or does not list the model, the run starts and a warning is logged. QA tests
+  these flows against a local stub OpenRouter: `SYMPHONY_QA_OPENROUTER_URL` replaces
+  `https://openrouter.ai/api` (for runs and the catalog) only while `SYMPHONY_BAR_QA_ROOT` is set
+  and only with an `http(s)` URL on a loopback host; anywhere else the implementation MUST use
+  `https://openrouter.ai/api`.
+- `agent.small_model`: OpenRouter model id string or null, default `null`. The model for the
+  agent's background calls (titles, summaries) on runs whose provider is `openrouter`; null
+  leaves them on the run's model. Runs whose provider is `anthropic` ignore it. When the
+  OpenRouter models catalog can be read, `symphony check` reports an id it does not list as an
+  error naming `agent.small_model`.
 - `agent.prompts.include_project_guides`: boolean, default `true`
 - `agent.prompts.project_guide_files`: list of relative paths or null, default `null`
 - `agent.permissions.approval_policy`: agent approval policy, default depends on `agent.runtime`
@@ -1809,6 +1867,7 @@ not require recognizing or validating extension fields unless that extension is 
 - `agent.timeouts.read_ms`: integer, default `30000`
 - `agent.timeouts.stall_ms`: integer, default `300000`
 - `agent.timeouts.command_ms`: integer, default `600000`
+- `agent.timeouts.mcp_tool_ms`: positive integer, default `600000`
 - `watchdog.enabled`: boolean, default `true`
 - `watchdog.tick_interval_ms`: integer, default `60000`
 - `watchdog.no_progress_threshold_ms`: integer, default `600000`
@@ -1951,10 +2010,24 @@ Important nuance:
   the run ends as before and the post-PR transition's workspace check applies.
 - When the workspace `HEAD` is readable, two consecutive turns with no new commit, no issue state
   change, no newly attached PR and no reviewer-agent verdict MUST end the run, move the issue to
-  `Backlog` and post a comment saying why. This does not apply in `Merging`, nor while the attached
-  PR's head is the workspace `HEAD` and that head has checks still pending; such a run (in
-  `Rework`, one that started on that head, or one whose pushed head awaits the pre-push reviewer)
-  keeps turning up to `agent.max_turns`.
+  `Backlog` and post a comment saying why. This does not apply in `Merging`. Nor does it apply to
+  a `Rework` run while the attached PR's head is the workspace `HEAD`, that `HEAD` differs from the
+  one the run started on or from the head the `Rework` started from, and its checks are still
+  running or have all passed. The run pushed that head and is waiting on its CI, so it MUST end and
+  move to the post-PR state instead. This includes a `Rework` run whose CI failure stays pending
+  until the run ends. Nor does it apply while the attached PR's head is the workspace `HEAD` and
+  that head has checks still pending; such a run (one that started on that head, or one whose
+  pushed head awaits the pre-push reviewer) keeps turning up to `agent.max_turns`. Nor does it apply, outside `Rework`, to a run started by
+  a CI failure once the PR head is the workspace `HEAD` and all its checks have passed: the red
+  check was a flake, so green CI is that run's outcome. Such a run MUST end and move the issue back
+  to `Merging` (with a comment saying why, and the CI-fix auto-merge hold dropped so auto-merge
+  turns on again) when the CI failure came from `Merging` and the PR head is still the commit that
+  failed, and to the post-PR state otherwise. A head that is still red, or has no checks, is parked as before.
+  The same holds for a run started by a merge conflict once GitHub reports the PR `MERGEABLE` and
+  its head green: it moves back to `Merging` (with the conflict's auto-merge state dropped) when the
+  conflict was found in `Merging` and the PR head is still the one that conflicted, and to the
+  post-PR state otherwise. A PR that still conflicts, or whose mergeability GitHub has not computed
+  yet, is parked as before, even when a CI failure is pending too.
 - The first turn SHOULD use the full rendered task prompt. Implementations MAY use a compact
   bootstrap prompt when the target agent transport cannot safely carry the full rendered prompt as a
   single startup message, provided the compact prompt preserves hard security rules and directs the
@@ -2025,6 +2098,13 @@ Distinct terminal reasons are important because retry logic and logs differ.
 
 - The orchestrator serializes state mutations through one authority to avoid duplicate dispatch.
 - `claimed` and `running` checks are REQUIRED before launching any worker.
+- Tracker calls the orchestrator waits on (a retry's issue refresh, the post-PR and blocked-state
+  moves, breakdown-parent parking, reviews, closes and plan comments) SHOULD run outside the
+  orchestrator's message loop, with the result delivered back as a message. A claimed issue's claim
+  stays held until the result is handled, so no poll dispatches it meanwhile. The pre-dispatch
+  refresh of the issues a dispatch pass may start is read the same way, in the task that checks
+  dispatch readiness, and the pass decides with that answer. The read that orders a usage-limit
+  hold's held retries to pick its canary runs the same way, and the hold stays until it answers.
 - Reconciliation runs before dispatch on every tick.
 - Restart recovery is tracker-driven and filesystem-driven (without a durable orchestrator DB).
 - Startup terminal cleanup removes stale workspaces for issues already in terminal states.
@@ -2073,6 +2153,38 @@ The poller:
   and starts a QA pass on green CI (see `auto_review`). It also tracks PRs of issues in
   `Merging`, so a held landing run (below) sees its head settle and a red head takes the normal
   CI-failure dispatch.
+- reads a PR head as green only once its CI has finished, not merely when every reported check
+  passed: a GitHub Actions workflow run that reported a check for the head and has not completed
+  (a rerun's new attempt, whose failed checks leave the rollup until it queues them, or a job with
+  `needs:` not created yet) reads as pending, and so does a head the poller asked to rerun until
+  every check it reran reports again. This holds for every reader of the head's CI: the poller's
+  QA start, the agent run's pushed-head handoff, the `Merging` wait and the merge tool.
+- reads a GitHub Actions check that still reports queued or in progress as finished, with its
+  workflow run's conclusion, once that run has completed `SUCCESS`, `NEUTRAL` or `SKIPPED`: GitHub
+  sometimes never closes a job's check run, and such a stale check must not hold the head pending
+  forever. It logs `Ignoring stale check <name> in completed run <id>`. A check in a run that
+  completed with any other conclusion stays as reported. To see this, a head whose rollup has no
+  failed check and only GitHub Actions checks left unfinished also reads the head's workflow runs.
+- reads a landing's head (the `Merging` wait, the release of a held landing run, and the merge
+  tool) against the checks its base branch requires: a head still waiting on a check, with none
+  failed, also reads the required status checks of the base branch's rulesets
+  (`GET repos/{owner}/{repo}/rules/branches/{branch}`) and branch protection
+  (`GET repos/{owner}/{repo}/branches/{branch}`, unless its enforcement is `off`). Once every
+  required check reported and passed, the head is ready to land while checks the branch doesn't
+  require are still queued or running. A failed check still holds it, required or not. When the
+  branch requires no check, or the read fails (logged as `Could not read the required checks of
+  <branch>; waiting on every check`), the landing waits on every check as above. The poller
+  records the head it last saw ready to land for each `Merging` issue, and the orchestrator
+  releases a held landing run on it as on a green head.
+- times how long a `Merging` head has waited on its checks: consecutive landing reads of the same
+  head that are still waiting keep the wait, and a new head, a failed check, a ready head or a read
+  outside `Merging` ends it. After 15 minutes, a head whose base branch was read as requiring no
+  check, with none failed, no rerun of a failed job starting and at least one check passed, is
+  ready to land without the checks still pending: the landing run's CI wait and the merge tool
+  read that mark for the same head, and a check that failed since still holds it. The first time a
+  wait lets a head past, the poller logs `Landing without the checks still pending after <n> min in
+  Merging; the base branch requires none` with the skipped checks, and comments once on the issue
+  naming them. A base branch whose required checks can't be read never takes this path.
 
 Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `enabled: true`):
 
@@ -2086,6 +2198,7 @@ Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `
   shows auto-merge on. When GitHub refuses (the PR can already merge, the branch has no protection,
   the repository doesn't allow auto-merge), the poller MUST read the PR again: one already `MERGED`
   takes the merged path below, and an open one at the same head with `mergeStateStatus == "CLEAN"`
+  (or `UNSTABLE` with a stale check read as finished, above)
   and every check `SUCCESS`, `NEUTRAL` or `SKIPPED` (or no checks at all) is squash-merged directly
   with the same `mergePullRequest` fields. The poller logs which path it took. A refusal because
   the head moved since the poller read it (`expected head oid does not match`) is not a refusal:
@@ -2237,7 +2350,18 @@ An issue is dispatch-eligible only if all are true:
 - Waiting rule passes:
   - An issue in the `issues.states.waiting_on_sub_issues` state is dispatched only when it is a
     `breakdown` parent with at least one sub-issue and every sub-issue is terminal (the close-out
-    run). Any other issue in that state waits for a human.
+    run). Any other issue in that state is never dispatched, and waits for a human unless the
+    merge of its pull request put it there (below).
+  - When a pull request of an issue that is not a `breakdown` parent merges while the issue has a
+    non-terminal sub-issue, the service moves the issue to the waiting state instead of `Done`,
+    whoever merged it and even when Linear's GitHub integration or a landing run already moved it
+    to `Done`, moves its `Backlog` sub-issues to `Todo` and comments on it. The service records
+    durably that the merge put the issue there. On each poll, such a recorded issue in the waiting
+    state with at least one sub-issue, every one terminal, and not running or claimed, is read again
+    and, if that still holds, moved to `Done` with a comment listing each sub-issue's state; no run
+    starts. An issue a person moved to the waiting state is not recorded, so it is not closed this
+    way. A sub-issue added while it waits counts in that check, and a
+    canceled one counts as finished.
   - On each poll, a `breakdown` parent in `In Progress` whose approved plan has a non-terminal
     sub-issue, and that is not running or claimed, is moved to the waiting state (a never-approved
     plan is not), so `In Progress` only holds issues an agent
@@ -2272,7 +2396,8 @@ An issue is dispatch-eligible only if all are true:
   - Comments: a person's comment on a `breakdown` parent's plan is read on the poll that follows
     it. Only comments with a user and no bot actor count, and not Symphony's own (the workpad, a
     QA report, an `Action needed` request, a promote or cancel record, a run-failure note, its own
-    replies, and every comment its last run on the parent posted). The service and the reviewer
+    replies, and every comment its last run on the parent posted), nor a supervisor's note (one
+    starting `Supervisor review:` or `Supervisor note:`). The service and the reviewer
     can share one Linear user, so the run's comments are told apart by id, which the run reports as
     it ends, and the others by how they start. The service reads the parent's history and comments
     only when the poll shows a comment newer than the last one it acted on.
@@ -2285,6 +2410,9 @@ An issue is dispatch-eligible only if all are true:
       worked is acted on once the parent is back in `In Review`. When the run's comments are
       unknown (a run from before a restart), a comment counts when it is newer than the parent's
       latest move into `In Review` and than the end of that run.
+    - Plan in the human review state, not approved: nothing is dispatched and the parent stays
+      there, since the service never moves an issue out of it. A person moves it to `Rework` or
+      back to `In Review` to have the plan revised.
     - Approved plan (the parent in the waiting state, or in `In Review` with its plan approved):
       nothing is dispatched and the plan is unchanged. Under each top-level comment newer than the
       parent's latest move into its state, the end of the service's last run on it and the
@@ -2498,6 +2626,11 @@ Note:
 
 - Terminal-state workspace cleanup is handled by startup cleanup and active-run reconciliation
   (including terminal transitions for currently running issues).
+- The orchestrator does not wait for a workspace removal (the `before_remove` hook, then
+  `git worktree remove` and the branch delete, which can take minutes): it hands the removal to a
+  cleanup worker that runs it outside the orchestrator and logs its failures, and releases the
+  issue's claim at once. A run of the same issue waits for a removal still in flight before it
+  creates or reuses the workspace.
 - Retry handling mainly operates on active candidates and releases claims when the issue is absent,
   rather than performing terminal cleanup itself.
 
@@ -2530,7 +2663,9 @@ reached (for Claude, a used-up five-hour or weekly window; for Codex, an error w
 - At `resume_at` the hold moves to `phase: canary` and exactly one held retry, the first in normal
   dispatch order (a forced issue first), is released as the canary; an immediate poll tick runs. The hold keeps covering
   every other run of that provider, so slots freed by held runs are not filled with other work on
-  it. With nothing held, the hold is cleared and no canary runs.
+  it. With nothing held, the hold is cleared and no canary runs. The held issues are read from the
+  tracker to order them; until that read answers the hold stays as it was, and a held retry that
+  comes due meanwhile stays held. A read that fails orders them by issue id.
 - When the canary's first `rate_limit_event` is `allowed` or `allowed_warning`, or the canary ends
   any way other than this limit (success, another failure, which follows the normal failure path),
   the hold is cleared and the other held retries return to normal candidate selection with their
@@ -2576,6 +2711,37 @@ sessions:
 - The Claude CLI only reports utilization once it passes its own warning threshold (seen at
   `0.75`), so a lower setting behaves as if set at that point.
 
+#### 8.4.3 Unreachable Model API Holds
+
+When the Claude CLI cannot reach the model API at all (a DNS failure, a refused or dropped
+connection), it still ends the turn with a `result` event: its text starts `API Error:` and names
+the failure (`Can't reach the API server … (ENOTFOUND)`, `Connection error`, `ECONNREFUSED`, …),
+and it is marked `is_error` or used nothing. An error the API returned (a 400, a 429, a 5xx) is not
+an outage and keeps its normal path.
+
+- The turn fails with `{:model_api_unreachable, info}` (`source: api_unreachable`, `error` the code
+  it named); it is never a completed turn, so it never counts toward the idle-turn park limit.
+- The run, a pre-push reviewer turn (review, self-check or re-quote), an Auto Review QA pass, a
+  `Final verification:` walkthrough and an acceptance gate pass all hold the provider as in Section
+  8.4.1, whatever `usage_limit.auto_pause` says, with `reason: "model_api_unreachable"`. The
+  reviewer is unavailable, never inconclusive: the run is held and the push waits for a review. QA
+  and the gate record no verdict (the gate counts no inconclusive pass and writes no comment) and
+  run again once the hold clears.
+- The first probe (the canary) goes out 60 seconds after the outage is found. Each canary that
+  still cannot reach the API doubles the wait, up to `usage_limit.unknown_reset_retry_seconds`,
+  keeping `since`. A run that finds the outage while a hold is already `paused` leaves it as it is,
+  so a usage-limit pause is not shortened.
+- A hold with no run held on it (only QA, gate or PR runs found the outage) has no canary: at
+  `resume_at` it is released so the next run probes the API, and remembered for
+  `usage_limit.unknown_reset_retry_seconds` (at least 10 minutes). A run that finds the outage
+  again within that time continues it as a failed canary would: same `since`, doubled wait, no new
+  `usage_limit_paused` event. The outage ends, with one `usage_limit_resumed` event, when no run
+  has found it again for that time, or as soon as the API answers with a usage limit.
+- Log `Model API unreachable (ENOTFOUND); holding dispatch provider=… probe_at=…` once per outage
+  and `Model API still unreachable (…) … next_probe_at=…` per failed probe. Show the hold in the
+  status surfaces as `Paused: Claude API unreachable (ENOTFOUND), retries ~14:05`, and in
+  `/api/v1/state` `usage_limits` with its `reason` and `error`.
+
 ### 8.5 Active Run Reconciliation
 
 Reconciliation runs every poll tick and has two reconciliation parts plus an independent watchdog
@@ -2611,11 +2777,16 @@ Part C: No-progress watchdog
 - Independently of the poll tick, a watchdog tick runs every `watchdog.tick_interval_ms`.
 - If `watchdog.enabled == false`, the tick performs no session termination.
 - For each running issue, compute `elapsed_ms` since `last_event_at`, where a workspace hook's start
-  and end count as events, or since the end of the run's latest wait on Linear when that is later.
-  While a workspace hook runs, compute it since the hook's deadline, as in Part A.
+  and end count as events, and so does each Claude Code `tool_progress` heartbeat its agent sends
+  while a tool runs (kept out of the transcript), or since the end of the run's latest wait on
+  Linear when that is later.
+  While a workspace hook runs, compute it since the hook's deadline, as in Part A. While the run's
+  agent waits on a call of one of Symphony's own MCP tools, compute it since the latest deadline of
+  its pending calls when that is later; a call without a deadline (a QA tool) does not hold it.
 - If `elapsed_ms >= watchdog.no_progress_threshold_ms`, terminate the agent session, run
   `after_run`, record the run as `timeout`, emit `run_stuck`, and queue a retry through the normal
-  retry helper/backoff path.
+  retry helper/backoff path. The log line names the run's oldest pending tool call and its age,
+  when there is one.
 
 Part D: Stray processes
 
@@ -2682,14 +2853,17 @@ Algorithm summary:
    - Fetch `origin` in that primary clone when `fetch_before_dispatch == true`.
    - Ensure the workspace is a registered git worktree for branch `auto/<issue.identifier>`,
      creating it with `git worktree add` when absent.
-   - When the issue's attached PR is open, same-repo, and its head branch differs from
-     `auto/<issue.identifier>` (for example after a Linear team-key rename changed the
-     identifier), use that PR head branch instead and sync the worktree to `origin/<head>`, so the
-     existing PR stays reachable from the workspace's current branch.
+   - When the issue's attached PR is open, same-repo, and its head branch is the issue's own
+     branch under an earlier team key (`auto/TON-218` for `TP-218`, after a Linear team-key
+     rename), use that PR head branch instead and sync the worktree to `origin/<head>`, so the
+     existing PR stays reachable from the workspace's current branch. A PR on any other head
+     (Linear also links a sub-ticket's PR to a parent its body names) is ignored and logged.
    - If that branch is still checked out in a sibling workspace under the same repo workspace
-     directory (the issue's pre-rename workspace) that no other running or retrying issue owns and
-     that has no uncommitted or unpushed work, detach the sibling's HEAD to release the branch;
-     otherwise refuse with a branch-collision error.
+     directory (the issue's pre-rename workspace) that no other running or retrying issue owns,
+     whose issue is terminal, unknown to the tracker, or this same issue, and that has no
+     uncommitted or unpushed work, detach the sibling's HEAD to release the branch; otherwise
+     refuse with a branch-collision error. An open issue whose agent is not running (held by the
+     usage limit, waiting, in review) keeps its branch.
 6. Mark `created_now=true` only if the directory or worktree was created during this call; otherwise
    `created_now=false`.
 7. If `created_now=true`, run `hooks.after_create` if configured. Also run it for a reused
@@ -2819,7 +2993,8 @@ Current Elixir sandbox behavior:
   startup files, and shell or REPL history files.
 - Shared write denies protect workflow and runtime guardrail files such as `WORKFLOW.md`,
   `symphony.yml`, `symphony.local.yml`, `.claude/settings.json`, `.git`, `mise.toml`,
-  `.tool-versions`, shell startup files, `~/.gitconfig`, and macOS launch agent roots.
+  `.tool-versions`, `config/settings_ui_exempt.yml`, shell startup files, `~/.gitconfig`, and
+  macOS launch agent roots.
 - Rendered Claude, SRT, and Codex native sandbox settings include both tilde and expanded absolute
   forms for home-relative deny paths as defense in depth.
 - Codex native `workspace_write` config renders command-sandbox read denies for
@@ -2831,11 +3006,16 @@ Current Elixir sandbox behavior:
   deny-write the sensitive/static Codex files `auth.json`, `config.toml`, and `AGENTS.md`.
   Shell startup files are also read-denied and write-denied; non-fatal PATH update warnings from
   Codex MUST NOT be resolved by granting access to those files.
-- SRT Git write model:
+- Git write model:
   - For each writable Git metadata root (workspace `.git`, plus any discovered linked-worktree
     `--git-dir` / `--git-common-dir`), SRT settings MUST deny writes to `config`,
-    `config.worktree`, `hooks`, `info`, `packed-refs`, and the per-worktree `worktrees/*/config`
-    and `worktrees/*/config.worktree` patterns. These deny rules apply regardless of layout.
+    `config.worktree`, `hooks`, `info`, `packed-refs`, the per-worktree `worktrees/*/config`
+    and `worktrees/*/config.worktree` patterns, and the submodule `modules/**/config` pattern.
+    These deny rules apply regardless of layout.
+  - A local Claude session's settings MUST deny the same paths for each of those roots that
+    exists, in `sandbox.filesystem.denyWrite` and as file-tool `Edit` deny rules. A local native
+    Codex session's managed permission profile MUST deny them too, with the patterns expanded to
+    the files that exist at launch; its enforcement is best-effort like the rest of that profile.
   - SRT settings MUST allow writes to `<git_dir>/objects` for clone workspaces and linked
     worktrees. This keeps `git add`, `git commit`, and similar staging operations working under
     SRT. Under the default linked-worktree layout (`workspaces.strategy: worktree`,
@@ -2935,6 +3115,16 @@ Notes:
   byte size, MCP session ID, and transport when available. Malformed newline-delimited JSON returns
   a structured JSON-RPC parse error when the request ID can be recovered, and response-send failures
   are logged instead of silently closing the connection.
+- A connection serves one request at a time. A call of one of Symphony's own tools (`linear_*`,
+  `github_*`) that runs longer than `agent.timeouts.mcp_tool_ms` (10 minutes by default; unset, the
+  `:mcp_tool_timeout_ms` application env applies first) is
+  stopped and answered with a `tool_timeout` tool error, so later calls on the connection are not
+  held behind it. QA tools keep their drivers' own timeouts. While a tool runs, the server still
+  reads the connection: a `notifications/cancelled` for the call stops the tool at once and leaves
+  the call unanswered, and a closed connection stops the tool too. A cancel for a call that already
+  finished changes nothing, and other requests sent meanwhile are answered after the call.
+- The implicit MCP server tells the orchestrator as each tool call starts (tool name, start time,
+  and the deadline its timeout sets) and ends, so the run's `pending_tool_calls` stay current.
 - Codex launch preserves the configured command while injecting `--config` overrides for
   `default_permissions="workspace_write"` and the generated `permissions.workspace_write.*`
   profile. Runtime launch paths render workspace-local filesystem entries with the validated
@@ -3266,7 +3456,8 @@ Scoped GitHub tool extension contract:
 - `github_merge_pull_request`, if exposed, MUST merge only the current
   workspace branch's pull request, MUST refuse unless the current issue is in
   the human-approved `Merging` state, MUST refuse while any check is failing or
-  pending, and MUST pin the merge to the head commit whose checks were read.
+  pending (only the checks the base branch requires, when it requires any; see the CI poller's
+  landing read), and MUST pin the merge to the head commit whose checks were read.
 - GitHub read-only review sessions SHOULD hide GitHub tools that mutate local
   workspace Git metadata or remote GitHub state.
 
@@ -3568,6 +3759,9 @@ SHOULD return:
 - each running row SHOULD include `linear_wait_until`: while the run waits out a Linear rate limit
   or outage (Section 8.5), when that wait ends, otherwise null; dashboards show such a run as
   waiting for Linear
+- each running row SHOULD include `pending_tool`: the oldest call of one of Symphony's own MCP tools
+  the run's agent has waited on for more than a minute (`name`, `started_at`, `age_ms`), otherwise
+  null; dashboards show such a run as waiting on that tool
 - `watching` (list of recently completed issues now in non-active, non-terminal states)
 - each watching row SHOULD include issue identifier, current state, issue URL, last-run time, and
   final transcript replay metadata while the watch remains open
@@ -3756,6 +3950,14 @@ Minimum endpoints:
 - `GET /api/v1/state`
   - Returns a summary view of the current system state (running sessions, retry queue/delays,
     aggregate token/runtime totals, latest rate limits, and any additional tracked summary fields).
+  - The Elixir implementation serves it from the snapshot the orchestrator publishes every
+    `dashboard.snapshot_publish_ms` (a call into the orchestrator only before the first one), so a
+    busy orchestrator makes it stale, not slow. `orchestrator` says how far behind it is: the orchestrator's
+    `message_queue_len`, the `snapshot_age_ms` of the snapshot served, and the `snapshot_build_ms`
+    of the last one with `snapshot_parts_ms` for the parts that read other processes or the run
+    store. Any of them is `null` when unknown. The orchestrator logs `Orchestrator slow
+    handle_call` / `handle_info` with the message for a callback that takes 1 s or more, and
+    `Orchestrator snapshot build slow` with the parts for a snapshot build that does.
   - Suggested response shape:
 
     ```json
@@ -3781,6 +3983,7 @@ Minimum endpoints:
           "last_event": "turn_completed",
           "last_message": "",
           "linear_wait_until": null,
+          "pending_tool": null,
           "started_at": "2026-02-24T20:10:12Z",
           "last_event_at": "2026-02-24T20:14:59Z",
           "forced": false,
@@ -3960,6 +4163,12 @@ Minimum endpoints:
           {"query": "SymphonyLinearIssuesById", "requests": 82},
           {"query": "SymphonyAgentCurrentIssue", "requests": 70}
         ]
+      },
+      "orchestrator": {
+        "message_queue_len": 0,
+        "snapshot_age_ms": 212,
+        "snapshot_build_ms": 3,
+        "snapshot_parts_ms": {"run_history": 1, "qa": 0, "auto_merge": 1}
       }
     }
     ```
@@ -4071,6 +4280,7 @@ Minimum endpoints:
         "last_event": "notification",
         "last_message": "Working on tests",
         "linear_wait_until": null,
+        "pending_tool": null,
         "last_event_at": "2026-02-24T20:14:59Z",
         "tokens": {
           "input_tokens": 1200,
@@ -4460,7 +4670,9 @@ function watchdog_tick(state):
     if running_entry.workspace_hook is not null:
       elapsed_ms = now_utc() - running_entry.workspace_hook.deadline
     else:
-      elapsed_ms = now_utc() - running_entry.last_event_at
+      clock = max(running_entry.last_event_at,
+                  latest deadline of running_entry.pending_tool_calls, if any)
+      elapsed_ms = now_utc() - clock
     if elapsed_ms >= watchdog.no_progress_threshold_ms:
       agent.stop_session(running_entry.agent_session)
       run_hook_best_effort("after_run", running_entry.workspace_path)
@@ -4825,7 +5037,9 @@ infrastructure.
 - `breakdown` parent in `Todo` or `In Progress` whose non-terminal sub-issues are all in `Backlog`
   is eligible as a `breakdown` run and is not moved to the waiting state
 - a person's comment on a `breakdown` parent in `In Review` with an unapproved plan moves it to
-  `In Progress`; the service's own comments and integration bots' comments move nothing; a person's
+  `In Progress`; the service's own comments, a supervisor's notes (`Supervisor review:`,
+  `Supervisor note:`) and integration bots' comments move nothing; a person's comment on one in the
+  human review state moves nothing; a person's
   comment made while the revision run worked moves it again once it is back in `In Review`; a
   top-level comment on an approved plan gets one reply and moves nothing, and a reply inside a
   thread or a comment from before the service started gets none
@@ -4926,12 +5140,15 @@ infrastructure.
   configured repo `WORKFLOW.md` through the same validation the service runs at startup, without
   starting the runtime or contacting the tracker or GitHub. It exits `0` and prints
   `Config OK: <path>` when valid, and exits `1` with the error on stderr when the file is missing
-  or invalid. For a `workflow_source: ref` repo it validates the `WORKFLOW.md` startup would use:
+  or invalid. It first prints its build on stderr, `Symphony <version>` and the short commit in
+  parentheses when the build records one. For a `workflow_source: ref` repo it validates the `WORKFLOW.md` startup would use:
   the file committed on the base branch ref when it parses (as last fetched; `check` does not fetch
   or write the snapshot), otherwise the last good snapshot or the file on disk. Errors name the
   file and key and never print secret values. A `workspace.source`
   repo whose clone does not exist yet is checked without its `WORKFLOW.md` (the service clones it
-  at startup before reading it), and the check prints a warning naming the repo.
+  at startup before reading it), and the check prints a warning naming the repo. A
+  `strategy: worktree` repo on the local host fails the check when its `workspaces.repo` does
+  not exist, is not a directory, or is not a git repository.
 - CLI accepts `--config path-to-symphony.yml` to select an alternate operator config.
 - CLI defaults to `./symphony.yml` when `--config` is omitted.
 - CLI errors when the resolved `symphony.yml` (explicit or default) does not exist.

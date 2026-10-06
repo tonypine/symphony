@@ -4,7 +4,8 @@ defmodule SymphonyElixir.Workspace do
   """
 
   require Logger
-  alias SymphonyElixir.{Config, ManagedClone, PathSafety, ProcessTree, SSH, WorkflowSource}
+  alias SymphonyElixir.{Config, GitConfigCommands, ManagedClone, PathSafety, ProcessTree, SSH, Tracker, WorkflowSource}
+  alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Hooks
   alias SymphonyElixir.GitHub.Repo, as: GitHubRepo
   alias SymphonyElixir.Repo.{Fetcher, FetchLog}
@@ -16,13 +17,35 @@ defmodule SymphonyElixir.Workspace do
   @orphan_backup_identity "symphony"
   @orphan_backup_email "symphony@localhost"
   @orphan_backup_message "symphony: orphaned worktree state before PR reset"
+  # `diff.ignoreSubmodules` and `submodule.recurse`: a nested repo in a workspace keeps its own
+  # config, which the agent writes, so `status` must not run git in it to see whether it is dirty,
+  # nor `checkout` or `reset` recurse into it. (`add` ignores `diff.ignoreSubmodules`; the orphan
+  # backup's `add -A` starts from an empty index, which lists no nested repo to check.)
+  # The last five keep git from running a command the config names: a fetch lists no refs of the
+  # repo's alternate object stores (`core.alternateRefsCommand`), no `git://` remote goes through
+  # `core.gitProxy`, and nothing checks or makes a signature with `gpg.program`.
+  # `core.askPass=` keeps an HTTPS remote that asks for credentials from running the config's
+  # command. The empty value also skips git's `SSH_ASKPASS` fallback, a desktop prompt an
+  # unattended fetch shouldn't raise; the operator's own `GIT_ASKPASS` still wins over it. With no
+  # askpass left, `GIT_TERMINAL_PROMPT=0` fails the call instead of asking on the operator's
+  # terminal.
+  # `core.sshCommand`: an SSH connection that stops answering is dropped after a minute instead
+  # of holding the git call (and the repo's fetch lock) forever.
   @safe_git_config_overrides [
-    "core.sshCommand=ssh",
+    "core.sshCommand=ssh -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4",
     "core.fsmonitor=",
     "core.hooksPath=",
     "credential.helper=",
+    "core.askPass=",
+    "diff.ignoreSubmodules=dirty",
     "protocol.ext.allow=never",
-    "protocol.file.allow=user"
+    "protocol.file.allow=user",
+    "submodule.recurse=false",
+    "core.alternateRefsCommand=true",
+    "protocol.git.allow=never",
+    "log.showSignature=false",
+    "merge.verifySignatures=false",
+    "push.gpgSign=false"
   ]
   # Exit status and output line of an SSH worker's `after_create` wrapper that
   # skipped the hook because it can't run on the base branch tree.
@@ -31,9 +54,16 @@ defmodule SymphonyElixir.Workspace do
   @safe_git_env [
     {"GIT_CONFIG_GLOBAL", "/dev/null"},
     {"GIT_CONFIG_SYSTEM", "/dev/null"},
-    {"GIT_OPTIONAL_LOCKS", "0"}
+    {"GIT_OPTIONAL_LOCKS", "0"},
+    {"GIT_TERMINAL_PROMPT", "0"}
   ]
   @safe_git_env_keys Enum.map(@safe_git_env, &elem(&1, 0))
+  # The git subcommands that talk to a remote, and the wall-clock limit each call of one gets.
+  # A remote can accept the connection and then never answer, and the SSH keepalives don't see
+  # that while the server's sshd still answers them.
+  @network_git_subcommands ["fetch", "pull", "push", "ls-remote"]
+  # The exit status of a network call Symphony stopped at its timeout, as `timeout(1)` uses.
+  @git_timeout_status 124
 
   @type worker_host :: String.t() | nil
   @type lifecycle_action :: %{
@@ -74,23 +104,125 @@ defmodule SymphonyElixir.Workspace do
     safe_git(command, args, [])
   end
 
+  # Every call also turns off the filter and merge drivers the repo's config defines, and the
+  # diff drivers and upload or receive pack commands it names (see
+  # `SymphonyElixir.GitConfigCommands`), and refuses to run git when it can't. The scan runs git
+  # through `/bin/sh`, so a missing git raises first, as `System.cmd/3` does.
+  #
+  # A `fetch`, `pull`, `push` or `ls-remote` is stopped, with git's whole process group, once it
+  # has run for `:network_timeout_ms` (default `Config.git_network_timeout_ms/0`: symphony.yml's
+  # `workspaces.git_network_timeout_ms`, 5 minutes unset), and then returns status 124 with a
+  # line saying so. It is stopped as well when its caller exits. Each one logs its duration.
   @spec safe_git(String.t(), [String.t()], keyword()) :: {Collectable.t(), non_neg_integer()}
   def safe_git(command, args, opts) when is_binary(command) and is_list(args) and is_list(opts) do
+    unless System.find_executable(command) do
+      :erlang.error(:enoent, [command, args, opts])
+    end
+
+    {timeout_ms, opts} = Keyword.pop(opts, :network_timeout_ms)
+
+    case GitConfigCommands.config_args(args, opts, &read_git(command, &1, &2)) do
+      {:ok, driver_args} ->
+        invocation = git_invocation(args, Keyword.get(opts, :cd))
+        run_safe_git(command, driver_args ++ GitConfigCommands.subcommand_args(args), opts, invocation, timeout_ms)
+
+      {:error, message, status} ->
+        {message, status}
+    end
+  end
+
+  defp run_safe_git(command, args, opts, {[subcommand | _args] = invocation, dir}, timeout_ms)
+       when subcommand in @network_git_subcommands do
+    log_command = Enum.join(["git" | invocation], " ")
+    dir = dir || File.cwd!()
+    timeout_ms = timeout_ms || Config.git_network_timeout_ms()
+    started_at = System.monotonic_time(:millisecond)
+
+    case run_git_port(command, safe_git_args(args), safe_git_opts(opts), timeout_ms) do
+      {:ok, {output, status}} ->
+        Logger.info("Git network call completed repo=#{dir} command=#{inspect(log_command)} status=#{status} duration_ms=#{elapsed_ms(started_at)}")
+
+        {output, status}
+
+      {:timeout, output} ->
+        Logger.error("Git network call timed out repo=#{dir} command=#{inspect(log_command)} timeout_ms=#{timeout_ms} duration_ms=#{elapsed_ms(started_at)}; stopped it")
+
+        {"symphony: #{log_command} timed out after #{timeout_ms} ms and was stopped\n" <> output, @git_timeout_status}
+    end
+  end
+
+  defp run_safe_git(command, args, opts, _invocation, _timeout_ms) do
     System.cmd(command, safe_git_args(args), safe_git_opts(opts))
+  end
+
+  # The subcommand with its arguments, and the dir the call runs in: the last `-C <dir>`, or the
+  # `:cd` option. Takes git's `-C <dir>` and `-c <config>` options before the subcommand.
+  defp git_invocation(["-C", dir | args], _dir), do: git_invocation(args, dir)
+  defp git_invocation(["-c", _config | args], dir), do: git_invocation(args, dir)
+  defp git_invocation(args, dir), do: {args, dir}
+
+  # Runs git in a port owned by a task, which stops git's process group (git and the `ssh` it
+  # started) at the deadline, or when the caller exits first.
+  defp run_git_port(command, args, opts, timeout_ms) do
+    owner = self()
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+
+    port_opts =
+      [:binary, :exit_status, :stderr_to_stdout, :hide, args: args, env: port_env(Keyword.fetch!(opts, :env))] ++
+        Keyword.take(opts, [:cd])
+
+    Task.async(fn ->
+      Process.flag(:trap_exit, true)
+      port = Port.open({:spawn_executable, System.find_executable(command)}, port_opts)
+      collect_hook_output(port, owner, [], deadline)
+    end)
+    |> Task.await(:infinity)
+  end
+
+  defp port_env(env) do
+    Enum.map(env, fn {key, value} -> {String.to_charlist(key), if(value, do: String.to_charlist(value), else: false)} end)
+  end
+
+  defp elapsed_ms(started_at), do: System.monotonic_time(:millisecond) - started_at
+
+  # The shell functions an SSH worker's script defines to run git as `safe_git/3` does:
+  # `symphony_git <dir> <args>` runs `git -C <dir> <args>` with the same env and `-c` overrides,
+  # and blanks the filter drivers the repo's config defines (see
+  # `SymphonyElixir.GitConfigCommands.shell_functions/0`).
+  @spec remote_safe_git_functions() :: String.t()
+  def remote_safe_git_functions do
+    env = Enum.map_join(@safe_git_env, " ", fn {key, value} -> "#{key}=#{shell_escape(value)}" end)
+    overrides = Enum.map_join(@safe_git_config_overrides, " ", &"-c #{shell_escape(&1)}")
+
+    """
+    symphony_git_raw() { #{env} git #{overrides} "$@"; }
+    #{GitConfigCommands.shell_functions()}\
+    """
   end
 
   # Runs git like `safe_git/1` but keeps stderr out of the output, for content reads
   # such as `git show <ref>:<path>`: a warning git prints (a config notice, the xcrun
-  # shim's cache warning) would otherwise land in the file content. The shell sends
-  # stderr to a temp file, so it never reaches the BEAM's own stderr either.
+  # shim's cache warning) would otherwise land in the file content.
   @spec safe_git_stdout([String.t()]) :: {String.t(), non_neg_integer(), String.t()}
   def safe_git_stdout(args) when is_list(args) do
+    case GitConfigCommands.config_args(args, [], &read_git("git", &1, &2)) do
+      {:ok, driver_args} -> read_git("git", driver_args ++ GitConfigCommands.subcommand_args(args), [])
+      {:error, message, status} -> {"", status, message}
+    end
+  end
+
+  # The shell sends stderr to a temp file, so it never reaches the BEAM's own stderr either.
+  defp read_git(command, args, opts) do
     stderr_path = Path.join(System.tmp_dir!(), "symphony-git-stderr-#{System.unique_integer([:positive])}")
     File.write!(stderr_path, "")
 
     try do
       {stdout, status} =
-        System.cmd("/bin/sh", ["-c", ~s(exec "$@" 2>"$0"), stderr_path, "git" | safe_git_args(args)], put_safe_git_env([]))
+        System.cmd(
+          "/bin/sh",
+          ["-c", ~s(exec "$@" 2>"$0"), stderr_path, command | safe_git_args(args)],
+          opts |> Keyword.take([:cd, :env]) |> put_safe_git_env()
+        )
 
       {stdout, status, File.read!(stderr_path)}
     after
@@ -102,6 +234,9 @@ defmodule SymphonyElixir.Workspace do
   #   * `:active_workspace_identifiers` - identifiers (or workspace basenames) of
   #     other issues a running or retrying agent owns. Their worktrees are never
   #     detached to release a branch for this issue.
+  #   * `:sibling_issue_lookup` - reads the issue a sibling worktree belongs to by
+  #     identifier, as `Tracker.fetch_issue_by_identifier/1` (the default) does. A
+  #     sibling's worktree is detached only when its issue is terminal or unknown.
   #   * `:on_hook` - called with `{:started, hook_name, timeout_ms}` and
   #     `{:finished, hook_name}` around each hook run.
   @spec create_for_issue(map() | String.t() | nil, worker_host(), String.t() | nil, keyword()) ::
@@ -111,6 +246,7 @@ defmodule SymphonyElixir.Workspace do
       issue_or_identifier
       |> issue_context(repo_key)
       |> Map.put(:active_workspaces, normalize_identifier_set(Keyword.get(opts, :active_workspace_identifiers, [])))
+      |> Map.put(:sibling_issue_lookup, Keyword.get(opts, :sibling_issue_lookup, &Tracker.fetch_issue_by_identifier/1))
       |> Map.put(:on_hook, Keyword.get(opts, :on_hook))
 
     try do
@@ -253,9 +389,9 @@ defmodule SymphonyElixir.Workspace do
          base_ref = worktree_base_ref(issue_context),
          create_base_ref = worktree_create_base_ref(repo, issue_context, base_ref),
          create_base_ref = create_base_ref || managed_clone_base_ref(repo, branch, settings),
-         active_workspaces = issue_context.active_workspaces,
+         siblings = sibling_release_policy(issue_context),
          {:ok, created?} <-
-           add_or_reuse_local_worktree(repo, workspace, branch, base_ref, create_base_ref, active_workspaces) do
+           add_or_reuse_local_worktree(repo, workspace, branch, base_ref, create_base_ref, siblings) do
       ensure_skip_comments_excluded(workspace)
       {:ok, workspace, created?}
     else
@@ -277,6 +413,7 @@ defmodule SymphonyElixir.Workspace do
     script =
       [
         "set -eu",
+        remote_safe_git_functions(),
         remote_shell_assign("root", settings.workspace.root),
         remote_shell_assign("repo", settings.workspace.repo || ""),
         remote_shell_assign("workspace", workspace),
@@ -291,12 +428,13 @@ defmodule SymphonyElixir.Workspace do
         "  echo \"workspace_repo_missing: $repo\"",
         "  exit 41",
         "fi",
-        "git -C \"$repo\" rev-parse --git-dir >/dev/null",
+        "symphony_git \"$repo\" rev-parse --git-dir >/dev/null",
+        remote_worktree_lock_functions(settings.hooks.timeout_ms),
         remote_fetch_before_dispatch_command(settings),
         remote_workspace_parent_containment_preamble(),
         remote_after_create_running_check(),
         "if [ -d \"$workspace\" ]; then",
-        "  if ! worktrees=$(git -C \"$repo\" worktree list --porcelain); then",
+        "  if ! worktrees=$(symphony_git \"$repo\" worktree list --porcelain); then",
         "    echo \"workspace_worktree_list_failed: $repo\"",
         "    exit 43",
         "  fi",
@@ -306,7 +444,7 @@ defmodule SymphonyElixir.Workspace do
         "    exit 42",
         "  fi",
         "  if [ -n \"$reset_base_ref\" ]; then",
-        "    reset_base_sha=$(git -C \"$repo\" rev-parse --verify --end-of-options \"$reset_base_ref^{commit}\")",
+        "    reset_base_sha=$(symphony_git \"$repo\" rev-parse --verify --end-of-options \"$reset_base_ref^{commit}\")",
         remote_worktree_branch_owner_command(),
         "    if [ -n \"$branch_owner\" ] && [ \"$branch_owner\" != \"$workspace\" ]; then",
         "      printf '%s\\t%s\\t%s\\t%s\\n' 'workspace_branch_already_checked_out_elsewhere' \\",
@@ -314,8 +452,8 @@ defmodule SymphonyElixir.Workspace do
         "      exit 45",
         "    fi",
         remote_worktree_reset_backup_lines(),
-        "    git -C \"$workspace\" reset --hard",
-        "    git -C \"$workspace\" checkout -f -B \"$branch\" \"$reset_base_sha\"",
+        "    symphony_git \"$workspace\" reset --hard",
+        "    symphony_git \"$workspace\" checkout -f -B \"$branch\" \"$reset_base_sha\"",
         "  fi",
         "  created=0",
         "elif [ -e \"$workspace\" ]; then",
@@ -409,24 +547,24 @@ defmodule SymphonyElixir.Workspace do
   # in-progress worktree is preserved; set by PR runs to the PR head). `create_base_ref`
   # drives fresh worktree creation, defaulting to the configured base branch so a new
   # worktree branches off clean trunk rather than whatever the source repo HEAD is on.
-  defp add_or_reuse_local_worktree(repo, workspace, branch, base_ref, create_base_ref, active_workspaces) do
+  defp add_or_reuse_local_worktree(repo, workspace, branch, base_ref, create_base_ref, siblings) do
     cond do
       File.dir?(workspace) ->
-        reuse_local_worktree(repo, workspace, branch, base_ref, active_workspaces)
+        reuse_local_worktree(repo, workspace, branch, base_ref, siblings)
 
       File.exists?(workspace) ->
         File.rm_rf!(workspace)
-        add_local_worktree(repo, workspace, branch, create_base_ref, active_workspaces)
+        add_local_worktree(repo, workspace, branch, create_base_ref, siblings)
 
       true ->
-        add_local_worktree(repo, workspace, branch, create_base_ref, active_workspaces)
+        add_local_worktree(repo, workspace, branch, create_base_ref, siblings)
     end
   end
 
-  defp reuse_local_worktree(repo, workspace, branch, base_ref, active_workspaces) do
+  defp reuse_local_worktree(repo, workspace, branch, base_ref, siblings) do
     case registered_worktree?(repo, workspace) do
       true ->
-        with :ok <- reset_worktree_to_base_ref(repo, workspace, branch, base_ref, active_workspaces) do
+        with :ok <- reset_worktree_to_base_ref(repo, workspace, branch, base_ref, siblings) do
           {:ok, false}
         end
 
@@ -438,11 +576,11 @@ defmodule SymphonyElixir.Workspace do
   # PR runs pass an explicit base_ref (e.g. "origin/<head>") so a redispatch sees
   # the latest PR head on the requested branch. Issue runs pass nil and keep the
   # existing worktree state.
-  defp reset_worktree_to_base_ref(_repo, _workspace, _branch, nil, _active_workspaces), do: :ok
-  defp reset_worktree_to_base_ref(_repo, _workspace, _branch, "", _active_workspaces), do: :ok
+  defp reset_worktree_to_base_ref(_repo, _workspace, _branch, nil, _siblings), do: :ok
+  defp reset_worktree_to_base_ref(_repo, _workspace, _branch, "", _siblings), do: :ok
 
-  defp reset_worktree_to_base_ref(repo, workspace, branch, base_ref, active_workspaces) when is_binary(base_ref) do
-    with :ok <- check_branch_not_checked_out_elsewhere(repo, workspace, branch, active_workspaces),
+  defp reset_worktree_to_base_ref(repo, workspace, branch, base_ref, siblings) when is_binary(base_ref) do
+    with :ok <- check_branch_not_checked_out_elsewhere(repo, workspace, branch, siblings),
          {:ok, commit_sha} <- resolve_git_commit(workspace, base_ref) do
       _ = backup_local_work_before_reset(workspace)
 
@@ -587,18 +725,23 @@ defmodule SymphonyElixir.Workspace do
     end
   end
 
-  defp add_local_worktree(repo, workspace, branch, base_ref, active_workspaces) do
+  # Under the repo's fetch lock: parallel `worktree add`s of one repo race for its
+  # `.git/config` lock and refs, and the loser exits 255 with its branch made but no
+  # worktree. `--no-track` keeps the add from writing the branch's upstream config.
+  defp add_local_worktree(repo, workspace, branch, base_ref, siblings) do
     File.mkdir_p!(Path.dirname(workspace))
 
-    case check_branch_not_checked_out_elsewhere(repo, workspace, branch, active_workspaces) do
-      :ok ->
-        repo
-        |> run_git(worktree_add_args(repo, workspace, branch, base_ref))
-        |> handle_local_worktree_add_result(repo, workspace)
+    Fetcher.with_lock(repo, fn ->
+      case check_branch_not_checked_out_elsewhere(repo, workspace, branch, siblings) do
+        :ok ->
+          repo
+          |> run_git(worktree_add_args(repo, workspace, branch, base_ref))
+          |> handle_local_worktree_add_result(repo, workspace)
 
-      error ->
-        error
-    end
+        error ->
+          error
+      end
+    end)
   end
 
   defp handle_local_worktree_add_result(:ok, _repo, _workspace), do: {:ok, true}
@@ -625,13 +768,13 @@ defmodule SymphonyElixir.Workspace do
 
   defp reuse_local_worktree_after_add_failure(_repo, _workspace, _attempts), do: :error
 
-  defp check_branch_not_checked_out_elsewhere(repo, workspace, branch, active_workspaces) do
+  defp check_branch_not_checked_out_elsewhere(repo, workspace, branch, siblings) do
     # On `git worktree list --porcelain` failure, fall through to the actual
     # `git worktree add` so its native error surfaces via the existing path.
     with {:ok, output} <- git_output(repo, ["worktree", "list", "--porcelain"]),
          path when is_binary(path) <- find_worktree_for_branch(output, branch),
          false <- Path.expand(path) == Path.expand(workspace),
-         :error <- release_branch_from_stale_sibling(path, workspace, branch, active_workspaces) do
+         :error <- release_branch_from_stale_sibling(path, workspace, branch, siblings) do
       {:error, {:branch_already_checked_out_elsewhere, branch: branch, at: path, requested: workspace}}
     else
       _ -> :ok
@@ -643,11 +786,13 @@ defmodule SymphonyElixir.Workspace do
   # checked out. When that sibling holds no uncommitted or unpushed work, detach
   # its HEAD so the renamed issue's workspace can take the branch over. Anything
   # else (a worktree outside this repo's workspace dir, one a running or retrying
-  # agent owns, or one with local-only work) keeps the collision error.
-  defp release_branch_from_stale_sibling(owner, workspace, branch, active_workspaces) do
+  # agent owns, one whose issue is still open, or one with local-only work) keeps
+  # the collision error.
+  defp release_branch_from_stale_sibling(owner, workspace, branch, siblings) do
     if Path.dirname(Path.expand(owner)) == Path.dirname(Path.expand(workspace)) and
-         not MapSet.member?(active_workspaces, Path.basename(owner)) and
+         not MapSet.member?(siblings.active, Path.basename(owner)) and
          not worktree_has_local_only_work?(owner) and
+         sibling_issue_closed?(Path.basename(owner), siblings) and
          run_git(owner, ["checkout", "--detach"]) == :ok do
       Logger.info("Released workspace branch from stale sibling worktree branch=#{branch} sibling=#{owner} workspace=#{workspace}")
       :ok
@@ -655,6 +800,50 @@ defmodule SymphonyElixir.Workspace do
       :error
     end
   end
+
+  defp sibling_release_policy(issue_context) do
+    %{
+      active: issue_context.active_workspaces,
+      issue_id: issue_context.issue_id,
+      lookup: issue_context.sibling_issue_lookup
+    }
+  end
+
+  # An open issue whose agent is not running right now (held by the usage limit,
+  # waiting on sub-tickets or a review) comes back to its worktree, so only a
+  # terminal or unknown issue gives its branch up. One that resolves to this very
+  # issue is its own pre-rename workspace. A failed lookup keeps the branch.
+  # Linear answers an unknown identifier with an "Entity not found" GraphQL error.
+  defp sibling_issue_closed?(identifier, %{issue_id: issue_id, lookup: lookup}) do
+    case lookup.(identifier) do
+      {:ok, %{id: ^issue_id}} when is_binary(issue_id) ->
+        true
+
+      {:ok, %{state: state}} ->
+        terminal_issue_state?(state)
+
+      {:error, :issue_not_found} ->
+        true
+
+      {:error, {:linear_graphql_errors, errors}} ->
+        Enum.any?(List.wrap(errors), &entity_not_found_error?/1)
+
+      {:error, reason} ->
+        Logger.warning("Kept workspace branch on sibling worktree; issue lookup failed sibling=#{identifier} reason=#{inspect(reason)}")
+        false
+    end
+  end
+
+  defp terminal_issue_state?(state) when is_binary(state) do
+    Config.settings!().tracker.terminal_states
+    |> Enum.map(&Schema.normalize_issue_state/1)
+    |> Enum.member?(Schema.normalize_issue_state(state))
+  end
+
+  defp terminal_issue_state?(_state), do: false
+
+  defp entity_not_found_error?(%{"message" => message}) when is_binary(message), do: message =~ ~r/not found/i
+  defp entity_not_found_error?(_error), do: false
 
   defp find_worktree_for_branch(porcelain_output, branch) when is_binary(branch) do
     porcelain_output
@@ -678,7 +867,7 @@ defmodule SymphonyElixir.Workspace do
   defp worktree_add_args(repo, workspace, branch, base_ref) do
     cond do
       is_binary(base_ref) and base_ref != "" ->
-        ["worktree", "add", "-B", branch, workspace, base_ref]
+        ["worktree", "add", "--no-track", "-B", branch, workspace, base_ref]
 
       git_branch_exists?(repo, branch) ->
         ["worktree", "add", workspace, branch]
@@ -689,7 +878,53 @@ defmodule SymphonyElixir.Workspace do
   end
 
   defp remote_worktree_add_command do
-    "branch_owner=$(git -C \"$repo\" worktree list --porcelain | awk -v b=\"$branch\" 'BEGIN { wt = \"\" } /^worktree / { wt = substr($0, 10); next } $0 == \"branch refs/heads/\" b { print wt; exit }'); if [ -n \"$branch_owner\" ] && [ \"$branch_owner\" != \"$workspace\" ]; then printf 'workspace_branch_already_checked_out_elsewhere\\t%s\\t%s\\t%s\\n' \"$branch\" \"$branch_owner\" \"$workspace\"; exit 45; fi; if [ \"$base_ref\" != \"HEAD\" ]; then git -C \"$repo\" worktree add -B \"$branch\" \"$workspace\" \"$base_ref\"; elif git -C \"$repo\" rev-parse --verify \"refs/heads/$branch\" >/dev/null 2>&1; then git -C \"$repo\" worktree add \"$workspace\" \"$branch\"; else git -C \"$repo\" worktree add -b \"$branch\" \"$workspace\" HEAD; fi"
+    "symphony_worktree_lock; branch_owner=$(symphony_git \"$repo\" worktree list --porcelain | awk -v b=\"$branch\" 'BEGIN { wt = \"\" } /^worktree / { wt = substr($0, 10); next } $0 == \"branch refs/heads/\" b { print wt; exit }'); if [ -n \"$branch_owner\" ] && [ \"$branch_owner\" != \"$workspace\" ]; then printf 'workspace_branch_already_checked_out_elsewhere\\t%s\\t%s\\t%s\\n' \"$branch\" \"$branch_owner\" \"$workspace\"; exit 45; fi; if [ \"$base_ref\" != \"HEAD\" ]; then symphony_git \"$repo\" worktree add --no-track -B \"$branch\" \"$workspace\" \"$base_ref\"; elif symphony_git \"$repo\" rev-parse --verify \"refs/heads/$branch\" >/dev/null 2>&1; then symphony_git \"$repo\" worktree add \"$workspace\" \"$branch\"; else symphony_git \"$repo\" worktree add -b \"$branch\" \"$workspace\" HEAD; fi; symphony_worktree_unlock"
+  end
+
+  # The remote counterpart of the `Fetcher.with_lock/2` the local add runs under:
+  # parallel dispatches to one worker host race for the shared repo's refs and
+  # `.git/worktrees`, so its `worktree add` takes a `mkdir` lock in the repo's git
+  # dir, holding the script's pid. Git runs from inside the repo, as the repo may
+  # be relative to the login dir and `--git-common-dir` is relative to the repo.
+  # It waits up to half the script's time limit, then exits 47. An EXIT trap (the
+  # signal traps turn a hangup or kill into an exit) drops the lock however the
+  # script ends; a lock whose holder died without it (SIGKILL) is taken over,
+  # under a second `mkdir` so two waiters never both take it.
+  defp remote_worktree_lock_functions(timeout_ms) do
+    """
+    symphony_worktree_lock_dir=""
+    symphony_worktree_unlock() {
+      if [ -n "$symphony_worktree_lock_dir" ]; then
+        rm -rf "$symphony_worktree_lock_dir"
+        symphony_worktree_lock_dir=""
+      fi
+    }
+    symphony_worktree_lock() {
+      lock_git_dir=$(cd "$repo" && symphony_git . rev-parse --git-common-dir)
+      lock_git_dir=$(cd "$repo" && cd "$lock_git_dir" && pwd -P)
+      lock="$lock_git_dir/symphony-worktree-add.lock"
+      trap symphony_worktree_unlock EXIT
+      trap 'exit 129' HUP
+      trap 'exit 130' INT
+      trap 'exit 143' TERM
+      lock_deadline=$(($(date +%s) + #{max(div(timeout_ms, 2_000), 1)}))
+      until mkdir "$lock" 2>/dev/null; do
+        lock_holder=$(cat "$lock/pid" 2>/dev/null || true)
+        if [ -n "$lock_holder" ] && ! kill -0 "$lock_holder" 2>/dev/null && mkdir "$lock.takeover" 2>/dev/null; then
+          if [ "$(cat "$lock/pid" 2>/dev/null || true)" = "$lock_holder" ]; then rm -rf "$lock"; fi
+          rmdir "$lock.takeover"
+          continue
+        fi
+        if [ "$(date +%s)" -ge "$lock_deadline" ]; then
+          echo "workspace_worktree_lock_timeout: $lock"
+          exit 47
+        fi
+        sleep 0.2 2>/dev/null || sleep 1
+      done
+      symphony_worktree_lock_dir=$lock
+      echo "$$" > "$lock/pid"
+    }\
+    """
   end
 
   # Mirror `snapshot_orphaned_work/2` for remote workers: snapshot a crashed run's
@@ -700,17 +935,19 @@ defmodule SymphonyElixir.Workspace do
   # never abort the `set -eu` script before the reset runs.
   defp remote_worktree_reset_backup_lines do
     [
-      "    ( reset_head_sha=$(git -C \"$workspace\" rev-parse HEAD 2>/dev/null) || exit 0",
+      "    ( reset_head_sha=$(symphony_git \"$workspace\" rev-parse HEAD 2>/dev/null) || exit 0",
       "      [ -n \"$reset_head_sha\" ] || exit 0",
-      "      reset_dirty=$(git -C \"$workspace\" status --porcelain=v1 --untracked-files=all)",
-      "      reset_unpushed=$(git -C \"$workspace\" rev-list --max-count=1 HEAD --not --remotes)",
+      "      reset_dirty=$(symphony_git \"$workspace\" status --porcelain=v1 --untracked-files=all)",
+      "      reset_unpushed=$(symphony_git \"$workspace\" rev-list --max-count=1 HEAD --not --remotes)",
       "      [ -n \"$reset_dirty\" ] || [ -n \"$reset_unpushed\" ] || exit 0",
       "      reset_index=$(mktemp -u \"${TMPDIR:-/tmp}/symphony-orphan.XXXXXX\")",
-      "      GIT_INDEX_FILE=\"$reset_index\" git -C \"$workspace\" add -A",
-      "      reset_tree=$(GIT_INDEX_FILE=\"$reset_index\" git -C \"$workspace\" write-tree)",
+      "      export GIT_INDEX_FILE=\"$reset_index\"",
+      "      symphony_git \"$workspace\" add -A",
+      "      reset_tree=$(symphony_git \"$workspace\" write-tree)",
+      "      unset GIT_INDEX_FILE",
       "      rm -f \"$reset_index\"",
-      "      reset_backup=$(git -C \"$workspace\" -c user.name=#{@orphan_backup_identity} -c user.email=#{@orphan_backup_email} commit-tree \"$reset_tree\" -p \"$reset_head_sha\" -m '#{@orphan_backup_message}')",
-      "      git -C \"$workspace\" update-ref \"refs/symphony/orphaned/$reset_head_sha\" \"$reset_backup\" ) || true"
+      "      reset_backup=$(symphony_git \"$workspace\" -c user.name=#{@orphan_backup_identity} -c user.email=#{@orphan_backup_email} commit-tree \"$reset_tree\" -p \"$reset_head_sha\" -m '#{@orphan_backup_message}')",
+      "      symphony_git \"$workspace\" update-ref \"refs/symphony/orphaned/$reset_head_sha\" \"$reset_backup\" ) || true"
     ]
   end
 
@@ -977,6 +1214,7 @@ defmodule SymphonyElixir.Workspace do
       script =
         [
           "set -eu",
+          remote_safe_git_functions(),
           remote_shell_assign("root", settings.workspace.root),
           remote_shell_assign("repo", settings.workspace.repo || ""),
           remote_shell_assign("workspace", workspace),
@@ -989,22 +1227,22 @@ defmodule SymphonyElixir.Workspace do
           "  echo \"workspace_repo_missing: $repo\"",
           "  exit 41",
           "fi",
-          "git -C \"$repo\" rev-parse --git-dir >/dev/null",
+          "symphony_git \"$repo\" rev-parse --git-dir >/dev/null",
           remote_workspace_mutation_containment_preamble(),
-          "if ! worktrees=$(git -C \"$repo\" worktree list --porcelain); then",
+          "if ! worktrees=$(symphony_git \"$repo\" worktree list --porcelain); then",
           "  echo \"workspace_worktree_list_failed: $repo\"",
           "  exit 43",
           "fi",
           "registered=$(printf '%s\\n' \"$worktrees\" | awk '/^worktree / {print substr($0, 10)}' | grep -Fx \"$workspace\" || true)",
           "if [ -n \"$registered\" ]; then",
-          "  git -C \"$repo\" worktree remove --force \"$workspace\"",
+          "  symphony_git \"$repo\" worktree remove --force \"$workspace\"",
           "elif [ -e \"$workspace\" ]; then",
           "  echo \"workspace_not_registered_worktree: $workspace\"",
           "  exit 42",
           "fi",
           remote_after_create_marker_remove_command(),
-          "if git -C \"$repo\" rev-parse --verify \"refs/heads/$branch\" >/dev/null 2>&1; then",
-          "  if ! branch_delete_output=$(git -C \"$repo\" branch -D \"$branch\" 2>&1); then",
+          "if symphony_git \"$repo\" rev-parse --verify \"refs/heads/$branch\" >/dev/null 2>&1; then",
+          "  if ! branch_delete_output=$(symphony_git \"$repo\" branch -D \"$branch\" 2>&1); then",
           "    case \"$branch_delete_output\" in",
           "      *\"checked out at\"*|*\"is checked out\"*)",
           "        printf '%s\\n' \"workspace_branch_delete_skipped: $branch checked out elsewhere\"",
@@ -1768,12 +2006,11 @@ defmodule SymphonyElixir.Workspace do
   # the skip line and exits 47, which `run_hook/7` logs as a skip rather than a
   # failure.
   defp remote_base_tree_lines(%{workspace: %{strategy: "worktree", repo: repo}}, issue_context, marker) do
-    git = Enum.map_join(@safe_git_config_overrides, " ", &"-c #{shell_escape(&1)}")
     base_refs = Enum.map_join(List.wrap(remote_worktree_create_base_ref(issue_context, nil)) ++ ["HEAD"], " ", &shell_escape/1)
     branch = shell_escape(worktree_branch(issue_context))
 
     detach = """
-    after_create_git() { git #{git} "$@"; }
+    #{remote_safe_git_functions()}
     after_create_skip() {
       : > #{marker}
       printf '#{@remote_after_create_skipped_line}\\t%s\\n' "$1"
@@ -1783,18 +2020,18 @@ defmodule SymphonyElixir.Workspace do
     after_create_base=
     if [ -n "$after_create_repo" ]; then
       for after_create_ref in #{base_refs}; do
-        after_create_base=$(after_create_git -C "$after_create_repo" rev-parse --verify --quiet --end-of-options "$after_create_ref^{commit}") && break
+        after_create_base=$(symphony_git "$after_create_repo" rev-parse --verify --quiet --end-of-options "$after_create_ref^{commit}") && break
         after_create_base=
       done
     fi
     [ -n "$after_create_base" ] || after_create_skip no_base_commit
-    after_create_changes=$(after_create_git status --porcelain=v1 --untracked-files=all) || after_create_skip uncommitted_changes
+    after_create_changes=$(symphony_git . status --porcelain=v1 --untracked-files=all) || after_create_skip uncommitted_changes
     [ -z "$after_create_changes" ] || after_create_skip uncommitted_changes
-    after_create_git checkout --quiet --detach "$after_create_base" || exit 1
-    after_create_git clean -ffdxq || { after_create_git checkout --quiet --force #{branch}; exit 1; }\
+    symphony_git . checkout --quiet --detach "$after_create_base" || exit 1
+    symphony_git . clean -ffdxq || { symphony_git . checkout --quiet --force #{branch}; exit 1; }\
     """
 
-    restore = ~s(after_create_git checkout --quiet --force #{branch} || { [ "$after_create_status" -ne 0 ] || after_create_status=1; })
+    restore = ~s(symphony_git . checkout --quiet --force #{branch} || { [ "$after_create_status" -ne 0 ] || after_create_status=1; })
 
     {detach, restore}
   end
@@ -2170,7 +2407,8 @@ defmodule SymphonyElixir.Workspace do
   # the shell start its next command, alongside the retry. The group is stopped
   # before the tree walk, which catches what moved to a group of its own. For a
   # remote hook this kills only the local `ssh`: with no pty the worker sends the
-  # hook no hangup, so it can keep running there.
+  # hook no hangup, so it can keep running there. A git network call is stopped the
+  # same way, with the `ssh` it started.
   defp stop_hook_process(port) do
     with {:os_pid, os_pid} <- Port.info(port, :os_pid) do
       signal_process_group(os_pid, "-STOP")
@@ -2387,20 +2625,26 @@ defmodule SymphonyElixir.Workspace do
   defp remote_after_create_state("0", ["1"]), do: :unfinished
   defp remote_after_create_state("0", _pending), do: :done
 
+  # The remove and the branch delete run under the repo's fetch lock, like a
+  # dispatch's `worktree add`: both write the shared `.git/worktrees` and refs. The
+  # `before_remove` hook runs before it, so a slow hook holds up no other dispatch.
   defp remove_local_worktree(repo, workspace, issue_context) do
     cond do
       registered_worktree?(repo, workspace) ->
         maybe_run_before_remove_hook(workspace, issue_context, nil)
-
-        with :ok <- run_git(repo, ["worktree", "remove", "--force", workspace]) do
-          delete_local_worktree_branch(repo, worktree_branch(issue_context))
-        end
+        Fetcher.with_lock(repo, fn -> remove_registered_worktree(repo, workspace, issue_context) end)
 
       File.exists?(workspace) ->
         {:error, {:workspace_not_registered_worktree, workspace}, ""}
 
       true ->
-        delete_local_worktree_branch(repo, worktree_branch(issue_context))
+        Fetcher.with_lock(repo, fn -> delete_local_worktree_branch(repo, worktree_branch(issue_context)) end)
+    end
+  end
+
+  defp remove_registered_worktree(repo, workspace, issue_context) do
+    with :ok <- run_git(repo, ["worktree", "remove", "--force", workspace]) do
+      delete_local_worktree_branch(repo, worktree_branch(issue_context))
     end
   end
 

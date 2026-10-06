@@ -62,6 +62,39 @@ that repository.
 
 Relative repository workflow paths resolve from the directory containing `symphony.yml`.
 
+## Settings in the macOS app
+
+Every `symphony.yml` setting gets a control in the macOS app, or a person's exemption. When a
+ticket adds a setting, its plan includes the control: in the same PR, or in a sub-ticket that
+blocks the parent's final verification, with a `## User walkthrough` for the new control.
+
+CI enforces it. `mix settings.ui_coverage`, part of `mix lint` (so of `make all` and the `lint`
+job), lists every setting as a dotted key path from the config schema
+(`SystemSchema.operator_key_paths/0`), such as `auto_review.acceptance_gate.mode` or
+`repositories[].route.team` for a key of every repository. It fails, naming each key, when a key is
+in neither of these:
+
+- **The app's manifest**, `SettingsUIManifest.keyPaths` in
+  `macos/Sources/SymphonyBarCore/SettingsUIManifest.swift`: the keys the Settings, Models and
+  Repos sections read and write, one string literal per line. A key holding a free-form map, such
+  as `agent.run_profiles`, covers everything under it. A Swift test runs every line-editor write
+  and fails when one writes a key the manifest doesn't list, or the manifest lists a key no editor
+  writes. The task also fails when the manifest lists a key that is not a setting.
+- **The exemption file**, `config/settings_ui_exempt.yml`: entries with a `key` (a key path, or
+  `prefix.*` for every key under the prefix, including later ones) or a `keys` list, a `reason`,
+  and an optional `ticket` for the planned control. The task warns about an exemption that matches
+  no setting or covers a key the manifest now lists, so a person can remove it.
+
+Only a person can exempt a setting. The exemption file is an agent-protected path: the agent
+sandbox denies writing it, and the `protected paths` check fails a Symphony PR whose own commits
+change it until a person other than the author adds the `protected-paths-approved` label. The
+acceptance gate's `:settings_ui` rule also sends a PR to a person when it adds a field to the config
+schema without changing the manifest (see `docs/acceptance_gate.md`).
+
+To add a setting: add its control to the app, list its key in the manifest, and extend the line
+editor and its tests. To exempt one, a person adds it to the exemption file with the reason, in the
+same PR, and labels the PR. `WORKFLOW.md` front matter (repo-owned settings) is not covered.
+
 ## Top-Level Sections
 
 ### `issues`
@@ -105,8 +138,16 @@ issues:
 - `states.waiting_on_sub_issues`: the state a `breakdown` parent waits in while its sub-tickets are
   worked, default `Waiting on sub-tickets`; `null` turns it off. It counts as active without being
   listed in `states.active`, but an issue in it is dispatched only for the close-out run, once it is
-  a `breakdown` parent whose sub-tickets are all terminal. The breakdown run ends with the parent
-  in `In Review` and its sub-tickets in `Backlog`. A human approves the plan by moving the parent
+  a `breakdown` parent whose sub-tickets are all terminal. Any other ticket whose PR merges with a
+  sub-ticket still open moves here instead of `Done`, and its `Backlog` sub-tickets move to `Todo`;
+  Symphony moves it to `Done` itself, with no run and a comment listing how each sub-ticket ended,
+  once every sub-ticket is terminal; one a person moves here waits for them. With the state off it
+  goes to `Done` on merge as before. Tickets that went `Done` before this wait existed are not
+  revisited: `mix symphony.done_with_open_subtickets --config /path/to/symphony.yml` lists every
+  parent in a terminal state with sub-tickets still open, without changing anything. When it cannot
+  read a repository, it names that repository above the list and exits non-zero. The breakdown
+  run ends with the parent in `In Review` and its sub-tickets in `Backlog`. A human approves the
+  plan by moving the parent
   from `In Review` to this state, and on the next poll Symphony moves every sub-ticket still in
   `Backlog` to `Todo` (blocked-by links keep the order); moving the parent to `Rework` instead
   cancels the sub-tickets the rejected breakdown run created and re-plans. Each batch is listed
@@ -127,8 +168,11 @@ issues:
   - **Revise:** a person's comment on a parent in `In Review` whose plan is not approved moves it
     to `In Progress`, and the `breakdown` run edits the plan in place: it rewrites the artifact
     comments, updates, files or cancels `Backlog` sub-tickets (`linear_update_subissue` refuses
-    any other), replies under each comment and moves the parent back to `In Review`. Symphony's
-    own comments and integration bots' comments start nothing. A comment made while the run works
+    any other), replies under each comment and moves the parent back to `In Review`. Only
+    `In Review` triggers it: a comment on a parent in `Human Review` starts nothing (move it to
+    `Rework` or back to `In Review` instead). Symphony's own comments, a supervisor's notes
+    (starting `Supervisor review:` or `Supervisor note:`) and integration bots' comments start
+    nothing. A comment made while the run works
     is picked up once the parent is back in `In Review`, unless the run answered it. A comment on
     an approved plan changes nothing: under a new top-level comment Symphony replies once that, if
     it asks for a plan change, `Rework` re-plans it.
@@ -153,7 +197,8 @@ issues:
   - an agent moves a `breakdown` parent to `In Review` and its ticket says a human reviews the plan:
     an `auto_review.acceptance_gate.escalate.labels` label other than `breakdown` (`needs-human`)
     or a title or description matching one of its `ticket_patterns` ("must not auto-approve",
-    "human review");
+    "human review"; naming the `Human Review` state doesn't count, see
+    [What escalates](acceptance_gate.md#what-escalates));
   - an agent that posted a `linear_request_human_action` request (or found it still open) moves
     its issue to `Backlog` or `In Review`, as the blocked-access escape hatch does.
 
@@ -293,6 +338,7 @@ workspaces:
   strategy: clone
   repo: ~/code/source-repo
   fetch_before_dispatch: true
+  git_network_timeout_ms: 300000
   attachments:
     allowed_hosts: [github.com]
     public_upload_extensions: [.png, .jpg, .jpeg, .gif, .webp, .svg, .pdf]
@@ -304,6 +350,11 @@ workspaces:
     orphan_action: log
     trash_dir: .trash
 ```
+
+`git_network_timeout_ms` (default `300000`, 5 minutes) is the wall-clock limit of each `git fetch`,
+`pull`, `push` or `ls-remote` Symphony runs on this host. At the limit Symphony stops git and the
+`ssh` it started, logs an error naming the repo and command, and the call fails. Settings in the
+macOS app edits it as Git network timeout, in minutes.
 
 `clones_root` is where Symphony keeps its clones of `repositories[].workspace.source` repos
 (default `~/.local/share/symphony/repos`). An agent's git commands write into that clone, so keep
@@ -324,6 +375,10 @@ folder is removed when the run succeeds and kept, with a log line naming it, whe
 you can look at what the agent left there; the issue's next run starts with an empty one. A run that
 can't create it logs a warning and keeps the runtime's default temp folder. Runs on a remote worker
 keep that host's temp folder.
+
+On macOS a local Claude session also gets the env that lets `swift build` and `swift test` run in
+its sandbox: `DIRHELPER_USER_DIR_SUFFIX=symphony/none` and
+`SWIFTPM_MODULECACHE_OVERRIDE=<temp folder>/swiftpm-module-cache` (see `docs/security.md`).
 
 When a run on the local host ends, after the `after_run` hook, Symphony stops every process still
 running in the issue workspace or the run's temp folder or started from either (by working folder
@@ -419,6 +474,7 @@ agent:
     read_ms: 30000
     stall_ms: 300000
     command_ms: 600000
+    mcp_tool_ms: 600000
 ```
 
 - `runtime`: `codex` or `claude`.
@@ -437,8 +493,6 @@ agent:
 - `permissions.filesystem.allow_write_paths`: extra writable host paths emitted to the Claude
   runtime as `sandbox.filesystem.allowWrite`. Use it to broaden Claude Code's default writable
   set (workspace + `/tmp`) — e.g. to grant test runs access to a configured MCP socket root.
-  On macOS, Symphony also adds the per-user temp dir's `TemporaryItems` for local runs
-  (Foundation's atomic writes need it; see `docs/security.md`).
   For Gradle builds, add `~/.gradle` so builds share its caches. Daemons don't come with it:
   each local agent run in a Gradle project (`gradlew`, `settings.gradle` or
   `settings.gradle.kts` at the workspace root) starts with
@@ -487,10 +541,27 @@ agent:
 - `provider`: default provider that serves the model: `anthropic` (default) or `openrouter`.
   `openrouter` needs a model for every run it serves (an OpenRouter model id such as
   `anthropic/claude-haiku-4.5`) and works only with `runtime: claude`. An `openrouter` run
-  starts `claude` with `ANTHROPIC_BASE_URL=https://openrouter.ai/api`,
-  `ANTHROPIC_AUTH_TOKEN=<OPENROUTER_API_KEY>`, an empty `ANTHROPIC_API_KEY`, `--model <id>`, and
-  `CLAUDE_CODE_SUBAGENT_MODEL=<id>` so subagents use the same model. `anthropic` runs start as
-  before.
+  starts `claude` with `--model <id>` and this env:
+  - `ANTHROPIC_BASE_URL=https://openrouter.ai/api`;
+  - `ANTHROPIC_AUTH_TOKEN=<OPENROUTER_API_KEY>`;
+  - `ANTHROPIC_API_KEY=` (empty);
+  - `CLAUDE_CODE_SUBAGENT_MODEL=<id>`, so subagents use the same model;
+  - `ANTHROPIC_DEFAULT_SONNET_MODEL=<id>` and `ANTHROPIC_DEFAULT_OPUS_MODEL=<id>`, so Claude
+    Code's model aliases use the same model instead of Anthropic's own ids, which OpenRouter does
+    not know;
+  - `ANTHROPIC_DEFAULT_HAIKU_MODEL` and `ANTHROPIC_SMALL_FAST_MODEL`, the model for Claude Code's
+    background calls (titles, summaries): `small_model` when it is set, else `<id>`.
+
+  `anthropic` runs start as before: Symphony sets none of these. In QA mode the base URL is the QA
+  stub's instead (see [OpenRouter in QA](#qa-passes)).
+- `small_model`: optional OpenRouter model id for Claude Code's background calls on runs whose
+  provider is `openrouter`, for example `anthropic/claude-haiku-4.5`. Titles and summaries are
+  frequent, simple calls, so a cheap model keeps them from billing at the run's model's rate.
+  Unset, they use the run's model. One value for every OpenRouter run; `anthropic` runs ignore it.
+  When `OPENROUTER_API_KEY` is set and a run uses `openrouter`, `symphony check` reports an id
+  OpenRouter does not list, for example
+  `` agent.small_model: OpenRouter has no model `acme/typo` ``. The model needs no `tools`.
+  Settings in the macOS app edits it as the Background calls row of Models.
 - `OPENROUTER_API_KEY` (environment variable, read from Symphony's own environment): the
   OpenRouter API key. It is never written to `symphony.yml` and reaches the agent only through
   the subprocess env, as `ANTHROPIC_AUTH_TOKEN`. When it is unset, an `openrouter` run fails
@@ -498,8 +569,8 @@ agent:
   run_kind=<kind>`; retries work as for any other failed start. `symphony check` prints a
   warning naming the run kinds that use `openrouter` while the variable is unset.
 - Model capabilities: Symphony agents need tool use, so an OpenRouter model must list `tools` in
-  `supported_parameters` on OpenRouter's models API (`GET https://openrouter.ai/api/v1/models`,
-  read without the key and cached in process for an hour). When `OPENROUTER_API_KEY` is set,
+  `supported_parameters` on OpenRouter's models API (`GET https://openrouter.ai/api/v1/models`, the
+  QA stub's in QA mode, read without the key and cached in process for an hour). When `OPENROUTER_API_KEY` is set,
   `symphony check` asks that API and reports, naming the key that set the model or effort
   (`pre_push_review.model`, `auto_review.model`, `repositories[<key>].agent.run_profiles.<kind>.model`,
   `repositories[<key>].agent.model`, `agent.run_profiles.<kind>.model`, `agent.model`, and the
@@ -508,13 +579,24 @@ agent:
     `` agent.run_profiles.landing.model: OpenRouter has no model `acme/typo` ``;
   - an error for a model without `tools`, for example
     `` agent.run_profiles.landing.model: OpenRouter model `acme/chat-only` does not support tools ``;
-  - a warning when `effort` is set for a model that does not list `reasoning`.
+  - a warning when `effort` is set for a model that does not list `reasoning`. When the effort
+    comes from a key above the one that picked the model (for example
+    `repositories[api].agent.run_profiles.breakdown: { provider: openrouter, model: acme/tools-only }`
+    under `agent.run_profiles.breakdown.effort: xhigh`), the warning names the model key and the
+    key the effort is inherited from:
+    `` repositories[api].agent.run_profiles.breakdown.model: OpenRouter model `acme/tools-only` does not support reasoning; its runs start without --effort xhigh, inherited from agent.run_profiles.breakdown.effort ``.
+
+  When a run's model is inherited from a key above the one that picked `openrouter` (for example
+  `repositories[api].agent.run_profiles.landing: { provider: openrouter }` with only `agent.model`
+  set), the error names that provider key, the key the model is inherited from, and the `model` key
+  to set next to it:
+  `` repositories[api].agent.run_profiles.landing.provider: OpenRouter has no model `claude-sonnet-5-5`, inherited from agent.model; set repositories[api].agent.run_profiles.landing.model to an OpenRouter model id ``.
 
   When the API cannot be reached, `check` prints a warning and does not fail. Before an
   OpenRouter run starts, Symphony looks the model up the same way: a model without `tools` fails
   the run before `claude` starts and logs `OpenRouter run cannot start: model <id> does not
   support tools run_kind=<kind>; set <key> to a model that lists tools`, where `<key>` is the
-  key that set the model, as in `check`; a model without `reasoning` starts without `--effort` and logs
+  model key `check` names; a model without `reasoning` starts without `--effort` and logs
   a warning once per model. If the lookup fails, or OpenRouter does not list the model, the run
   starts anyway and logs a warning, so an OpenRouter outage does not block work.
 - `run_profiles.<kind>`: `model`, `effort` and/or `provider` for one kind of run. Kinds, first match wins:
@@ -661,6 +743,10 @@ agent:
   invocation when a turn completes but the issue is still active. Codex reuses one `threadId`
   across these turns; Claude relaunches per turn (workspace + prompt provide continuation).
 - `timeouts.command_ms` caps a single shell command. Set `0` to disable.
+- `timeouts.mcp_tool_ms` (default `600000`, 10 minutes) caps one call of Symphony's own MCP tools
+  (`linear_*`, `github_*`): a call still running then is stopped and answered with a
+  `tool_timeout` error. QA tools keep their own timeouts. Settings in the macOS app edits it as
+  MCP tool timeout, in minutes.
 
 **Token budgets:**
 
@@ -689,7 +775,11 @@ agent:
 - `usage_limit.resume_margin_seconds` (default `120`, `>= 0`): added to the reset time the provider
   reports before runs resume.
 - `usage_limit.unknown_reset_retry_seconds` (default `900`, `>= 60`): how long the hold lasts when
-  no reset time is known (neither in the rejection nor remembered for that window).
+  no reset time is known (neither in the rejection nor remembered for that window). It also caps
+  the wait between probes while Claude can't reach its API (a network or DNS outage): that hold
+  starts whatever `auto_pause` says, probes after 60 seconds and doubles the wait after each
+  failed probe. A released outage hold is remembered this long (at least 10 minutes), so a QA or
+  acceptance-gate pass that finds the outage again keeps the backoff.
 - At the resume time one held run (the first in dispatch order) goes out alone. If Claude accepts
   it, the other held runs follow; if it hits the limit again, the hold starts over from the new
   reset time (or `unknown_reset_retry_seconds`). New Claude work stays held meanwhile.
@@ -1081,8 +1171,34 @@ and it is `skipped` only when no run can be read or a run is still in progress. 
 `api.github.com`, which is not in the built-in network allowlist; add it to
 `agent.permissions.network.allowed_domains` for the fallback to work.
 
+**OpenRouter in QA.** QA never uses a real, paid OpenRouter key. OpenRouter flows (Test connection
+in the macOS app's Settings, its Models list and Effort note, `symphony check` on an `openrouter`
+profile, an OpenRouter run) are tested against a stub OpenRouter, `SymphonyElixir.OpenRouter.Stub`,
+which listens on `127.0.0.1` only and answers with canned data:
+
+| Request | Answer |
+| --- | --- |
+| `GET /api/v1/key` | for the key `sk-or-v1-symphony-qa-stub`, the label `Symphony QA stub`, $1.25 used of a $10.00 limit, $8.75 left; any other key or none gets a 401, so Settings says the key is rejected |
+| `GET /api/v1/models` | `symphony-qa/reasoning-tools` (tools and reasoning), `symphony-qa/tools-only` (tools, no reasoning) and `symphony-qa/no-tools` (no tools) |
+| `POST /api/v1/messages` | with the valid key, a canned Anthropic message (JSON, or SSE when the request streams) naming the model it was asked for |
+
+It logs each request (method, path, model, whether the key was accepted), never the key. The
+`macos_app` QA driver starts one for each pass and launches every app with its URL; on a
+`worker_host`, the app's SSH session forwards a loopback port on the QA host back to it (`ssh -R`,
+so the QA host's `sshd` must allow TCP forwarding, as it does by default). The `cli` playbook starts
+one with `symphony openrouter-stub [--port <port>]`, which prints its URL and the variables to export.
+
+Symphony and the app use the stub only in QA mode: `SYMPHONY_QA_OPENROUTER_URL` (the stub's API
+base, such as `http://127.0.0.1:4100/api`) counts only while `SYMPHONY_BAR_QA_ROOT` is set too, and
+only for an `http` or `https` URL on a loopback host (`127.0.0.1`, `localhost`, `::1`). Otherwise a
+run, `symphony check` and the app always talk to `https://openrouter.ai`, whatever the environment
+says, so a stray variable cannot send a key to another host. Checks against the real API with a
+real key (a real model list, a real run) are manual: a person runs them by hand, with a cheap
+model, outside QA.
+
 An agent cannot change the agent-protected paths (`WORKFLOW.md`, `symphony.yml`, `.ai/skills`, the
-project `.claude` settings, hooks and skills, `mise.toml`, `.tool-versions`): its sandbox denies the
+project `.claude` settings, hooks and skills, `mise.toml`, `.tool-versions`,
+`config/settings_ui_exempt.yml`): its sandbox denies the
 writes and the `protected-paths` CI job fails a PR whose own commits touch them. The executor hands
 a criterion that only such a change can meet to a person, in a sub-issue or a follow-up ticket
 named in its workpad. The PR QA prompt lists these paths, and the agent marks such a handed-off
@@ -1104,6 +1220,14 @@ A pass whose QA agent runs into the Claude or Codex usage limit gets no verdict 
 issue stays in Auto Review, Symphony holds that provider's runs until the limit resets (as for an
 agent run, see `agent.usage_limit`), and the next green CI poll after that runs the pass again on
 the same PR head. With `agent.usage_limit.auto_pause: false` it is `blocked` instead.
+
+A `blocked` the QA agent didn't decide itself (it crashed, hit the usage limit with `auto_pause`
+off, or its dev server, emulator or browser didn't start) isn't kept for the PR head: when the
+issue is moved back to Auto Review on the same head, QA runs again before the acceptance gate
+judges it, after the usage limit resets if one still holds. A `blocked` verdict from the agent
+(a missing secret, a step only a person can do) is kept, and goes to the gate or human review
+again as it did the first time. A `blocked` stored by an older Symphony, which didn't record who
+decided it, is told apart by its reason: one Symphony gave for an error runs again too.
 
 Every pass rewrites one `## Symphony QA Report` comment on the issue (Symphony's only comment
 besides the agent workpad) and records a run with `kind: "qa"`, its tokens and wall time in the
@@ -1331,11 +1455,30 @@ app bundle it produces:
 auto_review:
   playbooks:
     macos_app:
-      build: make -C macos app            # run in the QA worktree
+      build: make -C macos qa-app         # run in the QA worktree
       app: macos/build/Symphony.app       # relative to the repo root
       build_timeout_ms: 900000            # optional, default 15 minutes
       # paths: ["macos/Sources/**"]       # optional, default: Swift, Info.plist, xib, storyboard, xcassets
 ```
+
+For Symphony's own app, build with `make -C macos qa-app`, not `make -C macos app`. The app runs
+`symphony check` on every Settings Save, and a plain `make` build has no Symphony to run it with,
+so each Save would stop at the check. `qa-app` builds the PR head's Symphony from the same copy
+(`mix deps.get`, then `mix escript.build`) and embeds it at
+`Symphony.app/Contents/Resources/symphony`, where releases embed theirs, so the QA app checks with
+the PR's code and never with an installed release. The embedded escript's first line points at
+the build host's Erlang (`<code:root_dir()>/bin/escript`), so the app runs it without `mise` or
+`PATH`. The build host needs `mix` and `erl` on the build's `PATH` (Erlang and Elixir as in
+`mise.toml`; set `MIX=` and `ERL=` on the make line to use others) and network access for
+`mix deps.get`. With `mise` shims on a QA host, add `~/.symphony-qa` to the QA user's
+`MISE_TRUSTED_CONFIG_PATHS`, since each pass copies the repository into a new directory there.
+The QA app has no update key, so it never updates itself.
+
+`symphony check` prints the build it runs first, on stderr: `Symphony <version> (<commit>)`. In QA
+mode the app writes each check's exit status and output to its own stderr, which `qa_quit_app`
+returns, so a QA report can quote the commit the check ran and compare it with the PR head. A
+build in a checkout takes the commit from `git rev-parse HEAD`; on a `worker_host`, where the copy
+has no `.git`, `git archive` writes it into `macos/source-commit` (an `export-subst` file).
 
 The QA agent's sandbox cannot build Swift, open apps or read the screen, so Symphony runs these
 tools for it on the host, outside the sandbox, and checks every argument:
@@ -1343,7 +1486,7 @@ tools for it on the host, outside the sandbox, and checks every argument:
 | Tool | Does | Refuses |
 | --- | --- | --- |
 | `qa_build` | runs `build` in the QA worktree with the agent's scrubbed environment, then copies the `app` bundle into a private directory | a worktree with changes outside `qa-evidence/` and `.gradle-daemons/` (Symphony's own), gitignored files included: none may exist before the first build, and none may appear or change after a build; a bundle that resolves (symlinks included) outside the worktree, or that holds an absolute symlink or one with `..` |
-| `qa_launch_app` | starts the private copy of the bundle with `SYMPHONY_BAR_QA_ROOT` set to a private directory ([QA mode](../macos/README.md#qa-mode)), and returns its PID | an executable that changed since the last `qa_build`, or a worktree `qa_build` would refuse |
+| `qa_launch_app` | starts the private copy of the bundle with `SYMPHONY_BAR_QA_ROOT` set to a private directory ([QA mode](../macos/README.md#qa-mode)) and `SYMPHONY_QA_OPENROUTER_URL` set to the pass's [OpenRouter stub](#qa-passes), and returns its PID | an executable that changed since the last `qa_build`, or a worktree `qa_build` would refuse |
 | `qa_quit_app` | quits a launched app and returns its recent output | a PID it did not launch |
 | `qa_screenshot` | saves the app's on-screen windows to new files `qa-evidence/<name>.png` | a PID it did not launch, a window of another app, a name that already exists (file or symlink) |
 | `qa_ax_tree` | reads the accessibility tree (role, title, value, frame; never a secure field's value), filtered by `role` or `text`, capped in depth, nodes and size | a PID it did not launch |
@@ -1448,7 +1591,9 @@ host and the worktree checks still apply there. Then:
   behind) into a fresh `src/` in a `0700` run directory under `~/.symphony-qa/runs/` on the QA
   host, runs `build` there with the QA user's login environment, and copies the bundle into the
   run directory;
-- `qa_launch_app` starts that copy with only `SYMPHONY_BAR_QA_ROOT` set;
+- `qa_launch_app` starts that copy with only `SYMPHONY_BAR_QA_ROOT` and `SYMPHONY_QA_OPENROUTER_URL`
+  set, over an SSH session that forwards the URL's loopback port on the QA host back to the
+  OpenRouter stub on the Symphony host;
 - the Swift helper is compiled there with `swiftc` on first use in each pass, into the run
   directory's `helper/`. Passes never share it: each PR's build runs as the QA user, and a helper
   it replaced could answer the permission, window and accessibility calls of later passes. There it
@@ -1603,12 +1748,14 @@ any other repository command on the host; they only call Symphony's adb.
 | `qa_android_rotate` | turns off auto-rotate and locks `portrait` or `landscape` (`cmd window user-rotation lock`, or the `user_rotation` setting on Android 9 and older), then waits up to 5 s for the display to turn; fails with `qa_android_rotate_failed` when it does not, for example when the app locks its orientation | any other orientation |
 | `qa_android_dark_mode` | turns the night theme `on` or `off` (`cmd uimode night`) | |
 | `qa_android_font_scale` | sets the font scale to 0.85, 1.0, 1.15, 1.3, 1.5, 1.8 or 2.0 | any other scale |
+| `qa_android_put_file` | puts a fixture file the agent wrote (a CSV to import, a malformed file) into the emulator's shared Downloads: copies the checked bytes into the private directory, runs `adb push` to `/sdcard/Download/<name>` and a media scan, so the system file picker lists it under Downloads. `dest` is `Download/<name>`, by default the file's own name. `qa_android_install` wipes app data, not Downloads, so the file survives a reinstall | a file that resolves outside the worktree and the pass's `$TMPDIR`, a symlink, a directory or other non-regular file, a file with other hard links, a file over 1 MB, a file replaced while it is read; a `dest` outside `Download/`, in a subfolder, or with a name other than letters, digits, `.`, `_` and `-` |
 
-The last seven tools work only once `qa_android_install` installed one of the `application_ids`
-in this pass.
+`qa_android_ui_tree` through `qa_android_font_scale` work only once `qa_android_install` installed
+one of the `application_ids` in this pass.
 
 When the pass ends, or crashes, Symphony resets what the pass changed (portrait with auto-rotate
-off, dark mode off, font scale 1.0), so the next pass starts clean on the same emulator, then
+off, dark mode off, font scale 1.0) and removes the files it put in Downloads, so the next pass
+starts clean on the same emulator, then
 uninstalls the `application_ids` apps and every package installed in the pass, gives the emulator back and removes the private directory. Only QA
 agents see these tools; executor and reviewer sessions cannot list or call them.
 

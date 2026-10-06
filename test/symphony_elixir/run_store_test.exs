@@ -1,6 +1,8 @@
 defmodule SymphonyElixir.RunStoreTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.RunStore.RunIndex
+
   @repo_key "repo-a"
   @other_repo_key "repo-b"
 
@@ -298,7 +300,7 @@ defmodule SymphonyElixir.RunStoreTest do
     assert %{paused: true, reason: "overnight deploy", paused_at: %DateTime{} = paused_at} =
              RunStore.get_paused()
 
-    restarted_pid = restart_run_store()
+    restart_run_store()
 
     assert %{paused: true, reason: "overnight deploy", paused_at: ^paused_at} =
              RunStore.get_paused()
@@ -311,7 +313,6 @@ defmodule SymphonyElixir.RunStoreTest do
     assert :ok = RunStore.set_paused(false, nil)
     assert %{paused: false, reason: nil, paused_at: nil} = RunStore.get_paused()
 
-    if Process.alive?(restarted_pid), do: GenServer.stop(restarted_pid)
     restart_run_store()
   end
 
@@ -322,7 +323,7 @@ defmodule SymphonyElixir.RunStoreTest do
     assert :ok = RunStore.put_own_state_move("issue-own", moved_at)
     assert :ok = RunStore.put_own_state_move("issue-own", DateTime.add(moved_at, 60))
 
-    restarted_pid = restart_run_store()
+    restart_run_store()
 
     assert RunStore.get_own_state_move("issue-own") == DateTime.add(moved_at, 60)
     assert RunStore.get_own_state_move("issue-other") == nil
@@ -330,7 +331,24 @@ defmodule SymphonyElixir.RunStoreTest do
     assert {:error, :invalid_own_state_move} = RunStore.put_own_state_move(nil, moved_at)
     assert {:error, :invalid_issue_id} = RunStore.get_own_state_move(nil)
 
-    if Process.alive?(restarted_pid), do: GenServer.stop(restarted_pid)
+    restart_run_store()
+  end
+
+  test "persists the issues a merge moved to the waiting state across run store restart" do
+    refute RunStore.merged_wait?("issue-merged")
+    assert :ok = RunStore.put_merged_wait("issue-merged")
+    assert :ok = RunStore.put_merged_wait("issue-merged")
+
+    restart_run_store()
+
+    assert RunStore.merged_wait?("issue-merged")
+    refute RunStore.merged_wait?("issue-other")
+    assert :ok = RunStore.delete_merged_wait("issue-merged")
+    refute RunStore.merged_wait?("issue-merged")
+    assert {:error, :invalid_issue_id} = RunStore.put_merged_wait(nil)
+    assert {:error, :invalid_issue_id} = RunStore.merged_wait?(nil)
+    assert {:error, :invalid_issue_id} = RunStore.delete_merged_wait(nil)
+
     restart_run_store()
   end
 
@@ -411,6 +429,273 @@ defmodule SymphonyElixir.RunStoreTest do
              %{run_id: "run-valid", status: "failure"},
              %{status: "running"}
            ] = Enum.sort_by(RunStore.list_runs(@repo_key, :all), &Map.get(&1, :run_id, "zzz"))
+  end
+
+  describe "the run index" do
+    test "bounded reads return the newest runs from the index, without scanning the table" do
+      put_indexed_runs(@repo_key, ["a-1", "a-2", "a-3"], 0)
+      put_indexed_runs(@other_repo_key, ["b-1", "b-2"], 10)
+      assert :ok = RunStore.put_run(%{repo_key: @repo_key, run_id: "a-unstarted", status: "running"})
+
+      assert run_ids(RunStore.list_runs(@repo_key, 2)) == ["a-3", "a-2"]
+      assert run_ids(RunStore.list_runs(@repo_key, 10)) == ["a-3", "a-2", "a-1", "a-unstarted"]
+      assert RunStore.list_runs(@repo_key, 0) == []
+      assert run_ids(RunStore.list_all_runs(3)) == ["b-2", "b-1", "a-3"]
+      assert RunStore.list_runs("missing-repo", 5) == []
+
+      # Written behind RunStore's back, so only a scan of the table can find it.
+      assert {:atomic, :ok} =
+               :mnesia.transaction(fn ->
+                 :mnesia.write({:symphony_run_store_runs, {@repo_key, "a-raw"}, @repo_key, "a-raw", %{run_id: "a-raw", started_at: started_at(99)}})
+               end)
+
+      assert run_ids(RunStore.list_runs(@repo_key, 2)) == ["a-3", "a-2"]
+      assert ["a-raw" | _rest] = run_ids(RunStore.list_runs(@repo_key, :all))
+    end
+
+    test "a bounded read costs the same however many runs the store holds" do
+      put_indexed_runs(@repo_key, Enum.map(1..20, &"small-#{&1}"), 0)
+      small = reductions(fn -> RunStore.list_runs(@repo_key, 10) end)
+
+      put_indexed_runs(@repo_key, Enum.map(1..400, &"large-#{&1}"), 100)
+      large = reductions(fn -> RunStore.list_runs(@repo_key, 10) end)
+      scan = reductions(fn -> RunStore.list_runs(@repo_key, :all) end)
+
+      assert length(RunStore.list_runs(@repo_key, 10)) == 10
+      assert large < small * 2, "list_runs/2 took #{large} reductions over 420 runs, #{small} over 20"
+      assert scan > large * 5
+    end
+
+    test "reads the runs of one issue from the index, newest first" do
+      put_indexed_runs(@repo_key, ["a-1", "a-2"], 0)
+      assert :ok = RunStore.put_run(%{repo_key: @repo_key, run_id: "a-3", issue_id: "issue-a-1", started_at: started_at(5)})
+      assert :ok = RunStore.put_run(%{repo_key: @other_repo_key, run_id: "b-1", issue_id: "issue-a-1", started_at: started_at(6)})
+      assert :ok = RunStore.put_run(%{repo_key: @repo_key, run_id: "no-issue", started_at: started_at(7)})
+
+      assert run_ids(RunStore.list_issue_runs(@repo_key, "issue-a-1")) == ["a-3", "a-1"]
+      assert run_ids(RunStore.list_issue_runs(@other_repo_key, "issue-a-1")) == ["b-1"]
+      assert RunStore.list_issue_runs(@repo_key, "missing-issue") == []
+
+      # A run moved to another issue or start is found only under its new ones.
+      assert :ok = RunStore.update_run(@repo_key, "a-3", %{issue_id: "issue-a-2", started_at: started_at(-1)})
+      assert run_ids(RunStore.list_issue_runs(@repo_key, "issue-a-1")) == ["a-1"]
+      assert run_ids(RunStore.list_issue_runs(@repo_key, "issue-a-2")) == ["a-2", "a-3"]
+
+      # Emptied as when RunStore starts, before the index is built: the read scans the repository.
+      assert :ok = RunIndex.create()
+      assert RunIndex.take_issue(@repo_key, "issue-a-2") == :unavailable
+      assert run_ids(RunStore.list_issue_runs(@repo_key, "issue-a-2")) == ["a-2", "a-3"]
+
+      restart_run_store()
+      assert {:ok, [{@repo_key, "a-2"}, {@repo_key, "a-3"}]} = RunIndex.take_issue(@repo_key, "issue-a-2")
+    end
+
+    test "reading one issue's runs costs the same however many runs the store holds" do
+      put_indexed_runs(@repo_key, Enum.map(1..20, &"small-#{&1}"), 0)
+      small = reductions(fn -> RunStore.list_issue_runs(@repo_key, "issue-small-1") end)
+
+      put_indexed_runs(@repo_key, Enum.map(1..400, &"large-#{&1}"), 100)
+      large = reductions(fn -> RunStore.list_issue_runs(@repo_key, "issue-small-1") end)
+
+      assert run_ids(RunStore.list_issue_runs(@repo_key, "issue-small-1")) == ["small-1"]
+      assert large < small * 2, "list_issue_runs/2 took #{large} reductions over 420 runs, #{small} over 20"
+    end
+
+    test "reads the runs with a status, the runs started on a day and a repository's workspace identifiers from the index" do
+      day = ~D[2026-10-05]
+      day_start = DateTime.new!(day, ~T[00:00:00.000000], "Etc/UTC")
+
+      put_run(@repo_key, "a-1", issue_identifier: "MT-1", status: "budget_exhausted", started_at: day_start)
+      put_run(@repo_key, "a-2", issue_identifier: "MT-1", status: "success", started_at: started_at(0))
+      put_run(@repo_key, "a-3", workspace_path: "/workspaces/repo-a/MT-2", status: "running", started_at: started_at(-86_400))
+      put_run(@repo_key, "a-4", issue_identifier: "MT-1" <> <<0>>, started_at: DateTime.add(day_start, 1, :day))
+      put_run(@repo_key, "a-5", issue_identifier: nil, workspace_path: "/workspaces/repo-a/MT-0")
+      put_run(@repo_key, "a-6", issue_identifier: 42)
+      put_run(@other_repo_key, "b-1", issue_identifier: "MT-9", status: "budget_exhausted", started_at: started_at(5))
+
+      assert run_ids(RunStore.list_runs_with_status("budget_exhausted")) |> Enum.sort() == ["a-1", "b-1"]
+      assert run_ids(RunStore.list_runs_with_status("running")) == ["a-3"]
+      assert RunStore.list_runs_with_status("missing") == []
+      assert run_ids(RunStore.list_runs_started_on(day)) == ["b-1", "a-2", "a-1"]
+      assert run_ids(RunStore.list_runs_started_on(Date.add(day, 1))) == ["a-4"]
+      assert RunStore.list_runs_started_on(Date.add(day, 2)) == []
+      assert RunStore.list_run_identifiers(@repo_key) == ["MT-0", "MT-1", "MT-1" <> <<0>>, "MT-2"]
+      assert RunStore.list_run_identifiers(@other_repo_key) == ["MT-9"]
+      assert RunStore.list_run_identifiers("missing-repo") == []
+      assert {:error, :invalid_repo_key} = RunStore.list_run_identifiers(" ")
+
+      # A run that changed status, start or workspace is found only under its new ones.
+      update = %{status: "success", started_at: started_at(-86_399), issue_identifier: "MT-3"}
+      assert :ok = RunStore.update_run(@repo_key, "a-1", update)
+      assert {:ok, 1} = RunStore.interrupt_running_runs(@repo_key, "restarted")
+      assert run_ids(RunStore.list_runs_with_status("budget_exhausted")) == ["b-1"]
+      assert RunStore.list_runs_with_status("running") == []
+      assert run_ids(RunStore.list_runs_with_status("failure")) == ["a-3"]
+      assert run_ids(RunStore.list_runs_started_on(day)) == ["b-1", "a-2"]
+      assert run_ids(RunStore.list_runs_started_on(Date.add(day, -1))) == ["a-1", "a-3"]
+      assert RunStore.list_run_identifiers(@repo_key) == ["MT-0", "MT-1", "MT-1" <> <<0>>, "MT-2", "MT-3"]
+
+      # Emptied as when RunStore starts, before the index is built: the reads scan the table.
+      assert :ok = RunIndex.create()
+      assert RunIndex.take_status("failure") == :unavailable
+      assert RunIndex.take_started(day_start, DateTime.add(day_start, 1, :day)) == :unavailable
+      assert RunIndex.take_identifiers(@repo_key) == :unavailable
+      assert run_ids(RunStore.list_runs_with_status("budget_exhausted")) == ["b-1"]
+      assert run_ids(RunStore.list_runs_started_on(day)) == ["b-1", "a-2"]
+      assert run_ids(RunStore.list_runs_started_on(Date.add(day, -1))) == ["a-1", "a-3"]
+      assert RunStore.list_run_identifiers(@repo_key) == ["MT-0", "MT-1", "MT-1" <> <<0>>, "MT-2", "MT-3"]
+      assert RunStore.list_run_identifiers("missing-repo") == []
+
+      restart_run_store()
+      assert {:ok, [{@repo_key, "a-3"}]} = RunIndex.take_status("failure")
+      assert RunStore.list_run_identifiers(@repo_key) == ["MT-0", "MT-1", "MT-1" <> <<0>>, "MT-2", "MT-3"]
+    end
+
+    test "the startup reads cost the same however many runs the store holds" do
+      day = ~D[2026-10-05]
+      put_startup_runs(@repo_key, "small", 20, 0)
+      small = startup_read_reductions(day)
+
+      # Older runs, on other days, with other statuses, for the same issues.
+      put_startup_runs(@repo_key, "large", 400, 86_400)
+      large = startup_read_reductions(day)
+      scan = reductions(fn -> RunStore.list_all_runs(:all) end)
+
+      assert length(RunStore.list_runs_started_on(day)) == 20
+      assert length(RunStore.list_runs_with_status("budget_exhausted")) == 2
+      assert RunStore.list_run_identifiers(@repo_key) == Enum.map(0..4, &"MT-#{&1}")
+
+      for {read, cost} <- large do
+        assert cost < small[read] * 2, "#{read} took #{cost} reductions over 420 runs, #{small[read]} over 20"
+        assert scan > cost * 5, "#{read} took #{cost} reductions over 420 runs, a scan #{scan}"
+      end
+    end
+
+    test "an update moves a run whose start changed and keeps the record current" do
+      put_indexed_runs(@repo_key, ["a-1", "a-2"], 0)
+
+      assert :ok = RunStore.update_run(@repo_key, "a-1", %{started_at: started_at(50), status: "success"})
+      assert [%{run_id: "a-1", status: "success"}, %{run_id: "a-2"}] = RunStore.list_runs(@repo_key, 5)
+
+      assert :ok = RunStore.update_run(@repo_key, "a-2", %{status: "failure"})
+      assert [%{run_id: "a-1"}, %{run_id: "a-2", status: "failure"}] = RunStore.list_runs(@repo_key, 5)
+      assert {:error, :run_not_found} = RunStore.update_run(@repo_key, "missing", %{status: "failure"})
+
+      assert :ok = RunStore.clear()
+      assert RunStore.list_runs(@repo_key, 5) == []
+      assert RunStore.list_all_runs(5) == []
+    end
+
+    test "memoizes a value per run kind until a run of that kind is written" do
+      test_pid = self()
+
+      derive = fn ->
+        send(test_pid, :derived)
+        {:ok, @repo_key |> RunStore.list_runs(:all) |> Enum.filter(&(&1[:kind] == "acceptance_gate")) |> run_ids()}
+      end
+
+      assert {:ok, []} = RunStore.memoize_runs(:gate_ids, "acceptance_gate", derive)
+      assert_received :derived
+
+      assert :ok = RunStore.put_run(%{repo_key: @repo_key, run_id: "agent-1", kind: "agent", started_at: started_at(1)})
+      assert {:ok, []} = RunStore.memoize_runs(:gate_ids, "acceptance_gate", derive)
+      refute_received :derived
+
+      assert :ok = RunStore.put_run(%{repo_key: @repo_key, run_id: "gate-1", kind: "acceptance_gate", status: "running", started_at: started_at(2)})
+      assert {:ok, ["gate-1"]} = RunStore.memoize_runs(:gate_ids, "acceptance_gate", derive)
+      assert_received :derived
+
+      assert :ok = RunStore.update_run(@repo_key, "gate-1", %{verdict: "approve"})
+      assert {:ok, ["gate-1"]} = RunStore.memoize_runs(:gate_ids, "acceptance_gate", derive)
+      assert_received :derived
+
+      assert {:ok, 1} = RunStore.interrupt_running_runs(@repo_key, "restarted")
+      assert {:ok, ["gate-1"]} = RunStore.memoize_runs(:gate_ids, "acceptance_gate", derive)
+      assert_received :derived
+
+      assert :ok = RunStore.clear()
+      assert {:error, :unreadable} = RunStore.memoize_runs(:gate_ids, "acceptance_gate", fn -> {:error, :unreadable} end)
+      assert {:ok, []} = RunStore.memoize_runs(:gate_ids, "acceptance_gate", derive)
+      assert_received :derived
+    end
+
+    test "falls back to scanning without a built index, and rebuilds it when RunStore starts" do
+      put_indexed_runs(@repo_key, ["a-1", "a-2"], 0)
+      test_pid = self()
+      derive = fn -> send(test_pid, :derived) && {:ok, :value} end
+
+      # Emptied as when RunStore starts, before the index is built.
+      assert :ok = RunIndex.create()
+      assert RunIndex.take(@repo_key, 1) == :unavailable
+      assert run_ids(RunStore.list_runs(@repo_key, 1)) == ["a-2"]
+      assert run_ids(RunStore.list_all_runs(1)) == ["a-2"]
+      assert {:ok, :value} = RunStore.memoize_runs(:fallback, "agent", derive)
+      assert {:ok, :value} = RunStore.memoize_runs(:fallback, "agent", derive)
+      assert_received :derived
+      assert_received :derived
+
+      # Gone, as while RunStore restarts.
+      :ets.delete(:symphony_run_store_run_index)
+      assert :ok = RunStore.put_run(%{repo_key: @repo_key, run_id: "a-3", started_at: started_at(3)})
+      assert :ok = RunIndex.touch()
+      assert :ok = RunIndex.reset()
+      assert :ok = RunIndex.build([])
+      assert RunIndex.take(:all, 1) == :unavailable
+      assert run_ids(RunStore.list_runs(@repo_key, 1)) == ["a-3"]
+      assert {:ok, :value} = RunStore.memoize_runs(:fallback, "agent", derive)
+      assert_received :derived
+
+      restart_run_store()
+
+      assert {:ok, [{@repo_key, "a-3"}, {@repo_key, "a-2"}]} = RunIndex.take(@repo_key, 2)
+      assert run_ids(RunStore.list_runs(@repo_key, 5)) == ["a-3", "a-2", "a-1"]
+      assert {:ok, :value} = RunStore.memoize_runs(:fallback, "agent", derive)
+      assert {:ok, :value} = RunStore.memoize_runs(:fallback, "agent", derive)
+      assert_received :derived
+      refute_received :derived
+    end
+  end
+
+  defp put_indexed_runs(repo_key, run_ids, offset) do
+    run_ids
+    |> Enum.with_index(offset)
+    |> Enum.each(fn {run_id, second} ->
+      record = %{repo_key: repo_key, run_id: run_id, issue_id: "issue-#{run_id}", status: "success", started_at: started_at(second)}
+      assert :ok = RunStore.put_run(record)
+    end)
+  end
+
+  # `count` runs of five issues, `offset` seconds before noon on 2026-10-05; the first two are
+  # budget-exhausted.
+  defp put_startup_runs(repo_key, prefix, count, offset) do
+    Enum.each(0..(count - 1), fn index ->
+      status = if index < 2 and offset == 0, do: "budget_exhausted", else: "success"
+      put_run(repo_key, "#{prefix}-#{index}", issue_identifier: "MT-#{rem(index, 5)}", status: status, started_at: started_at(-offset - index))
+    end)
+  end
+
+  defp put_run(repo_key, run_id, attrs) do
+    assert :ok = attrs |> Map.new() |> Map.merge(%{repo_key: repo_key, run_id: run_id}) |> RunStore.put_run()
+  end
+
+  defp startup_read_reductions(day) do
+    %{
+      started_on: reductions(fn -> RunStore.list_runs_started_on(day) end),
+      with_status: reductions(fn -> RunStore.list_runs_with_status("budget_exhausted") end),
+      identifiers: reductions(fn -> RunStore.list_run_identifiers(@repo_key) end)
+    }
+  end
+
+  defp started_at(second), do: DateTime.add(~U[2026-10-05 12:00:00.000000Z], second, :second)
+
+  defp run_ids(runs), do: Enum.map(runs, & &1.run_id)
+
+  defp reductions(fun) do
+    fun.()
+    {:reductions, before} = Process.info(self(), :reductions)
+    fun.()
+    {:reductions, later} = Process.info(self(), :reductions)
+    later - before
   end
 
   test "persists eval logs with indexed filter fields" do
@@ -642,14 +927,24 @@ defmodule SymphonyElixir.RunStoreTest do
     Enum.find_index(attributes, &(&1 == field)) + 2
   end
 
+  # Returns once the new RunStore built its run index, and leaves it unlinked from the test.
+  # Stopping a supervised RunStore behind the supervisor's back raced the supervisor's own restart:
+  # the test could read the index while it was still being built, or own a RunStore that died after
+  # the test and was restarted, emptying the index, during the next one. Each of those restarts also
+  # counted toward the supervisor's limit of 3 in 5 seconds, and a few such tests in a row shut the
+  # whole supervisor down, so `terminate_child/2` exited with `shutdown`. A restart through
+  # `terminate_child/2` and `restart_child/2` counts toward nothing.
   defp restart_run_store do
-    if pid = Process.whereis(RunStore) do
-      GenServer.stop(pid)
-    end
+    case Supervisor.terminate_child(SymphonyElixir.Supervisor, RunStore) do
+      :ok ->
+        {:ok, _pid} = Supervisor.restart_child(SymphonyElixir.Supervisor, RunStore)
+        :ok
 
-    case RunStore.start_link([]) do
-      {:ok, pid} -> pid
-      {:error, {:already_started, pid}} -> pid
+      # Without the orchestrator runtime nothing supervises it: `RunStore.ensure_started/0` starts it.
+      {:error, :not_found} ->
+        if pid = Process.whereis(RunStore), do: GenServer.stop(pid)
+        {:ok, _pid} = GenServer.start(RunStore, [], name: RunStore)
+        :ok
     end
   end
 

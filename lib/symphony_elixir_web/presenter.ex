@@ -102,7 +102,8 @@ defmodule SymphonyElixirWeb.Presenter do
           concurrency: Map.get(snapshot, :concurrency),
           claimed: Map.get(snapshot, :claimed, []),
           rate_limits: snapshot.rate_limits,
-          linear_usage: normalize_linear_usage(get_in(snapshot, [:polling, :linear, :usage]))
+          linear_usage: normalize_linear_usage(get_in(snapshot, [:polling, :linear, :usage])),
+          orchestrator: Orchestrator.diagnostics(orchestrator)
         }
 
       :timeout ->
@@ -574,6 +575,7 @@ defmodule SymphonyElixirWeb.Presenter do
       last_event: entry.last_codex_event,
       last_message: running_message(entry),
       linear_wait_until: entry |> Map.get(:linear_wait_until) |> iso8601(),
+      pending_tool: entry |> Map.get(:pending_tool) |> pending_tool_payload(),
       started_at: iso8601(entry.started_at),
       last_event_at: iso8601(Map.get(entry, :last_event_at) || entry.last_codex_timestamp),
       forced: Map.get(entry, :forced, false),
@@ -671,6 +673,7 @@ defmodule SymphonyElixirWeb.Presenter do
       last_event: running.last_codex_event,
       last_message: running_message(running),
       linear_wait_until: running |> Map.get(:linear_wait_until) |> iso8601(),
+      pending_tool: running |> Map.get(:pending_tool) |> pending_tool_payload(),
       last_event_at: iso8601(Map.get(running, :last_event_at) || running.last_codex_timestamp),
       tokens: %{
         input_tokens: entry_input_tokens(running),
@@ -808,6 +811,7 @@ defmodule SymphonyElixirWeb.Presenter do
       resets_at: iso8601(Map.get(entry, :resets_at)),
       resume_at: iso8601(entry.resume_at),
       source: optional_string(Map.get(entry, :source)),
+      error: Map.get(entry, :error),
       utilization: Map.get(entry, :utilization),
       issue_identifier: Map.get(entry, :issue_identifier),
       banner: UsageLimit.banner(entry, now)
@@ -1072,6 +1076,7 @@ defmodule SymphonyElixirWeb.Presenter do
       kind: :usage_limit,
       provider: Map.get(b, :provider),
       scope: UsageLimit.scope_label(Map.get(b, :scope, :all)),
+      reason: Map.get(b, :reason),
       window: Map.get(b, :window),
       phase: optional_string(Map.get(b, :phase)),
       resets_at: iso8601(Map.get(b, :resets_at)),
@@ -1293,7 +1298,15 @@ defmodule SymphonyElixirWeb.Presenter do
 
   # A run waiting out a Linear rate limit or outage has no new agent message to show.
   defp running_message(%{linear_wait_until: %DateTime{}}), do: "waiting for Linear"
+  # Nor does a run waiting on one of Symphony's own tool calls.
+  defp running_message(%{pending_tool: %{name: name, age_ms: age_ms}}), do: "waiting on #{name} for #{div(age_ms, 60_000)}m"
   defp running_message(running), do: summarize_message(running.last_codex_message)
+
+  defp pending_tool_payload(%{name: name, started_at: started_at, age_ms: age_ms}) do
+    %{name: name, started_at: iso8601(started_at), age_ms: age_ms}
+  end
+
+  defp pending_tool_payload(_pending_tool), do: nil
 
   defp summarize_message(nil), do: nil
   defp summarize_message(message), do: MessageHumanizer.humanize(message)

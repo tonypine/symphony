@@ -10,7 +10,7 @@ defmodule SymphonyElixir.PrReviewPoller do
   alias SymphonyElixir.GitHub.{CommentMarker, PullRequest}
   alias SymphonyElixir.Learnings.Reflection
   alias SymphonyElixir.Linear.{Issue, Usage}
-  alias SymphonyElixir.{Tracker, Workspace}
+  alias SymphonyElixir.{SubIssueWait, Tracker, Workspace}
 
   @in_review_state "In Review"
   @merging_state "Merging"
@@ -549,7 +549,6 @@ defmodule SymphonyElixir.PrReviewPoller do
   # With auto-merge on, `Merging` issues are watched too: this poller lands them (see AutoMerge).
   defp discover_reviews(settings, run_store, tracker, repo_key, now, opts) do
     with {:ok, issues} <- fetch_watched_issues(settings, tracker, opts),
-         {:ok, runs} <- list_runs(run_store, repo_key),
          {:ok, existing} <- list_pr_reviews(run_store, repo_key) do
       existing_by_issue = Map.new(existing, &{Map.get(&1, :issue_id), &1})
       issues = Enum.filter(issues, &match?(%Issue{}, &1))
@@ -560,7 +559,7 @@ defmodule SymphonyElixir.PrReviewPoller do
           else: MapSet.new()
 
       discovered =
-        Enum.count(issues, &persist_discovered_review?(&1, runs, existing_by_issue, merging_issue_ids, run_store, repo_key, now))
+        Enum.count(issues, &persist_discovered_review?(&1, existing_by_issue, merging_issue_ids, run_store, repo_key, now))
 
       {:ok, discovered, merging_issue_ids}
     end
@@ -593,11 +592,11 @@ defmodule SymphonyElixir.PrReviewPoller do
 
   defp normalize_state_name(state), do: state |> String.trim() |> String.downcase()
 
-  defp persist_discovered_review?(%Issue{} = issue, runs, existing_by_issue, merging_issue_ids, run_store, repo_key, now) do
+  defp persist_discovered_review?(%Issue{} = issue, existing_by_issue, merging_issue_ids, run_store, repo_key, now) do
     existing = Map.get(existing_by_issue, issue.id)
 
     record =
-      discover_review_record(issue, runs, existing, now) ||
+      discover_review_record(issue, run_store, repo_key, existing, now) ||
         discover_auto_merge_record(issue, existing, merging_issue_ids, now)
 
     case record do
@@ -617,12 +616,12 @@ defmodule SymphonyElixir.PrReviewPoller do
     end
   end
 
-  defp discover_review_record(%Issue{} = issue, runs, %{workspace_path: workspace_path} = existing, now)
+  defp discover_review_record(%Issue{} = issue, run_store, repo_key, %{workspace_path: workspace_path} = existing, now)
        when is_binary(workspace_path) and workspace_path != "" do
     attrs =
       existing
       |> missing_review_detail_attrs(issue)
-      |> missing_run_detail_attrs(existing, latest_run_for_issue(runs, issue.id))
+      |> missing_run_detail_attrs(existing, latest_run_for_issue(run_store, repo_key, issue.id))
       |> maybe_put_updated_at(now)
 
     if map_size(attrs) > 0 do
@@ -630,10 +629,10 @@ defmodule SymphonyElixir.PrReviewPoller do
     end
   end
 
-  defp discover_review_record(%Issue{} = issue, runs, existing, now) when is_list(runs) do
+  defp discover_review_record(%Issue{} = issue, run_store, repo_key, existing, now) do
     with pr_url when is_binary(pr_url) <- first_pr_url(issue),
          %{workspace_path: workspace_path} = run when is_binary(workspace_path) <-
-           latest_run_for_issue(runs, issue.id) do
+           latest_run_for_issue(run_store, repo_key, issue.id) do
       base = %{
         issue_id: issue.id,
         issue_identifier: issue.identifier,
@@ -659,8 +658,6 @@ defmodule SymphonyElixir.PrReviewPoller do
         nil
     end
   end
-
-  defp discover_review_record(_issue, _runs, _existing, _now), do: nil
 
   # Auto-merge owns every `Merging` issue with a PR (see AutoMerge.owns_issue?/2), so the
   # poller must watch it even without a run to take the workspace from (run history reset,
@@ -770,7 +767,7 @@ defmodule SymphonyElixir.PrReviewPoller do
 
     case review_action(record, activity, latest_activity_at, unaddressed_comments, ignored_users, settings, now) do
       :merged ->
-        with {:ok, record} <- finish_auto_merge(record, opts, now) do
+        with {:ok, record} <- finish_merged(record, settings, opts, now) do
           record
           |> maybe_capture_learnings(activity, settings, opts, now)
           |> cleanup_review(opts, now, "merged")
@@ -826,6 +823,34 @@ defmodule SymphonyElixir.PrReviewPoller do
         _other -> nil
       end
     end)
+  end
+
+  @doc """
+  Drops the CI-fix hold (see `AutoMerge.held?/1`) or the conflict state (see `AutoMerge.conflict/3`)
+  on the issue's PR, so its next `Merging` stay turns auto-merge on again, even at the same head. A
+  CI-fix or merge-conflict run that pushed nothing calls it before it moves the issue back to
+  `Merging`, which this poller may not have seen it leave. Failing to drop it is logged: auto-merge
+  then stays off for that stay, as for any CI-fix hold.
+  """
+  @spec release_auto_merge_hold(String.t(), keyword()) :: :ok
+  def release_auto_merge_hold(issue_id, opts \\ []) when is_binary(issue_id) do
+    run_store = Keyword.get(opts, :run_store, RunStore)
+
+    Enum.each(repo_keys_from_opts(opts), fn repo_key ->
+      with {:ok, records} <- list_pr_reviews(run_store, repo_key),
+           %{auto_merge: auto_merge} <- Enum.find(records, &(Map.get(&1, :issue_id) == issue_id)),
+           true <- AutoMerge.held?(auto_merge) or AutoMerge.conflict?(auto_merge),
+           {:error, reason} <- run_store.update_pr_review(repo_key, issue_id, %{auto_merge: nil}) do
+        log_auto_merge_hold_failure(issue_id, reason)
+      else
+        {:error, reason} -> log_auto_merge_hold_failure(issue_id, reason)
+        _other -> :ok
+      end
+    end)
+  end
+
+  defp log_auto_merge_hold_failure(issue_id, reason) do
+    Logger.warning("Failed to drop the auto-merge hold issue_id=#{issue_id}: #{inspect(reason)}")
   end
 
   @doc "Every PR the poller is landing with auto-merge, with a short status for the dashboard."
@@ -1089,26 +1114,55 @@ defmodule SymphonyElixir.PrReviewPoller do
     end
   end
 
-  # GitHub merged a PR Symphony was landing with auto-merge: move the issue to Done (Linear's
-  # GitHub integration may already have) before the usual merged cleanup.
-  defp finish_auto_merge(record, opts, now) do
+  # GitHub merged the PR. Whoever merged it, an issue with sub-issues still open waits on them
+  # instead of closing (see SubIssueWait.wait_on_merge?/3), even when Linear's GitHub integration or
+  # a landing run moved it to Done already. Otherwise an issue Symphony was landing with auto-merge
+  # moves to Done (Linear's GitHub integration may already have). Then the usual merged cleanup.
+  defp finish_merged(record, settings, opts, now) do
     previous = Map.get(record, :auto_merge)
+    landing? = AutoMerge.armed?(previous) or auto_merge_issue?(record, opts)
 
-    if AutoMerge.armed?(previous) or auto_merge_issue?(record, opts) do
-      tracker = Keyword.get(opts, :tracker, Tracker)
-      issue_id = Map.get(record, :issue_id)
+    case move_merged_issue(record, landing?, settings, opts) do
+      :ok when landing? ->
+        auto_merge = AutoMerge.merged(previous, now)
+        AutoMerge.log_transition(record, previous, auto_merge)
+        {:ok, Map.put(record, :auto_merge, auto_merge)}
 
-      case tracker.update_issue_state(issue_id, @done_state) do
-        :ok ->
-          auto_merge = AutoMerge.merged(previous, now)
-          AutoMerge.log_transition(record, previous, auto_merge)
-          {:ok, Map.put(record, :auto_merge, auto_merge)}
+      :ok ->
+        {:ok, record}
 
-        {:error, reason} ->
-          record_transition_error(record, %{}, opts, now, "done", reason)
+      {:error, action, reason} ->
+        record_transition_error(record, %{}, opts, now, action, reason)
+    end
+  end
+
+  defp move_merged_issue(record, landing?, settings, opts) do
+    tracker = Keyword.get(opts, :tracker, Tracker)
+
+    case merged_issue_waiting_on_sub_issues(record, settings, opts) do
+      {:ok, %Issue{} = issue} -> issue |> SubIssueWait.wait_on_merge(settings, tracker) |> transition_result("wait")
+      {:ok, nil} when landing? -> tracker.update_issue_state(Map.get(record, :issue_id), @done_state) |> transition_result("done")
+      {:ok, nil} -> :ok
+      {:error, reason} -> {:error, "wait", reason}
+    end
+  end
+
+  defp transition_result(:ok, _action), do: :ok
+  defp transition_result({:error, reason}, action), do: {:error, action, reason}
+
+  # The issue when it must wait on its sub-issues, nil when not (or when it is gone). The state off
+  # costs no read.
+  defp merged_issue_waiting_on_sub_issues(record, settings, opts) do
+    if SubIssueWait.enabled?(settings) do
+      terminal_states = settings.tracker.terminal_states
+
+      case fetch_review_issue(record, opts) do
+        {:ok, issue} -> {:ok, if(SubIssueWait.wait_on_merge?(issue, terminal_states, settings), do: issue)}
+        :missing -> {:ok, nil}
+        {:error, reason} -> {:error, reason}
       end
     else
-      {:ok, record}
+      {:ok, nil}
     end
   end
 
@@ -1232,6 +1286,7 @@ defmodule SymphonyElixir.PrReviewPoller do
 
   defp maybe_transition_conflict(record, attrs, opts, now) do
     issue_id = Map.get(record, :issue_id)
+    attrs = put_conflict_approval(attrs, record, opts)
 
     cond do
       active_agent_run?(issue_id, opts) ->
@@ -1253,6 +1308,15 @@ defmodule SymphonyElixir.PrReviewPoller do
       true ->
         transition_issue_for_action(record, attrs, opts, now, "conflict")
     end
+  end
+
+  # A conflict found while the issue is in `Merging` is marked `approved`, so a fix run that finds
+  # nothing to resolve and pushes nothing can hand the PR back to `Merging` once it no longer
+  # conflicts and its head is green. `conflict_context/3` keeps the mark while the head is the same.
+  defp put_conflict_approval(attrs, record, opts) do
+    Map.update!(attrs, :conflict_context, fn context ->
+      Map.put(context, :approved, context.approved or auto_merge_issue?(record, opts))
+    end)
   end
 
   defp maybe_put_conflict_attrs(attrs, record, activity, now) do
@@ -1315,8 +1379,17 @@ defmodule SymphonyElixir.PrReviewPoller do
       conflict_key: conflict_key(activity),
       observed_at: now,
       retry_count: next_conflict_retry_count(record, activity),
-      max_retries: @conflict_max_retries
+      max_retries: @conflict_max_retries,
+      approved: conflict_approved?(record, activity)
     }
+  end
+
+  # The approval stays with the PR head it was given for, as the base branch moves on.
+  defp conflict_approved?(record, activity) do
+    case normalize_conflict_context(Map.get(record, :conflict_context)) do
+      %{approved: true, head_sha: head} when is_binary(head) -> head == Map.get(activity, :head_ref_oid)
+      _context -> false
+    end
   end
 
   defp next_conflict_retry_count(record, activity) do
@@ -1349,7 +1422,8 @@ defmodule SymphonyElixir.PrReviewPoller do
       conflict_key: string_field(context, :conflict_key),
       observed_at: datetime_field(context, :observed_at),
       retry_count: non_negative_integer_field(context, :retry_count),
-      max_retries: positive_integer_field(context, :max_retries) || @conflict_max_retries
+      max_retries: positive_integer_field(context, :max_retries) || @conflict_max_retries,
+      approved: (Map.get(context, :approved) || Map.get(context, "approved")) == true
     }
 
     if Enum.all?([normalized.head_ref, normalized.head_sha, normalized.base_ref, normalized.base_sha, normalized.conflict_key], &is_nil/1) do
@@ -1392,8 +1466,8 @@ defmodule SymphonyElixir.PrReviewPoller do
     run_store = Keyword.get(opts, :run_store, RunStore)
     repo_key = repo_key_from_opts(opts)
 
-    case list_runs(run_store, repo_key) do
-      {:ok, runs} -> Enum.any?(runs, &(Map.get(&1, :issue_id) == issue_id and Map.get(&1, :status) == "running"))
+    case list_issue_runs(run_store, repo_key, issue_id) do
+      {:ok, runs} -> Enum.any?(runs, &(Map.get(&1, :status) == "running"))
       {:error, _reason} -> false
     end
   end
@@ -1843,17 +1917,16 @@ defmodule SymphonyElixir.PrReviewPoller do
   defp first_pr_url(%Issue{pr_urls: [url | _rest]}) when is_binary(url), do: url
   defp first_pr_url(_issue), do: nil
 
-  defp latest_run_for_issue(runs, issue_id) when is_list(runs) and is_binary(issue_id) do
-    runs
-    |> Enum.filter(&review_run_for_issue?(&1, issue_id))
-    |> Enum.max_by(&run_started_at_sort_key/1, fn -> nil end)
+  # The issue's newest finished run, or `{:error, reason}` when its runs can't be read.
+  defp latest_run_for_issue(run_store, repo_key, issue_id) do
+    with {:ok, runs} <- list_issue_runs(run_store, repo_key, issue_id) do
+      runs
+      |> Enum.filter(&review_run?/1)
+      |> Enum.max_by(&run_started_at_sort_key/1, fn -> nil end)
+    end
   end
 
-  defp review_run_for_issue?(run, issue_id) do
-    Map.get(run, :issue_id) == issue_id and
-      Map.get(run, :status) in ["success", "stopped"] and
-      is_binary(Map.get(run, :workspace_path))
-  end
+  defp review_run?(run), do: Map.get(run, :status) in ["success", "stopped"] and is_binary(Map.get(run, :workspace_path))
 
   defp run_started_at_sort_key(run) do
     case Map.get(run, :started_at) do
@@ -2198,10 +2271,14 @@ defmodule SymphonyElixir.PrReviewPoller do
 
   defp normalize_decision(_value), do: nil
 
-  defp list_runs(run_store, repo_key) do
-    case list_run_records(run_store, repo_key) do
-      runs when is_list(runs) -> {:ok, runs}
-      {:error, reason} -> {:error, reason}
+  defp list_issue_runs(run_store, repo_key, issue_id) do
+    if function_exported?(run_store, :list_issue_runs, 2) do
+      case run_store.list_issue_runs(repo_key, issue_id) do
+        runs when is_list(runs) -> {:ok, runs}
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      {:error, :runs_unsupported}
     end
   end
 
@@ -2209,19 +2286,6 @@ defmodule SymphonyElixir.PrReviewPoller do
     case list_pr_review_records(run_store, repo_key) do
       reviews when is_list(reviews) -> {:ok, reviews}
       {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp list_run_records(run_store, repo_key) do
-    cond do
-      function_exported?(run_store, :list_runs, 2) ->
-        run_store.list_runs(repo_key, :all)
-
-      function_exported?(run_store, :list_runs, 1) ->
-        run_store.list_runs(:all)
-
-      true ->
-        {:error, :runs_unsupported}
     end
   end
 
@@ -2484,7 +2548,8 @@ defmodule SymphonyElixir.PrReviewPoller do
     |> maybe_put_missing(:pr_url, record, first_pr_url(issue))
   end
 
-  defp missing_run_detail_attrs(attrs, _record, nil), do: attrs
+  # No finished run, or its runs couldn't be read.
+  defp missing_run_detail_attrs(attrs, _record, run) when not is_map(run), do: attrs
 
   defp missing_run_detail_attrs(attrs, record, run) when is_map(run) do
     attrs
@@ -3313,6 +3378,7 @@ defmodule SymphonyElixir.PrReviewPoller do
   defp action_atom("merge"), do: :merge
   defp action_atom("conflict"), do: :conflict
   defp action_atom("done"), do: :done
+  defp action_atom("wait"), do: :wait
 
   defp schedule_poll(%State{} = state, delay_ms) when is_integer(delay_ms) and delay_ms >= 0 do
     if is_reference(state.timer_ref) do

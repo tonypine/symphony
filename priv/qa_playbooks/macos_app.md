@@ -51,7 +51,21 @@ Do not edit files in the worktree, gitignored ones included (such as build cache
    and give the app the `path` it returns, never your own path: the app may run on a
    separate QA machine that cannot see your files. Type that path into the field rather
    than browsing for it in a file picker.
-8. Run `qa_quit_app` when you are done.
+   OpenRouter steps (Test connection, the Models list, the Effort note) run against a stub
+   OpenRouter Symphony starts for this pass: `qa_launch_app` points the app at it, and the
+   Symphony the app runs (`symphony check` on Save) checks models against it too. The app never
+   reaches openrouter.ai in QA, so never ask for a real key and never mark an OpenRouter step
+   `blocked` for want of one. The stub knows:
+   - one valid key, `sk-or-v1-symphony-qa-stub`: Test connection answers "Connected as Symphony
+     QA stub: $1.25 used of a $10.00 limit, $8.75 left". Any other key is rejected ("OpenRouter
+     rejected the key…"). The stub key is made up and public, so you may quote it;
+   - three models: `symphony-qa/reasoning-tools` (tools and reasoning),
+     `symphony-qa/tools-only` (tools, no reasoning, so Effort gets its note) and
+     `symphony-qa/no-tools` (no tools, so the Models picker leaves it out).
+   Judge the walkthrough's OpenRouter steps with these, `pass` or `fail`. Checks with a real key
+   are manual and not part of QA.
+8. Run `qa_quit_app` when you are done. It returns what the app wrote to its output; quote
+   the lines that bear on a step in that step's `details`.
 9. Attach the screenshots that show each step's result with `linear_attach_file`
    (`make_public: false`) and list the returned URLs in that step's `evidence`.
 

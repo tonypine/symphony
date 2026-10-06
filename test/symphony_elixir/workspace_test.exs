@@ -1,6 +1,8 @@
 defmodule SymphonyElixir.WorkspaceTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.Repo.Fetcher
+
   describe "validate/2" do
     test "accepts local paths under the workspace root" do
       test_root = unique_tmp("workspace-validate-local")
@@ -222,22 +224,79 @@ defmodule SymphonyElixir.WorkspaceTest do
     end
   end
 
+  test "a worktree remove waits while an add of the same repo holds the repo's lock" do
+    test_root = unique_tmp("workspace-remove-lock")
+    primary_repo = Path.join(test_root, "primary")
+    workspace_root = Path.join(test_root, "workspaces")
+    added = Path.join(test_root, "added")
+
+    try do
+      create_primary_repo!(primary_repo)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        workspace_fetch_before_dispatch: false
+      )
+
+      assert {:ok, workspace} = Workspace.create_for_issue("RSM-REMOVE")
+      {:ok, key} = SymphonyElixir.PathSafety.canonicalize(Path.join(primary_repo, ".git"))
+      test_pid = self()
+
+      # Holds the lock the way a dispatch's `worktree add` does, until the test lets it go.
+      adder =
+        Task.async(fn ->
+          Fetcher.with_lock(primary_repo, fn ->
+            git!(primary_repo, ["worktree", "add", "-b", "auto/RSM-ADD", added])
+            send(test_pid, :added)
+
+            receive do
+              :release -> :ok
+            end
+          end)
+        end)
+
+      assert_receive :added, 10_000
+      remover = Task.async(fn -> Workspace.remove(workspace) end)
+      wait_for_fetcher(&match?(%{^key => {{:lock, _ref}, [{:lock, _from}]}}, &1))
+
+      assert worktree_count(primary_repo, workspace) == 1
+      assert git_branch_exists?(primary_repo, "auto/RSM-REMOVE")
+
+      send(adder.pid, :release)
+      assert Task.await(adder, 10_000) == :ok
+      assert Task.await(remover, 10_000) == {:ok, [workspace]}
+
+      refute File.exists?(workspace)
+      refute git_branch_exists?(primary_repo, "auto/RSM-REMOVE")
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "worktree preparations of one repo at once share a single fetch" do
     test_root = unique_tmp("workspace-concurrent-fetch")
     primary_repo = Path.join(test_root, "primary")
     origin_repo = Path.join(test_root, "origin.git")
-    upload_pack = Path.join(test_root, "upload-pack")
+    bin = Path.join(test_root, "bin")
     uploads = Path.join(test_root, "uploads")
     release = Path.join(test_root, "release")
     workspace_root = Path.join(test_root, "workspaces")
+    previous_path = System.get_env("PATH")
+
+    on_exit(fn -> restore_env("PATH", previous_path) end)
 
     try do
       create_primary_repo!(primary_repo)
       git!(test_root, ["clone", "--quiet", "--bare", primary_repo, origin_repo])
-      git!(primary_repo, ["remote", "add", "origin", origin_repo])
+      git!(primary_repo, ["remote", "add", "origin", "slowfetch::" <> origin_repo])
 
-      # Each fetch runs this upload-pack once, which waits until the test lets it go.
-      File.write!(upload_pack, """
+      # Each fetch runs this remote helper once, which waits until the test lets it go and then
+      # connects git to the origin repo's upload-pack.
+      File.mkdir_p!(bin)
+
+      File.write!(Path.join(bin, "git-remote-slowfetch"), """
       #!/bin/sh
       printf 'upload\\n' >> #{shell_quote(uploads)}
       i=0
@@ -245,11 +304,17 @@ defmodule SymphonyElixir.WorkspaceTest do
         sleep 0.02
         i=$((i + 1))
       done
-      exec git upload-pack "$@"
+      while read -r line; do
+        case "$line" in
+          capabilities) printf 'connect\\n\\n' ;;
+          "connect git-"*) printf '\\n'; exec git "${line#connect git-}" "$2" ;;
+          *) exit 1 ;;
+        esac
+      done
       """)
 
-      File.chmod!(upload_pack, 0o755)
-      git!(primary_repo, ["config", "remote.origin.uploadpack", upload_pack])
+      File.chmod!(Path.join(bin, "git-remote-slowfetch"), 0o755)
+      System.put_env("PATH", bin <> ":" <> (previous_path || ""))
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
@@ -289,6 +354,56 @@ defmodule SymphonyElixir.WorkspaceTest do
 
       assert {_output, 0} =
                Workspace.safe_git(["-C", workspace, "check-ignore", ".symphony-skip-comments.json"])
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "worktree creation and reuse run no filter driver from the repo's local config" do
+    test_root = unique_tmp("workspace-filter-driver")
+    primary_repo = Path.join(test_root, "primary")
+    workspace_root = Path.join(test_root, "workspaces")
+    proof = Path.join(test_root, "SYMPHONY_FILTER_PWNED")
+
+    try do
+      create_primary_repo!(primary_repo)
+      git!(primary_repo, ["checkout", "-b", "agent/filter"])
+      File.write!(Path.join(primary_repo, ".gitattributes"), "*.txt filter=evil\n")
+      File.write!(Path.join(primary_repo, "notes.txt"), "stored\n")
+      git!(primary_repo, ["add", ".gitattributes", "notes.txt"])
+      git!(primary_repo, ["commit", "-m", "agent attributes"])
+      git!(primary_repo, ["checkout", "main"])
+
+      # The driver an agent's branch picks, set where agents commit: the shared repo's config.
+      git!(primary_repo, ["config", "filter.evil.smudge", "touch '#{proof}'; cat"])
+      git!(primary_repo, ["config", "filter.evil.clean", "touch '#{proof}'; cat"])
+      git!(primary_repo, ["config", "filter.evil.required", "true"])
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        workspace_fetch_before_dispatch: false
+      )
+
+      issue = %Issue{identifier: "RSM-FILTER", workspace_branch: "agent/filter", workspace_base_ref: "agent/filter"}
+
+      assert {:ok, workspace} = Workspace.create_for_issue(issue)
+      assert File.read!(Path.join(workspace, "notes.txt")) == "stored\n"
+      refute File.exists?(proof)
+
+      # Reusing a dirty worktree backs it up (`status`, `add -A`) before `reset --hard` and `checkout`.
+      head = git!(workspace, ["rev-parse", "HEAD"])
+      File.write!(Path.join(workspace, "notes.txt"), "agent edit\n")
+
+      assert {:ok, ^workspace} = Workspace.create_for_issue(issue)
+      assert File.read!(Path.join(workspace, "notes.txt")) == "stored\n"
+      assert git!(workspace, ["show", "refs/symphony/orphaned/#{head}:notes.txt"]) == "agent edit"
+      refute File.exists?(proof)
+
+      File.rm!(Path.join(workspace, "notes.txt"))
+      assert {_output, 0} = System.cmd("git", ["-C", workspace, "checkout", "--", "notes.txt"], stderr_to_stdout: true)
+      assert File.exists?(proof), "plain git runs the driver, so the setup above is a real attack"
     after
       File.rm_rf(test_root)
     end
@@ -338,6 +453,17 @@ defmodule SymphonyElixir.WorkspaceTest do
       _fetches when attempts > 0 ->
         Process.sleep(10)
         wait_for_fetch_waiters(key, count, attempts - 1)
+    end
+  end
+
+  defp wait_for_fetcher(matches, attempts \\ 500) do
+    cond do
+      matches.(:sys.get_state(Fetcher)) ->
+        :ok
+
+      attempts > 0 ->
+        Process.sleep(10)
+        wait_for_fetcher(matches, attempts - 1)
     end
   end
 

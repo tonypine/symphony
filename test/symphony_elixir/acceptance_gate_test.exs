@@ -58,7 +58,7 @@ defmodule SymphonyElixir.AcceptanceGateTest do
             overlaps: [%{pr_url: "https://github.com/org/app/pull/2", detail: "both change `alpha/1`"}],
             scope: [%{kind: "unrelated", detail: "reformats README"}],
             escalation_reasons: [],
-            follow_ups: [%{title: "Add a --json flag", detail: "out of scope here"}]
+            follow_ups: [%{title: "Add a --json flag", detail: "out of scope here", acceptance: ["`app check --json` prints JSON"]}]
           },
           attrs
         )
@@ -225,6 +225,10 @@ defmodule SymphonyElixir.AcceptanceGateTest do
       assert prompt =~ "- lib/app.ex +1 -0"
       assert prompt =~ "+  def check, do: :ok"
       refute prompt =~ "cut at 120 KB"
+      # A tracker other than Linear has no related tickets to list.
+      assert prompt =~ "Tickets that already exist around this one (its sub-issues, siblings, parent and blockers):\n(none)\n"
+      assert prompt =~ "set\n`covered_by` to its identifier"
+      assert prompt =~ "never the title restated"
     end
 
     test "the prompt leaves code style and bugs to the pre-push reviewer unless one makes a criterion unmet", %{settings: settings} do
@@ -399,6 +403,17 @@ defmodule SymphonyElixir.AcceptanceGateTest do
                    follow_ups: [%{title: "Later"}]
                  })
                )
+
+      follow_ups = [
+        %{title: "Copy", covered_by: " tp-584 ", acceptance: ["a test shows it", " ", 3]},
+        %{title: "New", covered_by: "the poller ticket", acceptance: "a test shows it"},
+        %{title: "Other", covered_by: 584}
+      ]
+
+      assert {:ok, %{follow_ups: [copy, new, other]}} = AcceptanceGate.parse_response(Jason.encode!(%{verdict: "approve", follow_ups: follow_ups}))
+      assert copy == %{title: "Copy", detail: "", acceptance: ["a test shows it"], covered_by: "TP-584"}
+      assert %{covered_by: nil, acceptance: []} = new
+      assert %{covered_by: nil, acceptance: []} = other
     end
 
     test "rejects a missing or malformed verdict object" do
@@ -552,10 +567,12 @@ defmodule SymphonyElixir.AcceptanceGateTest do
   end
 
   describe "enforced verdicts" do
-    # Answers the workpad and report comments, the issue's sub-issues and sub-issue creation.
+    # Answers the workpad and report comments, the issue's family and sub-issue creation.
     defp follow_up_client(opts) do
       recipient = self()
       children = Keyword.get(opts, :children, [])
+      parent = Keyword.get(opts, :parent)
+      family = %{"id" => "issue-gate", "relations" => %{"nodes" => []}, "inverseRelations" => %{"nodes" => []}, "parent" => parent, "children" => %{"nodes" => children}}
 
       fn query, variables, _opts ->
         cond do
@@ -570,8 +587,8 @@ defmodule SymphonyElixir.AcceptanceGateTest do
             team = %{"id" => "team-1", "states" => %{"nodes" => [%{"id" => "state-backlog", "name" => "Backlog", "type" => "backlog"}]}}
             {:ok, %{"data" => %{"issue" => %{"id" => "issue-gate", "team" => team, "children" => %{"nodes" => []}}}}}
 
-          query =~ "SymphonyAgentSubissues" ->
-            Keyword.get(opts, :children_result, {:ok, %{"data" => %{"issue" => %{"children" => %{"nodes" => children}}}}})
+          query =~ "SymphonyAgentRelatedIssues" ->
+            Keyword.get(opts, :family_result, {:ok, %{"data" => %{"issue" => family}}})
 
           query =~ "SymphonyAgentCreateSubissue" ->
             send(recipient, {:create_subissue, variables.input})
@@ -586,11 +603,12 @@ defmodule SymphonyElixir.AcceptanceGateTest do
       put_in(settings.tracker.kind, "linear")
     end
 
-    defp follow_ups(titles), do: Enum.map(titles, &%{title: &1, detail: "gap #{&1}"})
+    defp follow_ups(titles), do: Enum.map(titles, &%{title: &1, detail: "gap #{&1}", acceptance: ["a test shows #{&1} works"]})
 
     test "files up to 3 follow-ups as Backlog sub-issues, never a title twice, and lists each one", %{settings: settings} do
       titles = ["Already filed", "One", "one ", "Two"]
-      answer = FakeSession.answer_json(%{follow_ups: follow_ups(titles) ++ [%{title: "Three"}, %{title: "Four", detail: "gap Four"}]})
+      extra = [%{title: "Three", acceptance: ["- [ ] a test shows Three works"]}, %{title: "Four", detail: "gap Four", acceptance: ["a check shows Four"]}]
+      answer = FakeSession.answer_json(%{follow_ups: follow_ups(titles) ++ extra})
       Process.put(:gate_turn_results, [{:ok, %{result: answer}}])
       children = [%{"id" => "child-1", "identifier" => "TP-5", "title" => "already FILED"}, %{"id" => "child-2", "identifier" => "TP-6"}]
       :ok = RunStore.put_ci_check(record())
@@ -603,25 +621,30 @@ defmodule SymphonyElixir.AcceptanceGateTest do
         # A follow-up without a detail is described by its title.
         assert String.starts_with?(description, if(title == "Three", do: "Three\n", else: "gap #{title}\n"))
         assert description =~ "Symphony's acceptance gate found this gap outside TP-950 while judging its PR head `feedface0011`"
+        # Its criteria are the answer's, without a checklist marker of their own, plus CI.
+        assert description =~ "## Acceptance criteria\n\n- [ ] a test shows #{title} works\n- [ ] CI is green.\n"
       end
 
       refute_received {:create_subissue, _input}
       assert_received {:gate_comment, body}
       assert body =~ "**Mode:** enforce. Symphony applies this verdict: the issue moves to Merging"
-      assert body =~ "- already a sub-issue, not filed again: **Already filed**: gap Already filed"
+      assert body =~ "- already covered by TP-5, not filed again: **Already filed**: gap Already filed"
       assert body =~ ~r/- filed as TP-\d+: \*\*One\*\*: gap One/
-      assert body =~ "- already a sub-issue, not filed again: **one**: gap one"
+      assert body =~ ~r/- already covered by TP-\d+, not filed again: \*\*one\*\*: gap one/
       assert body =~ ~r/- filed as TP-\d+: \*\*Three\*\*/
       assert body =~ "- not filed (3 per verdict): **Four**: gap Four"
     end
 
-    test "files nothing when the sub-issues can't be read, and doesn't count a failed filing", %{settings: settings} do
+    test "files nothing when the related tickets can't be read, and doesn't count a failed filing", %{settings: settings} do
       Process.put(:gate_turn_results, [{:ok, %{result: FakeSession.answer_json(%{follow_ups: follow_ups(["One", "Two"])})}}])
-      down = follow_up_client(children_result: {:error, :linear_down})
+      down = follow_up_client(family_result: {:error, :linear_down})
 
       log = capture_log(fn -> assert {:ok, %{verdict: "approve"}} = AcceptanceGate.judge(judge_job(enforced(settings)), run_opts(linear_client: down)) end)
 
-      assert log =~ "Acceptance gate could not read the sub-issues of TP-950, so it filed no follow-up: :linear_down"
+      assert log =~ "Acceptance gate could not read the tickets related to TP-950: :linear_down"
+      assert_received {:gate_turn, _session, prompt, _issue, _opts}
+      assert prompt =~ "parent and blockers):\n(none)\n"
+      assert log =~ "Acceptance gate could not read the tickets related to TP-950, so it filed no follow-up: :linear_down"
       refute_received {:create_subissue, _input}
       assert_received {:gate_comment, body}
       assert body =~ "- not filed (:linear_down): **One**"
@@ -637,6 +660,80 @@ defmodule SymphonyElixir.AcceptanceGateTest do
       refute_received {:create_subissue, _input}
     end
 
+    test "names the existing ticket that covers a gap instead of filing a copy", %{settings: settings} do
+      children = [
+        %{"id" => "child-1", "identifier" => "TP-584", "title" => "Move the orchestrator's synchronous Linear, GitHub and run store I/O out of its callbacks", "state" => %{"name" => "Backlog"}}
+      ]
+
+      siblings = [
+        %{"id" => "issue-gate", "identifier" => "TP-950"},
+        %{"id" => "sibling-1", "identifier" => "TP-570", "title" => "Run the review agent's diffs on an SSH worker", "state" => %{"name" => "Done"}}
+      ]
+
+      parent = %{"id" => "parent-1", "identifier" => "TP-533", "title" => "Keep host-side git safe", "state" => %{"name" => "In Progress"}, "children" => %{"nodes" => siblings}}
+
+      copy = %{
+        title: "Move synchronous GitHub/Linear/git calls out of orchestrator callbacks",
+        detail: "the callbacks still block on Linear",
+        acceptance: ["a test shows the callback returns before the Linear call ends"],
+        covered_by: "tp-584"
+      }
+
+      Process.put(:gate_turn_results, [{:ok, %{result: FakeSession.answer_json(%{follow_ups: [copy]})}}])
+
+      assert {:ok, %{verdict: "approve"}} =
+               AcceptanceGate.judge(judge_job(enforced(settings)), run_opts(linear_client: follow_up_client(children: children, parent: parent)))
+
+      # The agent saw the ticket's family, so it could name the child that covers the gap.
+      assert_received {:gate_turn, _session, prompt, _issue, _opts}
+      assert prompt =~ "- TP-584 (sub-issue, Backlog): <linear_issue_title>\nMove the orchestrator's synchronous Linear, GitHub and run store I/O"
+      assert prompt =~ "- TP-533 (parent, In Progress): <linear_issue_title>\nKeep host-side git safe"
+      assert prompt =~ "- TP-570 (sibling, Done): <linear_issue_title>\nRun the review agent's diffs"
+      refute prompt =~ "- TP-950 ("
+
+      refute_received {:create_subissue, _input}
+      assert_received {:gate_comment, body}
+      assert body =~ "- already covered by TP-584, not filed again: **Move synchronous GitHub/Linear/git calls out of orchestrator callbacks**"
+    end
+
+    test "files a follow-up whose covered_by names a ticket outside the family", %{settings: settings} do
+      children = [%{"id" => "child-1", "identifier" => "TP-584", "title" => "Move the I/O out of the callbacks", "state" => %{"name" => "Backlog"}}]
+      itself = %{title: "Cache the runs", detail: "", acceptance: ["a test shows the runs are cached"], covered_by: "TP-950"}
+      made_up = %{title: "Retry the poll", detail: "", acceptance: ["a test shows the poll retries"], covered_by: "tp-9999"}
+      Process.put(:gate_turn_results, [{:ok, %{result: FakeSession.answer_json(%{follow_ups: [itself, made_up]})}}])
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %{verdict: "approve"}} =
+                   AcceptanceGate.judge(judge_job(enforced(settings)), run_opts(linear_client: follow_up_client(children: children)))
+        end)
+
+      assert log =~ "Acceptance gate ignored covered_by TP-950 on a follow-up of TP-950: it is not a ticket of its family"
+      assert log =~ "Acceptance gate ignored covered_by TP-9999 on a follow-up of TP-950: it is not a ticket of its family"
+      assert_received {:create_subissue, %{"title" => "Cache the runs"}}
+      assert_received {:create_subissue, %{"title" => "Retry the poll"}}
+      assert_received {:gate_comment, body}
+      refute body =~ "already covered"
+    end
+
+    test "files no follow-up whose only criterion restates its title", %{settings: settings} do
+      title = "Same-build retry after a pre-feature rollback skips health check"
+      restated = %{title: title, detail: "the retry skips it", acceptance: ["- [ ] Same-build retry, after a pre-feature rollback: skips *health check*.", " "]}
+      checkable = %{title: "Check health on a same-build retry", detail: "", acceptance: ["Check health on a same-build retry.", "a test shows the retry runs the health check"]}
+      Process.put(:gate_turn_results, [{:ok, %{result: FakeSession.answer_json(%{follow_ups: [restated, checkable]})}}])
+
+      assert {:ok, %{verdict: "approve"}} = AcceptanceGate.judge(judge_job(enforced(settings)), run_opts(linear_client: follow_up_client([])))
+
+      # The restated criterion is dropped from the one that has a checkable one too.
+      assert_received {:create_subissue, %{"title" => "Check health on a same-build retry", "description" => description}}
+      assert description =~ "## Acceptance criteria\n\n- [ ] a test shows the retry runs the health check\n- [ ] CI is green.\n"
+      refute description =~ "- [ ] Check health"
+      refute_received {:create_subissue, _input}
+
+      assert_received {:gate_comment, body}
+      assert body =~ "- not filed (no checkable acceptance criterion): **#{title}**: the retry skips it"
+    end
+
     test "a tracker other than Linear files nothing, and an advisory verdict only proposes", %{settings: settings} do
       Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
       on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_recipient) end)
@@ -649,6 +746,13 @@ defmodule SymphonyElixir.AcceptanceGateTest do
       assert {:ok, %{target: nil}} = AcceptanceGate.judge(judge_job(settings), run_opts())
       assert_received {:memory_tracker_comment, "issue-gate", body}
       assert body =~ "### Proposed follow-ups (not filed)"
+
+      # A proposed follow-up an existing ticket covers names it.
+      covered = %{title: "Cache it", detail: "", covered_by: "TP-12"}
+      Process.put(:gate_turn_results, [{:ok, %{result: FakeSession.answer_json(%{follow_ups: [covered]})}}])
+      assert {:ok, %{target: nil}} = AcceptanceGate.judge(judge_job(settings), run_opts())
+      assert_received {:memory_tracker_comment, "issue-gate", body}
+      assert body =~ "### Proposed follow-ups (not filed)\n\n- covered by TP-12: **Cache it**\n"
 
       # An enforced verdict without follow-ups lists none.
       Process.put(:gate_turn_results, [{:ok, %{result: FakeSession.answer_json(%{follow_ups: []})}}])
@@ -826,7 +930,9 @@ defmodule SymphonyElixir.AcceptanceGateTest do
       filed = [
         %{title: "Add a --json flag", detail: "out of scope here", status: {:filed, "TP-77"}},
         %{title: "Untitled id", detail: "", status: {:filed, nil}},
-        %{title: "Cache it", detail: "", status: :duplicate},
+        %{title: "Cache it", detail: "", status: {:covered, "TP-5"}},
+        %{title: "Again", detail: "", status: {:covered, nil}},
+        %{title: "Vague", detail: "", status: :no_acceptance},
         %{title: "Fourth", detail: "", status: :over_cap},
         %{title: "Broken", detail: "", status: {:failed, :linear_down}}
       ]
@@ -839,7 +945,9 @@ defmodule SymphonyElixir.AcceptanceGateTest do
 
                - filed as TP-77: **Add a --json flag**: out of scope here
                - filed as a sub-issue: **Untitled id**
-               - already a sub-issue, not filed again: **Cache it**
+               - already covered by TP-5, not filed again: **Cache it**
+               - already a ticket, not filed again: **Again**
+               - not filed (no checkable acceptance criterion): **Vague**
                - not filed (3 per verdict): **Fourth**
                - not filed (:linear_down): **Broken**
                """

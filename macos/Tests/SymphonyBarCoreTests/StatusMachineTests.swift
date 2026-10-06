@@ -81,12 +81,48 @@ final class StatusMachineTests: XCTestCase {
         XCTAssertEqual(machine.status, .starting)
     }
 
-    func testOwnedSymphonyThatStopsAnsweringIsAnError() {
-        let machine = machine(.started, .polled(.state(working)), .polled(.unreachable))
+    func testOneMissedPollIsSlowNotAnError() {
+        var machine = machine(.started, .polled(.state(working)), .polled(.unreachable))
+        XCTAssertEqual(machine.status, .running(working, external: false))
+        XCTAssertTrue(machine.slowToAnswer)
+        XCTAssertEqual(machine.nextPollInterval, 5)
 
+        machine.handle(.polled(.state(paused)))
+        XCTAssertEqual(machine.status, .paused(paused, external: false))
+        XCTAssertFalse(machine.slowToAnswer)
+
+        machine.handle(.polled(.unreachable))
+        XCTAssertEqual(machine.status, .paused(paused, external: false))
+        XCTAssertTrue(machine.slowToAnswer)
+    }
+
+    func testOwnedSymphonyThatStopsAnsweringIsAnError() {
+        var machine = machine(.started, .polled(.state(working)))
+        for _ in 0..<StatusMachine.missedPollsBeforeError {
+            machine.handle(.polled(.unreachable))
+        }
+
+        XCTAssertEqual(StatusMachine.missedPollsBeforeError, 2)
         XCTAssertEqual(machine.status, .error("Symphony isn't answering"))
+        XCTAssertFalse(machine.slowToAnswer)
         XCTAssertTrue(machine.canStop)
         XCTAssertFalse(machine.canStart)
+
+        machine.handle(.polled(.unreachable))
+        XCTAssertEqual(machine.status, .error("Symphony isn't answering"))
+
+        // Back to running with the next answer.
+        machine.handle(.polled(.state(working)))
+        XCTAssertEqual(machine.status, .running(working, external: false))
+    }
+
+    func testAnAnswerBetweenMissesStartsTheCountAgain() {
+        let machine = machine(
+            .started, .polled(.state(working)), .polled(.unreachable), .polled(.state(working)), .polled(.unreachable)
+        )
+
+        XCTAssertEqual(machine.status, .running(working, external: false))
+        XCTAssertTrue(machine.slowToAnswer)
     }
 
     func testAFailedPollIsAnError() {
@@ -95,6 +131,28 @@ final class StatusMachineTests: XCTestCase {
         XCTAssertEqual(machine.status, .error("Snapshot timed out"))
         XCTAssertEqual(machine.nextPollInterval, 5)
         XCTAssertTrue(machine.canStop)
+    }
+
+    func testAFailedPollIsAnErrorAtOnceWhileSlow() {
+        var machine = machine(.started, .polled(.state(working)), .polled(.unreachable), .polled(.failed("HTTP 500")))
+        XCTAssertEqual(machine.status, .error("HTTP 500"))
+        XCTAssertFalse(machine.slowToAnswer)
+
+        // A miss after a failed answer doesn't bring back the older snapshot.
+        machine.handle(.polled(.unreachable))
+        XCTAssertEqual(machine.status, .error("Symphony isn't answering"))
+        XCTAssertFalse(machine.slowToAnswer)
+    }
+
+    func testAnUnexpectedExitIsAnErrorAtOnceWhileSlow() {
+        var machine = machine(
+            .started, .polled(.state(working)), .polled(.unreachable), .exited(.exited(1), requested: false)
+        )
+        XCTAssertEqual(machine.status, .error("Symphony exited with status 1"))
+        XCTAssertFalse(machine.slowToAnswer)
+
+        machine.handle(.polled(.unreachable))
+        XCTAssertEqual(machine.status, .error("Symphony exited with status 1"))
     }
 
     func testAttachesToAnExternalSymphony() {
@@ -112,8 +170,30 @@ final class StatusMachineTests: XCTestCase {
         XCTAssertFalse(machine.canStop)
 
         machine.handle(.polled(.unreachable))
+        XCTAssertEqual(machine.status, .paused(paused, external: true))
+        XCTAssertTrue(machine.slowToAnswer)
+        XCTAssertFalse(machine.canStart)
+
+        machine.handle(.polled(.unreachable))
         XCTAssertEqual(machine.status, .stopped)
+        XCTAssertFalse(machine.slowToAnswer)
         XCTAssertTrue(machine.canStart)
+    }
+
+    func testExternalSymphonyGetsTheSameGraceBeforeStartIsOffered() {
+        var machine = machine(.polled(.state(working)))
+        for _ in 1..<StatusMachine.missedPollsBeforeError {
+            machine.handle(.polled(.unreachable))
+            XCTAssertEqual(machine.status, .running(working, external: true))
+            XCTAssertTrue(machine.slowToAnswer)
+            XCTAssertFalse(machine.canStart)
+        }
+
+        machine.handle(.polled(.unreachable))
+        XCTAssertEqual(machine.status, .stopped)
+        XCTAssertFalse(machine.slowToAnswer)
+        XCTAssertTrue(machine.canStart)
+        XCTAssertFalse(machine.canStop)
     }
 
     func testExternalFailureIsAnErrorThatAllowsStart() {
@@ -128,6 +208,7 @@ final class StatusMachineTests: XCTestCase {
         var machine = machine(.started, .exited(.exited(1), requested: false), .polled(.state(working)))
         XCTAssertEqual(machine.status, .running(working, external: true))
 
+        machine.handle(.polled(.unreachable))
         machine.handle(.polled(.unreachable))
         XCTAssertEqual(machine.status, .stopped)
     }

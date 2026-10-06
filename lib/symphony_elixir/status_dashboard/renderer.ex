@@ -681,8 +681,7 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
   end
 
   defp format_blocker_line(%{kind: :usage_limit, resume_at: resume_at} = blocker) do
-    state = if UsageLimit.headroom?(blocker), do: "headroom: holding new runs", else: "reached"
-    "#{UsageLimit.limit_label(blocker)} #{state} (resumes #{DateTime.to_iso8601(resume_at)})"
+    "#{UsageLimit.hold_label(blocker)} (resumes #{DateTime.to_iso8601(resume_at)})"
   end
 
   defp format_blocker_line(%{kind: kind}), do: "blocked: #{kind}"
@@ -1348,6 +1347,8 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
 
   # A run waiting out a Linear rate limit or outage has no new agent message to show.
   defp running_event_label(%{linear_wait_until: %DateTime{}}), do: "waiting for Linear"
+  # Nor does a run waiting on one of Symphony's own tool calls.
+  defp running_event_label(%{pending_tool: %{name: name, age_ms: age_ms}}), do: "waiting on #{name} for #{div(age_ms, 60_000)}m"
   defp running_event_label(running_entry), do: summarize_message(running_entry.last_codex_message)
 
   defp summarize_message(message), do: MessageHumanizer.humanize(message)

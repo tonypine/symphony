@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.GitHub.PullRequestTest do
   use ExUnit.Case, async: true
 
+  alias SymphonyElixir.CiPoller
   alias SymphonyElixir.GitHub.Hosts
   alias SymphonyElixir.GitHub.PullRequest
 
@@ -236,6 +237,187 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
              %{name: "ci/pending", status: "PENDING", conclusion: "PENDING", details_url: "https://ci.example.test/pending"},
              %{name: "ci/success", status: "SUCCESS", conclusion: "SUCCESS", details_url: "https://ci.example.test/success"}
            ] = status.checks
+  end
+
+  test "fetch_ci_status reads the head's workflow runs when every check reported passed" do
+    pr_url = "https://github.com/org/repo/pull/17"
+    runs_endpoint = "repos/org/repo/actions/runs?head_sha=abc123&per_page=100"
+
+    runner = fn runs_response ->
+      fn
+        ["pr", "view", ^pr_url, "--json", _fields], _opts ->
+          {Jason.encode!(%{
+             "state" => "OPEN",
+             "url" => pr_url,
+             "headRefOid" => "abc123",
+             "statusCheckRollup" => [
+               %{"name" => "lint", "status" => "COMPLETED", "conclusion" => "SUCCESS", "detailsUrl" => "https://github.com/org/repo/actions/runs/987/job/1"}
+             ]
+           }), 0}
+
+        ["api", ^runs_endpoint], _opts ->
+          runs_response
+      end
+    end
+
+    # The failed jobs of run 987 are being rerun: they left the rollup, and the run's new attempt is queued.
+    rerunning = {Jason.encode!(%{"workflow_runs" => [%{"id" => 987, "status" => "queued", "conclusion" => nil}, "ignored"]}), 0}
+    assert {:ok, status} = PullRequest.fetch_ci_status(pr_url, gh_runner: runner.(rerunning))
+    assert status.workflow_runs == [%{id: "987", status: "QUEUED", conclusion: nil}]
+    assert CiPoller.ci_action(status) == :pending
+
+    finished = {Jason.encode!(%{"workflow_runs" => [%{"id" => 987, "status" => "completed", "conclusion" => "success"}]}), 0}
+    assert {:ok, status} = PullRequest.fetch_ci_status(pr_url, gh_runner: runner.(finished))
+    assert CiPoller.ci_action(status) == :success
+
+    assert {:error, :invalid_workflow_runs_payload} = PullRequest.fetch_ci_status(pr_url, gh_runner: runner.({"[]", 0}))
+
+    assert {:error, {:gh_failed, ["api", ^runs_endpoint], 1, "HTTP 502"}} =
+             PullRequest.fetch_ci_status(pr_url, gh_runner: runner.({"HTTP 502", 1}))
+  end
+
+  test "fetch_ci_status reads a check left in progress in a completed workflow run as finished" do
+    pr_url = "https://github.com/org/repo/pull/70"
+    runs_endpoint = "repos/org/repo/actions/runs?head_sha=5e19a91&per_page=100"
+    run_url = "https://github.com/org/repo/actions/runs/37391815662"
+    test_pid = self()
+
+    runner = fn rollup, runs ->
+      fn
+        ["pr", "view", ^pr_url, "--json", _fields], _opts ->
+          {Jason.encode!(%{"state" => "OPEN", "url" => pr_url, "headRefOid" => "5e19a91", "mergeStateStatus" => "UNSTABLE", "statusCheckRollup" => rollup}), 0}
+
+        ["api", ^runs_endpoint], _opts ->
+          send(test_pid, :listed_runs)
+          {Jason.encode!(%{"workflow_runs" => runs}), 0}
+      end
+    end
+
+    ci = %{"name" => "ci", "status" => "COMPLETED", "conclusion" => "SUCCESS", "detailsUrl" => "#{run_url}/job/1"}
+    server_test = %{"name" => "server-test", "status" => "IN_PROGRESS", "conclusion" => "", "detailsUrl" => "#{run_url}/job/2"}
+    finished = [%{"id" => 37_391_815_662, "status" => "completed", "conclusion" => "success"}]
+
+    # The required `ci` job passed and the run completed, but GitHub never closed `server-test`.
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:ok, status} = PullRequest.fetch_ci_status(pr_url, gh_runner: runner.([ci, server_test], finished))
+        assert [%{name: "ci", conclusion: "SUCCESS"}, %{name: "server-test", status: "COMPLETED", conclusion: "SUCCESS", stale: true}] = status.checks
+        assert CiPoller.ci_action(status) == :success
+      end)
+
+    assert log =~ "Ignoring stale check server-test in completed run 37391815662 pr_url=#{pr_url} commit_sha=5e19a91"
+
+    # A required check still running in a run that is still running holds the head.
+    running = [%{"id" => 37_391_815_662, "status" => "in_progress", "conclusion" => nil}]
+    assert {:ok, status} = PullRequest.fetch_ci_status(pr_url, gh_runner: runner.([ci, server_test], running))
+    assert [_ci, %{name: "server-test", status: "IN_PROGRESS"} = check] = status.checks
+    refute Map.has_key?(check, :stale)
+    assert CiPoller.ci_action(status) == :pending
+
+    # A run that failed, or one the head's runs don't list, leaves its unfinished check pending.
+    failed = [%{"id" => 37_391_815_662, "status" => "completed", "conclusion" => "failure"}]
+    other = [%{"id" => 1, "status" => "completed", "conclusion" => "success"}]
+
+    for runs <- [failed, other] do
+      assert {:ok, status} = PullRequest.fetch_ci_status(pr_url, gh_runner: runner.([ci, server_test], runs))
+      assert CiPoller.ci_action(status) == :pending
+    end
+
+    # A failed check, or a pending check from outside GitHub Actions, needs no runs.
+    red = Map.merge(ci, %{"conclusion" => "FAILURE"})
+    external = %{"context" => "deploy/preview", "state" => "PENDING", "targetUrl" => "https://ci.example.test/1"}
+
+    for rollup <- [[red, server_test], [ci, server_test, external]] do
+      assert {:ok, status} = PullRequest.fetch_ci_status(pr_url, gh_runner: runner.(rollup, finished))
+      refute Map.has_key?(status, :workflow_runs)
+    end
+
+    for _listing <- 1..4, do: assert_received(:listed_runs)
+    refute_received :listed_runs
+  end
+
+  test "fetch_ci_status reads the base branch's required checks for a landing still waiting on a check" do
+    pr_url = "https://github.com/org/repo/pull/71"
+    rules_endpoint = "repos/org/repo/rules/branches/release%2F1.x?per_page=100"
+    branch_endpoint = "repos/org/repo/branches/release%2F1.x"
+    runs_endpoint = "repos/org/repo/actions/runs?head_sha=abc123&per_page=100"
+    test_pid = self()
+
+    rules =
+      Jason.encode!([
+        %{"type" => "required_status_checks", "parameters" => %{"required_status_checks" => [%{"context" => "make all"}, %{"context" => "lint"}, %{}]}},
+        %{"type" => "pull_request", "parameters" => %{}}
+      ])
+
+    protected = fn level ->
+      Jason.encode!(%{"name" => "release/1.x", "protection" => %{"required_status_checks" => %{"enforcement_level" => level, "contexts" => ["lint", "e2e", 7]}}})
+    end
+
+    runner = fn rollup, responses ->
+      fn
+        ["pr", "view", ^pr_url, "--json", _fields], _opts ->
+          {Jason.encode!(%{"state" => "OPEN", "url" => pr_url, "headRefOid" => "abc123", "baseRefName" => "release/1.x", "statusCheckRollup" => rollup}), 0}
+
+        ["api", endpoint], _opts ->
+          send(test_pid, {:api, endpoint})
+          Map.fetch!(responses, endpoint)
+      end
+    end
+
+    landing_read = fn rollup, responses ->
+      PullRequest.fetch_ci_status(pr_url, gh_runner: runner.(rollup, responses), required_checks: true)
+    end
+
+    make_all = %{"name" => "make all", "status" => "COMPLETED", "conclusion" => "SUCCESS"}
+    preview = %{"context" => "deploy/preview", "state" => "PENDING"}
+    read = %{rules_endpoint => {rules, 0}, branch_endpoint => {protected.("non_admins"), 0}}
+
+    assert {:ok, status} = landing_read.([make_all, preview], read)
+    assert status.required_checks == ["make all", "lint", "e2e"]
+    assert_received {:api, ^rules_endpoint}
+    assert_received {:api, ^branch_endpoint}
+
+    # Protection whose required checks are switched off, or a branch without protection, adds none.
+    for branch <- [protected.("off"), Jason.encode!(%{"name" => "release/1.x", "protection" => %{"enabled" => false}})] do
+      responses = %{rules_endpoint => {"[]", 0}, branch_endpoint => {branch, 0}}
+      assert {:ok, %{required_checks: []}} = landing_read.([make_all, preview], responses)
+    end
+
+    # Every check passed, but a workflow run of the head is still going: its later jobs may be required.
+    actions_check = Map.put(make_all, "detailsUrl", "https://github.com/org/repo/actions/runs/987/job/1")
+    queued = {Jason.encode!(%{"workflow_runs" => [%{"id" => 987, "status" => "queued", "conclusion" => nil}]}), 0}
+
+    assert {:ok, %{required_checks: ["make all", "lint", "e2e"]}} =
+             landing_read.([actions_check], Map.put(read, runs_endpoint, queued))
+
+    # A read that fails leaves the required checks out, so the landing waits on every check.
+    failed_reads = [
+      %{rules_endpoint => {"HTTP 404: Not Found", 1}},
+      %{rules_endpoint => {"not json", 0}},
+      %{rules_endpoint => {Jason.encode!(%{"message" => "Not Found"}), 0}, branch_endpoint => {protected.("everyone"), 0}}
+    ]
+
+    for responses <- failed_reads do
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, status} = landing_read.([make_all, preview], responses)
+          refute Map.has_key?(status, :required_checks)
+        end)
+
+      assert log =~ "Could not read the required checks of release/1.x; waiting on every check pr_url=#{pr_url} commit_sha=abc123"
+    end
+
+    # Other reads, a failed check, or a head with nothing left to wait on don't read them: the
+    # runner has no response for those endpoints.
+    red = %{"context" => "ci/test", "state" => "FAILURE"}
+
+    assert {:ok, status} = PullRequest.fetch_ci_status(pr_url, gh_runner: runner.([make_all, preview], %{}))
+    refute Map.has_key?(status, :required_checks)
+
+    for rollup <- [[red, preview], [make_all]] do
+      assert {:ok, status} = landing_read.(rollup, %{})
+      refute Map.has_key?(status, :required_checks)
+    end
   end
 
   test "fetch_failed_log and rerun_failed use gh run commands" do

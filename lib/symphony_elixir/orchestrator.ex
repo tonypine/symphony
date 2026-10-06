@@ -40,6 +40,7 @@ defmodule SymphonyElixir.Orchestrator do
     UsageLimit,
     Verification,
     Workspace,
+    WorkspaceCleanup,
     WorkspaceHead
   }
 
@@ -51,10 +52,14 @@ defmodule SymphonyElixir.Orchestrator do
   # A transient Linear error (timeout, refused connection, 5xx) is not the issue's
   # fault: retry soon, without failure backoff. A rate limit waits for its pause.
   @linear_wait_retry_delay_ms 5_000
+  # The snapshot shows a run's pending Symphony tool call once it has run this long.
+  @pending_tool_report_after_ms 60_000
   # Slightly above the dashboard render interval so "checking now…" can render.
   @poll_transition_render_delay_ms 20
   @default_transcript_buffer_size 200
   @default_snapshot_publish_ms 500
+  @slow_callback_ms 1_000
+  @running_metadata_persist_ms 5_000
   @stop_session_cleanup_timeout_ms 5_000
   @fresh_dispatch_state_grace_ms 120_000
   # A landing session can see its issue turn terminal (for example Linear's
@@ -65,6 +70,7 @@ defmodule SymphonyElixir.Orchestrator do
   @merging_terminal_grace_ms 300_000
   @snapshot_table :symphony_orchestrator_snapshot
   @snapshot_key :current
+  @snapshot_timing_key :timing
   @repo_poll_cold_failure_warm_after 3
   @terminal_agent_setup_error_marker "missing_required_mcp_tools"
   @empty_codex_totals %{
@@ -139,9 +145,12 @@ defmodule SymphonyElixir.Orchestrator do
       quality_gate_skipped_errors: %{},
       quality_gate_tasks: %{},
       dispatch_readiness_tasks: %{},
+      tracker_tasks: %{},
+      dispatch_refresh: nil,
       usage_limits: %{},
       usage_limit_timers: %{},
       usage_windows: %{},
+      api_outages: %{},
       clock: &DateTime.utc_now/0
     ]
 
@@ -239,14 +248,35 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   @impl true
-  def handle_info(:publish_snapshot, state) do
+  def handle_info(message, state), do: timed_callback(:handle_info, message, fn -> handle_info_message(message, state) end)
+
+  @impl true
+  def handle_call(message, from, state), do: timed_callback(:handle_call, message, fn -> handle_call_message(message, from, state) end)
+
+  # Every caller waits behind a slow callback, and the snapshot isn't published meanwhile, so the
+  # dashboards go stale: name the message that took the time.
+  defp timed_callback(callback, message, fun) do
+    started_ms = System.monotonic_time(:millisecond)
+    result = fun.()
+    duration_ms = System.monotonic_time(:millisecond) - started_ms
+
+    if duration_ms >= slow_callback_ms() do
+      Logger.warning("Orchestrator slow #{callback} duration_ms=#{duration_ms} message=#{inspect(message, limit: 3, printable_limit: 80)}")
+    end
+
+    result
+  end
+
+  defp slow_callback_ms, do: Application.get_env(:symphony_elixir, :orchestrator_slow_callback_ms, @slow_callback_ms)
+
+  defp handle_info_message(:publish_snapshot, state) do
     publish_snapshot(state)
     schedule_snapshot_publish(snapshot_publish_interval_ms())
     {:noreply, state}
   end
 
-  def handle_info({:tick, tick_token}, %{tick_token: tick_token} = state)
-      when is_reference(tick_token) do
+  defp handle_info_message({:tick, tick_token}, %{tick_token: tick_token} = state)
+       when is_reference(tick_token) do
     state = refresh_runtime_config(state)
 
     state = %{
@@ -262,9 +292,9 @@ defmodule SymphonyElixir.Orchestrator do
     {:noreply, state}
   end
 
-  def handle_info({:tick, _tick_token}, state), do: {:noreply, state}
+  defp handle_info_message({:tick, _tick_token}, state), do: {:noreply, state}
 
-  def handle_info(:tick, state) do
+  defp handle_info_message(:tick, state) do
     state = refresh_runtime_config(state)
 
     state = %{
@@ -280,7 +310,7 @@ defmodule SymphonyElixir.Orchestrator do
     {:noreply, state}
   end
 
-  def handle_info(:run_poll_cycle, state) do
+  defp handle_info_message(:run_poll_cycle, state) do
     now_ms = System.monotonic_time(:millisecond)
     state = refresh_runtime_config(state)
 
@@ -295,8 +325,8 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  def handle_info({:watchdog_tick, watchdog_token}, %{watchdog_token: watchdog_token} = state)
-      when is_reference(watchdog_token) do
+  defp handle_info_message({:watchdog_tick, watchdog_token}, %{watchdog_token: watchdog_token} = state)
+       when is_reference(watchdog_token) do
     state =
       state
       |> refresh_runtime_config()
@@ -306,9 +336,9 @@ defmodule SymphonyElixir.Orchestrator do
     {:noreply, state}
   end
 
-  def handle_info({:watchdog_tick, _watchdog_token}, state), do: {:noreply, state}
+  defp handle_info_message({:watchdog_tick, _watchdog_token}, state), do: {:noreply, state}
 
-  def handle_info(:watchdog_tick, state) do
+  defp handle_info_message(:watchdog_tick, state) do
     state =
       state
       |> refresh_runtime_config()
@@ -318,8 +348,8 @@ defmodule SymphonyElixir.Orchestrator do
     {:noreply, state}
   end
 
-  def handle_info({ref, {:startup_workspace_lifecycle_result, result}}, %{startup_workspace_lifecycle_task_ref: ref} = state)
-      when is_reference(ref) do
+  defp handle_info_message({ref, {:startup_workspace_lifecycle_result, result}}, %{startup_workspace_lifecycle_task_ref: ref} = state)
+       when is_reference(ref) do
     Process.demonitor(ref, [:flush])
 
     state =
@@ -331,8 +361,8 @@ defmodule SymphonyElixir.Orchestrator do
     {:noreply, state}
   end
 
-  def handle_info({ref, {:repo_poll_result, result}}, %{repo_poll_task_ref: ref} = state)
-      when is_reference(ref) do
+  defp handle_info_message({ref, {:repo_poll_result, result}}, %{repo_poll_task_ref: ref} = state)
+       when is_reference(ref) do
     Process.demonitor(ref, [:flush])
 
     state =
@@ -344,8 +374,8 @@ defmodule SymphonyElixir.Orchestrator do
     {:noreply, state}
   end
 
-  def handle_info({ref, {:quality_gate_result, result}}, %State{quality_gate_tasks: tasks} = state)
-      when is_reference(ref) and is_map(tasks) do
+  defp handle_info_message({ref, {:quality_gate_result, result}}, %State{quality_gate_tasks: tasks} = state)
+       when is_reference(ref) and is_map(tasks) do
     case Map.pop(tasks, ref) do
       {nil, _tasks} ->
         {:noreply, state}
@@ -362,8 +392,8 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  def handle_info({ref, {:dispatch_readiness_result, result}}, %State{dispatch_readiness_tasks: tasks} = state)
-      when is_reference(ref) and is_map(tasks) do
+  defp handle_info_message({ref, {:dispatch_readiness_result, result}}, %State{dispatch_readiness_tasks: tasks} = state)
+       when is_reference(ref) and is_map(tasks) do
     case Map.pop(tasks, ref) do
       {nil, _tasks} ->
         {:noreply, state}
@@ -380,10 +410,23 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  def handle_info(
-        {:DOWN, ref, :process, _pid, reason},
-        %{running: running} = state
-      ) do
+  defp handle_info_message({ref, {:tracker_task_result, result}}, %State{tracker_tasks: tasks} = state) when is_reference(ref) do
+    case Map.pop(tasks, ref) do
+      {nil, _tasks} ->
+        {:noreply, state}
+
+      {context, tasks} ->
+        Process.demonitor(ref, [:flush])
+        state = handle_tracker_task_result(%{state | tracker_tasks: tasks}, context, result)
+        notify_dashboard()
+        {:noreply, state}
+    end
+  end
+
+  defp handle_info_message(
+         {:DOWN, ref, :process, _pid, reason},
+         %{running: running} = state
+       ) do
     cond do
       state.startup_workspace_lifecycle_task_ref == ref ->
         Logger.warning("Async startup workspace lifecycle task exited before replying: #{inspect(reason)}")
@@ -412,6 +455,13 @@ defmodule SymphonyElixir.Orchestrator do
 
         {:noreply, state}
 
+      Map.has_key?(state.tracker_tasks, ref) ->
+        {context, tasks} = Map.pop(state.tracker_tasks, ref)
+        Logger.warning("Async Linear task #{context.kind} exited before replying: #{inspect(reason)}")
+        state = handle_tracker_task_result(%{state | tracker_tasks: tasks}, context, {:error, {:task_exit, reason}})
+        notify_dashboard()
+        {:noreply, state}
+
       is_map(state.dispatch_readiness_tasks) and Map.has_key?(state.dispatch_readiness_tasks, ref) ->
         {context, tasks} = Map.pop(state.dispatch_readiness_tasks, ref)
         Logger.warning("Async dispatch readiness task exited before replying: #{inspect(reason)}")
@@ -428,8 +478,8 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  def handle_info({:worker_runtime_info, issue_id, runtime_info}, %{running: running} = state)
-      when is_binary(issue_id) and is_map(runtime_info) do
+  defp handle_info_message({:worker_runtime_info, issue_id, runtime_info}, %{running: running} = state)
+       when is_binary(issue_id) and is_map(runtime_info) do
     case Map.get(running, issue_id) do
       nil ->
         {:noreply, state}
@@ -453,8 +503,8 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  def handle_info({:merging_ci_wait, issue_id, wait}, %{running: running} = state)
-      when is_binary(issue_id) and is_map(wait) do
+  defp handle_info_message({:merging_ci_wait, issue_id, wait}, %{running: running} = state)
+       when is_binary(issue_id) and is_map(wait) do
     case Map.get(running, issue_id) do
       nil -> {:noreply, state}
       running_entry -> {:noreply, %{state | running: Map.put(running, issue_id, Map.put(running_entry, :merging_ci_wait, wait))}}
@@ -462,8 +512,8 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # A run is waiting `delay_ms` on a Linear rate limit or outage; see after_linear_wait/2.
-  def handle_info({:linear_wait, issue_id, delay_ms}, %{running: running} = state)
-      when is_binary(issue_id) and is_integer(delay_ms) do
+  defp handle_info_message({:linear_wait, issue_id, delay_ms}, %{running: running} = state)
+       when is_binary(issue_id) and is_integer(delay_ms) do
     case Map.get(running, issue_id) do
       nil ->
         {:noreply, state}
@@ -474,10 +524,36 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  def handle_info(
-        {:codex_worker_update, issue_id, %{event: _, timestamp: _} = update},
-        %{running: running} = state
-      ) do
+  # One of Symphony's own MCP tool calls in the run started or ended; see pending_tool/2 and
+  # watchdog_clock_started_at/1.
+  defp handle_info_message({:mcp_tool_call, issue_id, event}, %{running: running} = state) when is_binary(issue_id) do
+    case Map.get(running, issue_id) do
+      nil ->
+        {:noreply, state}
+
+      running_entry ->
+        notify_dashboard()
+        {:noreply, %{state | running: Map.put(running, issue_id, put_pending_tool_call(running_entry, event))}}
+    end
+  end
+
+  # Claude Code's heartbeat while a tool runs, every few seconds: it only counts as activity for
+  # the first-turn stall check and the no-progress watchdog, so it skips the transcript, the run
+  # store and the dashboard.
+  defp handle_info_message(
+         {:codex_worker_update, issue_id, %{event: :tool_progress, timestamp: %DateTime{} = timestamp}},
+         %{running: running} = state
+       ) do
+    case Map.get(running, issue_id) do
+      nil -> {:noreply, state}
+      running_entry -> {:noreply, put_running_entry(state, issue_id, Map.put(running_entry, :last_event_at, timestamp))}
+    end
+  end
+
+  defp handle_info_message(
+         {:codex_worker_update, issue_id, %{event: _, timestamp: _} = update},
+         %{running: running} = state
+       ) do
     case Map.get(running, issue_id) do
       nil ->
         {:noreply, state}
@@ -501,30 +577,44 @@ defmodule SymphonyElixir.Orchestrator do
           |> enforce_issue_budget(issue_id)
           |> clear_usage_limit_on_allowed_canary(issue_id, update)
           |> hold_for_usage_headroom(updated_running_entry, update)
+          |> persist_running_metadata(issue_id)
 
-        persist_running_entry(updated_running_entry)
         notify_transcript(running_repo_key(state, updated_running_entry), issue_id, update)
         notify_dashboard()
         {:noreply, state}
     end
   end
 
-  def handle_info({:codex_worker_update, _issue_id, _update}, state), do: {:noreply, state}
+  defp handle_info_message({:codex_worker_update, _issue_id, _update}, state), do: {:noreply, state}
 
-  def handle_info({:retry_issue, issue_id, retry_token}, state) do
+  defp handle_info_message({:retry_issue, issue_id, retry_token}, state) do
     result =
-      case pop_retry_attempt_state(state, issue_id, retry_token) do
-        {:ok, attempt, metadata, state} -> handle_retry_issue(state, issue_id, attempt, metadata)
-        :missing -> {:noreply, state}
+      if held_for_canary_read?(state, issue_id, retry_token) do
+        {:noreply, keep_held_for_canary_read(state, issue_id)}
+      else
+        case pop_retry_attempt_state(state, issue_id, retry_token) do
+          {:ok, attempt, metadata, state} -> handle_retry_issue(state, issue_id, attempt, metadata)
+          :missing -> {:noreply, state}
+        end
       end
 
     notify_dashboard()
     result
   end
 
-  def handle_info({:retry_issue, _issue_id}, state), do: {:noreply, state}
+  defp handle_info_message({:retry_issue, _issue_id}, state), do: {:noreply, state}
 
-  def handle_info({:usage_limit_resume, key}, %State{} = state) do
+  defp handle_info_message({:api_outage_over, key, since}, %State{} = state) do
+    state =
+      case Map.fetch(state.api_outages, key) do
+        {:ok, %{since: ^since} = outage} -> finish_api_outage(state, key, outage)
+        _continued_or_gone -> state
+      end
+
+    {:noreply, state}
+  end
+
+  defp handle_info_message({:usage_limit_resume, key}, %State{} = state) do
     state =
       case Map.fetch(state.usage_limits, key) do
         {:ok, %{phase: :paused} = entry} -> maybe_resume_usage_limit(state, key, entry)
@@ -536,7 +626,7 @@ defmodule SymphonyElixir.Orchestrator do
     {:noreply, state}
   end
 
-  def handle_info(msg, state) do
+  defp handle_info_message(msg, state) do
     Logger.debug("Orchestrator ignored message: #{inspect(msg)}")
     {:noreply, state}
   end
@@ -638,6 +728,13 @@ defmodule SymphonyElixir.Orchestrator do
     })
   end
 
+  # A model API the agent couldn't reach is held as a usage limit is, `auto_pause` or not: no
+  # attempt is counted, and the canary is the probe that tells when the API is back.
+  defp handle_abnormal_agent_exit(%State{} = state, issue_id, running_entry, session_id, {:model_api_unreachable, %{} = info} = reason) do
+    persist_run_completion(running_entry, "model_api_unreachable", "agent exited: #{agent_exit_reason_summary(reason)}")
+    pause_for_usage_limit(state, issue_id, running_entry, session_id, info)
+  end
+
   defp handle_abnormal_agent_exit(%State{} = state, issue_id, running_entry, session_id, {:usage_limited, %{} = info} = reason) do
     if Config.settings!().agent.usage_limit.auto_pause do
       persist_run_completion(running_entry, "usage_limited", "agent exited: #{agent_exit_reason_summary(reason)}")
@@ -673,10 +770,12 @@ defmodule SymphonyElixir.Orchestrator do
             "reason=#{inspect(reason)}; terminal setup error is not retried"
         )
 
-        maybe_comment_terminal_agent_setup_failure(issue_id, running_entry, reason)
         emit_run_failed(running_entry, error, nil)
 
+        comment = fn -> maybe_comment_terminal_agent_setup_failure(issue_id, running_entry, reason) end
+
         state
+        |> start_tracker_task(%{kind: :comment, issue_ids: [issue_id]}, comment)
         |> release_issue_claim(issue_id)
         |> mark_setup_failed(issue_id, running_entry)
 
@@ -687,8 +786,8 @@ defmodule SymphonyElixir.Orchestrator do
         )
 
         blocked_state = review_agent_blocked_state(state, running_entry)
-        maybe_comment_review_agent_block(issue_id, running_entry, reason, blocked_state)
-        state = maybe_transition_review_agent_blocked_issue(state, issue_id, running_entry, blocked_state)
+        comment = fn -> maybe_comment_review_agent_block(issue_id, running_entry, reason, blocked_state) end
+        state = maybe_transition_review_agent_blocked_issue(state, issue_id, running_entry, blocked_state, comment)
         emit_run_failed(running_entry, error, nil)
         state
 
@@ -699,8 +798,8 @@ defmodule SymphonyElixir.Orchestrator do
         )
 
         blocked_state = review_agent_blocked_state(state, running_entry)
-        maybe_comment_tool_failure_circuit_breaker(issue_id, running_entry, reason, blocked_state)
-        state = maybe_transition_review_agent_blocked_issue(state, issue_id, running_entry, blocked_state)
+        comment = fn -> maybe_comment_tool_failure_circuit_breaker(issue_id, running_entry, reason, blocked_state) end
+        state = maybe_transition_review_agent_blocked_issue(state, issue_id, running_entry, blocked_state, comment)
         emit_run_failed(running_entry, error, nil)
         state
 
@@ -742,11 +841,13 @@ defmodule SymphonyElixir.Orchestrator do
   defp pause_for_usage_limit(%State{} = state, issue_id, running_entry, session_id, info) do
     {state, entry} = put_usage_limit(state, info, running_entry.identifier)
 
+    cause = if UsageLimit.api_unreachable?(entry), do: "could not reach the model API", else: "hit the usage limit"
+
     if pr_run_entry?(running_entry) do
-      Logger.warning("PR agent task hit the usage limit for issue_id=#{issue_id} session_id=#{session_id}; PR runs are not retried")
+      Logger.warning("PR agent task #{cause} for issue_id=#{issue_id} session_id=#{session_id}; PR runs are not retried")
       state
     else
-      Logger.info("Agent task hit the usage limit for issue_id=#{issue_id} session_id=#{session_id}; holding the retry until #{DateTime.to_iso8601(entry.resume_at)}")
+      Logger.info("Agent task #{cause} for issue_id=#{issue_id} session_id=#{session_id}; holding the retry until #{DateTime.to_iso8601(entry.resume_at)}")
 
       schedule_issue_retry(state, issue_id, retry_attempt(Map.get(running_entry, :retry_attempt)), %{
         repo_key: running_entry_repo_key(running_entry),
@@ -768,6 +869,10 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp agent_exit_reason_summary({:review_agent_blocked, payload}) do
     "review_agent blocked: #{review_agent_block_reason(payload)}"
+  end
+
+  defp agent_exit_reason_summary({:model_api_unreachable, info}) do
+    "model API unreachable (#{Map.get(info, :error)})"
   end
 
   defp agent_exit_reason_summary({:linear_unavailable, reason}) do
@@ -864,46 +969,34 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp maybe_comment_tool_failure_circuit_breaker(_issue_id, _running_entry, _reason, _blocked_state), do: :ok
 
-  defp maybe_transition_review_agent_blocked_issue(%State{} = state, issue_id, running_entry, blocked_state)
+  # The comment saying why and the move to the blocked state run in one task, so they land in that
+  # order and Linear never holds up the orchestrator; the claim stays held until the move is done.
+  defp maybe_transition_review_agent_blocked_issue(%State{} = state, issue_id, running_entry, blocked_state, comment)
        when is_binary(issue_id) and is_map(running_entry) and is_binary(blocked_state) do
-    case Tracker.update_issue_state(issue_id, blocked_state) do
-      :ok ->
-        issue =
-          running_entry
-          |> Map.get(:issue)
-          |> case do
-            %Issue{} = issue -> %Issue{issue | state: blocked_state, updated_at: DateTime.utc_now()}
-            _ -> nil
-          end
+    context = %{kind: :blocked_transition, issue_ids: [issue_id], issue: Map.get(running_entry, :issue), blocked_state: blocked_state}
 
-        state =
-          if issue do
-            put_watching_issue(state, issue)
-          else
-            state
-          end
-
-        release_issue_claim(state, issue_id)
-
-      {:error, transition_reason} ->
-        Logger.warning(
-          "Failed to move review-agent blocked issue to #{blocked_state}: " <>
-            "issue_id=#{issue_id} reason=#{inspect(transition_reason)}"
-        )
-
-        release_issue_claim(state, issue_id)
-    end
-  rescue
-    exception ->
-      Logger.warning(
-        "Failed to move review-agent blocked issue to #{blocked_state}: " <>
-          "issue_id=#{issue_id} reason=#{Exception.message(exception)}"
-      )
-
-      release_issue_claim(state, issue_id)
+    start_tracker_task(state, context, fn ->
+      comment.()
+      Tracker.update_issue_state(issue_id, blocked_state)
+    end)
   end
 
-  defp maybe_transition_review_agent_blocked_issue(%State{} = state, _issue_id, _running_entry, _blocked_state), do: state
+  defp maybe_transition_review_agent_blocked_issue(%State{} = state, _issue_id, _running_entry, _blocked_state, _comment), do: state
+
+  defp finish_blocked_transition(%State{} = state, %{issue_ids: [issue_id], issue: issue, blocked_state: blocked_state}, :ok) do
+    state =
+      case issue do
+        %Issue{} = issue -> put_watching_issue(state, %{issue | state: blocked_state, updated_at: DateTime.utc_now()})
+        _no_issue -> state
+      end
+
+    release_issue_claim(state, issue_id)
+  end
+
+  defp finish_blocked_transition(%State{} = state, %{issue_ids: [issue_id], blocked_state: blocked_state}, {:error, reason}) do
+    Logger.warning("Failed to move review-agent blocked issue to #{blocked_state}: issue_id=#{issue_id} reason=#{inspect(reason)}")
+    release_issue_claim(state, issue_id)
+  end
 
   defp review_agent_block_comment(reason, blocked_state) do
     """
@@ -1220,9 +1313,11 @@ defmodule SymphonyElixir.Orchestrator do
     |> Map.put(:poll_check_in_progress, false)
   end
 
-  # A claim is only held by a running agent, a queued retry, or a retry whose async quality
-  # gate or dispatch readiness check is in flight. Any other claim is orphaned: the poll skips
-  # claimed issues, so release it rather than leave the issue undispatchable until a restart.
+  # A claim is only held by a running agent, a queued retry, a retry whose async quality gate or
+  # dispatch readiness check is in flight, or a Linear task that keeps it until its answer is
+  # handled (a retry's refresh, the post-PR move, the move to the blocked state). Any other claim is
+  # orphaned: the poll skips claimed issues, so release it rather than leave the issue
+  # undispatchable until a restart.
   defp release_orphaned_claims(%State{} = state) do
     held = claim_holders(state)
 
@@ -1242,7 +1337,17 @@ defmodule SymphonyElixir.Orchestrator do
     |> Enum.concat(Map.keys(state.running))
     |> Enum.concat(Map.keys(state.retry_attempts))
     |> Enum.concat(Map.keys(state.slot_waiting))
+    |> Enum.concat(claim_holding_tracker_task_issue_ids(state))
     |> MapSet.new()
+  end
+
+  @claim_holding_tracker_task_kinds [:retry_refresh, :post_pr_transition, :blocked_transition]
+
+  defp claim_holding_tracker_task_issue_ids(%State{tracker_tasks: tasks}) do
+    for {_ref, %{kind: kind, issue_ids: issue_ids}} <- tasks,
+        kind in @claim_holding_tracker_task_kinds,
+        issue_id <- issue_ids,
+        do: issue_id
   end
 
   defp log_poll_error(:missing_linear_api_token), do: Logger.error("Linear API token missing in WORKFLOW.md")
@@ -1619,12 +1724,12 @@ defmodule SymphonyElixir.Orchestrator do
 
   @doc false
   @spec dispatch_chosen_issues_for_test([Issue.t() | term()], State.t()) :: State.t()
-  def dispatch_chosen_issues_for_test(issues, %State{} = state) when is_list(issues), do: dispatch_chosen_issues(issues, state)
+  def dispatch_chosen_issues_for_test(issues, %State{} = state) when is_list(issues), do: issues |> dispatch_chosen_issues(state) |> await_tracker_tasks()
 
   @doc false
   @spec start_usage_limit_canary_for_test(State.t(), UsageLimit.key(), ([String.t()] -> term())) :: State.t()
   def start_usage_limit_canary_for_test(%State{} = state, key, issue_fetcher) when is_function(issue_fetcher, 1) do
-    start_usage_limit_canary(state, key, Map.fetch!(state.usage_limits, key), issue_fetcher)
+    state |> start_usage_limit_canary(key, Map.fetch!(state.usage_limits, key), issue_fetcher) |> await_tracker_tasks()
   end
 
   @doc false
@@ -1651,15 +1756,19 @@ defmodule SymphonyElixir.Orchestrator do
   @doc false
   @spec review_breakdown_parents_for_test([Issue.t()], term(), keyword()) :: term()
   def review_breakdown_parents_for_test(issues, %State{} = state, opts \\ []) when is_list(issues),
-    do: review_breakdown_parents(issues, state, opts)
+    do: issues |> review_breakdown_parents(state, opts) |> await_tracker_tasks()
 
   @doc false
   @spec act_on_plan_comments_for_test(term(), [Issue.t()]) :: term()
-  def act_on_plan_comments_for_test(%State{} = state, issues) when is_list(issues), do: act_on_plan_comments(state, issues)
+  def act_on_plan_comments_for_test(%State{} = state, issues) when is_list(issues), do: state |> act_on_plan_comments(issues) |> await_tracker_tasks()
+
+  @doc false
+  @spec close_finished_parents_for_test([Issue.t()], term()) :: term()
+  def close_finished_parents_for_test(issues, %State{} = state) when is_list(issues), do: state |> close_finished_parents(issues) |> await_tracker_tasks()
 
   @doc false
   @spec park_breakdown_parents_for_test([Issue.t()], term()) :: term()
-  def park_breakdown_parents_for_test(issues, %State{} = state) when is_list(issues), do: park_breakdown_parents(issues, state)
+  def park_breakdown_parents_for_test(issues, %State{} = state) when is_list(issues), do: issues |> park_breakdown_parents(state) |> await_tracker_tasks()
 
   @doc false
   @spec revalidate_issue_for_dispatch_for_test(Issue.t(), ([String.t()] -> term())) ::
@@ -1687,7 +1796,8 @@ defmodule SymphonyElixir.Orchestrator do
           {:noreply, State.t()}
   def handle_retry_issue_for_test(%State{} = state, issue_id, attempt, metadata, issue_fetcher)
       when is_binary(issue_id) and is_integer(attempt) and is_map(metadata) and is_function(issue_fetcher, 1) do
-    handle_retry_issue_sync_for_test(state, issue_id, attempt, metadata, issue_fetcher)
+    {:noreply, state} = handle_retry_issue_sync_for_test(state, issue_id, attempt, metadata, issue_fetcher)
+    {:noreply, await_tracker_tasks(state)}
   end
 
   @doc false
@@ -2123,8 +2233,18 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # As for the first-turn stall check, a running workspace hook's clock starts at its deadline.
+  # So does the clock of a run waiting on one of Symphony's own tool calls: the agent shows no
+  # activity until the call returns, at the latest when its timeout stops it.
   defp watchdog_clock_started_at(%{workspace_hook: %{deadline: %DateTime{} = deadline}}), do: deadline
-  defp watchdog_clock_started_at(running_entry), do: watchdog_last_event_at(running_entry)
+
+  defp watchdog_clock_started_at(running_entry) do
+    last_event_at = watchdog_last_event_at(running_entry)
+
+    case pending_tool_deadline(running_entry) do
+      %DateTime{} = deadline when is_struct(last_event_at, DateTime) -> Enum.max([last_event_at, deadline], DateTime)
+      _no_deadline -> last_event_at
+    end
+  end
 
   defp watchdog_last_event_at(running_entry) when is_map(running_entry) do
     (Map.get(running_entry, :last_event_at) ||
@@ -2143,6 +2263,54 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp after_linear_wait(timestamp, _running_entry), do: timestamp
 
+  defp put_pending_tool_call(running_entry, {:started, call_id, call}) do
+    Map.update(running_entry, :pending_tool_calls, %{call_id => call}, &Map.put(&1, call_id, call))
+  end
+
+  # As for a workspace hook, a tool call's end counts as an event.
+  defp put_pending_tool_call(running_entry, {:finished, call_id}) do
+    running_entry
+    |> Map.update(:pending_tool_calls, %{}, &Map.delete(&1, call_id))
+    |> Map.put(:last_event_at, DateTime.utc_now())
+  end
+
+  defp oldest_pending_tool_call(%{pending_tool_calls: calls}) when map_size(calls) > 0 do
+    calls |> Map.values() |> Enum.min_by(& &1.started_at, DateTime)
+  end
+
+  defp oldest_pending_tool_call(_running_entry), do: nil
+
+  # The latest deadline of the run's pending tool calls. A call without one (a `qa_*` tool, which
+  # keeps its driver's timeout) does not hold the watchdog.
+  defp pending_tool_deadline(running_entry) do
+    running_entry
+    |> Map.get(:pending_tool_calls, %{})
+    |> Map.values()
+    |> Enum.map(& &1.deadline)
+    |> Enum.filter(&is_struct(&1, DateTime))
+    |> Enum.max(DateTime, fn -> nil end)
+  end
+
+  # The snapshot shows a run's oldest pending tool call once it has run for a minute.
+  defp pending_tool(running_entry, %DateTime{} = now) do
+    with %{name: name, started_at: started_at} <- oldest_pending_tool_call(running_entry),
+         age_ms when age_ms >= @pending_tool_report_after_ms <- DateTime.diff(now, started_at, :millisecond) do
+      %{name: name, started_at: started_at, age_ms: age_ms}
+    else
+      _ -> nil
+    end
+  end
+
+  defp pending_tool_for_log(running_entry, %DateTime{} = now) do
+    case oldest_pending_tool_call(running_entry) do
+      %{name: name, started_at: started_at} ->
+        " pending_tool=#{name} pending_tool_age_ms=#{max(0, DateTime.diff(now, started_at, :millisecond))}"
+
+      nil ->
+        ""
+    end
+  end
+
   defp restart_stuck_issue(state, issue_id, running_entry, elapsed_ms) do
     identifier = Map.get(running_entry, :identifier, issue_id)
     session_id = running_entry_session_id(running_entry)
@@ -2151,8 +2319,10 @@ defmodule SymphonyElixir.Orchestrator do
     error = "stuck for #{elapsed_ms}ms without transcript activity"
     next_attempt = next_retry_attempt_from_running(running_entry)
 
+    pending_tool = pending_tool_for_log(running_entry, DateTime.utc_now())
+
     Logger.warning(
-      "Agent run stuck: issue_id=#{issue_id} issue_identifier=#{identifier} session_id=#{session_id} last_event_at=#{last_event_at_for_log} elapsed_ms=#{elapsed_ms}; restarting with backoff"
+      "Agent run stuck: issue_id=#{issue_id} issue_identifier=#{identifier} session_id=#{session_id} last_event_at=#{last_event_at_for_log} elapsed_ms=#{elapsed_ms}#{pending_tool}; restarting with backoff"
     )
 
     emit_run_stuck(running_entry, elapsed_ms, next_attempt)
@@ -2613,6 +2783,7 @@ defmodule SymphonyElixir.Orchestrator do
       repo_keys: configured_repo_keys(state.repo_key),
       active_workspace_identifiers_by_repo: active_workspace_identifiers_by_repo(state),
       run_age_gc?: workspace_age_gc_due?(state, now_ms),
+      dispatch_refresh_ids: dispatch_refresh_ids(state, issues, context),
       now_ms: now_ms
     }
 
@@ -2629,14 +2800,31 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  # The issues dispatch may start are read from Linear here, in the readiness task, rather than one
+  # by one in `dispatch_issue/4`, which runs inside the orchestrator's callback. A poll reads only
+  # the candidates whose dispatch gates are open now; a retry reads its own issue.
+  defp dispatch_refresh_ids(_state, _issues, {:active_retry, %Issue{id: issue_id}, _attempt, _metadata}), do: [issue_id]
+
+  defp dispatch_refresh_ids(%State{} = state, issues, :poll) do
+    active_states = active_state_set()
+    terminal_states = terminal_state_set()
+
+    for %Issue{id: issue_id} = issue <- issues,
+        is_binary(issue_id),
+        dispatch_gates_open?(issue, state, active_states, terminal_states),
+        do: issue_id
+  end
+
   defp run_dispatch_readiness_checks(%{
          repo_keys: repo_keys,
          active_workspace_identifiers_by_repo: active_identifiers_by_repo,
          run_age_gc?: run_age_gc?,
+         dispatch_refresh_ids: dispatch_refresh_ids,
          now_ms: now_ms
        }) do
     %{
       now_ms: now_ms,
+      dispatch_refresh: prefetch_dispatch_issues(dispatch_refresh_ids),
       age_gc_result:
         if(run_age_gc?,
           do: {:ran, workspace_age_gc_result(repo_keys, active_identifiers_by_repo)},
@@ -2646,11 +2834,15 @@ defmodule SymphonyElixir.Orchestrator do
     }
   end
 
+  defp prefetch_dispatch_issues([]), do: nil
+  defp prefetch_dispatch_issues(issue_ids), do: %{ids: MapSet.new(issue_ids), result: Tracker.fetch_issue_states_by_ids(issue_ids)}
+
   defp handle_dispatch_readiness_result(%State{} = state, %{kind: context, issues: issues}, result) do
     state =
       state
       |> apply_dispatch_readiness_result(result)
       |> continue_after_dispatch_readiness(context, issues)
+      |> Map.put(:dispatch_refresh, nil)
 
     notify_dashboard()
     state
@@ -2673,8 +2865,8 @@ defmodule SymphonyElixir.Orchestrator do
     state
   end
 
-  defp apply_dispatch_readiness_result(%State{} = state, %{now_ms: now_ms, age_gc_result: age_gc_result, quota: quota}) do
-    state
+  defp apply_dispatch_readiness_result(%State{} = state, %{now_ms: now_ms, age_gc_result: age_gc_result, quota: quota} = result) do
+    %{state | dispatch_refresh: Map.get(result, :dispatch_refresh)}
     |> apply_workspace_age_gc_result(age_gc_result, now_ms)
     |> apply_workspace_quota_result(quota)
   end
@@ -2689,6 +2881,7 @@ defmodule SymphonyElixir.Orchestrator do
       issues
       |> park_breakdown_parents(state)
       |> then(&review_breakdown_parents(issues, &1))
+      |> close_finished_parents(issues)
       |> act_on_plan_comments(issues)
 
     state =
@@ -2718,23 +2911,28 @@ defmodule SymphonyElixir.Orchestrator do
   # so a parent stays in `parked_parents` until the cache stops showing it `In Progress`. The cache
   # can still show `In Progress` for a parent whose breakdown run just moved it to `In Review`, so
   # each one is read again first: moving it on from `In Review` would read as approving its plan.
+  # The reads and moves run in a task; the parents it parks join `parked_parents` when it answers.
   defp park_breakdown_parents(issues, %State{} = state) do
     settings = Config.settings!()
     terminal_states = terminal_state_set()
     parkable = Enum.filter(issues, &SubIssueWait.park?(&1, terminal_states, settings))
-    already_parked = MapSet.intersection(state.parked_parents, MapSet.new(parkable, & &1.id))
+    state = %{state | parked_parents: MapSet.intersection(state.parked_parents, MapSet.new(parkable, & &1.id))}
 
-    parked =
-      parkable
-      |> Enum.reject(&(MapSet.member?(already_parked, &1.id) or issue_claimed_or_running?(state, &1.id)))
-      |> still_parkable()
-      |> Enum.filter(&park_breakdown_parent(&1, SubIssueWait.state(settings)))
-      |> MapSet.new(& &1.id)
+    case Enum.reject(parkable, &(MapSet.member?(state.parked_parents, &1.id) or parent_busy?(state, :park_parents, &1.id))) do
+      [] ->
+        state
 
-    %{state | parked_parents: MapSet.union(already_parked, parked)}
+      candidates ->
+        waiting_state = SubIssueWait.state(settings)
+
+        start_tracker_task(state, %{kind: :park_parents, issue_ids: Enum.map(candidates, & &1.id)}, fn ->
+          {:ok, candidates |> still_parkable() |> Enum.filter(&park_breakdown_parent(&1, waiting_state)) |> Enum.map(& &1.id)}
+        end)
+    end
   end
 
-  defp still_parkable([]), do: []
+  defp parent_busy?(%State{} = state, kind, issue_id),
+    do: issue_claimed_or_running?(state, issue_id) or tracker_task_in_flight?(state, kind, issue_id)
 
   defp still_parkable(issues) do
     case Tracker.fetch_issue_states_by_ids(Enum.map(issues, & &1.id)) do
@@ -2745,6 +2943,43 @@ defmodule SymphonyElixir.Orchestrator do
       {:error, reason} ->
         Logger.warning("Failed to refresh breakdown parents before parking; retrying next poll reason=#{inspect(reason)}")
         []
+    end
+  end
+
+  # An issue that waits on its sub-issues after its PR merged (not a `breakdown` parent) moves to
+  # Done once every sub-issue is terminal; its PR is merged, so no run is needed. Candidates come
+  # from the repo poll cache, so each one is read again first: a sub-issue filed meanwhile keeps it
+  # waiting, and a person may have moved it on.
+  defp close_finished_parents(%State{} = state, issues) do
+    settings = Config.settings!()
+    terminal_states = terminal_state_set()
+
+    closeable? = &(SubIssueWait.close?(&1, terminal_states, settings) and not parent_busy?(state, :close_parents, &1.id))
+
+    case Enum.filter(issues, closeable?) do
+      [] ->
+        state
+
+      closeable ->
+        issue_ids = Enum.map(closeable, & &1.id)
+        close = fn -> close_finished_parents_fresh(issue_ids, terminal_states, settings) end
+        start_tracker_task(state, %{kind: :close_parents, issue_ids: issue_ids}, close)
+    end
+  end
+
+  defp close_finished_parents_fresh(issue_ids, terminal_states, settings) do
+    case Tracker.fetch_issue_states_by_ids(issue_ids) do
+      {:ok, fresh_issues} ->
+        for %Issue{} = issue <- fresh_issues, SubIssueWait.close?(issue, terminal_states, settings), do: close_finished_parent(issue)
+
+      {:error, reason} ->
+        Logger.warning("Failed to refresh issues waiting on sub-issues before closing them; retrying next poll reason=#{inspect(reason)}")
+    end
+  end
+
+  defp close_finished_parent(%Issue{} = issue) do
+    with {:error, reason} <- SubIssueWait.close(issue, Tracker.adapter()) do
+      Logger.warning("Failed to move an issue whose sub-issues are finished to Done; retrying next poll: #{issue_context(issue)} reason=#{inspect(reason)}")
     end
   end
 
@@ -2763,26 +2998,35 @@ defmodule SymphonyElixir.Orchestrator do
         end
       end)
 
-    kept = Map.take(state.breakdown_reviews, Enum.map(pending, &elem(&1, 2)))
+    state = %{state | breakdown_reviews: Map.take(state.breakdown_reviews, Enum.map(pending, &elem(&1, 2)))}
+    run_store = Keyword.get(opts, :run_store, RunStore)
 
-    reviews =
-      Enum.reduce(pending, kept, fn {issue, action, issue_id}, reviews ->
-        backlog = BreakdownReview.backlog_sub_issue_ids(issue)
+    Enum.reduce(pending, state, fn {issue, action, issue_id}, state ->
+      backlog = BreakdownReview.backlog_sub_issue_ids(issue)
 
-        cond do
-          issue_claimed_or_running?(state, issue_id) or Map.get(reviews, issue_id) == backlog -> reviews
-          review_breakdown_parent(issue, action, settings, opts) -> Map.put(reviews, issue_id, backlog)
-          true -> Map.delete(reviews, issue_id)
-        end
-      end)
-
-    %{state | breakdown_reviews: reviews}
+      if parent_busy?(state, :breakdown_review, issue_id) or Map.get(state.breakdown_reviews, issue_id) == backlog,
+        do: state,
+        else: start_breakdown_review(state, issue, action, backlog, settings, run_store)
+    end)
   end
 
-  defp review_breakdown_parent(%Issue{id: issue_id} = issue, action, settings, opts) do
+  # Until the review answers, the parent counts as not reviewed, so a re-plan waits for it.
+  defp start_breakdown_review(%State{} = state, %Issue{id: issue_id} = issue, action, backlog, settings, run_store) do
+    review = fn -> {:ok, review_breakdown_parent(issue, action, settings, run_store)} end
+
+    %{state | breakdown_reviews: Map.delete(state.breakdown_reviews, issue_id)}
+    |> start_tracker_task(%{kind: :breakdown_review, issue_ids: [issue_id], backlog: backlog}, review)
+  end
+
+  defp finish_breakdown_review(%State{} = state, %{issue_ids: [issue_id], backlog: backlog}, {:ok, true}),
+    do: %{state | breakdown_reviews: Map.put(state.breakdown_reviews, issue_id, backlog)}
+
+  defp finish_breakdown_review(%State{} = state, _context, _failed), do: state
+
+  defp review_breakdown_parent(%Issue{id: issue_id} = issue, action, settings, run_store) do
     case Tracker.fetch_breakdown_history(issue_id) do
       {:ok, history} ->
-        review_breakdown_history(issue, action, history, settings, Keyword.get(opts, :run_store, RunStore))
+        review_breakdown_history(issue, action, history, settings, run_store)
 
       {:error, reason} ->
         Logger.warning("Failed to read breakdown parent history: #{issue_context(issue)} reason=#{inspect(reason)}")
@@ -2850,16 +3094,27 @@ defmodule SymphonyElixir.Orchestrator do
 
     Enum.reduce(issues, state, fn issue, state ->
       with action when not is_nil(action) <- PlanComments.action(issue, terminal_states, settings),
-           false <- issue_claimed_or_running?(state, issue.id),
+           false <- parent_busy?(state, :plan_comments, issue.id),
            %DateTime{} = newest <- newest_comment_at(issue),
-           true <- newer_comment?(newest, Map.get(state.plan_comment_checks, issue.id)),
-           true <- read_plan_comments(issue, action, last_run(state, issue.id), state.plan_comments_since) do
-        %{state | plan_comment_checks: Map.put(state.plan_comment_checks, issue.id, newest)}
+           true <- newer_comment?(newest, Map.get(state.plan_comment_checks, issue.id)) do
+        start_plan_comments_read(state, issue, action, newest)
       else
         _skip -> state
       end
     end)
   end
+
+  defp start_plan_comments_read(%State{} = state, %Issue{id: issue_id} = issue, action, newest) do
+    last_run = last_run(state, issue_id)
+    started_at = state.plan_comments_since
+    read = fn -> {:ok, read_plan_comments(issue, action, last_run, started_at)} end
+    start_tracker_task(state, %{kind: :plan_comments, issue_ids: [issue_id], newest: newest}, read)
+  end
+
+  defp finish_plan_comments(%State{} = state, %{issue_ids: [issue_id], newest: newest}, {:ok, true}),
+    do: %{state | plan_comment_checks: Map.put(state.plan_comment_checks, issue_id, newest)}
+
+  defp finish_plan_comments(%State{} = state, _context, _failed), do: state
 
   defp read_plan_comments(%Issue{id: issue_id} = issue, action, last_run, started_at) do
     case Tracker.fetch_plan_comments(issue_id) do
@@ -2932,7 +3187,8 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # A landing run that ended on pending checks stays held in `Merging` until the CI poller sees
-  # that head go green, the issue leaves `Merging` (a red head takes the CI-failure path), or
+  # that head go green, or every check its base branch requires pass (`CiPoller.landing_action/1`),
+  # the issue leaves `Merging` (a red head takes the CI-failure path), or
   # `ci.merging_wait_timeout_ms` passes. Releasing it lets this poll dispatch the landing agent.
   defp release_merging_ci_waits(%State{merging_ci_waits: waits} = state, _issues) when map_size(waits) == 0, do: state
 
@@ -2970,7 +3226,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     case CiPoller.observed_head(issue_id, opts) do
       %{commit_sha: commit_sha, conclusion: "SUCCESS"} -> commit_sha == wait.commit_sha
-      _observed -> false
+      _observed -> is_binary(wait.commit_sha) and CiPoller.landing_ready_head(issue_id, opts) == wait.commit_sha
     end
   end
 
@@ -3920,7 +4176,7 @@ defmodule SymphonyElixir.Orchestrator do
     repo_key = dispatch_repo_key(state, issue)
     sticky_route? = retry_attempt?(attempt)
     terminal_states = terminal_state_set()
-    issue_fetcher = &Tracker.fetch_issue_states_by_ids/1
+    issue_fetcher = dispatch_issue_fetcher(state)
 
     case revalidate_issue_for_dispatch(issue, issue_fetcher, terminal_states, sticky_route?: sticky_route?) do
       {:ok, %Issue{} = refreshed_issue} ->
@@ -3942,6 +4198,21 @@ defmodule SymphonyElixir.Orchestrator do
         skip_dispatch_after_refresh_failure(state, issue, attempt, preferred_worker_host, repo_key, reason)
     end
   end
+
+  # Dispatch after a readiness task revalidates with the issues that task read; an issue it did not
+  # read (its gates opened in between, or no readiness task ran) is read from Linear here.
+  defp dispatch_issue_fetcher(%State{dispatch_refresh: %{ids: prefetched_ids, result: result}}) do
+    fn [issue_id] = issue_ids ->
+      if MapSet.member?(prefetched_ids, issue_id),
+        do: prefetched_dispatch_issue(result, issue_id),
+        else: Tracker.fetch_issue_states_by_ids(issue_ids)
+    end
+  end
+
+  defp dispatch_issue_fetcher(_state), do: &Tracker.fetch_issue_states_by_ids/1
+
+  defp prefetched_dispatch_issue({:ok, issues}, issue_id), do: {:ok, Enum.filter(issues, &match?(%Issue{id: ^issue_id}, &1))}
+  defp prefetched_dispatch_issue({:error, _reason} = error, _issue_id), do: error
 
   # A retry reaches dispatch with its retry entry already popped and its claim
   # still held. When dispatch starts nothing, release the claim, or the poll skips
@@ -4412,22 +4683,21 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  # The issue is read again in a task; its claim stays held until the answer is handled, so no poll
+  # dispatches it meanwhile.
   defp handle_retry_issue(%State{} = state, issue_id, attempt, metadata) do
-    handle_retry_issue(state, issue_id, attempt, metadata, &Tracker.fetch_issue_states_by_ids/1)
+    context = %{kind: :retry_refresh, issue_ids: [issue_id], attempt: attempt, metadata: metadata}
+    {:noreply, start_tracker_task(state, context, fn -> Tracker.fetch_issue_states_by_ids([issue_id]) end)}
   end
 
-  defp handle_retry_issue(%State{} = state, issue_id, attempt, metadata, issue_fetcher)
-       when is_function(issue_fetcher, 1) do
-    case issue_fetcher.([issue_id]) do
-      {:ok, issues} ->
-        issues
-        |> find_issue_by_id(issue_id)
-        |> handle_retry_issue_lookup(state, issue_id, attempt, metadata)
-
-      {:error, reason} ->
-        retry_issue_refresh_failed(state, issue_id, attempt, metadata, reason)
-    end
+  defp handle_retry_refresh_result(%State{} = state, issue_id, attempt, metadata, {:ok, issues}) do
+    issues
+    |> find_issue_by_id(issue_id)
+    |> handle_retry_issue_lookup(state, issue_id, attempt, metadata)
   end
+
+  defp handle_retry_refresh_result(%State{} = state, issue_id, attempt, metadata, {:error, reason}),
+    do: retry_issue_refresh_failed(state, issue_id, attempt, metadata, reason)
 
   defp retry_issue_refresh_failed(%State{} = state, issue_id, attempt, metadata, reason) do
     Logger.warning("Retry issue refresh failed for issue_id=#{issue_id} issue_identifier=#{metadata[:identifier] || issue_id}: #{inspect(reason)}")
@@ -4542,37 +4812,44 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  # The move runs in a task; the claim stays held until it lands.
   defp handle_post_pr_quiet_active_issue(%State{} = state, %Issue{} = issue, issue_id, attempt, metadata) do
     post_pr_state = AutoReview.post_pr_state(Config.settings!())
     Logger.info("Issue has an opened PR and no rework signal; moving to #{post_pr_state}: #{issue_context(issue)}")
 
-    case Usage.with_caller(:post_pr_transition, fn -> Tracker.update_issue_state(issue_id, post_pr_state) end) do
+    context = %{kind: :post_pr_transition, issue_ids: [issue_id], issue: issue, attempt: attempt, metadata: metadata}
+    {:noreply, start_tracker_task(state, Map.put(context, :post_pr_state, post_pr_state), fn -> move_post_pr_issue(issue_id, post_pr_state) end)}
+  end
+
+  defp move_post_pr_issue(issue_id, post_pr_state),
+    do: Usage.with_caller(:post_pr_transition, fn -> Tracker.update_issue_state(issue_id, post_pr_state) end)
+
+  defp finish_post_pr_transition(%State{} = state, %{issue: %Issue{} = issue, attempt: attempt, metadata: metadata, post_pr_state: post_pr_state}, result) do
+    issue_id = issue.id
+
+    case result do
       :ok ->
         reviewed_issue = %Issue{issue | state: post_pr_state, updated_at: DateTime.utc_now()}
 
-        state =
-          state
-          |> put_watching_issue(reviewed_issue)
-          |> release_issue_claim(issue_id)
-
-        {:noreply, state}
+        state
+        |> put_watching_issue(reviewed_issue)
+        |> release_issue_claim(issue_id)
 
       {:error, reason} ->
         Logger.warning("Failed to move post-PR issue to #{post_pr_state}: #{issue_context(issue)} reason=#{inspect(reason)}")
 
-        {:noreply,
-         schedule_issue_retry(
-           state,
-           issue_id,
-           attempt,
-           metadata
-           |> Map.merge(%{
-             identifier: issue.identifier,
-             title: issue.title,
-             error: post_pr_move_error(post_pr_state, reason)
-           })
-           |> linear_wait_metadata(reason)
-         )}
+        schedule_issue_retry(
+          state,
+          issue_id,
+          attempt,
+          metadata
+          |> Map.merge(%{
+            identifier: issue.identifier,
+            title: issue.title,
+            error: post_pr_move_error(post_pr_state, reason)
+          })
+          |> linear_wait_metadata(reason)
+        )
     end
   end
 
@@ -4592,8 +4869,11 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  # The removal runs the repo's before_remove hook and git under the repo's fetch lock, which
+  # can take minutes, so it is queued with WorkspaceCleanup and the orchestrator moves on. A run
+  # of the same issue waits for it before it creates the workspace again.
   defp cleanup_issue_workspace(%{identifier: identifier} = issue, worker_host) when is_binary(identifier) do
-    Workspace.remove_issue_workspaces(issue, worker_host)
+    WorkspaceCleanup.remove(issue, worker_host)
   end
 
   defp cleanup_issue_workspace(_identifier, _worker_host), do: :ok
@@ -4779,10 +5059,10 @@ defmodule SymphonyElixir.Orchestrator do
   defp startup_tracked_issue_identifiers(_candidate_issues_result, {:error, reason}), do: {:error, reason}
 
   defp startup_tracked_workspace_identifiers(repo_key, {:ok, tracked_issue_identifiers}) do
-    with runs when is_list(runs) <- RunStore.list_runs(repo_key, :all),
+    with run_identifiers when is_list(run_identifiers) <- RunStore.list_run_identifiers(repo_key),
          retries when is_list(retries) <- RunStore.list_retries(repo_key) do
       identifiers =
-        tracked_issue_identifiers ++ run_identifiers(runs) ++ retry_identifiers(retries)
+        tracked_issue_identifiers ++ run_identifiers ++ retry_identifiers(retries)
 
       {:ok, identifiers}
     else
@@ -4862,9 +5142,9 @@ defmodule SymphonyElixir.Orchestrator do
     end)
   end
 
-  # Workspaces other running or retrying issues in the same repo own. The
-  # dispatched agent must not detach their worktrees to take over a shared PR
-  # branch (see `Workspace.create_for_issue/4`).
+  # Workspaces other running or retrying issues in the same repo own, a retry whose issue is being
+  # read again included. The dispatched agent must not detach their worktrees to take over a shared
+  # PR branch (see `Workspace.create_for_issue/4`).
   defp sibling_active_workspace_identifiers(%State{} = state, issue_id, repo_key) do
     running =
       state.running
@@ -4872,8 +5152,13 @@ defmodule SymphonyElixir.Orchestrator do
       |> Enum.filter(fn {_id, entry} -> (Map.get(entry, :repo_key) || state.repo_key) == repo_key end)
       |> Enum.flat_map(fn {_id, entry} -> running_workspace_identifiers(entry) end)
 
+    refreshing =
+      for {_ref, %{kind: :retry_refresh, issue_ids: [retry_id], metadata: metadata}} <- state.tracker_tasks,
+          do: {retry_id, metadata}
+
     retrying =
       state.retry_attempts
+      |> Enum.concat(refreshing)
       |> Enum.reject(fn {retry_id, _retry} -> retry_id == issue_id end)
       |> Enum.filter(fn {_id, retry} -> (Map.get(retry, :repo_key) || state.repo_key) == repo_key end)
       |> Enum.map(fn {_id, retry} -> retry end)
@@ -4897,15 +5182,6 @@ defmodule SymphonyElixir.Orchestrator do
       %{identifier: identifier} when is_binary(identifier) -> [identifier]
       _ -> []
     end)
-  end
-
-  defp run_identifiers(runs) when is_list(runs) do
-    Enum.flat_map(runs, fn
-      %{issue_identifier: identifier} when is_binary(identifier) -> [identifier]
-      %{workspace_path: path} when is_binary(path) -> [workspace_identifier_from_path(path)]
-      _ -> []
-    end)
-    |> Enum.reject(&is_nil/1)
   end
 
   defp retry_identifiers(retries) when is_list(retries) do
@@ -5244,8 +5520,10 @@ defmodule SymphonyElixir.Orchestrator do
 
   # A canary hold has no time left, so a retry that comes due during the canary waits the
   # unknown-reset interval; the canary's outcome releases it sooner.
-  defp held_retry_delay_ms(%{phase: :canary}, _now), do: Config.settings!().agent.usage_limit.unknown_reset_retry_seconds * 1000
+  defp held_retry_delay_ms(%{phase: :canary}, _now), do: unknown_reset_retry_ms()
   defp held_retry_delay_ms(entry, now), do: UsageLimit.remaining_ms(entry, now)
+
+  defp unknown_reset_retry_ms, do: Config.settings!().agent.usage_limit.unknown_reset_retry_seconds * 1000
 
   # Waiting for a slot is not a failure: the retry leaves the backoff queue with its attempt
   # unchanged, and the poll dispatches it in stage order as soon as a slot is free.
@@ -5907,11 +6185,9 @@ defmodule SymphonyElixir.Orchestrator do
   defp present_value?(_value), do: true
 
   defp hydrate_budget_daily_used(%Date{} = day) do
-    case RunStore.list_all_runs(:all) do
+    case RunStore.list_runs_started_on(day) do
       runs when is_list(runs) ->
-        runs
-        |> Enum.filter(&run_started_on_day?(&1, day))
-        |> Enum.reduce(0, fn run, total ->
+        Enum.reduce(runs, 0, fn run, total ->
           total + run_total_tokens(run)
         end)
 
@@ -5932,7 +6208,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp hydrate_budget_exhausted(limit) do
-    case RunStore.list_all_runs(:all) do
+    case RunStore.list_runs_with_status("budget_exhausted") do
       runs when is_list(runs) ->
         runs
         |> Enum.flat_map(&budget_exhausted_issue_id(&1, limit))
@@ -5956,12 +6232,6 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp budget_exhausted_run_over_limit?(_run, _limit), do: true
-
-  defp run_started_on_day?(%{started_at: %DateTime{} = started_at}, %Date{} = day) do
-    DateTime.to_date(started_at) == day
-  end
-
-  defp run_started_on_day?(_run, _day), do: false
 
   defp run_total_tokens(%{tokens: %{total_tokens: total}}) when is_integer(total), do: max(total, 0)
   defp run_total_tokens(_run), do: 0
@@ -6049,6 +6319,35 @@ defmodule SymphonyElixir.Orchestrator do
         :ok
     end
   end
+
+  # An agent streams many events a second, and each durable write syncs the Mnesia log, so its run's
+  # metadata is written when a field that names the run changes (its session, PR, workspace, host or
+  # turn) and otherwise at most once every `running_metadata_persist_ms`. The run's completion
+  # writes everything (persist_run_completion/3).
+  defp persist_running_metadata(%State{running: running} = state, issue_id) do
+    with %{} = entry <- Map.get(running, issue_id),
+         key = running_metadata_key(entry),
+         now_ms = System.monotonic_time(:millisecond),
+         true <- running_metadata_due?(entry, key, now_ms) do
+      persist_running_entry(entry)
+      entry = Map.merge(entry, %{persisted_metadata_key: key, persisted_metadata_at_ms: now_ms})
+      %{state | running: Map.put(running, issue_id, entry)}
+    else
+      _not_due -> state
+    end
+  end
+
+  defp running_metadata_due?(%{persisted_metadata_key: key, persisted_metadata_at_ms: at_ms}, key, now_ms),
+    do: now_ms - at_ms >= running_metadata_persist_ms()
+
+  defp running_metadata_due?(_entry, _key, _now_ms), do: true
+
+  defp running_metadata_key(entry) do
+    {Map.get(entry, :session_id), URLUtils.pull_request_url(entry), Map.get(entry, :workspace_path), Map.get(entry, :worker_host), Map.get(entry, :turn_count, 0)}
+  end
+
+  defp running_metadata_persist_ms,
+    do: Application.get_env(:symphony_elixir, :orchestrator_running_metadata_persist_ms, @running_metadata_persist_ms)
 
   defp persist_run_completion(running_entry, status, error) when is_map(running_entry) and is_binary(status) do
     case {running_entry_repo_key(running_entry), Map.get(running_entry, :run_id)} do
@@ -6146,6 +6445,60 @@ defmodule SymphonyElixir.Orchestrator do
     end
   catch
     :exit, reason -> {:error, {:task_supervisor_exit, reason}}
+  end
+
+  defp handle_tracker_task_result(%State{} = state, %{kind: :retry_refresh, issue_ids: [issue_id]} = context, result) do
+    {:noreply, state} = handle_retry_refresh_result(state, issue_id, context.attempt, context.metadata, result)
+    state
+  end
+
+  defp handle_tracker_task_result(%State{} = state, %{kind: :post_pr_transition} = context, result), do: finish_post_pr_transition(state, context, result)
+  defp handle_tracker_task_result(%State{} = state, %{kind: :blocked_transition} = context, result), do: finish_blocked_transition(state, context, result)
+  defp handle_tracker_task_result(%State{} = state, %{kind: :breakdown_review} = context, result), do: finish_breakdown_review(state, context, result)
+  defp handle_tracker_task_result(%State{} = state, %{kind: :plan_comments} = context, result), do: finish_plan_comments(state, context, result)
+  defp handle_tracker_task_result(%State{} = state, %{kind: :usage_limit_canary} = context, result), do: finish_usage_limit_canary_read(state, context, result)
+
+  defp handle_tracker_task_result(%State{} = state, %{kind: :park_parents}, {:ok, parked_ids}),
+    do: %{state | parked_parents: MapSet.union(state.parked_parents, MapSet.new(parked_ids))}
+
+  # A comment, a failed park, and the close of finished parents change nothing here: the next poll
+  # tries again where it needs to.
+  defp handle_tracker_task_result(%State{} = state, _context, _result), do: state
+
+  # Linear work whose answer the orchestrator needs runs in a task, so a slow or retrying Linear
+  # call never holds up its callbacks, its callers or the snapshot. The context names what the
+  # result is for (see handle_tracker_task_result/3), and the issues it is about, so a poll does not
+  # start the same work again while it is in flight. A task that exits, or never starts, answers
+  # `{:error, reason}`.
+  defp start_tracker_task(%State{} = state, %{kind: kind} = context, fun) when is_function(fun, 0) do
+    case start_async_task(fn -> {:tracker_task_result, fun.()} end) do
+      {:ok, task} ->
+        %{state | tracker_tasks: Map.put(state.tracker_tasks, task.ref, context)}
+
+      {:error, reason} ->
+        Logger.warning("Failed to start async Linear task #{kind}: #{inspect(reason)}")
+        handle_tracker_task_result(state, context, {:error, reason})
+    end
+  end
+
+  defp tracker_task_in_flight?(%State{tracker_tasks: tasks}, kind, issue_id) do
+    Enum.any?(tasks, fn {_ref, context} -> context.kind == kind and issue_id in Map.get(context, :issue_ids, []) end)
+  end
+
+  # The test hooks that run on a bare State, with no orchestrator to receive the results, wait for
+  # the tasks they started and apply each result as the orchestrator would.
+  defp await_tracker_tasks(%State{tracker_tasks: tasks} = state) when map_size(tasks) == 0, do: state
+
+  defp await_tracker_tasks(%State{tracker_tasks: tasks} = state) do
+    receive do
+      {ref, {:tracker_task_result, _result}} = message when is_map_key(tasks, ref) ->
+        {:noreply, state} = handle_info_message(message, state)
+        await_tracker_tasks(state)
+
+      {:DOWN, ref, :process, _pid, _reason} = message when is_map_key(tasks, ref) ->
+        {:noreply, state} = handle_info_message(message, state)
+        await_tracker_tasks(state)
+    end
   end
 
   defp start_async_task(fun) when is_function(fun, 0) do
@@ -6551,6 +6904,53 @@ defmodule SymphonyElixir.Orchestrator do
     ArgumentError -> :missing
   end
 
+  @doc """
+  How well the orchestrator keeps up, for `/api/v1/state`: its message queue, the age of the
+  snapshot it last published, and how long that snapshot took to build, in total and for the parts
+  that read other processes or the run store. A field is nil when it isn't known.
+  """
+  @spec diagnostics(GenServer.server()) :: %{
+          message_queue_len: non_neg_integer() | nil,
+          snapshot_age_ms: non_neg_integer() | nil,
+          snapshot_build_ms: non_neg_integer() | nil,
+          snapshot_parts_ms: %{optional(atom()) => non_neg_integer()}
+        }
+  def diagnostics(server \\ __MODULE__) do
+    age_ms =
+      case snapshot_cache_entry(server) do
+        {:ok, %{system_ms: system_ms}} -> max(System.system_time(:millisecond) - system_ms, 0)
+        :missing -> nil
+      end
+
+    {build_ms, parts_ms} = snapshot_timing(server)
+
+    %{
+      message_queue_len: message_queue_len(server),
+      snapshot_age_ms: age_ms,
+      snapshot_build_ms: build_ms,
+      snapshot_parts_ms: parts_ms
+    }
+  end
+
+  defp message_queue_len(server) do
+    with pid when is_pid(pid) <- GenServer.whereis(server),
+         {:message_queue_len, len} <- Process.info(pid, :message_queue_len) do
+      len
+    else
+      _dead -> nil
+    end
+  end
+
+  defp snapshot_timing(server) do
+    with {:ok, owner} <- snapshot_table_owner(),
+         true <- snapshot_owner_matches?(server, owner),
+         [{@snapshot_timing_key, build_ms, parts_ms}] <- :ets.lookup(@snapshot_table, @snapshot_timing_key) do
+      {build_ms, parts_ms}
+    else
+      _missing -> {nil, %{}}
+    end
+  end
+
   defp snapshot_via_call(server, timeout) do
     if server_available?(server) do
       try do
@@ -6610,9 +7010,10 @@ defmodule SymphonyElixir.Orchestrator do
          true <- owner == self() do
       monotonic_ms = System.monotonic_time(:millisecond)
       system_ms = System.system_time(:millisecond)
-      snapshot = build_snapshot(state, DateTime.utc_now(), monotonic_ms)
-      :ets.insert(@snapshot_table, {@snapshot_key, snapshot, monotonic_ms, system_ms})
-      :ok
+      {snapshot, parts_ms} = build_snapshot(state, DateTime.utc_now(), monotonic_ms)
+      build_ms = System.monotonic_time(:millisecond) - monotonic_ms
+      :ets.insert(@snapshot_table, [{@snapshot_key, snapshot, monotonic_ms, system_ms}, {@snapshot_timing_key, build_ms, parts_ms}])
+      log_slow_snapshot_build(build_ms, parts_ms)
     else
       _ -> :ok
     end
@@ -6636,8 +7037,7 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  @impl true
-  def handle_call({:pause_dispatch, reason}, _from, state) do
+  defp handle_call_message({:pause_dispatch, reason}, _from, state) do
     already_paused? = operator_paused?(state)
 
     case RunStore.set_paused(true, reason) do
@@ -6658,7 +7058,7 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  def handle_call(:resume_dispatch, _from, state) do
+  defp handle_call_message(:resume_dispatch, _from, state) do
     case RunStore.set_paused(false, nil) do
       :ok ->
         pause = persisted_pause_state()
@@ -6671,17 +7071,17 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  def handle_call({:hold_for_usage_limit, info, identifier}, _from, state) do
+  defp handle_call_message({:hold_for_usage_limit, info, identifier}, _from, state) do
     {state, entry} = put_usage_limit(state, info, identifier)
     notify_dashboard()
     {:reply, {:ok, entry}, state}
   end
 
-  def handle_call(:pause_status, _from, state) do
+  defp handle_call_message(:pause_status, _from, state) do
     {:reply, state.pause || unpaused_state(), state}
   end
 
-  def handle_call({:dispatch_pr, target, opts}, _from, state) do
+  defp handle_call_message({:dispatch_pr, target, opts}, _from, state) do
     state = refresh_runtime_config(state)
 
     case do_dispatch_pr(state, target, opts) do
@@ -6694,7 +7094,7 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  def handle_call({:force_issue, %Issue{} = issue}, _from, state) do
+  defp handle_call_message({:force_issue, %Issue{} = issue}, _from, state) do
     settings = Config.settings!()
 
     # As in a poll, a ticket joins the queue only in an active state; one already queued is updated.
@@ -6719,7 +7119,7 @@ defmodule SymphonyElixir.Orchestrator do
     {:reply, {:ok, result}, state}
   end
 
-  def handle_call({:stop_running, issue_id_or_identifier}, _from, state) do
+  defp handle_call_message({:stop_running, issue_id_or_identifier}, _from, state) do
     case find_running_issue(state.running, issue_id_or_identifier) do
       {issue_id, running_entry} ->
         session_id = running_entry_session_id(running_entry)
@@ -6748,7 +7148,7 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  def handle_call(:request_refresh, _from, state) do
+  defp handle_call_message(:request_refresh, _from, state) do
     {coalesced, state} = request_poll(state)
 
     {:reply,
@@ -6760,11 +7160,27 @@ defmodule SymphonyElixir.Orchestrator do
      }, state}
   end
 
-  def handle_call(:snapshot, _from, state) do
+  defp handle_call_message(:snapshot, _from, state) do
     state = refresh_runtime_config(state)
-    snapshot = build_snapshot(state, DateTime.utc_now(), System.monotonic_time(:millisecond))
+    {snapshot, _parts_ms} = build_snapshot(state, DateTime.utc_now(), System.monotonic_time(:millisecond))
 
     {:reply, snapshot, state}
+  end
+
+  defp log_slow_snapshot_build(build_ms, parts_ms) do
+    if build_ms >= slow_callback_ms() do
+      parts = parts_ms |> Enum.sort() |> Enum.map_join(" ", fn {part, ms} -> "#{part}_ms=#{ms}" end)
+      Logger.warning("Orchestrator snapshot build slow build_ms=#{build_ms} #{parts}")
+    end
+
+    :ok
+  end
+
+  # The parts that read other processes or the run store, timed for `diagnostics/1`.
+  defp timed_part(fun) do
+    started_ms = System.monotonic_time(:millisecond)
+    result = fun.()
+    {result, System.monotonic_time(:millisecond) - started_ms}
   end
 
   defp build_snapshot(%State{} = state, %DateTime{} = now, now_ms) when is_integer(now_ms) do
@@ -6815,6 +7231,7 @@ defmodule SymphonyElixir.Orchestrator do
           transcript_buffer_size: Map.get(metadata, :transcript_buffer_size, 0),
           forced: forced_entry?(metadata),
           linear_wait_until: active_linear_wait_until(metadata, now),
+          pending_tool: pending_tool(metadata, now),
           runtime_seconds: running_seconds(metadata.started_at, now)
         }
       end)
@@ -6909,15 +7326,16 @@ defmodule SymphonyElixir.Orchestrator do
 
     skipped = error_skipped ++ cached_skipped
 
-    qa = qa_snapshot()
-    auto_merge = PrReviewPoller.auto_merge_statuses()
+    {qa, qa_ms} = timed_part(&qa_snapshot/0)
+    {auto_merge, auto_merge_ms} = timed_part(&PrReviewPoller.auto_merge_statuses/0)
+    {run_history, run_history_ms} = timed_part(fn -> persisted_run_history(state.repo_key) end)
 
     awaiting_clarification =
       quality_gate_cache
       |> QualityGate.awaiting_clarification_from_cache()
       |> Enum.map(&snapshot_awaiting_clarification_entry/1)
 
-    %{
+    snapshot = %{
       running: running,
       watching: watching,
       waiting_for_ci: waiting_for_ci,
@@ -6925,7 +7343,7 @@ defmodule SymphonyElixir.Orchestrator do
       retrying: retrying,
       awaiting_clarification: awaiting_clarification,
       skipped: skipped,
-      run_history: persisted_run_history(state.repo_key),
+      run_history: run_history,
       codex_totals: state.codex_totals,
       rate_limits: Map.get(state, :rate_limits),
       usage_limits: UsageLimit.snapshot(state.usage_limits, state.usage_windows),
@@ -6950,6 +7368,8 @@ defmodule SymphonyElixir.Orchestrator do
         linear: linear_rate_limit_snapshot(state)
       }
     }
+
+    {snapshot, %{run_history: run_history_ms, qa: qa_ms, auto_merge: auto_merge_ms}}
   end
 
   defp concurrency_snapshot(%State{} = state) do
@@ -7610,19 +8030,34 @@ defmodule SymphonyElixir.Orchestrator do
   defp put_usage_limit(%State{} = state, info, identifier) do
     key = UsageLimit.key(info)
     existing = Map.get(state.usage_limits, key)
+    last_outage = Map.get(state.api_outages, key)
 
     entry =
       UsageLimit.put(existing, info,
         now: state.clock.(),
         config: Config.settings!().agent.usage_limit,
         windows: state.usage_windows,
-        issue_identifier: identifier
+        issue_identifier: identifier,
+        last_outage: last_outage
       )
 
-    newly_paused? = is_nil(existing) or existing.phase == :headroom
+    {state, continued_outage} = settle_api_outage(state, key, last_outage, info, entry)
+    newly_paused? = (is_nil(existing) or existing.phase == :headroom) and is_nil(continued_outage)
     if newly_paused?, do: emit_usage_limit_event(:usage_limit_paused, entry, issue_identifier: identifier)
+    log_usage_limit_put(entry, existing || continued_outage, identifier, newly_paused?)
 
+    state = put_usage_limits(state, Map.put(state.usage_limits, key, entry))
+    {arm_usage_limit_timer(state, key, entry), entry}
+  end
+
+  defp log_usage_limit_put(entry, existing, identifier, newly_paused?) do
     cond do
+      entry == existing ->
+        :ok
+
+      UsageLimit.api_unreachable?(entry) ->
+        log_model_api_unreachable(entry, existing, identifier)
+
       match?(%{phase: :canary}, existing) ->
         Logger.warning(
           "Usage limit still active provider=#{entry.provider} scope=#{UsageLimit.scope_label(entry.scope)} " <>
@@ -7638,9 +8073,38 @@ defmodule SymphonyElixir.Orchestrator do
       true ->
         :ok
     end
+  end
 
-    state = put_usage_limits(state, Map.put(state.usage_limits, key, entry))
-    {arm_usage_limit_timer(state, key, entry), entry}
+  # A run that finds a released outage again continues it: no new pause event, and the outage is
+  # no longer due to end. A usage limit from the API shows the API is back.
+  defp settle_api_outage(%State{} = state, _key, nil, _info, _entry), do: {state, nil}
+
+  defp settle_api_outage(%State{} = state, key, last_outage, info, entry) do
+    cond do
+      UsageLimit.api_unreachable?(entry) and entry.since == last_outage.since ->
+        {%{state | api_outages: Map.delete(state.api_outages, key)}, last_outage}
+
+      UsageLimit.api_unreachable?(info) ->
+        {state, nil}
+
+      true ->
+        {finish_api_outage(state, key, last_outage), nil}
+    end
+  end
+
+  # One line when the outage is found, then one per probe that still can't get through.
+  defp log_model_api_unreachable(entry, existing, identifier) do
+    if UsageLimit.api_unreachable?(existing || %{}) do
+      Logger.warning(
+        "Model API still unreachable (#{entry.error}) provider=#{entry.provider} " <>
+          "next_probe_at=#{DateTime.to_iso8601(entry.resume_at)} issue_identifier=#{identifier}"
+      )
+    else
+      Logger.warning(
+        "Model API unreachable (#{entry.error}); holding dispatch provider=#{entry.provider} " <>
+          "probe_at=#{DateTime.to_iso8601(entry.resume_at)} issue_identifier=#{identifier}"
+      )
+    end
   end
 
   # `agent.usage_limit.headroom_utilization`: an allowed_warning at or above it holds new runs of
@@ -7745,6 +8209,10 @@ defmodule SymphonyElixir.Orchestrator do
     "usage limit headroom hold (provider=#{entry.provider} scope=#{UsageLimit.scope_label(entry.scope)}); resuming at #{DateTime.to_iso8601(entry.resume_at)}"
   end
 
+  defp usage_limit_error(%{reason: "model_api_unreachable"} = entry) do
+    "model API unreachable (provider=#{entry.provider} error=#{entry.error}); probing again at #{DateTime.to_iso8601(entry.resume_at)}"
+  end
+
   defp usage_limit_error(entry) do
     "usage limit reached (provider=#{entry.provider} scope=#{UsageLimit.scope_label(entry.scope)}); resuming at #{DateTime.to_iso8601(entry.resume_at)}"
   end
@@ -7773,23 +8241,83 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # At `resume_at` one held run goes out alone as the canary, first in dispatch order, while the
-  # hold keeps every other run of the provider back. With nothing held the hold just clears.
+  # hold keeps every other run of the provider back. With nothing held the hold just clears. The
+  # held issues are read in a tracker task to order them; the hold stays as it is until it answers.
   defp start_usage_limit_canary(%State{} = state, key, entry, issue_fetcher) do
     state = %{state | usage_limit_timers: Map.delete(state.usage_limit_timers, key)}
+    held = held_usage_limit_retries(state, key)
 
-    case held_usage_limit_retries(state, key) do
-      [] ->
-        clear_usage_limit(state, key, entry)
-
-      held ->
-        {issue_id, retry} = pick_usage_limit_canary(held, issue_fetcher, state)
-        Logger.warning("Usage limit canary provider=#{entry.provider} scope=#{UsageLimit.scope_label(entry.scope)} issue_identifier=#{retry[:identifier]}")
-
-        state
-        |> put_usage_limits(Map.put(state.usage_limits, key, UsageLimit.canary(entry, issue_id)))
-        |> release_usage_limit_retry(issue_id, retry)
-        |> schedule_immediate_tick()
+    cond do
+      held == [] -> end_usage_limit_without_canary(state, key, entry)
+      usage_limit_canary_read_in_flight?(state, key) -> state
+      true -> start_usage_limit_canary_read(state, key, held, issue_fetcher)
     end
+  end
+
+  defp start_usage_limit_canary_read(%State{} = state, key, held, issue_fetcher) do
+    issue_ids = held |> Enum.map(fn {issue_id, _retry} -> issue_id end) |> Enum.sort()
+    context = %{kind: :usage_limit_canary, key: key, issue_ids: issue_ids}
+    start_tracker_task(state, context, fn -> issue_fetcher.(issue_ids) end)
+  end
+
+  defp end_usage_limit_without_canary(%State{} = state, key, entry) do
+    if UsageLimit.api_unreachable?(entry),
+      do: release_api_outage(state, key, entry),
+      else: clear_usage_limit(state, key, entry)
+  end
+
+  defp usage_limit_canary_read_in_flight?(%State{tracker_tasks: tasks}, key) do
+    Enum.any?(tasks, fn {_ref, context} -> context.kind == :usage_limit_canary and context.key == key end)
+  end
+
+  # The hold may have moved on while its issues were read: cleared, refreshed with time left (its
+  # timer is armed again), or given a canary that is still alive. Only a hold still waiting for its
+  # canary picks one, from the runs held now. A read that failed or died orders them by id, as the
+  # tracker not returning them does.
+  defp finish_usage_limit_canary_read(%State{} = state, %{key: key}, result) do
+    with {:ok, entry} <- Map.fetch(state.usage_limits, key),
+         true <- usage_limit_waiting_for_canary?(state, entry) do
+      case held_usage_limit_retries(state, key) do
+        [] -> end_usage_limit_without_canary(state, key, entry)
+        held -> dispatch_usage_limit_canary(state, key, entry, held, result)
+      end
+    else
+      _moved_on -> state
+    end
+  end
+
+  defp usage_limit_waiting_for_canary?(%State{} = state, %{phase: :canary} = entry), do: not usage_limit_canary_alive?(state, entry.canary_issue_id)
+  defp usage_limit_waiting_for_canary?(%State{} = state, %{phase: :paused} = entry), do: UsageLimit.remaining_ms(entry, state.clock.()) == 0
+  defp usage_limit_waiting_for_canary?(%State{}, _entry), do: false
+
+  defp dispatch_usage_limit_canary(%State{} = state, key, entry, held, result) do
+    {issue_id, retry} = pick_usage_limit_canary(held, result, state)
+    Logger.warning("Usage limit canary provider=#{entry.provider} scope=#{UsageLimit.scope_label(entry.scope)} issue_identifier=#{retry[:identifier]}")
+
+    state
+    |> put_usage_limits(Map.put(state.usage_limits, key, UsageLimit.canary(entry, issue_id)))
+    |> release_usage_limit_retry(issue_id, retry)
+    |> schedule_immediate_tick()
+  end
+
+  # A held retry that comes due while its hold's canary read is in flight stays held, so the pick
+  # sees it; the pick releases it, or it waits the unknown-reset interval as under a canary.
+  defp held_for_canary_read?(%State{} = state, issue_id, retry_token) do
+    case Map.get(state.retry_attempts, issue_id) do
+      %{retry_token: ^retry_token, usage_limit_key: key} when not is_nil(key) ->
+        usage_limit_canary_read_in_flight?(state, key)
+
+      _retry ->
+        false
+    end
+  end
+
+  defp keep_held_for_canary_read(%State{} = state, issue_id) do
+    retry = Map.fetch!(state.retry_attempts, issue_id)
+    delay_ms = unknown_reset_retry_ms()
+    timer_ref = Process.send_after(self(), {:retry_issue, issue_id, retry.retry_token}, delay_ms)
+    retry = Map.merge(retry, %{timer_ref: timer_ref, due_at_ms: System.monotonic_time(:millisecond) + delay_ms})
+    %{state | retry_attempts: Map.put(state.retry_attempts, issue_id, retry)}
   end
 
   defp held_usage_limit_retries(%State{} = state, key) do
@@ -7797,12 +8325,12 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # Issues the tracker no longer returns sort last, by id. A forced ticket goes first.
-  defp pick_usage_limit_canary(held, issue_fetcher, %State{} = state) do
+  defp pick_usage_limit_canary(held, result, %State{} = state) do
     held_by_id = Map.new(held)
     issue_ids = held_by_id |> Map.keys() |> Enum.sort()
 
     ordered_ids =
-      case issue_fetcher.(issue_ids) do
+      case result do
         {:ok, issues} -> issues |> sort_issues_for_dispatch() |> forced_first(state) |> Enum.map(& &1.id)
         {:error, _reason} -> []
       end
@@ -7826,6 +8354,27 @@ defmodule SymphonyElixir.Orchestrator do
     |> held_usage_limit_retries(key)
     |> Enum.reduce(state, fn {issue_id, retry}, acc -> release_usage_limit_retry(acc, issue_id, retry) end)
     |> schedule_immediate_tick()
+  end
+
+  # An unreachable-API hold with no run held on it (QA, the acceptance gate, a PR run) has no
+  # canary: it is released so the next run probes the API, and remembered so a run that finds
+  # the outage again continues it. The outage ends, with its resumed event, when no run has found
+  # it again for `UsageLimit.outage_memory_seconds/1`.
+  defp release_api_outage(%State{} = state, key, entry) do
+    memory_seconds = UsageLimit.outage_memory_seconds(Config.settings!().agent.usage_limit)
+    Logger.info("Model API hold released provider=#{entry.provider}; the next run probes the API")
+    Process.send_after(self(), {:api_outage_over, key, entry.since}, memory_seconds * 1000)
+
+    state
+    |> put_usage_limits(Map.delete(state.usage_limits, key))
+    |> Map.update!(:api_outages, &Map.put(&1, key, entry))
+    |> schedule_immediate_tick()
+  end
+
+  defp finish_api_outage(%State{} = state, key, outage) do
+    Logger.warning("Usage limit resumed provider=#{outage.provider} scope=#{UsageLimit.scope_label(outage.scope)} paused_for_s=#{DateTime.diff(outage.resume_at, outage.since)}")
+    emit_usage_limit_event(:usage_limit_resumed, outage)
+    %{state | api_outages: Map.delete(state.api_outages, key)}
   end
 
   defp schedule_immediate_tick(%State{} = state) do

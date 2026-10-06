@@ -6,7 +6,7 @@ defmodule SymphonyElixir.CLICheckTest do
   alias SymphonyElixir.CLI
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Cache
-  alias SymphonyElixir.OpenRouter.Models
+  alias SymphonyElixir.OpenRouter.{Models, Stub}
   alias SymphonyElixir.Workflow
 
   @secret "lin_api_check_secret_value"
@@ -40,6 +40,19 @@ defmodule SymphonyElixir.CLICheckTest do
     assert output == "Config OK: #{path}\n"
     assert Workflow.symphony_file_path() == path
     refute_received :runtime_started
+  end
+
+  test "prints the build it runs on stderr, with its commit when the build has one", %{root: root} do
+    path = write_symphony!(root, valid_symphony(root))
+    original_build = Application.get_env(:symphony_elixir, :build)
+    on_exit(fn -> restore_app_env(:build, original_build) end)
+    version = :symphony_elixir |> Application.spec(:vsn) |> to_string()
+
+    Application.put_env(:symphony_elixir, :build, [])
+    assert check_io(["--config", path]) == {{:halt, 0}, "Config OK: #{path}\n", "Symphony #{version}\n"}
+
+    Application.put_env(:symphony_elixir, :build, sha: "ABCDEF1234567890abcdef1234567890abcdef12")
+    assert check_io(["--config", path]) == {{:halt, 0}, "Config OK: #{path}\n", "Symphony #{version} (abcdef1)\n"}
   end
 
   test "defaults to symphony.yml in the current folder", %{root: root} do
@@ -86,6 +99,48 @@ defmodule SymphonyElixir.CLICheckTest do
 
       assert {{:error, message}, ""} = check(["--config", path])
       assert message =~ "Missing WORKFLOW.md at #{Path.join([root, "clones", "octo", "hello", "WORKFLOW.md"])}"
+    end
+  end
+
+  describe "a strategy: worktree repo" do
+    test "fails when its workspace repo does not exist", %{root: root} do
+      missing = Path.join(root, "does-not-exist")
+      path = write_symphony!(root, worktree_symphony(root, missing))
+
+      assert {{:error, message}, ""} = check(["--config", path])
+      assert message == "Config error in #{path}: Invalid merged Symphony config: repo app: workspaces.repo does not exist: #{missing}"
+    end
+
+    test "fails when its workspace repo is not a git repository", %{root: root} do
+      plain = Path.join(root, "plain")
+      File.mkdir_p!(plain)
+      path = write_symphony!(root, worktree_symphony(root, plain))
+
+      assert {{:error, message}, ""} = check(["--config", path])
+      assert message =~ "repo app: workspaces.repo is not a valid git repository: #{plain}"
+    end
+
+    test "passes when its workspace repo is a git repository", %{root: root} do
+      primary = Path.join(root, "primary")
+      File.mkdir_p!(primary)
+      {_output, 0} = System.cmd("git", ["init", "-q", primary])
+      path = write_symphony!(root, worktree_symphony(root, primary))
+
+      assert check(["--config", path]) == {{:halt, 0}, "Config OK: #{path}\n"}
+    end
+
+    test "fails a global worktree strategy shared by several repos", %{root: root} do
+      config =
+        managed_symphony(root) <>
+          """
+            strategy: worktree
+            repo: #{root}
+          """
+
+      path = write_symphony!(root, config)
+
+      assert {{:error, message}, ""} = check(["--config", path])
+      assert message =~ "workspaces.strategy is global but repositories is multi-repo"
     end
   end
 
@@ -210,6 +265,27 @@ defmodule SymphonyElixir.CLICheckTest do
 
       assert {{:error, message}, ""} = check(["--config", path])
       assert message == "Config error in #{path}: agent.run_profiles.landing.model: OpenRouter has no model `acme/typo`"
+    end
+
+    test "checks agent.small_model against OpenRouter's models, without asking for tools", %{root: root} do
+      System.put_env("OPENROUTER_API_KEY", "sk-or-v1-check-secret")
+      stub_models_api()
+      small_model = &String.replace(openrouter_symphony(root), "  runtime: claude\n", "  runtime: claude\n  small_model: #{&1}\n")
+
+      path = write_symphony!(root, small_model.("acme/chat-only"))
+      assert check(["--config", path]) == {{:halt, 0}, "Config OK: #{path}\n"}
+
+      Cache.clear()
+      path = write_symphony!(root, small_model.("acme/typo"))
+      assert {{:error, message}, ""} = check(["--config", path])
+      assert message == "Config error in #{path}: agent.small_model: OpenRouter has no model `acme/typo`"
+    end
+
+    test "rejects a blank agent.small_model", %{root: root} do
+      path = write_symphony!(root, String.replace(openrouter_symphony(root), "  runtime: claude\n", "  runtime: claude\n  small_model: \"  \"\n"))
+
+      assert {{:error, message}, ""} = check(["--config", path])
+      assert message =~ "agent.small_model must not be blank"
     end
 
     test "warns when effort is set for a model without reasoning", %{root: root} do
@@ -337,7 +413,115 @@ defmodule SymphonyElixir.CLICheckTest do
 
       assert check(["--config", path]) ==
                {{:error, "Config error in #{path}: repositories[app].agent.run_profiles.landing.model: OpenRouter model `acme/chat-only` does not support tools; Symphony runs need tool use"},
-                "Warning: repositories[app].agent.effort: OpenRouter model `acme/tools-only` does not support reasoning; its runs start without --effort high\n"}
+                "Warning: repositories[app].agent.run_profiles.ci_fix.model: OpenRouter model `acme/tools-only` does not support reasoning; " <>
+                  "its runs start without --effort high, inherited from repositories[app].agent.effort\n"}
+    end
+
+    test "names the repository run profile that picked the model when its effort is inherited", %{root: root} do
+      System.put_env("OPENROUTER_API_KEY", "sk-or-v1-check-secret")
+      stub_models_api()
+
+      content =
+        String.replace(valid_symphony(root), "  runtime: codex\n  command: codex app-server\n", """
+          runtime: claude
+          command: claude
+          model: acme/tools-only
+          run_profiles:
+            breakdown: { model: claude-opus-5-5, effort: xhigh }
+            landing: { effort: high }
+        """) <>
+          """
+              agent:
+                run_profiles:
+                  breakdown: { provider: openrouter, model: acme/tools-only }
+                  landing: { provider: openrouter }
+          """
+
+      path = write_symphony!(root, content)
+
+      assert check(["--config", path]) ==
+               {{:halt, 0},
+                """
+                Config OK: #{path}
+                Warning: repositories[app].agent.run_profiles.breakdown.model: OpenRouter model `acme/tools-only` does not support reasoning; its runs start without --effort xhigh, inherited from agent.run_profiles.breakdown.effort
+                Warning: repositories[app].agent.run_profiles.landing.provider: OpenRouter model `acme/tools-only` does not support reasoning; its runs start without --effort high, inherited from agent.run_profiles.landing.effort
+                """}
+    end
+
+    test "names the repository run profile that picked openrouter when its model is inherited", %{root: root} do
+      System.put_env("OPENROUTER_API_KEY", "sk-or-v1-check-secret")
+      stub_models_api()
+
+      content =
+        String.replace(valid_symphony(root), "  runtime: codex\n  command: codex app-server\n", """
+          runtime: claude
+          command: claude
+          model: claude-sonnet-5-5
+        """) <>
+          """
+              agent:
+                run_profiles:
+                  landing: { provider: openrouter }
+          """
+
+      path = write_symphony!(root, content)
+
+      assert check(["--config", path]) ==
+               {{:error,
+                 "Config error in #{path}: repositories[app].agent.run_profiles.landing.provider: OpenRouter has no model `claude-sonnet-5-5`, " <>
+                   "inherited from agent.model; set repositories[app].agent.run_profiles.landing.model to an OpenRouter model id"}, ""}
+    end
+
+    test "names the run profile that picked openrouter when its inherited model lacks tools", %{root: root} do
+      System.put_env("OPENROUTER_API_KEY", "sk-or-v1-check-secret")
+      stub_models_api()
+
+      content =
+        String.replace(valid_symphony(root), "  runtime: codex\n  command: codex app-server\n", """
+          runtime: claude
+          command: claude
+          model: acme/chat-only
+          run_profiles:
+            ci_fix: { provider: openrouter }
+        """)
+
+      path = write_symphony!(root, content)
+
+      assert check(["--config", path]) ==
+               {{:error,
+                 "Config error in #{path}: agent.run_profiles.ci_fix.provider: OpenRouter model `acme/chat-only`, inherited from agent.model, " <>
+                   "does not support tools; set agent.run_profiles.ci_fix.model to an OpenRouter model that lists tools"}, ""}
+    end
+
+    test "checks models against the QA stub in QA mode", %{root: root} do
+      {:ok, stub, port} = Stub.start_link(log: fn _line -> :ok end)
+      saved = Map.new(~w(SYMPHONY_BAR_QA_ROOT SYMPHONY_QA_OPENROUTER_URL), &{&1, System.get_env(&1)})
+
+      on_exit(fn ->
+        Stub.stop(stub)
+
+        Enum.each(saved, fn
+          {name, nil} -> System.delete_env(name)
+          {name, value} -> System.put_env(name, value)
+        end)
+      end)
+
+      System.put_env("SYMPHONY_BAR_QA_ROOT", root)
+      System.put_env("SYMPHONY_QA_OPENROUTER_URL", Stub.url(port))
+      System.put_env("OPENROUTER_API_KEY", Stub.valid_key())
+      Application.put_env(:symphony_elixir, :openrouter_models_request, fn url, opts -> Req.get(url, opts) end)
+
+      content =
+        openrouter_symphony(root, "symphony-qa/no-tools")
+        |> String.replace("anthropic/claude-haiku-4.5", "symphony-qa/tools-only")
+        |> String.replace("  run_profiles:\n", "  effort: high\n  run_profiles:\n")
+
+      path = write_symphony!(root, content)
+
+      assert check(["--config", path]) ==
+               {{:error, "Config error in #{path}: agent.run_profiles.landing.model: OpenRouter model `symphony-qa/no-tools` does not support tools; Symphony runs need tool use"},
+                "Warning: agent.run_profiles.ci_fix.model: OpenRouter model `symphony-qa/tools-only` does not support reasoning; " <>
+                  "its runs start without --effort high, inherited from agent.effort\n"}
     end
 
     test "only warns when the models API cannot be reached", %{root: root} do
@@ -438,6 +622,12 @@ defmodule SymphonyElixir.CLICheckTest do
   end
 
   defp check(args, overrides \\ []) do
+    {result, output, _stderr} = check_io(args, overrides)
+    {result, output}
+  end
+
+  # Also returns what the check printed on stderr: the build line, then any error.
+  defp check_io(args, overrides \\ []) do
     parent = self()
 
     deps =
@@ -464,9 +654,9 @@ defmodule SymphonyElixir.CLICheckTest do
       }
       |> Map.merge(Map.new(overrides))
 
-    {result, output} = with_io(fn -> CLI.evaluate(["check" | args], deps) end)
+    {{result, output}, stderr} = with_io(:stderr, fn -> with_io(fn -> CLI.evaluate(["check" | args], deps) end) end)
     refute_received :runtime_started
-    {result, output}
+    {result, output, stderr}
   end
 
   defp write_symphony!(root, content) do
@@ -492,6 +682,15 @@ defmodule SymphonyElixir.CLICheckTest do
         route:
           team: Test
     """
+  end
+
+  defp worktree_symphony(root, repo) do
+    valid_symphony(root) <>
+      """
+          workspace:
+            strategy: worktree
+            repo: #{repo}
+      """
   end
 
   defp managed_symphony(root) do

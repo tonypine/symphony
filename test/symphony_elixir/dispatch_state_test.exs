@@ -30,6 +30,7 @@ defmodule SymphonyElixir.DispatchStateTest do
         kind: :usage_limit,
         provider: "anthropic",
         scope: :all,
+        reason: "claude_usage_limit",
         window: "five_hour",
         resets_at: ~U[2026-10-03 14:03:00Z],
         resume_at: ~U[2026-10-03 14:05:00Z],
@@ -164,6 +165,14 @@ defmodule SymphonyElixir.DispatchStateTest do
       result = DispatchState.compute(base_state(), config, %{})
 
       assert [%{kind: :missing_api_key, provider: :openai}] = result.blockers
+    end
+
+    test "a provider given as a string reads like the atom" do
+      config = base_config(%{quality_gate: feature_config(true, "anthropic")})
+
+      result = DispatchState.compute(base_state(), config, %{})
+
+      assert [%{kind: :missing_api_key, provider: :anthropic}] = result.blockers
     end
 
     test "missing feature sections and unsupported providers do not require api keys" do

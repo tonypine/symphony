@@ -3,7 +3,11 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   Reads pull request lifecycle state through the GitHub CLI.
   """
 
+  require Logger
+
   alias SymphonyElixir.GitHub.{CommentMarker, Hosts}
+
+  @passing_check_conclusions ["SUCCESS", "NEUTRAL", "SKIPPED"]
 
   @type comment :: %{
           optional(:id) => String.t() | nil,
@@ -46,10 +50,13 @@ defmodule SymphonyElixir.GitHub.PullRequest do
           optional(:conclusion) => String.t() | nil,
           optional(:details_url) => String.t() | nil,
           optional(:workflow_name) => String.t() | nil,
-          optional(:run_id) => String.t() | nil
+          optional(:run_id) => String.t() | nil,
+          optional(:stale) => boolean()
         }
 
   @type ci_status :: %{
+          optional(:workflow_runs) => [head_run()],
+          optional(:required_checks) => [String.t()],
           pr_url: String.t(),
           pr_title: String.t() | nil,
           pr_node_id: String.t() | nil,
@@ -64,6 +71,8 @@ defmodule SymphonyElixir.GitHub.PullRequest do
           auto_merge_enabled: boolean(),
           checks: [ci_check()]
         }
+
+  @type head_run :: %{id: String.t() | nil, status: String.t() | nil, conclusion: String.t() | nil}
 
   @type review :: %{
           optional(:id) => String.t() | nil,
@@ -124,6 +133,11 @@ defmodule SymphonyElixir.GitHub.PullRequest do
     end
   end
 
+  @doc """
+  Reads the pull request's head and its checks. With `required_checks: true` (a landing's read),
+  a head still waiting on a check, with none failed, also carries `:required_checks`: the names
+  of the checks its base branch requires, unless reading them failed.
+  """
   @spec fetch_ci_status(term(), keyword()) :: {:ok, ci_status()} | {:error, term()}
   def fetch_ci_status(pr_url, opts \\ []) do
     if is_binary(pr_url) and is_list(opts) do
@@ -594,31 +608,168 @@ defmodule SymphonyElixir.GitHub.PullRequest do
       "id,number,state,title,url,headRefName,headRefOid,baseRefName,isCrossRepository,headRepository,mergeable,mergeStateStatus,autoMergeRequest,statusCheckRollup"
     ]
 
-    with {:ok, _host, _owner, _repo, _number} <- parse_github_pr_url(pr_url, opts),
+    with {:ok, host, owner, repo, _number} <- parse_github_pr_url(pr_url, opts),
          {:ok, output} <- run_gh(args, opts),
          {:ok, pr} when is_map(pr) <- Jason.decode(output) do
-      {:ok,
-       %{
-         pr_url: Map.get(pr, "url") || pr_url,
-         pr_title: Map.get(pr, "title"),
-         pr_node_id: normalize_id(Map.get(pr, "id")),
-         state: Map.get(pr, "state"),
-         head_ref_name: normalize_id(Map.get(pr, "headRefName")),
-         commit_sha: normalize_id(Map.get(pr, "headRefOid")),
-         is_cross_repository: Map.get(pr, "isCrossRepository"),
-         head_repository: Map.get(pr, "headRepository"),
-         mergeable: normalize_id(Map.get(pr, "mergeable")),
-         merge_state_status: normalize_id(Map.get(pr, "mergeStateStatus")),
-         base_ref_name: normalize_id(Map.get(pr, "baseRefName")),
-         auto_merge_enabled: is_map(Map.get(pr, "autoMergeRequest")),
-         checks: normalize_status_check_rollup(Map.get(pr, "statusCheckRollup"))
-       }}
+      %{
+        pr_url: Map.get(pr, "url") || pr_url,
+        pr_title: Map.get(pr, "title"),
+        pr_node_id: normalize_id(Map.get(pr, "id")),
+        state: Map.get(pr, "state"),
+        head_ref_name: normalize_id(Map.get(pr, "headRefName")),
+        commit_sha: normalize_id(Map.get(pr, "headRefOid")),
+        is_cross_repository: Map.get(pr, "isCrossRepository"),
+        head_repository: Map.get(pr, "headRepository"),
+        mergeable: normalize_id(Map.get(pr, "mergeable")),
+        merge_state_status: normalize_id(Map.get(pr, "mergeStateStatus")),
+        base_ref_name: normalize_id(Map.get(pr, "baseRefName")),
+        auto_merge_enabled: is_map(Map.get(pr, "autoMergeRequest")),
+        checks: normalize_status_check_rollup(Map.get(pr, "statusCheckRollup"))
+      }
+      |> put_head_runs({host, owner, repo}, opts)
+      |> put_required_checks({host, owner, repo}, opts)
     else
       :error -> {:error, :invalid_pr_url}
       {:ok, _decoded} -> {:error, :invalid_pr_payload}
       {:error, %Jason.DecodeError{} = error} -> {:error, {:invalid_pr_payload, Exception.message(error)}}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  # Every check reported can have passed while a workflow run that reported them has not finished:
+  # a rerun of its failed jobs drops those checks from the rollup until the new attempt queues
+  # them, and a job with `needs:` has no check until it starts. So a rollup that reads green also
+  # carries the head's workflow runs, read in one request, for `CiPoller.ci_action/1` to check.
+  # A rollup still waiting on GitHub Actions checks reads them too: GitHub can leave a job's check
+  # `in_progress` after its workflow run completed, and only the run says it is finished (see
+  # `resolve_stale_checks/2`). A rollup with a failed check, a pending check from outside GitHub
+  # Actions, or no GitHub Actions check needs no extra call.
+  defp put_head_runs(%{commit_sha: sha, checks: checks} = ci_status, repo, opts) do
+    if is_binary(sha) and actions_rollup_without_failure?(checks) do
+      with {:ok, runs} <- list_head_runs(repo, sha, opts) do
+        {:ok, ci_status |> Map.put(:workflow_runs, runs) |> resolve_stale_checks(runs)}
+      end
+    else
+      {:ok, ci_status}
+    end
+  end
+
+  defp actions_rollup_without_failure?(checks) do
+    Enum.any?(checks, &is_binary(Map.get(&1, :run_id))) and
+      Enum.all?(checks, &(passing_check?(&1) or (unfinished_check?(&1) and is_binary(Map.get(&1, :run_id)))))
+  end
+
+  # A landing waits only on the checks its base branch requires (see `CiPoller.landing_action/1`),
+  # so a landing's read (`required_checks: true`) of a head still waiting on a check, with none
+  # failed, also reads them, from the branch's rulesets and its protection. When that read fails,
+  # `:required_checks` stays out and the landing waits on every check, as before.
+  defp put_required_checks({:ok, %{base_ref_name: base} = ci_status}, repo, opts) do
+    if Keyword.get(opts, :required_checks) == true and is_binary(base) and waiting_without_failure?(ci_status) do
+      case list_required_checks(repo, base, opts) do
+        {:ok, names} ->
+          {:ok, Map.put(ci_status, :required_checks, names)}
+
+        {:error, reason} ->
+          Logger.warning("Could not read the required checks of #{base}; waiting on every check pr_url=#{ci_status.pr_url} commit_sha=#{ci_status.commit_sha} reason=#{inspect(reason)}")
+          {:ok, ci_status}
+      end
+    else
+      {:ok, ci_status}
+    end
+  end
+
+  defp put_required_checks(error, _repo, _opts), do: error
+
+  defp waiting_without_failure?(%{checks: checks} = ci_status) do
+    Enum.all?(checks, &(passing_check?(&1) or unfinished_check?(&1))) and
+      (Enum.any?(checks, &unfinished_check?/1) or Enum.any?(Map.get(ci_status, :workflow_runs, []), &(&1.status != "COMPLETED")))
+  end
+
+  # The names of the status checks the branch requires: those of its rulesets'
+  # `required_status_checks` rules and those of its branch protection.
+  defp list_required_checks({host, owner, repo}, branch, opts) do
+    branch = URI.encode(branch, &URI.char_unreserved?/1)
+
+    with {:ok, rules} <- gh_api_json(host, "repos/#{owner}/#{repo}/rules/branches/#{branch}?per_page=100", opts),
+         {:ok, branch_info} <- gh_api_json(host, "repos/#{owner}/#{repo}/branches/#{branch}", opts) do
+      if is_list(rules) and is_map(branch_info) do
+        {:ok, Enum.uniq(ruleset_required_checks(rules) ++ protection_required_checks(branch_info))}
+      else
+        {:error, :invalid_required_checks_payload}
+      end
+    end
+  end
+
+  defp gh_api_json(host, endpoint, opts) do
+    with {:ok, output} <- run_gh(github_api_args(host, endpoint), opts) do
+      case Jason.decode(output) do
+        {:ok, decoded} -> {:ok, decoded}
+        {:error, _error} -> {:error, :invalid_required_checks_payload}
+      end
+    end
+  end
+
+  defp ruleset_required_checks(rules) do
+    for %{"type" => "required_status_checks", "parameters" => %{"required_status_checks" => checks}} when is_list(checks) <- rules,
+        %{"context" => context} when is_binary(context) <- checks,
+        do: context
+  end
+
+  defp protection_required_checks(%{"protection" => %{"required_status_checks" => %{"contexts" => contexts} = required}})
+       when is_list(contexts) do
+    if Map.get(required, "enforcement_level") == "off", do: [], else: Enum.filter(contexts, &is_binary/1)
+  end
+
+  defp protection_required_checks(_branch_info), do: []
+
+  # A check that still reads unfinished in a workflow run that completed with a passing
+  # conclusion is stale: GitHub never closed it, and the run can't end while one of its jobs
+  # runs. It counts as finished with the run's conclusion, so it can't hold a landing forever. A
+  # run that failed leaves its unfinished checks as they are; the next read has their conclusion.
+  defp resolve_stale_checks(ci_status, runs) do
+    passed_runs =
+      for %{id: id, status: "COMPLETED", conclusion: conclusion} <- runs,
+          conclusion in @passing_check_conclusions,
+          into: %{},
+          do: {id, conclusion}
+
+    Map.update!(ci_status, :checks, fn checks ->
+      Enum.map(checks, &resolve_stale_check(&1, passed_runs, ci_status))
+    end)
+  end
+
+  defp resolve_stale_check(check, passed_runs, ci_status) do
+    with true <- unfinished_check?(check),
+         {:ok, conclusion} <- Map.fetch(passed_runs, Map.get(check, :run_id)) do
+      Logger.info("Ignoring stale check #{Map.get(check, :name)} in completed run #{Map.get(check, :run_id)} pr_url=#{ci_status.pr_url} commit_sha=#{ci_status.commit_sha}")
+      Map.merge(check, %{status: "COMPLETED", conclusion: conclusion, stale: true})
+    else
+      _not_stale -> check
+    end
+  end
+
+  defp passing_check?(check), do: upcase(Map.get(check, :conclusion)) in @passing_check_conclusions
+
+  defp unfinished_check?(check) do
+    upcase(Map.get(check, :status)) not in ["COMPLETED", "SUCCESS", "FAILURE", "ERROR"] or upcase(Map.get(check, :conclusion)) in [nil, ""]
+  end
+
+  defp list_head_runs({host, owner, repo}, sha, opts) do
+    endpoint = "repos/#{owner}/#{repo}/actions/runs?head_sha=#{URI.encode_www_form(sha)}&per_page=100"
+
+    with {:ok, output} <- run_gh(github_api_args(host, endpoint), opts) do
+      case Jason.decode(output) do
+        {:ok, %{"workflow_runs" => runs}} when is_list(runs) ->
+          {:ok, for(run when is_map(run) <- runs, do: normalize_head_run(run))}
+
+        _other ->
+          {:error, :invalid_workflow_runs_payload}
+      end
+    end
+  end
+
+  defp normalize_head_run(run) do
+    %{id: normalize_id(run["id"]), status: upcase(run["status"]), conclusion: upcase(run["conclusion"])}
   end
 
   defp view_pr(pr_url, opts) do

@@ -26,8 +26,12 @@ BUILD_NUMBER ?=
 # The minisign public key (the key line of minisign.pub) updates are verified
 # against, written into Info.plist. Without it the app's Update item is off.
 MINISIGN_PUBLIC_KEY ?=
+# Inputs for `make qa-app`: the Mix and Erlang it builds Symphony with.
+MIX ?= mix
+ERL ?= erl
+QA_SYMPHONY := $(BUILD_DIR)/qa-symphony
 
-.PHONY: all app bundle install run test e2e clean
+.PHONY: all app bundle qa-app install run test e2e clean
 
 all: app
 
@@ -68,6 +72,20 @@ bundle: app
 	codesign --verify --strict "$(APP)/Contents/Resources/symphony"
 	codesign --verify --strict "$(QA_DRIVER_APP)"
 	codesign --verify --strict "$(APP)"
+
+# Builds the app with this checkout's Symphony embedded, for Auto Review's macos_app QA
+# (see docs/configuration.md), so the app's `symphony check` runs this code. Symphony is
+# the checkout's escript with its shebang pointed at this Mac's Erlang, so it runs without
+# mise or PATH. It reports the commit in source-commit, which `git archive` fills in (a QA
+# host gets such a copy), else the checkout's HEAD.
+qa-app:
+	cd .. && $(MIX) local.hex --if-missing --force && $(MIX) local.rebar --if-missing --force && $(MIX) deps.get
+	cd .. && SYMPHONY_BUILD_SHA="$$(grep -E '^[0-9a-f]{40}$$' macos/source-commit || git rev-parse HEAD 2>/dev/null)" $(MIX) escript.build
+	mkdir -p "$(BUILD_DIR)"
+	root="$$($(ERL) -noshell -eval 'io:put_chars(code:root_dir()), halt().')" && \
+		{ printf '#!%s/bin/escript\n' "$$root"; tail -n +2 ../bin/symphony; } > "$(QA_SYMPHONY)"
+	chmod 755 "$(QA_SYMPHONY)"
+	$(MAKE) bundle SYMPHONY_BIN="$(QA_SYMPHONY)"
 
 install: app
 	mkdir -p "$(INSTALL_DIR)"

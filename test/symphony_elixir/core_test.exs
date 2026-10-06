@@ -956,6 +956,7 @@ defmodule SymphonyElixir.CoreTest do
       refute Map.has_key?(updated_state.running, issue_id)
       refute MapSet.member?(updated_state.claimed, issue_id)
       refute Process.alive?(agent_pid)
+      assert :ok = WorkspaceCleanup.await(issue_identifier)
       refute File.exists?(workspace)
     after
       File.rm_rf(test_root)
@@ -1035,6 +1036,7 @@ defmodule SymphonyElixir.CoreTest do
       refute Map.has_key?(updated_state.running, issue_id)
       refute MapSet.member?(updated_state.claimed, issue_id)
       refute Process.alive?(agent_pid)
+      assert :ok = WorkspaceCleanup.await(issue_identifier)
       refute File.exists?(workspace)
     after
       File.rm_rf(test_root)
@@ -1091,6 +1093,7 @@ defmodule SymphonyElixir.CoreTest do
       refute Map.has_key?(updated_state.running, issue_id)
       refute MapSet.member?(updated_state.claimed, issue_id)
       refute Process.alive?(agent_pid)
+      assert :ok = WorkspaceCleanup.await(issue_identifier)
       refute File.exists?(workspace)
     after
       File.rm_rf(test_root)
@@ -2048,6 +2051,45 @@ defmodule SymphonyElixir.CoreTest do
     assert released.watching == %{}
   end
 
+  test "a held landing issue is dispatched once every check its base branch requires passed" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_active_states: ["Todo", "In Progress", "Merging", "Rework"],
+      tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
+    )
+
+    issue_id = "issue-merging-ci-required"
+    issue = %Issue{id: issue_id, identifier: "MT-236", title: "Land after CI", state: "Merging", repo_key: "api"}
+    state = merging_ci_hold_state(issue_id, "sha-head", DateTime.utc_now())
+
+    # A check the branch doesn't require still runs; an older head was ready to land.
+    put_observed_head!(issue_id, "sha-head", "IN_PROGRESS", "sha-older")
+    assert held_after_release?(state, issue)
+
+    put_observed_head!(issue_id, "sha-head", "IN_PROGRESS", "sha-head")
+    released = Orchestrator.release_merging_ci_waits_for_test(state, [issue])
+
+    assert released.merging_ci_waits == %{}
+    assert Orchestrator.should_dispatch_issue_for_test(issue, released)
+  end
+
+  test "a held landing issue whose wait has no head SHA stays held while no head is ready to land" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_active_states: ["Todo", "In Progress", "Merging", "Rework"],
+      tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
+    )
+
+    issue_id = "issue-merging-ci-no-sha"
+    issue = %Issue{id: issue_id, identifier: "MT-237", title: "Land after CI", state: "Merging", repo_key: "api"}
+    state = merging_ci_hold_state(issue_id, nil, DateTime.utc_now())
+
+    # No record at all, then a record with no head ready to land.
+    assert held_after_release?(state, issue)
+    put_observed_head!(issue_id, "sha-head", "IN_PROGRESS")
+    assert held_after_release?(state, issue)
+  end
+
   test "a held landing issue with a red head goes through the CI-failure path, not a landing dispatch" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
@@ -2121,14 +2163,15 @@ defmodule SymphonyElixir.CoreTest do
     Map.has_key?(released.merging_ci_waits, issue.id) and not Orchestrator.should_dispatch_issue_for_test(issue, released)
   end
 
-  defp put_observed_head!(issue_id, commit_sha, conclusion) do
+  defp put_observed_head!(issue_id, commit_sha, conclusion, landing_ready_sha \\ nil) do
     :ok =
       RunStore.put_ci_check(%{
         repo_key: "api",
         issue_id: issue_id,
         status: "watching",
         last_observed_sha: commit_sha,
-        last_observed_conclusion: conclusion
+        last_observed_conclusion: conclusion,
+        landing_ready_sha: landing_ready_sha
       })
 
     on_exit(fn -> RunStore.delete_ci_check("api", issue_id) end)
@@ -2675,6 +2718,14 @@ defmodule SymphonyElixir.CoreTest do
       true ->
         Process.sleep(5)
         do_wait_for_orchestrator_state(pid, predicate, deadline_ms)
+    end
+  end
+
+  defp wait_for_hook_log(path, expected, deadline_ms \\ System.monotonic_time(:millisecond) + 5_000) do
+    cond do
+      File.read(path) == {:ok, expected} -> :ok
+      System.monotonic_time(:millisecond) >= deadline_ms -> flunk("timed out waiting for #{path} to read #{inspect(expected)}")
+      true -> Process.sleep(10) && wait_for_hook_log(path, expected, deadline_ms)
     end
   end
 
@@ -3939,6 +3990,60 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
+  test "agent runner waits for a removal of the issue's workspace still in flight before creating it" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-elixir-agent-runner-await-cleanup-#{System.unique_integer([:positive])}")
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+      hook_log = Path.join(test_root, "hooks.log")
+      release = Path.join(test_root, "release")
+      workspace = Path.join([workspace_root, "default", "S-689"])
+      File.mkdir_p!(workspace)
+
+      # after_create fails, so the run stops right after it creates the workspace.
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        workspace_root: workspace_root,
+        hook_before_remove: """
+        echo remove-started >> #{hook_log}
+        while [ ! -f #{release} ]; do sleep 0.05; done
+        echo remove-finished >> #{hook_log}
+        """,
+        hook_after_create: """
+        echo created >> #{hook_log}
+        exit 1
+        """
+      )
+
+      issue = %Issue{id: "issue-s-689", identifier: "S-689", title: "Redispatched", state: "In Progress", labels: []}
+
+      assert :ok = WorkspaceCleanup.remove(%{id: issue.id, identifier: issue.identifier}, nil)
+      wait_for_hook_log(hook_log, "remove-started\n")
+
+      test_pid = self()
+
+      run =
+        Task.async(fn ->
+          capture_log(fn ->
+            assert_raise RuntimeError, ~r/workspace_hook_failed/, fn ->
+              AgentRunner.run(issue, test_pid, issue_enricher: &{:ok, &1})
+            end
+          end)
+        end)
+
+      # The run is waiting on the removal, so after_create has not run yet.
+      refute Task.yield(run, 200)
+      assert File.read!(hook_log) == "remove-started\n"
+
+      File.write!(release, "")
+      Task.await(run, 10_000)
+
+      assert File.read!(hook_log) == "remove-started\nremove-finished\ncreated\n"
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "agent runner compacts oversized Codex first-turn prompts before app-server send" do
     test_root =
       Path.join(
@@ -4500,56 +4605,57 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
-  test "agent runner refuses to take an attached PR's branch from a sibling an active issue owns" do
+  test "agent runner dispatches a parent on its own branch when its sub-ticket's PR is attached" do
     test_root =
       Path.join(
         System.tmp_dir!(),
-        "symphony-elixir-agent-runner-active-sibling-#{System.unique_integer([:positive])}"
+        "symphony-elixir-agent-runner-sub-ticket-pr-#{System.unique_integer([:positive])}"
       )
 
     try do
       %{workspace_root: workspace_root, pr_head_sha: pr_head_sha} = setup_worktree_pr_head!(test_root)
       primary_repo = Path.join(test_root, "primary")
 
-      # TP-225's agent is mid-run on the shared PR branch with a clean tree.
-      {:ok, sibling_workspace} =
-        SymphonyElixir.PathSafety.canonicalize(Path.join([workspace_root, "default", "TP-225"]))
+      # TP-586's clean, pushed worktree has its PR branch checked out while the usage limit
+      # holds it, so no agent owns it right now.
+      {:ok, sub_workspace} =
+        SymphonyElixir.PathSafety.canonicalize(Path.join([workspace_root, "default", "TP-586"]))
 
-      File.mkdir_p!(Path.dirname(sibling_workspace))
-      git!(primary_repo, ["worktree", "add", "-b", "auto/TP-225", sibling_workspace, "origin/feature-head"])
-      git!(primary_repo, ["push", "origin", "auto/TP-225"])
+      File.mkdir_p!(Path.dirname(sub_workspace))
+      git!(primary_repo, ["worktree", "add", "-b", "auto/TP-586", sub_workspace, "origin/feature-head"])
+      git!(primary_repo, ["push", "origin", "auto/TP-586"])
 
-      {:ok, workspace} =
-        SymphonyElixir.PathSafety.canonicalize(Path.join([workspace_root, "default", "TP-226"]))
-
-      git!(primary_repo, ["worktree", "add", "-b", "auto/TP-226", workspace, "origin/main"])
-
-      pr_url = "https://github.com/org/repo/pull/225#auto/TP-225"
+      # Linear linked the sub-ticket's PR to its parent because its body said "Part of TP-381".
+      pr_url = "https://github.com/org/repo/pull/83#auto/TP-586"
 
       issue = %Issue{
-        id: "issue-shared-pr",
-        identifier: "TP-226",
-        title: "Mentions TP-225's PR",
-        description: "Linear linked the shared PR to both issues",
+        id: "issue-parent",
+        identifier: "TP-381",
+        title: "Design how the hub updates itself",
+        description: "Parent of TP-586",
         state: "In Progress",
         pull_request_url: pr_url,
         pr_urls: [pr_url]
       }
 
-      capture_log(fn ->
-        assert_raise RuntimeError, ~r/branch_already_checked_out_elsewhere/, fn ->
-          AgentRunner.run(issue, nil,
-            issue_state_fetcher: fn [_issue_id] -> {:ok, [%{issue | state: "Done"}]} end,
-            issue_enricher: no_op_issue_enricher(),
-            github: AttachedPrGitHub,
-            active_workspace_identifiers: ["TP-225"]
-          )
-        end
-      end)
+      log =
+        capture_log(fn ->
+          assert :ok =
+                   AgentRunner.run(issue, nil,
+                     issue_state_fetcher: fn [_issue_id] -> {:ok, [%{issue | state: "Done"}]} end,
+                     issue_enricher: no_op_issue_enricher(),
+                     github: AttachedPrGitHub
+                   )
+        end)
 
-      assert git!(sibling_workspace, ["branch", "--show-current"]) == "auto/TP-225"
-      assert git!(sibling_workspace, ["rev-parse", "HEAD"]) == pr_head_sha
-      assert git!(workspace, ["branch", "--show-current"]) == "auto/TP-226"
+      assert log =~ "Ignoring attached PR on another issue's branch"
+      assert log =~ "head_ref=auto/TP-586"
+
+      workspace = Path.join([workspace_root, "default", "TP-381"])
+      assert git!(workspace, ["branch", "--show-current"]) == "auto/TP-381"
+      refute File.exists?(Path.join(workspace, "PR_HEAD.md"))
+      assert git!(sub_workspace, ["branch", "--show-current"]) == "auto/TP-586"
+      assert git!(sub_workspace, ["rev-parse", "HEAD"]) == pr_head_sha
     after
       File.rm_rf(test_root)
     end
@@ -4565,7 +4671,13 @@ defmodule SymphonyElixir.CoreTest do
     try do
       %{workspace_root: workspace_root} = setup_worktree_pr_head!(test_root)
 
-      for {identifier, fragment} <- [{"TP-300", "auto/TP-300"}, {"TP-301", "feature-head:MERGED"}] do
+      # An open PR on a branch that isn't this issue's own is ignored too.
+      for {identifier, fragment} <- [
+            {"TP-300", "auto/TP-300"},
+            {"TP-301", "feature-head:MERGED"},
+            {"TP-302", "feature-head"},
+            {"TP-303", "auto/feature-head"}
+          ] do
         pr_url = "https://github.com/org/repo/pull/300##{fragment}"
 
         issue = %Issue{
@@ -4897,7 +5009,7 @@ defmodule SymphonyElixir.CoreTest do
     pending = {:ok, %{commit_sha: "sha-pending", checks: [%{name: "make-all", status: "IN_PROGRESS", conclusion: nil}]}}
 
     assert run_merging_landing_turns(pending) == 1
-    assert_received {:merging_ci_status_fetched, ^pr_url, [cwd: _workspace]}
+    assert_received {:merging_ci_status_fetched, ^pr_url, [cwd: _workspace, required_checks: true]}
     assert_received {:merging_ci_wait, "issue-merging-continue", %{commit_sha: "sha-pending", pr_url: ^pr_url}}
   end
 
@@ -4909,6 +5021,29 @@ defmodule SymphonyElixir.CoreTest do
 
     assert run_merging_landing_turns({:error, :gh_unavailable}) == 2
     refute_received {:merging_ci_wait, _issue_id, _wait}
+  end
+
+  test "agent runner keeps a landing run going once every check the base branch requires passed" do
+    checks = [
+      %{name: "make-all", status: "COMPLETED", conclusion: "SUCCESS"},
+      %{name: "deploy preview", status: "QUEUED", conclusion: nil}
+    ]
+
+    assert run_merging_landing_turns({:ok, %{commit_sha: "sha-ready", checks: checks, required_checks: ["make-all"]}}) == 2
+    refute_received {:merging_ci_wait, _issue_id, _wait}
+
+    # Without required checks, the queued check holds it, until the CI poller's landing wait lets the head past.
+    assert run_merging_landing_turns({:ok, %{commit_sha: "sha-ready", checks: checks, required_checks: []}}) == 1
+    assert_received {:merging_ci_wait, "issue-merging-continue", %{commit_sha: "sha-ready"}}
+
+    :ok = RunStore.put_ci_check(%{repo_key: "default", issue_id: "issue-merging-continue", landing_fallback_sha: "sha-ready"})
+
+    try do
+      assert run_merging_landing_turns({:ok, %{commit_sha: "sha-ready", checks: checks, required_checks: []}}) == 2
+      refute_received {:merging_ci_wait, _issue_id, _wait}
+    after
+      RunStore.delete_ci_check("default", "issue-merging-continue")
+    end
   end
 
   defp run_merging_landing_turns(ci_status_result) do

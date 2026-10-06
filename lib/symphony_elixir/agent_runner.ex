@@ -35,12 +35,14 @@ defmodule SymphonyElixir.AgentRunner do
     Verification,
     Workpad,
     Workspace,
+    WorkspaceCleanup,
     WorkspaceHead
   }
 
   @dev_server_pid_key {__MODULE__, :verification_dev_server_pid}
   @dependency_review_state "In Review"
   @idle_park_state "Backlog"
+  @merging_state "Merging"
   # Consecutive turns with no new commit, no state change and no PR change that end the run.
   @max_empty_turns 2
   # Fallback when settings are unavailable; the effective value comes from
@@ -79,6 +81,7 @@ defmodule SymphonyElixir.AgentRunner do
       |> Keyword.put(:repo_key, repo_key)
       |> Keyword.put(:settings, settings)
       |> put_linear_wait_notice(issue, codex_update_recipient)
+      |> put_tool_call_notice(issue, codex_update_recipient)
 
     # The orchestrator owns host retries so one worker lifetime never hops machines.
     worker_host = selected_worker_host(Keyword.get(opts, :worker_host), settings.worker.ssh_hosts)
@@ -94,8 +97,8 @@ defmodule SymphonyElixir.AgentRunner do
         Logger.error("Agent run failed for #{issue_context(issue)}: #{inspect(reason)}")
 
         cond do
-          usage_limit = usage_limit_reason(reason) ->
-            exit({:usage_limited, usage_limit})
+          hold = provider_hold_reason(reason) ->
+            exit(hold)
 
           terminal_agent_setup_error?(reason) ->
             exit({:terminal_agent_setup_error, reason})
@@ -115,9 +118,15 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  # The orchestrator holds the provider's runs until the limit resets instead of failing the run.
-  defp usage_limit_reason({:usage_limited, %{} = info}), do: info
-  defp usage_limit_reason(_reason), do: nil
+  # The orchestrator holds the provider's runs until the limit resets instead of failing the run;
+  # it does the same, until a probe gets through, for a model API the agent couldn't reach.
+  # A parent walkthrough's QA agent reports either one as `{:usage_limited, info}`.
+  defp provider_hold_reason({:usage_limited, %{} = info}) do
+    if UsageLimit.api_unreachable?(info), do: {:model_api_unreachable, info}, else: {:usage_limited, info}
+  end
+
+  defp provider_hold_reason({:model_api_unreachable, %{}} = reason), do: reason
+  defp provider_hold_reason(_reason), do: nil
 
   defp terminal_review_agent_block?({:review_agent_blocked, _reason}), do: true
   defp terminal_review_agent_block?(_reason), do: false
@@ -133,6 +142,14 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp put_linear_wait_notice(opts, _issue, _recipient), do: opts
+
+  # Tells the orchestrator as each of Symphony's own MCP tool calls in this run starts and ends;
+  # see `SymphonyElixir.McpServer`.
+  defp put_tool_call_notice(opts, %{id: issue_id}, recipient) when is_binary(issue_id) and is_pid(recipient) do
+    Keyword.put_new(opts, :on_tool_call, fn event -> send(recipient, {:mcp_tool_call, issue_id, event}) end)
+  end
+
+  defp put_tool_call_notice(opts, _issue, _recipient), do: opts
 
   # A step that still could not reach Linear once its wait ran out, such as
   # `{:idle_park_failed, {:linear_rate_limited, until_ms}}`, failed through no fault of the
@@ -318,6 +335,9 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp workspace_for_issue(issue, codex_update_recipient, opts, worker_host) do
+    # A removal of this issue's workspace may still be running from when it last ended.
+    WorkspaceCleanup.await(issue.identifier)
+
     case Keyword.get(opts, :workspace_path) do
       workspace when is_binary(workspace) and workspace != "" ->
         with :ok <- Workspace.validate(workspace, worker_host) do
@@ -392,16 +412,20 @@ defmodule SymphonyElixir.AgentRunner do
   # this, the next dispatch builds a fresh `auto/TP-218` worktree and the scoped
   # GitHub tools, which resolve the PR from the workspace's current branch, no
   # longer see the PR opened on `auto/TON-218`. When the attached PR is still
-  # open, same-repo, and its head differs from the default branch, keep working
-  # on that head. Lookup failures fall back to the default branch.
-  defp renamed_issue_pr_head_ref(%Issue{identifier: identifier, pr_urls: [pr_url | _rest]}, opts)
+  # open, same-repo, and its head is this issue's branch under the old key, keep
+  # working on that head. Lookup failures fall back to the default branch.
+  #
+  # Any other head is ignored: Linear links a PR to every issue its body names after
+  # a word such as "Part of", so a parent can carry its sub-ticket's PR, and taking
+  # that head would put the parent's run on the sub-ticket's branch.
+  defp renamed_issue_pr_head_ref(%Issue{identifier: identifier, pr_urls: [pr_url | _rest]} = issue, opts)
        when is_binary(identifier) and is_binary(pr_url) do
     github = Keyword.get(opts, :github, PullRequest)
 
     case github.fetch_ci_status(pr_url, []) do
       {:ok, %{state: "OPEN", is_cross_repository: false, head_ref_name: head_ref}}
       when is_binary(head_ref) and head_ref != "" ->
-        if head_ref != "auto/" <> identifier, do: head_ref
+        renamed_own_head_ref(issue, pr_url, head_ref)
 
       _status ->
         nil
@@ -409,6 +433,37 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp renamed_issue_pr_head_ref(_issue, _opts), do: nil
+
+  defp renamed_own_head_ref(%Issue{identifier: identifier} = issue, pr_url, head_ref) do
+    cond do
+      head_ref == "auto/" <> identifier ->
+        nil
+
+      renamed_issue_branch?(identifier, head_ref) ->
+        head_ref
+
+      true ->
+        Logger.warning("Ignoring attached PR on another issue's branch #{issue_context(issue)} pr_url=#{pr_url} head_ref=#{head_ref}")
+        nil
+    end
+  end
+
+  # The same issue number under another team key: `auto/TON-218` for `TP-218`.
+  defp renamed_issue_branch?(identifier, "auto/" <> branch_identifier) do
+    case {issue_number(identifier), issue_number(branch_identifier)} do
+      {number, number} when is_binary(number) -> true
+      _numbers -> false
+    end
+  end
+
+  defp renamed_issue_branch?(_identifier, _head_ref), do: false
+
+  defp issue_number(identifier) do
+    case Regex.run(~r/\A[A-Za-z][A-Za-z0-9]*-(\d+)\z/, identifier) do
+      [_identifier, number] -> number
+      nil -> nil
+    end
+  end
 
   # Reuse an already-resolved conflict snapshot when the caller supplied one
   # (same precedence as put_pr_conflict/2), otherwise look it up in the store.
@@ -636,7 +691,8 @@ defmodule SymphonyElixir.AgentRunner do
       dependency_audit_module: dependency_audit_module(opts),
       dependency_audit_base_ref: Keyword.get(opts, :dependency_audit_base_ref),
       dependency_audit_command_runner: Keyword.get(opts, :dependency_audit_command_runner),
-      extra_env: AgentTmpDir.env(settings.agent.kind, Keyword.get(opts, :agent_tmp_dir))
+      extra_env: AgentTmpDir.env(settings.agent.kind, Keyword.get(opts, :agent_tmp_dir)),
+      on_tool_call: Keyword.get(opts, :on_tool_call)
     )
   end
 
@@ -729,8 +785,7 @@ defmodule SymphonyElixir.AgentRunner do
         hand_off_pushed_head(issue, ci_action, run_context)
 
       idle_turn_limit_reached?(issue, run_context) ->
-        forget_rework_base(issue, run_context.opts)
-        park_idle_issue(issue, run_context.opts)
+        end_idle_run(issue, run_context)
 
       true ->
         :continue
@@ -890,6 +945,12 @@ defmodule SymphonyElixir.AgentRunner do
 
       {:error, {:review_agent_inconclusive, reason}} ->
         handle_review_agent_inconclusive(run_context, config, round, reason)
+
+      # The reviewer is unavailable, not inconclusive: the run is held with the push still
+      # waiting for a review, and reviews again once the API is back.
+      {:error, {:model_api_unreachable, info} = reason} ->
+        Logger.warning("Reviewer agent could not reach the model API for #{issue_context(run_context.issue)} error=#{info.error}; holding the push until it is reviewed")
+        {:error, reason}
 
       {:error, reason} ->
         {:error, {:review_agent_failed, reason}}
@@ -1644,33 +1705,139 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   # A landing run waits on CI through `merging_ci_pending?/2`, and parking it would drop the
-  # human's merge approval. A run whose HEAD is the PR head with checks pending, but that is not
-  # handed off (a Rework run, or one that started on that head), is not idle either; it keeps
-  # turning, up to `agent.max_turns`, until CI settles.
-  defp idle_turn_limit_reached?(%Issue{} = issue, %{progress: progress} = run_context) do
-    progress.empty_turns >= @max_empty_turns and !merging_state?(issue.state) and
-      !pushed_head_ci_pending?(issue, run_context)
+  # human's merge approval.
+  defp idle_turn_limit_reached?(%Issue{} = issue, %{progress: progress}) do
+    progress.empty_turns >= @max_empty_turns and !merging_state?(issue.state)
   end
 
-  defp pushed_head_ci_pending?(%Issue{} = issue, %{progress: %{head: head}} = run_context) do
-    if pushed_head_ci_action(issue, run_context) == :pending do
-      Logger.info("Not parking #{issue_context(issue)}; waiting for CI on its pushed head #{head}")
-      true
-    else
-      false
+  # A Rework run that pushed a new head to its PR, with CI on it running or green, waits on that CI,
+  # so it is not idle: it moves to the post-PR state, where the CI poller takes the head over. That
+  # covers what `rework_finished?/2` skips, such as a Rework started by a CI failure, which stays
+  # pending until the run ends. Outside Rework, `pushed_head_handoff_ci_action/2` already handed off
+  # such a head once it passed the pre-push reviewer, so one left here awaits the reviewer. A run
+  # whose HEAD is the PR head with checks pending but that is not handed off (one that started on
+  # that head, or one whose pushed head awaits the reviewer) keeps turning, up to
+  # `agent.max_turns`, until CI settles. A CI-fix run that found the red check a flake, or a
+  # merge-conflict run that found the PR no longer conflicts, rightly pushes nothing: once CI on
+  # its PR head is green, that is its outcome, so it hands the PR back instead of being parked
+  # (`hand_off_green_fix/3`). Any other idle run is parked.
+  defp end_idle_run(%Issue{} = issue, %{progress: %{head: head}} = run_context) do
+    ci_status = pushed_head_ci_status(issue, run_context)
+    ci_action = ci_action(ci_status)
+    green_fix = if ci_action == :success, do: green_fix(issue, ci_status, run_context)
+
+    cond do
+      ci_action in [:pending, :success] and rework_state?(issue.state) and pushed_new_head?(run_context) ->
+        hand_off_idle_pushed_head(issue, ci_action, run_context)
+
+      ci_action == :pending ->
+        Logger.info("Not parking #{issue_context(issue)}; waiting for CI on its pushed head #{head}")
+        :continue
+
+      green_fix != nil ->
+        hand_off_green_fix(issue, green_fix, run_context)
+
+      true ->
+        park_idle_run(issue, run_context)
     end
   end
 
+  # The head moved past the one this run started on, or past the head the rework started from, so
+  # rework an earlier run pushed counts too.
+  defp pushed_new_head?(%{progress: progress}), do: progress.head != progress.start_head or progress.head != progress.rework_base
+
+  defp hand_off_idle_pushed_head(%Issue{} = issue, ci_action, run_context) do
+    with :ok <- hand_off_pushed_head(issue, ci_action, run_context) do
+      forget_rework_base(issue, run_context.opts)
+    end
+  end
+
+  # The fix a run that pushed nothing was dispatched for, given as the kind, whether the PR was
+  # approved (in `Merging`) when the signal came, and the head it came on; or nil. A CI-fix run
+  # answers a CI failure; a merge-conflict run answers a conflict, and only a PR GitHub now calls
+  # `MERGEABLE` shows it needed no commit, so one still conflicting (or not computed yet) is parked
+  # as before, whatever else is pending. `Rework` keeps its own rule (`rework_finished?/2`): a
+  # rework that adds no commit is not done.
+  defp green_fix(%Issue{} = issue, ci_status, %{opts: opts}) do
+    cond do
+      rework_state?(issue.state) -> nil
+      is_map(opts[:pr_conflict]) and Map.get(ci_status, :mergeable) != "MERGEABLE" -> nil
+      is_map(opts[:ci_failure]) -> {:ci_fix, opts[:ci_failure][:approved], opts[:ci_failure][:commit_sha]}
+      is_map(opts[:pr_conflict]) -> {:conflict_fix, opts[:pr_conflict][:approved], opts[:pr_conflict][:head_sha]}
+      true -> nil
+    end
+  end
+
+  defp park_idle_run(%Issue{} = issue, run_context) do
+    forget_rework_base(issue, run_context.opts)
+    park_idle_issue(issue, run_context.opts)
+  end
+
+  # A fix on an approved PR (the CI failure or conflict came from `Merging`) whose PR head is still
+  # the commit it came on goes back to `Merging`, where auto-merge turns on again: the approval
+  # still covers the PR's diff. Any other green fix, such as a run that started on a fix an earlier
+  # run pushed, goes to the post-PR state, where review judges its head.
+  defp hand_off_green_fix(%Issue{} = issue, {kind, approved, signal_head}, %{progress: %{head: head, start_head: start_head}} = run_context) do
+    if approved == true and head == start_head and head == signal_head do
+      Logger.info("#{fix_run_name(kind)} for #{issue_context(issue)} pushed nothing and CI on its PR head #{head} is green; moving back to #{@merging_state}")
+      PrReviewPoller.release_auto_merge_hold(issue.id, pending_lookup_opts(issue, run_context.opts))
+      return_to_merging(issue, kind, head, run_context)
+    else
+      post_pr_state = post_pr_state(run_context)
+      Logger.info("CI is green on #{issue_context(issue)}'s PR head #{head} after a #{fix_run_name(kind)} with no new commit; moving to #{post_pr_state}")
+
+      case move_to_post_pr_state(issue, post_pr_state, "with CI green on its PR head", run_context) do
+        :ok -> :ok
+        {:error, reason} -> {:error, {:green_fix_handoff_failed, kind, reason}}
+      end
+    end
+  end
+
+  defp fix_run_name(:ci_fix), do: "CI fix run"
+  defp fix_run_name(:conflict_fix), do: "merge conflict run"
+
+  defp return_to_merging(%Issue{id: issue_id} = issue, kind, head, run_context) do
+    label = "moving #{issue_context(issue)} back to #{@merging_state} with CI green"
+    move = fn -> Tracker.update_issue_state(issue_id, @merging_state) end
+    comment = fn -> Tracker.create_comment(issue_id, green_fix_note(kind, head)) end
+
+    with :ok <- with_linear_retry(move, label, run_context.opts),
+         :ok <- with_linear_retry(comment, label, run_context.opts) do
+      :ok
+    else
+      {:error, reason} -> {:error, {:green_fix_handoff_failed, kind, reason}}
+    end
+  end
+
+  defp green_fix_note(:ci_fix, head) do
+    """
+    Symphony moved this issue back to #{@merging_state}: the CI fix run found nothing to change and pushed no commit, and CI on the PR head `#{head}` is green, so the approval still covers the PR and auto-merge turns back on.
+    """
+  end
+
+  defp green_fix_note(:conflict_fix, head) do
+    """
+    Symphony moved this issue back to #{@merging_state}: the merge conflict run found nothing to resolve and pushed no commit, the PR no longer conflicts with the base branch, and CI on the PR head `#{head}` is green, so the approval still covers the PR and auto-merge turns back on.
+    """
+  end
+
   # The CI action for the workspace HEAD when it is the attached PR's head, or nil. A PR with no
-  # checks reported yet gives nil, so a repo without CI never waits on it and stays parkable.
-  defp pushed_head_ci_action(%Issue{} = issue, %{progress: %{head: head}} = run_context) do
+  # checks reported yet gives nil, so a repo without CI never waits on it and stays parkable. A
+  # rerun the CI poller started on that head reads as running until its checks report again.
+  defp pushed_head_ci_action(%Issue{} = issue, run_context), do: issue |> pushed_head_ci_status(run_context) |> ci_action()
+
+  defp ci_action(nil), do: nil
+  defp ci_action(ci_status), do: CiPoller.ci_action(ci_status)
+
+  # The PR status `pushed_head_ci_action/2` reads its CI action from, or nil.
+  defp pushed_head_ci_status(%Issue{} = issue, %{progress: %{head: head}} = run_context) do
     pr_url = URLUtils.pull_request_url(issue)
     github = Keyword.get(run_context.opts, :github, PullRequest)
 
     with true <- is_binary(pr_url),
          {:ok, %{commit_sha: ^head, checks: [_ | _]} = ci_status} <-
            github.fetch_ci_status(pr_url, cwd: run_context.workspace) do
-      CiPoller.ci_action(ci_status)
+      CiPoller.put_rerun_pending(ci_status, issue.id, pending_lookup_opts(issue, run_context.opts))
     else
       _ -> nil
     end
@@ -1722,14 +1889,16 @@ defmodule SymphonyElixir.AgentRunner do
 
   # A landing agent that ends its turn while the PR head's checks are pending would only spend
   # turns finding them still pending. End the run and tell the orchestrator, which holds the
-  # issue in `Merging` until the CI poller sees that head settle.
+  # issue in `Merging` until the CI poller sees that head settle. Only the checks the base branch
+  # requires count, when it requires any, and none once the poller let the head past them (see
+  # `CiPoller.landing_action/1`).
   defp merging_ci_pending?(%Issue{} = issue, run_context) do
     pr_url = URLUtils.pull_request_url(issue)
 
     if merging_state?(issue.state) and is_binary(pr_url) do
       github = Keyword.get(run_context.opts, :github, PullRequest)
 
-      case github.fetch_ci_status(pr_url, cwd: run_context.workspace) do
+      case github.fetch_ci_status(pr_url, cwd: run_context.workspace, required_checks: true) do
         {:ok, ci_status} ->
           maybe_wait_for_merging_ci(issue, pr_url, ci_status, run_context)
 
@@ -1743,7 +1912,10 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp maybe_wait_for_merging_ci(issue, pr_url, ci_status, run_context) do
-    if CiPoller.ci_action(ci_status) == :pending do
+    lookup_opts = pending_lookup_opts(issue, run_context.opts)
+    ci_status = ci_status |> CiPoller.put_rerun_pending(issue.id, lookup_opts) |> CiPoller.put_landing_fallback(issue.id, lookup_opts)
+
+    if CiPoller.landing_action(ci_status) == :pending do
       commit_sha = Map.get(ci_status, :commit_sha)
       Logger.info("Stopping landing run for #{issue_context(issue)}; waiting for CI on #{commit_sha}")
       send_merging_ci_wait(run_context.codex_update_recipient, issue, %{commit_sha: commit_sha, pr_url: pr_url})

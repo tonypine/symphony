@@ -97,7 +97,10 @@ branch instead of opening a second one. If a claimed issue moves to a terminal s
   `Rework` to have the plan made again. A plan run that stopped midway resumes from its workpad
   when the parent is moved to `In Progress`, keeping the sub-tickets already filed. The approved
   parent waits without being re-dispatched until every sub-ticket is closed, then closes out with
-  a Linear project update.
+  a Linear project update. Any other ticket whose PR merges with sub-tickets still open (the
+  acceptance gate's follow-ups, or ones an agent filed) waits in `Waiting on sub-tickets` too
+  instead of closing: Symphony promotes its `Backlog` sub-tickets to `Todo` and moves it to `Done`
+  once every sub-ticket is `Done`, `Canceled` or `Duplicate`, with a comment listing how each ended.
   With Auto Review on, the final verification ticket is a QA pass over the merged parent: the report
   goes on the parent and each failing step becomes a new ticket that blocks the verification
   ticket, which waits in `Todo` and runs again once those tickets are done.
@@ -272,9 +275,11 @@ Start the service from a directory containing `symphony.yml` (or pass `--config`
 ```
 
 Validate `symphony.yml` and every repo `WORKFLOW.md` it points at without starting the service
-(exit 0 with `Config OK: <path>`, or exit 1 with the error on stderr). It checks the same
+(exit 0 with `Config OK: <path>`, or exit 1 with the error on stderr). It first prints the build it
+runs on stderr, `Symphony <version> (<commit>)`. It checks the same
 `WORKFLOW.md` startup reads: with `workflow_source: ref`, the committed copy on the last fetched
-base branch, not uncommitted edits. A `workspace.source` repo
+base branch, not uncommitted edits. A `strategy: worktree` repo
+fails when its `workspaces.repo` is missing or isn't a git repository. A `workspace.source` repo
 Symphony hasn't cloned yet passes with a warning, as Symphony clones it when it starts:
 
 ```bash
@@ -326,6 +331,15 @@ The terminal and web dashboards list forced tickets in a "Forced" section above 
 with the phase each is in and what it waits on (`implementation · running`,
 `waiting for a human`, `implementation · waiting on blocker TP-12`), and mark forced rows elsewhere
 with ⚡. Once a forced ticket is done, Symphony removes the label.
+
+Test OpenRouter flows without a real key: `symphony openrouter-stub` serves a stub OpenRouter on
+`127.0.0.1` with a made-up valid key and three models, prints its URL and the variables that point a
+QA-mode Symphony or app at it, and runs until stopped (see
+[OpenRouter in QA](docs/configuration.md#qa-passes)):
+
+```bash
+./bin/symphony openrouter-stub --port 4100
+```
 
 ### Priority vs expedite
 
@@ -402,7 +416,9 @@ and resumes them when the limit resets (plus `agent.usage_limit.resume_margin_se
 attempt. One held run goes first; the rest follow only once it is accepted, and the hold starts
 again if the limit is still in force. Runs on other providers keep going, and an operator pause is never cleared by it.
 An Auto Review QA pass that hits the limit is held the same way: it records no verdict, the issue
-stays where it is, and the pass runs again after the hold. Set
+stays where it is, and the pass runs again after the hold. On Linear a note on the issue says
+`QA is waiting for the usage limit to reset at 14:05` (local time); a pass held again edits it, and the
+pass that runs, or the PR closing or merging first, deletes it. Set
 `agent.usage_limit.auto_pause: false` to fail and retry such runs as before.
 
 While Claude runs are held, the web and terminal dashboards show a banner such as
@@ -412,6 +428,16 @@ a `usage_limit` entry in `dispatch_state.blockers`. `dispatch_state.active?` tur
 every provider in use is held. Slack and webhook channels get one `usage_limit_paused` message when
 the hold starts and one `usage_limit_resumed` message when it clears, which is once Claude accepts
 the first run, not when it starts.
+
+When Claude can't reach its API at all (the network or DNS is down, so a turn ends on
+`API Error: Can't reach the API server … (ENOTFOUND)`), Symphony holds Claude runs the same way,
+`auto_pause` or not, instead of reading the turn as finished: no idle turn is counted and no issue
+is parked. The pre-push reviewer, QA and the acceptance gate hold too, so a push never goes ahead
+without a review and no verdict is recorded. One held run probes the API after a minute, then after
+twice as long each time it still fails (up to `unknown_reset_retry_seconds`). The log says
+`Model API unreachable (ENOTFOUND); holding dispatch` once, and the dashboards show
+`Paused: Claude API unreachable (ENOTFOUND), retries ~14:05`; `/api/v1/state` lists the hold
+under `usage_limits` with `reason: model_api_unreachable`.
 
 To leave part of the Claude limit for your own sessions, set
 `agent.usage_limit.headroom_utilization` (for example `0.9`; off by default). Once Claude reports

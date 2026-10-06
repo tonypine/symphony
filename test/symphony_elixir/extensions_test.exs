@@ -504,6 +504,21 @@ defmodule SymphonyElixir.ExtensionsTest do
              json_response(get(build_conn(), "/api/v1/MT-HTTP"), 200)
   end
 
+  test "phoenix observability api shows a run waiting on a Symphony tool call" do
+    pending_tool = %{name: "github_sync_base", started_at: ~U[2026-10-04 12:30:00.123Z], age_ms: 125_000}
+    snapshot = update_in(static_snapshot().running, fn [running] -> [Map.put(running, :pending_tool, pending_tool)] end)
+    orchestrator_name = Module.concat(__MODULE__, :PendingToolApiOrchestrator)
+    {:ok, _pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: snapshot)
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+    expected = %{"name" => "github_sync_base", "started_at" => "2026-10-04T12:30:00Z", "age_ms" => 125_000}
+
+    assert %{"running" => [%{"last_message" => "waiting on github_sync_base for 2m", "pending_tool" => ^expected}]} =
+             json_response(get(build_conn(), "/api/v1/state"), 200)
+
+    assert %{"running" => %{"last_message" => "waiting on github_sync_base for 2m", "pending_tool" => ^expected}} =
+             json_response(get(build_conn(), "/api/v1/MT-HTTP"), 200)
+  end
+
   test "phoenix observability api preserves state, issue, and refresh responses" do
     put_build(sha: "D3D301B0123456789ABCDEF0123456789ABCDEF0", repo: "https://github.com/acme/symphony", number: "168")
     snapshot = static_snapshot()
@@ -587,6 +602,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "last_event" => "notification",
                  "last_message" => "rendered",
                  "linear_wait_until" => nil,
+                 "pending_tool" => nil,
                  "started_at" => state_payload["running"] |> List.first() |> Map.fetch!("started_at"),
                  "last_event_at" => nil,
                  "forced" => false,
@@ -821,7 +837,13 @@ defmodule SymphonyElixir.ExtensionsTest do
              "concurrency" => %{"max_total" => 10, "finishing_max" => 2, "forced_max" => 1},
              "claimed" => ["issue-http", "retry-http"],
              "rate_limits" => %{"primary" => %{"remaining" => 11}},
-             "linear_usage" => %{"window_ms" => 3_600_000, "total" => 0, "callers" => [], "queries" => []}
+             "linear_usage" => %{"window_ms" => 3_600_000, "total" => 0, "callers" => [], "queries" => []},
+             "orchestrator" => %{
+               "message_queue_len" => 0,
+               "snapshot_age_ms" => nil,
+               "snapshot_build_ms" => nil,
+               "snapshot_parts_ms" => %{}
+             }
            }
 
     conn = get(build_conn(), "/api/v1/MT-HTTP")
@@ -849,6 +871,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                "last_event" => "notification",
                "last_message" => "rendered",
                "linear_wait_until" => nil,
+               "pending_tool" => nil,
                "last_event_at" => nil,
                "tokens" => %{
                  "input_tokens" => 4,
@@ -2386,6 +2409,7 @@ defmodule SymphonyElixir.ExtensionsTest do
             kind: :usage_limit,
             provider: "anthropic",
             scope: :all,
+            reason: "claude_usage_limit",
             window: "five_hour",
             resets_at: ~U[2026-10-03 14:03:00Z],
             resume_at: resume_at,
@@ -2414,6 +2438,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                "resets_at" => "2026-10-03T14:03:00Z",
                "resume_at" => DateTime.to_iso8601(resume_at),
                "source" => nil,
+               "error" => nil,
                "utilization" => nil,
                "issue_identifier" => "MT-HELD"
              }
@@ -2426,6 +2451,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "kind" => "usage_limit",
                  "provider" => "anthropic",
                  "scope" => "all",
+                 "reason" => "claude_usage_limit",
                  "window" => "five_hour",
                  "phase" => "paused",
                  "resets_at" => "2026-10-03T14:03:00Z",

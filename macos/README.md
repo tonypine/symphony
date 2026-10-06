@@ -127,6 +127,9 @@ app opens" in Settings (see [Launch at Login](#launch-at-login)).
 - **Pause Dispatch** holds new dispatch: Symphony picks up no new issues, but agent runs already under way
   continue. The pause is kept across restarts.
 - **Resume Dispatch** lets Symphony pick up new issues again.
+- **Acceptance gate: Enforce (repo)** (one row per repo whose acceptance gate runs, in Shadow or Enforce) is
+  the gate's kill switch: its submenu switches that repo to **Shadow** or **Off** at once. See
+  [Settings](#settings).
 - **Force a ticket…** asks for a Linear identifier and forces that ticket past the dispatch limits, like
   `symphony force`. The forced tickets are listed above it, each with **Stop forcing**. See
   [Forced tickets](#forced-tickets).
@@ -161,17 +164,17 @@ set (or, in Development mode, no checkout folder).
   on if a checkout folder is already set and the app has no embedded Symphony, so existing setups keep
   running their checkout.
 - **Restart timeout** (1–1440 minutes, 30 by default) is how long Restart Symphony waits for agent runs
-  before it also offers Restart Now Anyway.
+  before it also offers Restart Now Anyway, and how long Automatically at a set time waits for them before it
+  tries again the next day.
 - **Update mode** (in **Updates**) is how the app installs a newer release:
   - **Manual** (the default, and what an install from before this setting gets): the menu shows the
     release and you install it with Update to vX. See [Update](#update).
-  - **Automatically when idle** will install a new release by itself once no agent runs are active.
-  - **Automatically at a set time** will install a new release by itself each day at the **Time** shown under
+  - **Automatically when idle** installs a new release by itself as soon as no agent runs are active.
+  - **Automatically at a set time** installs a new release by itself each day at the **Time** shown under
     it (03:00 by default, in the Mac's time zone), waiting for agent runs like Update to vX. The time shows
     only for this mode, and is kept when you choose another.
 
-  The two automatic modes are saved and shown, but they don't install anything yet; a later version turns
-  them on. Until then the text under the picker says so, and updates install only from the menu.
+  See [Automatic updates](#automatic-updates).
 - `symphony.yml` path, Development mode, checkout folder, command prefix (`mise exec --` until you change
   it), stop timeout, restart timeout, "Start Symphony when the app opens", update mode (`updateMode`) and
   update time (`updateTime`, minutes after midnight) are stored in UserDefaults
@@ -234,6 +237,20 @@ set (or, in Development mode, no checkout folder).
   the same save wins over the moved one. A provider alone moves nothing. Higher effort and bigger models use the shared
   5-hour usage limit faster. The next run picks the change up without a restart. The Codex runtime ignores
   these keys (see [Run profiles](../docs/configuration.md)).
+- **Acceptance gate (saved in symphony.yml)** sets `auto_review.acceptance_gate.mode`, the gate's kill switch
+  (see [the acceptance gate](../docs/acceptance_gate.md)). Each mode shows a line under it: **Off** never
+  runs the gate; **Shadow** records a verdict and moves nothing; **Enforce** approves to Merging, sends back
+  to In Progress and escalates to In Review. Choosing Enforce asks first ("PRs the gate approves merge
+  without a person reviewing them"), and Cancel leaves the mode as it was. A missing key shows Off,
+  Symphony's default. Save runs `symphony check` on a copy of the changed file first, as for Models, then
+  rewrites only that value, keeping its comment, or inserts `mode:`, `acceptance_gate:` and `auto_review:`
+  when they are missing. An `off` is written quoted (`mode: "off"`), which Symphony reads the same as `off`.
+  Symphony reads the mode on its next poll, without a restart. Under the picker, one line per repo shows the
+  gate's agreement stats from `/api/v1/state`'s `acceptance_gate.agreement`, for example
+  `symphony: 12 judged · 92% agreement · 0 unsafe approvals · not ready: at least 20 judged tickets (12 so
+  far)`, ending in `ready to enforce` once the stats say so. While Symphony isn't running the line reads
+  "Start Symphony to see the gate's record." A repo's own mode is set in its **Edit…** sheet (see
+  [Repos](#repos)), and the status menu's **Acceptance gate** rows switch a repo to Shadow or Off at once.
 - `LINEAR_API_KEY` and any extra environment variables are stored only in
   `~/Library/Application Support/symphony/release/secrets.json`, next to Symphony's `control_token`, as a
   JSON object of variable name to value. The file is readable only by you (`0600`), and agents' sandboxes
@@ -326,6 +343,13 @@ the app attaches to it as "running (external)": Start, Stop and Restart stay dis
 starts a second Symphony nor stops one it doesn't own. Open Dashboard opens the control URL in the browser; Open Logs
 opens `menubar-child.log`.
 
+Each poll waits up to 5 seconds for an answer. After one missed poll the menu keeps the last status, with
+"Symphony is slow to answer" under it. Only after two missed polls in a row does it show "Symphony isn't
+answering" (error) for a Symphony the app started, or stopped for an external one. That grace counts for an
+external Symphony too, so Start isn't offered while a busy one still holds the control URL; the cost is that
+after an external Symphony exits, Start is offered 5 to 10 seconds later. A Symphony the app started that
+exits unexpectedly shows the error at once.
+
 ## Usage-limit pause
 
 When Symphony holds runs for a provider usage limit (for example Claude's 5-hour window), it lists the hold
@@ -336,12 +360,19 @@ when it isn't today:
 - `Resuming: checking Claude limit…` while one canary run checks the limit after the reset.
 - `Holding new runs: Claude at 91%, resets ~14:05` while Symphony leaves headroom before the limit runs out.
 
+Symphony holds runs the same way when the model API can't be reached at all (a network or DNS outage), and
+the menu reads it as an outage, not a limit:
+
+- `Paused: Claude API unreachable (ENOTFOUND), retries ~14:05` while new runs wait for the next check.
+- `Resuming: checking Claude API…` while one canary run checks the API is back.
+
 The icon shows `pause.circle` and the title reads "paused" while any hold is in place. When you have also
 paused dispatch, your pause is listed first. Pause Dispatch and Resume Dispatch only control your pause:
 Symphony lifts a usage-limit hold on its own.
 
 The app posts a notification when a hold starts, for example "Symphony paused: Claude 5-hour limit, resumes
-~14:05", and when a provider's last hold clears, "Symphony resumed: Claude limit reset". It posts each once,
+~14:05" or "Symphony paused: Claude API unreachable", and when a provider's last hold clears, "Symphony
+resumed: Claude limit reset" or, after an outage, "Symphony resumed: Claude API reachable again". It posts each once,
 not on every poll. A headroom hold or a canary posts nothing, and nothing is posted for a hold already in
 place when the app opens or when Symphony starts answering again. While your pause is on, the resume
 notification is skipped, since dispatch stays paused.
@@ -469,6 +500,11 @@ while `symphony.yml` can't be read or no longer has the repo.
   `strategy` and `workflow` (Symphony reads `WORKFLOW.md` from its clone); switching to a folder sets
   them as Add Repo does. A new route applies to the next dispatch without a restart; a new source,
   workflow or base branch restarts Symphony as Add Repo does, asking first while agents run.
+  The **Acceptance gate** picker sets `repositories[<key>].acceptance_gate.mode`: **Inherit** (the mode in
+  Settings, named in brackets) removes the key, and an `acceptance_gate:` block it leaves empty; **Off**,
+  **Shadow** and **Enforce** write it, and Enforce asks first as in Settings. Under it, the repo's agreement
+  line shows as in Settings. A Save that changes the gate runs `symphony check` first and saves nothing when
+  it fails. The row then shows **Gate** with the repo's mode while it differs from the one in Settings.
 - **Disconnect…** asks first, then removes the entry from `repositories:` together with the comment
   lines right above it (with no blank line between), and leaves one blank line between its neighbours.
   It never deletes a folder: a local checkout and its branches stay as they are, and a managed clone
@@ -511,7 +547,10 @@ runs.
 
 When a newer release is out, the menu shows **Update available: vX (N changes)**. Choose **Update to vX**:
 the app downloads and verifies it, lets agent runs finish, swaps itself for the new version and relaunches,
-with Symphony running again. The steps are under [Install an update](#install-an-update). You can also
+with Symphony running again. The steps are under [Install an update](#install-an-update). The relaunched
+app then [checks that Symphony is healthy](#health-check-and-automatic-rollback) on the new version and puts
+the previous version back by itself when it isn't. The app can also
+[install updates by itself](#automatic-updates) when idle or at a set time. You can also
 update by running the [install script](#with-the-install-script) again after quitting the app.
 
 The app checks the latest release at
@@ -543,6 +582,9 @@ release's build as skipped in UserDefaults (`skippedReleases`), so it stays skip
 - Installing it by hand with Update to vX clears the skip.
 - A skip covers that one build. A newer release is offered as usual, with its own Skip This Version.
 
+A release an update [rolled back](#health-check-and-automatic-rollback) is recorded the same way, with the
+reason "rolled back": the line reads **Update rolled back: vX**, and **Retry vX** replaces Update to vX.
+
 ### Install an update
 
 **Update to vX** shows under Update available. After you confirm, the line under it shows each step:
@@ -565,9 +607,10 @@ release's build as skipped in UserDefaults (`skippedReleases`), so it stays skip
    `Symphony (previous).app` next to it (replacing an older one), moves the new app into place, and opens
    it. If a move fails, it puts the old app back and opens that instead. Its log is
    `~/Library/Caches/com.tonypine.symphony.bar/update-helper.log`.
-6. **Bring Symphony back:** the relaunched app starts Symphony from its new embedded binary, which removes
-   the old version's unpacked release, and, once it answers, resumes dispatch if the update paused it. A
-   pause you made before the update stays. If the helper had to put the old app back, an alert says so.
+6. **Bring Symphony back:** the relaunched app runs the [health check](#health-check-and-automatic-rollback):
+   it checks `symphony.yml` with its new embedded binary, starts Symphony from it, which removes the old
+   version's unpacked release, and, once it answers, resumes dispatch if the update paused it. A pause you
+   made before the update stays. If the helper had to put the old app back, an alert says so.
 
 Update is disabled, with the reason under it, when:
 
@@ -583,14 +626,128 @@ release with the [install script](#with-the-install-script) instead; it keeps th
 
 To undo an update, see [Rollback](#rollback).
 
+### Health check and automatic rollback
+
+After every update, by hand or automatic, the relaunched app checks that Symphony works on the new version.
+The line under the update items shows "Checking vX: …" while it does:
+
+1. **Config check:** `symphony check --config <symphony.yml>` with the new embedded binary must pass, so a
+   config error such as `workspaces.repo does not exist` is caught. Symphony starts only once it passes.
+2. **Answer:** when the app starts Symphony after the update (it ran before the update, or "Start Symphony
+   when the app opens" is on), Symphony must answer on its control URL within 2 minutes of starting. When
+   it doesn't start Symphony, only the config check runs.
+3. **No crash loop:** for 10 minutes after the update, an unexpected exit of Symphony starts it again (each
+   start must answer within 2 minutes), and the third unexpected exit in those 10 minutes fails the check.
+   A Stop you choose doesn't count. Outside those 10 minutes the app doesn't start Symphony again after an
+   unexpected exit, as before.
+
+If any of these fails, the app rolls back by itself:
+
+1. It **pins** the new version: the build is recorded in the [skip list](#skip-a-release) as rolled back,
+   before anything moves.
+2. It stops Symphony if it runs, starts the update helper in reverse and quits. The helper moves the new
+   version aside as `Symphony (rolled back).app`, out of the previous version's place, moves
+   `Symphony (previous).app` back to `Symphony.app`, and opens it. Its log is
+   `~/Library/Caches/com.tonypine.symphony.bar/rollback-helper.log`.
+3. The restored app starts Symphony if it ran before the update and resumes dispatch if the update paused
+   it. A notification says "Symphony rolled back to vY", naming the version that failed and the check it
+   failed. The line under the update items says the same, for example "v0.0.1.43 was rolled back: symphony
+   check failed: …", naming Symphony's log when Symphony didn't answer or kept exiting. Choosing the line
+   opens the failed version's release notes, with **Open Rollback Steps**, which opens [Rollback](#rollback).
+   The restored app doesn't check itself, so a rollback can't loop.
+
+The pinned version shows as **Update rolled back: vX** and is never installed by itself; a newer release
+is, as usual. **Retry vX** takes the place of Update to vX: after the same confirmation it clears the pin
+and installs vX again, health check included. Installing it by hand any other way clears the pin too.
+
+When there is no `Symphony (previous).app`, or the helper can't start or can't swap the apps, the app
+doesn't roll back. A notification and the line under the update items say so, with how to do it by hand (see
+[Rollback](#rollback)), and leaves Symphony as it is. A failed swap relaunches the new version, which says
+so and doesn't start Symphony unless "Start Symphony when the app opens" is on. The version stays pinned.
+
+Automatic rollback only fully protects an update from a version that already has it: the version put back
+must read the pin and what the failed version recorded. A version from before it is still put back, but it
+doesn't say why, doesn't bring Symphony and dispatch back as they were, and may offer the rolled-back release
+as a normal update again. The next update still checks itself, to the rolled-back release or any other: the
+record the failed version left is dropped once an update is pending or a newer version runs. Installing the
+failed version again by hand drops it too, since the helper only renames apps and a reinstall puts a new one in
+place: the app then opens as usual instead of saying the rollback failed.
+
+`Symphony (previous).app` is never deleted by an update or a health check, whether it passes or not.
+
+### What changed
+
+Once an update passes the blocking part of its [health check](#health-check-and-automatic-rollback) (the config
+check, and Symphony answering when the app starts it), the menu shows **Updated to vX (N changes)** above
+Check for Updates…, with N from the release notes when known, whether you installed it or the app did.
+Choosing it opens that release's notes, in the same window as Release Notes…, with **Open Release Page**.
+The app keeps the release's version, notes and page in UserDefaults (`lastUpdate`) across the relaunch, as
+the new version is now the latest and no check offers it. The line stays until the next update (or a
+rollback) or for 7 days.
+
+After an automatic update the app also posts a notification, "Symphony updated to vX", with the number of
+changes when known. An update you just confirmed with Update to vX gets none. A rollback always gets one, see
+[Health check and automatic rollback](#health-check-and-automatic-rollback). Notifications need Symphony to be
+allowed in System Settings > Notifications; when they aren't, the app shows an alert instead.
+
+### Automatic updates
+
+**Update mode** in Settings chooses how a newer release is installed:
+
+- **Manual** (the default): the menu shows the release and you install it with Update to vX. Nothing
+  installs by itself.
+- **Automatically when idle** and **Automatically at a set time**, below.
+
+With one of the automatic modes, the app installs a newer release by itself through the same steps as
+[Install an update](#install-an-update), without the confirmation:
+
+- **Automatically when idle**: when a check finds a release, the app installs it as soon as Symphony has
+  no active agent runs. Idle means `0 running` in Symphony's state, whether dispatch is paused or not, so
+  paused dispatch with runs still active is not idle; with Symphony stopped the app counts as idle. The app
+  never pauses dispatch to get there: while runs are active the menu shows the release as available, and
+  the app looks again on each status poll (every 5 seconds) and installs at the first idle moment. If a run
+  starts just as the update pauses dispatch, the update gives up, resumes dispatch, and waits for the next
+  idle moment.
+- **Automatically at a set time**: each day at the set time the app checks for a release. If there is one,
+  it pauses dispatch, waits for the active agent runs to finish without interrupting them (there is no
+  Update Now Anyway), installs, and the relaunched app resumes dispatch. If the runs are still active after
+  the **Restart timeout** (30 minutes by default), it resumes dispatch, installs nothing, and the menu says
+  "Update postponed"; the next attempt is the next day's time. A time missed while the Mac slept or the app
+  was closed (more than 10 minutes late) waits for the next day's time too, so dispatch isn't paused in the
+  middle of the day. A release found by another check waits for the set time.
+
+In both modes:
+
+- A release you [skip](#skip-a-release), or one an update [rolled back](#health-check-and-automatic-rollback),
+  is never installed by itself. A newer release is.
+- Nothing installs while Update is disabled (a development build, Development mode, no update signing key,
+  or an app folder you can't write to).
+- A pause you made before the update stays after it, as with Update to vX. Cancel Update stops waiting.
+- A failure shows on the line under the update items, with no alert: a failed download or verification,
+  for example. When idle, the app tries again after the next check (every 6 hours, or Check for Updates); at
+  a set time, the next day.
+- The relaunched app runs the [health check](#health-check-and-automatic-rollback), as after Update to vX:
+  `symphony check` must pass, Symphony must answer within 120 seconds of starting, and it must not exit
+  unexpectedly 3 times within 10 minutes of the update. If any of these fails, the app rolls back to
+  `Symphony (previous).app` by itself and pins the failed version, so neither mode installs it again; a
+  notification and the menu say which version was rolled back and why. **Retry vX** installs the pinned
+  version again by hand, health check included. A newer release is installed as usual.
+- Once the update is healthy, a notification says "Symphony updated to vX" and the menu shows
+  [Updated to vX](#what-changed).
+
 ## Rollback
 
 Each update, and each install over an older version, keeps the version it replaced next to the app as
 `Symphony (previous).app`, for example `~/Applications/Symphony (previous).app`. Only one previous version is
-kept. To go back to it:
+kept. When an update fails its [health check](#health-check-and-automatic-rollback) the app goes back to it by
+itself, moving the failed version aside as `Symphony (rolled back).app`. To go back to it by hand:
 
-1. Choose **Quit** from the menu (this stops Symphony).
-2. Swap the two apps, in Finder or a terminal:
+1. **With an [automatic update mode](#automatic-updates) on, set Update mode to Manual in Settings… first.**
+   Otherwise the version you go back to finds the newer release with its check at launch and, when idle,
+   installs it again right away. The running version can't skip itself: its menu offers no release. The
+   mode is kept in UserDefaults, so the version you go back to reads it.
+2. Choose **Quit** from the menu (this stops Symphony).
+3. Swap the two apps, in Finder or a terminal:
 
    ```bash
    cd ~/Applications
@@ -598,13 +755,16 @@ kept. To go back to it:
    mv "Symphony (previous).app" Symphony.app
    ```
 
-3. Open `Symphony.app` and start Symphony. Your settings and stored variables carry over. A version from
+4. Open `Symphony.app` and start Symphony. Your settings and stored variables carry over. A version from
    before the secrets file reads the variables from the login Keychain instead, as they were when they were
    copied into the file, so a variable changed in Settings since then has its old value there. Delete
    `Symphony (rolled back).app` once you no longer need it.
+5. The menu offers the release you left as **Update available: vX**. Choose **Skip This Version** (see
+   [Skip a release](#skip-a-release)): a skipped release is never installed by itself, so you can set Update
+   mode back to an automatic mode. A newer release is installed as usual. Or stay on Manual.
 
-The app then offers the newer release again as an update; choose **Skip This Version** to stop offering it
-(see [Skip a release](#skip-a-release)). To install an older release than the previous
+After an automatic rollback the failed version is already pinned, with **Retry vX** to install it again, so
+there is nothing to skip. To install an older release than the previous
 one, quit the app and run the install script with `SYMPHONY_RELEASE_TAG` set to that release's tag (see
 [With the install script](#with-the-install-script)).
 
@@ -650,7 +810,9 @@ never to Symphony.app: macOS passes Symphony.app's grants to the agents it start
 [One-time macOS permissions](../docs/configuration.md#one-time-macos-permissions)).
 
 A plain `make` build has no embedded Symphony, so it runs only in Development mode, and it can't update
-itself.
+itself. `make qa-app` builds this checkout's Symphony (an escript, so it needs the checkout's Erlang and
+Elixir) and embeds it as `make bundle` does, for Auto Review's `macos_app` QA (see
+[macOS app QA](../docs/configuration.md#macos-app-qa)). It sets no update key, so it can't update itself either.
 
 ### Run a checkout
 
@@ -704,11 +866,20 @@ build removes older builds' unpacked releases from its folder). It still takes t
 `symphony@127.0.0.1`, so while another Symphony release runs, start the app with its own `ERL_EPMD_PORT`, for
 example `ERL_EPMD_PORT=24369`, and use a `symphony.yml` whose `dashboard.port` is free (`0` picks one).
 
-Two more variables, read only in QA mode:
+Each `symphony check` the app runs (on Save in Settings, and before Restart) goes to the app's stderr in QA
+mode: its exit status and output, which start with the build that checked, `Symphony <version> (<commit>)`.
+
+Three more variables, read only in QA mode:
 
 - `SYMPHONY_BAR_UPDATE_URL` replaces GitHub's `releases/latest` URL for update checks, for a local update feed
   that answers in the same format. An update in QA mode relaunches the app with its environment, so the new
   version is in QA mode too, with the same folders.
+- `SYMPHONY_QA_OPENROUTER_URL` points Settings' OpenRouter section (Test connection, the Models list) at a stub
+  OpenRouter instead of `https://openrouter.ai`, so QA never needs a real key: the API base `symphony
+  openrouter-stub` prints, such as `http://127.0.0.1:4100/api`. Only an `http` or `https` URL on a loopback host
+  counts. The Symphony the app runs gets it too and, also only in QA mode, checks and runs OpenRouter models
+  against the stub. Outside QA mode the app always talks to `https://openrouter.ai`, whatever the environment
+  says. See [OpenRouter in QA](../docs/configuration.md#qa-passes).
 - `SYMPHONY_BAR_QA_SCRIPTED=1` lets a script drive the app without Accessibility access. The app presses the
   menu item whose title the first line of a file in `commands/` holds (files are taken in name order and
   deleted; a name starting with `.` is skipped, so write one and rename it). As a click would, it presses

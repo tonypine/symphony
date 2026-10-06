@@ -186,6 +186,23 @@ final class StatusMenuTests: XCTestCase {
         )
     }
 
+    func testDetailLinesSaySymphonyIsSlowToAnswerUnderItsLastAnswer() {
+        XCTAssertEqual(
+            StatusMenu.detailLines(
+                .running(snapshot, external: false),
+                slowToAnswer: true,
+                waitingForKeychain: true,
+                controlError: "Couldn't pause Symphony: HTTP 500"
+            ),
+            [
+                "2 running · 1 retrying", "Symphony is slow to answer", "Waiting for Keychain access…",
+                "Couldn't pause Symphony: HTTP 500",
+            ]
+        )
+        // Still running, not a problem.
+        XCTAssertEqual(StatusMenu.statusTitle(.running(snapshot, external: false)), "Symphony is running")
+    }
+
     func testDetailLinesShowTheKeychainWaitBeforeTheRestart() {
         XCTAssertEqual(StatusMenu.detailLines(.stopped, waitingForKeychain: true), ["Waiting for Keychain access…"])
         XCTAssertEqual(
@@ -271,6 +288,30 @@ final class StatusMenuTests: XCTestCase {
             StatusMenu.usageLimitLine(.init(provider: "openai", phase: .headroom), now: sameDay, timeZone: utc),
             "Holding new runs: Codex"
         )
+    }
+
+    func testAPIUnreachableLines() {
+        let sameDay = pausedAt.addingTimeInterval(-3600)
+        var outage = StateSnapshot.UsageLimit(
+            phase: .paused, resumeAt: pausedAt.addingTimeInterval(120), reason: "model_api_unreachable", error: "ENOTFOUND"
+        )
+
+        XCTAssertEqual(
+            StatusMenu.usageLimitLine(outage, now: sameDay, timeZone: utc),
+            "Paused: Claude API unreachable (ENOTFOUND), retries ~12:18"
+        )
+        outage.error = nil
+        outage.resumeAt = nil
+        XCTAssertEqual(StatusMenu.usageLimitLine(outage, now: sameDay, timeZone: utc), "Paused: Claude API unreachable")
+
+        outage.phase = .canary
+        XCTAssertEqual(StatusMenu.usageLimitLine(outage, now: sameDay, timeZone: utc), "Resuming: checking Claude API…")
+
+        var usageLimit = claudeLimit
+        usageLimit.reason = "claude_usage_limit"
+        XCTAssertEqual(StatusMenu.usageLimitLine(usageLimit, now: sameDay, timeZone: utc), "Paused: Claude limit, resumes ~12:18")
+        usageLimit.phase = .canary
+        XCTAssertEqual(StatusMenu.usageLimitLine(usageLimit, now: sameDay, timeZone: utc), "Resuming: checking Claude limit…")
     }
 
     func testLimitNames() {

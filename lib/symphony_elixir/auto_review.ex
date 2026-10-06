@@ -22,7 +22,12 @@ defmodule SymphonyElixir.AutoReview do
     `auto_review.max_fix_attempts` is used up;
   - a pass whose QA agent runs into the provider's usage limit gets no verdict: the
     issue stays in Auto Review, the orchestrator holds the provider's runs until the
-    limit resets (`agent.usage_limit.auto_pause`), and the pass runs again after that;
+    limit resets (`agent.usage_limit.auto_pause`), and the pass runs again after that. On
+    Linear a note on the issue says until when (`SymphonyElixir.AutoReview.HoldNote`): a pass
+    held again rewrites it, and the pass that runs deletes it;
+  - a `blocked` the QA agent didn't decide itself (it crashed, its dev server or emulator
+    didn't start) is not kept for the head once it moved the issue on: an issue moved back
+    to Auto Review on the same head gets a fresh pass instead of the old verdict;
   - a pass that ends after its issue left Auto Review, its PR merged or closed, or its
     head moved on writes its report but leaves the issue where it is.
 
@@ -34,9 +39,12 @@ defmodule SymphonyElixir.AutoReview do
   `blocked` doesn't move the issue straight to `In Review`: it asks
   `SymphonyElixir.AcceptanceGate.Runner` for a gate pass on the PR head (`run_gate/2`, see
   `SymphonyElixir.AcceptanceGate`), and the issue moves on once the gate has a verdict. The
-  order is CI, then QA, then the gate. In `shadow` mode the verdict is advisory and the issue
-  goes to `In Review` as before; a QA `fail` never reaches the gate. In `enforce` mode the
-  verdict moves the issue (`SymphonyElixir.AcceptanceGate.enforced_target/4`): `approve` to
+  order is CI, then QA, then the gate, and the gate never runs alongside QA: a green poll while a
+  QA pass is in flight for the issue asks for no gate pass, a verdict that arrives while one is in
+  flight moves nothing until that pass reports, and a verdict stands only on the QA result it
+  followed (a new one on the head asks the gate again). In `shadow` mode the verdict is advisory
+  and the issue goes to `In Review` as before; a QA `fail` never reaches the gate. In `enforce`
+  mode the verdict moves the issue (`SymphonyElixir.AcceptanceGate.enforced_target/4`): `approve` to
   `Merging`, where GitHub auto-merge lands the PR; `rework` back to `In Progress` with the unmet
   criteria as continuation context, sharing `auto_review.max_fix_attempts` with QA fails (the
   rework past it goes to `In Review`); `escalate` to `In Review`. The mode is read again on every
@@ -55,6 +63,7 @@ defmodule SymphonyElixir.AutoReview do
   require Logger
 
   alias SymphonyElixir.{AcceptanceGate, Config, Notifications, QaAgent, QaRunner, RunStore, Tracker, UsageLimit}
+  alias SymphonyElixir.AutoReview.HoldNote
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.HumanReview
   alias SymphonyElixir.Linear.{Issue, Usage}
@@ -155,13 +164,17 @@ defmodule SymphonyElixir.AutoReview do
 
   When the PR head already has a QA result, the stored outcome is applied again: a
   failed move is retried, and an issue back in Auto Review on the same SHA after a
-  `fail` counts as another failed fix attempt. Otherwise a QA pass is requested from
-  the runner (`opts[:qa_runner]`, default `SymphonyElixir.QaRunner`).
+  `fail` counts as another failed fix attempt, while one back after a `blocked` the QA
+  agent didn't decide gets a fresh pass. Otherwise a QA pass is requested from the
+  runner (`opts[:qa_runner]`, default `SymphonyElixir.QaRunner`).
 
   With the acceptance gate on, a stored QA `pass`, `skip` or `blocked` applies the gate's
   stored verdict for the SHA, or asks the gate runner (`opts[:gate_runner]`, default
   `SymphonyElixir.AcceptanceGate.Runner`) for a pass when it has none. A judged SHA never
-  starts another gate run.
+  starts another gate run while its QA result stands.
+
+  While a QA pass is in flight for the issue, the poll does nothing: that pass applies its own
+  outcome, so a QA result stored before it never reaches the gate.
   """
   @spec on_green(Issue.t(), map(), map(), Schema.t(), keyword()) :: tuple()
   def on_green(%Issue{} = issue, record, ci_status, %Schema{} = settings, opts) do
@@ -175,6 +188,14 @@ defmodule SymphonyElixir.AutoReview do
       not is_binary(sha) or sha == "" ->
         {:qa_waiting, issue_id, :missing_head_sha}
 
+      # The pass in flight reports its own outcome, and asks for the gate itself: a QA result
+      # stored before it says nothing about what it will find.
+      qa_in_flight(issue_id, opts) ->
+        {:qa_running, issue_id}
+
+      rerun_on_return?(record, sha) ->
+        rerun_qa(issue, record, ci_status, settings, opts)
+
       Map.get(record, :qa_sha) == sha and is_binary(Map.get(record, :qa_verdict)) ->
         reapply_outcome(issue, record, settings, opts)
 
@@ -185,6 +206,39 @@ defmodule SymphonyElixir.AutoReview do
       true ->
         request_qa(issue, record, sha, ci_status, settings, opts)
     end
+  end
+
+  # A `blocked` the QA agent didn't decide (it crashed, hit a usage limit with `auto_pause` off, its
+  # dev server, emulator or browser didn't start, or git failed) says nothing about the PR. Once it
+  # moved the issue on, a return to Auto Review on the same head runs the pass again instead of
+  # handing the old verdict to the gate.
+  defp rerun_on_return?(record, sha) do
+    Map.get(record, :qa_sha) == sha and Map.get(record, :qa_verdict) == "blocked" and
+      infra_blocked?(record) and Map.get(record, :qa_applied) == true
+  end
+
+  # A record stored before `qa_infra_blocked` existed has no flag: its reason tells, as an error's
+  # reason is one of Symphony's own texts and the agent's is its free text.
+  defp infra_blocked?(record) do
+    case Map.get(record, :qa_infra_blocked) do
+      nil -> error_blocked_reason?(Map.get(record, :qa_reason))
+      flag -> flag == true
+    end
+  end
+
+  # The gate's verdict for the head went with the old QA verdict, so it is dropped too: the fresh
+  # pass asks the gate again.
+  defp rerun_qa(issue, record, ci_status, settings, opts) do
+    qa_attrs = Map.new(~w(qa_sha qa_verdict qa_reason qa_target_state qa_applied qa_infra_blocked)a, &{&1, nil})
+    attrs = Map.merge(qa_attrs, %{gate_sha: nil, gate_verdict: nil})
+    update_ci_check(Keyword.get(opts, :run_store, RunStore), record, attrs)
+
+    Logger.info(
+      "QA pass runs again: #{issue.identifier} came back to #{state(settings)} after an infrastructure block " <>
+        "issue_id=#{issue.id} sha=#{Map.get(record, :qa_sha)}"
+    )
+
+    handle_green(issue, Map.merge(record, attrs), ci_status, settings, opts)
   end
 
   # The QA agent runs on `auto_review.kind` (else `agent.kind`), so a Codex QA agent waits on the Codex limit.
@@ -242,10 +296,19 @@ defmodule SymphonyElixir.AutoReview do
   defp gate_after_qa?(verdict, settings), do: verdict in [:pass, :skip, :blocked] and AcceptanceGate.enabled?(settings)
 
   defp gate_outcome(issue, record, sha, settings, opts) do
-    if Map.get(record, :gate_sha) == sha and is_binary(Map.get(record, :gate_verdict)),
+    if Map.get(record, :gate_sha) == sha and is_binary(Map.get(record, :gate_verdict)) and follows_qa?(record),
       do: apply_gate_verdict(issue, record, settings, opts),
       else: request_gate(issue, record, sha, settings, opts)
   end
+
+  # A gate verdict stands on the QA result it followed (`gate_qa_at`, the result's `qa_updated_at`):
+  # once QA reports again on the head, the gate judges again. A record stored before `gate_qa_at`
+  # existed has no key, and its verdict stands.
+  defp follows_qa?(record), do: Map.get(record, :gate_qa_at, Map.get(record, :qa_updated_at)) == Map.get(record, :qa_updated_at)
+
+  # The head SHA of the QA pass in flight for the issue, else nil. `opts[:qa_running]` stands in for
+  # `QaRunner.running/0` in tests.
+  defp qa_in_flight(issue_id, opts), do: Map.get(Keyword.get(opts, :qa_running, &QaRunner.running/0).(), issue_id)
 
   defp request_gate(%Issue{id: issue_id} = issue, record, sha, settings, opts) do
     job = %{
@@ -271,6 +334,8 @@ defmodule SymphonyElixir.AutoReview do
   `SymphonyElixir.AcceptanceGate.Runner` task. An inconclusive pass below the limit leaves the
   issue in Auto Review, and the next green poll asks for another pass. A verdict that comes after
   the issue left Auto Review, or after its PR merged, closed or moved on, is kept but moves nothing.
+  So is one that comes while a QA pass is in flight for the issue, or after the QA result it
+  followed was replaced.
 
   The repository's settings are read again first, so a mode changed since the request applies.
   """
@@ -280,6 +345,9 @@ defmodule SymphonyElixir.AutoReview do
     settings = current_settings(Map.get(record, :repo_key), job.settings)
 
     case Keyword.get(opts, :acceptance_gate, AcceptanceGate).judge(%{job | settings: settings}, opts) do
+      {:ok, %{unavailable: %{}}} ->
+        {:gate_waiting, issue.id, :model_api_unreachable}
+
       {:ok, %{verdict: nil}} ->
         {:gate_inconclusive, issue.id, sha}
 
@@ -294,10 +362,30 @@ defmodule SymphonyElixir.AutoReview do
             gate_applied: false
           })
 
-        case moved_on(issue, record, sha, settings, opts) do
+        case moved_on(issue, record, sha, settings, opts) || qa_moved(issue, job.record, sha, opts) do
           nil -> apply_gate_verdict(issue, record, settings, opts)
           reason -> gate_unapplied(issue, sha, decision.verdict, reason)
         end
+    end
+  end
+
+  # The gate follows QA and never runs alongside it. A verdict that arrives while a QA pass is in
+  # flight for the issue is kept but moves nothing: that pass reports first, and a `fail` sends the
+  # issue back to In Progress as usual. A verdict whose QA result was replaced while it ran (QA
+  # reported again, or runs again, on the head) moves nothing either, and the next green poll asks
+  # the gate again for the new result (`follows_qa?/1`).
+  defp qa_moved(issue, record, sha, opts) do
+    stored = stored_ci_check(record, opts)
+
+    cond do
+      qa_sha = qa_in_flight(issue.id, opts) ->
+        "a QA pass is still running on `#{String.slice(qa_sha, 0, 12)}`"
+
+      is_map(stored) and (Map.get(stored, :qa_sha) != sha or Map.get(stored, :qa_updated_at) != Map.get(record, :qa_updated_at)) ->
+        "the QA result it followed was replaced since the gate started"
+
+      true ->
+        nil
     end
   end
 
@@ -454,8 +542,12 @@ defmodule SymphonyElixir.AutoReview do
       end
 
     case outcome do
-      %{verdict: :usage_limited} -> hold_pass(issue, sha, outcome, opts)
-      _verdict -> apply_or_report(issue, record, sha, outcome, settings, opts)
+      %{verdict: :usage_limited} ->
+        hold_pass(issue, record, sha, outcome, opts)
+
+      _verdict ->
+        withdraw_hold_note(issue, record, opts)
+        apply_or_report(issue, record, sha, outcome, settings, opts)
     end
   end
 
@@ -466,23 +558,48 @@ defmodule SymphonyElixir.AutoReview do
     end
   end
 
-  # A pass that ran into the provider's usage limit says nothing about the PR: it stores no
-  # verdict, writes no QA report and leaves the issue in Auto Review. The orchestrator holds the
-  # provider's runs until the limit resets, as for an agent run, and the first green CI poll after
-  # that asks for the same pass again (see `handle_green/5`).
-  defp hold_pass(issue, sha, outcome, opts) do
+  # A pass that ran into the provider's usage limit, or couldn't reach the model API, says nothing
+  # about the PR: it stores no verdict, writes no QA report and leaves the issue in Auto Review.
+  # The orchestrator holds the provider's runs until the limit resets (or a probe reaches the
+  # API), as for an agent run, and the first green CI poll after that asks for the same pass
+  # again (see `handle_green/5`). A note on the issue says until when (`HoldNote`).
+  defp hold_pass(issue, record, sha, outcome, opts) do
     hold = Keyword.get(opts, :usage_limit_hold, &Orchestrator.hold_for_usage_limit/2)
+    cause = if UsageLimit.api_unreachable?(outcome.usage_limit), do: "could not reach the model API", else: "hit the usage limit"
 
     case hold.(outcome.usage_limit, issue.identifier) do
       {:ok, %{resume_at: resume_at}} ->
-        Logger.info("QA pass hit the usage limit for #{issue.identifier} sha=#{sha}; no verdict, running it again after #{DateTime.to_iso8601(resume_at)}")
+        Logger.info("QA pass #{cause} for #{issue.identifier} sha=#{sha}; no verdict, running it again after #{DateTime.to_iso8601(resume_at)}")
+        post_hold_note(issue, record, outcome.usage_limit, resume_at, opts)
         {:qa_usage_limited, issue.id, resume_at}
 
       other ->
-        Logger.warning("QA pass hit the usage limit for #{issue.identifier} sha=#{sha}; no verdict, but the hold was not recorded: #{inspect(other)}")
+        Logger.warning("QA pass #{cause} for #{issue.identifier} sha=#{sha}; no verdict, but the hold was not recorded: #{inspect(other)}")
         {:qa_usage_limited, issue.id, nil}
     end
   end
+
+  # The CI check record remembers the note, so a pass reads the issue's comments only to delete it.
+  defp post_hold_note(issue, record, usage_limit, resume_at, opts) do
+    case HoldNote.post(issue, usage_limit, resume_at, hold_note_opts(opts)) do
+      :ok -> update_ci_check(Keyword.get(opts, :run_store, RunStore), record, %{qa_hold_note: true})
+      :skipped -> :ok
+      {:error, reason} -> Logger.warning("Failed to post the QA hold note for #{issue.identifier}: #{inspect(reason)}")
+    end
+  end
+
+  # The pass ran, so the issue no longer waits on the usage limit. A note that could not be
+  # deleted is tried again on the next pass.
+  defp withdraw_hold_note(issue, %{qa_hold_note: true} = record, opts) do
+    case HoldNote.withdraw(issue, hold_note_opts(opts)) do
+      :ok -> update_ci_check(Keyword.get(opts, :run_store, RunStore), record, %{qa_hold_note: false})
+      {:error, reason} -> Logger.warning("Failed to remove the QA hold note for #{issue.identifier}: #{inspect(reason)}")
+    end
+  end
+
+  defp withdraw_hold_note(_issue, _record, _opts), do: :ok
+
+  defp hold_note_opts(opts), do: Keyword.take(opts, [:linear_client, :settings, :now, :to_local])
 
   # A pass takes minutes and `issue` is from when it was requested: a human may have approved
   # or merged the PR, or a new commit may have been pushed, in the meantime. A state that
@@ -577,7 +694,7 @@ defmodule SymphonyElixir.AutoReview do
     else
       case changed_paths(record, sha, opts) do
         {:ok, paths} -> Selection.decide(issue, paths, config, dev_server?: dev_server?(settings))
-        {:error, reason} -> {:blocked, "could not list the PR's changed files: #{inspect(reason)}"}
+        {:error, reason} -> {:blocked, blocked_reason({:changed_files_unlisted, reason})}
       end
     end
   end
@@ -676,24 +793,60 @@ defmodule SymphonyElixir.AutoReview do
   end
 
   # With `agent.usage_limit.auto_pause` off, a usage limit is `blocked` like any other error, as
-  # an agent run that hits it fails.
+  # an agent run that hits it fails. A model API the agent couldn't reach is held either way: it
+  # says nothing about the PR.
   defp error_outcome(reason, settings) do
     case usage_limit(reason) do
-      %{} = info when settings.agent.usage_limit.auto_pause ->
-        %{verdict: :usage_limited, usage_limit: info, reason: "the QA agent hit the #{UsageLimit.limit_label(info)}"}
+      %{} = info ->
+        if UsageLimit.api_unreachable?(info) do
+          %{verdict: :usage_limited, usage_limit: info, reason: "the QA agent could not reach the model API (#{info.error})"}
+        else
+          usage_limit_outcome(reason, info, settings)
+        end
 
-      _other ->
+      nil ->
         %{verdict: :blocked, reason: blocked_reason(reason)}
     end
   end
 
-  @doc "The usage-limit info of a `SymphonyElixir.QaAgent.run/3` error caused by a provider usage limit, else nil."
+  defp usage_limit_outcome(reason, info, settings) do
+    if settings.agent.usage_limit.auto_pause,
+      do: %{verdict: :usage_limited, usage_limit: info, reason: "the QA agent hit the #{UsageLimit.limit_label(info)}"},
+      else: %{verdict: :blocked, reason: blocked_reason(reason)}
+  end
+
+  @doc """
+  The hold info of a `SymphonyElixir.QaAgent.run/3` error caused by a provider usage limit, or by
+  a model API the agent couldn't reach (`source: :api_unreachable`), else nil.
+  """
   @spec usage_limit(term()) :: map() | nil
   def usage_limit({:qa_agent_failed, reason}), do: usage_limit(reason)
   def usage_limit({:usage_limited, %{} = info}), do: info
+  def usage_limit({:model_api_unreachable, %{} = info}), do: info
   def usage_limit(_reason), do: nil
 
-  @doc "The `blocked` reason the QA report gives for a `SymphonyElixir.QaAgent.run/3` error."
+  # How every `blocked` reason `blocked_reason/1` gives starts. The legacy-record test in
+  # `auto_review_qa_test.exs` runs every clause of it against this list.
+  @error_blocked_reasons [
+    "the QA agent reached the per-issue token limit ",
+    "QA does not run on remote workers yet ",
+    "the dev server ",
+    "`npx` (Node.js) is not on Symphony's PATH",
+    "`auto_review.playbooks.web.browser_mcp` is invalid: ",
+    "the QA agent's answer could not be read: ",
+    "the QA agent could not finish: ",
+    "could not list the PR's changed files: "
+  ]
+
+  defp error_blocked_reason?(reason) when is_binary(reason),
+    do: String.starts_with?(reason, @error_blocked_reasons) or String.contains?(reason, "` is not installed on the Symphony host; ")
+
+  defp error_blocked_reason?(_reason), do: false
+
+  @doc """
+  The `blocked` reason the QA report gives for a `SymphonyElixir.QaAgent.run/3` error, or for the
+  PR's changed files that git could not list (`{:changed_files_unlisted, reason}`).
+  """
   @spec blocked_reason(term()) :: String.t()
   def blocked_reason({:qa_token_limit, total, limit}),
     do: "the QA agent reached the per-issue token limit (#{total} of #{limit} tokens)"
@@ -713,6 +866,7 @@ defmodule SymphonyElixir.AutoReview do
 
   def blocked_reason({:qa_browser_mcp_invalid, errors}), do: "`auto_review.playbooks.web.browser_mcp` is invalid: #{errors}"
   def blocked_reason({:malformed_qa_response, reason}), do: "the QA agent's answer could not be read: #{inspect(reason)}"
+  def blocked_reason({:changed_files_unlisted, reason}), do: "could not list the PR's changed files: #{inspect(reason)}"
   def blocked_reason(reason), do: "the QA agent could not finish: #{inspect(reason)}"
 
   # Stores the result for the head SHA, rewrites the QA report, then moves the issue.
@@ -733,12 +887,16 @@ defmodule SymphonyElixir.AutoReview do
         qa_target_state: target_state,
         qa_applied: false,
         qa_run_id: Map.get(outcome, :run_id),
-        qa_updated_at: DateTime.utc_now()
+        qa_updated_at: DateTime.utc_now(),
+        # A `blocked` with no agent result is an error, not the QA agent's verdict.
+        qa_infra_blocked: verdict == :blocked and not Map.has_key?(outcome, :result)
       }
       |> Map.merge(verdict_attrs(verdict, escalated?, fix_attempts, sha, result))
       |> keep_fix_attempts(issue, settings)
 
     update_ci_check(Keyword.get(opts, :run_store, RunStore), record, attrs)
+
+    Logger.info("QA outcome issue_id=#{issue.id} issue_identifier=#{issue.identifier} verdict=#{verdict} sha=#{sha} target_state=#{target_state}")
 
     publish_report(
       issue,

@@ -47,11 +47,17 @@ exceptions when a repo legitimately needs something like `~/.npmrc`.
 runtime's `sandbox.filesystem.allowWrite` so the agent can write under specific host paths beyond
 the Claude Code default (workspace + `/tmp`). Codex/SRT already authors a broader writable set
 under `/tmp` and the workspace, so this knob only affects the Claude runtime today.
-On macOS, Symphony also adds the per-user `TemporaryItems` dir
-(`$(getconf DARWIN_USER_TEMP_DIR)TemporaryItems`) to a local Claude run's `allowWrite`.
-Foundation stages atomic file writes there in a sandboxed process, so `swift build` and
-`swift test` fail without it. The rest of the per-user temp dir stays read-only: Symphony keeps
-each session's Claude settings and the MCP shim there.
+On macOS, a sandboxed process's Foundation stages every atomic file write in the per-user
+`TemporaryItems` dir (`$(getconf DARWIN_USER_TEMP_DIR)TemporaryItems`), so `swift build` and
+`swift test` fail in an agent's sandbox. That dir can't be granted: macOS refuses to read it, so
+Claude Code withholds an `allowWrite` entry for it (`withheld allowWrite …/TemporaryItems: its
+link chain cannot be followed safely` in its debug log). Instead, a local Claude session's env
+holds `DIRHELPER_USER_DIR_SUFFIX=symphony/none`, a suffix libc rejects: the per-user temp dir
+then falls back to the session's `$TMPDIR`, and Foundation stages each atomic write beside the
+file it replaces, where the agent may already write. The per-user cache dir has no value then
+either, so `SWIFTPM_MODULECACHE_OVERRIDE` points SwiftPM's module cache at the run's temp folder.
+The per-user temp dir stays read-only: Symphony keeps each session's Claude settings and the MCP
+shim there.
 
 Both runtimes also deny writes to the workspace's own instructions and workflow files:
 `WORKFLOW.md`, `symphony.yml`, the project `.claude/` settings, agents, commands and hooks, and the
@@ -111,6 +117,31 @@ so one run can change what a later run reads: Hex checks each package tarball ag
 in `mix.lock`, and `elixir_make` checks each precompiled archive against the package's checksum
 file, before using it. The host's own `~/.hex` and `~/Library/Caches` stay read-only, and the
 folder never holds `hex.config`, which can hold Hex API and repo keys.
+
+### Git metadata
+
+A local agent commits in its workspace, so it may write the workspace's git dir and, for a
+worktree (`workspace.strategy: worktree`), the shared repo's `.git`. Some files there change what
+git runs, in the agent's own `git` commands and in Symphony's on the host: the config (filter
+drivers, `core.fsmonitor`, `core.hooksPath`), the hooks and `info/attributes`. In each of those git
+dirs, every local runtime denies writes to:
+
+- `config`, `config.worktree`, `hooks`, `info` and `packed-refs`,
+- every worktree's `worktrees/<id>/config` and `worktrees/<id>/config.worktree`,
+- every submodule's `modules/<name>/config`, at any depth.
+
+Objects and refs stay writable, so `git add`, `git commit` and `git fetch` work. In a worktree
+those objects land in the shared `<repo>/.git/objects` and outlive the workspace until git
+collects them.
+
+| Runtime | How the git metadata is write-protected |
+| --- | --- |
+| Claude | `sandbox.filesystem.denyWrite` entries, globs for the worktree and submodule files, and an `Edit` rule for each one, which refuses the file tools too. Claude Code itself lets a worktree's session write the shared `.git` and protects only its `config`, the session's own `config.worktree` and `hooks`. |
+| Codex with SRT | SRT `denyWrite` entries, globs for the worktree and submodule files. |
+| Native Codex | A read-only entry for each path in the managed permission profile. The profile takes literal paths, so the worktree and submodule globs become the files that exist when the session starts. Codex itself protects a `.git` inside each writable root, but not the git dirs Symphony adds as writable roots. Codex may drop the profile's entries (see [configuration](configuration.md)), so use SRT when they must hold. |
+
+An SSH worker's workspace gets none of these entries: its git dirs aren't on this host. Its
+workspace `.git` stays write-protected with the other protected paths.
 
 ### Workspace hooks run outside the sandbox
 
@@ -177,20 +208,83 @@ on the credential paths, allow-writes scoped to the issue workspace, and an `ext
 policy so SRT — not nested `sandbox-exec` — owns command enforcement. Use this when native Codex
 deny-list enforcement is not enough.
 
-**Git write model.** SRT settings always deny writes to the high-risk Git metadata files
-`config`, `config.worktree`, `hooks`, `info`, `packed-refs`, and any `worktrees/*/config(.worktree)`
-entries on every discovered Git metadata root. Writes to `.git/objects` remain allowed so `git add`
-and `git commit` work in both clone workspaces and linked worktrees. For linked worktrees
-(`workspace.strategy: worktree`, `workspace.repo: <source>`), those object writes target the
-shared `<source>/.git/objects` database; this is an intentional cleanup/blast-radius tradeoff so
-SRT-wrapped Codex can commit normally while config, hooks, packed refs, and other high-risk Git
-metadata stay write-protected.
+**Git write model.** SRT denies writes to the git config files on every git dir the agent may
+write; see [Git metadata](#git-metadata) for the list and for the other runtimes.
 
 **Known issue.** Codex app-server sessions wrapped by SRT can fail while writing stdout with
 `Resource temporarily unavailable (os error 35)`, surfaced by Symphony as
 `:codex_stdio_write_failed`. Symphony drains and compacts app-server output after receipt, but this
 failure occurs before the frame reaches Symphony. Disable SRT for Codex on stability-sensitive runs
 until the Codex/SRT stdio behavior is hardened.
+
+### Host-side git
+
+Symphony runs git on the host, outside every agent sandbox and as the operator, to create, reuse
+and back up worktrees and to read branches for reviews and gates. Agents commit in the shared repo,
+so its local config (`.git/config`, a `config.worktree`, and the files they include) is where an
+agent would put a command for that git to run, and a branch's `.gitattributes` picks which files
+the command runs on. Every host-side git call:
+
+- reads no global or system config (`GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` are `/dev/null`)
+  and runs no hook, file-system monitor or credential helper, nor an `ext::` or `git://` remote;
+- runs no `core.askPass` when an HTTPS remote asks for credentials git doesn't have
+  (`-c core.askPass=`), and doesn't prompt on a terminal either (`GIT_TERMINAL_PROMPT=0`), so the
+  call fails instead. The empty `core.askPass` also turns off git's `SSH_ASKPASS` fallback; an
+  askpass the operator sets in `GIT_ASKPASS` still runs, since git reads it before the config;
+- still reads the repo's local config, which holds the remotes and branches Symphony works with.
+  Before a command that can read or write work-tree files (anything but `rev-parse`, `fetch`,
+  `log`, `show` and a few other read-only commands), Symphony lists the filter drivers
+  (`filter.<name>.clean`, `.smudge` and `.process`) and merge drivers (`merge.<name>.driver`)
+  defined in that config and in every file it includes, whatever the include's condition. It
+  blanks each filter driver with `-c` and sets its `required` to `false`, so git writes and reads
+  files as the repo stores them. In a repo that uses Git LFS the worktree gets the pointer files,
+  and an agent that needs the content runs `git lfs pull` in its sandbox. It replaces each merge
+  driver with `git merge-file`, so `merge` (the acceptance gate, `github_sync_base`) merges those
+  files as git does when no driver is set, conflict markers included;
+- doesn't run, and returns an error, when that config can't be read or names a driver with `=` in
+  its name, which `-c` can't address;
+- runs `diff`, `log` and `show` with `--no-ext-diff --no-textconv`, so the diffs of reviews, the
+  acceptance gate and the auto-merge fingerprint run no `diff.external`, `diff.<name>.command` or
+  `diff.<name>.textconv`, and show the files as the repo stores them;
+- runs `fetch`, `ls-remote` and `pull` with `--upload-pack=git-upload-pack` and `push` with
+  `--receive-pack=git-receive-pack`: the config's `remote.<name>.uploadpack` and `.receivepack`
+  would run as the operator for a remote on the same machine, and a `-c` can't override them.
+  `core.alternateRefsCommand=true` keeps a fetch from running the config's command for an
+  alternate object store;
+- checks and makes no signature: `log.showSignature`, `merge.verifySignatures` and `push.gpgSign`
+  are off, so the config's `gpg.program` doesn't run on a commit an agent signed;
+- leaves nested repos alone: a nested repo in a workspace keeps its own config, which the agent
+  writes. `diff.ignoreSubmodules=dirty` keeps `status` from running git inside one,
+  `submodule.recurse=false` keeps `checkout` and `reset` out, and the orphan backup's `add -A`
+  starts from an empty index.
+
+Host-side git still honors these keys of the repo's local config that can lead it to run a command:
+
+- `remote.<name>.url`, `.pushurl`, `.vcs` and `url.<base>.insteadOf` (or `.pushInsteadOf`) can
+  point a fetch or push at another repo. A `<helper>::<address>` URL runs `git-remote-<helper>`,
+  which git looks up in its own folder and on `PATH`, not in the repo.
+- `gpg.program` (and `gpg.<format>.program`, `gpg.ssh.defaultKeyCommand`) runs only when git signs
+  or checks a signature, which host-side git doesn't do (see above).
+- `core.editor`, `sequence.editor`, `core.pager` and `pager.<command>` run only when git talks to a
+  terminal, which Symphony's git never does.
+
+On an SSH worker, the scripts Symphony runs over SSH to fetch, create, reuse, back up and remove a
+worktree, to put a worktree on the base branch for `after_create`, and to read the review agent's
+diff of a workspace, run git as the worker's operator account with the same protections. They
+define a `symphony_git` shell function that sets the same environment and `-c` overrides, and
+lists and blanks the filter drivers in the worker repo's `config`, its `config.worktree` and
+every file they include before each command that can read or write work-tree files. It also
+refuses to run git when an include path holds a newline, since the shell reads the list line by
+line. Their `fetch origin` gets `--upload-pack=git-upload-pack` as on the host, and the review
+agent's `diff`, `log` and `show` get `--no-ext-diff --no-textconv`. They replace no merge driver: they never merge.
+
+Limits:
+
+- The drivers are listed just before the command runs, so one written to the config in between
+  still runs. Every local runtime denies agent writes to the repo's config files (see the Git
+  write model above), but native Codex may drop those entries.
+- Only `diff`, `log` and `show` get `--no-ext-diff --no-textconv`. Symphony runs no other command
+  that prints a diff, such as `blame`, `format-patch` or `range-diff`, on the host or a worker.
 
 ### Network access controls
 

@@ -1338,6 +1338,8 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
       assert log =~ "Workspace worktree preparation failed"
       assert log =~ "auto/MT-BAD-BASE"
+      # git's stderr
+      assert log =~ "fatal: invalid reference: origin/does-not-exist"
     after
       File.rm_rf(test_root)
     end
@@ -1467,6 +1469,108 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     end
   end
 
+  test "worktree strategy never detaches a sibling whose issue is open but not running" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-workspace-worktree-open-sibling-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      primary_repo = Path.join(test_root, "primary")
+      origin_repo = Path.join(test_root, "origin.git")
+      workspace_root = Path.join(test_root, "workspaces")
+
+      create_primary_repo!(primary_repo, origin_repo)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        workspace_fetch_before_dispatch: false
+      )
+
+      # TP-586's clean, pushed worktree has its branch checked out while the usage limit
+      # holds it, so no agent owns it right now. Its issue is still open.
+      assert {:ok, sibling_workspace} = Workspace.create_for_issue("TP-586")
+      git!(sibling_workspace, ["push", "origin", "auto/TP-586"])
+
+      issue = %Issue{id: "issue-381", identifier: "TP-381", workspace_branch: "auto/TP-586"}
+
+      log =
+        capture_log(fn ->
+          for lookup_result <- [
+                {:ok, %Issue{id: "issue-586", identifier: "TP-586", state: "In Progress"}},
+                {:ok, %Issue{id: "issue-586", identifier: "TP-586", state: "Rework"}},
+                {:ok, %Issue{id: "issue-586", identifier: "TP-586", state: nil}},
+                {:error, {:linear_graphql_errors, [%{"message" => "Rate limited"}, "unexpected"]}},
+                {:error, :timeout}
+              ] do
+            lookup = fn identifier ->
+              assert identifier == "TP-586"
+              lookup_result
+            end
+
+            assert {:error, {:branch_already_checked_out_elsewhere, details}} =
+                     Workspace.create_for_issue(issue, nil, nil, sibling_issue_lookup: lookup)
+
+            assert details[:branch] == "auto/TP-586"
+            assert SymphonyElixir.PathSafety.canonicalize(details[:at]) == {:ok, sibling_workspace}
+            assert String.trim(git!(sibling_workspace, ["branch", "--show-current"])) == "auto/TP-586"
+          end
+        end)
+
+      assert log =~ "Kept workspace branch on sibling worktree; issue lookup failed sibling=TP-586 reason=:timeout"
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "worktree strategy detaches a clean sibling whose issue is terminal, unknown, or this issue" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-workspace-worktree-closed-sibling-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      primary_repo = Path.join(test_root, "primary")
+      origin_repo = Path.join(test_root, "origin.git")
+      workspace_root = Path.join(test_root, "workspaces")
+
+      create_primary_repo!(primary_repo, origin_repo)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        workspace_fetch_before_dispatch: false
+      )
+
+      for {{sibling, lookup_result}, index} <-
+            Enum.with_index([
+              {"TP-700", {:ok, %Issue{id: "issue-700", identifier: "TP-700", state: "Done"}}},
+              {"TP-701", {:error, :issue_not_found}},
+              {"TP-702", {:error, {:linear_graphql_errors, [%{"message" => "Entity not found: Issue"}]}}},
+              # The renamed issue's own old workspace resolves to this very issue.
+              {"TON-703", {:ok, %Issue{id: "issue-taker-3", identifier: "TP-703", state: "In Progress"}}}
+            ]) do
+        assert {:ok, sibling_workspace} = Workspace.create_for_issue(sibling)
+        git!(sibling_workspace, ["push", "origin", "auto/#{sibling}"])
+
+        issue = %Issue{id: "issue-taker-#{index}", identifier: "TP-71#{index}", workspace_branch: "auto/#{sibling}"}
+
+        lookup = fn ^sibling -> lookup_result end
+        assert {:ok, workspace} = Workspace.create_for_issue(issue, nil, nil, sibling_issue_lookup: lookup)
+
+        assert String.trim(git!(workspace, ["branch", "--show-current"])) == "auto/#{sibling}"
+        assert String.trim(git!(sibling_workspace, ["branch", "--show-current"])) == ""
+      end
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "orchestrator lists other running and retrying workspaces in the same repo as active siblings" do
     state = %Orchestrator.State{
       repo_key: "default",
@@ -1479,12 +1583,20 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
         "issue-self" => %{identifier: "TP-226", repo_key: "default", workspace_path: "/ws/default/TON-226"},
         "issue-retrying" => %{identifier: "TP-224", repo_key: "default", workspace_path: nil},
         "issue-retrying-other-repo" => %{identifier: "TP-2", repo_key: "other"}
+      },
+      tracker_tasks: %{
+        make_ref() => %{
+          kind: :retry_refresh,
+          issue_ids: ["issue-refreshing"],
+          metadata: %{identifier: "TP-223", repo_key: "default", workspace_path: nil}
+        },
+        make_ref() => %{kind: :plan_comments, issue_ids: ["issue-parent"], newest: nil}
       }
     }
 
     identifiers = Orchestrator.sibling_active_workspace_identifiers_for_test(state, "issue-self", "default")
 
-    assert Enum.sort(identifiers) == ["TON-225", "TP-224", "TP-225"]
+    assert Enum.sort(identifiers) == ["TON-225", "TP-223", "TP-224", "TP-225"]
   end
 
   test "worktree reuse refuses when the requested branch is already checked out elsewhere" do
@@ -3391,6 +3503,46 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert parsed.stray_process_cpu_minutes == nil
   end
 
+  test "the git network and MCP tool timeouts come from symphony.yml, then the app env, then the defaults" do
+    on_exit(fn ->
+      Application.delete_env(:symphony_elixir, :git_network_timeout_ms)
+      Application.delete_env(:symphony_elixir, :mcp_tool_timeout_ms)
+    end)
+
+    assert Config.git_network_timeout_ms() == 300_000
+    assert Config.mcp_tool_timeout_ms() == 600_000
+
+    Application.put_env(:symphony_elixir, :git_network_timeout_ms, 1_000)
+    Application.put_env(:symphony_elixir, :mcp_tool_timeout_ms, 2_000)
+    assert Config.git_network_timeout_ms() == 1_000
+    assert Config.mcp_tool_timeout_ms() == 2_000
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      workspace_git_network_timeout_ms: 120_000,
+      agent_mcp_tool_timeout_ms: 900_000
+    )
+
+    assert Config.git_network_timeout_ms() == 120_000
+    assert Config.mcp_tool_timeout_ms() == 900_000
+    assert Config.settings!().workspace.git_network_timeout_ms == 120_000
+    assert Config.settings!().agent.mcp_tool_timeout_ms == 900_000
+
+    # A symphony.yml that doesn't validate falls back to the app env.
+    write_workflow_file!(Workflow.workflow_file_path(), workspace_git_network_timeout_ms: 0)
+    assert Config.git_network_timeout_ms() == 1_000
+    assert Config.mcp_tool_timeout_ms() == 2_000
+  end
+
+  test "symphony check names an invalid git network or MCP tool timeout" do
+    write_workflow_file!(Workflow.workflow_file_path(), workspace_git_network_timeout_ms: 0)
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "workspaces.git_network_timeout_ms"
+
+    write_workflow_file!(Workflow.workflow_file_path(), agent_mcp_tool_timeout_ms: "bad")
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "agent.timeouts.mcp_tool_ms"
+  end
+
   test "config reads defaults for optional settings" do
     previous_linear_api_key = System.get_env("LINEAR_API_KEY")
     on_exit(fn -> restore_env("LINEAR_API_KEY", previous_linear_api_key) end)
@@ -5127,9 +5279,14 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       trace = File.read!(trace_file)
       assert trace =~ "~/primary-clone"
       assert trace =~ "${repo#~/}"
-      assert trace =~ "git -C \"$repo\" fetch origin"
-      assert trace =~ "*\"cannot lock ref\"*) sleep 1; git -C \"$repo\" fetch origin ;;"
-      assert trace =~ "git -C \"$repo\" worktree add"
+      assert trace =~ "symphony_git_raw() { GIT_CONFIG_GLOBAL="
+      assert trace =~ "symphony_git \"$repo\" fetch --upload-pack=git-upload-pack origin"
+      assert trace =~ "*\"cannot lock ref\"*) sleep 1; symphony_git \"$repo\" fetch --upload-pack=git-upload-pack origin ;;"
+      assert trace =~ "symphony_git \"$repo\" worktree add"
+      assert trace =~ "symphony_worktree_lock; branch_owner="
+      assert trace =~ "symphony-worktree-add.lock"
+      assert trace =~ "trap symphony_worktree_unlock EXIT"
+      assert trace =~ "fi; symphony_worktree_unlock"
       assert trace =~ "export SYMPHONY_BRANCH="
       assert trace =~ "auto/MT-SSH-WT"
       assert trace =~ "symphony_configured_repo="
@@ -5137,7 +5294,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       assert trace =~ "git -C \"$symphony_configured_repo\" remote get-url origin"
       assert trace =~ "workspace_worktree_list_failed"
       assert trace =~ "auto/MT-SSH-WT"
-      assert trace =~ "git -C \"$repo\" worktree remove --force"
+      assert trace =~ "symphony_git \"$repo\" worktree remove --force"
       assert trace =~ "workspace_branch_delete_skipped"
       refute trace =~ "git clone"
     after
@@ -5448,6 +5605,153 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       assert output =~ "workspace_after_create_still_running: pid #{System.pid()}"
       refute File.exists?(runs_file)
       assert File.exists?(pending_marker)
+    end)
+  end
+
+  test "parallel remote worktree adds of one repo take its lock one at a time" do
+    with_real_exec_fake_ssh(fn ctx ->
+      primary_repo = Path.join(ctx.test_root, "primary")
+      create_primary_repo!(primary_repo, Path.join(ctx.test_root, "origin.git"))
+      workspace_root = Path.join(ctx.test_root, "wsroot")
+      bin = Path.join(ctx.test_root, "bin")
+      adding = Path.join(ctx.test_root, "adding")
+      overlaps = Path.join(ctx.test_root, "overlaps")
+
+      # The worker's git notes a `worktree add` that starts while another is still
+      # running, and holds each add open a moment so unserialized ones would overlap.
+      File.mkdir_p!(bin)
+
+      File.write!(Path.join(bin, "git"), """
+      #!/bin/sh
+      case " $* " in
+        *" worktree add "*)
+          mkdir #{adding} 2>/dev/null || echo overlap >> #{overlaps}
+          #{System.find_executable("git")} "$@"
+          status=$?
+          sleep 0.2
+          rmdir #{adding} 2>/dev/null
+          exit $status
+          ;;
+      esac
+      exec #{System.find_executable("git")} "$@"
+      """)
+
+      File.chmod!(Path.join(bin, "git"), 0o755)
+      write_real_exec_fake_ssh!(Path.join(ctx.test_root, "ssh"), bin <> ":")
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        worker_ssh_hosts: ["worker-01"]
+      )
+
+      identifiers = Enum.map(1..3, &"MT-LOCK-#{&1}")
+
+      results =
+        identifiers
+        |> Enum.map(fn identifier -> Task.async(fn -> Workspace.create_for_issue(identifier, "worker-01") end) end)
+        |> Task.await_many(30_000)
+
+      for {identifier, result} <- Enum.zip(identifiers, results) do
+        workspace_path = Path.join([workspace_root, "default", identifier])
+        assert {:ok, ^workspace_path} = result
+        assert String.trim(git!(workspace_path, ["rev-parse", "--abbrev-ref", "HEAD"])) == "auto/#{identifier}"
+      end
+
+      refute File.exists?(overlaps)
+      refute File.exists?(Path.join([primary_repo, ".git", "symphony-worktree-add.lock"]))
+    end)
+  end
+
+  test "remote worktree add of a repo given relative to the login dir takes the lock in its git dir" do
+    with_real_exec_fake_ssh(fn ctx ->
+      login_dir = Path.join(ctx.test_root, "home")
+      primary_repo = Path.join(login_dir, "primary")
+      create_primary_repo!(primary_repo, Path.join(ctx.test_root, "origin.git"))
+      workspace_root = Path.join(ctx.test_root, "wsroot")
+      workspace_path = Path.join([workspace_root, "default", "MT-LOCK-REL"])
+      lock = Path.join([primary_repo, ".git", "symphony-worktree-add.lock"])
+      write_real_exec_fake_ssh!(Path.join(ctx.test_root, "ssh"), "", login_dir)
+
+      # This VM stands in for another dispatch's script holding the lock.
+      File.mkdir_p!(lock)
+      File.write!(Path.join(lock, "pid"), "#{System.pid()}\n")
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: "primary",
+        worker_ssh_hosts: ["worker-01"],
+        hook_timeout_ms: 4_000
+      )
+
+      assert {:error, {:workspace_prepare_failed, "worker-01", 47, output}} =
+               Workspace.create_for_issue("MT-LOCK-REL", "worker-01")
+
+      assert output =~ "workspace_worktree_lock_timeout: #{lock}"
+
+      File.rm_rf!(lock)
+
+      assert {:ok, ^workspace_path} = Workspace.create_for_issue("MT-LOCK-REL", "worker-01")
+      assert String.trim(git!(workspace_path, ["rev-parse", "--abbrev-ref", "HEAD"])) == "auto/MT-LOCK-REL"
+      refute File.exists?(lock)
+      assert git!(primary_repo, ["status", "--porcelain"]) == ""
+    end)
+  end
+
+  test "remote worktree add gives up on a repo lock a live process holds" do
+    with_real_exec_fake_ssh(fn ctx ->
+      primary_repo = Path.join(ctx.test_root, "primary")
+      create_primary_repo!(primary_repo, Path.join(ctx.test_root, "origin.git"))
+      workspace_root = Path.join(ctx.test_root, "wsroot")
+      lock = Path.join([primary_repo, ".git", "symphony-worktree-add.lock"])
+
+      # This VM stands in for another dispatch's script holding the lock.
+      File.mkdir_p!(lock)
+      File.write!(Path.join(lock, "pid"), "#{System.pid()}\n")
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        worker_ssh_hosts: ["worker-01"],
+        hook_timeout_ms: 4_000
+      )
+
+      assert {:error, {:workspace_prepare_failed, "worker-01", 47, output}} =
+               Workspace.create_for_issue("MT-LOCK-HELD", "worker-01")
+
+      assert output =~ "workspace_worktree_lock_timeout: "
+      assert output =~ "symphony-worktree-add.lock"
+      refute File.exists?(Path.join([workspace_root, "default", "MT-LOCK-HELD"]))
+      assert File.read!(Path.join(lock, "pid")) == "#{System.pid()}\n"
+    end)
+  end
+
+  test "remote worktree add takes over a repo lock its dead holder left behind" do
+    with_real_exec_fake_ssh(fn ctx ->
+      primary_repo = Path.join(ctx.test_root, "primary")
+      create_primary_repo!(primary_repo, Path.join(ctx.test_root, "origin.git"))
+      workspace_root = Path.join(ctx.test_root, "wsroot")
+      workspace_path = Path.join([workspace_root, "default", "MT-LOCK-DEAD"])
+      lock = Path.join([primary_repo, ".git", "symphony-worktree-add.lock"])
+
+      # A script killed while it held the lock: its pid has exited.
+      {dead_pid, 0} = System.cmd("sh", ["-c", "echo $$"])
+      File.mkdir_p!(lock)
+      File.write!(Path.join(lock, "pid"), dead_pid)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        worker_ssh_hosts: ["worker-01"]
+      )
+
+      assert {:ok, ^workspace_path} = Workspace.create_for_issue("MT-LOCK-DEAD", "worker-01")
+      refute File.exists?(lock)
+      refute File.exists?(lock <> ".takeover")
     end)
   end
 
@@ -5809,6 +6113,131 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       assert {:ok, ^workspace_path} = Workspace.create_for_issue("MT-WT-OK", "worker-01")
       assert File.read!(Path.join(workspace_path, "README.md")) == "local progress\n"
       assert git_branch_exists?(primary_repo, "auto/MT-WT-OK")
+    end)
+  end
+
+  test "remote worktree creation, reuse and removal run no filter driver or hook from the repo's config" do
+    with_real_exec_fake_ssh(fn ctx ->
+      workspace_root = Path.join(ctx.test_root, "wsroot")
+      primary_repo = Path.join(ctx.test_root, "primary")
+      workspace_path = Path.join([workspace_root, "default", "MT-WT-FILTER"])
+      proof = Path.join(ctx.test_root, "SYMPHONY_FILTER_PWNED")
+      hook_proof = Path.join(ctx.test_root, "SYMPHONY_HOOK_PWNED")
+
+      create_primary_repo!(primary_repo)
+      git!(primary_repo, ["checkout", "-b", "agent/filter"])
+      File.write!(Path.join(primary_repo, ".gitattributes"), "*.txt filter=evil\n*.md filter=included\n")
+      File.write!(Path.join(primary_repo, "notes.txt"), "stored\n")
+      File.write!(Path.join(primary_repo, "notes.md"), "stored\n")
+      git!(primary_repo, ["add", ".gitattributes", "notes.txt", "notes.md"])
+      git!(primary_repo, ["commit", "-m", "agent attributes"])
+      git!(primary_repo, ["checkout", "main"])
+
+      # Drivers an agent's branch picks, set where agents commit: the shared repo's config, and a
+      # file it includes only on the agent's branch, by a path relative to the config.
+      git!(primary_repo, ["config", "filter.evil.smudge", "touch '#{proof}'; cat"])
+      git!(primary_repo, ["config", "filter.evil.clean", "touch '#{proof}'; cat"])
+      git!(primary_repo, ["config", "filter.evil.required", "true"])
+      File.write!(Path.join([primary_repo, ".git", "drivers"]), "[filter \"included\"]\n\tsmudge = touch '#{proof}'; cat\n")
+      git!(primary_repo, ["config", "includeIf.onbranch:agent/**.path", "drivers"])
+
+      hook = Path.join([primary_repo, ".git", "hooks", "post-checkout"])
+      File.write!(hook, "#!/bin/sh\ntouch '#{hook_proof}'\n")
+      File.chmod!(hook, 0o755)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        workspace_fetch_before_dispatch: false,
+        worker_ssh_hosts: ["worker-01"]
+      )
+
+      issue = %Issue{identifier: "MT-WT-FILTER", workspace_branch: "agent/filter", workspace_base_ref: "agent/filter"}
+
+      assert {:ok, ^workspace_path} = Workspace.create_for_issue(issue, "worker-01")
+      assert File.read!(Path.join(workspace_path, "notes.txt")) == "stored\n"
+      assert File.read!(Path.join(workspace_path, "notes.md")) == "stored\n"
+      refute File.exists?(proof)
+      refute File.exists?(hook_proof)
+
+      # Reusing a dirty worktree backs it up (`status`, `add -A`) before `reset --hard` and `checkout`.
+      head = String.trim(git!(workspace_path, ["rev-parse", "HEAD"]))
+      File.write!(Path.join(workspace_path, "notes.txt"), "agent edit\n")
+
+      assert {:ok, ^workspace_path} = Workspace.create_for_issue(issue, "worker-01")
+      assert File.read!(Path.join(workspace_path, "notes.txt")) == "stored\n"
+      assert git!(workspace_path, ["show", "refs/symphony/orphaned/#{head}:notes.txt"]) == "agent edit\n"
+      refute File.exists?(proof)
+      refute File.exists?(hook_proof)
+
+      File.rm!(Path.join(workspace_path, "notes.md"))
+      assert {_output, 0} = System.cmd("git", ["-C", workspace_path, "checkout", "--", "notes.md"], stderr_to_stdout: true)
+      assert File.exists?(proof), "plain git runs the included driver, so the setup above is a real attack"
+      File.rm!(proof)
+
+      assert :ok = Workspace.remove_issue_workspaces("MT-WT-FILTER", "worker-01")
+      refute File.exists?(workspace_path)
+      refute File.exists?(proof)
+    end)
+  end
+
+  test "remote worktree setup refuses to run git when the repo config names a driver -c can't turn off" do
+    with_real_exec_fake_ssh(fn ctx ->
+      workspace_root = Path.join(ctx.test_root, "wsroot")
+      primary_repo = Path.join(ctx.test_root, "primary")
+      workspace_path = Path.join([workspace_root, "default", "MT-WT-EQUALS"])
+
+      create_primary_repo!(primary_repo)
+      git!(primary_repo, ["config", "filter.a=b.smudge", "cat"])
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        workspace_fetch_before_dispatch: false,
+        worker_ssh_hosts: ["worker-01"]
+      )
+
+      assert {:error, {:workspace_prepare_failed, "worker-01", 128, output}} =
+               Workspace.create_for_issue("MT-WT-EQUALS", "worker-01")
+
+      assert output =~ ~s(symphony: refusing to run git, the repo config defines filter driver "a=b")
+      refute File.exists?(workspace_path)
+    end)
+  end
+
+  test "remote worktree setup reads no global git config on the worker" do
+    with_real_exec_fake_ssh(fn ctx ->
+      workspace_root = Path.join(ctx.test_root, "wsroot")
+      primary_repo = Path.join(ctx.test_root, "primary")
+      origin_repo = Path.join(ctx.test_root, "origin.git")
+      global_config = Path.join(ctx.test_root, "global.gitconfig")
+      upload_pack = Path.join(ctx.test_root, "upload-pack")
+      proof = Path.join(ctx.test_root, "SYMPHONY_GLOBAL_CONFIG_READ")
+      previous_global = System.get_env("GIT_CONFIG_GLOBAL")
+      on_exit(fn -> restore_env("GIT_CONFIG_GLOBAL", previous_global) end)
+
+      create_primary_repo!(primary_repo, origin_repo)
+      File.write!(upload_pack, "#!/bin/sh\ntouch '#{proof}'\nexec git upload-pack \"$@\"\n")
+      File.chmod!(upload_pack, 0o755)
+      File.write!(global_config, "[remote \"origin\"]\n\tuploadpack = #{upload_pack}\n")
+      # The worker's script inherits this env through the fake `ssh`.
+      System.put_env("GIT_CONFIG_GLOBAL", global_config)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        workspace_fetch_before_dispatch: true,
+        worker_ssh_hosts: ["worker-01"]
+      )
+
+      assert {:ok, _workspace} = Workspace.create_for_issue("MT-WT-GLOBAL", "worker-01")
+      refute File.exists?(proof)
+
+      assert {_output, 0} = System.cmd("git", ["-C", primary_repo, "fetch", "origin"], stderr_to_stdout: true)
+      assert File.exists?(proof), "plain git reads the global config, so the setup above is a real attack"
     end)
   end
 
@@ -6249,6 +6678,71 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     end
   end
 
+  test "six workspaces of one repo prepared at once each get their worktree, with no upstream config" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-parallel-worktrees-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      primary_repo = Path.join(test_root, "primary")
+      origin_repo = Path.join(test_root, "origin.git")
+      workflow_dir = Path.join(test_root, "workflow")
+      workflow_path = Path.join(workflow_dir, "WORKFLOW.md")
+      workspace_root = Path.join(test_root, "workspaces")
+
+      create_primary_repo!(primary_repo, origin_repo)
+      File.mkdir_p!(workflow_dir)
+      File.write!(workflow_path, "---\n---\nprompt\n")
+
+      File.write!(Workflow.symphony_file_path(), """
+      issues:
+        provider: memory
+      workspaces:
+        root: #{workspace_root}
+      agent:
+        runtime: codex
+        command: codex app-server
+      repositories:
+        - key: api
+          base_branch: main
+          workflow: #{workflow_path}
+          route:
+            team: Test
+          workspace:
+            strategy: worktree
+            repo: #{primary_repo}
+            fetch_before_dispatch: false
+      """)
+
+      assert :ok = Config.validate!()
+      identifiers = for n <- 1..6, do: "API-#{n}"
+
+      log =
+        capture_log(fn ->
+          results =
+            identifiers
+            |> Enum.map(fn identifier ->
+              Task.async(fn -> Workspace.create_for_issue(%Issue{id: identifier, identifier: identifier, repo_key: "api"}) end)
+            end)
+            |> Task.await_many(30_000)
+
+          assert Enum.all?(results, &match?({:ok, _workspace}, &1))
+        end)
+
+      refute log =~ "worktree preparation failed"
+      worktrees = git!(primary_repo, ["worktree", "list", "--porcelain"])
+
+      for identifier <- identifiers do
+        assert worktrees =~ "branch refs/heads/auto/#{identifier}\n"
+        assert {_output, 1} = System.cmd("git", ["-C", primary_repo, "config", "--get", "branch.auto/#{identifier}.merge"])
+      end
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   defp wait_for_file(path, timeout_ms) do
     cond do
       File.exists?(path) ->
@@ -6298,13 +6792,15 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     fun.(%{test_root: test_root, trace_file: trace_file})
   end
 
-  defp write_real_exec_fake_ssh!(path) do
+  # `path_prefix` puts directories ahead of the system ones on the remote's PATH.
+  defp write_real_exec_fake_ssh!(path, path_prefix \\ "", login_dir \\ nil) do
     File.write!(path, """
     #!/usr/bin/env bash
     set -u
+    #{if login_dir, do: "cd #{login_dir}"}
     trace_file="${SYMP_TEST_SSH_TRACE:-/dev/null}"
     printf 'ARGV:%s\\n' "$*" >> "$trace_file"
-    export PATH="/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
+    export PATH="#{path_prefix}/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
 
     # SSH.run passes the remote `bash -lc <script>` as a single argv entry.
     # Execute that locally so workspace.ex containment checks run against a real

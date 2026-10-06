@@ -5,6 +5,7 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
   alias SymphonyElixir.AgentTools.SecretScanner
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.RunStore
   alias SymphonyElixir.Workflow
   alias SymphonyElixir.Workspace
 
@@ -187,6 +188,61 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
                  nil,
                  [settings: draft_off] ++ base_opts
                )
+    after
+      File.rm_rf(workspace)
+    end
+  end
+
+  test "PR tools refuse to link any issue but the run's own" do
+    workspace = tmp_workspace!("github-agent-pr-links")
+    test_pid = self()
+
+    try do
+      gh_runner = fn args, _opts ->
+        send(test_pid, {:gh, args})
+
+        case args do
+          ["pr", "view" | _rest] -> {Jason.encode!(%{"url" => "https://github.com/acme/symphony/pull/3051"}), 0}
+          _args -> {"https://github.com/acme/symphony/pull/3051\n", 0}
+        end
+      end
+
+      opts = [git_runner: branch_runner(workspace), gh_runner: gh_runner]
+      context = workspace |> scoped_context() |> Map.put(:issue, %Issue{id: "issue-sub", identifier: "TP-586"})
+
+      # Linear links every issue a PR title names, and the issues a body names after a linking word.
+      for {title, body, linked} <- [
+            {"feat: drain the server", "Closes TP-586. Part of TP-381's update design.", ["TP-381"]},
+            {"feat: drain the server (TP-381)", "Closes TP-586.", ["TP-381"]},
+            {"Drain", "Part of [TP-381](https://linear.app/acme/issue/TP-381/design-updates)", ["TP-381"]},
+            {"Drain", "related to: https://linear.app/acme/issue/tp-381/design-updates", ["TP-381"]},
+            {"Drain", "Fixes TP-1, TP-2 and TP-586\nContributes to TP-3", ["TP-1", "TP-2", "TP-3"]}
+          ] do
+        assert {:error, {:pr_links_other_issues, ^linked}} =
+                 GitHub.create_pull_request(context, title, body, false, opts)
+      end
+
+      assert {:error, {:pr_links_other_issues, ["TP-381"]}} =
+               GitHub.update_pull_request_body(context, "Part of TP-381", opts)
+
+      refute_received {:gh, _args}
+
+      # The run's own issue, other teams' keys, and plain mentions without a linking word are fine.
+      allowed_body = "Closes TP-586. See TP-381 for the design. Fixes UTF-8 handling."
+
+      assert {:ok, %{"url" => "https://github.com/acme/symphony/pull/3051"}} =
+               GitHub.create_pull_request(context, "feat: drain the server (TP-586)", allowed_body, false, opts)
+
+      assert {:ok, _result} = GitHub.update_pull_request_body(context, allowed_body, opts)
+
+      # A context without a recognisable identifier has nothing to compare against.
+      for issue <- [%{"identifier" => "TP-586"}, %{identifier: "local"}, nil] do
+        context = Map.put(context, :issue, issue)
+        assert {:ok, _result} = GitHub.create_pull_request(context, "Drain", "Closes TP-586. Part of TP-586.", false, opts)
+      end
+
+      assert {:error, {:pr_links_other_issues, ["TP-381"]}} =
+               GitHub.create_pull_request(Map.put(context, :issue, %{"identifier" => "TP-586"}), "Drain", "Part of TP-381", false, opts)
     after
       File.rm_rf(workspace)
     end
@@ -1621,6 +1677,166 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
       assert {:error, {:checks_not_passing, :pending}} = merge_with_checks.([pending_check], refuse_merge)
       assert {:ok, %{"merged" => true, "head_sha" => "abc123"}} = merge_with_checks.([], fn _args -> :ok end)
     after
+      File.rm_rf(workspace)
+    end
+  end
+
+  test "merge_pull_request merges past a check left in progress in a completed workflow run" do
+    workspace = tmp_workspace!("github-agent-merge-stale")
+
+    try do
+      pr_url = "https://github.com/acme/symphony/pull/3051"
+      run_url = "https://github.com/acme/symphony/actions/runs/37391815662"
+      runs_endpoint = "repos/acme/symphony/actions/runs?head_sha=abc123&per_page=100"
+
+      rollup = [
+        %{"name" => "ci", "status" => "COMPLETED", "conclusion" => "SUCCESS", "detailsUrl" => "#{run_url}/job/1"},
+        %{"name" => "server-test", "status" => "IN_PROGRESS", "conclusion" => nil, "detailsUrl" => "#{run_url}/job/2"}
+      ]
+
+      merge_with_run = fn run, on_merge ->
+        pr_runner = merge_gh_runner(pr_url, "OPEN", rollup, on_merge)
+
+        gh_runner = fn
+          ["api", ^runs_endpoint], _opts -> {Jason.encode!(%{"workflow_runs" => [run]}), 0}
+          args, opts -> pr_runner.(args, opts)
+        end
+
+        GitHub.merge_pull_request(merge_context(workspace),
+          git_runner: branch_runner(workspace),
+          gh_runner: gh_runner,
+          linear_client: issue_state_client("Merging")
+        )
+      end
+
+      running = %{"id" => 37_391_815_662, "status" => "in_progress", "conclusion" => nil}
+      assert {:error, {:checks_not_passing, :pending}} = merge_with_run.(running, fn args -> flunk("merge must not run: #{inspect(args)}") end)
+
+      completed = %{"id" => 37_391_815_662, "status" => "completed", "conclusion" => "success"}
+
+      capture_log(fn ->
+        assert {:ok, %{"merged" => true, "head_sha" => "abc123"}} = merge_with_run.(completed, fn _args -> :ok end)
+      end)
+    after
+      File.rm_rf(workspace)
+    end
+  end
+
+  test "merge_pull_request lands once every check the base branch requires passed" do
+    workspace = tmp_workspace!("github-agent-merge-required")
+
+    try do
+      pr_url = "https://github.com/acme/symphony/pull/3051"
+      rules_endpoint = "repos/acme/symphony/rules/branches/main?per_page=100"
+      branch_endpoint = "repos/acme/symphony/branches/main"
+
+      rollup = [
+        %{"name" => "make all", "status" => "COMPLETED", "conclusion" => "SUCCESS"},
+        %{"name" => "deploy preview", "status" => "QUEUED", "conclusion" => nil}
+      ]
+
+      merge_with = fn required_reads, on_merge ->
+        pr_runner = merge_gh_runner(pr_url, "OPEN", rollup, on_merge)
+
+        gh_runner = fn
+          ["pr", "view", ^pr_url, "--json", _fields] = args, opts ->
+            {output, 0} = pr_runner.(args, opts)
+            {output |> Jason.decode!() |> Map.put("baseRefName", "main") |> Jason.encode!(), 0}
+
+          ["api", endpoint], _opts ->
+            Map.fetch!(required_reads, endpoint)
+
+          args, opts ->
+            pr_runner.(args, opts)
+        end
+
+        GitHub.merge_pull_request(merge_context(workspace),
+          git_runner: branch_runner(workspace),
+          gh_runner: gh_runner,
+          linear_client: issue_state_client("Merging")
+        )
+      end
+
+      ruleset = Jason.encode!([%{"type" => "required_status_checks", "parameters" => %{"required_status_checks" => [%{"context" => "make all"}]}}])
+      unprotected = Jason.encode!(%{"name" => "main", "protection" => %{"enabled" => false}})
+      refuse_merge = fn args -> flunk("merge must not run: #{inspect(args)}") end
+
+      # `make all` is the only required check: the queued preview doesn't hold the merge.
+      required = %{rules_endpoint => {ruleset, 0}, branch_endpoint => {unprotected, 0}}
+      assert {:ok, %{"merged" => true, "head_sha" => "abc123"}} = merge_with.(required, fn _args -> :ok end)
+
+      # No required checks configured: every check must finish.
+      none = %{rules_endpoint => {"[]", 0}, branch_endpoint => {unprotected, 0}}
+      assert {:error, {:checks_not_passing, :pending}} = merge_with.(none, refuse_merge)
+
+      # The required checks can't be read: every check must finish.
+      capture_log(fn ->
+        failed = %{rules_endpoint => {"HTTP 403: Resource not accessible by integration", 1}}
+        assert {:error, {:checks_not_passing, :pending}} = merge_with.(failed, refuse_merge)
+      end)
+    after
+      File.rm_rf(workspace)
+    end
+  end
+
+  test "merge_pull_request lands past pending checks once the CI poller's landing wait let the head past" do
+    workspace = tmp_workspace!("github-agent-merge-fallback")
+
+    try do
+      pr_url = "https://github.com/acme/symphony/pull/3051"
+      rules_endpoint = "repos/acme/symphony/rules/branches/main?per_page=100"
+      branch_endpoint = "repos/acme/symphony/branches/main"
+      make_all = %{"name" => "make all", "status" => "COMPLETED", "conclusion" => "SUCCESS"}
+      preview = %{"name" => "deploy preview", "status" => "QUEUED", "conclusion" => nil}
+      red = fn check -> %{check | "status" => "COMPLETED", "conclusion" => "FAILURE"} end
+      unprotected = {Jason.encode!(%{"name" => "main", "protection" => %{"enabled" => false}}), 0}
+      no_rules = %{rules_endpoint => {"[]", 0}, branch_endpoint => unprotected}
+      required_rule = %{"type" => "required_status_checks", "parameters" => %{"required_status_checks" => [%{"context" => "make all"}]}}
+      make_all_required = %{rules_endpoint => {Jason.encode!([required_rule]), 0}, branch_endpoint => unprotected}
+      context = Map.put(merge_context(workspace), :issue, %{repo_key: "default"})
+
+      merge_with = fn rollup, required_reads, on_merge ->
+        pr_runner = merge_gh_runner(pr_url, "OPEN", rollup, on_merge)
+
+        gh_runner = fn
+          ["pr", "view", ^pr_url, "--json", _fields] = args, opts ->
+            {output, 0} = pr_runner.(args, opts)
+            {output |> Jason.decode!() |> Map.put("baseRefName", "main") |> Jason.encode!(), 0}
+
+          ["api", endpoint], _opts ->
+            Map.fetch!(required_reads, endpoint)
+
+          args, opts ->
+            pr_runner.(args, opts)
+        end
+
+        GitHub.merge_pull_request(context,
+          git_runner: branch_runner(workspace),
+          gh_runner: gh_runner,
+          linear_client: issue_state_client("Merging")
+        )
+      end
+
+      refuse_merge = fn args -> flunk("merge must not run: #{inspect(args)}") end
+
+      # Before the poller lets the head past, a branch that requires no checks waits on every check.
+      assert {:error, {:checks_not_passing, :pending}} = merge_with.([make_all, preview], no_rules, refuse_merge)
+
+      :ok = RunStore.put_ci_check(%{repo_key: "default", issue_id: "issue-3051", landing_fallback_sha: "abc123"})
+
+      assert {:ok, %{"merged" => true, "head_sha" => "abc123"}} = merge_with.([make_all, preview], no_rules, fn _args -> :ok end)
+
+      # A red check never lands, required or not, and a branch that requires a check still waits on it.
+      assert {:error, {:checks_not_passing, {:failure, _checks}}} =
+               merge_with.([make_all, red.(preview)], no_rules, refuse_merge)
+
+      assert {:error, {:checks_not_passing, {:failure, _checks}}} =
+               merge_with.([red.(make_all), preview], make_all_required, refuse_merge)
+
+      assert {:error, {:checks_not_passing, :pending}} =
+               merge_with.([%{make_all | "status" => "IN_PROGRESS", "conclusion" => nil}, preview], make_all_required, refuse_merge)
+    after
+      RunStore.delete_ci_check("default", "issue-3051")
       File.rm_rf(workspace)
     end
   end

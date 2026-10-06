@@ -280,7 +280,10 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     },
     %{
       "name" => "github_create_pull_request",
-      "description" => "Create a pull request from the current workspace branch to the configured origin repo default branch.",
+      "description" =>
+        "Create a pull request from the current workspace branch to the configured origin repo default branch. " <>
+          "Link only the current issue: Linear links a PR to every issue its title names, or its body names after " <>
+          "a word such as Closes or Part of, and moves that issue with the PR. Name other issues without such a word.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -294,7 +297,9 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     },
     %{
       "name" => "github_update_pull_request_body",
-      "description" => "Update the body of the pull request for the current workspace branch.",
+      "description" =>
+        "Update the body of the pull request for the current workspace branch. " <>
+          "Name other issues without a Linear linking word such as Closes or Part of: only the current issue may be linked.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -602,6 +607,25 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         "required" => ["scale"],
         "properties" => %{"scale" => %{"type" => "number", "enum" => [0.85, 1.0, 1.15, 1.3, 1.5, 1.8, 2.0]}}
       }
+    },
+    %{
+      "name" => "qa_android_put_file",
+      "description" =>
+        "Put a fixture file you wrote (a CSV to import, a malformed file) into the emulator's shared Downloads, where the system file picker lists it, so an import step can pick it. " <>
+          "Only a regular file of at most 1 MB under the worktree (such as qa-evidence/) or $TMPDIR, no symlinks, and only into Download/. " <>
+          "qa_android_install wipes app data but not Downloads, so the file survives a reinstall; Symphony removes it when the QA pass ends.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["local_path"],
+        "properties" => %{
+          "local_path" => %{"type" => "string", "description" => "The file, absolute or relative to the worktree, e.g. qa-evidence/import/rows.csv."},
+          "dest" => %{
+            "type" => "string",
+            "description" => "`Download/<name>`, a name of letters, digits, `.`, `_`, `-`. Defaults to Download/ and the local file name."
+          }
+        }
+      }
     }
   ]
 
@@ -662,7 +686,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "qa_android_key" => ["key"],
     "qa_android_rotate" => ["orientation"],
     "qa_android_dark_mode" => ["mode"],
-    "qa_android_font_scale" => ["scale"]
+    "qa_android_font_scale" => ["scale"],
+    "qa_android_put_file" => ["local_path", "dest"]
   }
   @legacy_tool_aliases %{
     "linear.get_current_issue" => "linear_get_current_issue",
@@ -1777,6 +1802,20 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       "error" => %{
         "code" => "invalid_comment_id",
         "message" => "github_reply_to_review_comment requires a non-blank inline review comment id (integer or numeric string)."
+      }
+    }
+  end
+
+  defp tool_error_payload({:pr_links_other_issues, identifiers}) do
+    %{
+      "error" => %{
+        "code" => "pr_links_other_issues",
+        "message" =>
+          "Linear links a pull request to every issue its title names, or its body names after a linking word " <>
+            "(Closes, Fixes, Resolves, Completes, Part of, Related to, Contributes to, Ref, Towards), and moves that issue " <>
+            "along with the PR. A PR may link only this run's issue. Take #{Enum.join(identifiers, ", ")} out of the title, " <>
+            "and name it in the body without a linking word, for example `See #{hd(identifiers)}`.",
+        "issues" => identifiers
       }
     }
   end

@@ -387,6 +387,40 @@ final class ScopedRunProfilesTests: XCTestCase {
         XCTAssertEqual(try RunProfilesConfig.updating(there, from: changed, to: profiles), config)
     }
 
+    // MARK: Small model
+
+    func testReadsWritesAndRemovesTheSmallModel() throws {
+        let profiles = try RunProfilesConfig.scopedProfiles(in: config)
+        XCTAssertNil(profiles.smallModel)
+
+        var changed = profiles
+        changed.smallModel = "anthropic/claude-haiku-4.5"
+        let set = try RunProfilesConfig.updating(config, from: profiles, to: changed)
+        XCTAssertEqual(set, config.replacingOccurrences(
+            of: "  model: claude-sonnet-5-5  # default\n",
+            with: "  model: claude-sonnet-5-5  # default\n  small_model: anthropic/claude-haiku-4.5\n"
+        ))
+        XCTAssertEqual(try RunProfilesConfig.scopedProfiles(in: set), changed)
+
+        changed.smallModel = "acme/tiny"
+        let replaced = try RunProfilesConfig.updating(set, from: try RunProfilesConfig.scopedProfiles(in: set), to: changed)
+        XCTAssertEqual(try RunProfilesConfig.smallModel(in: replaced), "acme/tiny")
+
+        XCTAssertEqual(try RunProfilesConfig.updating(replaced, from: changed, to: profiles), config)
+    }
+
+    func testAddsAnAgentBlockForTheSmallModel() throws {
+        XCTAssertEqual(try RunProfilesConfig.settingSmallModel("x/y", in: "workspaces:\n  root: ~/work\n"), "workspaces:\n  root: ~/work\nagent:\n  small_model: x/y\n")
+        XCTAssertEqual(try RunProfilesConfig.settingSmallModel(nil, in: "workspaces: {}\n"), "workspaces: {}\n")
+        XCTAssertNil(try RunProfilesConfig.smallModel(in: "workspaces: {}\n"))
+    }
+
+    func testUsesOpenRouterWhenAnyRowPicksIt() throws {
+        XCTAssertTrue(try RunProfilesConfig.scopedProfiles(in: config).usesOpenRouter)
+        XCTAssertFalse(ScopedRunProfiles(global: RunProfiles(defaults: RunProfile(provider: "anthropic"))).usesOpenRouter)
+        XCTAssertTrue(ScopedRunProfiles(global: RunProfiles(kinds: [.ciFix: RunProfile(provider: "openrouter")])).usesOpenRouter)
+    }
+
     // MARK: Inherited values
 
     func testInheritedFollowsSymphonysResolutionOrder() {
@@ -451,9 +485,10 @@ final class ScopedRunProfilesTests: XCTestCase {
             checked.append(candidate)
             XCTAssertEqual(URL(fileURLWithPath: candidate).deletingLastPathComponent().path, directory.path)
             XCTAssertEqual(try? RunProfilesConfig.scopedProfiles(in: String(contentsOfFile: candidate, encoding: .utf8)), new)
-            return .failed("Config error: repositories[web].agent.run_profiles.landing.model: no tools")
+            return .failed("Config error in \(candidate): repositories[web].agent.run_profiles.landing.model: no tools")
         }
-        XCTAssertEqual(failed, .failed("Config error: repositories[web].agent.run_profiles.landing.model: no tools"))
+        // The check ran on a hidden copy, but the message names symphony.yml.
+        XCTAssertEqual(failed, .failed("Config error in \(path): repositories[web].agent.run_profiles.landing.model: no tools"))
         XCTAssertEqual(try String(contentsOfFile: path, encoding: .utf8), config)
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path), ["symphony.yml"])
 

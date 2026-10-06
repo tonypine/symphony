@@ -869,7 +869,7 @@ defmodule SymphonyElixir.QaAgent do
         nil
 
       playbook ->
-        driver_opts = [worktree: worktree, playbook: playbook, git: Keyword.get(opts, :git, &default_git/2)]
+        driver_opts = [worktree: worktree, playbook: playbook, tmp_dir: Keyword.get(opts, :qa_tmp_dir), git: Keyword.get(opts, :git, &default_git/2)]
         {:ok, driver} = AndroidDriver.start_link(Keyword.merge(driver_opts, Keyword.get(opts, :qa_android_driver_opts, [])))
         driver
     end
@@ -923,7 +923,7 @@ defmodule SymphonyElixir.QaAgent do
     File.mkdir_p!(Path.dirname(worktree))
 
     with :ok <- ensure_commit(workspace, job.sha, git),
-         {_output, 0} <- git.(["worktree", "add", "--detach", worktree, job.sha], workspace) do
+         {_output, 0} <- Fetcher.with_lock(workspace, fn -> git.(["worktree", "add", "--detach", worktree, job.sha], workspace) end) do
       {:ok, worktree}
     else
       {:error, reason} -> {:error, reason}
@@ -947,8 +947,11 @@ defmodule SymphonyElixir.QaAgent do
     end
   end
 
+  # The add and the remove run under the per-repo fetch lock: they write the
+  # `.git/worktrees` the workspace shares with the source checkout and every
+  # other worktree of it.
   defp remove_worktree(workspace, worktree, git) do
-    git.(["worktree", "remove", "--force", worktree], workspace)
+    Fetcher.with_lock(workspace, fn -> git.(["worktree", "remove", "--force", worktree], workspace) end)
     File.rm_rf(worktree)
     :ok
   end

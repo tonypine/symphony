@@ -8,7 +8,8 @@ defmodule SymphonyElixir.AutoMerge do
   the PR is `BEHIND`. GitHub merges the PR when the required checks pass; the poller then
   moves the issue to `Done`. When GitHub refuses auto-merge (the PR can already merge, the
   branch has no protection, or the repository doesn't allow it) but the PR is `CLEAN` with
-  green or no checks, it is squash-merged right away. Merge conflicts take the PR poller's
+  green or no checks (or `UNSTABLE` only for a check GitHub left in progress in a finished
+  workflow run), it is squash-merged right away. Merge conflicts take the PR poller's
   conflict path, with auto-merge turned off first (see `disable_for_conflict/5`). Red CI takes
   the CI poller's fix path; a fix run that can push code turns auto-merge off first too (see
   `disable_for_ci_fix/5`), while a flaky rerun of the same commit leaves it on.
@@ -48,6 +49,7 @@ defmodule SymphonyElixir.AutoMerge do
   @behind_merge_state "BEHIND"
   @blocked_merge_state "BLOCKED"
   @clean_merge_state "CLEAN"
+  @unstable_merge_state "UNSTABLE"
   @passing_conclusions ["success", "neutral", "skipped"]
   @green_conclusion "SUCCESS"
   @max_reason_length 300
@@ -112,6 +114,11 @@ defmodule SymphonyElixir.AutoMerge do
   @spec held?(term()) :: boolean()
   def held?(%{state: "ci_failure"}), do: true
   def held?(_auto_merge), do: false
+
+  @doc "True while the PR is down the conflict path (see `conflict/3`)."
+  @spec conflict?(term()) :: boolean()
+  def conflict?(%{state: "conflict"}), do: true
+  def conflict?(_auto_merge), do: false
 
   @doc "True when Symphony turned auto-merge on (or merged) for this record, so a later merge moves the issue to `Done`."
   @spec armed?(term()) :: boolean()
@@ -372,11 +379,19 @@ defmodule SymphonyElixir.AutoMerge do
   end
 
   # An open PR GitHub calls CLEAN whose checks all passed. No checks at all counts too: a
-  # repository without CI has nothing to wait for.
+  # repository without CI has nothing to wait for. GitHub calls a PR UNSTABLE while a check it
+  # never closed reads in progress, so one with a stale check (see
+  # `PullRequest.fetch_ci_status/2`) and every other check passed can merge too.
   defp mergeable_now?(status) do
-    Map.get(status, :state) == "OPEN" and merge_state(status) == @clean_merge_state and
-      Enum.all?(Map.get(status, :checks, []), &(normalize(Map.get(&1, :conclusion)) in @passing_conclusions))
+    checks = Map.get(status, :checks, [])
+
+    Map.get(status, :state) == "OPEN" and clean_but_for_stale_checks?(merge_state(status), checks) and
+      Enum.all?(checks, &(normalize(Map.get(&1, :conclusion)) in @passing_conclusions))
   end
+
+  defp clean_but_for_stale_checks?(@clean_merge_state, _checks), do: true
+  defp clean_but_for_stale_checks?(@unstable_merge_state, checks), do: Enum.any?(checks, &(Map.get(&1, :stale) == true))
+  defp clean_but_for_stale_checks?(_merge_state, _checks), do: false
 
   defp squash_request(activity, head) do
     %{

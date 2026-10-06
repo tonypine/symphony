@@ -70,6 +70,10 @@ case SymphonyElixir.LeftoverProcesses.Table.read() do
   _denied -> ExUnit.configure(exclude: [:process_table | Keyword.get(ExUnit.configuration(), :exclude, [])])
 end
 
+# Tests that start the real `claude` binary run only with `--only real_claude`, so no default run
+# (CI's, `mix cover.changed`'s) depends on whether or which `claude` is installed.
+ExUnit.configure(exclude: [:real_claude | Keyword.get(ExUnit.configuration(), :exclude, [])])
+
 # Tests that measure an agent's niceness need `setpriority`, which sandboxed
 # agent runs deny; `nice` then warns and runs the command unchanged.
 case System.cmd("nice", ["-n", "1", "true"], stderr_to_stdout: true) do

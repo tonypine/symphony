@@ -65,7 +65,7 @@ final class StatusPoller {
         let request = URLRequest(
             url: SymphonyState.stateURL(base: base),
             cachePolicy: .reloadIgnoringLocalCacheData,
-            timeoutInterval: 2
+            timeoutInterval: StatusMachine.pollTimeout
         )
         guard let (data, response) = try? await URLSession.shared.data(for: request) else { return .unreachable }
         return SymphonyState.poll(data: data, statusCode: (response as? HTTPURLResponse)?.statusCode ?? 0)

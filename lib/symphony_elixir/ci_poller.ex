@@ -13,6 +13,7 @@ defmodule SymphonyElixir.CiPoller do
 
   alias SymphonyElixir.AcceptanceGate.Agreement
   alias SymphonyElixir.{AuditLog, AutoMerge, AutoReview, Config, Notifications, Orchestrator, RunStore, Tracker}
+  alias SymphonyElixir.AutoReview.HoldNote
   alias SymphonyElixir.GitHub.{PullRequest, Webhook}
   alias SymphonyElixir.HumanReview
   alias SymphonyElixir.Linear.{Issue, Usage}
@@ -36,6 +37,9 @@ defmodule SymphonyElixir.CiPoller do
   # commits change an agent-protected path until a person adds the waiver label.
   @human_only_checks ["protected paths"]
   @waiver_label "protected-paths-approved"
+  # How long a `Merging` head waits on checks its base branch doesn't require before it may land
+  # without them (see `track_landing_wait/4`).
+  @landing_fallback_ms 15 * 60_000
 
   defmodule State do
     @moduledoc false
@@ -289,6 +293,16 @@ defmodule SymphonyElixir.CiPoller do
   end
 
   @doc """
+  The PR head SHA the poller last saw ready to land (see `landing_action/1`): every check it
+  requires passed. Nil before then, or when the last head it saw was not ready.
+  """
+  @spec landing_ready_head(String.t(), keyword()) :: String.t() | nil
+  def landing_ready_head(issue_id, opts \\ []) when is_binary(issue_id) do
+    run_store = Keyword.get(opts, :run_store, RunStore)
+    Enum.find_value(repo_keys_from_opts(opts), &Map.get(find_ci_check(run_store, &1, issue_id) || %{}, :landing_ready_sha))
+  end
+
+  @doc """
   The PR head SHA and its CI conclusion (`"SUCCESS"`, `"FAILURE"`, `"IN_PROGRESS"`, ...) the
   poller last observed for the issue, or nil before its first poll.
   """
@@ -433,7 +447,7 @@ defmodule SymphonyElixir.CiPoller do
     repo_key = repo_key_from_opts(opts)
     tracker = Keyword.get(opts, :tracker, Tracker)
 
-    with {:ok, discovered, auto_review_issues, merging_issue_ids} <-
+    with {:ok, discovered, auto_review_issues, merging_issue_ids, landing_issue_ids} <-
            discover_ci_checks(settings, run_store, tracker, repo_key, now, opts),
          {:ok, checks} <- list_ci_checks(run_store, repo_key) do
       opts =
@@ -441,6 +455,7 @@ defmodule SymphonyElixir.CiPoller do
         |> put_prefetched_rework_sources(run_store, repo_key, checks)
         |> Keyword.put(:auto_review_issues, auto_review_issues)
         |> Keyword.put(:merging_issue_ids, merging_issue_ids)
+        |> Keyword.put(:landing_issue_ids, landing_issue_ids)
 
       actions = Enum.map(checks, &process_ci_check(&1, settings, opts, now))
       settled = count_settled(checks, run_store, repo_key)
@@ -470,16 +485,16 @@ defmodule SymphonyElixir.CiPoller do
 
   defp discover_ci_checks(settings, run_store, tracker, repo_key, now, opts) do
     with {:ok, issues} <- fetch_watched_issues(settings, tracker, opts),
-         {:ok, runs} <- list_runs(run_store, repo_key),
          {:ok, existing} <- list_ci_checks(run_store, repo_key) do
       existing_by_issue = Map.new(existing, &{Map.get(&1, :issue_id), &1})
       issues = Enum.filter(issues, &match?(%Issue{}, &1))
       Enum.each(issues, &warn_if_pr_url_lost(&1, Map.get(existing_by_issue, &1.id)))
 
-      discovered = Enum.count(issues, &persist_discovered_ci_check?(&1, runs, existing_by_issue, run_store, repo_key, now))
-      observe_gate_decisions(settings, repo_key, issues, runs, existing, opts)
+      discovered = Enum.count(issues, &persist_discovered_ci_check?(&1, existing_by_issue, run_store, repo_key, now))
+      observe_gate_decisions(settings, repo_key, issues, existing, opts)
 
-      {:ok, discovered, auto_review_issues(settings, issues), auto_merge_issue_ids(settings, issues)}
+      merging_issue_ids = auto_merge_issue_ids(settings, issues)
+      {:ok, discovered, auto_review_issues(settings, issues), merging_issue_ids, landing_issue_ids(issues)}
     end
   end
 
@@ -501,14 +516,17 @@ defmodule SymphonyElixir.CiPoller do
   # Records the human's decision on gate verdicts whose issue left In Review (or Human Review). It
   # runs before the checks are processed, so the CI check record of a PR merged since the last
   # poll still holds the head the human merged.
-  defp observe_gate_decisions(settings, repo_key, issues, runs, ci_checks, opts) do
+  defp observe_gate_decisions(settings, repo_key, issues, ci_checks, opts) do
+    run_store = Keyword.get(opts, :run_store, RunStore)
+
     agreement_opts = [
-      run_store: Keyword.get(opts, :run_store, RunStore),
+      run_store: run_store,
       tracker: Keyword.get(opts, :tracker, Tracker),
       waiting_states: [AutoReview.state(settings) | HumanReview.review_states(settings)]
     ]
 
-    Agreement.observe(repo_key, issues, runs, ci_checks, agreement_opts ++ Keyword.take(opts, [:audit_dir]))
+    undecided = Agreement.undecided(repo_key, run_store: run_store)
+    Agreement.observe(repo_key, issues, undecided, ci_checks, agreement_opts ++ Keyword.take(opts, [:audit_dir]))
   end
 
   # `Merging` issues GitHub auto-merge lands: a CI-fix run for one turns auto-merge off first.
@@ -517,6 +535,9 @@ defmodule SymphonyElixir.CiPoller do
       do: issues |> Enum.filter(&AutoMerge.merging?/1) |> MapSet.new(& &1.id),
       else: MapSet.new()
   end
+
+  # Every `Merging` issue: its head's CI is read as a landing reads it (see `landing_action/1`).
+  defp landing_issue_ids(issues), do: issues |> Enum.filter(&AutoMerge.merging?/1) |> MapSet.new(& &1.id)
 
   defp fetch_watched_issues(settings, tracker, opts) do
     case Keyword.fetch(opts, :watched_issues) do
@@ -556,10 +577,10 @@ defmodule SymphonyElixir.CiPoller do
   defp normalize_state_name(state) when is_binary(state), do: state |> String.trim() |> String.downcase()
   defp normalize_state_name(_state), do: ""
 
-  defp persist_discovered_ci_check?(%Issue{} = issue, runs, existing_by_issue, run_store, repo_key, now) do
+  defp persist_discovered_ci_check?(%Issue{} = issue, existing_by_issue, run_store, repo_key, now) do
     existing = Map.get(existing_by_issue, issue.id)
 
-    case discover_ci_check_record(issue, runs, existing, now) do
+    case discover_ci_check_record(issue, run_store, repo_key, existing, now) do
       nil ->
         false
 
@@ -575,10 +596,10 @@ defmodule SymphonyElixir.CiPoller do
     end
   end
 
-  defp discover_ci_check_record(%Issue{} = issue, runs, existing, now) when is_list(runs) do
+  defp discover_ci_check_record(%Issue{} = issue, run_store, repo_key, existing, now) do
     with pr_url when is_binary(pr_url) <- first_pr_url(issue),
          %{workspace_path: workspace_path} = run when is_binary(workspace_path) <-
-           latest_run_for_issue(runs, issue.id) do
+           latest_run_for_issue(run_store, repo_key, issue.id) do
       base = %{
         repo_key: Map.get(existing || %{}, :repo_key),
         issue_id: issue.id,
@@ -606,8 +627,6 @@ defmodule SymphonyElixir.CiPoller do
     end
   end
 
-  defp discover_ci_check_record(_issue, _runs, _existing, _now), do: nil
-
   defp process_ci_check(record, settings, opts, now) when is_map(record) do
     case backoff_active_until(record, now) do
       {:backing_off, next_poll_at} ->
@@ -621,7 +640,7 @@ defmodule SymphonyElixir.CiPoller do
   defp fetch_and_process_ci(record, settings, opts, now) do
     github = Keyword.get(opts, :github, PullRequest)
 
-    case github.fetch_ci_status(Map.get(record, :pr_url), cwd: Map.get(record, :workspace_path)) do
+    case github.fetch_ci_status(Map.get(record, :pr_url), [cwd: Map.get(record, :workspace_path)] ++ landing_read_opts(record, opts)) do
       {:ok, ci_status} ->
         handle_ci_status(record, ci_status, settings, opts, now)
 
@@ -630,20 +649,32 @@ defmodule SymphonyElixir.CiPoller do
     end
   end
 
+  # A `Merging` issue's landing waits only on the checks its base branch requires, so its read
+  # carries them for `landing_action/1`.
+  defp landing_read_opts(record, opts) do
+    if landing_read?(record, opts), do: [required_checks: true], else: []
+  end
+
+  defp landing_read?(record, opts), do: MapSet.member?(Keyword.get(opts, :landing_issue_ids, MapSet.new()), Map.get(record, :issue_id))
+
   defp handle_ci_status(record, ci_status, settings, opts, now) do
+    ci_status = if rerun_pending?(record, ci_status), do: Map.put(ci_status, :rerun_pending, true), else: ci_status
+    ci_status = track_landing_wait(record, ci_status, opts, now)
+
     case ci_action(ci_status) do
       :closed ->
-        cleanup_ci(record, opts, now, "closed")
+        cleanup_ci(record, settings, opts, now, "closed")
 
       :success ->
         mark_ci_green(record, ci_status, settings, opts, now)
 
       :pending ->
         issue_id = Map.get(record, :issue_id)
-        attrs = ci_status_attrs(record, ci_status, %{status: "watching"}, now)
+        status = if Map.get(ci_status, :rerun_pending), do: "rerun_requested", else: "watching"
+        attrs = ci_status_attrs(record, ci_status, %{status: status}, now)
 
         case complete_ci_update(opts, record, attrs, {:watching, issue_id}) do
-          {:watching, ^issue_id} = action -> maybe_send_auto_review_conflict(action, record, ci_status, opts)
+          {:watching, ^issue_id} = action -> after_watching(action, record, ci_status, opts, now)
           other -> other
         end
 
@@ -943,9 +974,12 @@ defmodule SymphonyElixir.CiPoller do
     end
   end
 
+  # A failure on an approved (`Merging`) PR is marked `approved`, so a fix run that finds a flake
+  # and pushes nothing can hand the PR back to `Merging` once its head is green.
   defp persist_and_dispatch_ci_failure(record, ci_status, failed_checks, opts, now, tracker, issue_id, log_excerpt) do
     retry_count = ci_retry_count(record) + 1
-    ci_failure = ci_failure_context(ci_status, failed_checks, log_excerpt)
+    approved? = MapSet.member?(Keyword.get(opts, :merging_issue_ids, MapSet.new()), issue_id)
+    ci_failure = ci_status |> ci_failure_context(failed_checks, log_excerpt) |> Map.put(:approved, approved?)
 
     attrs =
       ci_status_attrs(
@@ -1155,6 +1189,12 @@ defmodule SymphonyElixir.CiPoller do
 
   # GitHub runs no `pull_request` workflows on a PR that conflicts with its base, so an Auto Review
   # issue whose PR conflicts and has no checks would wait forever (see AutoReview.on_conflict/4).
+  # Side effects of a pending poll, run once the record holds it.
+  defp after_watching(action, record, ci_status, opts, now) do
+    if Map.get(ci_status, :announce_landing_fallback), do: announce_landing_fallback(record, ci_status, opts, now)
+    maybe_send_auto_review_conflict(action, record, ci_status, opts)
+  end
+
   defp maybe_send_auto_review_conflict({:watching, issue_id} = action, record, ci_status, opts) do
     with %Issue{} = issue <- Map.get(Keyword.get(opts, :auto_review_issues, %{}), issue_id),
          true <- Map.get(ci_status, :checks) == [] and PullRequest.conflicting?(ci_status) do
@@ -1175,10 +1215,11 @@ defmodule SymphonyElixir.CiPoller do
     end
   end
 
-  defp cleanup_ci(record, opts, now, reason) do
+  defp cleanup_ci(record, settings, opts, now, reason) do
     run_store = Keyword.get(opts, :run_store, RunStore)
     repo_key = Map.get(record, :repo_key) || repo_key_from_opts(opts)
     issue_id = Map.get(record, :issue_id)
+    withdraw_qa_hold_note(record, settings, opts)
 
     case delete_ci_check(run_store, repo_key, issue_id) do
       :ok ->
@@ -1189,6 +1230,19 @@ defmodule SymphonyElixir.CiPoller do
         complete_ci_update(opts, record, attrs, {:cleanup_error, issue_id, delete_reason})
     end
   end
+
+  # A PR closed or merged while its QA pass was held gets no pass to delete the hold note, so it
+  # goes with the record. One that can't be deleted is logged; the record goes all the same.
+  defp withdraw_qa_hold_note(%{qa_hold_note: true} = record, settings, opts) do
+    issue = %Issue{id: Map.get(record, :issue_id), identifier: Map.get(record, :issue_identifier)}
+
+    case HoldNote.withdraw(issue, [settings: settings] ++ Keyword.take(opts, [:linear_client])) do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("Failed to remove the QA hold note for #{issue.identifier} after its PR closed: #{inspect(reason)}")
+    end
+  end
+
+  defp withdraw_qa_hold_note(_record, _settings, _opts), do: :ok
 
   defp failed_log_excerpt(record, failed_checks, settings, opts) do
     github = Keyword.get(opts, :github, PullRequest)
@@ -1246,10 +1300,74 @@ defmodule SymphonyElixir.CiPoller do
         commit_sha: Map.get(ci_status, :commit_sha),
         last_observed_sha: Map.get(ci_status, :commit_sha),
         last_observed_conclusion: conclusion_for_status(ci_status),
+        landing_ready_sha: if(landing_action(ci_status) == :success, do: Map.get(ci_status, :commit_sha)),
         updated_at: now
-      },
+      }
+      |> Map.merge(Map.get(ci_status, :landing_wait, %{})),
       attrs
     )
+  end
+
+  # How long a `Merging` head has waited on its checks: every landing read of the same head that
+  # `landing_action/1` leaves pending keeps the wait, and any other read ends it. Past
+  # `@landing_fallback_ms`, a head that may land on the checks still pending
+  # (`landing_fallback_eligible?/1`) is let past: `landing_ready_sha` names it, so the orchestrator
+  # releases the landing agent, and its merge and CI wait read the mark through
+  # `put_landing_fallback/3`. The first time a wait lets a head past, it is marked
+  # `:announce_landing_fallback`: once the record holds `landing_fallback_sha`, the checks it skips
+  # are logged and the issue gets one comment.
+  defp track_landing_wait(record, ci_status, opts, now) do
+    sha = Map.get(ci_status, :commit_sha)
+
+    if landing_read?(record, opts) and is_binary(sha) and landing_action(ci_status) == :pending do
+      since = if Map.get(record, :landing_wait_sha) == sha, do: Map.get(record, :landing_wait_since) || now, else: now
+      wait = %{landing_wait_sha: sha, landing_wait_since: since, landing_fallback_sha: nil}
+
+      if DateTime.diff(now, since, :millisecond) >= @landing_fallback_ms and landing_fallback_eligible?(ci_status),
+        do: land_past_pending_checks(record, ci_status, wait),
+        else: Map.put(ci_status, :landing_wait, wait)
+    else
+      Map.put(ci_status, :landing_wait, %{landing_wait_sha: nil, landing_wait_since: nil, landing_fallback_sha: nil})
+    end
+  end
+
+  defp land_past_pending_checks(record, ci_status, %{landing_wait_sha: sha} = wait) do
+    ci_status
+    |> Map.put(:landing_fallback, true)
+    |> Map.put(:landing_wait, %{wait | landing_fallback_sha: sha})
+    |> Map.put(:announce_landing_fallback, Map.get(record, :landing_fallback_sha) != sha)
+  end
+
+  defp announce_landing_fallback(record, ci_status, opts, now) do
+    issue_id = Map.get(record, :issue_id)
+    pr_url = Map.get(ci_status, :pr_url) || Map.get(record, :pr_url)
+    sha = Map.get(ci_status, :commit_sha)
+    minutes = div(DateTime.diff(now, ci_status.landing_wait.landing_wait_since, :second), 60)
+    skipped = ci_status |> Map.get(:checks, []) |> Enum.reject(&passed_check?/1) |> Enum.map(&Map.get(&1, :name)) |> Enum.uniq()
+
+    Logger.warning(
+      "Landing without the checks still pending after #{minutes} min in Merging; the base branch requires none: issue_id=#{issue_id} issue_identifier=#{Map.get(record, :issue_identifier)} pr_url=#{pr_url} commit_sha=#{sha} skipped=#{Enum.join(skipped, ", ")}"
+    )
+
+    tracker = Keyword.get(opts, :tracker, Tracker)
+
+    case tracker.create_comment(issue_id, landing_fallback_comment(pr_url, ci_status, skipped, minutes)) do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("Failed to comment that a landing skips pending checks issue_id=#{issue_id}: #{inspect(reason)}")
+    end
+  end
+
+  defp landing_fallback_comment(pr_url, ci_status, skipped, minutes) do
+    waiting_on =
+      case skipped do
+        [] -> "a workflow run that has not finished"
+        names -> Enum.map_join(names, ", ", &"`#{&1}`")
+      end
+
+    "Symphony stopped waiting on CI to land #{pr_url || "this PR"} at `#{String.slice(Map.get(ci_status, :commit_sha), 0, 7)}`: " <>
+      "after #{minutes} min in Merging it was still waiting on #{waiting_on}. " <>
+      "The base branch `#{Map.get(ci_status, :base_ref_name)}` requires no checks, none failed and at least one passed, " <>
+      "so Symphony lands it without waiting for the rest."
   end
 
   defp record_poll_error(record, reason, opts, now) do
@@ -1393,7 +1511,7 @@ defmodule SymphonyElixir.CiPoller do
       failed_checks(ci_status) != [] ->
         {:failure, failed_checks(ci_status)}
 
-      pending_checks?(ci_status) ->
+      pending_checks?(ci_status) or Map.get(ci_status, :rerun_pending) == true or unfinished_run?(ci_status) ->
         :pending
 
       success_checks?(ci_status) ->
@@ -1403,6 +1521,85 @@ defmodule SymphonyElixir.CiPoller do
         :pending
     end
   end
+
+  @doc """
+  What a landing reads from `ci_status`: `ci_action/1`, except that a pending head whose base
+  branch requires checks (`:required_checks`, see `PullRequest.fetch_ci_status/2`) lands once
+  every required check reported and passed, while checks the branch doesn't require still run. A
+  failed check holds it, required or not. Without required checks, it waits on every check, until
+  the poller has waited on them for 15 minutes in `Merging` (`:landing_fallback`, see
+  `put_landing_fallback/3`): a head whose base branch requires no checks then lands once one check
+  passed, while no rerun of a failed job is starting.
+  """
+  @spec landing_action(map()) :: :closed | :pending | :success | {:failure, [map()]}
+  def landing_action(ci_status) do
+    case ci_action(ci_status) do
+      :pending -> if landing_ready?(ci_status), do: :success, else: :pending
+      action -> action
+    end
+  end
+
+  defp landing_ready?(%{required_checks: [_ | _] = required} = ci_status), do: required_checks_passed?(ci_status, required)
+  defp landing_ready?(ci_status), do: Map.get(ci_status, :landing_fallback) == true and landing_fallback_eligible?(ci_status)
+
+  # A branch that requires checks lands once they pass, and one whose requirements couldn't be read
+  # can't tell which checks matter, so only a branch read as requiring none lands past its checks.
+  # A head where nothing passed yet (a runner outage) has nothing to land on.
+  defp landing_fallback_eligible?(ci_status) do
+    Map.get(ci_status, :required_checks) == [] and Map.get(ci_status, :rerun_pending) != true and
+      ci_status |> Map.get(:checks, []) |> Enum.any?(&passed_check?/1)
+  end
+
+  defp required_checks_passed?(ci_status, required) do
+    checks = Map.get(ci_status, :checks, [])
+
+    Enum.all?(required, fn name ->
+      named = Enum.filter(checks, &(Map.get(&1, :name) == name))
+      named != [] and Enum.all?(named, &passed_check?/1)
+    end)
+  end
+
+  @doc """
+  Marks `ci_status` `rerun_pending`, which `ci_action/1` reads as `:pending`, while the poller's
+  rerun of the failed jobs on this head has not reported yet. Until GitHub's new attempt queues
+  them, the rerun checks drop out of the rollup and only the checks that passed are left, so the
+  head would read green. The mark holds while the record is `rerun_requested` for this head and
+  a check it reran is missing from the rollup.
+  """
+  @spec put_rerun_pending(map(), String.t() | nil, keyword()) :: map()
+  def put_rerun_pending(ci_status, issue_id, opts \\ []) when is_map(ci_status) do
+    if rerun_pending?(find_issue_ci_check(issue_id, opts), ci_status), do: Map.put(ci_status, :rerun_pending, true), else: ci_status
+  end
+
+  @doc """
+  Marks `ci_status` `landing_fallback` when the poller let this head past the checks it was still
+  waiting on after 15 minutes in `Merging`. `landing_action/1` reads the mark as `:success` only
+  while this read still qualifies, so a check that failed since holds the landing.
+  """
+  @spec put_landing_fallback(map(), String.t() | nil, keyword()) :: map()
+  def put_landing_fallback(ci_status, issue_id, opts \\ []) when is_map(ci_status) do
+    sha = Map.get(ci_status, :commit_sha)
+    record = find_issue_ci_check(issue_id, opts) || %{}
+
+    if is_binary(sha) and Map.get(record, :landing_fallback_sha) == sha, do: Map.put(ci_status, :landing_fallback, true), else: ci_status
+  end
+
+  defp find_issue_ci_check(issue_id, opts) when is_binary(issue_id) do
+    run_store = Keyword.get(opts, :run_store, RunStore)
+    Enum.find_value(repo_keys_from_opts(opts), &find_ci_check(run_store, &1, issue_id))
+  end
+
+  defp find_issue_ci_check(_issue_id, _opts), do: nil
+
+  defp rerun_pending?(%{status: "rerun_requested"} = record, ci_status) do
+    commit_sha = Map.get(ci_status, :commit_sha)
+    reported = ci_status |> Map.get(:checks, []) |> MapSet.new(&Map.get(&1, :name))
+
+    is_binary(commit_sha) and commit_sha == Map.get(record, :last_observed_sha) and
+      record |> Map.get(:failed_checks, []) |> Enum.any?(&(not MapSet.member?(reported, Map.get(&1, :name))))
+  end
+
+  defp rerun_pending?(_record, _ci_status), do: false
 
   @doc "Whether only a person can clear this failed check, so a CI-fix run must leave it alone."
   @spec human_only_check?(map()) :: boolean()
@@ -1438,14 +1635,24 @@ defmodule SymphonyElixir.CiPoller do
     end)
   end
 
+  # A workflow run that reported checks to the rollup but has not completed (a rerun's new
+  # attempt, a job with `needs:` not created yet) can still fail. Runs with no check in the rollup
+  # (an environment approval, another event's run) are left out, so they can't hold a head forever.
+  defp unfinished_run?(ci_status) do
+    run_ids = ci_status |> Map.get(:checks, []) |> MapSet.new(&Map.get(&1, :run_id))
+
+    ci_status
+    |> Map.get(:workflow_runs, [])
+    |> Enum.any?(&(MapSet.member?(run_ids, Map.get(&1, :id)) and Map.get(&1, :status) != "COMPLETED"))
+  end
+
   defp success_checks?(ci_status) do
     checks = Map.get(ci_status, :checks, [])
 
-    checks != [] and
-      Enum.all?(checks, fn check ->
-        normalize_status(Map.get(check, :conclusion)) in ["SUCCESS", "NEUTRAL", "SKIPPED"]
-      end)
+    checks != [] and Enum.all?(checks, &passed_check?/1)
   end
+
+  defp passed_check?(check), do: normalize_status(Map.get(check, :conclusion)) in ["SUCCESS", "NEUTRAL", "SKIPPED"]
 
   defp conclusion_for_status(ci_status) do
     case ci_action(ci_status) do
@@ -1529,7 +1736,8 @@ defmodule SymphonyElixir.CiPoller do
         is_cross_repository: ci_failure_value(ci_failure, :is_cross_repository),
         head_repository: ci_failure_value(ci_failure, :head_repository),
         failed_checks: failed_checks,
-        log_excerpt: log_excerpt
+        log_excerpt: log_excerpt,
+        approved: ci_failure_value(ci_failure, :approved) == true
       }
     end
   end
@@ -1623,15 +1831,14 @@ defmodule SymphonyElixir.CiPoller do
     active_agent_run?(issue_id, repo_key, opts) or pending_rework_review?(issue_id, repo_key, opts)
   end
 
-  # Runs and PR reviews are prefetched once per poll cycle so the green-deferral
-  # and escalation paths do not rescan storage for every CI check (see
-  # rework_in_progress?/2).
+  # PR reviews are prefetched once per poll cycle so the green-deferral and
+  # escalation paths do not rescan storage for every CI check (see
+  # rework_in_progress?/2). Runs are read per issue through the run index.
   defp put_prefetched_rework_sources(opts, _run_store, _repo_key, []), do: opts
 
   defp put_prefetched_rework_sources(opts, run_store, repo_key, _checks) do
     sources = %{
       repo_key: repo_key,
-      runs: ok_list_or_nil(list_runs(run_store, repo_key)),
       reviews: ok_list_or_nil(list_pr_reviews(run_store, repo_key))
     }
 
@@ -1655,14 +1862,8 @@ defmodule SymphonyElixir.CiPoller do
   end
 
   defp active_agent_run?(issue_id, repo_key, opts) when is_binary(issue_id) and is_binary(repo_key) do
-    runs_result =
-      case prefetched_rework_source(opts, :runs, repo_key) do
-        {:ok, runs} -> {:ok, runs}
-        :miss -> list_runs(Keyword.get(opts, :run_store, RunStore), repo_key)
-      end
-
-    case runs_result do
-      {:ok, runs} -> Enum.any?(runs, &(Map.get(&1, :issue_id) == issue_id and Map.get(&1, :status) == "running"))
+    case list_issue_runs(Keyword.get(opts, :run_store, RunStore), repo_key, issue_id) do
+      {:ok, runs} -> Enum.any?(runs, &(Map.get(&1, :status) == "running"))
       {:error, _reason} -> false
     end
   end
@@ -1703,17 +1904,16 @@ defmodule SymphonyElixir.CiPoller do
   defp first_pr_url(%Issue{pr_urls: [url | _rest]}) when is_binary(url), do: url
   defp first_pr_url(_issue), do: nil
 
-  defp latest_run_for_issue(runs, issue_id) when is_list(runs) and is_binary(issue_id) do
-    runs
-    |> Enum.filter(&ci_run_for_issue?(&1, issue_id))
-    |> Enum.max_by(&run_started_at_sort_key/1, fn -> nil end)
+  # The issue's newest finished run, or `{:error, reason}` when its runs can't be read.
+  defp latest_run_for_issue(run_store, repo_key, issue_id) do
+    with {:ok, runs} <- list_issue_runs(run_store, repo_key, issue_id) do
+      runs
+      |> Enum.filter(&ci_run?/1)
+      |> Enum.max_by(&run_started_at_sort_key/1, fn -> nil end)
+    end
   end
 
-  defp ci_run_for_issue?(run, issue_id) do
-    Map.get(run, :issue_id) == issue_id and
-      Map.get(run, :status) in ["success", "stopped"] and
-      is_binary(Map.get(run, :workspace_path))
-  end
+  defp ci_run?(run), do: Map.get(run, :status) in ["success", "stopped"] and is_binary(Map.get(run, :workspace_path))
 
   defp run_started_at_sort_key(run) do
     case Map.get(run, :started_at) do
@@ -1722,10 +1922,14 @@ defmodule SymphonyElixir.CiPoller do
     end
   end
 
-  defp list_runs(run_store, repo_key) do
-    case list_run_records(run_store, repo_key) do
-      runs when is_list(runs) -> {:ok, runs}
-      {:error, reason} -> {:error, reason}
+  defp list_issue_runs(run_store, repo_key, issue_id) do
+    if function_exported?(run_store, :list_issue_runs, 2) do
+      case run_store.list_issue_runs(repo_key, issue_id) do
+        runs when is_list(runs) -> {:ok, runs}
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      {:error, :runs_unsupported}
     end
   end
 
@@ -1764,19 +1968,6 @@ defmodule SymphonyElixir.CiPoller do
 
       true ->
         {:error, :pr_reviews_unsupported}
-    end
-  end
-
-  defp list_run_records(run_store, repo_key) do
-    cond do
-      function_exported?(run_store, :list_runs, 2) ->
-        run_store.list_runs(repo_key, :all)
-
-      function_exported?(run_store, :list_runs, 1) ->
-        run_store.list_runs(:all)
-
-      true ->
-        {:error, :runs_unsupported}
     end
   end
 

@@ -50,9 +50,18 @@ In Progress as before and never reaches the gate. A verdict that comes after the
 Review, its PR merged or closed, or its head moved on is still recorded, but the issue stays where
 it is, as for a late QA pass.
 
+The gate never runs alongside QA. A gate pass starts only from the QA result stored for the PR
+head, and never while a QA pass is in flight for the issue: that pass reports first. A verdict that
+arrives while a QA pass is in flight is recorded but moves nothing; when QA then reports, a `fail`
+goes back to In Progress as usual and any other result asks the gate again. A verdict stands only
+on the QA result it followed (`gate_qa_at` on the CI check record): once QA reports again on the
+same head, the next green poll asks for a fresh gate pass instead of reusing it.
+
 - **The runner.** Like the QA runner, it runs passes in the background, one per issue and at most
   `max_concurrent` at once. A forced ticket goes first. While the gate agent's provider is held by
-  a usage limit, nothing starts; the next green CI poll asks again.
+  a usage limit, nothing starts; the next green CI poll asks again. A pass whose agent can't reach
+  its model API (a network or DNS outage) records nothing, not even an inconclusive pass: it holds
+  the provider the same way, and the pass runs again once the hold clears.
 - **The pass** (`AcceptanceGate.run/3`) builds the context (below), checks the escalation rules,
   then runs the gate agent in a throwaway worktree at the merge result. The session is read-only:
   the read-only Linear and GitHub tools only, a read-only Codex sandbox, and for Claude no
@@ -67,7 +76,11 @@ it is, as for a late QA pass.
   It doesn't review code style or bugs, which the pre-push reviewer covers, unless a bug makes a
   criterion unmet. It answers with JSON: `verdict` (`approve`, `rework` or `escalate`),
   `criteria[]`, `overlaps[]`, `scope[]`, `escalation_reasons[]` and `follow_ups[]` (gaps outside
-  the ticket). An answer without a readable JSON object gets one follow-up turn.
+  the ticket). The prompt lists the tickets that already exist around the ticket (its sub-issues,
+  siblings, parent and blockers): a gap one of them covers names it in the follow-up's
+  `covered_by`, and each new follow-up gives `acceptance[]` criteria saying what a test or a check
+  shows once it is fixed, never its title restated. An answer without a readable JSON object gets
+  one follow-up turn.
 - **The final verdict.** Any escalation rule that triggers forces `escalate`, and the agent's own
   verdict is kept as `agent_verdict`. A QA `blocked` adds the reason `qa_blocked`. A PR that
   conflicts with current main is `rework` (reason `conflict`). An inconclusive pass (an unreadable
@@ -181,10 +194,15 @@ With `mode: enforce`, set globally or for one repository, Auto Review applies th
   this workflow `Rework` means the approach is wrong, the PR is closed and the work starts over.
 - **Follow-ups.** The answer's `follow_ups` are filed as Backlog sub-issues of the ticket
   (`AcceptanceGate.FollowUps`, through `AgentTools.Linear.create_subissue/3`), at most 3 per
-  verdict. A title the ticket already has among its sub-issues (compared without case), or one the
-  answer repeats, is not filed again. When the sub-issues can't be read, none is filed. The gate
-  comment lists each follow-up as filed (with its identifier), already a sub-issue, over the cap,
-  or not filed and why. Only a Linear tracker files them.
+  verdict. A follow-up an existing ticket covers is not filed: one whose `covered_by` names a
+  ticket of the family (its sub-issues, siblings, parent and blockers; a `covered_by` outside it,
+  or naming the ticket itself, is ignored), one whose title a ticket of the family already has
+  (compared without case), or one the answer repeats. A filed follow-up lists its
+  `acceptance` criteria plus "CI is green"; a criterion that only restates the title is dropped,
+  and a follow-up left without one is not filed. When the family can't be read, none is filed.
+  The gate comment lists each follow-up as filed (with its identifier), already covered (naming
+  the ticket), without a checkable criterion, over the cap, or not filed and why. Only a Linear
+  tracker files them.
 - **Moves.** The target is stored on the CI check record before the move. A move that fails is
   tried again on the next green poll without counting another attempt. An issue back in Auto Review
   on the same SHA after a `rework`, because its fix run pushed nothing, counts another attempt.
@@ -222,6 +240,22 @@ The gate is configured in `symphony.yml`, the operator config: a global
 `auto_review.acceptance_gate` block, and a `repositories[].acceptance_gate` override per repository.
 A repository's `WORKFLOW.md` can't set it. Its only allowed `auto_review` key is `playbooks`, and
 anything else fails that workflow. A PR can't change the rules that gate it.
+
+### From the macOS app
+
+The menu bar app changes `mode` without a text editor, through the same comment-keeping `symphony.yml` line
+editor as its other settings (see [the app's Settings](../macos/README.md#settings)):
+
+- **Settings → Acceptance gate** sets `auto_review.acceptance_gate.mode` (Off, Shadow or Enforce, each with
+  one line on what it does). Choosing Enforce asks first. Save runs `symphony check` first. Under the picker,
+  each repository's agreement line from [The stats](#the-stats), or "Start Symphony to see the gate's
+  record." while Symphony isn't running.
+- **Repos → Edit…** sets `repositories[<key>].acceptance_gate.mode`: Inherit removes the key, Off, Shadow
+  and Enforce write it. The repository's row shows **Gate: <mode>** while it differs from the global mode.
+- **The status menu** lists **Acceptance gate: Enforce (<key>)** (or Shadow) for each repository the gate
+  runs on, with a submenu that switches it to Shadow or Off at once. It writes the repository's key without
+  running `symphony check`, so the kill switch never waits on it, and Symphony stops the moves on its next
+  poll (see [Enforce mode](#enforce-mode), Kill switch).
 
 ## The block
 
@@ -269,7 +303,7 @@ Quote regular expressions with single quotes in YAML, so a backslash stays a bac
 | `timeout_ms` | `900000` (15 minutes) | How long a gate run may take. |
 | `max_concurrent` | `2` | Gate runs at once, across all repositories. |
 | `escalate.labels` | `needs-human`, `breakdown` | An issue with one of these labels escalates. Matching ignores case and surrounding spaces. |
-| `escalate.ticket_patterns` | the three above | Regular expressions matched against the issue title and description. |
+| `escalate.ticket_patterns` | the three above | Regular expressions matched against the issue title and description, after the human review state's name is blanked (see [What escalates](#what-escalates)). |
 | `escalate.paths` | the built-in paths below | Globs matched against each changed path outside docs and tests. `**` spans directories, `*` and `?` don't. |
 | `escalate.diff_patterns` | the four above | Regular expressions matched against each added line of the diff, in every file. Removed lines don't count. |
 | `escalate.dependencies` | `major` | `off`: dependency changes don't escalate. `major`: a new dependency or a major version change in `mix.lock` or `package.json` escalates. `any`: any added, changed or removed dependency escalates. |
@@ -319,7 +353,7 @@ for example `repositories[symphony].acceptance_gate.mode must be one of: off, sh
 
 ## What escalates
 
-`Escalation.check(issue, diff_summary, busy_files, rules)` returns one reason per rule that
+`Escalation.check(issue, diff_summary, busy_files, rules, opts)` returns one reason per rule that
 triggers, as `%{rule: atom, detail: String.t()}`, or `[]` when nothing does. The rules are
 checked in this order:
 
@@ -332,6 +366,16 @@ checked in this order:
 | `:dependency` | `mix.lock` or a `package.json` adds a dependency or changes a major version (`major`), or changes any dependency (`any`). A manifest that can't be parsed also escalates. |
 | `:size` | more than `escalate.max_changed_lines` lines change outside docs and tests. |
 | `:busy_file` | more than `escalate.busy_files.max_lines` lines change in one busy file. |
+| `:settings_ui` | an added line in Symphony's own config schema (`lib/symphony_elixir/config/schema.ex` or `system_schema.ex`) declares a setting (`field(`, `embeds_one(`, `embeds_many(` or a `~w(` key list) and the PR doesn't change the macOS app's settings manifest. Other repositories don't have these files. See [Settings in the macOS app](configuration.md#settings-in-the-macos-app). |
+
+A ticket that only names the human review state doesn't match `human review`. Before
+`ticket_patterns` match, the gate blanks `issues.states.human_review` (`Human Review` by default)
+where the text names the state: in backticks (`` `Human Review` ``), in bold (`**Human Review**`),
+after `to`, `in`, `into` or `from` ("moves it to Human Review"), or before `state` ("the Human
+Review state"). The name matches case-sensitively and only in those places, so "This change needs
+a human review before merge" and "manually review the SQL" still escalate. With
+`issues.states.human_review: null` nothing is blanked. The same applies when Symphony checks
+whether a `breakdown` plan's ticket asks for a human review.
 
 A version's major is its first number. When that number is `0`, the first two numbers count,
 so `0.4.0` to `0.5.0` is a major change. Only a leading version is read, after any `^`, `~`,

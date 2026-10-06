@@ -16,6 +16,11 @@ defmodule SymphonyElixir.Repo.Fetcher do
   branch was force-pushed during the fetch) is run once more after a short
   delay.
 
+  The same lock serializes the other git calls that write the shared repo's
+  metadata (`with_lock/3`), such as a dispatch's `git worktree add` and every
+  host-side `git worktree remove`: the worktrees of one repo share its refs,
+  `.git/config` and `.git/worktrees`.
+
   A full fetch runs in its own process, so the server keeps taking requests.
   Without the server (some tests), every fetch runs in the caller, unlocked.
   """
@@ -24,10 +29,11 @@ defmodule SymphonyElixir.Repo.Fetcher do
 
   require Logger
 
-  alias SymphonyElixir.{PathSafety, Workspace}
+  alias SymphonyElixir.{GitConfigCommands, PathSafety, Workspace}
 
   @default_retry_delay_ms 1_000
   @lock_failure "cannot lock ref"
+  @remote_fetch_args Enum.join(GitConfigCommands.subcommand_args(["fetch", "origin"]), " ")
 
   @type result :: {String.t(), non_neg_integer()}
 
@@ -45,6 +51,9 @@ defmodule SymphonyElixir.Repo.Fetcher do
   `opts`:
     * `:server` - the server to ask (default `#{inspect(__MODULE__)}`).
     * `:git` - the git executable (default `"git"`).
+    * `:network_timeout_ms` - how long the fetch may run before it is stopped
+      (see `SymphonyElixir.Workspace.safe_git/3`). A stopped fetch hands the
+      lock on like any other.
     * `:retry_delay_ms` - the wait before the retry after `cannot lock ref`
       (default #{@default_retry_delay_ms}, or the `:repo_fetch_retry_delay_ms`
       application env).
@@ -53,7 +62,8 @@ defmodule SymphonyElixir.Repo.Fetcher do
   def fetch_origin(repo, opts \\ []) when is_binary(repo) and is_list(opts) do
     repo = Path.expand(repo)
     git = Keyword.get(opts, :git, "git")
-    fetch = fn -> with_retry(repo, fn -> Workspace.safe_git(git, ["-C", repo, "fetch", "origin"]) end, opts) end
+    git_opts = Keyword.take(opts, [:network_timeout_ms])
+    fetch = fn -> with_retry(repo, fn -> Workspace.safe_git(git, ["-C", repo, "fetch", "origin"], git_opts) end, opts) end
 
     case server(opts) do
       nil -> fetch.()
@@ -73,16 +83,29 @@ defmodule SymphonyElixir.Repo.Fetcher do
   @spec fetch(Path.t(), (-> term()), keyword()) :: term()
   def fetch(dir, fetch, opts \\ []) when is_binary(dir) and is_function(fetch, 0) and is_list(opts) do
     dir = Path.expand(dir)
+    with_lock(dir, fn -> with_retry(dir, fetch, opts) end, opts)
+  end
 
+  @doc """
+  Runs `fun` in the caller while no fetch of the repo of `dir` runs and no
+  other caller holds its lock, and returns what `fun` returns. It is never
+  retried. Takes the `:server` option of `fetch_origin/2`.
+
+  For a git call besides a fetch that writes the repo's shared metadata, such
+  as a dispatch's `git worktree add` or `git worktree remove`. `fun` must not
+  fetch the same repo: the lock is not reentrant.
+  """
+  @spec with_lock(Path.t(), (-> term()), keyword()) :: term()
+  def with_lock(dir, fun, opts \\ []) when is_binary(dir) and is_function(fun, 0) and is_list(opts) do
     case server(opts) do
       nil ->
-        with_retry(dir, fetch, opts)
+        fun.()
 
       server ->
-        {:ok, ref} = GenServer.call(server, {:lock, lock_key(dir)}, :infinity)
+        {:ok, ref} = GenServer.call(server, {:lock, lock_key(Path.expand(dir))}, :infinity)
 
         try do
-          with_retry(dir, fetch, opts)
+          fun.()
         after
           GenServer.call(server, {:unlock, ref}, :infinity)
         end
@@ -91,18 +114,21 @@ defmodule SymphonyElixir.Repo.Fetcher do
 
   @doc """
   The shell commands a remote worker's dispatch script runs to fetch `origin` in
-  `$repo`, under `set -e`. The lock lives in this node, so on the worker host a
-  fetch that fails with `cannot lock ref` is only run once more, a second later.
+  `$repo`, under `set -e`, with the `symphony_git` the script defines
+  (`SymphonyElixir.Workspace.remote_safe_git_functions/0`) and the options of
+  `SymphonyElixir.GitConfigCommands.subcommand_args/1`. The lock lives in this
+  node, so on the worker host a fetch that fails with `cannot lock ref` is only run
+  once more, a second later.
   """
   @spec remote_fetch_origin_script() :: String.t()
   def remote_fetch_origin_script do
     """
     symphony_fetch_status=0
-    symphony_fetch_output=$(git -C "$repo" fetch origin 2>&1) || symphony_fetch_status=$?
+    symphony_fetch_output=$(symphony_git "$repo" #{@remote_fetch_args} 2>&1) || symphony_fetch_status=$?
     if [ "$symphony_fetch_status" -ne 0 ]; then
       printf '%s\\n' "$symphony_fetch_output" >&2
       case "$symphony_fetch_output" in
-        *"#{@lock_failure}"*) sleep 1; git -C "$repo" fetch origin ;;
+        *"#{@lock_failure}"*) sleep 1; symphony_git "$repo" #{@remote_fetch_args} ;;
         *) exit "$symphony_fetch_status" ;;
       esac
     fi\

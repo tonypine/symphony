@@ -3,7 +3,7 @@ defmodule SymphonyElixir.CLI do
   Escript entrypoint for running Symphony with an operator `symphony.yml`.
   """
 
-  alias SymphonyElixir.{Config, ControlClient, LogFile, Paths, ReleaseNode, TerminalDashboard}
+  alias SymphonyElixir.{BuildInfo, Config, ControlClient, LogFile, OpenRouter, Paths, ReleaseNode, TerminalDashboard}
 
   # Retained so existing scripts (Docker, ops runbooks) that still pass the long
   # flag keep parsing — its value is ignored.
@@ -30,6 +30,7 @@ defmodule SymphonyElixir.CLI do
   @check_switches [config: :string]
   @dashboard_switches [url: :string]
   @force_switches [clear: :boolean]
+  @openrouter_stub_switches [port: :integer]
   @default_symphony_file "symphony.yml"
 
   @type ensure_started_result :: {:ok, [atom()]} | {:error, term()}
@@ -55,6 +56,7 @@ defmodule SymphonyElixir.CLI do
           run_one_shot: (String.t(), keyword() -> one_shot_result()),
           control_url: (-> String.t()),
           run_dashboard: ((-> String.t()) -> :ok),
+          start_openrouter_stub: (non_neg_integer() -> {:ok, :inet.port_number()} | {:error, term()}),
           force_issue: (String.t(), boolean() -> ControlClient.control_result())
         }
 
@@ -62,6 +64,7 @@ defmodule SymphonyElixir.CLI do
   def main(args) do
     case evaluate(args) do
       :ok -> wait_for_shutdown()
+      :serve -> serve_until_stopped()
       result -> halt(result)
     end
   end
@@ -90,7 +93,7 @@ defmodule SymphonyElixir.CLI do
   def finish({:error, message}), do: finish({:error, message, 1})
 
   @spec evaluate([String.t()], deps()) ::
-          :ok | {:halt, non_neg_integer()} | {:error, String.t()} | {:error, String.t(), non_neg_integer()}
+          :ok | :serve | {:halt, non_neg_integer()} | {:error, String.t()} | {:error, String.t(), non_neg_integer()}
   def evaluate(args, deps \\ runtime_deps()) do
     case args do
       ["check" | check_args] ->
@@ -115,9 +118,16 @@ defmodule SymphonyElixir.CLI do
         evaluate_workflow(workflow_args)
 
       _args ->
-        with :ok <- configure(args, deps) do
-          start_runtime(deps)
-        end
+        evaluate_service(args, deps)
+    end
+  end
+
+  # The long-running commands: the OpenRouter QA stub, or Symphony itself.
+  defp evaluate_service(["openrouter-stub" | stub_args], deps), do: evaluate_openrouter_stub(stub_args, deps)
+
+  defp evaluate_service(args, deps) do
+    with :ok <- configure(args, deps) do
+      start_runtime(deps)
     end
   end
 
@@ -132,12 +142,51 @@ defmodule SymphonyElixir.CLI do
     end
   end
 
+  # Serves the OpenRouter QA stub until the process is stopped (`:serve`), for QA of
+  # OpenRouter flows without a real key.
+  defp evaluate_openrouter_stub(args, deps) do
+    with {opts, [], []} <- OptionParser.parse(args, strict: @openrouter_stub_switches),
+         port when port in 0..65_535 <- Keyword.get(opts, :port, 0) do
+      case deps.start_openrouter_stub.(port) do
+        {:ok, port} ->
+          IO.puts(openrouter_stub_message(port))
+          :serve
+
+        {:error, :eaddrinuse} ->
+          {:error, "Could not start the OpenRouter QA stub: port #{port} is already in use"}
+
+        {:error, reason} ->
+          {:error, "Could not start the OpenRouter QA stub: #{inspect(reason)}"}
+      end
+    else
+      _ -> {:error, openrouter_stub_usage_message()}
+    end
+  end
+
+  defp openrouter_stub_message(port) do
+    url = OpenRouter.Stub.url(port)
+
+    """
+    OpenRouter QA stub listening on #{url}
+    Valid key: #{OpenRouter.Stub.valid_key()} (any other key is rejected)
+    Models: #{Enum.map_join(OpenRouter.Stub.models(), ", ", & &1["id"])}
+    Symphony and the macOS app use it only in QA mode:
+      export SYMPHONY_BAR_QA_ROOT="$TMPDIR/qa-root" #{OpenRouter.qa_url_env()}=#{url}\
+    """
+  end
+
   # Loads symphony.yml and every repo WORKFLOW.md startup would read (the committed
   # ref, see `WorkflowSource.load_for_check/1`) through the same validation the
   # application runs at boot, without starting the supervisor or touching the network.
+  # The build goes to stderr first, so the menu bar app's QA log shows which Symphony
+  # checked, and stdout stays `Config OK: <path>` for scripts. The escript has not loaded
+  # the application yet, and its version and build come from the application's spec.
   defp evaluate_check(args, deps) do
     case OptionParser.parse(args, strict: @check_switches) do
       {opts, [], []} ->
+        _loaded = Application.load(:symphony_elixir)
+        IO.puts(:stderr, build_line(BuildInfo.current()))
+
         with :ok <- set_symphony_config(opts, deps) do
           check_config(symphony_config_path(opts), deps)
         end
@@ -233,6 +282,9 @@ defmodule SymphonyElixir.CLI do
 
   defp check_result(_path, []), do: {:halt, 0}
   defp check_result(path, errors), do: {:error, "Config error in #{path}: #{Enum.join(errors, "; ")}"}
+
+  defp build_line(%{version: version, sha: nil}), do: "Symphony #{version}"
+  defp build_line(%{version: version, sha: sha}), do: "Symphony #{version} (#{BuildInfo.short_sha(sha)})"
 
   defp dispatch_pr(args) do
     case OptionParser.parse(args, strict: [intent: :string]) do
@@ -450,6 +502,7 @@ defmodule SymphonyElixir.CLI do
       "       symphony check [--config <path-to-symphony.yml>]\n" <>
       "       symphony dashboard [--url <control-url>]\n" <>
       "       symphony force [--clear] <issue-identifier>\n" <>
+      "       symphony openrouter-stub [--port <port>]\n" <>
       "       symphony [--config <path-to-symphony.yml>] [--state-root <path>] [--logs-root <path>] [--host <host>] [--port <port>]\n" <>
       "       symphony pr <url-or-number> [--intent \"address review comments\"]\n" <>
       "       symphony run <issue-identifier> [--config <path-to-symphony.yml>] [--timeout <duration>] [--no-retry] [--state-root <path>] [--logs-root <path>]\n" <>
@@ -462,6 +515,10 @@ defmodule SymphonyElixir.CLI do
 
   defp dashboard_usage_message do
     "Usage: symphony dashboard [--url <control-url>]"
+  end
+
+  defp openrouter_stub_usage_message do
+    "Usage: symphony openrouter-stub [--port <port>]"
   end
 
   defp force_usage_message do
@@ -491,8 +548,28 @@ defmodule SymphonyElixir.CLI do
       run_one_shot: &SymphonyElixir.OneShot.run/2,
       control_url: fn -> ControlClient.control_url() end,
       run_dashboard: &run_dashboard/1,
-      force_issue: &ControlClient.force_issue/2
+      force_issue: &ControlClient.force_issue/2,
+      start_openrouter_stub: &start_openrouter_stub/1
     }
+  end
+
+  # The escript has not started the application, so Bandit's own is started here. Bandit also
+  # logs a port it can't bind to; the command's own error says it once, so the start logs nothing.
+  defp start_openrouter_stub(port) do
+    with {:ok, _started} <- Application.ensure_all_started(:bandit),
+         {:ok, _pid, port} <- start_openrouter_stub_quietly(port) do
+      {:ok, port}
+    end
+  end
+
+  defp start_openrouter_stub_quietly(port) do
+    Logger.put_process_level(self(), :none)
+
+    try do
+      OpenRouter.Stub.start_link(port: port, log: &IO.puts/1)
+    after
+      Logger.delete_process_level(self())
+    end
   end
 
   defp run_dashboard(url_source) do
@@ -586,6 +663,14 @@ defmodule SymphonyElixir.CLI do
   @spec burrito_args(String.t() | nil, [charlist() | String.t()]) :: [String.t()] | :not_in_burrito
   def burrito_args(bin_path, _plain_arguments) when bin_path in [nil, ""], do: :not_in_burrito
   def burrito_args(_bin_path, plain_arguments), do: Enum.map(plain_arguments, &to_string/1)
+
+  # A long-running command such as `openrouter-stub` serves from its own processes until the
+  # escript is stopped. `Process.sleep/1` is typed to return, so the halt keeps this `no_return()`.
+  @spec serve_until_stopped() :: no_return()
+  defp serve_until_stopped do
+    Process.sleep(:infinity)
+    System.halt(0)
+  end
 
   @spec wait_for_shutdown() :: no_return()
   defp wait_for_shutdown do

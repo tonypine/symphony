@@ -17,12 +17,15 @@ final class UpdateModeTests: XCTestCase {
         XCTAssertEqual(UpdateMode.atTime.id, "atTime")
     }
 
-    func testOnlyManualSaysItIsActive() {
-        XCTAssertFalse(UpdateMode.manual.explanation.contains("Not active yet"))
+    func testEachModeSaysWhatItDoes() {
         XCTAssertTrue(UpdateMode.manual.explanation.contains("Update to vX"))
+        XCTAssertTrue(UpdateMode.whenIdle.explanation.contains("as soon as no agent runs are active"))
+        XCTAssertTrue(UpdateMode.atTime.explanation.contains("tries again the next day"))
+        for mode in UpdateMode.allCases {
+            XCTAssertFalse(mode.explanation.contains("Not active yet"), mode.rawValue)
+        }
         for mode in [UpdateMode.whenIdle, .atTime] {
-            XCTAssertTrue(mode.explanation.hasPrefix("Will install"), mode.rawValue)
-            XCTAssertTrue(mode.explanation.hasSuffix("install updates from the menu."), mode.rawValue)
+            XCTAssertTrue(mode.explanation.hasSuffix("A release you skip is never installed by itself."), mode.rawValue)
         }
     }
 

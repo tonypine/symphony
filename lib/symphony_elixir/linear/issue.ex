@@ -178,8 +178,9 @@ defmodule SymphonyElixir.Linear.Issue do
   def breakdown_label?(label) when is_binary(label), do: normalize_state(label) == @breakdown_label
   def breakdown_label?(_label), do: false
 
-  # The sub-issues outside `terminal_states`; one without a known state counts as open.
-  defp open_sub_issues(%__MODULE__{sub_issues: sub_issues}, terminal_states) when is_list(sub_issues) do
+  @doc "The issue's sub-issues outside `terminal_states`; one without a known state counts as open."
+  @spec open_sub_issues(t() | term(), Enumerable.t(String.t())) :: [map()]
+  def open_sub_issues(%__MODULE__{sub_issues: sub_issues}, terminal_states) when is_list(sub_issues) do
     terminal_states = MapSet.new(terminal_states, &normalize_state/1)
 
     Enum.reject(sub_issues, fn
@@ -188,7 +189,7 @@ defmodule SymphonyElixir.Linear.Issue do
     end)
   end
 
-  defp open_sub_issues(_issue, _terminal_states), do: []
+  def open_sub_issues(_issue, _terminal_states), do: []
 
   defp in_state?(%{state: state}, expected) when is_binary(state), do: normalize_state(state) == expected
   defp in_state?(_sub_issue, _expected), do: false
