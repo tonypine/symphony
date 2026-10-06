@@ -809,15 +809,16 @@ defmodule SymphonyElixir.RunStoreTest do
       GenServer.stop(pid)
     end
 
-    case RunStore.start_link([]) do
-      {:ok, pid} ->
-        pid
+    # The supervisor may restart it first and hand back a pid still in init, before the run
+    # index is built; a system message is only answered once init returned.
+    pid =
+      case RunStore.start_link([]) do
+        {:ok, pid} -> pid
+        {:error, {:already_started, pid}} -> pid
+      end
 
-      # The supervisor's restart won the name and may still be in init, before the run index is built.
-      {:error, {:already_started, pid}} ->
-        :sys.get_state(pid)
-        pid
-    end
+    _state = :sys.get_state(pid)
+    pid
   end
 
   defp create_legacy_run_store_dir!(dir) do
