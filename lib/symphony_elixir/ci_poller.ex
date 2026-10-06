@@ -289,6 +289,16 @@ defmodule SymphonyElixir.CiPoller do
   end
 
   @doc """
+  The PR head SHA the poller last saw ready to land (see `landing_action/1`): every check it
+  requires passed. Nil before then, or when the last head it saw was not ready.
+  """
+  @spec landing_ready_head(String.t(), keyword()) :: String.t() | nil
+  def landing_ready_head(issue_id, opts \\ []) when is_binary(issue_id) do
+    run_store = Keyword.get(opts, :run_store, RunStore)
+    Enum.find_value(repo_keys_from_opts(opts), &Map.get(find_ci_check(run_store, &1, issue_id) || %{}, :landing_ready_sha))
+  end
+
+  @doc """
   The PR head SHA and its CI conclusion (`"SUCCESS"`, `"FAILURE"`, `"IN_PROGRESS"`, ...) the
   poller last observed for the issue, or nil before its first poll.
   """
@@ -433,7 +443,7 @@ defmodule SymphonyElixir.CiPoller do
     repo_key = repo_key_from_opts(opts)
     tracker = Keyword.get(opts, :tracker, Tracker)
 
-    with {:ok, discovered, auto_review_issues, merging_issue_ids} <-
+    with {:ok, discovered, auto_review_issues, merging_issue_ids, landing_issue_ids} <-
            discover_ci_checks(settings, run_store, tracker, repo_key, now, opts),
          {:ok, checks} <- list_ci_checks(run_store, repo_key) do
       opts =
@@ -441,6 +451,7 @@ defmodule SymphonyElixir.CiPoller do
         |> put_prefetched_rework_sources(run_store, repo_key, checks)
         |> Keyword.put(:auto_review_issues, auto_review_issues)
         |> Keyword.put(:merging_issue_ids, merging_issue_ids)
+        |> Keyword.put(:landing_issue_ids, landing_issue_ids)
 
       actions = Enum.map(checks, &process_ci_check(&1, settings, opts, now))
       settled = count_settled(checks, run_store, repo_key)
@@ -478,7 +489,8 @@ defmodule SymphonyElixir.CiPoller do
       discovered = Enum.count(issues, &persist_discovered_ci_check?(&1, existing_by_issue, run_store, repo_key, now))
       observe_gate_decisions(settings, repo_key, issues, existing, opts)
 
-      {:ok, discovered, auto_review_issues(settings, issues), auto_merge_issue_ids(settings, issues)}
+      merging_issue_ids = auto_merge_issue_ids(settings, issues)
+      {:ok, discovered, auto_review_issues(settings, issues), merging_issue_ids, landing_issue_ids(issues)}
     end
   end
 
@@ -519,6 +531,9 @@ defmodule SymphonyElixir.CiPoller do
       do: issues |> Enum.filter(&AutoMerge.merging?/1) |> MapSet.new(& &1.id),
       else: MapSet.new()
   end
+
+  # Every `Merging` issue: its head's CI is read as a landing reads it (see `landing_action/1`).
+  defp landing_issue_ids(issues), do: issues |> Enum.filter(&AutoMerge.merging?/1) |> MapSet.new(& &1.id)
 
   defp fetch_watched_issues(settings, tracker, opts) do
     case Keyword.fetch(opts, :watched_issues) do
@@ -621,13 +636,21 @@ defmodule SymphonyElixir.CiPoller do
   defp fetch_and_process_ci(record, settings, opts, now) do
     github = Keyword.get(opts, :github, PullRequest)
 
-    case github.fetch_ci_status(Map.get(record, :pr_url), cwd: Map.get(record, :workspace_path)) do
+    case github.fetch_ci_status(Map.get(record, :pr_url), [cwd: Map.get(record, :workspace_path)] ++ landing_read_opts(record, opts)) do
       {:ok, ci_status} ->
         handle_ci_status(record, ci_status, settings, opts, now)
 
       {:error, reason} ->
         record_poll_error(record, reason, opts, now)
     end
+  end
+
+  # A `Merging` issue's landing waits only on the checks its base branch requires, so its read
+  # carries them for `landing_action/1`.
+  defp landing_read_opts(record, opts) do
+    if MapSet.member?(Keyword.get(opts, :landing_issue_ids, MapSet.new()), Map.get(record, :issue_id)),
+      do: [required_checks: true],
+      else: []
   end
 
   defp handle_ci_status(record, ci_status, settings, opts, now) do
@@ -1252,6 +1275,7 @@ defmodule SymphonyElixir.CiPoller do
         commit_sha: Map.get(ci_status, :commit_sha),
         last_observed_sha: Map.get(ci_status, :commit_sha),
         last_observed_conclusion: conclusion_for_status(ci_status),
+        landing_ready_sha: if(landing_action(ci_status) == :success, do: Map.get(ci_status, :commit_sha)),
         updated_at: now
       },
       attrs
@@ -1411,6 +1435,29 @@ defmodule SymphonyElixir.CiPoller do
   end
 
   @doc """
+  What a landing reads from `ci_status`: `ci_action/1`, except that a pending head whose base
+  branch requires checks (`:required_checks`, see `PullRequest.fetch_ci_status/2`) lands once
+  every required check reported and passed, while checks the branch doesn't require still run. A
+  failed check holds it, required or not. Without required checks, it waits on every check.
+  """
+  @spec landing_action(map()) :: :closed | :pending | :success | {:failure, [map()]}
+  def landing_action(ci_status) do
+    case {ci_action(ci_status), Map.get(ci_status, :required_checks)} do
+      {:pending, [_ | _] = required} -> if required_checks_passed?(ci_status, required), do: :success, else: :pending
+      {action, _required} -> action
+    end
+  end
+
+  defp required_checks_passed?(ci_status, required) do
+    checks = Map.get(ci_status, :checks, [])
+
+    Enum.all?(required, fn name ->
+      named = Enum.filter(checks, &(Map.get(&1, :name) == name))
+      named != [] and Enum.all?(named, &passed_check?/1)
+    end)
+  end
+
+  @doc """
   Marks `ci_status` `rerun_pending`, which `ci_action/1` reads as `:pending`, while the poller's
   rerun of the failed jobs on this head has not reported yet. Until GitHub's new attempt queues
   them, the rerun checks drop out of the rollup and only the checks that passed are left, so the
@@ -1485,11 +1532,10 @@ defmodule SymphonyElixir.CiPoller do
   defp success_checks?(ci_status) do
     checks = Map.get(ci_status, :checks, [])
 
-    checks != [] and
-      Enum.all?(checks, fn check ->
-        normalize_status(Map.get(check, :conclusion)) in ["SUCCESS", "NEUTRAL", "SKIPPED"]
-      end)
+    checks != [] and Enum.all?(checks, &passed_check?/1)
   end
+
+  defp passed_check?(check), do: normalize_status(Map.get(check, :conclusion)) in ["SUCCESS", "NEUTRAL", "SKIPPED"]
 
   defp conclusion_for_status(ci_status) do
     case ci_action(ci_status) do

@@ -143,7 +143,53 @@ defmodule SymphonyElixir.RunStore do
          :ok <- ensure_started() do
       case RunIndex.take_issue(repo_key, issue_id) do
         {:ok, keys} -> read_runs(keys)
-        :unavailable -> repo_key |> list_runs(:all) |> issue_runs(issue_id)
+        :unavailable -> repo_key |> list_runs(:all) |> filter_runs(&(Map.get(&1, :issue_id) == issue_id))
+      end
+    end
+  end
+
+  @doc """
+  Every run, in any repository, started on the UTC `day`, newest first, read through the run index,
+  so the orchestrator's start doesn't scan the whole store to total the day's tokens.
+  """
+  @spec list_runs_started_on(Date.t()) :: [map()] | {:error, term()}
+  def list_runs_started_on(%Date{} = day) do
+    from = DateTime.new!(day, ~T[00:00:00.000000], "Etc/UTC")
+    to = DateTime.add(from, 1, :day)
+
+    with :ok <- ensure_started() do
+      case RunIndex.take_started(from, to) do
+        {:ok, keys} -> read_runs(keys)
+        :unavailable -> :all |> list_all_runs() |> filter_runs(&started_between?(Map.get(&1, :started_at), from, to))
+      end
+    end
+  end
+
+  @doc """
+  Every run, in any repository, whose `status` is `status`, read through the run index, so the
+  orchestrator's start doesn't scan the whole store for the issues that ran out of budget.
+  """
+  @spec list_runs_with_status(String.t()) :: [map()] | {:error, term()}
+  def list_runs_with_status(status) when is_binary(status) do
+    with :ok <- ensure_started() do
+      case RunIndex.take_status(status) do
+        {:ok, keys} -> read_runs(keys)
+        :unavailable -> :all |> list_all_runs() |> filter_runs(&(Map.get(&1, :status) == status))
+      end
+    end
+  end
+
+  @doc """
+  The workspace identifiers of `repo_key`'s runs, each once, in ascending order, read through the
+  run index, so the startup orphan sweep doesn't scan the whole store for the workspaces to keep.
+  """
+  @spec list_run_identifiers(String.t()) :: [String.t()] | {:error, term()}
+  def list_run_identifiers(repo_key) do
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      case RunIndex.take_identifiers(repo_key) do
+        {:ok, identifiers} -> identifiers
+        :unavailable -> repo_key |> list_runs(:all) |> run_identifiers()
       end
     end
   end
@@ -189,6 +235,7 @@ defmodule SymphonyElixir.RunStore do
         {:ok, interrupt_running_records(repo_key, error, now)}
       end)
       |> unwrap_nested_error()
+      |> index_interrupted_runs()
       |> tap(fn _result -> RunIndex.touch() end)
     end
   end
@@ -1067,8 +1114,20 @@ defmodule SymphonyElixir.RunStore do
   defp take_runs(runs, limit) when is_list(runs), do: Enum.take(runs, limit)
   defp take_runs({:error, reason}, _limit), do: {:error, reason}
 
-  defp issue_runs(runs, issue_id) when is_list(runs), do: Enum.filter(runs, &(Map.get(&1, :issue_id) == issue_id))
-  defp issue_runs({:error, reason}, _issue_id), do: {:error, reason}
+  defp filter_runs(runs, fun) when is_list(runs), do: Enum.filter(runs, fun)
+  defp filter_runs({:error, reason}, _fun), do: {:error, reason}
+
+  defp started_between?(%DateTime{} = started_at, from, to) do
+    DateTime.compare(started_at, from) != :lt and DateTime.compare(started_at, to) == :lt
+  end
+
+  defp started_between?(_started_at, _from, _to), do: false
+
+  defp run_identifiers(runs) when is_list(runs) do
+    runs |> Enum.map(&RunIndex.workspace_identifier/1) |> Enum.reject(&is_nil/1) |> Enum.uniq() |> Enum.sort()
+  end
+
+  defp run_identifiers({:error, reason}), do: {:error, reason}
 
   defp update_pr_review_record(repo_key, issue_id, attrs) do
     durable_transaction(fn ->
@@ -1504,18 +1563,26 @@ defmodule SymphonyElixir.RunStore do
   defp interrupt_running_records(repo_key, error, now) do
     @runs_table
     |> scoped_records(repo_key)
-    |> Enum.reduce(0, &interrupt_running_record(&1, error, now, &2))
+    |> Enum.reduce([], &interrupt_running_record(&1, error, now, &2))
   end
+
+  # Only after the writes committed, as `index_run/4`.
+  defp index_interrupted_runs({:ok, interrupted}) do
+    Enum.each(interrupted, fn {repo_key, run_id, record} -> RunIndex.put(repo_key, run_id, record) end)
+    {:ok, length(interrupted)}
+  end
+
+  defp index_interrupted_runs(error), do: error
 
   # Auto Review QA runs use their own `qa_running` status so executor lookups never
   # mistake them for agent runs; a restart interrupts them all the same.
-  defp interrupt_running_record(%{status: status} = record, error, now, count) when status in ["running", "qa_running"] do
-    write_interrupted_run_record(record, error, now, count)
+  defp interrupt_running_record(%{status: status} = record, error, now, interrupted) when status in ["running", "qa_running"] do
+    write_interrupted_run_record(record, error, now, interrupted)
   end
 
-  defp interrupt_running_record(_record, _error, _now, count), do: count
+  defp interrupt_running_record(_record, _error, _now, interrupted), do: interrupted
 
-  defp write_interrupted_run_record(record, error, now, count) do
+  defp write_interrupted_run_record(record, error, now, interrupted) do
     case Map.get(record, :run_id) do
       run_id when is_binary(run_id) ->
         updated =
@@ -1528,11 +1595,11 @@ defmodule SymphonyElixir.RunStore do
 
         repo_key = Map.fetch!(record, :repo_key)
         :mnesia.write({@runs_table, scoped_key(repo_key, run_id), repo_key, run_id, updated})
-        count + 1
+        [{repo_key, run_id, updated} | interrupted]
 
       malformed_run_id ->
         Logger.warning("Skipping malformed running run store record during startup recovery run_id=#{inspect(malformed_run_id)}")
-        count
+        interrupted
     end
   end
 

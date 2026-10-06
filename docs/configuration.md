@@ -1733,12 +1733,14 @@ any other repository command on the host; they only call Symphony's adb.
 | `qa_android_rotate` | turns off auto-rotate and locks `portrait` or `landscape` (`cmd window user-rotation lock`, or the `user_rotation` setting on Android 9 and older), then waits up to 5 s for the display to turn; fails with `qa_android_rotate_failed` when it does not, for example when the app locks its orientation | any other orientation |
 | `qa_android_dark_mode` | turns the night theme `on` or `off` (`cmd uimode night`) | |
 | `qa_android_font_scale` | sets the font scale to 0.85, 1.0, 1.15, 1.3, 1.5, 1.8 or 2.0 | any other scale |
+| `qa_android_put_file` | puts a fixture file the agent wrote (a CSV to import, a malformed file) into the emulator's shared Downloads: copies the checked bytes into the private directory, runs `adb push` to `/sdcard/Download/<name>` and a media scan, so the system file picker lists it under Downloads. `dest` is `Download/<name>`, by default the file's own name. `qa_android_install` wipes app data, not Downloads, so the file survives a reinstall | a file that resolves outside the worktree and the pass's `$TMPDIR`, a symlink, a directory or other non-regular file, a file with other hard links, a file over 1 MB, a file replaced while it is read; a `dest` outside `Download/`, in a subfolder, or with a name other than letters, digits, `.`, `_` and `-` |
 
-The last seven tools work only once `qa_android_install` installed one of the `application_ids`
-in this pass.
+`qa_android_ui_tree` through `qa_android_font_scale` work only once `qa_android_install` installed
+one of the `application_ids` in this pass.
 
 When the pass ends, or crashes, Symphony resets what the pass changed (portrait with auto-rotate
-off, dark mode off, font scale 1.0), so the next pass starts clean on the same emulator, then
+off, dark mode off, font scale 1.0) and removes the files it put in Downloads, so the next pass
+starts clean on the same emulator, then
 uninstalls the `application_ids` apps and every package installed in the pass, gives the emulator back and removes the private directory. Only QA
 agents see these tools; executor and reviewer sessions cannot list or call them.
 

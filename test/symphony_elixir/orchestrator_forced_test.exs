@@ -451,7 +451,8 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
       retrying = Enum.sort_by(snapshot_of(state).retrying, & &1.issue_id)
       assert [%{issue_id: "part-1", forced: true}, %{issue_id: "plain-1", forced: false}] = retrying
 
-      state = Orchestrator.start_usage_limit_canary_for_test(state, @anthropic, fn _ids -> {:ok, [plain, part]} end)
+      fetcher = fn _ids -> {:ok, [plain, part]} end
+      state = Orchestrator.start_usage_limit_canary_for_test(at_resume(state), @anthropic, fetcher)
       assert %{phase: :canary, canary_issue_id: "part-1"} = state.usage_limits[@anthropic]
     end
 
@@ -550,7 +551,8 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
           retry_attempts: %{"plain-1" => held.(plain), "forced-1" => held.(forced)}
       }
 
-      state = Orchestrator.start_usage_limit_canary_for_test(state, @anthropic, fn _ids -> {:ok, [plain, forced]} end)
+      fetcher = fn _ids -> {:ok, [plain, forced]} end
+      state = Orchestrator.start_usage_limit_canary_for_test(at_resume(state), @anthropic, fetcher)
 
       assert %{phase: :canary, canary_issue_id: "forced-1"} = state.usage_limits[@anthropic]
       assert Map.has_key?(state.slot_waiting, "forced-1")
@@ -1065,6 +1067,9 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
 
     %{state | running: Map.put(state.running, issue.id, entry), claimed: MapSet.put(state.claimed, issue.id)}
   end
+
+  # The canary is picked once the hold's `resume_at` has come.
+  defp at_resume(state), do: %{state | clock: fn -> DateTime.add(DateTime.utc_now(), 3_600) end}
 
   defp orchestrator_state(max_total) do
     %Orchestrator.State{

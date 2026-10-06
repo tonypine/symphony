@@ -1823,14 +1823,15 @@ defmodule SymphonyElixir.AgentRunner do
 
   # A landing agent that ends its turn while the PR head's checks are pending would only spend
   # turns finding them still pending. End the run and tell the orchestrator, which holds the
-  # issue in `Merging` until the CI poller sees that head settle.
+  # issue in `Merging` until the CI poller sees that head settle. Only the checks the base branch
+  # requires count, when it requires any (see `CiPoller.landing_action/1`).
   defp merging_ci_pending?(%Issue{} = issue, run_context) do
     pr_url = URLUtils.pull_request_url(issue)
 
     if merging_state?(issue.state) and is_binary(pr_url) do
       github = Keyword.get(run_context.opts, :github, PullRequest)
 
-      case github.fetch_ci_status(pr_url, cwd: run_context.workspace) do
+      case github.fetch_ci_status(pr_url, cwd: run_context.workspace, required_checks: true) do
         {:ok, ci_status} ->
           maybe_wait_for_merging_ci(issue, pr_url, ci_status, run_context)
 
@@ -1846,7 +1847,7 @@ defmodule SymphonyElixir.AgentRunner do
   defp maybe_wait_for_merging_ci(issue, pr_url, ci_status, run_context) do
     ci_status = CiPoller.put_rerun_pending(ci_status, issue.id, pending_lookup_opts(issue, run_context.opts))
 
-    if CiPoller.ci_action(ci_status) == :pending do
+    if CiPoller.landing_action(ci_status) == :pending do
       commit_sha = Map.get(ci_status, :commit_sha)
       Logger.info("Stopping landing run for #{issue_context(issue)}; waiting for CI on #{commit_sha}")
       send_merging_ci_wait(run_context.codex_update_recipient, issue, %{commit_sha: commit_sha, pr_url: pr_url})
