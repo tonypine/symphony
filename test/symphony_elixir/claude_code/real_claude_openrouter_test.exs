@@ -1,8 +1,8 @@
 defmodule SymphonyElixir.ClaudeCode.RealClaudeOpenRouterTest do
   # Starts the installed `claude` binary, not a fake, through Symphony's OpenRouter launch path
   # against the OpenRouter QA stub, so no real key or paid request is involved. `test_helper.exs`
-  # excludes the `:real_claude` tag where `claude` is not on PATH, as on CI's runners; run it
-  # with `mix test --only real_claude <this file>`.
+  # always excludes the `:real_claude` tag; run it with `mix test --only real_claude <this file>`
+  # where `claude` is on PATH.
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.ClaudeCode.AppServer
@@ -41,6 +41,7 @@ defmodule SymphonyElixir.ClaudeCode.RealClaudeOpenRouterTest do
 
   test "a real claude run through the OpenRouter launch path accepts the stub's canned answer", %{test_root: test_root, stub_url: stub_url} do
     claude = System.find_executable("claude")
+    assert claude, "claude is not on PATH"
     workspace_root = Path.join(test_root, "workspaces")
     workspace = Path.join(workspace_root, "QA-OPENROUTER")
     # A throwaway HOME keeps the run off the operator's Claude config, history and login.
