@@ -2,6 +2,7 @@ defmodule SymphonyElixir.CLITest do
   use ExUnit.Case, async: true
 
   import ExUnit.CaptureIO
+  import ExUnit.CaptureLog
 
   alias SymphonyElixir.CLI
 
@@ -340,8 +341,20 @@ defmodule SymphonyElixir.CLITest do
       assert {:error, ^usage} = CLI.evaluate(["openrouter-stub" | args], base_deps())
     end
 
-    deps = base_deps(%{start_openrouter_stub: fn _port -> {:error, :eaddrinuse} end})
-    assert {:error, "Could not start the OpenRouter QA stub: :eaddrinuse"} = CLI.evaluate(["openrouter-stub", "--port", "4100"], deps)
+    deps = base_deps(%{start_openrouter_stub: fn _port -> {:error, :eacces} end})
+    assert {:error, "Could not start the OpenRouter QA stub: :eacces"} = CLI.evaluate(["openrouter-stub", "--port", "80"], deps)
+  end
+
+  test "openrouter-stub names a port that is already in use, in one line" do
+    {:ok, socket} = :gen_tcp.listen(0, ip: {127, 0, 0, 1})
+    {:ok, port} = :inet.port(socket)
+    message = "Could not start the OpenRouter QA stub: port #{port} is already in use"
+
+    log = capture_log(fn -> assert {:error, ^message} = CLI.evaluate(["openrouter-stub", "--port", "#{port}"]) end)
+    refute log =~ "already in use"
+    assert capture_io(:stderr, fn -> assert CLI.finish({:error, message}) == 1 end) == message <> "\n"
+
+    :gen_tcp.close(socket)
   end
 
   test "dashboard rejects unknown arguments with its usage" do

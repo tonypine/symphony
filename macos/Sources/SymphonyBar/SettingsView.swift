@@ -412,7 +412,8 @@ private struct RunProfileRow: View {
             // A grouped Form caps a row at 684pt whatever the window's width, and moves the controls under the
             // label when label and controls don't fit. Small controls in these columns keep the longest label,
             // "Review feedback", on one line with Reset to inherited, and fit "OpenRouter, inherited",
-            // "medium, inherited" and an OpenRouter name such as "Mistral: Mistral Nemo, inherited".
+            // "medium, inherited" and an OpenRouter name such as "Mistral: Mistral Nemo, inherited". All
+            // repositories has no Reset column, so its Effort column is wide enough for "medium, from command".
             HStack {
                 picker("Provider", providerSelection, RunProfilesConfig.providers, inherited: inherited.provider, source: providerSource)
                     .frame(width: 160)
@@ -438,7 +439,7 @@ private struct RunProfileRow: View {
                     picker("Effort", $profile.effort, RunProfilesConfig.efforts, inherited: inherited.effort)
                         .disabled(effortNote != nil)
                 }
-                .frame(width: 140)
+                .frame(width: canReset ? 140 : 170)
                 .help(effortNote ?? "Effort for this kind of run")
                 if canReset {
                     Button {
