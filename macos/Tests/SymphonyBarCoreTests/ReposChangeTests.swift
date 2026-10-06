@@ -69,6 +69,39 @@ final class ReposChangeTests: XCTestCase {
         XCTAssertEqual(kept.laterBanner, kept.banner)
     }
 
+    func testDisconnectBannersSayWhatHappenedToTheClone() {
+        XCTAssertEqual(
+            ReposChange.disconnected(
+                key: "billing", apply: .onNextStart, newDefault: nil, next: "api",
+                clone: .removed(path: "/var/clones/acme/billing")
+            ).banner,
+            ReposBanner(key: "api", text: "Disconnected billing. Removed Symphony's clone of billing at /var/clones/acme/billing.")
+        )
+        XCTAssertEqual(
+            ReposChange.disconnected(
+                key: "billing", apply: .restart, newDefault: "api", next: "api",
+                clone: .kept(reason: "TP-7 runs in a worktree of this clone. Remove it once that run finishes.")
+            ).banner,
+            ReposBanner(
+                key: "api",
+                text: "Disconnected billing. Symphony restarts to drop it. api is now the default repo. Kept Symphony's "
+                    + "clone: TP-7 runs in a worktree of this clone. Remove it once that run finishes.",
+                style: .error
+            )
+        )
+        XCTAssertEqual(
+            ReposChange.disconnected(
+                key: "billing", apply: .askToRestart(runs: 1), newDefault: nil, next: "api",
+                clone: .failed(message: "Couldn't remove the clone: permission denied")
+            ).laterBanner,
+            ReposBanner(
+                key: "api",
+                text: "Disconnected billing. Restart Symphony from the menu to drop it. Couldn't remove the clone: permission denied",
+                style: .error
+            )
+        )
+    }
+
     func testLaterBannersSayToRestartFromTheMenu() {
         XCTAssertEqual(
             ReposChange.added(key: "billing", apply: .askToRestart(runs: 1), madeDefault: nil).laterBanner,

@@ -154,13 +154,16 @@ public enum EditRepo {
 public enum DisconnectRepo {
     public static let buttonTitle = "Disconnect…"
     public static let confirmTitle = "Disconnect"
+    public static let newDefaultTitle = "New default"
+    /// Why the only repo can't be disconnected, as the button's help and the caption next to it.
+    public static let lastRepoProblem = "Symphony needs at least one repo."
 
     /// Why the repo `key` can't be disconnected, nil when it can.
     public static func problem(key: String, entries: [RepositoryEntry]) -> String? {
         guard entries.contains(where: { $0.key == key }) else {
             return "symphony.yml has no repo `\(key)`. Symphony keeps it until it restarts."
         }
-        guard entries.count > 1 else { return "\(key) is the only repo, and Symphony needs at least one." }
+        guard entries.count > 1 else { return lastRepoProblem }
         return nil
     }
 
@@ -187,12 +190,30 @@ public enum DisconnectRepo {
         return try RepositoriesConfig.removing(key, from: text)
     }
 
-    /// The alert asking before disconnecting `entry`.
+    /// What the Disconnect sheet shows for `entry` before the poll adds its clone's state.
+    public struct Sheet: Equatable {
+        public var key: String
+        public var title: String
+        public var message: String
+        /// The repos that can become the default, nil when `key` isn't the default.
+        public var candidates: [String]?
+        /// `owner/repo` of a managed repo, whose clone the sheet can delete; nil for a local folder.
+        public var gitHub: String?
+
+        public init(entry: RepositoryEntry, entries: [RepositoryEntry]) {
+            key = entry.key
+            candidates = DisconnectRepo.defaultCandidates(key: entry.key, entries: entries)
+            (title, message) = DisconnectRepo.question(for: entry, newDefaultNeeded: candidates != nil)
+            let source = entry.workspace.source?.trimmingWhitespace() ?? ""
+            gitHub = source.isEmpty ? nil : ReposList.gitHubRepo(source)
+        }
+    }
+
+    /// The sheet's text on disconnecting `entry`: what happens and what stays on disk.
     public static func question(for entry: RepositoryEntry, newDefaultNeeded: Bool) -> (title: String, message: String) {
         var message = "Symphony stops taking issues for \(entry.key), and its entry and comment leave symphony.yml."
         if let source = entry.workspace.source?.trimmingWhitespace(), !source.isEmpty {
-            message += " Symphony's clone of \(ReposList.gitHubRepo(source)) stays on disk: to delete it, use "
-                + "\(ManagedClones.buttonTitle) before disconnecting."
+            message += " Symphony's clone of \(ReposList.gitHubRepo(source)) stays on disk unless you delete it too."
         } else if let repo = entry.workspace.repo?.trimmingWhitespace(), !repo.isEmpty {
             message += " The folder \(repo) and its branches stay as they are."
         }
@@ -200,6 +221,33 @@ public enum DisconnectRepo {
             message += " \(entry.key) is the default repo: pick the repo that takes the issues no route matches."
         }
         return ("Disconnect \(entry.key)?", message)
+    }
+
+    /// The sheet's **Also delete Symphony's clone** checkbox for a managed repo whose clone exists, nil otherwise.
+    public struct CloneOption: Equatable {
+        public var title: String
+        /// The clone to delete, nil while the checkbox is off.
+        public var path: String?
+        /// Why the checkbox is off, shown under it.
+        public var reason: String?
+
+        public var isEnabled: Bool { path != nil }
+    }
+
+    /// The checkbox for `repo`, on only while `ManagedClones.removal` allows deleting its clone.
+    public static func cloneOption(for repo: RepoDetail) -> CloneOption? {
+        guard repo.source.kind == .managed, !repo.source.notCloned, let removal = repo.actions.cloneRemoval else {
+            return nil
+        }
+        let shown = removal.path ?? repo.source.path
+        let title = "Also delete Symphony's clone"
+            + (shown.map { " (\(($0 as NSString).abbreviatingWithTildeInPath))" } ?? "")
+        switch removal {
+        case let .allowed(path):
+            return CloneOption(title: title, path: path)
+        case let .blocked(reason):
+            return CloneOption(title: title, reason: reason)
+        }
     }
 
     /// What the window says after disconnecting, for how the change reaches Symphony.

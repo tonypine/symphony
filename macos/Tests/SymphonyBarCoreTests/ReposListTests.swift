@@ -701,7 +701,7 @@ final class ReposListTests: XCTestCase {
         let only = ReposConfig(path: "/etc/symphony.yml", repos: .entries([configured[0]]))
         XCTAssertEqual(
             window(.stopped, nil, config: only).repos[0].actions,
-            RepoActions(disconnectProblem: "symphony is the only repo, and Symphony needs at least one.")
+            RepoActions(disconnectProblem: "Symphony needs at least one repo.")
         )
 
         let unreadable = ReposConfig(path: "/etc/symphony.yml", repos: .unreadable("boom"))

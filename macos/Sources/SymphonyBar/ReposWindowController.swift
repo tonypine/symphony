@@ -19,6 +19,8 @@ final class ReposViewModel: ObservableObject {
     var pendingSelection: String?
     /// The open Add Repo sheet, nil while none is.
     @Published var addRepo: AddRepoViewModel?
+    /// The open Disconnect sheet, nil while none is.
+    @Published var disconnect: DisconnectSheetModel?
     /// What the last Add Repo, Edit, Disconnect or Remove Clone did, shown at the top of its repo's detail.
     @Published var banner: ReposBanner? {
         didSet {
@@ -37,6 +39,7 @@ final class ReposViewModel: ObservableObject {
     var onAddRepo: () -> Void = {}
     var onEdit: (_ key: String) -> Void = { _ in }
     var onDisconnect: (_ key: String) -> Void = { _ in }
+    var onConfirmDisconnect: (_ sheet: DisconnectSheetModel) -> Void = { _ in }
     var onRemoveClone: (_ key: String) -> Void = { _ in }
     var onStart: () -> Void = {}
     var onOpenSettings: () -> Void = {}
@@ -100,6 +103,7 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
             model.onAddRepo = { [weak self] in self?.showSheet(editing: nil) }
             model.onEdit = { [weak self] key in self?.showSheet(editing: key) }
             model.onDisconnect = { [weak self] key in self?.disconnect(key) }
+            model.onConfirmDisconnect = { [weak self] sheet in self?.confirmDisconnect(sheet) }
             model.onRemoveClone = { [weak self] key in self?.removeClone(key) }
             model.onStart = { [weak self] in self?.start() }
             model.onOpenSettings = { [weak self] in self?.openSettings() }
@@ -240,7 +244,7 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
 
     /// Opens the Add Repo sheet, or with `editing` the same sheet on that repo.
     private func showSheet(editing key: String?) {
-        guard let model, model.addRepo == nil else { return }
+        guard let model, model.addRepo == nil, model.disconnect == nil else { return }
         let sheet = AddRepoViewModel(configPath: configPath, secrets: secrets, editing: key, state: state) { [weak self] saved in
             self?.saved(saved)
         }
@@ -270,11 +274,9 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
         }
     }
 
-    /// Asks before disconnecting `key`, with a pick of the new default when it is the default, then removes its
-    /// entry from `symphony.yml`. Never deletes a folder.
+    /// Opens the Disconnect sheet on `key`, unless `symphony.yml` can't be read or the repo can't be disconnected.
     private func disconnect(_ key: String) {
-        guard let model, model.addRepo == nil else { return }
-        let file = SymphonyConfigFile(path: configPath)
+        guard let model, model.addRepo == nil, model.disconnect == nil else { return }
         let entries: [RepositoryEntry]
         switch ReposConfig.read(path: configPath).entries {
         case let .success(read):
@@ -288,37 +290,41 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
             return
         }
         guard let entry = entries.first(where: { $0.key == key }) else { return }
-        let candidates = DisconnectRepo.defaultCandidates(key: key, entries: entries)
-        let question = DisconnectRepo.question(for: entry, newDefaultNeeded: candidates != nil)
+        model.disconnect = DisconnectSheetModel(DisconnectRepo.Sheet(entry: entry, entries: entries))
+    }
 
-        let alert = NSAlert()
-        alert.messageText = question.title
-        alert.informativeText = question.message
-        alert.addButton(withTitle: DisconnectRepo.confirmTitle).hasDestructiveAction = true
-        alert.addButton(withTitle: "Cancel")
-        var picker: NSPopUpButton?
-        if let candidates {
-            let popUp = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 260, height: 26), pullsDown: false)
-            popUp.addItems(withTitles: candidates)
-            alert.accessoryView = popUp
-            picker = popUp
-        }
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-
-        let newDefault = picker?.titleOfSelectedItem
+    /// Removes the sheet's repo from `symphony.yml`, making the picked repo the default first. When the sheet asks to,
+    /// then asks Symphony again whether an agent uses the clone and deletes it only if not. Never deletes a local
+    /// folder.
+    private func confirmDisconnect(_ sheet: DisconnectSheetModel) {
+        guard let model else { return }
+        let key = sheet.content.key
+        let newDefault = sheet.content.candidates == nil ? nil : sheet.newDefault
+        // Checked again after the write: a clone that became busy while the sheet was open stays, and the banner
+        // says why.
+        let gitHub = sheet.deleteClone ? sheet.content.gitHub : nil
         let next = DisconnectRepo.nextSelection(after: key, in: model.window.repos.map(\.key))
+        model.disconnect = nil
         do {
-            try file.disconnectRepository(key, newDefault: newDefault)
+            try SymphonyConfigFile(path: configPath).disconnectRepository(key, newDefault: newDefault)
         } catch {
             show(ReposChange.failed(key: key, message: "Couldn't disconnect \(key): \(error.localizedDescription)").banner)
             return
         }
         let apply = AddRepo.apply(status: status)
-        finish(
-            .disconnected(key: key, apply: apply, newDefault: newDefault, next: next),
-            apply: apply,
-            question: { DisconnectRepo.restartQuestion(key: key, runs: $0) }
-        )
+        let question = { (runs: Int) in DisconnectRepo.restartQuestion(key: key, runs: runs) }
+        guard let gitHub else {
+            finish(.disconnected(key: key, apply: apply, newDefault: newDefault, next: next), apply: apply, question: question)
+            return
+        }
+        Task {
+            let outcome = await removeCheckedClone(of: gitHub)
+            finish(
+                .disconnected(key: key, apply: apply, newDefault: newDefault, next: next, clone: outcome),
+                apply: apply,
+                question: question
+            )
+        }
     }
 
     /// Asks before deleting Symphony's clone of a managed repo, asks Symphony again whether an agent uses it, then
@@ -336,26 +342,29 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
         Task {
-            // An agent may have started on the clone while the alert was open.
-            if ReposList.isAnswering(status) {
-                poll = await ReposAPI.fetch(stateRoot: stateRoot(), fallback: AppStores.current.controlURLFallback)
-            }
-            let root = ReposConfig.read(path: configPath).clonesRoot
-            let removal = ManagedClones.removal(gitHub: gitHub, root: root, status: status, poll: poll)
-            var change: ReposChange?
-            if let path = removal.path {
-                do {
-                    try await Task.detached { try ManagedClones.remove(path, root: root) }.value
-                    change = .cloneRemoved(key: key, path: path)
-                } catch {
-                    change = .failed(key: key, message: "Couldn't remove the clone: \(error.localizedDescription)")
-                }
-            } else if case let .blocked(reason) = removal {
+            let change: ReposChange
+            switch await removeCheckedClone(of: gitHub) {
+            case let .removed(path):
+                change = .cloneRemoved(key: key, path: path)
+            case let .kept(reason):
                 change = .cloneKept(key: key, reason: reason)
+            case let .failed(message):
+                change = .failed(key: key, message: message)
             }
             update(status: status)
-            if let change { show(change.banner) }
+            show(change.banner)
         }
+    }
+
+    /// Checks again whether Symphony's clone of `gitHub` can go, since an agent may have started on it while the
+    /// question was open, and deletes it only then.
+    private func removeCheckedClone(of gitHub: String) async -> ManagedClones.Outcome {
+        if ReposList.isAnswering(status) {
+            poll = await ReposAPI.fetch(stateRoot: stateRoot(), fallback: AppStores.current.controlURLFallback)
+        }
+        let root = ReposConfig.read(path: configPath).clonesRoot
+        let removal = ManagedClones.removal(gitHub: gitHub, root: root, status: status, poll: poll)
+        return await Task.detached { ManagedClones.remove(removal, root: root) }.value
     }
 
     /// Shows `banner` in place of the last one, and selects its repo now or once the window lists it.
