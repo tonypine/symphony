@@ -33,8 +33,10 @@ defmodule SymphonyElixir.PlanCommentsTest do
       assert PlanComments.action(%{parent | sub_issues: []}, @terminal, settings) == :revise
       assert PlanComments.action(%{parent | sub_issues: [%{id: "c1", identifier: "MT-2", state: "Todo"}]}, @terminal, settings) == :answer
       assert PlanComments.action(%{parent | state: @waiting}, @terminal, settings) == :answer
-      assert PlanComments.action(%{parent | state: "Human Review"}, @terminal, settings) == :revise
+      # Human Review waits for the operator: a comment there revises nothing, and an approved plan still gets its reply.
+      refute PlanComments.action(%{parent | state: "Human Review"}, @terminal, settings)
       refute PlanComments.action(%{parent | state: "Human Review"}, @terminal, %{settings | tracker: %{settings.tracker | human_review_state: nil}})
+      assert PlanComments.action(%{parent | state: "Human Review", sub_issues: [%{id: "c1", identifier: "MT-2", state: "Todo"}]}, @terminal, settings) == :answer
 
       # Close-out, other states, other issues: nothing.
       refute PlanComments.action(%{parent | sub_issues: [%{id: "c1", identifier: "MT-2", state: "Done"}]}, @terminal, settings)
@@ -127,6 +129,7 @@ defmodule SymphonyElixir.PlanCommentsTest do
   describe "human?/1" do
     test "skips integration bots and every comment Symphony posts itself" do
       assert PlanComments.human?(comment("x", "Please split MT-2"))
+      assert PlanComments.human?(comment("x", "Agree with the Supervisor review: split MT-2"))
       refute PlanComments.human?(comment("x", "Please split MT-2", nil, bot?: true))
       refute PlanComments.human?(%{bot?: false, body: nil})
       refute PlanComments.human?(nil)
@@ -143,7 +146,9 @@ defmodule SymphonyElixir.PlanCommentsTest do
             "Symphony couldn't land the PR ...",
             "Symphony turned off GitHub auto-merge ...",
             "Symphony quality gate: skipped (score 2 < threshold 3).",
-            PlanComments.reply("MT-1")
+            PlanComments.reply("MT-1"),
+            "Supervisor review: plan reviewed, Tony decides",
+            "\nSupervisor note: MT-2 overlaps MT-3"
           ] do
         refute PlanComments.human?(comment("x", body)), body
       end
