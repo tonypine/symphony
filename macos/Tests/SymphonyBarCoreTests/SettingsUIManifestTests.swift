@@ -62,6 +62,13 @@ final class SettingsUIManifestTests: XCTestCase {
         changed.workspace = RepositoryWorkspace(source: "acme/api", fetchBeforeDispatch: false)
         yaml = try record("updating a repository", { try RepositoriesConfig.updating("api", to: changed, in: $0) }, from: yaml)
 
+        yaml = try record("setting the acceptance gate mode", { try AcceptanceGate.settingGlobalMode(.shadow, in: $0) }, from: yaml)
+        yaml = try record("changing the acceptance gate mode", { try AcceptanceGate.settingGlobalMode(.enforce, in: $0) }, from: yaml)
+        yaml = try record("setting a repository's gate mode", {
+            try AcceptanceGate.settingRepositoryMode(.mode(.off), of: "api", in: $0)
+        }, from: yaml)
+        yaml = try record("inheriting the gate mode", { try AcceptanceGate.settingRepositoryMode(.inherit, of: "api", in: $0) }, from: yaml)
+
         let every = RunProfile(model: "claude-opus-5-5", effort: "max", provider: "anthropic")
         let profiles = RunProfiles(defaults: every, kinds: Dictionary(uniqueKeysWithValues: RunKind.allCases.map { ($0, every) }))
         let old = try RunProfilesConfig.scopedProfiles(in: yaml)
