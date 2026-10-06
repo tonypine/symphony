@@ -3020,7 +3020,10 @@ Current Elixir sandbox behavior:
   `~/.gnupg`, `~/Library/Application Support`, `~/Library/Keychains`,
   `~/Library/Preferences`, `~/.docker`, `~/.netrc`, `~/.git-credentials`, `~/.npmrc`,
   `~/.cargo/credentials`, `~/.config/op`, `~/.config/gcloud`, `~/.azure`, `~/.kube`, shell
-  startup files, and shell or REPL history files.
+  startup files, and shell or REPL history files. They also cover the cloud-synced folders
+  `~/Library/CloudStorage` (Google Drive, Dropbox, OneDrive) and `~/Library/Mobile Documents`
+  (iCloud Drive), which Claude's file tools are denied with `Read(<path>)` rules as well, so an
+  agent never makes macOS ask the operator to let Symphony access them.
 - Shared write denies protect workflow and runtime guardrail files such as `WORKFLOW.md`,
   `symphony.yml`, `symphony.local.yml`, `.claude/settings.json`, `.git`, `mise.toml`,
   `.tool-versions`, `config/settings_ui_exempt.yml`, shell startup files, `~/.gitconfig`, and

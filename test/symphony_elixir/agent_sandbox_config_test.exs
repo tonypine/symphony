@@ -50,6 +50,8 @@ defmodule SymphonyElixir.AgentSandboxConfigTest do
              "~/Library/Application Support",
              "~/Library/Keychains",
              "~/Library/Preferences",
+             "~/Library/CloudStorage",
+             "~/Library/Mobile Documents",
              "~/.docker",
              "~/.netrc",
              "~/.git-credentials",
@@ -368,6 +370,18 @@ defmodule SymphonyElixir.AgentSandboxConfigTest do
     assert "Edit(./WORKFLOW.md)" in rules
     assert "Edit(./.claude/hooks)" in rules
     assert "Edit(~/.claude/settings.json)" in rules
+  end
+
+  test "Claude Read deny rules keep the file tools out of cloud-synced folders unless allowed" do
+    assert AgentSandboxConfig.claude_read_deny_rules() == ["Read(~/Library/CloudStorage)", "Read(~/Library/Mobile Documents)"]
+
+    assert AgentSandboxConfig.claude_read_deny_rules([" ~/Library/CloudStorage ", :bad]) == ["Read(~/Library/Mobile Documents)"]
+    assert AgentSandboxConfig.claude_read_deny_rules(:bad) == AgentSandboxConfig.claude_read_deny_rules()
+
+    for path <- ["~/Library/CloudStorage", "~/Library/Mobile Documents"] do
+      assert path in AgentSandboxConfig.claude_filesystem_settings()["denyRead"]
+      refute path in AgentSandboxConfig.claude_filesystem_settings([path])["denyRead"]
+    end
   end
 
   test "Claude Edit deny rules add extra paths such as skill link targets, absolute ones with //" do

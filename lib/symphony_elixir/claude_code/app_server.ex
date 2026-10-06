@@ -183,16 +183,17 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   end
 
   # The `settings.json` a Claude session starts with: the sandbox, and the permission rules that
-  # deny pushing, the `gh` CLI and the file tools on the write-protected paths the sandbox keeps
-  # from the shell. A read-only session (`read_only: true` in `start_session/2`, the acceptance
-  # gate) also gets no file-editing tool and can't write its working directory from the shell.
+  # deny pushing, the `gh` CLI, the file tools on the write-protected paths the sandbox keeps
+  # from the shell, and reading the cloud-synced folders. A read-only session (`read_only: true`
+  # in `start_session/2`, the acceptance gate) also gets no file-editing tool and can't write its
+  # working directory from the shell.
   @doc false
   @spec build_claude_settings(Agent.NetworkAccess.t(), [String.t()], [String.t()], [String.t()], boolean()) :: map()
   def build_claude_settings(network_access, allow_read_paths, allow_write_paths, deny_write_paths \\ [], read_only? \\ false) do
     settings =
       network_access
       |> build_sandbox_settings(allow_read_paths, allow_write_paths, deny_write_paths)
-      |> Map.put("permissions", %{"deny" => @denied_commands ++ AgentSandboxConfig.claude_edit_deny_rules(deny_write_paths)})
+      |> Map.put("permissions", %{"deny" => @denied_commands ++ file_tool_deny_rules(allow_read_paths, deny_write_paths)})
 
     if read_only? do
       settings
@@ -201,6 +202,11 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     else
       settings
     end
+  end
+
+  defp file_tool_deny_rules(allow_read_paths, deny_write_paths) do
+    edit_rules = AgentSandboxConfig.claude_edit_deny_rules(deny_write_paths)
+    edit_rules ++ AgentSandboxConfig.claude_read_deny_rules(allow_read_paths)
   end
 
   defp build_mcp_config(mcp_session, socket_path, shim_path, settings) do
