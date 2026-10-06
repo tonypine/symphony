@@ -73,7 +73,8 @@ defmodule SymphonyElixir.OpenRouter.Stub do
 
   @doc """
   Starts a stub linked to the caller and returns its port. Options: `:port` (default `0`, any
-  free port) and `:log` (a function given each request line, default `Logger.info/1`).
+  free port) and `:log` (a function given each request line, default `Logger.info/1`). A port
+  that is already taken returns `{:error, :eaddrinuse}`.
   """
   @spec start_link(keyword()) :: {:ok, pid(), :inet.port_number()} | {:error, term()}
   def start_link(opts \\ []) do
@@ -87,9 +88,25 @@ defmodule SymphonyElixir.OpenRouter.Stub do
       thousand_island_options: [num_acceptors: 2]
     ]
 
-    with {:ok, pid} <- Bandit.start_link(bandit_opts),
+    with {:ok, pid} <- start_bandit(bandit_opts),
          {:ok, {_ip, port}} <- ThousandIsland.listener_info(pid) do
       {:ok, pid, port}
+    end
+  end
+
+  # A listener that can't bind stops Bandit's supervisor while it starts, and through the link
+  # that exit would kill the caller before the error came back. Trapping exits for the start
+  # turns it into `{:error, reason}`; `proc_lib` consumes the exit message.
+  defp start_bandit(bandit_opts) do
+    trap_exit? = Process.flag(:trap_exit, true)
+
+    try do
+      case Bandit.start_link(bandit_opts) do
+        {:error, {:shutdown, {:failed_to_start_child, :listener, reason}}} -> {:error, reason}
+        result -> result
+      end
+    after
+      Process.flag(:trap_exit, trap_exit?)
     end
   end
 
