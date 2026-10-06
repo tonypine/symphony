@@ -33,11 +33,22 @@ defmodule SymphonyElixir.AgentTmpDirTest do
   end
 
   test "puts the folder behind the agent's $TMPDIR and in its sandbox writable paths" do
-    assert AgentTmpDir.env("claude", "/tmp/x") == %{"CLAUDE_CODE_TMPDIR" => "/tmp/x"}
-    assert AgentTmpDir.env("codex", "/tmp/x") == %{"TMPDIR" => "/tmp/x"}
-    assert AgentTmpDir.env("claude", nil) == %{}
+    assert AgentTmpDir.env("claude", "/tmp/x", {:unix, :linux}) == %{"CLAUDE_CODE_TMPDIR" => "/tmp/x"}
+    assert AgentTmpDir.env("codex", "/tmp/x", {:unix, :darwin}) == %{"TMPDIR" => "/tmp/x"}
+    assert AgentTmpDir.env("claude", nil, {:unix, :darwin}) == %{}
+    assert AgentTmpDir.env("codex", nil) == %{}
 
     settings = AgentTmpDir.allow_write(Config.settings!(), "/tmp/x")
     assert List.last(settings.workspace.sandbox.allow_write_paths) == "/tmp/x"
+  end
+
+  # The suffix must hold a `/` before its last character: libc then rejects it, and a valid one
+  # keeps the per-user temp dir under `/var/folders`, which the sandbox can't write either.
+  test "points a macOS Claude session's Swift builds at folders its sandbox can write" do
+    assert AgentTmpDir.env("claude", "/tmp/x", {:unix, :darwin}) == %{
+             "CLAUDE_CODE_TMPDIR" => "/tmp/x",
+             "DIRHELPER_USER_DIR_SUFFIX" => "symphony/none",
+             "SWIFTPM_MODULECACHE_OVERRIDE" => "/tmp/x/swiftpm-module-cache"
+           }
   end
 end
