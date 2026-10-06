@@ -336,6 +336,44 @@ defmodule SymphonyElixir.VerificationTest do
       refute File.exists?(Path.join(workspace, "dev-server-env.txt"))
     end
 
+    test "removes the folders bwrap made in the checkout once it stops", %{root: root, workspace: workspace, config: config, port: port} do
+      bwrap = Path.join(root, "bwrap")
+      socat = Path.join(root, "socat")
+
+      # Passes the probe, makes the placeholders as bwrap does, then runs the command unsandboxed.
+      File.write!(bwrap, """
+      #!/bin/sh
+      for arg; do last=$arg; done
+      [ "$last" = ":" ] && exit 0
+      while [ "$1" != /bin/sh ]; do
+        [ "$1" = --remount-ro ] && mkdir -p "$2"
+        shift
+      done
+      exec "$@"
+      """)
+
+      File.write!(socat, "#!/bin/sh\nexit 0\n")
+      Enum.each([bwrap, socat], &File.chmod!(&1, 0o755))
+
+      assert {:ok, pid} =
+               DevServer.start(
+                 run_id: "placeholder-run",
+                 port: port,
+                 workspace: workspace,
+                 config: config,
+                 env: Verification.env(%{port: port}),
+                 owner: self(),
+                 sandbox: [os_type: {:unix, :linux}, bwrap: bwrap, socat: socat],
+                 # Short enough for socat's unix sockets in a nested `TMPDIR`.
+                 tmp_bases: [System.tmp_dir!()]
+               )
+
+      assert File.dir?(Path.join(workspace, ".claude"))
+      assert :ok = DevServer.stop(pid)
+      refute File.exists?(Path.join(workspace, ".claude"))
+      refute File.exists?(Path.join(workspace, ".ai"))
+    end
+
     @tag :bwrap
     test "serves on its loopback port from inside bwrap", %{workspace: workspace, config: config, port: port} do
       assert {:ok, pid} =
@@ -354,7 +392,9 @@ defmodule SymphonyElixir.VerificationTest do
       assert env =~ "SYMPHONY_VERIFICATION_PORT=#{port}\n"
       assert File.dir?(Path.join(workspace, ".claude"))
 
-      assert :ok = DevServer.stop(pid)
+      # Under 5 s: the stop signal ends the sandbox, without the KILL that follows `stop_timeout_ms`.
+      assert {stop_us, :ok} = :timer.tc(fn -> DevServer.stop(pid) end)
+      assert stop_us < 4_000_000, "stopping took #{div(stop_us, 1_000)} ms"
       refute http_ok?("http://127.0.0.1:#{port}/")
       refute File.exists?(Path.join(workspace, ".claude"))
     end

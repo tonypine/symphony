@@ -75,12 +75,13 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
 
   @doc """
   The argv that runs `start_cmd` with `sh -lc` inside the sandbox, writable in `workspace`
-  and `tmp_dir`. Options: `:os_type` (default `:os.type()`); on macOS `:executable` (default
+  and `tmp_dir`, and the empty folders the sandbox makes in `workspace` (`bwrap_args/4`), for
+  the caller to remove once nothing runs in it. Options: `:os_type` (default `:os.type()`); on macOS `:executable` (default
   `/usr/bin/sandbox-exec`) and `:getconf` (for the item replacement folder); on Linux `:bwrap`
   and `:socat` (default: found on `PATH`), and the dev server's `:port` and the egress proxy's
   `:proxy_port`, which the bridges carry.
   """
-  @spec command(String.t(), Path.t(), Path.t(), keyword()) :: {:ok, [String.t()]} | {:error, term()}
+  @spec command(String.t(), Path.t(), Path.t(), keyword()) :: {:ok, [String.t()], [Path.t()]} | {:error, term()}
   def command(start_cmd, workspace, tmp_dir, opts) when is_binary(start_cmd) do
     case Keyword.get_lazy(opts, :os_type, &:os.type/0) do
       {:unix, :darwin} -> seatbelt_command(start_cmd, workspace, tmp_dir, opts)
@@ -95,7 +96,7 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
     if File.regular?(executable) do
       write_paths = [workspace, tmp_dir] ++ AgentCaches.write_paths() ++ item_replacement_paths(opts)
       profile = profile(workspace, write_paths, protected_paths(workspace))
-      {:ok, [executable, "-p", profile, "/bin/sh", "-lc", start_cmd]}
+      {:ok, [executable, "-p", profile, "/bin/sh", "-lc", start_cmd], []}
     else
       {:error, {:dev_server_sandbox_unavailable, {:not_found, executable}}}
     end
@@ -103,7 +104,7 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
 
   # The host side of the bridges runs outside the sandbox, in the dev server's process group, so
   # stopping the group stops it too. It ends with `bwrap` either way: the shell waits for `bwrap`
-  # before a stop signal's trap, then stops the bridges and removes the empty placeholders.
+  # before a stop signal's trap, then stops the bridges.
   defp bwrap_command(start_cmd, workspace, tmp_dir, opts) do
     with {:ok, bwrap} <- find_tool(opts, :bwrap),
          {:ok, socat} <- find_tool(opts, :socat),
@@ -135,12 +136,13 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
             "trap : HUP INT TERM",
             sh_command([bwrap | args] ++ ["/bin/sh", "-c", sandbox_script]),
             "status=$?",
-            "kill $proxy_bridge $serve_bridge 2>/dev/null"
-          ] ++ Enum.map(placeholders, &("rmdir " <> sh_quote(&1) <> " 2>/dev/null")) ++ ["exit $status"],
+            "kill $proxy_bridge $serve_bridge 2>/dev/null",
+            "exit $status"
+          ],
           "\n"
         )
 
-      {:ok, ["/bin/sh", "-c", host_script]}
+      {:ok, ["/bin/sh", "-c", host_script], placeholders}
     else
       {:error, reason} -> {:error, {:dev_server_sandbox_unavailable, reason}}
     end

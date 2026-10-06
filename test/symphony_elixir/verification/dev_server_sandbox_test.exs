@@ -23,7 +23,7 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
       File.mkdir_p!(Path.join(workspace, ".ai/skills"))
       File.ln_s!("../../priv/skills/pull", Path.join(workspace, ".ai/skills/pull"))
 
-      assert {:ok, [^executable, "-p", profile, "/bin/sh", "-lc", "mix phx.server"]} =
+      assert {:ok, [^executable, "-p", profile, "/bin/sh", "-lc", "mix phx.server"], []} =
                DevServerSandbox.command("mix phx.server", workspace, tmp_dir,
                  os_type: {:unix, :darwin},
                  executable: executable,
@@ -50,7 +50,7 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
       File.write!(getconf, "#!/bin/sh\necho #{user_temp_dir}/\n")
       File.chmod!(getconf, 0o755)
 
-      assert {:ok, [^executable, "-p", profile | _argv]} =
+      assert {:ok, [^executable, "-p", profile | _argv], []} =
                DevServerSandbox.command("mix phx.server", workspace, tmp_dir,
                  os_type: {:unix, :darwin},
                  executable: executable,
@@ -100,11 +100,11 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
       %{workspace: workspace, tmp_dir: tmp_dir, bwrap: bwrap, socat: socat, record: record, opts: opts} = ctx
       File.mkdir_p!(Path.join(workspace, ".git"))
 
-      assert {:ok, ["/bin/sh", "-c", script]} = DevServerSandbox.command("mix phx.server --name 'web'", workspace, tmp_dir, opts)
+      assert {:ok, ["/bin/sh", "-c", script], placeholders} = DevServerSandbox.command("mix phx.server --name 'web'", workspace, tmp_dir, opts)
 
       protected = AgentSandboxConfig.workspace_protected_paths() ++ [".git"]
       write_paths = [workspace, tmp_dir] ++ AgentCaches.write_paths()
-      {args, placeholders} = DevServerSandbox.bwrap_args(workspace, write_paths, protected)
+      assert {args, ^placeholders} = DevServerSandbox.bwrap_args(workspace, write_paths, protected)
       assert Enum.map(placeholders, &Path.relative_to(&1, real(workspace))) == [".claude", ".ai", ".codex", "config"]
 
       proxy_socket = Path.join(real(tmp_dir), "proxy.sock")
@@ -113,14 +113,9 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
       assert script =~ "'#{socat}' 'TCP-LISTEN:4000,bind=127.0.0.1,reuseaddr,fork' 'UNIX-CONNECT:#{serve_socket}' &\n"
       assert script =~ "\ntrap : HUP INT TERM\n'#{bwrap}' '--die-with-parent' '--unshare-all' "
 
-      # bwrap makes the placeholder folders; the script removes them once bwrap exits, if empty.
-      File.mkdir_p!(Path.join(workspace, ".ai"))
-      File.mkdir_p!(Path.join(workspace, "config"))
-      File.write!(Path.join(workspace, "config/kept.txt"), "")
+      assert script =~ "\nkill $proxy_bridge $serve_bridge 2>/dev/null\nexit $status"
 
       assert {_output, 7} = System.cmd("/bin/sh", ["-c", script], cd: workspace, stderr_to_stdout: true)
-      refute File.exists?(Path.join(workspace, ".ai"))
-      assert File.exists?(Path.join(workspace, "config/kept.txt"))
 
       assert {^args, ["/bin/sh", "-c", sandbox_script, ""]} = record |> File.read!() |> String.split("\0") |> Enum.split(length(args))
       assert ["--bind", real(tmp_dir), real(tmp_dir)] in chunk_options(args)
@@ -547,7 +542,7 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
       """)
 
       opts = [os_type: {:unix, :linux}, port: free_port(), proxy_port: proxy_port]
-      assert {:ok, [shell | args]} = DevServerSandbox.command("python3 check.py", workspace, tmp_dir, opts)
+      assert {:ok, [shell | args], _placeholders} = DevServerSandbox.command("python3 check.py", workspace, tmp_dir, opts)
       assert {output, 0} = System.cmd(shell, args, cd: workspace, stderr_to_stdout: true)
 
       assert output =~ "direct: Network is unreachable\n"
