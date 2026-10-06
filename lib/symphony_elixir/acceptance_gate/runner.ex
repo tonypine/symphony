@@ -25,6 +25,7 @@ defmodule SymphonyElixir.AcceptanceGate.Runner do
   @type request_result :: :started | :running | :busy | :usage_limited | {:error, term()}
 
   @queued_ttl_ms 10 * 60_000
+  @request_timeout_ms 5_000
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -39,12 +40,21 @@ defmodule SymphonyElixir.AcceptanceGate.Runner do
   @spec request(map(), keyword()) :: request_result()
   def request(%{issue: %{id: issue_id}, settings: settings} = job, opts) when is_binary(issue_id) do
     server = Keyword.get(opts, :gate_runner_server, __MODULE__)
+    {timeout_ms, opts} = Keyword.pop(opts, :request_timeout_ms, @request_timeout_ms)
 
     cond do
       UsageLimit.persisted_holding(AcceptanceGate.usage_profile(settings)) -> :usage_limited
-      pid = GenServer.whereis(server) -> GenServer.call(pid, {:request, job, Keyword.delete(opts, :gate_runner_server)})
+      pid = GenServer.whereis(server) -> call_request(pid, {:request, job, Keyword.delete(opts, :gate_runner_server)}, timeout_ms)
       true -> {:error, :gate_runner_unavailable}
     end
+  end
+
+  # A runner that doesn't answer in time (a starved VM) is an error, not an exit, so the CI poll
+  # goes on and the issue's next green poll asks again.
+  defp call_request(pid, message, timeout_ms) do
+    GenServer.call(pid, message, timeout_ms)
+  catch
+    :exit, {reason, {GenServer, :call, _args}} -> {:error, {:gate_runner_call_failed, reason}}
   end
 
   @doc "The issue workspace, gate worktrees and temp folders of every pass in flight."

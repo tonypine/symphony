@@ -310,6 +310,33 @@ defmodule SymphonyElixir.AuditLogTest do
              AuditLog.verify_chain("2026-05-07", dir: audit_dir)
   end
 
+  test "chains a record to the last hashed record from the end of the day's file", %{audit_dir: audit_dir} do
+    timestamp = ~U[2026-05-08 12:00:00Z]
+    path = Path.join(audit_dir, "2026-05-08.ndjson")
+    event = fn type -> %{issue_id: "issue-1", run_id: "run-1", timestamp: timestamp, event_type: type} end
+    last_line = fn -> path |> File.read!() |> String.split("\n", trim: true) |> List.last() |> Jason.decode!() end
+
+    # A day whose file is empty, or holds no hashed record, starts the chain.
+    File.mkdir_p!(audit_dir)
+    File.write!(path, "")
+    assert :ok = AuditLog.record(event.("tool_call"), dir: audit_dir)
+    refute Map.has_key?(last_line.(), "previous_hash")
+
+    File.write!(path, "not json\n")
+    assert :ok = AuditLog.record(event.("tool_call"), dir: audit_dir)
+    first = last_line.()
+    refute Map.has_key?(first, "previous_hash")
+
+    assert :ok = AuditLog.record(event.("file_change"), dir: audit_dir)
+    second = last_line.()
+    assert second["previous_hash"] == first["record_hash"]
+
+    # Unhashed lines after the last record, one of them longer than a read chunk, are skipped back over.
+    File.write!(path, ~s({"no_hash":true}\n) <> String.duplicate("x", 150_000) <> "\n\n", [:append])
+    assert :ok = AuditLog.record(event.("token_usage_delta"), dir: audit_dir)
+    assert last_line.()["previous_hash"] == second["record_hash"]
+  end
+
   test "verify_chain reports invalid_date for non-parseable input", %{audit_dir: audit_dir} do
     assert {:error, :invalid_date} = AuditLog.verify_chain("not-a-date", dir: audit_dir)
   end
