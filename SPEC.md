@@ -2340,7 +2340,8 @@ An issue is dispatch-eligible only if all are true:
   - Comments: a person's comment on a `breakdown` parent's plan is read on the poll that follows
     it. Only comments with a user and no bot actor count, and not Symphony's own (the workpad, a
     QA report, an `Action needed` request, a promote or cancel record, a run-failure note, its own
-    replies, and every comment its last run on the parent posted). The service and the reviewer
+    replies, and every comment its last run on the parent posted), nor a supervisor's note (one
+    starting `Supervisor review:` or `Supervisor note:`). The service and the reviewer
     can share one Linear user, so the run's comments are told apart by id, which the run reports as
     it ends, and the others by how they start. The service reads the parent's history and comments
     only when the poll shows a comment newer than the last one it acted on.
@@ -2353,6 +2354,9 @@ An issue is dispatch-eligible only if all are true:
       worked is acted on once the parent is back in `In Review`. When the run's comments are
       unknown (a run from before a restart), a comment counts when it is newer than the parent's
       latest move into `In Review` and than the end of that run.
+    - Plan in the human review state, not approved: nothing is dispatched and the parent stays
+      there, since the service never moves an issue out of it. A person moves it to `Rework` or
+      back to `In Review` to have the plan revised.
     - Approved plan (the parent in the waiting state, or in `In Review` with its plan approved):
       nothing is dispatched and the plan is unchanged. Under each top-level comment newer than the
       parent's latest move into its state, the end of the service's last run on it and the
@@ -4963,7 +4967,9 @@ infrastructure.
 - `breakdown` parent in `Todo` or `In Progress` whose non-terminal sub-issues are all in `Backlog`
   is eligible as a `breakdown` run and is not moved to the waiting state
 - a person's comment on a `breakdown` parent in `In Review` with an unapproved plan moves it to
-  `In Progress`; the service's own comments and integration bots' comments move nothing; a person's
+  `In Progress`; the service's own comments, a supervisor's notes (`Supervisor review:`,
+  `Supervisor note:`) and integration bots' comments move nothing; a person's comment on one in the
+  human review state moves nothing; a person's
   comment made while the revision run worked moves it again once it is back in `In Review`; a
   top-level comment on an approved plan gets one reply and moves nothing, and a reply inside a
   thread or a comment from before the service started gets none
