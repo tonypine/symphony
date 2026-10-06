@@ -360,6 +360,9 @@ agent's sandbox:
   to do script ...'`), LaunchServices (`open -a Terminal x.command`) and launchd jobs
   (`launchctl submit`). `/usr/bin/open`, `/usr/bin/osascript` and `/bin/launchctl` can't run at
   all.
+- **Other processes** (macOS). The server may look into and signal only processes in its own
+  sandbox (`process-info*` and `signal` limited to `same-sandbox`). So `ps eww` can't read the
+  environment of Symphony's BEAM or any other process outside it, and `kill` can't stop them.
 - **Mach services** (macOS). Like the agent profiles, the server may look up only a fixed list of mach
   services: the agent's list without its window, font, sound, power and LaunchServices services,
   plus `trustd`, which checks TLS certificates for tools that use Security.framework. So there

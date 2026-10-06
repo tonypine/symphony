@@ -303,7 +303,11 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
                "(deny lsopen)",
                "(deny job-creation)",
                "(deny mach-lookup\n  " <> deny_mach_lookup,
-               "(deny process-exec\n  " <> deny_exec
+               "(deny process-exec\n  " <> deny_exec,
+               "(deny process-info*)",
+               "(allow process-info* (target same-sandbox))",
+               "(deny signal)",
+               "(allow signal (target same-sandbox))"
              ] = String.split(profile, ~r/\n(?=\()/)
 
       assert allow_write ==
@@ -460,6 +464,28 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
 
       Process.sleep(1_000)
       refute File.exists?(marker)
+    end
+
+    test "a command can't read the environment of a process outside the sandbox, or signal it", %{workspace: workspace, tmp_dir: tmp_dir, home: home} do
+      profile = DevServerSandbox.profile(workspace, [workspace, tmp_dir], [], home)
+      secret = "symphony-secret-#{System.unique_integer([:positive])}"
+      port = Port.open({:spawn_executable, "/bin/sleep"}, [:binary, args: ["60"], env: [{~c"SYMPHONY_TEST_SECRET", String.to_charlist(secret)}]])
+      {:os_pid, pid} = Port.info(port, :os_pid)
+      on_exit(fn -> System.cmd("/bin/kill", ["#{pid}"], stderr_to_stdout: true) end)
+      ps = "/bin/ps eww -o command= -p #{pid}"
+
+      # Outside the sandbox `ps` shows it, once `sleep` has replaced the forked child.
+      wait_until(fn -> System.cmd("/bin/sh", ["-c", ps], stderr_to_stdout: true) |> elem(0) =~ secret end)
+
+      assert {output, _status} = seatbelt(profile, workspace, ps)
+      refute output =~ secret
+
+      assert {output, status} = seatbelt(profile, workspace, "kill -0 #{pid}")
+      assert status != 0
+      assert output =~ "Operation not permitted"
+
+      # Its own processes it still signals.
+      assert {_output, 0} = seatbelt(profile, workspace, "/bin/sleep 5 & kill -0 $! && kill $!")
     end
 
     test "a command gets no window server and no pasteboard, but still checks TLS certificates", %{workspace: workspace, tmp_dir: tmp_dir, home: home} do
@@ -639,6 +665,14 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
 
   defp python_connect(host, port) do
     "python3 -c 'import socket; socket.create_connection((\"#{host}\", #{port}), timeout=5)'"
+  end
+
+  defp wait_until(fun, attempts \\ 50) do
+    cond do
+      fun.() -> :ok
+      attempts == 0 -> flunk("condition never held")
+      true -> Process.sleep(100) && wait_until(fun, attempts - 1)
+    end
   end
 
   defp seatbelt(profile, workspace, script) do

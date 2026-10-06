@@ -21,7 +21,9 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
       window server (no windows or dialogs on the operator's desktop) and no pasteboard;
     * the ways to have a process started outside the sandbox: Apple Events, LaunchServices
       (`open`), launchd jobs (`launchctl submit`), and running `open`, `osascript` and
-      `launchctl` at all.
+      `launchctl` at all;
+    * looking into or signalling a process outside the sandbox: `ps eww` can't read the BEAM's
+      environment, and `kill` can't reach it.
 
   Seatbelt matches the real path of a file, so the checkout, the temp folders and the home
   folder are given with their links resolved, and a denied path outside the home folder also
@@ -243,8 +245,8 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
   @doc """
   The Seatbelt profile: writable in `write_paths` but the `protected_paths` of `workspace`
   (relative to it), unreadable in the agent's denied read paths under `home`, with
-  loopback-only network, an allowlist of mach services and no way to have launchd start a
-  process outside it.
+  loopback-only network, an allowlist of mach services, no way to have launchd start a
+  process outside it, and no process info on or signals to a process outside it.
   """
   @spec profile(Path.t(), [Path.t()], [String.t()], Path.t()) :: String.t()
   def profile(workspace, write_paths, protected_paths, home \\ System.user_home!()) do
@@ -284,7 +286,11 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
         Enum.map(@launch_services, &"(global-name #{sb_string(&1)})") ++
           Enum.map(@launch_services_prefixes, &"(global-name-prefix #{sb_string(&1)})")
       ),
-      rule("deny process-exec", Enum.map(@launcher_executables, &literal/1))
+      rule("deny process-exec", Enum.map(@launcher_executables, &literal/1)),
+      "(deny process-info*)",
+      "(allow process-info* (target same-sandbox))",
+      "(deny signal)",
+      "(allow signal (target same-sandbox))"
     ]
     |> Enum.join("\n")
   end
