@@ -247,7 +247,9 @@ repositories:
     never reach a run. Symphony reads the ref at startup, again on every dispatch after the
     pre-dispatch `git fetch origin` (it fetches the checkout itself when
     `fetch_before_dispatch` is on and the checkout is not the worktree source it already
-    fetched), and before every Auto Review QA pass, after the same fetch. The committed file is copied to `<state root>/workflows/<key>/`. If the file is
+    fetched), and before every Auto Review QA pass, after the same fetch. The committed file is copied to `<state root>/workflows/<key>/`.
+    A workflow whose body is `{% render "playbook" %}` takes its instruction files from the same
+    ref, and the copy holds the expanded text (see [playbook](playbook.md#the-whole-playbook-in-one-line)). If the file is
     missing or invalid on the ref, Symphony logs an error and keeps the last good workflow, and
     `GET /api/v1/repos` reports the workflow as `missing` or `invalid` with that error until the
     ref loads again.
