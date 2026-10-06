@@ -1,0 +1,10 @@
+# Opt-in override that lets `bwrap` sandbox the verification dev server. It loosens Docker's
+# defaults for the whole container: see "Verification dev server" in README.md before using it.
+#
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev-server-sandbox.yml up
+services:
+  symphony:
+    security_opt:
+      - seccomp=seccomp-bwrap.json
+      - systempaths=unconfined
+      - apparmor=unconfined
