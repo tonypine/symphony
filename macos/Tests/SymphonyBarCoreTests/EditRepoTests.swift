@@ -234,7 +234,7 @@ final class EditRepoTests: XCTestCase {
         XCTAssertNil(DisconnectRepo.problem(key: "web", entries: entries))
         XCTAssertEqual(
             DisconnectRepo.problem(key: "web", entries: [web]),
-            "web is the only repo, and Symphony needs at least one."
+            "Symphony needs at least one repo."
         )
         XCTAssertEqual(
             DisconnectRepo.problem(key: "gone", entries: entries),
@@ -317,7 +317,7 @@ final class EditRepoTests: XCTestCase {
         XCTAssertEqual(
             DisconnectRepo.question(for: web, newDefaultNeeded: false).message,
             "Symphony stops taking issues for web, and its entry and comment leave symphony.yml. Symphony's clone of "
-                + "acme/web stays on disk: to delete it, use Remove Clone… before disconnecting."
+                + "acme/web stays on disk unless you delete it too."
         )
         XCTAssertEqual(
             DisconnectRepo.question(for: RepositoryEntry(key: "bare"), newDefaultNeeded: false).message,
@@ -339,6 +339,55 @@ final class EditRepoTests: XCTestCase {
         )
         XCTAssertEqual(DisconnectRepo.restartQuestion(key: "web", runs: 2).title, "Restart Symphony to drop web?")
         XCTAssertTrue(DisconnectRepo.restartQuestion(key: "web", runs: 2).message.hasPrefix("2 agent runs are active."))
+    }
+
+    func testTheSheetPicksTheNewDefaultOnlyForTheDefaultRepo() {
+        let local = DisconnectRepo.Sheet(entry: symphony, entries: entries)
+        XCTAssertEqual(local.key, "symphony")
+        XCTAssertEqual(local.title, "Disconnect symphony?")
+        XCTAssertEqual(local.message, DisconnectRepo.question(for: symphony, newDefaultNeeded: true).message)
+        XCTAssertEqual(local.candidates, ["web"])
+        XCTAssertNil(local.gitHub)
+
+        let managed = DisconnectRepo.Sheet(entry: web, entries: entries)
+        XCTAssertNil(managed.candidates)
+        XCTAssertEqual(managed.gitHub, "acme/web")
+        XCTAssertEqual(managed.message, DisconnectRepo.question(for: web, newDefaultNeeded: false).message)
+    }
+
+    func testTheCloneCheckboxIsOnOnlyWhileTheCloneCanBeDeleted() {
+        let home = NSHomeDirectory()
+        var repo = RepoDetail(
+            key: "web",
+            source: RepoDetail.Source(kind: .managed, path: home + "/clones/acme/web", baseBranch: "main", managedGitHub: "acme/web"),
+            routing: RepoDetail.Routing(sentence: ""),
+            live: .folded(line: "", canStart: false),
+            actions: RepoActions(cloneRemoval: .allowed(path: home + "/clones/acme/web"))
+        )
+        XCTAssertEqual(
+            DisconnectRepo.cloneOption(for: repo),
+            DisconnectRepo.CloneOption(title: "Also delete Symphony's clone (~/clones/acme/web)", path: home + "/clones/acme/web")
+        )
+        XCTAssertEqual(DisconnectRepo.cloneOption(for: repo)?.isEnabled, true)
+
+        repo.actions.cloneRemoval = .blocked("TP-1 runs in a worktree of this clone.")
+        let blocked = DisconnectRepo.cloneOption(for: repo)
+        XCTAssertEqual(blocked?.title, "Also delete Symphony's clone (~/clones/acme/web)")
+        XCTAssertEqual(blocked?.reason, "TP-1 runs in a worktree of this clone.")
+        XCTAssertEqual(blocked?.isEnabled, false)
+
+        // Symphony didn't report the path: the title has none.
+        repo.source.path = nil
+        XCTAssertEqual(DisconnectRepo.cloneOption(for: repo)?.title, "Also delete Symphony's clone")
+
+        // No checkbox before the first clone, for a local folder, or without a removal state.
+        repo.source.notCloned = true
+        XCTAssertNil(DisconnectRepo.cloneOption(for: repo))
+        repo.source = RepoDetail.Source(kind: .local, path: "/Users/me/web", baseBranch: "main")
+        XCTAssertNil(DisconnectRepo.cloneOption(for: repo))
+        repo.source = RepoDetail.Source(kind: .managed, path: "/c", baseBranch: "main", managedGitHub: "acme/web")
+        repo.actions.cloneRemoval = nil
+        XCTAssertNil(DisconnectRepo.cloneOption(for: repo))
     }
 
     /// Disconnecting a local repo rewrites only `symphony.yml`: its folder, files and git branches stay.
