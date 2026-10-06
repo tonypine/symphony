@@ -1468,12 +1468,14 @@ defmodule SymphonyElixir.PrReviewPollerTest do
              }
            ] = RunStore.list_pr_reviews()
 
+    # Found outside Merging, the conflict is not on an approved PR.
     assert %{
              head_ref: "auto/ACME-1780",
              head_sha: "head-sha",
              base_ref: "main",
              base_sha: "base-sha",
-             conflict_key: "head-sha|base-sha"
+             conflict_key: "head-sha|base-sha",
+             approved: false
            } = PrReviewPoller.pending_pr_conflict("issue-1780")
   end
 

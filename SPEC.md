@@ -2002,6 +2002,11 @@ Important nuance:
   to `Merging` (with a comment saying why, and the CI-fix auto-merge hold dropped so auto-merge
   turns on again) when the CI failure came from `Merging` and the PR head is still the commit that
   failed, and to the post-PR state otherwise. A head that is still red, or has no checks, is parked as before.
+  The same holds for a run started by a merge conflict once GitHub reports the PR `MERGEABLE` and
+  its head green: it moves back to `Merging` (with the conflict's auto-merge state dropped) when the
+  conflict was found in `Merging` and the PR head is still the one that conflicted, and to the
+  post-PR state otherwise. A PR that still conflicts, or whose mergeability GitHub has not computed
+  yet, is parked as before, even when a CI failure is pending too.
 - The first turn SHOULD use the full rendered task prompt. Implementations MAY use a compact
   bootstrap prompt when the target agent transport cannot safely carry the full rendered prompt as a
   single startup message, provided the compact prompt preserves hard security rules and directs the
