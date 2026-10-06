@@ -147,6 +147,20 @@ defmodule SymphonyElixir.CiPollerTest do
       do: SymphonyElixir.RunStore.update_ci_check(repo_key, issue_id, attrs)
   end
 
+  defmodule FailingLandingFallbackRunStore do
+    def list_issue_runs(repo_key, issue_id), do: SymphonyElixir.RunStore.list_issue_runs(repo_key, issue_id)
+    def list_all_runs(limit), do: SymphonyElixir.RunStore.list_all_runs(limit)
+    def list_ci_checks(repo_key), do: SymphonyElixir.RunStore.list_ci_checks(repo_key)
+    def list_pr_reviews(repo_key), do: SymphonyElixir.RunStore.list_pr_reviews(repo_key)
+    def put_ci_check(record), do: SymphonyElixir.RunStore.put_ci_check(record)
+    def delete_ci_check(repo_key, issue_id), do: SymphonyElixir.RunStore.delete_ci_check(repo_key, issue_id)
+
+    def update_ci_check(_repo_key, _issue_id, %{landing_fallback_sha: sha}) when is_binary(sha), do: {:error, :write_failed}
+
+    def update_ci_check(repo_key, issue_id, attrs),
+      do: SymphonyElixir.RunStore.update_ci_check(repo_key, issue_id, attrs)
+  end
+
   defmodule RaisingRunStore do
     def list_all_runs(:all), do: raise("ci poll exploded")
     def list_ci_checks, do: []
@@ -495,6 +509,64 @@ defmodule SymphonyElixir.CiPollerTest do
 
     assert log =~ "Failed to comment that a landing skips pending checks issue_id=issue-2401"
     assert CiPoller.landing_ready_head("issue-2401") == "def456"
+  end
+
+  test "a Merging head lands past a workflow run that has not finished after 15 minutes" do
+    now = ~U[2026-05-06 09:00:00Z]
+    issue = %{in_review_issue() | state: "Merging"}
+    Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+    Application.put_env(:symphony_elixir, :ci_test_required_checks, [])
+    put_run(issue, now)
+
+    make_all = %{name: "make all", status: "COMPLETED", conclusion: "SUCCESS", run_id: "987"}
+
+    status =
+      %{green_status() | checks: [make_all]}
+      |> Map.merge(%{base_ref_name: "main", workflow_runs: [%{id: "987", status: "IN_PROGRESS", conclusion: nil}]})
+
+    Application.put_env(:symphony_elixir, :ci_test_status, status)
+    poll = fn minutes -> CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: DateTime.add(now, minutes, :minute)) end
+
+    assert {:ok, %{actions: [{:watching, "issue-2401"}]}} = poll.(0)
+    log = capture_log([level: :warning], fn -> assert {:ok, %{actions: [{:watching, "issue-2401"}]}} = poll.(15) end)
+
+    assert log =~ ~r/skipped=$/m
+    assert CiPoller.landing_ready_head("issue-2401") == "abc123"
+    assert_received {:issue_comment, "issue-2401", body}
+    assert body =~ "still waiting on a workflow run that has not finished"
+  end
+
+  test "a Merging head is announced as landing past its pending checks only once the record holds it" do
+    now = ~U[2026-05-06 09:00:00Z]
+    issue = %{in_review_issue() | state: "Merging"}
+    Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+    Application.put_env(:symphony_elixir, :ci_test_required_checks, [])
+    put_run(issue, now)
+
+    make_all = %{name: "make all", status: "COMPLETED", conclusion: "SUCCESS", run_id: "987"}
+    preview = %{name: "deploy/preview", status: "QUEUED", conclusion: nil}
+    Application.put_env(:symphony_elixir, :ci_test_status, %{green_status() | checks: [make_all, preview]})
+
+    poll = fn minutes, run_store ->
+      CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, run_store: run_store, now: DateTime.add(now, minutes, :minute))
+    end
+
+    assert {:ok, %{actions: [{:watching, "issue-2401"}]}} = poll.(0, SymphonyElixir.RunStore)
+
+    log =
+      capture_log([level: :warning], fn ->
+        assert {:ok, %{actions: [{:update_error, "issue-2401", {:update_ci_check_failed, :write_failed}}]}} =
+                 poll.(15, FailingLandingFallbackRunStore)
+      end)
+
+    refute log =~ "Landing without the checks still pending"
+    refute_received {:issue_comment, "issue-2401", _body}
+    assert CiPoller.landing_ready_head("issue-2401") == nil
+
+    assert {:ok, %{actions: [{:watching, "issue-2401"}]}} = poll.(16, SymphonyElixir.RunStore)
+    assert_received {:issue_comment, "issue-2401", body}
+    assert body =~ "after 16 min in Merging"
+    assert CiPoller.landing_ready_head("issue-2401") == "abc123"
   end
 
   test "a Merging head waits on every check past 15 minutes when nothing passed or the required checks can't be read" do

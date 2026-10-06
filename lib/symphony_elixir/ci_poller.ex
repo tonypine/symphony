@@ -673,7 +673,7 @@ defmodule SymphonyElixir.CiPoller do
         attrs = ci_status_attrs(record, ci_status, %{status: status}, now)
 
         case complete_ci_update(opts, record, attrs, {:watching, issue_id}) do
-          {:watching, ^issue_id} = action -> maybe_send_auto_review_conflict(action, record, ci_status, opts)
+          {:watching, ^issue_id} = action -> after_watching(action, record, ci_status, opts, now)
           other -> other
         end
 
@@ -1188,6 +1188,12 @@ defmodule SymphonyElixir.CiPoller do
 
   # GitHub runs no `pull_request` workflows on a PR that conflicts with its base, so an Auto Review
   # issue whose PR conflicts and has no checks would wait forever (see AutoReview.on_conflict/4).
+  # Side effects of a pending poll, run once the record holds it.
+  defp after_watching(action, record, ci_status, opts, now) do
+    if Map.get(ci_status, :announce_landing_fallback), do: announce_landing_fallback(record, ci_status, opts, now)
+    maybe_send_auto_review_conflict(action, record, ci_status, opts)
+  end
+
   defp maybe_send_auto_review_conflict({:watching, issue_id} = action, record, ci_status, opts) do
     with %Issue{} = issue <- Map.get(Keyword.get(opts, :auto_review_issues, %{}), issue_id),
          true <- Map.get(ci_status, :checks) == [] and PullRequest.conflicting?(ci_status) do
@@ -1292,8 +1298,9 @@ defmodule SymphonyElixir.CiPoller do
   # `@landing_fallback_ms`, a head that may land on the checks still pending
   # (`landing_fallback_eligible?/1`) is let past: `landing_ready_sha` names it, so the orchestrator
   # releases the landing agent, and its merge and CI wait read the mark through
-  # `put_landing_fallback/3`. The first time a wait lets a head past, the checks it skips are
-  # logged and the issue gets one comment.
+  # `put_landing_fallback/3`. The first time a wait lets a head past, it is marked
+  # `:announce_landing_fallback`: once the record holds `landing_fallback_sha`, the checks it skips
+  # are logged and the issue gets one comment.
   defp track_landing_wait(record, ci_status, opts, now) do
     sha = Map.get(ci_status, :commit_sha)
 
@@ -1302,23 +1309,25 @@ defmodule SymphonyElixir.CiPoller do
       wait = %{landing_wait_sha: sha, landing_wait_since: since, landing_fallback_sha: nil}
 
       if DateTime.diff(now, since, :millisecond) >= @landing_fallback_ms and landing_fallback_eligible?(ci_status),
-        do: land_past_pending_checks(record, ci_status, wait, opts, now),
+        do: land_past_pending_checks(record, ci_status, wait),
         else: Map.put(ci_status, :landing_wait, wait)
     else
       Map.put(ci_status, :landing_wait, %{landing_wait_sha: nil, landing_wait_since: nil, landing_fallback_sha: nil})
     end
   end
 
-  defp land_past_pending_checks(record, ci_status, %{landing_wait_sha: sha} = wait, opts, now) do
-    if Map.get(record, :landing_fallback_sha) != sha, do: announce_landing_fallback(record, ci_status, wait.landing_wait_since, opts, now)
-    ci_status |> Map.put(:landing_fallback, true) |> Map.put(:landing_wait, %{wait | landing_fallback_sha: sha})
+  defp land_past_pending_checks(record, ci_status, %{landing_wait_sha: sha} = wait) do
+    ci_status
+    |> Map.put(:landing_fallback, true)
+    |> Map.put(:landing_wait, %{wait | landing_fallback_sha: sha})
+    |> Map.put(:announce_landing_fallback, Map.get(record, :landing_fallback_sha) != sha)
   end
 
-  defp announce_landing_fallback(record, ci_status, since, opts, now) do
+  defp announce_landing_fallback(record, ci_status, opts, now) do
     issue_id = Map.get(record, :issue_id)
     pr_url = Map.get(ci_status, :pr_url) || Map.get(record, :pr_url)
     sha = Map.get(ci_status, :commit_sha)
-    minutes = div(DateTime.diff(now, since, :second), 60)
+    minutes = div(DateTime.diff(now, ci_status.landing_wait.landing_wait_since, :second), 60)
     skipped = ci_status |> Map.get(:checks, []) |> Enum.reject(&passed_check?/1) |> Enum.map(&Map.get(&1, :name)) |> Enum.uniq()
 
     Logger.warning(
