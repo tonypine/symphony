@@ -320,6 +320,8 @@ defmodule SymphonyElixir.WorkflowSourceTest do
   end
 
   describe "instruction files" do
+    # The subdirectory test below also pushes a symlink and a directory with instruction
+    # file names; like `Workflow.instructions_on_disk/1`, the ref skips both.
     test "a branch that edits the instruction files does not change the prompt of a run on that branch", %{root: root} do
       %{checkout: checkout, other: other} = git_repos!(root, playbook_workflow())
       push_files!(other, %{".symphony/instructions/010-rules.md" => "Main rules\n"})
@@ -348,6 +350,8 @@ defmodule SymphonyElixir.WorkflowSourceTest do
 
     test "a workflow in a subdirectory reads instruction files next to it on the ref", %{root: root} do
       %{checkout: checkout, other: other} = git_repos!(root, "Root prompt")
+      File.mkdir_p!(Path.join(other, "agents/.symphony/instructions"))
+      File.ln_s!(Path.join(other, "agents/WORKFLOW.md"), Path.join(other, "agents/.symphony/instructions/015-link.md"))
 
       push_files!(other, %{
         "agents/WORKFLOW.md" => playbook_workflow(),

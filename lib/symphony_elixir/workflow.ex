@@ -170,8 +170,7 @@ defmodule SymphonyElixir.Workflow do
   """
   @spec assemble(String.t(), Assembly.reader()) :: {:ok, String.t()} | {:error, term()}
   def assemble(content, read_instructions) when is_binary(content) do
-    lines = String.split(content, ~r/\R/, trim: false)
-    {head, body} = Enum.split(lines, front_matter_length(lines))
+    {head, body} = split_body(content)
 
     if Enum.any?(body, &Assembly.directive?/1) do
       with {:ok, _workflow} <- parse_assembled(content),
@@ -185,8 +184,49 @@ defmodule SymphonyElixir.Workflow do
   end
 
   @doc """
+  Returns the directory the playbook line of the `WORKFLOW.md` at `path` with `content`
+  reads its instruction files from, or nil when the body has no such line.
+  """
+  @spec instructions_path(Path.t(), String.t()) :: Path.t() | nil
+  def instructions_path(path, content) when is_binary(path) and is_binary(content) do
+    {_head, body} = split_body(content)
+
+    with true <- Enum.any?(body, &Assembly.directive?/1),
+         {:ok, {front_matter, _prompt}} <- parse_document(content),
+         settings when is_map(settings) <- Map.get(front_matter, "playbook") || %{},
+         dir when is_binary(dir) <- Assembly.instructions_dir(settings) do
+      Path.expand(dir, Path.dirname(path))
+    else
+      _no_playbook -> nil
+    end
+  end
+
+  @doc """
+  Stamps the instruction files in `dir` (`instructions_path/2`) by name, type, size and
+  modification time, so a cache of a workflow expanded from them can tell when to load it
+  again. Nil for no directory.
+  """
+  @spec instructions_stamp(Path.t() | nil) :: term()
+  def instructions_stamp(nil), do: nil
+
+  def instructions_stamp(dir) when is_binary(dir) do
+    case File.ls(dir) do
+      {:ok, names} -> for name <- Enum.sort(names), Assembly.instruction_file?(name), do: file_stamp(dir, name)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp file_stamp(dir, name) do
+    case File.lstat(Path.join(dir, name), time: :posix) do
+      {:ok, stat} -> {name, stat.type, stat.size, stat.mtime}
+      {:error, reason} -> {name, reason}
+    end
+  end
+
+  @doc """
   Reads the instruction files of a playbook directory relative to `base_dir`; a
-  missing directory has none.
+  missing directory has none. Only regular files count: a symlink or directory with an
+  instruction file's name is skipped, as it is on a git ref.
   """
   @spec instructions_on_disk(Path.t()) :: Assembly.reader()
   def instructions_on_disk(base_dir) when is_binary(base_dir) do
@@ -203,8 +243,13 @@ defmodule SymphonyElixir.Workflow do
 
   defp read_files(names, dir) do
     Enum.reduce_while(names, {:ok, []}, fn name, {:ok, files} ->
-      case File.read(Path.join(dir, name)) do
-        {:ok, body} -> {:cont, {:ok, [{name, body} | files]}}
+      path = Path.join(dir, name)
+
+      with {:ok, %File.Stat{type: :regular}} <- File.lstat(path),
+           {:ok, body} <- File.read(path) do
+        {:cont, {:ok, [{name, body} | files]}}
+      else
+        {:ok, %File.Stat{}} -> {:cont, {:ok, files}}
         {:error, reason} -> {:halt, {:error, {name, reason}}}
       end
     end)
@@ -245,6 +290,12 @@ defmodule SymphonyElixir.Workflow do
         {:error, reason} -> {:error, {:symphony_parse_error, reason}}
       end
     end
+  end
+
+  # The front matter lines, delimiters included, and the body lines.
+  defp split_body(content) do
+    lines = String.split(content, ~r/\R/, trim: false)
+    Enum.split(lines, front_matter_length(lines))
   end
 
   # Lines of the front matter block, both `---` delimiters included.

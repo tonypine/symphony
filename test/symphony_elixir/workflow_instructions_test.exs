@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.WorkflowInstructionsTest do
   use ExUnit.Case, async: true
 
-  alias SymphonyElixir.{AgentSandboxConfig, Workflow, WorkflowPreview}
+  alias SymphonyElixir.{AgentSandboxConfig, Workflow, WorkflowPreview, WorkflowStore}
 
   @repo_root Path.expand("../..", __DIR__)
 
@@ -81,8 +81,52 @@ defmodule SymphonyElixir.WorkflowInstructionsTest do
     assert Workflow.load(path) == {:error, {:workflow_instructions_error, "rules", :enotdir}}
 
     File.rm!(Path.join(dir, "rules"))
-    File.mkdir_p!(Path.join(dir, "rules/010-dir.md"))
-    assert Workflow.load(path) == {:error, {:workflow_instructions_error, "rules", {"010-dir.md", :eisdir}}}
+    write!(dir, "rules/010-rules.md", "Rules\n")
+    # Listable but not searchable: the files cannot be looked up.
+    File.chmod!(Path.join(dir, "rules"), 0o644)
+    on_exit(fn -> File.chmod(Path.join(dir, "rules"), 0o755) end)
+
+    assert Workflow.load(path) == {:error, {:workflow_instructions_error, "rules", {"010-rules.md", :eacces}}}
+    assert Workflow.instructions_stamp(Path.join(dir, "rules")) == [{"010-rules.md", :eacces}]
+  end
+
+  test "only regular files are instruction files on disk, as on a git ref", %{dir: dir} do
+    path = write!(dir, "WORKFLOW.md", "{% render \"playbook\" %}\n")
+    secret = write!(dir, "host-secret.txt", "Host secret\n")
+    write!(dir, ".symphony/instructions/010-rules.md", "## Repo rules\n")
+    File.ln_s!(secret, Path.join(dir, ".symphony/instructions/020-link.md"))
+    File.mkdir_p!(Path.join(dir, ".symphony/instructions/030-dir.md"))
+
+    assert {:ok, %{prompt: prompt}} = Workflow.load(path)
+    assert prompt =~ "## Repo rules"
+    refute prompt =~ "Host secret"
+    assert {:ok, preview} = WorkflowPreview.render(file: path)
+    refute preview =~ "Host secret"
+  end
+
+  test "the workflow store reloads when only an instruction file changes", %{dir: dir} do
+    path = write!(dir, "WORKFLOW.md", "Intro\n{% render \"playbook\" %}\n")
+    rules = write!(dir, ".symphony/instructions/045-rules.md", "## First rules\n")
+    store = start_supervised!({WorkflowStore, name: nil, path: path})
+
+    assert {:ok, %{prompt: prompt}} = WorkflowStore.current(store)
+    assert prompt =~ "## First rules"
+
+    File.write!(rules, "## Second, longer rules\n")
+    assert {:ok, %{prompt: prompt}} = WorkflowStore.current(store)
+    assert prompt =~ "## Second, longer rules"
+
+    write!(dir, ".symphony/instructions/046-more.md", "## More rules\n")
+    assert {:ok, %{prompt: prompt}} = WorkflowStore.current(store)
+    assert prompt =~ ~r/## Second, longer rules.*## More rules/s
+  end
+
+  test "an instructions stamp is nil without a playbook line or a valid instructions directory", %{dir: dir} do
+    assert Workflow.instructions_path(Path.join(dir, "WORKFLOW.md"), "Inline prompt\n") == nil
+    assert Workflow.instructions_path(Path.join(dir, "WORKFLOW.md"), "---\nplaybook:\n  instructions: 1\n---\n{% render \"playbook\" %}\n") == nil
+    assert Workflow.instructions_path(Path.join(dir, "WORKFLOW.md"), "{% render \"playbook\" %}\n") == Path.join(dir, ".symphony/instructions")
+    assert Workflow.instructions_stamp(nil) == nil
+    assert Workflow.instructions_stamp(Path.join(dir, "missing")) == {:error, :enoent}
   end
 
   test "invalid front matter fails before any instruction file is read" do

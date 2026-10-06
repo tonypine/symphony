@@ -139,11 +139,14 @@ request. That is safe because Symphony never reads them from a run's workspace: 
 branch, `origin/<base_branch>`, and runs from a snapshot of the expanded text. An agent can propose
 an instruction change on its branch, but the change reaches a prompt only after its pull request
 passes CI, the acceptance gate and review and is merged, and it never changes the prompt of the run
-that made it. The files hold prompt text only: nothing in them runs on the host, and moving or
-dropping a Symphony partial still takes a `WORKFLOW.md` edit.
+that made it. The files hold prompt text only: nothing in them runs on the host, only regular
+files count (a symlink or a directory with an instruction file's name is skipped, on the ref and on
+disk alike, so a link cannot pull a host file into the prompt), and moving or dropping a Symphony
+partial still takes a `WORKFLOW.md` edit.
 
 With `workflow_source: local`, Symphony reads `WORKFLOW.md` and the instruction files from the
-operator's checkout on disk, never from an agent's workspace.
+operator's checkout on disk, never from an agent's workspace, and reloads the workflow when either
+changes.
 
 ### Git metadata
 

@@ -16,7 +16,9 @@ defmodule SymphonyElixir.Config.Cache do
   defmodule Entry do
     @moduledoc false
 
-    defstruct [:kind, :path, :stamp, :value, :last_error, :updated_at, stale?: false]
+    # `instructions` is the instruction directory a workflow's playbook line expanded and
+    # its `Workflow.instructions_stamp/1` before the load, or nil.
+    defstruct [:kind, :path, :stamp, :instructions, :value, :last_error, :updated_at, stale?: false]
   end
 
   @type cache_kind :: :symphony | :workflow
@@ -155,11 +157,10 @@ defmodule SymphonyElixir.Config.Cache do
 
   defp refresh_entry(%Entry{} = entry, loader) do
     case current_stamp(entry.path) do
-      {:ok, stamp} when stamp == entry.stamp ->
-        entry_result(entry)
-
       {:ok, stamp} ->
-        load_entry(entry.kind, entry.path, loader, entry, stamp)
+        if stamp == entry.stamp and instructions_current?(entry.instructions),
+          do: entry_result(entry),
+          else: load_entry(entry.kind, entry.path, loader, entry, stamp)
 
       {:error, reason} ->
         stale_entry(entry, {:missing_file, reason})
@@ -168,11 +169,12 @@ defmodule SymphonyElixir.Config.Cache do
 
   defp load_entry(kind, path, loader, previous \\ nil, known_stamp \\ nil) do
     with {:ok, stamp} <- stamp_for(path, known_stamp),
-         {:ok, value} <- loader.(path) do
+         {:ok, value, instructions} <- loader.(path) do
       entry = %Entry{
         kind: kind,
         path: path,
         stamp: stamp,
+        instructions: instructions,
         value: value,
         updated_at: System.system_time(:millisecond)
       }
@@ -190,6 +192,9 @@ defmodule SymphonyElixir.Config.Cache do
 
   defp stamp_for(_path, stamp) when is_tuple(stamp), do: {:ok, stamp}
   defp stamp_for(path, _stamp), do: current_stamp(path)
+
+  defp instructions_current?(nil), do: true
+  defp instructions_current?({dir, stamp}), do: Workflow.instructions_stamp(dir) == stamp
 
   defp stale_entry(%Entry{} = entry, reason) do
     stale = %{
@@ -250,12 +255,20 @@ defmodule SymphonyElixir.Config.Cache do
 
   defp load_symphony(path) do
     with {:ok, content} <- read_file(path),
-         do: Workflow.parse_symphony(content)
+         {:ok, value} <- Workflow.parse_symphony(content),
+         do: {:ok, value, nil}
   end
 
+  # The workflow's stamp covers the instruction files its playbook line expands, so an
+  # edit to one reloads it like an edit to the workflow file.
   defp load_workflow(path) do
-    with {:ok, content} <- read_file(path),
-         do: Workflow.parse_repo_workflow(content, Workflow.instructions_on_disk(Path.dirname(path)))
+    with {:ok, content} <- read_file(path) do
+      dir = Workflow.instructions_path(path, content)
+      instructions = if dir, do: {dir, Workflow.instructions_stamp(dir)}
+
+      with {:ok, workflow} <- Workflow.parse_repo_workflow(content, Workflow.instructions_on_disk(Path.dirname(path))),
+           do: {:ok, workflow, instructions}
+    end
   end
 
   defp read_file(path) do

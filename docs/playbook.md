@@ -70,7 +70,8 @@ The instruction files are the `NNN-name.md` files in `.symphony/instructions/`, 
 `WORKFLOW.md`. `NNN` places the file: `041-command-and-output-hygiene.md` comes after
 `scoped_tools` (40) and before `status_map` (50), and a file on a partial's own number
 comes right after that partial. Other files in the directory, such as a `README.md`,
-are left out. Each file goes in as written, with a blank line between sections, so it
+are left out, and so are symlinks and directories with such a name: an instruction
+file must be a regular file. Each file goes in as written, with a blank line between sections, so it
 uses the same Liquid variables as a `WORKFLOW.md` body (`{{ issue.identifier }}`,
 `{{ agent.workpad_heading }}`) and may render a partial itself. A file must not hold
 the `{% render "playbook" %}` line.
@@ -97,8 +98,9 @@ Symphony reads the instruction files from the same place as `WORKFLOW.md`: the
 fetched base branch, `origin/<base_branch>` (see `workflow_source` in
 [configuration](configuration.md)). An agent may edit them, since they are not
 write-protected, but its edits reach runs only once their pull request is merged.
-The run's own branch and checkout never change its prompt. See
-[security](security.md#workflow-and-instruction-files).
+The run's own branch and checkout never change its prompt. With `workflow_source: local`
+they are read from disk next to `WORKFLOW.md`, and an edit to one reloads the workflow
+like an edit to `WORKFLOW.md`. See [security](security.md#workflow-and-instruction-files).
 
 `symphony workflow preview` shows the assembled prompt, instruction files included,
 read from the disk next to the `WORKFLOW.md` it renders.

@@ -1580,9 +1580,10 @@ Playbook line:
 - Instruction files are the files named `<digits>-<name>.md` in the directory
   `playbook.instructions` names, relative to the workflow file (default `.symphony/instructions`).
   A file's number is its slot; on a tie the partial comes first, and files with the same number
-  sort by name. Other files are ignored. Each file's trimmed text goes in as written, so it renders
-  with the same variables as the rest of the body. A file holding the playbook line is an error,
-  as is a directory or file that cannot be read; a missing directory has no files.
+  sort by name. Other files are ignored, and only regular files count: a symlink or directory with
+  such a name is skipped, on a git ref as on disk. Each file's trimmed text goes in as written, so
+  it renders with the same variables as the rest of the body. A file holding the playbook line is
+  an error, as is a directory or file that cannot be read; a missing directory has no files.
 - A partial's render line passes each variable its header's `vars` list names under the same name,
   except `lockfile`, which takes the string `playbook.lockfile`. Without `playbook.lockfile`, a
   partial taking `lockfile` (`dependency_guardrail`) is left out.
@@ -1699,7 +1700,8 @@ Value coercion semantics:
 Dynamic reload behavior:
 
 - The Elixir implementation polls repo `WORKFLOW.md` files and keeps each `WorkflowStore` on the
-  last known good workflow when reload fails.
+  last known good workflow when reload fails. A workflow read from disk with a playbook line
+  (Section 5.5) also reloads when one of its instruction files is added, removed or changed.
 - For `workflow_source: ref`, the workflow is re-read from the remote base branch at startup,
   on every dispatch after the pre-dispatch fetch, and before every Auto Review QA pass, so a change
   pushed to the base branch applies to the next dispatch or QA pass without restart. A missing or invalid workflow on the ref is logged and the

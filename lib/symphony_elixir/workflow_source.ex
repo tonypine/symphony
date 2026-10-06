@@ -239,10 +239,14 @@ defmodule SymphonyElixir.WorkflowSource do
     end
   end
 
+  # Only regular files count, as on disk: a symlink (mode 120000) or a tree is skipped.
   defp instruction_blob(entry) do
-    [_mode, type, _sha, file] = String.split(entry, [" ", "\t"], parts: 4)
+    [mode, type, _sha, file] = String.split(entry, [" ", "\t"], parts: 4)
     name = Path.basename(file)
-    if type == "blob" and Assembly.instruction_file?(name), do: [{name, file}], else: []
+
+    if type == "blob" and mode != "120000" and Assembly.instruction_file?(name),
+      do: [{name, file}],
+      else: []
   end
 
   defp read_at_ref(files, checkout, ref) do
