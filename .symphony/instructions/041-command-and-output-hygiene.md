@@ -9,7 +9,8 @@
   suite, the 100% coverage report and Dialyzer on every push.
   - Cheap checks run locally, in any phase: `mix format --check-formatted`,
     `mix compile --warnings-as-errors`, `mix specs.check`,
-    `mix credo --strict <changed files>`, and the test files you added or
+    `mix credo --strict <changed files>`, `mix cover.changed` (line coverage
+    of the `lib/` modules you changed), and the test files you added or
     changed plus the test files of the modules you changed (`mix test <file>`
     or `<file>:<line>`).
   - Slow, compute-heavy checks never run locally: the full `mix test`,
