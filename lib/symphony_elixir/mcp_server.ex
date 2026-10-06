@@ -930,7 +930,7 @@ defmodule SymphonyElixir.McpServer do
   defp await_tool_event(%{task: %Task{ref: ref} = task, socket: socket} = call, buffer, {:select_info, _tag, handle} = select_info) do
     receive do
       {^ref, outcome} ->
-        Process.demonitor(ref, [:flush])
+        Task.ignore(task)
         :socket.cancel(socket, select_info)
         {outcome, buffer}
 
