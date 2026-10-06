@@ -827,6 +827,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         cancelRestartItem.isHidden = !restarter.machine.canCancel
         detailItems = StatusMenu.detailLines(
             status,
+            slowToAnswer: machine.slowToAnswer,
             waitingForKeychain: runner.isWaitingForKeychain,
             restartLine: restarter.machine.menuLine,
             controlError: controlError
