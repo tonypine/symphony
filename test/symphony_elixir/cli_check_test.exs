@@ -395,6 +395,51 @@ defmodule SymphonyElixir.CLICheckTest do
                 "Warning: repositories[app].agent.effort: OpenRouter model `acme/tools-only` does not support reasoning; its runs start without --effort high\n"}
     end
 
+    test "names the repository run profile that picked openrouter when its model is inherited", %{root: root} do
+      System.put_env("OPENROUTER_API_KEY", "sk-or-v1-check-secret")
+      stub_models_api()
+
+      content =
+        String.replace(valid_symphony(root), "  runtime: codex\n  command: codex app-server\n", """
+          runtime: claude
+          command: claude
+          model: claude-sonnet-5-5
+        """) <>
+          """
+              agent:
+                run_profiles:
+                  landing: { provider: openrouter }
+          """
+
+      path = write_symphony!(root, content)
+
+      assert check(["--config", path]) ==
+               {{:error,
+                 "Config error in #{path}: repositories[app].agent.run_profiles.landing.provider: OpenRouter has no model `claude-sonnet-5-5`, " <>
+                   "inherited from agent.model; set repositories[app].agent.run_profiles.landing.model to an OpenRouter model id"}, ""}
+    end
+
+    test "names the run profile that picked openrouter when its inherited model lacks tools", %{root: root} do
+      System.put_env("OPENROUTER_API_KEY", "sk-or-v1-check-secret")
+      stub_models_api()
+
+      content =
+        String.replace(valid_symphony(root), "  runtime: codex\n  command: codex app-server\n", """
+          runtime: claude
+          command: claude
+          model: acme/chat-only
+          run_profiles:
+            ci_fix: { provider: openrouter }
+        """)
+
+      path = write_symphony!(root, content)
+
+      assert check(["--config", path]) ==
+               {{:error,
+                 "Config error in #{path}: agent.run_profiles.ci_fix.provider: OpenRouter model `acme/chat-only`, inherited from agent.model, " <>
+                   "does not support tools; set agent.run_profiles.ci_fix.model to an OpenRouter model that lists tools"}, ""}
+    end
+
     test "checks models against the QA stub in QA mode", %{root: root} do
       {:ok, stub, port} = Stub.start_link(log: fn _line -> :ok end)
       saved = Map.new(~w(SYMPHONY_BAR_QA_ROOT SYMPHONY_QA_OPENROUTER_URL), &{&1, System.get_env(&1)})

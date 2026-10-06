@@ -126,8 +126,8 @@ struct SettingsView: View {
                             Text("Checking the token limits with symphony check…").foregroundStyle(.secondary)
                         }
                     }
-                    if let error = model.tokenLimitsError {
-                        CheckErrorText(message: error)
+                    if model.tokenLimitsError != nil {
+                        CheckErrorPointer(subject: "these token limits")
                     }
                     ForEach(TokenUsage.lines(model.budget, now: Date(), timeZone: .current), id: \.self) { line in
                         Text(line).foregroundStyle(.secondary)
@@ -174,8 +174,8 @@ struct SettingsView: View {
                         )
                     }
                     .disabled(!model.canEditRunProfiles)
-                    if let error = model.configCheckError {
-                        CheckErrorText(message: error)
+                    if model.configCheckError != nil {
+                        CheckErrorPointer(subject: "these models")
                     }
                     if model.commandProfile != RunProfile() {
                         Text(
@@ -320,11 +320,13 @@ struct SettingsView: View {
                 if let configFileError = model.configFileError {
                     Text(configFileError).foregroundStyle(.red)
                 }
-                if model.configCheckError != nil {
-                    Text("symphony check rejected the models; see Models.").foregroundStyle(.red)
+                // In full here, below the Form: a grouped Form row is laid out shorter than wrapped text draws, so
+                // a long reason there lost its last line and covered the row above.
+                if let error = model.configCheckError {
+                    CheckErrorText(message: error)
                 }
-                if model.tokenLimitsError != nil {
-                    Text("symphony check rejected the token limits; see Agents.").foregroundStyle(.red)
+                if let error = model.tokenLimitsError {
+                    CheckErrorText(message: error)
                 }
                 if model.acceptanceGateError != nil {
                     Text("symphony check rejected the acceptance gate's mode; see Acceptance gate.").foregroundStyle(.red)
@@ -559,7 +561,8 @@ private struct OpenRouterModelField: View {
     }
 }
 
-/// A `symphony check` failure shown in full: it wraps rather than cutting off the reason, and can be copied.
+/// A `symphony check` failure shown in full below the Form: it wraps rather than cutting off the reason, and can
+/// be copied.
 private struct CheckErrorText: View {
     let message: String
 
@@ -569,6 +572,18 @@ private struct CheckErrorText: View {
             .fixedSize(horizontal: false, vertical: true)
             .textSelection(.enabled)
             .help(message)
+    }
+}
+
+/// One line in a section saying `symphony check` rejected `subject`, such as "these models", and that the reason
+/// shows in full above Save.
+private struct CheckErrorPointer: View {
+    let subject: String
+
+    var body: some View {
+        Text("symphony check rejected \(subject); the reason shows above Save.")
+            .foregroundStyle(.red)
+            .lineLimit(1)
     }
 }
 

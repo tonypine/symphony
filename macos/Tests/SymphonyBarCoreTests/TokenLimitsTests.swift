@@ -197,10 +197,12 @@ final class TokenLimitsTests: XCTestCase {
             checked = try? String(contentsOfFile: path, encoding: .utf8)
             return .passed
         }
-        let failed = try await file.checkTokenLimits(TokenLimits(perDay: .tokens(-5)), from: configLimits) { _ in .failed("no") }
+        let failed = try await file.checkTokenLimits(TokenLimits(perDay: .tokens(-5)), from: configLimits) { path in
+            .failed("Config error in \(path): no")
+        }
 
         XCTAssertEqual(passed, .passed)
-        XCTAssertEqual(failed, .failed("no"))
+        XCTAssertEqual(failed, .failed("Config error in \(url.path): no"))
         XCTAssertEqual(try TokenLimits.values(in: XCTUnwrap(checked)), TokenLimits(perDay: .off, perIssue: configLimits.perIssue))
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), config)
         XCTAssertEqual(try siblings(of: url), ["symphony.yml"])

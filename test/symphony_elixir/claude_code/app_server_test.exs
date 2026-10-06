@@ -2736,6 +2736,27 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       end)
     end
 
+    test "names the model key next to the provider when a run inherits a model that lacks tools" do
+      with_openrouter_key("sk-or-v1-REDACTED", fn ->
+        with_models_api(fn ->
+          with_provider_env_fake_claude("ACME-OPENROUTER-INHERITED-NOTOOLS", fn workspace ->
+            settings = Config.settings!()
+            repository = %Config.Schema.RepoAgent{key: "beta", run_profiles: %{"ci_fix" => %{"provider" => "openrouter"}}}
+            settings = %{settings | agent: %{settings.agent | model: "acme/chat-only", repository: repository}}
+            profile = %{kind: :ci_fix, model: "acme/chat-only", effort: nil, provider: "openrouter"}
+
+            log =
+              capture_log(fn ->
+                assert AppServer.start_session(workspace, run_profile: profile, settings: settings) ==
+                         {:error, {:openrouter_model_unsupported, "acme/chat-only", :ci_fix, :tools}}
+              end)
+
+            assert log =~ "run_kind=ci_fix; set repositories[beta].agent.run_profiles.ci_fix.model to a model that lists tools"
+          end)
+        end)
+      end)
+    end
+
     test "keeps --effort for an OpenRouter model that supports reasoning" do
       with_openrouter_key("sk-or-v1-REDACTED", fn ->
         with_models_api(fn ->

@@ -451,9 +451,10 @@ final class ScopedRunProfilesTests: XCTestCase {
             checked.append(candidate)
             XCTAssertEqual(URL(fileURLWithPath: candidate).deletingLastPathComponent().path, directory.path)
             XCTAssertEqual(try? RunProfilesConfig.scopedProfiles(in: String(contentsOfFile: candidate, encoding: .utf8)), new)
-            return .failed("Config error: repositories[web].agent.run_profiles.landing.model: no tools")
+            return .failed("Config error in \(candidate): repositories[web].agent.run_profiles.landing.model: no tools")
         }
-        XCTAssertEqual(failed, .failed("Config error: repositories[web].agent.run_profiles.landing.model: no tools"))
+        // The check ran on a hidden copy, but the message names symphony.yml.
+        XCTAssertEqual(failed, .failed("Config error in \(path): repositories[web].agent.run_profiles.landing.model: no tools"))
         XCTAssertEqual(try String(contentsOfFile: path, encoding: .utf8), config)
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path), ["symphony.yml"])
 
