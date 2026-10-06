@@ -11,11 +11,15 @@ defmodule SymphonyElixir.GitConfigCommands do
       git keeps those files as the repo stores them;
     * a merge driver (`merge.<name>.driver`) when `merge` merges such a file. `config_args/3`
       replaces it with `git merge-file`, which merges the file as git does when no driver is set;
-    * a diff driver (`diff.external`, `diff.<name>.command` and `.textconv`) when `diff`, `log` or
-      `show` print a patch, and the config's `remote.<name>.uploadpack` or `.receivepack` when
-      `fetch`, `ls-remote`, `pull` or `push` reach a remote on the same machine.
-      `subcommand_args/1` passes the options that turn these off: the config's value wins over a
-      `-c` one for the two remote keys, and an empty diff driver makes git fail.
+    * a diff driver (`diff.external`, `diff.<name>.command` and `.textconv`) when `diff`, `log`,
+      `show`, `whatchanged`, `blame` or `format-patch` print a patch or a file, and the config's
+      `remote.<name>.uploadpack` or `.receivepack` when `fetch`, `ls-remote`, `pull` or `push`
+      reach a remote on the same machine. `subcommand_args/1` passes the options that turn these
+      off: the config's value wins over a `-c` one for the two remote keys, and an empty diff
+      driver makes git fail. `diff-tree`, `diff-index` and `diff-files` run a diff driver only
+      when asked with `--ext-diff` or `--textconv`, so they need neither option. `config_args/3`
+      refuses `range-diff`: the `git log -p` it runs for each range gets neither option, so it
+      runs the textconv drivers whatever options `range-diff` itself gets.
 
   `config_args/3` lists the drivers in the config the command reads, and in every file that
   config includes, whatever the include's condition: an `includeIf "gitdir:..."` can apply only
@@ -50,10 +54,14 @@ defmodule SymphonyElixir.GitConfigCommands do
   # labels git would use; it exits non-zero when the file conflicts, as a driver must.
   @merge_file_driver "git merge-file --marker-size=%L -L %X -L %S -L %Y %A %O %B"
   @no_diff_drivers ["--no-ext-diff", "--no-textconv"]
+  @range_diff_refusal "range-diff runs the repo's textconv drivers in a git log no option reaches"
   @subcommand_options %{
+    "blame" => @no_diff_drivers,
     "diff" => @no_diff_drivers,
+    "format-patch" => @no_diff_drivers,
     "log" => @no_diff_drivers,
     "show" => @no_diff_drivers,
+    "whatchanged" => @no_diff_drivers,
     "fetch" => ["--upload-pack=git-upload-pack"],
     "ls-remote" => ["--upload-pack=git-upload-pack"],
     "pull" => ["--upload-pack=git-upload-pack"],
@@ -64,25 +72,23 @@ defmodule SymphonyElixir.GitConfigCommands do
   The `-c` overrides that turn off every filter and merge driver git could load for `args`.
 
   `read` runs git with Symphony's safe config and env. Returns an error, and the command must not
-  run, when the config can't be read or names a driver `-c` can't address (a name with `=`).
+  run, when the config can't be read or names a driver `-c` can't address (a name with `=`), and
+  for `range-diff`, whose diff drivers no option turns off.
   """
   @spec config_args([String.t()], keyword(), reader()) ::
           {:ok, [String.t()]} | {:error, String.t(), pos_integer()}
   def config_args(args, opts, read) when is_list(args) and is_list(opts) and is_function(read, 2) do
     {global_options, subcommand} = split_global_args(args, [])
 
-    if subcommand in @no_filter_subcommands do
-      {:ok, []}
-    else
-      global_args = Enum.concat(global_options)
+    cond do
+      subcommand == "range-diff" ->
+        {:error, refusal(@range_diff_refusal), 128}
 
-      with {:ok, entries} <- read_entries(read, global_args ++ ["config" | @list_args], opts),
-           {:ok, config_dirs} <- config_dirs(entries, global_args, read, opts) do
-        entries
-        |> includes(config_dirs, 1)
-        |> walk_includes(driver_names(entries), %{}, read, opts)
-        |> override_args()
-      end
+      subcommand in @no_filter_subcommands ->
+        {:ok, []}
+
+      true ->
+        config_driver_args(global_options, opts, read)
     end
   end
 
@@ -197,6 +203,7 @@ defmodule SymphonyElixir.GitConfigCommands do
     }
     symphony_git() {
       case ${2-} in
+        range-diff) symphony_git_refuse "#{@range_diff_refusal}"; return ;;
         #{Enum.join(@no_filter_subcommands, "|")}) symphony_git_raw -C "$@"; return ;;
       esac
       symphony_git_drivers=$(symphony_git_filter_keys "$1") || return
@@ -231,6 +238,18 @@ defmodule SymphonyElixir.GitConfigCommands do
   defp split_global_args(["-" <> _flag = option | rest], acc), do: split_global_args(rest, [[option] | acc])
   defp split_global_args([subcommand | _rest], acc), do: {Enum.reverse(acc), subcommand}
   defp split_global_args([], acc), do: {Enum.reverse(acc), nil}
+
+  defp config_driver_args(global_options, opts, read) do
+    global_args = Enum.concat(global_options)
+
+    with {:ok, entries} <- read_entries(read, global_args ++ ["config" | @list_args], opts),
+         {:ok, config_dirs} <- config_dirs(entries, global_args, read, opts) do
+      entries
+      |> includes(config_dirs, 1)
+      |> walk_includes(driver_names(entries), %{}, read, opts)
+      |> override_args()
+    end
+  end
 
   # `git config` prints the path of the repo's own config files relative to the directory git
   # moves to, such as the top of the work tree, which can be neither `-C` nor `:cd`. So git

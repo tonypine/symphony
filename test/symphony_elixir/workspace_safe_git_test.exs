@@ -259,6 +259,12 @@ defmodule SymphonyElixir.WorkspaceSafeGitTest do
       assert {_output, 0} = Workspace.safe_git(["-C", repo, "log", "-p", "-1"])
       assert {_output, 0} = Workspace.safe_git(["-C", repo, "show", "HEAD"])
       assert {_stdout, 0, _stderr} = Workspace.safe_git_stdout(["-C", repo, "show", "HEAD"])
+      assert {blame, 0} = Workspace.safe_git(["-C", repo, "blame", "notes.txt"])
+      assert blame =~ "two"
+      assert {patch, 0} = Workspace.safe_git(["-C", repo, "format-patch", "--stdout", "-1"])
+      assert patch =~ "-one\n+two"
+      assert {output, 128} = Workspace.safe_git(["-C", repo, "range-diff", "HEAD~2..HEAD~1", "HEAD~1..HEAD"])
+      assert output =~ "symphony: refusing to run git, range-diff runs the repo's textconv drivers"
       refute File.exists?(proof), "safe_git ran #{key}"
 
       git!(repo, ["diff", "HEAD~1", "HEAD"])
@@ -266,6 +272,15 @@ defmodule SymphonyElixir.WorkspaceSafeGitTest do
       assert File.exists?(proof), "plain git runs #{key}, so the setup above is a real attack"
       git!(repo, ["config", "--unset", key])
     end
+
+    # `blame` and `range-diff` run a textconv driver too, the latter whatever options it gets.
+    git!(repo, ["config", "diff.evil.textconv", "touch '#{proof}'; cat"])
+    File.rm(proof)
+    git!(repo, ["blame", "notes.txt"])
+    assert File.exists?(proof), "plain git blame runs textconv, so the setup above is a real attack"
+    File.rm(proof)
+    git!(repo, ["range-diff", "--no-ext-diff", "--no-textconv", "HEAD~2..HEAD~1", "HEAD~1..HEAD"])
+    assert File.exists?(proof), "range-diff runs textconv despite both options, so safe_git refuses it"
   end
 
   test "safe_git merges run no merge driver the repo config sets, and merge as git does without one", %{test_root: test_root} do

@@ -145,8 +145,8 @@ app opens" in Settings (see [Launch at Login](#launch-at-login)).
 - **Update to vX** downloads and verifies the release, waits for agent runs like Restart, then swaps the app
   and relaunches it. See [Install an update](#install-an-update).
 - **Repos…** opens the Repos window: a sidebar of the connected repos and the detail of the selected one
-  (its source, GitHub remote, Linear routing, `WORKFLOW.md` status, last fetch, running agents and
-  acceptance gate), **Add Repo…** to connect another, and per repo **Edit…**, **Disconnect…** and, for a
+  (its health, source, GitHub remote, Linear routing, `WORKFLOW.md` status, last fetch, running agents and
+  acceptance gate, with a **Needs attention** box listing each problem and its fix), **Add Repo…** to connect another, and per repo **Edit…**, **Disconnect…** and, for a
   managed clone, **Remove Clone…**. See [Repos](#repos).
 - **Quit** stops Symphony first and asks before stopping active agent runs.
 
@@ -423,15 +423,33 @@ screen; after that it reopens at the size and position it was left at, on the re
 The toolbar says Symphony's state once, in a chip: **Symphony running**, **Symphony paused**, **Symphony
 is starting…**, **Symphony stopped** or **Symphony isn't answering**. Its **+** is **Add Repo…**.
 
-The sidebar lists one row per entry of `repositories:`, in config order: the key, the `owner/repo` (or the
-folder name of a local folder whose remote isn't known yet), a **Default** capsule on the repo that takes
-the issues no other repo's route matches, and the number of agents running on it. VoiceOver reads a row
-as, for example, "symphony, default, 2 agents running". A row's context menu has **Edit…**, **Reveal in
+The sidebar lists one row per entry of `repositories:`, in config order: a status glyph, the key, the
+`owner/repo` (or the folder name of a local folder whose remote isn't known yet), a **Default** capsule on
+the repo that takes the issues no other repo's route matches, and the number of agents running on it. The
+glyph differs in shape as well as colour: a green circle for healthy, an orange triangle for needs
+attention, a red diamond for not working, and a hollow grey circle for not checked (Symphony isn't
+answering with the repos). VoiceOver reads a row as, for example, "symphony, needs attention, default, 2
+agents running". A row's context menu has **Edit…**, **Reveal in
 Finder**, **Open on GitHub** and **Disconnect…**; **+** and **−** under the list add and disconnect.
 
 While Symphony answers, the detail shows each repo as Symphony's `GET /api/v1/repos` reports it:
 
-- The key, its `owner/repo` as a link to GitHub, the **Default** capsule and **Edit…**.
+- The key, its `owner/repo` as a link to GitHub, the **Default** capsule and **Edit…**, then a health line:
+  **Healthy**, **1 problem**, **2 problems**, or **Not checked: Symphony is stopped**.
+- **Needs attention**, above the sections while the repo has a problem, red when one is an error and orange
+  otherwise, one line per problem with its fixes:
+  - `WORKFLOW.md` invalid (error): Symphony's error and **Open WORKFLOW.md** (the file in a local folder,
+    the file on GitHub at the base branch for a managed clone).
+  - `WORKFLOW.md` missing (warning).
+  - The last fetch failed (error): git's error, selectable, **Copy Error** and **Open on GitHub**. Symphony
+    tries again before the next dispatch.
+  - An agent run with no activity for 10 minutes or more (warning): Symphony's stall timeout should have
+    restarted it, so it looks stuck. **Stop Run…** asks first, then asks Symphony's control API to stop it,
+    and shows why under the line when it couldn't; **Open in Linear** and **Reveal Worktree**.
+  - Under the problems, as information only: Symphony couldn't list the running agents, and a managed
+    clone not made yet.
+
+  A problem goes away on the next poll once it clears.
 - **Source**: **Local folder** with the checkout agent worktrees are made from, or **Managed clone** for a
   `workspace.source` repo with Symphony's clone or `Not cloned yet: Symphony clones it on the next
   dispatch`; the base branch (origin's default branch when `symphony.yml` names none). A path truncates in the middle,
@@ -448,7 +466,8 @@ While Symphony answers, the detail shows each repo as Symphony's `GET /api/v1/re
   pushed** with the file's path, until Symphony reports the file valid.
 - **Activity**: how long ago Symphony last ran `git fetch origin` before a dispatch, or **Failed** (in
   red, with git's error), or **None yet**; then one line per running agent with its issue, the SSH worker
-  it runs on, and **Reveal Worktree** for a worktree on this Mac. **No agents running** otherwise.
+  it runs on, how long it has run and its last activity, and **Reveal Worktree** for a worktree on this
+  Mac. **No agents running** otherwise.
 - **Acceptance gate**: the repo's mode (**Inherit: Shadow** while it follows Settings) and the gate's
   record for the repo.
 - **Disconnect…** at the foot, in red.
@@ -548,7 +567,11 @@ clone only when it starts. So after Save:
 - a stopped Symphony picks the repo up when it starts;
 - a Symphony the app didn't start needs a restart from where it was started.
 
-The message above the detail says which applies. A running Symphony lists the new repo at the
+The new repo is selected, and a banner at the top of its detail says which applies; Edit, Disconnect
+(on the repo selected next) and Remove Clone show theirs the same way, and so does a write that failed.
+A banner stays until you close it or make the next change. While a restart waits for agent runs, the
+toolbar chip reads **Restart pending: waiting on N runs**; click it for the runs, **Cancel Restart**,
+and **Restart Now** once the runs outlast the restart timeout. A running Symphony lists the new repo at the
 next poll, as it reads the route right away; a GitHub URL repo shows `not cloned yet` and its
 `WORKFLOW.md` as `missing` until the restart clones it. With Symphony stopped, the sidebar shows the repo
 from `symphony.yml`.
