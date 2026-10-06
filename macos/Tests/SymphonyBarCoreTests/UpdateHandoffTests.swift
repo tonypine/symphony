@@ -89,6 +89,21 @@ final class UpdateHandoffTests: XCTestCase {
         )
     }
 
+    func testRollbackReversesTheSwapAndMovesTheFailedBuildAside() {
+        let app = URL(fileURLWithPath: "/Users/me/Applications/Symphony.app")
+        let script = URL(fileURLWithPath: "/Users/me/Library/Caches/com.tonypine.symphony.bar/update-helper.sh")
+
+        XCTAssertEqual(UpdateHelper.rolledBackAppURL(for: app).path, "/Users/me/Applications/Symphony (rolled back).app")
+        XCTAssertEqual(
+            UpdateHelper.rollbackArguments(script: script, pid: 123, currentApp: app),
+            [
+                script.path, "123", app.path, "/Users/me/Applications/Symphony (previous).app",
+                "/Users/me/Applications/Symphony (rolled back).app",
+            ]
+        )
+        XCTAssertNotEqual(UpdateHelper.rollbackLogName, UpdateHelper.logName, "a rollback keeps the update's log")
+    }
+
     func testMenuText() {
         let release = Release(
             version: "0.0.1.43",

@@ -288,6 +288,21 @@ public enum UpdateMenu {
         "The update to v\(pending.version) couldn't replace the app, so this version was put back. See \(logPath)."
     }
 
+    /// The install item for a release an update rolled back, for example "Retry v0.0.1.43".
+    public static func retryTitle(_ release: Release) -> String {
+        "Retry v\(release.version)"
+    }
+
+    /// Shown by the build a health check put back: which version was rolled back and why.
+    public static func rolledBackLine(_ record: RollbackRecord) -> String {
+        "v\(record.version) was rolled back: \(record.reason)"
+    }
+
+    /// Shown when a version failed its health check but wasn't rolled back, with how to do it by hand.
+    public static func rollbackFailedLine(version: String, reason: String, problem: RollbackProblem) -> String {
+        "v\(version) failed its check (\(reason)) and couldn't be rolled back: \(problem.detail). \(problem.manualSteps)"
+    }
+
     /// Records the available release's build as skipped.
     public static let skipTitle = "Skip This Version"
 

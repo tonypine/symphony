@@ -513,14 +513,17 @@ defmodule SymphonyElixir.Config do
   What `symphony check` validates: the same as `validate_repo_workflows/0`, except that
   a `workspace.source` repo Symphony has not cloned yet is checked without its
   `WORKFLOW.md`, since Symphony clones it at start and only then reads the file.
-  `check_findings/1` warns about each such repo.
+  `check_findings/1` warns about each such repo. It also checks each repo's
+  `strategy: worktree` workspace the way `validate!/0` does, so a `workspaces.repo` that
+  does not exist fails the check instead of only failing every poll of a running Symphony.
   """
   @spec check_repo_workflows() :: :ok | {:error, term()}
   def check_repo_workflows, do: validate_repo_workflows(:check)
 
   defp validate_repo_workflows(source) do
     with {:ok, system_config} <- system(),
-         {:ok, _repo_settings} <- repo_runtime_settings(system_config, source: source) do
+         {:ok, repo_settings} <- repo_runtime_settings(system_config, source: source),
+         :ok <- validate_checked_workspaces(source, system_config, repo_settings) do
       :ok
     else
       {:error, {:invalid_symphony_config, message}} ->
@@ -795,6 +798,21 @@ defmodule SymphonyElixir.Config do
   defp runtime_settings_for_repo(%SystemSchema{} = system_config, %SystemSchema.Repo{} = repo, source) do
     with {:ok, repo_workflow} <- load_repo_workflow(repo, source),
          do: Schema.parse(merged_runtime_config(system_config, repo, repo_workflow))
+  end
+
+  defp validate_checked_workspaces(:check, %SystemSchema{} = system_config, repo_settings) do
+    with :ok <- validate_workspace_strategy_scope(system_config) do
+      Enum.reduce_while(repo_settings, :ok, &validate_checked_workspace/2)
+    end
+  end
+
+  defp validate_checked_workspaces(_source, _system_config, _repo_settings), do: :ok
+
+  defp validate_checked_workspace({repo, settings}, :ok) do
+    case validate_workspace_semantics(settings) do
+      :ok -> {:cont, :ok}
+      {:error, reason} -> {:halt, {:error, annotate_repo_config_error(repo, reason)}}
+    end
   end
 
   defp validate_repo_semantics(repo_settings, %SystemSchema{} = system_config) do

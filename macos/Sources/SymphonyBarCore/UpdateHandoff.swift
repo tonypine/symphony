@@ -97,6 +97,8 @@ public enum UpdateEligibility {
 public enum UpdateHelper {
     public static let resourceName = "update-helper.sh"
     public static let logName = "update-helper.log"
+    /// The helper's log when it rolls an update back.
+    public static let rollbackLogName = "rollback-helper.log"
     /// The helper's PATH outside QA mode: the system tools it runs.
     public static let path = "/usr/bin:/bin:/usr/sbin:/sbin"
     /// The Info.plist key that holds the minisign public key releases are checked against.
@@ -110,5 +112,20 @@ public enum UpdateHelper {
     /// `sh <script> <pid> <current app> <new app> <previous app>`.
     public static func arguments(script: URL, pid: Int32, currentApp: URL, newApp: URL) -> [String] {
         [script.path, String(pid), currentApp.path, newApp.path, previousAppURL(for: currentApp).path]
+    }
+
+    /// Where a rollback moves the build that failed its health check: next to the app, as
+    /// `Symphony (rolled back).app`, out of the previous app's place.
+    public static func rolledBackAppURL(for app: URL) -> URL {
+        app.deletingLastPathComponent().appendingPathComponent("Symphony (rolled back).app", isDirectory: true)
+    }
+
+    /// The same swap reversed: `sh <script> <pid> <current app> <previous app> <rolled back app>` moves the running
+    /// app aside as `Symphony (rolled back).app` and the previous app into its place, then relaunches it.
+    public static func rollbackArguments(script: URL, pid: Int32, currentApp: URL) -> [String] {
+        [
+            script.path, String(pid), currentApp.path, previousAppURL(for: currentApp).path,
+            rolledBackAppURL(for: currentApp).path,
+        ]
     }
 }
