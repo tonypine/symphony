@@ -401,8 +401,10 @@ defmodule SymphonyElixir.AcceptanceGate.Context do
 
   defp shared(left, right), do: left |> MapSet.new() |> MapSet.intersection(MapSet.new(right)) |> Enum.sort()
 
+  # Under the per-repo fetch lock: the remove writes the `.git/worktrees` the
+  # workspace shares with the source checkout and every other worktree of it.
   defp remove_worktree(workspace, worktree, git) do
-    git.(["worktree", "remove", "--force", worktree], workspace)
+    Fetcher.with_lock(workspace, fn -> git.(["worktree", "remove", "--force", worktree], workspace) end)
     File.rm_rf(worktree)
     :ok
   end
