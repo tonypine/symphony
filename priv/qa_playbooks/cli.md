@@ -21,8 +21,13 @@ Judge the change only by what the commands do.
    no reasoning) and `symphony-qa/no-tools` (no tools), rejects any other key, and answers each
    `claude` request with a canned message naming the model. Its log has a line per request
    (path, model, key accepted or rejected): quote it to show a run's model and key reached
-   OpenRouter. Never mark a step `blocked` for want of a real key; checks with a real key are
-   manual.
+   OpenRouter. To show a real `claude` run through Symphony's OpenRouter launch path accepts
+   the stub's answer, run `mix test --only real_claude
+   test/symphony_elixir/claude_code/real_claude_openrouter_test.exs` where `claude` is
+   installed (CI does not install it, so this one test file is the exception to not running
+   the suite). It starts its own stub and a throwaway `HOME`, and prints the command, the exit
+   status, the answer and the stub's request log: quote that block. Never mark a step
+   `blocked` for want of a real key; checks with a real key are manual.
 3. Run every command from the ticket's `## User walkthrough` in order. When there is
    no walkthrough, run each changed entry point with its documented happy path, then
    with one invalid input (missing file, bad flag, malformed config) and check that
