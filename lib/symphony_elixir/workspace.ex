@@ -2531,20 +2531,26 @@ defmodule SymphonyElixir.Workspace do
   defp remote_after_create_state("0", ["1"]), do: :unfinished
   defp remote_after_create_state("0", _pending), do: :done
 
+  # The remove and the branch delete run under the repo's fetch lock, like a
+  # dispatch's `worktree add`: both write the shared `.git/worktrees` and refs. The
+  # `before_remove` hook runs before it, so a slow hook holds up no other dispatch.
   defp remove_local_worktree(repo, workspace, issue_context) do
     cond do
       registered_worktree?(repo, workspace) ->
         maybe_run_before_remove_hook(workspace, issue_context, nil)
-
-        with :ok <- run_git(repo, ["worktree", "remove", "--force", workspace]) do
-          delete_local_worktree_branch(repo, worktree_branch(issue_context))
-        end
+        Fetcher.with_lock(repo, fn -> remove_registered_worktree(repo, workspace, issue_context) end)
 
       File.exists?(workspace) ->
         {:error, {:workspace_not_registered_worktree, workspace}, ""}
 
       true ->
-        delete_local_worktree_branch(repo, worktree_branch(issue_context))
+        Fetcher.with_lock(repo, fn -> delete_local_worktree_branch(repo, worktree_branch(issue_context)) end)
+    end
+  end
+
+  defp remove_registered_worktree(repo, workspace, issue_context) do
+    with :ok <- run_git(repo, ["worktree", "remove", "--force", workspace]) do
+      delete_local_worktree_branch(repo, worktree_branch(issue_context))
     end
   end
 

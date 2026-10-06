@@ -41,6 +41,7 @@ defmodule SymphonyElixir.AcceptanceGate do
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.Orchestrator
   alias SymphonyElixir.QaAgent
+  alias SymphonyElixir.Repo.Fetcher
   alias SymphonyElixir.ReviewAgent
   alias SymphonyElixir.RunKind
   alias SymphonyElixir.RunStore
@@ -933,8 +934,10 @@ defmodule SymphonyElixir.AcceptanceGate do
     end
   end
 
+  # Under the per-repo fetch lock: the remove writes the `.git/worktrees` the
+  # workspace shares with the source checkout and every other worktree of it.
   defp remove_worktree(workspace, worktree, git) do
-    git.(["worktree", "remove", "--force", worktree], workspace)
+    Fetcher.with_lock(workspace, fn -> git.(["worktree", "remove", "--force", worktree], workspace) end)
     File.rm_rf(worktree)
     :ok
   end
