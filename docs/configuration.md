@@ -2016,7 +2016,9 @@ command can serve both ways:
 
 A server that can only listen on a TCP port does not run on macOS: when its health check times out
 with nothing at the socket, the run fails with `dev_server_not_on_socket`, and an Auto Review
-`web` pass is `blocked` with that reason.
+`web` pass is `blocked` with that reason. An Elixir dev server must also set
+`MIX_OS_CONCURRENCY_LOCK=0` on macOS, so Mix's build lock, which listens on an ephemeral
+`127.0.0.1` port, does not fail with `:eperm` against the no-TCP-listener sandbox.
 
 Auto Review's `web` playbook starts the same dev server, from a worktree at the PR head, for each web QA pass
 (see [Web app QA](#web-app-qa)).

@@ -30,6 +30,9 @@ agent:
 EOF
 
 cd "$repo"
+# The dev server's sandbox forbids every TCP listener, and Mix's build lock takes one on an
+# ephemeral 127.0.0.1 port (`Mix.Sync.Lock`), which would fail `mix` with :eperm. Skip it.
+export MIX_OS_CONCURRENCY_LOCK=0
 set --
 if command -v mise >/dev/null 2>&1; then
   # The dev server's sandbox can't write mise's state and cache folders in the home folder, so
