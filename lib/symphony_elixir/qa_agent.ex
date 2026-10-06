@@ -542,21 +542,27 @@ defmodule SymphonyElixir.QaAgent do
 
   # The `macos_app` playbook's wide pass catches layout crashes that only happen in wide
   # windows (TP-701). On a QA screen too small for it the pass proves nothing about them, so
-  # a `pass` there is `blocked` and the acceptance gate escalates it rather than approving.
+  # a `pass` there is `blocked`, and that or the `blocked` the playbook asks for goes to a
+  # person, since only one can enlarge the screen.
   defp limit_wide_pass({:ok, %{result: %{verdict: :pass} = result} = run}, %{limited: true} = wide_pass) do
+    {:ok, %{run | result: Map.merge(result, %{verdict: :blocked, reason: limited_reason(wide_pass), needs_person: true})}}
+  end
+
+  defp limit_wide_pass({:ok, %{result: %{verdict: :blocked, reason: reason} = result} = run}, %{limited: true} = wide_pass) do
+    {:ok, %{run | result: Map.merge(result, %{reason: reason <> "; " <> limited_reason(wide_pass), needs_person: true})}}
+  end
+
+  defp limit_wide_pass(run, _wide_pass), do: run
+
+  defp limited_reason(wide_pass) do
     {sw, sh} = wide_pass.screen
     {vw, vh} = wide_pass.visible
     {ww, wh} = wide_pass.window
 
-    reason =
-      "the wide pass was limited: the QA screen is #{sw}×#{sh} pt (#{vw}×#{vh} pt usable), so the app's window reached only " <>
-        "#{ww}×#{wh} pt, under the 1400×900 pt the wide pass needs, and layouts wider than that were not checked. " <>
-        "An operator enlarges the QA machine's display (for the tart VM, `tart set <vm> --display 1920x1200`) and QA runs again"
-
-    {:ok, %{run | result: Map.merge(result, %{verdict: :blocked, reason: reason, needs_person: true})}}
+    "the wide pass was limited: the QA screen is #{sw}×#{sh} pt (#{vw}×#{vh} pt usable), so the app's window reached only " <>
+      "#{ww}×#{wh} pt, under the 1400×900 pt the wide pass needs, and layouts wider than that were not checked. " <>
+      "An operator enlarges the QA machine's display (for the tart VM, `tart set <vm> --display 1920x1200`) and QA runs again"
   end
-
-  defp limit_wide_pass(run, _wide_pass), do: run
 
   # Only a pass that runs the `web` playbook starts the dev server. It runs from its own
   # worktree at the PR head, so its build output never lands in the agent's worktree (where

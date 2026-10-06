@@ -1048,6 +1048,20 @@ defmodule SymphonyElixir.QaAgentTest do
 
       assert {:ok, %{result: %{verdict: :pass}}} = run.({1920, 1200}, {:ok, %{result: FakeSession.pass_json()}})
 
+      blocked_json =
+        Jason.encode!(%{
+          verdict: "blocked",
+          summary: "The wide pass was limited.",
+          reason: "the Wide pass step is blocked: the screen is 1024×768",
+          steps: [%{name: "Wide pass", status: "blocked", details: "qa_resize_window returned limited: true at 1024×675 pt."}],
+          findings: []
+        })
+
+      assert {:ok, %{result: %{verdict: :blocked, reason: blocked_reason, needs_person: true, steps: [%{name: "Wide pass"}]}}} =
+               run.({1024, 768}, {:ok, %{result: blocked_json}})
+
+      assert blocked_reason =~ "the Wide pass step is blocked: the screen is 1024×768; the wide pass was limited: the QA screen is 1024×768 pt"
+
       fail_json = Jason.encode!(%{verdict: "fail", summary: "Decide crashed.", steps: [], findings: ["Decide crashes at 1024 pt"]})
       assert {:ok, %{result: %{verdict: :fail} = failed}} = run.({1024, 768}, {:ok, %{result: fail_json}})
       refute Map.has_key?(failed, :needs_person)

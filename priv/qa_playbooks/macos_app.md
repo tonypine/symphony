@@ -17,8 +17,9 @@ for you on the host. They only act on this worktree's configured app and on apps
   land.
 - `qa_resize_window`: moves the app's main window (or the `AXWindow` at `path`) to the top left
   of the screen and resizes it to `width`×`height` points, 1400×900 by default, or the screen's
-  usable area when that is smaller. It returns the window's new `frame`, the `screen` size, its
-  `visible` (usable) area, and `limited: true` when that area is under 1400×900 pt.
+  usable area when that is smaller. It returns the window's new frame in `window` (`x`, `y`, `w`,
+  `h`), the `screen` size, its `visible` (usable) area, and `limited: true` when that area is
+  under 1400×900 pt.
 - `qa_check_app`: says whether the app is still `running`, `responding` (it answered an
   accessibility request within 10 seconds; a hung app does not) and has written no new crash
   report since launch (`crash_reports`, from `~/Library/Logs/DiagnosticReports` on the machine
