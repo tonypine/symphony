@@ -76,10 +76,10 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
   @doc """
   The argv that runs `start_cmd` with `sh -lc` inside the sandbox, writable in `workspace`
   and `tmp_dir`, and the empty folders the sandbox makes in `workspace` (`bwrap_args/4`), for
-  the caller to remove once nothing runs in it. Options: `:os_type` (default `:os.type()`); on macOS `:executable` (default
-  `/usr/bin/sandbox-exec`) and `:getconf` (for the item replacement folder); on Linux `:bwrap`
-  and `:socat` (default: found on `PATH`), and the dev server's `:port` and the egress proxy's
-  `:proxy_port`, which the bridges carry.
+  the caller to remove once nothing runs in it. Options: `:os_type` (default `:os.type()`); on
+  macOS `:executable` (default `/usr/bin/sandbox-exec`) and `:getconf` (for the item replacement
+  folder); on Linux `:bwrap` and `:socat` (default: found on `PATH`), and the dev server's
+  `:port` and the egress proxy's `:proxy_port`, which the bridges carry.
   """
   @spec command(String.t(), Path.t(), Path.t(), keyword()) :: {:ok, [String.t()], [Path.t()]} | {:error, term()}
   def command(start_cmd, workspace, tmp_dir, opts) when is_binary(start_cmd) do
