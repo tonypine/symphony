@@ -2068,7 +2068,8 @@ Distinct terminal reasons are important because retry logic and logs differ.
   orchestrator's message loop, with the result delivered back as a message. A claimed issue's claim
   stays held until the result is handled, so no poll dispatches it meanwhile. The pre-dispatch
   refresh of the issues a dispatch pass may start is read the same way, in the task that checks
-  dispatch readiness, and the pass decides with that answer.
+  dispatch readiness, and the pass decides with that answer. The read that orders a usage-limit
+  hold's held retries to pick its canary runs the same way, and the hold stays until it answers.
 - Reconciliation runs before dispatch on every tick.
 - Restart recovery is tracker-driven and filesystem-driven (without a durable orchestrator DB).
 - Startup terminal cleanup removes stale workspaces for issues already in terminal states.
@@ -2598,7 +2599,9 @@ reached (for Claude, a used-up five-hour or weekly window; for Codex, an error w
 - At `resume_at` the hold moves to `phase: canary` and exactly one held retry, the first in normal
   dispatch order (a forced issue first), is released as the canary; an immediate poll tick runs. The hold keeps covering
   every other run of that provider, so slots freed by held runs are not filled with other work on
-  it. With nothing held, the hold is cleared and no canary runs.
+  it. With nothing held, the hold is cleared and no canary runs. The held issues are read from the
+  tracker to order them; until that read answers the hold stays as it was, and a held retry that
+  comes due meanwhile stays held. A read that fails orders them by issue id.
 - When the canary's first `rate_limit_event` is `allowed` or `allowed_warning`, or the canary ends
   any way other than this limit (success, another failure, which follows the normal failure path),
   the hold is cleared and the other held retries return to normal candidate selection with their
