@@ -791,8 +791,13 @@ defmodule SymphonyElixir.RunStoreTest do
     end
 
     case RunStore.start_link([]) do
-      {:ok, pid} -> pid
-      {:error, {:already_started, pid}} -> pid
+      {:ok, pid} ->
+        pid
+
+      # The supervisor's restart won the name and may still be in init, before the run index is built.
+      {:error, {:already_started, pid}} ->
+        :sys.get_state(pid)
+        pid
     end
   end
 
