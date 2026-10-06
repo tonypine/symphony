@@ -1009,6 +1009,9 @@ defmodule SymphonyElixir.TestSupport do
       "  no_progress_threshold_ms: #{yaml_value(Map.get(config, :no_progress_threshold_ms))}",
       if(Map.has_key?(config, :stray_process_cpu_minutes),
         do: "  stray_process_cpu_minutes: #{yaml_value(config.stray_process_cpu_minutes)}"
+      ),
+      if(Map.has_key?(config, :pending_tool_report_after_ms),
+        do: "  pending_tool_report_after_ms: #{yaml_value(config.pending_tool_report_after_ms)}"
       )
     ]
     |> Enum.reject(&is_nil/1)

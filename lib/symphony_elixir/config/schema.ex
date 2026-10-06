@@ -246,9 +246,17 @@ defmodule SymphonyElixir.Config.Schema do
       # CPU time a process under a workspace or Symphony temp folder may use with no run
       # attached before the dashboard warns about it; `nil` turns the check off.
       field(:stray_process_cpu_minutes, :integer, default: 10)
+      # How long one of Symphony's own MCP tool calls must run before the snapshot reports it as pending.
+      field(:pending_tool_report_after_ms, :integer, default: 60_000)
     end
 
-    @fields [:enabled, :tick_interval_ms, :no_progress_threshold_ms, :stray_process_cpu_minutes]
+    @fields [
+      :enabled,
+      :tick_interval_ms,
+      :no_progress_threshold_ms,
+      :stray_process_cpu_minutes,
+      :pending_tool_report_after_ms
+    ]
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
@@ -257,6 +265,7 @@ defmodule SymphonyElixir.Config.Schema do
       |> validate_number(:tick_interval_ms, greater_than: 0)
       |> validate_number(:no_progress_threshold_ms, greater_than: 0)
       |> validate_number(:stray_process_cpu_minutes, greater_than: 0)
+      |> validate_number(:pending_tool_report_after_ms, greater_than: 0)
     end
   end
 

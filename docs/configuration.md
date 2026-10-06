@@ -785,7 +785,7 @@ agent:
   reports before runs resume.
 - `usage_limit.unknown_reset_retry_seconds` (default `900`, `>= 60`): how long the hold lasts when
   no reset time is known (neither in the rejection nor remembered for that window). It also caps
-  the wait between probes while Claude can't reach its API (a network or DNS outage): that hold
+  the wait between probes while Claude or Codex can't reach its API (a network or DNS outage): that hold
   starts whatever `auto_pause` says, probes after 60 seconds and doubles the wait after each
   failed probe. A released outage hold is remembered this long (at least 10 minutes), so a QA or
   acceptance-gate pass that finds the outage again keeps the backoff.
@@ -1964,7 +1964,13 @@ watchdog:
   tick_interval_ms: 60000
   no_progress_threshold_ms: 600000
   stray_process_cpu_minutes: 10
+  pending_tool_report_after_ms: 60000
 ```
+
+`pending_tool_report_after_ms` (default `60000`, one minute; a positive integer) is how long one of
+Symphony's own MCP tool calls (`linear_*`, `github_*`, `qa_*`) must run before Symphony's state and
+the dashboard show the run as waiting on it. Settings in the macOS app edits it as "Show a pending
+tool call after", in minutes.
 
 On every tick the watchdog also reads the host's process table and warns about stray processes.
 A stray process runs in, or names on its command line, a folder under `workspaces.root`,

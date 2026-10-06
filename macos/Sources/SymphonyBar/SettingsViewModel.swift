@@ -73,10 +73,11 @@ final class SettingsViewModel: ObservableObject {
     @Published private(set) var isCheckingTokenLimits = false
     /// Today's tokens from Symphony's latest state, nil while it isn't answering.
     @Published var budget: StateSnapshot.Budget?
-    /// `workspaces.git_network_timeout_ms` and `agent.timeouts.mcp_tool_ms` in the configured symphony.yml, in
-    /// minutes.
+    /// `workspaces.git_network_timeout_ms`, `agent.timeouts.mcp_tool_ms` and `watchdog.pending_tool_report_after_ms`
+    /// in the configured symphony.yml, in minutes.
     @Published var gitNetworkTimeoutMinutes = OperationTimeouts.minutes(OperationTimeouts.defaultGitNetworkMs)
     @Published var mcpToolTimeoutMinutes = OperationTimeouts.minutes(OperationTimeouts.defaultMcpToolMs)
+    @Published var pendingToolReportMinutes = OperationTimeouts.minutes(OperationTimeouts.defaultPendingToolReportMs)
     /// Why `symphony check` rejected the changed timeouts, shown in their section.
     @Published private(set) var timeoutsError: String?
     /// `auto_review.acceptance_gate.mode` in the configured symphony.yml.
@@ -253,6 +254,7 @@ final class SettingsViewModel: ObservableObject {
             let timeouts = try SymphonyConfigFile(path: path).readOperationTimeouts()
             gitNetworkTimeoutMinutes = OperationTimeouts.minutes(timeouts.gitNetworkMs)
             mcpToolTimeoutMinutes = OperationTimeouts.minutes(timeouts.mcpToolMs)
+            pendingToolReportMinutes = OperationTimeouts.minutes(timeouts.pendingToolReportMs)
             loadedTimeouts = timeouts
         } catch {
             configFileError = "Could not read the timeouts from symphony.yml: \(error.localizedDescription)"
@@ -397,7 +399,11 @@ final class SettingsViewModel: ObservableObject {
         let gateMode = acceptanceGateMode
         let gateChanged = loadedAcceptanceGateMode.map { $0 != gateMode } ?? false
         timeoutsError = nil
-        let timeouts = loadedTimeouts?.settingMinutes(gitNetwork: gitNetworkTimeoutMinutes, mcpTool: mcpToolTimeoutMinutes)
+        let timeouts = loadedTimeouts?.settingMinutes(
+            gitNetwork: gitNetworkTimeoutMinutes,
+            mcpTool: mcpToolTimeoutMinutes,
+            pendingToolReport: pendingToolReportMinutes
+        )
         let oldTimeouts = loadedTimeouts.flatMap { $0 != timeouts ? $0 : nil }
         guard loadedProfiles != nil || loadedLimits != nil || gateChanged || oldTimeouts != nil else {
             if saveRest(settings, secrets) { onSaved() }
