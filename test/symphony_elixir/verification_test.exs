@@ -343,13 +343,15 @@ defmodule SymphonyElixir.VerificationTest do
                  run_id: "bwrap-run",
                  port: port,
                  workspace: workspace,
-                 config: %{config | stop_timeout_ms: 5_000},
+                 config: %{config | health_timeout_ms: 30_000, stop_timeout_ms: 5_000},
                  env: Verification.env(%{port: port}),
                  owner: self(),
                  sandbox: [os_type: {:unix, :linux}]
                )
 
-      assert http_ok?("http://127.0.0.1:#{port}/dev-server-env.txt")
+      # Each request crosses two socat bridges, so it gets longer than `http_ok?/1`'s 100 ms.
+      assert {:ok, %{status: 200, body: env}} = Req.get("http://127.0.0.1:#{port}/dev-server-env.txt", receive_timeout: 5_000, retry: false)
+      assert env =~ "SYMPHONY_VERIFICATION_PORT=#{port}\n"
       assert File.dir?(Path.join(workspace, ".claude"))
 
       assert :ok = DevServer.stop(pid)
