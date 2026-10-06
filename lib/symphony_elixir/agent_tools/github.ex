@@ -164,8 +164,10 @@ defmodule SymphonyElixir.AgentTools.GitHub do
 
   A human approves the merge by moving the Linear issue to `Merging`, so the merge is refused in
   any other state. It is also refused while a check is failing or pending; when the base branch
-  requires checks, only those must have passed (see `CiPoller.landing_action/1`). A pull request
-  with no checks at all is mergeable. Merging an already merged pull request succeeds without a second merge.
+  requires checks, only those must have passed, and when it requires none, the CI poller can let
+  the head past the checks still pending after 15 minutes in `Merging` (see
+  `CiPoller.landing_action/1`). A pull request with no checks at all is mergeable. Merging an
+  already merged pull request succeeds without a second merge.
   """
   @spec merge_pull_request(context(), keyword()) :: {:ok, map()} | {:error, term()}
   def merge_pull_request(context, opts \\ []) do
@@ -259,7 +261,7 @@ defmodule SymphonyElixir.AgentTools.GitHub do
 
   defp squash_merge_pull_request(pr, pr_url, context, opts) do
     with {:ok, ci_status} <- PullRequest.fetch_ci_status(pr_url, github_opts(context, opts) ++ [required_checks: true]),
-         :ok <- require_passing_checks(ci_status),
+         :ok <- require_passing_checks(ci_status, context),
          {:ok, head_sha} <- head_commit_sha(ci_status),
          {:ok, _output} <-
            PullRequest.run_gh(
@@ -281,10 +283,12 @@ defmodule SymphonyElixir.AgentTools.GitHub do
     end
   end
 
-  defp require_passing_checks(%{checks: []}), do: :ok
+  defp require_passing_checks(%{checks: []}, _context), do: :ok
 
-  defp require_passing_checks(ci_status) do
-    case CiPoller.landing_action(ci_status) do
+  defp require_passing_checks(ci_status, context) do
+    lookup_opts = if repo_key = issue_repo_key(context), do: [repo_key: repo_key], else: []
+
+    case ci_status |> CiPoller.put_landing_fallback(Map.get(context, :issue_id), lookup_opts) |> CiPoller.landing_action() do
       :success -> :ok
       outcome -> {:error, {:checks_not_passing, outcome}}
     end

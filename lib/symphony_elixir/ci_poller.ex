@@ -36,6 +36,9 @@ defmodule SymphonyElixir.CiPoller do
   # commits change an agent-protected path until a person adds the waiver label.
   @human_only_checks ["protected paths"]
   @waiver_label "protected-paths-approved"
+  # How long a `Merging` head waits on checks its base branch doesn't require before it may land
+  # without them (see `track_landing_wait/4`).
+  @landing_fallback_ms 15 * 60_000
 
   defmodule State do
     @moduledoc false
@@ -648,13 +651,14 @@ defmodule SymphonyElixir.CiPoller do
   # A `Merging` issue's landing waits only on the checks its base branch requires, so its read
   # carries them for `landing_action/1`.
   defp landing_read_opts(record, opts) do
-    if MapSet.member?(Keyword.get(opts, :landing_issue_ids, MapSet.new()), Map.get(record, :issue_id)),
-      do: [required_checks: true],
-      else: []
+    if landing_read?(record, opts), do: [required_checks: true], else: []
   end
+
+  defp landing_read?(record, opts), do: MapSet.member?(Keyword.get(opts, :landing_issue_ids, MapSet.new()), Map.get(record, :issue_id))
 
   defp handle_ci_status(record, ci_status, settings, opts, now) do
     ci_status = if rerun_pending?(record, ci_status), do: Map.put(ci_status, :rerun_pending, true), else: ci_status
+    ci_status = track_landing_wait(record, ci_status, opts, now)
 
     case ci_action(ci_status) do
       :closed ->
@@ -1277,9 +1281,69 @@ defmodule SymphonyElixir.CiPoller do
         last_observed_conclusion: conclusion_for_status(ci_status),
         landing_ready_sha: if(landing_action(ci_status) == :success, do: Map.get(ci_status, :commit_sha)),
         updated_at: now
-      },
+      }
+      |> Map.merge(Map.get(ci_status, :landing_wait, %{})),
       attrs
     )
+  end
+
+  # How long a `Merging` head has waited on its checks: every landing read of the same head that
+  # `landing_action/1` leaves pending keeps the wait, and any other read ends it. Past
+  # `@landing_fallback_ms`, a head that may land on the checks still pending
+  # (`landing_fallback_eligible?/1`) is let past: `landing_ready_sha` names it, so the orchestrator
+  # releases the landing agent, and its merge and CI wait read the mark through
+  # `put_landing_fallback/3`. The first time a wait lets a head past, the checks it skips are
+  # logged and the issue gets one comment.
+  defp track_landing_wait(record, ci_status, opts, now) do
+    sha = Map.get(ci_status, :commit_sha)
+
+    if landing_read?(record, opts) and is_binary(sha) and landing_action(ci_status) == :pending do
+      since = if Map.get(record, :landing_wait_sha) == sha, do: Map.get(record, :landing_wait_since) || now, else: now
+      wait = %{landing_wait_sha: sha, landing_wait_since: since, landing_fallback_sha: nil}
+
+      if DateTime.diff(now, since, :millisecond) >= @landing_fallback_ms and landing_fallback_eligible?(ci_status),
+        do: land_past_pending_checks(record, ci_status, wait, opts, now),
+        else: Map.put(ci_status, :landing_wait, wait)
+    else
+      Map.put(ci_status, :landing_wait, %{landing_wait_sha: nil, landing_wait_since: nil, landing_fallback_sha: nil})
+    end
+  end
+
+  defp land_past_pending_checks(record, ci_status, %{landing_wait_sha: sha} = wait, opts, now) do
+    if Map.get(record, :landing_fallback_sha) != sha, do: announce_landing_fallback(record, ci_status, wait.landing_wait_since, opts, now)
+    ci_status |> Map.put(:landing_fallback, true) |> Map.put(:landing_wait, %{wait | landing_fallback_sha: sha})
+  end
+
+  defp announce_landing_fallback(record, ci_status, since, opts, now) do
+    issue_id = Map.get(record, :issue_id)
+    pr_url = Map.get(ci_status, :pr_url) || Map.get(record, :pr_url)
+    sha = Map.get(ci_status, :commit_sha)
+    minutes = div(DateTime.diff(now, since, :second), 60)
+    skipped = ci_status |> Map.get(:checks, []) |> Enum.reject(&passed_check?/1) |> Enum.map(&Map.get(&1, :name)) |> Enum.uniq()
+
+    Logger.warning(
+      "Landing without the checks still pending after #{minutes} min in Merging; the base branch requires none: issue_id=#{issue_id} issue_identifier=#{Map.get(record, :issue_identifier)} pr_url=#{pr_url} commit_sha=#{sha} skipped=#{Enum.join(skipped, ", ")}"
+    )
+
+    tracker = Keyword.get(opts, :tracker, Tracker)
+
+    case tracker.create_comment(issue_id, landing_fallback_comment(pr_url, ci_status, skipped, minutes)) do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("Failed to comment that a landing skips pending checks issue_id=#{issue_id}: #{inspect(reason)}")
+    end
+  end
+
+  defp landing_fallback_comment(pr_url, ci_status, skipped, minutes) do
+    waiting_on =
+      case skipped do
+        [] -> "a workflow run that has not finished"
+        names -> Enum.map_join(names, ", ", &"`#{&1}`")
+      end
+
+    "Symphony stopped waiting on CI to land #{pr_url || "this PR"} at `#{String.slice(Map.get(ci_status, :commit_sha), 0, 7)}`: " <>
+      "after #{minutes} min in Merging it was still waiting on #{waiting_on}. " <>
+      "The base branch `#{Map.get(ci_status, :base_ref_name)}` requires no checks, none failed and at least one passed, " <>
+      "so Symphony lands it without waiting for the rest."
   end
 
   defp record_poll_error(record, reason, opts, now) do
@@ -1438,14 +1502,28 @@ defmodule SymphonyElixir.CiPoller do
   What a landing reads from `ci_status`: `ci_action/1`, except that a pending head whose base
   branch requires checks (`:required_checks`, see `PullRequest.fetch_ci_status/2`) lands once
   every required check reported and passed, while checks the branch doesn't require still run. A
-  failed check holds it, required or not. Without required checks, it waits on every check.
+  failed check holds it, required or not. Without required checks, it waits on every check, until
+  the poller has waited on them for 15 minutes in `Merging` (`:landing_fallback`, see
+  `put_landing_fallback/3`): a head whose base branch requires no checks then lands once one check
+  passed, while no rerun of a failed job is starting.
   """
   @spec landing_action(map()) :: :closed | :pending | :success | {:failure, [map()]}
   def landing_action(ci_status) do
-    case {ci_action(ci_status), Map.get(ci_status, :required_checks)} do
-      {:pending, [_ | _] = required} -> if required_checks_passed?(ci_status, required), do: :success, else: :pending
-      {action, _required} -> action
+    case ci_action(ci_status) do
+      :pending -> if landing_ready?(ci_status), do: :success, else: :pending
+      action -> action
     end
+  end
+
+  defp landing_ready?(%{required_checks: [_ | _] = required} = ci_status), do: required_checks_passed?(ci_status, required)
+  defp landing_ready?(ci_status), do: Map.get(ci_status, :landing_fallback) == true and landing_fallback_eligible?(ci_status)
+
+  # A branch that requires checks lands once they pass, and one whose requirements couldn't be read
+  # can't tell which checks matter, so only a branch read as requiring none lands past its checks.
+  # A head where nothing passed yet (a runner outage) has nothing to land on.
+  defp landing_fallback_eligible?(ci_status) do
+    Map.get(ci_status, :required_checks) == [] and Map.get(ci_status, :rerun_pending) != true and
+      ci_status |> Map.get(:checks, []) |> Enum.any?(&passed_check?/1)
   end
 
   defp required_checks_passed?(ci_status, required) do
@@ -1466,13 +1544,28 @@ defmodule SymphonyElixir.CiPoller do
   """
   @spec put_rerun_pending(map(), String.t() | nil, keyword()) :: map()
   def put_rerun_pending(ci_status, issue_id, opts \\ []) when is_map(ci_status) do
-    run_store = Keyword.get(opts, :run_store, RunStore)
-
-    record =
-      if is_binary(issue_id), do: Enum.find_value(repo_keys_from_opts(opts), &find_ci_check(run_store, &1, issue_id))
-
-    if rerun_pending?(record, ci_status), do: Map.put(ci_status, :rerun_pending, true), else: ci_status
+    if rerun_pending?(find_issue_ci_check(issue_id, opts), ci_status), do: Map.put(ci_status, :rerun_pending, true), else: ci_status
   end
+
+  @doc """
+  Marks `ci_status` `landing_fallback` when the poller let this head past the checks it was still
+  waiting on after 15 minutes in `Merging`. `landing_action/1` reads the mark as `:success` only
+  while this read still qualifies, so a check that failed since holds the landing.
+  """
+  @spec put_landing_fallback(map(), String.t() | nil, keyword()) :: map()
+  def put_landing_fallback(ci_status, issue_id, opts \\ []) when is_map(ci_status) do
+    sha = Map.get(ci_status, :commit_sha)
+    record = find_issue_ci_check(issue_id, opts) || %{}
+
+    if is_binary(sha) and Map.get(record, :landing_fallback_sha) == sha, do: Map.put(ci_status, :landing_fallback, true), else: ci_status
+  end
+
+  defp find_issue_ci_check(issue_id, opts) when is_binary(issue_id) do
+    run_store = Keyword.get(opts, :run_store, RunStore)
+    Enum.find_value(repo_keys_from_opts(opts), &find_ci_check(run_store, &1, issue_id))
+  end
+
+  defp find_issue_ci_check(_issue_id, _opts), do: nil
 
   defp rerun_pending?(%{status: "rerun_requested"} = record, ci_status) do
     commit_sha = Map.get(ci_status, :commit_sha)

@@ -4960,9 +4960,18 @@ defmodule SymphonyElixir.CoreTest do
     assert run_merging_landing_turns({:ok, %{commit_sha: "sha-ready", checks: checks, required_checks: ["make-all"]}}) == 2
     refute_received {:merging_ci_wait, _issue_id, _wait}
 
-    # Without required checks, the queued check holds it.
+    # Without required checks, the queued check holds it, until the CI poller's landing wait lets the head past.
     assert run_merging_landing_turns({:ok, %{commit_sha: "sha-ready", checks: checks, required_checks: []}}) == 1
     assert_received {:merging_ci_wait, "issue-merging-continue", %{commit_sha: "sha-ready"}}
+
+    :ok = RunStore.put_ci_check(%{repo_key: "default", issue_id: "issue-merging-continue", landing_fallback_sha: "sha-ready"})
+
+    try do
+      assert run_merging_landing_turns({:ok, %{commit_sha: "sha-ready", checks: checks, required_checks: []}}) == 2
+      refute_received {:merging_ci_wait, _issue_id, _wait}
+    after
+      RunStore.delete_ci_check("default", "issue-merging-continue")
+    end
   end
 
   defp run_merging_landing_turns(ci_status_result) do
