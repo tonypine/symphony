@@ -2,9 +2,9 @@ import AppKit
 import SwiftUI
 import SymphonyBarCore
 
-/// What the Add Repo sheet edits and shows, also as the Edit Repo sheet of a connected repo. Linear's projects and
-/// labels load when it opens, with the stored `LINEAR_API_KEY`; the repos in `symphony.yml` are read once, to check
-/// the key and the route against them.
+/// What the Add Repo sheet edits and shows, also as the Edit Repo sheet of a connected repo. Linear's projects load
+/// when it opens, with the stored `LINEAR_API_KEY`, and the picked project's labels each time one is picked; the repos
+/// in `symphony.yml` are read once, to check the key and the route against them.
 @MainActor
 final class AddRepoViewModel: ObservableObject {
     enum LinearState: Equatable {
@@ -23,6 +23,8 @@ final class AddRepoViewModel: ObservableObject {
     @Published private(set) var projects: [LinearProject] = []
     @Published private(set) var labels: [LinearLabel] = []
     @Published private(set) var linear = LinearState.loading
+    /// How `labels` loads for the picked project.
+    @Published private(set) var labelsState = LinearState.loaded
     /// Why the folder picked is still being checked.
     @Published private(set) var isInspectingFolder = false
     /// Why the last Save failed.
@@ -47,6 +49,8 @@ final class AddRepoViewModel: ObservableObject {
     /// True once the key was typed, so picking another source no longer replaces it.
     private var keyEdited = false
     private let linearClient: (_ apiKey: String) -> LinearClient
+    /// The client the projects loaded with, which then loads the labels.
+    private var client: LinearClient?
     private let onSaved: (Saved) -> Void
 
     /// With `editing`, the sheet opens on that repo's entry and Save rewrites it.
@@ -104,13 +108,13 @@ final class AddRepoViewModel: ObservableObject {
     }
 
     var canSave: Bool {
-        if case .success = validation { return !isInspectingFolder && !isSaving }
+        if case .success = validation { return !isInspectingFolder && !isSaving && labelsState != .loading }
         return false
     }
 
     /// The labels an issue in the picked project can carry, and those the edited repo's route has already.
     var labelChoices: [String] {
-        let names = LinearLabel.names(labels, for: projects.first { $0.name == draft.project })
+        let names = LinearLabel.names(labels)
         let kept = (editing?.route.labels ?? []).filter { !names.contains($0) }
         return names + kept
     }
@@ -138,9 +142,7 @@ final class AddRepoViewModel: ObservableObject {
     var project: Binding<String?> {
         Binding(get: { self.draft.project }, set: { project in
             self.draft.project = project
-            // A label the new project's teams don't have would never match.
-            let choices = Set(self.labelChoices)
-            self.draft.labels.removeAll { !choices.contains($0) }
+            self.loadLabels()
         })
     }
 
@@ -153,7 +155,7 @@ final class AddRepoViewModel: ObservableObject {
 
     // MARK: Actions
 
-    /// Loads Linear's projects and labels with the stored key; again after a failure.
+    /// Loads Linear's projects with the stored key, then the picked project's labels; again after a failure.
     func loadLinear() {
         linear = .loading
         secrets.read { [weak self] result in
@@ -164,18 +166,50 @@ final class AddRepoViewModel: ObservableObject {
             }
             let client = self.linearClient(secrets.linearAPIKey)
             Task {
-                async let projects = client.projects()
-                async let labels = client.labels()
-                switch (await projects, await labels) {
-                case let (.success(projects), .success(labels)):
+                switch await client.projects() {
+                case let .success(projects):
+                    self.client = client
                     self.projects = projects
-                    self.labels = labels
                     self.linear = projects.isEmpty ? .failed("Linear lists no projects for this key.") : .loaded
-                case let (.failure(failure), _), let (_, .failure(failure)):
+                    self.loadLabels()
+                case let .failure(failure):
                     self.linear = .failed(failure.message)
                 }
             }
         }
+    }
+
+    /// Loads the labels an issue in the picked project can carry, then drops the picked labels it lacks, which would
+    /// never match. A new repo needs a project first; the edited repo's route can take any label without one, or with
+    /// a project Linear doesn't list.
+    func loadLabels() {
+        labels = []
+        let picked = draft.project
+        let projectID = picked.flatMap { name in projects.first { $0.name == name }?.id }
+        guard let client, projectID != nil || editing != nil else {
+            labelsState = .loaded
+            pruneLabels()
+            return
+        }
+        labelsState = .loading
+        Task {
+            let result = await client.labels(forProject: projectID)
+            // Another project was picked meanwhile; its own load fills the labels.
+            guard draft.project == picked else { return }
+            switch result {
+            case let .success(labels):
+                self.labels = labels
+                labelsState = .loaded
+            case let .failure(failure):
+                labelsState = .failed(failure.message)
+            }
+            pruneLabels()
+        }
+    }
+
+    private func pruneLabels() {
+        let choices = Set(labelChoices)
+        draft.labels.removeAll { !choices.contains($0) }
     }
 
     /// Asks for a folder, then checks it is a GitHub checkout with a `WORKFLOW.md`.
@@ -380,7 +414,7 @@ struct AddRepoView: View {
         case .loading:
             HStack {
                 ProgressView().controlSize(.small)
-                Text("Loading projects and labels from Linear…").foregroundStyle(.secondary)
+                Text("Loading projects from Linear…").foregroundStyle(.secondary)
             }
         case let .failed(message):
             HStack(alignment: .firstTextBaseline) {
@@ -401,8 +435,22 @@ struct AddRepoView: View {
                 }
             }
             LabeledContent("Labels") {
-                if model.labelChoices.isEmpty {
-                    Text("No labels").foregroundStyle(.secondary)
+                if model.labelsState == .loading {
+                    HStack {
+                        ProgressView().controlSize(.small)
+                        Text("Loading labels…").foregroundStyle(.secondary)
+                    }
+                } else if case let .failed(message) = model.labelsState {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(message)
+                            .foregroundStyle(.red)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer()
+                        Button("Retry", action: model.loadLabels)
+                    }
+                } else if model.labelChoices.isEmpty {
+                    Text(model.draft.project == nil && model.editing == nil ? "Pick a project to list its labels" : "No labels")
+                        .foregroundStyle(.secondary)
                 } else {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 4) {
