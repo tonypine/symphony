@@ -1802,7 +1802,11 @@ not require recognizing or validating extension fields unless that extension is 
   a TTL). A model whose `supported_parameters` lacks `tools` fails the run before the agent starts,
   with an error naming the model, the run kind, and the missing capability. A model without
   `reasoning` starts without `--effort`, with a warning logged once per model. If the catalog
-  cannot be read, or does not list the model, the run starts and a warning is logged.
+  cannot be read, or does not list the model, the run starts and a warning is logged. QA tests
+  these flows against a local stub OpenRouter: `SYMPHONY_QA_OPENROUTER_URL` replaces
+  `https://openrouter.ai/api` (for runs and the catalog) only while `SYMPHONY_BAR_QA_ROOT` is set
+  and only with an `http(s)` URL on a loopback host; anywhere else the implementation MUST use
+  `https://openrouter.ai/api`.
 - `agent.prompts.include_project_guides`: boolean, default `true`
 - `agent.prompts.project_guide_files`: list of relative paths or null, default `null`
 - `agent.permissions.approval_policy`: agent approval policy, default depends on `agent.runtime`

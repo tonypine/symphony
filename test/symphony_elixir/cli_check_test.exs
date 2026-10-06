@@ -6,7 +6,7 @@ defmodule SymphonyElixir.CLICheckTest do
   alias SymphonyElixir.CLI
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Cache
-  alias SymphonyElixir.OpenRouter.Models
+  alias SymphonyElixir.OpenRouter.{Models, Stub}
   alias SymphonyElixir.Workflow
 
   @secret "lin_api_check_secret_value"
@@ -393,6 +393,36 @@ defmodule SymphonyElixir.CLICheckTest do
       assert check(["--config", path]) ==
                {{:error, "Config error in #{path}: repositories[app].agent.run_profiles.landing.model: OpenRouter model `acme/chat-only` does not support tools; Symphony runs need tool use"},
                 "Warning: repositories[app].agent.effort: OpenRouter model `acme/tools-only` does not support reasoning; its runs start without --effort high\n"}
+    end
+
+    test "checks models against the QA stub in QA mode", %{root: root} do
+      {:ok, stub, port} = Stub.start_link(log: fn _line -> :ok end)
+      saved = Map.new(~w(SYMPHONY_BAR_QA_ROOT SYMPHONY_QA_OPENROUTER_URL), &{&1, System.get_env(&1)})
+
+      on_exit(fn ->
+        Stub.stop(stub)
+
+        Enum.each(saved, fn
+          {name, nil} -> System.delete_env(name)
+          {name, value} -> System.put_env(name, value)
+        end)
+      end)
+
+      System.put_env("SYMPHONY_BAR_QA_ROOT", root)
+      System.put_env("SYMPHONY_QA_OPENROUTER_URL", Stub.url(port))
+      System.put_env("OPENROUTER_API_KEY", Stub.valid_key())
+      Application.put_env(:symphony_elixir, :openrouter_models_request, fn url, opts -> Req.get(url, opts) end)
+
+      content =
+        openrouter_symphony(root, "symphony-qa/no-tools")
+        |> String.replace("anthropic/claude-haiku-4.5", "symphony-qa/tools-only")
+        |> String.replace("  run_profiles:\n", "  effort: high\n  run_profiles:\n")
+
+      path = write_symphony!(root, content)
+
+      assert check(["--config", path]) ==
+               {{:error, "Config error in #{path}: agent.run_profiles.landing.model: OpenRouter model `symphony-qa/no-tools` does not support tools; Symphony runs need tool use"},
+                "Warning: agent.effort: OpenRouter model `symphony-qa/tools-only` does not support reasoning; its runs start without --effort high\n"}
     end
 
     test "only warns when the models API cannot be reached", %{root: root} do
