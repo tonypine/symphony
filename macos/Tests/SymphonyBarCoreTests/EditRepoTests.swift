@@ -341,7 +341,6 @@ final class EditRepoTests: XCTestCase {
         XCTAssertTrue(DisconnectRepo.restartQuestion(key: "web", runs: 2).message.hasPrefix("2 agent runs are active."))
     }
 
-    /// Disconnecting a local repo rewrites only `symphony.yml`: its folder, files and git branches stay.
     func testTheSheetPicksTheNewDefaultOnlyForTheDefaultRepo() {
         let local = DisconnectRepo.Sheet(entry: symphony, entries: entries)
         XCTAssertEqual(local.key, "symphony")
@@ -391,6 +390,7 @@ final class EditRepoTests: XCTestCase {
         XCTAssertNil(DisconnectRepo.cloneOption(for: repo))
     }
 
+    /// Disconnecting a local repo rewrites only `symphony.yml`: its folder, files and git branches stay.
     func testDisconnectingALocalRepoLeavesItsFolderUntouched() throws {
         let directory = uniqueTemporaryDirectory("disconnect-repo")
         let folder = directory.appendingPathComponent("web")
