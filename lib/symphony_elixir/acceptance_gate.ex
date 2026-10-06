@@ -930,14 +930,15 @@ defmodule SymphonyElixir.AcceptanceGate do
     remove_worktree(workspace, worktree, git)
     File.mkdir_p!(Path.dirname(worktree))
 
-    case git.(["worktree", "add", "--detach", worktree, sha], workspace) do
+    case Fetcher.with_lock(workspace, fn -> git.(["worktree", "add", "--detach", worktree, sha], workspace) end) do
       {_output, 0} -> :ok
       {output, status} -> {:error, {:gate_worktree_failed, status, String.trim(output)}}
     end
   end
 
-  # Under the per-repo fetch lock: the remove writes the `.git/worktrees` the
-  # workspace shares with the source checkout and every other worktree of it.
+  # The add and the remove run under the per-repo fetch lock: they write the
+  # `.git/worktrees` the workspace shares with the source checkout and every
+  # other worktree of it.
   defp remove_worktree(workspace, worktree, git) do
     Fetcher.with_lock(workspace, fn -> git.(["worktree", "remove", "--force", worktree], workspace) end)
     File.rm_rf(worktree)
