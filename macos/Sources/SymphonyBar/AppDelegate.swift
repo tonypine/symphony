@@ -156,7 +156,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             UpdateRelaunch(
                 pending: updater.pending.take(),
                 rollback: updater.rollbacks.take(),
-                runningBuild: updates.current.build
+                runningBuild: updates.current.build,
+                runningBundle: updater.bundleFileNumber
             )
         )
 
@@ -270,7 +271,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             reason: failure.reason(logPath: runner.logPath),
             startSymphony: update.startSymphony,
             resumeDispatch: resumeAfterUpdate,
-            details: update.details
+            details: update.details,
+            bundle: updater.bundleFileNumber
         )
         // A crash loop can follow the healthy part of the check: the build put back doesn't say it was updated to.
         updater.lastUpdates.clear()
