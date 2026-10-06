@@ -538,7 +538,9 @@ Fields:
     dispatches of one repo add their worktrees one at a time. A new branch made from a base ref
     is added with `--no-track`: no upstream config goes into the shared `.git/config`, whose
     lock parallel adds would otherwise race for (the loser exits 255, its branch made but no
-    worktree). A failed add logs git's output.
+    worktree). A failed add logs git's output. A host-side `git worktree remove` takes the lock
+    too, whether it removes an issue workspace (with the branch delete after it) or the
+    throwaway worktree of an acceptance gate run or a QA pass.
   - Every git call Symphony makes runs SSH with keepalives, so a connection that stops answering
     is dropped after about a minute. A host-side `fetch`, `pull`, `push` or `ls-remote` also has
     a wall-clock limit (5 minutes by default, the `:git_network_timeout_ms` application env): at
