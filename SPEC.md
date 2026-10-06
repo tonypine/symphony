@@ -1391,7 +1391,9 @@ When enabled:
   `qa_check_app` reports whether the app still runs, answers an accessibility request within 10
   seconds, and has written a crash report since launch, naming the page the agent passes and that
   window size. A pass whose resize met a usable screen area under 1400×900 points MUST NOT be
-  reported `pass`: its `pass` becomes `blocked`, and that pass's `blocked` goes to a person. Every tool that
+  reported `pass`: its `pass` becomes `blocked`, and that pass's `blocked` goes to a person. A pass
+  with no `qa_resize_window` call MUST NOT be reported `pass` either: its wide pass did not run, so
+  its `pass` becomes `blocked` with that reason. Every tool that
   takes a PID MUST refuse a PID
   the pass did not launch. Apps still running when the pass ends MUST be quit. A missing Screen
   Recording or Accessibility grant MUST surface as a `qa_permission_missing` tool error that tells
@@ -3020,7 +3022,10 @@ Current Elixir sandbox behavior:
   `~/.gnupg`, `~/Library/Application Support`, `~/Library/Keychains`,
   `~/Library/Preferences`, `~/.docker`, `~/.netrc`, `~/.git-credentials`, `~/.npmrc`,
   `~/.cargo/credentials`, `~/.config/op`, `~/.config/gcloud`, `~/.azure`, `~/.kube`, shell
-  startup files, and shell or REPL history files.
+  startup files, and shell or REPL history files. They also cover the cloud-synced folders
+  `~/Library/CloudStorage` (Google Drive, Dropbox, OneDrive) and `~/Library/Mobile Documents`
+  (iCloud Drive), which Claude's file tools are denied with `Read(<path>)` rules as well, so an
+  agent never makes macOS ask the operator to let Symphony access them.
 - Shared write denies protect workflow and runtime guardrail files such as `WORKFLOW.md`,
   `symphony.yml`, `symphony.local.yml`, `.claude/settings.json`, `.git`, `mise.toml`,
   `.tool-versions`, `config/settings_ui_exempt.yml`, shell startup files, `~/.gitconfig`, and
