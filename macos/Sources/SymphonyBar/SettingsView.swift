@@ -384,14 +384,19 @@ private struct RunProfileRow: View {
 
     var body: some View {
         LabeledContent(kind?.title ?? "Default") {
+            // A grouped Form caps a row at 684pt whatever the window's width, and moves the controls under the
+            // label when label and controls don't fit. Small controls in these columns keep the longest label,
+            // "Review feedback", on one line with Reset to inherited, and fit "OpenRouter, inherited",
+            // "medium, inherited" and an OpenRouter name such as "Mistral: Mistral Nemo, inherited".
             HStack {
                 picker("Provider", providerSelection, RunProfilesConfig.providers, inherited: inherited.provider, source: providerSource)
-                    .frame(width: 180)
+                    .frame(width: 160)
                 Group {
                     if isOpenRouter {
                         OpenRouterModelField(
                             selection: $profile.model,
-                            inheritedTitle: inherited.model.map { $0 + ", " + inheritedSource } ?? "default",
+                            inherited: inherited.model,
+                            inheritedSource: inheritedSource,
                             models: openRouterModels,
                             hasKey: hasOpenRouterKey,
                             retry: retryOpenRouterModels,
@@ -408,7 +413,7 @@ private struct RunProfileRow: View {
                     picker("Effort", $profile.effort, RunProfilesConfig.efforts, inherited: inherited.effort)
                         .disabled(effortNote != nil)
                 }
-                .frame(width: 150)
+                .frame(width: 140)
                 .help(effortNote ?? "Effort for this kind of run")
                 if canReset {
                     Button {
@@ -422,6 +427,7 @@ private struct RunProfileRow: View {
                     .accessibilityLabel("Reset to inherited")
                 }
             }
+            .controlSize(.small)
         }
     }
 
@@ -459,7 +465,9 @@ private struct RunProfileRow: View {
 /// Without an OpenRouter key it shows a disabled hint instead, and while the list loads, a progress note.
 private struct OpenRouterModelField: View {
     @Binding var selection: String?
-    let inheritedTitle: String
+    /// The model id a nil selection falls back to, shown by its name with `inheritedSource`, such as "inherited".
+    let inherited: String?
+    let inheritedSource: String
     let models: Result<[OpenRouterModel], OpenRouterFailure>?
     let hasKey: Bool
     let retry: () -> Void
@@ -470,6 +478,7 @@ private struct OpenRouterModelField: View {
         switch models {
         case nil where !hasKey:
             Text("Add an OpenRouter key below first")
+                .lineLimit(1)
                 .foregroundStyle(.secondary)
                 .help("Enter an OpenRouter API key in the OpenRouter section to choose OpenRouter models.")
         case nil:
@@ -493,7 +502,7 @@ private struct OpenRouterModelField: View {
                 isPicking = true
             } label: {
                 HStack {
-                    Text(selection.map { id in models.first { $0.id == id }?.name ?? id } ?? inheritedTitle)
+                    Text(selection.map { OpenRouterModel.title(of: $0, in: models) } ?? inheritedTitle(models))
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .opacity(selection == nil ? 0.55 : 1)
@@ -514,7 +523,7 @@ private struct OpenRouterModelField: View {
             TextField("Search models that support tools", text: $query)
                 .textFieldStyle(.roundedBorder)
             List {
-                Button(inheritedTitle) { choose(nil) }
+                Button(inheritedTitle(models)) { choose(nil) }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
                 ForEach(matches, id: \.id) { model in
@@ -536,6 +545,12 @@ private struct OpenRouterModelField: View {
         }
         .padding(12)
         .frame(width: 360, height: 360)
+        // The row's small controls stop at the popover.
+        .controlSize(.regular)
+    }
+
+    private func inheritedTitle(_ models: [OpenRouterModel]) -> String {
+        inherited.map { OpenRouterModel.title(of: $0, in: models) + ", " + inheritedSource } ?? "default"
     }
 
     private func choose(_ id: String?) {
