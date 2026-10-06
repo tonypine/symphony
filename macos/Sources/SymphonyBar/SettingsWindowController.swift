@@ -24,12 +24,18 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         didSet { model?.budget = budget }
     }
 
+    /// Symphony's latest state, nil while it isn't answering. Its gate stats show under Acceptance gate.
+    var state: StateSnapshot? {
+        didSet { model?.state = state }
+    }
+
     private var model: SettingsViewModel?
 
     func show() {
         if window == nil {
             let model = SettingsViewModel(secrets: secrets, onSecretsChanged: { [weak self] in self?.onSecretsChanged() })
             model.budget = budget
+            model.state = state
             self.model = model
             let view = SettingsView(model: model) { [weak self] in self?.window?.close() }
             let hostingController = NSHostingController(rootView: view)

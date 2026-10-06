@@ -30,10 +30,21 @@ final class StateSnapshotTests: XCTestCase {
         perIssueLimit: 100_000_000
     )
 
+    /// The `running` entry in the recorded state.
+    private let recordedRuns = [
+        StateSnapshot.Run(
+            issueIdentifier: "TP-237",
+            repoKey: "symphony",
+            url: URL(string: "https://linear.app/tonypine/issue/TP-237/show-live-symphony-status-in-the-menu-bar-icon-and-menu"),
+            startedAt: Date(timeIntervalSince1970: 1_790_943_362),
+            lastEventAt: Date(timeIntervalSince1970: 1_790_943_458)
+        ),
+    ]
+
     func testDecodesTheRecordedState() throws {
         XCTAssertEqual(
             SymphonyState.poll(data: try recordedState(), statusCode: 200),
-            .state(StateSnapshot(running: 1, retrying: 0, pause: nil, budget: recordedBudget))
+            .state(StateSnapshot(running: 1, retrying: 0, pause: nil, budget: recordedBudget, runs: recordedRuns))
         )
     }
 
@@ -48,7 +59,8 @@ final class StateSnapshotTests: XCTestCase {
             .state(
                 StateSnapshot(
                     running: 1,
-                    budget: .init(dailyLimit: 1_000_000_000, dailyUsed: 1_000_000_123, dailyRemaining: 0, dailyPaused: true)
+                    budget: .init(dailyLimit: 1_000_000_000, dailyUsed: 1_000_000_123, dailyRemaining: 0, dailyPaused: true),
+                    runs: recordedRuns
                 )
             )
         )
@@ -62,7 +74,7 @@ final class StateSnapshotTests: XCTestCase {
 
         XCTAssertEqual(
             SymphonyState.poll(data: data, statusCode: 200),
-            .state(StateSnapshot(running: 1, budget: .init(dailyUsed: 42)))
+            .state(StateSnapshot(running: 1, budget: .init(dailyUsed: 42), runs: recordedRuns))
         )
     }
 
@@ -83,7 +95,8 @@ final class StateSnapshotTests: XCTestCase {
                     running: 1,
                     retrying: 0,
                     pause: .init(reason: "deploy freeze", since: Date(timeIntervalSince1970: 1_790_943_362)),
-                    budget: recordedBudget
+                    budget: recordedBudget,
+                    runs: recordedRuns
                 )
             )
         )
@@ -94,7 +107,7 @@ final class StateSnapshotTests: XCTestCase {
 
         XCTAssertEqual(
             SymphonyState.poll(data: data, statusCode: 200),
-            .state(StateSnapshot(running: 1, retrying: 0, pause: .init(), budget: recordedBudget))
+            .state(StateSnapshot(running: 1, retrying: 0, pause: .init(), budget: recordedBudget, runs: recordedRuns))
         )
     }
 
@@ -108,6 +121,11 @@ final class StateSnapshotTests: XCTestCase {
             ],
             ["provider": "anthropic", "scope": "opus", "window": "seven_day_opus", "phase": "canary", "resume_at": NSNull()],
             ["provider": "openai", "scope": "all", "phase": "headroom", "utilization": 0.91],
+            [
+                "provider": "anthropic", "scope": "all", "reason": "model_api_unreachable", "window": NSNull(),
+                "phase": "paused", "resume_at": "2026-10-02T12:18:02Z", "source": "api_unreachable", "error": "ENOTFOUND",
+                "banner": "Paused: Claude API unreachable (ENOTFOUND), retries ~12:18",
+            ],
             ["phase": "something_new"],
         ])
 
@@ -122,13 +140,21 @@ final class StateSnapshotTests: XCTestCase {
                             phase: .paused,
                             resetsAt: Date(timeIntervalSince1970: 1_790_943_362),
                             resumeAt: Date(timeIntervalSince1970: 1_790_943_482),
-                            utilization: 1
+                            utilization: 1,
+                            reason: "claude_usage_limit"
                         ),
                         .init(scope: "opus", window: "seven_day_opus", phase: .canary),
                         .init(provider: "openai", phase: .headroom, utilization: 0.91),
+                        .init(
+                            phase: .paused,
+                            resumeAt: Date(timeIntervalSince1970: 1_790_943_482),
+                            reason: "model_api_unreachable",
+                            error: "ENOTFOUND"
+                        ),
                         .init(),
                     ],
-                    budget: recordedBudget
+                    budget: recordedBudget,
+                    runs: recordedRuns
                 )
             )
         )
@@ -136,10 +162,10 @@ final class StateSnapshotTests: XCTestCase {
 
     func testDecodesTheTicketsAnUpdateWouldUnblock() throws {
         let data = try recordedState(replacing: "app_update", with: ["unblocks": 2, "issue_identifiers": ["TP-313", "TP-332"]])
-        XCTAssertEqual(SymphonyState.poll(data: data, statusCode: 200), .state(StateSnapshot(running: 1, budget: recordedBudget, updateUnblocks: 2)))
+        XCTAssertEqual(SymphonyState.poll(data: data, statusCode: 200), .state(StateSnapshot(running: 1, budget: recordedBudget, updateUnblocks: 2, runs: recordedRuns)))
 
         let empty = try recordedState(replacing: "app_update", with: [String: Any]())
-        XCTAssertEqual(SymphonyState.poll(data: empty, statusCode: 200), .state(StateSnapshot(running: 1, budget: recordedBudget)))
+        XCTAssertEqual(SymphonyState.poll(data: empty, statusCode: 200), .state(StateSnapshot(running: 1, budget: recordedBudget, runs: recordedRuns)))
     }
 
     func testDecodesTheForcedTickets() throws {
@@ -177,7 +203,8 @@ final class StateSnapshotTests: XCTestCase {
                             part: "TP-101"
                         ),
                         .init(identifier: "issue-7", state: "Todo"),
-                    ]
+                    ],
+                    runs: recordedRuns
                 )
             )
         )
@@ -189,11 +216,11 @@ final class StateSnapshotTests: XCTestCase {
         XCTAssertNil(object["forced"])
         XCTAssertEqual(
             SymphonyState.poll(data: try recordedState(), statusCode: 200),
-            .state(StateSnapshot(running: 1, budget: recordedBudget))
+            .state(StateSnapshot(running: 1, budget: recordedBudget, runs: recordedRuns))
         )
 
         let empty = try recordedState(replacing: "forced", with: [Any]())
-        XCTAssertEqual(SymphonyState.poll(data: empty, statusCode: 200), .state(StateSnapshot(running: 1, budget: recordedBudget)))
+        XCTAssertEqual(SymphonyState.poll(data: empty, statusCode: 200), .state(StateSnapshot(running: 1, budget: recordedBudget, runs: recordedRuns)))
     }
 
     func testDecodesTheHumanReviewCount() throws {
@@ -204,8 +231,41 @@ final class StateSnapshotTests: XCTestCase {
         )
         XCTAssertEqual(
             SymphonyState.poll(data: try recordedState(), statusCode: 200),
-            .state(StateSnapshot(running: 1, budget: recordedBudget, humanReview: 0))
+            .state(StateSnapshot(running: 1, budget: recordedBudget, humanReview: 0, runs: recordedRuns))
         )
+    }
+
+    func testDecodesTheRunningEntries() throws {
+        let data = try recordedState(replacing: "running", with: [
+            [
+                "issue_id": "issue-7", "issue_identifier": "TP-7", "repo_key": "api", "url": "https://linear.app/t/issue/TP-7",
+                "started_at": "2026-10-02T12:00:00Z", "last_event_at": "2026-10-02T12:16:02Z", "turn_count": 3,
+            ],
+            // Before its first event, and without an identifier: the id names it.
+            ["issue_id": "issue-8", "issue_identifier": NSNull(), "started_at": "2026-10-02T12:16:02Z", "last_event_at": NSNull()],
+            ["title": "No id at all", "started_at": "2026-10-02T12:16:02Z"],
+            ["issue_identifier": "TP-9", "started_at": "not a date", "url": NSNull()],
+        ])
+
+        guard case let .state(snapshot) = SymphonyState.poll(data: data, statusCode: 200) else {
+            return XCTFail("expected a state")
+        }
+        XCTAssertEqual(snapshot.running, 1, "the count stays counts.running")
+        XCTAssertEqual(
+            snapshot.runs,
+            [
+                .init(
+                    issueIdentifier: "TP-7",
+                    repoKey: "api",
+                    url: URL(string: "https://linear.app/t/issue/TP-7"),
+                    startedAt: Date(timeIntervalSince1970: 1_790_942_400),
+                    lastEventAt: Date(timeIntervalSince1970: 1_790_943_362)
+                ),
+                .init(issueIdentifier: "issue-8", startedAt: Date(timeIntervalSince1970: 1_790_943_362)),
+                .init(issueIdentifier: "TP-9"),
+            ]
+        )
+        XCTAssertEqual(SymphonyState.poll(data: Data(#"{"counts": {"running": 0}}"#.utf8), statusCode: 200), .state(StateSnapshot()))
     }
 
     func testRetryingDefaultsToZero() {

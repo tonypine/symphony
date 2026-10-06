@@ -4,7 +4,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
   alias SymphonyElixir.AgentSandboxConfig
   alias SymphonyElixir.ClaudeCode.AppServer
   alias SymphonyElixir.Config.Schema.Agent
-  alias SymphonyElixir.OpenRouter.Models
+  alias SymphonyElixir.OpenRouter.{Models, Stub}
   import Bitwise, only: [band: 2]
 
   defmodule StubSSH do
@@ -149,6 +149,24 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
     end
   end
 
+  describe "build_claude_settings/5" do
+    test "denies the file tools on every write-protected path and on the extra deny paths" do
+      network_access = %Agent.NetworkAccess{mode: "allowlist", allowed_domains: [], denied_domains: []}
+
+      deny = AppServer.build_claude_settings(network_access, [], [], ["./priv/skills/pull"]) |> get_in(["permissions", "deny"])
+
+      for path <- AgentSandboxConfig.deny_write_paths() ++ ["./priv/skills/pull"] do
+        assert "Edit(#{path})" in deny
+      end
+
+      assert "Edit(./WORKFLOW.md)" in deny
+      assert "Edit(./.claude/hooks)" in deny
+      assert "Bash(git push:*)" in deny
+      assert "Read(~/Library/CloudStorage)" in deny
+      refute "Edit" in deny
+    end
+  end
+
   describe "parse_event/1" do
     test "parses system event and returns session_started tuple" do
       line =
@@ -243,6 +261,13 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       line = "not valid json {"
 
       assert {:malformed, ^line} = AppServer.parse_event(line)
+    end
+
+    test "parses tool_progress heartbeats" do
+      line =
+        ~s({"type":"tool_progress","tool_use_id":"toolu_1","tool_name":"Bash","parent_tool_use_id":null,"elapsed_time_seconds":12,"uuid":"u-1","session_id":"sess-1"})
+
+      assert {:tool_progress, "Bash"} = AppServer.parse_event(line)
     end
 
     test "returns malformed for valid JSON with unrecognized shape" do
@@ -553,6 +578,50 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       assert {:rate_limited, %{retry_after_seconds: nil}, "API Error: 429 Too Many Requests"} = AppServer.parse_event(line)
     end
 
+    test "parses a result that could not reach the model API as an unreachable API, not a completed turn" do
+      text = "API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)"
+
+      line =
+        Jason.encode!(%{
+          "type" => "result",
+          "subtype" => "success",
+          "is_error" => true,
+          "result" => text,
+          "total_cost_usd" => 0,
+          "usage" => %{"input_tokens" => 0, "output_tokens" => 0}
+        })
+
+      assert {:api_unreachable, info} = AppServer.parse_event(line)
+
+      assert info == %{
+               provider: "anthropic",
+               scope: :all,
+               window: nil,
+               resets_at: nil,
+               utilization: nil,
+               source: :api_unreachable,
+               error: "ENOTFOUND"
+             }
+
+      # An error result, and a result not marked as an error that used nothing.
+      line = ~s({"type":"result","subtype":"error","is_error":true,"error":"API Error: Connection error."})
+      assert {:api_unreachable, %{error: "connection error"}} = AppServer.parse_event(line)
+
+      line = ~s|{"type":"result","subtype":"success","is_error":false,"result":"API Error: fetch failed (ECONNRESET)","usage":{"input_tokens":0,"output_tokens":0}}|
+      assert {:api_unreachable, %{error: "ECONNRESET"}} = AppServer.parse_event(line)
+    end
+
+    test "keeps today's parsing for API errors the API returned and for agent text that mentions one" do
+      line = ~s({"type":"result","subtype":"success","is_error":true,"result":"API Error: 500 Internal server error","usage":{}})
+      assert {:turn_completed, _usage} = AppServer.parse_event(line)
+
+      line = ~s({"type":"result","subtype":"success","is_error":true,"result":"Done. The ENOTFOUND bug is fixed.","usage":{}})
+      assert {:turn_completed, _usage} = AppServer.parse_event(line)
+
+      line = ~s|{"type":"result","subtype":"success","is_error":false,"result":"API Error: fetch failed (ECONNRESET)","usage":{"input_tokens":12,"output_tokens":3}}|
+      assert {:turn_completed, %{total_tokens: 15}} = AppServer.parse_event(line)
+    end
+
     test "keeps today's parsing for error results without usage-limit text" do
       line = ~s({"type":"result","subtype":"success","is_error":true,"result":"Something else","usage":{}})
       assert {:turn_completed, _usage} = AppServer.parse_event(line)
@@ -642,6 +711,11 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
                timestamp: %DateTime{},
                payload: %{method: "item/tool/result", params: %{text: "ok"}}
              } = AppServer.event_to_update({:tool_result, "ok"})
+
+      assert %{event: :tool_progress, timestamp: %DateTime{}, payload: %{tool: "Bash"}} =
+               AppServer.event_to_update({:tool_progress, "Bash"})
+
+      assert %{event: :tool_progress, payload: %{tool: nil}} = AppServer.event_to_update({:tool_progress, nil})
 
       usage = %{input_tokens: 10, cached_input_tokens: 3, output_tokens: 5, total_tokens: 15}
 
@@ -735,13 +809,14 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
         assert get_in(mcp_config, ["mcpServers", "symphony", "env", "PATH"]) == System.get_env("PATH")
         assert get_in(mcp_config, ["mcpServers", "symphony", "alwaysLoad"]) == true
 
-        assert get_in(contents, ["permissions", "deny"]) == [
-                 "Bash(gh:*)",
-                 "Bash(ghe:*)",
-                 "Bash(git push:*)",
-                 "Bash(git remote add:*)",
-                 "Bash(git remote set-url:*)"
-               ]
+        assert get_in(contents, ["permissions", "deny"]) ==
+                 [
+                   "Bash(gh:*)",
+                   "Bash(ghe:*)",
+                   "Bash(git push:*)",
+                   "Bash(git remote add:*)",
+                   "Bash(git remote set-url:*)"
+                 ] ++ AgentSandboxConfig.claude_edit_deny_rules() ++ AgentSandboxConfig.claude_read_deny_rules()
 
         if session.mcp_session.transport == :unix do
           assert File.exists?(session.mcp_session.socket_path)
@@ -793,9 +868,6 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
           workspace_sandbox: %{allow_write_paths: ["/private/tmp/symphony-mcp", "/opt/cache"]}
         )
 
-        Application.put_env(:symphony_elixir, :claude_item_replacement_opts, os_type: {:unix, :linux})
-        on_exit(fn -> Application.delete_env(:symphony_elixir, :claude_item_replacement_opts) end)
-
         assert {:ok, session} = AppServer.start_session(workspace)
         {:ok, contents} = Jason.decode(File.read!(session.settings_path))
 
@@ -808,38 +880,49 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       end
     end
 
-    test "lets a local macOS session write Foundation's item replacement directory" do
+    test "denies a worktree session writes to the shared repo's git config files, from the shell and the file tools" do
       test_root =
         Path.join(
           System.tmp_dir!(),
-          "symphony-elixir-claude-code-item-replacement-#{System.unique_integer([:positive])}"
+          "symphony-elixir-claude-code-git-metadata-#{System.unique_integer([:positive])}"
         )
 
       try do
         workspace_root = Path.join(test_root, "workspaces")
-        workspace = Path.join(workspace_root, "TEST-ITEM-REPLACEMENT")
-        user_temp_dir = Path.join(test_root, "T")
-        getconf = Path.join(test_root, "getconf")
-        File.mkdir_p!(workspace)
-        File.write!(getconf, "#!/bin/sh\necho '#{user_temp_dir}/'\n")
-        File.chmod!(getconf, 0o755)
+        workspace = Path.join(workspace_root, "TEST-GITMETA")
+        primary_repo = Path.join(test_root, "primary")
+        File.mkdir_p!(workspace_root)
+        File.mkdir_p!(primary_repo)
+
+        assert {_output, 0} = System.cmd("git", ["init", "-b", "main"], cd: primary_repo, stderr_to_stdout: true)
+
+        assert {_output, 0} =
+                 System.cmd("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "initial"],
+                   cd: primary_repo,
+                   stderr_to_stdout: true
+                 )
+
+        assert {_output, 0} = System.cmd("git", ["worktree", "add", "-b", "auto/TEST-GITMETA", workspace], cd: primary_repo, stderr_to_stdout: true)
+        {:ok, common_dir} = SymphonyElixir.PathSafety.canonicalize(Path.join(primary_repo, ".git"))
 
         write_workflow_file!(Workflow.workflow_file_path(),
           workspace_root: workspace_root,
-          agent_kind: "claude",
-          workspace_sandbox: %{allow_write_paths: ["/opt/cache"]}
+          agent_kind: "claude"
         )
-
-        item_replacement_opts = [os_type: {:unix, :darwin}, getconf: getconf]
-        Application.put_env(:symphony_elixir, :claude_item_replacement_opts, item_replacement_opts)
-        on_exit(fn -> Application.delete_env(:symphony_elixir, :claude_item_replacement_opts) end)
 
         assert {:ok, session} = AppServer.start_session(workspace)
         {:ok, contents} = Jason.decode(File.read!(session.settings_path))
+        deny_write = get_in(contents, ["sandbox", "filesystem", "denyWrite"])
+        deny = get_in(contents, ["permissions", "deny"])
 
-        allow_write = get_in(contents, ["sandbox", "filesystem", "allowWrite"])
-        assert ["/opt/cache", item_replacement_dir | _canonical] = allow_write
-        assert item_replacement_dir == Path.join(user_temp_dir, "TemporaryItems")
+        for entry <- ["config", "config.worktree", "info", "hooks", "worktrees/*/config.worktree", "modules/**/config"] do
+          path = Path.join(common_dir, entry)
+          assert path in deny_write
+          assert "Edit(/#{path})" in deny
+        end
+
+        assert Path.join([common_dir, "worktrees", "TEST-GITMETA", "config.worktree"]) in deny_write
+        refute Path.join(common_dir, "objects") in deny_write
 
         assert :ok = AppServer.stop_session(session)
       after
@@ -1842,6 +1925,53 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       end
     end
 
+    test "forwards tool_progress heartbeats without logging them as unparseable" do
+      test_root = Path.join(System.tmp_dir!(), "symphony-elixir-claude-code-tool-progress-#{System.unique_integer([:positive])}")
+
+      try do
+        workspace_root = Path.join(test_root, "workspaces")
+        workspace = Path.join(workspace_root, "ACME-PROGRESS")
+        fake_claude = Path.join(test_root, "fake-claude")
+        File.mkdir_p!(workspace)
+
+        File.write!(fake_claude, """
+        #!/bin/sh
+        printf '%s\\n' '{"type":"system","subtype":"init","session_id":"sess-progress","cwd":"/tmp","tools":[],"mcp_servers":[],"model":"claude-opus-4-5","permissionMode":"default","apiKeySource":"none"}'
+        printf '%s\\n' '{"type":"tool_progress","tool_use_id":"toolu_1","tool_name":"Bash","parent_tool_use_id":null,"elapsed_time_seconds":3,"uuid":"u-1","session_id":"sess-progress"}'
+        printf '%s\\n' '{"type":"tool_progress","tool_use_id":"toolu_1","tool_name":"Bash","parent_tool_use_id":null,"elapsed_time_seconds":6,"uuid":"u-2","session_id":"sess-progress"}'
+        printf '%s\\n' '{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"sess-progress","usage":{}}'
+        """)
+
+        File.chmod!(fake_claude, 0o755)
+
+        write_workflow_file!(Workflow.workflow_file_path(),
+          workspace_root: workspace_root,
+          agent_kind: "claude",
+          agent_command: fake_claude
+        )
+
+        session = local_session(workspace, test_root)
+        test_pid = self()
+        on_message = fn msg -> send(test_pid, {:turn_msg, msg}) end
+        issue = %{id: "issue-progress", identifier: "ACME-PROGRESS"}
+
+        log =
+          ExUnit.CaptureLog.capture_log(fn ->
+            send(test_pid, {:result, AppServer.run_turn(session, "do the thing", issue, on_message: on_message)})
+          end)
+
+        assert_received {:result, {:ok, _result}}
+        assert_received {:turn_msg, {:session_started, "sess-progress"}}
+        assert_received {:turn_msg, {:tool_progress, "Bash"}}
+        assert_received {:turn_msg, {:tool_progress, "Bash"}}
+        refute_received {:turn_msg, {:tool_progress, _tool_name}}
+        refute_received {:turn_msg, {:notification, _text}}
+        refute log =~ "unparseable"
+      after
+        File.rm_rf(test_root)
+      end
+    end
+
     test "falls back to the result text when no rate_limit_event arrives" do
       test_root =
         Path.join(
@@ -1874,6 +2004,47 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
 
         assert {:error, {:usage_limited, %{window: nil, resets_at: ~U[2025-10-03 23:00:00Z], source: :result_text}}} =
                  AppServer.run_turn(session, "do the thing", nil, [])
+      after
+        File.rm_rf(test_root)
+      end
+    end
+
+    test "a turn that can't reach the model API fails as an unreachable API on the run's provider" do
+      test_root = Path.join(System.tmp_dir!(), "symphony-elixir-claude-code-api-unreachable-#{System.unique_integer([:positive])}")
+
+      try do
+        workspace_root = Path.join(test_root, "workspaces")
+        workspace = Path.join(workspace_root, "ACME-OUTAGE")
+        fake_claude = Path.join(test_root, "fake-claude")
+        File.mkdir_p!(workspace)
+
+        File.write!(fake_claude, """
+        #!/bin/sh
+        printf '%s\\n' '{"type":"system","subtype":"init","session_id":"sess-outage","cwd":"/tmp","tools":[],"mcp_servers":[],"model":"claude-opus-4-5","permissionMode":"default","apiKeySource":"none"}'
+        printf '%s\\n' '{"type":"system","subtype":"api_error","level":"error","error":{"cause":{"code":"ENOTFOUND"}},"retryAttempt":10,"maxRetries":10,"session_id":"sess-outage"}'
+        printf '%s\\n' '{"type":"result","subtype":"success","is_error":true,"result":"API Error: Connection error (ENOTFOUND)","session_id":"sess-outage","total_cost_usd":0,"usage":{"input_tokens":0,"output_tokens":0}}'
+        exit 1
+        """)
+
+        File.chmod!(fake_claude, 0o755)
+
+        write_workflow_file!(Workflow.workflow_file_path(),
+          workspace_root: workspace_root,
+          agent_kind: "claude",
+          agent_command: fake_claude
+        )
+
+        session = Map.put(local_session(workspace, test_root), :run_profile, %{provider: "openrouter", model: "anthropic/claude-opus-4.5"})
+        test_pid = self()
+        on_message = fn msg -> send(test_pid, {:turn_msg, msg}) end
+
+        with_openrouter_key("sk-or-test", fn ->
+          assert {:error, {:model_api_unreachable, %{provider: "openrouter", source: :api_unreachable, error: "ENOTFOUND"}}} =
+                   AppServer.run_turn(session, "do the thing", nil, on_message: on_message)
+        end)
+
+        assert_received {:turn_msg, {:turn_failed, "model API unreachable (ENOTFOUND)"}}
+        refute_received {:turn_msg, {:turn_completed, _usage}}
       after
         File.rm_rf(test_root)
       end
@@ -2351,6 +2522,10 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
                    "AUTH_TOKEN=#{key}",
                    "API_KEY=",
                    "SUBAGENT_MODEL=anthropic/claude-haiku-4.5",
+                   "DEFAULT_HAIKU_MODEL=anthropic/claude-haiku-4.5",
+                   "DEFAULT_SONNET_MODEL=anthropic/claude-haiku-4.5",
+                   "DEFAULT_OPUS_MODEL=anthropic/claude-haiku-4.5",
+                   "SMALL_FAST_MODEL=anthropic/claude-haiku-4.5",
                    "OPENROUTER_API_KEY=<unset>"
                  ]
 
@@ -2361,9 +2536,76 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       end)
     end
 
-    test "launches an Anthropic profile without OpenRouter env, even when the key is set" do
+    test "sends an OpenRouter run's background calls to agent.small_model when it is set" do
+      with_openrouter_key("sk-or-v1-small", fn ->
+        with_provider_env_fake_claude("ACME-OPENROUTER-SMALL", [agent_small_model: "anthropic/claude-haiku-4.5"], fn workspace ->
+          profile = %{kind: :implementation, model: "anthropic/claude-sonnet-4.5", effort: nil, provider: "openrouter"}
+
+          {:ok, session} = AppServer.start_session(workspace, run_profile: profile)
+          assert {:ok, _result} = AppServer.run_turn(session, "build it", %{identifier: "ACME-OPENROUTER-SMALL"}, [])
+          AppServer.stop_session(session)
+
+          assert provider_env_trace(workspace) == [
+                   "BASE_URL=https://openrouter.ai/api",
+                   "AUTH_TOKEN=sk-or-v1-small",
+                   "API_KEY=",
+                   "SUBAGENT_MODEL=anthropic/claude-sonnet-4.5",
+                   "DEFAULT_HAIKU_MODEL=anthropic/claude-haiku-4.5",
+                   "DEFAULT_SONNET_MODEL=anthropic/claude-sonnet-4.5",
+                   "DEFAULT_OPUS_MODEL=anthropic/claude-sonnet-4.5",
+                   "SMALL_FAST_MODEL=anthropic/claude-haiku-4.5",
+                   "OPENROUTER_API_KEY=<unset>"
+                 ]
+
+          args = workspace |> Path.join("argv.trace") |> File.read!() |> String.split("\n", trim: true)
+          assert Enum.take(args, -2) == ["--model", "anthropic/claude-sonnet-4.5"]
+        end)
+      end)
+    end
+
+    test "launches an OpenRouter run in QA mode against the stub, which checks its model" do
+      {:ok, stub, port} = Stub.start_link(log: fn _line -> :ok end)
+      saved = Map.new(~w(SYMPHONY_BAR_QA_ROOT SYMPHONY_QA_OPENROUTER_URL), &{&1, System.get_env(&1)})
+      previous_request = Application.get_env(:symphony_elixir, :openrouter_models_request)
+
+      try do
+        System.put_env("SYMPHONY_BAR_QA_ROOT", System.tmp_dir!())
+        System.put_env("SYMPHONY_QA_OPENROUTER_URL", Stub.url(port))
+        Application.put_env(:symphony_elixir, :openrouter_models_request, fn url, opts -> Req.get(url, opts) end)
+        Models.clear_cache()
+
+        with_openrouter_key(Stub.valid_key(), fn ->
+          with_provider_env_fake_claude("ACME-OPENROUTER-QA", fn workspace ->
+            profile = %{kind: :landing, model: "symphony-qa/tools-only", effort: "high", provider: "openrouter"}
+
+            log =
+              capture_log(fn ->
+                {:ok, session} = AppServer.start_session(workspace, run_profile: profile)
+                assert {:ok, _result} = AppServer.run_turn(session, "land it", %{identifier: "ACME-OPENROUTER-QA"}, [])
+                AppServer.stop_session(session)
+
+                no_tools = %{profile | model: "symphony-qa/no-tools"}
+
+                assert {:error, {:openrouter_model_unsupported, "symphony-qa/no-tools", :landing, :tools}} =
+                         AppServer.start_session(workspace, run_profile: no_tools)
+              end)
+
+            assert log =~ "OpenRouter model symphony-qa/tools-only does not support reasoning"
+            assert "BASE_URL=#{Stub.url(port)}" in provider_env_trace(workspace)
+            assert "SMALL_FAST_MODEL=symphony-qa/tools-only" in provider_env_trace(workspace)
+          end)
+        end)
+      after
+        Stub.stop(stub)
+        Application.put_env(:symphony_elixir, :openrouter_models_request, previous_request)
+        Models.clear_cache()
+        Enum.each(saved, fn {name, value} -> restore_env(name, value) end)
+      end
+    end
+
+    test "launches an Anthropic profile without OpenRouter env, even when the key and agent.small_model are set" do
       with_openrouter_key("sk-or-v1-unused", fn ->
-        with_provider_env_fake_claude("ACME-ANTHROPIC", fn workspace ->
+        with_provider_env_fake_claude("ACME-ANTHROPIC", [agent_small_model: "anthropic/claude-haiku-4.5"], fn workspace ->
           profile = %{kind: :ci_fix, model: "claude-haiku-4-5", effort: "low", provider: "anthropic"}
 
           {:ok, session} = AppServer.start_session(workspace, run_profile: profile)
@@ -2374,6 +2616,10 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
                    "AUTH_TOKEN=<unset>",
                    "API_KEY=<unset>",
                    "SUBAGENT_MODEL=<unset>",
+                   "DEFAULT_HAIKU_MODEL=<unset>",
+                   "DEFAULT_SONNET_MODEL=<unset>",
+                   "DEFAULT_OPUS_MODEL=<unset>",
+                   "SMALL_FAST_MODEL=<unset>",
                    "OPENROUTER_API_KEY=<unset>"
                  ]
 
@@ -2478,6 +2724,27 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
               end)
 
             assert log =~ "run_kind=ci_fix; set repositories[beta].agent.model to a model that lists tools"
+          end)
+        end)
+      end)
+    end
+
+    test "names the model key next to the provider when a run inherits a model that lacks tools" do
+      with_openrouter_key("sk-or-v1-REDACTED", fn ->
+        with_models_api(fn ->
+          with_provider_env_fake_claude("ACME-OPENROUTER-INHERITED-NOTOOLS", fn workspace ->
+            settings = Config.settings!()
+            repository = %Config.Schema.RepoAgent{key: "beta", run_profiles: %{"ci_fix" => %{"provider" => "openrouter"}}}
+            settings = %{settings | agent: %{settings.agent | model: "acme/chat-only", repository: repository}}
+            profile = %{kind: :ci_fix, model: "acme/chat-only", effort: nil, provider: "openrouter"}
+
+            log =
+              capture_log(fn ->
+                assert AppServer.start_session(workspace, run_profile: profile, settings: settings) ==
+                         {:error, {:openrouter_model_unsupported, "acme/chat-only", :ci_fix, :tools}}
+              end)
+
+            assert log =~ "run_kind=ci_fix; set repositories[beta].agent.run_profiles.ci_fix.model to a model that lists tools"
           end)
         end)
       end)
@@ -3835,7 +4102,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
     end
   end
 
-  defp with_provider_env_fake_claude(identifier, fun) do
+  defp with_provider_env_fake_claude(identifier, workflow_overrides \\ [], fun) do
     test_root = Path.join(System.tmp_dir!(), "symphony-elixir-claude-code-provider-#{System.unique_integer([:positive])}")
 
     try do
@@ -3851,6 +4118,10 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
         printf 'AUTH_TOKEN=%s\\n' "${ANTHROPIC_AUTH_TOKEN-<unset>}"
         printf 'API_KEY=%s\\n' "${ANTHROPIC_API_KEY-<unset>}"
         printf 'SUBAGENT_MODEL=%s\\n' "${CLAUDE_CODE_SUBAGENT_MODEL-<unset>}"
+        printf 'DEFAULT_HAIKU_MODEL=%s\\n' "${ANTHROPIC_DEFAULT_HAIKU_MODEL-<unset>}"
+        printf 'DEFAULT_SONNET_MODEL=%s\\n' "${ANTHROPIC_DEFAULT_SONNET_MODEL-<unset>}"
+        printf 'DEFAULT_OPUS_MODEL=%s\\n' "${ANTHROPIC_DEFAULT_OPUS_MODEL-<unset>}"
+        printf 'SMALL_FAST_MODEL=%s\\n' "${ANTHROPIC_SMALL_FAST_MODEL-<unset>}"
         printf 'OPENROUTER_API_KEY=%s\\n' "${OPENROUTER_API_KEY-<unset>}"
       } > "$PWD/provider-env.trace"
       #{argv_tracing_fake_claude_script("sess-provider") |> String.replace("#!/bin/sh\n", "")}
@@ -3858,10 +4129,9 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
 
       File.chmod!(fake_claude, 0o755)
 
-      write_workflow_file!(Workflow.workflow_file_path(),
-        workspace_root: workspace_root,
-        agent_kind: "claude",
-        agent_command: fake_claude
+      write_workflow_file!(
+        Workflow.workflow_file_path(),
+        [workspace_root: workspace_root, agent_kind: "claude", agent_command: fake_claude] ++ workflow_overrides
       )
 
       fun.(workspace)

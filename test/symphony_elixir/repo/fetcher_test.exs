@@ -24,7 +24,7 @@ defmodule SymphonyElixir.Repo.FetcherTest do
 
     assert Fetcher.fetch_origin(repo, server: server, git: git) == {"From origin\n", 0}
     assert [call] = calls(root)
-    assert call =~ "-C #{repo} fetch origin"
+    assert call =~ "-C #{repo} fetch --upload-pack=git-upload-pack origin"
   end
 
   test "a fetch asked for while one of the same repo runs waits for it and gets its result", %{
@@ -93,7 +93,7 @@ defmodule SymphonyElixir.Repo.FetcherTest do
     missing_git = Path.join(root, "missing-git")
 
     capture_log(fn ->
-      assert {:enoent, [{:erlang, :open_port, _args, _info} | _stacktrace]} =
+      assert {:enoent, [{SymphonyElixir.Workspace, :safe_git, _args, _info} | _stacktrace]} =
                catch_exit(Fetcher.fetch_origin(repo, server: server, git: missing_git))
     end)
 
@@ -249,6 +249,98 @@ defmodule SymphonyElixir.Repo.FetcherTest do
     test "without the server it runs unlocked in the caller", %{repo: repo} do
       assert Fetcher.fetch(repo, fn -> {"", 0} end, server: :no_fetcher_running) == {"", 0}
     end
+
+    test "with no options it locks with the application's server", %{repo: repo} do
+      assert Fetcher.fetch(repo, fn -> {"fetched", 0} end) == {"fetched", 0}
+    end
+  end
+
+  describe "with_lock/3" do
+    test "runs in the caller once a fetch holding the repo's lock is done, and never retries", %{
+      repo: repo,
+      server: server
+    } do
+      key = key(repo)
+      holder = hold_lock(repo, server)
+      wait_for_state(server, &match?(%{^key => {{:lock, _ref}, []}}, &1))
+
+      test_pid = self()
+
+      locked =
+        Task.async(fn ->
+          Fetcher.with_lock(
+            repo,
+            fn ->
+              send(test_pid, {:locked, self()})
+              {@lock_error, 255}
+            end,
+            server: server
+          )
+        end)
+
+      wait_for_state(server, &match?(%{^key => {{:lock, _ref}, [{:lock, _from}]}}, &1))
+      refute_received {:locked, _pid}
+
+      release_lock(holder)
+
+      assert Task.await(locked, 10_000) == {@lock_error, 255}
+      locked_pid = locked.pid
+      assert_received {:locked, ^locked_pid}
+      refute_received {:locked, _pid}
+      assert :sys.get_state(server) == %{}
+    end
+
+    test "without the server it runs unlocked in the caller", %{repo: repo} do
+      assert Fetcher.with_lock(repo, fn -> :ran end, server: :no_fetcher_running) == :ran
+    end
+  end
+
+  describe "a remote that never answers" do
+    setup %{root: root} do
+      {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}, reuseaddr: true])
+      {:ok, port} = :inet.port(listener)
+      on_exit(fn -> :gen_tcp.close(listener) end)
+
+      checkout = Path.join(root, "checkout")
+      File.mkdir_p!(checkout)
+
+      for args <- [["init", "-b", "main"], ["remote", "add", "origin", "http://127.0.0.1:#{port}/stalled.git"]] do
+        {_output, 0} = System.cmd("git", args, cd: checkout, stderr_to_stdout: true)
+      end
+
+      %{checkout: checkout, listener: listener}
+    end
+
+    test "a stalled full fetch is stopped at its timeout and the next fetch of the repo goes ahead", %{
+      checkout: checkout,
+      listener: listener,
+      server: server
+    } do
+      test_pid = self()
+
+      log =
+        capture_log(fn ->
+          stalled = Task.async(fn -> Fetcher.fetch_origin(checkout, server: server, network_timeout_ms: 500) end)
+          {:ok, _connection} = :gen_tcp.accept(listener, 5_000)
+
+          queued =
+            Task.async(fn ->
+              Fetcher.fetch(checkout, fn -> send(test_pid, :queued_fetch_ran) && {"", 0} end, server: server)
+            end)
+
+          key = key(checkout)
+          wait_for_state(server, &match?(%{^key => {{:fetch, _ref, _waiters}, [{:lock, _from}]}}, &1))
+          refute_received :queued_fetch_ran
+
+          assert {output, 124} = Task.await(stalled, 10_000)
+          assert output =~ "symphony: git fetch origin timed out after 500 ms and was stopped"
+          assert Task.await(queued, 10_000) == {"", 0}
+          assert_received :queued_fetch_ran
+          wait_for_state(server, &(&1 == %{}))
+        end)
+
+      assert log =~ ~s(Git network call timed out repo=#{checkout} command="git fetch origin" timeout_ms=500)
+    end
   end
 
   describe "remote_fetch_origin_script/0" do
@@ -259,9 +351,12 @@ defmodule SymphonyElixir.Repo.FetcherTest do
       %{bin: bin}
     end
 
-    test "fetches origin in $repo", %{root: root, repo: repo, bin: bin} do
+    test "fetches origin in $repo with Symphony's safe git config", %{root: root, repo: repo, bin: bin} do
       assert {_output, 0} = run_remote_script(bin, repo)
-      assert calls(root) == ["-C #{repo} fetch origin"]
+      assert [call] = calls(root)
+      assert String.ends_with?(call, " -C #{repo} fetch --upload-pack=git-upload-pack origin")
+      assert call =~ "-c core.sshCommand=ssh "
+      assert call =~ "-c credential.helper= "
     end
 
     test "runs the fetch once more after cannot lock ref", %{root: root, repo: repo, bin: bin} do
@@ -283,7 +378,9 @@ defmodule SymphonyElixir.Repo.FetcherTest do
   end
 
   defp run_remote_script(bin, repo) do
-    script = Enum.join(["set -eu", "repo=#{repo}", Fetcher.remote_fetch_origin_script()], "\n")
+    script =
+      Enum.join(["set -eu", Workspace.remote_safe_git_functions(), "repo=#{repo}", Fetcher.remote_fetch_origin_script()], "\n")
+
     System.cmd("sh", ["-c", script], env: [{"PATH", bin <> ":" <> System.get_env("PATH")}], stderr_to_stdout: true)
   end
 

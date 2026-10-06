@@ -3,6 +3,12 @@ defmodule SymphonyElixir.PlaybookTest do
 
   alias SymphonyElixir.Playbook
   alias SymphonyElixir.Playbook.FileSystem
+  alias SymphonyElixir.Workflow
+
+  @workflow_path Path.expand(Path.join([__DIR__, "..", "..", "WORKFLOW.md"]))
+  @ticket_types_tag ~s({%- render "ticket_types", issue: issue %})
+  @ticket_types_anchor "The `Todo` -> `In Progress` transition and the workpad still apply.\n"
+  @render_opts [strict_variables: true, file_system: {FileSystem, nil}]
 
   @expected_names ~w(
     ci_triage
@@ -19,6 +25,7 @@ defmodule SymphonyElixir.PlaybookTest do
     reproduce_and_blast_radius
     scoped_tools
     status_map
+    ticket_types
     workpad_bootstrap
     workpad_template
   )
@@ -46,6 +53,19 @@ defmodule SymphonyElixir.PlaybookTest do
     refute body =~ "A human\n   promotes the sub-tickets to `Todo`."
   end
 
+  test "the rendered prompt names the `plan` label, with `breakdown` as its older name" do
+    template = Solid.parse!(~s({% render "status_map" %}\n{% render "parent_tickets" %}))
+    {:ok, rendered, []} = Solid.render(template, %{}, file_system: {FileSystem, nil})
+    prompt = rendered |> IO.iodata_to_binary() |> String.replace(~r/\s+/, " ")
+
+    assert prompt =~ "The `plan` label is a human's signal that a ticket is a plan ticket"
+    assert prompt =~ "`breakdown` is the label's older name and is still accepted"
+    assert prompt =~ "when the ticket has the `plan` label, and when its title starts with `Final verification:`"
+    assert prompt =~ "`Waiting on sub-tickets` -> a plan ticket (label `plan`, or `breakdown`, its older name)"
+    assert prompt =~ "### Plan run (no `Sub-issues` in the issue context"
+    refute prompt =~ "The `breakdown` label is"
+  end
+
   test "parent_tickets resumes a stopped plan and revises one under review without re-planning" do
     assert {:ok, body} = Playbook.fetch("parent_tickets")
     flat = String.replace(body, ~r/\s+/, " ")
@@ -54,6 +74,8 @@ defmodule SymphonyElixir.PlaybookTest do
     assert flat =~ "keep every artifact comment and sub-ticket already made"
     assert flat =~ "never file a sub-ticket a second time"
     assert flat =~ "### Plan revision run (a person commented on the plan under review)"
+    assert flat =~ "State: only `In Review`. A comment on a parent in `Human Review` starts nothing"
+    assert flat =~ "a comment starting with `Supervisor review:` or `Supervisor note:` never triggers a run, in any state"
     assert flat =~ "Edit the existing artifact comments (use cases, features, journeys and so on) with `linear_update_comment`"
     assert flat =~ "Leave every sub-ticket outside `Backlog` as it is."
     assert flat =~ "Reply under each comment with `linear_add_comment` and its `parent_id`"
@@ -69,6 +91,152 @@ defmodule SymphonyElixir.PlaybookTest do
     assert flat =~ "against the current UTC time (`date -u`), never against local time"
     assert flat =~ "When the job is under 30 minutes old, wait for the CI poller's flaky re-run instead of asking a human."
     assert flat =~ "withdraw it with `linear_withdraw_human_action`"
+  end
+
+  test "scoped_tools lists the document tools for a ticket's long-lived artifacts" do
+    assert {:ok, body} = Playbook.fetch("scoped_tools")
+    flat = String.replace(body, ~r/\s+/, " ")
+
+    assert flat =~ "`linear_create_document(title, content)` creates one in the issue's project, titled `<identifier> · <title>`, and attaches it to the issue"
+    assert flat =~ "`linear_update_document(document_id, content, title?)` replaces its content"
+    assert flat =~ "`linear_get_document(document_id?)` lists the issue's documents"
+  end
+
+  describe "ticket_types" do
+    test "an untyped ticket renders the same WORKFLOW.md prompt as before the partial" do
+      {without_tag, with_tag} = workflow_bodies()
+
+      for labels <- [[], ["bug", "feature", "type:other", "needs-human"]] do
+        assert render(with_tag, labels) == render(without_tag, labels)
+      end
+    end
+
+    test "a typed ticket gets its section between Step 0 and Step 1 of WORKFLOW.md" do
+      {_without_tag, with_tag} = workflow_bodies()
+      prompt = render(with_tag, ["type:bug"])
+
+      assert prompt =~ "still apply.\n\n## Ticket type: bug\n"
+      assert prompt =~ ~r/as the regression test\.\n4\. Name the root cause[^\n]*\n\n## Step 1: /
+    end
+
+    test "a bug checks Observed, Expected and Steps to reproduce, then starts with a failing test" do
+      prompt = render_ticket_types(["type:bug"])
+
+      assert prompt =~ "## Ticket type: bug"
+      assert prompt =~ "### Readiness check"
+      assert prompt =~ "each required section with text of the operator's own: `Observed`, `Expected` and `Steps to reproduce`"
+      assert prompt =~ "A section is missing when its heading is absent, or when it is empty or holds only the template's italic hint."
+      assert prompt =~ "`Where` and `Evidence` help but are not required."
+      assert_sends_back(prompt)
+      assert prompt =~ "First, write a test that reproduces the bug"
+      assert prompt =~ "fails on the current code the way `Observed` describes"
+      assert prompt =~ "record the failing command and its output in the workpad `Notes` as the reproduction signal, before changing the code under test"
+      assert prompt =~ "The same test now passes and stays in the PR"
+      refute prompt =~ "## Ticket type: feature"
+      refute prompt =~ "## Ticket type: plan"
+    end
+
+    test "a feature checks Goal and Acceptance criteria, then delivers one PR that meets every criterion" do
+      prompt = render_ticket_types(["type:feature"])
+
+      assert prompt =~ "## Ticket type: feature"
+      assert prompt =~ "each required section with text of the operator's own: `Goal` and `Acceptance criteria` (at least one criterion)"
+      assert prompt =~ "`Context`, `User walkthrough` and `Out of scope` help but are not required."
+      assert_sends_back(prompt)
+      assert prompt =~ "One PR that meets every item under `Acceptance criteria`."
+      assert prompt =~ "every step works end to end as written"
+      assert prompt =~ "Nothing listed under `Out of scope`."
+      refute prompt =~ "## Ticket type: bug"
+    end
+
+    test "a plan is never sent back and turns open questions into decisions with a recommended default" do
+      for label <- ["plan", "breakdown"] do
+        prompt = render_ticket_types([label])
+
+        assert prompt =~ "## Ticket type: plan"
+        assert prompt =~ "Every run on it follows the plan pipeline in `Parent tickets`."
+        assert prompt =~ "A plan ticket is never sent back for missing input and has no readiness check."
+        assert prompt =~ "Do not use the clarification escape hatch for a thin or unclear description, even one with only a `Vision`."
+        assert prompt =~ "Turn each open question into a decision: the options, the default you recommend and why."
+        assert prompt =~ "list every decision under a `Decisions` heading where the plan is handed over for review"
+        assert prompt =~ "With no box checked under `Artifacts wanted`, or no such section, the plan is a plain split into sub-tickets."
+        refute prompt =~ "### Readiness check"
+      end
+    end
+
+    test "plan wins over bug, and bug over feature, when a ticket has several type labels" do
+      plan = render_ticket_types(["type:bug", "type:feature", "plan"])
+      assert plan =~ "## Ticket type: plan"
+      refute plan =~ "## Ticket type: bug"
+      refute plan =~ "## Ticket type: feature"
+
+      bug = render_ticket_types(["type:feature", "type:bug"])
+      assert bug =~ "## Ticket type: bug"
+      refute bug =~ "## Ticket type: feature"
+    end
+  end
+
+  test "the ticket templates name their label and sections" do
+    templates = Path.expand(Path.join([__DIR__, "..", "..", "docs", "ticket-templates"]))
+
+    for {file, label, sections} <- [
+          {"bug.md", "type:bug", ["Observed", "Expected", "Steps to reproduce", "Where", "Evidence"]},
+          {"feature.md", "type:feature", ["Goal", "Context", "Acceptance criteria", "User walkthrough", "Out of scope"]},
+          {"plan.md", "plan", ["Vision", "Context", "Constraints", "Quality bar", "Artifacts wanted", "Done when"]}
+        ] do
+      body = File.read!(Path.join(templates, file))
+      assert body =~ "- **Label:** `#{label}`"
+      for section <- sections, do: assert(body =~ "\n## #{section}\n")
+    end
+
+    plan = File.read!(Path.join(templates, "plan.md"))
+
+    for artifact <- ["Domain brief", "User journeys", "Kano feature map", "Screens", "Decisions"] do
+      assert plan =~ "- [ ] #{artifact}\n"
+    end
+
+    assert File.read!(Path.join(templates, "README.md")) =~ "**Settings → Teams → _team_ → Templates**"
+  end
+
+  defp assert_sends_back(prompt) do
+    assert prompt =~
+             "When a required section is missing, do not guess: use the in-execution clarification escape hatch with one comment that names every missing section"
+
+    assert prompt =~ "move the ticket to `Backlog` and stop, without a branch, a commit or a PR."
+    assert prompt =~ "Skip the check when a PR is already attached to the ticket."
+  end
+
+  defp render_ticket_types(labels) do
+    ~s({% render "ticket_types", issue: issue %})
+    |> render(labels)
+    |> String.replace(~r/\s+/, " ")
+  end
+
+  # WORKFLOW.md's prompt body without the ticket_types render, and with it right after Step 0.
+  defp workflow_bodies do
+    {:ok, {_front_matter, body}} = Workflow.parse_document(File.read!(@workflow_path))
+    without_tag = String.replace(body, @ticket_types_tag <> "\n", "")
+    assert without_tag =~ @ticket_types_anchor
+
+    {without_tag, String.replace(without_tag, @ticket_types_anchor, @ticket_types_anchor <> @ticket_types_tag <> "\n")}
+  end
+
+  defp render(source, labels) do
+    issue = %{
+      "identifier" => "TP-1",
+      "title" => "Title",
+      "state" => "Todo",
+      "labels" => labels,
+      "url" => "https://linear.app/x/issue/TP-1",
+      "description" => "Description",
+      "comments" => [],
+      "linked_issues" => [],
+      "sub_issues" => []
+    }
+
+    assigns = %{"issue" => issue, "attempt" => nil, "agent" => %{"workpad_heading" => "## Symphony Workpad"}}
+    assert {:ok, rendered, []} = Solid.render(Solid.parse!(source), assigns, @render_opts)
+    IO.iodata_to_binary(rendered)
   end
 
   test "fetch/1 returns :error for an unknown partial" do

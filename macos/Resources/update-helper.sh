@@ -12,6 +12,11 @@
 # is relaunched. The app copies this script out of its bundle and runs it
 # detached, so moving the bundle doesn't pull it from under itself.
 #
+# A rollback, after an update fails its health check, runs the same swap with
+# the previous app as NEW_APP and "Symphony (rolled back).app" as PREVIOUS_APP:
+# the build that failed moves out of the way, the previous one moves back into
+# place and is relaunched, and the previous slot is left empty.
+#
 # In QA mode (SYMPHONY_BAR_QA_ROOT set, see macos/README.md) the app passes its
 # environment on, and the helper runs the app's binary directly instead of
 # `open`, which would start it without that environment, outside QA mode.

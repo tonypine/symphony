@@ -32,6 +32,41 @@ Application.put_env(:symphony_elixir, :agent_caches,
   host_elixir_make_cache: Path.join(agent_cache_dir, "host-elixir-make")
 )
 
+# Verification dev servers in tests start through a stand-in for `sandbox-exec` that drops the
+# profile and runs the command, so they also start on Linux and inside the agent sandbox, where
+# Seatbelt can't nest. The `:seatbelt` tests use the real one, and only run where it works; the
+# `seatbelt` workflow runs them on a macOS runner.
+fake_sandbox_exec = Path.join(agent_run_tmp_root, "fake-sandbox-exec")
+File.write!(fake_sandbox_exec, "#!/bin/sh\n# Drops `-p <profile>` and runs the command unsandboxed.\nshift 2\nexec \"$@\"\n")
+File.chmod!(fake_sandbox_exec, 0o755)
+
+Application.put_env(:symphony_elixir, :verification_dev_server_sandbox,
+  os_type: {:unix, :darwin},
+  executable: fake_sandbox_exec,
+  check_confinement: false
+)
+
+with true <- File.exists?("/usr/bin/sandbox-exec"),
+     {_output, 0} <- System.cmd("/usr/bin/sandbox-exec", ["-p", "(version 1)(allow default)", "/usr/bin/true"], stderr_to_stdout: true) do
+  :ok
+else
+  _unavailable -> ExUnit.configure(exclude: [:seatbelt | Keyword.get(ExUnit.configuration(), :exclude, [])])
+end
+
+# The `:bwrap` tests run the Linux sandbox for real, where bwrap can make its namespaces.
+with bwrap when is_binary(bwrap) <- System.find_executable("bwrap"),
+     socat when is_binary(socat) <- System.find_executable("socat"),
+     {_output, 0} <-
+       System.cmd(bwrap, ~w(--die-with-parent --unshare-all --ro-bind / / --dev /dev --proc /proc /bin/sh -c :), stderr_to_stdout: true) do
+  :ok
+else
+  _unavailable -> ExUnit.configure(exclude: [:bwrap | Keyword.get(ExUnit.configuration(), :exclude, [])])
+end
+
+# The qa-dashboard end-to-end test fetches deps and builds this checkout; it runs only on
+# `mix test --include qa_dashboard_e2e`.
+ExUnit.configure(exclude: [:qa_dashboard_e2e | Keyword.get(ExUnit.configuration(), :exclude, [])])
+
 # Tests never reach openrouter.ai: a test that needs the models API stubs this itself.
 offline_models_request = fn _url, _opts -> {:error, :network_disabled_in_tests} end
 Application.put_env(:symphony_elixir, :openrouter_models_request, offline_models_request)
@@ -46,6 +81,14 @@ case SymphonyElixir.LeftoverProcesses.Table.read() do
   {:ok, [_ | _]} -> :ok
   _denied -> ExUnit.configure(exclude: [:process_table | Keyword.get(ExUnit.configuration(), :exclude, [])])
 end
+
+# Tests that start the real `claude` binary run only with `--only real_claude`, so no default run
+# (CI's, `mix cover.changed`'s) depends on whether or which `claude` is installed.
+ExUnit.configure(exclude: [:real_claude | Keyword.get(ExUnit.configuration(), :exclude, [])])
+
+# The test that checks the dev server's record of the agent profiles' mach services against an SRT
+# install runs only with `--only srt_profile`; the `agent-profile` workflow runs it.
+ExUnit.configure(exclude: [:srt_profile | Keyword.get(ExUnit.configuration(), :exclude, [])])
 
 # Tests that measure an agent's niceness need `setpriority`, which sandboxed
 # agent runs deny; `nice` then warns and runs the command unchanged.

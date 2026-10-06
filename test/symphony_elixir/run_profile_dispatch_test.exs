@@ -83,20 +83,27 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
     end
   end
 
-  defp wait_until(fun, timeout_ms \\ 10_000) do
+  # The run of `issue_id` RunStore lists, once it lists one; fails naming the issue when none
+  # shows up within the timeout.
+  defp wait_for_run(issue_id, timeout_ms \\ 10_000) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
-    do_wait_until(fun, deadline)
+    do_wait_for_run(issue_id, deadline)
   end
 
-  defp do_wait_until(fun, deadline) do
-    case fun.() do
-      falsy when falsy in [nil, false, []] ->
-        if System.monotonic_time(:millisecond) > deadline, do: flunk("condition not met in time")
-        Process.sleep(25)
-        do_wait_until(fun, deadline)
+  defp do_wait_for_run(issue_id, deadline) do
+    runs = RunStore.list_runs()
 
-      value ->
-        value
+    cond do
+      run = is_list(runs) && Enum.find(runs, &(&1.issue_id == issue_id)) ->
+        run
+
+      System.monotonic_time(:millisecond) > deadline ->
+        listed = if is_list(runs), do: Enum.map(runs, & &1.issue_id), else: runs
+        flunk("expected RunStore to list a run of #{issue_id} within the timeout, it listed #{inspect(listed)}")
+
+      true ->
+        Process.sleep(25)
+        do_wait_for_run(issue_id, deadline)
     end
   end
 
@@ -150,18 +157,16 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
 
       on_exit(fn -> stop_process(pid) end)
 
-      log =
-        capture_log(fn ->
+      {first_run, log} =
+        with_log(fn ->
           send(pid, :run_poll_cycle)
           assert [first] = wait_for_argv_lines(ctx.argv_trace, 1)
           assert String.ends_with?(first, "--print --model claude-opus-5-5 --effort high")
-          wait_until(fn -> RunStore.list_runs() != [] end)
+          wait_for_run("issue-profile-breakdown")
         end)
 
       assert log =~ ~r/Dispatching issue to agent: issue_id=issue-profile-breakdown .* run_kind=breakdown model=claude-opus-5-5 effort=high/
-
-      assert [%{issue_id: "issue-profile-breakdown", run_kind: "breakdown", model: "claude-opus-5-5", effort: "high"} = first_run] =
-               RunStore.list_runs()
+      assert %{run_kind: "breakdown", model: "claude-opus-5-5", effort: "high"} = first_run
 
       refute Map.has_key?(first_run, :reviewer_profile)
 
@@ -178,13 +183,13 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
       # The repo was just polled; make it due again instead of waiting for the poll interval.
       :sys.replace_state(pid, &%{&1 | repo_poll_due_at_ms: %{}})
 
-      log =
-        capture_log(fn ->
+      {sub_run, log} =
+        with_log(fn ->
           send(pid, :run_poll_cycle)
           assert [_first, second | _reviewer] = wait_for_argv_lines(ctx.argv_trace, 2)
           assert String.ends_with?(second, "--print --effort low")
           refute second =~ "--model"
-          wait_until(fn -> Enum.find(RunStore.list_runs(), &(&1.issue_id == "issue-profile-sub")) end)
+          wait_for_run("issue-profile-sub")
         end)
 
       assert log =~ ~r/Dispatching issue to agent: issue_id=issue-profile-sub .* run_kind=implementation model=default effort=low\n/
@@ -194,7 +199,29 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
                model: nil,
                effort: "low",
                reviewer_profile: %{run_kind: "pre_push_review", model: "claude-sonnet-5-5", effort: "medium"}
-             } = Enum.find(RunStore.list_runs(), &(&1.issue_id == "issue-profile-sub"))
+             } = sub_run
+    end
+
+    test "dispatches a `plan` ticket as a breakdown run with the breakdown run profile", ctx do
+      write_profile_workflow!(ctx)
+      plan = issue("issue-profile-plan", "MT-PROFILE-3", %{labels: ["Plan"]})
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [plan])
+
+      orchestrator_name = Module.concat(__MODULE__, :PlanDispatchOrchestrator)
+      {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+      on_exit(fn -> stop_process(pid) end)
+
+      {plan_run, log} =
+        with_log(fn ->
+          send(pid, :run_poll_cycle)
+          assert [first] = wait_for_argv_lines(ctx.argv_trace, 1)
+          assert String.ends_with?(first, "--print --model claude-opus-5-5 --effort high")
+          wait_for_run("issue-profile-plan")
+        end)
+
+      assert log =~ ~r/Dispatching issue to agent: issue_id=issue-profile-plan .* run_kind=breakdown model=claude-opus-5-5 effort=high/
+      assert %{run_kind: "breakdown", effort: "high"} = plan_run
     end
 
     test "names the PR comment a review_feedback run answers", ctx do
@@ -223,7 +250,7 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
         capture_log(fn ->
           send(pid, :run_poll_cycle)
           assert [_first | _rest] = wait_for_argv_lines(ctx.argv_trace, 1)
-          wait_until(fn -> RunStore.list_runs() != [] end)
+          wait_for_run("issue-profile-review")
         end)
 
       assert log =~

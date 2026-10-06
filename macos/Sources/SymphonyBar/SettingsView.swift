@@ -39,7 +39,10 @@ struct SettingsView: View {
                             Text("minutes")
                         }
                     }
-                    .help("How long Restart Symphony waits for agent runs before it also offers Restart Now Anyway.")
+                    .help(
+                        "How long Restart Symphony waits for agent runs before it also offers Restart Now Anyway, "
+                            + "and how long an update at a set time waits for them before it tries the next day."
+                    )
                     Toggle("Start Symphony when the app opens", isOn: $model.settings.startOnLaunch)
                     Toggle(LoginItem.toggleTitle, isOn: $model.launchAtLogin)
                     if let note = model.loginItemNote {
@@ -62,13 +65,33 @@ struct SettingsView: View {
                         )
                     }
                 } footer: {
-                    Text(
+                    SectionFooter(
                         model.settings.developmentMode
                             ? "Runs bin/symphony from the checkout through a login shell, for working on Symphony itself."
                             : "Runs the Symphony built into this app. Turn on to run bin/symphony from a checkout."
                     )
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                }
+
+                Section {
+                    Picker("Update mode", selection: $model.settings.updateMode) {
+                        ForEach(UpdateMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                    if model.settings.updateMode == .atTime {
+                        DatePicker(
+                            "Time",
+                            selection: Binding(
+                                get: { model.settings.updateTime.date(on: Date(), calendar: .current) },
+                                set: { model.settings.updateTime = TimeOfDay(date: $0, calendar: .current) }
+                            ),
+                            displayedComponents: .hourAndMinute
+                        )
+                    }
+                } header: {
+                    Text("Updates")
+                } footer: {
+                    SectionFooter(model.settings.updateMode.explanation)
                 }
 
                 Section {
@@ -99,8 +122,8 @@ struct SettingsView: View {
                             Text("Checking the token limits with symphony check…").foregroundStyle(.secondary)
                         }
                     }
-                    if let error = model.tokenLimitsError {
-                        Text(error).foregroundStyle(.red)
+                    if model.tokenLimitsError != nil {
+                        CheckErrorPointer(subject: "these token limits")
                     }
                     ForEach(TokenUsage.lines(model.budget, now: Date(), timeZone: .current), id: \.self) { line in
                         Text(line).foregroundStyle(.secondary)
@@ -108,7 +131,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Agents (saved in symphony.yml)")
                 } footer: {
-                    Text(
+                    SectionFooter(
                         "Each epic under way keeps one of these agents for its sub-tickets; the rest take "
                             + "other work. Merges and QA runs don't count here: up to 2 more run on top. More "
                             + "agents use the Linear and GitHub API budgets faster. 2–3 is a safe range on a "
@@ -116,9 +139,32 @@ struct SettingsView: View {
                             + "reach it; the per-ticket cap stops a ticket that goes over it. Applies within a "
                             + "minute, no restart needed."
                     )
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
                 }
+
+                Section {
+                    TimeoutRow(title: "Git network timeout", minutes: $model.gitNetworkTimeoutMinutes)
+                    Text("Stops a git fetch, pull, push or ls-remote that runs longer, so a remote that stops answering can't hold the repo.")
+                        .foregroundStyle(.secondary)
+                    TimeoutRow(title: "MCP tool timeout", minutes: $model.mcpToolTimeoutMinutes)
+                    Text("Stops one call of Symphony's Linear and GitHub tools that runs longer and answers the agent with an error.")
+                        .foregroundStyle(.secondary)
+                    TimeoutRow(title: "Show a pending tool call after", minutes: $model.pendingToolReportMinutes)
+                    Text("Shows a run as waiting on one of those calls once the call has run this long.")
+                        .foregroundStyle(.secondary)
+                    if let error = model.timeoutsError {
+                        Text(error).foregroundStyle(.red)
+                    }
+                } header: {
+                    Text("Timeouts (saved in symphony.yml)")
+                } footer: {
+                    SectionFooter(
+                        "workspaces.git_network_timeout_ms (default 5 minutes), agent.timeouts.mcp_tool_ms (default "
+                            + "10 minutes) and watchdog.pending_tool_report_after_ms (default 1 minute). Save checks "
+                            + "symphony.yml with symphony check first; Symphony reads them on the next call, no restart "
+                            + "needed."
+                    )
+                }
+                .disabled(!model.canEditTimeouts)
 
                 Section {
                     Picker("Scope", selection: $model.runProfilesScope) {
@@ -147,8 +193,29 @@ struct SettingsView: View {
                         )
                     }
                     .disabled(!model.canEditRunProfiles)
-                    if let error = model.configCheckError {
-                        Text(error).foregroundStyle(.red)
+                    if model.runProfilesScope == .global && (model.runProfiles.usesOpenRouter || model.runProfiles.smallModel != nil) {
+                        LabeledContent("Background calls") {
+                            OpenRouterModelField(
+                                selection: $model.runProfiles.smallModel,
+                                inherited: nil,
+                                inheritedSource: "",
+                                models: model.openRouterAPIKey.isEmpty ? nil : model.openRouterModelList,
+                                hasKey: !model.openRouterAPIKey.isEmpty,
+                                retry: model.loadOpenRouterModels,
+                                isPicking: Binding(
+                                    get: { model.openRouterPickerRow == RunProfilesConfig.smallModelKey },
+                                    set: { model.openRouterPickerRow = $0 ? RunProfilesConfig.smallModelKey : nil }
+                                ),
+                                query: $model.openRouterQuery
+                            )
+                            .frame(width: 210)
+                            .controlSize(.small)
+                        }
+                        .help("The OpenRouter model for Claude Code's titles and summaries on OpenRouter runs (agent.small_model)")
+                        .disabled(!model.canEditRunProfiles)
+                    }
+                    if model.configCheckError != nil {
+                        CheckErrorPointer(subject: "these models")
                     }
                     if model.commandProfile != RunProfile() {
                         Text(
@@ -163,17 +230,45 @@ struct SettingsView: View {
                 } header: {
                     Text("Models (saved in symphony.yml)")
                 } footer: {
-                    Text(
+                    SectionFooter(
                         "Each kind of run uses its own provider, model and effort, or the Default row where it "
                             + "sets none. A repository's rows override All repositories for issues routed to it; "
-                            + "grey values are inherited. Higher effort and bigger models use the shared 5-hour "
-                            + "usage limit faster: keep Opus and high effort for breakdown and hard "
-                            + "implementation, and use Sonnet or Haiku with low effort for landing and CI fixes. "
-                            + "OpenRouter models must support tools. Claude runtime only. Save checks "
-                            + "symphony.yml with symphony check first; changes apply to the next run."
+                            + "grey values are inherited. Bigger models and higher effort use the 5-hour usage "
+                            + "limit faster: keep Opus and high effort for breakdown and hard implementation, and "
+                            + "Sonnet or Haiku with low effort for landing and CI fixes. Background calls sets a "
+                            + "cheaper OpenRouter model for Claude Code's titles and summaries on OpenRouter runs; "
+                            + "default keeps them on the run's model. Save checks symphony.yml with symphony check "
+                            + "first; changes apply to the next run."
                     )
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                }
+
+                Section {
+                    AcceptanceGatePicker(
+                        choice: Binding(
+                            get: { .mode(model.acceptanceGateMode) },
+                            set: { if case let .mode(mode) = $0 { model.acceptanceGateMode = mode } }
+                        ),
+                        pending: $model.pendingAcceptanceGate,
+                        choices: AcceptanceGateMode.allCases.map { .mode($0) },
+                        inherited: model.acceptanceGateMode
+                    )
+                    .disabled(!model.canEditAcceptanceGate)
+                    if let error = model.acceptanceGateError {
+                        Text(error).foregroundStyle(.red)
+                    }
+                    ForEach(model.acceptanceGateLines, id: \.self) { line in
+                        Text(line).foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text(AcceptanceGate.sectionTitle)
+                } footer: {
+                    SectionFooter(
+                        "The gate judges each PR against its ticket after QA. Each repository's Edit… sheet in "
+                            + "Repos… can set its own mode, and the status menu switches an enforced repository to "
+                            + "Shadow or Off at once. Save checks symphony.yml with symphony check first; Symphony "
+                            + "reads the mode on its next poll, no restart needed. The stats cover each repository's "
+                            + "last 50 verdicts a person decided."
+                    )
                 }
 
                 Section {
@@ -240,12 +335,11 @@ struct SettingsView: View {
                 } header: {
                     Text("OpenRouter")
                 } footer: {
-                    Text(
+                    SectionFooter(
                         "Stored with your other secrets and passed to Symphony as \(SecretSettings.openRouterAPIKeyName) "
-                            + "for run profiles with provider: openrouter. Leave blank to turn OpenRouter off."
+                            + "for run profiles with provider: openrouter. Those run on the Claude runtime only, with "
+                            + "models that support tools. Leave blank to turn OpenRouter off."
                     )
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
                 }
             }
             .formStyle(.grouped)
@@ -262,11 +356,19 @@ struct SettingsView: View {
                 if let configFileError = model.configFileError {
                     Text(configFileError).foregroundStyle(.red)
                 }
-                if model.configCheckError != nil {
-                    Text("symphony check rejected the models; see Models.").foregroundStyle(.red)
+                // In full here, below the Form: a grouped Form row is laid out shorter than wrapped text draws, so
+                // a long reason there lost its last line and covered the row above.
+                if let error = model.configCheckError {
+                    CheckErrorText(message: error)
                 }
-                if model.tokenLimitsError != nil {
-                    Text("symphony check rejected the token limits; see Agents.").foregroundStyle(.red)
+                if let error = model.tokenLimitsError {
+                    CheckErrorText(message: error)
+                }
+                if model.acceptanceGateError != nil {
+                    Text("symphony check rejected the acceptance gate's mode; see Acceptance gate.").foregroundStyle(.red)
+                }
+                if model.timeoutsError != nil {
+                    Text("symphony check rejected the timeouts; see Timeouts.").foregroundStyle(.red)
                 }
                 if let loginItemError = model.loginItemError {
                     Text(loginItemError).foregroundStyle(.red)
@@ -293,7 +395,7 @@ struct SettingsView: View {
         .frame(width: SettingsView.width)
     }
 
-    static let width: CGFloat = 780
+    static let width: CGFloat = 840
 }
 
 /// Provider, model and effort pickers for one kind of run, or the Default row for a nil kind. `inherited` holds
@@ -323,14 +425,20 @@ private struct RunProfileRow: View {
 
     var body: some View {
         LabeledContent(kind?.title ?? "Default") {
+            // A grouped Form caps a row at 684pt whatever the window's width, and moves the controls under the
+            // label when label and controls don't fit. Small controls in these columns keep the longest label,
+            // "Review feedback", on one line with Reset to inherited, and fit "OpenRouter, inherited",
+            // "medium, inherited" and an OpenRouter name such as "Mistral: Mistral Nemo, inherited". All
+            // repositories has no Reset column, so its Effort column is wide enough for "medium, from command".
             HStack {
                 picker("Provider", providerSelection, RunProfilesConfig.providers, inherited: inherited.provider, source: providerSource)
-                    .frame(width: 150)
+                    .frame(width: 160)
                 Group {
                     if isOpenRouter {
                         OpenRouterModelField(
                             selection: $profile.model,
-                            inheritedTitle: inherited.model.map { $0 + ", " + inheritedSource } ?? "default",
+                            inherited: inherited.model,
+                            inheritedSource: inheritedSource,
                             models: openRouterModels,
                             hasKey: hasOpenRouterKey,
                             retry: retryOpenRouterModels,
@@ -347,7 +455,7 @@ private struct RunProfileRow: View {
                     picker("Effort", $profile.effort, RunProfilesConfig.efforts, inherited: inherited.effort)
                         .disabled(effortNote != nil)
                 }
-                .frame(width: 130)
+                .frame(width: canReset ? 140 : 170)
                 .help(effortNote ?? "Effort for this kind of run")
                 if canReset {
                     Button {
@@ -361,6 +469,7 @@ private struct RunProfileRow: View {
                     .accessibilityLabel("Reset to inherited")
                 }
             }
+            .controlSize(.small)
         }
     }
 
@@ -398,7 +507,9 @@ private struct RunProfileRow: View {
 /// Without an OpenRouter key it shows a disabled hint instead, and while the list loads, a progress note.
 private struct OpenRouterModelField: View {
     @Binding var selection: String?
-    let inheritedTitle: String
+    /// The model id a nil selection falls back to, shown by its name with `inheritedSource`, such as "inherited".
+    let inherited: String?
+    let inheritedSource: String
     let models: Result<[OpenRouterModel], OpenRouterFailure>?
     let hasKey: Bool
     let retry: () -> Void
@@ -409,6 +520,7 @@ private struct OpenRouterModelField: View {
         switch models {
         case nil where !hasKey:
             Text("Add an OpenRouter key below first")
+                .lineLimit(1)
                 .foregroundStyle(.secondary)
                 .help("Enter an OpenRouter API key in the OpenRouter section to choose OpenRouter models.")
         case nil:
@@ -417,10 +529,11 @@ private struct OpenRouterModelField: View {
                 Text("Loading models…").foregroundStyle(.secondary)
             }
         case .failure(let failure)?:
-            HStack {
+            // Wraps in the narrow column, with Retry under it, so the whole reason shows.
+            VStack(alignment: .leading, spacing: 2) {
                 Text(failure.message)
                     .foregroundStyle(.red)
-                    .lineLimit(1)
+                    .fixedSize(horizontal: false, vertical: true)
                     .help(failure.message)
                 Button("Retry", action: retry)
                     .buttonStyle(.borderless)
@@ -431,7 +544,7 @@ private struct OpenRouterModelField: View {
                 isPicking = true
             } label: {
                 HStack {
-                    Text(selection.map { id in models.first { $0.id == id }?.name ?? id } ?? inheritedTitle)
+                    Text(selection.map { OpenRouterModel.title(of: $0, in: models) } ?? inheritedTitle(models))
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .opacity(selection == nil ? 0.55 : 1)
@@ -439,7 +552,8 @@ private struct OpenRouterModelField: View {
                     Image(systemName: "chevron.up.chevron.down").imageScale(.small)
                 }
             }
-            .help(selection ?? "Choose an OpenRouter model that supports tools")
+            // The chosen model's id, or the inherited model's full name, which this narrow column can cut.
+            .help(selection ?? (inherited == nil ? "Choose an OpenRouter model that supports tools" : inheritedTitle(models)))
             .popover(isPresented: $isPicking, arrowEdge: .bottom) {
                 picker(models)
             }
@@ -452,7 +566,7 @@ private struct OpenRouterModelField: View {
             TextField("Search models that support tools", text: $query)
                 .textFieldStyle(.roundedBorder)
             List {
-                Button(inheritedTitle) { choose(nil) }
+                Button(inheritedTitle(models)) { choose(nil) }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
                 ForEach(matches, id: \.id) { model in
@@ -474,11 +588,77 @@ private struct OpenRouterModelField: View {
         }
         .padding(12)
         .frame(width: 360, height: 360)
+        // The row's small controls stop at the popover.
+        .controlSize(.regular)
+    }
+
+    private func inheritedTitle(_ models: [OpenRouterModel]) -> String {
+        inherited.map { OpenRouterModel.title(of: $0, in: models) + ", " + inheritedSource } ?? "default"
     }
 
     private func choose(_ id: String?) {
         selection = id
         isPicking = false
+    }
+}
+
+/// A section's help text under the Form. Fixed to its wrapped height: without it the grouped Form can lay a footer
+/// out as one line cut off with an ellipsis.
+private struct SectionFooter: View {
+    let text: String
+
+    init(_ text: String) {
+        self.text = text
+    }
+
+    var body: some View {
+        Text(text)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// A `symphony check` failure shown in full below the Form: it wraps rather than cutting off the reason, and can
+/// be copied.
+private struct CheckErrorText: View {
+    let message: String
+
+    var body: some View {
+        Text(message)
+            .foregroundStyle(.red)
+            .fixedSize(horizontal: false, vertical: true)
+            .textSelection(.enabled)
+            .help(message)
+    }
+}
+
+/// One line in a section saying `symphony check` rejected `subject`, such as "these models", and that the reason
+/// shows in full above Save.
+private struct CheckErrorPointer: View {
+    let subject: String
+
+    var body: some View {
+        Text("symphony check rejected \(subject); the reason shows above Save.")
+            .foregroundStyle(.red)
+            .lineLimit(1)
+    }
+}
+
+/// A timeout in whole minutes, with a stepper over `OperationTimeouts.minuteRange`.
+private struct TimeoutRow: View {
+    let title: String
+    @Binding var minutes: Int
+
+    var body: some View {
+        LabeledContent(title) {
+            HStack {
+                Text(minutes == 1 ? "1 minute" : "\(minutes) minutes")
+                    .monospacedDigit()
+                Stepper(title, value: $minutes, in: OperationTimeouts.minuteRange)
+                    .labelsHidden()
+            }
+        }
     }
 }
 

@@ -224,7 +224,8 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
     end)
 
     send(pid, {:retry_issue, "wait-1", token})
-    state = :sys.get_state(pid)
+    # The retry reads its issue again in a task first.
+    state = Enum.find(Stream.repeatedly(fn -> Process.sleep(5) && :sys.get_state(pid) end), &(&1.tracker_tasks == %{}))
 
     assert %{attempt: 3, reason: "dispatch readiness task already in flight"} = state.slot_waiting["wait-1"]
     assert state.retry_attempts == %{}

@@ -33,6 +33,8 @@ defmodule SymphonyElixir.Config do
   {% endif %}
   """
   @default_server_port 0
+  @default_git_network_timeout_ms 300_000
+  @default_mcp_tool_timeout_ms 600_000
   @openrouter_api_key_env "OPENROUTER_API_KEY"
   @codex_auto_approve_all_approval_policy "auto_approve_all"
   @codex_auto_approve_all_wire_approval_policy "never"
@@ -315,8 +317,9 @@ defmodule SymphonyElixir.Config do
   What `symphony check` reports after the config validates, for runs whose provider is
   `openrouter`. Warnings: `OPENROUTER_API_KEY` is unset, the models API cannot be reached, or
   `effort` is set for a model that does not list `reasoning`. Errors: a model id OpenRouter does
-  not list, or a model without `tools`. Each model finding names the key that set the model or
-  effort. The models API is only asked when the key is set.
+  not list, or a model without `tools`, and an `agent.small_model` OpenRouter does not list. Each
+  model finding names the key that set the model or effort. The models API is only asked when
+  the key is set.
   """
   @spec check_findings(keyword()) :: %{errors: [String.t()], warnings: [String.t()]}
   def check_findings(opts \\ []) do
@@ -354,7 +357,10 @@ defmodule SymphonyElixir.Config do
   defp openrouter_findings(profiles, _key, opts) do
     case OpenRouterModels.catalog(opts) do
       {:ok, catalog} ->
-        findings = profiles |> Enum.flat_map(&model_findings(&1, Map.get(catalog, &1.model))) |> Enum.uniq()
+        findings =
+          profiles
+          |> Enum.flat_map(&(model_findings(&1, Map.get(catalog, &1.model)) ++ small_model_findings(&1.small_model, catalog)))
+          |> Enum.uniq()
 
         %{
           errors: for({:error, message} <- findings, do: message),
@@ -369,31 +375,67 @@ defmodule SymphonyElixir.Config do
     end
   end
 
-  defp model_findings(%{model: model, model_key: key}, nil) do
+  defp model_findings(%{model: model, model_key: key, inherited_from: nil}, nil) do
     [{:error, "#{key}: OpenRouter has no model `#{model}`"}]
   end
 
-  defp model_findings(%{model: model, model_key: key}, %{tools: false}) do
+  defp model_findings(%{model: model, model_key: key, provider_key: provider_key, inherited_from: from}, nil) do
+    [{:error, "#{provider_key}: OpenRouter has no model `#{model}`, inherited from #{from}; set #{key} to an OpenRouter model id"}]
+  end
+
+  defp model_findings(%{model: model, model_key: key, inherited_from: nil}, %{tools: false}) do
     [{:error, "#{key}: OpenRouter model `#{model}` does not support tools; Symphony runs need tool use"}]
   end
 
-  defp model_findings(%{model: model, effort: effort, effort_key: key}, %{reasoning: false}) when is_binary(effort) do
+  defp model_findings(%{model: model, model_key: key, provider_key: provider_key, inherited_from: from}, %{tools: false}) do
+    [
+      {:error,
+       "#{provider_key}: OpenRouter model `#{model}`, inherited from #{from}, does not support tools; " <>
+         "set #{key} to an OpenRouter model that lists tools"}
+    ]
+  end
+
+  defp model_findings(%{model: model, effort: effort, effort_key: key, effort_inherited_by: nil}, %{reasoning: false}) when is_binary(effort) do
     [{:warning, "#{key}: OpenRouter model `#{model}` does not support reasoning; its runs start without --effort #{effort}"}]
+  end
+
+  defp model_findings(%{model: model, effort: effort, effort_key: from, effort_inherited_by: key}, %{reasoning: false}) when is_binary(effort) do
+    [{:warning, "#{key}: OpenRouter model `#{model}` does not support reasoning; its runs start without --effort #{effort}, inherited from #{from}"}]
   end
 
   defp model_findings(_profile, _capabilities), do: []
 
-  # Every `openrouter` run kind with the model and effort it starts with, and the keys that set them.
+  # Background calls use no tools, so the small model only has to exist.
+  defp small_model_findings(nil, _catalog), do: []
+  defp small_model_findings(model, catalog) when is_map_key(catalog, model), do: []
+  defp small_model_findings(model, _catalog), do: [{:error, "agent.small_model: OpenRouter has no model `#{model}`"}]
+
+  # Every `openrouter` run kind with the model and effort it starts with, the keys that set them,
+  # and `agent.small_model`.
+  # `inherited_from` is the key the model comes from when it sits above the key that picked
+  # `openrouter`; `model_key` is then the `model` key next to that provider key.
+  # `effort_inherited_by` is the key that put the run on its model (the model key, or the provider
+  # key when the model is inherited) when the effort comes from a key above it, such as a
+  # repository's run profile picking a model under a global effort.
   defp openrouter_profiles(settings) do
     for kind <- openrouter_run_kinds(settings) do
       profile = effective_run_profile(settings, kind)
+      {model_key, inherited_from} = openrouter_model_source(settings, kind)
+      {provider_key, provider_rank} = profile_setting(settings, kind, :provider)
+      {_key, model_rank} = profile_setting(settings, kind, :model)
+      {effort_key, effort_rank} = profile_setting(settings, kind, :effort)
+      model_source_key = if inherited_from, do: provider_key, else: model_key
 
       %{
         kind: kind,
         model: profile.model,
-        model_key: profile_key(settings, kind, :model),
+        model_key: model_key,
+        provider_key: provider_key,
+        inherited_from: inherited_from,
         effort: profile.effort,
-        effort_key: profile_key(settings, kind, :effort)
+        effort_key: effort_key,
+        effort_inherited_by: if(effort_rank > min(model_rank, provider_rank), do: model_source_key),
+        small_model: settings.agent.small_model
       }
     end
   end
@@ -413,7 +455,29 @@ defmodule SymphonyElixir.Config do
   def run_profile_key(%Schema{} = settings, kind, field) when field in [:model, :effort],
     do: profile_key(settings, to_string(kind), field)
 
-  defp profile_key(settings, kind, field) do
+  @doc """
+  The key to set to change the model of an `openrouter` run of kind `kind`: the key that set the
+  model (as `run_profile_key/3`), or, when the model is inherited from a key above the one that
+  picked `openrouter`, the `model` key next to that provider key. With
+  `repositories[web].agent.run_profiles.landing.provider: openrouter` and only `agent.model` set,
+  that is `repositories[web].agent.run_profiles.landing.model`.
+  """
+  @spec openrouter_model_key(Schema.t(), atom() | String.t()) :: String.t()
+  def openrouter_model_key(%Schema{} = settings, kind), do: settings |> openrouter_model_source(to_string(kind)) |> elem(0)
+
+  defp openrouter_model_source(settings, kind) do
+    {model_key, model_rank} = profile_setting(settings, kind, :model)
+    {provider_key, provider_rank} = profile_setting(settings, kind, :provider)
+
+    if model_rank > provider_rank,
+      do: {String.replace_suffix(provider_key, ".provider", ".model"), model_key},
+      else: {model_key, nil}
+  end
+
+  defp profile_key(settings, kind, field), do: settings |> profile_setting(kind, field) |> elem(0)
+
+  # The key that sets `field` and its rank in the resolution order, 0 for the most specific.
+  defp profile_setting(settings, kind, field) do
     repo_agent = settings.agent.repository
     repo_path = repo_agent && "repositories[#{repo_agent.key}].agent"
     name = Atom.to_string(field)
@@ -425,8 +489,10 @@ defmodule SymphonyElixir.Config do
       {"agent.run_profiles.#{kind}", Map.get(settings.agent.run_profiles, kind, %{})[name]}
     ]
 
-    Enum.find_value(candidates, "agent.#{field}", fn
-      {section_key, value} when not is_nil(value) -> "#{section_key}.#{field}"
+    candidates
+    |> Enum.with_index()
+    |> Enum.find_value({"agent.#{field}", length(candidates)}, fn
+      {{section_key, value}, rank} when not is_nil(value) -> {"#{section_key}.#{field}", rank}
       _unset -> nil
     end)
   end
@@ -472,6 +538,34 @@ defmodule SymphonyElixir.Config do
     end
   end
 
+  @doc """
+  The wall-clock limit of one git `fetch`, `pull`, `push` or `ls-remote`: symphony.yml's
+  `workspaces.git_network_timeout_ms`, else the `:git_network_timeout_ms` application env, else
+  5 minutes.
+  """
+  @spec git_network_timeout_ms() :: pos_integer()
+  def git_network_timeout_ms do
+    operator_setting(& &1.workspace.git_network_timeout_ms, :git_network_timeout_ms, @default_git_network_timeout_ms)
+  end
+
+  @doc """
+  How long one call to Symphony's own MCP tools (`linear_*`, `github_*`) may run: symphony.yml's
+  `agent.timeouts.mcp_tool_ms`, else the `:mcp_tool_timeout_ms` application env, else 10 minutes.
+  """
+  @spec mcp_tool_timeout_ms() :: pos_integer()
+  def mcp_tool_timeout_ms do
+    operator_setting(& &1.agent.mcp_tool_timeout_ms, :mcp_tool_timeout_ms, @default_mcp_tool_timeout_ms)
+  end
+
+  # A symphony.yml setting with no default of its own: unset, or while symphony.yml can't be
+  # read, the application env (which tests set) and then `default` apply.
+  defp operator_setting(read, env_key, default) do
+    case system() do
+      {:ok, system_config} -> read.(system_config)
+      {:error, _reason} -> nil
+    end || Application.get_env(:symphony_elixir, env_key, default)
+  end
+
   @spec server_port() :: non_neg_integer()
   def server_port do
     case Application.get_env(:symphony_elixir, :server_port_override) do
@@ -513,14 +607,17 @@ defmodule SymphonyElixir.Config do
   What `symphony check` validates: the same as `validate_repo_workflows/0`, except that
   a `workspace.source` repo Symphony has not cloned yet is checked without its
   `WORKFLOW.md`, since Symphony clones it at start and only then reads the file.
-  `check_findings/1` warns about each such repo.
+  `check_findings/1` warns about each such repo. It also checks each repo's
+  `strategy: worktree` workspace the way `validate!/0` does, so a `workspaces.repo` that
+  does not exist fails the check instead of only failing every poll of a running Symphony.
   """
   @spec check_repo_workflows() :: :ok | {:error, term()}
   def check_repo_workflows, do: validate_repo_workflows(:check)
 
   defp validate_repo_workflows(source) do
     with {:ok, system_config} <- system(),
-         {:ok, _repo_settings} <- repo_runtime_settings(system_config, source: source) do
+         {:ok, repo_settings} <- repo_runtime_settings(system_config, source: source),
+         :ok <- validate_checked_workspaces(source, system_config, repo_settings) do
       :ok
     else
       {:error, {:invalid_symphony_config, message}} ->
@@ -795,6 +892,21 @@ defmodule SymphonyElixir.Config do
   defp runtime_settings_for_repo(%SystemSchema{} = system_config, %SystemSchema.Repo{} = repo, source) do
     with {:ok, repo_workflow} <- load_repo_workflow(repo, source),
          do: Schema.parse(merged_runtime_config(system_config, repo, repo_workflow))
+  end
+
+  defp validate_checked_workspaces(:check, %SystemSchema{} = system_config, repo_settings) do
+    with :ok <- validate_workspace_strategy_scope(system_config) do
+      Enum.reduce_while(repo_settings, :ok, &validate_checked_workspace/2)
+    end
+  end
+
+  defp validate_checked_workspaces(_source, _system_config, _repo_settings), do: :ok
+
+  defp validate_checked_workspace({repo, settings}, :ok) do
+    case validate_workspace_semantics(settings) do
+      :ok -> {:cont, :ok}
+      {:error, reason} -> {:halt, {:error, annotate_repo_config_error(repo, reason)}}
+    end
   end
 
   defp validate_repo_semantics(repo_settings, %SystemSchema{} = system_config) do

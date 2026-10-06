@@ -246,9 +246,17 @@ defmodule SymphonyElixir.Config.Schema do
       # CPU time a process under a workspace or Symphony temp folder may use with no run
       # attached before the dashboard warns about it; `nil` turns the check off.
       field(:stray_process_cpu_minutes, :integer, default: 10)
+      # How long one of Symphony's own MCP tool calls must run before the snapshot reports it as pending.
+      field(:pending_tool_report_after_ms, :integer, default: 60_000)
     end
 
-    @fields [:enabled, :tick_interval_ms, :no_progress_threshold_ms, :stray_process_cpu_minutes]
+    @fields [
+      :enabled,
+      :tick_interval_ms,
+      :no_progress_threshold_ms,
+      :stray_process_cpu_minutes,
+      :pending_tool_report_after_ms
+    ]
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
@@ -257,6 +265,7 @@ defmodule SymphonyElixir.Config.Schema do
       |> validate_number(:tick_interval_ms, greater_than: 0)
       |> validate_number(:no_progress_threshold_ms, greater_than: 0)
       |> validate_number(:stray_process_cpu_minutes, greater_than: 0)
+      |> validate_number(:pending_tool_report_after_ms, greater_than: 0)
     end
   end
 
@@ -451,6 +460,9 @@ defmodule SymphonyElixir.Config.Schema do
       field(:strategy, :string, default: "clone")
       field(:repo, :string)
       field(:fetch_before_dispatch, :boolean, default: true)
+      # The wall-clock limit of one git `fetch`, `pull`, `push` or `ls-remote`; unset, it is the
+      # `:git_network_timeout_ms` application env, or 5 minutes (see `Config.git_network_timeout_ms/0`).
+      field(:git_network_timeout_ms, :integer)
       # `owner/repo` of a repo Symphony clones itself (`repositories[].workspace.source`);
       # `repo` then points at that clone under `clones_root`.
       field(:github, :string)
@@ -463,7 +475,8 @@ defmodule SymphonyElixir.Config.Schema do
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
       schema
-      |> cast(attrs, [:root, :strategy, :repo, :fetch_before_dispatch, :github, :clones_root], empty_values: [])
+      |> cast(attrs, ~w(root strategy repo fetch_before_dispatch git_network_timeout_ms github clones_root)a, empty_values: [])
+      |> validate_number(:git_network_timeout_ms, greater_than: 0)
       |> cast_embed(:attachments, with: &Attachments.changeset/2)
       |> cast_embed(:sandbox, with: &Sandbox.changeset/2)
       |> cast_embed(:lifecycle, with: &Lifecycle.changeset/2)
@@ -1080,6 +1093,9 @@ defmodule SymphonyElixir.Config.Schema do
       field(:model, :string)
       field(:effort, :string)
       field(:provider, :string)
+      # The OpenRouter model for Claude Code's background calls (titles, summaries) on runs whose
+      # provider is `openrouter`; unset, they use the run's model.
+      field(:small_model, :string)
       field(:run_profiles, :map, default: %{})
 
       field(:approval_policy, StringOrMap)
@@ -1098,6 +1114,9 @@ defmodule SymphonyElixir.Config.Schema do
       field(:read_timeout_ms, :integer, default: 30_000)
       field(:stall_timeout_ms, :integer, default: 300_000)
       field(:command_timeout_ms, :integer, default: 600_000)
+      # How long one call to Symphony's own MCP tools may run; unset, it is the
+      # `:mcp_tool_timeout_ms` application env, or 10 minutes (see `Config.mcp_tool_timeout_ms/0`).
+      field(:mcp_tool_timeout_ms, :integer)
       field(:codex_stdio_prompt_soft_limit, :integer, default: @default_codex_stdio_prompt_soft_limit)
     end
 
@@ -1126,6 +1145,7 @@ defmodule SymphonyElixir.Config.Schema do
           :model,
           :effort,
           :provider,
+          :small_model,
           :run_profiles,
           :approval_policy,
           :include_project_guides,
@@ -1136,6 +1156,7 @@ defmodule SymphonyElixir.Config.Schema do
           :read_timeout_ms,
           :stall_timeout_ms,
           :command_timeout_ms,
+          :mcp_tool_timeout_ms,
           :codex_stdio_prompt_soft_limit
         ],
         empty_values: []
@@ -1156,9 +1177,11 @@ defmodule SymphonyElixir.Config.Schema do
       |> validate_number(:read_timeout_ms, greater_than: 0)
       |> validate_number(:stall_timeout_ms, greater_than_or_equal_to: 0)
       |> validate_number(:command_timeout_ms, greater_than_or_equal_to: 0)
+      |> validate_number(:mcp_tool_timeout_ms, greater_than: 0)
       |> validate_number(:codex_stdio_prompt_soft_limit, greater_than: 0)
       |> validate_project_guide_files()
       |> validate_run_profile_settings()
+      |> validate_setting(:small_model, &check_model/1)
       |> validate_openrouter_profiles()
       |> validate_command_run_profile_flags()
       |> update_change(:max_concurrent_agents_by_state, &Schema.normalize_state_limits/1)
@@ -2423,6 +2446,26 @@ defmodule SymphonyElixir.Config.Schema do
     (@codex_built_in_network_allowed_domains ++ normalize_domain_list(network_access.allowed_domains))
     |> normalize_domain_list()
     |> Enum.reject(&MapSet.member?(denied_domains, &1))
+  end
+
+  @doc """
+  The hosts a sandboxed verification dev server may reach through its egress proxy: the
+  agent's built-in dependency hosts, without the model providers, plus
+  `agent.permissions.network.allowed_domains`, less `denied_domains`. None with `mode: block`.
+  """
+  @spec dev_server_network_allowed_domains(%__MODULE__{}) :: [String.t()]
+  def dev_server_network_allowed_domains(%__MODULE__{} = settings) do
+    case codex_network_access(settings.agent.network_access) do
+      %{mode: "block"} ->
+        []
+
+      network_access ->
+        denied_domains = network_access.denied_domains |> normalize_domain_list() |> MapSet.new()
+
+        (@shared_built_in_network_allowed_domains ++ normalize_domain_list(network_access.allowed_domains))
+        |> normalize_domain_list()
+        |> Enum.reject(&MapSet.member?(denied_domains, &1))
+    end
   end
 
   @doc false

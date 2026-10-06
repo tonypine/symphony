@@ -695,7 +695,8 @@ defmodule SymphonyElixir.Codex.AppServer do
       comment_registry: Keyword.get(opts, :linear_comment_registry),
       tool_scope: Keyword.get(opts, :tool_scope),
       tool_opts: tool_opts(opts),
-      dependency_gate: DependencyGate.build(workspace, issue, Keyword.get(opts, :settings), opts)
+      dependency_gate: DependencyGate.build(workspace, issue, Keyword.get(opts, :settings), opts),
+      on_tool_call: Keyword.get(opts, :on_tool_call)
     }
 
     mcp_opts =
@@ -826,6 +827,9 @@ defmodule SymphonyElixir.Codex.AppServer do
     network_access = settings.agent.network_access || %Schema.Agent.NetworkAccess{}
     extra_deny_read_paths = Keyword.get(opts, :extra_deny_read_paths, [])
 
+    deny_write_paths =
+      workspace_link_targets(workspace, opts) ++ codex_git_metadata_deny_write_paths(settings, workspace, opts)
+
     overrides =
       network_access.mode
       |> AgentSandboxConfig.codex_config_overrides(
@@ -833,7 +837,7 @@ defmodule SymphonyElixir.Codex.AppServer do
         workspace_sandbox_allow_read_paths(settings),
         extra_deny_read_paths,
         workspace: workspace,
-        deny_write_paths: workspace_link_targets(workspace, opts)
+        deny_write_paths: deny_write_paths
       )
 
     with {:ok, command} <- inject_config_overrides(command, overrides) do
@@ -986,24 +990,25 @@ defmodule SymphonyElixir.Codex.AppServer do
   # allowing object writes for both clone workspaces and linked worktrees.
   @doc false
   @spec git_metadata_deny_write_paths(Path.t() | term(), Path.t() | term()) :: [Path.t()]
-  def git_metadata_deny_write_paths(path, workspace) when is_binary(path) do
-    if is_binary(workspace) and Enum.any?(Path.split(path), &(&1 == ".git")) do
-      [
-        "config",
-        "config.worktree",
-        "hooks",
-        "info",
-        "packed-refs",
-        Path.join(["worktrees", "*", "config"]),
-        Path.join(["worktrees", "*", "config.worktree"])
-      ]
-      |> Enum.map(&Path.join(path, &1))
-    else
-      []
-    end
-  end
+  def git_metadata_deny_write_paths(path, workspace) when is_binary(path) and is_binary(workspace),
+    do: AgentSandboxConfig.git_metadata_deny_write_paths([path])
 
   def git_metadata_deny_write_paths(_path, _workspace), do: []
+
+  # Codex's own `workspaceWrite` policy protects a `.git` inside each writable root, but the git
+  # dirs are writable roots themselves. Its permission profile takes literal paths, so the globs
+  # become the files there now. An SSH worker's git dirs aren't on this host.
+  defp codex_git_metadata_deny_write_paths(settings, workspace, opts) do
+    if Keyword.get(opts, :remote, false) do
+      []
+    else
+      settings
+      |> Schema.runtime_workspace_write_roots(workspace)
+      |> Enum.filter(&File.dir?/1)
+      |> AgentSandboxConfig.git_metadata_deny_write_paths()
+      |> AgentSandboxConfig.literal_paths()
+    end
+  end
 
   defp inject_config_overrides(command, overrides) do
     case shell_words(command) do
@@ -1419,8 +1424,8 @@ defmodule SymphonyElixir.Codex.AppServer do
          payload_string,
          stream_context
        ) do
-    case usage_limited(payload, stream_context.turn_stream_state) do
-      {:ok, info} -> handle_usage_limited(port, on_message, payload, payload_string, info)
+    case provider_hold(payload, stream_context.turn_stream_state) do
+      {_tag, _info} = hold -> handle_provider_hold(port, on_message, payload, payload_string, hold)
       :error -> handle_turn_failed(port, on_message, payload, payload_string)
     end
   end
@@ -1456,9 +1461,9 @@ defmodule SymphonyElixir.Codex.AppServer do
       _ ->
         updated_turn_stream_state = remember_rate_limits(updated_turn_stream_state, payload)
 
-        case usage_limited(payload, updated_turn_stream_state) do
-          {:ok, info} ->
-            handle_usage_limited(port, on_message, payload, payload_string, info)
+        case provider_hold(payload, updated_turn_stream_state) do
+          {_tag, _info} = hold ->
+            handle_provider_hold(port, on_message, payload, payload_string, hold)
 
           :error ->
             handle_turn_method(
@@ -1495,8 +1500,8 @@ defmodule SymphonyElixir.Codex.AppServer do
   end
 
   defp handle_turn_completed(port, on_message, payload, payload_string, turn_stream_state) do
-    case usage_limited(payload, turn_stream_state) do
-      {:ok, info} -> handle_usage_limited(port, on_message, payload, payload_string, info)
+    case provider_hold(payload, turn_stream_state) do
+      {_tag, _info} = hold -> handle_provider_hold(port, on_message, payload, payload_string, hold)
       :error -> handle_turn_completed_status(port, on_message, payload, payload_string, turn_stream_state)
     end
   end
@@ -1532,21 +1537,33 @@ defmodule SymphonyElixir.Codex.AppServer do
   end
 
   # A turn that ends on the Codex usage limit stops the run; the orchestrator holds Codex
-  # runs until the window resets (see `SymphonyElixir.UsageLimit`).
-  defp usage_limited(payload, turn_stream_state), do: CodexUsageLimit.usage_limited(payload, Map.get(turn_stream_state, :rate_limits))
+  # runs until the window resets (see `SymphonyElixir.UsageLimit`). So does a turn that could not
+  # reach the model API, until a probe gets through, as for the Claude stream.
+  defp provider_hold(payload, turn_stream_state) do
+    case CodexUsageLimit.usage_limited(payload, Map.get(turn_stream_state, :rate_limits)) do
+      {:ok, info} ->
+        {:usage_limited, info}
+
+      :error ->
+        case CodexUsageLimit.api_unreachable(payload) do
+          {:ok, info} -> {:model_api_unreachable, info}
+          :error -> :error
+        end
+    end
+  end
 
   defp remember_rate_limits(turn_stream_state, payload),
     do: Map.put(turn_stream_state, :rate_limits, CodexUsageLimit.remember(Map.get(turn_stream_state, :rate_limits), payload))
 
-  defp handle_usage_limited(port, on_message, payload, payload_string, info) do
+  defp handle_provider_hold(port, on_message, payload, payload_string, {tag, info} = hold) do
     emit_message(
       on_message,
-      :usage_limited,
+      tag,
       %{payload: payload, raw: payload_string, usage_limit: info},
       metadata_from_message(port, payload)
     )
 
-    {:error, {:usage_limited, info}}
+    {:error, hold}
   end
 
   defp emit_turn_event(on_message, event, payload, payload_string, port, payload_details) do

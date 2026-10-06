@@ -198,6 +198,10 @@ defmodule SymphonyElixir.OneShot do
         persist_run_update(deps.run_store, entry, run_update(entry))
         receive_attempt(task, issue, deps, entry, deadline_ms)
 
+      # A one-shot run has no no-progress watchdog, so a tool's heartbeat is dropped unrecorded.
+      {:codex_worker_update, issue_id, %{event: :tool_progress}} when issue_id == issue.id ->
+        receive_attempt(task, issue, deps, entry, deadline_ms)
+
       {:codex_worker_update, issue_id, update} when issue_id == issue.id ->
         entry = integrate_worker_update(entry, update)
         persist_run_update(deps.run_store, entry, run_update(entry))
@@ -241,6 +245,9 @@ defmodule SymphonyElixir.OneShot do
         entry
         |> merge_runtime_info(runtime_info)
         |> drain_worker_messages(issue)
+
+      {:codex_worker_update, issue_id, %{event: :tool_progress}} when issue_id == issue.id ->
+        drain_worker_messages(entry, issue)
 
       {:codex_worker_update, issue_id, update} when issue_id == issue.id ->
         entry

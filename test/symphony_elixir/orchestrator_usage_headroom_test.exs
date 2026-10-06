@@ -157,6 +157,14 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
     )
   end
 
+  # A retry reads its issue again in a task; the state is read once its answer is handled.
+  defp retry_handled_state(pid) do
+    wait_until(fn ->
+      state = :sys.get_state(pid)
+      state.tracker_tasks == %{} and state
+    end)
+  end
+
   defp wait_until(fun, timeout_ms \\ 15_000) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
     do_wait_until(fun, deadline)
@@ -297,8 +305,9 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
   test "a continuation deferred behind a dispatch readiness task stays a continuation and runs under the hold", ctx do
     write_headroom_workflow!(ctx, poll_interval_ms: 600_000)
     continuing = issue("issue-headroom-deferred", "MT-DEFERRED")
-    Application.put_env(:symphony_elixir, :memory_tracker_issues, [continuing])
+    # Listed after the boot poll, or it dispatches a run whose continuation replaces the planted retry.
     pid = start_orchestrator(ctx, :DeferredContinuationOrchestrator)
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [continuing])
     token = make_ref()
 
     :sys.replace_state(pid, fn state ->
@@ -315,7 +324,7 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
 
     capture_log(fn ->
       send(pid, {:retry_issue, continuing.id, token})
-      state = :sys.get_state(pid)
+      state = retry_handled_state(pid)
 
       assert %{attempt: 1, delay_type: :continuation, retry_token: rescheduled} = state.retry_attempts[continuing.id]
       assert rescheduled != token
@@ -333,8 +342,9 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
   test "a continuation deferred behind a quality gate task stays a continuation and runs under the hold", ctx do
     write_headroom_workflow!(ctx, poll_interval_ms: 600_000)
     continuing = issue("issue-headroom-gate-deferred", "MT-GATE-DEFERRED")
-    Application.put_env(:symphony_elixir, :memory_tracker_issues, [continuing])
+    # Listed after the boot poll, or it dispatches a run whose continuation replaces the planted retry.
     pid = start_orchestrator(ctx, :GateDeferredContinuationOrchestrator)
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [continuing])
     token = make_ref()
 
     :sys.replace_state(pid, fn state ->
@@ -351,7 +361,7 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
 
     capture_log(fn ->
       send(pid, {:retry_issue, continuing.id, token})
-      state = :sys.get_state(pid)
+      state = retry_handled_state(pid)
 
       assert %{attempt: 1, delay_type: :continuation, retry_token: rescheduled, error: "quality gate task already in flight; deferred"} =
                state.retry_attempts[continuing.id]
@@ -370,8 +380,9 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
   test "a failure retry deferred behind a quality gate task does not become a continuation", ctx do
     write_headroom_workflow!(ctx, poll_interval_ms: 600_000)
     failed = issue("issue-headroom-gate-failure", "MT-GATE-FAILURE")
-    Application.put_env(:symphony_elixir, :memory_tracker_issues, [failed])
+    # Listed after the boot poll, or it dispatches a run whose continuation replaces the planted retry.
     pid = start_orchestrator(ctx, :GateDeferredFailureOrchestrator)
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [failed])
     token = make_ref()
 
     :sys.replace_state(pid, fn state ->
@@ -387,7 +398,7 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
       send(pid, {:retry_issue, failed.id, token})
 
       assert %{attempt: 2, delay_type: nil, retry_token: rescheduled, error: "quality gate task already in flight; deferred"} =
-               :sys.get_state(pid).retry_attempts[failed.id]
+               retry_handled_state(pid).retry_attempts[failed.id]
 
       assert rescheduled != token
     end)

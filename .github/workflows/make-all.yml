@@ -118,6 +118,13 @@ jobs:
       - name: Build escript
         run: time mix escript.build
 
+      # The release workflow runs this on the Burrito binary only on pushes to main,
+      # so a change that breaks `symphony check` on the sample config fails here first.
+      # The escript skips the service step; `release-smoke` runs it on the Burrito
+      # binary when a pull request changes release-related paths.
+      - name: Smoke-test the escript
+        run: time scripts/release/smoke_test.sh bin/symphony "$GITHUB_WORKSPACE/symphony.yml"
+
   coverage:
     name: coverage (${{ matrix.partition }}/4)
     runs-on: ubuntu-latest
@@ -148,6 +155,16 @@ jobs:
 
       - name: Install dependencies
         run: time mix deps.get
+
+      # The `:bwrap` tests run the verification dev server's Linux sandbox for real.
+      - name: Install the dev server sandbox tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap socat
+          # Ubuntu 24.04 keeps unprivileged user namespaces from bwrap through AppArmor.
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
 
       - name: Run coverage partition
         env:

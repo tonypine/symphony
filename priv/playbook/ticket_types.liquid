@@ -1,0 +1,104 @@
+{% comment %}
+name: ticket_types
+description: Per-type steps for a ticket labelled type:bug, type:feature or plan, with a readiness check that sends a bug or feature missing a required section back to Backlog; renders nothing for an untyped ticket.
+vars: [issue]
+
+Render it with a left-trimming render tag (a dash after its opening brace): each
+branch starts with its own blank line, so an untyped ticket's prompt stays
+byte-identical to one without the render. When a ticket has several type labels,
+`plan` wins over `type:bug`, and `type:bug` over `type:feature`. The templates the
+operator writes these tickets from live in `docs/ticket-templates/`.
+{% endcomment %}
+{%- if issue.labels contains "plan" or issue.labels contains "breakdown" %}
+
+## Ticket type: plan
+
+This ticket has the `plan` label (or `breakdown`, its older name). The operator
+may have written it from the Plan template: `Vision`, `Context`, `Constraints`,
+`Quality bar`, `Artifacts wanted` and `Done when`. Every run on it follows the
+plan pipeline in `Parent tickets`.
+
+- A plan ticket is never sent back for missing input and has no readiness check.
+  Do not use the clarification escape hatch for a thin or unclear description,
+  even one with only a `Vision`.
+- Turn each open question into a decision: the options, the default you recommend
+  and why. Go on with that default, and list every decision under a `Decisions`
+  heading where the plan is handed over for review, so the operator answers them
+  all in that single review.
+- With no box checked under `Artifacts wanted`, or no such section, the plan is a
+  plain split into sub-tickets.
+- `Constraints` and `Quality bar` bind every sub-ticket: repeat the ones that
+  apply in its description. `Done when` is what the whole must achieve: carry it
+  into the `Final verification:` sub-ticket's checklist.
+{%- elsif issue.labels contains "type:bug" %}
+
+## Ticket type: bug
+
+This ticket has the `type:bug` label. The operator wrote it from the Bug
+template: `Observed`, `Expected`, `Steps to reproduce`, `Where` (platform,
+version) and `Evidence`.
+
+### Readiness check
+
+Right after the workpad exists, before planning, check that the description has
+each required section with text of the operator's own: `Observed`, `Expected`
+and `Steps to reproduce`. A section is missing when its heading is absent, or when
+it is empty or holds only the template's italic hint. `Where` and `Evidence` help
+but are not required. Skip the check when a PR is already attached to the ticket.
+
+When a required section is missing, do not guess: use the in-execution
+clarification escape hatch with one comment that names every missing section and
+asks the operator to fill them in and move the ticket back to `Todo`. Record it in
+the workpad, move the ticket to `Backlog` and stop, without a branch, a commit or
+a PR.
+
+### What a bug run does
+
+1. First, write a test that reproduces the bug: it follows `Steps to reproduce`,
+   asserts the `Expected` behaviour and fails on the current code the way
+   `Observed` describes. Run it and record the failing command and its output in
+   the workpad `Notes` as the reproduction signal, before changing the code under
+   test.
+2. When the steps do not reproduce the bug on the current default branch, do not
+   fix blind: use the clarification escape hatch with one comment saying what you
+   ran, on which commit, and what you saw. When no automated test can reach the
+   bug (it needs a device or a real key), record the closest deterministic signal
+   instead and say why in the workpad.
+3. Then fix the cause. The same test now passes and stays in the PR, next to the
+   fix, as the regression test.
+4. Name the root cause in the workpad `Notes` and in the PR's `## This PR`.
+{%- elsif issue.labels contains "type:feature" %}
+
+## Ticket type: feature
+
+This ticket has the `type:feature` label. The operator wrote it from the Feature
+template: `Goal`, `Context`, `Acceptance criteria`, `User walkthrough` and
+`Out of scope`.
+
+### Readiness check
+
+Right after the workpad exists, before planning, check that the description has
+each required section with text of the operator's own: `Goal` and
+`Acceptance criteria` (at least one criterion). A section is missing when its
+heading is absent, or when it is empty or holds only the template's italic hint.
+`Context`, `User walkthrough` and `Out of scope` help but are not required. Skip
+the check when a PR is already attached to the ticket.
+
+When a required section is missing, do not guess: use the in-execution
+clarification escape hatch with one comment that names every missing section and
+asks the operator to fill them in and move the ticket back to `Todo`. Record it in
+the workpad, move the ticket to `Backlog` and stop, without a branch, a commit or
+a PR.
+
+### What a feature run delivers
+
+- One PR that meets every item under `Acceptance criteria`. Copy them into the
+  workpad `Acceptance Criteria` as written, and check each one off only with
+  evidence: a test, a command's output or a screenshot.
+- A test for every criterion that code can check.
+- When the ticket has a `User walkthrough`, every step works end to end as
+  written, with the result it names.
+- Nothing listed under `Out of scope`. Use `Goal` and `Context` to settle details
+  the criteria leave open, and file anything larger with `linear_create_subissue`
+  instead of building it.
+{%- endif -%}

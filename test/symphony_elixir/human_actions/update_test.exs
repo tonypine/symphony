@@ -37,7 +37,7 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
       %Action{
         key: "plan:id-MOT-40",
         kind: :plan_review,
-        title: "Approve the breakdown plan for MOT-40",
+        title: "Approve the plan for MOT-40",
         why: "MOT-40 is split into sub-tickets, and none of them starts before you approve the plan.",
         unblocks: "its sub-tickets, waiting in Backlog",
         est_minutes: 10,
@@ -86,7 +86,7 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
 
            **Done when:** you remove the `human-action` label from MOT-24, or move it on once it is unblocked.
 
-           ### 2. Approve the breakdown plan for MOT-40
+           ### 2. Approve the plan for MOT-40
 
            **~10 min** · Unblocks [MOT-40](https://linear.app/acme/issue/MOT-40): its sub-tickets, waiting in Backlog
 

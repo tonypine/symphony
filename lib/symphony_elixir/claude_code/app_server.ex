@@ -11,13 +11,13 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Agent
   alias SymphonyElixir.GitHub.Hosts
+  alias SymphonyElixir.OpenRouter
   alias SymphonyElixir.OpenRouter.Models, as: OpenRouterModels
   alias SymphonyElixir.ProjectGuidePrompt
   alias SymphonyElixir.Secret
   alias SymphonyElixir.SharedSkills
   alias SymphonyElixir.UsageLimit
 
-  @openrouter_base_url "https://openrouter.ai/api"
   @agent_runtime_env AgentEnv.runtime_marker_name()
   @agent_runtime_env_value AgentEnv.runtime_marker_value()
   @settings_dir_prefix "symphony-claude-settings-"
@@ -65,6 +65,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
     with :ok <- check_provider(run_profile, worker_host),
          {:ok, run_profile} <- check_model_capabilities(run_profile, settings),
+         run_profile = put_small_model(run_profile, settings),
          {:ok, expanded_workspace} <- validate_workspace_cwd(workspace, worker_host, settings),
          {:ok, mcp_session, remote_socket_path, remote_shim_path} <-
            start_mcp_session(expanded_workspace, worker_host, opts),
@@ -96,7 +97,13 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     # Claude writes MCP server logs on the host it runs on.
     mcp_log_workspace = if is_nil(worker_host), do: workspace
 
-    read_opts = [required_mcp_server: required_mcp_server, issue: issue, mcp_log_workspace: mcp_log_workspace]
+    read_opts = [
+      required_mcp_server: required_mcp_server,
+      issue: issue,
+      mcp_log_workspace: mcp_log_workspace,
+      provider: session |> Map.get(:run_profile) |> run_profile_provider()
+    ]
+
     # `claude -p` starts a new conversation each turn unless told which one to resume.
     session =
       session
@@ -176,16 +183,17 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   end
 
   # The `settings.json` a Claude session starts with: the sandbox, and the permission rules that
-  # deny pushing and the `gh` CLI. A read-only session (`read_only: true` in `start_session/2`,
-  # the acceptance gate) also gets no file-editing tool and can't write its working directory
-  # from the shell.
+  # deny pushing, the `gh` CLI, the file tools on the write-protected paths the sandbox keeps
+  # from the shell, and reading the cloud-synced folders. A read-only session (`read_only: true`
+  # in `start_session/2`, the acceptance gate) also gets no file-editing tool and can't write its
+  # working directory from the shell.
   @doc false
   @spec build_claude_settings(Agent.NetworkAccess.t(), [String.t()], [String.t()], [String.t()], boolean()) :: map()
   def build_claude_settings(network_access, allow_read_paths, allow_write_paths, deny_write_paths \\ [], read_only? \\ false) do
     settings =
       network_access
       |> build_sandbox_settings(allow_read_paths, allow_write_paths, deny_write_paths)
-      |> Map.put("permissions", %{"deny" => @denied_commands})
+      |> Map.put("permissions", %{"deny" => @denied_commands ++ file_tool_deny_rules(allow_read_paths, deny_write_paths)})
 
     if read_only? do
       settings
@@ -194,6 +202,11 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     else
       settings
     end
+  end
+
+  defp file_tool_deny_rules(allow_read_paths, deny_write_paths) do
+    edit_rules = AgentSandboxConfig.claude_edit_deny_rules(deny_write_paths)
+    edit_rules ++ AgentSandboxConfig.claude_read_deny_rules(allow_read_paths)
   end
 
   defp build_mcp_config(mcp_session, socket_path, shim_path, settings) do
@@ -228,8 +241,10 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
            | {:turn_failed, String.t()}
            | {:rate_limited, %{retry_after_seconds: nil | non_neg_integer(), message: String.t()}, String.t()}
            | {:usage_limited, usage_limit_info()}
+           | {:api_unreachable, api_unreachable_info()}
            | {:usage_window, String.t(), usage_window()}
            | {:rate_limit_info, map()}
+           | {:tool_progress, String.t() | nil}
            | {:malformed, String.t()}
 
   @typedoc "A Claude usage-limit hit: a plan window (five-hour or weekly) is used up."
@@ -241,6 +256,21 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
           utilization: number() | nil,
           overage: String.t() | boolean() | nil,
           source: :rate_limit_event | :result_text
+        }
+
+  @typedoc """
+  A turn Claude ended because it could not reach the model API (a DNS failure, a refused or
+  dropped connection): `error` is the code it named, such as `ENOTFOUND`. The orchestrator holds
+  the provider's runs on it as on a usage limit (see `SymphonyElixir.UsageLimit`).
+  """
+  @type api_unreachable_info :: %{
+          provider: String.t(),
+          window: nil,
+          scope: :all,
+          resets_at: nil,
+          utilization: nil,
+          source: :api_unreachable,
+          error: String.t()
         }
 
   @typedoc "The latest reset time and utilization Claude reported for one usage window."
@@ -291,19 +321,30 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
   defp parse_decoded_event(%{"type" => "tool_use", "name" => name}, _line), do: {:tool_use, name}
 
+  defp parse_decoded_event(%{"type" => "tool_progress"} = event, _line), do: {:tool_progress, Map.get(event, "tool_name")}
+
   defp parse_decoded_event(%{"type" => "rate_limit_event", "rate_limit_info" => info}, _line),
     do: classify_rate_limit_event(info)
 
   defp parse_decoded_event(%{"type" => "result", "is_error" => true} = event, line) do
     case usage_limit_from_result(event) do
       {:ok, info} -> {:usage_limited, info}
-      :error -> parse_result_event(event, line)
+      :error -> parse_reachable_result(event, line)
     end
   end
 
-  defp parse_decoded_event(%{"type" => "result"} = event, line), do: parse_result_event(event, line)
+  defp parse_decoded_event(%{"type" => "result"} = event, line), do: parse_reachable_result(event, line)
 
   defp parse_decoded_event(_event, line), do: {:malformed, line}
+
+  # When the model API can't be reached, Claude still ends the turn with a `success` result:
+  # its text is `API Error: Can't reach the API server … (ENOTFOUND)` and nothing was used.
+  defp parse_reachable_result(event, line) do
+    case api_unreachable_from_result(event) do
+      {:ok, info} -> {:api_unreachable, info}
+      :error -> parse_result_event(event, line)
+    end
+  end
 
   defp parse_result_event(%{"subtype" => "success"} = event, _line),
     do: {:turn_completed, extract_turn_result(event)}
@@ -441,6 +482,15 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     }
   end
 
+  # A heartbeat only marks the run active: the orchestrator keeps it out of the transcript.
+  def event_to_update({:tool_progress, tool_name}) do
+    %{
+      event: :tool_progress,
+      timestamp: DateTime.utc_now(),
+      payload: %{tool: tool_name}
+    }
+  end
+
   def event_to_update({:rate_limited, info}) when is_map(info) do
     %{
       event: :rate_limited,
@@ -569,7 +619,8 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
       comment_registry: Keyword.get(opts, :linear_comment_registry),
       tool_scope: Keyword.get(opts, :tool_scope),
       tool_opts: tool_opts(opts),
-      dependency_gate: DependencyGate.build(workspace, issue, Keyword.get(opts, :settings), opts)
+      dependency_gate: DependencyGate.build(workspace, issue, Keyword.get(opts, :settings), opts),
+      on_tool_call: Keyword.get(opts, :on_tool_call)
     }
 
     mcp_opts =
@@ -658,7 +709,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     effective_shim_path = effective_shim_path(mcp_session, remote_shim_path)
     effective_socket_path = socket_path || mcp_session.socket_path
 
-    deny_write_paths = host_deny_write_paths(workspace, worker_host)
+    deny_write_paths = host_deny_write_paths(settings, workspace, worker_host)
 
     settings_json =
       build_claude_settings(network_access, allow_read_paths, allow_write_paths, deny_write_paths, read_only?)
@@ -697,24 +748,24 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
   defp workspace_sandbox_allow_write_paths(_settings), do: []
 
-  # The item replacement directory lives under the per-user temp dir of the host Claude runs on,
-  # which this host can't look up for an SSH worker. A local agent also keeps its Hex,
-  # `elixir_make` and PLT caches in Symphony's folder (see `SymphonyElixir.AgentCaches`); an SSH
-  # worker keeps its own.
-  defp host_allow_write_paths(nil) do
-    opts = Application.get_env(:symphony_elixir, :claude_item_replacement_opts, [])
-    AgentSandboxConfig.item_replacement_write_paths(opts) ++ AgentCaches.write_paths()
-  end
+  # A local agent keeps its Hex, `elixir_make` and PLT caches in Symphony's folder (see
+  # `SymphonyElixir.AgentCaches`); an SSH worker keeps its own.
+  defp host_allow_write_paths(nil), do: AgentCaches.write_paths()
 
   defp host_allow_write_paths(_worker_host), do: []
 
-  # The real files behind symlinked skills (`.ai/skills/pull -> ../../priv/skills/pull`). An SSH
-  # worker's workspace isn't on this host, so it keeps the plain deny list.
-  defp host_deny_write_paths(workspace, nil) when is_binary(workspace) do
-    for path <- AgentSandboxConfig.workspace_link_targets(workspace), do: "./" <> path
+  # The real files behind symlinked skills (`.ai/skills/pull -> ../../priv/skills/pull`), and the
+  # config, hooks and attributes in the workspace's git dirs: Claude Code lets a worktree's
+  # session write the shared repo's `.git` and protects only part of it. An SSH worker's
+  # workspace isn't on this host, so it keeps the plain deny list.
+  defp host_deny_write_paths(settings, workspace, nil) when is_binary(workspace) do
+    link_targets = for path <- AgentSandboxConfig.workspace_link_targets(workspace), do: "./" <> path
+    git_dirs = settings |> Schema.runtime_workspace_write_roots(workspace) |> Enum.filter(&File.dir?/1)
+
+    link_targets ++ AgentSandboxConfig.git_metadata_deny_write_paths(git_dirs)
   end
 
-  defp host_deny_write_paths(_workspace, _worker_host), do: []
+  defp host_deny_write_paths(_settings, _workspace, _worker_host), do: []
 
   defp claude_settings_dir(nil, %{id: id}) when is_binary(id) do
     Path.join(System.tmp_dir!(), "#{@settings_dir_prefix}#{id}")
@@ -1026,7 +1077,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
       {:ok, %{tools: false}} ->
         Logger.error(
           "OpenRouter run cannot start: model #{model} does not support tools run_kind=#{kind}; " <>
-            "set #{Config.run_profile_key(settings, kind, :model)} to a model that lists tools"
+            "set #{Config.openrouter_model_key(settings, kind)} to a model that lists tools"
         )
 
         {:error, {:openrouter_model_unsupported, model, kind, :tools}}
@@ -1062,8 +1113,19 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
   defp drop_unsupported_effort(profile), do: profile
 
+  # A set `agent.small_model` rides on an OpenRouter session's profile, so every turn of the
+  # session sends Claude Code's background calls to the model the session started with.
+  defp put_small_model(%{provider: "openrouter"} = profile, %Schema{agent: %{small_model: small_model}}) when is_binary(small_model),
+    do: Map.put(profile, :small_model, small_model)
+
+  defp put_small_model(profile, _settings), do: profile
+
   # The env that points `claude` at the run's provider, read at each launch so the key never
-  # sits in the session. Anthropic runs add nothing.
+  # sits in the session. Anthropic runs add nothing. Every model id `claude` can pick on its own
+  # (subagents, the small fast model for background calls, the alias defaults) points at the
+  # profile's model, since OpenRouter does not know Anthropic's own ids; the Haiku and small fast
+  # ids point at `agent.small_model` instead when it is set. The base URL is openrouter.ai's
+  # outside QA mode (`OpenRouter.base_url/1`).
   defp provider_env(%{provider: "openrouter"} = profile) do
     case Config.openrouter_api_key() do
       nil ->
@@ -1072,12 +1134,19 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
         {:error, {:missing_provider_env, Config.openrouter_api_key_env(), kind}}
 
       api_key ->
+        model = Map.get(profile, :model)
+        small_model = Map.get(profile, :small_model) || model
+
         {:ok,
          %{
-           "ANTHROPIC_BASE_URL" => @openrouter_base_url,
+           "ANTHROPIC_BASE_URL" => OpenRouter.base_url(),
            "ANTHROPIC_AUTH_TOKEN" => Secret.unwrap(api_key),
            "ANTHROPIC_API_KEY" => "",
-           "CLAUDE_CODE_SUBAGENT_MODEL" => Map.get(profile, :model)
+           "CLAUDE_CODE_SUBAGENT_MODEL" => model,
+           "ANTHROPIC_DEFAULT_HAIKU_MODEL" => small_model,
+           "ANTHROPIC_DEFAULT_SONNET_MODEL" => model,
+           "ANTHROPIC_DEFAULT_OPUS_MODEL" => model,
+           "ANTHROPIC_SMALL_FAST_MODEL" => small_model
          }}
     end
   end
@@ -1338,6 +1407,8 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
       mcp_log_workspace: Keyword.get(opts, :mcp_log_workspace),
       issue: Keyword.get(opts, :issue),
       usage_limited: nil,
+      api_unreachable: nil,
+      provider: Keyword.get(opts, :provider, "anthropic"),
       usage_windows: %{}
     }
 
@@ -1458,6 +1529,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   end
 
   defp finalize_read_result(%{usage_limited: %{} = info}), do: {:error, {:usage_limited, info}}
+  defp finalize_read_result(%{api_unreachable: %{} = info}), do: {:error, {:model_api_unreachable, info}}
 
   defp finalize_read_result(%{turn_failed: reason}) when is_binary(reason) do
     {:error, {:turn_failed, reason}}
@@ -1478,6 +1550,8 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
      |> Map.delete(:mcp_log_workspace)
      |> Map.delete(:issue)
      |> Map.delete(:usage_limited)
+     |> Map.delete(:api_unreachable)
+     |> Map.delete(:provider)
      |> Map.delete(:usage_windows)}
   end
 
@@ -1731,6 +1805,9 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   defp apply_command_tracking_event({:usage_limited, _info}, _active_tool_uses, _command_deadline, _timeout_ms, _now),
     do: {0, nil}
 
+  defp apply_command_tracking_event({:api_unreachable, _info}, _active_tool_uses, _command_deadline, _timeout_ms, _now),
+    do: {0, nil}
+
   defp apply_command_tracking_event(
          {:rate_limited, _info, _reason},
          _active_tool_uses,
@@ -1813,6 +1890,13 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     %{acc | usage_limited: info, turn_failed: reason}
   end
 
+  defp apply_event({:api_unreachable, info}, on_message, acc) do
+    info = %{info | provider: acc.provider}
+    reason = "model API unreachable (#{info.error})"
+    on_message.({:turn_failed, reason})
+    %{acc | api_unreachable: info, turn_failed: reason}
+  end
+
   defp apply_event({:usage_window, message, %{window: window} = usage_window}, on_message, acc) do
     windows = Map.put(acc.usage_windows, window, Map.take(usage_window, [:status, :resets_at, :utilization]))
     on_message.({:usage_window, message, windows})
@@ -1822,6 +1906,13 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   defp apply_event({:rate_limit_info, info}, _on_message, acc) do
     Logger.warning("Claude rate_limit_event not allowed #{issue_log_context(acc.issue)} session_id=#{inspect(acc.session_id)} rate_limit_info=#{inspect(info)}")
 
+    acc
+  end
+
+  # Claude Code sends one every few seconds while a tool runs. It is forwarded so a long tool
+  # call (a full test suite) counts as activity for the orchestrator's no-progress watchdog.
+  defp apply_event({:tool_progress, _tool_name} = event, on_message, acc) do
+    on_message.(event)
     acc
   end
 
@@ -2159,6 +2250,41 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
         :error
     end
   end
+
+  # Only a failure to reach the API: an HTTP error the API returned (a 400, a 429, a 500) is
+  # not an outage, and holding every run on it could hold them forever.
+  @api_unreachable_pattern ~r/can't reach the api server|connection error|fetch failed|socket hang up|getaddrinfo|\b(?:ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH|ENETDOWN)\b/iu
+  @api_error_code_pattern ~r/\b(E[A-Z_]{3,})\b/
+
+  defp api_unreachable_from_result(event) do
+    text = Enum.find_value(["result", "error"], &(is_binary(Map.get(event, &1)) && Map.get(event, &1)))
+
+    if is_binary(text) and String.starts_with?(String.trim_leading(text), "API Error:") and Regex.match?(@api_unreachable_pattern, text) and
+         (Map.get(event, "is_error") == true or extract_turn_result(event).total_tokens == 0) do
+      {:ok,
+       %{
+         provider: "anthropic",
+         window: nil,
+         scope: :all,
+         resets_at: nil,
+         utilization: nil,
+         source: :api_unreachable,
+         error: api_error_code(text)
+       }}
+    else
+      :error
+    end
+  end
+
+  defp api_error_code(text) do
+    case Regex.run(@api_error_code_pattern, text, capture: :all_but_first) do
+      [code] -> code
+      nil -> "connection error"
+    end
+  end
+
+  defp run_profile_provider(%{provider: provider}) when is_binary(provider), do: provider
+  defp run_profile_provider(_profile), do: "anthropic"
 
   defp result_usage_limit(resets_at) do
     %{

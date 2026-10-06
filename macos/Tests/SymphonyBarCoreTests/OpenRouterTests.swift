@@ -34,6 +34,15 @@ final class OpenRouterTests: XCTestCase {
         XCTAssertNil(OpenRouterClient().modelsRequest().value(forHTTPHeaderField: "Authorization"))
     }
 
+    func testAStubAPIBaseGetsTheSamePaths() {
+        let base = OpenRouterClient.baseURL(api: URL(string: "http://127.0.0.1:4100/api")!)
+        let stub = OpenRouterClient(baseURL: base)
+
+        XCTAssertEqual(base.absoluteString, "http://127.0.0.1:4100/api/v1/")
+        XCTAssertEqual(stub.keyRequest(apiKey: "sk-or-v1-symphony-qa-stub").url?.absoluteString, "http://127.0.0.1:4100/api/v1/key")
+        XCTAssertEqual(stub.modelsRequest().url?.absoluteString, "http://127.0.0.1:4100/api/v1/models")
+    }
+
     func testValidKeyWithALimitReportsLabelAndCredit() async {
         let body = """
             {"data":{"label":"sk-or-v1-abc...xyz","usage":12.5,"limit":100,"limit_remaining":87.5,
@@ -160,6 +169,13 @@ final class OpenRouterTests: XCTestCase {
         XCTAssertEqual(OpenRouterModel.toolModels(models, matching: "gpt").map(\.id), ["openai/gpt-4o"])
         XCTAssertEqual(OpenRouterModel.toolModels(models, matching: "sonnet 4").map(\.id), ["anthropic/claude-sonnet-4"])
         XCTAssertEqual(OpenRouterModel.toolModels(models, matching: "claude 2"), [])
+    }
+
+    func testTitleIsTheListedNameOrTheId() {
+        let models = [OpenRouterModel(id: "mistralai/mistral-nemo", name: "Mistral: Mistral Nemo", supportsTools: true)]
+
+        XCTAssertEqual(OpenRouterModel.title(of: "mistralai/mistral-nemo", in: models), "Mistral: Mistral Nemo")
+        XCTAssertEqual(OpenRouterModel.title(of: "a/unknown", in: models), "a/unknown")
     }
 
     func testEffortNoteOnlyForAListedModelWithoutReasoning() {

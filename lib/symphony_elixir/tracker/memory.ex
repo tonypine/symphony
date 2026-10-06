@@ -65,6 +65,13 @@ defmodule SymphonyElixir.Tracker.Memory do
      end)}
   end
 
+  @doc "Reports the repos named in `:memory_tracker_failed_repos` (`{name, reason}`) as failed reads."
+  @spec fetch_issues_by_states_with_failures([String.t()]) :: {:ok, [Issue.t()], [{String.t(), term()}]}
+  def fetch_issues_by_states_with_failures(state_names) do
+    {:ok, issues} = fetch_issues_by_states(state_names)
+    {:ok, issues, Application.get_env(:symphony_elixir, :memory_tracker_failed_repos, [])}
+  end
+
   @spec fetch_issue_states_by_ids([String.t()]) :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch_issue_states_by_ids(issue_ids) do
     maybe_sleep(:memory_tracker_fetch_states_sleep_ms)

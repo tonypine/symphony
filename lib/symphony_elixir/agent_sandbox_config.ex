@@ -4,9 +4,9 @@ defmodule SymphonyElixir.AgentSandboxConfig do
   @moduledoc """
   Shared sandbox defaults for agent runtimes.
 
-  Produces Claude Code `sandbox.filesystem` settings and Codex
-  `permissions.workspace_write.*` `--config` overrides from a single deny
-  list so both adapters stay in sync. Operator-supplied
+  Produces Claude Code `sandbox.filesystem` settings, Claude Code `Edit(<path>)`
+  deny rules for its file tools, and Codex `permissions.workspace_write.*`
+  `--config` overrides from a single deny list so both adapters stay in sync. Operator-supplied
   `workspace.sandbox.allow_read_paths` entries are subtracted from the
   shared `denyRead` set for both runtimes. Operator-supplied
   `workspace.sandbox.allow_write_paths` entries are emitted as
@@ -24,6 +24,9 @@ defmodule SymphonyElixir.AgentSandboxConfig do
       (operator-authored Claude Code prompts / subagents / hooks)
     * `/etc/sudoers`, `/private/etc/sudoers`, `/var/root` (macOS admin/root state)
     * `~/Library/Application Support`, `~/Library/Keychains`, `~/Library/Preferences` (macOS app data)
+    * `~/Library/CloudStorage` (Google Drive, Dropbox, OneDrive) and `~/Library/Mobile Documents`
+      (iCloud Drive): cloud-synced personal files, where an agent's read also makes macOS ask the
+      operator to let Symphony access them
     * shell startup files (e.g. `~/.zshrc`, `~/.bash_profile`) and shell/REPL history files
 
   Codex command sandboxing additionally denies reads of selected runtime
@@ -43,6 +46,10 @@ defmodule SymphonyElixir.AgentSandboxConfig do
       and for a local workspace the files a symlink in a protected path points at
       (`workspace_link_targets/1`)
     * shell startup files, `~/.gitconfig`, and macOS launch agent roots
+    * in each git dir the agent may write (the shared repo's common dir for a worktree), the
+      files that change what git runs: `config`, `config.worktree`, `hooks`, `info`,
+      `packed-refs`, every worktree's `config(.worktree)` and every submodule's `config`
+      (`git_metadata_deny_write_paths/1`)
   """
 
   @codex_profile "workspace_write"
@@ -69,6 +76,8 @@ defmodule SymphonyElixir.AgentSandboxConfig do
     "~/Library/Application Support",
     "~/Library/Keychains",
     "~/Library/Preferences",
+    "~/Library/CloudStorage",
+    "~/Library/Mobile Documents",
     "~/.docker",
     "~/.netrc",
     "~/.git-credentials",
@@ -91,6 +100,14 @@ defmodule SymphonyElixir.AgentSandboxConfig do
     "~/.node_repl_history"
   ]
 
+  # Claude's file tools run in the Claude process, outside the shell sandbox's `denyRead`. These
+  # get `Read(<path>)` rules too, so a Grep or Glob over the home folder doesn't make macOS ask the
+  # operator to let Symphony into their cloud drives.
+  @claude_read_deny_paths [
+    "~/Library/CloudStorage",
+    "~/Library/Mobile Documents"
+  ]
+
   @deny_write_paths [
     "./WORKFLOW.md",
     "./symphony.yml",
@@ -107,6 +124,8 @@ defmodule SymphonyElixir.AgentSandboxConfig do
     "./.git",
     "./mise.toml",
     "./.tool-versions",
+    # Only a person exempts a symphony.yml setting from having a control in the macOS app.
+    "./config/settings_ui_exempt.yml",
     "~/.zshrc",
     "~/.zshenv",
     "~/.zprofile",
@@ -125,6 +144,20 @@ defmodule SymphonyElixir.AgentSandboxConfig do
     "~/.claude/plugins",
     "~/.claude/skills",
     "~/.mcp.json"
+  ]
+
+  # Relative to a git dir. The agent writes objects and refs there to commit, but these change
+  # what git runs, the agent's and Symphony's host-side git alike: config (filter drivers,
+  # `core.fsmonitor`, `core.hooksPath`), hooks and `info/attributes`.
+  @git_metadata_deny_write_entries [
+    "config",
+    "config.worktree",
+    "hooks",
+    "info",
+    "packed-refs",
+    "worktrees/*/config",
+    "worktrees/*/config.worktree",
+    "modules/**/config"
   ]
 
   @srt_codex_runtime_write_paths [
@@ -149,6 +182,10 @@ defmodule SymphonyElixir.AgentSandboxConfig do
   @doc false
   @spec deny_read_paths() :: [String.t()]
   def deny_read_paths, do: @deny_read_paths
+
+  @doc false
+  @spec codex_runtime_deny_read_paths() :: [String.t()]
+  def codex_runtime_deny_read_paths, do: @codex_runtime_deny_read_paths
 
   @doc false
   @spec deny_write_paths() :: [String.t()]
@@ -235,6 +272,33 @@ defmodule SymphonyElixir.AgentSandboxConfig do
     end
   end
 
+  @doc """
+  The write-protected git metadata under each git dir in `git_dirs`, such as the git dir and
+  the shared common dir of a linked worktree. Paths without a `.git` segment are skipped.
+
+  Some entries are globs (`worktrees/*/config`, `modules/**/config`), which the Claude Code and
+  SRT sandboxes match; `literal_paths/1` expands them for a runtime that takes literal paths.
+  """
+  @spec git_metadata_deny_write_paths([Path.t()]) :: [Path.t()]
+  def git_metadata_deny_write_paths(git_dirs) do
+    for git_dir <- git_dirs,
+        is_binary(git_dir),
+        ".git" in Path.split(git_dir),
+        entry <- @git_metadata_deny_write_entries,
+        uniq: true,
+        do: Path.join(git_dir, entry)
+  end
+
+  @doc """
+  Replaces each glob in `paths` with the files on disk it matches now, and keeps the others.
+  """
+  @spec literal_paths([Path.t()]) :: [Path.t()]
+  def literal_paths(paths) do
+    Enum.flat_map(paths, fn path ->
+      if String.contains?(path, "*"), do: Path.wildcard(path, match_dot: true), else: [path]
+    end)
+  end
+
   @doc false
   @spec claude_filesystem_settings([String.t()], [String.t()], [String.t()]) :: map()
   def claude_filesystem_settings(allow_read_paths \\ [], allow_write_paths \\ [], extra_deny_write_paths \\ []) do
@@ -253,35 +317,38 @@ defmodule SymphonyElixir.AgentSandboxConfig do
   end
 
   @doc """
-  Writable paths a sandboxed macOS process needs for Foundation's atomic writes.
+  Claude Code `permissions.deny` rules that refuse its file tools on every write-protected path.
 
-  Foundation sees the sandbox and stages every `Data.write(options: .atomic)` in
-  the item replacement directory, `<DARWIN_USER_TEMP_DIR>/TemporaryItems`,
-  whatever `TMPDIR` says. Without write access there, SwiftPM's build fails
-  before compiling anything. Only `TemporaryItems` is granted: the per-user temp
-  dir itself also holds Symphony's per-session Claude settings and MCP shim.
-
-  Returns the path and its canonical form (`/var` is a symlink to `/private/var`),
-  or `[]` off macOS or when `getconf` fails. Options: `:os_type` (default
-  `:os.type()`) and `:getconf` (the `getconf` executable).
+  `sandbox.filesystem.denyWrite` binds shell commands only; `Edit`, `Write` and `NotebookEdit`
+  run in the Claude process. Claude Code applies an `Edit(<path>)` rule to all three and
+  ignores a `Write(<path>)` or `NotebookEdit(<path>)` rule (checked with Claude Code 2.1.289).
+  A directory rule covers the files under it. Claude matches a symlink's real path, so the
+  link targets in `extra_deny_write_paths` need their own rules. `./` is relative to the
+  session's working directory and `~/` to the home directory; an absolute path needs `//`.
   """
-  @spec item_replacement_write_paths(keyword()) :: [String.t()]
-  def item_replacement_write_paths(opts) do
-    case Keyword.get_lazy(opts, :os_type, &:os.type/0) do
-      {:unix, :darwin} ->
-        case System.cmd(Keyword.get(opts, :getconf, "getconf"), ["DARWIN_USER_TEMP_DIR"], stderr_to_stdout: true) do
-          {user_temp_dir, 0} ->
-            path = Path.join(String.trim(user_temp_dir), "TemporaryItems")
-            [path | canonical_absolute_path_variants(path)]
-
-          {_output, _status} ->
-            []
-        end
-
-      _os_type ->
-        []
-    end
+  @spec claude_edit_deny_rules([String.t()]) :: [String.t()]
+  def claude_edit_deny_rules(extra_deny_write_paths \\ []) do
+    (@deny_write_paths ++ normalize_sandbox_paths(extra_deny_write_paths))
+    |> Enum.uniq()
+    |> Enum.map(&"Edit(#{claude_rule_path(&1)})")
   end
+
+  @doc """
+  Claude Code `permissions.deny` rules that refuse its file tools on the cloud-synced folders,
+  but the ones an operator's `allow_read_paths` opens.
+
+  Claude Code applies a `Read(<path>)` rule to `Read`, `Grep` and `Glob`, which run in the Claude
+  process and so outside `sandbox.filesystem.denyRead`.
+  """
+  @spec claude_read_deny_rules([String.t()]) :: [String.t()]
+  def claude_read_deny_rules(allow_read_paths \\ []) do
+    allow_read_paths = normalize_allow_read_paths(allow_read_paths)
+
+    for path <- @claude_read_deny_paths, path not in allow_read_paths, do: "Read(#{path})"
+  end
+
+  defp claude_rule_path("/" <> _absolute = path), do: "/" <> path
+  defp claude_rule_path(path), do: path
 
   @doc false
   @spec codex_config_overrides(String.t(), [String.t()], [String.t()], [String.t()], keyword()) :: [String.t()]
@@ -356,10 +423,11 @@ defmodule SymphonyElixir.AgentSandboxConfig do
     # "read" here would create a duplicate TOML key whose later value silently
     # downgrades the protection to read-allowed.
     external_write_protect_entries =
-      @deny_write_paths
+      (@deny_write_paths ++ normalize_sandbox_paths(Keyword.get(opts, :deny_write_paths, [])))
       |> Enum.reject(&project_relative_sandbox_path?/1)
       |> expand_home_paths()
       |> Enum.reject(&MapSet.member?(deny_read_set, &1))
+      |> Enum.uniq()
       |> Enum.map(&{&1, "read"})
 
     deny_read_paths

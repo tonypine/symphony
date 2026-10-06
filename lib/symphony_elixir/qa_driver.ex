@@ -20,10 +20,13 @@ defmodule SymphonyElixir.QaDriver do
     still matches what the build produced and the worktree is as that build
     left it, so later worktree edits cannot change what runs. The app always
     gets `SYMPHONY_BAR_QA_ROOT` pointing at the private directory, so it never
-    touches real settings or secrets;
-  - `qa_quit_app`, `qa_screenshot`, `qa_ax_tree`, `qa_ax_press` and
-    `qa_ax_set_value` accept only a PID this driver launched and that is still
-    running;
+    touches real settings or secrets, and `SYMPHONY_QA_OPENROUTER_URL` pointing
+    at this pass's `SymphonyElixir.OpenRouter.Stub`, so its OpenRouter flows
+    never need a real key (see "OpenRouter stub" below);
+  - `qa_quit_app`, `qa_screenshot`, `qa_ax_tree`, `qa_ax_press`,
+    `qa_ax_set_value` and `qa_resize_window` accept only a PID this driver
+    launched and that is still running; `qa_check_app` also reports on one that
+    has exited;
   - screenshots land in `qa-evidence/` under the worktree, always as new files:
     a name that already exists, symlinks included, is refused rather than
     followed or replaced;
@@ -46,8 +49,30 @@ defmodule SymphonyElixir.QaDriver do
   root) is a `0700` directory under Symphony's state root, outside every path
   the agent sandbox may write.
 
+  Wide pass: `qa_resize_window` sizes an app's window to at least 1400×900 pt,
+  or the screen's usable area when that is smaller, and remembers the size it
+  reached. `qa_check_app` then says whether the app still runs, answers an
+  accessibility request within 10 seconds, and has left no new
+  `~/Library/Logs/DiagnosticReports/<executable>*` crash report (listed at launch
+  and again at each check, on the QA host for a `worker_host`), naming the page
+  the agent passes and that window size in each problem. A resize on a screen
+  whose usable area is under 1400×900 pt marks the pass's wide pass limited
+  (`wide_pass/1`), which `SymphonyElixir.QaAgent` reports as `blocked`, as it does
+  a `pass` with no resize at all (`wide_pass/1` is `nil`).
+
+  OpenRouter stub: the first `qa_launch_app` starts a
+  `SymphonyElixir.OpenRouter.Stub` in this BEAM, on `127.0.0.1`, and every app
+  of the pass gets its URL. The app, and the Symphony it runs, use it only in QA
+  mode (`SymphonyElixir.OpenRouter.base_url/1`).
+
+  Host ports: the driver picks three free ports on this host's loopback for the
+  pass (`host_ports/1`, `QA_HOST_PORTS` in the QA agent's prompt and
+  environment). The agent serves the app's stubs and proxies on `127.0.0.1` at
+  those ports, and the app reaches them at `http://localhost:<port>`.
+
   When the driver stops (the QA pass ends or crashes) it quits every app it
-  launched and removes its private directory.
+  launched, stops the stub, closes the host-port tunnel and removes its private
+  directory.
 
   With `:worker_host` (`auto_review.worker_host`) the build, the app and the
   helper run on that QA host instead, through `SymphonyElixir.QaDriver.Remote`.
@@ -57,7 +82,18 @@ defmodule SymphonyElixir.QaDriver do
   directory there and launches it from that copy. The agent cannot write on the
   QA host, so the copy is not checked again before launch. Screenshots are
   captured there and copied back into `qa-evidence/`, and `qa_put_file` copies
-  fixtures there, because the app cannot read the Symphony host's files. A QA host that can reach
+  fixtures there, because the app cannot read the Symphony host's files. Each
+  app's SSH session forwards a random loopback port on the QA host back to the
+  stub (`ssh -R`), and the app gets that port's URL. At start the driver also
+  opens one SSH session that forwards each host port from the QA host's
+  loopback to the same port here (`SymphonyElixir.QaDriver.Remote.tunnel/3`),
+  so `localhost` means the same service on both machines: an app on the bridged
+  QA VM cannot reach this host's NAT address, and macOS asks a person before an
+  app connects to a LAN address, while loopback needs no permission. A forward
+  the QA host refuses is retried on fresh ports; a tunnel that still cannot open
+  makes `host_ports/1` return the reason, and the QA pass is `blocked` with it.
+  A tunnel that closes during the pass is reopened at the next `qa_launch_app`,
+  which fails with `qa_host_tunnel_failed` when it cannot. A QA host that can reach
   the operator's credentials or holds push credentials is refused at start,
   and every tool then fails with `qa_worker_unsafe`.
   """
@@ -66,11 +102,15 @@ defmodule SymphonyElixir.QaDriver do
 
   require Logger
 
-  alias SymphonyElixir.{AgentEnv, PathSafety, Workspace}
+  alias SymphonyElixir.{AgentEnv, OpenRouter, PathSafety, Workspace}
   alias SymphonyElixir.QaDriver.{Checks, Host, Remote}
 
   @evidence_dir "qa-evidence"
   @qa_root_env "SYMPHONY_BAR_QA_ROOT"
+  # The QA host's loopback ports an app's SSH session may forward to the stub.
+  @stub_remote_ports 20_000..59_999
+  @host_port_count 3
+  @tunnel_attempts 3
   @default_build_timeout_ms 900_000
   @helper_timeout_ms 30_000
   @screenshot_timeout_ms 15_000
@@ -82,8 +122,17 @@ defmodule SymphonyElixir.QaDriver do
   @value_limit 10_000
   @press_actions ~w(AXPress AXRaise AXShowMenu AXConfirm AXCancel AXIncrement AXDecrement AXPick)
   @element_path ~r/\A\d{1,4}(\.\d{1,4}){0,63}\z/
-  @put_file_limit 1_000_000
-  @put_file_name ~r/\A[A-Za-z0-9][A-Za-z0-9._-]{0,127}\z/
+  # The wide pass needs a window at least this size (points).
+  @wide_width 1400
+  @wide_height 900
+  @max_window_size 8192
+
+  # Lists the crash reports named after the app (`$1`, its executable) in the
+  # user's DiagnosticReports, one name per line. No folder means no reports.
+  @crash_reports_script """
+  cd "$HOME/Library/Logs/DiagnosticReports" 2>/dev/null || exit 0
+  for report in "$1"[-_.]*; do if [ -f "$report" ]; then printf '%s\\n' "$report"; fi; done
+  """
 
   # Checks and copies the bundle on a QA host: `$1` build dir, `$2` app path,
   # `$3` destination. The bundle must be a real `.app` directory inside the build
@@ -101,7 +150,7 @@ defmodule SymphonyElixir.QaDriver do
   printf 'symphony-qa-app:%s\\n' "$executable"
   """
 
-  @tools ~w(qa_build qa_launch_app qa_quit_app qa_screenshot qa_ax_tree qa_ax_press qa_ax_set_value qa_put_file)
+  @tools ~w(qa_build qa_launch_app qa_quit_app qa_screenshot qa_ax_tree qa_ax_press qa_ax_set_value qa_resize_window qa_check_app qa_put_file)
 
   @type host :: %{
           required(:cmd) => (String.t(), [String.t()], keyword() -> {:ok, {String.t(), integer()}} | {:error, term()}),
@@ -114,6 +163,7 @@ defmodule SymphonyElixir.QaDriver do
           optional(:prepare) => (Path.t(), Path.t() -> {:ok, String.t()} | {:error, {atom(), String.t()}}),
           optional(:ship) => (Path.t(), String.t() -> :ok | {:error, String.t()}),
           optional(:put) => (Path.t(), String.t(), String.t() -> {:ok, String.t()} | {:error, String.t()}),
+          optional(:tunnel) => ([pos_integer()] -> {:ok, port()} | {:error, {:port_taken | :failed, String.t()}}),
           optional(:cleanup) => (String.t() -> :ok)
         }
   @type helper_result :: {:ok, Path.t()} | {:error, term()}
@@ -131,10 +181,27 @@ defmodule SymphonyElixir.QaDriver do
   with `build`, `app` and optional `build_timeout_ms`), `:tmp_dir` (the pass's
   `$TMPDIR`, where `qa_put_file` may read besides the worktree), `:worker_host`
   (the SSH host QA runs on, default this host), `:host` (overrides for the OS
-  boundary, see `t:host/0`) and `:git` (a `fn args, cwd -> {output, status}`).
+  boundary, see `t:host/0`), `:git` (a `fn args, cwd -> {output, status}`) and
+  `:start_stub` (a `fn -> {:ok, pid, port} | {:error, reason}` that starts the
+  OpenRouter stub, default `SymphonyElixir.OpenRouter.Stub.start_link/0`).
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
+
+  @doc """
+  The pass's wide pass: the screen, its usable area and the window size of the
+  last `qa_resize_window`, and whether that screen limited it (`limited: true`
+  when its usable area is under 1400×900 pt). `nil` when no window was resized
+  or there is no driver.
+  """
+  @spec wide_pass(pid() | nil) :: map() | nil
+  def wide_pass(nil), do: nil
+
+  def wide_pass(driver) when is_pid(driver) do
+    GenServer.call(driver, :wide_pass)
+  catch
+    :exit, _reason -> nil
+  end
 
   @doc "Stops the driver, quitting every app it launched."
   @spec stop(pid() | nil) :: :ok
@@ -145,6 +212,15 @@ defmodule SymphonyElixir.QaDriver do
   catch
     :exit, _reason -> :ok
   end
+
+  @doc """
+  The ports on this host's loopback that the QA agent may serve the app's stubs
+  and proxies on, which the app reaches at `http://localhost:<port>` wherever it
+  runs. `{:error, reason}` when the tunnel to the QA host could not open.
+  """
+  @spec host_ports(pid() | nil) :: {:ok, [pos_integer()]} | {:error, String.t()}
+  def host_ports(nil), do: {:ok, []}
+  def host_ports(driver) when is_pid(driver), do: GenServer.call(driver, :host_ports, 30_000)
 
   @doc """
   Runs one `qa_*` tool with the agent's arguments. Returns the tool payload or a
@@ -181,8 +257,10 @@ defmodule SymphonyElixir.QaDriver do
   defp run_tool("qa_launch_app", driver, config, _args) do
     with {:ok, built} <- fetch_build(driver),
          :ok <- ensure_clean_worktree(config, GenServer.call(driver, :ignored)),
-         :ok <- unchanged_build(config, built) do
-      GenServer.call(driver, {:launch, built.executable})
+         :ok <- unchanged_build(config, built),
+         name = Path.basename(built.executable),
+         {:ok, reports} <- crash_reports(config, name) do
+      GenServer.call(driver, {:launch, built.executable, %{name: name, crash_reports: reports}})
     end
   end
 
@@ -250,10 +328,34 @@ defmodule SymphonyElixir.QaDriver do
     end
   end
 
+  defp run_tool("qa_resize_window", driver, config, args) do
+    with {:ok, pid} <- running_pid(driver, args),
+         {:ok, path} <- optional_element_path(Map.get(args, "path")),
+         {:ok, width} <- optional_integer(args, "width", @wide_width, @max_window_size),
+         {:ok, height} <- optional_integer(args, "height", @wide_height, @max_window_size),
+         {:ok, helper} <- helper(driver, config),
+         size_args = [Integer.to_string(width || @wide_width), Integer.to_string(height || @wide_height)],
+         {:ok, resized} <- run_helper(config, helper, ["ax-resize", Integer.to_string(pid), path | size_args]),
+         {:ok, wide_pass} <- wide_pass_of(resized) do
+      GenServer.call(driver, {:resized, pid, wide_pass})
+      {:ok, Map.merge(resized, %{"limited" => wide_pass.limited, "note" => resize_note(wide_pass)})}
+    end
+  end
+
+  defp run_tool("qa_check_app", driver, config, args) do
+    with {:ok, pid} <- pid_argument(args),
+         {:ok, page} <- optional_string(args, "page", 200),
+         {:ok, app} <- GenServer.call(driver, {:app, pid}),
+         {:ok, reports} <- crash_reports(config, app.name),
+         {:ok, responding} <- responding(driver, config, pid, app) do
+      {:ok, health(pid, page, app, reports -- app.crash_reports, responding, config)}
+    end
+  end
+
   defp run_tool("qa_put_file", _driver, config, args) do
-    with {:ok, local_path} <- local_path(Map.get(args, "local_path")),
+    with {:ok, local_path} <- Checks.fixture_path(Map.get(args, "local_path")),
          {:ok, name} <- put_file_name(Map.get(args, "remote_name"), local_path),
-         {:ok, path, bytes} <- read_put_file(config, local_path) do
+         {:ok, path, bytes} <- Checks.read_fixture(config.put_roots, config.worktree, local_path, "qa_put_file") do
       put_file(config, path, bytes, name)
     end
   end
@@ -553,84 +655,6 @@ defmodule SymphonyElixir.QaDriver do
 
   # -- fixture files -----------------------------------------------------------
 
-  # Symphony reads files the agent's sandbox may not, so only a regular file the
-  # agent wrote itself passes: inside the worktree or its `$TMPDIR` once every
-  # link on the way is resolved, not a link itself, and with no other hard link,
-  # which could name a file elsewhere. The read goes through one descriptor that
-  # must be the file just checked, so a path swapped after the check is refused.
-  defp read_put_file(config, local_path) do
-    path = Path.expand(local_path, config.worktree)
-
-    with {:ok, _stat} <- put_file_lstat(path, local_path),
-         {:ok, canonical} <- inside_put_roots(config, path, local_path),
-         {:ok, stat} <- put_file_lstat(canonical, local_path),
-         :ok <- single_regular_file(stat, local_path),
-         {:ok, bytes} <- read_checked(canonical, stat, local_path) do
-      {:ok, canonical, bytes}
-    end
-  end
-
-  defp put_file_lstat(path, local_path) do
-    case File.lstat(path, time: :posix) do
-      {:ok, %File.Stat{type: :symlink}} -> put_file_refused("#{local_path} is a symlink. Pass the regular file itself.")
-      {:ok, stat} -> {:ok, stat}
-      {:error, reason} -> put_file_refused("#{local_path} could not be read: #{inspect(reason)}.")
-    end
-  end
-
-  defp inside_put_roots(config, path, local_path) do
-    with {:ok, canonical} <- PathSafety.canonicalize(path),
-         true <- Enum.any?(config.put_roots, &String.starts_with?(canonical, &1 <> "/")) do
-      {:ok, canonical}
-    else
-      _other ->
-        put_file_refused("#{local_path} is outside the QA worktree and $TMPDIR. Write the fixture under #{@evidence_dir}/ or $TMPDIR first.")
-    end
-  end
-
-  defp single_regular_file(%File.Stat{type: :regular, links: 1, size: size}, _local_path) when size <= @put_file_limit, do: :ok
-  defp single_regular_file(%File.Stat{type: :regular, links: 1}, local_path), do: put_file_refused("#{local_path} is over #{@put_file_limit} bytes.")
-  defp single_regular_file(%File.Stat{type: :regular}, local_path), do: put_file_refused("#{local_path} has other hard links. Write a fresh copy.")
-  defp single_regular_file(_stat, local_path), do: put_file_refused("#{local_path} is not a regular file.")
-
-  defp read_checked(path, stat, local_path) do
-    case :file.open(path, [:read, :binary, :raw]) do
-      {:ok, fd} ->
-        try do
-          read_opened(fd, path, stat, local_path)
-        after
-          :file.close(fd)
-        end
-
-      {:error, reason} ->
-        put_file_refused("#{local_path} could not be read: #{inspect(reason)}.")
-    end
-  end
-
-  defp read_opened(fd, path, stat, local_path) do
-    {:ok, info} = :file.read_file_info(fd, time: :posix)
-    opened = File.Stat.from_record(info)
-
-    bytes =
-      case :file.read(fd, @put_file_limit + 1) do
-        {:ok, bytes} -> bytes
-        :eof -> ""
-      end
-
-    same_file? = same_inode?(opened, stat) and opened.links == 1 and still_at?(path, opened)
-    complete? = byte_size(bytes) <= @put_file_limit
-    if same_file? and complete?, do: {:ok, bytes}, else: put_file_refused("#{local_path} changed while it was read; leave it alone during qa_put_file.")
-  end
-
-  defp same_inode?(a, b), do: {a.type, a.inode, a.major_device} == {b.type, b.inode, b.major_device}
-
-  # A folder on the way swapped for a link before the open makes the path
-  # resolve elsewhere afterwards, or name another file once it is swapped back.
-  defp still_at?(path, %File.Stat{type: type, inode: inode, major_device: device}) do
-    match?({:ok, ^path}, PathSafety.canonicalize(path)) and
-      match?({:ok, %File.Stat{type: ^type, inode: ^inode, major_device: ^device}}, File.lstat(path))
-  end
-
   defp put_file(%{remote?: false}, path, bytes, _name), do: {:ok, %{"path" => path, "bytes" => byte_size(bytes)}}
 
   # The checked bytes travel, not the path, which the agent can still change.
@@ -647,8 +671,6 @@ defmodule SymphonyElixir.QaDriver do
     File.rm(local)
     result
   end
-
-  defp put_file_refused(message), do: tool_error("qa_put_file_refused", message)
 
   # -- argument checks --------------------------------------------------------
 
@@ -671,6 +693,9 @@ defmodule SymphonyElixir.QaDriver do
 
   defp element_path(_path), do: tool_error("invalid_arguments", "`path` is required.")
 
+  defp optional_element_path(nil), do: {:ok, ""}
+  defp optional_element_path(path), do: element_path(path)
+
   defp press_action(nil), do: {:ok, "AXPress"}
   defp press_action(action) when action in @press_actions, do: {:ok, action}
   defp press_action(_action), do: tool_error("invalid_arguments", "`action` must be one of #{Enum.join(@press_actions, ", ")}.")
@@ -681,16 +706,10 @@ defmodule SymphonyElixir.QaDriver do
 
   defp set_value(_value), do: tool_error("invalid_arguments", "`value` must be a string of at most #{@value_limit} bytes.")
 
-  defp local_path(path) when is_binary(path) and path != "" and byte_size(path) <= 4_096 do
-    if String.contains?(path, <<0>>), do: tool_error("invalid_arguments", "`local_path` must not contain NUL bytes."), else: {:ok, path}
-  end
-
-  defp local_path(_path), do: tool_error("invalid_arguments", "`local_path` is required: a file under #{@evidence_dir}/ or $TMPDIR.")
-
   defp put_file_name(nil, local_path), do: put_file_name(Path.basename(local_path), local_path)
 
   defp put_file_name(name, _local_path) do
-    if is_binary(name) and Regex.match?(@put_file_name, name) do
+    if Checks.fixture_name?(name) do
       {:ok, name}
     else
       tool_error("invalid_arguments", "`remote_name` must be 1-128 characters of letters, digits, `.`, `_` or `-`, starting with a letter or digit.")
@@ -713,6 +732,103 @@ defmodule SymphonyElixir.QaDriver do
       _value -> tool_error("invalid_arguments", "`#{key}` must be an integer from #{min} to #{max}.")
     end
   end
+
+  # -- wide pass --------------------------------------------------------------
+
+  defp wide_pass_of(resized) do
+    with {:ok, window} <- size_of(resized, "window"),
+         {:ok, screen} <- size_of(resized, "screen"),
+         {:ok, {vw, vh} = visible} <- size_of(resized, "visible") do
+      {:ok, %{window: window, screen: screen, visible: visible, limited: vw < @wide_width or vh < @wide_height}}
+    else
+      :error -> tool_error("qa_helper_failed", "The QA helper returned no window size: #{inspect(resized)}")
+    end
+  end
+
+  defp size_of(resized, key) do
+    case resized do
+      %{^key => %{"w" => w, "h" => h}} when is_integer(w) and is_integer(h) -> {:ok, {w, h}}
+      _other -> :error
+    end
+  end
+
+  defp resize_note(%{limited: true} = wide_pass) do
+    "The QA screen is #{size(wide_pass.screen)} with #{size(wide_pass.visible)} usable, under the #{size({@wide_width, @wide_height})} " <>
+      "the wide pass needs, so the window is #{size(wide_pass.window)}. Run the wide pass at this size, report the screen size, " <>
+      "and mark the Wide pass step `blocked` as limited: Symphony reports a pass whose wide pass was limited as `blocked`."
+  end
+
+  defp resize_note(%{window: {w, h}} = wide_pass) when w < @wide_width or h < @wide_height do
+    "The app kept its window at #{size(wide_pass.window)} on a #{size(wide_pass.screen)} screen: the window has a maximum size " <>
+      "or ignored the resize. Resize the app's main window (pass its `path`) for the wide pass."
+  end
+
+  defp resize_note(wide_pass), do: "The window is #{size(wide_pass.window)} on a #{size(wide_pass.screen)} screen."
+
+  defp size({w, h}), do: "#{w}×#{h} pt"
+
+  defp crash_reports(config, name) do
+    case config.host.cmd.("/bin/sh", ["-c", @crash_reports_script, "sh", name], timeout_ms: @helper_timeout_ms, output_limit: @tree_bytes_limit) do
+      {:ok, {output, 0}} ->
+        {:ok, String.split(output, "\n", trim: true)}
+
+      {:ok, {output, status}} ->
+        tool_error("qa_crash_reports_failed", "Listing the app's crash reports failed (exit #{status}): #{tail(output, 500)}")
+
+      {:error, reason} ->
+        tool_error("qa_crash_reports_failed", "Listing the app's crash reports failed: #{inspect(reason)}")
+    end
+  end
+
+  # An app that exited answers nothing; a helper that gave up waiting on the app
+  # means it is hung too.
+  defp responding(_driver, _config, _pid, %{exit_status: status}) when is_integer(status), do: {:ok, nil}
+
+  defp responding(driver, config, pid, _app) do
+    with {:ok, helper} <- helper(driver, config) do
+      case run_helper(config, helper, ["ax-ping", Integer.to_string(pid)]) do
+        {:ok, _reply} -> {:ok, true}
+        {:error, {:qa_tool, code, _message}} when code in ["qa_app_not_responding", "qa_helper_timeout"] -> {:ok, false}
+        {:error, _reason} = error -> error
+      end
+    end
+  end
+
+  defp health(pid, page, app, new_reports, responding, config) do
+    where = where(page, app.window)
+
+    problems =
+      Enum.reject(
+        [
+          app.exit_status && "The app exited with status #{app.exit_status}#{where}. Last output: #{tail(app.output, 2_000)}",
+          responding == false && "The app did not answer accessibility requests for 10 seconds#{where}: it is hung.",
+          new_reports != [] &&
+            "New crash report#{where} in ~/Library/Logs/DiagnosticReports#{if config.remote?, do: " on the QA host"}: #{Enum.join(new_reports, ", ")}."
+        ],
+        &(&1 in [nil, false])
+      )
+
+    %{
+      "pid" => pid,
+      "page" => page,
+      "window" => window_payload(app.window),
+      "running" => app.exit_status == nil,
+      "responding" => responding,
+      "crash_reports" => new_reports,
+      "healthy" => problems == [],
+      "problems" => problems
+    }
+  end
+
+  defp where(page, window) do
+    case Enum.reject([page && "page #{inspect(page)}", window && "window #{size(window)}"], &is_nil/1) do
+      [] -> ""
+      parts -> " (" <> Enum.join(parts, ", ") <> ")"
+    end
+  end
+
+  defp window_payload(nil), do: nil
+  defp window_payload({w, h}), do: %{"w" => w, "h" => h}
 
   # -- helper -----------------------------------------------------------------
 
@@ -873,21 +989,50 @@ defmodule SymphonyElixir.QaDriver do
       app: Map.fetch!(playbook, :app),
       build_timeout_ms: Map.get(playbook, :build_timeout_ms) || @default_build_timeout_ms,
       scratch_dir: Checks.private_dir("qa-driver"),
-      put_roots: [worktree | put_tmp_root(Keyword.get(opts, :tmp_dir))],
+      put_roots: Checks.fixture_roots(worktree, Keyword.get(opts, :tmp_dir)),
       remote?: worker_host != nil,
       host: Map.merge(base_host, Map.new(Keyword.get(opts, :host, %{}))),
-      git: Keyword.get(opts, :git, &default_git/2)
+      git: Keyword.get(opts, :git, &default_git/2),
+      start_stub: Keyword.get(opts, :start_stub, &OpenRouter.Stub.start_link/0)
     }
 
-    {:ok, %{config: host_dirs(config, worker_host), build: nil, ignored: %{}, apps: %{}, helper: nil}}
+    state = %{config: host_dirs(config, worker_host), build: nil, ignored: %{}, apps: %{}, helper: nil, stub: nil}
+    state = Map.merge(state, %{wide_pass: nil, host_ports: pick_host_ports(), tunnel: nil, tunnel_error: nil})
+    {:ok, open_tunnel(state, @tunnel_attempts)}
   end
 
-  # `/tmp` is a link on macOS; the check compares resolved paths.
-  defp put_tmp_root(nil), do: []
+  # Held open together, so the ports differ; the agent binds them later.
+  defp pick_host_ports do
+    sockets =
+      for _index <- 1..@host_port_count do
+        {:ok, socket} = :gen_tcp.listen(0, ip: {127, 0, 0, 1})
+        socket
+      end
 
-  defp put_tmp_root(tmp_dir) do
-    {:ok, canonical} = PathSafety.canonicalize(tmp_dir)
-    [canonical]
+    ports = for socket <- sockets, do: elem(:inet.port(socket), 1)
+    Enum.each(sockets, &:gen_tcp.close/1)
+    ports
+  end
+
+  # A local app reaches the host ports directly, and a QA host Symphony refused
+  # runs no app.
+  defp open_tunnel(%{config: %{remote?: false}} = state, _attempts), do: state
+  defp open_tunnel(%{config: %{unavailable: _error}} = state, _attempts), do: state
+
+  defp open_tunnel(state, attempts) do
+    case state.config.host.tunnel.(state.host_ports) do
+      {:ok, tunnel} ->
+        Logger.info("QA driver forwards host ports=#{Enum.join(state.host_ports, ",")} to the QA host")
+        %{state | tunnel: tunnel, tunnel_error: nil}
+
+      {:error, {:port_taken, message}} when attempts > 1 ->
+        Logger.info("QA driver retries the host-port tunnel on fresh ports: #{message}")
+        open_tunnel(%{state | host_ports: pick_host_ports()}, attempts - 1)
+
+      {:error, {_kind, message}} ->
+        Logger.warning("QA driver could not open the host-port tunnel ports=#{Enum.join(state.host_ports, ",")}: #{message}")
+        %{state | tunnel_error: message}
+    end
   end
 
   # `host_dir` holds the bundle copies, screenshot staging and the app's QA root
@@ -929,22 +1074,47 @@ defmodule SymphonyElixir.QaDriver do
 
   @impl true
   def handle_call(:config, _from, state), do: {:reply, state.config, state}
+
+  def handle_call(:host_ports, _from, %{tunnel_error: nil} = state), do: {:reply, {:ok, state.host_ports}, state}
+  def handle_call(:host_ports, _from, state), do: {:reply, {:error, state.tunnel_error}, state}
   def handle_call(:build, _from, state), do: {:reply, state.build, state}
   def handle_call(:ignored, _from, state), do: {:reply, state.ignored, state}
   def handle_call(:helper, _from, state), do: {:reply, state.helper, state}
+  def handle_call(:wide_pass, _from, state), do: {:reply, state.wide_pass, state}
   def handle_call({:helper, path}, _from, state), do: {:reply, :ok, %{state | helper: path}}
 
   def handle_call({:record_build, fingerprint, ignored}, _from, state),
     do: {:reply, :ok, %{state | build: fingerprint, ignored: ignored}}
 
-  def handle_call({:launch, executable}, _from, state) do
+  def handle_call({:launch, executable, info}, _from, state) do
     running = Enum.count(state.apps, fn {_pid, app} -> app.exit_status == nil end)
 
-    if running >= @max_running_apps do
-      {:reply, tool_error("qa_too_many_apps", "#{running} launched apps are still running; quit one with qa_quit_app first."), state}
-    else
-      launch(executable, state)
+    cond do
+      running >= @max_running_apps ->
+        {:reply, tool_error("qa_too_many_apps", "#{running} launched apps are still running; quit one with qa_quit_app first."), state}
+
+      reopen_tunnel?(state) ->
+        case open_tunnel(state, 1) do
+          %{tunnel_error: nil} = state -> launch(executable, info, state)
+          state -> {:reply, tunnel_closed_error(state), state}
+        end
+
+      true ->
+        launch(executable, info, state)
     end
+  end
+
+  def handle_call({:app, pid}, _from, state) do
+    case Map.fetch(state.apps, pid) do
+      {:ok, app} -> {:reply, {:ok, app}, state}
+      :error -> {:reply, not_launched_error(pid), state}
+    end
+  end
+
+  # The app may have quit since the resize; the pass's wide pass still counts.
+  def handle_call({:resized, pid, wide_pass}, _from, state) do
+    state = update_in(state.apps, &Map.replace_lazy(&1, pid, fn app -> %{app | window: wide_pass.window} end))
+    {:reply, :ok, %{state | wide_pass: wide_pass}}
   end
 
   def handle_call({:running, pid}, _from, state) do
@@ -976,36 +1146,90 @@ defmodule SymphonyElixir.QaDriver do
     {:noreply, update_app(state, port, fn app -> %{app | output: tail(app.output <> data, @app_output_limit)} end)}
   end
 
+  # The tunnel closed during the pass: the next launch reopens it on the same ports.
+  # Its output (`ssh` warnings) matches no app above and is dropped.
+  def handle_info({port, {:exit_status, status}}, %{tunnel: port} = state) do
+    Logger.warning("QA driver host-port tunnel closed status=#{status}")
+    {:noreply, %{state | tunnel: nil}}
+  end
+
   def handle_info({port, {:exit_status, status}}, state) when is_port(port) do
     {:noreply, update_app(state, port, fn app -> %{app | exit_status: status} end)}
   end
+
+  # A stub that died is started again at the next launch.
+  def handle_info({:EXIT, pid, _reason}, %{stub: %{pid: pid}} = state), do: {:noreply, %{state | stub: nil}}
 
   def handle_info(_message, state), do: {:noreply, state}
 
   @impl true
   def terminate(_reason, state) do
     for {pid, %{exit_status: nil}} <- state.apps, do: state.config.host.kill.(pid)
+    if state.stub, do: OpenRouter.Stub.stop(state.stub.pid)
+    if state.tunnel && Port.info(state.tunnel), do: Port.close(state.tunnel)
     if state.config.remote? and state.config.host_dir, do: state.config.host.cleanup.(state.config.host_dir)
     File.rm_rf(state.config.scratch_dir)
     :ok
   end
 
-  defp launch(executable, state) do
-    case state.config.host.launch.(executable, cd: state.config.qa_root, env: launch_env(state.config)) do
-      {:ok, port, pid} ->
-        Logger.info("QA driver launched app pid=#{pid} executable=#{executable}")
-        app = %{port: port, output: "", exit_status: nil}
-        payload = %{"pid" => pid, "qa_mode" => true, "note" => "Wait for the window to settle before judging it."}
-        {:reply, {:ok, payload}, %{state | apps: Map.put(state.apps, pid, app)}}
+  defp launch(executable, info, state) do
+    with {:ok, state} <- ensure_stub(state),
+         {stub_url, forwards} = stub_route(state.config, state.stub.port),
+         launch_opts = [cd: state.config.qa_root, env: launch_env(state.config, stub_url), reverse_forwards: forwards],
+         {:ok, port, pid} <- state.config.host.launch.(executable, launch_opts) do
+      Logger.info("QA driver launched app pid=#{pid} executable=#{executable} openrouter_stub=#{stub_url}")
+      app = Map.merge(info, %{port: port, output: "", exit_status: nil, window: nil})
+      payload = %{"pid" => pid, "qa_mode" => true, "note" => "Wait for the window to settle before judging it."}
+      {:reply, {:ok, payload}, %{state | apps: Map.put(state.apps, pid, app)}}
+    else
+      {:error, {:qa_tool, _code, _message}} = error ->
+        {:reply, error, state}
 
       {:error, reason} ->
         {:reply, tool_error("qa_launch_failed", "The app could not start: #{inspect(reason)}"), state}
     end
   end
 
-  # The QA host has its own login environment; only the QA root crosses over.
-  defp launch_env(%{remote?: true, qa_root: qa_root}), do: [{@qa_root_env, qa_root}]
-  defp launch_env(config), do: AgentEnv.build_with(%{@qa_root_env => config.qa_root})
+  defp reopen_tunnel?(state),
+    do: state.config.remote? and state.tunnel == nil and not Map.has_key?(state.config, :unavailable)
+
+  defp tunnel_closed_error(state) do
+    tool_error(
+      "qa_host_tunnel_failed",
+      "The tunnel that forwards QA_HOST_PORTS (#{Enum.join(state.host_ports, ", ")}) from the QA host closed and could not reopen: " <>
+        "#{state.tunnel_error}. #{Checks.blocked_hint()}"
+    )
+  end
+
+  defp ensure_stub(%{stub: %{}} = state), do: {:ok, state}
+
+  defp ensure_stub(state) do
+    case state.config.start_stub.() do
+      {:ok, pid, port} ->
+        Logger.info("QA driver started the OpenRouter stub port=#{port}")
+        {:ok, %{state | stub: %{pid: pid, port: port}}}
+
+      {:error, reason} ->
+        tool_error("qa_launch_failed", "The OpenRouter stub the app talks to in QA could not start: #{inspect(reason)}")
+    end
+  end
+
+  # A local app reaches the stub directly. On a QA host the app's SSH session
+  # forwards a loopback port there back to the stub; a port already taken
+  # fails that launch, and the next one picks another.
+  defp stub_route(%{remote?: false}, port), do: {OpenRouter.Stub.url(port), []}
+
+  defp stub_route(%{remote?: true}, port) do
+    remote_port = Enum.random(@stub_remote_ports)
+    {OpenRouter.Stub.url(remote_port), [{"127.0.0.1:#{remote_port}", "127.0.0.1:#{port}"}]}
+  end
+
+  # The QA host has its own login environment; only the QA root and the stub's URL cross over.
+  defp launch_env(%{remote?: true, qa_root: qa_root}, stub_url),
+    do: [{@qa_root_env, qa_root}, {OpenRouter.qa_url_env(), stub_url}]
+
+  defp launch_env(config, stub_url),
+    do: AgentEnv.build_with(%{@qa_root_env => config.qa_root, OpenRouter.qa_url_env() => stub_url})
 
   defp update_app(state, port, fun) do
     case Enum.find(state.apps, fn {_pid, app} -> app.port == port end) do

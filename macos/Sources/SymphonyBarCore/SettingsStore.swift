@@ -19,6 +19,9 @@ public final class SettingsStore {
         public static let restartTimeoutMinutes = "restartTimeoutMinutes"
         public static let startOnLaunch = "startOnLaunch"
         public static let developmentMode = "developmentMode"
+        public static let updateMode = "updateMode"
+        /// Minutes since midnight.
+        public static let updateTime = "updateTime"
     }
 
     private let defaults: KeyValueStore
@@ -39,7 +42,11 @@ public final class SettingsStore {
             restartTimeoutMinutes: defaults.object(forKey: Key.restartTimeoutMinutes) as? Int
                 ?? AppSettings.defaultRestartTimeoutMinutes,
             startOnLaunch: defaults.object(forKey: Key.startOnLaunch) as? Bool ?? false,
-            developmentMode: defaults.object(forKey: Key.developmentMode) as? Bool ?? false
+            developmentMode: defaults.object(forKey: Key.developmentMode) as? Bool ?? false,
+            updateMode: (defaults.object(forKey: Key.updateMode) as? String).flatMap(UpdateMode.init(rawValue:))
+                ?? .manual,
+            updateTime: (defaults.object(forKey: Key.updateTime) as? Int).flatMap(TimeOfDay.init(minutesSinceMidnight:))
+                ?? .defaultUpdateTime
         )
     }
 
@@ -60,6 +67,8 @@ public final class SettingsStore {
         defaults.set(settings.restartTimeoutMinutes, forKey: Key.restartTimeoutMinutes)
         defaults.set(settings.startOnLaunch, forKey: Key.startOnLaunch)
         defaults.set(settings.developmentMode, forKey: Key.developmentMode)
+        defaults.set(settings.updateMode.rawValue, forKey: Key.updateMode)
+        defaults.set(settings.updateTime.minutesSinceMidnight, forKey: Key.updateTime)
     }
 
     /// Reads the Linear and OpenRouter API keys, and every other account in the secret store as an extra

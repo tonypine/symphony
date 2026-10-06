@@ -26,6 +26,7 @@ defmodule SymphonyElixir.TestSupport do
       alias SymphonyElixir.Workflow
       alias SymphonyElixir.WorkflowStore
       alias SymphonyElixir.Workspace
+      alias SymphonyElixir.WorkspaceCleanup
 
       import SymphonyElixir.TestSupport,
         only: [
@@ -545,6 +546,7 @@ defmodule SymphonyElixir.TestSupport do
           workspace_strategy: "clone",
           workspace_repo: nil,
           workspace_fetch_before_dispatch: true,
+          workspace_git_network_timeout_ms: nil,
           workspace_attachments: nil,
           workspace_sandbox: nil,
           workspace_lifecycle: nil,
@@ -578,6 +580,7 @@ defmodule SymphonyElixir.TestSupport do
           agent_read_timeout_ms: 30_000,
           agent_stall_timeout_ms: 300_000,
           agent_command_timeout_ms: 600_000,
+          agent_mcp_tool_timeout_ms: nil,
           hook_after_create: nil,
           hook_before_run: nil,
           hook_after_run: nil,
@@ -712,6 +715,7 @@ defmodule SymphonyElixir.TestSupport do
           workspace_strategy,
           workspace_repo,
           workspace_fetch_before_dispatch,
+          Keyword.get(config, :workspace_git_network_timeout_ms),
           workspace_attachments,
           workspace_lifecycle
         ),
@@ -723,6 +727,7 @@ defmodule SymphonyElixir.TestSupport do
           model: Keyword.get(config, :agent_model),
           effort: Keyword.get(config, :agent_effort),
           provider: Keyword.get(config, :agent_provider),
+          small_model: Keyword.get(config, :agent_small_model),
           run_profiles: Keyword.get(config, :agent_run_profiles),
           max_concurrent_agents: max_concurrent_agents,
           epic_lanes: epic_lanes,
@@ -740,6 +745,7 @@ defmodule SymphonyElixir.TestSupport do
           read_timeout_ms: agent_read_timeout_ms,
           stall_timeout_ms: agent_stall_timeout_ms,
           command_timeout_ms: agent_command_timeout_ms,
+          mcp_tool_timeout_ms: Keyword.get(config, :agent_mcp_tool_timeout_ms),
           include_project_guides: agent_include_project_guides,
           project_guide_files: agent_project_guide_files,
           codex_stdio_soft_limit_bytes: agent_codex_stdio_soft_limit_bytes,
@@ -861,13 +867,14 @@ defmodule SymphonyElixir.TestSupport do
     |> Enum.join("\n")
   end
 
-  defp workspaces_yaml(root, strategy, repo, fetch_before_dispatch, attachments, lifecycle) do
+  defp workspaces_yaml(root, strategy, repo, fetch_before_dispatch, git_network_timeout_ms, attachments, lifecycle) do
     [
       "workspaces:",
       "  root: #{yaml_value(root)}",
       "  strategy: #{yaml_value(strategy)}",
       "  repo: #{yaml_value(repo)}",
       "  fetch_before_dispatch: #{yaml_value(fetch_before_dispatch)}",
+      optional_yaml_line("  git_network_timeout_ms", git_network_timeout_ms),
       attachments && "  attachments: #{yaml_value(attachments)}",
       lifecycle && "  cleanup: #{yaml_value(normalize_workspace_cleanup(lifecycle))}"
     ]
@@ -911,7 +918,7 @@ defmodule SymphonyElixir.TestSupport do
   end
 
   defp agent_profile_yaml(config) do
-    [:model, :effort, :provider, :run_profiles]
+    [:model, :effort, :provider, :small_model, :run_profiles]
     |> Enum.reject(&is_nil(Map.get(config, &1)))
     |> Enum.map_join("\n", &"  #{&1}: #{yaml_value(Map.get(config, &1))}")
     |> case do
@@ -948,6 +955,7 @@ defmodule SymphonyElixir.TestSupport do
       "    read_ms: #{yaml_value(config.read_timeout_ms)}",
       "    stall_ms: #{yaml_value(config.stall_timeout_ms)}",
       "    command_ms: #{yaml_value(config.command_timeout_ms)}",
+      optional_yaml_line("    mcp_tool_ms", config.mcp_tool_timeout_ms),
       "  prompts:",
       "    include_project_guides: #{yaml_value(config.include_project_guides)}",
       "    project_guide_files: #{yaml_value(config.project_guide_files)}",
@@ -1001,6 +1009,9 @@ defmodule SymphonyElixir.TestSupport do
       "  no_progress_threshold_ms: #{yaml_value(Map.get(config, :no_progress_threshold_ms))}",
       if(Map.has_key?(config, :stray_process_cpu_minutes),
         do: "  stray_process_cpu_minutes: #{yaml_value(config.stray_process_cpu_minutes)}"
+      ),
+      if(Map.has_key?(config, :pending_tool_report_after_ms),
+        do: "  pending_tool_report_after_ms: #{yaml_value(config.pending_tool_report_after_ms)}"
       )
     ]
     |> Enum.reject(&is_nil/1)

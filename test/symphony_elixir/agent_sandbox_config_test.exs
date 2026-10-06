@@ -50,6 +50,8 @@ defmodule SymphonyElixir.AgentSandboxConfigTest do
              "~/Library/Application Support",
              "~/Library/Keychains",
              "~/Library/Preferences",
+             "~/Library/CloudStorage",
+             "~/Library/Mobile Documents",
              "~/.docker",
              "~/.netrc",
              "~/.git-credentials",
@@ -91,6 +93,7 @@ defmodule SymphonyElixir.AgentSandboxConfigTest do
              "./.git",
              "./mise.toml",
              "./.tool-versions",
+             "./config/settings_ui_exempt.yml",
              "~/.zshrc",
              "~/.zshenv",
              "~/.zprofile",
@@ -141,7 +144,8 @@ defmodule SymphonyElixir.AgentSandboxConfigTest do
              ".claude/skills",
              ".codex/skills",
              "mise.toml",
-             ".tool-versions"
+             ".tool-versions",
+             "config/settings_ui_exempt.yml"
            ]
   end
 
@@ -185,6 +189,62 @@ defmodule SymphonyElixir.AgentSandboxConfigTest do
     filesystem = Enum.find(overrides, &String.starts_with?(&1, "permissions.workspace_write.filesystem="))
 
     assert filesystem =~ ~s("#{Path.join(workspace, "priv/skills/pull")}"="read")
+  end
+
+  test "git metadata deny paths cover each git dir's config, hooks and attributes but not its objects" do
+    assert AgentSandboxConfig.git_metadata_deny_write_paths(["/repo/.git", "/repo/.git/worktrees/MT-1", "/workspaces/MT-1", :not_a_path, "/repo/.git"]) ==
+             [
+               "/repo/.git/config",
+               "/repo/.git/config.worktree",
+               "/repo/.git/hooks",
+               "/repo/.git/info",
+               "/repo/.git/packed-refs",
+               "/repo/.git/worktrees/*/config",
+               "/repo/.git/worktrees/*/config.worktree",
+               "/repo/.git/modules/**/config",
+               "/repo/.git/worktrees/MT-1/config",
+               "/repo/.git/worktrees/MT-1/config.worktree",
+               "/repo/.git/worktrees/MT-1/hooks",
+               "/repo/.git/worktrees/MT-1/info",
+               "/repo/.git/worktrees/MT-1/packed-refs",
+               "/repo/.git/worktrees/MT-1/worktrees/*/config",
+               "/repo/.git/worktrees/MT-1/worktrees/*/config.worktree",
+               "/repo/.git/worktrees/MT-1/modules/**/config"
+             ]
+  end
+
+  test "literal paths expand globs to the files on disk and keep plain paths" do
+    root = Path.join(System.tmp_dir!(), "symphony-literal-paths-#{System.unique_integer([:positive])}")
+    on_exit(fn -> File.rm_rf(root) end)
+
+    for path <- ["worktrees/MT-1/config.worktree", "worktrees/.hidden/config.worktree", "modules/a/config", "modules/a/modules/b/config"] do
+      File.mkdir_p!(Path.dirname(Path.join(root, path)))
+      File.write!(Path.join(root, path), "")
+    end
+
+    paths = [Path.join(root, "config"), Path.join(root, "worktrees/*/config.worktree"), Path.join(root, "modules/**/config"), Path.join(root, "hooks/*")]
+
+    assert Enum.sort(AgentSandboxConfig.literal_paths(paths)) ==
+             Enum.sort(
+               Enum.map(
+                 ["config", "worktrees/MT-1/config.worktree", "worktrees/.hidden/config.worktree", "modules/a/config", "modules/a/modules/b/config"],
+                 &Path.join(root, &1)
+               )
+             )
+  end
+
+  test "Codex permission profile write-protects absolute extra deny paths once" do
+    overrides =
+      AgentSandboxConfig.codex_config_overrides("allowlist", [], [], [],
+        workspace: "/repo/workspace",
+        deny_write_paths: ["/repo/.git/config", "/repo/.git/config", "priv/skills/pull"]
+      )
+
+    filesystem = Enum.find(overrides, &String.starts_with?(&1, "permissions.workspace_write.filesystem="))
+
+    assert length(String.split(filesystem, ~s("/repo/.git/config"="read"))) == 2
+    assert filesystem =~ ~s("/repo/workspace/priv/skills/pull"="read")
+    refute filesystem =~ ~s("/repo/workspace/repo/.git/config")
   end
 
   test "Claude filesystem settings deny writes to Claude Code persistence files (auto-loaded across sessions)" do
@@ -303,6 +363,34 @@ defmodule SymphonyElixir.AgentSandboxConfigTest do
            ]
   end
 
+  test "Claude Edit deny rules cover every write-protected path in the form Claude Code matches" do
+    rules = AgentSandboxConfig.claude_edit_deny_rules()
+
+    assert rules == Enum.map(AgentSandboxConfig.deny_write_paths(), &"Edit(#{&1})")
+    assert "Edit(./WORKFLOW.md)" in rules
+    assert "Edit(./.claude/hooks)" in rules
+    assert "Edit(~/.claude/settings.json)" in rules
+  end
+
+  test "Claude Read deny rules keep the file tools out of cloud-synced folders unless allowed" do
+    assert AgentSandboxConfig.claude_read_deny_rules() == ["Read(~/Library/CloudStorage)", "Read(~/Library/Mobile Documents)"]
+
+    assert AgentSandboxConfig.claude_read_deny_rules([" ~/Library/CloudStorage ", :bad]) == ["Read(~/Library/Mobile Documents)"]
+    assert AgentSandboxConfig.claude_read_deny_rules(:bad) == AgentSandboxConfig.claude_read_deny_rules()
+
+    for path <- ["~/Library/CloudStorage", "~/Library/Mobile Documents"] do
+      assert path in AgentSandboxConfig.claude_filesystem_settings()["denyRead"]
+      refute path in AgentSandboxConfig.claude_filesystem_settings([path])["denyRead"]
+    end
+  end
+
+  test "Claude Edit deny rules add extra paths such as skill link targets, absolute ones with //" do
+    rules = AgentSandboxConfig.claude_edit_deny_rules([" ./priv/skills/pull ", "/opt/protected", "", :bad, "./WORKFLOW.md"])
+
+    assert rules -- AgentSandboxConfig.claude_edit_deny_rules() == ["Edit(./priv/skills/pull)", "Edit(//opt/protected)"]
+    assert AgentSandboxConfig.claude_edit_deny_rules(:bad) == AgentSandboxConfig.claude_edit_deny_rules()
+  end
+
   test "Claude filesystem settings omit allowWrite when allow_write_paths empty" do
     settings = AgentSandboxConfig.claude_filesystem_settings()
 
@@ -316,47 +404,6 @@ defmodule SymphonyElixir.AgentSandboxConfigTest do
 
     defaults = AgentSandboxConfig.claude_filesystem_settings([], :bad)
     refute Map.has_key?(defaults, "allowWrite")
-  end
-
-  describe "item_replacement_write_paths/1" do
-    setup do
-      root = Path.join(System.tmp_dir!(), "agent-sandbox-item-replacement-#{System.unique_integer([:positive])}")
-      File.mkdir_p!(root)
-      on_exit(fn -> File.rm_rf(root) end)
-      %{root: root}
-    end
-
-    test "grants the TemporaryItems dir under the macOS per-user temp dir, in both path forms", %{root: root} do
-      real_temp_dir = Path.join(root, "private-T")
-      linked_temp_dir = Path.join(root, "T")
-      File.mkdir_p!(real_temp_dir)
-      File.ln_s!(real_temp_dir, linked_temp_dir)
-      getconf = fake_getconf!(root, "echo '#{linked_temp_dir}/'")
-
-      {:ok, canonical_temp_dir} = PathSafety.canonicalize(real_temp_dir)
-
-      assert AgentSandboxConfig.item_replacement_write_paths(os_type: {:unix, :darwin}, getconf: getconf) == [
-               Path.join(linked_temp_dir, "TemporaryItems"),
-               Path.join(canonical_temp_dir, "TemporaryItems")
-             ]
-    end
-
-    test "grants nothing when getconf fails", %{root: root} do
-      getconf = fake_getconf!(root, "echo 'getconf: no such configuration parameter' >&2; exit 1")
-
-      assert AgentSandboxConfig.item_replacement_write_paths(os_type: {:unix, :darwin}, getconf: getconf) == []
-    end
-
-    test "grants nothing off macOS" do
-      assert AgentSandboxConfig.item_replacement_write_paths(os_type: {:unix, :linux}) == []
-    end
-  end
-
-  defp fake_getconf!(root, body) do
-    path = Path.join(root, "getconf")
-    File.write!(path, "#!/bin/sh\n[ \"$1\" = DARWIN_USER_TEMP_DIR ] || exit 2\n#{body}\n")
-    File.chmod!(path, 0o755)
-    path
   end
 
   test "Codex allowlist config denies sensitive reads and protects workflow files from writes" do

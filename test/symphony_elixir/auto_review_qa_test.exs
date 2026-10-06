@@ -100,6 +100,28 @@ defmodule SymphonyElixir.AutoReviewQaTest do
 
   defp stored_record, do: Enum.find(RunStore.list_ci_checks(), &(&1.issue_id == "issue-qa-flow"))
 
+  # The argument patterns of `AutoReview.blocked_reason/1`'s clauses, in order, from its debug info.
+  defp blocked_reason_heads do
+    path = :code.where_is_file(~c"Elixir.SymphonyElixir.AutoReview.beam")
+    {:ok, {AutoReview, [debug_info: {:debug_info_v1, backend, data}]}} = :beam_lib.chunks(path, [:debug_info])
+    {:ok, %{definitions: definitions}} = backend.debug_info(:elixir_v1, AutoReview, data, [])
+    {{:blocked_reason, 1}, :def, _meta, clauses} = List.keyfind(definitions, {:blocked_reason, 1}, 0)
+    Enum.map(clauses, fn {_meta, [head], [], _body} -> Macro.prewalk(head, &underscore_var/1) end)
+  end
+
+  defp underscore_var({name, meta, context}) when is_atom(name) and is_atom(context), do: {:_, meta, context}
+  defp underscore_var(ast), do: ast
+
+  # The index of the `blocked_reason/1` clause that `error` runs.
+  defp blocked_reason_clause(heads, error) do
+    var = Macro.var(:error, nil)
+
+    Enum.find_index(heads, fn head ->
+      {matched?, _binding} = Code.eval_quoted(quote(do: match?(unquote(head), unquote(var))), error: error)
+      matched?
+    end)
+  end
+
   defp git_with_paths(paths) do
     fn
       ["merge-base", "origin/" <> _base, @sha], "/tmp/workspaces/TP-901" -> {"base123\n", 0}
@@ -122,6 +144,62 @@ defmodule SymphonyElixir.AutoReviewQaTest do
        },
        tokens: %{QaAgent.empty_tokens() | total_tokens: 91_000, output_tokens: 4_000}
      }}
+  end
+
+  # Linear with the comments kept in an Agent, so a later call sees what an earlier one wrote.
+  defp linear_comments_client(comments) do
+    {:ok, store} = Agent.start_link(fn -> comments end)
+    recipient = self()
+
+    client = fn query, variables, _opts ->
+      send(recipient, {:linear, query, variables})
+      fake_linear(store, query, variables)
+    end
+
+    {client, store}
+  end
+
+  defp fake_linear(store, query, variables) do
+    cond do
+      query =~ "comments(" ->
+        {:ok, %{"data" => %{"issue" => %{"comments" => %{"nodes" => Agent.get(store, & &1)}}}}}
+
+      query =~ "commentCreate" ->
+        id = "c-#{System.unique_integer([:positive])}"
+        Agent.update(store, &(&1 ++ [%{"id" => id, "body" => variables.body}]))
+        {:ok, %{"data" => %{"commentCreate" => %{"success" => true, "comment" => %{"id" => id}}}}}
+
+      query =~ "commentUpdate" ->
+        Agent.update(store, &Enum.map(&1, fn node -> rewrite_comment(node, variables) end))
+        {:ok, %{"data" => %{"commentUpdate" => %{"success" => true}}}}
+
+      query =~ "commentDelete" ->
+        Agent.update(store, &Enum.reject(&1, fn node -> node["id"] == variables.id end))
+        {:ok, %{"data" => %{"commentDelete" => %{"success" => true}}}}
+    end
+  end
+
+  defp rewrite_comment(%{"id" => id} = node, %{id: id, body: body}), do: %{node | "body" => body}
+  defp rewrite_comment(node, _variables), do: node
+
+  defp put_usage_limited_agent do
+    info = %{provider: "anthropic", scope: :all, window: "five_hour", source: :rate_limit_event}
+    error = {:qa_agent_failed, {:usage_limited, info}}
+    Application.put_env(:symphony_elixir, :qa_flow_agent_result, {:error, error, QaAgent.empty_tokens()})
+  end
+
+  # The tracker stays the memory one for state moves; comments go to `client` as on Linear.
+  defp hold_note_opts(client) do
+    settings = put_in(Config.settings!().tracker.kind, "linear")
+
+    [
+      git: git_with_paths(["bin/symphony"]),
+      qa_agent: FakeQaAgent,
+      linear_client: client,
+      settings: settings,
+      now: ~U[2026-10-06 10:00:00Z],
+      to_local: & &1
+    ]
   end
 
   defp fail_result do
@@ -372,7 +450,7 @@ defmodule SymphonyElixir.AutoReviewQaTest do
       assert_receive {:memory_tracker_comment, "issue-qa-flow", report}
       assert report =~ "**Verdict:** blocked → Human Review"
       assert_receive {:memory_tracker_state_update, "issue-qa-flow", "Human Review"}
-      assert %{qa_verdict: "blocked", qa_target_state: "Human Review", qa_applied: true} = stored_record()
+      assert %{qa_verdict: "blocked", qa_target_state: "Human Review", qa_applied: true, qa_infra_blocked: false} = stored_record()
 
       Application.put_env(:symphony_elixir, :qa_flow_agent_result, blocked.(false))
       record = put_record()
@@ -422,6 +500,7 @@ defmodule SymphonyElixir.AutoReviewQaTest do
 
         assert_receive {:memory_tracker_comment, _issue_id, report}
         assert report =~ text
+        assert %{qa_verdict: "blocked", qa_infra_blocked: true} = stored_record()
       end
 
       record = put_record()
@@ -432,6 +511,7 @@ defmodule SymphonyElixir.AutoReviewQaTest do
 
       assert_receive {:memory_tracker_comment, _issue_id, report}
       assert report =~ "could not list the PR's changed files"
+      assert %{qa_infra_blocked: true} = stored_record()
     end
 
     test "a pass that hits the usage limit stores no verdict, keeps the issue in Auto Review and runs again once the hold lifts" do
@@ -496,6 +576,55 @@ defmodule SymphonyElixir.AutoReviewQaTest do
       refute Map.get(stored_record(), :qa_verdict)
     end
 
+    test "a held pass leaves one note on Linear, rewrites it when held again and deletes it once the pass runs" do
+      {client, comments} = linear_comments_client([%{"id" => "w", "body" => "## Symphony Workpad"}])
+      opts = hold_note_opts(client)
+      put_usage_limited_agent()
+
+      hold_until = fn resume_at -> [usage_limit_hold: fn _info, _identifier -> {:ok, %{resume_at: resume_at}} end] end
+
+      assert {:qa_usage_limited, "issue-qa-flow", _resume_at} = AutoReview.run_qa(job(put_record()), opts ++ hold_until.(~U[2026-10-06 14:05:00Z]))
+      assert_receive {:linear, create, %{body: "QA is waiting for the usage limit to reset at 14:05. " <> _rest}}
+      assert create =~ "commentCreate"
+      assert [%{"id" => "w"}, %{"id" => note_id}] = Agent.get(comments, & &1)
+      assert %{qa_hold_note: true} = stored_record()
+
+      # Held again: the same note says the new time.
+      assert {:qa_usage_limited, "issue-qa-flow", _resume_at} = AutoReview.run_qa(job(stored_record()), opts ++ hold_until.(~U[2026-10-07 09:30:00Z]))
+      assert_receive {:linear, update, %{id: ^note_id, body: "QA is waiting for the usage limit to reset at Oct 7 09:30. " <> _rest}}
+      assert update =~ "commentUpdate"
+      refute_received {:linear, _create, %{body: "QA is waiting" <> _rest}}
+      assert [%{"id" => "w"}, %{"id" => ^note_id}] = Agent.get(comments, & &1)
+
+      # The pass runs: the note goes, and the QA report takes its place.
+      Application.put_env(:symphony_elixir, :qa_flow_agent_result, pass_result())
+      assert {:auto_review_qa, "issue-qa-flow", :pass, "In Review"} = AutoReview.run_qa(job(stored_record()), opts)
+      assert_receive {:linear, delete, %{id: ^note_id}}
+      assert delete =~ "commentDelete"
+      assert [%{"id" => "w"}, %{"body" => "## Symphony QA Report" <> _report}] = Agent.get(comments, & &1)
+      assert %{qa_hold_note: false, qa_verdict: "pass"} = stored_record()
+    end
+
+    test "a hold note that can't be posted or removed is logged, and its removal is tried again on the next pass" do
+      failing = fn _query, _variables, _opts -> {:error, :linear_down} end
+      opts = hold_note_opts(failing)
+      put_usage_limited_agent()
+      hold = fn _info, _identifier -> {:ok, %{resume_at: ~U[2026-10-06 14:05:00Z]}} end
+      opts = [usage_limit_hold: hold] ++ opts
+
+      held = job(put_record())
+      log = capture_log(fn -> assert {:qa_usage_limited, _issue_id, _at} = AutoReview.run_qa(held, opts) end)
+
+      assert log =~ "Failed to post the QA hold note for TP-901: :linear_down"
+      refute Map.get(stored_record(), :qa_hold_note)
+
+      Application.put_env(:symphony_elixir, :qa_flow_agent_result, pass_result())
+      record = put_record(%{qa_hold_note: true})
+      log = capture_log(fn -> assert {:auto_review_qa, _issue_id, :pass, "In Review"} = AutoReview.run_qa(job(record), opts) end)
+      assert log =~ "Failed to remove the QA hold note for TP-901: :linear_down"
+      assert %{qa_hold_note: true} = stored_record()
+    end
+
     test "with auto_pause off, a usage-limited pass is blocked like any other agent error" do
       write_workflow_file!(Workflow.workflow_file_path(),
         tracker_kind: "memory",
@@ -516,6 +645,38 @@ defmodule SymphonyElixir.AutoReviewQaTest do
 
       assert_receive {:memory_tracker_comment, _issue_id, report}
       assert report =~ "could not finish: {:qa_agent_failed, {:usage_limited"
+    end
+
+    test "a pass whose agent can't reach the model API records no verdict and is held, even with auto_pause off" do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        pr_review_mode: "polling",
+        ci: %{enabled: true},
+        agent_usage_limit: %{auto_pause: false},
+        auto_review: %{enabled: true, max_fix_attempts: 2}
+      )
+
+      record = put_record()
+      info = %{provider: "anthropic", scope: :all, window: nil, resets_at: nil, source: :api_unreachable, error: "ENOTFOUND"}
+      error = {:qa_agent_failed, {:model_api_unreachable, info}}
+      Application.put_env(:symphony_elixir, :qa_flow_agent_result, {:error, error, QaAgent.empty_tokens()})
+      resume_at = DateTime.add(DateTime.utc_now(), 60)
+      test_pid = self()
+
+      hold = fn held_info, identifier ->
+        send(test_pid, {:usage_limit_hold, held_info, identifier})
+        {:ok, %{provider: "anthropic", scope: :all, resume_at: resume_at}}
+      end
+
+      opts = [git: git_with_paths(["bin/symphony"]), qa_agent: FakeQaAgent, usage_limit_hold: hold]
+      log = capture_log(fn -> assert {:qa_usage_limited, "issue-qa-flow", ^resume_at} = AutoReview.run_qa(job(record), opts) end)
+
+      assert_receive {:usage_limit_hold, ^info, "TP-901"}
+      assert log =~ "QA pass could not reach the model API for TP-901"
+      refute_received {:memory_tracker_comment, _issue_id, _report}
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+      refute Map.get(stored_record(), :qa_verdict)
+      assert [%{status: "qa_usage_limited", error: "the QA agent could not reach the model API (ENOTFOUND)"}] = RunStore.list_runs(@repo_key, :all)
     end
 
     test "a dashboard change whose dev server fails its health check is blocked, not failed" do
@@ -566,8 +727,15 @@ defmodule SymphonyElixir.AutoReviewQaTest do
     end
 
     test "other dev server and browser server errors are blocked with their cause" do
+      unconfined = {:verification_failed, {:dev_server_sandbox_unconfined, :non_loopback_bind_allowed}}
+
       for {error, text} <- [
             {{:qa_dev_server_failed, :exhausted}, "the dev server did not start: :exhausted"},
+            {{:qa_dev_server_failed, unconfined},
+             "the dev server did not start: Seatbelt on this Mac could not keep it listening on loopback only, " <>
+               "so Symphony did not run it unconfined (:non_loopback_bind_allowed)"},
+            {{:qa_host_tunnel_failed, "ssh exited with status 255: Connection refused"},
+             "the tunnel that forwards QA_HOST_PORTS to the QA host could not open, so the app could not reach the host's stubs: ssh exited with status 255: Connection refused"},
             {{:qa_browser_mcp_invalid, "url can't be blank"}, "`auto_review.playbooks.web.browser_mcp` is invalid: url can't be blank"},
             {{:qa_browser_mcp_unavailable, :no_npx}, "`npx` (Node.js) is not on Symphony's PATH"},
             {{:qa_browser_mcp_unavailable, "@playwright/mcp@0.0.83"}, "`@playwright/mcp@0.0.83` is not installed on the Symphony host; run `npx -y @playwright/mcp@0.0.83 --version` there once"}
@@ -785,6 +953,108 @@ defmodule SymphonyElixir.AutoReviewQaTest do
                AutoReview.on_green(issue(), record, %{commit_sha: @sha, pr_url: nil}, settings, qa_runner: FakeRunner)
     end
 
+    test "an issue back after an infrastructure block gets a fresh pass, once a usage-limit hold lifts" do
+      settings = Config.settings!()
+      ci_status = %{commit_sha: @sha, pr_url: nil}
+      poll = fn record -> AutoReview.on_green(issue(), record, ci_status, settings, qa_runner: FakeRunner) end
+      on_exit(fn -> RunStore.put_usage_limits(%{}) end)
+      blocked = %{qa_sha: @sha, qa_verdict: "blocked", qa_target_state: "In Review", qa_infra_blocked: true}
+      Application.put_env(:symphony_elixir, :qa_flow_runner_result, :started)
+
+      # Not moved on yet: the stored verdict's move is retried, as for any verdict.
+      record = put_record(Map.put(blocked, :qa_applied, false))
+      assert {:auto_review_qa, "issue-qa-flow", :blocked, "In Review"} = poll.(record)
+      refute_received {:qa_runner_request, _job, _opts}
+
+      # Back in Auto Review while the QA provider is held: the verdict is dropped and the pass waits.
+      resume_at = DateTime.add(DateTime.utc_now(), 3600)
+      :ok = RunStore.put_usage_limits(%{{"openai", :all} => %{provider: "openai", scope: :all, resume_at: resume_at}})
+      record = put_record(Map.put(blocked, :qa_applied, true))
+
+      capture_log(fn ->
+        assert {:qa_waiting, "issue-qa-flow", :usage_limited} = poll.(record)
+      end)
+
+      refute_received {:qa_runner_request, _job, _opts}
+      assert %{qa_verdict: nil, qa_applied: nil} = stored_record()
+
+      :ok = RunStore.put_usage_limits(%{})
+      assert {:qa_started, "issue-qa-flow", @sha} = poll.(stored_record())
+      assert_receive {:qa_runner_request, %{sha: @sha}, _opts}
+    end
+
+    test "an issue back after the agent's own blocked verdict keeps it" do
+      settings = Config.settings!()
+      ci_status = %{commit_sha: @sha, pr_url: nil}
+
+      for {infra_blocked, needs_person_state} <- [{false, "Human Review"}, {nil, "In Review"}] do
+        record =
+          put_record(%{
+            qa_sha: @sha,
+            qa_verdict: "blocked",
+            qa_target_state: needs_person_state,
+            qa_applied: true,
+            qa_infra_blocked: infra_blocked
+          })
+
+        assert {:auto_review_qa, "issue-qa-flow", :blocked, ^needs_person_state} =
+                 AutoReview.on_green(issue(), record, ci_status, settings, qa_runner: FakeRunner)
+
+        assert_receive {:memory_tracker_state_update, "issue-qa-flow", ^needs_person_state}
+        refute_received {:qa_runner_request, _job, _opts}
+        assert %{qa_verdict: "blocked"} = stored_record()
+      end
+    end
+
+    test "a blocked record stored before the infrastructure flag existed is classified by its reason" do
+      settings = Config.settings!()
+      ci_status = %{commit_sha: @sha, pr_url: nil}
+      poll = fn record -> AutoReview.on_green(issue(), record, ci_status, settings, qa_runner: FakeRunner) end
+      legacy = %{qa_sha: @sha, qa_verdict: "blocked", qa_target_state: "In Review", qa_applied: true}
+      Application.put_env(:symphony_elixir, :qa_flow_runner_result, :started)
+
+      errors = [
+        {:qa_token_limit, 9, 5},
+        {:remote_worker_unsupported, "worker-1"},
+        {:qa_dev_server_failed, {:verification_failed, :health_timeout}},
+        {:qa_dev_server_failed, {:verification_failed, {:dev_server_sandbox_unconfined, :non_loopback_bind_allowed}}},
+        {:qa_dev_server_failed, :eaddrinuse},
+        {:qa_host_tunnel_failed, "ssh exited with status 255: Connection refused"},
+        {:qa_browser_mcp_unavailable, :no_npx},
+        {:qa_browser_mcp_unavailable, "@playwright/mcp"},
+        {:qa_browser_mcp_invalid, "command is required"},
+        {:malformed_qa_response, :no_json},
+        {:changed_files_unlisted, {:git_failed, 128, "fatal: bad object"}},
+        {:git_failed, 128}
+      ]
+
+      # One error per `blocked_reason/1` clause, so a clause added without one fails here before its
+      # text can miss the prefix list.
+      heads = blocked_reason_heads()
+      assert errors |> Enum.map(&blocked_reason_clause(heads, &1)) |> Enum.sort() == Enum.to_list(0..(length(heads) - 1))
+
+      for reason <- Enum.map(errors, &AutoReview.blocked_reason/1) do
+        record = put_record(Map.merge(legacy, %{qa_reason: reason, qa_infra_blocked: nil}))
+
+        capture_log(fn ->
+          assert {:qa_started, "issue-qa-flow", @sha} = poll.(record)
+        end)
+
+        assert_receive {:qa_runner_request, %{sha: @sha}, _opts}
+        assert %{qa_verdict: nil, qa_reason: nil} = stored_record()
+      end
+
+      # The agent's own reason, or none at all, keeps the verdict as before.
+      for reason <- ["the staging login needs a person to approve the device", nil] do
+        record = put_record(Map.merge(legacy, %{qa_reason: reason, qa_infra_blocked: nil}))
+
+        assert {:auto_review_qa, "issue-qa-flow", :blocked, "In Review"} = poll.(record)
+        assert_receive {:memory_tracker_state_update, "issue-qa-flow", "In Review"}
+        refute_received {:qa_runner_request, _job, _opts}
+        assert %{qa_verdict: "blocked", qa_reason: ^reason} = stored_record()
+      end
+    end
+
     test "re-applies a stored verdict and counts a return without a new commit as another failed attempt" do
       settings = Config.settings!()
       record = put_record(%{qa_sha: @sha, qa_verdict: "blocked", qa_target_state: "In Review", qa_applied: false})
@@ -815,6 +1085,28 @@ defmodule SymphonyElixir.AutoReviewQaTest do
   end
 
   describe "QaRunner" do
+    test "a runner that doesn't answer in time is a request error, not an exit" do
+      test_pid = self()
+      name = :"qa_runner_#{System.unique_integer([:positive])}"
+
+      run_fun = fn job, _opts ->
+        send(test_pid, {:pass_started, job.issue.id})
+        receive do: (:finish -> :ok)
+      end
+
+      runner = start_supervised!({QaRunner, name: name, run_fun: run_fun})
+      job = %{issue: issue(), record: %{workspace_path: "/workspaces/symphony/TP-901", repo_key: "symphony"}, sha: @sha, settings: Config.settings!()}
+      :ok = :sys.suspend(runner)
+
+      assert {:error, {:qa_runner_call_failed, :timeout}} =
+               QaRunner.request(job, qa_runner_server: name, request_timeout_ms: 10)
+
+      :ok = :sys.resume(runner)
+      # The runner took the request once it answered again, so the next poll finds the pass running.
+      assert_receive {:pass_started, "issue-qa-flow"}
+      assert :running = QaRunner.request(job, qa_runner_server: name)
+    end
+
     test "runs one pass per issue up to max_concurrent and forgets finished passes" do
       test_pid = self()
       name = :"qa_runner_#{System.unique_integer([:positive])}"

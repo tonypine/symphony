@@ -29,6 +29,8 @@ defmodule SymphonyElixir.Tracker do
   @callback fetch_candidate_issues_for_repo(term()) :: {:ok, [term()]} | {:error, term()}
   @callback fetch_issue_by_identifier(String.t()) :: {:ok, Issue.t()} | {:error, term()}
   @callback fetch_issues_by_states([String.t()]) :: {:ok, [term()]} | {:error, term()}
+  @callback fetch_issues_by_states_with_failures([String.t()]) ::
+              {:ok, [term()], [{String.t(), term()}]} | {:error, term()}
   @callback fetch_issue_states_by_ids([String.t()]) :: {:ok, [term()]} | {:error, term()}
   @callback enrich_issue(Issue.t()) :: {:ok, Issue.t()} | {:error, term()}
   @callback create_comment(String.t(), String.t()) :: :ok | {:error, term()}
@@ -58,6 +60,16 @@ defmodule SymphonyElixir.Tracker do
   @spec fetch_issues_by_states([String.t()]) :: {:ok, [term()]} | {:error, term()}
   def fetch_issues_by_states(states) do
     adapter().fetch_issues_by_states(states)
+  end
+
+  @doc """
+  Like `fetch_issues_by_states/1`, with the repos whose read failed as `{repo_name, reason}`, so a
+  caller can say its list is partial instead of passing it off as complete.
+  """
+  @spec fetch_issues_by_states_with_failures([String.t()]) ::
+          {:ok, [term()], [{String.t(), term()}]} | {:error, term()}
+  def fetch_issues_by_states_with_failures(states) do
+    adapter().fetch_issues_by_states_with_failures(states)
   end
 
   @spec fetch_issue_states_by_ids([String.t()]) :: {:ok, [term()]} | {:error, term()}

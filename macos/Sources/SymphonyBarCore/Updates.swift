@@ -29,16 +29,24 @@ public struct AppBuild: Equatable {
     public var build: Int
     /// True for a build without the embedded Symphony binary, such as a local `make` build.
     public var isDevelopment: Bool
+    /// `CFBundleShortVersionString`, for example `0.0.1.42`; nil when it is missing.
+    public var version: String?
 
-    public init(build: Int, isDevelopment: Bool) {
+    public init(build: Int, isDevelopment: Bool, version: String? = nil) {
         self.build = build
         self.isDevelopment = isDevelopment
+        self.version = version
     }
 
     /// Reads the build from an Info.plist dictionary; releases embed Symphony at `Contents/Resources/symphony`.
     public init(infoDictionary: [String: Any]?, hasEmbeddedSymphony: Bool) {
-        let version = (infoDictionary?["CFBundleVersion"] as? String)?.trimmingWhitespace()
-        self.init(build: version.flatMap { Int($0) } ?? 0, isDevelopment: !hasEmbeddedSymphony)
+        let build = (infoDictionary?["CFBundleVersion"] as? String)?.trimmingWhitespace()
+        let version = (infoDictionary?["CFBundleShortVersionString"] as? String)?.trimmingWhitespace()
+        self.init(
+            build: build.flatMap { Int($0) } ?? 0,
+            isDevelopment: !hasEmbeddedSymphony,
+            version: version?.isEmpty == false ? version : nil
+        )
     }
 }
 
@@ -288,19 +296,77 @@ public enum UpdateMenu {
         "The update to v\(pending.version) couldn't replace the app, so this version was put back. See \(logPath)."
     }
 
+    /// The install item for a release an update rolled back, for example "Retry v0.0.1.43".
+    public static func retryTitle(_ release: Release) -> String {
+        retryTitle(version: release.version)
+    }
+
+    static func retryTitle(version: String) -> String {
+        "Retry v\(version)"
+    }
+
+    /// Shown by the build a health check put back: which version was rolled back and why. Choosing it opens that
+    /// version's notes.
+    public static func rolledBackLine(_ record: RollbackRecord) -> String {
+        "v\(record.version) was rolled back: \(record.reason)"
+    }
+
+    /// Above the rolled-back version's notes: what failed, and where the steps to roll back by hand are.
+    public static func rolledBackNotesMessage(_ record: RollbackRecord) -> String {
+        "\(rolledBackLine(record)). To roll back by hand, or to keep the app from installing a version again, "
+            + "choose \(rollbackStepsTitle)."
+    }
+
+    /// The notes window's button after a rollback, which opens `rollbackStepsURL`.
+    public static let rollbackStepsTitle = "Open Rollback Steps"
+    /// The README's Rollback section.
+    public static let rollbackStepsURL = URL(
+        string: "https://github.com/tonypine/symphony/blob/main/macos/README.md#rollback"
+    )!
+
+    /// After an update passed its health check, for example "Updated to v0.0.1.43 (12 changes)". Choosing it opens
+    /// that version's notes.
+    public static func updatedLine(_ update: LastUpdate) -> String {
+        "Updated to v\(update.version)" + changesSuffix(update.details.changes)
+    }
+
+    /// Shown when a version failed its health check but wasn't rolled back, with how to do it by hand.
+    public static func rollbackFailedLine(version: String, reason: String, problem: RollbackProblem) -> String {
+        "v\(version) failed its check (\(reason)) and couldn't be rolled back: \(problem.detail). \(problem.manualSteps)"
+    }
+
+    /// Records the available release's build as skipped.
+    public static let skipTitle = "Skip This Version"
+
     /// For example "Update available: v0.0.1.42 (12 changes)", labelled for a development build.
     public static func availableTitle(_ release: Release, current: AppBuild) -> String {
-        var title = "Update available: v\(release.version)"
-        switch release.changes {
-        case 1?:
-            title += " (1 change)"
-        case let count?:
-            title += " (\(count) changes)"
-        case nil:
-            break
+        releaseTitle("Update available", release, current: current)
+    }
+
+    /// For example "Update skipped: v0.0.1.42 (12 changes)", for a release you skipped or an update rolled back.
+    public static func skippedTitle(_ release: Release, reason: SkippedRelease.Reason, current: AppBuild) -> String {
+        switch reason {
+        case .skipped:
+            return releaseTitle("Update skipped", release, current: current)
+        case .rolledBack:
+            return releaseTitle("Update rolled back", release, current: current)
         }
+    }
+
+    private static func releaseTitle(_ prefix: String, _ release: Release, current: AppBuild) -> String {
+        var title = "\(prefix): v\(release.version)" + changesSuffix(release.changes)
         if current.isDevelopment { title += " · development build" }
         return title
+    }
+
+    /// " (12 changes)", " (1 change)", or nothing when the count is unknown.
+    static func changesSuffix(_ changes: Int?) -> String {
+        changes.map { " (\(changeCount($0)))" } ?? ""
+    }
+
+    /// "12 changes" or "1 change".
+    static func changeCount(_ changes: Int) -> String {
+        changes == 1 ? "1 change" : "\(changes) changes"
     }
 
     /// The line under Check for Updates after a check started by hand, nil when there's none to show.

@@ -1366,6 +1366,107 @@ defmodule SymphonyElixir.AppServerTest do
     end
   end
 
+  test "native Codex permission profile write-protects the shared repo's git config files" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-app-server-git-metadata-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+      workspace = Path.join(workspace_root, "MT-GITMETA")
+      primary_repo = Path.join(test_root, "primary")
+      codex_binary = Path.join(test_root, "fake-codex")
+      trace_file = Path.join(test_root, "codex-git-metadata.trace")
+      File.mkdir_p!(workspace_root)
+      File.mkdir_p!(primary_repo)
+
+      assert {_output, 0} = System.cmd("git", ["init", "-b", "main"], cd: primary_repo, stderr_to_stdout: true)
+
+      assert {_output, 0} =
+               System.cmd("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "initial"],
+                 cd: primary_repo,
+                 stderr_to_stdout: true
+               )
+
+      assert {_output, 0} = System.cmd("git", ["worktree", "add", "-b", "auto/MT-GITMETA", workspace], cd: primary_repo, stderr_to_stdout: true)
+
+      assert {output, 0} =
+               System.cmd("git", ["-C", workspace, "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"], stderr_to_stdout: true)
+
+      [git_dir, common_dir] =
+        output
+        |> String.split("\n", trim: true)
+        |> Enum.map(fn path ->
+          {:ok, canonical} = SymphonyElixir.PathSafety.canonicalize(path)
+          canonical
+        end)
+
+      File.write!(Path.join(git_dir, "config.worktree"), "")
+      submodule_config = Path.join([common_dir, "modules", "vendor", "lib", "config"])
+      File.mkdir_p!(Path.dirname(submodule_config))
+      File.write!(submodule_config, "")
+
+      File.write!(codex_binary, """
+      #!/bin/sh
+      printf 'ARGV:%s\\n' "$*" >> "#{trace_file}"
+      count=0
+
+      while IFS= read -r _line; do
+        count=$((count + 1))
+
+        case "$count" in
+          1) printf '%s\\n' '{"id":1,"result":{}}' ;;
+          2) printf '%s\\n' '{"id":2,"result":{"thread":{"id":"thread-gitmeta"}}}' ;;
+          3) printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-gitmeta","status":"inProgress","items":[]}}}' ;;
+          4) printf '%s\\n' '{"method":"turn/completed"}'; exit 0 ;;
+          *) exit 0 ;;
+        esac
+      done
+      """)
+
+      File.chmod!(codex_binary, 0o755)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        agent_command: "#{codex_binary} app-server"
+      )
+
+      issue = %Issue{
+        id: "issue-git-metadata",
+        identifier: "MT-GITMETA",
+        title: "Protect git metadata",
+        description: "Deny writes to the shared repo's git config",
+        state: "In Progress",
+        url: "https://example.org/issues/MT-GITMETA",
+        labels: []
+      }
+
+      assert {:ok, _result} = AppServer.run(workspace, "Protect git metadata", issue)
+
+      [filesystem] = Regex.run(~r/permissions\.workspace_write\.filesystem=(\{.*?\}) --config/, File.read!(trace_file), capture: :all_but_first)
+
+      for path <- [
+            Path.join(common_dir, "config"),
+            Path.join(common_dir, "config.worktree"),
+            Path.join(common_dir, "hooks"),
+            Path.join(common_dir, "info"),
+            Path.join([common_dir, "worktrees", Path.basename(git_dir), "config.worktree"]),
+            submodule_config,
+            Path.join(git_dir, "config")
+          ] do
+        assert filesystem =~ ~s("#{path}"="read")
+      end
+
+      refute filesystem =~ ~s("#{Path.join(common_dir, "objects")}")
+      refute filesystem =~ "*"
+      assert length(String.split(filesystem, ~s("#{Path.join(git_dir, "config.worktree")}"="read"))) == 2
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "app server can wrap Codex app-server with srt settings" do
     test_root =
       Path.join(
@@ -1581,6 +1682,7 @@ defmodule SymphonyElixir.AppServerTest do
         assert Path.join(root, "packed-refs") in settings["filesystem"]["denyWrite"]
         assert Path.join([root, "worktrees", "*", "config"]) in settings["filesystem"]["denyWrite"]
         assert Path.join([root, "worktrees", "*", "config.worktree"]) in settings["filesystem"]["denyWrite"]
+        assert Path.join([root, "modules", "**", "config"]) in settings["filesystem"]["denyWrite"]
       end
 
       assert "~/.codex/auth.json" in settings["filesystem"]["denyWrite"]
@@ -1758,6 +1860,7 @@ defmodule SymphonyElixir.AppServerTest do
       assert Path.join(git_dir, "packed-refs") in denies
       assert Path.join([git_dir, "worktrees", "*", "config"]) in denies
       assert Path.join([git_dir, "worktrees", "*", "config.worktree"]) in denies
+      assert Path.join([git_dir, "modules", "**", "config"]) in denies
     end
 
     test "linked worktree common dir keeps objects writable while denying high-risk metadata" do
@@ -1774,6 +1877,7 @@ defmodule SymphonyElixir.AppServerTest do
       assert Path.join(common_dir, "packed-refs") in denies
       assert Path.join([common_dir, "worktrees", "*", "config"]) in denies
       assert Path.join([common_dir, "worktrees", "*", "config.worktree"]) in denies
+      assert Path.join([common_dir, "modules", "**", "config"]) in denies
     end
 
     test "linked worktree per-issue git_dir keeps objects writable while denying high-risk metadata" do

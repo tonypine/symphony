@@ -89,18 +89,29 @@ branch instead of opening a second one. If a claimed issue moves to a terminal s
   verification with manual checks left) wait in `Human Review` instead of `In Review`, so the board,
   the dashboard and the menu bar show what waits on you apart from the supervisor's queue. Set
   `issues.states.human_review: null` to keep them in `In Review`.
-- **Parent tickets** — label a large ticket `breakdown` and the agent splits it into sub-tickets plus a
-  final verification ticket instead of opening a PR, then moves the parent to `In Review`. Approve the
+- **Parent tickets** — label a large ticket `plan` (`breakdown`, the label's older name, still works)
+  and the agent splits this plan ticket into sub-tickets plus a final verification ticket instead of
+  opening a PR, then moves the parent to `In Review`. Approve the
   plan by moving the parent to `Waiting on sub-tickets` and Symphony promotes every `Backlog`
   sub-ticket to `Todo`; comment on the plan while it is `In Review` to have it revised in place
   (artifact comments edited, `Backlog` sub-tickets updated, each comment answered); move it to
   `Rework` to have the plan made again. A plan run that stopped midway resumes from its workpad
   when the parent is moved to `In Progress`, keeping the sub-tickets already filed. The approved
   parent waits without being re-dispatched until every sub-ticket is closed, then closes out with
-  a Linear project update.
+  a Linear project update. Any other ticket whose PR merges with sub-tickets still open (the
+  acceptance gate's follow-ups, or ones an agent filed) waits in `Waiting on sub-tickets` too
+  instead of closing: Symphony promotes its `Backlog` sub-tickets to `Todo` and moves it to `Done`
+  once every sub-ticket is `Done`, `Canceled` or `Duplicate`, with a comment listing how each ended.
   With Auto Review on, the final verification ticket is a QA pass over the merged parent: the report
   goes on the parent and each failing step becomes a new ticket that blocks the verification
-  ticket, which waits in `Todo` and runs again once those tickets are done.
+  ticket, which waits in `Todo` and runs again once those tickets are done. The design this flow
+  is moving to (bug, feature and `plan` ticket types, one review of a whole plan, artifacts in
+  Linear documents) is recorded in
+  [ADR 0001: the Director workflow](docs/adr/0001-director-workflow.md).
+
+  To move a workspace from `breakdown` to `plan`, rename the `breakdown` label to `plan` in Linear
+  (Settings → Labels). Linear renames it on every ticket, so parents already in flight keep their
+  state and Symphony starts no new run for them.
 - **Actions for a human** — when work waits on something only a person can do (a missing secret, a
   plan to approve, a QA pass or a final verification blocked on a permission, an issue labelled
   `human-action`), Symphony posts a Linear project update listing each one with its steps, and posts
@@ -272,9 +283,11 @@ Start the service from a directory containing `symphony.yml` (or pass `--config`
 ```
 
 Validate `symphony.yml` and every repo `WORKFLOW.md` it points at without starting the service
-(exit 0 with `Config OK: <path>`, or exit 1 with the error on stderr). It checks the same
+(exit 0 with `Config OK: <path>`, or exit 1 with the error on stderr). It first prints the build it
+runs on stderr, `Symphony <version> (<commit>)`. It checks the same
 `WORKFLOW.md` startup reads: with `workflow_source: ref`, the committed copy on the last fetched
-base branch, not uncommitted edits. A `workspace.source` repo
+base branch, not uncommitted edits. A `strategy: worktree` repo
+fails when its `workspaces.repo` is missing or isn't a git repository. A `workspace.source` repo
 Symphony hasn't cloned yet passes with a warning, as Symphony clones it when it starts:
 
 ```bash
@@ -327,6 +340,15 @@ with the phase each is in and what it waits on (`implementation · running`,
 `waiting for a human`, `implementation · waiting on blocker TP-12`), and mark forced rows elsewhere
 with ⚡. Once a forced ticket is done, Symphony removes the label.
 
+Test OpenRouter flows without a real key: `symphony openrouter-stub` serves a stub OpenRouter on
+`127.0.0.1` with a made-up valid key and three models, prints its URL and the variables that point a
+QA-mode Symphony or app at it, and runs until stopped (see
+[OpenRouter in QA](docs/configuration.md#qa-passes)):
+
+```bash
+./bin/symphony openrouter-stub --port 4100
+```
+
 ### Priority vs expedite
 
 A ticket's Linear priority means how important it is. Symphony uses it only to order work that waits
@@ -348,7 +370,7 @@ A run already going then finishes as a normal run and gives the forced slot to t
 
 `agent.concurrency.forced_max` (default `1`) forced runs go at once, on top of the normal slots. A
 second forced ticket queues behind the first, shows `queued #2` on the dashboard, and sends one
-`forced_waiting` notification. Forcing never stops a running agent. Forcing a `breakdown` parent
+`forced_waiting` notification. Forcing never stops a running agent. Forcing a plan ticket
 forces its sub-tickets one at a time, in blocked-by order. See `concurrency.force_label` in
 [docs/configuration.md](docs/configuration.md) for the details.
 
@@ -358,7 +380,7 @@ Forcing only removes the wait for a slot. These transitions stay with a person:
 | --- | --- |
 | `Backlog` → `Todo` | a person promotes the ticket; forcing doesn't |
 | `In Review` or `Human Review` → `Merging` | a person approves the PR (an enforced acceptance gate moves its approvals from Auto Review itself) |
-| `In Review` or `Human Review` → `Waiting on sub-tickets` | a person approves a `breakdown` plan |
+| `In Review` or `Human Review` → `Waiting on sub-tickets` | a person approves a plan |
 | any state → `Rework` | a person rejects the approach |
 | `Final verification:` `In Review` or `Human Review` → `Done` | a person signs it off |
 
@@ -402,7 +424,9 @@ and resumes them when the limit resets (plus `agent.usage_limit.resume_margin_se
 attempt. One held run goes first; the rest follow only once it is accepted, and the hold starts
 again if the limit is still in force. Runs on other providers keep going, and an operator pause is never cleared by it.
 An Auto Review QA pass that hits the limit is held the same way: it records no verdict, the issue
-stays where it is, and the pass runs again after the hold. Set
+stays where it is, and the pass runs again after the hold. On Linear a note on the issue says
+`QA is waiting for the usage limit to reset at 14:05` (local time); a pass held again edits it, and the
+pass that runs, or the PR closing or merging first, deletes it. Set
 `agent.usage_limit.auto_pause: false` to fail and retry such runs as before.
 
 While Claude runs are held, the web and terminal dashboards show a banner such as
@@ -412,6 +436,17 @@ a `usage_limit` entry in `dispatch_state.blockers`. `dispatch_state.active?` tur
 every provider in use is held. Slack and webhook channels get one `usage_limit_paused` message when
 the hold starts and one `usage_limit_resumed` message when it clears, which is once Claude accepts
 the first run, not when it starts.
+
+When Claude or Codex can't reach its API at all (the network or DNS is down, so a Claude turn ends
+on `API Error: Can't reach the API server … (ENOTFOUND)` or Codex gives up on
+`error sending request … dns error`), Symphony holds that provider's runs the same way,
+`auto_pause` or not, instead of reading the turn as finished: no idle turn is counted and no issue
+is parked. The pre-push reviewer, QA and the acceptance gate hold too, so a push never goes ahead
+without a review and no verdict is recorded. One held run probes the API after a minute, then after
+twice as long each time it still fails (up to `unknown_reset_retry_seconds`). The log says
+`Model API unreachable (ENOTFOUND); holding dispatch` once, and the dashboards show
+`Paused: Claude API unreachable (ENOTFOUND), retries ~14:05`; `/api/v1/state` lists the hold
+under `usage_limits` with `reason: model_api_unreachable`.
 
 To leave part of the Claude limit for your own sessions, set
 `agent.usage_limit.headroom_utilization` (for example `0.9`; off by default). Once Claude reports
@@ -462,6 +497,9 @@ implementation detail. Tickets with no user-facing change can leave the section 
   [docs/quality_gate_security.md](docs/quality_gate_security.md), and
   [docs/token_accounting.md](docs/token_accounting.md) — operational deep-dives.
 - [WORKFLOW.md](WORKFLOW.md) — the example in-repo workflow contract and agent prompt.
+- [docs/adr/](docs/adr/README.md) — architecture decision records, starting with
+  [0001: the Director workflow](docs/adr/0001-director-workflow.md) for ticket types, plan review
+  and artifacts.
 
 ## About This Fork
 

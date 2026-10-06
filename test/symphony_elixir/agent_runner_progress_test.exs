@@ -1,6 +1,8 @@
 defmodule SymphonyElixir.AgentRunnerProgressTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.Linear.Client
+  alias SymphonyElixir.PrReviewPoller
   alias SymphonyElixir.WorkspaceHead
 
   @pr_url "https://github.com/example/repo/pull/337"
@@ -8,30 +10,66 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
   @rate_limited {:error, {:linear_rate_limited, 1_791_000_030_000}}
 
   defmodule ProgressAgent do
-    # Coding-agent stand-in: every turn completes and is reported to the test.
-    def start_session(_workspace, _opts), do: {:ok, %{}}
+    # Coding-agent stand-in: every turn completes and is reported to the test, or, with
+    # `:progress_api_unreachable` set, ends as Claude's turn does when it can't reach the model API.
+    def start_session(_workspace, opts) do
+      send(Application.fetch_env!(:symphony_elixir, :progress_agent_recipient), {:progress_session_started, opts})
+      {:ok, %{}}
+    end
 
     def run_turn(_session, _prompt, _issue, _opts) do
       count = Application.get_env(:symphony_elixir, :progress_agent_turns, 0) + 1
       Application.put_env(:symphony_elixir, :progress_agent_turns, count)
       send(Application.fetch_env!(:symphony_elixir, :progress_agent_recipient), {:progress_turn, count})
-      {:ok, %{session_id: "sess-#{count}"}}
+
+      case Application.get_env(:symphony_elixir, :progress_api_unreachable) do
+        %{} = info -> {:error, {:model_api_unreachable, info}}
+        nil -> {:ok, %{session_id: "sess-#{count}"}}
+      end
     end
 
     def stop_session(_session), do: :ok
   end
 
   defmodule ProgressReviewer do
-    # Pre-push reviewer stand-in: approves the diff and reports the review to the test.
+    # Pre-push reviewer stand-in: approves the diff and reports the review to the test, asks for
+    # changes with `:progress_reviewer_requests_changes` set, or, with
+    # `:progress_reviewer_api_unreachable` set, can't reach the model API.
     def start_session(_workspace, _opts), do: {:ok, %{}}
 
     def run_turn(_session, _prompt, _issue, _opts) do
       turns = Application.get_env(:symphony_elixir, :progress_agent_turns, 0)
       send(Application.fetch_env!(:symphony_elixir, :progress_agent_recipient), {:progress_reviewed, turns})
-      {:ok, %{result: ~s({"verdict":"approve","comments":[]})}}
+
+      cond do
+        info = Application.get_env(:symphony_elixir, :progress_reviewer_api_unreachable) ->
+          {:error, {:model_api_unreachable, info}}
+
+        Application.get_env(:symphony_elixir, :progress_reviewer_requests_changes) ->
+          {:ok, %{result: request_changes_verdict()}}
+
+        true ->
+          {:ok, %{result: ~s({"verdict":"approve","comments":[]})}}
+      end
     end
 
     def stop_session(_session), do: :ok
+
+    defp request_changes_verdict do
+      Jason.encode!(%{
+        "verdict" => "request_changes",
+        "findings" => [
+          %{
+            "summary" => "Say which conflict this fixes.",
+            "file" => "fix.txt",
+            "line_range" => [1, 1],
+            "quoted_snippet" => "conflict fixed",
+            "suggested_fix" => "Name the conflict."
+          }
+        ],
+        "reason" => ""
+      })
+    end
   end
 
   defmodule ProgressGitHub do
@@ -57,6 +95,9 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
             :progress_agent_recipient,
             :progress_agent_turns,
             :progress_pr_head_result,
+            :progress_api_unreachable,
+            :progress_reviewer_api_unreachable,
+            :progress_reviewer_requests_changes,
             :memory_tracker_update_issue_state_result,
             :memory_tracker_create_comment_result
           ] do
@@ -144,6 +185,58 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     assert turns() == 2
     assert_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
     assert_received {:memory_tracker_comment, "issue-progress", "Symphony parked this issue in Backlog" <> _note}
+  end
+
+  test "a turn that can't reach the model API ends the run on the provider hold, so outage turns never park the issue" do
+    info = outage_info()
+    Application.put_env(:symphony_elixir, :progress_api_unreachable, info)
+
+    # Two runs in a row during the outage: each ends on its first turn, before the empty-turn check.
+    for run <- 1..2 do
+      assert {:model_api_unreachable, ^info} = catch_exit(run_issue!("In Progress", heads: ["sha-same"], pr_url: nil, max_turns: 5))
+      assert turns() == run
+    end
+
+    refute_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+    refute_received {:memory_tracker_comment, "issue-progress", "Symphony parked this issue" <> _note}
+  end
+
+  test "an issue with many attachments and no PR is still parked, saying it has no PR" do
+    fetcher = linear_issue_fetcher(screenshot_attachments(21..30))
+
+    log = capture_log(fn -> run_issue!("In Progress", heads: ["sha-same"], pr_url: nil, max_turns: 5, issue_state_fetcher: fetcher) end)
+
+    assert turns() == 2
+    assert_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+    refute_received {:pr_head_fetched, _pr_url}
+
+    assert log =~
+             "Parking issue_id=issue-progress issue_identifier=TP-337 in Backlog after 2 turns with no new commit or state change; " <>
+               "it has no attached PR, so CI on its head was not checked"
+
+    refute log =~ "at dispatch"
+  end
+
+  test "a run whose issue had a PR at dispatch warns after each refresh that shows no PR" do
+    fetcher = linear_issue_fetcher(screenshot_attachments(21..30))
+
+    log = capture_log(fn -> run_issue!("In Progress", heads: ["sha-same"], max_turns: 5, issue_state_fetcher: fetcher) end)
+
+    warning =
+      "issue_id=issue-progress issue_identifier=TP-337 had PR #{@pr_url} at dispatch, " <>
+        "but its refreshed Linear attachments show no PR; checks on its PR will not run"
+
+    # The PR URL dropping out of the first refresh counts as a change, so the run parks after three turns.
+    assert turns() == 3
+    assert log |> String.split(warning) |> length() == turns() + 1
+    assert_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+  end
+
+  test "a run whose refreshed issue still has its PR does not warn about a lost PR" do
+    log = capture_log(fn -> run_issue!("In Progress", heads: ["sha-same"], max_turns: 5) end)
+
+    assert turns() == 2
+    refute log =~ "at dispatch"
   end
 
   test "empty Rework turns while CI on the pushed PR head is pending do not park the issue" do
@@ -245,6 +338,23 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       refute log =~ "Parking"
     end
 
+    test "finds its PR past the first page of attachments, so CI running on the head it pushed moves it to Auto Review" do
+      # MOT-40: QA screenshots pushed the PR attachment past the first 20 attachments Linear returns.
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-fixed", checks: @pending_checks}})
+      fetcher = linear_issue_fetcher([pr_attachment() | screenshot_attachments(21..22)])
+
+      log =
+        capture_log(fn ->
+          run_issue!("In Progress", heads: ["sha-dirty", "sha-fixed"], pr_url: nil, max_turns: 6, issue_state_fetcher: fetcher)
+        end)
+
+      assert turns() == 1
+      assert_received {:pr_head_fetched, @pr_url}
+      assert_received {:memory_tracker_state_update, "issue-progress", "Auto Review"}
+      refute_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+      assert log =~ "CI is running on issue_id=issue-progress issue_identifier=TP-337's pushed head sha-fixed on its PR; moving to Auto Review"
+    end
+
     test "lets the pre-push reviewer review the head it pushed before moving to Auto Review" do
       Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-fixed", checks: @pending_checks}})
 
@@ -258,6 +368,26 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       assert reviewed_at < Enum.find_index(messages, &match?({:memory_tracker_state_update, "issue-progress", "Auto Review"}, &1))
       refute_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
       assert log =~ "CI is running on issue_id=issue-progress issue_identifier=TP-337's pushed head sha-fixed on its PR; moving to Auto Review"
+    end
+
+    test "holds the push when the pre-push reviewer can't reach the model API, instead of reading it as inconclusive" do
+      info = outage_info()
+      Application.put_env(:symphony_elixir, :progress_reviewer_api_unreachable, info)
+
+      log =
+        capture_log(fn ->
+          run = fn -> run_issue!("In Progress", heads: ["sha-dirty", "sha-fixed"], max_turns: 6, reviewer: true) end
+          assert {:model_api_unreachable, ^info} = catch_exit(run.())
+        end)
+
+      # No approval turn: the executor never gets the go-ahead to push.
+      assert turns() == 1
+      assert_received {:progress_reviewed, 1}
+      refute_received {:progress_reviewed, _turns}
+      refute_received {:memory_tracker_state_update, "issue-progress", _state}
+      assert log =~ "Reviewer agent could not reach the model API for issue_id=issue-progress issue_identifier=TP-337 error=ENOTFOUND; holding the push until it is reviewed"
+      refute log =~ "inconclusive"
+      refute log =~ "letting the push go ahead"
     end
 
     test "waits a turn for the checks of the head it pushed to show up, then moves to Auto Review" do
@@ -280,6 +410,40 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       assert turns() == 1
       assert_received {:memory_tracker_state_update, "issue-progress", "In Review"}
       assert log =~ "CI is green on issue_id=issue-progress issue_identifier=TP-337's pushed head sha-fixed on its PR; moving to In Review"
+    end
+
+    test "hands off as CI running, not green, while a rerun of its pushed head's failed jobs is starting" do
+      # TP-546: the failed checks leave the rollup until the rerun's new attempt queues them, so
+      # only the checks that passed are left.
+      passed = [%{name: "make-all", status: "COMPLETED", conclusion: "SUCCESS", run_id: "987"}]
+      run_not_finished = %{commit_sha: "sha-fixed", checks: passed, workflow_runs: [%{id: "987", status: "QUEUED", conclusion: nil}]}
+
+      # The head's workflow run is not finished; then, with that run unread, the CI poller's record
+      # of the rerun it requested on this head.
+      for {ci_status, ci_check} <- [
+            {run_not_finished, nil},
+            {%{commit_sha: "sha-fixed", checks: passed},
+             %{
+               repo_key: "default",
+               issue_id: "issue-progress",
+               issue_identifier: "TP-337",
+               pr_url: @pr_url,
+               status: "rerun_requested",
+               last_observed_sha: "sha-fixed",
+               failed_checks: [%{name: "dialyzer", status: "COMPLETED", conclusion: "FAILURE", run_id: "987"}]
+             }}
+          ] do
+        if ci_check, do: RunStore.put_ci_check(ci_check)
+        Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, ci_status})
+        Application.delete_env(:symphony_elixir, :progress_agent_turns)
+
+        log = capture_log(fn -> run_issue!("In Progress", heads: ["sha-dirty", "sha-fixed"], auto_review: nil) end)
+
+        assert turns() == 1
+        assert_received {:memory_tracker_state_update, "issue-progress", "In Review"}
+        assert log =~ "CI is running on issue_id=issue-progress issue_identifier=TP-337's pushed head sha-fixed on its PR; moving to In Review"
+        refute log =~ "CI is green"
+      end
     end
 
     test "is still parked when it pushed nothing, its head is red or has no checks, or its head is not the PR head" do
@@ -318,6 +482,285 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
 
       assert turns() == 3
       refute_received {:memory_tracker_state_update, _issue_id, _state}
+    end
+  end
+
+  describe "a CI-fix run that pushes nothing" do
+    # TP-656: the red check was a flake (also red on main), and its rerun on the PR head passed.
+    @green_checks [%{name: "make-all", status: "COMPLETED", conclusion: "SUCCESS"}]
+    @red_checks [%{name: "make-all", status: "COMPLETED", conclusion: "FAILURE"}]
+
+    test "on an approved PR goes back to Merging with its auto-merge hold dropped once CI on its head is green" do
+      :ok = put_pending_ci_failure(approved: true)
+      :ok = put_auto_merge_hold()
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-same", checks: @green_checks}})
+
+      log = capture_log(fn -> run_issue!("In Progress", heads: ["sha-same"], max_turns: 6) end)
+
+      assert turns() == 2
+      assert_received {:memory_tracker_state_update, "issue-progress", "Merging"}
+      assert_received {:memory_tracker_comment, "issue-progress", "Symphony moved this issue back to Merging: " <> note}
+      assert note =~ "CI on the PR head `sha-same` is green, so the approval still covers the PR and auto-merge turns back on"
+      refute_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+      assert PrReviewPoller.auto_merge("issue-progress") == nil
+      assert log =~ "CI fix run for issue_id=issue-progress issue_identifier=TP-337 pushed nothing and CI on its PR head sha-same is green; moving back to Merging"
+      refute log =~ "Parking"
+    end
+
+    test "on a PR that was not approved goes to the post-PR state once CI on its head is green" do
+      :ok = put_pending_ci_failure(approved: false)
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-same", checks: @green_checks}})
+
+      for {auto_review, post_pr_state} <- [{%{enabled: true}, "Auto Review"}, {nil, "In Review"}] do
+        Application.delete_env(:symphony_elixir, :progress_agent_turns)
+
+        log = capture_log(fn -> run_issue!("In Progress", heads: ["sha-same"], max_turns: 6, auto_review: auto_review) end)
+
+        assert turns() == 2
+        assert_received {:memory_tracker_state_update, "issue-progress", ^post_pr_state}
+        refute_received {:memory_tracker_state_update, "issue-progress", _state}
+        refute_received {:memory_tracker_comment, "issue-progress", "Symphony moved" <> _note}
+
+        assert log =~
+                 "CI is green on issue_id=issue-progress issue_identifier=TP-337's PR head sha-same after a CI fix run with no new commit; moving to #{post_pr_state}"
+      end
+    end
+
+    test "on an approved PR goes to the post-PR state when its head is not the commit that failed" do
+      # An earlier CI-fix run pushed `sha-same` and ended before it handed the PR off.
+      :ok = put_pending_ci_failure(approved: true, commit_sha: "sha-red")
+      :ok = put_auto_merge_hold()
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-same", checks: @green_checks}})
+
+      log = capture_log(fn -> run_issue!("In Progress", heads: ["sha-same"], max_turns: 6) end)
+
+      assert turns() == 2
+      assert_received {:memory_tracker_state_update, "issue-progress", "Auto Review"}
+      refute_received {:memory_tracker_state_update, "issue-progress", _state}
+      refute_received {:memory_tracker_comment, "issue-progress", "Symphony moved" <> _note}
+      assert %{state: "ci_failure"} = PrReviewPoller.auto_merge("issue-progress")
+
+      assert log =~
+               "CI is green on issue_id=issue-progress issue_identifier=TP-337's PR head sha-same after a CI fix run with no new commit; moving to Auto Review"
+    end
+
+    test "waits while CI on its head runs, then goes back to Merging once it is green" do
+      :ok = put_pending_ci_failure(approved: true)
+      pending = {:ok, %{commit_sha: "sha-same", checks: [%{name: "make-all", status: "IN_PROGRESS", conclusion: nil}]}}
+      green = {:ok, %{commit_sha: "sha-same", checks: @green_checks}}
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:by_turn, [pending, pending, pending, green]})
+
+      log = capture_log(fn -> run_issue!("In Progress", heads: ["sha-same"], max_turns: 6) end)
+
+      assert turns() == 4
+      assert_received {:memory_tracker_state_update, "issue-progress", "Merging"}
+      refute_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+      assert log =~ "Not parking issue_id=issue-progress issue_identifier=TP-337; waiting for CI on its pushed head sha-same"
+    end
+
+    test "is still parked when the check on its head is still red, has no checks or is not the PR head" do
+      :ok = put_pending_ci_failure(approved: true)
+
+      for pr_head_result <- [
+            {:ok, %{commit_sha: "sha-same", checks: @red_checks}},
+            {:ok, %{commit_sha: "sha-same", checks: []}},
+            {:ok, %{commit_sha: "sha-other", checks: @green_checks}}
+          ] do
+        Application.put_env(:symphony_elixir, :progress_pr_head_result, pr_head_result)
+        Application.delete_env(:symphony_elixir, :progress_agent_turns)
+
+        run_issue!("In Progress", heads: ["sha-same"], max_turns: 6)
+
+        assert turns() == 2
+        assert_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+        assert_received {:memory_tracker_comment, "issue-progress", "Symphony parked this issue in Backlog" <> _note}
+        refute_received {:memory_tracker_state_update, "issue-progress", _state}
+      end
+    end
+
+    test "in Rework is still parked on a green head: a rework that adds no commit is not done" do
+      :ok = put_pending_ci_failure(approved: true)
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-same", checks: @green_checks}})
+
+      run_issue!("Rework", heads: ["sha-same"], max_turns: 6)
+
+      assert turns() == 2
+      assert_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+      refute_received {:memory_tracker_state_update, "issue-progress", "Merging"}
+    end
+
+    test "fails the run when its move back to Merging or to the post-PR state fails" do
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-same", checks: @green_checks}})
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, {:error, :linear_down})
+
+      for approved <- [true, false] do
+        :ok = put_pending_ci_failure(approved: approved)
+        Application.delete_env(:symphony_elixir, :progress_agent_turns)
+
+        assert_raise RuntimeError, ~r/green_fix_handoff_failed/, fn ->
+          run_issue!("In Progress", heads: ["sha-same"], max_turns: 6)
+        end
+      end
+    end
+  end
+
+  describe "a merge-conflict run that pushes nothing" do
+    # TP-658: the PR no longer conflicts by the time the run looks (the base branch moved on), so
+    # there is nothing to resolve.
+    @green_checks [%{name: "make-all", status: "COMPLETED", conclusion: "SUCCESS"}]
+
+    test "on an approved PR goes back to Merging with its conflict state dropped once it is mergeable and green" do
+      :ok = put_pending_conflict(approved: true, head_sha: "sha-same", auto_merge: %{state: "conflict", head_sha: "sha-same", reason: "the PR conflicts with the base branch"})
+      put_green_pr_head("MERGEABLE")
+
+      log = capture_log(fn -> run_issue!("In Progress", heads: ["sha-same"], max_turns: 6) end)
+
+      assert turns() == 2
+      assert_received {:memory_tracker_state_update, "issue-progress", "Merging"}
+      assert_received {:memory_tracker_comment, "issue-progress", "Symphony moved this issue back to Merging: " <> note}
+      assert note =~ "the merge conflict run found nothing to resolve and pushed no commit, the PR no longer conflicts with the base branch"
+      assert note =~ "CI on the PR head `sha-same` is green, so the approval still covers the PR and auto-merge turns back on"
+      refute_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+      assert PrReviewPoller.auto_merge("issue-progress") == nil
+      assert log =~ "merge conflict run for issue_id=issue-progress issue_identifier=TP-337 pushed nothing and CI on its PR head sha-same is green; moving back to Merging"
+      refute log =~ "Parking"
+    end
+
+    test "goes to the post-PR state when the PR was not approved, or its head is not the one that conflicted" do
+      for {approved, conflict_head, auto_review, post_pr_state} <- [
+            {false, "sha-same", %{enabled: true}, "Auto Review"},
+            {false, "sha-same", nil, "In Review"},
+            {true, "sha-dirty", %{enabled: true}, "Auto Review"}
+          ] do
+        :ok = put_pending_conflict(approved: approved, head_sha: conflict_head)
+        put_green_pr_head("MERGEABLE")
+        Application.delete_env(:symphony_elixir, :progress_agent_turns)
+
+        log = capture_log(fn -> run_issue!("In Progress", heads: ["sha-same"], max_turns: 6, auto_review: auto_review) end)
+
+        assert turns() == 2
+        assert_received {:memory_tracker_state_update, "issue-progress", ^post_pr_state}
+        refute_received {:memory_tracker_state_update, "issue-progress", _state}
+        refute_received {:memory_tracker_comment, "issue-progress", "Symphony moved" <> _note}
+
+        assert log =~
+                 "CI is green on issue_id=issue-progress issue_identifier=TP-337's PR head sha-same after a merge conflict run with no new commit; moving to #{post_pr_state}"
+      end
+    end
+
+    test "is still parked while the PR conflicts or GitHub has not worked out whether it does, even with a CI failure pending too" do
+      for {mergeable, ci_failure?} <- [{"CONFLICTING", false}, {"UNKNOWN", false}, {"CONFLICTING", true}] do
+        :ok = put_pending_conflict(approved: true, head_sha: "sha-same")
+        if ci_failure?, do: :ok = put_pending_ci_failure(approved: true)
+        put_green_pr_head(mergeable)
+        Application.delete_env(:symphony_elixir, :progress_agent_turns)
+
+        run_issue!("In Progress", heads: ["sha-same"], max_turns: 6)
+
+        assert turns() == 2
+        assert_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+        assert_received {:memory_tracker_comment, "issue-progress", "Symphony parked this issue in Backlog" <> _note}
+        refute_received {:memory_tracker_state_update, "issue-progress", _state}
+      end
+    end
+
+    defp put_green_pr_head(mergeable) do
+      pr_head = %{commit_sha: "sha-same", mergeable: mergeable, checks: @green_checks}
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, pr_head})
+    end
+  end
+
+  describe "a fix run that pushed a commit and then waits on CI" do
+    # TP-662: a Rework run asked for a CI fix pushed it, then spent its turns waiting on CI. The CI
+    # failure that started it stays pending until the run ends, so the rework never reads finished.
+    @pending_checks [%{name: "make-all", status: "IN_PROGRESS", conclusion: nil}]
+    @green_checks [%{name: "make-all", status: "COMPLETED", conclusion: "SUCCESS"}]
+    @red_checks [%{name: "make-all", status: "COMPLETED", conclusion: "FAILURE"}]
+
+    test "in Rework moves to Auto Review instead of Backlog while CI on its pushed head runs or once it is green" do
+      for {checks, ci} <- [{@pending_checks, "running"}, {@green_checks, "green"}] do
+        :ok = put_pending_ci_failure(approved: false)
+        Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-fixed", checks: checks}})
+        Application.delete_env(:symphony_elixir, :progress_agent_turns)
+
+        log = capture_log(fn -> run_issue!("Rework", heads: ["sha-same", "sha-fixed"], max_turns: 6) end)
+
+        # The turn that pushed, then two turns with no new commit.
+        assert turns() == 3
+        assert_received {:memory_tracker_state_update, "issue-progress", "Auto Review"}
+        refute_received {:memory_tracker_state_update, "issue-progress", _state}
+        refute_received {:memory_tracker_comment, "issue-progress", "Symphony parked" <> _note}
+        assert RunStore.get_rework_base("default", "issue-progress") == nil
+        assert log =~ "CI is #{ci} on issue_id=issue-progress issue_identifier=TP-337's pushed head sha-fixed on its PR; moving to Auto Review"
+        refute log =~ "Parking"
+      end
+    end
+
+    test "in Rework moves on when an earlier run of the rework pushed the head" do
+      :ok = put_pending_ci_failure(approved: false)
+      :ok = RunStore.put_rework_base("default", "issue-progress", "sha-same")
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-fixed", checks: @green_checks}})
+
+      run_issue!("Rework", heads: ["sha-fixed"], max_turns: 6)
+
+      assert turns() == 2
+      assert_received {:memory_tracker_state_update, "issue-progress", "Auto Review"}
+      refute_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+    end
+
+    test "outside Rework moves to Auto Review through the pushed-head hand-off on the turn it pushed" do
+      :ok = put_pending_ci_failure(approved: true)
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-fixed", checks: @pending_checks}})
+
+      run_issue!("In Progress", heads: ["sha-same", "sha-fixed"], max_turns: 6)
+
+      assert turns() == 1
+      assert_received {:memory_tracker_state_update, "issue-progress", "Auto Review"}
+      refute_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+    end
+
+    test "outside Rework keeps turning while the pre-push reviewer has not passed the head it pushed" do
+      # Each reviewer pass changes the review state the empty-turn count compares, so such a run
+      # turns until the reviewer passes the head, and only then moves on.
+      for checks <- [@pending_checks, @green_checks] do
+        :ok = put_pending_ci_failure(approved: false)
+        Application.put_env(:symphony_elixir, :progress_reviewer_requests_changes, true)
+        Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-fixed", checks: checks}})
+        Application.delete_env(:symphony_elixir, :progress_agent_turns)
+
+        run_issue!("In Progress", heads: ["sha-dirty", "sha-fixed"], max_turns: 2, reviewer: true)
+
+        assert turns() == 2
+        assert_received {:progress_reviewed, 1}
+        refute_received {:memory_tracker_state_update, "issue-progress", _state}
+        refute_received {:memory_tracker_comment, "issue-progress", "Symphony parked" <> _note}
+      end
+    end
+
+    test "is still parked when its pushed head is red, or when it pushed nothing and CI is red" do
+      for {state, heads} <- [{"Rework", ["sha-same", "sha-fixed"]}, {"Rework", ["sha-fixed"]}, {"In Progress", ["sha-fixed"]}] do
+        :ok = put_pending_ci_failure(approved: false)
+        Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-fixed", checks: @red_checks}})
+        Application.delete_env(:symphony_elixir, :progress_agent_turns)
+
+        run_issue!(state, heads: heads, max_turns: 6)
+
+        assert turns() == length(heads) + 1
+        assert_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+        refute_received {:memory_tracker_state_update, "issue-progress", "Auto Review"}
+      end
+    end
+
+    test "fails the run when its move to Auto Review fails, keeping the rework base" do
+      :ok = put_pending_ci_failure(approved: false)
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-fixed", checks: @green_checks}})
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, {:error, :linear_down})
+
+      assert_raise RuntimeError, ~r/pushed_head_handoff_failed/, fn ->
+        run_issue!("Rework", heads: ["sha-same", "sha-fixed"], max_turns: 6)
+      end
+
+      assert RunStore.get_rework_base("default", "issue-progress") == "sha-same"
     end
   end
 
@@ -364,6 +807,32 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     assert_raise RuntimeError, ~r/pushed_head_handoff_failed/, fn ->
       run_issue!("In Progress", heads: ["sha-dirty", "sha-fixed"])
     end
+  end
+
+  test "a run's agent session tells the orchestrator as each Symphony tool call starts and ends" do
+    capture_log(fn ->
+      assert :ok = run_issue!("Rework", heads: ["sha-old", "sha-rework"], recipient: self())
+    end)
+
+    assert_received {:progress_session_started, session_opts}
+    on_tool_call = Keyword.fetch!(session_opts, :on_tool_call)
+    call = %{name: "github_sync_base", started_at: DateTime.utc_now(), deadline: nil}
+    call_id = make_ref()
+
+    on_tool_call.({:started, call_id, call})
+    on_tool_call.({:finished, call_id})
+
+    assert_received {:mcp_tool_call, "issue-progress", {:started, ^call_id, ^call}}
+    assert_received {:mcp_tool_call, "issue-progress", {:finished, ^call_id}}
+  end
+
+  test "a run without an orchestrator to tell starts its agent session without a tool call notice" do
+    capture_log(fn ->
+      assert :ok = run_issue!("Rework", heads: ["sha-old", "sha-rework"])
+    end)
+
+    assert_received {:progress_session_started, session_opts}
+    assert Keyword.fetch!(session_opts, :on_tool_call) == nil
   end
 
   describe "a Linear rate limit on a run's own Linear call" do
@@ -434,7 +903,9 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     end
   end
 
-  defp put_pending_conflict do
+  defp put_pending_conflict(opts \\ []) do
+    head = Keyword.get(opts, :head_sha, "sha-dirty")
+
     RunStore.put_pr_review(%{
       repo_key: "default",
       issue_id: "issue-progress",
@@ -442,15 +913,47 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       pr_url: @pr_url,
       workspace_path: "/tmp",
       status: "conflict_active_run",
+      auto_merge: Keyword.get(opts, :auto_merge),
       conflict_context: %{
         pr_url: @pr_url,
         head_ref: "auto/TP-337",
-        head_sha: "sha-dirty",
+        head_sha: head,
         base_ref: "main",
         base_sha: "sha-main",
-        conflict_key: "sha-dirty|sha-main"
+        conflict_key: "#{head}|sha-main",
+        approved: Keyword.get(opts, :approved, false)
       },
       updated_at: ~U[2026-10-04 08:29:00Z]
+    })
+  end
+
+  defp put_pending_ci_failure(opts) do
+    RunStore.put_ci_check(%{
+      repo_key: "default",
+      issue_id: "issue-progress",
+      issue_identifier: "TP-337",
+      pr_url: @pr_url,
+      status: "dispatch_requested",
+      last_observed_sha: Keyword.get(opts, :commit_sha, "sha-same"),
+      ci_failure: %{
+        commit_sha: Keyword.get(opts, :commit_sha, "sha-same"),
+        failed_checks: [%{name: "make-all", status: "COMPLETED", conclusion: "FAILURE"}],
+        log_excerpt: "stub_test.exs:21 failed",
+        approved: Keyword.fetch!(opts, :approved)
+      }
+    })
+  end
+
+  defp put_auto_merge_hold do
+    RunStore.put_pr_review(%{
+      repo_key: "default",
+      issue_id: "issue-progress",
+      issue_identifier: "TP-337",
+      pr_url: @pr_url,
+      workspace_path: "/tmp",
+      status: "watching",
+      auto_merge: %{state: "ci_failure", head_sha: "sha-red", reason: "CI failed; the fix goes back through review"},
+      updated_at: ~U[2026-10-06 23:45:45Z]
     })
   end
 
@@ -491,7 +994,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
           agent_module: ProgressAgent,
           github: ProgressGitHub,
           workspace_head_reader: fn ^workspace, nil -> at_turn(heads) end,
-          issue_state_fetcher: fn _ids -> {:ok, [%{issue | state: at_turn(states, -1)}]} end,
+          issue_state_fetcher: Keyword.get(opts, :issue_state_fetcher, fn _ids -> {:ok, [%{issue | state: at_turn(states, -1)}]} end),
           issue_enricher: &{:ok, &1},
           review_agent_module: ProgressReviewer
         ] ++ Keyword.get(opts, :runner_opts, [])
@@ -516,11 +1019,48 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     git.(["commit", "-m", "fix: resolve the conflict"])
   end
 
+  # Refreshes the issue through the Linear client, as the runner does in production: Linear returns
+  # 20 screenshot attachments first and `next_page` after them.
+  defp linear_issue_fetcher(next_page) do
+    attachments = fn nodes, next_cursor ->
+      %{"nodes" => nodes, "pageInfo" => %{"hasNextPage" => is_binary(next_cursor), "endCursor" => next_cursor}}
+    end
+
+    graphql_fun = fn
+      "query SymphonyLinearIssuesById" <> _query, %{ids: ["issue-progress"]} ->
+        issue = %{
+          "id" => "issue-progress",
+          "identifier" => "TP-337",
+          "title" => "Leave Rework",
+          "state" => %{"name" => "In Progress"},
+          "attachments" => attachments.(screenshot_attachments(1..20), "after-20")
+        }
+
+        {:ok, %{"data" => %{"issues" => %{"nodes" => [issue]}}}}
+
+      "query SymphonyLinearIssueAttachments" <> _query, %{id: "issue-progress", after: "after-20"} ->
+        {:ok, %{"data" => %{"issue" => %{"attachments" => attachments.(next_page, nil)}}}}
+    end
+
+    &Client.fetch_issue_states_by_ids_for_test(&1, graphql_fun)
+  end
+
+  defp screenshot_attachments(range) do
+    Enum.map(range, &%{"title" => "Screenshot #{&1}", "url" => "https://uploads.linear.app/qa/#{&1}.png", "sourceType" => "upload"})
+  end
+
+  defp pr_attachment, do: %{"title" => "PR #337", "url" => @pr_url, "sourceType" => "github", "metadata" => %{"status" => "open"}}
+
   defp at_turn(values, offset \\ 0) do
     Enum.at(values, turns() + offset) || List.last(values)
   end
 
   defp turns, do: Application.get_env(:symphony_elixir, :progress_agent_turns, 0)
+
+  # What Claude's turn reports when it can't reach the model API.
+  defp outage_info do
+    %{provider: "anthropic", scope: :all, window: nil, resets_at: nil, utilization: nil, source: :api_unreachable, error: "ENOTFOUND"}
+  end
 
   test "the workspace HEAD and its unpushed commits read from a local git checkout only" do
     root = Path.join(System.tmp_dir!(), "symphony-workspace-head-#{System.unique_integer([:positive])}")

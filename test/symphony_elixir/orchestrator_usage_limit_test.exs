@@ -80,10 +80,16 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
 
   # Handles `message` inside the orchestrator and returns its state right after, before a poll
   # the message schedules can run against the memory tracker and change it.
+  # A retry reads its issue again in a task; the state is read once its answer is handled.
   defp deliver(pid, message) do
     :sys.replace_state(pid, fn state ->
       {:noreply, state} = Orchestrator.handle_info(message, state)
       state
+    end)
+
+    wait_until(fn ->
+      state = :sys.get_state(pid)
+      state.tracker_tasks == %{} and state
     end)
   end
 
@@ -292,6 +298,37 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
     assert RunStore.get_usage_limits() == %{}
   end
 
+  test "runs that find the same outage share one hold, logged once, and a PR run is not retried", ctx do
+    write_usage_workflow!(ctx)
+    pid = start_orchestrator(ctx, :SharedOutageOrchestrator)
+    first = issue("issue-outage-first", "MT-OUTAGE-1")
+    second = issue("issue-outage-second", "MT-OUTAGE-2")
+    pr = issue("pr:default:9", "PR-9")
+    {first_pid, first_ref, _run_id} = start_run!(pid, first)
+    {second_pid, second_ref, _run_id} = start_run!(pid, second)
+    {pr_pid, pr_ref, pr_run_id} = start_run!(pid, pr, %{run_kind: :pr})
+    info = usage_info(ctx, %{window: nil, resets_at: nil, utilization: nil, source: :api_unreachable, error: "ENOTFOUND"})
+
+    log =
+      capture_log(fn ->
+        send(pid, {:DOWN, first_ref, :process, first_pid, {:model_api_unreachable, info}})
+        send(pid, {:DOWN, second_ref, :process, second_pid, {:model_api_unreachable, %{info | error: "ECONNREFUSED"}}})
+        send(pid, {:DOWN, pr_ref, :process, pr_pid, {:model_api_unreachable, info}})
+        :sys.get_state(pid)
+      end)
+
+    state = :sys.get_state(pid)
+    assert %{issue_identifier: "MT-OUTAGE-1", error: "ENOTFOUND", resume_at: resume_at} = state.usage_limits[@anthropic]
+    assert resume_at == DateTime.add(ctx.now, 60)
+    assert %{attempt: 3, usage_limit_key: @anthropic} = state.retry_attempts[first.id]
+    assert %{attempt: 3, usage_limit_key: @anthropic} = state.retry_attempts[second.id]
+    refute Map.has_key?(state.retry_attempts, pr.id)
+    assert %{status: "model_api_unreachable", error: "agent exited: model API unreachable (ENOTFOUND)"} = run_record(pr_run_id)
+    assert length(Regex.scan(~r/Model API unreachable/, log)) == 1
+    assert log =~ "Agent task could not reach the model API for issue_id=issue-outage-first"
+    assert log =~ "PR agent task could not reach the model API for issue_id=pr:default:9"
+  end
+
   test "a PR run that hits the usage limit creates the hold and is not retried", ctx do
     write_usage_workflow!(ctx)
     pid = start_orchestrator(ctx, :PrRunOrchestrator)
@@ -415,6 +452,7 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
     refute Map.has_key?(state.running, issue.id)
 
     # At resume_at it goes out as the canary with the same attempt.
+    set_clock(ctx, DateTime.add(ctx.now, 3720))
     state = Orchestrator.start_usage_limit_canary_for_test(state, @anthropic, fn _ids -> {:ok, [issue]} end)
     assert %{phase: :canary, canary_issue_id: "issue-usage-deferred"} = state.usage_limits[@anthropic]
 
@@ -513,6 +551,7 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
              kind: :usage_limit,
              provider: "anthropic",
              scope: :all,
+             reason: "claude_usage_limit",
              window: "five_hour",
              resets_at: resets_at,
              resume_at: resume_at,
@@ -528,6 +567,9 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
     set_clock(ctx, resume_at)
 
     # Starting the canary is not a resume: the hold stays, shown in the canary phase.
+    # The memory tracker lists neither run, so a poll would find the canary gone and pick the
+    # other, then clear the hold with nothing left: keep the pick from polling at once.
+    :sys.replace_state(pid, &%{&1 | next_poll_due_at_ms: System.monotonic_time(:millisecond)})
     capture_log(fn -> deliver(pid, {:usage_limit_resume, @anthropic}) end)
 
     assert %{usage_limits: [%{phase: :canary}], dispatch_state: %{blockers: [%{phase: :canary}]}} = GenServer.call(pid, :snapshot)
@@ -597,6 +639,102 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
     assert_receive {:notification_event, %Notifications.Event{event: "usage_limit_paused", issue_identifier: "MT-WALK"}}, 1_000
     assert_receive {:notification_event, %Notifications.Event{event: "usage_limit_resumed"}}, 1_000
     refute_receive {:notification_event, %Notifications.Event{event: "usage_limit_" <> _}}, 200
+  end
+
+  # TP-555: during a network outage Claude ends each turn on `API Error: Can't reach the API
+  # server … (ENOTFOUND)` with nothing used. A fake `claude` does that for its first two runs.
+  test "a turn that can't reach the model API holds the provider, probes with backoff and never parks the issue", ctx do
+    runs = Path.join(ctx.test_root, "outage-runs")
+    fake_claude = Path.join(ctx.test_root, "fake-claude-outage")
+    # Quoted for the single-quoted shell strings below.
+    api_error = String.replace("API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)", "'", ~S('"'"'))
+
+    File.write!(fake_claude, """
+    #!/bin/sh
+    cat > /dev/null
+    echo run >> #{runs}
+    if [ "$(wc -l < #{runs})" -le 2 ]; then
+      printf '%s\\n' '{"type":"system","subtype":"init","session_id":"sess-outage","cwd":"/tmp","tools":[],"mcp_servers":[{"name":"symphony","status":"connected"}],"model":"claude-opus-5-5","permissionMode":"default","apiKeySource":"env"}'
+      printf '%s\\n' '{"type":"system","subtype":"api_error","level":"error","error":{"cause":{"code":"ENOTFOUND"}},"retryInMs":500,"retryAttempt":10,"maxRetries":10,"session_id":"sess-outage"}'
+      printf '%s\\n' '{"type":"assistant","message":{"id":"msg-outage","type":"message","role":"assistant","model":"<synthetic>","content":[{"type":"text","text":"#{api_error}"}],"usage":{"input_tokens":0,"output_tokens":0}},"session_id":"sess-outage"}'
+      printf '%s\\n' '{"type":"result","subtype":"success","is_error":true,"duration_ms":180000,"num_turns":1,"result":"#{api_error}","session_id":"sess-outage","total_cost_usd":0,"usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}'
+      exit 1
+    fi
+    exec #{ctx.fake_claude}
+    """)
+
+    File.chmod!(fake_claude, 0o755)
+
+    # `auto_pause` is about usage limits: an unreachable API is held either way.
+    write_usage_workflow!(%{ctx | fake_claude: fake_claude},
+      agent_usage_limit: %{auto_pause: false},
+      tracker_active_states: ["Todo"]
+    )
+
+    issue = issue("issue-outage", "MT-OUTAGE", %{state: "Todo"})
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+    Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+    on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_recipient) end)
+    :ok = Notifications.subscribe()
+    name = Module.concat(__MODULE__, :OutageOrchestrator)
+    outage_runs = fn -> Enum.filter(RunStore.list_runs(:all), &(&1.issue_id == issue.id and &1.status == "model_api_unreachable")) end
+
+    log =
+      capture_log(fn ->
+        pid = start_orchestrator(ctx, :OutageOrchestrator)
+
+        # 1. The run ends on the outage, not as a completed turn: its retry is held on the
+        # provider hold with its attempt, and the first probe is a minute away.
+        wait_until(fn -> length(outage_runs.()) == 1 end)
+        state = wait_until(fn -> (state = :sys.get_state(pid)) && state.usage_limits[@anthropic] && state end)
+        first_probe = DateTime.add(ctx.now, 60)
+
+        assert %{reason: "model_api_unreachable", source: :api_unreachable, error: "ENOTFOUND", retry_seconds: 60, resume_at: ^first_probe} =
+                 state.usage_limits[@anthropic]
+
+        assert %{attempt: attempt, delay_type: :usage_limit, usage_limit_key: @anthropic, error: error} = state.retry_attempts[issue.id]
+        assert error == "model API unreachable (provider=anthropic error=ENOTFOUND); probing again at #{DateTime.to_iso8601(first_probe)}"
+
+        # 2. The state API shows the hold while it lasts.
+        payload =
+          wait_until(fn ->
+            payload = SymphonyElixirWeb.Presenter.state_payload(name, 1_000)
+            payload.usage_limits != [] and payload
+          end)
+
+        assert [%{reason: "model_api_unreachable", source: "api_unreachable", error: "ENOTFOUND", banner: _banner} = hold] = payload.usage_limits
+        assert [%{kind: :usage_limit, reason: "model_api_unreachable"}] = payload.dispatch_state.blockers
+        assert payload.dispatch_state.active? == false
+        assert UsageLimit.banner(hold, ctx.now, to_local: & &1) == "Paused: Claude API unreachable (ENOTFOUND), retries ~12:01"
+
+        # 3. The probe still can't reach the API: the wait doubles, the attempt stays.
+        set_clock(ctx, first_probe)
+        send(pid, {:usage_limit_resume, @anthropic})
+        wait_until(fn -> length(outage_runs.()) == 2 end)
+        second_probe = DateTime.add(first_probe, 120)
+
+        wait_until(fn ->
+          match?(%{phase: :paused, retry_seconds: 120}, :sys.get_state(pid).usage_limits[@anthropic])
+        end)
+
+        state = :sys.get_state(pid)
+        assert %{resume_at: ^second_probe, since: since} = state.usage_limits[@anthropic]
+        assert since == ctx.now
+        assert %{attempt: ^attempt, delay_type: :usage_limit} = state.retry_attempts[issue.id]
+
+        # 4. The API is back: the next probe runs normally and the hold clears.
+        set_clock(ctx, second_probe)
+        send(pid, {:usage_limit_resume, @anthropic})
+        wait_until(fn -> Enum.find(RunStore.list_runs(:all), &(&1.issue_id == issue.id and &1.status == "success")) end)
+        wait_until(fn -> SymphonyElixirWeb.Presenter.state_payload(name, 1_000).usage_limits == [] end)
+      end)
+
+    assert length(Regex.scan(~r/Model API unreachable \(ENOTFOUND\); holding dispatch provider=anthropic/, log)) == 1
+    assert log =~ "Model API still unreachable (ENOTFOUND) provider=anthropic next_probe_at=#{DateTime.to_iso8601(DateTime.add(ctx.now, 180))}"
+    refute log =~ "Parking"
+    refute_received {:memory_tracker_state_update, "issue-outage", "Backlog"}
+    refute_received {:notification_event, %Notifications.Event{event: "run_failed"}}
+    assert_received {:notification_event, %Notifications.Event{event: "usage_limit_paused", reason: "Claude API unreachable; resumes at " <> _}}
   end
 
   test "a partial hold is listed but leaves dispatch active for the other provider", ctx do
@@ -774,11 +912,132 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
 
     state = :sys.get_state(pid)
     on_exit(fn -> Enum.each(state.retry_attempts, fn {_id, retry} -> Process.cancel_timer(retry.timer_ref) end) end)
+    set_clock(ctx, DateTime.add(ctx.now, 3720))
 
-    for fetcher <- [fn _ids -> {:error, :boom} end, fn _ids -> {:ok, []} end] do
-      canary_state = Orchestrator.start_usage_limit_canary_for_test(state, @anthropic, fetcher)
-      assert %{canary_issue_id: "issue-canary-a"} = canary_state.usage_limits[@anthropic]
+    # A read that fails, returns nothing or dies still sends a canary; the other run stays held.
+    log =
+      capture_log(fn ->
+        for fetcher <- [fn _ids -> {:error, :boom} end, fn _ids -> {:ok, []} end, fn _ids -> exit(:boom) end] do
+          canary_state = Orchestrator.start_usage_limit_canary_for_test(state, @anthropic, fetcher)
+          assert %{phase: :canary, canary_issue_id: "issue-canary-a"} = canary_state.usage_limits[@anthropic]
+          assert %{usage_limit_key: @anthropic} = canary_state.retry_attempts["issue-canary-b"]
+          assert canary_state.tracker_tasks == %{}
+        end
+      end)
+
+    assert log =~ "Async Linear task usage_limit_canary exited before replying: :boom"
+  end
+
+  test "the canary read runs outside the orchestrator, which answers while it is in flight and keeps every held run held", ctx do
+    write_usage_workflow!(ctx)
+    pid = start_orchestrator(ctx, :CanaryReadOrchestrator)
+    held = [issue("issue-canary-read-b", "MT-READ-B"), issue("issue-canary-read-a", "MT-READ-A")]
+
+    for %Issue{} = issue <- held do
+      {worker_pid, worker_ref, _run_id} = start_run!(pid, issue)
+      send(pid, {:DOWN, worker_ref, :process, worker_pid, {:usage_limited, usage_info(ctx)}})
     end
+
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, held)
+    on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_fetch_states_sleep_ms) end)
+    # Far longer than the test; the read is stopped below.
+    Application.put_env(:symphony_elixir, :memory_tracker_fetch_states_sleep_ms, 60_000)
+    # Both runs are held before the clock reaches resume_at, so only the message below resumes.
+    wait_until(fn -> map_size(:sys.get_state(pid).retry_attempts) == 2 end)
+    set_clock(ctx, DateTime.add(ctx.now, 3720))
+    tasks_before = Task.Supervisor.children(SymphonyElixir.TaskSupervisor)
+    send(pid, {:usage_limit_resume, @anthropic})
+
+    assert %{tracker_tasks: tasks} = state = :sys.get_state(pid)
+    assert [%{kind: :usage_limit_canary, key: @anthropic, issue_ids: ["issue-canary-read-a", "issue-canary-read-b"]}] = Map.values(tasks)
+
+    # While Linear has not answered, the orchestrator answers snapshot calls and the hold stays.
+    assert %{usage_limits: [%{phase: :paused}], retrying: retrying} = GenServer.call(pid, :snapshot, 1_000)
+    assert length(retrying) == 2
+    assert %{usage_limits: [%{phase: :paused}]} = Orchestrator.snapshot(pid, 1_000)
+    assert state.slot_waiting == %{}
+
+    for %Issue{id: issue_id} = issue <- held do
+      assert %{usage_limit_key: @anthropic} = state.retry_attempts[issue_id]
+      refute Orchestrator.should_dispatch_issue_for_test(issue, %{state | claimed: MapSet.new()})
+    end
+
+    # A late resume timer starts no second read, and a held retry that comes due stays held,
+    # waiting the unknown-reset interval, rather than being read again.
+    send(pid, {:usage_limit_resume, @anthropic})
+    [%Issue{id: due_id} | _] = held
+    send(pid, {:retry_issue, due_id, state.retry_attempts[due_id].retry_token})
+
+    state = :sys.get_state(pid)
+    assert [%{kind: :usage_limit_canary}] = Map.values(state.tracker_tasks)
+    assert %{usage_limit_key: @anthropic, due_at_ms: due_at_ms, timer_ref: timer_ref} = state.retry_attempts[due_id]
+    assert is_integer(Process.read_timer(timer_ref))
+    delay_ms = due_at_ms - System.monotonic_time(:millisecond)
+    assert delay_ms > 890_000 and delay_ms <= 900_000
+    assert state.slot_waiting == %{}
+
+    # A read that dies keeps the hold and still sends a canary, in issue id order.
+    [task_pid] = Task.Supervisor.children(SymphonyElixir.TaskSupervisor) -- tasks_before
+
+    log =
+      capture_log(fn ->
+        Process.exit(task_pid, :kill)
+        wait_until(fn -> :sys.get_state(pid).tracker_tasks == %{} end)
+      end)
+
+    assert log =~ "Async Linear task usage_limit_canary exited before replying: :killed"
+    assert log =~ "Usage limit canary provider=anthropic scope=all issue_identifier=MT-READ-A"
+    state = :sys.get_state(pid)
+    on_exit(fn -> Enum.each(state.retry_attempts, fn {_id, retry} -> Process.cancel_timer(retry.timer_ref) end) end)
+    assert %{phase: :canary, canary_issue_id: "issue-canary-read-a"} = state.usage_limits[@anthropic]
+    assert %{usage_limit_key: @anthropic} = state.retry_attempts["issue-canary-read-b"]
+  end
+
+  test "a canary read whose hold moved on while it was in flight changes nothing", ctx do
+    write_usage_workflow!(ctx)
+    due = DateTime.add(ctx.now, 3720)
+    held = %{"issue-canary-stale" => %{attempt: 3, identifier: "MT-STALE", usage_limit_key: @anthropic, repo_key: Config.repo_key!()}}
+    ref = make_ref()
+
+    answer = fn usage_limits, attrs ->
+      state =
+        struct!(
+          orchestrator_state(),
+          Map.merge(
+            %{
+              clock: fn -> due end,
+              usage_limits: usage_limits,
+              retry_attempts: held,
+              tracker_tasks: %{ref => %{kind: :usage_limit_canary, key: @anthropic, issue_ids: Map.keys(held)}}
+            },
+            attrs
+          )
+        )
+
+      {:noreply, state} = Orchestrator.handle_info({ref, {:tracker_task_result, {:ok, []}}}, state)
+      assert state.tracker_tasks == %{}
+      state
+    end
+
+    # Cleared, refreshed with time left, turned into a headroom hold, or given a live canary.
+    for usage_limits <- [
+          %{},
+          %{@anthropic => hold(ctx, %{resume_at: DateTime.add(due, 60)})},
+          %{@anthropic => hold(ctx, %{phase: :headroom})}
+        ] do
+      assert answer.(usage_limits, %{}).usage_limits == usage_limits
+    end
+
+    canary = %{@anthropic => UsageLimit.canary(hold(ctx), "issue-canary-live")}
+    assert answer.(canary, %{claimed: MapSet.new(["issue-canary-live"])}).usage_limits == canary
+
+    # Nothing left held when it answers: the hold clears, or an outage is released for the next run.
+    capture_log(fn ->
+      assert answer.(%{@anthropic => hold(ctx)}, %{retry_attempts: %{}}).usage_limits == %{}
+      outage = hold(ctx, %{reason: "model_api_unreachable", source: :api_unreachable})
+      released = answer.(%{@anthropic => outage}, %{retry_attempts: %{}})
+      assert %{usage_limits: %{}, api_outages: %{@anthropic => ^outage}} = released
+    end)
   end
 
   test "a QA pass that hits the usage limit holds the provider until resume_at, then the hold clears", ctx do
@@ -800,6 +1059,80 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
 
     assert :sys.get_state(pid).usage_limits == %{}
     assert RunStore.get_usage_limits() == %{}
+  end
+
+  # TP-555: QA, the acceptance gate and PR runs hold no retry, so an outage hold has no canary.
+  test "an outage found again after its hold was released continues it: backoff, one pause and one resume", ctx do
+    write_usage_workflow!(ctx)
+    name = Module.concat(__MODULE__, :ReleasedOutageOrchestrator)
+    pid = start_orchestrator(ctx, :ReleasedOutageOrchestrator)
+    :ok = Notifications.subscribe()
+    outage = usage_info(ctx, %{window: nil, resets_at: nil, utilization: nil, source: :api_unreachable, error: "ENOTFOUND"})
+
+    log =
+      capture_log(fn ->
+        assert {:ok, first} = Orchestrator.hold_for_usage_limit(name, outage, "MT-QA")
+        assert %{retry_seconds: 60, resume_at: first_probe} = first
+
+        # Nothing is held on it: at resume_at the hold is released for the next run to probe.
+        set_clock(ctx, first_probe)
+        send(pid, {:usage_limit_resume, @anthropic})
+        state = :sys.get_state(pid)
+        assert state.usage_limits == %{}
+        assert state.api_outages == %{@anthropic => first}
+
+        # The next QA pass finds it again: the wait doubles and `since` stays.
+        found_again = DateTime.add(first_probe, 200)
+        set_clock(ctx, found_again)
+        assert {:ok, %{retry_seconds: 120, since: since} = second} = Orchestrator.hold_for_usage_limit(name, outage, "MT-QA")
+        assert since == ctx.now
+        assert second.resume_at == DateTime.add(found_again, 120)
+        assert :sys.get_state(pid).api_outages == %{}
+
+        # A late timer for the outage it continued does nothing.
+        send(pid, {:api_outage_over, @anthropic, since})
+        assert :sys.get_state(pid).usage_limits[@anthropic] == second
+
+        set_clock(ctx, second.resume_at)
+        send(pid, {:usage_limit_resume, @anthropic})
+        assert :sys.get_state(pid).api_outages == %{@anthropic => second}
+
+        # A run that finds the outage while a usage-limit hold is in force keeps it remembered.
+        limit = UsageLimit.put(nil, usage_info(ctx), now: second.resume_at, config: Config.settings!().agent.usage_limit)
+        :sys.replace_state(pid, &%{&1 | usage_limits: %{@anthropic => limit}})
+        assert {:ok, ^limit} = Orchestrator.hold_for_usage_limit(name, outage, "MT-QA")
+        assert :sys.get_state(pid).api_outages == %{@anthropic => second}
+        :sys.replace_state(pid, &%{&1 | usage_limits: %{}})
+
+        # No run finds it again: the outage ends with one resumed event.
+        send(pid, {:api_outage_over, @anthropic, since})
+        assert :sys.get_state(pid).api_outages == %{}
+      end)
+
+    assert_received {:notification_event, %Notifications.Event{event: "usage_limit_paused", reason: "Claude API unreachable; resumes at " <> _}}
+    refute_received {:notification_event, %Notifications.Event{event: "usage_limit_paused"}}
+    assert_received {:notification_event, %Notifications.Event{event: "usage_limit_resumed", reason: "Claude API unreachable"}}
+    refute_received {:notification_event, %Notifications.Event{event: "usage_limit_resumed"}}
+    assert length(Regex.scan(~r/Model API unreachable \(ENOTFOUND\); holding dispatch/, log)) == 1
+    assert log =~ "Model API still unreachable (ENOTFOUND) provider=anthropic next_probe_at=#{DateTime.to_iso8601(DateTime.add(ctx.now, 380))}"
+    assert length(Regex.scan(~r/Model API hold released provider=anthropic/, log)) == 2
+    assert length(Regex.scan(~r/Usage limit resumed provider=anthropic scope=all paused_for_s=380/, log)) == 1
+  end
+
+  test "a usage limit from the API ends a released outage before it pauses", ctx do
+    write_usage_workflow!(ctx)
+    name = Module.concat(__MODULE__, :OutageThenLimitOrchestrator)
+    pid = start_orchestrator(ctx, :OutageThenLimitOrchestrator)
+    outage = usage_info(ctx, %{window: nil, resets_at: nil, utilization: nil, source: :api_unreachable, error: "ENOTFOUND"})
+    assert {:ok, %{resume_at: first_probe}} = Orchestrator.hold_for_usage_limit(name, outage, "MT-QA")
+    set_clock(ctx, first_probe)
+    send(pid, {:usage_limit_resume, @anthropic})
+    :ok = Notifications.subscribe()
+
+    assert {:ok, %{reason: "claude_usage_limit"}} = Orchestrator.hold_for_usage_limit(name, usage_info(ctx), "MT-QA")
+    assert :sys.get_state(pid).api_outages == %{}
+    assert_received {:notification_event, %Notifications.Event{event: "usage_limit_resumed", reason: "Claude API unreachable"}}
+    assert_received {:notification_event, %Notifications.Event{event: "usage_limit_paused", reason: "Claude 5-hour limit; resumes at " <> _}}
   end
 
   test "with nothing held at resume_at the hold clears without a canary", ctx do
@@ -992,6 +1325,27 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
                AgentRunner.run(run_issue, nil,
                  workspace_path: workspace,
                  parent_walkthrough: LimitedWalkthrough,
+                 issue_state_fetcher: fn _ids -> {:ok, [run_issue]} end,
+                 issue_enricher: fn issue -> {:ok, issue} end
+               )
+             )
+  end
+
+  defmodule UnreachableWalkthrough do
+    def run(_issue, _workspace, _opts), do: {:error, {:usage_limited, %{provider: "anthropic", scope: :all, source: :api_unreachable, error: "ENOTFOUND"}}}
+  end
+
+  test "AgentRunner exits on the unreachable model API a final verification's QA agent hit", ctx do
+    write_usage_workflow!(ctx)
+    workspace = Path.join([ctx.test_root, "workspaces", "MT-FV-OUTAGE"])
+    File.mkdir_p!(workspace)
+    run_issue = issue("issue-fv-outage", "MT-FV-OUTAGE", %{title: "Final verification: Hold on the outage"})
+
+    assert {:model_api_unreachable, %{source: :api_unreachable, error: "ENOTFOUND"}} =
+             catch_exit(
+               AgentRunner.run(run_issue, nil,
+                 workspace_path: workspace,
+                 parent_walkthrough: UnreachableWalkthrough,
                  issue_state_fetcher: fn _ids -> {:ok, [run_issue]} end,
                  issue_enricher: fn issue -> {:ok, issue} end
                )

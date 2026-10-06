@@ -15,7 +15,11 @@ defmodule SymphonyElixir.QaAgent do
   is left (`SymphonyElixir.HumanReview`). An answer without that object gets
   one follow-up turn in the same session asking for it. A pass that runs the `macos_app`
   playbook also gets the host-side `qa_*` tools of a `SymphonyElixir.QaDriver`,
-  stopped (quitting every app it launched) when the pass ends. A pass that runs the
+  stopped (quitting every app it launched) when the pass ends, and its `pass` is
+  `blocked` when no `qa_resize_window` call ran the playbook's wide pass. It also gets its host ports
+  (`QA_HOST_PORTS` in the prompt and the session's environment) for the stubs and
+  proxies it serves the app; a pass whose host-port tunnel to the QA host cannot
+  open is `blocked` with the reason before the agent starts. A pass that runs the
   `android_app` playbook gets the `qa_android_*` tools of a
   `SymphonyElixir.QaAndroid.Driver` in the same way, which uninstalls its apps and
   gives the emulator back when the pass ends. A pass that runs the
@@ -51,6 +55,8 @@ defmodule SymphonyElixir.QaAgent do
   @max_verdict_follow_ups 1
   @browser_mcp_name "browser"
   @localhost_domains ["localhost", "127.0.0.1"]
+  @wide_pass_missing_reason "the wide pass did not run: no `qa_resize_window` call resized the app's window, " <>
+                              "so layouts at 1400×900 pt were not checked"
   # The default browser MCP server runs on the Symphony host, outside the agent sandbox, so it
   # is pinned to an exact version and never fetched during a pass (`npx --no`). To bump it,
   # change this version, check the flags in `default_browser_mcp/2` against that release, and
@@ -58,7 +64,13 @@ defmodule SymphonyElixir.QaAgent do
   @playwright_mcp_package "@playwright/mcp@0.0.83"
 
   @type verdict :: :pass | :fail | :blocked
-  @type step :: %{name: String.t(), status: String.t(), details: String.t(), evidence: [String.t()]}
+  @type step :: %{
+          required(:name) => String.t(),
+          required(:status) => String.t(),
+          required(:details) => String.t(),
+          required(:evidence) => [String.t()],
+          optional(:checklist) => true
+        }
   @type result :: %{
           required(:verdict) => verdict(),
           required(:summary) => String.t(),
@@ -80,6 +92,7 @@ defmodule SymphonyElixir.QaAgent do
           optional(:token_limit) => pos_integer() | nil,
           optional(:run_profile) => SymphonyElixir.RunKind.profile(),
           optional(:dev_server_url) => String.t() | nil,
+          optional(:host_ports) => [pos_integer()],
           optional(:verification_issue) => Issue.t(),
           optional(:base_ref) => String.t()
         }
@@ -187,7 +200,7 @@ defmodule SymphonyElixir.QaAgent do
     Title: #{PromptSafety.linear_issue_title(issue.title || "")}
     Description (walkthrough and acceptance criteria):
     #{PromptSafety.linear_issue_body(issue.description || "")}
-    #{parent_section(parent)}#{verification_section(job)}#{dev_server_section(Map.get(job, :dev_server_url))}#{android_section(job)}
+    #{parent_section(parent)}#{verification_section(job)}#{dev_server_section(Map.get(job, :dev_server_url))}#{host_ports_section(Map.get(job, :host_ports, []))}#{android_section(job)}
     Playbooks to follow:
 
     #{Enum.map_join(job.playbooks, "\n\n", & &1.prompt)}
@@ -223,7 +236,7 @@ defmodule SymphonyElixir.QaAgent do
           "name": "<what you checked>",
           "status": "pass" | "fail" | "blocked" | "skipped",
           "details": "<command and the relevant output, or what you saw>",
-          "evidence": ["<linear_attach_file URL or qa-evidence/ path>"]
+          "evidence": ["<linear_attach_file URL or qa-evidence/ path>"]#{checklist_field(job)}
         }
       ],
       "findings": ["<required for fail: one actionable defect per entry>"],
@@ -334,16 +347,35 @@ defmodule SymphonyElixir.QaAgent do
     """
   end
 
-  defp verification_section(%{verification_issue: %Issue{} = verification}) do
+  # The checklist is the verification ticket's whole purpose, so a `pass` that skipped its rows
+  # is not accepted (TP-545): `SymphonyElixir.AutoReview.ParentWalkthrough` counts the
+  # `checklist` steps.
+  defp verification_section(%{verification_issue: %Issue{} = verification} = job) do
     """
 
     Verification checklist (#{verification.identifier}, the parent's final verification sub-ticket):
     #{PromptSafety.linear_issue_title(verification.title || "")}
     #{PromptSafety.linear_issue_body(verification.description || "")}
+
+    Every row of this checklist is a required step. Report each row as its own step with
+    `"checklist": true` and the status `pass` or `fail`, with the evidence in `details`. A row the
+    merged result does not meet on `#{Map.get(job, :base_ref)}` is a gap: mark it `fail` and put the
+    gap in `findings`. Expand a row that groups several IDs (such as "UC1 to UC8", or a range of
+    sub-tickets) into one step per ID, named after the ID, with its own verdict. Reuse the evidence
+    that already exists: the merged sub-tickets (`linear_get_subissues`) and their commits in
+    `git log`, the tests that cover the row, and the code. Mark a row `skipped` only for a reason
+    you state in `details` that this QA host cannot get past, such as a check only a person or a
+    device this host lacks can do, and set `needs_person` when that is why. The number of rows, or
+    not having walked them one by one, is not a reason. Symphony does not accept `pass` when no
+    checklist row is reported or most of them are skipped: it reports the walkthrough as `blocked`
+    and hands the ticket to a person.
     """
   end
 
   defp verification_section(_job), do: ""
+
+  defp checklist_field(%{verification_issue: %Issue{}}), do: ~s(,\n      "checklist": true | false)
+  defp checklist_field(_job), do: ""
 
   defp fixer(%{verification_issue: %Issue{}}), do: "a follow-up ticket"
   defp fixer(_job), do: "the executor"
@@ -370,6 +402,19 @@ defmodule SymphonyElixir.QaAgent do
   end
 
   defp dev_server_section(_url), do: ""
+
+  # The `macos_app` playbook says how to use them.
+  defp host_ports_section([_port | _rest] = ports) do
+    """
+
+    Host ports:
+    QA_HOST_PORTS = #{Enum.join(ports, ",")} (also in your `QA_HOST_PORTS` environment variable).
+    Serve the app's stubs and proxies on `127.0.0.1` at these ports; the app reaches them at
+    `http://localhost:<port>`, even when it runs on a separate QA machine.
+    """
+  end
+
+  defp host_ports_section(_ports), do: ""
 
   # The agent runs the `android_app` build itself, so it needs the playbook's settings.
   defp android_section(job) do
@@ -445,12 +490,14 @@ defmodule SymphonyElixir.QaAgent do
   defp valid_step?(_step), do: false
 
   defp coerce_step(step) do
-    %{
+    coerced = %{
       name: String.trim(step["name"]),
       status: step["status"],
       details: trimmed(Map.get(step, "details")) || "",
       evidence: string_list(Map.get(step, "evidence"))
     }
+
+    if Map.get(step, "checklist") == true, do: Map.put(coerced, :checklist, true), else: coerced
   end
 
   defp validate_verdict(:fail, steps, findings, _reason) do
@@ -494,13 +541,23 @@ defmodule SymphonyElixir.QaAgent do
   defp run_with_tools(agent_module, job, worktree, settings, qa_settings, dev_server, opts) do
     case put_browser_mcp(qa_settings, job, worktree, dev_server, opts) do
       {:ok, qa_settings} ->
-        prompt = prompt(job, fetch_parent(job, worktree, settings, opts))
         driver = start_driver(job, worktree, settings, opts)
         android_driver = start_android_driver(job, worktree, opts)
         opts = Keyword.merge(opts, qa_driver: driver, qa_android_driver: android_driver)
 
         try do
-          run_tracked_session(agent_module, job, worktree, qa_settings, prompt, opts)
+          case QaDriver.host_ports(driver) do
+            {:ok, host_ports} ->
+              job = Map.put(job, :host_ports, host_ports)
+              prompt = prompt(job, fetch_parent(job, worktree, settings, opts))
+
+              agent_module
+              |> run_tracked_session(job, worktree, qa_settings, prompt, opts)
+              |> limit_wide_pass(driver, QaDriver.wide_pass(driver))
+
+            {:error, reason} ->
+              {:error, {:qa_host_tunnel_failed, reason}, empty_tokens()}
+          end
         after
           QaDriver.stop(driver)
           AndroidDriver.stop(android_driver)
@@ -509,6 +566,37 @@ defmodule SymphonyElixir.QaAgent do
       {:error, reason} ->
         {:error, reason, empty_tokens()}
     end
+  end
+
+  # The `macos_app` playbook's wide pass catches layout crashes that only happen in wide
+  # windows (TP-701). A `pass` whose wide pass never resized a window checked none of them, so
+  # it is `blocked` (TP-715). On a QA screen too small for it the pass proves nothing about
+  # them either, so a `pass` there is `blocked`, and that or the `blocked` the playbook asks for
+  # goes to a person, since only one can enlarge the screen.
+  defp limit_wide_pass(run, nil = _driver, _wide_pass), do: run
+
+  defp limit_wide_pass({:ok, %{result: %{verdict: :pass} = result} = run}, _driver, nil) do
+    {:ok, %{run | result: Map.merge(result, %{verdict: :blocked, reason: @wide_pass_missing_reason})}}
+  end
+
+  defp limit_wide_pass({:ok, %{result: %{verdict: :pass} = result} = run}, _driver, %{limited: true} = wide_pass) do
+    {:ok, %{run | result: Map.merge(result, %{verdict: :blocked, reason: limited_reason(wide_pass), needs_person: true})}}
+  end
+
+  defp limit_wide_pass({:ok, %{result: %{verdict: :blocked, reason: reason} = result} = run}, _driver, %{limited: true} = wide_pass) do
+    {:ok, %{run | result: Map.merge(result, %{reason: reason <> "; " <> limited_reason(wide_pass), needs_person: true})}}
+  end
+
+  defp limit_wide_pass(run, _driver, _wide_pass), do: run
+
+  defp limited_reason(wide_pass) do
+    {sw, sh} = wide_pass.screen
+    {vw, vh} = wide_pass.visible
+    {ww, wh} = wide_pass.window
+
+    "the wide pass was limited: the QA screen is #{sw}×#{sh} pt (#{vw}×#{vh} pt usable), so the app's window reached only " <>
+      "#{ww}×#{wh} pt, under the 1400×900 pt the wide pass needs, and layouts wider than that were not checked. " <>
+      "An operator enlarges the QA machine's display (for the tart VM, `tart set <vm> --display 1920x1200`) and QA runs again"
   end
 
   # Only a pass that runs the `web` playbook starts the dev server. It runs from its own
@@ -676,7 +764,7 @@ defmodule SymphonyElixir.QaAgent do
       tool_scope: :qa,
       qa_driver: Keyword.get(opts, :qa_driver),
       qa_android_driver: Keyword.get(opts, :qa_android_driver),
-      extra_env: AgentTmpDir.env(qa_settings.agent.kind, tmp_dir)
+      extra_env: Map.merge(AgentTmpDir.env(qa_settings.agent.kind, tmp_dir), host_ports_env(Map.get(job, :host_ports, [])))
     ]
 
     case agent_module.start_session(worktree, session_opts) do
@@ -688,6 +776,9 @@ defmodule SymphonyElixir.QaAgent do
         {:error, {:qa_agent_failed, reason}}
     end
   end
+
+  defp host_ports_env([]), do: %{}
+  defp host_ports_env(ports), do: %{"QA_HOST_PORTS" => Enum.join(ports, ",")}
 
   defp run_turn(agent_module, session, prompt, issue, turn_opts, tracker) do
     run_turns(agent_module, session, prompt, issue, turn_opts, tracker, 0)
@@ -842,7 +933,7 @@ defmodule SymphonyElixir.QaAgent do
         nil
 
       playbook ->
-        driver_opts = [worktree: worktree, playbook: playbook, git: Keyword.get(opts, :git, &default_git/2)]
+        driver_opts = [worktree: worktree, playbook: playbook, tmp_dir: Keyword.get(opts, :qa_tmp_dir), git: Keyword.get(opts, :git, &default_git/2)]
         {:ok, driver} = AndroidDriver.start_link(Keyword.merge(driver_opts, Keyword.get(opts, :qa_android_driver_opts, [])))
         driver
     end
@@ -896,7 +987,7 @@ defmodule SymphonyElixir.QaAgent do
     File.mkdir_p!(Path.dirname(worktree))
 
     with :ok <- ensure_commit(workspace, job.sha, git),
-         {_output, 0} <- git.(["worktree", "add", "--detach", worktree, job.sha], workspace) do
+         {_output, 0} <- Fetcher.with_lock(workspace, fn -> git.(["worktree", "add", "--detach", worktree, job.sha], workspace) end) do
       {:ok, worktree}
     else
       {:error, reason} -> {:error, reason}
@@ -920,8 +1011,11 @@ defmodule SymphonyElixir.QaAgent do
     end
   end
 
+  # The add and the remove run under the per-repo fetch lock: they write the
+  # `.git/worktrees` the workspace shares with the source checkout and every
+  # other worktree of it.
   defp remove_worktree(workspace, worktree, git) do
-    git.(["worktree", "remove", "--force", worktree], workspace)
+    Fetcher.with_lock(workspace, fn -> git.(["worktree", "remove", "--force", worktree], workspace) end)
     File.rm_rf(worktree)
     :ok
   end

@@ -19,7 +19,8 @@ defmodule SymphonyElixir.AcceptanceGate do
       leaves no verdict until the `escalate.inconclusive_limit`-th one on the same SHA, which
       escalates with reason `inconclusive`;
     * the verdict is stored per head SHA on the CI check record (`gate_sha`, `gate_verdict`,
-      `gate_agent_verdict`, `gate_reasons`, `gate_run_id`), the run in the run store with
+      `gate_agent_verdict`, `gate_reasons`, `gate_run_id`, and in `gate_qa_at` the `qa_updated_at`
+      of the QA result it follows), the run in the run store with
       `kind: "acceptance_gate"`, its tokens and the verdict (`verdict`, `agent_verdict`, `reasons`,
       the `criteria` counts, `judged_at`; `SymphonyElixir.AcceptanceGate.Agreement` later adds the
       human's decision), the `## Symphony Acceptance Gate` Linear comment
@@ -29,8 +30,8 @@ defmodule SymphonyElixir.AcceptanceGate do
   before, and the proposed follow-ups are listed, not filed. In `enforce` mode the verdict moves
   the issue (`enforced_target/4`): `approve` to Merging, `rework` back to In Progress, `escalate`
   to In Review; and up to 3 follow-ups are filed as Backlog sub-issues
-  (`SymphonyElixir.AcceptanceGate.FollowUps`). The gate never moves a `breakdown` parent or a
-  `Final verification:` ticket (`enforces?/2`).
+  (`SymphonyElixir.AcceptanceGate.FollowUps`), skipping a gap an existing ticket covers. The gate
+  never moves a plan parent or a `Final verification:` ticket (`enforces?/2`).
   """
 
   require Logger
@@ -38,8 +39,11 @@ defmodule SymphonyElixir.AcceptanceGate do
   alias SymphonyElixir.AcceptanceGate.{Context, Escalation, FollowUps, Report}
   alias SymphonyElixir.{AgentTelemetry, AgentTmpDir, AgentTools, AuditLog, Config, LeftoverProcesses, PromptSafety}
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.HumanReview
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.Orchestrator
   alias SymphonyElixir.QaAgent
+  alias SymphonyElixir.Repo.Fetcher
   alias SymphonyElixir.ReviewAgent
   alias SymphonyElixir.RunKind
   alias SymphonyElixir.RunStore
@@ -57,6 +61,11 @@ defmodule SymphonyElixir.AcceptanceGate do
   @merging_state "Merging"
   @active_state "In Progress"
   @review_state "In Review"
+  @relation_labels %{
+    "sub_issue" => "sub-issue",
+    "relation" => "blocked by this ticket",
+    "inverse_relation" => "blocks this ticket"
+  }
   # The tickets the gate never moves: their review stays with a person.
   @guarded_kinds [:breakdown, :close_out, :final_verification]
 
@@ -70,9 +79,9 @@ defmodule SymphonyElixir.AcceptanceGate do
           overlaps: [%{pr_url: String.t(), detail: String.t()}],
           scope: [%{kind: String.t(), detail: String.t()}],
           escalation_reasons: [String.t()],
-          follow_ups: [%{title: String.t(), detail: String.t()}]
+          follow_ups: [%{title: String.t(), detail: String.t(), acceptance: [String.t()], covered_by: String.t() | nil}]
         }
-  @type outcome :: {:answer, answer()} | {:inconclusive, term()} | {:conflict, [String.t()]}
+  @type outcome :: {:answer, answer()} | {:inconclusive, term()} | {:conflict, [String.t()]} | {:unavailable, map()}
   @type run_result :: %{
           outcome: outcome(),
           reasons: [reason()],
@@ -99,7 +108,7 @@ defmodule SymphonyElixir.AcceptanceGate do
 
   @doc """
   Whether the gate's verdict moves `issue`: the mode is `enforce`, and the issue isn't a
-  `breakdown` parent or a `Final verification:` ticket, whose review stays with a person.
+  plan parent or a `Final verification:` ticket, whose review stays with a person.
   """
   @spec enforces?(Issue.t(), Schema.t()) :: boolean()
   def enforces?(%Issue{} = issue, %Schema{} = settings), do: mode(settings) == "enforce" and RunKind.classify(issue) not in @guarded_kinds
@@ -192,6 +201,11 @@ defmodule SymphonyElixir.AcceptanceGate do
   `SymphonyElixir.AcceptanceGate.Runner` task. Returns the decision; its `verdict` is nil after
   an inconclusive pass below the limit.
 
+  A pass whose agent couldn't reach the model API is neither: it records no verdict, counts no
+  inconclusive pass and writes no comment. It holds the provider's runs as a usage limit does
+  (`opts[:usage_limit_hold]`, default `SymphonyElixir.Orchestrator.hold_for_usage_limit/2`), so
+  the next green poll waits, and returns a decision with `unavailable` set to the hold info.
+
   `job` carries `issue`, `record` (the CI check record), `sha`, `settings` and `qa` (the QA
   verdict and reason it follows).
 
@@ -236,6 +250,49 @@ defmodule SymphonyElixir.AcceptanceGate do
 
     job = Map.merge(job, %{run_id: run_id, token_limit: settings.agent.max_tokens_per_issue})
     result = run(job, settings, opts)
+
+    pass = %{
+      issue: issue,
+      record: record,
+      sha: sha,
+      settings: settings,
+      run_id: run_id,
+      started_at: started_at,
+      run_store: run_store
+    }
+
+    case result.outcome do
+      {:unavailable, info} -> hold_unavailable_pass(pass, result, info, opts)
+      _outcome -> record_pass(pass, result, opts)
+    end
+  end
+
+  defp hold_unavailable_pass(%{issue: issue, record: record, sha: sha} = pass, result, info, opts) do
+    hold = Keyword.get(opts, :usage_limit_hold, &Orchestrator.hold_for_usage_limit/2)
+    held = hold.(info, issue.identifier)
+
+    Logger.warning(
+      "Acceptance gate agent could not reach the model API (#{info.error}) for #{issue.identifier} sha=#{sha}; " <>
+        "no verdict, the pass runs again once the hold lifts hold=#{inspect(held)}"
+    )
+
+    ended_at = DateTime.utc_now()
+
+    update_run(pass.run_store, Map.get(record, :repo_key), pass.run_id, %{
+      status: "gate_unavailable",
+      ended_at: ended_at,
+      error: "model API unreachable (#{info.error})",
+      runtime_seconds: max(DateTime.diff(ended_at, pass.started_at), 0),
+      tokens: result.tokens,
+      updated_at: ended_at
+    })
+
+    decision = %{verdict: nil, agent_verdict: nil, reasons: [], inconclusive: 0, unavailable: info}
+    {:ok, Map.merge(decision, %{run_id: pass.run_id, findings: [], target: nil})}
+  end
+
+  defp record_pass(%{issue: issue, record: record, sha: sha, settings: settings, run_id: run_id, started_at: started_at, run_store: run_store}, result, opts) do
+    repo_key = Map.get(record, :repo_key)
     decision = decide(result, record, sha, settings)
     findings = rework_findings(result, decision)
     target = enforced_target(issue, record, decision.verdict, settings)
@@ -263,6 +320,8 @@ defmodule SymphonyElixir.AcceptanceGate do
       gate_agent_verdict: decision.agent_verdict,
       gate_reasons: decision.reasons,
       gate_run_id: run_id,
+      # The QA result the verdict follows: a new one on the head asks the gate again.
+      gate_qa_at: Map.get(record, :qa_updated_at),
       gate_mode: mode(settings),
       gate_inconclusive: decision.inconclusive,
       gate_findings: findings,
@@ -396,31 +455,33 @@ defmodule SymphonyElixir.AcceptanceGate do
   """
   @spec run(map(), Schema.t(), keyword()) :: run_result()
   def run(%{issue: issue, record: record, sha: sha} = job, %Schema{} = settings, opts) do
-    rules = settings.auto_review.acceptance_gate.escalate
     criteria = criteria(issue, settings, opts)
     qa_reasons = qa_reasons(Map.get(job, :qa))
     base = %{criteria: criteria, context: nil, tokens: QaAgent.empty_tokens(), follow_up_turns: 0}
 
     case Keyword.get(opts, :context, Context).build(issue, record, sha, settings, Keyword.get(opts, :context_opts, [])) do
       {:ok, context} ->
-        reasons = escalation_reasons(issue, context.diff_summary, context.busy_files, rules) ++ qa_reasons
-        job = Map.merge(job, %{context: context, criteria: criteria, reasons: reasons})
+        reasons = escalation_reasons(issue, context.diff_summary, context.busy_files, settings) ++ qa_reasons
+        existing = existing_tickets(issue, settings, opts)
+        job = Map.merge(job, %{context: context, criteria: criteria, reasons: reasons, existing_tickets: existing})
 
         base
         |> Map.merge(%{reasons: reasons, context: context})
         |> Map.merge(ask_agent(job, settings, opts))
 
       {:conflict, files} ->
-        Map.merge(base, %{outcome: {:conflict, files}, reasons: escalation_reasons(issue, %{files: []}, [], rules) ++ qa_reasons})
+        Map.merge(base, %{outcome: {:conflict, files}, reasons: escalation_reasons(issue, %{files: []}, [], settings) ++ qa_reasons})
 
       {:error, reason} ->
         Logger.warning("Acceptance gate context failed for #{issue.identifier} sha=#{sha}: #{inspect(reason)}")
-        Map.merge(base, %{outcome: {:inconclusive, {:context_failed, reason}}, reasons: escalation_reasons(issue, %{files: []}, [], rules) ++ qa_reasons})
+        Map.merge(base, %{outcome: {:inconclusive, {:context_failed, reason}}, reasons: escalation_reasons(issue, %{files: []}, [], settings) ++ qa_reasons})
     end
   end
 
-  defp escalation_reasons(issue, diff_summary, busy_files, rules) do
-    for %{rule: rule, detail: detail} <- Escalation.check(issue, diff_summary, busy_files, rules), do: %{rule: Atom.to_string(rule), detail: detail}
+  defp escalation_reasons(issue, diff_summary, busy_files, settings) do
+    rules = settings.auto_review.acceptance_gate.escalate
+    opts = [human_review_state: HumanReview.state(settings)]
+    for %{rule: rule, detail: detail} <- Escalation.check(issue, diff_summary, busy_files, rules, opts), do: %{rule: Atom.to_string(rule), detail: detail}
   end
 
   defp qa_reasons(%{verdict: :blocked} = qa), do: [%{rule: "qa_blocked", detail: "QA was blocked: " <> (Map.get(qa, :reason) || "no reason given")}]
@@ -514,6 +575,9 @@ defmodule SymphonyElixir.AcceptanceGate do
             {{:inconclusive, reason}, follow_ups}
         end
 
+      {:error, {:model_api_unreachable, info}} ->
+        {{:unavailable, info}, follow_ups}
+
       {:error, reason} ->
         {{:inconclusive, {:gate_agent_failed, reason}}, follow_ups}
     end
@@ -597,6 +661,9 @@ defmodule SymphonyElixir.AcceptanceGate do
     Acceptance criteria to judge:
     #{criteria_lines(job.criteria)}
 
+    Tickets that already exist around this one (its sub-issues, siblings, parent and blockers):
+    #{existing_lines(Map.get(job, :existing_tickets, []))}
+
     Judge, in this order:
     1. Each acceptance criterion: `met`, `unmet` or `unclear`, with `file:line` evidence from the
        merged diff below or the worktree. Answer every criterion listed above, by its id.
@@ -612,7 +679,13 @@ defmodule SymphonyElixir.AcceptanceGate do
     - `escalate`: a human must decide (see 4), or you can't tell.
 
     Put gaps that are real but outside this ticket in `follow_ups`. Symphony lists them, and when
-    your verdict is enforced it files up to 3 of them as Backlog sub-issues.
+    your verdict is enforced it files up to 3 of them as Backlog sub-issues. Before you add one,
+    read the existing tickets listed above: when one of them already covers the gap, set
+    `covered_by` to its identifier, and Symphony names that ticket instead of filing a copy. Give
+    each new follow-up one or more `acceptance` criteria a reviewer can check once it is fixed:
+    what a test or a check shows (for example "a test shows the poller reads only the changed
+    runs"), never the title restated. Symphony adds "CI is green" itself, and files no follow-up
+    without a checkable criterion.
 
     #{escalations_section(job.reasons)}Open PRs that change the same files:
     #{overlap_lines(context.overlaps)}
@@ -637,7 +710,9 @@ defmodule SymphonyElixir.AcceptanceGate do
       "overlaps": [{"pr_url": "<url>", "detail": "<the conflict or overlap>"}],
       "scope": [{"kind": "missing" | "unrelated", "detail": "<what>"}],
       "escalation_reasons": ["<a decision a human must make>"],
-      "follow_ups": [{"title": "<short title>", "detail": "<the out-of-scope gap>"}]
+      "follow_ups": [
+        {"title": "<short title>", "detail": "<the out-of-scope gap>", "acceptance": ["<what a test or a check shows once it is fixed>"], "covered_by": "<identifier of the existing ticket that covers it>" | null}
+      ]
     }
     """
   end
@@ -653,6 +728,16 @@ defmodule SymphonyElixir.AcceptanceGate do
 
   defp criteria_lines([]), do: "(none found under an Acceptance heading or in the workpad: derive them from the description, ids C1, C2, ...)"
   defp criteria_lines(criteria), do: Enum.map_join(criteria, "\n", &"- #{&1.id}: #{PromptSafety.linear_issue_body(&1.criterion)}")
+
+  # Titles come back from `AgentTools.Linear.get_related_issues/2` already wrapped as untrusted data.
+  defp existing_lines([]), do: "(none)"
+
+  defp existing_lines(tickets) do
+    Enum.map_join(tickets, "\n", fn ticket ->
+      relation = Map.get(@relation_labels, ticket["relation"], ticket["relation"])
+      "- #{ticket["identifier"]} (#{relation}, #{ticket["state"]}): #{ticket["title"]}"
+    end)
+  end
 
   defp escalations_section([]), do: ""
 
@@ -740,8 +825,23 @@ defmodule SymphonyElixir.AcceptanceGate do
   defp coerce_scope(%{"kind" => kind, "detail" => detail}) when kind in @scope_kinds and is_binary(detail), do: %{kind: kind, detail: String.trim(detail)}
   defp coerce_scope(_scope), do: nil
 
-  defp coerce_follow_up(%{"title" => title} = follow_up) when is_binary(title), do: %{title: String.trim(title), detail: trimmed(Map.get(follow_up, "detail")) || ""}
+  defp coerce_follow_up(%{"title" => title} = follow_up) when is_binary(title) do
+    %{
+      title: String.trim(title),
+      detail: trimmed(Map.get(follow_up, "detail")) || "",
+      acceptance: string_list(Map.get(follow_up, "acceptance")),
+      covered_by: issue_identifier(Map.get(follow_up, "covered_by"))
+    }
+  end
+
   defp coerce_follow_up(_follow_up), do: nil
+
+  defp issue_identifier(value) when is_binary(value) do
+    identifier = value |> String.trim() |> String.upcase()
+    if Regex.match?(~r/^[A-Z][A-Z0-9]*-\d+$/, identifier), do: identifier
+  end
+
+  defp issue_identifier(_value), do: nil
 
   @doc """
   The acceptance criteria the gate judges, numbered `C1`, `C2`, ...: the checklist items under
@@ -795,6 +895,22 @@ defmodule SymphonyElixir.AcceptanceGate do
 
   defp workpad_criteria(_issue, _settings, _opts), do: []
 
+  # The ticket's family, listed in the prompt so the agent names an existing ticket rather than
+  # proposing a copy of it. Reading it is best effort: the filing reads it again, and files nothing
+  # when it can't (`SymphonyElixir.AcceptanceGate.FollowUps`).
+  defp existing_tickets(issue, %Schema{tracker: %{kind: "linear"}}, opts) do
+    case AgentTools.Linear.get_related_issues(%{issue: issue}, Keyword.take(opts, [:linear_client])) do
+      {:ok, tickets} ->
+        tickets
+
+      {:error, reason} ->
+        Logger.warning("Acceptance gate could not read the tickets related to #{issue.identifier}: #{inspect(reason)}")
+        []
+    end
+  end
+
+  defp existing_tickets(_issue, _settings, _opts), do: []
+
   # Comments come back wrapped in an untrusted-data tag.
   defp comment_body(%{"body" => body}) when is_binary(body) do
     body
@@ -817,14 +933,17 @@ defmodule SymphonyElixir.AcceptanceGate do
     remove_worktree(workspace, worktree, git)
     File.mkdir_p!(Path.dirname(worktree))
 
-    case git.(["worktree", "add", "--detach", worktree, sha], workspace) do
+    case Fetcher.with_lock(workspace, fn -> git.(["worktree", "add", "--detach", worktree, sha], workspace) end) do
       {_output, 0} -> :ok
       {output, status} -> {:error, {:gate_worktree_failed, status, String.trim(output)}}
     end
   end
 
+  # The add and the remove run under the per-repo fetch lock: they write the
+  # `.git/worktrees` the workspace shares with the source checkout and every
+  # other worktree of it.
   defp remove_worktree(workspace, worktree, git) do
-    git.(["worktree", "remove", "--force", worktree], workspace)
+    Fetcher.with_lock(workspace, fn -> git.(["worktree", "remove", "--force", worktree], workspace) end)
     File.rm_rf(worktree)
     :ok
   end

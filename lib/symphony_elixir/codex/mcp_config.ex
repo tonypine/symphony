@@ -15,12 +15,17 @@ defmodule SymphonyElixir.Codex.McpConfig do
         }
 
   @cloud_requirements_cache_file "cloud-requirements-cache.json"
+  @runtime_home_prefix "symphony-codex-home-"
+
+  @doc "The path every per-run `CODEX_HOME` written by `write_home/3` starts with."
+  @spec runtime_home_prefix() :: Path.t()
+  def runtime_home_prefix, do: Path.join(System.tmp_dir!(), @runtime_home_prefix)
 
   @spec write_home(Schema.t(), map(), keyword()) :: {:ok, runtime_home()} | {:error, term()}
   def write_home(settings, mcp_session, opts \\ []) do
     home_path =
       Keyword.get_lazy(opts, :home_path, fn ->
-        Path.join(System.tmp_dir!(), "symphony-codex-home-#{mcp_session.id}")
+        "#{runtime_home_prefix()}#{mcp_session.id}"
       end)
 
     socket_path = Keyword.get(opts, :socket_path) || mcp_session.socket_path
