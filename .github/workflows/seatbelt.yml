@@ -7,6 +7,10 @@ name: seatbelt
 # Ubuntu runners and every agent run (Seatbelt can't nest), so they run here, on a macOS runner.
 # `--only seatbelt` runs them even so, and fails when none is found.
 #
+# It runs on the newest macOS image, the platform Symphony runs on. Where a macOS version lets a
+# command under the profile listen beyond loopback, the dev server refuses to start, and the tests
+# assert that refusal instead of a served page.
+#
 # Not a required check: on a pull request that changes none of these paths the workflow doesn't
 # run. Pushes to `main` that change them run it too, so it stays green there.
 on:
@@ -42,7 +46,7 @@ concurrency:
 jobs:
   seatbelt:
     name: seatbelt tests
-    runs-on: macos-15
+    runs-on: macos-26
     # One test builds this checkout with `scripts/qa-dashboard-server.sh` before it serves.
     timeout-minutes: 45
 
