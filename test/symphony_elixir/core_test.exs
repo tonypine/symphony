@@ -4605,56 +4605,57 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
-  test "agent runner refuses to take an attached PR's branch from a sibling an active issue owns" do
+  test "agent runner dispatches a parent on its own branch when its sub-ticket's PR is attached" do
     test_root =
       Path.join(
         System.tmp_dir!(),
-        "symphony-elixir-agent-runner-active-sibling-#{System.unique_integer([:positive])}"
+        "symphony-elixir-agent-runner-sub-ticket-pr-#{System.unique_integer([:positive])}"
       )
 
     try do
       %{workspace_root: workspace_root, pr_head_sha: pr_head_sha} = setup_worktree_pr_head!(test_root)
       primary_repo = Path.join(test_root, "primary")
 
-      # TP-225's agent is mid-run on the shared PR branch with a clean tree.
-      {:ok, sibling_workspace} =
-        SymphonyElixir.PathSafety.canonicalize(Path.join([workspace_root, "default", "TP-225"]))
+      # TP-586's clean, pushed worktree has its PR branch checked out while the usage limit
+      # holds it, so no agent owns it right now.
+      {:ok, sub_workspace} =
+        SymphonyElixir.PathSafety.canonicalize(Path.join([workspace_root, "default", "TP-586"]))
 
-      File.mkdir_p!(Path.dirname(sibling_workspace))
-      git!(primary_repo, ["worktree", "add", "-b", "auto/TP-225", sibling_workspace, "origin/feature-head"])
-      git!(primary_repo, ["push", "origin", "auto/TP-225"])
+      File.mkdir_p!(Path.dirname(sub_workspace))
+      git!(primary_repo, ["worktree", "add", "-b", "auto/TP-586", sub_workspace, "origin/feature-head"])
+      git!(primary_repo, ["push", "origin", "auto/TP-586"])
 
-      {:ok, workspace} =
-        SymphonyElixir.PathSafety.canonicalize(Path.join([workspace_root, "default", "TP-226"]))
-
-      git!(primary_repo, ["worktree", "add", "-b", "auto/TP-226", workspace, "origin/main"])
-
-      pr_url = "https://github.com/org/repo/pull/225#auto/TP-225"
+      # Linear linked the sub-ticket's PR to its parent because its body said "Part of TP-381".
+      pr_url = "https://github.com/org/repo/pull/83#auto/TP-586"
 
       issue = %Issue{
-        id: "issue-shared-pr",
-        identifier: "TP-226",
-        title: "Mentions TP-225's PR",
-        description: "Linear linked the shared PR to both issues",
+        id: "issue-parent",
+        identifier: "TP-381",
+        title: "Design how the hub updates itself",
+        description: "Parent of TP-586",
         state: "In Progress",
         pull_request_url: pr_url,
         pr_urls: [pr_url]
       }
 
-      capture_log(fn ->
-        assert_raise RuntimeError, ~r/branch_already_checked_out_elsewhere/, fn ->
-          AgentRunner.run(issue, nil,
-            issue_state_fetcher: fn [_issue_id] -> {:ok, [%{issue | state: "Done"}]} end,
-            issue_enricher: no_op_issue_enricher(),
-            github: AttachedPrGitHub,
-            active_workspace_identifiers: ["TP-225"]
-          )
-        end
-      end)
+      log =
+        capture_log(fn ->
+          assert :ok =
+                   AgentRunner.run(issue, nil,
+                     issue_state_fetcher: fn [_issue_id] -> {:ok, [%{issue | state: "Done"}]} end,
+                     issue_enricher: no_op_issue_enricher(),
+                     github: AttachedPrGitHub
+                   )
+        end)
 
-      assert git!(sibling_workspace, ["branch", "--show-current"]) == "auto/TP-225"
-      assert git!(sibling_workspace, ["rev-parse", "HEAD"]) == pr_head_sha
-      assert git!(workspace, ["branch", "--show-current"]) == "auto/TP-226"
+      assert log =~ "Ignoring attached PR on another issue's branch"
+      assert log =~ "head_ref=auto/TP-586"
+
+      workspace = Path.join([workspace_root, "default", "TP-381"])
+      assert git!(workspace, ["branch", "--show-current"]) == "auto/TP-381"
+      refute File.exists?(Path.join(workspace, "PR_HEAD.md"))
+      assert git!(sub_workspace, ["branch", "--show-current"]) == "auto/TP-586"
+      assert git!(sub_workspace, ["rev-parse", "HEAD"]) == pr_head_sha
     after
       File.rm_rf(test_root)
     end
@@ -4670,7 +4671,13 @@ defmodule SymphonyElixir.CoreTest do
     try do
       %{workspace_root: workspace_root} = setup_worktree_pr_head!(test_root)
 
-      for {identifier, fragment} <- [{"TP-300", "auto/TP-300"}, {"TP-301", "feature-head:MERGED"}] do
+      # An open PR on a branch that isn't this issue's own is ignored too.
+      for {identifier, fragment} <- [
+            {"TP-300", "auto/TP-300"},
+            {"TP-301", "feature-head:MERGED"},
+            {"TP-302", "feature-head"},
+            {"TP-303", "auto/feature-head"}
+          ] do
         pr_url = "https://github.com/org/repo/pull/300##{fragment}"
 
         issue = %Issue{
