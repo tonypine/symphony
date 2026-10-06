@@ -14,9 +14,16 @@ audit_dir = Path.join(System.tmp_dir!(), "symphony-elixir-test-audit-#{System.pi
 state_root = Path.join(System.tmp_dir!(), "symphony-elixir-test-state-#{System.pid()}-#{System.unique_integer([:positive])}")
 logs_root = Path.join(System.tmp_dir!(), "symphony-elixir-test-logs-#{System.pid()}-#{System.unique_integer([:positive])}")
 run_store_dir = Application.fetch_env!(:symphony_elixir, :run_store_dir)
-# Agent runs make their temp folders here, so the ones failed runs keep don't stay in `/tmp`.
-agent_run_tmp_root = Path.join(System.tmp_dir!(), "symphony-elixir-test-run-tmp-#{System.pid()}-#{System.unique_integer([:positive])}")
-File.mkdir_p!(agent_run_tmp_root)
+# Agent runs and dev servers make their temp folders here, removed at exit, so the ones failed
+# runs keep don't stay behind. Its name is short, and it is in `/tmp` where that is writable
+# (not macOS's long `/var/folders/...` TMPDIR), so a dev server's unix socket in it still fits
+# the 104-byte `sun_path` limit; sandboxed agent runs, which can't write `/tmp`, have a short
+# TMPDIR of their own.
+agent_run_tmp_root =
+  ["/tmp", System.tmp_dir!()]
+  |> Enum.map(&Path.join(&1, "st-#{System.pid()}"))
+  |> Enum.find(&(File.mkdir_p(&1) == :ok))
+
 Application.put_env(:symphony_elixir, :agent_run_tmp_bases, [agent_run_tmp_root])
 Application.put_env(:symphony_elixir, :state_root, state_root)
 Application.put_env(:symphony_elixir, :logs_root, logs_root)
@@ -61,6 +68,19 @@ with bwrap when is_binary(bwrap) <- System.find_executable("bwrap"),
   :ok
 else
   _unavailable -> ExUnit.configure(exclude: [:bwrap | Keyword.get(ExUnit.configuration(), :exclude, [])])
+end
+
+# The `:unix_socket` tests listen on a unix socket in the temp folder, as a verification dev
+# server does on macOS. The agent sandbox refuses that bind, so they run in CI.
+unix_socket_probe = Path.join(System.tmp_dir!(), "unix-socket-probe-#{System.pid()}.sock")
+
+case :gen_tcp.listen(0, ip: {:local, unix_socket_probe}) do
+  {:ok, socket} ->
+    :gen_tcp.close(socket)
+    File.rm(unix_socket_probe)
+
+  {:error, _reason} ->
+    ExUnit.configure(exclude: [:unix_socket | Keyword.get(ExUnit.configuration(), :exclude, [])])
 end
 
 # The qa-dashboard end-to-end test fetches deps and builds this checkout; it runs only on

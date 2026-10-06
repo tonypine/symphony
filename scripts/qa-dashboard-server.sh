@@ -3,10 +3,17 @@
 # `verification.dev_server` (Auto Review's web playbook). It runs with an in-memory
 # tracker, so it never talks to Linear or starts agents. Symphony starts it in the dev
 # server's sandbox, so it can write only this checkout, $TMPDIR and the agent cache folder.
+# On macOS that sandbox allows no TCP listener: the dashboard listens on the unix socket
+# $SYMPHONY_VERIFICATION_SOCKET instead, which Symphony serves on 127.0.0.1:$SYMPHONY_VERIFICATION_PORT.
 set -eu
 
 port="${SYMPHONY_VERIFICATION_PORT:?SYMPHONY_VERIFICATION_PORT is not set}"
 repo="$(cd "$(dirname "$0")/.." && pwd)"
+if [ -n "${SYMPHONY_VERIFICATION_SOCKET:-}" ]; then
+  host="unix:$SYMPHONY_VERIFICATION_SOCKET" listen_port=0
+else
+  host=127.0.0.1 listen_port="$port"
+fi
 root="$(mktemp -d "${TMPDIR:-/tmp}/symphony-qa-dashboard.XXXXXX")"
 
 cat >"$root/symphony.yml" <<EOF
@@ -39,4 +46,4 @@ fi
 # A Symphony agent environment turns the orchestrator and its HTTP server off.
 unset SYMPHONY_AGENT_RUNTIME SYMPHONY_DISABLE_ORCHESTRATOR
 exec "$@" ./bin/symphony --config "$root/symphony.yml" --state-root "$root/state" --logs-root "$root/logs" \
-  --host 127.0.0.1 --port "$port"
+  --host "$host" --port "$listen_port"

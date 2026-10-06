@@ -739,6 +739,11 @@ Fields:
     secrets, network limited to loopback plus an egress proxy that only reaches allowlisted
     dependency hosts, and no way to have the OS start a process outside the sandbox. Where no such sandbox is available, the run fails with `verification_failed`
     instead of starting the command unsandboxed.
+  - The sandbox MUST keep the command from accepting connections from other hosts. Where it can't
+    limit a TCP listener to loopback (macOS Seatbelt), it allows the command no TCP listener; the
+    command then also receives `SYMPHONY_VERIFICATION_SOCKET`, a unix socket path it listens on
+    instead, and the implementation serves that socket on `127.0.0.1:$SYMPHONY_VERIFICATION_PORT`
+    from outside the sandbox.
 - `dev_server.health_check_url` (string, REQUIRED when `start_cmd` is set)
   - Supports `$SYMPHONY_VERIFICATION_PORT` and `${SYMPHONY_VERIFICATION_PORT}` substitution.
   - The dev server is considered healthy only on HTTP `200`.

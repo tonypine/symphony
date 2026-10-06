@@ -13,8 +13,8 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
       folder, the item replacement folder and the `/dev` sinks, and, inside the checkout, the
       paths the agent may not write either (`.git`, `WORKFLOW.md`, its skills, the files their
       links point at);
-    * the network, but for listening and connecting on loopback and DNS lookups through
-      mDNSResponder. It reaches the dependency hosts through
+    * the network, but for unix sockets in the dev server's temp folder, connecting on loopback
+      and DNS lookups through mDNSResponder. It reaches the dependency hosts through
       `SymphonyElixir.Verification.EgressProxy` on loopback;
     * every mach service but a fixed list, like the agent profiles: the agent's list without
       its window, font, sound, power and LaunchServices services, plus `trustd` for TLS. So no
@@ -29,11 +29,16 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
   folder are given with their links resolved, and a denied path outside the home folder also
   with its real path (`/var/root` is `/private/var/root`).
 
-  Some macOS versions don't keep a listener on loopback: on macOS 15 the rule that lets the
-  dev server accept connections on loopback also lets it bind `0.0.0.0` and the LAN address.
-  So before the first dev server starts, a process under the profile binds `0.0.0.0`, and unless
-  Seatbelt refuses it the dev server does not start (`:dev_server_sandbox_unconfined`). The
-  verdict holds until Symphony restarts.
+  Seatbelt can't keep a TCP listener on loopback: the rule that lets a process accept connections
+  on `localhost` also lets it bind `0.0.0.0` and the LAN address, and a rule on the remote address
+  makes even `listen()` fail. So the profile lets the dev server open no TCP listener at all. It
+  listens on a unix socket in its temp folder instead (`listen_socket/2`, given to it as
+  `SYMPHONY_VERIFICATION_SOCKET`), and Symphony, outside the sandbox, serves that socket on
+  `127.0.0.1:<port>` (`SymphonyElixir.Verification.LoopbackBridge`). Before the first dev server
+  starts, a process under the profile tries to bind `0.0.0.0` and `127.0.0.1` and to listen on a
+  unix socket in the temp folder; unless Seatbelt refuses both binds and allows the socket, the dev
+  server does not start (`:dev_server_sandbox_unconfined`). The verdict holds until Symphony
+  restarts.
 
   On Linux the command runs under bubblewrap (`bwrap`) instead, with the same limits built from
   mounts and namespaces (`bwrap_args/4`): the whole filesystem read-only but the same writable
@@ -100,13 +105,30 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
   @launch_services ~w(com.apple.coreservices.launchservicesd com.apple.coreservices.appleevents)
   @launch_services_prefixes ~w(com.apple.lsd.)
   @launcher_executables ~w(/usr/bin/open /usr/bin/osascript /bin/launchctl)
-  # Binds every address on a free port, and exits non-zero with the reason when it can't.
+  # Binds every address and then loopback on a free port, each of which must fail with EPERM, then
+  # listens on the unix socket at its first argument. Prints `confined` and exits 0 only when all
+  # of that holds, and exits non-zero with the reason otherwise.
   @confinement_probe [
     "/usr/bin/perl",
     "-MSocket",
+    "-MErrno",
     "-e",
-    ~S{socket(my $s, PF_INET, SOCK_STREAM, 0) or die "socket: $!\n"; bind($s, sockaddr_in(0, INADDR_ANY)) or die "bind: $!\n"; print "bound\n"}
+    ~S"""
+    for my $ip (INADDR_ANY, INADDR_LOOPBACK) {
+      socket(my $s, PF_INET, SOCK_STREAM, 0) or die "socket: $!\n";
+      bind($s, sockaddr_in(0, $ip)) and die "tcp bound: " . inet_ntoa($ip) . "\n";
+      $!{EPERM} or die "bind: $!\n";
+    }
+    my $path = shift;
+    unlink $path;
+    socket(my $u, PF_UNIX, SOCK_STREAM, 0) or die "socket: $!\n";
+    bind($u, sockaddr_un($path)) or die "unix bind: $!\n";
+    listen($u, 1) or die "unix listen: $!\n";
+    unlink $path;
+    print "confined\n";
+    """
   ]
+  @probe_socket "probe.sock"
 
   # A pid namespace that dies with the launcher's child, and no network but loopback. No
   # `--new-session`: the dev server stops by its process group, and it has no terminal to reach.
@@ -115,12 +137,15 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
   @bwrap_hidden_dirs ~w(/tmp /run)
   @proxy_socket "proxy.sock"
   @serve_socket "serve.sock"
+  # macOS keeps 104 bytes for a unix socket path, with its terminating NUL.
+  @darwin_socket_path_bytes 103
 
   @doc """
   The argv that runs `start_cmd` with `sh -lc` inside the sandbox, writable in `workspace`
   and `tmp_dir`, and the empty folders the sandbox makes in `workspace` (`bwrap_args/4`), for
-  the caller to remove once nothing runs in it. On macOS the profile must first be known to keep
-  listeners on loopback on this Mac. Options: `:os_type` (default `:os.type()`); on macOS
+  the caller to remove once nothing runs in it. On macOS the dev server listens on
+  `listen_socket/2` in `tmp_dir`, and the profile must first be known to refuse every TCP
+  listener on this Mac. Options: `:os_type` (default `:os.type()`); on macOS
   `:executable` (default `/usr/bin/sandbox-exec`), `:getconf` (for the item replacement folder)
   and `:check_confinement` (default `true`; the tests' stand-in for `sandbox-exec`, which drops
   the profile, turns it off); on Linux `:bwrap` and `:socat` (default: found on `PATH`), and the
@@ -132,6 +157,28 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
       {:unix, :darwin} -> seatbelt_command(start_cmd, workspace, tmp_dir, opts)
       {:unix, :linux} -> bwrap_command(start_cmd, workspace, tmp_dir, opts)
       os_type -> {:error, {:dev_server_sandbox_unavailable, os_type}}
+    end
+  end
+
+  @doc """
+  The unix socket in `tmp_dir` the dev server listens on instead of its port, or `nil` where it
+  listens on its port. On macOS Seatbelt can't keep a TCP listener on loopback, so the profile
+  allows none, and Symphony serves this socket on `127.0.0.1:<port>`. On Linux the sandbox has a
+  loopback of its own, which `socat` bridges to the host's. Options: `:os_type` (default
+  `:os.type()`).
+  """
+  @spec listen_socket(Path.t(), keyword()) :: {:ok, Path.t() | nil} | {:error, term()}
+  def listen_socket(tmp_dir, opts) do
+    case Keyword.get_lazy(opts, :os_type, &:os.type/0) do
+      {:unix, :darwin} ->
+        path = Path.join(real_path(tmp_dir), @serve_socket)
+
+        if byte_size(path) <= @darwin_socket_path_bytes,
+          do: {:ok, path},
+          else: {:error, {:dev_server_sandbox_unavailable, {:unusable_socket_path, path}}}
+
+      _os_type ->
+        {:ok, nil}
     end
   end
 
@@ -216,16 +263,16 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
 
   defp sandboxed_command(start_cmd, workspace, tmp_dir, executable, opts) do
     write_paths = [workspace, tmp_dir] ++ AgentCaches.write_paths() ++ item_replacement_paths(opts)
-    profile = profile(workspace, write_paths, protected_paths(workspace))
+    profile = profile(workspace, write_paths, protected_paths(workspace), socket_dir: tmp_dir)
 
-    with :ok <- check_confinement(executable, profile, opts) do
+    with :ok <- check_confinement(executable, profile, tmp_dir, opts) do
       {:ok, [executable, "-p", profile, "/bin/sh", "-lc", start_cmd], []}
     end
   end
 
   # The macOS version can't change while Symphony runs, so a bind refused or allowed is kept; a
   # probe that couldn't run is tried again next time.
-  defp check_confinement(executable, profile, opts) do
+  defp check_confinement(executable, profile, tmp_dir, opts) do
     key = {__MODULE__, :confinement, executable}
 
     cond do
@@ -236,25 +283,24 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
         verdict
 
       true ->
-        case probe_confinement(executable, profile) do
+        case probe_confinement(executable, profile, Path.join(real_path(tmp_dir), @probe_socket)) do
           {:error, {:dev_server_sandbox_unconfined, {:probe_failed, _status, _output}}} = error -> error
           verdict -> tap(verdict, &:persistent_term.put(key, &1))
         end
     end
   end
 
-  # Only Seatbelt refusing the bind proves the confinement: a bind that works, or a probe that
-  # can't run, leaves the dev server unstarted. `sandbox-exec` that can't apply the profile also
-  # says "Operation not permitted", so the refusal must come from the bind.
-  defp probe_confinement(executable, profile) do
-    case System.cmd(executable, ["-p", profile | @confinement_probe], stderr_to_stdout: true) do
-      {_output, 0} ->
-        {:error, {:dev_server_sandbox_unconfined, :non_loopback_bind_allowed}}
+  # Only the probe's own word proves the confinement: a TCP bind that works, or a probe that can't
+  # run, leaves the dev server unstarted. `sandbox-exec` that can't apply the profile also says
+  # "Operation not permitted", so the refusals must come from the probe's binds.
+  defp probe_confinement(executable, profile, socket) do
+    {output, status} = System.cmd(executable, ["-p", profile | @confinement_probe] ++ [socket], stderr_to_stdout: true)
 
-      {output, status} ->
-        if output =~ "bind: Operation not permitted",
-          do: :ok,
-          else: {:error, {:dev_server_sandbox_unconfined, {:probe_failed, status, String.trim(output)}}}
+    # Its output may carry Perl's own warnings, such as an unset locale's.
+    cond do
+      status == 0 and output =~ ~r/^confined$/m -> :ok
+      output =~ "tcp bound: " -> {:error, {:dev_server_sandbox_unconfined, :tcp_bind_allowed}}
+      true -> {:error, {:dev_server_sandbox_unconfined, {:probe_failed, status, String.trim(output)}}}
     end
   end
 
@@ -288,13 +334,16 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
 
   @doc """
   The Seatbelt profile: writable in `write_paths` but the `protected_paths` of `workspace`
-  (relative to it), unreadable in the agent's denied read paths under `home`, with
-  loopback-only network, an allowlist of mach services, no way to have launchd start a
-  process outside it, and no process info on or signals to a process outside it.
+  (relative to it), unreadable in the agent's denied read paths under `home`, with no TCP
+  listener, unix sockets only in `socket_dir`, outgoing connections to loopback only, an
+  allowlist of mach services, no way to have launchd start a process outside it, and no process
+  info on or signals to a process outside it. Options: `:socket_dir` (required) and `:home`
+  (default `System.user_home!()`).
   """
-  @spec profile(Path.t(), [Path.t()], [String.t()], Path.t()) :: String.t()
-  def profile(workspace, write_paths, protected_paths, home \\ System.user_home!()) do
-    home = real_path(home)
+  @spec profile(Path.t(), [Path.t()], [String.t()], keyword()) :: String.t()
+  def profile(workspace, write_paths, protected_paths, opts) do
+    home = real_path(Keyword.get_lazy(opts, :home, &System.user_home!/0))
+    socket_dir = real_path(Keyword.fetch!(opts, :socket_dir))
     workspace = real_path(workspace)
 
     deny_read =
@@ -315,9 +364,9 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
       "(deny file-write*)",
       rule("allow file-write*", Enum.map(writable ++ @dev_write_subpaths, &subpath/1) ++ Enum.map(@dev_write_paths, &literal/1)),
       rule("deny file-write*", Enum.map(protected, &subpath/1)),
+      # A path filter matches only a unix socket, so no TCP or UDP socket may bind or accept.
       "(deny network*)",
-      ~s{(allow network-bind (local ip "localhost:*"))},
-      ~s{(allow network-inbound (local ip "localhost:*"))},
+      rule("allow network*", [subpath(socket_dir)]),
       ~s{(allow network-outbound (remote ip "localhost:*"))},
       rule("allow network-outbound", [literal(@dns_socket)]),
       "(deny mach-lookup)",

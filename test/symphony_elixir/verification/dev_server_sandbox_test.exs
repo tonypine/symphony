@@ -68,24 +68,43 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
                DevServerSandbox.command("mix phx.server", workspace, tmp_dir, os_type: {:win32, :nt})
     end
 
-    test "checks once that the profile refuses a non-loopback bind before it hands back the command", %{root: root, workspace: workspace, tmp_dir: tmp_dir} do
+    test "checks once that the profile refuses every TCP listener and allows the unix socket before it hands back the command", %{root: root, workspace: workspace, tmp_dir: tmp_dir} do
       calls = Path.join(root, "probe-calls")
-      executable = fake_sandbox_exec(root, "printf '%s\\0' \"$@\" >> '#{calls}'\necho 'bind: Operation not permitted' >&2\nexit 1")
+      executable = fake_sandbox_exec(root, "printf '%s\\0' \"$@\" >> '#{calls}'\necho 'perl: warning: Setting locale failed.' >&2\necho confined")
 
       assert {:ok, [^executable, "-p", profile, "/bin/sh", "-lc", "mix phx.server"], []} =
                command(workspace, tmp_dir, executable)
 
       assert {:ok, _argv, []} = command(workspace, tmp_dir, executable)
 
-      assert ["-p", ^profile, "/usr/bin/perl", "-MSocket", "-e", probe, ""] = calls |> File.read!() |> String.split("\0")
-      assert probe =~ "INADDR_ANY"
+      socket = Path.join(real(tmp_dir), "probe.sock")
+      assert ["-p", ^profile, "/usr/bin/perl", "-MSocket", "-MErrno", "-e", probe, ^socket, ""] = calls |> File.read!() |> String.split("\0")
+      assert probe =~ "INADDR_ANY, INADDR_LOOPBACK"
+      assert probe =~ "PF_UNIX"
     end
 
-    test "doesn't hand back the command when the profile lets a command bind beyond loopback", %{root: root, workspace: workspace, tmp_dir: tmp_dir} do
+    test "doesn't hand back the command when the profile lets a command bind a TCP port, and keeps that verdict", %{root: root, workspace: workspace, tmp_dir: tmp_dir} do
+      calls = Path.join(root, "probe-calls")
+      executable = fake_sandbox_exec(root, "echo call >> '#{calls}'\necho 'tcp bound: 0.0.0.0' >&2\nexit 29")
+
+      for _attempt <- 1..2 do
+        assert {:error, {:dev_server_sandbox_unconfined, :tcp_bind_allowed}} = command(workspace, tmp_dir, executable)
+      end
+
+      assert File.read!(calls) == "call\n"
+    end
+
+    test "doesn't hand back the command when the profile refuses the unix socket", %{root: root, workspace: workspace, tmp_dir: tmp_dir} do
+      executable = fake_sandbox_exec(root, "echo 'unix bind: Operation not permitted' >&2\nexit 1")
+
+      assert {:error, {:dev_server_sandbox_unconfined, {:probe_failed, 1, "unix bind: Operation not permitted"}}} =
+               command(workspace, tmp_dir, executable)
+    end
+
+    test "doesn't take a probe that exits 0 without saying it is confined", %{root: root, workspace: workspace, tmp_dir: tmp_dir} do
       executable = fake_sandbox_exec(root, "echo bound")
 
-      assert {:error, {:dev_server_sandbox_unconfined, :non_loopback_bind_allowed}} =
-               command(workspace, tmp_dir, executable)
+      assert {:error, {:dev_server_sandbox_unconfined, {:probe_failed, 0, "bound"}}} = command(workspace, tmp_dir, executable)
     end
 
     test "doesn't hand back the command when the bind check can't run, and tries it again next time", %{root: root, workspace: workspace, tmp_dir: tmp_dir} do
@@ -112,6 +131,24 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
 
       assert {:error, {:dev_server_sandbox_unavailable, {:not_found, ^executable}}} =
                DevServerSandbox.command("mix phx.server", workspace, tmp_dir, os_type: {:unix, :darwin}, executable: executable)
+    end
+  end
+
+  describe "listen_socket/2" do
+    test "is a socket in the temp folder on macOS, and none on Linux", %{tmp_dir: tmp_dir} do
+      assert {:ok, socket} = DevServerSandbox.listen_socket(tmp_dir, os_type: {:unix, :darwin})
+      assert socket == Path.join(real(tmp_dir), "serve.sock")
+
+      assert {:ok, nil} = DevServerSandbox.listen_socket(tmp_dir, os_type: {:unix, :linux})
+    end
+
+    test "fails on macOS when the socket path is too long for a unix socket", %{root: root} do
+      tmp_dir = Path.join(root, String.duplicate("t", 100))
+      File.mkdir_p!(tmp_dir)
+      socket = Path.join(real(tmp_dir), "serve.sock")
+
+      assert {:error, {:dev_server_sandbox_unavailable, {:unusable_socket_path, ^socket}}} =
+               DevServerSandbox.listen_socket(tmp_dir, os_type: {:unix, :darwin})
     end
   end
 
@@ -269,7 +306,7 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
 
   describe "profile/4" do
     test "denies reads of every path the agent can't read, under the given home", %{workspace: workspace, home: home} do
-      profile = DevServerSandbox.profile(workspace, [workspace], [], home)
+      profile = DevServerSandbox.profile(workspace, [workspace], [], home: home, socket_dir: workspace)
       deny_read = profile |> String.split(~r/\n(?=\()/) |> Enum.find(&String.starts_with?(&1, "(deny file-read*"))
 
       for path <- AgentSandboxConfig.deny_read_paths() ++ AgentSandboxConfig.codex_runtime_deny_read_paths() do
@@ -282,8 +319,9 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
       assert deny_read =~ ~s{(prefix "#{real(System.tmp_dir!())}/symphony-codex-home-")}
     end
 
-    test "allows writes only to the given paths and the /dev sinks, then takes the protected paths back", %{workspace: workspace, tmp_dir: tmp_dir, home: home} do
-      profile = DevServerSandbox.profile(workspace, [workspace, tmp_dir, workspace], [".git"], home)
+    test "allows writes only to the given paths and the /dev sinks, then takes the protected paths back, and no TCP listener", %{workspace: workspace, tmp_dir: tmp_dir, home: home} do
+      write_paths = [workspace, tmp_dir, workspace]
+      profile = DevServerSandbox.profile(workspace, write_paths, [".git"], home: home, socket_dir: tmp_dir)
 
       assert [
                "(version 1)",
@@ -293,8 +331,7 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
                "(allow file-write*" <> allow_write,
                "(deny file-write*\n  " <> deny_write,
                "(deny network*)",
-               ~s{(allow network-bind (local ip "localhost:*"))},
-               ~s{(allow network-inbound (local ip "localhost:*"))},
+               "(allow network*\n  " <> allow_sockets,
                ~s{(allow network-outbound (remote ip "localhost:*"))},
                ~s{(allow network-outbound\n  (literal "/private/var/run/mDNSResponder"))},
                "(deny mach-lookup)",
@@ -326,6 +363,7 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
                """
 
       assert deny_write == ~s{(subpath "#{real(workspace)}/.git"))}
+      assert allow_sockets == ~s{(subpath "#{real(tmp_dir)}"))}
 
       assert allow_mach_lookup ==
                """
@@ -360,7 +398,7 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
       link = Path.join(root, "workspace-link")
       File.ln_s!(workspace, link)
 
-      profile = DevServerSandbox.profile(link, [link], [], home)
+      profile = DevServerSandbox.profile(link, [link], [], home: home, socket_dir: link)
 
       assert profile =~ ~s{(subpath "#{real(root)}/odd \\"quoted\\" \\\\ dir")}
       refute profile =~ "workspace-link"
@@ -371,7 +409,7 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
       File.write!(file, "")
       workspace = Path.join(file, "workspace")
 
-      assert DevServerSandbox.profile(workspace, [workspace], [], home) =~ ~s{(subpath "#{workspace}")}
+      assert DevServerSandbox.profile(workspace, [workspace], [], home: home, socket_dir: workspace) =~ ~s{(subpath "#{workspace}")}
     end
   end
 
@@ -416,7 +454,7 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
       File.mkdir_p!(Path.join(home, ".ssh"))
       File.write!(Path.join(home, ".ssh/id_ed25519"), "secret")
       File.write!(Path.join(home, "notes.txt"), "notes")
-      profile = DevServerSandbox.profile(workspace, [workspace, tmp_dir], [".git"], home)
+      profile = DevServerSandbox.profile(workspace, [workspace, tmp_dir], [".git"], home: home, socket_dir: tmp_dir)
 
       assert {output, status} = seatbelt(profile, workspace, "cat #{home}/.ssh/id_ed25519")
       assert status != 0
@@ -438,7 +476,7 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
     end
 
     test "a command reaches the network only on loopback, and the dependency hosts only through the proxy", %{workspace: workspace, tmp_dir: tmp_dir, home: home} do
-      profile = DevServerSandbox.profile(workspace, [workspace, tmp_dir], [], home)
+      profile = DevServerSandbox.profile(workspace, [workspace, tmp_dir], [], home: home, socket_dir: tmp_dir)
       proxy = start_supervised!({EgressProxy, allowed_domains: ["localhost"]})
       {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
       {:ok, local_port} = :inet.port(listen)
@@ -468,7 +506,7 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
     end
 
     test "a command can't have launchd start a process outside the sandbox", %{workspace: workspace, tmp_dir: tmp_dir, home: home} do
-      profile = DevServerSandbox.profile(workspace, [workspace, tmp_dir], [], home)
+      profile = DevServerSandbox.profile(workspace, [workspace, tmp_dir], [], home: home, socket_dir: tmp_dir)
       marker = Path.join(home, "escaped")
       File.write!(Path.join(workspace, "x.command"), "#!/bin/sh\ntouch #{marker}\n")
       File.chmod!(Path.join(workspace, "x.command"), 0o755)
@@ -501,7 +539,7 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
     end
 
     test "a command can't read the environment of a process outside the sandbox, or signal it", %{workspace: workspace, tmp_dir: tmp_dir, home: home} do
-      profile = DevServerSandbox.profile(workspace, [workspace, tmp_dir], [], home)
+      profile = DevServerSandbox.profile(workspace, [workspace, tmp_dir], [], home: home, socket_dir: tmp_dir)
       secret = "symphony-secret-#{System.unique_integer([:positive])}"
       port = Port.open({:spawn_executable, "/bin/sleep"}, [:binary, args: ["60"], env: [{~c"SYMPHONY_TEST_SECRET", String.to_charlist(secret)}]])
       {:os_pid, pid} = Port.info(port, :os_pid)
@@ -523,7 +561,7 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
     end
 
     test "a command gets no window server and no pasteboard, but still checks TLS certificates", %{workspace: workspace, tmp_dir: tmp_dir, home: home} do
-      profile = DevServerSandbox.profile(workspace, [workspace, tmp_dir], [], home)
+      profile = DevServerSandbox.profile(workspace, [workspace, tmp_dir], [], home: home, socket_dir: tmp_dir)
       clipboard = "symphony-clipboard-#{System.unique_integer([:positive])}"
       {previous_clipboard, 0} = System.cmd("/usr/bin/pbpaste", [])
       on_exit(fn -> System.cmd("/bin/sh", ["-c", "printf %s \"$1\" | /usr/bin/pbcopy", "sh", previous_clipboard]) end)
@@ -556,21 +594,28 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
       assert code =~ ~r/^[234]\d\d$/
     end
 
-    # Where this macOS lets a sandboxed command listen beyond loopback, nothing starts under the
-    # profile at all.
-    test "a command can't listen on a non-loopback address, or the sandbox starts none", %{workspace: workspace, tmp_dir: tmp_dir, home: home} do
-      profile = DevServerSandbox.profile(workspace, [workspace, tmp_dir], [], home)
-      python = "import socket; s = socket.socket(); s.bind((\"0.0.0.0\", 0)); s.listen()"
+    # Seatbelt can't keep a TCP listener on loopback, so the profile allows none: the dev server
+    # listens on a unix socket in its temp folder, which Symphony serves on loopback.
+    test "a command can open no TCP listener on any address, only a unix socket in its temp folder", %{workspace: workspace, tmp_dir: tmp_dir, home: home} do
+      profile = DevServerSandbox.profile(workspace, [workspace, tmp_dir], [], home: home, socket_dir: tmp_dir)
+      {:ok, interfaces} = :inet.getifaddrs()
+      lan = for {_name, options} <- interfaces, {:addr, {first, _, _, _} = address} <- options, first != 127, do: to_string(:inet.ntoa(address))
 
-      case seatbelt(profile, workspace, "python3 -c '#{python}'") do
-        {_output, 0} ->
-          assert {:error, {:dev_server_sandbox_unconfined, :non_loopback_bind_allowed}} =
-                   DevServerSandbox.command("true", workspace, tmp_dir, [])
-
-        {output, _status} ->
-          assert output =~ "Operation not permitted"
-          assert {:ok, ["/usr/bin/sandbox-exec" | _argv], []} = DevServerSandbox.command("true", workspace, tmp_dir, [])
+      for address <- ["0.0.0.0", "127.0.0.1" | lan] do
+        python = "import socket; s = socket.socket(); s.bind((\"#{address}\", 0)); s.listen()"
+        assert {output, status} = seatbelt(profile, workspace, "python3 -c '#{python}'")
+        assert status != 0, "listened on #{address}"
+        assert output =~ "Operation not permitted"
       end
+
+      unix_listen = fn path -> "python3 -c 'import socket; s = socket.socket(socket.AF_UNIX); s.bind(\"#{path}\"); s.listen()'" end
+      # Short names: macOS's TMPDIR is long, and a socket path holds 103 bytes.
+      assert {_output, 0} = seatbelt(profile, workspace, unix_listen.(Path.join(real(tmp_dir), "s.sock")))
+      assert {output, status} = seatbelt(profile, workspace, unix_listen.(Path.join(real(workspace), "s.sock")))
+      assert status != 0
+      assert output =~ "Operation not permitted"
+
+      assert {:ok, ["/usr/bin/sandbox-exec" | _argv], []} = DevServerSandbox.command("true", workspace, tmp_dir, [])
     end
   end
 

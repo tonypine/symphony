@@ -1405,7 +1405,8 @@ set (see [`verification`](#verification)), and triggers on `lib/*_web/**`, `lib/
 For a `web` pass Symphony:
 
 1. takes a port from the verification port pool and starts `dev_server.start_cmd` with
-   `SYMPHONY_VERIFICATION_PORT` set, from a second worktree at the PR head (so its build output
+   `SYMPHONY_VERIFICATION_PORT` set (and on macOS `SYMPHONY_VERIFICATION_SOCKET`, see
+   [`verification`](#verification)), from a second worktree at the PR head (so its build output
    stays out of the agent's worktree), then waits for `health_check_url`. A server that
    does not start or fails its health check within `health_timeout_ms` makes the pass `blocked`
    ("the dev server failed its health check"), not `fail`, and no agent runs;
@@ -1996,14 +1997,35 @@ verification:
 `WORKFLOW.md` can override `verification.dev_server` per repo while inheriting the operator-owned
 port range.
 
+`start_cmd` gets `SYMPHONY_VERIFICATION_PORT`. On macOS it also gets `SYMPHONY_VERIFICATION_SOCKET`
+and must listen on that unix socket instead of the port: the dev server's sandbox allows no TCP
+listener there, since Seatbelt can't keep one off the network, and Symphony serves the socket on
+`127.0.0.1:$SYMPHONY_VERIFICATION_PORT`, where `health_check_url` and the QA browser reach it (see
+[security.md](security.md#macos-the-dev-server-listens-on-a-unix-socket)). Many servers take a
+socket path (`uvicorn --uds`, `gunicorn --bind unix:`, Puma's `-b unix://`, Node's
+`server.listen(path)`, Bandit's `ip: {:local, path}`, Symphony's own `--host unix:<path>`), so one
+command can serve both ways:
+
+```yaml
+    start_cmd: >-
+      if [ -n "${SYMPHONY_VERIFICATION_SOCKET:-}" ];
+      then exec uvicorn app:app --uds "$SYMPHONY_VERIFICATION_SOCKET";
+      else exec uvicorn app:app --host 127.0.0.1 --port "$SYMPHONY_VERIFICATION_PORT"; fi
+```
+
+A server that can only listen on a TCP port does not run on macOS: when its health check times out
+with nothing at the socket, the run fails with `dev_server_not_on_socket`, and an Auto Review
+`web` pass is `blocked` with that reason.
+
 Auto Review's `web` playbook starts the same dev server, from a worktree at the PR head, for each web QA pass
 (see [Web app QA](#web-app-qa)).
 
 `start_cmd` runs the checkout's code, which the agent can change, so Symphony runs it with
 `sh -lc` under macOS Seatbelt, or bubblewrap (`bwrap`) on Linux, with the agent's credential
 read-deny list, writes limited to the
-checkout, a temp folder of its own and the agent cache folder, the agent's environment, and
-network limited to loopback and, through a proxy Symphony sets as `HTTPS_PROXY`, the dependency
+checkout, a temp folder of its own and the agent cache folder, the agent's environment, no
+listener the network reaches (on macOS no TCP listener at all, only its unix socket), and
+connections limited to loopback and, through a proxy Symphony sets as `HTTPS_PROXY`, the dependency
 hosts on `agent.permissions.network`'s allowlist, an allowlist of mach services like the agent's
 (no window server, no pasteboard), and no way to have launchd start a process outside the
 sandbox (Apple Events, `open`, `launchctl submit`) (see
