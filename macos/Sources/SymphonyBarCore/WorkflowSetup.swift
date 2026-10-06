@@ -81,11 +81,11 @@ public enum PendingWorkflow: Equatable {
     public var field: RepoField {
         switch self {
         case let .pullRequest(url):
-            return RepoField(ReposList.workflowLabel, "pending: pull request open", detail: url)
+            return RepoField(ReposList.workflowStatusLabel, "Pending: pull request open", detail: url)
         case let .localFile(path):
             return RepoField(
-                ReposList.workflowLabel,
-                "pending: written, not pushed",
+                ReposList.workflowStatusLabel,
+                "Pending: written, not pushed",
                 detail: "\((path as NSString).abbreviatingWithTildeInPath): commit and push it to the base branch."
             )
         }
@@ -145,16 +145,19 @@ public final class PendingWorkflowStore {
 }
 
 extension ReposList {
-    /// `display` with the `WORKFLOW.md` field of each repo in `pending` saying so, unless Symphony reads the file.
-    public static func withPendingWorkflows(_ display: ReposDisplay, pending: [String: PendingWorkflow]) -> ReposDisplay {
-        var display = display
-        for index in display.rows.indices {
-            guard let pending = pending[display.rows[index].key] else { continue }
-            display.rows[index].fields = display.rows[index].fields.map { field in
-                field.label == workflowLabel && field.value != validWorkflow ? pending.field : field
-            }
+    /// `window` with the `WORKFLOW.md` status of each repo in `pending` saying so, unless Symphony reads the file.
+    public static func withPendingWorkflows(_ window: ReposWindow, pending: [String: PendingWorkflow]) -> ReposWindow {
+        guard case var .repos(repos) = window.content else { return window }
+        for index in repos.indices {
+            guard let pending = pending[repos[index].key],
+                  case let .status(workflow, lastFetch, agents, agentsProblem) = repos[index].live,
+                  workflow.value != validWorkflow
+            else { continue }
+            repos[index].live = .status(workflow: pending.field, lastFetch: lastFetch, agents: agents, agentsProblem: agentsProblem)
         }
-        return display
+        var window = window
+        window.content = .repos(repos)
+        return window
     }
 
     /// The keys of the repos whose `WORKFLOW.md` Symphony reports valid, whose pending entries are done.

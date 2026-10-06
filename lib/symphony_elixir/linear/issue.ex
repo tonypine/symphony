@@ -3,9 +3,9 @@ defmodule SymphonyElixir.Linear.Issue do
   Normalized Linear issue representation used by the orchestrator.
   """
 
-  # A human puts this label on a parent ticket to have it groomed into sub-tickets; it stays on while
-  # the sub-tickets are worked.
-  @breakdown_label "breakdown"
+  # A human puts the `plan` label on a parent ticket to have it groomed into sub-tickets; it stays on
+  # while the sub-tickets are worked. `breakdown` is its older name, still accepted.
+  @breakdown_labels ["plan", "breakdown"]
   @rework_state "rework"
   @todo_state "todo"
   @backlog_state "backlog"
@@ -80,7 +80,7 @@ defmodule SymphonyElixir.Linear.Issue do
   end
 
   @doc """
-  True when the issue is a `breakdown` parent whose plan was approved and is being worked: it has a
+  True when the issue is a plan parent whose plan was approved and is being worked: it has a
   sub-issue outside `terminal_states` and the plan is not `unapproved_plan?/2`. Such a parent waits
   instead of being dispatched. A sub-issue without a known state counts as approved and open.
   """
@@ -92,7 +92,7 @@ defmodule SymphonyElixir.Linear.Issue do
   def waiting_on_sub_issues?(_issue, _terminal_states), do: false
 
   @doc """
-  True when the issue is a `breakdown` parent with open sub-issues, every one of them in `Backlog`,
+  True when the issue is a plan parent with open sub-issues, every one of them in `Backlog`,
   and none `Done`. Approving a plan moves all its `Backlog` sub-issues to `Todo` at once, so none was
   approved: the breakdown run stopped before handing the plan over for review, or the plan is still
   under review. A `Backlog` sub-issue a person adds once others are `Done` follows an approved plan.
@@ -107,7 +107,7 @@ defmodule SymphonyElixir.Linear.Issue do
 
   def unapproved_plan?(_issue, _terminal_states), do: false
 
-  @doc "True when the issue is a `breakdown` parent with sub-issues, every one of them in `terminal_states`."
+  @doc "True when the issue is a plan parent with sub-issues, every one of them in `terminal_states`."
   @spec close_out_ready?(t(), Enumerable.t(String.t())) :: boolean()
   def close_out_ready?(%__MODULE__{sub_issues: [_ | _]} = issue, terminal_states) do
     breakdown?(issue) and open_sub_issues(issue, terminal_states) == []
@@ -116,7 +116,7 @@ defmodule SymphonyElixir.Linear.Issue do
   def close_out_ready?(_issue, _terminal_states), do: false
 
   @doc """
-  True when the issue is a `breakdown` parent in `Rework`: a human rejected its plan, so it is
+  True when the issue is a plan parent in `Rework`: a human rejected its plan, so it is
   broken down again whatever state its sub-issues are in.
   """
   @spec replanning?(t()) :: boolean()
@@ -154,7 +154,7 @@ defmodule SymphonyElixir.Linear.Issue do
 
   def blocked?(_issue, _terminal_states), do: false
 
-  @doc "True when the issue carries the `breakdown` label."
+  @doc "True when the issue carries the `plan` label (or `breakdown`, its older name)."
   @spec breakdown?(t()) :: boolean()
   def breakdown?(%__MODULE__{labels: labels}) when is_list(labels), do: Enum.any?(labels, &breakdown_label?/1)
   def breakdown?(_issue), do: false
@@ -173,9 +173,9 @@ defmodule SymphonyElixir.Linear.Issue do
 
   def forced?(_issue, _settings), do: false
 
-  @doc "True when `label` is the `breakdown` label."
+  @doc "True when `label` is the `plan` label or `breakdown`, its older name."
   @spec breakdown_label?(term()) :: boolean()
-  def breakdown_label?(label) when is_binary(label), do: normalize_state(label) == @breakdown_label
+  def breakdown_label?(label) when is_binary(label), do: normalize_state(label) in @breakdown_labels
   def breakdown_label?(_label), do: false
 
   @doc "The issue's sub-issues outside `terminal_states`; one without a known state counts as open."

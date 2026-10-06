@@ -336,6 +336,69 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
     refute_received :listed_runs
   end
 
+  test "fetch_ci_status leaves out a cancelled run that another run of its workflow on the head supersedes" do
+    pr_url = "https://github.com/org/repo/pull/98"
+    runs_endpoint = "repos/org/repo/actions/runs?head_sha=460a3f6&per_page=100"
+
+    runner = fn rollup, runs ->
+      fn
+        ["pr", "view", ^pr_url, "--json", _fields], _opts ->
+          {Jason.encode!(%{"state" => "OPEN", "url" => pr_url, "headRefOid" => "460a3f6", "statusCheckRollup" => rollup}), 0}
+
+        ["api", ^runs_endpoint], _opts ->
+          {Jason.encode!(%{"workflow_runs" => runs}), 0}
+      end
+    end
+
+    check = fn name, run_id, status, conclusion ->
+      %{
+        "name" => name,
+        "status" => status,
+        "conclusion" => conclusion,
+        "workflowName" => "ci",
+        "detailsUrl" => "https://github.com/org/repo/actions/runs/#{run_id}/job/#{name}"
+      }
+    end
+
+    # GitHub cancelled every job of run 37483418928 as a duplicate of run 37483170247, still running.
+    cancelled = for name <- ["server-static", "android", "macos"], do: check.(name, 37_483_418_928, "COMPLETED", "CANCELLED")
+    passed = [check.("server-static", 37_483_170_247, "COMPLETED", "SUCCESS"), check.("android", 37_483_170_247, "COMPLETED", "SUCCESS")]
+    running = check.("macos", 37_483_170_247, "IN_PROGRESS", "")
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        rollup = passed ++ [running | cancelled]
+        assert {:ok, status} = PullRequest.fetch_ci_status(pr_url, gh_runner: runner.(rollup, []))
+        assert Enum.map(status.checks, & &1.run_id) == ["37483170247", "37483170247", "37483170247"]
+        assert CiPoller.ci_action(status) == :pending
+      end)
+
+    assert log =~ "Ignoring the checks of cancelled run(s) 37483418928 superseded by another run of the same workflow pr_url=#{pr_url} commit_sha=460a3f6"
+
+    # Once the other run is green, so is the head.
+    green = passed ++ [check.("macos", 37_483_170_247, "COMPLETED", "SUCCESS")]
+    finished = [%{"id" => 37_483_170_247, "status" => "completed", "conclusion" => "success"}, %{"id" => 37_483_418_928, "status" => "completed", "conclusion" => "cancelled"}]
+    assert {:ok, status} = PullRequest.fetch_ci_status(pr_url, gh_runner: runner.(cancelled ++ green, finished))
+    assert length(status.checks) == 3
+    assert CiPoller.ci_action(status) == :success
+
+    # A job that really failed in the other run still fails the head.
+    red = [check.("server-static", 37_483_170_247, "COMPLETED", "FAILURE") | tl(green)]
+    assert {:ok, status} = PullRequest.fetch_ci_status(pr_url, gh_runner: runner.(cancelled ++ red, []))
+    assert {:failure, [%{name: "server-static", conclusion: "FAILURE", run_id: "37483170247"}]} = CiPoller.ci_action(status)
+
+    # With every run of the workflow cancelled, or a cancelled job beside live ones in its own run,
+    # or no other run of that workflow, the cancelled checks still fail the head.
+    all_cancelled = for name <- ["server-static", "android", "macos"], do: check.(name, 37_483_170_247, "COMPLETED", "CANCELLED")
+    fail_fast = [check.("macos", 37_483_170_247, "COMPLETED", "CANCELLED") | passed]
+    other_workflow = Enum.map(cancelled, &Map.put(&1, "workflowName", "release")) ++ green
+
+    for rollup <- [cancelled ++ all_cancelled, fail_fast, cancelled, other_workflow] do
+      assert {:ok, status} = PullRequest.fetch_ci_status(pr_url, gh_runner: runner.(rollup, []))
+      assert {:failure, [%{conclusion: "CANCELLED"} | _]} = CiPoller.ci_action(status)
+    end
+  end
+
   test "fetch_ci_status reads the base branch's required checks for a landing still waiting on a check" do
     pr_url = "https://github.com/org/repo/pull/71"
     rules_endpoint = "repos/org/repo/rules/branches/release%2F1.x?per_page=100"

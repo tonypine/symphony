@@ -292,23 +292,39 @@ final class WorkflowSetupTests: XCTestCase {
     func testShowsAPendingWorkflowUntilSymphonyReadsIt() {
         let missing = RepoStatus(key: "web", workflow: RepoStatus.Workflow(state: .missing, error: "no WORKFLOW.md"))
         let valid = RepoStatus(key: "api")
-        let display = ReposDisplay(rows: [ReposList.row(missing), ReposList.row(valid), ReposList.row(RepositoryEntry(key: "docs"))])
+        func detail(_ key: String, _ live: RepoDetail.Live) -> RepoDetail {
+            RepoDetail(key: key, source: RepoDetail.Source(kind: .local, baseBranch: "main"), routing: RepoDetail.Routing(sentence: ""), live: live)
+        }
+        func status(_ repo: RepoStatus) -> RepoDetail.Live {
+            .status(workflow: ReposList.workflowField(repo.workflow), lastFetch: RepoField("Last fetch", "None yet"), agents: [], agentsProblem: nil)
+        }
+        let window = ReposWindow(chip: .running, content: .repos([
+            detail("web", status(missing)),
+            detail("api", status(valid)),
+            detail("docs", .folded(line: ReposList.stoppedLine, canStart: true)),
+        ]))
         let pending: [String: PendingWorkflow] = [
             "web": .pullRequest(url: "https://github.com/acme/web/pull/7"),
             "api": .pullRequest(url: "https://github.com/acme/api/pull/1"),
             "docs": .localFile(path: "/code/docs/WORKFLOW.md"),
         ]
 
-        let shown = ReposList.withPendingWorkflows(display, pending: pending)
+        let shown = ReposList.withPendingWorkflows(window, pending: pending)
 
-        func workflow(_ row: Int) -> RepoField? { shown.rows[row].fields.first { $0.label == ReposList.workflowLabel } }
-        XCTAssertEqual(workflow(0), RepoField("WORKFLOW.md", "pending: pull request open", detail: "https://github.com/acme/web/pull/7"))
-        XCTAssertEqual(workflow(1)?.value, "found, valid")
-        XCTAssertEqual(workflow(2), RepoField(
-            "WORKFLOW.md", "pending: written, not pushed", detail: "/code/docs/WORKFLOW.md: commit and push it to the base branch."
-        ))
-        XCTAssertEqual(shown.rows[0].fields.count, display.rows[0].fields.count)
-        XCTAssertEqual(ReposList.withPendingWorkflows(display, pending: [:]), display)
+        func workflow(_ index: Int) -> RepoField? {
+            guard case let .status(workflow, _, _, _) = shown.repos[index].live else { return nil }
+            return workflow
+        }
+        XCTAssertEqual(workflow(0), RepoField("Status", "Pending: pull request open", detail: "https://github.com/acme/web/pull/7"))
+        XCTAssertEqual(workflow(1)?.value, "Valid")
+        XCTAssertEqual(shown.repos[2].live, .folded(line: ReposList.stoppedLine, canStart: true))
+        XCTAssertEqual(
+            PendingWorkflow.localFile(path: "/code/docs/WORKFLOW.md").field,
+            RepoField("Status", "Pending: written, not pushed", detail: "/code/docs/WORKFLOW.md: commit and push it to the base branch.")
+        )
+        XCTAssertEqual(ReposList.withPendingWorkflows(window, pending: [:]), window)
+        let empty = ReposWindow(chip: .stopped, content: .empty(.noRepos))
+        XCTAssertEqual(ReposList.withPendingWorkflows(empty, pending: pending), empty)
 
         XCTAssertEqual(ReposList.validWorkflows(.repos([missing, valid], warning: nil)), ["api"])
         XCTAssertEqual(ReposList.validWorkflows(.unreachable), [])

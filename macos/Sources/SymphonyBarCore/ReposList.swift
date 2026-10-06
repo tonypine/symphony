@@ -264,12 +264,11 @@ public enum ReposAPI {
     }
 }
 
-/// One line of a repo's row: a label, its value, and an optional detail shown under it and on hover.
+
+/// A label, its value, and an optional detail shown under it and on hover.
 public struct RepoField: Equatable {
     public enum Tone: Equatable {
         case normal
-        /// Symphony isn't answering, so the value isn't known.
-        case unavailable
         /// Something needs the engineer's attention, such as an invalid `WORKFLOW.md` or a failed fetch.
         case problem
     }
@@ -287,7 +286,7 @@ public struct RepoField: Equatable {
     }
 }
 
-/// What can be done to a repo from its row. A nil problem means the action is on.
+/// What can be done to a repo from the Repos window. A nil problem means the action is on.
 public struct RepoActions: Equatable {
     /// Why Edit is off.
     public var editProblem: String?
@@ -301,51 +300,315 @@ public struct RepoActions: Equatable {
         self.disconnectProblem = disconnectProblem
         self.cloneRemoval = cloneRemoval
     }
+}
 
-    /// Why actions are off, each reason once, to show under the row.
-    public var notes: [String] {
-        var notes: [String] = []
-        for problem in [editProblem, disconnectProblem] {
-            if let problem, !notes.contains(problem) { notes.append(problem) }
+/// The `symphony.yml` the Repos window reads, read once per refresh.
+public struct ReposConfig: Equatable {
+    public enum Repos: Equatable {
+        /// Settings has no `symphony.yml` path.
+        case noPath
+        /// The file or its `repositories:` couldn't be read; the message says why.
+        case unreadable(String)
+        case entries([RepositoryEntry])
+    }
+
+    public var path: String
+    public var repos: Repos
+    /// `auto_review.acceptance_gate.mode`, nil when it can't be read.
+    public var globalGate: AcceptanceGateMode?
+    /// Where Symphony keeps its own clones.
+    public var clonesRoot: URL
+
+    public init(path: String, repos: Repos, globalGate: AcceptanceGateMode? = nil, clonesRoot: URL? = nil) {
+        self.path = path
+        self.repos = repos
+        self.globalGate = globalGate
+        self.clonesRoot = clonesRoot ?? ManagedClones.root(in: "", configPath: path)
+    }
+
+    /// Reads the `symphony.yml` at `path`, as Settings holds it.
+    public static func read(path: String) -> ReposConfig {
+        let path = path.trimmingWhitespace()
+        guard !path.isEmpty else { return ReposConfig(path: path, repos: .noPath) }
+        let file = SymphonyConfigFile(path: path)
+        let repos: Repos
+        do {
+            repos = .entries(try file.readRepositories())
+        } catch {
+            repos = .unreadable(error.localizedDescription)
         }
-        if case let .blocked(reason)? = cloneRemoval { notes.append(reason) }
-        return notes
+        return ReposConfig(
+            path: path,
+            repos: repos,
+            globalGate: try? file.readAcceptanceGateMode(),
+            clonesRoot: try? file.readClonesRoot()
+        )
+    }
+
+    public var shownPath: String {
+        (path as NSString).abbreviatingWithTildeInPath
+    }
+
+    /// The repositories, or why Edit and Disconnect can't change `symphony.yml`.
+    public var entries: Result<[RepositoryEntry], AddRepoProblem> {
+        switch repos {
+        case .noPath:
+            return .failure(AddRepoProblem("Set the symphony.yml path in Settings first."))
+        case let .unreadable(message):
+            return .failure(AddRepoProblem("Couldn't read the repos in \(shownPath): \(message)"))
+        case let .entries(entries):
+            return .success(entries)
+        }
     }
 }
 
-/// A row of the Repos window.
-public struct RepoRow: Equatable, Identifiable {
+/// The Repos window's toolbar chip: Symphony's state, said once for the whole window.
+public enum ReposChip: Equatable {
+    case running
+    case paused
+    case starting
+    case stopped
+    case notAnswering
+
+    public enum Dot: Equatable {
+        case green
+        case orange
+        case grey
+        case red
+    }
+
+    public init(status: SymphonyStatus) {
+        switch status {
+        case .running:
+            self = .running
+        case .paused:
+            self = .paused
+        case .starting:
+            self = .starting
+        case .stopped:
+            self = .stopped
+        case .error:
+            self = .notAnswering
+        }
+    }
+
+    public var title: String {
+        switch self {
+        case .running: return "Symphony running"
+        case .paused: return "Symphony paused"
+        case .starting: return "Symphony is starting…"
+        case .stopped: return "Symphony stopped"
+        case .notAnswering: return "Symphony isn't answering"
+        }
+    }
+
+    public var dot: Dot {
+        switch self {
+        case .running: return .green
+        case .paused: return .orange
+        case .starting, .stopped: return .grey
+        case .notAnswering: return .red
+        }
+    }
+}
+
+/// What the Repos window shows in place of repos.
+public enum ReposEmptyState: Equatable {
+    /// `repositories:` is empty or missing, or Symphony lists no repos: offers Add Repo….
+    case noRepos
+    /// Settings has no `symphony.yml` path: offers Open Settings….
+    case noConfig
+    /// The `symphony.yml` at `path` can't be read: shows the error, with Reveal in Finder and Try Again.
+    case unreadable(path: String, message: String)
+
+    public var title: String {
+        switch self {
+        case .noRepos: return "No repos connected"
+        case .noConfig: return "Symphony doesn't know where its config is."
+        case .unreadable: return "Couldn't read symphony.yml"
+        }
+    }
+
+    public var message: String {
+        switch self {
+        case .noRepos:
+            return "Connect a GitHub repo or a folder on this Mac, and pick which Linear issues go to it."
+        case .noConfig:
+            return "Set the path of symphony.yml in Settings."
+        case let .unreadable(path, _):
+            return (path as NSString).abbreviatingWithTildeInPath
+        }
+    }
+}
+
+/// One repo in the Repos window: its sidebar row and its detail.
+public struct RepoDetail: Equatable, Identifiable {
+    /// Where the repo's code comes from.
+    public struct Source: Equatable {
+        public enum Kind: Equatable {
+            case local
+            case managed
+        }
+
+        public var kind: Kind
+        /// The local folder, or Symphony's clone once it exists, in full so it can be revealed in Finder.
+        public var path: String?
+        /// True for a managed repo Symphony hasn't cloned yet.
+        public var notCloned: Bool
+        public var baseBranch: String
+        /// `owner/repo` of a managed clone, nil for a local folder.
+        public var managedGitHub: String?
+
+        public init(kind: Kind, path: String? = nil, notCloned: Bool = false, baseBranch: String, managedGitHub: String? = nil) {
+            self.kind = kind
+            self.path = path
+            self.notCloned = notCloned
+            self.baseBranch = baseBranch
+            self.managedGitHub = managedGitHub
+        }
+
+        public var kindTitle: String {
+            kind == .local ? "Local folder" : "Managed clone"
+        }
+
+        public var pathLabel: String {
+            kind == .local ? "Folder" : "Clone"
+        }
+
+        public var shownPath: String? {
+            path.map { ($0 as NSString).abbreviatingWithTildeInPath }
+        }
+    }
+
+    /// Which Linear issues go to the repo.
+    public struct Routing: Equatable {
+        /// For example "Issues in Billing with label backend go to billing-api."
+        public var sentence: String
+        /// Project, labels, team and assignee, those that are set.
+        public var fields: [RepoField]
+        /// Set on the default repo.
+        public var defaultLine: String?
+
+        public init(sentence: String, fields: [RepoField] = [], defaultLine: String? = nil) {
+            self.sentence = sentence
+            self.fields = fields
+            self.defaultLine = defaultLine
+        }
+    }
+
+    /// An agent running on the repo.
+    public struct Agent: Equatable {
+        public var issueIdentifier: String
+        /// The SSH worker it runs on, nil on this Mac.
+        public var workerHost: String?
+        /// Its worktree, set only on this Mac, where Finder can reveal it.
+        public var worktreePath: String?
+
+        public init(issueIdentifier: String, workerHost: String? = nil, worktreePath: String? = nil) {
+            self.issueIdentifier = issueIdentifier
+            self.workerHost = workerHost
+            self.worktreePath = worktreePath
+        }
+
+        /// "TP-7", or "TP-7 · on worker-1".
+        public var title: String {
+            workerHost.map { "\(issueIdentifier) · on \($0)" } ?? issueIdentifier
+        }
+    }
+
+    /// What only a running Symphony knows: `WORKFLOW.md` and recent activity.
+    public enum Live: Equatable {
+        /// `agentsProblem` is set when Symphony listed the repos without their running agents.
+        case status(workflow: RepoField, lastFetch: RepoField, agents: [Agent], agentsProblem: String?)
+        /// One line in place of both sections, with Start Symphony when `canStart`.
+        case folded(line: String, canStart: Bool)
+    }
+
+    /// The repo's acceptance gate.
+    public struct Gate: Equatable {
+        public var mode: RepoField
+        public var record: String
+
+        public init(mode: RepoField, record: String) {
+            self.mode = mode
+            self.record = record
+        }
+    }
+
     public var id: String { key }
     public var key: String
     public var isDefault: Bool
-    public var fields: [RepoField]
-    /// `owner/repo` of a managed clone, nil for a local folder.
-    public var managedGitHub: String?
+    /// `owner/repo`, nil when it isn't known.
+    public var github: String?
+    /// `owner/repo`, or the folder name.
+    public var subtitle: String?
+    public var source: Source
+    public var routing: Routing
+    public var live: Live
+    /// Nil for a repo `symphony.yml` doesn't have.
+    public var gate: Gate?
     public var actions: RepoActions
 
     public init(
         key: String,
-        isDefault: Bool,
-        fields: [RepoField],
-        managedGitHub: String? = nil,
+        isDefault: Bool = false,
+        github: String? = nil,
+        subtitle: String? = nil,
+        source: Source,
+        routing: Routing,
+        live: Live,
+        gate: Gate? = nil,
         actions: RepoActions = RepoActions()
     ) {
         self.key = key
         self.isDefault = isDefault
-        self.fields = fields
-        self.managedGitHub = managedGitHub
+        self.github = github
+        self.subtitle = subtitle
+        self.source = source
+        self.routing = routing
+        self.live = live
+        self.gate = gate
         self.actions = actions
+    }
+
+    /// Agents running on the repo, 0 while Symphony doesn't say.
+    public var agentCount: Int {
+        guard case let .status(_, _, agents, _) = live else { return 0 }
+        return agents.count
+    }
+
+    public var gitHubURL: URL? {
+        github.flatMap { URL(string: "https://github.com/\($0)") }
+    }
+
+    /// What VoiceOver reads for the sidebar row: "billing-api, default, 2 agents running".
+    public var accessibilityLabel: String {
+        var parts = [key]
+        if isDefault { parts.append("default") }
+        let count = agentCount
+        if count > 0 { parts.append(count == 1 ? "1 agent running" : "\(count) agents running") }
+        return parts.joined(separator: ", ")
     }
 }
 
-/// What the Repos window shows: a notice above the rows when they don't come from a running Symphony.
-public struct ReposDisplay: Equatable {
-    public var notice: String?
-    public var rows: [RepoRow]
+/// What the Repos window shows: the toolbar chip, and the repos or an empty state.
+public struct ReposWindow: Equatable {
+    public enum Content: Equatable {
+        case empty(ReposEmptyState)
+        case repos([RepoDetail])
+    }
 
-    public init(notice: String? = nil, rows: [RepoRow] = []) {
-        self.notice = notice
-        self.rows = rows
+    public var chip: ReposChip
+    public var content: Content
+
+    public init(chip: ReposChip = .stopped, content: Content = .repos([])) {
+        self.chip = chip
+        self.content = content
+    }
+
+    public var repos: [RepoDetail] {
+        guard case let .repos(repos) = content else { return [] }
+        return repos
     }
 }
 
@@ -353,232 +616,276 @@ public struct ReposDisplay: Equatable {
 public enum ReposList {
     /// Title of the menu item that opens the Repos window, and of the window.
     public static let menuTitle = "Repos…"
-    public static let windowTitle = "Symphony Repos"
+    public static let windowTitle = "Repos"
 
-    /// Marker next to the key of the repo that takes the issues no route matches, and its tooltip.
-    public static let defaultMarker = "default"
+    /// The capsule on the repo that takes the issues no route matches, and its tooltip.
+    public static let defaultBadge = "Default"
     public static let defaultHelp = "Takes the issues no other repo's route matches."
 
-    /// Field labels, in row order.
-    public static let sourceLabel = "Source"
-    public static let githubLabel = "GitHub"
-    public static let linearLabel = "Linear"
-    public static let workflowLabel = "WORKFLOW.md"
-    public static let lastFetchLabel = "Last fetch"
-    public static let agentsLabel = "Agents"
+    /// The line in place of WORKFLOW.md and Activity while Symphony is stopped.
+    public static let stoppedLine = "Live status shows while Symphony runs."
+    /// The same line for a Symphony too old to serve `GET /api/v1/repos`.
+    public static let unsupportedLine = "Update Symphony to see live status."
+    public static let notClonedLine = "Not cloned yet: Symphony clones it on the next dispatch"
+    public static let noAgentsLine = "No agents running"
+    public static let defaultBranchLine = "origin's default branch"
 
-    /// Value of a field only a running Symphony knows.
-    public static let unavailable = "unavailable"
-    /// Value of the `WORKFLOW.md` field when the file loads.
-    public static let validWorkflow = "found, valid"
+    /// Buttons of the window, besides Add Repo…, Edit…, Disconnect…, Remove Clone… and Start Symphony.
+    public static let revealTitle = "Reveal in Finder"
+    public static let revealWorktreeTitle = "Reveal Worktree"
+    public static let openOnGitHubTitle = "Open on GitHub"
+    public static let openSettingsTitle = "Open Settings…"
+    public static let tryAgainTitle = "Try Again"
+    /// Value of the WORKFLOW.md status when the file loads.
+    public static let validWorkflow = "Valid"
+    /// Label of the WORKFLOW.md status field.
+    public static let workflowStatusLabel = "Status"
 
-    /// The Repos window for Symphony's `status` and the last repos poll, nil before the first. The repos come
-    /// from Symphony only while it answers; otherwise the rows come from the `symphony.yml` at `configPath`
-    /// with their live fields marked unavailable, and `readConfig` reads its repositories.
-    public static func display(
+    /// The window for Symphony's `status`, the last repos poll (nil before the first) and `symphony.yml`. The repos
+    /// come from Symphony while it answers with them, otherwise from `symphony.yml` with what only Symphony knows
+    /// folded into one line. `cloneRemoval` says whether a managed repo's clone can be deleted.
+    public static func window(
         status: SymphonyStatus,
         poll: ReposPoll?,
-        configPath: String,
-        readConfig: (String) throws -> [RepositoryEntry],
-        now: Date = Date()
-    ) -> ReposDisplay {
+        config: ReposConfig,
+        now: Date = Date(),
+        isDirectory: (String) -> Bool = ManagedClones.isDirectory,
+        cloneRemoval: (_ gitHub: String) -> ManagedClones.Removal
+    ) -> ReposWindow {
+        let chip = ReposChip(status: status)
+        let snapshot = snapshot(status)
+        let entries = (try? config.entries.get()) ?? []
+        var details: [RepoDetail]
         if isAnswering(status), case let .repos(repos, warning)? = poll {
-            return ReposDisplay(
-                notice: warning.map { "Symphony couldn't list its running agents: \($0)" }
-                    ?? (repos.isEmpty ? "Symphony lists no repos." : nil),
-                rows: repos.map { row($0, now: now) }
-            )
+            details = repos.map { repo in
+                detail(repo, warning: warning, now: now).withGate(entries, config.globalGate, snapshot)
+            }
+        } else {
+            switch config.repos {
+            case .noPath:
+                return ReposWindow(chip: chip, content: .empty(.noConfig))
+            case let .unreadable(message):
+                return ReposWindow(chip: chip, content: .empty(.unreadable(path: config.path, message: message)))
+            case let .entries(entries):
+                let live = folded(status: status, poll: poll)
+                details = entries.map { entry in
+                    detail(entry, live: live, config: config, isDirectory: isDirectory)
+                        .withGate(entries, config.globalGate, snapshot)
+                }
+            }
         }
-        return configured(reason: reason(status: status, poll: poll), configPath: configPath, readConfig: readConfig)
+        guard !details.isEmpty else { return ReposWindow(chip: chip, content: .empty(.noRepos)) }
+        for index in details.indices {
+            details[index].actions = actions(for: details[index], entries: config.entries, cloneRemoval: cloneRemoval)
+        }
+        return ReposWindow(chip: chip, content: .repos(details))
+    }
+
+    /// The repo to select: `saved` while the window lists it, otherwise the first.
+    public static func selection(saved: String?, in window: ReposWindow) -> String? {
+        let keys = window.repos.map(\.key)
+        if let saved, keys.contains(saved) { return saved }
+        return keys.first
     }
 
     /// True while Symphony answers its state, so the app asks it for the repos.
     public static func isAnswering(_ status: SymphonyStatus) -> Bool {
+        snapshot(status) != nil
+    }
+
+    static func snapshot(_ status: SymphonyStatus) -> StateSnapshot? {
         switch status {
-        case .running, .paused:
-            return true
+        case let .running(snapshot, _), let .paused(snapshot, _):
+            return snapshot
         case .stopped, .starting, .error:
-            return false
+            return nil
         }
     }
 
-    /// Why the rows come from `symphony.yml`, as the start of a sentence.
-    static func reason(status: SymphonyStatus, poll: ReposPoll?) -> String {
+    /// The line in place of WORKFLOW.md and Activity while the repos come from `symphony.yml`.
+    static func folded(status: SymphonyStatus, poll: ReposPoll?) -> RepoDetail.Live {
         switch status {
         case .stopped:
-            return "Symphony is stopped"
+            return .folded(line: stoppedLine, canStart: true)
         case .starting:
-            return "Symphony is starting"
+            return .folded(line: "Symphony is starting… Live status shows once it runs.", canStart: false)
         case .error:
-            return "Symphony isn't answering"
+            return .folded(line: "Symphony isn't answering. Live status shows while Symphony runs.", canStart: true)
         case .running, .paused:
             switch poll {
             case .unsupported?:
-                return "This Symphony doesn't list its repos; update it to see their live status"
+                return .folded(line: unsupportedLine, canStart: false)
             case let .failed(message)?:
-                return "Couldn't read the repos from Symphony: \(message)"
+                return .folded(line: "Couldn't read the repos from Symphony: \(message)", canStart: false)
             case .unreachable?:
-                return "Nothing answered on Symphony's control URL"
+                return .folded(line: "Nothing answered on Symphony's control URL.", canStart: false)
             case .repos?, nil:
-                return "Asking Symphony for the repos' status"
+                return .folded(line: "Asking Symphony for the repos' live status…", canStart: false)
             }
         }
-    }
-
-    /// The repos in `symphony.yml`, with `reason` saying why their live fields are unavailable.
-    static func configured(
-        reason: String,
-        configPath: String,
-        readConfig: (String) throws -> [RepositoryEntry]
-    ) -> ReposDisplay {
-        let path = configPath.trimmingWhitespace()
-        guard !path.isEmpty else { return ReposDisplay(notice: "\(reason). No symphony.yml is set in Settings.") }
-        let shownPath = (path as NSString).abbreviatingWithTildeInPath
-        let entries: [RepositoryEntry]
-        do {
-            entries = try readConfig(path)
-        } catch {
-            return ReposDisplay(notice: "\(reason). Couldn't read the repos in \(shownPath): \(error.localizedDescription)")
-        }
-        guard !entries.isEmpty else {
-            return ReposDisplay(notice: "\(reason). \(shownPath) has no repositories: section.")
-        }
-        return ReposDisplay(
-            notice: "\(reason). Showing the repos in \(shownPath); live fields are unavailable.",
-            rows: entries.map(row)
-        )
     }
 
     /// A repo as a running Symphony reports it.
-    public static func row(_ repo: RepoStatus, now: Date = Date()) -> RepoRow {
-        var managedGitHub: String?
-        if case let .managed(github, _, _) = repo.source { managedGitHub = github }
-        return RepoRow(
+    static func detail(_ repo: RepoStatus, warning: String?, now: Date) -> RepoDetail {
+        let source: RepoDetail.Source
+        let branch = baseBranch(repo.baseBranch)
+        switch repo.source {
+        case let .local(path):
+            source = RepoDetail.Source(kind: .local, path: path, baseBranch: branch)
+        case let .managed(github, clonePath, cloned):
+            source = RepoDetail.Source(
+                kind: .managed,
+                path: cloned ? clonePath : nil,
+                notCloned: !cloned,
+                baseBranch: branch,
+                managedGitHub: github
+            )
+        }
+        return RepoDetail(
             key: repo.key,
             isDefault: repo.isDefault,
-            fields: [
-                sourceField(repo.source),
-                RepoField(githubLabel, repo.github ?? "no GitHub remote"),
-                linearField(repo.route),
-                workflowField(repo.workflow),
-                fetchField(repo.lastFetch, now: now),
-                agentsField(repo.worktrees),
-            ],
-            managedGitHub: managedGitHub
+            github: repo.github,
+            subtitle: repo.github ?? folderName(source.path),
+            source: source,
+            routing: routing(repo.route, key: repo.key, isDefault: repo.isDefault),
+            live: .status(
+                workflow: workflowField(repo.workflow),
+                lastFetch: fetchField(repo.lastFetch, now: now),
+                agents: repo.worktrees.map { worktree in
+                    RepoDetail.Agent(
+                        issueIdentifier: worktree.issueIdentifier,
+                        workerHost: worktree.workerHost,
+                        worktreePath: worktree.workerHost == nil ? worktree.path : nil
+                    )
+                },
+                agentsProblem: warning.map { "Symphony couldn't list its running agents: \($0)" }
+            )
         )
     }
 
-    /// A repo as `symphony.yml` configures it, with what only a running Symphony knows marked unavailable.
-    public static func row(_ entry: RepositoryEntry) -> RepoRow {
-        let source: RepoField
-        let github: RepoField
-        var managedGitHub: String?
+    /// A repo as `symphony.yml` configures it, with `live` in place of what only a running Symphony knows.
+    static func detail(
+        _ entry: RepositoryEntry,
+        live: RepoDetail.Live,
+        config: ReposConfig,
+        isDirectory: (String) -> Bool
+    ) -> RepoDetail {
+        let branch = baseBranch(entry.baseBranch)
+        let source: RepoDetail.Source
+        var github: String?
         if let managed = entry.workspace.source?.trimmingWhitespace(), !managed.isEmpty {
             let repo = gitHubRepo(managed)
-            source = RepoField(sourceLabel, "Managed clone of \(repo)")
-            github = RepoField(githubLabel, repo)
-            managedGitHub = repo
+            let clone = ManagedClones.clonePath(root: config.clonesRoot, gitHub: repo).path
+            let cloned = isDirectory((clone as NSString).appendingPathComponent(".git"))
+            source = RepoDetail.Source(
+                kind: .managed,
+                path: cloned ? clone : nil,
+                notCloned: !cloned,
+                baseBranch: branch,
+                managedGitHub: repo
+            )
+            github = repo
         } else {
-            let path = entry.workspace.repo?.trimmingWhitespace()
-            source = RepoField(sourceLabel, "Local folder", detail: path.flatMap { $0.isEmpty ? nil : $0 })
-            github = RepoField(githubLabel, unavailable, tone: .unavailable)
+            let path = entry.workspace.repo?.trimmingWhitespace() ?? ""
+            source = RepoDetail.Source(
+                kind: .local,
+                path: path.isEmpty ? nil : (path as NSString).expandingTildeInPath,
+                baseBranch: branch
+            )
         }
-        return RepoRow(
+        let isDefault = entry.isDefault ?? false
+        return RepoDetail(
             key: entry.key,
-            isDefault: entry.isDefault ?? false,
-            fields: [
-                source,
-                github,
-                linearField(entry.route),
-                RepoField(workflowLabel, unavailable, detail: entry.workflow ?? "WORKFLOW.md", tone: .unavailable),
-                RepoField(lastFetchLabel, unavailable, tone: .unavailable),
-                RepoField(agentsLabel, unavailable, tone: .unavailable),
-            ],
-            managedGitHub: managedGitHub
+            isDefault: isDefault,
+            github: github,
+            subtitle: github ?? folderName(source.path),
+            source: source,
+            routing: routing(entry.route, key: entry.key, isDefault: isDefault),
+            live: live
         )
     }
 
-    /// `display` with each row's actions: Edit and Disconnect need the repo in `symphony.yml`, read as `entries`,
-    /// and `cloneRemoval` says whether a managed repo's clone can be deleted.
-    public static func withActions(
-        _ display: ReposDisplay,
+    /// Edit and Disconnect need the repo in `symphony.yml`, read as `entries`.
+    static func actions(
+        for detail: RepoDetail,
         entries: Result<[RepositoryEntry], AddRepoProblem>,
         cloneRemoval: (_ gitHub: String) -> ManagedClones.Removal
-    ) -> ReposDisplay {
-        var display = display
-        for index in display.rows.indices {
-            var row = display.rows[index]
-            switch entries {
-            case let .failure(problem):
-                row.actions.editProblem = problem.message
-                row.actions.disconnectProblem = problem.message
-            case let .success(entries):
-                row.actions.disconnectProblem = DisconnectRepo.problem(key: row.key, entries: entries)
-                row.actions.editProblem = entries.contains { $0.key == row.key } ? nil : row.actions.disconnectProblem
-            }
-            row.actions.cloneRemoval = row.managedGitHub.map(cloneRemoval)
-            display.rows[index] = row
+    ) -> RepoActions {
+        var actions = RepoActions(cloneRemoval: detail.source.managedGitHub.map(cloneRemoval))
+        switch entries {
+        case let .failure(problem):
+            actions.editProblem = problem.message
+            actions.disconnectProblem = problem.message
+        case let .success(entries):
+            actions.disconnectProblem = DisconnectRepo.problem(key: detail.key, entries: entries)
+            actions.editProblem = entries.contains { $0.key == detail.key } ? nil : actions.disconnectProblem
         }
-        return display
+        return actions
     }
 
-    static func sourceField(_ source: RepoStatus.Source) -> RepoField {
-        switch source {
-        case let .local(path):
-            return RepoField(sourceLabel, "Local folder", detail: path.map(abbreviated))
-        case let .managed(github, clonePath, cloned):
-            let detail = cloned ? clonePath.map(abbreviated) : "not cloned yet: Symphony clones it on the first dispatch"
-            return RepoField(sourceLabel, "Managed clone of \(github)", detail: detail)
+    /// The route sentence, then each part of the route that is set.
+    static func routing(_ route: RepositoryRoute, key: String, isDefault: Bool) -> RepoDetail.Routing {
+        let team = route.team?.trimmingWhitespace() ?? ""
+        let projects = (route.projects ?? []).filter { !$0.trimmingWhitespace().isEmpty }
+        let labels = (route.labels ?? []).filter { !$0.trimmingWhitespace().isEmpty }
+        let assignee = route.assignee?.trimmingWhitespace() ?? ""
+
+        var fields: [RepoField] = []
+        if !projects.isEmpty {
+            fields.append(RepoField(projects.count == 1 ? "Project" : "Projects", projects.joined(separator: ", ")))
         }
+        if !labels.isEmpty { fields.append(RepoField(labels.count == 1 ? "Label" : "Labels", labels.joined(separator: ", "))) }
+        if !team.isEmpty { fields.append(RepoField("Team", team)) }
+        if !assignee.isEmpty { fields.append(RepoField("Assignee", assignee)) }
+
+        guard !fields.isEmpty else {
+            return RepoDetail.Routing(
+                sentence: "\(key) has no Linear route of its own.",
+                defaultLine: isDefault ? "It takes the issues no other repo's route matches." : nil
+            )
+        }
+        var sentence = projects.isEmpty ? "Issues" : "Issues in \(spoken(projects, or: true))"
+        if !team.isEmpty { sentence += projects.isEmpty ? " in team \(team)" : " of team \(team)" }
+        if !labels.isEmpty { sentence += " with \(labels.count == 1 ? "label" : "labels") \(spoken(labels, or: false))" }
+        if !assignee.isEmpty { sentence += " assigned to \(assignee)" }
+        return RepoDetail.Routing(
+            sentence: sentence + " go to \(key).",
+            fields: fields,
+            defaultLine: isDefault ? "It also takes the issues no other repo's route matches." : nil
+        )
     }
 
-    /// For example "team ENG · project web-platform · labels frontend, api · assignee me".
-    static func linearField(_ route: RepositoryRoute) -> RepoField {
-        var parts: [String] = []
-        if let team = route.team?.trimmingWhitespace(), !team.isEmpty { parts.append("team \(team)") }
-        if let projects = route.projects, !projects.isEmpty {
-            parts.append("\(projects.count == 1 ? "project" : "projects") \(projects.joined(separator: ", "))")
-        }
-        if let labels = route.labels, !labels.isEmpty {
-            parts.append("\(labels.count == 1 ? "label" : "labels") \(labels.joined(separator: ", "))")
-        }
-        if let assignee = route.assignee?.trimmingWhitespace(), !assignee.isEmpty { parts.append("assignee \(assignee)") }
-        return RepoField(linearLabel, parts.isEmpty ? "no route" : parts.joined(separator: " · "))
+    /// "a", "a or b", "a, b or c" (or "and").
+    static func spoken(_ items: [String], or: Bool) -> String {
+        let word = or ? "or" : "and"
+        guard let last = items.last, items.count > 1 else { return items.first ?? "" }
+        return items.dropLast().joined(separator: ", ") + " \(word) \(last)"
     }
 
-    /// "found, valid", "found, invalid" with the error, or "missing" with the error.
+    /// "Valid", "Invalid" with the error, "Missing", or a status this app doesn't know as Symphony words it.
     static func workflowField(_ workflow: RepoStatus.Workflow) -> RepoField {
         let path = workflow.path.map(abbreviated)
         switch workflow.state {
         case .valid:
-            return RepoField(workflowLabel, validWorkflow, detail: path)
+            return RepoField(workflowStatusLabel, validWorkflow, detail: path)
         case .invalid:
-            return RepoField(workflowLabel, "found, invalid", detail: workflow.error ?? path, tone: .problem)
+            return RepoField(workflowStatusLabel, "Invalid", detail: workflow.error ?? path, tone: .problem)
         case .missing:
-            return RepoField(workflowLabel, "missing", detail: workflow.error ?? path, tone: .problem)
+            return RepoField(workflowStatusLabel, "Missing", detail: workflow.error ?? path, tone: .problem)
         case let .other(status):
-            return RepoField(workflowLabel, status, detail: workflow.error ?? path)
+            return RepoField(workflowStatusLabel, status, detail: workflow.error ?? path)
         }
     }
 
-    /// "5m ago, ok", or "5m ago, failed" with the error; "none yet" before the first fetch.
+    /// "5m ago", or "Failed 5m ago" with the error; "None yet" before the first fetch.
     static func fetchField(_ fetch: RepoStatus.Fetch?, now: Date) -> RepoField {
-        guard let fetch else { return RepoField(lastFetchLabel, "none yet") }
-        let when = fetch.at.map { "\(StatusMenu.durationLabel(Int(now.timeIntervalSince($0)))) ago" } ?? "at an unknown time"
-        return fetch.succeeded
-            ? RepoField(lastFetchLabel, "\(when), ok")
-            : RepoField(lastFetchLabel, "\(when), failed", detail: fetch.error, tone: .problem)
-    }
-
-    /// "TP-1, TP-2 (on worker-1)", or "none" while no agent runs on the repo.
-    static func agentsField(_ worktrees: [RepoStatus.Worktree]) -> RepoField {
-        guard !worktrees.isEmpty else { return RepoField(agentsLabel, "none") }
-        let value = worktrees.map { worktree in
-            worktree.workerHost.map { "\(worktree.issueIdentifier) (on \($0))" } ?? worktree.issueIdentifier
+        let label = "Last fetch"
+        guard let fetch else { return RepoField(label, "None yet") }
+        let when = fetch.at.map { "\(StatusMenu.durationLabel(Int(now.timeIntervalSince($0)))) ago" }
+        guard fetch.succeeded else {
+            return RepoField(label, "Failed" + (when.map { " \($0)" } ?? ""), detail: fetch.error, tone: .problem)
         }
-        let paths = worktrees.compactMap { $0.path.map(abbreviated) }
-        let detail = paths.isEmpty ? nil : paths.joined(separator: "\n")
-        return RepoField(agentsLabel, value.joined(separator: ", "), detail: detail)
+        return RepoField(label, when ?? "At an unknown time")
     }
 
     /// `owner/repo` from a `workspace.source`: `owner/repo`, a github.com URL or an SSH remote.
@@ -593,7 +900,26 @@ public enum ReposList {
         return repo
     }
 
+    /// The base branch, or what Symphony starts branches from when `symphony.yml` names none: `origin/HEAD`.
+    static func baseBranch(_ branch: String?) -> String {
+        let branch = branch?.trimmingWhitespace() ?? ""
+        return branch.isEmpty ? defaultBranchLine : branch
+    }
+
+    private static func folderName(_ path: String?) -> String? {
+        path.map { ($0 as NSString).lastPathComponent }
+    }
+
     private static func abbreviated(_ path: String) -> String {
         (path as NSString).abbreviatingWithTildeInPath
+    }
+}
+
+private extension RepoDetail {
+    /// The detail with its gate from `symphony.yml`'s `entries` and the global mode, and the record in `snapshot`.
+    func withGate(_ entries: [RepositoryEntry], _ global: AcceptanceGateMode?, _ snapshot: StateSnapshot?) -> RepoDetail {
+        var detail = self
+        detail.gate = entries.first { $0.key == key }.map { AcceptanceGate.repoGate($0, global: global, in: snapshot) }
+        return detail
     }
 }

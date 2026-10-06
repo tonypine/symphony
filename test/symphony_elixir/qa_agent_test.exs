@@ -71,11 +71,28 @@ defmodule SymphonyElixir.QaAgentTest do
     defdelegate stop_session(session), to: FakeSession
 
     def run_turn(session, prompt, issue, opts) do
-      [tmp_dir] = Map.values(opts[:extra_env])
+      [tmp_dir] = opts[:extra_env] |> Map.delete("QA_HOST_PORTS") |> Map.values()
       fixture = Path.join(tmp_dir, "symphony.yml")
       File.write!(fixture, "repos: []\n")
       result = SymphonyElixir.QaDriver.call_tool(opts[:qa_driver], "qa_put_file", %{"local_path" => fixture})
       send(Application.fetch_env!(:symphony_elixir, :qa_test_recipient), {:put_file, tmp_dir, result})
+      FakeSession.run_turn(session, prompt, issue, opts)
+    end
+  end
+
+  # Builds and launches the macos_app and resizes its window for the wide pass, as a
+  # macos_app QA agent does, then answers like `FakeSession`.
+  defmodule WidePassSession do
+    alias SymphonyElixir.QaDriver
+
+    defdelegate start_session(workspace, opts), to: FakeSession
+    defdelegate stop_session(session), to: FakeSession
+
+    def run_turn(session, prompt, issue, opts) do
+      driver = opts[:qa_driver]
+      {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+      {:ok, %{"pid" => pid}} = QaDriver.call_tool(driver, "qa_launch_app", %{})
+      {:ok, %{"limited" => _limited}} = QaDriver.call_tool(driver, "qa_resize_window", %{"pid" => pid})
       FakeSession.run_turn(session, prompt, issue, opts)
     end
   end
@@ -192,6 +209,39 @@ defmodule SymphonyElixir.QaAgentTest do
   end
 
   defp playbooks, do: Selection.playbooks(%{playbooks: %{}})
+
+  # A QA host whose build writes the playbook's `build/App.app` and whose screen is `{w, h}`
+  # points, 93 pt of its height taken by the menu bar and the Dock; the window reaches at most 1400×900.
+  defp wide_pass_host({w, h}) do
+    usable = h - 93
+    window = %{x: 0, y: 25, w: min(w, 1400), h: min(usable, 900)}
+    resized = Jason.encode!(%{ok: true, window: window, screen: %{w: w, h: h}, visible: %{x: 0, y: 25, w: w, h: usable}})
+
+    cmd = fn
+      "/bin/sh", ["-c", "make app"], opts ->
+        macos = Path.join(opts[:cd], "build/App.app/Contents/MacOS")
+        File.mkdir_p!(macos)
+        File.write!(Path.join(macos, "App"), "binary")
+        {:ok, {"built", 0}}
+
+      "/bin/sh", ["-c", _script, "sh", "App"], _opts ->
+        {:ok, {"", 0}}
+
+      "/usr/bin/plutil", _args, _opts ->
+        {:ok, {"App\n", 0}}
+
+      "/fake/helper", ["ax-resize" | _args], _opts ->
+        {:ok, {resized, 0}}
+    end
+
+    %{
+      cmd: cmd,
+      call_helper: cmd,
+      helper: fn -> {:ok, "/fake/helper"} end,
+      launch: fn _executable, _opts -> {:ok, Port.open({:spawn, "cat"}, [:binary]), System.unique_integer([:positive]) + 100_000} end,
+      kill: fn _pid -> :ok end
+    }
+  end
 
   defp job(attrs \\ %{}) do
     Map.merge(
@@ -950,7 +1000,7 @@ defmodule SymphonyElixir.QaAgentTest do
       [macos_app] =
         Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => %{"build" => "make app", "app" => "build/App.app"}}})
 
-      assert {:ok, %{result: %{verdict: :pass}}} =
+      assert {:ok, %{result: %{verdict: :blocked}}} =
                QaAgent.run(job(%{playbooks: [macos_app]}), Config.settings!(),
                  git: fake_git(),
                  qa_agent_module: FakeSession,
@@ -963,18 +1013,125 @@ defmodule SymphonyElixir.QaAgentTest do
       assert_receive {:qa_turn, _session, prompt, _issue, turn_opts}
       assert turn_opts[:qa_driver] == driver
       assert prompt =~ "### Playbook: macos_app"
+      assert %{"QA_HOST_PORTS" => ports} = session_opts[:extra_env]
+      assert [_one, _two, _three] = String.split(ports, ",")
+      assert prompt =~ "Host ports:\nQA_HOST_PORTS = #{ports} (also in your `QA_HOST_PORTS` environment variable)."
+      assert prompt =~ "the app reaches them at\n`http://localhost:<port>`"
       refute Process.alive?(driver)
 
       assert {:ok, _result} = QaAgent.run(job(), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession)
       assert_receive {:qa_session_started, _worktree, cli_opts}
       assert cli_opts[:qa_driver] == nil
+      refute Map.has_key?(cli_opts[:extra_env], "QA_HOST_PORTS")
+      assert_receive {:qa_turn, _session, cli_prompt, _issue, _turn_opts}
+      refute cli_prompt =~ "QA_HOST_PORTS"
+    end
+
+    test "blocks a macos_app pass whose host-port tunnel to the QA host cannot open, before the agent starts" do
+      [macos_app] =
+        Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => %{"build" => "make app", "app" => "build/App.app"}}})
+
+      host = %{
+        kill: fn _pid -> :ok end,
+        prepare: fn _operator_home, _canary -> {:ok, "/Users/qa/symphony-qa/run-1"} end,
+        tunnel: fn _ports -> {:error, {:failed, "ssh exited with status 255: Connection refused"}} end,
+        cleanup: fn _dir -> :ok end
+      }
+
+      {result, log} =
+        with_log(fn ->
+          QaAgent.run(job(%{playbooks: [macos_app]}), Config.settings!(),
+            git: fake_git(),
+            qa_agent_module: FakeSession,
+            qa_driver_opts: [worker_host: "qa-vm", host: host]
+          )
+        end)
+
+      assert {:error, {:qa_host_tunnel_failed, "ssh exited with status 255: Connection refused"}, %{total_tokens: 0}} = result
+      assert log =~ "QA driver could not open the host-port tunnel"
+      refute_received {:qa_session_started, _worktree, _opts}
+    end
+
+    test "reports a pass whose wide pass the QA screen limited as blocked, for a person" do
+      [macos_app] =
+        Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => %{"build" => "make app", "app" => "build/App.app"}}})
+
+      run = fn screen, turn_result ->
+        Application.put_env(:symphony_elixir, :qa_test_turn_result, turn_result)
+
+        {result, _log} =
+          with_log(fn ->
+            QaAgent.run(job(%{playbooks: [macos_app]}), Config.settings!(),
+              git: fake_git(),
+              qa_agent_module: WidePassSession,
+              qa_driver_opts: [host: wide_pass_host(screen), git: fn _args, _cwd -> {"", 0} end]
+            )
+          end)
+
+        result
+      end
+
+      assert {:ok, %{result: %{verdict: :blocked, reason: reason, needs_person: true, steps: [%{name: "symphony check"}]}}} =
+               run.({1024, 768}, {:ok, %{result: FakeSession.pass_json()}})
+
+      assert reason =~ "the wide pass was limited: the QA screen is 1024×768 pt (1024×675 pt usable)"
+      assert reason =~ "reached only 1024×675 pt, under the 1400×900 pt the wide pass needs"
+      assert Report.render(%{verdict: :blocked, reason: reason, sha: @sha, target_state: "Human Review"}) =~ "Reason: the wide pass was limited"
+
+      assert {:ok, %{result: %{verdict: :pass}}} = run.({1920, 1200}, {:ok, %{result: FakeSession.pass_json()}})
+
+      blocked_json =
+        Jason.encode!(%{
+          verdict: "blocked",
+          summary: "The wide pass was limited.",
+          reason: "the Wide pass step is blocked: the screen is 1024×768",
+          steps: [%{name: "Wide pass", status: "blocked", details: "qa_resize_window returned limited: true at 1024×675 pt."}],
+          findings: []
+        })
+
+      assert {:ok, %{result: %{verdict: :blocked, reason: blocked_reason, needs_person: true, steps: [%{name: "Wide pass"}]}}} =
+               run.({1024, 768}, {:ok, %{result: blocked_json}})
+
+      assert blocked_reason =~ "the Wide pass step is blocked: the screen is 1024×768; the wide pass was limited: the QA screen is 1024×768 pt"
+
+      fail_json = Jason.encode!(%{verdict: "fail", summary: "Decide crashed.", steps: [], findings: ["Decide crashes at 1024 pt"]})
+      assert {:ok, %{result: %{verdict: :fail} = failed}} = run.({1024, 768}, {:ok, %{result: fail_json}})
+      refute Map.has_key?(failed, :needs_person)
+    end
+
+    test "reports a macos_app pass that never resized a window as blocked, since its wide pass did not run" do
+      [macos_app] =
+        Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => %{"build" => "make app", "app" => "build/App.app"}}})
+
+      run = fn turn_result ->
+        Application.put_env(:symphony_elixir, :qa_test_turn_result, turn_result)
+
+        QaAgent.run(job(%{playbooks: [macos_app]}), Config.settings!(),
+          git: fake_git(),
+          qa_agent_module: FakeSession,
+          qa_driver_opts: [host: %{kill: fn _pid -> :ok end}]
+        )
+      end
+
+      assert {:ok, %{result: %{verdict: :blocked, reason: reason, steps: [%{name: "symphony check"}]} = blocked}} =
+               run.({:ok, %{result: FakeSession.pass_json()}})
+
+      assert reason =~ "the wide pass did not run: no `qa_resize_window` call resized the app's window"
+      refute Map.has_key?(blocked, :needs_person)
+      assert Report.render(%{verdict: :blocked, reason: reason, sha: @sha, target_state: "In Review"}) =~ "Reason: the wide pass did not run"
+
+      fail_json = Jason.encode!(%{verdict: "fail", summary: "The app crashed at launch.", steps: [], findings: ["App exits at launch"]})
+      assert {:ok, %{result: %{verdict: :fail}}} = run.({:ok, %{result: fail_json}})
+
+      Application.delete_env(:symphony_elixir, :qa_test_turn_result)
+      assert {:ok, %{result: %{verdict: :pass}}} = QaAgent.run(job(), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession)
     end
 
     test "lets the QA driver read fixtures from the pass's own $TMPDIR" do
       [macos_app] =
         Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => %{"build" => "make app", "app" => "build/App.app"}}})
 
-      assert {:ok, %{result: %{verdict: :pass}}} =
+      assert {:ok, %{result: %{verdict: :blocked}}} =
                QaAgent.run(job(%{playbooks: [macos_app]}), Config.settings!(),
                  git: fake_git(),
                  qa_agent_module: PutFileSession,

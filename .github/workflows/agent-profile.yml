@@ -1,0 +1,68 @@
+name: agent-profile
+
+# Runs the `:srt_profile` test, which checks the verification dev server's record of the mach
+# services the agent profiles allow (`DevServerSandbox.mach_services/0`) against the profile the
+# latest `@anthropic-ai/sandbox-runtime` generates. Claude Code runs SRT's profile too. The dev
+# server's own list is derived from that record, so when SRT changes its list this turns red and
+# the record, and with it the dev server's list, is brought back in step.
+#
+# Not a required check: it runs weekly, to catch an SRT release, and on pull requests that change
+# the record or this test.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 6 * * 1"
+  pull_request:
+    paths:
+      - "lib/symphony_elixir/verification/dev_server_sandbox.ex"
+      - "test/symphony_elixir/verification/dev_server_sandbox_test.exs"
+      - "test/test_helper.exs"
+      - ".github/workflows/agent-profile.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-profile-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  srt-profile:
+    name: srt profile
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up mise tools
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+        with:
+          install: true
+          cache: true
+
+      - name: Cache deps and build
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-${{ hashFiles('mix.lock', 'mix.exs', 'mise.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-
+
+      - name: Install dependencies
+        run: time mix deps.get
+
+      # Only the package's files are read: no install scripts run.
+      - name: Install the latest SRT
+        run: |
+          npm install --prefix "$RUNNER_TEMP/srt" --ignore-scripts --no-audit --no-fund @anthropic-ai/sandbox-runtime@latest
+          npm ls --prefix "$RUNNER_TEMP/srt" @anthropic-ai/sandbox-runtime
+          echo "SRT_PACKAGE_DIR=$RUNNER_TEMP/srt/node_modules/@anthropic-ai/sandbox-runtime" >> "$GITHUB_ENV"
+
+      - name: Check the agent profiles' mach services
+        run: mix test test/symphony_elixir/verification/dev_server_sandbox_test.exs --only srt_profile

@@ -209,7 +209,7 @@ With `mode: enforce`, set globally or for one repository, Auto Review applies th
 - **Kill switch.** The mode is read again on every CI poll and when a gate pass ends, so switching a
   repository to `shadow` or `off` stops the moves on the next poll, without a restart: a verdict
   not applied yet moves the issue where QA sent it. An issue already in Merging stays there.
-- **Guard.** The gate never moves a `breakdown` parent or a `Final verification:` ticket: their
+- **Guard.** The gate never moves a plan ticket (label `plan`, or `breakdown`, its older name) or a `Final verification:` ticket: their
   verdicts stay advisory, and the issue goes where QA sent it.
 - **Re-review in Merging.** A push after approval is judged again before it lands
   (`AutoMerge.step/5`). The first PR poll of a Merging stay, whether the gate or a person moved the
@@ -273,7 +273,7 @@ auto_review:
     timeout_ms: 900000
     max_concurrent: 2
     escalate:
-      labels: [needs-human, breakdown]
+      labels: [needs-human, plan, breakdown]
       ticket_patterns:
         - '(?i)\b(human|manual(ly)?)\s+review'
         - '(?i)must not (auto-?approve|auto-?merge)'
@@ -302,7 +302,7 @@ Quote regular expressions with single quotes in YAML, so a backslash stays a bac
 | `max_turns` | `12` | Turns the gate agent gets. |
 | `timeout_ms` | `900000` (15 minutes) | How long a gate run may take. |
 | `max_concurrent` | `2` | Gate runs at once, across all repositories. |
-| `escalate.labels` | `needs-human`, `breakdown` | An issue with one of these labels escalates. Matching ignores case and surrounding spaces. |
+| `escalate.labels` | `needs-human`, `plan`, `breakdown` | An issue with one of these labels escalates. Matching ignores case and surrounding spaces. |
 | `escalate.ticket_patterns` | the three above | Regular expressions matched against the issue title and description, after the human review state's name is blanked (see [What escalates](#what-escalates)). |
 | `escalate.paths` | the built-in paths below | Globs matched against each changed path outside docs and tests. `**` spans directories, `*` and `?` don't. |
 | `escalate.diff_patterns` | the four above | Regular expressions matched against each added line of the diff, in every file. Removed lines don't count. |
@@ -375,7 +375,7 @@ after `to`, `in`, `into` or `from` ("moves it to Human Review"), or before `stat
 Review state"). The name matches case-sensitively and only in those places, so "This change needs
 a human review before merge" and "manually review the SQL" still escalate. With
 `issues.states.human_review: null` nothing is blanked. The same applies when Symphony checks
-whether a `breakdown` plan's ticket asks for a human review.
+whether a plan's ticket asks for a human review.
 
 A version's major is its first number. When that number is `0`, the first two numbers count,
 so `0.4.0` to `0.5.0` is a major change. Only a leading version is read, after any `^`, `~`,

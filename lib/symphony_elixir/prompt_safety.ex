@@ -9,6 +9,8 @@ defmodule SymphonyElixir.PromptSafety do
   # Symphony's own workpad is read back and rewritten whole by the agent, so a cut here
   # deletes the tail from Linear on the next update.
   @workpad_comment_limit 50_000
+  # A document is read back and rewritten whole like the workpad, so it gets the same limit.
+  @document_limit 50_000
   @truncation_marker_pattern ~r/\[\.\.\. truncated by Symphony: \w+ exceeded \d+ characters \.\.\.\]/
   # Tags an issue field or comment body could open or close to step out of its boundary:
   # Symphony's own `<linear_*>` and `<github_pr_*>` boundaries, and chat role tags.
@@ -44,6 +46,12 @@ defmodule SymphonyElixir.PromptSafety do
   """
   @spec linear_workpad_comment_body(String.t()) :: String.t()
   def linear_workpad_comment_body(value), do: copyable_block(value, "linear_issue_comment_body", @workpad_comment_limit)
+
+  @spec linear_document_title(String.t()) :: String.t()
+  def linear_document_title(value), do: copyable_block(value, "linear_document_title", @title_limit)
+
+  @spec linear_document_content(String.t()) :: String.t()
+  def linear_document_content(value), do: copyable_block(value, "linear_document_content", @document_limit)
 
   @doc """
   Reverses the escaping `linear_issue_comment_body/1` applies to a comment body.

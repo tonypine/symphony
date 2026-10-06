@@ -73,6 +73,9 @@ defmodule SymphonyElixir.QaDriverTest do
 
   defp default_cmd("/usr/bin/plutil", _args, _opts, _replies), do: {:ok, {"Demo\n", 0}}
 
+  # The crash report listing: none unless a test's `crash_reports` replies say so.
+  defp default_cmd("/bin/sh", ["-c", _script, "sh", "Demo"], _opts, replies), do: Map.get(replies, "crash_reports", {:ok, {"", 0}})
+
   defp default_cmd(@helper, ["screenshot" | _rest] = args, _opts, _replies) do
     File.write!(List.last(args), "png")
     {:ok, {~s({"ok":true}), 0}}
@@ -137,6 +140,14 @@ defmodule SymphonyElixir.QaDriverTest do
   end
 
   describe "tools" do
+    test "hands out three free host ports and opens no tunnel for a local app", %{worktree: worktree} do
+      driver = start_driver(worktree)
+      assert {:ok, [_one, _two, _three] = ports} = QaDriver.host_ports(driver)
+      assert length(Enum.uniq(ports)) == 3
+      assert %{tunnel: nil} = :sys.get_state(driver)
+      assert QaDriver.host_ports(nil) == {:ok, []}
+    end
+
     test "lists the qa tools and needs a driver" do
       assert "qa_build" in QaDriver.tools()
       assert "qa_ax_set_value" in QaDriver.tools()
@@ -438,7 +449,7 @@ defmodule SymphonyElixir.QaDriverTest do
     test "copies in-bundle symlinks and refuses links that leave the bundle", %{worktree: worktree} do
       build_with_link = fn target ->
         fn
-          "/bin/sh", _args, opts ->
+          "/bin/sh", ["-c", _build], opts ->
             write_bundle(opts[:cd])
             framework = Path.join([opts[:cd], @app, "Contents/Frameworks/Dep.framework"])
             File.mkdir_p!(Path.join(framework, "Versions/A"))
@@ -891,9 +902,25 @@ defmodule SymphonyElixir.QaDriverTest do
           Map.get(overrides, :put, {:ok, "#{dir}/files/#{name}"})
         end,
         helper: fn dir -> send(test, {:helper, dir}) && {:ok, @helper} end,
+        tunnel: fn ports -> send(test, {:tunnel, ports}) && Map.get(overrides, :tunnel, &open_tunnel/0).() end,
         cleanup: fn dir -> send(test, {:cleanup, dir}) && :ok end
       })
     end
+
+    # Stands in for the tunnel's SSH session: it prints a line as `ssh` may, then
+    # runs until its stdin closes, or exits when the test writes a line to it.
+    defp open_tunnel, do: {:ok, Port.open({:spawn_executable, "/bin/sh"}, [:binary, :exit_status, args: ["-c", "echo warning; read line; exit 3"]])}
+
+    # Answers each tunnel request with the next of `results`.
+    defp tunnel_results(results) do
+      {:ok, agent} = Agent.start_link(fn -> results end)
+      on_exit(fn -> if Process.alive?(agent), do: Agent.stop(agent) end)
+
+      fn -> agent |> Agent.get_and_update(fn [result | rest] -> {result, rest} end) |> tunnel_result() end
+    end
+
+    defp tunnel_result(:open), do: open_tunnel()
+    defp tunnel_result(error), do: error
 
     defp remote_git(["archive" | _args], _cwd), do: {"fatal: not a valid object name HEAD\n", 128}
     defp remote_git(args, cwd), do: clean_git(args, cwd)
@@ -993,6 +1020,59 @@ defmodule SymphonyElixir.QaDriverTest do
       assert message =~ "could not be prepared: ssh exited with status 255"
     end
 
+    test "forwards the host ports from the QA host for the whole pass", %{worktree: worktree} do
+      driver = remote_driver(worktree, remote_host())
+      assert_received {:tunnel, ports}
+      assert QaDriver.host_ports(driver) == {:ok, ports}
+      assert length(ports) == 3 and length(Enum.uniq(ports)) == 3
+      %{tunnel: tunnel} = :sys.get_state(driver)
+      assert Port.info(tunnel)
+
+      QaDriver.stop(driver)
+      refute Port.info(tunnel)
+    end
+
+    test "retries a port the QA host refuses on fresh ports, then reports why the tunnel could not open", %{worktree: worktree} do
+      taken = {:error, {:port_taken, "ssh exited with status 255: Error: remote port forwarding failed for listen port 50001"}}
+      driver = remote_driver(worktree, remote_host(%{tunnel: tunnel_results([taken, :open])}))
+      assert_received {:tunnel, refused}
+      assert_received {:tunnel, ports}
+      assert refused != ports
+      assert QaDriver.host_ports(driver) == {:ok, ports}
+
+      driver = remote_driver(worktree, remote_host(%{tunnel: tunnel_results([taken, taken, taken])}))
+      assert {:error, "ssh exited with status 255: Error: remote port forwarding failed" <> _rest} = QaDriver.host_ports(driver)
+      for _attempt <- 1..3, do: assert_received({:tunnel, _ports})
+
+      driver = remote_driver(worktree, remote_host(%{tunnel: tunnel_results([{:error, {:failed, "ssh exited with status 255: Connection refused"}}])}))
+      assert QaDriver.host_ports(driver) == {:error, "ssh exited with status 255: Connection refused"}
+      assert_received {:tunnel, _ports}
+      refute_received {:tunnel, _ports}
+    end
+
+    test "opens no tunnel to a QA host it refused", %{worktree: worktree} do
+      driver = remote_driver(worktree, remote_host(%{prepare: {:error, {:unsafe, "has a forwarded SSH agent"}}}))
+      assert {:ok, [_one, _two, _three]} = QaDriver.host_ports(driver)
+      refute_received {:tunnel, _ports}
+    end
+
+    test "reopens a tunnel that closed at the next launch, and fails the launch when it cannot", %{worktree: worktree} do
+      failed = {:error, {:failed, "ssh exited with status 255: Connection refused"}}
+      driver = remote_driver(worktree, remote_host(%{tunnel: tunnel_results([:open, :open, failed])}))
+      assert_received {:tunnel, ports}
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+
+      assert capture_log(fn -> close_tunnel(driver) end) =~ "host-port tunnel closed status=3"
+      {{:ok, %{"pid" => _pid}}, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{}) end)
+      assert_received {:tunnel, ^ports}
+
+      capture_log(fn -> close_tunnel(driver) end)
+      {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{}) end)
+      assert {:error, {:qa_tool, "qa_host_tunnel_failed", message}} = result
+      assert message =~ "QA_HOST_PORTS (#{Enum.join(ports, ", ")}) from the QA host closed and could not reopen: ssh exited with status 255: Connection refused."
+      assert message =~ "answer with verdict `blocked`"
+    end
+
     test "reports a failed copy to the QA host", %{worktree: worktree} do
       driver = remote_driver(worktree, remote_host(), &remote_git/2)
       assert {:error, {:qa_tool, "qa_git_failed", message}} = QaDriver.call_tool(driver, "qa_build", %{})
@@ -1083,5 +1163,176 @@ defmodule SymphonyElixir.QaDriverTest do
       assert {:error, _message} = Host.launch("/nonexistent/qa", cd: System.tmp_dir!(), env: [])
       assert %{cmd: _cmd, launch: _launch, kill: _kill, helper: _helper, call_helper: _call_helper} = Host.default()
     end
+  end
+
+  describe "wide pass" do
+    defp resized(window, screen, visible) do
+      {Jason.encode!(%{ok: true, method: "AXSize", window: window, screen: screen, visible: visible, requested: %{w: 1400, h: 900}}), 0}
+    end
+
+    @wide_screen %{w: 1920, h: 1200}
+    @wide_visible %{x: 0, y: 25, w: 1920, h: 1105}
+
+    test "resizes the main window or a given one and remembers the size it reached", %{worktree: worktree} do
+      reply = resized(%{x: 0, y: 25, w: 1400, h: 900}, @wide_screen, @wide_visible)
+      {driver, pid} = launched_app(worktree, host: host(%{helper_replies: %{"ax-resize" => reply}}))
+      assert QaDriver.wide_pass(driver) == nil
+
+      assert {:ok, %{"window" => %{"w" => 1400, "h" => 900}, "screen" => %{"w" => 1920}, "limited" => false, "note" => note}} =
+               QaDriver.call_tool(driver, "qa_resize_window", %{"pid" => pid})
+
+      assert note == "The window is 1400×900 pt on a 1920×1200 pt screen."
+      assert_received {:cmd, @helper, ["ax-resize", pid_arg, "", "1400", "900"], _opts}
+      assert pid_arg == Integer.to_string(pid)
+
+      assert QaDriver.wide_pass(driver) ==
+               %{window: {1400, 900}, screen: {1920, 1200}, visible: {1920, 1105}, limited: false}
+
+      assert {:ok, %{"limited" => false}} = QaDriver.call_tool(driver, "qa_resize_window", %{"pid" => pid, "path" => "1", "width" => 1600, "height" => 1000})
+      assert_received {:cmd, @helper, ["ax-resize", _pid, "1", "1600", "1000"], _opts}
+
+      for args <- [%{"width" => 1200}, %{"height" => 600}, %{"width" => 9000}, %{"path" => "window"}, %{"width" => "1400"}] do
+        assert error_code(QaDriver.call_tool(driver, "qa_resize_window", Map.put(args, "pid", pid))) == "invalid_arguments"
+      end
+
+      assert error_code(QaDriver.call_tool(driver, "qa_resize_window", %{"pid" => pid + 1})) == "qa_pid_not_launched"
+
+      # The wide pass outlives the app it resized.
+      assert {:ok, %{"quit" => true}} = QaDriver.call_tool(driver, "qa_quit_app", %{"pid" => pid})
+      assert %{limited: false} = QaDriver.wide_pass(driver)
+      QaDriver.stop(driver)
+      assert QaDriver.wide_pass(driver) == nil
+      assert QaDriver.wide_pass(nil) == nil
+    end
+
+    test "says the wide pass is limited on a screen under 1400×900 pt", %{worktree: worktree} do
+      reply = resized(%{x: 0, y: 25, w: 1024, h: 675}, %{w: 1024, h: 768}, %{x: 0, y: 25, w: 1024, h: 675})
+      {driver, pid} = launched_app(worktree, host: host(%{helper_replies: %{"ax-resize" => reply}}))
+
+      assert {:ok, %{"limited" => true, "note" => note}} = QaDriver.call_tool(driver, "qa_resize_window", %{"pid" => pid})
+      assert note =~ "The QA screen is 1024×768 pt with 1024×675 pt usable, under the 1400×900 pt the wide pass needs"
+      assert note =~ "mark the Wide pass step `blocked`"
+      assert %{limited: true, screen: {1024, 768}, window: {1024, 675}} = QaDriver.wide_pass(driver)
+    end
+
+    test "tells an app that keeps its window small from a small screen", %{worktree: worktree} do
+      replies = %{
+        "ax-resize" => resized(%{x: 0, y: 25, w: 548, h: 420}, @wide_screen, @wide_visible),
+        "ax-ping" => {~s({"ok":true,"responding":true,"ms":3}), 0}
+      }
+
+      {driver, pid} = launched_app(worktree, host: host(%{helper_replies: replies}))
+
+      assert {:ok, %{"limited" => false, "note" => note}} = QaDriver.call_tool(driver, "qa_resize_window", %{"pid" => pid})
+      assert note =~ "The app kept its window at 548×420 pt on a 1920×1200 pt screen"
+
+      assert {:ok, %{"healthy" => true, "window" => %{"w" => 548, "h" => 420}, "page" => "Settings", "problems" => []}} =
+               QaDriver.call_tool(driver, "qa_check_app", %{"pid" => pid, "page" => "Settings"})
+    end
+
+    test "refuses a resize reply without the window size", %{worktree: worktree} do
+      {driver, pid} = launched_app(worktree, host: host(%{helper_replies: %{"ax-resize" => {~s({"ok":true}), 0}}}))
+
+      assert {:error, {:qa_tool, "qa_helper_failed", message}} = QaDriver.call_tool(driver, "qa_resize_window", %{"pid" => pid})
+      assert message =~ "no window size"
+      assert QaDriver.wide_pass(driver) == nil
+    end
+
+    # The QA playbook fixture: a build whose layout crashes once its window is wider than
+    # 1200 pt passes at its default size and fails the wide pass, named by page and size.
+    test "fails a build that crashes in a window wider than 1200 pt, naming the page and size", %{root: root, worktree: worktree} do
+      trigger = Path.join(root, "crash-trigger")
+      listing = Path.join(root, "crash-reports")
+      File.write!(listing, "Demo-2026-10-01-090000.ips\nOther-2026-10-06-120000.ips\n")
+
+      cmd = fn
+        "/bin/sh", ["-c", _script, "sh", "Demo"], _opts ->
+          {:ok, {File.read!(listing), 0}}
+
+        @helper, ["ax-resize", _pid, _path, width, height], _opts ->
+          if String.to_integer(width) > 1200 do
+            File.write!(trigger, "")
+            File.write!(listing, "Demo-2026-10-06-120000.ips\n", [:append])
+          end
+
+          window = %{x: 0, y: 25, w: String.to_integer(width), h: String.to_integer(height)}
+          {:ok, resized(window, @wide_screen, @wide_visible)}
+
+        @helper, ["ax-ping", _pid], _opts ->
+          {:ok, {~s({"ok":true,"responding":true,"ms":2}), 0}}
+
+        executable, args, opts ->
+          default_cmd(executable, args, opts, replies(%{}))
+      end
+
+      # The app runs until the resize trips its layout (10 s at most, so a failed test leaves
+      # nothing running), then dies like an uncaught exception.
+      launch = fn _executable, _opts ->
+        script = ~s{i=0; while [ ! -e "$1" ] && [ $i -lt 500 ]; do sleep 0.02; i=$((i + 1)); done; echo "Decide layout: constraint loop"; exit 134}
+        port = Port.open({:spawn_executable, "/bin/sh"}, [:binary, :exit_status, args: ["-c", script, "sh", trigger]])
+        {:os_pid, os_pid} = Port.info(port, :os_pid)
+        {:ok, port, os_pid}
+      end
+
+      {driver, pid} = launched_app(worktree, host: host(%{cmd: cmd, launch: launch}))
+
+      # At the default size the build is healthy.
+      assert {:ok, %{"healthy" => true, "running" => true, "responding" => true, "crash_reports" => [], "window" => nil}} =
+               QaDriver.call_tool(driver, "qa_check_app", %{"pid" => pid, "page" => "Decide"})
+
+      assert {:ok, %{"window" => %{"w" => 1400, "h" => 900}}} = QaDriver.call_tool(driver, "qa_resize_window", %{"pid" => pid})
+      wait_until(fn -> match?({:ok, %{"running" => false}}, QaDriver.call_tool(driver, "qa_check_app", %{"pid" => pid})) end)
+
+      assert {:ok, %{"healthy" => false, "running" => false, "responding" => nil, "crash_reports" => reports, "problems" => [exited, crashed]}} =
+               QaDriver.call_tool(driver, "qa_check_app", %{"pid" => pid, "page" => "Decide"})
+
+      assert reports == ["Demo-2026-10-06-120000.ips"]
+      assert exited =~ ~s[The app exited with status 134 (page "Decide", window 1400×900 pt). Last output: Decide layout: constraint loop]
+      assert crashed == ~s[New crash report (page "Decide", window 1400×900 pt) in ~/Library/Logs/DiagnosticReports: Demo-2026-10-06-120000.ips.]
+
+      # The other tools still refuse the exited app.
+      assert error_code(QaDriver.call_tool(driver, "qa_ax_tree", %{"pid" => pid})) == "qa_app_exited"
+    end
+
+    test "reports a hung app and passes on other helper failures", %{worktree: worktree} do
+      not_responding = {~s({"error":{"code":"app_not_responding","message":"no answer"}}), 1}
+      {driver, pid} = launched_app(worktree, host: host(%{helper_replies: %{"ax-ping" => not_responding}}))
+
+      assert {:ok, %{"healthy" => false, "running" => true, "responding" => false, "problems" => [problem]}} =
+               QaDriver.call_tool(driver, "qa_check_app", %{"pid" => pid, "page" => "Decide"})
+
+      assert problem == ~s[The app did not answer accessibility requests for 10 seconds (page "Decide"): it is hung.]
+
+      {driver, pid} = launched_app(worktree, host: host(%{helper_replies: %{"ax-ping" => {:error, :timeout}}}))
+      assert {:ok, %{"responding" => false, "problems" => [hung]}} = QaDriver.call_tool(driver, "qa_check_app", %{"pid" => pid})
+      assert hung == "The app did not answer accessibility requests for 10 seconds: it is hung."
+
+      no_grant = {~s({"error":{"code":"accessibility_permission_missing","message":"no"}}), 1}
+      {driver, pid} = launched_app(worktree, host: host(%{helper_replies: %{"ax-ping" => no_grant}}))
+      assert error_code(QaDriver.call_tool(driver, "qa_check_app", %{"pid" => pid})) == "qa_permission_missing"
+
+      {driver, pid} = launched_app(worktree, host: host(%{helper: fn -> {:error, :swiftc_not_found} end}))
+      assert error_code(QaDriver.call_tool(driver, "qa_check_app", %{"pid" => pid})) == "qa_helper_unavailable"
+
+      assert error_code(QaDriver.call_tool(driver, "qa_check_app", %{"pid" => pid + 1})) == "qa_pid_not_launched"
+      assert error_code(QaDriver.call_tool(driver, "qa_check_app", %{"pid" => pid, "page" => String.duplicate("p", 201)})) == "invalid_arguments"
+      assert error_code(QaDriver.call_tool(driver, "qa_check_app", %{})) == "invalid_arguments"
+    end
+
+    test "does not launch when the crash reports cannot be listed", %{worktree: worktree} do
+      for {reply, detail} <- [{{:ok, {"ls: Operation not permitted", 1}}, "(exit 1): ls: Operation not permitted"}, {{:error, :timeout}, ":timeout"}] do
+        driver = start_driver(worktree, host: host(%{helper_replies: %{"crash_reports" => reply}}))
+        assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+        assert {:error, {:qa_tool, "qa_crash_reports_failed", message}} = QaDriver.call_tool(driver, "qa_launch_app", %{})
+        assert message =~ detail
+        refute_received {:launched, _executable, _opts, _port, _pid}
+      end
+    end
+  end
+
+  defp close_tunnel(driver) do
+    %{tunnel: tunnel} = :sys.get_state(driver)
+    Port.command(tunnel, "close\n")
+    wait_until(fn -> :sys.get_state(driver).tunnel == nil end)
   end
 end

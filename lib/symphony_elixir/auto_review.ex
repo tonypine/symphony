@@ -831,6 +831,7 @@ defmodule SymphonyElixir.AutoReview do
     "the QA agent reached the per-issue token limit ",
     "QA does not run on remote workers yet ",
     "the dev server ",
+    "the tunnel that forwards QA_HOST_PORTS ",
     "`npx` (Node.js) is not on Symphony's PATH",
     "`auto_review.playbooks.web.browser_mcp` is invalid: ",
     "the QA agent's answer could not be read: ",
@@ -856,7 +857,15 @@ defmodule SymphonyElixir.AutoReview do
   def blocked_reason({:qa_dev_server_failed, {:verification_failed, :health_timeout}}),
     do: "the dev server failed its health check, so the web playbook could not run"
 
+  def blocked_reason({:qa_dev_server_failed, {:verification_failed, {:dev_server_sandbox_unconfined, cause}}}),
+    do:
+      "the dev server did not start: Seatbelt on this Mac could not keep it listening on loopback only, " <>
+        "so Symphony did not run it unconfined (#{inspect(cause)})"
+
   def blocked_reason({:qa_dev_server_failed, reason}), do: "the dev server did not start: #{inspect(reason)}"
+
+  def blocked_reason({:qa_host_tunnel_failed, reason}),
+    do: "the tunnel that forwards QA_HOST_PORTS to the QA host could not open, so the app could not reach the host's stubs: #{reason}"
 
   def blocked_reason({:qa_browser_mcp_unavailable, :no_npx}),
     do: "`npx` (Node.js) is not on Symphony's PATH, so the web playbook's browser could not start"

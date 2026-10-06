@@ -20,6 +20,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         autoconf \
         bash \
+        bubblewrap \
         build-essential \
         ca-certificates \
         curl \
@@ -31,6 +32,7 @@ RUN apt-get update \
         npm \
         openssh-client \
         procps \
+        socat \
     && rm -rf /var/lib/apt/lists/*
 
 RUN npm install -g \

@@ -107,7 +107,7 @@ public enum AcceptanceGateConfigError: LocalizedError, Equatable {
 public enum AcceptanceGate {
     public static let sectionTitle = "Acceptance gate (saved in symphony.yml)"
     public static let pickerTitle = "Acceptance gate"
-    public static let repoFieldLabel = "Gate"
+    public static let repoModeLabel = "Mode"
 
     /// The alert Enforce opens before it is picked.
     public static let confirmTitle = "Turn on Enforce?"
@@ -206,24 +206,18 @@ public enum AcceptanceGate {
 
     // MARK: Repos window
 
-    /// The row's Gate field when the repository's own mode differs from the global one, nil otherwise.
-    public static func repoField(_ entry: RepositoryEntry, global: AcceptanceGateMode) -> RepoField? {
-        guard let value = entry.acceptanceGateMode else { return nil }
+    /// A repository's Acceptance gate section in the Repos window: its mode ("Inherit: Shadow", "Enforce") and its
+    /// record in `snapshot`. `global` is nil when the global mode can't be read.
+    public static func repoGate(_ entry: RepositoryEntry, global: AcceptanceGateMode?, in snapshot: StateSnapshot?) -> RepoDetail.Gate {
+        let record = agreementLine(for: entry.key, in: snapshot)
+        guard let value = entry.acceptanceGateMode else {
+            return RepoDetail.Gate(mode: RepoField(repoModeLabel, global.map { "Inherit: \($0.title)" } ?? "Inherit"), record: record)
+        }
         guard let mode = AcceptanceGateMode(value: value) else {
-            return RepoField(repoFieldLabel, value, detail: "Symphony accepts off, shadow or enforce.", tone: .problem)
+            let field = RepoField(repoModeLabel, value, detail: "Symphony accepts off, shadow or enforce.", tone: .problem)
+            return RepoDetail.Gate(mode: field, record: record)
         }
-        return mode == global ? nil : RepoField(repoFieldLabel, mode.title)
-    }
-
-    /// `display` with a Gate field on each row whose repository's own mode, in `entries`, differs from `global`.
-    public static func withGateFields(_ display: ReposDisplay, entries: [RepositoryEntry], global: AcceptanceGateMode) -> ReposDisplay {
-        var display = display
-        for index in display.rows.indices {
-            guard let entry = entries.first(where: { $0.key == display.rows[index].key }),
-                  let field = repoField(entry, global: global) else { continue }
-            display.rows[index].fields.append(field)
-        }
-        return display
+        return RepoDetail.Gate(mode: RepoField(repoModeLabel, mode.title), record: record)
     }
 
     // MARK: symphony.yml

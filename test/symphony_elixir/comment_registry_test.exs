@@ -50,6 +50,21 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistryTest do
     assert {:error, :project_update_registry_unavailable} = CommentRegistry.reserve_project_update(nil, 1)
   end
 
+  test "reserve_document/2 counts its own slots and record_document/2 lists the run's documents" do
+    {:ok, pid} = CommentRegistry.start_link()
+
+    assert :ok = CommentRegistry.reserve_document(pid, 1)
+    assert {:error, {:document_cap_reached, 1}} = CommentRegistry.reserve_document(pid, 1)
+    assert :ok = CommentRegistry.release_document(pid)
+    assert :ok = CommentRegistry.reserve_document(pid, 1)
+    assert {:error, :document_registry_unavailable} = CommentRegistry.reserve_document(nil, 1)
+
+    assert :ok = CommentRegistry.record_document(pid, "doc-1")
+    assert :ok = CommentRegistry.record_document(pid, "doc-1")
+    assert CommentRegistry.document_ids(pid) == ["doc-1"]
+    assert CommentRegistry.document_ids(nil) == []
+  end
+
   test "reserve_subissue/2 refuses without a registry" do
     assert {:error, :subissue_registry_unavailable} = CommentRegistry.reserve_subissue(nil, 10)
   end

@@ -135,24 +135,25 @@ issues:
 - `linear.scope`: default Linear scope. Repo routes can narrow or replace this per repo.
 - `states.active`: issue states eligible for dispatch.
 - `states.terminal`: states that stop active runs and allow cleanup.
-- `states.waiting_on_sub_issues`: the state a `breakdown` parent waits in while its sub-tickets are
+- `states.waiting_on_sub_issues`: the state a plan ticket (label `plan`, or `breakdown`, its older
+  name) waits in while its sub-tickets are
   worked, default `Waiting on sub-tickets`; `null` turns it off. It counts as active without being
   listed in `states.active`, but an issue in it is dispatched only for the close-out run, once it is
-  a `breakdown` parent whose sub-tickets are all terminal. Any other ticket whose PR merges with a
+  a plan ticket whose sub-tickets are all terminal. Any other ticket whose PR merges with a
   sub-ticket still open moves here instead of `Done`, and its `Backlog` sub-tickets move to `Todo`;
   Symphony moves it to `Done` itself, with no run and a comment listing how each sub-ticket ended,
   once every sub-ticket is terminal; one a person moves here waits for them. With the state off it
   goes to `Done` on merge as before. Tickets that went `Done` before this wait existed are not
   revisited: `mix symphony.done_with_open_subtickets --config /path/to/symphony.yml` lists every
   parent in a terminal state with sub-tickets still open, without changing anything. When it cannot
-  read a repository, it names that repository above the list and exits non-zero. The breakdown
+  read a repository, it names that repository above the list and exits non-zero. The plan
   run ends with the parent in `In Review` and its sub-tickets in `Backlog`. A human approves the
   plan by moving the parent
   from `In Review` to this state, and on the next poll Symphony moves every sub-ticket still in
   `Backlog` to `Todo` (blocked-by links keep the order); moving the parent to `Rework` instead
-  cancels the sub-tickets the rejected breakdown run created and re-plans. Each batch is listed
+  cancels the sub-tickets the rejected plan run created and re-plans. Each batch is listed
   in one comment on the parent. Agents cannot move an issue here
-  (`linear_update_state` refuses it). On every poll Symphony also moves a `breakdown` parent it
+  (`linear_update_state` refuses it). On every poll Symphony also moves a plan ticket it
   finds `In Progress` with open sub-tickets of an approved plan here (some sub-ticket left
   `Backlog`), so `In Progress` only holds issues an agent is working, after a fresh read confirms it is still `In Progress`; that move is not an approval and
   promotes nothing, even if Symphony and the reviewer share one Linear user. Create it in Linear as a started state just
@@ -162,11 +163,11 @@ issues:
   Three ways a plan moves forward besides approval, and when each applies:
   - **Resume:** a parent in `Todo` or `In Progress` whose open sub-tickets are all still in
     `Backlog` (and none `Done`) was never approved, so it is neither held nor moved here: it gets
-    a `breakdown` run that picks the plan up from its workpad, keeps every artifact and sub-ticket
+    a plan run that picks the plan up from its workpad, keeps every artifact and sub-ticket
     already made, files what is left and moves the parent to `In Review`. Use it after a plan run
     stopped midway, for example on Linear's usage limit.
   - **Revise:** a person's comment on a parent in `In Review` whose plan is not approved moves it
-    to `In Progress`, and the `breakdown` run edits the plan in place: it rewrites the artifact
+    to `In Progress`, and the plan run edits the plan in place: it rewrites the artifact
     comments, updates, files or cancels `Backlog` sub-tickets (`linear_update_subissue` refuses
     any other), replies under each comment and moves the parent back to `In Review`. Only
     `In Review` triggers it: a comment on a parent in `Human Review` starts nothing (move it to
@@ -194,8 +195,8 @@ issues:
     `In Review`;
   - a `Final verification:` parent walkthrough passes, or is blocked with no failing step, and the
     QA agent says the checks left are manual;
-  - an agent moves a `breakdown` parent to `In Review` and its ticket says a human reviews the plan:
-    an `auto_review.acceptance_gate.escalate.labels` label other than `breakdown` (`needs-human`)
+  - an agent moves a plan ticket to `In Review` and its ticket says a human reviews the plan:
+    an `auto_review.acceptance_gate.escalate.labels` label other than `plan` and `breakdown` (`needs-human`)
     or a title or description matching one of its `ticket_patterns` ("must not auto-approve",
     "human review"; naming the `Human Review` state doesn't count, see
     [What escalates](acceptance_gate.md#what-escalates));
@@ -600,9 +601,9 @@ agent:
   a warning once per model. If the lookup fails, or OpenRouter does not list the model, the run
   starts anyway and logs a warning, so an OpenRouter outage does not block work.
 - `run_profiles.<kind>`: `model`, `effort` and/or `provider` for one kind of run. Kinds, first match wins:
-  `final_verification` (title starts with `Final verification:`), `breakdown` (`breakdown` parent in
-  `Rework`), `close_out` (`breakdown` parent whose sub-issues are all terminal), `breakdown` (other
-  `breakdown` parent: a new, resumed or revised plan), `landing` (`Merging`),
+  `final_verification` (title starts with `Final verification:`), `breakdown` (plan ticket in
+  `Rework`), `close_out` (plan ticket whose sub-issues are all terminal), `breakdown` (other
+  plan ticket: a new, resumed or revised plan), `landing` (`Merging`),
   `rework` (`Rework`), `ci_fix` (continuation after red CI), `review_feedback` (continuation after
   PR review comments), and `implementation` (everything else). `pre_push_review`, `qa` and
   `acceptance_gate` name the pre-push reviewer, QA agent and acceptance gate runs.
@@ -642,7 +643,7 @@ agent:
 
 - `concurrency.max_total` is the global dispatch cap.
 - `concurrency.epic_lanes` (default: `max_total`) is how many of those slots in-progress epics may
-  reserve. An epic is a `breakdown` parent in `Waiting on sub-tickets` with at least one
+  reserve. An epic is a plan ticket in `Waiting on sub-tickets` with at least one
   sub-ticket approved and not finished (anything but Backlog, Triage or a terminal state). Each
   one, in parent priority then age order, holds one lane: its sub-tickets run there one after
   another, and the lane stays reserved while the current part is landing, so the next part starts
@@ -676,11 +677,11 @@ agent:
   `breakdown`, `close_out`, `final_verification`), whether an agent or QA pass is `running` for it,
   what it `waiting_on` (`slot`, `human`, `ci`, `blocker` with the open `blockers`' identifiers,
   `usage_limit`, `paused`, `backlog`, or null) and a one-line `summary` such as
-  `implementation · running` or `implementation · waiting on blocker TP-12`. A forced `breakdown`
-  parent's phase is its current part's. The terminal and web dashboards show a "Forced" section
+  `implementation · running` or `implementation · waiting on blocker TP-12`. A forced plan
+  ticket's phase is its current part's. The terminal and web dashboards show a "Forced" section
   above the running agents (identifier, phase, waiting on, forced for), a ⚡ on forced rows elsewhere,
   and the forced count over `forced_max` in the header. When a forced ticket enters `In Review`
-  (for a `breakdown` parent, its plan), Symphony sends a `forced_human_gate` notification saying it
+  (for a plan ticket, its plan), Symphony sends a `forced_human_gate` notification saying it
   is waiting for your review, again each time it comes back to `In Review`. A ticket leaves the list
   at the next poll after the label is removed, it reaches a terminal state, or Linear no longer
   returns it; one that reaches a terminal state has the label removed by Symphony. The audit log
@@ -708,7 +709,7 @@ agent:
   links, a failed setup, retry backoff, the post-PR quiet period, auto-merge and `Merging` CI waits,
   and a usage-limit pause still hold it; when a usage-limit pause resumes, a held forced ticket
   goes out first.
-  A forced `breakdown` parent is one forced unit. Its breakdown, re-plan and close-out runs use the
+  A forced plan ticket is one forced unit. Its plan, re-plan and close-out runs use the
   allowance like any forced ticket. While it waits on its sub-tickets, one ticket on its epic path
   at a time (its sub-tickets at any depth and their open blockers, picked in epic-lane order, so
   blocked-by links keep their order; the `Final verification:` sub-ticket comes last) counts as
@@ -1000,6 +1001,10 @@ pull_requests:
 - `poll_interval_ms` is shared by PR review polling and CI polling when checks are enabled.
 - PR polling detects GitHub merge-conflict signals, deduplicates by head/base identity, and injects
   conflict-resolution context into the next prompt. The agent still owns the merge resolution.
+  A conflict on an issue an agent parked for a person (outside `tracker.active_states`, with the
+  `human_actions.label` label, `needs-human` or another `auto_review.acceptance_gate.escalate.labels`
+  label other than `plan` and `breakdown`) gets no state move, conflict-fix run or escalation, and
+  uses no retry, until a person removes the label or moves the issue to an active state.
 - `review_comments.ignored_reviewers` skips those accounts entirely. The Linear GitHub
   integration's linkback comment is always skipped: comments by `linear-code`, `linear-code[bot]`
   or `linear[bot]`, and any comment whose body starts with `<!-- linear-linkback -->`. Comments
@@ -1008,6 +1013,11 @@ pull_requests:
   with a hidden `<!-- symphony:agent -->` marker and skips those.
 - `checks.retry_failed_once` retries one likely-flaky failure before escalating.
 - `checks.max_fix_attempts` bounds automated CI rework.
+- A red head on an issue an agent parked for a person (outside `tracker.active_states`, with the
+  `human_actions.label` label, `needs-human` or another `auto_review.acceptance_gate.escalate.labels`
+  label other than `plan` and `breakdown`) gets no re-run, CI-fix run, escalation or state move,
+  and uses no fix attempt. The normal CI flow resumes once a person removes the label, moves the
+  issue to an active state, or the head turns green.
 - `checks.landing_wait_timeout_ms` bounds how long a `Merging` issue waits for CI. When a landing
   run ends with the PR head's checks pending, Symphony holds the issue in `Merging` and dispatches
   the landing agent again once the CI poller sees that head go green (a red head goes through the
@@ -1122,7 +1132,7 @@ instead of `In Review`, and the CI poller watches it there:
 - a PR that conflicts with its base and has no checks (GitHub runs no CI on it) goes to `Rework`
   with a comment saying which branch to merge in.
 
-Agents can no longer move the issue to `In Review` or `Human Review` themselves (a `breakdown` plan
+Agents can no longer move the issue to `In Review` or `Human Review` themselves (a plan
 or a `Final verification:` ticket, which open no PR, still can): `linear_update_state("In Review")`
 returns "Symphony moves the issue to Auto Review once the PR is open; leave the state as it is."
 
@@ -1261,7 +1271,7 @@ A parent's `Final verification:` sub-ticket gets a QA-only run instead of an exe
 the other sub-tickets have merged and the ticket is dispatched, Symphony runs the QA agent in a
 fresh worktree at the head of `origin/<base_branch>`, with the parent as the issue under test:
 it walks the parent's acceptance criteria and `## User walkthrough` plus the verification
-ticket's checklist (breakdown runs copy the walkthrough under `## Auto Review: parent
+ticket's checklist (plan runs copy the walkthrough under `## Auto Review: parent
 walkthrough`), and attaches its evidence to the parent. There is no PR to diff, so `qa:<kind>`
 labels on the ticket or the parent choose the playbooks, and every enabled playbook runs without
 one.
@@ -1491,6 +1501,8 @@ tools for it on the host, outside the sandbox, and checks every argument:
 | `qa_screenshot` | saves the app's on-screen windows to new files `qa-evidence/<name>.png` | a PID it did not launch, a window of another app, a name that already exists (file or symlink) |
 | `qa_ax_tree` | reads the accessibility tree (role, title, value, frame; never a secure field's value), filtered by `role` or `text`, capped in depth, nodes and size | a PID it did not launch |
 | `qa_ax_press`, `qa_ax_set_value` | press an element (or `AXRaise` a window) and set a field's value: a text field gets it typed in with key events sent to the app alone (brought to the front, focused, text selected, then Tab), so the app sees the edit; other controls get `AXValue` set | a PID it did not launch, a tab or line break for a single-line field |
+| `qa_resize_window` | the wide pass: moves the app's main window (or the `AXWindow` at `path`) to the top left of the screen and resizes it to `width`×`height` points (1400×900 by default), or the screen's usable area when that is smaller, with `AXSize` or else the window's zoom button; returns the window frame it reached, the screen and its usable area, and `limited` when that area is under 1400×900 pt | a PID it did not launch, a size under 1400×900 or over 8192 pt, a `path` that is not a window |
+| `qa_check_app` | says whether a launched app still runs (also after it exited), answers an accessibility request within 10 seconds (else it is hung), and has written a new `~/Library/Logs/DiagnosticReports/<executable>*` crash report since launch (read on the QA host for a `worker_host`), with each problem naming the `page` the agent passes and the window size `qa_resize_window` set | a PID it did not launch |
 | `qa_put_file` | puts a fixture file the agent wrote (a test `symphony.yml`, a `WORKFLOW.md`) where the app can open it and returns that path: the file's own path on this host, a copy in the run directory's `files/` on a `worker_host` | a file that resolves outside the worktree and the pass's `$TMPDIR`, a symlink, a directory or other non-regular file, a file with other hard links, a file over 1 MB, and a file replaced while it is read |
 
 At most three launched apps run at once, and every app still running is quit when the pass ends.
@@ -1500,6 +1512,20 @@ The playbook judges a window only after it settles: it waits about 10 seconds af
 opens, changes focus once, and then checks the sizes of the content and scroll areas in the
 accessibility tree, not just the window frame. A window that opens at full height and collapses
 seconds later fails, with the AX tree quoted and a screenshot attached.
+
+After the walkthrough at the app's default size, the playbook runs a **wide pass**, because some
+layout crashes only happen in wide windows: `qa_resize_window` makes the main window at least
+1400×900 pt, then on each page the PR changes, and on its inspector or side panel, the agent waits 30
+seconds with the app running and calls `qa_check_app`. The pass fails when the app exits, hangs (no
+accessibility answer for 10 seconds) or writes a new crash report, and the report names the page and
+the window size. The report's `Wide pass` step gives the window size, the screen size and the
+pages it covered. A QA screen whose usable area is under 1400×900 pt (a VM with a 1024×768 display)
+cannot run it at full size: the step says the wide pass was limited, and Symphony reports a `pass`
+from that screen as `blocked` for a person, so the acceptance gate escalates it (`qa_blocked`)
+instead of approving it. A `pass` with no `qa_resize_window` call at all is `blocked` too, with the
+reason that the wide pass did not run. Give the QA VM a larger display, for example
+`tart set symphony-qa --display 1920x1200`, and restart it. The resize needs no grant beyond the
+helper's Accessibility.
 
 The screenshot and accessibility tools run in a small helper app, `SymphonyQADriver.app`, which
 holds the Screen Recording and Accessibility grants. Symphony opens it through LaunchServices
@@ -1594,6 +1620,17 @@ host and the worktree checks still apply there. Then:
 - `qa_launch_app` starts that copy with only `SYMPHONY_BAR_QA_ROOT` and `SYMPHONY_QA_OPENROUTER_URL`
   set, over an SSH session that forwards the URL's loopback port on the QA host back to the
   OpenRouter stub on the Symphony host;
+- at the start of the pass Symphony picks three free loopback ports on the Symphony host and
+  hands them to the QA agent as `QA_HOST_PORTS` (in the prompt and its environment). It opens one
+  SSH session to the QA host that forwards each of them from the QA host's loopback to the same
+  port on the Symphony host (`ssh -o ExitOnForwardFailure=yes -R <port>:127.0.0.1:<port>`), and
+  closes it when the pass ends. The agent serves the app's stubs and proxies on `127.0.0.1` at
+  those ports, and the app uses `http://localhost:<port>`. Loopback works whatever address the QA
+  VM has (a bridged VM cannot reach the NAT address `bridge100` still has) and needs no macOS
+  Local Network permission, which an app connecting to a LAN address asks a person for. A port
+  the QA host refuses is retried with fresh ports; a tunnel that still cannot open makes the pass
+  `blocked` with the reason, and one that closes during the pass is reopened at the next
+  `qa_launch_app`, which fails with `qa_host_tunnel_failed` when it cannot;
 - the Swift helper is compiled there with `swiftc` on first use in each pass, into the run
   directory's `helper/`. Passes never share it: each PR's build runs as the QA user, and a helper
   it replaced could answer the permission, window and accessibility calls of later passes. There it
@@ -1963,8 +2000,18 @@ port range.
 Auto Review's `web` playbook starts the same dev server, from a worktree at the PR head, for each web QA pass
 (see [Web app QA](#web-app-qa)).
 
-`start_cmd` runs on the host as your user, outside the agent sandbox, and usually runs files the
-agent can change (see [security](security.md#verification-dev-server-runs-on-the-host)).
+`start_cmd` runs the checkout's code, which the agent can change, so Symphony runs it with
+`sh -lc` under macOS Seatbelt, or bubblewrap (`bwrap`) on Linux, with the agent's credential
+read-deny list, writes limited to the
+checkout, a temp folder of its own and the agent cache folder, the agent's environment, and
+network limited to loopback and, through a proxy Symphony sets as `HTTPS_PROXY`, the dependency
+hosts on `agent.permissions.network`'s allowlist, an allowlist of mach services like the agent's
+(no window server, no pasteboard), and no way to have launchd start a process outside the
+sandbox (Apple Events, `open`, `launchctl submit`) (see
+[security](security.md#verification-dev-server-runs-in-a-sandbox)). On Linux the network is a
+namespace of its own, bridged by `socat` to the host's loopback for the server's port and the
+proxy only, and the mach service and launchd limits don't apply. Without `bwrap` and `socat`, or
+on another system, the dev server does not start.
 
 ### `workers`
 
@@ -2072,7 +2119,7 @@ lists:
   `Backlog` stays in `Backlog`;
 - an issue with the label and no such comment, as a task in itself (its description's list items
   become the steps);
-- a `breakdown` parent in `In Review` or `Human Review`, waiting for its plan to be approved;
+- a plan ticket in `In Review` or `Human Review`, waiting for its plan to be approved;
 - an issue in `In Review` or `Human Review` whose `## Symphony QA Report` has the verdict `blocked`;
 - a `Final verification:` ticket whose Auto Review parent walkthrough had the verdict `blocked`,
   such as a QA host without the macOS app's Screen Recording and Accessibility permissions. It is
@@ -2156,7 +2203,7 @@ health set by the project's previous update. No secret value reaches an update:
 `linear_request_human_action` refuses any field that holds a secret pattern, and the whole update
 is redacted again before it is posted, which covers secrets pasted into an issue or comment by hand.
 
-A rendered example, for a mix of a missing secret, a breakdown plan, a hand-labelled task and a
+A rendered example, for a mix of a missing secret, a plan, a hand-labelled task and a
 blocked QA pass:
 
 ```md
@@ -2175,7 +2222,7 @@ blocked QA pass:
 
 **Done when:** you remove the `human-action` label from MOT-24, or move it on once it is unblocked.
 
-### 2. Approve the breakdown plan for MOT-40
+### 2. Approve the plan for MOT-40
 
 **~10 min** · Unblocks [MOT-40](https://linear.app/acme/issue/MOT-40): its sub-tickets, waiting in Backlog
 
