@@ -32,7 +32,9 @@ public enum UpdateHealthFailure: Equatable {
 /// 3. Until `crashWindow` after the update, an unexpected exit starts Symphony again, so a crash loop can be counted;
 ///    the `crashLimit`th one fails. After the window an exit is left alone, as outside an update.
 ///
-/// A failure asks the app to roll back. When the app doesn't start Symphony, only the config check runs.
+/// Once the config check passed and Symphony answered (or the app doesn't start it), the update counts as healthy: the
+/// app records it and says so, once. A crash loop in the window after that still rolls it back. A failure asks the app
+/// to roll back. When the app doesn't start Symphony, only the config check runs.
 public struct UpdateHealthCheck: Equatable {
     public static let answerTimeout = RestartMachine.answerTimeout
     public static let crashWindow: TimeInterval = 10 * 60
@@ -69,6 +71,8 @@ public struct UpdateHealthCheck: Equatable {
         case checkConfig
         /// Start Symphony, then report `.started` or `.notStarted`.
         case start
+        /// Symphony works on the new build: record the update and say so. Comes once per check.
+        case healthy
         /// Put the previous build back.
         case rollBack(UpdateHealthFailure)
     }
@@ -79,6 +83,7 @@ public struct UpdateHealthCheck: Equatable {
     public private(set) var unexpectedExits = 0
 
     private var startsSymphony = false
+    private var reportedHealthy = false
     private var windowEnd = Date.distantPast
     private var answerDeadline = Date.distantPast
 
@@ -117,7 +122,7 @@ public struct UpdateHealthCheck: Equatable {
         case (.checkingConfig, .configChecked(.passed)):
             guard startsSymphony else {
                 phase = .passed
-                return []
+                return healthy()
             }
             phase = .starting
             return [.start]
@@ -127,13 +132,10 @@ public struct UpdateHealthCheck: Equatable {
             answerDeadline = now.addingTimeInterval(Self.answerTimeout)
             return []
 
-        case (.starting, .notStarted), (.waitingForAnswer, .exited(requested: true)):
+        case (.starting, .notStarted), (.waitingForAnswer, .exited(requested: true)),
+            (.waitingForAnswer, .polled(.state)):
             watch(now: now)
-            return []
-
-        case (.waitingForAnswer, .polled(.state)):
-            watch(now: now)
-            return []
+            return healthy()
 
         case (.waitingForAnswer, .polled):
             return now >= answerDeadline ? fail(.noAnswer) : []
@@ -173,6 +175,13 @@ public struct UpdateHealthCheck: Equatable {
         phase = now >= windowEnd ? .passed : .watching
     }
 
+    /// `.healthy` the first time the check stops holding, nothing after a restart in the window.
+    private mutating func healthy() -> [Effect] {
+        guard !reportedHealthy else { return [] }
+        reportedHealthy = true
+        return [.healthy]
+    }
+
     private mutating func fail(_ failure: UpdateHealthFailure) -> [Effect] {
         phase = .failed(failure)
         return [.rollBack(failure)]
@@ -192,13 +201,23 @@ public struct RollbackRecord: Equatable {
     public var startSymphony: Bool
     /// The update paused dispatch, so the restored app resumes it once Symphony answers.
     public var resumeDispatch: Bool
+    /// The rolled-back release's notes, page and change count, which its menu line opens.
+    public var details: ReleaseDetails
 
-    public init(build: Int, version: String, reason: String, startSymphony: Bool, resumeDispatch: Bool) {
+    public init(
+        build: Int,
+        version: String,
+        reason: String,
+        startSymphony: Bool,
+        resumeDispatch: Bool,
+        details: ReleaseDetails = ReleaseDetails()
+    ) {
         self.build = build
         self.version = version
         self.reason = reason
         self.startSymphony = startSymphony
         self.resumeDispatch = resumeDispatch
+        self.details = details
     }
 
     /// False when the relaunched app is still the build that failed: the swap didn't happen.
@@ -218,16 +237,14 @@ public final class RollbackStore {
     }
 
     public func save(_ record: RollbackRecord) {
-        defaults.set(
-            [
-                "build": record.build,
-                "version": record.version,
-                "reason": record.reason,
-                "startSymphony": record.startSymphony,
-                "resumeDispatch": record.resumeDispatch,
-            ] as [String: Any],
-            forKey: Self.key
-        )
+        let values: [String: Any] = [
+            "build": record.build,
+            "version": record.version,
+            "reason": record.reason,
+            "startSymphony": record.startSymphony,
+            "resumeDispatch": record.resumeDispatch,
+        ]
+        defaults.set(values.merging(record.details.storedValues) { first, _ in first }, forKey: Self.key)
     }
 
     public func clear() {
@@ -250,7 +267,8 @@ public final class RollbackStore {
             version: version,
             reason: reason,
             startSymphony: startSymphony,
-            resumeDispatch: resumeDispatch
+            resumeDispatch: resumeDispatch,
+            details: ReleaseDetails(stored: values)
         )
     }
 }
