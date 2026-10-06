@@ -37,8 +37,6 @@ defmodule SymphonyElixir.CiPoller do
   # commits change an agent-protected path until a person adds the waiver label.
   @human_only_checks ["protected paths"]
   @waiver_label "protected-paths-approved"
-  # Asks for a person whatever the acceptance gate's `escalate.labels` say (see `await_human_action/6`).
-  @needs_human_label "needs-human"
   # How long a `Merging` head waits on checks its base branch doesn't require before it may land
   # without them (see `track_landing_wait/4`).
   @landing_fallback_ms 15 * 60_000
@@ -771,9 +769,14 @@ defmodule SymphonyElixir.CiPoller do
     issue_id = Map.get(record, :issue_id)
 
     case read_issue(issue_id, opts) do
-      {:ok, %Issue{} = issue} -> if parked_issue?(issue, settings), do: {:parked, issue}, else: :not_parked
-      {:ok, nil} -> :not_parked
-      {:error, reason} -> {:error, reason}
+      {:ok, %Issue{} = issue} ->
+        if HumanReview.parked_for_person?(issue, settings), do: {:parked, issue}, else: :not_parked
+
+      {:ok, nil} ->
+        :not_parked
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -787,20 +790,6 @@ defmodule SymphonyElixir.CiPoller do
           {:ok, Enum.find(issues, &match?(%Issue{id: ^issue_id}, &1))}
         end
     end
-  end
-
-  defp parked_issue?(%Issue{labels: labels} = issue, settings) do
-    wanted = MapSet.new(person_labels(settings), &normalize_state_name/1)
-
-    not issue_in_states?(issue, settings.tracker.active_states) and
-      Enum.any?(labels || [], &(is_binary(&1) and MapSet.member?(wanted, normalize_state_name(&1))))
-  end
-
-  # `plan` and `breakdown` are acceptance gate labels every plan carries, not a request for a
-  # person (see `HumanReview.requested_by_ticket?/2`).
-  defp person_labels(settings) do
-    [settings.human_actions.label, @needs_human_label | settings.auto_review.acceptance_gate.escalate.labels]
-    |> Enum.reject(&Issue.breakdown_label?/1)
   end
 
   # A fix run can't clear a human-only check, so the issue stays where it is (the agent that

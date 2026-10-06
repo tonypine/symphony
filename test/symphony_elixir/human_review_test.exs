@@ -116,6 +116,20 @@ defmodule SymphonyElixir.HumanReviewTest do
     end
   end
 
+  describe "parked_for_person?/2" do
+    test "is true outside the active states with a label that asks for a person" do
+      settings = Config.settings!()
+      parked = %Issue{state: "Backlog", labels: ["Human-Action"]}
+
+      assert HumanReview.parked_for_person?(parked, settings)
+      assert HumanReview.parked_for_person?(%{parked | labels: [" needs-human "]}, settings)
+      assert HumanReview.parked_for_person?(%{parked | state: nil}, settings)
+      refute HumanReview.parked_for_person?(%{parked | state: " in progress "}, settings)
+      refute HumanReview.parked_for_person?(%{parked | labels: ["plan", "breakdown", nil]}, settings)
+      refute HumanReview.parked_for_person?(%{parked | labels: nil}, settings)
+    end
+  end
+
   describe "check_tracker_state/3" do
     test "keeps the state on when Linear has it" do
       Process.put(:human_review_state_result, {:ok, true})

@@ -1001,6 +1001,10 @@ pull_requests:
 - `poll_interval_ms` is shared by PR review polling and CI polling when checks are enabled.
 - PR polling detects GitHub merge-conflict signals, deduplicates by head/base identity, and injects
   conflict-resolution context into the next prompt. The agent still owns the merge resolution.
+  A conflict on an issue an agent parked for a person (outside `tracker.active_states`, with the
+  `human_actions.label` label, `needs-human` or another `auto_review.acceptance_gate.escalate.labels`
+  label other than `plan` and `breakdown`) gets no state move, conflict-fix run or escalation, and
+  uses no retry, until a person removes the label or moves the issue to an active state.
 - `review_comments.ignored_reviewers` skips those accounts entirely. The Linear GitHub
   integration's linkback comment is always skipped: comments by `linear-code`, `linear-code[bot]`
   or `linear[bot]`, and any comment whose body starts with `<!-- linear-linkback -->`. Comments
