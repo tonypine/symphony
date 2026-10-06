@@ -14,7 +14,9 @@ defmodule SymphonyElixir.Verification.LoopbackBridgeTest do
   @tag :unix_socket
   test "copies a loopback connection to the unix socket and back", %{socket: socket, port: port} do
     {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, ip: {:local, socket}])
-    bridge = start_supervised!({LoopbackBridge, port: port, socket: socket})
+    # `:temporary`, so the test supervisor does not restart the bridge after the stop below and
+    # re-listen on the port, which would make the `econnrefused` assertion race the restart.
+    bridge = start_supervised!({LoopbackBridge, port: port, socket: socket}, restart: :temporary)
 
     {:ok, client} = :gen_tcp.connect(~c"127.0.0.1", port, [:binary, active: false])
     {:ok, server} = :gen_tcp.accept(listen, 5_000)
