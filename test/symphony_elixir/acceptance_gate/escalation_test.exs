@@ -52,6 +52,7 @@ defmodule SymphonyElixir.AcceptanceGate.EscalationTest do
   test "label" do
     assert check(issue: issue(labels: ["feature", " Needs-Human "])) == [%{rule: :label, detail: "the issue is labelled ` Needs-Human `"}]
     assert check(issue: issue(labels: ["needs-human", "breakdown"])) == [%{rule: :label, detail: "the issue is labelled `needs-human`; the issue is labelled `breakdown`"}]
+    assert check(issue: issue(labels: ["Plan"])) == [%{rule: :label, detail: "the issue is labelled `Plan`"}]
     assert check(issue: issue(labels: ["risky"]), rules: rules(labels: ["risky"])) == [%{rule: :label, detail: "the issue is labelled `risky`"}]
   end
 

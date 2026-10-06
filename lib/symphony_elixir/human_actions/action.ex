@@ -7,7 +7,7 @@ defmodule SymphonyElixir.HumanActions.Action do
 
   - `:request`: an `## Action needed:` comment (`linear_request_human_action`, or written by hand);
   - `:task`: an issue carrying the `human_actions.label` label with no request comment;
-  - `:plan_review`: a `breakdown` parent waiting in `In Review` for its plan to be approved;
+  - `:plan_review`: a plan parent waiting in `In Review` for its plan to be approved;
   - `:qa_blocked`: an issue whose latest QA report says Auto Review was `blocked`;
   - `:human_review`: an issue waiting in the Human Review state with no other action;
   - `:verification_blocked`: a `Final verification:` ticket whose Auto Review parent walkthrough

@@ -46,6 +46,19 @@ defmodule SymphonyElixir.PlaybookTest do
     refute body =~ "A human\n   promotes the sub-tickets to `Todo`."
   end
 
+  test "the rendered prompt names the `plan` label, with `breakdown` as its older name" do
+    template = Solid.parse!(~s({% render "status_map" %}\n{% render "parent_tickets" %}))
+    {:ok, rendered, []} = Solid.render(template, %{}, file_system: {FileSystem, nil})
+    prompt = rendered |> IO.iodata_to_binary() |> String.replace(~r/\s+/, " ")
+
+    assert prompt =~ "The `plan` label is a human's signal that a ticket is a plan ticket"
+    assert prompt =~ "`breakdown` is the label's older name and is still accepted"
+    assert prompt =~ "when the ticket has the `plan` label, and when its title starts with `Final verification:`"
+    assert prompt =~ "`Waiting on sub-tickets` -> a plan ticket (label `plan`, or `breakdown`, its older name)"
+    assert prompt =~ "### Plan run (no `Sub-issues` in the issue context"
+    refute prompt =~ "The `breakdown` label is"
+  end
+
   test "parent_tickets resumes a stopped plan and revises one under review without re-planning" do
     assert {:ok, body} = Playbook.fetch("parent_tickets")
     flat = String.replace(body, ~r/\s+/, " ")

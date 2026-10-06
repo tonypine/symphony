@@ -73,7 +73,7 @@ defmodule SymphonyElixir.ForcedStatus do
     "auto_review" => "Auto Review",
     "waiting_for_human" => "waiting for a human",
     "landing" => "landing",
-    "breakdown" => "breakdown",
+    "breakdown" => "plan",
     "close_out" => "close-out",
     "final_verification" => "final verification"
   }
