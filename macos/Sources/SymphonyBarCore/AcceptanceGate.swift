@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 /// `auto_review.acceptance_gate.mode`, the acceptance gate's kill switch, as `docs/acceptance_gate.md` describes it.
@@ -152,6 +153,23 @@ public enum AcceptanceGate {
         let all = keys + agreement.keys.filter { !keys.contains($0) }.sorted()
         guard !all.isEmpty else { return [noRecordLine] }
         return all.map { "\($0): \(agreementLine(agreement[$0]))" }
+    }
+
+    /// The Edit Repo sheet's stats line for one repository, refreshed with each state poll while the sheet is open,
+    /// as Settings' lines are.
+    public final class RepoAgreement: ObservableObject {
+        public let key: String
+        /// Symphony's latest state, nil while it isn't answering.
+        @Published public var state: StateSnapshot?
+
+        public init(key: String, state: StateSnapshot?) {
+            self.key = key
+            self.state = state
+        }
+
+        public var line: String {
+            AcceptanceGate.agreementLine(for: key, in: state)
+        }
     }
 
     // MARK: Status menu kill switch

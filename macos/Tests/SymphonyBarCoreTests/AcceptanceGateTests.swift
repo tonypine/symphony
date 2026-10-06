@@ -1,3 +1,4 @@
+import Combine
 import XCTest
 @testable import SymphonyBarCore
 
@@ -337,6 +338,22 @@ final class AcceptanceGateTests: XCTestCase {
         XCTAssertEqual(AcceptanceGate.agreementLine(for: "web", in: snapshot), AcceptanceGate.noRecordLine)
         XCTAssertEqual(AcceptanceGate.agreementLine(for: "symphony", in: nil), "Start Symphony to see the gate's record.")
         XCTAssertEqual(AcceptanceGate.agreementLine(for: "symphony", in: StateSnapshot()), AcceptanceGate.unsupportedLine)
+    }
+
+    func testTheEditSheetLineFollowsEachPoll() {
+        let agreement = AcceptanceGate.RepoAgreement(key: "symphony", state: StateSnapshot(gateAgreement: ["symphony": notReady]))
+        XCTAssertEqual(agreement.line, AcceptanceGate.agreementLine(notReady))
+
+        var changes = 0
+        let observer = agreement.objectWillChange.sink { changes += 1 }
+        let ready = StateSnapshot.GateAgreement(judged: 24, agreed: 23, agreementRate: 0.958, readyToEnforce: true)
+        agreement.state = StateSnapshot(gateAgreement: ["symphony": ready])
+        XCTAssertEqual(changes, 1)
+        XCTAssertEqual(agreement.line, "24 judged · 96% agreement · 0 unsafe approvals · ready to enforce")
+
+        agreement.state = nil
+        XCTAssertEqual(agreement.line, AcceptanceGate.notRunningLine)
+        observer.cancel()
     }
 
     func testSettingsLinesListEachRepository() {
