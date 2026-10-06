@@ -1609,10 +1609,12 @@ Playbook line:
 - A body line that is exactly `{% render "playbook" %}`, apart from surrounding whitespace, MUST be
   expanded when the workflow is loaded, before the template is parsed. It becomes Symphony's
   playbook partials, each as a `{% render %}` line on its slot (continuation_context 10,
-  issue_context 20, default_posture 30, scoped_tools 40, status_map 50, pr_feedback_sweep 60,
-  ci_triage 70, escape_hatches 80, parent_tickets 90, completion_bar 100, guardrails 110,
-  out_of_scope_backlog 120, dependency_guardrail 130, workpad_template 140), merged with the repo's
-  instruction files, ordered by number. Sections are joined with a blank line.
+  issue_context 20, default_posture 30, scoped_tools 40, status_map 50, ticket_types 52,
+  pr_feedback_sweep 60, ci_triage 70, escape_hatches 80, parent_tickets 90, review_brief 95,
+  completion_bar 100, guardrails 110, out_of_scope_backlog 120, dependency_guardrail 130,
+  workpad_template 140), merged with the repo's instruction files, ordered by number. Sections are
+  joined with a blank line. `ticket_types` renders with a left-trimming tag (`{%- render %}`), so it
+  adds nothing, not even a blank line, for an untyped ticket.
 - Instruction files are the files named `<digits>-<name>.md` in the directory
   `playbook.instructions` names, relative to the workflow file (default `.symphony/instructions`).
   A file's number is its slot; on a tie the partial comes first, and files with the same number

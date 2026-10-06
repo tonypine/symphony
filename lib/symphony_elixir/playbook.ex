@@ -51,6 +51,7 @@ defmodule SymphonyElixir.Playbook do
     {"default_posture", 30},
     {"scoped_tools", 40},
     {"status_map", 50},
+    {"ticket_types", 52},
     {"pr_feedback_sweep", 60},
     {"ci_triage", 70},
     {"escape_hatches", 80},
