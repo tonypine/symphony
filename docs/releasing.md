@@ -117,3 +117,9 @@ same check locally (cwd is `macos/`, after the commands above):
 ```bash
 ../scripts/release/smoke_test.sh build/Symphony.app/Contents/Resources/symphony "$PWD/../symphony.yml"
 ```
+
+The release workflow runs only on pushes to `main`, so pull request CI (`make-all`'s `build`
+job) runs the same script on the escript, without the service step only the Burrito binary
+needs. Locally, `make smoke` does the same. The script gives each run a fresh `HOME` and
+creates an empty git repo there at every `repo: ~/...` path the config names, since
+`symphony check` rejects a `strategy: worktree` repo that doesn't exist.
