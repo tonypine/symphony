@@ -98,6 +98,17 @@ Symphony refuses non-loopback binds unless `SYMPHONY_ALLOW_REMOTE_BIND=1`. The c
 this so the container can bind `0.0.0.0:4000` and let Docker publish the port — but the host port
 is bound to `127.0.0.1` only. Put authentication in front of it if you change that.
 
+## Verification dev server
+
+The image ships `bwrap` and `socat`, which run `verification.dev_server.start_cmd` in a sandbox
+(see [Verification dev server runs in a sandbox](../docs/security.md#verification-dev-server-runs-in-a-sandbox)).
+`bwrap` needs unprivileged user namespaces, which Docker's default seccomp profile refuses, so
+under the shipped compose file the dev server does not start: an agent run with a dev server
+fails with `verification_failed` before its first turn, and an Auto Review `web` pass is
+`blocked`.
+Allowing them (for example `security_opt: [seccomp=unconfined]`) weakens the container's own
+isolation; decide that for your host.
+
 ## Linux UID matching
 
 On Linux, files written into bind-mounted repo paths inherit the container UID (`1000` by default).

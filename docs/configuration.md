@@ -1001,6 +1001,10 @@ pull_requests:
 - `poll_interval_ms` is shared by PR review polling and CI polling when checks are enabled.
 - PR polling detects GitHub merge-conflict signals, deduplicates by head/base identity, and injects
   conflict-resolution context into the next prompt. The agent still owns the merge resolution.
+  A conflict on an issue an agent parked for a person (outside `tracker.active_states`, with the
+  `human_actions.label` label, `needs-human` or another `auto_review.acceptance_gate.escalate.labels`
+  label other than `plan` and `breakdown`) gets no state move, conflict-fix run or escalation, and
+  uses no retry, until a person removes the label or moves the issue to an active state.
 - `review_comments.ignored_reviewers` skips those accounts entirely. The Linear GitHub
   integration's linkback comment is always skipped: comments by `linear-code`, `linear-code[bot]`
   or `linear[bot]`, and any comment whose body starts with `<!-- linear-linkback -->`. Comments
@@ -1009,6 +1013,11 @@ pull_requests:
   with a hidden `<!-- symphony:agent -->` marker and skips those.
 - `checks.retry_failed_once` retries one likely-flaky failure before escalating.
 - `checks.max_fix_attempts` bounds automated CI rework.
+- A red head on an issue an agent parked for a person (outside `tracker.active_states`, with the
+  `human_actions.label` label, `needs-human` or another `auto_review.acceptance_gate.escalate.labels`
+  label other than `plan` and `breakdown`) gets no re-run, CI-fix run, escalation or state move,
+  and uses no fix attempt. The normal CI flow resumes once a person removes the label, moves the
+  issue to an active state, or the head turns green.
 - `checks.landing_wait_timeout_ms` bounds how long a `Merging` issue waits for CI. When a landing
   run ends with the PR head's checks pending, Symphony holds the issue in `Merging` and dispatches
   the landing agent again once the CI poller sees that head go green (a red head goes through the
@@ -1991,14 +2000,17 @@ Auto Review's `web` playbook starts the same dev server, from a worktree at the 
 (see [Web app QA](#web-app-qa)).
 
 `start_cmd` runs the checkout's code, which the agent can change, so Symphony runs it with
-`sh -lc` under macOS Seatbelt, with the agent's credential read-deny list, writes limited to the
+`sh -lc` under macOS Seatbelt, or bubblewrap (`bwrap`) on Linux, with the agent's credential
+read-deny list, writes limited to the
 checkout, a temp folder of its own and the agent cache folder, the agent's environment, and
 network limited to loopback and, through a proxy Symphony sets as `HTTPS_PROXY`, the dependency
 hosts on `agent.permissions.network`'s allowlist, an allowlist of mach services like the agent's
 (no window server, no pasteboard), and no way to have launchd start a process outside the
 sandbox (Apple Events, `open`, `launchctl submit`) (see
-[security](security.md#verification-dev-server-runs-in-a-sandbox)). Off macOS the dev server does
-not start.
+[security](security.md#verification-dev-server-runs-in-a-sandbox)). On Linux the network is a
+namespace of its own, bridged by `socat` to the host's loopback for the server's port and the
+proxy only, and the mach service and launchd limits don't apply. Without `bwrap` and `socat`, or
+on another system, the dev server does not start.
 
 ### `workers`
 

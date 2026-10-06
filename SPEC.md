@@ -823,7 +823,12 @@ affect CI escalation. A head whose only failed check is `protected paths` gets n
 flaky re-run, no CI-fix run and no escalation, and uses no fix attempt: only a person clears that
 check, with the `protected-paths-approved` label, so the issue stays where it is until the check
 passes. When another check fails beside it, the CI-fix run's prompt names `protected paths` as not
-the agent's to fix.
+the agent's to fix. A red head on an issue parked for a person, outside `tracker.active_states`
+with the `human_actions.label` label, `needs-human` or another
+`auto_review.acceptance_gate.escalate.labels` label other than `plan` and `breakdown`, gets the
+same: no re-run, CI-fix run, escalation or state move, and no fix attempt used. The normal flow
+resumes once a person removes the label, moves the issue to an active state, or the head turns
+green.
 
 #### 5.4.7 `github` (object)
 
@@ -2152,7 +2157,12 @@ The poller:
   already-answered comment is not replied to twice;
 - detects GitHub merge conflict signals (`mergeable == "CONFLICTING"` or
   `mergeStateStatus == "DIRTY"`), deduplicates by head/base identity, stores conflict context,
-  and moves the issue back to `In Progress` for agent-owned conflict resolution;
+  and moves the issue back to `In Progress` for agent-owned conflict resolution; a conflict on an
+  issue parked for a person (outside `tracker.active_states` with the `human_actions.label` label,
+  `needs-human` or another `auto_review.acceptance_gate.escalate.labels` label other than `plan`
+  and `breakdown`, as for a red head in the CI poller) is recorded as
+  `conflict_awaiting_human_action` with no state move, conflict-fix run or escalation and no retry
+  used, until a person removes the label or moves the issue to an active state;
 - moves the issue back to `In Progress` when GitHub reports approval so the orchestrator starts
   the merge/landing workflow through the normal run path;
 - removes tracked workspaces and durable review records when PRs merge, close, or remain idle
@@ -2177,6 +2187,12 @@ The poller:
   forever. It logs `Ignoring stale check <name> in completed run <id>`. A check in a run that
   completed with any other conclusion stays as reported. To see this, a head whose rollup has no
   failed check and only GitHub Actions checks left unfinished also reads the head's workflow runs.
+- leaves out the checks of a GitHub Actions run whose every check on the head was cancelled while
+  another run of the same workflow on the head reported a check that wasn't (a duplicate run a
+  concurrency group cancelled): the other run says how the head's CI went, so such a run starts
+  no rerun and no CI-fix run. It logs `Ignoring the checks of cancelled run(s) <ids> superseded by
+  another run of the same workflow`. When every run of the workflow was cancelled, or a cancelled
+  job sits beside others in its own run, the cancelled checks still read as a failure.
 - reads a landing's head (the `Merging` wait, the release of a held landing run, and the merge
   tool) against the checks its base branch requires: a head still waiting on a check, with none
   failed, also reads the required status checks of the base branch's rulesets

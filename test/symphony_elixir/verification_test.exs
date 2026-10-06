@@ -4,7 +4,7 @@ defmodule SymphonyElixir.VerificationTest do
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Verification.DevServer, as: DevServerConfig
   alias SymphonyElixir.Verification
-  alias SymphonyElixir.Verification.{DevServer, PortPool}
+  alias SymphonyElixir.Verification.{DevServer, DevServerSandbox, PortPool}
 
   setup do
     stop_verification_port_pool()
@@ -272,7 +272,7 @@ defmodule SymphonyElixir.VerificationTest do
                  config: config,
                  env: Verification.env(%{port: port}),
                  owner: self(),
-                 sandbox: [os_type: {:unix, :darwin}, executable: sandbox_exec]
+                 sandbox: [os_type: {:unix, :darwin}, executable: sandbox_exec, check_confinement: false]
                )
 
       assert ["-p", profile, "/bin/sh", "-lc", start_cmd, ""] = record |> File.read!() |> String.split("\0")
@@ -320,18 +320,83 @@ defmodule SymphonyElixir.VerificationTest do
       refute http_ok?("http://127.0.0.1:#{port}/")
     end
 
-    test "does not start the command when there is no sandbox", %{workspace: workspace, config: config, port: port} do
-      assert {:error, {:verification_failed, {:dev_server_sandbox_unavailable, {:unix, :linux}}}} =
+    test "does not start the command when there is no sandbox", %{root: root, workspace: workspace, config: config, port: port} do
+      bwrap = Path.join(root, "missing-bwrap")
+
+      assert {:error, {:verification_failed, {:dev_server_sandbox_unavailable, {:not_found, ^bwrap}}}} =
                DevServer.start(
                  run_id: "unsandboxed-run",
                  port: port,
                  workspace: workspace,
                  config: config,
                  env: Verification.env(%{port: port}),
-                 sandbox: [os_type: {:unix, :linux}]
+                 sandbox: [os_type: {:unix, :linux}, bwrap: bwrap]
                )
 
       refute File.exists?(Path.join(workspace, "dev-server-env.txt"))
+    end
+
+    test "removes the folders bwrap made in the checkout once it stops", %{root: root, workspace: workspace, config: config, port: port} do
+      bwrap = Path.join(root, "bwrap")
+      socat = Path.join(root, "socat")
+
+      # Passes the probe, makes the placeholders as bwrap does, then runs the command unsandboxed.
+      File.write!(bwrap, """
+      #!/bin/sh
+      for arg; do last=$arg; done
+      [ "$last" = ":" ] && exit 0
+      while [ "$1" != /bin/sh ]; do
+        [ "$1" = --remount-ro ] && mkdir -p "$2"
+        shift
+      done
+      exec "$@"
+      """)
+
+      File.write!(socat, "#!/bin/sh\nexit 0\n")
+      Enum.each([bwrap, socat], &File.chmod!(&1, 0o755))
+
+      assert {:ok, pid} =
+               DevServer.start(
+                 run_id: "placeholder-run",
+                 port: port,
+                 workspace: workspace,
+                 config: config,
+                 env: Verification.env(%{port: port}),
+                 owner: self(),
+                 sandbox: [os_type: {:unix, :linux}, bwrap: bwrap, socat: socat],
+                 # Short enough for socat's unix sockets in a nested `TMPDIR`.
+                 tmp_bases: [System.tmp_dir!()]
+               )
+
+      assert File.dir?(Path.join(workspace, ".claude"))
+      assert :ok = DevServer.stop(pid)
+      refute File.exists?(Path.join(workspace, ".claude"))
+      refute File.exists?(Path.join(workspace, ".ai"))
+    end
+
+    @tag :bwrap
+    test "serves on its loopback port from inside bwrap", %{workspace: workspace, config: config, port: port} do
+      assert {:ok, pid} =
+               DevServer.start(
+                 run_id: "bwrap-run",
+                 port: port,
+                 workspace: workspace,
+                 config: %{config | health_timeout_ms: 30_000, stop_timeout_ms: 5_000},
+                 env: Verification.env(%{port: port}),
+                 owner: self(),
+                 sandbox: [os_type: {:unix, :linux}]
+               )
+
+      # Each request crosses two socat bridges, so it gets longer than `http_ok?/1`'s 100 ms.
+      assert {:ok, %{status: 200, body: env}} = Req.get("http://127.0.0.1:#{port}/dev-server-env.txt", receive_timeout: 5_000, retry: false)
+      assert env =~ "SYMPHONY_VERIFICATION_PORT=#{port}\n"
+      assert File.dir?(Path.join(workspace, ".claude"))
+
+      # Under 5 s: the stop signal ends the sandbox, without the KILL that follows `stop_timeout_ms`.
+      assert {stop_us, :ok} = :timer.tc(fn -> DevServer.stop(pid) end)
+      assert stop_us < 4_000_000, "stopping took #{div(stop_us, 1_000)} ms"
+      refute http_ok?("http://127.0.0.1:#{port}/")
+      refute File.exists?(Path.join(workspace, ".claude"))
     end
 
     test "does not start without a temp folder of its own", %{root: root, workspace: workspace, config: config, port: port} do
@@ -349,21 +414,28 @@ defmodule SymphonyElixir.VerificationTest do
                )
     end
 
+    # Where Seatbelt can't keep a listener on loopback, the dev server doesn't start instead.
     @tag :seatbelt
     test "serves from inside the real sandbox", %{workspace: workspace, config: config, port: port} do
-      assert {:ok, pid} =
-               DevServer.start(
-                 run_id: "seatbelt-run",
-                 port: port,
-                 workspace: workspace,
-                 config: config,
-                 env: Verification.env(%{port: port}),
-                 owner: self(),
-                 sandbox: []
-               )
+      start =
+        DevServer.start(
+          run_id: "seatbelt-run",
+          port: port,
+          workspace: workspace,
+          config: config,
+          env: Verification.env(%{port: port}),
+          owner: self(),
+          sandbox: []
+        )
 
-      assert http_ok?("http://127.0.0.1:#{port}/")
-      assert :ok = DevServer.stop(pid)
+      if loopback_confined?(workspace) do
+        assert {:ok, pid} = start
+        assert http_ok?("http://127.0.0.1:#{port}/")
+        assert :ok = DevServer.stop(pid)
+      else
+        assert {:error, {:verification_failed, {:dev_server_sandbox_unconfined, :non_loopback_bind_allowed}}} = start
+        refute File.exists?(Path.join(workspace, "dev-server-env.txt"))
+      end
     end
 
     # Builds this checkout with `mix build` (in `_build/dev` and `bin/`), fetching its deps, before
@@ -381,19 +453,24 @@ defmodule SymphonyElixir.VerificationTest do
         stop_timeout_ms: 5_000
       }
 
-      assert {:ok, pid} =
-               DevServer.start(
-                 run_id: "qa-dashboard-seatbelt-run",
-                 port: port,
-                 workspace: File.cwd!(),
-                 config: config,
-                 env: Verification.env(%{port: port}),
-                 owner: self(),
-                 sandbox: []
-               )
+      start =
+        DevServer.start(
+          run_id: "qa-dashboard-seatbelt-run",
+          port: port,
+          workspace: File.cwd!(),
+          config: config,
+          env: Verification.env(%{port: port}),
+          owner: self(),
+          sandbox: []
+        )
 
-      assert http_ok?("http://127.0.0.1:#{port}/")
-      assert :ok = DevServer.stop(pid)
+      if loopback_confined?(File.cwd!()) do
+        assert {:ok, pid} = start
+        assert http_ok?("http://127.0.0.1:#{port}/")
+        assert :ok = DevServer.stop(pid)
+      else
+        assert {:error, {:verification_failed, {:dev_server_sandbox_unconfined, :non_loopback_bind_allowed}}} = start
+      end
     end
   end
 
@@ -614,6 +691,15 @@ defmodule SymphonyElixir.VerificationTest do
     else
       false
     end
+  end
+
+  # Whether Seatbelt refuses a non-loopback bind under the dev server's profile on this Mac,
+  # checked here without `DevServerSandbox.command/4`'s own check.
+  defp loopback_confined?(workspace) do
+    profile = DevServerSandbox.profile(workspace, [workspace], [])
+    bind = ~s{import socket; socket.socket().bind(("0.0.0.0", 0))}
+    {_output, status} = System.cmd("/usr/bin/sandbox-exec", ["-p", profile, "/usr/bin/python3", "-c", bind], stderr_to_stdout: true)
+    status != 0
   end
 
   defp http_ok?(url) do

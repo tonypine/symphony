@@ -28,6 +28,7 @@ defmodule SymphonyElixir.Verification.DevServer do
     :owner_ref,
     :tmp_dir,
     :proxy,
+    sandbox_dirs: [],
     stopping?: false
   ]
 
@@ -43,6 +44,7 @@ defmodule SymphonyElixir.Verification.DevServer do
           owner_ref: reference() | nil,
           tmp_dir: Path.t() | nil,
           proxy: pid() | nil,
+          sandbox_dirs: [Path.t()],
           stopping?: boolean()
         }
 
@@ -113,8 +115,19 @@ defmodule SymphonyElixir.Verification.DevServer do
     end
   end
 
-  defp start_dev_server(%__MODULE__{run_id: run_id, port: port, config: config} = state, env, launcher, sandbox) do
-    case start_sandboxed(config.start_cmd, state, env, launcher, sandbox) do
+  defp start_dev_server(%__MODULE__{config: config} = state, env, launcher, sandbox) do
+    case sandbox_command(config.start_cmd, state, sandbox) do
+      {:ok, argv, sandbox_dirs} ->
+        run_dev_server(%{state | sandbox_dirs: sandbox_dirs}, argv, env, launcher)
+
+      {:error, reason} ->
+        release_resources(state)
+        {:stop, {:verification_failed, reason}}
+    end
+  end
+
+  defp run_dev_server(%__MODULE__{run_id: run_id, port: port, config: config, workspace: workspace} = state, argv, env, launcher) do
+    case start_process(argv, workspace, child_env(env, state), launcher) do
       {:ok, port_handle, metadata} ->
         state = %{state | port_handle: port_handle, os_pid: metadata.os_pid, pgid: metadata.pgid, process_group?: metadata.process_group?}
 
@@ -148,7 +161,8 @@ defmodule SymphonyElixir.Verification.DevServer do
   def handle_call(:stop, _from, state) do
     state = %{state | stopping?: true}
     stop_process(state)
-    {:stop, :normal, :ok, state}
+    # Stopped: `terminate/2` only releases the resources.
+    {:stop, :normal, :ok, %{state | port_handle: nil}}
   end
 
   @impl true
@@ -186,18 +200,20 @@ defmodule SymphonyElixir.Verification.DevServer do
 
   defp tmp_bases, do: Application.get_env(:symphony_elixir, :agent_run_tmp_bases) || AgentTmpDir.default_bases()
 
-  defp release_resources(%{tmp_dir: tmp_dir, proxy: proxy}) do
+  # Called once the dev server's process group is gone, so no sandbox mounts over its folders.
+  defp release_resources(%{tmp_dir: tmp_dir, proxy: proxy, sandbox_dirs: sandbox_dirs}) do
     EgressProxy.stop(proxy)
     File.rm_rf(tmp_dir)
+    Enum.each(sandbox_dirs, &File.rmdir/1)
     :ok
   end
 
   # The launcher stays outside the sandbox only to start a process group; its child execs
-  # `sandbox-exec`, which applies the profile before the start command runs.
-  defp start_sandboxed(command, %{workspace: workspace} = state, env, launcher, sandbox) do
-    with {:ok, argv} <- DevServerSandbox.command(command, workspace, state.tmp_dir, sandbox) do
-      start_process(argv, workspace, child_env(env, state), launcher)
-    end
+  # `sandbox-exec`, which applies the profile before the start command runs, or on Linux a
+  # shell that runs the socat bridges to the sandbox's loopback and `bwrap`.
+  defp sandbox_command(command, %{workspace: workspace} = state, sandbox) do
+    sandbox = [port: state.port, proxy_port: EgressProxy.port(state.proxy)] ++ sandbox
+    DevServerSandbox.command(command, workspace, state.tmp_dir, sandbox)
   end
 
   # The agent's env: the host's tokens and agent sockets are left out, the tool caches point
@@ -441,15 +457,17 @@ defmodule SymphonyElixir.Verification.DevServer do
     end
   end
 
+  # `--` keeps a group's `-<pgid>` an operand: procps-ng's `kill` reads it as an option and
+  # signals `-<first digit>` instead, exiting 0.
   defp alive_target?(target) when is_integer(target) do
-    case System.cmd("kill", ["-0", to_string(target)], stderr_to_stdout: true) do
+    case System.cmd("kill", ["-0", "--", to_string(target)], stderr_to_stdout: true) do
       {_output, 0} -> true
       {_output, _status} -> false
     end
   end
 
   defp send_signal(target, signal) when is_integer(target) and is_binary(signal) do
-    System.cmd("kill", ["-#{signal}", to_string(target)], stderr_to_stdout: true)
+    System.cmd("kill", ["-#{signal}", "--", to_string(target)], stderr_to_stdout: true)
     :ok
   rescue
     _exception -> :ok
