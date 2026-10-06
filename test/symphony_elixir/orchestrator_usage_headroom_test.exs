@@ -157,6 +157,14 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
     )
   end
 
+  # A retry reads its issue again in a task; the state is read once its answer is handled.
+  defp retry_handled_state(pid) do
+    wait_until(fn ->
+      state = :sys.get_state(pid)
+      state.tracker_tasks == %{} and state
+    end)
+  end
+
   defp wait_until(fun, timeout_ms \\ 15_000) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
     do_wait_until(fun, deadline)
@@ -315,7 +323,7 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
 
     capture_log(fn ->
       send(pid, {:retry_issue, continuing.id, token})
-      state = :sys.get_state(pid)
+      state = retry_handled_state(pid)
 
       assert %{attempt: 1, delay_type: :continuation, retry_token: rescheduled} = state.retry_attempts[continuing.id]
       assert rescheduled != token
@@ -351,7 +359,7 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
 
     capture_log(fn ->
       send(pid, {:retry_issue, continuing.id, token})
-      state = :sys.get_state(pid)
+      state = retry_handled_state(pid)
 
       assert %{attempt: 1, delay_type: :continuation, retry_token: rescheduled, error: "quality gate task already in flight; deferred"} =
                state.retry_attempts[continuing.id]
@@ -387,7 +395,7 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
       send(pid, {:retry_issue, failed.id, token})
 
       assert %{attempt: 2, delay_type: nil, retry_token: rescheduled, error: "quality gate task already in flight; deferred"} =
-               :sys.get_state(pid).retry_attempts[failed.id]
+               retry_handled_state(pid).retry_attempts[failed.id]
 
       assert rescheduled != token
     end)
