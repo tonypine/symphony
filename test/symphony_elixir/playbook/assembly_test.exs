@@ -4,22 +4,6 @@ defmodule SymphonyElixir.Playbook.AssemblyTest do
   alias SymphonyElixir.Playbook
   alias SymphonyElixir.Playbook.Assembly
 
-  # Serves the shipped partials plus a `review_brief` that is not shipped yet, standing in
-  # for a partial Symphony adds to the aggregate later.
-  defmodule ReviewBriefFileSystem do
-    @behaviour Solid.FileSystem
-
-    @impl Solid.FileSystem
-    def read_template_file("review_brief", _options), do: {:ok, "## Review brief\n\nLeave one brief at every handoff."}
-
-    def read_template_file(name, _options) do
-      case Playbook.fetch(name) do
-        {:ok, body} -> {:ok, body}
-        :error -> {:error, %Solid.FileSystem.Error{reason: "unknown playbook partial `#{name}`"}}
-      end
-    end
-  end
-
   defp files(files), do: fn _dir -> {:ok, files} end
 
   defp expand!(body, settings, read_instructions, aggregate \\ Playbook.aggregate()) do
@@ -61,6 +45,7 @@ defmodule SymphonyElixir.Playbook.AssemblyTest do
                  ~s({% render "ci_triage" %}),
                  ~s({% render "escape_hatches" %}),
                  ~s({% render "parent_tickets" %}),
+                 ~s({% render "review_brief" %}),
                  ~s({% render "completion_bar" %}),
                  ~s({% render "guardrails" %}),
                  ~s({% render "out_of_scope_backlog" %}),
@@ -98,22 +83,24 @@ defmodule SymphonyElixir.Playbook.AssemblyTest do
 
   test "a partial added to the aggregate reaches the rendered prompt with no WORKFLOW.md change" do
     workflow_body = ~s(Intro\n\n{% render "playbook" %})
-    settings = %{"partials" => Map.new(Playbook.aggregate(), fn {name, _slot} -> {name, false} end)}
+    # Drop every shipped partial but completion_bar and review_brief, to keep the prompt short.
+    without_brief = List.keydelete(Playbook.aggregate(), "review_brief", 0)
+    settings = %{"partials" => Map.new(without_brief, fn {name, _slot} -> {name, false} end)}
     settings = put_in(settings, ["partials", "completion_bar"], 100)
     instructions = files([{"101-repo-bar.md", "- Repo bar item."}])
 
     render = fn aggregate ->
       template = expand!(workflow_body, settings, instructions, aggregate)
-      {:ok, result, []} = Solid.render(Solid.parse!(template), %{}, file_system: {ReviewBriefFileSystem, nil}, strict_variables: true)
+      {:ok, result, []} = Solid.render(Solid.parse!(template), %{}, file_system: {Playbook.FileSystem, nil}, strict_variables: true)
       IO.iodata_to_binary(result)
     end
 
-    before = render.(Playbook.aggregate())
+    before = render.(without_brief)
     refute before =~ "## Review brief"
 
-    prompt = render.(Playbook.aggregate() ++ [{"review_brief", 105}])
-    assert prompt =~ "## Review brief\n\nLeave one brief at every handoff."
-    assert prompt =~ ~r/## Completion bar.*- Repo bar item\.\n\n## Review brief/s
+    prompt = render.(Playbook.aggregate())
+    assert prompt =~ "## Review brief\n\nThe workpad is the agent's log"
+    assert prompt =~ ~r/## Review brief.*## Completion bar.*- Repo bar item\./s
   end
 
   test "instructions_dir, instruction_file? and directive?" do

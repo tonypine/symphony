@@ -171,7 +171,8 @@ issues:
     comments, updates, files or cancels `Backlog` sub-tickets (`linear_update_subissue` refuses
     any other), replies under each comment and moves the parent back to `In Review`. Only
     `In Review` triggers it: a comment on a parent in `Human Review` starts nothing (move it to
-    `Rework` or back to `In Review` instead). Symphony's own comments, a supervisor's notes
+    `Rework` or back to `In Review` instead). Symphony's own comments (the review brief, headed
+    `## Review brief`, among them), a supervisor's notes
     (starting `Supervisor review:` or `Supervisor note:`) and integration bots' comments start
     nothing. A comment made while the run works
     is picked up once the parent is back in `In Review`, unless the run answered it. A comment on

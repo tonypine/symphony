@@ -2475,9 +2475,10 @@ An issue is dispatch-eligible only if all are true:
     (`linear_update_state` allows `In Review` for a plan parent even with Auto Review on),
     or to the human review state when the ticket asks for a human review (human review rule).
   - Comments: a person's comment on a plan parent's plan is read on the poll that follows
-    it. Only comments with a user and no bot actor count, and not Symphony's own (the workpad, a
-    QA report, an `Action needed` request, a promote or cancel record, a run-failure note, its own
-    replies, and every comment its last run on the parent posted), nor a supervisor's note (one
+    it. Only comments with a user and no bot actor count, and not Symphony's own (the workpad, the
+    review brief, a QA report, an `Action needed` request, a promote or cancel record, a
+    run-failure note, its own replies, and every comment its last run on the parent posted), nor a
+    supervisor's note (one
     starting `Supervisor review:` or `Supervisor note:`). The service and the reviewer
     can share one Linear user, so the run's comments are told apart by id, which the run reports as
     it ends, and the others by how they start. The service reads the parent's history and comments
