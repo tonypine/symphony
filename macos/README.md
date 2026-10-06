@@ -661,8 +661,8 @@ so and doesn't start Symphony unless "Start Symphony when the app opens" is on. 
 Automatic rollback only fully protects an update from a version that already has it: the version put back
 must read the pin and what the failed version recorded. A version from before it is still put back, but it
 doesn't say why, doesn't bring Symphony and dispatch back as they were, and may offer the rolled-back release
-as a normal update again. The next update still checks itself: the record the failed version left is
-dropped when a newer update is pending.
+as a normal update again. The next update still checks itself, to the rolled-back release or any other: the
+record the failed version left is dropped once an update is pending or a newer version runs.
 
 `Symphony (previous).app` is never deleted by an update or a health check, whether it passes or not.
 

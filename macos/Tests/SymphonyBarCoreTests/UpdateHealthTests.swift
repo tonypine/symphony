@@ -246,11 +246,24 @@ final class UpdateHealthTests: XCTestCase {
             "a stale rollback record doesn't stop the next update's health check"
         )
         XCTAssertEqual(UpdateRelaunch(pending: newer, rollback: record, runningBuild: 42), .notReplaced(newer))
+    }
+
+    func testStaleRollbackRecordDoesNotSkipTheHealthCheckOfTheSameBuild() {
+        // A version from before automatic rollback was put back, never read the record or the pin, and installed the
+        // rolled-back build again: toBuild <= record.build, and nothing pins it any more. The decision reads no pin.
+        let retry = PendingUpdate(fromBuild: 42, toBuild: 43, version: "0.0.1.43", startSymphony: true, resumeDispatch: false)
         XCTAssertEqual(
-            UpdateRelaunch(pending: pending, rollback: record, runningBuild: 42),
-            .rolledBack(record),
-            "a pending update no newer than the rolled-back build never makes the restored build check itself"
+            UpdateRelaunch(pending: retry, rollback: record, runningBuild: 43),
+            .checkHealth(retry),
+            "a stale rollback record doesn't stop the health check of the build it names"
         )
+        XCTAssertEqual(UpdateRelaunch(pending: retry, rollback: record, runningBuild: 42), .notReplaced(retry))
+
+        let older = PendingUpdate(fromBuild: 41, toBuild: 42, version: "0.0.1.42", startSymphony: false, resumeDispatch: false)
+        XCTAssertEqual(UpdateRelaunch(pending: older, rollback: record, runningBuild: 42), .checkHealth(older))
+
+        // Installed by hand over it, without an update: a newer build than the record runs.
+        XCTAssertEqual(UpdateRelaunch(pending: nil, rollback: record, runningBuild: 44), .none)
     }
 
     // MARK: Pin and Retry
