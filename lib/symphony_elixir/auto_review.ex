@@ -652,7 +652,7 @@ defmodule SymphonyElixir.AutoReview do
     else
       case changed_paths(record, sha, opts) do
         {:ok, paths} -> Selection.decide(issue, paths, config, dev_server?: dev_server?(settings))
-        {:error, reason} -> {:blocked, "could not list the PR's changed files: #{inspect(reason)}"}
+        {:error, reason} -> {:blocked, blocked_reason({:changed_files_unlisted, reason})}
       end
     end
   end
@@ -783,8 +783,8 @@ defmodule SymphonyElixir.AutoReview do
   def usage_limit({:model_api_unreachable, %{} = info}), do: info
   def usage_limit(_reason), do: nil
 
-  # How every `blocked` reason an error gives starts: `blocked_reason/1`'s, and `select/5`'s when the
-  # PR's changed files can't be listed. Keep it in step with both.
+  # How every `blocked` reason `blocked_reason/1` gives starts. The legacy-record test in
+  # `auto_review_qa_test.exs` runs every clause of it against this list.
   @error_blocked_reasons [
     "the QA agent reached the per-issue token limit ",
     "QA does not run on remote workers yet ",
@@ -801,7 +801,10 @@ defmodule SymphonyElixir.AutoReview do
 
   defp error_blocked_reason?(_reason), do: false
 
-  @doc "The `blocked` reason the QA report gives for a `SymphonyElixir.QaAgent.run/3` error."
+  @doc """
+  The `blocked` reason the QA report gives for a `SymphonyElixir.QaAgent.run/3` error, or for the
+  PR's changed files that git could not list (`{:changed_files_unlisted, reason}`).
+  """
   @spec blocked_reason(term()) :: String.t()
   def blocked_reason({:qa_token_limit, total, limit}),
     do: "the QA agent reached the per-issue token limit (#{total} of #{limit} tokens)"
@@ -821,6 +824,7 @@ defmodule SymphonyElixir.AutoReview do
 
   def blocked_reason({:qa_browser_mcp_invalid, errors}), do: "`auto_review.playbooks.web.browser_mcp` is invalid: #{errors}"
   def blocked_reason({:malformed_qa_response, reason}), do: "the QA agent's answer could not be read: #{inspect(reason)}"
+  def blocked_reason({:changed_files_unlisted, reason}), do: "could not list the PR's changed files: #{inspect(reason)}"
   def blocked_reason(reason), do: "the QA agent could not finish: #{inspect(reason)}"
 
   # Stores the result for the head SHA, rewrites the QA report, then moves the issue.

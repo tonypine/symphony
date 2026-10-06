@@ -300,7 +300,7 @@ defmodule SymphonyElixir.RunStoreTest do
     assert %{paused: true, reason: "overnight deploy", paused_at: %DateTime{} = paused_at} =
              RunStore.get_paused()
 
-    restarted_pid = restart_run_store()
+    restart_run_store()
 
     assert %{paused: true, reason: "overnight deploy", paused_at: ^paused_at} =
              RunStore.get_paused()
@@ -313,7 +313,6 @@ defmodule SymphonyElixir.RunStoreTest do
     assert :ok = RunStore.set_paused(false, nil)
     assert %{paused: false, reason: nil, paused_at: nil} = RunStore.get_paused()
 
-    if Process.alive?(restarted_pid), do: GenServer.stop(restarted_pid)
     restart_run_store()
   end
 
@@ -324,7 +323,7 @@ defmodule SymphonyElixir.RunStoreTest do
     assert :ok = RunStore.put_own_state_move("issue-own", moved_at)
     assert :ok = RunStore.put_own_state_move("issue-own", DateTime.add(moved_at, 60))
 
-    restarted_pid = restart_run_store()
+    restart_run_store()
 
     assert RunStore.get_own_state_move("issue-own") == DateTime.add(moved_at, 60)
     assert RunStore.get_own_state_move("issue-other") == nil
@@ -332,7 +331,6 @@ defmodule SymphonyElixir.RunStoreTest do
     assert {:error, :invalid_own_state_move} = RunStore.put_own_state_move(nil, moved_at)
     assert {:error, :invalid_issue_id} = RunStore.get_own_state_move(nil)
 
-    if Process.alive?(restarted_pid), do: GenServer.stop(restarted_pid)
     restart_run_store()
   end
 
@@ -341,7 +339,7 @@ defmodule SymphonyElixir.RunStoreTest do
     assert :ok = RunStore.put_merged_wait("issue-merged")
     assert :ok = RunStore.put_merged_wait("issue-merged")
 
-    restarted_pid = restart_run_store()
+    restart_run_store()
 
     assert RunStore.merged_wait?("issue-merged")
     refute RunStore.merged_wait?("issue-other")
@@ -351,7 +349,6 @@ defmodule SymphonyElixir.RunStoreTest do
     assert {:error, :invalid_issue_id} = RunStore.merged_wait?(nil)
     assert {:error, :invalid_issue_id} = RunStore.delete_merged_wait(nil)
 
-    if Process.alive?(restarted_pid), do: GenServer.stop(restarted_pid)
     restart_run_store()
   end
 
@@ -933,18 +930,21 @@ defmodule SymphonyElixir.RunStoreTest do
   # Returns once the new RunStore built its run index, and leaves it unlinked from the test.
   # Stopping a supervised RunStore behind the supervisor's back raced the supervisor's own restart:
   # the test could read the index while it was still being built, or own a RunStore that died after
-  # the test and was restarted, emptying the index, during the next one.
+  # the test and was restarted, emptying the index, during the next one. Each of those restarts also
+  # counted toward the supervisor's limit of 3 in 5 seconds, and a few such tests in a row shut the
+  # whole supervisor down, so `terminate_child/2` exited with `shutdown`. A restart through
+  # `terminate_child/2` and `restart_child/2` counts toward nothing.
   defp restart_run_store do
     case Supervisor.terminate_child(SymphonyElixir.Supervisor, RunStore) do
       :ok ->
-        {:ok, pid} = Supervisor.restart_child(SymphonyElixir.Supervisor, RunStore)
-        pid
+        {:ok, _pid} = Supervisor.restart_child(SymphonyElixir.Supervisor, RunStore)
+        :ok
 
       # Without the orchestrator runtime nothing supervises it: `RunStore.ensure_started/0` starts it.
       {:error, :not_found} ->
         if pid = Process.whereis(RunStore), do: GenServer.stop(pid)
-        {:ok, pid} = GenServer.start(RunStore, [], name: RunStore)
-        pid
+        {:ok, _pid} = GenServer.start(RunStore, [], name: RunStore)
+        :ok
     end
   end
 
