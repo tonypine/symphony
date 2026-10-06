@@ -869,7 +869,7 @@ defmodule SymphonyElixir.QaAgent do
         nil
 
       playbook ->
-        driver_opts = [worktree: worktree, playbook: playbook, git: Keyword.get(opts, :git, &default_git/2)]
+        driver_opts = [worktree: worktree, playbook: playbook, tmp_dir: Keyword.get(opts, :qa_tmp_dir), git: Keyword.get(opts, :git, &default_git/2)]
         {:ok, driver} = AndroidDriver.start_link(Keyword.merge(driver_opts, Keyword.get(opts, :qa_android_driver_opts, [])))
         driver
     end

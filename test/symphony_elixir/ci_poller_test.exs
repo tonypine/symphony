@@ -43,11 +43,24 @@ defmodule SymphonyElixir.CiPollerTest do
   end
 
   defmodule FakeGitHub do
-    def fetch_ci_status(pr_url, _opts) do
+    def fetch_ci_status(pr_url, opts) do
       recipient = Application.fetch_env!(:symphony_elixir, :ci_test_recipient)
       send(recipient, {:fetch_ci_status, pr_url})
-      next_status()
+
+      with {:ok, status} <- next_status() do
+        {:ok, put_required_checks(status, Keyword.get(opts, :required_checks))}
+      end
     end
+
+    # A landing read carries the base branch's required checks, as `PullRequest` reads them.
+    defp put_required_checks(status, true) do
+      case Application.get_env(:symphony_elixir, :ci_test_required_checks) do
+        nil -> status
+        names -> Map.put(status, :required_checks, names)
+      end
+    end
+
+    defp put_required_checks(status, _landing_read), do: status
 
     def rerun_failed(run_id, _opts) do
       recipient = Application.fetch_env!(:symphony_elixir, :ci_test_recipient)
@@ -227,6 +240,7 @@ defmodule SymphonyElixir.CiPollerTest do
       Application.delete_env(:symphony_elixir, :ci_test_issues)
       Application.delete_env(:symphony_elixir, :ci_test_status)
       Application.delete_env(:symphony_elixir, :ci_test_statuses)
+      Application.delete_env(:symphony_elixir, :ci_test_required_checks)
       Application.delete_env(:symphony_elixir, :ci_test_failed_log)
       Application.delete_env(:symphony_elixir, :ci_test_failed_log_error)
       Application.delete_env(:symphony_elixir, :ci_test_failed_logs_by_run_id)
@@ -386,6 +400,59 @@ defmodule SymphonyElixir.CiPollerTest do
 
     assert_receive {:issue_state_update, "issue-2401", "In Progress"}
     assert CiPoller.observed_head("issue-2401") == %{commit_sha: "def456", conclusion: "FAILURE"}
+  end
+
+  test "a Merging head is ready to land once every check its base branch requires passed" do
+    now = ~U[2026-05-06 09:00:00Z]
+    issue = %{in_review_issue() | state: "Merging"}
+    Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+    put_run(issue, now)
+
+    make_all = %{name: "make all", status: "COMPLETED", conclusion: "SUCCESS", run_id: "987"}
+    preview = %{name: "deploy/preview", status: "QUEUED", conclusion: nil}
+    Application.put_env(:symphony_elixir, :ci_test_status, %{green_status() | checks: [make_all, preview]})
+
+    # Without required checks, the head waits on every check.
+    assert {:ok, %{actions: [{:watching, "issue-2401"}]}} = CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+    assert CiPoller.landing_ready_head("issue-2401") == nil
+
+    Application.put_env(:symphony_elixir, :ci_test_required_checks, ["make all"])
+
+    assert {:ok, %{actions: [{:watching, "issue-2401"}]}} =
+             CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: DateTime.add(now, 1, :minute))
+
+    assert CiPoller.observed_head("issue-2401") == %{commit_sha: "abc123", conclusion: "IN_PROGRESS"}
+    assert CiPoller.landing_ready_head("issue-2401", repo_key: @repo_key) == "abc123"
+
+    # Outside Merging, the poller reads no required checks.
+    Application.put_env(:symphony_elixir, :ci_test_issues, [in_review_issue()])
+
+    assert {:ok, %{actions: [{:watching, "issue-2401"}]}} =
+             CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: DateTime.add(now, 2, :minute))
+
+    assert CiPoller.landing_ready_head("issue-2401") == nil
+    assert CiPoller.landing_ready_head("issue-unknown") == nil
+  end
+
+  test "landing_action lands a pending head once every check the base branch requires passed" do
+    make_all = %{name: "make all", status: "COMPLETED", conclusion: "SUCCESS"}
+    lint = %{name: "lint", status: "COMPLETED", conclusion: "SUCCESS"}
+    preview = %{name: "deploy/preview", status: "QUEUED", conclusion: nil}
+    pending_lint = %{lint | status: "IN_PROGRESS", conclusion: nil}
+    status = fn checks, required -> %{state: "OPEN", commit_sha: "abc123", checks: checks, required_checks: required} end
+
+    assert CiPoller.landing_action(status.([make_all, lint, preview], ["make all", "lint"])) == :success
+    assert CiPoller.landing_action(status.([make_all, lint], ["make all"])) == :success
+
+    # A required check still running, or not reported yet, holds it; so does no required check at all.
+    assert CiPoller.landing_action(status.([make_all, pending_lint, preview], ["make all", "lint"])) == :pending
+    assert CiPoller.landing_action(status.([make_all, preview], ["make all", "lint"])) == :pending
+    assert CiPoller.landing_action(status.([make_all, preview], [])) == :pending
+    assert CiPoller.landing_action(Map.delete(status.([make_all, preview], nil), :required_checks)) == :pending
+
+    # A failed check holds it, required or not.
+    red_preview = %{preview | status: "COMPLETED", conclusion: "FAILURE"}
+    assert {:failure, [%{name: "deploy/preview"}]} = CiPoller.landing_action(status.([make_all, red_preview], ["make all"]))
   end
 
   describe "with Auto Review on" do
