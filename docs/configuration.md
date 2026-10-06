@@ -777,7 +777,7 @@ agent:
   reports before runs resume.
 - `usage_limit.unknown_reset_retry_seconds` (default `900`, `>= 60`): how long the hold lasts when
   no reset time is known (neither in the rejection nor remembered for that window). It also caps
-  the wait between probes while Claude can't reach its API (a network or DNS outage): that hold
+  the wait between probes while Claude or Codex can't reach its API (a network or DNS outage): that hold
   starts whatever `auto_pause` says, probes after 60 seconds and doubles the wait after each
   failed probe. A released outage hold is remembered this long (at least 10 minutes), so a QA or
   acceptance-gate pass that finds the outage again keeps the backoff.
