@@ -26,6 +26,18 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - run: SYMPHONY_CONFIG="$PWD/test/fixtures/runtime/symphony.yml" SYMPHONY_REPOS_ROOT="$PWD" docker compose -f docker/docker-compose.yml config
+      - run: SYMPHONY_CONFIG="$PWD/test/fixtures/runtime/symphony.yml" SYMPHONY_REPOS_ROOT="$PWD" docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev-server-sandbox.yml config
+
+      # The dev server sandbox's security options loosen the whole container, so they stay in the
+      # opt-in override and out of the default compose file.
+      - name: Keep the default compose file on Docker's security defaults
+        run: |
+          SYMPHONY_CONFIG="$PWD/test/fixtures/runtime/symphony.yml" SYMPHONY_REPOS_ROOT="$PWD" \
+            docker compose -f docker/docker-compose.yml config --format json > "$RUNNER_TEMP/compose.json"
+          if ! jq -e '[.services[] | (.security_opt // []), (.privileged // false | select(.))] | flatten | length == 0' "$RUNNER_TEMP/compose.json"; then
+            echo "docker/docker-compose.yml sets security_opt or privileged; put them in docker/docker-compose.dev-server-sandbox.yml" >&2
+            exit 1
+          fi
 
   build-image:
     runs-on: ubuntu-latest
@@ -41,3 +53,25 @@ jobs:
           tags: symphony:local
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # The dev server sandbox override confines the container with the shipped AppArmor profile,
+      # which the host must load first. The runner has AppArmor, so this checks the profile parses.
+      - name: Load the bwrap AppArmor profile
+        run: sudo apparmor_parser -r -W docker/apparmor-bwrap
+
+      # The verification dev server's sandbox: `bwrap`'s probe must pass under the shipped compose
+      # file plus the dev server sandbox override, in a container confined by `symphony-bwrap`.
+      # The runner keeps Ubuntu 24.04's restriction on unprivileged user namespaces: the profile
+      # must work without lifting it.
+      - name: Probe bwrap in the container
+        run: |
+          mkdir -p ~/.codex ~/.claude ~/.ssh
+          export SYMPHONY_CONFIG="$PWD/test/fixtures/runtime/symphony.yml" SYMPHONY_REPOS_ROOT="$PWD"
+          compose="docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev-server-sandbox.yml"
+          confinement=$($compose run --rm --no-deps -T --entrypoint cat symphony /proc/self/attr/current)
+          if [ "$confinement" != "symphony-bwrap (enforce)" ]; then
+            echo "the container runs under '$confinement', not 'symphony-bwrap (enforce)'" >&2
+            exit 1
+          fi
+          $compose run --rm --no-deps --entrypoint bwrap symphony \
+            --unshare-all --ro-bind / / --dev /dev --proc /proc /bin/sh -c :

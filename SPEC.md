@@ -1385,7 +1385,15 @@ When enabled:
   directory there). `qa_put_file` MUST read only a regular file of bounded size that resolves inside
   the QA worktree or the pass's temp folder, and MUST refuse symlinks and files with other hard
   links. `qa_ax_set_value` MUST enter a text field's value so the app registers the edit, with key
-  events sent to that app alone, and the tools MUST NOT return a secure field's value. Every tool that
+  events sent to that app alone, and the tools MUST NOT return a secure field's value.
+  `qa_resize_window` (the playbook's wide pass) sizes a launched app's window to at least 1400×900
+  points, or the screen's usable area when that is smaller, through the Accessibility grant alone, and
+  `qa_check_app` reports whether the app still runs, answers an accessibility request within 10
+  seconds, and has written a crash report since launch, naming the page the agent passes and that
+  window size. A pass whose resize met a usable screen area under 1400×900 points MUST NOT be
+  reported `pass`: its `pass` becomes `blocked`, and that pass's `blocked` goes to a person. A pass
+  with no `qa_resize_window` call MUST NOT be reported `pass` either: its wide pass did not run, so
+  its `pass` becomes `blocked` with that reason. Every tool that
   takes a PID MUST refuse a PID
   the pass did not launch. Apps still running when the pass ends MUST be quit. A missing Screen
   Recording or Accessibility grant MUST surface as a `qa_permission_missing` tool error that tells
@@ -2181,6 +2189,12 @@ The poller:
   forever. It logs `Ignoring stale check <name> in completed run <id>`. A check in a run that
   completed with any other conclusion stays as reported. To see this, a head whose rollup has no
   failed check and only GitHub Actions checks left unfinished also reads the head's workflow runs.
+- leaves out the checks of a GitHub Actions run whose every check on the head was cancelled while
+  another run of the same workflow on the head reported a check that wasn't (a duplicate run a
+  concurrency group cancelled): the other run says how the head's CI went, so such a run starts
+  no rerun and no CI-fix run. It logs `Ignoring the checks of cancelled run(s) <ids> superseded by
+  another run of the same workflow`. When every run of the workflow was cancelled, or a cancelled
+  job sits beside others in its own run, the cancelled checks still read as a failure.
 - reads a landing's head (the `Merging` wait, the release of a held landing run, and the merge
   tool) against the checks its base branch requires: a head still waiting on a check, with none
   failed, also reads the required status checks of the base branch's rulesets
@@ -3008,7 +3022,10 @@ Current Elixir sandbox behavior:
   `~/.gnupg`, `~/Library/Application Support`, `~/Library/Keychains`,
   `~/Library/Preferences`, `~/.docker`, `~/.netrc`, `~/.git-credentials`, `~/.npmrc`,
   `~/.cargo/credentials`, `~/.config/op`, `~/.config/gcloud`, `~/.azure`, `~/.kube`, shell
-  startup files, and shell or REPL history files.
+  startup files, and shell or REPL history files. They also cover the cloud-synced folders
+  `~/Library/CloudStorage` (Google Drive, Dropbox, OneDrive) and `~/Library/Mobile Documents`
+  (iCloud Drive), which Claude's file tools are denied with `Read(<path>)` rules as well, so an
+  agent never makes macOS ask the operator to let Symphony access them.
 - Shared write denies protect workflow and runtime guardrail files such as `WORKFLOW.md`,
   `symphony.yml`, `symphony.local.yml`, `.claude/settings.json`, `.git`, `mise.toml`,
   `.tool-versions`, `config/settings_ui_exempt.yml`, shell startup files, `~/.gitconfig`, and

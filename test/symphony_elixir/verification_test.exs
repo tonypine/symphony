@@ -414,6 +414,26 @@ defmodule SymphonyElixir.VerificationTest do
                )
     end
 
+    test "does not start without its egress proxy, and removes its temp folder", %{root: root, workspace: workspace, config: config, port: port} do
+      log =
+        capture_log(fn ->
+          assert {:error, {:verification_failed, {:egress_proxy_unavailable, :emfile}}} =
+                   DevServer.start(
+                     run_id: "no-proxy-run",
+                     port: port,
+                     workspace: workspace,
+                     config: config,
+                     env: Verification.env(%{port: port}),
+                     tmp_bases: [root],
+                     egress_proxy: [listen: fn _port, _options -> {:error, :emfile} end]
+                   )
+        end)
+
+      assert log =~ "Verification dev server egress proxy unavailable run_id=no-proxy-run reason=:emfile"
+      assert File.ls!(root) == ["workspace"]
+      refute File.exists?(Path.join(workspace, "dev-server-env.txt"))
+    end
+
     # Where Seatbelt can't keep a listener on loopback, the dev server doesn't start instead.
     @tag :seatbelt
     test "serves from inside the real sandbox", %{workspace: workspace, config: config, port: port} do
