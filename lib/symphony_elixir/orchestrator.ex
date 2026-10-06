@@ -5207,20 +5207,17 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp notify_transcript(_repo_key, _issue_id, _event), do: :ok
 
+  # The audit writes go to AuditLog.Writer: done here, they held up every update (and the state
+  # API) for as long as the audit log's lock and the disk took.
   defp audit_agent_update(running_entry, update, token_delta) do
-    running_entry
-    |> AuditLog.record_agent_update(update, token_delta)
-    |> log_audit_error("record agent update")
+    AuditLog.Writer.record_agent_update(running_entry, update, token_delta)
   end
 
   defp maybe_emit_pr_opened(previous_entry, updated_entry) when is_map(updated_entry) do
     pr_url = URLUtils.pull_request_url(updated_entry)
 
     if is_nil(URLUtils.pull_request_url(previous_entry)) and is_binary(pr_url) do
-      updated_entry
-      |> AuditLog.record_pr_opened(pr_url)
-      |> log_audit_error("record pr_opened")
-
+      AuditLog.Writer.record_pr_opened(updated_entry, pr_url)
       emit_running_event(:pr_opened, updated_entry)
     end
   end
@@ -9014,11 +9011,4 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp seconds_since(_timestamp, _now), do: nil
-
-  defp log_audit_error(:ok, _action), do: :ok
-
-  defp log_audit_error({:error, reason}, action) do
-    Logger.warning("Audit log failed to #{action}: #{inspect(reason)}")
-    :ok
-  end
 end

@@ -77,6 +77,19 @@ defmodule SymphonyElixir.AcceptanceGate.RunnerTest do
     assert %{running: [], queued: []} = Runner.snapshot(name)
   end
 
+  test "a runner that doesn't answer in time is a request error, not an exit", %{settings: settings, run_fun: run_fun, name: name} do
+    runner = start_supervised!({Runner, name: name, run_fun: run_fun})
+    :ok = :sys.suspend(runner)
+
+    assert {:error, {:gate_runner_call_failed, :timeout}} =
+             Runner.request(job(settings, "a"), gate_runner_server: name, request_timeout_ms: 10)
+
+    :ok = :sys.resume(runner)
+    # The runner took the request once it answered again, so the next poll finds the pass running.
+    assert_receive {:gate_started, "a", _pass_pid, []}
+    assert :running = Runner.request(job(settings, "a"), gate_runner_server: name)
+  end
+
   test "a queued forced request takes the next free slot", %{settings: settings, run_fun: run_fun, name: name} do
     start_supervised!({Runner, name: name, run_fun: run_fun})
 

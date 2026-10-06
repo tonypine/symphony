@@ -533,6 +533,55 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert {:current_function, {SlowQualityGateProvider, :score, 2}} = Process.info(gate_pid, :current_function)
   end
 
+  test "a slow audit log write for an agent update doesn't delay a concurrent snapshot" do
+    issue = %Issue{id: "issue-slow-audit", identifier: "MT-AUDIT", title: "Slow audit", state: "In Progress"}
+    test_pid = self()
+
+    # Stays in flight until the test releases it, as a write behind a busy lock or a large day.
+    Application.put_env(:symphony_elixir, :audit_log_writer_record_agent_update, fn entry, _update, _delta ->
+      send(test_pid, {:audit_write_started, self(), entry})
+
+      receive do
+        :release_audit_write -> send(test_pid, :audit_write_done)
+      after
+        60_000 -> :ok
+      end
+    end)
+
+    {:ok, pid} = Orchestrator.start_link(name: Module.concat(__MODULE__, :SlowAuditOrchestrator))
+
+    on_exit(fn ->
+      Application.delete_env(:symphony_elixir, :audit_log_writer_record_agent_update)
+      if Process.alive?(pid), do: stop_process(pid)
+    end)
+
+    initial_state = get_orchestrator_state(pid)
+
+    running_entry = %{
+      pid: self(),
+      ref: make_ref(),
+      identifier: issue.identifier,
+      issue: issue,
+      run_id: "run-slow-audit",
+      session_id: nil,
+      turn_count: 0,
+      started_at: DateTime.utc_now()
+    }
+
+    :sys.replace_state(pid, fn _ -> %{initial_state | running: %{issue.id => running_entry}, claimed: MapSet.put(initial_state.claimed, issue.id)} end)
+
+    send(pid, {:codex_worker_update, issue.id, %{event: :session_started, session_id: "thread-slow-audit", timestamp: DateTime.utc_now()}})
+    assert_receive {:audit_write_started, writer_pid, audited_entry}, @min_wait_ms
+    # The writer got only the fields an audit event names, not the whole running entry.
+    assert audited_entry == %{issue: issue, identifier: "MT-AUDIT", run_id: "run-slow-audit", session_id: "thread-slow-audit"}
+
+    assert %{running: [%{issue_id: "issue-slow-audit", session_id: "thread-slow-audit"}]} = Orchestrator.snapshot(pid, 1_000)
+    # The write is still waiting for its release, so the snapshot didn't wait on it.
+    refute_received :audit_write_done
+    send(writer_pid, :release_audit_write)
+    assert_receive :audit_write_done, @min_wait_ms
+  end
+
   test "orchestrator snapshot reflects last codex update and session id" do
     issue_id = "issue-snapshot"
 
