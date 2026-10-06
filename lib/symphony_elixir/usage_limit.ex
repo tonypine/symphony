@@ -420,16 +420,21 @@ defmodule SymphonyElixir.UsageLimit do
 
   defp time_suffix(_verb, nil, _now, _opts), do: ""
 
-  defp time_suffix(verb, %DateTime{} = at, now, opts) do
+  defp time_suffix(verb, %DateTime{} = at, now, opts), do: ", #{verb} ~#{local_time(at, now, opts)}"
+
+  @doc """
+  `at` in local time as `14:05`, or `Oct 7 14:05` when it is not on `now`'s day.
+  `opts[:to_local]` converts a UTC `NaiveDateTime` to local time (default: the host's time zone).
+  """
+  @spec local_time(DateTime.t(), DateTime.t(), keyword()) :: String.t()
+  def local_time(%DateTime{} = at, %DateTime{} = now, opts) do
     to_local = Keyword.get(opts, :to_local, &host_local_time/1)
     local = to_local.(DateTime.to_naive(at))
     time = local |> NaiveDateTime.to_time() |> Calendar.strftime("%H:%M")
 
-    if NaiveDateTime.to_date(local) == NaiveDateTime.to_date(to_local.(DateTime.to_naive(now))) do
-      ", #{verb} ~#{time}"
-    else
-      ", #{verb} ~#{Calendar.strftime(local, "%b %-d")} #{time}"
-    end
+    if NaiveDateTime.to_date(local) == NaiveDateTime.to_date(to_local.(DateTime.to_naive(now))),
+      do: time,
+      else: "#{Calendar.strftime(local, "%b %-d")} #{time}"
   end
 
   defp datetime(%DateTime{} = datetime), do: datetime
