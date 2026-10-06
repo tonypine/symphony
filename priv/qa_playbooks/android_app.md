@@ -22,6 +22,10 @@ tools. They only act on Symphony's emulator and on the application IDs listed be
   Symphony resets them when the pass ends.
 - `qa_android_screenshot`: saves the screen to `qa-evidence/<name>.png`. Each name can be used
   once; it never replaces an existing file.
+- `qa_android_put_file`: puts a file you wrote under `qa-evidence/` or `$TMPDIR` (at most 1 MB)
+  into the emulator's `Download/` folder, where the system file picker lists it under Downloads.
+  `dest` is `Download/<name>` and defaults to the file's own name. A reinstall wipes app data,
+  not Downloads, so the file stays until the pass ends.
 
 Do not edit tracked files in the worktree: `qa_android_install` refuses a modified checkout. The
 build's own outputs (gitignored files) are fine.
@@ -36,7 +40,9 @@ build's own outputs (gitignored files) are fine.
    When there is no walkthrough, open each screen the change touches (from the acceptance
    criteria and the changed files) and use the controls it adds or changes. Find nodes with
    `qa_android_ui_tree` and act with `qa_android_tap`, `qa_android_type` and `qa_android_key`.
-   Use made-up values, never real credentials.
+   Use made-up values, never real credentials. To test an import, write a synthetic file (a
+   CSV with made-up rows, or a malformed one for the error path) under `qa-evidence/`, put it in
+   `Download/` with `qa_android_put_file`, then pick it in the app's file picker under Downloads.
 4. Let every screen settle before you judge it. Screens animate in, load data and lay out
    again, so a tree read right after a tap proves nothing: wait 3 to 5 seconds after each
    navigation or action (`sleep 3` in your shell), then read `qa_android_ui_tree`. When the tree

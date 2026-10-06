@@ -3173,7 +3173,8 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # A landing run that ended on pending checks stays held in `Merging` until the CI poller sees
-  # that head go green, the issue leaves `Merging` (a red head takes the CI-failure path), or
+  # that head go green, or every check its base branch requires pass (`CiPoller.landing_action/1`),
+  # the issue leaves `Merging` (a red head takes the CI-failure path), or
   # `ci.merging_wait_timeout_ms` passes. Releasing it lets this poll dispatch the landing agent.
   defp release_merging_ci_waits(%State{merging_ci_waits: waits} = state, _issues) when map_size(waits) == 0, do: state
 
@@ -3211,7 +3212,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     case CiPoller.observed_head(issue_id, opts) do
       %{commit_sha: commit_sha, conclusion: "SUCCESS"} -> commit_sha == wait.commit_sha
-      _observed -> false
+      _observed -> is_binary(wait.commit_sha) and CiPoller.landing_ready_head(issue_id, opts) == wait.commit_sha
     end
   end
 
@@ -5041,10 +5042,10 @@ defmodule SymphonyElixir.Orchestrator do
   defp startup_tracked_issue_identifiers(_candidate_issues_result, {:error, reason}), do: {:error, reason}
 
   defp startup_tracked_workspace_identifiers(repo_key, {:ok, tracked_issue_identifiers}) do
-    with runs when is_list(runs) <- RunStore.list_runs(repo_key, :all),
+    with run_identifiers when is_list(run_identifiers) <- RunStore.list_run_identifiers(repo_key),
          retries when is_list(retries) <- RunStore.list_retries(repo_key) do
       identifiers =
-        tracked_issue_identifiers ++ run_identifiers(runs) ++ retry_identifiers(retries)
+        tracked_issue_identifiers ++ run_identifiers ++ retry_identifiers(retries)
 
       {:ok, identifiers}
     else
@@ -5164,15 +5165,6 @@ defmodule SymphonyElixir.Orchestrator do
       %{identifier: identifier} when is_binary(identifier) -> [identifier]
       _ -> []
     end)
-  end
-
-  defp run_identifiers(runs) when is_list(runs) do
-    Enum.flat_map(runs, fn
-      %{issue_identifier: identifier} when is_binary(identifier) -> [identifier]
-      %{workspace_path: path} when is_binary(path) -> [workspace_identifier_from_path(path)]
-      _ -> []
-    end)
-    |> Enum.reject(&is_nil/1)
   end
 
   defp retry_identifiers(retries) when is_list(retries) do
@@ -6176,11 +6168,9 @@ defmodule SymphonyElixir.Orchestrator do
   defp present_value?(_value), do: true
 
   defp hydrate_budget_daily_used(%Date{} = day) do
-    case RunStore.list_all_runs(:all) do
+    case RunStore.list_runs_started_on(day) do
       runs when is_list(runs) ->
-        runs
-        |> Enum.filter(&run_started_on_day?(&1, day))
-        |> Enum.reduce(0, fn run, total ->
+        Enum.reduce(runs, 0, fn run, total ->
           total + run_total_tokens(run)
         end)
 
@@ -6201,7 +6191,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp hydrate_budget_exhausted(limit) do
-    case RunStore.list_all_runs(:all) do
+    case RunStore.list_runs_with_status("budget_exhausted") do
       runs when is_list(runs) ->
         runs
         |> Enum.flat_map(&budget_exhausted_issue_id(&1, limit))
@@ -6225,12 +6215,6 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp budget_exhausted_run_over_limit?(_run, _limit), do: true
-
-  defp run_started_on_day?(%{started_at: %DateTime{} = started_at}, %Date{} = day) do
-    DateTime.to_date(started_at) == day
-  end
-
-  defp run_started_on_day?(_run, _day), do: false
 
   defp run_total_tokens(%{tokens: %{total_tokens: total}}) when is_integer(total), do: max(total, 0)
   defp run_total_tokens(_run), do: 0
