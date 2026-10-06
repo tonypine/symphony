@@ -38,58 +38,73 @@ public enum MaxConcurrentAgents {
 /// inserted when missing, so comments, ordering and indentation stay as they are.
 enum AgentSetting {
     /// Indent added for a new nested key when the file gives no example to follow.
-    static let defaultIndentStep = 2
+    static let defaultIndentStep = ConfigSetting.defaultIndentStep
 
     /// The value after `key:` without its comment, "" when empty, or nil when the key or a section above it
     /// is missing. Throws `MaxConcurrentAgentsError.notABlock` when a section above it holds an inline value.
     static func value(_ key: String, in section: String, of yaml: String) throws -> String? {
-        let document = Document(yaml)
-        guard let agent = document.child("agent", in: document.all) else { return nil }
-        let agentBlock = try document.block(of: agent)
-        guard let sectionKey = document.child(section, in: agentBlock) else { return nil }
-        let sectionBlock = try document.block(of: sectionKey)
-        return document.child(key, in: sectionBlock).map { ValueLine($0.rest).value }
+        try ConfigSetting.value(at: ["agent", section, key], of: yaml)
     }
 
     /// The same text with `key` set to `value`. Inserts the key, and the section or `agent:` when they are
     /// missing too.
     static func setting(_ key: String, in section: String, to value: String, in yaml: String) throws -> String {
+        try ConfigSetting.setting(at: ["agent", section, key], to: value, in: yaml)
+    }
+}
+
+/// One value at a key path of a `symphony.yml`, such as `["workspaces", "git_network_timeout_ms"]`. Only that
+/// one line is rewritten, or inserted when missing, so comments, ordering and indentation stay as they are.
+enum ConfigSetting {
+    /// Indent added for a new nested key when the file gives no example to follow.
+    static let defaultIndentStep = 2
+
+    /// The value after the last key's colon without its comment, "" when empty, or nil when the key or a
+    /// section above it is missing. Throws `MaxConcurrentAgentsError.notABlock` when a section above it holds
+    /// an inline value.
+    static func value(at path: [String], of yaml: String) throws -> String? {
+        let document = Document(yaml)
+        var range = document.all
+        for name in path.dropLast() {
+            guard let section = document.child(name, in: range) else { return nil }
+            range = try document.block(of: section)
+        }
+        return path.last.flatMap { document.child($0, in: range) }.map { ValueLine($0.rest).value }
+    }
+
+    /// The same text with the last key of `path` set to `value`. Inserts the key, and the sections above it
+    /// when they are missing too, indented like the block they go in.
+    static func setting(at path: [String], to value: String, in yaml: String) throws -> String {
         var document = Document(yaml)
+        var range = document.all
+        var parent: Document.Key?
+        var step = defaultIndentStep
 
-        guard let agent = document.child("agent", in: document.all) else {
-            let step = defaultIndentStep
-            document.append([
-                "agent:",
-                String(repeating: " ", count: step) + "\(section):",
-                String(repeating: " ", count: step * 2) + "\(key): \(value)",
-            ])
-            return document.text
+        for (depth, name) in path.enumerated() {
+            guard let key = document.child(name, in: range) else {
+                let column = document.childIndent(in: range) ?? parent.map { $0.indent + step } ?? 0
+                let missing = path[depth...]
+                let lines = missing.enumerated().map { offset, name in
+                    let line = String(repeating: " ", count: column + offset * step) + name + ":"
+                    return offset == missing.count - 1 ? line + " " + value : line
+                }
+                if let parent {
+                    document.insert(lines, after: parent.index)
+                } else {
+                    document.append(lines)
+                }
+                return document.text
+            }
+
+            guard depth < path.count - 1 else {
+                let prefix = String(repeating: " ", count: key.indent) + "\(name):"
+                document.lines[key.index] = prefix + ValueLine(key.rest).replacingValue(with: value)
+                return document.text
+            }
+            range = try document.block(of: key)
+            if let childIndent = document.childIndent(in: range) { step = childIndent - key.indent }
+            parent = key
         }
-        let agentBlock = try document.block(of: agent)
-        let agentChildIndent = document.childIndent(in: agentBlock) ?? agent.indent + defaultIndentStep
-
-        guard let sectionKey = document.child(section, in: agentBlock) else {
-            let step = agentChildIndent - agent.indent
-            document.insert(
-                [
-                    String(repeating: " ", count: agentChildIndent) + "\(section):",
-                    String(repeating: " ", count: agentChildIndent + step) + "\(key): \(value)",
-                ],
-                after: agent.index
-            )
-            return document.text
-        }
-        let sectionBlock = try document.block(of: sectionKey)
-
-        guard let line = document.child(key, in: sectionBlock) else {
-            let indent = document.childIndent(in: sectionBlock)
-                ?? sectionKey.indent + (agentChildIndent - agent.indent)
-            document.insert([String(repeating: " ", count: indent) + "\(key): \(value)"], after: sectionKey.index)
-            return document.text
-        }
-
-        let prefix = String(repeating: " ", count: line.indent) + "\(key):"
-        document.lines[line.index] = prefix + ValueLine(line.rest).replacingValue(with: value)
         return document.text
     }
 }

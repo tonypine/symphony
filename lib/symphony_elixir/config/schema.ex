@@ -451,6 +451,9 @@ defmodule SymphonyElixir.Config.Schema do
       field(:strategy, :string, default: "clone")
       field(:repo, :string)
       field(:fetch_before_dispatch, :boolean, default: true)
+      # The wall-clock limit of one git `fetch`, `pull`, `push` or `ls-remote`; unset, it is the
+      # `:git_network_timeout_ms` application env, or 5 minutes (see `Config.git_network_timeout_ms/0`).
+      field(:git_network_timeout_ms, :integer)
       # `owner/repo` of a repo Symphony clones itself (`repositories[].workspace.source`);
       # `repo` then points at that clone under `clones_root`.
       field(:github, :string)
@@ -463,7 +466,8 @@ defmodule SymphonyElixir.Config.Schema do
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
       schema
-      |> cast(attrs, [:root, :strategy, :repo, :fetch_before_dispatch, :github, :clones_root], empty_values: [])
+      |> cast(attrs, ~w(root strategy repo fetch_before_dispatch git_network_timeout_ms github clones_root)a, empty_values: [])
+      |> validate_number(:git_network_timeout_ms, greater_than: 0)
       |> cast_embed(:attachments, with: &Attachments.changeset/2)
       |> cast_embed(:sandbox, with: &Sandbox.changeset/2)
       |> cast_embed(:lifecycle, with: &Lifecycle.changeset/2)
@@ -1101,6 +1105,9 @@ defmodule SymphonyElixir.Config.Schema do
       field(:read_timeout_ms, :integer, default: 30_000)
       field(:stall_timeout_ms, :integer, default: 300_000)
       field(:command_timeout_ms, :integer, default: 600_000)
+      # How long one call to Symphony's own MCP tools may run; unset, it is the
+      # `:mcp_tool_timeout_ms` application env, or 10 minutes (see `Config.mcp_tool_timeout_ms/0`).
+      field(:mcp_tool_timeout_ms, :integer)
       field(:codex_stdio_prompt_soft_limit, :integer, default: @default_codex_stdio_prompt_soft_limit)
     end
 
@@ -1140,6 +1147,7 @@ defmodule SymphonyElixir.Config.Schema do
           :read_timeout_ms,
           :stall_timeout_ms,
           :command_timeout_ms,
+          :mcp_tool_timeout_ms,
           :codex_stdio_prompt_soft_limit
         ],
         empty_values: []
@@ -1160,6 +1168,7 @@ defmodule SymphonyElixir.Config.Schema do
       |> validate_number(:read_timeout_ms, greater_than: 0)
       |> validate_number(:stall_timeout_ms, greater_than_or_equal_to: 0)
       |> validate_number(:command_timeout_ms, greater_than_or_equal_to: 0)
+      |> validate_number(:mcp_tool_timeout_ms, greater_than: 0)
       |> validate_number(:codex_stdio_prompt_soft_limit, greater_than: 0)
       |> validate_project_guide_files()
       |> validate_run_profile_settings()

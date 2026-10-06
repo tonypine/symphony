@@ -545,7 +545,8 @@ Fields:
     its checkout of the merged commit, and a QA pass's checkouts of the PR head.
   - Every git call Symphony makes runs SSH with keepalives, so a connection that stops answering
     is dropped after about a minute. A host-side `fetch`, `pull`, `push` or `ls-remote` also has
-    a wall-clock limit (5 minutes by default, the `:git_network_timeout_ms` application env): at
+    a wall-clock limit (`workspaces.git_network_timeout_ms`, 5 minutes by default; unset, the
+    `:git_network_timeout_ms` application env applies first): at
     the limit Symphony stops git and the `ssh` it started, logs an error naming the repo and
     command, and the call fails with status 124, so the fetch lock passes to the next call. Each
     such call logs its status and duration.
@@ -658,6 +659,9 @@ Fields:
   - Defaults for `repositories[].workspace`.
   - Multi-repo configs SHOULD set worktree population under each repo instead of globally.
   - `strategy` defaults to `clone`; `fetch_before_dispatch` defaults to `true`.
+- `git_network_timeout_ms` (positive integer)
+  - Default: `300000`.
+  - The wall-clock limit of each host-side git `fetch`, `pull`, `push` or `ls-remote`.
 - `cleanup` (object)
   - Optional workspace lifecycle guardrails.
   - `enabled` defaults to `true`.
@@ -1851,6 +1855,7 @@ not require recognizing or validating extension fields unless that extension is 
 - `agent.timeouts.read_ms`: integer, default `30000`
 - `agent.timeouts.stall_ms`: integer, default `300000`
 - `agent.timeouts.command_ms`: integer, default `600000`
+- `agent.timeouts.mcp_tool_ms`: positive integer, default `600000`
 - `watchdog.enabled`: boolean, default `true`
 - `watchdog.tick_interval_ms`: integer, default `60000`
 - `watchdog.no_progress_threshold_ms`: integer, default `600000`
@@ -3099,7 +3104,8 @@ Notes:
   a structured JSON-RPC parse error when the request ID can be recovered, and response-send failures
   are logged instead of silently closing the connection.
 - A connection serves one request at a time. A call of one of Symphony's own tools (`linear_*`,
-  `github_*`) that runs longer than 10 minutes (the `:mcp_tool_timeout_ms` application env) is
+  `github_*`) that runs longer than `agent.timeouts.mcp_tool_ms` (10 minutes by default; unset, the
+  `:mcp_tool_timeout_ms` application env applies first) is
   stopped and answered with a `tool_timeout` tool error, so later calls on the connection are not
   held behind it. QA tools keep their drivers' own timeouts. While a tool runs, the server still
   reads the connection: a `notifications/cancelled` for the call stops the tool at once and leaves
