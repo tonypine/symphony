@@ -72,6 +72,18 @@ defmodule SymphonyElixir.RunProfilesConfigTest do
     end
   end
 
+  describe "agent.small_model" do
+    test "is nil by default and trimmed when set" do
+      assert settings!(%{}).agent.small_model == nil
+      assert settings!(%{"small_model" => " anthropic/claude-haiku-4.5 "}).agent.small_model == "anthropic/claude-haiku-4.5"
+    end
+
+    test "rejects a blank or non-string value" do
+      assert error!(%{"small_model" => " "}) =~ "agent.small_model must not be blank"
+      assert error!(%{"small_model" => ["x"]}) =~ "agent.small_model is invalid"
+    end
+  end
+
   describe "provider" do
     test "resolves profile, then agent.provider, then anthropic" do
       settings =
