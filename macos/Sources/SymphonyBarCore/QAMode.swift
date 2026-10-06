@@ -2,7 +2,8 @@ import Foundation
 
 /// QA mode, for test launches: `SYMPHONY_BAR_QA_ROOT=<dir>` keeps the app's settings, secrets, Launch at Login,
 /// logs, update downloads, Symphony's state and logs and the embedded Symphony's unpacked release under `<dir>`,
-/// never in UserDefaults, the app's secrets file or the folders a normal launch uses.
+/// never in UserDefaults, the app's secrets file or the folders a normal launch uses. With
+/// `SYMPHONY_QA_OPENROUTER_URL` it talks to Symphony's OpenRouter stub instead of openrouter.ai.
 public struct QAMode: Equatable {
     /// The directory QA mode keeps everything under. QA mode is on while it is set and not blank.
     public static let environmentKey = "SYMPHONY_BAR_QA_ROOT"
@@ -10,6 +11,9 @@ public struct QAMode: Equatable {
     public static let scriptedKey = "SYMPHONY_BAR_QA_SCRIPTED"
     /// The releases/latest URL update checks read instead of GitHub's, for a local update feed.
     public static let updateURLKey = "SYMPHONY_BAR_UPDATE_URL"
+    /// The API base of the OpenRouter stub QA starts (`symphony openrouter-stub`), such as
+    /// `http://127.0.0.1:4100/api`. The Symphony the app runs reads it too, also only in QA mode.
+    public static let openRouterURLKey = "SYMPHONY_QA_OPENROUTER_URL"
     /// Where Symphony writes its logs (`SymphonyElixir.Paths`).
     public static let symphonyLogsRootKey = "SYMPHONY_LOGS_ROOT"
     /// Where the embedded Burrito binary unpacks its release, under `.burrito/`. Burrito's launcher removes older
@@ -29,11 +33,14 @@ public struct QAMode: Equatable {
     public let scripted: Bool
     /// The update feed from `SYMPHONY_BAR_UPDATE_URL`, nil for GitHub's.
     public let updateURL: URL?
+    /// The OpenRouter stub from `SYMPHONY_QA_OPENROUTER_URL`, nil for openrouter.ai.
+    public let openRouterURL: URL?
 
-    public init(root: URL, scripted: Bool = false, updateURL: URL? = nil) {
+    public init(root: URL, scripted: Bool = false, updateURL: URL? = nil, openRouterURL: URL? = nil) {
         self.root = root.standardizedFileURL
         self.scripted = scripted
         self.updateURL = updateURL
+        self.openRouterURL = openRouterURL
     }
 
     /// QA mode from `SYMPHONY_BAR_QA_ROOT`, or nil when it is unset or blank. `~` is expanded.
@@ -43,8 +50,22 @@ public struct QAMode: Equatable {
         return QAMode(
             root: URL(fileURLWithPath: (path as NSString).expandingTildeInPath, isDirectory: true),
             scripted: environment[scriptedKey]?.trimmingWhitespace() == "1",
-            updateURL: updateURL.flatMap { ["http", "https"].contains($0.scheme ?? "") ? $0 : nil }
+            updateURL: updateURL.flatMap { ["http", "https"].contains($0.scheme ?? "") ? $0 : nil },
+            openRouterURL: environment[openRouterURLKey].flatMap(loopbackURL)
         )
+    }
+
+    /// `value` as an http(s) URL on a loopback host without a trailing slash, or nil. The stub only ever runs on the
+    /// app's own Mac, so no other host is accepted, and a key typed in QA never leaves it.
+    static func loopbackURL(_ value: String) -> URL? {
+        var text = value.trimmingWhitespace()
+        while text.hasSuffix("/") { text.removeLast() }
+        guard let components = URLComponents(string: text),
+              ["http", "https"].contains(components.scheme ?? ""),
+              ["127.0.0.1", "localhost", "::1", "[::1]"].contains(components.host ?? ""),
+              components.user == nil, components.password == nil, components.query == nil, components.fragment == nil
+        else { return nil }
+        return components.url
     }
 
     public var settingsFile: URL { root.appendingPathComponent(Self.settingsFileName) }
@@ -68,6 +89,9 @@ public struct AppStores {
     public let updateCacheDirectory: URL?
     /// The releases/latest URL update checks read.
     public let updateURL: URL
+    /// The OpenRouter API base Settings talks to: openrouter.ai's, whatever the environment says, except in QA mode
+    /// with a stub.
+    public let openRouterBaseURL: URL
     /// The control URL used while Symphony hasn't written one. Nil in QA mode, so the app never mistakes the
     /// Symphony a normal launch runs, on the default port, for its own.
     public let controlURLFallback: URL?
@@ -88,6 +112,7 @@ public struct AppStores {
             logDirectory = ChildLog.defaultDirectory(home: home)
             updateCacheDirectory = nil
             updateURL = UpdateChecker.latestReleaseURL
+            openRouterBaseURL = OpenRouterClient.baseURL
             controlURLFallback = SymphonyState.defaultBaseURL
             self.environment = environment
             return
@@ -101,6 +126,7 @@ public struct AppStores {
         logDirectory = qaMode.logDirectory
         updateCacheDirectory = qaMode.updateCacheDirectory
         updateURL = qaMode.updateURL ?? UpdateChecker.latestReleaseURL
+        openRouterBaseURL = qaMode.openRouterURL.map(OpenRouterClient.baseURL(api:)) ?? OpenRouterClient.baseURL
         controlURLFallback = nil
         var environment = environment
         for (key, folder) in [

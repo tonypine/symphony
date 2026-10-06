@@ -6,7 +6,8 @@ and checks what TP-272 used to leave to a person on the live app:
 1. **Update** from release N to N+1 while an agent run is active. The old Symphony waits for the run, then
    stops; the new app starts its Symphony on its own and dispatch resumes. Afterwards only N+1's unpacked
    release is left, no BEAM from N runs, and the app folder holds N+1 as `Symphony.app` and N as
-   `Symphony (previous).app`. If N's unpacked release disappears while N's Symphony still runs (the
+   `Symphony (previous).app`, and the new app's menu shows "Updated to vN+1", the release carried across the
+   relaunch. If N's unpacked release disappears while N's Symphony still runs (the
    [TP-339](https://linear.app/tonypine/issue/TP-339) failure: the new binary ran before the old Symphony
    stopped), the test fails.
 2. **Restart** while a run is active: it waits for the run, restarts, and dispatch resumes. The test pauses

@@ -67,6 +67,26 @@ final class QAModeTests: XCTestCase {
         XCTAssertNil(ignored?.updateURL)
     }
 
+    func testQAModeReadsOnlyALoopbackOpenRouterStub() {
+        func stub(_ value: String) -> String? {
+            QAMode.detect(environment: [QAMode.environmentKey: "/tmp/qa", QAMode.openRouterURLKey: value])?
+                .openRouterURL?.absoluteString
+        }
+
+        XCTAssertNil(QAMode.detect(environment: [QAMode.environmentKey: "/tmp/qa"])?.openRouterURL)
+        XCTAssertEqual(stub(" http://127.0.0.1:4100/api/ \n"), "http://127.0.0.1:4100/api")
+        XCTAssertEqual(stub("https://localhost:4100/api"), "https://localhost:4100/api")
+        XCTAssertEqual(stub("http://[::1]:4100/api"), "http://[::1]:4100/api")
+        // Any other host, scheme or a URL with credentials would take the key off this Mac.
+        XCTAssertNil(stub("https://openrouter.example.com/api"))
+        XCTAssertNil(stub("http://10.0.0.5:4100/api"))
+        XCTAssertNil(stub("http://127.0.0.1.example.com/api"))
+        XCTAssertNil(stub("http://user:pass@127.0.0.1:4100/api"))
+        XCTAssertNil(stub("http://127.0.0.1:4100/api?next=https://evil.example"))
+        XCTAssertNil(stub("file:///tmp/api"))
+        XCTAssertNil(stub(""))
+    }
+
     func testQAPathsAreUnderTheRoot() {
         let qa = QAMode(root: URL(fileURLWithPath: "/tmp/qa", isDirectory: true))
 
@@ -98,6 +118,27 @@ final class QAModeTests: XCTestCase {
         XCTAssertEqual(stores.controlURLFallback, SymphonyState.defaultBaseURL)
         XCTAssertEqual(stores.environment, ["HOME": "/Users/me"])
         XCTAssertEqual(stores.updateHelperEnvironment, ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"])
+        XCTAssertEqual(stores.openRouterBaseURL, OpenRouterClient.baseURL)
+    }
+
+    func testANormalLaunchAlwaysTalksToOpenRouterWhateverTheEnvironmentSays() {
+        let stores = AppStores(
+            environment: [QAMode.openRouterURLKey: "http://127.0.0.1:4100/api", QAMode.environmentKey: " "],
+            home: home
+        )
+
+        XCTAssertFalse(stores.isQAMode)
+        XCTAssertEqual(stores.openRouterBaseURL.absoluteString, "https://openrouter.ai/api/v1/")
+    }
+
+    func testQAModeTalksToTheOpenRouterStubWhenGivenOne() {
+        XCTAssertEqual(qaStores().openRouterBaseURL, OpenRouterClient.baseURL)
+        XCTAssertEqual(qaStores([QAMode.openRouterURLKey: "https://openrouter.ai/api"]).openRouterBaseURL, OpenRouterClient.baseURL)
+
+        let stores = qaStores([QAMode.openRouterURLKey: "http://127.0.0.1:4100/api"])
+        XCTAssertEqual(stores.openRouterBaseURL.absoluteString, "http://127.0.0.1:4100/api/v1/")
+        // The Symphony the app runs gets the URL too, and reads it only in QA mode.
+        XCTAssertEqual(stores.environment[QAMode.openRouterURLKey], "http://127.0.0.1:4100/api")
     }
 
     func testQAModeUsesFilesUnderTheRoot() {
