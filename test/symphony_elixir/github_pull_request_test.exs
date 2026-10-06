@@ -276,6 +276,66 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
              PullRequest.fetch_ci_status(pr_url, gh_runner: runner.({"HTTP 502", 1}))
   end
 
+  test "fetch_ci_status reads a check left in progress in a completed workflow run as finished" do
+    pr_url = "https://github.com/org/repo/pull/70"
+    runs_endpoint = "repos/org/repo/actions/runs?head_sha=5e19a91&per_page=100"
+    run_url = "https://github.com/org/repo/actions/runs/37391815662"
+    test_pid = self()
+
+    runner = fn rollup, runs ->
+      fn
+        ["pr", "view", ^pr_url, "--json", _fields], _opts ->
+          {Jason.encode!(%{"state" => "OPEN", "url" => pr_url, "headRefOid" => "5e19a91", "mergeStateStatus" => "UNSTABLE", "statusCheckRollup" => rollup}), 0}
+
+        ["api", ^runs_endpoint], _opts ->
+          send(test_pid, :listed_runs)
+          {Jason.encode!(%{"workflow_runs" => runs}), 0}
+      end
+    end
+
+    ci = %{"name" => "ci", "status" => "COMPLETED", "conclusion" => "SUCCESS", "detailsUrl" => "#{run_url}/job/1"}
+    server_test = %{"name" => "server-test", "status" => "IN_PROGRESS", "conclusion" => "", "detailsUrl" => "#{run_url}/job/2"}
+    finished = [%{"id" => 37_391_815_662, "status" => "completed", "conclusion" => "success"}]
+
+    # The required `ci` job passed and the run completed, but GitHub never closed `server-test`.
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:ok, status} = PullRequest.fetch_ci_status(pr_url, gh_runner: runner.([ci, server_test], finished))
+        assert [%{name: "ci", conclusion: "SUCCESS"}, %{name: "server-test", status: "COMPLETED", conclusion: "SUCCESS", stale: true}] = status.checks
+        assert CiPoller.ci_action(status) == :success
+      end)
+
+    assert log =~ "Ignoring stale check server-test in completed run 37391815662 pr_url=#{pr_url} commit_sha=5e19a91"
+
+    # A required check still running in a run that is still running holds the head.
+    running = [%{"id" => 37_391_815_662, "status" => "in_progress", "conclusion" => nil}]
+    assert {:ok, status} = PullRequest.fetch_ci_status(pr_url, gh_runner: runner.([ci, server_test], running))
+    assert [_ci, %{name: "server-test", status: "IN_PROGRESS"} = check] = status.checks
+    refute Map.has_key?(check, :stale)
+    assert CiPoller.ci_action(status) == :pending
+
+    # A run that failed, or one the head's runs don't list, leaves its unfinished check pending.
+    failed = [%{"id" => 37_391_815_662, "status" => "completed", "conclusion" => "failure"}]
+    other = [%{"id" => 1, "status" => "completed", "conclusion" => "success"}]
+
+    for runs <- [failed, other] do
+      assert {:ok, status} = PullRequest.fetch_ci_status(pr_url, gh_runner: runner.([ci, server_test], runs))
+      assert CiPoller.ci_action(status) == :pending
+    end
+
+    # A failed check, or a pending check from outside GitHub Actions, needs no runs.
+    red = Map.merge(ci, %{"conclusion" => "FAILURE"})
+    external = %{"context" => "deploy/preview", "state" => "PENDING", "targetUrl" => "https://ci.example.test/1"}
+
+    for rollup <- [[red, server_test], [ci, server_test, external]] do
+      assert {:ok, status} = PullRequest.fetch_ci_status(pr_url, gh_runner: runner.(rollup, finished))
+      refute Map.has_key?(status, :workflow_runs)
+    end
+
+    for _listing <- 1..4, do: assert_received(:listed_runs)
+    refute_received :listed_runs
+  end
+
   test "fetch_failed_log and rerun_failed use gh run commands" do
     runner = fn
       ["run", "view", "987", "--log-failed"], opts ->
