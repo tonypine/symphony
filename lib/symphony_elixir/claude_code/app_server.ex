@@ -65,6 +65,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
     with :ok <- check_provider(run_profile, worker_host),
          {:ok, run_profile} <- check_model_capabilities(run_profile, settings),
+         run_profile = put_small_model(run_profile, settings),
          {:ok, expanded_workspace} <- validate_workspace_cwd(workspace, worker_host, settings),
          {:ok, mcp_session, remote_socket_path, remote_shim_path} <-
            start_mcp_session(expanded_workspace, worker_host, opts),
@@ -1097,11 +1098,19 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
   defp drop_unsupported_effort(profile), do: profile
 
+  # A set `agent.small_model` rides on an OpenRouter session's profile, so every turn of the
+  # session sends Claude Code's background calls to the model the session started with.
+  defp put_small_model(%{provider: "openrouter"} = profile, %Schema{agent: %{small_model: small_model}}) when is_binary(small_model),
+    do: Map.put(profile, :small_model, small_model)
+
+  defp put_small_model(profile, _settings), do: profile
+
   # The env that points `claude` at the run's provider, read at each launch so the key never
   # sits in the session. Anthropic runs add nothing. Every model id `claude` can pick on its own
   # (subagents, the small fast model for background calls, the alias defaults) points at the
-  # profile's model, since OpenRouter does not know Anthropic's own ids. The base URL is
-  # openrouter.ai's outside QA mode (`OpenRouter.base_url/1`).
+  # profile's model, since OpenRouter does not know Anthropic's own ids; the Haiku and small fast
+  # ids point at `agent.small_model` instead when it is set. The base URL is openrouter.ai's
+  # outside QA mode (`OpenRouter.base_url/1`).
   defp provider_env(%{provider: "openrouter"} = profile) do
     case Config.openrouter_api_key() do
       nil ->
@@ -1111,6 +1120,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
       api_key ->
         model = Map.get(profile, :model)
+        small_model = Map.get(profile, :small_model) || model
 
         {:ok,
          %{
@@ -1118,10 +1128,10 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
            "ANTHROPIC_AUTH_TOKEN" => Secret.unwrap(api_key),
            "ANTHROPIC_API_KEY" => "",
            "CLAUDE_CODE_SUBAGENT_MODEL" => model,
-           "ANTHROPIC_DEFAULT_HAIKU_MODEL" => model,
+           "ANTHROPIC_DEFAULT_HAIKU_MODEL" => small_model,
            "ANTHROPIC_DEFAULT_SONNET_MODEL" => model,
            "ANTHROPIC_DEFAULT_OPUS_MODEL" => model,
-           "ANTHROPIC_SMALL_FAST_MODEL" => model
+           "ANTHROPIC_SMALL_FAST_MODEL" => small_model
          }}
     end
   end
