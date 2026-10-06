@@ -503,11 +503,14 @@ public struct RepoDetail: Equatable, Identifiable {
         public var workerHost: String?
         /// Its worktree, set only on this Mac, where Finder can reveal it.
         public var worktreePath: String?
+        /// "Running for 12m · last activity 3m ago", nil when Symphony's state doesn't list the run.
+        public var activity: String?
 
-        public init(issueIdentifier: String, workerHost: String? = nil, worktreePath: String? = nil) {
+        public init(issueIdentifier: String, workerHost: String? = nil, worktreePath: String? = nil, activity: String? = nil) {
             self.issueIdentifier = issueIdentifier
             self.workerHost = workerHost
             self.worktreePath = worktreePath
+            self.activity = activity
         }
 
         /// "TP-7", or "TP-7 · on worker-1".
@@ -548,6 +551,7 @@ public struct RepoDetail: Equatable, Identifiable {
     /// Nil for a repo `symphony.yml` doesn't have.
     public var gate: Gate?
     public var actions: RepoActions
+    public var health: RepoHealth
 
     public init(
         key: String,
@@ -558,7 +562,8 @@ public struct RepoDetail: Equatable, Identifiable {
         routing: Routing,
         live: Live,
         gate: Gate? = nil,
-        actions: RepoActions = RepoActions()
+        actions: RepoActions = RepoActions(),
+        health: RepoHealth = .notChecked(status: .stopped, poll: nil)
     ) {
         self.key = key
         self.isDefault = isDefault
@@ -569,6 +574,7 @@ public struct RepoDetail: Equatable, Identifiable {
         self.live = live
         self.gate = gate
         self.actions = actions
+        self.health = health
     }
 
     /// Agents running on the repo, 0 while Symphony doesn't say.
@@ -581,9 +587,9 @@ public struct RepoDetail: Equatable, Identifiable {
         github.flatMap { URL(string: "https://github.com/\($0)") }
     }
 
-    /// What VoiceOver reads for the sidebar row: "billing-api, default, 2 agents running".
+    /// What VoiceOver reads for the sidebar row: "billing-api, needs attention, default, 2 agents running".
     public var accessibilityLabel: String {
-        var parts = [key]
+        var parts = [key, health.status.spoken]
         if isDefault { parts.append("default") }
         let count = agentCount
         if count > 0 { parts.append(count == 1 ? "1 agent running" : "\(count) agents running") }
@@ -639,12 +645,14 @@ public enum ReposList {
 
     /// The window for Symphony's `status`, the last repos poll (nil before the first) and `symphony.yml`. The repos
     /// come from Symphony while it answers with them, otherwise from `symphony.yml` with what only Symphony knows
-    /// folded into one line. `cloneRemoval` says whether a managed repo's clone can be deleted.
+    /// folded into one line. `pending` is the `WORKFLOW.md` the app wrote for a repo key and that isn't on its base
+    /// branch yet. `cloneRemoval` says whether a managed repo's clone can be deleted.
     public static func window(
         status: SymphonyStatus,
         poll: ReposPoll?,
         config: ReposConfig,
         now: Date = Date(),
+        pending: (_ key: String) -> PendingWorkflow? = { _ in nil },
         isDirectory: (String) -> Bool = ManagedClones.isDirectory,
         cloneRemoval: (_ gitHub: String) -> ManagedClones.Removal
     ) -> ReposWindow {
@@ -653,8 +661,10 @@ public enum ReposList {
         let entries = (try? config.entries.get()) ?? []
         var details: [RepoDetail]
         if isAnswering(status), case let .repos(repos, warning)? = poll {
+            let runs = snapshot?.runs ?? []
             details = repos.map { repo in
-                detail(repo, warning: warning, now: now).withGate(entries, config.globalGate, snapshot)
+                detail(repo, warning: warning, runs: runs, pending: pending(repo.key), now: now)
+                    .withGate(entries, config.globalGate, snapshot)
             }
         } else {
             switch config.repos {
@@ -664,8 +674,9 @@ public enum ReposList {
                 return ReposWindow(chip: chip, content: .empty(.unreadable(path: config.path, message: message)))
             case let .entries(entries):
                 let live = folded(status: status, poll: poll)
+                let health = RepoHealth.notChecked(status: status, poll: poll)
                 details = entries.map { entry in
-                    detail(entry, live: live, config: config, isDirectory: isDirectory)
+                    detail(entry, live: live, health: health, config: config, isDirectory: isDirectory)
                         .withGate(entries, config.globalGate, snapshot)
                 }
             }
@@ -721,8 +732,14 @@ public enum ReposList {
         }
     }
 
-    /// A repo as a running Symphony reports it.
-    static func detail(_ repo: RepoStatus, warning: String?, now: Date) -> RepoDetail {
+    /// A repo as a running Symphony reports it, with the running entries of its state.
+    static func detail(
+        _ repo: RepoStatus,
+        warning: String?,
+        runs: [StateSnapshot.Run] = [],
+        pending: PendingWorkflow? = nil,
+        now: Date
+    ) -> RepoDetail {
         let source: RepoDetail.Source
         let branch = baseBranch(repo.baseBranch)
         switch repo.source {
@@ -751,18 +768,37 @@ public enum ReposList {
                     RepoDetail.Agent(
                         issueIdentifier: worktree.issueIdentifier,
                         workerHost: worktree.workerHost,
-                        worktreePath: worktree.workerHost == nil ? worktree.path : nil
+                        worktreePath: worktree.workerHost == nil ? worktree.path : nil,
+                        activity: runs.first { $0.issueIdentifier == worktree.issueIdentifier }
+                            .flatMap { activityLine($0, now: now) }
                     )
                 },
                 agentsProblem: warning.map { "Symphony couldn't list its running agents: \($0)" }
-            )
+            ),
+            health: RepoHealth.of(repo, warning: warning, runs: runs, pending: pending, now: now)
         )
+    }
+
+    /// "Running for 12m · last activity 3m ago", or the part Symphony reported.
+    static func activityLine(_ run: StateSnapshot.Run, now: Date) -> String? {
+        let age = { (date: Date) in StatusMenu.durationLabel(Int(now.timeIntervalSince(date))) }
+        switch (run.startedAt, run.lastEventAt) {
+        case let (started?, last?):
+            return "Running for \(age(started)) · last activity \(age(last)) ago"
+        case let (started?, nil):
+            return "Running for \(age(started)) · no activity yet"
+        case let (nil, last?):
+            return "Last activity \(age(last)) ago"
+        case (nil, nil):
+            return nil
+        }
     }
 
     /// A repo as `symphony.yml` configures it, with `live` in place of what only a running Symphony knows.
     static func detail(
         _ entry: RepositoryEntry,
         live: RepoDetail.Live,
+        health: RepoHealth = .notChecked(status: .stopped, poll: nil),
         config: ReposConfig,
         isDirectory: (String) -> Bool
     ) -> RepoDetail {
@@ -797,7 +833,8 @@ public enum ReposList {
             subtitle: github ?? folderName(source.path),
             source: source,
             routing: routing(entry.route, key: entry.key, isDefault: isDefault),
-            live: live
+            live: live,
+            health: health
         )
     }
 

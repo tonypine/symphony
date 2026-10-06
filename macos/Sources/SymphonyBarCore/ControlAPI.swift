@@ -1,6 +1,6 @@
 import Foundation
 
-/// An operator control the menu sends to Symphony's `POST /api/v1/control/*`.
+/// An operator control the app sends to Symphony's `POST /api/v1/control/*`.
 public enum ControlAction: Equatable {
     case pause
     case resume
@@ -8,6 +8,8 @@ public enum ControlAction: Equatable {
     case force(String)
     /// Removes the force label from the ticket.
     case stopForcing(String)
+    /// Stops the agent running on the ticket.
+    case stop(String)
 
     /// Reason Symphony records for a pause from the menu; the dashboard and the menu show it.
     public static let pauseReason = "paused from menu bar"
@@ -20,6 +22,8 @@ public enum ControlAction: Equatable {
             return "api/v1/control/resume"
         case .force, .stopForcing:
             return "api/v1/control/force"
+        case .stop:
+            return "api/v1/control/stop"
         }
     }
 
@@ -33,6 +37,8 @@ public enum ControlAction: Equatable {
             return ["identifier": identifier]
         case let .stopForcing(identifier):
             return ["identifier": identifier, "clear": "true"]
+        case let .stop(identifier):
+            return ["issue_identifier": identifier]
         }
     }
 
@@ -47,6 +53,8 @@ public enum ControlAction: Equatable {
             return "Couldn't force \(identifier)"
         case let .stopForcing(identifier):
             return "Couldn't stop forcing \(identifier)"
+        case let .stop(identifier):
+            return "Couldn't stop \(identifier)"
         }
     }
 }
@@ -123,6 +131,10 @@ public enum ControlAPI {
         let prefix = action.failurePrefix
         switch statusCode {
         case 200:
+            // Symphony answers 200 with `stopped: false` when no agent runs on the ticket.
+            if case let .stop(identifier) = action, !stopped(data) {
+                return .failed("\(prefix): no agent runs on \(identifier) anymore")
+            }
             return .done
         case 401:
             return .failed("\(prefix): it rejected the control token (HTTP 401)")
@@ -132,6 +144,13 @@ public enum ControlAPI {
             if let message = errorMessage(data) { return .failed("\(prefix): \(message) (HTTP \(statusCode))") }
             return .failed("\(prefix): HTTP \(statusCode)")
         }
+    }
+
+    private static func stopped(_ data: Data) -> Bool {
+        struct Payload: Decodable {
+            let stopped: Bool?
+        }
+        return (try? JSONDecoder().decode(Payload.self, from: data))?.stopped ?? false
     }
 
     private static func errorMessage(_ data: Data) -> String? {
