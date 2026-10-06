@@ -170,6 +170,37 @@ defmodule SymphonyElixir.SubIssueWaitTest do
       refute SubIssueWait.park?(nil, ["Done"], settings)
     end
 
+    test "an issue that is not a breakdown parent waits on merge while a sub-issue is open, and closes once all are terminal" do
+      settings = Config.settings!()
+      terminal = ["Done", "Canceled", "Duplicate"]
+      open = [%{id: "c1", identifier: "MT-2", state: "Backlog"}, %{id: "c2", identifier: "MT-3", state: "Done"}]
+      issue = %Issue{id: "p", identifier: "MT-1", title: "Work", state: "Merging", labels: ["improvement"], sub_issues: open}
+
+      assert SubIssueWait.wait_on_merge?(issue, terminal, settings)
+      assert SubIssueWait.wait_on_merge?(%{issue | sub_issues: [%{id: "c1", identifier: "MT-2"}]}, terminal, settings)
+      refute SubIssueWait.wait_on_merge?(%{issue | sub_issues: []}, terminal, settings)
+      canceled = [%{id: "c1", identifier: "MT-2", state: "Canceled"}]
+      refute SubIssueWait.wait_on_merge?(%{issue | sub_issues: canceled}, terminal, settings)
+      refute SubIssueWait.wait_on_merge?(%{issue | labels: ["breakdown"]}, terminal, settings)
+      refute SubIssueWait.wait_on_merge?(nil, terminal, settings)
+
+      waiting = %{issue | state: @waiting}
+      refute SubIssueWait.close?(waiting, terminal, settings)
+
+      for finished <- ["Done", "Canceled", "Duplicate"] do
+        assert SubIssueWait.close?(%{waiting | sub_issues: [%{id: "c1", identifier: "MT-2", state: finished}]}, terminal, settings)
+      end
+
+      done = %{waiting | sub_issues: [%{id: "c1", identifier: "MT-2", state: "Done"}]}
+      refute SubIssueWait.close?(%{done | state: "In Progress"}, terminal, settings)
+      refute SubIssueWait.close?(%{done | labels: ["breakdown"]}, terminal, settings)
+      refute SubIssueWait.close?(%{done | sub_issues: []}, terminal, settings)
+      refute SubIssueWait.close?(nil, terminal, settings)
+
+      # It stays held while it waits: Symphony closes it with no run.
+      assert SubIssueWait.held?(done, terminal, settings)
+    end
+
     test "tells a never-approved plan, with every open sub-issue in Backlog, from an approved one" do
       settings = Config.settings!()
       backlog = [%{id: "c1", identifier: "MT-2", state: " backlog "}, %{id: "c2", identifier: "MT-3", state: "Cancelled"}]
@@ -364,6 +395,62 @@ defmodule SymphonyElixir.SubIssueWaitTest do
       approved = %{parent | sub_issues: Enum.map(backlog, &%{&1 | state: "Todo"})}
       refute Orchestrator.should_dispatch_issue_for_test(approved, state)
       refute Orchestrator.should_dispatch_issue_for_test(%{approved | state: @waiting}, state)
+    end
+
+    test "moves an issue waiting on its sub-tickets after its PR merged to Done once each one is finished" do
+      state = orchestrator_state()
+
+      sub_issues = [
+        %{id: "child-1", identifier: "MT-1702", state: "Done"},
+        %{id: "child-2", identifier: "MT-1703", state: "Canceled"},
+        %{id: "child-3", identifier: "MT-1704", state: "Duplicate"}
+      ]
+
+      waiting = %Issue{id: "waiting", identifier: "MT-1701", title: "Work", state: @waiting, labels: ["improvement"], sub_issues: sub_issues}
+      running = %{waiting | id: "waiting-running", identifier: "MT-1705"}
+      claimed = %{waiting | id: "waiting-claimed", identifier: "MT-1706"}
+      breakdown = %{waiting | id: "waiting-breakdown", identifier: "MT-1707", labels: ["breakdown"]}
+      state = %{state | running: %{"waiting-running" => %{}}, claimed: MapSet.new(["waiting-claimed"])}
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [waiting, running, claimed, breakdown])
+
+      refute Orchestrator.should_dispatch_issue_for_test(waiting, state)
+
+      log =
+        capture_log([level: :info], fn ->
+          candidates = [waiting, running, claimed, breakdown, nil]
+          assert ^state = Orchestrator.close_finished_parents_for_test(candidates, state)
+        end)
+
+      assert_received {:memory_tracker_state_update, "waiting", "Done"}
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+      assert_received {:memory_tracker_comment, "waiting", body}
+      assert body == "Every sub-ticket is finished, so this ticket is Done:\n\n- MT-1702: Done\n- MT-1703: Canceled\n- MT-1704: Duplicate"
+      assert log =~ "Moved issue to Done: every sub-issue is finished issue_id=waiting issue_identifier=MT-1701"
+
+      # A sub-ticket filed since the cached poll keeps it waiting; one gone from the fresh read is left too.
+      filed = %{waiting | sub_issues: sub_issues ++ [%{id: "child-4", identifier: "MT-1708", state: "Backlog"}]}
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [filed])
+      Orchestrator.close_finished_parents_for_test([waiting], state)
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [])
+      Orchestrator.close_finished_parents_for_test([waiting], state)
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [waiting])
+      Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, {:error, :boom})
+
+      log = capture_log(fn -> Orchestrator.close_finished_parents_for_test([waiting], state) end)
+      assert_received {:memory_tracker_state_update, "waiting", "Done"}
+      assert log =~ "Failed to comment on an issue waiting on its sub-issues: issue_id=waiting issue_identifier=MT-1701 reason=:boom"
+
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, {:error, :linear_down})
+      log = capture_log(fn -> Orchestrator.close_finished_parents_for_test([waiting], state) end)
+      assert log =~ "Failed to move an issue whose sub-issues are finished to Done; retrying next poll: issue_id=waiting"
+      assert log =~ ":linear_down"
+
+      Application.put_env(:symphony_elixir, :memory_tracker_fetch_issue_states_result, {:error, :timeout})
+      log = capture_log(fn -> Orchestrator.close_finished_parents_for_test([waiting], state) end)
+      assert log =~ "Failed to refresh issues waiting on sub-issues before closing them; retrying next poll reason=:timeout"
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
     end
 
     test "a poll cycle parks a breakdown parent In Progress and does not dispatch it" do
