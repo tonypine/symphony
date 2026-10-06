@@ -82,19 +82,44 @@ defmodule SymphonyElixir.AcceptanceGate.Agreement do
 
   @doc """
   Records the human's decision on each issue's latest undecided verdict in `runs` (the
-  repository's runs). `issues` are the issues the CI poller watches this cycle; the state of any
-  other issue is read from the tracker. `ci_checks` give the PR head the human decided on.
+  repository's runs, or `undecided/2`). `issues` are the issues the CI poller watches this cycle;
+  the state of any other issue is read from the tracker. `ci_checks` give the PR head the human
+  decided on.
 
   Options: `:run_store`, `:tracker`, `:waiting_states` (default In Review, Auto Review and Human
   Review), `:now`, `:audit_dir`. Returns `{issue_id, decision}` for each decision recorded.
   """
   @spec observe(String.t(), [Issue.t()], [map()], [map()], keyword()) :: [{String.t(), String.t()}]
   def observe(repo_key, issues, runs, ci_checks, opts) do
-    case runs |> latest_per_issue() |> Enum.filter(&(is_nil(Map.get(&1, :human_decision)) and is_nil(Map.get(&1, :moved_by_gate)))) do
+    case undecided_latest(runs) do
       [] -> []
       pending -> decide_pending(repo_key, pending, issues, ci_checks, opts)
     end
   end
+
+  @doc """
+  The latest verdict of each issue of repository `repo_key` still waiting for a human decision,
+  the runs `observe/5` decides on. It is kept until a gate run is written, so the CI poller reads
+  it every cycle without scanning the run store. Options: `:run_store`.
+  """
+  @spec undecided(String.t(), keyword()) :: [map()]
+  def undecided(repo_key, opts \\ []) do
+    run_store = Keyword.get(opts, :run_store, RunStore)
+
+    case memoize(run_store, {:undecided, repo_key}, fn -> undecided_runs(run_store, repo_key) end) do
+      {:ok, runs} -> runs
+      {:error, _reason} -> []
+    end
+  end
+
+  defp undecided_runs(run_store, repo_key) do
+    with {:ok, runs} <- memoize(run_store, :verdicts, fn -> verdict_runs(run_store) end) do
+      {:ok, runs |> Enum.filter(&(Map.get(&1, :repo_key) == repo_key)) |> undecided_latest()}
+    end
+  end
+
+  defp undecided_latest(runs),
+    do: runs |> latest_per_issue() |> Enum.filter(&(is_nil(Map.get(&1, :human_decision)) and is_nil(Map.get(&1, :moved_by_gate))))
 
   defp decide_pending(repo_key, pending, issues, ci_checks, opts) do
     states = issue_states(pending, issues, Keyword.get(opts, :tracker, Tracker))

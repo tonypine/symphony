@@ -1567,7 +1567,8 @@ defmodule SymphonyElixir.AutoMergeTest do
   defmodule HoldFailingRunStore do
     alias SymphonyElixir.RunStore
 
-    defdelegate list_runs(repo_key, limit), to: RunStore
+    defdelegate list_issue_runs(repo_key, issue_id), to: RunStore
+    defdelegate list_all_runs(limit), to: RunStore
     defdelegate list_ci_checks(repo_key), to: RunStore
     defdelegate list_pr_reviews(repo_key), to: RunStore
     defdelegate put_ci_check(record), to: RunStore
@@ -1585,8 +1586,8 @@ defmodule SymphonyElixir.AutoMergeTest do
     @spec list_pr_reviews(String.t()) :: [map()] | {:error, term()}
     def list_pr_reviews(repo_key), do: RunStore.list_pr_reviews(repo_key)
 
-    @spec list_runs(String.t()) :: [map()] | {:error, term()}
-    def list_runs(repo_key), do: RunStore.list_runs(repo_key)
+    @spec list_issue_runs(String.t(), String.t()) :: [map()] | {:error, term()}
+    def list_issue_runs(repo_key, issue_id), do: RunStore.list_issue_runs(repo_key, issue_id)
 
     @spec put_pr_review(map()) :: :ok | {:error, term()}
     def put_pr_review(record), do: RunStore.put_pr_review(record)

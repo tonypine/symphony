@@ -16,6 +16,11 @@ public struct StatusMachine: Equatable {
     /// How often to poll while Symphony is starting, and otherwise.
     public static let startingPollInterval: TimeInterval = 1
     public static let pollInterval: TimeInterval = 5
+    /// How long a state poll waits for Symphony's answer.
+    public static let pollTimeout: TimeInterval = 5
+    /// Polls missed in a row before a Symphony that answered counts as not answering: with the timeout and the
+    /// interval, at least 15 s without an answer. A single miss is a slow answer, for example a busy snapshot.
+    public static let missedPollsBeforeError = 2
 
     public enum Event: Equatable {
         /// The app started Symphony.
@@ -30,6 +35,7 @@ public struct StatusMachine: Equatable {
     private var answeredSinceStart = false
     private var exitFailure: String?
     private var lastPoll: StatusPoll?
+    private var missedPolls = 0
 
     public init() {}
 
@@ -40,13 +46,22 @@ public struct StatusMachine: Equatable {
             answeredSinceStart = false
             exitFailure = nil
             lastPoll = nil
+            missedPolls = 0
         case let .exited(exit, requested):
             ownsChild = false
             answeredSinceStart = false
             exitFailure = requested ? nil : "Symphony \(exit.summary)"
             // The last answer came from the process that just exited.
             lastPoll = nil
+            missedPolls = 0
         case let .polled(poll):
+            if case .unreachable = poll {
+                missedPolls += 1
+                // Keep showing the last answer until Symphony has missed enough polls in a row.
+                if slowToAnswer { return }
+            } else {
+                missedPolls = 0
+            }
             lastPoll = poll
             if case .state = poll {
                 if ownsChild { answeredSinceStart = true }
@@ -68,6 +83,12 @@ public struct StatusMachine: Equatable {
             }
             return exitFailure.map(SymphonyStatus.error) ?? .stopped
         }
+    }
+
+    /// True while the last state answer is still shown although Symphony missed the latest poll.
+    public var slowToAnswer: Bool {
+        guard case .state? = lastPoll else { return false }
+        return missedPolls > 0 && missedPolls < Self.missedPollsBeforeError
     }
 
     /// Seconds until the next poll: quicker while Symphony is starting.
