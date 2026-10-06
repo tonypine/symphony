@@ -809,6 +809,7 @@ defmodule SymphonyElixirWeb.Presenter do
       resets_at: iso8601(Map.get(entry, :resets_at)),
       resume_at: iso8601(entry.resume_at),
       source: optional_string(Map.get(entry, :source)),
+      error: Map.get(entry, :error),
       utilization: Map.get(entry, :utilization),
       issue_identifier: Map.get(entry, :issue_identifier),
       banner: UsageLimit.banner(entry, now)
@@ -1073,6 +1074,7 @@ defmodule SymphonyElixirWeb.Presenter do
       kind: :usage_limit,
       provider: Map.get(b, :provider),
       scope: UsageLimit.scope_label(Map.get(b, :scope, :all)),
+      reason: Map.get(b, :reason),
       window: Map.get(b, :window),
       phase: optional_string(Map.get(b, :phase)),
       resets_at: iso8601(Map.get(b, :resets_at)),

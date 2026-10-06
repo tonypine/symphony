@@ -520,6 +520,38 @@ defmodule SymphonyElixir.AutoReviewQaTest do
       assert report =~ "could not finish: {:qa_agent_failed, {:usage_limited"
     end
 
+    test "a pass whose agent can't reach the model API records no verdict and is held, even with auto_pause off" do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        pr_review_mode: "polling",
+        ci: %{enabled: true},
+        agent_usage_limit: %{auto_pause: false},
+        auto_review: %{enabled: true, max_fix_attempts: 2}
+      )
+
+      record = put_record()
+      info = %{provider: "anthropic", scope: :all, window: nil, resets_at: nil, source: :api_unreachable, error: "ENOTFOUND"}
+      error = {:qa_agent_failed, {:model_api_unreachable, info}}
+      Application.put_env(:symphony_elixir, :qa_flow_agent_result, {:error, error, QaAgent.empty_tokens()})
+      resume_at = DateTime.add(DateTime.utc_now(), 60)
+      test_pid = self()
+
+      hold = fn held_info, identifier ->
+        send(test_pid, {:usage_limit_hold, held_info, identifier})
+        {:ok, %{provider: "anthropic", scope: :all, resume_at: resume_at}}
+      end
+
+      opts = [git: git_with_paths(["bin/symphony"]), qa_agent: FakeQaAgent, usage_limit_hold: hold]
+      log = capture_log(fn -> assert {:qa_usage_limited, "issue-qa-flow", ^resume_at} = AutoReview.run_qa(job(record), opts) end)
+
+      assert_receive {:usage_limit_hold, ^info, "TP-901"}
+      assert log =~ "QA pass could not reach the model API for TP-901"
+      refute_received {:memory_tracker_comment, _issue_id, _report}
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+      refute Map.get(stored_record(), :qa_verdict)
+      assert [%{status: "qa_usage_limited", error: "the QA agent could not reach the model API (ENOTFOUND)"}] = RunStore.list_runs(@repo_key, :all)
+    end
+
     test "a dashboard change whose dev server fails its health check is blocked, not failed" do
       write_workflow_file!(Workflow.workflow_file_path(),
         tracker_kind: "memory",

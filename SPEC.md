@@ -2590,6 +2590,37 @@ sessions:
 - The Claude CLI only reports utilization once it passes its own warning threshold (seen at
   `0.75`), so a lower setting behaves as if set at that point.
 
+#### 8.4.3 Unreachable Model API Holds
+
+When the Claude CLI cannot reach the model API at all (a DNS failure, a refused or dropped
+connection), it still ends the turn with a `result` event: its text starts `API Error:` and names
+the failure (`Can't reach the API server … (ENOTFOUND)`, `Connection error`, `ECONNREFUSED`, …),
+and it is marked `is_error` or used nothing. An error the API returned (a 400, a 429, a 5xx) is not
+an outage and keeps its normal path.
+
+- The turn fails with `{:model_api_unreachable, info}` (`source: api_unreachable`, `error` the code
+  it named); it is never a completed turn, so it never counts toward the idle-turn park limit.
+- The run, a pre-push reviewer turn (review, self-check or re-quote), an Auto Review QA pass, a
+  `Final verification:` walkthrough and an acceptance gate pass all hold the provider as in Section
+  8.4.1, whatever `usage_limit.auto_pause` says, with `reason: "model_api_unreachable"`. The
+  reviewer is unavailable, never inconclusive: the run is held and the push waits for a review. QA
+  and the gate record no verdict (the gate counts no inconclusive pass and writes no comment) and
+  run again once the hold clears.
+- The first probe (the canary) goes out 60 seconds after the outage is found. Each canary that
+  still cannot reach the API doubles the wait, up to `usage_limit.unknown_reset_retry_seconds`,
+  keeping `since`. A run that finds the outage while a hold is already `paused` leaves it as it is,
+  so a usage-limit pause is not shortened.
+- A hold with no run held on it (only QA, gate or PR runs found the outage) has no canary: at
+  `resume_at` it is released so the next run probes the API, and remembered for
+  `usage_limit.unknown_reset_retry_seconds` (at least 10 minutes). A run that finds the outage
+  again within that time continues it as a failed canary would: same `since`, doubled wait, no new
+  `usage_limit_paused` event. The outage ends, with one `usage_limit_resumed` event, when no run
+  has found it again for that time, or as soon as the API answers with a usage limit.
+- Log `Model API unreachable (ENOTFOUND); holding dispatch provider=… probe_at=…` once per outage
+  and `Model API still unreachable (…) … next_probe_at=…` per failed probe. Show the hold in the
+  status surfaces as `Paused: Claude API unreachable (ENOTFOUND), retries ~14:05`, and in
+  `/api/v1/state` `usage_limits` with its `reason` and `error`.
+
 ### 8.5 Active Run Reconciliation
 
 Reconciliation runs every poll tick and has two reconciliation parts plus an independent watchdog

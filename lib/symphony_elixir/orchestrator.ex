@@ -144,6 +144,7 @@ defmodule SymphonyElixir.Orchestrator do
       usage_limits: %{},
       usage_limit_timers: %{},
       usage_windows: %{},
+      api_outages: %{},
       clock: &DateTime.utc_now/0
     ]
 
@@ -547,6 +548,16 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp handle_info_message({:retry_issue, _issue_id}, state), do: {:noreply, state}
 
+  defp handle_info_message({:api_outage_over, key, since}, %State{} = state) do
+    state =
+      case Map.fetch(state.api_outages, key) do
+        {:ok, %{since: ^since} = outage} -> finish_api_outage(state, key, outage)
+        _continued_or_gone -> state
+      end
+
+    {:noreply, state}
+  end
+
   defp handle_info_message({:usage_limit_resume, key}, %State{} = state) do
     state =
       case Map.fetch(state.usage_limits, key) do
@@ -661,6 +672,13 @@ defmodule SymphonyElixir.Orchestrator do
     })
   end
 
+  # A model API the agent couldn't reach is held as a usage limit is, `auto_pause` or not: no
+  # attempt is counted, and the canary is the probe that tells when the API is back.
+  defp handle_abnormal_agent_exit(%State{} = state, issue_id, running_entry, session_id, {:model_api_unreachable, %{} = info} = reason) do
+    persist_run_completion(running_entry, "model_api_unreachable", "agent exited: #{agent_exit_reason_summary(reason)}")
+    pause_for_usage_limit(state, issue_id, running_entry, session_id, info)
+  end
+
   defp handle_abnormal_agent_exit(%State{} = state, issue_id, running_entry, session_id, {:usage_limited, %{} = info} = reason) do
     if Config.settings!().agent.usage_limit.auto_pause do
       persist_run_completion(running_entry, "usage_limited", "agent exited: #{agent_exit_reason_summary(reason)}")
@@ -765,11 +783,13 @@ defmodule SymphonyElixir.Orchestrator do
   defp pause_for_usage_limit(%State{} = state, issue_id, running_entry, session_id, info) do
     {state, entry} = put_usage_limit(state, info, running_entry.identifier)
 
+    cause = if UsageLimit.api_unreachable?(entry), do: "could not reach the model API", else: "hit the usage limit"
+
     if pr_run_entry?(running_entry) do
-      Logger.warning("PR agent task hit the usage limit for issue_id=#{issue_id} session_id=#{session_id}; PR runs are not retried")
+      Logger.warning("PR agent task #{cause} for issue_id=#{issue_id} session_id=#{session_id}; PR runs are not retried")
       state
     else
-      Logger.info("Agent task hit the usage limit for issue_id=#{issue_id} session_id=#{session_id}; holding the retry until #{DateTime.to_iso8601(entry.resume_at)}")
+      Logger.info("Agent task #{cause} for issue_id=#{issue_id} session_id=#{session_id}; holding the retry until #{DateTime.to_iso8601(entry.resume_at)}")
 
       schedule_issue_retry(state, issue_id, retry_attempt(Map.get(running_entry, :retry_attempt)), %{
         repo_key: running_entry_repo_key(running_entry),
@@ -791,6 +811,10 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp agent_exit_reason_summary({:review_agent_blocked, payload}) do
     "review_agent blocked: #{review_agent_block_reason(payload)}"
+  end
+
+  defp agent_exit_reason_summary({:model_api_unreachable, info}) do
+    "model API unreachable (#{Map.get(info, :error)})"
   end
 
   defp agent_exit_reason_summary({:linear_unavailable, reason}) do
@@ -7699,19 +7723,34 @@ defmodule SymphonyElixir.Orchestrator do
   defp put_usage_limit(%State{} = state, info, identifier) do
     key = UsageLimit.key(info)
     existing = Map.get(state.usage_limits, key)
+    last_outage = Map.get(state.api_outages, key)
 
     entry =
       UsageLimit.put(existing, info,
         now: state.clock.(),
         config: Config.settings!().agent.usage_limit,
         windows: state.usage_windows,
-        issue_identifier: identifier
+        issue_identifier: identifier,
+        last_outage: last_outage
       )
 
-    newly_paused? = is_nil(existing) or existing.phase == :headroom
+    {state, continued_outage} = settle_api_outage(state, key, last_outage, info, entry)
+    newly_paused? = (is_nil(existing) or existing.phase == :headroom) and is_nil(continued_outage)
     if newly_paused?, do: emit_usage_limit_event(:usage_limit_paused, entry, issue_identifier: identifier)
+    log_usage_limit_put(entry, existing || continued_outage, identifier, newly_paused?)
 
+    state = put_usage_limits(state, Map.put(state.usage_limits, key, entry))
+    {arm_usage_limit_timer(state, key, entry), entry}
+  end
+
+  defp log_usage_limit_put(entry, existing, identifier, newly_paused?) do
     cond do
+      entry == existing ->
+        :ok
+
+      UsageLimit.api_unreachable?(entry) ->
+        log_model_api_unreachable(entry, existing, identifier)
+
       match?(%{phase: :canary}, existing) ->
         Logger.warning(
           "Usage limit still active provider=#{entry.provider} scope=#{UsageLimit.scope_label(entry.scope)} " <>
@@ -7727,9 +7766,38 @@ defmodule SymphonyElixir.Orchestrator do
       true ->
         :ok
     end
+  end
 
-    state = put_usage_limits(state, Map.put(state.usage_limits, key, entry))
-    {arm_usage_limit_timer(state, key, entry), entry}
+  # A run that finds a released outage again continues it: no new pause event, and the outage is
+  # no longer due to end. A usage limit from the API shows the API is back.
+  defp settle_api_outage(%State{} = state, _key, nil, _info, _entry), do: {state, nil}
+
+  defp settle_api_outage(%State{} = state, key, last_outage, info, entry) do
+    cond do
+      UsageLimit.api_unreachable?(entry) and entry.since == last_outage.since ->
+        {%{state | api_outages: Map.delete(state.api_outages, key)}, last_outage}
+
+      UsageLimit.api_unreachable?(info) ->
+        {state, nil}
+
+      true ->
+        {finish_api_outage(state, key, last_outage), nil}
+    end
+  end
+
+  # One line when the outage is found, then one per probe that still can't get through.
+  defp log_model_api_unreachable(entry, existing, identifier) do
+    if UsageLimit.api_unreachable?(existing || %{}) do
+      Logger.warning(
+        "Model API still unreachable (#{entry.error}) provider=#{entry.provider} " <>
+          "next_probe_at=#{DateTime.to_iso8601(entry.resume_at)} issue_identifier=#{identifier}"
+      )
+    else
+      Logger.warning(
+        "Model API unreachable (#{entry.error}); holding dispatch provider=#{entry.provider} " <>
+          "probe_at=#{DateTime.to_iso8601(entry.resume_at)} issue_identifier=#{identifier}"
+      )
+    end
   end
 
   # `agent.usage_limit.headroom_utilization`: an allowed_warning at or above it holds new runs of
@@ -7834,6 +7902,10 @@ defmodule SymphonyElixir.Orchestrator do
     "usage limit headroom hold (provider=#{entry.provider} scope=#{UsageLimit.scope_label(entry.scope)}); resuming at #{DateTime.to_iso8601(entry.resume_at)}"
   end
 
+  defp usage_limit_error(%{reason: "model_api_unreachable"} = entry) do
+    "model API unreachable (provider=#{entry.provider} error=#{entry.error}); probing again at #{DateTime.to_iso8601(entry.resume_at)}"
+  end
+
   defp usage_limit_error(entry) do
     "usage limit reached (provider=#{entry.provider} scope=#{UsageLimit.scope_label(entry.scope)}); resuming at #{DateTime.to_iso8601(entry.resume_at)}"
   end
@@ -7868,7 +7940,9 @@ defmodule SymphonyElixir.Orchestrator do
 
     case held_usage_limit_retries(state, key) do
       [] ->
-        clear_usage_limit(state, key, entry)
+        if UsageLimit.api_unreachable?(entry),
+          do: release_api_outage(state, key, entry),
+          else: clear_usage_limit(state, key, entry)
 
       held ->
         {issue_id, retry} = pick_usage_limit_canary(held, issue_fetcher, state)
@@ -7915,6 +7989,27 @@ defmodule SymphonyElixir.Orchestrator do
     |> held_usage_limit_retries(key)
     |> Enum.reduce(state, fn {issue_id, retry}, acc -> release_usage_limit_retry(acc, issue_id, retry) end)
     |> schedule_immediate_tick()
+  end
+
+  # An unreachable-API hold with no run held on it (QA, the acceptance gate, a PR run) has no
+  # canary: it is released so the next run probes the API, and remembered so a run that finds
+  # the outage again continues it. The outage ends, with its resumed event, when no run has found
+  # it again for `UsageLimit.outage_memory_seconds/1`.
+  defp release_api_outage(%State{} = state, key, entry) do
+    memory_seconds = UsageLimit.outage_memory_seconds(Config.settings!().agent.usage_limit)
+    Logger.info("Model API hold released provider=#{entry.provider}; the next run probes the API")
+    Process.send_after(self(), {:api_outage_over, key, entry.since}, memory_seconds * 1000)
+
+    state
+    |> put_usage_limits(Map.delete(state.usage_limits, key))
+    |> Map.update!(:api_outages, &Map.put(&1, key, entry))
+    |> schedule_immediate_tick()
+  end
+
+  defp finish_api_outage(%State{} = state, key, outage) do
+    Logger.warning("Usage limit resumed provider=#{outage.provider} scope=#{UsageLimit.scope_label(outage.scope)} paused_for_s=#{DateTime.diff(outage.resume_at, outage.since)}")
+    emit_usage_limit_event(:usage_limit_resumed, outage)
+    %{state | api_outages: Map.delete(state.api_outages, key)}
   end
 
   defp schedule_immediate_tick(%State{} = state) do
