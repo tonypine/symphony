@@ -128,7 +128,8 @@ public struct SymphonyConfigFile {
 
     /// Like `rewrite`, but runs `check` (such as `symphony check`) on a sibling copy of the new text first,
     /// and replaces the file only when it passes. Returns the check's result, or `.passed` when the text
-    /// doesn't change. The copy sits next to the file, so relative paths in it resolve the same way.
+    /// doesn't change. The copy sits next to the file, so relative paths in it resolve the same way; a failure
+    /// names the file, not the copy.
     public func rewrite(
         _ transform: (String) throws -> String,
         checkingWith check: (String) async -> ConfigCheckResult
@@ -138,7 +139,7 @@ public struct SymphonyConfigFile {
         let updated = try transform(text)
         guard updated != text else { return .passed }
         let candidate = try writeSibling(of: url, updated)
-        let result = await check(candidate.path)
+        let result = await check(candidate.path).naming(url, for: candidate)
         guard result == .passed else {
             try? FileManager.default.removeItem(at: candidate)
             return result
@@ -148,7 +149,7 @@ public struct SymphonyConfigFile {
     }
 
     /// Runs `check` on a sibling copy of `transform` of the file's text, then removes the copy and leaves the
-    /// file as it is. Returns `.passed` when the text doesn't change.
+    /// file as it is. Returns `.passed` when the text doesn't change; a failure names the file, not the copy.
     public func checking(
         _ transform: (String) throws -> String,
         with check: (String) async -> ConfigCheckResult
@@ -159,7 +160,7 @@ public struct SymphonyConfigFile {
         guard updated != text else { return .passed }
         let candidate = try writeSibling(of: url, updated)
         defer { try? FileManager.default.removeItem(at: candidate) }
-        return await check(candidate.path)
+        return await check(candidate.path).naming(url, for: candidate)
     }
 
     /// Writes `text` to a new hidden file next to `url`.

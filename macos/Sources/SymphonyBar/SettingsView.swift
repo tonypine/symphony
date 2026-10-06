@@ -567,8 +567,21 @@ private struct CheckErrorText: View {
         Text(message)
             .foregroundStyle(.red)
             .fixedSize(horizontal: false, vertical: true)
+            // The grouped Form sizes the row shorter than the wrapped text draws, which cut off the last line. A
+            // floor measured narrower than the row keeps the whole message inside the section.
+            .frame(minHeight: Self.minimumHeight(message), alignment: .topLeading)
             .textSelection(.enabled)
             .help(message)
+    }
+
+    /// The height `message` takes in the body font when wrapped at `width`, which is narrower than the Form's rows.
+    static func minimumHeight(_ message: String, width: CGFloat = SettingsView.width - 200) -> CGFloat {
+        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        let bounds = NSAttributedString(string: message, attributes: [.font: font]).boundingRect(
+            with: NSSize(width: width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading]
+        )
+        return ceil(bounds.height)
     }
 }
 

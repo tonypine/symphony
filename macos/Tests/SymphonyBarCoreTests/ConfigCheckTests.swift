@@ -48,6 +48,16 @@ final class ConfigCheckTests: XCTestCase {
         )
     }
 
+    func testAFailureOnTheHiddenCopyNamesTheFile() {
+        let file = URL(fileURLWithPath: "/ops/symphony.yml")
+        let copy = URL(fileURLWithPath: "/ops/.symphony.yml.74B448CD-E3DA-4192-AF79-696B76A39D77")
+        XCTAssertEqual(
+            ConfigCheckResult.failed("Config error in \(copy.path): agent.model: bad").naming(file, for: copy),
+            .failed("Config error in /ops/symphony.yml: agent.model: bad")
+        )
+        XCTAssertEqual(ConfigCheckResult.passed.naming(file, for: copy), .passed)
+    }
+
     func testOtherMessagesStayAsTheyAre() {
         let missing = "/opt/symphony/bin/symphony was not found. Build it with `mise exec -- mix build` in the checkout."
         XCTAssertEqual(ConfigCheck.reasonFirst(missing), missing)

@@ -1066,7 +1066,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
       {:ok, %{tools: false}} ->
         Logger.error(
           "OpenRouter run cannot start: model #{model} does not support tools run_kind=#{kind}; " <>
-            "set #{Config.run_profile_key(settings, kind, :model)} to a model that lists tools"
+            "set #{Config.openrouter_model_key(settings, kind)} to a model that lists tools"
         )
 
         {:error, {:openrouter_model_unsupported, model, kind, :tools}}

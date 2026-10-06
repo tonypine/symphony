@@ -555,11 +555,17 @@ agent:
     `` agent.run_profiles.landing.model: OpenRouter model `acme/chat-only` does not support tools ``;
   - a warning when `effort` is set for a model that does not list `reasoning`.
 
+  When a run's model is inherited from a key above the one that picked `openrouter` (for example
+  `repositories[api].agent.run_profiles.landing: { provider: openrouter }` with only `agent.model`
+  set), the error names that provider key, the key the model is inherited from, and the `model` key
+  to set next to it:
+  `` repositories[api].agent.run_profiles.landing.provider: OpenRouter has no model `claude-sonnet-5-5`, inherited from agent.model; set repositories[api].agent.run_profiles.landing.model to an OpenRouter model id ``.
+
   When the API cannot be reached, `check` prints a warning and does not fail. Before an
   OpenRouter run starts, Symphony looks the model up the same way: a model without `tools` fails
   the run before `claude` starts and logs `OpenRouter run cannot start: model <id> does not
   support tools run_kind=<kind>; set <key> to a model that lists tools`, where `<key>` is the
-  key that set the model, as in `check`; a model without `reasoning` starts without `--effort` and logs
+  model key `check` names; a model without `reasoning` starts without `--effort` and logs
   a warning once per model. If the lookup fails, or OpenRouter does not list the model, the run
   starts anyway and logs a warning, so an OpenRouter outage does not block work.
 - `run_profiles.<kind>`: `model`, `effort` and/or `provider` for one kind of run. Kinds, first match wins:

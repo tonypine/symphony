@@ -7,6 +7,15 @@ public enum ConfigCheckResult: Equatable {
     case failed(String)
 }
 
+extension ConfigCheckResult {
+    /// This result with a failure's mentions of `copy`, a hidden sibling of `file` that the check ran on, read as
+    /// `file`, so the message names symphony.yml rather than `.symphony.yml.<UUID>`.
+    public func naming(_ file: URL, for copy: URL) -> ConfigCheckResult {
+        guard case .failed(let message) = self else { return self }
+        return .failed(message.replacingOccurrences(of: copy.lastPathComponent, with: file.lastPathComponent))
+    }
+}
+
 /// Runs `symphony check --config <symphony.yml>`, which loads the config and every repo's WORKFLOW.md the way
 /// Symphony does at boot, without starting it.
 public enum ConfigCheck {
