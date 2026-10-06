@@ -114,19 +114,59 @@ defmodule SymphonyElixir.HumanReviewTest do
       assert HumanReview.requested_by_ticket?(%{plan | title: "Human review: split the importer"}, settings)
       refute HumanReview.requested_by_ticket?(%{plan | description: "Keep parents in `Human Review` until approved."}, settings)
     end
+
+    test "is true when the plan's author says they review it" do
+      settings = Config.settings!()
+      plan = %Issue{title: "Create a native foreground dashboard to the macOS app", description: nil, labels: ["plan"]}
+
+      for description <- [
+            "I only want to review and validate the artifacts",
+            "We'll approve the plan before anything starts.",
+            "I need to sign off on the split.",
+            "We will review each screen."
+          ] do
+        assert HumanReview.requested_by_ticket?(%{plan | description: description}, settings), description
+      end
+
+      refute HumanReview.requested_by_ticket?(plan, settings)
+      refute HumanReview.requested_by_ticket?(%{plan | description: "The dashboard will review recent runs. Review the code."}, settings)
+    end
   end
 
   describe "parked_for_person?/2" do
     test "is true outside the active states with a label that asks for a person" do
       settings = Config.settings!()
-      parked = %Issue{state: "Backlog", labels: ["Human-Action"]}
+      parked = %Issue{state: "Backlog", labels: ["needs-human"]}
 
       assert HumanReview.parked_for_person?(parked, settings)
       assert HumanReview.parked_for_person?(%{parked | labels: [" needs-human "]}, settings)
+      # The retired request label only counts while a config still names it.
+      refute HumanReview.parked_for_person?(%{parked | labels: ["Human-Action"]}, settings)
+      assert HumanReview.parked_for_person?(%{parked | labels: ["Human-Action"]}, put_in(settings.human_actions.label, "human-action"))
       assert HumanReview.parked_for_person?(%{parked | state: nil}, settings)
       refute HumanReview.parked_for_person?(%{parked | state: " in progress "}, settings)
       refute HumanReview.parked_for_person?(%{parked | labels: ["plan", "breakdown", nil]}, settings)
       refute HumanReview.parked_for_person?(%{parked | labels: nil}, settings)
+    end
+
+    test "is true in the Human Review state without a label" do
+      settings = Config.settings!()
+
+      assert HumanReview.parked_for_person?(%Issue{state: "Human Review", labels: []}, settings)
+      refute HumanReview.parked_for_person?(%Issue{state: "In Review", labels: []}, settings)
+    end
+  end
+
+  describe "legacy_request_labels/1" do
+    test "lists the deprecated request labels a config still names" do
+      settings = Config.settings!()
+      assert HumanReview.legacy_request_labels(settings) == []
+
+      escalating = put_in(settings.auto_review.acceptance_gate.escalate.labels, ["needs-human", " Human-Action "])
+      assert HumanReview.legacy_request_labels(escalating) == ["human-action"]
+
+      both = put_in(escalating.human_actions.label, "Waiting-On-Tony")
+      assert HumanReview.legacy_request_labels(both) == ["waiting-on-tony", "human-action"]
     end
   end
 

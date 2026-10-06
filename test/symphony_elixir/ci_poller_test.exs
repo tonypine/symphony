@@ -1367,7 +1367,7 @@ defmodule SymphonyElixir.CiPollerTest do
     assert_receive {:rerun_failed, "987"}
 
     # The agent parked the issue: only a person can make the fix.
-    parked = %{issue | state: "Backlog", labels: ["human-action"]}
+    parked = %{issue | state: "Backlog", labels: ["needs-human"]}
     Application.put_env(:symphony_elixir, :ci_test_issues, [parked])
 
     log =
@@ -1457,9 +1457,23 @@ defmodule SymphonyElixir.CiPollerTest do
     refute_receive {:rerun_failed, _run_id}
   end
 
+  test "an issue in Human Review waits for the person without a label" do
+    now = ~U[2026-05-06 09:00:00Z]
+    issue = %{in_review_issue() | state: "Human Review", labels: []}
+    Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+    Application.put_env(:symphony_elixir, :ci_test_status, failed_status("abc123"))
+    put_run(issue, now)
+
+    assert {:ok, %{actions: [{:awaiting_human_action, "issue-2401", "abc123"}]}} =
+             CiPoller.poll_once(tracker: StateFilteringTracker, github: FakeGitHub, now: now)
+
+    refute_receive {:rerun_failed, _run_id}
+    refute_receive {:issue_state_update, _issue_id, _state}
+  end
+
   test "an issue in an active state with a person's label still gets the normal CI flow" do
     now = ~U[2026-05-06 09:00:00Z]
-    issue = %{in_review_issue() | state: "In Progress", labels: ["human-action", "breakdown"]}
+    issue = %{in_review_issue() | state: "In Progress", labels: ["needs-human", "breakdown"]}
     Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
     Application.put_env(:symphony_elixir, :ci_test_status, failed_status("abc123"))
 
@@ -1486,7 +1500,7 @@ defmodule SymphonyElixir.CiPollerTest do
 
   test "a failed issue read backs off instead of starting a CI-fix run" do
     now = ~U[2026-05-06 09:00:00Z]
-    issue = %{in_review_issue() | state: "Backlog", labels: ["human-action"]}
+    issue = %{in_review_issue() | state: "Backlog", labels: ["needs-human"]}
     Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
     Application.put_env(:symphony_elixir, :ci_test_status, failed_status("abc123"))
     Application.put_env(:symphony_elixir, :ci_test_issue_read_error, :linear_unavailable)

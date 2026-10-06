@@ -37,6 +37,8 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @merging_state "Merging"
   # Sub-issues land in Backlog so an agent cannot start other agents; a human promotes them.
   @backlog_state "Backlog"
+  # Where a withdrawn request's issue goes back to when its history doesn't say.
+  @in_progress_state "In Progress"
   @subissue_cap_per_run 10
   @subissue_update_fields [{"title", :title}, {"description", :description}, {"blocked_by", :blocked_by}, {"cancel_reason", :cancel_reason}]
   # A project update notifies everyone following the project, so a run may post only one.
@@ -455,10 +457,11 @@ defmodule SymphonyElixir.AgentTools.Linear do
   """
 
   @human_action_scope_query """
-  query SymphonyAgentHumanActionScope($id: String!, $label: String!) {
+  query SymphonyAgentHumanActionScope($id: String!) {
     issue(id: $id) {
       id
-      team { id }
+      state { name }
+      team { states { nodes { id name } } }
       labels { nodes { id name } }
       comments(last: 50, orderBy: createdAt) {
         nodes { id body createdAt parent { id } }
@@ -466,26 +469,6 @@ defmodule SymphonyElixir.AgentTools.Linear do
       history(first: 50) {
         nodes { createdAt fromState { name } toState { name } }
       }
-    }
-    issueLabels(filter: {name: {eqIgnoreCase: $label}}, first: 50) {
-      nodes { id team { id } }
-    }
-  }
-  """
-
-  @create_label_mutation """
-  mutation SymphonyAgentCreateLabel($input: IssueLabelCreateInput!) {
-    issueLabelCreate(input: $input) {
-      success
-      issueLabel { id }
-    }
-  }
-  """
-
-  @add_label_mutation """
-  mutation SymphonyAgentAddLabel($issueId: String!, $labelId: String!) {
-    issueAddLabel(id: $issueId, labelId: $labelId) {
-      success
     }
   }
   """
@@ -1133,11 +1116,14 @@ defmodule SymphonyElixir.AgentTools.Linear do
   end
 
   @doc """
-  Records that the current issue needs something only a human can do: adds the
-  `human_actions.label` label to the issue and posts an `## Action needed:` comment
-  (`SymphonyElixir.HumanActions.Request`), which Symphony lists in the project's human-action
-  update. A request with the same title still open on the issue is not posted again. Every field
-  is refused when it holds a secret pattern. At most #{@human_action_cap_per_run} per run.
+  Records that the current issue needs something only a human can do: posts an
+  `## Action needed:` comment (`SymphonyElixir.HumanActions.Request`), which Symphony lists in the
+  project's human-action update, and moves the issue to the Human Review state
+  (`SymphonyElixir.HumanReview.target_state/1`: `In Review` when that state is off). It adds no
+  label. The request stays open until a person moves the issue on, or the agent withdraws it. A
+  request with the same title still open on the issue is not posted again, but the issue still
+  moves. Every field is refused when it holds a secret pattern. At most
+  #{@human_action_cap_per_run} per run.
   """
   @spec request_human_action(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def request_human_action(context, attrs, opts \\ []) when is_map(attrs) do
@@ -1212,68 +1198,76 @@ defmodule SymphonyElixir.AgentTools.Linear do
   defp issue_repo_key(%{issue: %{repo_key: repo_key}}), do: repo_key
   defp issue_repo_key(_context), do: nil
 
-  defp post_human_action(issue_id, request, settings, opts) do
-    label = settings.human_actions.label
-
-    with {:ok, body} <- graphql(@human_action_scope_query, %{id: issue_id, label: label}, opts),
+  @doc """
+  The open human-action requests on the current issue (`SymphonyElixir.HumanActions.Request`),
+  as `{comment_id, request}`: requests with no withdrawal reply that the issue hasn't moved on
+  from since.
+  """
+  @spec open_human_action_requests(context(), Schema.t(), keyword()) ::
+          {:ok, [{String.t(), Request.t()}]} | {:error, term()}
+  def open_human_action_requests(context, settings, opts \\ []) do
+    with {:ok, issue_id} <- current_issue_id(context),
+         {:ok, body} <- graphql(@human_action_scope_query, %{id: issue_id}, opts),
          {:ok, issue} <- fetch_path(body, ["data", "issue"], :issue_not_found) do
-      labelled? = Enum.any?(get_in(issue, ["labels", "nodes"]) || [], &(String.downcase(to_string(&1["name"])) == String.downcase(label)))
-
-      case duplicate_request(issue, request, labelled?, settings) do
-        {comment_id, _request} -> {:ok, %{"requested" => false, "reason" => "already_open", "commentId" => comment_id, "label" => label}}
-        nil -> create_human_action(issue, body, request, label, labelled?, opts)
-      end
+      {:ok, HumanActionsCollector.open_requests(issue, settings)}
     end
   end
 
-  # Without the label, an earlier request is closed (a person removed the label), so a new one is
-  # posted.
-  defp duplicate_request(_issue, _request, false, _settings), do: nil
+  defp post_human_action(issue_id, request, settings, opts) do
+    target = HumanReview.target_state(settings)
 
-  defp duplicate_request(issue, request, true, settings) do
+    with {:ok, body} <- graphql(@human_action_scope_query, %{id: issue_id}, opts),
+         {:ok, issue} <- fetch_path(body, ["data", "issue"], :issue_not_found),
+         {:ok, result} <- post_request(issue, request, target, settings, opts),
+         {:ok, state} <- move_issue(issue, target, opts) do
+      {:ok, Map.put(result, "state", state)}
+    end
+  end
+
+  defp post_request(issue, request, target, settings, opts) do
     title = Request.normalize_title(request.title)
-    Enum.find(HumanActionsCollector.open_requests(issue, settings), fn {_comment_id, open} -> Request.normalize_title(open.title) == title end)
-  end
 
-  defp create_human_action(issue, body, request, label, labelled?, opts) do
-    with :ok <- ensure_human_action_label(issue, body, label, labelled?, opts),
-         {:ok, response} <- graphql(@add_comment_mutation, %{issueId: issue["id"], body: Request.render(request, label)}, opts),
-         {:ok, response} <- check_mutation_success(response, "commentCreate") do
-      comment = get_in(response, ["data", "commentCreate", "comment"]) || %{}
-      {:ok, %{"requested" => true, "commentId" => comment["id"], "url" => comment["url"], "label" => label}}
+    case Enum.find(HumanActionsCollector.open_requests(issue, settings), fn {_comment_id, open} -> Request.normalize_title(open.title) == title end) do
+      {comment_id, _request} ->
+        {:ok, %{"requested" => false, "reason" => "already_open", "commentId" => comment_id}}
+
+      nil ->
+        with {:ok, response} <- graphql(@add_comment_mutation, %{issueId: issue["id"], body: Request.render(request, target)}, opts),
+             {:ok, response} <- check_mutation_success(response, "commentCreate") do
+          comment = get_in(response, ["data", "commentCreate", "comment"]) || %{}
+          {:ok, %{"requested" => true, "commentId" => comment["id"], "url" => comment["url"]}}
+        end
     end
   end
 
-  defp ensure_human_action_label(_issue, _body, _label, true, _opts), do: :ok
+  # Moves the issue to the team state named `target`, unless it is there already. Returns the
+  # state's name.
+  defp move_issue(issue, target, opts) do
+    states = get_in(issue, ["team", "states", "nodes"]) || []
 
-  defp ensure_human_action_label(issue, body, label, false, opts) do
-    team_id = get_in(issue, ["team", "id"])
-    labels = get_in(body, ["data", "issueLabels", "nodes"]) || []
-    existing = Enum.find(labels, &(get_in(&1, ["team", "id"]) == team_id)) || Enum.find(labels, &is_nil(&1["team"]))
+    cond do
+      state_name_matches?(issue["state"] || %{}, target) ->
+        {:ok, target}
 
-    with {:ok, label_id} <- human_action_label_id(existing, label, team_id, opts),
-         {:ok, response} <- graphql(@add_label_mutation, %{issueId: issue["id"], labelId: label_id}, opts),
-         {:ok, _response} <- check_mutation_success(response, "issueAddLabel") do
-      :ok
-    end
-  end
+      state = Enum.find(states, &state_name_matches?(&1, target)) ->
+        with {:ok, response} <- graphql(@update_issue_state_mutation, %{id: issue["id"], stateId: state["id"]}, opts),
+             {:ok, _response} <- check_mutation_success(response, "issueUpdate") do
+          {:ok, state["name"]}
+        end
 
-  defp human_action_label_id(%{"id" => label_id}, _label, _team_id, _opts), do: {:ok, label_id}
-
-  defp human_action_label_id(nil, label, team_id, opts) do
-    with {:ok, response} <- graphql(@create_label_mutation, %{input: %{"name" => label, "teamId" => team_id}}, opts),
-         {:ok, response} <- check_mutation_success(response, "issueLabelCreate") do
-      fetch_path(response, ["data", "issueLabelCreate", "issueLabel", "id"], :label_not_created)
+      true ->
+        {:error, {:state_not_found, Enum.map(states, & &1["name"])}}
     end
   end
 
   @doc """
   Withdraws open human-action requests on the current issue that are no longer needed: replies
-  `## Action withdrawn` with `reason` under each one (or only under the one titled `title`), and
-  removes the `human_actions.label` label once no open request is left, so the next human-action
-  update drops them and the run's next move to `Backlog` or `In Review` no longer goes to Human
-  Review. An issue with no open request is left as it is. The reason is refused when it holds a
-  secret pattern.
+  `## Action withdrawn` with `reason` under each one (or only under the one titled `title`), so the
+  next human-action update drops them. Once no open request is left, the run's next move to
+  `Backlog` or `In Review` no longer goes to Human Review, an issue the request moved to the Human
+  Review state goes back to the active state it came from (`In Progress` when the history doesn't
+  say), and a deprecated request label (`HumanReview.legacy_request_labels/1`) comes off. An issue
+  with no open request is left as it is. The reason is refused when it holds a secret pattern.
   """
   @spec withdraw_human_action(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def withdraw_human_action(context, attrs, opts \\ []) when is_map(attrs) do
@@ -1294,7 +1288,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   end
 
   # With no open request left on the issue, the run's issue no longer waits on a person.
-  defp forget_human_action_request(context, %{"labelRemoved" => true}),
+  defp forget_human_action_request(context, %{"remaining" => 0}),
     do: CommentRegistry.clear_human_action_request(Map.get(context, :comment_registry))
 
   defp forget_human_action_request(_context, _withdrawal), do: :ok
@@ -1311,18 +1305,15 @@ defmodule SymphonyElixir.AgentTools.Linear do
   end
 
   defp post_withdrawal(issue_id, reason, title, settings, opts) do
-    label = settings.human_actions.label
-
-    with {:ok, body} <- graphql(@human_action_scope_query, %{id: issue_id, label: label}, opts),
+    with {:ok, body} <- graphql(@human_action_scope_query, %{id: issue_id}, opts),
          {:ok, issue} <- fetch_path(body, ["data", "issue"], :issue_not_found) do
-      issue_label = Enum.find(get_in(issue, ["labels", "nodes"]) || [], &(String.downcase(to_string(&1["name"])) == String.downcase(label)))
-      open = if issue_label, do: HumanActionsCollector.open_requests(issue, settings), else: []
+      open = HumanActionsCollector.open_requests(issue, settings)
       {withdrawing, remaining} = Enum.split_with(open, &withdrawing?(&1, title))
 
       if withdrawing == [] do
-        {:ok, %{"withdrawn" => false, "reason" => "no_open_request", "label" => label}}
+        {:ok, %{"withdrawn" => false, "reason" => "no_open_request"}}
       else
-        withdraw_requests(issue["id"], issue_label, withdrawing, remaining, reason, label, opts)
+        withdraw_requests(issue, withdrawing, remaining, reason, settings, opts)
       end
     end
   end
@@ -1330,19 +1321,60 @@ defmodule SymphonyElixir.AgentTools.Linear do
   defp withdrawing?(_request, nil), do: true
   defp withdrawing?({_comment_id, request}, title), do: Request.normalize_title(request.title) == Request.normalize_title(title)
 
-  # Replies first: a withdrawn request stays out of the update even if removing the label fails.
-  defp withdraw_requests(issue_id, issue_label, withdrawing, remaining, reason, label, opts) do
-    with {:ok, reply_ids} <- reply_withdrawals(issue_id, withdrawing, reason, opts),
-         {:ok, label_removed?} <- remove_human_action_label(issue_id, issue_label, remaining, opts) do
+  # Replies first: a withdrawn request stays out of the update even if moving the issue back fails.
+  defp withdraw_requests(issue, withdrawing, remaining, reason, settings, opts) do
+    with {:ok, reply_ids} <- reply_withdrawals(issue["id"], withdrawing, reason, opts),
+         {:ok, state} <- release_issue(issue, remaining, settings, opts) do
       {:ok,
        %{
          "withdrawn" => true,
          "requestCommentIds" => Enum.map(withdrawing, fn {comment_id, _request} -> comment_id end),
          "replyCommentIds" => reply_ids,
-         "labelRemoved" => label_removed?,
-         "label" => label
+         "remaining" => length(remaining),
+         "state" => state
        }}
     end
+  end
+
+  # Another open request still waits on a person: the issue stays where it is.
+  defp release_issue(issue, [_open | _rest], _settings, _opts), do: {:ok, get_in(issue, ["state", "name"])}
+
+  defp release_issue(issue, [], settings, opts) do
+    with :ok <- remove_legacy_request_labels(issue, settings, opts) do
+      if HumanReview.in_state?(get_in(issue, ["state", "name"]), settings),
+        do: move_issue(issue, return_state(issue, settings), opts),
+        else: {:ok, get_in(issue, ["state", "name"])}
+    end
+  end
+
+  # The active state the issue was in when it last moved to the Human Review state.
+  defp return_state(issue, settings) do
+    from =
+      issue
+      |> get_in(["history", "nodes"])
+      |> List.wrap()
+      |> Enum.filter(&HumanReview.in_state?(get_in(&1, ["toState", "name"]), settings))
+      |> Enum.max_by(&(&1["createdAt"] || ""), fn -> %{} end)
+      |> get_in(["fromState", "name"])
+
+    if Enum.any?(settings.tracker.active_states, &state_name_matches?(%{"name" => from}, &1)), do: from, else: @in_progress_state
+  end
+
+  defp remove_legacy_request_labels(issue, settings, opts) do
+    legacy = HumanReview.legacy_request_labels(settings)
+
+    issue
+    |> get_in(["labels", "nodes"])
+    |> List.wrap()
+    |> Enum.filter(&(String.downcase(to_string(&1["name"])) in legacy))
+    |> Enum.reduce_while(:ok, fn %{"id" => label_id}, :ok ->
+      with {:ok, response} <- graphql(@remove_label_mutation, %{issueId: issue["id"], labelId: label_id}, opts),
+           {:ok, _response} <- check_mutation_success(response, "issueRemoveLabel") do
+        {:cont, :ok}
+      else
+        error -> {:halt, error}
+      end
+    end)
   end
 
   defp reply_withdrawals(issue_id, withdrawing, reason, opts) do
@@ -1356,16 +1388,6 @@ defmodule SymphonyElixir.AgentTools.Linear do
         error -> {:halt, error}
       end
     end)
-  end
-
-  # Another open request on the issue still needs the label.
-  defp remove_human_action_label(_issue_id, _issue_label, [_open | _rest], _opts), do: {:ok, false}
-
-  defp remove_human_action_label(issue_id, %{"id" => label_id}, [], opts) do
-    with {:ok, response} <- graphql(@remove_label_mutation, %{issueId: issue_id, labelId: label_id}, opts),
-         {:ok, _response} <- check_mutation_success(response, "issueRemoveLabel") do
-      {:ok, true}
-    end
   end
 
   defp validate_project_update_fields(attrs) do

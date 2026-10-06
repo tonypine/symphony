@@ -1606,7 +1606,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
 
   test "leaves a merge conflict alone while the issue is parked for a person, until the label goes" do
     now = ~U[2026-05-01 09:00:00Z]
-    parked = %{in_review_issue(updated_at: now) | state: "Backlog", labels: ["human-action"]}
+    parked = %{in_review_issue(updated_at: now) | state: "Backlog", labels: ["needs-human"]}
     Application.put_env(:symphony_elixir, :pr_review_test_issues, [parked])
     :ok = put_review(now)
 
@@ -1665,7 +1665,7 @@ defmodule SymphonyElixir.PrReviewPollerTest do
 
   test "a merge conflict on an issue in an active state with a person's label takes the conflict path" do
     now = ~U[2026-05-01 09:00:00Z]
-    issue = %{in_review_issue(updated_at: now) | state: "In Progress", labels: ["human-action"]}
+    issue = %{in_review_issue(updated_at: now) | state: "In Progress", labels: ["needs-human"]}
     Application.put_env(:symphony_elixir, :pr_review_test_issues, [issue])
     :ok = put_review(now)
 

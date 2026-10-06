@@ -8,7 +8,9 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
   @project %{"id" => "project-1", "name" => "Cycle"}
   @scope %{"team" => %{"key" => %{"eq" => "MOT"}}}
 
-  defp settings, do: %Schema{}
+  # Most tests read issues a config that predates the Human Review state labelled: it still sets
+  # the deprecated `human_actions.label`.
+  defp settings, do: put_in(%Schema{}.human_actions.label, "human-action")
 
   defp collect(nodes, opts \\ []) do
     test_pid = self()
@@ -50,7 +52,7 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
   defp history(entries), do: %{"nodes" => entries}
 
   defp request_comment(id, title, created_at) do
-    body = Request.render(%{title: title, why: "Release fails.", unblocks: "the Release workflow", est_minutes: 10, steps: ["Add the secret."]}, "human-action")
+    body = Request.render(%{title: title, why: "Release fails.", unblocks: "the Release workflow", est_minutes: 10, steps: ["Add the secret."]}, "Human Review")
     %{"id" => id, "body" => body, "createdAt" => created_at}
   end
 
@@ -80,6 +82,37 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
                %{"state" => %{"name" => %{"nin" => ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]}}}
              ]
            }
+  end
+
+  test "with the default settings, queries no label, and lists a request on an unlabelled issue in Human Review" do
+    issue =
+      node("MOT-25", %{
+        "state" => %{"name" => "Human Review"},
+        "comments" => comments([request_comment("comment-1", "Add the release signing secrets", "2026-10-03T10:00:00.000Z")]),
+        "history" => history([%{"createdAt" => "2026-10-03T10:00:05.000Z", "fromState" => %{"name" => "In Progress"}, "toState" => %{"name" => "Human Review"}}])
+      })
+
+    # Without the deprecated setting, the label marks nothing.
+    labelled = node("MOT-26", %{"labels" => labels(["human-action"])})
+
+    assert {:ok, collected} = collect([issue, labelled], settings: %Schema{})
+
+    assert [
+             %Action{
+               key: "request:comment-1",
+               kind: :request,
+               human_review: true,
+               done_when: "you move MOT-25 out of Human Review once it is unblocked, or the agent withdraws the request."
+             }
+           ] = actions(collected)
+
+    assert_received {:query, _query, %{filter: %{"and" => [_scope, %{"or" => wanted}, _terminal]}}}
+
+    assert wanted == [
+             %{"state" => %{"name" => %{"eqIgnoreCase" => "In Review"}}},
+             %{"state" => %{"name" => %{"eqIgnoreCase" => "Human Review"}}},
+             %{"title" => %{"startsWith" => "Final verification:"}}
+           ]
   end
 
   test "lists each open request on a labelled issue, and drops the ones the issue moved on from" do
@@ -118,7 +151,7 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
                est_minutes: 10,
                steps: ["Add the secret."],
                issue: %{id: "id-MOT-24", identifier: "MOT-24", url: "https://linear.app/acme/issue/MOT-24", state: "Backlog"},
-               done_when: "you remove the `human-action` label from MOT-24, or move it on once it is unblocked."
+               done_when: "you move MOT-24 out of Backlog once it is unblocked, or the agent withdraws the request."
              }
            ] = actions(collected)
   end
@@ -146,7 +179,7 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
                kind: :task,
                title: "Turn on the pre-push hook",
                steps: ["Run `git config core.hooksPath .githooks`", "Push once"],
-               done_when: "you close MOT-31, or remove its `human-action` label."
+               done_when: "you close MOT-31, or move it on."
              }
            ] = actions(collected)
   end
@@ -441,10 +474,13 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
     no_human_review = %Schema{tracker: %{settings().tracker | human_review_state: nil}}
 
     assert {:ok, collected} = collect([node("MOT-63", %{"state" => %{"name" => "Human Review"}})], settings: no_human_review)
+    # The deprecated label still counts.
+    no_human_review = put_in(no_human_review.human_actions.label, "human-action")
+    assert {:ok, ^collected} = collect([node("MOT-63", %{"state" => %{"name" => "Human Review"}})], settings: no_human_review)
     assert collected == %{}
 
     assert_received {:query, _query, %{filter: %{"and" => [_scope, %{"or" => wanted}, _terminal]}}}
-    assert [_label, in_review, _final_verification] = wanted
+    assert [in_review, _final_verification] = wanted
     assert in_review == %{"state" => %{"name" => %{"eqIgnoreCase" => "In Review"}}}
   end
 

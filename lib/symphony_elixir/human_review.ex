@@ -12,7 +12,15 @@ defmodule SymphonyElixir.HumanReview do
     key, a check on a real device), as opposed to a tooling gap the factory can fix;
   - a parent walkthrough (`Final verification:`) whose remaining steps are manual;
   - a plan whose ticket says a human reviews it (`requested_by_ticket?/2`);
-  - an issue whose run posted a `linear_request_human_action` request.
+  - an issue whose run posted a `linear_request_human_action` request: the tool moves it there,
+    and the request stays open until a person moves the issue out or the agent withdraws it;
+  - an acceptance gate escalation only a person can clear (see
+    `SymphonyElixir.AcceptanceGate.enforced_target/4`).
+
+  It is the one way to say a person needs to act. The `human-action` label that used to say it is
+  retired: a config that still sets `human_actions.label`, or lists `human-action` in the gate's
+  `escalate.labels`, loads with a deprecation warning, and an issue carrying that label counts as
+  one with an open request (`legacy_request_labels/1`).
 
   At startup Symphony checks that the Linear team has the state. When it is missing, the state is
   turned off for the life of the process and a warning is logged, so those issues go to
@@ -30,6 +38,13 @@ defmodule SymphonyElixir.HumanReview do
   @review_state "In Review"
   # Asks for a person whatever the acceptance gate's `escalate.labels` say (see `parked_for_person?/2`).
   @needs_human_label "needs-human"
+  # The retired label that marked an open human-action request (see `legacy_request_labels/1`).
+  @legacy_request_label "human-action"
+  # A plan ticket whose author says they review it: "I only want to review and validate the
+  # artifacts", "we'll approve the plan", "I want to sign off".
+  @plan_review_patterns [
+    ~r/\b(?:i|we)(?:\s+(?:only|just|first))?(?:\s+(?:want|need|would like|wish|have)\s+to|\s+will|'ll|\s+must)(?:\s+(?:only|just|first))?\s+(?:review|validate|approve|sign off)\b/iu
+  ]
 
   @doc "The configured state name, or nil when it is turned off in config."
   @spec state(Schema.t() | term()) :: String.t() | nil
@@ -91,33 +106,62 @@ defmodule SymphonyElixir.HumanReview do
 
   @doc """
   True when the ticket says a person reviews it: an `auto_review.acceptance_gate.escalate` label
-  other than `plan` and `breakdown` (every plan has one), or a title or description matching one of its
+  other than `plan` and `breakdown` (every plan has one), a title or description matching one of its
   `ticket_patterns` ("must not auto-approve", "needs human", "human review"), where naming this
-  state doesn't count (`Escalation.ticket_reasons/3`).
+  state doesn't count (`Escalation.ticket_reasons/3`), or a description in which its author says
+  they review it ("I only want to review and validate the artifacts").
   """
   @spec requested_by_ticket?(Issue.t(), Schema.t()) :: boolean()
   def requested_by_ticket?(%Issue{} = issue, %Schema{} = settings) do
     rules = settings.auto_review.acceptance_gate.escalate
     rules = %{rules | labels: Enum.reject(rules.labels, &Issue.breakdown_label?/1)}
-    Escalation.ticket_reasons(%{issue | labels: issue.labels || []}, rules, human_review_state: state(settings)) != []
+
+    Escalation.ticket_reasons(%{issue | labels: issue.labels || []}, rules, human_review_state: state(settings)) != [] or
+      author_reviews?(issue)
+  end
+
+  defp author_reviews?(%Issue{title: title, description: description}) do
+    text = Enum.join([title || "", description || ""], "\n")
+    Enum.any?(@plan_review_patterns, &Regex.match?(&1, text))
   end
 
   @doc """
-  True when an agent parked the issue for a person: it sits outside `tracker.active_states` with a
-  label that asks for one (`human_actions.label`, `needs-human`, or an
+  True when an issue waits on a person: it sits outside `tracker.active_states` and either in this
+  state or with a label that asks for one (`needs-human`, a `legacy_request_labels/1` label, or an
   `auto_review.acceptance_gate.escalate` label other than `plan` and `breakdown`, which every plan
   carries). Labels and states compare case-insensitively.
 
   A fix run (CI or merge conflict) can't do what the person must, so the pollers leave such an
-  issue where it is until the label goes or it moves to an active state.
+  issue where it is until it leaves this state, the label goes, or it moves to an active state.
   """
   @spec parked_for_person?(Issue.t(), Schema.t()) :: boolean()
   def parked_for_person?(%Issue{state: issue_state, labels: labels}, %Schema{} = settings) do
     wanted = MapSet.new(person_labels(settings), &normalize/1)
 
     not active_state?(issue_state, settings) and
-      Enum.any?(labels || [], &(is_binary(&1) and MapSet.member?(wanted, normalize(&1))))
+      (in_state?(issue_state, settings) or Enum.any?(labels || [], &(is_binary(&1) and MapSet.member?(wanted, normalize(&1)))))
   end
+
+  @doc """
+  The labels that still mark an open human-action request, from a config that predates this state:
+  `human_actions.label` when it is set, and `human-action` when the gate's `escalate.labels` list
+  it. Both are deprecated (`SymphonyElixir.Config.SystemSchema` warns when it loads them); an issue
+  carrying one counts as an issue with an open request. Lower case.
+  """
+  @spec legacy_request_labels(Schema.t()) :: [String.t()]
+  def legacy_request_labels(%Schema{} = settings) do
+    configured = settings.human_actions.label
+    escalated? = Enum.any?(settings.auto_review.acceptance_gate.escalate.labels, &(normalize(&1) == @legacy_request_label))
+
+    [configured, if(escalated?, do: @legacy_request_label)]
+    |> Enum.filter(&is_binary/1)
+    |> Enum.map(&normalize/1)
+    |> Enum.uniq()
+  end
+
+  @doc "The retired label that marked an open human-action request."
+  @spec legacy_request_label() :: String.t()
+  def legacy_request_label, do: @legacy_request_label
 
   defp active_state?(issue_state, settings) when is_binary(issue_state),
     do: Enum.any?(settings.tracker.active_states, &(normalize(&1) == normalize(issue_state)))
@@ -125,7 +169,7 @@ defmodule SymphonyElixir.HumanReview do
   defp active_state?(_issue_state, _settings), do: false
 
   defp person_labels(settings) do
-    [settings.human_actions.label, @needs_human_label | settings.auto_review.acceptance_gate.escalate.labels]
+    [@needs_human_label | legacy_request_labels(settings) ++ settings.auto_review.acceptance_gate.escalate.labels]
     |> Enum.reject(&Issue.breakdown_label?/1)
   end
 

@@ -6,7 +6,7 @@ defmodule SymphonyElixir.HumanActions.Action do
   changed. `kind` says where it came from:
 
   - `:request`: an `## Action needed:` comment (`linear_request_human_action`, or written by hand);
-  - `:task`: an issue carrying the `human_actions.label` label with no request comment;
+  - `:task`: an issue carrying a deprecated request label (`HumanReview.legacy_request_labels/1`) with no request comment;
   - `:plan_review`: a plan parent waiting in `In Review` for its plan to be approved;
   - `:qa_blocked`: an issue whose latest QA report says Auto Review was `blocked`;
   - `:human_review`: an issue waiting in the Human Review state with no other action;

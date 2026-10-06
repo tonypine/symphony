@@ -6,13 +6,15 @@ escalation rules check the ticket and the diff, and any rule that triggers sends
 
 Auto Review runs CI, then QA, then the gate. In `shadow` mode the gate records an advisory
 verdict and the issue moves to In Review as before. In `enforce` mode the verdict moves the issue:
-`approve` to Merging, `rework` back to In Progress, `escalate` to In Review (see
-[Enforce mode](#enforce-mode)).
+`approve` to Merging, `rework` back to In Progress, `escalate` to In Review, or to Human Review
+when only a person can clear it (see [Enforce mode](#enforce-mode)).
 
 What the review states mean depends on the mode:
 
-- **In Review** holds the escalations when the gate is enforced, and every PR when the gate is
-  `off` or in `shadow`.
+- **In Review** holds the escalations the supervisor can judge when the gate is enforced, and
+  every PR when the gate is `off` or in `shadow`.
+- **Human Review** holds the escalations only a person can clear: a ticket that waits on a person
+  (reason `human_action`) or carries an `escalate.labels` label.
 - **Merging** means approved, by a person or by the gate.
 
 ## Who reviews what
@@ -185,7 +187,7 @@ With `mode: enforce`, set globally or for one repository, Auto Review applies th
 | --- | --- |
 | `approve` | Merging. The PR review poller turns GitHub auto-merge on at its next poll, and the issue ends in Done once GitHub merges the PR. |
 | `rework` | In Progress, on the same PR, with the unmet criteria, the missing scope and the reasons (such as a conflict) as continuation context, like a QA `fail`. |
-| `escalate` | In Review (or the Human Review state, when QA was blocked on something only a person can do). The gate comment opens with the escalation reasons. |
+| `escalate` | In Review, or the Human Review state when a reason only a person can clear is among the escalation reasons (`human_action`, `label`) or QA was blocked on something only a person can do. The gate comment opens with the escalation reasons. |
 
 - **Fix attempts.** A `rework` counts against `auto_review.max_fix_attempts`, with QA fails, on the
   CI check record's `qa_fix_attempts`. While the gate is enforced, a QA `pass` doesn't reset the
@@ -367,6 +369,11 @@ checked in this order:
 | `:size` | more than `escalate.max_changed_lines` lines change outside docs and tests. |
 | `:busy_file` | more than `escalate.busy_files.max_lines` lines change in one busy file. |
 | `:settings_ui` | an added line in Symphony's own config schema (`lib/symphony_elixir/config/schema.ex` or `system_schema.ex`) declares a setting (`field(`, `embeds_one(`, `embeds_many(` or a `~w(` key list) and the PR doesn't change the macOS app's settings manifest. Other repositories don't have these files. See [Settings in the macOS app](configuration.md#settings-in-the-macos-app). |
+
+Besides these rules, the gate escalates with reason `human_action` an issue that waits on a person:
+one in the Human Review state, with an open `## Action needed:` request
+(`linear_request_human_action`), or with a deprecated request label (`human_actions.label`, or
+`human-action` in `escalate.labels`). Such an issue is never approved.
 
 A ticket that only names the human review state doesn't match `human review`. Before
 `ticket_patterns` match, the gate blanks `issues.states.human_review` (`Human Review` by default)

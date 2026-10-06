@@ -742,12 +742,11 @@ defmodule SymphonyElixir.CiPoller do
     end
   end
 
-  # An agent that needs a person parks its issue outside the active states with a label that
-  # asks for one (`human_actions.label`, or a label the acceptance gate escalates on). A fix run
-  # can't do what the person must: it would only merge the base branch, push a new head and park
-  # the issue again. The issue stays where it is, with no rerun, fix run or escalation and no fix
-  # attempt spent, until a person removes the label, moves the issue to an active state, or the
-  # head turns green.
+  # An issue that waits on a person sits in the Human Review state, or outside the active states
+  # with a label that asks for one (see `HumanReview.parked_for_person?/2`). A fix run can't do
+  # what the person must: it would only merge the base branch, push a new head and park the issue
+  # again. The issue stays where it is, with no rerun, fix run or escalation and no fix attempt
+  # spent, until a person moves it on or removes the label, or the head turns green.
   defp await_human_action(record, %Issue{} = issue, ci_status, failed_checks, opts, now) do
     issue_id = Map.get(record, :issue_id)
     commit_sha = Map.get(ci_status, :commit_sha)

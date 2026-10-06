@@ -14,7 +14,7 @@ defmodule SymphonyElixir.HumanActions.RequestTest do
       steps: ["Open Settings → Secrets.", "## Add `MACOS_CERTIFICATE`\nwith the certificate."]
     }
 
-    body = Request.render(request, "human-action")
+    body = Request.render(request, "Human Review")
 
     assert body == """
            ## Action needed: Add the release signing secrets
@@ -27,7 +27,7 @@ defmodule SymphonyElixir.HumanActions.RequestTest do
            1. Open Settings → Secrets.
            2. Add `MACOS_CERTIFICATE` with the certificate.
 
-           _Symphony lists this in the project update until this issue moves on. Remove the `human-action` label once it is done._\
+           _Symphony lists this in the project update until this issue moves on. Once it is done, move the issue out of Human Review._\
            """
 
     assert Request.parse(body, @created_at) == %{
@@ -41,11 +41,12 @@ defmodule SymphonyElixir.HumanActions.RequestTest do
   end
 
   test "renders only the fields that are given" do
-    body = Request.render(%{title: "Decide the pricing", why: "The page needs a price.", steps: ["Pick one."]}, "needs-tony")
+    body = Request.render(%{title: "Decide the pricing", why: "The page needs a price.", steps: ["Pick one."]}, "In Review")
 
     refute body =~ "**Unblocks:**"
     refute body =~ "**Time:**"
-    assert body =~ "Remove the `needs-tony` label"
+    assert body =~ "move the issue out of In Review."
+    refute body =~ "label"
     assert %{unblocks: nil, est_minutes: nil, steps: ["Pick one."]} = Request.parse(body)
   end
 
