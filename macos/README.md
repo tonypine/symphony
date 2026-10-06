@@ -493,7 +493,8 @@ Edit the draft in the sheet, then pick how it lands under **Add it by**:
 - **Open a pull request** (the default): Save makes a `symphony/add-workflow` branch (`-2`, `-3`… when
   taken) from the base branch through GitHub's API, commits the file there and opens a pull request
   against the base branch with `gh pr create`, so the file goes through review like any change. No
-  checkout of yours is touched. Agents start on the repo once it merges.
+  checkout of yours is touched. Agents start on the repo once it merges. When the commit or the pull
+  request fails, Save deletes the branch again, so trying again doesn't leave branches behind.
 - **Write it into the checkout** (local folder only): Save writes `WORKFLOW.md` at the checkout's top and
   leaves it uncommitted. Commit and push it: Symphony reads the file from the base branch.
 - **Don't create one now**: Save connects the repo as before.

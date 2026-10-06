@@ -50,6 +50,8 @@ final class WorkflowSetupTests: XCTestCase {
         output: "Creating pull request for symphony/add-workflow into main in acme/web\n\nhttps://github.com/acme/web/pull/7\n"
     )
 
+    private let deleteBranch = Answer(pattern: "'api -X DELETE repos/acme/web/git/refs/heads/symphony/add-workflow'", output: "")
+
     private func newBranch(_ name: String, exists: Bool = false) -> Answer {
         Answer(
             pattern: "'api -X POST repos/acme/web/git/refs -f ref=refs/heads/\(name) -f sha=abc123'",
@@ -106,12 +108,16 @@ final class WorkflowSetupTests: XCTestCase {
              "Couldn't make the branch symphony/add-workflow on acme/web: gh: Resource not accessible by integration (HTTP 403)"),
             ([baseRef] + taken,
              "acme/web already has branches symphony/add-workflow to symphony/add-workflow-5. Delete the old ones first."),
-            ([baseRef, newBranch("symphony/add-workflow"), Answer(pattern: "'api -X PUT'*", error: "gh: Invalid request (HTTP 422)", status: 1)],
+            ([baseRef, newBranch("symphony/add-workflow"), Answer(pattern: "'api -X PUT'*", error: "gh: Invalid request (HTTP 422)", status: 1), deleteBranch],
              "Couldn't commit WORKFLOW.md to symphony/add-workflow of acme/web: gh: Invalid request (HTTP 422)"),
-            ([baseRef, newBranch("symphony/add-workflow"), commit, Answer(pattern: "'pr create'*", error: "a pull request already exists", status: 1)],
-             "Committed WORKFLOW.md to symphony/add-workflow of acme/web, but couldn't open the pull request: a pull request already exists"),
-            ([baseRef, newBranch("symphony/add-workflow"), commit, Answer(pattern: "'pr create'*", output: "done\n")],
-             "Committed WORKFLOW.md to symphony/add-workflow of acme/web, but couldn't open the pull request: gh exited with status 0"),
+            ([baseRef, newBranch("symphony/add-workflow"), commit, Answer(pattern: "'pr create'*", error: "a pull request already exists", status: 1), deleteBranch],
+             "Couldn't open the pull request from symphony/add-workflow of acme/web: a pull request already exists"),
+            ([baseRef, newBranch("symphony/add-workflow"), commit, Answer(pattern: "'pr create'*", output: "done\n"), deleteBranch],
+             "Couldn't open the pull request from symphony/add-workflow of acme/web: gh exited with status 0"),
+            ([baseRef, newBranch("symphony/add-workflow"), commit, Answer(pattern: "'pr create'*", error: "gh: Forbidden", status: 1),
+              Answer(pattern: "'api -X DELETE'*", error: "gh: Forbidden (HTTP 403)", status: 1)],
+             "Couldn't open the pull request from symphony/add-workflow of acme/web: gh: Forbidden\n"
+                + "The branch symphony/add-workflow is still on acme/web; delete it on GitHub."),
         ]
         for (answers, message) in cases {
             let gh = try fakeGH(answers)
@@ -120,6 +126,9 @@ final class WorkflowSetupTests: XCTestCase {
                 .failure(AddRepoProblem(message)),
                 message
             )
+            // A branch it made is deleted again, so trying again starts from symphony/add-workflow, not the next one.
+            let deletes = answers.contains { $0.pattern.contains("DELETE") }
+            XCTAssertEqual(gh.calls().last == ["api", "-X", "DELETE", "repos/acme/web/git/refs/heads/symphony/add-workflow"], deletes, message)
         }
     }
 

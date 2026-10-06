@@ -285,7 +285,8 @@ public struct GitHubCLI {
     }
 
     /// Opens a pull request against `baseBranch` of `repo` that adds `WORKFLOW.md` with `text`, on a new branch made
-    /// through the API. Returns the pull request's URL.
+    /// through the API. Returns the pull request's URL. When the commit or the pull request fails, the branch is
+    /// deleted again.
     public func openWorkflowPullRequest(
         _ repo: String,
         baseBranch: String,
@@ -320,7 +321,9 @@ public struct GitHubCLI {
             "-f", "content=\(Data(text.utf8).base64EncodedString())",
             "-f", "branch=\(branch)",
         ])
-        guard commit.status == 0 else { return .failure(problem("Couldn't commit WORKFLOW.md to \(branch) of \(repo)", commit)) }
+        guard commit.status == 0 else {
+            return .failure(removing(branch, of: repo, after: problem("Couldn't commit WORKFLOW.md to \(branch) of \(repo)", commit)))
+        }
 
         let body = """
             Symphony's Add Repo sheet drafted this `WORKFLOW.md` from the files at the repo's top (\(summary)), and it \
@@ -335,9 +338,17 @@ public struct GitHubCLI {
         ])
         let url = pullRequest.output.split(separator: "\n").map { String($0).trimmingWhitespace() }.last { $0.hasPrefix("https://") }
         guard pullRequest.status == 0, let url else {
-            return .failure(problem("Committed WORKFLOW.md to \(branch) of \(repo), but couldn't open the pull request", pullRequest))
+            return .failure(removing(branch, of: repo, after: problem("Couldn't open the pull request from \(branch) of \(repo)", pullRequest)))
         }
         return .success(.pullRequest(url: url))
+    }
+
+    /// Deletes `branch`, which a failed `openWorkflowPullRequest` made, so trying again starts clean rather than
+    /// leaving it behind and making the next one. Returns `failure`, saying so when the branch is left.
+    private func removing(_ branch: String, of repo: String, after failure: AddRepoProblem) -> AddRepoProblem {
+        let deleted = run(["api", "-X", "DELETE", "repos/\(repo)/git/refs/heads/\(encoded(branch))"])
+        guard deleted.status != 0 else { return failure }
+        return AddRepoProblem("\(failure.message)\nThe branch \(branch) is still on \(repo); delete it on GitHub.")
     }
 
     private func contentsPath(_ repo: String, _ path: String, branch: String) -> String {
