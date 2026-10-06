@@ -124,6 +124,62 @@ defmodule SymphonyElixir.AutoReviewQaTest do
      }}
   end
 
+  # Linear with the comments kept in an Agent, so a later call sees what an earlier one wrote.
+  defp linear_comments_client(comments) do
+    {:ok, store} = Agent.start_link(fn -> comments end)
+    recipient = self()
+
+    client = fn query, variables, _opts ->
+      send(recipient, {:linear, query, variables})
+      fake_linear(store, query, variables)
+    end
+
+    {client, store}
+  end
+
+  defp fake_linear(store, query, variables) do
+    cond do
+      query =~ "comments(" ->
+        {:ok, %{"data" => %{"issue" => %{"comments" => %{"nodes" => Agent.get(store, & &1)}}}}}
+
+      query =~ "commentCreate" ->
+        id = "c-#{System.unique_integer([:positive])}"
+        Agent.update(store, &(&1 ++ [%{"id" => id, "body" => variables.body}]))
+        {:ok, %{"data" => %{"commentCreate" => %{"success" => true, "comment" => %{"id" => id}}}}}
+
+      query =~ "commentUpdate" ->
+        Agent.update(store, &Enum.map(&1, fn node -> rewrite_comment(node, variables) end))
+        {:ok, %{"data" => %{"commentUpdate" => %{"success" => true}}}}
+
+      query =~ "commentDelete" ->
+        Agent.update(store, &Enum.reject(&1, fn node -> node["id"] == variables.id end))
+        {:ok, %{"data" => %{"commentDelete" => %{"success" => true}}}}
+    end
+  end
+
+  defp rewrite_comment(%{"id" => id} = node, %{id: id, body: body}), do: %{node | "body" => body}
+  defp rewrite_comment(node, _variables), do: node
+
+  defp put_usage_limited_agent do
+    info = %{provider: "anthropic", scope: :all, window: "five_hour", source: :rate_limit_event}
+    error = {:qa_agent_failed, {:usage_limited, info}}
+    Application.put_env(:symphony_elixir, :qa_flow_agent_result, {:error, error, QaAgent.empty_tokens()})
+  end
+
+  # The tracker stays the memory one for state moves; comments go to `client` as on Linear.
+  defp hold_note_opts(client) do
+    settings = put_in(Config.settings!().tracker.kind, "linear")
+
+    [
+      git: git_with_paths(["bin/symphony"]),
+      qa_agent: FakeQaAgent,
+      linear_client: client,
+      settings: settings,
+      now: ~U[2026-10-06 10:00:00Z],
+      to_local: & &1
+    ]
+  end
+
   defp fail_result do
     {:ok,
      %{
@@ -496,6 +552,55 @@ defmodule SymphonyElixir.AutoReviewQaTest do
       assert log =~ "the hold was not recorded: :unavailable"
       refute_received {:memory_tracker_comment, _issue_id, _report}
       refute Map.get(stored_record(), :qa_verdict)
+    end
+
+    test "a held pass leaves one note on Linear, rewrites it when held again and deletes it once the pass runs" do
+      {client, comments} = linear_comments_client([%{"id" => "w", "body" => "## Symphony Workpad"}])
+      opts = hold_note_opts(client)
+      put_usage_limited_agent()
+
+      hold_until = fn resume_at -> [usage_limit_hold: fn _info, _identifier -> {:ok, %{resume_at: resume_at}} end] end
+
+      assert {:qa_usage_limited, "issue-qa-flow", _resume_at} = AutoReview.run_qa(job(put_record()), opts ++ hold_until.(~U[2026-10-06 14:05:00Z]))
+      assert_receive {:linear, create, %{body: "QA is waiting for the usage limit to reset at 14:05. " <> _rest}}
+      assert create =~ "commentCreate"
+      assert [%{"id" => "w"}, %{"id" => note_id}] = Agent.get(comments, & &1)
+      assert %{qa_hold_note: true} = stored_record()
+
+      # Held again: the same note says the new time.
+      assert {:qa_usage_limited, "issue-qa-flow", _resume_at} = AutoReview.run_qa(job(stored_record()), opts ++ hold_until.(~U[2026-10-07 09:30:00Z]))
+      assert_receive {:linear, update, %{id: ^note_id, body: "QA is waiting for the usage limit to reset at Oct 7 09:30. " <> _rest}}
+      assert update =~ "commentUpdate"
+      refute_received {:linear, _create, %{body: "QA is waiting" <> _rest}}
+      assert [%{"id" => "w"}, %{"id" => ^note_id}] = Agent.get(comments, & &1)
+
+      # The pass runs: the note goes, and the QA report takes its place.
+      Application.put_env(:symphony_elixir, :qa_flow_agent_result, pass_result())
+      assert {:auto_review_qa, "issue-qa-flow", :pass, "In Review"} = AutoReview.run_qa(job(stored_record()), opts)
+      assert_receive {:linear, delete, %{id: ^note_id}}
+      assert delete =~ "commentDelete"
+      assert [%{"id" => "w"}, %{"body" => "## Symphony QA Report" <> _report}] = Agent.get(comments, & &1)
+      assert %{qa_hold_note: false, qa_verdict: "pass"} = stored_record()
+    end
+
+    test "a hold note that can't be posted or removed is logged, and its removal is tried again on the next pass" do
+      failing = fn _query, _variables, _opts -> {:error, :linear_down} end
+      opts = hold_note_opts(failing)
+      put_usage_limited_agent()
+      hold = fn _info, _identifier -> {:ok, %{resume_at: ~U[2026-10-06 14:05:00Z]}} end
+      opts = [usage_limit_hold: hold] ++ opts
+
+      held = job(put_record())
+      log = capture_log(fn -> assert {:qa_usage_limited, _issue_id, _at} = AutoReview.run_qa(held, opts) end)
+
+      assert log =~ "Failed to post the QA hold note for TP-901: :linear_down"
+      refute Map.get(stored_record(), :qa_hold_note)
+
+      Application.put_env(:symphony_elixir, :qa_flow_agent_result, pass_result())
+      record = put_record(%{qa_hold_note: true})
+      log = capture_log(fn -> assert {:auto_review_qa, _issue_id, :pass, "In Review"} = AutoReview.run_qa(job(record), opts) end)
+      assert log =~ "Failed to remove the QA hold note for TP-901: :linear_down"
+      assert %{qa_hold_note: true} = stored_record()
     end
 
     test "with auto_pause off, a usage-limited pass is blocked like any other agent error" do
