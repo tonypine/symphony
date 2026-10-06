@@ -104,4 +104,7 @@ mix pr_body.check --file /path/to/pr_body.md
 If behavior/config changes, update docs in the same PR:
 
 - `README.md` for project concept, goals, and run instructions.
-- `WORKFLOW.md` for workflow/config contract changes.
+- `WORKFLOW.md` for workflow/config contract changes (front matter: hooks, push check, `playbook`
+  settings). It is agent-protected.
+- `.symphony/instructions/NNN-name.md` for changes to the agent instructions themselves. Agents
+  may edit these; `symphony workflow preview` shows them assembled into the prompt.

@@ -212,9 +212,10 @@ defmodule SymphonyElixir.PlaybookTest do
     |> String.replace(~r/\s+/, " ")
   end
 
-  # WORKFLOW.md's prompt body without the ticket_types render, and with it right after Step 0.
+  # WORKFLOW.md's prompt body, its instruction files expanded, without the ticket_types render and
+  # with it right after Step 0.
   defp workflow_bodies do
-    {:ok, {_front_matter, body}} = Workflow.parse_document(File.read!(@workflow_path))
+    {:ok, %{prompt_template: body}} = Workflow.load(@workflow_path)
     without_tag = String.replace(body, @ticket_types_tag <> "\n", "")
     assert without_tag =~ @ticket_types_anchor
 
