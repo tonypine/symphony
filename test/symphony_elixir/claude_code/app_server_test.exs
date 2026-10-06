@@ -4,7 +4,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
   alias SymphonyElixir.AgentSandboxConfig
   alias SymphonyElixir.ClaudeCode.AppServer
   alias SymphonyElixir.Config.Schema.Agent
-  alias SymphonyElixir.OpenRouter.Models
+  alias SymphonyElixir.OpenRouter.{Models, Stub}
   import Bitwise, only: [band: 2]
 
   defmodule StubSSH do
@@ -2568,6 +2568,46 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
           refute Enum.any?(args, &(&1 =~ key))
         end)
       end)
+    end
+
+    test "launches an OpenRouter run in QA mode against the stub, which checks its model" do
+      {:ok, stub, port} = Stub.start_link(log: fn _line -> :ok end)
+      saved = Map.new(~w(SYMPHONY_BAR_QA_ROOT SYMPHONY_QA_OPENROUTER_URL), &{&1, System.get_env(&1)})
+      previous_request = Application.get_env(:symphony_elixir, :openrouter_models_request)
+
+      try do
+        System.put_env("SYMPHONY_BAR_QA_ROOT", System.tmp_dir!())
+        System.put_env("SYMPHONY_QA_OPENROUTER_URL", Stub.url(port))
+        Application.put_env(:symphony_elixir, :openrouter_models_request, fn url, opts -> Req.get(url, opts) end)
+        Models.clear_cache()
+
+        with_openrouter_key(Stub.valid_key(), fn ->
+          with_provider_env_fake_claude("ACME-OPENROUTER-QA", fn workspace ->
+            profile = %{kind: :landing, model: "symphony-qa/tools-only", effort: "high", provider: "openrouter"}
+
+            log =
+              capture_log(fn ->
+                {:ok, session} = AppServer.start_session(workspace, run_profile: profile)
+                assert {:ok, _result} = AppServer.run_turn(session, "land it", %{identifier: "ACME-OPENROUTER-QA"}, [])
+                AppServer.stop_session(session)
+
+                no_tools = %{profile | model: "symphony-qa/no-tools"}
+
+                assert {:error, {:openrouter_model_unsupported, "symphony-qa/no-tools", :landing, :tools}} =
+                         AppServer.start_session(workspace, run_profile: no_tools)
+              end)
+
+            assert log =~ "OpenRouter model symphony-qa/tools-only does not support reasoning"
+            assert "BASE_URL=#{Stub.url(port)}" in provider_env_trace(workspace)
+            assert "SMALL_FAST_MODEL=symphony-qa/tools-only" in provider_env_trace(workspace)
+          end)
+        end)
+      after
+        Stub.stop(stub)
+        Application.put_env(:symphony_elixir, :openrouter_models_request, previous_request)
+        Models.clear_cache()
+        Enum.each(saved, fn {name, value} -> restore_env(name, value) end)
+      end
     end
 
     test "launches an Anthropic profile without OpenRouter env, even when the key is set" do

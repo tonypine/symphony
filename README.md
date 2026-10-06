@@ -97,7 +97,10 @@ branch instead of opening a second one. If a claimed issue moves to a terminal s
   `Rework` to have the plan made again. A plan run that stopped midway resumes from its workpad
   when the parent is moved to `In Progress`, keeping the sub-tickets already filed. The approved
   parent waits without being re-dispatched until every sub-ticket is closed, then closes out with
-  a Linear project update.
+  a Linear project update. Any other ticket whose PR merges with sub-tickets still open (the
+  acceptance gate's follow-ups, or ones an agent filed) waits in `Waiting on sub-tickets` too
+  instead of closing: Symphony promotes its `Backlog` sub-tickets to `Todo` and moves it to `Done`
+  once every sub-ticket is `Done`, `Canceled` or `Duplicate`, with a comment listing how each ended.
   With Auto Review on, the final verification ticket is a QA pass over the merged parent: the report
   goes on the parent and each failing step becomes a new ticket that blocks the verification
   ticket, which waits in `Todo` and runs again once those tickets are done.
@@ -328,6 +331,15 @@ The terminal and web dashboards list forced tickets in a "Forced" section above 
 with the phase each is in and what it waits on (`implementation · running`,
 `waiting for a human`, `implementation · waiting on blocker TP-12`), and mark forced rows elsewhere
 with ⚡. Once a forced ticket is done, Symphony removes the label.
+
+Test OpenRouter flows without a real key: `symphony openrouter-stub` serves a stub OpenRouter on
+`127.0.0.1` with a made-up valid key and three models, prints its URL and the variables that point a
+QA-mode Symphony or app at it, and runs until stopped (see
+[OpenRouter in QA](docs/configuration.md#qa-passes)):
+
+```bash
+./bin/symphony openrouter-stub --port 4100
+```
 
 ### Priority vs expedite
 

@@ -34,6 +34,15 @@ final class OpenRouterTests: XCTestCase {
         XCTAssertNil(OpenRouterClient().modelsRequest().value(forHTTPHeaderField: "Authorization"))
     }
 
+    func testAStubAPIBaseGetsTheSamePaths() {
+        let base = OpenRouterClient.baseURL(api: URL(string: "http://127.0.0.1:4100/api")!)
+        let stub = OpenRouterClient(baseURL: base)
+
+        XCTAssertEqual(base.absoluteString, "http://127.0.0.1:4100/api/v1/")
+        XCTAssertEqual(stub.keyRequest(apiKey: "sk-or-v1-symphony-qa-stub").url?.absoluteString, "http://127.0.0.1:4100/api/v1/key")
+        XCTAssertEqual(stub.modelsRequest().url?.absoluteString, "http://127.0.0.1:4100/api/v1/models")
+    }
+
     func testValidKeyWithALimitReportsLabelAndCredit() async {
         let body = """
             {"data":{"label":"sk-or-v1-abc...xyz","usage":12.5,"limit":100,"limit_remaining":87.5,

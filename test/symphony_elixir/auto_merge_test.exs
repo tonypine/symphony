@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.AutoMergeTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{AutoMerge, AutoReview, CiPoller, PrReviewPoller}
+  alias SymphonyElixir.{AutoMerge, AutoReview, CiPoller, PrReviewPoller, SubIssueWait}
   alias SymphonyElixir.Linear.Issue
 
   @repo_key "default"
@@ -23,10 +23,24 @@ defmodule SymphonyElixir.AutoMergeTest do
       {:ok, issues}
     end
 
+    @spec fetch_issue_states_by_ids([String.t()]) :: {:ok, [Issue.t()]} | {:error, term()}
+    def fetch_issue_states_by_ids(issue_ids) do
+      send(recipient(), {:fetch_issue_states_by_ids, issue_ids})
+
+      case Application.get_env(:symphony_elixir, :auto_merge_test_fetch_result) do
+        nil -> {:ok, Enum.filter(Application.get_env(:symphony_elixir, :auto_merge_test_issues, []), &(&1.id in issue_ids))}
+        result -> result
+      end
+    end
+
     @spec update_issue_state(String.t(), String.t()) :: :ok | {:error, term()}
     def update_issue_state(issue_id, state_name) do
       send(recipient(), {:issue_state_update, issue_id, state_name})
-      Application.get_env(:symphony_elixir, :auto_merge_test_state_result, :ok)
+
+      case Application.get_env(:symphony_elixir, :auto_merge_test_state_result, :ok) do
+        %{} = results -> Map.get(results, issue_id, :ok)
+        result -> result
+      end
     end
 
     @spec create_comment(String.t(), String.t()) :: :ok | {:error, term()}
@@ -103,6 +117,7 @@ defmodule SymphonyElixir.AutoMergeTest do
             :auto_merge_test_recipient,
             :auto_merge_test_replies,
             :auto_merge_test_state_result,
+            :auto_merge_test_fetch_result,
             :auto_merge_test_comment_result
           ] do
         Application.delete_env(:symphony_elixir, key)
@@ -1265,6 +1280,163 @@ defmodule SymphonyElixir.AutoMergeTest do
     refute_received {:issue_state_update, _issue_id, _state}
   end
 
+  describe "a merged PR whose issue has sub-tickets" do
+    @waiting "Waiting on sub-tickets"
+
+    setup do
+      SubIssueWait.reset_for_test(@waiting)
+      on_exit(fn -> SubIssueWait.reset_for_test(@waiting) end)
+    end
+
+    test "with one still open moves the issue to the waiting state instead of Done and its Backlog sub-tickets to Todo" do
+      now = ~U[2026-10-03 12:00:00Z]
+      put_run!(now)
+
+      track([
+        with_sub_issues(issue("Merging"), [
+          {"child-1", "ACME-1781", "Backlog"},
+          {"child-2", "ACME-1782", "Todo"},
+          {"child-3", "ACME-1783", "Done"}
+        ])
+      ])
+
+      activity(head: "head-1", state: "MERGED", auto_merge_enabled: true)
+
+      log = capture_log([level: :info], fn -> assert {:ok, %{actions: [{:cleanup, @issue_id, "merged"}]}} = poll(now) end)
+
+      assert_received {:issue_state_update, @issue_id, @waiting}
+      assert_received {:issue_state_update, "child-1", "Todo"}
+      refute_received {:issue_state_update, _issue_id, _state}
+      assert_received {:issue_comment, @issue_id, body}
+
+      assert body ==
+               "Waiting on sub-tickets: the PR merged with sub-tickets still open (ACME-1781, ACME-1782), so this ticket " <>
+                 "moves to Done once every sub-ticket is finished. Canceling one counts as finishing it.\n\nPromoted to Todo: ACME-1781"
+
+      assert log =~ "Moved issue to Waiting on sub-tickets after its PR merged with sub-issues open; promoted to Todo: ACME-1781"
+      assert log =~ "Auto-merge ACME-1780: merged"
+      assert RunStore.list_pr_reviews(@repo_key) == []
+      # The merge put it there, so it moves to Done once its sub-tickets finish.
+      assert RunStore.merged_wait?(@issue_id)
+    end
+
+    test "waits even when Linear already moved the issue to Done, and a failed read retries on the next poll" do
+      now = ~U[2026-10-03 12:00:00Z]
+      put_run!(now)
+      discover_review!(now)
+      track([with_sub_issues(issue("Done"), [{"child-1", "ACME-1781", "Todo"}])])
+      activity(head: "head-1", state: "MERGED")
+      Application.put_env(:symphony_elixir, :auto_merge_test_fetch_result, {:error, :linear_down})
+
+      assert {:ok, %{actions: [{:state_transition_error, @issue_id, :wait, :linear_down}]}} = poll(now)
+      assert_received {:fetch_issue_states_by_ids, [@issue_id]}
+      refute_received {:issue_state_update, _issue_id, _state}
+      assert [%{status: "state_transition_error"}] = RunStore.list_pr_reviews(@repo_key)
+
+      Application.delete_env(:symphony_elixir, :auto_merge_test_fetch_result)
+
+      capture_log(fn -> assert {:ok, %{actions: [{:cleanup, @issue_id, "merged"}]}} = poll(DateTime.add(now, 60)) end)
+      assert_received {:issue_state_update, @issue_id, @waiting}
+      refute_received {:issue_state_update, _issue_id, _state}
+      assert_received {:issue_comment, @issue_id, body}
+      refute body =~ "Promoted"
+    end
+
+    test "keeps the record when a sub-ticket can't be promoted, and promotes only what is left next poll" do
+      now = ~U[2026-10-03 12:00:00Z]
+      put_run!(now)
+      sub_issues = [{"child-1", "ACME-1781", "Backlog"}, {"child-2", "ACME-1782", "Backlog"}]
+      track([with_sub_issues(issue("Merging"), sub_issues)])
+      activity(head: "head-1", state: "MERGED", auto_merge_enabled: true)
+      Application.put_env(:symphony_elixir, :auto_merge_test_state_result, %{"child-2" => {:error, :linear_down}})
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %{actions: [{:state_transition_error, @issue_id, :wait, reason}]}} = poll(now)
+          assert reason == {:sub_issue_promotion_failed, ["ACME-1782"]}
+        end)
+
+      assert log =~ "Failed to move sub-issue ACME-1782 to Todo after its parent's PR merged"
+      assert_received {:issue_state_update, @issue_id, @waiting}
+      assert_received {:issue_state_update, "child-1", "Todo"}
+      assert_received {:issue_state_update, "child-2", "Todo"}
+      assert_received {:issue_comment, @issue_id, _first}
+
+      # Linear now shows it waiting with one sub-ticket left in Backlog: only that one moves.
+      Application.delete_env(:symphony_elixir, :auto_merge_test_state_result)
+      track([with_sub_issues(issue(@waiting), [{"child-1", "ACME-1781", "Todo"}, {"child-2", "ACME-1782", "Backlog"}])])
+
+      capture_log(fn -> assert {:ok, %{actions: [{:cleanup, @issue_id, "merged"}]}} = poll(DateTime.add(now, 60)) end)
+      assert_received {:issue_state_update, "child-2", "Todo"}
+      refute_received {:issue_state_update, _issue_id, _state}
+      assert_received {:issue_comment, @issue_id, "Promoted to Todo: ACME-1782"}
+    end
+
+    test "an issue already waiting with nothing left in Backlog is neither moved nor commented on again" do
+      now = ~U[2026-10-03 12:00:00Z]
+      put_run!(now)
+      discover_review!(now)
+      track([with_sub_issues(issue(@waiting), [{"child-1", "ACME-1781", "In Progress"}])])
+      activity(head: "head-1", state: "MERGED")
+
+      assert {:ok, %{actions: [{:cleanup, @issue_id, "merged"}]}} = poll(now)
+      assert_received {:fetch_issue_states_by_ids, [@issue_id]}
+      refute_received {:issue_state_update, _issue_id, _state}
+      refute_received {:issue_comment, _issue_id, _body}
+    end
+
+    test "a failed move to the waiting state keeps the record for the next poll" do
+      now = ~U[2026-10-03 12:00:00Z]
+      put_run!(now)
+      track([with_sub_issues(issue("Merging"), [{"child-1", "ACME-1781", "Backlog"}])])
+      activity(head: "head-1", state: "MERGED", auto_merge_enabled: true)
+      Application.put_env(:symphony_elixir, :auto_merge_test_state_result, {:error, :linear_down})
+
+      assert {:ok, %{actions: [{:state_transition_error, @issue_id, :wait, :linear_down}]}} = poll(now)
+      assert_received {:issue_state_update, @issue_id, @waiting}
+      refute_received {:issue_state_update, _issue_id, _state}
+      refute_received {:issue_comment, _issue_id, _body}
+    end
+
+    test "all finished, a breakdown parent, or the waiting state off: Done on merge as before" do
+      now = ~U[2026-10-03 12:00:00Z]
+      finished = [{"child-1", "ACME-1781", "Done"}, {"child-2", "ACME-1782", "Canceled"}, {"child-3", "ACME-1783", "Duplicate"}]
+      open = [{"child-1", "ACME-1781", "Backlog"}]
+
+      for {merging, disabled?} <- [
+            {with_sub_issues(issue("Merging"), finished), false},
+            {%{with_sub_issues(issue("Merging"), open) | labels: ["breakdown"]}, false},
+            {with_sub_issues(issue("Merging"), open), true}
+          ] do
+        if disabled?, do: disable_waiting_state!()
+        put_run!(now)
+        track([merging])
+        activity(head: "head-1", state: "MERGED", auto_merge_enabled: true)
+
+        capture_log(fn -> assert {:ok, %{actions: [{:cleanup, @issue_id, "merged"}]}} = poll(now) end)
+        assert_received {:issue_state_update, @issue_id, "Done"}
+        refute_received {:issue_state_update, _issue_id, _state}
+        refute_received {:issue_comment, _issue_id, _body}
+        refute RunStore.merged_wait?(@issue_id)
+      end
+
+      # With the state off the issue is not even read.
+      refute_received {:fetch_issue_states_by_ids, _issue_ids}
+    end
+
+    test "an issue gone from Linear keeps the plain cleanup" do
+      now = ~U[2026-10-03 12:00:00Z]
+      put_run!(now)
+      discover_review!(now)
+      track([])
+      activity(head: "head-1", state: "MERGED")
+
+      assert {:ok, %{actions: [{:cleanup, @issue_id, "merged"}]}} = poll(now)
+      assert_received {:fetch_issue_states_by_ids, [@issue_id]}
+      refute_received {:issue_state_update, _issue_id, _state}
+    end
+  end
+
   test "a Merging PR with no run on record is still watched and landed" do
     now = ~U[2026-10-03 12:00:00Z]
     merging = issue("Merging")
@@ -1518,6 +1690,32 @@ defmodule SymphonyElixir.AutoMergeTest do
   end
 
   defp track(issues), do: Application.put_env(:symphony_elixir, :auto_merge_test_issues, issues)
+
+  # The poller watches the PR from its issue's review; the issue then leaves the watched states.
+  defp discover_review!(now) do
+    track([issue("In Review")])
+    activity(head: "head-1")
+    capture_log(fn -> assert {:ok, %{discovered: 1}} = poll(DateTime.add(now, -60)) end)
+  end
+
+  defp with_sub_issues(issue, sub_issues) do
+    sub_issues = for {id, identifier, state} <- sub_issues, do: %{id: id, identifier: identifier, state: state}
+    %{issue | sub_issues: sub_issues}
+  end
+
+  defmodule MissingStateTracker do
+    @spec workflow_state_exists?(String.t(), [String.t()]) :: {:ok, false}
+    def workflow_state_exists?(_state_name, _teams), do: {:ok, false}
+  end
+
+  defp disable_waiting_state! do
+    opts = [tracker: MissingStateTracker]
+    settings = Config.settings!()
+    log = capture_log(fn -> send(self(), SubIssueWait.check_tracker_state(settings, [], opts)) end)
+    assert_received :disabled
+    assert log =~ "Waiting on sub-issues state disabled"
+  end
+
   defp replies(replies), do: Application.put_env(:symphony_elixir, :auto_merge_test_replies, replies)
 
   defp issue(state) do

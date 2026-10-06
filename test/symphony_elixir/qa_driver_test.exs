@@ -100,11 +100,13 @@ defmodule SymphonyElixir.QaDriverTest do
 
     {:ok, driver} =
       QaDriver.start_link(
-        worktree: worktree,
-        playbook: playbook,
-        tmp_dir: Keyword.get(opts, :tmp_dir),
-        host: Keyword.get(opts, :host, host()),
-        git: Keyword.get(opts, :git, &clean_git/2)
+        [
+          worktree: worktree,
+          playbook: playbook,
+          tmp_dir: Keyword.get(opts, :tmp_dir),
+          host: Keyword.get(opts, :host, host()),
+          git: Keyword.get(opts, :git, &clean_git/2)
+        ] ++ Keyword.take(opts, [:start_stub])
       )
 
     on_exit(fn -> QaDriver.stop(driver) end)
@@ -120,6 +122,19 @@ defmodule SymphonyElixir.QaDriverTest do
   end
 
   defp error_code({:error, {:qa_tool, code, _message}}), do: code
+
+  defp stub_url(launch_opts) do
+    {_name, url} = Enum.find(launch_opts[:env], fn {name, _value} -> name == ~c"SYMPHONY_QA_OPENROUTER_URL" end)
+    to_string(url)
+  end
+
+  defp wait_until(fun, attempts \\ 50) do
+    cond do
+      fun.() -> :ok
+      attempts == 0 -> flunk("condition never held")
+      true -> Process.sleep(10) && wait_until(fun, attempts - 1)
+    end
+  end
 
   describe "tools" do
     test "lists the qa tools and needs a driver" do
@@ -494,6 +509,45 @@ defmodule SymphonyElixir.QaDriverTest do
       assert {:error, {:qa_tool, "qa_bundle_unsafe", message}} = QaDriver.call_tool(driver, "qa_build", %{})
       assert message =~ ":eacces"
       File.chmod!(resources, 0o700)
+    end
+
+    test "starts one OpenRouter stub for the pass and points every app at it", %{worktree: worktree} do
+      {driver, _pid} = launched_app(worktree)
+      assert_received {:launched, _executable, launch_opts, _port, _pid}
+      assert launch_opts[:reverse_forwards] == []
+      url = stub_url(launch_opts)
+      assert url =~ ~r{\Ahttp://127\.0\.0\.1:\d+/api\z}
+      assert Req.get!(url <> "/v1/models", retry: false).status == 200
+
+      {_result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{}) end)
+      assert_received {:launched, _executable, second_opts, _port, _pid}
+      assert stub_url(second_opts) == url
+
+      # A stub that died is started again for the next launch.
+      %{stub: %{pid: stub}} = :sys.get_state(driver)
+      ref = Process.monitor(stub)
+      Process.exit(stub, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^stub, :killed}
+      wait_until(fn -> :sys.get_state(driver).stub == nil end)
+
+      {_result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{}) end)
+      assert_received {:launched, _executable, third_opts, _port, _pid}
+      assert Req.get!(stub_url(third_opts) <> "/v1/models", retry: false).status == 200
+
+      # Stopping the driver stops the stub.
+      %{stub: %{pid: restarted}} = :sys.get_state(driver)
+      ref = Process.monitor(restarted)
+      QaDriver.stop(driver)
+      assert_receive {:DOWN, ^ref, :process, ^restarted, _reason}
+    end
+
+    test "fails the launch when the OpenRouter stub can't start", %{worktree: worktree} do
+      driver = start_driver(worktree, start_stub: fn -> {:error, :eaddrinuse} end)
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+      assert {:error, {:qa_tool, "qa_launch_failed", message}} = QaDriver.call_tool(driver, "qa_launch_app", %{})
+      assert message =~ "OpenRouter stub"
+      assert message =~ ":eaddrinuse"
+      refute_received {:launched, _executable, _opts, _port, _pid}
     end
 
     test "caps running apps and reports launch failures", %{worktree: worktree} do
@@ -884,7 +938,14 @@ defmodule SymphonyElixir.QaDriverTest do
       assert_received {:launched, executable, launch_opts, _port, ^pid}
       assert executable == bundle_dest <> "/Demo.app/Contents/MacOS/Demo"
       assert launch_opts[:cd] == @run_dir <> "/app-root"
-      assert launch_opts[:env] == [{"SYMPHONY_BAR_QA_ROOT", @run_dir <> "/app-root"}]
+      # The app's SSH session forwards a loopback port on the QA host back to this pass's stub.
+      assert [{"SYMPHONY_BAR_QA_ROOT", qa_root}, {"SYMPHONY_QA_OPENROUTER_URL", stub_url}] = launch_opts[:env]
+      assert qa_root == @run_dir <> "/app-root"
+      %{stub: %{port: stub_port}} = :sys.get_state(driver)
+      assert [{"127.0.0.1:" <> remote_port, local}] = launch_opts[:reverse_forwards]
+      assert local == "127.0.0.1:#{stub_port}"
+      assert stub_url == "http://127.0.0.1:#{remote_port}/api"
+      assert String.to_integer(remote_port) in 20_000..59_999
 
       assert {:ok, %{"files" => [%{"path" => "qa-evidence/settings.png"}]}} = QaDriver.call_tool(driver, "qa_screenshot", %{"pid" => pid, "name" => "settings"})
       assert_received {:cmd, @helper, ["screenshot", _pid, "11", capture], _opts}

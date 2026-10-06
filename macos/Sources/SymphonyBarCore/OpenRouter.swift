@@ -138,6 +138,11 @@ public struct OpenRouterClient {
         self.baseURL = baseURL
     }
 
+    /// The client's base URL for an API base such as the QA stub's `http://127.0.0.1:4100/api`.
+    public static func baseURL(api: URL) -> URL {
+        api.appendingPathComponent("v1", isDirectory: true)
+    }
+
     /// `GET /key` with the key as a bearer token.
     public func keyRequest(apiKey: String) -> URLRequest {
         var request = request(path: "key")
