@@ -336,6 +336,90 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
     refute_received :listed_runs
   end
 
+  test "fetch_ci_status reads the base branch's required checks for a landing still waiting on a check" do
+    pr_url = "https://github.com/org/repo/pull/71"
+    rules_endpoint = "repos/org/repo/rules/branches/release%2F1.x?per_page=100"
+    branch_endpoint = "repos/org/repo/branches/release%2F1.x"
+    runs_endpoint = "repos/org/repo/actions/runs?head_sha=abc123&per_page=100"
+    test_pid = self()
+
+    rules =
+      Jason.encode!([
+        %{"type" => "required_status_checks", "parameters" => %{"required_status_checks" => [%{"context" => "make all"}, %{"context" => "lint"}, %{}]}},
+        %{"type" => "pull_request", "parameters" => %{}}
+      ])
+
+    protected = fn level ->
+      Jason.encode!(%{"name" => "release/1.x", "protection" => %{"required_status_checks" => %{"enforcement_level" => level, "contexts" => ["lint", "e2e", 7]}}})
+    end
+
+    runner = fn rollup, responses ->
+      fn
+        ["pr", "view", ^pr_url, "--json", _fields], _opts ->
+          {Jason.encode!(%{"state" => "OPEN", "url" => pr_url, "headRefOid" => "abc123", "baseRefName" => "release/1.x", "statusCheckRollup" => rollup}), 0}
+
+        ["api", endpoint], _opts ->
+          send(test_pid, {:api, endpoint})
+          Map.fetch!(responses, endpoint)
+      end
+    end
+
+    landing_read = fn rollup, responses ->
+      PullRequest.fetch_ci_status(pr_url, gh_runner: runner.(rollup, responses), required_checks: true)
+    end
+
+    make_all = %{"name" => "make all", "status" => "COMPLETED", "conclusion" => "SUCCESS"}
+    preview = %{"context" => "deploy/preview", "state" => "PENDING"}
+    read = %{rules_endpoint => {rules, 0}, branch_endpoint => {protected.("non_admins"), 0}}
+
+    assert {:ok, status} = landing_read.([make_all, preview], read)
+    assert status.required_checks == ["make all", "lint", "e2e"]
+    assert_received {:api, ^rules_endpoint}
+    assert_received {:api, ^branch_endpoint}
+
+    # Protection whose required checks are switched off, or a branch without protection, adds none.
+    for branch <- [protected.("off"), Jason.encode!(%{"name" => "release/1.x", "protection" => %{"enabled" => false}})] do
+      responses = %{rules_endpoint => {"[]", 0}, branch_endpoint => {branch, 0}}
+      assert {:ok, %{required_checks: []}} = landing_read.([make_all, preview], responses)
+    end
+
+    # Every check passed, but a workflow run of the head is still going: its later jobs may be required.
+    actions_check = Map.put(make_all, "detailsUrl", "https://github.com/org/repo/actions/runs/987/job/1")
+    queued = {Jason.encode!(%{"workflow_runs" => [%{"id" => 987, "status" => "queued", "conclusion" => nil}]}), 0}
+
+    assert {:ok, %{required_checks: ["make all", "lint", "e2e"]}} =
+             landing_read.([actions_check], Map.put(read, runs_endpoint, queued))
+
+    # A read that fails leaves the required checks out, so the landing waits on every check.
+    failed_reads = [
+      %{rules_endpoint => {"HTTP 404: Not Found", 1}},
+      %{rules_endpoint => {"not json", 0}},
+      %{rules_endpoint => {Jason.encode!(%{"message" => "Not Found"}), 0}, branch_endpoint => {protected.("everyone"), 0}}
+    ]
+
+    for responses <- failed_reads do
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, status} = landing_read.([make_all, preview], responses)
+          refute Map.has_key?(status, :required_checks)
+        end)
+
+      assert log =~ "Could not read the required checks of release/1.x; waiting on every check pr_url=#{pr_url} commit_sha=abc123"
+    end
+
+    # Other reads, a failed check, or a head with nothing left to wait on don't read them: the
+    # runner has no response for those endpoints.
+    red = %{"context" => "ci/test", "state" => "FAILURE"}
+
+    assert {:ok, status} = PullRequest.fetch_ci_status(pr_url, gh_runner: runner.([make_all, preview], %{}))
+    refute Map.has_key?(status, :required_checks)
+
+    for rollup <- [[red, preview], [make_all]] do
+      assert {:ok, status} = landing_read.(rollup, %{})
+      refute Map.has_key?(status, :required_checks)
+    end
+  end
+
   test "fetch_failed_log and rerun_failed use gh run commands" do
     runner = fn
       ["run", "view", "987", "--log-failed"], opts ->

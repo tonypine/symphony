@@ -588,9 +588,13 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp handle_info_message({:retry_issue, issue_id, retry_token}, state) do
     result =
-      case pop_retry_attempt_state(state, issue_id, retry_token) do
-        {:ok, attempt, metadata, state} -> handle_retry_issue(state, issue_id, attempt, metadata)
-        :missing -> {:noreply, state}
+      if held_for_canary_read?(state, issue_id, retry_token) do
+        {:noreply, keep_held_for_canary_read(state, issue_id)}
+      else
+        case pop_retry_attempt_state(state, issue_id, retry_token) do
+          {:ok, attempt, metadata, state} -> handle_retry_issue(state, issue_id, attempt, metadata)
+          :missing -> {:noreply, state}
+        end
       end
 
     notify_dashboard()
@@ -1724,7 +1728,7 @@ defmodule SymphonyElixir.Orchestrator do
   @doc false
   @spec start_usage_limit_canary_for_test(State.t(), UsageLimit.key(), ([String.t()] -> term())) :: State.t()
   def start_usage_limit_canary_for_test(%State{} = state, key, issue_fetcher) when is_function(issue_fetcher, 1) do
-    start_usage_limit_canary(state, key, Map.fetch!(state.usage_limits, key), issue_fetcher)
+    state |> start_usage_limit_canary(key, Map.fetch!(state.usage_limits, key), issue_fetcher) |> await_tracker_tasks()
   end
 
   @doc false
@@ -3182,7 +3186,8 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # A landing run that ended on pending checks stays held in `Merging` until the CI poller sees
-  # that head go green, the issue leaves `Merging` (a red head takes the CI-failure path), or
+  # that head go green, or every check its base branch requires pass (`CiPoller.landing_action/1`),
+  # the issue leaves `Merging` (a red head takes the CI-failure path), or
   # `ci.merging_wait_timeout_ms` passes. Releasing it lets this poll dispatch the landing agent.
   defp release_merging_ci_waits(%State{merging_ci_waits: waits} = state, _issues) when map_size(waits) == 0, do: state
 
@@ -3220,7 +3225,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     case CiPoller.observed_head(issue_id, opts) do
       %{commit_sha: commit_sha, conclusion: "SUCCESS"} -> commit_sha == wait.commit_sha
-      _observed -> false
+      _observed -> is_binary(wait.commit_sha) and CiPoller.landing_ready_head(issue_id, opts) == wait.commit_sha
     end
   end
 
@@ -5050,10 +5055,10 @@ defmodule SymphonyElixir.Orchestrator do
   defp startup_tracked_issue_identifiers(_candidate_issues_result, {:error, reason}), do: {:error, reason}
 
   defp startup_tracked_workspace_identifiers(repo_key, {:ok, tracked_issue_identifiers}) do
-    with runs when is_list(runs) <- RunStore.list_runs(repo_key, :all),
+    with run_identifiers when is_list(run_identifiers) <- RunStore.list_run_identifiers(repo_key),
          retries when is_list(retries) <- RunStore.list_retries(repo_key) do
       identifiers =
-        tracked_issue_identifiers ++ run_identifiers(runs) ++ retry_identifiers(retries)
+        tracked_issue_identifiers ++ run_identifiers ++ retry_identifiers(retries)
 
       {:ok, identifiers}
     else
@@ -5173,15 +5178,6 @@ defmodule SymphonyElixir.Orchestrator do
       %{identifier: identifier} when is_binary(identifier) -> [identifier]
       _ -> []
     end)
-  end
-
-  defp run_identifiers(runs) when is_list(runs) do
-    Enum.flat_map(runs, fn
-      %{issue_identifier: identifier} when is_binary(identifier) -> [identifier]
-      %{workspace_path: path} when is_binary(path) -> [workspace_identifier_from_path(path)]
-      _ -> []
-    end)
-    |> Enum.reject(&is_nil/1)
   end
 
   defp retry_identifiers(retries) when is_list(retries) do
@@ -5520,8 +5516,10 @@ defmodule SymphonyElixir.Orchestrator do
 
   # A canary hold has no time left, so a retry that comes due during the canary waits the
   # unknown-reset interval; the canary's outcome releases it sooner.
-  defp held_retry_delay_ms(%{phase: :canary}, _now), do: Config.settings!().agent.usage_limit.unknown_reset_retry_seconds * 1000
+  defp held_retry_delay_ms(%{phase: :canary}, _now), do: unknown_reset_retry_ms()
   defp held_retry_delay_ms(entry, now), do: UsageLimit.remaining_ms(entry, now)
+
+  defp unknown_reset_retry_ms, do: Config.settings!().agent.usage_limit.unknown_reset_retry_seconds * 1000
 
   # Waiting for a slot is not a failure: the retry leaves the backoff queue with its attempt
   # unchanged, and the poll dispatches it in stage order as soon as a slot is free.
@@ -6183,11 +6181,9 @@ defmodule SymphonyElixir.Orchestrator do
   defp present_value?(_value), do: true
 
   defp hydrate_budget_daily_used(%Date{} = day) do
-    case RunStore.list_all_runs(:all) do
+    case RunStore.list_runs_started_on(day) do
       runs when is_list(runs) ->
-        runs
-        |> Enum.filter(&run_started_on_day?(&1, day))
-        |> Enum.reduce(0, fn run, total ->
+        Enum.reduce(runs, 0, fn run, total ->
           total + run_total_tokens(run)
         end)
 
@@ -6208,7 +6204,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp hydrate_budget_exhausted(limit) do
-    case RunStore.list_all_runs(:all) do
+    case RunStore.list_runs_with_status("budget_exhausted") do
       runs when is_list(runs) ->
         runs
         |> Enum.flat_map(&budget_exhausted_issue_id(&1, limit))
@@ -6232,12 +6228,6 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp budget_exhausted_run_over_limit?(_run, _limit), do: true
-
-  defp run_started_on_day?(%{started_at: %DateTime{} = started_at}, %Date{} = day) do
-    DateTime.to_date(started_at) == day
-  end
-
-  defp run_started_on_day?(_run, _day), do: false
 
   defp run_total_tokens(%{tokens: %{total_tokens: total}}) when is_integer(total), do: max(total, 0)
   defp run_total_tokens(_run), do: 0
@@ -6462,6 +6452,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp handle_tracker_task_result(%State{} = state, %{kind: :blocked_transition} = context, result), do: finish_blocked_transition(state, context, result)
   defp handle_tracker_task_result(%State{} = state, %{kind: :breakdown_review} = context, result), do: finish_breakdown_review(state, context, result)
   defp handle_tracker_task_result(%State{} = state, %{kind: :plan_comments} = context, result), do: finish_plan_comments(state, context, result)
+  defp handle_tracker_task_result(%State{} = state, %{kind: :usage_limit_canary} = context, result), do: finish_usage_limit_canary_read(state, context, result)
 
   defp handle_tracker_task_result(%State{} = state, %{kind: :park_parents}, {:ok, parked_ids}),
     do: %{state | parked_parents: MapSet.union(state.parked_parents, MapSet.new(parked_ids))}
@@ -8246,25 +8237,83 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # At `resume_at` one held run goes out alone as the canary, first in dispatch order, while the
-  # hold keeps every other run of the provider back. With nothing held the hold just clears.
+  # hold keeps every other run of the provider back. With nothing held the hold just clears. The
+  # held issues are read in a tracker task to order them; the hold stays as it is until it answers.
   defp start_usage_limit_canary(%State{} = state, key, entry, issue_fetcher) do
     state = %{state | usage_limit_timers: Map.delete(state.usage_limit_timers, key)}
+    held = held_usage_limit_retries(state, key)
 
-    case held_usage_limit_retries(state, key) do
-      [] ->
-        if UsageLimit.api_unreachable?(entry),
-          do: release_api_outage(state, key, entry),
-          else: clear_usage_limit(state, key, entry)
-
-      held ->
-        {issue_id, retry} = pick_usage_limit_canary(held, issue_fetcher, state)
-        Logger.warning("Usage limit canary provider=#{entry.provider} scope=#{UsageLimit.scope_label(entry.scope)} issue_identifier=#{retry[:identifier]}")
-
-        state
-        |> put_usage_limits(Map.put(state.usage_limits, key, UsageLimit.canary(entry, issue_id)))
-        |> release_usage_limit_retry(issue_id, retry)
-        |> schedule_immediate_tick()
+    cond do
+      held == [] -> end_usage_limit_without_canary(state, key, entry)
+      usage_limit_canary_read_in_flight?(state, key) -> state
+      true -> start_usage_limit_canary_read(state, key, held, issue_fetcher)
     end
+  end
+
+  defp start_usage_limit_canary_read(%State{} = state, key, held, issue_fetcher) do
+    issue_ids = held |> Enum.map(fn {issue_id, _retry} -> issue_id end) |> Enum.sort()
+    context = %{kind: :usage_limit_canary, key: key, issue_ids: issue_ids}
+    start_tracker_task(state, context, fn -> issue_fetcher.(issue_ids) end)
+  end
+
+  defp end_usage_limit_without_canary(%State{} = state, key, entry) do
+    if UsageLimit.api_unreachable?(entry),
+      do: release_api_outage(state, key, entry),
+      else: clear_usage_limit(state, key, entry)
+  end
+
+  defp usage_limit_canary_read_in_flight?(%State{tracker_tasks: tasks}, key) do
+    Enum.any?(tasks, fn {_ref, context} -> context.kind == :usage_limit_canary and context.key == key end)
+  end
+
+  # The hold may have moved on while its issues were read: cleared, refreshed with time left (its
+  # timer is armed again), or given a canary that is still alive. Only a hold still waiting for its
+  # canary picks one, from the runs held now. A read that failed or died orders them by id, as the
+  # tracker not returning them does.
+  defp finish_usage_limit_canary_read(%State{} = state, %{key: key}, result) do
+    with {:ok, entry} <- Map.fetch(state.usage_limits, key),
+         true <- usage_limit_waiting_for_canary?(state, entry) do
+      case held_usage_limit_retries(state, key) do
+        [] -> end_usage_limit_without_canary(state, key, entry)
+        held -> dispatch_usage_limit_canary(state, key, entry, held, result)
+      end
+    else
+      _moved_on -> state
+    end
+  end
+
+  defp usage_limit_waiting_for_canary?(%State{} = state, %{phase: :canary} = entry), do: not usage_limit_canary_alive?(state, entry.canary_issue_id)
+  defp usage_limit_waiting_for_canary?(%State{} = state, %{phase: :paused} = entry), do: UsageLimit.remaining_ms(entry, state.clock.()) == 0
+  defp usage_limit_waiting_for_canary?(%State{}, _entry), do: false
+
+  defp dispatch_usage_limit_canary(%State{} = state, key, entry, held, result) do
+    {issue_id, retry} = pick_usage_limit_canary(held, result, state)
+    Logger.warning("Usage limit canary provider=#{entry.provider} scope=#{UsageLimit.scope_label(entry.scope)} issue_identifier=#{retry[:identifier]}")
+
+    state
+    |> put_usage_limits(Map.put(state.usage_limits, key, UsageLimit.canary(entry, issue_id)))
+    |> release_usage_limit_retry(issue_id, retry)
+    |> schedule_immediate_tick()
+  end
+
+  # A held retry that comes due while its hold's canary read is in flight stays held, so the pick
+  # sees it; the pick releases it, or it waits the unknown-reset interval as under a canary.
+  defp held_for_canary_read?(%State{} = state, issue_id, retry_token) do
+    case Map.get(state.retry_attempts, issue_id) do
+      %{retry_token: ^retry_token, usage_limit_key: key} when not is_nil(key) ->
+        usage_limit_canary_read_in_flight?(state, key)
+
+      _retry ->
+        false
+    end
+  end
+
+  defp keep_held_for_canary_read(%State{} = state, issue_id) do
+    retry = Map.fetch!(state.retry_attempts, issue_id)
+    delay_ms = unknown_reset_retry_ms()
+    timer_ref = Process.send_after(self(), {:retry_issue, issue_id, retry.retry_token}, delay_ms)
+    retry = Map.merge(retry, %{timer_ref: timer_ref, due_at_ms: System.monotonic_time(:millisecond) + delay_ms})
+    %{state | retry_attempts: Map.put(state.retry_attempts, issue_id, retry)}
   end
 
   defp held_usage_limit_retries(%State{} = state, key) do
@@ -8272,12 +8321,12 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # Issues the tracker no longer returns sort last, by id. A forced ticket goes first.
-  defp pick_usage_limit_canary(held, issue_fetcher, %State{} = state) do
+  defp pick_usage_limit_canary(held, result, %State{} = state) do
     held_by_id = Map.new(held)
     issue_ids = held_by_id |> Map.keys() |> Enum.sort()
 
     ordered_ids =
-      case issue_fetcher.(issue_ids) do
+      case result do
         {:ok, issues} -> issues |> sort_issues_for_dispatch() |> forced_first(state) |> Enum.map(& &1.id)
         {:error, _reason} -> []
       end

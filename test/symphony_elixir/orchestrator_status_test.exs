@@ -3476,6 +3476,72 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert MapSet.member?(state.budget_exhausted, other_issue_id)
   end
 
+  test "orchestrator startup reads budget state and tracked workspaces from the run index of a large store" do
+    workspace_root = Path.join(System.tmp_dir!(), "symphony-startup-index-test-#{System.unique_integer([:positive])}")
+    tracked_workspace = Path.join([workspace_root, "default", "MT-SEED-3"])
+    orphan_workspace = Path.join([workspace_root, "default", "MT-ORPHAN"])
+    File.mkdir_p!(tracked_workspace)
+    File.mkdir_p!(orphan_workspace)
+    on_exit(fn -> File.rm_rf(workspace_root) end)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      max_tokens_per_issue: 10,
+      workspace_root: workspace_root,
+      workspace_lifecycle: %{age_gc_enabled: false, orphan_action: "delete"}
+    )
+
+    repo_key = Config.repo_key!()
+    midnight = DateTime.new!(Date.utc_today(), ~T[00:00:00.000000], "Etc/UTC")
+
+    # 300 runs of 10 issues over the last 10 days; one in 25 ran out of budget, some under the limit.
+    Enum.each(0..299, fn index ->
+      assert :ok =
+               RunStore.put_run(%{
+                 repo_key: repo_key,
+                 run_id: "run-seed-#{index}",
+                 issue_id: "issue-seed-#{rem(index, 10)}",
+                 issue_identifier: "MT-SEED-#{rem(index, 10)}",
+                 status: if(rem(index, 25) == 0, do: "budget_exhausted", else: "success"),
+                 started_at: DateTime.add(midnight, -div(index, 30) * 86_400 + rem(index, 30) * 60, :second),
+                 tokens: %{total_tokens: rem(index, 13)}
+               })
+    end)
+
+    # What the full scan the orchestrator used to make finds.
+    runs = RunStore.list_all_runs(:all)
+    expected_daily_used = runs |> Enum.filter(&(DateTime.to_date(&1.started_at) == Date.utc_today())) |> Enum.map(& &1.tokens.total_tokens) |> Enum.sum()
+
+    expected_exhausted =
+      for %{status: "budget_exhausted", issue_id: issue_id, tokens: %{total_tokens: total}} <- runs, total >= 10, into: MapSet.new(), do: issue_id
+
+    assert expected_daily_used > 0
+    assert MapSet.size(expected_exhausted) > 0
+
+    # Written behind RunStore's back, so only a scan of the table can find it.
+    raw_run = %{run_id: "run-raw", issue_id: "issue-raw", status: "budget_exhausted", started_at: midnight, tokens: %{total_tokens: 1_000}}
+    assert {:atomic, :ok} = :mnesia.transaction(fn -> :mnesia.write({:symphony_run_store_runs, {repo_key, "run-raw"}, repo_key, "run-raw", raw_run}) end)
+
+    orchestrator_name = Module.concat(__MODULE__, :LargeStoreStartupOrchestrator)
+
+    capture_log(fn ->
+      {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+      try do
+        state = get_orchestrator_state(pid)
+        assert state.budget_daily_used == expected_daily_used
+        assert state.budget_exhausted == expected_exhausted
+
+        wait_for_orchestrator_state(pid, &is_nil(&1.startup_workspace_lifecycle_task_ref), 2_000)
+      after
+        if Process.alive?(pid), do: GenServer.stop(pid)
+      end
+    end)
+
+    assert File.exists?(tracked_workspace)
+    refute File.exists?(orphan_workspace)
+  end
+
   test "orchestrator skips persisted budget-exhausted issues when the current limit no longer applies" do
     issue_id = "issue-budget-raised"
 

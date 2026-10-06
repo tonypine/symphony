@@ -823,7 +823,8 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       for {tool, args} <- [
             {"qa_android_tap", %{"x" => 1, "y" => 1, "pid" => 1}},
             {"qa_android_type", %{"text" => "a", "shell" => "id"}},
-            {"qa_android_install", %{"apk" => "app.apk", "apk_path" => "../outside.apk"}}
+            {"qa_android_install", %{"apk" => "app.apk", "apk_path" => "../outside.apk"}},
+            {"qa_android_put_file", %{"local_path" => "qa-evidence/rows.csv", "device_path" => "/data/local/tmp/rows.csv"}}
           ] do
         response = DynamicTool.execute(tool, args, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
         assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
