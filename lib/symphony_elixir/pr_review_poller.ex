@@ -1321,11 +1321,12 @@ defmodule SymphonyElixir.PrReviewPoller do
     end
   end
 
-  # An agent that needs a person parks its issue outside the active states with a label that asks
-  # for one (see `HumanReview.parked_for_person?/2`). A conflict-fix run can't do what the person
-  # must: it would merge the base branch, push and park the issue again. The issue stays where it
-  # is, with no fix run or escalation and no retry spent, until a person removes the label or
-  # moves the issue to an active state; the next conflicting poll then takes the conflict path.
+  # An issue that waits on a person sits in the Human Review state, outside the active states
+  # with a label that asks for one, or, with that state off, in `In Review` with an open request
+  # (see `HumanReview.parked_for_person/3`). A conflict-fix run
+  # can't do what the person must: it would merge the base branch, push and park the issue again.
+  # The issue stays where it is, with no fix run or escalation and no retry spent, until a person
+  # moves it on or removes the label; the next conflicting poll then takes the conflict path.
   defp await_human_action_for_conflict(record, attrs, %Issue{} = issue, opts) do
     issue_id = Map.get(record, :issue_id)
 
@@ -1344,13 +1345,16 @@ defmodule SymphonyElixir.PrReviewPoller do
     issue_id = Map.get(record, :issue_id)
 
     with {:ok, issues} <- watched_or_fetched_issue(issue_id, Keyword.get(opts, :tracker, Tracker), opts) do
-      issue = Enum.find(issues, &match?(%Issue{id: ^issue_id}, &1))
-
-      if match?(%Issue{}, issue) and HumanReview.parked_for_person?(issue, settings),
-        do: {:parked, issue},
-        else: :not_parked
+      case Enum.find(issues, &match?(%Issue{id: ^issue_id}, &1)) do
+        %Issue{} = issue -> parked_result(issue, HumanReview.parked_for_person(issue, settings, opts))
+        nil -> :not_parked
+      end
     end
   end
+
+  defp parked_result(issue, {:ok, true}), do: {:parked, issue}
+  defp parked_result(_issue, {:ok, false}), do: :not_parked
+  defp parked_result(_issue, {:error, reason}), do: {:error, reason}
 
   # A conflict found while the issue is in `Merging` is marked `approved`, so a fix run that finds
   # nothing to resolve and pushes nothing can hand the PR back to `Merging` once it no longer

@@ -52,11 +52,12 @@ defmodule SymphonyElixir.HumanActions.Update do
   def health(_actions), do: "atRisk"
 
   @doc """
-  Renders the update body and the secret patterns redacted from it. `label` is the label that
-  marks a human task, named where an action is closed by removing it.
+  Renders the update body and the secret patterns redacted from it. `states` are the states a
+  person reviews in (`SymphonyElixir.HumanReview.review_states/1`), named where the update has
+  more actions than it lists.
   """
-  @spec render([Action.t()], String.t()) :: {String.t(), [atom()]}
-  def render(actions, label) do
+  @spec render([Action.t()], [String.t()]) :: {String.t(), [atom()]}
+  def render(actions, states) do
     sorted = sort(actions)
     {shown, hidden} = Enum.split(sorted, @max_actions)
 
@@ -65,7 +66,7 @@ defmodule SymphonyElixir.HumanActions.Update do
       |> Enum.with_index(1)
       |> Enum.map(fn {action, index} -> action_section(action, index) end)
 
-    [header(sorted), sections, more(hidden, label), footer(list_id(actions))]
+    [header(sorted), sections, more(hidden, states), footer(list_id(actions))]
     |> List.flatten()
     |> Enum.join("\n\n")
     |> SecretScanner.redact()
@@ -126,8 +127,8 @@ defmodule SymphonyElixir.HumanActions.Update do
   defp done_line(done_when) when is_binary(done_when), do: "**Done when:** #{done_when}"
   defp done_line(_done_when), do: nil
 
-  defp more([], _label), do: []
-  defp more(hidden, label), do: "_…and #{length(hidden)} more: see the issues labelled `#{label}`._"
+  defp more([], _states), do: []
+  defp more(hidden, states), do: "_…and #{length(hidden)} more: see the issues in #{Enum.map_join(states, " and ", &"`#{&1}`")}._"
 
   defp footer(list_id), do: "---\n_Symphony posts a new update when this list changes · list `#{list_id}`_"
 end

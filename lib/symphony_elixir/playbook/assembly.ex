@@ -28,6 +28,7 @@ defmodule SymphonyElixir.Playbook.Assembly do
   @default_instructions_dir ".symphony/instructions"
   @settings_keys ~w(instructions lockfile partials)
   @instruction_file ~r/\A(\d+)-[^\/]+\.md\z/
+  @left_trimmed ~w(ticket_types)
 
   @type instruction_files :: [{String.t(), String.t()}]
   @type reader :: (String.t() -> {:ok, instruction_files()} | {:error, term()})
@@ -171,9 +172,14 @@ defmodule SymphonyElixir.Playbook.Assembly do
       []
     else
       args = Enum.map_join(vars, fn var -> ", " <> arg(var, lockfile) end)
-      [{slot, 0, name, ~s({% render "#{name}") <> args <> " %}"}]
+      [{slot, 0, name, ~s({#{open_tag(name)} render "#{name}") <> args <> " %}"}]
     end
   end
+
+  # `ticket_types` renders nothing for an untyped ticket and starts each branch with its own
+  # blank line, so its tag trims the blank line before it and an untyped prompt is unchanged.
+  defp open_tag(name) when name in @left_trimmed, do: "%-"
+  defp open_tag(_name), do: "%"
 
   defp arg("lockfile", lockfile), do: ~s(lockfile: "#{lockfile}")
   defp arg(var, _lockfile), do: "#{var}: #{var}"

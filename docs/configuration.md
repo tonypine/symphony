@@ -188,8 +188,9 @@ issues:
   not be one of `states.active`: Symphony never dispatches a ticket in it. The CI and PR review
   pollers watch its PR as they do in `In Review`, and a person's move out of it counts like one out
   of `In Review`: to `Merging` (approve), `Rework`, `states.waiting_on_sub_issues` (approve a
-  plan) or `Done` (sign off a final verification). Symphony puts a ticket there instead of
-  `In Review` when:
+  plan) or `Done` (sign off a final verification). It is the one way to say a person needs to act:
+  no label says it (the `human-action` label is retired, see `human_actions`). Symphony puts a
+  ticket there instead of `In Review` when:
   - Auto Review QA is `blocked` and the QA agent says only a person can clear it
     (`needs_person`: a missing secret or key, a check by hand or on a device); a block the
     factory can fix (a tool missing on the QA host, a dev server that fails) still goes to
@@ -200,9 +201,16 @@ issues:
     an `auto_review.acceptance_gate.escalate.labels` label other than `plan` and `breakdown` (`needs-human`)
     or a title or description matching one of its `ticket_patterns` ("must not auto-approve",
     "human review"; naming the `Human Review` state doesn't count, see
-    [What escalates](acceptance_gate.md#what-escalates));
-  - an agent that posted a `linear_request_human_action` request (or found it still open) moves
-    its issue to `Backlog` or `In Review`, as the blocked-access escape hatch does.
+    [What escalates](acceptance_gate.md#what-escalates)), or a description in which its author
+    says they review it ("I only want to review and validate the artifacts", "we'll approve the
+    plan");
+  - an agent posts a `linear_request_human_action` request: the tool moves the ticket there, and
+    the run's later move to `Backlog` or `In Review` lands there too;
+  - the acceptance gate, in `enforce` mode, escalates for a reason only a person can clear: the
+    ticket waits on a person (`human_action`) or carries an `escalate.labels` label. Escalations
+    the supervisor can judge (`path`, `diff_pattern`, `ticket_pattern`, a rework past its fix
+    attempts, ...) stay in `In Review`. The gate never approves a ticket in `Human Review` or with
+    an open action request.
 
   The dashboard, `/api/v1/state` (`counts.human_review` and a `human_review` list of the watched
   tickets in it) and the menu bar show how many tickets wait there, and the human-action update
@@ -1004,10 +1012,12 @@ pull_requests:
 - `poll_interval_ms` is shared by PR review polling and CI polling when checks are enabled.
 - PR polling detects GitHub merge-conflict signals, deduplicates by head/base identity, and injects
   conflict-resolution context into the next prompt. The agent still owns the merge resolution.
-  A conflict on an issue an agent parked for a person (outside `tracker.active_states`, with the
-  `human_actions.label` label, `needs-human` or another `auto_review.acceptance_gate.escalate.labels`
-  label other than `plan` and `breakdown`) gets no state move, conflict-fix run or escalation, and
-  uses no retry, until a person removes the label or moves the issue to an active state.
+  A conflict on an issue that waits on a person (in `Human Review`, or outside
+  `tracker.active_states` with `needs-human`, a deprecated `human_actions.label` label or another
+  `auto_review.acceptance_gate.escalate.labels` label other than `plan` and `breakdown`, or, while
+  the Human Review state is off, in `In Review` with an open `## Action needed:` request) gets no
+  state move, conflict-fix run or escalation, and uses no retry, until a person moves the issue on
+  or removes the label.
 - `review_comments.ignored_reviewers` skips those accounts entirely. The Linear GitHub
   integration's linkback comment is always skipped: comments by `linear-code`, `linear-code[bot]`
   or `linear[bot]`, and any comment whose body starts with `<!-- linear-linkback -->`. Comments
@@ -1016,11 +1026,12 @@ pull_requests:
   with a hidden `<!-- symphony:agent -->` marker and skips those.
 - `checks.retry_failed_once` retries one likely-flaky failure before escalating.
 - `checks.max_fix_attempts` bounds automated CI rework.
-- A red head on an issue an agent parked for a person (outside `tracker.active_states`, with the
-  `human_actions.label` label, `needs-human` or another `auto_review.acceptance_gate.escalate.labels`
-  label other than `plan` and `breakdown`) gets no re-run, CI-fix run, escalation or state move,
-  and uses no fix attempt. The normal CI flow resumes once a person removes the label, moves the
-  issue to an active state, or the head turns green.
+- A red head on an issue that waits on a person (in `Human Review`, or outside
+  `tracker.active_states` with `needs-human`, a deprecated `human_actions.label` label or another
+  `auto_review.acceptance_gate.escalate.labels` label other than `plan` and `breakdown`, or, while
+  the Human Review state is off, in `In Review` with an open `## Action needed:` request) gets no
+  re-run, CI-fix run, escalation or state move, and uses no fix attempt. The normal CI flow resumes
+  once a person moves the issue on or removes the label, or the head turns green.
 - `checks.landing_wait_timeout_ms` bounds how long a `Merging` issue waits for CI. When a landing
   run ends with the PR head's checks pending, Symphony holds the issue in `Merging` and dispatches
   the landing agent again once the CI poller sees that head go green (a red head goes through the
@@ -2113,7 +2124,6 @@ On by default with a Linear tracker.
 ```yaml
 human_actions:
   enabled: true
-  label: human-action
   interval_ms: 300000
   min_update_interval_ms: 900000
 ```
@@ -2131,8 +2141,13 @@ human_actions:
   With it off, Symphony reads none of that repository's issues for human actions, and
   `linear_request_human_action` refuses with `human_actions_disabled` so the agent writes a plain
   blocker comment instead.
-- `label` (default `human-action`): the label that marks an issue as needing a person. The agent
-  tool adds it, creating it in the issue's team the first time when the workspace has none.
+- `label` (deprecated, no default): the label that used to mark an issue as needing a person. The
+  `Human Review` state (`issues.states.human_review`) is now the one way to say a person needs to
+  act, and `linear_request_human_action` adds no label. A config that still sets it loads with a
+  deprecation warning, and an issue carrying the label counts as one with an open request: the
+  acceptance gate escalates it, the pollers leave its red CI and merge conflicts to the person, and
+  the update lists it. So does `human-action` in `auto_review.acceptance_gate.escalate.labels`,
+  which also warns. Drop both once no issue carries the label.
 - `interval_ms` (default `300000`): how often Symphony reads the open actions. A read is one Linear
   request per repository route, plus one per project the first time Symphony sees it, plus one per
   update posted. They show as `human_actions` in the dashboard's Linear usage table.
@@ -2142,18 +2157,21 @@ human_actions:
 **Where actions come from.** On each read, in the scope each repository route polls, Symphony
 lists:
 
-- each open `## Action needed:` comment on an issue with the label. Agents post one with
-  `linear_request_human_action` (`title`, `why`, `steps`, optional `unblocks` and `est_minutes`)
-  when they hit something only a person can do: a missing secret or permission, an account to set
-  up, a product decision, a check on a device. Then they follow the blocked-access escape hatch as
-  usual, and its move to `Backlog` lands in `issues.states.human_review`. A request whose title
-  matches one still open on the issue is not posted again. An agent that finds its request is not
-  needed after all withdraws it with `linear_withdraw_human_action` (`reason`, optional `title`):
-  Symphony replies `## Action withdrawn` with the reason under the request, which closes it, and
-  removes the label once no open request is left on the issue, and then the run's move to
-  `Backlog` stays in `Backlog`;
-- an issue with the label and no such comment, as a task in itself (its description's list items
-  become the steps);
+- each open `## Action needed:` comment. Agents post one with `linear_request_human_action`
+  (`title`, `why`, `steps`, optional `unblocks` and `est_minutes`) when they hit something only a
+  person can do: a missing secret or permission, an account to set up, a product decision, a check
+  on a device. The tool moves the issue to `issues.states.human_review` (`In Review` when that
+  state is off) and adds no label; the move ends the run shortly after, so the agent first pushes
+  its committed work (and opens or updates the PR when the rest of the ticket is done) and updates
+  its workpad. A request whose title matches one still open on the issue is not posted again,
+  and the issue still moves. An agent that finds its request is not needed after all withdraws it
+  with `linear_withdraw_human_action` (`reason`, optional `title`): Symphony replies
+  `## Action withdrawn` with the reason under the request, which closes it. Once no open request
+  is left on the issue, an issue the request moved to `Human Review` goes back to the active state
+  it came from (`In Progress` when its history doesn't say), and the run's move to `Backlog` stays
+  in `Backlog`;
+- with the deprecated `human_actions.label`, an issue with the label and no such comment, as a task
+  in itself (its description's list items become the steps);
 - a plan ticket in `In Review` or `Human Review`, waiting for its plan to be approved;
 - an issue in `In Review` or `Human Review` whose `## Symphony QA Report` has the verdict `blocked`;
 - a `Final verification:` ticket whose Auto Review parent walkthrough had the verdict `blocked`,
@@ -2185,8 +2203,8 @@ lists:
   first time one of its workflows fails this way. When GitHub or Linear cannot be read, the
   repository's last actions stay listed.
 
-A supervisor or a person adds an action by hand the same way: put the label on the issue, and
-optionally a comment in the request format:
+A supervisor or a person adds an action by hand the same way: move the issue to `Human Review`,
+and optionally add a comment in the request format:
 
 ```md
 ## Action needed: Turn on the pre-push hook
@@ -2203,8 +2221,9 @@ Only the heading is required.
 
 **When an action closes.** A request closes when its issue moves on: after the request, the issue
 leaves a state a person moves it out of (anything but `issues.states.active`, the waiting state and
-the Auto Review state), such as `Backlog` back to `Todo`. The agent's own move to `Backlog` keeps it
-open. Removing the label closes every action on the issue, and so does a terminal state. A plan
+the Auto Review state), such as `Human Review` to `Merging`, `Rework` or `Done`. The request's own
+move to `Human Review` keeps it open, and so does the agent's move to `Backlog`. A withdrawal
+closes it, and so does a terminal state. A plan
 review closes when the parent leaves its review state, and a blocked QA pass when the issue leaves
 its review state or its next QA report is not `blocked`. A blocked final verification closes when
 its next walkthrough is not `blocked`, or when the ticket leaves the state the walkthrough moved it
@@ -2238,8 +2257,8 @@ health set by the project's previous update. No secret value reaches an update:
 `linear_request_human_action` refuses any field that holds a secret pattern, and the whole update
 is redacted again before it is posted, which covers secrets pasted into an issue or comment by hand.
 
-A rendered example, for a mix of a missing secret, a plan, a hand-labelled task and a
-blocked QA pass:
+A rendered example, for a mix of a missing secret, a plan, a task labelled with the deprecated
+`human_actions.label` and a blocked QA pass:
 
 ```md
 **4 actions need you.** Quickest first.
@@ -2255,7 +2274,7 @@ blocked QA pass:
 3. Add `MACOS_CERTIFICATE_PASSWORD` with its password.
 4. Move MOT-24 to Todo.
 
-**Done when:** you remove the `human-action` label from MOT-24, or move it on once it is unblocked.
+**Done when:** you move MOT-24 out of Human Review once it is unblocked, or the agent withdraws the request.
 
 ### 2. Approve the plan for MOT-40
 
@@ -2275,7 +2294,7 @@ Tracked in [MOT-31](https://linear.app/acme/issue/MOT-31)
 
 1. Run `git config core.hooksPath .githooks` in your cycle checkout.
 
-**Done when:** you close MOT-31, or remove its `human-action` label.
+**Done when:** you close MOT-31, or move it on.
 
 ### 4. Unblock QA for MOT-52
 

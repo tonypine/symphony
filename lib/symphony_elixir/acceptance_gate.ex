@@ -14,7 +14,9 @@ defmodule SymphonyElixir.AcceptanceGate do
       shell write in its working directory; pushing and the `gh` CLI stay denied. An answer
       without the JSON verdict object gets one follow-up turn in the same session;
     * `decide/4` turns the run into the final verdict: a deterministic escalation reason
-      (including `qa_blocked`) forces `escalate` and the agent's verdict is kept as
+      (including `qa_blocked`, and `human_action` for an issue that waits on a person: in the
+      Human Review state, with an open `## Action needed:` request, or with a deprecated request
+      label) forces `escalate` and the agent's verdict is kept as
       `agent_verdict`; a PR that conflicts with current main is `rework`; an inconclusive pass
       leaves no verdict until the `escalate.inconclusive_limit`-th one on the same SHA, which
       escalates with reason `inconclusive`;
@@ -29,8 +31,9 @@ defmodule SymphonyElixir.AcceptanceGate do
   In `shadow` mode the verdict is advisory: Auto Review moves the issue to In Review as it did
   before, and the proposed follow-ups are listed, not filed. In `enforce` mode the verdict moves
   the issue (`enforced_target/4`): `approve` to Merging, `rework` back to In Progress, `escalate`
-  to In Review; and up to 3 follow-ups are filed as Backlog sub-issues
-  (`SymphonyElixir.AcceptanceGate.FollowUps`), skipping a gap an existing ticket covers. The gate
+  to In Review, or to the Human Review state when only a person can clear it; and up to 3
+  follow-ups are filed as Backlog sub-issues (`SymphonyElixir.AcceptanceGate.FollowUps`),
+  skipping a gap an existing ticket covers. The gate
   never moves a plan parent or a `Final verification:` ticket (`enforces?/2`).
   """
 
@@ -68,6 +71,10 @@ defmodule SymphonyElixir.AcceptanceGate do
   }
   # The tickets the gate never moves: their review stays with a person.
   @guarded_kinds [:breakdown, :close_out, :final_verification]
+  # Escalations only a person can clear: the issue waits on them, or its label asks for them. The
+  # others (`path`, `diff_pattern`, `ticket_pattern`, a rework past its attempts, ...) stay in
+  # In Review, where the supervisor triages them.
+  @person_rules ["human_action", "label"]
 
   @type verdict :: String.t()
   @type reason :: %{rule: String.t(), detail: String.t()}
@@ -120,15 +127,17 @@ defmodule SymphonyElixir.AcceptanceGate do
     * `approve` goes to Merging, where GitHub auto-merge lands the PR;
     * `rework` goes back to In Progress while `qa_fix_attempts` (shared with QA fails) is below
       `auto_review.max_fix_attempts`; past it, it goes where `escalate` goes, with `escalated: true`;
-    * `escalate` goes to the state QA picked for human review (`qa_target_state`): In Review, or
-      the Human Review state for a QA block only a person can clear.
+    * `escalate` goes to the Human Review state (`HumanReview.target_state/1`) when one of the
+      verdict's reasons (`gate_reasons`) only a person can clear (`human_action`, `label`), else
+      to the state QA picked for human review (`qa_target_state`): In Review, or the Human Review
+      state for a QA block only a person can clear.
   """
   @spec enforced_target(Issue.t(), map(), verdict() | nil, Schema.t()) :: target() | nil
   def enforced_target(%Issue{} = issue, record, verdict, %Schema{} = settings) do
     cond do
       verdict not in @verdicts or not enforces?(issue, settings) -> nil
       verdict == "approve" -> %{state: @merging_state, escalated: false}
-      verdict == "escalate" -> %{state: human_review_state(record), escalated: false}
+      verdict == "escalate" -> %{state: escalate_state(record, settings), escalated: false}
       fix_attempts(record) < settings.auto_review.max_fix_attempts -> %{state: @active_state, escalated: false}
       true -> %{state: human_review_state(record), escalated: true}
     end
@@ -139,6 +148,14 @@ defmodule SymphonyElixir.AcceptanceGate do
   def fix_attempts(record), do: Map.get(record, :qa_fix_attempts) || 0
 
   defp human_review_state(record), do: Map.get(record, :qa_target_state) || @review_state
+
+  defp escalate_state(record, settings) do
+    rules = record |> Map.get(:gate_reasons) |> List.wrap() |> Enum.map(&(Map.get(&1, :rule) || Map.get(&1, "rule")))
+
+    if Enum.any?(rules, &(&1 in @person_rules)),
+      do: HumanReview.target_state(settings),
+      else: human_review_state(record)
+  end
 
   @doc """
   The settings a gate session runs with: the gate's runtime, command, turns and timeout, and a
@@ -295,7 +312,7 @@ defmodule SymphonyElixir.AcceptanceGate do
     repo_key = Map.get(record, :repo_key)
     decision = decide(result, record, sha, settings)
     findings = rework_findings(result, decision)
-    target = enforced_target(issue, record, decision.verdict, settings)
+    target = enforced_target(issue, Map.put(record, :gate_reasons, decision.reasons), decision.verdict, settings)
     follow_ups = if target, do: FollowUps.file(issue, answer_follow_ups(result.outcome), sha, settings, opts)
     ended_at = DateTime.utc_now()
     runtime_seconds = max(DateTime.diff(ended_at, started_at), 0)
@@ -456,7 +473,7 @@ defmodule SymphonyElixir.AcceptanceGate do
   @spec run(map(), Schema.t(), keyword()) :: run_result()
   def run(%{issue: issue, record: record, sha: sha} = job, %Schema{} = settings, opts) do
     criteria = criteria(issue, settings, opts)
-    qa_reasons = qa_reasons(Map.get(job, :qa))
+    qa_reasons = person_reasons(issue, settings, opts) ++ qa_reasons(Map.get(job, :qa))
     base = %{criteria: criteria, context: nil, tokens: QaAgent.empty_tokens(), follow_up_turns: 0}
 
     case Keyword.get(opts, :context, Context).build(issue, record, sha, settings, Keyword.get(opts, :context_opts, [])) do
@@ -483,6 +500,36 @@ defmodule SymphonyElixir.AcceptanceGate do
     opts = [human_review_state: HumanReview.state(settings)]
     for %{rule: rule, detail: detail} <- Escalation.check(issue, diff_summary, busy_files, rules, opts), do: %{rule: Atom.to_string(rule), detail: detail}
   end
+
+  # An issue that waits on a person is never approved: it sits in the Human Review state, has an
+  # open `## Action needed:` request, or carries a deprecated request label.
+  defp person_reasons(issue, settings, opts) do
+    labels = issue.labels |> List.wrap() |> Enum.filter(&is_binary/1) |> Enum.map(&String.downcase(String.trim(&1)))
+
+    details =
+      [
+        if(HumanReview.in_state?(issue, settings), do: "the issue is in `#{issue.state}`"),
+        for(label <- HumanReview.legacy_request_labels(settings), label in labels, do: "the issue is labelled `#{label}`, an open action request"),
+        for({_comment_id, request} <- open_requests(issue, settings, opts), do: "the issue has an open action request: #{request.title}")
+      ]
+      |> List.flatten()
+      |> Enum.reject(&is_nil/1)
+
+    if details == [], do: [], else: [%{rule: "human_action", detail: "the issue waits on a person: " <> Enum.join(details, "; ")}]
+  end
+
+  defp open_requests(issue, %Schema{tracker: %{kind: "linear"}} = settings, opts) do
+    case AgentTools.Linear.open_human_action_requests(%{issue: issue}, settings, Keyword.take(opts, [:linear_client])) do
+      {:ok, requests} ->
+        requests
+
+      {:error, reason} ->
+        Logger.warning("Acceptance gate could not read the action requests of #{issue.identifier}: #{inspect(reason)}")
+        []
+    end
+  end
+
+  defp open_requests(_issue, _settings, _opts), do: []
 
   defp qa_reasons(%{verdict: :blocked} = qa), do: [%{rule: "qa_blocked", detail: "QA was blocked: " <> (Map.get(qa, :reason) || "no reason given")}]
   defp qa_reasons(_qa), do: []
