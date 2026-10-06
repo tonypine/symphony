@@ -1,7 +1,8 @@
 #!/bin/sh
 # Serves the Symphony dashboard from this checkout on $SYMPHONY_VERIFICATION_PORT, for
 # `verification.dev_server` (Auto Review's web playbook). It runs with an in-memory
-# tracker, so it never talks to Linear or starts agents.
+# tracker, so it never talks to Linear or starts agents. Symphony starts it in the dev
+# server's sandbox, so it can write only this checkout, $TMPDIR and the agent cache folder.
 set -eu
 
 port="${SYMPHONY_VERIFICATION_PORT:?SYMPHONY_VERIFICATION_PORT is not set}"
@@ -24,7 +25,11 @@ EOF
 cd "$repo"
 set --
 if command -v mise >/dev/null 2>&1; then
-  mise trust --quiet >/dev/null 2>&1 || true
+  # The dev server's sandbox can't write mise's state and cache folders in the home folder, so
+  # mise keeps them in this run's temp folder, and this checkout's config is trusted for this
+  # process only (an untrusted `mise exec` would write the trust store).
+  export MISE_STATE_DIR="$root/mise-state" MISE_CACHE_DIR="$root/mise-cache"
+  export MISE_TRUSTED_CONFIG_PATHS="$repo${MISE_TRUSTED_CONFIG_PATHS:+:$MISE_TRUSTED_CONFIG_PATHS}"
   set -- mise exec --
 fi
 

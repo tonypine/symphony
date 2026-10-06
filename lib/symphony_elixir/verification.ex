@@ -167,6 +167,7 @@ defmodule SymphonyElixir.Verification do
           workspace: workspace,
           config: dev_server,
           env: env(context),
+          allowed_domains: Schema.dev_server_network_allowed_domains(settings),
           owner: self()
         )
 
