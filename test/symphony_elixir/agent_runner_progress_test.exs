@@ -597,10 +597,76 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
         :ok = put_pending_ci_failure(approved: approved)
         Application.delete_env(:symphony_elixir, :progress_agent_turns)
 
-        assert_raise RuntimeError, ~r/green_ci_fix_handoff_failed/, fn ->
+        assert_raise RuntimeError, ~r/green_fix_handoff_failed/, fn ->
           run_issue!("In Progress", heads: ["sha-same"], max_turns: 6)
         end
       end
+    end
+  end
+
+  describe "a merge-conflict run that pushes nothing" do
+    # TP-658: the PR no longer conflicts by the time the run looks (the base branch moved on), so
+    # there is nothing to resolve.
+    @green_checks [%{name: "make-all", status: "COMPLETED", conclusion: "SUCCESS"}]
+
+    test "on an approved PR goes back to Merging with its conflict state dropped once it is mergeable and green" do
+      :ok = put_pending_conflict(approved: true, head_sha: "sha-same", auto_merge: %{state: "conflict", head_sha: "sha-same", reason: "the PR conflicts with the base branch"})
+      put_green_pr_head("MERGEABLE")
+
+      log = capture_log(fn -> run_issue!("In Progress", heads: ["sha-same"], max_turns: 6) end)
+
+      assert turns() == 2
+      assert_received {:memory_tracker_state_update, "issue-progress", "Merging"}
+      assert_received {:memory_tracker_comment, "issue-progress", "Symphony moved this issue back to Merging: " <> note}
+      assert note =~ "the merge conflict run found nothing to resolve and pushed no commit, the PR no longer conflicts with the base branch"
+      assert note =~ "CI on the PR head `sha-same` is green, so the approval still covers the PR and auto-merge turns back on"
+      refute_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+      assert PrReviewPoller.auto_merge("issue-progress") == nil
+      assert log =~ "merge conflict run for issue_id=issue-progress issue_identifier=TP-337 pushed nothing and CI on its PR head sha-same is green; moving back to Merging"
+      refute log =~ "Parking"
+    end
+
+    test "goes to the post-PR state when the PR was not approved, or its head is not the one that conflicted" do
+      for {approved, conflict_head, auto_review, post_pr_state} <- [
+            {false, "sha-same", %{enabled: true}, "Auto Review"},
+            {false, "sha-same", nil, "In Review"},
+            {true, "sha-dirty", %{enabled: true}, "Auto Review"}
+          ] do
+        :ok = put_pending_conflict(approved: approved, head_sha: conflict_head)
+        put_green_pr_head("MERGEABLE")
+        Application.delete_env(:symphony_elixir, :progress_agent_turns)
+
+        log = capture_log(fn -> run_issue!("In Progress", heads: ["sha-same"], max_turns: 6, auto_review: auto_review) end)
+
+        assert turns() == 2
+        assert_received {:memory_tracker_state_update, "issue-progress", ^post_pr_state}
+        refute_received {:memory_tracker_state_update, "issue-progress", _state}
+        refute_received {:memory_tracker_comment, "issue-progress", "Symphony moved" <> _note}
+
+        assert log =~
+                 "CI is green on issue_id=issue-progress issue_identifier=TP-337's PR head sha-same after a merge conflict run with no new commit; moving to #{post_pr_state}"
+      end
+    end
+
+    test "is still parked while the PR conflicts or GitHub has not worked out whether it does, even with a CI failure pending too" do
+      for {mergeable, ci_failure?} <- [{"CONFLICTING", false}, {"UNKNOWN", false}, {"CONFLICTING", true}] do
+        :ok = put_pending_conflict(approved: true, head_sha: "sha-same")
+        if ci_failure?, do: :ok = put_pending_ci_failure(approved: true)
+        put_green_pr_head(mergeable)
+        Application.delete_env(:symphony_elixir, :progress_agent_turns)
+
+        run_issue!("In Progress", heads: ["sha-same"], max_turns: 6)
+
+        assert turns() == 2
+        assert_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+        assert_received {:memory_tracker_comment, "issue-progress", "Symphony parked this issue in Backlog" <> _note}
+        refute_received {:memory_tracker_state_update, "issue-progress", _state}
+      end
+    end
+
+    defp put_green_pr_head(mergeable) do
+      pr_head = %{commit_sha: "sha-same", mergeable: mergeable, checks: @green_checks}
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, pr_head})
     end
   end
 
@@ -837,7 +903,9 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     end
   end
 
-  defp put_pending_conflict do
+  defp put_pending_conflict(opts \\ []) do
+    head = Keyword.get(opts, :head_sha, "sha-dirty")
+
     RunStore.put_pr_review(%{
       repo_key: "default",
       issue_id: "issue-progress",
@@ -845,13 +913,15 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       pr_url: @pr_url,
       workspace_path: "/tmp",
       status: "conflict_active_run",
+      auto_merge: Keyword.get(opts, :auto_merge),
       conflict_context: %{
         pr_url: @pr_url,
         head_ref: "auto/TP-337",
-        head_sha: "sha-dirty",
+        head_sha: head,
         base_ref: "main",
         base_sha: "sha-main",
-        conflict_key: "sha-dirty|sha-main"
+        conflict_key: "#{head}|sha-main",
+        approved: Keyword.get(opts, :approved, false)
       },
       updated_at: ~U[2026-10-04 08:29:00Z]
     })
