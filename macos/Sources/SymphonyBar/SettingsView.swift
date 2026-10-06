@@ -65,13 +65,11 @@ struct SettingsView: View {
                         )
                     }
                 } footer: {
-                    Text(
+                    SectionFooter(
                         model.settings.developmentMode
                             ? "Runs bin/symphony from the checkout through a login shell, for working on Symphony itself."
                             : "Runs the Symphony built into this app. Turn on to run bin/symphony from a checkout."
                     )
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
                 }
 
                 Section {
@@ -93,9 +91,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Updates")
                 } footer: {
-                    Text(model.settings.updateMode.explanation)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+                    SectionFooter(model.settings.updateMode.explanation)
                 }
 
                 Section {
@@ -135,7 +131,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Agents (saved in symphony.yml)")
                 } footer: {
-                    Text(
+                    SectionFooter(
                         "Each epic under way keeps one of these agents for its sub-tickets; the rest take "
                             + "other work. Merges and QA runs don't count here: up to 2 more run on top. More "
                             + "agents use the Linear and GitHub API budgets faster. 2–3 is a safe range on a "
@@ -143,8 +139,6 @@ struct SettingsView: View {
                             + "reach it; the per-ticket cap stops a ticket that goes over it. Applies within a "
                             + "minute, no restart needed."
                     )
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
                 }
 
                 Section {
@@ -190,17 +184,14 @@ struct SettingsView: View {
                 } header: {
                     Text("Models (saved in symphony.yml)")
                 } footer: {
-                    Text(
+                    SectionFooter(
                         "Each kind of run uses its own provider, model and effort, or the Default row where it "
                             + "sets none. A repository's rows override All repositories for issues routed to it; "
-                            + "grey values are inherited. Higher effort and bigger models use the shared 5-hour "
-                            + "usage limit faster: keep Opus and high effort for breakdown and hard "
-                            + "implementation, and use Sonnet or Haiku with low effort for landing and CI fixes. "
-                            + "OpenRouter models must support tools. Claude runtime only. Save checks "
-                            + "symphony.yml with symphony check first; changes apply to the next run."
+                            + "grey values are inherited. Bigger models and higher effort use the 5-hour usage "
+                            + "limit faster: keep Opus and high effort for breakdown and hard implementation, and "
+                            + "Sonnet or Haiku with low effort for landing and CI fixes. Save checks symphony.yml "
+                            + "with symphony check first; changes apply to the next run."
                     )
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
                 }
 
                 Section {
@@ -223,15 +214,13 @@ struct SettingsView: View {
                 } header: {
                     Text(AcceptanceGate.sectionTitle)
                 } footer: {
-                    Text(
+                    SectionFooter(
                         "The gate judges each PR against its ticket after QA. Each repository's Edit… sheet in "
                             + "Repos… can set its own mode, and the status menu switches an enforced repository to "
                             + "Shadow or Off at once. Save checks symphony.yml with symphony check first; Symphony "
                             + "reads the mode on its next poll, no restart needed. The stats cover each repository's "
                             + "last 50 verdicts a person decided."
                     )
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
                 }
 
                 Section {
@@ -298,12 +287,11 @@ struct SettingsView: View {
                 } header: {
                     Text("OpenRouter")
                 } footer: {
-                    Text(
+                    SectionFooter(
                         "Stored with your other secrets and passed to Symphony as \(SecretSettings.openRouterAPIKeyName) "
-                            + "for run profiles with provider: openrouter. Leave blank to turn OpenRouter off."
+                            + "for run profiles with provider: openrouter. Those run on the Claude runtime only, with "
+                            + "models that support tools. Leave blank to turn OpenRouter off."
                     )
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
                 }
             }
             .formStyle(.grouped)
@@ -513,7 +501,8 @@ private struct OpenRouterModelField: View {
                     Image(systemName: "chevron.up.chevron.down").imageScale(.small)
                 }
             }
-            .help(selection ?? "Choose an OpenRouter model that supports tools")
+            // The chosen model's id, or the inherited model's full name, which this narrow column can cut.
+            .help(selection ?? (inherited == nil ? "Choose an OpenRouter model that supports tools" : inheritedTitle(models)))
             .popover(isPresented: $isPicking, arrowEdge: .bottom) {
                 picker(models)
             }
@@ -559,6 +548,23 @@ private struct OpenRouterModelField: View {
     private func choose(_ id: String?) {
         selection = id
         isPicking = false
+    }
+}
+
+/// A section's help text under the Form. Fixed to its wrapped height: without it the grouped Form can lay a footer
+/// out as one line cut off with an ellipsis.
+private struct SectionFooter: View {
+    let text: String
+
+    init(_ text: String) {
+        self.text = text
+    }
+
+    var body: some View {
+        Text(text)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 
