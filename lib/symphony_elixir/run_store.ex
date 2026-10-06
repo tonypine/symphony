@@ -41,6 +41,15 @@ defmodule SymphonyElixir.RunStore do
   @quality_gate_cache_key :quality_gate_cache
   @quality_gate_comment_keys_key :quality_gate_comment_keys
   @mnesia_core_dir "core_dumps"
+  # A run's row keeps only the newest events of its transcript buffer. The live run keeps its whole
+  # buffer in memory for the dashboard; the row only feeds a finished run's transcript after a
+  # restart, and every event it holds is rewritten with the table on each Mnesia log dump.
+  @stored_transcript_events 20
+  @rewrite_dc_dump_limit 1_000_000_000
+  # A store written before the transcript cap can take far longer than a few seconds to load, and
+  # its rows are trimmed only once it has loaded.
+  @table_load_timeout_ms 120_000
+  @table_load_progress_ms 10_000
 
   defmodule State do
     @moduledoc false
@@ -72,7 +81,7 @@ defmodule SymphonyElixir.RunStore do
   def put_run(%{repo_key: repo_key, run_id: run_id} = record) when is_binary(run_id) do
     with {:ok, repo_key} <- normalize_repo_key(repo_key),
          :ok <- ensure_started() do
-      record = record |> normalize_record() |> Map.put(:repo_key, repo_key)
+      record = record |> normalize_record() |> Map.put(:repo_key, repo_key) |> bound_transcript_buffer()
 
       durable_transaction(fn ->
         :mnesia.write({@runs_table, scoped_key(repo_key, run_id), repo_key, run_id, record})
@@ -1056,11 +1065,28 @@ defmodule SymphonyElixir.RunStore do
   defp attribute_position(index, _attributes), do: index
 
   defp wait_for_tables do
-    case :mnesia.wait_for_tables(@data_tables, 5_000) do
+    wait_fun = Application.get_env(:symphony_elixir, :run_store_wait_for_tables, &:mnesia.wait_for_tables/2)
+    wait_for_tables(wait_fun, 0)
+  end
+
+  defp wait_for_tables(wait_fun, waited_ms) do
+    step_ms = min(@table_load_progress_ms, @table_load_timeout_ms - waited_ms)
+
+    case wait_fun.(@data_tables, step_ms) do
       :ok -> :ok
-      {:timeout, tables} -> {:error, {:mnesia_table_timeout, tables}}
+      {:timeout, tables} -> table_load_timed_out(wait_fun, tables, waited_ms + step_ms)
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp table_load_timed_out(_wait_fun, tables, waited_ms) when waited_ms >= @table_load_timeout_ms do
+    Logger.error("RunStore gave up loading tables after #{div(waited_ms, 1_000)} s: #{inspect(tables)}")
+    {:error, {:mnesia_table_timeout, tables, %{waited_ms: waited_ms}}}
+  end
+
+  defp table_load_timed_out(wait_fun, tables, waited_ms) do
+    Logger.info("RunStore still loading tables after #{div(waited_ms, 1_000)} s: #{inspect(tables)}")
+    wait_for_tables(wait_fun, waited_ms)
   end
 
   defp transaction(fun) when is_function(fun, 0) do
@@ -1076,7 +1102,12 @@ defmodule SymphonyElixir.RunStore do
 
       case :mnesia.read(@runs_table, key) do
         [{@runs_table, ^key, ^repo_key, ^run_id, record}] ->
-          updated = record |> Map.merge(normalize_update(attrs, [:key, :repo_key, :run_id])) |> Map.put(:repo_key, repo_key)
+          updated =
+            record
+            |> Map.merge(normalize_update(attrs, [:key, :repo_key, :run_id]))
+            |> Map.put(:repo_key, repo_key)
+            |> bound_transcript_buffer()
+
           :mnesia.write({@runs_table, key, repo_key, run_id, updated})
           {:ok, updated}
 
@@ -1096,9 +1127,72 @@ defmodule SymphonyElixir.RunStore do
 
   defp build_run_index do
     with entries when is_list(entries) <- transaction(fn -> :mnesia.match_object({@runs_table, :_, :_, :_, :_}) end) do
+      trim_stored_transcripts(entries)
+
       entries
-      |> Enum.map(fn {@runs_table, _key, repo_key, run_id, record} -> {repo_key, run_id, record} end)
+      |> Enum.map(fn {@runs_table, _key, repo_key, run_id, record} -> {repo_key, run_id, bound_transcript_buffer(record)} end)
       |> RunIndex.build()
+    end
+  end
+
+  defp bound_transcript_buffer(%{transcript_buffer: buffer} = record) when is_list(buffer) do
+    if length(buffer) > @stored_transcript_events do
+      kept = Enum.take(buffer, -@stored_transcript_events)
+      %{record | transcript_buffer: kept} |> Map.put(:transcript_buffer_size, length(kept))
+    else
+      record
+    end
+  end
+
+  defp bound_transcript_buffer(record), do: record
+
+  # Rows written before the buffer was bounded hold up to 200 events each. Trimmed once, when the
+  # store starts. Each row is read again in the transaction: a run written since the scan is already
+  # bounded.
+  #
+  # Mnesia rewrites a disc_copies table's file from memory at a log dump only when the table has a
+  # log file (`.DCL`) a quarter of the file's size (`dc_dump_limit`), which the log of the trimmed rows
+  # would take hours of writes to reach. So the limit is raised for these dumps, and the rows written
+  # twice: when the table had no log file, the first dump creates it and the second rewrites the file.
+  defp trim_stored_transcripts(entries) do
+    case Enum.filter(entries, fn {@runs_table, _key, _repo_key, _run_id, record} -> bound_transcript_buffer(record) != record end) do
+      [] ->
+        :ok
+
+      over_cap ->
+        limit = :mnesia.system_info(:dc_dump_limit)
+
+        result =
+          try do
+            :mnesia.change_config(:dc_dump_limit, @rewrite_dc_dump_limit)
+            Enum.reduce_while(1..2, :ok, fn _pass, :ok -> trim_pass(over_cap) end)
+          after
+            :mnesia.change_config(:dc_dump_limit, limit)
+          end
+
+        case result do
+          :ok ->
+            Logger.info("RunStore trimmed the stored transcript buffers of #{length(over_cap)} run(s) to #{@stored_transcript_events} events")
+
+          # Startup goes on with the index trimmed; the next start trims the rows again.
+          {:error, reason} ->
+            Logger.warning("RunStore failed to trim stored transcript buffers: #{inspect(reason)}")
+        end
+    end
+  end
+
+  defp trim_pass(over_cap) do
+    with :ok <- transaction(fn -> Enum.each(over_cap, &trim_stored_transcript/1) end),
+         :dumped <- :mnesia.dump_log() do
+      {:cont, :ok}
+    else
+      {:error, reason} -> {:halt, {:error, reason}}
+    end
+  end
+
+  defp trim_stored_transcript({@runs_table, key, _repo_key, _run_id, _record}) do
+    with [{@runs_table, ^key, repo_key, run_id, record}] <- :mnesia.read(@runs_table, key) do
+      :mnesia.write({@runs_table, key, repo_key, run_id, bound_transcript_buffer(record)})
     end
   end
 

@@ -85,6 +85,57 @@ defmodule SymphonyElixir.Codex.UsageLimitTest do
     assert :error = CodexUsageLimit.usage_limited(%{"method" => "turn/completed", "params" => %{"turn" => %{"status" => "completed"}}}, nil)
   end
 
+  describe "api_unreachable/1" do
+    defp unreachable(method \\ "error", error), do: CodexUsageLimit.api_unreachable(%{"method" => method, "params" => %{"error" => error}})
+
+    test "a DNS failure Codex gave up retrying ends the turn on the error notification and the failed turn" do
+      [retried, gave_up, completed] = Enum.map(fixture_lines("api_unreachable.jsonl"), &Jason.decode!/1)
+
+      assert CodexUsageLimit.api_unreachable(retried) == :error
+      assert {:ok, info} = CodexUsageLimit.api_unreachable(gave_up)
+      assert CodexUsageLimit.api_unreachable(completed) == {:ok, info}
+
+      assert info == %{
+               provider: "openai",
+               window: nil,
+               scope: :all,
+               resets_at: nil,
+               utilization: nil,
+               source: :api_unreachable,
+               error: "ENOTFOUND"
+             }
+
+      # Neither is a usage limit.
+      assert CodexUsageLimit.usage_limited(gave_up, nil) == :error
+    end
+
+    test "names the transport error, from an error code or the message" do
+      legacy = %{"method" => "codex/event/error", "params" => %{"msg" => %{"type" => "error", "message" => "tcp connect error: Connection refused (os error 61)"}}}
+      assert {:ok, %{error: "ECONNREFUSED"}} = CodexUsageLimit.api_unreachable(legacy)
+
+      assert {:ok, %{error: "ETIMEDOUT"}} = unreachable("turn/failed", %{"message" => "request failed (ETIMEDOUT)"})
+      assert {:ok, %{error: "ETIMEDOUT"}} = unreachable(%{"message" => "error sending request for url (x): operation timed out"})
+      assert {:ok, %{error: "ECONNRESET"}} = unreachable(%{"message" => "error sending request: connection reset by peer"})
+      assert {:ok, %{error: "ENETUNREACH"}} = unreachable(%{"message" => "Network is unreachable (os error 51)"})
+      assert {:ok, %{error: "connection error"}} = unreachable(%{"message" => "error sending request for url (x)"})
+      assert {:ok, %{error: "connection error"}} = unreachable(%{"codexErrorInfo" => "responseStreamConnectionFailed"})
+    end
+
+    test "an error the API answered, one Codex retries, or any other error is reachable" do
+      assert "throttle.jsonl" |> fixture_lines() |> Enum.map(&CodexUsageLimit.api_unreachable(Jason.decode!(&1))) == [:error, :error, :error, :error]
+
+      assert :error = unreachable(%{"message" => "connection reset", "codexErrorInfo" => %{"responseStreamConnectionFailed" => %{"httpStatusCode" => 502}}})
+      assert :error = unreachable(%{"message" => "Internal server error", "codexErrorInfo" => "internalServerError"})
+      assert :error = unreachable(%{"message" => "boom", "codexErrorInfo" => %{"other" => "x"}})
+      assert :error = unreachable(%{"codexErrorInfo" => 7})
+      assert :error = unreachable(@limit_error)
+      assert :error = unreachable("item/completed", %{"message" => "dns error"})
+      assert :error = CodexUsageLimit.api_unreachable(%{"method" => "error", "params" => %{"willRetry" => true, "error" => %{"message" => "dns error"}}})
+      assert :error = CodexUsageLimit.api_unreachable(%{"method" => "error", "params" => %{"error" => "dns error"}})
+      assert :error = CodexUsageLimit.api_unreachable(%{"method" => "turn/completed"})
+    end
+  end
+
   test "rate_limits reads both shapes and ignores payloads without windows" do
     assert CodexUsageLimit.rate_limits(%{"params" => %{"rateLimits" => %{"primary" => %{"usedPercent" => 5}}}}) ==
              %{"primary" => %{used_percent: 5, resets_at: nil}}
@@ -182,6 +233,39 @@ defmodule SymphonyElixir.Codex.UsageLimitTest do
       fake_codex!(ctx, [failed])
 
       assert {:error, {:usage_limited, %{provider: "openai"}}} = run_turn(ctx)
+    end
+
+    test "a turn that can't reach the model API fails as an unreachable API, on any turn-ending line", ctx do
+      fake_codex!(ctx, fixture_lines("api_unreachable.jsonl"))
+
+      assert {:error, {:model_api_unreachable, %{provider: "openai", source: :api_unreachable, error: "ENOTFOUND"}}} = run_turn(ctx)
+      assert_received {:codex_message, %{event: :model_api_unreachable, usage_limit: %{error: "ENOTFOUND"}}}
+      refute_received {:codex_message, %{event: :turn_completed}}
+
+      [_retried, _gave_up, completed] = fixture_lines("api_unreachable.jsonl")
+      fake_codex!(ctx, [completed])
+
+      assert {:error, {:model_api_unreachable, %{error: "ENOTFOUND"}}} = run_turn(ctx)
+
+      fake_codex!(ctx, [String.replace(completed, ~s("method":"turn/completed"), ~s("method":"turn/failed"))])
+
+      assert {:error, {:model_api_unreachable, %{error: "ENOTFOUND"}}} = run_turn(ctx)
+    end
+
+    test "a turn that fails for another reason keeps today's handling", ctx do
+      failed_turn = fn method ->
+        Jason.encode!(%{
+          "method" => method,
+          "params" => %{"turn" => %{"id" => "turn_usage", "status" => "failed", "error" => %{"message" => "Internal server error", "codexErrorInfo" => "internalServerError"}}}
+        })
+      end
+
+      fake_codex!(ctx, [failed_turn.("turn/completed")])
+      assert {:ok, %{result: :turn_completed}} = run_turn(ctx)
+
+      fake_codex!(ctx, [failed_turn.("turn/failed")])
+      assert {:error, {:turn_failed, %{"turn" => %{"status" => "failed"}}}} = run_turn(ctx)
+      refute_received {:codex_message, %{event: :model_api_unreachable}}
     end
 
     test "a 429 throttle keeps today's failure handling", ctx do
