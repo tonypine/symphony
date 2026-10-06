@@ -343,6 +343,13 @@ the app attaches to it as "running (external)": Start, Stop and Restart stay dis
 starts a second Symphony nor stops one it doesn't own. Open Dashboard opens the control URL in the browser; Open Logs
 opens `menubar-child.log`.
 
+Each poll waits up to 5 seconds for an answer. After one missed poll the menu keeps the last status, with
+"Symphony is slow to answer" under it. Only after two missed polls in a row does it show "Symphony isn't
+answering" (error) for a Symphony the app started, or stopped for an external one. That grace counts for an
+external Symphony too, so Start isn't offered while a busy one still holds the control URL; the cost is that
+after an external Symphony exits, Start is offered 5 to 10 seconds later. A Symphony the app started that
+exits unexpectedly shows the error at once.
+
 ## Usage-limit pause
 
 When Symphony holds runs for a provider usage limit (for example Claude's 5-hour window), it lists the hold
