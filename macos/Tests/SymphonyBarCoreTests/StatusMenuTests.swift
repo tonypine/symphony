@@ -290,6 +290,30 @@ final class StatusMenuTests: XCTestCase {
         )
     }
 
+    func testAPIUnreachableLines() {
+        let sameDay = pausedAt.addingTimeInterval(-3600)
+        var outage = StateSnapshot.UsageLimit(
+            phase: .paused, resumeAt: pausedAt.addingTimeInterval(120), reason: "model_api_unreachable", error: "ENOTFOUND"
+        )
+
+        XCTAssertEqual(
+            StatusMenu.usageLimitLine(outage, now: sameDay, timeZone: utc),
+            "Paused: Claude API unreachable (ENOTFOUND), retries ~12:18"
+        )
+        outage.error = nil
+        outage.resumeAt = nil
+        XCTAssertEqual(StatusMenu.usageLimitLine(outage, now: sameDay, timeZone: utc), "Paused: Claude API unreachable")
+
+        outage.phase = .canary
+        XCTAssertEqual(StatusMenu.usageLimitLine(outage, now: sameDay, timeZone: utc), "Resuming: checking Claude API…")
+
+        var usageLimit = claudeLimit
+        usageLimit.reason = "claude_usage_limit"
+        XCTAssertEqual(StatusMenu.usageLimitLine(usageLimit, now: sameDay, timeZone: utc), "Paused: Claude limit, resumes ~12:18")
+        usageLimit.phase = .canary
+        XCTAssertEqual(StatusMenu.usageLimitLine(usageLimit, now: sameDay, timeZone: utc), "Resuming: checking Claude limit…")
+    }
+
     func testLimitNames() {
         let names = ["five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet", "monthly", nil].map {
             StatusMenu.limitName(.init(window: $0))

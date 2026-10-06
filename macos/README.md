@@ -353,12 +353,19 @@ when it isn't today:
 - `Resuming: checking Claude limit…` while one canary run checks the limit after the reset.
 - `Holding new runs: Claude at 91%, resets ~14:05` while Symphony leaves headroom before the limit runs out.
 
+Symphony holds runs the same way when the model API can't be reached at all (a network or DNS outage), and
+the menu reads it as an outage, not a limit:
+
+- `Paused: Claude API unreachable (ENOTFOUND), retries ~14:05` while new runs wait for the next check.
+- `Resuming: checking Claude API…` while one canary run checks the API is back.
+
 The icon shows `pause.circle` and the title reads "paused" while any hold is in place. When you have also
 paused dispatch, your pause is listed first. Pause Dispatch and Resume Dispatch only control your pause:
 Symphony lifts a usage-limit hold on its own.
 
 The app posts a notification when a hold starts, for example "Symphony paused: Claude 5-hour limit, resumes
-~14:05", and when a provider's last hold clears, "Symphony resumed: Claude limit reset". It posts each once,
+~14:05" or "Symphony paused: Claude API unreachable", and when a provider's last hold clears, "Symphony
+resumed: Claude limit reset" or, after an outage, "Symphony resumed: Claude API reachable again". It posts each once,
 not on every poll. A headroom hold or a canary posts nothing, and nothing is posted for a hold already in
 place when the app opens or when Symphony starts answering again. While your pause is on, the resume
 notification is skipped, since dispatch stays paused.
