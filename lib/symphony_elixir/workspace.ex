@@ -61,7 +61,6 @@ defmodule SymphonyElixir.Workspace do
   # A remote can accept the connection and then never answer, and the SSH keepalives don't see
   # that while the server's sshd still answers them.
   @network_git_subcommands ["fetch", "pull", "push", "ls-remote"]
-  @default_git_network_timeout_ms 300_000
   # The exit status of a network call Symphony stopped at its timeout, as `timeout(1)` uses.
   @git_timeout_status 124
 
@@ -110,16 +109,16 @@ defmodule SymphonyElixir.Workspace do
   # through `/bin/sh`, so a missing git raises first, as `System.cmd/3` does.
   #
   # A `fetch`, `pull`, `push` or `ls-remote` is stopped, with git's whole process group, once it
-  # has run for `:network_timeout_ms` (default 5 minutes, or the `:git_network_timeout_ms`
-  # application env), and then returns status 124 with a line saying so. It is stopped as well
-  # when its caller exits. Each one logs its duration.
+  # has run for `:network_timeout_ms` (default `Config.git_network_timeout_ms/0`: symphony.yml's
+  # `workspaces.git_network_timeout_ms`, 5 minutes unset), and then returns status 124 with a
+  # line saying so. It is stopped as well when its caller exits. Each one logs its duration.
   @spec safe_git(String.t(), [String.t()], keyword()) :: {Collectable.t(), non_neg_integer()}
   def safe_git(command, args, opts) when is_binary(command) and is_list(args) and is_list(opts) do
     unless System.find_executable(command) do
       :erlang.error(:enoent, [command, args, opts])
     end
 
-    {timeout_ms, opts} = Keyword.pop_lazy(opts, :network_timeout_ms, &default_git_network_timeout_ms/0)
+    {timeout_ms, opts} = Keyword.pop(opts, :network_timeout_ms)
 
     case GitConfigCommands.config_args(args, opts, &read_git(command, &1, &2)) do
       {:ok, driver_args} ->
@@ -135,6 +134,7 @@ defmodule SymphonyElixir.Workspace do
        when subcommand in @network_git_subcommands do
     log_command = Enum.join(["git" | invocation], " ")
     dir = dir || File.cwd!()
+    timeout_ms = timeout_ms || Config.git_network_timeout_ms()
     started_at = System.monotonic_time(:millisecond)
 
     case run_git_port(command, safe_git_args(args), safe_git_opts(opts), timeout_ms) do
@@ -183,10 +183,6 @@ defmodule SymphonyElixir.Workspace do
   end
 
   defp elapsed_ms(started_at), do: System.monotonic_time(:millisecond) - started_at
-
-  defp default_git_network_timeout_ms do
-    Application.get_env(:symphony_elixir, :git_network_timeout_ms, @default_git_network_timeout_ms)
-  end
 
   # The shell functions an SSH worker's script defines to run git as `safe_git/3` does:
   # `symphony_git <dir> <args>` runs `git -C <dir> <args>` with the same env and `-c` overrides,

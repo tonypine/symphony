@@ -3401,6 +3401,46 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert parsed.stray_process_cpu_minutes == nil
   end
 
+  test "the git network and MCP tool timeouts come from symphony.yml, then the app env, then the defaults" do
+    on_exit(fn ->
+      Application.delete_env(:symphony_elixir, :git_network_timeout_ms)
+      Application.delete_env(:symphony_elixir, :mcp_tool_timeout_ms)
+    end)
+
+    assert Config.git_network_timeout_ms() == 300_000
+    assert Config.mcp_tool_timeout_ms() == 600_000
+
+    Application.put_env(:symphony_elixir, :git_network_timeout_ms, 1_000)
+    Application.put_env(:symphony_elixir, :mcp_tool_timeout_ms, 2_000)
+    assert Config.git_network_timeout_ms() == 1_000
+    assert Config.mcp_tool_timeout_ms() == 2_000
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      workspace_git_network_timeout_ms: 120_000,
+      agent_mcp_tool_timeout_ms: 900_000
+    )
+
+    assert Config.git_network_timeout_ms() == 120_000
+    assert Config.mcp_tool_timeout_ms() == 900_000
+    assert Config.settings!().workspace.git_network_timeout_ms == 120_000
+    assert Config.settings!().agent.mcp_tool_timeout_ms == 900_000
+
+    # A symphony.yml that doesn't validate falls back to the app env.
+    write_workflow_file!(Workflow.workflow_file_path(), workspace_git_network_timeout_ms: 0)
+    assert Config.git_network_timeout_ms() == 1_000
+    assert Config.mcp_tool_timeout_ms() == 2_000
+  end
+
+  test "symphony check names an invalid git network or MCP tool timeout" do
+    write_workflow_file!(Workflow.workflow_file_path(), workspace_git_network_timeout_ms: 0)
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "workspaces.git_network_timeout_ms"
+
+    write_workflow_file!(Workflow.workflow_file_path(), agent_mcp_tool_timeout_ms: "bad")
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "agent.timeouts.mcp_tool_ms"
+  end
+
   test "config reads defaults for optional settings" do
     previous_linear_api_key = System.get_env("LINEAR_API_KEY")
     on_exit(fn -> restore_env("LINEAR_API_KEY", previous_linear_api_key) end)

@@ -73,6 +73,12 @@ final class SettingsViewModel: ObservableObject {
     @Published private(set) var isCheckingTokenLimits = false
     /// Today's tokens from Symphony's latest state, nil while it isn't answering.
     @Published var budget: StateSnapshot.Budget?
+    /// `workspaces.git_network_timeout_ms` and `agent.timeouts.mcp_tool_ms` in the configured symphony.yml, in
+    /// minutes.
+    @Published var gitNetworkTimeoutMinutes = OperationTimeouts.minutes(OperationTimeouts.defaultGitNetworkMs)
+    @Published var mcpToolTimeoutMinutes = OperationTimeouts.minutes(OperationTimeouts.defaultMcpToolMs)
+    /// Why `symphony check` rejected the changed timeouts, shown in their section.
+    @Published private(set) var timeoutsError: String?
     /// `auto_review.acceptance_gate.mode` in the configured symphony.yml.
     @Published var acceptanceGateMode = AcceptanceGateMode.off
     /// Enforce, while its confirmation is open.
@@ -95,6 +101,10 @@ final class SettingsViewModel: ObservableObject {
     /// The limits read from symphony.yml, or nil when they couldn't be read. Only limits changed from these
     /// are written.
     private var loadedTokenLimits: TokenLimits?
+
+    /// The timeouts read from symphony.yml, or nil when they couldn't be read. Only a timeout whose stepper
+    /// moved is written.
+    private var loadedTimeouts: OperationTimeouts?
 
     /// The gate mode read from symphony.yml, or nil when it couldn't be read. Written only when it changed.
     private var loadedAcceptanceGateMode: AcceptanceGateMode?
@@ -141,6 +151,7 @@ final class SettingsViewModel: ObservableObject {
 
         loadMaxConcurrentAgents()
         loadTokenLimits()
+        loadTimeouts()
         loadRunProfiles()
         loadAcceptanceGateMode()
         // Off the main thread, so a Keychain prompt can't freeze the app while Settings opens.
@@ -229,6 +240,22 @@ final class SettingsViewModel: ObservableObject {
             guard !Task.isCancelled else { return }
             isCheckingTokenLimits = false
             if case .failed(let message) = result { tokenLimitsError = "symphony check rejects this: \(ConfigCheck.reasonFirst(message))" }
+        }
+    }
+
+    /// The timeout steppers are off until a symphony.yml has been read, and while Save checks it.
+    var canEditTimeouts: Bool { loadedTimeouts != nil && !isSaving }
+
+    private func loadTimeouts() {
+        let path = settings.trimmed().configPath
+        guard !path.isEmpty else { return }
+        do {
+            let timeouts = try SymphonyConfigFile(path: path).readOperationTimeouts()
+            gitNetworkTimeoutMinutes = OperationTimeouts.minutes(timeouts.gitNetworkMs)
+            mcpToolTimeoutMinutes = OperationTimeouts.minutes(timeouts.mcpToolMs)
+            loadedTimeouts = timeouts
+        } catch {
+            configFileError = "Could not read the timeouts from symphony.yml: \(error.localizedDescription)"
         }
     }
 
@@ -350,9 +377,9 @@ final class SettingsViewModel: ObservableObject {
         ).trimmed()
     }
 
-    /// Validates and saves, then calls `onSaved` when everything was stored. Changed models and token limits are
-    /// written only after `symphony check` passes on them; until then the rest isn't saved, and a failure shows
-    /// in `configCheckError` or `tokenLimitsError`.
+    /// Validates and saves, then calls `onSaved` when everything was stored. Changed models, token limits, gate
+    /// mode and timeouts are written only after `symphony check` passes on them; until then the rest isn't saved,
+    /// and a failure shows in `configCheckError`, `tokenLimitsError`, `acceptanceGateError` or `timeoutsError`.
     func save(onSaved: @escaping () -> Void) {
         guard canSave else { return }
         let settings = settings.trimmed()
@@ -369,7 +396,10 @@ final class SettingsViewModel: ObservableObject {
         acceptanceGateError = nil
         let gateMode = acceptanceGateMode
         let gateChanged = loadedAcceptanceGateMode.map { $0 != gateMode } ?? false
-        guard loadedProfiles != nil || loadedLimits != nil || gateChanged else {
+        timeoutsError = nil
+        let timeouts = loadedTimeouts?.settingMinutes(gitNetwork: gitNetworkTimeoutMinutes, mcpTool: mcpToolTimeoutMinutes)
+        let oldTimeouts = loadedTimeouts.flatMap { $0 != timeouts ? $0 : nil }
+        guard loadedProfiles != nil || loadedLimits != nil || gateChanged || oldTimeouts != nil else {
             if saveRest(settings, secrets) { onSaved() }
             return
         }
@@ -384,6 +414,9 @@ final class SettingsViewModel: ObservableObject {
             }
             if saved, gateChanged {
                 saved = await saveAcceptanceGateMode(gateMode, settings: settings, secrets: secrets)
+            }
+            if saved, let timeouts, let oldTimeouts {
+                saved = await saveTimeouts(timeouts, from: oldTimeouts, settings: settings, secrets: secrets)
             }
             isSaving = false
             if saved && saveRest(settings, secrets) { onSaved() }
@@ -474,6 +507,32 @@ final class SettingsViewModel: ObservableObject {
         }
         configFileError = nil
         loadedTokenLimits = limits
+        return true
+    }
+
+    /// Writes the timeouts that changed to symphony.yml once `symphony check` passes on the result.
+    private func saveTimeouts(
+        _ timeouts: OperationTimeouts,
+        from loaded: OperationTimeouts,
+        settings: AppSettings,
+        secrets: SecretSettings
+    ) async -> Bool {
+        let check = configCheck
+        let result: ConfigCheckResult
+        do {
+            result = try await SymphonyConfigFile(path: settings.configPath).writeOperationTimeouts(timeouts, from: loaded) { path in
+                await check(path, settings, secrets)
+            }
+        } catch {
+            configFileError = "Could not save the timeouts to symphony.yml: \(error.localizedDescription)"
+            return false
+        }
+        if case .failed(let message) = result {
+            timeoutsError = "symphony check rejected these timeouts, so nothing was saved: \(ConfigCheck.reasonFirst(message))"
+            return false
+        }
+        configFileError = nil
+        loadedTimeouts = timeouts
         return true
     }
 

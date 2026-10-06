@@ -79,6 +79,8 @@ final class SettingsUIManifestTests: XCTestCase {
         yaml = try record("setting max concurrent agents", { try MaxConcurrentAgents.setting(3, in: $0) }, from: yaml)
         let limits = TokenLimits(perDay: .tokens(1_000), perIssue: .off)
         yaml = try record("setting token limits", { try TokenLimits.updating($0, from: TokenLimits(), to: limits) }, from: yaml)
+        let timeouts = OperationTimeouts(gitNetworkMs: 120_000, mcpToolMs: 1_200_000)
+        yaml = try record("setting timeouts", { try OperationTimeouts.updating($0, from: OperationTimeouts(), to: timeouts) }, from: yaml)
         _ = try record("removing a repository", { try RepositoriesConfig.removing("api", from: $0) }, from: yaml)
 
         for key in SettingsUIManifest.keyPaths where !written.contains(where: { $0 == key || $0.hasPrefix(key + ".") }) {
