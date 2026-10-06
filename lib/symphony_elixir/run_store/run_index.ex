@@ -1,9 +1,11 @@
 defmodule SymphonyElixir.RunStore.RunIndex do
   @moduledoc """
   An ETS index of the run store's runs, newest `started_at` first, so the bounded reads
-  (`RunStore.list_runs/2` and `RunStore.list_all_runs/1` with a limit) look up only the runs they
-  return instead of scanning and sorting the whole table. The orchestrator reads its run history
-  twice a second, so that read must not grow with the store.
+  (`RunStore.list_runs/2` and `RunStore.list_all_runs/1` with a limit, and
+  `RunStore.list_issue_runs/2`) look up only the runs they return instead of scanning and sorting
+  the whole table. The orchestrator reads its run history twice a second, and the CI and PR review
+  pollers read the runs of each issue they watch every cycle, so those reads must not grow with the
+  store.
 
   It also versions the runs of each `kind`: `memoize/3` keeps a value derived from the runs of one
   kind (the acceptance gate's verdicts) until a run of that kind is written.
@@ -79,6 +81,17 @@ defmodule SymphonyElixir.RunStore.RunIndex do
   end
 
   @doc """
+  The `{repo_key, run_id}` of every run of issue `issue_id` in `repo_key`, newest first;
+  `:unavailable` while the index isn't built.
+  """
+  @spec take_issue(String.t(), String.t()) :: {:ok, [{String.t(), String.t()}]} | :unavailable
+  def take_issue(repo_key, issue_id) do
+    with_table(:unavailable, fn ->
+      if ready?(), do: {:ok, :ets.select(@table, [{{{:issue, repo_key, issue_id, :_, :"$1"}}, [], [{{repo_key, :"$1"}}]}])}, else: :unavailable
+    end)
+  end
+
+  @doc """
   The value `fun` derives from the runs of `kind`, computed again only after a run of that kind
   was written. `fun` returns `{:ok, value}` to keep the value or anything else to keep nothing.
   """
@@ -120,22 +133,29 @@ defmodule SymphonyElixir.RunStore.RunIndex do
     ArgumentError -> default
   end
 
-  # A run whose `started_at` changed has its old entries replaced.
+  # A run whose `started_at` or `issue_id` changed has its old entries replaced.
   defp index(repo_key, run_id, record) do
     rank = rank(Map.get(record, :started_at))
+    issue_id = Map.get(record, :issue_id)
 
     case :ets.lookup(@table, {:run, repo_key, run_id}) do
-      [{_key, ^rank}] ->
+      [{_key, ^rank, ^issue_id}] ->
         :ok
 
       previous ->
-        Enum.each(previous, fn {_key, old_rank} ->
+        Enum.each(previous, fn {_key, old_rank, old_issue_id} ->
           :ets.delete(@table, {:repo, repo_key, old_rank, run_id})
           :ets.delete(@table, {:all, old_rank, repo_key, run_id})
+          :ets.delete(@table, {:issue, repo_key, old_issue_id, old_rank, run_id})
         end)
 
-        :ets.insert(@table, [{{:run, repo_key, run_id}, rank}, {{:repo, repo_key, rank, run_id}}, {{:all, rank, repo_key, run_id}}])
+        :ets.insert(@table, [{{:run, repo_key, run_id}, rank, issue_id} | entries(repo_key, issue_id, rank, run_id)])
     end
+  end
+
+  defp entries(repo_key, issue_id, rank, run_id) do
+    issue_entries = if is_binary(issue_id), do: [{{:issue, repo_key, issue_id, rank, run_id}}], else: []
+    [{{:repo, repo_key, rank, run_id}}, {{:all, rank, repo_key, run_id}} | issue_entries]
   end
 
   # Ascending keys in the ordered set are the newest runs first; a run without a start sorts last.

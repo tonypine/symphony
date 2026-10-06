@@ -112,7 +112,8 @@ defmodule SymphonyElixir.CiPollerTest do
   end
 
   defmodule FailingUpdateRunStore do
-    def list_runs(:all), do: []
+    def list_issue_runs(_repo_key, _issue_id), do: []
+    def list_all_runs(:all), do: []
     def list_ci_checks, do: [Application.fetch_env!(:symphony_elixir, :ci_test_ci_record)]
     def update_ci_check(_issue_id, _attrs), do: {:error, :write_failed}
     def put_ci_check(_record), do: :ok
@@ -120,7 +121,8 @@ defmodule SymphonyElixir.CiPollerTest do
   end
 
   defmodule FailingEscalationFinalUpdateRunStore do
-    def list_runs(repo_key, scope), do: SymphonyElixir.RunStore.list_runs(repo_key, scope)
+    def list_issue_runs(repo_key, issue_id), do: SymphonyElixir.RunStore.list_issue_runs(repo_key, issue_id)
+    def list_all_runs(limit), do: SymphonyElixir.RunStore.list_all_runs(limit)
     def list_ci_checks(repo_key), do: SymphonyElixir.RunStore.list_ci_checks(repo_key)
     def list_pr_reviews(repo_key), do: SymphonyElixir.RunStore.list_pr_reviews(repo_key)
     def put_ci_check(record), do: SymphonyElixir.RunStore.put_ci_check(record)
@@ -133,15 +135,17 @@ defmodule SymphonyElixir.CiPollerTest do
   end
 
   defmodule RaisingRunStore do
-    def list_runs(:all), do: raise("ci poll exploded")
+    def list_all_runs(:all), do: raise("ci poll exploded")
     def list_ci_checks, do: []
   end
 
   defmodule CountingRunStore do
-    def list_runs(repo_key, scope) do
-      bump(:list_runs)
-      SymphonyElixir.RunStore.list_runs(repo_key, scope)
+    def list_issue_runs(repo_key, issue_id) do
+      bump(:list_issue_runs)
+      SymphonyElixir.RunStore.list_issue_runs(repo_key, issue_id)
     end
+
+    def list_all_runs(limit), do: SymphonyElixir.RunStore.list_all_runs(limit)
 
     def list_ci_checks(repo_key), do: SymphonyElixir.RunStore.list_ci_checks(repo_key)
 
@@ -165,7 +169,7 @@ defmodule SymphonyElixir.CiPollerTest do
 
   defmodule WebhookRaisingRunStore do
     def list_ci_checks(_repo_key), do: [%{issue_id: "issue-2401", pr_url: "https://github.com/example/repo/pull/2401"}]
-    def list_runs(_repo_key, _scope), do: raise("webhook poll exploded")
+    def list_all_runs(_limit), do: raise("webhook poll exploded")
   end
 
   defmodule FailingTransitionTracker do
@@ -1315,7 +1319,26 @@ defmodule SymphonyElixir.CiPollerTest do
     refute CiPoller.ci_owned_issue?(issue.id, repo_key: @repo_key)
   end
 
-  test "green ci poll prefetches runs and reviews once per cycle across checks" do
+  test "a poll's run-store cost doesn't grow with the store" do
+    now = ~U[2026-05-06 09:00:00Z]
+    issue = in_review_issue()
+    Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+    Application.put_env(:symphony_elixir, :ci_test_status, pending_status())
+    put_run(issue, now)
+
+    poll = fn ->
+      assert {:ok, %{actions: [{:watching, "issue-2401"}]}} =
+               CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, now: now)
+    end
+
+    small = reductions(poll)
+    put_other_runs(2_000, now)
+    large = reductions(poll)
+
+    assert large < small * 1.5, "a CI poll took #{large} reductions over 2001 runs, #{small} over 1"
+  end
+
+  test "green ci poll reads runs per issue and prefetches reviews once per cycle across checks" do
     now = ~U[2026-05-06 09:00:00Z]
     issue_a = in_review_issue()
 
@@ -1373,10 +1396,9 @@ defmodule SymphonyElixir.CiPollerTest do
 
     assert Enum.all?(actions, &match?({:green_deferred, _, :rework_in_progress}, &1))
 
-    # One list_runs for discovery plus one prefetch, and a single
-    # list_pr_reviews prefetch — independent of the number of CI checks.
-    assert %{list_runs: 2, list_pr_reviews: 1} =
-             Application.fetch_env!(:symphony_elixir, :ci_test_store_counts)
+    # Each issue's runs are read through the run index once for discovery and once for its
+    # check, and PR reviews are prefetched once — independent of the number of CI checks.
+    assert Application.fetch_env!(:symphony_elixir, :ci_test_store_counts) == %{list_issue_runs: 4, list_pr_reviews: 1}
   end
 
   test "green ci defers while PR rework comments are pending then resets after completion" do
@@ -2182,6 +2204,23 @@ defmodule SymphonyElixir.CiPollerTest do
       started_at: DateTime.add(now, -2, :minute),
       ended_at: run_ended_at(status, now)
     })
+  end
+
+  # Finished runs of other issues, as a store holding months of history has.
+  defp put_other_runs(count, now) do
+    for n <- 1..count do
+      run = %{repo_key: @repo_key, run_id: "other-#{n}", issue_id: "other-#{n}", kind: "agent", status: "success", workspace_path: "/tmp/other"}
+      assert :ok = RunStore.put_run(Map.put(run, :started_at, DateTime.add(now, -n, :minute)))
+    end
+  end
+
+  # The reductions of `fun`'s second call, so both measure a warm cycle.
+  defp reductions(fun) do
+    fun.()
+    {:reductions, before} = Process.info(self(), :reductions)
+    fun.()
+    {:reductions, later} = Process.info(self(), :reductions)
+    later - before
   end
 
   defp run_ended_at("running", _now), do: nil
