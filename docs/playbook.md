@@ -55,6 +55,11 @@ This catalog is kept in sync with `priv/playbook/` by
 | `workpad_bootstrap` | `agent` | Find, reuse, or create the single persistent Linear workpad comment and reconcile it before new work. |
 | `workpad_template` | `agent` | Canonical structure for the persistent workpad comment. |
 
+The breakdown flow in `parent_tickets` (plan run, single plan review, approval
+through `Waiting on sub-tickets`, close-out) is the base of the Director workflow:
+[ADR 0001](adr/0001-director-workflow.md) records the ticket types, the plan stages
+and where a plan's artifacts live.
+
 ## Recommended composition
 
 A repo `WORKFLOW.md` owns the *structure* — the status routing, the numbered
