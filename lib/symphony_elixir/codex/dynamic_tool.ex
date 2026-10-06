@@ -384,7 +384,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     },
     %{
       "name" => "qa_launch_app",
-      "description" => "Launch the configured app bundle the last qa_build produced, in QA mode (private settings and secrets). Returns its PID.",
+      "description" =>
+        "Launch the configured app bundle the last qa_build produced, in QA mode (private settings and secrets). Returns its PID and host_stub_url, the address this app reaches the qa_host_stub stub at.",
       "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
     },
     %{
@@ -471,6 +472,21 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         "properties" => %{
           "local_path" => %{"type" => "string", "description" => "The file, absolute or relative to the worktree, e.g. qa-evidence/qa-config/symphony.yml."},
           "remote_name" => %{"type" => "string", "description" => "File name on the QA host: letters, digits, `.`, `_`, `-`. Defaults to the local file name."}
+        }
+      }
+    },
+    %{
+      "name" => "qa_host_stub",
+      "description" =>
+        "Serve the app canned HTTP responses from Symphony's host stub, since the app cannot reach a server you start. With local_path, replace the routes with the ones in that JSON file: " <>
+          ~s({"routes": [{"method": "GET", "path": "/api/items?page=1", "status": 200, "json": [...]}, {"path": "/health", "body": "ok", "content_type": "text/plain"}]}) <>
+          " (method defaults to GET, status to 200; a path without a query matches any query; unmatched requests get 404). " <>
+          "Always returns the route count and the last 50 requests the stub answered. The app reaches the stub at the host_stub_url qa_launch_app returned.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "properties" => %{
+          "local_path" => %{"type" => "string", "description" => "The routes JSON file under the worktree or $TMPDIR, e.g. qa-evidence/stub-routes.json. Omit it to only read the requests."}
         }
       }
     }
@@ -676,6 +692,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "qa_ax_press" => ["pid", "path", "action"],
     "qa_ax_set_value" => ["pid", "path", "value"],
     "qa_put_file" => ["local_path", "remote_name"],
+    "qa_host_stub" => ["local_path"],
     "qa_android_install" => ["apk"],
     "qa_android_launch" => ["application_id"],
     "qa_android_stop" => ["application_id"],
