@@ -1338,6 +1338,8 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
       assert log =~ "Workspace worktree preparation failed"
       assert log =~ "auto/MT-BAD-BASE"
+      # git's stderr
+      assert log =~ "fatal: invalid reference: origin/does-not-exist"
     after
       File.rm_rf(test_root)
     end
@@ -6370,6 +6372,71 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       # Worktree must start from origin/main, not the feature HEAD.
       assert git!(workspace, ["rev-parse", "HEAD"]) == base_commit
       refute File.exists?(Path.join(workspace, "unrelated.txt"))
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "six workspaces of one repo prepared at once each get their worktree, with no upstream config" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-parallel-worktrees-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      primary_repo = Path.join(test_root, "primary")
+      origin_repo = Path.join(test_root, "origin.git")
+      workflow_dir = Path.join(test_root, "workflow")
+      workflow_path = Path.join(workflow_dir, "WORKFLOW.md")
+      workspace_root = Path.join(test_root, "workspaces")
+
+      create_primary_repo!(primary_repo, origin_repo)
+      File.mkdir_p!(workflow_dir)
+      File.write!(workflow_path, "---\n---\nprompt\n")
+
+      File.write!(Workflow.symphony_file_path(), """
+      issues:
+        provider: memory
+      workspaces:
+        root: #{workspace_root}
+      agent:
+        runtime: codex
+        command: codex app-server
+      repositories:
+        - key: api
+          base_branch: main
+          workflow: #{workflow_path}
+          route:
+            team: Test
+          workspace:
+            strategy: worktree
+            repo: #{primary_repo}
+            fetch_before_dispatch: false
+      """)
+
+      assert :ok = Config.validate!()
+      identifiers = for n <- 1..6, do: "API-#{n}"
+
+      log =
+        capture_log(fn ->
+          results =
+            identifiers
+            |> Enum.map(fn identifier ->
+              Task.async(fn -> Workspace.create_for_issue(%Issue{id: identifier, identifier: identifier, repo_key: "api"}) end)
+            end)
+            |> Task.await_many(30_000)
+
+          assert Enum.all?(results, &match?({:ok, _workspace}, &1))
+        end)
+
+      refute log =~ "worktree preparation failed"
+      worktrees = git!(primary_repo, ["worktree", "list", "--porcelain"])
+
+      for identifier <- identifiers do
+        assert worktrees =~ "branch refs/heads/auto/#{identifier}\n"
+        assert {_output, 1} = System.cmd("git", ["-C", primary_repo, "config", "--get", "branch.auto/#{identifier}.merge"])
+      end
     after
       File.rm_rf(test_root)
     end
