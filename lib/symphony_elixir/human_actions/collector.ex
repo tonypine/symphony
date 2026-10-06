@@ -3,12 +3,13 @@ defmodule SymphonyElixir.HumanActions.Collector do
   Reads the open human actions in Symphony's scope from Linear, grouped by project.
 
   One query per repository route, in the scope that route polls, returns every non-terminal issue
-  that carries the `human_actions.label` label, sits in `In Review` or the Human Review state
-  (`SymphonyElixir.HumanReview`), or is a `Final verification:` ticket. From those:
+  that sits in `In Review` or the Human Review state (`SymphonyElixir.HumanReview`), is a
+  `Final verification:` ticket, or carries a deprecated request label
+  (`SymphonyElixir.HumanReview.legacy_request_labels/1`). From those:
 
-  - each open `## Action needed:` comment on a labelled issue is a `:request`
+  - each open `## Action needed:` comment is a `:request`
     (see `SymphonyElixir.HumanActions.Request`); a withdrawn one is not listed;
-  - a labelled issue with no request comment is itself a `:task`;
+  - an issue with a deprecated request label and no request comment is itself a `:task`;
   - a plan parent in a review state is a `:plan_review`;
   - an issue in a review state whose `## Symphony QA Report` says `blocked` is a `:qa_blocked`,
     unless it is a `Final verification:` ticket;
@@ -147,10 +148,10 @@ defmodule SymphonyElixir.HumanActions.Collector do
   defp issue_page(body), do: {:error, {:human_actions_query_failed, body}}
 
   defp filter(scope, settings) do
-    labelled = %{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => settings.human_actions.label}}}}
+    labelled = Enum.map(HumanReview.legacy_request_labels(settings), &%{"labels" => %{"some" => %{"name" => %{"eqIgnoreCase" => &1}}}})
     in_review = Enum.map(HumanReview.review_states(settings), &%{"state" => %{"name" => %{"eqIgnoreCase" => &1}}})
     final_verification = %{"title" => %{"startsWith" => RunKind.final_verification_prefix()}}
-    wanted = %{"or" => [labelled | in_review] ++ [final_verification]}
+    wanted = %{"or" => labelled ++ in_review ++ [final_verification]}
 
     %{"and" => [scope, wanted, %{"state" => %{"name" => %{"nin" => settings.tracker.terminal_states}}}]}
   end
@@ -177,8 +178,10 @@ defmodule SymphonyElixir.HumanActions.Collector do
     human_review? = HumanReview.in_state?(issue.state, settings)
     final_verification? = RunKind.classify(%Issue{title: issue.title}) == :final_verification
 
+    legacy_labelled? = Enum.any?(HumanReview.legacy_request_labels(settings), &(&1 in labels))
+
     actions =
-      labelled_actions(context, String.downcase(settings.human_actions.label) in labels) ++
+      request_actions(context, legacy_labelled?) ++
         plan_review_actions(context, in_review? and Enum.any?(labels, &Issue.breakdown_label?/1)) ++
         qa_blocked_actions(context, in_review? and not final_verification?) ++
         verification_blocked_actions(context, final_verification?)
@@ -190,11 +193,10 @@ defmodule SymphonyElixir.HumanActions.Collector do
 
   defp issue_actions(_node, _settings), do: []
 
-  defp labelled_actions(_context, false), do: []
-
-  defp labelled_actions(context, true) do
+  # A deprecated request label on an issue with no request comment makes the issue itself the task.
+  defp request_actions(context, legacy_labelled?) do
     case requests(context.node) do
-      [] -> [task_action(context)]
+      [] when legacy_labelled? -> [task_action(context)]
       _requests -> for {comment_id, request} <- open_requests(context.node, context.settings), do: request_action(context, comment_id, request)
     end
   end
@@ -235,7 +237,7 @@ defmodule SymphonyElixir.HumanActions.Collector do
       unblocks: request.unblocks,
       est_minutes: request.est_minutes,
       steps: request.steps,
-      done_when: "you remove the `#{context.settings.human_actions.label}` label from #{context.issue.identifier}, or move it on once it is unblocked."
+      done_when: "you move #{context.issue.identifier} out of #{context.issue.state} once it is unblocked, or the agent withdraws the request."
     })
   end
 
@@ -245,7 +247,7 @@ defmodule SymphonyElixir.HumanActions.Collector do
       kind: :task,
       title: context.issue.title || context.issue.identifier,
       steps: context.node["description"] |> Request.text_steps() |> Enum.take(@max_task_steps),
-      done_when: "you close #{context.issue.identifier}, or remove its `#{context.settings.human_actions.label}` label."
+      done_when: "you close #{context.issue.identifier}, or move it on."
     })
   end
 

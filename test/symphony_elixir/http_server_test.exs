@@ -91,6 +91,21 @@ defmodule SymphonyElixir.HttpServerTest do
       assert byte_size(token) > 0
     end
 
+    # As the verification dev server does on macOS, where Symphony serves the socket on loopback.
+    @tag :unix_socket
+    test "listens on a unix socket for a unix: host, with no control URL", %{tmp: tmp} do
+      socket = Path.join(tmp, "dashboard.sock")
+      start_supervised!({HttpServer, [host: "unix:#{socket}", port: 0]})
+
+      assert HttpServer.bound_port() == nil
+      assert ControlUrl.read() == nil
+
+      {:ok, conn} = :gen_tcp.connect({:local, socket}, 0, [:binary, active: false])
+      :ok = :gen_tcp.send(conn, "GET /api/v1/state HTTP/1.1\r\nhost: 127.0.0.1\r\nconnection: close\r\n\r\n")
+      assert {:ok, "HTTP/1.1 " <> _rest} = :gen_tcp.recv(conn, 0, 5_000)
+      :gen_tcp.close(conn)
+    end
+
     test "rewrites the IPv4 wildcard host to a loopback URL for local CLI discovery" do
       System.put_env(@allow_remote_bind_env, "1")
 

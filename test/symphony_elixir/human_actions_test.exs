@@ -196,7 +196,7 @@ defmodule SymphonyElixir.HumanActionsTest do
 
   test "reads the last list back after a restart instead of posting it again" do
     listed = [action("a")]
-    {body, []} = Update.render(listed, "human-action")
+    {body, []} = Update.render(listed, ["In Review", "Human Review"])
 
     previous =
       {:ok,

@@ -8,6 +8,7 @@ defmodule SymphonyElixir.AcceptanceGateTest do
   alias SymphonyElixir.ClaudeCode.AppServer, as: ClaudeAppServer
   alias SymphonyElixir.Codex.DynamicTool
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.HumanActions.Request
 
   @sha "feedface00112233445566778899aabbccddeeff"
   @merged "abcabc00112233445566778899aabbccddeeff00"
@@ -563,6 +564,7 @@ defmodule SymphonyElixir.AcceptanceGateTest do
       assert log =~ "Failed to store the acceptance gate verdict issue_id=issue-gate"
       assert log =~ "Failed to publish the acceptance gate report for TP-950"
       assert log =~ "Failed to audit the acceptance gate verdict for TP-950"
+      assert log =~ "Acceptance gate could not read the action requests of TP-950: :linear_down"
     end
   end
 
@@ -578,6 +580,10 @@ defmodule SymphonyElixir.AcceptanceGateTest do
         cond do
           query =~ "SymphonyAgentIssueComments" ->
             {:ok, %{"data" => %{"issue" => %{"comments" => %{"nodes" => []}}}}}
+
+          query =~ "SymphonyAgentHumanActionScope" ->
+            comments = Keyword.get(opts, :request_comments, [])
+            {:ok, %{"data" => %{"issue" => %{"id" => "issue-gate", "comments" => %{"nodes" => comments}, "history" => %{"nodes" => []}}}}}
 
           query =~ "SymphonyAgentAddComment" ->
             send(recipient, {:gate_comment, variables.body})
@@ -807,6 +813,66 @@ defmodule SymphonyElixir.AcceptanceGateTest do
       # The rework past `max_fix_attempts` (2) goes to a person.
       assert {:ok, %{target: %{state: "In Review", escalated: true}}} =
                AcceptanceGate.judge(judge_job(enforce, %{record: record(%{qa_fix_attempts: 2})}), run_opts())
+    end
+
+    test "an issue with an open action request is escalated to Human Review, never approved, without the label", %{settings: settings} do
+      request = %{
+        "id" => "request-1",
+        "body" => Request.render(%{title: "Add the signing secrets", why: "x", steps: ["y"]}, "Human Review"),
+        "createdAt" => "2026-10-06T10:00:00.000Z"
+      }
+
+      client = follow_up_client(request_comments: [request])
+
+      assert {:ok, %{verdict: "escalate", agent_verdict: "approve", reasons: reasons, target: %{state: "Human Review", escalated: false}}} =
+               AcceptanceGate.judge(judge_job(enforced(settings)), run_opts(linear_client: client))
+
+      assert %{rule: "human_action", detail: "the issue waits on a person: the issue has an open action request: Add the signing secrets"} in reasons
+      refute Enum.any?(reasons, &(&1.rule == "label"))
+    end
+
+    test "an issue in Human Review is escalated there, never approved", %{settings: settings} do
+      job = judge_job(enforced(settings), %{issue: issue(%{state: "Human Review"})})
+
+      assert {:ok, %{verdict: "escalate", reasons: [%{rule: "human_action", detail: "the issue waits on a person: the issue is in `Human Review`"} | _rest], target: %{state: "Human Review"}}} =
+               AcceptanceGate.judge(job, run_opts(linear_client: follow_up_client([])))
+    end
+
+    test "a deprecated request label still counts as an open request", %{settings: settings} do
+      legacy = settings |> enforced() |> put_in([Access.key!(:human_actions), Access.key!(:label)], "human-action")
+      job = judge_job(legacy, %{issue: issue(%{labels: ["Human-Action"]})})
+
+      assert {:ok, %{verdict: "escalate", reasons: [%{rule: "human_action", detail: detail} | _rest], target: %{state: "Human Review"}}} =
+               AcceptanceGate.judge(job, run_opts(linear_client: follow_up_client([])))
+
+      assert detail == "the issue waits on a person: the issue is labelled `human-action`, an open action request"
+    end
+
+    test "enforced_target/4 sends an escalation only a person can clear to Human Review, and the others to In Review", %{settings: settings} do
+      enforce = put_in(settings.auto_review.acceptance_gate.mode, "enforce")
+
+      escalate = fn reasons, settings ->
+        AcceptanceGate.enforced_target(issue(), record(%{gate_reasons: reasons}), "escalate", settings)
+      end
+
+      for rule <- ["human_action", "label"] do
+        assert escalate.([%{rule: rule, detail: "x"}], enforce) == %{state: "Human Review", escalated: false}
+      end
+
+      # Reasons read back from the run store have string keys.
+      assert escalate.([%{"rule" => "label", "detail" => "x"}], enforce).state == "Human Review"
+
+      for rule <- ["path", "diff_pattern", "ticket_pattern", "size", "inconclusive"] do
+        assert escalate.([%{rule: rule, detail: "x"}], enforce) == %{state: "In Review", escalated: false}
+      end
+
+      # A rework past its fix attempts stays with the supervisor.
+      past_limit = record(%{qa_fix_attempts: 2, gate_reasons: []})
+      assert AcceptanceGate.enforced_target(issue(), past_limit, "rework", enforce) == %{state: "In Review", escalated: true}
+
+      # With the Human Review state off, it goes to In Review as before.
+      off = put_in(enforce.tracker.human_review_state, nil)
+      assert escalate.([%{rule: "label", detail: "x"}], off).state == "In Review"
     end
 
     test "enforced_target/4 never moves a breakdown parent or a Final verification ticket, and keeps QA's review state", %{settings: settings} do

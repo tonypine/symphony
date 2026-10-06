@@ -5,6 +5,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   import Ecto.Changeset
 
+  require Logger
+
   alias SymphonyElixir.AcceptanceGate
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.ManagedClone
@@ -94,6 +96,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "poller" => ~w(backoff_base_ms max_backoff_ms degraded_threshold),
     "issue_gate" => ~w(enabled provider model pass_threshold clarification_floor max_clarification_rounds on_error),
     "dependency_audit" => ~w(allow_registries allow_git_sources allow_path_sources),
+    # `label` is deprecated (see `normalize_human_actions/1`).
     "human_actions" => ~w(enabled label interval_ms min_update_interval_ms),
     "dashboard" => ~w(enabled host port refresh_ms render_interval_ms snapshot_publish_ms transcript_buffer_size)
   }
@@ -943,6 +946,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
          :ok <- reject_unknown_section_keys(escalate, @acceptance_gate_escalate_keys, path <> ".escalate"),
          {:ok, busy_files} <- section_map(Map.get(escalate, "busy_files"), path <> ".escalate.busy_files"),
          :ok <- reject_unknown_section_keys(busy_files, @acceptance_gate_busy_files_keys, path <> ".escalate.busy_files") do
+      warn_legacy_escalate_label(Map.get(escalate, "labels"), path)
+
       {:ok,
        config
        |> Map.drop(["runtime", "escalate"])
@@ -950,6 +955,19 @@ defmodule SymphonyElixir.Config.SystemSchema do
        |> maybe_put("escalate", escalate)}
     end
   end
+
+  defp warn_legacy_escalate_label(labels, path) when is_list(labels) do
+    legacy = SymphonyElixir.HumanReview.legacy_request_label()
+
+    if Enum.any?(labels, &(is_binary(&1) and String.downcase(String.trim(&1)) == legacy)) do
+      Logger.warning(
+        "symphony.yml `#{path}.escalate.labels` lists the deprecated `#{legacy}` label: an action request now moves its issue " <>
+          "to the Human Review state, which the gate escalates on without the label. Remove `#{legacy}` from the list"
+      )
+    end
+  end
+
+  defp warn_legacy_escalate_label(_labels, _path), do: :ok
 
   # The other agent sections name their runtime `runtime`; say so instead of "unknown key".
   defp reject_acceptance_gate_kind(%{"kind" => _kind}, path, allowed_keys) do
@@ -1031,9 +1049,19 @@ defmodule SymphonyElixir.Config.SystemSchema do
     end
   end
 
+  # `label` is retired: the Human Review state says a person needs to act. A config that still
+  # sets it loads, and an issue carrying the label counts as one with an open request
+  # (`SymphonyElixir.HumanReview.legacy_request_labels/1`).
   defp normalize_human_actions(config) do
     with {:ok, config} <- section_map(config, "human_actions"),
          :ok <- reject_unknown_section_keys(config, section_keys("human_actions"), "human_actions") do
+      if Map.has_key?(config, "label") do
+        Logger.warning(
+          "symphony.yml `human_actions.label` is deprecated and will be removed: an action request now moves its issue " <>
+            "to the Human Review state and adds no label. An issue carrying the label still counts as an open request"
+        )
+      end
+
       {:ok, config}
     end
   end

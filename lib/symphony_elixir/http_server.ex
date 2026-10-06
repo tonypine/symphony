@@ -58,13 +58,16 @@ defmodule SymphonyElixir.HttpServer do
     Application.put_env(:symphony_elixir, Endpoint, endpoint_config)
 
     with {:ok, _pid} = ok <- Endpoint.start_link() do
-      persist_control_url(host)
+      persist_control_url(ip, host)
       _ = ControlToken.current()
       ok
     end
   end
 
-  defp persist_control_url(host) do
+  # A unix socket has no URL for the CLI; its server is reached through a bridge.
+  defp persist_control_url({:local, _path}, _host), do: :ok
+
+  defp persist_control_url(_ip, host) do
     case bound_port() do
       port when is_integer(port) ->
         url = "http://#{discovery_host(host)}:#{port}"
@@ -158,6 +161,10 @@ defmodule SymphonyElixir.HttpServer do
   defp parse_host({_, _, _, _} = ip), do: {:ok, ip}
   defp parse_host({_, _, _, _, _, _, _, _} = ip), do: {:ok, ip}
 
+  # `unix:<path>` listens on a unix socket instead, as the verification dev server does on macOS
+  # (`scripts/qa-dashboard-server.sh`), where Symphony serves it on loopback.
+  defp parse_host("unix:" <> path) when path != "", do: {:ok, {:local, path}}
+
   defp parse_host(host) when is_binary(host) do
     charhost = String.to_charlist(host)
 
@@ -190,11 +197,13 @@ defmodule SymphonyElixir.HttpServer do
     end
   end
 
+  defp loopback?({:local, _path}), do: true
   defp loopback?({127, _, _, _}), do: true
   defp loopback?({0, 0, 0, 0, 0, 0, 0, 1}), do: true
   defp loopback?(_ip), do: false
 
   defp normalize_host(host) when host in ["", nil], do: "127.0.0.1"
+  defp normalize_host("unix:" <> _path), do: "127.0.0.1"
   defp normalize_host(host) when is_binary(host), do: host
   defp normalize_host(host), do: to_string(host)
 
