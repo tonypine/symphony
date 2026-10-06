@@ -14,6 +14,9 @@ defmodule SymphonyElixir.Verification.DevServer do
   @socket_env "SYMPHONY_VERIFICATION_SOCKET"
   @launcher_marker "__SYMPHONY_DEV_SERVER_PGID__"
   @health_poll_interval_ms 250
+  # How many of the dev server's output chunks to keep for the failure log. Enough to show why it
+  # refused to start, bounded so a chatty server can't grow the process's mailbox without limit.
+  @health_output_chunks 200
   @tmp_dir_prefix "symphony-dev-server-"
   @no_proxy "localhost,127.0.0.1,::1"
 
@@ -170,13 +173,14 @@ defmodule SymphonyElixir.Verification.DevServer do
 
         health_url = Verification.interpolate_port(config.health_check_url, port)
 
-        case wait_for_health(health_url, config.health_timeout_ms) do
-          :ok ->
+        case wait_for_health(health_url, config.health_timeout_ms, port_handle) do
+          {:ok, _output} ->
             Logger.info("Verification dev server healthy run_id=#{run_id} port=#{port} url=#{health_url}")
             {:ok, state}
 
-          {:error, reason} ->
+          {:error, reason, output} ->
             Logger.warning("Verification dev server failed health check run_id=#{run_id} port=#{port} url=#{health_url} reason=#{inspect(reason)}")
+            log_dev_server_output(run_id, output)
             reason = health_failure(reason, state)
             stop_process(state)
             release_resources(state)
@@ -424,26 +428,62 @@ defmodule SymphonyElixir.Verification.DevServer do
     end
   end
 
-  defp wait_for_health(url, timeout_ms) do
+  defp wait_for_health(url, timeout_ms, port_handle) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
-    poll_health(url, deadline)
+    poll_health(url, deadline, port_handle, [])
   end
 
-  defp poll_health(url, deadline) do
-    case health_ok?(url) do
-      true ->
-        :ok
-
-      false ->
-        now = System.monotonic_time(:millisecond)
-
-        if now >= deadline do
-          {:error, :health_timeout}
-        else
-          Process.sleep(min(@health_poll_interval_ms, max(1, deadline - now)))
-          poll_health(url, deadline)
-        end
+  defp poll_health(url, deadline, port_handle, output) do
+    if health_ok?(url) do
+      {:ok, output}
+    else
+      poll_unhealthy(url, deadline, port_handle, output)
     end
+  end
+
+  defp poll_unhealthy(url, deadline, port_handle, output) do
+    case drain_output(port_handle, output) do
+      # The dev server exited: it can't come back, so report it now, with what it said, rather than
+      # waiting out the whole health timeout for a socket that will never open.
+      {:exited, status, output} ->
+        {:error, {:dev_server_exit, status}, output}
+
+      {:ok, output} ->
+        wait_before_retry(url, deadline, port_handle, output)
+    end
+  end
+
+  defp wait_before_retry(url, deadline, port_handle, output) do
+    now = System.monotonic_time(:millisecond)
+
+    if now >= deadline do
+      {:error, :health_timeout, output}
+    else
+      Process.sleep(min(@health_poll_interval_ms, max(1, deadline - now)))
+      poll_health(url, deadline, port_handle, output)
+    end
+  end
+
+  # The dev server's own output, which the health check would otherwise never read: a server that
+  # refuses to start leaves only a socket that was never created, and the failure is undiagnosable.
+  # Only the newest @health_output_chunks are kept, so a chatty server can't grow the mailbox.
+  defp drain_output(port_handle, output) do
+    receive do
+      {^port_handle, {:data, chunk}} ->
+        drain_output(port_handle, Enum.take([chunk | output], @health_output_chunks))
+
+      {^port_handle, {:exit_status, status}} ->
+        {:exited, status, output}
+    after
+      0 -> {:ok, output}
+    end
+  end
+
+  defp log_dev_server_output(_run_id, []), do: :ok
+
+  defp log_dev_server_output(run_id, chunks) do
+    output = chunks |> Enum.reverse() |> Enum.map_join("\n", &inspect/1)
+    Logger.warning("Verification dev server output run_id=#{run_id}\n#{output}")
   end
 
   defp health_ok?(url) do

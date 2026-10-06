@@ -192,6 +192,62 @@ defmodule SymphonyElixir.VerificationTest do
              )
   end
 
+  test "dev server logs its own output when its health check times out" do
+    port = free_tcp_port()
+
+    config = %DevServerConfig{
+      start_cmd: ~s{touch "$SYMPHONY_VERIFICATION_SOCKET"; echo dev-server-said-hello; sleep 5},
+      health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/healthz",
+      health_timeout_ms: 1_000,
+      stop_signal: "TERM",
+      stop_timeout_ms: 100
+    }
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:error, {:verification_failed, :health_timeout}} =
+                 DevServer.start(
+                   run_id: "output-run",
+                   port: port,
+                   workspace: System.tmp_dir!(),
+                   config: config,
+                   env: Verification.env(%{port: port}),
+                   owner: self()
+                 )
+      end)
+
+    assert log =~ "Verification dev server output run_id=output-run"
+    assert log =~ "dev-server-said-hello"
+  end
+
+  test "dev server reports an exit during startup with its output, without waiting out the health check" do
+    port = free_tcp_port()
+
+    config = %DevServerConfig{
+      start_cmd: "echo dev-server-crashed; exit 3",
+      health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/healthz",
+      health_timeout_ms: 60_000,
+      stop_signal: "TERM",
+      stop_timeout_ms: 100
+    }
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:error, {:verification_failed, {:dev_server_exit, 3}}} =
+                 DevServer.start(
+                   run_id: "exit-run",
+                   port: port,
+                   workspace: System.tmp_dir!(),
+                   config: config,
+                   env: Verification.env(%{port: port}),
+                   owner: self()
+                 )
+      end)
+
+    assert log =~ "Verification dev server output run_id=exit-run"
+    assert log =~ "dev-server-crashed"
+  end
+
   test "dev server that never listens on its unix socket says so when its health check times out" do
     port = free_tcp_port()
 
