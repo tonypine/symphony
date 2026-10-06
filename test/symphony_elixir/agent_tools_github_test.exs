@@ -193,6 +193,61 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
     end
   end
 
+  test "PR tools refuse to link any issue but the run's own" do
+    workspace = tmp_workspace!("github-agent-pr-links")
+    test_pid = self()
+
+    try do
+      gh_runner = fn args, _opts ->
+        send(test_pid, {:gh, args})
+
+        case args do
+          ["pr", "view" | _rest] -> {Jason.encode!(%{"url" => "https://github.com/acme/symphony/pull/3051"}), 0}
+          _args -> {"https://github.com/acme/symphony/pull/3051\n", 0}
+        end
+      end
+
+      opts = [git_runner: branch_runner(workspace), gh_runner: gh_runner]
+      context = workspace |> scoped_context() |> Map.put(:issue, %Issue{id: "issue-sub", identifier: "TP-586"})
+
+      # Linear links every issue a PR title names, and the issues a body names after a linking word.
+      for {title, body, linked} <- [
+            {"feat: drain the server", "Closes TP-586. Part of TP-381's update design.", ["TP-381"]},
+            {"feat: drain the server (TP-381)", "Closes TP-586.", ["TP-381"]},
+            {"Drain", "Part of [TP-381](https://linear.app/acme/issue/TP-381/design-updates)", ["TP-381"]},
+            {"Drain", "related to: https://linear.app/acme/issue/tp-381/design-updates", ["TP-381"]},
+            {"Drain", "Fixes TP-1, TP-2 and TP-586\nContributes to TP-3", ["TP-1", "TP-2", "TP-3"]}
+          ] do
+        assert {:error, {:pr_links_other_issues, ^linked}} =
+                 GitHub.create_pull_request(context, title, body, false, opts)
+      end
+
+      assert {:error, {:pr_links_other_issues, ["TP-381"]}} =
+               GitHub.update_pull_request_body(context, "Part of TP-381", opts)
+
+      refute_received {:gh, _args}
+
+      # The run's own issue, other teams' keys, and plain mentions without a linking word are fine.
+      allowed_body = "Closes TP-586. See TP-381 for the design. Fixes UTF-8 handling."
+
+      assert {:ok, %{"url" => "https://github.com/acme/symphony/pull/3051"}} =
+               GitHub.create_pull_request(context, "feat: drain the server (TP-586)", allowed_body, false, opts)
+
+      assert {:ok, _result} = GitHub.update_pull_request_body(context, allowed_body, opts)
+
+      # A context without a recognisable identifier has nothing to compare against.
+      for issue <- [%{"identifier" => "TP-586"}, %{identifier: "local"}, nil] do
+        context = Map.put(context, :issue, issue)
+        assert {:ok, _result} = GitHub.create_pull_request(context, "Drain", "Closes TP-586. Part of TP-586.", false, opts)
+      end
+
+      assert {:error, {:pr_links_other_issues, ["TP-381"]}} =
+               GitHub.create_pull_request(Map.put(context, :issue, %{"identifier" => "TP-586"}), "Drain", "Part of TP-381", false, opts)
+    after
+      File.rm_rf(workspace)
+    end
+  end
+
   test "current branch detection rejects empty and detached heads" do
     workspace = tmp_workspace!("github-agent-branch-errors")
 

@@ -35,6 +35,7 @@ defmodule SymphonyElixir.AgentRunner do
     Verification,
     Workpad,
     Workspace,
+    WorkspaceCleanup,
     WorkspaceHead
   }
 
@@ -334,6 +335,9 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp workspace_for_issue(issue, codex_update_recipient, opts, worker_host) do
+    # A removal of this issue's workspace may still be running from when it last ended.
+    WorkspaceCleanup.await(issue.identifier)
+
     case Keyword.get(opts, :workspace_path) do
       workspace when is_binary(workspace) and workspace != "" ->
         with :ok <- Workspace.validate(workspace, worker_host) do
@@ -408,16 +412,20 @@ defmodule SymphonyElixir.AgentRunner do
   # this, the next dispatch builds a fresh `auto/TP-218` worktree and the scoped
   # GitHub tools, which resolve the PR from the workspace's current branch, no
   # longer see the PR opened on `auto/TON-218`. When the attached PR is still
-  # open, same-repo, and its head differs from the default branch, keep working
-  # on that head. Lookup failures fall back to the default branch.
-  defp renamed_issue_pr_head_ref(%Issue{identifier: identifier, pr_urls: [pr_url | _rest]}, opts)
+  # open, same-repo, and its head is this issue's branch under the old key, keep
+  # working on that head. Lookup failures fall back to the default branch.
+  #
+  # Any other head is ignored: Linear links a PR to every issue its body names after
+  # a word such as "Part of", so a parent can carry its sub-ticket's PR, and taking
+  # that head would put the parent's run on the sub-ticket's branch.
+  defp renamed_issue_pr_head_ref(%Issue{identifier: identifier, pr_urls: [pr_url | _rest]} = issue, opts)
        when is_binary(identifier) and is_binary(pr_url) do
     github = Keyword.get(opts, :github, PullRequest)
 
     case github.fetch_ci_status(pr_url, []) do
       {:ok, %{state: "OPEN", is_cross_repository: false, head_ref_name: head_ref}}
       when is_binary(head_ref) and head_ref != "" ->
-        if head_ref != "auto/" <> identifier, do: head_ref
+        renamed_own_head_ref(issue, pr_url, head_ref)
 
       _status ->
         nil
@@ -425,6 +433,37 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp renamed_issue_pr_head_ref(_issue, _opts), do: nil
+
+  defp renamed_own_head_ref(%Issue{identifier: identifier} = issue, pr_url, head_ref) do
+    cond do
+      head_ref == "auto/" <> identifier ->
+        nil
+
+      renamed_issue_branch?(identifier, head_ref) ->
+        head_ref
+
+      true ->
+        Logger.warning("Ignoring attached PR on another issue's branch #{issue_context(issue)} pr_url=#{pr_url} head_ref=#{head_ref}")
+        nil
+    end
+  end
+
+  # The same issue number under another team key: `auto/TON-218` for `TP-218`.
+  defp renamed_issue_branch?(identifier, "auto/" <> branch_identifier) do
+    case {issue_number(identifier), issue_number(branch_identifier)} do
+      {number, number} when is_binary(number) -> true
+      _numbers -> false
+    end
+  end
+
+  defp renamed_issue_branch?(_identifier, _head_ref), do: false
+
+  defp issue_number(identifier) do
+    case Regex.run(~r/\A[A-Za-z][A-Za-z0-9]*-(\d+)\z/, identifier) do
+      [_identifier, number] -> number
+      nil -> nil
+    end
+  end
 
   # Reuse an already-resolved conflict snapshot when the caller supplied one
   # (same precedence as put_pr_conflict/2), otherwise look it up in the store.

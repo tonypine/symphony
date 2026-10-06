@@ -20,6 +20,13 @@ defmodule SymphonyElixir.AgentTools.GitHub do
   @failed_conclusions MapSet.new(["ACTION_REQUIRED", "CANCELLED", "FAILURE", "STARTUP_FAILURE", "TIMED_OUT"])
   @max_git_output_bytes 4_096
   @merge_config ["-c", "rerere.enabled=true", "-c", "rerere.autoupdate=true", "-c", "merge.conflictstyle=zdiff3"]
+  # The words after which Linear's GitHub integration links the issues a PR body names.
+  @linking_words Enum.join(
+                   ~w(close closes closed closing fix fixes fixed fixing resolve resolves resolved resolving) ++
+                     ~w(complete completes completed completing ref refs references toward towards) ++
+                     ["part\\s+of", "related\\s+to", "contributes\\s+to"],
+                   "|"
+                 )
 
   @type context :: %{
           optional(:issue) => map() | nil,
@@ -84,6 +91,7 @@ defmodule SymphonyElixir.AgentTools.GitHub do
              "github_create_pull_request",
              opts
            ),
+         :ok <- reject_other_issue_links(context, title: title, body: body),
          {:ok, draft?} <- resolve_draft(draft, opts),
          {:ok, origin_repo} <- origin_repo(context),
          {:ok, branch} <- current_branch(context, opts),
@@ -101,6 +109,7 @@ defmodule SymphonyElixir.AgentTools.GitHub do
   def update_pull_request_body(context, body, opts \\ []) do
     with {:ok, body} <- require_string(body, :invalid_body),
          :ok <- SecretScanner.reject_fields_if_secret_pattern([body: body], context, "github_update_pull_request_body", opts),
+         :ok <- reject_other_issue_links(context, body: body),
          {:ok, pr_url} <- current_pull_request_url(context, opts),
          {:ok, _output} <- PullRequest.run_gh(["pr", "edit", pr_url, "--body", body], github_opts(context, opts)) do
       {:ok, %{"url" => pr_url}}
@@ -570,6 +579,57 @@ defmodule SymphonyElixir.AgentTools.GitHub do
       "" -> nil
       present -> present
     end
+  end
+
+  # Linear links a PR to every issue its title names, or its body names after a linking
+  # word ("Closes", "Part of", ...), and its PR automation then moves that issue with the
+  # PR: a sub-ticket's PR saying "Part of <parent>" lands on the parent and moves it out of
+  # `Waiting on sub-tickets`. So a PR may link only the run's own issue. Issues of its team
+  # named any other way ("See TP-1") stay plain mentions.
+  defp reject_other_issue_links(context, fields) do
+    case own_issue_identifier(context) do
+      {:ok, team_key, own} ->
+        case Enum.flat_map(fields, &linked_issue_identifiers(&1, team_key)) |> Enum.uniq() |> List.delete(own) do
+          [] -> :ok
+          others -> {:error, {:pr_links_other_issues, others}}
+        end
+
+      :error ->
+        :ok
+    end
+  end
+
+  defp own_issue_identifier(context) do
+    identifier =
+      case Map.get(context, :issue) do
+        %{identifier: identifier} -> identifier
+        %{"identifier" => identifier} -> identifier
+        _issue -> nil
+      end
+
+    with true <- is_binary(identifier),
+         [_identifier, team_key] <- Regex.run(~r/\A([A-Za-z][A-Za-z0-9]*)-\d+\z/, identifier) do
+      {:ok, team_key, String.upcase(identifier)}
+    else
+      _missing -> :error
+    end
+  end
+
+  defp linked_issue_identifiers({:title, title}, team_key), do: issue_identifiers(title, team_key)
+
+  defp linked_issue_identifiers({:body, body}, team_key) do
+    reference = "\\[?(?:https?://linear\\.app/[^/\\s]+/issue/)?#{Regex.escape(team_key)}-\\d+[^\\s,]*"
+    linking = Regex.compile!("\\b(?:#{@linking_words})[\\s:]+(#{reference}(?:\\s*(?:,|&|\\band\\b)\\s*#{reference})*)", "i")
+
+    linking
+    |> Regex.scan(body, capture: :all_but_first)
+    |> Enum.flat_map(fn [references] -> issue_identifiers(references, team_key) end)
+  end
+
+  defp issue_identifiers(text, team_key) do
+    ~r/\b#{Regex.escape(team_key)}-\d+\b/i
+    |> Regex.scan(text)
+    |> Enum.map(fn [identifier] -> String.upcase(identifier) end)
   end
 
   defp require_string(value, _reason) when is_binary(value), do: {:ok, value}

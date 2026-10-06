@@ -1272,6 +1272,68 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
              Jason.decode!(response["output"])
   end
 
+  test "a sub-ticket run cannot attach a PR to its parent or move the parent" do
+    test_pid = self()
+
+    client = fn query, variables, _opts ->
+      send(test_pid, {:linear_client_called, query, variables})
+      {:ok, %{"data" => %{"attachmentLinkURL" => %{"success" => true, "attachment" => %{"id" => "a1"}}}}}
+    end
+
+    opts = [issue: %Issue{id: "issue-sub", identifier: "TP-586"}, linear_client: client]
+    pr_url = "https://github.com/acme/hub/pull/83"
+
+    for {tool, args} <- [
+          {"linear_attach_url", %{"url" => pr_url, "issueId" => "issue-parent"}},
+          {"linear_attach_url", %{"url" => pr_url, "issue_id" => "issue-parent"}},
+          {"linear_update_state", %{"state_name_or_id" => "In Progress", "id" => "issue-parent"}}
+        ] do
+      response = DynamicTool.execute(tool, args, opts)
+
+      assert response["success"] == false
+      assert %{"error" => %{"code" => "scope_argument_rejected"}} = Jason.decode!(response["output"])
+    end
+
+    refute_received {:linear_client_called, _query, _variables}
+
+    # Without an issue argument the attachment goes on the run's own issue.
+    assert DynamicTool.execute("linear_attach_url", %{"url" => pr_url}, opts)["success"] == true
+    assert_received {:linear_client_called, _query, %{issueId: "issue-sub", url: ^pr_url}}
+  end
+
+  test "github PR tools refuse a title or body that links another issue" do
+    workspace = tmp_workspace!("github-pr-links-other-issue")
+
+    try do
+      gh_runner = fn _args, _opts -> flunk("gh should not run for a PR linking another issue") end
+      git_runner = fn _args, _opts -> flunk("git should not run for a PR linking another issue") end
+      issue = %Issue{id: "issue-sub", identifier: "TP-586"}
+      opts = github_tool_opts(workspace, gh_runner: gh_runner, git_runner: git_runner, issue: issue)
+
+      response =
+        DynamicTool.execute(
+          "github_create_pull_request",
+          %{"title" => "feat: drain the server", "body" => "Closes TP-586. Part of TP-381's update design."},
+          opts
+        )
+
+      assert response["success"] == false
+
+      assert %{"error" => %{"code" => "pr_links_other_issues", "issues" => ["TP-381"], "message" => message}} =
+               Jason.decode!(response["output"])
+
+      assert message =~ "Part of"
+      assert message =~ "`See TP-381`"
+
+      response = DynamicTool.execute("github_update_pull_request_body", %{"body" => "Fixes TP-1, TP-2 and TP-586"}, opts)
+
+      assert %{"error" => %{"code" => "pr_links_other_issues", "issues" => ["TP-1", "TP-2"]}} =
+               Jason.decode!(response["output"])
+    after
+      File.rm_rf(workspace)
+    end
+  end
+
   test "add_comment records ownership and update_comment allows owned comments" do
     {:ok, registry} = CommentRegistry.start_link()
     test_pid = self()

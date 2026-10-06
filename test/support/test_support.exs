@@ -26,6 +26,7 @@ defmodule SymphonyElixir.TestSupport do
       alias SymphonyElixir.Workflow
       alias SymphonyElixir.WorkflowStore
       alias SymphonyElixir.Workspace
+      alias SymphonyElixir.WorkspaceCleanup
 
       import SymphonyElixir.TestSupport,
         only: [
