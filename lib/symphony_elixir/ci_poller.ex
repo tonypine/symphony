@@ -13,6 +13,7 @@ defmodule SymphonyElixir.CiPoller do
 
   alias SymphonyElixir.AcceptanceGate.Agreement
   alias SymphonyElixir.{AuditLog, AutoMerge, AutoReview, Config, Notifications, Orchestrator, RunStore, Tracker}
+  alias SymphonyElixir.AutoReview.HoldNote
   alias SymphonyElixir.GitHub.{PullRequest, Webhook}
   alias SymphonyElixir.HumanReview
   alias SymphonyElixir.Linear.{Issue, Usage}
@@ -658,7 +659,7 @@ defmodule SymphonyElixir.CiPoller do
 
     case ci_action(ci_status) do
       :closed ->
-        cleanup_ci(record, opts, now, "closed")
+        cleanup_ci(record, settings, opts, now, "closed")
 
       :success ->
         mark_ci_green(record, ci_status, settings, opts, now)
@@ -1204,10 +1205,11 @@ defmodule SymphonyElixir.CiPoller do
     end
   end
 
-  defp cleanup_ci(record, opts, now, reason) do
+  defp cleanup_ci(record, settings, opts, now, reason) do
     run_store = Keyword.get(opts, :run_store, RunStore)
     repo_key = Map.get(record, :repo_key) || repo_key_from_opts(opts)
     issue_id = Map.get(record, :issue_id)
+    withdraw_qa_hold_note(record, settings, opts)
 
     case delete_ci_check(run_store, repo_key, issue_id) do
       :ok ->
@@ -1218,6 +1220,19 @@ defmodule SymphonyElixir.CiPoller do
         complete_ci_update(opts, record, attrs, {:cleanup_error, issue_id, delete_reason})
     end
   end
+
+  # A PR closed or merged while its QA pass was held gets no pass to delete the hold note, so it
+  # goes with the record. One that can't be deleted is logged; the record goes all the same.
+  defp withdraw_qa_hold_note(%{qa_hold_note: true} = record, settings, opts) do
+    issue = %Issue{id: Map.get(record, :issue_id), identifier: Map.get(record, :issue_identifier)}
+
+    case HoldNote.withdraw(issue, [settings: settings] ++ Keyword.take(opts, [:linear_client])) do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("Failed to remove the QA hold note for #{issue.identifier} after its PR closed: #{inspect(reason)}")
+    end
+  end
+
+  defp withdraw_qa_hold_note(_record, _settings, _opts), do: :ok
 
   defp failed_log_excerpt(record, failed_checks, settings, opts) do
     github = Keyword.get(opts, :github, PullRequest)
