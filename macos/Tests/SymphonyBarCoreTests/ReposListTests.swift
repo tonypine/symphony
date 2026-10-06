@@ -441,7 +441,10 @@ final class ReposListTests: XCTestCase {
         try "repositories: [{key: a}]\n".write(to: file, atomically: false, encoding: .utf8)
         let unreadable = ReposConfig.read(path: file.path)
         guard case let .unreadable(message) = unreadable.repos else { return XCTFail("\(unreadable.repos)") }
-        XCTAssertEqual(unreadable.entries, .failure(AddRepoProblem("Couldn't read the repos in \(file.path): \(message)")))
+        XCTAssertEqual(unreadable.shownPath, (file.path as NSString).abbreviatingWithTildeInPath)
+        XCTAssertEqual(
+            unreadable.entries, .failure(AddRepoProblem("Couldn't read the repos in \(unreadable.shownPath): \(message)"))
+        )
         XCTAssertEqual(unreadable.globalGate, .off)
 
         let missing = ReposConfig.read(path: root.appendingPathComponent("missing.yml").path)
