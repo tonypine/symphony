@@ -164,8 +164,11 @@ issues:
   - **Revise:** a person's comment on a parent in `In Review` whose plan is not approved moves it
     to `In Progress`, and the `breakdown` run edits the plan in place: it rewrites the artifact
     comments, updates, files or cancels `Backlog` sub-tickets (`linear_update_subissue` refuses
-    any other), replies under each comment and moves the parent back to `In Review`. Symphony's
-    own comments and integration bots' comments start nothing. A comment made while the run works
+    any other), replies under each comment and moves the parent back to `In Review`. Only
+    `In Review` triggers it: a comment on a parent in `Human Review` starts nothing (move it to
+    `Rework` or back to `In Review` instead). Symphony's own comments, a supervisor's notes
+    (starting `Supervisor review:` or `Supervisor note:`) and integration bots' comments start
+    nothing. A comment made while the run works
     is picked up once the parent is back in `In Review`, unless the run answered it. A comment on
     an approved plan changes nothing: under a new top-level comment Symphony replies once that, if
     it asks for a plan change, `Rework` re-plans it.
