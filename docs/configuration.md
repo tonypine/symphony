@@ -562,7 +562,12 @@ agent:
     `` agent.run_profiles.landing.model: OpenRouter has no model `acme/typo` ``;
   - an error for a model without `tools`, for example
     `` agent.run_profiles.landing.model: OpenRouter model `acme/chat-only` does not support tools ``;
-  - a warning when `effort` is set for a model that does not list `reasoning`.
+  - a warning when `effort` is set for a model that does not list `reasoning`. When the effort
+    comes from a key above the one that picked the model (for example
+    `repositories[api].agent.run_profiles.breakdown: { provider: openrouter, model: acme/tools-only }`
+    under `agent.run_profiles.breakdown.effort: xhigh`), the warning names the model key and the
+    key the effort is inherited from:
+    `` repositories[api].agent.run_profiles.breakdown.model: OpenRouter model `acme/tools-only` does not support reasoning; its runs start without --effort xhigh, inherited from agent.run_profiles.breakdown.effort ``.
 
   When a run's model is inherited from a key above the one that picked `openrouter` (for example
   `repositories[api].agent.run_profiles.landing: { provider: openrouter }` with only `agent.model`

@@ -413,7 +413,39 @@ defmodule SymphonyElixir.CLICheckTest do
 
       assert check(["--config", path]) ==
                {{:error, "Config error in #{path}: repositories[app].agent.run_profiles.landing.model: OpenRouter model `acme/chat-only` does not support tools; Symphony runs need tool use"},
-                "Warning: repositories[app].agent.effort: OpenRouter model `acme/tools-only` does not support reasoning; its runs start without --effort high\n"}
+                "Warning: repositories[app].agent.run_profiles.ci_fix.model: OpenRouter model `acme/tools-only` does not support reasoning; " <>
+                  "its runs start without --effort high, inherited from repositories[app].agent.effort\n"}
+    end
+
+    test "names the repository run profile that picked the model when its effort is inherited", %{root: root} do
+      System.put_env("OPENROUTER_API_KEY", "sk-or-v1-check-secret")
+      stub_models_api()
+
+      content =
+        String.replace(valid_symphony(root), "  runtime: codex\n  command: codex app-server\n", """
+          runtime: claude
+          command: claude
+          model: acme/tools-only
+          run_profiles:
+            breakdown: { model: claude-opus-5-5, effort: xhigh }
+            landing: { effort: high }
+        """) <>
+          """
+              agent:
+                run_profiles:
+                  breakdown: { provider: openrouter, model: acme/tools-only }
+                  landing: { provider: openrouter }
+          """
+
+      path = write_symphony!(root, content)
+
+      assert check(["--config", path]) ==
+               {{:halt, 0},
+                """
+                Config OK: #{path}
+                Warning: repositories[app].agent.run_profiles.breakdown.model: OpenRouter model `acme/tools-only` does not support reasoning; its runs start without --effort xhigh, inherited from agent.run_profiles.breakdown.effort
+                Warning: repositories[app].agent.run_profiles.landing.provider: OpenRouter model `acme/tools-only` does not support reasoning; its runs start without --effort high, inherited from agent.run_profiles.landing.effort
+                """}
     end
 
     test "names the repository run profile that picked openrouter when its model is inherited", %{root: root} do
@@ -488,7 +520,8 @@ defmodule SymphonyElixir.CLICheckTest do
 
       assert check(["--config", path]) ==
                {{:error, "Config error in #{path}: agent.run_profiles.landing.model: OpenRouter model `symphony-qa/no-tools` does not support tools; Symphony runs need tool use"},
-                "Warning: agent.effort: OpenRouter model `symphony-qa/tools-only` does not support reasoning; its runs start without --effort high\n"}
+                "Warning: agent.run_profiles.ci_fix.model: OpenRouter model `symphony-qa/tools-only` does not support reasoning; " <>
+                  "its runs start without --effort high, inherited from agent.effort\n"}
     end
 
     test "only warns when the models API cannot be reached", %{root: root} do
