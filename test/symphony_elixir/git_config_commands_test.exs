@@ -69,6 +69,9 @@ defmodule SymphonyElixir.GitConfigCommandsTest do
 
     assert GitConfigCommands.subcommand_args(["log", "-p"]) == ["log" | no_diff_drivers] ++ ["-p"]
     assert GitConfigCommands.subcommand_args(["show", "HEAD"]) == ["show" | no_diff_drivers] ++ ["HEAD"]
+    assert GitConfigCommands.subcommand_args(["whatchanged", "-p"]) == ["whatchanged" | no_diff_drivers] ++ ["-p"]
+    assert GitConfigCommands.subcommand_args(["blame", "f"]) == ["blame" | no_diff_drivers] ++ ["f"]
+    assert GitConfigCommands.subcommand_args(["format-patch", "-1"]) == ["format-patch" | no_diff_drivers] ++ ["-1"]
     assert GitConfigCommands.subcommand_args(["fetch", "origin"]) == ["fetch", "--upload-pack=git-upload-pack", "origin"]
     assert GitConfigCommands.subcommand_args(["ls-remote", "origin"]) == ["ls-remote", "--upload-pack=git-upload-pack", "origin"]
     assert GitConfigCommands.subcommand_args(["pull"]) == ["pull", "--upload-pack=git-upload-pack"]
@@ -95,6 +98,12 @@ defmodule SymphonyElixir.GitConfigCommandsTest do
       assert GitConfigCommands.config_args(args, [], reader({"", 128, ""})) == {:ok, []}
     end
 
+    refute_received {:git, _args, _opts}
+  end
+
+  test "refuses range-diff, whose textconv drivers no option turns off" do
+    assert {:error, message, 128} = GitConfigCommands.config_args(["-C", "/repo", "range-diff", "a..b", "c..d"], [], reader({"", 1, ""}))
+    assert message == "symphony: refusing to run git, range-diff runs the repo's textconv drivers in a git log no option reaches\n"
     refute_received {:git, _args, _opts}
   end
 
@@ -248,6 +257,9 @@ defmodule SymphonyElixir.GitConfigCommandsTest do
 
       # Subcommands that touch no work-tree file skip the scan.
       assert {_output, 0} = run_shell(~s(symphony_git "$repo" rev-parse HEAD), repo)
+
+      assert {output, 128} = run_shell(~s(symphony_git "$repo" range-diff HEAD HEAD HEAD 2>&1), repo)
+      assert output == "symphony: refusing to run git, range-diff runs the repo's textconv drivers in a git log no option reaches\n"
       refute File.exists?(proof)
     end
 

@@ -55,7 +55,7 @@ defmodule Mix.Tasks.ProtectedPaths.Check do
   end
 
   defp run_git(args, repo) do
-    case System.cmd("git", args, cd: repo, stderr_to_stdout: true) do
+    case System.cmd("git", SymphonyElixir.GitConfigCommands.subcommand_args(args), cd: repo, stderr_to_stdout: true) do
       {output, 0} -> {:ok, output}
       {output, status} -> {:error, {:git_failed, args, status, output}}
     end
