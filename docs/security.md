@@ -221,6 +221,10 @@ the command runs on. Every host-side git call:
 
 - reads no global or system config (`GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` are `/dev/null`)
   and runs no hook, file-system monitor or credential helper, nor an `ext::` or `git://` remote;
+- runs no `core.askPass` when an HTTPS remote asks for credentials git doesn't have
+  (`-c core.askPass=`), and doesn't prompt on a terminal either (`GIT_TERMINAL_PROMPT=0`), so the
+  call fails instead. The empty `core.askPass` also turns off git's `SSH_ASKPASS` fallback; an
+  askpass the operator sets in `GIT_ASKPASS` still runs, since git reads it before the config;
 - still reads the repo's local config, which holds the remotes and branches Symphony works with.
   Before a command that can read or write work-tree files (anything but `rev-parse`, `fetch`,
   `log`, `show` and a few other read-only commands), Symphony lists the filter drivers
@@ -253,7 +257,6 @@ Host-side git still honors these keys of the repo's local config that can lead i
 - `remote.<name>.url`, `.pushurl`, `.vcs` and `url.<base>.insteadOf` (or `.pushInsteadOf`) can
   point a fetch or push at another repo. A `<helper>::<address>` URL runs `git-remote-<helper>`,
   which git looks up in its own folder and on `PATH`, not in the repo.
-- `core.askPass` runs when an HTTPS fetch or push needs credentials git doesn't have.
 - `gpg.program` (and `gpg.<format>.program`, `gpg.ssh.defaultKeyCommand`) runs only when git signs
   or checks a signature, which host-side git doesn't do (see above).
 - `core.editor`, `sequence.editor`, `core.pager` and `pager.<command>` run only when git talks to a

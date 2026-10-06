@@ -23,6 +23,11 @@ defmodule SymphonyElixir.Workspace do
   # The last five keep git from running a command the config names: a fetch lists no refs of the
   # repo's alternate object stores (`core.alternateRefsCommand`), no `git://` remote goes through
   # `core.gitProxy`, and nothing checks or makes a signature with `gpg.program`.
+  # `core.askPass=` keeps an HTTPS remote that asks for credentials from running the config's
+  # command. The empty value also skips git's `SSH_ASKPASS` fallback, a desktop prompt an
+  # unattended fetch shouldn't raise; the operator's own `GIT_ASKPASS` still wins over it. With no
+  # askpass left, `GIT_TERMINAL_PROMPT=0` fails the call instead of asking on the operator's
+  # terminal.
   # `core.sshCommand`: an SSH connection that stops answering is dropped after a minute instead
   # of holding the git call (and the repo's fetch lock) forever.
   @safe_git_config_overrides [
@@ -30,6 +35,7 @@ defmodule SymphonyElixir.Workspace do
     "core.fsmonitor=",
     "core.hooksPath=",
     "credential.helper=",
+    "core.askPass=",
     "diff.ignoreSubmodules=dirty",
     "protocol.ext.allow=never",
     "protocol.file.allow=user",
@@ -47,7 +53,8 @@ defmodule SymphonyElixir.Workspace do
   @safe_git_env [
     {"GIT_CONFIG_GLOBAL", "/dev/null"},
     {"GIT_CONFIG_SYSTEM", "/dev/null"},
-    {"GIT_OPTIONAL_LOCKS", "0"}
+    {"GIT_OPTIONAL_LOCKS", "0"},
+    {"GIT_TERMINAL_PROMPT", "0"}
   ]
   @safe_git_env_keys Enum.map(@safe_git_env, &elem(&1, 0))
   # The git subcommands that talk to a remote, and the wall-clock limit each call of one gets.
