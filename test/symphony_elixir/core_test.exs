@@ -2048,6 +2048,28 @@ defmodule SymphonyElixir.CoreTest do
     assert released.watching == %{}
   end
 
+  test "a held landing issue is dispatched once every check its base branch requires passed" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_active_states: ["Todo", "In Progress", "Merging", "Rework"],
+      tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
+    )
+
+    issue_id = "issue-merging-ci-required"
+    issue = %Issue{id: issue_id, identifier: "MT-236", title: "Land after CI", state: "Merging", repo_key: "api"}
+    state = merging_ci_hold_state(issue_id, "sha-head", DateTime.utc_now())
+
+    # A check the branch doesn't require still runs; an older head was ready to land.
+    put_observed_head!(issue_id, "sha-head", "IN_PROGRESS", "sha-older")
+    assert held_after_release?(state, issue)
+
+    put_observed_head!(issue_id, "sha-head", "IN_PROGRESS", "sha-head")
+    released = Orchestrator.release_merging_ci_waits_for_test(state, [issue])
+
+    assert released.merging_ci_waits == %{}
+    assert Orchestrator.should_dispatch_issue_for_test(issue, released)
+  end
+
   test "a held landing issue with a red head goes through the CI-failure path, not a landing dispatch" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
@@ -2121,14 +2143,15 @@ defmodule SymphonyElixir.CoreTest do
     Map.has_key?(released.merging_ci_waits, issue.id) and not Orchestrator.should_dispatch_issue_for_test(issue, released)
   end
 
-  defp put_observed_head!(issue_id, commit_sha, conclusion) do
+  defp put_observed_head!(issue_id, commit_sha, conclusion, landing_ready_sha \\ nil) do
     :ok =
       RunStore.put_ci_check(%{
         repo_key: "api",
         issue_id: issue_id,
         status: "watching",
         last_observed_sha: commit_sha,
-        last_observed_conclusion: conclusion
+        last_observed_conclusion: conclusion,
+        landing_ready_sha: landing_ready_sha
       })
 
     on_exit(fn -> RunStore.delete_ci_check("api", issue_id) end)
@@ -4897,7 +4920,7 @@ defmodule SymphonyElixir.CoreTest do
     pending = {:ok, %{commit_sha: "sha-pending", checks: [%{name: "make-all", status: "IN_PROGRESS", conclusion: nil}]}}
 
     assert run_merging_landing_turns(pending) == 1
-    assert_received {:merging_ci_status_fetched, ^pr_url, [cwd: _workspace]}
+    assert_received {:merging_ci_status_fetched, ^pr_url, [cwd: _workspace, required_checks: true]}
     assert_received {:merging_ci_wait, "issue-merging-continue", %{commit_sha: "sha-pending", pr_url: ^pr_url}}
   end
 
@@ -4909,6 +4932,20 @@ defmodule SymphonyElixir.CoreTest do
 
     assert run_merging_landing_turns({:error, :gh_unavailable}) == 2
     refute_received {:merging_ci_wait, _issue_id, _wait}
+  end
+
+  test "agent runner keeps a landing run going once every check the base branch requires passed" do
+    checks = [
+      %{name: "make-all", status: "COMPLETED", conclusion: "SUCCESS"},
+      %{name: "deploy preview", status: "QUEUED", conclusion: nil}
+    ]
+
+    assert run_merging_landing_turns({:ok, %{commit_sha: "sha-ready", checks: checks, required_checks: ["make-all"]}}) == 2
+    refute_received {:merging_ci_wait, _issue_id, _wait}
+
+    # Without required checks, the queued check holds it.
+    assert run_merging_landing_turns({:ok, %{commit_sha: "sha-ready", checks: checks, required_checks: []}}) == 1
+    assert_received {:merging_ci_wait, "issue-merging-continue", %{commit_sha: "sha-ready"}}
   end
 
   defp run_merging_landing_turns(ci_status_result) do

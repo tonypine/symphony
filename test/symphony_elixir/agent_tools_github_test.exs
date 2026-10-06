@@ -1666,6 +1666,63 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
     end
   end
 
+  test "merge_pull_request lands once every check the base branch requires passed" do
+    workspace = tmp_workspace!("github-agent-merge-required")
+
+    try do
+      pr_url = "https://github.com/acme/symphony/pull/3051"
+      rules_endpoint = "repos/acme/symphony/rules/branches/main?per_page=100"
+      branch_endpoint = "repos/acme/symphony/branches/main"
+
+      rollup = [
+        %{"name" => "make all", "status" => "COMPLETED", "conclusion" => "SUCCESS"},
+        %{"name" => "deploy preview", "status" => "QUEUED", "conclusion" => nil}
+      ]
+
+      merge_with = fn required_reads, on_merge ->
+        pr_runner = merge_gh_runner(pr_url, "OPEN", rollup, on_merge)
+
+        gh_runner = fn
+          ["pr", "view", ^pr_url, "--json", _fields] = args, opts ->
+            {output, 0} = pr_runner.(args, opts)
+            {output |> Jason.decode!() |> Map.put("baseRefName", "main") |> Jason.encode!(), 0}
+
+          ["api", endpoint], _opts ->
+            Map.fetch!(required_reads, endpoint)
+
+          args, opts ->
+            pr_runner.(args, opts)
+        end
+
+        GitHub.merge_pull_request(merge_context(workspace),
+          git_runner: branch_runner(workspace),
+          gh_runner: gh_runner,
+          linear_client: issue_state_client("Merging")
+        )
+      end
+
+      ruleset = Jason.encode!([%{"type" => "required_status_checks", "parameters" => %{"required_status_checks" => [%{"context" => "make all"}]}}])
+      unprotected = Jason.encode!(%{"name" => "main", "protection" => %{"enabled" => false}})
+      refuse_merge = fn args -> flunk("merge must not run: #{inspect(args)}") end
+
+      # `make all` is the only required check: the queued preview doesn't hold the merge.
+      required = %{rules_endpoint => {ruleset, 0}, branch_endpoint => {unprotected, 0}}
+      assert {:ok, %{"merged" => true, "head_sha" => "abc123"}} = merge_with.(required, fn _args -> :ok end)
+
+      # No required checks configured: every check must finish.
+      none = %{rules_endpoint => {"[]", 0}, branch_endpoint => {unprotected, 0}}
+      assert {:error, {:checks_not_passing, :pending}} = merge_with.(none, refuse_merge)
+
+      # The required checks can't be read: every check must finish.
+      capture_log(fn ->
+        failed = %{rules_endpoint => {"HTTP 403: Resource not accessible by integration", 1}}
+        assert {:error, {:checks_not_passing, :pending}} = merge_with.(failed, refuse_merge)
+      end)
+    after
+      File.rm_rf(workspace)
+    end
+  end
+
   test "merge_pull_request needs the head commit to pin the merge" do
     workspace = tmp_workspace!("github-agent-merge-head")
 
