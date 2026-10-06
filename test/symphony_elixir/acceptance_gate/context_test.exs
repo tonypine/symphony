@@ -2,6 +2,7 @@ defmodule SymphonyElixir.AcceptanceGate.ContextTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.AcceptanceGate.{Context, OpenPrCache}
+  alias SymphonyElixir.Repo.Fetcher
 
   @repo_url "https://github.com/org/app"
 
@@ -349,6 +350,51 @@ defmodule SymphonyElixir.AcceptanceGate.ContextTest do
     end
   end
 
+  test "the worktree add waits while another holder has the repo's lock", ctx do
+    fixture = fixture!(ctx.root)
+    gated = branch!(fixture.author, "pr-1", "main", %{"lib/new.ex" => "# new\n"})
+    ctx = Map.merge(ctx, fixture)
+    {:ok, key} = SymphonyElixir.PathSafety.canonicalize(Path.join(fixture.workspace, ".git"))
+    test_pid = self()
+
+    # The build stops in its first locked call, the remove before the add, so another holder
+    # can queue for the lock ahead of the add.
+    git = fn args, cwd ->
+      send(test_pid, {:git, args})
+
+      if match?(["worktree", "remove" | _rest], args) and not Process.get(:paused?, false) do
+        Process.put(:paused?, true)
+        send(test_pid, {:removing, self()})
+        assert_receive :go, 10_000
+      end
+
+      Workspace.safe_git(["-C", cwd | args], stderr_to_stdout: true)
+    end
+
+    builder = Task.async(fn -> build(ctx, gated, git: git) end)
+    assert_receive {:removing, builder_pid}, 10_000
+
+    holder =
+      Task.async(fn ->
+        Fetcher.with_lock(fixture.workspace, fn ->
+          send(test_pid, :locked)
+          assert_receive :release, 10_000
+        end)
+      end)
+
+    wait_for_fetcher(&match?(%{^key => {{:lock, _ref}, [{:lock, _from}]}}, &1))
+    send(builder_pid, :go)
+    assert_receive :locked, 10_000
+    wait_for_fetcher(&match?(%{^key => {{:lock, _ref}, [{:lock, _from}]}}, &1))
+
+    refute_received {:git, ["worktree", "add" | _rest]}
+
+    send(holder.pid, :release)
+    assert Task.await(holder, 10_000) == :release
+    assert {:ok, _context} = Task.await(builder, 10_000)
+    assert_received {:git, ["worktree", "add", "--detach" | _rest]}
+  end
+
   test "reports a missing workspace, base branch or PR head, and a failed merge", ctx do
     fixture = fixture!(ctx.root)
     gated = branch!(fixture.author, "pr-1", "main", %{"lib/new.ex" => "# new\n"})
@@ -384,6 +430,17 @@ defmodule SymphonyElixir.AcceptanceGate.ContextTest do
   defp build(ctx, sha, opts \\ []) do
     opts = Keyword.merge([run_store: FakeRunStore, tracker: FakeTracker, github: FakeGitHub, cache: :acceptance_gate_context_test_no_cache], opts)
     Context.build(issue(), ctx.record, sha, ctx.settings, opts)
+  end
+
+  defp wait_for_fetcher(matches, attempts \\ 500) do
+    cond do
+      matches.(:sys.get_state(Fetcher)) ->
+        :ok
+
+      attempts > 0 ->
+        Process.sleep(10)
+        wait_for_fetcher(matches, attempts - 1)
+    end
   end
 
   defp issue, do: %Issue{id: "issue-1", identifier: "TP-1", title: "Gate me", state: "Auto Review"}
