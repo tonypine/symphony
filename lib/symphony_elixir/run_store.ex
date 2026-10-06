@@ -7,6 +7,7 @@ defmodule SymphonyElixir.RunStore do
   require Logger
 
   alias SymphonyElixir.{Config, Paths}
+  alias SymphonyElixir.RunStore.RunIndex
 
   @runs_table :symphony_run_store_runs
   @retry_table :symphony_run_store_retries
@@ -71,11 +72,13 @@ defmodule SymphonyElixir.RunStore do
   def put_run(%{repo_key: repo_key, run_id: run_id} = record) when is_binary(run_id) do
     with {:ok, repo_key} <- normalize_repo_key(repo_key),
          :ok <- ensure_started() do
+      record = record |> normalize_record() |> Map.put(:repo_key, repo_key)
+
       durable_transaction(fn ->
-        key = scoped_key(repo_key, run_id)
-        :mnesia.write({@runs_table, key, repo_key, run_id, record |> normalize_record() |> Map.put(:repo_key, repo_key)})
+        :mnesia.write({@runs_table, scoped_key(repo_key, run_id), repo_key, run_id, record})
         :ok
       end)
+      |> index_run(repo_key, run_id, record)
     end
   end
 
@@ -110,9 +113,12 @@ defmodule SymphonyElixir.RunStore do
 
   @spec list_runs(String.t(), non_neg_integer() | :all) :: [map()] | {:error, term()}
   def list_runs(repo_key, limit) when is_integer(limit) and limit >= 0 do
-    case list_runs(repo_key, :all) do
-      runs when is_list(runs) -> Enum.take(runs, limit)
-      {:error, reason} -> {:error, reason}
+    with {:ok, repo_key} <- normalize_repo_key(repo_key),
+         :ok <- ensure_started() do
+      case RunIndex.take(repo_key, limit) do
+        {:ok, keys} -> read_runs(keys)
+        :unavailable -> repo_key |> list_runs(:all) |> take_runs(limit)
+      end
     end
   end
 
@@ -132,9 +138,11 @@ defmodule SymphonyElixir.RunStore do
 
   @spec list_all_runs(non_neg_integer() | :all) :: [map()] | {:error, term()}
   def list_all_runs(limit) when is_integer(limit) and limit >= 0 do
-    case list_all_runs(:all) do
-      runs when is_list(runs) -> Enum.take(runs, limit)
-      {:error, reason} -> {:error, reason}
+    with :ok <- ensure_started() do
+      case RunIndex.take(:all, limit) do
+        {:ok, keys} -> read_runs(keys)
+        :unavailable -> :all |> list_all_runs() |> take_runs(limit)
+      end
     end
   end
 
@@ -148,6 +156,14 @@ defmodule SymphonyElixir.RunStore do
     end
   end
 
+  @doc """
+  The value `fun` derives from the runs of `kind` (their `:kind` field), kept until a run of that
+  kind is written, so a reader polled every second doesn't scan the store each time. `fun` returns
+  `{:ok, value}` to keep it; anything else is returned and not kept.
+  """
+  @spec memoize_runs(term(), String.t(), (-> {:ok, term()} | {:error, term()})) :: {:ok, term()} | {:error, term()}
+  def memoize_runs(key, kind, fun) when is_function(fun, 0), do: RunIndex.memoize(key, kind, fun)
+
   @spec interrupt_running_runs(String.t(), String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
   def interrupt_running_runs(repo_key, error) when is_binary(error) do
     now = DateTime.utc_now()
@@ -158,6 +174,7 @@ defmodule SymphonyElixir.RunStore do
         {:ok, interrupt_running_records(repo_key, error, now)}
       end)
       |> unwrap_nested_error()
+      |> tap(fn _result -> RunIndex.touch() end)
     end
   end
 
@@ -702,15 +719,19 @@ defmodule SymphonyElixir.RunStore do
       @data_tables
       |> Enum.reduce_while(:ok, &clear_table/2)
       |> sync_after_clear()
+      |> tap(fn _result -> RunIndex.reset() end)
     end
   end
 
   @impl true
   def init(opts) do
     dir = Keyword.get(opts, :dir, store_dir())
+    # Before Mnesia: a run written while the index is built still lands in it.
+    :ok = RunIndex.create()
 
     case setup_mnesia(dir) do
       :ok ->
+        build_run_index()
         {:ok, %State{dir: dir}}
 
       {:error, reason} ->
@@ -960,13 +981,41 @@ defmodule SymphonyElixir.RunStore do
         [{@runs_table, ^key, ^repo_key, ^run_id, record}] ->
           updated = record |> Map.merge(normalize_update(attrs, [:key, :repo_key, :run_id])) |> Map.put(:repo_key, repo_key)
           :mnesia.write({@runs_table, key, repo_key, run_id, updated})
-          :ok
+          {:ok, updated}
 
         [] ->
           {:error, :run_not_found}
       end
     end)
+    |> case do
+      {:ok, updated} -> index_run(:ok, repo_key, run_id, updated)
+      error -> error
+    end
   end
+
+  # Only after the write committed, so the index never names a run Mnesia doesn't hold.
+  defp index_run(:ok, repo_key, run_id, record), do: RunIndex.put(repo_key, run_id, record)
+  defp index_run(error, _repo_key, _run_id, _record), do: error
+
+  defp build_run_index do
+    with entries when is_list(entries) <- transaction(fn -> :mnesia.match_object({@runs_table, :_, :_, :_, :_}) end) do
+      entries
+      |> Enum.map(fn {@runs_table, _key, repo_key, run_id, record} -> {repo_key, run_id, record} end)
+      |> RunIndex.build()
+    end
+  end
+
+  # Reads the runs the index named, in its order; a run deleted since is left out.
+  defp read_runs(keys) do
+    transaction(fn -> Enum.flat_map(keys, &read_run/1) end)
+  end
+
+  defp read_run({repo_key, run_id}) do
+    for {@runs_table, _key, _repo_key, _run_id, record} <- :mnesia.read(@runs_table, scoped_key(repo_key, run_id)), do: record
+  end
+
+  defp take_runs(runs, limit) when is_list(runs), do: Enum.take(runs, limit)
+  defp take_runs({:error, reason}, _limit), do: {:error, reason}
 
   defp update_pr_review_record(repo_key, issue_id, attrs) do
     durable_transaction(fn ->

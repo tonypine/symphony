@@ -1,6 +1,8 @@
 defmodule SymphonyElixir.RunStoreTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.RunStore.RunIndex
+
   @repo_key "repo-a"
   @other_repo_key "repo-b"
 
@@ -411,6 +413,147 @@ defmodule SymphonyElixir.RunStoreTest do
              %{run_id: "run-valid", status: "failure"},
              %{status: "running"}
            ] = Enum.sort_by(RunStore.list_runs(@repo_key, :all), &Map.get(&1, :run_id, "zzz"))
+  end
+
+  describe "the run index" do
+    test "bounded reads return the newest runs from the index, without scanning the table" do
+      put_indexed_runs(@repo_key, ["a-1", "a-2", "a-3"], 0)
+      put_indexed_runs(@other_repo_key, ["b-1", "b-2"], 10)
+      assert :ok = RunStore.put_run(%{repo_key: @repo_key, run_id: "a-unstarted", status: "running"})
+
+      assert run_ids(RunStore.list_runs(@repo_key, 2)) == ["a-3", "a-2"]
+      assert run_ids(RunStore.list_runs(@repo_key, 10)) == ["a-3", "a-2", "a-1", "a-unstarted"]
+      assert RunStore.list_runs(@repo_key, 0) == []
+      assert run_ids(RunStore.list_all_runs(3)) == ["b-2", "b-1", "a-3"]
+      assert RunStore.list_runs("missing-repo", 5) == []
+
+      # Written behind RunStore's back, so only a scan of the table can find it.
+      assert {:atomic, :ok} =
+               :mnesia.transaction(fn ->
+                 :mnesia.write({:symphony_run_store_runs, {@repo_key, "a-raw"}, @repo_key, "a-raw", %{run_id: "a-raw", started_at: started_at(99)}})
+               end)
+
+      assert run_ids(RunStore.list_runs(@repo_key, 2)) == ["a-3", "a-2"]
+      assert ["a-raw" | _rest] = run_ids(RunStore.list_runs(@repo_key, :all))
+    end
+
+    test "a bounded read costs the same however many runs the store holds" do
+      put_indexed_runs(@repo_key, Enum.map(1..20, &"small-#{&1}"), 0)
+      small = reductions(fn -> RunStore.list_runs(@repo_key, 10) end)
+
+      put_indexed_runs(@repo_key, Enum.map(1..400, &"large-#{&1}"), 100)
+      large = reductions(fn -> RunStore.list_runs(@repo_key, 10) end)
+      scan = reductions(fn -> RunStore.list_runs(@repo_key, :all) end)
+
+      assert length(RunStore.list_runs(@repo_key, 10)) == 10
+      assert large < small * 2, "list_runs/2 took #{large} reductions over 420 runs, #{small} over 20"
+      assert scan > large * 5
+    end
+
+    test "an update moves a run whose start changed and keeps the record current" do
+      put_indexed_runs(@repo_key, ["a-1", "a-2"], 0)
+
+      assert :ok = RunStore.update_run(@repo_key, "a-1", %{started_at: started_at(50), status: "success"})
+      assert [%{run_id: "a-1", status: "success"}, %{run_id: "a-2"}] = RunStore.list_runs(@repo_key, 5)
+
+      assert :ok = RunStore.update_run(@repo_key, "a-2", %{status: "failure"})
+      assert [%{run_id: "a-1"}, %{run_id: "a-2", status: "failure"}] = RunStore.list_runs(@repo_key, 5)
+      assert {:error, :run_not_found} = RunStore.update_run(@repo_key, "missing", %{status: "failure"})
+
+      assert :ok = RunStore.clear()
+      assert RunStore.list_runs(@repo_key, 5) == []
+      assert RunStore.list_all_runs(5) == []
+    end
+
+    test "memoizes a value per run kind until a run of that kind is written" do
+      test_pid = self()
+
+      derive = fn ->
+        send(test_pid, :derived)
+        {:ok, @repo_key |> RunStore.list_runs(:all) |> Enum.filter(&(&1[:kind] == "acceptance_gate")) |> run_ids()}
+      end
+
+      assert {:ok, []} = RunStore.memoize_runs(:gate_ids, "acceptance_gate", derive)
+      assert_received :derived
+
+      assert :ok = RunStore.put_run(%{repo_key: @repo_key, run_id: "agent-1", kind: "agent", started_at: started_at(1)})
+      assert {:ok, []} = RunStore.memoize_runs(:gate_ids, "acceptance_gate", derive)
+      refute_received :derived
+
+      assert :ok = RunStore.put_run(%{repo_key: @repo_key, run_id: "gate-1", kind: "acceptance_gate", status: "running", started_at: started_at(2)})
+      assert {:ok, ["gate-1"]} = RunStore.memoize_runs(:gate_ids, "acceptance_gate", derive)
+      assert_received :derived
+
+      assert :ok = RunStore.update_run(@repo_key, "gate-1", %{verdict: "approve"})
+      assert {:ok, ["gate-1"]} = RunStore.memoize_runs(:gate_ids, "acceptance_gate", derive)
+      assert_received :derived
+
+      assert {:ok, 1} = RunStore.interrupt_running_runs(@repo_key, "restarted")
+      assert {:ok, ["gate-1"]} = RunStore.memoize_runs(:gate_ids, "acceptance_gate", derive)
+      assert_received :derived
+
+      assert :ok = RunStore.clear()
+      assert {:error, :unreadable} = RunStore.memoize_runs(:gate_ids, "acceptance_gate", fn -> {:error, :unreadable} end)
+      assert {:ok, []} = RunStore.memoize_runs(:gate_ids, "acceptance_gate", derive)
+      assert_received :derived
+    end
+
+    test "falls back to scanning without a built index, and rebuilds it when RunStore starts" do
+      put_indexed_runs(@repo_key, ["a-1", "a-2"], 0)
+      test_pid = self()
+      derive = fn -> send(test_pid, :derived) && {:ok, :value} end
+
+      # Emptied as when RunStore starts, before the index is built.
+      assert :ok = RunIndex.create()
+      assert RunIndex.take(@repo_key, 1) == :unavailable
+      assert run_ids(RunStore.list_runs(@repo_key, 1)) == ["a-2"]
+      assert run_ids(RunStore.list_all_runs(1)) == ["a-2"]
+      assert {:ok, :value} = RunStore.memoize_runs(:fallback, "agent", derive)
+      assert {:ok, :value} = RunStore.memoize_runs(:fallback, "agent", derive)
+      assert_received :derived
+      assert_received :derived
+
+      # Gone, as while RunStore restarts.
+      :ets.delete(:symphony_run_store_run_index)
+      assert :ok = RunStore.put_run(%{repo_key: @repo_key, run_id: "a-3", started_at: started_at(3)})
+      assert :ok = RunIndex.touch()
+      assert :ok = RunIndex.reset()
+      assert :ok = RunIndex.build([])
+      assert RunIndex.take(:all, 1) == :unavailable
+      assert run_ids(RunStore.list_runs(@repo_key, 1)) == ["a-3"]
+      assert {:ok, :value} = RunStore.memoize_runs(:fallback, "agent", derive)
+      assert_received :derived
+
+      restart_run_store()
+
+      assert {:ok, [{@repo_key, "a-3"}, {@repo_key, "a-2"}]} = RunIndex.take(@repo_key, 2)
+      assert run_ids(RunStore.list_runs(@repo_key, 5)) == ["a-3", "a-2", "a-1"]
+      assert {:ok, :value} = RunStore.memoize_runs(:fallback, "agent", derive)
+      assert {:ok, :value} = RunStore.memoize_runs(:fallback, "agent", derive)
+      assert_received :derived
+      refute_received :derived
+    end
+  end
+
+  defp put_indexed_runs(repo_key, run_ids, offset) do
+    run_ids
+    |> Enum.with_index(offset)
+    |> Enum.each(fn {run_id, second} ->
+      record = %{repo_key: repo_key, run_id: run_id, issue_id: "issue-#{run_id}", status: "success", started_at: started_at(second)}
+      assert :ok = RunStore.put_run(record)
+    end)
+  end
+
+  defp started_at(second), do: DateTime.add(~U[2026-10-05 12:00:00.000000Z], second, :second)
+
+  defp run_ids(runs), do: Enum.map(runs, & &1.run_id)
+
+  defp reductions(fun) do
+    fun.()
+    {:reductions, before} = Process.info(self(), :reductions)
+    fun.()
+    {:reductions, later} = Process.info(self(), :reductions)
+    later - before
   end
 
   test "persists eval logs with indexed filter fields" do
