@@ -32,7 +32,8 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
   end
 
   defmodule ProgressReviewer do
-    # Pre-push reviewer stand-in: approves the diff and reports the review to the test, or, with
+    # Pre-push reviewer stand-in: approves the diff and reports the review to the test, asks for
+    # changes with `:progress_reviewer_requests_changes` set, or, with
     # `:progress_reviewer_api_unreachable` set, can't reach the model API.
     def start_session(_workspace, _opts), do: {:ok, %{}}
 
@@ -40,13 +41,35 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       turns = Application.get_env(:symphony_elixir, :progress_agent_turns, 0)
       send(Application.fetch_env!(:symphony_elixir, :progress_agent_recipient), {:progress_reviewed, turns})
 
-      case Application.get_env(:symphony_elixir, :progress_reviewer_api_unreachable) do
-        %{} = info -> {:error, {:model_api_unreachable, info}}
-        nil -> {:ok, %{result: ~s({"verdict":"approve","comments":[]})}}
+      cond do
+        info = Application.get_env(:symphony_elixir, :progress_reviewer_api_unreachable) ->
+          {:error, {:model_api_unreachable, info}}
+
+        Application.get_env(:symphony_elixir, :progress_reviewer_requests_changes) ->
+          {:ok, %{result: request_changes_verdict()}}
+
+        true ->
+          {:ok, %{result: ~s({"verdict":"approve","comments":[]})}}
       end
     end
 
     def stop_session(_session), do: :ok
+
+    defp request_changes_verdict do
+      Jason.encode!(%{
+        "verdict" => "request_changes",
+        "findings" => [
+          %{
+            "summary" => "Say which conflict this fixes.",
+            "file" => "fix.txt",
+            "line_range" => [1, 1],
+            "quoted_snippet" => "conflict fixed",
+            "suggested_fix" => "Name the conflict."
+          }
+        ],
+        "reason" => ""
+      })
+    end
   end
 
   defmodule ProgressGitHub do
@@ -74,6 +97,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
             :progress_pr_head_result,
             :progress_api_unreachable,
             :progress_reviewer_api_unreachable,
+            :progress_reviewer_requests_changes,
             :memory_tracker_update_issue_state_result,
             :memory_tracker_create_comment_result
           ] do
@@ -618,7 +642,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       refute_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
     end
 
-    test "outside Rework moves to Auto Review as soon as CI runs on the head it pushed" do
+    test "outside Rework moves to Auto Review through the pushed-head hand-off on the turn it pushed" do
       :ok = put_pending_ci_failure(approved: true)
       Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-fixed", checks: @pending_checks}})
 
@@ -627,6 +651,24 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       assert turns() == 1
       assert_received {:memory_tracker_state_update, "issue-progress", "Auto Review"}
       refute_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+    end
+
+    test "outside Rework keeps turning while the pre-push reviewer has not passed the head it pushed" do
+      # Each reviewer pass changes the review state the empty-turn count compares, so such a run
+      # turns until the reviewer passes the head, and only then moves on.
+      for checks <- [@pending_checks, @green_checks] do
+        :ok = put_pending_ci_failure(approved: false)
+        Application.put_env(:symphony_elixir, :progress_reviewer_requests_changes, true)
+        Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-fixed", checks: checks}})
+        Application.delete_env(:symphony_elixir, :progress_agent_turns)
+
+        run_issue!("In Progress", heads: ["sha-dirty", "sha-fixed"], max_turns: 2, reviewer: true)
+
+        assert turns() == 2
+        assert_received {:progress_reviewed, 1}
+        refute_received {:memory_tracker_state_update, "issue-progress", _state}
+        refute_received {:memory_tracker_comment, "issue-progress", "Symphony parked" <> _note}
+      end
     end
 
     test "is still parked when its pushed head is red, or when it pushed nothing and CI is red" do

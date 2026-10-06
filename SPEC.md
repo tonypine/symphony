@@ -1980,13 +1980,14 @@ Important nuance:
   the run ends as before and the post-PR transition's workspace check applies.
 - When the workspace `HEAD` is readable, two consecutive turns with no new commit, no issue state
   change, no newly attached PR and no reviewer-agent verdict MUST end the run, move the issue to
-  `Backlog` and post a comment saying why. This does not apply in `Merging`. Nor does it apply
-  while the attached PR's head is the workspace `HEAD`, that `HEAD` differs from the one the run
-  started on (or, in `Rework`, from the head the `Rework` started from), and its checks are still
+  `Backlog` and post a comment saying why. This does not apply in `Merging`. Nor does it apply to
+  a `Rework` run while the attached PR's head is the workspace `HEAD`, that `HEAD` differs from the
+  one the run started on or from the head the `Rework` started from, and its checks are still
   running or have all passed. The run pushed that head and is waiting on its CI, so it MUST end and
   move to the post-PR state instead. This includes a `Rework` run whose CI failure stays pending
-  until the run ends. A run whose `HEAD` is the PR head with checks still pending, but that
-  started on that head, keeps turning up to `agent.max_turns`. Nor does it apply, outside `Rework`, to a run started by
+  until the run ends. Nor does it apply while the attached PR's head is the workspace `HEAD` and
+  that head has checks still pending; such a run (one that started on that head, or one whose
+  pushed head awaits the pre-push reviewer) keeps turning up to `agent.max_turns`. Nor does it apply, outside `Rework`, to a run started by
   a CI failure once the PR head is the workspace `HEAD` and all its checks have passed: the red
   check was a flake, so green CI is that run's outcome. Such a run MUST end and move the issue back
   to `Merging` (with a comment saying why, and the CI-fix auto-merge hold dropped so auto-merge
