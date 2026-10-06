@@ -188,7 +188,7 @@ defmodule SymphonyElixir.AcceptanceGateTest do
 
       assert names ==
                Enum.sort(~w(linear_get_current_issue linear_get_subissues linear_get_parent_issue linear_get_comments linear_get_related_issues
-                     github_get_pull_request github_get_pr_checks github_list_pr_comments github_list_pr_review_comments github_list_pr_reviews
+                     linear_get_document github_get_pull_request github_get_pr_checks github_list_pr_comments github_list_pr_review_comments github_list_pr_reviews
                      github_get_failed_run_log))
 
       # Codex runs the turn under a read-only sandbox policy.

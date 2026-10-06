@@ -23,6 +23,15 @@ branch's changes to write-protected files such as `.ai/skills` come through. The
 
 Do not craft raw Linear GraphQL from prompts.
 
+Keep a ticket's long-lived artifacts (a domain brief, journeys, a Kano map,
+screens, an ADR draft) in Linear documents rather than comments:
+`linear_create_document(title, content)` creates one in the issue's project,
+titled `<identifier> · <title>`, and attaches it to the issue;
+`linear_update_document(document_id, content, title?)` replaces its content;
+`linear_get_document(document_id?)` lists the issue's documents without an id and
+reads one with it. They act only on documents this issue's runs created. Edit an
+existing document instead of creating a second one.
+
 Images and files attached to the ticket appear in the description and comments as
 `https://uploads.linear.app/...` links that Symphony has pre-signed, so they download
 without a Linear key: save one with `curl -sSfL -o "$TMPDIR/<name>" '<link>'` and open
