@@ -3811,6 +3811,14 @@ Minimum endpoints:
 - `GET /api/v1/state`
   - Returns a summary view of the current system state (running sessions, retry queue/delays,
     aggregate token/runtime totals, latest rate limits, and any additional tracked summary fields).
+  - The Elixir implementation serves it from the snapshot the orchestrator publishes every
+    `dashboard.snapshot_publish_ms` (a call into the orchestrator only before the first one), so a
+    busy orchestrator makes it stale, not slow. `orchestrator` says how far behind it is: the orchestrator's
+    `message_queue_len`, the `snapshot_age_ms` of the snapshot served, and the `snapshot_build_ms`
+    of the last one with `snapshot_parts_ms` for the parts that read other processes or the run
+    store. Any of them is `null` when unknown. The orchestrator logs `Orchestrator slow
+    handle_call` / `handle_info` with the message for a callback that takes 1 s or more, and
+    `Orchestrator snapshot build slow` with the parts for a snapshot build that does.
   - Suggested response shape:
 
     ```json
@@ -4015,6 +4023,12 @@ Minimum endpoints:
           {"query": "SymphonyLinearIssuesById", "requests": 82},
           {"query": "SymphonyAgentCurrentIssue", "requests": 70}
         ]
+      },
+      "orchestrator": {
+        "message_queue_len": 0,
+        "snapshot_age_ms": 212,
+        "snapshot_build_ms": 3,
+        "snapshot_parts_ms": {"run_history": 1, "qa": 0, "auto_merge": 1}
       }
     }
     ```
