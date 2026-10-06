@@ -418,7 +418,7 @@ again if the limit is still in force. Runs on other providers keep going, and an
 An Auto Review QA pass that hits the limit is held the same way: it records no verdict, the issue
 stays where it is, and the pass runs again after the hold. On Linear a note on the issue says
 `QA is waiting for the usage limit to reset at 14:05` (local time); a pass held again edits it, and the
-pass that runs deletes it. Set
+pass that runs, or the PR closing or merging first, deletes it. Set
 `agent.usage_limit.auto_pause: false` to fail and retry such runs as before.
 
 While Claude runs are held, the web and terminal dashboards show a banner such as

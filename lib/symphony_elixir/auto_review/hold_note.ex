@@ -5,7 +5,8 @@ defmodule SymphonyElixir.AutoReview.HoldNote do
   why Auto Review is idle.
 
   Symphony posts it when it holds the pass, rewrites the same comment when a later pass is
-  held again, and deletes it once a pass runs (see `SymphonyElixir.AutoReview.run_qa/2`).
+  held again, and deletes it once a pass runs (see `SymphonyElixir.AutoReview.run_qa/2`) or the
+  PR is closed or merged before one does (`SymphonyElixir.CiPoller` drops the issue's CI record).
   Only Linear gets the note: other trackers can't edit or delete a comment.
   """
 
