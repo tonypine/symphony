@@ -2737,7 +2737,9 @@ Part C: No-progress watchdog
 - Independently of the poll tick, a watchdog tick runs every `watchdog.tick_interval_ms`.
 - If `watchdog.enabled == false`, the tick performs no session termination.
 - For each running issue, compute `elapsed_ms` since `last_event_at`, where a workspace hook's start
-  and end count as events, or since the end of the run's latest wait on Linear when that is later.
+  and end count as events, and so does each Claude Code `tool_progress` heartbeat its agent sends
+  while a tool runs (kept out of the transcript), or since the end of the run's latest wait on
+  Linear when that is later.
   While a workspace hook runs, compute it since the hook's deadline, as in Part A. While the run's
   agent waits on a call of one of Symphony's own MCP tools, compute it since the latest deadline of
   its pending calls when that is later; a call without a deadline (a QA tool) does not hold it.

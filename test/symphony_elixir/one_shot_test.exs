@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.OneShotTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.ClaudeCode.AppServer
   alias SymphonyElixir.OneShot
 
   setup do
@@ -27,6 +28,54 @@ defmodule SymphonyElixir.OneShotTest do
 
     assert [%{status: "success", issue_id: "issue-success", issue_identifier: "ACME-SUCCESS", repo_key: "default"}] =
              RunStore.list_runs("default", :all)
+  end
+
+  test "tool progress heartbeats are not recorded in the run-store record" do
+    issue = memory_issue("issue-heartbeat", "ACME-HEARTBEAT")
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+
+    deps =
+      deps(%{
+        start_agent_task: fn issue, recipient, _opts ->
+          Task.Supervisor.async_nolink(SymphonyElixir.TaskSupervisor, fn ->
+            send(recipient, {:codex_worker_update, issue.id, AppServer.event_to_update({:tool_progress, "Bash"})})
+            send(recipient, {:codex_worker_update, issue.id, AppServer.event_to_update({:agent_text, "working"})})
+            send(recipient, {:codex_worker_update, issue.id, AppServer.event_to_update({:tool_progress, "Bash"})})
+            :ok
+          end)
+        end
+      })
+
+    assert {:ok, %{status: "success", last_event: :agent_text}} =
+             OneShot.run("ACME-HEARTBEAT", deps: deps, no_retry: true)
+
+    assert [%{status: "success", last_event: :agent_text} = run] = RunStore.list_runs("default", :all)
+    refute inspect(run) =~ "tool_progress"
+  end
+
+  test "tool progress heartbeats drained after a timeout are not recorded" do
+    issue = memory_issue("issue-heartbeat-timeout", "ACME-HEARTBEAT-TIMEOUT")
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+
+    deps =
+      deps(%{
+        start_agent_task: fn _issue, _recipient, _opts ->
+          Task.Supervisor.async_nolink(SymphonyElixir.TaskSupervisor, fn ->
+            Process.sleep(:infinity)
+          end)
+        end,
+        shutdown_task: fn task, timeout ->
+          send(self(), {:codex_worker_update, issue.id, AppServer.event_to_update({:agent_text, "working"})})
+          send(self(), {:codex_worker_update, issue.id, AppServer.event_to_update({:tool_progress, "Bash"})})
+          Task.shutdown(task, timeout)
+        end
+      })
+
+    assert {:timeout, :timeout_exceeded} =
+             OneShot.run("ACME-HEARTBEAT-TIMEOUT", deps: deps, timeout_ms: 10, no_retry: true)
+
+    assert [%{status: "timeout", last_event: :agent_text} = run] = RunStore.list_runs("default", :all)
+    refute inspect(run) =~ "tool_progress"
   end
 
   test "agent failure exhausts bounded retry attempts" do

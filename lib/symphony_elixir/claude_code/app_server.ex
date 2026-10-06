@@ -476,6 +476,15 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     }
   end
 
+  # A heartbeat only marks the run active: the orchestrator keeps it out of the transcript.
+  def event_to_update({:tool_progress, tool_name}) do
+    %{
+      event: :tool_progress,
+      timestamp: DateTime.utc_now(),
+      payload: %{tool: tool_name}
+    }
+  end
+
   def event_to_update({:rate_limited, info}) when is_map(info) do
     %{
       event: :rate_limited,
@@ -1894,9 +1903,12 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     acc
   end
 
-  # Claude Code sends one every few seconds while a tool runs. The tool's own `tool_use` and
-  # `tool_result` already reach the orchestrator, so the heartbeat is dropped, not forwarded.
-  defp apply_event({:tool_progress, _tool_name}, _on_message, acc), do: acc
+  # Claude Code sends one every few seconds while a tool runs. It is forwarded so a long tool
+  # call (a full test suite) counts as activity for the orchestrator's no-progress watchdog.
+  defp apply_event({:tool_progress, _tool_name} = event, on_message, acc) do
+    on_message.(event)
+    acc
+  end
 
   defp apply_event({:malformed, raw}, _on_message, acc) do
     Logger.debug("ClaudeCode unparseable line: #{inspect(raw)}")
