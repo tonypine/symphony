@@ -1522,7 +1522,8 @@ the window size. The report's `Wide pass` step gives the window size, the screen
 pages it covered. A QA screen whose usable area is under 1400×900 pt (a VM with a 1024×768 display)
 cannot run it at full size: the step says the wide pass was limited, and Symphony reports a `pass`
 from that screen as `blocked` for a person, so the acceptance gate escalates it (`qa_blocked`)
-instead of approving it. Give the QA VM a larger display, for example
+instead of approving it. A `pass` with no `qa_resize_window` call at all is `blocked` too, with the
+reason that the wide pass did not run. Give the QA VM a larger display, for example
 `tart set symphony-qa --display 1920x1200`, and restart it. The resize needs no grant beyond the
 helper's Accessibility.
 
