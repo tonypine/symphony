@@ -203,6 +203,9 @@ public struct RollbackRecord: Equatable {
     public var resumeDispatch: Bool
     /// The rolled-back release's notes, page and change count, which its menu line opens.
     public var details: ReleaseDetails
+    /// The file number of the failed build's app bundle, from `bundleFileNumber(_:)`; nil when it couldn't be read or
+    /// the record comes from a version from before it was kept.
+    public var bundle: Int?
 
     public init(
         build: Int,
@@ -210,7 +213,8 @@ public struct RollbackRecord: Equatable {
         reason: String,
         startSymphony: Bool,
         resumeDispatch: Bool,
-        details: ReleaseDetails = ReleaseDetails()
+        details: ReleaseDetails = ReleaseDetails(),
+        bundle: Int? = nil
     ) {
         self.build = build
         self.version = version
@@ -218,11 +222,26 @@ public struct RollbackRecord: Equatable {
         self.startSymphony = startSymphony
         self.resumeDispatch = resumeDispatch
         self.details = details
+        self.bundle = bundle
     }
 
     /// False when the relaunched app is still the build that failed: the swap didn't happen.
     public func succeeded(runningBuild: Int) -> Bool {
         runningBuild < build
+    }
+
+    /// False when the failed build was installed again since: the helper only renames app bundles, so a failed swap
+    /// relaunches the bundle that recorded this, while a reinstall puts a new one in its place. True when either
+    /// number is unknown.
+    public func isSameBundle(_ runningBundle: Int?) -> Bool {
+        guard let bundle, let runningBundle else { return true }
+        return bundle == runningBundle
+    }
+
+    /// The file number of the app bundle at `url`, nil when it can't be read. Renaming or moving the bundle in its
+    /// folder keeps it; installing the app again gives it a new one.
+    public static func bundleFileNumber(_ url: URL) -> Int? {
+        (try? FileManager.default.attributesOfItem(atPath: url.path))?[.systemFileNumber] as? Int
     }
 }
 
@@ -237,13 +256,14 @@ public final class RollbackStore {
     }
 
     public func save(_ record: RollbackRecord) {
-        let values: [String: Any] = [
+        var values: [String: Any] = [
             "build": record.build,
             "version": record.version,
             "reason": record.reason,
             "startSymphony": record.startSymphony,
             "resumeDispatch": record.resumeDispatch,
         ]
+        values["bundle"] = record.bundle
         defaults.set(values.merging(record.details.storedValues) { first, _ in first }, forKey: Self.key)
     }
 
@@ -268,7 +288,8 @@ public final class RollbackStore {
             reason: reason,
             startSymphony: startSymphony,
             resumeDispatch: resumeDispatch,
-            details: ReleaseDetails(stored: values)
+            details: ReleaseDetails(stored: values),
+            bundle: values["bundle"] as? Int
         )
     }
 }
@@ -288,11 +309,14 @@ public enum UpdateRelaunch: Equatable {
     case rollbackFailed(RollbackRecord)
 
     /// A failed build takes the pending update before it records its rollback, and the build it puts back is older,
-    /// so any pending update, or a build newer than the record, means the record is stale: a version from before
-    /// automatic rollback was put back, never read it, and has since started this update (to any build, the
-    /// rolled-back one included) or been replaced by a newer one.
-    public init(pending: PendingUpdate?, rollback: RollbackRecord?, runningBuild: Int) {
-        if let rollback, pending == nil, runningBuild <= rollback.build {
+    /// so any pending update, a build newer than the record, or the failed build in another app bundle means the
+    /// record is stale: a version from before automatic rollback was put back, never read it, and has since started
+    /// this update (to any build, the rolled-back one included), been replaced by a newer one, or been replaced by
+    /// hand with the failed build. `runningBundle` is the running app's `RollbackRecord.bundleFileNumber`.
+    public init(pending: PendingUpdate?, rollback: RollbackRecord?, runningBuild: Int, runningBundle: Int? = nil) {
+        if let rollback, pending == nil, runningBuild < rollback.build
+            || (runningBuild == rollback.build && rollback.isSameBundle(runningBundle))
+        {
             self = rollback.succeeded(runningBuild: runningBuild) ? .rolledBack(rollback) : .rollbackFailed(rollback)
         } else if let pending {
             self = pending.succeeded(runningBuild: runningBuild) ? .checkHealth(pending) : .notReplaced(pending)

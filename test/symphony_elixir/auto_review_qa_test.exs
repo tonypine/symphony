@@ -100,6 +100,28 @@ defmodule SymphonyElixir.AutoReviewQaTest do
 
   defp stored_record, do: Enum.find(RunStore.list_ci_checks(), &(&1.issue_id == "issue-qa-flow"))
 
+  # The argument patterns of `AutoReview.blocked_reason/1`'s clauses, in order, from its debug info.
+  defp blocked_reason_heads do
+    path = :code.where_is_file(~c"Elixir.SymphonyElixir.AutoReview.beam")
+    {:ok, {AutoReview, [debug_info: {:debug_info_v1, backend, data}]}} = :beam_lib.chunks(path, [:debug_info])
+    {:ok, %{definitions: definitions}} = backend.debug_info(:elixir_v1, AutoReview, data, [])
+    {{:blocked_reason, 1}, :def, _meta, clauses} = List.keyfind(definitions, {:blocked_reason, 1}, 0)
+    Enum.map(clauses, fn {_meta, [head], [], _body} -> Macro.prewalk(head, &underscore_var/1) end)
+  end
+
+  defp underscore_var({name, meta, context}) when is_atom(name) and is_atom(context), do: {:_, meta, context}
+  defp underscore_var(ast), do: ast
+
+  # The index of the `blocked_reason/1` clause that `error` runs.
+  defp blocked_reason_clause(heads, error) do
+    var = Macro.var(:error, nil)
+
+    Enum.find_index(heads, fn head ->
+      {matched?, _binding} = Code.eval_quoted(quote(do: match?(unquote(head), unquote(var))), error: error)
+      matched?
+    end)
+  end
+
   defp git_with_paths(paths) do
     fn
       ["merge-base", "origin/" <> _base, @sha], "/tmp/workspaces/TP-901" -> {"base123\n", 0}
@@ -879,23 +901,25 @@ defmodule SymphonyElixir.AutoReviewQaTest do
       legacy = %{qa_sha: @sha, qa_verdict: "blocked", qa_target_state: "In Review", qa_applied: true}
       Application.put_env(:symphony_elixir, :qa_flow_runner_result, :started)
 
-      error_reasons =
-        Enum.map(
-          [
-            {:qa_token_limit, 9, 5},
-            {:remote_worker_unsupported, "worker-1"},
-            {:qa_dev_server_failed, {:verification_failed, :health_timeout}},
-            {:qa_dev_server_failed, :eaddrinuse},
-            {:qa_browser_mcp_unavailable, :no_npx},
-            {:qa_browser_mcp_unavailable, "@playwright/mcp"},
-            {:qa_browser_mcp_invalid, "command is required"},
-            {:malformed_qa_response, :no_json},
-            {:git_failed, 128}
-          ],
-          &AutoReview.blocked_reason/1
-        ) ++ ["could not list the PR's changed files: :timeout"]
+      errors = [
+        {:qa_token_limit, 9, 5},
+        {:remote_worker_unsupported, "worker-1"},
+        {:qa_dev_server_failed, {:verification_failed, :health_timeout}},
+        {:qa_dev_server_failed, :eaddrinuse},
+        {:qa_browser_mcp_unavailable, :no_npx},
+        {:qa_browser_mcp_unavailable, "@playwright/mcp"},
+        {:qa_browser_mcp_invalid, "command is required"},
+        {:malformed_qa_response, :no_json},
+        {:changed_files_unlisted, {:git_failed, 128, "fatal: bad object"}},
+        {:git_failed, 128}
+      ]
 
-      for reason <- error_reasons do
+      # One error per `blocked_reason/1` clause, so a clause added without one fails here before its
+      # text can miss the prefix list.
+      heads = blocked_reason_heads()
+      assert errors |> Enum.map(&blocked_reason_clause(heads, &1)) |> Enum.sort() == Enum.to_list(0..(length(heads) - 1))
+
+      for reason <- Enum.map(errors, &AutoReview.blocked_reason/1) do
         record = put_record(Map.merge(legacy, %{qa_reason: reason, qa_infra_blocked: nil}))
 
         capture_log(fn ->
