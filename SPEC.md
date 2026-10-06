@@ -2262,7 +2262,18 @@ An issue is dispatch-eligible only if all are true:
 - Waiting rule passes:
   - An issue in the `issues.states.waiting_on_sub_issues` state is dispatched only when it is a
     `breakdown` parent with at least one sub-issue and every sub-issue is terminal (the close-out
-    run). Any other issue in that state waits for a human.
+    run). Any other issue in that state is never dispatched, and waits for a human unless the
+    merge of its pull request put it there (below).
+  - When a pull request of an issue that is not a `breakdown` parent merges while the issue has a
+    non-terminal sub-issue, the service moves the issue to the waiting state instead of `Done`,
+    whoever merged it and even when Linear's GitHub integration or a landing run already moved it
+    to `Done`, moves its `Backlog` sub-issues to `Todo` and comments on it. The service records
+    durably that the merge put the issue there. On each poll, such a recorded issue in the waiting
+    state with at least one sub-issue, every one terminal, and not running or claimed, is read again
+    and, if that still holds, moved to `Done` with a comment listing each sub-issue's state; no run
+    starts. An issue a person moved to the waiting state is not recorded, so it is not closed this
+    way. A sub-issue added while it waits counts in that check, and a
+    canceled one counts as finished.
   - On each poll, a `breakdown` parent in `In Progress` whose approved plan has a non-terminal
     sub-issue, and that is not running or claimed, is moved to the waiting state (a never-approved
     plan is not), so `In Progress` only holds issues an agent
