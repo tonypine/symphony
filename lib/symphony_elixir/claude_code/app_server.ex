@@ -732,14 +732,9 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
   defp workspace_sandbox_allow_write_paths(_settings), do: []
 
-  # The item replacement directory lives under the per-user temp dir of the host Claude runs on,
-  # which this host can't look up for an SSH worker. A local agent also keeps its Hex,
-  # `elixir_make` and PLT caches in Symphony's folder (see `SymphonyElixir.AgentCaches`); an SSH
-  # worker keeps its own.
-  defp host_allow_write_paths(nil) do
-    opts = Application.get_env(:symphony_elixir, :claude_item_replacement_opts, [])
-    AgentSandboxConfig.item_replacement_write_paths(opts) ++ AgentCaches.write_paths()
-  end
+  # A local agent keeps its Hex, `elixir_make` and PLT caches in Symphony's folder (see
+  # `SymphonyElixir.AgentCaches`); an SSH worker keeps its own.
+  defp host_allow_write_paths(nil), do: AgentCaches.write_paths()
 
   defp host_allow_write_paths(_worker_host), do: []
 

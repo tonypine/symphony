@@ -47,11 +47,17 @@ exceptions when a repo legitimately needs something like `~/.npmrc`.
 runtime's `sandbox.filesystem.allowWrite` so the agent can write under specific host paths beyond
 the Claude Code default (workspace + `/tmp`). Codex/SRT already authors a broader writable set
 under `/tmp` and the workspace, so this knob only affects the Claude runtime today.
-On macOS, Symphony also adds the per-user `TemporaryItems` dir
-(`$(getconf DARWIN_USER_TEMP_DIR)TemporaryItems`) to a local Claude run's `allowWrite`.
-Foundation stages atomic file writes there in a sandboxed process, so `swift build` and
-`swift test` fail without it. The rest of the per-user temp dir stays read-only: Symphony keeps
-each session's Claude settings and the MCP shim there.
+On macOS, a sandboxed process's Foundation stages every atomic file write in the per-user
+`TemporaryItems` dir (`$(getconf DARWIN_USER_TEMP_DIR)TemporaryItems`), so `swift build` and
+`swift test` fail in an agent's sandbox. That dir can't be granted: macOS refuses to read it, so
+Claude Code withholds an `allowWrite` entry for it (`withheld allowWrite …/TemporaryItems: its
+link chain cannot be followed safely` in its debug log). Instead, a local Claude session's env
+holds `DIRHELPER_USER_DIR_SUFFIX=symphony/none`, a suffix libc rejects: the per-user temp dir
+then falls back to the session's `$TMPDIR`, and Foundation stages each atomic write beside the
+file it replaces, where the agent may already write. The per-user cache dir has no value then
+either, so `SWIFTPM_MODULECACHE_OVERRIDE` points SwiftPM's module cache at the run's temp folder.
+The per-user temp dir stays read-only: Symphony keeps each session's Claude settings and the MCP
+shim there.
 
 Both runtimes also deny writes to the workspace's own instructions and workflow files:
 `WORKFLOW.md`, `symphony.yml`, the project `.claude/` settings, agents, commands and hooks, and the
