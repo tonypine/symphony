@@ -79,6 +79,7 @@ defmodule SymphonyElixir.AgentRunner do
       |> Keyword.put(:repo_key, repo_key)
       |> Keyword.put(:settings, settings)
       |> put_linear_wait_notice(issue, codex_update_recipient)
+      |> put_tool_call_notice(issue, codex_update_recipient)
 
     # The orchestrator owns host retries so one worker lifetime never hops machines.
     worker_host = selected_worker_host(Keyword.get(opts, :worker_host), settings.worker.ssh_hosts)
@@ -139,6 +140,14 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp put_linear_wait_notice(opts, _issue, _recipient), do: opts
+
+  # Tells the orchestrator as each of Symphony's own MCP tool calls in this run starts and ends;
+  # see `SymphonyElixir.McpServer`.
+  defp put_tool_call_notice(opts, %{id: issue_id}, recipient) when is_binary(issue_id) and is_pid(recipient) do
+    Keyword.put_new(opts, :on_tool_call, fn event -> send(recipient, {:mcp_tool_call, issue_id, event}) end)
+  end
+
+  defp put_tool_call_notice(opts, _issue, _recipient), do: opts
 
   # A step that still could not reach Linear once its wait ran out, such as
   # `{:idle_park_failed, {:linear_rate_limited, until_ms}}`, failed through no fault of the
@@ -642,7 +651,8 @@ defmodule SymphonyElixir.AgentRunner do
       dependency_audit_module: dependency_audit_module(opts),
       dependency_audit_base_ref: Keyword.get(opts, :dependency_audit_base_ref),
       dependency_audit_command_runner: Keyword.get(opts, :dependency_audit_command_runner),
-      extra_env: AgentTmpDir.env(settings.agent.kind, Keyword.get(opts, :agent_tmp_dir))
+      extra_env: AgentTmpDir.env(settings.agent.kind, Keyword.get(opts, :agent_tmp_dir)),
+      on_tool_call: Keyword.get(opts, :on_tool_call)
     )
   end
 

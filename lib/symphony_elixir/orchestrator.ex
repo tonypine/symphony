@@ -51,6 +51,8 @@ defmodule SymphonyElixir.Orchestrator do
   # A transient Linear error (timeout, refused connection, 5xx) is not the issue's
   # fault: retry soon, without failure backoff. A rate limit waits for its pause.
   @linear_wait_retry_delay_ms 5_000
+  # The snapshot shows a run's pending Symphony tool call once it has run this long.
+  @pending_tool_report_after_ms 60_000
   # Slightly above the dashboard render interval so "checking now…" can render.
   @poll_transition_render_delay_ms 20
   @default_transcript_buffer_size 200
@@ -495,6 +497,19 @@ defmodule SymphonyElixir.Orchestrator do
       running_entry ->
         wait_until = DateTime.add(DateTime.utc_now(), delay_ms, :millisecond)
         {:noreply, %{state | running: Map.put(running, issue_id, Map.put(running_entry, :linear_wait_until, wait_until))}}
+    end
+  end
+
+  # One of Symphony's own MCP tool calls in the run started or ended; see pending_tool/2 and
+  # watchdog_clock_started_at/1.
+  defp handle_info_message({:mcp_tool_call, issue_id, event}, %{running: running} = state) when is_binary(issue_id) do
+    case Map.get(running, issue_id) do
+      nil ->
+        {:noreply, state}
+
+      running_entry ->
+        notify_dashboard()
+        {:noreply, %{state | running: Map.put(running, issue_id, put_pending_tool_call(running_entry, event))}}
     end
   end
 
@@ -1705,6 +1720,10 @@ defmodule SymphonyElixir.Orchestrator do
   def act_on_plan_comments_for_test(%State{} = state, issues) when is_list(issues), do: act_on_plan_comments(state, issues)
 
   @doc false
+  @spec close_finished_parents_for_test([Issue.t()], term()) :: term()
+  def close_finished_parents_for_test(issues, %State{} = state) when is_list(issues), do: close_finished_parents(state, issues)
+
+  @doc false
   @spec park_breakdown_parents_for_test([Issue.t()], term()) :: term()
   def park_breakdown_parents_for_test(issues, %State{} = state) when is_list(issues), do: park_breakdown_parents(issues, state)
 
@@ -2170,8 +2189,18 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # As for the first-turn stall check, a running workspace hook's clock starts at its deadline.
+  # So does the clock of a run waiting on one of Symphony's own tool calls: the agent shows no
+  # activity until the call returns, at the latest when its timeout stops it.
   defp watchdog_clock_started_at(%{workspace_hook: %{deadline: %DateTime{} = deadline}}), do: deadline
-  defp watchdog_clock_started_at(running_entry), do: watchdog_last_event_at(running_entry)
+
+  defp watchdog_clock_started_at(running_entry) do
+    last_event_at = watchdog_last_event_at(running_entry)
+
+    case pending_tool_deadline(running_entry) do
+      %DateTime{} = deadline when is_struct(last_event_at, DateTime) -> Enum.max([last_event_at, deadline], DateTime)
+      _no_deadline -> last_event_at
+    end
+  end
 
   defp watchdog_last_event_at(running_entry) when is_map(running_entry) do
     (Map.get(running_entry, :last_event_at) ||
@@ -2190,6 +2219,54 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp after_linear_wait(timestamp, _running_entry), do: timestamp
 
+  defp put_pending_tool_call(running_entry, {:started, call_id, call}) do
+    Map.update(running_entry, :pending_tool_calls, %{call_id => call}, &Map.put(&1, call_id, call))
+  end
+
+  # As for a workspace hook, a tool call's end counts as an event.
+  defp put_pending_tool_call(running_entry, {:finished, call_id}) do
+    running_entry
+    |> Map.update(:pending_tool_calls, %{}, &Map.delete(&1, call_id))
+    |> Map.put(:last_event_at, DateTime.utc_now())
+  end
+
+  defp oldest_pending_tool_call(%{pending_tool_calls: calls}) when map_size(calls) > 0 do
+    calls |> Map.values() |> Enum.min_by(& &1.started_at, DateTime)
+  end
+
+  defp oldest_pending_tool_call(_running_entry), do: nil
+
+  # The latest deadline of the run's pending tool calls. A call without one (a `qa_*` tool, which
+  # keeps its driver's timeout) does not hold the watchdog.
+  defp pending_tool_deadline(running_entry) do
+    running_entry
+    |> Map.get(:pending_tool_calls, %{})
+    |> Map.values()
+    |> Enum.map(& &1.deadline)
+    |> Enum.filter(&is_struct(&1, DateTime))
+    |> Enum.max(DateTime, fn -> nil end)
+  end
+
+  # The snapshot shows a run's oldest pending tool call once it has run for a minute.
+  defp pending_tool(running_entry, %DateTime{} = now) do
+    with %{name: name, started_at: started_at} <- oldest_pending_tool_call(running_entry),
+         age_ms when age_ms >= @pending_tool_report_after_ms <- DateTime.diff(now, started_at, :millisecond) do
+      %{name: name, started_at: started_at, age_ms: age_ms}
+    else
+      _ -> nil
+    end
+  end
+
+  defp pending_tool_for_log(running_entry, %DateTime{} = now) do
+    case oldest_pending_tool_call(running_entry) do
+      %{name: name, started_at: started_at} ->
+        " pending_tool=#{name} pending_tool_age_ms=#{max(0, DateTime.diff(now, started_at, :millisecond))}"
+
+      nil ->
+        ""
+    end
+  end
+
   defp restart_stuck_issue(state, issue_id, running_entry, elapsed_ms) do
     identifier = Map.get(running_entry, :identifier, issue_id)
     session_id = running_entry_session_id(running_entry)
@@ -2198,8 +2275,10 @@ defmodule SymphonyElixir.Orchestrator do
     error = "stuck for #{elapsed_ms}ms without transcript activity"
     next_attempt = next_retry_attempt_from_running(running_entry)
 
+    pending_tool = pending_tool_for_log(running_entry, DateTime.utc_now())
+
     Logger.warning(
-      "Agent run stuck: issue_id=#{issue_id} issue_identifier=#{identifier} session_id=#{session_id} last_event_at=#{last_event_at_for_log} elapsed_ms=#{elapsed_ms}; restarting with backoff"
+      "Agent run stuck: issue_id=#{issue_id} issue_identifier=#{identifier} session_id=#{session_id} last_event_at=#{last_event_at_for_log} elapsed_ms=#{elapsed_ms}#{pending_tool}; restarting with backoff"
     )
 
     emit_run_stuck(running_entry, elapsed_ms, next_attempt)
@@ -2736,6 +2815,7 @@ defmodule SymphonyElixir.Orchestrator do
       issues
       |> park_breakdown_parents(state)
       |> then(&review_breakdown_parents(issues, &1))
+      |> close_finished_parents(issues)
       |> act_on_plan_comments(issues)
 
     state =
@@ -2792,6 +2872,38 @@ defmodule SymphonyElixir.Orchestrator do
       {:error, reason} ->
         Logger.warning("Failed to refresh breakdown parents before parking; retrying next poll reason=#{inspect(reason)}")
         []
+    end
+  end
+
+  # An issue that waits on its sub-issues after its PR merged (not a `breakdown` parent) moves to
+  # Done once every sub-issue is terminal; its PR is merged, so no run is needed. Candidates come
+  # from the repo poll cache, so each one is read again first: a sub-issue filed meanwhile keeps it
+  # waiting, and a person may have moved it on.
+  defp close_finished_parents(%State{} = state, issues) do
+    settings = Config.settings!()
+    terminal_states = terminal_state_set()
+
+    case Enum.filter(issues, &(SubIssueWait.close?(&1, terminal_states, settings) and not issue_claimed_or_running?(state, &1.id))) do
+      [] -> :ok
+      closeable -> closeable |> Enum.map(& &1.id) |> close_finished_parents_fresh(terminal_states, settings)
+    end
+
+    state
+  end
+
+  defp close_finished_parents_fresh(issue_ids, terminal_states, settings) do
+    case Tracker.fetch_issue_states_by_ids(issue_ids) do
+      {:ok, fresh_issues} ->
+        for %Issue{} = issue <- fresh_issues, SubIssueWait.close?(issue, terminal_states, settings), do: close_finished_parent(issue)
+
+      {:error, reason} ->
+        Logger.warning("Failed to refresh issues waiting on sub-issues before closing them; retrying next poll reason=#{inspect(reason)}")
+    end
+  end
+
+  defp close_finished_parent(%Issue{} = issue) do
+    with {:error, reason} <- SubIssueWait.close(issue, Tracker.adapter()) do
+      Logger.warning("Failed to move an issue whose sub-issues are finished to Done; retrying next poll: #{issue_context(issue)} reason=#{inspect(reason)}")
     end
   end
 
@@ -6925,6 +7037,7 @@ defmodule SymphonyElixir.Orchestrator do
           transcript_buffer_size: Map.get(metadata, :transcript_buffer_size, 0),
           forced: forced_entry?(metadata),
           linear_wait_until: active_linear_wait_until(metadata, now),
+          pending_tool: pending_tool(metadata, now),
           runtime_seconds: running_seconds(metadata.started_at, now)
         }
       end)
