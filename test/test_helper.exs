@@ -86,6 +86,10 @@ end
 # (CI's, `mix cover.changed`'s) depends on whether or which `claude` is installed.
 ExUnit.configure(exclude: [:real_claude | Keyword.get(ExUnit.configuration(), :exclude, [])])
 
+# The test that checks the dev server's record of the agent profiles' mach services against an SRT
+# install runs only with `--only srt_profile`; the `agent-profile` workflow runs it.
+ExUnit.configure(exclude: [:srt_profile | Keyword.get(ExUnit.configuration(), :exclude, [])])
+
 # Tests that measure an agent's niceness need `setpriority`, which sandboxed
 # agent runs deny; `nice` then warns and runs the command unchanged.
 case System.cmd("nice", ["-n", "1", "true"], stderr_to_stdout: true) do
