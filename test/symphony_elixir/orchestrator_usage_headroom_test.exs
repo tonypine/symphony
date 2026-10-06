@@ -67,14 +67,6 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
     pid
   end
 
-  # The boot poll dispatches every issue the tracker lists, and that real run's own retry would race
-  # the retry a test fakes. List the issues only once that poll is done.
-  defp start_orchestrator_listing(ctx, name, issues) do
-    pid = start_orchestrator(ctx, name)
-    Application.put_env(:symphony_elixir, :memory_tracker_issues, issues)
-    pid
-  end
-
   # The boot tick starts an async poll whose running-state refresh stops any run the memory
   # tracker does not list. Wait for it to finish so it cannot end the runs `start_run!` fakes.
   defp await_boot_poll(pid) do
@@ -313,7 +305,9 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
   test "a continuation deferred behind a dispatch readiness task stays a continuation and runs under the hold", ctx do
     write_headroom_workflow!(ctx, poll_interval_ms: 600_000)
     continuing = issue("issue-headroom-deferred", "MT-DEFERRED")
-    pid = start_orchestrator_listing(ctx, :DeferredContinuationOrchestrator, [continuing])
+    # Listed after the boot poll, or it dispatches a run whose continuation replaces the planted retry.
+    pid = start_orchestrator(ctx, :DeferredContinuationOrchestrator)
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [continuing])
     token = make_ref()
 
     :sys.replace_state(pid, fn state ->
@@ -348,7 +342,9 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
   test "a continuation deferred behind a quality gate task stays a continuation and runs under the hold", ctx do
     write_headroom_workflow!(ctx, poll_interval_ms: 600_000)
     continuing = issue("issue-headroom-gate-deferred", "MT-GATE-DEFERRED")
-    pid = start_orchestrator_listing(ctx, :GateDeferredContinuationOrchestrator, [continuing])
+    # Listed after the boot poll, or it dispatches a run whose continuation replaces the planted retry.
+    pid = start_orchestrator(ctx, :GateDeferredContinuationOrchestrator)
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [continuing])
     token = make_ref()
 
     :sys.replace_state(pid, fn state ->
@@ -384,7 +380,9 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
   test "a failure retry deferred behind a quality gate task does not become a continuation", ctx do
     write_headroom_workflow!(ctx, poll_interval_ms: 600_000)
     failed = issue("issue-headroom-gate-failure", "MT-GATE-FAILURE")
-    pid = start_orchestrator_listing(ctx, :GateDeferredFailureOrchestrator, [failed])
+    # Listed after the boot poll, or it dispatches a run whose continuation replaces the planted retry.
+    pid = start_orchestrator(ctx, :GateDeferredFailureOrchestrator)
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [failed])
     token = make_ref()
 
     :sys.replace_state(pid, fn state ->
