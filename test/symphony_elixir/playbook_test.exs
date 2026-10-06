@@ -50,6 +50,19 @@ defmodule SymphonyElixir.PlaybookTest do
     refute body =~ "A human\n   promotes the sub-tickets to `Todo`."
   end
 
+  test "the rendered prompt names the `plan` label, with `breakdown` as its older name" do
+    template = Solid.parse!(~s({% render "status_map" %}\n{% render "parent_tickets" %}))
+    {:ok, rendered, []} = Solid.render(template, %{}, file_system: {FileSystem, nil})
+    prompt = rendered |> IO.iodata_to_binary() |> String.replace(~r/\s+/, " ")
+
+    assert prompt =~ "The `plan` label is a human's signal that a ticket is a plan ticket"
+    assert prompt =~ "`breakdown` is the label's older name and is still accepted"
+    assert prompt =~ "when the ticket has the `plan` label, and when its title starts with `Final verification:`"
+    assert prompt =~ "`Waiting on sub-tickets` -> a plan ticket (label `plan`, or `breakdown`, its older name)"
+    assert prompt =~ "### Plan run (no `Sub-issues` in the issue context"
+    refute prompt =~ "The `breakdown` label is"
+  end
+
   test "parent_tickets resumes a stopped plan and revises one under review without re-planning" do
     assert {:ok, body} = Playbook.fetch("parent_tickets")
     flat = String.replace(body, ~r/\s+/, " ")
@@ -126,7 +139,7 @@ defmodule SymphonyElixir.PlaybookTest do
     assert flat =~ "link every artifact (each document or artifact comment, the HTML screens), list every sub-ticket"
     assert flat =~ "put every decision the plan leaves open under `Decisions needed`"
 
-    # Plan to In Review / Human Review: the breakdown run, a resumed plan and a re-plan.
+    # Plan to In Review / Human Review: the plan run, a resumed plan and a re-plan.
     assert flat =~
              "Leave the review brief (see `Review brief`): one brief for the whole plan, linking every artifact, " <>
                "listing every sub-ticket and every decision needed, with the moves that approve, change or reject it. " <>
