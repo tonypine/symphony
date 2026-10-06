@@ -57,7 +57,8 @@ defmodule SymphonyElixir.QaDriver do
   and again at each check, on the QA host for a `worker_host`), naming the page
   the agent passes and that window size in each problem. A resize on a screen
   whose usable area is under 1400×900 pt marks the pass's wide pass limited
-  (`wide_pass/1`), which `SymphonyElixir.QaAgent` reports as `blocked`.
+  (`wide_pass/1`), which `SymphonyElixir.QaAgent` reports as `blocked`, as it does
+  a `pass` with no resize at all (`wide_pass/1` is `nil`).
 
   OpenRouter stub: the first `qa_launch_app` starts a
   `SymphonyElixir.OpenRouter.Stub` in this BEAM, on `127.0.0.1`, and every app

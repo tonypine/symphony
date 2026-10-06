@@ -1391,7 +1391,9 @@ When enabled:
   `qa_check_app` reports whether the app still runs, answers an accessibility request within 10
   seconds, and has written a crash report since launch, naming the page the agent passes and that
   window size. A pass whose resize met a usable screen area under 1400×900 points MUST NOT be
-  reported `pass`: its `pass` becomes `blocked`, and that pass's `blocked` goes to a person. Every tool that
+  reported `pass`: its `pass` becomes `blocked`, and that pass's `blocked` goes to a person. A pass
+  with no `qa_resize_window` call MUST NOT be reported `pass` either: its wide pass did not run, so
+  its `pass` becomes `blocked` with that reason. Every tool that
   takes a PID MUST refuse a PID
   the pass did not launch. Apps still running when the pass ends MUST be quit. A missing Screen
   Recording or Accessibility grant MUST surface as a `qa_permission_missing` tool error that tells
