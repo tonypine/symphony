@@ -469,6 +469,41 @@ defmodule SymphonyElixir.RunStoreTest do
       assert scan > large * 5
     end
 
+    test "reads the runs of one issue from the index, newest first" do
+      put_indexed_runs(@repo_key, ["a-1", "a-2"], 0)
+      assert :ok = RunStore.put_run(%{repo_key: @repo_key, run_id: "a-3", issue_id: "issue-a-1", started_at: started_at(5)})
+      assert :ok = RunStore.put_run(%{repo_key: @other_repo_key, run_id: "b-1", issue_id: "issue-a-1", started_at: started_at(6)})
+      assert :ok = RunStore.put_run(%{repo_key: @repo_key, run_id: "no-issue", started_at: started_at(7)})
+
+      assert run_ids(RunStore.list_issue_runs(@repo_key, "issue-a-1")) == ["a-3", "a-1"]
+      assert run_ids(RunStore.list_issue_runs(@other_repo_key, "issue-a-1")) == ["b-1"]
+      assert RunStore.list_issue_runs(@repo_key, "missing-issue") == []
+
+      # A run moved to another issue or start is found only under its new ones.
+      assert :ok = RunStore.update_run(@repo_key, "a-3", %{issue_id: "issue-a-2", started_at: started_at(-1)})
+      assert run_ids(RunStore.list_issue_runs(@repo_key, "issue-a-1")) == ["a-1"]
+      assert run_ids(RunStore.list_issue_runs(@repo_key, "issue-a-2")) == ["a-2", "a-3"]
+
+      # Emptied as when RunStore starts, before the index is built: the read scans the repository.
+      assert :ok = RunIndex.create()
+      assert RunIndex.take_issue(@repo_key, "issue-a-2") == :unavailable
+      assert run_ids(RunStore.list_issue_runs(@repo_key, "issue-a-2")) == ["a-2", "a-3"]
+
+      restart_run_store()
+      assert {:ok, [{@repo_key, "a-2"}, {@repo_key, "a-3"}]} = RunIndex.take_issue(@repo_key, "issue-a-2")
+    end
+
+    test "reading one issue's runs costs the same however many runs the store holds" do
+      put_indexed_runs(@repo_key, Enum.map(1..20, &"small-#{&1}"), 0)
+      small = reductions(fn -> RunStore.list_issue_runs(@repo_key, "issue-small-1") end)
+
+      put_indexed_runs(@repo_key, Enum.map(1..400, &"large-#{&1}"), 100)
+      large = reductions(fn -> RunStore.list_issue_runs(@repo_key, "issue-small-1") end)
+
+      assert run_ids(RunStore.list_issue_runs(@repo_key, "issue-small-1")) == ["small-1"]
+      assert large < small * 2, "list_issue_runs/2 took #{large} reductions over 420 runs, #{small} over 20"
+    end
+
     test "an update moves a run whose start changed and keeps the record current" do
       put_indexed_runs(@repo_key, ["a-1", "a-2"], 0)
 
@@ -804,21 +839,22 @@ defmodule SymphonyElixir.RunStoreTest do
     Enum.find_index(attributes, &(&1 == field)) + 2
   end
 
+  # Returns once the new RunStore built its run index, and leaves it unlinked from the test.
+  # Stopping a supervised RunStore behind the supervisor's back raced the supervisor's own restart:
+  # the test could read the index while it was still being built, or own a RunStore that died after
+  # the test and was restarted, emptying the index, during the next one.
   defp restart_run_store do
-    if pid = Process.whereis(RunStore) do
-      GenServer.stop(pid)
+    case Supervisor.terminate_child(SymphonyElixir.Supervisor, RunStore) do
+      :ok ->
+        {:ok, pid} = Supervisor.restart_child(SymphonyElixir.Supervisor, RunStore)
+        pid
+
+      # Without the orchestrator runtime nothing supervises it: `RunStore.ensure_started/0` starts it.
+      {:error, :not_found} ->
+        if pid = Process.whereis(RunStore), do: GenServer.stop(pid)
+        {:ok, pid} = GenServer.start(RunStore, [], name: RunStore)
+        pid
     end
-
-    # The supervisor may restart it first and hand back a pid still in init, before the run
-    # index is built; a system message is only answered once init returned.
-    pid =
-      case RunStore.start_link([]) do
-        {:ok, pid} -> pid
-        {:error, {:already_started, pid}} -> pid
-      end
-
-    _state = :sys.get_state(pid)
-    pid
   end
 
   defp create_legacy_run_store_dir!(dir) do
