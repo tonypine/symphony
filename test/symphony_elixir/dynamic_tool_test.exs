@@ -790,6 +790,12 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
       response = DynamicTool.execute("qa_put_file", %{"local_path" => "qa-evidence/a.yml", "mode" => "0777"}, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
       assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
+
+      response = DynamicTool.execute("qa_resize_window", %{"pid" => 1, "x" => 0}, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
+      assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
+
+      response = DynamicTool.execute("qa_check_app", %{"pid" => 1, "page" => "Decide"}, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
+      assert %{"error" => %{"code" => "qa_driver_unavailable"}} = Jason.decode!(response["output"])
     end
 
     test "only the QA scope lists and runs the qa_android tools, routed to the Android driver" do

@@ -1385,7 +1385,13 @@ When enabled:
   directory there). `qa_put_file` MUST read only a regular file of bounded size that resolves inside
   the QA worktree or the pass's temp folder, and MUST refuse symlinks and files with other hard
   links. `qa_ax_set_value` MUST enter a text field's value so the app registers the edit, with key
-  events sent to that app alone, and the tools MUST NOT return a secure field's value. Every tool that
+  events sent to that app alone, and the tools MUST NOT return a secure field's value.
+  `qa_resize_window` (the playbook's wide pass) sizes a launched app's window to at least 1400×900
+  points, or the screen's usable area when that is smaller, through the Accessibility grant alone, and
+  `qa_check_app` reports whether the app still runs, answers an accessibility request within 10
+  seconds, and has written a crash report since launch, naming the page the agent passes and that
+  window size. A pass whose resize met a usable screen area under 1400×900 points MUST NOT be
+  reported `pass`: its `pass` becomes `blocked`, and that pass's `blocked` goes to a person. Every tool that
   takes a PID MUST refuse a PID
   the pass did not launch. Apps still running when the pass ends MUST be quit. A missing Screen
   Recording or Accessibility grant MUST surface as a `qa_permission_missing` tool error that tells
