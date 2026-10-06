@@ -296,7 +296,7 @@ Quote regular expressions with single quotes in YAML, so a backslash stays a bac
 | `timeout_ms` | `900000` (15 minutes) | How long a gate run may take. |
 | `max_concurrent` | `2` | Gate runs at once, across all repositories. |
 | `escalate.labels` | `needs-human`, `breakdown` | An issue with one of these labels escalates. Matching ignores case and surrounding spaces. |
-| `escalate.ticket_patterns` | the three above | Regular expressions matched against the issue title and description. |
+| `escalate.ticket_patterns` | the three above | Regular expressions matched against the issue title and description, after the human review state's name is blanked (see [What escalates](#what-escalates)). |
 | `escalate.paths` | the built-in paths below | Globs matched against each changed path outside docs and tests. `**` spans directories, `*` and `?` don't. |
 | `escalate.diff_patterns` | the four above | Regular expressions matched against each added line of the diff, in every file. Removed lines don't count. |
 | `escalate.dependencies` | `major` | `off`: dependency changes don't escalate. `major`: a new dependency or a major version change in `mix.lock` or `package.json` escalates. `any`: any added, changed or removed dependency escalates. |
@@ -346,7 +346,7 @@ for example `repositories[symphony].acceptance_gate.mode must be one of: off, sh
 
 ## What escalates
 
-`Escalation.check(issue, diff_summary, busy_files, rules)` returns one reason per rule that
+`Escalation.check(issue, diff_summary, busy_files, rules, opts)` returns one reason per rule that
 triggers, as `%{rule: atom, detail: String.t()}`, or `[]` when nothing does. The rules are
 checked in this order:
 
@@ -360,6 +360,15 @@ checked in this order:
 | `:size` | more than `escalate.max_changed_lines` lines change outside docs and tests. |
 | `:busy_file` | more than `escalate.busy_files.max_lines` lines change in one busy file. |
 | `:settings_ui` | an added line in Symphony's own config schema (`lib/symphony_elixir/config/schema.ex` or `system_schema.ex`) declares a setting (`field(`, `embeds_one(`, `embeds_many(` or a `~w(` key list) and the PR doesn't change the macOS app's settings manifest. Other repositories don't have these files. See [Settings in the macOS app](configuration.md#settings-in-the-macos-app). |
+
+A ticket that only names the human review state doesn't match `human review`. Before
+`ticket_patterns` match, the gate blanks `issues.states.human_review` (`Human Review` by default)
+where the text names the state: in backticks (`` `Human Review` ``), in bold (`**Human Review**`),
+after `to`, `in`, `into` or `from` ("moves it to Human Review"), or before `state` ("the Human
+Review state"). The name matches case-sensitively and only in those places, so "This change needs
+a human review before merge" and "manually review the SQL" still escalate. With
+`issues.states.human_review: null` nothing is blanked. The same applies when Symphony checks
+whether a `breakdown` plan's ticket asks for a human review.
 
 A version's major is its first number. When that number is `0`, the first two numbers count,
 so `0.4.0` to `0.5.0` is a major change. Only a leading version is read, after any `^`, `~`,
