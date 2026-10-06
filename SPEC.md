@@ -530,6 +530,11 @@ Fields:
     repo runs or waits joins it and reuses its result; a targeted fetch waits its turn. A fetch
     that fails with `cannot lock ref` is retried once after a short delay. On a remote worker the
     dispatch script's `git fetch origin` is not locked, only retried once.
+  - A host-side `git worktree add` for a dispatch takes the same per-repo lock, so the
+    dispatches of one repo add their worktrees one at a time. A new branch made from a base ref
+    is added with `--no-track`: no upstream config goes into the shared `.git/config`, whose
+    lock parallel adds would otherwise race for (the loser exits 255, its branch made but no
+    worktree). A failed add logs git's output.
   - Every git call Symphony makes runs SSH with keepalives, so a connection that stops answering
     is dropped after about a minute. A host-side `fetch`, `pull`, `push` or `ls-remote` also has
     a wall-clock limit (5 minutes by default, the `:git_network_timeout_ms` application env): at
