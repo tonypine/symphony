@@ -42,6 +42,35 @@ defmodule SymphonyElixir.OrchestratorPlanCommentsTest do
     refute_received {:memory_tracker_state_update, _issue_id, _state}
   end
 
+  test "a person's comment on an unapproved plan in Human Review starts no run and leaves the parent there" do
+    parent = parent("Human Review", [%{id: "child-1", identifier: "MOT-31", state: "Backlog"}], [~U[2026-10-04 12:10:00Z]])
+
+    put_feedback("parent", [change(~U[2026-10-04 12:00:00Z], "In Review", "Human Review")], [
+      comment("c1", "Split MOT-31 in two", ~U[2026-10-04 12:10:00Z])
+    ])
+
+    log = capture_log([level: :info], fn -> assert act(state(), parent) == state() end)
+
+    refute_received {:memory_tracker_plan_comments, _issue_id}
+    refute_received {:memory_tracker_state_update, _issue_id, _state}
+    refute log =~ "revise its plan"
+  end
+
+  test "a supervisor's note on a plan under review starts no run" do
+    parent = parent("In Review", [%{id: "child-1", identifier: "MOT-31", state: "Backlog"}], [~U[2026-10-04 12:11:00Z]])
+
+    put_feedback("parent", [change(~U[2026-10-04 12:00:00Z], "In Progress", "In Review")], [
+      comment("s1", "Supervisor review: plan reviewed, Tony decides. MOT-31 could be split.", ~U[2026-10-04 12:10:00Z]),
+      comment("s2", "Supervisor note: MOT-31 overlaps MOT-30's journey", ~U[2026-10-04 12:11:00Z])
+    ])
+
+    state = act(state(), parent)
+
+    assert_received {:memory_tracker_plan_comments, "parent"}
+    refute_received {:memory_tracker_state_update, _issue_id, _state}
+    assert state.plan_comment_checks == %{"parent" => ~U[2026-10-04 12:11:00Z]}
+  end
+
   test "Symphony's own comments and integration bots start no run" do
     parent = parent("In Review", [], [~U[2026-10-04 12:20:00Z]])
 
