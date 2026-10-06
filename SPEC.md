@@ -1124,6 +1124,10 @@ Fields:
   - Default: `10`
   - CPU time a process under a workspace or Symphony temp folder may use with no run attached
     before the dashboard warns about it (Section 8.5, Part D). `null` turns the check off.
+- `pending_tool_report_after_ms` (positive integer)
+  - Default: `60000` (1 minute)
+  - How long one of Symphony's own MCP tool calls must run before the runtime snapshot reports
+    the run's oldest pending call (`pending_tool`).
 
 #### 5.4.11 `workers` (object)
 
@@ -1894,6 +1898,7 @@ not require recognizing or validating extension fields unless that extension is 
 - `watchdog.tick_interval_ms`: integer, default `60000`
 - `watchdog.no_progress_threshold_ms`: integer, default `600000`
 - `watchdog.stray_process_cpu_minutes`: integer or `null`, default `10`
+- `watchdog.pending_tool_report_after_ms`: positive integer, default `60000`
 - `workers.ssh_hosts`: list of strings, default `[]`
 - `workers.max_concurrent_agents_per_host`: positive integer or null
 - `dashboard.enabled`: boolean, default `true`; turns the terminal dashboard on or off. It does not stop

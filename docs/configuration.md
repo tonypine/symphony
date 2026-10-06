@@ -1953,7 +1953,13 @@ watchdog:
   tick_interval_ms: 60000
   no_progress_threshold_ms: 600000
   stray_process_cpu_minutes: 10
+  pending_tool_report_after_ms: 60000
 ```
+
+`pending_tool_report_after_ms` (default `60000`, one minute; a positive integer) is how long one of
+Symphony's own MCP tool calls (`linear_*`, `github_*`, `qa_*`) must run before Symphony's state and
+the dashboard show the run as waiting on it. Settings in the macOS app edits it as "Show a pending
+tool call after", in minutes.
 
 On every tick the watchdog also reads the host's process table and warns about stray processes.
 A stray process runs in, or names on its command line, a folder under `workspaces.root`,

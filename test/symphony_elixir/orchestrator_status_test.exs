@@ -5328,6 +5328,32 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       Process.exit(worker_pid, :shutdown)
     end
 
+    test "shows the call only past watchdog.pending_tool_report_after_ms" do
+      watchdog = Map.put(@watchdog_only[:watchdog], :pending_tool_report_after_ms, 300_000)
+      pid = start_linear_wait_orchestrator!(:ToolCallReportAfterOrchestrator, Keyword.put(@watchdog_only, :watchdog, watchdog))
+
+      issue = linear_wait_issue("issue-tool-call-report-after")
+      {worker_pid, worker_ref} = start_blocked_worker()
+      put_running_entry(pid, issue, linear_wait_running_entry(issue, worker_pid, worker_ref, DateTime.utc_now()))
+
+      # Two minutes is past the default minute but short of the configured five.
+      deadline = DateTime.add(DateTime.utc_now(), 600, :second)
+      two_minutes_ago = DateTime.add(DateTime.utc_now(), -120, :second)
+      young_call = %{name: "linear_get_comments", started_at: two_minutes_ago, deadline: deadline}
+      send(pid, {:mcp_tool_call, issue.id, {:started, :young_call, young_call}})
+      assert %{running: [%{pending_tool: nil}]} = GenServer.call(pid, :snapshot)
+
+      six_minutes_ago = DateTime.add(DateTime.utc_now(), -360, :second)
+      old_call = %{name: "github_sync_base", started_at: six_minutes_ago, deadline: deadline}
+      send(pid, {:mcp_tool_call, issue.id, {:started, :old_call, old_call}})
+
+      assert %{running: [%{pending_tool: %{name: "github_sync_base", age_ms: age_ms}}]} = GenServer.call(pid, :snapshot)
+      assert age_ms >= 360_000
+
+      Process.demonitor(worker_ref, [:flush])
+      Process.exit(worker_pid, :shutdown)
+    end
+
     test "names the pending call when the watchdog restarts a run past the call's deadline" do
       pid = start_linear_wait_orchestrator!(:ToolCallStuckOrchestrator, @watchdog_only)
       issue = linear_wait_issue("issue-tool-call-stuck")
