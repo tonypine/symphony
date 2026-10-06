@@ -1964,8 +1964,15 @@ port range.
 Auto Review's `web` playbook starts the same dev server, from a worktree at the PR head, for each web QA pass
 (see [Web app QA](#web-app-qa)).
 
-`start_cmd` runs on the host as your user, outside the agent sandbox, and usually runs files the
-agent can change (see [security](security.md#verification-dev-server-runs-on-the-host)).
+`start_cmd` runs the checkout's code, which the agent can change, so Symphony runs it with
+`sh -lc` under macOS Seatbelt, with the agent's credential read-deny list, writes limited to the
+checkout, a temp folder of its own and the agent cache folder, the agent's environment, and
+network limited to loopback and, through a proxy Symphony sets as `HTTPS_PROXY`, the dependency
+hosts on `agent.permissions.network`'s allowlist, an allowlist of mach services like the agent's
+(no window server, no pasteboard), and no way to have launchd start a process outside the
+sandbox (Apple Events, `open`, `launchctl submit`) (see
+[security](security.md#verification-dev-server-runs-in-a-sandbox)). Off macOS the dev server does
+not start.
 
 ### `workers`
 
