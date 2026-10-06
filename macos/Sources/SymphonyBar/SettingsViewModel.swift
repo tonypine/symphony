@@ -123,7 +123,7 @@ final class SettingsViewModel: ObservableObject {
         secrets: SecretsReader? = nil,
         validator: SettingsValidator = SettingsValidator(embeddedSymphonyPath: SymphonyRunner.embeddedSymphonyPath),
         loginItem: LoginItemService = AppStores.current.loginItem,
-        openRouter: OpenRouterClient = OpenRouterClient(),
+        openRouter: OpenRouterClient = OpenRouterClient(baseURL: AppStores.current.openRouterBaseURL),
         configCheck: @escaping SettingsConfigCheck = SettingsViewModel.runConfigCheck,
         onSecretsChanged: @escaping () -> Void = {}
     ) {
