@@ -94,7 +94,7 @@ defmodule SymphonyElixir.AcceptanceGate.Report do
   defp mode_line(%{mode: "enforce", decision: %{verdict: nil}}), do: "**Mode:** enforce."
 
   defp mode_line(%{mode: "enforce"}),
-    do: "**Mode:** enforce, but the gate never moves a `breakdown` parent or a `Final verification:` ticket: this verdict is advisory, and the issue moves to In Review as before."
+    do: "**Mode:** enforce, but the gate never moves a plan parent or a `Final verification:` ticket: this verdict is advisory, and the issue moves to In Review as before."
 
   defp mode_line(%{mode: mode}), do: "**Mode:** #{mode}. The gate was turned off during this pass: this verdict is advisory, and the issue moves to In Review as before."
 
