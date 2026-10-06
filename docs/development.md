@@ -114,6 +114,25 @@ export LINEAR_API_KEY=...
 make e2e
 ```
 
+## Seatbelt tests
+
+The tests tagged `:seatbelt` run commands under the verification dev server's real
+`sandbox-exec` profile (see [security.md](security.md)). `test/test_helper.exs` skips them where
+`sandbox-exec` can't run: on Linux and inside an agent's sandbox, since Seatbelt can't nest. Run
+them on a Mac outside any sandbox with:
+
+```bash
+mix test --only seatbelt
+```
+
+Where a macOS version lets a command under the profile listen beyond loopback, the dev server
+refuses to start, and the tests that serve a page assert that refusal instead.
+
+The [`seatbelt` workflow](../.github/workflows/seatbelt.yml) runs the same command on the newest
+macOS runner image, on pull requests and pushes to `main` that change `lib/symphony_elixir/verification/`,
+`lib/symphony_elixir/agent_sandbox_config.ex`, `scripts/qa-dashboard-server.sh` or the tests
+themselves. It is not a required check.
+
 ## Required checks
 
 `main` requires the `make-all`, `macos` and `validate-pr-description` checks. A required check

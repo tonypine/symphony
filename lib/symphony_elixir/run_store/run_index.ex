@@ -180,7 +180,8 @@ defmodule SymphonyElixir.RunStore.RunIndex do
   end
 
   # A run whose `started_at`, `issue_id`, `status` or workspace identifier changed has its old
-  # entries replaced.
+  # entries replaced. The new entries go in before the stale ones go, so a concurrent read never
+  # finds the run missing from an entry both versions share.
   defp index(repo_key, run_id, record) do
     fields = {rank(Map.get(record, :started_at)), Map.get(record, :issue_id), Map.get(record, :status), workspace_identifier(record)}
 
@@ -189,11 +190,12 @@ defmodule SymphonyElixir.RunStore.RunIndex do
         :ok
 
       previous ->
-        Enum.each(previous, fn {_key, old_fields} ->
-          repo_key |> entries(run_id, old_fields) |> Enum.each(&:ets.delete(@table, &1))
-        end)
+        new_entries = entries(repo_key, run_id, fields)
+        :ets.insert(@table, [{{:run, repo_key, run_id}, fields} | Enum.map(new_entries, &{&1})])
 
-        :ets.insert(@table, [{{:run, repo_key, run_id}, fields} | Enum.map(entries(repo_key, run_id, fields), &{&1})])
+        Enum.each(previous, fn {_key, old_fields} ->
+          (entries(repo_key, run_id, old_fields) -- new_entries) |> Enum.each(&:ets.delete(@table, &1))
+        end)
     end
   end
 

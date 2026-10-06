@@ -79,6 +79,7 @@ defmodule SymphonyElixir.ForcedStatusTest do
     assert ForcedStatus.phase_label(:review_feedback) == "review feedback"
     assert ForcedStatus.phase_label("waiting_for_human") == "waiting for a human"
     assert ForcedStatus.phase_label(:close_out) == "close-out"
+    assert ForcedStatus.phase_label(:breakdown) == "plan"
     assert ForcedStatus.phase_label(nil) == "unknown"
 
     assert ForcedStatus.waiting_label(%{running: true, waiting_on: :slot}) == "running"

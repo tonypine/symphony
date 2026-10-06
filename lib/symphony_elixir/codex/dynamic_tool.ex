@@ -61,7 +61,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "linear_update_state",
       "description" =>
-        "Move the current Linear issue to a state in its team's workflow. Moving it to Merging is refused: only a human can approve a merge. With Auto Review on, moving it to In Review is refused too: Symphony moves the issue once the PR is open. When the issue needs a person (a breakdown plan its ticket says a human reviews, or after linear_request_human_action), a move to In Review or Backlog lands in Human Review instead when that state is on; the response names the state.",
+        "Move the current Linear issue to a state in its team's workflow. Moving it to Merging is refused: only a human can approve a merge. With Auto Review on, moving it to In Review is refused too: Symphony moves the issue once the PR is open. When the issue needs a person (a plan its ticket says a human reviews, or after linear_request_human_action), a move to In Review or Backlog lands in Human Review instead when that state is on; the response names the state.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -506,6 +506,36 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       }
     },
     %{
+      "name" => "qa_resize_window",
+      "description" =>
+        "Wide pass: move the launched app's main window (or the AXWindow at `path`) to the top left of the screen and resize it to width x height points (default 1400 x 900), or the screen's usable area when that is smaller. Returns the window frame it reached, the screen and its usable area, and `limited` when the screen is under 1400 x 900 pt.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["pid"],
+        "properties" => %{
+          "pid" => @pid_property,
+          "path" => %{"type" => "string", "description" => "The AXWindow's element path from qa_ax_tree, like `0`. Defaults to the app's main window."},
+          "width" => %{"type" => "integer", "minimum" => 1400, "maximum" => 8192, "default" => 1400},
+          "height" => %{"type" => "integer", "minimum" => 900, "maximum" => 8192, "default" => 900}
+        }
+      }
+    },
+    %{
+      "name" => "qa_check_app",
+      "description" =>
+        "Check a launched app's health: still running, answers an accessibility request within 10 s (not hung), and no new crash report in ~/Library/Logs/DiagnosticReports since launch. Works after the app exited. `problems` names the page you pass and the window size qa_resize_window set.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["pid"],
+        "properties" => %{
+          "pid" => @pid_property,
+          "page" => %{"type" => "string", "maxLength" => 200, "description" => "The page, view or panel on screen, named in the problems."}
+        }
+      }
+    },
+    %{
       "name" => "qa_put_file",
       "description" =>
         "Put a fixture file you wrote (a test config, a WORKFLOW.md) where the app can open it, and return the path to give the app. On a separate QA host the app cannot see your files, so always pass it this path. Only a regular file of at most 1 MB under the worktree or $TMPDIR; no symlinks.",
@@ -723,6 +753,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "qa_ax_tree" => ["pid", "role", "text", "max_depth", "max_nodes"],
     "qa_ax_press" => ["pid", "path", "action"],
     "qa_ax_set_value" => ["pid", "path", "value"],
+    "qa_resize_window" => ["pid", "path", "width", "height"],
+    "qa_check_app" => ["pid", "page"],
     "qa_put_file" => ["local_path", "remote_name"],
     "qa_android_install" => ["apk"],
     "qa_android_launch" => ["application_id"],
@@ -1895,7 +1927,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       "error" => %{
         "code" => "waiting_on_sub_issues_state_requires_human_approval",
         "message" =>
-          "linear_update_state cannot move the issue to #{inspect(state_name)}. Moving a `breakdown` parent there " <>
+          "linear_update_state cannot move the issue to #{inspect(state_name)}. Moving a plan parent there " <>
             "approves its plan and promotes its sub-tickets, so a human does it; move the parent to `In Review` instead."
       }
     }

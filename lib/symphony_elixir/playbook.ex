@@ -35,6 +35,7 @@ defmodule SymphonyElixir.Playbook do
     reproduce_and_blast_radius
     scoped_tools
     status_map
+    ticket_types
     workpad_bootstrap
     workpad_template
   )

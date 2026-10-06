@@ -1,111 +1,519 @@
+import AppKit
 import SwiftUI
 import SymphonyBarCore
 
-/// One row per connected repo, as `ReposList` describes them.
+/// The Repos window: a sidebar of repos and the detail of the selected one, as `ReposList` describes them.
 struct ReposView: View {
-    static let width: CGFloat = 640
+    static let defaultWidth: CGFloat = 880
+    static let defaultHeight: CGFloat = 600
+    static let minWidth: CGFloat = 720
+    static let minHeight: CGFloat = 460
 
     @ObservedObject var model: ReposViewModel
+    @FocusState private var sidebarFocused: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(model.message ?? "")
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer()
-                Button(AddRepo.buttonTitle) { model.onAddRepo() }
+        NavigationSplitView {
+            sidebar
+                .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 300)
+        } detail: {
+            VStack(spacing: 0) {
+                if let banner = model.shownBanner {
+                    ReposBannerView(banner: banner) { model.banner = nil }
+                }
+                detail
             }
-            .padding(12)
-            Divider()
-            if let notice = model.display.notice {
-                Text(notice)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(12)
-                Divider()
-            }
-            List(model.display.rows) { row in
-                RepoRowView(
-                    row: row,
-                    edit: { model.onEdit(row.key) },
-                    disconnect: { model.onDisconnect(row.key) },
-                    removeClone: { model.onRemoveClone(row.key) }
-                )
-            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        .frame(minWidth: 480, idealWidth: Self.width, minHeight: 320)
+        .frame(minWidth: Self.minWidth, minHeight: Self.minHeight)
         .sheet(isPresented: Binding(get: { model.addRepo != nil }, set: { if !$0 { model.addRepo = nil } })) {
             if let addRepo = model.addRepo {
                 AddRepoView(model: addRepo) { model.addRepo = nil }
             }
         }
     }
+
+    // MARK: Sidebar
+
+    private var sidebar: some View {
+        List(selection: $model.selection) {
+            ForEach(model.window.repos) { repo in
+                RepoSidebarRow(repo: repo)
+                    .tag(repo.key)
+                    .contextMenu { contextMenu(repo) }
+            }
+        }
+        .listStyle(.sidebar)
+        .focused($sidebarFocused)
+        .onAppear { sidebarFocused = true }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                Divider()
+                HStack(spacing: 2) {
+                    Button { model.onAddRepo() } label: {
+                        Image(systemName: "plus").frame(width: 22, height: 18)
+                    }
+                    .keyboardShortcut("n", modifiers: .command)
+                    .help(AddRepo.buttonTitle)
+                    .accessibilityLabel(AddRepo.buttonTitle)
+                    Button { model.selection.map(model.onDisconnect) } label: {
+                        Image(systemName: "minus").frame(width: 22, height: 18)
+                    }
+                    .keyboardShortcut(.delete, modifiers: [])
+                    .disabled(model.selected == nil || model.selected?.actions.disconnectProblem != nil)
+                    .help(model.selected?.actions.disconnectProblem ?? DisconnectRepo.buttonTitle)
+                    .accessibilityLabel(DisconnectRepo.buttonTitle)
+                    Spacer()
+                }
+                .buttonStyle(.borderless)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+            }
+            .background(.bar)
+        }
+    }
+
+    @ViewBuilder private func contextMenu(_ repo: RepoDetail) -> some View {
+        Button(EditRepo.buttonTitle) { model.onEdit(repo.key) }
+            .disabled(repo.actions.editProblem != nil)
+        Button(ReposList.revealTitle) { repo.source.path.map(reveal) }
+            .disabled(repo.source.path == nil)
+        Button(ReposList.openOnGitHubTitle) {
+            if let url = repo.gitHubURL { NSWorkspace.shared.open(url) }
+        }
+            .disabled(repo.gitHubURL == nil)
+        Divider()
+        Button(DisconnectRepo.buttonTitle) { model.onDisconnect(repo.key) }
+            .disabled(repo.actions.disconnectProblem != nil)
+    }
+
+    // MARK: Detail
+
+    @ViewBuilder private var detail: some View {
+        switch model.window.content {
+        case let .empty(state):
+            ReposEmptyView(state: state, model: model)
+        case .repos:
+            if let repo = model.selected {
+                RepoDetailView(repo: repo, model: model)
+            } else {
+                Text("Select a repo")
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
 }
 
-struct RepoRowView: View {
-    let row: RepoRow
-    let edit: () -> Void
-    let disconnect: () -> Void
-    let removeClone: () -> Void
+/// Shows `path` selected in a Finder window.
+@MainActor private func reveal(_ path: String) {
+    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+}
+
+/// What the last change did, at the top of the detail, with a close button. The text wraps to at most
+/// `maxLines` lines and never sizes itself: a banner that fixes its own height makes the split view probe it at a
+/// tiny width, grow thousands of points tall and draw the whole window off-screen.
+struct ReposBannerView: View {
+    let banner: ReposBanner
+    let dismiss: () -> Void
+    static let maxLines = 4
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Text(row.key).font(.headline)
-                if row.isDefault {
-                    Text(ReposList.defaultMarker)
-                        .font(.caption)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 1)
-                        .background(Capsule().fill(Color.secondary.opacity(0.2)))
-                        .help(ReposList.defaultHelp)
-                }
-                Spacer()
-                HStack(spacing: 6) { actions }
-                    .controlSize(.small)
+        let isError = banner.style == .error
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                .foregroundStyle(isError ? Color.red : Color.green)
+                .accessibilityLabel(isError ? "Error" : "Done")
+            Text(banner.text)
+                .lineLimit(Self.maxLines)
+                .truncationMode(.tail)
+                .textSelection(.enabled)
+                .help(banner.text)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button(action: dismiss) {
+                Image(systemName: "xmark")
             }
-            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 3) {
-                ForEach(row.fields, id: \.label) { field in
-                    GridRow {
-                        Text(field.label)
-                            .foregroundStyle(.secondary)
-                            .gridColumnAlignment(.trailing)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(field.value).foregroundStyle(color(field.tone))
-                            if let detail = field.detail {
-                                Text(detail)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(3)
-                                    .truncationMode(.middle)
-                                    .textSelection(.enabled)
-                            }
-                        }
-                        .help(field.detail ?? field.value)
+            .buttonStyle(.borderless)
+            .help(ReposBanner.dismissTitle)
+            .accessibilityLabel(ReposBanner.dismissTitle)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill((isError ? Color.red : Color.accentColor).opacity(0.1))
+        )
+        .padding(.horizontal, 20)
+        .padding(.top, 12)
+    }
+}
+
+/// The toolbar chip with Symphony's state, or the restart under way with a pop-over of what it waits on.
+struct ReposChipView: View {
+    @ObservedObject var model: ReposViewModel
+    @State private var showsPopover = false
+
+    var body: some View {
+        if let restart = model.restartChip {
+            Button { showsPopover.toggle() } label: {
+                capsule(title: restart.title, dot: .orange)
+            }
+            .buttonStyle(.plain)
+            .help(restart.line ?? restart.title)
+            .popover(isPresented: $showsPopover, arrowEdge: .bottom) {
+                ReposRestartPopover(chip: restart, model: model)
+            }
+        } else {
+            capsule(title: model.window.chip.title, dot: model.window.chip.dot)
+        }
+    }
+
+    private func capsule(title: String, dot: ReposChip.Dot) -> some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(color(dot))
+                .frame(width: 8, height: 8)
+            Text(title)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 3)
+        .overlay(Capsule().strokeBorder(Color(nsColor: .separatorColor)))
+        .contentShape(Capsule())
+        .fixedSize()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+    }
+
+    private func color(_ dot: ReposChip.Dot) -> Color {
+        switch dot {
+        case .green: return .green
+        case .orange: return .orange
+        case .grey: return .gray
+        case .red: return .red
+        }
+    }
+}
+
+/// The restart chip's pop-over: what the restart does now, the runs it waits on, and Restart Now and Cancel Restart
+/// while it can take them.
+struct ReposRestartPopover: View {
+    let chip: ReposRestartChip
+    @ObservedObject var model: ReposViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(chip.title)
+                .font(.headline)
+            if let line = chip.line {
+                Text(line)
+                    .foregroundStyle(.secondary)
+            }
+            if !chip.runs.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(chip.runs, id: \.self) { run in
+                        Text(run)
+                            .textSelection(.enabled)
                     }
                 }
             }
-            ForEach(row.actions.notes, id: \.self) { note in
-                Text(note)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+            if chip.showsRestartNow || chip.showsCancel {
+                HStack {
+                    Spacer()
+                    if chip.showsCancel {
+                        Button(chip.cancelTitle) { model.onCancelRestart() }
+                    }
+                    if chip.showsRestartNow {
+                        Button(chip.restartNowTitle) { model.onRestartNow() }
+                            .disabled(!chip.restartNowEnabled)
+                            .help(chip.restartNowEnabled ? chip.restartNowTitle : ReposRestartChip.restartNowHelp)
+                    }
+                }
             }
         }
-        .padding(.vertical, 6)
+        .padding(14)
+        .frame(width: 300, alignment: .leading)
+    }
+}
+
+/// A sidebar row: key, `owner/repo` or the folder name, Default and the running agents.
+struct RepoSidebarRow: View {
+    let repo: RepoDetail
+
+    var body: some View {
+        HStack(spacing: 6) {
+            HealthGlyph(status: repo.health.status)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(repo.key)
+                    .lineLimit(1)
+                if let subtitle = repo.subtitle {
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            Spacer(minLength: 4)
+            if repo.isDefault {
+                Badge(text: ReposList.defaultBadge)
+                    .help(ReposList.defaultHelp)
+            }
+            if repo.agentCount > 0 {
+                Badge(text: "\(repo.agentCount)", prominent: true)
+            }
+        }
+        .padding(.vertical, 2)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(repo.accessibilityLabel)
+    }
+}
+
+/// A repo's status, told apart by shape as well as colour: a green circle, an orange triangle, a red diamond, or a
+/// hollow grey circle while nothing was checked.
+struct HealthGlyph: View {
+    let status: RepoHealth.Status
+
+    var body: some View {
+        Image(systemName: symbol)
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(color)
+            .frame(width: 12)
+            .help(status.spoken.prefix(1).uppercased() + status.spoken.dropFirst())
+            .accessibilityLabel(status.spoken)
     }
 
-    @ViewBuilder private var actions: some View {
-        Button(EditRepo.buttonTitle, action: edit)
-            .disabled(row.actions.editProblem != nil)
-            .help(row.actions.editProblem ?? "Change where the code comes from, the base branch and the Linear route.")
-        Button(DisconnectRepo.buttonTitle, action: disconnect)
-            .disabled(row.actions.disconnectProblem != nil)
-            .help(row.actions.disconnectProblem ?? "Remove the repo from symphony.yml. No folder is deleted.")
-        if let removal = row.actions.cloneRemoval {
-            Button(ManagedClones.buttonTitle, action: removeClone)
-                .disabled(removal.path == nil)
-                .help(cloneRemovalHelp(removal))
+    private var symbol: String {
+        switch status {
+        case .healthy: return "circle.fill"
+        case .needsAttention: return "triangle.fill"
+        case .notWorking: return "diamond.fill"
+        case .notChecked: return "circle"
+        }
+    }
+
+    private var color: Color {
+        switch status {
+        case .healthy: return .green
+        case .needsAttention: return .orange
+        case .notWorking: return .red
+        case .notChecked: return .gray
+        }
+    }
+}
+
+/// A small capsule, such as **Default** or an agent count.
+struct Badge: View {
+    let text: String
+    var prominent = false
+
+    var body: some View {
+        Text(text)
+            .font(.caption2)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .foregroundStyle(prominent ? Color.white : Color.secondary)
+            .background(Capsule().fill(prominent ? Color.accentColor : Color.secondary.opacity(0.18)))
+    }
+}
+
+/// The selected repo: header, then Source, Linear routing, WORKFLOW.md, Activity and Acceptance gate, then
+/// Disconnect….
+struct RepoDetailView: View {
+    let repo: RepoDetail
+    @ObservedObject var model: ReposViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+                .padding(.horizontal, 20)
+                .padding(.top, 16)
+            Form {
+                if repo.health.showsBox {
+                    Section {
+                        NeedsAttentionBox(health: repo.health, model: model)
+                    }
+                }
+                source
+                routing
+                live
+                if let gate = repo.gate {
+                    Section("Acceptance gate") {
+                        FieldRow(field: gate.mode)
+                        LabeledContent("Record") {
+                            Text(gate.record).multilineTextAlignment(.trailing)
+                        }
+                    }
+                }
+            }
+            .formStyle(.grouped)
+            Divider()
+            footer
+                .padding(.horizontal, 20)
+                .padding(.vertical, 10)
+        }
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            title
+            HStack(spacing: 6) {
+                HealthGlyph(status: repo.health.status)
+                Text(repo.health.summary)
+                    .foregroundStyle(.secondary)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(repo.health.summary)
+        }
+    }
+
+    private var title: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(repo.key)
+                .font(.title2.weight(.semibold))
+                .lineLimit(1)
+                .textSelection(.enabled)
+            if let github = repo.github, let url = repo.gitHubURL {
+                Link(github, destination: url)
+                    .help(ReposList.openOnGitHubTitle)
+            }
+            if repo.isDefault {
+                Badge(text: ReposList.defaultBadge)
+                    .help(ReposList.defaultHelp)
+            }
+            Spacer()
+            Button(EditRepo.buttonTitle) { model.onEdit(repo.key) }
+                .disabled(repo.actions.editProblem != nil)
+                .help(repo.actions.editProblem ?? "Change where the code comes from, the base branch, the Linear route "
+                    + "and the acceptance gate.")
+        }
+    }
+
+    private var source: some View {
+        Section("Source") {
+            LabeledContent("Kind", value: repo.source.kindTitle)
+            if let path = repo.source.path, let shown = repo.source.shownPath {
+                LabeledContent(repo.source.pathLabel) {
+                    HStack(spacing: 8) {
+                        Text(shown)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .textSelection(.enabled)
+                            .help(path)
+                        Button(ReposList.revealTitle) { reveal(path) }
+                            .controlSize(.small)
+                    }
+                }
+            } else if repo.source.notCloned {
+                LabeledContent("Clone", value: ReposList.notClonedLine)
+            }
+            LabeledContent("Base branch", value: repo.source.baseBranch)
+            if let removal = repo.actions.cloneRemoval, !repo.source.notCloned {
+                HStack(alignment: .firstTextBaseline) {
+                    if case let .blocked(reason) = removal {
+                        Text(reason)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer()
+                    Button(ManagedClones.buttonTitle) { model.onRemoveClone(repo.key) }
+                        .disabled(removal.path == nil)
+                        .help(cloneRemovalHelp(removal))
+                }
+            }
+        }
+    }
+
+    private var routing: some View {
+        Section("Linear routing") {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(repo.routing.sentence)
+                if let line = repo.routing.defaultLine {
+                    Text(line).foregroundStyle(.secondary)
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            ForEach(repo.routing.fields, id: \.label) { FieldRow(field: $0) }
+        }
+    }
+
+    @ViewBuilder private var live: some View {
+        switch repo.live {
+        case let .folded(line, canStart):
+            Section("WORKFLOW.md and activity") {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(line)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    if canStart {
+                        Button(StatusMenu.startTitle) { model.onStart() }
+                            .disabled(!model.canStart)
+                    }
+                }
+            }
+        case let .status(workflow, lastFetch, agents, agentsProblem):
+            Section("WORKFLOW.md") {
+                FieldRow(field: workflow)
+            }
+            Section("Activity") {
+                FieldRow(field: lastFetch)
+                if let agentsProblem {
+                    Text(agentsProblem)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if agents.isEmpty {
+                    Text(ReposList.noAgentsLine).foregroundStyle(.secondary)
+                } else {
+                    ForEach(agents, id: \.issueIdentifier) { agent in
+                        HStack(alignment: .firstTextBaseline) {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(agent.title)
+                                if let activity = agent.activity {
+                                    Text(activity)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            if let path = agent.worktreePath {
+                                Text((path as NSString).abbreviatingWithTildeInPath)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                    .textSelection(.enabled)
+                                    .help(path)
+                            }
+                            Spacer()
+                            if let path = agent.worktreePath {
+                                Button(ReposList.revealWorktreeTitle) { reveal(path) }
+                                    .controlSize(.small)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var footer: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            // A bordered macOS button ignores the role and the label's colour; a red tint on a prominent one shows.
+            Button(DisconnectRepo.buttonTitle, role: .destructive) { model.onDisconnect(repo.key) }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .disabled(repo.actions.disconnectProblem != nil)
+                .help(repo.actions.disconnectProblem ?? "Remove the repo from symphony.yml. No folder is deleted.")
+            if let problem = repo.actions.disconnectProblem {
+                Text(problem)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            Spacer()
         }
     }
 
@@ -117,15 +525,199 @@ struct RepoRowView: View {
             return reason
         }
     }
+}
 
-    private func color(_ tone: RepoField.Tone) -> Color {
-        switch tone {
-        case .normal:
-            return .primary
-        case .unavailable:
-            return .secondary
-        case .problem:
-            return .red
+/// The Needs attention box: one row per problem, errors first, each with its fixes; then the information lines.
+struct NeedsAttentionBox: View {
+    let health: RepoHealth
+    @ObservedObject var model: ReposViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(RepoHealth.boxTitle)
+                .font(.headline)
+            ForEach(health.problems) { problem in
+                row(problem)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8).fill(tint.opacity(0.12)))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(tint.opacity(0.5)))
+    }
+
+    private var tint: Color {
+        health.status == .notWorking ? .red : .orange
+    }
+
+    private func row(_ problem: RepoHealth.Problem) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: icon(problem.severity))
+                .foregroundStyle(color(problem.severity))
+                .accessibilityLabel(spoken(problem.severity))
+            VStack(alignment: .leading, spacing: 4) {
+                Text(problem.title)
+                    .fontWeight(problem.severity == .info ? .regular : .semibold)
+                    .foregroundStyle(problem.severity == .info ? Color.secondary : Color.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let detail = problem.detail {
+                    Text(detail)
+                        .font(.system(.callout, design: .monospaced))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let note = problem.note {
+                    Text(note)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if !problem.fixes.isEmpty {
+                    HStack(spacing: 8) {
+                        ForEach(problem.fixes, id: \.title) { fix in
+                            Button(fix.title) { model.onFix(fix) }
+                                .controlSize(.small)
+                                .disabled(stopping(fix))
+                        }
+                        if problem.fixes.contains(where: stopping) {
+                            ProgressView().controlSize(.small)
+                        }
+                    }
+                }
+                if let failure = stopFailure(problem) {
+                    Text(failure)
+                        .font(.callout)
+                        .foregroundStyle(.red)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    private func stopping(_ fix: RepoHealth.Fix) -> Bool {
+        guard case let .stopRun(identifier) = fix else { return false }
+        return model.stopping.contains(identifier)
+    }
+
+    private func stopFailure(_ problem: RepoHealth.Problem) -> String? {
+        for case let .stopRun(identifier) in problem.fixes {
+            if let failure = model.stopFailures[identifier] { return failure }
+        }
+        return nil
+    }
+
+    private func icon(_ severity: RepoHealth.Severity) -> String {
+        switch severity {
+        case .error: return "xmark.octagon.fill"
+        case .warning: return "exclamationmark.triangle.fill"
+        case .info: return "info.circle"
+        }
+    }
+
+    private func color(_ severity: RepoHealth.Severity) -> Color {
+        switch severity {
+        case .error: return .red
+        case .warning: return .orange
+        case .info: return .secondary
+        }
+    }
+
+    private func spoken(_ severity: RepoHealth.Severity) -> String {
+        switch severity {
+        case .error: return "Error"
+        case .warning: return "Warning"
+        case .info: return "Information"
+        }
+    }
+}
+
+/// A label and its value, with the detail under the value in small selectable text.
+struct FieldRow: View {
+    let field: RepoField
+
+    var body: some View {
+        LabeledContent(field.label) {
+            VStack(alignment: .trailing, spacing: 1) {
+                Text(field.value)
+                    .foregroundStyle(field.tone == .problem ? Color.red : Color.primary)
+                if let detail = field.detail {
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.trailing)
+                        .lineLimit(3)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
+            }
+        }
+        .help(field.detail ?? field.value)
+    }
+}
+
+/// No repos, no `symphony.yml` set, or one that can't be read, each with its way out.
+struct ReposEmptyView: View {
+    let state: ReposEmptyState
+    @ObservedObject var model: ReposViewModel
+
+    var body: some View {
+        // The geometry reader and scroll view keep the wrapped text from setting the split view's
+        // minimum height: without them the column can grow taller than the window and push the
+        // sidebar footer off screen.
+        GeometryReader { proxy in
+            ScrollView {
+                content
+                    .padding(40)
+                    .frame(maxWidth: 480)
+                    .frame(width: proxy.size.width)
+                    .frame(minHeight: proxy.size.height)
+            }
+        }
+    }
+
+    private var content: some View {
+        VStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 40))
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            Text(state.title)
+                .font(.title3.weight(.semibold))
+                .multilineTextAlignment(.center)
+            Text(state.message)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            switch state {
+            case .noRepos:
+                Button(AddRepo.buttonTitle) { model.onAddRepo() }
+                    .keyboardShortcut(.defaultAction)
+            case .noConfig:
+                Button(ReposList.openSettingsTitle) { model.onOpenSettings() }
+                    .keyboardShortcut(.defaultAction)
+            case let .unreadable(path, message):
+                Text(message)
+                    .font(.system(.callout, design: .monospaced))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.1)))
+                HStack {
+                    Button(ReposList.revealTitle) { reveal(path) }
+                    Button(ReposList.tryAgainTitle) { model.onTryAgain() }
+                        .keyboardShortcut(.defaultAction)
+                }
+            }
+        }
+    }
+
+    private var icon: String {
+        switch state {
+        case .noRepos: return "square.stack.3d.up"
+        case .noConfig: return "gearshape"
+        case .unreadable: return "exclamationmark.triangle"
         }
     }
 }

@@ -143,6 +143,8 @@ defmodule SymphonyElixir.AcceptanceGateConfigTest do
 
       for {field, values} <- Escalate.built_in(), do: assert(Map.fetch!(gate.escalate, field) == values)
       assert "needs-human" in gate.escalate.labels
+      assert "plan" in gate.escalate.labels
+      assert "breakdown" in gate.escalate.labels
       assert ".github/workflows/**" in gate.escalate.paths
     end
 

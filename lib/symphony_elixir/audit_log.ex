@@ -14,6 +14,7 @@ defmodule SymphonyElixir.AuditLog do
   @redacted "[REDACTED]"
   @preview_chars 500
   @result_preview_chars 500
+  @tail_chunk_bytes 65_536
   @common_secret_envs [
     "LINEAR_API_KEY",
     "LINEAR_ASSIGNEE",
@@ -1070,14 +1071,43 @@ defmodule SymphonyElixir.AuditLog do
     {:error, {:invalid_record, line_number, :not_a_json_object}}
   end
 
+  # Reads the day's file backwards from its end, a chunk at a time, so a write costs the same at
+  # the end of a busy day as at its start: decoding the whole file took seconds per event once it
+  # reached tens of MB, with the `:global` lock held.
   defp last_record_hash(path) do
-    path
-    |> read_ndjson_lines()
-    |> Enum.reverse()
-    |> Enum.find_value(fn
-      {_line_number, %{} = event} -> Map.get(event, "record_hash")
-      _line -> nil
-    end)
+    case File.open(path, [:read, :binary, :raw]) do
+      {:ok, io} ->
+        try do
+          {:ok, size} = :file.position(io, :eof)
+          tail_record_hash(io, size, "")
+        after
+          File.close(io)
+        end
+
+      {:error, _reason} ->
+        nil
+    end
+  end
+
+  defp tail_record_hash(_io, 0, _partial_line), do: nil
+
+  defp tail_record_hash(io, position, partial_line) do
+    start = max(position - @tail_chunk_bytes, 0)
+    {:ok, chunk} = :file.pread(io, start, position - start)
+    [first | complete] = String.split(chunk <> partial_line, "\n")
+    lines = if start == 0, do: [first | complete], else: complete
+
+    case lines |> Enum.reverse() |> Enum.find_value(&line_record_hash/1) do
+      nil when start > 0 -> tail_record_hash(io, start, first)
+      hash -> hash
+    end
+  end
+
+  defp line_record_hash(line) do
+    case line |> String.trim() |> decode_json_line() do
+      %{} = event -> Map.get(event, "record_hash")
+      _not_event -> nil
+    end
   end
 
   defp normalize_event_type(event_type) when is_atom(event_type), do: Atom.to_string(event_type)

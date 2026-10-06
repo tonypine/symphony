@@ -1,20 +1,21 @@
 {% comment %}
 name: parent_tickets
-description: Parent tickets labeled breakdown are groomed into sub-tickets; breakdown (new, resumed, revised, re-planned), final verification, and close-out runs never open a PR.
+description: Plan tickets (label plan, or breakdown, its older name) are groomed into sub-tickets; plan (new, resumed, revised, re-planned), final verification, and close-out runs never open a PR.
 vars: []
 {% endcomment %}## Parent tickets (tickets with sub-tickets)
 
-The `breakdown` label is a human's signal that a ticket is too large for one PR and
-must be groomed into sub-tickets before any work starts. The label stays on the
-parent while its sub-tickets are worked. Follow this section instead of the normal
-implementation steps when the ticket has the `breakdown` label, and when its title
-starts with `Final verification:`.
+The `plan` label is a human's signal that a ticket is a plan ticket: too large for
+one PR, it does plan work and must be groomed into sub-tickets before any work
+starts. `breakdown` is the label's older name and is still accepted; read it as
+`plan` everywhere below. The label stays on the parent while its sub-tickets are
+worked. Follow this section instead of the normal implementation steps when the
+ticket has the `plan` label, and when its title starts with `Final verification:`.
 
-Rules for every `breakdown` parent run:
+Rules for every plan ticket run:
 
 - Never create commits, push a branch, open a PR, or attach any other artifact for
   the parent. Its deliverables are its sub-tickets.
-- The plan is reviewed before any sub-ticket is worked. The breakdown run leaves
+- The plan is reviewed before any sub-ticket is worked. The plan run leaves
   its sub-tickets in `Backlog` and moves the parent to `In Review` (Symphony puts
   it in `Human Review` instead when the ticket says a human reviews the plan, such
   as a `needs-human` label or "must not auto-approve"). A human
@@ -26,29 +27,29 @@ Rules for every `breakdown` parent run:
   rejected plan's sub-tickets still in `Backlog` and starts a re-plan run. Each
   batch Symphony promotes or cancels is listed in one comment on the parent.
 - A plan is approved once a sub-ticket left `Backlog`. Symphony does not dispatch or
-  continue a `breakdown` parent outside `Rework` whose approved plan has a sub-issue
+  continue a plan ticket outside `Rework` whose approved plan has a sub-issue
   outside a terminal state, and dispatches the close-out run once every sub-issue is
   terminal. A parent whose open sub-tickets are all still in `Backlog` was never
-  approved: in `Todo` or `In Progress` it gets a breakdown run, never the waiting
+  approved: in `Todo` or `In Progress` it gets a plan run, never the waiting
   state.
 - Never promote a sub-ticket, and never edit or cancel one outside `Backlog`:
   `linear_update_subissue` refuses it, because a person already promoted it.
 - Keep the workpad as the single progress record, as for any ticket.
 
-Which breakdown run this is:
+Which plan run this is:
 
-- **New plan:** the parent has no sub-tickets yet. Follow the breakdown run below.
+- **New plan:** the parent has no sub-tickets yet. Follow the plan run below.
 - **Resume:** the parent is in `Todo` or `In Progress`, has sub-tickets in `Backlog`
   only, and no person commented since the plan was last handed over for review. A
   previous run stopped midway (a usage limit, a crash, a person moving it back).
   Read the workpad and the newest comments, keep every artifact comment and
-  sub-ticket already made, do only what is left of the breakdown run below (never
+  sub-ticket already made, do only what is left of the plan run below (never
   file a sub-ticket a second time), and move the parent to `In Review`.
 - **Revise:** Symphony moved the parent from `In Review` back to `In Progress`
   because a person commented on the plan. Follow the plan revision run below.
 - **Re-plan:** the parent is in `Rework`. Follow the re-plan run below.
 
-### Breakdown run (no `Sub-issues` in the issue context, or the parent is in `Rework`)
+### Plan run (no `Sub-issues` in the issue context, or the parent is in `Rework`)
 
 1. Read the description and comments, and write the planned split in the workpad.
 2. Create each sub-ticket with `linear_create_subissue`, in the order they should
@@ -72,7 +73,7 @@ In `Rework` (a re-plan run), the human rejected the plan:
 - Read every review comment and write in the workpad what the new plan changes.
 - Symphony has cancelled the rejected plan's sub-tickets that were still in
   `Backlog`, and listed them in a comment on the parent. A `Backlog` sub-ticket a
-  person added outside the breakdown run (a follow-up idea, a parked
+  person added outside the plan run (a follow-up idea, a parked
   `Final verification:`) stays; leave it alone and fold it into the new plan. Do not
   create a replacement for a sub-ticket outside `Backlog` and `Canceled` (a human
   already promoted it), and do not create one twice: a sub-ticket in `Backlog` that
@@ -82,7 +83,7 @@ In `Rework` (a re-plan run), the human rejected the plan:
 
 ### Plan revision run (a person commented on the plan under review)
 
-When a person comments on a `breakdown` parent in `In Review` whose plan is not
+When a person comments on a plan ticket in `In Review` whose plan is not
 approved yet, Symphony moves it to `In Progress` and starts this run. It changes the
 plan in place; it is not a re-plan.
 
@@ -129,7 +130,7 @@ sub-issue is terminal, outside `Rework`.
 
 1. Confirm with `linear_get_subissues` that every sub-ticket is `Done` (or
    deliberately cancelled) and that a `Final verification:` sub-ticket exists and is
-   `Done`. If there is none, create it as in the breakdown run and end the turn.
+   `Done`. If there is none, create it as in the plan run and end the turn.
 2. Post one project update with `linear_create_project_update`: what shipped, the
    sub-tickets that delivered it, and any follow-ups left open.
 3. Move the parent to `Done`.

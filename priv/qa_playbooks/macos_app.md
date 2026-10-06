@@ -15,6 +15,17 @@ for you on the host. They only act on this worktree's configured app and on apps
   types into a text field the way a person does and presses Tab to commit it, so the app
   saves what it shows; it fails with `text_not_entered` or `not_focused` when the text did not
   land.
+- `qa_resize_window`: moves the app's main window (or the `AXWindow` at `path`) to the top left
+  of the screen and resizes it to `width`×`height` points, 1400×900 by default, or the screen's
+  usable area when that is smaller. It returns the window's new frame in `window` (`x`, `y`, `w`,
+  `h`), the `screen` size, its `visible` (usable) area, and `limited: true` when that area is
+  under 1400×900 pt.
+- `qa_check_app`: says whether the app is still `running`, `responding` (it answered an
+  accessibility request within 10 seconds; a hung app does not) and has written no new crash
+  report since launch (`crash_reports`, from `~/Library/Logs/DiagnosticReports` on the machine
+  the app runs on). Pass the `page` on screen: each entry of `problems` names it and the window
+  size `qa_resize_window` set. `healthy` is true when there are no problems. It works after the
+  app has exited.
 - `qa_screenshot`: saves the app's windows to `qa-evidence/<name>.png`. Each name can be used
   once; it never replaces an existing file.
 - `qa_quit_app`: quits the app and returns its recent output.
@@ -23,6 +34,20 @@ for you on the host. They only act on this worktree's configured app and on apps
 
 Do not edit files in the worktree, gitignored ones included (such as build caches):
 `qa_build` and `qa_launch_app` refuse a modified checkout.
+
+Servers the app talks to (a stub of the project's API, a proxy) run in your shell on this host:
+- Bind each one to `127.0.0.1` at a port from `QA_HOST_PORTS` (see "Host ports" above), never
+  to `0.0.0.0` or another port, and point the app at `http://localhost:<port>`. The app may run on
+  a separate QA machine: Symphony forwards those ports, and only those, from its `localhost` to
+  this host's `127.0.0.1`.
+- Never give the app this host's LAN or bridge address: the QA machine may not reach it, and
+  macOS asks a person for Local Network permission before an app connects to one, which QA
+  cannot grant.
+- Start the server before the app connects and keep it running while you drive the app (your
+  shell tool's background option, with a time limit). Have it log each request, and quote the
+  app's requests from that log in the step's `details`.
+- When the server cannot listen on the port, or the app still cannot reach it, mark the steps
+  that need it `blocked` with the error in `details`.
 
 1. Run `qa_build`. A non-zero `exit_status` from a change that should build is a failing
    step; quote the end of the output.
@@ -64,9 +89,30 @@ Do not edit files in the worktree, gitignored ones included (such as build cache
      `symphony-qa/no-tools` (no tools, so the Models picker leaves it out).
    Judge the walkthrough's OpenRouter steps with these, `pass` or `fail`. Checks with a real key
    are manual and not part of QA.
-8. Run `qa_quit_app` when you are done. It returns what the app wrote to its output; quote
+8. **Wide pass.** Layout bugs that only show in wide windows (a layout loop, a constraint
+   crash) never appear at the default size, so after the walkthrough run the app wide:
+   - call `qa_resize_window` for the app's main window. When the main window is not the one the
+     PR changes (a Settings window, a panel), pass that window's `path`. Use the default
+     1400×900 unless the ticket names a larger size;
+   - with the window at that size, open each page or view the PR changes (the main page when it
+     changes none), and on each one the inspector or side panel where the page has one;
+   - on each of them, wait 30 seconds with the app running (`sleep 30` in your shell), then call
+     `qa_check_app` with `page` set to the page's name (for example `Decide` or
+     `Decide + inspector`), and take a `qa_screenshot`.
+   Report one step named `Wide pass` with: the window size `qa_resize_window` reached, the
+   screen size it reports, and every page and panel you opened with its `qa_check_app` result.
+   The step fails when `qa_check_app` is not `healthy` on any of them (the app exited, it hung,
+   or it wrote a new crash report): quote its `problems`, which name the page and the window
+   size, and list each one in `findings`. When the app exits, wait 10 seconds and call
+   `qa_check_app` once more, because macOS writes the crash report a few seconds after the
+   crash. When `qa_resize_window` returns `limited: true`, the QA screen is too small for the
+   wide pass: still run it at the size you got, say in the step that the wide pass was limited
+   with the screen size, and mark the step `blocked`. Symphony reports a pass whose wide pass
+   was limited as `blocked` either way, so a person enlarges the QA screen, and reports a pass
+   with no `qa_resize_window` call as `blocked` too, because its wide pass did not run.
+9. Run `qa_quit_app` when you are done. It returns what the app wrote to its output; quote
    the lines that bear on a step in that step's `details`.
-9. Attach the screenshots that show each step's result with `linear_attach_file`
+10. Attach the screenshots that show each step's result with `linear_attach_file`
    (`make_public: false`) and list the returned URLs in that step's `evidence`.
 
 Verdicts for this playbook:
@@ -79,5 +125,5 @@ Verdicts for this playbook:
   steps of the other playbooks offered to you (such as `cli` or `web`) and report each of
   them as `pass` or `fail`. Answer `blocked` with the tool's message as `reason`. Do the same
   for `qa_helper_unavailable`.
-- The app crashing or exiting (`qa_app_exited`) during the walkthrough is a failing step;
-  quote its last output.
+- The app crashing or exiting (`qa_app_exited`) during the walkthrough or the wide pass is a
+  failing step; quote its last output and the `qa_check_app` problems.

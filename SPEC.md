@@ -829,7 +829,12 @@ affect CI escalation. A head whose only failed check is `protected paths` gets n
 flaky re-run, no CI-fix run and no escalation, and uses no fix attempt: only a person clears that
 check, with the `protected-paths-approved` label, so the issue stays where it is until the check
 passes. When another check fails beside it, the CI-fix run's prompt names `protected paths` as not
-the agent's to fix.
+the agent's to fix. A red head on an issue parked for a person, outside `tracker.active_states`
+with the `human_actions.label` label, `needs-human` or another
+`auto_review.acceptance_gate.escalate.labels` label other than `plan` and `breakdown`, gets the
+same: no re-run, CI-fix run, escalation or state move, and no fix attempt used. The normal flow
+resumes once a person removes the label, moves the issue to an active state, or the head turns
+green.
 
 #### 5.4.7 `github` (object)
 
@@ -1125,6 +1130,10 @@ Fields:
   - Default: `10`
   - CPU time a process under a workspace or Symphony temp folder may use with no run attached
     before the dashboard warns about it (Section 8.5, Part D). `null` turns the check off.
+- `pending_tool_report_after_ms` (positive integer)
+  - Default: `60000` (1 minute)
+  - How long one of Symphony's own MCP tool calls must run before the runtime snapshot reports
+    the run's oldest pending call (`pending_tool`).
 
 #### 5.4.11 `workers` (object)
 
@@ -1150,6 +1159,9 @@ Fields:
   - Default: `500`.
 - `transcript_buffer_size` (non-negative integer)
   - Default: `200`.
+  - Bounds a live run's in-memory transcript buffer. A run's persisted record keeps only its newest
+    20 events, and records stored with more are trimmed when the run store starts.
+    The run store waits up to 120 s for its tables to load at startup, logging progress every 10 s.
 
 Listener fields also live under `dashboard`:
 
@@ -1338,7 +1350,7 @@ When enabled:
   agent sessions with a clear error telling the agent that Symphony moves the issue once the PR is
   open, rather than redirecting the target state. The refusal applies before the human review
   redirect, so a run that posted a `linear_request_human_action` request cannot skip QA; its blocked
-  PR reaches the human review state through the QA verdict. A `breakdown` parent and a ticket whose
+  PR reaches the human review state through the QA verdict. A plan parent and a ticket whose
   title starts with `Final verification:` open no PR, so they MAY move to either state.
 - The CI poller MUST discover issues in `state` as well as `In Review`. Red CI follows the normal
   `In Progress` fix loop and escalation. Green CI on an issue in `state` starts a QA pass for the
@@ -1386,7 +1398,15 @@ When enabled:
   directory there). `qa_put_file` MUST read only a regular file of bounded size that resolves inside
   the QA worktree or the pass's temp folder, and MUST refuse symlinks and files with other hard
   links. `qa_ax_set_value` MUST enter a text field's value so the app registers the edit, with key
-  events sent to that app alone, and the tools MUST NOT return a secure field's value. Every tool that
+  events sent to that app alone, and the tools MUST NOT return a secure field's value.
+  `qa_resize_window` (the playbook's wide pass) sizes a launched app's window to at least 1400×900
+  points, or the screen's usable area when that is smaller, through the Accessibility grant alone, and
+  `qa_check_app` reports whether the app still runs, answers an accessibility request within 10
+  seconds, and has written a crash report since launch, naming the page the agent passes and that
+  window size. A pass whose resize met a usable screen area under 1400×900 points MUST NOT be
+  reported `pass`: its `pass` becomes `blocked`, and that pass's `blocked` goes to a person. A pass
+  with no `qa_resize_window` call MUST NOT be reported `pass` either: its wide pass did not run, so
+  its `pass` becomes `blocked` with that reason. Every tool that
   takes a PID MUST refuse a PID
   the pass did not launch. Apps still running when the pass ends MUST be quit. A missing Screen
   Recording or Accessibility grant MUST surface as a `qa_permission_missing` tool error that tells
@@ -1443,6 +1463,12 @@ When enabled:
   credentials, a global git credential helper or a forwarded SSH agent); the `qa_*` tools then fail
   with `qa_worker_unsafe` (or `qa_worker_unreachable` when the host cannot be reached) and tell the
   agent to answer `blocked`.
+- A `macos_app` pass MUST hand the QA agent the host loopback ports it may serve the app's stubs
+  and proxies on (`QA_HOST_PORTS`), and the app reaches them at `http://localhost:<port>`. With
+  `worker_host` set, Symphony MUST forward each of them from the QA host's loopback to the same
+  port on the Symphony host's `127.0.0.1` for the whole pass (one `ssh -R` session per pass, with
+  `ExitOnForwardFailure`), and only those ports; a pass whose forwards cannot open MUST be
+  `blocked` with the reason before the agent starts.
 - The QA agent MUST run in a fresh detached worktree at the PR head SHA, outside the issue
   workspace, removed afterwards, with a tool scope limited to read-only Linear/GitHub tools and
   `linear_attach_file`. It answers with JSON: `verdict` (`pass`, `fail` or `blocked`), `summary`,
@@ -1504,7 +1530,7 @@ When enabled:
   sub-issues, never twice with the same title, never for a gap an existing ticket of the issue's
   family covers (named in the comment instead), and only with an acceptance criterion that does
   not restate the title. The mode is read on every poll, so a switch back to
-  `shadow` or `off` stops the moves without a restart. The gate MUST NOT move a `breakdown` parent or
+  `shadow` or `off` stops the moves without a restart. The gate MUST NOT move a plan parent or
   a `Final verification:` ticket. When a judged issue leaves `In Review`, the human's decision at
   that SHA SHOULD be recorded on the gate run (a move to `Merging` is `approve`; a move to `Rework`,
   or back to `In Progress` with PR review comments, is `rework`) with one
@@ -1913,6 +1939,7 @@ not require recognizing or validating extension fields unless that extension is 
 - `watchdog.tick_interval_ms`: integer, default `60000`
 - `watchdog.no_progress_threshold_ms`: integer, default `600000`
 - `watchdog.stray_process_cpu_minutes`: integer or `null`, default `10`
+- `watchdog.pending_tool_report_after_ms`: positive integer, default `60000`
 - `workers.ssh_hosts`: list of strings, default `[]`
 - `workers.max_concurrent_agents_per_host`: positive integer or null
 - `dashboard.enabled`: boolean, default `true`; turns the terminal dashboard on or off. It does not stop
@@ -2140,7 +2167,7 @@ Distinct terminal reasons are important because retry logic and logs differ.
 - The orchestrator serializes state mutations through one authority to avoid duplicate dispatch.
 - `claimed` and `running` checks are REQUIRED before launching any worker.
 - Tracker calls the orchestrator waits on (a retry's issue refresh, the post-PR and blocked-state
-  moves, breakdown-parent parking, reviews, closes and plan comments) SHOULD run outside the
+  moves, plan-parent parking, reviews, closes and plan comments) SHOULD run outside the
   orchestrator's message loop, with the result delivered back as a message. A claimed issue's claim
   stays held until the result is handled, so no poll dispatches it meanwhile. The pre-dispatch
   refresh of the issues a dispatch pass may start is read the same way, in the task that checks
@@ -2181,7 +2208,12 @@ The poller:
   already-answered comment is not replied to twice;
 - detects GitHub merge conflict signals (`mergeable == "CONFLICTING"` or
   `mergeStateStatus == "DIRTY"`), deduplicates by head/base identity, stores conflict context,
-  and moves the issue back to `In Progress` for agent-owned conflict resolution;
+  and moves the issue back to `In Progress` for agent-owned conflict resolution; a conflict on an
+  issue parked for a person (outside `tracker.active_states` with the `human_actions.label` label,
+  `needs-human` or another `auto_review.acceptance_gate.escalate.labels` label other than `plan`
+  and `breakdown`, as for a red head in the CI poller) is recorded as
+  `conflict_awaiting_human_action` with no state move, conflict-fix run or escalation and no retry
+  used, until a person removes the label or moves the issue to an active state;
 - moves the issue back to `In Progress` when GitHub reports approval so the orchestrator starts
   the merge/landing workflow through the normal run path;
 - removes tracked workspaces and durable review records when PRs merge, close, or remain idle
@@ -2206,6 +2238,12 @@ The poller:
   forever. It logs `Ignoring stale check <name> in completed run <id>`. A check in a run that
   completed with any other conclusion stays as reported. To see this, a head whose rollup has no
   failed check and only GitHub Actions checks left unfinished also reads the head's workflow runs.
+- leaves out the checks of a GitHub Actions run whose every check on the head was cancelled while
+  another run of the same workflow on the head reported a check that wasn't (a duplicate run a
+  concurrency group cancelled): the other run says how the head's CI went, so such a run starts
+  no rerun and no CI-fix run. It logs `Ignoring the checks of cancelled run(s) <ids> superseded by
+  another run of the same workflow`. When every run of the workflow was cancelled, or a cancelled
+  job sits beside others in its own run, the cancelled checks still read as a failure.
 - reads a landing's head (the `Merging` wait, the release of a held landing run, and the merge
   tool) against the checks its base branch requires: a head still waiting on a check, with none
   failed, also reads the required status checks of the base branch's rulesets
@@ -2374,26 +2412,28 @@ An issue is dispatch-eligible only if all are true:
     checkout (no sha), and the `skip-update-hold` label on the held issue or on the blocker release
     the issue at once. A lookup that fails releases it too, as before.
 - Parent rule passes:
-  - If the issue has the `breakdown` label and its plan was approved, do not dispatch while any
+  - A plan parent is an issue with the `plan` label, or `breakdown`, the label's older name
+    (case-insensitive); both are accepted, and the run kind keeps the name `breakdown`.
+  - If the issue is a plan parent and its plan was approved, do not dispatch while any
     sub-issue is non-terminal (a sub-issue with an unknown state counts as non-terminal and
     approved). The parent waits while its sub-issues are worked and becomes eligible again for
     close-out once every sub-issue is terminal. The same rule ends a running parent's
     continuation turns and its retries.
   - A plan is approved when a non-terminal sub-issue is outside `Backlog`, or a sub-issue is
     `Done`: approval moves every `Backlog` sub-issue to `Todo` at once, and nothing else promotes
-    them. A `breakdown` parent whose non-terminal sub-issues are all in `Backlog` and none `Done`
-    was never approved: its breakdown run stopped midway, or its plan is under review. Outside the
+    them. A plan parent whose non-terminal sub-issues are all in `Backlog` and none `Done`
+    was never approved: its plan run stopped midway, or its plan is under review. Outside the
     waiting state it is not held, so in an active state it is dispatched as a `breakdown` run that
     resumes the plan, keeps the sub-issues already filed and ends in `In Review`.
-  - A `breakdown` parent in `Rework` is exempt: a human rejected its plan, so it is eligible for a
+  - A plan parent in `Rework` is exempt: a human rejected its plan, so it is eligible for a
     re-plan (run kind `breakdown`) whatever its sub-issues' states, once its rejected sub-issues
     are cancelled (see the review rule below).
 - Waiting rule passes:
   - An issue in the `issues.states.waiting_on_sub_issues` state is dispatched only when it is a
-    `breakdown` parent with at least one sub-issue and every sub-issue is terminal (the close-out
+    plan parent with at least one sub-issue and every sub-issue is terminal (the close-out
     run). Any other issue in that state is never dispatched, and waits for a human unless the
     merge of its pull request put it there (below).
-  - When a pull request of an issue that is not a `breakdown` parent merges while the issue has a
+  - When a pull request of an issue that is not a plan parent merges while the issue has a
     non-terminal sub-issue, the service moves the issue to the waiting state instead of `Done`,
     whoever merged it and even when Linear's GitHub integration or a landing run already moved it
     to `Done`, moves its `Backlog` sub-issues to `Todo` and comments on it. The service records
@@ -2403,10 +2443,10 @@ An issue is dispatch-eligible only if all are true:
     starts. An issue a person moved to the waiting state is not recorded, so it is not closed this
     way. A sub-issue added while it waits counts in that check, and a
     canceled one counts as finished.
-  - On each poll, a `breakdown` parent in `In Progress` whose approved plan has a non-terminal
+  - On each poll, a plan parent in `In Progress` whose approved plan has a non-terminal
     sub-issue, and that is not running or claimed, is moved to the waiting state (a never-approved
     plan is not), so `In Progress` only holds issues an agent
-    is working. The poll's candidates can be stale (a breakdown run that just moved its parent to
+    is working. The poll's candidates can be stale (a plan run that just moved its parent to
     `In Review` still shows `In Progress`), so the service reads the parent's state again just
     before the move and skips it unless it is still `In Progress`; a failed read skips every
     parent until the next poll. Agents cannot move an issue there: `linear_update_state` refuses the state,
@@ -2420,8 +2460,8 @@ An issue is dispatch-eligible only if all are true:
   - The service puts an issue there instead of `In Review` when only a person can move it on: an
     Auto Review QA verdict `blocked` whose answer sets `needs_person`; a `Final verification:`
     parent walkthrough that passes, or is blocked with no failing step, with `needs_person` set;
-    `linear_update_state` to `In Review` for a `breakdown` parent whose ticket has an
-    `auto_review.acceptance_gate.escalate` label other than `breakdown` or matches one of its
+    `linear_update_state` to `In Review` for a plan parent whose ticket has an
+    `auto_review.acceptance_gate.escalate` label other than `plan` and `breakdown` or matches one of its
     ticket patterns; and `linear_update_state` to `Backlog` or `In Review` from a run that posted
     (or found open) a `linear_request_human_action` request (with Auto Review on, only `Backlog`
     or a PR-less issue: the Auto Review rule refuses the rest). The tool's answer names the state.
@@ -2431,10 +2471,10 @@ An issue is dispatch-eligible only if all are true:
     `counts.human_review` and a `human_review` list of watched issues in it, and a supervisor never
     moves an issue out of it on the operator's behalf.
 - Plan review rule:
-  - The breakdown run leaves its sub-issues in `Backlog` and moves the parent to `In Review`
-    (`linear_update_state` allows `In Review` for a `breakdown` parent even with Auto Review on),
+  - The plan run leaves its sub-issues in `Backlog` and moves the parent to `In Review`
+    (`linear_update_state` allows `In Review` for a plan parent even with Auto Review on),
     or to the human review state when the ticket asks for a human review (human review rule).
-  - Comments: a person's comment on a `breakdown` parent's plan is read on the poll that follows
+  - Comments: a person's comment on a plan parent's plan is read on the poll that follows
     it. Only comments with a user and no bot actor count, and not Symphony's own (the workpad, a
     QA report, an `Action needed` request, a promote or cancel record, a run-failure note, its own
     replies, and every comment its last run on the parent posted), nor a supervisor's note (one
@@ -2460,7 +2500,7 @@ An issue is dispatch-eligible only if all are true:
       service's start, the service replies once that if the comment asks for a plan change,
       `Rework` re-plans it. Replies inside a thread get nothing.
     - `Rework` keeps its meaning: a full re-plan.
-  - Approval: on each poll, for a `breakdown` parent in the waiting state with a sub-issue in
+  - Approval: on each poll, for a plan parent in the waiting state with a sub-issue in
     `Backlog` that is not running or claimed, the service reads the parent's state history. When
     its latest state change is `In Review` (or the human review state) to the waiting state, every sub-issue that has been in
     `Backlog` since before that change (created before it, no state change after it) moves to
@@ -2469,7 +2509,7 @@ An issue is dispatch-eligible only if all are true:
     and the reviewer can share one Linear user, so the service durably records when it moves a
     parent to the waiting state itself (before the move), and a change within 60 seconds of that
     record is not an approval. While that record cannot be read nothing moves.
-  - Rejection: for a `breakdown` parent in `Rework` with a sub-issue in `Backlog`, the rejected
+  - Rejection: for a plan parent in `Rework` with a sub-issue in `Backlog`, the rejected
     plan's sub-issues in `Backlog` since the parent's latest move to `Rework` are cancelled
     (`Canceled`, else `Cancelled`) before the re-plan is dispatched; until that succeeds the
     parent is not dispatched. The plan's sub-issues are those created by the run that moved the
@@ -2518,7 +2558,7 @@ transitions stay with a person, forced or not:
 | --- | --- |
 | `Backlog` -> `Todo` | a person promotes the issue; forcing does not |
 | `In Review` -> `Merging` | a person approves the PR |
-| `In Review` -> the waiting state (default `Waiting on sub-tickets`) | a person approves a `breakdown` plan |
+| `In Review` -> the waiting state (default `Waiting on sub-tickets`) | a person approves a plan |
 | any state -> `Rework` | a person rejects the approach |
 | `Final verification:` `In Review` -> `Done` | a person signs it off |
 
@@ -2559,7 +2599,7 @@ Forced allowance:
 - Still respected: the operator pause, the Linear rate-limit pause, the workspace quota pause, the
   per-host worker cap, blocked-by links, setup-failure suppression, retry backoff, post-PR quiet,
   and the auto-merge / `Merging` CI waits.
-- A forced `breakdown` parent is one forced unit; its breakdown, re-plan and close-out runs are
+- A forced plan parent is one forced unit; its plan, re-plan and close-out runs are
   forced runs. While it waits on its sub-issues (and is not re-planning), its current part is
   forced too, without the service writing the label on it: the first issue on its epic path
   (see Epic lanes below) that is dispatch-eligible or in the Auto Review state, in epic-lane order
@@ -2607,10 +2647,10 @@ The runtime counts issues by their current tracked state in the `running` map.
 
 Epic lanes:
 
-- An active epic is a `breakdown` parent waiting on its sub-issues with at least one sub-issue
+- An active epic is a plan parent waiting on its sub-issues with at least one sub-issue
   approved and not finished (any state other than `Backlog`, `Triage` or a terminal state).
 - An active epic yields while nothing on its path can run: every open issue on the path is in
-  `In Review`, `Backlog` or `Triage`, has no known state, is a `breakdown` parent waiting on its
+  `In Review`, `Backlog` or `Triage`, has no known state, is a plan parent waiting on its
   sub-issues (outside `Rework`), or is a `Todo` with open blockers. A yielded epic takes no lane.
 - The other active epics are ordered by the parent's priority, then the parent's creation time. The
   first `min(epic_lanes, max_concurrent_agents)` of them each reserve one slot (a lane); the rest
@@ -2757,8 +2797,13 @@ sessions:
 When the Claude CLI cannot reach the model API at all (a DNS failure, a refused or dropped
 connection), it still ends the turn with a `result` event: its text starts `API Error:` and names
 the failure (`Can't reach the API server … (ENOTFOUND)`, `Connection error`, `ECONNREFUSED`, …),
-and it is marked `is_error` or used nothing. An error the API returned (a 400, a 429, a 5xx) is not
-an outage and keeps its normal path.
+and it is marked `is_error` or used nothing. The Codex app-server reports the same outage, once it
+stops retrying (`willRetry` not `true`), on an `error` or `codex/event/error` notification or a
+failed `turn/completed` or `turn/failed`: its `codexErrorInfo` is `httpConnectionFailed` or
+`responseStreamConnectionFailed`, or its message names the transport error (`error sending
+request`, a DNS lookup, a refused or reset connection, a connect timeout), and it carries no HTTP
+status; the hold is on the `openai` provider. An error the API returned (a 400, a 429, a 5xx) is
+not an outage and keeps its normal path.
 
 - The turn fails with `{:model_api_unreachable, info}` (`source: api_unreachable`, `error` the code
   it named); it is never a completed turn, so it never counts toward the idle-turn park limit.
@@ -3031,7 +3076,10 @@ Current Elixir sandbox behavior:
   `~/.gnupg`, `~/Library/Application Support`, `~/Library/Keychains`,
   `~/Library/Preferences`, `~/.docker`, `~/.netrc`, `~/.git-credentials`, `~/.npmrc`,
   `~/.cargo/credentials`, `~/.config/op`, `~/.config/gcloud`, `~/.azure`, `~/.kube`, shell
-  startup files, and shell or REPL history files.
+  startup files, and shell or REPL history files. They also cover the cloud-synced folders
+  `~/Library/CloudStorage` (Google Drive, Dropbox, OneDrive) and `~/Library/Mobile Documents`
+  (iCloud Drive), which Claude's file tools are denied with `Read(<path>)` rules as well, so an
+  agent never makes macOS ask the operator to let Symphony access them.
 - Shared write denies protect workflow and runtime guardrail files such as `WORKFLOW.md`,
   `symphony.yml`, `symphony.local.yml`, `.claude/settings.json`, `.git`, `mise.toml`,
   `.tool-versions`, `config/settings_ui_exempt.yml`, shell startup files, `~/.gitconfig`, and
@@ -3612,7 +3660,7 @@ An implementation MUST support these tracker adapter operations:
 3. `fetch_issue_states_by_ids(issue_ids)`
    - Used for active-run reconciliation.
 
-An implementation that reviews `breakdown` plans (Section 8, plan review rule) also supports:
+An implementation that reviews plans (Section 8, plan review rule) also supports:
 
 4. `fetch_breakdown_history(issue_id)`
    - Return the issue's state changes (time, from state, to state) and each sub-issue's id,
@@ -3837,7 +3885,7 @@ SHOULD return:
 - running, retry and `slot_waiting` rows SHOULD include `forced`: for a running row, whether it
   runs on the forced allowance; for the others, whether the issue is in the forced queue or is a
   forced parent's current part
-- `forced` rows SHOULD include `sub_issue` (a forced `breakdown` parent's current part, or null)
+- `forced` rows SHOULD include `sub_issue` (a forced plan parent's current part, or null)
   and `waiting_on_human` (the issue is in `Backlog`, `Triage` or `In Review`)
 - `forced` rows SHOULD include `forced_for_seconds`, `stale` (forced for at least
   `concurrency.forced_stale_after_hours`), `phase` (one of `implementation`, `rework`,
@@ -3845,7 +3893,7 @@ SHOULD return:
   `breakdown`, `close_out`, `final_verification`), `running` (an agent run or QA pass is going for
   it), `waiting_on` (one of `slot`, `human`, `ci`, `blocker`, `usage_limit`, `paused`, `backlog`,
   or null), `blockers` (the open blockers' identifiers when `waiting_on` is `blocker`) and a
-  one-line `summary`; for a forced `breakdown` parent with a current part, the phase and what it
+  one-line `summary`; for a forced plan parent with a current part, the phase and what it
   waits on are the part's
 - `qa` (Auto Review QA passes): `running` rows (`issue_id`, `identifier`, `sha`, `forced`: whether
   the pass runs on the forced allowance) and `queued` rows (`issue_id`, `identifier`, `forced`:
@@ -5078,7 +5126,7 @@ infrastructure.
   normal run
 - The daily token budget and a usage-limit headroom hold do not stop a forced dispatch; the
   operator pause, blocked-by links and a `paused` usage-limit hold do
-- A forced `breakdown` parent waiting on its sub-issues forces one issue on its epic path at a
+- A forced plan parent waiting on its sub-issues forces one issue on its epic path at a
   time, in blocked-by order and without labelling it, then its close-out run; a forced parent in
   `In Review` is not moved
 - A forced issue's QA request goes to the front of the QA queue and, with the QA slots full,
@@ -5099,28 +5147,28 @@ infrastructure.
   sub-issue; a blocker shared by two epics runs once and holds one lane
 - `Todo` issue with non-terminal blockers is not eligible
 - `Todo` issue with terminal blockers is eligible
-- `breakdown` issue with an approved non-terminal sub-issue is not eligible; once every sub-issue
+- plan parent with an approved non-terminal sub-issue is not eligible; once every sub-issue
   is terminal it is eligible
-- `breakdown` parent in `Todo` or `In Progress` whose non-terminal sub-issues are all in `Backlog`
+- plan parent in `Todo` or `In Progress` whose non-terminal sub-issues are all in `Backlog`
   is eligible as a `breakdown` run and is not moved to the waiting state
-- a person's comment on a `breakdown` parent in `In Review` with an unapproved plan moves it to
+- a person's comment on a plan parent in `In Review` with an unapproved plan moves it to
   `In Progress`; the service's own comments, a supervisor's notes (`Supervisor review:`,
   `Supervisor note:`) and integration bots' comments move nothing; a person's comment on one in the
   human review state moves nothing; a person's
   comment made while the revision run worked moves it again once it is back in `In Review`; a
   top-level comment on an approved plan gets one reply and moves nothing, and a reply inside a
   thread or a comment from before the service started gets none
-- `breakdown` parent in `In Progress` with an approved non-terminal sub-issue moves to the waiting state;
-  an issue in the waiting state is eligible only as a `breakdown` parent whose sub-issues are all
+- plan parent in `In Progress` with an approved non-terminal sub-issue moves to the waiting state;
+  an issue in the waiting state is eligible only as a plan parent whose sub-issues are all
   terminal
-- `breakdown` parent moved from `In Review` to the waiting state has its `Backlog` sub-issues moved
+- plan parent moved from `In Review` to the waiting state has its `Backlog` sub-issues moved
   to `Todo` within one poll; sub-issues in other states, or moved back to `Backlog` after the
   approval, are left alone, and a re-poll moves nothing
-- `breakdown` parent parked from `In Progress` to the waiting state has nothing promoted
-- `breakdown` parent the poll cache shows `In Progress` but a fresh read shows `In Review` is not
+- plan parent parked from `In Progress` to the waiting state has nothing promoted
+- plan parent the poll cache shows `In Progress` but a fresh read shows `In Review` is not
   moved, and its `Backlog` sub-issues stay there
 - a waiting-state move the service made itself is never an approval, even from `In Review`
-- `breakdown` parent in `Rework` has the rejected plan's pre-`Rework` `Backlog` sub-issues
+- plan parent in `Rework` has the rejected plan's pre-`Rework` `Backlog` sub-issues
   cancelled, leaves a `Backlog` sub-issue a person created outside that run alone, is not held
   by its open sub-issues, and is not dispatched until the cancel succeeds
 - each promote and cancel batch posts one comment on the parent listing the moved identifiers

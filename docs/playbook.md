@@ -118,18 +118,29 @@ read from the disk next to the `WORKFLOW.md` it renders.
 | `guardrails` | — | Cross-cutting safety and process guardrails for an issue run; repos append repo-specific guardrails after the render. |
 | `issue_context` | `issue` | Standard Linear issue fields, description, recent comments, linked issues, and sub-issues for the agent to act on. |
 | `out_of_scope_backlog` | — | Split work and file out-of-scope improvements as Backlog sub-issues of the current issue with linear_create_subissue instead of expanding scope. |
-| `parent_tickets` | — | Parent tickets labeled breakdown are groomed into sub-tickets; breakdown (new, resumed, revised, re-planned), final verification, and close-out runs never open a PR. |
+| `parent_tickets` | — | Plan tickets (label plan, or breakdown, its older name) are groomed into sub-tickets; plan (new, resumed, revised, re-planned), final verification, and close-out runs never open a PR. |
 | `pr_feedback_sweep` | — | Required sweep of all PR feedback channels; every actionable comment must be resolved or answered before In Review. |
 | `reproduce_and_blast_radius` | — | Capture a reproduction/acceptance signal and a blast-radius analysis before the first code edit. |
 | `scoped_tools` | — | How to discover and use the scoped linear_* and github_* tools Symphony injects for the current issue. |
 | `status_map` | — | Canonical Symphony issue state machine and what each state means for the agent. |
+| `ticket_types` | `issue` | Per-type steps for a ticket labelled type:bug, type:feature or plan, with a readiness check that sends a bug or feature missing a required section back to Backlog; renders nothing for an untyped ticket. |
 | `workpad_bootstrap` | `agent` | Find, reuse, or create the single persistent Linear workpad comment and reconcile it before new work. |
 | `workpad_template` | `agent` | Canonical structure for the persistent workpad comment. |
 
-The breakdown flow in `parent_tickets` (plan run, single plan review, approval
+The plan flow in `parent_tickets` (plan run, single plan review, approval
 through `Waiting on sub-tickets`, close-out) is the base of the Director workflow:
 [ADR 0001](adr/0001-director-workflow.md) records the ticket types, the plan stages
 and where a plan's artifacts live.
+
+`ticket_types` routes a ticket by its type label (`type:bug`, `type:feature` or `plan`) and runs
+the readiness check on bugs and features. The templates the operator writes those tickets from,
+and the steps to create them in Linear, are in [`ticket-templates/`](ticket-templates/README.md).
+It renders nothing for a ticket with no type label; render it with a left-trimming tag right after
+your Step 0 routing, so an untyped ticket's prompt stays byte-identical:
+
+```liquid
+{%- render "ticket_types", issue: issue %}
+```
 
 ## Recommended composition
 
@@ -150,7 +161,10 @@ You are working on a Linear ticket `{{ issue.identifier }}`
 
 {% render "status_map" %}
 
-## Step 0 … Step 4   <!-- repo-authored routing + execution skeleton -->
+## Step 0   <!-- repo-authored routing -->
+{%- render "ticket_types", issue: issue %}
+
+## Step 1 … Step 4   <!-- repo-authored execution skeleton -->
 {% render "pr_feedback_sweep" %}
 {% render "ci_triage" %}
 {% render "escape_hatches" %}

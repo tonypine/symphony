@@ -55,7 +55,7 @@ defmodule SymphonyElixir.AcceptanceGate.Settings do
     @dependency_modes ["off", "major", "any"]
 
     @built_in %{
-      labels: ["needs-human", "breakdown"],
+      labels: ["needs-human", "plan", "breakdown"],
       ticket_patterns: [
         "(?i)\\b(human|manual(ly)?)\\s+review",
         "(?i)must not (auto-?approve|auto-?merge)",
