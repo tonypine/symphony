@@ -20,6 +20,9 @@ public struct StatusMachine: Equatable {
     public static let pollTimeout: TimeInterval = 5
     /// Polls missed in a row before a Symphony that answered counts as not answering: with the timeout and the
     /// interval, at least 15 s without an answer. A single miss is a slow answer, for example a busy snapshot.
+    /// This counts for an external Symphony too: it shows as stopped, and Start is offered, only after these misses,
+    /// so a busy one that still holds the control URL isn't joined by a second Symphony. Once one exits, Start comes
+    /// 5 to 10 s later.
     public static let missedPollsBeforeError = 2
 
     public enum Event: Equatable {
