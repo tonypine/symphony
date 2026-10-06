@@ -5,9 +5,14 @@ defmodule SymphonyElixir.AcceptanceGate.FollowUps do
   Review parent walkthrough files its gaps. Only an enforced verdict files them (see
   `SymphonyElixir.AcceptanceGate.judge/2`); in `shadow` mode they are listed, not filed.
 
-  At most 3 are filed per verdict. A title the ticket already has among its sub-issues, or one the
-  answer repeats, is not filed again; titles compare without case. When the sub-issues can't be
-  read, nothing is filed, so a title is never filed twice.
+  At most 3 are filed per verdict. A follow-up an existing ticket covers is not filed: one the
+  answer names in `covered_by`, one whose title a ticket of the ticket's family already has (its
+  sub-issues, siblings, parent and blockers; titles compare without case), and one the answer
+  repeats. When the family can't be read, nothing is filed, so a title is never filed twice.
+
+  Each filed follow-up lists the answer's `acceptance` criteria, plus "CI is green". A criterion
+  that only restates the title is dropped, and a follow-up left without one is not filed: its
+  criteria must say what a test or a check shows.
   """
 
   require Logger
@@ -20,7 +25,8 @@ defmodule SymphonyElixir.AcceptanceGate.FollowUps do
 
   @max_per_verdict 3
 
-  @type status :: {:filed, String.t() | nil} | :duplicate | :over_cap | {:failed, term()}
+  @type status ::
+          {:filed, String.t() | nil} | {:covered, String.t() | nil} | :no_acceptance | :over_cap | {:failed, term()}
   @type result :: %{title: String.t(), detail: String.t(), status: status()}
 
   @doc "How many follow-ups one verdict files at most."
@@ -48,16 +54,16 @@ defmodule SymphonyElixir.AcceptanceGate.FollowUps do
     linear_opts = Keyword.take(opts, [:linear_client])
 
     try do
-      case AgentTools.Linear.get_subissues(context, linear_opts) do
-        {:ok, children} ->
-          existing = MapSet.new(children, &normalize(Map.get(&1, "title")))
+      case AgentTools.Linear.get_related_issues(context, linear_opts) do
+        {:ok, tickets} ->
+          existing = Map.new(tickets, &{normalize(Map.get(&1, "title")), Map.get(&1, "identifier")})
 
           follow_ups
           |> Enum.map_reduce({existing, 0}, &file_one(&1, &2, context, issue, sha, linear_opts))
           |> elem(0)
 
         {:error, reason} ->
-          Logger.warning("Acceptance gate could not read the sub-issues of #{issue.identifier}, so it filed no follow-up: #{inspect(reason)}")
+          Logger.warning("Acceptance gate could not read the tickets related to #{issue.identifier}, so it filed no follow-up: #{inspect(reason)}")
           Enum.map(follow_ups, &Map.put(&1, :status, {:failed, reason}))
       end
     after
@@ -67,22 +73,30 @@ defmodule SymphonyElixir.AcceptanceGate.FollowUps do
 
   defp file_one(follow_up, {seen, filed}, context, issue, sha, linear_opts) do
     title = normalize(PromptSafety.linear_issue_title(follow_up.title))
+    acceptance = acceptance(follow_up)
+    covered_by = Map.get(follow_up, :covered_by)
 
     cond do
-      MapSet.member?(seen, title) ->
-        {Map.put(follow_up, :status, :duplicate), {seen, filed}}
+      covered_by ->
+        {Map.put(follow_up, :status, {:covered, covered_by}), {seen, filed}}
+
+      Map.has_key?(seen, title) ->
+        {Map.put(follow_up, :status, {:covered, Map.fetch!(seen, title)}), {seen, filed}}
+
+      acceptance == [] ->
+        {Map.put(follow_up, :status, :no_acceptance), {seen, filed}}
 
       filed >= @max_per_verdict ->
         {Map.put(follow_up, :status, :over_cap), {seen, filed}}
 
       true ->
-        attrs = %{"title" => follow_up.title, "description" => description(follow_up, issue, sha)}
+        attrs = %{"title" => follow_up.title, "description" => description(follow_up, acceptance, issue, sha)}
 
         case AgentTools.Linear.create_subissue(context, attrs, linear_opts) do
           {:ok, response} ->
             identifier = get_in(response, ["data", "issueCreate", "issue", "identifier"])
             Logger.info("Acceptance gate filed follow-up #{identifier} under #{issue.identifier}: #{follow_up.title}")
-            {Map.put(follow_up, :status, {:filed, identifier}), {MapSet.put(seen, title), filed + 1}}
+            {Map.put(follow_up, :status, {:filed, identifier}), {Map.put(seen, title, identifier), filed + 1}}
 
           {:error, reason} ->
             Logger.warning("Acceptance gate could not file a follow-up under #{issue.identifier}: #{inspect(reason)}")
@@ -96,7 +110,21 @@ defmodule SymphonyElixir.AcceptanceGate.FollowUps do
   defp normalize(title) when is_binary(title), do: title |> String.trim() |> String.downcase()
   defp normalize(_title), do: ""
 
-  defp description(follow_up, issue, sha) do
+  # The checkable acceptance criteria of `follow_up`: its `acceptance` items without a checklist
+  # marker, less the blank ones and the ones that only restate its title (compared without case,
+  # punctuation or markdown).
+  defp acceptance(follow_up) do
+    title = criterion_key(follow_up.title)
+
+    follow_up
+    |> Map.get(:acceptance, [])
+    |> Enum.map(&(&1 |> String.replace(~r/^\s*[-*+]\s+(\[[ xX]\]\s+)?/, "") |> String.trim()))
+    |> Enum.reject(&(criterion_key(&1) in ["", title]))
+  end
+
+  defp criterion_key(text), do: text |> String.downcase() |> String.replace(~r/[^\p{L}\p{N}]+/u, " ") |> String.trim()
+
+  defp description(follow_up, acceptance, issue, sha) do
     """
     #{if follow_up.detail != "", do: follow_up.detail, else: follow_up.title}
 
@@ -104,7 +132,8 @@ defmodule SymphonyElixir.AcceptanceGate.FollowUps do
 
     ## Acceptance criteria
 
-    - [ ] #{follow_up.title}
+    #{Enum.map_join(acceptance, "\n", &"- [ ] #{&1}")}
+    - [ ] CI is green.
     """
   end
 end

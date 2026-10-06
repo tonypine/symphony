@@ -1456,7 +1456,9 @@ When enabled:
   with the unmet criteria as continuation context, counted against `auto_review.max_fix_attempts`
   with QA fails (the `rework` past it goes to `In Review`), and `escalate` to `In Review`, with the
   comment opening on the escalation reasons; up to 3 follow-ups per verdict are filed as Backlog
-  sub-issues, never twice with the same title. The mode is read on every poll, so a switch back to
+  sub-issues, never twice with the same title, never for a gap an existing ticket of the issue's
+  family covers (named in the comment instead), and only with an acceptance criterion that does
+  not restate the title. The mode is read on every poll, so a switch back to
   `shadow` or `off` stops the moves without a restart. The gate MUST NOT move a `breakdown` parent or
   a `Final verification:` ticket. When a judged issue leaves `In Review`, the human's decision at
   that SHA SHOULD be recorded on the gate run (a move to `Merging` is `approve`; a move to `Rework`,
