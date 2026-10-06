@@ -605,6 +605,29 @@ final class ReposListTests: XCTestCase {
         XCTAssertNil(ReposList.selection(saved: "api", in: ReposWindow(content: .empty(.noRepos))))
     }
 
+    func testSelectsTheBannersRepoOnceTheWindowListsIt() {
+        let banner = ReposBanner(key: "docs", text: "Added docs.")
+        // Add Repo shows its banner before the running Symphony's next poll lists the new repo.
+        let before = window(running, .repos([symphony, api], warning: nil))
+        let shown = ReposList.selection(current: "api", pending: banner.key, saved: "api", in: before)
+        XCTAssertEqual(shown.selection, "api")
+        XCTAssertEqual(shown.pending, "docs")
+        XCTAssertTrue(banner.isShown(on: shown.selection, listed: before.repos.map(\.key)))
+
+        let after = window(running, .repos([symphony, api, docs], warning: nil))
+        let listed = ReposList.selection(current: shown.selection, pending: shown.pending, saved: "api", in: after)
+        XCTAssertEqual(listed.selection, "docs")
+        XCTAssertNil(listed.pending)
+        XCTAssertTrue(banner.isShown(on: listed.selection, listed: after.repos.map(\.key)))
+
+        let next = ReposList.selection(current: "api", pending: listed.pending, saved: "api", in: after)
+        XCTAssertEqual(next.selection, "api", "the user's next pick stays")
+        // A selection the window no longer lists falls back to the saved one while the banner's repo waits.
+        let gone = ReposList.selection(current: "gone", pending: "new", saved: "api", in: after)
+        XCTAssertEqual(gone.selection, "api")
+        XCTAssertEqual(gone.pending, "new")
+    }
+
     // MARK: Actions
 
     func testActionsFollowTheConfigAndTheClone() {

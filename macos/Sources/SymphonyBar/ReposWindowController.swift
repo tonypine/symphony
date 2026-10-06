@@ -9,13 +9,22 @@ final class ReposViewModel: ObservableObject {
     /// The key of the repo shown in the detail.
     @Published var selection: String? {
         didSet {
-            if let selection, selection != oldValue { onSelect(selection) }
+            guard let selection, selection != oldValue else { return }
+            // Picking another repo drops the wait for the banner's.
+            if selection != pendingSelection { pendingSelection = nil }
+            onSelect(selection)
         }
     }
+    /// The banner's repo while the window doesn't list it yet, selected once it does.
+    var pendingSelection: String?
     /// The open Add Repo sheet, nil while none is.
     @Published var addRepo: AddRepoViewModel?
     /// What the last Add Repo, Edit, Disconnect or Remove Clone did, shown at the top of its repo's detail.
-    @Published var banner: ReposBanner?
+    @Published var banner: ReposBanner? {
+        didSet {
+            if banner == nil { pendingSelection = nil }
+        }
+    }
     /// The toolbar chip while a restart is under way, nil while none is.
     @Published var restartChip: ReposRestartChip?
     /// Whether Start Symphony would start it now.
@@ -154,10 +163,17 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
         }
         model.window = shown
         model.restartChip = ReposRestartChip(machine: restartMachine(), window: shown)
-        if model.selection.map({ key in !shown.repos.contains { $0.key == key } }) ?? true {
-            let saved = AppStores.current.defaults.object(forKey: Self.selectionKey) as? String
-            model.selection = ReposList.selection(saved: saved, in: shown)
-        }
+        select(in: model)
+    }
+
+    /// Selects the banner's repo once the window lists it, else keeps the selection while listed, else restores it.
+    private func select(in model: ReposViewModel) {
+        let saved = AppStores.current.defaults.object(forKey: Self.selectionKey) as? String
+        let next = ReposList.selection(
+            current: model.selection, pending: model.pendingSelection, saved: saved, in: model.window
+        )
+        model.selection = next.selection
+        model.pendingSelection = next.pending
     }
 
     /// Symphony's state while it answers, for the Edit sheet's gate stats.
@@ -336,11 +352,12 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
         }
     }
 
-    /// Shows `banner` in place of the last one, and selects its repo while the window lists it.
+    /// Shows `banner` in place of the last one, and selects its repo now or once the window lists it.
     private func show(_ banner: ReposBanner) {
         guard let model else { return }
         model.banner = banner
-        if let key = banner.key, model.window.repos.contains(where: { $0.key == key }) { model.selection = key }
+        model.pendingSelection = banner.key
+        select(in: model)
     }
 
     /// Shows what a change did and gets Symphony to use it, asking first when the restart waits for agent runs.
