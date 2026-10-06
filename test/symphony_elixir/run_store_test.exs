@@ -855,6 +855,27 @@ defmodule SymphonyElixir.RunStoreTest do
       restart_run_store()
       assert stored_run("legacy-20").transcript_buffer == Enum.take(events, -20)
     end
+
+    test "a trim that fails leaves the rows for the next start and logs a warning" do
+      record = %{repo_key: @repo_key, run_id: "legacy", status: "success", transcript_buffer: events(1..200)}
+      row = {:symphony_run_store_runs, {@repo_key, "legacy"}, @repo_key, "legacy", Map.put(record, :transcript_buffer_size, 200)}
+      assert {:atomic, :ok} = :mnesia.transaction(fn -> :mnesia.write(row) end)
+      assert {:atomic, :ok} = :mnesia.change_table_access_mode(:symphony_run_store_runs, :read_only)
+
+      log =
+        try do
+          capture_log(fn -> restart_run_store() end)
+        after
+          {:atomic, :ok} = :mnesia.change_table_access_mode(:symphony_run_store_runs, :read_write)
+        end
+
+      assert log =~ "RunStore failed to trim stored transcript buffers:"
+      refute log =~ "RunStore trimmed"
+      assert stored_run("legacy").transcript_buffer_size == 200
+
+      restart_run_store()
+      assert stored_run("legacy").transcript_buffer == events(181..200)
+    end
   end
 
   test "scopes durable records by repo_key when identifiers collide" do

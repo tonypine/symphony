@@ -1141,18 +1141,32 @@ defmodule SymphonyElixir.RunStore do
       over_cap ->
         limit = :mnesia.system_info(:dc_dump_limit)
 
-        try do
-          :mnesia.change_config(:dc_dump_limit, @rewrite_dc_dump_limit)
-
-          for _pass <- 1..2 do
-            transaction(fn -> Enum.each(over_cap, &trim_stored_transcript/1) end)
-            :mnesia.dump_log()
+        result =
+          try do
+            :mnesia.change_config(:dc_dump_limit, @rewrite_dc_dump_limit)
+            Enum.reduce_while(1..2, :ok, fn _pass, :ok -> trim_pass(over_cap) end)
+          after
+            :mnesia.change_config(:dc_dump_limit, limit)
           end
-        after
-          :mnesia.change_config(:dc_dump_limit, limit)
-        end
 
-        Logger.info("RunStore trimmed the stored transcript buffers of #{length(over_cap)} run(s) to #{@stored_transcript_events} events")
+        case result do
+          :ok ->
+            Logger.info("RunStore trimmed the stored transcript buffers of #{length(over_cap)} run(s) to #{@stored_transcript_events} events")
+
+          # Startup goes on with the index trimmed; the next start trims the rows again.
+          {:error, reason} ->
+            Logger.warning("RunStore failed to trim stored transcript buffers: #{inspect(reason)}")
+        end
+    end
+  end
+
+  defp trim_pass(over_cap) do
+    with :ok <- transaction(fn -> Enum.each(over_cap, &trim_stored_transcript/1) end),
+         :dumped <- :mnesia.dump_log() do
+      {:cont, :ok}
+    else
+      {:error, reason} -> {:halt, {:error, reason}}
+      other -> {:halt, {:error, other}}
     end
   end
 
