@@ -711,6 +711,11 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
                payload: %{method: "item/tool/result", params: %{text: "ok"}}
              } = AppServer.event_to_update({:tool_result, "ok"})
 
+      assert %{event: :tool_progress, timestamp: %DateTime{}, payload: %{tool: "Bash"}} =
+               AppServer.event_to_update({:tool_progress, "Bash"})
+
+      assert %{event: :tool_progress, payload: %{tool: nil}} = AppServer.event_to_update({:tool_progress, nil})
+
       usage = %{input_tokens: 10, cached_input_tokens: 3, output_tokens: 5, total_tokens: 15}
 
       assert %{
@@ -1919,7 +1924,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       end
     end
 
-    test "drops tool_progress heartbeats without forwarding or logging them" do
+    test "forwards tool_progress heartbeats without logging them as unparseable" do
       test_root = Path.join(System.tmp_dir!(), "symphony-elixir-claude-code-tool-progress-#{System.unique_integer([:positive])}")
 
       try do
@@ -1956,6 +1961,8 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
 
         assert_received {:result, {:ok, _result}}
         assert_received {:turn_msg, {:session_started, "sess-progress"}}
+        assert_received {:turn_msg, {:tool_progress, "Bash"}}
+        assert_received {:turn_msg, {:tool_progress, "Bash"}}
         refute_received {:turn_msg, {:tool_progress, _tool_name}}
         refute_received {:turn_msg, {:notification, _text}}
         refute log =~ "unparseable"
