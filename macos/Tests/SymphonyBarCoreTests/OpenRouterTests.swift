@@ -162,6 +162,13 @@ final class OpenRouterTests: XCTestCase {
         XCTAssertEqual(OpenRouterModel.toolModels(models, matching: "claude 2"), [])
     }
 
+    func testTitleIsTheListedNameOrTheId() {
+        let models = [OpenRouterModel(id: "mistralai/mistral-nemo", name: "Mistral: Mistral Nemo", supportsTools: true)]
+
+        XCTAssertEqual(OpenRouterModel.title(of: "mistralai/mistral-nemo", in: models), "Mistral: Mistral Nemo")
+        XCTAssertEqual(OpenRouterModel.title(of: "a/unknown", in: models), "a/unknown")
+    }
+
     func testEffortNoteOnlyForAListedModelWithoutReasoning() {
         let models = [
             OpenRouterModel(id: "a/thinks", name: "Thinks", supportsTools: true, supportsReasoning: true),

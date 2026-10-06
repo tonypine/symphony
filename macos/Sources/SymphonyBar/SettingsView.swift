@@ -354,7 +354,8 @@ struct SettingsView: View {
         .frame(width: SettingsView.width)
     }
 
-    static let width: CGFloat = 840
+    /// Wide enough that a repository's rows, with Reset to inherited, keep their pickers on the label's line.
+    static let width: CGFloat = 920
 }
 
 /// Provider, model and effort pickers for one kind of run, or the Default row for a nil kind. `inherited` holds
@@ -391,7 +392,8 @@ private struct RunProfileRow: View {
                     if isOpenRouter {
                         OpenRouterModelField(
                             selection: $profile.model,
-                            inheritedTitle: inherited.model.map { $0 + ", " + inheritedSource } ?? "default",
+                            inherited: inherited.model,
+                            inheritedSource: inheritedSource,
                             models: openRouterModels,
                             hasKey: hasOpenRouterKey,
                             retry: retryOpenRouterModels,
@@ -402,7 +404,7 @@ private struct RunProfileRow: View {
                         picker("Model", $profile.model, RunProfilesConfig.models, inherited: inherited.model)
                     }
                 }
-                .frame(width: 210)
+                .frame(width: 240)
                 // The tooltip sits on a wrapper, as a disabled control shows none of its own.
                 HStack {
                     picker("Effort", $profile.effort, RunProfilesConfig.efforts, inherited: inherited.effort)
@@ -459,7 +461,9 @@ private struct RunProfileRow: View {
 /// Without an OpenRouter key it shows a disabled hint instead, and while the list loads, a progress note.
 private struct OpenRouterModelField: View {
     @Binding var selection: String?
-    let inheritedTitle: String
+    /// The model id a nil selection falls back to, shown by its name with `inheritedSource`, such as "inherited".
+    let inherited: String?
+    let inheritedSource: String
     let models: Result<[OpenRouterModel], OpenRouterFailure>?
     let hasKey: Bool
     let retry: () -> Void
@@ -493,7 +497,7 @@ private struct OpenRouterModelField: View {
                 isPicking = true
             } label: {
                 HStack {
-                    Text(selection.map { id in models.first { $0.id == id }?.name ?? id } ?? inheritedTitle)
+                    Text(selection.map { OpenRouterModel.title(of: $0, in: models) } ?? inheritedTitle(models))
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .opacity(selection == nil ? 0.55 : 1)
@@ -514,7 +518,7 @@ private struct OpenRouterModelField: View {
             TextField("Search models that support tools", text: $query)
                 .textFieldStyle(.roundedBorder)
             List {
-                Button(inheritedTitle) { choose(nil) }
+                Button(inheritedTitle(models)) { choose(nil) }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
                 ForEach(matches, id: \.id) { model in
@@ -536,6 +540,10 @@ private struct OpenRouterModelField: View {
         }
         .padding(12)
         .frame(width: 360, height: 360)
+    }
+
+    private func inheritedTitle(_ models: [OpenRouterModel]) -> String {
+        inherited.map { OpenRouterModel.title(of: $0, in: models) + ", " + inheritedSource } ?? "default"
     }
 
     private func choose(_ id: String?) {

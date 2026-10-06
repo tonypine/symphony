@@ -86,6 +86,11 @@ public struct OpenRouterModel: Equatable {
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
+    /// The name `models` lists for the model `id`, such as "Mistral: Mistral Nemo", or `id` when it lists none.
+    public static func title(of id: String, in models: [OpenRouterModel]) -> String {
+        models.first { $0.id == id }?.name ?? id
+    }
+
     /// Why effort doesn't apply to the model `id`, or nil when it does or `models` doesn't list it.
     public static func effortNote(for id: String?, in models: [OpenRouterModel]) -> String? {
         guard let model = models.first(where: { $0.id == id }), !model.supportsReasoning else { return nil }
