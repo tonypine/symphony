@@ -318,6 +318,32 @@ defmodule SymphonyElixir.CLITest do
     end
   end
 
+  test "openrouter-stub serves the stub and prints how to point a QA run at it" do
+    test = self()
+    deps = base_deps(%{start_openrouter_stub: fn port -> send(test, {:stub_port, port}) && {:ok, 4100} end})
+
+    output = capture_io(fn -> assert :serve = CLI.evaluate(["openrouter-stub"], deps) end)
+    assert_received {:stub_port, 0}
+    assert output =~ "OpenRouter QA stub listening on http://127.0.0.1:4100/api"
+    assert output =~ "Valid key: sk-or-v1-symphony-qa-stub"
+    assert output =~ "symphony-qa/reasoning-tools, symphony-qa/tools-only, symphony-qa/no-tools"
+    assert output =~ ~s(export SYMPHONY_BAR_QA_ROOT="$TMPDIR/qa-root" SYMPHONY_QA_OPENROUTER_URL=http://127.0.0.1:4100/api)
+
+    capture_io(fn -> assert :serve = CLI.evaluate(["openrouter-stub", "--port", "4100"], deps) end)
+    assert_received {:stub_port, 4100}
+  end
+
+  test "openrouter-stub reports bad arguments and a stub that can't start" do
+    usage = "Usage: symphony openrouter-stub [--port <port>]"
+
+    for args <- [["--port", "nope"], ["--port", "70000"], ["extra"], ["--host", "0.0.0.0"]] do
+      assert {:error, ^usage} = CLI.evaluate(["openrouter-stub" | args], base_deps())
+    end
+
+    deps = base_deps(%{start_openrouter_stub: fn _port -> {:error, :eaddrinuse} end})
+    assert {:error, "Could not start the OpenRouter QA stub: :eaddrinuse"} = CLI.evaluate(["openrouter-stub", "--port", "4100"], deps)
+  end
+
   test "dashboard rejects unknown arguments with its usage" do
     assert {:error, "Usage: symphony dashboard [--url <control-url>]"} =
              CLI.evaluate(["dashboard", "--port", "4000"], base_deps())

@@ -332,6 +332,15 @@ with the phase each is in and what it waits on (`implementation · running`,
 `waiting for a human`, `implementation · waiting on blocker TP-12`), and mark forced rows elsewhere
 with ⚡. Once a forced ticket is done, Symphony removes the label.
 
+Test OpenRouter flows without a real key: `symphony openrouter-stub` serves a stub OpenRouter on
+`127.0.0.1` with a made-up valid key and three models, prints its URL and the variables that point a
+QA-mode Symphony or app at it, and runs until stopped (see
+[OpenRouter in QA](docs/configuration.md#qa-passes)):
+
+```bash
+./bin/symphony openrouter-stub --port 4100
+```
+
 ### Priority vs expedite
 
 A ticket's Linear priority means how important it is. Symphony uses it only to order work that waits

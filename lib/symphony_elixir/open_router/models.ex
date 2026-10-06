@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.OpenRouter.Models do
   @moduledoc """
-  What each OpenRouter model can do, read from `GET https://openrouter.ai/api/v1/models`.
+  What each OpenRouter model can do, read from `GET https://openrouter.ai/api/v1/models` (the QA
+  stub's in QA mode, see `SymphonyElixir.OpenRouter.base_url/1`).
 
   Symphony agents reach MCP and shell tools through tool use, so a model must list `tools` in
   its `supported_parameters`. `reasoning` tells whether `--effort` means anything to it.
@@ -12,7 +13,8 @@ defmodule SymphonyElixir.OpenRouter.Models do
   `Req` request.
   """
 
-  @endpoint "https://openrouter.ai/api/v1/models"
+  alias SymphonyElixir.OpenRouter
+
   @ttl_ms :timer.hours(1)
   @timeout_ms 5_000
   @cache_key {__MODULE__, :catalog}
@@ -22,7 +24,7 @@ defmodule SymphonyElixir.OpenRouter.Models do
 
   @doc "The models API endpoint."
   @spec endpoint() :: String.t()
-  def endpoint, do: @endpoint
+  def endpoint, do: OpenRouter.base_url() <> "/v1/models"
 
   @doc """
   The capabilities of `model_id`: `{:error, :unknown_model}` when OpenRouter does not list it,
@@ -84,7 +86,7 @@ defmodule SymphonyElixir.OpenRouter.Models do
   # An exit from the HTTP client (a missing pool, a crashed connection) is a failed read, so
   # callers warn instead of crashing.
   defp safe_request(request_fun, req_options) do
-    request_fun.(@endpoint, req_options)
+    request_fun.(endpoint(), req_options)
   catch
     :exit, reason -> {:error, {:exit, reason}}
   end
