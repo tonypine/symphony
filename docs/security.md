@@ -215,7 +215,7 @@ Host-side steps of Symphony's own `WORKFLOW.md` hooks:
 | `after_create` | `mise trust` | Trusts the base branch's mise config for the workspace path, so `mise exec` reads it. |
 | `after_create` | `mise exec -- mix deps.get` | Fetches the base branch's Hex dependencies, on the base branch's tree. |
 | `after_create` | `MIX_ENV=test mise exec -- mix deps.compile` | `lazy_html` downloads its precompiled NIF, which the sandbox's proxy refuses. Runs on the base branch's tree. |
-| `before_remove` | `mise exec -- mix workspace.before_remove` | Closes the branch's open pull requests with the operator's `gh` login. It still evaluates the agent's checkout (`mix.exs`, `deps/`, `_build/`, the mise config trusted above); TP-523 replaces it with plain `gh` calls. |
+| `before_remove` | `cd /`, then `gh pr list` and `gh pr close` on `SYMPHONY_REPO` and `SYMPHONY_BRANCH` | Closes the branch's open pull requests with the operator's `gh` login. It runs nothing from the agent's checkout: Symphony sets both variables itself, and the step leaves the checkout before calling `gh`. |
 
 ### No windows on the host desktop
 

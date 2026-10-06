@@ -56,7 +56,7 @@ arguments from prompts.
   into sub-tickets or to file out-of-scope work.
 - `linear_update_subissue` with `{"identifier": "TP-13", "title": "...", "description": "...", "blocked_by": ["TP-12"]}`
   or `{"identifier": "TP-13", "cancel_reason": "..."}`: changes a `Backlog`
-  sub-issue of the current issue when a breakdown run revises its plan.
+  sub-issue of the current issue when a plan run revises its plan.
   `blocked_by` is the complete list of sibling sub-issues that block it (sibling
   links left out are removed). `cancel_reason` alone posts the reason on the
   sub-issue and cancels it. A sub-issue outside `Backlog` was promoted by a person
@@ -69,7 +69,29 @@ arguments from prompts.
 - `linear_create_project_update` with `{"body": "...", "health": "onTrack"}`:
   posts an update to the current issue's project. `health` is optional
   (`onTrack`, `atRisk`, `offTrack`). The body is secret-scanned. At most one per
-  run. Use it when a `breakdown` parent ticket closes out.
+  run. Use it when a plan ticket (label `plan`) closes out.
+- `linear_create_document` with `{"title": "...", "content": "..."}`: creates a
+  document in the current issue's project titled `<identifier> · <title>` and
+  attaches it to the issue, so later runs on the issue can read and edit it. Use
+  it for long-lived artifacts (domain brief, journeys, Kano map, screens, ADR
+  draft) instead of comments. Title and content are secret-scanned. At most 10
+  per run; an issue outside a project is refused.
+- `linear_update_document` with `{"document_id": "...", "content": "...", "title": "..."}`:
+  replaces the whole content, and the title when given (it keeps the identifier
+  prefix), of a document this issue's runs created. `title` is optional. Content
+  and title are secret-scanned. Any other document is refused.
+- `linear_get_document` with `{}`: lists the documents this issue's runs created
+  (id, title, url). With `{"document_id": "..."}` it reads one in full, its
+  content secret-redacted. Any other document is refused. It is read-only.
+- `linear_request_human_action` with `{"title": "...", "why": "...", "steps": ["..."], "unblocks": "...", "est_minutes": 10}`:
+  records that the current issue needs something only a person can do (a missing
+  secret or permission, a product decision, an account setup, a check on a
+  device). It posts an `## Action needed:` request that Symphony lists for the
+  operator. `title` (up to 120 characters) is an instruction; `steps` is 1 to 15
+  exact steps, detailed enough to do from a phone, naming settings and secrets,
+  never their values. `unblocks` and `est_minutes` (1 to 480) are optional. Every
+  field is refused when it holds a secret. A request with the same title still
+  open is not posted again. At most 5 per run.
 - `linear_withdraw_human_action` with `{"reason": "...", "title": "..."}`:
   withdraws a human-action request that is no longer needed. It replies with the
   reason under the request and removes the human-action label once no open
