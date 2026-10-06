@@ -626,6 +626,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
         auto_merge_enabled: is_map(Map.get(pr, "autoMergeRequest")),
         checks: normalize_status_check_rollup(Map.get(pr, "statusCheckRollup"))
       }
+      |> drop_superseded_checks()
       |> put_head_runs({host, owner, repo}, opts)
       |> put_required_checks({host, owner, repo}, opts)
     else
@@ -634,6 +635,33 @@ defmodule SymphonyElixir.GitHub.PullRequest do
       {:error, %Jason.DecodeError{} = error} -> {:error, {:invalid_pr_payload, Exception.message(error)}}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  # GitHub cancels every job of a workflow run a concurrency group drops as a duplicate of another
+  # run of the same workflow on the head, which turns its checks red though nothing failed. So the
+  # checks of a run that were all cancelled are left out while another run of that workflow on the
+  # head reported a check that wasn't: that run says how the head's CI went. When every run of the
+  # workflow was cancelled, their checks stay and read as a failure.
+  defp drop_superseded_checks(%{checks: checks} = ci_status) do
+    case superseded_run_ids(checks) do
+      [] ->
+        ci_status
+
+      run_ids ->
+        Logger.info("Ignoring the checks of cancelled run(s) #{Enum.join(run_ids, ", ")} superseded by another run of the same workflow pr_url=#{ci_status.pr_url} commit_sha=#{ci_status.commit_sha}")
+        %{ci_status | checks: Enum.reject(checks, &(Map.get(&1, :run_id) in run_ids))}
+    end
+  end
+
+  defp superseded_run_ids(checks) do
+    {cancelled, live} =
+      checks
+      |> Enum.filter(&(is_binary(Map.get(&1, :run_id)) and is_binary(Map.get(&1, :workflow_name))))
+      |> Enum.group_by(&{Map.get(&1, :workflow_name), Map.get(&1, :run_id)})
+      |> Enum.split_with(fn {_run, run_checks} -> Enum.all?(run_checks, &(upcase(Map.get(&1, :conclusion)) == "CANCELLED")) end)
+
+    live_workflows = MapSet.new(live, fn {{workflow, _run_id}, _checks} -> workflow end)
+    for {{workflow, run_id}, _checks} <- cancelled, MapSet.member?(live_workflows, workflow), do: run_id
   end
 
   # Every check reported can have passed while a workflow run that reported them has not finished:
