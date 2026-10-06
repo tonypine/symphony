@@ -145,6 +145,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         }
         reposWindow.stateRoot = poller.stateRoot
         reposWindow.restart = { [weak self] in self?.restart() }
+        reposWindow.start = { [weak self] in self?.startSymphony(nil) }
+        reposWindow.canStart = { [weak self] in
+            guard let self else { return false }
+            return !runner.isRunning && !runner.isStarting && machine.canStart && !restarting
+        }
+        reposWindow.openSettings = { [weak self] in self?.settingsWindow.show() }
         poller.onPoll = { [weak self] poll in
             guard let self else { return StatusMachine.pollInterval }
             handle(.polled(poll))
