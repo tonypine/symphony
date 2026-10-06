@@ -118,6 +118,11 @@ jobs:
       - name: Build escript
         run: time mix escript.build
 
+      # The release workflow runs this on the Burrito binary only on pushes to main,
+      # so a change that breaks `symphony check` on the sample config fails here first.
+      - name: Smoke-test the escript
+        run: time scripts/release/smoke_test.sh bin/symphony "$GITHUB_WORKSPACE/symphony.yml"
+
   coverage:
     name: coverage (${{ matrix.partition }}/4)
     runs-on: ubuntu-latest
