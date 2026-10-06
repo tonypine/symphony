@@ -1139,6 +1139,142 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     end
   end
 
+  describe "linear document tools" do
+    @document_scope %{"id" => "issue-current", "identifier" => "TP-7", "project" => %{"id" => "project-1"}, "attachments" => %{"nodes" => []}}
+
+    test "are advertised with their fields; only linear_get_document is in the read-only scope" do
+      specs = Map.new(DynamicTool.tool_specs(), &{&1["name"], &1["inputSchema"]})
+
+      assert %{"required" => ["title", "content"], "properties" => create} = specs["linear_create_document"]
+      assert create |> Map.keys() |> Enum.sort() == ["content", "title"]
+      assert %{"required" => ["document_id", "content"], "properties" => update} = specs["linear_update_document"]
+      assert update |> Map.keys() |> Enum.sort() == ["content", "document_id", "title"]
+      assert specs["linear_get_document"]["properties"] |> Map.keys() == ["document_id"]
+
+      read_only = Enum.map(DynamicTool.tool_specs(:read_only), & &1["name"])
+      assert "linear_get_document" in read_only
+      refute "linear_create_document" in read_only
+      refute "linear_update_document" in read_only
+
+      response =
+        DynamicTool.execute("linear_create_document", %{"title" => "Brief", "content" => "x"},
+          issue: %Issue{id: "issue-current"},
+          tool_scope: :read_only,
+          linear_client: fn _query, _variables, _opts -> flunk("read-only scope must not create documents") end
+        )
+
+      assert %{"error" => %{"code" => "tool_scope_rejected"}} = Jason.decode!(response["output"])
+
+      response =
+        DynamicTool.execute("linear_create_document", %{"title" => "Brief", "content" => "x", "projectId" => "project-other"},
+          issue: %Issue{id: "issue-current"},
+          linear_client: fn _query, _variables, _opts -> flunk("smuggled project must not reach Linear") end
+        )
+
+      assert %{"error" => %{"code" => "unexpected_arguments", "arguments" => ["projectId"]}} = Jason.decode!(response["output"])
+    end
+
+    test "create, list, read and update a document for the current issue" do
+      {:ok, registry} = CommentRegistry.start_link()
+      document = %{"id" => "doc-1", "title" => "TP-7 · Brief", "url" => "https://linear.app/acme/document/tp-7-brief-abc"}
+
+      client = fn query, _variables, _opts ->
+        cond do
+          query =~ "SymphonyAgentDocumentScope" -> {:ok, %{"data" => %{"issue" => @document_scope}}}
+          query =~ "SymphonyAgentCreateDocument" -> {:ok, %{"data" => %{"documentCreate" => %{"success" => true, "document" => document}}}}
+          query =~ "SymphonyAgentAttachDocument" -> {:ok, %{"data" => %{"attachmentCreate" => %{"success" => true}}}}
+          query =~ "SymphonyAgentDocuments" -> {:ok, %{"data" => %{"documents" => %{"nodes" => [document]}}}}
+          query =~ "SymphonyAgentDocument(" -> {:ok, %{"data" => %{"document" => Map.put(document, "content", "# Brief")}}}
+          query =~ "SymphonyAgentUpdateDocument" -> {:ok, %{"data" => %{"documentUpdate" => %{"success" => true, "document" => document}}}}
+        end
+      end
+
+      opts = [issue: %Issue{id: "issue-current"}, comment_registry: registry, linear_client: client]
+
+      response = DynamicTool.execute("linear_create_document", %{"title" => "Brief", "content" => "# Brief"}, opts)
+      assert %{"document" => ^document, "attached" => true} = Jason.decode!(response["output"])
+
+      response = DynamicTool.execute("linear_get_document", %{}, opts)
+      assert %{"documents" => [%{"id" => "doc-1"}]} = Jason.decode!(response["output"])
+
+      response = DynamicTool.execute("linear_get_document", %{"document_id" => "doc-1"}, opts)
+      assert %{"content" => "<linear_document_content>\n# Brief\n</linear_document_content>"} = Jason.decode!(response["output"])
+
+      response = DynamicTool.execute("linear_update_document", %{"document_id" => "doc-1", "content" => "# Brief v2"}, opts)
+      assert %{"document" => %{"id" => "doc-1"}, "contentLength" => 10} = Jason.decode!(response["output"])
+    end
+
+    test "returns explicit error payloads for refusals" do
+      no_linear = fn _query, _variables, _opts -> flunk("Linear should not be called") end
+      opts = [issue: %Issue{id: "issue-current"}, linear_client: no_linear]
+      truncated = PromptSafety.linear_document_content(String.duplicate("a", 50_001))
+
+      for {tool, args, code} <- [
+            {"linear_create_document", %{"title" => " ", "content" => "x"}, "invalid_document_title"},
+            {"linear_create_document", %{"title" => "Brief", "content" => " "}, "invalid_document_content"},
+            {"linear_update_document", %{"document_id" => " ", "content" => "x"}, "invalid_document_id"},
+            {"linear_update_document", %{"document_id" => "doc-1", "content" => truncated}, "truncated_document_content"}
+          ] do
+        response = DynamicTool.execute(tool, args, opts)
+        assert %{"error" => %{"code" => ^code, "message" => message}} = Jason.decode!(response["output"])
+        assert is_binary(message)
+      end
+
+      scope_client = fn scope ->
+        fn query, _variables, _opts ->
+          assert query =~ "SymphonyAgentDocumentScope"
+          {:ok, %{"data" => %{"issue" => scope}}}
+        end
+      end
+
+      args = %{"title" => "Brief", "content" => "x"}
+
+      response = DynamicTool.execute("linear_create_document", args, Keyword.put(opts, :linear_client, scope_client.(Map.put(@document_scope, "project", nil))))
+      assert %{"error" => %{"code" => "issue_has_no_project", "message" => "The current issue is not in a Linear project" <> _rest}} = Jason.decode!(response["output"])
+
+      response = DynamicTool.execute("linear_create_document", args, Keyword.put(opts, :linear_client, scope_client.(@document_scope)))
+      assert %{"error" => %{"code" => "document_registry_unavailable"}} = Jason.decode!(response["output"])
+
+      {:ok, registry} = CommentRegistry.start_link()
+      for _slot <- 1..10, do: :ok = CommentRegistry.reserve_document(registry, 10)
+      capped = Keyword.merge(opts, comment_registry: registry, linear_client: scope_client.(@document_scope))
+      response = DynamicTool.execute("linear_create_document", args, capped)
+      assert %{"error" => %{"code" => "document_cap_reached", "cap" => 10}} = Jason.decode!(response["output"])
+
+      response = DynamicTool.execute("linear_get_document", %{"document_id" => "doc-other"}, Keyword.put(opts, :linear_client, scope_client.(@document_scope)))
+      assert %{"error" => %{"code" => "document_not_owned_by_issue", "document_id" => "doc-other"}} = Jason.decode!(response["output"])
+    end
+
+    test "reports a created document it could not attach, an unreturned document and a missing one" do
+      document = %{"id" => "doc-1", "title" => "TP-7 · Brief", "url" => "https://linear.app/acme/document/tp-7-brief-abc"}
+      scope = put_in(@document_scope, ["attachments", "nodes"], [%{"metadata" => %{"symphonyDocumentId" => "doc-1"}}])
+
+      client = fn created, attached ->
+        fn query, _variables, _opts ->
+          cond do
+            query =~ "SymphonyAgentDocumentScope" -> {:ok, %{"data" => %{"issue" => scope}}}
+            query =~ "SymphonyAgentCreateDocument" -> {:ok, %{"data" => %{"documentCreate" => %{"success" => true, "document" => created}}}}
+            query =~ "SymphonyAgentAttachDocument" -> attached
+            query =~ "SymphonyAgentDocument(" -> {:ok, %{"data" => %{"document" => nil}}}
+          end
+        end
+      end
+
+      {:ok, registry} = CommentRegistry.start_link()
+      opts = [issue: %Issue{id: "issue-current"}, comment_registry: registry]
+      args = %{"title" => "Brief", "content" => "x"}
+
+      response = DynamicTool.execute("linear_create_document", args, Keyword.put(opts, :linear_client, client.(document, {:error, :linear_down})))
+      assert %{"error" => %{"code" => "document_attach_failed", "document" => ^document}} = Jason.decode!(response["output"])
+
+      response = DynamicTool.execute("linear_create_document", args, Keyword.put(opts, :linear_client, client.(nil, nil)))
+      assert %{"error" => %{"code" => "document_not_returned"}} = Jason.decode!(response["output"])
+
+      response = DynamicTool.execute("linear_get_document", %{"document_id" => "doc-1"}, Keyword.put(opts, :linear_client, client.(nil, nil)))
+      assert %{"error" => %{"code" => "document_not_found"}} = Jason.decode!(response["output"])
+    end
+  end
+
   describe "linear_request_human_action" do
     @request %{"title" => "Add the release signing secrets", "why" => "Release fails.", "steps" => ["Add the secret."]}
 
