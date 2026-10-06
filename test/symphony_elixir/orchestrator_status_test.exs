@@ -4732,6 +4732,82 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     Process.exit(worker_pid, :shutdown)
   end
 
+  test "watchdog leaves alone a run that only sends Claude Code tool_progress heartbeats past the threshold" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_api_token: nil,
+      agent_stall_timeout_ms: 0,
+      watchdog: %{enabled: true, tick_interval_ms: 60_000, no_progress_threshold_ms: 1_000}
+    )
+
+    issue = %Issue{
+      id: "issue-watchdog-heartbeat",
+      identifier: "MT-HEARTBEAT",
+      title: "Watchdog heartbeat",
+      description: "Keep a run inside a long tool call running",
+      state: "In Progress"
+    }
+
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+
+    orchestrator_name = Module.concat(__MODULE__, :WatchdogHeartbeatOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        stop_process(pid)
+      end
+    end)
+
+    {worker_pid, worker_ref} = start_blocked_worker()
+    # The run's last transcript event, its `tool_use`, is already past the threshold.
+    tool_use_at = DateTime.add(DateTime.utc_now(), -2, :second)
+    run_id = "run-watchdog-heartbeat"
+
+    running_entry =
+      running_entry(issue, worker_pid, worker_ref, run_id, tool_use_at, %{
+        session_id: "sess-heartbeat",
+        last_codex_timestamp: tool_use_at,
+        last_codex_event: :tool_use,
+        last_codex_message: "Bash",
+        last_event_at: tool_use_at
+      })
+
+    put_running_entry(pid, issue, running_entry)
+
+    # Heartbeats take the agent runner's path: stream line, parsed event, worker update.
+    for elapsed_seconds <- [3, 4] do
+      line =
+        ~s({"type":"tool_progress","tool_use_id":"toolu_1","tool_name":"Bash","parent_tool_use_id":null,"elapsed_time_seconds":#{elapsed_seconds},"uuid":"u-#{elapsed_seconds}","session_id":"sess-heartbeat"})
+
+      update = line |> AppServer.parse_event() |> AppServer.event_to_update()
+      send(pid, {:codex_worker_update, issue.id, update})
+      send(pid, {:codex_worker_update, "issue-not-running", update})
+      send(pid, :watchdog_tick)
+
+      # The orchestrator handles the messages before it answers this.
+      state = get_orchestrator_state(pid)
+      assert %{last_event_at: last_event_at} = entry = state.running[issue.id]
+      assert DateTime.compare(last_event_at, update.timestamp) == :eq
+      assert %{last_codex_event: :tool_use, last_codex_message: "Bash", last_codex_timestamp: ^tool_use_at} = entry
+      refute Map.has_key?(state.running, "issue-not-running")
+      refute Map.has_key?(state.retry_attempts, issue.id)
+
+      # Only heartbeats arrive for longer than the threshold.
+      Process.sleep(600)
+    end
+
+    send(pid, :watchdog_tick)
+    state = get_orchestrator_state(pid)
+    assert DateTime.diff(DateTime.utc_now(), tool_use_at, :millisecond) > 3_000
+    assert Map.has_key?(state.running, issue.id)
+    refute Map.has_key?(state.retry_attempts, issue.id)
+    assert Process.alive?(worker_pid)
+
+    Process.demonitor(worker_ref, [:flush])
+    Process.exit(worker_pid, :shutdown)
+  end
+
   test "disabled watchdog tick is a no-op" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_api_token: nil,
