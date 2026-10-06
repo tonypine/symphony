@@ -789,6 +789,74 @@ defmodule SymphonyElixir.RunStoreTest do
     restart_run_store()
   end
 
+  describe "the stored transcript buffer" do
+    test "a run's row keeps only the newest 20 events" do
+      assert :ok =
+               RunStore.put_run(%{
+                 repo_key: @repo_key,
+                 run_id: "run-tx",
+                 status: "running",
+                 transcript_buffer: events(1..200),
+                 transcript_buffer_size: 200
+               })
+
+      assert %{transcript_buffer: kept, transcript_buffer_size: 20} = stored_run("run-tx")
+      assert kept == events(181..200)
+
+      update = %{status: "success", transcript_buffer: events(1..20), transcript_buffer_size: 20}
+      assert :ok = RunStore.update_run(@repo_key, "run-tx", update)
+      assert %{status: "success", transcript_buffer: kept, transcript_buffer_size: 20} = stored_run("run-tx")
+      assert kept == events(1..20)
+
+      assert :ok = RunStore.update_run(@repo_key, "run-tx", %{transcript_buffer: events(1..21), transcript_buffer_size: 21})
+      assert stored_run("run-tx").transcript_buffer == events(2..21)
+
+      assert :ok = RunStore.put_run(%{repo_key: @repo_key, run_id: "run-no-tx", status: "running"})
+      refute Map.has_key?(stored_run("run-no-tx"), :transcript_buffer)
+    end
+
+    test "rows written before the cap are trimmed once when the store starts, and the table's files shrink" do
+      events = Enum.map(1..200, &%{event: :notification, payload: %{"delta" => String.duplicate("x", 500)}, n: &1})
+
+      # Written behind RunStore's back, as rows stored before the cap were.
+      assert {:atomic, :ok} =
+               :mnesia.transaction(fn ->
+                 for n <- 1..20 do
+                   run_id = "legacy-#{n}"
+
+                   record = %{
+                     repo_key: @repo_key,
+                     run_id: run_id,
+                     status: "success",
+                     started_at: started_at(n),
+                     transcript_buffer: events,
+                     transcript_buffer_size: 200
+                   }
+
+                   :mnesia.write({:symphony_run_store_runs, {@repo_key, run_id}, @repo_key, run_id, record})
+                 end
+
+                 :ok
+               end)
+
+      :ok = :mnesia.sync_log()
+      :dumped = :mnesia.dump_log()
+      before = runs_table_disc_size()
+      restart_run_store()
+
+      assert %{transcript_buffer: kept, transcript_buffer_size: 20, status: "success"} = stored_run("legacy-1")
+      assert kept == Enum.take(events, -20)
+      assert [%{transcript_buffer_size: 20} | _rest] = RunStore.list_runs(@repo_key, 1)
+      assert before > 2_000_000
+      # A tenth of the events, in the rewritten file and at most once more in the log.
+      assert runs_table_disc_size() < before / 3
+
+      # Nothing is left to trim: the next start rewrites nothing.
+      restart_run_store()
+      assert stored_run("legacy-20").transcript_buffer == Enum.take(events, -20)
+    end
+  end
+
   test "scopes durable records by repo_key when identifiers collide" do
     now = DateTime.utc_now()
 
@@ -946,6 +1014,28 @@ defmodule SymphonyElixir.RunStoreTest do
         {:ok, _pid} = GenServer.start(RunStore, [], name: RunStore)
         :ok
     end
+  end
+
+  defp events(range), do: Enum.map(range, &%{event: :notification, n: &1})
+
+  defp stored_run(run_id) do
+    {:atomic, [{_table, _key, _repo_key, ^run_id, record}]} =
+      :mnesia.transaction(fn -> :mnesia.read(:symphony_run_store_runs, {@repo_key, run_id}) end)
+
+    record
+  end
+
+  # The table file and its log: the rows sit in either, depending on when Mnesia last dumped its log.
+  defp runs_table_disc_size do
+    ["symphony_run_store_runs.DCD", "symphony_run_store_runs.DCL"]
+    |> Enum.map(&Path.join(RunStore.store_dir(), &1))
+    |> Enum.map(fn path ->
+      case File.stat(path) do
+        {:ok, %{size: size}} -> size
+        {:error, :enoent} -> 0
+      end
+    end)
+    |> Enum.sum()
   end
 
   defp create_legacy_run_store_dir!(dir) do
