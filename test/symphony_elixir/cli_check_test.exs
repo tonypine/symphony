@@ -267,6 +267,27 @@ defmodule SymphonyElixir.CLICheckTest do
       assert message == "Config error in #{path}: agent.run_profiles.landing.model: OpenRouter has no model `acme/typo`"
     end
 
+    test "checks agent.small_model against OpenRouter's models, without asking for tools", %{root: root} do
+      System.put_env("OPENROUTER_API_KEY", "sk-or-v1-check-secret")
+      stub_models_api()
+      small_model = &String.replace(openrouter_symphony(root), "  runtime: claude\n", "  runtime: claude\n  small_model: #{&1}\n")
+
+      path = write_symphony!(root, small_model.("acme/chat-only"))
+      assert check(["--config", path]) == {{:halt, 0}, "Config OK: #{path}\n"}
+
+      Cache.clear()
+      path = write_symphony!(root, small_model.("acme/typo"))
+      assert {{:error, message}, ""} = check(["--config", path])
+      assert message == "Config error in #{path}: agent.small_model: OpenRouter has no model `acme/typo`"
+    end
+
+    test "rejects a blank agent.small_model", %{root: root} do
+      path = write_symphony!(root, String.replace(openrouter_symphony(root), "  runtime: claude\n", "  runtime: claude\n  small_model: \"  \"\n"))
+
+      assert {{:error, message}, ""} = check(["--config", path])
+      assert message =~ "agent.small_model must not be blank"
+    end
+
     test "warns when effort is set for a model without reasoning", %{root: root} do
       System.put_env("OPENROUTER_API_KEY", "sk-or-v1-check-secret")
       stub_models_api()

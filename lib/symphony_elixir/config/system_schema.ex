@@ -69,7 +69,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "workspaces" => ~w(root clones_root strategy repo fetch_before_dispatch cleanup attachments),
     "workspaces.cleanup" => ~w(enabled max_age_days interval_ms min_free_bytes orphan_action trash_dir),
     "workspaces.attachments" => ~w(allowed_hosts public_upload_extensions),
-    "agent" => ~w(runtime command model effort provider run_profiles concurrency limits timeouts prompts permissions mcp usage_limit),
+    "agent" => ~w(runtime command model effort provider small_model run_profiles concurrency limits timeouts prompts permissions mcp usage_limit),
     "agent.concurrency" => ~w(max_total max_by_issue_state epic_lanes finishing_max force_label forced_max forced_stale_after_hours),
     "agent.limits" => ~w(max_turns retry_backoff_max_ms tokens_per_issue tokens_per_day max_consecutive_identical_tool_failures),
     "agent.timeouts" => ~w(turn_ms read_ms stall_ms command_ms),
@@ -854,6 +854,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
         |> maybe_put("model", Map.get(config, "model"))
         |> maybe_put("effort", Map.get(config, "effort"))
         |> maybe_put("provider", Map.get(config, "provider"))
+        |> maybe_put("small_model", Map.get(config, "small_model"))
         |> maybe_put("run_profiles", Map.get(config, "run_profiles"))
         |> maybe_put("max_concurrent_agents", Map.get(concurrency, "max_total"))
         |> maybe_put("max_concurrent_agents_by_state", Map.get(concurrency, "max_by_issue_state"))

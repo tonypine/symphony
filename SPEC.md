@@ -1813,11 +1813,11 @@ not require recognizing or validating extension fields unless that extension is 
   ignores both and logs a warning. A Claude run whose provider is `openrouter` also starts with
   `ANTHROPIC_BASE_URL=https://openrouter.ai/api`, `ANTHROPIC_AUTH_TOKEN` set from the
   `OPENROUTER_API_KEY` environment variable of the Symphony process, an empty
-  `ANTHROPIC_API_KEY`, and `CLAUDE_CODE_SUBAGENT_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`,
-  `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_OPUS_MODEL` and
-  `ANTHROPIC_SMALL_FAST_MODEL` all set to `<model>`. If `OPENROUTER_API_KEY` is unset
-  or blank, the run fails before the agent starts with an error naming the run kind and the
-  variable. The key MUST NOT be written to config, logs, the audit log, the run store, or
+  `ANTHROPIC_API_KEY`, `CLAUDE_CODE_SUBAGENT_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL` and
+  `ANTHROPIC_DEFAULT_OPUS_MODEL` set to `<model>`, and `ANTHROPIC_DEFAULT_HAIKU_MODEL` and
+  `ANTHROPIC_SMALL_FAST_MODEL` set to `agent.small_model` when it is set, else `<model>`. If
+  `OPENROUTER_API_KEY` is unset or blank, the run fails before the agent starts with an error
+  naming the run kind and the variable. The key MUST NOT be written to config, logs, the audit log, the run store, or
   transcripts. Before an OpenRouter run starts, the implementation looks the model up in
   OpenRouter's models catalog (`GET https://openrouter.ai/api/v1/models`, cached in process with
   a TTL). A model whose `supported_parameters` lacks `tools` fails the run before the agent starts,
@@ -1828,6 +1828,11 @@ not require recognizing or validating extension fields unless that extension is 
   `https://openrouter.ai/api` (for runs and the catalog) only while `SYMPHONY_BAR_QA_ROOT` is set
   and only with an `http(s)` URL on a loopback host; anywhere else the implementation MUST use
   `https://openrouter.ai/api`.
+- `agent.small_model`: OpenRouter model id string or null, default `null`. The model for the
+  agent's background calls (titles, summaries) on runs whose provider is `openrouter`; null
+  leaves them on the run's model. Runs whose provider is `anthropic` ignore it. When the
+  OpenRouter models catalog can be read, `symphony check` reports an id it does not list as an
+  error naming `agent.small_model`.
 - `agent.prompts.include_project_guides`: boolean, default `true`
 - `agent.prompts.project_guide_files`: list of relative paths or null, default `null`
 - `agent.permissions.approval_policy`: agent approval policy, default depends on `agent.runtime`

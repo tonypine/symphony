@@ -45,7 +45,7 @@ final class SettingsViewModel: ObservableObject {
     /// `agent.concurrency.max_total` in the configured symphony.yml. Saved to that file, not UserDefaults.
     @Published var maxConcurrentAgents = MaxConcurrentAgents.symphonyDefault
     /// `agent.provider`, `.model`, `.effort` and `.run_profiles` in the configured symphony.yml, and the same
-    /// keys under each `repositories[].agent`.
+    /// keys under each `repositories[].agent`, plus `agent.small_model`.
     @Published var runProfiles = ScopedRunProfiles()
     /// The `agent` block the Models rows edit: the top-level one or a repository's.
     @Published var runProfilesScope = RunProfilesScope.global

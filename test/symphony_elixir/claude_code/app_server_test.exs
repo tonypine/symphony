@@ -2528,6 +2528,33 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       end)
     end
 
+    test "sends an OpenRouter run's background calls to agent.small_model when it is set" do
+      with_openrouter_key("sk-or-v1-small", fn ->
+        with_provider_env_fake_claude("ACME-OPENROUTER-SMALL", [agent_small_model: "anthropic/claude-haiku-4.5"], fn workspace ->
+          profile = %{kind: :implementation, model: "anthropic/claude-sonnet-4.5", effort: nil, provider: "openrouter"}
+
+          {:ok, session} = AppServer.start_session(workspace, run_profile: profile)
+          assert {:ok, _result} = AppServer.run_turn(session, "build it", %{identifier: "ACME-OPENROUTER-SMALL"}, [])
+          AppServer.stop_session(session)
+
+          assert provider_env_trace(workspace) == [
+                   "BASE_URL=https://openrouter.ai/api",
+                   "AUTH_TOKEN=sk-or-v1-small",
+                   "API_KEY=",
+                   "SUBAGENT_MODEL=anthropic/claude-sonnet-4.5",
+                   "DEFAULT_HAIKU_MODEL=anthropic/claude-haiku-4.5",
+                   "DEFAULT_SONNET_MODEL=anthropic/claude-sonnet-4.5",
+                   "DEFAULT_OPUS_MODEL=anthropic/claude-sonnet-4.5",
+                   "SMALL_FAST_MODEL=anthropic/claude-haiku-4.5",
+                   "OPENROUTER_API_KEY=<unset>"
+                 ]
+
+          args = workspace |> Path.join("argv.trace") |> File.read!() |> String.split("\n", trim: true)
+          assert Enum.take(args, -2) == ["--model", "anthropic/claude-sonnet-4.5"]
+        end)
+      end)
+    end
+
     test "launches an OpenRouter run in QA mode against the stub, which checks its model" do
       {:ok, stub, port} = Stub.start_link(log: fn _line -> :ok end)
       saved = Map.new(~w(SYMPHONY_BAR_QA_ROOT SYMPHONY_QA_OPENROUTER_URL), &{&1, System.get_env(&1)})
@@ -2568,9 +2595,9 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       end
     end
 
-    test "launches an Anthropic profile without OpenRouter env, even when the key is set" do
+    test "launches an Anthropic profile without OpenRouter env, even when the key and agent.small_model are set" do
       with_openrouter_key("sk-or-v1-unused", fn ->
-        with_provider_env_fake_claude("ACME-ANTHROPIC", fn workspace ->
+        with_provider_env_fake_claude("ACME-ANTHROPIC", [agent_small_model: "anthropic/claude-haiku-4.5"], fn workspace ->
           profile = %{kind: :ci_fix, model: "claude-haiku-4-5", effort: "low", provider: "anthropic"}
 
           {:ok, session} = AppServer.start_session(workspace, run_profile: profile)
@@ -4067,7 +4094,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
     end
   end
 
-  defp with_provider_env_fake_claude(identifier, fun) do
+  defp with_provider_env_fake_claude(identifier, workflow_overrides \\ [], fun) do
     test_root = Path.join(System.tmp_dir!(), "symphony-elixir-claude-code-provider-#{System.unique_integer([:positive])}")
 
     try do
@@ -4094,10 +4121,9 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
 
       File.chmod!(fake_claude, 0o755)
 
-      write_workflow_file!(Workflow.workflow_file_path(),
-        workspace_root: workspace_root,
-        agent_kind: "claude",
-        agent_command: fake_claude
+      write_workflow_file!(
+        Workflow.workflow_file_path(),
+        [workspace_root: workspace_root, agent_kind: "claude", agent_command: fake_claude] ++ workflow_overrides
       )
 
       fun.(workspace)
