@@ -1479,12 +1479,20 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
         "issue-self" => %{identifier: "TP-226", repo_key: "default", workspace_path: "/ws/default/TON-226"},
         "issue-retrying" => %{identifier: "TP-224", repo_key: "default", workspace_path: nil},
         "issue-retrying-other-repo" => %{identifier: "TP-2", repo_key: "other"}
+      },
+      tracker_tasks: %{
+        make_ref() => %{
+          kind: :retry_refresh,
+          issue_ids: ["issue-refreshing"],
+          metadata: %{identifier: "TP-223", repo_key: "default", workspace_path: nil}
+        },
+        make_ref() => %{kind: :plan_comments, issue_ids: ["issue-parent"], newest: nil}
       }
     }
 
     identifiers = Orchestrator.sibling_active_workspace_identifiers_for_test(state, "issue-self", "default")
 
-    assert Enum.sort(identifiers) == ["TON-225", "TP-224", "TP-225"]
+    assert Enum.sort(identifiers) == ["TON-225", "TP-223", "TP-224", "TP-225"]
   end
 
   test "worktree reuse refuses when the requested branch is already checked out elsewhere" do

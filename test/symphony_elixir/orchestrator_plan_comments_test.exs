@@ -115,6 +115,29 @@ defmodule SymphonyElixir.OrchestratorPlanCommentsTest do
     refute_received {:memory_tracker_state_update, _issue_id, _state}
   end
 
+  test "a read of the comments that crashes, or cannot start, leaves them to the next poll" do
+    parent = parent("In Review", [], [~U[2026-10-04 12:10:00Z]])
+    Application.put_env(:symphony_elixir, :memory_tracker_plan_comments, :unreadable)
+
+    log = capture_log(fn -> send(self(), {:state, act(state(), parent)}) end)
+
+    assert_received {:state, state}
+    assert_received {:memory_tracker_plan_comments, "parent"}
+    assert log =~ "Async Linear task plan_comments exited before replying"
+    assert state.plan_comment_checks == %{}
+    assert state.tracker_tasks == %{}
+
+    put_feedback("parent", [change(~U[2026-10-04 12:00:00Z], "In Progress", "In Review")], [comment("c1", "Split it", ~U[2026-10-04 12:10:00Z])])
+    assert :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, SymphonyElixir.TaskSupervisor)
+
+    log = capture_log(fn -> send(self(), {:state, act(state(), parent)}) end)
+
+    assert_received {:state, state}
+    assert log =~ "Failed to start async Linear task plan_comments: :task_supervisor_unavailable"
+    assert state.plan_comment_checks == %{}
+    refute_received {:memory_tracker_plan_comments, _issue_id}
+  end
+
   test "a comment on an approved plan gets one reply under its thread and changes nothing" do
     approved = [%{id: "child-1", identifier: "MOT-31", state: "In Progress"}]
     parent = parent(@waiting, approved, [~U[2026-10-04 12:10:00Z], nil])

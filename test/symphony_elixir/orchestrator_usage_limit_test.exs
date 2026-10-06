@@ -80,10 +80,16 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
 
   # Handles `message` inside the orchestrator and returns its state right after, before a poll
   # the message schedules can run against the memory tracker and change it.
+  # A retry reads its issue again in a task; the state is read once its answer is handled.
   defp deliver(pid, message) do
     :sys.replace_state(pid, fn state ->
       {:noreply, state} = Orchestrator.handle_info(message, state)
       state
+    end)
+
+    wait_until(fn ->
+      state = :sys.get_state(pid)
+      state.tracker_tasks == %{} and state
     end)
   end
 
