@@ -113,7 +113,7 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
       assert script =~ "'#{socat}' 'TCP-LISTEN:4000,bind=127.0.0.1,reuseaddr,fork' 'UNIX-CONNECT:#{serve_socket}' &\n"
       assert script =~ "\ntrap : HUP INT TERM\n'#{bwrap}' '--die-with-parent' '--unshare-all' "
 
-      assert script =~ "\nkill $proxy_bridge $serve_bridge 2>/dev/null\nexit $status"
+      assert script =~ "\nkill $proxy_bridge $serve_bridge 2>/dev/null\nwait\nexit $status"
 
       assert {_output, 7} = System.cmd("/bin/sh", ["-c", script], cd: workspace, stderr_to_stdout: true)
 

@@ -1,0 +1,165 @@
+name: bwrap-diagnostics
+
+# Temporary (TP-543): shows how the bwrap dev server's process group stops on a Linux runner.
+# Dropped before the final push.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  bwrap-diagnostics:
+    name: bwrap diagnostics
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Install the dev server sandbox tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap socat
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
+      - name: Stop the sandbox as DevServer does
+        run: |
+          out="$RUNNER_TEMP/diag.txt"
+          exec > >(tee "$out") 2>&1
+
+          echo "== host"
+          uname -r; bwrap --version; socat -V | head -2; command -v kill; env kill --version 2>&1 | head -1
+          sudo aa-status 2>/dev/null | grep -i -A2 bwrap || echo "no bwrap apparmor profile"
+          echo "== ancestry of this step"
+          p=$$; while [ "$p" -gt 1 ]; do ps -o pid=,ppid=,args= -p "$p"; p=$(ps -o ppid= -p "$p" | tr -d ' '); done
+          sh -c 'sleep 30 >/dev/null 2>&1 & echo $! > /tmp/orphan'; sleep 0.5
+          reaper=$(ps -o ppid= -p "$(cat /tmp/orphan)" | tr -d ' ')
+          echo "orphans go to: $(ps -o pid=,args= -p "$reaper")"
+
+          old_wait='pid, status = os.waitpid(pid, 0)'
+          new_wait=$(printf '%s\n' \
+            "status = None" \
+            "deadline = None" \
+            "while True:" \
+            "    try:" \
+            "        child, child_status = os.waitpid(-1, 0 if status is None else os.WNOHANG)" \
+            "    except ChildProcessError:" \
+            "        break" \
+            "    if child == pid:" \
+            "        status = child_status" \
+            "        deadline = time.monotonic() + 1" \
+            "    elif child == 0:" \
+            "        try:" \
+            "            os.killpg(pid, 0)" \
+            "        except OSError:" \
+            "            break" \
+            "        if time.monotonic() > deadline:" \
+            "            break" \
+            "        time.sleep(0.01)")
+
+          launcher() {
+            # $1: old | new
+            printf '%s\n' \
+              "import ctypes, json, os, sys, time" \
+              "argv = json.loads(os.environ.pop('ARGV'))"
+            if [ "$1" = new ]; then
+              printf '%s\n' "if sys.platform.startswith('linux'):" "    ctypes.CDLL(None).prctl(36, 1, 0, 0, 0)"
+            fi
+            printf '%s\n' \
+              "pid = os.fork()" \
+              "if pid == 0:" \
+              "    os.setsid()" \
+              "    print('PGID=' + str(os.getpid()), flush=True)" \
+              "    os.execv(argv[0], argv)"
+            if [ "$1" = new ]; then
+              printf '%s\n' "$new_wait"
+            else
+              printf '%s\n' "$old_wait"
+            fi
+            printf '%s\n' "sys.exit(0)"
+          }
+
+          members() {
+            ps -eo pid=,ppid=,pgid=,stat=,args= | awk -v g="$1" '$3 == g'
+          }
+
+          details() {
+            for pid in $(ps -eo pid=,pgid= | awk -v g="$1" '$2 == g {print $1}'); do
+              printf '%s ' "$pid"
+              grep -s -E '^(Name|NSpid|SigBlk|SigIgn|SigCgt)' /proc/$pid/status | tr '\n' ' '
+              printf 'apparmor=%s\n' "$(cat /proc/$pid/attr/current 2>/dev/null)"
+            done
+          }
+
+          run() {
+            variant=$1; script_variant=$2; port=$3
+            echo; echo "======== launcher=$variant host script=$script_variant"
+            ws=$(mktemp -d); tmp=$(mktemp -d /tmp/dv.XXXX); pport=$((port + 1))
+            sandbox_script="socat TCP-LISTEN:$pport,bind=127.0.0.1,reuseaddr,fork UNIX-CONNECT:$tmp/proxy.sock &
+          socat UNIX-LISTEN:$tmp/serve.sock,fork,unlink-early TCP:127.0.0.1:$port &
+          exec /bin/sh -lc 'exec python3 -m http.server $port --bind 127.0.0.1'"
+            reap=""; [ "$script_variant" = new ] && reap="wait"
+            host_script="socat UNIX-LISTEN:$tmp/proxy.sock,fork,unlink-early TCP:127.0.0.1:$pport &
+          proxy_bridge=\$!
+          socat TCP-LISTEN:$port,bind=127.0.0.1,reuseaddr,fork UNIX-CONNECT:$tmp/serve.sock &
+          serve_bridge=\$!
+          trap : HUP INT TERM
+          bwrap --die-with-parent --unshare-all --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp --tmpfs /run --bind $ws $ws --bind $tmp $tmp --chdir $ws /bin/sh -c \"\$1\"
+          status=\$?
+          kill \$proxy_bridge \$serve_bridge 2>/dev/null
+          $reap
+          exit \$status"
+            argv=$(python3 -c 'import json, sys; print(json.dumps(sys.argv[1:]))' /bin/sh -c "$host_script" sh "$sandbox_script")
+            ARGV="$argv" python3 -c "$(launcher "$variant")" > "$tmp.out" 2>&1 &
+            lpid=$!
+            for _ in $(seq 50); do grep -q PGID= "$tmp.out" && break; sleep 0.1; done
+            pgid=$(sed -n 's/^PGID=//p' "$tmp.out")
+            for _ in $(seq 100); do curl -sf -o /dev/null --max-time 2 "http://127.0.0.1:$port/" && break; sleep 0.2; done
+            curl -s -o /dev/null -w 'serving: %{http_code}\n' --max-time 5 "http://127.0.0.1:$port/"
+            echo "-- group $pgid before stop"; members "$pgid"; details "$pgid"
+            start=$(date +%s%N)
+            env kill -TERM -"$pgid"; echo "kill -TERM status $?"
+            stopped=""
+            for i in $(seq 20); do
+              sleep 0.25
+              if ! env kill -0 -"$pgid" 2>/dev/null; then stopped="TERM after $(( ($(date +%s%N) - start) / 1000000 )) ms"; break; fi
+              if [ "$i" = 2 ] || [ "$i" = 8 ]; then echo "-- $((i * 250)) ms after TERM"; members "$pgid"; details "$pgid"; fi
+            done
+            if [ -z "$stopped" ]; then
+              echo "-- 5 s after TERM"; members "$pgid"; details "$pgid"
+              env kill -KILL -"$pgid"
+              for i in $(seq 12); do
+                sleep 0.25
+                if ! env kill -0 -"$pgid" 2>/dev/null; then stopped="KILL after $(( ($(date +%s%N) - start) / 1000000 )) ms"; break; fi
+              done
+              echo "-- after KILL"; members "$pgid"
+              for z in $(ps -eo pid=,pgid= | awk -v g="$pgid" '$2 == g {print $1}'); do
+                pp=$(ps -o ppid= -p "$z" | tr -d ' '); echo "$z parent: $(ps -o pid=,stat=,args= -p "$pp")"
+              done
+            fi
+            echo "RESULT launcher=$variant script=$script_variant: ${stopped:-group still there 8 s after TERM}"
+            wait "$lpid" 2>/dev/null; echo "launcher exit $?"
+            env kill -KILL -"$pgid" 2>/dev/null
+          }
+
+          run old old 18080
+          run new new 18090
+          run new old 18100
+          true
+
+      - name: Post the results on the pull request
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "Temporary TP-543 bwrap stop diagnostics for $GITHUB_SHA (this job goes before the final push)."
+            echo
+            echo '```text'
+            tail -c 60000 "$RUNNER_TEMP/diag.txt"
+            echo '```'
+          } > "$RUNNER_TEMP/comment.md"
+          gh pr comment "${{ github.event.pull_request.number }}" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/comment.md"

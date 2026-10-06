@@ -161,7 +161,8 @@ defmodule SymphonyElixir.Verification.DevServer do
   def handle_call(:stop, _from, state) do
     state = %{state | stopping?: true}
     stop_process(state)
-    {:stop, :normal, :ok, state}
+    # Stopped: `terminate/2` only releases the resources.
+    {:stop, :normal, :ok, %{state | port_handle: nil}}
   end
 
   @impl true
@@ -280,10 +281,19 @@ defmodule SymphonyElixir.Verification.DevServer do
     end
   end
 
+  # On Linux the launcher is the child subreaper of the group: a member whose parent dies first
+  # (bwrap's namespace init when a stop signal ends bwrap) is reaped here, instead of staying a
+  # zombie in the group for `stop_process/1` to wait out. Once its child exits it reaps for up
+  # to a second more, until the group is gone.
   defp python_launcher do
     [
-      "import json, os, sys",
+      "import ctypes, json, os, sys, time",
       "argv = json.loads(os.environ.pop(#{inspect(@launcher_argv_env)}))",
+      "if sys.platform.startswith('linux'):",
+      "    try:",
+      "        ctypes.CDLL(None).prctl(36, 1, 0, 0, 0)",
+      "    except Exception:",
+      "        pass",
       "pid = os.fork()",
       "if pid == 0:",
       "    process_group = 0",
@@ -294,7 +304,26 @@ defmodule SymphonyElixir.Verification.DevServer do
       "        pass",
       "    print(#{inspect(@launcher_marker)} + '=' + str(os.getpid()) + ':' + str(process_group), flush=True)",
       "    os.execv(argv[0], argv)",
-      "pid, status = os.waitpid(pid, 0)",
+      "status = None",
+      "deadline = None",
+      "while True:",
+      "    try:",
+      "        child, child_status = os.waitpid(-1, 0 if status is None else os.WNOHANG)",
+      "    except ChildProcessError:",
+      "        break",
+      "    if child == pid:",
+      "        status = child_status",
+      "        deadline = time.monotonic() + 1",
+      "    elif child == 0:",
+      "        try:",
+      "            os.killpg(pid, 0)",
+      "        except OSError:",
+      "            break",
+      "        if time.monotonic() > deadline:",
+      "            break",
+      "        time.sleep(0.01)",
+      "if status is None:",
+      "    sys.exit(1)",
       "if os.WIFEXITED(status):",
       "    sys.exit(os.WEXITSTATUS(status))",
       "if os.WIFSIGNALED(status):",

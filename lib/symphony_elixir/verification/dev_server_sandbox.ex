@@ -104,7 +104,7 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
 
   # The host side of the bridges runs outside the sandbox, in the dev server's process group, so
   # stopping the group stops it too. It ends with `bwrap` either way: the shell waits for `bwrap`
-  # before a stop signal's trap, then stops the bridges.
+  # before a stop signal's trap, then stops and reaps the bridges.
   defp bwrap_command(start_cmd, workspace, tmp_dir, opts) do
     with {:ok, bwrap} <- find_tool(opts, :bwrap),
          {:ok, socat} <- find_tool(opts, :socat),
@@ -137,6 +137,7 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
             sh_command([bwrap | args] ++ ["/bin/sh", "-c", sandbox_script]),
             "status=$?",
             "kill $proxy_bridge $serve_bridge 2>/dev/null",
+            "wait",
             "exit $status"
           ],
           "\n"
