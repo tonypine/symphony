@@ -203,7 +203,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             return pending.startSymphony
         case let .rolledBack(record):
             updater.rolledBack = record
-            notify(.rolledBack(record, restoredVersion: updates.current.version))
+            notifyAfterLaunch(.rolledBack(record, restoredVersion: updates.current.version))
             resumeAfterUpdate = record.resumeDispatch
             return record.startSymphony
         case let .rollbackFailed(record):
@@ -215,7 +215,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                 reason: record.reason,
                 problem: problem
             )
-            notify(.rollbackFailed(version: record.version, reason: record.reason, problem: problem))
+            notifyAfterLaunch(.rollbackFailed(version: record.version, reason: record.reason, problem: problem))
             return false
         }
     }
@@ -298,6 +298,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     private func notify(_ notice: UpdateNotice) {
         runner.notify(title: notice.title, body: notice.body)
+    }
+
+    /// Notifies once launch has finished, so a scripted QA run has started and records the notice.
+    private func notifyAfterLaunch(_ notice: UpdateNotice) {
+        DispatchQueue.main.async { [weak self] in self?.notify(notice) }
     }
 
     /// Quitting stops an owned Symphony first, after confirming when agent runs are active.
