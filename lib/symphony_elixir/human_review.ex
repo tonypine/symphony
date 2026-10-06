@@ -28,6 +28,8 @@ defmodule SymphonyElixir.HumanReview do
   alias SymphonyElixir.Tracker
 
   @review_state "In Review"
+  # Asks for a person whatever the acceptance gate's `escalate.labels` say (see `parked_for_person?/2`).
+  @needs_human_label "needs-human"
 
   @doc "The configured state name, or nil when it is turned off in config."
   @spec state(Schema.t() | term()) :: String.t() | nil
@@ -98,6 +100,33 @@ defmodule SymphonyElixir.HumanReview do
     rules = settings.auto_review.acceptance_gate.escalate
     rules = %{rules | labels: Enum.reject(rules.labels, &Issue.breakdown_label?/1)}
     Escalation.ticket_reasons(%{issue | labels: issue.labels || []}, rules, human_review_state: state(settings)) != []
+  end
+
+  @doc """
+  True when an agent parked the issue for a person: it sits outside `tracker.active_states` with a
+  label that asks for one (`human_actions.label`, `needs-human`, or an
+  `auto_review.acceptance_gate.escalate` label other than `plan` and `breakdown`, which every plan
+  carries). Labels and states compare case-insensitively.
+
+  A fix run (CI or merge conflict) can't do what the person must, so the pollers leave such an
+  issue where it is until the label goes or it moves to an active state.
+  """
+  @spec parked_for_person?(Issue.t(), Schema.t()) :: boolean()
+  def parked_for_person?(%Issue{state: issue_state, labels: labels}, %Schema{} = settings) do
+    wanted = MapSet.new(person_labels(settings), &normalize/1)
+
+    not active_state?(issue_state, settings) and
+      Enum.any?(labels || [], &(is_binary(&1) and MapSet.member?(wanted, normalize(&1))))
+  end
+
+  defp active_state?(issue_state, settings) when is_binary(issue_state),
+    do: Enum.any?(settings.tracker.active_states, &(normalize(&1) == normalize(issue_state)))
+
+  defp active_state?(_issue_state, _settings), do: false
+
+  defp person_labels(settings) do
+    [settings.human_actions.label, @needs_human_label | settings.auto_review.acceptance_gate.escalate.labels]
+    |> Enum.reject(&Issue.breakdown_label?/1)
   end
 
   @doc """
