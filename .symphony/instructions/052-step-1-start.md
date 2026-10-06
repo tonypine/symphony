@@ -15,7 +15,7 @@
     - Ensure `Acceptance Criteria` and `Validation` are current and still make sense for the task.
 4.  Start work by writing/updating a hierarchical plan in the workpad comment.
     - If the ticket asks you to split the work into sub-tickets, create each one with `linear_create_subissue` (see `Splitting work and out-of-scope improvements` below) and record their identifiers in the workpad `Notes`. They land in `Backlog` as children of this issue.
-    - If the work is clearly too large for one PR and the ticket has no `breakdown` label, say so in the workpad `Confusions` so a human can add the label; do not split it unasked.
+    - If the work is clearly too large for one PR and the ticket has no `plan` label, say so in the workpad `Confusions` so a human can add the label; do not split it unasked.
 5.  Ensure the workpad includes a compact environment stamp at the top as a code fence line:
     - Format: `<host>:<abs-workdir>@<short-sha>`
     - Example: `devbox-01:/home/dev-user/code/symphony-workspaces/MT-32@7bdde33bc`
@@ -25,6 +25,7 @@
       When the ticket has a `## User walkthrough` section, copy its numbered steps and expected results into that criterion verbatim.
     - If changes touch app files or app behavior, add explicit app-specific flow checks to `Acceptance Criteria` in the workpad (for example: launch path, changed interaction path, and expected result path).
     - If the ticket description/comment context includes `Validation`, `Test Plan`, or `Testing` sections, copy those requirements into the workpad `Acceptance Criteria` and `Validation` sections as required checkboxes (no optional downgrade).
+    - If the ticket adds a `symphony.yml` setting, the plan includes its control in the macOS app: in the same PR (add the control, list the key in `SettingsUIManifest.keyPaths`, extend the line editor and its tests), or in a sub-ticket filed with `linear_create_subissue` that blocks the parent's final verification and has a `## User walkthrough` for the new control. `mix settings.ui_coverage` fails CI for a setting with neither a control nor an exemption. Never add an exemption yourself: `config/settings_ui_exempt.yml` is agent-protected. If the setting should have no control, say so in the workpad `Confusions` and leave the exemption to a person. See `docs/configuration.md#settings-in-the-macos-app`.
 7.  Run a principal-style review of the plan and refine it in the comment.
 8.  Before implementing, capture a concrete reproduction signal and record it in the workpad `Notes` section (command/output, screenshot, or deterministic UI behavior).
 9.  Run the `pull` skill to sync with latest `origin/main` before any code edits, then record the pull/sync result in the workpad `Notes`.
