@@ -4823,6 +4823,82 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     end
   end
 
+  @watchdog_only [
+    agent_stall_timeout_ms: 0,
+    watchdog: %{enabled: true, tick_interval_ms: 60_000, no_progress_threshold_ms: 1_000}
+  ]
+
+  describe "a run waiting on one of Symphony's own tool calls" do
+    test "shows the call past a minute and holds the no-progress watchdog until the call's deadline" do
+      pid = start_linear_wait_orchestrator!(:ToolCallWatchdogOrchestrator, @watchdog_only)
+      issue = linear_wait_issue("issue-tool-call-pending")
+      {worker_pid, worker_ref} = start_blocked_worker()
+      stale_at = DateTime.add(DateTime.utc_now(), -5, :second)
+      attrs = %{last_codex_timestamp: stale_at}
+      running_entry = linear_wait_running_entry(issue, worker_pid, worker_ref, stale_at, attrs)
+      put_running_entry(pid, issue, running_entry)
+
+      # The agent called `github_sync_base` two minutes ago; its fetch is still running.
+      started_at = DateTime.add(DateTime.utc_now(), -120, :second)
+      call = %{name: "github_sync_base", started_at: started_at, deadline: DateTime.add(DateTime.utc_now(), 60, :second)}
+      send(pid, {:mcp_tool_call, issue.id, {:started, :sync_call, call}})
+      send(pid, {:mcp_tool_call, "issue-not-running", {:started, :other_call, call}})
+      send(pid, :watchdog_tick)
+      state = get_orchestrator_state(pid)
+
+      refute Map.has_key?(state.running, "issue-not-running")
+      refute Map.has_key?(state.retry_attempts, issue.id)
+      assert Process.alive?(worker_pid)
+
+      assert %{running: [%{pending_tool: %{name: "github_sync_base", started_at: ^started_at, age_ms: age_ms}}]} =
+               GenServer.call(pid, :snapshot)
+
+      assert age_ms >= 120_000
+
+      # A call younger than a minute is not shown yet; the call that ended is no longer shown.
+      send(pid, {:mcp_tool_call, issue.id, {:started, :list_call, %{call | name: "linear_get_comments", started_at: DateTime.utc_now()}}})
+      send(pid, {:mcp_tool_call, issue.id, {:finished, :sync_call}})
+      assert %{running: [%{pending_tool: nil}]} = GenServer.call(pid, :snapshot)
+      send(pid, {:mcp_tool_call, issue.id, {:finished, :list_call}})
+
+      # The call's end counts as activity.
+      assert %{pending_tool_calls: calls, last_event_at: last_event_at} = get_orchestrator_state(pid).running[issue.id]
+      assert calls == %{}
+      assert DateTime.after?(last_event_at, stale_at)
+      assert %{running: [%{pending_tool: nil}]} = GenServer.call(pid, :snapshot)
+
+      Process.demonitor(worker_ref, [:flush])
+      Process.exit(worker_pid, :shutdown)
+    end
+
+    test "names the pending call when the watchdog restarts a run past the call's deadline" do
+      pid = start_linear_wait_orchestrator!(:ToolCallStuckOrchestrator, @watchdog_only)
+      issue = linear_wait_issue("issue-tool-call-stuck")
+      {worker_pid, worker_ref} = start_blocked_worker()
+      now = DateTime.utc_now()
+      stale_at = DateTime.add(now, -15, :second)
+      attrs = %{last_codex_timestamp: stale_at}
+      running_entry = linear_wait_running_entry(issue, worker_pid, worker_ref, stale_at, attrs)
+      put_running_entry(pid, issue, running_entry)
+
+      # The call's deadline passed five seconds ago, and a QA tool call (no deadline) holds nothing.
+      sync_call = %{name: "github_sync_base", started_at: DateTime.add(now, -605, :second), deadline: DateTime.add(now, -5, :second)}
+      qa_call = %{name: "qa_build", started_at: DateTime.add(now, -10, :second), deadline: nil}
+      send(pid, {:mcp_tool_call, issue.id, {:started, :sync_call, sync_call}})
+      send(pid, {:mcp_tool_call, issue.id, {:started, :qa_call, qa_call}})
+
+      log =
+        capture_log(fn ->
+          send(pid, :watchdog_tick)
+          assert %{error: "stuck for " <> _} = wait_for_retry!(pid, issue)
+        end)
+
+      assert log =~ "Agent run stuck: issue_id=issue-tool-call-stuck"
+      assert log =~ ~r/elapsed_ms=\d+ pending_tool=github_sync_base pending_tool_age_ms=\d+; restarting with backoff/
+      assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}
+    end
+  end
+
   defp start_linear_wait_orchestrator!(name, workflow_overrides) do
     workflow = [tracker_kind: "memory", tracker_api_token: nil] ++ workflow_overrides
     write_workflow_file!(Workflow.workflow_file_path(), workflow)
@@ -5702,6 +5778,27 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       )
 
     assert row =~ "waiting for Linear"
+    refute row =~ "older agent message"
+  end
+
+  test "status dashboard shows a run waiting on a Symphony tool call in place of its last message" do
+    row =
+      Renderer.format_running_summary(
+        %{
+          identifier: "MT-899",
+          state: "running",
+          session_id: "thread-1234567890",
+          codex_app_server_pid: "4242",
+          codex_total_tokens: 12,
+          runtime_seconds: 15,
+          last_codex_event: :notification,
+          last_codex_message: "older agent message",
+          pending_tool: %{name: "github_sync_base", started_at: DateTime.utc_now(), age_ms: 185_000}
+        },
+        Renderer.running_event_width(200)
+      )
+
+    assert row =~ "waiting on github_sync_base for 3m"
     refute row =~ "older agent message"
   end
 
