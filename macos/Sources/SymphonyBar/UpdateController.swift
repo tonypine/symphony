@@ -181,6 +181,11 @@ final class UpdateController {
         }
     }
 
+    /// The file number of this app's bundle, which tells a failed rollback swap from a reinstall of the failed build.
+    var bundleFileNumber: Int? {
+        RollbackRecord.bundleFileNumber(app)
+    }
+
     /// True when `Symphony (previous).app` is next to the app, so a rollback has something to put back.
     var hasPreviousApp: Bool {
         FileManager.default.fileExists(atPath: UpdateHelper.previousAppURL(for: app).path)
