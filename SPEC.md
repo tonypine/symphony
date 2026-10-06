@@ -2091,6 +2091,12 @@ The poller:
   `needs:` not created yet) reads as pending, and so does a head the poller asked to rerun until
   every check it reran reports again. This holds for every reader of the head's CI: the poller's
   QA start, the agent run's pushed-head handoff, the `Merging` wait and the merge tool.
+- reads a GitHub Actions check that still reports queued or in progress as finished, with its
+  workflow run's conclusion, once that run has completed `SUCCESS`, `NEUTRAL` or `SKIPPED`: GitHub
+  sometimes never closes a job's check run, and such a stale check must not hold the head pending
+  forever. It logs `Ignoring stale check <name> in completed run <id>`. A check in a run that
+  completed with any other conclusion stays as reported. To see this, a head whose rollup has no
+  failed check and only GitHub Actions checks left unfinished also reads the head's workflow runs.
 
 Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `enabled: true`):
 
@@ -2104,6 +2110,7 @@ Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `
   shows auto-merge on. When GitHub refuses (the PR can already merge, the branch has no protection,
   the repository doesn't allow auto-merge), the poller MUST read the PR again: one already `MERGED`
   takes the merged path below, and an open one at the same head with `mergeStateStatus == "CLEAN"`
+  (or `UNSTABLE` with a stale check read as finished, above)
   and every check `SUCCESS`, `NEUTRAL` or `SKIPPED` (or no checks at all) is squash-merged directly
   with the same `mergePullRequest` fields. The poller logs which path it took. A refusal because
   the head moved since the poller read it (`expected head oid does not match`) is not a refusal:

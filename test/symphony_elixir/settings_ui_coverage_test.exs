@@ -120,8 +120,10 @@ defmodule SymphonyElixir.SettingsUICoverageTest do
 
   describe "check/3" do
     test "every setting on the default branch has a control in the app or an exemption" do
-      assert SettingsUICoverage.check(SystemSchema.operator_key_paths(), manifest(), exemptions()) ==
-               %{uncovered: [], unknown_manifest_keys: [], unused_exemptions: [], redundant_exemptions: []}
+      # A redundant exemption only warns, as in `mix settings.ui_coverage`: an agent's PR adds the control, and a
+      # person removes the exemption afterwards, since agents can't write the exemption file.
+      assert %{uncovered: [], unknown_manifest_keys: [], unused_exemptions: []} =
+               SettingsUICoverage.check(SystemSchema.operator_key_paths(), manifest(), exemptions())
     end
 
     test "a setting added to the schema without a manifest entry or exemption is uncovered, by name" do

@@ -3,7 +3,11 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   Reads pull request lifecycle state through the GitHub CLI.
   """
 
+  require Logger
+
   alias SymphonyElixir.GitHub.{CommentMarker, Hosts}
+
+  @passing_check_conclusions ["SUCCESS", "NEUTRAL", "SKIPPED"]
 
   @type comment :: %{
           optional(:id) => String.t() | nil,
@@ -46,7 +50,8 @@ defmodule SymphonyElixir.GitHub.PullRequest do
           optional(:conclusion) => String.t() | nil,
           optional(:details_url) => String.t() | nil,
           optional(:workflow_name) => String.t() | nil,
-          optional(:run_id) => String.t() | nil
+          optional(:run_id) => String.t() | nil,
+          optional(:stale) => boolean()
         }
 
   @type ci_status :: %{
@@ -628,18 +633,55 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   # a rerun of its failed jobs drops those checks from the rollup until the new attempt queues
   # them, and a job with `needs:` has no check until it starts. So a rollup that reads green also
   # carries the head's workflow runs, read in one request, for `CiPoller.ci_action/1` to check.
-  # A rollup with a pending or failed check, or no GitHub Actions check, needs no extra call.
+  # A rollup still waiting on GitHub Actions checks reads them too: GitHub can leave a job's check
+  # `in_progress` after its workflow run completed, and only the run says it is finished (see
+  # `resolve_stale_checks/2`). A rollup with a failed check, a pending check from outside GitHub
+  # Actions, or no GitHub Actions check needs no extra call.
   defp put_head_runs(%{commit_sha: sha, checks: checks} = ci_status, repo, opts) do
-    if is_binary(sha) and passing_actions_rollup?(checks) do
-      with {:ok, runs} <- list_head_runs(repo, sha, opts), do: {:ok, Map.put(ci_status, :workflow_runs, runs)}
+    if is_binary(sha) and actions_rollup_without_failure?(checks) do
+      with {:ok, runs} <- list_head_runs(repo, sha, opts) do
+        {:ok, ci_status |> Map.put(:workflow_runs, runs) |> resolve_stale_checks(runs)}
+      end
     else
       {:ok, ci_status}
     end
   end
 
-  defp passing_actions_rollup?(checks) do
+  defp actions_rollup_without_failure?(checks) do
     Enum.any?(checks, &is_binary(Map.get(&1, :run_id))) and
-      Enum.all?(checks, &(upcase(Map.get(&1, :conclusion)) in ["SUCCESS", "NEUTRAL", "SKIPPED"]))
+      Enum.all?(checks, &(passing_check?(&1) or (unfinished_check?(&1) and is_binary(Map.get(&1, :run_id)))))
+  end
+
+  # A check that still reads unfinished in a workflow run that completed with a passing
+  # conclusion is stale: GitHub never closed it, and the run can't end while one of its jobs
+  # runs. It counts as finished with the run's conclusion, so it can't hold a landing forever. A
+  # run that failed leaves its unfinished checks as they are; the next read has their conclusion.
+  defp resolve_stale_checks(ci_status, runs) do
+    passed_runs =
+      for %{id: id, status: "COMPLETED", conclusion: conclusion} <- runs,
+          conclusion in @passing_check_conclusions,
+          into: %{},
+          do: {id, conclusion}
+
+    Map.update!(ci_status, :checks, fn checks ->
+      Enum.map(checks, &resolve_stale_check(&1, passed_runs, ci_status))
+    end)
+  end
+
+  defp resolve_stale_check(check, passed_runs, ci_status) do
+    with true <- unfinished_check?(check),
+         {:ok, conclusion} <- Map.fetch(passed_runs, Map.get(check, :run_id)) do
+      Logger.info("Ignoring stale check #{Map.get(check, :name)} in completed run #{Map.get(check, :run_id)} pr_url=#{ci_status.pr_url} commit_sha=#{ci_status.commit_sha}")
+      Map.merge(check, %{status: "COMPLETED", conclusion: conclusion, stale: true})
+    else
+      _not_stale -> check
+    end
+  end
+
+  defp passing_check?(check), do: upcase(Map.get(check, :conclusion)) in @passing_check_conclusions
+
+  defp unfinished_check?(check) do
+    upcase(Map.get(check, :status)) not in ["COMPLETED", "SUCCESS", "FAILURE", "ERROR"] or upcase(Map.get(check, :conclusion)) in [nil, ""]
   end
 
   defp list_head_runs({host, owner, repo}, sha, opts) do
