@@ -834,12 +834,12 @@ affect CI escalation. A head whose only failed check is `protected paths` gets n
 flaky re-run, no CI-fix run and no escalation, and uses no fix attempt: only a person clears that
 check, with the `protected-paths-approved` label, so the issue stays where it is until the check
 passes. When another check fails beside it, the CI-fix run's prompt names `protected paths` as not
-the agent's to fix. A red head on an issue parked for a person, outside `tracker.active_states`
-with the `human_actions.label` label, `needs-human` or another
-`auto_review.acceptance_gate.escalate.labels` label other than `plan` and `breakdown`, gets the
-same: no re-run, CI-fix run, escalation or state move, and no fix attempt used. The normal flow
-resumes once a person removes the label, moves the issue to an active state, or the head turns
-green.
+the agent's to fix. A red head on an issue parked for a person, in the
+`issues.states.human_review` state, or outside `tracker.active_states` with `needs-human`, a
+deprecated request label (`human_actions.label`, or `human-action` in the escalate labels) or
+another `auto_review.acceptance_gate.escalate.labels` label other than `plan` and `breakdown`, or,
+while that state is off, in `In Review` with an open `## Action needed:` request, gets the same: no re-run, CI-fix run, escalation or state move, and no fix attempt used. The normal flow
+resumes once a person moves the issue on or removes the label, or the head turns green.
 
 #### 5.4.7 `github` (object)
 
@@ -1354,8 +1354,8 @@ When enabled:
 - `linear_update_state` MUST refuse `In Review`, and the `issues.states.human_review` state, from
   agent sessions with a clear error telling the agent that Symphony moves the issue once the PR is
   open, rather than redirecting the target state. The refusal applies before the human review
-  redirect, so a run that posted a `linear_request_human_action` request cannot skip QA; its blocked
-  PR reaches the human review state through the QA verdict. A plan parent and a ticket whose
+  redirect. A `linear_request_human_action` request moves its issue to the human review state
+  itself, since only a person can move it on; the acceptance gate never approves an issue there. A plan parent and a ticket whose
   title starts with `Final verification:` open no PR, so they MAY move to either state.
 - The CI poller MUST discover issues in `state` as well as `In Review`. Red CI follows the normal
   `In Progress` fix loop and escalation. Green CI on an issue in `state` starts a QA pass for the
@@ -1517,7 +1517,9 @@ When enabled:
   scope, and judgment calls for a human, not code style or bugs, and answers with JSON: `verdict`
   (`approve`, `rework` or `escalate`), `criteria`, `overlaps`, `scope`, `escalation_reasons` and
   `follow_ups`. An unreadable answer SHOULD get one follow-up turn. Any escalation rule that
-  triggers, and a QA `blocked` (reason `qa_blocked`), MUST make the final verdict `escalate`, with
+  triggers, a QA `blocked` (reason `qa_blocked`), and an issue that waits on a person (reason
+  `human_action`: in the `issues.states.human_review` state, with an open `## Action needed:`
+  request, or with a deprecated request label) MUST make the final verdict `escalate`, with
   the agent's verdict kept as `agent_verdict`; a PR that conflicts with current main is `rework`
   without an agent run; an inconclusive pass records no verdict until the
   `escalate.inconclusive_limit`-th on the same SHA, which escalates with reason `inconclusive`. The
@@ -1531,7 +1533,10 @@ When enabled:
   the issue: `approve` to `Merging` (where auto-merge lands the PR), `rework` back to `In Progress`
   with the unmet criteria as continuation context, counted against `auto_review.max_fix_attempts`
   with QA fails (the `rework` past it goes to `In Review`), and `escalate` to `In Review`, with the
-  comment opening on the escalation reasons; up to 3 follow-ups per verdict are filed as Backlog
+  comment opening on the escalation reasons. An `escalate` with a reason only a person can clear
+  (`human_action`, or an `escalate.labels` label) MUST go to the `issues.states.human_review` state
+  instead; the reasons the supervisor can judge (`path`, `diff_pattern`, `ticket_pattern` and the
+  others) stay in `In Review`; up to 3 follow-ups per verdict are filed as Backlog
   sub-issues, never twice with the same title, never for a gap an existing ticket of the issue's
   family covers (named in the comment instead), and only with an acceptance criterion that does
   not restate the title. The mode is read on every poll, so a switch back to
@@ -2214,11 +2219,11 @@ The poller:
 - detects GitHub merge conflict signals (`mergeable == "CONFLICTING"` or
   `mergeStateStatus == "DIRTY"`), deduplicates by head/base identity, stores conflict context,
   and moves the issue back to `In Progress` for agent-owned conflict resolution; a conflict on an
-  issue parked for a person (outside `tracker.active_states` with the `human_actions.label` label,
-  `needs-human` or another `auto_review.acceptance_gate.escalate.labels` label other than `plan`
-  and `breakdown`, as for a red head in the CI poller) is recorded as
-  `conflict_awaiting_human_action` with no state move, conflict-fix run or escalation and no retry
-  used, until a person removes the label or moves the issue to an active state;
+  issue parked for a person (in the `issues.states.human_review` state, or outside
+  `tracker.active_states` with a label that asks for one, or with that state off in `In Review`
+  with an open request, as for a red head in the CI poller) is
+  recorded as `conflict_awaiting_human_action` with no state move, conflict-fix run or escalation
+  and no retry used, until a person moves the issue on or removes the label;
 - moves the issue back to `In Progress` when GitHub reports approval so the orchestrator starts
   the merge/landing workflow through the normal run path;
 - removes tracked workspaces and durable review records when PRs merge, close, or remain idle
@@ -2462,14 +2467,20 @@ An issue is dispatch-eligible only if all are true:
     person's move out of `In Review` means something (a plan approval or rejection, a plan comment),
     a move out of the human review state means the same. Merging, Rework and Done read only the
     state moved to, so they behave the same from either.
-  - The service puts an issue there instead of `In Review` when only a person can move it on: an
-    Auto Review QA verdict `blocked` whose answer sets `needs_person`; a `Final verification:`
-    parent walkthrough that passes, or is blocked with no failing step, with `needs_person` set;
-    `linear_update_state` to `In Review` for a plan parent whose ticket has an
-    `auto_review.acceptance_gate.escalate` label other than `plan` and `breakdown` or matches one of its
-    ticket patterns; and `linear_update_state` to `Backlog` or `In Review` from a run that posted
-    (or found open) a `linear_request_human_action` request (with Auto Review on, only `Backlog`
-    or a PR-less issue: the Auto Review rule refuses the rest). The tool's answer names the state.
+  - It is the one way to say a person needs to act; Symphony adds no label for it. The service puts
+    an issue there instead of `In Review` when only a person can move it on: an Auto Review QA
+    verdict `blocked` whose answer sets `needs_person`; an enforced acceptance gate `escalate` with
+    a reason only a person can clear; a `Final verification:` parent walkthrough that passes, or is
+    blocked with no failing step, with `needs_person` set; `linear_update_state` to `In Review` for
+    a plan parent whose ticket has an `auto_review.acceptance_gate.escalate` label other than
+    `plan` and `breakdown`, matches one of its ticket patterns, or whose author says they review it
+    ("I only want to review and validate the artifacts"); `linear_request_human_action`, which
+    moves its issue there; and `linear_update_state` to `Backlog` or `In Review` from a run that
+    posted (or found open) such a request (with Auto Review on, only `Backlog` or a PR-less issue:
+    the Auto Review rule refuses the rest). The tool's answer names the state.
+  - A config that still sets the deprecated `human_actions.label`, or lists `human-action` in
+    `auto_review.acceptance_gate.escalate.labels`, MUST load with a deprecation warning, and an
+    issue carrying that label counts as one with an open request.
   - When the state is null, or the startup check finds a configured team without it (the state is
     then off until restart, with a warning), those issues go to `In Review` as before.
   - The human-action update lists issues in the state first, the state API reports
@@ -3499,20 +3510,23 @@ Scoped Linear tool extension contract:
   reviewer and QA scopes; the read-only reviewer scope MUST NOT advertise or execute the other two.
 - `linear_request_human_action` MUST only act on the current issue and MUST accept only `title`,
   `why`, a non-empty `steps` list, an optional `unblocks` and an optional `est_minutes`. Every
-  field MUST pass the same secret scan as comments before any Linear call. It adds the configured
-  human-action label to the current issue (creating the team label when the workspace has none)
-  and posts an `## Action needed: <title>` comment that Symphony's human-action project updates
-  list. A request with the same title still open on the issue MUST NOT be posted again. Requests
+  field MUST pass the same secret scan as comments before any Linear call. It posts an
+  `## Action needed: <title>` comment that Symphony's human-action project updates list, moves the
+  current issue to the `issues.states.human_review` state (`In Review` when that state is off), and
+  MUST NOT add a label. The request stays open until a person moves the issue out of that state, or
+  it is withdrawn. A request with the same title still open on the issue MUST NOT be posted again;
+  the issue still moves. Requests
   MUST be capped per run (the Elixir cap is 5) and refused when the run has no state to count
   against, or when the issue's repository turned human actions off. The read-only reviewer scope
   MUST NOT advertise or execute it.
 - `linear_withdraw_human_action` MUST only act on the current issue and MUST accept only a
   non-blank `reason` and an optional `title`. The reason MUST pass the same secret scan as comments
   before any Linear call. It replies `## Action withdrawn` with the reason under each open request
-  on the issue (only the one whose title matches, when `title` is given), and removes the
-  human-action label once no open request is left. Once no open request is left, the run's later
-  moves to `Backlog` or `In Review` MUST NOT go to the Human Review state on account of its
-  requests. A request with such a reply MUST NOT be listed in a human-action project update, and MUST NOT block a new request with the same title. With no
+  on the issue (only the one whose title matches, when `title` is given). Once no open request is
+  left, an issue in the Human Review state goes back to the active state it came from
+  (`In Progress` when its history doesn't say), a deprecated request label comes off, and the
+  run's later moves to `Backlog` or `In Review` MUST NOT go to the Human Review state on account of
+  its requests. A request with such a reply MUST NOT be listed in a human-action project update, and MUST NOT block a new request with the same title. With no
   open request to withdraw it MUST change nothing. The read-only reviewer scope MUST NOT advertise
   or execute it.
 - The standardized Linear tool surface does not include an assignee mutation tool. Implementations
