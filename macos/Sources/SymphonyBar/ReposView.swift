@@ -23,6 +23,7 @@ struct ReposView: View {
                 }
                 detail
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .frame(minWidth: Self.minWidth, minHeight: Self.minHeight)
         .sheet(isPresented: Binding(get: { model.addRepo != nil }, set: { if !$0 { model.addRepo = nil } })) {
@@ -109,10 +110,13 @@ struct ReposView: View {
     NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
 }
 
-/// What the last change did, at the top of the detail, with a close button.
+/// What the last change did, at the top of the detail, with a close button. The text wraps to at most
+/// `maxLines` lines and never sizes itself: a banner that fixes its own height makes the split view probe it at a
+/// tiny width, grow thousands of points tall and draw the whole window off-screen.
 struct ReposBannerView: View {
     let banner: ReposBanner
     let dismiss: () -> Void
+    static let maxLines = 4
 
     var body: some View {
         let isError = banner.style == .error
@@ -121,9 +125,11 @@ struct ReposBannerView: View {
                 .foregroundStyle(isError ? Color.red : Color.green)
                 .accessibilityLabel(isError ? "Error" : "Done")
             Text(banner.text)
-                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(Self.maxLines)
+                .truncationMode(.tail)
                 .textSelection(.enabled)
-            Spacer(minLength: 8)
+                .help(banner.text)
+                .frame(maxWidth: .infinity, alignment: .leading)
             Button(action: dismiss) {
                 Image(systemName: "xmark")
             }
