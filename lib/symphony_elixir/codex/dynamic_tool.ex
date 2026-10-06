@@ -61,7 +61,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "linear_update_state",
       "description" =>
-        "Move the current Linear issue to a state in its team's workflow. Moving it to Merging is refused: only a human can approve a merge. With Auto Review on, moving it to In Review is refused too: Symphony moves the issue once the PR is open. When the issue needs a person (a breakdown plan its ticket says a human reviews, or after linear_request_human_action), a move to In Review or Backlog lands in Human Review instead when that state is on; the response names the state.",
+        "Move the current Linear issue to a state in its team's workflow. Moving it to Merging is refused: only a human can approve a merge. With Auto Review on, moving it to In Review is refused too: Symphony moves the issue once the PR is open. When the issue needs a person (a plan its ticket says a human reviews, or after linear_request_human_action), a move to In Review or Backlog lands in Human Review instead when that state is on; the response names the state.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -1895,7 +1895,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       "error" => %{
         "code" => "waiting_on_sub_issues_state_requires_human_approval",
         "message" =>
-          "linear_update_state cannot move the issue to #{inspect(state_name)}. Moving a `breakdown` parent there " <>
+          "linear_update_state cannot move the issue to #{inspect(state_name)}. Moving a plan parent there " <>
             "approves its plan and promotes its sub-tickets, so a human does it; move the parent to `In Review` instead."
       }
     }

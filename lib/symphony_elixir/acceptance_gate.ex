@@ -31,7 +31,7 @@ defmodule SymphonyElixir.AcceptanceGate do
   the issue (`enforced_target/4`): `approve` to Merging, `rework` back to In Progress, `escalate`
   to In Review; and up to 3 follow-ups are filed as Backlog sub-issues
   (`SymphonyElixir.AcceptanceGate.FollowUps`), skipping a gap an existing ticket covers. The gate
-  never moves a `breakdown` parent or a `Final verification:` ticket (`enforces?/2`).
+  never moves a plan parent or a `Final verification:` ticket (`enforces?/2`).
   """
 
   require Logger
@@ -108,7 +108,7 @@ defmodule SymphonyElixir.AcceptanceGate do
 
   @doc """
   Whether the gate's verdict moves `issue`: the mode is `enforce`, and the issue isn't a
-  `breakdown` parent or a `Final verification:` ticket, whose review stays with a person.
+  plan parent or a `Final verification:` ticket, whose review stays with a person.
   """
   @spec enforces?(Issue.t(), Schema.t()) :: boolean()
   def enforces?(%Issue{} = issue, %Schema{} = settings), do: mode(settings) == "enforce" and RunKind.classify(issue) not in @guarded_kinds

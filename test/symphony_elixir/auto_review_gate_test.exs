@@ -659,7 +659,7 @@ defmodule SymphonyElixir.AutoReviewGateTest do
       assert {:auto_review_gate, "issue-gate-flow", "approve", "In Review"} = AutoReview.run_gate(job, gate_opts(root))
       assert_receive {:memory_tracker_state_update, "issue-gate-flow", "In Review"}
       assert_receive {:memory_tracker_comment, "issue-gate-flow", body}
-      assert body =~ "**Mode:** enforce, but the gate never moves a `breakdown` parent"
+      assert body =~ "**Mode:** enforce, but the gate never moves a plan parent"
       refute_received {:memory_tracker_state_update, _issue_id, "Merging"}
     end
 
