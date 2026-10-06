@@ -849,7 +849,9 @@ defmodule SymphonyElixir.CiPollerTest do
              is_cross_repository: false,
              head_repository: %{"nameWithOwner" => "example/repo"},
              failed_checks: [%{name: "specs"}],
-             log_excerpt: log_excerpt
+             log_excerpt: log_excerpt,
+             # The issue was not in Merging, so the PR was not approved.
+             approved: false
            } = CiPoller.pending_ci_failure("issue-2401")
 
     assert log_excerpt =~ "ERROR: specs failed"

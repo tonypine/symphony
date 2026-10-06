@@ -592,6 +592,66 @@ defmodule SymphonyElixir.AutoMergeTest do
     assert_received {:issue_state_update, @issue_id, "Done"}
   end
 
+  test "a CI fix on an approved PR is marked approved, and dropping its hold turns auto-merge on again at the same head" do
+    now = ~U[2026-10-03 12:00:00Z]
+    write_auto_merge_workflow!(ci: %{enabled: true, flaky_retry: false})
+    put_run!(now)
+    track([issue("Merging")])
+    activity(head: "head-1", merge_state: "BLOCKED")
+    assert {:ok, %{actions: [{:auto_merge, @issue_id, "enabled"}]}} = poll(now)
+    assert_received {:enable_auto_merge, @pr_url, %{head_sha: "head-1"}}
+
+    # Dropping the hold leaves auto-merge that is not held alone.
+    PrReviewPoller.release_auto_merge_hold(@issue_id)
+    assert %{state: "enabled"} = PrReviewPoller.auto_merge(@issue_id)
+
+    red_ci_status(auto_merge_enabled: true)
+
+    capture_log(fn ->
+      assert {:ok, %{actions: [{:state_transitioned, @issue_id, :ci_failure, "In Progress"}]}} = ci_poll(DateTime.add(now, 10))
+    end)
+
+    mailbox()
+    assert %{approved: true, commit_sha: "head-1"} = CiPoller.pending_ci_failure(@issue_id)
+
+    # The fix run found a flake and pushed nothing. Back in Merging before the PR poller saw it
+    # leave, the hold would keep auto-merge off.
+    assert {:ok, %{actions: [{:auto_merge, @issue_id, "ci_failure"}]}} = poll(DateTime.add(now, 20))
+    assert mailbox() == []
+
+    # The run drops the hold as it moves the issue back, so the next poll turns auto-merge on.
+    PrReviewPoller.release_auto_merge_hold(@issue_id)
+    assert PrReviewPoller.auto_merge(@issue_id) == nil
+    assert {:ok, %{actions: [{:auto_merge, @issue_id, "enabled"}]}} = poll(DateTime.add(now, 60))
+    assert_received {:enable_auto_merge, @pr_url, %{head_sha: "head-1"}}
+
+    # An issue with no PR review record has no hold to drop.
+    assert :ok = PrReviewPoller.release_auto_merge_hold("issue-without-review")
+  end
+
+  test "a CI-fix hold that can't be dropped is logged, and auto-merge stays off" do
+    now = ~U[2026-10-03 12:00:00Z]
+    write_auto_merge_workflow!(ci: %{enabled: true, flaky_retry: false})
+    put_run!(now)
+    track([issue("Merging")])
+    activity(head: "head-1", merge_state: "BLOCKED")
+    assert {:ok, %{actions: [{:auto_merge, @issue_id, "enabled"}]}} = poll(now)
+    red_ci_status(auto_merge_enabled: false)
+    assert {:ok, %{actions: [{:state_transitioned, @issue_id, :ci_failure, "In Progress"}]}} = ci_poll(DateTime.add(now, 10))
+
+    failing_store = [run_store: __MODULE__.HoldFailingRunStore]
+    log = capture_log(fn -> assert :ok = PrReviewPoller.release_auto_merge_hold(@issue_id, failing_store) end)
+
+    assert log =~ "Failed to drop the CI-fix auto-merge hold issue_id=#{@issue_id}: :write_failed"
+    assert %{state: "ci_failure"} = PrReviewPoller.auto_merge(@issue_id)
+
+    unreadable_store = [run_store: __MODULE__.PrReviewsFailingRunStore]
+    log = capture_log(fn -> assert :ok = PrReviewPoller.release_auto_merge_hold(@issue_id, unreadable_store) end)
+
+    assert log =~ "Failed to drop the CI-fix auto-merge hold issue_id=#{@issue_id}: :mnesia_down"
+    assert %{state: "ci_failure"} = PrReviewPoller.auto_merge(@issue_id)
+  end
+
   test "a flaky rerun of the same commit keeps auto-merge on" do
     now = ~U[2026-10-03 12:00:00Z]
     write_auto_merge_workflow!(ci: %{enabled: true, flaky_retry: true})
@@ -1577,6 +1637,11 @@ defmodule SymphonyElixir.AutoMergeTest do
 
     @spec update_pr_review(String.t(), String.t(), map()) :: {:error, term()}
     def update_pr_review(_repo_key, _issue_id, _attrs), do: {:error, :write_failed}
+  end
+
+  defmodule PrReviewsFailingRunStore do
+    @spec list_pr_reviews(String.t()) :: {:error, :mnesia_down}
+    def list_pr_reviews(_repo_key), do: {:error, :mnesia_down}
   end
 
   defmodule CiChecksFailingRunStore do

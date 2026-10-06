@@ -25,7 +25,7 @@ defmodule SymphonyElixir.OpenRouter.StubTest do
     response = request(:get, url <> "/v1/key", valid_key())
     assert response.status == 200
     assert %{"data" => %{"label" => "Symphony QA stub", "usage" => 1.25, "limit" => 10.0, "limit_remaining" => 8.75, "is_free_tier" => false}} = Jason.decode!(response.body)
-    assert_received {:stub_log, "OpenRouter stub: GET /api/v1/key key=accepted status=200"}
+    assert_receive {:stub_log, "OpenRouter stub: GET /api/v1/key key=accepted status=200"}, 1_000
 
     for opts <- [[auth: {:bearer, "sk-or-v1-made-up"}], []] do
       response = request(:get, url <> "/v1/key", opts)
@@ -33,7 +33,7 @@ defmodule SymphonyElixir.OpenRouter.StubTest do
       assert %{"error" => %{"code" => 401}} = Jason.decode!(response.body)
     end
 
-    assert_received {:stub_log, "OpenRouter stub: GET /api/v1/key key=rejected status=401"}
+    assert_receive {:stub_log, "OpenRouter stub: GET /api/v1/key key=rejected status=401"}, 1_000
   end
 
   test "lists a model with tools and reasoning, one with tools only and one without tools", %{url: url} do
@@ -58,7 +58,7 @@ defmodule SymphonyElixir.OpenRouter.StubTest do
     assert response.status == 200
     assert %{"type" => "message", "model" => "symphony-qa/tools-only", "content" => [%{"text" => text}]} = Jason.decode!(response.body)
     assert text =~ "symphony-qa/tools-only"
-    assert_received {:stub_log, "OpenRouter stub: POST /api/v1/messages model=symphony-qa/tools-only key=accepted status=200"}
+    assert_receive {:stub_log, "OpenRouter stub: POST /api/v1/messages model=symphony-qa/tools-only key=accepted status=200"}, 1_000
 
     stream = request(:post, url <> "/v1/messages", json: Map.put(body, "stream", true), headers: [{"x-api-key", Stub.valid_key()}])
     assert stream.status == 200
@@ -71,7 +71,7 @@ defmodule SymphonyElixir.OpenRouter.StubTest do
     count = request(:post, url <> "/v1/messages/count_tokens", [json: %{}] ++ valid_key())
     assert count.status == 200
     assert Jason.decode!(count.body) == %{"input_tokens" => 1}
-    assert_received {:stub_log, "OpenRouter stub: POST /api/v1/messages/count_tokens model=unknown key=accepted status=200"}
+    assert_receive {:stub_log, "OpenRouter stub: POST /api/v1/messages/count_tokens model=unknown key=accepted status=200"}, 1_000
   end
 
   test "rejects a messages call without the valid key, a bad body and unknown paths", %{url: url} do
@@ -81,7 +81,7 @@ defmodule SymphonyElixir.OpenRouter.StubTest do
     assert request(:post, url <> "/v1/messages/batches", [json: %{}] ++ valid_key()).status == 404
     assert request(:get, url <> "/v1/credits", valid_key()).status == 404
     assert request(:get, String.replace(url, "/api", "/")).status == 404
-    assert_received {:stub_log, "OpenRouter stub: GET /api/v1/credits key=accepted status=404"}
+    assert_receive {:stub_log, "OpenRouter stub: GET /api/v1/credits key=accepted status=404"}, 1_000
   end
 
   test "logs through Logger by default and stops", %{pid: pid} do

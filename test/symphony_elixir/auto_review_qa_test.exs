@@ -872,6 +872,51 @@ defmodule SymphonyElixir.AutoReviewQaTest do
       end
     end
 
+    test "a blocked record stored before the infrastructure flag existed is classified by its reason" do
+      settings = Config.settings!()
+      ci_status = %{commit_sha: @sha, pr_url: nil}
+      poll = fn record -> AutoReview.on_green(issue(), record, ci_status, settings, qa_runner: FakeRunner) end
+      legacy = %{qa_sha: @sha, qa_verdict: "blocked", qa_target_state: "In Review", qa_applied: true}
+      Application.put_env(:symphony_elixir, :qa_flow_runner_result, :started)
+
+      error_reasons =
+        Enum.map(
+          [
+            {:qa_token_limit, 9, 5},
+            {:remote_worker_unsupported, "worker-1"},
+            {:qa_dev_server_failed, {:verification_failed, :health_timeout}},
+            {:qa_dev_server_failed, :eaddrinuse},
+            {:qa_browser_mcp_unavailable, :no_npx},
+            {:qa_browser_mcp_unavailable, "@playwright/mcp"},
+            {:qa_browser_mcp_invalid, "command is required"},
+            {:malformed_qa_response, :no_json},
+            {:git_failed, 128}
+          ],
+          &AutoReview.blocked_reason/1
+        ) ++ ["could not list the PR's changed files: :timeout"]
+
+      for reason <- error_reasons do
+        record = put_record(Map.merge(legacy, %{qa_reason: reason, qa_infra_blocked: nil}))
+
+        capture_log(fn ->
+          assert {:qa_started, "issue-qa-flow", @sha} = poll.(record)
+        end)
+
+        assert_receive {:qa_runner_request, %{sha: @sha}, _opts}
+        assert %{qa_verdict: nil, qa_reason: nil} = stored_record()
+      end
+
+      # The agent's own reason, or none at all, keeps the verdict as before.
+      for reason <- ["the staging login needs a person to approve the device", nil] do
+        record = put_record(Map.merge(legacy, %{qa_reason: reason, qa_infra_blocked: nil}))
+
+        assert {:auto_review_qa, "issue-qa-flow", :blocked, "In Review"} = poll.(record)
+        assert_receive {:memory_tracker_state_update, "issue-qa-flow", "In Review"}
+        refute_received {:qa_runner_request, _job, _opts}
+        assert %{qa_verdict: "blocked", qa_reason: ^reason} = stored_record()
+      end
+    end
+
     test "re-applies a stored verdict and counts a return without a new commit as another failed attempt" do
       settings = Config.settings!()
       record = put_record(%{qa_sha: @sha, qa_verdict: "blocked", qa_target_state: "In Review", qa_applied: false})

@@ -150,13 +150,18 @@ defmodule SymphonyElixir.AcceptanceGate.Report do
     list_block("Overlaps with open PRs", lines)
   end
 
-  defp follow_ups_block(nil, proposed), do: list_block("Proposed follow-ups (not filed)", Enum.map(proposed, &follow_up_line/1))
+  defp follow_ups_block(nil, proposed), do: list_block("Proposed follow-ups (not filed)", Enum.map(proposed, &proposed_line/1))
   defp follow_ups_block(filed, _proposed), do: list_block("Follow-ups", Enum.map(filed, &filed_line/1))
 
   defp filed_line(%{status: {:filed, identifier}} = follow_up), do: "filed as #{identifier || "a sub-issue"}: #{follow_up_line(follow_up)}"
-  defp filed_line(%{status: :duplicate} = follow_up), do: "already a sub-issue, not filed again: #{follow_up_line(follow_up)}"
+  defp filed_line(%{status: {:covered, nil}} = follow_up), do: "already a ticket, not filed again: #{follow_up_line(follow_up)}"
+  defp filed_line(%{status: {:covered, identifier}} = follow_up), do: "already covered by #{identifier}, not filed again: #{follow_up_line(follow_up)}"
+  defp filed_line(%{status: :no_acceptance} = follow_up), do: "not filed (no checkable acceptance criterion): #{follow_up_line(follow_up)}"
   defp filed_line(%{status: :over_cap} = follow_up), do: "not filed (#{FollowUps.max_per_verdict()} per verdict): #{follow_up_line(follow_up)}"
   defp filed_line(%{status: {:failed, reason}} = follow_up), do: "not filed (#{inspect(reason)}): #{follow_up_line(follow_up)}"
+
+  defp proposed_line(%{covered_by: identifier} = follow_up) when is_binary(identifier), do: "covered by #{identifier}: #{follow_up_line(follow_up)}"
+  defp proposed_line(follow_up), do: follow_up_line(follow_up)
 
   defp follow_up_line(%{title: title, detail: ""}), do: "**#{title}**"
   defp follow_up_line(%{title: title, detail: detail}), do: "**#{title}**: #{detail}"

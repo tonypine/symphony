@@ -363,6 +363,10 @@ are repo-scoped by default, with selected aggregate helpers for cross-repo accou
 Live scheduler state still owns dispatch decisions. Durable records are used for restart recovery
 and observability, not as a second concurrent scheduler.
 
+A running run's record MAY be written on a bounded cadence rather than on every agent event. The
+Elixir implementation writes it when the run's session, PR, workspace, worker host or turn changes,
+and otherwise at most every 5 s; the run's completion writes the final record.
+
 ### 4.2 Stable Identifiers and Normalization Rules
 
 - `Issue ID`
@@ -1321,7 +1325,8 @@ When enabled:
   applied again once it moved the issue on: when the issue returns to `state` on the same head SHA,
   Symphony MUST drop that QA verdict and the acceptance gate's verdict for the SHA and run a fresh
   QA pass before the gate judges it. A `blocked` verdict from the QA agent is applied again as
-  before.
+  before. A `blocked` stored before Symphony recorded which kind it was is classified by its
+  reason: one of Symphony's own error reasons counts as not given by the QA agent.
 - QA selection is deterministic and runs before any agent: a `qa:skip` label skips; a
   `qa:<kind>` label selects that playbook; a diff that only touches docs, tests or `skip_globs`
   skips; otherwise playbooks are selected by their trigger paths, and the `cli` playbook also by a
@@ -1466,7 +1471,9 @@ When enabled:
   with the unmet criteria as continuation context, counted against `auto_review.max_fix_attempts`
   with QA fails (the `rework` past it goes to `In Review`), and `escalate` to `In Review`, with the
   comment opening on the escalation reasons; up to 3 follow-ups per verdict are filed as Backlog
-  sub-issues, never twice with the same title. The mode is read on every poll, so a switch back to
+  sub-issues, never twice with the same title, never for a gap an existing ticket of the issue's
+  family covers (named in the comment instead), and only with an acceptance criterion that does
+  not restate the title. The mode is read on every poll, so a switch back to
   `shadow` or `off` stops the moves without a restart. The gate MUST NOT move a `breakdown` parent or
   a `Final verification:` ticket. When a judged issue leaves `In Review`, the human's decision at
   that SHA SHOULD be recorded on the gate run (a move to `Merging` is `approve`; a move to `Rework`,
@@ -1976,7 +1983,12 @@ Important nuance:
   `Backlog` and post a comment saying why. This does not apply in `Merging`, nor while the attached
   PR's head is the workspace `HEAD` and that head has checks still pending; such a run (in
   `Rework`, one that started on that head, or one whose pushed head awaits the pre-push reviewer)
-  keeps turning up to `agent.max_turns`.
+  keeps turning up to `agent.max_turns`. Nor does it apply, outside `Rework`, to a run started by
+  a CI failure once the PR head is the workspace `HEAD` and all its checks have passed: the red
+  check was a flake, so green CI is that run's outcome. Such a run MUST end and move the issue back
+  to `Merging` (with a comment saying why, and the CI-fix auto-merge hold dropped so auto-merge
+  turns on again) when the CI failure came from `Merging` and the PR head is still the commit that
+  failed, and to the post-PR state otherwise. A head that is still red, or has no checks, is parked as before.
 - The first turn SHOULD use the full rendered task prompt. Implementations MAY use a compact
   bootstrap prompt when the target agent transport cannot safely carry the full rendered prompt as a
   single startup message, provided the compact prompt preserves hard security rules and directs the
@@ -2047,6 +2059,12 @@ Distinct terminal reasons are important because retry logic and logs differ.
 
 - The orchestrator serializes state mutations through one authority to avoid duplicate dispatch.
 - `claimed` and `running` checks are REQUIRED before launching any worker.
+- Tracker calls the orchestrator waits on (a retry's issue refresh, the post-PR and blocked-state
+  moves, breakdown-parent parking, reviews, closes and plan comments) SHOULD run outside the
+  orchestrator's message loop, with the result delivered back as a message. A claimed issue's claim
+  stays held until the result is handled, so no poll dispatches it meanwhile. The pre-dispatch
+  refresh of the issues a dispatch pass may start is read the same way, in the task that checks
+  dispatch readiness, and the pass decides with that answer.
 - Reconciliation runs before dispatch on every tick.
 - Restart recovery is tracker-driven and filesystem-driven (without a durable orchestrator DB).
 - Startup terminal cleanup removes stale workspaces for issues already in terminal states.
@@ -3024,7 +3042,10 @@ Notes:
 - A connection serves one request at a time. A call of one of Symphony's own tools (`linear_*`,
   `github_*`) that runs longer than 10 minutes (the `:mcp_tool_timeout_ms` application env) is
   stopped and answered with a `tool_timeout` tool error, so later calls on the connection are not
-  held behind it. QA tools keep their drivers' own timeouts.
+  held behind it. QA tools keep their drivers' own timeouts. While a tool runs, the server still
+  reads the connection: a `notifications/cancelled` for the call stops the tool at once and leaves
+  the call unanswered, and a closed connection stops the tool too. A cancel for a call that already
+  finished changes nothing, and other requests sent meanwhile are answered after the call.
 - The implicit MCP server tells the orchestrator as each tool call starts (tool name, start time,
   and the deadline its timeout sets) and ends, so the run's `pending_tool_calls` stay current.
 - Codex launch preserves the configured command while injecting `--config` overrides for

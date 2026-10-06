@@ -39,8 +39,8 @@ final class AddRepoViewModel: ObservableObject {
     let editing: RepositoryEntry?
     /// `auto_review.acceptance_gate.mode`, which the repo's Inherit follows.
     let globalGateMode: AcceptanceGateMode
-    /// Symphony's state when the sheet opened, for the repo's gate stats; nil while Symphony isn't answering.
-    let state: StateSnapshot?
+    /// The edited repo's gate stats, which each state poll refreshes; nil while adding a repo.
+    let gateAgreement: AcceptanceGate.RepoAgreement?
     private let configCheck: SettingsConfigCheck
     private let existing: [RepositoryEntry]
     private let secrets: SecretsReader
@@ -61,7 +61,6 @@ final class AddRepoViewModel: ObservableObject {
     ) {
         self.configPath = configPath.trimmingCharacters(in: .whitespacesAndNewlines)
         self.secrets = secrets
-        self.state = state
         self.linearClient = linearClient
         self.configCheck = configCheck
         self.onSaved = onSaved
@@ -83,6 +82,7 @@ final class AddRepoViewModel: ObservableObject {
             configProblem = "symphony.yml has no repo `\(key)`."
         }
         self.editing = editing
+        gateAgreement = editing.map { AcceptanceGate.RepoAgreement(key: $0.key, state: state) }
         self.existing = existing
         self.configProblem = configProblem
         if let editing {
@@ -106,11 +106,6 @@ final class AddRepoViewModel: ObservableObject {
     var canSave: Bool {
         if case .success = validation { return !isInspectingFolder && !isSaving }
         return false
-    }
-
-    /// The repo's gate stats from Symphony, or why they don't show.
-    var gateAgreementLine: String {
-        AcceptanceGate.agreementLine(for: editing?.key ?? draft.key, in: state)
     }
 
     /// The labels an issue in the picked project can carry, and those the edited repo's route has already.
@@ -298,7 +293,7 @@ struct AddRepoView: View {
                 Section("Linear routing") {
                     linear
                 }
-                if model.editing != nil {
+                if let gateAgreement = model.gateAgreement {
                     Section(AcceptanceGate.pickerTitle) {
                         AcceptanceGatePicker(
                             choice: $model.draft.acceptanceGate,
@@ -306,9 +301,7 @@ struct AddRepoView: View {
                             choices: AcceptanceGateChoice.allCases,
                             inherited: model.globalGateMode
                         )
-                        Text(model.gateAgreementLine)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        GateAgreementLine(agreement: gateAgreement)
                     }
                 }
             }
@@ -438,5 +431,16 @@ struct AddRepoView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+}
+
+/// The edited repo's gate stats, observed on its own so each state poll redraws it while the sheet is open.
+private struct GateAgreementLine: View {
+    @ObservedObject var agreement: AcceptanceGate.RepoAgreement
+
+    var body: some View {
+        Text(agreement.line)
+            .font(.caption)
+            .foregroundStyle(.secondary)
     }
 }

@@ -31,6 +31,7 @@ When logging Codex execution lifecycle events, include:
 - `AgentRunner`: log start/completion/failure with issue context, plus `session_id` when known.
 - `Orchestrator`: log dispatch, retry, terminal/non-active transitions, and worker exits with issue context. Include `session_id` whenever running-entry data has it. Dispatch lines carry `slot=` and `forced=true|false` (whether the run uses the forced allowance).
   A callback that takes 1 s or more logs `Orchestrator slow handle_call|handle_info duration_ms= message=` (the message inspected with limits), and a snapshot build that does logs `Orchestrator snapshot build slow build_ms=` with `<part>_ms=` for its parts.
+  The Linear calls the orchestrator needs an answer from run in tasks; one that dies logs `Async Linear task <kind> exited before replying:`, and one that cannot start logs `Failed to start async Linear task <kind>:`.
 - `Codex.AppServer`: log session start/completion/error with issue context and `session_id`.
 - `McpServer`: log JSON decode/framing failures, handler crashes, and response-send failures with MCP method, tool name, request ID, MCP session ID, payload byte size, and transport when available. Raw payload logging must stay redacted and preview-limited.
 
