@@ -833,7 +833,31 @@ defmodule SymphonyElixir.McpServer do
   # exits with is raised again here, for `safe_handle_payload/3` to log and answer.
   defp run_tool(tool, arguments, context, request_meta) do
     timeout_ms = tool_timeout_ms(tool, context)
+    call_id = notify_tool_call_started(context, tool, timeout_ms)
 
+    try do
+      run_tool_task(tool, arguments, context, request_meta, timeout_ms)
+    after
+      notify_tool_call(context, {:finished, call_id})
+    end
+  end
+
+  # The run's agent shows no activity while it waits on one of Symphony's own tools, so the
+  # session's `:on_tool_call` notice tells the orchestrator when a call starts and ends: it shows
+  # the call in its snapshot and holds the no-progress watchdog until the call's deadline.
+  defp notify_tool_call_started(context, tool, timeout_ms) do
+    call_id = make_ref()
+    started_at = DateTime.utc_now()
+    deadline = if is_integer(timeout_ms), do: DateTime.add(started_at, timeout_ms, :millisecond)
+
+    notify_tool_call(context, {:started, call_id, %{name: tool, started_at: started_at, deadline: deadline}})
+    call_id
+  end
+
+  defp notify_tool_call(%{on_tool_call: notify}, event) when is_function(notify, 1), do: notify.(event)
+  defp notify_tool_call(_context, _event), do: :ok
+
+  defp run_tool_task(tool, arguments, context, request_meta, timeout_ms) do
     task =
       Task.async(fn ->
         try do

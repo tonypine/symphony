@@ -138,8 +138,12 @@ issues:
 - `states.waiting_on_sub_issues`: the state a `breakdown` parent waits in while its sub-tickets are
   worked, default `Waiting on sub-tickets`; `null` turns it off. It counts as active without being
   listed in `states.active`, but an issue in it is dispatched only for the close-out run, once it is
-  a `breakdown` parent whose sub-tickets are all terminal. The breakdown run ends with the parent
-  in `In Review` and its sub-tickets in `Backlog`. A human approves the plan by moving the parent
+  a `breakdown` parent whose sub-tickets are all terminal. Any other ticket whose PR merges with a
+  sub-ticket still open moves here instead of `Done`, and its `Backlog` sub-tickets move to `Todo`;
+  Symphony moves it to `Done` itself, with no run and a comment listing how each sub-ticket ended,
+  once every sub-ticket is terminal; one a person moves here waits for them. With the state off it
+  goes to `Done` on merge as before. The breakdown run ends with the parent in `In Review` and its
+  sub-tickets in `Backlog`. A human approves the plan by moving the parent
   from `In Review` to this state, and on the next poll Symphony moves every sub-ticket still in
   `Backlog` to `Todo` (blocked-by links keep the order); moving the parent to `Rework` instead
   cancels the sub-tickets the rejected breakdown run created and re-plans. Each batch is listed

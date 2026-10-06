@@ -336,6 +336,25 @@ defmodule SymphonyElixir.RunStoreTest do
     restart_run_store()
   end
 
+  test "persists the issues a merge moved to the waiting state across run store restart" do
+    refute RunStore.merged_wait?("issue-merged")
+    assert :ok = RunStore.put_merged_wait("issue-merged")
+    assert :ok = RunStore.put_merged_wait("issue-merged")
+
+    restarted_pid = restart_run_store()
+
+    assert RunStore.merged_wait?("issue-merged")
+    refute RunStore.merged_wait?("issue-other")
+    assert :ok = RunStore.delete_merged_wait("issue-merged")
+    refute RunStore.merged_wait?("issue-merged")
+    assert {:error, :invalid_issue_id} = RunStore.put_merged_wait(nil)
+    assert {:error, :invalid_issue_id} = RunStore.merged_wait?(nil)
+    assert {:error, :invalid_issue_id} = RunStore.delete_merged_wait(nil)
+
+    if Process.alive?(restarted_pid), do: GenServer.stop(restarted_pid)
+    restart_run_store()
+  end
+
   test "interrupt_running_runs marks stale running records as failures" do
     now = DateTime.utc_now()
 
@@ -790,8 +809,8 @@ defmodule SymphonyElixir.RunStoreTest do
       GenServer.stop(pid)
     end
 
-    # The supervisor may restart it first: its name is taken before `init/1` builds the index, so
-    # wait for `init/1` to return.
+    # The supervisor may restart it first and hand back a pid still in init, before the run
+    # index is built; a system message is only answered once init returned.
     pid =
       case RunStore.start_link([]) do
         {:ok, pid} -> pid

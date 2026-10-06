@@ -504,6 +504,21 @@ defmodule SymphonyElixir.ExtensionsTest do
              json_response(get(build_conn(), "/api/v1/MT-HTTP"), 200)
   end
 
+  test "phoenix observability api shows a run waiting on a Symphony tool call" do
+    pending_tool = %{name: "github_sync_base", started_at: ~U[2026-10-04 12:30:00.123Z], age_ms: 125_000}
+    snapshot = update_in(static_snapshot().running, fn [running] -> [Map.put(running, :pending_tool, pending_tool)] end)
+    orchestrator_name = Module.concat(__MODULE__, :PendingToolApiOrchestrator)
+    {:ok, _pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: snapshot)
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+    expected = %{"name" => "github_sync_base", "started_at" => "2026-10-04T12:30:00Z", "age_ms" => 125_000}
+
+    assert %{"running" => [%{"last_message" => "waiting on github_sync_base for 2m", "pending_tool" => ^expected}]} =
+             json_response(get(build_conn(), "/api/v1/state"), 200)
+
+    assert %{"running" => %{"last_message" => "waiting on github_sync_base for 2m", "pending_tool" => ^expected}} =
+             json_response(get(build_conn(), "/api/v1/MT-HTTP"), 200)
+  end
+
   test "phoenix observability api preserves state, issue, and refresh responses" do
     put_build(sha: "D3D301B0123456789ABCDEF0123456789ABCDEF0", repo: "https://github.com/acme/symphony", number: "168")
     snapshot = static_snapshot()
@@ -587,6 +602,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "last_event" => "notification",
                  "last_message" => "rendered",
                  "linear_wait_until" => nil,
+                 "pending_tool" => nil,
                  "started_at" => state_payload["running"] |> List.first() |> Map.fetch!("started_at"),
                  "last_event_at" => nil,
                  "forced" => false,
@@ -855,6 +871,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                "last_event" => "notification",
                "last_message" => "rendered",
                "linear_wait_until" => nil,
+               "pending_tool" => nil,
                "last_event_at" => nil,
                "tokens" => %{
                  "input_tokens" => 4,
