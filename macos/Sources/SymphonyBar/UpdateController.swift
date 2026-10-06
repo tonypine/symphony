@@ -16,10 +16,16 @@ final class UpdateController {
     private(set) var error: String?
     /// True while the update under way was started by the app itself: its failures show in the menu only.
     private var automatic = false
+    /// What the last update's health check did, such as a rollback, shown in the menu until the next update.
+    var notice: String? {
+        didSet { onChange?() }
+    }
 
     let pending = PendingUpdateStore(defaults: AppStores.current.defaults)
     /// The builds Skip This Version recorded, which the menu shows as skipped rather than available.
     let skips = SkippedReleaseStore(defaults: AppStores.current.defaults)
+    /// What a rollback records for the build it puts back.
+    let rollbacks = RollbackStore(defaults: AppStores.current.defaults)
     let cacheDirectory: URL
     private let current: AppBuild
     private let publicKey: MinisignPublicKey?
@@ -44,14 +50,21 @@ final class UpdateController {
 
     var isUpdating: Bool { preparing != nil || prepared != nil }
 
-    /// The line under the update items: progress while downloading, or why the last update failed.
+    /// The line under the update items: progress while downloading, why the last update failed, or what its health
+    /// check did.
     var menuLine: String? {
-        preparing.map(UpdateMenu.preparingLine) ?? error
+        preparing.map(UpdateMenu.preparingLine) ?? error ?? notice
     }
 
     /// The helper's log, with `~` for the home folder.
     var helperLogPath: String {
         (cacheDirectory.appendingPathComponent(UpdateHelper.logName).path as NSString).abbreviatingWithTildeInPath
+    }
+
+    /// The helper's log for a rollback, with `~` for the home folder.
+    var rollbackLogPath: String {
+        (cacheDirectory.appendingPathComponent(UpdateHelper.rollbackLogName).path as NSString)
+            .abbreviatingWithTildeInPath
     }
 
     /// Why Update is off, nil when it is available.
@@ -71,6 +84,7 @@ final class UpdateController {
     func prepare(_ release: Release, automatic: Bool = false, ready: @escaping (PreparedUpdate) -> Void) {
         guard !isUpdating else { return }
         error = nil
+        notice = nil
         self.automatic = automatic
         preparing = release
         onChange?()
@@ -155,6 +169,58 @@ final class UpdateController {
             pending.clear()
             throw UpdateError.helper(error.localizedDescription)
         }
+    }
+
+    /// True when `Symphony (previous).app` is next to the app, so a rollback has something to put back.
+    var hasPreviousApp: Bool {
+        FileManager.default.fileExists(atPath: UpdateHelper.previousAppURL(for: app).path)
+    }
+
+    /// Pins the build that failed its health check, so it isn't installed by itself again.
+    func pin(_ record: RollbackRecord) {
+        skips.record(SkippedRelease(build: record.build, version: record.version, reason: .rolledBack))
+    }
+
+    /// Puts `Symphony (previous).app` back after this build failed its health check: pins this build, records
+    /// `record` for the restored app, and starts the helper, which swaps the apps once this app quits and relaunches
+    /// the previous one. The caller stops Symphony first and quits next. Returns why it couldn't, nil when the helper
+    /// started; the pin stays either way.
+    func rollBack(_ record: RollbackRecord) -> RollbackProblem? {
+        pin(record)
+        guard hasPreviousApp else { return .noPreviousApp }
+        let files = FileManager.default
+        guard let bundled = Bundle.main.url(forResource: UpdateHelper.resourceName, withExtension: nil) else {
+            return .helper("\(UpdateHelper.resourceName) is missing from the app")
+        }
+        let script = cacheDirectory.appendingPathComponent(UpdateHelper.resourceName)
+        let log = cacheDirectory.appendingPathComponent(UpdateHelper.rollbackLogName)
+        do {
+            try files.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+            try? files.removeItem(at: script)
+            try? files.removeItem(at: log)
+            try files.copyItem(at: bundled, to: script)
+        } catch {
+            return .helper(error.localizedDescription)
+        }
+
+        rollbacks.save(record)
+        let launch = ChildLaunch(
+            executable: "/bin/sh",
+            arguments: UpdateHelper.rollbackArguments(
+                script: script,
+                pid: ProcessInfo.processInfo.processIdentifier,
+                currentApp: app
+            ),
+            workingDirectory: cacheDirectory.path,
+            environment: AppStores.current.updateHelperEnvironment
+        )
+        do {
+            try ChildProcess.spawnDetached(launch, logURL: log)
+        } catch {
+            rollbacks.clear()
+            return .helper(error.localizedDescription)
+        }
+        return nil
     }
 
     /// Removes what the last update downloaded, once the relaunched app runs.

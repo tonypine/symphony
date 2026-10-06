@@ -1,6 +1,7 @@
 #!/bin/sh
 # Tests Resources/update-helper.sh with fake app bundles in a temp folder: the
-# swap, the wait for the quitting app, and putting the old app back on failure.
+# swap, the wait for the quitting app, putting the old app back on failure, and
+# the reversed swap a rollback runs.
 #
 # Usage (from macos/): sh Tests/update-helper-test.sh
 set -u
@@ -133,6 +134,56 @@ run_helper
 expect_status 1
 expect "$current" 1
 [ ! -e "$previous" ] || fail "the previous app was created"
+expect_opened "$current"
+
+# Rollback after a failed health check: the same swap with the previous app as
+# the new one. The failed build moves to "Symphony (rolled back).app", replacing
+# an older copy there, and the previous app is back in place and relaunched.
+setup rollback-swap
+rolled_back="$dir/Applications/Symphony (rolled back).app"
+make_app "$current" 2
+make_app "$previous" 1
+make_app "$rolled_back" 0
+SYMPHONY_UPDATE_OPEN="$dir/open" SYMPHONY_UPDATE_WAIT_SECONDS=10 \
+  sh "$helper" "$pid" "$current" "$previous" "$rolled_back" > "$dir/log" 2>&1
+status=$?
+expect_status 0
+expect "$current" 1
+expect "$rolled_back" 2
+[ ! -e "$previous" ] || fail "the failed build was left in the previous app's place"
+[ -z "$(ls "$dir/Applications" | grep replaced)" ] || fail "the older rolled-back copy was left behind"
+expect_opened "$current"
+
+# A rollback without a previous app changes nothing and relaunches the app,
+# which then says it couldn't roll back.
+setup rollback-without-previous
+rolled_back="$dir/Applications/Symphony (rolled back).app"
+make_app "$current" 2
+SYMPHONY_UPDATE_OPEN="$dir/open" SYMPHONY_UPDATE_WAIT_SECONDS=10 \
+  sh "$helper" "$pid" "$current" "$previous" "$rolled_back" > "$dir/log" 2>&1
+status=$?
+expect_status 1
+expect "$current" 2
+[ ! -e "$rolled_back" ] || fail "the rolled-back app was created"
+expect_opened "$current"
+
+# A rollback whose previous app can't move into place (its folder is
+# read-only here) puts the failed build back and relaunches it.
+setup rollback-swap-fails
+rolled_back="$dir/Applications/Symphony (rolled back).app"
+mkdir -p "$dir/kept"
+previous="$dir/kept/Symphony (previous).app"
+make_app "$current" 2
+make_app "$previous" 1
+chmod a-w "$dir/kept"
+SYMPHONY_UPDATE_OPEN="$dir/open" SYMPHONY_UPDATE_WAIT_SECONDS=10 \
+  sh "$helper" "$pid" "$current" "$previous" "$rolled_back" > "$dir/log" 2>&1
+status=$?
+chmod u+w "$dir/kept"
+expect_status 1
+expect "$current" 2
+expect "$previous" 1
+[ ! -e "$rolled_back" ] || fail "the failed build was left at $rolled_back"
 expect_opened "$current"
 
 # QA mode: the helper runs the new app's binary itself, with the QA
