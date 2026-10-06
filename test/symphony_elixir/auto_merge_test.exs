@@ -1316,6 +1316,8 @@ defmodule SymphonyElixir.AutoMergeTest do
       assert log =~ "Moved issue to Waiting on sub-tickets after its PR merged with sub-issues open; promoted to Todo: ACME-1781"
       assert log =~ "Auto-merge ACME-1780: merged"
       assert RunStore.list_pr_reviews(@repo_key) == []
+      # The merge put it there, so it moves to Done once its sub-tickets finish.
+      assert RunStore.merged_wait?(@issue_id)
     end
 
     test "waits even when Linear already moved the issue to Done, and a failed read retries on the next poll" do
@@ -1415,6 +1417,7 @@ defmodule SymphonyElixir.AutoMergeTest do
         assert_received {:issue_state_update, @issue_id, "Done"}
         refute_received {:issue_state_update, _issue_id, _state}
         refute_received {:issue_comment, _issue_id, _body}
+        refute RunStore.merged_wait?(@issue_id)
       end
 
       # With the state off the issue is not even read.

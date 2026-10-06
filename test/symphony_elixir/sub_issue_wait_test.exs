@@ -184,18 +184,31 @@ defmodule SymphonyElixir.SubIssueWaitTest do
       refute SubIssueWait.wait_on_merge?(%{issue | labels: ["breakdown"]}, terminal, settings)
       refute SubIssueWait.wait_on_merge?(nil, terminal, settings)
 
+      # A sub-issue with no known state counts as open but is not promoted.
+      no_state = %{issue | sub_issues: [%{id: "c1", identifier: "MT-2"}]}
+      assert :ok = SubIssueWait.wait_on_merge(no_state, settings, SymphonyElixir.Tracker.Memory)
+      assert_received {:memory_tracker_state_update, "p", @waiting}
+      refute_received {:memory_tracker_state_update, "c1", _state}
+      assert RunStore.merged_wait?("p")
+      :ok = RunStore.delete_merged_wait("p")
+
       waiting = %{issue | state: @waiting}
       refute SubIssueWait.close?(waiting, terminal, settings)
+
+      # Only an issue its PR's merge put in the waiting state closes: one a person moved there waits.
+      done = %{waiting | sub_issues: [%{id: "c1", identifier: "MT-2", state: "Done"}]}
+      refute SubIssueWait.close?(done, terminal, settings)
+      :ok = RunStore.put_merged_wait("p")
 
       for finished <- ["Done", "Canceled", "Duplicate"] do
         assert SubIssueWait.close?(%{waiting | sub_issues: [%{id: "c1", identifier: "MT-2", state: finished}]}, terminal, settings)
       end
 
-      done = %{waiting | sub_issues: [%{id: "c1", identifier: "MT-2", state: "Done"}]}
       refute SubIssueWait.close?(%{done | state: "In Progress"}, terminal, settings)
       refute SubIssueWait.close?(%{done | labels: ["breakdown"]}, terminal, settings)
       refute SubIssueWait.close?(%{done | sub_issues: []}, terminal, settings)
       refute SubIssueWait.close?(nil, terminal, settings)
+      refute SubIssueWait.close?(%{done | id: nil}, terminal, settings)
 
       # It stays held while it waits: Symphony closes it with no run.
       assert SubIssueWait.held?(done, terminal, settings)
@@ -411,13 +424,17 @@ defmodule SymphonyElixir.SubIssueWaitTest do
       claimed = %{waiting | id: "waiting-claimed", identifier: "MT-1706"}
       breakdown = %{waiting | id: "waiting-breakdown", identifier: "MT-1707", labels: ["breakdown"]}
       state = %{state | running: %{"waiting-running" => %{}}, claimed: MapSet.new(["waiting-claimed"])}
-      Application.put_env(:symphony_elixir, :memory_tracker_issues, [waiting, running, claimed, breakdown])
+      moved_by_person = %{waiting | id: "waiting-moved", identifier: "MT-1709"}
+      tracked = [waiting, running, claimed, breakdown, moved_by_person]
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, tracked)
+      merged = ["waiting", "waiting-running", "waiting-claimed", "waiting-breakdown"]
+      for issue_id <- merged, do: :ok = RunStore.put_merged_wait(issue_id)
 
       refute Orchestrator.should_dispatch_issue_for_test(waiting, state)
 
       log =
         capture_log([level: :info], fn ->
-          candidates = [waiting, running, claimed, breakdown, nil]
+          candidates = [waiting, running, claimed, breakdown, moved_by_person, nil]
           assert ^state = Orchestrator.close_finished_parents_for_test(candidates, state)
         end)
 
@@ -426,6 +443,9 @@ defmodule SymphonyElixir.SubIssueWaitTest do
       assert_received {:memory_tracker_comment, "waiting", body}
       assert body == "Every sub-ticket is finished, so this ticket is Done:\n\n- MT-1702: Done\n- MT-1703: Canceled\n- MT-1704: Duplicate"
       assert log =~ "Moved issue to Done: every sub-issue is finished issue_id=waiting issue_identifier=MT-1701"
+      refute RunStore.merged_wait?("waiting")
+      assert RunStore.merged_wait?("waiting-running")
+      :ok = RunStore.put_merged_wait("waiting")
 
       # A sub-ticket filed since the cached poll keeps it waiting; one gone from the fresh read is left too.
       filed = %{waiting | sub_issues: sub_issues ++ [%{id: "child-4", identifier: "MT-1708", state: "Backlog"}]}
@@ -442,10 +462,13 @@ defmodule SymphonyElixir.SubIssueWaitTest do
       assert_received {:memory_tracker_state_update, "waiting", "Done"}
       assert log =~ "Failed to comment on an issue waiting on its sub-issues: issue_id=waiting issue_identifier=MT-1701 reason=:boom"
 
+      :ok = RunStore.put_merged_wait("waiting")
       Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, {:error, :linear_down})
       log = capture_log(fn -> Orchestrator.close_finished_parents_for_test([waiting], state) end)
       assert log =~ "Failed to move an issue whose sub-issues are finished to Done; retrying next poll: issue_id=waiting"
       assert log =~ ":linear_down"
+      # A failed move keeps the record, so the next poll retries.
+      assert RunStore.merged_wait?("waiting")
 
       Application.put_env(:symphony_elixir, :memory_tracker_fetch_issue_states_result, {:error, :timeout})
       log = capture_log(fn -> Orchestrator.close_finished_parents_for_test([waiting], state) end)

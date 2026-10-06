@@ -15,7 +15,8 @@ defmodule SymphonyElixir.SubIssueWait do
   Any other issue whose pull request merges with a sub-issue still open waits there too, instead of
   closing (`wait_on_merge?/3`): its `Backlog` sub-issues move to `Todo`, and Symphony moves it to
   `Done` itself, with no run, once every sub-issue is terminal (`close?/3`). A sub-issue filed or
-  canceled meanwhile just counts in that check.
+  canceled meanwhile just counts in that check. The RunStore records each issue the merge put there,
+  so one a person moved there, with its pull request still open, waits for a human as before.
 
   At startup Symphony checks that the Linear team has the state. When it is
   missing, the state is turned off for the life of the process and a warning is
@@ -26,7 +27,7 @@ defmodule SymphonyElixir.SubIssueWait do
 
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Issue
-  alias SymphonyElixir.Tracker
+  alias SymphonyElixir.{RunStore, Tracker}
 
   @parked_from_state "In Progress"
   @backlog_state "Backlog"
@@ -139,15 +140,17 @@ defmodule SymphonyElixir.SubIssueWait do
   @doc """
   Moves `issue`, whose pull request merged with sub-issues open, to the waiting state and its
   sub-issues in `Backlog` to `Todo`, and comments on it. Only states change, so blocked-by links and
-  labels stay. It can run again: an issue already waiting is not moved or commented on again unless
-  a sub-issue is left in `Backlog`, such as one whose promotion failed (returned as an error).
+  labels stay. It first records the merge in the RunStore, which `close?/3` requires. It can run
+  again: an issue already waiting is not moved or commented on again unless a sub-issue is left in
+  `Backlog`, such as one whose promotion failed (returned as an error).
   """
   @spec wait_on_merge(Issue.t(), Schema.t(), module()) :: :ok | {:error, term()}
   def wait_on_merge(%Issue{} = issue, %Schema{} = settings, tracker) do
     waiting_state = state(settings)
     already_waiting? = in_state?(issue, settings)
 
-    with :ok <- move_to_waiting(issue, waiting_state, already_waiting?, tracker) do
+    with :ok <- RunStore.put_merged_wait(issue.id),
+         :ok <- move_to_waiting(issue, waiting_state, already_waiting?, tracker) do
       {promoted, failed} = promote_backlog_sub_issues(issue, tracker)
       log_wait(issue, waiting_state, already_waiting?, promoted)
 
@@ -162,11 +165,13 @@ defmodule SymphonyElixir.SubIssueWait do
 
   @doc """
   True when Symphony closes `issue` itself: it sits in the waiting state, is not a `breakdown` parent
-  (its close-out run closes it) and has sub-issues, every one of them in `terminal_states`.
+  (its close-out run closes it), has sub-issues, every one of them in `terminal_states`, and its
+  pull request's merge put it there (`wait_on_merge/3`). One a person moved there waits for them.
   """
   @spec close?(Issue.t() | term(), Enumerable.t(String.t()), Schema.t() | term()) :: boolean()
   def close?(%Issue{sub_issues: [_ | _]} = issue, terminal_states, settings) do
-    in_state?(issue, settings) and not Issue.breakdown?(issue) and Issue.open_sub_issues(issue, terminal_states) == []
+    in_state?(issue, settings) and not Issue.breakdown?(issue) and
+      Issue.open_sub_issues(issue, terminal_states) == [] and RunStore.merged_wait?(issue.id) == true
   end
 
   def close?(_issue, _terminal_states, _settings), do: false
@@ -176,6 +181,7 @@ defmodule SymphonyElixir.SubIssueWait do
   def close(%Issue{id: issue_id} = issue, tracker) do
     with :ok <- tracker.update_issue_state(issue_id, @done_state) do
       Logger.info("Moved issue to #{@done_state}: every sub-issue is finished #{issue_fields(issue)}")
+      _ = RunStore.delete_merged_wait(issue_id)
       comment(issue, close_comment(issue), tracker)
     end
   end
