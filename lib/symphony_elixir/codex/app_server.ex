@@ -695,7 +695,8 @@ defmodule SymphonyElixir.Codex.AppServer do
       comment_registry: Keyword.get(opts, :linear_comment_registry),
       tool_scope: Keyword.get(opts, :tool_scope),
       tool_opts: tool_opts(opts),
-      dependency_gate: DependencyGate.build(workspace, issue, Keyword.get(opts, :settings), opts)
+      dependency_gate: DependencyGate.build(workspace, issue, Keyword.get(opts, :settings), opts),
+      on_tool_call: Keyword.get(opts, :on_tool_call)
     }
 
     mcp_opts =
