@@ -602,6 +602,25 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         "required" => ["scale"],
         "properties" => %{"scale" => %{"type" => "number", "enum" => [0.85, 1.0, 1.15, 1.3, 1.5, 1.8, 2.0]}}
       }
+    },
+    %{
+      "name" => "qa_android_put_file",
+      "description" =>
+        "Put a fixture file you wrote (a CSV to import, a malformed file) into the emulator's shared Downloads, where the system file picker lists it, so an import step can pick it. " <>
+          "Only a regular file of at most 1 MB under the worktree (such as qa-evidence/) or $TMPDIR, no symlinks, and only into Download/. " <>
+          "qa_android_install wipes app data but not Downloads, so the file survives a reinstall; Symphony removes it when the QA pass ends.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["local_path"],
+        "properties" => %{
+          "local_path" => %{"type" => "string", "description" => "The file, absolute or relative to the worktree, e.g. qa-evidence/import/rows.csv."},
+          "dest" => %{
+            "type" => "string",
+            "description" => "`Download/<name>`, a name of letters, digits, `.`, `_`, `-`. Defaults to Download/ and the local file name."
+          }
+        }
+      }
     }
   ]
 
@@ -662,7 +681,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "qa_android_key" => ["key"],
     "qa_android_rotate" => ["orientation"],
     "qa_android_dark_mode" => ["mode"],
-    "qa_android_font_scale" => ["scale"]
+    "qa_android_font_scale" => ["scale"],
+    "qa_android_put_file" => ["local_path", "dest"]
   }
   @legacy_tool_aliases %{
     "linear.get_current_issue" => "linear_get_current_issue",

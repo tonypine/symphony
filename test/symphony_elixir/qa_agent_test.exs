@@ -80,6 +80,20 @@ defmodule SymphonyElixir.QaAgentTest do
     end
   end
 
+  defmodule AndroidPutFileSession do
+    defdelegate start_session(workspace, opts), to: FakeSession
+    defdelegate stop_session(session), to: FakeSession
+
+    def run_turn(session, prompt, issue, opts) do
+      [tmp_dir] = Map.values(opts[:extra_env])
+      fixture = Path.join(tmp_dir, "rows.csv")
+      File.write!(fixture, "date,minutes\n")
+      result = AndroidDriver.call_tool(opts[:qa_android_driver], "qa_android_put_file", %{"local_path" => fixture})
+      send(Application.fetch_env!(:symphony_elixir, :qa_test_recipient), {:put_file, tmp_dir, result})
+      FakeSession.run_turn(session, prompt, issue, opts)
+    end
+  end
+
   # Stands in for `SymphonyElixir.Verification` in web passes.
   defmodule FakeVerification do
     def start_qa_dev_server(issue, run_id, worktree, opts) do
@@ -328,6 +342,8 @@ defmodule SymphonyElixir.QaAgentTest do
       assert prompt =~ "### Playbook: android_app"
       assert prompt =~ "qa_android_unavailable"
       assert prompt =~ "qa_app_exited"
+      # Import steps get their file from qa_android_put_file.
+      assert prompt =~ "put it in\n   `Download/` with `qa_android_put_file`"
 
       for path <- ["app/src/main/AndroidManifest.xml", "app/src/main/res/layout/login.xml", "app/build.gradle.kts", "build.gradle", "lib/src/main/java/Util.java"] do
         assert {:run, [%{kind: "android_app"}]} = Selection.decide(issue(), [path], config)
@@ -999,6 +1015,26 @@ defmodule SymphonyElixir.QaAgentTest do
       assert {:ok, _result} = QaAgent.run(job(), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession)
       assert_receive {:qa_session_started, _worktree, cli_opts}
       assert cli_opts[:qa_android_driver] == nil
+    end
+
+    test "lets the Android QA driver put fixtures from the pass's own $TMPDIR into Downloads" do
+      test = self()
+      lease = %{lease: make_ref(), serial: "emulator-5600", adb: "/sdk/platform-tools/adb", adb_server_port: 15_037}
+      android_app = %{kind: "android_app", paths: [], prompt: "Test the Android app.", build: "./gradlew assembleDebug", apk_paths: ["app.apk"], application_ids: ["com.example.app"]}
+
+      assert {:ok, %{result: %{verdict: :pass}}} =
+               QaAgent.run(job(%{playbooks: [android_app]}), Config.settings!(),
+                 git: fake_git(),
+                 qa_agent_module: AndroidPutFileSession,
+                 qa_android_driver_opts: [
+                   checkout: fn -> {:ok, lease} end,
+                   checkin: fn _lease -> :ok end,
+                   cmd: fn _executable, args, _opts -> send(test, {:adb, Enum.drop(args, 4)}) && {:ok, {"", 0}} end
+                 ]
+               )
+
+      assert_receive {:put_file, _tmp_dir, {:ok, %{"path" => "Download/rows.csv", "bytes" => 13}}}
+      assert_received {:adb, ["push", _copy, "/sdcard/Download/rows.csv"]}
     end
 
     test "an Android change in a repo without the android_app playbook gets its device steps blocked, not an emulator" do
