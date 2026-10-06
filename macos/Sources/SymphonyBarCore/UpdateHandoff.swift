@@ -1,5 +1,46 @@
 import Foundation
 
+/// What the menu shows of a release once the app runs it: its notes and page, and its change count. The relaunched
+/// build is the latest release, so no update check offers them any more.
+public struct ReleaseDetails: Equatable {
+    public var notes: String
+    /// Nil when the record was written by a build that didn't keep it.
+    public var pageURL: URL?
+    public var changes: Int?
+
+    public init(notes: String = "", pageURL: URL? = nil, changes: Int? = nil) {
+        self.notes = notes
+        self.pageURL = pageURL
+        self.changes = changes
+    }
+
+    public init(_ release: Release) {
+        self.init(notes: release.notes, pageURL: release.pageURL, changes: release.changes)
+    }
+
+    /// The release for the notes window, nil without a page URL.
+    public func release(version: String, build: Int) -> Release? {
+        pageURL.map { Release(version: version, build: build, notes: notes, pageURL: $0, changes: changes) }
+    }
+
+    /// The keys a store adds to its record.
+    var storedValues: [String: Any] {
+        var values: [String: Any] = ["notes": notes]
+        if let pageURL { values["pageURL"] = pageURL.absoluteString }
+        if let changes { values["changes"] = changes }
+        return values
+    }
+
+    /// Reads `storedValues`; a missing key, as from an older build, reads as unknown.
+    init(stored values: [String: Any]) {
+        self.init(
+            notes: values["notes"] as? String ?? "",
+            pageURL: (values["pageURL"] as? String).flatMap(URL.init(string:)),
+            changes: values["changes"] as? Int
+        )
+    }
+}
+
 /// What the app records just before it quits for an update, so the relaunched app can bring Symphony back.
 public struct PendingUpdate: Equatable {
     /// The build that quit.
@@ -12,13 +53,27 @@ public struct PendingUpdate: Equatable {
     public var startSymphony: Bool
     /// The update paused dispatch, so the relaunched app resumes it once Symphony answers.
     public var resumeDispatch: Bool
+    /// The release's notes, page and change count, for the menu line after the update.
+    public var details: ReleaseDetails
+    /// The app installed it by itself, so the relaunched app posts a notification once it is healthy.
+    public var automatic: Bool
 
-    public init(fromBuild: Int, toBuild: Int, version: String, startSymphony: Bool, resumeDispatch: Bool) {
+    public init(
+        fromBuild: Int,
+        toBuild: Int,
+        version: String,
+        startSymphony: Bool,
+        resumeDispatch: Bool,
+        details: ReleaseDetails = ReleaseDetails(),
+        automatic: Bool = false
+    ) {
         self.fromBuild = fromBuild
         self.toBuild = toBuild
         self.version = version
         self.startSymphony = startSymphony
         self.resumeDispatch = resumeDispatch
+        self.details = details
+        self.automatic = automatic
     }
 
     /// False when the relaunched app is still the old build: the helper put it back.
@@ -38,16 +93,15 @@ public final class PendingUpdateStore {
     }
 
     public func save(_ pending: PendingUpdate) {
-        defaults.set(
-            [
-                "fromBuild": pending.fromBuild,
-                "toBuild": pending.toBuild,
-                "version": pending.version,
-                "startSymphony": pending.startSymphony,
-                "resumeDispatch": pending.resumeDispatch,
-            ] as [String: Any],
-            forKey: Self.key
-        )
+        let values: [String: Any] = [
+            "fromBuild": pending.fromBuild,
+            "toBuild": pending.toBuild,
+            "version": pending.version,
+            "startSymphony": pending.startSymphony,
+            "resumeDispatch": pending.resumeDispatch,
+            "automatic": pending.automatic,
+        ]
+        defaults.set(values.merging(pending.details.storedValues) { first, _ in first }, forKey: Self.key)
     }
 
     public func clear() {
@@ -55,7 +109,8 @@ public final class PendingUpdateStore {
     }
 
     /// The pending update, cleared so a later launch doesn't act on it again. Nil when there is none or it
-    /// can't be read.
+    /// can't be read. One from a build that didn't record the release's details or `automatic` reads them as unknown
+    /// and false.
     public func take() -> PendingUpdate? {
         guard let stored = defaults.object(forKey: Self.key) else { return nil }
         clear()
@@ -71,7 +126,9 @@ public final class PendingUpdateStore {
             toBuild: toBuild,
             version: version,
             startSymphony: startSymphony,
-            resumeDispatch: resumeDispatch
+            resumeDispatch: resumeDispatch,
+            details: ReleaseDetails(stored: values),
+            automatic: values["automatic"] as? Bool ?? false
         )
     }
 }

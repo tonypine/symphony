@@ -42,11 +42,16 @@ final class UpdatePoller {
         self.timer = timer
     }
 
-    /// Shows the release notes in an alert with scrollable text, with a button that opens the release page.
-    static func showReleaseNotes(_ release: Release) {
+    /// Shows the release notes in an alert with scrollable text, with a button that opens the release page. A
+    /// `message`, as after a rollback, shows above the notes, with a button that opens the README's rollback steps.
+    static func showReleaseNotes(_ release: Release, message: String? = nil) {
         let alert = NSAlert()
         alert.messageText = UpdateMenu.releaseNotesHeading(release)
         alert.addButton(withTitle: UpdateMenu.openReleasePageTitle)
+        if let message {
+            alert.informativeText = message
+            alert.addButton(withTitle: UpdateMenu.rollbackStepsTitle)
+        }
         alert.addButton(withTitle: "Close")
 
         let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 480, height: 320))
@@ -63,8 +68,13 @@ final class UpdatePoller {
         alert.accessoryView = scroll
 
         SymphonyRunner.activateApp()
-        if alert.runModal() == .alertFirstButtonReturn {
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
             NSWorkspace.shared.open(release.pageURL)
+        case .alertSecondButtonReturn where message != nil:
+            NSWorkspace.shared.open(UpdateMenu.rollbackStepsURL)
+        default:
+            break
         }
     }
 }

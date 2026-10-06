@@ -5,7 +5,7 @@ defmodule SymphonyElixir.ReviewAgent do
 
   require Logger
 
-  alias SymphonyElixir.{AgentLabels, AgentTmpDir, Config, PromptSafety, SSH}
+  alias SymphonyElixir.{AgentLabels, AgentTmpDir, Config, GitConfigCommands, PromptSafety, SSH}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.ReviewAgent.Context
@@ -920,10 +920,13 @@ defmodule SymphonyElixir.ReviewAgent do
     end
   end
 
+  # On a worker, git runs through the script's `symphony_git`, with the same safe config, env and
+  # filter driver overrides as host-side git, and `diff`, `log` and `show` get the options of
+  # `GitConfigCommands.subcommand_args/1`, so the worker repo's diff drivers don't run either.
   defp git(workspace, args, worker_host) when is_binary(worker_host) do
     command =
-      (["git", "-C", workspace] ++ args)
-      |> Enum.map_join(" ", &shell_escape/1)
+      SymphonyElixir.Workspace.remote_safe_git_functions() <>
+        "\nsymphony_git " <> Enum.map_join([workspace | GitConfigCommands.subcommand_args(args)], " ", &shell_escape/1)
 
     case SSH.run(worker_host, command, stderr_to_stdout: true) do
       {:ok, {output, 0}} -> {:ok, output}

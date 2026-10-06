@@ -530,7 +530,8 @@ agent:
     background calls (titles, summaries) and model aliases use the same model instead of
     Anthropic's own ids, which OpenRouter does not know.
 
-  `anthropic` runs start as before: Symphony sets none of these.
+  `anthropic` runs start as before: Symphony sets none of these. In QA mode the base URL is the QA
+  stub's instead (see [OpenRouter in QA](#qa-passes)).
 - `OPENROUTER_API_KEY` (environment variable, read from Symphony's own environment): the
   OpenRouter API key. It is never written to `symphony.yml` and reaches the agent only through
   the subprocess env, as `ANTHROPIC_AUTH_TOKEN`. When it is unset, an `openrouter` run fails
@@ -538,8 +539,8 @@ agent:
   run_kind=<kind>`; retries work as for any other failed start. `symphony check` prints a
   warning naming the run kinds that use `openrouter` while the variable is unset.
 - Model capabilities: Symphony agents need tool use, so an OpenRouter model must list `tools` in
-  `supported_parameters` on OpenRouter's models API (`GET https://openrouter.ai/api/v1/models`,
-  read without the key and cached in process for an hour). When `OPENROUTER_API_KEY` is set,
+  `supported_parameters` on OpenRouter's models API (`GET https://openrouter.ai/api/v1/models`, the
+  QA stub's in QA mode, read without the key and cached in process for an hour). When `OPENROUTER_API_KEY` is set,
   `symphony check` asks that API and reports, naming the key that set the model or effort
   (`pre_push_review.model`, `auto_review.model`, `repositories[<key>].agent.run_profiles.<kind>.model`,
   `repositories[<key>].agent.model`, `agent.run_profiles.<kind>.model`, `agent.model`, and the
@@ -1125,6 +1126,31 @@ and it is `skipped` only when no run can be read or a run is still in progress. 
 `api.github.com`, which is not in the built-in network allowlist; add it to
 `agent.permissions.network.allowed_domains` for the fallback to work.
 
+**OpenRouter in QA.** QA never uses a real, paid OpenRouter key. OpenRouter flows (Test connection
+in the macOS app's Settings, its Models list and Effort note, `symphony check` on an `openrouter`
+profile, an OpenRouter run) are tested against a stub OpenRouter, `SymphonyElixir.OpenRouter.Stub`,
+which listens on `127.0.0.1` only and answers with canned data:
+
+| Request | Answer |
+| --- | --- |
+| `GET /api/v1/key` | for the key `sk-or-v1-symphony-qa-stub`, the label `Symphony QA stub`, $1.25 used of a $10.00 limit, $8.75 left; any other key or none gets a 401, so Settings says the key is rejected |
+| `GET /api/v1/models` | `symphony-qa/reasoning-tools` (tools and reasoning), `symphony-qa/tools-only` (tools, no reasoning) and `symphony-qa/no-tools` (no tools) |
+| `POST /api/v1/messages` | with the valid key, a canned Anthropic message (JSON, or SSE when the request streams) naming the model it was asked for |
+
+It logs each request (method, path, model, whether the key was accepted), never the key. The
+`macos_app` QA driver starts one for each pass and launches every app with its URL; on a
+`worker_host`, the app's SSH session forwards a loopback port on the QA host back to it (`ssh -R`,
+so the QA host's `sshd` must allow TCP forwarding, as it does by default). The `cli` playbook starts
+one with `symphony openrouter-stub [--port <port>]`, which prints its URL and the variables to export.
+
+Symphony and the app use the stub only in QA mode: `SYMPHONY_QA_OPENROUTER_URL` (the stub's API
+base, such as `http://127.0.0.1:4100/api`) counts only while `SYMPHONY_BAR_QA_ROOT` is set too, and
+only for an `http` or `https` URL on a loopback host (`127.0.0.1`, `localhost`, `::1`). Otherwise a
+run, `symphony check` and the app always talk to `https://openrouter.ai`, whatever the environment
+says, so a stray variable cannot send a key to another host. Checks against the real API with a
+real key (a real model list, a real run) are manual: a person runs them by hand, with a cheap
+model, outside QA.
+
 An agent cannot change the agent-protected paths (`WORKFLOW.md`, `symphony.yml`, `.ai/skills`, the
 project `.claude` settings, hooks and skills, `mise.toml`, `.tool-versions`,
 `config/settings_ui_exempt.yml`): its sandbox denies the
@@ -1414,7 +1440,7 @@ tools for it on the host, outside the sandbox, and checks every argument:
 | Tool | Does | Refuses |
 | --- | --- | --- |
 | `qa_build` | runs `build` in the QA worktree with the agent's scrubbed environment, then copies the `app` bundle into a private directory | a worktree with changes outside `qa-evidence/` and `.gradle-daemons/` (Symphony's own), gitignored files included: none may exist before the first build, and none may appear or change after a build; a bundle that resolves (symlinks included) outside the worktree, or that holds an absolute symlink or one with `..` |
-| `qa_launch_app` | starts the private copy of the bundle with `SYMPHONY_BAR_QA_ROOT` set to a private directory ([QA mode](../macos/README.md#qa-mode)), and returns its PID | an executable that changed since the last `qa_build`, or a worktree `qa_build` would refuse |
+| `qa_launch_app` | starts the private copy of the bundle with `SYMPHONY_BAR_QA_ROOT` set to a private directory ([QA mode](../macos/README.md#qa-mode)) and `SYMPHONY_QA_OPENROUTER_URL` set to the pass's [OpenRouter stub](#qa-passes), and returns its PID | an executable that changed since the last `qa_build`, or a worktree `qa_build` would refuse |
 | `qa_quit_app` | quits a launched app and returns its recent output | a PID it did not launch |
 | `qa_screenshot` | saves the app's on-screen windows to new files `qa-evidence/<name>.png` | a PID it did not launch, a window of another app, a name that already exists (file or symlink) |
 | `qa_ax_tree` | reads the accessibility tree (role, title, value, frame; never a secure field's value), filtered by `role` or `text`, capped in depth, nodes and size | a PID it did not launch |
@@ -1519,7 +1545,9 @@ host and the worktree checks still apply there. Then:
   behind) into a fresh `src/` in a `0700` run directory under `~/.symphony-qa/runs/` on the QA
   host, runs `build` there with the QA user's login environment, and copies the bundle into the
   run directory;
-- `qa_launch_app` starts that copy with only `SYMPHONY_BAR_QA_ROOT` set;
+- `qa_launch_app` starts that copy with only `SYMPHONY_BAR_QA_ROOT` and `SYMPHONY_QA_OPENROUTER_URL`
+  set, over an SSH session that forwards the URL's loopback port on the QA host back to the
+  OpenRouter stub on the Symphony host;
 - the Swift helper is compiled there with `swiftc` on first use in each pass, into the run
   directory's `helper/`. Passes never share it: each PR's build runs as the QA user, and a helper
   it replaced could answer the permission, window and accessibility calls of later passes. There it

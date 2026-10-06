@@ -16,8 +16,13 @@ final class UpdateController {
     private(set) var error: String?
     /// True while the update under way was started by the app itself: its failures show in the menu only.
     private var automatic = false
-    /// What the last update's health check did, such as a rollback, shown in the menu until the next update.
+    /// What the last update's health check did, such as a rollback that failed, shown in the menu until the next
+    /// update.
     var notice: String? {
+        didSet { onChange?() }
+    }
+    /// The rollback that put this build back, shown in the menu until the next update.
+    var rolledBack: RollbackRecord? {
         didSet { onChange?() }
     }
 
@@ -26,6 +31,8 @@ final class UpdateController {
     let skips = SkippedReleaseStore(defaults: AppStores.current.defaults)
     /// What a rollback records for the build it puts back.
     let rollbacks = RollbackStore(defaults: AppStores.current.defaults)
+    /// The update that passed its health check, for the menu line that says what changed.
+    let lastUpdates = LastUpdateStore(defaults: AppStores.current.defaults)
     let cacheDirectory: URL
     private let current: AppBuild
     private let publicKey: MinisignPublicKey?
@@ -85,6 +92,7 @@ final class UpdateController {
         guard !isUpdating else { return }
         error = nil
         notice = nil
+        rolledBack = nil
         self.automatic = automatic
         preparing = release
         onChange?()
@@ -149,7 +157,9 @@ final class UpdateController {
                 toBuild: update.release.build,
                 version: update.release.version,
                 startSymphony: symphonyStopped,
-                resumeDispatch: resumeDispatch
+                resumeDispatch: resumeDispatch,
+                details: ReleaseDetails(update.release),
+                automatic: automatic
             )
         )
         let launch = ChildLaunch(

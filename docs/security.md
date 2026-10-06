@@ -263,14 +263,14 @@ Host-side git still honors these keys of the repo's local config that can lead i
   terminal, which Symphony's git never does.
 
 On an SSH worker, the scripts Symphony runs over SSH to fetch, create, reuse, back up and remove a
-worktree, and to put a worktree on the base branch for `after_create`, run git as the worker's
-operator account with the same protections. They define a `symphony_git` shell function that sets
-the same environment and `-c` overrides, and lists and blanks the filter drivers in the worker
-repo's `config`, its `config.worktree` and every file they include before each command that can
-read or write work-tree files. It also refuses to run git when an include path holds a newline,
-since the shell reads the list line by line. Their `fetch origin` gets
-`--upload-pack=git-upload-pack` as on the host. They replace no merge driver and pass no
-`--no-ext-diff --no-textconv`: they never merge or print a diff.
+worktree, to put a worktree on the base branch for `after_create`, and to read the review agent's
+diff of a workspace, run git as the worker's operator account with the same protections. They
+define a `symphony_git` shell function that sets the same environment and `-c` overrides, and
+lists and blanks the filter drivers in the worker repo's `config`, its `config.worktree` and
+every file they include before each command that can read or write work-tree files. It also
+refuses to run git when an include path holds a newline, since the shell reads the list line by
+line. Their `fetch origin` gets `--upload-pack=git-upload-pack` as on the host, and the review
+agent's `diff`, `log` and `show` get `--no-ext-diff --no-textconv`. They replace no merge driver: they never merge.
 
 Limits:
 
@@ -278,9 +278,7 @@ Limits:
   still runs. Every local runtime denies agent writes to the repo's config files (see the Git
   write model above), but native Codex may drop those entries.
 - Only `diff`, `log` and `show` get `--no-ext-diff --no-textconv`. Symphony runs no other command
-  that prints a diff, such as `blame`, `format-patch` or `range-diff`, on the host.
-- The review agent's diffs of a workspace on an SSH worker run plain git over SSH, so a diff
-  driver or fsmonitor in the worker repo's config still runs there.
+  that prints a diff, such as `blame`, `format-patch` or `range-diff`, on the host or a worker.
 
 ### Network access controls
 
