@@ -1080,6 +1080,9 @@ defmodule SymphonyElixir.Config.Schema do
       field(:model, :string)
       field(:effort, :string)
       field(:provider, :string)
+      # The OpenRouter model for Claude Code's background calls (titles, summaries) on runs whose
+      # provider is `openrouter`; unset, they use the run's model.
+      field(:small_model, :string)
       field(:run_profiles, :map, default: %{})
 
       field(:approval_policy, StringOrMap)
@@ -1126,6 +1129,7 @@ defmodule SymphonyElixir.Config.Schema do
           :model,
           :effort,
           :provider,
+          :small_model,
           :run_profiles,
           :approval_policy,
           :include_project_guides,
@@ -1159,6 +1163,7 @@ defmodule SymphonyElixir.Config.Schema do
       |> validate_number(:codex_stdio_prompt_soft_limit, greater_than: 0)
       |> validate_project_guide_files()
       |> validate_run_profile_settings()
+      |> validate_setting(:small_model, &check_model/1)
       |> validate_openrouter_profiles()
       |> validate_command_run_profile_flags()
       |> update_change(:max_concurrent_agents_by_state, &Schema.normalize_state_limits/1)

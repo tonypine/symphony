@@ -54,6 +54,8 @@ defmodule SymphonyElixir.PlaybookTest do
     assert flat =~ "keep every artifact comment and sub-ticket already made"
     assert flat =~ "never file a sub-ticket a second time"
     assert flat =~ "### Plan revision run (a person commented on the plan under review)"
+    assert flat =~ "State: only `In Review`. A comment on a parent in `Human Review` starts nothing"
+    assert flat =~ "a comment starting with `Supervisor review:` or `Supervisor note:` never triggers a run, in any state"
     assert flat =~ "Edit the existing artifact comments (use cases, features, journeys and so on) with `linear_update_comment`"
     assert flat =~ "Leave every sub-ticket outside `Backlog` as it is."
     assert flat =~ "Reply under each comment with `linear_add_comment` and its `parent_id`"

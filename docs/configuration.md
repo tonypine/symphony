@@ -164,8 +164,11 @@ issues:
   - **Revise:** a person's comment on a parent in `In Review` whose plan is not approved moves it
     to `In Progress`, and the `breakdown` run edits the plan in place: it rewrites the artifact
     comments, updates, files or cancels `Backlog` sub-tickets (`linear_update_subissue` refuses
-    any other), replies under each comment and moves the parent back to `In Review`. Symphony's
-    own comments and integration bots' comments start nothing. A comment made while the run works
+    any other), replies under each comment and moves the parent back to `In Review`. Only
+    `In Review` triggers it: a comment on a parent in `Human Review` starts nothing (move it to
+    `Rework` or back to `In Review` instead). Symphony's own comments, a supervisor's notes
+    (starting `Supervisor review:` or `Supervisor note:`) and integration bots' comments start
+    nothing. A comment made while the run works
     is picked up once the parent is back in `In Review`, unless the run answered it. A comment on
     an approved plan changes nothing: under a new top-level comment Symphony replies once that, if
     it asks for a plan change, `Rework` re-plans it.
@@ -532,13 +535,22 @@ agent:
   - `ANTHROPIC_AUTH_TOKEN=<OPENROUTER_API_KEY>`;
   - `ANTHROPIC_API_KEY=` (empty);
   - `CLAUDE_CODE_SUBAGENT_MODEL=<id>`, so subagents use the same model;
-  - `ANTHROPIC_DEFAULT_HAIKU_MODEL=<id>`, `ANTHROPIC_DEFAULT_SONNET_MODEL=<id>`,
-    `ANTHROPIC_DEFAULT_OPUS_MODEL=<id>` and `ANTHROPIC_SMALL_FAST_MODEL=<id>`, so Claude Code's
-    background calls (titles, summaries) and model aliases use the same model instead of
-    Anthropic's own ids, which OpenRouter does not know.
+  - `ANTHROPIC_DEFAULT_SONNET_MODEL=<id>` and `ANTHROPIC_DEFAULT_OPUS_MODEL=<id>`, so Claude
+    Code's model aliases use the same model instead of Anthropic's own ids, which OpenRouter does
+    not know;
+  - `ANTHROPIC_DEFAULT_HAIKU_MODEL` and `ANTHROPIC_SMALL_FAST_MODEL`, the model for Claude Code's
+    background calls (titles, summaries): `small_model` when it is set, else `<id>`.
 
   `anthropic` runs start as before: Symphony sets none of these. In QA mode the base URL is the QA
   stub's instead (see [OpenRouter in QA](#qa-passes)).
+- `small_model`: optional OpenRouter model id for Claude Code's background calls on runs whose
+  provider is `openrouter`, for example `anthropic/claude-haiku-4.5`. Titles and summaries are
+  frequent, simple calls, so a cheap model keeps them from billing at the run's model's rate.
+  Unset, they use the run's model. One value for every OpenRouter run; `anthropic` runs ignore it.
+  When `OPENROUTER_API_KEY` is set and a run uses `openrouter`, `symphony check` reports an id
+  OpenRouter does not list, for example
+  `` agent.small_model: OpenRouter has no model `acme/typo` ``. The model needs no `tools`.
+  Settings in the macOS app edits it as the Background calls row of Models.
 - `OPENROUTER_API_KEY` (environment variable, read from Symphony's own environment): the
   OpenRouter API key. It is never written to `symphony.yml` and reaches the agent only through
   the subprocess env, as `ANTHROPIC_AUTH_TOKEN`. When it is unset, an `openrouter` run fails
