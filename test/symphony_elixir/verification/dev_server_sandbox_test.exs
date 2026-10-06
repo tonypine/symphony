@@ -104,7 +104,8 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
     test "doesn't take a probe that exits 0 without saying it is confined", %{root: root, workspace: workspace, tmp_dir: tmp_dir} do
       executable = fake_sandbox_exec(root, "echo bound")
 
-      assert {:error, {:dev_server_sandbox_unconfined, {:probe_failed, 0, "bound"}}} = command(workspace, tmp_dir, executable)
+      assert {:error, {:dev_server_sandbox_unconfined, {:probe_failed, 0, "bound"}}} =
+               command(workspace, tmp_dir, executable)
     end
 
     test "doesn't hand back the command when the bind check can't run, and tries it again next time", %{root: root, workspace: workspace, tmp_dir: tmp_dir} do
