@@ -52,11 +52,19 @@ defmodule SymphonyElixir.Verification.EgressProxy do
     }
 
     accept = Keyword.get(opts, :accept, &:gen_tcp.accept/1)
-    {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}, reuseaddr: true])
-    {:ok, port} = :inet.port(listen)
-    {:ok, clients} = Task.Supervisor.start_link()
-    acceptor = spawn_link(fn -> accept_loop(listen, accept, clients, config) end)
-    {:ok, %{listen: listen, port: port, acceptor: acceptor, clients: clients}}
+    listen = Keyword.get(opts, :listen, &:gen_tcp.listen/2)
+
+    # A listen error (`emfile`) fails the start, so the dev server that owns the proxy can clean up.
+    case listen.(0, [:binary, active: false, ip: {127, 0, 0, 1}, reuseaddr: true]) do
+      {:ok, socket} ->
+        {:ok, port} = :inet.port(socket)
+        {:ok, clients} = Task.Supervisor.start_link()
+        acceptor = spawn_link(fn -> accept_loop(socket, accept, clients, config) end)
+        {:ok, %{listen: socket, port: port, acceptor: acceptor, clients: clients}}
+
+      {:error, reason} ->
+        {:stop, reason}
+    end
   end
 
   @impl true
