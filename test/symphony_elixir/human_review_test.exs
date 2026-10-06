@@ -110,6 +110,7 @@ defmodule SymphonyElixir.HumanReviewTest do
       assert HumanReview.requested_by_ticket?(%{plan | labels: ["breakdown", "Needs-Human"]}, settings)
       assert HumanReview.requested_by_ticket?(%{plan | description: "The plan must not auto-approve."}, settings)
       assert HumanReview.requested_by_ticket?(%{plan | title: "Human review: split the importer"}, settings)
+      refute HumanReview.requested_by_ticket?(%{plan | description: "Keep parents in `Human Review` until approved."}, settings)
     end
   end
 
