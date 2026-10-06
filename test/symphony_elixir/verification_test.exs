@@ -393,13 +393,8 @@ defmodule SymphonyElixir.VerificationTest do
       assert File.dir?(Path.join(workspace, ".claude"))
 
       # Under 5 s: the stop signal ends the sandbox, without the KILL that follows `stop_timeout_ms`.
-      %DevServer{pgid: pgid} = :sys.get_state(pid)
       assert {stop_us, :ok} = :timer.tc(fn -> DevServer.stop(pid) end)
-      # TP-543 diagnostics, dropped before the final push.
-      {ps, _status} = System.cmd("ps", ["-eo", "pid=,ppid=,pgid=,stat=,args="])
-      pgid_column = Integer.to_string(pgid)
-      group = ps |> String.split("\n") |> Enum.filter(&match?([_, _, ^pgid_column | _], String.split(&1)))
-      assert stop_us < 4_000_000, "stopping took #{div(stop_us, 1_000)} ms; left in group #{pgid}:\n#{Enum.join(group, "\n")}"
+      assert stop_us < 4_000_000, "stopping took #{div(stop_us, 1_000)} ms"
       refute http_ok?("http://127.0.0.1:#{port}/")
       refute File.exists?(Path.join(workspace, ".claude"))
     end
