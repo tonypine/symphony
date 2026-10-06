@@ -461,15 +461,16 @@ Then:
 - **Repo key** is filled in from the repo name (in lower case, with `-2`, `-3`… when taken) until you
   type one. It holds letters, digits, `.`, `_` and `-`, and must differ from every other key.
 - **Base branch** is `main` until you change it.
-- **Linear routing:** the sheet lists the projects and labels of the Linear workspace of the
-  `LINEAR_API_KEY` in Settings. Pick the project whose issues go to the repo, and optionally labels an
-  issue must all carry. The labels offered are the workspace's and those of the project's teams. A
-  missing key or a failed request shows the reason with **Retry**.
+- **Linear routing:** the sheet lists the projects of the Linear workspace of the `LINEAR_API_KEY` in
+  Settings. Pick the project whose issues go to the repo, and optionally labels an issue must all carry.
+  The labels load once a project is picked: the workspace's and those of the project's teams. A missing
+  key or a failed request shows the reason in plain words with **Retry**. Each request reads one list in
+  pages of 50, so it stays well under Linear's query complexity limit.
 
 Save stays disabled, with the reason under the form, while the input can't be saved: no folder chosen,
 a folder that isn't a GitHub checkout with a `WORKFLOW.md`, a URL that isn't a GitHub repo, a key that is
 empty, malformed or taken, an empty base branch, no project, or the same project and labels as another
-repo. Save changes only `repositories:`: comments and the other entries stay as they are. When the file
+repo. It also waits while the picked project's labels load. Save changes only `repositories:`: comments and the other entries stay as they are. When the file
 has a single repo with no route, Save also marks it `default: true`, so it keeps the issues no route
 matches (Symphony refuses a second repo next to a repo with no route that isn't the default).
 
