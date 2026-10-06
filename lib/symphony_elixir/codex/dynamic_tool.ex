@@ -280,7 +280,10 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     },
     %{
       "name" => "github_create_pull_request",
-      "description" => "Create a pull request from the current workspace branch to the configured origin repo default branch.",
+      "description" =>
+        "Create a pull request from the current workspace branch to the configured origin repo default branch. " <>
+          "Link only the current issue: Linear links a PR to every issue its title names, or its body names after " <>
+          "a word such as Closes or Part of, and moves that issue with the PR. Name other issues without such a word.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -294,7 +297,9 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     },
     %{
       "name" => "github_update_pull_request_body",
-      "description" => "Update the body of the pull request for the current workspace branch.",
+      "description" =>
+        "Update the body of the pull request for the current workspace branch. " <>
+          "Name other issues without a Linear linking word such as Closes or Part of: only the current issue may be linked.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -1797,6 +1802,20 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       "error" => %{
         "code" => "invalid_comment_id",
         "message" => "github_reply_to_review_comment requires a non-blank inline review comment id (integer or numeric string)."
+      }
+    }
+  end
+
+  defp tool_error_payload({:pr_links_other_issues, identifiers}) do
+    %{
+      "error" => %{
+        "code" => "pr_links_other_issues",
+        "message" =>
+          "Linear links a pull request to every issue its title names, or its body names after a linking word " <>
+            "(Closes, Fixes, Resolves, Completes, Part of, Related to, Contributes to, Ref, Towards), and moves that issue " <>
+            "along with the PR. A PR may link only this run's issue. Take #{Enum.join(identifiers, ", ")} out of the title, " <>
+            "and name it in the body without a linking word, for example `See #{hd(identifiers)}`.",
+        "issues" => identifiers
       }
     }
   end

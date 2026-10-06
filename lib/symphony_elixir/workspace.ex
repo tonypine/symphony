@@ -4,7 +4,8 @@ defmodule SymphonyElixir.Workspace do
   """
 
   require Logger
-  alias SymphonyElixir.{Config, GitConfigCommands, ManagedClone, PathSafety, ProcessTree, SSH, WorkflowSource}
+  alias SymphonyElixir.{Config, GitConfigCommands, ManagedClone, PathSafety, ProcessTree, SSH, Tracker, WorkflowSource}
+  alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Hooks
   alias SymphonyElixir.GitHub.Repo, as: GitHubRepo
   alias SymphonyElixir.Repo.{Fetcher, FetchLog}
@@ -237,6 +238,9 @@ defmodule SymphonyElixir.Workspace do
   #   * `:active_workspace_identifiers` - identifiers (or workspace basenames) of
   #     other issues a running or retrying agent owns. Their worktrees are never
   #     detached to release a branch for this issue.
+  #   * `:sibling_issue_lookup` - reads the issue a sibling worktree belongs to by
+  #     identifier, as `Tracker.fetch_issue_by_identifier/1` (the default) does. A
+  #     sibling's worktree is detached only when its issue is terminal or unknown.
   #   * `:on_hook` - called with `{:started, hook_name, timeout_ms}` and
   #     `{:finished, hook_name}` around each hook run.
   @spec create_for_issue(map() | String.t() | nil, worker_host(), String.t() | nil, keyword()) ::
@@ -246,6 +250,7 @@ defmodule SymphonyElixir.Workspace do
       issue_or_identifier
       |> issue_context(repo_key)
       |> Map.put(:active_workspaces, normalize_identifier_set(Keyword.get(opts, :active_workspace_identifiers, [])))
+      |> Map.put(:sibling_issue_lookup, Keyword.get(opts, :sibling_issue_lookup, &Tracker.fetch_issue_by_identifier/1))
       |> Map.put(:on_hook, Keyword.get(opts, :on_hook))
 
     try do
@@ -388,9 +393,9 @@ defmodule SymphonyElixir.Workspace do
          base_ref = worktree_base_ref(issue_context),
          create_base_ref = worktree_create_base_ref(repo, issue_context, base_ref),
          create_base_ref = create_base_ref || managed_clone_base_ref(repo, branch, settings),
-         active_workspaces = issue_context.active_workspaces,
+         siblings = sibling_release_policy(issue_context),
          {:ok, created?} <-
-           add_or_reuse_local_worktree(repo, workspace, branch, base_ref, create_base_ref, active_workspaces) do
+           add_or_reuse_local_worktree(repo, workspace, branch, base_ref, create_base_ref, siblings) do
       ensure_skip_comments_excluded(workspace)
       {:ok, workspace, created?}
     else
@@ -545,24 +550,24 @@ defmodule SymphonyElixir.Workspace do
   # in-progress worktree is preserved; set by PR runs to the PR head). `create_base_ref`
   # drives fresh worktree creation, defaulting to the configured base branch so a new
   # worktree branches off clean trunk rather than whatever the source repo HEAD is on.
-  defp add_or_reuse_local_worktree(repo, workspace, branch, base_ref, create_base_ref, active_workspaces) do
+  defp add_or_reuse_local_worktree(repo, workspace, branch, base_ref, create_base_ref, siblings) do
     cond do
       File.dir?(workspace) ->
-        reuse_local_worktree(repo, workspace, branch, base_ref, active_workspaces)
+        reuse_local_worktree(repo, workspace, branch, base_ref, siblings)
 
       File.exists?(workspace) ->
         File.rm_rf!(workspace)
-        add_local_worktree(repo, workspace, branch, create_base_ref, active_workspaces)
+        add_local_worktree(repo, workspace, branch, create_base_ref, siblings)
 
       true ->
-        add_local_worktree(repo, workspace, branch, create_base_ref, active_workspaces)
+        add_local_worktree(repo, workspace, branch, create_base_ref, siblings)
     end
   end
 
-  defp reuse_local_worktree(repo, workspace, branch, base_ref, active_workspaces) do
+  defp reuse_local_worktree(repo, workspace, branch, base_ref, siblings) do
     case registered_worktree?(repo, workspace) do
       true ->
-        with :ok <- reset_worktree_to_base_ref(repo, workspace, branch, base_ref, active_workspaces) do
+        with :ok <- reset_worktree_to_base_ref(repo, workspace, branch, base_ref, siblings) do
           {:ok, false}
         end
 
@@ -574,11 +579,11 @@ defmodule SymphonyElixir.Workspace do
   # PR runs pass an explicit base_ref (e.g. "origin/<head>") so a redispatch sees
   # the latest PR head on the requested branch. Issue runs pass nil and keep the
   # existing worktree state.
-  defp reset_worktree_to_base_ref(_repo, _workspace, _branch, nil, _active_workspaces), do: :ok
-  defp reset_worktree_to_base_ref(_repo, _workspace, _branch, "", _active_workspaces), do: :ok
+  defp reset_worktree_to_base_ref(_repo, _workspace, _branch, nil, _siblings), do: :ok
+  defp reset_worktree_to_base_ref(_repo, _workspace, _branch, "", _siblings), do: :ok
 
-  defp reset_worktree_to_base_ref(repo, workspace, branch, base_ref, active_workspaces) when is_binary(base_ref) do
-    with :ok <- check_branch_not_checked_out_elsewhere(repo, workspace, branch, active_workspaces),
+  defp reset_worktree_to_base_ref(repo, workspace, branch, base_ref, siblings) when is_binary(base_ref) do
+    with :ok <- check_branch_not_checked_out_elsewhere(repo, workspace, branch, siblings),
          {:ok, commit_sha} <- resolve_git_commit(workspace, base_ref) do
       _ = backup_local_work_before_reset(workspace)
 
@@ -726,11 +731,11 @@ defmodule SymphonyElixir.Workspace do
   # Under the repo's fetch lock: parallel `worktree add`s of one repo race for its
   # `.git/config` lock and refs, and the loser exits 255 with its branch made but no
   # worktree. `--no-track` keeps the add from writing the branch's upstream config.
-  defp add_local_worktree(repo, workspace, branch, base_ref, active_workspaces) do
+  defp add_local_worktree(repo, workspace, branch, base_ref, siblings) do
     File.mkdir_p!(Path.dirname(workspace))
 
     Fetcher.with_lock(repo, fn ->
-      case check_branch_not_checked_out_elsewhere(repo, workspace, branch, active_workspaces) do
+      case check_branch_not_checked_out_elsewhere(repo, workspace, branch, siblings) do
         :ok ->
           repo
           |> run_git(worktree_add_args(repo, workspace, branch, base_ref))
@@ -766,13 +771,13 @@ defmodule SymphonyElixir.Workspace do
 
   defp reuse_local_worktree_after_add_failure(_repo, _workspace, _attempts), do: :error
 
-  defp check_branch_not_checked_out_elsewhere(repo, workspace, branch, active_workspaces) do
+  defp check_branch_not_checked_out_elsewhere(repo, workspace, branch, siblings) do
     # On `git worktree list --porcelain` failure, fall through to the actual
     # `git worktree add` so its native error surfaces via the existing path.
     with {:ok, output} <- git_output(repo, ["worktree", "list", "--porcelain"]),
          path when is_binary(path) <- find_worktree_for_branch(output, branch),
          false <- Path.expand(path) == Path.expand(workspace),
-         :error <- release_branch_from_stale_sibling(path, workspace, branch, active_workspaces) do
+         :error <- release_branch_from_stale_sibling(path, workspace, branch, siblings) do
       {:error, {:branch_already_checked_out_elsewhere, branch: branch, at: path, requested: workspace}}
     else
       _ -> :ok
@@ -784,11 +789,13 @@ defmodule SymphonyElixir.Workspace do
   # checked out. When that sibling holds no uncommitted or unpushed work, detach
   # its HEAD so the renamed issue's workspace can take the branch over. Anything
   # else (a worktree outside this repo's workspace dir, one a running or retrying
-  # agent owns, or one with local-only work) keeps the collision error.
-  defp release_branch_from_stale_sibling(owner, workspace, branch, active_workspaces) do
+  # agent owns, one whose issue is still open, or one with local-only work) keeps
+  # the collision error.
+  defp release_branch_from_stale_sibling(owner, workspace, branch, siblings) do
     if Path.dirname(Path.expand(owner)) == Path.dirname(Path.expand(workspace)) and
-         not MapSet.member?(active_workspaces, Path.basename(owner)) and
+         not MapSet.member?(siblings.active, Path.basename(owner)) and
          not worktree_has_local_only_work?(owner) and
+         sibling_issue_closed?(Path.basename(owner), siblings) and
          run_git(owner, ["checkout", "--detach"]) == :ok do
       Logger.info("Released workspace branch from stale sibling worktree branch=#{branch} sibling=#{owner} workspace=#{workspace}")
       :ok
@@ -796,6 +803,50 @@ defmodule SymphonyElixir.Workspace do
       :error
     end
   end
+
+  defp sibling_release_policy(issue_context) do
+    %{
+      active: issue_context.active_workspaces,
+      issue_id: issue_context.issue_id,
+      lookup: issue_context.sibling_issue_lookup
+    }
+  end
+
+  # An open issue whose agent is not running right now (held by the usage limit,
+  # waiting on sub-tickets or a review) comes back to its worktree, so only a
+  # terminal or unknown issue gives its branch up. One that resolves to this very
+  # issue is its own pre-rename workspace. A failed lookup keeps the branch.
+  # Linear answers an unknown identifier with an "Entity not found" GraphQL error.
+  defp sibling_issue_closed?(identifier, %{issue_id: issue_id, lookup: lookup}) do
+    case lookup.(identifier) do
+      {:ok, %{id: ^issue_id}} when is_binary(issue_id) ->
+        true
+
+      {:ok, %{state: state}} ->
+        terminal_issue_state?(state)
+
+      {:error, :issue_not_found} ->
+        true
+
+      {:error, {:linear_graphql_errors, errors}} ->
+        Enum.any?(List.wrap(errors), &entity_not_found_error?/1)
+
+      {:error, reason} ->
+        Logger.warning("Kept workspace branch on sibling worktree; issue lookup failed sibling=#{identifier} reason=#{inspect(reason)}")
+        false
+    end
+  end
+
+  defp terminal_issue_state?(state) when is_binary(state) do
+    Config.settings!().tracker.terminal_states
+    |> Enum.map(&Schema.normalize_issue_state/1)
+    |> Enum.member?(Schema.normalize_issue_state(state))
+  end
+
+  defp terminal_issue_state?(_state), do: false
+
+  defp entity_not_found_error?(%{"message" => message}) when is_binary(message), do: message =~ ~r/not found/i
+  defp entity_not_found_error?(_error), do: false
 
   defp find_worktree_for_branch(porcelain_output, branch) when is_binary(branch) do
     porcelain_output
