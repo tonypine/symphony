@@ -1321,7 +1321,8 @@ When enabled:
   applied again once it moved the issue on: when the issue returns to `state` on the same head SHA,
   Symphony MUST drop that QA verdict and the acceptance gate's verdict for the SHA and run a fresh
   QA pass before the gate judges it. A `blocked` verdict from the QA agent is applied again as
-  before.
+  before. A `blocked` stored before Symphony recorded which kind it was is classified by its
+  reason: one of Symphony's own error reasons counts as not given by the QA agent.
 - QA selection is deterministic and runs before any agent: a `qa:skip` label skips; a
   `qa:<kind>` label selects that playbook; a diff that only touches docs, tests or `skip_globs`
   skips; otherwise playbooks are selected by their trigger paths, and the `cli` playbook also by a
