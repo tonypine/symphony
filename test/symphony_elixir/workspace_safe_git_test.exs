@@ -27,6 +27,7 @@ defmodule SymphonyElixir.WorkspaceSafeGitTest do
       printf 'GIT_CONFIG_GLOBAL:%s\\n' "$GIT_CONFIG_GLOBAL"
       printf 'GIT_CONFIG_SYSTEM:%s\\n' "$GIT_CONFIG_SYSTEM"
       printf 'GIT_OPTIONAL_LOCKS:%s\\n' "$GIT_OPTIONAL_LOCKS"
+      printf 'GIT_TERMINAL_PROMPT:%s\\n' "$GIT_TERMINAL_PROMPT"
     } > "#{trace}"
     """)
 
@@ -37,7 +38,8 @@ defmodule SymphonyElixir.WorkspaceSafeGitTest do
                env: [
                  {"GIT_CONFIG_GLOBAL", "/tmp/hostile-global"},
                  {"GIT_CONFIG_SYSTEM", "/tmp/hostile-system"},
-                 {"GIT_OPTIONAL_LOCKS", "1"}
+                 {"GIT_OPTIONAL_LOCKS", "1"},
+                 {"GIT_TERMINAL_PROMPT", "1"}
                ]
              )
 
@@ -45,6 +47,8 @@ defmodule SymphonyElixir.WorkspaceSafeGitTest do
     assert output =~ "-c core.sshCommand=ssh"
     assert output =~ "-c core.fsmonitor="
     assert output =~ "-c core.hooksPath="
+    assert output =~ "-c credential.helper= "
+    assert output =~ "-c core.askPass= "
     assert output =~ "-c protocol.ext.allow=never"
     assert output =~ "-c protocol.file.allow=user"
     assert output =~ "-c diff.ignoreSubmodules=dirty"
@@ -59,6 +63,7 @@ defmodule SymphonyElixir.WorkspaceSafeGitTest do
     assert output =~ "GIT_CONFIG_GLOBAL:/dev/null"
     assert output =~ "GIT_CONFIG_SYSTEM:/dev/null"
     assert output =~ "GIT_OPTIONAL_LOCKS:0"
+    assert output =~ "GIT_TERMINAL_PROMPT:0"
   end
 
   test "safe_git does not execute repo-local core.fsmonitor", %{test_root: test_root} do
@@ -374,6 +379,28 @@ defmodule SymphonyElixir.WorkspaceSafeGitTest do
     assert File.exists?(proof), "plain git runs the proxy, so the setup above is a real attack"
   end
 
+  test "safe_git runs no core.askPass the repo config sets when an HTTPS remote asks for credentials", %{test_root: test_root} do
+    repo = init_repo!(Path.join(test_root, "repo"))
+    proof = Path.join(test_root, "SYMPHONY_ASKPASS_PWNED")
+    askpass = proof_script!(test_root, proof)
+    # No askpass of the operator's stands in for the config's command.
+    env = [{"GIT_ASKPASS", nil}, {"SSH_ASKPASS", nil}]
+
+    git!(repo, ["remote", "add", "origin", "https://127.0.0.1:#{credentials_remote!()}/repo.git"])
+    git!(repo, ["config", "http.sslVerify", "false"])
+    git!(repo, ["config", "core.askPass", askpass])
+
+    for args <- [["ls-remote", "origin"], ["fetch", "origin"]] do
+      assert {output, status} = Workspace.safe_git(["-C", repo | args], env: env)
+      assert status != 0
+      assert output =~ "could not read Username"
+      refute File.exists?(proof)
+    end
+
+    System.cmd("git", ["-C", repo, "ls-remote", "origin"], env: [{"GIT_TERMINAL_PROMPT", "0"} | env], stderr_to_stdout: true)
+    assert File.exists?(proof), "plain git runs the askpass, so the setup above is a real attack"
+  end
+
   test "safe_git refuses to run git when a merge driver's name holds `=`", %{test_root: test_root} do
     repo = init_repo!(Path.join(test_root, "repo"))
     git!(repo, ["config", "merge.a=b.driver", "touch '#{Path.join(test_root, "pwned")}'"])
@@ -452,6 +479,46 @@ defmodule SymphonyElixir.WorkspaceSafeGitTest do
     {:ok, port} = :inet.port(listener)
     on_exit(fn -> :gen_tcp.close(listener) end)
     {listener, port}
+  end
+
+  # An HTTPS remote, with a self-signed certificate, that answers every request with a Basic
+  # auth challenge. Returns its port.
+  defp credentials_remote! do
+    {:ok, _apps} = Application.ensure_all_started(:ssl)
+    # RSA keys: the LibreSSL in Apple's git turns down the default test key.
+    rsa = [key: {:rsa, 2048, 65_537}]
+
+    %{server_config: server_config} =
+      :public_key.pkix_test_data(%{server_chain: %{root: rsa, peer: rsa}, client_chain: %{root: rsa, peer: rsa}})
+
+    {:ok, listener} =
+      :ssl.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}, reuseaddr: true] ++ Keyword.take(server_config, [:cert, :key]))
+
+    {:ok, {_address, port}} = :ssl.sockname(listener)
+    server = spawn(fn -> challenge(listener) end)
+    on_exit(fn -> Process.exit(server, :kill) end)
+    port
+  end
+
+  defp challenge(listener) do
+    case :ssl.transport_accept(listener) do
+      {:ok, transport} ->
+        with {:ok, connection} <- :ssl.handshake(transport, 5_000) do
+          _request = :ssl.recv(connection, 0, 5_000)
+
+          :ssl.send(
+            connection,
+            "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"repo\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+          )
+
+          :ssl.close(connection)
+        end
+
+        challenge(listener)
+
+      {:error, _closed} ->
+        :ok
+    end
   end
 
   # The client's request comes first; the connection closes once git is stopped.
