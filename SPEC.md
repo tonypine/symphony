@@ -2151,7 +2151,12 @@ The poller:
   already-answered comment is not replied to twice;
 - detects GitHub merge conflict signals (`mergeable == "CONFLICTING"` or
   `mergeStateStatus == "DIRTY"`), deduplicates by head/base identity, stores conflict context,
-  and moves the issue back to `In Progress` for agent-owned conflict resolution;
+  and moves the issue back to `In Progress` for agent-owned conflict resolution; a conflict on an
+  issue parked for a person (outside `tracker.active_states` with the `human_actions.label` label,
+  `needs-human` or another `auto_review.acceptance_gate.escalate.labels` label other than `plan`
+  and `breakdown`, as for a red head in the CI poller) is recorded as
+  `conflict_awaiting_human_action` with no state move, conflict-fix run or escalation and no retry
+  used, until a person removes the label or moves the issue to an active state;
 - moves the issue back to `In Progress` when GitHub reports approval so the orchestrator starts
   the merge/landing workflow through the normal run path;
 - removes tracked workspaces and durable review records when PRs merge, close, or remain idle

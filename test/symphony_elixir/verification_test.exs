@@ -4,7 +4,7 @@ defmodule SymphonyElixir.VerificationTest do
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Verification.DevServer, as: DevServerConfig
   alias SymphonyElixir.Verification
-  alias SymphonyElixir.Verification.{DevServer, PortPool}
+  alias SymphonyElixir.Verification.{DevServer, DevServerSandbox, PortPool}
 
   setup do
     stop_verification_port_pool()
@@ -272,7 +272,7 @@ defmodule SymphonyElixir.VerificationTest do
                  config: config,
                  env: Verification.env(%{port: port}),
                  owner: self(),
-                 sandbox: [os_type: {:unix, :darwin}, executable: sandbox_exec]
+                 sandbox: [os_type: {:unix, :darwin}, executable: sandbox_exec, check_confinement: false]
                )
 
       assert ["-p", profile, "/bin/sh", "-lc", start_cmd, ""] = record |> File.read!() |> String.split("\0")
@@ -414,21 +414,28 @@ defmodule SymphonyElixir.VerificationTest do
                )
     end
 
+    # Where Seatbelt can't keep a listener on loopback, the dev server doesn't start instead.
     @tag :seatbelt
     test "serves from inside the real sandbox", %{workspace: workspace, config: config, port: port} do
-      assert {:ok, pid} =
-               DevServer.start(
-                 run_id: "seatbelt-run",
-                 port: port,
-                 workspace: workspace,
-                 config: config,
-                 env: Verification.env(%{port: port}),
-                 owner: self(),
-                 sandbox: []
-               )
+      start =
+        DevServer.start(
+          run_id: "seatbelt-run",
+          port: port,
+          workspace: workspace,
+          config: config,
+          env: Verification.env(%{port: port}),
+          owner: self(),
+          sandbox: []
+        )
 
-      assert http_ok?("http://127.0.0.1:#{port}/")
-      assert :ok = DevServer.stop(pid)
+      if loopback_confined?(workspace) do
+        assert {:ok, pid} = start
+        assert http_ok?("http://127.0.0.1:#{port}/")
+        assert :ok = DevServer.stop(pid)
+      else
+        assert {:error, {:verification_failed, {:dev_server_sandbox_unconfined, :non_loopback_bind_allowed}}} = start
+        refute File.exists?(Path.join(workspace, "dev-server-env.txt"))
+      end
     end
 
     # Builds this checkout with `mix build` (in `_build/dev` and `bin/`), fetching its deps, before
@@ -446,19 +453,24 @@ defmodule SymphonyElixir.VerificationTest do
         stop_timeout_ms: 5_000
       }
 
-      assert {:ok, pid} =
-               DevServer.start(
-                 run_id: "qa-dashboard-seatbelt-run",
-                 port: port,
-                 workspace: File.cwd!(),
-                 config: config,
-                 env: Verification.env(%{port: port}),
-                 owner: self(),
-                 sandbox: []
-               )
+      start =
+        DevServer.start(
+          run_id: "qa-dashboard-seatbelt-run",
+          port: port,
+          workspace: File.cwd!(),
+          config: config,
+          env: Verification.env(%{port: port}),
+          owner: self(),
+          sandbox: []
+        )
 
-      assert http_ok?("http://127.0.0.1:#{port}/")
-      assert :ok = DevServer.stop(pid)
+      if loopback_confined?(File.cwd!()) do
+        assert {:ok, pid} = start
+        assert http_ok?("http://127.0.0.1:#{port}/")
+        assert :ok = DevServer.stop(pid)
+      else
+        assert {:error, {:verification_failed, {:dev_server_sandbox_unconfined, :non_loopback_bind_allowed}}} = start
+      end
     end
   end
 
@@ -679,6 +691,15 @@ defmodule SymphonyElixir.VerificationTest do
     else
       false
     end
+  end
+
+  # Whether Seatbelt refuses a non-loopback bind under the dev server's profile on this Mac,
+  # checked here without `DevServerSandbox.command/4`'s own check.
+  defp loopback_confined?(workspace) do
+    profile = DevServerSandbox.profile(workspace, [workspace], [])
+    bind = ~s{import socket; socket.socket().bind(("0.0.0.0", 0))}
+    {_output, status} = System.cmd("/usr/bin/sandbox-exec", ["-p", profile, "/usr/bin/python3", "-c", bind], stderr_to_stdout: true)
+    status != 0
   end
 
   defp http_ok?(url) do

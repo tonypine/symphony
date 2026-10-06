@@ -27,6 +27,12 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
   folder are given with their links resolved, and a denied path outside the home folder also
   with its real path (`/var/root` is `/private/var/root`).
 
+  Some macOS versions don't keep a listener on loopback: on macOS 15 the rule that lets the
+  dev server accept connections on loopback also lets it bind `0.0.0.0` and the LAN address.
+  So before the first dev server starts, a process under the profile binds `0.0.0.0`, and unless
+  Seatbelt refuses it the dev server does not start (`:dev_server_sandbox_unconfined`). The
+  verdict holds until Symphony restarts.
+
   On Linux the command runs under bubblewrap (`bwrap`) instead, with the same limits built from
   mounts and namespaces (`bwrap_args/4`): the whole filesystem read-only but the same writable
   paths, the denied read paths covered by empty ones, and a network namespace of its own that
@@ -64,6 +70,13 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
   @launch_services ~w(com.apple.coreservices.launchservicesd com.apple.coreservices.appleevents)
   @launch_services_prefixes ~w(com.apple.lsd.)
   @launcher_executables ~w(/usr/bin/open /usr/bin/osascript /bin/launchctl)
+  # Binds every address on a free port, and exits non-zero with the reason when it can't.
+  @confinement_probe [
+    "/usr/bin/perl",
+    "-MSocket",
+    "-e",
+    ~S{socket(my $s, PF_INET, SOCK_STREAM, 0) or die "socket: $!\n"; bind($s, sockaddr_in(0, INADDR_ANY)) or die "bind: $!\n"; print "bound\n"}
+  ]
 
   # A pid namespace that dies with the launcher's child, and no network but loopback. No
   # `--new-session`: the dev server stops by its process group, and it has no terminal to reach.
@@ -76,10 +89,12 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
   @doc """
   The argv that runs `start_cmd` with `sh -lc` inside the sandbox, writable in `workspace`
   and `tmp_dir`, and the empty folders the sandbox makes in `workspace` (`bwrap_args/4`), for
-  the caller to remove once nothing runs in it. Options: `:os_type` (default `:os.type()`); on
-  macOS `:executable` (default `/usr/bin/sandbox-exec`) and `:getconf` (for the item replacement
-  folder); on Linux `:bwrap` and `:socat` (default: found on `PATH`), and the dev server's
-  `:port` and the egress proxy's `:proxy_port`, which the bridges carry.
+  the caller to remove once nothing runs in it. On macOS the profile must first be known to keep
+  listeners on loopback on this Mac. Options: `:os_type` (default `:os.type()`); on macOS
+  `:executable` (default `/usr/bin/sandbox-exec`), `:getconf` (for the item replacement folder)
+  and `:check_confinement` (default `true`; the tests' stand-in for `sandbox-exec`, which drops
+  the profile, turns it off); on Linux `:bwrap` and `:socat` (default: found on `PATH`), and the
+  dev server's `:port` and the egress proxy's `:proxy_port`, which the bridges carry.
   """
   @spec command(String.t(), Path.t(), Path.t(), keyword()) :: {:ok, [String.t()], [Path.t()]} | {:error, term()}
   def command(start_cmd, workspace, tmp_dir, opts) when is_binary(start_cmd) do
@@ -94,9 +109,7 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
     executable = Keyword.get(opts, :executable, @sandbox_exec)
 
     if File.regular?(executable) do
-      write_paths = [workspace, tmp_dir] ++ AgentCaches.write_paths() ++ item_replacement_paths(opts)
-      profile = profile(workspace, write_paths, protected_paths(workspace))
-      {:ok, [executable, "-p", profile, "/bin/sh", "-lc", start_cmd], []}
+      sandboxed_command(start_cmd, workspace, tmp_dir, executable, opts)
     else
       {:error, {:dev_server_sandbox_unavailable, {:not_found, executable}}}
     end
@@ -169,6 +182,50 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
   defp socket_path(tmp_dir, name) do
     path = Path.join(real_path(tmp_dir), name)
     if path =~ ~r"\A[A-Za-z0-9/._-]{1,107}\z", do: {:ok, path}, else: {:error, {:unusable_socket_path, path}}
+  end
+
+  defp sandboxed_command(start_cmd, workspace, tmp_dir, executable, opts) do
+    write_paths = [workspace, tmp_dir] ++ AgentCaches.write_paths() ++ item_replacement_paths(opts)
+    profile = profile(workspace, write_paths, protected_paths(workspace))
+
+    with :ok <- check_confinement(executable, profile, opts) do
+      {:ok, [executable, "-p", profile, "/bin/sh", "-lc", start_cmd], []}
+    end
+  end
+
+  # The macOS version can't change while Symphony runs, so a bind refused or allowed is kept; a
+  # probe that couldn't run is tried again next time.
+  defp check_confinement(executable, profile, opts) do
+    key = {__MODULE__, :confinement, executable}
+
+    cond do
+      not Keyword.get(opts, :check_confinement, true) ->
+        :ok
+
+      verdict = :persistent_term.get(key, nil) ->
+        verdict
+
+      true ->
+        case probe_confinement(executable, profile) do
+          {:error, {:dev_server_sandbox_unconfined, {:probe_failed, _status, _output}}} = error -> error
+          verdict -> tap(verdict, &:persistent_term.put(key, &1))
+        end
+    end
+  end
+
+  # Only Seatbelt refusing the bind proves the confinement: a bind that works, or a probe that
+  # can't run, leaves the dev server unstarted. `sandbox-exec` that can't apply the profile also
+  # says "Operation not permitted", so the refusal must come from the bind.
+  defp probe_confinement(executable, profile) do
+    case System.cmd(executable, ["-p", profile | @confinement_probe], stderr_to_stdout: true) do
+      {_output, 0} ->
+        {:error, {:dev_server_sandbox_unconfined, :non_loopback_bind_allowed}}
+
+      {output, status} ->
+        if output =~ "bind: Operation not permitted",
+          do: :ok,
+          else: {:error, {:dev_server_sandbox_unconfined, {:probe_failed, status, String.trim(output)}}}
+    end
   end
 
   # Foundation stages a sandboxed process's atomic writes in

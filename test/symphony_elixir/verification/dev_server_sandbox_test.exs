@@ -27,7 +27,8 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
                DevServerSandbox.command("mix phx.server", workspace, tmp_dir,
                  os_type: {:unix, :darwin},
                  executable: executable,
-                 getconf: "false"
+                 getconf: "false",
+                 check_confinement: false
                )
 
       assert profile =~ ~s{(subpath "#{real(workspace)}")}
@@ -54,7 +55,8 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
                DevServerSandbox.command("mix phx.server", workspace, tmp_dir,
                  os_type: {:unix, :darwin},
                  executable: executable,
-                 getconf: getconf
+                 getconf: getconf,
+                 check_confinement: false
                )
 
       assert profile =~ ~s{(subpath "#{Path.join(real(root), "user-temp/TemporaryItems")}")}
@@ -64,6 +66,45 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
     test "fails off macOS and Linux, where it has no sandbox", %{workspace: workspace, tmp_dir: tmp_dir} do
       assert {:error, {:dev_server_sandbox_unavailable, {:win32, :nt}}} =
                DevServerSandbox.command("mix phx.server", workspace, tmp_dir, os_type: {:win32, :nt})
+    end
+
+    test "checks once that the profile refuses a non-loopback bind before it hands back the command", %{root: root, workspace: workspace, tmp_dir: tmp_dir} do
+      calls = Path.join(root, "probe-calls")
+      executable = fake_sandbox_exec(root, "printf '%s\\0' \"$@\" >> '#{calls}'\necho 'bind: Operation not permitted' >&2\nexit 1")
+
+      assert {:ok, [^executable, "-p", profile, "/bin/sh", "-lc", "mix phx.server"], []} =
+               command(workspace, tmp_dir, executable)
+
+      assert {:ok, _argv, []} = command(workspace, tmp_dir, executable)
+
+      assert ["-p", ^profile, "/usr/bin/perl", "-MSocket", "-e", probe, ""] = calls |> File.read!() |> String.split("\0")
+      assert probe =~ "INADDR_ANY"
+    end
+
+    test "doesn't hand back the command when the profile lets a command bind beyond loopback", %{root: root, workspace: workspace, tmp_dir: tmp_dir} do
+      executable = fake_sandbox_exec(root, "echo bound")
+
+      assert {:error, {:dev_server_sandbox_unconfined, :non_loopback_bind_allowed}} =
+               command(workspace, tmp_dir, executable)
+    end
+
+    test "doesn't hand back the command when the bind check can't run, and tries it again next time", %{root: root, workspace: workspace, tmp_dir: tmp_dir} do
+      calls = Path.join(root, "probe-calls")
+      executable = fake_sandbox_exec(root, "echo call >> '#{calls}'\necho 'perl: not found' >&2\nexit 127")
+
+      for _attempt <- 1..2 do
+        assert {:error, {:dev_server_sandbox_unconfined, {:probe_failed, 127, "perl: not found"}}} =
+                 command(workspace, tmp_dir, executable)
+      end
+
+      assert File.read!(calls) == "call\ncall\n"
+    end
+
+    test "doesn't take sandbox-exec failing to apply the profile for a refused bind", %{root: root, workspace: workspace, tmp_dir: tmp_dir} do
+      executable = fake_sandbox_exec(root, "echo 'sandbox-exec: sandbox_apply: Operation not permitted' >&2\nexit 71")
+
+      assert {:error, {:dev_server_sandbox_unconfined, {:probe_failed, 71, "sandbox-exec: sandbox_apply: Operation not permitted"}}} =
+               command(workspace, tmp_dir, executable)
     end
 
     test "fails when sandbox-exec is missing", %{root: root, workspace: workspace, tmp_dir: tmp_dir} do
@@ -455,13 +496,21 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
       assert code =~ ~r/^[234]\d\d$/
     end
 
-    test "a command can't listen on a non-loopback address", %{workspace: workspace, tmp_dir: tmp_dir, home: home} do
+    # Where this macOS lets a sandboxed command listen beyond loopback, nothing starts under the
+    # profile at all.
+    test "a command can't listen on a non-loopback address, or the sandbox starts none", %{workspace: workspace, tmp_dir: tmp_dir, home: home} do
       profile = DevServerSandbox.profile(workspace, [workspace, tmp_dir], [], home)
       python = "import socket; s = socket.socket(); s.bind((\"0.0.0.0\", 0)); s.listen()"
 
-      assert {output, status} = seatbelt(profile, workspace, "python3 -c '#{python}'")
-      assert status != 0
-      assert output =~ "Operation not permitted"
+      case seatbelt(profile, workspace, "python3 -c '#{python}'") do
+        {_output, 0} ->
+          assert {:error, {:dev_server_sandbox_unconfined, :non_loopback_bind_allowed}} =
+                   DevServerSandbox.command("true", workspace, tmp_dir, [])
+
+        {output, _status} ->
+          assert output =~ "Operation not permitted"
+          assert {:ok, ["/usr/bin/sandbox-exec" | _argv], []} = DevServerSandbox.command("true", workspace, tmp_dir, [])
+      end
     end
   end
 
@@ -575,6 +624,17 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
     {:ok, port} = :inet.port(socket)
     :gen_tcp.close(socket)
     port
+  end
+
+  defp fake_sandbox_exec(root, body) do
+    executable = Path.join(root, "sandbox-exec")
+    File.write!(executable, "#!/bin/sh\n#{body}\n")
+    File.chmod!(executable, 0o755)
+    executable
+  end
+
+  defp command(workspace, tmp_dir, executable) do
+    DevServerSandbox.command("mix phx.server", workspace, tmp_dir, os_type: {:unix, :darwin}, executable: executable, getconf: "false")
   end
 
   defp python_connect(host, port) do
