@@ -47,6 +47,11 @@ case SymphonyElixir.LeftoverProcesses.Table.read() do
   _denied -> ExUnit.configure(exclude: [:process_table | Keyword.get(ExUnit.configuration(), :exclude, [])])
 end
 
+# Tests that start the real `claude` binary need it on PATH; CI's runners don't install it.
+if is_nil(System.find_executable("claude")) do
+  ExUnit.configure(exclude: [:real_claude | Keyword.get(ExUnit.configuration(), :exclude, [])])
+end
+
 # Tests that measure an agent's niceness need `setpriority`, which sandboxed
 # agent runs deny; `nice` then warns and runs the command unchanged.
 case System.cmd("nice", ["-n", "1", "true"], stderr_to_stdout: true) do
