@@ -9,6 +9,31 @@ defmodule SymphonyElixir.QaDriverTest do
   @app "macos/build/Demo.app"
   @helper "/fake/symphony-qa-driver"
 
+  # Stands in for the QA agent's gh stub: it sends the test each call's form
+  # fields and answers `api` calls with the default branch, anything else with a
+  # 404.
+  defmodule GhStub do
+    @behaviour Plug
+
+    import Plug.Conn
+
+    @impl Plug
+    def init(opts), do: opts
+
+    @impl Plug
+    def call(conn, test: test) do
+      {:ok, body, conn} = read_body(conn)
+      fields = body |> URI.query_decoder() |> Enum.to_list()
+      args = for {"arg", arg} <- fields, do: arg
+      send(test, {:gh_call, :proplists.get_value("argc", fields), args})
+
+      case args do
+        ["api" | _rest] -> send_resp(conn, 200, "main\n")
+        _other -> send_resp(conn, 404, "gh stub: no answer for #{Enum.join(args, " ")}\n")
+      end
+    end
+  end
+
   setup do
     File.mkdir_p!(System.tmp_dir!())
     {:ok, tmp} = PathSafety.canonicalize(System.tmp_dir!())
@@ -75,6 +100,10 @@ defmodule SymphonyElixir.QaDriverTest do
 
   # The crash report listing: none unless a test's `crash_reports` replies say so.
   defp default_cmd("/bin/sh", ["-c", _script, "sh", "Demo"], _opts, replies), do: Map.get(replies, "crash_reports", {:ok, {"", 0}})
+
+  # The scripts that work in the driver's own directory (the fake gh, a
+  # checkout) run for real.
+  defp default_cmd("/bin/sh", ["-c", _script, "sh", _dir | _rest] = args, opts, _replies), do: Host.cmd("/bin/sh", args, opts)
 
   defp default_cmd(@helper, ["screenshot" | _rest] = args, _opts, _replies) do
     File.write!(List.last(args), "png")
@@ -874,6 +903,186 @@ defmodule SymphonyElixir.QaDriverTest do
     end
   end
 
+  describe "app stand-ins" do
+    # A git bundle of a repo with `files`, made the way the playbook says.
+    defp bundle!(dir, files) do
+      repo = Path.join(dir, "repo-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(repo)
+      for {name, contents} <- files, do: File.write!(Path.join(repo, name), contents)
+      git = fn args -> {_output, 0} = System.cmd("git", ["-c", "user.name=QA", "-c", "user.email=qa@example.com" | args], cd: repo, stderr_to_stdout: true) end
+      git.(["init", "--quiet", "--initial-branch=main"])
+      git.(["add", "."])
+      git.(["commit", "--quiet", "-m", "fixture"])
+      bundle = repo <> ".bundle"
+      git.(["bundle", "create", bundle, "--all"])
+      bundle
+    end
+
+    defp put_checkout(driver, args), do: QaDriver.call_tool(driver, "qa_put_checkout", args)
+
+    test "the launched app runs Symphony's fake gh, which hands each call to the agent's gh stub", %{root: root, worktree: worktree} do
+      app = """
+      #!/bin/sh
+      "$SYMPHONY_BAR_GH" api repos/acme/widgets --jq .default_branch; echo "first=$?"
+      "$SYMPHONY_BAR_GH" pr create --title 'Add WORKFLOW.md' --body 'two
+      lines & = %'; echo "second=$?"
+      SYMPHONY_QA_GH_URL= "$SYMPHONY_BAR_GH" auth status; echo "third=$?"
+      SYMPHONY_QA_GH_URL=http://127.0.0.1:1 "$SYMPHONY_BAR_GH" auth status; echo "fourth=$?"
+      """
+
+      build = fn
+        "/bin/sh", ["-c", "make app"], opts ->
+          write_bundle(opts[:cd], app)
+          File.chmod!(Path.join([opts[:cd], @app, "Contents/MacOS/Demo"]), 0o755)
+          {:ok, {"", 0}}
+
+        executable, args, opts ->
+          default_cmd(executable, args, opts, %{})
+      end
+
+      driver = start_driver(worktree, tmp_dir: root, host: host(%{cmd: build, launch: &Host.launch/2}))
+      {:ok, [port | _rest]} = QaDriver.host_ports(driver)
+      start_supervised!({Bandit, plug: {GhStub, test: self()}, ip: {127, 0, 0, 1}, port: port, startup_log: false})
+
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+      {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{"gh_stub_port" => port}) end)
+      assert {:ok, %{"pid" => pid}} = result
+      wait_until(fn -> :sys.get_state(driver).apps[pid].exit_status != nil end, 1_000)
+      assert {:ok, %{"output" => output, "exit_status" => 0}} = QaDriver.call_tool(driver, "qa_quit_app", %{"pid" => pid})
+
+      assert_received {:gh_call, "4", ["api", "repos/acme/widgets", "--jq", ".default_branch"]}
+      assert_received {:gh_call, "6", ["pr", "create", "--title", "Add WORKFLOW.md", "--body", "two\nlines & = %"]}
+      assert output =~ "main\nfirst=0\n"
+      assert output =~ "gh stub: no answer for pr create --title Add WORKFLOW.md --body two\nlines & = %\nsecond=1\n"
+      assert output =~ "SYMPHONY_QA_GH_URL is not set\nthird=1\n"
+      assert output =~ "couldn't reach the gh stub at http://127.0.0.1:1\nfourth=1\n"
+
+      %{scratch_dir: scratch_dir} = GenServer.call(driver, :config)
+      assert File.stat!(Path.join(scratch_dir, "bin/gh")).mode |> Bitwise.band(0o777) == 0o700
+    end
+
+    test "puts a checkout of a bundle and opens the folder picker in it", %{root: root, worktree: worktree} do
+      driver = start_driver(worktree, tmp_dir: root)
+      bundle = bundle!(root, %{"package.json" => "{}\n"})
+
+      assert {:ok, %{"path" => path, "remote_url" => "https://github.com/acme/widgets.git"}} =
+               put_checkout(driver, %{"local_path" => bundle, "remote_url" => "https://github.com/acme/widgets"})
+
+      %{scratch_dir: scratch_dir} = GenServer.call(driver, :config)
+      assert path == Path.join(scratch_dir, "checkouts/widgets")
+      assert File.read!(Path.join(path, "package.json")) == "{}\n"
+      assert {"https://github.com/acme/widgets.git\n", 0} = System.cmd("git", ["-C", path, "remote", "get-url", "origin"])
+      assert {"origin/main\n", 0} = System.cmd("git", ["-C", path, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+      assert File.ls!(scratch_dir) |> Enum.filter(&String.ends_with?(&1, ".bundle")) == []
+
+      assert {:ok, %{"path" => other}} =
+               put_checkout(driver, %{"local_path" => bundle, "remote_url" => "https://github.com/acme/widgets.git", "remote_name" => "with-workflow"})
+
+      assert other == Path.join(scratch_dir, "checkouts/with-workflow")
+
+      assert {:error, {:qa_tool, "qa_put_checkout_failed", message}} =
+               put_checkout(driver, %{"local_path" => bundle, "remote_url" => "https://github.com/acme/widgets"})
+
+      assert message =~ "already exists; pass another remote_name"
+
+      {:ok, [gh_port, linear_port | _rest]} = QaDriver.host_ports(driver)
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+      args = %{"gh_stub_port" => gh_port, "linear_stub_port" => linear_port, "open_panel_dir" => path}
+      {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", args) end)
+      assert {:ok, %{"pid" => _pid}} = result
+      assert_received {:launched, _executable, launch_opts, _port, _pid}
+      env = Map.new(launch_opts[:env])
+      assert env[~c"SYMPHONY_BAR_GH"] == String.to_charlist(Path.join(scratch_dir, "bin/gh"))
+      assert env[~c"SYMPHONY_QA_GH_URL"] == ~c"http://localhost:#{gh_port}"
+      assert env[~c"SYMPHONY_QA_LINEAR_URL"] == ~c"http://localhost:#{linear_port}/graphql"
+      assert env[~c"SYMPHONY_BAR_QA_OPEN_PANEL_DIR"] == String.to_charlist(path)
+
+      # Without stand-in arguments the app gets none of them.
+      {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{}) end)
+      assert {:ok, %{"pid" => _pid}} = result
+      assert_received {:launched, _executable, launch_opts, _port, _pid}
+      refute Enum.any?(launch_opts[:env], fn {name, _value} -> name in [~c"SYMPHONY_BAR_GH", ~c"SYMPHONY_QA_LINEAR_URL", ~c"SYMPHONY_BAR_QA_OPEN_PANEL_DIR"] end)
+    end
+
+    test "refuses stand-in arguments it can't honour", %{worktree: worktree} do
+      driver = start_driver(worktree)
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+      {:ok, [port | _rest] = ports} = QaDriver.host_ports(driver)
+      unused = Enum.find(40_000..60_000, &(&1 not in ports))
+
+      for {args, expected} <- [
+            {%{"gh_stub_port" => unused}, "`gh_stub_port` must be one of QA_HOST_PORTS (#{Enum.join(ports, ", ")})"},
+            {%{"gh_stub_port" => "#{port}"}, "`gh_stub_port` must be one of QA_HOST_PORTS"},
+            {%{"linear_stub_port" => unused}, "`linear_stub_port` must be one of QA_HOST_PORTS"},
+            {%{"open_panel_dir" => "/Users/qa/repo"}, "`open_panel_dir` must be a path qa_put_checkout returned"}
+          ] do
+        assert {:error, {:qa_tool, "invalid_arguments", message}} = QaDriver.call_tool(driver, "qa_launch_app", args)
+        assert message =~ expected
+      end
+
+      refute_received {:launched, _executable, _opts, _port, _pid}
+
+      for reply <- [{:ok, {"mkdir: denied\n", 1}}, {:ok, {"", 0}}, {:error, :timeout}] do
+        cmd = fn
+          "/bin/sh", ["-c", _script, "sh", _dir, "#!/bin/sh" <> _fake], _opts -> reply
+          executable, args, opts -> default_cmd(executable, args, opts, %{})
+        end
+
+        driver = start_driver(worktree, host: host(%{cmd: cmd}))
+        assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+        {:ok, [port | _rest]} = QaDriver.host_ports(driver)
+        assert {:error, {:qa_tool, "qa_launch_failed", message}} = QaDriver.call_tool(driver, "qa_launch_app", %{"gh_stub_port" => port})
+        assert message =~ "fake gh could not be installed"
+      end
+    end
+
+    test "refuses a checkout it can't make", %{root: root, worktree: worktree} do
+      driver = start_driver(worktree, tmp_dir: root)
+      bundle = bundle!(root, %{"README.md" => "hi\n"})
+      junk = Path.join(root, "junk.bundle")
+      File.write!(junk, "not a bundle")
+
+      for {args, expected} <- [
+            {%{"remote_url" => "https://github.com/acme/widgets"}, "`local_path` is required"},
+            {%{"local_path" => bundle}, "`remote_url` must be a GitHub repo URL"},
+            {%{"local_path" => bundle, "remote_url" => "https://gitlab.com/acme/widgets"}, "`remote_url` must be a GitHub repo URL"},
+            {%{"local_path" => bundle, "remote_url" => "https://github.com/acme/widgets/tree/main"}, "`remote_url` must be a GitHub repo URL"},
+            {%{"local_path" => bundle, "remote_url" => "https://github.com/acme/widgets", "remote_name" => "../x"}, "`remote_name` must be"}
+          ] do
+        assert {:error, {:qa_tool, "invalid_arguments", message}} = put_checkout(driver, args)
+        assert message =~ expected
+      end
+
+      outside = Path.join(Path.dirname(root), "outside-#{System.unique_integer([:positive])}.bundle")
+      File.write!(outside, "x")
+      on_exit(fn -> File.rm(outside) end)
+
+      assert {:error, {:qa_tool, "qa_put_checkout_refused", message}} =
+               put_checkout(driver, %{"local_path" => outside, "remote_url" => "https://github.com/acme/widgets"})
+
+      assert message =~ "is outside the QA worktree and $TMPDIR"
+
+      assert {:error, {:qa_tool, "qa_put_checkout_failed", message}} =
+               put_checkout(driver, %{"local_path" => junk, "remote_url" => "https://github.com/acme/widgets"})
+
+      assert message =~ "git could not clone the bundle (exit 1)"
+      assert message =~ "git bundle create <file> --all"
+      %{scratch_dir: scratch_dir} = GenServer.call(driver, :config)
+      refute File.exists?(Path.join(scratch_dir, "checkouts/widgets"))
+
+      for {reply, expected} <- [{{:ok, {"cloned\n", 0}}, "was not confirmed: cloned"}, {{:error, :timeout}, "could not clone the bundle: :timeout"}] do
+        cmd = fn
+          "/bin/sh", ["-c", _script, "sh", _dir, _bundle, _name, _url], _opts -> reply
+          executable, args, opts -> default_cmd(executable, args, opts, %{})
+        end
+
+        driver = start_driver(worktree, tmp_dir: root, host: host(%{cmd: cmd}))
+        assert {:error, {:qa_tool, "qa_put_checkout_failed", message}} = put_checkout(driver, %{"local_path" => bundle, "remote_url" => "https://github.com/acme/widgets"})
+        assert message =~ expected
+      end
+    end
+  end
+
   describe "worker_host" do
     @run_dir "/Users/qa/.symphony-qa/runs/run.abc123"
 
@@ -886,6 +1095,8 @@ defmodule SymphonyElixir.QaDriverTest do
       cmd = fn
         "/bin/sh", ["-c", "make app"], _opts -> {:ok, {"Build complete!\n", 0}}
         "/bin/sh", ["-c", _script, "sh", _build_dir, @app, dest], _opts -> bundle.(dest)
+        "/bin/sh", ["-c", _script, "sh", @run_dir, _bundle, name, _url], _opts -> {:ok, {"symphony-qa-checkout:#{@run_dir}/checkouts/#{name}\n", 0}}
+        "/bin/sh", ["-c", _script, "sh", @run_dir, _fake_gh], _opts -> {:ok, {"symphony-qa-gh:#{@run_dir}/bin/gh\n", 0}}
         @helper, ["screenshot" | _args], _opts -> {:ok, {~s({"ok":true}), 0}}
         executable, args, opts -> default_cmd(executable, args, opts, replies(Map.take(overrides, [:helper_replies])))
       end
@@ -1136,6 +1347,47 @@ defmodule SymphonyElixir.QaDriverTest do
       driver = remote_driver(worktree, remote_host(%{prepare: {:error, {:unsafe, "has a forwarded SSH agent"}}}))
       assert error_code(QaDriver.call_tool(driver, "qa_put_file", %{"local_path" => fixture})) == "qa_worker_unsafe"
       refute_received {:put, _local, _bytes, _dir, _name}
+    end
+
+    test "puts a checkout and the fake gh on the QA host", %{worktree: worktree} do
+      driver = remote_driver(worktree, remote_host())
+      bundle = Path.join(worktree, "qa-evidence/widgets.bundle")
+      File.mkdir_p!(Path.dirname(bundle))
+      File.write!(bundle, "bundle bytes")
+
+      assert {:ok, %{"path" => path}} =
+               QaDriver.call_tool(driver, "qa_put_checkout", %{"local_path" => "qa-evidence/widgets.bundle", "remote_url" => "https://github.com/acme/widgets"})
+
+      assert path == @run_dir <> "/checkouts/widgets"
+      assert_received {:put, local, "bundle bytes", @run_dir, "widgets.bundle"}
+      refute File.exists?(local)
+      assert_received {:cmd, "/bin/sh", ["-c", _script, "sh", @run_dir, remote_bundle, "widgets", "https://github.com/acme/widgets.git"], _opts}
+      assert remote_bundle == @run_dir <> "/files/widgets.bundle"
+
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+      {:ok, [gh_port, linear_port | _rest]} = QaDriver.host_ports(driver)
+      args = %{"gh_stub_port" => gh_port, "linear_stub_port" => linear_port, "open_panel_dir" => path}
+      {{:ok, %{"pid" => _pid}}, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", args) end)
+      assert_received {:launched, _executable, launch_opts, _port, _pid}
+
+      assert [
+               {"SYMPHONY_BAR_QA_ROOT", _qa_root},
+               {"SYMPHONY_QA_OPENROUTER_URL", _stub_url},
+               {"SYMPHONY_BAR_GH", @run_dir <> "/bin/gh"},
+               {"SYMPHONY_QA_GH_URL", gh_url},
+               {"SYMPHONY_QA_LINEAR_URL", linear_url},
+               {"SYMPHONY_BAR_QA_OPEN_PANEL_DIR", ^path}
+             ] = launch_opts[:env]
+
+      assert gh_url == "http://localhost:#{gh_port}"
+      assert linear_url == "http://localhost:#{linear_port}/graphql"
+
+      driver = remote_driver(worktree, remote_host(%{put: {:error, "exit 1: disk full"}}))
+
+      assert {:error, {:qa_tool, "qa_put_checkout_failed", message}} =
+               QaDriver.call_tool(driver, "qa_put_checkout", %{"local_path" => bundle, "remote_url" => "https://github.com/acme/widgets"})
+
+      assert message =~ "The bundle could not be copied to the QA host: exit 1: disk full"
     end
 
     test "reports a capture it cannot copy back", %{worktree: worktree} do
