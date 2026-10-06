@@ -103,7 +103,10 @@ branch instead of opening a second one. If a claimed issue moves to a terminal s
   once every sub-ticket is `Done`, `Canceled` or `Duplicate`, with a comment listing how each ended.
   With Auto Review on, the final verification ticket is a QA pass over the merged parent: the report
   goes on the parent and each failing step becomes a new ticket that blocks the verification
-  ticket, which waits in `Todo` and runs again once those tickets are done.
+  ticket, which waits in `Todo` and runs again once those tickets are done. The design this flow
+  is moving to (bug, feature and `plan` ticket types, one review of a whole plan, artifacts in
+  Linear documents) is recorded in
+  [ADR 0001: the Director workflow](docs/adr/0001-director-workflow.md).
 - **Actions for a human** — when work waits on something only a person can do (a missing secret, a
   plan to approve, a QA pass or a final verification blocked on a permission, an issue labelled
   `human-action`), Symphony posts a Linear project update listing each one with its steps, and posts
@@ -488,6 +491,9 @@ implementation detail. Tickets with no user-facing change can leave the section 
   [docs/quality_gate_security.md](docs/quality_gate_security.md), and
   [docs/token_accounting.md](docs/token_accounting.md) — operational deep-dives.
 - [WORKFLOW.md](WORKFLOW.md) — the example in-repo workflow contract and agent prompt.
+- [docs/adr/](docs/adr/README.md) — architecture decision records, starting with
+  [0001: the Director workflow](docs/adr/0001-director-workflow.md) for ticket types, plan review
+  and artifacts.
 
 ## About This Fork
 
