@@ -44,7 +44,8 @@ Which plan run this is:
   previous run stopped midway (a usage limit, a crash, a person moving it back).
   Read the workpad and the newest comments, keep every artifact comment and
   sub-ticket already made, do only what is left of the plan run below (never
-  file a sub-ticket a second time), and move the parent to `In Review`.
+  file a sub-ticket a second time), leave the review brief (see `Review brief`), and
+  move the parent to `In Review`.
 - **Revise:** Symphony moved the parent from `In Review` back to `In Progress`
   because a person commented on the plan. Follow the plan revision run below.
 - **Re-plan:** the parent is in `Rework`. Follow the re-plan run below.
@@ -64,9 +65,12 @@ Which plan run this is:
    other sub-ticket is `Done`. When the parent has a `## User walkthrough`, copy
    its numbered steps and expected results under an
    `## Auto Review: parent walkthrough` heading in this description.
-4. Record the plan and the sub-ticket identifiers in the workpad `Notes`, move the
-   parent to `In Review` with `linear_update_state`, and end the turn. The human
-   reviewing the plan reads it there.
+4. Record the plan and the sub-ticket identifiers in the workpad `Notes`. Leave the
+   review brief (see `Review brief`): one brief for the whole plan, linking every
+   artifact, listing every sub-ticket and every decision needed, with the moves that
+   approve, change or reject it. Then move the parent to `In Review` with
+   `linear_update_state` and end the turn. The human reviewing the plan reads the
+   brief, not the workpad.
 
 In `Rework` (a re-plan run), the human rejected the plan:
 
@@ -79,7 +83,9 @@ In `Rework` (a re-plan run), the human rejected the plan:
   already promoted it), and do not create one twice: a sub-ticket in `Backlog` that
   was created after the parent moved to `Rework` belongs to this re-plan.
 - Then follow steps 2-4 for the new plan, including the `Final verification:`
-  sub-ticket, and move the parent to `In Review` again.
+  sub-ticket. Edit the existing review brief in place with `linear_update_comment`,
+  with what the new plan changes under `What changed since the last brief`, and move
+  the parent to `In Review` again.
 
 ### Plan revision run (a person commented on the plan under review)
 
@@ -93,17 +99,17 @@ What triggers it:
   because Symphony never moves a ticket out of it; to have that plan revised, a
   person moves the parent to `Rework` or back to `In Review`.
 - Openers: a comment starting with `Supervisor review:` or `Supervisor note:` never
-  triggers a run, in any state, like Symphony's own comments (the workpad, QA
-  reports, `Action needed` requests, the promote and cancel lists, and notes starting
-  `Symphony stopped`, `Symphony parked`, `Symphony couldn't`, `Symphony turned off`
-  or `Symphony quality gate`). The supervisor posts as the operator, and plan
+  triggers a run, in any state, like Symphony's own comments (the workpad, the
+  review brief, QA reports, `Action needed` requests, the promote and cancel lists,
+  and notes starting `Symphony stopped`, `Symphony parked`, `Symphony couldn't`,
+  `Symphony turned off` or `Symphony quality gate`). The supervisor posts as the operator, and plan
   approval stays the operator's call.
 
 1. Read every comment since the plan was handed over for review (newest first with
-   `linear_get_comments`). Only people's comments count: skip the workpad, QA
-   reports, `Action needed` requests, Symphony's promote and cancel lists, supervisor
-   notes (`Supervisor review:`, `Supervisor note:`), and integration bots. List in
-   the workpad what each comment asks.
+   `linear_get_comments`). Only people's comments count: skip the workpad, the
+   review brief, QA reports, `Action needed` requests, Symphony's promote and cancel
+   lists, supervisor notes (`Supervisor review:`, `Supervisor note:`), and integration
+   bots. List in the workpad what each comment asks.
 2. Edit the existing artifact comments (use cases, features, journeys and so on) with
    `linear_update_comment` instead of posting new copies. Start each edited comment
    with a short note of what changed.
@@ -114,8 +120,11 @@ What triggers it:
    `cancel_reason` saying why. Leave every sub-ticket outside `Backlog` as it is.
 4. Reply under each comment with `linear_add_comment` and its `parent_id`: what
    changed, or why nothing did for a question or a pushback.
-5. Record the changes in the workpad `Notes`, move the parent to `In Review` with
-   `linear_update_state`, and end the turn. Never move it to `Waiting on sub-tickets`
+5. Record the changes in the workpad `Notes`. Edit the existing review brief in place
+   with `linear_update_comment` (never post a second one): bring every part up to date
+   and list under `What changed since the last brief` one line per change and the
+   comment it answers. Then move the parent to `In Review` with `linear_update_state`
+   and end the turn. Never move it to `Waiting on sub-tickets`
    and never promote a sub-ticket: approval stays a person's move.
 
 A comment on an approved plan (the parent in `Waiting on sub-tickets`, or back in
@@ -158,4 +167,6 @@ The steps below apply when it does not
 3. When every requirement is met, move this ticket to `In Review` for a human to
    sign off and move it to `Done`. When the requirements left can only be checked by a
    person (a real key, a device, a hand check), move it to `Human Review` instead and
-   list those checks in the workpad. The parent's close-out run follows.
+   list those checks in the workpad. Before either move, leave the review brief (see
+   `Review brief`): the requirements checked, the checks left for the person, and the
+   moves that sign it off or send it back. The parent's close-out run follows.

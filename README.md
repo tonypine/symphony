@@ -392,8 +392,10 @@ changes them.
 
 `symphony workflow preview` renders the exact base-issue prompt the agent would receive for the
 repo-local `WORKFLOW.md`, using deterministic sample issue data — no Linear access, network, or
-running orchestrator required. Use it to confirm your template and `{% render %}` partials resolve
-correctly before a real run:
+running orchestrator required. When the body is `{% render "playbook" %}`, the preview includes the
+instruction files next to that `WORKFLOW.md` (`.symphony/instructions/` by default; see
+[playbook](docs/playbook.md#the-whole-playbook-in-one-line)). Use it to confirm your template and
+`{% render %}` partials resolve correctly before a real run:
 
 ```bash
 ./bin/symphony workflow preview                       # renders ./WORKFLOW.md

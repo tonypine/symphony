@@ -5,7 +5,9 @@ repo `WORKFLOW.md` pulls the blocks it wants into its own structure with the
 Solid `{% render %}` tag, so the shared prose lives in one place
 (`priv/playbook/*.liquid`) and stops drifting across repos. Repo-specific
 structure — status map, step ordering, completion bar, conventions — stays
-authored in the repo's `WORKFLOW.md`.
+authored by the repo, either in its `WORKFLOW.md` or, with
+[the whole playbook in one line](#the-whole-playbook-in-one-line), in instruction
+files an agent may edit.
 
 ## How to use
 
@@ -34,6 +36,76 @@ This catalog is kept in sync with `priv/playbook/` by
 `test/symphony_elixir/playbook_catalog_test.exs` — edit the partial's
 `{% comment %}` header and this table together.
 
+## The whole playbook in one line
+
+A repo can also take every standard partial at once and keep its own instructions out
+of `WORKFLOW.md`. Its body is then one line:
+
+```liquid
+{% render "playbook" %}
+```
+
+Symphony expands that line when it loads the workflow, before Solid parses it. It
+becomes the partials below, each on its slot, with the repo's instruction files
+between them by number:
+
+| Slot | Partial |
+| --- | --- |
+| 10 | `continuation_context` |
+| 20 | `issue_context` |
+| 30 | `default_posture` |
+| 40 | `scoped_tools` |
+| 50 | `status_map` |
+| 60 | `pr_feedback_sweep` |
+| 70 | `ci_triage` |
+| 80 | `escape_hatches` |
+| 90 | `parent_tickets` |
+| 95 | `review_brief` |
+| 100 | `completion_bar` |
+| 110 | `guardrails` |
+| 120 | `out_of_scope_backlog` |
+| 130 | `dependency_guardrail` (only with `playbook.lockfile`) |
+| 140 | `workpad_template` |
+
+The instruction files are the `NNN-name.md` files in `.symphony/instructions/`, next to
+`WORKFLOW.md`. `NNN` places the file: `041-command-and-output-hygiene.md` comes after
+`scoped_tools` (40) and before `status_map` (50), and a file on a partial's own number
+comes right after that partial. Other files in the directory, such as a `README.md`,
+are left out, and so are symlinks and directories with such a name: an instruction
+file must be a regular file. Each file goes in as written, with a blank line between sections, so it
+uses the same Liquid variables as a `WORKFLOW.md` body (`{{ issue.identifier }}`,
+`{{ agent.workpad_heading }}`) and may render a partial itself. A file must not hold
+the `{% render "playbook" %}` line.
+
+The front matter's `playbook` map shapes the rest. It stays in `WORKFLOW.md`, so a
+change to it stays a person's call:
+
+```yaml
+playbook:
+  instructions: .symphony/instructions   # the default; relative to WORKFLOW.md
+  lockfile: mix.lock                     # the lock file dependency_guardrail cites
+  partials:
+    ci_triage: false                     # drop a partial
+    status_map: 45                       # move one to another slot
+    workpad_bootstrap: 52                # add one the playbook leaves out
+```
+
+A partial Symphony adds to this list reaches every repo that uses the line, with no
+`WORKFLOW.md` edit. A new partial takes a free slot, so the repo text around it stays
+where it was. A repo that keeps its instructions inline in `WORKFLOW.md`, with its own
+`{% render %}` lines, renders exactly as before.
+
+Symphony reads the instruction files from the same place as `WORKFLOW.md`: the
+fetched base branch, `origin/<base_branch>` (see `workflow_source` in
+[configuration](configuration.md)). An agent may edit them, since they are not
+write-protected, but its edits reach runs only once their pull request is merged.
+The run's own branch and checkout never change its prompt. With `workflow_source: local`
+they are read from disk next to `WORKFLOW.md`, and an edit to one reloads the workflow
+like an edit to `WORKFLOW.md`. See [security](security.md#workflow-and-instruction-files).
+
+`symphony workflow preview` shows the assembled prompt, instruction files included,
+read from the disk next to the `WORKFLOW.md` it renders.
+
 ## Available partials
 
 | Partial | Vars | Description |
@@ -50,6 +122,7 @@ This catalog is kept in sync with `priv/playbook/` by
 | `parent_tickets` | — | Plan tickets (label plan, or breakdown, its older name) are groomed into sub-tickets; plan (new, resumed, revised, re-planned), final verification, and close-out runs never open a PR. |
 | `pr_feedback_sweep` | — | Required sweep of all PR feedback channels; every actionable comment must be resolved or answered before In Review. |
 | `reproduce_and_blast_radius` | — | Capture a reproduction/acceptance signal and a blast-radius analysis before the first code edit. |
+| `review_brief` | — | One human-facing review brief per ticket, edited in place at every handoff: what to review, what changed, the decisions needed and the move that approves, changes or rejects. |
 | `scoped_tools` | — | How to discover and use the scoped linear_* and github_* tools Symphony injects for the current issue. |
 | `status_map` | — | Canonical Symphony issue state machine and what each state means for the agent. |
 | `ticket_types` | `issue` | Per-type steps for a ticket labelled type:bug, type:feature or plan, with a readiness check that sends a bug or feature missing a required section back to Backlog; renders nothing for an untyped ticket. |
@@ -60,6 +133,11 @@ The plan flow in `parent_tickets` (plan run, single plan review, approval
 through `Waiting on sub-tickets`, close-out) is the base of the Director workflow:
 [ADR 0001](adr/0001-director-workflow.md) records the ticket types, the plan stages
 and where a plan's artifacts live.
+
+`parent_tickets`, `escape_hatches`, `completion_bar` and `default_posture` ask for the
+review brief at their handoffs, so render `review_brief` in any workflow that renders
+them; `{% render "playbook" %}` already does. The brief is the one comment written for
+the person reviewing; the workpad stays the agent's log.
 
 `ticket_types` routes a ticket by its type label (`type:bug`, `type:feature` or `plan`) and runs
 the readiness check on bugs and features. The templates the operator writes those tickets from,
@@ -105,6 +183,7 @@ You are working on a Linear ticket `{{ issue.identifier }}`
 <!-- repo-authored: extra guardrails, e.g. lock-file rule -->
 
 {% render "parent_tickets" %}
+{% render "review_brief" %}
 {% render "out_of_scope_backlog" %}
 {% render "dependency_guardrail", lockfile: "<your-lock-file>" %}
 {% render "workpad_template", agent: agent %}
