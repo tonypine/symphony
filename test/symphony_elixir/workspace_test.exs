@@ -1,6 +1,8 @@
 defmodule SymphonyElixir.WorkspaceTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.Repo.Fetcher
+
   describe "validate/2" do
     test "accepts local paths under the workspace root" do
       test_root = unique_tmp("workspace-validate-local")
@@ -222,6 +224,57 @@ defmodule SymphonyElixir.WorkspaceTest do
     end
   end
 
+  test "a worktree remove waits while an add of the same repo holds the repo's lock" do
+    test_root = unique_tmp("workspace-remove-lock")
+    primary_repo = Path.join(test_root, "primary")
+    workspace_root = Path.join(test_root, "workspaces")
+    added = Path.join(test_root, "added")
+
+    try do
+      create_primary_repo!(primary_repo)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        workspace_fetch_before_dispatch: false
+      )
+
+      assert {:ok, workspace} = Workspace.create_for_issue("RSM-REMOVE")
+      {:ok, key} = SymphonyElixir.PathSafety.canonicalize(Path.join(primary_repo, ".git"))
+      test_pid = self()
+
+      # Holds the lock the way a dispatch's `worktree add` does, until the test lets it go.
+      adder =
+        Task.async(fn ->
+          Fetcher.with_lock(primary_repo, fn ->
+            git!(primary_repo, ["worktree", "add", "-b", "auto/RSM-ADD", added])
+            send(test_pid, :added)
+
+            receive do
+              :release -> :ok
+            end
+          end)
+        end)
+
+      assert_receive :added, 10_000
+      remover = Task.async(fn -> Workspace.remove(workspace) end)
+      wait_for_fetcher(&match?(%{^key => {{:lock, _ref}, [{:lock, _from}]}}, &1))
+
+      assert worktree_count(primary_repo, workspace) == 1
+      assert git_branch_exists?(primary_repo, "auto/RSM-REMOVE")
+
+      send(adder.pid, :release)
+      assert Task.await(adder, 10_000) == :ok
+      assert Task.await(remover, 10_000) == {:ok, [workspace]}
+
+      refute File.exists?(workspace)
+      refute git_branch_exists?(primary_repo, "auto/RSM-REMOVE")
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "worktree preparations of one repo at once share a single fetch" do
     test_root = unique_tmp("workspace-concurrent-fetch")
     primary_repo = Path.join(test_root, "primary")
@@ -400,6 +453,17 @@ defmodule SymphonyElixir.WorkspaceTest do
       _fetches when attempts > 0 ->
         Process.sleep(10)
         wait_for_fetch_waiters(key, count, attempts - 1)
+    end
+  end
+
+  defp wait_for_fetcher(matches, attempts \\ 500) do
+    cond do
+      matches.(:sys.get_state(Fetcher)) ->
+        :ok
+
+      attempts > 0 ->
+        Process.sleep(10)
+        wait_for_fetcher(matches, attempts - 1)
     end
   end
 
