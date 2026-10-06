@@ -316,8 +316,12 @@ defmodule SymphonyElixir.AuditLogTest do
     event = fn type -> %{issue_id: "issue-1", run_id: "run-1", timestamp: timestamp, event_type: type} end
     last_line = fn -> path |> File.read!() |> String.split("\n", trim: true) |> List.last() |> Jason.decode!() end
 
-    # A day that holds no hashed record starts the chain.
+    # A day whose file is empty, or holds no hashed record, starts the chain.
     File.mkdir_p!(audit_dir)
+    File.write!(path, "")
+    assert :ok = AuditLog.record(event.("tool_call"), dir: audit_dir)
+    refute Map.has_key?(last_line.(), "previous_hash")
+
     File.write!(path, "not json\n")
     assert :ok = AuditLog.record(event.("tool_call"), dir: audit_dir)
     first = last_line.()

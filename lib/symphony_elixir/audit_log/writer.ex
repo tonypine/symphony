@@ -6,10 +6,12 @@ defmodule SymphonyElixir.AuditLog.Writer do
   An agent streams many updates a second, and each one can write a few audit events under the
   audit log's `:global` lock, which every other audit writer also takes. Writing them inline
   stalled the orchestrator, and with it the state API, for as long as the lock and the disk took.
-  When the writer isn't running (a one-shot command), events are written in the caller.
+  When the writer isn't running (a one-shot command), events are written in the caller. When it
+  stops, it writes the events still queued for it first.
   """
 
-  use GenServer
+  # Long enough to write a backlog queued behind a slow lock or disk before the application stops.
+  use GenServer, shutdown: 30_000
   require Logger
 
   alias SymphonyElixir.AuditLog
@@ -37,12 +39,28 @@ defmodule SymphonyElixir.AuditLog.Writer do
   end
 
   @impl true
-  def init(_opts), do: {:ok, %{}}
+  def init(_opts) do
+    Process.flag(:trap_exit, true)
+    {:ok, %{}}
+  end
 
   @impl true
   def handle_cast({:write, write}, state) do
     perform(write)
     {:noreply, state}
+  end
+
+  @impl true
+  def terminate(_reason, _state), do: drain()
+
+  defp drain do
+    receive do
+      {:"$gen_cast", {:write, write}} ->
+        perform(write)
+        drain()
+    after
+      0 -> :ok
+    end
   end
 
   defp write(server, write) do

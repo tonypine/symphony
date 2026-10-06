@@ -1089,6 +1089,8 @@ defmodule SymphonyElixir.AuditLog do
     end
   end
 
+  defp tail_record_hash(_io, 0, _partial_line), do: nil
+
   defp tail_record_hash(io, position, partial_line) do
     start = max(position - @tail_chunk_bytes, 0)
     {:ok, chunk} = :file.pread(io, start, position - start)

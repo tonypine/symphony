@@ -65,6 +65,48 @@ defmodule SymphonyElixir.AuditLog.WriterTest do
     assert previous == delta["record_hash"]
   end
 
+  test "writes the events still queued when it stops", %{entry: entry, audit_dir: audit_dir} do
+    test_pid = self()
+
+    # The first write holds until the test releases it, so the rest queue up behind it.
+    Application.put_env(:symphony_elixir, :audit_log_writer_record_agent_update, fn entry, update, delta ->
+      unless Process.get(:held) do
+        Process.put(:held, true)
+        send(test_pid, :writing)
+        receive do: (:release -> :ok)
+      end
+
+      SymphonyElixir.AuditLog.record_agent_update(entry, update, delta)
+    end)
+
+    on_exit(fn -> Application.delete_env(:symphony_elixir, :audit_log_writer_record_agent_update) end)
+
+    name = :"audit_writer_#{System.unique_integer([:positive])}"
+    writer = start_supervised!(Supervisor.child_spec({Writer, name: name}, restart: :temporary))
+
+    assert :ok = Writer.record_agent_update(entry, update(), token_delta(), name)
+    assert_receive :writing
+    assert :ok = Writer.record_pr_opened(entry, "https://github.com/acme/repo/pull/1", name)
+
+    # The shutdown arrives ahead of the last write, so only the drain on stop writes it.
+    stopping = Task.async(fn -> GenServer.stop(writer) end)
+    wait_for_message_queue(writer, 2)
+    assert :ok = Writer.record_pr_opened(entry, "https://github.com/acme/repo/pull/2", name)
+    send(writer, :release)
+    Task.await(stopping)
+
+    assert [%{"event_type" => "token_usage_delta"}, first, second] = events(audit_dir)
+    assert %{"event_type" => "pr_opened", "url" => "https://github.com/acme/repo/pull/1"} = first
+    assert %{"event_type" => "pr_opened", "url" => "https://github.com/acme/repo/pull/2"} = second
+  end
+
+  defp wait_for_message_queue(pid, length) do
+    case Process.info(pid, :message_queue_len) do
+      {:message_queue_len, queued} when queued >= length -> :ok
+      _fewer -> wait_for_message_queue(pid, length)
+    end
+  end
+
   test "the application's writer records a pr_opened event", %{entry: entry, audit_dir: audit_dir} do
     assert :ok = Writer.record_pr_opened(entry, "https://github.com/acme/repo/pull/7")
     :sys.get_state(Writer)
