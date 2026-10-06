@@ -273,7 +273,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "linear_request_human_action",
       "description" =>
-        "Record that the current issue needs something only a human can do: a missing secret or permission, a product decision, an account setup, a manual check on a device. Symphony lists it, with your steps, in a Linear project update for the human, and drops it once the issue moves on. Never put a secret value in any field. A request with the same title that is still open is not posted again. Before asking about slow or stuck CI, compute the job's age from the API's UTC timestamps against the current UTC time (`date -u`), never local time; under 30 minutes old, wait for the CI poller's re-run instead. Then follow the blocked-access escape hatch as usual: its move to Backlog lands in Human Review when that state is on, where the human finds it.",
+        "Record that the current issue needs something only a human can do: a missing secret or permission, a product decision, an account setup, a manual check on a device. It moves the issue to Human Review (In Review when that state is off), where the human finds it, and Symphony lists the request, with your steps, in a Linear project update until a person moves the issue on. It adds no label. Never put a secret value in any field. A request with the same title that is still open is not posted again. Before asking about slow or stuck CI, compute the job's age from the API's UTC timestamps against the current UTC time (`date -u`), never local time; under 30 minutes old, wait for the CI poller's re-run instead. Update the workpad first: the move ends your run shortly after.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -296,7 +296,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "linear_withdraw_human_action",
       "description" =>
-        "Withdraw a human-action request on the current Linear issue that is no longer needed, such as one sent by mistake. Replies with the reason under the request and, once no open request is left, removes the human-action label, so the next project update no longer lists it. A comment saying the request is not needed does not take it off the list; this does.",
+        "Withdraw a human-action request on the current Linear issue that is no longer needed, such as one sent by mistake. Replies with the reason under the request, so the next project update no longer lists it, and once no open request is left moves the issue from Human Review back to the active state it came from. A comment saying the request is not needed does not take it off the list; this does.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,

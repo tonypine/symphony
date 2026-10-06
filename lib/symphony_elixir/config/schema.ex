@@ -2116,7 +2116,8 @@ defmodule SymphonyElixir.Config.Schema do
 
     embedded_schema do
       field(:enabled, :boolean, default: true)
-      field(:label, :string, default: "human-action")
+      # Deprecated: the retired label that marked an open request (`HumanReview.legacy_request_labels/1`).
+      field(:label, :string)
       field(:interval_ms, :integer, default: 300_000)
       field(:min_update_interval_ms, :integer, default: 900_000)
     end
@@ -2125,7 +2126,6 @@ defmodule SymphonyElixir.Config.Schema do
     def changeset(schema, attrs) do
       schema
       |> cast(attrs, @fields, empty_values: [])
-      |> Schema.validate_present([:label])
       |> validate_format(:label, ~r/\S/, message: "must not be blank")
       |> validate_number(:interval_ms, greater_than: 0)
       |> validate_number(:min_update_interval_ms, greater_than_or_equal_to: 0)

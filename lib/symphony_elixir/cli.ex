@@ -3,7 +3,17 @@ defmodule SymphonyElixir.CLI do
   Escript entrypoint for running Symphony with an operator `symphony.yml`.
   """
 
-  alias SymphonyElixir.{BuildInfo, Config, ControlClient, LogFile, OpenRouter, Paths, ReleaseNode, TerminalDashboard}
+  alias SymphonyElixir.{
+    BuildInfo,
+    Config,
+    ControlClient,
+    HttpServer,
+    LogFile,
+    OpenRouter,
+    Paths,
+    ReleaseNode,
+    TerminalDashboard
+  }
 
   # Retained so existing scripts (Docker, ops runbooks) that still pass the long
   # flag keep parsing — its value is ignored.
@@ -616,12 +626,10 @@ defmodule SymphonyElixir.CLI do
 
   defp maybe_set_server_host(opts, deps) do
     with_last_opt(opts, :host, fn raw ->
-      host = String.trim(raw)
-
-      if host == "" do
-        {:error, usage_message()}
-      else
-        :ok = deps.set_server_host_override.(host)
+      case String.trim(raw) do
+        "" -> {:error, usage_message()}
+        "unix:" -> {:error, HttpServer.empty_unix_socket_message()}
+        host -> :ok = deps.set_server_host_override.(host)
       end
     end)
   end
