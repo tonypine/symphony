@@ -3543,6 +3543,22 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert message =~ "agent.timeouts.mcp_tool_ms"
   end
 
+  test "the pending tool report threshold comes from symphony.yml and must be a positive integer" do
+    write_workflow_file!(Workflow.workflow_file_path())
+    assert Config.settings!().watchdog.pending_tool_report_after_ms == 60_000
+
+    watchdog = %{enabled: true, tick_interval_ms: 60_000, no_progress_threshold_ms: 600_000}
+
+    write_workflow_file!(Workflow.workflow_file_path(), watchdog: Map.put(watchdog, :pending_tool_report_after_ms, 300_000))
+    assert Config.settings!().watchdog.pending_tool_report_after_ms == 300_000
+
+    for bad <- [0, -1, "soon"] do
+      write_workflow_file!(Workflow.workflow_file_path(), watchdog: Map.put(watchdog, :pending_tool_report_after_ms, bad))
+      assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+      assert message =~ "watchdog.pending_tool_report_after_ms"
+    end
+  end
+
   test "config reads defaults for optional settings" do
     previous_linear_api_key = System.get_env("LINEAR_API_KEY")
     on_exit(fn -> restore_env("LINEAR_API_KEY", previous_linear_api_key) end)

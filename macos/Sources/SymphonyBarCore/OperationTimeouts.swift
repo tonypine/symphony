@@ -1,7 +1,7 @@
 import Foundation
 
-/// Why `workspaces.git_network_timeout_ms` or `agent.timeouts.mcp_tool_ms` can't be read or changed by editing
-/// one line.
+/// Why `workspaces.git_network_timeout_ms`, `agent.timeouts.mcp_tool_ms` or `watchdog.pending_tool_report_after_ms`
+/// can't be read or changed by editing one line.
 public enum OperationTimeoutsError: LocalizedError, Equatable {
     /// The key holds an inline value (for example `timeouts: {mcp_tool_ms: 5}`) instead of an indented block.
     case notABlock(String)
@@ -18,35 +18,45 @@ public enum OperationTimeoutsError: LocalizedError, Equatable {
     }
 }
 
-/// `workspaces.git_network_timeout_ms` and `agent.timeouts.mcp_tool_ms` in the text of a `symphony.yml`, in
-/// milliseconds. Only the lines of the timeouts that change are rewritten, or inserted when missing, so the rest
-/// of the file stays as it is.
+/// `workspaces.git_network_timeout_ms`, `agent.timeouts.mcp_tool_ms` and `watchdog.pending_tool_report_after_ms` in
+/// the text of a `symphony.yml`, in milliseconds. Only the lines of the timeouts that change are rewritten, or
+/// inserted when missing, so the rest of the file stays as it is.
 public struct OperationTimeouts: Equatable {
     /// The wall-clock limit of each git `fetch`, `pull`, `push` or `ls-remote` Symphony runs.
     public var gitNetworkMs: Int
     /// How long one call of Symphony's own MCP tools (`linear_*`, `github_*`) may run.
     public var mcpToolMs: Int
+    /// How long one of those calls runs before Symphony's state reports the run as waiting on it.
+    public var pendingToolReportMs: Int
 
     /// What Symphony uses when a key is missing or null.
     public static let defaultGitNetworkMs = 300_000
     public static let defaultMcpToolMs = 600_000
+    public static let defaultPendingToolReportMs = 60_000
 
     /// Values Settings offers, in minutes.
     public static let minuteRange = 1...120
 
     static let gitNetworkPath = ["workspaces", "git_network_timeout_ms"]
     static let mcpToolPath = ["agent", "timeouts", "mcp_tool_ms"]
+    static let pendingToolReportPath = ["watchdog", "pending_tool_report_after_ms"]
 
-    public init(gitNetworkMs: Int = defaultGitNetworkMs, mcpToolMs: Int = defaultMcpToolMs) {
+    public init(
+        gitNetworkMs: Int = defaultGitNetworkMs,
+        mcpToolMs: Int = defaultMcpToolMs,
+        pendingToolReportMs: Int = defaultPendingToolReportMs
+    ) {
         self.gitNetworkMs = gitNetworkMs
         self.mcpToolMs = mcpToolMs
+        self.pendingToolReportMs = pendingToolReportMs
     }
 
-    /// Both timeouts, with Symphony's default for a missing or null key.
+    /// The timeouts, with Symphony's default for a missing or null key.
     public static func values(in yaml: String) throws -> OperationTimeouts {
         OperationTimeouts(
             gitNetworkMs: try milliseconds(gitNetworkPath, default: defaultGitNetworkMs, in: yaml),
-            mcpToolMs: try milliseconds(mcpToolPath, default: defaultMcpToolMs, in: yaml)
+            mcpToolMs: try milliseconds(mcpToolPath, default: defaultMcpToolMs, in: yaml),
+            pendingToolReportMs: try milliseconds(pendingToolReportPath, default: defaultPendingToolReportMs, in: yaml)
         )
     }
 
@@ -55,6 +65,9 @@ public struct OperationTimeouts: Equatable {
         var yaml = yaml
         if new.gitNetworkMs != old.gitNetworkMs { yaml = try setting(gitNetworkPath, to: new.gitNetworkMs, in: yaml) }
         if new.mcpToolMs != old.mcpToolMs { yaml = try setting(mcpToolPath, to: new.mcpToolMs, in: yaml) }
+        if new.pendingToolReportMs != old.pendingToolReportMs {
+            yaml = try setting(pendingToolReportPath, to: new.pendingToolReportMs, in: yaml)
+        }
         return yaml
     }
 
@@ -65,10 +78,12 @@ public struct OperationTimeouts: Equatable {
 
     /// These timeouts with the steppers' minutes. A timeout whose minutes didn't move keeps its exact value, so
     /// one that isn't a whole number of minutes is never rewritten by an untouched stepper.
-    public func settingMinutes(gitNetwork: Int, mcpTool: Int) -> OperationTimeouts {
+    public func settingMinutes(gitNetwork: Int, mcpTool: Int, pendingToolReport: Int) -> OperationTimeouts {
         OperationTimeouts(
             gitNetworkMs: gitNetwork == Self.minutes(gitNetworkMs) ? gitNetworkMs : gitNetwork * 60_000,
-            mcpToolMs: mcpTool == Self.minutes(mcpToolMs) ? mcpToolMs : mcpTool * 60_000
+            mcpToolMs: mcpTool == Self.minutes(mcpToolMs) ? mcpToolMs : mcpTool * 60_000,
+            pendingToolReportMs: pendingToolReport == Self.minutes(pendingToolReportMs)
+                ? pendingToolReportMs : pendingToolReport * 60_000
         )
     }
 
