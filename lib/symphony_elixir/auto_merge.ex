@@ -115,6 +115,11 @@ defmodule SymphonyElixir.AutoMerge do
   def held?(%{state: "ci_failure"}), do: true
   def held?(_auto_merge), do: false
 
+  @doc "True while the PR is down the conflict path (see `conflict/3`)."
+  @spec conflict?(term()) :: boolean()
+  def conflict?(%{state: "conflict"}), do: true
+  def conflict?(_auto_merge), do: false
+
   @doc "True when Symphony turned auto-merge on (or merged) for this record, so a later merge moves the issue to `Done`."
   @spec armed?(term()) :: boolean()
   def armed?(%{state: state}) when state in ["enabled", "updating_branch", "merging", "conflict", "rereview"], do: true

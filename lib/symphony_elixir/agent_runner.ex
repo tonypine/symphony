@@ -35,6 +35,7 @@ defmodule SymphonyElixir.AgentRunner do
     Verification,
     Workpad,
     Workspace,
+    WorkspaceCleanup,
     WorkspaceHead
   }
 
@@ -334,6 +335,9 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp workspace_for_issue(issue, codex_update_recipient, opts, worker_host) do
+    # A removal of this issue's workspace may still be running from when it last ended.
+    WorkspaceCleanup.await(issue.identifier)
+
     case Keyword.get(opts, :workspace_path) do
       workspace when is_binary(workspace) and workspace != "" ->
         with :ok <- Workspace.validate(workspace, worker_host) do
@@ -1713,11 +1717,14 @@ defmodule SymphonyElixir.AgentRunner do
   # such a head once it passed the pre-push reviewer, so one left here awaits the reviewer. A run
   # whose HEAD is the PR head with checks pending but that is not handed off (one that started on
   # that head, or one whose pushed head awaits the reviewer) keeps turning, up to
-  # `agent.max_turns`, until CI settles. A CI-fix run that found the red check a flake rightly
-  # pushes nothing: once CI on its PR head is green, that is its outcome, so it hands the PR back
-  # instead of being parked (`hand_off_green_ci_fix/2`). Any other idle run is parked.
+  # `agent.max_turns`, until CI settles. A CI-fix run that found the red check a flake, or a
+  # merge-conflict run that found the PR no longer conflicts, rightly pushes nothing: once CI on
+  # its PR head is green, that is its outcome, so it hands the PR back instead of being parked
+  # (`hand_off_green_fix/3`). Any other idle run is parked.
   defp end_idle_run(%Issue{} = issue, %{progress: %{head: head}} = run_context) do
-    ci_action = pushed_head_ci_action(issue, run_context)
+    ci_status = pushed_head_ci_status(issue, run_context)
+    ci_action = ci_action(ci_status)
+    green_fix = if ci_action == :success, do: green_fix(issue, ci_status, run_context)
 
     cond do
       ci_action in [:pending, :success] and rework_state?(issue.state) and pushed_new_head?(run_context) ->
@@ -1727,8 +1734,8 @@ defmodule SymphonyElixir.AgentRunner do
         Logger.info("Not parking #{issue_context(issue)}; waiting for CI on its pushed head #{head}")
         :continue
 
-      ci_action == :success and ci_fix_run?(issue, run_context) ->
-        hand_off_green_ci_fix(issue, run_context)
+      green_fix != nil ->
+        hand_off_green_fix(issue, green_fix, run_context)
 
       true ->
         park_idle_run(issue, run_context)
@@ -1745,68 +1752,92 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  # `Rework` keeps its own rule (`rework_finished?/2`): a rework that adds no commit is not done.
-  defp ci_fix_run?(%Issue{} = issue, run_context), do: is_map(run_context.opts[:ci_failure]) and !rework_state?(issue.state)
+  # The fix a run that pushed nothing was dispatched for, given as the kind, whether the PR was
+  # approved (in `Merging`) when the signal came, and the head it came on; or nil. A CI-fix run
+  # answers a CI failure; a merge-conflict run answers a conflict, and only a PR GitHub now calls
+  # `MERGEABLE` shows it needed no commit, so one still conflicting (or not computed yet) is parked
+  # as before, whatever else is pending. `Rework` keeps its own rule (`rework_finished?/2`): a
+  # rework that adds no commit is not done.
+  defp green_fix(%Issue{} = issue, ci_status, %{opts: opts}) do
+    cond do
+      rework_state?(issue.state) -> nil
+      is_map(opts[:pr_conflict]) and Map.get(ci_status, :mergeable) != "MERGEABLE" -> nil
+      is_map(opts[:ci_failure]) -> {:ci_fix, opts[:ci_failure][:approved], opts[:ci_failure][:commit_sha]}
+      is_map(opts[:pr_conflict]) -> {:conflict_fix, opts[:pr_conflict][:approved], opts[:pr_conflict][:head_sha]}
+      true -> nil
+    end
+  end
 
   defp park_idle_run(%Issue{} = issue, run_context) do
     forget_rework_base(issue, run_context.opts)
     park_idle_issue(issue, run_context.opts)
   end
 
-  # A CI fix on an approved PR (the CI failure came from `Merging`) whose PR head is still the
-  # commit that failed goes back to `Merging`, where auto-merge turns on again: the approval still
-  # covers the PR's diff. Any other green CI fix, such as a run that started on a fix an earlier
+  # A fix on an approved PR (the CI failure or conflict came from `Merging`) whose PR head is still
+  # the commit it came on goes back to `Merging`, where auto-merge turns on again: the approval
+  # still covers the PR's diff. Any other green fix, such as a run that started on a fix an earlier
   # run pushed, goes to the post-PR state, where review judges its head.
-  defp hand_off_green_ci_fix(%Issue{} = issue, %{progress: %{head: head, start_head: start_head}} = run_context) do
-    ci_failure = run_context.opts[:ci_failure]
-
-    if ci_failure[:approved] == true and head == start_head and head == ci_failure[:commit_sha] do
-      Logger.info("CI fix run for #{issue_context(issue)} pushed nothing and CI on its PR head #{head} is green; moving back to #{@merging_state}")
+  defp hand_off_green_fix(%Issue{} = issue, {kind, approved, signal_head}, %{progress: %{head: head, start_head: start_head}} = run_context) do
+    if approved == true and head == start_head and head == signal_head do
+      Logger.info("#{fix_run_name(kind)} for #{issue_context(issue)} pushed nothing and CI on its PR head #{head} is green; moving back to #{@merging_state}")
       PrReviewPoller.release_auto_merge_hold(issue.id, pending_lookup_opts(issue, run_context.opts))
-      return_to_merging(issue, head, run_context)
+      return_to_merging(issue, kind, head, run_context)
     else
       post_pr_state = post_pr_state(run_context)
-      Logger.info("CI is green on #{issue_context(issue)}'s PR head #{head} after a CI fix run with no new commit; moving to #{post_pr_state}")
+      Logger.info("CI is green on #{issue_context(issue)}'s PR head #{head} after a #{fix_run_name(kind)} with no new commit; moving to #{post_pr_state}")
 
       case move_to_post_pr_state(issue, post_pr_state, "with CI green on its PR head", run_context) do
         :ok -> :ok
-        {:error, reason} -> {:error, {:green_ci_fix_handoff_failed, reason}}
+        {:error, reason} -> {:error, {:green_fix_handoff_failed, kind, reason}}
       end
     end
   end
 
-  defp return_to_merging(%Issue{id: issue_id} = issue, head, run_context) do
+  defp fix_run_name(:ci_fix), do: "CI fix run"
+  defp fix_run_name(:conflict_fix), do: "merge conflict run"
+
+  defp return_to_merging(%Issue{id: issue_id} = issue, kind, head, run_context) do
     label = "moving #{issue_context(issue)} back to #{@merging_state} with CI green"
     move = fn -> Tracker.update_issue_state(issue_id, @merging_state) end
-    comment = fn -> Tracker.create_comment(issue_id, green_ci_fix_note(head)) end
+    comment = fn -> Tracker.create_comment(issue_id, green_fix_note(kind, head)) end
 
     with :ok <- with_linear_retry(move, label, run_context.opts),
          :ok <- with_linear_retry(comment, label, run_context.opts) do
       :ok
     else
-      {:error, reason} -> {:error, {:green_ci_fix_handoff_failed, reason}}
+      {:error, reason} -> {:error, {:green_fix_handoff_failed, kind, reason}}
     end
   end
 
-  defp green_ci_fix_note(head) do
+  defp green_fix_note(:ci_fix, head) do
     """
     Symphony moved this issue back to #{@merging_state}: the CI fix run found nothing to change and pushed no commit, and CI on the PR head `#{head}` is green, so the approval still covers the PR and auto-merge turns back on.
+    """
+  end
+
+  defp green_fix_note(:conflict_fix, head) do
+    """
+    Symphony moved this issue back to #{@merging_state}: the merge conflict run found nothing to resolve and pushed no commit, the PR no longer conflicts with the base branch, and CI on the PR head `#{head}` is green, so the approval still covers the PR and auto-merge turns back on.
     """
   end
 
   # The CI action for the workspace HEAD when it is the attached PR's head, or nil. A PR with no
   # checks reported yet gives nil, so a repo without CI never waits on it and stays parkable. A
   # rerun the CI poller started on that head reads as running until its checks report again.
-  defp pushed_head_ci_action(%Issue{} = issue, %{progress: %{head: head}} = run_context) do
+  defp pushed_head_ci_action(%Issue{} = issue, run_context), do: issue |> pushed_head_ci_status(run_context) |> ci_action()
+
+  defp ci_action(nil), do: nil
+  defp ci_action(ci_status), do: CiPoller.ci_action(ci_status)
+
+  # The PR status `pushed_head_ci_action/2` reads its CI action from, or nil.
+  defp pushed_head_ci_status(%Issue{} = issue, %{progress: %{head: head}} = run_context) do
     pr_url = URLUtils.pull_request_url(issue)
     github = Keyword.get(run_context.opts, :github, PullRequest)
 
     with true <- is_binary(pr_url),
          {:ok, %{commit_sha: ^head, checks: [_ | _]} = ci_status} <-
            github.fetch_ci_status(pr_url, cwd: run_context.workspace) do
-      ci_status
-      |> CiPoller.put_rerun_pending(issue.id, pending_lookup_opts(issue, run_context.opts))
-      |> CiPoller.ci_action()
+      CiPoller.put_rerun_pending(ci_status, issue.id, pending_lookup_opts(issue, run_context.opts))
     else
       _ -> nil
     end

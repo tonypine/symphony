@@ -144,7 +144,9 @@ defmodule SymphonyElixir.AcceptanceGate.Context do
   end
 
   defp merge_onto_base(job, worktree, git) do
-    with {:ok, _output} <- run(git, ["worktree", "add", "--detach", worktree, job.base_sha], job.workspace) do
+    add = fn -> run(git, ["worktree", "add", "--detach", worktree, job.base_sha], job.workspace) end
+
+    with {:ok, _output} <- Fetcher.with_lock(job.workspace, add) do
       case git.(@merge_identity ++ ["merge", "--no-commit", "--no-ff", "--quiet", job.sha], worktree) do
         {_output, 0} -> merge_result(job, worktree, git)
         {output, status} -> conflict(worktree, git, {:git_failed, "merge", status, String.trim(output)})
@@ -401,8 +403,9 @@ defmodule SymphonyElixir.AcceptanceGate.Context do
 
   defp shared(left, right), do: left |> MapSet.new() |> MapSet.intersection(MapSet.new(right)) |> Enum.sort()
 
-  # Under the per-repo fetch lock: the remove writes the `.git/worktrees` the
-  # workspace shares with the source checkout and every other worktree of it.
+  # The add and the remove run under the per-repo fetch lock: they write the
+  # `.git/worktrees` the workspace shares with the source checkout and every
+  # other worktree of it.
   defp remove_worktree(workspace, worktree, git) do
     Fetcher.with_lock(workspace, fn -> git.(["worktree", "remove", "--force", worktree], workspace) end)
     File.rm_rf(worktree)

@@ -956,6 +956,7 @@ defmodule SymphonyElixir.CoreTest do
       refute Map.has_key?(updated_state.running, issue_id)
       refute MapSet.member?(updated_state.claimed, issue_id)
       refute Process.alive?(agent_pid)
+      assert :ok = WorkspaceCleanup.await(issue_identifier)
       refute File.exists?(workspace)
     after
       File.rm_rf(test_root)
@@ -1035,6 +1036,7 @@ defmodule SymphonyElixir.CoreTest do
       refute Map.has_key?(updated_state.running, issue_id)
       refute MapSet.member?(updated_state.claimed, issue_id)
       refute Process.alive?(agent_pid)
+      assert :ok = WorkspaceCleanup.await(issue_identifier)
       refute File.exists?(workspace)
     after
       File.rm_rf(test_root)
@@ -1091,6 +1093,7 @@ defmodule SymphonyElixir.CoreTest do
       refute Map.has_key?(updated_state.running, issue_id)
       refute MapSet.member?(updated_state.claimed, issue_id)
       refute Process.alive?(agent_pid)
+      assert :ok = WorkspaceCleanup.await(issue_identifier)
       refute File.exists?(workspace)
     after
       File.rm_rf(test_root)
@@ -2718,6 +2721,14 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
+  defp wait_for_hook_log(path, expected, deadline_ms \\ System.monotonic_time(:millisecond) + 5_000) do
+    cond do
+      File.read(path) == {:ok, expected} -> :ok
+      System.monotonic_time(:millisecond) >= deadline_ms -> flunk("timed out waiting for #{path} to read #{inspect(expected)}")
+      true -> Process.sleep(10) && wait_for_hook_log(path, expected, deadline_ms)
+    end
+  end
+
   defp no_op_issue_enricher do
     fn issue -> {:ok, issue} end
   end
@@ -3974,6 +3985,60 @@ defmodule SymphonyElixir.CoreTest do
       assert File.read!(Path.join([workspace_root, "default", "S-378", "deps.txt"])) == "installed\n"
       assert File.read!(agent_launches) == "launch\n"
       assert log =~ "Running workspace hook an earlier run left unfinished hook=after_create"
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "agent runner waits for a removal of the issue's workspace still in flight before creating it" do
+    test_root = Path.join(System.tmp_dir!(), "symphony-elixir-agent-runner-await-cleanup-#{System.unique_integer([:positive])}")
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+      hook_log = Path.join(test_root, "hooks.log")
+      release = Path.join(test_root, "release")
+      workspace = Path.join([workspace_root, "default", "S-689"])
+      File.mkdir_p!(workspace)
+
+      # after_create fails, so the run stops right after it creates the workspace.
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        workspace_root: workspace_root,
+        hook_before_remove: """
+        echo remove-started >> #{hook_log}
+        while [ ! -f #{release} ]; do sleep 0.05; done
+        echo remove-finished >> #{hook_log}
+        """,
+        hook_after_create: """
+        echo created >> #{hook_log}
+        exit 1
+        """
+      )
+
+      issue = %Issue{id: "issue-s-689", identifier: "S-689", title: "Redispatched", state: "In Progress", labels: []}
+
+      assert :ok = WorkspaceCleanup.remove(%{id: issue.id, identifier: issue.identifier}, nil)
+      wait_for_hook_log(hook_log, "remove-started\n")
+
+      test_pid = self()
+
+      run =
+        Task.async(fn ->
+          capture_log(fn ->
+            assert_raise RuntimeError, ~r/workspace_hook_failed/, fn ->
+              AgentRunner.run(issue, test_pid, issue_enricher: &{:ok, &1})
+            end
+          end)
+        end)
+
+      # The run is waiting on the removal, so after_create has not run yet.
+      refute Task.yield(run, 200)
+      assert File.read!(hook_log) == "remove-started\n"
+
+      File.write!(release, "")
+      Task.await(run, 10_000)
+
+      assert File.read!(hook_log) == "remove-started\nremove-finished\ncreated\n"
     after
       File.rm_rf(test_root)
     end

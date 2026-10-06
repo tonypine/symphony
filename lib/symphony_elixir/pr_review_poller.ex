@@ -826,10 +826,11 @@ defmodule SymphonyElixir.PrReviewPoller do
   end
 
   @doc """
-  Drops the CI-fix hold (see `AutoMerge.held?/1`) on the issue's PR, so its next `Merging` stay
-  turns auto-merge on again. A CI-fix run that pushed nothing calls it before it moves the issue
-  back to `Merging`, which this poller may not have seen it leave. Failing to drop it is logged:
-  auto-merge then stays off for that stay, as for any CI-fix hold.
+  Drops the CI-fix hold (see `AutoMerge.held?/1`) or the conflict state (see `AutoMerge.conflict/3`)
+  on the issue's PR, so its next `Merging` stay turns auto-merge on again, even at the same head. A
+  CI-fix or merge-conflict run that pushed nothing calls it before it moves the issue back to
+  `Merging`, which this poller may not have seen it leave. Failing to drop it is logged: auto-merge
+  then stays off for that stay, as for any CI-fix hold.
   """
   @spec release_auto_merge_hold(String.t(), keyword()) :: :ok
   def release_auto_merge_hold(issue_id, opts \\ []) when is_binary(issue_id) do
@@ -838,7 +839,7 @@ defmodule SymphonyElixir.PrReviewPoller do
     Enum.each(repo_keys_from_opts(opts), fn repo_key ->
       with {:ok, records} <- list_pr_reviews(run_store, repo_key),
            %{auto_merge: auto_merge} <- Enum.find(records, &(Map.get(&1, :issue_id) == issue_id)),
-           true <- AutoMerge.held?(auto_merge),
+           true <- AutoMerge.held?(auto_merge) or AutoMerge.conflict?(auto_merge),
            {:error, reason} <- run_store.update_pr_review(repo_key, issue_id, %{auto_merge: nil}) do
         log_auto_merge_hold_failure(issue_id, reason)
       else
@@ -849,7 +850,7 @@ defmodule SymphonyElixir.PrReviewPoller do
   end
 
   defp log_auto_merge_hold_failure(issue_id, reason) do
-    Logger.warning("Failed to drop the CI-fix auto-merge hold issue_id=#{issue_id}: #{inspect(reason)}")
+    Logger.warning("Failed to drop the auto-merge hold issue_id=#{issue_id}: #{inspect(reason)}")
   end
 
   @doc "Every PR the poller is landing with auto-merge, with a short status for the dashboard."
@@ -1285,6 +1286,7 @@ defmodule SymphonyElixir.PrReviewPoller do
 
   defp maybe_transition_conflict(record, attrs, opts, now) do
     issue_id = Map.get(record, :issue_id)
+    attrs = put_conflict_approval(attrs, record, opts)
 
     cond do
       active_agent_run?(issue_id, opts) ->
@@ -1306,6 +1308,15 @@ defmodule SymphonyElixir.PrReviewPoller do
       true ->
         transition_issue_for_action(record, attrs, opts, now, "conflict")
     end
+  end
+
+  # A conflict found while the issue is in `Merging` is marked `approved`, so a fix run that finds
+  # nothing to resolve and pushes nothing can hand the PR back to `Merging` once it no longer
+  # conflicts and its head is green. `conflict_context/3` keeps the mark while the head is the same.
+  defp put_conflict_approval(attrs, record, opts) do
+    Map.update!(attrs, :conflict_context, fn context ->
+      Map.put(context, :approved, context.approved or auto_merge_issue?(record, opts))
+    end)
   end
 
   defp maybe_put_conflict_attrs(attrs, record, activity, now) do
@@ -1368,8 +1379,17 @@ defmodule SymphonyElixir.PrReviewPoller do
       conflict_key: conflict_key(activity),
       observed_at: now,
       retry_count: next_conflict_retry_count(record, activity),
-      max_retries: @conflict_max_retries
+      max_retries: @conflict_max_retries,
+      approved: conflict_approved?(record, activity)
     }
+  end
+
+  # The approval stays with the PR head it was given for, as the base branch moves on.
+  defp conflict_approved?(record, activity) do
+    case normalize_conflict_context(Map.get(record, :conflict_context)) do
+      %{approved: true, head_sha: head} when is_binary(head) -> head == Map.get(activity, :head_ref_oid)
+      _context -> false
+    end
   end
 
   defp next_conflict_retry_count(record, activity) do
@@ -1402,7 +1422,8 @@ defmodule SymphonyElixir.PrReviewPoller do
       conflict_key: string_field(context, :conflict_key),
       observed_at: datetime_field(context, :observed_at),
       retry_count: non_negative_integer_field(context, :retry_count),
-      max_retries: positive_integer_field(context, :max_retries) || @conflict_max_retries
+      max_retries: positive_integer_field(context, :max_retries) || @conflict_max_retries,
+      approved: (Map.get(context, :approved) || Map.get(context, "approved")) == true
     }
 
     if Enum.all?([normalized.head_ref, normalized.head_sha, normalized.base_ref, normalized.base_sha, normalized.conflict_key], &is_nil/1) do
