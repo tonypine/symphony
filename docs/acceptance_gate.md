@@ -50,6 +50,13 @@ In Progress as before and never reaches the gate. A verdict that comes after the
 Review, its PR merged or closed, or its head moved on is still recorded, but the issue stays where
 it is, as for a late QA pass.
 
+The gate never runs alongside QA. A gate pass starts only from the QA result stored for the PR
+head, and never while a QA pass is in flight for the issue: that pass reports first. A verdict that
+arrives while a QA pass is in flight is recorded but moves nothing; when QA then reports, a `fail`
+goes back to In Progress as usual and any other result asks the gate again. A verdict stands only
+on the QA result it followed (`gate_qa_at` on the CI check record): once QA reports again on the
+same head, the next green poll asks for a fresh gate pass instead of reusing it.
+
 - **The runner.** Like the QA runner, it runs passes in the background, one per issue and at most
   `max_concurrent` at once. A forced ticket goes first. While the gate agent's provider is held by
   a usage limit, nothing starts; the next green CI poll asks again. A pass whose agent can't reach

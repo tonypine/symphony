@@ -730,4 +730,109 @@ defmodule SymphonyElixir.AutoReviewGateTest do
       end)
     end
   end
+
+  describe "the gate follows QA" do
+    defp qa_running(sha), do: fn -> %{"issue-gate-flow" => sha} end
+
+    defp qa_fail do
+      {:ok, %{result: %{verdict: :fail, summary: "Broken.", steps: [], findings: ["exits 0 on a bad config"]}, tokens: QaAgent.empty_tokens()}}
+    end
+
+    test "an issue back in Auto Review on a new head starts no gate run until QA reports on that head", %{root: root} do
+      settings = settings("enforce", root)
+
+      # The previous head passed QA and the gate, before a rework pushed a new head.
+      previous = %{qa_sha: "older", qa_verdict: "pass", qa_target_state: "In Review", qa_applied: true}
+      record = put_record(Map.merge(previous, %{gate_sha: "older", gate_verdict: "rework"}))
+      poll_opts = [gate_runner: FakeGateRunner, qa_runner: FakeQaRunner]
+      poll = &AutoReview.on_green(issue(), &1, %{commit_sha: @sha}, settings, poll_opts ++ &2)
+
+      assert {:qa_started, "issue-gate-flow", @sha} = poll.(record, [])
+      assert_receive {:qa_request, %{sha: @sha, record: qa_record}}
+
+      # While that pass runs, no poll reaches the gate, not even one whose record already holds a
+      # QA result for the new head (a leftover of an earlier pass through Auto Review).
+      assert {:qa_running, "issue-gate-flow"} = poll.(stored_record(), qa_running: qa_running(@sha))
+      leftover = put_record(%{qa_sha: @sha, qa_verdict: "pass", qa_target_state: "In Review", qa_applied: false})
+      assert {:qa_running, "issue-gate-flow"} = poll.(leftover, qa_running: qa_running(@sha))
+      refute_received {:gate_request, _job, _opts}
+
+      # QA reports on the new head, and only then is the gate asked.
+      Application.put_env(:symphony_elixir, :gate_flow_qa_result, qa_pass())
+      assert {:gate_started, "issue-gate-flow", @sha} = AutoReview.run_qa(qa_job(qa_record, settings), qa_opts(["lib/symphony_elixir/cli.ex"]))
+      assert_receive {:gate_request, %{sha: @sha, qa: %{verdict: :pass}}, _opts}
+    end
+
+    test "an approve made while QA runs on the same head moves nothing, and a QA fail afterwards goes back to In Progress", %{root: root} do
+      settings = settings("enforce", root)
+      record = put_record(%{qa_sha: @sha, qa_verdict: "pass", qa_target_state: "In Review", qa_applied: false})
+
+      log =
+        capture_log(fn ->
+          assert {:auto_review_gate_not_applied, "issue-gate-flow", "approve", "a QA pass is still running on `feedface0011`"} =
+                   AutoReview.run_gate(gate_job(record, settings), gate_opts(root, qa_running: qa_running(@sha)))
+        end)
+
+      assert log =~ "Acceptance gate outcome not applied: a QA pass is still running on `feedface0011`"
+      refute log =~ "Acceptance gate moved"
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+      assert %{gate_sha: @sha, gate_verdict: "approve", gate_applied: false, gate_target_state: nil} = stored_record()
+
+      # The QA pass that was running reports a fail: the usual fix loop, and the approve is dropped.
+      Application.put_env(:symphony_elixir, :gate_flow_qa_result, qa_fail())
+
+      assert {:auto_review_qa, "issue-gate-flow", :fail, "In Progress"} =
+               AutoReview.run_qa(qa_job(stored_record(), settings), qa_opts(["lib/symphony_elixir/cli.ex"]))
+
+      assert_receive {:memory_tracker_state_update, "issue-gate-flow", "In Progress"}
+      refute_received {:memory_tracker_state_update, _issue_id, "Merging"}
+      refute_received {:gate_request, _job, _opts}
+      assert %{qa_verdict: "fail", qa_fix_attempts: 1, qa_failure: %{findings: ["exits 0 on a bad config"]}} = stored_record()
+    end
+
+    test "a verdict whose QA result was replaced while it ran moves nothing, and the next poll asks the gate again", %{root: root} do
+      settings = settings("enforce", root)
+      first = DateTime.add(DateTime.utc_now(), -60, :second)
+      record = put_record(%{qa_sha: @sha, qa_verdict: "pass", qa_target_state: "In Review", qa_applied: false, qa_updated_at: first})
+
+      # QA reported again on the head while the gate ran.
+      put_record(Map.put(record, :qa_updated_at, DateTime.utc_now()))
+
+      log =
+        capture_log(fn ->
+          assert {:auto_review_gate_not_applied, "issue-gate-flow", "approve", "the QA result it followed was replaced since the gate started"} =
+                   AutoReview.run_gate(gate_job(record, settings), gate_opts(root))
+        end)
+
+      refute log =~ "Acceptance gate moved"
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+      assert %{gate_sha: @sha, gate_verdict: "approve", gate_qa_at: ^first} = stored_record()
+
+      # The stored approve followed the replaced result, so the next green poll asks for a fresh pass.
+      assert {:gate_started, "issue-gate-flow", @sha} = green_poll(stored_record(), settings)
+      assert_receive {:gate_request, %{sha: @sha}, _opts}
+
+      # QA running again on the head (its result cleared) replaces it too.
+      put_record(Map.merge(record, %{qa_sha: nil, qa_verdict: nil}))
+
+      assert {:auto_review_gate_not_applied, "issue-gate-flow", "approve", "the QA result it followed was replaced since the gate started"} =
+               AutoReview.run_gate(gate_job(record, settings), gate_opts(root))
+    end
+
+    test "the gate's move to Merging is logged after the QA outcome for the same head", %{root: root} do
+      settings = settings("enforce", root)
+      Application.put_env(:symphony_elixir, :gate_flow_qa_result, qa_pass())
+
+      log =
+        capture_log(fn ->
+          assert {:gate_started, "issue-gate-flow", @sha} = AutoReview.run_qa(qa_job(put_record(), settings), qa_opts(["lib/symphony_elixir/cli.ex"]))
+          assert_receive {:gate_request, job, _opts}
+          assert {:auto_review_gate, "issue-gate-flow", "approve", "Merging"} = AutoReview.run_gate(job, gate_opts(root))
+        end)
+
+      {qa_at, _length} = :binary.match(log, "QA outcome issue_id=issue-gate-flow issue_identifier=TP-960 verdict=pass sha=#{@sha}")
+      {moved_at, _length} = :binary.match(log, "Acceptance gate moved TP-960 to Merging issue_id=issue-gate-flow verdict=approve sha=#{@sha}")
+      assert qa_at < moved_at
+    end
+  end
 end

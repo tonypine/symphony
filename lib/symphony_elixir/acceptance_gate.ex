@@ -19,7 +19,8 @@ defmodule SymphonyElixir.AcceptanceGate do
       leaves no verdict until the `escalate.inconclusive_limit`-th one on the same SHA, which
       escalates with reason `inconclusive`;
     * the verdict is stored per head SHA on the CI check record (`gate_sha`, `gate_verdict`,
-      `gate_agent_verdict`, `gate_reasons`, `gate_run_id`), the run in the run store with
+      `gate_agent_verdict`, `gate_reasons`, `gate_run_id`, and in `gate_qa_at` the `qa_updated_at`
+      of the QA result it follows), the run in the run store with
       `kind: "acceptance_gate"`, its tokens and the verdict (`verdict`, `agent_verdict`, `reasons`,
       the `criteria` counts, `judged_at`; `SymphonyElixir.AcceptanceGate.Agreement` later adds the
       human's decision), the `## Symphony Acceptance Gate` Linear comment
@@ -319,6 +320,8 @@ defmodule SymphonyElixir.AcceptanceGate do
       gate_agent_verdict: decision.agent_verdict,
       gate_reasons: decision.reasons,
       gate_run_id: run_id,
+      # The QA result the verdict follows: a new one on the head asks the gate again.
+      gate_qa_at: Map.get(record, :qa_updated_at),
       gate_mode: mode(settings),
       gate_inconclusive: decision.inconclusive,
       gate_findings: findings,
