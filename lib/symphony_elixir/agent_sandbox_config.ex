@@ -24,6 +24,9 @@ defmodule SymphonyElixir.AgentSandboxConfig do
       (operator-authored Claude Code prompts / subagents / hooks)
     * `/etc/sudoers`, `/private/etc/sudoers`, `/var/root` (macOS admin/root state)
     * `~/Library/Application Support`, `~/Library/Keychains`, `~/Library/Preferences` (macOS app data)
+    * `~/Library/CloudStorage` (Google Drive, Dropbox, OneDrive) and `~/Library/Mobile Documents`
+      (iCloud Drive): cloud-synced personal files, where an agent's read also makes macOS ask the
+      operator to let Symphony access them
     * shell startup files (e.g. `~/.zshrc`, `~/.bash_profile`) and shell/REPL history files
 
   Codex command sandboxing additionally denies reads of selected runtime
@@ -73,6 +76,8 @@ defmodule SymphonyElixir.AgentSandboxConfig do
     "~/Library/Application Support",
     "~/Library/Keychains",
     "~/Library/Preferences",
+    "~/Library/CloudStorage",
+    "~/Library/Mobile Documents",
     "~/.docker",
     "~/.netrc",
     "~/.git-credentials",
@@ -93,6 +98,14 @@ defmodule SymphonyElixir.AgentSandboxConfig do
     "~/.history",
     "~/.python_history",
     "~/.node_repl_history"
+  ]
+
+  # Claude's file tools run in the Claude process, outside the shell sandbox's `denyRead`. These
+  # get `Read(<path>)` rules too, so a Grep or Glob over the home folder doesn't make macOS ask the
+  # operator to let Symphony into their cloud drives.
+  @claude_read_deny_paths [
+    "~/Library/CloudStorage",
+    "~/Library/Mobile Documents"
   ]
 
   @deny_write_paths [
@@ -318,6 +331,20 @@ defmodule SymphonyElixir.AgentSandboxConfig do
     (@deny_write_paths ++ normalize_sandbox_paths(extra_deny_write_paths))
     |> Enum.uniq()
     |> Enum.map(&"Edit(#{claude_rule_path(&1)})")
+  end
+
+  @doc """
+  Claude Code `permissions.deny` rules that refuse its file tools on the cloud-synced folders,
+  but the ones an operator's `allow_read_paths` opens.
+
+  Claude Code applies a `Read(<path>)` rule to `Read`, `Grep` and `Glob`, which run in the Claude
+  process and so outside `sandbox.filesystem.denyRead`.
+  """
+  @spec claude_read_deny_rules([String.t()]) :: [String.t()]
+  def claude_read_deny_rules(allow_read_paths \\ []) do
+    allow_read_paths = normalize_allow_read_paths(allow_read_paths)
+
+    for path <- @claude_read_deny_paths, path not in allow_read_paths, do: "Read(#{path})"
   end
 
   defp claude_rule_path("/" <> _absolute = path), do: "/" <> path
