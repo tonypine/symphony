@@ -70,6 +70,19 @@ arguments from prompts.
   posts an update to the current issue's project. `health` is optional
   (`onTrack`, `atRisk`, `offTrack`). The body is secret-scanned. At most one per
   run. Use it when a `breakdown` parent ticket closes out.
+- `linear_create_document` with `{"title": "...", "content": "..."}`: creates a
+  document in the current issue's project titled `<identifier> · <title>` and
+  attaches it to the issue, so later runs on the issue can read and edit it. Use
+  it for long-lived artifacts (domain brief, journeys, Kano map, screens, ADR
+  draft) instead of comments. Title and content are secret-scanned. At most 10
+  per run; an issue outside a project is refused.
+- `linear_update_document` with `{"document_id": "...", "content": "...", "title": "..."}`:
+  replaces the whole content, and the title when given (it keeps the identifier
+  prefix), of a document this issue's runs created. `title` is optional. Content
+  and title are secret-scanned. Any other document is refused.
+- `linear_get_document` with `{}`: lists the documents this issue's runs created
+  (id, title, url). With `{"document_id": "..."}` it reads one in full, its
+  content secret-redacted. Any other document is refused. It is read-only.
 - `linear_withdraw_human_action` with `{"reason": "...", "title": "..."}`:
   withdraws a human-action request that is no longer needed. It replies with the
   reason under the request and removes the human-action label once no open
