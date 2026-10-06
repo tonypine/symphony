@@ -2593,6 +2593,11 @@ Note:
 
 - Terminal-state workspace cleanup is handled by startup cleanup and active-run reconciliation
   (including terminal transitions for currently running issues).
+- The orchestrator does not wait for a workspace removal (the `before_remove` hook, then
+  `git worktree remove` and the branch delete, which can take minutes): it hands the removal to a
+  cleanup worker that runs it outside the orchestrator and logs its failures, and releases the
+  issue's claim at once. A run of the same issue waits for a removal still in flight before it
+  creates or reuses the workspace.
 - Retry handling mainly operates on active candidates and releases claims when the issue is absent,
   rather than performing terminal cleanup itself.
 

@@ -74,6 +74,7 @@ defmodule SymphonyElixir.Application do
           # can stop the agent processes they leave behind.
           SymphonyElixir.AgentProcesses,
           {Task.Supervisor, name: SymphonyElixir.TaskSupervisor},
+          SymphonyElixir.WorkspaceCleanup,
           SymphonyElixir.Config.Cache,
           SymphonyElixir.Linear.Usage,
           SymphonyElixir.Repo.FetchLog,

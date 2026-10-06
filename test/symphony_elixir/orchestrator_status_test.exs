@@ -3072,6 +3072,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert_receive {:DOWN, ^worker_ref, :process, ^worker_pid, :shutdown}
 
     assert %{running: []} = GenServer.call(pid, :snapshot)
+    assert :ok = WorkspaceCleanup.await(issue.identifier)
     assert File.read!(marker) == "stopped"
     refute File.exists?(workspace)
 
@@ -3080,6 +3081,76 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     assert {:ok, %{stopped: false, issue_id: "MT-STOP"}} =
              Orchestrator.stop_running(orchestrator_name, issue.identifier)
+  end
+
+  test "stop_running leaves the workspace removal to WorkspaceCleanup and keeps answering while its before_remove hook runs" do
+    workspace_root = Path.join(System.tmp_dir!(), "symphony-stop-running-slow-remove-#{System.unique_integer([:positive])}")
+    hook_log = Path.join(workspace_root, "hook.log")
+    release = Path.join(workspace_root, "release")
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      workspace_root: workspace_root,
+      poll_interval_ms: 60_000,
+      hook_before_remove: """
+      echo started >> #{hook_log}
+      while [ ! -f #{release} ]; do sleep 0.05; done
+      echo finished >> #{hook_log}
+      """
+    )
+
+    slow_issue = %Issue{id: "issue-slow-remove", identifier: "MT-SLOW-REMOVE", title: "Slow remove", state: "In Progress"}
+    other_issue = %Issue{id: "issue-other-stop", identifier: "MT-OTHER-STOP", title: "Other", state: "In Progress"}
+    workspace = Path.join([workspace_root, "default", slow_issue.identifier])
+    File.mkdir_p!(workspace)
+
+    orchestrator_name = Module.concat(__MODULE__, :SlowRemoveOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      File.write(release, "")
+      WorkspaceCleanup.await(slow_issue.identifier)
+
+      if Process.alive?(pid) do
+        stop_process(pid)
+      end
+
+      File.rm_rf(workspace_root)
+    end)
+
+    # The startup poll would stop runs the memory tracker does not list.
+    wait_for_poll_cycle_idle(pid)
+    {slow_worker, slow_ref} = start_blocked_worker()
+    {other_worker, other_ref} = start_blocked_worker()
+    started_at = DateTime.utc_now()
+
+    :sys.replace_state(pid, fn state ->
+      %{
+        state
+        | running: %{
+            slow_issue.id => running_entry(slow_issue, slow_worker, slow_ref, "run-slow-remove", started_at),
+            other_issue.id => running_entry(other_issue, other_worker, other_ref, "run-other-stop", started_at)
+          },
+          claimed: MapSet.new([slow_issue.id, other_issue.id])
+      }
+    end)
+
+    assert {:ok, %{stopped: true}} = Orchestrator.stop_running(orchestrator_name, slow_issue.identifier)
+    assert_receive {:DOWN, ^slow_ref, :process, ^slow_worker, :shutdown}
+    assert wait_for_file_contents(hook_log, "started\n", 5_000)
+
+    # The hook is still blocked: the orchestrator answers and handles another issue meanwhile.
+    assert %{running: [%{issue_id: "issue-other-stop"}]} = GenServer.call(pid, :snapshot, 1_000)
+    assert {:ok, %{stopped: true}} = Orchestrator.stop_running(orchestrator_name, other_issue.identifier)
+    assert_receive {:DOWN, ^other_ref, :process, ^other_worker, :shutdown}
+    assert %{running: []} = Orchestrator.snapshot(orchestrator_name, 1_000)
+    assert File.read!(hook_log) == "started\n"
+    assert File.exists?(workspace)
+
+    File.write!(release, "")
+    assert :ok = WorkspaceCleanup.await(slow_issue.identifier)
+    assert File.read!(hook_log) == "started\nfinished\n"
+    refute File.exists?(workspace)
   end
 
   test "stop_running returns before slow stop_session cleanup completes" do
