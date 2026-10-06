@@ -1437,6 +1437,12 @@ When enabled:
   credentials, a global git credential helper or a forwarded SSH agent); the `qa_*` tools then fail
   with `qa_worker_unsafe` (or `qa_worker_unreachable` when the host cannot be reached) and tell the
   agent to answer `blocked`.
+- A `macos_app` pass MUST hand the QA agent the host loopback ports it may serve the app's stubs
+  and proxies on (`QA_HOST_PORTS`), and the app reaches them at `http://localhost:<port>`. With
+  `worker_host` set, Symphony MUST forward each of them from the QA host's loopback to the same
+  port on the Symphony host's `127.0.0.1` for the whole pass (one `ssh -R` session per pass, with
+  `ExitOnForwardFailure`), and only those ports; a pass whose forwards cannot open MUST be
+  `blocked` with the reason before the agent starts.
 - The QA agent MUST run in a fresh detached worktree at the PR head SHA, outside the issue
   workspace, removed afterwards, with a tool scope limited to read-only Linear/GitHub tools and
   `linear_attach_file`. It answers with JSON: `verdict` (`pass`, `fail` or `blocked`), `summary`,

@@ -1594,6 +1594,17 @@ host and the worktree checks still apply there. Then:
 - `qa_launch_app` starts that copy with only `SYMPHONY_BAR_QA_ROOT` and `SYMPHONY_QA_OPENROUTER_URL`
   set, over an SSH session that forwards the URL's loopback port on the QA host back to the
   OpenRouter stub on the Symphony host;
+- at the start of the pass Symphony picks three free loopback ports on the Symphony host and
+  hands them to the QA agent as `QA_HOST_PORTS` (in the prompt and its environment). It opens one
+  SSH session to the QA host that forwards each of them from the QA host's loopback to the same
+  port on the Symphony host (`ssh -o ExitOnForwardFailure=yes -R <port>:127.0.0.1:<port>`), and
+  closes it when the pass ends. The agent serves the app's stubs and proxies on `127.0.0.1` at
+  those ports, and the app uses `http://localhost:<port>`. Loopback works whatever address the QA
+  VM has (a bridged VM cannot reach the NAT address `bridge100` still has) and needs no macOS
+  Local Network permission, which an app connecting to a LAN address asks a person for. A port
+  the QA host refuses is retried with fresh ports; a tunnel that still cannot open makes the pass
+  `blocked` with the reason, and one that closes during the pass is reopened at the next
+  `qa_launch_app`, which fails with `qa_host_tunnel_failed` when it cannot;
 - the Swift helper is compiled there with `swiftc` on first use in each pass, into the run
   directory's `helper/`. Passes never share it: each PR's build runs as the QA user, and a helper
   it replaced could answer the permission, window and accessibility calls of later passes. There it

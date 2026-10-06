@@ -137,6 +137,14 @@ defmodule SymphonyElixir.QaDriverTest do
   end
 
   describe "tools" do
+    test "hands out three free host ports and opens no tunnel for a local app", %{worktree: worktree} do
+      driver = start_driver(worktree)
+      assert {:ok, [_one, _two, _three] = ports} = QaDriver.host_ports(driver)
+      assert length(Enum.uniq(ports)) == 3
+      assert %{tunnel: nil} = :sys.get_state(driver)
+      assert QaDriver.host_ports(nil) == {:ok, []}
+    end
+
     test "lists the qa tools and needs a driver" do
       assert "qa_build" in QaDriver.tools()
       assert "qa_ax_set_value" in QaDriver.tools()
@@ -891,9 +899,25 @@ defmodule SymphonyElixir.QaDriverTest do
           Map.get(overrides, :put, {:ok, "#{dir}/files/#{name}"})
         end,
         helper: fn dir -> send(test, {:helper, dir}) && {:ok, @helper} end,
+        tunnel: fn ports -> send(test, {:tunnel, ports}) && Map.get(overrides, :tunnel, &open_tunnel/0).() end,
         cleanup: fn dir -> send(test, {:cleanup, dir}) && :ok end
       })
     end
+
+    # Stands in for the tunnel's SSH session: it prints a line as `ssh` may, then
+    # runs until its stdin closes, or exits when the test writes a line to it.
+    defp open_tunnel, do: {:ok, Port.open({:spawn_executable, "/bin/sh"}, [:binary, :exit_status, args: ["-c", "echo warning; read line; exit 3"]])}
+
+    # Answers each tunnel request with the next of `results`.
+    defp tunnel_results(results) do
+      {:ok, agent} = Agent.start_link(fn -> results end)
+      on_exit(fn -> if Process.alive?(agent), do: Agent.stop(agent) end)
+
+      fn -> agent |> Agent.get_and_update(fn [result | rest] -> {result, rest} end) |> tunnel_result() end
+    end
+
+    defp tunnel_result(:open), do: open_tunnel()
+    defp tunnel_result(error), do: error
 
     defp remote_git(["archive" | _args], _cwd), do: {"fatal: not a valid object name HEAD\n", 128}
     defp remote_git(args, cwd), do: clean_git(args, cwd)
@@ -993,6 +1017,59 @@ defmodule SymphonyElixir.QaDriverTest do
       assert message =~ "could not be prepared: ssh exited with status 255"
     end
 
+    test "forwards the host ports from the QA host for the whole pass", %{worktree: worktree} do
+      driver = remote_driver(worktree, remote_host())
+      assert_received {:tunnel, ports}
+      assert QaDriver.host_ports(driver) == {:ok, ports}
+      assert length(ports) == 3 and length(Enum.uniq(ports)) == 3
+      %{tunnel: tunnel} = :sys.get_state(driver)
+      assert Port.info(tunnel)
+
+      QaDriver.stop(driver)
+      refute Port.info(tunnel)
+    end
+
+    test "retries a port the QA host refuses on fresh ports, then reports why the tunnel could not open", %{worktree: worktree} do
+      taken = {:error, {:port_taken, "ssh exited with status 255: Error: remote port forwarding failed for listen port 50001"}}
+      driver = remote_driver(worktree, remote_host(%{tunnel: tunnel_results([taken, :open])}))
+      assert_received {:tunnel, refused}
+      assert_received {:tunnel, ports}
+      assert refused != ports
+      assert QaDriver.host_ports(driver) == {:ok, ports}
+
+      driver = remote_driver(worktree, remote_host(%{tunnel: tunnel_results([taken, taken, taken])}))
+      assert {:error, "ssh exited with status 255: Error: remote port forwarding failed" <> _rest} = QaDriver.host_ports(driver)
+      for _attempt <- 1..3, do: assert_received({:tunnel, _ports})
+
+      driver = remote_driver(worktree, remote_host(%{tunnel: tunnel_results([{:error, {:failed, "ssh exited with status 255: Connection refused"}}])}))
+      assert QaDriver.host_ports(driver) == {:error, "ssh exited with status 255: Connection refused"}
+      assert_received {:tunnel, _ports}
+      refute_received {:tunnel, _ports}
+    end
+
+    test "opens no tunnel to a QA host it refused", %{worktree: worktree} do
+      driver = remote_driver(worktree, remote_host(%{prepare: {:error, {:unsafe, "has a forwarded SSH agent"}}}))
+      assert {:ok, [_one, _two, _three]} = QaDriver.host_ports(driver)
+      refute_received {:tunnel, _ports}
+    end
+
+    test "reopens a tunnel that closed at the next launch, and fails the launch when it cannot", %{worktree: worktree} do
+      failed = {:error, {:failed, "ssh exited with status 255: Connection refused"}}
+      driver = remote_driver(worktree, remote_host(%{tunnel: tunnel_results([:open, :open, failed])}))
+      assert_received {:tunnel, ports}
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+
+      assert capture_log(fn -> close_tunnel(driver) end) =~ "host-port tunnel closed status=3"
+      {{:ok, %{"pid" => _pid}}, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{}) end)
+      assert_received {:tunnel, ^ports}
+
+      capture_log(fn -> close_tunnel(driver) end)
+      {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{}) end)
+      assert {:error, {:qa_tool, "qa_host_tunnel_failed", message}} = result
+      assert message =~ "QA_HOST_PORTS (#{Enum.join(ports, ", ")}) from the QA host closed and could not reopen: ssh exited with status 255: Connection refused."
+      assert message =~ "answer with verdict `blocked`"
+    end
+
     test "reports a failed copy to the QA host", %{worktree: worktree} do
       driver = remote_driver(worktree, remote_host(), &remote_git/2)
       assert {:error, {:qa_tool, "qa_git_failed", message}} = QaDriver.call_tool(driver, "qa_build", %{})
@@ -1083,5 +1160,11 @@ defmodule SymphonyElixir.QaDriverTest do
       assert {:error, _message} = Host.launch("/nonexistent/qa", cd: System.tmp_dir!(), env: [])
       assert %{cmd: _cmd, launch: _launch, kill: _kill, helper: _helper, call_helper: _call_helper} = Host.default()
     end
+  end
+
+  defp close_tunnel(driver) do
+    %{tunnel: tunnel} = :sys.get_state(driver)
+    Port.command(tunnel, "close\n")
+    wait_until(fn -> :sys.get_state(driver).tunnel == nil end)
   end
 end
