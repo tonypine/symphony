@@ -41,6 +41,7 @@ defmodule SymphonyElixir.AgentRunner do
   @dev_server_pid_key {__MODULE__, :verification_dev_server_pid}
   @dependency_review_state "In Review"
   @idle_park_state "Backlog"
+  @merging_state "Merging"
   # Consecutive turns with no new commit, no state change and no PR change that end the run.
   @max_empty_turns 2
   # Fallback when settings are unavailable; the effective value comes from
@@ -745,8 +746,7 @@ defmodule SymphonyElixir.AgentRunner do
         hand_off_pushed_head(issue, ci_action, run_context)
 
       idle_turn_limit_reached?(issue, run_context) ->
-        forget_rework_base(issue, run_context.opts)
-        park_idle_issue(issue, run_context.opts)
+        end_idle_run(issue, run_context)
 
       true ->
         :continue
@@ -1666,21 +1666,78 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   # A landing run waits on CI through `merging_ci_pending?/2`, and parking it would drop the
-  # human's merge approval. A run whose HEAD is the PR head with checks pending, but that is not
-  # handed off (a Rework run, or one that started on that head), is not idle either; it keeps
-  # turning, up to `agent.max_turns`, until CI settles.
-  defp idle_turn_limit_reached?(%Issue{} = issue, %{progress: progress} = run_context) do
-    progress.empty_turns >= @max_empty_turns and !merging_state?(issue.state) and
-      !pushed_head_ci_pending?(issue, run_context)
+  # human's merge approval.
+  defp idle_turn_limit_reached?(%Issue{} = issue, %{progress: progress}) do
+    progress.empty_turns >= @max_empty_turns and !merging_state?(issue.state)
   end
 
-  defp pushed_head_ci_pending?(%Issue{} = issue, %{progress: %{head: head}} = run_context) do
-    if pushed_head_ci_action(issue, run_context) == :pending do
-      Logger.info("Not parking #{issue_context(issue)}; waiting for CI on its pushed head #{head}")
-      true
-    else
-      false
+  # A run whose HEAD is the PR head with checks pending, but that is not handed off (a Rework run,
+  # or one that started on that head), is not idle; it keeps turning, up to `agent.max_turns`,
+  # until CI settles. A CI-fix run that found the red check a flake rightly pushes nothing: once CI
+  # on its PR head is green, that is its outcome, so it hands the PR back instead of being parked
+  # (`hand_off_green_ci_fix/2`). Any other idle run is parked.
+  defp end_idle_run(%Issue{} = issue, %{progress: %{head: head}} = run_context) do
+    case pushed_head_ci_action(issue, run_context) do
+      :pending ->
+        Logger.info("Not parking #{issue_context(issue)}; waiting for CI on its pushed head #{head}")
+        :continue
+
+      ci_action ->
+        if ci_action == :success and ci_fix_run?(issue, run_context) do
+          hand_off_green_ci_fix(issue, run_context)
+        else
+          park_idle_run(issue, run_context)
+        end
     end
+  end
+
+  # `Rework` keeps its own rule (`rework_finished?/2`): a rework that adds no commit is not done.
+  defp ci_fix_run?(%Issue{} = issue, run_context), do: is_map(run_context.opts[:ci_failure]) and !rework_state?(issue.state)
+
+  defp park_idle_run(%Issue{} = issue, run_context) do
+    forget_rework_base(issue, run_context.opts)
+    park_idle_issue(issue, run_context.opts)
+  end
+
+  # A CI fix on an approved PR (the CI failure came from `Merging`) whose PR head is still the
+  # commit that failed goes back to `Merging`, where auto-merge turns on again: the approval still
+  # covers the PR's diff. Any other green CI fix, such as a run that started on a fix an earlier
+  # run pushed, goes to the post-PR state, where review judges its head.
+  defp hand_off_green_ci_fix(%Issue{} = issue, %{progress: %{head: head, start_head: start_head}} = run_context) do
+    ci_failure = run_context.opts[:ci_failure]
+
+    if ci_failure[:approved] == true and head == start_head and head == ci_failure[:commit_sha] do
+      Logger.info("CI fix run for #{issue_context(issue)} pushed nothing and CI on its PR head #{head} is green; moving back to #{@merging_state}")
+      PrReviewPoller.release_auto_merge_hold(issue.id, pending_lookup_opts(issue, run_context.opts))
+      return_to_merging(issue, head, run_context)
+    else
+      post_pr_state = post_pr_state(run_context)
+      Logger.info("CI is green on #{issue_context(issue)}'s PR head #{head} after a CI fix run with no new commit; moving to #{post_pr_state}")
+
+      case move_to_post_pr_state(issue, post_pr_state, "with CI green on its PR head", run_context) do
+        :ok -> :ok
+        {:error, reason} -> {:error, {:green_ci_fix_handoff_failed, reason}}
+      end
+    end
+  end
+
+  defp return_to_merging(%Issue{id: issue_id} = issue, head, run_context) do
+    label = "moving #{issue_context(issue)} back to #{@merging_state} with CI green"
+    move = fn -> Tracker.update_issue_state(issue_id, @merging_state) end
+    comment = fn -> Tracker.create_comment(issue_id, green_ci_fix_note(head)) end
+
+    with :ok <- with_linear_retry(move, label, run_context.opts),
+         :ok <- with_linear_retry(comment, label, run_context.opts) do
+      :ok
+    else
+      {:error, reason} -> {:error, {:green_ci_fix_handoff_failed, reason}}
+    end
+  end
+
+  defp green_ci_fix_note(head) do
+    """
+    Symphony moved this issue back to #{@merging_state}: the CI fix run found nothing to change and pushed no commit, and CI on the PR head `#{head}` is green, so the approval still covers the PR and auto-merge turns back on.
+    """
   end
 
   # The CI action for the workspace HEAD when it is the attached PR's head, or nil. A PR with no
