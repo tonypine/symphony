@@ -3173,7 +3173,8 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # A landing run that ended on pending checks stays held in `Merging` until the CI poller sees
-  # that head go green, the issue leaves `Merging` (a red head takes the CI-failure path), or
+  # that head go green, or every check its base branch requires pass (`CiPoller.landing_action/1`),
+  # the issue leaves `Merging` (a red head takes the CI-failure path), or
   # `ci.merging_wait_timeout_ms` passes. Releasing it lets this poll dispatch the landing agent.
   defp release_merging_ci_waits(%State{merging_ci_waits: waits} = state, _issues) when map_size(waits) == 0, do: state
 
@@ -3211,7 +3212,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     case CiPoller.observed_head(issue_id, opts) do
       %{commit_sha: commit_sha, conclusion: "SUCCESS"} -> commit_sha == wait.commit_sha
-      _observed -> false
+      _observed -> is_binary(wait.commit_sha) and CiPoller.landing_ready_head(issue_id, opts) == wait.commit_sha
     end
   end
 

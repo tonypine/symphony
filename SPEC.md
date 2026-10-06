@@ -2139,6 +2139,17 @@ The poller:
   forever. It logs `Ignoring stale check <name> in completed run <id>`. A check in a run that
   completed with any other conclusion stays as reported. To see this, a head whose rollup has no
   failed check and only GitHub Actions checks left unfinished also reads the head's workflow runs.
+- reads a landing's head (the `Merging` wait, the release of a held landing run, and the merge
+  tool) against the checks its base branch requires: a head still waiting on a check, with none
+  failed, also reads the required status checks of the base branch's rulesets
+  (`GET repos/{owner}/{repo}/rules/branches/{branch}`) and branch protection
+  (`GET repos/{owner}/{repo}/branches/{branch}`, unless its enforcement is `off`). Once every
+  required check reported and passed, the head is ready to land while checks the branch doesn't
+  require are still queued or running. A failed check still holds it, required or not. When the
+  branch requires no check, or the read fails (logged as `Could not read the required checks of
+  <branch>; waiting on every check`), the landing waits on every check as above. The poller
+  records the head it last saw ready to land for each `Merging` issue, and the orchestrator
+  releases a held landing run on it as on a green head.
 
 Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `enabled: true`):
 
@@ -3399,7 +3410,8 @@ Scoped GitHub tool extension contract:
 - `github_merge_pull_request`, if exposed, MUST merge only the current
   workspace branch's pull request, MUST refuse unless the current issue is in
   the human-approved `Merging` state, MUST refuse while any check is failing or
-  pending, and MUST pin the merge to the head commit whose checks were read.
+  pending (only the checks the base branch requires, when it requires any; see the CI poller's
+  landing read), and MUST pin the merge to the head commit whose checks were read.
 - GitHub read-only review sessions SHOULD hide GitHub tools that mutate local
   workspace Git metadata or remote GitHub state.
 

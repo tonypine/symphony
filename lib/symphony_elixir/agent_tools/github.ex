@@ -163,8 +163,9 @@ defmodule SymphonyElixir.AgentTools.GitHub do
   Squash-merges the current branch's pull request at the head commit whose checks were read.
 
   A human approves the merge by moving the Linear issue to `Merging`, so the merge is refused in
-  any other state. It is also refused while a check is failing or pending; a pull request with no
-  checks at all is mergeable. Merging an already merged pull request succeeds without a second merge.
+  any other state. It is also refused while a check is failing or pending; when the base branch
+  requires checks, only those must have passed (see `CiPoller.landing_action/1`). A pull request
+  with no checks at all is mergeable. Merging an already merged pull request succeeds without a second merge.
   """
   @spec merge_pull_request(context(), keyword()) :: {:ok, map()} | {:error, term()}
   def merge_pull_request(context, opts \\ []) do
@@ -257,7 +258,7 @@ defmodule SymphonyElixir.AgentTools.GitHub do
   end
 
   defp squash_merge_pull_request(pr, pr_url, context, opts) do
-    with {:ok, ci_status} <- PullRequest.fetch_ci_status(pr_url, github_opts(context, opts)),
+    with {:ok, ci_status} <- PullRequest.fetch_ci_status(pr_url, github_opts(context, opts) ++ [required_checks: true]),
          :ok <- require_passing_checks(ci_status),
          {:ok, head_sha} <- head_commit_sha(ci_status),
          {:ok, _output} <-
@@ -283,7 +284,7 @@ defmodule SymphonyElixir.AgentTools.GitHub do
   defp require_passing_checks(%{checks: []}), do: :ok
 
   defp require_passing_checks(ci_status) do
-    case CiPoller.ci_action(ci_status) do
+    case CiPoller.landing_action(ci_status) do
       :success -> :ok
       outcome -> {:error, {:checks_not_passing, outcome}}
     end
