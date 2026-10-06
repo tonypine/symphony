@@ -132,14 +132,24 @@ public enum RunProfilesScope: Hashable {
 }
 
 /// The profiles of the top-level `agent` block and of each repository's `agent` block, keyed by
-/// repository key. A repository without a block holds empty profiles.
+/// repository key. A repository without a block holds empty profiles. `smallModel` is `agent.small_model`, the
+/// OpenRouter model for Claude Code's background calls on OpenRouter runs; nil leaves them on the run's model.
 public struct ScopedRunProfiles: Equatable {
     public var global: RunProfiles
     public var repositories: [String: RunProfiles]
+    public var smallModel: String?
 
-    public init(global: RunProfiles = RunProfiles(), repositories: [String: RunProfiles] = [:]) {
+    public init(global: RunProfiles = RunProfiles(), repositories: [String: RunProfiles] = [:], smallModel: String? = nil) {
         self.global = global
         self.repositories = repositories
+        self.smallModel = smallModel
+    }
+
+    /// Whether any row in any scope picks OpenRouter, so `smallModel` has runs to serve.
+    public var usesOpenRouter: Bool {
+        ([global] + repositories.values).contains { profiles in
+            ([profiles.defaults] + profiles.kinds.values).contains { $0.provider == RunProfilesConfig.openRouter }
+        }
     }
 
     public subscript(scope: RunProfilesScope) -> RunProfiles {
@@ -223,7 +233,8 @@ public enum RunProfilesConfig {
     }
 
     /// Keys of `agent:` in the order new ones are written.
-    static let agentOrder = ["runtime", "command", "provider", "model", "effort", "run_profiles"]
+    static let agentOrder = ["runtime", "command", "provider", "model", "effort", smallModelKey, "run_profiles"]
+    public static let smallModelKey = "small_model"
     static let fieldOrder = RunProfileField.allCases.map(\.rawValue)
     static let defaultIndentStep = 2
 
@@ -269,13 +280,20 @@ public enum RunProfilesConfig {
         return profiles
     }
 
-    /// The profiles of the top-level `agent` block and of every repository.
+    /// The profiles of the top-level `agent` block and of every repository, and `agent.small_model`.
     public static func scopedProfiles(in yaml: String) throws -> ScopedRunProfiles {
-        var profiles = ScopedRunProfiles(global: try self.profiles(in: yaml))
+        var profiles = ScopedRunProfiles(global: try self.profiles(in: yaml), smallModel: try smallModel(in: yaml))
         for key in try repositoryKeys(in: yaml) {
             profiles.repositories[key] = try self.profiles(in: yaml, scope: .repository(key))
         }
         return profiles
+    }
+
+    /// `agent.small_model`, or nil when it's missing.
+    public static func smallModel(in yaml: String) throws -> String? {
+        let document = Document(yaml)
+        guard let agent = try agentKey(in: document) else { return nil }
+        return try scalar(smallModelKey, in: document.children(of: agent), of: document)
     }
 
     /// The keys of the `repositories[]` entries, in file order.
@@ -402,7 +420,24 @@ public enum RunProfilesConfig {
                 }
             }
         }
+        if old.smallModel != new.smallModel {
+            text = try settingSmallModel(new.smallModel, in: text)
+        }
         return text
+    }
+
+    /// The same text with `agent.small_model` set, inserting it and any missing `agent:`, or removed for nil.
+    public static func settingSmallModel(_ value: String?, in yaml: String) throws -> String {
+        var document = Document(yaml)
+        let rendered = value.map(RepositoriesConfig.scalar)
+        guard let agent = try agentKey(in: document) else {
+            guard let rendered else { return yaml }
+            document.append(["agent:", String(repeating: " ", count: defaultIndentStep) + smallModelKey + ": " + rendered])
+            return document.text
+        }
+        let column = document.childIndent(in: document.children(of: agent)) ?? agent.indent + defaultIndentStep
+        try set(smallModelKey, to: rendered, under: agent, column: column, order: agentOrder, in: &document)
+        return document.text
     }
 
     /// The same text with one field set: `agent.<field>` for a nil kind, else

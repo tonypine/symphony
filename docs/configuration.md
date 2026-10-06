@@ -532,13 +532,22 @@ agent:
   - `ANTHROPIC_AUTH_TOKEN=<OPENROUTER_API_KEY>`;
   - `ANTHROPIC_API_KEY=` (empty);
   - `CLAUDE_CODE_SUBAGENT_MODEL=<id>`, so subagents use the same model;
-  - `ANTHROPIC_DEFAULT_HAIKU_MODEL=<id>`, `ANTHROPIC_DEFAULT_SONNET_MODEL=<id>`,
-    `ANTHROPIC_DEFAULT_OPUS_MODEL=<id>` and `ANTHROPIC_SMALL_FAST_MODEL=<id>`, so Claude Code's
-    background calls (titles, summaries) and model aliases use the same model instead of
-    Anthropic's own ids, which OpenRouter does not know.
+  - `ANTHROPIC_DEFAULT_SONNET_MODEL=<id>` and `ANTHROPIC_DEFAULT_OPUS_MODEL=<id>`, so Claude
+    Code's model aliases use the same model instead of Anthropic's own ids, which OpenRouter does
+    not know;
+  - `ANTHROPIC_DEFAULT_HAIKU_MODEL` and `ANTHROPIC_SMALL_FAST_MODEL`, the model for Claude Code's
+    background calls (titles, summaries): `small_model` when it is set, else `<id>`.
 
   `anthropic` runs start as before: Symphony sets none of these. In QA mode the base URL is the QA
   stub's instead (see [OpenRouter in QA](#qa-passes)).
+- `small_model`: optional OpenRouter model id for Claude Code's background calls on runs whose
+  provider is `openrouter`, for example `anthropic/claude-haiku-4.5`. Titles and summaries are
+  frequent, simple calls, so a cheap model keeps them from billing at the run's model's rate.
+  Unset, they use the run's model. One value for every OpenRouter run; `anthropic` runs ignore it.
+  When `OPENROUTER_API_KEY` is set and a run uses `openrouter`, `symphony check` reports an id
+  OpenRouter does not list, for example
+  `` agent.small_model: OpenRouter has no model `acme/typo` ``. The model needs no `tools`.
+  Settings in the macOS app edits it as the Background calls row of Models.
 - `OPENROUTER_API_KEY` (environment variable, read from Symphony's own environment): the
   OpenRouter API key. It is never written to `symphony.yml` and reaches the agent only through
   the subprocess env, as `ANTHROPIC_AUTH_TOKEN`. When it is unset, an `openrouter` run fails
