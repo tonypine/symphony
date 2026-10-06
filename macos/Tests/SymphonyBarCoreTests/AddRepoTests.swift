@@ -100,7 +100,35 @@ final class AddRepoTests: XCTestCase {
         XCTAssertEqual(checkout.workflowPath, "/Users/me/code/web/WORKFLOW.md")
     }
 
-    func testRejectsAFolderThatIsNotAGitHubCheckoutWithAWorkflow() {
+    func testAcceptsACheckoutWithoutAWorkflowAndReadsItsDefaultBranch() {
+        let result = LocalCheckout.inspect(
+            "/Users/me/code/web",
+            git: git([
+                "rev-parse --show-toplevel @ /Users/me/code/web": (0, "/Users/me/code/web\n"),
+                "remote get-url origin @ /Users/me/code/web": (0, "git@github.com:acme/web.git\n"),
+                "symbolic-ref --short refs/remotes/origin/HEAD @ /Users/me/code/web": (0, "origin/trunk\n"),
+            ]),
+            fileExists: { _ in false }
+        )
+
+        XCTAssertEqual(result, .success(LocalCheckout(path: "/Users/me/code/web", gitHub: "acme/web", hasWorkflow: false, defaultBranch: "trunk")))
+        XCTAssertEqual(checkout.missingWorkflowProblem, AddRepoProblem("/Users/me/code/web has no WORKFLOW.md. Add one before connecting the repo."))
+
+        for head in ["origin/\n", "trunk\n"] {
+            let odd = LocalCheckout.inspect(
+                "/w",
+                git: git([
+                    "rev-parse --show-toplevel @ /w": (0, "/w\n"),
+                    "remote get-url origin @ /w": (0, "acme/web\n"),
+                    "symbolic-ref --short refs/remotes/origin/HEAD @ /w": (0, head),
+                ]),
+                fileExists: { _ in true }
+            )
+            XCTAssertEqual(odd, .success(LocalCheckout(path: "/w", gitHub: "acme/web")), head)
+        }
+    }
+
+    func testRejectsAFolderThatIsNotAGitHubCheckout() {
         let top = ["rev-parse --show-toplevel @ /tmp/web": (Int32(0), "/tmp/web\n")]
         let cases: [([String: (Int32, String)], Bool, String)] = [
             ([:], true, "/tmp/web isn't a git checkout."),
@@ -110,8 +138,6 @@ final class AddRepoTests: XCTestCase {
              "/tmp/web has no origin remote. Symphony pushes agent branches to a GitHub origin."),
             (top.merging(["remote get-url origin @ /tmp/web": (0, "https://gitlab.com/acme/web.git\n")]) { $1 }, true,
              "The origin of /tmp/web isn't a GitHub repo: https://gitlab.com/acme/web.git"),
-            (top.merging(["remote get-url origin @ /tmp/web": (0, "https://github.com/acme/web\n")]) { $1 }, false,
-             "/tmp/web has no WORKFLOW.md. Add one before connecting the repo."),
         ]
         for (answers, hasWorkflow, message) in cases {
             let result = LocalCheckout.inspect("/tmp/web", git: git(answers), fileExists: { _ in hasWorkflow })

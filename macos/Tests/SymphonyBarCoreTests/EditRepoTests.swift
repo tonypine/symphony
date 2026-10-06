@@ -118,6 +118,9 @@ final class EditRepoTests: XCTestCase {
         )
         draft.folder = .failure(AddRepoProblem("~/x isn't a git checkout."))
         XCTAssertEqual(EditRepo.entry(for: draft, editing: web, existing: entries), .failure(AddRepoProblem("~/x isn't a git checkout.")))
+        // Only Add Repo drafts a WORKFLOW.md.
+        draft.folder = .success(LocalCheckout(path: "/Users/me/code/web", gitHub: "acme/web", hasWorkflow: false))
+        XCTAssertEqual(EditRepo.entry(for: draft, editing: web, existing: entries), .failure(checkout.missingWorkflowProblem))
 
         draft.folder = .success(checkout)
         let entry = try EditRepo.entry(for: draft, editing: web, existing: entries).get()

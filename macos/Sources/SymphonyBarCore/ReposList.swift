@@ -369,6 +369,8 @@ public enum ReposList {
 
     /// Value of a field only a running Symphony knows.
     public static let unavailable = "unavailable"
+    /// Value of the `WORKFLOW.md` field when the file loads.
+    public static let validWorkflow = "found, valid"
 
     /// The Repos window for Symphony's `status` and the last repos poll, nil before the first. The repos come
     /// from Symphony only while it answers; otherwise the rows come from the `symphony.yml` at `configPath`
@@ -549,7 +551,7 @@ public enum ReposList {
         let path = workflow.path.map(abbreviated)
         switch workflow.state {
         case .valid:
-            return RepoField(workflowLabel, "found, valid", detail: path)
+            return RepoField(workflowLabel, validWorkflow, detail: path)
         case .invalid:
             return RepoField(workflowLabel, "found, invalid", detail: workflow.error ?? path, tone: .problem)
         case .missing:

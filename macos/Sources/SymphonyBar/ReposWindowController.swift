@@ -28,6 +28,8 @@ final class ReposWindowController: NSObject, NSWindowDelegate {
     var restart: () -> Void = {}
 
     private let secrets: SecretsReader
+    /// The `WORKFLOW.md` files Add Repo added that Symphony can't read yet.
+    private let pendingWorkflows = PendingWorkflowStore(defaults: AppStores.current.defaults)
 
     /// `secrets` is shared with Start, so the Add Repo sheet and Start can't each put up a Keychain prompt.
     init(secrets: SecretsReader) {
@@ -107,7 +109,8 @@ final class ReposWindowController: NSObject, NSWindowDelegate {
         if case let .success(entries) = entries, let global = try? SymphonyConfigFile(path: configPath).readAcceptanceGateMode() {
             shown = AcceptanceGate.withGateFields(shown, entries: entries, global: global)
         }
-        model?.display = shown
+        ReposList.validWorkflows(poll).forEach(pendingWorkflows.clear)
+        model?.display = ReposList.withPendingWorkflows(shown, pending: pendingWorkflows.all)
     }
 
     /// Symphony's state while it answers, for the Edit sheet's gate stats.
@@ -147,10 +150,11 @@ final class ReposWindowController: NSObject, NSWindowDelegate {
     /// runs, but makes a repo's workflow store and its own clone only when it starts.
     private func saved(_ saved: AddRepoViewModel.Saved) {
         switch saved {
-        case let .added(key, madeDefault):
+        case let .added(key, madeDefault, workflow):
+            if let workflow { pendingWorkflows.record(workflow, for: key) }
             let apply = AddRepo.apply(status: status)
             finish(
-                message: AddRepo.savedMessage(key: key, apply: apply, madeDefault: madeDefault),
+                message: AddRepo.savedMessage(key: key, apply: apply, madeDefault: madeDefault, workflow: workflow),
                 apply: apply,
                 question: { AddRepo.restartQuestion(key: key, runs: $0) },
                 later: "Added \(key). Restart Symphony from the menu to connect it."
@@ -208,6 +212,7 @@ final class ReposWindowController: NSObject, NSWindowDelegate {
             model.message = "Couldn't disconnect \(key): \(error.localizedDescription)"
             return
         }
+        pendingWorkflows.clear(key)
         let apply = AddRepo.apply(status: status)
         finish(
             message: DisconnectRepo.message(key: key, apply: apply, newDefault: newDefault),
