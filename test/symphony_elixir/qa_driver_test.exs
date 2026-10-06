@@ -4,7 +4,7 @@ defmodule SymphonyElixir.QaDriverTest do
   import ExUnit.CaptureLog
 
   alias SymphonyElixir.{AgentEnv, Paths, PathSafety, QaDriver}
-  alias SymphonyElixir.QaDriver.{Host, HostStub}
+  alias SymphonyElixir.QaDriver.Host
 
   @app "macos/build/Demo.app"
   @helper "/fake/symphony-qa-driver"
@@ -106,7 +106,7 @@ defmodule SymphonyElixir.QaDriverTest do
           tmp_dir: Keyword.get(opts, :tmp_dir),
           host: Keyword.get(opts, :host, host()),
           git: Keyword.get(opts, :git, &clean_git/2)
-        ] ++ Keyword.take(opts, [:start_stub, :start_host_stub])
+        ] ++ Keyword.take(opts, [:start_stub])
       )
 
     on_exit(fn -> QaDriver.stop(driver) end)
@@ -566,170 +566,6 @@ defmodule SymphonyElixir.QaDriverTest do
     end
   end
 
-  describe "qa_host_stub" do
-    defp host_stub(driver, args \\ %{}), do: QaDriver.call_tool(driver, "qa_host_stub", args)
-
-    defp write_routes(dir, routes) do
-      path = Path.join(dir, "routes-#{System.unique_integer([:positive])}.json")
-      File.mkdir_p!(dir)
-      File.write!(path, if(is_binary(routes), do: routes, else: Jason.encode!(routes)))
-      path
-    end
-
-    defp launch_url(driver) do
-      {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{}) end)
-      assert {:ok, %{"host_stub_url" => url}} = result
-      url
-    end
-
-    test "serves the agent's routes at the URL each launch returns and records every request", %{root: root, worktree: worktree} do
-      tmp_dir = Path.join(root, "tmp")
-      driver = start_driver(worktree, tmp_dir: tmp_dir)
-
-      # Routes load before any app runs; the stub starts with the first launch.
-      routes = %{
-        "routes" => [
-          %{"path" => "/api/postings?page=2", "json" => [%{"id" => 2}]},
-          %{"method" => "get", "path" => "/api/postings", "json" => [%{"id" => 1, "body" => "**Bold**"}]},
-          %{"method" => "POST", "path" => "/api/postings", "status" => 201, "body" => "created", "content_type" => "text/plain"},
-          %{"path" => "/empty"}
-        ]
-      }
-
-      assert {:ok, %{"routes" => 4, "requests" => [], "note" => note}} = host_stub(driver, %{"local_path" => write_routes(tmp_dir, routes)})
-      assert note =~ "host_stub_url"
-      assert :sys.get_state(driver).host_stub == nil
-
-      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
-      url = launch_url(driver)
-      assert url =~ ~r{\Ahttp://127\.0\.0\.1:\d+\z}
-      assert_received {:launched, _executable, launch_opts, _port, _pid}
-      assert launch_opts[:reverse_forwards] == []
-
-      {responses, log} =
-        with_log(fn ->
-          [
-            Req.get!(url <> "/api/postings", retry: false),
-            Req.get!(url <> "/api/postings?page=2", retry: false),
-            Req.get!(url <> "/api/postings?page=3", retry: false),
-            Req.post!(url <> "/api/postings", body: "{}", retry: false),
-            Req.get!(url <> "/empty", retry: false),
-            Req.delete!(url <> "/api/postings", retry: false)
-          ]
-        end)
-
-      assert [first, second, third, posted, empty, deleted] = responses
-      assert {first.status, first.body} == {200, [%{"id" => 1, "body" => "**Bold**"}]}
-      assert Req.Response.get_header(first, "content-type") == ["application/json"]
-      assert second.body == [%{"id" => 2}]
-      assert third.body == [%{"id" => 1, "body" => "**Bold**"}]
-      assert {posted.status, posted.body} == {201, "created"}
-      assert Req.Response.get_header(posted, "content-type") == ["text/plain"]
-      assert {empty.status, empty.body} == {200, ""}
-      assert deleted.status == 404
-      assert deleted.body == %{"error" => "No route in the QA host stub for DELETE /api/postings."}
-      assert log =~ "QA host stub: GET /api/postings?page=2 status=200"
-
-      assert {:ok, %{"routes" => 4, "requests" => requests}} = host_stub(driver)
-
-      assert Enum.map(requests, &Map.take(&1, ["method", "path", "status", "matched"])) == [
-               %{"method" => "GET", "path" => "/api/postings", "status" => 200, "matched" => true},
-               %{"method" => "GET", "path" => "/api/postings?page=2", "status" => 200, "matched" => true},
-               %{"method" => "GET", "path" => "/api/postings?page=3", "status" => 200, "matched" => true},
-               %{"method" => "POST", "path" => "/api/postings", "status" => 201, "matched" => true},
-               %{"method" => "GET", "path" => "/empty", "status" => 200, "matched" => true},
-               %{"method" => "DELETE", "path" => "/api/postings", "status" => 404, "matched" => false}
-             ]
-
-      assert {:ok, _at, 0} = DateTime.from_iso8601(hd(requests)["at"])
-
-      # New routes replace the old ones on the running stub, and every app of the pass reaches it.
-      replaced = write_routes(Path.join(worktree, "qa-evidence"), %{"routes" => [%{"path" => "/health", "body" => "ok"}]})
-      assert {:ok, %{"routes" => 1}} = host_stub(driver, %{"local_path" => "qa-evidence/" <> Path.basename(replaced)})
-      second_url = launch_url(driver)
-      assert second_url == url
-
-      {_result, _log} =
-        with_log(fn ->
-          assert Req.get!(second_url <> "/health", retry: false).body == "ok"
-          assert Req.get!(second_url <> "/api/postings", retry: false).status == 404
-        end)
-
-      # A stub that died is started again for the next launch, with the same routes.
-      %{host_stub: %{pid: stub}} = :sys.get_state(driver)
-      ref = Process.monitor(stub)
-      Process.exit(stub, :kill)
-      assert_receive {:DOWN, ^ref, :process, ^stub, :killed}
-      wait_until(fn -> :sys.get_state(driver).host_stub == nil end)
-      restarted_url = launch_url(driver)
-      {_result, _log} = with_log(fn -> assert Req.get!(restarted_url <> "/health", retry: false).body == "ok" end)
-
-      # Stopping the driver stops the stub.
-      %{host_stub: %{pid: restarted}} = :sys.get_state(driver)
-      ref = Process.monitor(restarted)
-      QaDriver.stop(driver)
-      assert_receive {:DOWN, ^ref, :process, ^restarted, _reason}
-      assert :ok = HostStub.stop(restarted)
-    end
-
-    test "keeps the last 50 requests", %{worktree: worktree} do
-      driver = start_driver(worktree)
-      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
-      url = launch_url(driver)
-      {_result, _log} = with_log(fn -> for index <- 1..52, do: Req.get!(url <> "/r/#{index}", retry: false) end)
-
-      assert {:ok, %{"routes" => 0, "requests" => requests}} = host_stub(driver)
-      assert length(requests) == 50
-      assert hd(requests)["path"] == "/r/3"
-      assert List.last(requests)["path"] == "/r/52"
-    end
-
-    test "refuses a routes file it cannot read or serve", %{root: root, worktree: worktree} do
-      tmp_dir = Path.join(root, "tmp")
-      driver = start_driver(worktree, tmp_dir: tmp_dir)
-
-      assert error_code(host_stub(driver, %{"local_path" => ""})) == "invalid_arguments"
-      assert error_code(host_stub(driver, %{"local_path" => Path.join(root, "elsewhere.json")})) == "qa_host_stub_refused"
-
-      invalid = [
-        {"{", "is not valid JSON"},
-        {[], ~s(must be a JSON object with a "routes" list)},
-        {%{"routes" => List.duplicate(%{"path" => "/"}, 201)}, "has 201 routes; at most 200"},
-        {%{"routes" => [%{"path" => "/a"}, %{"path" => "a"}]}, ~s(invalid route 2: it needs a "path" starting with "/")},
-        {%{"routes" => [%{"path" => "/a", "headers" => %{}}]}, "unknown keys headers"},
-        {%{"routes" => [%{"path" => "/a", "method" => "GET /b"}]}, ~s("method" must be a word)},
-        {%{"routes" => [%{"path" => "/a", "method" => 1}]}, ~s("method" must be a word)},
-        {%{"routes" => [%{"path" => "/a", "status" => 101}]}, ~s("status" must be an integer from 200 to 599)},
-        {%{"routes" => [%{"path" => "/a", "json" => [], "body" => ""}]}, ~s(set "json" or "body", not both)},
-        {%{"routes" => [%{"path" => "/a", "body" => %{}}]}, ~s("body" must be a string)},
-        {%{"routes" => [%{"path" => "/a", "content_type" => "text/plain\r\nX-Evil: 1"}]}, ~s("content_type" must be one line)},
-        {%{"routes" => [%{"path" => "/a", "content_type" => ""}]}, ~s("content_type" must be one line)}
-      ]
-
-      for {routes, expected} <- invalid do
-        path = write_routes(tmp_dir, routes)
-        assert {:error, {:qa_tool, "qa_host_stub_invalid", message}} = host_stub(driver, %{"local_path" => path})
-        assert message =~ path
-        assert message =~ expected
-      end
-
-      # A refused file leaves the routes as they were.
-      assert {:ok, %{"routes" => 0}} = host_stub(driver)
-    end
-
-    test "fails the launch when the host stub can't start, keeping the OpenRouter stub", %{worktree: worktree} do
-      driver = start_driver(worktree, start_host_stub: fn _table -> {:error, :eaddrinuse} end)
-      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
-
-      {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{}) end)
-      assert {:error, {:qa_tool, "qa_launch_failed", message}} = result
-      assert message =~ "QA host stub"
-      assert message =~ ":eaddrinuse"
-      refute_received {:launched, _executable, _opts, _port, _pid}
-      assert %{stub: %{pid: _pid}, host_stub: nil} = :sys.get_state(driver)
-    end
-  end
-
   describe "launched PIDs" do
     test "every PID tool rejects a PID QA did not launch", %{worktree: worktree} do
       {driver, _pid} = launched_app(worktree)
@@ -1098,25 +934,18 @@ defmodule SymphonyElixir.QaDriverTest do
       assert String.starts_with?(bundle_dest, @run_dir <> "/builds/")
 
       {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{}) end)
-      assert {:ok, %{"pid" => pid, "host_stub_url" => host_stub_url}} = result
+      assert {:ok, %{"pid" => pid}} = result
       assert_received {:launched, executable, launch_opts, _port, ^pid}
       assert executable == bundle_dest <> "/Demo.app/Contents/MacOS/Demo"
       assert launch_opts[:cd] == @run_dir <> "/app-root"
-      # The app's SSH session forwards a loopback port on the QA host back to each of this pass's stubs.
+      # The app's SSH session forwards a loopback port on the QA host back to this pass's stub.
       assert [{"SYMPHONY_BAR_QA_ROOT", qa_root}, {"SYMPHONY_QA_OPENROUTER_URL", stub_url}] = launch_opts[:env]
       assert qa_root == @run_dir <> "/app-root"
-      %{stub: %{port: stub_port}, host_stub: %{port: host_stub_port}} = :sys.get_state(driver)
-
-      assert [{"127.0.0.1:" <> remote_port, local}, {"127.0.0.1:" <> host_stub_remote_port, host_stub_local}] =
-               launch_opts[:reverse_forwards]
-
+      %{stub: %{port: stub_port}} = :sys.get_state(driver)
+      assert [{"127.0.0.1:" <> remote_port, local}] = launch_opts[:reverse_forwards]
       assert local == "127.0.0.1:#{stub_port}"
       assert stub_url == "http://127.0.0.1:#{remote_port}/api"
-      assert host_stub_local == "127.0.0.1:#{host_stub_port}"
-      assert host_stub_url == "http://127.0.0.1:#{host_stub_remote_port}"
       assert String.to_integer(remote_port) in 20_000..59_999
-      assert String.to_integer(host_stub_remote_port) in 20_000..59_999
-      refute remote_port == host_stub_remote_port
 
       assert {:ok, %{"files" => [%{"path" => "qa-evidence/settings.png"}]}} = QaDriver.call_tool(driver, "qa_screenshot", %{"pid" => pid, "name" => "settings"})
       assert_received {:cmd, @helper, ["screenshot", _pid, "11", capture], _opts}

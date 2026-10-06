@@ -1486,21 +1486,15 @@ tools for it on the host, outside the sandbox, and checks every argument:
 | Tool | Does | Refuses |
 | --- | --- | --- |
 | `qa_build` | runs `build` in the QA worktree with the agent's scrubbed environment, then copies the `app` bundle into a private directory | a worktree with changes outside `qa-evidence/` and `.gradle-daemons/` (Symphony's own), gitignored files included: none may exist before the first build, and none may appear or change after a build; a bundle that resolves (symlinks included) outside the worktree, or that holds an absolute symlink or one with `..` |
-| `qa_launch_app` | starts the private copy of the bundle with `SYMPHONY_BAR_QA_ROOT` set to a private directory ([QA mode](../macos/README.md#qa-mode)) and `SYMPHONY_QA_OPENROUTER_URL` set to the pass's [OpenRouter stub](#qa-passes), and returns its PID and `host_stub_url`, the address this app reaches the pass's host stub at (see `qa_host_stub`) | an executable that changed since the last `qa_build`, or a worktree `qa_build` would refuse |
+| `qa_launch_app` | starts the private copy of the bundle with `SYMPHONY_BAR_QA_ROOT` set to a private directory ([QA mode](../macos/README.md#qa-mode)) and `SYMPHONY_QA_OPENROUTER_URL` set to the pass's [OpenRouter stub](#qa-passes), and returns its PID | an executable that changed since the last `qa_build`, or a worktree `qa_build` would refuse |
 | `qa_quit_app` | quits a launched app and returns its recent output | a PID it did not launch |
 | `qa_screenshot` | saves the app's on-screen windows to new files `qa-evidence/<name>.png` | a PID it did not launch, a window of another app, a name that already exists (file or symlink) |
 | `qa_ax_tree` | reads the accessibility tree (role, title, value, frame; never a secure field's value), filtered by `role` or `text`, capped in depth, nodes and size | a PID it did not launch |
 | `qa_ax_press`, `qa_ax_set_value` | press an element (or `AXRaise` a window) and set a field's value: a text field gets it typed in with key events sent to the app alone (brought to the front, focused, text selected, then Tab), so the app sees the edit; other controls get `AXValue` set | a PID it did not launch, a tab or line break for a single-line field |
 | `qa_put_file` | puts a fixture file the agent wrote (a test `symphony.yml`, a `WORKFLOW.md`) where the app can open it and returns that path: the file's own path on this host, a copy in the run directory's `files/` on a `worker_host` | a file that resolves outside the worktree and the pass's `$TMPDIR`, a symlink, a directory or other non-regular file, a file with other hard links, a file over 1 MB, and a file replaced while it is read |
-| `qa_host_stub` | serves the app canned HTTP responses: with `local_path`, replaces the host stub's routes with the ones in that JSON file (`{"routes": [{"method", "path", "status", "json" or "body", "content_type"}]}`); always returns the route count and the last 50 requests the stub answered (method, path with query, status, whether a route matched). The stub runs in Symphony on `127.0.0.1` from the first `qa_launch_app`, and each app gets its own `host_stub_url` | a routes file `qa_put_file` would refuse, invalid JSON, more than 200 routes, a route without a `/` path, with unknown keys, a status outside 200-599, both `json` and `body`, or a multi-line `content_type` |
 
 At most three launched apps run at once, and every app still running is quit when the pass ends.
 Only QA agents see these tools; executor and reviewer sessions cannot list or call them.
-
-The QA agent never serves the app itself: its sandbox listens on the Symphony host's loopback
-only, which an app on a `worker_host` cannot reach, and an address of the Symphony host on the
-LAN or a VM bridge changes with the network. The app reaches services the walkthrough needs (a
-project's API or hub) through `qa_host_stub`, at the `host_stub_url` its launch returned.
 
 The playbook judges a window only after it settles: it waits about 10 seconds after the window
 opens, changes focus once, and then checks the sizes of the content and scroll areas in the
@@ -1598,9 +1592,8 @@ host and the worktree checks still apply there. Then:
   host, runs `build` there with the QA user's login environment, and copies the bundle into the
   run directory;
 - `qa_launch_app` starts that copy with only `SYMPHONY_BAR_QA_ROOT` and `SYMPHONY_QA_OPENROUTER_URL`
-  set, over an SSH session that forwards two random loopback ports on the QA host back to the
-  OpenRouter stub and the host stub on the Symphony host, and returns the host stub's
-  `host_stub_url` with that app's port;
+  set, over an SSH session that forwards the URL's loopback port on the QA host back to the
+  OpenRouter stub on the Symphony host;
 - the Swift helper is compiled there with `swiftc` on first use in each pass, into the run
   directory's `helper/`. Passes never share it: each PR's build runs as the QA user, and a helper
   it replaced could answer the permission, window and accessibility calls of later passes. There it

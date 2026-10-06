@@ -53,15 +53,8 @@ defmodule SymphonyElixir.QaDriver do
   of the pass gets its URL. The app, and the Symphony it runs, use it only in QA
   mode (`SymphonyElixir.OpenRouter.base_url/1`).
 
-  Host stub: the agent cannot serve the app a server of its own (its sandbox
-  listens on this host's loopback only, which an app on a QA host cannot
-  reach), so `qa_host_stub` loads the agent's canned responses into a
-  `SymphonyElixir.QaDriver.HostStub`, which the first `qa_launch_app` starts on
-  `127.0.0.1` too. Each launch returns the URL that app reaches it at
-  (`host_stub_url`), and `qa_host_stub` returns the requests it answered.
-
   When the driver stops (the QA pass ends or crashes) it quits every app it
-  launched, stops the stubs and removes its private directory.
+  launched, stops the stub and removes its private directory.
 
   With `:worker_host` (`auto_review.worker_host`) the build, the app and the
   helper run on that QA host instead, through `SymphonyElixir.QaDriver.Remote`.
@@ -72,8 +65,8 @@ defmodule SymphonyElixir.QaDriver do
   QA host, so the copy is not checked again before launch. Screenshots are
   captured there and copied back into `qa-evidence/`, and `qa_put_file` copies
   fixtures there, because the app cannot read the Symphony host's files. Each
-  app's SSH session forwards a random loopback port on the QA host back to each
-  stub (`ssh -R`), and the app gets those ports' URLs. A QA host that can reach
+  app's SSH session forwards a random loopback port on the QA host back to the
+  stub (`ssh -R`), and the app gets that port's URL. A QA host that can reach
   the operator's credentials or holds push credentials is refused at start,
   and every tool then fails with `qa_worker_unsafe`.
   """
@@ -83,11 +76,11 @@ defmodule SymphonyElixir.QaDriver do
   require Logger
 
   alias SymphonyElixir.{AgentEnv, OpenRouter, PathSafety, Workspace}
-  alias SymphonyElixir.QaDriver.{Checks, Host, HostStub, Remote}
+  alias SymphonyElixir.QaDriver.{Checks, Host, Remote}
 
   @evidence_dir "qa-evidence"
   @qa_root_env "SYMPHONY_BAR_QA_ROOT"
-  # The QA host's loopback ports an app's SSH session may forward to the stubs.
+  # The QA host's loopback ports an app's SSH session may forward to the stub.
   @stub_remote_ports 20_000..59_999
   @default_build_timeout_ms 900_000
   @helper_timeout_ms 30_000
@@ -117,7 +110,7 @@ defmodule SymphonyElixir.QaDriver do
   printf 'symphony-qa-app:%s\\n' "$executable"
   """
 
-  @tools ~w(qa_build qa_launch_app qa_quit_app qa_screenshot qa_ax_tree qa_ax_press qa_ax_set_value qa_put_file qa_host_stub)
+  @tools ~w(qa_build qa_launch_app qa_quit_app qa_screenshot qa_ax_tree qa_ax_press qa_ax_set_value qa_put_file)
 
   @type host :: %{
           required(:cmd) => (String.t(), [String.t()], keyword() -> {:ok, {String.t(), integer()}} | {:error, term()}),
@@ -149,9 +142,7 @@ defmodule SymphonyElixir.QaDriver do
   (the SSH host QA runs on, default this host), `:host` (overrides for the OS
   boundary, see `t:host/0`), `:git` (a `fn args, cwd -> {output, status}`) and
   `:start_stub` (a `fn -> {:ok, pid, port} | {:error, reason}` that starts the
-  OpenRouter stub, default `SymphonyElixir.OpenRouter.Stub.start_link/0`) and
-  `:start_host_stub` (the same for the host stub, given the pass's routes table,
-  default `SymphonyElixir.QaDriver.HostStub.start_link/1`).
+  OpenRouter stub, default `SymphonyElixir.OpenRouter.Stub.start_link/0`).
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
@@ -277,19 +268,6 @@ defmodule SymphonyElixir.QaDriver do
       put_file(config, path, bytes, name)
     end
   end
-
-  # Routes live in the driver's table, so they load whether or not the stub runs yet.
-  defp run_tool("qa_host_stub", _driver, config, %{"local_path" => _path} = args) do
-    with {:ok, local_path} <- Checks.fixture_path(Map.get(args, "local_path")),
-         {:ok, _path, json} <- Checks.read_fixture(config.put_roots, config.worktree, local_path, "qa_host_stub") do
-      case HostStub.load_routes(config.host_stub_table, json) do
-        {:ok, _count} -> host_stub_status(config)
-        {:error, message} -> tool_error("qa_host_stub_invalid", "#{local_path} #{message}")
-      end
-    end
-  end
-
-  defp run_tool("qa_host_stub", _driver, config, _args), do: host_stub_status(config)
 
   # -- build and bundle checks ------------------------------------------------
 
@@ -603,11 +581,6 @@ defmodule SymphonyElixir.QaDriver do
     result
   end
 
-  defp host_stub_status(config) do
-    note = "Each app reaches this stub at the host_stub_url qa_launch_app returned for it; requests are the last 50 it answered, oldest first."
-    {:ok, config.host_stub_table |> HostStub.status() |> Map.put("note", note)}
-  end
-
   # -- argument checks --------------------------------------------------------
 
   defp pid_argument(%{"pid" => pid}) when is_integer(pid) and pid > 0, do: {:ok, pid}
@@ -818,7 +791,6 @@ defmodule SymphonyElixir.QaDriver do
     {:ok, worktree} = PathSafety.canonicalize(Keyword.fetch!(opts, :worktree))
     worker_host = Keyword.get(opts, :worker_host)
     base_host = if worker_host, do: Remote.host(worker_host), else: Host.default()
-    host_stub_table = HostStub.new()
 
     config = %{
       worktree: worktree,
@@ -830,21 +802,10 @@ defmodule SymphonyElixir.QaDriver do
       remote?: worker_host != nil,
       host: Map.merge(base_host, Map.new(Keyword.get(opts, :host, %{}))),
       git: Keyword.get(opts, :git, &default_git/2),
-      start_stub: Keyword.get(opts, :start_stub, &OpenRouter.Stub.start_link/0),
-      host_stub_table: host_stub_table,
-      start_host_stub: Keyword.get(opts, :start_host_stub, &HostStub.start_link/1)
+      start_stub: Keyword.get(opts, :start_stub, &OpenRouter.Stub.start_link/0)
     }
 
-    {:ok,
-     %{
-       config: host_dirs(config, worker_host),
-       build: nil,
-       ignored: %{},
-       apps: %{},
-       helper: nil,
-       stub: nil,
-       host_stub: nil
-     }}
+    {:ok, %{config: host_dirs(config, worker_host), build: nil, ignored: %{}, apps: %{}, helper: nil, stub: nil}}
   end
 
   # `host_dir` holds the bundle copies, screenshot staging and the app's QA root
@@ -939,7 +900,6 @@ defmodule SymphonyElixir.QaDriver do
 
   # A stub that died is started again at the next launch.
   def handle_info({:EXIT, pid, _reason}, %{stub: %{pid: pid}} = state), do: {:noreply, %{state | stub: nil}}
-  def handle_info({:EXIT, pid, _reason}, %{host_stub: %{pid: pid}} = state), do: {:noreply, %{state | host_stub: nil}}
 
   def handle_info(_message, state), do: {:noreply, state}
 
@@ -947,72 +907,50 @@ defmodule SymphonyElixir.QaDriver do
   def terminate(_reason, state) do
     for {pid, %{exit_status: nil}} <- state.apps, do: state.config.host.kill.(pid)
     if state.stub, do: OpenRouter.Stub.stop(state.stub.pid)
-    if state.host_stub, do: HostStub.stop(state.host_stub.pid)
     if state.config.remote? and state.config.host_dir, do: state.config.host.cleanup.(state.config.host_dir)
     File.rm_rf(state.config.scratch_dir)
     :ok
   end
 
-  # A stub started before a failure stays in the state, so the next launch reuses it.
   defp launch(executable, state) do
-    with {:ok, state} <- ensure_stub(state, :stub, state.config.start_stub, "OpenRouter stub"),
-         {:ok, state} <- ensure_stub(state, :host_stub, fn -> state.config.start_host_stub.(state.config.host_stub_table) end, "QA host stub") do
-      launch_app(executable, state)
+    with {:ok, state} <- ensure_stub(state),
+         {stub_url, forwards} = stub_route(state.config, state.stub.port),
+         launch_opts = [cd: state.config.qa_root, env: launch_env(state.config, stub_url), reverse_forwards: forwards],
+         {:ok, port, pid} <- state.config.host.launch.(executable, launch_opts) do
+      Logger.info("QA driver launched app pid=#{pid} executable=#{executable} openrouter_stub=#{stub_url}")
+      app = %{port: port, output: "", exit_status: nil}
+      payload = %{"pid" => pid, "qa_mode" => true, "note" => "Wait for the window to settle before judging it."}
+      {:reply, {:ok, payload}, %{state | apps: Map.put(state.apps, pid, app)}}
     else
-      {:failed, error, state} -> {:reply, error, state}
-    end
-  end
-
-  defp launch_app(executable, state) do
-    {[stub_port, host_stub_port], forwards} = stub_ports(state.config, [state.stub.port, state.host_stub.port])
-    stub_url = OpenRouter.Stub.url(stub_port)
-    host_stub_url = HostStub.url(host_stub_port)
-    launch_opts = [cd: state.config.qa_root, env: launch_env(state.config, stub_url), reverse_forwards: forwards]
-
-    case state.config.host.launch.(executable, launch_opts) do
-      {:ok, port, pid} ->
-        Logger.info("QA driver launched app pid=#{pid} executable=#{executable} openrouter_stub=#{stub_url} host_stub=#{host_stub_url}")
-        app = %{port: port, output: "", exit_status: nil}
-
-        payload = %{
-          "pid" => pid,
-          "qa_mode" => true,
-          "host_stub_url" => host_stub_url,
-          "note" => "Wait for the window to settle before judging it. This app reaches the qa_host_stub stub at host_stub_url."
-        }
-
-        {:reply, {:ok, payload}, %{state | apps: Map.put(state.apps, pid, app)}}
+      {:error, {:qa_tool, _code, _message}} = error ->
+        {:reply, error, state}
 
       {:error, reason} ->
         {:reply, tool_error("qa_launch_failed", "The app could not start: #{inspect(reason)}"), state}
     end
   end
 
-  defp ensure_stub(state, key, start, name) do
-    case Map.fetch!(state, key) do
-      %{} ->
-        {:ok, state}
+  defp ensure_stub(%{stub: %{}} = state), do: {:ok, state}
 
-      nil ->
-        case start.() do
-          {:ok, pid, port} ->
-            Logger.info("QA driver started the #{name} port=#{port}")
-            {:ok, Map.put(state, key, %{pid: pid, port: port})}
+  defp ensure_stub(state) do
+    case state.config.start_stub.() do
+      {:ok, pid, port} ->
+        Logger.info("QA driver started the OpenRouter stub port=#{port}")
+        {:ok, %{state | stub: %{pid: pid, port: port}}}
 
-          {:error, reason} ->
-            {:failed, tool_error("qa_launch_failed", "The #{name} the app talks to in QA could not start: #{inspect(reason)}"), state}
-        end
+      {:error, reason} ->
+        tool_error("qa_launch_failed", "The OpenRouter stub the app talks to in QA could not start: #{inspect(reason)}")
     end
   end
 
-  # A local app reaches the stubs directly. On a QA host the app's SSH session
-  # forwards a distinct loopback port there back to each stub; a port already
-  # taken fails that launch, and the next one picks others.
-  defp stub_ports(%{remote?: false}, ports), do: {ports, []}
+  # A local app reaches the stub directly. On a QA host the app's SSH session
+  # forwards a loopback port there back to the stub; a port already taken
+  # fails that launch, and the next one picks another.
+  defp stub_route(%{remote?: false}, port), do: {OpenRouter.Stub.url(port), []}
 
-  defp stub_ports(%{remote?: true}, ports) do
-    remote_ports = Enum.take_random(@stub_remote_ports, length(ports))
-    {remote_ports, Enum.zip_with(remote_ports, ports, &{"127.0.0.1:#{&1}", "127.0.0.1:#{&2}"})}
+  defp stub_route(%{remote?: true}, port) do
+    remote_port = Enum.random(@stub_remote_ports)
+    {OpenRouter.Stub.url(remote_port), [{"127.0.0.1:#{remote_port}", "127.0.0.1:#{port}"}]}
   end
 
   # The QA host has its own login environment; only the QA root and the stub's URL cross over.

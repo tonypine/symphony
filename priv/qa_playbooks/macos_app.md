@@ -7,8 +7,7 @@ for you on the host. They only act on this worktree's configured app and on apps
 
 - `qa_build`: runs the configured build command. Call it once, before anything else.
 - `qa_launch_app`: launches the bundle `qa_build` produced, in QA mode (private settings and
-  secrets, never the real ones), and returns its `pid` and its `host_stub_url`, the address
-  this app reaches the `qa_host_stub` stub at.
+  secrets, never the real ones), and returns its `pid`.
 - `qa_ax_tree`: the app's accessibility tree with each element's role, title, value and
   `frame` (`x`, `y`, `w`, `h` in points). Pass `role` or `text` to list only matching elements.
 - `qa_ax_press` (`action` defaults to `AXPress`; `AXRaise` focuses a window) and
@@ -21,8 +20,6 @@ for you on the host. They only act on this worktree's configured app and on apps
 - `qa_quit_app`: quits the app and returns its recent output.
 - `qa_put_file`: puts a file you wrote under `qa-evidence/` or `$TMPDIR` (a test `symphony.yml`,
   a `WORKFLOW.md`) where the app can open it, and returns the `path` to give the app.
-- `qa_host_stub`: serves the app canned HTTP responses from Symphony's host stub, and returns
-  the requests the stub answered.
 
 Do not edit files in the worktree, gitignored ones included (such as build caches):
 `qa_build` and `qa_launch_app` refuse a modified checkout.
@@ -67,23 +64,6 @@ Do not edit files in the worktree, gitignored ones included (such as build cache
      `symphony-qa/no-tools` (no tools, so the Models picker leaves it out).
    Judge the walkthrough's OpenRouter steps with these, `pass` or `fail`. Checks with a real key
    are manual and not part of QA.
-   When the app reads from a server of the project's (an API, a hub), serve it with
-   `qa_host_stub`, never with a server you start yourself, and never give the app an address
-   you picked (this host's LAN or bridge address, a port you listen on): the app may run on a
-   separate QA machine, and your sandbox listens only on this host's loopback, which that
-   machine cannot reach. Write the responses to a JSON file under `qa-evidence/` or `$TMPDIR`:
-   `{"routes": [{"method": "GET", "path": "/api/items", "json": [...]}, {"path": "/api/items?page=2", "json": []}]}`
-   (`method` defaults to `GET`, `status` to 200; `body` with `content_type` serves text; a
-   `path` without a query matches any query; anything else gets a 404). Call `qa_host_stub`
-   with that `local_path`, then type the `host_stub_url` that `qa_launch_app` returned into the
-   app's server address field, as is or with the path prefix the app expects. Each launch
-   returns its own `host_stub_url`; routes stay loaded for the whole pass and a new file
-   replaces them. To serve what the project's own server would answer, run that server in your
-   sandbox on `127.0.0.1`, save its responses with `curl`, and serve those.
-   Call `qa_host_stub` without arguments to read the requests the stub answered, and quote the
-   ones a step relies on in that step's `details`: they show the app reached the stub and what
-   it asked for. A request that got a 404 means a route is missing or the app asked for
-   another path: fix the routes and try again before you judge the step.
 8. Run `qa_quit_app` when you are done. It returns what the app wrote to its output; quote
    the lines that bear on a step in that step's `details`.
 9. Attach the screenshots that show each step's result with `linear_attach_file`

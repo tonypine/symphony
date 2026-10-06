@@ -1371,13 +1371,9 @@ When enabled:
   `SYMPHONY_BAR_QA_ROOT` set to a private directory), `qa_screenshot` (new files in `qa-evidence/`, never replacing or following an existing entry), and
   `qa_ax_tree`, `qa_ax_press`, `qa_ax_set_value`, and `qa_put_file`, which returns a path the app
   can open for a fixture file the agent wrote (on a separate QA host, a copy in the pass's run
-  directory there), and `qa_host_stub`, which serves the app canned HTTP responses from a routes
-  file the agent wrote and returns the requests the stub answered. `qa_put_file` and `qa_host_stub`
-  MUST read only a regular file of bounded size that resolves inside
+  directory there). `qa_put_file` MUST read only a regular file of bounded size that resolves inside
   the QA worktree or the pass's temp folder, and MUST refuse symlinks and files with other hard
-  links. The host stub MUST listen on the Symphony host's loopback only; `qa_launch_app` MUST
-  return the URL that app reaches it at, forwarded over the app's SSH session on a separate QA
-  host, so the agent never has to guess an address of the Symphony host. `qa_ax_set_value` MUST enter a text field's value so the app registers the edit, with key
+  links. `qa_ax_set_value` MUST enter a text field's value so the app registers the edit, with key
   events sent to that app alone, and the tools MUST NOT return a secure field's value. Every tool that
   takes a PID MUST refuse a PID
   the pass did not launch. Apps still running when the pass ends MUST be quit. A missing Screen
