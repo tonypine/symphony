@@ -623,19 +623,31 @@ defmodule SymphonyElixir.VerificationTest do
         stop_timeout_ms: 5_000
       }
 
-      assert {:ok, pid} =
-               DevServer.start(
-                 run_id: "qa-dashboard-seatbelt-run",
-                 port: port,
-                 workspace: File.cwd!(),
-                 config: config,
-                 env: Verification.env(%{port: port}),
-                 owner: self(),
-                 sandbox: []
-               )
+      # The app logs to the rotating disk file (`SymphonyElixir.LogFile` drops the console
+      # handler), so on CI a dev server that fails to start leaves no output in the job log.
+      # Capture it here and print it on failure, where the diagnosis would otherwise be lost.
+      {result, log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          DevServer.start(
+            run_id: "qa-dashboard-seatbelt-run",
+            port: port,
+            workspace: File.cwd!(),
+            config: config,
+            env: Verification.env(%{port: port}),
+            owner: self(),
+            sandbox: []
+          )
+        end)
 
-      assert http_ok?("http://127.0.0.1:#{port}/")
-      assert :ok = DevServer.stop(pid)
+      case result do
+        {:ok, pid} ->
+          assert http_ok?("http://127.0.0.1:#{port}/")
+          assert :ok = DevServer.stop(pid)
+
+        {:error, reason} ->
+          IO.puts(:stderr, "qa dashboard dev server failed to start: #{inspect(reason)}\n#{log}")
+          flunk("qa dashboard dev server failed to start: #{inspect(reason)}")
+      end
     end
   end
 
