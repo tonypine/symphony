@@ -40,6 +40,7 @@ defmodule SymphonyElixir.Orchestrator do
     UsageLimit,
     Verification,
     Workspace,
+    WorkspaceCleanup,
     WorkspaceHead
   }
 
@@ -4868,8 +4869,11 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  # The removal runs the repo's before_remove hook and git under the repo's fetch lock, which
+  # can take minutes, so it is queued with WorkspaceCleanup and the orchestrator moves on. A run
+  # of the same issue waits for it before it creates the workspace again.
   defp cleanup_issue_workspace(%{identifier: identifier} = issue, worker_host) when is_binary(identifier) do
-    Workspace.remove_issue_workspaces(issue, worker_host)
+    WorkspaceCleanup.remove(issue, worker_host)
   end
 
   defp cleanup_issue_workspace(_identifier, _worker_host), do: :ok
