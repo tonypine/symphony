@@ -5522,6 +5522,42 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     end)
   end
 
+  test "remote worktree add of a repo given relative to the login dir takes the lock in its git dir" do
+    with_real_exec_fake_ssh(fn ctx ->
+      login_dir = Path.join(ctx.test_root, "home")
+      primary_repo = Path.join(login_dir, "primary")
+      create_primary_repo!(primary_repo, Path.join(ctx.test_root, "origin.git"))
+      workspace_root = Path.join(ctx.test_root, "wsroot")
+      workspace_path = Path.join([workspace_root, "default", "MT-LOCK-REL"])
+      lock = Path.join([primary_repo, ".git", "symphony-worktree-add.lock"])
+      write_real_exec_fake_ssh!(Path.join(ctx.test_root, "ssh"), "", login_dir)
+
+      # This VM stands in for another dispatch's script holding the lock.
+      File.mkdir_p!(lock)
+      File.write!(Path.join(lock, "pid"), "#{System.pid()}\n")
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: "primary",
+        worker_ssh_hosts: ["worker-01"],
+        hook_timeout_ms: 4_000
+      )
+
+      assert {:error, {:workspace_prepare_failed, "worker-01", 47, output}} =
+               Workspace.create_for_issue("MT-LOCK-REL", "worker-01")
+
+      assert output =~ "workspace_worktree_lock_timeout: #{lock}"
+
+      File.rm_rf!(lock)
+
+      assert {:ok, ^workspace_path} = Workspace.create_for_issue("MT-LOCK-REL", "worker-01")
+      assert String.trim(git!(workspace_path, ["rev-parse", "--abbrev-ref", "HEAD"])) == "auto/MT-LOCK-REL"
+      refute File.exists?(lock)
+      assert git!(primary_repo, ["status", "--porcelain"]) == ""
+    end)
+  end
+
   test "remote worktree add gives up on a repo lock a live process holds" do
     with_real_exec_fake_ssh(fn ctx ->
       primary_repo = Path.join(ctx.test_root, "primary")
@@ -6615,10 +6651,11 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
   end
 
   # `path_prefix` puts directories ahead of the system ones on the remote's PATH.
-  defp write_real_exec_fake_ssh!(path, path_prefix \\ "") do
+  defp write_real_exec_fake_ssh!(path, path_prefix \\ "", login_dir \\ nil) do
     File.write!(path, """
     #!/usr/bin/env bash
     set -u
+    #{if login_dir, do: "cd #{login_dir}"}
     trace_file="${SYMP_TEST_SSH_TRACE:-/dev/null}"
     printf 'ARGV:%s\\n' "$*" >> "$trace_file"
     export PATH="#{path_prefix}/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"

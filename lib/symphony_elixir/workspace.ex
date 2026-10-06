@@ -837,11 +837,12 @@ defmodule SymphonyElixir.Workspace do
   # The remote counterpart of the `Fetcher.with_lock/2` the local add runs under:
   # parallel dispatches to one worker host race for the shared repo's refs and
   # `.git/worktrees`, so its `worktree add` takes a `mkdir` lock in the repo's git
-  # dir, holding the script's pid. It waits up to half the script's time limit,
-  # then exits 47. An EXIT trap (the signal traps turn a hangup or kill into an
-  # exit) drops the lock however the script ends; a lock whose holder died
-  # without it (SIGKILL) is taken over, under a second `mkdir` so two waiters
-  # never both take it.
+  # dir, holding the script's pid. Git runs from inside the repo, as the repo may
+  # be relative to the login dir and `--git-common-dir` is relative to the repo.
+  # It waits up to half the script's time limit, then exits 47. An EXIT trap (the
+  # signal traps turn a hangup or kill into an exit) drops the lock however the
+  # script ends; a lock whose holder died without it (SIGKILL) is taken over,
+  # under a second `mkdir` so two waiters never both take it.
   defp remote_worktree_lock_functions(timeout_ms) do
     """
     symphony_worktree_lock_dir=""
@@ -852,7 +853,8 @@ defmodule SymphonyElixir.Workspace do
       fi
     }
     symphony_worktree_lock() {
-      lock_git_dir=$(cd "$repo" && cd "$(symphony_git "$repo" rev-parse --git-common-dir)" && pwd -P)
+      lock_git_dir=$(cd "$repo" && symphony_git . rev-parse --git-common-dir)
+      lock_git_dir=$(cd "$repo" && cd "$lock_git_dir" && pwd -P)
       lock="$lock_git_dir/symphony-worktree-add.lock"
       trap symphony_worktree_unlock EXIT
       trap 'exit 129' HUP
