@@ -20,7 +20,9 @@ defmodule SymphonyElixir.QaDriver do
     still matches what the build produced and the worktree is as that build
     left it, so later worktree edits cannot change what runs. The app always
     gets `SYMPHONY_BAR_QA_ROOT` pointing at the private directory, so it never
-    touches real settings or secrets;
+    touches real settings or secrets, and `SYMPHONY_QA_OPENROUTER_URL` pointing
+    at this pass's `SymphonyElixir.OpenRouter.Stub`, so its OpenRouter flows
+    never need a real key (see "OpenRouter stub" below);
   - `qa_quit_app`, `qa_screenshot`, `qa_ax_tree`, `qa_ax_press` and
     `qa_ax_set_value` accept only a PID this driver launched and that is still
     running;
@@ -46,8 +48,13 @@ defmodule SymphonyElixir.QaDriver do
   root) is a `0700` directory under Symphony's state root, outside every path
   the agent sandbox may write.
 
+  OpenRouter stub: the first `qa_launch_app` starts a
+  `SymphonyElixir.OpenRouter.Stub` in this BEAM, on `127.0.0.1`, and every app
+  of the pass gets its URL. The app, and the Symphony it runs, use it only in QA
+  mode (`SymphonyElixir.OpenRouter.base_url/1`).
+
   When the driver stops (the QA pass ends or crashes) it quits every app it
-  launched and removes its private directory.
+  launched, stops the stub and removes its private directory.
 
   With `:worker_host` (`auto_review.worker_host`) the build, the app and the
   helper run on that QA host instead, through `SymphonyElixir.QaDriver.Remote`.
@@ -57,7 +64,9 @@ defmodule SymphonyElixir.QaDriver do
   directory there and launches it from that copy. The agent cannot write on the
   QA host, so the copy is not checked again before launch. Screenshots are
   captured there and copied back into `qa-evidence/`, and `qa_put_file` copies
-  fixtures there, because the app cannot read the Symphony host's files. A QA host that can reach
+  fixtures there, because the app cannot read the Symphony host's files. Each
+  app's SSH session forwards a random loopback port on the QA host back to the
+  stub (`ssh -R`), and the app gets that port's URL. A QA host that can reach
   the operator's credentials or holds push credentials is refused at start,
   and every tool then fails with `qa_worker_unsafe`.
   """
@@ -66,11 +75,13 @@ defmodule SymphonyElixir.QaDriver do
 
   require Logger
 
-  alias SymphonyElixir.{AgentEnv, PathSafety, Workspace}
+  alias SymphonyElixir.{AgentEnv, OpenRouter, PathSafety, Workspace}
   alias SymphonyElixir.QaDriver.{Checks, Host, Remote}
 
   @evidence_dir "qa-evidence"
   @qa_root_env "SYMPHONY_BAR_QA_ROOT"
+  # The QA host's loopback ports an app's SSH session may forward to the stub.
+  @stub_remote_ports 20_000..59_999
   @default_build_timeout_ms 900_000
   @helper_timeout_ms 30_000
   @screenshot_timeout_ms 15_000
@@ -131,7 +142,9 @@ defmodule SymphonyElixir.QaDriver do
   with `build`, `app` and optional `build_timeout_ms`), `:tmp_dir` (the pass's
   `$TMPDIR`, where `qa_put_file` may read besides the worktree), `:worker_host`
   (the SSH host QA runs on, default this host), `:host` (overrides for the OS
-  boundary, see `t:host/0`) and `:git` (a `fn args, cwd -> {output, status}`).
+  boundary, see `t:host/0`), `:git` (a `fn args, cwd -> {output, status}`) and
+  `:start_stub` (a `fn -> {:ok, pid, port} | {:error, reason}` that starts the
+  OpenRouter stub, default `SymphonyElixir.OpenRouter.Stub.start_link/0`).
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
@@ -876,10 +889,11 @@ defmodule SymphonyElixir.QaDriver do
       put_roots: [worktree | put_tmp_root(Keyword.get(opts, :tmp_dir))],
       remote?: worker_host != nil,
       host: Map.merge(base_host, Map.new(Keyword.get(opts, :host, %{}))),
-      git: Keyword.get(opts, :git, &default_git/2)
+      git: Keyword.get(opts, :git, &default_git/2),
+      start_stub: Keyword.get(opts, :start_stub, &OpenRouter.Stub.start_link/0)
     }
 
-    {:ok, %{config: host_dirs(config, worker_host), build: nil, ignored: %{}, apps: %{}, helper: nil}}
+    {:ok, %{config: host_dirs(config, worker_host), build: nil, ignored: %{}, apps: %{}, helper: nil, stub: nil}}
   end
 
   # `/tmp` is a link on macOS; the check compares resolved paths.
@@ -980,32 +994,67 @@ defmodule SymphonyElixir.QaDriver do
     {:noreply, update_app(state, port, fn app -> %{app | exit_status: status} end)}
   end
 
+  # A stub that died is started again at the next launch.
+  def handle_info({:EXIT, pid, _reason}, %{stub: %{pid: pid}} = state), do: {:noreply, %{state | stub: nil}}
+
   def handle_info(_message, state), do: {:noreply, state}
 
   @impl true
   def terminate(_reason, state) do
     for {pid, %{exit_status: nil}} <- state.apps, do: state.config.host.kill.(pid)
+    if state.stub, do: OpenRouter.Stub.stop(state.stub.pid)
     if state.config.remote? and state.config.host_dir, do: state.config.host.cleanup.(state.config.host_dir)
     File.rm_rf(state.config.scratch_dir)
     :ok
   end
 
   defp launch(executable, state) do
-    case state.config.host.launch.(executable, cd: state.config.qa_root, env: launch_env(state.config)) do
-      {:ok, port, pid} ->
-        Logger.info("QA driver launched app pid=#{pid} executable=#{executable}")
-        app = %{port: port, output: "", exit_status: nil}
-        payload = %{"pid" => pid, "qa_mode" => true, "note" => "Wait for the window to settle before judging it."}
-        {:reply, {:ok, payload}, %{state | apps: Map.put(state.apps, pid, app)}}
+    with {:ok, state} <- ensure_stub(state),
+         {stub_url, forwards} = stub_route(state.config, state.stub.port),
+         launch_opts = [cd: state.config.qa_root, env: launch_env(state.config, stub_url), reverse_forwards: forwards],
+         {:ok, port, pid} <- state.config.host.launch.(executable, launch_opts) do
+      Logger.info("QA driver launched app pid=#{pid} executable=#{executable} openrouter_stub=#{stub_url}")
+      app = %{port: port, output: "", exit_status: nil}
+      payload = %{"pid" => pid, "qa_mode" => true, "note" => "Wait for the window to settle before judging it."}
+      {:reply, {:ok, payload}, %{state | apps: Map.put(state.apps, pid, app)}}
+    else
+      {:error, {:qa_tool, _code, _message}} = error ->
+        {:reply, error, state}
 
       {:error, reason} ->
         {:reply, tool_error("qa_launch_failed", "The app could not start: #{inspect(reason)}"), state}
     end
   end
 
-  # The QA host has its own login environment; only the QA root crosses over.
-  defp launch_env(%{remote?: true, qa_root: qa_root}), do: [{@qa_root_env, qa_root}]
-  defp launch_env(config), do: AgentEnv.build_with(%{@qa_root_env => config.qa_root})
+  defp ensure_stub(%{stub: %{}} = state), do: {:ok, state}
+
+  defp ensure_stub(state) do
+    case state.config.start_stub.() do
+      {:ok, pid, port} ->
+        Logger.info("QA driver started the OpenRouter stub port=#{port}")
+        {:ok, %{state | stub: %{pid: pid, port: port}}}
+
+      {:error, reason} ->
+        tool_error("qa_launch_failed", "The OpenRouter stub the app talks to in QA could not start: #{inspect(reason)}")
+    end
+  end
+
+  # A local app reaches the stub directly. On a QA host the app's SSH session
+  # forwards a loopback port there back to the stub; a port already taken
+  # fails that launch, and the next one picks another.
+  defp stub_route(%{remote?: false}, port), do: {OpenRouter.Stub.url(port), []}
+
+  defp stub_route(%{remote?: true}, port) do
+    remote_port = Enum.random(@stub_remote_ports)
+    {OpenRouter.Stub.url(remote_port), [{"127.0.0.1:#{remote_port}", "127.0.0.1:#{port}"}]}
+  end
+
+  # The QA host has its own login environment; only the QA root and the stub's URL cross over.
+  defp launch_env(%{remote?: true, qa_root: qa_root}, stub_url),
+    do: [{@qa_root_env, qa_root}, {OpenRouter.qa_url_env(), stub_url}]
+
+  defp launch_env(config, stub_url),
+    do: AgentEnv.build_with(%{@qa_root_env => config.qa_root, OpenRouter.qa_url_env() => stub_url})
 
   defp update_app(state, port, fun) do
     case Enum.find(state.apps, fn {_pid, app} -> app.port == port end) do

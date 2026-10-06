@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.OpenRouter.ModelsTest do
   use ExUnit.Case
 
-  alias SymphonyElixir.OpenRouter.Models
+  alias SymphonyElixir.OpenRouter.{Models, Stub}
 
   @catalog %{
     "data" => [
@@ -35,6 +35,31 @@ defmodule SymphonyElixir.OpenRouter.ModelsTest do
     assert Models.lookup("acme/no-params", request_fun: request_fun) == {:ok, %{tools: false, reasoning: false, context_length: nil}}
     assert Models.lookup("acme/missing", request_fun: request_fun) == {:error, :unknown_model}
     assert Models.endpoint() == "https://openrouter.ai/api/v1/models"
+  end
+
+  test "reads the QA stub's catalog in QA mode only" do
+    {:ok, stub, port} = Stub.start_link(log: fn _line -> :ok end)
+    saved = Map.new(~w(SYMPHONY_BAR_QA_ROOT SYMPHONY_QA_OPENROUTER_URL), &{&1, System.get_env(&1)})
+
+    on_exit(fn ->
+      Stub.stop(stub)
+
+      Enum.each(saved, fn
+        {name, nil} -> System.delete_env(name)
+        {name, value} -> System.put_env(name, value)
+      end)
+    end)
+
+    System.put_env("SYMPHONY_QA_OPENROUTER_URL", Stub.url(port))
+    System.delete_env("SYMPHONY_BAR_QA_ROOT")
+    assert Models.endpoint() == "https://openrouter.ai/api/v1/models"
+
+    System.put_env("SYMPHONY_BAR_QA_ROOT", System.tmp_dir!())
+    assert Models.endpoint() == Stub.url(port) <> "/v1/models"
+
+    request_fun = fn url, opts -> Req.get(url, opts) end
+    assert Models.lookup("symphony-qa/tools-only", request_fun: request_fun) == {:ok, %{tools: true, reasoning: false, context_length: 128_000}}
+    assert Models.lookup("symphony-qa/no-tools", request_fun: request_fun) == {:ok, %{tools: false, reasoning: false, context_length: 32_000}}
   end
 
   test "caches the catalog until the TTL passes" do
