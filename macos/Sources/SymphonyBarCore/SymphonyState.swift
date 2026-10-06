@@ -18,6 +18,28 @@ public struct StateSnapshot: Equatable {
     public var humanReview: Int
     /// The acceptance gate's agreement stats per repository key; nil when Symphony predates them.
     public var gateAgreement: [String: GateAgreement]?
+    /// The running agents, in Symphony's order; empty when none runs.
+    public var runs: [Run]
+
+    /// A running agent, as `/api/v1/state`'s `running` lists it.
+    public struct Run: Equatable {
+        public var issueIdentifier: String
+        /// The repo it runs on, nil when Symphony didn't say.
+        public var repoKey: String?
+        /// The issue in Linear.
+        public var url: URL?
+        public var startedAt: Date?
+        /// Its last agent event, nil before the first.
+        public var lastEventAt: Date?
+
+        public init(issueIdentifier: String, repoKey: String? = nil, url: URL? = nil, startedAt: Date? = nil, lastEventAt: Date? = nil) {
+            self.issueIdentifier = issueIdentifier
+            self.repoKey = repoKey
+            self.url = url
+            self.startedAt = startedAt
+            self.lastEventAt = lastEventAt
+        }
+    }
 
     public struct Pause: Equatable {
         public var reason: String?
@@ -181,7 +203,8 @@ public struct StateSnapshot: Equatable {
         updateUnblocks: Int = 0,
         forced: [ForcedTicket] = [],
         humanReview: Int = 0,
-        gateAgreement: [String: GateAgreement]? = nil
+        gateAgreement: [String: GateAgreement]? = nil,
+        runs: [Run] = []
     ) {
         self.running = running
         self.retrying = retrying
@@ -192,6 +215,7 @@ public struct StateSnapshot: Equatable {
         self.forced = forced
         self.humanReview = humanReview
         self.gateAgreement = gateAgreement
+        self.runs = runs
     }
 }
 
@@ -290,6 +314,16 @@ public enum SymphonyState {
             )
         }
         snapshot.gateAgreement = gateAgreement(data)
+        snapshot.runs = (payload.running ?? []).compactMap { run in
+            guard let identifier = run.issueIdentifier ?? run.issueId else { return nil }
+            return StateSnapshot.Run(
+                issueIdentifier: identifier,
+                repoKey: run.repoKey,
+                url: run.url.flatMap(URL.init(string:)),
+                startedAt: run.startedAt.flatMap(parseDate),
+                lastEventAt: run.lastEventAt.flatMap(parseDate)
+            )
+        }
         return .state(snapshot)
     }
 
@@ -424,7 +458,18 @@ public enum SymphonyState {
             let subIssue: Part?
         }
 
+        struct Running: Decodable {
+            let issueId: String?
+            let issueIdentifier: String?
+            let repoKey: String?
+            let url: String?
+            let startedAt: String?
+            let lastEventAt: String?
+        }
+
         let counts: Counts?
+        /// Every field is optional, so an entry missing one never fails the whole state.
+        let running: [Running]?
         let pause: Pause?
         let budget: Budget?
         let usageLimits: [UsageLimit]?

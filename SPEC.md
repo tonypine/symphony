@@ -2751,8 +2751,13 @@ sessions:
 When the Claude CLI cannot reach the model API at all (a DNS failure, a refused or dropped
 connection), it still ends the turn with a `result` event: its text starts `API Error:` and names
 the failure (`Can't reach the API server … (ENOTFOUND)`, `Connection error`, `ECONNREFUSED`, …),
-and it is marked `is_error` or used nothing. An error the API returned (a 400, a 429, a 5xx) is not
-an outage and keeps its normal path.
+and it is marked `is_error` or used nothing. The Codex app-server reports the same outage, once it
+stops retrying (`willRetry` not `true`), on an `error` or `codex/event/error` notification or a
+failed `turn/completed` or `turn/failed`: its `codexErrorInfo` is `httpConnectionFailed` or
+`responseStreamConnectionFailed`, or its message names the transport error (`error sending
+request`, a DNS lookup, a refused or reset connection, a connect timeout), and it carries no HTTP
+status; the hold is on the `openai` provider. An error the API returned (a 400, a 429, a 5xx) is
+not an outage and keeps its normal path.
 
 - The turn fails with `{:model_api_unreachable, info}` (`source: api_unreachable`, `error` the code
   it named); it is never a completed turn, so it never counts toward the idle-turn park limit.

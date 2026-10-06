@@ -1424,8 +1424,8 @@ defmodule SymphonyElixir.Codex.AppServer do
          payload_string,
          stream_context
        ) do
-    case usage_limited(payload, stream_context.turn_stream_state) do
-      {:ok, info} -> handle_usage_limited(port, on_message, payload, payload_string, info)
+    case provider_hold(payload, stream_context.turn_stream_state) do
+      {_tag, _info} = hold -> handle_provider_hold(port, on_message, payload, payload_string, hold)
       :error -> handle_turn_failed(port, on_message, payload, payload_string)
     end
   end
@@ -1461,9 +1461,9 @@ defmodule SymphonyElixir.Codex.AppServer do
       _ ->
         updated_turn_stream_state = remember_rate_limits(updated_turn_stream_state, payload)
 
-        case usage_limited(payload, updated_turn_stream_state) do
-          {:ok, info} ->
-            handle_usage_limited(port, on_message, payload, payload_string, info)
+        case provider_hold(payload, updated_turn_stream_state) do
+          {_tag, _info} = hold ->
+            handle_provider_hold(port, on_message, payload, payload_string, hold)
 
           :error ->
             handle_turn_method(
@@ -1500,8 +1500,8 @@ defmodule SymphonyElixir.Codex.AppServer do
   end
 
   defp handle_turn_completed(port, on_message, payload, payload_string, turn_stream_state) do
-    case usage_limited(payload, turn_stream_state) do
-      {:ok, info} -> handle_usage_limited(port, on_message, payload, payload_string, info)
+    case provider_hold(payload, turn_stream_state) do
+      {_tag, _info} = hold -> handle_provider_hold(port, on_message, payload, payload_string, hold)
       :error -> handle_turn_completed_status(port, on_message, payload, payload_string, turn_stream_state)
     end
   end
@@ -1537,21 +1537,33 @@ defmodule SymphonyElixir.Codex.AppServer do
   end
 
   # A turn that ends on the Codex usage limit stops the run; the orchestrator holds Codex
-  # runs until the window resets (see `SymphonyElixir.UsageLimit`).
-  defp usage_limited(payload, turn_stream_state), do: CodexUsageLimit.usage_limited(payload, Map.get(turn_stream_state, :rate_limits))
+  # runs until the window resets (see `SymphonyElixir.UsageLimit`). So does a turn that could not
+  # reach the model API, until a probe gets through, as for the Claude stream.
+  defp provider_hold(payload, turn_stream_state) do
+    case CodexUsageLimit.usage_limited(payload, Map.get(turn_stream_state, :rate_limits)) do
+      {:ok, info} ->
+        {:usage_limited, info}
+
+      :error ->
+        case CodexUsageLimit.api_unreachable(payload) do
+          {:ok, info} -> {:model_api_unreachable, info}
+          :error -> :error
+        end
+    end
+  end
 
   defp remember_rate_limits(turn_stream_state, payload),
     do: Map.put(turn_stream_state, :rate_limits, CodexUsageLimit.remember(Map.get(turn_stream_state, :rate_limits), payload))
 
-  defp handle_usage_limited(port, on_message, payload, payload_string, info) do
+  defp handle_provider_hold(port, on_message, payload, payload_string, {tag, info} = hold) do
     emit_message(
       on_message,
-      :usage_limited,
+      tag,
       %{payload: payload, raw: payload_string, usage_limit: info},
       metadata_from_message(port, payload)
     )
 
-    {:error, {:usage_limited, info}}
+    {:error, hold}
   end
 
   defp emit_turn_event(on_message, event, payload, payload_string, port, payload_details) do
