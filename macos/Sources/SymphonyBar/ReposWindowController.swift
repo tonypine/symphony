@@ -18,6 +18,10 @@ final class ReposViewModel: ObservableObject {
     @Published var message: String?
     /// Whether Start Symphony would start it now.
     @Published var canStart = false
+    /// Issue identifiers whose Stop Run is out.
+    @Published var stopping: Set<String> = []
+    /// Why Stop Run failed, by issue identifier, shown under its line in the Needs attention box.
+    @Published var stopFailures: [String: String] = [:]
     var onSelect: (_ key: String) -> Void = { _ in }
     var onAddRepo: () -> Void = {}
     var onEdit: (_ key: String) -> Void = { _ in }
@@ -26,6 +30,7 @@ final class ReposViewModel: ObservableObject {
     var onStart: () -> Void = {}
     var onOpenSettings: () -> Void = {}
     var onTryAgain: () -> Void = {}
+    var onFix: (_ fix: RepoHealth.Fix) -> Void = { _ in }
 
     var selected: RepoDetail? {
         window.repos.first { $0.key == selection }
@@ -77,6 +82,7 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
             model.onStart = { [weak self] in self?.start() }
             model.onOpenSettings = { [weak self] in self?.openSettings() }
             model.onTryAgain = { [weak self] in self.map { $0.update(status: $0.status) } }
+            model.onFix = { [weak self] fix in self?.fix(fix) }
             self.model = model
             let hostingController = NSHostingController(rootView: ReposView(model: model))
             // Only the minimum: the window keeps the size it was left at.
@@ -308,6 +314,55 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
                 }
             } else if case let .blocked(reason) = removal {
                 self.model?.message = "Didn't remove the clone: \(reason)"
+            }
+            update(status: status)
+        }
+    }
+
+    /// Runs a fix from the Needs attention box.
+    private func fix(_ fix: RepoHealth.Fix) {
+        switch fix {
+        case let .openWorkflow(url), let .viewPullRequest(url), let .openOnGitHub(url), let .openInLinear(url):
+            NSWorkspace.shared.open(url)
+        case let .revealInFinder(path), let .revealWorktree(path):
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+        case let .copyError(error):
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(error, forType: .string)
+        case let .stopRun(identifier):
+            stopRun(identifier)
+        }
+    }
+
+    /// Asks before stopping the agent on `identifier`, then asks Symphony to stop it. A failure shows under the
+    /// problem's line.
+    private func stopRun(_ identifier: String) {
+        guard let model, !model.stopping.contains(identifier) else { return }
+        let question = RepoHealth.stopQuestion(issueIdentifier: identifier)
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = question.title
+        alert.informativeText = question.message
+        alert.addButton(withTitle: RepoHealth.stopConfirmTitle).hasDestructiveAction = true
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        model.stopping.insert(identifier)
+        model.stopFailures[identifier] = nil
+        let stateRoot = stateRoot()
+        Task {
+            let result = await ControlAPI.send(
+                .stop(identifier),
+                stateRoot: stateRoot,
+                fallback: AppStores.current.controlURLFallback
+            )
+            guard let model = self.model else { return }
+            model.stopping.remove(identifier)
+            switch result {
+            case .done:
+                model.message = RepoHealth.stoppedMessage(issueIdentifier: identifier)
+            case let .failed(message):
+                model.stopFailures[identifier] = message
             }
             update(status: status)
         }
