@@ -857,6 +857,11 @@ defmodule SymphonyElixir.AutoReview do
   def blocked_reason({:qa_dev_server_failed, {:verification_failed, :health_timeout}}),
     do: "the dev server failed its health check, so the web playbook could not run"
 
+  def blocked_reason({:qa_dev_server_failed, {:verification_failed, {:dev_server_sandbox_unconfined, cause}}}),
+    do:
+      "the dev server did not start: Seatbelt on this Mac could not keep it listening on loopback only, " <>
+        "so Symphony did not run it unconfined (#{inspect(cause)})"
+
   def blocked_reason({:qa_dev_server_failed, reason}), do: "the dev server did not start: #{inspect(reason)}"
 
   def blocked_reason({:qa_host_tunnel_failed, reason}),

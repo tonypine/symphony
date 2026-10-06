@@ -34,14 +34,16 @@ Application.put_env(:symphony_elixir, :agent_caches,
 
 # Verification dev servers in tests start through a stand-in for `sandbox-exec` that drops the
 # profile and runs the command, so they also start on Linux and inside the agent sandbox, where
-# Seatbelt can't nest. The `:seatbelt` tests use the real one, and only run where it works.
+# Seatbelt can't nest. The `:seatbelt` tests use the real one, and only run where it works; the
+# `seatbelt` workflow runs them on a macOS runner.
 fake_sandbox_exec = Path.join(agent_run_tmp_root, "fake-sandbox-exec")
 File.write!(fake_sandbox_exec, "#!/bin/sh\n# Drops `-p <profile>` and runs the command unsandboxed.\nshift 2\nexec \"$@\"\n")
 File.chmod!(fake_sandbox_exec, 0o755)
 
 Application.put_env(:symphony_elixir, :verification_dev_server_sandbox,
   os_type: {:unix, :darwin},
-  executable: fake_sandbox_exec
+  executable: fake_sandbox_exec,
+  check_confinement: false
 )
 
 with true <- File.exists?("/usr/bin/sandbox-exec"),
