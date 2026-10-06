@@ -157,6 +157,23 @@ defmodule SymphonyElixir.AcceptanceGate.AgreementTest do
       assert Agreement.observe("default", issues, RunStore.list_runs("default", :all), ci_checks, tracker: RaisingTracker) == []
     end
 
+    test "undecided/2 is each issue's latest undecided verdict of the repository" do
+      put_runs([
+        gate_run("waiting", "approve"),
+        gate_run("decided", "approve", %{human_decision: "approve"}),
+        gate_run("moved", "approve", %{moved_by_gate: "Merging"}),
+        gate_run("other-repo", "approve", %{repo_key: "other"})
+      ])
+
+      assert ["waiting"] = Enum.map(Agreement.undecided("default"), & &1.issue_id)
+
+      # A newer verdict on the issue replaces the kept one.
+      assert :ok = RunStore.put_run(gate_run("waiting", "rework", %{judged_at: @now}))
+      assert [%{issue_id: "waiting", verdict: "rework"}] = Agreement.undecided("default")
+
+      assert Agreement.undecided("default", run_store: FailingStore) == []
+    end
+
     test "an escalated verdict the human merges unchanged has no agreement", %{dir: dir} do
       put_runs([gate_run("escalated", "escalate")])
       issues = [%Issue{id: "escalated", state: "Merging"}]

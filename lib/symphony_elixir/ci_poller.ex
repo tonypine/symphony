@@ -470,14 +470,13 @@ defmodule SymphonyElixir.CiPoller do
 
   defp discover_ci_checks(settings, run_store, tracker, repo_key, now, opts) do
     with {:ok, issues} <- fetch_watched_issues(settings, tracker, opts),
-         {:ok, runs} <- list_runs(run_store, repo_key),
          {:ok, existing} <- list_ci_checks(run_store, repo_key) do
       existing_by_issue = Map.new(existing, &{Map.get(&1, :issue_id), &1})
       issues = Enum.filter(issues, &match?(%Issue{}, &1))
       Enum.each(issues, &warn_if_pr_url_lost(&1, Map.get(existing_by_issue, &1.id)))
 
-      discovered = Enum.count(issues, &persist_discovered_ci_check?(&1, runs, existing_by_issue, run_store, repo_key, now))
-      observe_gate_decisions(settings, repo_key, issues, runs, existing, opts)
+      discovered = Enum.count(issues, &persist_discovered_ci_check?(&1, existing_by_issue, run_store, repo_key, now))
+      observe_gate_decisions(settings, repo_key, issues, existing, opts)
 
       {:ok, discovered, auto_review_issues(settings, issues), auto_merge_issue_ids(settings, issues)}
     end
@@ -501,14 +500,17 @@ defmodule SymphonyElixir.CiPoller do
   # Records the human's decision on gate verdicts whose issue left In Review (or Human Review). It
   # runs before the checks are processed, so the CI check record of a PR merged since the last
   # poll still holds the head the human merged.
-  defp observe_gate_decisions(settings, repo_key, issues, runs, ci_checks, opts) do
+  defp observe_gate_decisions(settings, repo_key, issues, ci_checks, opts) do
+    run_store = Keyword.get(opts, :run_store, RunStore)
+
     agreement_opts = [
-      run_store: Keyword.get(opts, :run_store, RunStore),
+      run_store: run_store,
       tracker: Keyword.get(opts, :tracker, Tracker),
       waiting_states: [AutoReview.state(settings) | HumanReview.review_states(settings)]
     ]
 
-    Agreement.observe(repo_key, issues, runs, ci_checks, agreement_opts ++ Keyword.take(opts, [:audit_dir]))
+    undecided = Agreement.undecided(repo_key, run_store: run_store)
+    Agreement.observe(repo_key, issues, undecided, ci_checks, agreement_opts ++ Keyword.take(opts, [:audit_dir]))
   end
 
   # `Merging` issues GitHub auto-merge lands: a CI-fix run for one turns auto-merge off first.
@@ -556,10 +558,10 @@ defmodule SymphonyElixir.CiPoller do
   defp normalize_state_name(state) when is_binary(state), do: state |> String.trim() |> String.downcase()
   defp normalize_state_name(_state), do: ""
 
-  defp persist_discovered_ci_check?(%Issue{} = issue, runs, existing_by_issue, run_store, repo_key, now) do
+  defp persist_discovered_ci_check?(%Issue{} = issue, existing_by_issue, run_store, repo_key, now) do
     existing = Map.get(existing_by_issue, issue.id)
 
-    case discover_ci_check_record(issue, runs, existing, now) do
+    case discover_ci_check_record(issue, run_store, repo_key, existing, now) do
       nil ->
         false
 
@@ -575,10 +577,10 @@ defmodule SymphonyElixir.CiPoller do
     end
   end
 
-  defp discover_ci_check_record(%Issue{} = issue, runs, existing, now) when is_list(runs) do
+  defp discover_ci_check_record(%Issue{} = issue, run_store, repo_key, existing, now) do
     with pr_url when is_binary(pr_url) <- first_pr_url(issue),
          %{workspace_path: workspace_path} = run when is_binary(workspace_path) <-
-           latest_run_for_issue(runs, issue.id) do
+           latest_run_for_issue(run_store, repo_key, issue.id) do
       base = %{
         repo_key: Map.get(existing || %{}, :repo_key),
         issue_id: issue.id,
@@ -605,8 +607,6 @@ defmodule SymphonyElixir.CiPoller do
         nil
     end
   end
-
-  defp discover_ci_check_record(_issue, _runs, _existing, _now), do: nil
 
   defp process_ci_check(record, settings, opts, now) when is_map(record) do
     case backoff_active_until(record, now) do
@@ -1664,15 +1664,14 @@ defmodule SymphonyElixir.CiPoller do
     active_agent_run?(issue_id, repo_key, opts) or pending_rework_review?(issue_id, repo_key, opts)
   end
 
-  # Runs and PR reviews are prefetched once per poll cycle so the green-deferral
-  # and escalation paths do not rescan storage for every CI check (see
-  # rework_in_progress?/2).
+  # PR reviews are prefetched once per poll cycle so the green-deferral and
+  # escalation paths do not rescan storage for every CI check (see
+  # rework_in_progress?/2). Runs are read per issue through the run index.
   defp put_prefetched_rework_sources(opts, _run_store, _repo_key, []), do: opts
 
   defp put_prefetched_rework_sources(opts, run_store, repo_key, _checks) do
     sources = %{
       repo_key: repo_key,
-      runs: ok_list_or_nil(list_runs(run_store, repo_key)),
       reviews: ok_list_or_nil(list_pr_reviews(run_store, repo_key))
     }
 
@@ -1696,14 +1695,8 @@ defmodule SymphonyElixir.CiPoller do
   end
 
   defp active_agent_run?(issue_id, repo_key, opts) when is_binary(issue_id) and is_binary(repo_key) do
-    runs_result =
-      case prefetched_rework_source(opts, :runs, repo_key) do
-        {:ok, runs} -> {:ok, runs}
-        :miss -> list_runs(Keyword.get(opts, :run_store, RunStore), repo_key)
-      end
-
-    case runs_result do
-      {:ok, runs} -> Enum.any?(runs, &(Map.get(&1, :issue_id) == issue_id and Map.get(&1, :status) == "running"))
+    case list_issue_runs(Keyword.get(opts, :run_store, RunStore), repo_key, issue_id) do
+      {:ok, runs} -> Enum.any?(runs, &(Map.get(&1, :status) == "running"))
       {:error, _reason} -> false
     end
   end
@@ -1744,17 +1737,16 @@ defmodule SymphonyElixir.CiPoller do
   defp first_pr_url(%Issue{pr_urls: [url | _rest]}) when is_binary(url), do: url
   defp first_pr_url(_issue), do: nil
 
-  defp latest_run_for_issue(runs, issue_id) when is_list(runs) and is_binary(issue_id) do
-    runs
-    |> Enum.filter(&ci_run_for_issue?(&1, issue_id))
-    |> Enum.max_by(&run_started_at_sort_key/1, fn -> nil end)
+  # The issue's newest finished run, or `{:error, reason}` when its runs can't be read.
+  defp latest_run_for_issue(run_store, repo_key, issue_id) do
+    with {:ok, runs} <- list_issue_runs(run_store, repo_key, issue_id) do
+      runs
+      |> Enum.filter(&ci_run?/1)
+      |> Enum.max_by(&run_started_at_sort_key/1, fn -> nil end)
+    end
   end
 
-  defp ci_run_for_issue?(run, issue_id) do
-    Map.get(run, :issue_id) == issue_id and
-      Map.get(run, :status) in ["success", "stopped"] and
-      is_binary(Map.get(run, :workspace_path))
-  end
+  defp ci_run?(run), do: Map.get(run, :status) in ["success", "stopped"] and is_binary(Map.get(run, :workspace_path))
 
   defp run_started_at_sort_key(run) do
     case Map.get(run, :started_at) do
@@ -1763,10 +1755,14 @@ defmodule SymphonyElixir.CiPoller do
     end
   end
 
-  defp list_runs(run_store, repo_key) do
-    case list_run_records(run_store, repo_key) do
-      runs when is_list(runs) -> {:ok, runs}
-      {:error, reason} -> {:error, reason}
+  defp list_issue_runs(run_store, repo_key, issue_id) do
+    if function_exported?(run_store, :list_issue_runs, 2) do
+      case run_store.list_issue_runs(repo_key, issue_id) do
+        runs when is_list(runs) -> {:ok, runs}
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      {:error, :runs_unsupported}
     end
   end
 
@@ -1805,19 +1801,6 @@ defmodule SymphonyElixir.CiPoller do
 
       true ->
         {:error, :pr_reviews_unsupported}
-    end
-  end
-
-  defp list_run_records(run_store, repo_key) do
-    cond do
-      function_exported?(run_store, :list_runs, 2) ->
-        run_store.list_runs(repo_key, :all)
-
-      function_exported?(run_store, :list_runs, 1) ->
-        run_store.list_runs(:all)
-
-      true ->
-        {:error, :runs_unsupported}
     end
   end
 
