@@ -696,6 +696,26 @@ defmodule SymphonyElixir.AcceptanceGateTest do
       assert body =~ "- already covered by TP-584, not filed again: **Move synchronous GitHub/Linear/git calls out of orchestrator callbacks**"
     end
 
+    test "files a follow-up whose covered_by names a ticket outside the family", %{settings: settings} do
+      children = [%{"id" => "child-1", "identifier" => "TP-584", "title" => "Move the I/O out of the callbacks", "state" => %{"name" => "Backlog"}}]
+      itself = %{title: "Cache the runs", detail: "", acceptance: ["a test shows the runs are cached"], covered_by: "TP-950"}
+      made_up = %{title: "Retry the poll", detail: "", acceptance: ["a test shows the poll retries"], covered_by: "tp-9999"}
+      Process.put(:gate_turn_results, [{:ok, %{result: FakeSession.answer_json(%{follow_ups: [itself, made_up]})}}])
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %{verdict: "approve"}} =
+                   AcceptanceGate.judge(judge_job(enforced(settings)), run_opts(linear_client: follow_up_client(children: children)))
+        end)
+
+      assert log =~ "Acceptance gate ignored covered_by TP-950 on a follow-up of TP-950: it is not a ticket of its family"
+      assert log =~ "Acceptance gate ignored covered_by TP-9999 on a follow-up of TP-950: it is not a ticket of its family"
+      assert_received {:create_subissue, %{"title" => "Cache the runs"}}
+      assert_received {:create_subissue, %{"title" => "Retry the poll"}}
+      assert_received {:gate_comment, body}
+      refute body =~ "already covered"
+    end
+
     test "files no follow-up whose only criterion restates its title", %{settings: settings} do
       title = "Same-build retry after a pre-feature rollback skips health check"
       restated = %{title: title, detail: "the retry skips it", acceptance: ["- [ ] Same-build retry, after a pre-feature rollback: skips *health check*.", " "]}

@@ -6,7 +6,8 @@ defmodule SymphonyElixir.AcceptanceGate.FollowUps do
   `SymphonyElixir.AcceptanceGate.judge/2`); in `shadow` mode they are listed, not filed.
 
   At most 3 are filed per verdict. A follow-up an existing ticket covers is not filed: one the
-  answer names in `covered_by`, one whose title a ticket of the ticket's family already has (its
+  answer names in `covered_by` when that ticket is one of the ticket's family (a `covered_by`
+  outside it is ignored, and the follow-up is judged as if it had none), one whose title a ticket of the ticket's family already has (its
   sub-issues, siblings, parent and blockers; titles compare without case), and one the answer
   repeats. When the family can't be read, nothing is filed, so a title is never filed twice.
 
@@ -57,9 +58,10 @@ defmodule SymphonyElixir.AcceptanceGate.FollowUps do
       case AgentTools.Linear.get_related_issues(context, linear_opts) do
         {:ok, tickets} ->
           existing = Map.new(tickets, &{normalize(Map.get(&1, "title")), Map.get(&1, "identifier")})
+          family_ids = tickets |> Enum.map(&Map.get(&1, "identifier")) |> Enum.filter(&is_binary/1) |> MapSet.new(&String.upcase/1)
 
           follow_ups
-          |> Enum.map_reduce({existing, 0}, &file_one(&1, &2, context, issue, sha, linear_opts))
+          |> Enum.map_reduce({existing, 0}, &file_one(&1, &2, family_ids, context, issue, sha, linear_opts))
           |> elem(0)
 
         {:error, reason} ->
@@ -71,10 +73,10 @@ defmodule SymphonyElixir.AcceptanceGate.FollowUps do
     end
   end
 
-  defp file_one(follow_up, {seen, filed}, context, issue, sha, linear_opts) do
+  defp file_one(follow_up, {seen, filed}, family_ids, context, issue, sha, linear_opts) do
     title = normalize(PromptSafety.linear_issue_title(follow_up.title))
     acceptance = acceptance(follow_up)
-    covered_by = Map.get(follow_up, :covered_by)
+    covered_by = family_covered_by(follow_up, family_ids, issue)
 
     cond do
       covered_by ->
@@ -101,6 +103,23 @@ defmodule SymphonyElixir.AcceptanceGate.FollowUps do
           {:error, reason} ->
             Logger.warning("Acceptance gate could not file a follow-up under #{issue.identifier}: #{inspect(reason)}")
             {Map.put(follow_up, :status, {:failed, reason}), {seen, filed}}
+        end
+    end
+  end
+
+  # The `covered_by` of `follow_up` when it names a ticket of the family, or nil: an identifier the
+  # agent made up, or one outside the family, doesn't stop the follow-up from being filed.
+  defp family_covered_by(follow_up, family_ids, issue) do
+    case Map.get(follow_up, :covered_by) do
+      nil ->
+        nil
+
+      identifier ->
+        if MapSet.member?(family_ids, identifier) do
+          identifier
+        else
+          Logger.info("Acceptance gate ignored covered_by #{identifier} on a follow-up of #{issue.identifier}: it is not a ticket of its family")
+          nil
         end
     end
   end

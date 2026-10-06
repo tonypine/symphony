@@ -188,8 +188,9 @@ With `mode: enforce`, set globally or for one repository, Auto Review applies th
 - **Follow-ups.** The answer's `follow_ups` are filed as Backlog sub-issues of the ticket
   (`AcceptanceGate.FollowUps`, through `AgentTools.Linear.create_subissue/3`), at most 3 per
   verdict. A follow-up an existing ticket covers is not filed: one whose `covered_by` names a
-  ticket, one whose title a ticket of the family already has (its sub-issues, siblings, parent and
-  blockers, compared without case), or one the answer repeats. A filed follow-up lists its
+  ticket of the family (its sub-issues, siblings, parent and blockers; a `covered_by` outside it,
+  or naming the ticket itself, is ignored), one whose title a ticket of the family already has
+  (compared without case), or one the answer repeats. A filed follow-up lists its
   `acceptance` criteria plus "CI is green"; a criterion that only restates the title is dropped,
   and a follow-up left without one is not filed. When the family can't be read, none is filed.
   The gate comment lists each follow-up as filed (with its identifier), already covered (naming
