@@ -152,6 +152,29 @@ defmodule SymphonyElixir.QaAgent.Report do
   end
 
   defp publish_linear(issue, body, heading, opts) do
+    with_linear_comment(issue, heading, opts, fn
+      context, nil -> ok(AgentTools.Linear.add_comment(context, body, opts))
+      context, comment_id -> ok(AgentTools.Linear.update_comment(context, comment_id, body, opts))
+    end)
+  end
+
+  @doc """
+  Deletes the Symphony-written Linear comment that starts with `opts[:heading]`. No such
+  comment is fine.
+  """
+  @spec withdraw(Issue.t(), keyword()) :: :ok | {:error, term()}
+  def withdraw(%Issue{id: issue_id} = issue, opts) when is_binary(issue_id) do
+    linear_opts = Keyword.take(opts, [:linear_client, :settings])
+
+    with_linear_comment(issue, Keyword.fetch!(opts, :heading), linear_opts, fn
+      _context, nil -> :ok
+      context, comment_id -> ok(AgentTools.Linear.delete_comment(context, comment_id, linear_opts))
+    end)
+  end
+
+  # Calls `fun` with the comment that starts with `heading`, or `nil` when there is none. The
+  # comment is recorded as this caller's own, so it may be edited or deleted.
+  defp with_linear_comment(issue, heading, opts, fun) do
     {:ok, registry} = CommentRegistry.start_link()
 
     try do
@@ -161,10 +184,10 @@ defmodule SymphonyElixir.QaAgent.Report do
         case Enum.find(comments, &report_comment?(&1, heading)) do
           %{"id" => comment_id} ->
             CommentRegistry.record(registry, comment_id)
-            ok(AgentTools.Linear.update_comment(context, comment_id, body, opts))
+            fun.(context, comment_id)
 
           nil ->
-            ok(AgentTools.Linear.add_comment(context, body, opts))
+            fun.(context, nil)
         end
       end
     after

@@ -22,7 +22,9 @@ defmodule SymphonyElixir.AutoReview do
     `auto_review.max_fix_attempts` is used up;
   - a pass whose QA agent runs into the provider's usage limit gets no verdict: the
     issue stays in Auto Review, the orchestrator holds the provider's runs until the
-    limit resets (`agent.usage_limit.auto_pause`), and the pass runs again after that;
+    limit resets (`agent.usage_limit.auto_pause`), and the pass runs again after that. On
+    Linear a note on the issue says until when (`SymphonyElixir.AutoReview.HoldNote`): a pass
+    held again rewrites it, and the pass that runs deletes it;
   - a `blocked` the QA agent didn't decide itself (it crashed, its dev server or emulator
     didn't start) is not kept for the head once it moved the issue on: an issue moved back
     to Auto Review on the same head gets a fresh pass instead of the old verdict;
@@ -58,6 +60,7 @@ defmodule SymphonyElixir.AutoReview do
   require Logger
 
   alias SymphonyElixir.{AcceptanceGate, Config, Notifications, QaAgent, QaRunner, RunStore, Tracker, UsageLimit}
+  alias SymphonyElixir.AutoReview.HoldNote
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.HumanReview
   alias SymphonyElixir.Linear.{Issue, Usage}
@@ -497,8 +500,12 @@ defmodule SymphonyElixir.AutoReview do
       end
 
     case outcome do
-      %{verdict: :usage_limited} -> hold_pass(issue, sha, outcome, opts)
-      _verdict -> apply_or_report(issue, record, sha, outcome, settings, opts)
+      %{verdict: :usage_limited} ->
+        hold_pass(issue, record, sha, outcome, opts)
+
+      _verdict ->
+        withdraw_hold_note(issue, record, opts)
+        apply_or_report(issue, record, sha, outcome, settings, opts)
     end
   end
 
@@ -513,14 +520,15 @@ defmodule SymphonyElixir.AutoReview do
   # about the PR: it stores no verdict, writes no QA report and leaves the issue in Auto Review.
   # The orchestrator holds the provider's runs until the limit resets (or a probe reaches the
   # API), as for an agent run, and the first green CI poll after that asks for the same pass
-  # again (see `handle_green/5`).
-  defp hold_pass(issue, sha, outcome, opts) do
+  # again (see `handle_green/5`). A note on the issue says until when (`HoldNote`).
+  defp hold_pass(issue, record, sha, outcome, opts) do
     hold = Keyword.get(opts, :usage_limit_hold, &Orchestrator.hold_for_usage_limit/2)
     cause = if UsageLimit.api_unreachable?(outcome.usage_limit), do: "could not reach the model API", else: "hit the usage limit"
 
     case hold.(outcome.usage_limit, issue.identifier) do
       {:ok, %{resume_at: resume_at}} ->
         Logger.info("QA pass #{cause} for #{issue.identifier} sha=#{sha}; no verdict, running it again after #{DateTime.to_iso8601(resume_at)}")
+        post_hold_note(issue, record, outcome.usage_limit, resume_at, opts)
         {:qa_usage_limited, issue.id, resume_at}
 
       other ->
@@ -528,6 +536,28 @@ defmodule SymphonyElixir.AutoReview do
         {:qa_usage_limited, issue.id, nil}
     end
   end
+
+  # The CI check record remembers the note, so a pass reads the issue's comments only to delete it.
+  defp post_hold_note(issue, record, usage_limit, resume_at, opts) do
+    case HoldNote.post(issue, usage_limit, resume_at, hold_note_opts(opts)) do
+      :ok -> update_ci_check(Keyword.get(opts, :run_store, RunStore), record, %{qa_hold_note: true})
+      :skipped -> :ok
+      {:error, reason} -> Logger.warning("Failed to post the QA hold note for #{issue.identifier}: #{inspect(reason)}")
+    end
+  end
+
+  # The pass ran, so the issue no longer waits on the usage limit. A note that could not be
+  # deleted is tried again on the next pass.
+  defp withdraw_hold_note(issue, %{qa_hold_note: true} = record, opts) do
+    case HoldNote.withdraw(issue, hold_note_opts(opts)) do
+      :ok -> update_ci_check(Keyword.get(opts, :run_store, RunStore), record, %{qa_hold_note: false})
+      {:error, reason} -> Logger.warning("Failed to remove the QA hold note for #{issue.identifier}: #{inspect(reason)}")
+    end
+  end
+
+  defp withdraw_hold_note(_issue, _record, _opts), do: :ok
+
+  defp hold_note_opts(opts), do: Keyword.take(opts, [:linear_client, :settings, :now, :to_local])
 
   # A pass takes minutes and `issue` is from when it was requested: a human may have approved
   # or merged the PR, or a new commit may have been pushed, in the meantime. A state that
