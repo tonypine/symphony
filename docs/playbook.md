@@ -47,7 +47,7 @@ This catalog is kept in sync with `priv/playbook/` by
 | `guardrails` | — | Cross-cutting safety and process guardrails for an issue run; repos append repo-specific guardrails after the render. |
 | `issue_context` | `issue` | Standard Linear issue fields, description, recent comments, linked issues, and sub-issues for the agent to act on. |
 | `out_of_scope_backlog` | — | Split work and file out-of-scope improvements as Backlog sub-issues of the current issue with linear_create_subissue instead of expanding scope. |
-| `parent_tickets` | — | Parent tickets labeled breakdown are groomed into sub-tickets; breakdown (new, resumed, revised, re-planned), final verification, and close-out runs never open a PR. |
+| `parent_tickets` | — | Plan tickets (label plan, or breakdown, its older name) are groomed into sub-tickets; plan (new, resumed, revised, re-planned), final verification, and close-out runs never open a PR. |
 | `pr_feedback_sweep` | — | Required sweep of all PR feedback channels; every actionable comment must be resolved or answered before In Review. |
 | `reproduce_and_blast_radius` | — | Capture a reproduction/acceptance signal and a blast-radius analysis before the first code edit. |
 | `scoped_tools` | — | How to discover and use the scoped linear_* and github_* tools Symphony injects for the current issue. |
@@ -55,7 +55,7 @@ This catalog is kept in sync with `priv/playbook/` by
 | `workpad_bootstrap` | `agent` | Find, reuse, or create the single persistent Linear workpad comment and reconcile it before new work. |
 | `workpad_template` | `agent` | Canonical structure for the persistent workpad comment. |
 
-The breakdown flow in `parent_tickets` (plan run, single plan review, approval
+The plan flow in `parent_tickets` (plan run, single plan review, approval
 through `Waiting on sub-tickets`, close-out) is the base of the Director workflow:
 [ADR 0001](adr/0001-director-workflow.md) records the ticket types, the plan stages
 and where a plan's artifacts live.

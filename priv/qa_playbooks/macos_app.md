@@ -35,6 +35,20 @@ for you on the host. They only act on this worktree's configured app and on apps
 Do not edit files in the worktree, gitignored ones included (such as build caches):
 `qa_build` and `qa_launch_app` refuse a modified checkout.
 
+Servers the app talks to (a stub of the project's API, a proxy) run in your shell on this host:
+- Bind each one to `127.0.0.1` at a port from `QA_HOST_PORTS` (see "Host ports" above), never
+  to `0.0.0.0` or another port, and point the app at `http://localhost:<port>`. The app may run on
+  a separate QA machine: Symphony forwards those ports, and only those, from its `localhost` to
+  this host's `127.0.0.1`.
+- Never give the app this host's LAN or bridge address: the QA machine may not reach it, and
+  macOS asks a person for Local Network permission before an app connects to one, which QA
+  cannot grant.
+- Start the server before the app connects and keep it running while you drive the app (your
+  shell tool's background option, with a time limit). Have it log each request, and quote the
+  app's requests from that log in the step's `details`.
+- When the server cannot listen on the port, or the app still cannot reach it, mark the steps
+  that need it `blocked` with the error in `details`.
+
 1. Run `qa_build`. A non-zero `exit_status` from a change that should build is a failing
    step; quote the end of the output.
 2. Run `qa_launch_app`. In QA mode the app starts with empty settings.

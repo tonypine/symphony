@@ -46,6 +46,13 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @human_action_cap_per_run 5
   @human_action_max_steps 15
   @human_action_max_minutes 480
+  # Documents hold a ticket's long-lived artifacts, edited over several runs; this bounds a run that loops.
+  @document_cap_per_run 10
+  @document_attachment_first 100
+  # An issue attachment whose metadata carries this key marks a document Symphony created for the
+  # issue, so a later run on it may edit the document. A person cannot set attachment metadata.
+  @document_metadata_key "symphonyDocumentId"
+  @document_title_separator " · "
 
   @uuid_pattern ~r/\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i
 
@@ -487,6 +494,66 @@ defmodule SymphonyElixir.AgentTools.Linear do
   mutation SymphonyAgentRemoveLabel($issueId: String!, $labelId: String!) {
     issueRemoveLabel(id: $issueId, labelId: $labelId) {
       success
+    }
+  }
+  """
+
+  @document_scope_query """
+  query SymphonyAgentDocumentScope($id: String!, $first: Int!) {
+    issue(id: $id) {
+      id
+      identifier
+      project { id }
+      attachments(first: $first) {
+        nodes { metadata }
+      }
+    }
+  }
+  """
+
+  @create_document_mutation """
+  mutation SymphonyAgentCreateDocument($input: DocumentCreateInput!) {
+    documentCreate(input: $input) {
+      success
+      document { id title url }
+    }
+  }
+  """
+
+  @update_document_mutation """
+  mutation SymphonyAgentUpdateDocument($id: String!, $input: DocumentUpdateInput!) {
+    documentUpdate(id: $id, input: $input) {
+      success
+      document { id title url }
+    }
+  }
+  """
+
+  @attach_document_mutation """
+  mutation SymphonyAgentAttachDocument($input: AttachmentCreateInput!) {
+    attachmentCreate(input: $input) {
+      success
+      attachment { id url }
+    }
+  }
+  """
+
+  @document_query """
+  query SymphonyAgentDocument($id: String!) {
+    document(id: $id) {
+      id
+      title
+      content
+      url
+      updatedAt
+    }
+  }
+  """
+
+  @documents_query """
+  query SymphonyAgentDocuments($ids: [ID!]!, $first: Int!) {
+    documents(filter: { id: { in: $ids } }, first: $first) {
+      nodes { id title url updatedAt }
     }
   }
   """
@@ -1319,6 +1386,186 @@ defmodule SymphonyElixir.AgentTools.Linear do
          {:ok, response} <- graphql(@create_project_update_mutation, %{input: input}, opts) do
       check_mutation_success(response, "projectUpdateCreate")
     end
+  end
+
+  @doc """
+  Creates a Linear document in the current issue's project, titled `<identifier> · <title>`, and
+  attaches its URL to the current issue with the document id in the attachment's metadata, so
+  later runs on the issue may read and edit it. An issue outside a project is refused. Title and
+  content are refused when they hold a secret pattern. At most #{@document_cap_per_run} per run.
+  """
+  @spec create_document(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
+  def create_document(context, attrs, opts \\ []) when is_map(attrs) do
+    registry = Map.get(context, :comment_registry)
+
+    with {:ok, issue_id} <- current_issue_id(context),
+         {:ok, title} <- document_title_field(Map.get(attrs, "title")),
+         {:ok, content} <- document_content_field(Map.get(attrs, "content")),
+         :ok <- SecretScanner.reject_fields_if_secret_pattern([title: title, content: content], context, "linear_create_document", opts),
+         {:ok, scope} <- document_scope(issue_id, opts),
+         {:ok, project_id} <- fetch_path(scope, ["project", "id"], :document_issue_has_no_project),
+         :ok <- CommentRegistry.reserve_document(registry, @document_cap_per_run) do
+      input = %{"projectId" => project_id, "title" => document_title(scope, title), "content" => content}
+
+      case create_project_document(input, opts) do
+        {:ok, document} ->
+          CommentRegistry.record_document(registry, document["id"])
+          attach_document(issue_id, document, opts)
+
+        {:error, _reason} = error ->
+          CommentRegistry.release_document(registry)
+          error
+      end
+    end
+  end
+
+  @doc """
+  Replaces the content, and the title when given, of a document the current issue's runs created:
+  one this run created, or one an attachment on the issue marks as created for it. Any other
+  document is refused before anything is written, as are content copied from a cut read and
+  fields holding a secret pattern. The title keeps the `<identifier> · ` prefix.
+  """
+  @spec update_document(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
+  def update_document(context, attrs, opts \\ []) when is_map(attrs) do
+    with {:ok, issue_id} <- current_issue_id(context),
+         {:ok, document_id} <- document_id_field(Map.get(attrs, "document_id")),
+         {:ok, title} <- optional_document_title(Map.get(attrs, "title")),
+         {:ok, content} <- document_content_field(Map.get(attrs, "content")),
+         :ok <- reject_truncated_document(content),
+         :ok <- SecretScanner.reject_fields_if_secret_pattern([title: title, content: content], context, "linear_update_document", opts),
+         {:ok, scope} <- document_scope(issue_id, opts),
+         :ok <- verify_document_owner(scope, context, document_id),
+         input = document_update_input(scope, title, content),
+         {:ok, response} <- graphql(@update_document_mutation, %{id: document_id, input: input}, opts),
+         {:ok, response} <- check_mutation_success(response, "documentUpdate") do
+      document = get_in(response, ["data", "documentUpdate", "document"]) || %{}
+      {:ok, %{"document" => Map.merge(%{"id" => document_id}, document_summary(document)), "contentLength" => String.length(content)}}
+    end
+  end
+
+  @doc """
+  Without a `document_id`, lists the documents the current issue's runs created (id, title, url).
+  With one, reads that document, its content secret-redacted and wrapped as untrusted text. Any
+  other document is refused before it is read.
+  """
+  @spec get_document(context(), String.t() | nil, keyword()) :: {:ok, map()} | {:error, term()}
+  def get_document(context, document_id, opts \\ []) do
+    if is_nil(document_id),
+      do: list_issue_documents(context, opts),
+      else: read_issue_document(context, document_id, opts)
+  end
+
+  defp list_issue_documents(context, opts) do
+    with {:ok, issue_id} <- current_issue_id(context),
+         {:ok, scope} <- document_scope(issue_id, opts),
+         {:ok, documents} <- list_documents(owned_document_ids(scope, context), opts) do
+      {:ok, %{"documents" => Enum.map(documents, fn document -> wrap_string_field(document, "title", &PromptSafety.linear_document_title/1) end)}}
+    end
+  end
+
+  defp read_issue_document(context, document_id, opts) do
+    with {:ok, issue_id} <- current_issue_id(context),
+         {:ok, document_id} <- document_id_field(document_id),
+         {:ok, scope} <- document_scope(issue_id, opts),
+         :ok <- verify_document_owner(scope, context, document_id),
+         {:ok, body} <- signed_graphql(@document_query, %{id: document_id}, opts),
+         {:ok, document} <- fetch_path(body, ["data", "document"], :document_not_found) do
+      {:ok, wrap_document(document, context, opts)}
+    end
+  end
+
+  defp document_scope(issue_id, opts) do
+    with {:ok, body} <- graphql(@document_scope_query, %{id: issue_id, first: @document_attachment_first}, opts) do
+      fetch_path(body, ["data", "issue"], :issue_not_found)
+    end
+  end
+
+  defp document_title_field(title) do
+    if non_blank?(title) and String.length(String.trim(title)) <= @title_max_length,
+      do: {:ok, String.trim(title)},
+      else: {:error, :invalid_document_title}
+  end
+
+  defp optional_document_title(nil), do: {:ok, nil}
+  defp optional_document_title(title), do: document_title_field(title)
+
+  defp document_content_field(content), do: if(non_blank?(content), do: {:ok, content}, else: {:error, :invalid_document_content})
+
+  defp document_id_field(document_id),
+    do: if(non_blank?(document_id), do: {:ok, String.trim(document_id)}, else: {:error, :invalid_document_id})
+
+  # Content copied from a cut read would replace the stored document with its truncated text.
+  defp reject_truncated_document(content) do
+    if PromptSafety.truncated?(content), do: {:error, :truncated_document_content}, else: :ok
+  end
+
+  # A title that already carries the prefix keeps a single one.
+  defp document_title(%{"identifier" => identifier}, title) do
+    prefix = identifier <> @document_title_separator
+    if String.starts_with?(title, prefix), do: title, else: prefix <> title
+  end
+
+  defp document_update_input(_scope, nil, content), do: %{"content" => content}
+  defp document_update_input(scope, title, content), do: %{"title" => document_title(scope, title), "content" => content}
+
+  defp create_project_document(input, opts) do
+    with {:ok, response} <- graphql(@create_document_mutation, %{input: input}, opts),
+         {:ok, response} <- check_mutation_success(response, "documentCreate") do
+      case get_in(response, ["data", "documentCreate", "document"]) do
+        %{"id" => id} = document when is_binary(id) -> {:ok, document}
+        _ -> {:error, :document_not_returned}
+      end
+    end
+  end
+
+  # The document exists by then, so its slot stays used and this run may still edit it.
+  defp attach_document(issue_id, document, opts) do
+    input = %{
+      "issueId" => issue_id,
+      "url" => document["url"],
+      "title" => document["title"],
+      "metadata" => %{@document_metadata_key => document["id"]}
+    }
+
+    with {:ok, response} <- graphql(@attach_document_mutation, %{input: input}, opts),
+         {:ok, _response} <- check_mutation_success(response, "attachmentCreate") do
+      {:ok, %{"document" => document_summary(document), "attached" => true}}
+    else
+      {:error, reason} -> {:error, {:document_attach_failed, document_summary(document), reason}}
+    end
+  end
+
+  defp document_summary(document), do: Map.take(document, ["id", "title", "url"])
+
+  defp verify_document_owner(scope, context, document_id) do
+    if document_id in owned_document_ids(scope, context),
+      do: :ok,
+      else: {:error, {:document_not_owned_by_issue, document_id}}
+  end
+
+  # The documents this run created, plus the ones the issue's attachments mark as created for it.
+  defp owned_document_ids(scope, context) do
+    attached =
+      for %{"metadata" => %{@document_metadata_key => document_id}} <- get_in(scope, ["attachments", "nodes"]) || [],
+          is_binary(document_id),
+          do: document_id
+
+    Enum.uniq(attached ++ CommentRegistry.document_ids(Map.get(context, :comment_registry)))
+  end
+
+  defp list_documents([], _opts), do: {:ok, []}
+
+  defp list_documents(document_ids, opts) do
+    with {:ok, body} <- graphql(@documents_query, %{ids: document_ids, first: length(document_ids)}, opts) do
+      fetch_path(body, ["data", "documents", "nodes"], [])
+    end
+  end
+
+  defp wrap_document(document, context, opts) do
+    document
+    |> redact_string_field("content", context, "linear_get_document", opts)
+    |> wrap_string_field("content", &PromptSafety.linear_document_content/1)
+    |> wrap_string_field("title", &PromptSafety.linear_document_title/1)
   end
 
   defp validate_subissue_fields(attrs) do

@@ -71,7 +71,7 @@ defmodule SymphonyElixir.QaAgentTest do
     defdelegate stop_session(session), to: FakeSession
 
     def run_turn(session, prompt, issue, opts) do
-      [tmp_dir] = Map.values(opts[:extra_env])
+      [tmp_dir] = opts[:extra_env] |> Map.delete("QA_HOST_PORTS") |> Map.values()
       fixture = Path.join(tmp_dir, "symphony.yml")
       File.write!(fixture, "repos: []\n")
       result = SymphonyElixir.QaDriver.call_tool(opts[:qa_driver], "qa_put_file", %{"local_path" => fixture})
@@ -1013,11 +1013,43 @@ defmodule SymphonyElixir.QaAgentTest do
       assert_receive {:qa_turn, _session, prompt, _issue, turn_opts}
       assert turn_opts[:qa_driver] == driver
       assert prompt =~ "### Playbook: macos_app"
+      assert %{"QA_HOST_PORTS" => ports} = session_opts[:extra_env]
+      assert [_one, _two, _three] = String.split(ports, ",")
+      assert prompt =~ "Host ports:\nQA_HOST_PORTS = #{ports} (also in your `QA_HOST_PORTS` environment variable)."
+      assert prompt =~ "the app reaches them at\n`http://localhost:<port>`"
       refute Process.alive?(driver)
 
       assert {:ok, _result} = QaAgent.run(job(), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession)
       assert_receive {:qa_session_started, _worktree, cli_opts}
       assert cli_opts[:qa_driver] == nil
+      refute Map.has_key?(cli_opts[:extra_env], "QA_HOST_PORTS")
+      assert_receive {:qa_turn, _session, cli_prompt, _issue, _turn_opts}
+      refute cli_prompt =~ "QA_HOST_PORTS"
+    end
+
+    test "blocks a macos_app pass whose host-port tunnel to the QA host cannot open, before the agent starts" do
+      [macos_app] =
+        Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => %{"build" => "make app", "app" => "build/App.app"}}})
+
+      host = %{
+        kill: fn _pid -> :ok end,
+        prepare: fn _operator_home, _canary -> {:ok, "/Users/qa/symphony-qa/run-1"} end,
+        tunnel: fn _ports -> {:error, {:failed, "ssh exited with status 255: Connection refused"}} end,
+        cleanup: fn _dir -> :ok end
+      }
+
+      {result, log} =
+        with_log(fn ->
+          QaAgent.run(job(%{playbooks: [macos_app]}), Config.settings!(),
+            git: fake_git(),
+            qa_agent_module: FakeSession,
+            qa_driver_opts: [worker_host: "qa-vm", host: host]
+          )
+        end)
+
+      assert {:error, {:qa_host_tunnel_failed, "ssh exited with status 255: Connection refused"}, %{total_tokens: 0}} = result
+      assert log =~ "QA driver could not open the host-port tunnel"
+      refute_received {:qa_session_started, _worktree, _opts}
     end
 
     test "reports a pass whose wide pass the QA screen limited as blocked, for a person" do

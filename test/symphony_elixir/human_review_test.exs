@@ -101,13 +101,15 @@ defmodule SymphonyElixir.HumanReviewTest do
   end
 
   describe "requested_by_ticket?/2" do
-    test "is true for an escalation label other than breakdown, or a ticket pattern" do
+    test "is true for an escalation label other than plan or breakdown, or a ticket pattern" do
       settings = Config.settings!()
       plan = %Issue{title: "Split the importer", description: "Plan the work.", labels: ["breakdown"]}
 
       refute HumanReview.requested_by_ticket?(plan, settings)
       refute HumanReview.requested_by_ticket?(%{plan | labels: nil}, settings)
       assert HumanReview.requested_by_ticket?(%{plan | labels: ["breakdown", "Needs-Human"]}, settings)
+      refute HumanReview.requested_by_ticket?(%{plan | labels: ["Plan"]}, settings)
+      assert HumanReview.requested_by_ticket?(%{plan | labels: ["plan", "needs-human"]}, settings)
       assert HumanReview.requested_by_ticket?(%{plan | description: "The plan must not auto-approve."}, settings)
       assert HumanReview.requested_by_ticket?(%{plan | title: "Human review: split the importer"}, settings)
       refute HumanReview.requested_by_ticket?(%{plan | description: "Keep parents in `Human Review` until approved."}, settings)

@@ -64,8 +64,14 @@ defmodule SymphonyElixir.QaDriver do
   of the pass gets its URL. The app, and the Symphony it runs, use it only in QA
   mode (`SymphonyElixir.OpenRouter.base_url/1`).
 
+  Host ports: the driver picks three free ports on this host's loopback for the
+  pass (`host_ports/1`, `QA_HOST_PORTS` in the QA agent's prompt and
+  environment). The agent serves the app's stubs and proxies on `127.0.0.1` at
+  those ports, and the app reaches them at `http://localhost:<port>`.
+
   When the driver stops (the QA pass ends or crashes) it quits every app it
-  launched, stops the stub and removes its private directory.
+  launched, stops the stub, closes the host-port tunnel and removes its private
+  directory.
 
   With `:worker_host` (`auto_review.worker_host`) the build, the app and the
   helper run on that QA host instead, through `SymphonyElixir.QaDriver.Remote`.
@@ -77,7 +83,16 @@ defmodule SymphonyElixir.QaDriver do
   captured there and copied back into `qa-evidence/`, and `qa_put_file` copies
   fixtures there, because the app cannot read the Symphony host's files. Each
   app's SSH session forwards a random loopback port on the QA host back to the
-  stub (`ssh -R`), and the app gets that port's URL. A QA host that can reach
+  stub (`ssh -R`), and the app gets that port's URL. At start the driver also
+  opens one SSH session that forwards each host port from the QA host's
+  loopback to the same port here (`SymphonyElixir.QaDriver.Remote.tunnel/3`),
+  so `localhost` means the same service on both machines: an app on the bridged
+  QA VM cannot reach this host's NAT address, and macOS asks a person before an
+  app connects to a LAN address, while loopback needs no permission. A forward
+  the QA host refuses is retried on fresh ports; a tunnel that still cannot open
+  makes `host_ports/1` return the reason, and the QA pass is `blocked` with it.
+  A tunnel that closes during the pass is reopened at the next `qa_launch_app`,
+  which fails with `qa_host_tunnel_failed` when it cannot. A QA host that can reach
   the operator's credentials or holds push credentials is refused at start,
   and every tool then fails with `qa_worker_unsafe`.
   """
@@ -93,6 +108,8 @@ defmodule SymphonyElixir.QaDriver do
   @qa_root_env "SYMPHONY_BAR_QA_ROOT"
   # The QA host's loopback ports an app's SSH session may forward to the stub.
   @stub_remote_ports 20_000..59_999
+  @host_port_count 3
+  @tunnel_attempts 3
   @default_build_timeout_ms 900_000
   @helper_timeout_ms 30_000
   @screenshot_timeout_ms 15_000
@@ -145,6 +162,7 @@ defmodule SymphonyElixir.QaDriver do
           optional(:prepare) => (Path.t(), Path.t() -> {:ok, String.t()} | {:error, {atom(), String.t()}}),
           optional(:ship) => (Path.t(), String.t() -> :ok | {:error, String.t()}),
           optional(:put) => (Path.t(), String.t(), String.t() -> {:ok, String.t()} | {:error, String.t()}),
+          optional(:tunnel) => ([pos_integer()] -> {:ok, port()} | {:error, {:port_taken | :failed, String.t()}}),
           optional(:cleanup) => (String.t() -> :ok)
         }
   @type helper_result :: {:ok, Path.t()} | {:error, term()}
@@ -193,6 +211,15 @@ defmodule SymphonyElixir.QaDriver do
   catch
     :exit, _reason -> :ok
   end
+
+  @doc """
+  The ports on this host's loopback that the QA agent may serve the app's stubs
+  and proxies on, which the app reaches at `http://localhost:<port>` wherever it
+  runs. `{:error, reason}` when the tunnel to the QA host could not open.
+  """
+  @spec host_ports(pid() | nil) :: {:ok, [pos_integer()]} | {:error, String.t()}
+  def host_ports(nil), do: {:ok, []}
+  def host_ports(driver) when is_pid(driver), do: GenServer.call(driver, :host_ports, 30_000)
 
   @doc """
   Runs one `qa_*` tool with the agent's arguments. Returns the tool payload or a
@@ -968,8 +995,43 @@ defmodule SymphonyElixir.QaDriver do
       start_stub: Keyword.get(opts, :start_stub, &OpenRouter.Stub.start_link/0)
     }
 
-    config = host_dirs(config, worker_host)
-    {:ok, %{config: config, build: nil, ignored: %{}, apps: %{}, helper: nil, stub: nil, wide_pass: nil}}
+    state = %{config: host_dirs(config, worker_host), build: nil, ignored: %{}, apps: %{}, helper: nil, stub: nil}
+    state = Map.merge(state, %{wide_pass: nil, host_ports: pick_host_ports(), tunnel: nil, tunnel_error: nil})
+    {:ok, open_tunnel(state, @tunnel_attempts)}
+  end
+
+  # Held open together, so the ports differ; the agent binds them later.
+  defp pick_host_ports do
+    sockets =
+      for _index <- 1..@host_port_count do
+        {:ok, socket} = :gen_tcp.listen(0, ip: {127, 0, 0, 1})
+        socket
+      end
+
+    ports = for socket <- sockets, do: elem(:inet.port(socket), 1)
+    Enum.each(sockets, &:gen_tcp.close/1)
+    ports
+  end
+
+  # A local app reaches the host ports directly, and a QA host Symphony refused
+  # runs no app.
+  defp open_tunnel(%{config: %{remote?: false}} = state, _attempts), do: state
+  defp open_tunnel(%{config: %{unavailable: _error}} = state, _attempts), do: state
+
+  defp open_tunnel(state, attempts) do
+    case state.config.host.tunnel.(state.host_ports) do
+      {:ok, tunnel} ->
+        Logger.info("QA driver forwards host ports=#{Enum.join(state.host_ports, ",")} to the QA host")
+        %{state | tunnel: tunnel, tunnel_error: nil}
+
+      {:error, {:port_taken, message}} when attempts > 1 ->
+        Logger.info("QA driver retries the host-port tunnel on fresh ports: #{message}")
+        open_tunnel(%{state | host_ports: pick_host_ports()}, attempts - 1)
+
+      {:error, {_kind, message}} ->
+        Logger.warning("QA driver could not open the host-port tunnel ports=#{Enum.join(state.host_ports, ",")}: #{message}")
+        %{state | tunnel_error: message}
+    end
   end
 
   # `host_dir` holds the bundle copies, screenshot staging and the app's QA root
@@ -1011,6 +1073,9 @@ defmodule SymphonyElixir.QaDriver do
 
   @impl true
   def handle_call(:config, _from, state), do: {:reply, state.config, state}
+
+  def handle_call(:host_ports, _from, %{tunnel_error: nil} = state), do: {:reply, {:ok, state.host_ports}, state}
+  def handle_call(:host_ports, _from, state), do: {:reply, {:error, state.tunnel_error}, state}
   def handle_call(:build, _from, state), do: {:reply, state.build, state}
   def handle_call(:ignored, _from, state), do: {:reply, state.ignored, state}
   def handle_call(:helper, _from, state), do: {:reply, state.helper, state}
@@ -1023,10 +1088,18 @@ defmodule SymphonyElixir.QaDriver do
   def handle_call({:launch, executable, info}, _from, state) do
     running = Enum.count(state.apps, fn {_pid, app} -> app.exit_status == nil end)
 
-    if running >= @max_running_apps do
-      {:reply, tool_error("qa_too_many_apps", "#{running} launched apps are still running; quit one with qa_quit_app first."), state}
-    else
-      launch(executable, info, state)
+    cond do
+      running >= @max_running_apps ->
+        {:reply, tool_error("qa_too_many_apps", "#{running} launched apps are still running; quit one with qa_quit_app first."), state}
+
+      reopen_tunnel?(state) ->
+        case open_tunnel(state, 1) do
+          %{tunnel_error: nil} = state -> launch(executable, info, state)
+          state -> {:reply, tunnel_closed_error(state), state}
+        end
+
+      true ->
+        launch(executable, info, state)
     end
   end
 
@@ -1072,6 +1145,13 @@ defmodule SymphonyElixir.QaDriver do
     {:noreply, update_app(state, port, fn app -> %{app | output: tail(app.output <> data, @app_output_limit)} end)}
   end
 
+  # The tunnel closed during the pass: the next launch reopens it on the same ports.
+  # Its output (`ssh` warnings) matches no app above and is dropped.
+  def handle_info({port, {:exit_status, status}}, %{tunnel: port} = state) do
+    Logger.warning("QA driver host-port tunnel closed status=#{status}")
+    {:noreply, %{state | tunnel: nil}}
+  end
+
   def handle_info({port, {:exit_status, status}}, state) when is_port(port) do
     {:noreply, update_app(state, port, fn app -> %{app | exit_status: status} end)}
   end
@@ -1085,6 +1165,7 @@ defmodule SymphonyElixir.QaDriver do
   def terminate(_reason, state) do
     for {pid, %{exit_status: nil}} <- state.apps, do: state.config.host.kill.(pid)
     if state.stub, do: OpenRouter.Stub.stop(state.stub.pid)
+    if state.tunnel && Port.info(state.tunnel), do: Port.close(state.tunnel)
     if state.config.remote? and state.config.host_dir, do: state.config.host.cleanup.(state.config.host_dir)
     File.rm_rf(state.config.scratch_dir)
     :ok
@@ -1106,6 +1187,17 @@ defmodule SymphonyElixir.QaDriver do
       {:error, reason} ->
         {:reply, tool_error("qa_launch_failed", "The app could not start: #{inspect(reason)}"), state}
     end
+  end
+
+  defp reopen_tunnel?(state),
+    do: state.config.remote? and state.tunnel == nil and not Map.has_key?(state.config, :unavailable)
+
+  defp tunnel_closed_error(state) do
+    tool_error(
+      "qa_host_tunnel_failed",
+      "The tunnel that forwards QA_HOST_PORTS (#{Enum.join(state.host_ports, ", ")}) from the QA host closed and could not reopen: " <>
+        "#{state.tunnel_error}. #{Checks.blocked_hint()}"
+    )
   end
 
   defp ensure_stub(%{stub: %{}} = state), do: {:ok, state}

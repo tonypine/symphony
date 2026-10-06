@@ -9,7 +9,7 @@ defmodule SymphonyElixir.HumanActions.Collector do
   - each open `## Action needed:` comment on a labelled issue is a `:request`
     (see `SymphonyElixir.HumanActions.Request`); a withdrawn one is not listed;
   - a labelled issue with no request comment is itself a `:task`;
-  - a `breakdown` parent in a review state is a `:plan_review`;
+  - a plan parent in a review state is a `:plan_review`;
   - an issue in a review state whose `## Symphony QA Report` says `blocked` is a `:qa_blocked`,
     unless it is a `Final verification:` ticket;
   - a `Final verification:` ticket, in any state, whose parent walkthrough report says `blocked`
@@ -262,7 +262,7 @@ defmodule SymphonyElixir.HumanActions.Collector do
       action(context, %{
         key: "plan:#{issue.id}",
         kind: :plan_review,
-        title: "Approve the breakdown plan for #{issue.identifier}",
+        title: "Approve the plan for #{issue.identifier}",
         why: "#{issue.identifier} is split into sub-tickets, and none of them starts before you approve the plan.",
         unblocks: "its sub-tickets, waiting in Backlog",
         est_minutes: @plan_review_minutes,

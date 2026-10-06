@@ -197,6 +197,28 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
              } = Enum.find(RunStore.list_runs(), &(&1.issue_id == "issue-profile-sub"))
     end
 
+    test "dispatches a `plan` ticket as a breakdown run with the breakdown run profile", ctx do
+      write_profile_workflow!(ctx)
+      plan = issue("issue-profile-plan", "MT-PROFILE-3", %{labels: ["Plan"]})
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [plan])
+
+      orchestrator_name = Module.concat(__MODULE__, :PlanDispatchOrchestrator)
+      {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+      on_exit(fn -> stop_process(pid) end)
+
+      log =
+        capture_log(fn ->
+          send(pid, :run_poll_cycle)
+          assert [first] = wait_for_argv_lines(ctx.argv_trace, 1)
+          assert String.ends_with?(first, "--print --model claude-opus-5-5 --effort high")
+          wait_until(fn -> RunStore.list_runs() != [] end)
+        end)
+
+      assert log =~ ~r/Dispatching issue to agent: issue_id=issue-profile-plan .* run_kind=breakdown model=claude-opus-5-5 effort=high/
+      assert [%{issue_id: "issue-profile-plan", run_kind: "breakdown", effort: "high"}] = RunStore.list_runs()
+    end
+
     test "names the PR comment a review_feedback run answers", ctx do
       write_profile_workflow!(ctx)
       issue = issue("issue-profile-review", "MT-PROFILE-3", %{state: "In Progress"})

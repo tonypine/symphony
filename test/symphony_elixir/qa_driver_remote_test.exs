@@ -91,16 +91,19 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
 
   defp trace, do: File.read!(System.get_env("QA_FAKE_TRACE"))
 
-  defp git_worktree!(root) do
+  @app_script ~s(echo "qa root $SYMPHONY_BAR_QA_ROOT secret ${LINEAR_API_KEY:-none} openrouter $SYMPHONY_QA_OPENROUTER_URL")
+
+  defp git_worktree!(root, app_script \\ @app_script) do
     worktree = Path.join(root, "worktree")
     File.mkdir_p!(worktree)
     {_output, 0} = System.cmd("git", ["init", "--quiet", worktree])
+    File.write!(Path.join(worktree, "app.sh"), "#!/bin/sh\n#{app_script}\nexec sleep 30\n")
 
     File.write!(Path.join(worktree, "build.sh"), """
     #!/bin/sh
     mkdir -p macos/build/Demo.app/Contents/MacOS
     printf '<plist/>' > macos/build/Demo.app/Contents/Info.plist
-    printf '#!/bin/sh\\necho "qa root $SYMPHONY_BAR_QA_ROOT secret ${LINEAR_API_KEY:-none} openrouter $SYMPHONY_QA_OPENROUTER_URL"\\nexec sleep 30\\n' > macos/build/Demo.app/Contents/MacOS/Demo
+    cp app.sh macos/build/Demo.app/Contents/MacOS/Demo
     chmod +x macos/build/Demo.app/Contents/MacOS/Demo
     echo "built on $HOME"
     """)
@@ -188,6 +191,48 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
       QaDriver.stop(driver)
       refute File.exists?(run_dir)
       refute File.exists?(scratch_dir)
+    end
+
+    # On the fake QA host `localhost` is this host, so the forwards are only
+    # traced; the app still reaches the stub the way it does on a QA VM, at
+    # `http://localhost:<port>` for a port from QA_HOST_PORTS.
+    test "forwards the host ports for the pass, so the app reaches a stub on this host at localhost", %{root: root, ssh_host: ssh_host} do
+      prepare = fn _operator_home, _canary -> Remote.prepare(ssh_host, Path.join(root, "operator"), Path.join(root, "no-canary")) end
+      worktree = Path.join(root, "worktree")
+      File.mkdir_p!(worktree)
+
+      {{:ok, driver}, log} =
+        with_log(fn ->
+          QaDriver.start_link(
+            worktree: worktree,
+            worker_host: ssh_host,
+            playbook: %{build: "sh build.sh", app: @app},
+            host: %{prepare: prepare}
+          )
+        end)
+
+      assert {:ok, [port | _rest] = ports} = QaDriver.host_ports(driver)
+      assert log =~ "QA driver forwards host ports=#{Enum.join(ports, ",")} to the QA host"
+
+      forwards = Enum.map_join(ports, " ", &"-R #{&1}:127.0.0.1:#{&1}")
+
+      assert trace() =~
+               "#{forwards} -o BatchMode=yes -o LogLevel=ERROR -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -T #{ssh_host}"
+
+      stub = serve_stub(port, ~s({"jobs":[{"title":"QA stub job"}]}))
+      git_worktree!(root, "curl -s --noproxy '*' --max-time 5 http://localhost:#{port}/api/jobs; echo")
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+      {{:ok, %{"pid" => pid}}, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{}) end)
+
+      assert_receive {:stub_request, ^stub, "GET /api/jobs HTTP/1.1"}, 5_000
+      wait_until(fn -> Enum.any?(:sys.get_state(driver).apps, fn {_pid, app} -> app.output =~ "QA stub job" end) end)
+      assert {:ok, %{"output" => output}} = QaDriver.call_tool(driver, "qa_quit_app", %{"pid" => pid})
+      assert output =~ ~s({"jobs":[{"title":"QA stub job"}]})
+
+      # The tunnel's session ends with the pass.
+      {:os_pid, ssh_pid} = Port.info(:sys.get_state(driver).tunnel, :os_pid)
+      QaDriver.stop(driver)
+      wait_until(fn -> elem(System.cmd("kill", ["-0", "#{ssh_pid}"], stderr_to_stdout: true), 1) != 0 end)
     end
 
     test "refuses a QA host that runs as the operator", %{root: root, ssh_host: ssh_host} do
@@ -434,9 +479,57 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
       assert {:error, :ssh_not_found} = Remote.launch(ssh_host, "/bin/true", [])
     end
 
+    test "tunnel reports a port the QA host refuses, a failed session and a host that never answers", %{root: root, ssh_host: ssh_host} do
+      System.put_env("QA_FAKE_SSH_MODE", "output")
+      System.put_env("QA_FAKE_SSH_OUTPUT", "Error: remote port forwarding failed for listen port 50001\n")
+      System.put_env("QA_FAKE_SSH_STATUS", "255")
+
+      assert {:error, {:port_taken, "ssh exited with status 255: Error: remote port forwarding failed for listen port 50001"}} =
+               Remote.tunnel(ssh_host, [50_001])
+
+      System.put_env("QA_FAKE_SSH_MODE", "fail")
+      assert {:error, {:failed, message}} = Remote.tunnel(ssh_host, [50_001])
+      assert message =~ "status 255: ssh: connect to host qa-vm port 22: Connection refused"
+
+      System.put_env("QA_FAKE_SSH_MODE", "hang")
+      assert {:error, {:failed, "the QA host did not open the forwards within 200 ms"}} = Remote.tunnel(ssh_host, [50_001], timeout_ms: 200)
+
+      System.put_env("PATH", Path.join(root, "empty"))
+      assert {:error, {:failed, ":ssh_not_found"}} = Remote.tunnel(ssh_host, [50_001])
+    end
+
     test "cleanup removes only run directories", %{root: root, ssh_host: ssh_host} do
       assert :ok = Remote.cleanup(ssh_host, root)
       assert File.dir?(root)
+    end
+  end
+
+  # A one-request HTTP server on 127.0.0.1:`port`, standing in for the stub a
+  # QA agent serves; it reports the request line to the test.
+  defp serve_stub(port, body) do
+    test = self()
+    ref = make_ref()
+    {:ok, listen} = :gen_tcp.listen(port, [:binary, ip: {127, 0, 0, 1}, active: false, packet: :line])
+
+    stub =
+      spawn_link(fn ->
+        {:ok, socket} = :gen_tcp.accept(listen, 10_000)
+        {:ok, line} = :gen_tcp.recv(socket, 0, 5_000)
+        send(test, {:stub_request, ref, String.trim(line)})
+        :gen_tcp.send(socket, "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: #{byte_size(body)}\r\nconnection: close\r\n\r\n#{body}")
+        :gen_tcp.close(socket)
+        :gen_tcp.close(listen)
+      end)
+
+    on_exit(fn -> Process.exit(stub, :kill) end)
+    ref
+  end
+
+  defp wait_until(fun, attempts \\ 200) do
+    cond do
+      fun.() -> :ok
+      attempts == 0 -> flunk("condition never held")
+      true -> Process.sleep(25) && wait_until(fun, attempts - 1)
     end
   end
 end
