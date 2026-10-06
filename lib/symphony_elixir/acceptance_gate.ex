@@ -29,8 +29,8 @@ defmodule SymphonyElixir.AcceptanceGate do
   before, and the proposed follow-ups are listed, not filed. In `enforce` mode the verdict moves
   the issue (`enforced_target/4`): `approve` to Merging, `rework` back to In Progress, `escalate`
   to In Review; and up to 3 follow-ups are filed as Backlog sub-issues
-  (`SymphonyElixir.AcceptanceGate.FollowUps`). The gate never moves a `breakdown` parent or a
-  `Final verification:` ticket (`enforces?/2`).
+  (`SymphonyElixir.AcceptanceGate.FollowUps`), skipping a gap an existing ticket covers. The gate
+  never moves a `breakdown` parent or a `Final verification:` ticket (`enforces?/2`).
   """
 
   require Logger
@@ -58,6 +58,11 @@ defmodule SymphonyElixir.AcceptanceGate do
   @merging_state "Merging"
   @active_state "In Progress"
   @review_state "In Review"
+  @relation_labels %{
+    "sub_issue" => "sub-issue",
+    "relation" => "blocked by this ticket",
+    "inverse_relation" => "blocks this ticket"
+  }
   # The tickets the gate never moves: their review stays with a person.
   @guarded_kinds [:breakdown, :close_out, :final_verification]
 
@@ -71,7 +76,7 @@ defmodule SymphonyElixir.AcceptanceGate do
           overlaps: [%{pr_url: String.t(), detail: String.t()}],
           scope: [%{kind: String.t(), detail: String.t()}],
           escalation_reasons: [String.t()],
-          follow_ups: [%{title: String.t(), detail: String.t()}]
+          follow_ups: [%{title: String.t(), detail: String.t(), acceptance: [String.t()], covered_by: String.t() | nil}]
         }
   @type outcome :: {:answer, answer()} | {:inconclusive, term()} | {:conflict, [String.t()]} | {:unavailable, map()}
   @type run_result :: %{
@@ -453,7 +458,8 @@ defmodule SymphonyElixir.AcceptanceGate do
     case Keyword.get(opts, :context, Context).build(issue, record, sha, settings, Keyword.get(opts, :context_opts, [])) do
       {:ok, context} ->
         reasons = escalation_reasons(issue, context.diff_summary, context.busy_files, rules) ++ qa_reasons
-        job = Map.merge(job, %{context: context, criteria: criteria, reasons: reasons})
+        existing = existing_tickets(issue, settings, opts)
+        job = Map.merge(job, %{context: context, criteria: criteria, reasons: reasons, existing_tickets: existing})
 
         base
         |> Map.merge(%{reasons: reasons, context: context})
@@ -649,6 +655,9 @@ defmodule SymphonyElixir.AcceptanceGate do
     Acceptance criteria to judge:
     #{criteria_lines(job.criteria)}
 
+    Tickets that already exist around this one (its sub-issues, siblings, parent and blockers):
+    #{existing_lines(Map.get(job, :existing_tickets, []))}
+
     Judge, in this order:
     1. Each acceptance criterion: `met`, `unmet` or `unclear`, with `file:line` evidence from the
        merged diff below or the worktree. Answer every criterion listed above, by its id.
@@ -664,7 +673,13 @@ defmodule SymphonyElixir.AcceptanceGate do
     - `escalate`: a human must decide (see 4), or you can't tell.
 
     Put gaps that are real but outside this ticket in `follow_ups`. Symphony lists them, and when
-    your verdict is enforced it files up to 3 of them as Backlog sub-issues.
+    your verdict is enforced it files up to 3 of them as Backlog sub-issues. Before you add one,
+    read the existing tickets listed above: when one of them already covers the gap, set
+    `covered_by` to its identifier, and Symphony names that ticket instead of filing a copy. Give
+    each new follow-up one or more `acceptance` criteria a reviewer can check once it is fixed:
+    what a test or a check shows (for example "a test shows the poller reads only the changed
+    runs"), never the title restated. Symphony adds "CI is green" itself, and files no follow-up
+    without a checkable criterion.
 
     #{escalations_section(job.reasons)}Open PRs that change the same files:
     #{overlap_lines(context.overlaps)}
@@ -689,7 +704,9 @@ defmodule SymphonyElixir.AcceptanceGate do
       "overlaps": [{"pr_url": "<url>", "detail": "<the conflict or overlap>"}],
       "scope": [{"kind": "missing" | "unrelated", "detail": "<what>"}],
       "escalation_reasons": ["<a decision a human must make>"],
-      "follow_ups": [{"title": "<short title>", "detail": "<the out-of-scope gap>"}]
+      "follow_ups": [
+        {"title": "<short title>", "detail": "<the out-of-scope gap>", "acceptance": ["<what a test or a check shows once it is fixed>"], "covered_by": "<identifier of the existing ticket that covers it>" | null}
+      ]
     }
     """
   end
@@ -705,6 +722,16 @@ defmodule SymphonyElixir.AcceptanceGate do
 
   defp criteria_lines([]), do: "(none found under an Acceptance heading or in the workpad: derive them from the description, ids C1, C2, ...)"
   defp criteria_lines(criteria), do: Enum.map_join(criteria, "\n", &"- #{&1.id}: #{PromptSafety.linear_issue_body(&1.criterion)}")
+
+  # Titles come back from `AgentTools.Linear.get_related_issues/2` already wrapped as untrusted data.
+  defp existing_lines([]), do: "(none)"
+
+  defp existing_lines(tickets) do
+    Enum.map_join(tickets, "\n", fn ticket ->
+      relation = Map.get(@relation_labels, ticket["relation"], ticket["relation"])
+      "- #{ticket["identifier"]} (#{relation}, #{ticket["state"]}): #{ticket["title"]}"
+    end)
+  end
 
   defp escalations_section([]), do: ""
 
@@ -792,8 +819,23 @@ defmodule SymphonyElixir.AcceptanceGate do
   defp coerce_scope(%{"kind" => kind, "detail" => detail}) when kind in @scope_kinds and is_binary(detail), do: %{kind: kind, detail: String.trim(detail)}
   defp coerce_scope(_scope), do: nil
 
-  defp coerce_follow_up(%{"title" => title} = follow_up) when is_binary(title), do: %{title: String.trim(title), detail: trimmed(Map.get(follow_up, "detail")) || ""}
+  defp coerce_follow_up(%{"title" => title} = follow_up) when is_binary(title) do
+    %{
+      title: String.trim(title),
+      detail: trimmed(Map.get(follow_up, "detail")) || "",
+      acceptance: string_list(Map.get(follow_up, "acceptance")),
+      covered_by: issue_identifier(Map.get(follow_up, "covered_by"))
+    }
+  end
+
   defp coerce_follow_up(_follow_up), do: nil
+
+  defp issue_identifier(value) when is_binary(value) do
+    identifier = value |> String.trim() |> String.upcase()
+    if Regex.match?(~r/^[A-Z][A-Z0-9]*-\d+$/, identifier), do: identifier
+  end
+
+  defp issue_identifier(_value), do: nil
 
   @doc """
   The acceptance criteria the gate judges, numbered `C1`, `C2`, ...: the checklist items under
@@ -846,6 +888,22 @@ defmodule SymphonyElixir.AcceptanceGate do
   end
 
   defp workpad_criteria(_issue, _settings, _opts), do: []
+
+  # The ticket's family, listed in the prompt so the agent names an existing ticket rather than
+  # proposing a copy of it. Reading it is best effort: the filing reads it again, and files nothing
+  # when it can't (`SymphonyElixir.AcceptanceGate.FollowUps`).
+  defp existing_tickets(issue, %Schema{tracker: %{kind: "linear"}}, opts) do
+    case AgentTools.Linear.get_related_issues(%{issue: issue}, Keyword.take(opts, [:linear_client])) do
+      {:ok, tickets} ->
+        tickets
+
+      {:error, reason} ->
+        Logger.warning("Acceptance gate could not read the tickets related to #{issue.identifier}: #{inspect(reason)}")
+        []
+    end
+  end
+
+  defp existing_tickets(_issue, _settings, _opts), do: []
 
   # Comments come back wrapped in an untrusted-data tag.
   defp comment_body(%{"body" => body}) when is_binary(body) do

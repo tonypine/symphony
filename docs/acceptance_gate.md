@@ -69,7 +69,11 @@ it is, as for a late QA pass.
   It doesn't review code style or bugs, which the pre-push reviewer covers, unless a bug makes a
   criterion unmet. It answers with JSON: `verdict` (`approve`, `rework` or `escalate`),
   `criteria[]`, `overlaps[]`, `scope[]`, `escalation_reasons[]` and `follow_ups[]` (gaps outside
-  the ticket). An answer without a readable JSON object gets one follow-up turn.
+  the ticket). The prompt lists the tickets that already exist around the ticket (its sub-issues,
+  siblings, parent and blockers): a gap one of them covers names it in the follow-up's
+  `covered_by`, and each new follow-up gives `acceptance[]` criteria saying what a test or a check
+  shows once it is fixed, never its title restated. An answer without a readable JSON object gets
+  one follow-up turn.
 - **The final verdict.** Any escalation rule that triggers forces `escalate`, and the agent's own
   verdict is kept as `agent_verdict`. A QA `blocked` adds the reason `qa_blocked`. A PR that
   conflicts with current main is `rework` (reason `conflict`). An inconclusive pass (an unreadable
@@ -183,10 +187,15 @@ With `mode: enforce`, set globally or for one repository, Auto Review applies th
   this workflow `Rework` means the approach is wrong, the PR is closed and the work starts over.
 - **Follow-ups.** The answer's `follow_ups` are filed as Backlog sub-issues of the ticket
   (`AcceptanceGate.FollowUps`, through `AgentTools.Linear.create_subissue/3`), at most 3 per
-  verdict. A title the ticket already has among its sub-issues (compared without case), or one the
-  answer repeats, is not filed again. When the sub-issues can't be read, none is filed. The gate
-  comment lists each follow-up as filed (with its identifier), already a sub-issue, over the cap,
-  or not filed and why. Only a Linear tracker files them.
+  verdict. A follow-up an existing ticket covers is not filed: one whose `covered_by` names a
+  ticket of the family (its sub-issues, siblings, parent and blockers; a `covered_by` outside it,
+  or naming the ticket itself, is ignored), one whose title a ticket of the family already has
+  (compared without case), or one the answer repeats. A filed follow-up lists its
+  `acceptance` criteria plus "CI is green"; a criterion that only restates the title is dropped,
+  and a follow-up left without one is not filed. When the family can't be read, none is filed.
+  The gate comment lists each follow-up as filed (with its identifier), already covered (naming
+  the ticket), without a checkable criterion, over the cap, or not filed and why. Only a Linear
+  tracker files them.
 - **Moves.** The target is stored on the CI check record before the move. A move that fails is
   tried again on the next green poll without counting another attempt. An issue back in Auto Review
   on the same SHA after a `rework`, because its fix run pushed nothing, counts another attempt.
