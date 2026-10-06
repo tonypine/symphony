@@ -1699,11 +1699,14 @@ defmodule SymphonyElixir.AgentRunner do
     park_idle_issue(issue, run_context.opts)
   end
 
-  # A CI fix on an approved PR (the CI failure came from `Merging`) that added no commit goes back
-  # to `Merging`, where auto-merge turns on again: the approval still covers the PR's diff. Any
-  # other green CI fix goes to the post-PR state, where review judges its head.
+  # A CI fix on an approved PR (the CI failure came from `Merging`) whose PR head is still the
+  # commit that failed goes back to `Merging`, where auto-merge turns on again: the approval still
+  # covers the PR's diff. Any other green CI fix, such as a run that started on a fix an earlier
+  # run pushed, goes to the post-PR state, where review judges its head.
   defp hand_off_green_ci_fix(%Issue{} = issue, %{progress: %{head: head, start_head: start_head}} = run_context) do
-    if run_context.opts[:ci_failure][:approved] == true and head == start_head do
+    ci_failure = run_context.opts[:ci_failure]
+
+    if ci_failure[:approved] == true and head == start_head and head == ci_failure[:commit_sha] do
       Logger.info("CI fix run for #{issue_context(issue)} pushed nothing and CI on its PR head #{head} is green; moving back to #{@merging_state}")
       PrReviewPoller.release_auto_merge_hold(issue.id, pending_lookup_opts(issue, run_context.opts))
       return_to_merging(issue, head, run_context)

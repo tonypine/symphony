@@ -502,6 +502,24 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       end
     end
 
+    test "on an approved PR goes to the post-PR state when its head is not the commit that failed" do
+      # An earlier CI-fix run pushed `sha-same` and ended before it handed the PR off.
+      :ok = put_pending_ci_failure(approved: true, commit_sha: "sha-red")
+      :ok = put_auto_merge_hold()
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-same", checks: @green_checks}})
+
+      log = capture_log(fn -> run_issue!("In Progress", heads: ["sha-same"], max_turns: 6) end)
+
+      assert turns() == 2
+      assert_received {:memory_tracker_state_update, "issue-progress", "Auto Review"}
+      refute_received {:memory_tracker_state_update, "issue-progress", _state}
+      refute_received {:memory_tracker_comment, "issue-progress", "Symphony moved" <> _note}
+      assert %{state: "ci_failure"} = PrReviewPoller.auto_merge("issue-progress")
+
+      assert log =~
+               "CI is green on issue_id=issue-progress issue_identifier=TP-337's PR head sha-same after a CI fix run with no new commit; moving to Auto Review"
+    end
+
     test "waits while CI on its head runs, then goes back to Merging once it is green" do
       :ok = put_pending_ci_failure(approved: true)
       pending = {:ok, %{commit_sha: "sha-same", checks: [%{name: "make-all", status: "IN_PROGRESS", conclusion: nil}]}}
@@ -728,9 +746,9 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       issue_identifier: "TP-337",
       pr_url: @pr_url,
       status: "dispatch_requested",
-      last_observed_sha: "sha-red",
+      last_observed_sha: Keyword.get(opts, :commit_sha, "sha-same"),
       ci_failure: %{
-        commit_sha: "sha-red",
+        commit_sha: Keyword.get(opts, :commit_sha, "sha-same"),
         failed_checks: [%{name: "make-all", status: "COMPLETED", conclusion: "FAILURE"}],
         log_excerpt: "stub_test.exs:21 failed",
         approved: Keyword.fetch!(opts, :approved)

@@ -1980,8 +1980,8 @@ Important nuance:
   a CI failure once the PR head is the workspace `HEAD` and all its checks have passed: the red
   check was a flake, so green CI is that run's outcome. Such a run MUST end and move the issue back
   to `Merging` (with a comment saying why, and the CI-fix auto-merge hold dropped so auto-merge
-  turns on again) when the CI failure came from `Merging` and the run added no commit, and to the
-  post-PR state otherwise. A head that is still red, or has no checks, is parked as before.
+  turns on again) when the CI failure came from `Merging` and the PR head is still the commit that
+  failed, and to the post-PR state otherwise. A head that is still red, or has no checks, is parked as before.
 - The first turn SHOULD use the full rendered task prompt. Implementations MAY use a compact
   bootstrap prompt when the target agent transport cannot safely carry the full rendered prompt as a
   single startup message, provided the compact prompt preserves hard security rules and directs the

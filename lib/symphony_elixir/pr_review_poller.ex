@@ -840,9 +840,16 @@ defmodule SymphonyElixir.PrReviewPoller do
            %{auto_merge: auto_merge} <- Enum.find(records, &(Map.get(&1, :issue_id) == issue_id)),
            true <- AutoMerge.held?(auto_merge),
            {:error, reason} <- run_store.update_pr_review(repo_key, issue_id, %{auto_merge: nil}) do
-        Logger.warning("Failed to drop the CI-fix auto-merge hold issue_id=#{issue_id}: #{inspect(reason)}")
+        log_auto_merge_hold_failure(issue_id, reason)
+      else
+        {:error, reason} -> log_auto_merge_hold_failure(issue_id, reason)
+        _other -> :ok
       end
     end)
+  end
+
+  defp log_auto_merge_hold_failure(issue_id, reason) do
+    Logger.warning("Failed to drop the CI-fix auto-merge hold issue_id=#{issue_id}: #{inspect(reason)}")
   end
 
   @doc "Every PR the poller is landing with auto-merge, with a short status for the dashboard."

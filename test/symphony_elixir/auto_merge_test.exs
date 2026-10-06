@@ -644,6 +644,12 @@ defmodule SymphonyElixir.AutoMergeTest do
 
     assert log =~ "Failed to drop the CI-fix auto-merge hold issue_id=#{@issue_id}: :write_failed"
     assert %{state: "ci_failure"} = PrReviewPoller.auto_merge(@issue_id)
+
+    unreadable_store = [run_store: __MODULE__.PrReviewsFailingRunStore]
+    log = capture_log(fn -> assert :ok = PrReviewPoller.release_auto_merge_hold(@issue_id, unreadable_store) end)
+
+    assert log =~ "Failed to drop the CI-fix auto-merge hold issue_id=#{@issue_id}: :mnesia_down"
+    assert %{state: "ci_failure"} = PrReviewPoller.auto_merge(@issue_id)
   end
 
   test "a flaky rerun of the same commit keeps auto-merge on" do
@@ -1631,6 +1637,11 @@ defmodule SymphonyElixir.AutoMergeTest do
 
     @spec update_pr_review(String.t(), String.t(), map()) :: {:error, term()}
     def update_pr_review(_repo_key, _issue_id, _attrs), do: {:error, :write_failed}
+  end
+
+  defmodule PrReviewsFailingRunStore do
+    @spec list_pr_reviews(String.t()) :: {:error, :mnesia_down}
+    def list_pr_reviews(_repo_key), do: {:error, :mnesia_down}
   end
 
   defmodule CiChecksFailingRunStore do
