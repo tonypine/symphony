@@ -38,6 +38,7 @@ defmodule SymphonyElixir.AcceptanceGate do
   alias SymphonyElixir.AcceptanceGate.{Context, Escalation, FollowUps, Report}
   alias SymphonyElixir.{AgentTelemetry, AgentTmpDir, AgentTools, AuditLog, Config, LeftoverProcesses, PromptSafety}
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.HumanReview
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.Orchestrator
   alias SymphonyElixir.QaAgent
@@ -451,14 +452,13 @@ defmodule SymphonyElixir.AcceptanceGate do
   """
   @spec run(map(), Schema.t(), keyword()) :: run_result()
   def run(%{issue: issue, record: record, sha: sha} = job, %Schema{} = settings, opts) do
-    rules = settings.auto_review.acceptance_gate.escalate
     criteria = criteria(issue, settings, opts)
     qa_reasons = qa_reasons(Map.get(job, :qa))
     base = %{criteria: criteria, context: nil, tokens: QaAgent.empty_tokens(), follow_up_turns: 0}
 
     case Keyword.get(opts, :context, Context).build(issue, record, sha, settings, Keyword.get(opts, :context_opts, [])) do
       {:ok, context} ->
-        reasons = escalation_reasons(issue, context.diff_summary, context.busy_files, rules) ++ qa_reasons
+        reasons = escalation_reasons(issue, context.diff_summary, context.busy_files, settings) ++ qa_reasons
         existing = existing_tickets(issue, settings, opts)
         job = Map.merge(job, %{context: context, criteria: criteria, reasons: reasons, existing_tickets: existing})
 
@@ -467,16 +467,18 @@ defmodule SymphonyElixir.AcceptanceGate do
         |> Map.merge(ask_agent(job, settings, opts))
 
       {:conflict, files} ->
-        Map.merge(base, %{outcome: {:conflict, files}, reasons: escalation_reasons(issue, %{files: []}, [], rules) ++ qa_reasons})
+        Map.merge(base, %{outcome: {:conflict, files}, reasons: escalation_reasons(issue, %{files: []}, [], settings) ++ qa_reasons})
 
       {:error, reason} ->
         Logger.warning("Acceptance gate context failed for #{issue.identifier} sha=#{sha}: #{inspect(reason)}")
-        Map.merge(base, %{outcome: {:inconclusive, {:context_failed, reason}}, reasons: escalation_reasons(issue, %{files: []}, [], rules) ++ qa_reasons})
+        Map.merge(base, %{outcome: {:inconclusive, {:context_failed, reason}}, reasons: escalation_reasons(issue, %{files: []}, [], settings) ++ qa_reasons})
     end
   end
 
-  defp escalation_reasons(issue, diff_summary, busy_files, rules) do
-    for %{rule: rule, detail: detail} <- Escalation.check(issue, diff_summary, busy_files, rules), do: %{rule: Atom.to_string(rule), detail: detail}
+  defp escalation_reasons(issue, diff_summary, busy_files, settings) do
+    rules = settings.auto_review.acceptance_gate.escalate
+    opts = [human_review_state: HumanReview.state(settings)]
+    for %{rule: rule, detail: detail} <- Escalation.check(issue, diff_summary, busy_files, rules, opts), do: %{rule: Atom.to_string(rule), detail: detail}
   end
 
   defp qa_reasons(%{verdict: :blocked} = qa), do: [%{rule: "qa_blocked", detail: "QA was blocked: " <> (Map.get(qa, :reason) || "no reason given")}]
