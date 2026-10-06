@@ -73,6 +73,7 @@ final class ReposWindowController: NSObject, NSWindowDelegate {
         guard model != nil else { return }
         self.status = status
         if !ReposList.isAnswering(status) { poll = nil }
+        model?.addRepo?.gateAgreement?.state = state
         showDisplay()
         guard ReposList.isAnswering(status), !inFlight else { return }
         inFlight = true
