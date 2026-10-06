@@ -543,6 +543,12 @@ Fields:
     throwaway worktree of an acceptance gate run or a QA pass. So does the `git worktree add
     --detach` of each throwaway worktree: the acceptance gate's merge onto the base branch and
     its checkout of the merged commit, and a QA pass's checkouts of the PR head.
+  - On a remote worker the dispatch script's `git worktree add` takes a per-repo lock on the
+    worker host: a `symphony-worktree-add.lock` directory in the repo's git common dir, holding
+    the script's pid, so parallel dispatches to one remote repo add their worktrees one at a
+    time. The script waits up to half the hook timeout (at least 1 second) for it, then fails
+    with status 47 and `workspace_worktree_lock_timeout: <lock>`. It drops the lock after the
+    add and on any exit or hangup; a lock whose holder process is gone is taken over.
   - Every git call Symphony makes runs SSH with keepalives, so a connection that stops answering
     is dropped after about a minute. A host-side `fetch`, `pull`, `push` or `ls-remote` also has
     a wall-clock limit (`workspaces.git_network_timeout_ms`, 5 minutes by default; unset, the
@@ -2164,6 +2170,15 @@ The poller:
   <branch>; waiting on every check`), the landing waits on every check as above. The poller
   records the head it last saw ready to land for each `Merging` issue, and the orchestrator
   releases a held landing run on it as on a green head.
+- times how long a `Merging` head has waited on its checks: consecutive landing reads of the same
+  head that are still waiting keep the wait, and a new head, a failed check, a ready head or a read
+  outside `Merging` ends it. After 15 minutes, a head whose base branch was read as requiring no
+  check, with none failed, no rerun of a failed job starting and at least one check passed, is
+  ready to land without the checks still pending: the landing run's CI wait and the merge tool
+  read that mark for the same head, and a check that failed since still holds it. The first time a
+  wait lets a head past, the poller logs `Landing without the checks still pending after <n> min in
+  Merging; the base branch requires none` with the skipped checks, and comments once on the issue
+  naming them. A base branch whose required checks can't be read never takes this path.
 
 Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `enabled: true`):
 
