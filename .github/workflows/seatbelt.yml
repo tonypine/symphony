@@ -82,37 +82,61 @@ jobs:
           mkdir -p "$RUNNER_TEMP/ws" "$RUNNER_TEMP/tmp"
           WS=$(cd "$RUNNER_TEMP/ws" && pwd -P); TMPD=$(cd "$RUNNER_TEMP/tmp" && pwd -P)
           MIX_ENV=test mix compile > /dev/null 2>&1
-          MIX_ENV=test mix run --no-start -e "IO.write(SymphonyElixir.Verification.DevServerSandbox.profile(\"$WS\", [\"$WS\", \"$TMPD\"], []))" > "$RUNNER_TEMP/profile.sb"
-          echo "== profile"; cat "$RUNNER_TEMP/profile.sb"
-          SB() { /usr/bin/sandbox-exec -f "$RUNNER_TEMP/profile.sb" /bin/sh -lc "$1" 2>&1; echo "[exit $?]"; }
-          echo "== login shell"; ls -la ~/.profile ~/.bash_profile /etc/profile; cat /etc/profile
-          echo "== host python3: $(command -v python3) $(python3 -V)"
-          SB 'echo PATH=$PATH; command -v python3; python3 -V; ls -la "$(command -v python3)"'
+          MIX_ENV=test mix run --no-start -e "IO.write(SymphonyElixir.Verification.DevServerSandbox.profile(\"$WS\", [\"$WS\", \"$TMPD\"], [\".git\"]))" > "$RUNNER_TEMP/full.sb"
+          PROBE="$RUNNER_TEMP/probe.py"
+          cat > "$PROBE" <<'PY'
+          import socket, sys
+          mode = sys.argv[1]
+          try:
+              if mode == "bind":
+                  s = socket.socket(); s.bind((sys.argv[2], 0)); s.listen(); print("bind", sys.argv[2], "OK", s.getsockname())
+              elif mode == "serve":
+                  s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                  s.bind((sys.argv[2], int(sys.argv[3]))); s.listen(); s.settimeout(4)
+                  c, a = s.accept(); print("accepted", a, c.recv(10))
+              elif mode == "connect":
+                  c = socket.create_connection((sys.argv[2], int(sys.argv[3])), timeout=3); c.send(b"hi"); print("connect", sys.argv[2], "OK")
+          except Exception as e:
+              print(mode, sys.argv[2:], type(e).__name__, e)
+          PY
           IP=$(ipconfig getifaddr en0 || ipconfig getifaddr en1)
-          echo "== en0 ip: $IP"
-          for addr in 0.0.0.0 127.0.0.1 "$IP"; do
-            for port in 0 18765; do
-              echo "-- bind $addr:$port"
-              SB "python3 -c 'import socket; s=socket.socket(); s.bind((\"$addr\", $port)); s.listen(); print(\"bound\", s.getsockname())'"
-            done
+          L='"localhost:*"'
+          DNS='(allow network-outbound (literal "/private/var/run/mDNSResponder"))'
+          variant() {
+            case "$1" in
+              N0) echo "(allow network*)" ;;
+              N1) echo "(deny network*)(allow network-bind (local ip $L))(allow network-inbound (local ip $L))(allow network-outbound (remote ip $L))$DNS" ;;
+              N2) echo "(deny network*)(allow network-bind (local ip $L))(allow network-outbound (remote ip $L))$DNS" ;;
+              N3) echo "(deny network*)(allow network-bind (local ip $L))(allow network-inbound (local ip $L))(allow network-outbound (local ip $L))$DNS" ;;
+              N4) echo "(deny network*)(allow network-bind (local ip $L))(allow network-outbound (remote ip $L))(allow network-outbound (local ip $L))$DNS" ;;
+              N5) echo "(deny network*)(allow network-inbound (local ip $L))(allow network-bind (local ip $L))(allow network-outbound (remote ip $L))$DNS" ;;
+              N6) echo "(deny network*)(allow network* (local ip $L))(allow network-outbound (remote ip $L))$DNS" ;;
+              N7) echo "(deny network*)(allow network-bind (local ip $L))(allow network-inbound (remote ip $L))(allow network-outbound (remote ip $L))$DNS" ;;
+              N8) echo "(deny network*)(allow network-bind (local ip $L))(allow network-inbound (local ip $L))(allow network-inbound (remote ip $L))(allow network-outbound (remote ip $L))$DNS" ;;
+              N9) echo "(deny network*)(allow network-inbound (local ip $L))(allow network-outbound (remote ip $L))$DNS(deny network-bind)(allow network-bind (local ip $L))" ;;
+            esac
+          }
+          port=19000
+          run_probes() {
+            P="$1"
+            SBX() { /usr/bin/sandbox-exec -p "$P" python3 "$PROBE" "$@" 2>&1 | tail -1; }
+            echo "  $(SBX bind 0.0.0.0)"; echo "  $(SBX bind "$IP")"; echo "  $(SBX bind 127.0.0.1)"
+            port=$((port+1)); /usr/bin/sandbox-exec -p "$P" python3 "$PROBE" serve 127.0.0.1 $port > "$RUNNER_TEMP/s.log" 2>&1 &
+            sleep 1; echo "  host->sandbox 127.0.0.1: $(python3 "$PROBE" connect 127.0.0.1 $port)"; wait; echo "  sandbox server: $(tail -1 "$RUNNER_TEMP/s.log")"
+            port=$((port+1)); python3 "$PROBE" serve 127.0.0.1 $port > "$RUNNER_TEMP/h.log" 2>&1 &
+            sleep 1; echo "  sandbox->host 127.0.0.1: $(SBX connect 127.0.0.1 $port)"; wait
+            port=$((port+1)); python3 "$PROBE" serve 0.0.0.0 $port > "$RUNNER_TEMP/h.log" 2>&1 &
+            sleep 1; echo "  sandbox->host $IP: $(SBX connect "$IP" $port)"; wait
+            echo "  sandbox->1.1.1.1:443: $(SBX connect 1.1.1.1 443)"
+          }
+          echo "== control (allow default)"; run_probes '(version 1)(allow default)'
+          for v in N0 N1 N2 N3 N4 N5 N6 N7 N8 N9; do
+            echo "== minimal $v: $(variant $v)"; run_probes "(version 1)(allow default)$(variant $v)"
+            NET="$(variant $v)" python3 -c 'import os,re,sys; p=open(sys.argv[1]).read(); print(re.sub(r"\(deny network\*\).*?mDNSResponder\"\)\)", lambda m: os.environ["NET"], p, flags=re.S))' "$RUNNER_TEMP/full.sb" > "$RUNNER_TEMP/v.sb"
+            grep -q "network" "$RUNNER_TEMP/v.sb" || echo "  (substitution failed)"
+            echo "== full $v"; run_probes "$(cat "$RUNNER_TEMP/v.sb")"
           done
-          echo "-- minimal profile bind 0.0.0.0"
-          /usr/bin/sandbox-exec -p '(version 1)(allow default)(deny network*)(allow network-bind (local ip "localhost:*"))' python3 -c 'import socket; s=socket.socket(); s.bind(("0.0.0.0", 0)); s.listen(); print("bound", s.getsockname())' 2>&1; echo "[exit $?]"
-          echo "-- minimal profile bind 0.0.0.0 with ip4"
-          /usr/bin/sandbox-exec -p '(version 1)(allow default)(deny network*)(allow network-bind (local ip4 "localhost:*"))' python3 -c 'import socket; s=socket.socket(); s.bind(("0.0.0.0", 0)); s.listen(); print("bound", s.getsockname())' 2>&1; echo "[exit $?]"
-          echo "-- bind 0.0.0.0, then accept from en0 ip"
-          /usr/bin/sandbox-exec -f "$RUNNER_TEMP/profile.sb" python3 -c 'import socket; s=socket.socket(); s.bind(("0.0.0.0", 18766)); s.listen(); s.settimeout(8); c,a=s.accept(); print("accepted", a); print("recv", c.recv(10))' > "$RUNNER_TEMP/accept.log" 2>&1 &
-          sleep 2; python3 -c "import socket; c=socket.create_connection(('$IP', 18766), timeout=3); c.send(b'hi'); print('client connected')" 2>&1; sleep 2; wait; cat "$RUNNER_TEMP/accept.log"
-          echo "== http.server under the profile with sh -lc"
-          (cd "$WS" && TMPDIR="$TMPD" /usr/bin/sandbox-exec -f "$RUNNER_TEMP/profile.sb" /bin/sh -lc 'exec python3 -m http.server 18767 --bind 127.0.0.1' > "$RUNNER_TEMP/http.log" 2>&1 &)
-          sleep 5; curl -sS -m 3 -o /dev/null -w 'http %{http_code}\n' http://127.0.0.1:18767/; echo "[curl exit $?]"
-          pkill -f 'http.server 18767'; sleep 1; echo "-- http.server log"; cat "$RUNNER_TEMP/http.log"
-          echo "== same without -l"
-          (cd "$WS" && TMPDIR="$TMPD" /usr/bin/sandbox-exec -f "$RUNNER_TEMP/profile.sb" /bin/sh -c 'exec python3 -m http.server 18768 --bind 127.0.0.1' > "$RUNNER_TEMP/http2.log" 2>&1 &)
-          sleep 5; curl -sS -m 3 -o /dev/null -w 'http %{http_code}\n' http://127.0.0.1:18768/; echo "[curl exit $?]"
-          pkill -f 'http.server 18768'; sleep 1; cat "$RUNNER_TEMP/http2.log"
-          echo "== seatbelt tests without the dashboard build"
-          mix test --only seatbelt --exclude qa_dashboard_e2e
+          echo "== full profile"; cat "$RUNNER_TEMP/full.sb"
           exit 1
 
       - name: Run the Seatbelt tests
