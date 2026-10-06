@@ -11,7 +11,10 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
   defmodule ProgressAgent do
     # Coding-agent stand-in: every turn completes and is reported to the test, or, with
     # `:progress_api_unreachable` set, ends as Claude's turn does when it can't reach the model API.
-    def start_session(_workspace, _opts), do: {:ok, %{}}
+    def start_session(_workspace, opts) do
+      send(Application.fetch_env!(:symphony_elixir, :progress_agent_recipient), {:progress_session_started, opts})
+      {:ok, %{}}
+    end
 
     def run_turn(_session, _prompt, _issue, _opts) do
       count = Application.get_env(:symphony_elixir, :progress_agent_turns, 0) + 1
@@ -500,6 +503,32 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     assert_raise RuntimeError, ~r/pushed_head_handoff_failed/, fn ->
       run_issue!("In Progress", heads: ["sha-dirty", "sha-fixed"])
     end
+  end
+
+  test "a run's agent session tells the orchestrator as each Symphony tool call starts and ends" do
+    capture_log(fn ->
+      assert :ok = run_issue!("Rework", heads: ["sha-old", "sha-rework"], recipient: self())
+    end)
+
+    assert_received {:progress_session_started, session_opts}
+    on_tool_call = Keyword.fetch!(session_opts, :on_tool_call)
+    call = %{name: "github_sync_base", started_at: DateTime.utc_now(), deadline: nil}
+    call_id = make_ref()
+
+    on_tool_call.({:started, call_id, call})
+    on_tool_call.({:finished, call_id})
+
+    assert_received {:mcp_tool_call, "issue-progress", {:started, ^call_id, ^call}}
+    assert_received {:mcp_tool_call, "issue-progress", {:finished, ^call_id}}
+  end
+
+  test "a run without an orchestrator to tell starts its agent session without a tool call notice" do
+    capture_log(fn ->
+      assert :ok = run_issue!("Rework", heads: ["sha-old", "sha-rework"])
+    end)
+
+    assert_received {:progress_session_started, session_opts}
+    assert Keyword.fetch!(session_opts, :on_tool_call) == nil
   end
 
   describe "a Linear rate limit on a run's own Linear call" do
