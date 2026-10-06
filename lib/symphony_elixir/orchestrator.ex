@@ -1295,9 +1295,11 @@ defmodule SymphonyElixir.Orchestrator do
     |> Map.put(:poll_check_in_progress, false)
   end
 
-  # A claim is only held by a running agent, a queued retry, or a retry whose async quality
-  # gate or dispatch readiness check is in flight. Any other claim is orphaned: the poll skips
-  # claimed issues, so release it rather than leave the issue undispatchable until a restart.
+  # A claim is only held by a running agent, a queued retry, a retry whose async quality gate or
+  # dispatch readiness check is in flight, or a Linear task that keeps it until its answer is
+  # handled (a retry's refresh, the post-PR move, the move to the blocked state). Any other claim is
+  # orphaned: the poll skips claimed issues, so release it rather than leave the issue
+  # undispatchable until a restart.
   defp release_orphaned_claims(%State{} = state) do
     held = claim_holders(state)
 
@@ -1317,7 +1319,17 @@ defmodule SymphonyElixir.Orchestrator do
     |> Enum.concat(Map.keys(state.running))
     |> Enum.concat(Map.keys(state.retry_attempts))
     |> Enum.concat(Map.keys(state.slot_waiting))
+    |> Enum.concat(claim_holding_tracker_task_issue_ids(state))
     |> MapSet.new()
+  end
+
+  @claim_holding_tracker_task_kinds [:retry_refresh, :post_pr_transition, :blocked_transition]
+
+  defp claim_holding_tracker_task_issue_ids(%State{tracker_tasks: tasks}) do
+    for {_ref, %{kind: kind, issue_ids: issue_ids}} <- tasks,
+        kind in @claim_holding_tracker_task_kinds,
+        issue_id <- issue_ids,
+        do: issue_id
   end
 
   defp log_poll_error(:missing_linear_api_token), do: Logger.error("Linear API token missing in WORKFLOW.md")
