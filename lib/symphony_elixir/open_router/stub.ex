@@ -111,8 +111,9 @@ defmodule SymphonyElixir.OpenRouter.Stub do
     accepted? = valid_key?(conn)
     {conn, status, model} = route(conn, conn.method, conn.path_info, accepted?)
     model_note = if model, do: " model=#{model}", else: ""
+    # Log before the response goes out, so a caller that has the response has the log line too.
     log.("OpenRouter stub: #{conn.method} #{conn.request_path}#{model_note} key=#{if accepted?, do: "accepted", else: "rejected"} status=#{status}")
-    conn
+    send_resp(conn)
   end
 
   defp route(conn, "GET", ["api", "v1", "key"], true), do: {json(conn, 200, %{"data" => @key_info}), 200, nil}
@@ -139,7 +140,7 @@ defmodule SymphonyElixir.OpenRouter.Stub do
       if request["stream"] == true do
         conn
         |> put_resp_content_type("text/event-stream")
-        |> send_resp(200, stream_body(model, text))
+        |> resp(200, stream_body(model, text))
       else
         json(conn, 200, message(model, text))
       end
@@ -203,7 +204,7 @@ defmodule SymphonyElixir.OpenRouter.Stub do
   defp json(conn, status, body) do
     conn
     |> put_resp_content_type("application/json")
-    |> send_resp(status, Jason.encode!(body))
+    |> resp(status, Jason.encode!(body))
   end
 
   defp default_log(line), do: Logger.info(line)
