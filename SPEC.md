@@ -2827,14 +2827,17 @@ Algorithm summary:
    - Fetch `origin` in that primary clone when `fetch_before_dispatch == true`.
    - Ensure the workspace is a registered git worktree for branch `auto/<issue.identifier>`,
      creating it with `git worktree add` when absent.
-   - When the issue's attached PR is open, same-repo, and its head branch differs from
-     `auto/<issue.identifier>` (for example after a Linear team-key rename changed the
-     identifier), use that PR head branch instead and sync the worktree to `origin/<head>`, so the
-     existing PR stays reachable from the workspace's current branch.
+   - When the issue's attached PR is open, same-repo, and its head branch is the issue's own
+     branch under an earlier team key (`auto/TON-218` for `TP-218`, after a Linear team-key
+     rename), use that PR head branch instead and sync the worktree to `origin/<head>`, so the
+     existing PR stays reachable from the workspace's current branch. A PR on any other head
+     (Linear also links a sub-ticket's PR to a parent its body names) is ignored and logged.
    - If that branch is still checked out in a sibling workspace under the same repo workspace
-     directory (the issue's pre-rename workspace) that no other running or retrying issue owns and
-     that has no uncommitted or unpushed work, detach the sibling's HEAD to release the branch;
-     otherwise refuse with a branch-collision error.
+     directory (the issue's pre-rename workspace) that no other running or retrying issue owns,
+     whose issue is terminal, unknown to the tracker, or this same issue, and that has no
+     uncommitted or unpushed work, detach the sibling's HEAD to release the branch; otherwise
+     refuse with a branch-collision error. An open issue whose agent is not running (held by the
+     usage limit, waiting, in review) keeps its branch.
 6. Mark `created_now=true` only if the directory or worktree was created during this call; otherwise
    `created_now=false`.
 7. If `created_now=true`, run `hooks.after_create` if configured. Also run it for a reused
