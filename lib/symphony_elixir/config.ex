@@ -389,8 +389,12 @@ defmodule SymphonyElixir.Config do
     ]
   end
 
-  defp model_findings(%{model: model, effort: effort, effort_key: key}, %{reasoning: false}) when is_binary(effort) do
+  defp model_findings(%{model: model, effort: effort, effort_key: key, effort_inherited_by: nil}, %{reasoning: false}) when is_binary(effort) do
     [{:warning, "#{key}: OpenRouter model `#{model}` does not support reasoning; its runs start without --effort #{effort}"}]
+  end
+
+  defp model_findings(%{model: model, effort: effort, effort_key: from, effort_inherited_by: key}, %{reasoning: false}) when is_binary(effort) do
+    [{:warning, "#{key}: OpenRouter model `#{model}` does not support reasoning; its runs start without --effort #{effort}, inherited from #{from}"}]
   end
 
   defp model_findings(_profile, _capabilities), do: []
@@ -398,19 +402,27 @@ defmodule SymphonyElixir.Config do
   # Every `openrouter` run kind with the model and effort it starts with, and the keys that set them.
   # `inherited_from` is the key the model comes from when it sits above the key that picked
   # `openrouter`; `model_key` is then the `model` key next to that provider key.
+  # `effort_inherited_by` is the key that put the run on its model (the model key, or the provider
+  # key when the model is inherited) when the effort comes from a key above it, such as a
+  # repository's run profile picking a model under a global effort.
   defp openrouter_profiles(settings) do
     for kind <- openrouter_run_kinds(settings) do
       profile = effective_run_profile(settings, kind)
       {model_key, inherited_from} = openrouter_model_source(settings, kind)
+      {provider_key, provider_rank} = profile_setting(settings, kind, :provider)
+      {_key, model_rank} = profile_setting(settings, kind, :model)
+      {effort_key, effort_rank} = profile_setting(settings, kind, :effort)
+      model_source_key = if inherited_from, do: provider_key, else: model_key
 
       %{
         kind: kind,
         model: profile.model,
         model_key: model_key,
-        provider_key: profile_key(settings, kind, :provider),
+        provider_key: provider_key,
         inherited_from: inherited_from,
         effort: profile.effort,
-        effort_key: profile_key(settings, kind, :effort)
+        effort_key: effort_key,
+        effort_inherited_by: if(effort_rank > min(model_rank, provider_rank), do: model_source_key)
       }
     end
   end
