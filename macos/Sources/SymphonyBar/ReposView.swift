@@ -410,10 +410,26 @@ struct ReposEmptyView: View {
     @ObservedObject var model: ReposViewModel
 
     var body: some View {
+        // The geometry reader and scroll view keep the wrapped text from setting the split view's
+        // minimum height: without them the column can grow taller than the window and push the
+        // sidebar footer off screen.
+        GeometryReader { proxy in
+            ScrollView {
+                content
+                    .padding(40)
+                    .frame(maxWidth: 480)
+                    .frame(width: proxy.size.width)
+                    .frame(minHeight: proxy.size.height)
+            }
+        }
+    }
+
+    private var content: some View {
         VStack(spacing: 10) {
             Image(systemName: icon)
                 .font(.system(size: 40))
                 .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
             Text(state.title)
                 .font(.title3.weight(.semibold))
                 .multilineTextAlignment(.center)
@@ -443,9 +459,6 @@ struct ReposEmptyView: View {
                 }
             }
         }
-        .padding(40)
-        .frame(maxWidth: 480)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var icon: String {
