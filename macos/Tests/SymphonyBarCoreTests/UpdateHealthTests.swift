@@ -266,6 +266,72 @@ final class UpdateHealthTests: XCTestCase {
         XCTAssertEqual(UpdateRelaunch(pending: nil, rollback: record, runningBuild: 44), .none)
     }
 
+    func testRollbackRecordKeepsTheFailedBuildsBundle() {
+        let defaults = MemoryKeyValueStore()
+        var withBundle = record
+        withBundle.bundle = 7
+        RollbackStore(defaults: defaults).save(withBundle)
+
+        XCTAssertEqual(RollbackStore(defaults: defaults).take(), withBundle)
+
+        RollbackStore(defaults: defaults).save(record)
+        XCTAssertNil((defaults.values[RollbackStore.key] as? [String: Any])?["bundle"])
+        XCTAssertNil(RollbackStore(defaults: defaults).take()?.bundle)
+    }
+
+    func testFailedBuildInstalledAgainByHandIgnoresTheRollbackRecord() {
+        var recorded = record
+        recorded.bundle = 7
+
+        // A version from before automatic rollback was put back and never read the record, then the failed build was
+        // installed again by hand: same build, nothing pending, another app bundle.
+        XCTAssertEqual(UpdateRelaunch(pending: nil, rollback: recorded, runningBuild: 43, runningBundle: 8), .none)
+
+        // The helper couldn't swap the apps and relaunched the bundle that failed.
+        XCTAssertEqual(
+            UpdateRelaunch(pending: nil, rollback: recorded, runningBuild: 43, runningBundle: 7),
+            .rollbackFailed(recorded)
+        )
+        XCTAssertEqual(
+            UpdateRelaunch(pending: nil, rollback: recorded, runningBuild: 42, runningBundle: 8),
+            .rolledBack(recorded)
+        )
+
+        // Either bundle unknown, such as a record from a version from before it was kept: as before.
+        XCTAssertEqual(
+            UpdateRelaunch(pending: nil, rollback: recorded, runningBuild: 43, runningBundle: nil),
+            .rollbackFailed(recorded)
+        )
+        XCTAssertEqual(
+            UpdateRelaunch(pending: nil, rollback: record, runningBuild: 43, runningBundle: 8),
+            .rollbackFailed(record)
+        )
+    }
+
+    func testBundleFileNumberSurvivesTheHelpersRenamesButNotAReinstall() throws {
+        let files = FileManager.default
+        let folder = files.temporaryDirectory.appendingPathComponent("rollback-bundle-\(UUID().uuidString)")
+        defer { try? files.removeItem(at: folder) }
+        let app = folder.appendingPathComponent("Symphony.app")
+        let rolledBack = folder.appendingPathComponent("Symphony (rolled back).app")
+        try files.createDirectory(at: app.appendingPathComponent("Contents"), withIntermediateDirectories: true)
+
+        let failed = try XCTUnwrap(RollbackRecord.bundleFileNumber(app))
+        // A failed swap moves the app aside and back.
+        try files.moveItem(at: app, to: rolledBack)
+        try files.moveItem(at: rolledBack, to: app)
+        XCTAssertEqual(RollbackRecord.bundleFileNumber(app), failed)
+
+        // The install script moves the app aside and a freshly unzipped copy into its place.
+        let unzipped = folder.appendingPathComponent("unzipped.app")
+        try files.copyItem(at: app, to: unzipped)
+        try files.moveItem(at: app, to: rolledBack)
+        try files.moveItem(at: unzipped, to: app)
+        XCTAssertNotEqual(RollbackRecord.bundleFileNumber(app), failed)
+
+        XCTAssertNil(RollbackRecord.bundleFileNumber(folder.appendingPathComponent("Missing.app")))
+    }
+
     // MARK: Pin and Retry
 
     func testTheRolledBackBuildIsPinnedAndOffersRetry() {

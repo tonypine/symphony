@@ -126,18 +126,21 @@ defmodule SymphonyElixir.Config.CacheTest do
 
   describe ":stop watcher cleanup" do
     test "does not retry unavailable watcher backend on every cache read", %{root: root} do
+      # Not set as the node's config path: any process reading config would
+      # then send the app's Cache to watch `dir` too, and that attempt could
+      # reach the stub before this instance marks `dir` as stat-only.
       symphony_path = Path.join(root, "symphony.yml")
       File.write!(symphony_path, "tracker:\n  kind: memory\n")
-      Workflow.set_symphony_file_path(symphony_path)
 
       test_pid = self()
       symphony_path = Path.expand(symphony_path)
       dir = Path.dirname(symphony_path)
 
       # Accept every dir: the app's Cache also calls this for any config read
-      # on the node, and a stub that only matches `dir` would crash it.
+      # on the node, and a stub that only matches `dir` would crash it. Tag
+      # each attempt with the cache that made it, so only this instance's count.
       Application.put_env(:symphony_elixir, :config_cache_watcher, fn watched_dir ->
-        send(test_pid, {:watch_attempt, watched_dir})
+        send(test_pid, {:watch_attempt, self(), watched_dir})
         :ignore
       end)
 
@@ -165,9 +168,9 @@ defmodule SymphonyElixir.Config.CacheTest do
 
       # `:sys.get_state` above drains each cast, so every watch attempt has
       # already been delivered.
-      assert_received {:watch_attempt, ^dir}
-      assert_received {:watch_attempt, ^other_dir}
-      refute_received {:watch_attempt, ^dir}
+      assert_received {:watch_attempt, ^cache, ^dir}
+      assert_received {:watch_attempt, ^cache, ^other_dir}
+      refute_received {:watch_attempt, ^cache, ^dir}
 
       state = :sys.get_state(cache)
       refute Map.has_key?(state.watchers, dir)
