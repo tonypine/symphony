@@ -789,10 +789,10 @@ defmodule SymphonyElixir.CiPoller do
     end
   end
 
-  defp parked_issue?(%Issue{state: state, labels: labels}, settings) do
+  defp parked_issue?(%Issue{labels: labels} = issue, settings) do
     wanted = MapSet.new(person_labels(settings), &normalize_state_name/1)
 
-    not issue_in_states?(%Issue{state: state}, settings.tracker.active_states) and
+    not issue_in_states?(issue, settings.tracker.active_states) and
       Enum.any?(labels || [], &(is_binary(&1) and MapSet.member?(wanted, normalize_state_name(&1))))
   end
 
