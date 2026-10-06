@@ -1,5 +1,8 @@
 # Opt-in override that lets `bwrap` sandbox the verification dev server. It loosens Docker's
 # defaults for the whole container: see "Verification dev server" in README.md before using it.
+# On a host with AppArmor, load apparmor-bwrap first:
+#
+#   sudo apparmor_parser -r -W docker/apparmor-bwrap
 #
 #   docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev-server-sandbox.yml up
 services:
@@ -7,4 +10,4 @@ services:
     security_opt:
       - seccomp=seccomp-bwrap.json
       - systempaths=unconfined
-      - apparmor=unconfined
+      - apparmor=symphony-bwrap

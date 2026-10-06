@@ -108,11 +108,29 @@ with `verification_failed` before its first turn, and an Auto Review `web` pass 
 Nothing else is affected, and the container keeps Docker's default confinement.
 
 To run the dev server, add the opt-in override
-[`docker-compose.dev-server-sandbox.yml`](docker-compose.dev-server-sandbox.yml):
+[`docker-compose.dev-server-sandbox.yml`](docker-compose.dev-server-sandbox.yml). On a host with
+AppArmor (Ubuntu, Debian and most of their derivatives), first load the shipped AppArmor profile
+[`apparmor-bwrap`](apparmor-bwrap), named `symphony-bwrap`, into the host's kernel:
 
 ```bash
+sudo apparmor_parser -r -W docker/apparmor-bwrap
 docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev-server-sandbox.yml up --build
 ```
+
+`apparmor_parser -r` loads the profile, or replaces it after you pull a changed one; `-W` also
+caches it. The kernel forgets it at reboot, so to keep it loaded copy it where the host's AppArmor
+service loads profiles at boot:
+
+```bash
+sudo cp docker/apparmor-bwrap /etc/apparmor.d/symphony-bwrap
+sudo apparmor_parser -r -W /etc/apparmor.d/symphony-bwrap
+```
+
+Check it with `sudo aa-status | grep symphony-bwrap`. Without it, the container does not start:
+Docker fails with `apparmor failed to apply profile`. On a host without AppArmor (Docker Desktop,
+Fedora and other SELinux hosts) there is nothing to load: Docker ignores the AppArmor option. The
+profile declares AppArmor ABI 3.0, as Docker's own does, so it needs AppArmor 3.0 or later
+(Ubuntu 22.04, Debian 12).
 
 Pass both `-f` files to every `docker compose` command for that deployment (`down` included). The
 override sets three `security_opt` entries. They apply to **the whole container**, Symphony and
@@ -131,19 +149,19 @@ every agent and tool it runs, not only to `bwrap`:
   `CAP_SYS_ADMIN`, so most of these stay unreadable or unwritable to it, but the kernel's own
   permissions are now the only guard. **Buys:** `bwrap` can mount a fresh `/proc`, which the
   kernel refuses while those mounts cover parts of the container's.
-- `apparmor=unconfined`. **Loosens:** on a host with AppArmor, the container runs without
-  Docker's `docker-default` profile, which also denies writes to parts of `/proc` and `/sys` and
-  every `mount`. **Buys:** `bwrap`'s mounts. On a host without AppArmor it changes nothing.
+- `apparmor=symphony-bwrap`. **Loosens:** on a host with AppArmor, the container runs under
+  `symphony-bwrap` instead of Docker's `docker-default` profile. It is `docker-default` (from
+  [moby/profiles](https://github.com/moby/profiles/blob/main/apparmor/template.go)) with its
+  `deny mount` rule replaced by rules that allow `mount` and `pivot_root`; every other rule,
+  such as the denied writes to parts of `/proc` and `/sys`, still applies. As with seccomp, the
+  kernel still keeps those mounts inside namespaces the process made. **Buys:** `bwrap`'s mounts.
 
 The container still runs as `symphony` with Docker's default capabilities, none of them
 `CAP_SYS_ADMIN`, and is not `privileged`. Leave the override out if you run no dev server.
 
-On a host that restricts unprivileged user namespaces through AppArmor (Ubuntu 23.10 and later),
-also allow them on the host, or `bwrap` still fails. This is a host-wide setting:
-
-```bash
-sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-```
+A host that restricts unprivileged user namespaces through AppArmor (Ubuntu 23.10 and later) needs
+no change: the restriction applies to unconfined processes, and `bwrap` in the container runs
+under `symphony-bwrap`, whose ABI does not mediate user namespaces.
 
 ## Linux UID matching
 
