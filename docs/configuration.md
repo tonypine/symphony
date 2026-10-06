@@ -1501,6 +1501,8 @@ tools for it on the host, outside the sandbox, and checks every argument:
 | `qa_screenshot` | saves the app's on-screen windows to new files `qa-evidence/<name>.png` | a PID it did not launch, a window of another app, a name that already exists (file or symlink) |
 | `qa_ax_tree` | reads the accessibility tree (role, title, value, frame; never a secure field's value), filtered by `role` or `text`, capped in depth, nodes and size | a PID it did not launch |
 | `qa_ax_press`, `qa_ax_set_value` | press an element (or `AXRaise` a window) and set a field's value: a text field gets it typed in with key events sent to the app alone (brought to the front, focused, text selected, then Tab), so the app sees the edit; other controls get `AXValue` set | a PID it did not launch, a tab or line break for a single-line field |
+| `qa_resize_window` | the wide pass: moves the app's main window (or the `AXWindow` at `path`) to the top left of the screen and resizes it to `width`×`height` points (1400×900 by default), or the screen's usable area when that is smaller, with `AXSize` or else the window's zoom button; returns the window frame it reached, the screen and its usable area, and `limited` when that area is under 1400×900 pt | a PID it did not launch, a size under 1400×900 or over 8192 pt, a `path` that is not a window |
+| `qa_check_app` | says whether a launched app still runs (also after it exited), answers an accessibility request within 10 seconds (else it is hung), and has written a new `~/Library/Logs/DiagnosticReports/<executable>*` crash report since launch (read on the QA host for a `worker_host`), with each problem naming the `page` the agent passes and the window size `qa_resize_window` set | a PID it did not launch |
 | `qa_put_file` | puts a fixture file the agent wrote (a test `symphony.yml`, a `WORKFLOW.md`) where the app can open it and returns that path: the file's own path on this host, a copy in the run directory's `files/` on a `worker_host` | a file that resolves outside the worktree and the pass's `$TMPDIR`, a symlink, a directory or other non-regular file, a file with other hard links, a file over 1 MB, and a file replaced while it is read |
 
 At most three launched apps run at once, and every app still running is quit when the pass ends.
@@ -1510,6 +1512,19 @@ The playbook judges a window only after it settles: it waits about 10 seconds af
 opens, changes focus once, and then checks the sizes of the content and scroll areas in the
 accessibility tree, not just the window frame. A window that opens at full height and collapses
 seconds later fails, with the AX tree quoted and a screenshot attached.
+
+After the walkthrough at the app's default size, the playbook runs a **wide pass**, because some
+layout crashes only happen in wide windows: `qa_resize_window` makes the main window at least
+1400×900 pt, then on each page the PR changes, and on its inspector or side panel, the agent waits 30
+seconds with the app running and calls `qa_check_app`. The pass fails when the app exits, hangs (no
+accessibility answer for 10 seconds) or writes a new crash report, and the report names the page and
+the window size. The report's `Wide pass` step gives the window size, the screen size and the
+pages it covered. A QA screen whose usable area is under 1400×900 pt (a VM with a 1024×768 display)
+cannot run it at full size: the step says the wide pass was limited, and Symphony reports a `pass`
+from that screen as `blocked` for a person, so the acceptance gate escalates it (`qa_blocked`)
+instead of approving it. Give the QA VM a larger display, for example
+`tart set symphony-qa --display 1920x1200`, and restart it. The resize needs no grant beyond the
+helper's Accessibility.
 
 The screenshot and accessibility tools run in a small helper app, `SymphonyQADriver.app`, which
 holds the Screen Recording and Accessibility grants. Symphony opens it through LaunchServices
