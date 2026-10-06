@@ -1149,6 +1149,9 @@ Fields:
   - Default: `500`.
 - `transcript_buffer_size` (non-negative integer)
   - Default: `200`.
+  - Bounds a live run's in-memory transcript buffer. A run's persisted record keeps only its newest
+    20 events, and records stored with more are trimmed when the run store starts.
+    The run store waits up to 120 s for its tables to load at startup, logging progress every 10 s.
 
 Listener fields also live under `dashboard`:
 
