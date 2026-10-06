@@ -3,12 +3,13 @@ defmodule SymphonyElixir.PlaybookTest do
 
   alias SymphonyElixir.Playbook
   alias SymphonyElixir.Playbook.FileSystem
+  alias SymphonyElixir.PromptBuilder
   alias SymphonyElixir.Workflow
   alias SymphonyElixir.WorkflowPreview
 
   @workflow_path Path.expand(Path.join([__DIR__, "..", "..", "WORKFLOW.md"]))
   @ticket_types_tag ~s({%- render "ticket_types", issue: issue %})
-  @ticket_types_anchor "The `Todo` -> `In Progress` transition and the workpad still apply.\n"
+  @ticket_types_anchor "The `Todo` -> `In Progress` transition and the workpad still apply."
   @render_opts [strict_variables: true, file_system: {FileSystem, nil}]
 
   @expected_names ~w(
@@ -193,17 +194,29 @@ defmodule SymphonyElixir.PlaybookTest do
   end
 
   describe "ticket_types" do
-    test "an untyped ticket renders the same WORKFLOW.md prompt as before the partial" do
+    test "the playbook aggregate renders ticket_types right after the repo's Step 0, left-trimmed" do
+      assert {"ticket_types", 52} in Playbook.aggregate()
+
+      {:ok, %{prompt_template: body}} = Workflow.load(@workflow_path)
+      assert body =~ @ticket_types_anchor <> "\n\n" <> @ticket_types_tag <> "\n\n## Step 1: "
+    end
+
+    # Blank lines included: the left-trimmed tag takes the blank line before it, and the
+    # partial renders nothing at all for an untyped ticket.
+    test "an untyped ticket renders the same WORKFLOW.md prompt as without the partial" do
       {without_tag, with_tag} = workflow_bodies()
 
       for labels <- [[], ["bug", "feature", "type:other", "needs-human"]] do
-        assert render(with_tag, labels) == render(without_tag, labels)
+        prompt = render(with_tag, labels)
+        assert prompt == render(without_tag, labels)
+        refute prompt =~ "## Ticket type:"
       end
     end
 
     test "a typed ticket gets its section between Step 0 and Step 1 of WORKFLOW.md" do
-      {_without_tag, with_tag} = workflow_bodies()
-      prompt = render(with_tag, ["type:bug"])
+      {:ok, workflow} = Workflow.load(@workflow_path)
+      issue = %{WorkflowPreview.sample_issue() | labels: ["type:bug"]}
+      prompt = PromptBuilder.build_prompt(issue, workflow: workflow, prompt_mode: :issue, agent_kind: "claude")
 
       assert prompt =~ "still apply.\n\n## Ticket type: bug\n"
       assert prompt =~ ~r/as the regression test\.\n4\. Name the root cause[^\n]*\n\n## Step 1: /
@@ -302,14 +315,14 @@ defmodule SymphonyElixir.PlaybookTest do
     |> String.replace(~r/\s+/, " ")
   end
 
-  # WORKFLOW.md's prompt body, its instruction files expanded, without the ticket_types render and
-  # with it right after Step 0.
+  # WORKFLOW.md's prompt body, its instruction files expanded, without and with the ticket_types
+  # render the playbook puts right after Step 0.
   defp workflow_bodies do
     {:ok, %{prompt_template: body}} = Workflow.load(@workflow_path)
-    without_tag = String.replace(body, @ticket_types_tag <> "\n", "")
-    assert without_tag =~ @ticket_types_anchor
+    without_tag = String.replace(body, "\n\n" <> @ticket_types_tag, "")
+    refute without_tag =~ "ticket_types"
 
-    {without_tag, String.replace(without_tag, @ticket_types_anchor, @ticket_types_anchor <> @ticket_types_tag <> "\n")}
+    {without_tag, body}
   end
 
   defp render(source, labels) do

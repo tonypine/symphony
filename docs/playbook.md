@@ -56,6 +56,7 @@ between them by number:
 | 30 | `default_posture` |
 | 40 | `scoped_tools` |
 | 50 | `status_map` |
+| 52 | `ticket_types` (left-trimmed; nothing for an untyped ticket) |
 | 60 | `pr_feedback_sweep` |
 | 70 | `ci_triage` |
 | 80 | `escape_hatches` |
@@ -143,7 +144,8 @@ the person reviewing; the workpad stays the agent's log.
 the readiness check on bugs and features. The templates the operator writes those tickets from,
 and the steps to create them in Linear, are in [`ticket-templates/`](ticket-templates/README.md).
 It renders nothing for a ticket with no type label; render it with a left-trimming tag right after
-your Step 0 routing, so an untyped ticket's prompt stays byte-identical:
+your Step 0 routing, so an untyped ticket's prompt stays byte-identical. `{% render "playbook" %}`
+already does, on slot 52: number your Step 0 file 51 or lower and your Step 1 file 52 or higher:
 
 ```liquid
 {%- render "ticket_types", issue: issue %}

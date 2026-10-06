@@ -41,6 +41,7 @@ defmodule SymphonyElixir.Playbook.AssemblyTest do
                  ~s({% render "scoped_tools" %}),
                  "## Hygiene",
                  ~s({% render "status_map" %}),
+                 ~s({%- render "ticket_types", issue: issue %}),
                  ~s({% render "pr_feedback_sweep" %}),
                  ~s({% render "ci_triage" %}),
                  ~s({% render "escape_hatches" %}),
