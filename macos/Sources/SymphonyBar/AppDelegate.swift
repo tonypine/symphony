@@ -33,6 +33,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private let updates = UpdatePoller()
     /// The newer release, while there is one.
     private var availableRelease: Release?
+    /// The latest release the last successful check found, newer or not.
+    private var latestRelease: Release?
     private let updateAvailableItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let releaseNotesItem = NSMenuItem(title: UpdateMenu.releaseNotesTitle, action: nil, keyEquivalent: "")
     /// The result of a Check for Updates chosen by hand, under that item.
@@ -42,6 +44,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private lazy var skipUpdateItem = menuItem(UpdateMenu.skipTitle, action: #selector(skipUpdate(_:)))
     /// Under Update to vX: the update's progress, why it failed, or why Update is off.
     private let updateLineItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    /// What the last update or rollback did, which opens the release notes of the version it names.
+    private lazy var updateOutcomeItem = menuItem("", action: #selector(showOutcomeNotes(_:)))
     /// Set when the app started Symphony after an update: resume dispatch once it answers.
     private var resumeWhenAnswering = false
     /// True until the dispatch an update paused is resumed: kept across the health check's restarts of Symphony.
@@ -98,6 +102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         menu.addItem(updateAvailableItem)
         menu.addItem(installUpdateItem)
         menu.addItem(updateLineItem)
+        menu.addItem(updateOutcomeItem)
         menu.addItem(skipUpdateItem)
         menu.addItem(releaseNotesItem)
         menu.addItem(menuItem(UpdateMenu.checkTitle, action: #selector(checkForUpdates(_:))))
@@ -197,17 +202,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             resumeAfterUpdate = pending.resumeDispatch
             return pending.startSymphony
         case let .rolledBack(record):
-            updater.notice = UpdateMenu.rolledBackLine(record)
+            updater.rolledBack = record
+            notify(.rolledBack(record, restoredVersion: updates.current.version))
             resumeAfterUpdate = record.resumeDispatch
             return record.startSymphony
         case let .rollbackFailed(record):
             // Still the build that failed its check: say how to roll back by hand, and don't start Symphony for the
             // update. Start Symphony at launch still applies.
+            let problem = RollbackProblem.swapFailed(logPath: updater.rollbackLogPath)
             updater.notice = UpdateMenu.rollbackFailedLine(
                 version: record.version,
                 reason: record.reason,
-                problem: .swapFailed(logPath: updater.rollbackLogPath)
+                problem: problem
             )
+            notify(.rollbackFailed(version: record.version, reason: record.reason, problem: problem))
             return false
         }
     }
@@ -238,6 +246,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                 startWhenStopped = true
                 resumeWhenAnswering = resumeAfterUpdate
                 poller.pollNow()
+            case .healthy:
+                guard let checkedUpdate else { break }
+                let update = LastUpdate(checkedUpdate, installedAt: Date())
+                updater.lastUpdates.save(update)
+                // A manual update you just confirmed needs no notification.
+                if checkedUpdate.automatic { notify(.updated(update)) }
             case let .rollBack(failure):
                 rollBack(failure)
             }
@@ -255,8 +269,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             version: update.version,
             reason: failure.reason(logPath: runner.logPath),
             startSymphony: update.startSymphony,
-            resumeDispatch: resumeAfterUpdate
+            resumeDispatch: resumeAfterUpdate,
+            details: update.details
         )
+        // A crash loop can follow the healthy part of the check: the build put back doesn't say it was updated to.
+        updater.lastUpdates.clear()
         startWhenStopped = false
         resumeWhenAnswering = false
         guard updater.hasPreviousApp else {
@@ -276,6 +293,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private func rollbackFailed(_ record: RollbackRecord, _ problem: RollbackProblem) {
         updater.pin(record)
         updater.notice = UpdateMenu.rollbackFailedLine(version: record.version, reason: record.reason, problem: problem)
+        notify(.rollbackFailed(version: record.version, reason: record.reason, problem: problem))
+    }
+
+    private func notify(_ notice: UpdateNotice) {
+        runner.notify(title: notice.title, body: notice.body)
     }
 
     /// Quitting stops an owned Symphony first, after confirming when agent runs are active.
@@ -353,6 +375,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             return !updates.isChecking
         case #selector(showReleaseNotes(_:)):
             return availableRelease != nil
+        case #selector(showOutcomeNotes(_:)):
+            return updateOutcome?.release(latest: latestRelease) != nil
         case #selector(skipUpdate(_:)):
             return availableRelease != nil && !updater.isUpdating
         case #selector(installUpdate(_:)):
@@ -523,6 +547,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         UpdatePoller.showReleaseNotes(release)
     }
 
+    /// Shows the notes of the version the last update installed or the last rollback took out.
+    @objc private func showOutcomeNotes(_ sender: Any?) {
+        guard let outcome = updateOutcome, let release = outcome.release(latest: latestRelease) else { return }
+        UpdatePoller.showReleaseNotes(release, message: outcome.notesMessage)
+    }
+
+    /// The rollback that put this build back, or else the update that installed it while its line shows.
+    private var updateOutcome: UpdateOutcome? {
+        UpdateOutcome(
+            rolledBack: updater.rolledBack,
+            lastUpdate: updater.lastUpdates.shown(runningBuild: updates.current.build)
+        )
+    }
+
     /// Records the available release as skipped: the menu shows it as skipped, and Update to vX still installs it.
     @objc private func skipUpdate(_ sender: Any?) {
         guard let release = availableRelease, !updater.isUpdating else { return }
@@ -600,8 +638,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         switch result {
         case let .available(release)?:
             availableRelease = release
-        case .upToDate?:
+            latestRelease = release
+        case let .upToDate(release)?:
             availableRelease = nil
+            latestRelease = release
         case .failed?, nil:
             break
         }
@@ -681,6 +721,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         let line = updater.menuLine ?? health.menuLine ?? (release == nil ? nil : updateBlocker)
         updateLineItem.title = line ?? ""
         updateLineItem.isHidden = line == nil
+        let outcome = updateOutcome
+        updateOutcomeItem.title = outcome?.menuTitle ?? ""
+        updateOutcomeItem.isHidden = outcome == nil
         updateResultItem.isHidden = updateResultItem.title.isEmpty
     }
 
