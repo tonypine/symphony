@@ -483,6 +483,63 @@ defmodule SymphonyElixir.CiPollerTest do
       assert [%{status: "green"}] = RunStore.list_ci_checks()
     end
 
+    test "a PR closed or merged while its QA pass is held deletes the hold note with its CI record" do
+      now = ~U[2026-05-06 09:00:00Z]
+      issue = %{in_review_issue() | state: "Auto Review"}
+      Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+      put_run(issue, now)
+      recipient = self()
+
+      client = fn query, variables, _opts ->
+        send(recipient, {:linear, query, variables})
+
+        if query =~ "commentDelete",
+          do: {:ok, %{"data" => %{"commentDelete" => %{"success" => true}}}},
+          else: {:ok, %{"data" => %{"issue" => %{"comments" => %{"nodes" => [%{"id" => "note", "body" => "QA is waiting for the usage limit to reset at 14:05."}]}}}}}
+      end
+
+      for state <- ["MERGED", "CLOSED"] do
+        put_held_ci_check(issue, now, %{qa_hold_note: true})
+        Application.put_env(:symphony_elixir, :ci_test_status, %{green_status() | state: state})
+
+        assert {:ok, %{actions: [{:cleanup, "issue-2401", "closed"}]}} =
+                 CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, linear_client: client, now: now)
+
+        assert_receive {:linear, comments, %{id: "issue-2401"}}
+        assert comments =~ "comments("
+        assert_receive {:linear, delete, %{id: "note"}}
+        assert delete =~ "commentDelete"
+        assert RunStore.list_ci_checks() == []
+      end
+
+      # A record without a note leaves Linear alone.
+      put_held_ci_check(issue, now, %{})
+
+      assert {:ok, %{actions: [{:cleanup, "issue-2401", "closed"}]}} =
+               CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, linear_client: client, now: now)
+
+      refute_received {:linear, _query, _variables}
+    end
+
+    test "a hold note that can't be deleted when the PR closes is logged, and the CI record goes all the same" do
+      now = ~U[2026-05-06 09:00:00Z]
+      issue = %{in_review_issue() | state: "Auto Review"}
+      Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+      Application.put_env(:symphony_elixir, :ci_test_status, %{green_status() | state: "MERGED"})
+      put_run(issue, now)
+      put_held_ci_check(issue, now, %{qa_hold_note: true})
+      failing = fn _query, _variables, _opts -> {:error, :linear_down} end
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %{actions: [{:cleanup, "issue-2401", "closed"}]}} =
+                   CiPoller.poll_once(tracker: FakeTracker, github: FakeGitHub, linear_client: failing, now: now)
+        end)
+
+      assert log =~ "Failed to remove the QA hold note for ACME-2401 after its PR closed: :linear_down"
+      assert RunStore.list_ci_checks() == []
+    end
+
     test "red CI sends an Auto Review issue back to In Progress" do
       now = ~U[2026-05-06 09:00:00Z]
       issue = %{in_review_issue() | state: "Auto Review"}
@@ -2243,6 +2300,21 @@ defmodule SymphonyElixir.CiPollerTest do
       attempts == 0 -> flunk("condition never became true")
       true -> Process.sleep(20) && assert_eventually(fun, attempts - 1)
     end
+  end
+
+  # The CI record of an Auto Review issue whose QA pass is held.
+  defp put_held_ci_check(issue, now, attrs) do
+    record = %{
+      repo_key: @repo_key,
+      issue_id: issue.id,
+      issue_identifier: issue.identifier,
+      pr_url: hd(issue.pr_urls),
+      workspace_path: "/tmp/workspaces/ACME-2401",
+      status: "green",
+      updated_at: now
+    }
+
+    assert :ok = RunStore.put_ci_check(Map.merge(record, attrs))
   end
 
   defp pending_status do

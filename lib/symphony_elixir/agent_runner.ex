@@ -35,6 +35,7 @@ defmodule SymphonyElixir.AgentRunner do
     Verification,
     Workpad,
     Workspace,
+    WorkspaceCleanup,
     WorkspaceHead
   }
 
@@ -334,6 +335,9 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp workspace_for_issue(issue, codex_update_recipient, opts, worker_host) do
+    # A removal of this issue's workspace may still be running from when it last ended.
+    WorkspaceCleanup.await(issue.identifier)
+
     case Keyword.get(opts, :workspace_path) do
       workspace when is_binary(workspace) and workspace != "" ->
         with :ok <- Workspace.validate(workspace, worker_host) do
