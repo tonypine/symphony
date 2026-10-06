@@ -362,6 +362,10 @@ you can look at what the agent left there; the issue's next run starts with an e
 can't create it logs a warning and keeps the runtime's default temp folder. Runs on a remote worker
 keep that host's temp folder.
 
+On macOS a local Claude session also gets the env that lets `swift build` and `swift test` run in
+its sandbox: `DIRHELPER_USER_DIR_SUFFIX=symphony/none` and
+`SWIFTPM_MODULECACHE_OVERRIDE=<temp folder>/swiftpm-module-cache` (see `docs/security.md`).
+
 When a run on the local host ends, after the `after_run` hook, Symphony stops every process still
 running in the issue workspace or the run's temp folder or started from either (by working folder
 or a path on the command line), including ones the agent detached with `&`, `nohup` or `setsid`,
@@ -474,8 +478,6 @@ agent:
 - `permissions.filesystem.allow_write_paths`: extra writable host paths emitted to the Claude
   runtime as `sandbox.filesystem.allowWrite`. Use it to broaden Claude Code's default writable
   set (workspace + `/tmp`) — e.g. to grant test runs access to a configured MCP socket root.
-  On macOS, Symphony also adds the per-user temp dir's `TemporaryItems` for local runs
-  (Foundation's atomic writes need it; see `docs/security.md`).
   For Gradle builds, add `~/.gradle` so builds share its caches. Daemons don't come with it:
   each local agent run in a Gradle project (`gradlew`, `settings.gradle` or
   `settings.gradle.kts` at the workspace root) starts with
