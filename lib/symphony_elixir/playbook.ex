@@ -33,6 +33,7 @@ defmodule SymphonyElixir.Playbook do
     parent_tickets
     pr_feedback_sweep
     reproduce_and_blast_radius
+    review_brief
     scoped_tools
     status_map
     ticket_types
@@ -54,6 +55,7 @@ defmodule SymphonyElixir.Playbook do
     {"ci_triage", 70},
     {"escape_hatches", 80},
     {"parent_tickets", 90},
+    {"review_brief", 95},
     {"completion_bar", 100},
     {"guardrails", 110},
     {"out_of_scope_backlog", 120},

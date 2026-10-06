@@ -60,6 +60,7 @@ between them by number:
 | 70 | `ci_triage` |
 | 80 | `escape_hatches` |
 | 90 | `parent_tickets` |
+| 95 | `review_brief` |
 | 100 | `completion_bar` |
 | 110 | `guardrails` |
 | 120 | `out_of_scope_backlog` |
@@ -121,6 +122,7 @@ read from the disk next to the `WORKFLOW.md` it renders.
 | `parent_tickets` | — | Plan tickets (label plan, or breakdown, its older name) are groomed into sub-tickets; plan (new, resumed, revised, re-planned), final verification, and close-out runs never open a PR. |
 | `pr_feedback_sweep` | — | Required sweep of all PR feedback channels; every actionable comment must be resolved or answered before In Review. |
 | `reproduce_and_blast_radius` | — | Capture a reproduction/acceptance signal and a blast-radius analysis before the first code edit. |
+| `review_brief` | — | One human-facing review brief per ticket, edited in place at every handoff: what to review, what changed, the decisions needed and the move that approves, changes or rejects. |
 | `scoped_tools` | — | How to discover and use the scoped linear_* and github_* tools Symphony injects for the current issue. |
 | `status_map` | — | Canonical Symphony issue state machine and what each state means for the agent. |
 | `ticket_types` | `issue` | Per-type steps for a ticket labelled type:bug, type:feature or plan, with a readiness check that sends a bug or feature missing a required section back to Backlog; renders nothing for an untyped ticket. |
@@ -131,6 +133,11 @@ The plan flow in `parent_tickets` (plan run, single plan review, approval
 through `Waiting on sub-tickets`, close-out) is the base of the Director workflow:
 [ADR 0001](adr/0001-director-workflow.md) records the ticket types, the plan stages
 and where a plan's artifacts live.
+
+`parent_tickets`, `escape_hatches`, `completion_bar` and `default_posture` ask for the
+review brief at their handoffs, so render `review_brief` in any workflow that renders
+them; `{% render "playbook" %}` already does. The brief is the one comment written for
+the person reviewing; the workpad stays the agent's log.
 
 `ticket_types` routes a ticket by its type label (`type:bug`, `type:feature` or `plan`) and runs
 the readiness check on bugs and features. The templates the operator writes those tickets from,
@@ -176,6 +183,7 @@ You are working on a Linear ticket `{{ issue.identifier }}`
 <!-- repo-authored: extra guardrails, e.g. lock-file rule -->
 
 {% render "parent_tickets" %}
+{% render "review_brief" %}
 {% render "out_of_scope_backlog" %}
 {% render "dependency_guardrail", lockfile: "<your-lock-file>" %}
 {% render "workpad_template", agent: agent %}
