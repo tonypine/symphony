@@ -1,0 +1,70 @@
+name: release-smoke
+
+# Builds the Burrito `symphony` binary as the `release` workflow does and runs the
+# release smoke test on it, on pull requests that change how the release is built
+# or started. `make-all`'s `build` job smoke-tests only the escript, which skips the
+# service-instance step (the binary running as the service under the node name
+# symphony@127.0.0.1, registered with epmd), so without this a break there would
+# show up only in `release` after the merge.
+#
+# Not a required check: on a pull request that changes none of these paths the
+# workflow doesn't run.
+on:
+  pull_request:
+    paths:
+      - "rel/**"
+      - "mix.exs"
+      - "mix.lock"
+      - "mise.toml"
+      - "Makefile"
+      - "config/config.exs"
+      - "config/runtime.exs"
+      - "lib/symphony_elixir/release_node.ex"
+      - "lib/symphony_elixir/release_cookie.ex"
+      - "scripts/release/**"
+      - "scripts/zig-sdk-shim/**"
+      - "symphony.yml"
+      - ".github/workflows/release.yml"
+      - ".github/workflows/release-smoke.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  burrito-smoke:
+    name: burrito smoke
+    # The same runner as `release`: Zig 0.15.2 (pinned by Burrito) cannot link
+    # against the macOS 26 SDK.
+    runs-on: macos-15
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up mise tools
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+        with:
+          install: true
+          cache: true
+
+      - name: Build the Symphony binary (macOS arm64)
+        env:
+          BURRITO_TARGET: macos_arm64
+          # A build number, as `release` sets, so the release version is a semver
+          # pre-release (0.0.1-N) like a published build's.
+          SYMPHONY_BUILD_NUMBER: ${{ github.run_number }}
+          SYMPHONY_BUILD_SHA: ${{ github.sha }}
+          SYMPHONY_BUILD_REPO: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          time make package
+          test -x burrito_out/symphony-macos-arm64
+
+      - name: Smoke-test the Burrito binary
+        run: time scripts/release/smoke_test.sh burrito_out/symphony-macos-arm64 "$GITHUB_WORKSPACE/symphony.yml"

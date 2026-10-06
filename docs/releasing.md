@@ -120,6 +120,13 @@ same check locally (cwd is `macos/`, after the commands above):
 
 The release workflow runs only on pushes to `main`, so pull request CI (`make-all`'s `build`
 job) runs the same script on the escript, without the service step only the Burrito binary
-needs. Locally, `make smoke` does the same. The script gives each run a fresh `HOME` and
-creates an empty git repo there at every `repo: ~/...` path the config names, since
-`symphony check` rejects a `strategy: worktree` repo that doesn't exist.
+needs. Locally, `make smoke` does the same. A pull request that changes how the release is
+built or started (`rel/`, `mix.exs`, `mix.lock`, `mise.toml`, the `Makefile`, `config/`'s
+`config.exs` and `runtime.exs`, `ReleaseNode` and `ReleaseCookie`, `scripts/release/`, the Zig
+SDK shim, the sample `symphony.yml`, or the `release` and `release-smoke` workflows) also runs
+the [`release-smoke` workflow](../.github/workflows/release-smoke.yml): it builds the Burrito
+binary on `macos-15` as `release` does and runs the whole script on it, service step included.
+
+The script gives each run a fresh `HOME` and creates an empty git repo there at every
+`repo: ~/...` path the config names, since `symphony check` rejects a `strategy: worktree`
+repo that doesn't exist.

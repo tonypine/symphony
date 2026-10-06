@@ -120,6 +120,8 @@ jobs:
 
       # The release workflow runs this on the Burrito binary only on pushes to main,
       # so a change that breaks `symphony check` on the sample config fails here first.
+      # The escript skips the service step; `release-smoke` runs it on the Burrito
+      # binary when a pull request changes release-related paths.
       - name: Smoke-test the escript
         run: time scripts/release/smoke_test.sh bin/symphony "$GITHUB_WORKSPACE/symphony.yml"
 
