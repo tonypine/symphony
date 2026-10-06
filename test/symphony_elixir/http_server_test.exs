@@ -106,6 +106,12 @@ defmodule SymphonyElixir.HttpServerTest do
       :gen_tcp.close(conn)
     end
 
+    test "names the empty socket path of a unix: host instead of failing a DNS lookup" do
+      assert {:error, message} = HttpServer.start_link(host: "unix:", port: 0)
+      assert message == HttpServer.empty_unix_socket_message()
+      assert message =~ ~s(the socket path in host "unix:" is empty)
+    end
+
     test "rewrites the IPv4 wildcard host to a loopback URL for local CLI discovery" do
       System.put_env(@allow_remote_bind_env, "1")
 
