@@ -4090,6 +4090,10 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       timestamp: ended_at
     }
 
+    # The run store keeps a row's newest 20 events, and the watching entry shows those.
+    earlier_events = Enum.map(1..29, &%{event: :notification, payload: %{"n" => &1}, timestamp: started_at})
+    shown_events = Enum.take(earlier_events, -19) ++ [transcript_event]
+
     assert :ok =
              RunStore.put_run(%{
                repo_key: Config.repo_key!(),
@@ -4114,8 +4118,8 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
                  output_tokens: 8,
                  total_tokens: 28
                },
-               transcript_buffer: [transcript_event],
-               transcript_buffer_size: 1,
+               transcript_buffer: earlier_events ++ [transcript_event],
+               transcript_buffer_size: 30,
                runtime_seconds: 120
              })
 
@@ -4163,8 +4167,8 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
                  output_tokens: 8,
                  total_tokens: 28
                },
-               transcript_buffer: [^transcript_event],
-               transcript_buffer_size: 1
+               transcript_buffer: ^shown_events,
+               transcript_buffer_size: 20
              }
            ] = snapshot.watching
 
