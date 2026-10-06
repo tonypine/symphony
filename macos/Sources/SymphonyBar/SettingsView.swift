@@ -190,17 +190,19 @@ struct SettingsView: View {
                 } header: {
                     Text("Models (saved in symphony.yml)")
                 } footer: {
+                    // Fixed to its wrapped height: without it the grouped Form laid this footer out as one line
+                    // cut off with an ellipsis.
                     Text(
                         "Each kind of run uses its own provider, model and effort, or the Default row where it "
                             + "sets none. A repository's rows override All repositories for issues routed to it; "
-                            + "grey values are inherited. Higher effort and bigger models use the shared 5-hour "
-                            + "usage limit faster: keep Opus and high effort for breakdown and hard "
-                            + "implementation, and use Sonnet or Haiku with low effort for landing and CI fixes. "
-                            + "OpenRouter models must support tools. Claude runtime only. Save checks "
-                            + "symphony.yml with symphony check first; changes apply to the next run."
+                            + "grey values are inherited. Bigger models and higher effort use the 5-hour usage "
+                            + "limit faster: keep Opus and high effort for breakdown and hard implementation, and "
+                            + "Sonnet or Haiku with low effort for landing and CI fixes. Save checks symphony.yml "
+                            + "with symphony check first; changes apply to the next run."
                     )
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 }
 
                 Section {
@@ -300,10 +302,12 @@ struct SettingsView: View {
                 } footer: {
                     Text(
                         "Stored with your other secrets and passed to Symphony as \(SecretSettings.openRouterAPIKeyName) "
-                            + "for run profiles with provider: openrouter. Leave blank to turn OpenRouter off."
+                            + "for run profiles with provider: openrouter. Those run on the Claude runtime only, with "
+                            + "models that support tools. Leave blank to turn OpenRouter off."
                     )
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .formStyle(.grouped)
@@ -512,7 +516,8 @@ private struct OpenRouterModelField: View {
                     Image(systemName: "chevron.up.chevron.down").imageScale(.small)
                 }
             }
-            .help(selection ?? "Choose an OpenRouter model that supports tools")
+            // The chosen model's id, or the inherited model's full name, which this narrow column can cut.
+            .help(selection ?? (inherited == nil ? "Choose an OpenRouter model that supports tools" : inheritedTitle(models)))
             .popover(isPresented: $isPicking, arrowEdge: .bottom) {
                 picker(models)
             }
