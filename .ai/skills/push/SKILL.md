@@ -28,9 +28,10 @@ description:
 1. Identify current branch and confirm remote state.
 2. Run the targeted pre-push checks from `WORKFLOW.md` before pushing:
    `mix format --check-formatted`, `mix compile --warnings-as-errors`,
-   `mix specs.check`, `mix credo --strict <changed files>`, and every new or
-   changed test file plus the test files of the modules you changed
-   (`mix test <file>` or `<file>:<line>`). Don't run the full `mix test`,
+   `mix specs.check`, `mix credo --strict <changed files>`,
+   `mix settings.ui_coverage`, and every new or changed test file plus the
+   test files of the modules you changed (`mix test <file>` or
+   `<file>:<line>`). Don't run the full `mix test`,
    `make check`, `make coverage`, `make all` or Dialyzer locally: CI is the
    gate for the full suite, the 100% coverage report and Dialyzer, and those
    runs are slow in a sandbox and load the shared host. Plan a test for every
@@ -40,6 +41,8 @@ description:
    shims, never as a shortcut. `make all` stays an optional extra for a
    change to shared infrastructure (the config schema, orchestrator core); run
    it with `TEST_MAX_CASES=2 BEAM_SCHEDULERS=2` and record why in the workpad.
+   A new `symphony.yml` setting needs a control in the macOS app or a
+   person's exemption: see `docs/configuration.md#settings-in-the-macos-app`.
 3. Push branch to `origin` with upstream tracking if needed, using whatever
    remote URL is already configured. `git push` runs the repo's
    `.githooks/pre-push` hook (format, compile and credo on the Elixir files the

@@ -75,13 +75,6 @@ exemptions:
       - agent.usage_limit.resume_margin_seconds
       - agent.usage_limit.unknown_reset_retry_seconds
 
-  # auto_review.acceptance_gate.mode
-  - reason: The acceptance gate's mode; its control is planned.
-    ticket: TP-547
-    keys:
-      - auto_review.acceptance_gate.mode
-      - repositories[].acceptance_gate.mode
-
   # auto_review.acceptance_gate
   - reason: The acceptance gate agent's runtime, limits and escalation rules. No control in the app yet.
     keys:
