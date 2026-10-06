@@ -198,6 +198,7 @@ defmodule SymphonyElixir.Config.RepoWorkflowSchema do
       "dev_server" =>
         configured_map(paths, "dev_server", fn dev_server_paths ->
           %{
+            "build_cmd" => configured_value(dev_server_paths, "build_cmd", verification.dev_server.build_cmd),
             "start_cmd" => configured_value(dev_server_paths, "start_cmd", verification.dev_server.start_cmd),
             "health_check_url" => configured_value(dev_server_paths, "health_check_url", verification.dev_server.health_check_url),
             "health_timeout_ms" => configured_value(dev_server_paths, "health_timeout_ms", verification.dev_server.health_timeout_ms),

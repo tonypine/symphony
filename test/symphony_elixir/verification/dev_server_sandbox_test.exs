@@ -135,6 +135,37 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
     end
   end
 
+  describe "build_command/4" do
+    test "runs the build command with sh -lc under sandbox-exec and the build profile, with no listener probe", %{root: root, workspace: workspace, tmp_dir: tmp_dir} do
+      # A probe would run this and fail: the build profile allows loopback listeners by design.
+      executable = Path.join(root, "sandbox-exec")
+      File.write!(executable, "#!/bin/sh\nexit 1\n")
+      File.chmod!(executable, 0o755)
+
+      assert {:ok, [^executable, "-p", profile, "/bin/sh", "-lc", "mix build"], []} =
+               DevServerSandbox.build_command("mix build", workspace, tmp_dir,
+                 os_type: {:unix, :darwin},
+                 executable: executable,
+                 getconf: "false"
+               )
+
+      assert profile =~ ~s{(allow network-bind (local ip "localhost:*"))}
+      assert profile =~ ~s{(allow network-inbound (local ip "localhost:*"))}
+      assert profile =~ ~s{(subpath "#{Path.join(real(workspace), ".git")}")}
+      assert profile =~ "(deny process-exec"
+    end
+
+    test "fails off macOS and Linux, and when sandbox-exec is missing", %{root: root, workspace: workspace, tmp_dir: tmp_dir} do
+      assert {:error, {:dev_server_sandbox_unavailable, {:win32, :nt}}} =
+               DevServerSandbox.build_command("mix build", workspace, tmp_dir, os_type: {:win32, :nt})
+
+      missing = Path.join(root, "missing-sandbox-exec")
+
+      assert {:error, {:dev_server_sandbox_unavailable, {:not_found, ^missing}}} =
+               DevServerSandbox.build_command("mix build", workspace, tmp_dir, os_type: {:unix, :darwin}, executable: missing)
+    end
+  end
+
   describe "listen_socket/2" do
     test "is a socket in the temp folder on macOS, and none on Linux", %{tmp_dir: tmp_dir} do
       assert {:ok, socket} = DevServerSandbox.listen_socket(tmp_dir, os_type: {:unix, :darwin})
@@ -206,6 +237,31 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
                    "'#{socat}' 'TCP-LISTEN:5555,bind=127.0.0.1,reuseaddr,fork' 'UNIX-CONNECT:#{proxy_socket}' &",
                    "'#{socat}' 'UNIX-LISTEN:#{serve_socket},fork,unlink-early' 'TCP:127.0.0.1:4000' &",
                    "exec '/bin/sh' '-lc' 'mix phx.server --name '\\''web'\\'''"
+                 ],
+                 "\n"
+               )
+    end
+
+    test "runs the build command under bwrap, bridged to the host's loopback for the egress proxy only", ctx do
+      %{workspace: workspace, tmp_dir: tmp_dir, socat: socat, record: record, opts: opts} = ctx
+      opts = Keyword.delete(opts, :port)
+
+      assert {:ok, ["/bin/sh", "-c", script], _placeholders} = DevServerSandbox.build_command("mix build", workspace, tmp_dir, opts)
+
+      proxy_socket = Path.join(real(tmp_dir), "proxy.sock")
+      assert script =~ "'#{socat}' 'UNIX-LISTEN:#{proxy_socket},fork,unlink-early' 'TCP:127.0.0.1:5555' &\n"
+      refute script =~ "serve.sock"
+      refute script =~ "serve_bridge"
+      assert script =~ "\nkill $proxy_bridge 2>/dev/null\nwait\nexit $status"
+
+      assert {_output, 7} = System.cmd("/bin/sh", ["-c", script], cd: workspace, stderr_to_stdout: true)
+      assert ["", sandbox_script, "-c", "/bin/sh" | _args] = record |> File.read!() |> String.split("\0") |> Enum.reverse()
+
+      assert sandbox_script ==
+               Enum.join(
+                 [
+                   "'#{socat}' 'TCP-LISTEN:5555,bind=127.0.0.1,reuseaddr,fork' 'UNIX-CONNECT:#{proxy_socket}' &",
+                   "exec '/bin/sh' '-lc' 'mix build'"
                  ],
                  "\n"
                )
@@ -617,6 +673,24 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
       assert output =~ "Operation not permitted"
 
       assert {:ok, ["/usr/bin/sandbox-exec" | _argv], []} = DevServerSandbox.command("true", workspace, tmp_dir, [])
+    end
+
+    # Mix's build lock and pub/sub listen on an ephemeral 127.0.0.1 port, as the agent's own
+    # sandbox lets them.
+    test "a build command can listen on loopback, and still writes only its paths", %{workspace: workspace, tmp_dir: tmp_dir, home: home} do
+      opts = [home: home, socket_dir: tmp_dir, loopback_listeners: true]
+      profile = DevServerSandbox.profile(workspace, [workspace, tmp_dir], [], opts)
+
+      python =
+        "import socket; s = socket.socket(); s.bind((\"127.0.0.1\", 0)); s.listen(); " <>
+          "c = socket.create_connection(s.getsockname()); print(\"accepted\" if s.accept() else \"\")"
+
+      assert {output, 0} = seatbelt(profile, workspace, "python3 -c '#{python}'")
+      assert output =~ "accepted"
+
+      assert {output, status} = seatbelt(profile, workspace, "touch #{Path.join(home, "outside")}")
+      assert status != 0
+      assert output =~ "Operation not permitted"
     end
   end
 

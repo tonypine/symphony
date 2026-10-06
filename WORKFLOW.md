@@ -35,6 +35,9 @@ push_check:
 # dashboard with an in-memory tracker; Auto Review's web playbook tests dashboard changes on it.
 verification:
   dev_server:
+    # Builds the escript in the build sandbox (the agent's confinement): Mix can't run in the
+    # dev server's sandbox, which allows no TCP listener.
+    build_cmd: scripts/qa-dashboard-build.sh
     start_cmd: scripts/qa-dashboard-server.sh
     health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/api/v1/state"
     health_timeout_ms: 600000

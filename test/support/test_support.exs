@@ -1131,6 +1131,7 @@ defmodule SymphonyElixir.TestSupport do
           kv("range", Map.get(port_allocation, :range))
         ]),
         nested_yaml("dev_server", [
+          kv("build_cmd", Map.get(dev_server, :build_cmd)),
           kv("start_cmd", Map.get(dev_server, :start_cmd)),
           kv("health_check_url", Map.get(dev_server, :health_check_url)),
           kv("health_timeout_ms", Map.get(dev_server, :health_timeout_ms)),

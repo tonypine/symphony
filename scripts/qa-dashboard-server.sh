@@ -6,7 +6,8 @@
 # On macOS that sandbox allows no TCP listener: the dashboard listens on the unix socket
 # $SYMPHONY_VERIFICATION_SOCKET instead, which Symphony serves on 127.0.0.1:$SYMPHONY_VERIFICATION_PORT.
 # It runs no Mix: Mix loads deps through a TCP listener (see the guard below), so it serves the
-# escript built outside the sandbox with `mix build`.
+# escript scripts/qa-dashboard-build.sh built first, as `verification.dev_server.build_cmd`, in a
+# sandbox that allows one.
 set -eu
 
 port="${SYMPHONY_VERIFICATION_PORT:?SYMPHONY_VERIFICATION_PORT is not set}"
@@ -36,10 +37,10 @@ cd "$repo"
 # The dev server's sandbox allows no TCP listener at all, and Mix can't run without one: every
 # task that loads deps starts `Mix.PubSub` (`Mix.Sync.PubSub.subscribe/1`) on an ephemeral
 # 127.0.0.1 port, and Mix's build lock takes one too. So no Mix task can run here. Serve the
-# escript this checkout built outside the sandbox with `mix build`.
+# escript `build_cmd` built.
 if [ ! -x ./bin/symphony ]; then
   echo "scripts/qa-dashboard-server.sh: ./bin/symphony is missing." >&2
-  echo "Build it first with \`mix build\`. Mix can't run inside the dev server sandbox on macOS: it opens TCP listeners for its build lock and pub/sub." >&2
+  echo "Build it first with scripts/qa-dashboard-build.sh, as verification.dev_server.build_cmd (see docs/configuration.md#verification). Mix can't run inside the dev server sandbox on macOS: it opens TCP listeners for its build lock and pub/sub." >&2
   exit 1
 fi
 
