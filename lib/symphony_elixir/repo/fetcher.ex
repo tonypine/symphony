@@ -16,6 +16,10 @@ defmodule SymphonyElixir.Repo.Fetcher do
   branch was force-pushed during the fetch) is run once more after a short
   delay.
 
+  The same lock serializes the other git calls that write the shared repo's
+  metadata (`with_lock/3`), such as a dispatch's `git worktree add`: the
+  worktrees of one repo share its refs and `.git/config`.
+
   A full fetch runs in its own process, so the server keeps taking requests.
   Without the server (some tests), every fetch runs in the caller, unlocked.
   """
@@ -78,16 +82,29 @@ defmodule SymphonyElixir.Repo.Fetcher do
   @spec fetch(Path.t(), (-> term()), keyword()) :: term()
   def fetch(dir, fetch, opts \\ []) when is_binary(dir) and is_function(fetch, 0) and is_list(opts) do
     dir = Path.expand(dir)
+    with_lock(dir, fn -> with_retry(dir, fetch, opts) end, opts)
+  end
 
+  @doc """
+  Runs `fun` in the caller while no fetch of the repo of `dir` runs and no
+  other caller holds its lock, and returns what `fun` returns. It is never
+  retried. Takes the `:server` option of `fetch_origin/2`.
+
+  For a git call besides a fetch that writes the repo's shared metadata, such
+  as a dispatch's `git worktree add`. `fun` must not fetch the same repo: the
+  lock is not reentrant.
+  """
+  @spec with_lock(Path.t(), (-> term()), keyword()) :: term()
+  def with_lock(dir, fun, opts \\ []) when is_binary(dir) and is_function(fun, 0) and is_list(opts) do
     case server(opts) do
       nil ->
-        with_retry(dir, fetch, opts)
+        fun.()
 
       server ->
-        {:ok, ref} = GenServer.call(server, {:lock, lock_key(dir)}, :infinity)
+        {:ok, ref} = GenServer.call(server, {:lock, lock_key(Path.expand(dir))}, :infinity)
 
         try do
-          with_retry(dir, fetch, opts)
+          fun.()
         after
           GenServer.call(server, {:unlock, ref}, :infinity)
         end

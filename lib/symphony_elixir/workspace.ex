@@ -716,18 +716,23 @@ defmodule SymphonyElixir.Workspace do
     end
   end
 
+  # Under the repo's fetch lock: parallel `worktree add`s of one repo race for its
+  # `.git/config` lock and refs, and the loser exits 255 with its branch made but no
+  # worktree. `--no-track` keeps the add from writing the branch's upstream config.
   defp add_local_worktree(repo, workspace, branch, base_ref, active_workspaces) do
     File.mkdir_p!(Path.dirname(workspace))
 
-    case check_branch_not_checked_out_elsewhere(repo, workspace, branch, active_workspaces) do
-      :ok ->
-        repo
-        |> run_git(worktree_add_args(repo, workspace, branch, base_ref))
-        |> handle_local_worktree_add_result(repo, workspace)
+    Fetcher.with_lock(repo, fn ->
+      case check_branch_not_checked_out_elsewhere(repo, workspace, branch, active_workspaces) do
+        :ok ->
+          repo
+          |> run_git(worktree_add_args(repo, workspace, branch, base_ref))
+          |> handle_local_worktree_add_result(repo, workspace)
 
-      error ->
-        error
-    end
+        error ->
+          error
+      end
+    end)
   end
 
   defp handle_local_worktree_add_result(:ok, _repo, _workspace), do: {:ok, true}
@@ -807,7 +812,7 @@ defmodule SymphonyElixir.Workspace do
   defp worktree_add_args(repo, workspace, branch, base_ref) do
     cond do
       is_binary(base_ref) and base_ref != "" ->
-        ["worktree", "add", "-B", branch, workspace, base_ref]
+        ["worktree", "add", "--no-track", "-B", branch, workspace, base_ref]
 
       git_branch_exists?(repo, branch) ->
         ["worktree", "add", workspace, branch]
@@ -818,7 +823,7 @@ defmodule SymphonyElixir.Workspace do
   end
 
   defp remote_worktree_add_command do
-    "branch_owner=$(symphony_git \"$repo\" worktree list --porcelain | awk -v b=\"$branch\" 'BEGIN { wt = \"\" } /^worktree / { wt = substr($0, 10); next } $0 == \"branch refs/heads/\" b { print wt; exit }'); if [ -n \"$branch_owner\" ] && [ \"$branch_owner\" != \"$workspace\" ]; then printf 'workspace_branch_already_checked_out_elsewhere\\t%s\\t%s\\t%s\\n' \"$branch\" \"$branch_owner\" \"$workspace\"; exit 45; fi; if [ \"$base_ref\" != \"HEAD\" ]; then symphony_git \"$repo\" worktree add -B \"$branch\" \"$workspace\" \"$base_ref\"; elif symphony_git \"$repo\" rev-parse --verify \"refs/heads/$branch\" >/dev/null 2>&1; then symphony_git \"$repo\" worktree add \"$workspace\" \"$branch\"; else symphony_git \"$repo\" worktree add -b \"$branch\" \"$workspace\" HEAD; fi"
+    "branch_owner=$(symphony_git \"$repo\" worktree list --porcelain | awk -v b=\"$branch\" 'BEGIN { wt = \"\" } /^worktree / { wt = substr($0, 10); next } $0 == \"branch refs/heads/\" b { print wt; exit }'); if [ -n \"$branch_owner\" ] && [ \"$branch_owner\" != \"$workspace\" ]; then printf 'workspace_branch_already_checked_out_elsewhere\\t%s\\t%s\\t%s\\n' \"$branch\" \"$branch_owner\" \"$workspace\"; exit 45; fi; if [ \"$base_ref\" != \"HEAD\" ]; then symphony_git \"$repo\" worktree add --no-track -B \"$branch\" \"$workspace\" \"$base_ref\"; elif symphony_git \"$repo\" rev-parse --verify \"refs/heads/$branch\" >/dev/null 2>&1; then symphony_git \"$repo\" worktree add \"$workspace\" \"$branch\"; else symphony_git \"$repo\" worktree add -b \"$branch\" \"$workspace\" HEAD; fi"
   end
 
   # Mirror `snapshot_orphaned_work/2` for remote workers: snapshot a crashed run's
