@@ -168,6 +168,62 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     )
   end
 
+  test "reports its queue and snapshot timings, and logs the callbacks and snapshot builds that are slow" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      observability_snapshot_publish_ms: 25
+    )
+
+    orchestrator_name = Module.concat(__MODULE__, :DiagnosticsOrchestrator)
+
+    assert Orchestrator.diagnostics(orchestrator_name) == %{
+             message_queue_len: nil,
+             snapshot_age_ms: nil,
+             snapshot_build_ms: nil,
+             snapshot_parts_ms: %{}
+           }
+
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        stop_process(pid)
+      end
+    end)
+
+    wait_for_snapshot_cache(pid, &is_map(&1.snapshot), 100)
+
+    assert %{
+             message_queue_len: queue_len,
+             snapshot_age_ms: age_ms,
+             snapshot_build_ms: build_ms,
+             snapshot_parts_ms: %{run_history: run_history_ms, qa: qa_ms, auto_merge: auto_merge_ms}
+           } = Orchestrator.diagnostics(pid)
+
+    assert Enum.all?([queue_len, age_ms, build_ms, run_history_ms, qa_ms, auto_merge_ms], &(is_integer(&1) and &1 >= 0))
+
+    assert %{orchestrator: %{snapshot_build_ms: api_build_ms}} =
+             SymphonyElixirWeb.Presenter.state_payload(orchestrator_name, 1_000)
+
+    assert is_integer(api_build_ms)
+
+    Application.put_env(:symphony_elixir, :orchestrator_slow_callback_ms, 0)
+
+    log =
+      try do
+        capture_log(fn ->
+          send(pid, :publish_snapshot)
+          GenServer.call(pid, :pause_status)
+        end)
+      after
+        Application.delete_env(:symphony_elixir, :orchestrator_slow_callback_ms)
+      end
+
+    assert log =~ ~r/Orchestrator slow handle_info duration_ms=\d+ message=:publish_snapshot/
+    assert log =~ ~r/Orchestrator slow handle_call duration_ms=\d+ message=:pause_status/
+    assert log =~ ~r/Orchestrator snapshot build slow build_ms=\d+ auto_merge_ms=\d+ qa_ms=\d+ run_history_ms=\d+/
+  end
+
   test "codex updates and snapshots stay responsive during quality gate evaluation" do
     System.put_env("ANTHROPIC_API_KEY", "test-anthropic-key")
     Application.put_env(:symphony_elixir, :quality_gate_anthropic_module, SlowQualityGateProvider)

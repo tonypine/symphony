@@ -96,7 +96,13 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     # Claude writes MCP server logs on the host it runs on.
     mcp_log_workspace = if is_nil(worker_host), do: workspace
 
-    read_opts = [required_mcp_server: required_mcp_server, issue: issue, mcp_log_workspace: mcp_log_workspace]
+    read_opts = [
+      required_mcp_server: required_mcp_server,
+      issue: issue,
+      mcp_log_workspace: mcp_log_workspace,
+      provider: session |> Map.get(:run_profile) |> run_profile_provider()
+    ]
+
     # `claude -p` starts a new conversation each turn unless told which one to resume.
     session =
       session
@@ -228,8 +234,10 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
            | {:turn_failed, String.t()}
            | {:rate_limited, %{retry_after_seconds: nil | non_neg_integer(), message: String.t()}, String.t()}
            | {:usage_limited, usage_limit_info()}
+           | {:api_unreachable, api_unreachable_info()}
            | {:usage_window, String.t(), usage_window()}
            | {:rate_limit_info, map()}
+           | {:tool_progress, String.t() | nil}
            | {:malformed, String.t()}
 
   @typedoc "A Claude usage-limit hit: a plan window (five-hour or weekly) is used up."
@@ -241,6 +249,21 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
           utilization: number() | nil,
           overage: String.t() | boolean() | nil,
           source: :rate_limit_event | :result_text
+        }
+
+  @typedoc """
+  A turn Claude ended because it could not reach the model API (a DNS failure, a refused or
+  dropped connection): `error` is the code it named, such as `ENOTFOUND`. The orchestrator holds
+  the provider's runs on it as on a usage limit (see `SymphonyElixir.UsageLimit`).
+  """
+  @type api_unreachable_info :: %{
+          provider: String.t(),
+          window: nil,
+          scope: :all,
+          resets_at: nil,
+          utilization: nil,
+          source: :api_unreachable,
+          error: String.t()
         }
 
   @typedoc "The latest reset time and utilization Claude reported for one usage window."
@@ -291,19 +314,30 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
   defp parse_decoded_event(%{"type" => "tool_use", "name" => name}, _line), do: {:tool_use, name}
 
+  defp parse_decoded_event(%{"type" => "tool_progress"} = event, _line), do: {:tool_progress, Map.get(event, "tool_name")}
+
   defp parse_decoded_event(%{"type" => "rate_limit_event", "rate_limit_info" => info}, _line),
     do: classify_rate_limit_event(info)
 
   defp parse_decoded_event(%{"type" => "result", "is_error" => true} = event, line) do
     case usage_limit_from_result(event) do
       {:ok, info} -> {:usage_limited, info}
-      :error -> parse_result_event(event, line)
+      :error -> parse_reachable_result(event, line)
     end
   end
 
-  defp parse_decoded_event(%{"type" => "result"} = event, line), do: parse_result_event(event, line)
+  defp parse_decoded_event(%{"type" => "result"} = event, line), do: parse_reachable_result(event, line)
 
   defp parse_decoded_event(_event, line), do: {:malformed, line}
+
+  # When the model API can't be reached, Claude still ends the turn with a `success` result:
+  # its text is `API Error: Can't reach the API server … (ENOTFOUND)` and nothing was used.
+  defp parse_reachable_result(event, line) do
+    case api_unreachable_from_result(event) do
+      {:ok, info} -> {:api_unreachable, info}
+      :error -> parse_result_event(event, line)
+    end
+  end
 
   defp parse_result_event(%{"subtype" => "success"} = event, _line),
     do: {:turn_completed, extract_turn_result(event)}
@@ -1352,6 +1386,8 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
       mcp_log_workspace: Keyword.get(opts, :mcp_log_workspace),
       issue: Keyword.get(opts, :issue),
       usage_limited: nil,
+      api_unreachable: nil,
+      provider: Keyword.get(opts, :provider, "anthropic"),
       usage_windows: %{}
     }
 
@@ -1472,6 +1508,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   end
 
   defp finalize_read_result(%{usage_limited: %{} = info}), do: {:error, {:usage_limited, info}}
+  defp finalize_read_result(%{api_unreachable: %{} = info}), do: {:error, {:model_api_unreachable, info}}
 
   defp finalize_read_result(%{turn_failed: reason}) when is_binary(reason) do
     {:error, {:turn_failed, reason}}
@@ -1492,6 +1529,8 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
      |> Map.delete(:mcp_log_workspace)
      |> Map.delete(:issue)
      |> Map.delete(:usage_limited)
+     |> Map.delete(:api_unreachable)
+     |> Map.delete(:provider)
      |> Map.delete(:usage_windows)}
   end
 
@@ -1745,6 +1784,9 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   defp apply_command_tracking_event({:usage_limited, _info}, _active_tool_uses, _command_deadline, _timeout_ms, _now),
     do: {0, nil}
 
+  defp apply_command_tracking_event({:api_unreachable, _info}, _active_tool_uses, _command_deadline, _timeout_ms, _now),
+    do: {0, nil}
+
   defp apply_command_tracking_event(
          {:rate_limited, _info, _reason},
          _active_tool_uses,
@@ -1827,6 +1869,13 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     %{acc | usage_limited: info, turn_failed: reason}
   end
 
+  defp apply_event({:api_unreachable, info}, on_message, acc) do
+    info = %{info | provider: acc.provider}
+    reason = "model API unreachable (#{info.error})"
+    on_message.({:turn_failed, reason})
+    %{acc | api_unreachable: info, turn_failed: reason}
+  end
+
   defp apply_event({:usage_window, message, %{window: window} = usage_window}, on_message, acc) do
     windows = Map.put(acc.usage_windows, window, Map.take(usage_window, [:status, :resets_at, :utilization]))
     on_message.({:usage_window, message, windows})
@@ -1838,6 +1887,10 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
     acc
   end
+
+  # Claude Code sends one every few seconds while a tool runs. The tool's own `tool_use` and
+  # `tool_result` already reach the orchestrator, so the heartbeat is dropped, not forwarded.
+  defp apply_event({:tool_progress, _tool_name}, _on_message, acc), do: acc
 
   defp apply_event({:malformed, raw}, _on_message, acc) do
     Logger.debug("ClaudeCode unparseable line: #{inspect(raw)}")
@@ -2173,6 +2226,41 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
         :error
     end
   end
+
+  # Only a failure to reach the API: an HTTP error the API returned (a 400, a 429, a 500) is
+  # not an outage, and holding every run on it could hold them forever.
+  @api_unreachable_pattern ~r/can't reach the api server|connection error|fetch failed|socket hang up|getaddrinfo|\b(?:ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH|ENETDOWN)\b/iu
+  @api_error_code_pattern ~r/\b(E[A-Z_]{3,})\b/
+
+  defp api_unreachable_from_result(event) do
+    text = Enum.find_value(["result", "error"], &(is_binary(Map.get(event, &1)) && Map.get(event, &1)))
+
+    if is_binary(text) and String.starts_with?(String.trim_leading(text), "API Error:") and Regex.match?(@api_unreachable_pattern, text) and
+         (Map.get(event, "is_error") == true or extract_turn_result(event).total_tokens == 0) do
+      {:ok,
+       %{
+         provider: "anthropic",
+         window: nil,
+         scope: :all,
+         resets_at: nil,
+         utilization: nil,
+         source: :api_unreachable,
+         error: api_error_code(text)
+       }}
+    else
+      :error
+    end
+  end
+
+  defp api_error_code(text) do
+    case Regex.run(@api_error_code_pattern, text, capture: :all_but_first) do
+      [code] -> code
+      nil -> "connection error"
+    end
+  end
+
+  defp run_profile_provider(%{provider: provider}) when is_binary(provider), do: provider
+  defp run_profile_provider(_profile), do: "anthropic"
 
   defp result_usage_limit(resets_at) do
     %{

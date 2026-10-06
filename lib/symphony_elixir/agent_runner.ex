@@ -94,8 +94,8 @@ defmodule SymphonyElixir.AgentRunner do
         Logger.error("Agent run failed for #{issue_context(issue)}: #{inspect(reason)}")
 
         cond do
-          usage_limit = usage_limit_reason(reason) ->
-            exit({:usage_limited, usage_limit})
+          hold = provider_hold_reason(reason) ->
+            exit(hold)
 
           terminal_agent_setup_error?(reason) ->
             exit({:terminal_agent_setup_error, reason})
@@ -115,9 +115,15 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  # The orchestrator holds the provider's runs until the limit resets instead of failing the run.
-  defp usage_limit_reason({:usage_limited, %{} = info}), do: info
-  defp usage_limit_reason(_reason), do: nil
+  # The orchestrator holds the provider's runs until the limit resets instead of failing the run;
+  # it does the same, until a probe gets through, for a model API the agent couldn't reach.
+  # A parent walkthrough's QA agent reports either one as `{:usage_limited, info}`.
+  defp provider_hold_reason({:usage_limited, %{} = info}) do
+    if UsageLimit.api_unreachable?(info), do: {:model_api_unreachable, info}, else: {:usage_limited, info}
+  end
+
+  defp provider_hold_reason({:model_api_unreachable, %{}} = reason), do: reason
+  defp provider_hold_reason(_reason), do: nil
 
   defp terminal_review_agent_block?({:review_agent_blocked, _reason}), do: true
   defp terminal_review_agent_block?(_reason), do: false
@@ -890,6 +896,12 @@ defmodule SymphonyElixir.AgentRunner do
 
       {:error, {:review_agent_inconclusive, reason}} ->
         handle_review_agent_inconclusive(run_context, config, round, reason)
+
+      # The reviewer is unavailable, not inconclusive: the run is held with the push still
+      # waiting for a review, and reviews again once the API is back.
+      {:error, {:model_api_unreachable, info} = reason} ->
+        Logger.warning("Reviewer agent could not reach the model API for #{issue_context(run_context.issue)} error=#{info.error}; holding the push until it is reviewed")
+        {:error, reason}
 
       {:error, reason} ->
         {:error, {:review_agent_failed, reason}}

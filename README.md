@@ -275,7 +275,8 @@ Validate `symphony.yml` and every repo `WORKFLOW.md` it points at without starti
 (exit 0 with `Config OK: <path>`, or exit 1 with the error on stderr). It first prints the build it
 runs on stderr, `Symphony <version> (<commit>)`. It checks the same
 `WORKFLOW.md` startup reads: with `workflow_source: ref`, the committed copy on the last fetched
-base branch, not uncommitted edits. A `workspace.source` repo
+base branch, not uncommitted edits. A `strategy: worktree` repo
+fails when its `workspaces.repo` is missing or isn't a git repository. A `workspace.source` repo
 Symphony hasn't cloned yet passes with a warning, as Symphony clones it when it starts:
 
 ```bash
@@ -422,6 +423,16 @@ a `usage_limit` entry in `dispatch_state.blockers`. `dispatch_state.active?` tur
 every provider in use is held. Slack and webhook channels get one `usage_limit_paused` message when
 the hold starts and one `usage_limit_resumed` message when it clears, which is once Claude accepts
 the first run, not when it starts.
+
+When Claude can't reach its API at all (the network or DNS is down, so a turn ends on
+`API Error: Can't reach the API server … (ENOTFOUND)`), Symphony holds Claude runs the same way,
+`auto_pause` or not, instead of reading the turn as finished: no idle turn is counted and no issue
+is parked. The pre-push reviewer, QA and the acceptance gate hold too, so a push never goes ahead
+without a review and no verdict is recorded. One held run probes the API after a minute, then after
+twice as long each time it still fails (up to `unknown_reset_retry_seconds`). The log says
+`Model API unreachable (ENOTFOUND); holding dispatch` once, and the dashboards show
+`Paused: Claude API unreachable (ENOTFOUND), retries ~14:05`; `/api/v1/state` lists the hold
+under `usage_limits` with `reason: model_api_unreachable`.
 
 To leave part of the Claude limit for your own sessions, set
 `agent.usage_limit.headroom_utilization` (for example `0.9`; off by default). Once Claude reports

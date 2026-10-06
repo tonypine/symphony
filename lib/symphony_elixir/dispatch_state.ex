@@ -41,6 +41,7 @@ defmodule SymphonyElixir.DispatchState do
               kind: :usage_limit,
               provider: String.t(),
               scope: String.t() | :all,
+              reason: String.t(),
               window: String.t() | nil,
               resets_at: DateTime.t() | nil,
               resume_at: DateTime.t(),
@@ -85,7 +86,7 @@ defmodule SymphonyElixir.DispatchState do
 
   defp usage_limit_blocker(hold) do
     hold
-    |> Map.take([:provider, :scope, :window, :resets_at, :resume_at, :phase])
+    |> Map.take([:provider, :scope, :reason, :window, :resets_at, :resume_at, :phase])
     |> Map.put(:kind, :usage_limit)
   end
 

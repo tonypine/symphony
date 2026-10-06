@@ -262,6 +262,13 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       assert {:malformed, ^line} = AppServer.parse_event(line)
     end
 
+    test "parses tool_progress heartbeats" do
+      line =
+        ~s({"type":"tool_progress","tool_use_id":"toolu_1","tool_name":"Bash","parent_tool_use_id":null,"elapsed_time_seconds":12,"uuid":"u-1","session_id":"sess-1"})
+
+      assert {:tool_progress, "Bash"} = AppServer.parse_event(line)
+    end
+
     test "returns malformed for valid JSON with unrecognized shape" do
       line = ~s({"type":"unknown_event","data":"something"})
 
@@ -568,6 +575,50 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
         ~s({"type":"result","subtype":"error","is_error":true,"error":"API Error: 429 Too Many Requests","session_id":"sess-1"})
 
       assert {:rate_limited, %{retry_after_seconds: nil}, "API Error: 429 Too Many Requests"} = AppServer.parse_event(line)
+    end
+
+    test "parses a result that could not reach the model API as an unreachable API, not a completed turn" do
+      text = "API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)"
+
+      line =
+        Jason.encode!(%{
+          "type" => "result",
+          "subtype" => "success",
+          "is_error" => true,
+          "result" => text,
+          "total_cost_usd" => 0,
+          "usage" => %{"input_tokens" => 0, "output_tokens" => 0}
+        })
+
+      assert {:api_unreachable, info} = AppServer.parse_event(line)
+
+      assert info == %{
+               provider: "anthropic",
+               scope: :all,
+               window: nil,
+               resets_at: nil,
+               utilization: nil,
+               source: :api_unreachable,
+               error: "ENOTFOUND"
+             }
+
+      # An error result, and a result not marked as an error that used nothing.
+      line = ~s({"type":"result","subtype":"error","is_error":true,"error":"API Error: Connection error."})
+      assert {:api_unreachable, %{error: "connection error"}} = AppServer.parse_event(line)
+
+      line = ~s|{"type":"result","subtype":"success","is_error":false,"result":"API Error: fetch failed (ECONNRESET)","usage":{"input_tokens":0,"output_tokens":0}}|
+      assert {:api_unreachable, %{error: "ECONNRESET"}} = AppServer.parse_event(line)
+    end
+
+    test "keeps today's parsing for API errors the API returned and for agent text that mentions one" do
+      line = ~s({"type":"result","subtype":"success","is_error":true,"result":"API Error: 500 Internal server error","usage":{}})
+      assert {:turn_completed, _usage} = AppServer.parse_event(line)
+
+      line = ~s({"type":"result","subtype":"success","is_error":true,"result":"Done. The ENOTFOUND bug is fixed.","usage":{}})
+      assert {:turn_completed, _usage} = AppServer.parse_event(line)
+
+      line = ~s|{"type":"result","subtype":"success","is_error":false,"result":"API Error: fetch failed (ECONNRESET)","usage":{"input_tokens":12,"output_tokens":3}}|
+      assert {:turn_completed, %{total_tokens: 15}} = AppServer.parse_event(line)
     end
 
     test "keeps today's parsing for error results without usage-limit text" do
@@ -1910,6 +1961,51 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       end
     end
 
+    test "drops tool_progress heartbeats without forwarding or logging them" do
+      test_root = Path.join(System.tmp_dir!(), "symphony-elixir-claude-code-tool-progress-#{System.unique_integer([:positive])}")
+
+      try do
+        workspace_root = Path.join(test_root, "workspaces")
+        workspace = Path.join(workspace_root, "ACME-PROGRESS")
+        fake_claude = Path.join(test_root, "fake-claude")
+        File.mkdir_p!(workspace)
+
+        File.write!(fake_claude, """
+        #!/bin/sh
+        printf '%s\\n' '{"type":"system","subtype":"init","session_id":"sess-progress","cwd":"/tmp","tools":[],"mcp_servers":[],"model":"claude-opus-4-5","permissionMode":"default","apiKeySource":"none"}'
+        printf '%s\\n' '{"type":"tool_progress","tool_use_id":"toolu_1","tool_name":"Bash","parent_tool_use_id":null,"elapsed_time_seconds":3,"uuid":"u-1","session_id":"sess-progress"}'
+        printf '%s\\n' '{"type":"tool_progress","tool_use_id":"toolu_1","tool_name":"Bash","parent_tool_use_id":null,"elapsed_time_seconds":6,"uuid":"u-2","session_id":"sess-progress"}'
+        printf '%s\\n' '{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"sess-progress","usage":{}}'
+        """)
+
+        File.chmod!(fake_claude, 0o755)
+
+        write_workflow_file!(Workflow.workflow_file_path(),
+          workspace_root: workspace_root,
+          agent_kind: "claude",
+          agent_command: fake_claude
+        )
+
+        session = local_session(workspace, test_root)
+        test_pid = self()
+        on_message = fn msg -> send(test_pid, {:turn_msg, msg}) end
+        issue = %{id: "issue-progress", identifier: "ACME-PROGRESS"}
+
+        log =
+          ExUnit.CaptureLog.capture_log(fn ->
+            send(test_pid, {:result, AppServer.run_turn(session, "do the thing", issue, on_message: on_message)})
+          end)
+
+        assert_received {:result, {:ok, _result}}
+        assert_received {:turn_msg, {:session_started, "sess-progress"}}
+        refute_received {:turn_msg, {:tool_progress, _tool_name}}
+        refute_received {:turn_msg, {:notification, _text}}
+        refute log =~ "unparseable"
+      after
+        File.rm_rf(test_root)
+      end
+    end
+
     test "falls back to the result text when no rate_limit_event arrives" do
       test_root =
         Path.join(
@@ -1942,6 +2038,47 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
 
         assert {:error, {:usage_limited, %{window: nil, resets_at: ~U[2025-10-03 23:00:00Z], source: :result_text}}} =
                  AppServer.run_turn(session, "do the thing", nil, [])
+      after
+        File.rm_rf(test_root)
+      end
+    end
+
+    test "a turn that can't reach the model API fails as an unreachable API on the run's provider" do
+      test_root = Path.join(System.tmp_dir!(), "symphony-elixir-claude-code-api-unreachable-#{System.unique_integer([:positive])}")
+
+      try do
+        workspace_root = Path.join(test_root, "workspaces")
+        workspace = Path.join(workspace_root, "ACME-OUTAGE")
+        fake_claude = Path.join(test_root, "fake-claude")
+        File.mkdir_p!(workspace)
+
+        File.write!(fake_claude, """
+        #!/bin/sh
+        printf '%s\\n' '{"type":"system","subtype":"init","session_id":"sess-outage","cwd":"/tmp","tools":[],"mcp_servers":[],"model":"claude-opus-4-5","permissionMode":"default","apiKeySource":"none"}'
+        printf '%s\\n' '{"type":"system","subtype":"api_error","level":"error","error":{"cause":{"code":"ENOTFOUND"}},"retryAttempt":10,"maxRetries":10,"session_id":"sess-outage"}'
+        printf '%s\\n' '{"type":"result","subtype":"success","is_error":true,"result":"API Error: Connection error (ENOTFOUND)","session_id":"sess-outage","total_cost_usd":0,"usage":{"input_tokens":0,"output_tokens":0}}'
+        exit 1
+        """)
+
+        File.chmod!(fake_claude, 0o755)
+
+        write_workflow_file!(Workflow.workflow_file_path(),
+          workspace_root: workspace_root,
+          agent_kind: "claude",
+          agent_command: fake_claude
+        )
+
+        session = Map.put(local_session(workspace, test_root), :run_profile, %{provider: "openrouter", model: "anthropic/claude-opus-4.5"})
+        test_pid = self()
+        on_message = fn msg -> send(test_pid, {:turn_msg, msg}) end
+
+        with_openrouter_key("sk-or-test", fn ->
+          assert {:error, {:model_api_unreachable, %{provider: "openrouter", source: :api_unreachable, error: "ENOTFOUND"}}} =
+                   AppServer.run_turn(session, "do the thing", nil, on_message: on_message)
+        end)
+
+        assert_received {:turn_msg, {:turn_failed, "model API unreachable (ENOTFOUND)"}}
+        refute_received {:turn_msg, {:turn_completed, _usage}}
       after
         File.rm_rf(test_root)
       end

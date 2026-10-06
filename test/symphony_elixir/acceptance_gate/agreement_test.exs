@@ -282,6 +282,29 @@ defmodule SymphonyElixir.AcceptanceGate.AgreementTest do
       assert Agreement.latest("default", "one", run_store: FailingStore) == nil
     end
 
+    test "reads the run store again only after a gate run is written" do
+      put_runs([gate_run("one", "approve", %{judged_at: ~U[2026-10-04 08:00:00Z]})])
+      no_runner = [runner: Module.concat(__MODULE__, :NoRunner)]
+      assert %{recent: [%{issue_id: "one"}]} = Agreement.snapshot(no_runner)
+      assert %{issue_id: "one"} = Agreement.latest("default", "one")
+
+      # Written behind RunStore's back: the kept verdicts don't see it.
+      hidden = gate_run("hidden", "rework", %{judged_at: ~U[2026-10-04 09:00:00Z]})
+
+      assert {:atomic, :ok} =
+               :mnesia.transaction(fn ->
+                 :mnesia.write({:symphony_run_store_runs, {"default", hidden.run_id}, "default", hidden.run_id, hidden})
+               end)
+
+      assert :ok = RunStore.put_run(%{repo_key: "default", run_id: "agent-run", kind: "agent", issue_id: "one"})
+      assert %{recent: [%{issue_id: "one"}]} = Agreement.snapshot(no_runner)
+      assert Agreement.latest("default", "hidden") == nil
+
+      put_runs([gate_run("two", "approve", %{judged_at: ~U[2026-10-04 10:00:00Z]})])
+      assert %{recent: [%{issue_id: "two"}, %{issue_id: "hidden"}, %{issue_id: "one"}]} = Agreement.snapshot(no_runner)
+      assert %{verdict: "rework"} = Agreement.latest("default", "hidden")
+    end
+
     test "an unreadable store or a dead runner shows an empty gate" do
       runner = spawn(fn -> :ok end)
       ref = Process.monitor(runner)

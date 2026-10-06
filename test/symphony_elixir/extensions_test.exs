@@ -821,7 +821,13 @@ defmodule SymphonyElixir.ExtensionsTest do
              "concurrency" => %{"max_total" => 10, "finishing_max" => 2, "forced_max" => 1},
              "claimed" => ["issue-http", "retry-http"],
              "rate_limits" => %{"primary" => %{"remaining" => 11}},
-             "linear_usage" => %{"window_ms" => 3_600_000, "total" => 0, "callers" => [], "queries" => []}
+             "linear_usage" => %{"window_ms" => 3_600_000, "total" => 0, "callers" => [], "queries" => []},
+             "orchestrator" => %{
+               "message_queue_len" => 0,
+               "snapshot_age_ms" => nil,
+               "snapshot_build_ms" => nil,
+               "snapshot_parts_ms" => %{}
+             }
            }
 
     conn = get(build_conn(), "/api/v1/MT-HTTP")
@@ -2386,6 +2392,7 @@ defmodule SymphonyElixir.ExtensionsTest do
             kind: :usage_limit,
             provider: "anthropic",
             scope: :all,
+            reason: "claude_usage_limit",
             window: "five_hour",
             resets_at: ~U[2026-10-03 14:03:00Z],
             resume_at: resume_at,
@@ -2414,6 +2421,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                "resets_at" => "2026-10-03T14:03:00Z",
                "resume_at" => DateTime.to_iso8601(resume_at),
                "source" => nil,
+               "error" => nil,
                "utilization" => nil,
                "issue_identifier" => "MT-HELD"
              }
@@ -2426,6 +2434,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "kind" => "usage_limit",
                  "provider" => "anthropic",
                  "scope" => "all",
+                 "reason" => "claude_usage_limit",
                  "window" => "five_hour",
                  "phase" => "paused",
                  "resets_at" => "2026-10-03T14:03:00Z",
