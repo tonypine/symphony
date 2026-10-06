@@ -28,6 +28,40 @@ final class UsageLimitNoticesTests: XCTestCase {
         )
     }
 
+    func testAnnouncesAnUnreachableAPIAndItsReturn() {
+        let outage = StateSnapshot.UsageLimit(
+            phase: .paused, resumeAt: now.addingTimeInterval(120), reason: "model_api_unreachable", error: "ENOTFOUND"
+        )
+        var canary = outage
+        canary.phase = .canary
+
+        XCTAssertEqual(
+            notices([poll([]), poll([outage]), poll([canary]), poll([outage]), poll([])]),
+            [
+                [],
+                [.init(title: "Symphony paused", body: "Claude API unreachable")],
+                [],
+                [],
+                [.init(title: "Symphony resumed", body: "Claude API reachable again")],
+            ]
+        )
+    }
+
+    func testAUsageLimitAfterAnOutageIsAnnouncedAsALimit() {
+        let outage = StateSnapshot.UsageLimit(phase: .paused, reason: "model_api_unreachable")
+
+        XCTAssertEqual(
+            notices([poll([]), poll([outage]), poll([claudeLimit]), poll([outage, claudeLimit]), poll([])]),
+            [
+                [],
+                [.init(title: "Symphony paused", body: "Claude API unreachable")],
+                [paused],
+                [.init(title: "Symphony paused", body: "Claude API unreachable")],
+                [resumed],
+            ]
+        )
+    }
+
     func testAHoldAlreadyInPlaceAtLaunchIsNotAnnounced() {
         XCTAssertEqual(notices([poll([claudeLimit]), poll([claudeLimit]), poll([])]), [[], [], [resumed]])
     }
