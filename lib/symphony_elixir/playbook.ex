@@ -31,6 +31,7 @@ defmodule SymphonyElixir.Playbook do
     review_brief
     scoped_tools
     status_map
+    ticket_types
     workpad_bootstrap
     workpad_template
   )

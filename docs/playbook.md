@@ -53,6 +53,7 @@ This catalog is kept in sync with `priv/playbook/` by
 | `review_brief` | — | One human-facing review brief per ticket, edited in place at every handoff: what to review, what changed, the decisions needed and the move that approves, changes or rejects. |
 | `scoped_tools` | — | How to discover and use the scoped linear_* and github_* tools Symphony injects for the current issue. |
 | `status_map` | — | Canonical Symphony issue state machine and what each state means for the agent. |
+| `ticket_types` | `issue` | Per-type steps for a ticket labelled type:bug, type:feature or plan, with a readiness check that sends a bug or feature missing a required section back to Backlog; renders nothing for an untyped ticket. |
 | `workpad_bootstrap` | `agent` | Find, reuse, or create the single persistent Linear workpad comment and reconcile it before new work. |
 | `workpad_template` | `agent` | Canonical structure for the persistent workpad comment. |
 
@@ -65,6 +66,16 @@ and where a plan's artifacts live.
 review brief at their handoffs, so render `review_brief` in any workflow that renders
 them. The brief is the one comment written for the person reviewing; the workpad stays
 the agent's log.
+
+`ticket_types` routes a ticket by its type label (`type:bug`, `type:feature` or `plan`) and runs
+the readiness check on bugs and features. The templates the operator writes those tickets from,
+and the steps to create them in Linear, are in [`ticket-templates/`](ticket-templates/README.md).
+It renders nothing for a ticket with no type label; render it with a left-trimming tag right after
+your Step 0 routing, so an untyped ticket's prompt stays byte-identical:
+
+```liquid
+{%- render "ticket_types", issue: issue %}
+```
 
 ## Recommended composition
 
@@ -85,7 +96,10 @@ You are working on a Linear ticket `{{ issue.identifier }}`
 
 {% render "status_map" %}
 
-## Step 0 … Step 4   <!-- repo-authored routing + execution skeleton -->
+## Step 0   <!-- repo-authored routing -->
+{%- render "ticket_types", issue: issue %}
+
+## Step 1 … Step 4   <!-- repo-authored execution skeleton -->
 {% render "pr_feedback_sweep" %}
 {% render "ci_triage" %}
 {% render "escape_hatches" %}
