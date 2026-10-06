@@ -1394,9 +1394,13 @@ When enabled:
   nodes were left out; tap MUST refuse a point off the display and a path that is not in the last
   tree; keys, orientations, night modes and font scales MUST come from fixed allowlists; rotate MUST
   report success only once the display has turned, and `qa_android_rotate_failed` otherwise; and typed
-  text MUST reach the device's shell quoted so that no character in it can run a command. When the
+  text MUST reach the device's shell quoted so that no character in it can run a command.
+  `qa_android_put_file` MUST read its file under the `qa_put_file` rules (a regular file of bounded
+  size inside the worktree or the pass's `$TMPDIR`, no symlink, no other hard link, not swapped
+  while read) and MUST write only to `Download/<name>` on the device's shared storage, with a name
+  of letters, digits, `.`, `_` and `-`, then have the media scanner index it. When the
   pass ends or crashes, Symphony MUST reset the rotation, dark mode and font scale the pass changed,
-  uninstall the configured apps and every package installed in the pass, release the lease and
+  remove the files it put in Downloads, uninstall the configured apps and every package installed in the pass, release the lease and
   remove its private directory. An emulator that cannot start MUST
   surface as `qa_android_unavailable`, telling the agent to answer `blocked`. Other tool scopes MUST
   NOT list or run them. The QA prompt MUST give the agent the playbook's `build`, every APK path and
@@ -2073,7 +2077,8 @@ Distinct terminal reasons are important because retry logic and logs differ.
   orchestrator's message loop, with the result delivered back as a message. A claimed issue's claim
   stays held until the result is handled, so no poll dispatches it meanwhile. The pre-dispatch
   refresh of the issues a dispatch pass may start is read the same way, in the task that checks
-  dispatch readiness, and the pass decides with that answer.
+  dispatch readiness, and the pass decides with that answer. The read that orders a usage-limit
+  hold's held retries to pick its canary runs the same way, and the hold stays until it answers.
 - Reconciliation runs before dispatch on every tick.
 - Restart recovery is tracker-driven and filesystem-driven (without a durable orchestrator DB).
 - Startup terminal cleanup removes stale workspaces for issues already in terminal states.
@@ -2134,6 +2139,17 @@ The poller:
   forever. It logs `Ignoring stale check <name> in completed run <id>`. A check in a run that
   completed with any other conclusion stays as reported. To see this, a head whose rollup has no
   failed check and only GitHub Actions checks left unfinished also reads the head's workflow runs.
+- reads a landing's head (the `Merging` wait, the release of a held landing run, and the merge
+  tool) against the checks its base branch requires: a head still waiting on a check, with none
+  failed, also reads the required status checks of the base branch's rulesets
+  (`GET repos/{owner}/{repo}/rules/branches/{branch}`) and branch protection
+  (`GET repos/{owner}/{repo}/branches/{branch}`, unless its enforcement is `off`). Once every
+  required check reported and passed, the head is ready to land while checks the branch doesn't
+  require are still queued or running. A failed check still holds it, required or not. When the
+  branch requires no check, or the read fails (logged as `Could not read the required checks of
+  <branch>; waiting on every check`), the landing waits on every check as above. The poller
+  records the head it last saw ready to land for each `Merging` issue, and the orchestrator
+  releases a held landing run on it as on a green head.
 
 Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `enabled: true`):
 
@@ -2607,7 +2623,9 @@ reached (for Claude, a used-up five-hour or weekly window; for Codex, an error w
 - At `resume_at` the hold moves to `phase: canary` and exactly one held retry, the first in normal
   dispatch order (a forced issue first), is released as the canary; an immediate poll tick runs. The hold keeps covering
   every other run of that provider, so slots freed by held runs are not filled with other work on
-  it. With nothing held, the hold is cleared and no canary runs.
+  it. With nothing held, the hold is cleared and no canary runs. The held issues are read from the
+  tracker to order them; until that read answers the hold stays as it was, and a held retry that
+  comes due meanwhile stays held. A read that fails orders them by issue id.
 - When the canary's first `rate_limit_event` is `allowed` or `allowed_warning`, or the canary ends
   any way other than this limit (success, another failure, which follows the normal failure path),
   the hold is cleared and the other held retries return to normal candidate selection with their
@@ -3392,7 +3410,8 @@ Scoped GitHub tool extension contract:
 - `github_merge_pull_request`, if exposed, MUST merge only the current
   workspace branch's pull request, MUST refuse unless the current issue is in
   the human-approved `Merging` state, MUST refuse while any check is failing or
-  pending, and MUST pin the merge to the head commit whose checks were read.
+  pending (only the checks the base branch requires, when it requires any; see the CI poller's
+  landing read), and MUST pin the merge to the head commit whose checks were read.
 - GitHub read-only review sessions SHOULD hide GitHub tools that mutate local
   workspace Git metadata or remote GitHub state.
 

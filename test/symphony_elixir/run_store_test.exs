@@ -501,6 +501,76 @@ defmodule SymphonyElixir.RunStoreTest do
       assert large < small * 2, "list_issue_runs/2 took #{large} reductions over 420 runs, #{small} over 20"
     end
 
+    test "reads the runs with a status, the runs started on a day and a repository's workspace identifiers from the index" do
+      day = ~D[2026-10-05]
+      day_start = DateTime.new!(day, ~T[00:00:00.000000], "Etc/UTC")
+
+      put_run(@repo_key, "a-1", issue_identifier: "MT-1", status: "budget_exhausted", started_at: day_start)
+      put_run(@repo_key, "a-2", issue_identifier: "MT-1", status: "success", started_at: started_at(0))
+      put_run(@repo_key, "a-3", workspace_path: "/workspaces/repo-a/MT-2", status: "running", started_at: started_at(-86_400))
+      put_run(@repo_key, "a-4", issue_identifier: "MT-1" <> <<0>>, started_at: DateTime.add(day_start, 1, :day))
+      put_run(@repo_key, "a-5", issue_identifier: nil, workspace_path: "/workspaces/repo-a/MT-0")
+      put_run(@repo_key, "a-6", issue_identifier: 42)
+      put_run(@other_repo_key, "b-1", issue_identifier: "MT-9", status: "budget_exhausted", started_at: started_at(5))
+
+      assert run_ids(RunStore.list_runs_with_status("budget_exhausted")) |> Enum.sort() == ["a-1", "b-1"]
+      assert run_ids(RunStore.list_runs_with_status("running")) == ["a-3"]
+      assert RunStore.list_runs_with_status("missing") == []
+      assert run_ids(RunStore.list_runs_started_on(day)) == ["b-1", "a-2", "a-1"]
+      assert run_ids(RunStore.list_runs_started_on(Date.add(day, 1))) == ["a-4"]
+      assert RunStore.list_runs_started_on(Date.add(day, 2)) == []
+      assert RunStore.list_run_identifiers(@repo_key) == ["MT-0", "MT-1", "MT-1" <> <<0>>, "MT-2"]
+      assert RunStore.list_run_identifiers(@other_repo_key) == ["MT-9"]
+      assert RunStore.list_run_identifiers("missing-repo") == []
+      assert {:error, :invalid_repo_key} = RunStore.list_run_identifiers(" ")
+
+      # A run that changed status, start or workspace is found only under its new ones.
+      update = %{status: "success", started_at: started_at(-86_399), issue_identifier: "MT-3"}
+      assert :ok = RunStore.update_run(@repo_key, "a-1", update)
+      assert {:ok, 1} = RunStore.interrupt_running_runs(@repo_key, "restarted")
+      assert run_ids(RunStore.list_runs_with_status("budget_exhausted")) == ["b-1"]
+      assert RunStore.list_runs_with_status("running") == []
+      assert run_ids(RunStore.list_runs_with_status("failure")) == ["a-3"]
+      assert run_ids(RunStore.list_runs_started_on(day)) == ["b-1", "a-2"]
+      assert run_ids(RunStore.list_runs_started_on(Date.add(day, -1))) == ["a-1", "a-3"]
+      assert RunStore.list_run_identifiers(@repo_key) == ["MT-0", "MT-1", "MT-1" <> <<0>>, "MT-2", "MT-3"]
+
+      # Emptied as when RunStore starts, before the index is built: the reads scan the table.
+      assert :ok = RunIndex.create()
+      assert RunIndex.take_status("failure") == :unavailable
+      assert RunIndex.take_started(day_start, DateTime.add(day_start, 1, :day)) == :unavailable
+      assert RunIndex.take_identifiers(@repo_key) == :unavailable
+      assert run_ids(RunStore.list_runs_with_status("budget_exhausted")) == ["b-1"]
+      assert run_ids(RunStore.list_runs_started_on(day)) == ["b-1", "a-2"]
+      assert run_ids(RunStore.list_runs_started_on(Date.add(day, -1))) == ["a-1", "a-3"]
+      assert RunStore.list_run_identifiers(@repo_key) == ["MT-0", "MT-1", "MT-1" <> <<0>>, "MT-2", "MT-3"]
+      assert RunStore.list_run_identifiers("missing-repo") == []
+
+      restart_run_store()
+      assert {:ok, [{@repo_key, "a-3"}]} = RunIndex.take_status("failure")
+      assert RunStore.list_run_identifiers(@repo_key) == ["MT-0", "MT-1", "MT-1" <> <<0>>, "MT-2", "MT-3"]
+    end
+
+    test "the startup reads cost the same however many runs the store holds" do
+      day = ~D[2026-10-05]
+      put_startup_runs(@repo_key, "small", 20, 0)
+      small = startup_read_reductions(day)
+
+      # Older runs, on other days, with other statuses, for the same issues.
+      put_startup_runs(@repo_key, "large", 400, 86_400)
+      large = startup_read_reductions(day)
+      scan = reductions(fn -> RunStore.list_all_runs(:all) end)
+
+      assert length(RunStore.list_runs_started_on(day)) == 20
+      assert length(RunStore.list_runs_with_status("budget_exhausted")) == 2
+      assert RunStore.list_run_identifiers(@repo_key) == Enum.map(0..4, &"MT-#{&1}")
+
+      for {read, cost} <- large do
+        assert cost < small[read] * 2, "#{read} took #{cost} reductions over 420 runs, #{small[read]} over 20"
+        assert scan > cost * 5, "#{read} took #{cost} reductions over 420 runs, a scan #{scan}"
+      end
+    end
+
     test "an update moves a run whose start changed and keeps the record current" do
       put_indexed_runs(@repo_key, ["a-1", "a-2"], 0)
 
@@ -593,6 +663,27 @@ defmodule SymphonyElixir.RunStoreTest do
       record = %{repo_key: repo_key, run_id: run_id, issue_id: "issue-#{run_id}", status: "success", started_at: started_at(second)}
       assert :ok = RunStore.put_run(record)
     end)
+  end
+
+  # `count` runs of five issues, `offset` seconds before noon on 2026-10-05; the first two are
+  # budget-exhausted.
+  defp put_startup_runs(repo_key, prefix, count, offset) do
+    Enum.each(0..(count - 1), fn index ->
+      status = if index < 2 and offset == 0, do: "budget_exhausted", else: "success"
+      put_run(repo_key, "#{prefix}-#{index}", issue_identifier: "MT-#{rem(index, 5)}", status: status, started_at: started_at(-offset - index))
+    end)
+  end
+
+  defp put_run(repo_key, run_id, attrs) do
+    assert :ok = attrs |> Map.new() |> Map.merge(%{repo_key: repo_key, run_id: run_id}) |> RunStore.put_run()
+  end
+
+  defp startup_read_reductions(day) do
+    %{
+      started_on: reductions(fn -> RunStore.list_runs_started_on(day) end),
+      with_status: reductions(fn -> RunStore.list_runs_with_status("budget_exhausted") end),
+      identifiers: reductions(fn -> RunStore.list_run_identifiers(@repo_key) end)
+    }
   end
 
   defp started_at(second), do: DateTime.add(~U[2026-10-05 12:00:00.000000Z], second, :second)

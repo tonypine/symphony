@@ -56,6 +56,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
 
   @type ci_status :: %{
           optional(:workflow_runs) => [head_run()],
+          optional(:required_checks) => [String.t()],
           pr_url: String.t(),
           pr_title: String.t() | nil,
           pr_node_id: String.t() | nil,
@@ -132,6 +133,11 @@ defmodule SymphonyElixir.GitHub.PullRequest do
     end
   end
 
+  @doc """
+  Reads the pull request's head and its checks. With `required_checks: true` (a landing's read),
+  a head still waiting on a check, with none failed, also carries `:required_checks`: the names
+  of the checks its base branch requires, unless reading them failed.
+  """
   @spec fetch_ci_status(term(), keyword()) :: {:ok, ci_status()} | {:error, term()}
   def fetch_ci_status(pr_url, opts \\ []) do
     if is_binary(pr_url) and is_list(opts) do
@@ -621,6 +627,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
         checks: normalize_status_check_rollup(Map.get(pr, "statusCheckRollup"))
       }
       |> put_head_runs({host, owner, repo}, opts)
+      |> put_required_checks({host, owner, repo}, opts)
     else
       :error -> {:error, :invalid_pr_url}
       {:ok, _decoded} -> {:error, :invalid_pr_payload}
@@ -651,6 +658,69 @@ defmodule SymphonyElixir.GitHub.PullRequest do
     Enum.any?(checks, &is_binary(Map.get(&1, :run_id))) and
       Enum.all?(checks, &(passing_check?(&1) or (unfinished_check?(&1) and is_binary(Map.get(&1, :run_id)))))
   end
+
+  # A landing waits only on the checks its base branch requires (see `CiPoller.landing_action/1`),
+  # so a landing's read (`required_checks: true`) of a head still waiting on a check, with none
+  # failed, also reads them, from the branch's rulesets and its protection. When that read fails,
+  # `:required_checks` stays out and the landing waits on every check, as before.
+  defp put_required_checks({:ok, %{base_ref_name: base} = ci_status}, repo, opts) do
+    if Keyword.get(opts, :required_checks) == true and is_binary(base) and waiting_without_failure?(ci_status) do
+      case list_required_checks(repo, base, opts) do
+        {:ok, names} ->
+          {:ok, Map.put(ci_status, :required_checks, names)}
+
+        {:error, reason} ->
+          Logger.warning("Could not read the required checks of #{base}; waiting on every check pr_url=#{ci_status.pr_url} commit_sha=#{ci_status.commit_sha} reason=#{inspect(reason)}")
+          {:ok, ci_status}
+      end
+    else
+      {:ok, ci_status}
+    end
+  end
+
+  defp put_required_checks(error, _repo, _opts), do: error
+
+  defp waiting_without_failure?(%{checks: checks} = ci_status) do
+    Enum.all?(checks, &(passing_check?(&1) or unfinished_check?(&1))) and
+      (Enum.any?(checks, &unfinished_check?/1) or Enum.any?(Map.get(ci_status, :workflow_runs, []), &(&1.status != "COMPLETED")))
+  end
+
+  # The names of the status checks the branch requires: those of its rulesets'
+  # `required_status_checks` rules and those of its branch protection.
+  defp list_required_checks({host, owner, repo}, branch, opts) do
+    branch = URI.encode(branch, &URI.char_unreserved?/1)
+
+    with {:ok, rules} <- gh_api_json(host, "repos/#{owner}/#{repo}/rules/branches/#{branch}?per_page=100", opts),
+         {:ok, branch_info} <- gh_api_json(host, "repos/#{owner}/#{repo}/branches/#{branch}", opts) do
+      if is_list(rules) and is_map(branch_info) do
+        {:ok, Enum.uniq(ruleset_required_checks(rules) ++ protection_required_checks(branch_info))}
+      else
+        {:error, :invalid_required_checks_payload}
+      end
+    end
+  end
+
+  defp gh_api_json(host, endpoint, opts) do
+    with {:ok, output} <- run_gh(github_api_args(host, endpoint), opts) do
+      case Jason.decode(output) do
+        {:ok, decoded} -> {:ok, decoded}
+        {:error, _error} -> {:error, :invalid_required_checks_payload}
+      end
+    end
+  end
+
+  defp ruleset_required_checks(rules) do
+    for %{"type" => "required_status_checks", "parameters" => %{"required_status_checks" => checks}} when is_list(checks) <- rules,
+        %{"context" => context} when is_binary(context) <- checks,
+        do: context
+  end
+
+  defp protection_required_checks(%{"protection" => %{"required_status_checks" => %{"contexts" => contexts} = required}})
+       when is_list(contexts) do
+    if Map.get(required, "enforcement_level") == "off", do: [], else: Enum.filter(contexts, &is_binary/1)
+  end
+
+  defp protection_required_checks(_branch_info), do: []
 
   # A check that still reads unfinished in a workflow run that completed with a passing
   # conclusion is stale: GitHub never closed it, and the run can't end while one of its jobs
