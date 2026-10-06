@@ -71,6 +71,9 @@ defmodule SymphonyElixir.QaAndroid.DriverTest do
   defp command(["exec-out", "uiautomator" | _rest]), do: :ui_dump
   defp command(["exec-out" | _rest]), do: :screencap
   defp command(["logcat" | _rest]), do: :logcat
+  defp command(["push" | _rest]), do: :push
+  defp command(["shell", "am", "broadcast" | _rest]), do: :scan
+  defp command(["shell", "rm" | _rest]), do: :rm
 
   defp default_reply(["uninstall", id], packages, _apk_package) do
     Agent.update(packages, &Map.delete(&1, id))
@@ -202,7 +205,7 @@ defmodule SymphonyElixir.QaAndroid.DriverTest do
   describe "tools" do
     test "lists the qa_android tools and needs a driver" do
       assert Driver.tools() ==
-               ~w(qa_android_install qa_android_launch qa_android_stop qa_android_screenshot qa_android_ui_tree qa_android_tap qa_android_type qa_android_key qa_android_rotate qa_android_dark_mode qa_android_font_scale)
+               ~w(qa_android_install qa_android_launch qa_android_stop qa_android_screenshot qa_android_ui_tree qa_android_tap qa_android_type qa_android_key qa_android_rotate qa_android_dark_mode qa_android_font_scale qa_android_put_file)
 
       assert error_code(Driver.call_tool(nil, "qa_android_install", %{})) == "qa_android_driver_unavailable"
       assert {:error, {:qa_tool, _code, message}} = Driver.call_tool(nil, "qa_android_install", %{})
@@ -1170,6 +1173,151 @@ defmodule SymphonyElixir.QaAndroid.DriverTest do
   defp row(index, text, bounds \\ "[0,0][1080,200]") do
     bounds = if bounds, do: ~s( bounds="#{bounds}"), else: ""
     ~s(<node index="#{index}" text="#{text}" class="android.widget.TextView" package="#{@app_id}" clickable="true"#{bounds} />)
+  end
+
+  describe "qa_android_put_file" do
+    @scan ["shell", "am", "broadcast", "-a", "android.intent.action.MEDIA_SCANNER_SCAN_FILE", "-d"]
+
+    defp write_fixture!(path, contents \\ "date,minutes\n") do
+      File.mkdir_p!(Path.dirname(path))
+      File.write!(path, contents)
+      path
+    end
+
+    # The adb push reaches the test with the bytes of the copy it pushes.
+    defp pushing_device(replies \\ %{}) do
+      test = self()
+      device = device(replies)
+
+      fn executable, args, opts ->
+        with [_port_flag, _port, "-s", _serial, "push", copy, _dest] <- args, do: send(test, {:pushed_bytes, File.read!(copy)})
+        device.(executable, args, opts)
+      end
+    end
+
+    test "pushes a fixture from qa-evidence or $TMPDIR into Downloads and scans it, before or after an install", %{root: root, worktree: worktree} do
+      tmp_real = Path.join(root, "tmp-real")
+      File.mkdir_p!(tmp_real)
+      tmp_link = Path.join(root, "tmp-link")
+      File.ln_s!(tmp_real, tmp_link)
+      driver = start_driver(worktree, tmp_dir: tmp_link, cmd: pushing_device())
+      %{scratch_dir: scratch_dir} = GenServer.call(driver, :config)
+
+      write_fixture!(Path.join(worktree, "qa-evidence/import/rows.csv"))
+
+      assert {:ok, %{"path" => "Download/rows.csv", "bytes" => 13, "note" => note}} =
+               call(driver, "qa_android_put_file", %{"local_path" => "qa-evidence/import/rows.csv"})
+
+      assert note =~ "Downloads"
+      assert note =~ "qa_android_install wipes app data, not Downloads"
+      assert [["push", copy, "/sdcard/Download/rows.csv"], @scan ++ ["file:///sdcard/Download/rows.csv"]] = adb_calls()
+      assert String.starts_with?(copy, scratch_dir <> "/")
+      refute File.exists?(copy)
+      assert_received {:pushed_bytes, "date,minutes\n"}
+
+      # An install wipes app data, not the pushed file.
+      assert {:ok, %{"installed" => [@app_id]}} = call(driver, "qa_android_install")
+      refute Enum.any?(adb_calls(), &match?(["shell", "rm" | _rest], &1))
+
+      write_fixture!(Path.join(tmp_real, "bad.csv"), "")
+
+      assert {:ok, %{"path" => "Download/malformed-1.csv", "bytes" => 0}} =
+               call(driver, "qa_android_put_file", %{"local_path" => Path.join(tmp_link, "bad.csv"), "dest" => "Download/malformed-1.csv"})
+
+      assert [["push", _copy, "/sdcard/Download/malformed-1.csv"], _scan] = adb_calls()
+
+      # Putting a file again replaces it; the pass removes each file once when it ends.
+      assert {:ok, _result} = call(driver, "qa_android_put_file", %{"local_path" => "qa-evidence/import/rows.csv"})
+      adb_calls()
+
+      assert Driver.stop(driver) == :ok
+      [remove] = Enum.filter(adb_calls(), &match?(["shell", "rm" | _rest], &1))
+      assert remove == ["shell", "rm", "-f", "/sdcard/Download/rows.csv", "/sdcard/Download/malformed-1.csv"]
+    end
+
+    test "refuses a source outside the worktree and $TMPDIR, links, non-regular and oversized files", %{root: root, worktree: worktree} do
+      driver = start_driver(worktree)
+      outside = write_fixture!(Path.join(root, "outside/secret.csv"))
+      evidence = Path.join(worktree, "qa-evidence")
+      fixture = write_fixture!(Path.join(evidence, "rows.csv"))
+      File.ln_s!(outside, Path.join(evidence, "link.csv"))
+      File.ln_s!(Path.dirname(outside), Path.join(evidence, "outside-dir"))
+      File.ln!(fixture, Path.join(evidence, "hard.csv"))
+      write_fixture!(Path.join(evidence, "big.csv"), String.duplicate("x", 1_000_001))
+
+      for {local_path, expected} <- [
+            {outside, "is outside the QA worktree and $TMPDIR"},
+            {"../outside/secret.csv", "is outside the QA worktree and $TMPDIR"},
+            {"qa-evidence/outside-dir/secret.csv", "is outside the QA worktree and $TMPDIR"},
+            {"/etc/hosts", "is outside the QA worktree and $TMPDIR"},
+            {"qa-evidence/link.csv", "is a symlink"},
+            {"qa-evidence/missing.csv", "could not be read: :enoent"},
+            {"qa-evidence", "is not a regular file"},
+            {"qa-evidence/hard.csv", "has other hard links"},
+            {"qa-evidence/big.csv", "is over 1000000 bytes"}
+          ] do
+        assert {:error, {:qa_tool, "qa_android_put_file_refused", message}} =
+                 call(driver, "qa_android_put_file", %{"local_path" => local_path, "dest" => "Download/rows.csv"})
+
+        assert message =~ expected, "#{local_path}: #{message}"
+      end
+
+      assert adb_calls() == []
+      Driver.stop(driver)
+      refute Enum.any?(adb_calls(), &match?(["shell", "rm" | _rest], &1))
+    end
+
+    test "refuses any destination outside Download/ and bad arguments", %{worktree: worktree} do
+      driver = start_driver(worktree)
+      write_fixture!(Path.join(worktree, "qa-evidence/rows.csv"))
+      write_fixture!(Path.join(worktree, "qa-evidence/my rows.csv"))
+
+      for dest <- [
+            "Documents/rows.csv",
+            "/sdcard/Download/rows.csv",
+            "/data/local/tmp/rows.csv",
+            "download/rows.csv",
+            "Download/",
+            "Download/../rows.csv",
+            "Download/import/rows.csv",
+            "Download/.hidden",
+            "Download/rows;rm -rf.csv",
+            "Download/" <> String.duplicate("a", 129),
+            5
+          ] do
+        assert {:error, {:qa_tool, "invalid_arguments", message}} = call(driver, "qa_android_put_file", %{"local_path" => "qa-evidence/rows.csv", "dest" => dest})
+        assert message =~ "`dest` must be `Download/<name>`", inspect(dest)
+      end
+
+      # Without `dest`, the file's own name must fit.
+      assert {:error, {:qa_tool, "invalid_arguments", message}} = call(driver, "qa_android_put_file", %{"local_path" => "qa-evidence/my rows.csv"})
+      assert message =~ "`dest`"
+
+      for args <- [%{}, %{"local_path" => ""}, %{"local_path" => 7}, %{"local_path" => "a\0b"}] do
+        assert {:error, {:qa_tool, "invalid_arguments", message}} = call(driver, "qa_android_put_file", args)
+        assert message =~ "local_path"
+      end
+
+      assert adb_calls() == []
+    end
+
+    test "reports a push or scan that fails, and still removes the file when the pass ends", %{worktree: worktree} do
+      write_fixture!(Path.join(worktree, "qa-evidence/rows.csv"))
+      failed = {:ok, {"adb: error: failed to copy: remote couldn't create file: Read-only file system\n", 1}}
+      driver = start_driver(worktree, cmd: device(%{push: failed}))
+
+      assert {:error, {:qa_tool, "qa_android_adb_failed", message}} = call(driver, "qa_android_put_file", %{"local_path" => "qa-evidence/rows.csv"})
+      assert message =~ "Read-only file system"
+      %{scratch_dir: scratch_dir} = GenServer.call(driver, :config)
+      assert File.ls!(scratch_dir) == []
+
+      Driver.stop(driver)
+      assert ["shell", "rm", "-f", "/sdcard/Download/rows.csv"] in adb_calls()
+
+      scan_failed = start_driver(worktree, cmd: device(%{scan: {:error, :timeout}}))
+      assert {:error, {:qa_tool, "qa_android_adb_failed", message}} = call(scan_failed, "qa_android_put_file", %{"local_path" => "qa-evidence/rows.csv"})
+      assert message =~ "MEDIA_SCANNER_SCAN_FILE"
+    end
   end
 
   # What the device types for one adb command: its shell parses the command

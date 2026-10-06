@@ -1394,9 +1394,13 @@ When enabled:
   nodes were left out; tap MUST refuse a point off the display and a path that is not in the last
   tree; keys, orientations, night modes and font scales MUST come from fixed allowlists; rotate MUST
   report success only once the display has turned, and `qa_android_rotate_failed` otherwise; and typed
-  text MUST reach the device's shell quoted so that no character in it can run a command. When the
+  text MUST reach the device's shell quoted so that no character in it can run a command.
+  `qa_android_put_file` MUST read its file under the `qa_put_file` rules (a regular file of bounded
+  size inside the worktree or the pass's `$TMPDIR`, no symlink, no other hard link, not swapped
+  while read) and MUST write only to `Download/<name>` on the device's shared storage, with a name
+  of letters, digits, `.`, `_` and `-`, then have the media scanner index it. When the
   pass ends or crashes, Symphony MUST reset the rotation, dark mode and font scale the pass changed,
-  uninstall the configured apps and every package installed in the pass, release the lease and
+  remove the files it put in Downloads, uninstall the configured apps and every package installed in the pass, release the lease and
   remove its private directory. An emulator that cannot start MUST
   surface as `qa_android_unavailable`, telling the agent to answer `blocked`. Other tool scopes MUST
   NOT list or run them. The QA prompt MUST give the agent the playbook's `build`, every APK path and
