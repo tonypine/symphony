@@ -158,12 +158,22 @@ defmodule SymphonyElixir.HttpServer do
     end
   end
 
+  @doc """
+  The error for a `unix:` host with an empty socket path, which would otherwise be looked up
+  in DNS as a hostname and fail with `:nxdomain`.
+  """
+  @spec empty_unix_socket_message() :: String.t()
+  def empty_unix_socket_message do
+    ~s(the socket path in host "unix:" is empty: give one, as in "unix:/tmp/symphony.sock")
+  end
+
   defp parse_host({_, _, _, _} = ip), do: {:ok, ip}
   defp parse_host({_, _, _, _, _, _, _, _} = ip), do: {:ok, ip}
 
   # `unix:<path>` listens on a unix socket instead, as the verification dev server does on macOS
   # (`scripts/qa-dashboard-server.sh`), where Symphony serves it on loopback.
-  defp parse_host("unix:" <> path) when path != "", do: {:ok, {:local, path}}
+  defp parse_host("unix:"), do: {:error, empty_unix_socket_message()}
+  defp parse_host("unix:" <> path), do: {:ok, {:local, path}}
 
   defp parse_host(host) when is_binary(host) do
     charhost = String.to_charlist(host)
