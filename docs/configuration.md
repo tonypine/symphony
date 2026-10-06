@@ -193,7 +193,8 @@ issues:
   - an agent moves a `breakdown` parent to `In Review` and its ticket says a human reviews the plan:
     an `auto_review.acceptance_gate.escalate.labels` label other than `breakdown` (`needs-human`)
     or a title or description matching one of its `ticket_patterns` ("must not auto-approve",
-    "human review");
+    "human review"; naming the `Human Review` state doesn't count, see
+    [What escalates](acceptance_gate.md#what-escalates));
   - an agent that posted a `linear_request_human_action` request (or found it still open) moves
     its issue to `Backlog` or `In Review`, as the blocked-access escape hatch does.
 

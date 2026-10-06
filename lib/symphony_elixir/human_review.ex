@@ -90,13 +90,14 @@ defmodule SymphonyElixir.HumanReview do
   @doc """
   True when the ticket says a person reviews it: an `auto_review.acceptance_gate.escalate` label
   other than `breakdown` (every plan has that one), or a title or description matching one of its
-  `ticket_patterns` ("must not auto-approve", "needs human", "human review").
+  `ticket_patterns` ("must not auto-approve", "needs human", "human review"), where naming this
+  state doesn't count (`Escalation.ticket_reasons/3`).
   """
   @spec requested_by_ticket?(Issue.t(), Schema.t()) :: boolean()
   def requested_by_ticket?(%Issue{} = issue, %Schema{} = settings) do
     rules = settings.auto_review.acceptance_gate.escalate
     rules = %{rules | labels: Enum.reject(rules.labels, &Issue.breakdown_label?/1)}
-    Escalation.ticket_reasons(%{issue | labels: issue.labels || []}, rules) != []
+    Escalation.ticket_reasons(%{issue | labels: issue.labels || []}, rules, human_review_state: state(settings)) != []
   end
 
   @doc """
