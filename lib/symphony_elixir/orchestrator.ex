@@ -3208,7 +3208,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     case CiPoller.observed_head(issue_id, opts) do
       %{commit_sha: commit_sha, conclusion: "SUCCESS"} -> commit_sha == wait.commit_sha
-      _observed -> CiPoller.landing_ready_head(issue_id, opts) == wait.commit_sha
+      _observed -> is_binary(wait.commit_sha) and CiPoller.landing_ready_head(issue_id, opts) == wait.commit_sha
     end
   end
 

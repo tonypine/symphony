@@ -2070,6 +2070,23 @@ defmodule SymphonyElixir.CoreTest do
     assert Orchestrator.should_dispatch_issue_for_test(issue, released)
   end
 
+  test "a held landing issue whose wait has no head SHA stays held while no head is ready to land" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_active_states: ["Todo", "In Progress", "Merging", "Rework"],
+      tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
+    )
+
+    issue_id = "issue-merging-ci-no-sha"
+    issue = %Issue{id: issue_id, identifier: "MT-237", title: "Land after CI", state: "Merging", repo_key: "api"}
+    state = merging_ci_hold_state(issue_id, nil, DateTime.utc_now())
+
+    # No record at all, then a record with no head ready to land.
+    assert held_after_release?(state, issue)
+    put_observed_head!(issue_id, "sha-head", "IN_PROGRESS")
+    assert held_after_release?(state, issue)
+  end
+
   test "a held landing issue with a red head goes through the CI-failure path, not a landing dispatch" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "memory",
