@@ -144,8 +144,9 @@ issues:
   once every sub-ticket is terminal; one a person moves here waits for them. With the state off it
   goes to `Done` on merge as before. Tickets that went `Done` before this wait existed are not
   revisited: `mix symphony.done_with_open_subtickets --config /path/to/symphony.yml` lists every
-  parent in a terminal state with sub-tickets still open, without changing anything. The breakdown run ends with the parent in `In Review` and its
-  sub-tickets in `Backlog`. A human approves the plan by moving the parent
+  parent in a terminal state with sub-tickets still open, without changing anything. The breakdown
+  run ends with the parent in `In Review` and its sub-tickets in `Backlog`. A human approves the
+  plan by moving the parent
   from `In Review` to this state, and on the next poll Symphony moves every sub-ticket still in
   `Backlog` to `Todo` (blocked-by links keep the order); moving the parent to `Rework` instead
   cancels the sub-tickets the rejected breakdown run created and re-plans. Each batch is listed
