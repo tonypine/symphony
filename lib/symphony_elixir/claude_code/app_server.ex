@@ -11,13 +11,13 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Agent
   alias SymphonyElixir.GitHub.Hosts
+  alias SymphonyElixir.OpenRouter
   alias SymphonyElixir.OpenRouter.Models, as: OpenRouterModels
   alias SymphonyElixir.ProjectGuidePrompt
   alias SymphonyElixir.Secret
   alias SymphonyElixir.SharedSkills
   alias SymphonyElixir.UsageLimit
 
-  @openrouter_base_url "https://openrouter.ai/api"
   @agent_runtime_env AgentEnv.runtime_marker_name()
   @agent_runtime_env_value AgentEnv.runtime_marker_value()
   @settings_dir_prefix "symphony-claude-settings-"
@@ -1070,7 +1070,8 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   # The env that points `claude` at the run's provider, read at each launch so the key never
   # sits in the session. Anthropic runs add nothing. Every model id `claude` can pick on its own
   # (subagents, the small fast model for background calls, the alias defaults) points at the
-  # profile's model, since OpenRouter does not know Anthropic's own ids.
+  # profile's model, since OpenRouter does not know Anthropic's own ids. The base URL is
+  # openrouter.ai's outside QA mode (`OpenRouter.base_url/1`).
   defp provider_env(%{provider: "openrouter"} = profile) do
     case Config.openrouter_api_key() do
       nil ->
@@ -1083,7 +1084,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
         {:ok,
          %{
-           "ANTHROPIC_BASE_URL" => @openrouter_base_url,
+           "ANTHROPIC_BASE_URL" => OpenRouter.base_url(),
            "ANTHROPIC_AUTH_TOKEN" => Secret.unwrap(api_key),
            "ANTHROPIC_API_KEY" => "",
            "CLAUDE_CODE_SUBAGENT_MODEL" => model,

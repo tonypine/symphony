@@ -763,11 +763,17 @@ example `ERL_EPMD_PORT=24369`, and use a `symphony.yml` whose `dashboard.port` i
 Each `symphony check` the app runs (on Save in Settings, and before Restart) goes to the app's stderr in QA
 mode: its exit status and output, which start with the build that checked, `Symphony <version> (<commit>)`.
 
-Two more variables, read only in QA mode:
+Three more variables, read only in QA mode:
 
 - `SYMPHONY_BAR_UPDATE_URL` replaces GitHub's `releases/latest` URL for update checks, for a local update feed
   that answers in the same format. An update in QA mode relaunches the app with its environment, so the new
   version is in QA mode too, with the same folders.
+- `SYMPHONY_QA_OPENROUTER_URL` points Settings' OpenRouter section (Test connection, the Models list) at a stub
+  OpenRouter instead of `https://openrouter.ai`, so QA never needs a real key: the API base `symphony
+  openrouter-stub` prints, such as `http://127.0.0.1:4100/api`. Only an `http` or `https` URL on a loopback host
+  counts. The Symphony the app runs gets it too and, also only in QA mode, checks and runs OpenRouter models
+  against the stub. Outside QA mode the app always talks to `https://openrouter.ai`, whatever the environment
+  says. See [OpenRouter in QA](../docs/configuration.md#qa-passes).
 - `SYMPHONY_BAR_QA_SCRIPTED=1` lets a script drive the app without Accessibility access. The app presses the
   menu item whose title the first line of a file in `commands/` holds (files are taken in name order and
   deleted; a name starting with `.` is skipped, so write one and rename it). As a click would, it presses
