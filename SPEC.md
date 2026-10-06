@@ -363,6 +363,10 @@ are repo-scoped by default, with selected aggregate helpers for cross-repo accou
 Live scheduler state still owns dispatch decisions. Durable records are used for restart recovery
 and observability, not as a second concurrent scheduler.
 
+A running run's record MAY be written on a bounded cadence rather than on every agent event. The
+Elixir implementation writes it when the run's session, PR, workspace, worker host or turn changes,
+and otherwise at most every 5 s; the run's completion writes the final record.
+
 ### 4.2 Stable Identifiers and Normalization Rules
 
 - `Issue ID`
@@ -2050,6 +2054,12 @@ Distinct terminal reasons are important because retry logic and logs differ.
 
 - The orchestrator serializes state mutations through one authority to avoid duplicate dispatch.
 - `claimed` and `running` checks are REQUIRED before launching any worker.
+- Tracker calls the orchestrator waits on (a retry's issue refresh, the post-PR and blocked-state
+  moves, breakdown-parent parking, reviews, closes and plan comments) SHOULD run outside the
+  orchestrator's message loop, with the result delivered back as a message. A claimed issue's claim
+  stays held until the result is handled, so no poll dispatches it meanwhile. The pre-dispatch
+  refresh of the issues a dispatch pass may start is read the same way, in the task that checks
+  dispatch readiness, and the pass decides with that answer.
 - Reconciliation runs before dispatch on every tick.
 - Restart recovery is tracker-driven and filesystem-driven (without a durable orchestrator DB).
 - Startup terminal cleanup removes stale workspaces for issues already in terminal states.
