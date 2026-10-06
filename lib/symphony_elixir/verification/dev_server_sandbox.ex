@@ -103,21 +103,23 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
     end
   end
 
+  # The macOS version can't change while Symphony runs, so a bind refused or allowed is kept; a
+  # probe that couldn't run is tried again next time.
   defp check_confinement(executable, profile, opts) do
-    if Keyword.get(opts, :check_confinement, true) do
-      key = {__MODULE__, :confinement, executable}
+    key = {__MODULE__, :confinement, executable}
 
-      case :persistent_term.get(key, nil) do
-        nil ->
-          verdict = probe_confinement(executable, profile)
-          :persistent_term.put(key, verdict)
-          verdict
+    cond do
+      not Keyword.get(opts, :check_confinement, true) ->
+        :ok
 
-        verdict ->
-          verdict
-      end
-    else
-      :ok
+      verdict = :persistent_term.get(key, nil) ->
+        verdict
+
+      true ->
+        case probe_confinement(executable, profile) do
+          {:error, {:dev_server_sandbox_unconfined, {:probe_failed, _status, _output}}} = error -> error
+          verdict -> tap(verdict, &:persistent_term.put(key, &1))
+        end
     end
   end
 

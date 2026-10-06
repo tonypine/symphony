@@ -87,11 +87,16 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
                command(workspace, tmp_dir, executable)
     end
 
-    test "doesn't hand back the command when the bind check can't run", %{root: root, workspace: workspace, tmp_dir: tmp_dir} do
-      executable = fake_sandbox_exec(root, "echo 'perl: not found' >&2\nexit 127")
+    test "doesn't hand back the command when the bind check can't run, and tries it again next time", %{root: root, workspace: workspace, tmp_dir: tmp_dir} do
+      calls = Path.join(root, "probe-calls")
+      executable = fake_sandbox_exec(root, "echo call >> '#{calls}'\necho 'perl: not found' >&2\nexit 127")
 
-      assert {:error, {:dev_server_sandbox_unconfined, {:probe_failed, 127, "perl: not found"}}} =
-               command(workspace, tmp_dir, executable)
+      for _attempt <- 1..2 do
+        assert {:error, {:dev_server_sandbox_unconfined, {:probe_failed, 127, "perl: not found"}}} =
+                 command(workspace, tmp_dir, executable)
+      end
+
+      assert File.read!(calls) == "call\ncall\n"
     end
 
     test "fails when sandbox-exec is missing", %{root: root, workspace: workspace, tmp_dir: tmp_dir} do
