@@ -432,6 +432,16 @@ final class ReposListTests: XCTestCase {
         XCTAssertEqual(try read.entries.get().map(\.key), ["symphony"])
     }
 
+    func testReadsAnEmptyFlowListAsNoRepos() throws {
+        let file = root.appendingPathComponent("symphony.yml")
+        try "repositories: []\n".write(to: file, atomically: false, encoding: .utf8)
+
+        let read = ReposConfig.read(path: file.path)
+
+        XCTAssertEqual(read.repos, .entries([]))
+        XCTAssertEqual(window(.stopped, nil, config: read).content, .empty(.noRepos))
+    }
+
     func testSaysWhySymphonyYmlCantBeRead() throws {
         let none = ReposConfig.read(path: " ")
         XCTAssertEqual(none.repos, .noPath)

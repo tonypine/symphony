@@ -253,6 +253,22 @@ final class RepositoriesConfigTests: XCTestCase {
         )
     }
 
+    func testReadsAnEmptyFlowListAsNoRepos() throws {
+        XCTAssertEqual(try RepositoriesConfig.entries(in: "repositories: []\n"), [])
+        XCTAssertEqual(try RepositoriesConfig.entries(in: "repositories: [ ]  # none yet\nagent: {}\n"), [])
+    }
+
+    func testAddToAnEmptyFlowListTurnsItIntoABlockList() throws {
+        XCTAssertEqual(
+            try RepositoriesConfig.adding(RepositoryEntry(key: "a"), to: "repositories: []\nagent: {}\n"),
+            "repositories:\n  - key: a\nagent: {}\n"
+        )
+        XCTAssertEqual(
+            try RepositoriesConfig.adding(RepositoryEntry(key: "a"), to: "repositories: []   # none yet\n"),
+            "repositories: # none yet\n  - key: a\n"
+        )
+    }
+
     func testAddToAnEmptySectionGoesRightUnderIt() throws {
         XCTAssertEqual(
             try RepositoriesConfig.adding(RepositoryEntry(key: "a"), to: "repositories:\n  # none yet\nagent: {}\n"),
@@ -622,7 +638,7 @@ final class RepositoriesConfigTests: XCTestCase {
     func testRejectsUnsupportedShapes() {
         let cases: [(String, Int)] = [
             ("repositories: [{key: a}]\n", 1),
-            ("repositories: []\n", 1),
+            ("repositories: []\n  - key: a\n", 2),
             ("repositories: &repos\n  - key: a\n", 1),
             ("repositories:\n  - key: &k a\n", 2),
             ("repositories:\n  - key: a\n    route: *shared\n", 3),

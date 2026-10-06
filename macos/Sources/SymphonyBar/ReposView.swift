@@ -356,8 +356,10 @@ struct RepoDetailView: View {
 
     private var footer: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
+            // A bordered macOS button ignores the role and the label's colour; a red tint on a prominent one shows.
             Button(DisconnectRepo.buttonTitle, role: .destructive) { model.onDisconnect(repo.key) }
-                .foregroundStyle(repo.actions.disconnectProblem == nil ? Color.red : Color.secondary)
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
                 .disabled(repo.actions.disconnectProblem != nil)
                 .help(repo.actions.disconnectProblem ?? "Remove the repo from symphony.yml. No folder is deleted.")
             if let problem = repo.actions.disconnectProblem {

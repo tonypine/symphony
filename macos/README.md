@@ -463,7 +463,7 @@ Symphony** (or that Symphony is starting, or isn't answering). A Symphony too ol
 
 In place of the repos, the detail shows:
 
-- **No repos connected**, with **Add Repo…**, when `repositories:` is empty or missing;
+- **No repos connected**, with **Add Repo…**, when `repositories:` is empty (nothing under it, or `[]`) or missing;
 - **Symphony doesn't know where its config is.**, with **Open Settings…**, when no `symphony.yml` is set;
 - the error, with **Reveal in Finder** and **Try Again**, when the `symphony.yml` can't be read.
 
@@ -541,8 +541,8 @@ or no longer has the repo.
 - **Remove Clone…** (managed repos only) deletes Symphony's clone under `workspaces.clones_root`
   after you confirm; the repo stays connected and Symphony clones it again when it starts or on its
   next dispatch. It is disabled, with the reason next to it, while an agent runs in a worktree of
-  the clone (any repo with the same source), while Symphony is starting or doesn't list its running
-  agents, and before the first clone. The app asks Symphony again after you confirm, and deletes the
+  the clone (any repo with the same source), and while Symphony is starting or doesn't list its running
+  agents. Before the first clone the detail says "Not cloned yet" and shows no Remove Clone…. The app asks Symphony again after you confirm, and deletes the
   folder only when, with symlinks resolved, it is inside the clones folder: `clones_root` with `~`
   expanded and a relative path taken from the folder of `symphony.yml`, or
   `~/.local/share/symphony/repos`.
