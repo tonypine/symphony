@@ -1625,6 +1625,47 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
     end
   end
 
+  test "merge_pull_request merges past a check left in progress in a completed workflow run" do
+    workspace = tmp_workspace!("github-agent-merge-stale")
+
+    try do
+      pr_url = "https://github.com/acme/symphony/pull/3051"
+      run_url = "https://github.com/acme/symphony/actions/runs/37391815662"
+      runs_endpoint = "repos/acme/symphony/actions/runs?head_sha=abc123&per_page=100"
+
+      rollup = [
+        %{"name" => "ci", "status" => "COMPLETED", "conclusion" => "SUCCESS", "detailsUrl" => "#{run_url}/job/1"},
+        %{"name" => "server-test", "status" => "IN_PROGRESS", "conclusion" => nil, "detailsUrl" => "#{run_url}/job/2"}
+      ]
+
+      merge_with_run = fn run, on_merge ->
+        pr_runner = merge_gh_runner(pr_url, "OPEN", rollup, on_merge)
+
+        gh_runner = fn
+          ["api", ^runs_endpoint], _opts -> {Jason.encode!(%{"workflow_runs" => [run]}), 0}
+          args, opts -> pr_runner.(args, opts)
+        end
+
+        GitHub.merge_pull_request(merge_context(workspace),
+          git_runner: branch_runner(workspace),
+          gh_runner: gh_runner,
+          linear_client: issue_state_client("Merging")
+        )
+      end
+
+      running = %{"id" => 37_391_815_662, "status" => "in_progress", "conclusion" => nil}
+      assert {:error, {:checks_not_passing, :pending}} = merge_with_run.(running, fn args -> flunk("merge must not run: #{inspect(args)}") end)
+
+      completed = %{"id" => 37_391_815_662, "status" => "completed", "conclusion" => "success"}
+
+      capture_log(fn ->
+        assert {:ok, %{"merged" => true, "head_sha" => "abc123"}} = merge_with_run.(completed, fn _args -> :ok end)
+      end)
+    after
+      File.rm_rf(workspace)
+    end
+  end
+
   test "merge_pull_request needs the head commit to pin the merge" do
     workspace = tmp_workspace!("github-agent-merge-head")
 

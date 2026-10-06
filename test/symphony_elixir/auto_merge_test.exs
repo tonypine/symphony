@@ -229,6 +229,25 @@ defmodule SymphonyElixir.AutoMergeTest do
     assert AutoMerge.owns_issue?(merging)
   end
 
+  test "a refused PR that is UNSTABLE only for a stale check is squash-merged directly" do
+    now = ~U[2026-10-03 12:00:00Z]
+    put_run!(now)
+    merging = issue("Merging")
+    track([merging])
+    activity(head: "head-1", merge_state: "UNSTABLE")
+    # `server-test` still read in progress in a workflow run that completed; the CI read counts it finished.
+    stale = %{name: "server-test", status: "COMPLETED", conclusion: "SUCCESS", stale: true}
+    ci_status(merge_state: "UNSTABLE", checks: [check("SUCCESS"), stale])
+    replies(%{enable_auto_merge: {:error, {:gh_failed, ["api", "graphql"], 1, "gh: Protected branch rules not configured for this branch"}}})
+
+    log = capture_log(fn -> assert {:ok, %{actions: [{:auto_merge, @issue_id, "merging"}]}} = poll(now) end)
+
+    assert_received {:squash_merge, @pr_url, %{head_sha: "head-1"}}
+    assert log =~ "squash-merging the clean PR directly"
+    refute_received {:issue_comment, _issue_id, _body}
+    assert AutoMerge.owns_issue?(merging)
+  end
+
   test "a PR that merged while auto-merge was refused takes the merged path, not the landing agent" do
     now = ~U[2026-10-03 12:00:00Z]
     put_run!(now)
@@ -258,6 +277,8 @@ defmodule SymphonyElixir.AutoMergeTest do
           [merge_state: "CLEAN", checks: [check("SUCCESS"), check("FAILURE")]],
           [merge_state: "CLEAN", checks: [%{name: "make-all", status: "IN_PROGRESS", conclusion: nil}]],
           [merge_state: "UNSTABLE", checks: []],
+          [merge_state: "UNSTABLE", checks: [check("SUCCESS")]],
+          [merge_state: "UNSTABLE", checks: [%{name: "server-test", status: "COMPLETED", conclusion: "FAILURE", stale: true}]],
           [merge_state: "BEHIND", checks: [check("SUCCESS")]],
           [merge_state: "CLEAN", state: "CLOSED", checks: []],
           [merge_state: "CLEAN", commit_sha: "head-2", checks: []],
