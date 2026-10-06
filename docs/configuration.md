@@ -1009,6 +1009,11 @@ pull_requests:
   with a hidden `<!-- symphony:agent -->` marker and skips those.
 - `checks.retry_failed_once` retries one likely-flaky failure before escalating.
 - `checks.max_fix_attempts` bounds automated CI rework.
+- A red head on an issue an agent parked for a person (outside `tracker.active_states`, with the
+  `human_actions.label` label, `needs-human` or another `auto_review.acceptance_gate.escalate.labels`
+  label other than `plan` and `breakdown`) gets no re-run, CI-fix run, escalation or state move,
+  and uses no fix attempt. The normal CI flow resumes once a person removes the label, moves the
+  issue to an active state, or the head turns green.
 - `checks.landing_wait_timeout_ms` bounds how long a `Merging` issue waits for CI. When a landing
   run ends with the PR head's checks pending, Symphony holds the issue in `Merging` and dispatches
   the landing agent again once the CI poller sees that head go green (a red head goes through the

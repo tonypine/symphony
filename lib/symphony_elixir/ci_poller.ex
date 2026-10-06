@@ -796,8 +796,8 @@ defmodule SymphonyElixir.CiPoller do
       Enum.any?(labels || [], &(is_binary(&1) and MapSet.member?(wanted, normalize_state_name(&1))))
   end
 
-  # `breakdown` is an acceptance gate label every plan carries, not a request for a person (see
-  # `HumanReview.requested_by_ticket?/2`).
+  # `plan` and `breakdown` are acceptance gate labels every plan carries, not a request for a
+  # person (see `HumanReview.requested_by_ticket?/2`).
   defp person_labels(settings) do
     [settings.human_actions.label, @needs_human_label | settings.auto_review.acceptance_gate.escalate.labels]
     |> Enum.reject(&Issue.breakdown_label?/1)
