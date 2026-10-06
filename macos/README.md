@@ -144,10 +144,10 @@ app opens" in Settings (see [Launch at Login](#launch-at-login)).
   instead, and Update to vX still installs it. See [Skip a release](#skip-a-release).
 - **Update to vX** downloads and verifies the release, waits for agent runs like Restart, then swaps the app
   and relaunches it. See [Install an update](#install-an-update).
-- **Repos…** opens the Repos window: one row per connected repo with its source, GitHub remote, Linear
-  routing, `WORKFLOW.md` status, last fetch and running agents, **Add Repo…** to connect another, and
-  per repo **Edit…**, **Disconnect…** and, for a managed clone, **Remove Clone…**.
-  See [Repos](#repos).
+- **Repos…** opens the Repos window: a sidebar of the connected repos and the detail of the selected one
+  (its source, GitHub remote, Linear routing, `WORKFLOW.md` status, last fetch, running agents and
+  acceptance gate), **Add Repo…** to connect another, and per repo **Edit…**, **Disconnect…** and, for a
+  managed clone, **Remove Clone…**. See [Repos](#repos).
 - **Quit** stops Symphony first and asks before stopping active agent runs.
 
 The sections below describe each in detail.
@@ -416,35 +416,61 @@ The menu follows within one poll. A Symphony too old to report forced tickets sh
 
 ## Repos
 
-Repos… opens the Repos window, with one row per entry of `repositories:` in config order, as Symphony's
-`GET /api/v1/repos` reports them:
+Repos… opens the Repos window, titled **Repos**: a sidebar of the repos on the left and the detail of the
+selected one on the right. It opens at 880×600 the first time and at least 720×460, so it fits a 1024×768
+screen; after that it reopens at the size and position it was left at, on the repo selected last.
 
-- The key, marked `default` for the repo that takes the issues no other repo's route matches.
-- **Source**: `Local folder` with the checkout agent worktrees are made from, or `Managed clone of owner/repo`
-  for a `workspace.source` repo, with the clone's path or `not cloned yet`.
-- **GitHub**: the `owner/repo` of the source, or of the checkout's `origin` remote; `no GitHub remote`
-  when it has none.
-- **Linear**: the route's team, projects, labels and assignee, or `no route`.
-- **WORKFLOW.md**: `found, valid`, `found, invalid` or `missing`, in red when it doesn't load, with
-  Symphony's error under it. Symphony keeps using the last good workflow until the file is fixed. With
-  the default `workflow_source: ref`, this is the file committed on the base branch, so a broken
-  `WORKFLOW.md` pushed there shows as invalid even though the last good one still runs.
-- **Last fetch**: how long ago Symphony last ran `git fetch origin` before a dispatch, `ok` or `failed`
-  (in red, with git's error), or `none yet`.
-- **Agents**: the identifiers of the running agents on the repo, with their worktree paths under them, or
-  `none`.
+The toolbar says Symphony's state once, in a chip: **Symphony running**, **Symphony paused**, **Symphony
+is starting…**, **Symphony stopped** or **Symphony isn't answering**. Its **+** is **Add Repo…**.
 
-Hover over a field to see its full detail. While the window is open it refreshes with each status poll,
-so an agent run that starts shows up within a few seconds.
+The sidebar lists one row per entry of `repositories:`, in config order: the key, the `owner/repo` (or the
+folder name of a local folder whose remote isn't known yet), a **Default** capsule on the repo that takes
+the issues no other repo's route matches, and the number of agents running on it. VoiceOver reads a row
+as, for example, "symphony, default, 2 agents running". A row's context menu has **Edit…**, **Reveal in
+Finder**, **Open on GitHub** and **Disconnect…**; **+** and **−** under the list add and disconnect.
+
+While Symphony answers, the detail shows each repo as Symphony's `GET /api/v1/repos` reports it:
+
+- The key, its `owner/repo` as a link to GitHub, the **Default** capsule and **Edit…**.
+- **Source**: **Local folder** with the checkout agent worktrees are made from, or **Managed clone** for a
+  `workspace.source` repo with Symphony's clone or `Not cloned yet: Symphony clones it on the next
+  dispatch`; the base branch (origin's default branch when `symphony.yml` names none). A path truncates in the middle,
+  shows in full on hover, can be selected, and has **Reveal in Finder**. A managed repo has **Remove
+  Clone…** here.
+- **Linear routing**: a sentence such as "Issues in billing with label backend go to api.", then the
+  project, labels, team and assignee that are set, and for the default repo "It also takes the issues no
+  other repo's route matches."
+- **WORKFLOW.md**: **Valid**, **Invalid** or **Missing**, in red when it doesn't load, with Symphony's
+  error under it. Symphony keeps using the last good workflow until the file is fixed. With the default
+  `workflow_source: ref`, this is the file committed on the base branch, so a broken `WORKFLOW.md` pushed
+  there shows as invalid even though the last good one still runs.
+- **Activity**: how long ago Symphony last ran `git fetch origin` before a dispatch, or **Failed** (in
+  red, with git's error), or **None yet**; then one line per running agent with its issue, the SSH worker
+  it runs on, and **Reveal Worktree** for a worktree on this Mac. **No agents running** otherwise.
+- **Acceptance gate**: the repo's mode (**Inherit: Shadow** while it follows Settings) and the gate's
+  record for the repo.
+- **Disconnect…** at the foot, in red.
+
+While the window is open it refreshes with each status poll, so an agent run that starts shows up within a
+few seconds. ↑ and ↓ move through the sidebar, ⌘N adds a repo, Delete disconnects the selected one (after
+the same confirmation), and ⌘W closes the window.
 
 When Symphony is stopped, starting, or not answering, the window lists the repos in the `symphony.yml`
-set in Settings instead, and says why above them. Their source, GitHub repo (for a managed clone) and
-Linear routing come from the file; `WORKFLOW.md`, the last fetch, the agents and a local folder's GitHub
-remote show as `unavailable`. A Symphony too old to serve `GET /api/v1/repos` is shown the same way.
+set in Settings instead. Their source, Linear routing and acceptance gate come from the file, and
+**WORKFLOW.md** and **Activity** fold into one line: "Live status shows while Symphony runs." with **Start
+Symphony** (or that Symphony is starting, or isn't answering). A Symphony too old to serve
+`GET /api/v1/repos` shows the same repos with "Update Symphony to see live status."
+
+In place of the repos, the detail shows:
+
+- **No repos connected**, with **Add Repo…**, when `repositories:` is empty or missing;
+- **Symphony doesn't know where its config is.**, with **Open Settings…**, when no `symphony.yml` is set;
+- the error, with **Reveal in Finder** and **Try Again**, when the `symphony.yml` can't be read.
 
 ### Add a repo
 
-**Add Repo…** at the top of the Repos window opens a sheet that adds an entry to `repositories:` in the
+**Add Repo…** (the toolbar's **+**, the **+** under the sidebar, ⌘N, or the button of an empty window) opens
+a sheet that adds an entry to `repositories:` in the
 `symphony.yml` set in Settings. Pick where the code comes from:
 
 - **GitHub URL:** paste `https://github.com/owner/repo` (a browser URL with more path after it works
@@ -482,15 +508,16 @@ clone only when it starts. So after Save:
 - a stopped Symphony picks the repo up when it starts;
 - a Symphony the app didn't start needs a restart from where it was started.
 
-The message at the top of the window says which applies. A running Symphony lists the new repo at the
+The message above the detail says which applies. A running Symphony lists the new repo at the
 next poll, as it reads the route right away; a GitHub URL repo shows `not cloned yet` and its
-`WORKFLOW.md` as `missing` until the restart clones it. With Symphony stopped, the list shows the repo
+`WORKFLOW.md` as `missing` until the restart clones it. With Symphony stopped, the sidebar shows the repo
 from `symphony.yml`.
 
 ### Edit, disconnect or remove a clone
 
-Each row has buttons for the repo. Edit and Disconnect are disabled, with the reason under the row,
-while `symphony.yml` can't be read or no longer has the repo.
+Edit… sits in the detail's header, Disconnect… at its foot, and both in the sidebar row's context menu.
+They are disabled, with the reason on hover (and next to Disconnect…), while `symphony.yml` can't be read
+or no longer has the repo.
 
 - **Edit…** opens the Add Repo sheet on the repo. Switch between **GitHub URL** and **Local folder**
   (in either direction), change the base branch (empty uses `origin`'s default branch), and pick
@@ -505,7 +532,7 @@ while `symphony.yml` can't be read or no longer has the repo.
   Settings, named in brackets) removes the key, and an `acceptance_gate:` block it leaves empty; **Off**,
   **Shadow** and **Enforce** write it, and Enforce asks first as in Settings. Under it, the repo's agreement
   line shows as in Settings. A Save that changes the gate runs `symphony check` first and saves nothing when
-  it fails. The row then shows **Gate** with the repo's mode while it differs from the one in Settings.
+  it fails. The detail's **Acceptance gate** section then shows the repo's mode.
 - **Disconnect…** asks first, then removes the entry from `repositories:` together with the comment
   lines right above it (with no blank line between), and leaves one blank line between its neighbours.
   It never deletes a folder: a local checkout and its branches stay as they are, and a managed clone
@@ -513,7 +540,7 @@ while `symphony.yml` can't be read or no longer has the repo.
   asks which repo becomes the default. Symphony then restarts as after Add Repo.
 - **Remove Clone…** (managed repos only) deletes Symphony's clone under `workspaces.clones_root`
   after you confirm; the repo stays connected and Symphony clones it again when it starts or on its
-  next dispatch. It is disabled, with the reason under the row, while an agent runs in a worktree of
+  next dispatch. It is disabled, with the reason next to it, while an agent runs in a worktree of
   the clone (any repo with the same source), while Symphony is starting or doesn't list its running
   agents, and before the first clone. The app asks Symphony again after you confirm, and deletes the
   folder only when, with symlinks resolved, it is inside the clones folder: `clones_root` with `~`

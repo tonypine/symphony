@@ -5,27 +5,52 @@ import SymphonyBarCore
 /// What the Repos window shows, refreshed by its controller.
 @MainActor
 final class ReposViewModel: ObservableObject {
-    @Published var display = ReposDisplay()
+    @Published var window = ReposWindow()
+    /// The key of the repo shown in the detail.
+    @Published var selection: String? {
+        didSet {
+            if let selection, selection != oldValue { onSelect(selection) }
+        }
+    }
     /// The open Add Repo sheet, nil while none is.
     @Published var addRepo: AddRepoViewModel?
-    /// What the last Add Repo, Edit, Disconnect or Remove Clone did, shown above the rows.
+    /// What the last Add Repo, Edit, Disconnect or Remove Clone did, shown above the detail.
     @Published var message: String?
+    /// Whether Start Symphony would start it now.
+    @Published var canStart = false
+    var onSelect: (_ key: String) -> Void = { _ in }
     var onAddRepo: () -> Void = {}
     var onEdit: (_ key: String) -> Void = { _ in }
     var onDisconnect: (_ key: String) -> Void = { _ in }
     var onRemoveClone: (_ key: String) -> Void = { _ in }
+    var onStart: () -> Void = {}
+    var onOpenSettings: () -> Void = {}
+    var onTryAgain: () -> Void = {}
+
+    var selected: RepoDetail? {
+        window.repos.first { $0.key == selection }
+    }
 }
 
 /// Owns the single Repos window. While it is open, each status poll refreshes it: from Symphony's
 /// `GET /api/v1/repos` while Symphony answers, otherwise from the repositories in `symphony.yml`.
 @MainActor
-final class ReposWindowController: NSObject, NSWindowDelegate {
-    private static let initialContentSize = NSSize(width: ReposView.width, height: 560)
+final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate {
+    private static let initialContentSize = NSSize(width: ReposView.defaultWidth, height: ReposView.defaultHeight)
+    private static let frameName = "SymphonyReposWindow"
+    /// The app's defaults key for the repo selected last.
+    private static let selectionKey = "ReposWindowSelection"
+    private static let chipItem = NSToolbarItem.Identifier("ReposChip")
+    private static let addItem = NSToolbarItem.Identifier("ReposAdd")
 
     /// Symphony's state directory, looked up before each request since Symphony rewrites its control URL on start.
     var stateRoot: () -> URL = { StateRoot.locate(environment: AppStores.current.environment) }
     /// Restarts the app's Symphony gracefully, so it sets up a repo just added or changed.
     var restart: () -> Void = {}
+    /// Starts the app's Symphony, and whether it can now.
+    var start: () -> Void = {}
+    var canStart: () -> Bool = { false }
+    var openSettings: () -> Void = {}
 
     private let secrets: SecretsReader
 
@@ -44,20 +69,29 @@ final class ReposWindowController: NSObject, NSWindowDelegate {
     func show(status: SymphonyStatus) {
         if window == nil {
             let model = ReposViewModel()
+            model.onSelect = { key in AppStores.current.defaults.set(key, forKey: Self.selectionKey) }
             model.onAddRepo = { [weak self] in self?.showSheet(editing: nil) }
             model.onEdit = { [weak self] key in self?.showSheet(editing: key) }
             model.onDisconnect = { [weak self] key in self?.disconnect(key) }
             model.onRemoveClone = { [weak self] key in self?.removeClone(key) }
+            model.onStart = { [weak self] in self?.start() }
+            model.onOpenSettings = { [weak self] in self?.openSettings() }
+            model.onTryAgain = { [weak self] in self.map { $0.update(status: $0.status) } }
             self.model = model
             let hostingController = NSHostingController(rootView: ReposView(model: model))
-            hostingController.sizingOptions = [.minSize, .maxSize]
+            // Only the minimum: the window keeps the size it was left at.
+            hostingController.sizingOptions = [.minSize]
             let window = NSWindow(contentViewController: hostingController)
             window.title = ReposList.windowTitle
             window.styleMask = [.titled, .closable, .resizable, .miniaturizable]
+            window.toolbar = toolbar()
+            window.toolbarStyle = .unified
             window.setContentSize(Self.initialContentSize)
+            window.contentMinSize = NSSize(width: ReposView.minWidth, height: ReposView.minHeight)
             window.isReleasedWhenClosed = false
             window.delegate = self
-            window.center()
+            if !window.setFrameUsingName(Self.frameName) { window.center() }
+            window.setFrameAutosaveName(Self.frameName)
             self.window = window
         }
         update(status: status)
@@ -74,6 +108,7 @@ final class ReposWindowController: NSObject, NSWindowDelegate {
         self.status = status
         if !ReposList.isAnswering(status) { poll = nil }
         model?.addRepo?.gateAgreement?.state = state
+        model?.canStart = canStart()
         showDisplay()
         guard ReposList.isAnswering(status), !inFlight else { return }
         inFlight = true
@@ -92,22 +127,16 @@ final class ReposWindowController: NSObject, NSWindowDelegate {
     }
 
     private func showDisplay() {
-        let configPath = configPath
-        let display = ReposList.display(
-            status: status,
-            poll: poll,
-            configPath: configPath,
-            readConfig: { try SymphonyConfigFile(path: $0).readRepositories() }
-        )
-        let root = clonesRoot(configPath)
-        let entries = readEntries(configPath)
-        var shown = ReposList.withActions(display, entries: entries) { [status, poll] gitHub in
-            ManagedClones.removal(gitHub: gitHub, root: root, status: status, poll: poll)
+        guard let model else { return }
+        let config = ReposConfig.read(path: configPath)
+        let shown = ReposList.window(status: status, poll: poll, config: config) { [status, poll] gitHub in
+            ManagedClones.removal(gitHub: gitHub, root: config.clonesRoot, status: status, poll: poll)
         }
-        if case let .success(entries) = entries, let global = try? SymphonyConfigFile(path: configPath).readAcceptanceGateMode() {
-            shown = AcceptanceGate.withGateFields(shown, entries: entries, global: global)
+        model.window = shown
+        if model.selection.map({ key in !shown.repos.contains { $0.key == key } }) ?? true {
+            let saved = AppStores.current.defaults.object(forKey: Self.selectionKey) as? String
+            model.selection = ReposList.selection(saved: saved, in: shown)
         }
-        model?.display = shown
     }
 
     /// Symphony's state while it answers, for the Edit sheet's gate stats.
@@ -120,18 +149,50 @@ final class ReposWindowController: NSObject, NSWindowDelegate {
         }
     }
 
-    private func readEntries(_ configPath: String) -> Result<[RepositoryEntry], AddRepoProblem> {
-        guard !configPath.isEmpty else { return .failure(AddRepoProblem("Set the symphony.yml path in Settings first.")) }
-        do {
-            return .success(try SymphonyConfigFile(path: configPath).readRepositories())
-        } catch {
-            let shown = (configPath as NSString).abbreviatingWithTildeInPath
-            return .failure(AddRepoProblem("Couldn't read the repos in \(shown): \(error.localizedDescription)"))
-        }
+    // MARK: Toolbar
+
+    private func toolbar() -> NSToolbar {
+        let toolbar = NSToolbar(identifier: "SymphonyRepos")
+        toolbar.delegate = self
+        toolbar.displayMode = .iconOnly
+        toolbar.allowsUserCustomization = false
+        return toolbar
     }
 
-    private func clonesRoot(_ configPath: String) -> URL {
-        (try? SymphonyConfigFile(path: configPath).readClonesRoot()) ?? ManagedClones.root(in: "", configPath: configPath)
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [.flexibleSpace, Self.chipItem, Self.addItem]
+    }
+
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        toolbarDefaultItemIdentifiers(toolbar)
+    }
+
+    func toolbar(
+        _ toolbar: NSToolbar,
+        itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
+        willBeInsertedIntoToolbar flag: Bool
+    ) -> NSToolbarItem? {
+        let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+        switch itemIdentifier {
+        case Self.chipItem:
+            guard let model else { return nil }
+            item.label = "Symphony"
+            item.view = NSHostingView(rootView: ReposChipView(model: model))
+        case Self.addItem:
+            item.label = AddRepo.buttonTitle
+            item.toolTip = AddRepo.buttonTitle
+            item.image = NSImage(systemSymbolName: "plus", accessibilityDescription: AddRepo.buttonTitle)
+            item.isBordered = true
+            item.target = self
+            item.action = #selector(addRepo(_:))
+        default:
+            return nil
+        }
+        return item
+    }
+
+    @objc private func addRepo(_ sender: Any?) {
+        showSheet(editing: nil)
     }
 
     /// Opens the Add Repo sheet, or with `editing` the same sheet on that repo.
@@ -172,7 +233,7 @@ final class ReposWindowController: NSObject, NSWindowDelegate {
         guard let model, model.addRepo == nil else { return }
         let file = SymphonyConfigFile(path: configPath)
         let entries: [RepositoryEntry]
-        switch readEntries(configPath) {
+        switch ReposConfig.read(path: configPath).entries {
         case let .success(read):
             entries = read
         case let .failure(problem):
@@ -220,8 +281,8 @@ final class ReposWindowController: NSObject, NSWindowDelegate {
     /// Asks before deleting Symphony's clone of a managed repo, asks Symphony again whether an agent uses it, then
     /// deletes it if it is inside the clones folder.
     private func removeClone(_ key: String) {
-        guard let model, let row = model.display.rows.first(where: { $0.key == key }),
-              let gitHub = row.managedGitHub, let path = row.actions.cloneRemoval?.path else { return }
+        guard let model, let repo = model.window.repos.first(where: { $0.key == key }),
+              let gitHub = repo.source.managedGitHub, let path = repo.actions.cloneRemoval?.path else { return }
         let question = ManagedClones.question(key: key, gitHub: gitHub, path: path)
         let alert = NSAlert()
         alert.alertStyle = .warning
@@ -236,7 +297,7 @@ final class ReposWindowController: NSObject, NSWindowDelegate {
             if ReposList.isAnswering(status) {
                 poll = await ReposAPI.fetch(stateRoot: stateRoot(), fallback: AppStores.current.controlURLFallback)
             }
-            let root = clonesRoot(configPath)
+            let root = ReposConfig.read(path: configPath).clonesRoot
             let removal = ManagedClones.removal(gitHub: gitHub, root: root, status: status, poll: poll)
             if let path = removal.path {
                 do {
@@ -287,6 +348,9 @@ final class ReposWindowController: NSObject, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        // Saves the frame now and frees its name, which the next window takes even if this one isn't freed yet.
+        window?.saveFrame(usingName: Self.frameName)
+        window?.setFrameAutosaveName("")
         window = nil
         model = nil
         poll = nil
