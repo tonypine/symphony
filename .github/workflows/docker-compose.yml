@@ -54,16 +54,24 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # The dev server sandbox override confines the container with the shipped AppArmor profile,
+      # which the host must load first. The runner has AppArmor, so this checks the profile parses.
+      - name: Load the bwrap AppArmor profile
+        run: sudo apparmor_parser -r -W docker/apparmor-bwrap
+
       # The verification dev server's sandbox: `bwrap`'s probe must pass under the shipped compose
-      # file plus the dev server sandbox override.
+      # file plus the dev server sandbox override, in a container confined by `symphony-bwrap`.
+      # The runner keeps Ubuntu 24.04's restriction on unprivileged user namespaces: the profile
+      # must work without lifting it.
       - name: Probe bwrap in the container
         run: |
-          # Ubuntu 24.04 keeps unprivileged user namespaces from bwrap through AppArmor.
-          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
           mkdir -p ~/.codex ~/.claude ~/.ssh
-          SYMPHONY_CONFIG="$PWD/test/fixtures/runtime/symphony.yml" SYMPHONY_REPOS_ROOT="$PWD" \
-            docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev-server-sandbox.yml \
-            run --rm --no-deps --entrypoint bwrap symphony \
+          export SYMPHONY_CONFIG="$PWD/test/fixtures/runtime/symphony.yml" SYMPHONY_REPOS_ROOT="$PWD"
+          compose="docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev-server-sandbox.yml"
+          confinement=$($compose run --rm --no-deps -T --entrypoint cat symphony /proc/self/attr/current)
+          if [ "$confinement" != "symphony-bwrap (enforce)" ]; then
+            echo "the container runs under '$confinement', not 'symphony-bwrap (enforce)'" >&2
+            exit 1
+          fi
+          $compose run --rm --no-deps --entrypoint bwrap symphony \
             --unshare-all --ro-bind / / --dev /dev --proc /proc /bin/sh -c :

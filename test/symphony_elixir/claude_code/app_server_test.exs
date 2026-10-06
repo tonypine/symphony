@@ -162,6 +162,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       assert "Edit(./WORKFLOW.md)" in deny
       assert "Edit(./.claude/hooks)" in deny
       assert "Bash(git push:*)" in deny
+      assert "Read(~/Library/CloudStorage)" in deny
       refute "Edit" in deny
     end
   end
@@ -815,7 +816,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
                    "Bash(git push:*)",
                    "Bash(git remote add:*)",
                    "Bash(git remote set-url:*)"
-                 ] ++ AgentSandboxConfig.claude_edit_deny_rules()
+                 ] ++ AgentSandboxConfig.claude_edit_deny_rules() ++ AgentSandboxConfig.claude_read_deny_rules()
 
         if session.mcp_session.transport == :unix do
           assert File.exists?(session.mcp_session.socket_path)

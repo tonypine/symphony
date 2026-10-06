@@ -1000,7 +1000,7 @@ defmodule SymphonyElixir.QaAgentTest do
       [macos_app] =
         Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => %{"build" => "make app", "app" => "build/App.app"}}})
 
-      assert {:ok, %{result: %{verdict: :pass}}} =
+      assert {:ok, %{result: %{verdict: :blocked}}} =
                QaAgent.run(job(%{playbooks: [macos_app]}), Config.settings!(),
                  git: fake_git(),
                  qa_agent_module: FakeSession,
@@ -1099,11 +1099,39 @@ defmodule SymphonyElixir.QaAgentTest do
       refute Map.has_key?(failed, :needs_person)
     end
 
+    test "reports a macos_app pass that never resized a window as blocked, since its wide pass did not run" do
+      [macos_app] =
+        Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => %{"build" => "make app", "app" => "build/App.app"}}})
+
+      run = fn turn_result ->
+        Application.put_env(:symphony_elixir, :qa_test_turn_result, turn_result)
+
+        QaAgent.run(job(%{playbooks: [macos_app]}), Config.settings!(),
+          git: fake_git(),
+          qa_agent_module: FakeSession,
+          qa_driver_opts: [host: %{kill: fn _pid -> :ok end}]
+        )
+      end
+
+      assert {:ok, %{result: %{verdict: :blocked, reason: reason, steps: [%{name: "symphony check"}]} = blocked}} =
+               run.({:ok, %{result: FakeSession.pass_json()}})
+
+      assert reason =~ "the wide pass did not run: no `qa_resize_window` call resized the app's window"
+      refute Map.has_key?(blocked, :needs_person)
+      assert Report.render(%{verdict: :blocked, reason: reason, sha: @sha, target_state: "In Review"}) =~ "Reason: the wide pass did not run"
+
+      fail_json = Jason.encode!(%{verdict: "fail", summary: "The app crashed at launch.", steps: [], findings: ["App exits at launch"]})
+      assert {:ok, %{result: %{verdict: :fail}}} = run.({:ok, %{result: fail_json}})
+
+      Application.delete_env(:symphony_elixir, :qa_test_turn_result)
+      assert {:ok, %{result: %{verdict: :pass}}} = QaAgent.run(job(), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession)
+    end
+
     test "lets the QA driver read fixtures from the pass's own $TMPDIR" do
       [macos_app] =
         Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => %{"build" => "make app", "app" => "build/App.app"}}})
 
-      assert {:ok, %{result: %{verdict: :pass}}} =
+      assert {:ok, %{result: %{verdict: :blocked}}} =
                QaAgent.run(job(%{playbooks: [macos_app]}), Config.settings!(),
                  git: fake_git(),
                  qa_agent_module: PutFileSession,
