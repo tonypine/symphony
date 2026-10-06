@@ -1229,7 +1229,8 @@ defmodule SymphonyElixir.McpServerTest do
       issue_id: "issue-1",
       workspace: System.tmp_dir!(),
       mcp_tool_timeout_ms: 200,
-      tool_opts: [linear_client: linear_client]
+      tool_opts: [linear_client: linear_client],
+      on_tool_call: fn event -> send(test_pid, {:tool_call, event}) end
     }
 
     session = start_transport_session!(context, server)
@@ -1252,6 +1253,11 @@ defmodule SymphonyElixir.McpServerTest do
       assert_received {:tool_running, tool_pid}
       refute Process.alive?(tool_pid)
 
+      # The orchestrator hears of the call as it starts, with the deadline its timeout sets, and as it ends.
+      assert_received {:tool_call, {:started, call_id, %{name: "linear_get_current_issue", started_at: started_at, deadline: deadline}}}
+      assert DateTime.diff(deadline, started_at, :millisecond) == 200
+      assert_received {:tool_call, {:finished, ^call_id}}
+
       assert %{"result" => %{"tools" => [_ | _]}} = request!(socket, 2, "tools/list", %{})
     after
       close_socket(socket)
@@ -1263,13 +1269,18 @@ defmodule SymphonyElixir.McpServerTest do
     server = unique_server()
     start_supervised!({McpServer, name: server})
 
-    session = start_transport_session!(%{workspace: System.tmp_dir!(), tool_scope: :qa, mcp_tool_timeout_ms: 0}, server)
+    test_pid = self()
+    on_tool_call = fn event -> send(test_pid, {:tool_call, event}) end
+    context = %{workspace: System.tmp_dir!(), tool_scope: :qa, mcp_tool_timeout_ms: 0, on_tool_call: on_tool_call}
+    session = start_transport_session!(context, server)
     socket = connect_session!(session)
 
     try do
       response = request!(socket, 1, "tools/call", %{"name" => "qa_build", "arguments" => %{}})
       [content] = response["result"]["content"]
       assert content["text"] =~ "qa_driver_unavailable"
+      assert_received {:tool_call, {:started, call_id, %{name: "qa_build", deadline: nil}}}
+      assert_received {:tool_call, {:finished, ^call_id}}
     after
       close_socket(socket)
       McpServer.stop_session(session, server: server)

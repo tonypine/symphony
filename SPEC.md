@@ -272,12 +272,17 @@ Fields:
 - `last_codex_timestamp` (timestamp or null)
 - `last_event_at` (timestamp or null)
   - Updated for every transcript event and initialized when runtime dispatch metadata is received.
-  - Also updated when a workspace hook starts or ends.
+  - Also updated when a workspace hook starts or ends, and when a call of one of Symphony's own
+    MCP tools ends.
   - Used by no-progress watchdog detection.
 - `workspace_hook` (object or null)
   - The `after_create` or `before_run` hook the worker is running: `name`, and `deadline`, when the
     hook's own timeout ends it. Null when no hook runs.
   - Used by stall detection and the watchdog (Section 8.5).
+- `pending_tool_calls` (map)
+  - The calls of Symphony's own MCP tools the run's agent is waiting on, each with `name`,
+    `started_at`, and `deadline`, when the tool timeout stops it (null for QA tools).
+  - Used by the watchdog (Section 8.5) and the runtime snapshot (Section 13.4).
 - `last_codex_message` (summarized payload)
 - `input_tokens` (integer, legacy total input bucket)
 - `uncached_input_tokens` (integer)
@@ -2664,10 +2669,13 @@ Part C: No-progress watchdog
 - If `watchdog.enabled == false`, the tick performs no session termination.
 - For each running issue, compute `elapsed_ms` since `last_event_at`, where a workspace hook's start
   and end count as events, or since the end of the run's latest wait on Linear when that is later.
-  While a workspace hook runs, compute it since the hook's deadline, as in Part A.
+  While a workspace hook runs, compute it since the hook's deadline, as in Part A. While the run's
+  agent waits on a call of one of Symphony's own MCP tools, compute it since the latest deadline of
+  its pending calls when that is later; a call without a deadline (a QA tool) does not hold it.
 - If `elapsed_ms >= watchdog.no_progress_threshold_ms`, terminate the agent session, run
   `after_run`, record the run as `timeout`, emit `run_stuck`, and queue a retry through the normal
-  retry helper/backoff path.
+  retry helper/backoff path. The log line names the run's oldest pending tool call and its age,
+  when there is one.
 
 Part D: Stray processes
 
@@ -2997,6 +3005,8 @@ Notes:
   `github_*`) that runs longer than 10 minutes (the `:mcp_tool_timeout_ms` application env) is
   stopped and answered with a `tool_timeout` tool error, so later calls on the connection are not
   held behind it. QA tools keep their drivers' own timeouts.
+- The implicit MCP server tells the orchestrator as each tool call starts (tool name, start time,
+  and the deadline its timeout sets) and ends, so the run's `pending_tool_calls` stay current.
 - Codex launch preserves the configured command while injecting `--config` overrides for
   `default_permissions="workspace_write"` and the generated `permissions.workspace_write.*`
   profile. Runtime launch paths render workspace-local filesystem entries with the validated
@@ -3630,6 +3640,9 @@ SHOULD return:
 - each running row SHOULD include `linear_wait_until`: while the run waits out a Linear rate limit
   or outage (Section 8.5), when that wait ends, otherwise null; dashboards show such a run as
   waiting for Linear
+- each running row SHOULD include `pending_tool`: the oldest call of one of Symphony's own MCP tools
+  the run's agent has waited on for more than a minute (`name`, `started_at`, `age_ms`), otherwise
+  null; dashboards show such a run as waiting on that tool
 - `watching` (list of recently completed issues now in non-active, non-terminal states)
 - each watching row SHOULD include issue identifier, current state, issue URL, last-run time, and
   final transcript replay metadata while the watch remains open
@@ -3851,6 +3864,7 @@ Minimum endpoints:
           "last_event": "turn_completed",
           "last_message": "",
           "linear_wait_until": null,
+          "pending_tool": null,
           "started_at": "2026-02-24T20:10:12Z",
           "last_event_at": "2026-02-24T20:14:59Z",
           "forced": false,
@@ -4147,6 +4161,7 @@ Minimum endpoints:
         "last_event": "notification",
         "last_message": "Working on tests",
         "linear_wait_until": null,
+        "pending_tool": null,
         "last_event_at": "2026-02-24T20:14:59Z",
         "tokens": {
           "input_tokens": 1200,
@@ -4536,7 +4551,9 @@ function watchdog_tick(state):
     if running_entry.workspace_hook is not null:
       elapsed_ms = now_utc() - running_entry.workspace_hook.deadline
     else:
-      elapsed_ms = now_utc() - running_entry.last_event_at
+      clock = max(running_entry.last_event_at,
+                  latest deadline of running_entry.pending_tool_calls, if any)
+      elapsed_ms = now_utc() - clock
     if elapsed_ms >= watchdog.no_progress_threshold_ms:
       agent.stop_session(running_entry.agent_session)
       run_hook_best_effort("after_run", running_entry.workspace_path)
