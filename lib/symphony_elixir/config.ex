@@ -369,12 +369,24 @@ defmodule SymphonyElixir.Config do
     end
   end
 
-  defp model_findings(%{model: model, model_key: key}, nil) do
+  defp model_findings(%{model: model, model_key: key, inherited_from: nil}, nil) do
     [{:error, "#{key}: OpenRouter has no model `#{model}`"}]
   end
 
-  defp model_findings(%{model: model, model_key: key}, %{tools: false}) do
+  defp model_findings(%{model: model, model_key: key, provider_key: provider_key, inherited_from: from}, nil) do
+    [{:error, "#{provider_key}: OpenRouter has no model `#{model}`, inherited from #{from}; set #{key} to an OpenRouter model id"}]
+  end
+
+  defp model_findings(%{model: model, model_key: key, inherited_from: nil}, %{tools: false}) do
     [{:error, "#{key}: OpenRouter model `#{model}` does not support tools; Symphony runs need tool use"}]
+  end
+
+  defp model_findings(%{model: model, model_key: key, provider_key: provider_key, inherited_from: from}, %{tools: false}) do
+    [
+      {:error,
+       "#{provider_key}: OpenRouter model `#{model}`, inherited from #{from}, does not support tools; " <>
+         "set #{key} to an OpenRouter model that lists tools"}
+    ]
   end
 
   defp model_findings(%{model: model, effort: effort, effort_key: key}, %{reasoning: false}) when is_binary(effort) do
@@ -384,14 +396,19 @@ defmodule SymphonyElixir.Config do
   defp model_findings(_profile, _capabilities), do: []
 
   # Every `openrouter` run kind with the model and effort it starts with, and the keys that set them.
+  # `inherited_from` is the key the model comes from when it sits above the key that picked
+  # `openrouter`; `model_key` is then the `model` key next to that provider key.
   defp openrouter_profiles(settings) do
     for kind <- openrouter_run_kinds(settings) do
       profile = effective_run_profile(settings, kind)
+      {model_key, inherited_from} = openrouter_model_source(settings, kind)
 
       %{
         kind: kind,
         model: profile.model,
-        model_key: profile_key(settings, kind, :model),
+        model_key: model_key,
+        provider_key: profile_key(settings, kind, :provider),
+        inherited_from: inherited_from,
         effort: profile.effort,
         effort_key: profile_key(settings, kind, :effort)
       }
@@ -413,7 +430,29 @@ defmodule SymphonyElixir.Config do
   def run_profile_key(%Schema{} = settings, kind, field) when field in [:model, :effort],
     do: profile_key(settings, to_string(kind), field)
 
-  defp profile_key(settings, kind, field) do
+  @doc """
+  The key to set to change the model of an `openrouter` run of kind `kind`: the key that set the
+  model (as `run_profile_key/3`), or, when the model is inherited from a key above the one that
+  picked `openrouter`, the `model` key next to that provider key. With
+  `repositories[web].agent.run_profiles.landing.provider: openrouter` and only `agent.model` set,
+  that is `repositories[web].agent.run_profiles.landing.model`.
+  """
+  @spec openrouter_model_key(Schema.t(), atom() | String.t()) :: String.t()
+  def openrouter_model_key(%Schema{} = settings, kind), do: settings |> openrouter_model_source(to_string(kind)) |> elem(0)
+
+  defp openrouter_model_source(settings, kind) do
+    {model_key, model_rank} = profile_setting(settings, kind, :model)
+    {provider_key, provider_rank} = profile_setting(settings, kind, :provider)
+
+    if model_rank > provider_rank,
+      do: {String.replace_suffix(provider_key, ".provider", ".model"), model_key},
+      else: {model_key, nil}
+  end
+
+  defp profile_key(settings, kind, field), do: settings |> profile_setting(kind, field) |> elem(0)
+
+  # The key that sets `field` and its rank in the resolution order, 0 for the most specific.
+  defp profile_setting(settings, kind, field) do
     repo_agent = settings.agent.repository
     repo_path = repo_agent && "repositories[#{repo_agent.key}].agent"
     name = Atom.to_string(field)
@@ -425,8 +464,10 @@ defmodule SymphonyElixir.Config do
       {"agent.run_profiles.#{kind}", Map.get(settings.agent.run_profiles, kind, %{})[name]}
     ]
 
-    Enum.find_value(candidates, "agent.#{field}", fn
-      {section_key, value} when not is_nil(value) -> "#{section_key}.#{field}"
+    candidates
+    |> Enum.with_index()
+    |> Enum.find_value({"agent.#{field}", length(candidates)}, fn
+      {{section_key, value}, rank} when not is_nil(value) -> {"#{section_key}.#{field}", rank}
       _unset -> nil
     end)
   end
