@@ -878,6 +878,54 @@ defmodule SymphonyElixir.RunStoreTest do
     end
   end
 
+  describe "loading the tables at startup" do
+    test "a table load slower than 5 s no longer fails startup, and its progress is logged every 10 s" do
+      :ok = RunStore.put_run(%{repo_key: @repo_key, run_id: "loaded-late", status: "success"})
+      test_pid = self()
+      calls = :counters.new(1, [])
+
+      # The first three waits time out, as a large table still loading would: 30 s in all.
+      wait = fn tables, timeout_ms ->
+        send(test_pid, {:waited, timeout_ms})
+        :counters.add(calls, 1, 1)
+
+        if :counters.get(calls, 1) <= 3, do: {:timeout, tables}, else: :mnesia.wait_for_tables(tables, timeout_ms)
+      end
+
+      log = with_table_wait(wait, fn -> capture_log([level: :info], fn -> restart_run_store() end) end)
+
+      for _wait <- 1..4, do: assert_received({:waited, 10_000})
+      assert log =~ "RunStore still loading tables after 10 s"
+      assert log =~ "RunStore still loading tables after 30 s"
+      refute log =~ "after 40 s"
+      assert stored_run("loaded-late").status == "success"
+    end
+
+    test "a table load that never finishes fails startup after 120 s, and says how long it waited" do
+      test_pid = self()
+
+      wait = fn tables, timeout_ms ->
+        send(test_pid, {:waited, timeout_ms})
+        {:timeout, tables}
+      end
+
+      log =
+        with_run_store_stopped(fn ->
+          with_table_wait(wait, fn ->
+            capture_log(fn ->
+              assert {:error, {:mnesia_table_timeout, [_table | _tables], %{waited_ms: 120_000}}} =
+                       GenServer.start(RunStore, [], name: RunStore)
+            end)
+          end)
+        end)
+
+      for _wait <- 1..12, do: assert_received({:waited, 10_000})
+      refute_received {:waited, _timeout_ms}
+      assert log =~ "RunStore still loading tables after 110 s"
+      assert log =~ "RunStore gave up loading tables after 120 s"
+    end
+  end
+
   test "scopes durable records by repo_key when identifiers collide" do
     now = DateTime.utc_now()
 
@@ -1034,6 +1082,33 @@ defmodule SymphonyElixir.RunStoreTest do
         if pid = Process.whereis(RunStore), do: GenServer.stop(pid)
         {:ok, _pid} = GenServer.start(RunStore, [], name: RunStore)
         :ok
+    end
+  end
+
+  # Stops RunStore for `fun` and starts it again afterwards, supervised or not.
+  defp with_run_store_stopped(fun) do
+    supervised? = Supervisor.terminate_child(SymphonyElixir.Supervisor, RunStore) == :ok
+    pid = Process.whereis(RunStore)
+    if not supervised? and pid, do: GenServer.stop(pid)
+
+    try do
+      fun.()
+    after
+      if supervised? do
+        {:ok, _pid} = Supervisor.restart_child(SymphonyElixir.Supervisor, RunStore)
+      else
+        {:ok, _pid} = GenServer.start(RunStore, [], name: RunStore)
+      end
+    end
+  end
+
+  defp with_table_wait(wait, fun) do
+    Application.put_env(:symphony_elixir, :run_store_wait_for_tables, wait)
+
+    try do
+      fun.()
+    after
+      Application.delete_env(:symphony_elixir, :run_store_wait_for_tables)
     end
   end
 

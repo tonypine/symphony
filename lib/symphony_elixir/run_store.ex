@@ -46,6 +46,10 @@ defmodule SymphonyElixir.RunStore do
   # restart, and every event it holds is rewritten with the table on each Mnesia log dump.
   @stored_transcript_events 20
   @rewrite_dc_dump_limit 1_000_000_000
+  # A store written before the transcript cap can take far longer than a few seconds to load, and
+  # its rows are trimmed only once it has loaded.
+  @table_load_timeout_ms 120_000
+  @table_load_progress_ms 10_000
 
   defmodule State do
     @moduledoc false
@@ -1061,11 +1065,28 @@ defmodule SymphonyElixir.RunStore do
   defp attribute_position(index, _attributes), do: index
 
   defp wait_for_tables do
-    case :mnesia.wait_for_tables(@data_tables, 5_000) do
+    wait_fun = Application.get_env(:symphony_elixir, :run_store_wait_for_tables, &:mnesia.wait_for_tables/2)
+    wait_for_tables(wait_fun, 0)
+  end
+
+  defp wait_for_tables(wait_fun, waited_ms) do
+    step_ms = min(@table_load_progress_ms, @table_load_timeout_ms - waited_ms)
+
+    case wait_fun.(@data_tables, step_ms) do
       :ok -> :ok
-      {:timeout, tables} -> {:error, {:mnesia_table_timeout, tables}}
+      {:timeout, tables} -> table_load_timed_out(wait_fun, tables, waited_ms + step_ms)
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp table_load_timed_out(_wait_fun, tables, waited_ms) when waited_ms >= @table_load_timeout_ms do
+    Logger.error("RunStore gave up loading tables after #{div(waited_ms, 1_000)} s: #{inspect(tables)}")
+    {:error, {:mnesia_table_timeout, tables, %{waited_ms: waited_ms}}}
+  end
+
+  defp table_load_timed_out(wait_fun, tables, waited_ms) do
+    Logger.info("RunStore still loading tables after #{div(waited_ms, 1_000)} s: #{inspect(tables)}")
+    wait_for_tables(wait_fun, waited_ms)
   end
 
   defp transaction(fun) when is_function(fun, 0) do
