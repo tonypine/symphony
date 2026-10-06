@@ -158,6 +158,7 @@ struct RepoSidebarRow: View {
 
     var body: some View {
         HStack(spacing: 6) {
+            HealthGlyph(status: repo.health.status)
             VStack(alignment: .leading, spacing: 1) {
                 Text(repo.key)
                     .lineLimit(1)
@@ -181,6 +182,39 @@ struct RepoSidebarRow: View {
         .padding(.vertical, 2)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(repo.accessibilityLabel)
+    }
+}
+
+/// A repo's status, told apart by shape as well as colour: a green circle, an orange triangle, a red diamond, or a
+/// hollow grey circle while nothing was checked.
+struct HealthGlyph: View {
+    let status: RepoHealth.Status
+
+    var body: some View {
+        Image(systemName: symbol)
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(color)
+            .frame(width: 12)
+            .help(status.spoken.prefix(1).uppercased() + status.spoken.dropFirst())
+            .accessibilityLabel(status.spoken)
+    }
+
+    private var symbol: String {
+        switch status {
+        case .healthy: return "circle.fill"
+        case .needsAttention: return "triangle.fill"
+        case .notWorking: return "diamond.fill"
+        case .notChecked: return "circle"
+        }
+    }
+
+    private var color: Color {
+        switch status {
+        case .healthy: return .green
+        case .needsAttention: return .orange
+        case .notWorking: return .red
+        case .notChecked: return .gray
+        }
     }
 }
 
@@ -211,6 +245,11 @@ struct RepoDetailView: View {
                 .padding(.horizontal, 20)
                 .padding(.top, 16)
             Form {
+                if repo.health.showsBox {
+                    Section {
+                        NeedsAttentionBox(health: repo.health, model: model)
+                    }
+                }
                 source
                 routing
                 live
@@ -232,6 +271,19 @@ struct RepoDetailView: View {
     }
 
     private var header: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            title
+            HStack(spacing: 6) {
+                HealthGlyph(status: repo.health.status)
+                Text(repo.health.summary)
+                    .foregroundStyle(.secondary)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(repo.health.summary)
+        }
+    }
+
+    private var title: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Text(repo.key)
                 .font(.title2.weight(.semibold))
@@ -332,7 +384,14 @@ struct RepoDetailView: View {
                 } else {
                     ForEach(agents, id: \.issueIdentifier) { agent in
                         HStack(alignment: .firstTextBaseline) {
-                            Text(agent.title)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(agent.title)
+                                if let activity = agent.activity {
+                                    Text(activity)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
                             if let path = agent.worktreePath {
                                 Text((path as NSString).abbreviatingWithTildeInPath)
                                     .font(.caption)
@@ -378,6 +437,111 @@ struct RepoDetailView: View {
             return "Delete Symphony's clone at \((path as NSString).abbreviatingWithTildeInPath)."
         case let .blocked(reason):
             return reason
+        }
+    }
+}
+
+/// The Needs attention box: one row per problem, errors first, each with its fixes; then the information lines.
+struct NeedsAttentionBox: View {
+    let health: RepoHealth
+    @ObservedObject var model: ReposViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(RepoHealth.boxTitle)
+                .font(.headline)
+            ForEach(health.problems) { problem in
+                row(problem)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8).fill(tint.opacity(0.12)))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(tint.opacity(0.5)))
+    }
+
+    private var tint: Color {
+        health.status == .notWorking ? .red : .orange
+    }
+
+    private func row(_ problem: RepoHealth.Problem) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: icon(problem.severity))
+                .foregroundStyle(color(problem.severity))
+                .accessibilityLabel(spoken(problem.severity))
+            VStack(alignment: .leading, spacing: 4) {
+                Text(problem.title)
+                    .fontWeight(problem.severity == .info ? .regular : .semibold)
+                    .foregroundStyle(problem.severity == .info ? Color.secondary : Color.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let detail = problem.detail {
+                    Text(detail)
+                        .font(.system(.callout, design: .monospaced))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let note = problem.note {
+                    Text(note)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if !problem.fixes.isEmpty {
+                    HStack(spacing: 8) {
+                        ForEach(problem.fixes, id: \.title) { fix in
+                            Button(fix.title) { model.onFix(fix) }
+                                .controlSize(.small)
+                                .disabled(stopping(fix))
+                        }
+                        if problem.fixes.contains(where: stopping) {
+                            ProgressView().controlSize(.small)
+                        }
+                    }
+                }
+                if let failure = stopFailure(problem) {
+                    Text(failure)
+                        .font(.callout)
+                        .foregroundStyle(.red)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    private func stopping(_ fix: RepoHealth.Fix) -> Bool {
+        guard case let .stopRun(identifier) = fix else { return false }
+        return model.stopping.contains(identifier)
+    }
+
+    private func stopFailure(_ problem: RepoHealth.Problem) -> String? {
+        for case let .stopRun(identifier) in problem.fixes {
+            if let failure = model.stopFailures[identifier] { return failure }
+        }
+        return nil
+    }
+
+    private func icon(_ severity: RepoHealth.Severity) -> String {
+        switch severity {
+        case .error: return "xmark.octagon.fill"
+        case .warning: return "exclamationmark.triangle.fill"
+        case .info: return "info.circle"
+        }
+    }
+
+    private func color(_ severity: RepoHealth.Severity) -> Color {
+        switch severity {
+        case .error: return .red
+        case .warning: return .orange
+        case .info: return .secondary
+        }
+    }
+
+    private func spoken(_ severity: RepoHealth.Severity) -> String {
+        switch severity {
+        case .error: return "Error"
+        case .warning: return "Warning"
+        case .info: return "Information"
         }
     }
 }
