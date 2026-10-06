@@ -1469,6 +1469,108 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     end
   end
 
+  test "worktree strategy never detaches a sibling whose issue is open but not running" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-workspace-worktree-open-sibling-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      primary_repo = Path.join(test_root, "primary")
+      origin_repo = Path.join(test_root, "origin.git")
+      workspace_root = Path.join(test_root, "workspaces")
+
+      create_primary_repo!(primary_repo, origin_repo)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        workspace_fetch_before_dispatch: false
+      )
+
+      # TP-586's clean, pushed worktree has its branch checked out while the usage limit
+      # holds it, so no agent owns it right now. Its issue is still open.
+      assert {:ok, sibling_workspace} = Workspace.create_for_issue("TP-586")
+      git!(sibling_workspace, ["push", "origin", "auto/TP-586"])
+
+      issue = %Issue{id: "issue-381", identifier: "TP-381", workspace_branch: "auto/TP-586"}
+
+      log =
+        capture_log(fn ->
+          for lookup_result <- [
+                {:ok, %Issue{id: "issue-586", identifier: "TP-586", state: "In Progress"}},
+                {:ok, %Issue{id: "issue-586", identifier: "TP-586", state: "Rework"}},
+                {:ok, %Issue{id: "issue-586", identifier: "TP-586", state: nil}},
+                {:error, {:linear_graphql_errors, [%{"message" => "Rate limited"}, "unexpected"]}},
+                {:error, :timeout}
+              ] do
+            lookup = fn identifier ->
+              assert identifier == "TP-586"
+              lookup_result
+            end
+
+            assert {:error, {:branch_already_checked_out_elsewhere, details}} =
+                     Workspace.create_for_issue(issue, nil, nil, sibling_issue_lookup: lookup)
+
+            assert details[:branch] == "auto/TP-586"
+            assert SymphonyElixir.PathSafety.canonicalize(details[:at]) == {:ok, sibling_workspace}
+            assert String.trim(git!(sibling_workspace, ["branch", "--show-current"])) == "auto/TP-586"
+          end
+        end)
+
+      assert log =~ "Kept workspace branch on sibling worktree; issue lookup failed sibling=TP-586 reason=:timeout"
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "worktree strategy detaches a clean sibling whose issue is terminal, unknown, or this issue" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-workspace-worktree-closed-sibling-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      primary_repo = Path.join(test_root, "primary")
+      origin_repo = Path.join(test_root, "origin.git")
+      workspace_root = Path.join(test_root, "workspaces")
+
+      create_primary_repo!(primary_repo, origin_repo)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        workspace_fetch_before_dispatch: false
+      )
+
+      for {{sibling, lookup_result}, index} <-
+            Enum.with_index([
+              {"TP-700", {:ok, %Issue{id: "issue-700", identifier: "TP-700", state: "Done"}}},
+              {"TP-701", {:error, :issue_not_found}},
+              {"TP-702", {:error, {:linear_graphql_errors, [%{"message" => "Entity not found: Issue"}]}}},
+              # The renamed issue's own old workspace resolves to this very issue.
+              {"TON-703", {:ok, %Issue{id: "issue-taker-3", identifier: "TP-703", state: "In Progress"}}}
+            ]) do
+        assert {:ok, sibling_workspace} = Workspace.create_for_issue(sibling)
+        git!(sibling_workspace, ["push", "origin", "auto/#{sibling}"])
+
+        issue = %Issue{id: "issue-taker-#{index}", identifier: "TP-71#{index}", workspace_branch: "auto/#{sibling}"}
+
+        lookup = fn ^sibling -> lookup_result end
+        assert {:ok, workspace} = Workspace.create_for_issue(issue, nil, nil, sibling_issue_lookup: lookup)
+
+        assert String.trim(git!(workspace, ["branch", "--show-current"])) == "auto/#{sibling}"
+        assert String.trim(git!(sibling_workspace, ["branch", "--show-current"])) == ""
+      end
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "orchestrator lists other running and retrying workspaces in the same repo as active siblings" do
     state = %Orchestrator.State{
       repo_key: "default",
