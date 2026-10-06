@@ -9,27 +9,37 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
   @rate_limited {:error, {:linear_rate_limited, 1_791_000_030_000}}
 
   defmodule ProgressAgent do
-    # Coding-agent stand-in: every turn completes and is reported to the test.
+    # Coding-agent stand-in: every turn completes and is reported to the test, or, with
+    # `:progress_api_unreachable` set, ends as Claude's turn does when it can't reach the model API.
     def start_session(_workspace, _opts), do: {:ok, %{}}
 
     def run_turn(_session, _prompt, _issue, _opts) do
       count = Application.get_env(:symphony_elixir, :progress_agent_turns, 0) + 1
       Application.put_env(:symphony_elixir, :progress_agent_turns, count)
       send(Application.fetch_env!(:symphony_elixir, :progress_agent_recipient), {:progress_turn, count})
-      {:ok, %{session_id: "sess-#{count}"}}
+
+      case Application.get_env(:symphony_elixir, :progress_api_unreachable) do
+        %{} = info -> {:error, {:model_api_unreachable, info}}
+        nil -> {:ok, %{session_id: "sess-#{count}"}}
+      end
     end
 
     def stop_session(_session), do: :ok
   end
 
   defmodule ProgressReviewer do
-    # Pre-push reviewer stand-in: approves the diff and reports the review to the test.
+    # Pre-push reviewer stand-in: approves the diff and reports the review to the test, or, with
+    # `:progress_reviewer_api_unreachable` set, can't reach the model API.
     def start_session(_workspace, _opts), do: {:ok, %{}}
 
     def run_turn(_session, _prompt, _issue, _opts) do
       turns = Application.get_env(:symphony_elixir, :progress_agent_turns, 0)
       send(Application.fetch_env!(:symphony_elixir, :progress_agent_recipient), {:progress_reviewed, turns})
-      {:ok, %{result: ~s({"verdict":"approve","comments":[]})}}
+
+      case Application.get_env(:symphony_elixir, :progress_reviewer_api_unreachable) do
+        %{} = info -> {:error, {:model_api_unreachable, info}}
+        nil -> {:ok, %{result: ~s({"verdict":"approve","comments":[]})}}
+      end
     end
 
     def stop_session(_session), do: :ok
@@ -58,6 +68,8 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
             :progress_agent_recipient,
             :progress_agent_turns,
             :progress_pr_head_result,
+            :progress_api_unreachable,
+            :progress_reviewer_api_unreachable,
             :memory_tracker_update_issue_state_result,
             :memory_tracker_create_comment_result
           ] do
@@ -145,6 +157,20 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     assert turns() == 2
     assert_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
     assert_received {:memory_tracker_comment, "issue-progress", "Symphony parked this issue in Backlog" <> _note}
+  end
+
+  test "a turn that can't reach the model API ends the run on the provider hold, so outage turns never park the issue" do
+    info = outage_info()
+    Application.put_env(:symphony_elixir, :progress_api_unreachable, info)
+
+    # Two runs in a row during the outage: each ends on its first turn, before the empty-turn check.
+    for run <- 1..2 do
+      assert {:model_api_unreachable, ^info} = catch_exit(run_issue!("In Progress", heads: ["sha-same"], pr_url: nil, max_turns: 5))
+      assert turns() == run
+    end
+
+    refute_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+    refute_received {:memory_tracker_comment, "issue-progress", "Symphony parked this issue" <> _note}
   end
 
   test "an issue with many attachments and no PR is still parked, saying it has no PR" do
@@ -314,6 +340,26 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       assert reviewed_at < Enum.find_index(messages, &match?({:memory_tracker_state_update, "issue-progress", "Auto Review"}, &1))
       refute_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
       assert log =~ "CI is running on issue_id=issue-progress issue_identifier=TP-337's pushed head sha-fixed on its PR; moving to Auto Review"
+    end
+
+    test "holds the push when the pre-push reviewer can't reach the model API, instead of reading it as inconclusive" do
+      info = outage_info()
+      Application.put_env(:symphony_elixir, :progress_reviewer_api_unreachable, info)
+
+      log =
+        capture_log(fn ->
+          run = fn -> run_issue!("In Progress", heads: ["sha-dirty", "sha-fixed"], max_turns: 6, reviewer: true) end
+          assert {:model_api_unreachable, ^info} = catch_exit(run.())
+        end)
+
+      # No approval turn: the executor never gets the go-ahead to push.
+      assert turns() == 1
+      assert_received {:progress_reviewed, 1}
+      refute_received {:progress_reviewed, _turns}
+      refute_received {:memory_tracker_state_update, "issue-progress", _state}
+      assert log =~ "Reviewer agent could not reach the model API for issue_id=issue-progress issue_identifier=TP-337 error=ENOTFOUND; holding the push until it is reviewed"
+      refute log =~ "inconclusive"
+      refute log =~ "letting the push go ahead"
     end
 
     test "waits a turn for the checks of the head it pushed to show up, then moves to Auto Review" do
@@ -643,6 +689,11 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
   end
 
   defp turns, do: Application.get_env(:symphony_elixir, :progress_agent_turns, 0)
+
+  # What Claude's turn reports when it can't reach the model API.
+  defp outage_info do
+    %{provider: "anthropic", scope: :all, window: nil, resets_at: nil, utilization: nil, source: :api_unreachable, error: "ENOTFOUND"}
+  end
 
   test "the workspace HEAD and its unpushed commits read from a local git checkout only" do
     root = Path.join(System.tmp_dir!(), "symphony-workspace-head-#{System.unique_integer([:positive])}")

@@ -23,8 +23,10 @@ defmodule SymphonyElixir.Workspace do
   # The last five keep git from running a command the config names: a fetch lists no refs of the
   # repo's alternate object stores (`core.alternateRefsCommand`), no `git://` remote goes through
   # `core.gitProxy`, and nothing checks or makes a signature with `gpg.program`.
+  # `core.sshCommand`: an SSH connection that stops answering is dropped after a minute instead
+  # of holding the git call (and the repo's fetch lock) forever.
   @safe_git_config_overrides [
-    "core.sshCommand=ssh",
+    "core.sshCommand=ssh -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4",
     "core.fsmonitor=",
     "core.hooksPath=",
     "credential.helper=",
@@ -48,6 +50,13 @@ defmodule SymphonyElixir.Workspace do
     {"GIT_OPTIONAL_LOCKS", "0"}
   ]
   @safe_git_env_keys Enum.map(@safe_git_env, &elem(&1, 0))
+  # The git subcommands that talk to a remote, and the wall-clock limit each call of one gets.
+  # A remote can accept the connection and then never answer, and the SSH keepalives don't see
+  # that while the server's sshd still answers them.
+  @network_git_subcommands ["fetch", "pull", "push", "ls-remote"]
+  @default_git_network_timeout_ms 300_000
+  # The exit status of a network call Symphony stopped at its timeout, as `timeout(1)` uses.
+  @git_timeout_status 124
 
   @type worker_host :: String.t() | nil
   @type lifecycle_action :: %{
@@ -92,19 +101,84 @@ defmodule SymphonyElixir.Workspace do
   # diff drivers and upload or receive pack commands it names (see
   # `SymphonyElixir.GitConfigCommands`), and refuses to run git when it can't. The scan runs git
   # through `/bin/sh`, so a missing git raises first, as `System.cmd/3` does.
+  #
+  # A `fetch`, `pull`, `push` or `ls-remote` is stopped, with git's whole process group, once it
+  # has run for `:network_timeout_ms` (default 5 minutes, or the `:git_network_timeout_ms`
+  # application env), and then returns status 124 with a line saying so. It is stopped as well
+  # when its caller exits. Each one logs its duration.
   @spec safe_git(String.t(), [String.t()], keyword()) :: {Collectable.t(), non_neg_integer()}
   def safe_git(command, args, opts) when is_binary(command) and is_list(args) and is_list(opts) do
     unless System.find_executable(command) do
       :erlang.error(:enoent, [command, args, opts])
     end
 
+    {timeout_ms, opts} = Keyword.pop_lazy(opts, :network_timeout_ms, &default_git_network_timeout_ms/0)
+
     case GitConfigCommands.config_args(args, opts, &read_git(command, &1, &2)) do
       {:ok, driver_args} ->
-        System.cmd(command, safe_git_args(driver_args ++ GitConfigCommands.subcommand_args(args)), safe_git_opts(opts))
+        invocation = git_invocation(args, Keyword.get(opts, :cd))
+        run_safe_git(command, driver_args ++ GitConfigCommands.subcommand_args(args), opts, invocation, timeout_ms)
 
       {:error, message, status} ->
         {message, status}
     end
+  end
+
+  defp run_safe_git(command, args, opts, {[subcommand | _args] = invocation, dir}, timeout_ms)
+       when subcommand in @network_git_subcommands do
+    log_command = Enum.join(["git" | invocation], " ")
+    dir = dir || File.cwd!()
+    started_at = System.monotonic_time(:millisecond)
+
+    case run_git_port(command, safe_git_args(args), safe_git_opts(opts), timeout_ms) do
+      {:ok, {output, status}} ->
+        Logger.info("Git network call completed repo=#{dir} command=#{inspect(log_command)} status=#{status} duration_ms=#{elapsed_ms(started_at)}")
+
+        {output, status}
+
+      {:timeout, output} ->
+        Logger.error("Git network call timed out repo=#{dir} command=#{inspect(log_command)} timeout_ms=#{timeout_ms} duration_ms=#{elapsed_ms(started_at)}; stopped it")
+
+        {"symphony: #{log_command} timed out after #{timeout_ms} ms and was stopped\n" <> output, @git_timeout_status}
+    end
+  end
+
+  defp run_safe_git(command, args, opts, _invocation, _timeout_ms) do
+    System.cmd(command, safe_git_args(args), safe_git_opts(opts))
+  end
+
+  # The subcommand with its arguments, and the dir the call runs in: the last `-C <dir>`, or the
+  # `:cd` option. Takes git's `-C <dir>` and `-c <config>` options before the subcommand.
+  defp git_invocation(["-C", dir | args], _dir), do: git_invocation(args, dir)
+  defp git_invocation(["-c", _config | args], dir), do: git_invocation(args, dir)
+  defp git_invocation(args, dir), do: {args, dir}
+
+  # Runs git in a port owned by a task, which stops git's process group (git and the `ssh` it
+  # started) at the deadline, or when the caller exits first.
+  defp run_git_port(command, args, opts, timeout_ms) do
+    owner = self()
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+
+    port_opts =
+      [:binary, :exit_status, :stderr_to_stdout, :hide, args: args, env: port_env(Keyword.fetch!(opts, :env))] ++
+        Keyword.take(opts, [:cd])
+
+    Task.async(fn ->
+      Process.flag(:trap_exit, true)
+      port = Port.open({:spawn_executable, System.find_executable(command)}, port_opts)
+      collect_hook_output(port, owner, [], deadline)
+    end)
+    |> Task.await(:infinity)
+  end
+
+  defp port_env(env) do
+    Enum.map(env, fn {key, value} -> {String.to_charlist(key), if(value, do: String.to_charlist(value), else: false)} end)
+  end
+
+  defp elapsed_ms(started_at), do: System.monotonic_time(:millisecond) - started_at
+
+  defp default_git_network_timeout_ms do
+    Application.get_env(:symphony_elixir, :git_network_timeout_ms, @default_git_network_timeout_ms)
   end
 
   # The shell functions an SSH worker's script defines to run git as `safe_git/3` does:
@@ -2227,7 +2301,8 @@ defmodule SymphonyElixir.Workspace do
   # the shell start its next command, alongside the retry. The group is stopped
   # before the tree walk, which catches what moved to a group of its own. For a
   # remote hook this kills only the local `ssh`: with no pty the worker sends the
-  # hook no hangup, so it can keep running there.
+  # hook no hangup, so it can keep running there. A git network call is stopped the
+  # same way, with the `ssh` it started.
   defp stop_hook_process(port) do
     with {:os_pid, os_pid} <- Port.info(port, :os_pid) do
       signal_process_group(os_pid, "-STOP")

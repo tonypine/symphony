@@ -251,6 +251,54 @@ defmodule SymphonyElixir.Repo.FetcherTest do
     end
   end
 
+  describe "a remote that never answers" do
+    setup %{root: root} do
+      {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}, reuseaddr: true])
+      {:ok, port} = :inet.port(listener)
+      on_exit(fn -> :gen_tcp.close(listener) end)
+
+      checkout = Path.join(root, "checkout")
+      File.mkdir_p!(checkout)
+
+      for args <- [["init", "-b", "main"], ["remote", "add", "origin", "http://127.0.0.1:#{port}/stalled.git"]] do
+        {_output, 0} = System.cmd("git", args, cd: checkout, stderr_to_stdout: true)
+      end
+
+      %{checkout: checkout, listener: listener}
+    end
+
+    test "a stalled full fetch is stopped at its timeout and the next fetch of the repo goes ahead", %{
+      checkout: checkout,
+      listener: listener,
+      server: server
+    } do
+      test_pid = self()
+
+      log =
+        capture_log(fn ->
+          stalled = Task.async(fn -> Fetcher.fetch_origin(checkout, server: server, network_timeout_ms: 500) end)
+          {:ok, _connection} = :gen_tcp.accept(listener, 5_000)
+
+          queued =
+            Task.async(fn ->
+              Fetcher.fetch(checkout, fn -> send(test_pid, :queued_fetch_ran) && {"", 0} end, server: server)
+            end)
+
+          key = key(checkout)
+          wait_for_state(server, &match?(%{^key => {{:fetch, _ref, _waiters}, [{:lock, _from}]}}, &1))
+          refute_received :queued_fetch_ran
+
+          assert {output, 124} = Task.await(stalled, 10_000)
+          assert output =~ "symphony: git fetch origin timed out after 500 ms and was stopped"
+          assert Task.await(queued, 10_000) == {"", 0}
+          assert_received :queued_fetch_ran
+          wait_for_state(server, &(&1 == %{}))
+        end)
+
+      assert log =~ ~s(Git network call timed out repo=#{checkout} command="git fetch origin" timeout_ms=500)
+    end
+  end
+
   describe "remote_fetch_origin_script/0" do
     setup %{root: root, git: git} do
       bin = Path.join(root, "bin")

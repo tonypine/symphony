@@ -397,6 +397,67 @@ defmodule SymphonyElixir.WorkspaceSafeGitTest do
     assert {"", 128, ^message} = Workspace.safe_git_stdout(["-C", repo, "status"])
   end
 
+  describe "network calls" do
+    setup %{test_root: test_root} do
+      {listener, port} = silent_remote!()
+      repo = init_repo!(Path.join(test_root, "repo"))
+      git!(repo, ["remote", "add", "origin", "http://127.0.0.1:#{port}/stalled.git"])
+
+      %{repo: repo, listener: listener}
+    end
+
+    test "a fetch or push to a remote that never answers is stopped at the timeout", %{repo: repo} do
+      for args <- [["fetch", "origin"], ["push", "origin", "main"]] do
+        log =
+          capture_log(fn ->
+            {elapsed_us, result} = :timer.tc(fn -> Workspace.safe_git(["-C", repo | args], network_timeout_ms: 300) end)
+
+            assert {output, 124} = result
+            assert output =~ "symphony: git #{Enum.join(args, " ")} timed out after 300 ms and was stopped"
+            assert elapsed_us < 5_000_000
+          end)
+
+        assert log =~ ~s(Git network call timed out repo=#{repo} command="git #{Enum.join(args, " ")}" timeout_ms=300)
+      end
+    end
+
+    test "the timeout defaults to the application env", %{repo: repo} do
+      Application.put_env(:symphony_elixir, :git_network_timeout_ms, 200)
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :git_network_timeout_ms) end)
+
+      capture_log(fn -> assert {_output, 124} = Workspace.safe_git(["ls-remote", "origin"], cd: repo) end)
+    end
+
+    test "a network call that ends logs its status and duration", %{test_root: test_root, repo: repo} do
+      git!(repo, ["remote", "set-url", "origin", init_repo!(Path.join(test_root, "upstream"))])
+
+      log = capture_log([level: :info], fn -> assert {_output, 0} = Workspace.safe_git(["-C", repo, "-c", "fetch.prune=false", "fetch", "origin"]) end)
+
+      assert log =~ ~r/Git network call completed repo=#{Regex.escape(repo)} command="git fetch origin" status=0 duration_ms=\d+/
+    end
+
+    test "a network call is stopped when its caller exits", %{repo: repo, listener: listener} do
+      caller = spawn(fn -> Workspace.safe_git(["-C", repo, "fetch", "origin"]) end)
+      {:ok, connection} = :gen_tcp.accept(listener, 5_000)
+
+      Process.exit(caller, :kill)
+
+      assert {:error, :closed} = :gen_tcp.recv(connection, 0, 5_000) |> drain(connection)
+    end
+  end
+
+  # A remote that takes the connection and never answers it.
+  defp silent_remote! do
+    {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}, reuseaddr: true])
+    {:ok, port} = :inet.port(listener)
+    on_exit(fn -> :gen_tcp.close(listener) end)
+    {listener, port}
+  end
+
+  # The client's request comes first; the connection closes once git is stopped.
+  defp drain({:ok, _request}, connection), do: connection |> :gen_tcp.recv(0, 5_000) |> drain(connection)
+  defp drain(result, _connection), do: result
+
   # A command that leaves `proof` behind and acts as a signing `gpg.program` would.
   defp proof_script!(dir, proof) do
     script = Path.join(dir, "proof-#{System.unique_integer([:positive])}")

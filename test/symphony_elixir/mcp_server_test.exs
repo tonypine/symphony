@@ -1215,6 +1215,91 @@ defmodule SymphonyElixir.McpServerTest do
     end
   end
 
+  test "a tool call that outlives its timeout returns an error and the connection answers the next request" do
+    server = unique_server()
+    start_supervised!({McpServer, name: server})
+    test_pid = self()
+
+    linear_client = fn _query, _variables, _opts ->
+      send(test_pid, {:tool_running, self()})
+      Process.sleep(:infinity)
+    end
+
+    context = %{
+      issue_id: "issue-1",
+      workspace: System.tmp_dir!(),
+      mcp_tool_timeout_ms: 200,
+      tool_opts: [linear_client: linear_client]
+    }
+
+    session = start_transport_session!(context, server)
+    socket = connect_session!(session)
+
+    try do
+      log =
+        capture_log([level: :error], fn ->
+          send(test_pid, {:timed_out, request!(socket, 1, "tools/call", %{"name" => "linear_get_current_issue", "arguments" => %{}})})
+        end)
+
+      assert_receive {:timed_out, response}
+      assert response["result"]["isError"]
+      [content] = response["result"]["content"]
+      assert content["text"] =~ ~s("code": "tool_timeout")
+      assert content["text"] =~ "linear_get_current_issue did not finish within 200 ms, so Symphony stopped it."
+      assert log =~ ~s(MCP tool call timed out method="tools/call" tool="linear_get_current_issue" request_id=1)
+      assert log =~ "timeout_ms=200"
+
+      assert_received {:tool_running, tool_pid}
+      refute Process.alive?(tool_pid)
+
+      assert %{"result" => %{"tools" => [_ | _]}} = request!(socket, 2, "tools/list", %{})
+    after
+      close_socket(socket)
+      McpServer.stop_session(session, server: server)
+    end
+  end
+
+  test "QA tools run without the tool call timeout" do
+    server = unique_server()
+    start_supervised!({McpServer, name: server})
+
+    session = start_transport_session!(%{workspace: System.tmp_dir!(), tool_scope: :qa, mcp_tool_timeout_ms: 0}, server)
+    socket = connect_session!(session)
+
+    try do
+      response = request!(socket, 1, "tools/call", %{"name" => "qa_build", "arguments" => %{}})
+      [content] = response["result"]["content"]
+      assert content["text"] =~ "qa_driver_unavailable"
+    after
+      close_socket(socket)
+      McpServer.stop_session(session, server: server)
+    end
+  end
+
+  test "a tool that exits is answered with an internal error, as a handler crash is" do
+    server = unique_server()
+    start_supervised!({McpServer, name: server})
+
+    linear_client = fn _query, _variables, _opts -> exit(:linear_gone) end
+    context = %{issue_id: "issue-1", workspace: System.tmp_dir!(), tool_opts: [linear_client: linear_client]}
+    session = start_transport_session!(context, server)
+    socket = connect_session!(session)
+
+    try do
+      log =
+        capture_log([level: :error], fn ->
+          response = request!(socket, 1, "tools/call", %{"name" => "linear_get_current_issue", "arguments" => %{}})
+          assert response["error"]["message"] =~ "Internal MCP handler error: {:exit, :linear_gone}"
+        end)
+
+      assert log =~ "MCP handler exited"
+      assert log =~ ~s(tool="linear_get_current_issue")
+    after
+      close_socket(socket)
+      McpServer.stop_session(session, server: server)
+    end
+  end
+
   test "handler crash returns internal error and logs request metadata" do
     server = unique_server()
     start_supervised!({McpServer, name: server})

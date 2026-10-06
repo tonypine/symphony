@@ -2386,6 +2386,7 @@ defmodule SymphonyElixir.ExtensionsTest do
             kind: :usage_limit,
             provider: "anthropic",
             scope: :all,
+            reason: "claude_usage_limit",
             window: "five_hour",
             resets_at: ~U[2026-10-03 14:03:00Z],
             resume_at: resume_at,
@@ -2414,6 +2415,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                "resets_at" => "2026-10-03T14:03:00Z",
                "resume_at" => DateTime.to_iso8601(resume_at),
                "source" => nil,
+               "error" => nil,
                "utilization" => nil,
                "issue_identifier" => "MT-HELD"
              }
@@ -2426,6 +2428,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "kind" => "usage_limit",
                  "provider" => "anthropic",
                  "scope" => "all",
+                 "reason" => "claude_usage_limit",
                  "window" => "five_hour",
                  "phase" => "paused",
                  "resets_at" => "2026-10-03T14:03:00Z",

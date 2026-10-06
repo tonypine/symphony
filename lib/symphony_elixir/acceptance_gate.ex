@@ -39,6 +39,7 @@ defmodule SymphonyElixir.AcceptanceGate do
   alias SymphonyElixir.{AgentTelemetry, AgentTmpDir, AgentTools, AuditLog, Config, LeftoverProcesses, PromptSafety}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.Orchestrator
   alias SymphonyElixir.QaAgent
   alias SymphonyElixir.ReviewAgent
   alias SymphonyElixir.RunKind
@@ -72,7 +73,7 @@ defmodule SymphonyElixir.AcceptanceGate do
           escalation_reasons: [String.t()],
           follow_ups: [%{title: String.t(), detail: String.t()}]
         }
-  @type outcome :: {:answer, answer()} | {:inconclusive, term()} | {:conflict, [String.t()]}
+  @type outcome :: {:answer, answer()} | {:inconclusive, term()} | {:conflict, [String.t()]} | {:unavailable, map()}
   @type run_result :: %{
           outcome: outcome(),
           reasons: [reason()],
@@ -192,6 +193,11 @@ defmodule SymphonyElixir.AcceptanceGate do
   `SymphonyElixir.AcceptanceGate.Runner` task. Returns the decision; its `verdict` is nil after
   an inconclusive pass below the limit.
 
+  A pass whose agent couldn't reach the model API is neither: it records no verdict, counts no
+  inconclusive pass and writes no comment. It holds the provider's runs as a usage limit does
+  (`opts[:usage_limit_hold]`, default `SymphonyElixir.Orchestrator.hold_for_usage_limit/2`), so
+  the next green poll waits, and returns a decision with `unavailable` set to the hold info.
+
   `job` carries `issue`, `record` (the CI check record), `sha`, `settings` and `qa` (the QA
   verdict and reason it follows).
 
@@ -236,6 +242,49 @@ defmodule SymphonyElixir.AcceptanceGate do
 
     job = Map.merge(job, %{run_id: run_id, token_limit: settings.agent.max_tokens_per_issue})
     result = run(job, settings, opts)
+
+    pass = %{
+      issue: issue,
+      record: record,
+      sha: sha,
+      settings: settings,
+      run_id: run_id,
+      started_at: started_at,
+      run_store: run_store
+    }
+
+    case result.outcome do
+      {:unavailable, info} -> hold_unavailable_pass(pass, result, info, opts)
+      _outcome -> record_pass(pass, result, opts)
+    end
+  end
+
+  defp hold_unavailable_pass(%{issue: issue, record: record, sha: sha} = pass, result, info, opts) do
+    hold = Keyword.get(opts, :usage_limit_hold, &Orchestrator.hold_for_usage_limit/2)
+    held = hold.(info, issue.identifier)
+
+    Logger.warning(
+      "Acceptance gate agent could not reach the model API (#{info.error}) for #{issue.identifier} sha=#{sha}; " <>
+        "no verdict, the pass runs again once the hold lifts hold=#{inspect(held)}"
+    )
+
+    ended_at = DateTime.utc_now()
+
+    update_run(pass.run_store, Map.get(record, :repo_key), pass.run_id, %{
+      status: "gate_unavailable",
+      ended_at: ended_at,
+      error: "model API unreachable (#{info.error})",
+      runtime_seconds: max(DateTime.diff(ended_at, pass.started_at), 0),
+      tokens: result.tokens,
+      updated_at: ended_at
+    })
+
+    decision = %{verdict: nil, agent_verdict: nil, reasons: [], inconclusive: 0, unavailable: info}
+    {:ok, Map.merge(decision, %{run_id: pass.run_id, findings: [], target: nil})}
+  end
+
+  defp record_pass(%{issue: issue, record: record, sha: sha, settings: settings, run_id: run_id, started_at: started_at, run_store: run_store}, result, opts) do
+    repo_key = Map.get(record, :repo_key)
     decision = decide(result, record, sha, settings)
     findings = rework_findings(result, decision)
     target = enforced_target(issue, record, decision.verdict, settings)
@@ -513,6 +562,9 @@ defmodule SymphonyElixir.AcceptanceGate do
           {:error, reason} ->
             {{:inconclusive, reason}, follow_ups}
         end
+
+      {:error, {:model_api_unreachable, info}} ->
+        {{:unavailable, info}, follow_ups}
 
       {:error, reason} ->
         {{:inconclusive, {:gate_agent_failed, reason}}, follow_ups}
