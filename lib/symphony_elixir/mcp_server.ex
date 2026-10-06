@@ -7,6 +7,7 @@ defmodule SymphonyElixir.McpServer do
 
   alias SymphonyElixir.AuditLog
   alias SymphonyElixir.Codex.DynamicTool
+  alias SymphonyElixir.Config
   alias SymphonyElixir.DependencyGate
 
   @server_name "symphony"
@@ -19,10 +20,6 @@ defmodule SymphonyElixir.McpServer do
   @max_socket_path_bytes 103
   @shim_prefix "symphony-mcp-shim-"
   @orphaned_socket_dir_grace_seconds 5
-  # How long one of Symphony's own tools (`linear_*`, `github_*`) may run before the call returns
-  # an error. A connection serves one request at a time, so a call that never ends would hold
-  # every later call on it, the ones its client gave up on included.
-  @default_tool_timeout_ms 600_000
 
   @type session :: %{
           id: String.t(),
@@ -972,13 +969,14 @@ defmodule SymphonyElixir.McpServer do
   defp remaining_ms(:infinity), do: :infinity
   defp remaining_ms(deadline), do: max(deadline - System.monotonic_time(:millisecond), 0)
 
+  # How long one of Symphony's own tools (`linear_*`, `github_*`) may run before the call returns
+  # an error: `Config.mcp_tool_timeout_ms/0`. A connection serves one request at a time, so a call
+  # that never ends would hold every later call on it, the ones its client gave up on included.
   # QA tools keep the timeouts their drivers set: a `qa_build` runs as long as its playbook allows.
   defp tool_timeout_ms("qa_" <> _rest, _context), do: :infinity
 
   defp tool_timeout_ms(_tool, context) do
-    Map.get_lazy(context, :mcp_tool_timeout_ms, fn ->
-      Application.get_env(:symphony_elixir, :mcp_tool_timeout_ms, @default_tool_timeout_ms)
-    end)
+    Map.get_lazy(context, :mcp_tool_timeout_ms, &Config.mcp_tool_timeout_ms/0)
   end
 
   defp tool_timeout_output(tool, timeout_ms) do
