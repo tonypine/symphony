@@ -39,7 +39,7 @@ cd "$repo"
 # escript this checkout built outside the sandbox with `mix build`.
 if [ ! -x ./bin/symphony ]; then
   echo "scripts/qa-dashboard-server.sh: ./bin/symphony is missing." >&2
-  echo "Build it first with \`mix build\`. Mix can't run inside the dev server sandbox on macOS: it opens TCP listeners for its build lock and pub/sub." >&2
+  echo "Build it first with \`mix build\`, in hooks.before_run (see docs/configuration.md#verification). Mix can't run inside the dev server sandbox on macOS: it opens TCP listeners for its build lock and pub/sub." >&2
   exit 1
 fi
 

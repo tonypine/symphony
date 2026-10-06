@@ -3023,6 +3023,10 @@ Execution contract:
 - When verification is enabled for the run, `hooks.before_run` and `hooks.after_run` receive
   `SYMPHONY_VERIFICATION_PORT` in their environment. If a project starts its dev server from a hook
   instead of `verification.dev_server.start_cmd`, it is responsible for backgrounding and cleanup.
+- A QA pass that starts `verification.dev_server` from a worktree of its own runs
+  `hooks.before_run` in that worktree first, with `SYMPHONY_VERIFICATION_PORT` set, and starts the
+  dev server only when the hook succeeds. This is where a project builds, outside the dev server's
+  sandbox, an artifact the sandbox can't build.
 - Hook timeout uses `hooks.timeout_ms`; default: `60000 ms`. `after_create` uses
   `hooks.after_create_timeout_ms`, or the larger of `hooks.timeout_ms` and `600000 ms` when unset.
 - On a timeout of a local hook, stop the hook's process and what it started, at once, so the hook

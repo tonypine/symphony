@@ -5,6 +5,7 @@ defmodule SymphonyElixir.Verification do
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.Verification.{DevServer, PortPool}
+  alias SymphonyElixir.Workspace
 
   @env_var "SYMPHONY_VERIFICATION_PORT"
   @dev_server_supervisor SymphonyElixir.Verification.DevServerSupervisor
@@ -47,8 +48,11 @@ defmodule SymphonyElixir.Verification do
 
   @doc """
   Allocates a port and starts `verification.dev_server` in `workspace` for a QA pass,
-  waiting for its health check. The port is released again when the server does not
-  start. Stop it with `stop_qa_dev_server/1`.
+  waiting for its health check. `hooks.before_run` runs in `workspace` first, outside the
+  dev server's sandbox and with `SYMPHONY_VERIFICATION_PORT` set, as it does before an agent
+  run's dev server: a fresh worktree builds there what the sandbox can't (an Elixir escript).
+  The port is released again when the hook fails or the server does not start. Stop it with
+  `stop_qa_dev_server/1`.
   """
   @spec start_qa_dev_server(Issue.t(), String.t(), Path.t(), keyword()) :: {:ok, qa_dev_server()} | {:error, term()}
   def start_qa_dev_server(%Issue{} = issue, run_id, workspace, opts) when is_binary(run_id) and is_binary(workspace) do
@@ -56,10 +60,12 @@ defmodule SymphonyElixir.Verification do
 
     case allocate_for_dispatch(issue, run_id, nil, opts) do
       {:ok, %{port: port} = context} ->
-        case start_dev_server(context, workspace, settings: settings) do
-          {:ok, pid} when is_pid(pid) ->
-            {:ok, %{context: context, pid: pid, port: port, url: dev_server_url(port, settings)}}
+        hook_opts = [env: env(context), settings: settings, repo_key: context.repo_key]
 
+        with :ok <- Workspace.run_before_run_hook(workspace, issue, nil, hook_opts),
+             {:ok, pid} when is_pid(pid) <- start_dev_server(context, workspace, settings: settings) do
+          {:ok, %{context: context, pid: pid, port: port, url: dev_server_url(port, settings)}}
+        else
           other ->
             release(context, "qa dev server did not start")
             {:error, dev_server_error(other)}

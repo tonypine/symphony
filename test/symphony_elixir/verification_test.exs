@@ -10,6 +10,19 @@ defmodule SymphonyElixir.VerificationTest do
   # stand-in for `sandbox-exec`), else on `127.0.0.1:$SYMPHONY_VERIFICATION_PORT`.
   @dev_server Path.expand("../support/dev_server.py", __DIR__)
 
+  # The `hooks.before_run` docs/configuration.md gives Symphony's own repo: it builds the
+  # dashboard's escript outside the dev server's sandbox, where Mix can't run on macOS.
+  @dashboard_build_hook """
+  if [ -n "${SYMPHONY_VERIFICATION_PORT:-}" ]; then
+    export MIX_ENV=dev
+    if command -v mise >/dev/null 2>&1; then
+      mise trust && mise exec -- mix deps.get && mise exec -- mix build
+    else
+      mix deps.get && mix build
+    fi
+  fi
+  """
+
   setup do
     stop_verification_port_pool()
     :ok = RunStore.clear()
@@ -608,45 +621,56 @@ defmodule SymphonyElixir.VerificationTest do
       assert :ok = DevServer.stop(pid)
     end
 
-    # Builds this checkout's escript with `mix build` (in `_build/dev` and `bin/`) outside the
-    # sandbox before it serves, as an Auto Review `web` pass does, so it can take minutes. The
-    # command then runs in a sandbox that allows no TCP listener, and Mix needs one to load deps
-    # (see the guard in `scripts/qa-dashboard-server.sh`), so the build can't happen there. A plain
-    # `mix test` skips it; `--include qa_dashboard_e2e` or `--only seatbelt` runs it.
+    # An Auto Review `web` pass on Symphony's own repo: the dev server starts from a fresh worktree
+    # at the PR head, with no `deps/`, `_build/` or `bin/symphony`. `hooks.before_run` (the one
+    # docs/configuration.md gives for this repo) fetches deps and builds the escript outside the
+    # sandbox, which can take minutes; the command then runs in a sandbox that allows no TCP
+    # listener, where Mix can't run (see the guard in `scripts/qa-dashboard-server.sh`), and the
+    # bridge serves the dashboard. A plain `mix test` skips it; `--include qa_dashboard_e2e` or
+    # `--only seatbelt` runs it.
     @tag :seatbelt
     @tag :qa_dashboard_e2e
     @tag timeout: 900_000
-    test "serves the dashboard with scripts/qa-dashboard-server.sh from inside the real sandbox", %{port: port} do
-      build_escript!()
+    test "serves the dashboard from a fresh worktree, built by hooks.before_run, from inside the real sandbox", %{root: root, port: port} do
+      worktree = Path.join(root, "pr-head")
+      {output, 0} = System.cmd("git", ["worktree", "add", "--detach", worktree, "HEAD"], stderr_to_stdout: true)
+      on_exit(fn -> System.cmd("git", ["worktree", "remove", "--force", worktree], stderr_to_stdout: true) end)
+      refute File.exists?(Path.join(worktree, "bin/symphony")), output
 
-      config = %DevServerConfig{
-        start_cmd: "scripts/qa-dashboard-server.sh",
-        health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/api/v1/state",
-        health_timeout_ms: 600_000,
-        stop_signal: "TERM",
-        stop_timeout_ms: 5_000
-      }
+      previous_sandbox = Application.get_env(:symphony_elixir, :verification_dev_server_sandbox)
+      Application.put_env(:symphony_elixir, :verification_dev_server_sandbox, [])
+      on_exit(fn -> Application.put_env(:symphony_elixir, :verification_dev_server_sandbox, previous_sandbox) end)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        hook_before_run: @dashboard_build_hook,
+        hook_timeout_ms: 900_000,
+        verification: %{
+          enabled: true,
+          port_allocation: %{range: [port, port]},
+          dev_server: %{
+            start_cmd: "scripts/qa-dashboard-server.sh",
+            health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/api/v1/state",
+            health_timeout_ms: 600_000,
+            stop_timeout_ms: 5_000
+          }
+        }
+      )
+
+      issue = %Issue{id: "issue-qa-dashboard", identifier: "SYM-WEB", title: "Dashboard tweak", state: "Auto Review"}
 
       # The app logs to the rotating disk file (`SymphonyElixir.LogFile` drops the console
       # handler), so on CI a dev server that fails to start leaves no output in the job log.
       # Capture it here and print it on failure, where the diagnosis would otherwise be lost.
       {result, log} =
         ExUnit.CaptureLog.with_log(fn ->
-          DevServer.start(
-            run_id: "qa-dashboard-seatbelt-run",
-            port: port,
-            workspace: File.cwd!(),
-            config: config,
-            env: Verification.env(%{port: port}),
-            owner: self(),
-            sandbox: []
-          )
+          Verification.start_qa_dev_server(issue, "qa-dashboard-seatbelt-run", worktree, settings: Config.settings!())
         end)
 
       case result do
-        {:ok, pid} ->
+        {:ok, dev_server} ->
+          assert File.exists?(Path.join(worktree, "bin/symphony"))
           assert http_ok?("http://127.0.0.1:#{port}/")
-          assert :ok = DevServer.stop(pid)
+          assert :ok = Verification.stop_qa_dev_server(dev_server)
 
         {:error, reason} ->
           IO.puts(:stderr, "qa dashboard dev server failed to start: #{inspect(reason)}\n#{log}")
@@ -776,9 +800,10 @@ defmodule SymphonyElixir.VerificationTest do
       %{issue: issue, port: free_tcp_port()}
     end
 
-    defp qa_settings(port, dev_server) do
-      write_workflow_file!(Workflow.workflow_file_path(),
-        verification: %{enabled: true, port_allocation: %{range: [port, port]}, dev_server: dev_server}
+    defp qa_settings(port, dev_server, overrides \\ []) do
+      write_workflow_file!(
+        Workflow.workflow_file_path(),
+        [verification: %{enabled: true, port_allocation: %{range: [port, port]}, dev_server: dev_server}] ++ overrides
       )
 
       Config.settings!()
@@ -804,6 +829,54 @@ defmodule SymphonyElixir.VerificationTest do
       assert :ok = Verification.stop_qa_dev_server(dev_server)
       refute Process.alive?(pid)
       assert [%{run_id: "qa-web-run", status: "released", release_reason: "qa pass ended"}] = RunStore.list_verification_allocations()
+    end
+
+    # A fresh worktree at the PR head has no build output, and on macOS the dev server's sandbox
+    # can't run a build tool that opens a TCP listener (Mix): `hooks.before_run` builds outside it.
+    @tag :unix_socket
+    test "runs hooks.before_run in the worktree, outside the sandbox and with the port, before the start command", %{issue: issue, port: port} do
+      worktree = Path.join(System.tmp_dir!(), "qa-web-hook-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(worktree)
+      on_exit(fn -> File.rm_rf(worktree) end)
+
+      settings =
+        qa_settings(
+          port,
+          %{
+            start_cmd: "test -f built && exec python3 #{@dev_server}",
+            health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/built",
+            health_timeout_ms: 5_000,
+            stop_timeout_ms: 1_000
+          },
+          hook_before_run: ~S|test -z "${SYMPHONY_VERIFICATION_SOCKET:-}" && echo "$SYMPHONY_VERIFICATION_PORT" > built|
+        )
+
+      assert {:ok, dev_server} = Verification.start_qa_dev_server(issue, "qa-web-hook", worktree, settings: settings)
+      assert File.read!(Path.join(worktree, "built")) == "#{port}\n"
+      assert http_ok?("http://127.0.0.1:#{port}/built")
+      assert :ok = Verification.stop_qa_dev_server(dev_server)
+    end
+
+    test "does not start the dev server when hooks.before_run fails, and releases the port", %{issue: issue, port: port} do
+      worktree = Path.join(System.tmp_dir!(), "qa-web-hook-failed-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(worktree)
+      on_exit(fn -> File.rm_rf(worktree) end)
+
+      settings =
+        qa_settings(
+          port,
+          %{start_cmd: "touch started; sleep 5", health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/", health_timeout_ms: 1_000},
+          hook_before_run: "echo build broke; exit 3"
+        )
+
+      assert {:error, {:workspace_hook_failed, "before_run", 3, output}} =
+               Verification.start_qa_dev_server(issue, "qa-web-hook-failed", worktree, settings: settings)
+
+      assert output =~ "build broke"
+      refute File.exists?(Path.join(worktree, "started"))
+
+      assert [%{run_id: "qa-web-hook-failed", status: "released", release_reason: "qa dev server did not start"}] =
+               RunStore.list_verification_allocations()
     end
 
     test "a dev server that fails its health check returns verification_failed and releases the port", %{issue: issue, port: port} do
@@ -875,15 +948,6 @@ defmodule SymphonyElixir.VerificationTest do
     File.write!(socat, "#!/bin/sh\nexit 0\n")
     Enum.each([bwrap, socat], &File.chmod!(&1, 0o755))
     [os_type: {:unix, :linux}, bwrap: bwrap, socat: socat]
-  end
-
-  # The dev server's sandbox allows no TCP listener, and Mix loads deps through one
-  # (`Mix.PubSub`, and Mix's build lock), so no Mix task can run inside it. Build the escript the
-  # dashboard script serves here, outside the sandbox, as the CI job and an Auto Review `web` pass
-  # do before they start the server.
-  defp build_escript! do
-    {output, status} = System.cmd("mix", ["build"], stderr_to_stdout: true, env: [{"MIX_ENV", "dev"}])
-    assert status == 0, "mix build failed:\n#{output}"
   end
 
   defp real_path(path) do

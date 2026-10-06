@@ -204,6 +204,11 @@ runs whatever code the checkout holds: any `mix` command evaluates `mix.exs`, an
   should run nothing from the checkout: no build tool, no script from the repo, and no
   `mise exec`, which reads the checkout's mise config. `before_remove` gets the repo and branch
   from `SYMPHONY_REPO` and `SYMPHONY_BRANCH`.
+- **`before_run` also runs in an Auto Review `web` pass's worktree at the PR head,** before its
+  dev server starts, so the same holds there. It is the hook for building what the dev server's
+  sandbox can't (an Elixir escript, see [below](#macos-the-dev-server-listens-on-a-unix-socket)),
+  and such a build runs the PR's `mix.exs` and dependencies on the host. A repo sets one only when
+  it accepts that its agents' code runs with the operator's rights.
 - Symphony's own git commands in a workspace run with repo hooks and `core.fsmonitor` off, and a
   local hook runs Gradle without a daemon (see [configuration](configuration.md#workspace-hooks)).
 
@@ -432,7 +437,8 @@ GitHub's `macos-14`, `macos-26` and `xcode-27` images). A rule on the remote add
 - No Mix task runs inside the sandbox. Loading deps starts `Mix.PubSub`, which listens on an
   ephemeral `127.0.0.1` port, and Mix's build lock takes one too; both are refused here. An Elixir
   dev server runs a prebuilt artifact (an escript or a release), built outside the sandbox with
-  `mix build` before verification, never `mix run` or `mix phx.server`.
+  `mix build` before verification (in `hooks.before_run`, see
+  [configuration](configuration.md#verification)), never `mix run` or `mix phx.server`.
 - The server listens on the unix socket `$SYMPHONY_VERIFICATION_SOCKET` (`serve.sock` in its
   `$TMPDIR`) instead of `$SYMPHONY_VERIFICATION_PORT`. A unix socket can't be reached from
   another host.
