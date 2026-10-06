@@ -43,7 +43,14 @@ if command -v mise >/dev/null 2>&1; then
   set -- mise exec --
 fi
 
-"$@" mix deps.get >&2
+# The sandbox reaches the Hex registry only through the run's egress proxy, and only for hosts
+# the run allows. This checkout's deps are normally fetched outside the sandbox already, by the
+# agent or the CI job, so fetch them here only when they are missing: `mix deps.get` resolves
+# against the registry even with every dep present, which a run whose allowlist refuses the
+# registry would fail on.
+if [ ! -d deps ] || [ -z "$(ls -A deps 2>/dev/null)" ]; then
+  "$@" mix deps.get >&2
+fi
 "$@" mix build >&2
 
 # A Symphony agent environment turns the orchestrator and its HTTP server off.
