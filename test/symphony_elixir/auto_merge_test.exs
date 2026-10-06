@@ -478,6 +478,42 @@ defmodule SymphonyElixir.AutoMergeTest do
     assert audit_events("auto_merge_disabled") == []
   end
 
+  test "a conflict found in Merging is approved while the PR head stays, and dropping its state turns auto-merge on again at that head" do
+    now = ~U[2026-10-03 12:00:00Z]
+    put_run!(now)
+    track([issue("Merging")])
+    activity(head: "head-1", merge_state: "BLOCKED")
+    assert {:ok, %{actions: [{:auto_merge, @issue_id, "enabled"}]}} = poll(now)
+
+    # GitHub shows auto-merge off already, so Symphony keeps the head it turned it on for.
+    activity(head: "head-1", mergeable: "CONFLICTING", merge_state: "DIRTY")
+    assert {:ok, %{actions: [{:state_transitioned, @issue_id, :conflict, "In Progress"}]}} = poll(DateTime.add(now, 30))
+    assert %{head_sha: "head-1", approved: true} = PrReviewPoller.pending_pr_conflict(@issue_id)
+    assert %{state: "conflict", enabled_head_sha: "head-1"} = PrReviewPoller.auto_merge(@issue_id)
+
+    # Out of Merging, the base branch moves on: the conflict on the same head keeps its approval.
+    track([issue("In Progress")])
+    activity(head: "head-1", base: "base-2", mergeable: "CONFLICTING", merge_state: "DIRTY")
+    assert {:ok, %{actions: [{:state_transitioned, @issue_id, :conflict, "In Progress"}]}} = poll(DateTime.add(now, 60))
+    assert %{conflict_key: "head-1|base-2", approved: true} = PrReviewPoller.pending_pr_conflict(@issue_id)
+
+    # The merge-conflict run found nothing to resolve: dropping the conflict state as it moves the
+    # issue back to Merging lets the next poll turn auto-merge on at the same head.
+    mailbox()
+    PrReviewPoller.release_auto_merge_hold(@issue_id)
+    assert PrReviewPoller.auto_merge(@issue_id) == nil
+    track([issue("Merging")])
+    activity(head: "head-1", base: "base-2", merge_state: "BLOCKED")
+    assert {:ok, %{actions: [{:auto_merge, @issue_id, "enabled"}]}} = poll(DateTime.add(now, 90))
+    assert_received {:enable_auto_merge, @pr_url, %{head_sha: "head-1"}}
+
+    # A new head is a new diff: a conflict on it, found outside Merging, is not approved.
+    track([issue("In Progress")])
+    activity(head: "head-2", base: "base-2", mergeable: "CONFLICTING", merge_state: "DIRTY")
+    capture_log(fn -> assert {:ok, %{actions: [{:state_transitioned, @issue_id, :conflict, "In Progress"}]}} = poll(DateTime.add(now, 120)) end)
+    assert %{head_sha: "head-2", approved: false} = PrReviewPoller.pending_pr_conflict(@issue_id)
+  end
+
   test "while auto-merge can't be turned off the conflict-fix run waits, and a failed comment doesn't hold it" do
     now = ~U[2026-10-03 12:00:00Z]
     put_run!(now)
@@ -642,13 +678,13 @@ defmodule SymphonyElixir.AutoMergeTest do
     failing_store = [run_store: __MODULE__.HoldFailingRunStore]
     log = capture_log(fn -> assert :ok = PrReviewPoller.release_auto_merge_hold(@issue_id, failing_store) end)
 
-    assert log =~ "Failed to drop the CI-fix auto-merge hold issue_id=#{@issue_id}: :write_failed"
+    assert log =~ "Failed to drop the auto-merge hold issue_id=#{@issue_id}: :write_failed"
     assert %{state: "ci_failure"} = PrReviewPoller.auto_merge(@issue_id)
 
     unreadable_store = [run_store: __MODULE__.PrReviewsFailingRunStore]
     log = capture_log(fn -> assert :ok = PrReviewPoller.release_auto_merge_hold(@issue_id, unreadable_store) end)
 
-    assert log =~ "Failed to drop the CI-fix auto-merge hold issue_id=#{@issue_id}: :mnesia_down"
+    assert log =~ "Failed to drop the auto-merge hold issue_id=#{@issue_id}: :mnesia_down"
     assert %{state: "ci_failure"} = PrReviewPoller.auto_merge(@issue_id)
   end
 
@@ -1841,7 +1877,7 @@ defmodule SymphonyElixir.AutoMergeTest do
       head_ref_name: "auto/ACME-1780",
       head_ref_oid: Keyword.fetch!(opts, :head),
       base_ref_name: "main",
-      base_ref_oid: "base-1",
+      base_ref_oid: Keyword.get(opts, :base, "base-1"),
       is_cross_repository: false,
       latest_activity_at: ~U[2026-10-03 11:00:00Z],
       latest_review_activity_at: ~U[2026-10-03 11:00:00Z],
