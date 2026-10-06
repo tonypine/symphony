@@ -72,7 +72,7 @@ final class SettingsUIManifestTests: XCTestCase {
         let every = RunProfile(model: "claude-opus-5-5", effort: "max", provider: "anthropic")
         let profiles = RunProfiles(defaults: every, kinds: Dictionary(uniqueKeysWithValues: RunKind.allCases.map { ($0, every) }))
         let old = try RunProfilesConfig.scopedProfiles(in: yaml)
-        let new = ScopedRunProfiles(global: profiles, repositories: ["web": profiles, "api": profiles])
+        let new = ScopedRunProfiles(global: profiles, repositories: ["web": profiles, "api": profiles], smallModel: "x/y")
         yaml = try record("saving models", { try RunProfilesConfig.updating($0, from: old, to: new) }, from: yaml)
         yaml = try record("clearing models", { try RunProfilesConfig.updating($0, from: new, to: ScopedRunProfiles()) }, from: yaml)
 
