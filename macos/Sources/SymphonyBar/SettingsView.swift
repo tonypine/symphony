@@ -174,6 +174,27 @@ struct SettingsView: View {
                         )
                     }
                     .disabled(!model.canEditRunProfiles)
+                    if model.runProfilesScope == .global && (model.runProfiles.usesOpenRouter || model.runProfiles.smallModel != nil) {
+                        LabeledContent("Background calls") {
+                            OpenRouterModelField(
+                                selection: $model.runProfiles.smallModel,
+                                inherited: nil,
+                                inheritedSource: "",
+                                models: model.openRouterAPIKey.isEmpty ? nil : model.openRouterModelList,
+                                hasKey: !model.openRouterAPIKey.isEmpty,
+                                retry: model.loadOpenRouterModels,
+                                isPicking: Binding(
+                                    get: { model.openRouterPickerRow == RunProfilesConfig.smallModelKey },
+                                    set: { model.openRouterPickerRow = $0 ? RunProfilesConfig.smallModelKey : nil }
+                                ),
+                                query: $model.openRouterQuery
+                            )
+                            .frame(width: 210)
+                            .controlSize(.small)
+                        }
+                        .help("The OpenRouter model for Claude Code's titles and summaries on OpenRouter runs (agent.small_model)")
+                        .disabled(!model.canEditRunProfiles)
+                    }
                     if model.configCheckError != nil {
                         CheckErrorPointer(subject: "these models")
                     }
@@ -196,8 +217,10 @@ struct SettingsView: View {
                             + "grey values are inherited. Higher effort and bigger models use the shared 5-hour "
                             + "usage limit faster: keep Opus and high effort for breakdown and hard "
                             + "implementation, and use Sonnet or Haiku with low effort for landing and CI fixes. "
-                            + "OpenRouter models must support tools. Claude runtime only. Save checks "
-                            + "symphony.yml with symphony check first; changes apply to the next run."
+                            + "OpenRouter models must support tools. Claude runtime only. Background calls sets a "
+                            + "cheaper OpenRouter model for Claude Code's titles and summaries on OpenRouter runs; "
+                            + "default keeps them on the run's model. Save checks symphony.yml with symphony check "
+                            + "first; changes apply to the next run."
                     )
                     .font(.callout)
                     .foregroundStyle(.secondary)

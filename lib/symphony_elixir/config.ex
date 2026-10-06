@@ -315,8 +315,9 @@ defmodule SymphonyElixir.Config do
   What `symphony check` reports after the config validates, for runs whose provider is
   `openrouter`. Warnings: `OPENROUTER_API_KEY` is unset, the models API cannot be reached, or
   `effort` is set for a model that does not list `reasoning`. Errors: a model id OpenRouter does
-  not list, or a model without `tools`. Each model finding names the key that set the model or
-  effort. The models API is only asked when the key is set.
+  not list, or a model without `tools`, and an `agent.small_model` OpenRouter does not list. Each
+  model finding names the key that set the model or effort. The models API is only asked when
+  the key is set.
   """
   @spec check_findings(keyword()) :: %{errors: [String.t()], warnings: [String.t()]}
   def check_findings(opts \\ []) do
@@ -354,7 +355,10 @@ defmodule SymphonyElixir.Config do
   defp openrouter_findings(profiles, _key, opts) do
     case OpenRouterModels.catalog(opts) do
       {:ok, catalog} ->
-        findings = profiles |> Enum.flat_map(&model_findings(&1, Map.get(catalog, &1.model))) |> Enum.uniq()
+        findings =
+          profiles
+          |> Enum.flat_map(&(model_findings(&1, Map.get(catalog, &1.model)) ++ small_model_findings(&1.small_model, catalog)))
+          |> Enum.uniq()
 
         %{
           errors: for({:error, message} <- findings, do: message),
@@ -395,7 +399,13 @@ defmodule SymphonyElixir.Config do
 
   defp model_findings(_profile, _capabilities), do: []
 
-  # Every `openrouter` run kind with the model and effort it starts with, and the keys that set them.
+  # Background calls use no tools, so the small model only has to exist.
+  defp small_model_findings(nil, _catalog), do: []
+  defp small_model_findings(model, catalog) when is_map_key(catalog, model), do: []
+  defp small_model_findings(model, _catalog), do: [{:error, "agent.small_model: OpenRouter has no model `#{model}`"}]
+
+  # Every `openrouter` run kind with the model and effort it starts with, the keys that set them,
+  # and `agent.small_model`.
   # `inherited_from` is the key the model comes from when it sits above the key that picked
   # `openrouter`; `model_key` is then the `model` key next to that provider key.
   defp openrouter_profiles(settings) do
@@ -410,7 +420,8 @@ defmodule SymphonyElixir.Config do
         provider_key: profile_key(settings, kind, :provider),
         inherited_from: inherited_from,
         effort: profile.effort,
-        effort_key: profile_key(settings, kind, :effort)
+        effort_key: profile_key(settings, kind, :effort),
+        small_model: settings.agent.small_model
       }
     end
   end

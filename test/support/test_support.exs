@@ -723,6 +723,7 @@ defmodule SymphonyElixir.TestSupport do
           model: Keyword.get(config, :agent_model),
           effort: Keyword.get(config, :agent_effort),
           provider: Keyword.get(config, :agent_provider),
+          small_model: Keyword.get(config, :agent_small_model),
           run_profiles: Keyword.get(config, :agent_run_profiles),
           max_concurrent_agents: max_concurrent_agents,
           epic_lanes: epic_lanes,
@@ -911,7 +912,7 @@ defmodule SymphonyElixir.TestSupport do
   end
 
   defp agent_profile_yaml(config) do
-    [:model, :effort, :provider, :run_profiles]
+    [:model, :effort, :provider, :small_model, :run_profiles]
     |> Enum.reject(&is_nil(Map.get(config, &1)))
     |> Enum.map_join("\n", &"  #{&1}: #{yaml_value(Map.get(config, &1))}")
     |> case do

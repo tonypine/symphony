@@ -18,6 +18,7 @@ public enum SettingsUIManifest {
         "agent.model",
         "agent.provider",
         "agent.run_profiles",
+        "agent.small_model",
         "auto_review.acceptance_gate.mode",
         "auto_review.command",
         "auto_review.effort",
