@@ -5,7 +5,9 @@ defmodule SymphonyElixir.RunStore.RunIndex do
   `RunStore.list_issue_runs/2`) look up only the runs they return instead of scanning and sorting
   the whole table. The orchestrator reads its run history twice a second, and the CI and PR review
   pollers read the runs of each issue they watch every cycle, so those reads must not grow with the
-  store.
+  store. It also finds the runs with a status (`take_status/1`), the runs started in a time range
+  (`take_started/2`) and the workspace identifiers of a repository's runs (`take_identifiers/1`),
+  which the orchestrator reads when it starts.
 
   It also versions the runs of each `kind`: `memoize/3` keeps a value derived from the runs of one
   kind (the acceptance gate's verdicts) until a run of that kind is written.
@@ -92,6 +94,50 @@ defmodule SymphonyElixir.RunStore.RunIndex do
   end
 
   @doc """
+  The `{repo_key, run_id}` of every run, in any repository, whose `status` is `status`; `:unavailable`
+  while the index isn't built.
+  """
+  @spec take_status(String.t()) :: {:ok, [{String.t(), String.t()}]} | :unavailable
+  def take_status(status) when is_binary(status) do
+    with_table(:unavailable, fn ->
+      if ready?(), do: {:ok, :ets.select(@table, [{{{:status, status, :"$1", :"$2"}}, [], [{{:"$1", :"$2"}}]}])}, else: :unavailable
+    end)
+  end
+
+  @doc """
+  The `{repo_key, run_id}` of every run, in any repository, started at or after `from` and before
+  `to`, newest first; `:unavailable` while the index isn't built. It visits only those runs.
+  """
+  @spec take_started(DateTime.t(), DateTime.t()) :: {:ok, [{String.t(), String.t()}]} | :unavailable
+  def take_started(%DateTime{} = from, %DateTime{} = to) do
+    with_table(:unavailable, fn ->
+      # The runs started before `to` rank above it; numbers sort before the binary repo keys, so the
+      # walk starts at the first of them.
+      if ready?(), do: {:ok, started(:ets.next(@table, {:all, rank(to) + 1, 0, 0}), rank(from))}, else: :unavailable
+    end)
+  end
+
+  @doc """
+  The workspace identifiers of `repo_key`'s runs (see `workspace_identifier/1`), each once, in
+  ascending order; `:unavailable` while the index isn't built. It visits one run per identifier.
+  """
+  @spec take_identifiers(String.t()) :: {:ok, [String.t()]} | :unavailable
+  def take_identifiers(repo_key) do
+    with_table(:unavailable, fn ->
+      if ready?(), do: {:ok, identifiers(:ets.next(@table, {:identifier, repo_key, 0, 0}), repo_key)}, else: :unavailable
+    end)
+  end
+
+  @doc """
+  The identifier of the workspace a run used: its `issue_identifier`, else the last segment of its
+  `workspace_path`; `nil` without either.
+  """
+  @spec workspace_identifier(map()) :: String.t() | nil
+  def workspace_identifier(%{issue_identifier: identifier}) when is_binary(identifier), do: identifier
+  def workspace_identifier(%{workspace_path: path}) when is_binary(path), do: Path.basename(path)
+  def workspace_identifier(_record), do: nil
+
+  @doc """
   The value `fun` derives from the runs of `kind`, computed again only after a run of that kind
   was written. `fun` returns `{:ok, value}` to keep the value or anything else to keep nothing.
   """
@@ -133,29 +179,34 @@ defmodule SymphonyElixir.RunStore.RunIndex do
     ArgumentError -> default
   end
 
-  # A run whose `started_at` or `issue_id` changed has its old entries replaced.
+  # A run whose `started_at`, `issue_id`, `status` or workspace identifier changed has its old
+  # entries replaced.
   defp index(repo_key, run_id, record) do
-    rank = rank(Map.get(record, :started_at))
-    issue_id = Map.get(record, :issue_id)
+    fields = {rank(Map.get(record, :started_at)), Map.get(record, :issue_id), Map.get(record, :status), workspace_identifier(record)}
 
     case :ets.lookup(@table, {:run, repo_key, run_id}) do
-      [{_key, ^rank, ^issue_id}] ->
+      [{_key, ^fields}] ->
         :ok
 
       previous ->
-        Enum.each(previous, fn {_key, old_rank, old_issue_id} ->
-          :ets.delete(@table, {:repo, repo_key, old_rank, run_id})
-          :ets.delete(@table, {:all, old_rank, repo_key, run_id})
-          :ets.delete(@table, {:issue, repo_key, old_issue_id, old_rank, run_id})
+        Enum.each(previous, fn {_key, old_fields} ->
+          repo_key |> entries(run_id, old_fields) |> Enum.each(&:ets.delete(@table, &1))
         end)
 
-        :ets.insert(@table, [{{:run, repo_key, run_id}, rank, issue_id} | entries(repo_key, issue_id, rank, run_id)])
+        :ets.insert(@table, [{{:run, repo_key, run_id}, fields} | Enum.map(entries(repo_key, run_id, fields), &{&1})])
     end
   end
 
-  defp entries(repo_key, issue_id, rank, run_id) do
-    issue_entries = if is_binary(issue_id), do: [{{:issue, repo_key, issue_id, rank, run_id}}], else: []
-    [{{:repo, repo_key, rank, run_id}}, {{:all, rank, repo_key, run_id}} | issue_entries]
+  defp entries(repo_key, run_id, {rank, issue_id, status, identifier}) do
+    for {key, indexed?} <- [
+          {{:repo, repo_key, rank, run_id}, true},
+          {{:all, rank, repo_key, run_id}, true},
+          {{:issue, repo_key, issue_id, rank, run_id}, is_binary(issue_id)},
+          {{:status, status, repo_key, run_id}, is_binary(status)},
+          {{:identifier, repo_key, identifier, run_id}, is_binary(identifier)}
+        ],
+        indexed?,
+        do: key
   end
 
   # Ascending keys in the ordered set are the newest runs first; a run without a start sorts last.
@@ -178,6 +229,18 @@ defmodule SymphonyElixir.RunStore.RunIndex do
 
   defp selected({keys, _continuation}), do: keys
   defp selected(:"$end_of_table"), do: []
+
+  defp started({:all, rank, repo_key, run_id} = key, oldest_rank) when rank <= oldest_rank,
+    do: [{repo_key, run_id} | started(:ets.next(@table, key), oldest_rank)]
+
+  defp started(_key, _oldest_rank), do: []
+
+  # From one identifier, skip its other runs: `identifier <> <<0>>` sorts after `identifier` and
+  # before or at the next one.
+  defp identifiers({:identifier, repo_key, identifier, _run_id}, repo_key),
+    do: [identifier | identifiers(:ets.next(@table, {:identifier, repo_key, identifier <> <<0>>, 0}), repo_key)]
+
+  defp identifiers(_key, _repo_key), do: []
 
   defp counter(key) do
     case :ets.lookup(@table, key) do
