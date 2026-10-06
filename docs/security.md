@@ -204,11 +204,6 @@ runs whatever code the checkout holds: any `mix` command evaluates `mix.exs`, an
   should run nothing from the checkout: no build tool, no script from the repo, and no
   `mise exec`, which reads the checkout's mise config. `before_remove` gets the repo and branch
   from `SYMPHONY_REPO` and `SYMPHONY_BRANCH`.
-- **`before_run` also runs in an Auto Review `web` pass's worktree at the PR head,** before its
-  dev server starts, so the same holds there. It is the hook for building what the dev server's
-  sandbox can't (an Elixir escript, see [below](#macos-the-dev-server-listens-on-a-unix-socket)),
-  and such a build runs the PR's `mix.exs` and dependencies on the host. A repo sets one only when
-  it accepts that its agents' code runs with the operator's rights.
 - Symphony's own git commands in a workspace run with repo hooks and `core.fsmonitor` off, and a
   local hook runs Gradle without a daemon (see [configuration](configuration.md#workspace-hooks)).
 
@@ -378,7 +373,7 @@ Symphony starts `verification.dev_server.start_cmd` itself, from the checkout un
 
 The command usually runs files from that checkout: a script such as Symphony's own
 `scripts/qa-dashboard-server.sh`, and the repo's build or runtime tool (`npm`, `pnpm`, or an
-Elixir escript or release built outside the sandbox; Mix itself can't run under the macOS profile,
+Elixir escript or release that `build_cmd` built; Mix itself can't run under the macOS profile,
 see [below](#macos-the-dev-server-listens-on-a-unix-socket)), which runs the project's code and
 build config. The agent can change all of these, so Symphony runs the command
 under macOS Seatbelt (`sandbox-exec`), or bubblewrap (`bwrap`) on Linux, with limits like the
@@ -423,6 +418,20 @@ agent's sandbox:
   `LINEAR_API_KEY`, provider keys, GitHub tokens or `SSH_AUTH_SOCK`. Hex and `elixir_make` use
   the agent cache folder.
 
+#### The build command runs in the agent's confinement
+
+`verification.dev_server.build_cmd` runs the checkout's build config too (`mix.exs`, `config/`,
+dependency build scripts, the mise config), so it never runs on the host. Symphony runs it in the
+same checkout, before `start_cmd`, under the profile above with one change: it may listen on
+loopback, as the agent's own sandbox may (`allowLocalBinding`), because Mix's build lock and
+pub/sub need a TCP listener. Its reads, writes, environment, egress proxy, mach services and
+process limits are the dev server's. On macOS that loopback rule also lets it bind `0.0.0.0` (see
+below), the exposure every agent command already has; the build serves nothing and runs only
+until it exits. On Linux it gets the same `bwrap` sandbox, whose loopback is its own, with only the
+egress proxy bridged. A build that fails, or runs past 15 minutes, keeps the dev server from
+starting. So an Elixir dev server builds under the agent's confinement and serves under the dev
+server's.
+
 #### macOS: the dev server listens on a unix socket
 
 Seatbelt can't keep a TCP listener on loopback. A rule on the listener's local address
@@ -436,9 +445,9 @@ GitHub's `macos-14`, `macos-26` and `xcode-27` images). A rule on the remote add
   `$TMPDIR` only.
 - No Mix task runs inside the sandbox. Loading deps starts `Mix.PubSub`, which listens on an
   ephemeral `127.0.0.1` port, and Mix's build lock takes one too; both are refused here. An Elixir
-  dev server runs a prebuilt artifact (an escript or a release), built outside the sandbox with
-  `mix build` before verification (in `hooks.before_run`, see
-  [configuration](configuration.md#verification)), never `mix run` or `mix phx.server`.
+  dev server runs a prebuilt artifact (an escript or a release), built by `build_cmd` in the build
+  sandbox (see [above](#the-build-command-runs-in-the-agents-confinement)), never `mix run` or
+  `mix phx.server`.
 - The server listens on the unix socket `$SYMPHONY_VERIFICATION_SOCKET` (`serve.sock` in its
   `$TMPDIR`) instead of `$SYMPHONY_VERIFICATION_PORT`. A unix socket can't be reached from
   another host.

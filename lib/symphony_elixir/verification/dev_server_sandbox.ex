@@ -57,6 +57,13 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
   @dev_write_paths ~w(/dev/null /dev/zero /dev/tty /dev/stdout /dev/stderr /dev/dtracehelper /dev/autofs_nowait)
   @dev_write_subpaths ~w(/dev/fd)
   @dns_socket "/private/var/run/mDNSResponder"
+  # What SRT's `allowLocalBinding` (Symphony's agent sandbox setting) adds to the agent's profile,
+  # for the build profile: a TCP listener on loopback, and connections to it.
+  @loopback_listener_rules [
+    ~s{(allow network-bind (local ip "localhost:*"))},
+    ~s{(allow network-inbound (local ip "localhost:*"))},
+    ~s{(allow network-outbound (local ip "localhost:*"))}
+  ]
   # The mach services the Claude Code and SRT agent profiles always allow, as SRT's
   # `generateSandboxProfile` (`dist/sandbox/macos-sandbox-utils.js`, SRT 0.0.78) lists them: its
   # mach-lookup block, then SecurityServer, the keychain daemon, which `mix` needs to read the
@@ -161,6 +168,26 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
   end
 
   @doc """
+  The argv that runs `build_cmd` with `sh -lc` in the build sandbox, and the empty folders it
+  makes in `workspace`, as `command/4` does for `start_cmd`. The build sandbox is the agent's
+  confinement rather than the dev server's: the same writable paths, denied reads, environment and
+  egress proxy, but TCP listeners allowed on loopback, as the agent's sandbox allows them
+  (`allowLocalBinding`), because Mix needs one for its build lock and pub/sub. On macOS that rule
+  can't keep the listener off the network (see the moduledoc), the agent's own exposure; the build
+  only runs to completion and serves nothing. On Linux the sandbox has a loopback of its own, so
+  only the egress proxy is bridged. Takes the options of `command/4` but `:check_confinement`
+  and `:port`.
+  """
+  @spec build_command(String.t(), Path.t(), Path.t(), keyword()) :: {:ok, [String.t()], [Path.t()]} | {:error, term()}
+  def build_command(build_cmd, workspace, tmp_dir, opts) when is_binary(build_cmd) do
+    case Keyword.get_lazy(opts, :os_type, &:os.type/0) do
+      {:unix, :darwin} -> seatbelt_command(build_cmd, workspace, tmp_dir, Keyword.put(opts, :build?, true))
+      {:unix, :linux} -> bwrap_command(build_cmd, workspace, tmp_dir, Keyword.put(opts, :build?, true))
+      os_type -> {:error, {:dev_server_sandbox_unavailable, os_type}}
+    end
+  end
+
+  @doc """
   The unix socket in `tmp_dir` the dev server listens on instead of its port, or `nil` where it
   listens on its port. On macOS Seatbelt can't keep a TCP listener on loopback, so the profile
   allows none, and Symphony serves this socket on `127.0.0.1:<port>`. On Linux the sandbox has a
@@ -201,18 +228,25 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
          :ok <- probe_bwrap(bwrap),
          {:ok, proxy_socket} <- socket_path(tmp_dir, @proxy_socket),
          {:ok, serve_socket} <- socket_path(tmp_dir, @serve_socket) do
-      port = Keyword.fetch!(opts, :port)
       proxy_port = Keyword.fetch!(opts, :proxy_port)
       write_paths = [workspace, tmp_dir] ++ AgentCaches.write_paths()
       {args, placeholders} = bwrap_args(workspace, write_paths, protected_paths(workspace))
 
+      # A build serves nothing, so only the egress proxy is bridged for it.
+      {serve_bridge_inside, serve_bridge_host, serve_bridge_pid} =
+        if Keyword.get(opts, :build?, false) do
+          {[], [], []}
+        else
+          port = Keyword.fetch!(opts, :port)
+
+          {[sh_command([socat, "UNIX-LISTEN:#{serve_socket},fork,unlink-early", "TCP:127.0.0.1:#{port}"]) <> " &"],
+           [sh_command([socat, "TCP-LISTEN:#{port},bind=127.0.0.1,reuseaddr,fork", "UNIX-CONNECT:#{serve_socket}"]) <> " &", "serve_bridge=$!"], ["$serve_bridge"]}
+        end
+
       sandbox_script =
         Enum.join(
-          [
-            sh_command([socat, "TCP-LISTEN:#{proxy_port},bind=127.0.0.1,reuseaddr,fork", "UNIX-CONNECT:#{proxy_socket}"]) <> " &",
-            sh_command([socat, "UNIX-LISTEN:#{serve_socket},fork,unlink-early", "TCP:127.0.0.1:#{port}"]) <> " &",
-            "exec " <> sh_command(["/bin/sh", "-lc", start_cmd])
-          ],
+          [sh_command([socat, "TCP-LISTEN:#{proxy_port},bind=127.0.0.1,reuseaddr,fork", "UNIX-CONNECT:#{proxy_socket}"]) <> " &"] ++
+            serve_bridge_inside ++ ["exec " <> sh_command(["/bin/sh", "-lc", start_cmd])],
           "\n"
         )
 
@@ -220,16 +254,17 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
         Enum.join(
           [
             sh_command([socat, "UNIX-LISTEN:#{proxy_socket},fork,unlink-early", "TCP:127.0.0.1:#{proxy_port}"]) <> " &",
-            "proxy_bridge=$!",
-            sh_command([socat, "TCP-LISTEN:#{port},bind=127.0.0.1,reuseaddr,fork", "UNIX-CONNECT:#{serve_socket}"]) <> " &",
-            "serve_bridge=$!",
-            "trap : HUP INT TERM",
-            sh_command([bwrap | args] ++ ["/bin/sh", "-c", sandbox_script]),
-            "status=$?",
-            "kill $proxy_bridge $serve_bridge 2>/dev/null",
-            "wait",
-            "exit $status"
-          ],
+            "proxy_bridge=$!"
+          ] ++
+            serve_bridge_host ++
+            [
+              "trap : HUP INT TERM",
+              sh_command([bwrap | args] ++ ["/bin/sh", "-c", sandbox_script]),
+              "status=$?",
+              Enum.join(["kill $proxy_bridge" | serve_bridge_pid] ++ ["2>/dev/null"], " "),
+              "wait",
+              "exit $status"
+            ],
           "\n"
         )
 
@@ -262,10 +297,13 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
   end
 
   defp sandboxed_command(start_cmd, workspace, tmp_dir, executable, opts) do
+    build? = Keyword.get(opts, :build?, false)
     write_paths = [workspace, tmp_dir] ++ AgentCaches.write_paths() ++ item_replacement_paths(opts)
-    profile = profile(workspace, write_paths, protected_paths(workspace), socket_dir: tmp_dir)
+    profile_opts = [socket_dir: tmp_dir, loopback_listeners: build?]
+    profile = profile(workspace, write_paths, protected_paths(workspace), profile_opts)
 
-    with :ok <- check_confinement(executable, profile, tmp_dir, opts) do
+    # The build profile allows loopback listeners by design, so there is no refusal to probe.
+    with :ok <- if(build?, do: :ok, else: check_confinement(executable, profile, tmp_dir, opts)) do
       {:ok, [executable, "-p", profile, "/bin/sh", "-lc", start_cmd], []}
     end
   end
@@ -337,8 +375,9 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
   (relative to it), unreadable in the agent's denied read paths under `home`, with no TCP
   listener, unix sockets only in `socket_dir`, outgoing connections to loopback only, an
   allowlist of mach services, no way to have launchd start a process outside it, and no process
-  info on or signals to a process outside it. Options: `:socket_dir` (required) and `:home`
-  (default `System.user_home!()`).
+  info on or signals to a process outside it. Options: `:socket_dir` (required), `:home`
+  (default `System.user_home!()`) and `:loopback_listeners` (default `false`; the build profile
+  of `build_command/4` sets it to allow TCP listeners on loopback, as the agent's profile does).
   """
   @spec profile(Path.t(), [Path.t()], [String.t()], keyword()) :: String.t()
   def profile(workspace, write_paths, protected_paths, opts) do
@@ -356,6 +395,7 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
 
     writable = write_paths |> Enum.map(&real_path/1) |> Enum.uniq()
     protected = Enum.map(protected_paths, &Path.join(workspace, &1))
+    listener_rules = if Keyword.get(opts, :loopback_listeners, false), do: @loopback_listener_rules, else: []
 
     [
       "(version 1)",
@@ -368,6 +408,7 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
       "(deny network*)",
       rule("allow network*", [subpath(socket_dir)]),
       ~s{(allow network-outbound (remote ip "localhost:*"))},
+      listener_rules,
       rule("allow network-outbound", [literal(@dns_socket)]),
       "(deny mach-lookup)",
       rule("allow mach-lookup", Enum.map(@mach_services, &"(global-name #{sb_string(&1)})")),
@@ -385,6 +426,7 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
       "(deny signal)",
       "(allow signal (target same-sandbox))"
     ]
+    |> List.flatten()
     |> Enum.join("\n")
   end
 

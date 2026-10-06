@@ -729,6 +729,16 @@ Fields:
   - The range is global to the Symphony process across all worker hosts. Operators using SSH worker
     pools should size the range for total verification-enabled concurrency, not per-host
     concurrency.
+- `dev_server.build_cmd` (string, OPTIONAL)
+  - Shell command run to completion in the same checkout before every `start_cmd`, to build what
+    the dev server serves (for example an Elixir escript, since Mix can't run in the dev server's
+    macOS sandbox). It receives the dev server's environment, without
+    `SYMPHONY_VERIFICATION_SOCKET`.
+  - It runs the checkout's build config, which the agent can change, so the implementation MUST
+    run it in a sandbox no weaker than the agent's, never on the host: the dev server's sandbox,
+    which MAY additionally allow TCP listeners on loopback as the agent's sandbox does.
+  - A build that exits non-zero, or outlasts the implementation's build timeout, keeps the dev
+    server from starting; the run fails with `verification_failed` and the port is released.
 - `dev_server.start_cmd` (string, OPTIONAL)
   - Long-lived shell command run in the issue workspace after `hooks.before_run` and before the
     first agent turn.
@@ -1859,6 +1869,7 @@ not require recognizing or validating extension fields unless that extension is 
   `workspaces.fetch_before_dispatch` or `true`
 - `verification.enabled`: boolean, default `false`
 - `verification.port_allocation.range`: two-integer inclusive range, default `[4000, 4099]`
+- `verification.dev_server.build_cmd`: shell command or null
 - `verification.dev_server.start_cmd`: shell command or null
 - `verification.dev_server.health_check_url`: URL template or null
 - `verification.dev_server.health_timeout_ms`: integer, default `30000`
@@ -3023,10 +3034,6 @@ Execution contract:
 - When verification is enabled for the run, `hooks.before_run` and `hooks.after_run` receive
   `SYMPHONY_VERIFICATION_PORT` in their environment. If a project starts its dev server from a hook
   instead of `verification.dev_server.start_cmd`, it is responsible for backgrounding and cleanup.
-- A QA pass that starts `verification.dev_server` from a worktree of its own runs
-  `hooks.before_run` in that worktree first, with `SYMPHONY_VERIFICATION_PORT` set, and starts the
-  dev server only when the hook succeeds. This is where a project builds, outside the dev server's
-  sandbox, an artifact the sandbox can't build.
 - Hook timeout uses `hooks.timeout_ms`; default: `60000 ms`. `after_create` uses
   `hooks.after_create_timeout_ms`, or the larger of `hooks.timeout_ms` and `600000 ms` when unset.
 - On a timeout of a local hook, stop the hook's process and what it started, at once, so the hook
@@ -4883,6 +4890,11 @@ function run_agent_attempt(issue, attempt, orchestrator_channel, verification, r
 
   dev_server = null
   if verification and config.verification.dev_server.start_cmd:
+    if config.verification.dev_server.build_cmd and
+       sandboxed_build(config.verification.dev_server.build_cmd, cwd=workspace.path, env=hook_env) failed:
+      run_hook_best_effort("after_run", workspace.path, env=hook_env)
+      verification_port_pool.release(verification)
+      fail_worker("verification_failed")
     dev_server = dev_server.start(
       command=config.verification.dev_server.start_cmd,
       cwd=workspace.path,

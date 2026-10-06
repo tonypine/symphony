@@ -1699,6 +1699,7 @@ defmodule SymphonyElixir.Config.Schema do
       @stop_signals ["TERM", "INT", "QUIT", "HUP", "KILL"]
 
       embedded_schema do
+        field(:build_cmd, :string)
         field(:start_cmd, :string)
         field(:health_check_url, :string)
         field(:health_timeout_ms, :integer, default: 30_000)
@@ -1711,9 +1712,10 @@ defmodule SymphonyElixir.Config.Schema do
         schema
         |> cast(
           attrs,
-          [:start_cmd, :health_check_url, :health_timeout_ms, :stop_signal, :stop_timeout_ms],
+          [:build_cmd, :start_cmd, :health_check_url, :health_timeout_ms, :stop_signal, :stop_timeout_ms],
           empty_values: []
         )
+        |> normalize_optional_string(:build_cmd)
         |> normalize_optional_string(:start_cmd)
         |> normalize_optional_string(:health_check_url)
         |> normalize_stop_signal()

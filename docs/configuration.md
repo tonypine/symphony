@@ -1407,14 +1407,13 @@ set (see [`verification`](#verification)), and triggers on `lib/*_web/**`, `lib/
 
 For a `web` pass Symphony:
 
-1. takes a port from the verification port pool, runs `hooks.before_run` in a second worktree at
-   the PR head (so its build output stays out of the agent's worktree), outside the sandbox, with
-   `SYMPHONY_VERIFICATION_PORT` set, and then starts `dev_server.start_cmd` there with
-   `SYMPHONY_VERIFICATION_PORT` (and on macOS `SYMPHONY_VERIFICATION_SOCKET`, see
-   [`verification`](#verification)), then waits for `health_check_url`. A failing `before_run`,
-   or a server that does not start or fails its health check within `health_timeout_ms`, makes
-   the pass `blocked` ("the dev server did not start", "the dev server failed its health check"),
-   not `fail`, and no agent runs;
+1. takes a port from the verification port pool and, in a second worktree at the PR head (so its
+   build output stays out of the agent's worktree), runs `dev_server.build_cmd` when it is set,
+   then starts `dev_server.start_cmd` with `SYMPHONY_VERIFICATION_PORT` set (and on macOS
+   `SYMPHONY_VERIFICATION_SOCKET`, see [`verification`](#verification)) and waits for
+   `health_check_url`. A build that fails or times out, or a server that does not start or fails
+   its health check within `health_timeout_ms`, makes the pass `blocked` ("the dev server did not
+   start", "the dev server failed its health check"), not `fail`, and no agent runs;
 2. gives the QA agent the server's address and a `browser` MCP server that only this QA session
    gets. By default that is [Playwright MCP](https://github.com/microsoft/playwright-mcp) with
    headless Chromium and an in-memory profile, limited with `--allowed-origins` to the dev server
@@ -1458,8 +1457,9 @@ auto_review:
 An invalid `browser_mcp` makes the pass `blocked` with the error.
 
 Symphony's own `WORKFLOW.md` points `verification.dev_server` at `scripts/qa-dashboard-server.sh`,
-which builds Symphony from the PR head and serves the status dashboard with an in-memory tracker,
-so dashboard changes get a `web` pass once the operator sets `verification.enabled: true`.
+which serves the status dashboard from the PR head's escript with an in-memory tracker, so
+dashboard changes get a `web` pass once the operator sets `verification.enabled: true`. Its
+`build_cmd`, `scripts/qa-dashboard-build.sh`, builds that escript first.
 
 #### macOS app QA
 
@@ -1999,6 +1999,7 @@ verification:
   port_allocation:
     range: [4000, 4099]
   dev_server:
+    build_cmd: "pnpm install"   # optional, runs before start_cmd
     start_cmd: "pnpm dev --port $SYMPHONY_VERIFICATION_PORT"
     health_check_url: "http://localhost:${SYMPHONY_VERIFICATION_PORT}/healthz"
     health_timeout_ms: 30000
@@ -2030,33 +2031,28 @@ with nothing at the socket, the run fails with `dev_server_not_on_socket`, and a
 `web` pass is `blocked` with that reason. An Elixir dev server can't run Mix inside the sandbox at
 all: every task that loads deps starts `Mix.PubSub` on an ephemeral `127.0.0.1` port, and Mix's
 build lock takes one too, both refused by the no-TCP-listener profile. Build the escript or release
-outside the sandbox first (`mix build`) and point `start_cmd` at that prebuilt artifact, so the
-sandbox only starts the artifact and never Mix (`scripts/qa-dashboard-server.sh` does this).
+in `build_cmd` and point `start_cmd` at that prebuilt artifact, so the dev server's sandbox only
+starts the artifact and never Mix (`scripts/qa-dashboard-server.sh` does this).
 
-The pre-start hook for that build is [`hooks.before_run`](#workspace-hooks): it runs outside the
-sandbox, in the checkout the dev server starts from, with `SYMPHONY_VERIFICATION_PORT` set, and
-`start_cmd` starts only once it succeeds. That holds for an agent run's dev server and for an
-Auto Review `web` pass, whose fresh worktree at the PR head has no `deps/`, `_build/` or build
-output yet. A `before_run` that fails or times out (`hooks.timeout_ms`) keeps the dev server from
-starting. This one builds Symphony's own dashboard escript, only in runs that have a dev server:
+`build_cmd` (optional) runs with `sh -lc` in the same checkout before `start_cmd`, every time the
+dev server starts: in an agent run before the first turn, and in an Auto Review `web` pass in its
+fresh worktree at the PR head, which has no `deps/`, `_build/` or build output yet. It gets the dev
+server's environment (`SYMPHONY_VERIFICATION_PORT`, the agent cache folder, the egress proxy, its
+own `$TMPDIR`; no `SYMPHONY_VERIFICATION_SOCKET`) and runs in the agent's confinement rather than
+on the host: the dev server's sandbox, but allowed to listen on loopback as the agent's sandbox
+is, so Mix can run (see
+[security](security.md#the-build-command-runs-in-the-agents-confinement)). A build that exits
+non-zero (`dev_server_build_failed`) or runs past 15 minutes (`dev_server_build_timeout`) keeps
+the dev server from starting and releases its port: the agent run fails with
+`verification_failed`, and an Auto Review `web` pass is `blocked`. Symphony's own repo builds its
+dashboard escript with it:
 
 ```yaml
-hooks:
-  timeout_ms: 900000   # a fresh worktree fetches and compiles every dependency
-  before_run: |
-    if [ -n "${SYMPHONY_VERIFICATION_PORT:-}" ]; then
-      export MIX_ENV=dev
-      if command -v mise >/dev/null 2>&1; then
-        mise trust && mise exec -- mix deps.get && mise exec -- mix build
-      else
-        mix deps.get && mix build
-      fi
-    fi
+verification:
+  dev_server:
+    build_cmd: scripts/qa-dashboard-build.sh   # mix deps.get && mix build, through mise when present
+    start_cmd: scripts/qa-dashboard-server.sh
 ```
-
-A build in `before_run` runs the checkout's build config (`mix.exs`, `deps/`, the mise config),
-which the agent can change, on the host with your rights and no sandbox. Weigh that against
-[security](security.md#workspace-hooks-run-outside-the-sandbox) before you set one.
 
 Auto Review's `web` playbook starts the same dev server, from a worktree at the PR head, for each web QA pass
 (see [Web app QA](#web-app-qa)).
@@ -2365,8 +2361,7 @@ operator/runtime settings belong in `symphony.yml`.
 `hooks` runs shell scripts in the workspace at four points: `after_create` (when the
 workspace is new), `before_run` and `after_run` (around every run), and `before_remove` (before the
 workspace is deleted). A failing `after_create` or `before_run` fails the run; `after_run` and
-`before_remove` failures are logged and ignored. `before_run` also runs in an Auto Review `web`
-pass's dev server worktree, before the dev server starts (see [`verification`](#verification)).
+`before_remove` failures are logged and ignored.
 
 ```yaml
 hooks:

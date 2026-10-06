@@ -5,7 +5,6 @@ defmodule SymphonyElixir.Verification do
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.Verification.{DevServer, PortPool}
-  alias SymphonyElixir.Workspace
 
   @env_var "SYMPHONY_VERIFICATION_PORT"
   @dev_server_supervisor SymphonyElixir.Verification.DevServerSupervisor
@@ -47,12 +46,9 @@ defmodule SymphonyElixir.Verification do
     do: enabled?(settings) and is_binary(command) and command != ""
 
   @doc """
-  Allocates a port and starts `verification.dev_server` in `workspace` for a QA pass,
-  waiting for its health check. `hooks.before_run` runs in `workspace` first, outside the
-  dev server's sandbox and with `SYMPHONY_VERIFICATION_PORT` set, as it does before an agent
-  run's dev server: a fresh worktree builds there what the sandbox can't (an Elixir escript).
-  The port is released again when the hook fails or the server does not start. Stop it with
-  `stop_qa_dev_server/1`.
+  Allocates a port and starts `verification.dev_server` in `workspace` for a QA pass, after its
+  `build_cmd`, waiting for its health check. The port is released again when the server does not
+  start. Stop it with `stop_qa_dev_server/1`.
   """
   @spec start_qa_dev_server(Issue.t(), String.t(), Path.t(), keyword()) :: {:ok, qa_dev_server()} | {:error, term()}
   def start_qa_dev_server(%Issue{} = issue, run_id, workspace, opts) when is_binary(run_id) and is_binary(workspace) do
@@ -60,12 +56,10 @@ defmodule SymphonyElixir.Verification do
 
     case allocate_for_dispatch(issue, run_id, nil, opts) do
       {:ok, %{port: port} = context} ->
-        hook_opts = [env: env(context), settings: settings, repo_key: context.repo_key]
+        case start_dev_server(context, workspace, settings: settings) do
+          {:ok, pid} when is_pid(pid) ->
+            {:ok, %{context: context, pid: pid, port: port, url: dev_server_url(port, settings)}}
 
-        with :ok <- Workspace.run_before_run_hook(workspace, issue, nil, hook_opts),
-             {:ok, pid} when is_pid(pid) <- start_dev_server(context, workspace, settings: settings) do
-          {:ok, %{context: context, pid: pid, port: port, url: dev_server_url(port, settings)}}
-        else
           other ->
             release(context, "qa dev server did not start")
             {:error, dev_server_error(other)}
@@ -167,7 +161,7 @@ defmodule SymphonyElixir.Verification do
 
     case dev_server.start_cmd do
       command when is_binary(command) and command != "" ->
-        start_dev_server_child(
+        child_opts = [
           run_id: run_id,
           port: port,
           workspace: workspace,
@@ -175,7 +169,9 @@ defmodule SymphonyElixir.Verification do
           env: env(context),
           allowed_domains: Schema.dev_server_network_allowed_domains(settings),
           owner: self()
-        )
+        ]
+
+        with :ok <- build_dev_server(dev_server, child_opts), do: start_dev_server_child(child_opts)
 
       _ ->
         {:ok, nil}
@@ -206,6 +202,11 @@ defmodule SymphonyElixir.Verification do
   end
 
   defp normalize_context(context) when is_map(context), do: allocation_context(context)
+
+  # `build_cmd` runs in the caller, not under the dev server supervisor, so a long build holds up
+  # no other run's dev server.
+  defp build_dev_server(%{build_cmd: command}, opts) when is_binary(command) and command != "", do: DevServer.build(opts)
+  defp build_dev_server(_dev_server, _opts), do: :ok
 
   defp start_dev_server_child(opts) do
     case Process.whereis(@dev_server_supervisor) do

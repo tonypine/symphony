@@ -18,6 +18,8 @@ defmodule SymphonyElixir.Verification.DevServer do
   # refused to start, bounded so a chatty server can't grow the process's mailbox without limit.
   @health_output_chunks 200
   @tmp_dir_prefix "symphony-dev-server-"
+  # A fresh worktree's build fetches and compiles every dependency.
+  @build_timeout_ms 900_000
   @no_proxy "localhost,127.0.0.1,::1"
 
   defstruct [
@@ -34,7 +36,11 @@ defmodule SymphonyElixir.Verification.DevServer do
     :proxy,
     :socket,
     :bridge,
+    :build_from,
+    :build_result,
+    build?: false,
     sandbox_dirs: [],
+    build_output: [],
     stopping?: false
   ]
 
@@ -52,7 +58,11 @@ defmodule SymphonyElixir.Verification.DevServer do
           proxy: pid() | nil,
           socket: Path.t() | nil,
           bridge: pid() | nil,
+          build?: boolean(),
+          build_from: GenServer.from() | nil,
+          build_result: :ok | {:error, term()} | nil,
           sandbox_dirs: [Path.t()],
+          build_output: [binary()],
           stopping?: boolean()
         }
 
@@ -78,6 +88,29 @@ defmodule SymphonyElixir.Verification.DevServer do
   @spec start(keyword()) :: GenServer.on_start()
   def start(opts) do
     GenServer.start(__MODULE__, opts)
+  end
+
+  @doc """
+  Runs the config's `build_cmd` in `workspace` in the build sandbox
+  (`DevServerSandbox.build_command/4`), with the dev server's env and egress proxy, and waits for
+  it to exit. Returns `:ok` when it exits 0, `{:error, {:verification_failed,
+  {:dev_server_build_failed, status}}}` when it does not, and `{:error, {:verification_failed,
+  :dev_server_build_timeout}}` when it outlasts `:build_timeout_ms` (default 15 minutes); its
+  process group is then stopped. Takes `start/1`'s options.
+  """
+  @spec build(keyword()) :: :ok | {:error, term()}
+  def build(opts) do
+    case GenServer.start(__MODULE__, Keyword.put(opts, :build, true)) do
+      {:ok, pid} -> await_build(pid)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # The build process stops when its egress proxy does, before it replies.
+  defp await_build(pid) do
+    GenServer.call(pid, :await_build, :infinity)
+  catch
+    :exit, {reason, _call} -> {:error, {:verification_failed, reason}}
   end
 
   @spec stop(pid()) :: :ok
@@ -116,7 +149,7 @@ defmodule SymphonyElixir.Verification.DevServer do
         proxy_opts = [allowed_domains: Keyword.get(opts, :allowed_domains, []), run_id: run_id] ++ Keyword.get(opts, :egress_proxy, [])
 
         with {:ok, state} <- start_egress_proxy(state, proxy_opts) do
-          start_dev_server(state, env, launcher, sandbox)
+          start_command(state, env, launcher, sandbox, opts)
         end
 
       :error ->
@@ -143,6 +176,30 @@ defmodule SymphonyElixir.Verification.DevServer do
          state = %{state | sandbox_dirs: sandbox_dirs},
          {:ok, state} <- start_bridge(state) do
       run_dev_server(state, argv, env, launcher)
+    else
+      {:error, reason} ->
+        release_resources(state)
+        {:stop, {:verification_failed, reason}}
+    end
+  end
+
+  defp start_command(state, env, launcher, sandbox, opts) do
+    if Keyword.get(opts, :build, false),
+      do: start_build(state, env, launcher, sandbox, Keyword.get(opts, :build_timeout_ms, @build_timeout_ms)),
+      else: start_dev_server(state, env, launcher, sandbox)
+  end
+
+  # The build runs to its exit after `init/1` returns, so a long build holds up nobody but the
+  # caller of `build/1`, which waits on `:await_build`.
+  defp start_build(%__MODULE__{config: config} = state, env, launcher, sandbox, timeout_ms) do
+    sandbox = [proxy_port: EgressProxy.port(state.proxy)] ++ sandbox
+
+    with {:ok, argv, sandbox_dirs} <-
+           DevServerSandbox.build_command(config.build_cmd, state.workspace, state.tmp_dir, sandbox),
+         state = %{state | sandbox_dirs: sandbox_dirs},
+         {:ok, port_handle, metadata} <- start_process(argv, state.workspace, child_env(env, state), launcher) do
+      Process.send_after(self(), :build_timeout, timeout_ms)
+      {:ok, %{state | build?: true, port_handle: port_handle, os_pid: metadata.os_pid, pgid: metadata.pgid, process_group?: metadata.process_group?}}
     else
       {:error, reason} ->
         release_resources(state)
@@ -194,6 +251,9 @@ defmodule SymphonyElixir.Verification.DevServer do
   end
 
   @impl true
+  def handle_call(:await_build, from, %{build_result: nil} = state), do: {:noreply, %{state | build_from: from}}
+  def handle_call(:await_build, _from, %{build_result: result} = state), do: {:stop, :normal, result, state}
+
   def handle_call(:stop, _from, state) do
     state = %{state | stopping?: true}
     stop_process(state)
@@ -205,6 +265,27 @@ defmodule SymphonyElixir.Verification.DevServer do
   def handle_info({:DOWN, ref, :process, _pid, reason}, %{owner_ref: ref} = state) do
     Logger.warning("Verification dev server owner exited run_id=#{state.run_id} reason=#{inspect(reason)}")
     {:stop, {:owner_down, reason}, state}
+  end
+
+  def handle_info({port_handle, {:exit_status, 0}}, %{port_handle: port_handle, build?: true} = state) do
+    Logger.info("Verification dev server build finished run_id=#{state.run_id}")
+    finish_build(:ok, exited(state))
+  end
+
+  def handle_info({port_handle, {:exit_status, status}}, %{port_handle: port_handle, build?: true} = state) do
+    Logger.warning("Verification dev server build failed run_id=#{state.run_id} status=#{status}")
+    log_dev_server_output(state.run_id, state.build_output)
+    finish_build({:error, {:verification_failed, {:dev_server_build_failed, status}}}, exited(state))
+  end
+
+  def handle_info({port_handle, {:data, chunk}}, %{port_handle: port_handle, build?: true} = state),
+    do: {:noreply, %{state | build_output: Enum.take([chunk | state.build_output], @health_output_chunks)}}
+
+  def handle_info(:build_timeout, %{port_handle: port_handle, build?: true} = state) when is_port(port_handle) do
+    Logger.warning("Verification dev server build timed out run_id=#{state.run_id}")
+    log_dev_server_output(state.run_id, state.build_output)
+    stop_process(state)
+    finish_build({:error, {:verification_failed, :dev_server_build_timeout}}, exited(state))
   end
 
   def handle_info({port_handle, {:exit_status, _status}}, %{port_handle: port_handle, stopping?: true} = state) do
@@ -230,6 +311,18 @@ defmodule SymphonyElixir.Verification.DevServer do
 
   def handle_info({_port_handle, {:data, _data}}, state), do: {:noreply, state}
   def handle_info(_message, state), do: {:noreply, state}
+
+  defp exited(state), do: %{state | port_handle: nil, os_pid: nil, pgid: nil}
+
+  # The caller may ask for the result before or after the build exits. Its temp folder and proxy
+  # are gone by the time it gets it (`terminate/2` releasing them again is a no-op).
+  defp finish_build(result, %{build_from: nil} = state), do: {:noreply, %{state | build_result: result}}
+
+  defp finish_build(result, %{build_from: from} = state) do
+    release_resources(state)
+    GenServer.reply(from, result)
+    {:stop, :normal, state}
+  end
 
   @impl true
   def terminate(_reason, state) do
