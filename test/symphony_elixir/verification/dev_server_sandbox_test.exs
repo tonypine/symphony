@@ -325,14 +325,14 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
 
       assert allow_mach_lookup ==
                """
-               (global-name "com.apple.system.opendirectoryd.libinfo")
-                 (global-name "com.apple.system.opendirectoryd.membership")
-                 (global-name "com.apple.system.notification_center")
+               (global-name "com.apple.logd")
                  (global-name "com.apple.system.logger")
-                 (global-name "com.apple.logd")
+                 (global-name "com.apple.system.notification_center")
+                 (global-name "com.apple.system.opendirectoryd.libinfo")
+                 (global-name "com.apple.system.opendirectoryd.membership")
                  (global-name "com.apple.bsd.dirhelper")
-                 (global-name "com.apple.SecurityServer")
                  (global-name "com.apple.securityd.xpc")
+                 (global-name "com.apple.SecurityServer")
                  (global-name "com.apple.trustd")
                  (global-name "com.apple.trustd.agent"))\
                """
@@ -368,6 +368,40 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
       workspace = Path.join(file, "workspace")
 
       assert DevServerSandbox.profile(workspace, [workspace], [], home) =~ ~s{(subpath "#{workspace}")}
+    end
+  end
+
+  describe "mach_services/0" do
+    test "is the agent profiles' list without the ones it leaves out, plus the ones it adds" do
+      %{agent: agent, agent_opt_in: opt_in, left_out: left_out, added: added, dev_server: dev_server} =
+        DevServerSandbox.mach_services()
+
+      assert left_out -- agent == []
+      assert added -- agent == added
+      assert dev_server == (agent -- left_out) ++ added
+      assert agent -- opt_in == agent
+      assert Enum.uniq(agent ++ opt_in) == agent ++ opt_in
+      refute Enum.any?(dev_server, &(&1 =~ ~r/windowserver|pasteboard|fonts|lsd|launchservices/i))
+    end
+  end
+
+  # Checks the record of the agent profiles' mach services against the profile an SRT install
+  # generates (`SRT_PACKAGE_DIR`, the `@anthropic-ai/sandbox-runtime` package folder). Claude Code
+  # runs SRT's profile too. The `agent-profile` workflow runs it with the latest SRT.
+  describe "against SRT's profile" do
+    @describetag :srt_profile
+
+    test "the agent profiles allow the recorded mach services" do
+      package = System.get_env("SRT_PACKAGE_DIR") || flunk("set SRT_PACKAGE_DIR to the SRT package folder")
+      source = File.read!(Path.join(package, "dist/sandbox/macos-sandbox-utils.js"))
+      %{agent: agent, agent_opt_in: opt_in} = DevServerSandbox.mach_services()
+
+      # The profile's mach-lookup block, then single rules: SecurityServer always, the rest behind
+      # an option.
+      [block] = Regex.run(~r/'\(allow mach-lookup',\n(.*?)\n\s*'\)',/s, source, capture: :all_but_first)
+
+      assert global_names(block) ++ ["com.apple.SecurityServer"] == agent
+      assert Enum.sort(global_names(source)) == Enum.sort(agent ++ opt_in)
     end
   end
 
@@ -643,6 +677,12 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
 
   defp seatbelt(profile, workspace, script) do
     System.cmd("/usr/bin/sandbox-exec", ["-p", profile, "/bin/sh", "-c", script], cd: workspace, stderr_to_stdout: true)
+  end
+
+  defp global_names(source) do
+    ~r/\(global-name "([^"]+)"\)/
+    |> Regex.scan(source, capture: :all_but_first)
+    |> List.flatten()
   end
 
   defp real(path) do

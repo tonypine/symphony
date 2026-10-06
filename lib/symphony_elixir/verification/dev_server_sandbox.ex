@@ -50,22 +50,50 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
   @dev_write_paths ~w(/dev/null /dev/zero /dev/tty /dev/stdout /dev/stderr /dev/dtracehelper /dev/autofs_nowait)
   @dev_write_subpaths ~w(/dev/fd)
   @dns_socket "/private/var/run/mDNSResponder"
-  # The mach services the Claude Code and SRT agent profiles allow, without the window, font,
-  # sound, power and LaunchServices ones, plus trustd for tools that check TLS certificates with
-  # Security.framework. SecurityServer is the keychain daemon: the agent profiles allow it too,
-  # and `mix` needs it to read the system's root certificates.
-  @mach_services ~w(
+  # The mach services the Claude Code and SRT agent profiles always allow, as SRT's
+  # `generateSandboxProfile` (`dist/sandbox/macos-sandbox-utils.js`, SRT 0.0.78) lists them: its
+  # mach-lookup block, then SecurityServer, the keychain daemon, which `mix` needs to read the
+  # system's root certificates. The `:srt_profile` test checks this against an SRT install.
+  @agent_mach_services ~w(
+    com.apple.audio.systemsoundserver
+    com.apple.distributed_notifications@Uv3
+    com.apple.FontObjectsServer
+    com.apple.fonts
+    com.apple.logd
+    com.apple.lsd.mapdb
+    com.apple.PowerManagement.control
+    com.apple.system.logger
+    com.apple.system.notification_center
     com.apple.system.opendirectoryd.libinfo
     com.apple.system.opendirectoryd.membership
-    com.apple.system.notification_center
-    com.apple.system.logger
-    com.apple.logd
     com.apple.bsd.dirhelper
-    com.apple.SecurityServer
     com.apple.securityd.xpc
-    com.apple.trustd
-    com.apple.trustd.agent
+    com.apple.coreservices.launchservicesd
+    com.apple.SecurityServer
   )
+  # The ones SRT allows only behind an option: `enableWeakerNetworkIsolation` (trustd.agent) and
+  # `allowAppleEvents` (the rest).
+  @agent_opt_in_mach_services ~w(
+    com.apple.trustd.agent
+    com.apple.coreservices.appleevents
+    com.apple.CoreServices.coreservicesd
+    com.apple.coreservices.quarantine-resolver
+  )
+  # The agent's services the dev server goes without: the window (distributed notifications), font,
+  # sound, power and LaunchServices ones.
+  @left_out_mach_services ~w(
+    com.apple.distributed_notifications@Uv3
+    com.apple.FontObjectsServer
+    com.apple.fonts
+    com.apple.audio.systemsoundserver
+    com.apple.PowerManagement.control
+    com.apple.lsd.mapdb
+    com.apple.coreservices.launchservicesd
+  )
+  # trustd, for tools that check TLS certificates with Security.framework.
+  @added_mach_services ~w(com.apple.trustd com.apple.trustd.agent)
+  # The dev server's list, kept in step with the agent's by deriving it.
+  @mach_services (@agent_mach_services -- @left_out_mach_services) ++ @added_mach_services
   # launchd starts what these ask for as the operator, outside the sandbox.
   @launch_services ~w(com.apple.coreservices.launchservicesd com.apple.coreservices.appleevents)
   @launch_services_prefixes ~w(com.apple.lsd.)
@@ -239,6 +267,22 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
 
   defp protected_paths(workspace),
     do: AgentSandboxConfig.workspace_protected_paths() ++ [".git" | AgentSandboxConfig.workspace_link_targets(workspace)]
+
+  @doc """
+  The mach services of the profile and where they come from: the ones the agent profiles always
+  allow (`:agent`) and only behind an option (`:agent_opt_in`), the agent's ones the dev server
+  leaves out (`:left_out`) and adds (`:added`), and the dev server's own list (`:dev_server`).
+  """
+  @spec mach_services() :: %{(:agent | :agent_opt_in | :left_out | :added | :dev_server) => [String.t()]}
+  def mach_services do
+    %{
+      agent: @agent_mach_services,
+      agent_opt_in: @agent_opt_in_mach_services,
+      left_out: @left_out_mach_services,
+      added: @added_mach_services,
+      dev_server: @mach_services
+    }
+  end
 
   @doc """
   The Seatbelt profile: writable in `write_paths` but the `protected_paths` of `workspace`
