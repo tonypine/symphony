@@ -108,6 +108,11 @@ final class StateSnapshotTests: XCTestCase {
             ],
             ["provider": "anthropic", "scope": "opus", "window": "seven_day_opus", "phase": "canary", "resume_at": NSNull()],
             ["provider": "openai", "scope": "all", "phase": "headroom", "utilization": 0.91],
+            [
+                "provider": "anthropic", "scope": "all", "reason": "model_api_unreachable", "window": NSNull(),
+                "phase": "paused", "resume_at": "2026-10-02T12:18:02Z", "source": "api_unreachable", "error": "ENOTFOUND",
+                "banner": "Paused: Claude API unreachable (ENOTFOUND), retries ~12:18",
+            ],
             ["phase": "something_new"],
         ])
 
@@ -122,10 +127,17 @@ final class StateSnapshotTests: XCTestCase {
                             phase: .paused,
                             resetsAt: Date(timeIntervalSince1970: 1_790_943_362),
                             resumeAt: Date(timeIntervalSince1970: 1_790_943_482),
-                            utilization: 1
+                            utilization: 1,
+                            reason: "claude_usage_limit"
                         ),
                         .init(scope: "opus", window: "seven_day_opus", phase: .canary),
                         .init(provider: "openai", phase: .headroom, utilization: 0.91),
+                        .init(
+                            phase: .paused,
+                            resumeAt: Date(timeIntervalSince1970: 1_790_943_482),
+                            reason: "model_api_unreachable",
+                            error: "ENOTFOUND"
+                        ),
                         .init(),
                     ],
                     budget: recordedBudget
