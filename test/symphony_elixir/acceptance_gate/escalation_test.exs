@@ -66,6 +66,24 @@ defmodule SymphonyElixir.AcceptanceGate.EscalationTest do
     assert check(issue: issue(title: nil, description: nil)) == []
   end
 
+  test "ticket pattern skips the Human Review state's name, but not a request for a human review" do
+    opts = [human_review_state: "Human Review"]
+    reasons = fn text, opts -> Escalation.ticket_reasons(issue(description: text, labels: []), @rules, opts) end
+    names_state = "It moves it to Human Review, for a parent in `Human Review`, from **Human Review** into Human Review."
+
+    assert Escalation.ticket_reasons(issue(title: "Fix the Human Review state", description: names_state, labels: []), @rules, opts) == []
+    assert Escalation.check(issue(description: names_state), diff([]), [], @rules, opts) == []
+
+    for request <- ["This change needs a human review before merge.", "Please manually review the SQL.", "This needs a manual review of the migration."] do
+      assert [%{rule: :ticket_pattern}] = reasons.(request, opts)
+    end
+
+    # The name matches case-sensitively, and only when configured.
+    assert [%{rule: :ticket_pattern}] = reasons.("Send it to human review.", opts)
+    assert [%{rule: :ticket_pattern}] = reasons.(names_state, [])
+    assert [%{rule: :ticket_pattern}] = reasons.(names_state, human_review_state: nil)
+  end
+
   test "path glob, ignoring docs and tests" do
     assert check(files: [file("lib/app/auth/session.ex")]) == [%{rule: :path, detail: "lib/app/auth/session.ex matches `**/*auth*/**`"}]
 
