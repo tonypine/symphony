@@ -50,6 +50,14 @@ public struct StateSnapshot: Equatable {
         public var resumeAt: Date?
         /// How much of the window is used, from 0 to 1, when known.
         public var utilization: Double?
+        /// Why Symphony holds the provider, for example `claude_usage_limit` or `model_api_unreachable`; nil when
+        /// Symphony predates it.
+        public var reason: String?
+        /// What the agent got when it couldn't reach the model API, for example `ENOTFOUND`.
+        public var error: String?
+
+        /// Symphony holds the provider because its API couldn't be reached, not for a usage limit.
+        public var isAPIUnreachable: Bool { reason == "model_api_unreachable" }
 
         public init(
             provider: String = "anthropic",
@@ -58,7 +66,9 @@ public struct StateSnapshot: Equatable {
             phase: Phase = .paused,
             resetsAt: Date? = nil,
             resumeAt: Date? = nil,
-            utilization: Double? = nil
+            utilization: Double? = nil,
+            reason: String? = nil,
+            error: String? = nil
         ) {
             self.provider = provider
             self.scope = scope
@@ -67,6 +77,8 @@ public struct StateSnapshot: Equatable {
             self.resetsAt = resetsAt
             self.resumeAt = resumeAt
             self.utilization = utilization
+            self.reason = reason
+            self.error = error
         }
     }
 
@@ -252,7 +264,9 @@ public enum SymphonyState {
                 phase: phase(limit.phase),
                 resetsAt: limit.resetsAt.flatMap(parseDate),
                 resumeAt: limit.resumeAt.flatMap(parseDate),
-                utilization: limit.utilization
+                utilization: limit.utilization,
+                reason: limit.reason,
+                error: limit.error
             )
         }
         snapshot.budget = payload.budget.map { budget in
@@ -380,6 +394,8 @@ public enum SymphonyState {
             let resetsAt: String?
             let resumeAt: String?
             let utilization: Double?
+            let reason: String?
+            let error: String?
         }
 
         struct Budget: Decodable {
