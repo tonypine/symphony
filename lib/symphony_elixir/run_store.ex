@@ -373,6 +373,41 @@ defmodule SymphonyElixir.RunStore do
 
   def get_own_state_move(_issue_id), do: {:error, :invalid_issue_id}
 
+  # An issue Symphony moved to the waiting state because its pull request merged with a sub-issue
+  # open. Only such an issue is moved to Done once its sub-issues finish (see `SubIssueWait`).
+  @spec put_merged_wait(String.t()) :: :ok | {:error, term()}
+  def put_merged_wait(issue_id) when is_binary(issue_id) do
+    with :ok <- ensure_started() do
+      durable_transaction(fn ->
+        :mnesia.write({@totals_table, merged_wait_key(issue_id), true})
+        :ok
+      end)
+    end
+  end
+
+  def put_merged_wait(_issue_id), do: {:error, :invalid_issue_id}
+
+  @spec merged_wait?(String.t()) :: boolean() | {:error, term()}
+  def merged_wait?(issue_id) when is_binary(issue_id) do
+    with :ok <- ensure_started() do
+      transaction(fn -> :mnesia.read(@totals_table, merged_wait_key(issue_id)) != [] end)
+    end
+  end
+
+  def merged_wait?(_issue_id), do: {:error, :invalid_issue_id}
+
+  @spec delete_merged_wait(String.t()) :: :ok | {:error, term()}
+  def delete_merged_wait(issue_id) when is_binary(issue_id) do
+    with :ok <- ensure_started() do
+      durable_transaction(fn ->
+        :mnesia.delete({@totals_table, merged_wait_key(issue_id)})
+        :ok
+      end)
+    end
+  end
+
+  def delete_merged_wait(_issue_id), do: {:error, :invalid_issue_id}
+
   @doc """
   Replaces the forced-ticket queue (`SymphonyElixir.ForcedQueue` entries keyed by issue id), so a
   restart keeps each ticket's `forced_since` and its place in the queue.
@@ -1272,6 +1307,8 @@ defmodule SymphonyElixir.RunStore do
   end
 
   defp own_state_move_key(issue_id), do: {:own_state_move, issue_id}
+
+  defp merged_wait_key(issue_id), do: {:merged_wait, issue_id}
 
   defp read_own_state_move(issue_id) do
     case :mnesia.read(@totals_table, own_state_move_key(issue_id)) do

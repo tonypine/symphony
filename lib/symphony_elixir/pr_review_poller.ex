@@ -10,7 +10,7 @@ defmodule SymphonyElixir.PrReviewPoller do
   alias SymphonyElixir.GitHub.{CommentMarker, PullRequest}
   alias SymphonyElixir.Learnings.Reflection
   alias SymphonyElixir.Linear.{Issue, Usage}
-  alias SymphonyElixir.{Tracker, Workspace}
+  alias SymphonyElixir.{SubIssueWait, Tracker, Workspace}
 
   @in_review_state "In Review"
   @merging_state "Merging"
@@ -767,7 +767,7 @@ defmodule SymphonyElixir.PrReviewPoller do
 
     case review_action(record, activity, latest_activity_at, unaddressed_comments, ignored_users, settings, now) do
       :merged ->
-        with {:ok, record} <- finish_auto_merge(record, opts, now) do
+        with {:ok, record} <- finish_merged(record, settings, opts, now) do
           record
           |> maybe_capture_learnings(activity, settings, opts, now)
           |> cleanup_review(opts, now, "merged")
@@ -1086,26 +1086,55 @@ defmodule SymphonyElixir.PrReviewPoller do
     end
   end
 
-  # GitHub merged a PR Symphony was landing with auto-merge: move the issue to Done (Linear's
-  # GitHub integration may already have) before the usual merged cleanup.
-  defp finish_auto_merge(record, opts, now) do
+  # GitHub merged the PR. Whoever merged it, an issue with sub-issues still open waits on them
+  # instead of closing (see SubIssueWait.wait_on_merge?/3), even when Linear's GitHub integration or
+  # a landing run moved it to Done already. Otherwise an issue Symphony was landing with auto-merge
+  # moves to Done (Linear's GitHub integration may already have). Then the usual merged cleanup.
+  defp finish_merged(record, settings, opts, now) do
     previous = Map.get(record, :auto_merge)
+    landing? = AutoMerge.armed?(previous) or auto_merge_issue?(record, opts)
 
-    if AutoMerge.armed?(previous) or auto_merge_issue?(record, opts) do
-      tracker = Keyword.get(opts, :tracker, Tracker)
-      issue_id = Map.get(record, :issue_id)
+    case move_merged_issue(record, landing?, settings, opts) do
+      :ok when landing? ->
+        auto_merge = AutoMerge.merged(previous, now)
+        AutoMerge.log_transition(record, previous, auto_merge)
+        {:ok, Map.put(record, :auto_merge, auto_merge)}
 
-      case tracker.update_issue_state(issue_id, @done_state) do
-        :ok ->
-          auto_merge = AutoMerge.merged(previous, now)
-          AutoMerge.log_transition(record, previous, auto_merge)
-          {:ok, Map.put(record, :auto_merge, auto_merge)}
+      :ok ->
+        {:ok, record}
 
-        {:error, reason} ->
-          record_transition_error(record, %{}, opts, now, "done", reason)
+      {:error, action, reason} ->
+        record_transition_error(record, %{}, opts, now, action, reason)
+    end
+  end
+
+  defp move_merged_issue(record, landing?, settings, opts) do
+    tracker = Keyword.get(opts, :tracker, Tracker)
+
+    case merged_issue_waiting_on_sub_issues(record, settings, opts) do
+      {:ok, %Issue{} = issue} -> issue |> SubIssueWait.wait_on_merge(settings, tracker) |> transition_result("wait")
+      {:ok, nil} when landing? -> tracker.update_issue_state(Map.get(record, :issue_id), @done_state) |> transition_result("done")
+      {:ok, nil} -> :ok
+      {:error, reason} -> {:error, "wait", reason}
+    end
+  end
+
+  defp transition_result(:ok, _action), do: :ok
+  defp transition_result({:error, reason}, action), do: {:error, action, reason}
+
+  # The issue when it must wait on its sub-issues, nil when not (or when it is gone). The state off
+  # costs no read.
+  defp merged_issue_waiting_on_sub_issues(record, settings, opts) do
+    if SubIssueWait.enabled?(settings) do
+      terminal_states = settings.tracker.terminal_states
+
+      case fetch_review_issue(record, opts) do
+        {:ok, issue} -> {:ok, if(SubIssueWait.wait_on_merge?(issue, terminal_states, settings), do: issue)}
+        :missing -> {:ok, nil}
+        {:error, reason} -> {:error, reason}
       end
     else
-      {:ok, record}
+      {:ok, nil}
     end
   end
 
@@ -3301,6 +3330,7 @@ defmodule SymphonyElixir.PrReviewPoller do
   defp action_atom("merge"), do: :merge
   defp action_atom("conflict"), do: :conflict
   defp action_atom("done"), do: :done
+  defp action_atom("wait"), do: :wait
 
   defp schedule_poll(%State{} = state, delay_ms) when is_integer(delay_ms) and delay_ms >= 0 do
     if is_reference(state.timer_ref) do
