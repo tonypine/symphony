@@ -7,12 +7,16 @@ defmodule SymphonyElixir.Verification.DevServer do
   alias SymphonyElixir.{AgentCaches, AgentEnv, AgentTmpDir}
   alias SymphonyElixir.Config.Schema.Verification.DevServer, as: DevServerConfig
   alias SymphonyElixir.Verification
-  alias SymphonyElixir.Verification.{DevServerSandbox, EgressProxy, PortPool}
+  alias SymphonyElixir.Verification.{DevServerSandbox, EgressProxy, LoopbackBridge, PortPool}
 
   @port_line_bytes 1_048_576
   @launcher_argv_env "SYMPHONY_DEV_SERVER_ARGV"
+  @socket_env "SYMPHONY_VERIFICATION_SOCKET"
   @launcher_marker "__SYMPHONY_DEV_SERVER_PGID__"
   @health_poll_interval_ms 250
+  # How many of the dev server's output chunks to keep for the failure log. Enough to show why it
+  # refused to start, bounded so a chatty server can't grow the process's mailbox without limit.
+  @health_output_chunks 200
   @tmp_dir_prefix "symphony-dev-server-"
   @no_proxy "localhost,127.0.0.1,::1"
 
@@ -28,6 +32,8 @@ defmodule SymphonyElixir.Verification.DevServer do
     :owner_ref,
     :tmp_dir,
     :proxy,
+    :socket,
+    :bridge,
     sandbox_dirs: [],
     stopping?: false
   ]
@@ -44,6 +50,8 @@ defmodule SymphonyElixir.Verification.DevServer do
           owner_ref: reference() | nil,
           tmp_dir: Path.t() | nil,
           proxy: pid() | nil,
+          socket: Path.t() | nil,
+          bridge: pid() | nil,
           sandbox_dirs: [Path.t()],
           stopping?: boolean()
         }
@@ -129,13 +137,26 @@ defmodule SymphonyElixir.Verification.DevServer do
   end
 
   defp start_dev_server(%__MODULE__{config: config} = state, env, launcher, sandbox) do
-    case sandbox_command(config.start_cmd, state, sandbox) do
-      {:ok, argv, sandbox_dirs} ->
-        run_dev_server(%{state | sandbox_dirs: sandbox_dirs}, argv, env, launcher)
-
+    with {:ok, socket} <- DevServerSandbox.listen_socket(state.tmp_dir, sandbox),
+         state = %{state | socket: socket},
+         {:ok, argv, sandbox_dirs} <- sandbox_command(config.start_cmd, state, sandbox),
+         state = %{state | sandbox_dirs: sandbox_dirs},
+         {:ok, state} <- start_bridge(state) do
+      run_dev_server(state, argv, env, launcher)
+    else
       {:error, reason} ->
         release_resources(state)
         {:stop, {:verification_failed, reason}}
+    end
+  end
+
+  # Where the dev server listens on a unix socket (macOS), Symphony serves it on its port.
+  defp start_bridge(%__MODULE__{socket: nil} = state), do: {:ok, state}
+
+  defp start_bridge(%__MODULE__{port: port, socket: socket} = state) do
+    case LoopbackBridge.start_link(port: port, socket: socket) do
+      {:ok, bridge} -> {:ok, %{state | bridge: bridge}}
+      {:error, reason} -> {:error, {:loopback_bridge_unavailable, reason}}
     end
   end
 
@@ -152,13 +173,15 @@ defmodule SymphonyElixir.Verification.DevServer do
 
         health_url = Verification.interpolate_port(config.health_check_url, port)
 
-        case wait_for_health(health_url, config.health_timeout_ms) do
-          :ok ->
+        case wait_for_health(health_url, config.health_timeout_ms, port_handle) do
+          {:ok, _output} ->
             Logger.info("Verification dev server healthy run_id=#{run_id} port=#{port} url=#{health_url}")
             {:ok, state}
 
-          {:error, reason} ->
+          {:error, reason, output} ->
             Logger.warning("Verification dev server failed health check run_id=#{run_id} port=#{port} url=#{health_url} reason=#{inspect(reason)}")
+            log_dev_server_output(run_id, output)
+            reason = health_failure(reason, state)
             stop_process(state)
             release_resources(state)
             {:stop, {:verification_failed, reason}}
@@ -193,6 +216,12 @@ defmodule SymphonyElixir.Verification.DevServer do
     {:stop, {:dev_server_exit, status}, %{state | port_handle: nil, os_pid: nil, pgid: nil}}
   end
 
+  # Without its bridge nobody reaches the dev server, so it stops too.
+  def handle_info({:EXIT, bridge, reason}, %{bridge: bridge} = state) when is_pid(bridge) do
+    Logger.warning("Verification dev server loopback bridge exited run_id=#{state.run_id} reason=#{inspect(reason)}")
+    {:stop, {:loopback_bridge_down, reason}, state}
+  end
+
   # Without its proxy the dev server can't fetch a dependency, so it stops too.
   def handle_info({:EXIT, proxy, reason}, %{proxy: proxy} = state) do
     Logger.warning("Verification dev server egress proxy exited run_id=#{state.run_id} reason=#{inspect(reason)}")
@@ -214,7 +243,8 @@ defmodule SymphonyElixir.Verification.DevServer do
   defp tmp_bases, do: Application.get_env(:symphony_elixir, :agent_run_tmp_bases) || AgentTmpDir.default_bases()
 
   # Called once the dev server's process group is gone, so no sandbox mounts over its folders.
-  defp release_resources(%{tmp_dir: tmp_dir, proxy: proxy, sandbox_dirs: sandbox_dirs}) do
+  defp release_resources(%{tmp_dir: tmp_dir, proxy: proxy, bridge: bridge, sandbox_dirs: sandbox_dirs}) do
+    LoopbackBridge.stop(bridge)
     EgressProxy.stop(proxy)
     File.rm_rf(tmp_dir)
     Enum.each(sandbox_dirs, &File.rmdir/1)
@@ -230,11 +260,14 @@ defmodule SymphonyElixir.Verification.DevServer do
   end
 
   # The agent's env: the host's tokens and agent sockets are left out, the tool caches point
-  # at the agent cache folder, and HTTP(S) goes through the egress proxy.
-  defp child_env(env, %{tmp_dir: tmp_dir, proxy: proxy}) do
+  # at the agent cache folder, and HTTP(S) goes through the egress proxy. On macOS the dev
+  # server is told the unix socket to listen on.
+  defp child_env(env, %{tmp_dir: tmp_dir, proxy: proxy, socket: socket}) do
     proxy_url = "http://127.0.0.1:#{EgressProxy.port(proxy)}"
 
-    Map.merge(AgentCaches.env(), %{
+    AgentCaches.env()
+    |> Map.merge(if(socket, do: %{@socket_env => socket}, else: %{}))
+    |> Map.merge(%{
       Verification.env_var() => verification_port(env),
       "TMPDIR" => tmp_dir,
       "HTTP_PROXY" => proxy_url,
@@ -245,6 +278,14 @@ defmodule SymphonyElixir.Verification.DevServer do
       "no_proxy" => @no_proxy
     })
   end
+
+  # A dev server that never listened on its unix socket most likely listens on a TCP port, which
+  # the sandbox refuses on macOS: say so, rather than only that the health check timed out.
+  defp health_failure(:health_timeout, %{socket: socket}) when is_binary(socket) do
+    if File.exists?(socket), do: :health_timeout, else: {:dev_server_not_on_socket, socket}
+  end
+
+  defp health_failure(reason, _state), do: reason
 
   defp start_process(argv, workspace, env, launcher) when is_binary(workspace) and is_function(launcher, 0) do
     case launcher.() do
@@ -387,26 +428,62 @@ defmodule SymphonyElixir.Verification.DevServer do
     end
   end
 
-  defp wait_for_health(url, timeout_ms) do
+  defp wait_for_health(url, timeout_ms, port_handle) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
-    poll_health(url, deadline)
+    poll_health(url, deadline, port_handle, [])
   end
 
-  defp poll_health(url, deadline) do
-    case health_ok?(url) do
-      true ->
-        :ok
-
-      false ->
-        now = System.monotonic_time(:millisecond)
-
-        if now >= deadline do
-          {:error, :health_timeout}
-        else
-          Process.sleep(min(@health_poll_interval_ms, max(1, deadline - now)))
-          poll_health(url, deadline)
-        end
+  defp poll_health(url, deadline, port_handle, output) do
+    if health_ok?(url) do
+      {:ok, output}
+    else
+      poll_unhealthy(url, deadline, port_handle, output)
     end
+  end
+
+  defp poll_unhealthy(url, deadline, port_handle, output) do
+    case drain_output(port_handle, output) do
+      # The dev server exited: it can't come back, so report it now, with what it said, rather than
+      # waiting out the whole health timeout for a socket that will never open.
+      {:exited, status, output} ->
+        {:error, {:dev_server_exit, status}, output}
+
+      {:ok, output} ->
+        wait_before_retry(url, deadline, port_handle, output)
+    end
+  end
+
+  defp wait_before_retry(url, deadline, port_handle, output) do
+    now = System.monotonic_time(:millisecond)
+
+    if now >= deadline do
+      {:error, :health_timeout, output}
+    else
+      Process.sleep(min(@health_poll_interval_ms, max(1, deadline - now)))
+      poll_health(url, deadline, port_handle, output)
+    end
+  end
+
+  # The dev server's own output, which the health check would otherwise never read: a server that
+  # refuses to start leaves only a socket that was never created, and the failure is undiagnosable.
+  # Only the newest @health_output_chunks are kept, so a chatty server can't grow the mailbox.
+  defp drain_output(port_handle, output) do
+    receive do
+      {^port_handle, {:data, chunk}} ->
+        drain_output(port_handle, Enum.take([chunk | output], @health_output_chunks))
+
+      {^port_handle, {:exit_status, status}} ->
+        {:exited, status, output}
+    after
+      0 -> {:ok, output}
+    end
+  end
+
+  defp log_dev_server_output(_run_id, []), do: :ok
+
+  defp log_dev_server_output(run_id, chunks) do
+    output = chunks |> Enum.reverse() |> Enum.map_join("\n", &inspect/1)
+    Logger.warning("Verification dev server output run_id=#{run_id}\n#{output}")
   end
 
   defp health_ok?(url) do

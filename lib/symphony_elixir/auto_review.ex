@@ -861,8 +861,13 @@ defmodule SymphonyElixir.AutoReview do
 
   def blocked_reason({:qa_dev_server_failed, {:verification_failed, {:dev_server_sandbox_unconfined, cause}}}),
     do:
-      "the dev server did not start: Seatbelt on this Mac could not keep it listening on loopback only, " <>
+      "the dev server did not start: Seatbelt on this Mac could not keep it from opening a TCP listener, " <>
         "so Symphony did not run it unconfined (#{inspect(cause)})"
+
+  def blocked_reason({:qa_dev_server_failed, {:verification_failed, {:dev_server_not_on_socket, socket}}}),
+    do:
+      "the dev server never listened on $SYMPHONY_VERIFICATION_SOCKET (#{socket}): on macOS its sandbox allows " <>
+        "no TCP listener, so it must listen on that unix socket, which Symphony serves on 127.0.0.1:$SYMPHONY_VERIFICATION_PORT"
 
   def blocked_reason({:qa_dev_server_failed, reason}), do: "the dev server did not start: #{inspect(reason)}"
 
