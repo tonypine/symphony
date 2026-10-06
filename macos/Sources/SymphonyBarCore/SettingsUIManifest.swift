@@ -7,7 +7,7 @@ import Foundation
 /// `mix settings.ui_coverage` reads this list from this file and fails CI for a setting that is neither here
 /// nor in `config/settings_ui_exempt.yml`, so a new setting ships with a control. `SettingsUIManifestTests`
 /// checks that every key the line editors (`RepositoriesConfig`, `RunProfilesConfig`, `MaxConcurrentAgents`,
-/// `TokenLimits`) write is here. Keep one string literal per line, sorted.
+/// `TokenLimits`, `AcceptanceGate`) write is here. Keep one string literal per line, sorted.
 public enum SettingsUIManifest {
     public static let keyPaths: [String] = [
         "agent.command",
@@ -18,12 +18,14 @@ public enum SettingsUIManifest {
         "agent.model",
         "agent.provider",
         "agent.run_profiles",
+        "auto_review.acceptance_gate.mode",
         "auto_review.command",
         "auto_review.effort",
         "auto_review.model",
         "pre_push_review.command",
         "pre_push_review.effort",
         "pre_push_review.model",
+        "repositories[].acceptance_gate.mode",
         "repositories[].agent.effort",
         "repositories[].agent.model",
         "repositories[].agent.provider",
