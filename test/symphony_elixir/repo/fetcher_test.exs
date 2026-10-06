@@ -249,6 +249,50 @@ defmodule SymphonyElixir.Repo.FetcherTest do
     test "without the server it runs unlocked in the caller", %{repo: repo} do
       assert Fetcher.fetch(repo, fn -> {"", 0} end, server: :no_fetcher_running) == {"", 0}
     end
+
+    test "with no options it locks with the application's server", %{repo: repo} do
+      assert Fetcher.fetch(repo, fn -> {"fetched", 0} end) == {"fetched", 0}
+    end
+  end
+
+  describe "with_lock/3" do
+    test "runs in the caller once a fetch holding the repo's lock is done, and never retries", %{
+      repo: repo,
+      server: server
+    } do
+      key = key(repo)
+      holder = hold_lock(repo, server)
+      wait_for_state(server, &match?(%{^key => {{:lock, _ref}, []}}, &1))
+
+      test_pid = self()
+
+      locked =
+        Task.async(fn ->
+          Fetcher.with_lock(
+            repo,
+            fn ->
+              send(test_pid, {:locked, self()})
+              {@lock_error, 255}
+            end,
+            server: server
+          )
+        end)
+
+      wait_for_state(server, &match?(%{^key => {{:lock, _ref}, [{:lock, _from}]}}, &1))
+      refute_received {:locked, _pid}
+
+      release_lock(holder)
+
+      assert Task.await(locked, 10_000) == {@lock_error, 255}
+      locked_pid = locked.pid
+      assert_received {:locked, ^locked_pid}
+      refute_received {:locked, _pid}
+      assert :sys.get_state(server) == %{}
+    end
+
+    test "without the server it runs unlocked in the caller", %{repo: repo} do
+      assert Fetcher.with_lock(repo, fn -> :ran end, server: :no_fetcher_running) == :ran
+    end
   end
 
   describe "a remote that never answers" do
