@@ -3,7 +3,7 @@ defmodule SymphonyElixir.AcceptanceGate.Escalation do
   The acceptance gate's escalation rules: checks, without an agent, whether a PR must go to a
   human whatever the gate agent would say.
 
-  `check/4` returns one reason per rule that triggers, in this order, or `[]`:
+  `check/5` returns one reason per rule that triggers, in this order, or `[]`:
 
     * `:label` - the issue has an `escalate.labels` label (case-insensitive);
     * `:ticket_pattern` - the issue title or description matches an `escalate.ticket_patterns` regex;
@@ -18,6 +18,11 @@ defmodule SymphonyElixir.AcceptanceGate.Escalation do
       doesn't change. A new `symphony.yml` setting needs a control in the app; an exemption needs
       a person anyway (see `SymphonyElixir.SettingsUICoverage`). Other repositories don't have
       these files, so the rule never triggers there.
+
+  Before `:ticket_pattern` matches, the `:human_review_state` option (`issues.states.human_review`,
+  e.g. `Human Review`) is blanked where the text names the state: backticked, bolded, after
+  `to`, `in`, `into` or `from`, or before `state`. The name matches case-sensitively, so a ticket
+  about the state doesn't match `human review`, and "needs a human review" still does.
 
   Docs and tests are the globs QA selection skips (`QaAgent.Selection.docs_or_test?/1`).
   A version's major is its first number, or its first two when the first is `0`, so `0.4` to
@@ -61,13 +66,13 @@ defmodule SymphonyElixir.AcceptanceGate.Escalation do
   @doc """
   The reasons `issue` and its PR's diff must go to a human, one per triggered rule. `busy_files`
   are the paths changed most often on the default branch lately; `rules` is the effective
-  `auto_review.acceptance_gate.escalate` block.
+  `auto_review.acceptance_gate.escalate` block. Options: `:human_review_state`.
   """
-  @spec check(Issue.t(), diff_summary(), [String.t()], Escalate.t()) :: [reason()]
-  def check(%Issue{} = issue, %{files: files}, busy_files, %Escalate{} = rules) when is_list(files) and is_list(busy_files) do
+  @spec check(Issue.t(), diff_summary(), [String.t()], Escalate.t(), keyword()) :: [reason()]
+  def check(%Issue{} = issue, %{files: files}, busy_files, %Escalate{} = rules, opts \\ []) when is_list(files) and is_list(busy_files) do
     [
       {:label, label_detail(issue, rules.labels)},
-      {:ticket_pattern, ticket_pattern_detail(issue, rules.ticket_patterns)},
+      {:ticket_pattern, ticket_pattern_detail(issue, rules.ticket_patterns, opts[:human_review_state])},
       {:path, path_detail(files, rules.paths)},
       {:diff_pattern, diff_pattern_detail(files, rules.diff_patterns)},
       {:dependency, dependency_detail(files, rules.dependencies)},
@@ -81,11 +86,14 @@ defmodule SymphonyElixir.AcceptanceGate.Escalation do
 
   @doc """
   The reasons the ticket alone (its labels, title and description) must go to a human: the
-  `:label` and `:ticket_pattern` rules of `check/4`, which need no diff.
+  `:label` and `:ticket_pattern` rules of `check/5`, which need no diff. Options as `check/5`.
   """
-  @spec ticket_reasons(Issue.t(), Escalate.t()) :: [reason()]
-  def ticket_reasons(%Issue{} = issue, %Escalate{} = rules) do
-    [{:label, label_detail(issue, rules.labels)}, {:ticket_pattern, ticket_pattern_detail(issue, rules.ticket_patterns)}]
+  @spec ticket_reasons(Issue.t(), Escalate.t(), keyword()) :: [reason()]
+  def ticket_reasons(%Issue{} = issue, %Escalate{} = rules, opts \\ []) do
+    [
+      {:label, label_detail(issue, rules.labels)},
+      {:ticket_pattern, ticket_pattern_detail(issue, rules.ticket_patterns, opts[:human_review_state])}
+    ]
     |> Enum.reject(fn {_rule, detail} -> is_nil(detail) end)
     |> Enum.map(fn {rule, detail} -> %{rule: rule, detail: detail} end)
   end
@@ -98,13 +106,21 @@ defmodule SymphonyElixir.AcceptanceGate.Escalation do
     |> join_or_nil(&"the issue is labelled `#{&1}`")
   end
 
-  defp ticket_pattern_detail(%Issue{title: title, description: description}, patterns) do
-    text = Enum.join([title || "", description || ""], "\n")
+  defp ticket_pattern_detail(%Issue{title: title, description: description}, patterns, human_review_state) do
+    text = [title || "", description || ""] |> Enum.join("\n") |> blank_state_name(human_review_state)
 
     patterns
     |> Enum.filter(&Regex.match?(Regex.compile!(&1), text))
     |> join_or_nil(&"the ticket matches `#{&1}`")
   end
+
+  # The ticket naming the Human Review state isn't a request for a human review.
+  defp blank_state_name(text, state) when is_binary(state) and state != "" do
+    name = Regex.escape(state)
+    Regex.replace(~r/`#{name}`|\*\*#{name}\*\*|\b(?i:to|in|into|from)\s+#{name}\b|\b#{name}\s+(?i:state)\b/u, text, " ")
+  end
+
+  defp blank_state_name(text, _state), do: text
 
   defp path_detail(files, globs) do
     files
