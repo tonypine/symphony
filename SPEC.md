@@ -5001,7 +5001,9 @@ infrastructure.
   or write the snapshot), otherwise the last good snapshot or the file on disk. Errors name the
   file and key and never print secret values. A `workspace.source`
   repo whose clone does not exist yet is checked without its `WORKFLOW.md` (the service clones it
-  at startup before reading it), and the check prints a warning naming the repo.
+  at startup before reading it), and the check prints a warning naming the repo. A
+  `strategy: worktree` repo on the local host fails the check when its `workspaces.repo` does
+  not exist, is not a directory, or is not a git repository.
 - CLI accepts `--config path-to-symphony.yml` to select an alternate operator config.
 - CLI defaults to `./symphony.yml` when `--config` is omitted.
 - CLI errors when the resolved `symphony.yml` (explicit or default) does not exist.
