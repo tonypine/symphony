@@ -35,6 +35,44 @@ final class UpdateHandoffTests: XCTestCase {
         XCTAssertNil(defaults.values[PendingUpdateStore.key])
     }
 
+    func testCarriesTheReleaseAcrossTheRelaunch() {
+        let defaults = MemoryKeyValueStore()
+        let release = Release(
+            version: "0.0.1.43",
+            build: 43,
+            notes: "12 changes since v0.0.1.42:\n- Fix",
+            pageURL: URL(string: "https://github.com/tonypine/symphony/releases/tag/v0.0.1.43")!,
+            changes: 12
+        )
+        let automatic = PendingUpdate(
+            fromBuild: 42,
+            toBuild: 43,
+            version: "0.0.1.43",
+            startSymphony: false,
+            resumeDispatch: false,
+            details: ReleaseDetails(release),
+            automatic: true
+        )
+        PendingUpdateStore(defaults: defaults).save(automatic)
+
+        let relaunched = PendingUpdateStore(defaults: defaults).take()
+        XCTAssertEqual(relaunched, automatic)
+        XCTAssertEqual(relaunched?.details.release(version: "0.0.1.43", build: 43), release)
+    }
+
+    func testReadsAPendingUpdateFromABuildThatDidNotKeepTheRelease() {
+        let defaults = MemoryKeyValueStore()
+        defaults.values[PendingUpdateStore.key] = [
+            "fromBuild": 42, "toBuild": 43, "version": "0.0.1.43", "startSymphony": true, "resumeDispatch": true,
+        ] as [String: Any]
+
+        let relaunched = PendingUpdateStore(defaults: defaults).take()
+        XCTAssertEqual(relaunched, pending)
+        XCTAssertEqual(relaunched?.details, ReleaseDetails())
+        XCTAssertEqual(relaunched?.automatic, false, "an update of unknown origin posts no notification")
+        XCTAssertNil(relaunched?.details.release(version: "0.0.1.43", build: 43), "no page to open")
+    }
+
     func testKeepsAPauseTheUserMade() {
         let store = PendingUpdateStore(defaults: MemoryKeyValueStore())
         let userPaused = PendingUpdate(fromBuild: 42, toBuild: 43, version: "0.0.1.43", startSymphony: true, resumeDispatch: false)

@@ -258,5 +258,13 @@ final class UpdatesTests: XCTestCase {
         )
         XCTAssertEqual(AppBuild(infoDictionary: ["CFBundleVersion": "1.2"], hasEmbeddedSymphony: true).build, 0)
         XCTAssertEqual(AppBuild(infoDictionary: nil, hasEmbeddedSymphony: false), AppBuild(build: 0, isDevelopment: true))
+        XCTAssertEqual(
+            AppBuild(
+                infoDictionary: ["CFBundleVersion": "42", "CFBundleShortVersionString": " 0.0.1.42\n"],
+                hasEmbeddedSymphony: true
+            ).version,
+            "0.0.1.42"
+        )
+        XCTAssertNil(AppBuild(infoDictionary: ["CFBundleShortVersionString": ""], hasEmbeddedSymphony: true).version)
     }
 }

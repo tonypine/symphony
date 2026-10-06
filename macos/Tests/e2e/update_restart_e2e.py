@@ -801,6 +801,10 @@ def scenario_update(instance):
         raise Failure("the app folder doesn't hold N+1 as Symphony.app and N as Symphony (previous).app")
     if instance.alerts():
         raise Failure(f"the updated app showed alerts: {instance.alerts()}")
+    # The release the old build installed, carried across the relaunch: the line opens its notes.
+    updated_line = f"Updated to v{version(BUILD_N1)}"
+    if not any(title.startswith(updated_line) and enabled for title, enabled in instance.menu().items()):
+        raise Failure(f"the updated app's menu has no enabled '{updated_line}' line: {instance.menu()}")
     log("scenario 1 passed")
 
 
