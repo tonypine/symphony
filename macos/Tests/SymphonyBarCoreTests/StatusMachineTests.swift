@@ -180,6 +180,22 @@ final class StatusMachineTests: XCTestCase {
         XCTAssertTrue(machine.canStart)
     }
 
+    func testExternalSymphonyGetsTheSameGraceBeforeStartIsOffered() {
+        var machine = machine(.polled(.state(working)))
+        for _ in 1..<StatusMachine.missedPollsBeforeError {
+            machine.handle(.polled(.unreachable))
+            XCTAssertEqual(machine.status, .running(working, external: true))
+            XCTAssertTrue(machine.slowToAnswer)
+            XCTAssertFalse(machine.canStart)
+        }
+
+        machine.handle(.polled(.unreachable))
+        XCTAssertEqual(machine.status, .stopped)
+        XCTAssertFalse(machine.slowToAnswer)
+        XCTAssertTrue(machine.canStart)
+        XCTAssertFalse(machine.canStop)
+    }
+
     func testExternalFailureIsAnErrorThatAllowsStart() {
         let machine = machine(.polled(.failed("Symphony answered with HTTP 404")))
 
