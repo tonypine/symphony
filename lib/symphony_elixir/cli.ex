@@ -64,7 +64,7 @@ defmodule SymphonyElixir.CLI do
   def main(args) do
     case evaluate(args) do
       :ok -> wait_for_shutdown()
-      :serve -> Process.sleep(:infinity)
+      :serve -> serve_until_stopped()
       result -> halt(result)
     end
   end
@@ -649,6 +649,14 @@ defmodule SymphonyElixir.CLI do
   @spec burrito_args(String.t() | nil, [charlist() | String.t()]) :: [String.t()] | :not_in_burrito
   def burrito_args(bin_path, _plain_arguments) when bin_path in [nil, ""], do: :not_in_burrito
   def burrito_args(_bin_path, plain_arguments), do: Enum.map(plain_arguments, &to_string/1)
+
+  # A long-running command such as `openrouter-stub` serves from its own processes until the
+  # escript is stopped. `Process.sleep/1` is typed to return, so the halt keeps this `no_return()`.
+  @spec serve_until_stopped() :: no_return()
+  defp serve_until_stopped do
+    Process.sleep(:infinity)
+    System.halt(0)
+  end
 
   @spec wait_for_shutdown() :: no_return()
   defp wait_for_shutdown do
