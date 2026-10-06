@@ -37,14 +37,14 @@ final class LinearAPITests: XCTestCase {
         XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
         let json = try body(request)
         XCTAssertEqual(json["query"] as? String, LinearClient.projectsQuery)
-        XCTAssertEqual(json["variables"] as? [String: Int], ["first": 250])
+        XCTAssertEqual(json["variables"] as? [String: Int], ["first": 50])
     }
 
-    func testListsProjectsSortedByNameWithTheirTeams() async {
+    func testListsProjectsSortedByName() async {
         let page = """
             {"data":{"projects":{"nodes":[
-              {"id":"p2","name":"web platform","teams":{"nodes":[{"key":"ENG"},{"key":"OPS"}]}},
-              {"id":"p1","name":"Apps","teams":{"nodes":[]}},
+              {"id":"p2","name":"web platform"},
+              {"id":"p1","name":"Apps"},
               {"id":"p3","name":"Billing"}
             ],"pageInfo":{"hasNextPage":false,"endCursor":"c1"}}}}
             """
@@ -55,7 +55,7 @@ final class LinearAPITests: XCTestCase {
         XCTAssertEqual(result, .success([
             LinearProject(id: "p1", name: "Apps"),
             LinearProject(id: "p3", name: "Billing"),
-            LinearProject(id: "p2", name: "web platform", teamKeys: ["ENG", "OPS"]),
+            LinearProject(id: "p2", name: "web platform"),
         ]))
         XCTAssertEqual(transport.requests.count, 1)
     }
@@ -82,44 +82,80 @@ final class LinearAPITests: XCTestCase {
         XCTAssertEqual(transport.requests.count, LinearClient.maxPages)
     }
 
-    func testListsLabelsWithoutGroupsSortedByName() async throws {
+    func testListsAProjectsLabelsFromItsTeamsWithoutGroupsSortedByName() async throws {
+        let teams = #"{"data":{"project":{"teams":{"nodes":[{"id":"t1"},{"id":"t2"}],"pageInfo":{"hasNextPage":false}}}}}"#
         let page = """
             {"data":{"issueLabels":{"nodes":[
-              {"id":"l1","name":"frontend","isGroup":false,"team":{"key":"ENG"}},
-              {"id":"l2","name":"Area","isGroup":true,"team":null},
-              {"id":"l3","name":"Bug","isGroup":false,"team":null},
+              {"id":"l1","name":"frontend","isGroup":false},
+              {"id":"l2","name":"Area","isGroup":true},
+              {"id":"l3","name":"Bug","isGroup":false},
               {"id":"l4","name":"api"}
             ],"pageInfo":{"hasNextPage":false}}}}
             """
-        let (client, transport) = client([(200, page)])
+        let (client, transport) = client([(200, teams), (200, page)])
 
-        let result = await client.labels()
+        let result = await client.labels(forProject: "p1")
 
         XCTAssertEqual(result, .success([
             LinearLabel(id: "l4", name: "api"),
             LinearLabel(id: "l3", name: "Bug"),
-            LinearLabel(id: "l1", name: "frontend", teamKey: "ENG"),
+            LinearLabel(id: "l1", name: "frontend"),
         ]))
-        XCTAssertEqual(try body(transport.requests.first)["query"] as? String, LinearClient.labelsQuery)
+        let teamsBody = try body(transport.requests.first)
+        XCTAssertEqual(teamsBody["query"] as? String, LinearClient.projectTeamsQuery)
+        XCTAssertEqual((teamsBody["variables"] as? [String: Any])?["projectId"] as? String, "p1")
+        let labelsBody = try body(transport.requests.last)
+        XCTAssertEqual(labelsBody["query"] as? String, LinearClient.labelsQuery)
+        let filter = try XCTUnwrap((labelsBody["variables"] as? [String: Any])?["filter"])
+        let expected: [String: Any] = ["or": [["team": ["null": true]], ["team": ["id": ["in": ["t1", "t2"]]]]]]
+        XCTAssertEqual(filter as? NSDictionary, expected as NSDictionary)
     }
 
-    func testLabelNamesForAProjectKeepWorkspaceLabelsAndItsTeams() {
+    func testListsEveryLabelWithoutAProject() async throws {
+        let page = #"{"data":{"issueLabels":{"nodes":[{"id":"l1","name":"Bug"}],"pageInfo":{"hasNextPage":false}}}}"#
+        let (client, transport) = client([(200, page)])
+
+        let result = await client.labels(forProject: nil)
+
+        XCTAssertEqual(result, .success([LinearLabel(id: "l1", name: "Bug")]))
+        XCTAssertEqual(transport.requests.count, 1)
+        XCTAssertNil((try body(transport.requests.first)["variables"] as? [String: Any])?["filter"])
+    }
+
+    func testAProjectLinearDoesntFindFailsItsLabels() async {
+        let (client, transport) = client([(200, #"{"data":{"project":null}}"#)])
+
+        let result = await client.labels(forProject: "gone")
+
+        XCTAssertEqual(result, .failure(.unreadable))
+        XCTAssertEqual(transport.requests.count, 1)
+    }
+
+    func testAFailureReadingTheProjectsTeamsFailsItsLabels() async {
+        let (client, transport) = client([(401, "{}")])
+
+        let result = await client.labels(forProject: "p1")
+
+        XCTAssertEqual(result, .failure(.rejectedKey))
+        XCTAssertEqual(transport.requests.count, 1)
+    }
+
+    func testLabelNamesAreEachNameOnceSorted() {
         let labels = [
-            LinearLabel(id: "1", name: "frontend", teamKey: "ENG"),
+            LinearLabel(id: "1", name: "frontend"),
             LinearLabel(id: "2", name: "Bug"),
-            LinearLabel(id: "3", name: "bug-ops", teamKey: "OPS"),
-            LinearLabel(id: "4", name: "Bug", teamKey: "ENG"),
+            LinearLabel(id: "3", name: "bug-ops"),
+            LinearLabel(id: "4", name: "Bug"),
         ]
 
-        XCTAssertEqual(LinearLabel.names(labels, for: LinearProject(id: "p", name: "Web", teamKeys: ["ENG"])), ["Bug", "frontend"])
-        XCTAssertEqual(LinearLabel.names(labels, for: nil), ["Bug", "bug-ops", "frontend"])
+        XCTAssertEqual(LinearLabel.names(labels), ["Bug", "bug-ops", "frontend"])
     }
 
     func testAMissingKeyFailsWithoutARequest() async {
         let (client, transport) = client(key: "  ", [])
 
         let projects = await client.projects()
-        let labels = await client.labels()
+        let labels = await client.labels(forProject: "p1")
 
         XCTAssertEqual(projects, .failure(.missingKey))
         XCTAssertEqual(labels, .failure(.missingKey))
@@ -136,6 +172,10 @@ final class LinearAPITests: XCTestCase {
             ((400, #"{"errors":[{"message":"Rate limit exceeded","extensions":{"code":"RATELIMITED"}}]}"#), .rateLimited),
             ((200, #"{"data":null,"errors":[{"message":"Cannot query field \"bogus\""}]}"#), .graphQL(#"Cannot query field "bogus""#)),
             ((200, #"{"errors":[{}]}"#), .graphQL("unknown error")),
+            (
+                (400, #"{"errors":[{"message":"Entity not found","extensions":{"userPresentableMessage":"Couldn't find the project."}}]}"#),
+                .graphQL("Couldn't find the project.")
+            ),
             ((502, "<html>Bad gateway</html>"), .httpStatus(502)),
             ((200, "not json"), .unreadable),
             ((200, #"{"data":{"projects":null}}"#), .unreadable),
@@ -155,7 +195,7 @@ final class LinearAPITests: XCTestCase {
         let first = #"{"data":{"issueLabels":{"nodes":[{"id":"l1","name":"a"}],"pageInfo":{"hasNextPage":true,"endCursor":"c1"}}}}"#
         let (client, _) = client([(200, first), (500, "{}")])
 
-        let result = await client.labels()
+        let result = await client.labels(forProject: nil)
 
         XCTAssertEqual(result, .failure(.httpStatus(500)))
     }

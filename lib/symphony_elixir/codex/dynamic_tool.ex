@@ -226,6 +226,51 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       }
     },
     %{
+      "name" => "linear_create_document",
+      "description" =>
+        "Create a Linear document for a long-lived artifact of the current issue (a domain brief, journeys, a Kano map, screens, an ADR draft) rather than a comment. " <>
+          "It lands in the issue's project titled `<identifier> · <title>` and is attached to the issue, so later runs on the issue can read and edit it. " <>
+          "Edit an existing one with linear_update_document rather than creating a second. At most 10 per run; an issue outside a project is refused.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["title", "content"],
+        "properties" => %{
+          "title" => %{"type" => "string", "maxLength" => 120, "description" => "Title without the issue identifier, which Symphony adds: `Domain brief`."},
+          "content" => %{"type" => "string", "description" => "Markdown content."}
+        }
+      }
+    },
+    %{
+      "name" => "linear_update_document",
+      "description" =>
+        "Replace the content, and the title when given, of a document this issue's runs created with linear_create_document. " <>
+          "Send the whole new content: it replaces the old. Any other document is refused.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["document_id", "content"],
+        "properties" => %{
+          "document_id" => %{"type" => "string", "description" => "Id of the document, as linear_create_document or linear_get_document returned it."},
+          "content" => %{"type" => "string", "description" => "The document's whole new markdown content."},
+          "title" => %{"type" => "string", "maxLength" => 120, "description" => "New title without the issue identifier, which Symphony keeps."}
+        }
+      }
+    },
+    %{
+      "name" => "linear_get_document",
+      "description" =>
+        "Without arguments, list the documents this issue's runs created with linear_create_document (id, title, url). " <>
+          "Pass `document_id` to read one in full. Any other document is refused.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "properties" => %{
+          "document_id" => %{"type" => "string", "description" => "Id of the document to read in full."}
+        }
+      }
+    },
+    %{
       "name" => "linear_request_human_action",
       "description" =>
         "Record that the current issue needs something only a human can do: a missing secret or permission, a product decision, an account setup, a manual check on a device. Symphony lists it, with your steps, in a Linear project update for the human, and drops it once the issue moves on. Never put a secret value in any field. A request with the same title that is still open is not posted again. Before asking about slow or stuck CI, compute the job's age from the API's UTC timestamps against the current UTC time (`date -u`), never local time; under 30 minutes old, wait for the CI poller's re-run instead. Then follow the blocked-access escape hatch as usual: its move to Backlog lands in Human Review when that state is on, where the human finds it.",
@@ -652,6 +697,9 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "linear_update_subissue" => ["identifier", "title", "description", "blocked_by", "cancel_reason"],
     "linear_add_blocked_by" => ["blocked_by"],
     "linear_create_project_update" => ["body", "health"],
+    "linear_create_document" => ["title", "content"],
+    "linear_update_document" => ["document_id", "content", "title"],
+    "linear_get_document" => ["document_id"],
     "linear_request_human_action" => ["title", "why", "steps", "unblocks", "est_minutes"],
     "linear_withdraw_human_action" => ["reason", "title"],
     "github_get_pull_request" => [],
@@ -724,6 +772,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
                      "linear_get_parent_issue",
                      "linear_get_comments",
                      "linear_get_related_issues",
+                     "linear_get_document",
                      "github_get_pull_request",
                      "github_get_pr_checks",
                      "github_list_pr_comments",
@@ -878,6 +927,18 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   defp execute_linear_tool("linear_create_project_update", context, args, opts) do
     Linear.create_project_update(context, args, opts)
+  end
+
+  defp execute_linear_tool("linear_create_document", context, args, opts) do
+    Linear.create_document(context, args, opts)
+  end
+
+  defp execute_linear_tool("linear_update_document", context, args, opts) do
+    Linear.update_document(context, args, opts)
+  end
+
+  defp execute_linear_tool("linear_get_document", context, args, opts) do
+    Linear.get_document(context, Map.get(args, "document_id"), opts)
   end
 
   defp execute_linear_tool("linear_request_human_action", context, args, opts) do
@@ -1322,6 +1383,96 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   defp tool_error_payload(:invalid_project_update_health) do
     %{"error" => %{"code" => "invalid_project_update_health", "message" => "linear_create_project_update `health` must be onTrack, atRisk, or offTrack."}}
+  end
+
+  defp tool_error_payload(:invalid_document_title) do
+    %{"error" => %{"code" => "invalid_document_title", "message" => "The document `title` must be a non-blank string of at most 120 characters."}}
+  end
+
+  defp tool_error_payload(:invalid_document_content) do
+    %{"error" => %{"code" => "invalid_document_content", "message" => "The document `content` must be a non-blank string."}}
+  end
+
+  defp tool_error_payload(:invalid_document_id) do
+    %{
+      "error" => %{
+        "code" => "invalid_document_id",
+        "message" => "`document_id` must be the non-blank id of a document. Call linear_get_document without arguments to list the issue's documents."
+      }
+    }
+  end
+
+  defp tool_error_payload(:truncated_document_content) do
+    %{
+      "error" => %{
+        "code" => "truncated_document_content",
+        "message" =>
+          "The content contains Symphony's `[... truncated by Symphony: ... exceeded N characters ...]` marker, so it was copied from a cut read and would delete the text past the cut. Nothing was changed."
+      }
+    }
+  end
+
+  defp tool_error_payload({:document_cap_reached, cap}) do
+    %{
+      "error" => %{
+        "code" => "document_cap_reached",
+        "message" => "This run already created #{cap} documents, the per-run limit. Edit an existing one with linear_update_document instead.",
+        "cap" => cap
+      }
+    }
+  end
+
+  defp tool_error_payload(:document_registry_unavailable) do
+    %{
+      "error" => %{
+        "code" => "document_registry_unavailable",
+        "message" => "Symphony has no per-run tool state for this session, so it cannot enforce the document cap and refused to create the document."
+      }
+    }
+  end
+
+  defp tool_error_payload(:document_issue_has_no_project) do
+    %{
+      "error" => %{
+        "code" => "issue_has_no_project",
+        "message" =>
+          "The current issue is not in a Linear project, and a Linear document lives in a project, so no document was created. " <>
+            "Keep the artifact in a comment, or ask a person to add the issue to a project."
+      }
+    }
+  end
+
+  defp tool_error_payload({:document_not_owned_by_issue, document_id}) do
+    %{
+      "error" => %{
+        "code" => "document_not_owned_by_issue",
+        "message" =>
+          "#{document_id} is not a document this issue's runs created, so it is not read or changed. " <>
+            "Call linear_get_document without arguments to list the ones that are.",
+        "document_id" => document_id
+      }
+    }
+  end
+
+  defp tool_error_payload({:document_attach_failed, document, reason}) do
+    %{
+      "error" => %{
+        "code" => "document_attach_failed",
+        "message" =>
+          "Created the document, but could not attach it to the issue, so later runs cannot find or edit it. " <>
+            "This run can still edit it; record its id and URL in the workpad for a human to attach.",
+        "document" => document,
+        "reason" => inspect(reason)
+      }
+    }
+  end
+
+  defp tool_error_payload(:document_not_returned) do
+    %{"error" => %{"code" => "document_not_returned", "message" => "Linear did not return the created document."}}
+  end
+
+  defp tool_error_payload(:document_not_found) do
+    %{"error" => %{"code" => "document_not_found", "message" => "Linear has no such document; it may have been deleted."}}
   end
 
   defp tool_error_payload(:invalid_subissue_title) do
