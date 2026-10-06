@@ -666,11 +666,14 @@ defmodule SymphonyElixir.McpServer do
       {:ok, payload, rest, message_meta} ->
         request_meta = request_meta(payload, Map.merge(connection_meta, message_meta))
 
-        payload
-        |> safe_handle_payload(context, request_meta)
-        |> maybe_send_response(socket, request_meta, send_fun(context))
+        case safe_handle_payload(payload, context, request_meta, {socket, rest}) do
+          {response, rest} ->
+            maybe_send_response(response, socket, request_meta, send_fun(context))
+            serve(socket, context, rest, connection_meta)
 
-        serve(socket, context, rest, connection_meta)
+          :closed ->
+            :ok
+        end
 
       {:error, {:json_decode_failed, line, rest, reason}} ->
         request_meta = parse_error_meta(line, connection_meta)
@@ -700,28 +703,60 @@ defmodule SymphonyElixir.McpServer do
   # connection — the client sees "MCP error -32000: Connection closed" with no
   # trace in the symphony log. Catch and log so the real cause is recoverable
   # and the connection survives.
-  defp safe_handle_payload(payload, context, request_meta) do
-    handle_payload(payload, context, request_meta)
-  rescue
-    error ->
-      stacktrace = __STACKTRACE__
-
-      Logger.error(
-        "MCP handler crashed #{format_request_meta(request_meta)} " <>
-          format_exception_fields(:error, error, stacktrace)
-      )
-
-      crash_response(payload, error)
+  #
+  # Returns the response with the bytes read past the request (a tool call reads the connection
+  # while it runs), or `:closed` when the client closed the connection during a tool call.
+  defp safe_handle_payload(payload, context, request_meta, {_socket, buffer} = connection) do
+    dispatch_payload(payload, context, request_meta, connection)
   catch
-    kind, reason ->
-      stacktrace = __STACKTRACE__
+    kind, reason -> {handler_failure(kind, reason, __STACKTRACE__, payload, request_meta), buffer}
+  end
 
-      Logger.error(
-        "MCP handler exited #{format_request_meta(request_meta)} " <>
-          format_exception_fields(kind, reason, stacktrace)
-      )
+  defp dispatch_payload(%{"id" => id, "method" => "tools/call", "params" => params} = payload, context, request_meta, connection) do
+    tool = Map.get(params, "name")
+    arguments = Map.get(params, "arguments", %{})
 
-      crash_response(payload, {kind, reason})
+    case run_tool(tool, arguments, context, request_meta, connection) do
+      {{:ok, result}, buffer} ->
+        {tool_response(id, Map.get(result, "output", ""), Map.get(result, "success") != true), buffer}
+
+      {{:timeout, timeout_ms}, buffer} ->
+        {tool_response(id, tool_timeout_output(tool, timeout_ms), true), buffer}
+
+      {{:raised, kind, reason, stacktrace}, buffer} ->
+        {handler_failure(kind, reason, stacktrace, payload, request_meta), buffer}
+
+      # MCP: the receiver of a cancel does not answer the cancelled request.
+      {:cancelled, buffer} ->
+        {nil, buffer}
+
+      :closed ->
+        :closed
+    end
+  end
+
+  defp dispatch_payload(payload, context, request_meta, {_socket, buffer}) do
+    {handle_payload(payload, context, request_meta), buffer}
+  end
+
+  defp handler_failure(:error, reason, stacktrace, payload, request_meta) do
+    error = Exception.normalize(:error, reason, stacktrace)
+
+    Logger.error(
+      "MCP handler crashed #{format_request_meta(request_meta)} " <>
+        format_exception_fields(:error, error, stacktrace)
+    )
+
+    crash_response(payload, error)
+  end
+
+  defp handler_failure(kind, reason, stacktrace, payload, request_meta) do
+    Logger.error(
+      "MCP handler exited #{format_request_meta(request_meta)} " <>
+        format_exception_fields(kind, reason, stacktrace)
+    )
+
+    crash_response(payload, {kind, reason})
   end
 
   defp mcp_tool_name(%{"params" => %{"name" => name}}) when is_binary(name), do: name
@@ -813,30 +848,20 @@ defmodule SymphonyElixir.McpServer do
     response(id, %{"tools" => tool_specs_for_context(context)})
   end
 
-  defp handle_payload(%{"id" => id, "method" => "tools/call", "params" => params}, context, request_meta) do
-    tool = Map.get(params, "name")
-    arguments = Map.get(params, "arguments", %{})
-
-    case run_tool(tool, arguments, context, request_meta) do
-      {:ok, result} -> tool_response(id, Map.get(result, "output", ""), Map.get(result, "success") != true)
-      {:timeout, timeout_ms} -> tool_response(id, tool_timeout_output(tool, timeout_ms), true)
-    end
-  end
-
   defp handle_payload(%{"id" => id, "method" => method}, _context, _request_meta) do
     error_response(id, -32_601, "Unsupported MCP method: #{method}")
   end
 
   defp handle_payload(_payload, _context, _request_meta), do: nil
 
-  # The tool runs in a task killed at the timeout (see `tool_timeout_ms/2`). What it raises or
-  # exits with is raised again here, for `safe_handle_payload/3` to log and answer.
-  defp run_tool(tool, arguments, context, request_meta) do
+  # The tool runs in a task killed at the timeout (see `tool_timeout_ms/2`), or as soon as its
+  # client cancels the call or closes the connection (see `await_tool_task/2`).
+  defp run_tool(tool, arguments, context, request_meta, connection) do
     timeout_ms = tool_timeout_ms(tool, context)
     call_id = notify_tool_call_started(context, tool, timeout_ms)
 
     try do
-      run_tool_task(tool, arguments, context, request_meta, timeout_ms)
+      run_tool_task(tool, arguments, context, request_meta, timeout_ms, connection)
     after
       notify_tool_call(context, {:finished, call_id})
     end
@@ -857,7 +882,7 @@ defmodule SymphonyElixir.McpServer do
   defp notify_tool_call(%{on_tool_call: notify}, event) when is_function(notify, 1), do: notify.(event)
   defp notify_tool_call(_context, _event), do: :ok
 
-  defp run_tool_task(tool, arguments, context, request_meta, timeout_ms) do
+  defp run_tool_task(tool, arguments, context, request_meta, timeout_ms, {socket, buffer}) do
     task =
       Task.async(fn ->
         try do
@@ -867,19 +892,85 @@ defmodule SymphonyElixir.McpServer do
         end
       end)
 
-    case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
-      {:ok, {:ok, result}} ->
-        {:ok, result}
+    call = %{
+      task: task,
+      socket: socket,
+      request_meta: request_meta,
+      timeout_ms: timeout_ms,
+      deadline: tool_deadline(timeout_ms)
+    }
 
-      {:ok, {:raised, kind, reason, stacktrace}} ->
-        :erlang.raise(kind, reason, stacktrace)
+    await_tool_task(call, buffer)
+  end
 
-      nil ->
-        Logger.error("MCP tool call timed out #{format_request_meta(request_meta)} timeout_ms=#{timeout_ms}; stopped it")
+  # A connection serves one request at a time, so while the tool runs nothing else reads the
+  # socket: read it here, so a client that gives up on the call frees the connection at once
+  # instead of after the call's timeout. A `notifications/cancelled` for the call, or the socket
+  # closing, stops the task. Whatever else arrives stays in the buffer for the serve loop, the
+  # cancel included, where it is a no-op like any cancel of a call that already finished.
+  defp await_tool_task(call, buffer) do
+    if cancel_requested?(buffer, call.request_meta.request_id) do
+      stop_tool_task(call, "client_cancelled")
+      {:cancelled, buffer}
+    else
+      case :socket.recv(call.socket, 0, :nowait) do
+        {:ok, data} ->
+          await_tool_task(call, buffer <> data)
 
-        {:timeout, timeout_ms}
+        {:select, select_info} ->
+          await_tool_event(call, buffer, select_info)
+
+        {:error, _reason} ->
+          stop_tool_task(call, "connection_closed")
+          :closed
+      end
     end
   end
+
+  defp await_tool_event(%{task: %Task{ref: ref} = task, socket: socket} = call, buffer, {:select_info, _tag, handle} = select_info) do
+    receive do
+      {^ref, outcome} ->
+        Process.demonitor(ref, [:flush])
+        :socket.cancel(socket, select_info)
+        {outcome, buffer}
+
+      {:"$socket", ^socket, :select, ^handle} ->
+        await_tool_task(call, buffer)
+    after
+      remaining_ms(call.deadline) ->
+        :socket.cancel(socket, select_info)
+        {:ok, outcome} = Task.shutdown(task, :brutal_kill) || {:ok, tool_timed_out(call)}
+        {outcome, buffer}
+    end
+  end
+
+  defp tool_timed_out(%{request_meta: request_meta, timeout_ms: timeout_ms}) do
+    Logger.error("MCP tool call timed out #{format_request_meta(request_meta)} timeout_ms=#{timeout_ms}; stopped it")
+    {:timeout, timeout_ms}
+  end
+
+  defp stop_tool_task(%{task: task, request_meta: request_meta}, reason) do
+    Task.shutdown(task, :brutal_kill)
+    Logger.info("MCP tool call stopped #{format_request_meta(request_meta)} reason=#{reason}")
+  end
+
+  # The complete lines read so far hold a `notifications/cancelled` for the request.
+  defp cancel_requested?(buffer, request_id) do
+    buffer
+    |> String.split("\n")
+    |> Enum.drop(-1)
+    |> Enum.any?(&cancels_request?(&1, request_id))
+  end
+
+  defp cancels_request?(line, request_id) do
+    match?({:ok, %{"method" => "notifications/cancelled", "params" => %{"requestId" => ^request_id}}}, Jason.decode(line))
+  end
+
+  defp tool_deadline(:infinity), do: :infinity
+  defp tool_deadline(timeout_ms), do: System.monotonic_time(:millisecond) + timeout_ms
+
+  defp remaining_ms(:infinity), do: :infinity
+  defp remaining_ms(deadline), do: max(deadline - System.monotonic_time(:millisecond), 0)
 
   # QA tools keep the timeouts their drivers set: a `qa_build` runs as long as its playbook allows.
   defp tool_timeout_ms("qa_" <> _rest, _context), do: :infinity
