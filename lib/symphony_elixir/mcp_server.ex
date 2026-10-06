@@ -20,6 +20,7 @@ defmodule SymphonyElixir.McpServer do
   @max_socket_path_bytes 103
   @shim_prefix "symphony-mcp-shim-"
   @orphaned_socket_dir_grace_seconds 5
+
   @type session :: %{
           id: String.t(),
           transport: :unix | :tcp,
