@@ -7,9 +7,10 @@ name: seatbelt
 # Ubuntu runners and every agent run (Seatbelt can't nest), so they run here, on a macOS runner.
 # `--only seatbelt` runs them even so, and fails when none is found.
 #
-# It runs on the newest macOS image, the platform Symphony runs on. Where a macOS version lets a
-# command under the profile listen beyond loopback, the dev server refuses to start, and the tests
-# assert that refusal instead of a served page.
+# It runs on the `xcode-27` image, macOS 27, whose Seatbelt refuses a bind beyond loopback under
+# the profile, so the dev server starts confined and the serve tests check a served page. On
+# `macos-26` the profile lets a command listen on 0.0.0.0, so the dev server refuses to start
+# there and the tests could only assert that refusal. Move to `macos-27` once that label ships.
 #
 # Not a required check: on a pull request that changes none of these paths the workflow doesn't
 # run. Pushes to `main` that change them run it too, so it stays green there.
@@ -46,7 +47,7 @@ concurrency:
 jobs:
   seatbelt:
     name: seatbelt tests
-    runs-on: macos-26
+    runs-on: xcode-27
     # One test builds this checkout with `scripts/qa-dashboard-server.sh` before it serves.
     timeout-minutes: 45
 
@@ -83,8 +84,9 @@ jobs:
       - name: Run the Seatbelt tests
         run: time mix test --only seatbelt
 
-      # Whether the dev server runs confined on this image or refuses to start: the tests pass
-      # either way, so the run says which as an annotation.
+      # Whether the dev server runs confined on this image or refuses to start. The tests pass
+      # either way, so this step fails the job when it refuses: the served-page path would go
+      # unchecked.
       - name: Report the confinement verdict
         if: ${{ !cancelled() }}
         env:
@@ -95,7 +97,11 @@ jobs:
             File.mkdir_p!(dir)
 
             case SymphonyElixir.Verification.DevServerSandbox.command("true", dir, dir, []) do
-              {:ok, _argv} -> IO.puts("::notice title=Seatbelt confinement::the profile refuses a bind on 0.0.0.0, so the dev server runs confined")
-              {:error, reason} -> IO.puts("::warning title=Seatbelt confinement::the dev server refuses to start: #{inspect(reason)}")
+              {:ok, _argv, _cleanup} ->
+                IO.puts("::notice title=Seatbelt confinement::the profile refuses a bind on 0.0.0.0, so the dev server runs confined")
+
+              {:error, reason} ->
+                IO.puts("::error title=Seatbelt confinement::the dev server refuses to start, so no test checked a served page: #{inspect(reason)}")
+                System.halt(1)
             end
           '
