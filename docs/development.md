@@ -125,8 +125,11 @@ them on a Mac outside any sandbox with:
 mix test --only seatbelt
 ```
 
-The [`seatbelt` workflow](../.github/workflows/seatbelt.yml) runs the same command on a macOS
-runner, on pull requests and pushes to `main` that change `lib/symphony_elixir/verification/`,
+Where a macOS version lets a command under the profile listen beyond loopback, the dev server
+refuses to start, and the tests that serve a page assert that refusal instead.
+
+The [`seatbelt` workflow](../.github/workflows/seatbelt.yml) runs the same command on the newest
+macOS runner image, on pull requests and pushes to `main` that change `lib/symphony_elixir/verification/`,
 `lib/symphony_elixir/agent_sandbox_config.ex`, `scripts/qa-dashboard-server.sh` or the tests
 themselves. It is not a required check.
 

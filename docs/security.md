@@ -378,6 +378,12 @@ Seatbelt exists on macOS only. Elsewhere, and when `/usr/bin/sandbox-exec` is mi
 server does not start: an agent run fails with `verification_failed` before its first turn, and
 an Auto Review `web` pass is `blocked`.
 
+Not every macOS version keeps the listener on loopback: on macOS 15 the rule that lets the server
+accept connections on loopback also lets it bind `0.0.0.0` and the LAN address. So before the
+first dev server starts, Symphony binds `0.0.0.0` under the profile with `/usr/bin/perl`, and
+unless Seatbelt refuses it the dev server does not start either
+(`dev_server_sandbox_unconfined`), the same way. The result holds until Symphony restarts.
+
 The dev server is off by default. It starts only when `verification.enabled` is `true` and
 `verification.dev_server.start_cmd` is set. A repo's `WORKFLOW.md` can set both, and its values
 override `symphony.yml`. To turn it off, leave `verification.enabled` unset (or `false`) in

@@ -42,7 +42,8 @@ File.chmod!(fake_sandbox_exec, 0o755)
 
 Application.put_env(:symphony_elixir, :verification_dev_server_sandbox,
   os_type: {:unix, :darwin},
-  executable: fake_sandbox_exec
+  executable: fake_sandbox_exec,
+  check_confinement: false
 )
 
 with true <- File.exists?("/usr/bin/sandbox-exec"),

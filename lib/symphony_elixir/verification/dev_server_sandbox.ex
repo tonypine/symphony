@@ -27,6 +27,12 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
   folder are given with their links resolved, and a denied path outside the home folder also
   with its real path (`/var/root` is `/private/var/root`). Off macOS there is no Seatbelt, and the dev
   server does not start.
+
+  Some macOS versions don't keep a listener on loopback: on macOS 15 the rule that lets the
+  dev server accept connections on loopback also lets it bind `0.0.0.0` and the LAN address.
+  So before the first dev server starts, a process under the profile binds `0.0.0.0`, and unless
+  Seatbelt refuses it the dev server does not start (`:dev_server_sandbox_unconfined`). The
+  verdict holds until Symphony restarts.
   """
 
   alias SymphonyElixir.{AgentCaches, AgentSandboxConfig, PathSafety}
@@ -56,11 +62,20 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
   @launch_services ~w(com.apple.coreservices.launchservicesd com.apple.coreservices.appleevents)
   @launch_services_prefixes ~w(com.apple.lsd.)
   @launcher_executables ~w(/usr/bin/open /usr/bin/osascript /bin/launchctl)
+  # Binds every address on a free port, and exits non-zero with the reason when it can't.
+  @confinement_probe [
+    "/usr/bin/perl",
+    "-MSocket",
+    "-e",
+    ~S{socket(my $s, PF_INET, SOCK_STREAM, 0) or die "socket: $!\n"; bind($s, sockaddr_in(0, INADDR_ANY)) or die "bind: $!\n"; print "bound\n"}
+  ]
 
   @doc """
   The argv that runs `start_cmd` with `sh -lc` inside the sandbox, writable in `workspace`
-  and `tmp_dir`. Options: `:os_type` (default `:os.type()`), `:executable` (default
-  `/usr/bin/sandbox-exec`) and `:getconf` (for the item replacement folder).
+  and `tmp_dir`, once the profile is known to keep listeners on loopback on this Mac. Options:
+  `:os_type` (default `:os.type()`), `:executable` (default `/usr/bin/sandbox-exec`),
+  `:getconf` (for the item replacement folder) and `:check_confinement` (default `true`; the
+  tests' stand-in for `sandbox-exec`, which drops the profile, turns it off).
   """
   @spec command(String.t(), Path.t(), Path.t(), keyword()) :: {:ok, [String.t()]} | {:error, term()}
   def command(start_cmd, workspace, tmp_dir, opts) when is_binary(start_cmd) do
@@ -69,15 +84,54 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
     case Keyword.get_lazy(opts, :os_type, &:os.type/0) do
       {:unix, :darwin} ->
         if File.regular?(executable) do
-          write_paths = [workspace, tmp_dir] ++ AgentCaches.write_paths() ++ item_replacement_paths(opts)
-          profile = profile(workspace, write_paths, protected_paths(workspace))
-          {:ok, [executable, "-p", profile, "/bin/sh", "-lc", start_cmd]}
+          sandboxed_command(start_cmd, workspace, tmp_dir, executable, opts)
         else
           {:error, {:dev_server_sandbox_unavailable, {:not_found, executable}}}
         end
 
       os_type ->
         {:error, {:dev_server_sandbox_unavailable, os_type}}
+    end
+  end
+
+  defp sandboxed_command(start_cmd, workspace, tmp_dir, executable, opts) do
+    write_paths = [workspace, tmp_dir] ++ AgentCaches.write_paths() ++ item_replacement_paths(opts)
+    profile = profile(workspace, write_paths, protected_paths(workspace))
+
+    with :ok <- check_confinement(executable, profile, opts) do
+      {:ok, [executable, "-p", profile, "/bin/sh", "-lc", start_cmd]}
+    end
+  end
+
+  defp check_confinement(executable, profile, opts) do
+    if Keyword.get(opts, :check_confinement, true) do
+      key = {__MODULE__, :confinement, executable}
+
+      case :persistent_term.get(key, nil) do
+        nil ->
+          verdict = probe_confinement(executable, profile)
+          :persistent_term.put(key, verdict)
+          verdict
+
+        verdict ->
+          verdict
+      end
+    else
+      :ok
+    end
+  end
+
+  # Only Seatbelt refusing the bind proves the confinement: a bind that works, or a probe that
+  # can't run, leaves the dev server unstarted.
+  defp probe_confinement(executable, profile) do
+    case System.cmd(executable, ["-p", profile | @confinement_probe], stderr_to_stdout: true) do
+      {_output, 0} ->
+        {:error, {:dev_server_sandbox_unconfined, :non_loopback_bind_allowed}}
+
+      {output, status} ->
+        if output =~ "Operation not permitted",
+          do: :ok,
+          else: {:error, {:dev_server_sandbox_unconfined, {:probe_failed, status, String.trim(output)}}}
     end
   end
 
