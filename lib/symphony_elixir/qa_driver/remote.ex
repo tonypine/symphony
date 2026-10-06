@@ -82,6 +82,11 @@ defmodule SymphonyElixir.QaDriver.Remote do
   if [ ! -d "$dest" ] && cat > "$part" && mv -f "$part" "$dest"; then printf 'symphony-qa-put:%s\\n' "$dest"; else rm -f "$part"; exit 1; fi
   """
 
+  # Holds the tunnel's SSH session open until Symphony closes its stdin. The
+  # QA host's `sshd` answers the `-R` requests before it runs this, so the
+  # marker means every forward is listening.
+  @tunnel_script ~s(printf 'symphony-qa-tunnel:open\\n'; exec cat > /dev/null)
+
   @kill_script """
   kill -TERM "$1" 2>/dev/null || exit 0
   i=0
@@ -105,6 +110,7 @@ defmodule SymphonyElixir.QaDriver.Remote do
       prepare: &prepare(ssh_host, &1, &2),
       ship: &ship(ssh_host, &1, &2),
       put: &put(ssh_host, &1, &2, &3),
+      tunnel: &tunnel(ssh_host, &1),
       cleanup: &cleanup(ssh_host, &1)
     }
   end
@@ -183,6 +189,49 @@ defmodule SymphonyElixir.QaDriver.Remote do
       max(deadline - System.monotonic_time(:millisecond), 0) ->
         Port.close(port)
         {:error, :timeout}
+    end
+  end
+
+  @doc """
+  Opens one SSH session that forwards each of `ports` on the QA host's loopback
+  to the same port on this host's `127.0.0.1` (`ssh -R <port>:127.0.0.1:<port>`),
+  for the services the QA agent runs on this host for the app. Loopback
+  connections need no macOS Local Network permission, which a LAN address does.
+
+  Returns once every forward listens. The returned port belongs to the caller,
+  and closing it ends the session: the QA host's end sees its stdin close. A
+  forward the QA host refuses (its port is taken) is `{:port_taken, message}`;
+  anything else is `{:failed, message}`.
+  """
+  @spec tunnel(String.t(), [pos_integer()], keyword()) :: {:ok, port()} | {:error, {:port_taken | :failed, String.t()}}
+  def tunnel(ssh_host, ports, opts \\ []) do
+    forwards = for port <- ports, do: {Integer.to_string(port), "127.0.0.1:#{port}"}
+    options = ["-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"]
+
+    case SSH.command(ssh_host, remote_command(@tunnel_script, []), reverse_forwards: forwards, options: options) do
+      {:ok, ssh, args} ->
+        port = Port.open({:spawn_executable, ssh}, [:binary, :exit_status, :stderr_to_stdout, args: args])
+        timeout_ms = Keyword.get(opts, :timeout_ms, @timeout_ms)
+        await_tunnel(port, "", System.monotonic_time(:millisecond) + timeout_ms, timeout_ms)
+
+      {:error, reason} ->
+        {:error, {:failed, inspect(reason)}}
+    end
+  end
+
+  defp await_tunnel(port, buffer, deadline, timeout_ms) do
+    receive do
+      {^port, {:data, data}} ->
+        buffer = buffer <> data
+        if String.contains?(buffer, "symphony-qa-tunnel:open\n"), do: {:ok, port}, else: await_tunnel(port, buffer, deadline, timeout_ms)
+
+      {^port, {:exit_status, status}} ->
+        message = "ssh exited with status #{status}: #{tail(String.trim(buffer), 500)}"
+        if buffer =~ "port forwarding failed", do: {:error, {:port_taken, message}}, else: {:error, {:failed, message}}
+    after
+      max(deadline - System.monotonic_time(:millisecond), 0) ->
+        Port.close(port)
+        {:error, {:failed, "the QA host did not open the forwards within #{timeout_ms} ms"}}
     end
   end
 
