@@ -19,6 +19,8 @@ on:
       - "Makefile"
       - "config/config.exs"
       - "config/runtime.exs"
+      - "lib/symphony_elixir/cli.ex"
+      - "lib/symphony_elixir/paths.ex"
       - "lib/symphony_elixir/release_node.ex"
       - "lib/symphony_elixir/release_cookie.ex"
       - "scripts/release/**"
