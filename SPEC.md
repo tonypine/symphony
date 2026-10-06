@@ -823,7 +823,11 @@ affect CI escalation. A head whose only failed check is `protected paths` gets n
 flaky re-run, no CI-fix run and no escalation, and uses no fix attempt: only a person clears that
 check, with the `protected-paths-approved` label, so the issue stays where it is until the check
 passes. When another check fails beside it, the CI-fix run's prompt names `protected paths` as not
-the agent's to fix.
+the agent's to fix. A red head on an issue parked for a person, outside `tracker.active_states`
+with the `human_actions.label` label, `needs-human` or another
+`auto_review.acceptance_gate.escalate.labels` label other than `breakdown`, gets the same: no re-run,
+CI-fix run, escalation or state move, and no fix attempt used. The normal flow resumes once a person
+removes the label, moves the issue to an active state, or the head turns green.
 
 #### 5.4.7 `github` (object)
 
