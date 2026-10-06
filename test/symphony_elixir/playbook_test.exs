@@ -73,6 +73,15 @@ defmodule SymphonyElixir.PlaybookTest do
     assert flat =~ "withdraw it with `linear_withdraw_human_action`"
   end
 
+  test "scoped_tools lists the document tools for a ticket's long-lived artifacts" do
+    assert {:ok, body} = Playbook.fetch("scoped_tools")
+    flat = String.replace(body, ~r/\s+/, " ")
+
+    assert flat =~ "`linear_create_document(title, content)` creates one in the issue's project, titled `<identifier> · <title>`, and attaches it to the issue"
+    assert flat =~ "`linear_update_document(document_id, content, title?)` replaces its content"
+    assert flat =~ "`linear_get_document(document_id?)` lists the issue's documents"
+  end
+
   test "fetch/1 returns :error for an unknown partial" do
     assert Playbook.fetch("does_not_exist") == :error
   end

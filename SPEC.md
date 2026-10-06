@@ -3313,7 +3313,8 @@ Scoped Linear tool extension contract:
   `linear_get_parent_issue`, `linear_get_comments`, `linear_get_related_issues`,
   `linear_update_state`, `linear_add_comment`, `linear_update_comment`, `linear_delete_comment`,
   `linear_attach_url`, `linear_attach_file`, `linear_create_subissue`, `linear_update_subissue`,
-  `linear_add_blocked_by`, `linear_create_project_update`, `linear_request_human_action`, and
+  `linear_add_blocked_by`, `linear_create_project_update`, `linear_create_document`,
+  `linear_update_document`, `linear_get_document`, `linear_request_human_action`, and
   `linear_withdraw_human_action`.
 - `linear_add_comment` MAY take a `parent_id` naming a comment on the current issue; the comment is
   then posted as a reply under it. `linear_get_comments` SHOULD return each reply's parent id.
@@ -3370,6 +3371,26 @@ Scoped Linear tool extension contract:
   MUST pass the same secret scan as comments before any Linear call. Posting MUST be capped per run
   (the Elixir cap is 1) and refused when the run has no state to count against. The read-only
   reviewer scope MUST NOT advertise or execute it.
+- `linear_create_document` MUST only create a document in the current issue's project, resolved
+  server-side, and MUST accept only `title` and `content`. The document's title MUST be
+  `<identifier> · <title>`, and its URL MUST be attached to the current issue with an attachment
+  that marks it as created for the issue (the Elixir implementation puts the document id in the
+  attachment's `metadata.symphonyDocumentId`, which a person cannot set from Linear's UI). It MUST
+  fail with an explicit error naming the gap when the current issue has no project. Title and
+  content MUST pass the same secret scan as comments before any Linear call. Creation MUST be
+  capped per run (the Elixir cap is 10) and refused when the run has no state to count against.
+  When the attachment fails after the document exists, the error MUST name the document so it can
+  be attached by hand.
+- `linear_update_document` and `linear_get_document` MUST only act on documents the current
+  issue's runs created: one the run created, or one an attachment on the current issue marks as
+  created for it. Any other document id MUST fail with an explicit error before the document is
+  read or written. `linear_update_document` accepts `document_id`, the whole new `content` and an
+  optional `title` (which keeps the identifier prefix); content and title MUST pass the same secret
+  scan as comments, and content carrying Symphony's truncation marker MUST be refused.
+  `linear_get_document` without `document_id` lists the issue's documents (id, title, url); with
+  one it returns the document with its content secret-redacted and wrapped in prompt-safety
+  boundary tags like comments. `linear_get_document` is read-only and available to the read-only
+  reviewer and QA scopes; the read-only reviewer scope MUST NOT advertise or execute the other two.
 - `linear_request_human_action` MUST only act on the current issue and MUST accept only `title`,
   `why`, a non-empty `steps` list, an optional `unblocks` and an optional `est_minutes`. Every
   field MUST pass the same secret scan as comments before any Linear call. It adds the configured
