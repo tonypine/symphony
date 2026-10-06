@@ -695,6 +695,21 @@ public enum ReposList {
         return keys.first
     }
 
+    /// The repo to select once the window refreshes, and the repo still waiting to be selected. `pending`, the repo of
+    /// the banner shown last, is selected the first time the window lists it, as a running Symphony lists a repo
+    /// just added only once its next poll comes back. Otherwise `current` stays while listed, else `saved` is restored.
+    public static func selection(
+        current: String?,
+        pending: String?,
+        saved: String?,
+        in window: ReposWindow
+    ) -> (selection: String?, pending: String?) {
+        let keys = window.repos.map(\.key)
+        if let pending, keys.contains(pending) { return (pending, nil) }
+        if let current, keys.contains(current) { return (current, pending) }
+        return (selection(saved: saved, in: window), pending)
+    }
+
     /// True while Symphony answers its state, so the app asks it for the repos.
     public static func isAnswering(_ status: SymphonyStatus) -> Bool {
         snapshot(status) != nil
