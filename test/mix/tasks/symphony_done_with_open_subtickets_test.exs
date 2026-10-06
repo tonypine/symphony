@@ -2,6 +2,40 @@ defmodule Mix.Tasks.Symphony.DoneWithOpenSubticketsTest do
   use SymphonyElixir.TestSupport
 
   alias Mix.Tasks.Symphony.DoneWithOpenSubtickets
+  alias SymphonyElixir.Linear.Client
+
+  defmodule PartialLinearClient do
+    @moduledoc false
+
+    alias SymphonyElixir.Linear.Client
+
+    # The real client's per-repo poll, with GraphQL answering for `web` and failing for `api`.
+    def fetch_issues_by_states_with_failures(states) do
+      Client.fetch_issues_by_states_with_failures_for_test(states, &graphql/2)
+    end
+
+    defp graphql(_query, variables) do
+      case get_in(variables, [:filter, "labels", "some", "name", "eqIgnoreCase"]) do
+        "web" ->
+          child = %{"id" => "id-WEB-2", "identifier" => "WEB-2", "state" => %{"name" => "Todo"}}
+
+          parent = %{
+            "id" => "id-WEB-1",
+            "identifier" => "WEB-1",
+            "title" => "Web parent",
+            "state" => %{"name" => "Done"},
+            "labels" => %{"nodes" => []},
+            "inverseRelations" => %{"nodes" => []},
+            "children" => %{"nodes" => [child]}
+          }
+
+          {:ok, %{"data" => %{"issues" => %{"nodes" => [parent], "pageInfo" => %{"hasNextPage" => false, "endCursor" => nil}}}}}
+
+        "api" ->
+          {:error, :linear_unavailable}
+      end
+    end
+  end
 
   setup do
     previous_shell = Mix.shell()
@@ -9,7 +43,12 @@ defmodule Mix.Tasks.Symphony.DoneWithOpenSubticketsTest do
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
-    on_exit(fn -> Mix.shell(previous_shell) end)
+    on_exit(fn ->
+      Mix.shell(previous_shell)
+      Application.delete_env(:symphony_elixir, :memory_tracker_failed_repos)
+      Application.delete_env(:symphony_elixir, :linear_client_module)
+    end)
+
     :ok
   end
 
@@ -61,6 +100,55 @@ defmodule Mix.Tasks.Symphony.DoneWithOpenSubticketsTest do
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue("TP-1", "Done", "One", [sub_issue("TP-2", "Done")])])
     DoneWithOpenSubtickets.run([])
     assert_received {:mix_shell, :info, ["No parent in a terminal state has open sub-tickets."]}
+  end
+
+  test "names the repository it could not read and exits non-zero instead of passing the list off as complete" do
+    repo_root = Path.dirname(Workflow.workflow_file_path())
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      repos: [
+        %{"name" => "web", "path" => repo_root, "workflow" => "WORKFLOW.md", "team" => "ACME", "labels" => ["web"]},
+        %{"name" => "api", "path" => repo_root, "workflow" => "WORKFLOW.md", "team" => "ACME", "labels" => ["api"]}
+      ]
+    )
+
+    Application.put_env(:symphony_elixir, :linear_client_module, PartialLinearClient)
+
+    assert_raise Mix.Error, "Incomplete report: could not read api.", fn -> DoneWithOpenSubtickets.run([]) end
+
+    assert_received {:mix_shell, :info, [output]}
+
+    assert output == """
+           Incomplete: could not read repository api (:linear_unavailable), so its parents are missing below.
+           1 parent in a terminal state with open sub-tickets:
+
+           - WEB-1 (Done): Web parent
+             - WEB-2: Todo\
+           """
+  end
+
+  test "says the list is incomplete even when the repositories it read have no such parent" do
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [])
+    Application.put_env(:symphony_elixir, :memory_tracker_failed_repos, [{"api", :timeout}, {"ops", :timeout}])
+
+    assert_raise Mix.Error, "Incomplete report: could not read api, ops.", fn -> DoneWithOpenSubtickets.run([]) end
+
+    assert_received {:mix_shell, :info, [output]}
+
+    assert output == """
+           Incomplete: could not read repository api (:timeout), so its parents are missing below.
+           Incomplete: could not read repository ops (:timeout), so its parents are missing below.
+           No parent in a terminal state has open sub-tickets.\
+           """
+  end
+
+  test "the client fails when every repository read fails and reads nothing for no states" do
+    graphql_fun = fn _query, _variables -> {:error, :linear_unavailable} end
+
+    assert {:error, {:repo_poll_failed, [{"default", :linear_unavailable}]}} =
+             Client.fetch_issues_by_states_with_failures_for_test(["Done"], graphql_fun)
+
+    assert {:ok, [], []} = Client.fetch_issues_by_states_with_failures_for_test([], graphql_fun)
   end
 
   test "rejects unknown arguments" do

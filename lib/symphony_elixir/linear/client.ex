@@ -361,6 +361,16 @@ defmodule SymphonyElixir.Linear.Client do
     end
   end
 
+  @doc """
+  The issues in these states across every configured repo, with the repos whose read failed
+  (`{repo_name, reason}`), for callers that must say a list is partial. Errors when every repo fails.
+  """
+  @spec fetch_issues_by_states_with_failures([String.t()]) ::
+          {:ok, [Issue.t()], [{String.t(), term()}]} | {:error, term()}
+  def fetch_issues_by_states_with_failures(state_names) when is_list(state_names) do
+    do_fetch_issues_by_states_with_failures(state_names, &graphql/2)
+  end
+
   @spec fetch_issue_states_by_ids([String.t()]) :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch_issue_states_by_ids(issue_ids) when is_list(issue_ids) do
     ids = Enum.uniq(issue_ids)
@@ -532,6 +542,17 @@ defmodule SymphonyElixir.Linear.Client do
   end
 
   @doc false
+  @spec fetch_issues_by_states_with_failures_for_test(
+          [String.t()],
+          (String.t(), map() -> {:ok, map()} | {:error, term()})
+        ) ::
+          {:ok, [Issue.t()], [{String.t(), term()}]} | {:error, term()}
+  def fetch_issues_by_states_with_failures_for_test(state_names, graphql_fun)
+      when is_list(state_names) and is_function(graphql_fun, 2) do
+    do_fetch_issues_by_states_with_failures(state_names, graphql_fun)
+  end
+
+  @doc false
   @spec fetch_issue_by_identifier_for_test(String.t(), (String.t(), map() -> {:ok, map()} | {:error, term()})) ::
           {:ok, Issue.t()} | {:error, term()}
   def fetch_issue_by_identifier_for_test(identifier, graphql_fun)
@@ -569,20 +590,26 @@ defmodule SymphonyElixir.Linear.Client do
     end
   end
 
+  defp do_fetch_issues_by_states_with_failures(state_names, graphql_fun) do
+    normalized_states = Enum.map(state_names, &to_string/1) |> Enum.uniq()
+
+    if normalized_states == [] do
+      {:ok, [], []}
+    else
+      with {:ok, context} <- repo_poll_context() do
+        context.repos
+        |> collect_repo_issue_results(normalized_states, context.tracker, graphql_fun)
+        |> issues_with_failures()
+      end
+    end
+  end
+
+  defp issues_with_failures({[], [_ | _] = errors}), do: {:error, {:repo_poll_failed, errors}}
+  defp issues_with_failures({results, errors}), do: {:ok, dedupe_repo_issues(results), errors}
+
   defp fetch_repo_issue_results(repos, state_names, tracker, graphql_fun)
        when is_list(repos) and is_function(graphql_fun, 2) do
-    {results, errors} =
-      Enum.reduce(repos, {[], []}, fn repo, {results, errors} ->
-        repo_key = repo_key(repo)
-
-        case do_fetch_repo_by_states(repo, state_names, tracker, graphql_fun: graphql_fun) do
-          {:ok, issues} -> {[{repo_key, issues} | results], errors}
-          {:error, reason} -> {results, [{repo_key, reason} | errors]}
-        end
-      end)
-
-    results = Enum.reverse(results)
-    errors = Enum.reverse(errors)
+    {results, errors} = collect_repo_issue_results(repos, state_names, tracker, graphql_fun)
 
     cond do
       errors == [] ->
@@ -595,6 +622,20 @@ defmodule SymphonyElixir.Linear.Client do
       true ->
         {:error, {:repo_poll_failed, errors}}
     end
+  end
+
+  defp collect_repo_issue_results(repos, state_names, tracker, graphql_fun) do
+    {results, errors} =
+      Enum.reduce(repos, {[], []}, fn repo, {results, errors} ->
+        repo_key = repo_key(repo)
+
+        case do_fetch_repo_by_states(repo, state_names, tracker, graphql_fun: graphql_fun) do
+          {:ok, issues} -> {[{repo_key, issues} | results], errors}
+          {:error, reason} -> {results, [{repo_key, reason} | errors]}
+        end
+      end)
+
+    {Enum.reverse(results), Enum.reverse(errors)}
   end
 
   defp do_fetch_repo_by_states(repo, state_names, tracker, opts \\ []) do
