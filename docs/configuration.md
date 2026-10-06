@@ -1469,8 +1469,9 @@ An invalid `browser_mcp` makes the pass `blocked` with the error.
 
 Symphony's own `WORKFLOW.md` points `verification.dev_server` at `scripts/qa-dashboard-server.sh`,
 which serves the status dashboard from the PR head's escript with an in-memory tracker, so
-dashboard changes get a `web` pass once the operator sets `verification.enabled: true`. Its
-`build_cmd`, `scripts/qa-dashboard-build.sh`, builds that escript first.
+dashboard changes get a `web` pass once the operator sets `verification.enabled: true`. That
+script needs the escript built first: set `build_cmd: scripts/qa-dashboard-build.sh` next to it,
+or the dev server stops because `bin/symphony` is missing.
 
 #### macOS app QA
 
@@ -2056,7 +2057,7 @@ is, so Mix can run (see
 non-zero (`dev_server_build_failed`) or runs past 15 minutes (`dev_server_build_timeout`) keeps
 the dev server from starting and releases its port: the agent run fails with
 `verification_failed`, and an Auto Review `web` pass is `blocked`. Symphony's own repo builds its
-dashboard escript with it:
+dashboard escript with it when `WORKFLOW.md` sets:
 
 ```yaml
 verification:
