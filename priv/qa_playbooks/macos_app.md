@@ -108,7 +108,8 @@ Servers the app talks to (a stub of the project's API, a proxy) run in your shel
    crash. When `qa_resize_window` returns `limited: true`, the QA screen is too small for the
    wide pass: still run it at the size you got, say in the step that the wide pass was limited
    with the screen size, and mark the step `blocked`. Symphony reports a pass whose wide pass
-   was limited as `blocked` either way, so a person enlarges the QA screen.
+   was limited as `blocked` either way, so a person enlarges the QA screen, and reports a pass
+   with no `qa_resize_window` call as `blocked` too, because its wide pass did not run.
 9. Run `qa_quit_app` when you are done. It returns what the app wrote to its output; quote
    the lines that bear on a step in that step's `details`.
 10. Attach the screenshots that show each step's result with `linear_attach_file`

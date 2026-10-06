@@ -1,6 +1,7 @@
 import AppKit
 
-/// Menu bar apps have no visible main menu, but text fields still need one for ⌘C, ⌘V, ⌘X, ⌘A and ⌘Z to work.
+/// Menu bar apps have no visible main menu, but text fields still need one for ⌘C, ⌘V, ⌘X, ⌘A and ⌘Z to work, and
+/// windows for ⌘W.
 enum EditMenu {
     static func install() {
         let edit = NSMenu(title: "Edit")
@@ -13,10 +14,16 @@ enum EditMenu {
         edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
 
+        let window = NSMenu(title: "Window")
+        window.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+
         let editItem = NSMenuItem()
         editItem.submenu = edit
+        let windowItem = NSMenuItem()
+        windowItem.submenu = window
         let mainMenu = NSMenu()
         mainMenu.addItem(editItem)
+        mainMenu.addItem(windowItem)
         NSApp.mainMenu = mainMenu
     }
 }

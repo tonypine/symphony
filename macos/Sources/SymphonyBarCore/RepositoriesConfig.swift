@@ -117,6 +117,9 @@ public enum RepositoriesConfig {
             return text.text
         }
         guard let last = section.items.last else {
+            if let tail = section.emptyFlowTail {
+                text.lines[keyIndex] = tail.isEmpty ? "repositories:" : "repositories: " + tail
+            }
             text.lines.insert(contentsOf: newLines, at: keyIndex + 1)
             return text.text
         }
@@ -657,13 +660,18 @@ private struct Item {
 private struct Section {
     private(set) var keyIndex: Int?
     private(set) var items: [Item] = []
+    /// The comment after `repositories: []`, an empty flow list, which adding a repo turns into a block one.
+    private(set) var emptyFlowTail: String?
 
     init(_ text: ConfigLines) throws {
         for index in text.lines.indices where text.indent(at: index) == 0 {
             let line = Line(index: index, column: 0, content: text.lines[index][...])
             guard let (name, rest) = parseKey(line.content), name == "repositories" else { continue }
             guard keyIndex == nil else { throw line.unsupported("`repositories:` appears twice") }
-            guard try InlineValue(rest, on: line).text.isEmpty else {
+            let value = try InlineValue(rest, on: line)
+            if value.text.filter({ $0 != " " && $0 != "\t" }) == "[]" {
+                emptyFlowTail = String(value.tail.drop { $0 == " " || $0 == "\t" })
+            } else if !value.text.isEmpty {
                 throw line.unsupported("`repositories:` should be followed by indented `- key: ...` entries")
             }
             keyIndex = index
@@ -683,6 +691,9 @@ private struct Section {
             structure.append(line)
         }
         items = try Self.items(structure)
+        if emptyFlowTail != nil, let first = items.first {
+            throw RepositoriesConfigError.unsupported(line: first.dashIndex + 1, reason: "`repositories: []` can't be followed by entries")
+        }
 
         var keys = Set<String>()
         for item in items where !keys.insert(item.entry.key).inserted {
