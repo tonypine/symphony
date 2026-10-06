@@ -1671,23 +1671,41 @@ defmodule SymphonyElixir.AgentRunner do
     progress.empty_turns >= @max_empty_turns and !merging_state?(issue.state)
   end
 
-  # A run whose HEAD is the PR head with checks pending, but that is not handed off (a Rework run,
-  # or one that started on that head), is not idle; it keeps turning, up to `agent.max_turns`,
-  # until CI settles. A CI-fix run that found the red check a flake rightly pushes nothing: once CI
-  # on its PR head is green, that is its outcome, so it hands the PR back instead of being parked
-  # (`hand_off_green_ci_fix/2`). Any other idle run is parked.
+  # A run that pushed a new head to its PR, with CI on it running or green, waits on that CI, so it
+  # is not idle: it moves to the post-PR state, where the CI poller takes the head over. That covers
+  # what the earlier hand-offs skip, such as a Rework run started by a CI failure, which stays
+  # pending until the run ends and so keeps `rework_finished?/2` false. A run whose HEAD is the PR
+  # head with checks pending but that pushed nothing (it started on that head) keeps turning, up to
+  # `agent.max_turns`, until CI settles. A CI-fix run that found the red check a flake rightly
+  # pushes nothing: once CI on its PR head is green, that is its outcome, so it hands the PR back
+  # instead of being parked (`hand_off_green_ci_fix/2`). Any other idle run is parked.
   defp end_idle_run(%Issue{} = issue, %{progress: %{head: head}} = run_context) do
-    case pushed_head_ci_action(issue, run_context) do
-      :pending ->
+    ci_action = pushed_head_ci_action(issue, run_context)
+
+    cond do
+      ci_action in [:pending, :success] and pushed_new_head?(run_context) ->
+        hand_off_idle_pushed_head(issue, ci_action, run_context)
+
+      ci_action == :pending ->
         Logger.info("Not parking #{issue_context(issue)}; waiting for CI on its pushed head #{head}")
         :continue
 
-      ci_action ->
-        if ci_action == :success and ci_fix_run?(issue, run_context) do
-          hand_off_green_ci_fix(issue, run_context)
-        else
-          park_idle_run(issue, run_context)
-        end
+      ci_action == :success and ci_fix_run?(issue, run_context) ->
+        hand_off_green_ci_fix(issue, run_context)
+
+      true ->
+        park_idle_run(issue, run_context)
+    end
+  end
+
+  # The head moved past the one this run started on, or, in `Rework`, past the head the rework
+  # started from, so rework an earlier run pushed counts too. Both are the start head outside
+  # `Rework`.
+  defp pushed_new_head?(%{progress: progress}), do: progress.head != progress.start_head or progress.head != progress.rework_base
+
+  defp hand_off_idle_pushed_head(%Issue{} = issue, ci_action, run_context) do
+    with :ok <- hand_off_pushed_head(issue, ci_action, run_context) do
+      forget_rework_base(issue, run_context.opts)
     end
   end
 
