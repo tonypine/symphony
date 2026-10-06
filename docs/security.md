@@ -243,9 +243,12 @@ the command runs on. Every host-side git call:
   files as git does when no driver is set, conflict markers included;
 - doesn't run, and returns an error, when that config can't be read or names a driver with `=` in
   its name, which `-c` can't address;
-- runs `diff`, `log` and `show` with `--no-ext-diff --no-textconv`, so the diffs of reviews, the
-  acceptance gate and the auto-merge fingerprint run no `diff.external`, `diff.<name>.command` or
-  `diff.<name>.textconv`, and show the files as the repo stores them;
+- runs `diff`, `log`, `show`, `whatchanged`, `blame` and `format-patch` with
+  `--no-ext-diff --no-textconv`, so the diffs of reviews, the acceptance gate and the auto-merge
+  fingerprint run no `diff.external`, `diff.<name>.command` or `diff.<name>.textconv`, and show
+  the files as the repo stores them. `diff-tree`, `diff-index` and `diff-files` run a diff driver
+  only when asked to. It refuses `range-diff`, which runs the textconv drivers whatever options it
+  gets. A test fails when code under `lib/` starts git without these options;
 - runs `fetch`, `ls-remote` and `pull` with `--upload-pack=git-upload-pack` and `push` with
   `--receive-pack=git-receive-pack`: the config's `remote.<name>.uploadpack` and `.receivepack`
   would run as the operator for a remote on the same machine, and a `-c` can't override them.
@@ -273,7 +276,8 @@ worktree, to put a worktree on the base branch for `after_create`, and to read t
 diff of a workspace, run git as the worker's operator account with the same protections. They
 define a `symphony_git` shell function that sets the same environment and `-c` overrides, and
 lists and blanks the filter drivers in the worker repo's `config`, its `config.worktree` and
-every file they include before each command that can read or write work-tree files. It also
+every file they include before each command that can read or write work-tree files, and refuses
+`range-diff`. It also
 refuses to run git when an include path holds a newline, since the shell reads the list line by
 line. Their `fetch origin` gets `--upload-pack=git-upload-pack` as on the host, and the review
 agent's `diff`, `log` and `show` get `--no-ext-diff --no-textconv`. They replace no merge driver: they never merge.
@@ -283,8 +287,8 @@ Limits:
 - The drivers are listed just before the command runs, so one written to the config in between
   still runs. Every local runtime denies agent writes to the repo's config files (see the Git
   write model above), but native Codex may drop those entries.
-- Only `diff`, `log` and `show` get `--no-ext-diff --no-textconv`. Symphony runs no other command
-  that prints a diff, such as `blame`, `format-patch` or `range-diff`, on the host or a worker.
+- A command that prints a diff through another git command, such as `stash show -p` or
+  `add -p`, gets neither option. Symphony runs none of them on the host or a worker.
 
 ### Network access controls
 

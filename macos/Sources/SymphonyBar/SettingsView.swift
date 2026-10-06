@@ -148,6 +148,9 @@ struct SettingsView: View {
                     TimeoutRow(title: "MCP tool timeout", minutes: $model.mcpToolTimeoutMinutes)
                     Text("Stops one call of Symphony's Linear and GitHub tools that runs longer and answers the agent with an error.")
                         .foregroundStyle(.secondary)
+                    TimeoutRow(title: "Show a pending tool call after", minutes: $model.pendingToolReportMinutes)
+                    Text("Shows a run as waiting on one of those calls once the call has run this long.")
+                        .foregroundStyle(.secondary)
                     if let error = model.timeoutsError {
                         Text(error).foregroundStyle(.red)
                     }
@@ -155,9 +158,10 @@ struct SettingsView: View {
                     Text("Timeouts (saved in symphony.yml)")
                 } footer: {
                     SectionFooter(
-                        "workspaces.git_network_timeout_ms (default 5 minutes) and agent.timeouts.mcp_tool_ms (default "
-                            + "10 minutes). Save checks symphony.yml with symphony check first; Symphony reads them on "
-                            + "the next call, no restart needed."
+                        "workspaces.git_network_timeout_ms (default 5 minutes), agent.timeouts.mcp_tool_ms (default "
+                            + "10 minutes) and watchdog.pending_tool_report_after_ms (default 1 minute). Save checks "
+                            + "symphony.yml with symphony check first; Symphony reads them on the next call, no restart "
+                            + "needed."
                     )
                 }
                 .disabled(!model.canEditTimeouts)

@@ -136,7 +136,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
         runner.onEvent = { [weak self] event in self?.handle(event) }
         runner.onKeychainChange = { [weak self] in self?.showStatus() }
-        restarter.onChange = { [weak self] in self?.showStatus() }
+        restarter.onChange = { [weak self] in
+            self?.showStatus()
+            self?.reposWindow.restartChanged()
+        }
         // Symphony reads its secrets only at start; restart() does nothing while it isn't running.
         settingsWindow.onSecretsChanged = { [weak self] in self?.restart() }
         updater.onChange = { [weak self] in self?.showUpdateItems() }
@@ -151,6 +154,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             return !runner.isRunning && !runner.isStarting && machine.canStart && !restarting
         }
         reposWindow.openSettings = { [weak self] in self?.settingsWindow.show() }
+        reposWindow.restartMachine = { [weak self] in self?.restarter.machine ?? RestartMachine() }
+        reposWindow.restartNow = { [weak self] in self?.restartNow(nil) }
+        reposWindow.cancelRestart = { [weak self] in self?.cancelRestart(nil) }
         poller.onPoll = { [weak self] poll in
             guard let self else { return StatusMachine.pollInterval }
             handle(.polled(poll))

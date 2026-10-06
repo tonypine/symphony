@@ -1129,6 +1129,10 @@ Fields:
   - Default: `10`
   - CPU time a process under a workspace or Symphony temp folder may use with no run attached
     before the dashboard warns about it (Section 8.5, Part D). `null` turns the check off.
+- `pending_tool_report_after_ms` (positive integer)
+  - Default: `60000` (1 minute)
+  - How long one of Symphony's own MCP tool calls must run before the runtime snapshot reports
+    the run's oldest pending call (`pending_tool`).
 
 #### 5.4.11 `workers` (object)
 
@@ -1154,6 +1158,9 @@ Fields:
   - Default: `500`.
 - `transcript_buffer_size` (non-negative integer)
   - Default: `200`.
+  - Bounds a live run's in-memory transcript buffer. A run's persisted record keeps only its newest
+    20 events, and records stored with more are trimmed when the run store starts.
+    The run store waits up to 120 s for its tables to load at startup, logging progress every 10 s.
 
 Listener fields also live under `dashboard`:
 
@@ -1896,6 +1903,7 @@ not require recognizing or validating extension fields unless that extension is 
 - `watchdog.tick_interval_ms`: integer, default `60000`
 - `watchdog.no_progress_threshold_ms`: integer, default `600000`
 - `watchdog.stray_process_cpu_minutes`: integer or `null`, default `10`
+- `watchdog.pending_tool_report_after_ms`: positive integer, default `60000`
 - `workers.ssh_hosts`: list of strings, default `[]`
 - `workers.max_concurrent_agents_per_host`: positive integer or null
 - `dashboard.enabled`: boolean, default `true`; turns the terminal dashboard on or off. It does not stop
@@ -2753,8 +2761,13 @@ sessions:
 When the Claude CLI cannot reach the model API at all (a DNS failure, a refused or dropped
 connection), it still ends the turn with a `result` event: its text starts `API Error:` and names
 the failure (`Can't reach the API server … (ENOTFOUND)`, `Connection error`, `ECONNREFUSED`, …),
-and it is marked `is_error` or used nothing. An error the API returned (a 400, a 429, a 5xx) is not
-an outage and keeps its normal path.
+and it is marked `is_error` or used nothing. The Codex app-server reports the same outage, once it
+stops retrying (`willRetry` not `true`), on an `error` or `codex/event/error` notification or a
+failed `turn/completed` or `turn/failed`: its `codexErrorInfo` is `httpConnectionFailed` or
+`responseStreamConnectionFailed`, or its message names the transport error (`error sending
+request`, a DNS lookup, a refused or reset connection, a connect timeout), and it carries no HTTP
+status; the hold is on the `openai` provider. An error the API returned (a 400, a 429, a 5xx) is
+not an outage and keeps its normal path.
 
 - The turn fails with `{:model_api_unreachable, info}` (`source: api_unreachable`, `error` the code
   it named); it is never a completed turn, so it never counts toward the idle-turn park limit.
