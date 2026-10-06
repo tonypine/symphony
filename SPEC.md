@@ -2181,6 +2181,12 @@ The poller:
   forever. It logs `Ignoring stale check <name> in completed run <id>`. A check in a run that
   completed with any other conclusion stays as reported. To see this, a head whose rollup has no
   failed check and only GitHub Actions checks left unfinished also reads the head's workflow runs.
+- leaves out the checks of a GitHub Actions run whose every check on the head was cancelled while
+  another run of the same workflow on the head reported a check that wasn't (a duplicate run a
+  concurrency group cancelled): the other run says how the head's CI went, so such a run starts
+  no rerun and no CI-fix run. It logs `Ignoring the checks of cancelled run(s) <ids> superseded by
+  another run of the same workflow`. When every run of the workflow was cancelled, or a cancelled
+  job sits beside others in its own run, the cancelled checks still read as a failure.
 - reads a landing's head (the `Merging` wait, the release of a held landing run, and the merge
   tool) against the checks its base branch requires: a head still waiting on a check, with none
   failed, also reads the required status checks of the base branch's rulesets
