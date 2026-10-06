@@ -5,7 +5,9 @@ repo `WORKFLOW.md` pulls the blocks it wants into its own structure with the
 Solid `{% render %}` tag, so the shared prose lives in one place
 (`priv/playbook/*.liquid`) and stops drifting across repos. Repo-specific
 structure — status map, step ordering, completion bar, conventions — stays
-authored in the repo's `WORKFLOW.md`.
+authored by the repo, either in its `WORKFLOW.md` or, with
+[the whole playbook in one line](#the-whole-playbook-in-one-line), in instruction
+files an agent may edit.
 
 ## How to use
 
@@ -33,6 +35,73 @@ leaner repos still use them. An unrendered partial is available, not dead.
 This catalog is kept in sync with `priv/playbook/` by
 `test/symphony_elixir/playbook_catalog_test.exs` — edit the partial's
 `{% comment %}` header and this table together.
+
+## The whole playbook in one line
+
+A repo can also take every standard partial at once and keep its own instructions out
+of `WORKFLOW.md`. Its body is then one line:
+
+```liquid
+{% render "playbook" %}
+```
+
+Symphony expands that line when it loads the workflow, before Solid parses it. It
+becomes the partials below, each on its slot, with the repo's instruction files
+between them by number:
+
+| Slot | Partial |
+| --- | --- |
+| 10 | `continuation_context` |
+| 20 | `issue_context` |
+| 30 | `default_posture` |
+| 40 | `scoped_tools` |
+| 50 | `status_map` |
+| 60 | `pr_feedback_sweep` |
+| 70 | `ci_triage` |
+| 80 | `escape_hatches` |
+| 90 | `parent_tickets` |
+| 100 | `completion_bar` |
+| 110 | `guardrails` |
+| 120 | `out_of_scope_backlog` |
+| 130 | `dependency_guardrail` (only with `playbook.lockfile`) |
+| 140 | `workpad_template` |
+
+The instruction files are the `NNN-name.md` files in `.symphony/instructions/`, next to
+`WORKFLOW.md`. `NNN` places the file: `041-command-and-output-hygiene.md` comes after
+`scoped_tools` (40) and before `status_map` (50), and a file on a partial's own number
+comes right after that partial. Other files in the directory, such as a `README.md`,
+are left out. Each file goes in as written, with a blank line between sections, so it
+uses the same Liquid variables as a `WORKFLOW.md` body (`{{ issue.identifier }}`,
+`{{ agent.workpad_heading }}`) and may render a partial itself. A file must not hold
+the `{% render "playbook" %}` line.
+
+The front matter's `playbook` map shapes the rest. It stays in `WORKFLOW.md`, so a
+change to it stays a person's call:
+
+```yaml
+playbook:
+  instructions: .symphony/instructions   # the default; relative to WORKFLOW.md
+  lockfile: mix.lock                     # the lock file dependency_guardrail cites
+  partials:
+    ci_triage: false                     # drop a partial
+    status_map: 45                       # move one to another slot
+    workpad_bootstrap: 52                # add one the playbook leaves out
+```
+
+A partial Symphony adds to this list reaches every repo that uses the line, with no
+`WORKFLOW.md` edit. A new partial takes a free slot, so the repo text around it stays
+where it was. A repo that keeps its instructions inline in `WORKFLOW.md`, with its own
+`{% render %}` lines, renders exactly as before.
+
+Symphony reads the instruction files from the same place as `WORKFLOW.md`: the
+fetched base branch, `origin/<base_branch>` (see `workflow_source` in
+[configuration](configuration.md)). An agent may edit them, since they are not
+write-protected, but its edits reach runs only once their pull request is merged.
+The run's own branch and checkout never change its prompt. See
+[security](security.md#workflow-and-instruction-files).
+
+`symphony workflow preview` shows the assembled prompt, instruction files included,
+read from the disk next to the `WORKFLOW.md` it renders.
 
 ## Available partials
 

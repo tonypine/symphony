@@ -2,9 +2,15 @@ defmodule SymphonyElixir.Workflow do
   @moduledoc """
   Loads operator configuration from `symphony.yml` and repo workflow prompts from
   `WORKFLOW.md`.
+
+  A `WORKFLOW.md` body may hold a `{% render "playbook" %}` line, which loading
+  expands into Symphony's playbook partials and the repo's instruction files (see
+  `SymphonyElixir.Playbook.Assembly`). `load/1` reads those files next to the
+  workflow file; `SymphonyElixir.WorkflowSource` reads them from the git ref.
   """
 
   alias SymphonyElixir.Config.RepoWorkflowSchema
+  alias SymphonyElixir.Playbook.Assembly
   alias SymphonyElixir.WorkflowStore
 
   @symphony_file_name "symphony.yml"
@@ -105,7 +111,7 @@ defmodule SymphonyElixir.Workflow do
   def load(path) when is_binary(path) do
     case File.read(path) do
       {:ok, content} ->
-        parse_repo_workflow(content)
+        parse_repo_workflow(content, instructions_on_disk(Path.dirname(path)))
 
       {:error, reason} ->
         {:error, {:missing_workflow_file, path, reason}}
@@ -146,9 +152,67 @@ defmodule SymphonyElixir.Workflow do
     end
   end
 
-  @doc false
-  @spec parse_repo_workflow(String.t()) :: {:ok, loaded_workflow()} | {:error, term()}
-  def parse_repo_workflow(content) when is_binary(content) do
+  @doc """
+  Parses a repo `WORKFLOW.md`, expanding its playbook line with the instruction
+  files `read_instructions` returns (none by default).
+  """
+  @spec parse_repo_workflow(String.t(), Assembly.reader()) :: {:ok, loaded_workflow()} | {:error, term()}
+  def parse_repo_workflow(content, read_instructions \\ &no_instructions/1) when is_binary(content) do
+    with {:ok, assembled} <- assemble(content, read_instructions) do
+      parse_assembled(assembled)
+    end
+  end
+
+  @doc """
+  Returns the `WORKFLOW.md` text with its playbook line expanded, front matter
+  unchanged, or the same text when the body has no such line. A snapshot of the
+  result loads without the instruction files.
+  """
+  @spec assemble(String.t(), Assembly.reader()) :: {:ok, String.t()} | {:error, term()}
+  def assemble(content, read_instructions) when is_binary(content) do
+    lines = String.split(content, ~r/\R/, trim: false)
+    {head, body} = Enum.split(lines, front_matter_length(lines))
+
+    if Enum.any?(body, &Assembly.directive?/1) do
+      with {:ok, _workflow} <- parse_assembled(content),
+           {:ok, {front_matter, _prompt}} <- parse_document(content),
+           {:ok, body} <- Assembly.expand(body, Map.get(front_matter, "playbook") || %{}, read_instructions) do
+        {:ok, Enum.join(head ++ body, "\n")}
+      end
+    else
+      {:ok, content}
+    end
+  end
+
+  @doc """
+  Reads the instruction files of a playbook directory relative to `base_dir`; a
+  missing directory has none.
+  """
+  @spec instructions_on_disk(Path.t()) :: Assembly.reader()
+  def instructions_on_disk(base_dir) when is_binary(base_dir) do
+    fn dir ->
+      dir = Path.expand(dir, base_dir)
+
+      case File.ls(dir) do
+        {:ok, names} -> names |> Enum.filter(&Assembly.instruction_file?/1) |> read_files(dir)
+        {:error, :enoent} -> {:ok, []}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  defp read_files(names, dir) do
+    Enum.reduce_while(names, {:ok, []}, fn name, {:ok, files} ->
+      case File.read(Path.join(dir, name)) do
+        {:ok, body} -> {:cont, {:ok, [{name, body} | files]}}
+        {:error, reason} -> {:halt, {:error, {name, reason}}}
+      end
+    end)
+  end
+
+  defp no_instructions(_dir), do: {:ok, []}
+
+  defp parse_assembled(content) do
     with {:ok, {front_matter, prompt}} <- parse_document(content),
          {:ok, repo_config} <- RepoWorkflowSchema.parse(front_matter) do
       {:ok,
@@ -182,6 +246,16 @@ defmodule SymphonyElixir.Workflow do
       end
     end
   end
+
+  # Lines of the front matter block, both `---` delimiters included.
+  defp front_matter_length(["---" | tail]) do
+    case Enum.split_while(tail, &(&1 != "---")) do
+      {front, ["---" | _prompt_lines]} -> length(front) + 2
+      {front, []} -> length(front) + 1
+    end
+  end
+
+  defp front_matter_length(_lines), do: 0
 
   defp split_front_matter(content) do
     lines = String.split(content, ~r/\R/, trim: false)

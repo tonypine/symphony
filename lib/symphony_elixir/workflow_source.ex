@@ -8,6 +8,12 @@ defmodule SymphonyElixir.WorkflowSource do
   reach a run. The committed content is copied into a snapshot under the Symphony
   state root, and the config cache and workflow stores watch that snapshot.
 
+  A workflow whose body has a `{% render "playbook" %}` line takes its instruction
+  files from the same ref, and the snapshot holds the expanded text (see
+  `SymphonyElixir.Workflow.assemble/2`). So neither the checkout nor a run's own
+  branch can change the prompt: an instruction change reaches runs once it is merged
+  into the base branch.
+
   The snapshot is only replaced with content that parses, so a missing or invalid
   `WORKFLOW.md` on the ref logs an error and keeps the last known good workflow.
   The error is kept next to the snapshot until the ref loads again, so
@@ -29,6 +35,7 @@ defmodule SymphonyElixir.WorkflowSource do
 
   alias SymphonyElixir.Config.{Cache, SystemSchema}
   alias SymphonyElixir.{ManagedClone, Paths, Workflow, Workspace}
+  alias SymphonyElixir.Playbook.Assembly
   alias SymphonyElixir.Repo.{Fetcher, FetchLog}
 
   @default_branch_refs ["origin/HEAD", "origin/main", "origin/master"]
@@ -211,9 +218,40 @@ defmodule SymphonyElixir.WorkflowSource do
   defp ref_workflow(repo, checkout, workflow_in_repo) do
     with {:ok, ref} <- base_ref(repo, checkout),
          {:ok, content} <- git_show(checkout, "#{ref}:#{workflow_in_repo}"),
+         read_instructions = instructions_at_ref(checkout, ref, Path.dirname(workflow_in_repo)),
+         {:ok, content} <- Workflow.assemble(content, read_instructions),
          {:ok, workflow} <- Workflow.parse_repo_workflow(content) do
       {:ok, content, workflow}
     end
+  end
+
+  # Reads a playbook's instruction files from the ref, never from the checkout's files.
+  defp instructions_at_ref(checkout, ref, workflow_dir) do
+    fn dir ->
+      path = if workflow_dir == ".", do: dir, else: Path.join(workflow_dir, dir)
+
+      with {:ok, listing} <- git_stdout(checkout, ["ls-tree", "-z", ref, "--", String.trim_trailing(path, "/") <> "/"]) do
+        listing
+        |> String.split("\0", trim: true)
+        |> Enum.flat_map(&instruction_blob/1)
+        |> read_at_ref(checkout, ref)
+      end
+    end
+  end
+
+  defp instruction_blob(entry) do
+    [_mode, type, _sha, file] = String.split(entry, [" ", "\t"], parts: 4)
+    name = Path.basename(file)
+    if type == "blob" and Assembly.instruction_file?(name), do: [{name, file}], else: []
+  end
+
+  defp read_at_ref(files, checkout, ref) do
+    Enum.reduce_while(files, {:ok, []}, fn {name, file}, {:ok, read} ->
+      case git_show(checkout, "#{ref}:#{file}") do
+        {:ok, body} -> {:cont, {:ok, [{name, body} | read]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
   end
 
   # The primary workflow store follows the configured workflow path, which points at
@@ -281,9 +319,9 @@ defmodule SymphonyElixir.WorkflowSource do
   defp git(checkout, args), do: git_result(Workspace.safe_git(["-C", checkout | args]), args)
 
   # The output becomes the snapshot, so it is stdout only; git's stderr goes in the error.
-  defp git_show(checkout, object) do
-    args = ["show", object]
+  defp git_show(checkout, object), do: git_stdout(checkout, ["show", object])
 
+  defp git_stdout(checkout, args) do
     case Workspace.safe_git_stdout(["-C", checkout | args]) do
       {content, 0, _stderr} -> {:ok, content}
       {_content, status, stderr} -> git_result({stderr, status}, args)

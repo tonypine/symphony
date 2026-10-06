@@ -255,7 +255,7 @@ defmodule SymphonyElixir.Config.Cache do
 
   defp load_workflow(path) do
     with {:ok, content} <- read_file(path),
-         do: Workflow.parse_repo_workflow(content)
+         do: Workflow.parse_repo_workflow(content, Workflow.instructions_on_disk(Path.dirname(path)))
   end
 
   defp read_file(path) do

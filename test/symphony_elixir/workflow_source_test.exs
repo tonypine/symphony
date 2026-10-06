@@ -319,6 +319,74 @@ defmodule SymphonyElixir.WorkflowSourceTest do
     end
   end
 
+  describe "instruction files" do
+    test "a branch that edits the instruction files does not change the prompt of a run on that branch", %{root: root} do
+      %{checkout: checkout, other: other} = git_repos!(root, playbook_workflow())
+      push_files!(other, %{".symphony/instructions/010-rules.md" => "Main rules\n"})
+      write_symphony!(root, checkout, base_branch: "main")
+      {:ok, repo} = Config.repo("app")
+
+      # The run's branch, pushed, and an uncommitted edit on top of it.
+      git!(checkout, ["checkout", "-q", "-b", "auto/TP-1"])
+      write_file!(checkout, ".symphony/instructions/010-rules.md", "Branch rules\n")
+      write_file!(checkout, ".symphony/instructions/020-extra.md", "Branch extra\n")
+      git!(checkout, ["add", "."])
+      git!(checkout, ["commit", "-q", "-m", "change my own instructions"])
+      git!(checkout, ["push", "-q", "-u", "origin", "auto/TP-1"])
+      write_file!(checkout, ".symphony/instructions/010-rules.md", "Uncommitted rules\n")
+
+      assert WorkflowSource.refresh(repo, fetch: true) == :ok
+      assert {:ok, %{prompt: "Main rules"}} = Config.workflow_for_repo("app")
+      assert File.read!(WorkflowSource.read_path(repo)) =~ "Main rules"
+
+      push_files!(other, %{".symphony/instructions/010-rules.md" => "Merged rules\n"})
+
+      assert WorkflowSource.refresh(repo, fetch: true) == :ok
+      assert {:ok, %{prompt: "Merged rules"}} = Config.workflow_for_repo("app")
+      assert WorkflowSource.refresh(repo, fetch: true) == :unchanged
+    end
+
+    test "a workflow in a subdirectory reads instruction files next to it on the ref", %{root: root} do
+      %{checkout: checkout, other: other} = git_repos!(root, "Root prompt")
+
+      push_files!(other, %{
+        "agents/WORKFLOW.md" => playbook_workflow(),
+        "agents/.symphony/instructions/010-rules.md" => "Agent rules\n",
+        "agents/.symphony/instructions/README.md" => "Not an instruction file\n",
+        "agents/.symphony/instructions/020-dir.md/030-nested.md" => "Nested\n"
+      })
+
+      repo = repo(checkout, workflow: Path.join(checkout, "agents/WORKFLOW.md"))
+      assert WorkflowSource.refresh(repo, fetch: true) == :ok
+      assert {:ok, %{prompt: "Agent rules"}} = Workflow.load(WorkflowSource.read_path(repo))
+      assert {:ok, %{prompt: "Agent rules"}} = WorkflowSource.load_for_check(repo)
+    end
+
+    test "an instruction file the ref cannot read keeps the last known good workflow", %{root: root} do
+      %{checkout: checkout} = git_repos!(root, playbook_workflow())
+      write_file!(checkout, ".symphony/instructions/010-rules.md", "Main rules\n")
+      git!(checkout, ["add", "."])
+      git!(checkout, ["commit", "-q", "-m", "instructions"])
+      git!(checkout, ["push", "-q", "origin", "main"])
+      repo = repo(checkout)
+      assert WorkflowSource.refresh(repo) == :ok
+
+      blob = String.trim(git!(checkout, ["rev-parse", "origin/main:.symphony/instructions/010-rules.md"]))
+      {dir, file} = String.split_at(blob, 2)
+      File.rm!(Path.join([checkout, ".git", "objects", dir, file]))
+      write_file!(checkout, "WORKFLOW.md", "Edited so the snapshot would change\n")
+
+      log =
+        capture_log(fn ->
+          assert {:error, {:workflow_instructions_error, ".symphony/instructions", {:git_failed, ["show", _object], _status, _output}}} =
+                   WorkflowSource.refresh(repo)
+        end)
+
+      assert log =~ "keeping last known good workflow"
+      assert {:ok, %{prompt: "Main rules"}} = Workflow.load(WorkflowSource.read_path(repo))
+    end
+  end
+
   describe "load_for_check/1" do
     test "validates the committed workflow, not a broken working copy, without writing the snapshot", %{root: root} do
       %{checkout: checkout} = git_repos!(root, "Committed prompt")
@@ -415,6 +483,25 @@ defmodule SymphonyElixir.WorkflowSourceTest do
     end
 
     :ok
+  end
+
+  # A workflow whose prompt is only its instruction files: every playbook partial dropped.
+  defp playbook_workflow do
+    partials = Enum.map_join(SymphonyElixir.Playbook.aggregate(), fn {name, _slot} -> "\n    #{name}: false" end)
+    "---\nplaybook:\n  partials:#{partials}\n---\n{% render \"playbook\" %}"
+  end
+
+  defp push_files!(clone, files) do
+    Enum.each(files, fn {path, content} -> write_file!(clone, path, content) end)
+    git!(clone, ["add", "."])
+    git!(clone, ["commit", "-q", "-m", "update files"])
+    git!(clone, ["push", "-q", "origin", "main"])
+  end
+
+  defp write_file!(dir, path, content) do
+    path = Path.join(dir, path)
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, content)
   end
 
   defp push_workflow!(clone, content) do
