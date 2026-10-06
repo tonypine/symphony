@@ -18,18 +18,8 @@ struct ReposView: View {
                 .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 300)
         } detail: {
             VStack(spacing: 0) {
-                if let message = model.message {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text(message)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .textSelection(.enabled)
-                        Spacer()
-                        Button("Dismiss") { model.message = nil }
-                            .buttonStyle(.borderless)
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 10)
-                    Divider()
+                if let banner = model.shownBanner {
+                    ReposBannerView(banner: banner) { model.banner = nil }
                 }
                 detail
             }
@@ -119,17 +109,65 @@ struct ReposView: View {
     NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
 }
 
-/// The toolbar chip with Symphony's state.
-struct ReposChipView: View {
-    @ObservedObject var model: ReposViewModel
+/// What the last change did, at the top of the detail, with a close button.
+struct ReposBannerView: View {
+    let banner: ReposBanner
+    let dismiss: () -> Void
 
     var body: some View {
-        let chip = model.window.chip
+        let isError = banner.style == .error
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                .foregroundStyle(isError ? Color.red : Color.green)
+                .accessibilityLabel(isError ? "Error" : "Done")
+            Text(banner.text)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            Spacer(minLength: 8)
+            Button(action: dismiss) {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.borderless)
+            .help(ReposBanner.dismissTitle)
+            .accessibilityLabel(ReposBanner.dismissTitle)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill((isError ? Color.red : Color.accentColor).opacity(0.1))
+        )
+        .padding(.horizontal, 20)
+        .padding(.top, 12)
+    }
+}
+
+/// The toolbar chip with Symphony's state, or the restart under way with a pop-over of what it waits on.
+struct ReposChipView: View {
+    @ObservedObject var model: ReposViewModel
+    @State private var showsPopover = false
+
+    var body: some View {
+        if let restart = model.restartChip {
+            Button { showsPopover.toggle() } label: {
+                capsule(title: restart.title, dot: .orange)
+            }
+            .buttonStyle(.plain)
+            .help(restart.line ?? restart.title)
+            .popover(isPresented: $showsPopover, arrowEdge: .bottom) {
+                ReposRestartPopover(chip: restart, model: model)
+            }
+        } else {
+            capsule(title: model.window.chip.title, dot: model.window.chip.dot)
+        }
+    }
+
+    private func capsule(title: String, dot: ReposChip.Dot) -> some View {
         HStack(spacing: 6) {
             Circle()
-                .fill(color(chip.dot))
+                .fill(color(dot))
                 .frame(width: 8, height: 8)
-            Text(chip.title)
+            Text(title)
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -137,9 +175,10 @@ struct ReposChipView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 3)
         .overlay(Capsule().strokeBorder(Color(nsColor: .separatorColor)))
+        .contentShape(Capsule())
         .fixedSize()
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(chip.title)
+        .accessibilityLabel(title)
     }
 
     private func color(_ dot: ReposChip.Dot) -> Color {
@@ -149,6 +188,47 @@ struct ReposChipView: View {
         case .grey: return .gray
         case .red: return .red
         }
+    }
+}
+
+/// The restart chip's pop-over: what the restart does now, the runs it waits on, and Restart Now and Cancel Restart
+/// while it can take them.
+struct ReposRestartPopover: View {
+    let chip: ReposRestartChip
+    @ObservedObject var model: ReposViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(chip.title)
+                .font(.headline)
+            if let line = chip.line {
+                Text(line)
+                    .foregroundStyle(.secondary)
+            }
+            if !chip.runs.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(chip.runs, id: \.self) { run in
+                        Text(run)
+                            .textSelection(.enabled)
+                    }
+                }
+            }
+            if chip.showsRestartNow || chip.showsCancel {
+                HStack {
+                    Spacer()
+                    if chip.showsCancel {
+                        Button(chip.cancelTitle) { model.onCancelRestart() }
+                    }
+                    if chip.showsRestartNow {
+                        Button(chip.restartNowTitle) { model.onRestartNow() }
+                            .disabled(!chip.restartNowEnabled)
+                            .help(chip.restartNowEnabled ? chip.restartNowTitle : ReposRestartChip.restartNowHelp)
+                    }
+                }
+            }
+        }
+        .padding(14)
+        .frame(width: 300, alignment: .leading)
     }
 }
 

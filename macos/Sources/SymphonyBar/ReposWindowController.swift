@@ -14,8 +14,10 @@ final class ReposViewModel: ObservableObject {
     }
     /// The open Add Repo sheet, nil while none is.
     @Published var addRepo: AddRepoViewModel?
-    /// What the last Add Repo, Edit, Disconnect or Remove Clone did, shown above the detail.
-    @Published var message: String?
+    /// What the last Add Repo, Edit, Disconnect or Remove Clone did, shown at the top of its repo's detail.
+    @Published var banner: ReposBanner?
+    /// The toolbar chip while a restart is under way, nil while none is.
+    @Published var restartChip: ReposRestartChip?
     /// Whether Start Symphony would start it now.
     @Published var canStart = false
     var onSelect: (_ key: String) -> Void = { _ in }
@@ -26,9 +28,16 @@ final class ReposViewModel: ObservableObject {
     var onStart: () -> Void = {}
     var onOpenSettings: () -> Void = {}
     var onTryAgain: () -> Void = {}
+    var onRestartNow: () -> Void = {}
+    var onCancelRestart: () -> Void = {}
 
     var selected: RepoDetail? {
         window.repos.first { $0.key == selection }
+    }
+
+    /// The banner on the detail shown now.
+    var shownBanner: ReposBanner? {
+        banner.flatMap { $0.isShown(on: selection, listed: window.repos.map(\.key)) ? $0 : nil }
     }
 }
 
@@ -51,6 +60,10 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
     var start: () -> Void = {}
     var canStart: () -> Bool = { false }
     var openSettings: () -> Void = {}
+    /// The app's graceful restart, which the toolbar chip follows, and its Restart Now and Cancel Restart.
+    var restartMachine: () -> RestartMachine = { RestartMachine() }
+    var restartNow: () -> Void = {}
+    var cancelRestart: () -> Void = {}
 
     private let secrets: SecretsReader
 
@@ -77,6 +90,8 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
             model.onStart = { [weak self] in self?.start() }
             model.onOpenSettings = { [weak self] in self?.openSettings() }
             model.onTryAgain = { [weak self] in self.map { $0.update(status: $0.status) } }
+            model.onRestartNow = { [weak self] in self?.restartNow() }
+            model.onCancelRestart = { [weak self] in self?.cancelRestart() }
             self.model = model
             let hostingController = NSHostingController(rootView: ReposView(model: model))
             // Only the minimum: the window keeps the size it was left at.
@@ -122,6 +137,11 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
         }
     }
 
+    /// Called after each step of a restart, so the toolbar chip follows it. Does nothing while the window is closed.
+    func restartChanged() {
+        showDisplay()
+    }
+
     private var configPath: String {
         AppStores.current.settingsStore().loadSettings().configPath.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -133,6 +153,7 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
             ManagedClones.removal(gitHub: gitHub, root: config.clonesRoot, status: status, poll: poll)
         }
         model.window = shown
+        model.restartChip = ReposRestartChip(machine: restartMachine(), window: shown)
         if model.selection.map({ key in !shown.repos.contains { $0.key == key } }) ?? true {
             let saved = AppStores.current.defaults.object(forKey: Self.selectionKey) as? String
             model.selection = ReposList.selection(saved: saved, in: shown)
@@ -198,10 +219,12 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
     /// Opens the Add Repo sheet, or with `editing` the same sheet on that repo.
     private func showSheet(editing key: String?) {
         guard let model, model.addRepo == nil else { return }
-        model.message = nil
-        model.addRepo = AddRepoViewModel(configPath: configPath, secrets: secrets, editing: key, state: state) { [weak self] saved in
+        let sheet = AddRepoViewModel(configPath: configPath, secrets: secrets, editing: key, state: state) { [weak self] saved in
             self?.saved(saved)
         }
+        // Also on the repo, so the error is still there once the sheet is closed.
+        sheet.onSaveError = { [weak self] message in self?.show(ReposChange.failed(key: key, message: message).banner) }
+        model.addRepo = sheet
     }
 
     /// Closes the sheet, shows the repo from the file, and gets Symphony to use it: Symphony reads routes while it
@@ -211,18 +234,16 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
         case let .added(key, madeDefault):
             let apply = AddRepo.apply(status: status)
             finish(
-                message: AddRepo.savedMessage(key: key, apply: apply, madeDefault: madeDefault),
+                .added(key: key, apply: apply, madeDefault: madeDefault),
                 apply: apply,
-                question: { AddRepo.restartQuestion(key: key, runs: $0) },
-                later: "Added \(key). Restart Symphony from the menu to connect it."
+                question: { AddRepo.restartQuestion(key: key, runs: $0) }
             )
         case let .edited(original, entry):
             let apply = EditRepo.apply(status: status, from: original, to: entry)
             finish(
-                message: EditRepo.savedMessage(key: entry.key, apply: apply),
+                .edited(key: entry.key, apply: apply),
                 apply: apply,
-                question: { EditRepo.restartQuestion(key: entry.key, runs: $0) },
-                later: "Saved \(entry.key). Restart Symphony from the menu to apply it."
+                question: { EditRepo.restartQuestion(key: entry.key, runs: $0) }
             )
         }
     }
@@ -237,11 +258,11 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
         case let .success(read):
             entries = read
         case let .failure(problem):
-            model.message = problem.message
+            show(ReposChange.failed(key: key, message: problem.message).banner)
             return
         }
         if let problem = DisconnectRepo.problem(key: key, entries: entries) {
-            model.message = problem
+            show(ReposChange.failed(key: key, message: problem).banner)
             return
         }
         guard let entry = entries.first(where: { $0.key == key }) else { return }
@@ -263,18 +284,18 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
         let newDefault = picker?.titleOfSelectedItem
+        let next = DisconnectRepo.nextSelection(after: key, in: model.window.repos.map(\.key))
         do {
             try file.disconnectRepository(key, newDefault: newDefault)
         } catch {
-            model.message = "Couldn't disconnect \(key): \(error.localizedDescription)"
+            show(ReposChange.failed(key: key, message: "Couldn't disconnect \(key): \(error.localizedDescription)").banner)
             return
         }
         let apply = AddRepo.apply(status: status)
         finish(
-            message: DisconnectRepo.message(key: key, apply: apply, newDefault: newDefault),
+            .disconnected(key: key, apply: apply, newDefault: newDefault, next: next),
             apply: apply,
-            question: { DisconnectRepo.restartQuestion(key: key, runs: $0) },
-            later: "Disconnected \(key). Restart Symphony from the menu to drop it."
+            question: { DisconnectRepo.restartQuestion(key: key, runs: $0) }
         )
     }
 
@@ -299,42 +320,50 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
             }
             let root = ReposConfig.read(path: configPath).clonesRoot
             let removal = ManagedClones.removal(gitHub: gitHub, root: root, status: status, poll: poll)
+            var change: ReposChange?
             if let path = removal.path {
                 do {
                     try await Task.detached { try ManagedClones.remove(path, root: root) }.value
-                    self.model?.message = ManagedClones.removedMessage(key: key, path: path)
+                    change = .cloneRemoved(key: key, path: path)
                 } catch {
-                    self.model?.message = "Couldn't remove the clone: \(error.localizedDescription)"
+                    change = .failed(key: key, message: "Couldn't remove the clone: \(error.localizedDescription)")
                 }
             } else if case let .blocked(reason) = removal {
-                self.model?.message = "Didn't remove the clone: \(reason)"
+                change = .cloneKept(key: key, reason: reason)
             }
             update(status: status)
+            if let change { show(change.banner) }
         }
+    }
+
+    /// Shows `banner` in place of the last one, and selects its repo while the window lists it.
+    private func show(_ banner: ReposBanner) {
+        guard let model else { return }
+        model.banner = banner
+        if let key = banner.key, model.window.repos.contains(where: { $0.key == key }) { model.selection = key }
     }
 
     /// Shows what a change did and gets Symphony to use it, asking first when the restart waits for agent runs.
     private func finish(
-        message: String,
+        _ change: ReposChange,
         apply: AddRepoApply?,
-        question: @escaping (_ runs: Int) -> (title: String, message: String),
-        later: String
+        question: @escaping (_ runs: Int) -> (title: String, message: String)
     ) {
         model?.addRepo = nil
-        model?.message = message
         update(status: status)
+        show(change.banner)
         switch apply {
         case .restart?:
             restart()
         case let .askToRestart(runs)?:
             // After the sheet has closed, so the alert sits on the window.
-            DispatchQueue.main.async { [weak self] in self?.askToRestart(question(runs), later: later) }
+            DispatchQueue.main.async { [weak self] in self?.askToRestart(question(runs), later: change.laterBanner) }
         case .onNextStart?, .restartManually?, nil:
             break
         }
     }
 
-    private func askToRestart(_ question: (title: String, message: String), later: String) {
+    private func askToRestart(_ question: (title: String, message: String), later: ReposBanner) {
         let alert = NSAlert()
         alert.messageText = question.title
         alert.informativeText = question.message
@@ -343,7 +372,7 @@ final class ReposWindowController: NSObject, NSWindowDelegate, NSToolbarDelegate
         if alert.runModal() == .alertFirstButtonReturn {
             restart()
         } else {
-            model?.message = later
+            show(later)
         }
     }
 

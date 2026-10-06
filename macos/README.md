@@ -508,7 +508,11 @@ clone only when it starts. So after Save:
 - a stopped Symphony picks the repo up when it starts;
 - a Symphony the app didn't start needs a restart from where it was started.
 
-The message above the detail says which applies. A running Symphony lists the new repo at the
+The new repo is selected, and a banner at the top of its detail says which applies; Edit, Disconnect
+(on the repo selected next) and Remove Clone show theirs the same way, and so does a write that failed.
+A banner stays until you close it or make the next change. While a restart waits for agent runs, the
+toolbar chip reads **Restart pending: waiting on N runs**; click it for the runs, **Cancel Restart**,
+and **Restart Now** once the runs outlast the restart timeout. A running Symphony lists the new repo at the
 next poll, as it reads the route right away; a GitHub URL repo shows `not cloned yet` and its
 `WORKFLOW.md` as `missing` until the restart clones it. With Symphony stopped, the sidebar shows the repo
 from `symphony.yml`.
