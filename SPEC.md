@@ -543,6 +543,12 @@ Fields:
     throwaway worktree of an acceptance gate run or a QA pass. So does the `git worktree add
     --detach` of each throwaway worktree: the acceptance gate's merge onto the base branch and
     its checkout of the merged commit, and a QA pass's checkouts of the PR head.
+  - On a remote worker the dispatch script's `git worktree add` takes a per-repo lock on the
+    worker host: a `symphony-worktree-add.lock` directory in the repo's git common dir, holding
+    the script's pid, so parallel dispatches to one remote repo add their worktrees one at a
+    time. The script waits up to half the hook timeout (at least 1 second) for it, then fails
+    with status 47 and `workspace_worktree_lock_timeout: <lock>`. It drops the lock after the
+    add and on any exit or hangup; a lock whose holder process is gone is taken over.
   - Every git call Symphony makes runs SSH with keepalives, so a connection that stops answering
     is dropped after about a minute. A host-side `fetch`, `pull`, `push` or `ls-remote` also has
     a wall-clock limit (5 minutes by default, the `:git_network_timeout_ms` application env): at

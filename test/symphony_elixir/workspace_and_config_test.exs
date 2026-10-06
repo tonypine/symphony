@@ -5141,6 +5141,10 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       assert trace =~ "symphony_git \"$repo\" fetch --upload-pack=git-upload-pack origin"
       assert trace =~ "*\"cannot lock ref\"*) sleep 1; symphony_git \"$repo\" fetch --upload-pack=git-upload-pack origin ;;"
       assert trace =~ "symphony_git \"$repo\" worktree add"
+      assert trace =~ "symphony_worktree_lock; branch_owner="
+      assert trace =~ "symphony-worktree-add.lock"
+      assert trace =~ "trap symphony_worktree_unlock EXIT"
+      assert trace =~ "fi; symphony_worktree_unlock"
       assert trace =~ "export SYMPHONY_BRANCH="
       assert trace =~ "auto/MT-SSH-WT"
       assert trace =~ "symphony_configured_repo="
@@ -5459,6 +5463,117 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       assert output =~ "workspace_after_create_still_running: pid #{System.pid()}"
       refute File.exists?(runs_file)
       assert File.exists?(pending_marker)
+    end)
+  end
+
+  test "parallel remote worktree adds of one repo take its lock one at a time" do
+    with_real_exec_fake_ssh(fn ctx ->
+      primary_repo = Path.join(ctx.test_root, "primary")
+      create_primary_repo!(primary_repo, Path.join(ctx.test_root, "origin.git"))
+      workspace_root = Path.join(ctx.test_root, "wsroot")
+      bin = Path.join(ctx.test_root, "bin")
+      adding = Path.join(ctx.test_root, "adding")
+      overlaps = Path.join(ctx.test_root, "overlaps")
+
+      # The worker's git notes a `worktree add` that starts while another is still
+      # running, and holds each add open a moment so unserialized ones would overlap.
+      File.mkdir_p!(bin)
+
+      File.write!(Path.join(bin, "git"), """
+      #!/bin/sh
+      case " $* " in
+        *" worktree add "*)
+          mkdir #{adding} 2>/dev/null || echo overlap >> #{overlaps}
+          #{System.find_executable("git")} "$@"
+          status=$?
+          sleep 0.2
+          rmdir #{adding} 2>/dev/null
+          exit $status
+          ;;
+      esac
+      exec #{System.find_executable("git")} "$@"
+      """)
+
+      File.chmod!(Path.join(bin, "git"), 0o755)
+      write_real_exec_fake_ssh!(Path.join(ctx.test_root, "ssh"), bin <> ":")
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        worker_ssh_hosts: ["worker-01"]
+      )
+
+      identifiers = Enum.map(1..3, &"MT-LOCK-#{&1}")
+
+      results =
+        identifiers
+        |> Enum.map(fn identifier -> Task.async(fn -> Workspace.create_for_issue(identifier, "worker-01") end) end)
+        |> Task.await_many(30_000)
+
+      for {identifier, result} <- Enum.zip(identifiers, results) do
+        workspace_path = Path.join([workspace_root, "default", identifier])
+        assert {:ok, ^workspace_path} = result
+        assert String.trim(git!(workspace_path, ["rev-parse", "--abbrev-ref", "HEAD"])) == "auto/#{identifier}"
+      end
+
+      refute File.exists?(overlaps)
+      refute File.exists?(Path.join([primary_repo, ".git", "symphony-worktree-add.lock"]))
+    end)
+  end
+
+  test "remote worktree add gives up on a repo lock a live process holds" do
+    with_real_exec_fake_ssh(fn ctx ->
+      primary_repo = Path.join(ctx.test_root, "primary")
+      create_primary_repo!(primary_repo, Path.join(ctx.test_root, "origin.git"))
+      workspace_root = Path.join(ctx.test_root, "wsroot")
+      lock = Path.join([primary_repo, ".git", "symphony-worktree-add.lock"])
+
+      # This VM stands in for another dispatch's script holding the lock.
+      File.mkdir_p!(lock)
+      File.write!(Path.join(lock, "pid"), "#{System.pid()}\n")
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        worker_ssh_hosts: ["worker-01"],
+        hook_timeout_ms: 4_000
+      )
+
+      assert {:error, {:workspace_prepare_failed, "worker-01", 47, output}} =
+               Workspace.create_for_issue("MT-LOCK-HELD", "worker-01")
+
+      assert output =~ "workspace_worktree_lock_timeout: "
+      assert output =~ "symphony-worktree-add.lock"
+      refute File.exists?(Path.join([workspace_root, "default", "MT-LOCK-HELD"]))
+      assert File.read!(Path.join(lock, "pid")) == "#{System.pid()}\n"
+    end)
+  end
+
+  test "remote worktree add takes over a repo lock its dead holder left behind" do
+    with_real_exec_fake_ssh(fn ctx ->
+      primary_repo = Path.join(ctx.test_root, "primary")
+      create_primary_repo!(primary_repo, Path.join(ctx.test_root, "origin.git"))
+      workspace_root = Path.join(ctx.test_root, "wsroot")
+      workspace_path = Path.join([workspace_root, "default", "MT-LOCK-DEAD"])
+      lock = Path.join([primary_repo, ".git", "symphony-worktree-add.lock"])
+
+      # A script killed while it held the lock: its pid has exited.
+      {dead_pid, 0} = System.cmd("sh", ["-c", "echo $$"])
+      File.mkdir_p!(lock)
+      File.write!(Path.join(lock, "pid"), dead_pid)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        worker_ssh_hosts: ["worker-01"]
+      )
+
+      assert {:ok, ^workspace_path} = Workspace.create_for_issue("MT-LOCK-DEAD", "worker-01")
+      refute File.exists?(lock)
+      refute File.exists?(lock <> ".takeover")
     end)
   end
 
@@ -6499,13 +6614,14 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     fun.(%{test_root: test_root, trace_file: trace_file})
   end
 
-  defp write_real_exec_fake_ssh!(path) do
+  # `path_prefix` puts directories ahead of the system ones on the remote's PATH.
+  defp write_real_exec_fake_ssh!(path, path_prefix \\ "") do
     File.write!(path, """
     #!/usr/bin/env bash
     set -u
     trace_file="${SYMP_TEST_SSH_TRACE:-/dev/null}"
     printf 'ARGV:%s\\n' "$*" >> "$trace_file"
-    export PATH="/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
+    export PATH="#{path_prefix}/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
 
     # SSH.run passes the remote `bash -lc <script>` as a single argv entry.
     # Execute that locally so workspace.ex containment checks run against a real

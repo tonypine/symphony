@@ -428,6 +428,7 @@ defmodule SymphonyElixir.Workspace do
         "  exit 41",
         "fi",
         "symphony_git \"$repo\" rev-parse --git-dir >/dev/null",
+        remote_worktree_lock_functions(settings.hooks.timeout_ms),
         remote_fetch_before_dispatch_command(settings),
         remote_workspace_parent_containment_preamble(),
         remote_after_create_running_check(),
@@ -830,7 +831,51 @@ defmodule SymphonyElixir.Workspace do
   end
 
   defp remote_worktree_add_command do
-    "branch_owner=$(symphony_git \"$repo\" worktree list --porcelain | awk -v b=\"$branch\" 'BEGIN { wt = \"\" } /^worktree / { wt = substr($0, 10); next } $0 == \"branch refs/heads/\" b { print wt; exit }'); if [ -n \"$branch_owner\" ] && [ \"$branch_owner\" != \"$workspace\" ]; then printf 'workspace_branch_already_checked_out_elsewhere\\t%s\\t%s\\t%s\\n' \"$branch\" \"$branch_owner\" \"$workspace\"; exit 45; fi; if [ \"$base_ref\" != \"HEAD\" ]; then symphony_git \"$repo\" worktree add --no-track -B \"$branch\" \"$workspace\" \"$base_ref\"; elif symphony_git \"$repo\" rev-parse --verify \"refs/heads/$branch\" >/dev/null 2>&1; then symphony_git \"$repo\" worktree add \"$workspace\" \"$branch\"; else symphony_git \"$repo\" worktree add -b \"$branch\" \"$workspace\" HEAD; fi"
+    "symphony_worktree_lock; branch_owner=$(symphony_git \"$repo\" worktree list --porcelain | awk -v b=\"$branch\" 'BEGIN { wt = \"\" } /^worktree / { wt = substr($0, 10); next } $0 == \"branch refs/heads/\" b { print wt; exit }'); if [ -n \"$branch_owner\" ] && [ \"$branch_owner\" != \"$workspace\" ]; then printf 'workspace_branch_already_checked_out_elsewhere\\t%s\\t%s\\t%s\\n' \"$branch\" \"$branch_owner\" \"$workspace\"; exit 45; fi; if [ \"$base_ref\" != \"HEAD\" ]; then symphony_git \"$repo\" worktree add --no-track -B \"$branch\" \"$workspace\" \"$base_ref\"; elif symphony_git \"$repo\" rev-parse --verify \"refs/heads/$branch\" >/dev/null 2>&1; then symphony_git \"$repo\" worktree add \"$workspace\" \"$branch\"; else symphony_git \"$repo\" worktree add -b \"$branch\" \"$workspace\" HEAD; fi; symphony_worktree_unlock"
+  end
+
+  # The remote counterpart of the `Fetcher.with_lock/2` the local add runs under:
+  # parallel dispatches to one worker host race for the shared repo's refs and
+  # `.git/worktrees`, so its `worktree add` takes a `mkdir` lock in the repo's git
+  # dir, holding the script's pid. It waits up to half the script's time limit,
+  # then exits 47. An EXIT trap (the signal traps turn a hangup or kill into an
+  # exit) drops the lock however the script ends; a lock whose holder died
+  # without it (SIGKILL) is taken over, under a second `mkdir` so two waiters
+  # never both take it.
+  defp remote_worktree_lock_functions(timeout_ms) do
+    """
+    symphony_worktree_lock_dir=""
+    symphony_worktree_unlock() {
+      if [ -n "$symphony_worktree_lock_dir" ]; then
+        rm -rf "$symphony_worktree_lock_dir"
+        symphony_worktree_lock_dir=""
+      fi
+    }
+    symphony_worktree_lock() {
+      lock_git_dir=$(cd "$repo" && cd "$(symphony_git "$repo" rev-parse --git-common-dir)" && pwd -P)
+      lock="$lock_git_dir/symphony-worktree-add.lock"
+      trap symphony_worktree_unlock EXIT
+      trap 'exit 129' HUP
+      trap 'exit 130' INT
+      trap 'exit 143' TERM
+      lock_deadline=$(($(date +%s) + #{max(div(timeout_ms, 2_000), 1)}))
+      until mkdir "$lock" 2>/dev/null; do
+        lock_holder=$(cat "$lock/pid" 2>/dev/null || true)
+        if [ -n "$lock_holder" ] && ! kill -0 "$lock_holder" 2>/dev/null && mkdir "$lock.takeover" 2>/dev/null; then
+          if [ "$(cat "$lock/pid" 2>/dev/null || true)" = "$lock_holder" ]; then rm -rf "$lock"; fi
+          rmdir "$lock.takeover"
+          continue
+        fi
+        if [ "$(date +%s)" -ge "$lock_deadline" ]; then
+          echo "workspace_worktree_lock_timeout: $lock"
+          exit 47
+        fi
+        sleep 0.2 2>/dev/null || sleep 1
+      done
+      symphony_worktree_lock_dir=$lock
+      echo "$$" > "$lock/pid"
+    }\
+    """
   end
 
   # Mirror `snapshot_orphaned_work/2` for remote workers: snapshot a crashed run's
