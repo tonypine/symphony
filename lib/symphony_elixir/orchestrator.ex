@@ -536,6 +536,19 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  # Claude Code's heartbeat while a tool runs, every few seconds: it only counts as activity for
+  # the first-turn stall check and the no-progress watchdog, so it skips the transcript, the run
+  # store and the dashboard.
+  defp handle_info_message(
+         {:codex_worker_update, issue_id, %{event: :tool_progress, timestamp: %DateTime{} = timestamp}},
+         %{running: running} = state
+       ) do
+    case Map.get(running, issue_id) do
+      nil -> {:noreply, state}
+      running_entry -> {:noreply, put_running_entry(state, issue_id, Map.put(running_entry, :last_event_at, timestamp))}
+    end
+  end
+
   defp handle_info_message(
          {:codex_worker_update, issue_id, %{event: _, timestamp: _} = update},
          %{running: running} = state

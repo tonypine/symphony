@@ -538,7 +538,9 @@ Fields:
     dispatches of one repo add their worktrees one at a time. A new branch made from a base ref
     is added with `--no-track`: no upstream config goes into the shared `.git/config`, whose
     lock parallel adds would otherwise race for (the loser exits 255, its branch made but no
-    worktree). A failed add logs git's output.
+    worktree). A failed add logs git's output. A host-side `git worktree remove` takes the lock
+    too, whether it removes an issue workspace (with the branch delete after it) or the
+    throwaway worktree of an acceptance gate run or a QA pass.
   - Every git call Symphony makes runs SSH with keepalives, so a connection that stops answering
     is dropped after about a minute. A host-side `fetch`, `pull`, `push` or `ls-remote` also has
     a wall-clock limit (5 minutes by default, the `:git_network_timeout_ms` application env): at
@@ -2737,7 +2739,9 @@ Part C: No-progress watchdog
 - Independently of the poll tick, a watchdog tick runs every `watchdog.tick_interval_ms`.
 - If `watchdog.enabled == false`, the tick performs no session termination.
 - For each running issue, compute `elapsed_ms` since `last_event_at`, where a workspace hook's start
-  and end count as events, or since the end of the run's latest wait on Linear when that is later.
+  and end count as events, and so does each Claude Code `tool_progress` heartbeat its agent sends
+  while a tool runs (kept out of the transcript), or since the end of the run's latest wait on
+  Linear when that is later.
   While a workspace hook runs, compute it since the hook's deadline, as in Part A. While the run's
   agent waits on a call of one of Symphony's own MCP tools, compute it since the latest deadline of
   its pending calls when that is later; a call without a deadline (a QA tool) does not hold it.
