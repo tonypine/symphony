@@ -319,37 +319,6 @@ defmodule SymphonyElixir.AgentSandboxConfig do
   defp claude_rule_path("/" <> _absolute = path), do: "/" <> path
   defp claude_rule_path(path), do: path
 
-  @doc """
-  Writable paths a sandboxed macOS process needs for Foundation's atomic writes.
-
-  Foundation sees the sandbox and stages every `Data.write(options: .atomic)` in
-  the item replacement directory, `<DARWIN_USER_TEMP_DIR>/TemporaryItems`,
-  whatever `TMPDIR` says. Without write access there, SwiftPM's build fails
-  before compiling anything. Only `TemporaryItems` is granted: the per-user temp
-  dir itself also holds Symphony's per-session Claude settings and MCP shim.
-
-  Returns the path and its canonical form (`/var` is a symlink to `/private/var`),
-  or `[]` off macOS or when `getconf` fails. Options: `:os_type` (default
-  `:os.type()`) and `:getconf` (the `getconf` executable).
-  """
-  @spec item_replacement_write_paths(keyword()) :: [String.t()]
-  def item_replacement_write_paths(opts) do
-    case Keyword.get_lazy(opts, :os_type, &:os.type/0) do
-      {:unix, :darwin} ->
-        case System.cmd(Keyword.get(opts, :getconf, "getconf"), ["DARWIN_USER_TEMP_DIR"], stderr_to_stdout: true) do
-          {user_temp_dir, 0} ->
-            path = Path.join(String.trim(user_temp_dir), "TemporaryItems")
-            [path | canonical_absolute_path_variants(path)]
-
-          {_output, _status} ->
-            []
-        end
-
-      _os_type ->
-        []
-    end
-  end
-
   @doc false
   @spec codex_config_overrides(String.t(), [String.t()], [String.t()], [String.t()], keyword()) :: [String.t()]
   def codex_config_overrides(network_mode, allowed_domains, allow_read_paths \\ [], extra_deny_read_paths \\ [], opts \\ []) do
