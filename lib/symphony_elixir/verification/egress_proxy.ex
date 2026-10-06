@@ -3,11 +3,11 @@ defmodule SymphonyElixir.Verification.EgressProxy do
   A loopback HTTP proxy through which a sandboxed verification dev server reaches its
   dependency hosts, and only them.
 
-  The dev server's Seatbelt profile (`SymphonyElixir.Verification.DevServerSandbox`) lets it
-  connect to loopback only, and its env points `HTTPS_PROXY` and `HTTP_PROXY` here, so Hex,
-  npm, git and mise fetch through this proxy. It only tunnels `CONNECT host:port` to a host
-  on the allowlist: a name on it, or a subdomain of a `*.example.com` entry. Any other host,
-  and any other method (plain HTTP), gets a 403.
+  The dev server's sandbox (`SymphonyElixir.Verification.DevServerSandbox`) lets it connect to
+  loopback only (on Linux, its own loopback, bridged to this proxy), and its env points
+  `HTTPS_PROXY` and `HTTP_PROXY` here, so Hex, npm, git and mise fetch through this proxy. It
+  only tunnels `CONNECT host:port` to a host on the allowlist: a name on it, or a subdomain of a
+  `*.example.com` entry. Any other host, and any other method (plain HTTP), gets a 403.
   """
 
   use GenServer
