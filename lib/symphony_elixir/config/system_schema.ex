@@ -66,13 +66,13 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "repositories[].acceptance_gate" => @repo_acceptance_gate_keys,
     "repositories[].acceptance_gate.escalate" => @acceptance_gate_escalate_keys,
     "repositories[].acceptance_gate.escalate.busy_files" => @acceptance_gate_busy_files_keys,
-    "workspaces" => ~w(root clones_root strategy repo fetch_before_dispatch cleanup attachments),
+    "workspaces" => ~w(root clones_root strategy repo fetch_before_dispatch git_network_timeout_ms cleanup attachments),
     "workspaces.cleanup" => ~w(enabled max_age_days interval_ms min_free_bytes orphan_action trash_dir),
     "workspaces.attachments" => ~w(allowed_hosts public_upload_extensions),
     "agent" => ~w(runtime command model effort provider small_model run_profiles concurrency limits timeouts prompts permissions mcp usage_limit),
     "agent.concurrency" => ~w(max_total max_by_issue_state epic_lanes finishing_max force_label forced_max forced_stale_after_hours),
     "agent.limits" => ~w(max_turns retry_backoff_max_ms tokens_per_issue tokens_per_day max_consecutive_identical_tool_failures),
-    "agent.timeouts" => ~w(turn_ms read_ms stall_ms command_ms),
+    "agent.timeouts" => ~w(turn_ms read_ms stall_ms command_ms mcp_tool_ms),
     "agent.prompts" => ~w(include_project_guides project_guide_files codex_stdio_soft_limit_bytes),
     "agent.permissions" => ~w(approval_policy filesystem network outer_sandbox),
     "agent.permissions.filesystem" => ~w(sandbox turn_policy allow_read_paths allow_write_paths),
@@ -163,6 +163,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "agent.turn_sandbox_policy" => "agent.permissions.filesystem.turn_policy",
     "agent.turn_timeout_ms" => "agent.timeouts.turn_ms",
     "agent.command_timeout_ms" => "agent.timeouts.command_ms",
+    "agent.mcp_tool_timeout_ms" => "agent.timeouts.mcp_tool_ms",
     "auto_review.kind" => "auto_review.runtime",
     "auto_review.acceptance_gate.kind" => "auto_review.acceptance_gate.runtime",
     "ci.enabled" => "pull_requests.checks.enabled",
@@ -241,6 +242,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "workspace.attachments.allowed_hosts" => "workspaces.attachments.allowed_hosts",
     "workspace.attachments.public_upload_extensions" => "workspaces.attachments.public_upload_extensions",
     "workspace.fetch_before_dispatch" => "workspaces.fetch_before_dispatch",
+    "workspace.git_network_timeout_ms" => "workspaces.git_network_timeout_ms",
     "workspace.lifecycle" => "workspaces.cleanup",
     "workspace.lifecycle.age_gc_enabled" => "workspaces.cleanup.enabled",
     "workspace.lifecycle.gc_interval_ms" => "workspaces.cleanup.interval_ms",
@@ -808,6 +810,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
         |> maybe_put("strategy", Map.get(config, "strategy"))
         |> maybe_put("repo", Map.get(config, "repo"))
         |> maybe_put("fetch_before_dispatch", Map.get(config, "fetch_before_dispatch"))
+        |> maybe_put("git_network_timeout_ms", Map.get(config, "git_network_timeout_ms"))
         |> maybe_put("lifecycle", lifecycle)
         |> maybe_put("attachments", attachments)
 
@@ -872,6 +875,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
         |> maybe_put("read_timeout_ms", Map.get(timeouts, "read_ms"))
         |> maybe_put("stall_timeout_ms", Map.get(timeouts, "stall_ms"))
         |> maybe_put("command_timeout_ms", Map.get(timeouts, "command_ms"))
+        |> maybe_put("mcp_tool_timeout_ms", Map.get(timeouts, "mcp_tool_ms"))
         |> maybe_put("include_project_guides", Map.get(prompts, "include_project_guides"))
         |> maybe_put("project_guide_files", Map.get(prompts, "project_guide_files"))
         |> maybe_put("codex_stdio_prompt_soft_limit", Map.get(prompts, "codex_stdio_soft_limit_bytes"))

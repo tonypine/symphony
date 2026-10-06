@@ -33,6 +33,8 @@ defmodule SymphonyElixir.Config do
   {% endif %}
   """
   @default_server_port 0
+  @default_git_network_timeout_ms 300_000
+  @default_mcp_tool_timeout_ms 600_000
   @openrouter_api_key_env "OPENROUTER_API_KEY"
   @codex_auto_approve_all_approval_policy "auto_approve_all"
   @codex_auto_approve_all_wire_approval_policy "never"
@@ -534,6 +536,34 @@ defmodule SymphonyElixir.Config do
       _ ->
         @default_prompt_template
     end
+  end
+
+  @doc """
+  The wall-clock limit of one git `fetch`, `pull`, `push` or `ls-remote`: symphony.yml's
+  `workspaces.git_network_timeout_ms`, else the `:git_network_timeout_ms` application env, else
+  5 minutes.
+  """
+  @spec git_network_timeout_ms() :: pos_integer()
+  def git_network_timeout_ms do
+    operator_setting(& &1.workspace.git_network_timeout_ms, :git_network_timeout_ms, @default_git_network_timeout_ms)
+  end
+
+  @doc """
+  How long one call to Symphony's own MCP tools (`linear_*`, `github_*`) may run: symphony.yml's
+  `agent.timeouts.mcp_tool_ms`, else the `:mcp_tool_timeout_ms` application env, else 10 minutes.
+  """
+  @spec mcp_tool_timeout_ms() :: pos_integer()
+  def mcp_tool_timeout_ms do
+    operator_setting(& &1.agent.mcp_tool_timeout_ms, :mcp_tool_timeout_ms, @default_mcp_tool_timeout_ms)
+  end
+
+  # A symphony.yml setting with no default of its own: unset, or while symphony.yml can't be
+  # read, the application env (which tests set) and then `default` apply.
+  defp operator_setting(read, env_key, default) do
+    case system() do
+      {:ok, system_config} -> read.(system_config)
+      {:error, _reason} -> nil
+    end || Application.get_env(:symphony_elixir, env_key, default)
   end
 
   @spec server_port() :: non_neg_integer()

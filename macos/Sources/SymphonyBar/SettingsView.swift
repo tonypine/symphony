@@ -142,6 +142,27 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    TimeoutRow(title: "Git network timeout", minutes: $model.gitNetworkTimeoutMinutes)
+                    Text("Stops a git fetch, pull, push or ls-remote that runs longer, so a remote that stops answering can't hold the repo.")
+                        .foregroundStyle(.secondary)
+                    TimeoutRow(title: "MCP tool timeout", minutes: $model.mcpToolTimeoutMinutes)
+                    Text("Stops one call of Symphony's Linear and GitHub tools that runs longer and answers the agent with an error.")
+                        .foregroundStyle(.secondary)
+                    if let error = model.timeoutsError {
+                        Text(error).foregroundStyle(.red)
+                    }
+                } header: {
+                    Text("Timeouts (saved in symphony.yml)")
+                } footer: {
+                    SectionFooter(
+                        "workspaces.git_network_timeout_ms (default 5 minutes) and agent.timeouts.mcp_tool_ms (default "
+                            + "10 minutes). Save checks symphony.yml with symphony check first; Symphony reads them on "
+                            + "the next call, no restart needed."
+                    )
+                }
+                .disabled(!model.canEditTimeouts)
+
+                Section {
                     Picker("Scope", selection: $model.runProfilesScope) {
                         Text("All repositories").tag(RunProfilesScope.global)
                         ForEach(model.repositoryKeys, id: \.self) { key in
@@ -341,6 +362,9 @@ struct SettingsView: View {
                 }
                 if model.acceptanceGateError != nil {
                     Text("symphony check rejected the acceptance gate's mode; see Acceptance gate.").foregroundStyle(.red)
+                }
+                if model.timeoutsError != nil {
+                    Text("symphony check rejected the timeouts; see Timeouts.").foregroundStyle(.red)
                 }
                 if let loginItemError = model.loginItemError {
                     Text(loginItemError).foregroundStyle(.red)
@@ -614,6 +638,23 @@ private struct CheckErrorPointer: View {
         Text("symphony check rejected \(subject); the reason shows above Save.")
             .foregroundStyle(.red)
             .lineLimit(1)
+    }
+}
+
+/// A timeout in whole minutes, with a stepper over `OperationTimeouts.minuteRange`.
+private struct TimeoutRow: View {
+    let title: String
+    @Binding var minutes: Int
+
+    var body: some View {
+        LabeledContent(title) {
+            HStack {
+                Text(minutes == 1 ? "1 minute" : "\(minutes) minutes")
+                    .monospacedDigit()
+                Stepper(title, value: $minutes, in: OperationTimeouts.minuteRange)
+                    .labelsHidden()
+            }
+        }
     }
 }
 

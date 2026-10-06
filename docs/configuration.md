@@ -337,6 +337,7 @@ workspaces:
   strategy: clone
   repo: ~/code/source-repo
   fetch_before_dispatch: true
+  git_network_timeout_ms: 300000
   attachments:
     allowed_hosts: [github.com]
     public_upload_extensions: [.png, .jpg, .jpeg, .gif, .webp, .svg, .pdf]
@@ -348,6 +349,11 @@ workspaces:
     orphan_action: log
     trash_dir: .trash
 ```
+
+`git_network_timeout_ms` (default `300000`, 5 minutes) is the wall-clock limit of each `git fetch`,
+`pull`, `push` or `ls-remote` Symphony runs on this host. At the limit Symphony stops git and the
+`ssh` it started, logs an error naming the repo and command, and the call fails. Settings in the
+macOS app edits it as Git network timeout, in minutes.
 
 `clones_root` is where Symphony keeps its clones of `repositories[].workspace.source` repos
 (default `~/.local/share/symphony/repos`). An agent's git commands write into that clone, so keep
@@ -467,6 +473,7 @@ agent:
     read_ms: 30000
     stall_ms: 300000
     command_ms: 600000
+    mcp_tool_ms: 600000
 ```
 
 - `runtime`: `codex` or `claude`.
@@ -735,6 +742,10 @@ agent:
   invocation when a turn completes but the issue is still active. Codex reuses one `threadId`
   across these turns; Claude relaunches per turn (workspace + prompt provide continuation).
 - `timeouts.command_ms` caps a single shell command. Set `0` to disable.
+- `timeouts.mcp_tool_ms` (default `600000`, 10 minutes) caps one call of Symphony's own MCP tools
+  (`linear_*`, `github_*`): a call still running then is stopped and answered with a
+  `tool_timeout` error. QA tools keep their own timeouts. Settings in the macOS app edits it as
+  MCP tool timeout, in minutes.
 
 **Token budgets:**
 
