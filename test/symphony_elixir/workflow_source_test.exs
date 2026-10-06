@@ -5,7 +5,7 @@ defmodule SymphonyElixir.WorkflowSourceTest do
 
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.{Cache, SystemSchema}
-  alias SymphonyElixir.{Paths, Workflow, WorkflowSource, Workspace}
+  alias SymphonyElixir.{Paths, Workflow, WorkflowSource, WorkflowStore, Workspace}
   alias SymphonyElixir.Repo.Status, as: RepoStatus
   alias SymphonyElixir.Repo.Supervisor, as: RepoSupervisor
 
@@ -348,6 +348,36 @@ defmodule SymphonyElixir.WorkflowSourceTest do
       assert WorkflowSource.refresh(repo, fetch: true) == :unchanged
     end
 
+    # No byte of an instruction file may reach the config: the snapshot keeps the
+    # WORKFLOW.md front matter (an empty one when it has none) ahead of the expanded body,
+    # so the config cache and a workflow store read the YAML below as prompt text, also
+    # when they load the snapshot again after a merged edit.
+    for {shape, workflow} <- [without: ~s({% render "playbook" %}), with: ~s(---\nprompts: {}\n---\n{% render "playbook" %})] do
+      test "an instruction file cannot set the config of a WORKFLOW.md #{shape} front matter through the snapshot", %{root: root} do
+        %{checkout: checkout, other: other} = git_repos!(root, unquote(workflow))
+        push_files!(other, %{".symphony/instructions/000-x.md" => "---\nhooks:\n  after_create: echo hi\n---\nFirst\n"})
+        write_symphony!(root, checkout)
+        {:ok, repo} = Config.repo("app")
+
+        assert WorkflowSource.refresh(repo, fetch: true) == :ok
+        snapshot = WorkflowSource.read_path(repo)
+        assert File.read!(snapshot) =~ ~r/\A---\n(prompts: {}\n)?---\n---\nhooks:/
+        assert {:ok, workflow} = Config.workflow_for_repo("app")
+        assert_hooks_in_prompt(workflow, "First")
+        assert Workflow.load(snapshot) == {:ok, workflow}
+        assert WorkflowSource.load_for_check(repo) == {:ok, workflow}
+
+        store = start_supervised!({WorkflowStore, name: nil, path: snapshot})
+        assert WorkflowStore.current(store) == {:ok, workflow}
+
+        push_files!(other, %{".symphony/instructions/000-x.md" => "---\nhooks:\n  after_create: echo hi\n---\nSecond, reloaded\n"})
+        assert WorkflowSource.refresh(repo, fetch: true) == :ok
+        assert {:ok, reloaded} = Config.workflow_for_repo("app")
+        assert_hooks_in_prompt(reloaded, "Second, reloaded")
+        assert WorkflowStore.current(store) == {:ok, reloaded}
+      end
+    end
+
     test "a workflow in a subdirectory reads instruction files next to it on the ref", %{root: root} do
       %{checkout: checkout, other: other} = git_repos!(root, "Root prompt")
       File.mkdir_p!(Path.join(other, "agents/.symphony/instructions"))
@@ -493,6 +523,11 @@ defmodule SymphonyElixir.WorkflowSourceTest do
   defp playbook_workflow do
     partials = Enum.map_join(SymphonyElixir.Playbook.aggregate(), fn {name, _slot} -> "\n    #{name}: false" end)
     "---\nplaybook:\n  partials:#{partials}\n---\n{% render \"playbook\" %}"
+  end
+
+  defp assert_hooks_in_prompt(%{config: config, prompt: prompt}, text) do
+    refute inspect(config) =~ "echo hi"
+    assert prompt =~ "---\nhooks:\n  after_create: echo hi\n---\n" <> text
   end
 
   defp push_files!(clone, files) do

@@ -139,7 +139,11 @@ request. That is safe because Symphony never reads them from a run's workspace: 
 branch, `origin/<base_branch>`, and runs from a snapshot of the expanded text. An agent can propose
 an instruction change on its branch, but the change reaches a prompt only after its pull request
 passes CI, the acceptance gate and review and is merged, and it never changes the prompt of the run
-that made it. The files hold prompt text only: nothing in them runs on the host, only regular
+that made it. The files hold prompt text only: nothing in them runs on the host. The config (hooks,
+push check, `playbook` settings) is read from `WORKFLOW.md`'s own front matter before the playbook
+line expands, never from the expanded text, and the snapshot keeps that front matter first, an empty
+`---`/`---` block when there is none, so a file that opens with a YAML block stays prompt text when
+the snapshot is loaded again. Only regular
 files count (a symlink or a directory with an instruction file's name is skipped, on the ref and on
 disk alike, so a link cannot pull a host file into the prompt), and moving or dropping a Symphony
 partial still takes a `WORKFLOW.md` edit.

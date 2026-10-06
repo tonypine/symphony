@@ -1593,6 +1593,10 @@ Playbook line:
   `lockfile` with quotes or braces are configuration errors.
 - A body without the line MUST render unchanged, and the front matter is never changed by the
   expansion.
+- The config MUST come from the workflow file's own front matter, split off before the expansion;
+  no instruction file text may reach it. Expanded text kept for a later load (the `ref` snapshot)
+  MUST start with that front matter, or an empty `---`/`---` block when the file has none, so that
+  instruction text opening with `---` stays in the body.
 - Instruction files are not agent-protected (Section 9.6). They reach a run only from the
   workflow's source (`workflow_source`, Section 5.1): with `ref`, the fetched base branch, so a
   run's own branch or checkout never changes its prompt. `symphony workflow preview` renders the

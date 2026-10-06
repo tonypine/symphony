@@ -74,6 +74,27 @@ defmodule SymphonyElixir.WorkflowInstructionsTest do
     assert prompt =~ ~s(Intro\n{% render "continuation_context", attempt: attempt %})
   end
 
+  # An instruction file is agent-editable, so none of its bytes may reach the config: a
+  # file that sorts first and opens with a YAML block stays prompt text, on disk, in an
+  # assembled snapshot and in a store that loads that snapshot again.
+  for {shape, workflow} <- [without: ~s({% render "playbook" %}\n), with: ~s(---\nprompts: {}\n---\n{% render "playbook" %}\n)] do
+    test "an instruction file cannot set the config of a WORKFLOW.md #{shape} front matter", %{dir: dir} do
+      path = write!(dir, "WORKFLOW.md", unquote(workflow))
+      write!(dir, ".symphony/instructions/000-x.md", "---\nhooks:\n  after_create: echo hi\n---\nText\n")
+
+      assert {:ok, workflow} = Workflow.load(path)
+      assert_hooks_stay_in_prompt(workflow)
+
+      assert {:ok, snapshot} = Workflow.assemble(File.read!(path), Workflow.instructions_on_disk(dir))
+      assert snapshot =~ ~r/\A---\n(prompts: {}\n)?---\n---\nhooks:\n  after_create: echo hi\n---\nText\n/
+      snapshot_path = write!(dir, "snapshot/WORKFLOW.md", snapshot)
+      assert Workflow.load(snapshot_path) == {:ok, workflow}
+
+      store = start_supervised!({WorkflowStore, name: nil, path: snapshot_path})
+      assert WorkflowStore.current(store) == {:ok, workflow}
+    end
+  end
+
   test "an unreadable instructions directory or file fails the load", %{dir: dir} do
     path = write!(dir, "WORKFLOW.md", "---\nplaybook:\n  instructions: rules\n---\n{% render \"playbook\" %}\n")
 
@@ -152,6 +173,11 @@ defmodule SymphonyElixir.WorkflowInstructionsTest do
     end
 
     refute Enum.any?(protected, &String.starts_with?(&1, ".symphony"))
+  end
+
+  defp assert_hooks_stay_in_prompt(%{config: config, prompt: prompt}) do
+    refute inspect(config) =~ "echo hi"
+    assert prompt =~ "---\nhooks:\n  after_create: echo hi\n---\nText"
   end
 
   # The symphony repo's WORKFLOW.md with its body replaced by the playbook line.

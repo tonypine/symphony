@@ -137,29 +137,23 @@ defmodule SymphonyElixir.Workflow do
   @doc false
   @spec parse_document(String.t()) :: {:ok, {map(), String.t()}} | {:error, term()}
   def parse_document(content) when is_binary(content) do
-    {front_matter_lines, prompt_lines} = split_front_matter(content)
+    {head, body} = split_body(content)
 
-    case front_matter_yaml_to_map(front_matter_lines) do
-      {:ok, front_matter} ->
-        prompt = Enum.join(prompt_lines, "\n") |> String.trim()
-        {:ok, {front_matter, prompt}}
-
-      {:error, :front_matter_not_a_map} ->
-        {:error, :front_matter_not_a_map}
-
-      {:error, reason} ->
-        {:error, {:front_matter_parse_error, reason}}
+    with {:ok, front_matter} <- parse_front_matter(head) do
+      {:ok, {front_matter, body |> Enum.join("\n") |> String.trim()}}
     end
   end
 
   @doc """
   Parses a repo `WORKFLOW.md`, expanding its playbook line with the instruction
-  files `read_instructions` returns (none by default).
+  files `read_instructions` returns (none by default). The config comes from the
+  file's own front matter only, never from instruction file text.
   """
   @spec parse_repo_workflow(String.t(), Assembly.reader()) :: {:ok, loaded_workflow()} | {:error, term()}
   def parse_repo_workflow(content, read_instructions \\ &no_instructions/1) when is_binary(content) do
-    with {:ok, assembled} <- assemble(content, read_instructions) do
-      parse_assembled(assembled)
+    with {:ok, _head, config, body} <- expand(content, read_instructions) do
+      prompt = body |> Enum.join("\n") |> String.trim()
+      {:ok, %{config: config, prompt: prompt, prompt_template: prompt}}
     end
   end
 
@@ -167,21 +161,42 @@ defmodule SymphonyElixir.Workflow do
   Returns the `WORKFLOW.md` text with its playbook line expanded, front matter
   unchanged, or the same text when the body has no such line. A snapshot of the
   result loads without the instruction files.
+
+  The result always opens with the original front matter, an empty `---`/`---` block
+  when there was none, so loading it again reads the config from those lines alone:
+  expanded text that starts with `---` stays in the body.
   """
   @spec assemble(String.t(), Assembly.reader()) :: {:ok, String.t()} | {:error, term()}
   def assemble(content, read_instructions) when is_binary(content) do
-    {head, body} = split_body(content)
+    {_head, body} = split_body(content)
 
     if Enum.any?(body, &Assembly.directive?/1) do
-      with {:ok, _workflow} <- parse_assembled(content),
-           {:ok, {front_matter, _prompt}} <- parse_document(content),
-           {:ok, body} <- Assembly.expand(body, Map.get(front_matter, "playbook") || %{}, read_instructions) do
-        {:ok, Enum.join(head ++ body, "\n")}
+      with {:ok, head, _config, body} <- expand(content, read_instructions) do
+        {:ok, Enum.join(snapshot_head(head) ++ body, "\n")}
       end
     else
       {:ok, content}
     end
   end
+
+  # Splits the front matter off before the body's playbook line expands, and takes the
+  # config and the `playbook` settings from it, so no instruction file byte reaches them.
+  defp expand(content, read_instructions) do
+    {head, body} = split_body(content)
+
+    with {:ok, front_matter} <- parse_front_matter(head),
+         {:ok, repo_config} <- RepoWorkflowSchema.parse(front_matter),
+         {:ok, body} <- Assembly.expand(body, Map.get(front_matter, "playbook") || %{}, read_instructions) do
+      {:ok, head, RepoWorkflowSchema.to_config_map(repo_config), body}
+    else
+      {:error, :front_matter_not_a_map} -> {:error, :workflow_front_matter_not_a_map}
+      {:error, {:front_matter_parse_error, reason}} -> {:error, {:workflow_parse_error, reason}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp snapshot_head([]), do: ["---", "---"]
+  defp snapshot_head(head), do: head
 
   @doc """
   Returns the directory the playbook line of the `WORKFLOW.md` at `path` with `content`
@@ -257,27 +272,6 @@ defmodule SymphonyElixir.Workflow do
 
   defp no_instructions(_dir), do: {:ok, []}
 
-  defp parse_assembled(content) do
-    with {:ok, {front_matter, prompt}} <- parse_document(content),
-         {:ok, repo_config} <- RepoWorkflowSchema.parse(front_matter) do
-      {:ok,
-       %{
-         config: RepoWorkflowSchema.to_config_map(repo_config),
-         prompt: prompt,
-         prompt_template: prompt
-       }}
-    else
-      {:error, :front_matter_not_a_map} ->
-        {:error, :workflow_front_matter_not_a_map}
-
-      {:error, {:front_matter_parse_error, reason}} ->
-        {:error, {:workflow_parse_error, reason}}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
   @doc false
   @spec parse_symphony(String.t()) :: {:ok, map()} | {:error, term()}
   def parse_symphony(content) when is_binary(content) do
@@ -308,20 +302,13 @@ defmodule SymphonyElixir.Workflow do
 
   defp front_matter_length(_lines), do: 0
 
-  defp split_front_matter(content) do
-    lines = String.split(content, ~r/\R/, trim: false)
+  # Parses the front matter lines `split_body/1` returns; none is an empty map.
+  defp parse_front_matter([]), do: {:ok, %{}}
 
-    case lines do
-      ["---" | tail] ->
-        {front, rest} = Enum.split_while(tail, &(&1 != "---"))
-
-        case rest do
-          ["---" | prompt_lines] -> {front, prompt_lines}
-          _ -> {front, []}
-        end
-
-      _ ->
-        {[], lines}
+  defp parse_front_matter(["---" | lines]) do
+    case front_matter_yaml_to_map(Enum.take_while(lines, &(&1 != "---"))) do
+      {:error, reason} when reason != :front_matter_not_a_map -> {:error, {:front_matter_parse_error, reason}}
+      result -> result
     end
   end
 
