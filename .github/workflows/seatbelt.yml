@@ -7,10 +7,12 @@ name: seatbelt
 # Ubuntu runners and every agent run (Seatbelt can't nest), so they run here, on a macOS runner.
 # `--only seatbelt` runs them even so, and fails when none is found.
 #
-# It runs on the `xcode-27` image, macOS 27, whose Seatbelt refuses a bind beyond loopback under
-# the profile, so the dev server starts confined and the serve tests check a served page. On
-# `macos-26` the profile lets a command listen on 0.0.0.0, so the dev server refuses to start
-# there and the tests could only assert that refusal. Move to `macos-27` once that label ships.
+# It runs on the `macos-14` image, the oldest macOS image GitHub still hosts, where Seatbelt
+# refuses a bind beyond loopback under the profile, so the dev server starts confined and the
+# serve tests check a served page. macOS 15 and later (the `macos-15`, `macos-26` and `xcode-27`
+# images among them) let a command under the profile listen on 0.0.0.0, so there the dev server
+# refuses to start and the tests could only assert that refusal. Move back to the newest image
+# once one confines the bind again.
 #
 # Not a required check: on a pull request that changes none of these paths the workflow doesn't
 # run. Pushes to `main` that change them run it too, so it stays green there.
@@ -47,7 +49,7 @@ concurrency:
 jobs:
   seatbelt:
     name: seatbelt tests
-    runs-on: xcode-27
+    runs-on: macos-14
     # One test builds this checkout with `scripts/qa-dashboard-server.sh` before it serves.
     timeout-minutes: 45
 
