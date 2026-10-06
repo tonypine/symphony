@@ -102,12 +102,35 @@ is bound to `127.0.0.1` only. Put authentication in front of it if you change th
 
 The image ships `bwrap` and `socat`, which run `verification.dev_server.start_cmd` in a sandbox
 (see [Verification dev server runs in a sandbox](../docs/security.md#verification-dev-server-runs-in-a-sandbox)).
-`bwrap` needs unprivileged user namespaces, which Docker's default seccomp profile refuses, so
-under the shipped compose file the dev server does not start: an agent run with a dev server
-fails with `verification_failed` before its first turn, and an Auto Review `web` pass is
-`blocked`.
-Allowing them (for example `security_opt: [seccomp=unconfined]`) weakens the container's own
-isolation; decide that for your host.
+The dev server starts under the shipped compose file, which sets three `security_opt` entries
+for `bwrap` and leaves the rest of the container's confinement as it is:
+
+- `seccomp=seccomp-bwrap.json`: [`seccomp-bwrap.json`](seccomp-bwrap.json) is Docker's default
+  seccomp profile (from [moby/profiles](https://github.com/moby/profiles/blob/main/seccomp/default.json))
+  with one rule added, which lets a process without `CAP_SYS_ADMIN` call `clone` and `unshare`
+  with namespace flags, `mount`, `umount2` and `pivot_root`. Docker's default profile refuses
+  them, so `bwrap` can't make its namespaces. The kernel still checks each call: they only work
+  inside the user namespace `bwrap` makes, never on the container's own mounts.
+- `systempaths=unconfined`: Docker hides parts of `/proc` (such as `/proc/kcore`) behind mounts,
+  and while they are there the kernel refuses `bwrap` a fresh `/proc`. Symphony runs as a
+  non-root user with no capabilities, so the files they hid stay unreadable to it.
+- `apparmor=unconfined`: on a host with AppArmor, Docker's `docker-default` profile denies every
+  `mount`, `bwrap`'s included.
+
+The container still runs as `symphony` with Docker's default capabilities, none of them
+`CAP_SYS_ADMIN`, and is not `privileged`.
+
+On a host that restricts unprivileged user namespaces through AppArmor (Ubuntu 23.10 and later),
+also allow them on the host, or `bwrap` still fails:
+
+```bash
+sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+```
+
+Without these, `bwrap` can't make its namespaces and the dev server does not start: an agent run
+with a dev server fails with `verification_failed` before its first turn, and an Auto Review
+`web` pass is `blocked`. Remove the `security_opt` entries if you run no dev server and want
+Docker's defaults back.
 
 ## Linux UID matching
 

@@ -41,3 +41,16 @@ jobs:
           tags: symphony:local
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # The verification dev server's sandbox: `bwrap`'s probe must pass under the shipped compose
+      # file's security options.
+      - name: Probe bwrap in the container
+        run: |
+          # Ubuntu 24.04 keeps unprivileged user namespaces from bwrap through AppArmor.
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          mkdir -p ~/.codex ~/.claude ~/.ssh
+          SYMPHONY_CONFIG="$PWD/test/fixtures/runtime/symphony.yml" SYMPHONY_REPOS_ROOT="$PWD" \
+            docker compose -f docker/docker-compose.yml run --rm --no-deps --entrypoint bwrap symphony \
+            --unshare-all --ro-bind / / --dev /dev --proc /proc /bin/sh -c :
