@@ -39,9 +39,12 @@ defmodule SymphonyElixir.AutoReview do
   `blocked` doesn't move the issue straight to `In Review`: it asks
   `SymphonyElixir.AcceptanceGate.Runner` for a gate pass on the PR head (`run_gate/2`, see
   `SymphonyElixir.AcceptanceGate`), and the issue moves on once the gate has a verdict. The
-  order is CI, then QA, then the gate. In `shadow` mode the verdict is advisory and the issue
-  goes to `In Review` as before; a QA `fail` never reaches the gate. In `enforce` mode the
-  verdict moves the issue (`SymphonyElixir.AcceptanceGate.enforced_target/4`): `approve` to
+  order is CI, then QA, then the gate, and the gate never runs alongside QA: a green poll while a
+  QA pass is in flight for the issue asks for no gate pass, a verdict that arrives while one is in
+  flight moves nothing until that pass reports, and a verdict stands only on the QA result it
+  followed (a new one on the head asks the gate again). In `shadow` mode the verdict is advisory
+  and the issue goes to `In Review` as before; a QA `fail` never reaches the gate. In `enforce`
+  mode the verdict moves the issue (`SymphonyElixir.AcceptanceGate.enforced_target/4`): `approve` to
   `Merging`, where GitHub auto-merge lands the PR; `rework` back to `In Progress` with the unmet
   criteria as continuation context, sharing `auto_review.max_fix_attempts` with QA fails (the
   rework past it goes to `In Review`); `escalate` to `In Review`. The mode is read again on every
@@ -168,7 +171,10 @@ defmodule SymphonyElixir.AutoReview do
   With the acceptance gate on, a stored QA `pass`, `skip` or `blocked` applies the gate's
   stored verdict for the SHA, or asks the gate runner (`opts[:gate_runner]`, default
   `SymphonyElixir.AcceptanceGate.Runner`) for a pass when it has none. A judged SHA never
-  starts another gate run.
+  starts another gate run while its QA result stands.
+
+  While a QA pass is in flight for the issue, the poll does nothing: that pass applies its own
+  outcome, so a QA result stored before it never reaches the gate.
   """
   @spec on_green(Issue.t(), map(), map(), Schema.t(), keyword()) :: tuple()
   def on_green(%Issue{} = issue, record, ci_status, %Schema{} = settings, opts) do
@@ -181,6 +187,11 @@ defmodule SymphonyElixir.AutoReview do
     cond do
       not is_binary(sha) or sha == "" ->
         {:qa_waiting, issue_id, :missing_head_sha}
+
+      # The pass in flight reports its own outcome, and asks for the gate itself: a QA result
+      # stored before it says nothing about what it will find.
+      qa_in_flight(issue_id, opts) ->
+        {:qa_running, issue_id}
 
       rerun_on_return?(record, sha) ->
         rerun_qa(issue, record, ci_status, settings, opts)
@@ -285,10 +296,19 @@ defmodule SymphonyElixir.AutoReview do
   defp gate_after_qa?(verdict, settings), do: verdict in [:pass, :skip, :blocked] and AcceptanceGate.enabled?(settings)
 
   defp gate_outcome(issue, record, sha, settings, opts) do
-    if Map.get(record, :gate_sha) == sha and is_binary(Map.get(record, :gate_verdict)),
+    if Map.get(record, :gate_sha) == sha and is_binary(Map.get(record, :gate_verdict)) and follows_qa?(record),
       do: apply_gate_verdict(issue, record, settings, opts),
       else: request_gate(issue, record, sha, settings, opts)
   end
+
+  # A gate verdict stands on the QA result it followed (`gate_qa_at`, the result's `qa_updated_at`):
+  # once QA reports again on the head, the gate judges again. A record stored before `gate_qa_at`
+  # existed has no key, and its verdict stands.
+  defp follows_qa?(record), do: Map.get(record, :gate_qa_at, Map.get(record, :qa_updated_at)) == Map.get(record, :qa_updated_at)
+
+  # The head SHA of the QA pass in flight for the issue, else nil. `opts[:qa_running]` stands in for
+  # `QaRunner.running/0` in tests.
+  defp qa_in_flight(issue_id, opts), do: Map.get(Keyword.get(opts, :qa_running, &QaRunner.running/0).(), issue_id)
 
   defp request_gate(%Issue{id: issue_id} = issue, record, sha, settings, opts) do
     job = %{
@@ -314,6 +334,8 @@ defmodule SymphonyElixir.AutoReview do
   `SymphonyElixir.AcceptanceGate.Runner` task. An inconclusive pass below the limit leaves the
   issue in Auto Review, and the next green poll asks for another pass. A verdict that comes after
   the issue left Auto Review, or after its PR merged, closed or moved on, is kept but moves nothing.
+  So is one that comes while a QA pass is in flight for the issue, or after the QA result it
+  followed was replaced.
 
   The repository's settings are read again first, so a mode changed since the request applies.
   """
@@ -340,10 +362,30 @@ defmodule SymphonyElixir.AutoReview do
             gate_applied: false
           })
 
-        case moved_on(issue, record, sha, settings, opts) do
+        case moved_on(issue, record, sha, settings, opts) || qa_moved(issue, job.record, sha, opts) do
           nil -> apply_gate_verdict(issue, record, settings, opts)
           reason -> gate_unapplied(issue, sha, decision.verdict, reason)
         end
+    end
+  end
+
+  # The gate follows QA and never runs alongside it. A verdict that arrives while a QA pass is in
+  # flight for the issue is kept but moves nothing: that pass reports first, and a `fail` sends the
+  # issue back to In Progress as usual. A verdict whose QA result was replaced while it ran (QA
+  # reported again, or runs again, on the head) moves nothing either, and the next green poll asks
+  # the gate again for the new result (`follows_qa?/1`).
+  defp qa_moved(issue, record, sha, opts) do
+    stored = stored_ci_check(record, opts)
+
+    cond do
+      qa_sha = qa_in_flight(issue.id, opts) ->
+        "a QA pass is still running on `#{String.slice(qa_sha, 0, 12)}`"
+
+      is_map(stored) and (Map.get(stored, :qa_sha) != sha or Map.get(stored, :qa_updated_at) != Map.get(record, :qa_updated_at)) ->
+        "the QA result it followed was replaced since the gate started"
+
+      true ->
+        nil
     end
   end
 
@@ -853,6 +895,8 @@ defmodule SymphonyElixir.AutoReview do
       |> keep_fix_attempts(issue, settings)
 
     update_ci_check(Keyword.get(opts, :run_store, RunStore), record, attrs)
+
+    Logger.info("QA outcome issue_id=#{issue.id} issue_identifier=#{issue.identifier} verdict=#{verdict} sha=#{sha} target_state=#{target_state}")
 
     publish_report(
       issue,
