@@ -51,6 +51,16 @@ else
   _unavailable -> ExUnit.configure(exclude: [:seatbelt | Keyword.get(ExUnit.configuration(), :exclude, [])])
 end
 
+# The `:bwrap` tests run the Linux sandbox for real, where bwrap can make its namespaces.
+with bwrap when is_binary(bwrap) <- System.find_executable("bwrap"),
+     socat when is_binary(socat) <- System.find_executable("socat"),
+     {_output, 0} <-
+       System.cmd(bwrap, ~w(--die-with-parent --unshare-all --ro-bind / / --dev /dev --proc /proc /bin/sh -c :), stderr_to_stdout: true) do
+  :ok
+else
+  _unavailable -> ExUnit.configure(exclude: [:bwrap | Keyword.get(ExUnit.configuration(), :exclude, [])])
+end
+
 # The qa-dashboard end-to-end test fetches deps and builds this checkout; it runs only on
 # `mix test --include qa_dashboard_e2e`.
 ExUnit.configure(exclude: [:qa_dashboard_e2e | Keyword.get(ExUnit.configuration(), :exclude, [])])

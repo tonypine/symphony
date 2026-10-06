@@ -2,6 +2,7 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
   use ExUnit.Case, async: true
 
   alias SymphonyElixir.{AgentCaches, AgentSandboxConfig}
+  alias SymphonyElixir.Codex.McpConfig
   alias SymphonyElixir.Verification.{DevServerSandbox, EgressProxy}
 
   setup do
@@ -60,9 +61,9 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
       refute profile =~ ~s{(subpath "#{real(user_temp_dir)}")}
     end
 
-    test "fails off macOS, where there is no Seatbelt", %{workspace: workspace, tmp_dir: tmp_dir} do
-      assert {:error, {:dev_server_sandbox_unavailable, {:unix, :linux}}} =
-               DevServerSandbox.command("mix phx.server", workspace, tmp_dir, os_type: {:unix, :linux})
+    test "fails off macOS and Linux, where it has no sandbox", %{workspace: workspace, tmp_dir: tmp_dir} do
+      assert {:error, {:dev_server_sandbox_unavailable, {:win32, :nt}}} =
+               DevServerSandbox.command("mix phx.server", workspace, tmp_dir, os_type: {:win32, :nt})
     end
 
     test "fails when sandbox-exec is missing", %{root: root, workspace: workspace, tmp_dir: tmp_dir} do
@@ -70,6 +71,163 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
 
       assert {:error, {:dev_server_sandbox_unavailable, {:not_found, ^executable}}} =
                DevServerSandbox.command("mix phx.server", workspace, tmp_dir, os_type: {:unix, :darwin}, executable: executable)
+    end
+  end
+
+  describe "command/4 on Linux" do
+    setup %{root: root} do
+      bwrap = Path.join(root, "bwrap")
+      socat = Path.join(root, "socat")
+      record = Path.join(root, "bwrap-argv")
+
+      # Passes the probe (`... /bin/sh -c :`), records any other argv and fails with 7.
+      File.write!(bwrap, """
+      #!/bin/sh
+      for arg; do last=$arg; done
+      [ "$last" = ":" ] && exit 0
+      printf '%s\\0' "$@" > '#{record}'
+      exit 7
+      """)
+
+      File.write!(socat, "#!/bin/sh\nexit 0\n")
+      Enum.each([bwrap, socat], &File.chmod!(&1, 0o755))
+      opts = [os_type: {:unix, :linux}, bwrap: bwrap, socat: socat, port: 4000, proxy_port: 5555]
+
+      {:ok, bwrap: bwrap, socat: socat, record: record, opts: opts}
+    end
+
+    test "runs the start command under bwrap, bridged to the host's loopback by socat", ctx do
+      %{workspace: workspace, tmp_dir: tmp_dir, bwrap: bwrap, socat: socat, record: record, opts: opts} = ctx
+      File.mkdir_p!(Path.join(workspace, ".git"))
+
+      assert {:ok, ["/bin/sh", "-c", script]} = DevServerSandbox.command("mix phx.server --name 'web'", workspace, tmp_dir, opts)
+
+      protected = AgentSandboxConfig.workspace_protected_paths() ++ [".git"]
+      write_paths = [workspace, tmp_dir] ++ AgentCaches.write_paths()
+      {args, placeholders} = DevServerSandbox.bwrap_args(workspace, write_paths, protected)
+      assert Enum.map(placeholders, &Path.relative_to(&1, real(workspace))) == [".claude", ".ai", ".codex", "config"]
+
+      proxy_socket = Path.join(real(tmp_dir), "proxy.sock")
+      serve_socket = Path.join(real(tmp_dir), "serve.sock")
+      assert script =~ "'#{socat}' 'UNIX-LISTEN:#{proxy_socket},fork,unlink-early' 'TCP:127.0.0.1:5555' &\n"
+      assert script =~ "'#{socat}' 'TCP-LISTEN:4000,bind=127.0.0.1,reuseaddr,fork' 'UNIX-CONNECT:#{serve_socket}' &\n"
+      assert script =~ "\ntrap : HUP INT TERM\n'#{bwrap}' '--die-with-parent' '--unshare-all' "
+
+      # bwrap makes the placeholder folders; the script removes them once bwrap exits, if empty.
+      File.mkdir_p!(Path.join(workspace, ".ai"))
+      File.mkdir_p!(Path.join(workspace, "config"))
+      File.write!(Path.join(workspace, "config/kept.txt"), "")
+
+      assert {_output, 7} = System.cmd("/bin/sh", ["-c", script], cd: workspace, stderr_to_stdout: true)
+      refute File.exists?(Path.join(workspace, ".ai"))
+      assert File.exists?(Path.join(workspace, "config/kept.txt"))
+
+      assert {^args, ["/bin/sh", "-c", sandbox_script, ""]} = record |> File.read!() |> String.split("\0") |> Enum.split(length(args))
+      assert ["--bind", real(tmp_dir), real(tmp_dir)] in chunk_options(args)
+      assert ["--ro-bind", Path.join(real(workspace), ".git"), Path.join(real(workspace), ".git")] in chunk_options(args)
+
+      assert sandbox_script ==
+               Enum.join(
+                 [
+                   "'#{socat}' 'TCP-LISTEN:5555,bind=127.0.0.1,reuseaddr,fork' 'UNIX-CONNECT:#{proxy_socket}' &",
+                   "'#{socat}' 'UNIX-LISTEN:#{serve_socket},fork,unlink-early' 'TCP:127.0.0.1:4000' &",
+                   "exec '/bin/sh' '-lc' 'mix phx.server --name '\\''web'\\'''"
+                 ],
+                 "\n"
+               )
+    end
+
+    test "fails without bwrap or socat", %{root: root, workspace: workspace, tmp_dir: tmp_dir, opts: opts} do
+      missing = Path.join(root, "missing")
+
+      assert {:error, {:dev_server_sandbox_unavailable, {:not_found, ^missing}}} =
+               DevServerSandbox.command("mix phx.server", workspace, tmp_dir, Keyword.put(opts, :bwrap, missing))
+
+      assert {:error, {:dev_server_sandbox_unavailable, {:not_found, "bwrap"}}} =
+               DevServerSandbox.command("mix phx.server", workspace, tmp_dir, Keyword.put(opts, :bwrap, nil))
+
+      assert {:error, {:dev_server_sandbox_unavailable, {:not_found, ^missing}}} =
+               DevServerSandbox.command("mix phx.server", workspace, tmp_dir, Keyword.put(opts, :socat, missing))
+    end
+
+    test "fails where bwrap can't make its namespaces", %{root: root, workspace: workspace, tmp_dir: tmp_dir, opts: opts} do
+      bwrap = Path.join(root, "bwrap-without-userns")
+      File.write!(bwrap, "#!/bin/sh\necho 'bwrap: No permissions to create new namespace' >&2\nexit 1\n")
+      File.chmod!(bwrap, 0o755)
+
+      assert {:error, {:dev_server_sandbox_unavailable, {:bwrap_failed, "bwrap: No permissions to create new namespace"}}} =
+               DevServerSandbox.command("mix phx.server", workspace, tmp_dir, Keyword.put(opts, :bwrap, bwrap))
+    end
+
+    test "fails when socat can't take the temp folder's sockets", %{root: root, workspace: workspace, opts: opts} do
+      tmp_dir = Path.join(root, "tmp,odd")
+      File.mkdir_p!(tmp_dir)
+      socket = Path.join(real(tmp_dir), "proxy.sock")
+
+      assert {:error, {:dev_server_sandbox_unavailable, {:unusable_socket_path, ^socket}}} =
+               DevServerSandbox.command("mix phx.server", workspace, tmp_dir, opts)
+    end
+  end
+
+  describe "bwrap_args/4" do
+    test "is read-only but the write paths, with loopback only and the read-deny list covered", %{root: root, workspace: workspace, tmp_dir: tmp_dir, home: home} do
+      File.mkdir_p!(Path.join(home, ".ssh"))
+      File.write!(Path.join(home, ".netrc"), "machine example.com password secret")
+      cache = Path.join(root, "cache")
+      File.mkdir_p!(cache)
+
+      assert {args, []} = DevServerSandbox.bwrap_args(workspace, [workspace, tmp_dir, workspace, cache], [], home)
+      codex_homes = real(Path.dirname(McpConfig.runtime_home_prefix()))
+      [bound_workspace, bound_tmp_dir, bound_cache] = Enum.map([workspace, tmp_dir, cache], &real/1)
+
+      # The `CODEX_HOME`s' folder is `/tmp` itself where `TMPDIR` is unset (Linux CI).
+      hidden = Enum.uniq(["/tmp", "/run", codex_homes])
+
+      expected =
+        ~w(--die-with-parent --unshare-all --ro-bind / / --dev /dev --proc /proc) ++
+          Enum.flat_map(hidden, &["--tmpfs", &1]) ++
+          Enum.flat_map([bound_workspace, bound_tmp_dir, bound_cache], &["--bind", &1, &1])
+
+      assert {^expected, rest} = Enum.split(args, length(expected))
+
+      assert ["--chdir", ^bound_workspace] = Enum.take(rest, -2)
+
+      covered = rest |> Enum.drop(-2) |> chunk_options()
+      assert ["--tmpfs", Path.join(real(home), ".ssh")] in covered
+      assert ["--ro-bind", "/dev/null", Path.join(real(home), ".netrc")] in covered
+      refute Enum.any?(covered, &(Path.join(real(home), ".aws") in &1))
+    end
+
+    test "keeps the protected paths read-only, and the missing ones from being made", %{root: root, workspace: workspace, tmp_dir: tmp_dir, home: home} do
+      for dir <- [".git", ".claude", "deep"], do: File.mkdir_p!(Path.join(workspace, dir))
+      File.write!(Path.join(workspace, "mise.toml"), "")
+      File.write!(Path.join(workspace, "config"), "")
+      File.ln_s!(Path.join(root, "nowhere"), Path.join(workspace, ".codex"))
+
+      protected = [
+        ".git",
+        "mise.toml",
+        ".claude/settings.local.json",
+        "deep/a/b",
+        ".ai/skills",
+        "top/a/b",
+        "WORKFLOW.md",
+        "config/settings_ui_exempt.yml",
+        ".codex/skills"
+      ]
+
+      assert {args, placeholders} = DevServerSandbox.bwrap_args(workspace, [workspace, tmp_dir], protected, home)
+      ws = real(workspace)
+      assert placeholders == [Path.join(ws, ".ai"), Path.join(ws, "top")]
+
+      options = chunk_options(args)
+      read_only = for ["--ro-bind", path, path] <- options, String.starts_with?(path, ws <> "/"), do: Path.relative_to(path, ws)
+      assert read_only == [".git", "mise.toml", ".claude", "deep"]
+
+      for placeholder <- placeholders do
+        assert ["--tmpfs", placeholder] in options
+        assert ["--remount-ro", placeholder] in options
+      end
     end
   end
 
@@ -310,6 +468,118 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
       assert status != 0
       assert output =~ "Operation not permitted"
     end
+  end
+
+  describe "under bwrap" do
+    @describetag :bwrap
+
+    # Out of `/tmp`, which the sandbox empties, so the home folder's other files stay readable.
+    setup do
+      root = Path.join(File.cwd!(), "tmp/dev-server-bwrap-#{System.unique_integer([:positive])}")
+      workspace = Path.join(root, "workspace")
+      tmp_dir = Path.join(root, "tmp")
+      home = Path.join(root, "home")
+      Enum.each([workspace, tmp_dir, home], &File.mkdir_p!/1)
+      on_exit(fn -> File.rm_rf(root) end)
+
+      {:ok, workspace: workspace, tmp_dir: tmp_dir, home: home}
+    end
+
+    test "a command can't read a credential path but reads and writes the workspace", %{workspace: workspace, tmp_dir: tmp_dir, home: home} do
+      File.mkdir_p!(Path.join(home, ".ssh"))
+      File.write!(Path.join(home, ".ssh/id_ed25519"), "secret")
+      File.write!(Path.join(home, "notes.txt"), "notes")
+      File.mkdir_p!(Path.join(workspace, ".git"))
+      File.mkdir_p!(Path.join(workspace, ".claude"))
+      protected = [".git", ".claude/settings.local.json", ".ai/skills"]
+      {args, _placeholders} = DevServerSandbox.bwrap_args(workspace, [workspace, tmp_dir], protected, home)
+
+      assert {output, status} = bwrap(args, "cat #{home}/.ssh/id_ed25519")
+      assert status != 0
+      refute output =~ "secret"
+
+      assert {"notes", 0} = bwrap(args, "cat #{home}/notes.txt")
+      assert {_output, 0} = bwrap(args, "echo built > build.txt && echo tmp > #{tmp_dir}/tmp.txt")
+      assert File.read!(Path.join(workspace, "build.txt")) == "built\n"
+      assert File.read!(Path.join(tmp_dir, "tmp.txt")) == "tmp\n"
+
+      for script <- ["echo hook > #{home}/planted.txt", "echo hook > .git/config", "echo '{}' > .claude/settings.local.json", "mkdir -p .ai/skills"] do
+        assert {_output, status} = bwrap(args, script)
+        assert status != 0, script
+      end
+
+      refute File.exists?(Path.join(home, "planted.txt"))
+      refute File.exists?(Path.join(workspace, ".git/config"))
+      refute File.exists?(Path.join(workspace, ".claude/settings.local.json"))
+      refute File.exists?(Path.join(workspace, ".ai/skills"))
+    end
+
+    test "a command reaches the network only on its loopback, and the dependency hosts only through the proxy", %{workspace: workspace, tmp_dir: tmp_dir} do
+      proxy = start_supervised!({EgressProxy, allowed_domains: ["localhost"]})
+      {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
+      {:ok, local_port} = :inet.port(listen)
+      proxy_port = EgressProxy.port(proxy)
+
+      # The bridges start beside the command, so the first tries may find nobody listening yet.
+      File.write!(Path.join(workspace, "check.py"), """
+      import socket, time
+
+      def connect(host):
+          for _ in range(100):
+              try:
+                  s = socket.create_connection(("127.0.0.1", #{proxy_port}), timeout=5)
+                  s.sendall(b"CONNECT " + host + b":#{local_port} HTTP/1.1\\r\\n\\r\\n")
+                  line = s.recv(200).decode().split("\\r\\n")[0]
+                  if line:
+                      return line
+              except OSError:
+                  pass
+              time.sleep(0.1)
+          return "no proxy"
+
+      try:
+          socket.create_connection(("192.0.2.1", 443), timeout=5)
+          print("direct: connected")
+      except OSError as error:
+          print("direct: " + str(error.strerror))
+      print(connect(b"localhost"))
+      print(connect(b"example.com"))
+      """)
+
+      opts = [os_type: {:unix, :linux}, port: free_port(), proxy_port: proxy_port]
+      assert {:ok, [shell | args]} = DevServerSandbox.command("python3 check.py", workspace, tmp_dir, opts)
+      assert {output, 0} = System.cmd(shell, args, cd: workspace, stderr_to_stdout: true)
+
+      assert output =~ "direct: Network is unreachable\n"
+      assert output =~ "HTTP/1.1 200 Connection Established\n"
+      assert output =~ "HTTP/1.1 403 Forbidden: example.com is not on"
+
+      :gen_tcp.close(listen)
+    end
+  end
+
+  defp chunk_options(args) do
+    Enum.chunk_while(
+      args,
+      [],
+      fn
+        "--" <> _option = arg, [] -> {:cont, [arg]}
+        "--" <> _option = arg, option -> {:cont, Enum.reverse(option), [arg]}
+        arg, option -> {:cont, [arg | option]}
+      end,
+      &{:cont, Enum.reverse(&1), []}
+    )
+  end
+
+  defp bwrap(args, script) do
+    System.cmd(System.find_executable("bwrap"), args ++ ["/bin/sh", "-c", script], stderr_to_stdout: true)
+  end
+
+  defp free_port do
+    {:ok, socket} = :gen_tcp.listen(0, ip: {127, 0, 0, 1})
+    {:ok, port} = :inet.port(socket)
+    :gen_tcp.close(socket)
+    port
   end
 
   defp python_connect(host, port) do

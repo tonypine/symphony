@@ -193,8 +193,11 @@ defmodule SymphonyElixir.Verification.DevServer do
   end
 
   # The launcher stays outside the sandbox only to start a process group; its child execs
-  # `sandbox-exec`, which applies the profile before the start command runs.
+  # `sandbox-exec`, which applies the profile before the start command runs, or on Linux a
+  # shell that runs the socat bridges to the sandbox's loopback and `bwrap`.
   defp start_sandboxed(command, %{workspace: workspace} = state, env, launcher, sandbox) do
+    sandbox = [port: state.port, proxy_port: EgressProxy.port(state.proxy)] ++ sandbox
+
     with {:ok, argv} <- DevServerSandbox.command(command, workspace, state.tmp_dir, sandbox) do
       start_process(argv, workspace, child_env(env, state), launcher)
     end

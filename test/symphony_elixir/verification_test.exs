@@ -320,18 +320,41 @@ defmodule SymphonyElixir.VerificationTest do
       refute http_ok?("http://127.0.0.1:#{port}/")
     end
 
-    test "does not start the command when there is no sandbox", %{workspace: workspace, config: config, port: port} do
-      assert {:error, {:verification_failed, {:dev_server_sandbox_unavailable, {:unix, :linux}}}} =
+    test "does not start the command when there is no sandbox", %{root: root, workspace: workspace, config: config, port: port} do
+      bwrap = Path.join(root, "missing-bwrap")
+
+      assert {:error, {:verification_failed, {:dev_server_sandbox_unavailable, {:not_found, ^bwrap}}}} =
                DevServer.start(
                  run_id: "unsandboxed-run",
                  port: port,
                  workspace: workspace,
                  config: config,
                  env: Verification.env(%{port: port}),
-                 sandbox: [os_type: {:unix, :linux}]
+                 sandbox: [os_type: {:unix, :linux}, bwrap: bwrap]
                )
 
       refute File.exists?(Path.join(workspace, "dev-server-env.txt"))
+    end
+
+    @tag :bwrap
+    test "serves on its loopback port from inside bwrap", %{workspace: workspace, config: config, port: port} do
+      assert {:ok, pid} =
+               DevServer.start(
+                 run_id: "bwrap-run",
+                 port: port,
+                 workspace: workspace,
+                 config: %{config | stop_timeout_ms: 5_000},
+                 env: Verification.env(%{port: port}),
+                 owner: self(),
+                 sandbox: [os_type: {:unix, :linux}]
+               )
+
+      assert http_ok?("http://127.0.0.1:#{port}/dev-server-env.txt")
+      assert File.dir?(Path.join(workspace, ".claude"))
+
+      assert :ok = DevServer.stop(pid)
+      refute http_ok?("http://127.0.0.1:#{port}/")
+      refute File.exists?(Path.join(workspace, ".claude"))
     end
 
     test "does not start without a temp folder of its own", %{root: root, workspace: workspace, config: config, port: port} do
