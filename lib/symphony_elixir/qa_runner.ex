@@ -37,6 +37,7 @@ defmodule SymphonyElixir.QaRunner do
   @type queued_pass :: %{issue_id: String.t(), identifier: String.t(), waiting_on: :finishing_max | :max_concurrent}
 
   @queued_ttl_ms 10 * 60_000
+  @request_timeout_ms 5_000
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
@@ -51,10 +52,20 @@ defmodule SymphonyElixir.QaRunner do
   def request(%{issue: %{id: issue_id}} = job, opts \\ []) when is_binary(issue_id) do
     server = Keyword.get(opts, :qa_runner_server, __MODULE__)
 
+    {timeout_ms, opts} = Keyword.pop(opts, :request_timeout_ms, @request_timeout_ms)
+
     case GenServer.whereis(server) do
       nil -> {:error, :qa_runner_unavailable}
-      pid -> GenServer.call(pid, {:request, job, Keyword.delete(opts, :qa_runner_server)})
+      pid -> call_request(pid, {:request, job, Keyword.delete(opts, :qa_runner_server)}, timeout_ms)
     end
+  end
+
+  # A runner that doesn't answer in time (a starved VM) is an error, not an exit, so the CI poll
+  # goes on and the issue's next green poll asks again.
+  defp call_request(pid, message, timeout_ms) do
+    GenServer.call(pid, message, timeout_ms)
+  catch
+    :exit, {reason, {GenServer, :call, _args}} -> {:error, {:qa_runner_call_failed, reason}}
   end
 
   @doc "Issue ids with a QA pass in flight, mapped to the PR head SHA under test."

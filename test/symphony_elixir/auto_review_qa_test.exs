@@ -1085,6 +1085,28 @@ defmodule SymphonyElixir.AutoReviewQaTest do
   end
 
   describe "QaRunner" do
+    test "a runner that doesn't answer in time is a request error, not an exit" do
+      test_pid = self()
+      name = :"qa_runner_#{System.unique_integer([:positive])}"
+
+      run_fun = fn job, _opts ->
+        send(test_pid, {:pass_started, job.issue.id})
+        receive do: (:finish -> :ok)
+      end
+
+      runner = start_supervised!({QaRunner, name: name, run_fun: run_fun})
+      job = %{issue: issue(), record: %{workspace_path: "/workspaces/symphony/TP-901", repo_key: "symphony"}, sha: @sha, settings: Config.settings!()}
+      :ok = :sys.suspend(runner)
+
+      assert {:error, {:qa_runner_call_failed, :timeout}} =
+               QaRunner.request(job, qa_runner_server: name, request_timeout_ms: 10)
+
+      :ok = :sys.resume(runner)
+      # The runner took the request once it answered again, so the next poll finds the pass running.
+      assert_receive {:pass_started, "issue-qa-flow"}
+      assert :running = QaRunner.request(job, qa_runner_server: name)
+    end
+
     test "runs one pass per issue up to max_concurrent and forgets finished passes" do
       test_pid = self()
       name = :"qa_runner_#{System.unique_integer([:positive])}"
