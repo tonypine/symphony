@@ -238,7 +238,7 @@ final class StateSnapshotTests: XCTestCase {
     func testDecodesWhatWaitsOnYou() throws {
         let data = try recordedState(replacing: "waiting_on_you", with: [
             [
-                "issue_id": "id-1", "issue_identifier": "TP-1", "title": "Research issue template",
+                "issue_id": "id-1", "issue_identifier": "TP-1", "repo_key": "symphony", "title": "Research issue template",
                 "url": "https://linear.app/tonypine/issue/TP-1", "state": "In Review", "kind": "plan",
                 "headline": "The split", "waiting_since": "2026-10-02T12:16:02Z", "waiting_seconds": 7_200,
             ],
@@ -254,10 +254,10 @@ final class StateSnapshotTests: XCTestCase {
         }
         XCTAssertEqual(snapshot.waitingOnYou, [
             .init(
-                identifier: "TP-1", title: "Research issue template", url: URL(string: "https://linear.app/tonypine/issue/TP-1"),
-                kind: .plan, headline: "The split", waitingSeconds: 7_200
+                issueID: "id-1", identifier: "TP-1", repoKey: "symphony", title: "Research issue template",
+                url: URL(string: "https://linear.app/tonypine/issue/TP-1"), kind: .plan, headline: "The split", waitingSeconds: 7_200
             ),
-            .init(identifier: "id-2", kind: .finalVerification),
+            .init(issueID: "id-2", identifier: "id-2", kind: .finalVerification),
             .init(identifier: "TP-3", kind: .action),
             .init(identifier: "TP-4", kind: .pr),
             .init(identifier: "TP-5", kind: .other("")),

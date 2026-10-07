@@ -1,0 +1,173 @@
+{
+  "auto_merge": [],
+  "awaiting_clarification": [],
+  "blocked": [],
+  "budget": {
+    "daily_limit": 5000000,
+    "daily_paused": false,
+    "daily_remaining": 5000000,
+    "daily_used": 0,
+    "per_issue_limit": 2000000
+  },
+  "build": {
+    "sha": "9f54098c3a1e5b7d2f4c6a8e0b1d3f5a7c9e1b3d",
+    "version": "0.0.1.412"
+  },
+  "codex_totals": {
+    "cache_creation_input_tokens": 6568666,
+    "cached_input_tokens": 149857148,
+    "input_tokens": 156430436,
+    "output_tokens": 629302,
+    "seconds_running": 23413,
+    "total_tokens": 156465114,
+    "uncached_input_tokens": 4622
+  },
+  "concurrency": {
+    "finishing_max": 2,
+    "forced_max": 1,
+    "max_total": 10
+  },
+  "conflicts": [],
+  "counts": {
+    "claimed": 0,
+    "conflicts": 0,
+    "forced": 0,
+    "human_review": 0,
+    "retrying": 0,
+    "running": 0,
+    "shipped_today": 0,
+    "waiting_on_you": 0,
+    "watching": 0
+  },
+  "dispatch_state": {
+    "active?": true,
+    "blockers": []
+  },
+  "epic_lanes": {
+    "lanes": [
+      {
+        "id": "e1",
+        "identifier": "SHOP-300",
+        "status": "running",
+        "sub_issue": {
+          "identifier": "SHOP-302",
+          "issue_id": "i-302",
+          "state": "In Progress",
+          "via": "blocked_by"
+        },
+        "title": "Gift cards"
+      },
+      {
+        "id": "e2",
+        "identifier": "API-120",
+        "status": "waiting",
+        "sub_issue": null,
+        "title": "Rate limits"
+      }
+    ],
+    "max_total": 10,
+    "queued_epics": [
+      {
+        "id": "e3",
+        "identifier": "WEB-88",
+        "title": "Dark mode"
+      }
+    ],
+    "shared": {
+      "slots": 8,
+      "used": 2
+    }
+  },
+  "finishing": {
+    "running": [],
+    "slots": 2,
+    "used": 0
+  },
+  "forced": [],
+  "generated_at": "2026-10-07T14:20:00Z",
+  "human_review": [],
+  "linear_usage": {
+    "callers": [
+      {
+        "caller": "poll",
+        "requests": 720
+      },
+      {
+        "caller": "reconcile",
+        "requests": 402
+      },
+      {
+        "caller": "agent_tool",
+        "requests": 151
+      },
+      {
+        "caller": "qa",
+        "requests": 11
+      }
+    ],
+    "queries": [
+      {
+        "query": "CandidateIssues",
+        "requests": 720
+      }
+    ],
+    "total": 1284,
+    "window_ms": 3600000
+  },
+  "orchestrator": {
+    "message_queue_len": 0,
+    "snapshot_age_ms": 420,
+    "snapshot_build_ms": 12,
+    "snapshot_parts_ms": {}
+  },
+  "pause": {
+    "paused": false,
+    "paused_at": null,
+    "reason": null
+  },
+  "pollers": {
+    "ci": {
+      "consecutive_failures": 0,
+      "current_backoff_ms": null,
+      "poll_interval_ms": 60000,
+      "status": "running",
+      "webhooks": {
+        "enabled": true,
+        "events_received": 214,
+        "last_event_at": "2026-10-07T13:58:40Z",
+        "rejected": 2,
+        "relay": "smee.io",
+        "results_via_poll": 7,
+        "results_via_webhook": 96
+      }
+    },
+    "pr_review": {
+      "consecutive_failures": 0,
+      "current_backoff_ms": null,
+      "poll_interval_ms": 60000,
+      "status": "running",
+      "webhooks": null
+    }
+  },
+  "qa": {
+    "queued": [],
+    "running": []
+  },
+  "rate_limits": null,
+  "repos": [
+    "api",
+    "docs",
+    "web-shop"
+  ],
+  "retrying": [],
+  "run_history": [],
+  "running": [],
+  "shipped_today": [],
+  "skipped": [],
+  "slot_waiting": [],
+  "stray_processes": [],
+  "uptime_seconds": 11580,
+  "usage_limits": [],
+  "waiting_on_you": [],
+  "watching": []
+}

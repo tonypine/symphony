@@ -54,6 +54,8 @@ struct SettingsView: View {
                     }
                 }
 
+                NotificationsSection()
+
                 Section {
                     Toggle("Development mode", isOn: $model.settings.developmentMode)
                     if model.settings.developmentMode {
@@ -604,6 +606,32 @@ private struct OpenRouterModelField: View {
 
 /// A section's help text under the Form. Fixed to its wrapped height: without it the grouped Form can lay a footer
 /// out as one line cut off with an ellipsis.
+/// D14: one switch per kind of notification, kept in the app's defaults and read at each poll.
+private struct NotificationsSection: View {
+    @State private var preferences = NotificationPreferences.load(from: AppStores.current.defaults)
+
+    var body: some View {
+        Section {
+            ForEach(NoticeKind.allCases, id: \.self) { kind in
+                Toggle(kind.settingsTitle, isOn: Binding(
+                    get: { preferences.isOn(kind) },
+                    set: { on in
+                        preferences.set(kind, on: on)
+                        preferences.save(to: AppStores.current.defaults)
+                    }
+                ))
+            }
+        } header: {
+            Text("Notifications")
+        } footer: {
+            SectionFooter(
+                "One notification for each new thing that waits on you and each new problem, never twice for the same "
+                    + "one, and nothing for routine progress."
+            )
+        }
+    }
+}
+
 private struct SectionFooter: View {
     let text: String
 

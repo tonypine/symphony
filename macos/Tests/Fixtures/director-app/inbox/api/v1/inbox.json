@@ -1,0 +1,279 @@
+{
+  "counts": {
+    "action": 1,
+    "clarify": 1,
+    "final_verification": 1,
+    "plan": 1,
+    "pr": 1,
+    "total": 5
+  },
+  "generated_at": "2026-10-07T14:20:00Z",
+  "items": [
+    {
+      "ask": "The plan for gift cards at checkout, in 7 sub-tickets.",
+      "identifier": "SHOP-330",
+      "issue_id": "i-330",
+      "kind": "plan",
+      "repo_key": "web-shop",
+      "review": {
+        "brief": {
+          "decisions": [
+            {
+              "options": [
+                "In the checkout",
+                "On a separate page"
+              ],
+              "question": "Where are gift cards bought?",
+              "recommendation": "In the checkout: one path to pay.",
+              "recommended": 0
+            },
+            {
+              "options": [
+                "The store's currency",
+                "The buyer's currency"
+              ],
+              "question": "Which currency does a card hold?",
+              "recommendation": "The store's currency, so refunds never convert.",
+              "recommended": 0
+            }
+          ],
+          "format": "parsed",
+          "headline": "The plan for gift cards at checkout, in 7 sub-tickets.",
+          "moves": [
+            {
+              "move": "approve",
+              "text": "move SHOP-330 to Waiting on sub-tickets; Symphony promotes its 7 sub-tickets."
+            },
+            {
+              "move": "change",
+              "text": "comment on any part of the plan; a revision run edits it in place."
+            },
+            {
+              "move": "reject",
+              "text": "move SHOP-330 to Rework; Symphony cancels its Backlog sub-tickets and plans again."
+            }
+          ],
+          "supervisor_check": null,
+          "what_changed": [],
+          "what_to_review": [
+            {
+              "links": [
+                {
+                  "label": "Domain brief",
+                  "url": "https://linear.app/acme/document/gift-cards-domain-brief-3f2a"
+                }
+              ],
+              "text": "Domain brief"
+            },
+            {
+              "links": [
+                {
+                  "label": "Screens",
+                  "url": "https://linear.app/acme/document/gift-cards-screens-81c0"
+                }
+              ],
+              "text": "Screens"
+            },
+            {
+              "links": [],
+              "text": "SHOP-331 to SHOP-337, in landing order"
+            }
+          ]
+        },
+        "sub_tickets": [
+          {
+            "identifier": "SHOP-331",
+            "state": "Backlog",
+            "title": "Gift card model and migration",
+            "url": "https://linear.app/acme/issue/SHOP-331"
+          },
+          {
+            "identifier": "SHOP-332",
+            "state": "Backlog",
+            "title": "Buy a gift card in the checkout",
+            "url": "https://linear.app/acme/issue/SHOP-332"
+          },
+          {
+            "identifier": "SHOP-333",
+            "state": "Backlog",
+            "title": "Redeem a card at payment",
+            "url": "https://linear.app/acme/issue/SHOP-333"
+          },
+          {
+            "identifier": "SHOP-334",
+            "state": "Backlog",
+            "title": "Balance page",
+            "url": "https://linear.app/acme/issue/SHOP-334"
+          },
+          {
+            "identifier": "SHOP-335",
+            "state": "Backlog",
+            "title": "Refund to a card",
+            "url": "https://linear.app/acme/issue/SHOP-335"
+          },
+          {
+            "identifier": "SHOP-336",
+            "state": "Backlog",
+            "title": "Emails for bought and used cards",
+            "url": "https://linear.app/acme/issue/SHOP-336"
+          },
+          {
+            "identifier": "SHOP-337",
+            "state": "Backlog",
+            "title": "Admin: void a card",
+            "url": "https://linear.app/acme/issue/SHOP-337"
+          }
+        ]
+      },
+      "state": "In Review",
+      "title": "Gift cards at checkout",
+      "url": "https://linear.app/acme/issue/SHOP-330",
+      "waiting_seconds": 11520,
+      "waiting_since": "2026-10-07T11:08:00Z"
+    },
+    {
+      "ask": "Proration for plan changes in the middle of a billing cycle.",
+      "identifier": "BIL-206",
+      "issue_id": "i-206",
+      "kind": "pr",
+      "repo_key": "api",
+      "review": {
+        "brief": {
+          "decisions": [],
+          "format": "parsed",
+          "headline": "Proration for plan changes in the middle of a billing cycle.",
+          "moves": [
+            {
+              "move": "approve",
+              "text": "move BIL-206 to Merging; Symphony merges the PR."
+            },
+            {
+              "move": "change",
+              "text": "leave review comments on the PR."
+            },
+            {
+              "move": "reject",
+              "text": "move BIL-206 to Rework."
+            }
+          ],
+          "supervisor_check": null,
+          "what_changed": [],
+          "what_to_review": [
+            {
+              "links": [
+                {
+                  "label": "PR #412",
+                  "url": "https://github.com/acme/api/pull/412"
+                }
+              ],
+              "text": "PR #412"
+            },
+            {
+              "links": [],
+              "text": "Try an upgrade on day 15: the invoice shows half of each plan."
+            }
+          ]
+        },
+        "pull_request": {
+          "change": {
+            "additions": 412,
+            "deletions": 38,
+            "files": 9,
+            "largest": [
+              {
+                "additions": 180,
+                "deletions": 4,
+                "path": "lib/billing/proration.ex"
+              }
+            ]
+          },
+          "ci": "passed",
+          "gate": {
+            "agent_verdict": "approve",
+            "mode": "shadow",
+            "verdict": "escalate"
+          },
+          "qa": {
+            "report_url": "https://linear.app/acme/issue/BIL-206#comment-5d1e0a2c",
+            "verdict": "pass"
+          },
+          "url": "https://github.com/acme/api/pull/412"
+        }
+      },
+      "state": "In Review",
+      "title": "Prorate plan changes mid-cycle",
+      "url": "https://linear.app/acme/issue/BIL-206",
+      "waiting_seconds": 5460,
+      "waiting_since": "2026-10-07T12:49:00Z"
+    },
+    {
+      "ask": "Every requirement of BIL-200 checked on main; one supervisor check left.",
+      "identifier": "BIL-213",
+      "issue_id": "i-200",
+      "kind": "final_verification",
+      "repo_key": "api",
+      "review": {
+        "brief": {
+          "format": "raw",
+          "markdown": "## Review brief\n\nAll eight sub-tickets of BIL-200 are Done. Each requirement was checked on main, with CI run 8812 green.\n\nSign off by moving BIL-213 to Done."
+        }
+      },
+      "state": "In Review",
+      "title": "Final verification: Usage-based billing",
+      "url": "https://linear.app/acme/issue/BIL-213",
+      "waiting_seconds": 2700,
+      "waiting_since": "2026-10-07T13:35:00Z"
+    },
+    {
+      "ask": "Add the signing certificate to the release workflow",
+      "identifier": "NOTE-90",
+      "issue_id": "i-90",
+      "kind": "action",
+      "repo_key": "docs",
+      "review": {
+        "est_minutes": 10,
+        "options": [],
+        "question": null,
+        "requested_at": "2026-10-07T13:59:00Z",
+        "steps": [
+          "Export the Developer ID certificate from Keychain Access as a .p12 file.",
+          "Add it to the repository's secrets as MACOS_CERTIFICATE, base64-encoded.",
+          "Add its password as MACOS_CERTIFICATE_PASSWORD.",
+          "Move NOTE-90 to Todo."
+        ],
+        "title": "Add the signing certificate to the release workflow",
+        "unblocks": "the Release workflow on main",
+        "why": "The release workflow can't sign the app without the certificate, so no release ships."
+      },
+      "state": "Human Review",
+      "title": "Sign the release build",
+      "url": "https://linear.app/acme/issue/NOTE-90",
+      "waiting_seconds": 1260,
+      "waiting_since": "2026-10-07T13:59:00Z"
+    },
+    {
+      "ask": "Answer the quality gate's questions",
+      "identifier": "SHOP-341",
+      "issue_id": "i-341",
+      "kind": "clarify",
+      "repo_key": "web-shop",
+      "review": {
+        "found": "The ticket says what to improve but not what better means: no acceptance criteria and no example query.",
+        "held": true,
+        "max_rounds": 2,
+        "pass_threshold": 6,
+        "questions": [
+          "Which searches return wrong results today?",
+          "What should a good result list look like for one of them?"
+        ],
+        "round": 1,
+        "score": 3
+      },
+      "state": "Todo",
+      "title": "Make search better",
+      "url": "https://linear.app/acme/issue/SHOP-341",
+      "waiting_seconds": 600,
+      "waiting_since": "2026-10-07T14:10:00Z"
+    }
+  ]
+}

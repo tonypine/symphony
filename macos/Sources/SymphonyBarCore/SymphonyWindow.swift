@@ -73,7 +73,7 @@ public enum SidebarSection: String, CaseIterable, Equatable {
 /// The sidebar: only the views built so far, in the design's order, with ⌘1–⌘8 following that order.
 public struct Sidebar: Equatable {
     /// The views this version of the app has. Later views join here, in place.
-    public static let builtViews: [SymphonyView] = [.overview, .repos, .diagnostics]
+    public static let builtViews: [SymphonyView] = [.inbox, .overview, .repos, .diagnostics]
     public static let maxShortcuts = 8
 
     public let views: [SymphonyView]

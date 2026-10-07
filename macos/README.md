@@ -347,11 +347,12 @@ the app attaches to it as "running (external)": Start, Stop and Restart stay dis
 starts a second Symphony nor stops one it doesn't own. Open Web Dashboard opens the control URL in the browser;
 Open Logs opens `menubar-child.log`.
 
-While tickets wait on you (`waiting_on_you` in `/api/v1/state`: plans and PRs in `In Review` or `Human Review`,
-final verifications to sign off, and open decisions), the icon shows a red dot and the menu lists them under
-**Waiting on you**, oldest first, for example `TP-123 · Plan · Split the importer into four sub-tickets · 2h`: the
-ticket, what it waits for, the headline of its review brief (its title when it has none) and how long it has waited.
-Choosing a row opens the ticket in the browser. The menu lists five; **N more…** opens the dashboard for the rest.
+While something waits on you (`waiting_on_you` in `/api/v1/state`, the Inbox's list: plans and PRs in
+`In Review` or `Human Review`, final verifications to sign off, open decisions, and tickets the quality gate
+holds or skipped), the icon shows an orange dot and the menu lists them under **Waiting on you**, oldest first,
+each with its kind's symbol, for example `TP-123 · Plan · Split the importer into four sub-tickets · 2h`: the
+ticket, what it waits for, its one-line ask (its title when it has none) and how long it has waited. Choosing a
+row opens the Symphony window on it in the Inbox. The menu lists five; **N more…** opens the Inbox for the rest.
 
 Each poll waits up to 5 seconds for an answer. After one missed poll the menu keeps the last status, with
 "Symphony is slow to answer" under it. Only after two missed polls in a row does it show "Symphony isn't
@@ -834,14 +835,27 @@ one, quit the app and run the install script with `SYMPHONY_RELEASE_TAG` set to 
 **Open Symphony** (⌘O) opens one window, **Symphony**, next to the menu bar item. It has a sidebar of views
 and, in the toolbar, the view's title, Symphony's connection state (quiet while Symphony answers; the time of
 the last update is in its help), the scope pop-up and **Refresh** (⌘R). The sidebar lists the views this
-version has, in the order they will keep as more arrive, on ⌘1 to ⌘8: **Overview**, then under **Factory**,
-**Repos** (which opens the Repos window) and **Diagnostics**. Its foot shows Symphony's version and state. The
-window opens on the Overview the first time.
+version has, in the order they will keep as more arrive, on ⌘1 to ⌘8: **Inbox**, **Overview**, then under
+**Factory**, **Repos** (which opens the Repos window) and **Diagnostics**. Its foot shows Symphony's version and
+state. The window opens on the Inbox the first time.
+
+- **Inbox** lists everything that waits on you (`/api/v1/inbox`), grouped as Plans, Pull requests, Final
+  verifications, Actions and Clarify, oldest first in each group, each row with its ticket, title, one-line ask
+  and age; its sidebar item counts them in orange, in every repo. ↑ and ↓ move through the list and Return
+  takes the review's first action. Beside the list, the review of the selected item: a plan's **What to
+  review** with its links, **Decisions needed** with the recommended option picked, and its sub-tickets in
+  landing order; a PR's checks (CI, Auto Review QA with its report, the acceptance gate's verdict and mode,
+  and how many files and lines it changes), with **Open PR**; an action's why, numbered steps, time and what it
+  unblocks, with **Copy Steps**; and what the quality gate found in a ticket it holds, its score and round, with
+  **Edit in Linear**. A review brief Symphony can't read into its parts shows as text. **Open in Linear** opens
+  the ticket. With nothing left it says "Nothing waits on you." with **Open Overview**, and a scope that hides
+  items says how many ("2 more in other repos"). Approving and sending back come in a later version.
 
 - **Overview** answers "is the factory moving, is anything stuck" at a glance. One sentence says how things
   are: "The factory is flowing.", "2 things need attention.", "Dispatch is paused since 14:03: Deploy
   freeze." with **Resume Dispatch**, or "The factory is idle.", with a line of context under it. The flow
-  strip counts the tickets at each stage: Queued, Working, Auto Review, Waiting on you (Human Review), Merging
+  strip counts the tickets at each stage: Queued, Working, Auto Review, Waiting on you (the Inbox; the tile
+  opens it), Merging
   and Shipped today (the tickets Symphony saw reach Done today, UTC); a stage at 0 stays in place in grey.
   **Needs attention** shows only when something does, most severe and oldest first, one row per ticket or
   hold: a run with no agent activity for 10 minutes, 3 failed attempts or more, a ticket routed to more than
@@ -866,7 +880,13 @@ window opens on the Overview the first time.
   **Open Settings…** while no `symphony.yml` is set. A view whose endpoint an older Symphony doesn't serve
   says "Update Symphony to see this view."
 
-While the window is open the app is a regular app, with a Dock icon, a ⌘-Tab entry and its main menu. ⌘W
+**Notifications.** The app notifies each new Inbox item ("BIL-206 waits on you") and each new Needs attention
+problem once, with **Open**, which opens the window on it; never twice for the same one, even after a relaunch,
+and nothing for routine progress or what was already there the first time the app ran. They make no sound. The
+app asks for permission the first time one is due, and Settings has a switch per kind under **Notifications**.
+
+While the window is open the app is a regular app, with a Dock icon, a ⌘-Tab entry and its main menu; the Dock
+icon shows how many things wait on you. ⌘W
 closes the window and the app goes back to the menu bar only; Symphony keeps running. The window opens at
 1200 × 760 (it can't shrink below 960 × 600) and comes back at the size, position and view it was left at,
 also after a relaunch. It reads Symphony's local API every 2 seconds while it is on screen and every 30
@@ -992,7 +1012,7 @@ Four more variables, read only in QA mode:
   all read through it, so the app shows Symphony as running (external). The fixtures of a running Symphony
   are in [`Tests/Fixtures/director-app/running`](Tests/Fixtures/director-app/running), and those of the
   Overview's four states next to it: `flowing`, `attention` (a stuck forced ticket and a Codex usage-limit
-  hold), `paused` and `idle`. Ages in them count from the payload's `generated_at`, so they read the same
+  hold), `paused` and `idle`, and of the Inbox: `inbox` (one item of each kind) and `inbox-empty`. Ages in them count from the payload's `generated_at`, so they read the same
   on any day; clock times show in the Mac's time zone:
 
   ```bash

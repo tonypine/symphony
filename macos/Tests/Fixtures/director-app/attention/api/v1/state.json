@@ -36,6 +36,7 @@
     "retrying": 0,
     "running": 3,
     "shipped_today": 3,
+    "waiting_on_you": 2,
     "watching": 5
   },
   "dispatch_state": {
@@ -377,6 +378,32 @@
       "source": "agent",
       "utilization": 1.0,
       "window": "five_hour"
+    }
+  ],
+  "waiting_on_you": [
+    {
+      "headline": "Quick start rewrite",
+      "issue_id": "i-40",
+      "issue_identifier": "DOCS-40",
+      "kind": "pr",
+      "repo_key": "docs",
+      "state": "Human Review",
+      "title": "Quick start rewrite",
+      "url": "https://linear.app/acme/issue/DOCS-40",
+      "waiting_seconds": 11520,
+      "waiting_since": "2026-10-07T11:08:00Z"
+    },
+    {
+      "headline": "Address autocomplete",
+      "issue_id": "i-290",
+      "issue_identifier": "SHOP-290",
+      "kind": "pr",
+      "repo_key": "web-shop",
+      "state": "Human Review",
+      "title": "Address autocomplete",
+      "url": "https://linear.app/acme/issue/SHOP-290",
+      "waiting_seconds": 2400,
+      "waiting_since": "2026-10-07T11:08:00Z"
     }
   ],
   "watching": [

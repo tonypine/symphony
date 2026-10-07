@@ -114,5 +114,9 @@ public enum DesignTokens {
         public static let sidebarWidth: Double = 200
         public static let minSidebarWidth: Double = 180
         public static let maxSidebarWidth: Double = 260
+        /// The list column of the Inbox (and later Initiatives).
+        public static let listColumnWidth: Double = 340
+        public static let minListColumnWidth: Double = 300
+        public static let maxListColumnWidth: Double = 420
     }
 }
