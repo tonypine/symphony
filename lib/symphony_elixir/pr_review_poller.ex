@@ -784,7 +784,7 @@ defmodule SymphonyElixir.PrReviewPoller do
 
       :conflict ->
         with {:ok, attrs} <- put_auto_merge_conflict(attrs, record, activity, settings, opts, now) do
-          maybe_transition_conflict(record, attrs, opts, now)
+          maybe_transition_conflict(record, attrs, settings, opts, now)
         end
 
       action when action in [:approved, :stale, :watching] ->
@@ -1010,7 +1010,7 @@ defmodule SymphonyElixir.PrReviewPoller do
 
   defp transition_auto_merge_conflict(record, attrs, activity, auto_merge, settings, opts, now) do
     with {:ok, attrs} <- disable_auto_merge_for_conflict(attrs, record, activity, auto_merge, settings, opts, now) do
-      maybe_transition_conflict(record, attrs, opts, now)
+      maybe_transition_conflict(record, attrs, settings, opts, now)
     end
   end
 
@@ -1284,31 +1284,77 @@ defmodule SymphonyElixir.PrReviewPoller do
   defp reviewer_comments_action(_unaddressed_comments, true), do: :watching
   defp reviewer_comments_action(_unaddressed_comments, false), do: :review_comments
 
-  defp maybe_transition_conflict(record, attrs, opts, now) do
+  defp maybe_transition_conflict(record, attrs, settings, opts, now) do
     issue_id = Map.get(record, :issue_id)
     attrs = put_conflict_approval(attrs, record, opts)
 
-    cond do
-      active_agent_run?(issue_id, opts) ->
-        complete_review_update(opts, record, Map.merge(attrs, %{status: "conflict_active_run"}), {:active_run, issue_id, :conflict})
-
-      conflict_retry_count(record) >= @conflict_max_retries ->
-        complete_review_update(
-          opts,
-          record,
-          Map.merge(attrs, %{
-            status: "conflict_escalated",
-            error: "merge conflict retry limit reached",
-            target_issue_state: @in_review_state,
-            updated_at: now
-          }),
-          {:conflict_escalated, issue_id, @conflict_max_retries}
-        )
-
-      true ->
-        transition_issue_for_action(record, attrs, opts, now, "conflict")
+    if active_agent_run?(issue_id, opts) do
+      complete_review_update(opts, record, Map.merge(attrs, %{status: "conflict_active_run"}), {:active_run, issue_id, :conflict})
+    else
+      record
+      |> parked_for_person(settings, opts)
+      |> transition_unless_parked(record, attrs, opts, now)
     end
   end
+
+  defp transition_unless_parked({:error, reason}, record, _attrs, opts, now),
+    do: record_poll_error(record, {:issue_read_failed, reason}, opts, now)
+
+  defp transition_unless_parked({:parked, issue}, record, attrs, opts, _now),
+    do: await_human_action_for_conflict(record, attrs, issue, opts)
+
+  defp transition_unless_parked(:not_parked, record, attrs, opts, now) do
+    if conflict_retry_count(record) >= @conflict_max_retries do
+      complete_review_update(
+        opts,
+        record,
+        Map.merge(attrs, %{
+          status: "conflict_escalated",
+          error: "merge conflict retry limit reached",
+          target_issue_state: @in_review_state,
+          updated_at: now
+        }),
+        {:conflict_escalated, Map.get(record, :issue_id), @conflict_max_retries}
+      )
+    else
+      transition_issue_for_action(record, attrs, opts, now, "conflict")
+    end
+  end
+
+  # An issue that waits on a person sits in the Human Review state, outside the active states
+  # with a label that asks for one, or, with that state off, in `In Review` with an open request
+  # (see `HumanReview.parked_for_person/3`). A conflict-fix run
+  # can't do what the person must: it would merge the base branch, push and park the issue again.
+  # The issue stays where it is, with no fix run or escalation and no retry spent, until a person
+  # moves it on or removes the label; the next conflicting poll then takes the conflict path.
+  defp await_human_action_for_conflict(record, attrs, %Issue{} = issue, opts) do
+    issue_id = Map.get(record, :issue_id)
+
+    unless Map.get(record, :status) == "conflict_awaiting_human_action" do
+      Logger.info(
+        "PR review #{Map.get(record, :issue_identifier)}: the PR conflicts with the base branch while the issue waits in #{issue.state} for a person; no conflict-fix run issue_id=#{issue_id} pr_url=#{Map.get(record, :pr_url)}"
+      )
+    end
+
+    complete_review_update(opts, record, Map.put(attrs, :status, "conflict_awaiting_human_action"), {:conflict_awaiting_human_action, issue_id})
+  end
+
+  # This cycle's watched issues have the issue when it sits in a review state; any other issue
+  # (`Backlog`, an active state) is read by id.
+  defp parked_for_person(record, settings, opts) do
+    issue_id = Map.get(record, :issue_id)
+
+    with {:ok, issues} <- watched_or_fetched_issue(issue_id, Keyword.get(opts, :tracker, Tracker), opts) do
+      case Enum.find(issues, &match?(%Issue{id: ^issue_id}, &1)) do
+        %Issue{} = issue -> parked_result(issue, HumanReview.parked_for_person(issue, settings, opts))
+        nil -> :not_parked
+      end
+    end
+  end
+
+  defp parked_result(issue, {:ok, true}), do: {:parked, issue}
+  defp parked_result(_issue, {:ok, false}), do: :not_parked
+  defp parked_result(_issue, {:error, reason}), do: {:error, reason}
 
   # A conflict found while the issue is in `Merging` is marked `approved`, so a fix run that finds
   # nothing to resolve and pushes nothing can hand the PR back to `Merging` once it no longer

@@ -428,6 +428,14 @@ defmodule SymphonyElixir.CLITest do
     assert_received {:host, "0.0.0.0"}
   end
 
+  test "rejects --host unix: with an empty socket path and exits non-zero naming it" do
+    deps = base_deps(%{set_server_host_override: fn host -> flunk("unexpected host override #{inspect(host)}") end})
+
+    assert {:error, message} = CLI.evaluate(["--host", "unix:"], deps)
+    assert message =~ ~s(the socket path in host "unix:" is empty)
+    assert capture_io(:stderr, fn -> assert CLI.finish({:error, message}) == 1 end) == message <> "\n"
+  end
+
   test "returns startup error when app cannot start" do
     deps = base_deps(%{ensure_all_started: fn -> {:error, :boom} end})
 

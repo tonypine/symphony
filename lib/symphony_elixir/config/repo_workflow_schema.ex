@@ -6,6 +6,7 @@ defmodule SymphonyElixir.Config.RepoWorkflowSchema do
   import Ecto.Changeset
 
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.Playbook.Assembly
 
   # Recompile this schema when an embed's defaults change; see SystemSchema.
   require Schema.Hooks
@@ -13,7 +14,9 @@ defmodule SymphonyElixir.Config.RepoWorkflowSchema do
   require Schema.Verification
 
   @primary_key false
-  @allowed_keys ~w(hooks prompts push_check verification validation auto_review human_actions)
+  # `playbook` shapes the prompt only: `SymphonyElixir.Workflow` expands it before parsing,
+  # so it is checked here and never reaches the config map.
+  @allowed_keys ~w(hooks prompts push_check verification validation auto_review human_actions playbook)
 
   embedded_schema do
     field(:configured_paths, :map, virtual: true, default: %{})
@@ -36,7 +39,8 @@ defmodule SymphonyElixir.Config.RepoWorkflowSchema do
 
     with :ok <- reject_removed_keys(config),
          :ok <- reject_unknown_keys(config),
-         :ok <- validate_auto_review(Map.get(config, "auto_review")) do
+         :ok <- validate_auto_review(Map.get(config, "auto_review")),
+         :ok <- validate_playbook(Map.get(config, "playbook")) do
       config
       |> drop_nil_values()
       |> changeset()
@@ -127,6 +131,13 @@ defmodule SymphonyElixir.Config.RepoWorkflowSchema do
 
   defp validate_auto_review(_auto_review), do: {:error, {:invalid_repo_workflow_config, "auto_review must be a map"}}
 
+  defp validate_playbook(playbook) do
+    case Assembly.validate_settings(playbook) do
+      :ok -> :ok
+      {:error, message} -> {:error, {:invalid_repo_workflow_config, message}}
+    end
+  end
+
   defp validate_playbooks(nil), do: :ok
 
   defp validate_playbooks(playbooks) when is_map(playbooks) do
@@ -187,6 +198,7 @@ defmodule SymphonyElixir.Config.RepoWorkflowSchema do
       "dev_server" =>
         configured_map(paths, "dev_server", fn dev_server_paths ->
           %{
+            "build_cmd" => configured_value(dev_server_paths, "build_cmd", verification.dev_server.build_cmd),
             "start_cmd" => configured_value(dev_server_paths, "start_cmd", verification.dev_server.start_cmd),
             "health_check_url" => configured_value(dev_server_paths, "health_check_url", verification.dev_server.health_check_url),
             "health_timeout_ms" => configured_value(dev_server_paths, "health_timeout_ms", verification.dev_server.health_timeout_ms),

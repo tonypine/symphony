@@ -14,9 +14,16 @@ audit_dir = Path.join(System.tmp_dir!(), "symphony-elixir-test-audit-#{System.pi
 state_root = Path.join(System.tmp_dir!(), "symphony-elixir-test-state-#{System.pid()}-#{System.unique_integer([:positive])}")
 logs_root = Path.join(System.tmp_dir!(), "symphony-elixir-test-logs-#{System.pid()}-#{System.unique_integer([:positive])}")
 run_store_dir = Application.fetch_env!(:symphony_elixir, :run_store_dir)
-# Agent runs make their temp folders here, so the ones failed runs keep don't stay in `/tmp`.
-agent_run_tmp_root = Path.join(System.tmp_dir!(), "symphony-elixir-test-run-tmp-#{System.pid()}-#{System.unique_integer([:positive])}")
-File.mkdir_p!(agent_run_tmp_root)
+# Agent runs and dev servers make their temp folders here, removed at exit, so the ones failed
+# runs keep don't stay behind. Its name is short, and it is in `/tmp` where that is writable
+# (not macOS's long `/var/folders/...` TMPDIR), so a dev server's unix socket in it still fits
+# the 104-byte `sun_path` limit; sandboxed agent runs, which can't write `/tmp`, have a short
+# TMPDIR of their own.
+agent_run_tmp_root =
+  ["/tmp", System.tmp_dir!()]
+  |> Enum.map(&Path.join(&1, "st-#{System.pid()}"))
+  |> Enum.find(&(File.mkdir_p(&1) == :ok))
+
 Application.put_env(:symphony_elixir, :agent_run_tmp_bases, [agent_run_tmp_root])
 Application.put_env(:symphony_elixir, :state_root, state_root)
 Application.put_env(:symphony_elixir, :logs_root, logs_root)
@@ -34,14 +41,16 @@ Application.put_env(:symphony_elixir, :agent_caches,
 
 # Verification dev servers in tests start through a stand-in for `sandbox-exec` that drops the
 # profile and runs the command, so they also start on Linux and inside the agent sandbox, where
-# Seatbelt can't nest. The `:seatbelt` tests use the real one, and only run where it works.
+# Seatbelt can't nest. The `:seatbelt` tests use the real one, and only run where it works; the
+# `seatbelt` workflow runs them on a macOS runner.
 fake_sandbox_exec = Path.join(agent_run_tmp_root, "fake-sandbox-exec")
 File.write!(fake_sandbox_exec, "#!/bin/sh\n# Drops `-p <profile>` and runs the command unsandboxed.\nshift 2\nexec \"$@\"\n")
 File.chmod!(fake_sandbox_exec, 0o755)
 
 Application.put_env(:symphony_elixir, :verification_dev_server_sandbox,
   os_type: {:unix, :darwin},
-  executable: fake_sandbox_exec
+  executable: fake_sandbox_exec,
+  check_confinement: false
 )
 
 with true <- File.exists?("/usr/bin/sandbox-exec"),
@@ -49,6 +58,29 @@ with true <- File.exists?("/usr/bin/sandbox-exec"),
   :ok
 else
   _unavailable -> ExUnit.configure(exclude: [:seatbelt | Keyword.get(ExUnit.configuration(), :exclude, [])])
+end
+
+# The `:bwrap` tests run the Linux sandbox for real, where bwrap can make its namespaces.
+with bwrap when is_binary(bwrap) <- System.find_executable("bwrap"),
+     socat when is_binary(socat) <- System.find_executable("socat"),
+     {_output, 0} <-
+       System.cmd(bwrap, ~w(--die-with-parent --unshare-all --ro-bind / / --dev /dev --proc /proc /bin/sh -c :), stderr_to_stdout: true) do
+  :ok
+else
+  _unavailable -> ExUnit.configure(exclude: [:bwrap | Keyword.get(ExUnit.configuration(), :exclude, [])])
+end
+
+# The `:unix_socket` tests listen on a unix socket in the temp folder, as a verification dev
+# server does on macOS. The agent sandbox refuses that bind, so they run in CI.
+unix_socket_probe = Path.join(System.tmp_dir!(), "unix-socket-probe-#{System.pid()}.sock")
+
+case :gen_tcp.listen(0, ip: {:local, unix_socket_probe}) do
+  {:ok, socket} ->
+    :gen_tcp.close(socket)
+    File.rm(unix_socket_probe)
+
+  {:error, _reason} ->
+    ExUnit.configure(exclude: [:unix_socket | Keyword.get(ExUnit.configuration(), :exclude, [])])
 end
 
 # The qa-dashboard end-to-end test fetches deps and builds this checkout; it runs only on
@@ -73,6 +105,10 @@ end
 # Tests that start the real `claude` binary run only with `--only real_claude`, so no default run
 # (CI's, `mix cover.changed`'s) depends on whether or which `claude` is installed.
 ExUnit.configure(exclude: [:real_claude | Keyword.get(ExUnit.configuration(), :exclude, [])])
+
+# The test that checks the dev server's record of the agent profiles' mach services against an SRT
+# install runs only with `--only srt_profile`; the `agent-profile` workflow runs it.
+ExUnit.configure(exclude: [:srt_profile | Keyword.get(ExUnit.configuration(), :exclude, [])])
 
 # Tests that measure an agent's niceness need `setpriority`, which sandboxed
 # agent runs deny; `nice` then warns and runs the command unchanged.

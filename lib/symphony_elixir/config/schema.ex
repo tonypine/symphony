@@ -246,9 +246,17 @@ defmodule SymphonyElixir.Config.Schema do
       # CPU time a process under a workspace or Symphony temp folder may use with no run
       # attached before the dashboard warns about it; `nil` turns the check off.
       field(:stray_process_cpu_minutes, :integer, default: 10)
+      # How long one of Symphony's own MCP tool calls must run before the snapshot reports it as pending.
+      field(:pending_tool_report_after_ms, :integer, default: 60_000)
     end
 
-    @fields [:enabled, :tick_interval_ms, :no_progress_threshold_ms, :stray_process_cpu_minutes]
+    @fields [
+      :enabled,
+      :tick_interval_ms,
+      :no_progress_threshold_ms,
+      :stray_process_cpu_minutes,
+      :pending_tool_report_after_ms
+    ]
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
@@ -257,6 +265,7 @@ defmodule SymphonyElixir.Config.Schema do
       |> validate_number(:tick_interval_ms, greater_than: 0)
       |> validate_number(:no_progress_threshold_ms, greater_than: 0)
       |> validate_number(:stray_process_cpu_minutes, greater_than: 0)
+      |> validate_number(:pending_tool_report_after_ms, greater_than: 0)
     end
   end
 
@@ -1690,6 +1699,7 @@ defmodule SymphonyElixir.Config.Schema do
       @stop_signals ["TERM", "INT", "QUIT", "HUP", "KILL"]
 
       embedded_schema do
+        field(:build_cmd, :string)
         field(:start_cmd, :string)
         field(:health_check_url, :string)
         field(:health_timeout_ms, :integer, default: 30_000)
@@ -1702,9 +1712,10 @@ defmodule SymphonyElixir.Config.Schema do
         schema
         |> cast(
           attrs,
-          [:start_cmd, :health_check_url, :health_timeout_ms, :stop_signal, :stop_timeout_ms],
+          [:build_cmd, :start_cmd, :health_check_url, :health_timeout_ms, :stop_signal, :stop_timeout_ms],
           empty_values: []
         )
+        |> normalize_optional_string(:build_cmd)
         |> normalize_optional_string(:start_cmd)
         |> normalize_optional_string(:health_check_url)
         |> normalize_stop_signal()
@@ -2105,7 +2116,8 @@ defmodule SymphonyElixir.Config.Schema do
 
     embedded_schema do
       field(:enabled, :boolean, default: true)
-      field(:label, :string, default: "human-action")
+      # Deprecated: the retired label that marked an open request (`HumanReview.legacy_request_labels/1`).
+      field(:label, :string)
       field(:interval_ms, :integer, default: 300_000)
       field(:min_update_interval_ms, :integer, default: 900_000)
     end
@@ -2114,7 +2126,6 @@ defmodule SymphonyElixir.Config.Schema do
     def changeset(schema, attrs) do
       schema
       |> cast(attrs, @fields, empty_values: [])
-      |> Schema.validate_present([:label])
       |> validate_format(:label, ~r/\S/, message: "must not be blank")
       |> validate_number(:interval_ms, greater_than: 0)
       |> validate_number(:min_update_interval_ms, greater_than_or_equal_to: 0)

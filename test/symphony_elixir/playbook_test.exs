@@ -3,15 +3,14 @@ defmodule SymphonyElixir.PlaybookTest do
 
   alias SymphonyElixir.Playbook
   alias SymphonyElixir.Playbook.FileSystem
+  alias SymphonyElixir.PromptBuilder
   alias SymphonyElixir.Workflow
   alias SymphonyElixir.WorkflowPreview
 
   @workflow_path Path.expand(Path.join([__DIR__, "..", "..", "WORKFLOW.md"]))
   @ticket_types_tag ~s({%- render "ticket_types", issue: issue %})
-  @ticket_types_anchor "The `Todo` -> `In Progress` transition and the workpad still apply.\n"
+  @ticket_types_anchor "The `Todo` -> `In Progress` transition and the workpad still apply."
   @render_opts [strict_variables: true, file_system: {FileSystem, nil}]
-  @review_brief_tag ~s({% render "review_brief" %})
-  @review_brief_anchor ~s({% render "parent_tickets" %}\n)
 
   @expected_names ~w(
     ci_triage
@@ -95,6 +94,11 @@ defmodule SymphonyElixir.PlaybookTest do
     assert flat =~ "against the current UTC time (`date -u`), never against local time"
     assert flat =~ "When the job is under 30 minutes old, wait for the CI poller's flaky re-run instead of asking a human."
     assert flat =~ "withdraw it with `linear_withdraw_human_action`"
+
+    assert flat =~
+             "the move ends the run shortly after: first push your committed work (open or update the PR if the rest of the ticket is done) and record the blocker in the workpad, then call it, so the person finds the PR waiting with the ticket."
+
+    assert flat =~ "Never add a label to say a person must act."
   end
 
   test "review_brief keeps one brief per ticket, edited in place, with the fixed format and the moves for each kind" do
@@ -133,16 +137,20 @@ defmodule SymphonyElixir.PlaybookTest do
     assert flat =~ "Approve: move the parent to `Waiting on sub-tickets`"
     assert flat =~ "Reject: move the parent to `Rework`; Symphony cancels its `Backlog` sub-tickets"
     assert flat =~ "Approve: move the ticket to `Merging`; Symphony merges the PR."
-    assert flat =~ "Approve: do the steps in the `## Action needed:` comment, then move the ticket to `Todo`"
+    assert flat =~ "Approve: reply under the `## Decision needed:` comment with the option you pick, then move the ticket to `Todo`"
+    refute flat =~ "do the steps"
     assert flat =~ "Approve: move the ticket to `Done`; the parent's close-out run follows."
   end
 
-  @tag :tmp_dir
-  test "the repo WORKFLOW.md renders the review brief and asks for it at every handoff", %{tmp_dir: tmp_dir} do
-    workflow = Path.join(tmp_dir, "WORKFLOW.md")
-    File.write!(workflow, workflow_with_review_brief())
+  test "the playbook aggregate renders review_brief between the repo's Step 4 and the completion bar" do
+    assert {"review_brief", 95} in Playbook.aggregate()
 
-    assert {:ok, prompt} = WorkflowPreview.render(file: workflow, agent_kind: "claude")
+    slots = Map.new(Playbook.aggregate())
+    assert slots["parent_tickets"] < slots["review_brief"] and slots["review_brief"] < slots["completion_bar"]
+  end
+
+  test "the repo WORKFLOW.md renders the review brief and asks for it at every handoff" do
+    assert {:ok, prompt} = WorkflowPreview.render(file: @workflow_path, agent_kind: "claude")
     flat = String.replace(prompt, ~r/\s+/, " ")
 
     # The brief's own section, with the plan's brief covering every artifact, decision and sub-ticket.
@@ -172,7 +180,7 @@ defmodule SymphonyElixir.PlaybookTest do
                "On a later handoff (review comments addressed, a CI fix), the existing brief is edited in place with `linear_update_comment`"
 
     # Final verification and human-action handoffs.
-    assert flat =~ "Before either move, leave the review brief (see `Review brief`): the requirements checked"
+    assert flat =~ "Before the move, leave the review brief (see `Review brief`): the requirements checked"
     assert flat =~ "After a `linear_request_human_action` request, leave the review brief (see `Review brief`) pointing to the request"
 
     # The brief is never read as a person's comment on the plan, and the workpad points to it.
@@ -180,6 +188,38 @@ defmodule SymphonyElixir.PlaybookTest do
     assert flat =~ "The workpad is the agent's log: plan, checklist, validation evidence and notes."
     assert flat =~ "The person reviewing reads the `## Review brief` comment instead"
     assert flat =~ "The one comment written for the person is the review brief, edited in place at each handoff."
+  end
+
+  test "the repo WORKFLOW.md hands a person only decisions, and routes checks an agent can't run to the supervisor in In Review" do
+    assert {:ok, prompt} = WorkflowPreview.render(file: @workflow_path, agent_kind: "claude")
+    flat = String.replace(prompt, ~r/\s+/, " ")
+
+    assert prompt =~ "\n## Decisions for a person, checks for the supervisor (required behavior)\n"
+    assert flat =~ "A person only ever makes decisions. Never hand them a check to run or a runbook of steps."
+
+    # A verification-only remainder goes to In Review with a supervisor check, never to Human Review.
+    assert flat =~
+             "When all that is left is verification an agent can't run (launching the app, a host crash check, a check on a device), " <>
+               "hand it to the supervisor, never to a person and never to `Human Review`: leave a `## Supervisor check` block, " <>
+               "in the review brief or in its own comment, then move the ticket to `In Review`."
+
+    assert prompt =~ "  ## Supervisor check\n\n  **Verify:** <what must hold, and on which commit or build>"
+    assert flat =~ "with no PR (the work is already on the default branch), the move to `In Review` is allowed once the block is posted"
+    assert flat =~ "When a manual check could be an automated test, write the test instead of asking anyone to check by hand."
+
+    # TP-612: work already on main becomes a decision or a supervisor check, never steps.
+    assert flat =~ "hand over the call to close it as a decision, or the check that is left as a supervisor check; never as steps."
+
+    # A request for a person is a decision with options.
+    assert flat =~ "one question in `decision`, 2 to 4 options, each with what it does, one of them recommended. A request without options is refused."
+    assert flat =~ "A check on a device is not a blocker for a person: it is a `## Supervisor check`"
+
+    # The status map and the final verification send manual checks to In Review, not Human Review.
+    assert flat =~ "or all that is left is a `## Supervisor check` an agent can't run; waiting on the supervisor or a human."
+    assert flat =~ "It never holds a check to run: a check an agent can't run goes to `In Review` as a `## Supervisor check`."
+    refute flat =~ "a final verification whose remaining checks are manual"
+    assert flat =~ "still move it to `In Review`, never `Human Review`, with a `## Supervisor check` block for each"
+    refute flat =~ "exact steps"
   end
 
   test "scoped_tools lists the document tools for a ticket's long-lived artifacts" do
@@ -192,17 +232,29 @@ defmodule SymphonyElixir.PlaybookTest do
   end
 
   describe "ticket_types" do
-    test "an untyped ticket renders the same WORKFLOW.md prompt as before the partial" do
+    test "the playbook aggregate renders ticket_types right after the repo's Step 0, left-trimmed" do
+      assert {"ticket_types", 52} in Playbook.aggregate()
+
+      {:ok, %{prompt_template: body}} = Workflow.load(@workflow_path)
+      assert body =~ @ticket_types_anchor <> "\n\n" <> @ticket_types_tag <> "\n\n## Step 1: "
+    end
+
+    # Blank lines included: the left-trimmed tag takes the blank line before it, and the
+    # partial renders nothing at all for an untyped ticket.
+    test "an untyped ticket renders the same WORKFLOW.md prompt as without the partial" do
       {without_tag, with_tag} = workflow_bodies()
 
       for labels <- [[], ["bug", "feature", "type:other", "needs-human"]] do
-        assert render(with_tag, labels) == render(without_tag, labels)
+        prompt = render(with_tag, labels)
+        assert prompt == render(without_tag, labels)
+        refute prompt =~ "## Ticket type:"
       end
     end
 
     test "a typed ticket gets its section between Step 0 and Step 1 of WORKFLOW.md" do
-      {_without_tag, with_tag} = workflow_bodies()
-      prompt = render(with_tag, ["type:bug"])
+      {:ok, workflow} = Workflow.load(@workflow_path)
+      issue = %{WorkflowPreview.sample_issue() | labels: ["type:bug"]}
+      prompt = PromptBuilder.build_prompt(issue, workflow: workflow, prompt_mode: :issue, agent_kind: "claude")
 
       assert prompt =~ "still apply.\n\n## Ticket type: bug\n"
       assert prompt =~ ~r/as the regression test\.\n4\. Name the root cause[^\n]*\n\n## Step 1: /
@@ -301,22 +353,14 @@ defmodule SymphonyElixir.PlaybookTest do
     |> String.replace(~r/\s+/, " ")
   end
 
-  # WORKFLOW.md with the review_brief render right after parent_tickets. WORKFLOW.md is a
-  # protected path, so a person adds that line; until then the test adds it to a copy.
-  defp workflow_with_review_brief do
-    source = String.replace(File.read!(@workflow_path), @review_brief_tag <> "\n", "")
-    assert source =~ @review_brief_anchor
-
-    String.replace(source, @review_brief_anchor, @review_brief_anchor <> "\n" <> @review_brief_tag <> "\n")
-  end
-
-  # WORKFLOW.md's prompt body without the ticket_types render, and with it right after Step 0.
+  # WORKFLOW.md's prompt body, its instruction files expanded, without and with the ticket_types
+  # render the playbook puts right after Step 0.
   defp workflow_bodies do
-    {:ok, {_front_matter, body}} = Workflow.parse_document(File.read!(@workflow_path))
-    without_tag = String.replace(body, @ticket_types_tag <> "\n", "")
-    assert without_tag =~ @ticket_types_anchor
+    {:ok, %{prompt_template: body}} = Workflow.load(@workflow_path)
+    without_tag = String.replace(body, "\n\n" <> @ticket_types_tag, "")
+    refute without_tag =~ "ticket_types"
 
-    {without_tag, String.replace(without_tag, @ticket_types_anchor, @ticket_types_anchor <> @ticket_types_tag <> "\n")}
+    {without_tag, body}
   end
 
   defp render(source, labels) do

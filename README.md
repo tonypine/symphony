@@ -113,10 +113,11 @@ branch instead of opening a second one. If a claimed issue moves to a terminal s
   (Settings → Labels). Linear renames it on every ticket, so parents already in flight keep their
   state and Symphony starts no new run for them.
 - **Actions for a human** — when work waits on something only a person can do (a missing secret, a
-  plan to approve, a QA pass or a final verification blocked on a permission, an issue labelled
-  `human-action`), Symphony posts a Linear project update listing each one with its steps, and posts
-  again only when that list changes. Agents add requests with `linear_request_human_action` and
-  withdraw them with `linear_withdraw_human_action`; see `human_actions` in
+  plan to approve, a QA pass or a final verification blocked on a permission), the ticket waits in
+  `Human Review`, and Symphony posts a Linear project update listing each one with its steps, and
+  posts again only when that list changes. Agents add requests with `linear_request_human_action`,
+  which moves the ticket to `Human Review`, and withdraw them with `linear_withdraw_human_action`;
+  see `human_actions` in
   [docs/configuration.md](docs/configuration.md).
 - **Executor + reviewer runs** — an optional read-only reviewer agent gates the executor's push.
 - **Auto Review** — an optional QA agent uses each PR the way a user would before human review, with
@@ -391,8 +392,10 @@ changes them.
 
 `symphony workflow preview` renders the exact base-issue prompt the agent would receive for the
 repo-local `WORKFLOW.md`, using deterministic sample issue data — no Linear access, network, or
-running orchestrator required. Use it to confirm your template and `{% render %}` partials resolve
-correctly before a real run:
+running orchestrator required. When the body is `{% render "playbook" %}`, the preview includes the
+instruction files next to that `WORKFLOW.md` (`.symphony/instructions/` by default; see
+[playbook](docs/playbook.md#the-whole-playbook-in-one-line)). Use it to confirm your template and
+`{% render %}` partials resolve correctly before a real run:
 
 ```bash
 ./bin/symphony workflow preview                       # renders ./WORKFLOW.md
@@ -437,8 +440,9 @@ every provider in use is held. Slack and webhook channels get one `usage_limit_p
 the hold starts and one `usage_limit_resumed` message when it clears, which is once Claude accepts
 the first run, not when it starts.
 
-When Claude can't reach its API at all (the network or DNS is down, so a turn ends on
-`API Error: Can't reach the API server … (ENOTFOUND)`), Symphony holds Claude runs the same way,
+When Claude or Codex can't reach its API at all (the network or DNS is down, so a Claude turn ends
+on `API Error: Can't reach the API server … (ENOTFOUND)` or Codex gives up on
+`error sending request … dns error`), Symphony holds that provider's runs the same way,
 `auto_pause` or not, instead of reading the turn as finished: no idle turn is counted and no issue
 is parked. The pre-push reviewer, QA and the acceptance gate hold too, so a push never goes ahead
 without a review and no verdict is recorded. One held run probes the API after a minute, then after

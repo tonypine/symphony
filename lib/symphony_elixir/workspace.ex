@@ -2256,12 +2256,13 @@ defmodule SymphonyElixir.Workspace do
 
   defp remote_before_remove_repo_env_fallback(%{workspace: %{repo: repo}}) when is_binary(repo) and repo != "" do
     [
+      remote_safe_git_functions(),
       remote_shell_assign("symphony_configured_repo", repo),
       """
       if [ -z "${SYMPHONY_REPO:-}" ] && [ -n "$symphony_configured_repo" ]; then
         symphony_origin_url="$symphony_configured_repo"
         if [ -d "$symphony_configured_repo" ]; then
-          symphony_origin_url=$(git -C "$symphony_configured_repo" remote get-url origin 2>/dev/null || true)
+          symphony_origin_url=$(symphony_git "$symphony_configured_repo" remote get-url origin 2>/dev/null || true)
         fi
         case "$symphony_origin_url" in
           git@github.com:*)

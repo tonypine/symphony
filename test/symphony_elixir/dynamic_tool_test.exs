@@ -408,8 +408,16 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       plain_plan = %{"title" => "Split the importer", "description" => "Plan it.", "labels" => %{"nodes" => [%{"name" => "breakdown"}]}}
       not_a_plan = %{"title" => "Fix the importer", "labels" => %{"nodes" => [%{"name" => "needs-human"}]}}
 
+      # TP-747: the plan's author says they review its artifacts.
+      reviews_artifacts = %{
+        "title" => "Create a native foreground dashboard to the macOS app",
+        "description" => "Plan the dashboard. I only want to review and validate the artifacts.",
+        "labels" => %{"nodes" => [%{"name" => "plan"}]}
+      }
+
       assert move("In Review", needs_human) == "state-human"
       assert move("in review", must_not) == "state-human"
+      assert move("In Review", reviews_artifacts) == "state-human"
       assert move("In Review", plain_plan) == "state-review"
       assert move("In Review", not_a_plan) == "state-review"
 
@@ -469,6 +477,82 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       # and a PR-less breakdown plan can still be moved there.
       assert move("Backlog", implementation, comment_registry: registry) == "state-human"
       assert move("Human Review", %{"labels" => %{"nodes" => [%{"name" => "breakdown"}]}}) == "state-human"
+    end
+
+    # TP-612: the work was already on `main`, so there is no PR, and only a host crash check is left.
+    test "with Auto Review on, a ticket with no PR goes to In Review once its run left a supervisor check" do
+      write_workflow_file!(Workflow.workflow_file_path(), auto_review: %{enabled: true})
+      {:ok, registry} = CommentRegistry.start_link()
+      no_pr = %{"title" => "Keep the toolbars off the inspector", "attachments" => %{"nodes" => [%{"url" => "https://linear.app/acme/document/brief"}, %{}]}}
+      with_pr = %{no_pr | "attachments" => %{"nodes" => [%{"url" => "https://github.com/acme/app/pull/12"}]}}
+      test_pid = self()
+
+      refused? = fn target, issue_fields ->
+        response =
+          DynamicTool.execute(
+            "linear_update_state",
+            %{"state_name_or_id" => target},
+            issue: %Issue{id: "issue-current"},
+            comment_registry: registry,
+            linear_client: fn query, variables, client_opts ->
+              if query =~ "SymphonyAgentIssueTeamStates",
+                do: {:ok, %{"data" => %{"issue" => Map.merge(team_states_issue(@review_states, []), issue_fields)}}},
+                else: update_state_client(test_pid, @review_states).(query, variables, client_opts)
+            end
+          )
+
+        match?(%{"error" => %{"code" => "in_review_set_by_auto_review"}}, Jason.decode!(response["output"]))
+      end
+
+      comment = fn tool, args ->
+        response =
+          DynamicTool.execute(tool, args,
+            issue: %Issue{id: "issue-current"},
+            comment_registry: registry,
+            linear_client: fn _query, _variables, _opts ->
+              {:ok,
+               %{
+                 "data" => %{
+                   "commentCreate" => %{"success" => true, "comment" => %{"id" => "brief-1"}},
+                   "commentUpdate" => %{"success" => true, "comment" => %{"id" => "brief-1"}},
+                   "commentDelete" => %{"success" => true}
+                 }
+               }}
+            end
+          )
+
+        assert response["success"] == true
+      end
+
+      # A brief without the block, or naming it only in passing, changes nothing.
+      comment.("linear_add_comment", %{"body" => "## Review brief\n\nSee the `## Supervisor check` below."})
+      assert refused?.("In Review", no_pr)
+      refute CommentRegistry.supervisor_check?(registry)
+
+      comment.("linear_update_comment", %{"comment_id" => "brief-1", "body" => "## Review brief\n\n  ## Supervisor check\n\n**Verify:** no crash on `main`."})
+      assert CommentRegistry.supervisor_check?(registry)
+
+      assert move("In Review", no_pr, comment_registry: registry) == "state-review"
+      assert refused?.("Human Review", no_pr)
+      assert refused?.("In Review", with_pr)
+
+      # Editing the block away, or deleting the comment that holds it, takes the exemption back.
+      check = "## Supervisor check\n\n**Verify:** no crash on `main`."
+      comment.("linear_update_comment", %{"comment_id" => "brief-1", "body" => "## Review brief\n\nNothing left to check."})
+      assert refused?.("In Review", no_pr)
+
+      comment.("linear_update_comment", %{"comment_id" => "brief-1", "body" => check})
+      assert move("In Review", no_pr, comment_registry: registry) == "state-review"
+
+      comment.("linear_delete_comment", %{"comment_id" => "brief-1"})
+      refute CommentRegistry.supervisor_check?(registry)
+      assert refused?.("In Review", no_pr)
+
+      # A PR the run opened counts before Linear lists it among the issue's attachments.
+      comment.("linear_add_comment", %{"body" => check})
+      assert move("In Review", no_pr, comment_registry: registry) == "state-review"
+      CommentRegistry.record_pull_request(registry)
+      assert refused?.("In Review", no_pr)
     end
   end
 
@@ -790,6 +874,12 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
       response = DynamicTool.execute("qa_put_file", %{"local_path" => "qa-evidence/a.yml", "mode" => "0777"}, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
       assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
+
+      response = DynamicTool.execute("qa_resize_window", %{"pid" => 1, "x" => 0}, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
+      assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
+
+      response = DynamicTool.execute("qa_check_app", %{"pid" => 1, "page" => "Decide"}, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
+      assert %{"error" => %{"code" => "qa_driver_unavailable"}} = Jason.decode!(response["output"])
     end
 
     test "only the QA scope lists and runs the qa_android tools, routed to the Android driver" do
@@ -858,7 +948,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       end
     end
 
-    test "creates the sub-issue through the legacy alias and reports the cap past it" do
+    test "creates the sub-issue through the legacy alias and refuses a duplicate title" do
       {:ok, registry} = CommentRegistry.start_link()
 
       client = fn query, _variables, _opts ->
@@ -879,13 +969,12 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
       opts = [issue: %Issue{id: "issue-current"}, comment_registry: registry, linear_client: client]
 
-      for _ <- 1..10 do
-        response = DynamicTool.execute("linear.create_subissue", %{title: "Slice", description: "body", priority: 3}, opts)
-        assert response["success"] == true
-      end
+      response = DynamicTool.execute("linear.create_subissue", %{title: "Slice", description: "body", priority: 3}, opts)
+      assert response["success"] == true
 
       response = DynamicTool.execute("linear_create_subissue", %{"title" => "Slice", "description" => "body"}, opts)
-      assert %{"error" => %{"code" => "subissue_cap_reached", "cap" => 10}} = Jason.decode!(response["output"])
+      assert %{"error" => %{"code" => "duplicate_subissue", "identifier" => "TP-1", "message" => message}} = Jason.decode!(response["output"])
+      assert message =~ "already filed TP-1"
     end
 
     test "returns explicit error payloads for invalid input, no registry and no Backlog state" do
@@ -955,21 +1044,22 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       assert response["success"] == true
       assert %{"data" => %{"issueCreate" => %{"issue" => %{"blockedBy" => ["TP-2"]}}}} = Jason.decode!(response["output"])
 
-      response = DynamicTool.execute("linear_create_subissue", %{args | "blocked_by" => ["TP-2", "OPS-9"]}, opts)
+      response = DynamicTool.execute("linear_create_subissue", %{args | "title" => "Slice 2", "blocked_by" => ["TP-2", "OPS-9"]}, opts)
 
       assert %{"error" => %{"code" => "blocked_by_not_sibling", "unknown" => ["OPS-9"], "sub_issues" => ["TP-2", "TP-3"], "message" => message}} =
                Jason.decode!(response["output"])
 
       assert message =~ "Not a sub-issue: OPS-9. Nothing was created."
 
-      response = DynamicTool.execute("linear_create_subissue", args, Keyword.put(opts, :linear_client, client.(created, %{"success" => false})))
+      response =
+        DynamicTool.execute("linear_create_subissue", %{args | "title" => "Slice 2"}, Keyword.put(opts, :linear_client, client.(created, %{"success" => false})))
 
       assert %{"error" => %{"code" => "blocked_by_relation_failed", "identifier" => "TP-3", "blocker" => "TP-2", "message" => message}} =
                Jason.decode!(response["output"])
 
       assert message =~ "Created TP-3, but could not mark it blocked by TP-2"
 
-      response = DynamicTool.execute("linear_create_subissue", args, Keyword.put(opts, :linear_client, client.(%{"success" => true}, nil)))
+      response = DynamicTool.execute("linear_create_subissue", %{args | "title" => "Slice 3"}, Keyword.put(opts, :linear_client, client.(%{"success" => true}, nil)))
       assert %{"error" => %{"code" => "subissue_not_returned"}} = Jason.decode!(response["output"])
     end
   end
@@ -1276,13 +1366,27 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
   end
 
   describe "linear_request_human_action" do
-    @request %{"title" => "Add the release signing secrets", "why" => "Release fails.", "steps" => ["Add the secret."]}
+    @request %{
+      "title" => "Add the release signing secrets",
+      "why" => "Release fails.",
+      "decision" => %{
+        "question" => "Add the secret, or ship unsigned?",
+        "options" => [%{"label" => "Add it", "effect" => "Releases sign again.", "recommended" => true}, %{"label" => "Ship unsigned", "effect" => "No signing."}]
+      }
+    }
 
     test "is advertised with its fields and hidden from the read-only scope" do
-      assert %{"inputSchema" => %{"properties" => properties, "required" => ["title", "why", "steps"]}} =
+      assert %{"description" => description, "inputSchema" => %{"properties" => properties, "required" => ["title", "why", "decision"]}} =
                Enum.find(DynamicTool.tool_specs(), &(&1["name"] == "linear_request_human_action"))
 
-      assert properties |> Map.keys() |> Enum.sort() == ["est_minutes", "steps", "title", "unblocks", "why"]
+      assert properties |> Map.keys() |> Enum.sort() == ["decision", "est_minutes", "title", "unblocks", "why"]
+
+      assert %{"required" => ["question", "options"], "properties" => %{"options" => %{"minItems" => 2, "maxItems" => 4, "items" => option}}} =
+               properties["decision"]
+
+      assert %{"required" => ["label", "effect"], "properties" => %{"recommended" => %{"type" => "boolean"}}} = option
+      assert description =~ "a request without options is refused"
+      assert description =~ "goes to the supervisor as a `## Supervisor check` block with the ticket moved to In Review"
       refute "linear_request_human_action" in Enum.map(DynamicTool.tool_specs(:read_only), & &1["name"])
 
       response =
@@ -1303,13 +1407,19 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
             {:ok,
              %{
                "data" => %{
-                 "issue" => %{"id" => "issue-current", "team" => %{"id" => "team-1"}, "labels" => %{"nodes" => [%{"id" => "l1", "name" => "human-action"}]}},
-                 "issueLabels" => %{"nodes" => []}
+                 "issue" => %{
+                   "id" => "issue-current",
+                   "state" => %{"name" => "In Progress"},
+                   "team" => %{"states" => %{"nodes" => [%{"id" => "state-human", "name" => "Human Review"}]}}
+                 }
                }
              }}
 
           query =~ "SymphonyAgentAddComment" ->
             {:ok, %{"data" => %{"commentCreate" => %{"success" => true, "comment" => %{"id" => "comment-1"}}}}}
+
+          query =~ "SymphonyAgentUpdateIssueState" ->
+            {:ok, %{"data" => %{"issueUpdate" => %{"success" => true}}}}
         end
       end
 
@@ -1317,10 +1427,16 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
       response = DynamicTool.execute("linear_request_human_action", @request, opts)
       assert response["success"] == true
-      assert %{"requested" => true, "commentId" => "comment-1"} = Jason.decode!(response["output"])
+      assert %{"requested" => true, "commentId" => "comment-1", "state" => "Human Review"} = Jason.decode!(response["output"])
 
-      response = DynamicTool.execute("linear_request_human_action", Map.put(@request, "steps", []), opts)
-      assert %{"error" => %{"code" => "invalid_human_action", "message" => "linear_request_human_action: `steps`" <> _rest}} = Jason.decode!(response["output"])
+      response = DynamicTool.execute("linear_request_human_action", put_in(@request, ["decision", "options"], []), opts)
+
+      assert %{"error" => %{"code" => "invalid_human_action", "message" => "linear_request_human_action: `decision.options` must list 2 to 4 options" <> _rest}} =
+               Jason.decode!(response["output"])
+
+      # The old runbook shape is refused outright.
+      response = DynamicTool.execute("linear_request_human_action", @request |> Map.delete("decision") |> Map.put("steps", ["Check it."]), opts)
+      assert response["success"] == false
 
       disabled = Config.settings!() |> then(&%{&1 | human_actions: %{&1.human_actions | enabled: false}})
       response = DynamicTool.execute("linear_request_human_action", @request, Keyword.put(opts, :settings, disabled))
@@ -1367,7 +1483,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
                "data" => %{
                  "issue" => %{
                    "id" => "issue-current",
-                   "labels" => %{"nodes" => [%{"id" => "l1", "name" => "human-action"}]},
+                   "state" => %{"name" => "In Progress"},
                    "comments" => %{"nodes" => [request]}
                  }
                }
@@ -1375,9 +1491,6 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
           query =~ "SymphonyAgentAddReply" ->
             {:ok, %{"data" => %{"commentCreate" => %{"success" => true, "comment" => %{"id" => "reply-1"}}}}}
-
-          query =~ "SymphonyAgentRemoveLabel" ->
-            {:ok, %{"data" => %{"issueRemoveLabel" => %{"success" => true}}}}
         end
       end
 
@@ -1385,7 +1498,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
       response = DynamicTool.execute("linear_withdraw_human_action", %{"reason" => "The run had just started."}, opts)
       assert response["success"] == true
-      assert %{"withdrawn" => true, "replyCommentIds" => ["reply-1"], "labelRemoved" => true} = Jason.decode!(response["output"])
+      assert %{"withdrawn" => true, "replyCommentIds" => ["reply-1"], "remaining" => 0, "state" => "In Progress"} = Jason.decode!(response["output"])
 
       response = DynamicTool.execute("linear_withdraw_human_action", %{"reason" => " "}, opts)
 
@@ -1908,6 +2021,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
   test "github.create_pull_request uses current branch and configured origin repo" do
     workspace = tmp_workspace!("github-create-pr")
+    {:ok, registry} = CommentRegistry.start_link()
 
     try do
       git_runner = fn
@@ -1939,10 +2053,11 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
         DynamicTool.execute(
           "github_create_pull_request",
           %{"title" => "Add tools", "body" => "Body"},
-          github_tool_opts(workspace, gh_runner: gh_runner, git_runner: git_runner)
+          github_tool_opts(workspace, gh_runner: gh_runner, git_runner: git_runner, comment_registry: registry)
         )
 
       assert response["success"] == true
+      assert CommentRegistry.pull_request_created?(registry)
 
       assert %{
                "url" => "https://github.com/acme/symphony/pull/3051",

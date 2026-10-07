@@ -8,8 +8,9 @@ The workpad is the agent's log, and the person reviewing never needs to read it.
 every handoff to a person, leave one comment written for them, headed `## Review brief`.
 The handoffs are: a plan moved to `In Review` or `Human Review`, a PR moved to
 `In Review` (or left for Symphony to move to `Auto Review`), a `Final verification:`
-ticket moved to `In Review` or `Human Review`, and a `linear_request_human_action`
-request.
+ticket moved to `In Review` or `Human Review`, a ticket moved to `In Review` with a
+`## Supervisor check` (put the block in the brief), and a `linear_request_human_action`
+decision.
 
 - One brief per ticket. Before writing, look for a comment starting `## Review brief`
   with `linear_get_comments`. When one exists, edit it in place with
@@ -72,12 +73,12 @@ Write `None.` under `Decisions needed` when nothing is open. Fill in
   - Change: leave review comments on the PR; Symphony brings the ticket back to
     `In Progress` to address them on the same PR.
   - Reject: move the ticket to `Rework`; the PR is closed and the work starts over.
-- **Human Review** (a ticket waiting on a `linear_request_human_action` request; a
+- **Human Review** (a ticket waiting on a `linear_request_human_action` decision; a
   plan, PR or final verification in `Human Review` uses its own kind's moves):
-  - Approve: do the steps in the `## Action needed:` comment, then move the ticket to
-    `Todo`; the next run carries on.
-  - Change: reply under the request with what to do instead, then move the ticket to
-    `Todo`.
+  - Approve: reply under the `## Decision needed:` comment with the option you pick,
+    then move the ticket to `Todo`; the next run carries it out.
+  - Change: reply under the request with what to do instead of the options, then move
+    the ticket to `Todo`.
   - Reject: move the ticket to `Canceled` to drop the work.
 - **Final verification** (a `Final verification:` ticket in `In Review` or
   `Human Review`):

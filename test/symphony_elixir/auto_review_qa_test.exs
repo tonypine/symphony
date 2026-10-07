@@ -689,9 +689,10 @@ defmodule SymphonyElixir.AutoReviewQaTest do
           enabled: true,
           port_allocation: %{range: [4190, 4199]},
           dev_server: %{
-            start_cmd: "sleep 1",
+            # Something is at its socket, so it's the health check that fails.
+            start_cmd: ~s{touch "$SYMPHONY_VERIFICATION_SOCKET"; sleep 5},
             health_check_url: "http://127.0.0.1:${SYMPHONY_VERIFICATION_PORT}/api/v1/state",
-            health_timeout_ms: 50,
+            health_timeout_ms: 1_000,
             stop_timeout_ms: 100
           }
         }
@@ -727,8 +728,18 @@ defmodule SymphonyElixir.AutoReviewQaTest do
     end
 
     test "other dev server and browser server errors are blocked with their cause" do
+      unconfined = {:verification_failed, {:dev_server_sandbox_unconfined, :tcp_bind_allowed}}
+      not_on_socket = {:verification_failed, {:dev_server_not_on_socket, "/private/tmp/symphony-dev-server-1/serve.sock"}}
+
       for {error, text} <- [
             {{:qa_dev_server_failed, :exhausted}, "the dev server did not start: :exhausted"},
+            {{:qa_dev_server_failed, unconfined},
+             "the dev server did not start: Seatbelt on this Mac could not keep it from opening a TCP listener, " <>
+               "so Symphony did not run it unconfined (:tcp_bind_allowed)"},
+            {{:qa_dev_server_failed, not_on_socket},
+             "the dev server never listened on $SYMPHONY_VERIFICATION_SOCKET (/private/tmp/symphony-dev-server-1/serve.sock): " <>
+               "on macOS its sandbox allows no TCP listener, so it must listen on that unix socket, " <>
+               "which Symphony serves on 127.0.0.1:$SYMPHONY_VERIFICATION_PORT"},
             {{:qa_host_tunnel_failed, "ssh exited with status 255: Connection refused"},
              "the tunnel that forwards QA_HOST_PORTS to the QA host could not open, so the app could not reach the host's stubs: ssh exited with status 255: Connection refused"},
             {{:qa_browser_mcp_invalid, "url can't be blank"}, "`auto_review.playbooks.web.browser_mcp` is invalid: url can't be blank"},
@@ -1012,6 +1023,8 @@ defmodule SymphonyElixir.AutoReviewQaTest do
         {:qa_token_limit, 9, 5},
         {:remote_worker_unsupported, "worker-1"},
         {:qa_dev_server_failed, {:verification_failed, :health_timeout}},
+        {:qa_dev_server_failed, {:verification_failed, {:dev_server_sandbox_unconfined, :tcp_bind_allowed}}},
+        {:qa_dev_server_failed, {:verification_failed, {:dev_server_not_on_socket, "/tmp/symphony-dev-server-1/serve.sock"}}},
         {:qa_dev_server_failed, :eaddrinuse},
         {:qa_host_tunnel_failed, "ssh exited with status 255: Connection refused"},
         {:qa_browser_mcp_unavailable, :no_npx},
@@ -1079,6 +1092,28 @@ defmodule SymphonyElixir.AutoReviewQaTest do
   end
 
   describe "QaRunner" do
+    test "a runner that doesn't answer in time is a request error, not an exit" do
+      test_pid = self()
+      name = :"qa_runner_#{System.unique_integer([:positive])}"
+
+      run_fun = fn job, _opts ->
+        send(test_pid, {:pass_started, job.issue.id})
+        receive do: (:finish -> :ok)
+      end
+
+      runner = start_supervised!({QaRunner, name: name, run_fun: run_fun})
+      job = %{issue: issue(), record: %{workspace_path: "/workspaces/symphony/TP-901", repo_key: "symphony"}, sha: @sha, settings: Config.settings!()}
+      :ok = :sys.suspend(runner)
+
+      assert {:error, {:qa_runner_call_failed, :timeout}} =
+               QaRunner.request(job, qa_runner_server: name, request_timeout_ms: 10)
+
+      :ok = :sys.resume(runner)
+      # The runner took the request once it answered again, so the next poll finds the pass running.
+      assert_receive {:pass_started, "issue-qa-flow"}
+      assert :running = QaRunner.request(job, qa_runner_server: name)
+    end
+
     test "runs one pass per issue up to max_concurrent and forgets finished passes" do
       test_pid = self()
       name = :"qa_runner_#{System.unique_integer([:positive])}"

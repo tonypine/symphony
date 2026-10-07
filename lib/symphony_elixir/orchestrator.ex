@@ -52,8 +52,6 @@ defmodule SymphonyElixir.Orchestrator do
   # A transient Linear error (timeout, refused connection, 5xx) is not the issue's
   # fault: retry soon, without failure backoff. A rate limit waits for its pause.
   @linear_wait_retry_delay_ms 5_000
-  # The snapshot shows a run's pending Symphony tool call once it has run this long.
-  @pending_tool_report_after_ms 60_000
   # Slightly above the dashboard render interval so "checking now…" can render.
   @poll_transition_render_delay_ms 20
   @default_transcript_buffer_size 200
@@ -2291,10 +2289,11 @@ defmodule SymphonyElixir.Orchestrator do
     |> Enum.max(DateTime, fn -> nil end)
   end
 
-  # The snapshot shows a run's oldest pending tool call once it has run for a minute.
-  defp pending_tool(running_entry, %DateTime{} = now) do
+  # The snapshot shows a run's oldest pending tool call once it has run for
+  # `watchdog.pending_tool_report_after_ms` (a minute by default).
+  defp pending_tool(running_entry, %DateTime{} = now, report_after_ms) do
     with %{name: name, started_at: started_at} <- oldest_pending_tool_call(running_entry),
-         age_ms when age_ms >= @pending_tool_report_after_ms <- DateTime.diff(now, started_at, :millisecond) do
+         age_ms when age_ms >= report_after_ms <- DateTime.diff(now, started_at, :millisecond) do
       %{name: name, started_at: started_at, age_ms: age_ms}
     else
       _ -> nil
@@ -5207,20 +5206,17 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp notify_transcript(_repo_key, _issue_id, _event), do: :ok
 
+  # The audit writes go to AuditLog.Writer: done here, they held up every update (and the state
+  # API) for as long as the audit log's lock and the disk took.
   defp audit_agent_update(running_entry, update, token_delta) do
-    running_entry
-    |> AuditLog.record_agent_update(update, token_delta)
-    |> log_audit_error("record agent update")
+    AuditLog.Writer.record_agent_update(running_entry, update, token_delta)
   end
 
   defp maybe_emit_pr_opened(previous_entry, updated_entry) when is_map(updated_entry) do
     pr_url = URLUtils.pull_request_url(updated_entry)
 
     if is_nil(URLUtils.pull_request_url(previous_entry)) and is_binary(pr_url) do
-      updated_entry
-      |> AuditLog.record_pr_opened(pr_url)
-      |> log_audit_error("record pr_opened")
-
+      AuditLog.Writer.record_pr_opened(updated_entry, pr_url)
       emit_running_event(:pr_opened, updated_entry)
     end
   end
@@ -7184,6 +7180,8 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp build_snapshot(%State{} = state, %DateTime{} = now, now_ms) when is_integer(now_ms) do
+    pending_tool_report_after_ms = Config.settings!().watchdog.pending_tool_report_after_ms
+
     running =
       state.running
       |> Enum.map(fn {issue_id, metadata} ->
@@ -7231,7 +7229,7 @@ defmodule SymphonyElixir.Orchestrator do
           transcript_buffer_size: Map.get(metadata, :transcript_buffer_size, 0),
           forced: forced_entry?(metadata),
           linear_wait_until: active_linear_wait_until(metadata, now),
-          pending_tool: pending_tool(metadata, now),
+          pending_tool: pending_tool(metadata, now, pending_tool_report_after_ms),
           runtime_seconds: running_seconds(metadata.started_at, now)
         }
       end)
@@ -9014,11 +9012,4 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp seconds_since(_timestamp, _now), do: nil
-
-  defp log_audit_error(:ok, _action), do: :ok
-
-  defp log_audit_error({:error, reason}, action) do
-    Logger.warning("Audit log failed to #{action}: #{inspect(reason)}")
-    :ok
-  end
 end

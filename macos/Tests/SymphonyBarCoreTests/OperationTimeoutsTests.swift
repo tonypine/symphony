@@ -14,23 +14,29 @@ final class OperationTimeoutsTests: XCTestCase {
           root: ~/work
           git_network_timeout_ms: 120000
 
+        watchdog:
+          pending_tool_report_after_ms: 300000
+
         """
 
-    private let configTimeouts = OperationTimeouts(gitNetworkMs: 120_000, mcpToolMs: 900_000)
+    private let configTimeouts = OperationTimeouts(gitNetworkMs: 120_000, mcpToolMs: 900_000, pendingToolReportMs: 300_000)
 
     // MARK: Reading
 
-    func testReadsBothTimeouts() throws {
+    func testReadsTheTimeouts() throws {
         XCTAssertEqual(try OperationTimeouts.values(in: config), configTimeouts)
     }
 
     func testMissingAndNullKeysReadAsSymphonysDefaults() throws {
-        let defaults = OperationTimeouts(gitNetworkMs: 300_000, mcpToolMs: 600_000)
+        let defaults = OperationTimeouts(gitNetworkMs: 300_000, mcpToolMs: 600_000, pendingToolReportMs: 60_000)
         XCTAssertEqual(OperationTimeouts(), defaults)
         XCTAssertEqual(try OperationTimeouts.values(in: ""), defaults)
         XCTAssertEqual(try OperationTimeouts.values(in: "agent:\n  timeouts:\n    turn_ms: 5\nworkspaces:\n  root: ~/w\n"), defaults)
         XCTAssertEqual(
-            try OperationTimeouts.values(in: "agent:\n  timeouts:\n    mcp_tool_ms: null\nworkspaces:\n  git_network_timeout_ms: ~\n"),
+            try OperationTimeouts.values(
+                in: "agent:\n  timeouts:\n    mcp_tool_ms: null\nworkspaces:\n  git_network_timeout_ms: ~\n"
+                    + "watchdog:\n  pending_tool_report_after_ms: null\n"
+            ),
             defaults
         )
     }
@@ -65,10 +71,15 @@ final class OperationTimeoutsTests: XCTestCase {
         let updated = try OperationTimeouts.updating(
             config,
             from: configTimeouts,
-            to: OperationTimeouts(gitNetworkMs: 120_000, mcpToolMs: 1_200_000)
+            to: OperationTimeouts(gitNetworkMs: 120_000, mcpToolMs: 1_200_000, pendingToolReportMs: 300_000)
         )
         XCTAssertEqual(changedLines(config, updated), ["    mcp_tool_ms: 1200000  # 15 minutes"])
         XCTAssertEqual(try OperationTimeouts.updating(config, from: configTimeouts, to: configTimeouts), config)
+
+        var later = configTimeouts
+        later.pendingToolReportMs = 120_000
+        let reported = try OperationTimeouts.updating(config, from: configTimeouts, to: later)
+        XCTAssertEqual(changedLines(config, reported), ["  pending_tool_report_after_ms: 120000"])
     }
 
     func testInsertsMissingKeysAndSections() throws {
@@ -76,6 +87,10 @@ final class OperationTimeoutsTests: XCTestCase {
         XCTAssertEqual(
             try OperationTimeouts.updating("issues:\n  provider: linear\n", from: OperationTimeouts(), to: new),
             "issues:\n  provider: linear\nworkspaces:\n  git_network_timeout_ms: 60000\nagent:\n  timeouts:\n    mcp_tool_ms: 120000\n"
+        )
+        XCTAssertEqual(
+            try OperationTimeouts.updating("issues:\n  provider: linear\n", from: OperationTimeouts(), to: OperationTimeouts(pendingToolReportMs: 180_000)),
+            "issues:\n  provider: linear\nwatchdog:\n  pending_tool_report_after_ms: 180000\n"
         )
         XCTAssertEqual(
             try OperationTimeouts.updating("agent:\n    runtime: codex\nworkspaces:\n    root: ~/w\n", from: OperationTimeouts(), to: new),
@@ -105,10 +120,20 @@ final class OperationTimeoutsTests: XCTestCase {
     }
 
     func testOnlyAMovedStepperChangesItsTimeout() {
-        let loaded = OperationTimeouts(gitNetworkMs: 200, mcpToolMs: 600_000)
-        XCTAssertEqual(loaded.settingMinutes(gitNetwork: 1, mcpTool: 10), loaded)
-        XCTAssertEqual(loaded.settingMinutes(gitNetwork: 3, mcpTool: 10), OperationTimeouts(gitNetworkMs: 180_000, mcpToolMs: 600_000))
-        XCTAssertEqual(loaded.settingMinutes(gitNetwork: 1, mcpTool: 30), OperationTimeouts(gitNetworkMs: 200, mcpToolMs: 1_800_000))
+        let loaded = OperationTimeouts(gitNetworkMs: 200, mcpToolMs: 600_000, pendingToolReportMs: 45_000)
+        XCTAssertEqual(loaded.settingMinutes(gitNetwork: 1, mcpTool: 10, pendingToolReport: 1), loaded)
+        XCTAssertEqual(
+            loaded.settingMinutes(gitNetwork: 3, mcpTool: 10, pendingToolReport: 1),
+            OperationTimeouts(gitNetworkMs: 180_000, mcpToolMs: 600_000, pendingToolReportMs: 45_000)
+        )
+        XCTAssertEqual(
+            loaded.settingMinutes(gitNetwork: 1, mcpTool: 30, pendingToolReport: 1),
+            OperationTimeouts(gitNetworkMs: 200, mcpToolMs: 1_800_000, pendingToolReportMs: 45_000)
+        )
+        XCTAssertEqual(
+            loaded.settingMinutes(gitNetwork: 1, mcpTool: 10, pendingToolReport: 5),
+            OperationTimeouts(gitNetworkMs: 200, mcpToolMs: 600_000, pendingToolReportMs: 300_000)
+        )
     }
 
     // MARK: The file
@@ -116,7 +141,8 @@ final class OperationTimeoutsTests: XCTestCase {
     func testFileWriteRunsTheCheckOnTheNewTextFirst() async throws {
         let url = try writeConfig()
         let file = SymphonyConfigFile(path: url.path)
-        let new = OperationTimeouts(gitNetworkMs: 600_000, mcpToolMs: configTimeouts.mcpToolMs)
+        var new = configTimeouts
+        new.gitNetworkMs = 600_000
         var checked: String?
 
         let result = try await file.writeOperationTimeouts(new, from: try file.readOperationTimeouts()) { path in
@@ -135,7 +161,7 @@ final class OperationTimeoutsTests: XCTestCase {
         let url = try writeConfig()
 
         let result = try await SymphonyConfigFile(path: url.path).writeOperationTimeouts(
-            OperationTimeouts(gitNetworkMs: 0, mcpToolMs: configTimeouts.mcpToolMs),
+            OperationTimeouts(gitNetworkMs: 0, mcpToolMs: configTimeouts.mcpToolMs, pendingToolReportMs: configTimeouts.pendingToolReportMs),
             from: configTimeouts
         ) { _ in .failed("workspaces.git_network_timeout_ms must be greater than 0") }
 

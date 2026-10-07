@@ -13,7 +13,8 @@ defmodule SymphonyElixir.WorkflowStore do
   defmodule State do
     @moduledoc false
 
-    defstruct [:path, :stamp, :workflow, :last_error, :follow_app_env?, :path_resolver]
+    # `instructions` is the directory the workflow's playbook line reads, or nil.
+    defstruct [:path, :stamp, :instructions, :workflow, :last_error, :follow_app_env?, :path_resolver]
   end
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -169,7 +170,7 @@ defmodule SymphonyElixir.WorkflowStore do
   end
 
   defp reload_current_path(path, state) do
-    case current_stamp(path) do
+    case current_stamp(path, state.instructions) do
       {:ok, stamp} when stamp == state.stamp ->
         {:ok, %{state | last_error: nil}}
 
@@ -182,20 +183,29 @@ defmodule SymphonyElixir.WorkflowStore do
     end
   end
 
+  # Stamped before the load, so an edit made during it reloads on the next check.
   defp load_state(path) do
-    with {:ok, workflow} <- Workflow.load(path),
-         {:ok, stamp} <- current_stamp(path) do
-      {:ok, %State{path: path, stamp: stamp, workflow: workflow}}
-    else
-      {:error, reason} ->
-        {:error, reason}
+    with {:ok, content} <- read_workflow(path),
+         instructions = Workflow.instructions_path(path, content),
+         {:ok, stamp} <- current_stamp(path, instructions),
+         {:ok, workflow} <- Workflow.load(path) do
+      {:ok, %State{path: path, stamp: stamp, instructions: instructions, workflow: workflow}}
     end
   end
 
-  defp current_stamp(path) when is_binary(path) do
+  defp read_workflow(path) do
+    case File.read(path) do
+      {:ok, content} -> {:ok, content}
+      {:error, reason} -> {:error, {:missing_workflow_file, path, reason}}
+    end
+  end
+
+  # The stamp covers the instruction files the playbook line expands, so an edit to one
+  # reloads the workflow like an edit to `WORKFLOW.md`.
+  defp current_stamp(path, instructions) when is_binary(path) do
     with {:ok, stat} <- File.stat(path, time: :posix),
          {:ok, content} <- File.read(path) do
-      {:ok, {stat.mtime, stat.size, :erlang.phash2(content)}}
+      {:ok, {stat.mtime, stat.size, :erlang.phash2(content), Workflow.instructions_stamp(instructions)}}
     else
       {:error, reason} -> {:error, {:missing_workflow_file, path, reason}}
     end

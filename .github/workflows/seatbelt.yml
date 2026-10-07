@@ -1,0 +1,112 @@
+name: seatbelt
+
+# Runs the `:seatbelt` tests, which start commands under the verification dev server's real
+# `sandbox-exec` profile: a read of a credential path fails, a connection off loopback fails, the
+# egress proxy tunnels only to allowlisted hosts, no TCP listener opens on any address, and a dev
+# server serves from inside the sandbox on 127.0.0.1 only, through Symphony's loopback bridge, while
+# a connection to the runner's own non-loopback address is refused.
+# `test/test_helper.exs` excludes them where `sandbox-exec` can't run, which is `make-all`'s
+# Ubuntu runners and every agent run (Seatbelt can't nest), so they run here, on a macOS runner.
+# `--only seatbelt` runs them even so, and fails when none is found.
+#
+# It runs on the newest macOS image, the platform Symphony runs on. Seatbelt can't keep a TCP
+# listener on loopback (`macos-14`, `macos-26` and `xcode-27` all let a `localhost` rule listen on
+# 0.0.0.0), so the profile allows no TCP listener at all: the dev server listens on a unix socket
+# in its temp folder, and Symphony serves that socket on 127.0.0.1 from outside the sandbox.
+#
+# Not a required check: on a pull request that changes none of these paths the workflow doesn't
+# run. Pushes to `main` that change them run it too, so it stays green there.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "lib/symphony_elixir/verification/**"
+      - "lib/symphony_elixir/agent_sandbox_config.ex"
+      - "lib/symphony_elixir/http_server.ex"
+      - "scripts/qa-dashboard-server.sh"
+      - "test/support/dev_server.py"
+      - "test/symphony_elixir/verification/dev_server_sandbox_test.exs"
+      - "test/symphony_elixir/verification_test.exs"
+      - "test/test_helper.exs"
+      - ".github/workflows/seatbelt.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "lib/symphony_elixir/verification/**"
+      - "lib/symphony_elixir/agent_sandbox_config.ex"
+      - "lib/symphony_elixir/http_server.ex"
+      - "scripts/qa-dashboard-server.sh"
+      - "test/support/dev_server.py"
+      - "test/symphony_elixir/verification/dev_server_sandbox_test.exs"
+      - "test/symphony_elixir/verification_test.exs"
+      - "test/test_helper.exs"
+      - ".github/workflows/seatbelt.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: seatbelt-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  seatbelt:
+    name: seatbelt tests
+    runs-on: macos-26
+    # One test builds this checkout's escript (`mix build`, outside the sandbox) before the
+    # dashboard dev server serves it: the sandbox allows no TCP listener, so Mix can't run there.
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up mise tools
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+        with:
+          install: true
+          cache: true
+
+      - name: Cache deps and build
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-${{ runner.arch }}-seatbelt-mix-${{ hashFiles('mix.lock', 'mix.exs', 'mise.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-seatbelt-mix-
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          /usr/bin/sandbox-exec -p '(version 1)(allow default)' /usr/bin/true && echo "sandbox-exec works"
+
+      - name: Install dependencies
+        run: time mix deps.get
+
+      - name: Run the Seatbelt tests
+        run: time mix test --only seatbelt
+
+      # Whether the dev server runs confined on this image or refuses to start, as an annotation.
+      - name: Report the confinement verdict
+        if: ${{ !cancelled() }}
+        env:
+          MIX_ENV: test
+        run: |
+          mix run --no-start -e '
+            dir = Path.join(System.tmp_dir!(), "seatbelt-verdict")
+            File.mkdir_p!(dir)
+
+            case SymphonyElixir.Verification.DevServerSandbox.command("true", dir, dir, []) do
+              {:ok, _argv, _cleanup} ->
+                IO.puts("::notice title=Seatbelt confinement::the profile refuses every TCP listener, so the dev server runs confined behind the loopback bridge")
+
+              {:error, reason} ->
+                IO.puts("::error title=Seatbelt confinement::the dev server refuses to start: #{inspect(reason)}")
+                System.halt(1)
+            end
+          '

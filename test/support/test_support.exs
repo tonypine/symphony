@@ -1009,6 +1009,9 @@ defmodule SymphonyElixir.TestSupport do
       "  no_progress_threshold_ms: #{yaml_value(Map.get(config, :no_progress_threshold_ms))}",
       if(Map.has_key?(config, :stray_process_cpu_minutes),
         do: "  stray_process_cpu_minutes: #{yaml_value(config.stray_process_cpu_minutes)}"
+      ),
+      if(Map.has_key?(config, :pending_tool_report_after_ms),
+        do: "  pending_tool_report_after_ms: #{yaml_value(config.pending_tool_report_after_ms)}"
       )
     ]
     |> Enum.reject(&is_nil/1)
@@ -1128,6 +1131,7 @@ defmodule SymphonyElixir.TestSupport do
           kv("range", Map.get(port_allocation, :range))
         ]),
         nested_yaml("dev_server", [
+          kv("build_cmd", Map.get(dev_server, :build_cmd)),
           kv("start_cmd", Map.get(dev_server, :start_cmd)),
           kv("health_check_url", Map.get(dev_server, :health_check_url)),
           kv("health_timeout_ms", Map.get(dev_server, :health_timeout_ms)),

@@ -165,8 +165,10 @@ The steps below apply when it does not
    If a gap cannot be linked, move this ticket to `Backlog` instead and say why in
    the workpad, so a human re-promotes it.
 3. When every requirement is met, move this ticket to `In Review` for a human to
-   sign off and move it to `Done`. When the requirements left can only be checked by a
-   person (a real key, a device, a hand check), move it to `Human Review` instead and
-   list those checks in the workpad. Before either move, leave the review brief (see
-   `Review brief`): the requirements checked, the checks left for the person, and the
-   moves that sign it off or send it back. The parent's close-out run follows.
+   sign off and move it to `Done`. When the requirements left need a check an agent
+   can't run (a real key, a device, launching the app), still move it to `In Review`,
+   never `Human Review`, with a `## Supervisor check` block for each (see
+   `Decisions for a person, checks for the supervisor`), and list them in the
+   workpad. Before the move, leave the review brief (see `Review brief`): the
+   requirements checked, the supervisor checks left, and the moves that sign it off
+   or send it back. The parent's close-out run follows.

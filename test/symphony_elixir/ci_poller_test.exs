@@ -110,6 +110,32 @@ defmodule SymphonyElixir.CiPollerTest do
     def fetch_failed_log(run_id, opts), do: FakeGitHub.fetch_failed_log(run_id, opts)
   end
 
+  # Reads the head's CI through `PullRequest.fetch_ci_status/2`, from the status check rollups in
+  # `:ci_test_rollups`, one per read.
+  defmodule RollupGitHub do
+    alias SymphonyElixir.GitHub.PullRequest
+
+    def fetch_ci_status(pr_url, opts) do
+      send(Application.fetch_env!(:symphony_elixir, :ci_test_recipient), {:fetch_ci_status, pr_url})
+      [rollup | rest] = Application.fetch_env!(:symphony_elixir, :ci_test_rollups)
+      Application.put_env(:symphony_elixir, :ci_test_rollups, rest)
+
+      runner = fn
+        ["pr", "view", ^pr_url, "--json", _fields], _opts ->
+          pr = %{"state" => "OPEN", "url" => pr_url, "headRefName" => "feature/fix-ci", "headRefOid" => "abc123", "statusCheckRollup" => rollup}
+          {Jason.encode!(pr), 0}
+
+        ["api", "repos/example/repo/actions/runs?head_sha=abc123&per_page=100"], _opts ->
+          {Jason.encode!(%{"workflow_runs" => []}), 0}
+      end
+
+      PullRequest.fetch_ci_status(pr_url, Keyword.put(opts, :gh_runner, runner))
+    end
+
+    def rerun_failed(run_id, opts), do: FakeGitHub.rerun_failed(run_id, opts)
+    def fetch_failed_log(run_id, opts), do: FakeGitHub.fetch_failed_log(run_id, opts)
+  end
+
   defmodule FailingGitHub do
     def fetch_ci_status(pr_url, _opts) do
       recipient = Application.fetch_env!(:symphony_elixir, :ci_test_recipient)
@@ -279,6 +305,7 @@ defmodule SymphonyElixir.CiPollerTest do
       Application.delete_env(:symphony_elixir, :ci_test_issues)
       Application.delete_env(:symphony_elixir, :ci_test_status)
       Application.delete_env(:symphony_elixir, :ci_test_statuses)
+      Application.delete_env(:symphony_elixir, :ci_test_rollups)
       Application.delete_env(:symphony_elixir, :ci_test_required_checks)
       Application.delete_env(:symphony_elixir, :ci_test_failed_log)
       Application.delete_env(:symphony_elixir, :ci_test_failed_log_error)
@@ -1132,6 +1159,63 @@ defmodule SymphonyElixir.CiPollerTest do
              RunStore.list_ci_checks()
   end
 
+  describe "with a duplicate run on the head that GitHub cancelled" do
+    setup do
+      now = ~U[2026-10-06 14:58:00Z]
+      issue = in_review_issue()
+      Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+      put_run(issue, now)
+
+      check = fn name, run_id, conclusion ->
+        status = if conclusion == "", do: "IN_PROGRESS", else: "COMPLETED"
+        url = "https://github.com/example/repo/actions/runs/#{run_id}/job/#{name}"
+        %{"name" => name, "status" => status, "conclusion" => conclusion, "workflowName" => "ci", "detailsUrl" => url}
+      end
+
+      cancelled = for name <- ["server-static", "android", "macos"], do: check.(name, 222, "CANCELLED")
+      poll = fn minutes -> CiPoller.poll_once(tracker: FakeTracker, github: RollupGitHub, now: DateTime.add(now, minutes, :minute)) end
+      {:ok, check: check, cancelled: cancelled, poll: poll}
+    end
+
+    test "reads pending while the other run goes on, and starts no rerun or CI-fix run", %{check: check, cancelled: cancelled, poll: poll} do
+      running = [check.("server-static", 111, "SUCCESS"), check.("android", 111, "SUCCESS"), check.("macos", 111, "")]
+      Application.put_env(:symphony_elixir, :ci_test_rollups, [running ++ cancelled, running ++ cancelled])
+
+      assert {:ok, %{actions: [{:watching, "issue-2401"}]}} = poll.(0)
+      assert {:ok, %{actions: [{:watching, "issue-2401"}]}} = poll.(5)
+      assert [%{status: "watching", last_observed_conclusion: "IN_PROGRESS"}] = RunStore.list_ci_checks()
+
+      refute_received {:rerun_failed, _run_id}
+      refute_received {:fetch_failed_log, _run_id}
+      refute_received {:issue_state_update, _issue_id, _state}
+    end
+
+    test "reads green once the other run passed", %{check: check, cancelled: cancelled, poll: poll} do
+      green = for name <- ["server-static", "android", "macos"], do: check.(name, 111, "SUCCESS")
+      Application.put_env(:symphony_elixir, :ci_test_rollups, [cancelled ++ green])
+
+      assert {:ok, %{actions: [{:green, "issue-2401"}]}} = poll.(0)
+      refute_received {:rerun_failed, _run_id}
+      refute_received {:issue_state_update, _issue_id, _state}
+    end
+
+    test "a job that really failed in the other run still reruns that run, then starts a CI-fix run", %{check: check, cancelled: cancelled, poll: poll} do
+      red = [check.("server-static", 111, "FAILURE"), check.("android", 111, "SUCCESS"), check.("macos", 111, "SUCCESS")]
+      Application.put_env(:symphony_elixir, :ci_test_rollups, [red ++ cancelled, red ++ cancelled])
+
+      assert {:ok, %{actions: [{:rerun_requested, "issue-2401", "111"}]}} = poll.(0)
+      assert_received {:rerun_failed, "111"}
+
+      assert {:ok, %{actions: [{:state_transitioned, "issue-2401", :ci_failure, "In Progress"}]}} = poll.(1)
+      assert_received {:fetch_failed_log, "111"}
+      assert_received {:issue_state_update, "issue-2401", "In Progress"}
+      assert %{failed_checks: [%{name: "server-static", run_id: "111"}]} = CiPoller.pending_ci_failure("issue-2401")
+
+      refute_received {:rerun_failed, "222"}
+      refute_received {:fetch_failed_log, "222"}
+    end
+  end
+
   test "second failure dispatches once with prompt ci failure context" do
     now = ~U[2026-05-06 09:00:00Z]
     issue = in_review_issue()
@@ -1283,7 +1367,7 @@ defmodule SymphonyElixir.CiPollerTest do
     assert_receive {:rerun_failed, "987"}
 
     # The agent parked the issue: only a person can make the fix.
-    parked = %{issue | state: "Backlog", labels: ["human-action"]}
+    parked = %{issue | state: "Backlog", labels: ["needs-human"]}
     Application.put_env(:symphony_elixir, :ci_test_issues, [parked])
 
     log =
@@ -1373,9 +1457,61 @@ defmodule SymphonyElixir.CiPollerTest do
     refute_receive {:rerun_failed, _run_id}
   end
 
+  test "an issue in Human Review waits for the person without a label" do
+    now = ~U[2026-05-06 09:00:00Z]
+    issue = %{in_review_issue() | state: "Human Review", labels: []}
+    Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+    Application.put_env(:symphony_elixir, :ci_test_status, failed_status("abc123"))
+    put_run(issue, now)
+
+    assert {:ok, %{actions: [{:awaiting_human_action, "issue-2401", "abc123"}]}} =
+             CiPoller.poll_once(tracker: StateFilteringTracker, github: FakeGitHub, now: now)
+
+    refute_receive {:rerun_failed, _run_id}
+    refute_receive {:issue_state_update, _issue_id, _state}
+  end
+
+  test "with human_review: null an In Review issue with an open request waits for the person" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_human_review_state: nil,
+      pr_review_mode: "polling",
+      ci: %{enabled: true, log_excerpt_lines: 3, max_retries: 3}
+    )
+
+    now = ~U[2026-05-06 09:00:00Z]
+    issue = %{in_review_issue() | labels: []}
+    Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
+    Application.put_env(:symphony_elixir, :ci_test_status, failed_status("abc123"))
+    put_run(issue, now)
+
+    # The request moved the issue to In Review and added no label: only the comment says it waits.
+    request = %{"id" => "c1", "body" => "## Action needed: Add the signing secrets", "createdAt" => "2026-05-06T08:00:00.000Z"}
+
+    linear_client = fn query, %{id: issue_id}, _opts ->
+      assert query =~ "SymphonyAgentHumanActionScope"
+      issue_node = %{"id" => issue_id, "comments" => %{"nodes" => [request]}, "history" => %{"nodes" => []}}
+      {:ok, %{"data" => %{"issue" => issue_node}}}
+    end
+
+    poll_opts = [tracker: StateFilteringTracker, github: FakeGitHub, linear_client: linear_client, now: now]
+    assert {:ok, %{actions: [{:awaiting_human_action, "issue-2401", "abc123"}]}} = CiPoller.poll_once(poll_opts)
+
+    refute_receive {:rerun_failed, _run_id}
+    refute_receive {:issue_state_update, _issue_id, _state}
+
+    # The requests can't be read: nothing moves the issue until they can.
+    failing = fn _query, _variables, _opts -> {:error, :linear_unavailable} end
+
+    assert {:ok, %{actions: [{:poll_error, "issue-2401", {:issue_read_failed, :linear_unavailable}}]}} =
+             CiPoller.poll_once(tracker: StateFilteringTracker, github: FakeGitHub, linear_client: failing, now: DateTime.add(now, 5, :minute))
+
+    refute_receive {:issue_state_update, _issue_id, _state}
+  end
+
   test "an issue in an active state with a person's label still gets the normal CI flow" do
     now = ~U[2026-05-06 09:00:00Z]
-    issue = %{in_review_issue() | state: "In Progress", labels: ["human-action", "breakdown"]}
+    issue = %{in_review_issue() | state: "In Progress", labels: ["needs-human", "breakdown"]}
     Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
     Application.put_env(:symphony_elixir, :ci_test_status, failed_status("abc123"))
 
@@ -1402,7 +1538,7 @@ defmodule SymphonyElixir.CiPollerTest do
 
   test "a failed issue read backs off instead of starting a CI-fix run" do
     now = ~U[2026-05-06 09:00:00Z]
-    issue = %{in_review_issue() | state: "Backlog", labels: ["human-action"]}
+    issue = %{in_review_issue() | state: "Backlog", labels: ["needs-human"]}
     Application.put_env(:symphony_elixir, :ci_test_issues, [issue])
     Application.put_env(:symphony_elixir, :ci_test_status, failed_status("abc123"))
     Application.put_env(:symphony_elixir, :ci_test_issue_read_error, :linear_unavailable)

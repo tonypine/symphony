@@ -138,11 +138,16 @@ defmodule SymphonyElixir.QaDriver.Remote do
     end
   end
 
-  @doc "Runs `executable` with `args` on the QA host. Options as `Host.cmd/3`; `:env` stays local."
+  @doc """
+  Runs `executable` with `args` on the QA host. Options as `Host.cmd/3`; `:env`
+  stays local, and `:remote_env` (`{name, value}` pairs) is added to the QA
+  user's environment for the command.
+  """
   @spec cmd(String.t(), String.t(), [String.t()], keyword()) :: {:ok, {String.t(), integer()}} | {:error, term()}
   def cmd(ssh_host, executable, args, opts) do
-    script = ~s(cd "$1" || exit 125; shift; exec "$@")
-    run(ssh_host, script, [Keyword.get(opts, :cd) || "." | [executable | args]], Keyword.take(opts, [:timeout_ms, :output_limit]))
+    env = for {name, value} <- Keyword.get(opts, :remote_env, []), do: "#{name}=#{value}"
+    script = ~s(cd "$1" || exit 125; shift; exec env "$@")
+    run(ssh_host, script, [Keyword.get(opts, :cd) || "." | env ++ [executable | args]], Keyword.take(opts, [:timeout_ms, :output_limit]))
   end
 
   @doc """

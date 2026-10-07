@@ -33,13 +33,19 @@
 //   ax-tree <pid> <max-depth> <max-nodes> <role or ""> <text or "">
 //   ax-press <pid> <path> <action>
 //   ax-set-value <pid> <path> <value>
+//   ax-resize <pid> <window path or ""> <width> <height>
+//   ax-ping <pid>
 //
 // `ax-set-value` types into a text field the way a person does (see
 // `enterText`), and sets `AXValue` directly only on other controls.
+// `ax-resize` sizes a window for the playbook's wide pass (see `resizeWindow`)
+// and `ax-ping` tells a hung app from a busy one; both use the Accessibility
+// grant like the other `ax-` commands.
 //
 // Opened with no arguments (by hand, from Finder or `open`), it asks for both
 // permissions, so that it is listed in System Settings.
 
+import AppKit
 import ApplicationServices
 import CoreGraphics
 import Foundation
@@ -122,12 +128,14 @@ func describe(_ element: AXUIElement, path: String) -> [String: Any] {
         node["focused"] = true
     }
 
-    if let origin = point(attribute(element, kAXPositionAttribute as String)),
-       let extent = size(attribute(element, kAXSizeAttribute as String)) {
-        node["frame"] = ["x": Int(origin.x), "y": Int(origin.y), "w": Int(extent.width), "h": Int(extent.height)]
-    }
-
+    node["frame"] = frame(element)
     return node
+}
+
+func frame(_ element: AXUIElement) -> [String: Int]? {
+    guard let origin = point(attribute(element, kAXPositionAttribute as String)),
+          let extent = size(attribute(element, kAXSizeAttribute as String)) else { return nil }
+    return ["x": Int(origin.x), "y": Int(origin.y), "w": Int(extent.width), "h": Int(extent.height)]
 }
 
 func matches(_ node: [String: Any], role: String, needle: String) -> Bool {
@@ -416,9 +424,105 @@ func enterText(_ app: AXUIElement, _ pid: pid_t, _ element: AXUIElement, role: S
     emit(["ok": true, "typed": true, "element": describe(element, path: path)])
 }
 
+// -- wide pass --------------------------------------------------------------------
+
+// An app counts as hung when it leaves an accessibility request unanswered this long.
+let hangTimeout: Float = 10
+
+func element(_ value: AnyObject?) -> AXUIElement? {
+    guard let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+    return (value as! AXUIElement)
+}
+
+func mainWindow(_ app: AXUIElement) -> AXUIElement? {
+    element(attribute(app, kAXMainWindowAttribute as String))
+        ?? element(attribute(app, kAXFocusedWindowAttribute as String))
+        ?? (attribute(app, kAXWindowsAttribute as String) as? [AXUIElement])?.first
+}
+
+func settable(_ element: AXUIElement, _ name: String) -> Bool {
+    var result: DarwinBoolean = false
+    return AXUIElementIsAttributeSettable(element, name as CFString, &result) == .success && result.boolValue
+}
+
+func setGeometry(_ element: AXUIElement, _ name: String, _ type: AXValueType, _ value: UnsafeRawPointer) -> AXError {
+    guard let wrapped = AXValueCreate(type, value) else { return .illegalArgument }
+    return AXUIElementSetAttributeValue(element, name as CFString, wrapped)
+}
+
+// Moves the window to the top left of the screen's usable area (below the menu
+// bar, beside the Dock), then sizes it to the request, or to that area when it
+// is smaller. A window whose `AXSize` can't be set gets its zoom button pressed
+// instead, which fills the usable area. Reports what the window ended up as,
+// with the screen and its usable area, so the caller can tell a small screen
+// from an app that keeps its window small.
+func resizeWindow(_ pid: pid_t, _ path: String, width: Double, height: Double) {
+    let app = application(pid)
+    let window: AXUIElement
+
+    if path.isEmpty {
+        guard let main = mainWindow(app) else { fail("no_window", "The app has no window to resize. Open its main window first.") }
+        window = main
+    } else {
+        window = resolve(app, path)
+        guard (attribute(window, kAXRoleAttribute as String) as? String) == kAXWindowRole as String else {
+            fail("not_a_window", "The element at \(path) is not a window (AXWindow).")
+        }
+    }
+
+    guard let screen = NSScreen.screens.first else { fail("no_screen", "The QA host has no screen.") }
+    // AppKit measures from the bottom left of the primary screen, accessibility from its top left.
+    let usable = screen.visibleFrame
+    var origin = CGPoint(x: usable.minX, y: screen.frame.maxY - usable.maxY)
+    var target = CGSize(width: min(width, usable.width), height: min(height, usable.height))
+    var method = "AXSize"
+
+    _ = setGeometry(window, kAXPositionAttribute as String, .cgPoint, &origin)
+
+    if !(settable(window, kAXSizeAttribute as String) && setGeometry(window, kAXSizeAttribute as String, .cgSize, &target) == .success) {
+        guard let zoom = element(attribute(window, kAXZoomButtonAttribute as String)),
+              AXUIElementPerformAction(zoom, kAXPressAction as CFString) == .success else {
+            fail("not_resizable", "The window has a fixed size: neither AXSize nor its zoom button resized it.")
+        }
+        method = "zoom"
+    }
+
+    _ = waitUntil(2) {
+        size(attribute(window, kAXSizeAttribute as String)).map { abs($0.width - target.width) < 1 && abs($0.height - target.height) < 1 } ?? false
+    }
+
+    emit([
+        "ok": true,
+        "method": method,
+        "window": frame(window) ?? [:],
+        "screen": ["w": Int(screen.frame.width), "h": Int(screen.frame.height)],
+        "visible": ["x": Int(origin.x), "y": Int(origin.y), "w": Int(usable.width), "h": Int(usable.height)],
+        "requested": ["w": Int(width), "h": Int(height)]
+    ])
+}
+
+// Any attribute read goes to the app's main thread, so one left unanswered for
+// `hangTimeout` means the app is hung. An app with no windows still answers.
+func ping(_ pid: pid_t) {
+    let app = AXUIElementCreateApplication(pid)
+    AXUIElementSetMessagingTimeout(app, hangTimeout)
+    var value: AnyObject?
+    let started = Date()
+    let result = AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value)
+
+    switch result {
+    case .success, .noValue, .attributeUnsupported:
+        emit(["ok": true, "responding": true, "ms": Int(Date().timeIntervalSince(started) * 1000)])
+    case .cannotComplete:
+        fail("app_not_responding", "The app did not answer an accessibility request within \(Int(hangTimeout)) seconds.")
+    default:
+        axFailure(result, "reading the app's windows")
+    }
+}
+
 // -- server ---------------------------------------------------------------------
 
-let pidCommands: Set<String> = ["windows", "screenshot", "ax-tree", "ax-press", "ax-set-value"]
+let pidCommands: Set<String> = ["windows", "screenshot", "ax-tree", "ax-press", "ax-set-value", "ax-resize", "ax-ping"]
 let requestLimit = 64 * 1024
 let commandTimeout: TimeInterval = 60
 // Symphony waits 15 s for the helper it opens, so an older owner file was left
@@ -693,6 +797,17 @@ case "ax-set-value" where args.count == 4:
         if result != .success { axFailure(result, "setting AXValue") }
         emit(["ok": true, "element": describe(element, path: args[2])])
     }
+
+case "ax-resize" where args.count == 5:
+    requireAccessibility()
+    guard let width = Double(args[3]), let height = Double(args[4]), width >= 1, height >= 1 else {
+        fail("invalid_size", "Width and height must be positive numbers of points.")
+    }
+    resizeWindow(pidArgument(args[1]), args[2], width: width, height: height)
+
+case "ax-ping" where args.count == 2:
+    requireAccessibility()
+    ping(pidArgument(args[1]))
 
 default:
     fail("usage", "Unknown command or wrong number of arguments.")

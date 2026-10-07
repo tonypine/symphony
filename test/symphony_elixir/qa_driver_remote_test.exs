@@ -75,6 +75,7 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
       windows) echo '{"windows":[{"id":11,"title":"Settings","layer":0,"onscreen":true,"frame":{"x":0,"y":0,"w":548,"h":420}}]}' ;;
       ax-tree) echo '{"root":{"path":"","role":"AXApplication","children":[{"path":"0","role":"AXWindow","title":"Settings"}]},"nodes":2,"truncated":false}' ;;
       screenshot) printf 'png-from-qa-host' > "$4"; echo '{"ok":true}' ;;
+      ax-ping) echo '{"ok":true,"responding":true}' ;;
     esac
     HELPER
     chmod +x "$out"
@@ -140,9 +141,26 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
       assert File.regular?(Path.join([run_dir, "src", @app, "Contents/MacOS/Demo"]))
       refute File.exists?(Path.join(worktree, "macos/build"))
 
+      # Crash reports are read on the QA host; one from before the launch is not this app's.
+      reports = Path.join(qa_home, "Library/Logs/DiagnosticReports")
+      File.mkdir_p!(reports)
+      File.write!(Path.join(reports, "Demo-2026-10-01-090000.ips"), "{}")
+
       {result, log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{}) end)
       assert {:ok, %{"pid" => pid, "qa_mode" => true}} = result
       assert log =~ "executable=#{run_dir}/builds/"
+
+      assert {:ok, %{"healthy" => true, "running" => true, "responding" => true, "crash_reports" => []}} =
+               QaDriver.call_tool(driver, "qa_check_app", %{"pid" => pid})
+
+      for name <- ["Demo-2026-10-06-120000.ips", "DemoHelper-2026-10-06-120000.ips", "Other-2026-10-06-120000.ips"],
+          do: File.write!(Path.join(reports, name), "{}")
+
+      assert {:ok, %{"healthy" => false, "crash_reports" => ["Demo-2026-10-06-120000.ips"], "problems" => [problem]}} =
+               QaDriver.call_tool(driver, "qa_check_app", %{"pid" => pid, "page" => "Settings"})
+
+      assert problem ==
+               ~s(New crash report \(page "Settings"\) in ~/Library/Logs/DiagnosticReports on the QA host: Demo-2026-10-06-120000.ips.)
 
       assert {:ok, %{"root" => %{"children" => [%{"title" => "Settings"}]}}} = QaDriver.call_tool(driver, "qa_ax_tree", %{"pid" => pid})
       assert File.read!(Path.join(run_dir, "helper/symphony-qa-driver.swift")) == elem(Host.helper_source(), 1)
@@ -321,6 +339,13 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
 
       assert {:ok, {_output, 125}} = cmd.("/bin/true", [], cd: Path.join(root, "missing"), timeout_ms: 5_000)
       assert {:ok, {"ok\n", 0}} = cmd.("/bin/sh", ["-c", "echo ok"], [])
+    end
+
+    test "cmd adds only the remote env to the command's environment", %{ssh_host: ssh_host} do
+      %{cmd: cmd} = Remote.host(ssh_host)
+      opts = [env: [{~c"LOCAL_ONLY", ~c"secret"}], remote_env: [{"QA_HOST_PORTS", "50001,50002,50003"}], timeout_ms: 5_000]
+
+      assert {:ok, {"50001,50002,50003|\n", 0}} = cmd.("/bin/sh", ["-c", ~s(echo "$QA_HOST_PORTS|$LOCAL_ONLY")], opts)
     end
 
     test "ship unpacks a tar into a fresh directory", %{root: root, ssh_host: ssh_host} do

@@ -421,24 +421,25 @@ final class AcceptanceGateTests: XCTestCase {
         XCTAssertEqual(AcceptanceGate.menuItems(global: .shadow, entries: entries), [.init(key: "my_web", mode: .shadow)])
     }
 
-    func testARowShowsTheModeWhenItDiffersFromTheGlobalOne() throws {
+    func testTheReposWindowShowsEachRepositorysModeAndRecord() throws {
         let entries = try RepositoriesConfig.entries(in: config)
-        XCTAssertEqual(AcceptanceGate.repoField(entries[0], global: .shadow), RepoField("Gate", "Enforce"))
-        XCTAssertNil(AcceptanceGate.repoField(entries[0], global: .enforce))
-        XCTAssertNil(AcceptanceGate.repoField(entries[1], global: .shadow))
+        let notRunning = AcceptanceGate.notRunningLine
+        XCTAssertEqual(
+            AcceptanceGate.repoGate(entries[0], global: .shadow, in: nil),
+            RepoDetail.Gate(mode: RepoField("Mode", "Enforce"), record: notRunning)
+        )
+        XCTAssertEqual(
+            AcceptanceGate.repoGate(entries[1], global: .shadow, in: nil),
+            RepoDetail.Gate(mode: RepoField("Mode", "Inherit: Shadow"), record: notRunning)
+        )
+        XCTAssertEqual(AcceptanceGate.repoGate(entries[1], global: nil, in: nil).mode, RepoField("Mode", "Inherit"))
         let loud = RepositoryEntry(key: "x", acceptanceGateMode: "loud")
-        XCTAssertEqual(AcceptanceGate.repoField(loud, global: .off)?.tone, .problem)
-        XCTAssertEqual(AcceptanceGate.repoField(loud, global: .off)?.value, "loud")
-    }
-
-    func testTheReposWindowAddsTheGateFieldToRowsThatDiffer() throws {
-        let entries = try RepositoriesConfig.entries(in: config)
-        let display = ReposDisplay(notice: "n", rows: entries.map(ReposList.row) + [RepoRow(key: "api", isDefault: false, fields: [])])
-        let shown = AcceptanceGate.withGateFields(display, entries: entries, global: .shadow)
-        XCTAssertEqual(shown.rows[0].fields.last, RepoField("Gate", "Enforce"))
-        XCTAssertEqual(shown.rows[0].fields.count, display.rows[0].fields.count + 1)
-        XCTAssertEqual(shown.rows[1], display.rows[1])
-        XCTAssertEqual(shown.rows[2], display.rows[2])
-        XCTAssertEqual(AcceptanceGate.withGateFields(display, entries: entries, global: .enforce), display)
+        XCTAssertEqual(
+            AcceptanceGate.repoGate(loud, global: .off, in: StateSnapshot()),
+            RepoDetail.Gate(
+                mode: RepoField("Mode", "loud", detail: "Symphony accepts off, shadow or enforce.", tone: .problem),
+                record: AcceptanceGate.unsupportedLine
+            )
+        )
     }
 }

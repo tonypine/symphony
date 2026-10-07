@@ -13,11 +13,12 @@ defmodule SymphonyElixir.ChangedCoverage.Runner do
 
   @doc """
   Runs git in the current directory: `{:ok, stdout}`, or `{:error, message}` on a non-zero exit.
-  Git's stderr goes to the terminal, so warnings never mix into the file lists.
+  Git's stderr goes to the terminal, so warnings never mix into the file lists. A repo's diff
+  drivers stay off (`SymphonyElixir.GitConfigCommands.subcommand_args/1`).
   """
   @spec git([String.t()]) :: {:ok, String.t()} | {:error, String.t()}
   def git(args) do
-    case System.cmd("git", args) do
+    case System.cmd("git", SymphonyElixir.GitConfigCommands.subcommand_args(args)) do
       {output, 0} -> {:ok, output}
       {_output, status} -> {:error, "exit status #{status}"}
     end

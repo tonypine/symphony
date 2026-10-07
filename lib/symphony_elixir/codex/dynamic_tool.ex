@@ -61,7 +61,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "linear_update_state",
       "description" =>
-        "Move the current Linear issue to a state in its team's workflow. Moving it to Merging is refused: only a human can approve a merge. With Auto Review on, moving it to In Review is refused too: Symphony moves the issue once the PR is open. When the issue needs a person (a plan its ticket says a human reviews, or after linear_request_human_action), a move to In Review or Backlog lands in Human Review instead when that state is on; the response names the state.",
+        "Move the current Linear issue to a state in its team's workflow. Moving it to Merging is refused: only a human can approve a merge. With Auto Review on, moving it to In Review is refused too: Symphony moves the issue once the PR is open; a ticket with no PR whose run left a `## Supervisor check` block may still move to In Review, for the supervisor to run the check. When the issue needs a person (a plan its ticket says a human reviews, or after linear_request_human_action), a move to In Review or Backlog lands in Human Review instead when that state is on; the response names the state.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -148,7 +148,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "linear_create_subissue",
       "description" =>
-        "Create a child issue of the current Linear issue, in its team and project and assigned to its assignee. The new issue lands in Backlog; a human promotes it. Pass `blocked_by` with the identifiers of earlier sibling sub-issues it depends on to add Linear blocked-by links. Capped per run.",
+        "Create a child issue of the current Linear issue, in its team and project and assigned to its assignee. The new issue lands in Backlog; a human promotes it. Pass `blocked_by` with the identifiers of earlier sibling sub-issues it depends on to add Linear blocked-by links. A title this run already filed under the current issue is refused.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -273,30 +273,47 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "linear_request_human_action",
       "description" =>
-        "Record that the current issue needs something only a human can do: a missing secret or permission, a product decision, an account setup, a manual check on a device. Symphony lists it, with your steps, in a Linear project update for the human, and drops it once the issue moves on. Never put a secret value in any field. A request with the same title that is still open is not posted again. Before asking about slow or stuck CI, compute the job's age from the API's UTC timestamps against the current UTC time (`date -u`), never local time; under 30 minutes old, wait for the CI poller's re-run instead. Then follow the blocked-access escape hatch as usual: its move to Backlog lands in Human Review when that state is on, where the human finds it.",
+        "Ask a person for a decision only they can make on the current issue: a product call, a missing secret or permission (add it, or drop what needs it), an account to set up. Give one question and 2 to 4 options, each with what it does, one of them recommended; a request without options is refused. Never ask a person to run a check: a check an agent can't run (launching the app, a host crash check, a check on a device) goes to the supervisor as a `## Supervisor check` block with the ticket moved to In Review, and a manual check that could be a test becomes a test. It moves the issue to Human Review (In Review when that state is off), where the person finds it, and Symphony lists the decision in a Linear project update until a person moves the issue on. It adds no label. Never put a secret value in any field. A request with the same title that is still open is not posted again. Before asking about slow or stuck CI, compute the job's age from the API's UTC timestamps against the current UTC time (`date -u`), never local time; under 30 minutes old, wait for the CI poller's re-run instead. Update the workpad first: the move ends your run shortly after.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
-        "required" => ["title", "why", "steps"],
+        "required" => ["title", "why", "decision"],
         "properties" => %{
-          "title" => %{"type" => "string", "maxLength" => 120, "description" => "What the human must do, as an instruction: `Add the release signing secrets`."},
-          "why" => %{"type" => "string", "description" => "Why it is needed and what fails without it, in one or two sentences."},
-          "steps" => %{
-            "type" => "array",
-            "items" => %{"type" => "string"},
-            "minItems" => 1,
-            "maxItems" => 15,
-            "description" => "Exact steps, one instruction each, detailed enough to do from a phone without opening anything else. Name settings and secret names, never values."
+          "title" => %{"type" => "string", "maxLength" => 120, "description" => "The decision in a few words: `Close TP-612 as a duplicate of TP-668`."},
+          "why" => %{"type" => "string", "description" => "Why it is needed and what waits on it, in one or two sentences."},
+          "decision" => %{
+            "type" => "object",
+            "additionalProperties" => false,
+            "required" => ["question", "options"],
+            "properties" => %{
+              "question" => %{"type" => "string", "description" => "The one question the person answers."},
+              "options" => %{
+                "type" => "array",
+                "minItems" => 2,
+                "maxItems" => 4,
+                "description" => "The choices, each with what happens once it is picked. Mark exactly one recommended.",
+                "items" => %{
+                  "type" => "object",
+                  "additionalProperties" => false,
+                  "required" => ["label", "effect"],
+                  "properties" => %{
+                    "label" => %{"type" => "string", "description" => "A short name for the option: `Close as duplicate`."},
+                    "effect" => %{"type" => "string", "description" => "What happens once it is picked: `TP-612 moves to Done, linked to TP-668`."},
+                    "recommended" => %{"type" => "boolean", "description" => "True on the one option you recommend."}
+                  }
+                }
+              }
+            }
           },
-          "unblocks" => %{"type" => "string", "description" => "What becomes possible once it is done, e.g. `the Release workflow on main`."},
-          "est_minutes" => %{"type" => "integer", "minimum" => 1, "maximum" => 480, "description" => "Rough minutes the human needs."}
+          "unblocks" => %{"type" => "string", "description" => "What becomes possible once it is decided, e.g. `the Release workflow on main`."},
+          "est_minutes" => %{"type" => "integer", "minimum" => 1, "maximum" => 480, "description" => "Rough minutes the person needs to decide."}
         }
       }
     },
     %{
       "name" => "linear_withdraw_human_action",
       "description" =>
-        "Withdraw a human-action request on the current Linear issue that is no longer needed, such as one sent by mistake. Replies with the reason under the request and, once no open request is left, removes the human-action label, so the next project update no longer lists it. A comment saying the request is not needed does not take it off the list; this does.",
+        "Withdraw a human-action request on the current Linear issue that is no longer needed, such as one sent by mistake. Replies with the reason under the request, so the next project update no longer lists it, and once no open request is left moves the issue from Human Review back to the active state it came from. A comment saying the request is not needed does not take it off the list; this does.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -506,6 +523,36 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       }
     },
     %{
+      "name" => "qa_resize_window",
+      "description" =>
+        "Wide pass: move the launched app's main window (or the AXWindow at `path`) to the top left of the screen and resize it to width x height points (default 1400 x 900), or the screen's usable area when that is smaller. Returns the window frame it reached, the screen and its usable area, and `limited` when the screen is under 1400 x 900 pt.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["pid"],
+        "properties" => %{
+          "pid" => @pid_property,
+          "path" => %{"type" => "string", "description" => "The AXWindow's element path from qa_ax_tree, like `0`. Defaults to the app's main window."},
+          "width" => %{"type" => "integer", "minimum" => 1400, "maximum" => 8192, "default" => 1400},
+          "height" => %{"type" => "integer", "minimum" => 900, "maximum" => 8192, "default" => 900}
+        }
+      }
+    },
+    %{
+      "name" => "qa_check_app",
+      "description" =>
+        "Check a launched app's health: still running, answers an accessibility request within 10 s (not hung), and no new crash report in ~/Library/Logs/DiagnosticReports since launch. Works after the app exited. `problems` names the page you pass and the window size qa_resize_window set.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["pid"],
+        "properties" => %{
+          "pid" => @pid_property,
+          "page" => %{"type" => "string", "maxLength" => 200, "description" => "The page, view or panel on screen, named in the problems."}
+        }
+      }
+    },
+    %{
       "name" => "qa_put_file",
       "description" =>
         "Put a fixture file you wrote (a test config, a WORKFLOW.md) where the app can open it, and return the path to give the app. On a separate QA host the app cannot see your files, so always pass it this path. Only a regular file of at most 1 MB under the worktree or $TMPDIR; no symlinks.",
@@ -700,7 +747,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "linear_create_document" => ["title", "content"],
     "linear_update_document" => ["document_id", "content", "title"],
     "linear_get_document" => ["document_id"],
-    "linear_request_human_action" => ["title", "why", "steps", "unblocks", "est_minutes"],
+    "linear_request_human_action" => ["title", "why", "decision", "unblocks", "est_minutes"],
     "linear_withdraw_human_action" => ["reason", "title"],
     "github_get_pull_request" => [],
     "github_fetch_origin" => [],
@@ -723,6 +770,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "qa_ax_tree" => ["pid", "role", "text", "max_depth", "max_nodes"],
     "qa_ax_press" => ["pid", "path", "action"],
     "qa_ax_set_value" => ["pid", "path", "value"],
+    "qa_resize_window" => ["pid", "path", "width", "height"],
+    "qa_check_app" => ["pid", "page"],
     "qa_put_file" => ["local_path", "remote_name"],
     "qa_android_install" => ["apk"],
     "qa_android_launch" => ["application_id"],
@@ -1298,12 +1347,12 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     }
   end
 
-  defp tool_error_payload({:subissue_cap_reached, cap}) do
+  defp tool_error_payload({:duplicate_subissue, identifier}) do
     %{
       "error" => %{
-        "code" => "subissue_cap_reached",
-        "message" => "This run already created #{cap} sub-issues, the per-run limit. List the remaining work in the workpad for a human to file instead.",
-        "cap" => cap
+        "code" => "duplicate_subissue",
+        "message" => "This run already filed #{identifier} with this title under the current issue. Nothing was created. Change #{identifier} with linear_update_subissue instead of filing it again.",
+        "identifier" => identifier
       }
     }
   end
@@ -1312,7 +1361,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "error" => %{
         "code" => "subissue_registry_unavailable",
-        "message" => "Symphony has no per-run tool state for this session, so it cannot enforce the sub-issue cap and refused to create the issue."
+        "message" => "Symphony has no per-run tool state for this session, so it cannot check for a duplicate sub-issue and refused to create the issue."
       }
     }
   end

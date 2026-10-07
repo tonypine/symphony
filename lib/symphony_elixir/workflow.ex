@@ -2,9 +2,15 @@ defmodule SymphonyElixir.Workflow do
   @moduledoc """
   Loads operator configuration from `symphony.yml` and repo workflow prompts from
   `WORKFLOW.md`.
+
+  A `WORKFLOW.md` body may hold a `{% render "playbook" %}` line, which loading
+  expands into Symphony's playbook partials and the repo's instruction files (see
+  `SymphonyElixir.Playbook.Assembly`). `load/1` reads those files next to the
+  workflow file; `SymphonyElixir.WorkflowSource` reads them from the git ref.
   """
 
   alias SymphonyElixir.Config.RepoWorkflowSchema
+  alias SymphonyElixir.Playbook.Assembly
   alias SymphonyElixir.WorkflowStore
 
   @symphony_file_name "symphony.yml"
@@ -105,7 +111,7 @@ defmodule SymphonyElixir.Workflow do
   def load(path) when is_binary(path) do
     case File.read(path) do
       {:ok, content} ->
-        parse_repo_workflow(content)
+        parse_repo_workflow(content, instructions_on_disk(Path.dirname(path)))
 
       {:error, reason} ->
         {:error, {:missing_workflow_file, path, reason}}
@@ -131,43 +137,140 @@ defmodule SymphonyElixir.Workflow do
   @doc false
   @spec parse_document(String.t()) :: {:ok, {map(), String.t()}} | {:error, term()}
   def parse_document(content) when is_binary(content) do
-    {front_matter_lines, prompt_lines} = split_front_matter(content)
+    {head, body} = split_body(content)
 
-    case front_matter_yaml_to_map(front_matter_lines) do
-      {:ok, front_matter} ->
-        prompt = Enum.join(prompt_lines, "\n") |> String.trim()
-        {:ok, {front_matter, prompt}}
-
-      {:error, :front_matter_not_a_map} ->
-        {:error, :front_matter_not_a_map}
-
-      {:error, reason} ->
-        {:error, {:front_matter_parse_error, reason}}
+    with {:ok, front_matter} <- parse_front_matter(head) do
+      {:ok, {front_matter, body |> Enum.join("\n") |> String.trim()}}
     end
   end
 
-  @doc false
-  @spec parse_repo_workflow(String.t()) :: {:ok, loaded_workflow()} | {:error, term()}
-  def parse_repo_workflow(content) when is_binary(content) do
-    with {:ok, {front_matter, prompt}} <- parse_document(content),
-         {:ok, repo_config} <- RepoWorkflowSchema.parse(front_matter) do
-      {:ok,
-       %{
-         config: RepoWorkflowSchema.to_config_map(repo_config),
-         prompt: prompt,
-         prompt_template: prompt
-       }}
+  @doc """
+  Parses a repo `WORKFLOW.md`, expanding its playbook line with the instruction
+  files `read_instructions` returns (none by default). The config comes from the
+  file's own front matter only, never from instruction file text.
+  """
+  @spec parse_repo_workflow(String.t(), Assembly.reader()) :: {:ok, loaded_workflow()} | {:error, term()}
+  def parse_repo_workflow(content, read_instructions \\ &no_instructions/1) when is_binary(content) do
+    with {:ok, _head, config, body} <- expand(content, read_instructions) do
+      prompt = body |> Enum.join("\n") |> String.trim()
+      {:ok, %{config: config, prompt: prompt, prompt_template: prompt}}
+    end
+  end
+
+  @doc """
+  Returns the `WORKFLOW.md` text with its playbook line expanded, front matter
+  unchanged, or the same text when the body has no such line. A snapshot of the
+  result loads without the instruction files.
+
+  The result always opens with the original front matter, an empty `---`/`---` block
+  when there was none, so loading it again reads the config from those lines alone:
+  expanded text that starts with `---` stays in the body.
+  """
+  @spec assemble(String.t(), Assembly.reader()) :: {:ok, String.t()} | {:error, term()}
+  def assemble(content, read_instructions) when is_binary(content) do
+    {_head, body} = split_body(content)
+
+    if Enum.any?(body, &Assembly.directive?/1) do
+      with {:ok, head, _config, body} <- expand(content, read_instructions) do
+        {:ok, Enum.join(snapshot_head(head) ++ body, "\n")}
+      end
     else
-      {:error, :front_matter_not_a_map} ->
-        {:error, :workflow_front_matter_not_a_map}
-
-      {:error, {:front_matter_parse_error, reason}} ->
-        {:error, {:workflow_parse_error, reason}}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:ok, content}
     end
   end
+
+  # Splits the front matter off before the body's playbook line expands, and takes the
+  # config and the `playbook` settings from it, so no instruction file byte reaches them.
+  defp expand(content, read_instructions) do
+    {head, body} = split_body(content)
+
+    with {:ok, front_matter} <- parse_front_matter(head),
+         {:ok, repo_config} <- RepoWorkflowSchema.parse(front_matter),
+         {:ok, body} <- Assembly.expand(body, Map.get(front_matter, "playbook") || %{}, read_instructions) do
+      {:ok, head, RepoWorkflowSchema.to_config_map(repo_config), body}
+    else
+      {:error, :front_matter_not_a_map} -> {:error, :workflow_front_matter_not_a_map}
+      {:error, {:front_matter_parse_error, reason}} -> {:error, {:workflow_parse_error, reason}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp snapshot_head([]), do: ["---", "---"]
+  defp snapshot_head(head), do: head
+
+  @doc """
+  Returns the directory the playbook line of the `WORKFLOW.md` at `path` with `content`
+  reads its instruction files from, or nil when the body has no such line.
+  """
+  @spec instructions_path(Path.t(), String.t()) :: Path.t() | nil
+  def instructions_path(path, content) when is_binary(path) and is_binary(content) do
+    {_head, body} = split_body(content)
+
+    with true <- Enum.any?(body, &Assembly.directive?/1),
+         {:ok, {front_matter, _prompt}} <- parse_document(content),
+         settings when is_map(settings) <- Map.get(front_matter, "playbook") || %{},
+         dir when is_binary(dir) <- Assembly.instructions_dir(settings) do
+      Path.expand(dir, Path.dirname(path))
+    else
+      _no_playbook -> nil
+    end
+  end
+
+  @doc """
+  Stamps the instruction files in `dir` (`instructions_path/2`) by name, type, size and
+  modification time, so a cache of a workflow expanded from them can tell when to load it
+  again. Nil for no directory.
+  """
+  @spec instructions_stamp(Path.t() | nil) :: term()
+  def instructions_stamp(nil), do: nil
+
+  def instructions_stamp(dir) when is_binary(dir) do
+    case File.ls(dir) do
+      {:ok, names} -> for name <- Enum.sort(names), Assembly.instruction_file?(name), do: file_stamp(dir, name)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp file_stamp(dir, name) do
+    case File.lstat(Path.join(dir, name), time: :posix) do
+      {:ok, stat} -> {name, stat.type, stat.size, stat.mtime}
+      {:error, reason} -> {name, reason}
+    end
+  end
+
+  @doc """
+  Reads the instruction files of a playbook directory relative to `base_dir`; a
+  missing directory has none. Only regular files count: a symlink or directory with an
+  instruction file's name is skipped, as it is on a git ref.
+  """
+  @spec instructions_on_disk(Path.t()) :: Assembly.reader()
+  def instructions_on_disk(base_dir) when is_binary(base_dir) do
+    fn dir ->
+      dir = Path.expand(dir, base_dir)
+
+      case File.ls(dir) do
+        {:ok, names} -> names |> Enum.filter(&Assembly.instruction_file?/1) |> read_files(dir)
+        {:error, :enoent} -> {:ok, []}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  defp read_files(names, dir) do
+    Enum.reduce_while(names, {:ok, []}, fn name, {:ok, files} ->
+      path = Path.join(dir, name)
+
+      with {:ok, %File.Stat{type: :regular}} <- File.lstat(path),
+           {:ok, body} <- File.read(path) do
+        {:cont, {:ok, [{name, body} | files]}}
+      else
+        {:ok, %File.Stat{}} -> {:cont, {:ok, files}}
+        {:error, reason} -> {:halt, {:error, {name, reason}}}
+      end
+    end)
+  end
+
+  defp no_instructions(_dir), do: {:ok, []}
 
   @doc false
   @spec parse_symphony(String.t()) :: {:ok, map()} | {:error, term()}
@@ -183,20 +286,29 @@ defmodule SymphonyElixir.Workflow do
     end
   end
 
-  defp split_front_matter(content) do
+  # The front matter lines, delimiters included, and the body lines.
+  defp split_body(content) do
     lines = String.split(content, ~r/\R/, trim: false)
+    Enum.split(lines, front_matter_length(lines))
+  end
 
-    case lines do
-      ["---" | tail] ->
-        {front, rest} = Enum.split_while(tail, &(&1 != "---"))
+  # Lines of the front matter block, both `---` delimiters included.
+  defp front_matter_length(["---" | tail]) do
+    case Enum.split_while(tail, &(&1 != "---")) do
+      {front, ["---" | _prompt_lines]} -> length(front) + 2
+      {front, []} -> length(front) + 1
+    end
+  end
 
-        case rest do
-          ["---" | prompt_lines] -> {front, prompt_lines}
-          _ -> {front, []}
-        end
+  defp front_matter_length(_lines), do: 0
 
-      _ ->
-        {[], lines}
+  # Parses the front matter lines `split_body/1` returns; none is an empty map.
+  defp parse_front_matter([]), do: {:ok, %{}}
+
+  defp parse_front_matter(["---" | lines]) do
+    case front_matter_yaml_to_map(Enum.take_while(lines, &(&1 != "---"))) do
+      {:error, reason} when reason != :front_matter_not_a_map -> {:error, {:front_matter_parse_error, reason}}
+      result -> result
     end
   end
 

@@ -112,6 +112,55 @@ final class ControlAPITests: XCTestCase {
         XCTAssertEqual(sent?.value(forHTTPHeaderField: "Authorization"), "Bearer 0123abcd")
     }
 
+    func testStopRequest() throws {
+        let stop = ControlAPI.request(.stop("TP-7"), base: base, token: "secret")
+        XCTAssertEqual(stop.httpMethod, "POST")
+        XCTAssertEqual(stop.url?.absoluteString, "http://127.0.0.1:4010/api/v1/control/stop")
+        XCTAssertEqual(stop.value(forHTTPHeaderField: "Authorization"), "Bearer secret")
+        XCTAssertEqual(try json(stop), ["issue_identifier": "TP-7"])
+    }
+
+    func testStopResponses() {
+        XCTAssertEqual(
+            ControlAPI.result(.stop("TP-7"), statusCode: 200, data: Data(#"{"stopped":true,"issue_identifier":"TP-7"}"#.utf8)),
+            .done
+        )
+        // Symphony answers 200 when no agent runs on the ticket, with `stopped: false`.
+        XCTAssertEqual(
+            ControlAPI.result(.stop("TP-7"), statusCode: 200, data: Data(#"{"stopped":false,"issue_id":"TP-7"}"#.utf8)),
+            .failed("Couldn't stop TP-7: no agent runs on TP-7 anymore")
+        )
+        XCTAssertEqual(
+            ControlAPI.result(.stop("TP-7"), statusCode: 200, data: Data("<html>".utf8)),
+            .failed("Couldn't stop TP-7: no agent runs on TP-7 anymore")
+        )
+        XCTAssertEqual(
+            ControlAPI.result(.stop("TP-7"), statusCode: 503, data: Data()),
+            .failed("Couldn't stop TP-7: its orchestrator is unavailable (HTTP 503)")
+        )
+    }
+
+    func testSendStopsARun() async throws {
+        try "http://127.0.0.1:4010\n".write(to: root.appendingPathComponent("control_url"), atomically: false, encoding: .utf8)
+        try "0123abcd\n".write(to: root.appendingPathComponent("control_token"), atomically: false, encoding: .utf8)
+        var sent: URLRequest?
+
+        let result = await ControlAPI.send(.stop("TP-7"), stateRoot: root) { request in
+            sent = request
+            return (
+                Data(#"{"stopped":true}"#.utf8),
+                HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            )
+        }
+
+        XCTAssertEqual(result, .done)
+        XCTAssertEqual(sent?.url?.absoluteString, "http://127.0.0.1:4010/api/v1/control/stop")
+        XCTAssertEqual(try json(XCTUnwrap(sent)), ["issue_identifier": "TP-7"])
+
+        let unreachable = await ControlAPI.send(.stop("TP-7"), stateRoot: root) { _ in throw URLError(.cannotConnectToHost) }
+        XCTAssertEqual(unreachable, .failed("Couldn't stop TP-7: nothing answered at http://127.0.0.1:4010"))
+    }
+
     func testSendFallsBackToTheDefaultURL() async throws {
         try "0123abcd".write(to: root.appendingPathComponent("control_token"), atomically: false, encoding: .utf8)
         var sent: URLRequest?

@@ -533,6 +533,55 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert {:current_function, {SlowQualityGateProvider, :score, 2}} = Process.info(gate_pid, :current_function)
   end
 
+  test "a slow audit log write for an agent update doesn't delay a concurrent snapshot" do
+    issue = %Issue{id: "issue-slow-audit", identifier: "MT-AUDIT", title: "Slow audit", state: "In Progress"}
+    test_pid = self()
+
+    # Stays in flight until the test releases it, as a write behind a busy lock or a large day.
+    Application.put_env(:symphony_elixir, :audit_log_writer_record_agent_update, fn entry, _update, _delta ->
+      send(test_pid, {:audit_write_started, self(), entry})
+
+      receive do
+        :release_audit_write -> send(test_pid, :audit_write_done)
+      after
+        60_000 -> :ok
+      end
+    end)
+
+    {:ok, pid} = Orchestrator.start_link(name: Module.concat(__MODULE__, :SlowAuditOrchestrator))
+
+    on_exit(fn ->
+      Application.delete_env(:symphony_elixir, :audit_log_writer_record_agent_update)
+      if Process.alive?(pid), do: stop_process(pid)
+    end)
+
+    initial_state = get_orchestrator_state(pid)
+
+    running_entry = %{
+      pid: self(),
+      ref: make_ref(),
+      identifier: issue.identifier,
+      issue: issue,
+      run_id: "run-slow-audit",
+      session_id: nil,
+      turn_count: 0,
+      started_at: DateTime.utc_now()
+    }
+
+    :sys.replace_state(pid, fn _ -> %{initial_state | running: %{issue.id => running_entry}, claimed: MapSet.put(initial_state.claimed, issue.id)} end)
+
+    send(pid, {:codex_worker_update, issue.id, %{event: :session_started, session_id: "thread-slow-audit", timestamp: DateTime.utc_now()}})
+    assert_receive {:audit_write_started, writer_pid, audited_entry}, @min_wait_ms
+    # The writer got only the fields an audit event names, not the whole running entry.
+    assert audited_entry == %{issue: issue, identifier: "MT-AUDIT", run_id: "run-slow-audit", session_id: "thread-slow-audit"}
+
+    assert %{running: [%{issue_id: "issue-slow-audit", session_id: "thread-slow-audit"}]} = Orchestrator.snapshot(pid, 1_000)
+    # The write is still waiting for its release, so the snapshot didn't wait on it.
+    refute_received :audit_write_done
+    send(writer_pid, :release_audit_write)
+    assert_receive :audit_write_done, @min_wait_ms
+  end
+
   test "orchestrator snapshot reflects last codex update and session id" do
     issue_id = "issue-snapshot"
 
@@ -4041,6 +4090,10 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       timestamp: ended_at
     }
 
+    # The run store keeps a row's newest 20 events, and the watching entry shows those.
+    earlier_events = Enum.map(1..29, &%{event: :notification, payload: %{"n" => &1}, timestamp: started_at})
+    shown_events = Enum.take(earlier_events, -19) ++ [transcript_event]
+
     assert :ok =
              RunStore.put_run(%{
                repo_key: Config.repo_key!(),
@@ -4065,8 +4118,8 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
                  output_tokens: 8,
                  total_tokens: 28
                },
-               transcript_buffer: [transcript_event],
-               transcript_buffer_size: 1,
+               transcript_buffer: earlier_events ++ [transcript_event],
+               transcript_buffer_size: 30,
                runtime_seconds: 120
              })
 
@@ -4114,8 +4167,8 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
                  output_tokens: 8,
                  total_tokens: 28
                },
-               transcript_buffer: [^transcript_event],
-               transcript_buffer_size: 1
+               transcript_buffer: ^shown_events,
+               transcript_buffer_size: 20
              }
            ] = snapshot.watching
 
@@ -5270,6 +5323,32 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       assert calls == %{}
       assert DateTime.after?(last_event_at, stale_at)
       assert %{running: [%{pending_tool: nil}]} = GenServer.call(pid, :snapshot)
+
+      Process.demonitor(worker_ref, [:flush])
+      Process.exit(worker_pid, :shutdown)
+    end
+
+    test "shows the call only past watchdog.pending_tool_report_after_ms" do
+      watchdog = Map.put(@watchdog_only[:watchdog], :pending_tool_report_after_ms, 300_000)
+      pid = start_linear_wait_orchestrator!(:ToolCallReportAfterOrchestrator, Keyword.put(@watchdog_only, :watchdog, watchdog))
+
+      issue = linear_wait_issue("issue-tool-call-report-after")
+      {worker_pid, worker_ref} = start_blocked_worker()
+      put_running_entry(pid, issue, linear_wait_running_entry(issue, worker_pid, worker_ref, DateTime.utc_now()))
+
+      # Two minutes is past the default minute but short of the configured five.
+      deadline = DateTime.add(DateTime.utc_now(), 600, :second)
+      two_minutes_ago = DateTime.add(DateTime.utc_now(), -120, :second)
+      young_call = %{name: "linear_get_comments", started_at: two_minutes_ago, deadline: deadline}
+      send(pid, {:mcp_tool_call, issue.id, {:started, :young_call, young_call}})
+      assert %{running: [%{pending_tool: nil}]} = GenServer.call(pid, :snapshot)
+
+      six_minutes_ago = DateTime.add(DateTime.utc_now(), -360, :second)
+      old_call = %{name: "github_sync_base", started_at: six_minutes_ago, deadline: deadline}
+      send(pid, {:mcp_tool_call, issue.id, {:started, :old_call, old_call}})
+
+      assert %{running: [%{pending_tool: %{name: "github_sync_base", age_ms: age_ms}}]} = GenServer.call(pid, :snapshot)
+      assert age_ms >= 360_000
 
       Process.demonitor(worker_ref, [:flush])
       Process.exit(worker_pid, :shutdown)

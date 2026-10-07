@@ -18,16 +18,43 @@ defmodule SymphonyElixir.HumanActionsConfigTest do
   test "is on by default with the documented settings" do
     write_workflow_file!(Workflow.workflow_file_path())
 
-    assert %{enabled: true, label: "human-action", interval_ms: 300_000, min_update_interval_ms: 900_000} =
+    assert %{enabled: true, label: nil, interval_ms: 300_000, min_update_interval_ms: 900_000} =
              Config.settings!().human_actions
   end
 
   test "reads the human_actions section of symphony.yml" do
     write_workflow_file!(Workflow.workflow_file_path())
-    append_symphony_yml!("human_actions:\n  label: needs-tony\n  interval_ms: 60000\n  min_update_interval_ms: 0\n")
+    append_symphony_yml!("human_actions:\n  interval_ms: 60000\n  min_update_interval_ms: 0\n")
 
-    assert %{enabled: true, label: "needs-tony", interval_ms: 60_000, min_update_interval_ms: 0} =
+    assert %{enabled: true, label: nil, interval_ms: 60_000, min_update_interval_ms: 0} =
              Config.settings!().human_actions
+  end
+
+  test "loads a config that still sets the retired label or escalates on it, with a deprecation warning" do
+    write_workflow_file!(Workflow.workflow_file_path())
+
+    yaml = """
+    human_actions:
+      label: needs-tony
+    auto_review:
+      acceptance_gate:
+        escalate:
+          labels: [needs-human, Human-Action]
+    """
+
+    log =
+      capture_log(fn ->
+        append_symphony_yml!(yaml)
+        assert %{label: "needs-tony"} = Config.settings!().human_actions
+      end)
+
+    assert log =~ "symphony.yml `human_actions.label` is deprecated"
+    assert log =~ "symphony.yml `auto_review.acceptance_gate.escalate.labels` lists the deprecated `human-action` label"
+
+    # A labelled issue counts as one with an open request.
+    settings = Config.settings!()
+    assert SymphonyElixir.HumanReview.legacy_request_labels(settings) == ["needs-tony", "human-action"]
+    assert SymphonyElixir.HumanReview.parked_for_person?(%Issue{state: "Backlog", labels: ["Needs-Tony"]}, settings)
   end
 
   test "rejects unknown keys and invalid values" do
@@ -73,13 +100,13 @@ defmodule SymphonyElixir.HumanActionsConfigTest do
     test_pid = self()
 
     collect = fn repos, opts ->
-      send(test_pid, {:repos, repos, opts[:settings].human_actions.label})
+      send(test_pid, {:repos, repos, opts[:settings].human_actions.enabled})
       {:ok, %{}}
     end
 
     HumanActions.run_once(%{opts: [collect: collect], projects: %{}, timer: make_ref()})
 
-    assert_received {:repos, [repo], "human-action"}
+    assert_received {:repos, [repo], true}
     assert {:ok, %{"project" => %{"slugId" => %{"eq" => "cycle"}}} = filter} = Client.repo_scope_filter(repo)
     refute Map.has_key?(filter, "state")
 

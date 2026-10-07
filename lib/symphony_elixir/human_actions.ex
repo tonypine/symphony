@@ -27,7 +27,7 @@ defmodule SymphonyElixir.HumanActions do
   require Logger
 
   alias SymphonyElixir.AgentTools.SecretScanner
-  alias SymphonyElixir.{Config, Notifications}
+  alias SymphonyElixir.{Config, HumanReview, Notifications}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.HumanActions.{CiSecrets, Collector, Update}
   alias SymphonyElixir.Linear.{Client, Usage}
@@ -208,7 +208,7 @@ defmodule SymphonyElixir.HumanActions do
   defp rate_limited?(_posted, _settings, _state), do: false
 
   defp post(state, project_id, posted, actions, settings) do
-    {body, patterns} = Update.render(actions, settings.human_actions.label)
+    {body, patterns} = Update.render(actions, HumanReview.review_states(settings))
     SecretScanner.audit_redaction(patterns, %{}, "human_actions", "project_update", Keyword.get(state.opts, :audit_opts, []))
     input = %{"projectId" => project_id, "body" => body, "health" => Update.health(actions)}
 

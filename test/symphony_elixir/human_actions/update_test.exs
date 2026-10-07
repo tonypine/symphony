@@ -15,13 +15,12 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
         why: "Every Release run on `main` fails at the signing step without them.",
         unblocks: "the Release workflow on `main`",
         est_minutes: 10,
-        steps: [
-          "Open github.com/acme/cycle → Settings → Secrets and variables → Actions.",
-          "Add `MACOS_CERTIFICATE` with the base64 of the Developer ID certificate (.p12).",
-          "Add `MACOS_CERTIFICATE_PASSWORD` with its password.",
-          "Move MOT-24 to Todo."
+        question: "Add the signing secrets, or ship unsigned builds?",
+        options: [
+          "**Add the secrets** (recommended): you add `MACOS_CERTIFICATE` and `MACOS_CERTIFICATE_PASSWORD` in the repository's Actions secrets; releases are signed again.",
+          "**Ship unsigned**: the agent drops the signing step; Gatekeeper warns on first launch."
         ],
-        done_when: "you remove the `human-action` label from MOT-24, or move it on once it is unblocked.",
+        done_when: "you reply with your pick and move MOT-24 out of Human Review, or the agent withdraws the request.",
         issue: issue("MOT-24", "Make the Release workflow green"),
         project: @project
       },
@@ -30,7 +29,7 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
         kind: :task,
         title: "Turn on the pre-push hook on your laptop",
         steps: ["Run `git config core.hooksPath .githooks` in your cycle checkout."],
-        done_when: "you close MOT-31, or remove its `human-action` label.",
+        done_when: "you close MOT-31, or move it on.",
         issue: issue("MOT-31", "Turn on the pre-push hook on your laptop"),
         project: @project
       },
@@ -68,7 +67,7 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
   end
 
   test "renders the documented format, quickest first" do
-    {body, []} = Update.render(example_actions(), "human-action")
+    {body, []} = Update.render(example_actions(), ["In Review", "Human Review"])
 
     assert body == """
            **4 actions need you.** Quickest first.
@@ -79,12 +78,12 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
 
            **Why:** Every Release run on `main` fails at the signing step without them.
 
-           1. Open github.com/acme/cycle → Settings → Secrets and variables → Actions.
-           2. Add `MACOS_CERTIFICATE` with the base64 of the Developer ID certificate (.p12).
-           3. Add `MACOS_CERTIFICATE_PASSWORD` with its password.
-           4. Move MOT-24 to Todo.
+           **Decide:** Add the signing secrets, or ship unsigned builds?
 
-           **Done when:** you remove the `human-action` label from MOT-24, or move it on once it is unblocked.
+           1. **Add the secrets** (recommended): you add `MACOS_CERTIFICATE` and `MACOS_CERTIFICATE_PASSWORD` in the repository's Actions secrets; releases are signed again.
+           2. **Ship unsigned**: the agent drops the signing step; Gatekeeper warns on first launch.
+
+           **Done when:** you reply with your pick and move MOT-24 out of Human Review, or the agent withdraws the request.
 
            ### 2. Approve the plan for MOT-40
 
@@ -104,7 +103,7 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
 
            1. Run `git config core.hooksPath .githooks` in your cycle checkout.
 
-           **Done when:** you close MOT-31, or remove its `human-action` label.
+           **Done when:** you close MOT-31, or move it on.
 
            ### 4. Unblock QA for MOT-52
 
@@ -136,7 +135,7 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
       human_review: true
     }
 
-    {body, []} = Update.render(example_actions() ++ [review], "human-action")
+    {body, []} = Update.render(example_actions() ++ [review], ["In Review", "Human Review"])
 
     assert body =~ "**5 actions need you.** Human Review tickets first, then quickest first.\n\n### 1. Review MOT-63\n\n**Human Review** · **~30 min** · Unblocks"
     assert body =~ "### 2. Add the release signing secrets"
@@ -148,19 +147,19 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
     [_before, after_intro] = String.split(docs, "A rendered example, for a mix of", parts: 2)
     [_intro, example | _rest] = String.split(after_intro, ["```md\n", "\n```\n"], parts: 3)
 
-    assert {^example, []} = Update.render(example_actions(), "human-action")
+    assert {^example, []} = Update.render(example_actions(), ["In Review", "Human Review"])
   end
 
   test "renders a single action and the empty list" do
     [request | _rest] = example_actions()
-    {single, []} = Update.render([%{request | unblocks: nil, est_minutes: nil, why: nil, steps: [], done_when: nil}], "human-action")
+    {single, []} = Update.render([%{request | unblocks: nil, est_minutes: nil, why: nil, question: nil, options: [], done_when: nil}], ["In Review", "Human Review"])
 
     assert single =~ "**1 action needs you.**\n\n### 1. Add the release signing secrets\n\nUnblocks [MOT-24](https://linear.app/acme/issue/MOT-24) Make the Release workflow green\n\n---"
 
-    {no_url, []} = Update.render([%{request | issue: %{request.issue | url: nil}}], "human-action")
+    {no_url, []} = Update.render([%{request | issue: %{request.issue | url: nil}}], ["In Review", "Human Review"])
     assert no_url =~ "Unblocks MOT-24: the Release workflow"
 
-    {empty, []} = Update.render([], "human-action")
+    {empty, []} = Update.render([], ["In Review", "Human Review"])
     assert empty == "**Nothing needs you.** Every action from the last update is closed.\n\n---\n_Symphony posts a new update when this list changes · list `#{Update.list_id([])}`_"
     assert Update.health([]) == "onTrack"
   end
@@ -178,7 +177,7 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
       project: @project
     }
 
-    {body, []} = Update.render(example_actions() ++ [ci_secret], "human-action")
+    {body, []} = Update.render(example_actions() ++ [ci_secret], ["In Review", "Human Review"])
 
     assert body =~ """
            ### 1. Add the `SIGNING_KEY` secret
@@ -193,23 +192,23 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
            """
   end
 
-  test "lists at most 25 actions and points to the label for the rest" do
+  test "lists at most 25 actions and points to the review states for the rest" do
     [request | _rest] = example_actions()
     actions = for index <- 1..27, do: %{request | key: "request:#{index}", title: "Action #{index}"}
 
-    {body, []} = Update.render(actions, "needs-tony")
+    {body, []} = Update.render(actions, ["In Review", "Human Review"])
 
     assert body =~ "**27 actions need you.**"
     assert body =~ "### 25. "
     refute body =~ "### 26. "
-    assert body =~ "_…and 2 more: see the issues labelled `needs-tony`._"
+    assert body =~ "_…and 2 more: see the issues in `In Review` and `Human Review`._"
   end
 
   test "never renders a secret value from any field" do
     [request | _rest] = example_actions()
     secret = "ghp_" <> String.duplicate("a", 36)
 
-    {body, patterns} = Update.render([%{request | why: "Use #{secret}", steps: ["Paste #{secret}"]}], "human-action")
+    {body, patterns} = Update.render([%{request | why: "Use #{secret}", steps: ["Paste #{secret}"]}], ["In Review", "Human Review"])
 
     refute body =~ secret
     assert body =~ "[REDACTED:github_token]"
@@ -224,7 +223,7 @@ defmodule SymphonyElixir.HumanActions.UpdateTest do
     assert Update.list_id(Enum.reverse(actions)) == list_id
     refute Update.list_id(tl(actions)) == list_id
 
-    {body, []} = Update.render(actions, "human-action")
+    {body, []} = Update.render(actions, ["In Review", "Human Review"])
     assert Update.list_id_from_body(body) == list_id
     assert Update.list_id_from_body("Shipped the wrapper.") == nil
     assert Update.list_id_from_body(nil) == nil

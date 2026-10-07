@@ -3,7 +3,17 @@ defmodule SymphonyElixir.CLI do
   Escript entrypoint for running Symphony with an operator `symphony.yml`.
   """
 
-  alias SymphonyElixir.{BuildInfo, Config, ControlClient, LogFile, OpenRouter, Paths, ReleaseNode, TerminalDashboard}
+  alias SymphonyElixir.{
+    BuildInfo,
+    Config,
+    ControlClient,
+    HttpServer,
+    LogFile,
+    OpenRouter,
+    Paths,
+    ReleaseNode,
+    TerminalDashboard
+  }
 
   # Retained so existing scripts (Docker, ops runbooks) that still pass the long
   # flag keep parsing — its value is ignored.
@@ -503,7 +513,7 @@ defmodule SymphonyElixir.CLI do
       "       symphony dashboard [--url <control-url>]\n" <>
       "       symphony force [--clear] <issue-identifier>\n" <>
       "       symphony openrouter-stub [--port <port>]\n" <>
-      "       symphony [--config <path-to-symphony.yml>] [--state-root <path>] [--logs-root <path>] [--host <host>] [--port <port>]\n" <>
+      "       symphony [--config <path-to-symphony.yml>] [--state-root <path>] [--logs-root <path>] [--host <host>|unix:<socket>] [--port <port>]\n" <>
       "       symphony pr <url-or-number> [--intent \"address review comments\"]\n" <>
       "       symphony run <issue-identifier> [--config <path-to-symphony.yml>] [--timeout <duration>] [--no-retry] [--state-root <path>] [--logs-root <path>]\n" <>
       "       symphony workflow preview [--file WORKFLOW.md] [--agent codex|claude]"
@@ -616,12 +626,10 @@ defmodule SymphonyElixir.CLI do
 
   defp maybe_set_server_host(opts, deps) do
     with_last_opt(opts, :host, fn raw ->
-      host = String.trim(raw)
-
-      if host == "" do
-        {:error, usage_message()}
-      else
-        :ok = deps.set_server_host_override.(host)
+      case String.trim(raw) do
+        "" -> {:error, usage_message()}
+        "unix:" -> {:error, HttpServer.empty_unix_socket_message()}
+        host -> :ok = deps.set_server_host_override.(host)
       end
     end)
   end

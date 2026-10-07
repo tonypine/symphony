@@ -8,6 +8,7 @@ defmodule SymphonyElixir.AgentTools.GitHub do
   """
 
   alias SymphonyElixir.AgentTools.{Linear, ProtectedPaths, PushCheck, SecretScanner}
+  alias SymphonyElixir.AgentTools.Linear.CommentRegistry
   alias SymphonyElixir.CiPoller
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
@@ -101,6 +102,7 @@ defmodule SymphonyElixir.AgentTools.GitHub do
                draft_args(draft?),
              github_opts(context, opts)
            ) do
+      CommentRegistry.record_pull_request(Map.get(context, :comment_registry))
       {:ok, %{"url" => String.trim(output), "repo" => origin_repo, "head" => branch, "draft" => draft?}}
     end
   end

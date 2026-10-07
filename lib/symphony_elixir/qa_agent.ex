@@ -15,7 +15,8 @@ defmodule SymphonyElixir.QaAgent do
   is left (`SymphonyElixir.HumanReview`). An answer without that object gets
   one follow-up turn in the same session asking for it. A pass that runs the `macos_app`
   playbook also gets the host-side `qa_*` tools of a `SymphonyElixir.QaDriver`,
-  stopped (quitting every app it launched) when the pass ends, and its host ports
+  stopped (quitting every app it launched) when the pass ends, and its `pass` is
+  `blocked` when no `qa_resize_window` call ran the playbook's wide pass. It also gets its host ports
   (`QA_HOST_PORTS` in the prompt and the session's environment) for the stubs and
   proxies it serves the app; a pass whose host-port tunnel to the QA host cannot
   open is `blocked` with the reason before the agent starts. A pass that runs the
@@ -54,6 +55,8 @@ defmodule SymphonyElixir.QaAgent do
   @max_verdict_follow_ups 1
   @browser_mcp_name "browser"
   @localhost_domains ["localhost", "127.0.0.1"]
+  @wide_pass_missing_reason "the wide pass did not run: no `qa_resize_window` call resized the app's window, " <>
+                              "so layouts at 1400×900 pt were not checked"
   # The default browser MCP server runs on the Symphony host, outside the agent sandbox, so it
   # is pinned to an exact version and never fetched during a pass (`npx --no`). To bump it,
   # change this version, check the flags in `default_browser_mcp/2` against that release, and
@@ -547,7 +550,10 @@ defmodule SymphonyElixir.QaAgent do
             {:ok, host_ports} ->
               job = Map.put(job, :host_ports, host_ports)
               prompt = prompt(job, fetch_parent(job, worktree, settings, opts))
-              run_tracked_session(agent_module, job, worktree, qa_settings, prompt, opts)
+
+              agent_module
+              |> run_tracked_session(job, worktree, qa_settings, prompt, opts)
+              |> limit_wide_pass(driver, QaDriver.wide_pass(driver))
 
             {:error, reason} ->
               {:error, {:qa_host_tunnel_failed, reason}, empty_tokens()}
@@ -560,6 +566,37 @@ defmodule SymphonyElixir.QaAgent do
       {:error, reason} ->
         {:error, reason, empty_tokens()}
     end
+  end
+
+  # The `macos_app` playbook's wide pass catches layout crashes that only happen in wide
+  # windows (TP-701). A `pass` whose wide pass never resized a window checked none of them, so
+  # it is `blocked` (TP-715). On a QA screen too small for it the pass proves nothing about
+  # them either, so a `pass` there is `blocked`, and that or the `blocked` the playbook asks for
+  # goes to a person, since only one can enlarge the screen.
+  defp limit_wide_pass(run, nil = _driver, _wide_pass), do: run
+
+  defp limit_wide_pass({:ok, %{result: %{verdict: :pass} = result} = run}, _driver, nil) do
+    {:ok, %{run | result: Map.merge(result, %{verdict: :blocked, reason: @wide_pass_missing_reason})}}
+  end
+
+  defp limit_wide_pass({:ok, %{result: %{verdict: :pass} = result} = run}, _driver, %{limited: true} = wide_pass) do
+    {:ok, %{run | result: Map.merge(result, %{verdict: :blocked, reason: limited_reason(wide_pass), needs_person: true})}}
+  end
+
+  defp limit_wide_pass({:ok, %{result: %{verdict: :blocked, reason: reason} = result} = run}, _driver, %{limited: true} = wide_pass) do
+    {:ok, %{run | result: Map.merge(result, %{reason: reason <> "; " <> limited_reason(wide_pass), needs_person: true})}}
+  end
+
+  defp limit_wide_pass(run, _driver, _wide_pass), do: run
+
+  defp limited_reason(wide_pass) do
+    {sw, sh} = wide_pass.screen
+    {vw, vh} = wide_pass.visible
+    {ww, wh} = wide_pass.window
+
+    "the wide pass was limited: the QA screen is #{sw}×#{sh} pt (#{vw}×#{vh} pt usable), so the app's window reached only " <>
+      "#{ww}×#{wh} pt, under the 1400×900 pt the wide pass needs, and layouts wider than that were not checked. " <>
+      "An operator enlarges the QA machine's display (for the tart VM, `tart set <vm> --display 1920x1200`) and QA runs again"
   end
 
   # Only a pass that runs the `web` playbook starts the dev server. It runs from its own

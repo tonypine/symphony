@@ -2,7 +2,6 @@ defmodule SymphonyElixir.PlanCommentsTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.{BreakdownReview, PlanComments, SubIssueWait, Tracker}
-  alias SymphonyElixir.HumanActions.Request
   alias SymphonyElixir.Linear.Adapter
   alias SymphonyElixir.QaAgent.Report
 
@@ -161,7 +160,8 @@ defmodule SymphonyElixir.PlanCommentsTest do
             "## Review brief\n\n**What to review:** the plan",
             "## Codex Workpad\n\n...",
             Report.heading() <> "\n\nPASS",
-            Request.heading() <> " add a secret",
+            "## Decision needed: add a secret",
+            "## Action needed: add a secret",
             BreakdownReview.comment(:promote, ["MT-2"]),
             BreakdownReview.comment(:replace, ["MT-2"]),
             "  Symphony stopped this run without retrying because ...",

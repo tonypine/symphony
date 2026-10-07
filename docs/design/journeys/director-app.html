@@ -1,0 +1,1744 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TP-747 · Symphony for Mac: design system and screens</title>
+<style>
+:root{
+  --font: -apple-system, system-ui, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --mono: "SF Mono", ui-monospace, Menlo, monospace;
+}
+.theme-light{
+  --page:#F4F4F6; --desk:linear-gradient(140deg,#BFD0E6 0%,#D9D3EA 55%,#EBD8DF 100%);
+  --win:#ECECEC; --content:#FFFFFF; --raised:#F5F5F7; --sheet:#F6F6F8; --sep:rgba(0,0,0,.10); --sep2:rgba(0,0,0,.06);
+  --t1:rgba(0,0,0,.85); --t2:rgba(0,0,0,.55); --t3:rgba(0,0,0,.30);
+  --accent:#007AFF; --you:#FF9500; --work:#007AFF; --prob:#FF3B30; --done:#28CD41; --idle:#8E8E93; --forced:#AF52DE;
+  --s1:#007AFF; --s2:#E07800; --s3:#AF52DE; --s4:#1A9BB0; --grid:rgba(0,0,0,.08);
+  --glass:rgba(255,255,255,.74); --glassb:rgba(0,0,0,.09); --sbg:rgba(236,236,240,.88); --btn:#FFFFFF;
+  --tint:14%; --menubar:rgba(255,255,255,.55); --menu:rgba(246,246,248,.92); --notif:rgba(250,250,252,.86);
+  --shadow:0 0 0 .5px rgba(0,0,0,.28), 0 24px 60px rgba(0,0,0,.26);
+}
+.theme-dark{
+  --page:#161618; --desk:linear-gradient(140deg,#1D2A44 0%,#2C2443 55%,#3A2532 100%);
+  --win:#2B2B2B; --content:#1E1E1E; --raised:#2C2C2E; --sheet:#2A2A2C; --sep:rgba(255,255,255,.10); --sep2:rgba(255,255,255,.06);
+  --t1:rgba(255,255,255,.88); --t2:rgba(255,255,255,.58); --t3:rgba(255,255,255,.30);
+  --accent:#0A84FF; --you:#FF9F0A; --work:#0A84FF; --prob:#FF453A; --done:#32D74B; --idle:#98989D; --forced:#BF5AF2;
+  --s1:#3D86F5; --s2:#CC780A; --s3:#AE5ADF; --s4:#2A9FB4; --grid:rgba(255,255,255,.10);
+  --glass:rgba(58,58,62,.72); --glassb:rgba(255,255,255,.12); --sbg:rgba(44,44,48,.88); --btn:#3A3A3C;
+  --tint:22%; --menubar:rgba(30,30,34,.55); --menu:rgba(40,40,44,.92); --notif:rgba(44,44,48,.86);
+  --shadow:0 0 0 .5px rgba(255,255,255,.16), 0 0 0 1.5px rgba(0,0,0,.6), 0 24px 60px rgba(0,0,0,.5);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:var(--page)}
+body{font-family:var(--font);font-size:13px;line-height:1.35;color:var(--t1);-webkit-font-smoothing:antialiased}
+a{color:var(--accent);text-decoration:none}
+svg.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+svg.ic.s{width:12px;height:12px} svg.ic.l{width:20px;height:20px} svg.ic.xl{width:44px;height:44px;stroke-width:1.3}
+.mono{font-family:var(--mono);font-size:12px}
+.num{font-variant-numeric:tabular-nums}
+.t2{color:var(--t2)} .t3{color:var(--t3)}
+
+/* ---------- Document chrome ---------- */
+.doc{max-width:1340px;margin:0 auto;padding:40px 40px 100px}
+.doc>header h1{font-size:30px;font-weight:700;letter-spacing:-.01em}
+.doc>header p{font-size:15px;color:var(--t2);margin-top:6px;max-width:860px}
+.toggle{position:fixed;top:16px;right:16px;z-index:10;display:flex;gap:2px;padding:3px;border-radius:18px;background:var(--glass);box-shadow:0 0 0 .5px var(--glassb),0 4px 14px rgba(0,0,0,.12);backdrop-filter:blur(20px)}
+.toggle button{font:inherit;font-size:12px;border:0;background:transparent;color:var(--t1);padding:5px 12px;border-radius:14px;cursor:pointer}
+.toggle button.on{background:var(--accent);color:#fff}
+.doc h2{font-size:24px;font-weight:700;margin:56px 0 6px;padding-top:12px;border-top:1px solid var(--sep)}
+.doc h2+p.lead{color:var(--t2);font-size:14px;max-width:900px;margin-bottom:8px}
+.toc{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:20px}
+.toc a{display:block;background:var(--content);border-radius:12px;padding:12px 14px;box-shadow:0 0 0 .5px var(--sep);color:var(--t1)}
+.toc a b{display:block;font-size:13px} .toc a span{color:var(--t2);font-size:12px}
+table.idx{border-collapse:collapse;width:100%;margin-top:14px;background:var(--content);border-radius:12px;overflow:hidden;box-shadow:0 0 0 .5px var(--sep)}
+table.idx th,table.idx td{text-align:left;padding:7px 12px;border-bottom:.5px solid var(--sep);vertical-align:top;font-size:12.5px}
+table.idx th{font-size:11px;color:var(--t2);font-weight:500;background:var(--raised)}
+.screen{margin:36px 0 0}
+.screen>h3{font-size:17px;font-weight:600;display:flex;gap:10px;align-items:baseline}
+.screen>h3 .id{font-family:var(--mono);font-size:13px;color:var(--accent);font-weight:600}
+.screen>p,.screen>ul{color:var(--t2);font-size:13px;max-width:980px;margin-top:4px}
+.screen>ul{padding-left:18px}
+.stage{background:var(--desk);padding:28px;border-radius:18px;margin-top:12px;overflow:auto}
+.steps{margin-top:8px;font-size:12.5px;color:var(--t2)}
+.steps b{color:var(--t1)}
+
+/* ---------- Window ---------- */
+.win{position:relative;width:1200px;height:760px;border-radius:22px;background:var(--win);overflow:hidden;box-shadow:var(--shadow);color:var(--t1)}
+.win.short{height:640px}
+.lights{display:flex;gap:8px;padding:18px 0 0 18px;height:44px}
+.lights i{width:12px;height:12px;border-radius:50%;background:#FF5F57;box-shadow:inset 0 0 0 .5px rgba(0,0,0,.15)}
+.lights i:nth-child(2){background:#FEBC2E} .lights i:nth-child(3){background:#28C840}
+.sb{position:absolute;top:8px;left:8px;bottom:8px;width:200px;border-radius:15px;background:var(--sbg);box-shadow:0 0 0 .5px var(--glassb),0 4px 16px rgba(0,0,0,.08);backdrop-filter:blur(30px);z-index:3}
+.sb nav{padding:6px 10px}
+.sb .grp{font-size:11px;font-weight:600;color:var(--t2);padding:12px 8px 4px}
+.sb .it{display:flex;align-items:center;gap:8px;height:28px;padding:0 8px;border-radius:9px;color:var(--t1);font-size:13px}
+.sb .it svg{color:var(--accent)}
+.sb .it.sel{background:color-mix(in srgb,var(--accent) 18%,transparent)}
+.sb .it span{flex:1}
+.cnt{font-size:11px;font-weight:600;min-width:20px;height:18px;padding:0 6px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;font-variant-numeric:tabular-nums}
+.cnt.you{background:color-mix(in srgb,var(--you) 28%,transparent);color:var(--t1)}
+.cnt.prob{background:color-mix(in srgb,var(--prob) 26%,transparent);color:var(--t1)}
+.cnt.plain{color:var(--t2)}
+.sb .foot{position:absolute;bottom:10px;left:14px;right:14px;font-size:11px;color:var(--t2);display:flex;align-items:center;gap:6px}
+.main{position:absolute;top:0;left:216px;right:0;bottom:0}
+.tb{position:absolute;top:0;left:0;right:0;height:56px;display:flex;align-items:center;gap:8px;padding:0 14px 0 16px;z-index:2}
+.tb .ttl{display:flex;flex-direction:column;margin-right:auto;min-width:0}
+.tb .ttl b{font-size:15px;font-weight:600;white-space:nowrap}
+.tb .ttl span{font-size:11px;color:var(--t2);white-space:nowrap}
+.glass{height:34px;border-radius:17px;background:var(--glass);box-shadow:0 0 0 .5px var(--glassb),0 2px 8px rgba(0,0,0,.07);backdrop-filter:blur(20px);display:inline-flex;align-items:center;gap:6px;padding:0 13px;font-size:13px;white-space:nowrap;color:var(--t1)}
+.glass.icon{width:34px;padding:0;justify-content:center}
+.glass.grp{padding:0 4px;gap:0}
+.glass.grp>span{display:inline-flex;align-items:center;justify-content:center;height:34px;min-width:32px;padding:0 9px;gap:5px}
+.glass.grp>span+span{box-shadow:-0.5px 0 0 var(--sep)}
+.glass.pri{background:var(--accent);color:#fff;box-shadow:0 2px 8px color-mix(in srgb,var(--accent) 40%,transparent)}
+.glass.dest{color:var(--prob)}
+.glass.search{width:170px;color:var(--t3)}
+.glass.dim{color:var(--t3)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--done);flex:none}
+.dot.you{background:var(--you)} .dot.idle{background:var(--idle)} .dot.prob{background:var(--prob)} .dot.work{background:var(--work)}
+.body{position:absolute;top:56px;left:0;right:0;bottom:0;padding:6px 20px 20px;overflow:hidden}
+.body.split{display:grid;grid-template-columns:1fr 300px;gap:16px}
+.col{display:flex;flex-direction:column;gap:16px;min-width:0}
+
+/* ---------- Content pieces ---------- */
+.sentence{padding:4px 2px 2px}
+.sentence h2{font-size:17px;font-weight:600;margin:0;padding:0;border:0;display:flex;align-items:center;gap:8px}
+.sentence p{color:var(--t2);font-size:12.5px;margin-top:2px}
+.card{background:var(--content);border-radius:14px;box-shadow:0 0 0 .5px var(--sep);padding:12px 14px;min-width:0}
+.card>h4{font-size:15px;font-weight:600;display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.card>h4 .r{margin-left:auto;font-size:12px;font-weight:400;color:var(--accent)}
+.card>h4 .r.t2{color:var(--t2)}
+.flow{display:flex;align-items:stretch;gap:4px}
+.flow .chev{display:flex;align-items:center;color:var(--t3)}
+.tile{flex:1;min-width:0;background:var(--content);border-radius:14px;box-shadow:0 0 0 .5px var(--sep);padding:10px 12px 11px;position:relative}
+.tile .l{font-size:11px;font-weight:500;color:var(--t2);display:flex;align-items:center;gap:5px;white-space:nowrap}
+.tile .v{font-size:28px;font-weight:600;line-height:34px;margin-top:1px;letter-spacing:-.01em}
+.tile .c{font-size:12px;color:var(--t2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile.you{background:color-mix(in srgb,var(--you) 11%,var(--content));box-shadow:0 0 0 .5px color-mix(in srgb,var(--you) 45%,transparent)}
+.tile.you .l svg{color:var(--you)}
+.tile .spark{position:absolute;right:10px;top:30px}
+.tile.zero .v{color:var(--t3)}
+.badge{display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 8px;border-radius:10px;font-size:11px;font-weight:500;white-space:nowrap;background:color-mix(in srgb,var(--c,var(--idle)) var(--tint),transparent);color:var(--t1)}
+.badge svg{color:var(--c);width:12px;height:12px}
+.b-you{--c:var(--you)} .b-work{--c:var(--work)} .b-prob{--c:var(--prob)} .b-done{--c:var(--done)} .b-idle{--c:var(--idle)} .b-forced{--c:var(--forced)} .b-plain{--c:var(--idle)} .b-acc{--c:var(--accent)}
+.badge.lg{height:24px;font-size:12px;padding:0 10px;border-radius:12px}
+.rows{display:flex;flex-direction:column}
+.row{display:flex;align-items:center;gap:10px;padding:7px 8px;border-radius:10px;min-width:0}
+.row+.row{box-shadow:0 -0.5px 0 var(--sep2)}
+.row.sel{background:color-mix(in srgb,var(--accent) 16%,transparent);box-shadow:none}
+.row.sel+.row{box-shadow:none}
+.row .sym{width:22px;display:flex;justify-content:center;flex:none}
+.row .main2{flex:1;min-width:0}
+.row .l1{display:flex;align-items:baseline;gap:6px;min-width:0;white-space:nowrap}
+.row .l1 b{font-weight:600}
+.row .l1 .tt{overflow:hidden;text-overflow:ellipsis}
+.row .l2{font-size:12px;color:var(--t2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+.row .end{text-align:right;font-size:12px;color:var(--t2);white-space:nowrap;font-variant-numeric:tabular-nums}
+.row .acts{display:flex;gap:6px;flex:none}
+.c-you{color:var(--you)} .c-work{color:var(--work)} .c-prob{color:var(--prob)} .c-done{color:var(--done)} .c-idle{color:var(--idle)} .c-forced{color:var(--forced)} .c-acc{color:var(--accent)}
+.btn{display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 11px;border-radius:12px;font-size:12.5px;background:var(--btn);color:var(--t1);box-shadow:0 0 0 .5px rgba(0,0,0,.16),0 1px 1.5px rgba(0,0,0,.08);white-space:nowrap}
+.theme-dark .btn{box-shadow:0 0 0 .5px rgba(255,255,255,.14),0 1px 1.5px rgba(0,0,0,.3)}
+.btn.pri{background:var(--accent);color:#fff;box-shadow:none}
+.btn.dest{background:var(--prob);color:#fff;box-shadow:none}
+.btn.destt{color:var(--prob)}
+.btn.dis{color:var(--t3)}
+.btn.lg{height:28px;padding:0 14px;border-radius:14px;font-size:13px}
+.link{color:var(--accent);font-size:12.5px;display:inline-flex;align-items:center;gap:3px}
+.meter{height:6px;border-radius:3px;background:color-mix(in srgb,var(--mc,var(--accent)) 18%,transparent);overflow:hidden}
+.meter>i{display:block;height:100%;border-radius:3px;background:var(--mc,var(--accent))}
+.m-you{--mc:var(--you)} .m-prob{--mc:var(--prob)}
+.mrow{margin:6px 0 12px}
+.mrow .h{display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:5px;gap:8px}
+.mrow .h span:last-child{color:var(--t2);font-variant-numeric:tabular-nums;white-space:nowrap}
+.mrow .f{font-size:11px;color:var(--t2);margin-top:4px}
+.seg{display:flex;gap:2px;height:6px;border-radius:3px;overflow:hidden}
+.seg i{display:block;height:100%}
+.seg .d{background:var(--done)} .seg .w{background:var(--work)} .seg .y{background:var(--you)} .seg .q{background:color-mix(in srgb,var(--idle) 35%,transparent)} .seg .p{background:var(--prob)}
+.kv{display:grid;grid-template-columns:130px 1fr;gap:6px 12px;font-size:12.5px}
+.kv dt{color:var(--t2)} .kv dd{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.legend{display:flex;gap:14px;font-size:11.5px;color:var(--t2);margin:2px 0 6px;flex-wrap:wrap}
+.legend span{display:inline-flex;align-items:center;gap:5px}
+.legend i{width:10px;height:10px;border-radius:3px;display:inline-block}
+.chart text{font-family:var(--font);font-size:10.5px;fill:var(--t2)}
+.chart .gl{stroke:var(--grid);stroke-width:1}
+.chart .ref{stroke:var(--t2);stroke-width:1;stroke-dasharray:0}
+.banner{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:12px;background:color-mix(in srgb,var(--c,var(--accent)) 12%,var(--content));box-shadow:0 0 0 .5px color-mix(in srgb,var(--c,var(--accent)) 35%,transparent);font-size:12.5px}
+.banner svg{color:var(--c,var(--accent))}
+.banner .sp{flex:1}
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:8px;color:var(--t2);height:100%}
+.empty svg{color:var(--t3)}
+.empty b{font-size:17px;font-weight:600;color:var(--t1);margin-top:6px}
+.empty p{max-width:340px;font-size:13px}
+.tbl{width:100%;border-collapse:separate;border-spacing:0;font-size:12.5px}
+.tbl th{font-size:11px;font-weight:500;color:var(--t2);text-align:left;padding:6px 8px;border-bottom:.5px solid var(--sep);white-space:nowrap}
+.tbl td{padding:0 8px;height:28px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:260px}
+.tbl tbody tr:nth-child(even) td{background:var(--raised)}
+.tbl tr td:first-child{border-radius:7px 0 0 7px} .tbl tr td:last-child{border-radius:0 7px 7px 0}
+.tbl tr.sel td{background:var(--accent)!important;color:#fff}
+.tbl tr.sel td .badge{background:rgba(255,255,255,.22);color:#fff} .tbl tr.sel td .badge svg{color:#fff}
+.tbl tr.sel td .t2{color:rgba(255,255,255,.8)}
+.tbl td.r,.tbl th.r{text-align:right}
+.scope{display:flex;gap:6px;margin:2px 0 10px;flex-wrap:wrap}
+.scope span{height:24px;padding:0 10px;border-radius:12px;display:inline-flex;align-items:center;gap:5px;font-size:12px;background:var(--content);box-shadow:0 0 0 .5px var(--sep);white-space:nowrap}
+.scope span b{font-weight:600;font-variant-numeric:tabular-nums;color:var(--t2)}
+.scope span.on{background:var(--accent);color:#fff;box-shadow:none} .scope span.on b{color:rgba(255,255,255,.85)}
+.seg-ctl{display:inline-flex;padding:2px;border-radius:9px;background:color-mix(in srgb,var(--t1) 8%,transparent);gap:2px}
+.seg-ctl span{padding:3px 12px;border-radius:7px;font-size:12px}
+.seg-ctl span.on{background:var(--content);box-shadow:0 0 0 .5px var(--sep),0 1px 2px rgba(0,0,0,.08)}
+
+/* three-pane (Inbox, Initiatives) */
+.list3{position:absolute;top:56px;left:0;width:340px;bottom:0;padding:4px 10px 12px;overflow:hidden}
+.detail3{position:absolute;top:56px;left:340px;right:0;bottom:0;background:var(--content);box-shadow:-0.5px 0 0 var(--sep);padding:18px 24px;overflow:hidden}
+.detail3.under{top:0;padding-top:74px}
+.lhdr{font-size:11px;font-weight:600;color:var(--t2);padding:10px 8px 4px;display:flex;justify-content:space-between}
+.irow{display:flex;gap:10px;padding:9px 10px;border-radius:11px}
+.irow+.irow{box-shadow:0 -0.5px 0 var(--sep2)}
+.irow.sel{background:var(--accent);color:#fff;box-shadow:none}
+.irow.sel+.irow{box-shadow:none}
+.irow.sel .l2,.irow.sel .l3,.irow.sel .age{color:rgba(255,255,255,.82)}
+.irow.sel svg.kind{color:#fff}
+.irow svg.kind{margin-top:1px}
+.irow .m{flex:1;min-width:0}
+.irow .l1{display:flex;gap:6px;align-items:baseline}
+.irow .l1 b{font-weight:600;font-size:13px}
+.irow .age{margin-left:auto;font-size:12px;color:var(--t2);font-variant-numeric:tabular-nums;white-space:nowrap}
+.irow .l2{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.irow .l3{font-size:12px;color:var(--t2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+.dh{display:flex;align-items:flex-start;gap:12px;margin-bottom:12px}
+.dh .tt{flex:1;min-width:0}
+.dh .id{font-size:12px;color:var(--t2);font-weight:500}
+.dh h3{font-size:20px;font-weight:600;margin:1px 0 6px;letter-spacing:-.01em}
+.dh .bs{display:flex;gap:6px;flex-wrap:wrap}
+.headline{font-size:14px;line-height:1.45;margin-bottom:14px;max-width:720px}
+.dsec{margin-bottom:12px}
+.dsec>h5{font-size:13px;font-weight:600;margin-bottom:6px;display:flex;align-items:center;gap:6px}
+.dsec>h5 .r{margin-left:auto;font-weight:400;color:var(--t2);font-size:12px}
+.box{border-radius:12px;box-shadow:0 0 0 .5px var(--sep);background:var(--content);padding:4px 6px}
+.theme-light .detail3 .box{background:var(--raised);box-shadow:none}
+.decision{padding:10px 12px;border-radius:12px;background:var(--raised);margin-bottom:8px}
+.decision .q{font-weight:600;font-size:13px;margin-bottom:6px;display:flex;gap:8px;align-items:center}
+.decision .o{display:flex;align-items:center;gap:8px;font-size:12.5px;padding:3px 0}
+.radio{width:14px;height:14px;border-radius:50%;box-shadow:inset 0 0 0 1px var(--t3);background:var(--content);flex:none;position:relative}
+.radio.on{background:var(--accent);box-shadow:none}
+.radio.on::after{content:"";position:absolute;inset:4.5px;border-radius:50%;background:#fff}
+.check{width:14px;height:14px;border-radius:4px;box-shadow:inset 0 0 0 1px var(--t3);background:var(--content);flex:none;position:relative}
+.check.on{background:var(--accent);box-shadow:none}
+.check.on::after{content:"";position:absolute;left:4.5px;top:1.5px;width:3.5px;height:7px;border:solid #fff;border-width:0 1.8px 1.8px 0;transform:rotate(45deg)}
+.thumbs{display:flex;gap:8px}
+.thumbs div{flex:1;height:84px;border-radius:9px;background:linear-gradient(160deg,var(--raised),color-mix(in srgb,var(--accent) 10%,var(--raised)));box-shadow:0 0 0 .5px var(--sep);display:flex;align-items:flex-end;padding:6px 8px;font-size:11px;color:var(--t2)}
+
+/* sheets, popovers, scrim */
+.scrim{position:absolute;inset:0;background:rgba(0,0,0,.14);z-index:5}
+.theme-dark .scrim{background:rgba(0,0,0,.35)}
+.sheet{position:absolute;left:50%;top:76px;transform:translateX(-50%);width:480px;background:var(--sheet);border-radius:20px;box-shadow:0 0 0 .5px rgba(0,0,0,.22),0 22px 60px rgba(0,0,0,.32);padding:20px 22px 16px;z-index:6}
+.theme-dark .sheet{box-shadow:0 0 0 .5px rgba(255,255,255,.16),0 22px 60px rgba(0,0,0,.6)}
+.sheet h3{font-size:15px;font-weight:700;margin-bottom:8px}
+.sheet p{font-size:13px;line-height:1.45;margin-bottom:10px}
+.sheet .opt{display:flex;gap:8px;align-items:flex-start;font-size:13px;margin:6px 0}
+.sheet .field{background:var(--content);border-radius:8px;box-shadow:0 0 0 .5px rgba(0,0,0,.18);padding:6px 9px;font-size:13px;min-height:28px}
+.theme-dark .sheet .field{box-shadow:0 0 0 .5px rgba(255,255,255,.18)}
+.sheet .field.focus{box-shadow:0 0 0 3.5px color-mix(in srgb,var(--accent) 45%,transparent)}
+.sheet .lbl{font-size:12px;color:var(--t2);margin:10px 0 4px}
+.sheet .foot{display:flex;justify-content:flex-end;gap:8px;margin-top:16px;padding-top:12px;box-shadow:0 -0.5px 0 var(--sep)}
+.sheet .foot .btn{height:28px;padding:0 16px;border-radius:14px;font-size:13px}
+.sheet .note{font-size:12px;color:var(--t2)}
+.sheet .found{display:flex;gap:10px;align-items:center;padding:8px 10px;border-radius:10px;background:var(--content);box-shadow:0 0 0 .5px var(--sep);margin-top:8px}
+.popover{position:absolute;z-index:6;width:280px;background:var(--glass);backdrop-filter:blur(30px);border-radius:16px;box-shadow:0 0 0 .5px var(--glassb),0 14px 40px rgba(0,0,0,.22);padding:14px}
+.theme-light .popover{background:rgba(250,250,252,.94)}
+.theme-dark .popover{background:rgba(52,52,56,.96)}
+.popover h4{font-size:13px;font-weight:600;display:flex;align-items:center;gap:7px}
+.popover p{font-size:12px;color:var(--t2);margin:4px 0 10px}
+.toast{position:absolute;left:50%;transform:translateX(-50%);bottom:18px;z-index:4;display:flex;gap:12px;align-items:center;padding:8px 10px 8px 14px;border-radius:18px;background:var(--glass);backdrop-filter:blur(30px);box-shadow:0 0 0 .5px var(--glassb),0 8px 26px rgba(0,0,0,.18);font-size:12.5px;white-space:nowrap}
+.theme-light .toast{background:rgba(250,250,252,.95)}
+
+/* inspector */
+.insp{position:absolute;top:0;right:0;bottom:0;width:300px;background:var(--content);box-shadow:-0.5px 0 0 var(--sep);padding:70px 16px 16px;z-index:1}
+.insp h5{font-size:11px;font-weight:600;color:var(--t2);margin:14px 0 6px}
+
+/* timeline */
+.tl{position:relative;padding-left:22px}
+.tl::before{content:"";position:absolute;left:7px;top:6px;bottom:6px;width:1.5px;background:var(--sep)}
+.tl .st{position:relative;padding:5px 0 7px}
+.tl .st>svg{position:absolute;left:-22px;top:5px;background:var(--content);border-radius:50%}
+.tl .st .a{display:flex;gap:8px;align-items:baseline}
+.tl .st .a b{font-weight:600;font-size:12.5px}
+.tl .st .a .tm{color:var(--t2);font-size:12px;font-variant-numeric:tabular-nums;width:40px;flex:none}
+.tl .st .a .rt{margin-left:auto;color:var(--t2);font-size:12px;white-space:nowrap}
+.tl .st .b{font-size:12px;color:var(--t2);margin-left:48px;margin-top:1px}
+
+/* transcript */
+.ev{display:flex;gap:10px;padding:6px 10px;border-radius:9px;align-items:flex-start}
+.ev .tm{width:56px;color:var(--t2);font-size:12px;font-variant-numeric:tabular-nums;flex:none;padding-top:1px}
+.ev .k{width:70px;flex:none;font-size:11px;font-weight:500;color:var(--t2);padding-top:2px}
+.ev .tx{flex:1;min-width:0;font-size:12.5px}
+.ev .rs{font-size:12px;color:var(--t2);white-space:nowrap}
+.ev.sel{background:color-mix(in srgb,var(--accent) 16%,transparent)}
+.turn{font-size:11px;font-weight:600;color:var(--t2);padding:10px 10px 3px}
+.code{background:var(--raised);border-radius:10px;padding:10px 12px;font-family:var(--mono);font-size:11.5px;line-height:1.5;color:var(--t1);white-space:pre;overflow:hidden}
+
+/* desktop: menu bar and notifications */
+.desk{position:relative;width:1200px;height:620px;border-radius:14px;overflow:hidden;background:var(--desk);box-shadow:var(--shadow)}
+.desk.n{height:360px}
+.mbar{height:30px;background:var(--menubar);backdrop-filter:blur(30px);display:flex;align-items:center;padding:0 14px;gap:18px;font-size:13px;color:var(--t1)}
+.mbar .sp{flex:1}
+.mbar b{font-weight:700}
+.sticon{position:relative;display:inline-flex;align-items:center;justify-content:center;width:30px;height:22px;border-radius:6px}
+.sticon.open{background:color-mix(in srgb,var(--t1) 16%,transparent)}
+.sticon .bd{position:absolute;top:0;right:1px;width:9px;height:9px;border-radius:50%;background:var(--you);box-shadow:0 0 0 1.5px var(--menubar)}
+.menu{position:absolute;width:330px;background:var(--menu);backdrop-filter:blur(30px);border-radius:12px;box-shadow:0 0 0 .5px var(--glassb),0 14px 40px rgba(0,0,0,.25);padding:5px;font-size:13px}
+.menu .mi{display:flex;align-items:center;gap:8px;height:24px;padding:0 9px;border-radius:6px;white-space:nowrap}
+.menu .mi .k{margin-left:auto;color:var(--t2);font-size:12px}
+.menu .mi.hl{background:var(--accent);color:#fff} .menu .mi.hl .k,.menu .mi.hl .t2{color:rgba(255,255,255,.85)}
+.menu .mi.dis{color:var(--t2)}
+.menu .mh{font-size:11px;font-weight:600;color:var(--t2);padding:6px 9px 2px}
+.menu hr{border:0;height:.5px;background:var(--sep);margin:5px 9px}
+.notif{position:absolute;right:14px;width:360px;border-radius:20px;background:var(--notif);backdrop-filter:blur(30px);box-shadow:0 0 0 .5px var(--glassb),0 10px 30px rgba(0,0,0,.2);padding:12px 14px;display:flex;gap:11px}
+.appicon{width:34px;height:34px;border-radius:9px;background:linear-gradient(160deg,#5E5CE6,#0A84FF);display:flex;align-items:center;justify-content:center;color:#fff;flex:none}
+.notif .m{flex:1;min-width:0}
+.notif .h{display:flex;font-size:13px;font-weight:600}
+.notif .h span{margin-left:auto;font-weight:400;color:var(--t2);font-size:12px}
+.notif .b{font-size:13px;line-height:1.35;margin-top:1px}
+.notif .acts{display:flex;gap:6px;margin-top:9px}
+.notif .acts .btn{flex:1;justify-content:center;height:26px;border-radius:13px}
+
+/* specimen */
+.spec{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin-top:14px}
+.spec .card{padding:16px}
+.sw{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.sw div{font-size:11px;color:var(--t2)}
+.sw i{display:block;height:44px;border-radius:10px;box-shadow:0 0 0 .5px var(--sep);margin-bottom:5px}
+.sw b{display:block;color:var(--t1);font-weight:600;font-size:11.5px}
+.ts>div{display:flex;align-items:baseline;gap:14px;padding:4px 0;border-bottom:.5px solid var(--sep2)}
+.ts>div span:first-child{width:120px;font-size:11px;color:var(--t2);font-family:var(--mono);flex:none}
+.spc{display:flex;align-items:flex-end;gap:14px}
+.spc div{display:flex;flex-direction:column;align-items:center;gap:4px;font-size:11px;color:var(--t2)}
+.spc i{display:block;background:color-mix(in srgb,var(--accent) 45%,transparent);border-radius:2px}
+.rad{display:flex;gap:14px;align-items:flex-end}
+.rad div{font-size:11px;color:var(--t2);text-align:center}
+.rad i{display:block;width:64px;height:44px;background:var(--raised);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--accent) 50%,transparent);margin-bottom:4px}
+.comp{display:flex;flex-direction:column;gap:12px}
+.comp .lab{font-size:11px;color:var(--t2);font-family:var(--mono)}
+.wrapbadges{display:flex;gap:6px;flex-wrap:wrap}
+
+/* solo render mode: one frame per page, for the PNG screenshots */
+body.solo .doc>*{display:none}
+body.solo .doc{padding:0;max-width:none;margin:0}
+body.solo .doc>.screens{display:block}
+body.solo .screens>*{display:none}
+body.solo .screens>.screen.shot{display:block;margin:0}
+body.solo .screen.shot>*{display:none}
+body.solo .screen.shot>.stage{display:block;margin:0;border-radius:0;padding:24px;overflow:visible}
+body.solo .toggle{display:none}
+body.solo .specimen-shot{display:block!important}
+</style>
+</head>
+<body class="theme-light">
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+<defs>
+<symbol id="i-tray" viewBox="0 0 24 24"><path d="M3.5 13.5 6 5h12l2.5 8.5V19a1 1 0 0 1-1 1h-15a1 1 0 0 1-1-1z"/><path d="M3.5 13.5H9l1 2h4l1-2h5.5"/></symbol>
+<symbol id="i-gauge" viewBox="0 0 24 24"><path d="M4 17a8 8 0 1 1 16 0"/><path d="M12 17l4.5-5"/><circle cx="12" cy="17" r="1.2"/></symbol>
+<symbol id="i-flag" viewBox="0 0 24 24"><path d="M5 21V4"/><path d="M5 4h12l-2.5 4.5L17 13H5"/></symbol>
+<symbol id="i-list" viewBox="0 0 24 24"><path d="M9 7h11M9 12h11M9 17h11"/><circle cx="5" cy="7" r=".9"/><circle cx="5" cy="12" r=".9"/><circle cx="5" cy="17" r=".9"/></symbol>
+<symbol id="i-seal" viewBox="0 0 24 24"><path d="M12 3l2.2 1.6 2.7-.1.8 2.6 2.2 1.6-.9 2.6.9 2.6-2.2 1.6-.8 2.6-2.7-.1L12 21l-2.2-1.6-2.7.1-.8-2.6-2.2-1.6.9-2.6-.9-2.6 2.2-1.6.8-2.6 2.7.1z"/><path d="M8.8 12.2l2.2 2.2 4.2-4.6"/></symbol>
+<symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 20h16"/><path d="M7 16v-4M12 16V7M17 16v-7"/></symbol>
+<symbol id="i-box" viewBox="0 0 24 24"><path d="M4 7.5 12 4l8 3.5v9L12 20l-8-3.5z"/><path d="M4 7.5 12 11l8-3.5M12 11v9"/></symbol>
+<symbol id="i-clip" viewBox="0 0 24 24"><rect x="5" y="4.5" width="14" height="16" rx="2"/><path d="M9 4.5V3.5h6v1"/><path d="M9 10h6M9 13.5h6M9 17h4"/></symbol>
+<symbol id="i-stack" viewBox="0 0 24 24"><path d="M12 4 20 8l-8 4-8-4z"/><path d="M4 12l8 4 8-4"/><path d="M4 16l8 4 8-4"/></symbol>
+<symbol id="i-steth" viewBox="0 0 24 24"><path d="M6 3.5v6a4 4 0 0 0 8 0v-6"/><path d="M10 13.5v1.5a4.5 4.5 0 0 0 9 0v-2"/><circle cx="19" cy="11" r="2"/></symbol>
+<symbol id="i-you" viewBox="0 0 24 24"><circle cx="10" cy="8" r="3.5"/><path d="M3.5 20a6.5 6.5 0 0 1 11-4.7"/><path d="M19 12.5v4.5"/><circle cx="19" cy="20" r=".7" fill="currentColor"/></symbol>
+<symbol id="i-work" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" stroke-dasharray="2.2 2.6"/><circle cx="12" cy="12" r="3.2" fill="currentColor" stroke="none"/></symbol>
+<symbol id="i-warn" viewBox="0 0 24 24"><path d="M12 3.5 21.5 20h-19z" fill="currentColor"/><path d="M12 9.5v4.8" stroke="#fff"/><circle cx="12" cy="17" r="1" fill="#fff" stroke="none"/></symbol>
+<symbol id="i-done" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="currentColor" stroke="none"/><path d="M8 12.3l2.7 2.7 5.3-5.8" stroke="#fff" stroke-width="2"/></symbol>
+<symbol id="i-fail" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="currentColor" stroke="none"/><path d="M9 9l6 6M15 9l-6 6" stroke="#fff" stroke-width="2"/></symbol>
+<symbol id="i-pause" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M10 9v6M14 9v6"/></symbol>
+<symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+<symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2.5 5 13.5h6l-1 8 8-11h-6z" fill="currentColor"/></symbol>
+<symbol id="i-plan" viewBox="0 0 24 24"><path d="M14 3.5H7a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h4"/><path d="M14 3.5 19 8.5v2"/><path d="M14 3.5v5h5"/><circle cx="16.5" cy="16" r="3"/><path d="M18.7 18.2 21 20.5"/></symbol>
+<symbol id="i-pr" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="18" r="2.2"/><path d="M6 8.2v7.6"/><path d="M18 15.8V9a3 3 0 0 0-3-3h-4"/><path d="M13 3.8 10.8 6 13 8.2"/></symbol>
+<symbol id="i-hand" viewBox="0 0 24 24"><path d="M8 12.5V6.2a1.4 1.4 0 0 1 2.8 0V11"/><path d="M10.8 10.5V4.6a1.4 1.4 0 0 1 2.8 0v5.9"/><path d="M13.6 10.5V5.8a1.4 1.4 0 0 1 2.8 0v5.2"/><path d="M16.4 11V8.8a1.4 1.4 0 0 1 2.8 0V14a7 7 0 0 1-7 7h-.7a6.5 6.5 0 0 1-5.6-3.2l-2.2-3.8a1.4 1.4 0 0 1 2.3-1.6L8 14.5"/></symbol>
+<symbol id="i-ask" viewBox="0 0 24 24"><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v8a2.5 2.5 0 0 1-2.5 2.5H11l-4.5 3.5V17A2.5 2.5 0 0 1 4 14.5z"/><path d="M10 8.7a2 2 0 1 1 2.6 1.9c-.4.2-.6.5-.6.9v.6"/><circle cx="12" cy="14.3" r=".6" fill="currentColor"/></symbol>
+<symbol id="i-chev" viewBox="0 0 24 24"><path d="M9.5 6l6 6-6 6"/></symbol>
+<symbol id="i-chevd" viewBox="0 0 24 24"><path d="M7 9.5l5 5 5-5"/></symbol>
+<symbol id="i-chevl" viewBox="0 0 24 24"><path d="M14.5 6l-6 6 6 6"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/></symbol>
+<symbol id="i-sidebar" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M9 5v14"/></symbol>
+<symbol id="i-insp" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M15 5v14"/></symbol>
+<symbol id="i-ext" viewBox="0 0 24 24"><path d="M8 16 16 8"/><path d="M9.5 8H16v6.5"/></symbol>
+<symbol id="i-more" viewBox="0 0 24 24"><circle cx="6" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="18" cy="12" r="1.3" fill="currentColor" stroke="none"/></symbol>
+<symbol id="i-stop" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><rect x="9" y="9" width="6" height="6" rx="1" fill="currentColor"/></symbol>
+<symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l10-6.5z" fill="currentColor"/></symbol>
+<symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></symbol>
+<symbol id="i-doc" viewBox="0 0 24 24"><path d="M14 3.5H7a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8.5z"/><path d="M14 3.5v5h5"/></symbol>
+<symbol id="i-refresh" viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 4.5v4h-4"/></symbol>
+<symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></symbol>
+<symbol id="i-sym" viewBox="0 0 24 24"><path d="M9 18V6.5l10-2.5v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/></symbol>
+<symbol id="i-filter" viewBox="0 0 24 24"><path d="M4 6h16M7 12h10M10 18h4"/></symbol>
+<symbol id="i-cal" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M8 3v4M16 3v4"/></symbol>
+<symbol id="i-bulb" viewBox="0 0 24 24"><path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2V16h5v-.1c0-.8.4-1.5 1-2A6 6 0 0 0 12 3z"/></symbol>
+<symbol id="i-wifi" viewBox="0 0 24 24"><path d="M4 9.5a12 12 0 0 1 16 0M7 13a7.5 7.5 0 0 1 10 0M10 16.5a3 3 0 0 1 4 0"/></symbol>
+<symbol id="i-batt" viewBox="0 0 24 24"><rect x="2.5" y="8" width="17" height="8" rx="2.5"/><rect x="4.5" y="10" width="11" height="4" rx="1" fill="currentColor"/><path d="M21.5 11v2"/></symbol>
+<symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v5.5c0 4.4-3 8-7 9.5-4-1.5-7-5.1-7-9.5V6z"/><path d="M8.8 12l2.2 2.2 4.2-4.4"/></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+<symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M5.5 18.5l1.7-1.7M16.8 7.2l1.7-1.7"/></symbol>
+<symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 8 5 12l4 4"/><path d="M5 12h9a5 5 0 0 1 0 10h-2"/></symbol>
+<symbol id="i-terminal" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="2.5"/><path d="M7 9.5l3 2.5-3 2.5M12.5 15h4.5"/></symbol>
+</defs>
+</svg>
+
+<div class="toggle" role="group" aria-label="Appearance"><button data-theme="light" class="on">Light</button><button data-theme="dark">Dark</button></div>
+<div class="doc">
+<header>
+  <h1>Symphony for Mac: design system and screens</h1>
+  <p>TP-747. Every screen in the <b>Screens</b> document, journey by journey, styled for macOS 26 and later (Liquid Glass for navigation, solid surfaces for data). Frames are 1200 × 760 pt, the window's default size. Switch Light and Dark at the top right. All repos, tickets and numbers are made up.</p>
+  <div class="toc">
+    <a href="#spec"><b>Design system specimen</b><span>Tokens and components</span></a>
+    <a href="#j1"><b>J1 · Clear the inbox</b><span>D14 D13 D2a D12d D2b D2c D2d D2e</span></a>
+    <a href="#j2"><b>J2 · The glance</b><span>D1</span></a>
+    <a href="#j3"><b>J3 · Unstick a ticket</b><span>D1 attention, D3, D4, D12c</span></a>
+    <a href="#j4"><b>J4 · Steer the factory</b><span>D12a, D1 paused, D12b, D6</span></a>
+    <a href="#j5"><b>J5 · Follow an initiative</b><span>D5</span></a>
+    <a href="#j6"><b>J6 · Trust the gate</b><span>D7</span></a>
+    <a href="#j7"><b>J7 · Keep spend in check</b><span>D8</span></a>
+    <a href="#j8"><b>J8 · Look back</b><span>D9, D10</span></a>
+    <a href="#j9"><b>J9 · Mac routines</b><span>D0, D11</span></a>
+  </div>
+  <table class="idx">
+    <thead><tr><th>Screen</th><th>What it is</th><th>Journeys</th></tr></thead>
+    <tbody>
+      <tr><td><a href="#s-d0">D0</a></td><td>Window states: Symphony stopped, starting, not answering, first launch</td><td>J9</td></tr>
+      <tr><td><a href="#s-d1">D1</a></td><td>Overview, the dashboard: flowing, <a href="#s-d1-attention">needs attention</a>, <a href="#s-d1-paused">paused</a>, <a href="#s-d1-idle">idle</a></td><td>J2, J3, J4, J7, J9</td></tr>
+      <tr><td><a href="#s-d2a">D2</a></td><td>Inbox: <a href="#s-d2a">plan</a>, <a href="#s-d2b">PR</a>, <a href="#s-d2c">action</a>, <a href="#s-d2d">clarify</a>, <a href="#s-d2e">empty</a></td><td>J1, J5</td></tr>
+      <tr><td><a href="#s-d3">D3</a></td><td>Ticket page, and its inspector form on <a href="#s-d6">D6</a></td><td>J3, J4, J6, J7</td></tr>
+      <tr><td><a href="#s-d4">D4</a></td><td>Run transcript</td><td>J3</td></tr>
+      <tr><td><a href="#s-d5">D5</a></td><td>Initiatives</td><td>J5</td></tr>
+      <tr><td><a href="#s-d6">D6</a></td><td>Tickets</td><td>J2, J4</td></tr>
+      <tr><td><a href="#s-d7">D7</a></td><td>Quality</td><td>J6</td></tr>
+      <tr><td><a href="#s-d8">D8</a></td><td>Usage</td><td>J7</td></tr>
+      <tr><td><a href="#s-d9">D9</a></td><td>Shipped, and <a href="#s-d9-learnings">Learnings</a></td><td>J8</td></tr>
+      <tr><td><a href="#s-d10">D10</a></td><td>Audit</td><td>J8</td></tr>
+      <tr><td><a href="#s-d11">D11</a></td><td>Diagnostics</td><td>J9</td></tr>
+      <tr><td><a href="#s-d12a-popover">D12</a></td><td>Steering sheets: <a href="#s-d12a-popover">dispatch</a>, <a href="#s-d12a-sheet">pause</a>, <a href="#s-d12b">force</a>, <a href="#s-d12c">stop run</a>, <a href="#s-d12d">approve</a></td><td>J1, J3, J4, J7</td></tr>
+      <tr><td><a href="#s-d13">D13</a></td><td>Menu bar menu</td><td>J1, J9</td></tr>
+      <tr><td><a href="#s-d14">D14</a></td><td>Notifications</td><td>J1, J3</td></tr>
+    </tbody>
+  </table>
+</header>
+
+<div class="screens">
+
+<h2 id="spec">Design system specimen</h2>
+<p class="lead">Tokens and components from the Design system document, drawn with the same values the screens use. Switch to Dark to see the dark steps.</p>
+
+<section class="screen" id="s-spec-foundations">
+  <h3><span class="id">DS1</span> Foundations: color, type, spacing, shape</h3>
+  <div class="stage"><div class="win" style="height:760px;padding:24px 28px;overflow:hidden">
+    <div style="display:grid;grid-template-columns:1.25fr 1fr;gap:18px;height:100%">
+      <div class="col">
+        <div class="card"><h4>Surfaces and text</h4>
+          <div class="sw">
+            <div><i style="background:var(--win)"></i><b>surface.window</b>windowBackground</div>
+            <div><i style="background:var(--content)"></i><b>surface.content</b>controlBackground</div>
+            <div><i style="background:var(--raised)"></i><b>surface.raised</b>background.secondary</div>
+            <div><i style="background:var(--accent)"></i><b>accent</b>user's accent color</div>
+            <div><i style="background:var(--t1)"></i><b>text.primary</b>labelColor</div>
+            <div><i style="background:var(--t2)"></i><b>text.secondary</b>secondaryLabel</div>
+            <div><i style="background:var(--t3)"></i><b>text.tertiary</b>tertiaryLabel</div>
+            <div><i style="background:var(--sep)"></i><b>stroke.separator</b>separatorColor</div>
+          </div>
+        </div>
+        <div class="card"><h4>Status <span class="r t2">always symbol + word</span></h4>
+          <div class="sw" style="grid-template-columns:repeat(6,1fr)">
+            <div><i style="background:var(--you)"></i><b>status.you</b>orange</div>
+            <div><i style="background:var(--work)"></i><b>status.working</b>blue</div>
+            <div><i style="background:var(--prob)"></i><b>status.problem</b>red</div>
+            <div><i style="background:var(--done)"></i><b>status.done</b>green</div>
+            <div><i style="background:var(--idle)"></i><b>status.idle</b>gray</div>
+            <div><i style="background:var(--forced)"></i><b>status.forced</b>purple</div>
+          </div>
+          <div class="wrapbadges" style="margin-top:12px">
+            <span class="badge b-you"><svg class="ic"><use href="#i-you"/></svg>Waiting on you</span>
+            <span class="badge b-work"><svg class="ic"><use href="#i-work"/></svg>Working</span>
+            <span class="badge b-prob"><svg class="ic"><use href="#i-warn"/></svg>Needs attention</span>
+            <span class="badge b-done"><svg class="ic"><use href="#i-done"/></svg>Shipped</span>
+            <span class="badge b-idle"><svg class="ic"><use href="#i-clock"/></svg>Queued</span>
+            <span class="badge b-idle"><svg class="ic"><use href="#i-pause"/></svg>Paused</span>
+            <span class="badge b-forced"><svg class="ic"><use href="#i-bolt"/></svg>Forced</span>
+          </div>
+        </div>
+        <div class="card"><h4>Chart series <span class="r t2">validated light and dark; fixed order</span></h4>
+          <div class="sw">
+            <div><i style="background:var(--s1)"></i><b>chart.series1</b>blue</div>
+            <div><i style="background:var(--s2)"></i><b>chart.series2</b>orange</div>
+            <div><i style="background:var(--s3)"></i><b>chart.series3</b>purple</div>
+            <div><i style="background:var(--s4)"></i><b>chart.series4</b>teal</div>
+          </div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="card ts"><h4>Type <span class="r t2">SF Pro, macOS text styles</span></h4>
+          <div><span>type.sentence</span><span style="font-size:17px;font-weight:600">The factory is flowing.</span></div>
+          <div><span>type.figure</span><span style="font-size:28px;font-weight:600">1,284</span></div>
+          <div><span>type.section</span><span style="font-size:15px;font-weight:600">Needs attention</span></div>
+          <div><span>type.rowTitle</span><span style="font-weight:600">BIL-206 Invoice PDF export</span></div>
+          <div><span>type.body</span><span>Checks green, QA passed.</span></div>
+          <div><span>type.callout</span><span style="font-size:12px">billing-api · 1 h 05 min</span></div>
+          <div><span>type.label</span><span style="font-size:11px;font-weight:500">WAITING ON YOU</span></div>
+          <div><span>type.caption</span><span style="font-size:10px">Updated 14:03</span></div>
+          <div><span>type.mono</span><span class="mono">mix test test/checkout_test.exs</span></div>
+        </div>
+        <div class="card"><h4>Spacing <span class="r t2">4 pt grid</span></h4>
+          <div class="spc">
+            <div><i style="width:4px;height:4px"></i>4</div><div><i style="width:8px;height:8px"></i>8</div><div><i style="width:12px;height:12px"></i>12</div><div><i style="width:16px;height:16px"></i>16</div><div><i style="width:20px;height:20px"></i>20</div><div><i style="width:24px;height:24px"></i>24</div><div><i style="width:32px;height:32px"></i>32</div>
+          </div>
+        </div>
+        <div class="card"><h4>Shape <span class="r t2">concentric</span></h4>
+          <div class="rad">
+            <div><i style="border-radius:14px"></i>card 14</div>
+            <div><i style="border-radius:10px"></i>row 10</div>
+            <div><i style="border-radius:4px"></i>mark 4</div>
+            <div><i style="border-radius:22px"></i>capsule</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+</section>
+
+<section class="screen" id="s-spec-components">
+  <h3><span class="id">DS2</span> Components</h3>
+  <div class="stage"><div class="win" style="height:760px;padding:24px 28px;overflow:hidden">
+    <div style="display:grid;grid-template-columns:1.3fr 1fr;gap:18px;height:100%">
+      <div class="col">
+        <div class="comp"><span class="lab">C6 Flow strip (C5 stat tiles)</span>
+          <div class="flow">
+            <div class="tile"><div class="l"><svg class="ic s"><use href="#i-clock"/></svg>Queued</div><div class="v">4</div><div class="c">next slot ~10 min</div></div><div class="chev"><svg class="ic s"><use href="#i-chev"/></svg></div>
+            <div class="tile"><div class="l"><svg class="ic s c-work"><use href="#i-work"/></svg>Working</div><div class="v">3</div><div class="c">of 6 slots</div></div><div class="chev"><svg class="ic s"><use href="#i-chev"/></svg></div>
+            <div class="tile you"><div class="l"><svg class="ic s"><use href="#i-you"/></svg>Waiting on you</div><div class="v">4</div><div class="c">oldest 3 h 12 min</div></div><div class="chev"><svg class="ic s"><use href="#i-chev"/></svg></div>
+            <div class="tile"><div class="l"><svg class="ic s c-done"><use href="#i-done"/></svg>Shipped today</div><div class="v">5</div><div class="c">+2 vs. yesterday</div><div class="spark" data-spark="[2,3,1,4,3,2,5,3,4,3,3,5]"></div></div>
+          </div>
+        </div>
+        <div class="comp"><span class="lab">C8 Ticket row · C9 Attention row</span>
+          <div class="card" style="padding:6px">
+            <div class="rows">
+              <div class="row"><div class="sym"><svg class="ic c-work"><use href="#i-work"/></svg></div><div class="main2"><div class="l1"><b>BIL-205</b><span class="tt">Credit notes on invoices</span></div><div class="l2">billing-api · Implementation run · turn 18 · “Running mix test” 40 s ago</div></div><div class="end">23 min<br><span class="t2">412K tokens</span></div></div>
+              <div class="row"><div class="sym"><svg class="ic c-prob"><use href="#i-warn"/></svg></div><div class="main2"><div class="l1"><b>SHOP-305</b><span class="tt">No agent activity for 14 min</span></div><div class="l2">web-shop · Checkout total rounding · attempt 2</div></div><div class="acts"><span class="btn">Open</span><span class="btn pri">Stop Run…</span></div></div>
+            </div>
+          </div>
+        </div>
+        <div class="comp"><span class="lab">C11 Meter: normal · near (≥ 75%) · at limit (≥ 95%)</span>
+          <div class="card">
+            <div class="mrow"><div class="h"><span>Tokens today</span><span>3.1M of 5M · 62%</span></div><div class="meter"><i style="width:62%"></i></div></div>
+            <div class="mrow"><div class="h"><span>Claude 7-day limit</span><span>82% · resets Thu 09:00</span></div><div class="meter m-you"><i style="width:82%"></i></div></div>
+            <div class="mrow" style="margin-bottom:0"><div class="h"><span>Claude 5-hour limit</span><span>96% · new runs held until ~16:00</span></div><div class="meter m-prob"><i style="width:96%"></i></div></div>
+          </div>
+        </div>
+        <div class="comp"><span class="lab">C12 Column chart (one series, reference line) · C13 sparkline in C5</span>
+          <div class="card"><div data-chart='{"type":"cols","w":600,"h":120,"max":6,"ticks":[0,2,4,6],"unit":"M","labels":["M","T","W","T","F","S","S","M","T","W","T","F","S","S"],"series":[[2.7,3.1,3.9,1.5,1.0,3.7,4.0,4.6,3.3,4.0,4.5,2.7,3.7,4.1]],"colors":["--s1"],"ref":5,"refLabel":"Daily budget 5M","names":["Tokens"]}'></div></div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="comp"><span class="lab">C2 Dispatch control · C3 Scope · C4 Connection</span>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <span class="glass"><i class="dot"></i>Dispatch on<svg class="ic s t2"><use href="#i-chevd"/></svg></span>
+            <span class="glass"><i class="dot you"></i>Paused · Deploy freeze<svg class="ic s t2"><use href="#i-chevd"/></svg></span>
+            <span class="glass"><i class="dot you"></i>Holding · Claude limit</span>
+            <span class="glass"><svg class="ic s c-acc"><use href="#i-stack"/></svg>All repos<svg class="ic s t2"><use href="#i-chevd"/></svg></span>
+            <span class="glass dim"><i class="dot idle"></i>Not answering</span>
+          </div>
+        </div>
+        <div class="comp"><span class="lab">Buttons</span>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <span class="btn pri lg">Approve and Merge…</span><span class="btn lg">Open PR<svg class="ic s"><use href="#i-ext"/></svg></span><span class="btn dest lg">Stop Run</span><span class="btn lg dis">Send Decisions</span>
+          </div>
+        </div>
+        <div class="comp"><span class="lab">C16 Decision card</span>
+          <div class="decision" style="background:var(--content);box-shadow:0 0 0 .5px var(--sep)">
+            <div class="q">D1 · Where gift cards are bought</div>
+            <div class="o"><span class="radio on"></span>A. In the cart, as a product <span class="badge b-acc">Recommended</span></div>
+            <div class="o"><span class="radio"></span>B. On their own page</div>
+            <div class="o"><span class="radio"></span>C. Both</div>
+          </div>
+        </div>
+        <div class="comp"><span class="lab">C14 Run timeline</span>
+          <div class="card"><div class="tl">
+            <div class="st"><svg class="ic c-fail" style="color:var(--prob)"><use href="#i-fail"/></svg><div class="a"><span class="tm">13:03</span><b>Implementation run 1</b><span class="rt">22 min · 640K</span></div><div class="b">Failed: test/checkout_test.exs:88 timed out</div></div>
+            <div class="st"><svg class="ic c-work"><use href="#i-work"/></svg><div class="a"><span class="tm">13:27</span><b>Implementation run 2</b><span class="rt">38 min · 780K</span></div><div class="b">Running · no activity for 14 min</div></div>
+          </div></div>
+        </div>
+        <div class="comp"><span class="lab">C18 Banner · C20 Empty state</span>
+          <div class="banner" style="--c:var(--done)"><svg class="ic c-done"><use href="#i-done"/></svg><span class="sp">BIL-206 moved to Merging. Auto-merge is on.</span><span class="btn"><svg class="ic s"><use href="#i-undo"/></svg>Undo</span></div>
+          <div class="card" style="height:92px;padding:8px"><div class="empty" style="gap:4px"><svg class="ic xl" style="width:30px;height:30px"><use href="#i-tray"/></svg><b style="font-size:14px;margin:0">Nothing waits on you.</b><p style="font-size:12px">New plans, PRs and requests show here.</p></div></div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+</section>
+
+<h2 id="j1">J1 · Clear the inbox</h2>
+<p class="lead">US1, US2. The Director learns that something waits on them, reads each item's review, and answers it from the app. Steps: 1 → D14 / D13, 2 → D2, 3–4 → D2a, D12d, 5 → D2b, 6 → D2c, 7 → D2d, 8 → D2e.</p>
+
+<section class="screen" id="s-d14">
+  <h3><span class="id">D14</span> Notifications</h3>
+  <p>One notification per new Inbox item and per new problem, with actions. Nothing for routine progress. Each kind can be turned off in Settings; Focus applies.</p>
+  <div class="stage"><div class="desk n">
+    <div class="mbar"><b>Mail</b><span>File</span><span>Edit</span><span>View</span><span>Window</span><span class="sp"></span><span class="sticon"><svg class="ic"><use href="#i-sym"/></svg><i class="bd"></i></span><svg class="ic"><use href="#i-wifi"/></svg><svg class="ic l"><use href="#i-batt"/></svg><span>Tue 6 Oct 14:21</span></div>
+    <div class="notif" style="top:42px">
+      <div class="appicon"><svg class="ic l"><use href="#i-sym"/></svg></div>
+      <div class="m"><div class="h">BIL-206 waits on you<span>now</span></div><div class="b">PR ready: Invoice PDF export. Checks green, QA passed, the gate approves.</div>
+        <div class="acts"><span class="btn">Open</span><span class="btn">Approve and Merge…</span></div></div>
+    </div>
+    <div class="notif" style="top:164px">
+      <div class="appicon"><svg class="ic l"><use href="#i-sym"/></svg></div>
+      <div class="m"><div class="h">SHOP-305 looks stuck<span>2 min ago</span></div><div class="b">No agent activity for 14 min on Checkout total rounding (attempt 2).</div></div>
+    </div>
+    <div class="notif" style="top:248px">
+      <div class="appicon"><svg class="ic l"><use href="#i-sym"/></svg></div>
+      <div class="m"><div class="h">SHOP-330 waits on you<span>3 h ago</span></div><div class="b">Plan ready: Gift cards. 2 decisions need you.</div></div>
+    </div>
+  </div></div>
+</section>
+
+<section class="screen" id="s-d13">
+  <h3><span class="id">D13</span> Menu bar menu</h3>
+  <p>The status item carries a badge while anything waits on the Director. The menu lists the oldest five items; each opens the window on that item. Start, Stop, Pause, Force, Updates, Repos and Settings stay where they are today; Open Dashboard becomes Open Symphony.</p>
+  <div class="stage"><div class="desk">
+    <div class="mbar"><b>Xcode</b><span>File</span><span>Edit</span><span>View</span><span>Window</span><span class="sp"></span><span class="sticon open"><svg class="ic"><use href="#i-sym"/></svg><i class="bd"></i></span><svg class="ic"><use href="#i-wifi"/></svg><svg class="ic l"><use href="#i-batt"/></svg><span>Tue 6 Oct 14:21</span></div>
+    <div class="menu" style="top:36px;right:150px">
+      <div class="mi" style="height:auto;padding:5px 9px;flex-direction:column;align-items:flex-start;gap:1px"><b>Symphony is running</b><span class="t2" style="font-size:12px">3 working · 4 queued · dispatch on</span></div>
+      <hr>
+      <div class="mh">Waiting on you · 4</div>
+      <div class="mi hl"><svg class="ic s"><use href="#i-plan"/></svg>SHOP-330 Plan: Gift cards<span class="k">3 h</span></div>
+      <div class="mi"><svg class="ic s"><use href="#i-pr"/></svg>BIL-206 Invoice PDF export<span class="k">1 h</span></div>
+      <div class="mi"><svg class="ic s"><use href="#i-hand"/></svg>NOTE-90 App Store Connect key<span class="k">20 min</span></div>
+      <div class="mi"><svg class="ic s"><use href="#i-ask"/></svg>SHOP-341 Fix the thing on checkout<span class="k">5 min</span></div>
+      <hr>
+      <div class="mi">Open Symphony<span class="k">⌘O</span></div>
+      <hr>
+      <div class="mi">Pause Dispatch…</div>
+      <div class="mi">Force a Ticket…</div>
+      <div class="mi">Forced<span class="k">1 ›</span></div>
+      <hr>
+      <div class="mi">Stop Symphony</div>
+      <div class="mi">Restart Symphony</div>
+      <hr>
+      <div class="mi">Check for Updates…</div>
+      <div class="mi">Repos…</div>
+      <div class="mi">Settings…<span class="k">⌘,</span></div>
+      <div class="mi">Developer<span class="k">›</span></div>
+      <hr>
+      <div class="mi">Quit Symphony<span class="k">⌘Q</span></div>
+    </div>
+  </div></div>
+</section>
+
+<section class="screen" id="s-d2a">
+  <h3><span class="id">D2a</span> Inbox: a plan to review</h3>
+  <p>Three panes, like Mail. The list groups items by kind, oldest first. The review is built from the ticket's review brief (ADR 0001): what to review, the decisions with the recommended option picked, and the sub-tickets. Changing a pick enables <b>Send Decisions</b>; approving as is follows the recommendations.</p>
+  <div class="stage"><div class="win">
+    <aside class="sb" data-sel="inbox" data-inbox="4"></aside>
+    <div class="main">
+      <div class="tb">
+        <div class="ttl"><b>Inbox</b><span>4 waiting · oldest 3 h 12 min</span></div>
+        <span class="glass"><svg class="ic s c-acc"><use href="#i-stack"/></svg>All repos<svg class="ic s t2"><use href="#i-chevd"/></svg></span>
+        <span class="glass">Open in Linear<svg class="ic s"><use href="#i-ext"/></svg></span>
+        <span class="glass dim">Send Decisions</span>
+        <span class="glass pri">Approve Plan…</span>
+        <span class="glass icon"><svg class="ic"><use href="#i-more"/></svg></span>
+      </div>
+      <div class="list3">
+        <div class="lhdr">Plans</div>
+        <div class="irow sel"><svg class="ic kind"><use href="#i-plan"/></svg><div class="m"><div class="l1"><b>SHOP-330</b><span class="age">3 h 12 min</span></div><div class="l2">Plan: Gift cards</div><div class="l3">3 documents · 2 decisions · 7 sub-tickets</div></div></div>
+        <div class="lhdr">Pull requests</div>
+        <div class="irow"><svg class="ic kind c-acc"><use href="#i-pr"/></svg><div class="m"><div class="l1"><b>BIL-206</b><span class="age">1 h 05 min</span></div><div class="l2">Invoice PDF export</div><div class="l3">Checks green · QA passed · gate approves</div></div></div>
+        <div class="lhdr">Actions</div>
+        <div class="irow"><svg class="ic kind c-acc"><use href="#i-hand"/></svg><div class="m"><div class="l1"><b>NOTE-90</b><span class="age">20 min</span></div><div class="l2">Add the App Store Connect key</div><div class="l3">About 10 min · unblocks notes-app releases</div></div></div>
+        <div class="lhdr">Clarify</div>
+        <div class="irow"><svg class="ic kind c-acc"><use href="#i-ask"/></svg><div class="m"><div class="l1"><b>SHOP-341</b><span class="age">5 min</span></div><div class="l2">Fix the thing on checkout</div><div class="l3">Held by the quality gate: no expected behaviour</div></div></div>
+      </div>
+      <div class="detail3">
+        <div class="dh"><div class="tt"><div class="id">SHOP-330 · web-shop</div><h3>Plan: Gift cards</h3>
+          <div class="bs"><span class="badge b-plain"><svg class="ic"><use href="#i-plan"/></svg>Plan</span><span class="badge b-you"><svg class="ic"><use href="#i-you"/></svg>Waiting on you · 3 h 12 min</span><span class="badge b-plain">In Review</span></div></div></div>
+        <p class="headline">Journeys, screens and a split into 7 sub-tickets for gift cards. Two decisions need you; approving as is takes the recommended options.</p>
+        <div class="dsec"><h5>What to review</h5>
+          <div class="box rows">
+            <div class="row"><svg class="ic c-acc"><use href="#i-doc"/></svg><div class="main2">Stories and journeys</div><span class="link">Linear document<svg class="ic s"><use href="#i-ext"/></svg></span></div>
+            <div class="row"><svg class="ic c-acc"><use href="#i-doc"/></svg><div class="main2">Screens · gift-cards.html</div><span class="link">Linear document<svg class="ic s"><use href="#i-ext"/></svg></span></div>
+            <div class="row"><svg class="ic c-acc"><use href="#i-doc"/></svg><div class="main2">Kano feature map</div><span class="link">Linear document<svg class="ic s"><use href="#i-ext"/></svg></span></div>
+          </div></div>
+        <div class="dsec"><h5>Decisions needed<span class="r">2</span></h5>
+          <div class="decision"><div class="q">D1 · Where gift cards are bought</div>
+            <div class="o"><span class="radio on"></span>A. In the cart, as a product <span class="badge b-acc">Recommended</span></div>
+            <div class="o"><span class="radio"></span>B. On their own page</div>
+            <div class="o"><span class="radio"></span>C. Both</div></div>
+          <div class="decision"><div class="q">D2 · A card worth more than the order</div>
+            <div class="o"><span class="radio on"></span>A. Keep the rest as a balance <span class="badge b-acc">Recommended</span></div>
+            <div class="o"><span class="radio"></span>B. Single use: the rest is lost, and checkout says so</div></div>
+        </div>
+        <div class="dsec"><h5>Sub-tickets<span class="r">7, in landing order</span></h5>
+          <div class="box rows">
+            <div class="row" style="padding:5px 8px"><b class="num">SHOP-331</b><span class="main2">Gift card balance model</span><span class="t2" style="font-size:12px">Must-be</span></div>
+            <div class="row" style="padding:5px 8px"><b class="num">SHOP-332</b><span class="main2">Buy a gift card in the cart</span><span class="t2" style="font-size:12px">after SHOP-331</span></div>
+            <div class="row" style="padding:5px 8px"><b class="num">SHOP-333</b><span class="main2">Redeem at checkout</span><span class="t2" style="font-size:12px">after SHOP-331</span></div>
+            <div class="row" style="padding:5px 8px"><span class="t2">+ 4 more, ending with Final verification</span><span class="main2"></span><span class="link">Show all</span></div>
+          </div></div>
+      </div>
+    </div>
+  </div></div>
+</section>
+
+<section class="screen" id="s-d12d">
+  <h3><span class="id">D12d</span> Approve: the consequence sheet</h3>
+  <p>The approve move is the Director's alone (Symphony never makes it). The sheet names what happens in Linear and which sub-ticket starts first. After it, the item leaves the list, the next one is selected, and a banner offers <b>Undo</b> for 10 seconds. The PR version reads "Move BIL-206 to Merging? Symphony turns on auto-merge, and GitHub merges once checks pass."</p>
+  <div class="stage"><div class="win">
+    <aside class="sb" data-sel="inbox" data-inbox="4"></aside>
+    <div class="main">
+      <div class="tb">
+        <div class="ttl"><b>Inbox</b><span>4 waiting · oldest 3 h 12 min</span></div>
+        <span class="glass"><svg class="ic s c-acc"><use href="#i-stack"/></svg>All repos<svg class="ic s t2"><use href="#i-chevd"/></svg></span>
+        <span class="glass">Open in Linear<svg class="ic s"><use href="#i-ext"/></svg></span>
+        <span class="glass dim">Send Decisions</span>
+        <span class="glass pri">Approve Plan…</span>
+        <span class="glass icon"><svg class="ic"><use href="#i-more"/></svg></span>
+      </div>
+      <div class="list3">
+        <div class="lhdr">Plans</div>
+        <div class="irow sel"><svg class="ic kind"><use href="#i-plan"/></svg><div class="m"><div class="l1"><b>SHOP-330</b><span class="age">3 h 12 min</span></div><div class="l2">Plan: Gift cards</div><div class="l3">3 documents · 2 decisions · 7 sub-tickets</div></div></div>
+        <div class="lhdr">Pull requests</div>
+        <div class="irow"><svg class="ic kind c-acc"><use href="#i-pr"/></svg><div class="m"><div class="l1"><b>BIL-206</b><span class="age">1 h 05 min</span></div><div class="l2">Invoice PDF export</div><div class="l3">Checks green · QA passed · gate approves</div></div></div>
+        <div class="lhdr">Actions</div>
+        <div class="irow"><svg class="ic kind c-acc"><use href="#i-hand"/></svg><div class="m"><div class="l1"><b>NOTE-90</b><span class="age">20 min</span></div><div class="l2">Add the App Store Connect key</div><div class="l3">About 10 min · unblocks notes-app releases</div></div></div>
+      </div>
+      <div class="detail3">
+        <div class="dh"><div class="tt"><div class="id">SHOP-330 · web-shop</div><h3>Plan: Gift cards</h3></div></div>
+        <p class="headline">Journeys, screens and a split into 7 sub-tickets for gift cards.</p>
+      </div>
+    </div>
+    <div class="scrim"></div>
+    <div class="sheet" style="width:500px">
+      <h3>Approve the plan for SHOP-330?</h3>
+      <p>Symphony moves SHOP-330 to <b>Waiting on sub-tickets</b> and promotes its 7 sub-tickets from Backlog to Todo. Their blocked-by links keep the order: <b>SHOP-331</b> starts first.</p>
+      <div class="lbl">With your decisions, posted on the ticket with the approval</div>
+      <div class="box rows" style="background:var(--content)">
+        <div class="row" style="padding:5px 8px"><b>D1</b><span class="main2">A · In the cart, as a product</span><span class="badge b-acc">Recommended</span></div>
+        <div class="row" style="padding:5px 8px"><b>D2</b><span class="main2">A · Keep the rest as a balance</span><span class="badge b-acc">Recommended</span></div>
+      </div>
+      <p class="note" style="margin-top:10px">To change the plan instead, cancel and use Send Decisions, or comment in Linear.</p>
+      <div class="foot"><span class="btn">Cancel</span><span class="btn pri">Approve Plan</span></div>
+    </div>
+  </div></div>
+</section>
+
+<section class="screen" id="s-d2b">
+  <h3><span class="id">D2b</span> Inbox: a pull request to approve</h3>
+  <p>Everything needed to decide, in one place: what the PR does, CI, the Auto Review QA result, the acceptance gate's verdict with its record on this repo, and the size of the change. The diff stays on GitHub. <b>Send to Rework…</b> asks for the reason and posts it on the ticket.</p>
+  <div class="stage"><div class="win">
+    <aside class="sb" data-sel="inbox" data-inbox="3"></aside>
+    <div class="main">
+      <div class="tb">
+        <div class="ttl"><b>Inbox</b><span>3 waiting · oldest 1 h 05 min</span></div>
+        <span class="glass"><svg class="ic s c-acc"><use href="#i-stack"/></svg>All repos<svg class="ic s t2"><use href="#i-chevd"/></svg></span>
+        <span class="glass">Open PR<svg class="ic s"><use href="#i-ext"/></svg></span>
+        <span class="glass">Send to Rework…</span>
+        <span class="glass pri">Approve and Merge…</span>
+        <span class="glass icon"><svg class="ic"><use href="#i-more"/></svg></span>
+      </div>
+      <div class="list3">
+        <div class="lhdr">Pull requests</div>
+        <div class="irow sel"><svg class="ic kind"><use href="#i-pr"/></svg><div class="m"><div class="l1"><b>BIL-206</b><span class="age">1 h 05 min</span></div><div class="l2">Invoice PDF export</div><div class="l3">Checks green · QA passed · gate approves</div></div></div>
+        <div class="lhdr">Actions</div>
+        <div class="irow"><svg class="ic kind c-acc"><use href="#i-hand"/></svg><div class="m"><div class="l1"><b>NOTE-90</b><span class="age">20 min</span></div><div class="l2">Add the App Store Connect key</div><div class="l3">About 10 min · unblocks notes-app releases</div></div></div>
+        <div class="lhdr">Clarify</div>
+        <div class="irow"><svg class="ic kind c-acc"><use href="#i-ask"/></svg><div class="m"><div class="l1"><b>SHOP-341</b><span class="age">5 min</span></div><div class="l2">Fix the thing on checkout</div><div class="l3">Held by the quality gate: no expected behaviour</div></div></div>
+      </div>
+      <div class="detail3">
+        <div class="dh"><div class="tt"><div class="id">BIL-206 · billing-api · Invoices v2</div><h3>Invoice PDF export</h3>
+          <div class="bs"><span class="badge b-plain"><svg class="ic"><use href="#i-pr"/></svg>PR #482</span><span class="badge b-you"><svg class="ic"><use href="#i-you"/></svg>Waiting on you · 1 h 05 min</span><span class="badge b-plain">In Review</span></div></div></div>
+        <p class="headline">Adds <b>Export PDF</b> to the invoice page, with the company logo and VAT lines. Checks are green, QA passed every walkthrough step, and the gate approves.</p>
+        <div class="dsec"><h5>Checks</h5>
+          <div class="box rows">
+            <div class="row"><svg class="ic c-done"><use href="#i-done"/></svg><div class="main2"><div class="l1"><b>CI</b><span class="tt">14 of 14 checks passed</span></div></div><span class="end">6 min ago</span></div>
+            <div class="row"><svg class="ic c-done"><use href="#i-done"/></svg><div class="main2"><div class="l1"><b>Auto Review QA</b><span class="tt">Passed 6 of 6 walkthrough steps</span></div></div><span class="link">Report<svg class="ic s"><use href="#i-ext"/></svg></span></div>
+            <div class="row"><svg class="ic c-done"><use href="#i-done"/></svg><div class="main2"><div class="l1"><b>Acceptance gate</b><span class="tt">Approve · Shadow, so your call decides</span></div><div class="l2">Agreed with you on 12 of 12 billing-api tickets</div></div></div>
+            <div class="row"><svg class="ic c-done"><use href="#i-done"/></svg><div class="main2"><div class="l1"><b>Review agent</b><span class="tt">Approved after 1 round</span></div></div></div>
+          </div></div>
+        <div class="dsec"><h5>Change<span class="r">9 files · <span class="c-done">+412</span> <span class="c-prob">−120</span></span></h5>
+          <div class="box rows">
+            <div class="row" style="padding:5px 8px"><span class="mono main2">lib/billing/invoices/pdf.ex</span><span class="mono t2">+188 −0</span></div>
+            <div class="row" style="padding:5px 8px"><span class="mono main2">lib/billing_web/live/invoice_live.ex</span><span class="mono t2">+64 −22</span></div>
+            <div class="row" style="padding:5px 8px"><span class="t2 main2">+ 7 more files</span><span class="link">Open PR<svg class="ic s"><use href="#i-ext"/></svg></span></div>
+          </div></div>
+        <div class="dsec"><h5>QA screenshots</h5>
+          <div class="thumbs"><div>Invoice page</div><div>Export menu</div><div>PDF preview</div></div></div>
+      </div>
+    </div>
+  </div></div>
+</section>
+
+<section class="screen" id="s-d2c">
+  <h3><span class="id">D2c</span> Inbox: an action only the Director can do</h3>
+  <p>A <code>linear_request_human_action</code> request: why it is needed, the exact steps, about how long, what it unblocks. The banner at the bottom confirms the PR approved a moment ago, with Undo. Once the steps are done, moving the ticket back in Linear lets Symphony carry on.</p>
+  <div class="stage"><div class="win">
+    <aside class="sb" data-sel="inbox" data-inbox="2"></aside>
+    <div class="main">
+      <div class="tb">
+        <div class="ttl"><b>Inbox</b><span>2 waiting · oldest 20 min</span></div>
+        <span class="glass"><svg class="ic s c-acc"><use href="#i-stack"/></svg>All repos<svg class="ic s t2"><use href="#i-chevd"/></svg></span>
+        <span class="glass"><svg class="ic s"><use href="#i-copy"/></svg>Copy Steps</span>
+        <span class="glass pri">Open in Linear<svg class="ic s"><use href="#i-ext"/></svg></span>
+        <span class="glass icon"><svg class="ic"><use href="#i-more"/></svg></span>
+      </div>
+      <div class="list3">
+        <div class="lhdr">Actions</div>
+        <div class="irow sel"><svg class="ic kind"><use href="#i-hand"/></svg><div class="m"><div class="l1"><b>NOTE-90</b><span class="age">20 min</span></div><div class="l2">Add the App Store Connect key</div><div class="l3">About 10 min · unblocks notes-app releases</div></div></div>
+        <div class="lhdr">Clarify</div>
+        <div class="irow"><svg class="ic kind c-acc"><use href="#i-ask"/></svg><div class="m"><div class="l1"><b>SHOP-341</b><span class="age">5 min</span></div><div class="l2">Fix the thing on checkout</div><div class="l3">Held by the quality gate: no expected behaviour</div></div></div>
+      </div>
+      <div class="detail3">
+        <div class="dh"><div class="tt"><div class="id">NOTE-90 · notes-app</div><h3>Add the App Store Connect key</h3>
+          <div class="bs"><span class="badge b-plain"><svg class="ic"><use href="#i-hand"/></svg>Action</span><span class="badge b-you"><svg class="ic"><use href="#i-you"/></svg>Waiting on you · 20 min</span><span class="badge b-plain">Human Review</span></div></div></div>
+        <p class="headline">Symphony can't upload the TestFlight build for NOTE-88 without an App Store Connect API key. Nothing else in notes-app is blocked.</p>
+        <div class="dsec"><h5>Steps<span class="r">about 10 min</span></h5>
+          <div class="box" style="padding:10px 14px">
+            <ol style="padding-left:18px;font-size:13px;line-height:1.6">
+              <li>In App Store Connect, open Users and Access → Integrations → App Store Connect API.</li>
+              <li>Generate a key with the App Manager role, and download the <span class="mono">.p8</span> file.</li>
+              <li>In Symphony Settings → Secrets, add <span class="mono">ASC_KEY_ID</span>, <span class="mono">ASC_ISSUER_ID</span> and <span class="mono">ASC_KEY_PATH</span>.</li>
+              <li>Move NOTE-90 back to Todo in Linear. Symphony picks it up on its next poll.</li>
+            </ol>
+          </div></div>
+        <div class="dsec"><h5>Unblocks</h5><p style="font-size:13px">The release workflow of notes-app: NOTE-88, TestFlight build 2.4.</p></div>
+        <div class="dsec"><h5>Asked by</h5><p style="font-size:13px" class="t2">Implementation run on NOTE-88, today 14:01. Listed in the project update for humans.</p></div>
+      </div>
+    </div>
+    <div class="toast"><svg class="ic c-done"><use href="#i-done"/></svg>BIL-206 moved to Merging. Auto-merge is on.<span class="btn"><svg class="ic s"><use href="#i-undo"/></svg>Undo</span></div>
+  </div></div>
+</section>
+
+<section class="screen" id="s-d2d">
+  <h3><span class="id">D2d</span> Inbox: a ticket to clarify</h3>
+  <p>Tickets the quality gate held or skipped wait on the Director to rewrite them, so they belong in the Inbox, not in two tables at the bottom of the dashboard. The review shows what the gate found and the ticket as written.</p>
+  <div class="stage"><div class="win">
+    <aside class="sb" data-sel="inbox" data-inbox="1"></aside>
+    <div class="main">
+      <div class="tb">
+        <div class="ttl"><b>Inbox</b><span>1 waiting · 5 min</span></div>
+        <span class="glass"><svg class="ic s c-acc"><use href="#i-stack"/></svg>All repos<svg class="ic s t2"><use href="#i-chevd"/></svg></span>
+        <span class="glass pri">Edit in Linear<svg class="ic s"><use href="#i-ext"/></svg></span>
+        <span class="glass icon"><svg class="ic"><use href="#i-more"/></svg></span>
+      </div>
+      <div class="list3">
+        <div class="lhdr">Clarify</div>
+        <div class="irow sel"><svg class="ic kind"><use href="#i-ask"/></svg><div class="m"><div class="l1"><b>SHOP-341</b><span class="age">5 min</span></div><div class="l2">Fix the thing on checkout</div><div class="l3">Held by the quality gate: no expected behaviour</div></div></div>
+      </div>
+      <div class="detail3">
+        <div class="dh"><div class="tt"><div class="id">SHOP-341 · web-shop</div><h3>Fix the thing on checkout</h3>
+          <div class="bs"><span class="badge b-plain"><svg class="ic"><use href="#i-ask"/></svg>Clarify</span><span class="badge b-you"><svg class="ic"><use href="#i-you"/></svg>Waiting on you · 5 min</span><span class="badge b-plain">Todo · held</span></div></div></div>
+        <p class="headline">The quality gate held this ticket before any run started: an agent can't tell what to fix, or how to know it's done.</p>
+        <div class="dsec"><h5>What the gate found<span class="r">score 2 of 5 · round 1 of 3</span></h5>
+          <div class="box rows">
+            <div class="row"><svg class="ic c-prob"><use href="#i-fail"/></svg><div class="main2">No expected behaviour: what should checkout do instead?</div></div>
+            <div class="row"><svg class="ic c-prob"><use href="#i-fail"/></svg><div class="main2">No steps to reproduce, device or browser</div></div>
+            <div class="row"><svg class="ic c-done"><use href="#i-done"/></svg><div class="main2">The area is clear: checkout in web-shop</div></div>
+          </div></div>
+        <div class="dsec"><h5>The ticket as written</h5>
+          <div class="box" style="padding:10px 14px;font-size:13px;font-style:italic" >Checkout is weird again on mobile, see Slack.</div></div>
+        <div class="dsec"><h5>What happens next</h5><p style="font-size:13px">Edit the ticket in Linear (the bug template asks for Observed, Expected and Steps). Symphony scores it again on its next poll and starts it once it passes.</p></div>
+      </div>
+    </div>
+  </div></div>
+</section>
+
+<section class="screen" id="s-d2e">
+  <h3><span class="id">D2e</span> Inbox: empty</h3>
+  <p>An empty Inbox is good news and says so. The Dock and menu bar badges clear.</p>
+  <div class="stage"><div class="win">
+    <aside class="sb" data-sel="inbox" data-inbox="0"></aside>
+    <div class="main">
+      <div class="tb">
+        <div class="ttl"><b>Inbox</b><span>Nothing waiting</span></div>
+        <span class="glass"><svg class="ic s c-acc"><use href="#i-stack"/></svg>All repos<svg class="ic s t2"><use href="#i-chevd"/></svg></span>
+      </div>
+      <div class="body"><div class="empty">
+        <svg class="ic xl"><use href="#i-tray"/></svg>
+        <b>Nothing waits on you.</b>
+        <p>You answered 4 items today. New plans, pull requests, actions and held tickets show here and in a notification.</p>
+        <span class="btn lg" style="margin-top:6px">Open Overview</span>
+      </div></div>
+    </div>
+  </div></div>
+</section>
+
+<h2 id="j2">J2 · The glance</h2>
+<p class="lead">US3. One sentence, the flow of tickets through the stages, what is moving now, and on the right today's spend and the initiatives. Sections with nothing to say are not drawn. Steps: 1–4 → D1, 5 → D2 or D6.</p>
+
+<section class="screen" id="s-d1">
+  <h3><span class="id">D1</span> Overview: flowing</h3>
+  <ul>
+    <li>Replaces nine equal metric cards and sixteen always-on sections with one sentence and six tiles in the order work flows. Only <b>Waiting on you</b> is tinted.</li>
+    <li>Each tile opens Tickets (or the Inbox) filtered to its stage. <b>Needs attention</b> isn't drawn because nothing needs it.</li>
+    <li>The dispatch control in the toolbar is the one custom glass element: state at a glance, Pause and Resume on click (D12a).</li>
+  </ul>
+  <div class="stage"><div class="win">
+    <aside class="sb" data-sel="overview" data-inbox="4"></aside>
+    <div class="main">
+      <div class="tb">
+        <div class="ttl"><b>Overview</b><span>4 repos</span></div>
+        <span class="glass"><svg class="ic s c-acc"><use href="#i-stack"/></svg>All repos<svg class="ic s t2"><use href="#i-chevd"/></svg></span>
+        <span class="glass"><i class="dot"></i>Dispatch on<svg class="ic s t2"><use href="#i-chevd"/></svg></span>
+        <span class="glass search"><svg class="ic s"><use href="#i-search"/></svg>Search</span>
+      </div>
+      <div class="body" style="display:flex;flex-direction:column;gap:14px">
+        <div class="sentence"><h2>The factory is flowing.</h2><p>10 tickets in progress across 3 repos. 4 wait on you, the oldest for 3 h 12 min.</p></div>
+        <div class="flow">
+          <div class="tile"><div class="l"><svg class="ic s"><use href="#i-clock"/></svg>Queued</div><div class="v">4</div><div class="c">next slot ~10 min</div></div><div class="chev"><svg class="ic s"><use href="#i-chev"/></svg></div>
+          <div class="tile"><div class="l"><svg class="ic s c-work"><use href="#i-work"/></svg>Working</div><div class="v">3</div><div class="c">of 6 slots</div></div><div class="chev"><svg class="ic s"><use href="#i-chev"/></svg></div>
+          <div class="tile"><div class="l"><svg class="ic s c-work"><use href="#i-seal"/></svg>Auto Review</div><div class="v">2</div><div class="c">1 QA pass, 1 gate</div></div><div class="chev"><svg class="ic s"><use href="#i-chev"/></svg></div>
+          <div class="tile you"><div class="l"><svg class="ic s"><use href="#i-you"/></svg>Waiting on you</div><div class="v">4</div><div class="c">oldest 3 h 12 min</div></div><div class="chev"><svg class="ic s"><use href="#i-chev"/></svg></div>
+          <div class="tile"><div class="l"><svg class="ic s c-work"><use href="#i-pr"/></svg>Merging</div><div class="v">1</div><div class="c">CI running</div></div><div class="chev"><svg class="ic s"><use href="#i-chev"/></svg></div>
+          <div class="tile"><div class="l"><svg class="ic s c-done"><use href="#i-done"/></svg>Shipped today</div><div class="v">5</div><div class="c">+2 vs. yesterday</div><div class="spark" data-spark="[2,3,1,4,3,2,5,3,4,3,3,5]"></div></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 300px;gap:16px;min-height:0">
+          <div class="col">
+            <div class="card" style="padding:12px 8px 6px"><h4 style="padding:0 6px">Now working<span class="r">Show All</span></h4>
+              <div class="rows">
+                <div class="row"><div class="sym"><svg class="ic c-work"><use href="#i-work"/></svg></div><div class="main2"><div class="l1"><b>BIL-205</b><span class="tt">Credit notes on invoices</span></div><div class="l2">billing-api · Implementation run · turn 18 · “Running mix test” 40 s ago</div></div><div class="end">23 min<br><span>412K tokens</span></div></div>
+                <div class="row"><div class="sym"><svg class="ic c-work"><use href="#i-work"/></svg></div><div class="main2"><div class="l1"><b>SHOP-318</b><span class="tt">Cart badge count off by one</span></div><div class="l2">web-shop · Implementation run · turn 7 · “Editing lib/cart/badge.ex” 1 min ago</div></div><div class="end">9 min<br><span>160K tokens</span></div></div>
+                <div class="row"><div class="sym"><svg class="ic c-work"><use href="#i-work"/></svg></div><div class="main2"><div class="l1"><b>NOTE-87</b><span class="tt">Sync conflict banner</span></div><div class="l2">notes-app · Plan run · turn 4 · “Reading the sync module” 20 s ago</div></div><div class="end">6 min<br><span>95K tokens</span></div></div>
+                <div class="row"><div class="sym"><svg class="ic c-work"><use href="#i-seal"/></svg></div><div class="main2"><div class="l1"><b>SHOP-312</b><span class="tt">Wishlist share link</span></div><div class="l2">web-shop · Auto Review · QA walkthrough step 4 of 6</div></div><div class="end">12 min<br><span>520K tokens</span></div></div>
+                <div class="row"><div class="sym"><svg class="ic c-work"><use href="#i-seal"/></svg></div><div class="main2"><div class="l1"><b>NOTE-85</b><span class="tt">Export notes as Markdown</span></div><div class="l2">notes-app · Auto Review · the acceptance gate is judging</div></div><div class="end">3 min<br><span>610K tokens</span></div></div>
+                <div class="row"><div class="sym"><svg class="ic c-work"><use href="#i-pr"/></svg></div><div class="main2"><div class="l1"><b>SHOP-316</b><span class="tt">Coupon field keeps focus</span></div><div class="l2">web-shop · Merging · CI running, auto-merge on</div></div><div class="end">6 min<br><span>310K tokens</span></div></div>
+              </div>
+            </div>
+            <div class="card" style="padding:12px 8px 6px"><h4 style="padding:0 6px">Next up<span class="r">Show Queue</span></h4>
+              <div class="rows">
+                <div class="row"><div class="sym"><svg class="ic c-idle"><use href="#i-clock"/></svg></div><div class="main2"><div class="l1"><b>SHOP-320</b><span class="tt">Saved carts expire too soon</span><span class="t2" style="font-size:12px">· waiting for a free slot</span></div></div><div class="end">40 min</div></div>
+                <div class="row"><div class="sym"><svg class="ic c-idle"><use href="#i-clock"/></svg></div><div class="main2"><div class="l1"><b>BIL-207</b><span class="tt">Invoice reminders</span><span class="t2" style="font-size:12px">· waits on BIL-206 (you)</span></div></div><div class="end">2 days</div></div>
+              </div>
+            </div>
+          </div>
+          <div class="col">
+            <div class="card"><h4>Today<span class="r">Usage</span></h4>
+              <div class="mrow"><div class="h"><span>Tokens</span><span>3.1M of 5M</span></div><div class="meter"><i style="width:62%"></i></div></div>
+              <div class="mrow"><div class="h"><span>Claude 5-hour limit</span><span>41% · resets 16:00</span></div><div class="meter"><i style="width:41%"></i></div></div>
+              <div class="mrow" style="margin-bottom:2px"><div class="h"><span>Codex 5-hour limit</span><span>18% · resets 17:30</span></div><div class="meter"><i style="width:18%"></i></div></div>
+            </div>
+            <div class="card"><h4>Initiatives<span class="r">Show All</span></h4>
+              <div class="mrow"><div class="h"><span><b>BIL-200</b> Invoices v2</span><span>4 of 8</span></div><div class="seg"><i class="d" style="width:50%"></i><i class="w" style="width:12.5%"></i><i class="y" style="width:12.5%"></i><i class="q" style="width:25%"></i></div><div class="f">1 working · 1 waiting on you · 2 queued</div></div>
+              <div class="mrow" style="margin-bottom:2px"><div class="h"><span><b>SHOP-300</b> Checkout revamp</span><span>9 of 12</span></div><div class="seg"><i class="d" style="width:75%"></i><i class="w" style="width:16.6%"></i><i class="q" style="width:8.4%"></i></div><div class="f">2 working · 1 queued</div></div>
+            </div>
+            <div class="card" style="display:flex;align-items:center;gap:8px;padding:10px 14px"><svg class="ic c-done"><use href="#i-done"/></svg><span style="flex:1">All 4 repos healthy</span><span class="link">Repos</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+</section>
+
+<section class="screen" id="s-d1-idle">
+  <h3><span class="id">D1</span> Overview: idle</h3>
+  <p>Nothing queued, nothing working. Empty stages keep their place, in tertiary text, so the strip doesn't jump when work arrives. Today's spend and the initiatives stay on the right.</p>
+  <div class="stage"><div class="win">
+    <aside class="sb" data-sel="overview" data-inbox="0"></aside>
+    <div class="main">
+      <div class="tb">
+        <div class="ttl"><b>Overview</b><span>4 repos</span></div>
+        <span class="glass"><svg class="ic s c-acc"><use href="#i-stack"/></svg>All repos<svg class="ic s t2"><use href="#i-chevd"/></svg></span>
+        <span class="glass"><i class="dot"></i>Dispatch on<svg class="ic s t2"><use href="#i-chevd"/></svg></span>
+        <span class="glass search"><svg class="ic s"><use href="#i-search"/></svg>Search</span>
+      </div>
+      <div class="body" style="display:flex;flex-direction:column;gap:14px">
+        <div class="sentence"><h2>The factory is idle.</h2><p>Nothing is queued and nothing waits on you. Tickets moved to Todo in Linear start here.</p></div>
+        <div class="flow">
+          <div class="tile zero"><div class="l"><svg class="ic s"><use href="#i-clock"/></svg>Queued</div><div class="v">0</div><div class="c">nothing in Todo</div></div><div class="chev"><svg class="ic s"><use href="#i-chev"/></svg></div>
+          <div class="tile zero"><div class="l"><svg class="ic s c-work"><use href="#i-work"/></svg>Working</div><div class="v">0</div><div class="c">6 slots free</div></div><div class="chev"><svg class="ic s"><use href="#i-chev"/></svg></div>
+          <div class="tile zero"><div class="l"><svg class="ic s c-work"><use href="#i-seal"/></svg>Auto Review</div><div class="v">0</div><div class="c">&nbsp;</div></div><div class="chev"><svg class="ic s"><use href="#i-chev"/></svg></div>
+          <div class="tile zero"><div class="l"><svg class="ic s"><use href="#i-you"/></svg>Waiting on you</div><div class="v">0</div><div class="c">all clear</div></div><div class="chev"><svg class="ic s"><use href="#i-chev"/></svg></div>
+          <div class="tile zero"><div class="l"><svg class="ic s c-work"><use href="#i-pr"/></svg>Merging</div><div class="v">0</div><div class="c">&nbsp;</div></div><div class="chev"><svg class="ic s"><use href="#i-chev"/></svg></div>
+          <div class="tile"><div class="l"><svg class="ic s c-done"><use href="#i-done"/></svg>Shipped today</div><div class="v">7</div><div class="c">+4 vs. yesterday</div><div class="spark" data-spark="[2,3,1,4,3,2,5,3,4,3,3,7]"></div></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 300px;gap:16px;min-height:0">
+          <div class="card" style="height:300px"><div class="empty"><svg class="ic xl"><use href="#i-done"/></svg><b>All caught up.</b><p>7 tickets shipped today. Write the next ticket in Linear, or look at what shipped.</p><span class="btn lg" style="margin-top:4px">Show Shipped</span></div></div>
+          <div class="col">
+            <div class="card"><h4>Today<span class="r">Usage</span></h4>
+              <div class="mrow"><div class="h"><span>Tokens</span><span>3.8M of 5M</span></div><div class="meter m-you"><i style="width:76%"></i></div></div>
+              <div class="mrow" style="margin-bottom:2px"><div class="h"><span>Claude 5-hour limit</span><span>12% · resets 21:00</span></div><div class="meter"><i style="width:12%"></i></div></div>
+            </div>
+            <div class="card"><h4>Initiatives<span class="r">Show All</span></h4>
+              <div class="mrow" style="margin-bottom:2px"><div class="h"><span><b>BIL-200</b> Invoices v2</span><span>8 of 8</span></div><div class="seg"><i class="d" style="width:100%"></i></div><div class="f">Final verification passed · Done</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+</section>
+
+<h2 id="j3">J3 · Unstick a ticket</h2>
+<p class="lead">US4. A run stops making progress; the Director sees it, reads why, and stops it with the consequence spelled out. Steps: 1 → D14, D1 (attention), 2 → D3, 3 → D4, 4 → D12c, 5 → D1, D3.</p>
+
+<section class="screen" id="s-d1-attention">
+  <h3><span class="id">D1</span> Overview: needs attention</h3>
+  <ul>
+    <li>The sentence names the problems; <b>Needs attention</b> appears above everything else, one row per problem, each with its fix. The sidebar's Overview item carries the count.</li>
+    <li>Problems: a run with no agent activity for 10 min, 3 failed attempts or more, a repo conflict, a usage-limit hold, a stale forced ticket, stray processes. A row leaves on the poll after its problem clears.</li>
+    <li>The usage-limit hold also shows in the dispatch control: "Holding · Claude limit".</li>
+  </ul>
+  <div class="stage"><div class="win">
+    <aside class="sb" data-sel="overview" data-inbox="4" data-attn="2"></aside>
+    <div class="main">
+      <div class="tb">
+        <div class="ttl"><b>Overview</b><span>4 repos</span></div>
+        <span class="glass"><svg class="ic s c-acc"><use href="#i-stack"/></svg>All repos<svg class="ic s t2"><use href="#i-chevd"/></svg></span>
+        <span class="glass"><i class="dot you"></i>Holding · Claude limit<svg class="ic s t2"><use href="#i-chevd"/></svg></span>
+        <span class="glass search"><svg class="ic s"><use href="#i-search"/></svg>Search</span>
+      </div>
+      <div class="body" style="display:flex;flex-direction:column;gap:14px">
+        <div class="sentence"><h2><svg class="ic l c-prob"><use href="#i-warn"/></svg>2 things need attention.</h2><p>11 tickets in progress across 3 repos. 4 wait on you, the oldest for 3 h 26 min.</p></div>
+        <div class="flow">
+          <div class="tile"><div class="l"><svg class="ic s"><use href="#i-clock"/></svg>Queued</div><div class="v">4</div><div class="c">held until ~16:00</div></div><div class="chev"><svg class="ic s"><use href="#i-chev"/></svg></div>
+          <div class="tile"><div class="l"><svg class="ic s c-work"><use href="#i-work"/></svg>Working</div><div class="v">4</div><div class="c">of 6 slots · 1 stuck</div></div><div class="chev"><svg class="ic s"><use href="#i-chev"/></svg></div>
+          <div class="tile"><div class="l"><svg class="ic s c-work"><use href="#i-seal"/></svg>Auto Review</div><div class="v">2</div><div class="c">1 QA pass, 1 gate</div></div><div class="chev"><svg class="ic s"><use href="#i-chev"/></svg></div>
+          <div class="tile you"><div class="l"><svg class="ic s"><use href="#i-you"/></svg>Waiting on you</div><div class="v">4</div><div class="c">oldest 3 h 26 min</div></div><div class="chev"><svg class="ic s"><use href="#i-chev"/></svg></div>
+          <div class="tile"><div class="l"><svg class="ic s c-work"><use href="#i-pr"/></svg>Merging</div><div class="v">1</div><div class="c">CI running</div></div><div class="chev"><svg class="ic s"><use href="#i-chev"/></svg></div>
+          <div class="tile"><div class="l"><svg class="ic s c-done"><use href="#i-done"/></svg>Shipped today</div><div class="v">5</div><div class="c">+2 vs. yesterday</div><div class="spark" data-spark="[2,3,1,4,3,2,5,3,4,3,3,5]"></div></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 300px;gap:16px;min-height:0">
+          <div class="col">
+            <div class="card" style="padding:12px 8px 6px;box-shadow:0 0 0 .5px color-mix(in srgb,var(--prob) 45%,transparent)"><h4 style="padding:0 6px">Needs attention<span class="r t2">2</span></h4>
+              <div class="rows">
+                <div class="row"><div class="sym"><svg class="ic c-prob"><use href="#i-warn"/></svg></div><div class="main2"><div class="l1"><b>SHOP-305</b><span class="tt">No agent activity for 14 min</span></div><div class="l2">web-shop · Checkout total rounding · attempt 2 · last: mix test test/checkout_test.exs</div></div><div class="acts"><span class="btn">Open</span><span class="btn pri">Stop Run…</span></div></div>
+                <div class="row"><div class="sym"><svg class="ic c-you"><use href="#i-pause"/></svg></div><div class="main2"><div class="l1"><b>New runs held</b><span class="tt">Claude 5-hour limit at 96%</span></div><div class="l2">4 queued tickets start at ~16:00 when it resets. Runs already working go on.</div></div><div class="acts"><span class="btn">Open Usage</span></div></div>
+              </div>
+            </div>
+            <div class="card" style="padding:12px 8px 6px"><h4 style="padding:0 6px">Now working<span class="r">Show All</span></h4>
+              <div class="rows">
+                <div class="row"><div class="sym"><svg class="ic c-prob"><use href="#i-warn"/></svg></div><div class="main2"><div class="l1"><b>SHOP-305</b><span class="tt">Checkout total rounding</span></div><div class="l2">web-shop · Implementation run · turn 31 · no activity for 14 min</div></div><div class="end">38 min<br><span>780K tokens</span></div></div>
+                <div class="row"><div class="sym"><svg class="ic c-work"><use href="#i-work"/></svg></div><div class="main2"><div class="l1"><b>BIL-205</b><span class="tt">Credit notes on invoices</span></div><div class="l2">billing-api · Implementation run · turn 22 · “Writing tests” 10 s ago</div></div><div class="end">37 min<br><span>530K tokens</span></div></div>
+                <div class="row"><div class="sym"><svg class="ic c-work"><use href="#i-work"/></svg></div><div class="main2"><div class="l1"><b>SHOP-318</b><span class="tt">Cart badge count off by one</span></div><div class="l2">web-shop · Implementation run · turn 12 · “Running mix test” 30 s ago</div></div><div class="end">23 min<br><span>240K tokens</span></div></div>
+                <div class="row"><div class="sym"><svg class="ic t2"><use href="#i-more"/></svg></div><div class="main2"><span class="t2">4 more: NOTE-87, SHOP-312, NOTE-85, SHOP-316</span></div></div>
+              </div>
+            </div>
+          </div>
+          <div class="col">
+            <div class="card"><h4>Today<span class="r">Usage</span></h4>
+              <div class="mrow"><div class="h"><span>Tokens</span><span>3.4M of 5M</span></div><div class="meter"><i style="width:68%"></i></div></div>
+              <div class="mrow"><div class="h"><span>Claude 5-hour limit</span><span>96% · resets 16:00</span></div><div class="meter m-prob"><i style="width:96%"></i></div></div>
+              <div class="mrow" style="margin-bottom:2px"><div class="h"><span>Codex 5-hour limit</span><span>22% · resets 17:30</span></div><div class="meter"><i style="width:22%"></i></div></div>
+            </div>
+            <div class="card"><h4>Initiatives<span class="r">Show All</span></h4>
+              <div class="mrow"><div class="h"><span><b>BIL-200</b> Invoices v2</span><span>4 of 8</span></div><div class="seg"><i class="d" style="width:50%"></i><i class="w" style="width:12.5%"></i><i class="y" style="width:12.5%"></i><i class="q" style="width:25%"></i></div><div class="f">1 working · 1 waiting on you · 2 queued</div></div>
+              <div class="mrow" style="margin-bottom:2px"><div class="h"><span><b>SHOP-300</b> Checkout revamp</span><span>9 of 12</span></div><div class="seg"><i class="d" style="width:75%"></i><i class="p" style="width:8.3%"></i><i class="w" style="width:8.3%"></i><i class="q" style="width:8.4%"></i></div><div class="f">1 stuck · 1 working · 1 queued</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+</section>
+
+<section class="screen" id="s-d3">
+  <h3><span class="id">D3</span> Ticket page</h3>
+  <ul>
+    <li>One ticket, one story: what runs now and its last activity, every earlier run with its result, the PR, the gate and QA results when it has them, tokens against the per-ticket cap.</li>
+    <li>Opens from any row (Return or double-click) and from search; ⌘[ goes back. A single click shows the same facts in the inspector (see D6).</li>
+    <li>JSON, audit and worktree links from the web dashboard live in the ⋯ menu: Copy API URL, Show Audit Records, Reveal Worktree.</li>
+  </ul>
+  <div class="stage"><div class="win">
+    <aside class="sb" data-sel="overview" data-inbox="4" data-attn="2"></aside>
+    <div class="main">
+      <div class="tb">
+        <span class="glass icon"><svg class="ic"><use href="#i-chevl"/></svg></span>
+        <div class="ttl"><b>SHOP-305</b><span>Checkout total rounding</span></div>
+        <span class="glass">View Transcript</span>
+        <span class="glass">Open in Linear<svg class="ic s"><use href="#i-ext"/></svg></span>
+        <span class="glass dest"><svg class="ic s"><use href="#i-stop"/></svg>Stop Run…</span>
+        <span class="glass icon"><svg class="ic"><use href="#i-more"/></svg></span>
+      </div>
+      <div class="body split">
+        <div class="col">
+          <div class="dh" style="margin:6px 0 0"><div class="tt"><div class="id">SHOP-305 · web-shop · Checkout revamp</div><h3>Checkout total rounding</h3>
+            <div class="bs"><span class="badge b-prob"><svg class="ic"><use href="#i-warn"/></svg>Needs attention · no activity for 14 min</span><span class="badge b-plain">In Progress</span><span class="badge b-plain">Attempt 2</span></div></div></div>
+          <div class="card"><h4>Now</h4>
+            <dl class="kv">
+              <dt>Run</dt><dd>Implementation run 2 · claude-opus-5-5 · high effort</dd>
+              <dt>Running for</dt><dd>38 min · turn 31</dd>
+              <dt>Last activity</dt><dd><span class="c-prob">14 min ago</span> · <span class="mono">mix test test/checkout_test.exs</span></dd>
+              <dt>Workspace</dt><dd><span class="mono">~/symphony-workspaces/web-shop/SHOP-305</span> <span class="link">Reveal</span></dd>
+            </dl>
+            <div class="mrow" style="margin:12px 0 2px"><div class="h"><span>Tokens</span><span>1.4M of the 2M per-ticket cap</span></div><div class="meter m-you"><i style="width:70%"></i></div></div>
+          </div>
+          <div class="card"><h4>Timeline</h4>
+            <div class="tl">
+              <div class="st"><svg class="ic c-idle"><use href="#i-clock"/></svg><div class="a"><span class="tm">13:02</span><b>Started from Todo</b><span class="rt">web-shop</span></div></div>
+              <div class="st"><svg class="ic" style="color:var(--prob)"><use href="#i-fail"/></svg><div class="a"><span class="tm">13:03</span><b>Implementation run 1 · failed</b><span class="rt">22 min · 640K tokens</span></div><div class="b">test/checkout_test.exs:88 timed out after 15 min</div></div>
+              <div class="st"><svg class="ic c-idle"><use href="#i-refresh"/></svg><div class="a"><span class="tm">13:25</span><b>Retry scheduled</b><span class="rt">attempt 2 in 2 min</span></div></div>
+              <div class="st"><svg class="ic c-work"><use href="#i-work"/></svg><div class="a"><span class="tm">13:27</span><b>Implementation run 2 · running</b><span class="rt">38 min · 780K tokens</span></div><div class="b">No agent activity since 13:51</div></div>
+            </div>
+          </div>
+        </div>
+        <div class="col" style="padding-top:6px">
+          <div class="card"><h4>Ticket</h4>
+            <dl class="kv" style="grid-template-columns:90px 1fr">
+              <dt>State</dt><dd>In Progress</dd>
+              <dt>Type</dt><dd>Bug</dd>
+              <dt>Initiative</dt><dd><span class="link">SHOP-300 Checkout revamp</span></dd>
+              <dt>Pull request</dt><dd class="t2">None yet</dd>
+              <dt>Gate</dt><dd class="t2">Not judged yet</dd>
+              <dt>Forced</dt><dd class="t2">No</dd>
+            </dl>
+          </div>
+          <div class="card"><h4>Last from the agent</h4>
+            <p style="font-size:12.5px;line-height:1.45">“One failure left at line 88: the total is 10.00, expected 9.99. The test reads the system clock for the tax date; pinning it and running the file again.”</p>
+            <p class="t2" style="font-size:11px;margin-top:6px">13:50 · turn 30</p>
+          </div>
+          <div class="card"><h4>Links</h4>
+            <div class="rows">
+              <div class="row" style="padding:4px 2px"><span class="main2">Linear</span><svg class="ic s c-acc"><use href="#i-ext"/></svg></div>
+              <div class="row" style="padding:4px 2px"><span class="main2">Transcript, run 2</span><svg class="ic s c-acc"><use href="#i-chev"/></svg></div>
+              <div class="row" style="padding:4px 2px"><span class="main2">Audit records</span><span class="t2">12</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+</section>
+
+<section class="screen" id="s-d4">
+  <h3><span class="id">D4</span> Run transcript</h3>
+  <ul>
+    <li>A window of its own (⌘-click opens another), grouped by turn: what the agent said, each tool call with its result and duration. Filters for Messages, Tools and Errors; ⌘F searches.</li>
+    <li>The selected event shows in full below, monospaced and selectable. A tool call that hasn't returned says how long it has been silent.</li>
+  </ul>
+  <div class="stage"><div class="win">
+    <div class="main" style="left:0">
+      <div class="tb" style="padding-left:18px">
+        <div class="lights" style="padding:0 10px 0 0;height:auto"><i></i><i></i><i></i></div>
+        <div class="ttl"><b>SHOP-305 · Run 2</b><span>Implementation run · claude-opus-5-5 · high · started 13:27</span></div>
+        <span class="glass grp"><span style="background:color-mix(in srgb,var(--accent) 20%,transparent);border-radius:14px">All</span><span>Messages</span><span>Tools</span><span>Errors</span></span>
+        <span class="glass search"><svg class="ic s"><use href="#i-search"/></svg>Search</span>
+        <span class="glass"><svg class="ic s"><use href="#i-copy"/></svg>Copy Session ID</span>
+      </div>
+      <div class="body" style="display:flex;flex-direction:column;gap:12px">
+        <div class="card" style="padding:6px 6px;flex:1;overflow:hidden">
+          <div class="turn">Turn 27 · 13:44</div>
+          <div class="ev"><span class="tm">13:44:30</span><span class="k">Agent</span><span class="tx">The total is rounded per line and then summed. Moving the rounding to the order total in Checkout.Totals.</span></div>
+          <div class="ev"><span class="tm">13:45:02</span><span class="k">Edit</span><span class="tx mono">lib/web_shop/checkout/totals.ex</span><span class="rs">+14 −9</span></div>
+          <div class="turn">Turn 28 · 13:46</div>
+          <div class="ev"><span class="tm">13:46:10</span><span class="k">Shell</span><span class="tx mono">mix compile --warnings-as-errors</span><span class="rs"><span class="c-done">exit 0</span> · 11.4 s</span></div>
+          <div class="turn">Turn 29 · 13:48</div>
+          <div class="ev"><span class="tm">13:48:12</span><span class="k">Agent</span><span class="tx">The rounding fix is in. Running the checkout tests again.</span></div>
+          <div class="ev"><span class="tm">13:48:15</span><span class="k">Shell</span><span class="tx mono">mix test test/checkout_test.exs</span><span class="rs"><span class="c-prob">exit 1</span> · 1 failure · 8.2 s</span></div>
+          <div class="turn">Turn 30 · 13:50</div>
+          <div class="ev"><span class="tm">13:50:02</span><span class="k">Agent</span><span class="tx">One failure left at line 88: the total is 10.00, expected 9.99. The test reads the system clock for the tax date; pinning it and running the file again.</span></div>
+          <div class="ev"><span class="tm">13:50:40</span><span class="k">Edit</span><span class="tx mono">test/checkout_test.exs</span><span class="rs">+3 −1</span></div>
+          <div class="turn">Turn 31 · 13:51</div>
+          <div class="ev sel"><span class="tm">13:51:04</span><span class="k">Shell</span><span class="tx mono">mix test test/checkout_test.exs</span><span class="rs"><svg class="ic s c-prob" style="vertical-align:-2px"><use href="#i-warn"/></svg> no output for 14 min</span></div>
+        </div>
+        <div class="card" style="height:250px">
+          <h4>Shell · 13:51:04<span class="r t2">running · 14 min</span></h4>
+          <dl class="kv" style="margin-bottom:10px">
+            <dt>Command</dt><dd class="mono">mix test test/checkout_test.exs</dd>
+            <dt>Working directory</dt><dd class="mono">~/symphony-workspaces/web-shop/SHOP-305</dd>
+          </dl>
+          <div class="code">Compiling 2 files (.ex)
+Running ExUnit with seed: 48213, max_cases: 16
+
+..........
+<span class="t2">(no output since 13:51:19)</span></div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+</section>
+
+<section class="screen" id="s-d12c">
+  <h3><span class="id">D12c</span> Stop Run: the consequence sheet</h3>
+  <p>Stopping ends the agent and removes its workspace; the ticket keeps its Linear state, so Symphony would start it again on the next poll. The sheet says so and offers to move it to Backlog with a note, which the app posts on the ticket.</p>
+  <div class="stage"><div class="win">
+    <aside class="sb" data-sel="overview" data-inbox="4" data-attn="2"></aside>
+    <div class="main">
+      <div class="tb">
+        <span class="glass icon"><svg class="ic"><use href="#i-chevl"/></svg></span>
+        <div class="ttl"><b>SHOP-305</b><span>Checkout total rounding</span></div>
+        <span class="glass">View Transcript</span>
+        <span class="glass">Open in Linear<svg class="ic s"><use href="#i-ext"/></svg></span>
+        <span class="glass dest"><svg class="ic s"><use href="#i-stop"/></svg>Stop Run…</span>
+        <span class="glass icon"><svg class="ic"><use href="#i-more"/></svg></span>
+      </div>
+      <div class="body split">
+        <div class="col">
+          <div class="dh" style="margin:6px 0 0"><div class="tt"><div class="id">SHOP-305 · web-shop · Checkout revamp</div><h3>Checkout total rounding</h3></div></div>
+          <div class="card" style="height:150px"></div><div class="card" style="height:220px"></div>
+        </div>
+        <div class="col" style="padding-top:6px"><div class="card" style="height:200px"></div><div class="card" style="height:140px"></div></div>
+      </div>
+    </div>
+    <div class="scrim"></div>
+    <div class="sheet" style="width:500px">
+      <h3>Stop the run on SHOP-305?</h3>
+      <p>Symphony ends the agent and removes its workspace. The 780K tokens it used stay counted.</p>
+      <p>SHOP-305 stays <b>In Progress</b> in Linear, so Symphony starts it again on its next poll unless you move it.</p>
+      <div class="opt"><span class="check on" style="margin-top:2px"></span><span>Also move SHOP-305 to <b>Backlog</b></span></div>
+      <div class="lbl">Note for the ticket (posted as a comment)</div>
+      <div class="field focus" style="min-height:56px">The test hangs at checkout_test.exs:88 when the clock is pinned. Needs a look at the tax date helper before another run.</div>
+      <div class="foot"><span class="btn">Cancel</span><span class="btn dest">Stop Run</span></div>
+    </div>
+  </div></div>
+</section>
+
+<h2 id="j4">J4 · Steer the factory</h2>
+<p class="lead">US5. Pause and resume with a reason, push a ticket ahead of the queue, and see it move. Steps: 1–2 → D12a, 3 → D1 (paused), 4 → D12a, 5 → D12b, 6 → D6, D3.</p>
+
+<section class="screen" id="s-d12a-popover">
+  <h3><span class="id">D12a</span> Dispatch control: popover</h3>
+  <p>A click on the dispatch control shows what dispatch is doing and the one move that changes it. While paused the same popover offers <b>Resume Dispatch</b>, with who paused, when and why; while a usage limit holds new runs it says which limit and when it resets.</p>
+  <div class="stage"><div class="win"><aside class="sb" data-sel="overview" data-inbox="4"></aside><div class="main"><div class="tb"><div class="ttl"><b>Overview</b><span>4 repos</span></div><span class="glass"><svg class="ic s c-acc"><use href="#i-stack"/></svg>All repos<svg class="ic s t2"><use href="#i-chevd"/></svg></span><span class="glass"><i class="dot"></i>Dispatch on<svg class="ic s t2"><use href="#i-chevd"/></svg></span><span class="glass search"><svg class="ic s"><use href="#i-search"/></svg>Search</span></div><div class="body" style="display:flex;flex-direction:column;gap:14px"><div class="sentence"><h2>The factory is flowing.</h2><p>10 tickets in progress across 3 repos. 4 wait on you, the oldest for 3 h 12 min.</p></div><div class="flow"><div class="tile"><div class="l"><svg class="ic s "><use href="#i-clock"/></svg>Queued</div><div class="v">4</div><div class="c">next slot ~10 min</div></div><div class="chev"><svg class="ic s"><use href="#i-chev"/></svg></div><div class="tile"><div class="l"><svg class="ic s c-work"><use href="#i-work"/></svg>Working</div><div class="v">3</div><div class="c">of 6 slots</div></div><div class="chev"><svg class="ic s"><use href="#i-chev"/></svg></div><div class="tile"><div class="l"><svg class="ic s c-work"><use href="#i-seal"/></svg>Auto Review</div><div class="v">2</div><div class="c">1 QA pass, 1 gate</div></div><div class="chev"><svg class="ic s"><use href="#i-chev"/></svg></div><div class="tile you"><div class="l"><svg class="ic s"><use href="#i-you"/></svg>Waiting on you</div><div class="v">4</div><div class="c">oldest 3 h 12 min</div></div><div class="chev"><svg class="ic s"><use href="#i-chev"/></svg></div><div class="tile"><div class="l"><svg class="ic s c-work"><use href="#i-pr"/></svg>Merging</div><div class="v">1</div><div class="c">CI running</div></div><div class="chev"><svg class="ic s"><use href="#i-chev"/></svg></div><div class="tile"><div class="l"><svg class="ic s c-done"><use href="#i-done"/></svg>Shipped today</div><div class="v">5</div><div class="c">+2 vs. yesterday</div><div class="spark" data-spark="[2,3,1,4,3,2,5,3,4,3,3,5]"></div></div></div><div style="display:grid;grid-template-columns:1fr 300px;gap:16px;min-height:0"><div class="col"><div class="card" style="padding:12px 8px 6px"><h4 style="padding:0 6px">Now working<span class="r">Show All</span></h4><div class="rows"><div class="row"><div class="sym"><svg class="ic c-work"><use href="#i-work"/></svg></div><div class="main2"><div class="l1"><b>BIL-205</b><span class="tt">Credit notes on invoices</span></div><div class="l2">billing-api · Implementation run · turn 18 · “Running mix test” 40 s ago</div></div><div class="end">23 min<br><span>412K tokens</span></div></div>
+                <div class="row"><div class="sym"><svg class="ic c-work"><use href="#i-work"/></svg></div><div class="main2"><div class="l1"><b>SHOP-318</b><span class="tt">Cart badge count off by one</span></div><div class="l2">web-shop · Implementation run · turn 7 · “Editing lib/cart/badge.ex” 1 min ago</div></div><div class="end">9 min<br><span>160K tokens</span></div></div>
+                <div class="row"><div class="sym"><svg class="ic c-work"><use href="#i-work"/></svg></div><div class="main2"><div class="l1"><b>NOTE-87</b><span class="tt">Sync conflict banner</span></div><div class="l2">notes-app · Plan run · turn 4 · “Reading the sync module” 20 s ago</div></div><div class="end">6 min<br><span>95K tokens</span></div></div></div></div></div><div class="col">
+            <div class="card"><h4>Today<span class="r">Usage</span></h4>
+              <div class="mrow"><div class="h"><span>Tokens</span><span>3.1M of 5M</span></div><div class="meter"><i style="width:62%"></i></div></div>
+              <div class="mrow"><div class="h"><span>Claude 5-hour limit</span><span>41% · resets 16:00</span></div><div class="meter"><i style="width:41%"></i></div></div>
+              <div class="mrow" style="margin-bottom:2px"><div class="h"><span>Codex 5-hour limit</span><span>18% · resets 17:30</span></div><div class="meter"><i style="width:18%"></i></div></div>
+            </div>
+            <div class="card"><h4>Initiatives<span class="r">Show All</span></h4>
+              <div class="mrow"><div class="h"><span><b>BIL-200</b> Invoices v2</span><span>4 of 8</span></div><div class="seg"><i class="d" style="width:50%"></i><i class="w" style="width:12.5%"></i><i class="y" style="width:12.5%"></i><i class="q" style="width:25%"></i></div><div class="f">1 working · 1 waiting on you · 2 queued</div></div>
+              <div class="mrow" style="margin-bottom:2px"><div class="h"><span><b>SHOP-300</b> Checkout revamp</span><span>9 of 12</span></div><div class="seg"><i class="d" style="width:75%"></i><i class="w" style="width:16.6%"></i><i class="q" style="width:8.4%"></i></div><div class="f">2 working · 1 queued</div></div>
+            </div>
+          </div></div></div></div>
+    <div class="popover" style="top:60px;right:118px">
+      <h4><i class="dot"></i>Dispatch on</h4>
+      <p>3 working in 6 slots · 4 queued. New runs start as slots free up.</p>
+      <div style="display:flex;gap:8px"><span class="btn" style="flex:1;justify-content:center"><svg class="ic s"><use href="#i-pause"/></svg>Pause Dispatch…</span><span class="btn" style="flex:1;justify-content:center"><svg class="ic s c-forced"><use href="#i-bolt"/></svg>Force a Ticket…</span></div>
+    </div>
+  </div></div>
+</section>
+
+<section class="screen" id="s-d12a-sheet">
+  <h3><span class="id">D12a</span> Pause Dispatch: the consequence sheet</h3>
+  <p>The reason is optional and shows everywhere the pause shows: the toolbar, the sentence, the menu bar and the web dashboard. It replaces the web dashboard's click-twice <i>Pause All</i>.</p>
+  <div class="stage"><div class="win"><aside class="sb" data-sel="overview" data-inbox="4"></aside><div class="main"><div class="tb"><div class="ttl"><b>Overview</b><span>4 repos</span></div><span class="glass"><svg class="ic s c-acc"><use href="#i-stack"/></svg>All repos<svg class="ic s t2"><use href="#i-chevd"/></svg></span><span class="glass"><i class="dot"></i>Dispatch on<svg class="ic s t2"><use href="#i-chevd"/></svg></span><span class="glass search"><svg class="ic s"><use href="#i-search"/></svg>Search</span></div><div class="body" style="display:flex;flex-direction:column;gap:14px"><div class="sentence"><h2>The factory is flowing.</h2><p>10 tickets in progress across 3 repos. 4 wait on you, the oldest for 3 h 12 min.</p></div><div class="flow"><div class="tile"><div class="l"><svg class="ic s "><use href="#i-clock"/></svg>Queued</div><div class="v">4</div><div class="c">next slot ~10 min</div></div><div class="chev"><svg class="ic s"><use href="#i-chev"/></svg></div><div class="tile"><div class="l"><svg class="ic s c-work"><use href="#i-work"/></svg>Working</div><div class="v">3</div><div class="c">of 6 slots</div></div><div class="chev"><svg class="ic s"><use href="#i-chev"/></svg></div><div class="tile"><div class="l"><svg class="ic s c-work"><use href="#i-seal"/></svg>Auto Review</div><div class="v">2</div><div class="c">1 QA pass, 1 gate</div></div><div class="chev"><svg class="ic s"><use href="#i-chev"/></svg></div><div class="tile you"><div class="l"><svg class="ic s"><use href="#i-you"/></svg>Waiting on you</div><div class="v">4</div><div class="c">oldest 3 h 12 min</div></div><div class="chev"><svg class="ic s"><use href="#i-chev"/></svg></div><div class="tile"><div class="l"><svg class="ic s c-work"><use href="#i-pr"/></svg>Merging</div><div class="v">1</div><div class="c">CI running</div></div><div class="chev"><svg class="ic s"><use href="#i-chev"/></svg></div><div class="tile"><div class="l"><svg class="ic s c-done"><use href="#i-done"/></svg>Shipped today</div><div class="v">5</div><div class="c">+2 vs. yesterday</div><div class="spark" data-spark="[2,3,1,4,3,2,5,3,4,3,3,5]"></div></div></div><div style="display:grid;grid-template-columns:1fr 300px;gap:16px;min-height:0"><div class="col"><div class="card" style="padding:12px 8px 6px"><h4 style="padding:0 6px">Now working<span class="r">Show All</span></h4><div class="rows"><div class="row"><div class="sym"><svg class="ic c-work"><use href="#i-work"/></svg></div><div class="main2"><div class="l1"><b>BIL-205</b><span class="tt">Credit notes on invoices</span></div><div class="l2">billing-api · Implementation run · turn 18 · “Running mix test” 40 s ago</div></div><div class="end">23 min<br><span>412K tokens</span></div></div>
+                <div class="row"><div class="sym"><svg class="ic c-work"><use href="#i-work"/></svg></div><div class="main2"><div class="l1"><b>SHOP-318</b><span class="tt">Cart badge count off by one</span></div><div class="l2">web-shop · Implementation run · turn 7 · “Editing lib/cart/badge.ex” 1 min ago</div></div><div class="end">9 min<br><span>160K tokens</span></div></div>
+                <div class="row"><div class="sym"><svg class="ic c-work"><use href="#i-work"/></svg></div><div class="main2"><div class="l1"><b>NOTE-87</b><span class="tt">Sync conflict banner</span></div><div class="l2">notes-app · Plan run · turn 4 · “Reading the sync module” 20 s ago</div></div><div class="end">6 min<br><span>95K tokens</span></div></div></div></div></div><div class="col">
+            <div class="card"><h4>Today<span class="r">Usage</span></h4>
+              <div class="mrow"><div class="h"><span>Tokens</span><span>3.1M of 5M</span></div><div class="meter"><i style="width:62%"></i></div></div>
+              <div class="mrow"><div class="h"><span>Claude 5-hour limit</span><span>41% · resets 16:00</span></div><div class="meter"><i style="width:41%"></i></div></div>
+              <div class="mrow" style="margin-bottom:2px"><div class="h"><span>Codex 5-hour limit</span><span>18% · resets 17:30</span></div><div class="meter"><i style="width:18%"></i></div></div>
+            </div>
+            <div class="card"><h4>Initiatives<span class="r">Show All</span></h4>
+              <div class="mrow"><div class="h"><span><b>BIL-200</b> Invoices v2</span><span>4 of 8</span></div><div class="seg"><i class="d" style="width:50%"></i><i class="w" style="width:12.5%"></i><i class="y" style="width:12.5%"></i><i class="q" style="width:25%"></i></div><div class="f">1 working · 1 waiting on you · 2 queued</div></div>
+              <div class="mrow" style="margin-bottom:2px"><div class="h"><span><b>SHOP-300</b> Checkout revamp</span><span>9 of 12</span></div><div class="seg"><i class="d" style="width:75%"></i><i class="w" style="width:16.6%"></i><i class="q" style="width:8.4%"></i></div><div class="f">2 working · 1 queued</div></div>
+            </div>
+          </div></div></div></div>
+    <div class="scrim"></div>
+    <div class="sheet">
+      <h3>Pause dispatch?</h3>
+      <p>No new run starts in any repo until you resume, forced tickets included.</p>
+      <p>The 3 runs working now go on to their end. Tickets stay where they are in Linear.</p>
+      <div class="lbl">Reason (optional)</div>
+      <div class="field focus">Deploy freeze</div>
+      <p class="note" style="margin-top:6px">Shown in the toolbar, the menu bar and the web dashboard while dispatch is paused.</p>
+      <div class="foot"><span class="btn">Cancel</span><span class="btn pri">Pause Dispatch</span></div>
+    </div>
+  </div></div>
+</section>
+
+<section class="screen" id="s-d1-paused">
+  <h3><span class="id">D1</span> Overview: dispatch paused</h3>
+  <p>The pause is said once, in words, with its reason and the way out. The dispatch control turns orange; queued tickets say they are held by the pause.</p>
+  <div class="stage"><div class="win"><aside class="sb" data-sel="overview" data-inbox="4"></aside><div class="main"><div class="tb"><div class="ttl"><b>Overview</b><span>4 repos</span></div><span class="glass"><svg class="ic s c-acc"><use href="#i-stack"/></svg>All repos<svg class="ic s t2"><use href="#i-chevd"/></svg></span><span class="glass"><i class="dot you"></i>Paused · Deploy freeze<svg class="ic s t2"><use href="#i-chevd"/></svg></span><span class="glass search"><svg class="ic s"><use href="#i-search"/></svg>Search</span></div><div class="body" style="display:flex;flex-direction:column;gap:14px"><div class="sentence" style="display:flex;align-items:center;gap:12px"><div style="flex:1"><h2><svg class="ic l c-you"><use href="#i-pause"/></svg>Dispatch is paused since 14:03: Deploy freeze.</h2><p>3 runs are finishing. No new run starts until you resume, forced tickets included.</p></div><span class="btn lg"><svg class="ic s"><use href="#i-play"/></svg>Resume Dispatch</span></div><div class="flow"><div class="tile"><div class="l"><svg class="ic s "><use href="#i-clock"/></svg>Queued</div><div class="v">4</div><div class="c">held by the pause</div></div><div class="chev"><svg class="ic s"><use href="#i-chev"/></svg></div><div class="tile"><div class="l"><svg class="ic s c-work"><use href="#i-work"/></svg>Working</div><div class="v">3</div><div class="c">finishing</div></div><div class="chev"><svg class="ic s"><use href="#i-chev"/></svg></div><div class="tile"><div class="l"><svg class="ic s c-work"><use href="#i-seal"/></svg>Auto Review</div><div class="v">2</div><div class="c">1 QA pass, 1 gate</div></div><div class="chev"><svg class="ic s"><use href="#i-chev"/></svg></div><div class="tile you"><div class="l"><svg class="ic s"><use href="#i-you"/></svg>Waiting on you</div><div class="v">4</div><div class="c">oldest 3 h 30 min</div></div><div class="chev"><svg class="ic s"><use href="#i-chev"/></svg></div><div class="tile"><div class="l"><svg class="ic s c-work"><use href="#i-pr"/></svg>Merging</div><div class="v">1</div><div class="c">CI running</div></div><div class="chev"><svg class="ic s"><use href="#i-chev"/></svg></div><div class="tile"><div class="l"><svg class="ic s c-done"><use href="#i-done"/></svg>Shipped today</div><div class="v">5</div><div class="c">+2 vs. yesterday</div><div class="spark" data-spark="[2,3,1,4,3,2,5,3,4,3,3,5]"></div></div></div><div style="display:grid;grid-template-columns:1fr 300px;gap:16px;min-height:0"><div class="col"><div class="card" style="padding:12px 8px 6px"><h4 style="padding:0 6px">Now working<span class="r">Show All</span></h4><div class="rows"><div class="row"><div class="sym"><svg class="ic c-work"><use href="#i-work"/></svg></div><div class="main2"><div class="l1"><b>BIL-205</b><span class="tt">Credit notes on invoices</span></div><div class="l2">billing-api · Implementation run · turn 18 · “Running mix test” 40 s ago</div></div><div class="end">23 min<br><span>412K tokens</span></div></div>
+                <div class="row"><div class="sym"><svg class="ic c-work"><use href="#i-work"/></svg></div><div class="main2"><div class="l1"><b>SHOP-318</b><span class="tt">Cart badge count off by one</span></div><div class="l2">web-shop · Implementation run · turn 7 · “Editing lib/cart/badge.ex” 1 min ago</div></div><div class="end">9 min<br><span>160K tokens</span></div></div>
+                <div class="row"><div class="sym"><svg class="ic c-work"><use href="#i-work"/></svg></div><div class="main2"><div class="l1"><b>NOTE-87</b><span class="tt">Sync conflict banner</span></div><div class="l2">notes-app · Plan run · turn 4 · “Reading the sync module” 20 s ago</div></div><div class="end">6 min<br><span>95K tokens</span></div></div></div></div></div><div class="col">
+            <div class="card"><h4>Today<span class="r">Usage</span></h4>
+              <div class="mrow"><div class="h"><span>Tokens</span><span>3.1M of 5M</span></div><div class="meter"><i style="width:62%"></i></div></div>
+              <div class="mrow"><div class="h"><span>Claude 5-hour limit</span><span>41% · resets 16:00</span></div><div class="meter"><i style="width:41%"></i></div></div>
+              <div class="mrow" style="margin-bottom:2px"><div class="h"><span>Codex 5-hour limit</span><span>18% · resets 17:30</span></div><div class="meter"><i style="width:18%"></i></div></div>
+            </div>
+            <div class="card"><h4>Initiatives<span class="r">Show All</span></h4>
+              <div class="mrow"><div class="h"><span><b>BIL-200</b> Invoices v2</span><span>4 of 8</span></div><div class="seg"><i class="d" style="width:50%"></i><i class="w" style="width:12.5%"></i><i class="y" style="width:12.5%"></i><i class="q" style="width:25%"></i></div><div class="f">1 working · 1 waiting on you · 2 queued</div></div>
+              <div class="mrow" style="margin-bottom:2px"><div class="h"><span><b>SHOP-300</b> Checkout revamp</span><span>9 of 12</span></div><div class="seg"><i class="d" style="width:75%"></i><i class="w" style="width:16.6%"></i><i class="q" style="width:8.4%"></i></div><div class="f">2 working · 1 queued</div></div>
+            </div>
+          </div></div></div></div></div></div>
+</section>
+
+<section class="screen" id="s-d12b">
+  <h3><span class="id">D12b</span> Force a ticket</h3>
+  <p>From the Tickets toolbar, the dispatch popover, the menu bar or ⇧⌘F. The sheet finds the ticket as you type and says exactly what forcing does and doesn't skip, from the workflow's rules.</p>
+  <div class="stage"><div class="win">
+    <aside class="sb" data-sel="tickets" data-inbox="4"></aside>
+    <div class="main"><div class="tb"><div class="ttl"><b>Tickets</b><span>15 in progress or queued</span></div><span class="glass"><svg class="ic s c-acc"><use href="#i-stack"/></svg>All repos<svg class="ic s t2"><use href="#i-chevd"/></svg></span><span class="glass"><svg class="ic s c-forced"><use href="#i-bolt"/></svg>Force a Ticket…</span><span class="glass search"><svg class="ic s"><use href="#i-search"/></svg>Search</span><span class="glass icon"><svg class="ic"><use href="#i-insp"/></svg></span></div>
+      <div class="body"><div class="scope"><span class="on">All <b>15</b></span><span class="">Working <b>4</b></span><span class="">Auto Review <b>2</b></span><span class="">Waiting on you <b>4</b></span><span class="">Merging <b>1</b></span><span class="">Queued <b>4</b></span><span class="">Needs attention <b>1</b></span><span class="">Forced <b>0</b></span></div><table class="tbl" style="table-layout:fixed"><thead><tr><th style="width:84px">Ticket</th><th>Title</th><th style="width:84px">Repo</th><th style="width:150px">Stage</th><th style="width:150px">Waiting on</th><th class="r" style="width:84px">Since</th></tr></thead><tbody><tr><td><b>SHOP-305</b></td><td>Checkout total rounding</td><td class="t2">web-shop</td><td><span class="badge b-prob"><svg class="ic"><use href="#i-warn"/></svg>Needs attention</span></td><td>No activity for 14 min</td><td class="r num">38 min</td></tr><tr><td><b>BIL-205</b></td><td>Credit notes on invoices</td><td class="t2">billing-api</td><td><span class="badge b-work"><svg class="ic"><use href="#i-work"/></svg>Working</span></td><td>Agent: turn 22</td><td class="r num">37 min</td></tr><tr><td><b>SHOP-318</b></td><td>Cart badge count off by one</td><td class="t2">web-shop</td><td><span class="badge b-work"><svg class="ic"><use href="#i-work"/></svg>Working</span></td><td>Agent: turn 12</td><td class="r num">23 min</td></tr><tr><td><b>NOTE-87</b></td><td>Sync conflict banner</td><td class="t2">notes-app</td><td><span class="badge b-work"><svg class="ic"><use href="#i-work"/></svg>Working</span></td><td>Agent: plan run</td><td class="r num">14 min</td></tr><tr><td><b>SHOP-312</b></td><td>Wishlist share link</td><td class="t2">web-shop</td><td><span class="badge b-work"><svg class="ic"><use href="#i-seal"/></svg>Auto Review</span></td><td>QA: step 4 of 6</td><td class="r num">20 min</td></tr><tr><td><b>NOTE-85</b></td><td>Export notes as Markdown</td><td class="t2">notes-app</td><td><span class="badge b-work"><svg class="ic"><use href="#i-seal"/></svg>Auto Review</span></td><td>Acceptance gate</td><td class="r num">11 min</td></tr><tr><td><b>SHOP-330</b></td><td>Plan: Gift cards</td><td class="t2">web-shop</td><td><span class="badge b-you"><svg class="ic"><use href="#i-you"/></svg>Waiting on you</span></td><td>Plan review</td><td class="r num">3 h 34 min</td></tr><tr><td><b>BIL-206</b></td><td>Invoice PDF export</td><td class="t2">billing-api</td><td><span class="badge b-you"><svg class="ic"><use href="#i-you"/></svg>Waiting on you</span></td><td>PR review</td><td class="r num">1 h 27 min</td></tr><tr><td><b>NOTE-90</b></td><td>Add the App Store Connect key</td><td class="t2">notes-app</td><td><span class="badge b-you"><svg class="ic"><use href="#i-you"/></svg>Waiting on you</span></td><td>Action</td><td class="r num">42 min</td></tr><tr><td><b>SHOP-341</b></td><td>Fix the thing on checkout</td><td class="t2">web-shop</td><td><span class="badge b-you"><svg class="ic"><use href="#i-you"/></svg>Waiting on you</span></td><td>Clarify</td><td class="r num">27 min</td></tr><tr><td><b>SHOP-316</b></td><td>Coupon field keeps focus</td><td class="t2">web-shop</td><td><span class="badge b-work"><svg class="ic"><use href="#i-pr"/></svg>Merging</span></td><td>CI, auto-merge on</td><td class="r num">28 min</td></tr><tr><td><b>BIL-207</b></td><td>Invoice reminders</td><td class="t2">billing-api</td><td><span class="badge b-idle"><svg class="ic"><use href="#i-clock"/></svg>Queued</span></td><td>Blocked by BIL-206</td><td class="r num">2 days</td></tr><tr><td><b>SHOP-320</b></td><td>Saved carts expire too soon</td><td class="t2">web-shop</td><td><span class="badge b-idle"><svg class="ic"><use href="#i-clock"/></svg>Queued</span></td><td>Next free slot</td><td class="r num">40 min</td></tr><tr><td><b>BIL-208</b></td><td>Final verification: Invoices v2</td><td class="t2">billing-api</td><td><span class="badge b-idle"><svg class="ic"><use href="#i-clock"/></svg>Queued</span></td><td>Blocked by 3 tickets</td><td class="r num">2 days</td></tr><tr><td><b>NOTE-91</b></td><td>Widget dark mode</td><td class="t2">notes-app</td><td><span class="badge b-idle"><svg class="ic"><use href="#i-clock"/></svg>Queued</span></td><td>Next free slot</td><td class="r num">1 h</td></tr></tbody></table></div>
+    </div>
+    <div class="scrim"></div>
+    <div class="sheet">
+      <h3>Force a ticket</h3>
+      <div class="field focus">SHOP-320</div>
+      <div class="found"><svg class="ic c-idle"><use href="#i-clock"/></svg><div class="main2" style="flex:1"><div class="l1" style="display:flex;gap:6px"><b>SHOP-320</b>Saved carts expire too soon</div><div class="t2" style="font-size:12px">web-shop · Todo · queued for 40 min</div></div></div>
+      <p style="margin-top:12px">SHOP-320 skips the queue and the slot limits, and runs on the forced allowance (1 of 3 in use after this).</p>
+      <p class="note">It still waits on its blocked-by tickets, on its reviews, on a pause and on the per-ticket token cap. Forcing never moves a ticket in Linear or approves a review.</p>
+      <div class="foot"><span class="btn">Cancel</span><span class="btn pri"><svg class="ic s"><use href="#i-bolt"/></svg>Force</span></div>
+    </div>
+  </div></div>
+</section>
+
+<section class="screen" id="s-d6">
+  <h3><span class="id">D6</span> Tickets, with the inspector</h3>
+  <ul>
+    <li>Every ticket Symphony is tracking, in one sortable table: what stage it is in and what it waits on. Replaces Running sessions, Watching, Retry queue, Finishing runs, Waiting on blockers, Conflict and Forced.</li>
+    <li>The scope bar filters by stage; the flow strip's tiles open this view with their filter on. A click shows the inspector (D3's facts, short); Return opens the ticket page.</li>
+    <li>Here: SHOP-320 just forced, working on the forced allowance, with <b>Stop Forcing</b>.</li>
+  </ul>
+  <div class="stage"><div class="win">
+    <aside class="sb" data-sel="tickets" data-inbox="4"></aside>
+    <div class="main"><div class="tb"><div class="ttl"><b>Tickets</b><span>15 in progress or queued</span></div><span class="glass"><svg class="ic s c-acc"><use href="#i-stack"/></svg>All repos<svg class="ic s t2"><use href="#i-chevd"/></svg></span><span class="glass"><svg class="ic s c-forced"><use href="#i-bolt"/></svg>Force a Ticket…</span><span class="glass search"><svg class="ic s"><use href="#i-search"/></svg>Search</span><span class="glass icon" style="color:var(--accent)"><svg class="ic"><use href="#i-insp"/></svg></span></div>
+      <div class="body" style="right:300px"><div class="scope"><span class="on">All <b>15</b></span><span class="">Working <b>5</b></span><span class="">Review <b>2</b></span><span class="">Waiting on you <b>4</b></span><span class="">Queued <b>3</b></span><span>More<svg class="ic s t2"><use href="#i-chevd"/></svg></span></div><table class="tbl" style="table-layout:fixed"><thead><tr><th style="width:84px">Ticket</th><th>Title</th><th style="width:144px">Stage</th><th style="width:128px">Waiting on</th><th class="r" style="width:96px">Since</th></tr></thead><tbody><tr class="sel"><td><b>SHOP-320</b></td><td>Saved carts expire too soon</td><td><span class="badge b-forced"><svg class="ic"><use href="#i-bolt"/></svg>Forced · working</span></td><td>Agent: turn 2</td><td class="r num">3 min</td></tr><tr><td><b>SHOP-305</b></td><td>Checkout total rounding</td><td><span class="badge b-prob"><svg class="ic"><use href="#i-warn"/></svg>Needs attention</span></td><td>No activity for 14 min</td><td class="r num">38 min</td></tr><tr><td><b>BIL-205</b></td><td>Credit notes on invoices</td><td><span class="badge b-work"><svg class="ic"><use href="#i-work"/></svg>Working</span></td><td>Agent: turn 22</td><td class="r num">37 min</td></tr><tr><td><b>SHOP-318</b></td><td>Cart badge count off by one</td><td><span class="badge b-work"><svg class="ic"><use href="#i-work"/></svg>Working</span></td><td>Agent: turn 12</td><td class="r num">23 min</td></tr><tr><td><b>NOTE-87</b></td><td>Sync conflict banner</td><td><span class="badge b-work"><svg class="ic"><use href="#i-work"/></svg>Working</span></td><td>Agent: plan run</td><td class="r num">14 min</td></tr><tr><td><b>SHOP-312</b></td><td>Wishlist share link</td><td><span class="badge b-work"><svg class="ic"><use href="#i-seal"/></svg>Auto Review</span></td><td>QA: step 4 of 6</td><td class="r num">20 min</td></tr><tr><td><b>NOTE-85</b></td><td>Export notes as Markdown</td><td><span class="badge b-work"><svg class="ic"><use href="#i-seal"/></svg>Auto Review</span></td><td>Acceptance gate</td><td class="r num">11 min</td></tr><tr><td><b>SHOP-330</b></td><td>Plan: Gift cards</td><td><span class="badge b-you"><svg class="ic"><use href="#i-you"/></svg>Waiting on you</span></td><td>Plan review</td><td class="r num">3 h 34 min</td></tr><tr><td><b>BIL-206</b></td><td>Invoice PDF export</td><td><span class="badge b-you"><svg class="ic"><use href="#i-you"/></svg>Waiting on you</span></td><td>PR review</td><td class="r num">1 h 27 min</td></tr><tr><td><b>NOTE-90</b></td><td>Add the App Store Connect key</td><td><span class="badge b-you"><svg class="ic"><use href="#i-you"/></svg>Waiting on you</span></td><td>Action</td><td class="r num">42 min</td></tr><tr><td><b>SHOP-341</b></td><td>Fix the thing on checkout</td><td><span class="badge b-you"><svg class="ic"><use href="#i-you"/></svg>Waiting on you</span></td><td>Clarify</td><td class="r num">27 min</td></tr><tr><td><b>SHOP-316</b></td><td>Coupon field keeps focus</td><td><span class="badge b-work"><svg class="ic"><use href="#i-pr"/></svg>Merging</span></td><td>CI, auto-merge on</td><td class="r num">28 min</td></tr><tr><td><b>BIL-207</b></td><td>Invoice reminders</td><td><span class="badge b-idle"><svg class="ic"><use href="#i-clock"/></svg>Queued</span></td><td>Blocked by BIL-206</td><td class="r num">2 days</td></tr><tr><td><b>BIL-208</b></td><td>Final verification: Invoices v2</td><td><span class="badge b-idle"><svg class="ic"><use href="#i-clock"/></svg>Queued</span></td><td>Blocked by 3 tickets</td><td class="r num">2 days</td></tr><tr><td><b>NOTE-91</b></td><td>Widget dark mode</td><td><span class="badge b-idle"><svg class="ic"><use href="#i-clock"/></svg>Queued</span></td><td>Next free slot</td><td class="r num">1 h</td></tr></tbody></table></div>
+      <div class="insp">
+        <div class="id t2" style="font-size:12px;font-weight:500">SHOP-320 · web-shop</div>
+        <div style="font-size:17px;font-weight:600;margin:2px 0 8px">Saved carts expire too soon</div>
+        <div class="bs" style="display:flex;gap:6px;flex-wrap:wrap"><span class="badge b-forced"><svg class="ic"><use href="#i-bolt"/></svg>Forced</span><span class="badge b-work"><svg class="ic"><use href="#i-work"/></svg>Working</span><span class="badge b-plain">In Progress</span></div>
+        <h5>NOW</h5>
+        <dl class="kv" style="grid-template-columns:96px 1fr">
+          <dt>Run</dt><dd>Implementation run 1</dd>
+          <dt>Running for</dt><dd>3 min · turn 2</dd>
+          <dt>Last activity</dt><dd>5 s ago</dd>
+          <dt>Tokens</dt><dd>42K of 2M</dd>
+        </dl>
+        <h5>FORCED</h5>
+        <dl class="kv" style="grid-template-columns:96px 1fr">
+          <dt>By</dt><dd>You, 14:21</dd>
+          <dt>Allowance</dt><dd>1 of 3 in use</dd>
+          <dt>Still waits on</dt><dd>Blockers, reviews</dd>
+        </dl>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:16px">
+          <span class="btn" style="justify-content:center">Open Ticket</span>
+          <span class="btn" style="justify-content:center">Stop Forcing</span>
+        </div>
+      </div>
+    </div>
+  </div></div>
+</section>
+
+<h2 id="j5">J5 · Follow an initiative</h2>
+<p class="lead">US6. Each approved plan, its sub-tickets in landing order, and what holds it. Steps: 1–2 → D5, 3 → D2b, 4 → D5.</p>
+
+<section class="screen" id="s-d5">
+  <h3><span class="id">D5</span> Initiatives</h3>
+  <ul>
+    <li>Plan tickets, grouped: active (approved, sub-tickets in flight), in review (waiting on the Director), done recently. Each with a progress bar by state.</li>
+    <li>The detail lists the sub-tickets in landing order with what each one waits on; the one waiting on the Director has <b>Review</b>, which opens its Inbox item.</li>
+    <li>Agent lanes from the web dashboard become the initiative's slot line; slot counts live in Diagnostics.</li>
+  </ul>
+  <div class="stage"><div class="win">
+    <aside class="sb" data-sel="initiatives" data-inbox="4"></aside>
+    <div class="main">
+      <div class="tb">
+        <div class="ttl"><b>Initiatives</b><span>3 active · 1 in review</span></div>
+        <span class="glass"><svg class="ic s c-acc"><use href="#i-stack"/></svg>All repos<svg class="ic s t2"><use href="#i-chevd"/></svg></span>
+        <span class="glass">Open in Linear<svg class="ic s"><use href="#i-ext"/></svg></span>
+      </div>
+      <div class="list3">
+        <div class="lhdr">Active</div>
+        <div class="irow sel"><svg class="ic kind"><use href="#i-flag"/></svg><div class="m"><div class="l1"><b>BIL-200</b><span class="age">4 of 8</span></div><div class="l2">Invoices v2</div><div class="seg" style="margin:6px 0 4px;background:rgba(255,255,255,.25)"><i style="width:50%;background:#fff"></i><i style="width:12.5%;background:rgba(255,255,255,.75)"></i><i style="width:12.5%;background:rgba(255,255,255,.55)"></i><i style="width:25%;background:rgba(255,255,255,.3)"></i></div><div class="l3">BIL-206 waits on you</div></div></div>
+        <div class="irow"><svg class="ic kind c-acc"><use href="#i-flag"/></svg><div class="m"><div class="l1"><b>SHOP-300</b><span class="age">9 of 12</span></div><div class="l2">Checkout revamp</div><div class="seg" style="margin:6px 0 4px"><i class="d" style="width:75%"></i><i class="p" style="width:8.3%"></i><i class="w" style="width:8.3%"></i><i class="q" style="width:8.4%"></i></div><div class="l3"><span class="c-prob">SHOP-305 needs attention</span></div></div></div>
+        <div class="irow"><svg class="ic kind c-acc"><use href="#i-flag"/></svg><div class="m"><div class="l1"><b>NOTE-70</b><span class="age">1 of 5</span></div><div class="l2">Offline mode</div><div class="seg" style="margin:6px 0 4px"><i class="d" style="width:20%"></i><i class="w" style="width:20%"></i><i class="q" style="width:60%"></i></div><div class="l3">Waiting for an initiative slot</div></div></div>
+        <div class="lhdr">In review</div>
+        <div class="irow"><svg class="ic kind c-you"><use href="#i-plan"/></svg><div class="m"><div class="l1"><b>SHOP-330</b><span class="age">3 h 12 min</span></div><div class="l2">Plan: Gift cards</div><div class="l3">Waits on you · 7 sub-tickets proposed</div></div></div>
+        <div class="lhdr">Done recently</div>
+        <div class="irow"><svg class="ic kind c-done"><use href="#i-done"/></svg><div class="m"><div class="l1"><b>NOTE-60</b><span class="age">Sep 28</span></div><div class="l2">Onboarding</div><div class="l3">6 of 6 · final verification passed</div></div></div>
+      </div>
+      <div class="detail3">
+        <div class="dh"><div class="tt"><div class="id">BIL-200 · billing-api</div><h3>Invoices v2</h3>
+          <div class="bs"><span class="badge b-plain"><svg class="ic"><use href="#i-flag"/></svg>Plan approved Sep 30</span><span class="badge b-plain">Has its initiative slot</span></div></div></div>
+        <p class="headline" style="margin-bottom:8px"><b>4 of 8 done.</b> BIL-206 waits on you, and 2 tickets wait on it.</p>
+        <div class="seg" style="height:8px;border-radius:4px;margin-bottom:6px"><i class="d" style="width:50%"></i><i class="w" style="width:12.5%"></i><i class="y" style="width:12.5%"></i><i class="q" style="width:25%"></i></div>
+        <div class="legend" style="margin-bottom:12px"><span><i style="background:var(--done)"></i>Shipped 4</span><span><i style="background:var(--work)"></i>Working 1</span><span><i style="background:var(--you)"></i>Waiting on you 1</span><span><i style="background:color-mix(in srgb,var(--idle) 35%,transparent)"></i>Queued 2</span></div>
+        <div class="dsec"><h5>Sub-tickets<span class="r">in landing order</span></h5>
+          <div class="box rows">
+            <div class="row"><svg class="ic c-done"><use href="#i-done"/></svg><div class="main2"><div class="l1"><b>BIL-201</b><span class="tt">Invoice data model</span></div></div><span class="end">Shipped Oct 1</span></div>
+            <div class="row"><svg class="ic c-done"><use href="#i-done"/></svg><div class="main2"><div class="l1"><b>BIL-202</b><span class="tt">Numbering and series</span></div></div><span class="end">Shipped Oct 2</span></div>
+            <div class="row"><svg class="ic c-done"><use href="#i-done"/></svg><div class="main2"><div class="l1"><b>BIL-203</b><span class="tt">Late fee rules</span></div></div><span class="end">Shipped Oct 3</span></div>
+            <div class="row"><svg class="ic c-done"><use href="#i-done"/></svg><div class="main2"><div class="l1"><b>BIL-204</b><span class="tt">Invoice numbering in the UI</span></div></div><span class="end">Shipped today</span></div>
+            <div class="row"><svg class="ic c-work"><use href="#i-work"/></svg><div class="main2"><div class="l1"><b>BIL-205</b><span class="tt">Credit notes on invoices</span></div><div class="l2">Working · implementation run, turn 18</div></div><span class="end">23 min</span></div>
+            <div class="row"><svg class="ic c-you"><use href="#i-you"/></svg><div class="main2"><div class="l1"><b>BIL-206</b><span class="tt">Invoice PDF export</span></div><div class="l2">Waiting on you · PR #482, checks green</div></div><span class="btn pri">Review</span></div>
+            <div class="row"><svg class="ic c-idle"><use href="#i-clock"/></svg><div class="main2"><div class="l1"><b>BIL-207</b><span class="tt">Invoice reminders</span></div><div class="l2">Queued · after BIL-206</div></div></div>
+            <div class="row"><svg class="ic c-idle"><use href="#i-seal"/></svg><div class="main2"><div class="l1"><b>BIL-208</b><span class="tt">Final verification: Invoices v2</span></div><div class="l2">Waits on 3 tickets</div></div></div>
+          </div></div>
+      </div>
+    </div>
+  </div></div>
+</section>
+
+<h2 id="j6">J6 · Decide how much to trust the gate</h2>
+<p class="lead">US7. How often the crew's judgment matched the Director's, where it didn't, and the move that hands over more. Steps: 1 → D7, 2 → D7 → D3, 3 → D7 → Repos window (TP-695 S9).</p>
+
+<section class="screen" id="s-d7">
+  <h3><span class="id">D7</span> Quality</h3>
+  <ul>
+    <li>Four tiles answer "can I trust it": the gate's agreement with the Director, QA passing first time, runs that end in a PR, PRs sent back.</li>
+    <li>Agreement per repo with <b>Change Gate…</b>, which opens the Repos window's gate sheet for that repo. Outcomes per day use the status colors with a legend.</li>
+    <li>The web Quality page's runs table, with its agent, outcome and date filters, is one click away: <b>Show All Runs</b>.</li>
+  </ul>
+  <div class="stage"><div class="win">
+    <aside class="sb" data-sel="quality" data-inbox="4"></aside>
+    <div class="main">
+      <div class="tb">
+        <div class="ttl"><b>Quality</b><span>Last 30 days</span></div>
+        <span class="glass"><svg class="ic s c-acc"><use href="#i-stack"/></svg>All repos<svg class="ic s t2"><use href="#i-chevd"/></svg></span>
+        <span class="glass"><svg class="ic s c-acc"><use href="#i-cal"/></svg>Last 30 days<svg class="ic s t2"><use href="#i-chevd"/></svg></span>
+        <span class="glass">Show All Runs</span>
+      </div>
+      <div class="body" style="display:flex;flex-direction:column;gap:14px">
+        <div class="flow" style="gap:12px">
+          <div class="tile"><div class="l">Gate agreed with you</div><div class="v">92%</div><div class="c">23 of 25 decisions</div><div class="spark" data-spark="[80,84,83,88,86,90,89,91,90,92,92,92]"></div></div>
+          <div class="tile"><div class="l">QA passed first time</div><div class="v">78%</div><div class="c">29 of 37 passes</div></div>
+          <div class="tile"><div class="l">Runs that opened a PR</div><div class="v">86%</div><div class="c">96 of 112 runs</div></div>
+          <div class="tile"><div class="l">PRs sent to Rework</div><div class="v">8%</div><div class="c">3 of 38 PRs</div></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+          <div class="card"><h4>Gate agreement by repo</h4>
+            <div data-chart='{"type":"hbars","color":"--s1","scale":0.5,"lw":90,"rows":[["billing-api",100,"12 of 12","<span class=\"t2\" style=\"font-size:12px;margin-right:8px\">Shadow</span><span class=\"btn\">Change Gate…</span>"],["web-shop",85,"11 of 13","<span class=\"t2\" style=\"font-size:12px;margin-right:8px\">Shadow</span><span class=\"btn\">Change Gate…</span>"],["notes-app",null,"Not judged","<span class=\"t2\" style=\"font-size:12px;margin-right:8px\">Off</span><span class=\"btn\">Change Gate…</span>"],["docs-site",null,"Not judged","<span class=\"t2\" style=\"font-size:12px;margin-right:8px\">Off</span><span class=\"btn\">Change Gate…</span>"]]}'></div>
+            <p class="t2" style="font-size:11.5px;margin-top:8px">Agreement: the gate's verdict matched your move on the same PR.</p>
+          </div>
+          <div class="card"><h4>Runs by outcome</h4>
+            <div class="legend"><span><i style="background:var(--done)"></i>PR opened</span><span><i style="background:var(--idle)"></i>No changes</span><span><i style="background:var(--prob)"></i>Error</span></div>
+            <div data-chart='{"type":"cols","w":410,"h":150,"max":12,"ticks":[0,4,8,12],"unit":"","labels":["","24","","26","","28","","30","","2","","4","","6"],"series":[[6,7,5,2,1,8,9,7,6,8,9,4,7,7],[1,0,1,0,0,1,0,1,1,0,1,0,1,0],[0,1,0,0,0,0,1,0,1,0,0,0,1,0]],"colors":["--done","--idle","--prob"],"names":["PR opened","No changes","Error"]}'></div>
+          </div>
+        </div>
+        <div class="card" style="padding:12px 8px 6px"><h4 style="padding:0 6px">Disagreements<span class="r">Show All</span></h4>
+          <div class="rows">
+            <div class="row"><div class="sym"><svg class="ic c-you"><use href="#i-seal"/></svg></div><div class="main2"><div class="l1"><b>SHOP-298</b><span class="tt">Promo banner overlaps the cart</span></div><div class="l2">web-shop · the gate said Approve · you sent it to Rework: “banner covers the total on iPhone SE”</div></div><span class="end">Sep 30</span><span class="btn">Open</span></div>
+            <div class="row"><div class="sym"><svg class="ic c-you"><use href="#i-seal"/></svg></div><div class="main2"><div class="l1"><b>SHOP-287</b><span class="tt">Search filters reset on back</span></div><div class="l2">web-shop · the gate said Rework (“no test for the back button”) · you approved it</div></div><span class="end">Sep 24</span><span class="btn">Open</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+</section>
+
+<h2 id="j7">J7 · Keep spend in check</h2>
+<p class="lead">US8. Today against the budget, each provider's limits, and the tickets that cost most. Steps: 1 → D1, 2 → D8, 3 → D3 → D12c, 4 → D8, D1.</p>
+
+<section class="screen" id="s-d8">
+  <h3><span class="id">D8</span> Usage</h3>
+  <ul>
+    <li>Meters carry severity: blue below 75%, orange from 75%, red from 95%. The daily budget, the per-ticket cap and every provider limit with its reset time replace the raw rate-limit JSON.</li>
+    <li>Tokens per day by provider (Claude, Codex: identity, so the categorical palette with a legend) against the daily budget line.</li>
+    <li><b>Heaviest tickets</b> catches a runaway: BIL-212 has used 90% of its cap over 4 attempts.</li>
+  </ul>
+  <div class="stage"><div class="win">
+    <aside class="sb" data-sel="usage" data-inbox="4"></aside>
+    <div class="main">
+      <div class="tb">
+        <div class="ttl"><b>Usage</b><span>Tokens and provider limits</span></div>
+        <span class="glass"><svg class="ic s c-acc"><use href="#i-stack"/></svg>All repos<svg class="ic s t2"><use href="#i-chevd"/></svg></span>
+        <span class="glass"><svg class="ic s c-acc"><use href="#i-cal"/></svg>Last 14 days<svg class="ic s t2"><use href="#i-chevd"/></svg></span>
+      </div>
+      <div class="body" style="display:flex;flex-direction:column;gap:14px">
+        <div style="display:grid;grid-template-columns:1fr 330px;gap:16px">
+          <div class="card"><h4>Tokens per day</h4>
+            <div class="legend"><span><i style="background:var(--s1)"></i>Claude</span><span><i style="background:var(--s2)"></i>Codex</span></div>
+            <div data-chart='{"type":"cols","w":560,"h":196,"max":6,"ticks":[0,2,4,6],"unit":"M","labels":["23","24","25","26","27","28","29","30","1","2","3","4","5","6"],"series":[[2.1,2.6,3.0,1.2,0.8,2.9,3.3,3.6,2.7,3.1,3.4,2.2,3.0,3.3],[0.6,0.5,0.9,0.3,0.2,0.8,0.7,1.0,0.6,0.9,1.1,0.5,0.7,0.8]],"colors":["--s1","--s2"],"names":["Claude","Codex"],"ref":5,"refLabel":"Daily budget 5M","endLabel":"4.1M"}'></div>
+          </div>
+          <div class="col">
+            <div class="card"><h4>Today</h4>
+              <div class="mrow"><div class="h"><span>Daily budget</span><span>4.1M of 5M · 82%</span></div><div class="meter m-you"><i style="width:82%"></i></div><div class="f">Resets at midnight. Per-ticket cap: 2M.</div></div>
+            </div>
+            <div class="card"><h4>Provider limits</h4>
+              <div class="mrow"><div class="h"><span>Claude 5-hour</span><span>41% · resets 16:00</span></div><div class="meter"><i style="width:41%"></i></div></div>
+              <div class="mrow"><div class="h"><span>Claude 7-day</span><span>71% · resets Thu 09:00</span></div><div class="meter"><i style="width:71%"></i></div></div>
+              <div class="mrow" style="margin-bottom:2px"><div class="h"><span>Codex 5-hour</span><span>18% · resets 17:30</span></div><div class="meter"><i style="width:18%"></i></div></div>
+            </div>
+          </div>
+        </div>
+        <div class="card" style="padding:12px 8px 6px"><h4 style="padding:0 6px">Heaviest tickets this week</h4>
+          <div class="rows">
+            <div class="row"><div class="main2" style="flex:0 0 330px"><div class="l1"><b>BIL-212</b><span class="tt">Tax rounding for EU invoices</span></div><div class="l2">billing-api · 4 attempts · all failed at the same test</div></div><div style="flex:1"><div class="meter m-you"><i style="width:90%"></i></div></div><span class="end" style="width:120px">1.8M of 2M</span><span class="btn">Open</span></div>
+            <div class="row"><div class="main2" style="flex:0 0 330px"><div class="l1"><b>SHOP-305</b><span class="tt">Checkout total rounding</span></div><div class="l2">web-shop · 2 attempts</div></div><div style="flex:1"><div class="meter"><i style="width:70%"></i></div></div><span class="end" style="width:120px">1.4M of 2M</span><span class="btn">Open</span></div>
+            <div class="row"><div class="main2" style="flex:0 0 330px"><div class="l1"><b>BIL-205</b><span class="tt">Credit notes on invoices</span></div><div class="l2">billing-api · 1 attempt</div></div><div style="flex:1"><div class="meter"><i style="width:45%"></i></div></div><span class="end" style="width:120px">0.9M of 2M</span><span class="btn">Open</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+</section>
+
+<h2 id="j8">J8 · Look back</h2>
+<p class="lead">US9. What shipped, what the crew learned, and the audit record. Steps: 1 → D9, 2 → D9 (Learnings), 3 → D10.</p>
+
+<section class="screen" id="s-d9">
+  <h3><span class="id">D9</span> Shipped</h3>
+  <p>Merged tickets by day, each with its initiative, PR and time from Todo to Done. Learnings is the second tab of the same view.</p>
+  <div class="stage"><div class="win">
+    <aside class="sb" data-sel="shipped" data-inbox="4"></aside>
+    <div class="main">
+      <div class="tb">
+        <div class="ttl"><b>Shipped</b><span>Last 7 days</span></div>
+        <span class="glass grp"><span style="background:color-mix(in srgb,var(--accent) 20%,transparent);border-radius:14px">Shipped</span><span>Learnings</span></span>
+        <span class="glass"><svg class="ic s c-acc"><use href="#i-stack"/></svg>All repos<svg class="ic s t2"><use href="#i-chevd"/></svg></span>
+        <span class="glass"><svg class="ic s c-acc"><use href="#i-cal"/></svg>Last 7 days<svg class="ic s t2"><use href="#i-chevd"/></svg></span>
+      </div>
+      <div class="body" style="display:flex;flex-direction:column;gap:14px">
+        <div style="display:grid;grid-template-columns:1fr 330px;gap:16px;align-items:start">
+          <div class="sentence"><h2>14 tickets shipped in the last 7 days.</h2><p>5 today. Half took less than 1 day 4 h from Todo to Done.</p></div>
+          <div class="card" style="padding:10px 12px 6px"><div data-chart='{"type":"cols","w":306,"h":92,"max":6,"ticks":[0,3,6],"unit":"","labels":["W","T","F","S","S","M","T"],"series":[[2,3,1,0,0,3,5]],"colors":["--s1"],"names":["Shipped"],"endLabel":"5"}'></div></div>
+        </div>
+        <div class="card" style="padding:10px 8px 6px;flex:1">
+          <div class="lhdr" style="padding-top:0">Today · 5</div>
+          <div class="rows">
+            <div class="row"><svg class="ic c-done"><use href="#i-done"/></svg><div class="main2"><div class="l1"><b>BIL-204</b><span class="tt">Invoice numbering in the UI</span></div><div class="l2">billing-api · Invoices v2 · PR #479</div></div><span class="end">1 d 4 h</span></div>
+            <div class="row"><svg class="ic c-done"><use href="#i-done"/></svg><div class="main2"><div class="l1"><b>SHOP-317</b><span class="tt">Shipping estimate on the cart</span></div><div class="l2">web-shop · Checkout revamp · PR #880</div></div><span class="end">6 h</span></div>
+            <div class="row"><svg class="ic c-done"><use href="#i-done"/></svg><div class="main2"><div class="l1"><b>NOTE-86</b><span class="tt">Faster search index</span></div><div class="l2">notes-app · PR #212</div></div><span class="end">2 d 1 h</span></div>
+            <div class="row"><svg class="ic c-done"><use href="#i-done"/></svg><div class="main2"><div class="l1"><b>SHOP-315</b><span class="tt">Address autocomplete keyboard</span></div><div class="l2">web-shop · Checkout revamp · PR #878</div></div><span class="end">9 h</span></div>
+            <div class="row"><svg class="ic c-done"><use href="#i-done"/></svg><div class="main2"><div class="l1"><b>DOC-41</b><span class="tt">Document the billing webhooks</span></div><div class="l2">docs-site · PR #95</div></div><span class="end">3 h</span></div>
+          </div>
+          <div class="lhdr">Yesterday · 3</div>
+          <div class="rows">
+            <div class="row"><svg class="ic c-done"><use href="#i-done"/></svg><div class="main2"><div class="l1"><b>BIL-203</b><span class="tt">Late fee rules</span></div><div class="l2">billing-api · Invoices v2 · PR #476</div></div><span class="end">1 d 2 h</span></div>
+            <div class="row"><svg class="ic c-done"><use href="#i-done"/></svg><div class="main2"><div class="l1"><b>SHOP-313</b><span class="tt">Promo code error message</span></div><div class="l2">web-shop · Checkout revamp · PR #874</div></div><span class="end">5 h</span></div>
+            <div class="row"><svg class="ic c-done"><use href="#i-done"/></svg><div class="main2"><div class="l1"><b>NOTE-84</b><span class="tt">Pin notes to the top</span></div><div class="l2">notes-app · PR #209</div></div><span class="end">1 d 7 h</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+</section>
+
+<section class="screen" id="s-d9-learnings">
+  <h3><span class="id">D9</span> Shipped: Learnings</h3>
+  <p>The run-end reflections from merged PRs (today's <code>/learnings</code>), newest first, filtered by repo and searchable. Each links to its ticket and PR.</p>
+  <div class="stage"><div class="win">
+    <aside class="sb" data-sel="shipped" data-inbox="4"></aside>
+    <div class="main">
+      <div class="tb">
+        <div class="ttl"><b>Shipped</b><span>Learnings · last 7 days</span></div>
+        <span class="glass grp"><span>Shipped</span><span style="background:color-mix(in srgb,var(--accent) 20%,transparent);border-radius:14px">Learnings</span></span>
+        <span class="glass"><svg class="ic s c-acc"><use href="#i-stack"/></svg>All repos<svg class="ic s t2"><use href="#i-chevd"/></svg></span>
+        <span class="glass search"><svg class="ic s"><use href="#i-search"/></svg>Search</span>
+      </div>
+      <div class="body" style="display:flex;flex-direction:column;gap:12px">
+        <div class="card"><div class="l1 t2" style="font-size:12px;display:flex;gap:8px"><svg class="ic s c-acc"><use href="#i-bulb"/></svg>web-shop · SHOP-317 · today</div><p style="font-size:13.5px;margin-top:6px">Checkout tests read the system clock for the tax date. Freeze the clock before asserting totals, or they fail around midnight.</p></div>
+        <div class="card"><div class="l1 t2" style="font-size:12px;display:flex;gap:8px"><svg class="ic s c-acc"><use href="#i-bulb"/></svg>billing-api · BIL-204 · today</div><p style="font-size:13.5px;margin-top:6px">Invoice numbers come from the series table. Never compute them in the LiveView; read the next number through <span class="mono">Billing.Series.next/1</span>.</p></div>
+        <div class="card"><div class="l1 t2" style="font-size:12px;display:flex;gap:8px"><svg class="ic s c-acc"><use href="#i-bulb"/></svg>notes-app · NOTE-86 · yesterday</div><p style="font-size:13.5px;margin-top:6px">Rebuild the search index with sync off in tests; the sync worker races the rebuild and leaves half an index.</p></div>
+        <div class="card"><div class="l1 t2" style="font-size:12px;display:flex;gap:8px"><svg class="ic s c-acc"><use href="#i-bulb"/></svg>billing-api · BIL-203 · Oct 4</div><p style="font-size:13.5px;margin-top:6px">Late fee rules are per tenant. Seed two tenants in every test that touches fees, or a global default hides the bug.</p></div>
+        <div class="card"><div class="l1 t2" style="font-size:12px;display:flex;gap:8px"><svg class="ic s c-acc"><use href="#i-bulb"/></svg>web-shop · SHOP-313 · Oct 5</div><p style="font-size:13.5px;margin-top:6px">Promo errors come back from the API as codes; map them in <span class="mono">PromoMessages</span> so the copy stays in one place.</p></div>
+      </div>
+    </div>
+  </div></div>
+</section>
+
+<section class="screen" id="s-d10">
+  <h3><span class="id">D10</span> Audit</h3>
+  <p>The local audit record (today's <code>/audit</code>): filters, chain verification and NDJSON export. Moves the Director makes from the app are recorded like any other.</p>
+  <div class="stage"><div class="win">
+    <aside class="sb" data-sel="audit" data-inbox="4"></aside>
+    <div class="main">
+      <div class="tb">
+        <div class="ttl"><b>Audit</b><span>Local audit records</span></div>
+        <span class="glass"><svg class="ic s c-acc"><use href="#i-stack"/></svg>All repos<svg class="ic s t2"><use href="#i-chevd"/></svg></span>
+        <span class="glass search"><svg class="ic s"><use href="#i-search"/></svg>Ticket or text</span>
+        <span class="glass">Export…</span>
+      </div>
+      <div class="body">
+        <div style="display:flex;gap:8px;align-items:center;margin:2px 0 10px">
+          <span class="glass" style="height:28px"><svg class="ic s c-acc"><use href="#i-filter"/></svg>All kinds<svg class="ic s t2"><use href="#i-chevd"/></svg></span>
+          <span class="glass" style="height:28px"><svg class="ic s c-acc"><use href="#i-cal"/></svg>Last 7 days<svg class="ic s t2"><use href="#i-chevd"/></svg></span>
+          <span style="flex:1"></span>
+          <span class="badge b-done lg"><svg class="ic"><use href="#i-shield"/></svg>Chain verified · 4,812 records</span>
+        </div>
+        <table class="tbl" style="table-layout:fixed">
+          <thead><tr><th style="width:150px">Time</th><th style="width:150px">Kind</th><th style="width:96px">Ticket</th><th style="width:180px">Actor</th><th>What happened</th></tr></thead>
+          <tbody>
+            <tr><td class="num">Today 14:21:06</td><td>Ticket forced</td><td><b>SHOP-320</b></td><td>You · Symphony for Mac</td><td>Forced SHOP-320 onto the forced allowance</td></tr>
+            <tr><td class="num">Today 14:19:40</td><td>Linear move</td><td><b>BIL-206</b></td><td>You · Symphony for Mac</td><td>In Review → Merging</td></tr>
+            <tr><td class="num">Today 14:18:02</td><td>Linear move</td><td><b>SHOP-330</b></td><td>You · Symphony for Mac</td><td>In Review → Waiting on sub-tickets, 2 decisions posted</td></tr>
+            <tr><td class="num">Today 14:15:30</td><td>Dispatch resumed</td><td class="t2">—</td><td>You · Symphony for Mac</td><td>Paused for 12 min</td></tr>
+            <tr><td class="num">Today 14:03:11</td><td>Dispatch paused</td><td class="t2">—</td><td>You · Symphony for Mac</td><td>Reason: Deploy freeze</td></tr>
+            <tr><td class="num">Today 13:27:00</td><td>Run started</td><td><b>SHOP-305</b></td><td>Symphony</td><td>Implementation run 2</td></tr>
+            <tr><td class="num">Today 13:25:10</td><td>Run ended</td><td><b>SHOP-305</b></td><td>Symphony</td><td>Failed: test/checkout_test.exs:88 timed out</td></tr>
+            <tr><td class="num">Today 13:03:02</td><td>Run started</td><td><b>SHOP-305</b></td><td>Symphony</td><td>Implementation run 1</td></tr>
+            <tr><td class="num">Today 13:02:44</td><td>Ticket claimed</td><td><b>SHOP-305</b></td><td>Symphony</td><td>Picked up from Todo in web-shop</td></tr>
+            <tr><td class="num">Today 12:58:30</td><td>Gate verdict</td><td><b>NOTE-85</b></td><td>Acceptance gate</td><td>Approve (Shadow)</td></tr>
+            <tr><td class="num">Today 12:41:17</td><td>QA pass</td><td><b>BIL-206</b></td><td>Auto Review</td><td>Passed 6 of 6 walkthrough steps</td></tr>
+            <tr><td class="num">Today 12:10:05</td><td>PR opened</td><td><b>BIL-206</b></td><td>Symphony</td><td>PR #482 Invoice PDF export</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div></div>
+</section>
+
+<h2 id="j9">J9 · Mac routines</h2>
+<p class="lead">Platform baseline. The window when Symphony isn't there to answer, and the one place for Symphony's own internals. Steps: 1–2 → D0, 3 → D13, 4–5 → D1, 6 → D11.</p>
+
+<section class="screen" id="s-d0">
+  <h3><span class="id">D0</span> Window states: Symphony stopped</h3>
+  <ul>
+    <li>One placeholder per view instead of "unavailable" in every field. The toolbar's dispatch control becomes <b>Start Symphony</b>; badges hide because the counts are unknown.</li>
+    <li>The same layout covers: <b>Starting</b> ("Symphony is starting…", with a spinner), <b>Not answering</b> ("Symphony isn't answering. It has been running for 2 days; its log may say why." with Open Logs and Restart Symphony), <b>Older Symphony</b> ("Update Symphony to see this view." on the views its API can't serve), and <b>First launch</b> ("Symphony doesn't know where its config is." with Open Settings…).</li>
+  </ul>
+  <div class="stage"><div class="win">
+    <aside class="sb" data-sel="overview" data-inbox="0" data-foot='<i class="dot idle"></i>Symphony v0.42.1 · stopped'></aside>
+    <div class="main">
+      <div class="tb">
+        <div class="ttl"><b>Overview</b><span>Symphony isn't running</span></div>
+        <span class="glass"><svg class="ic s c-acc"><use href="#i-stack"/></svg>All repos<svg class="ic s t2"><use href="#i-chevd"/></svg></span>
+        <span class="glass pri"><svg class="ic s"><use href="#i-play"/></svg>Start Symphony</span>
+      </div>
+      <div class="body"><div class="empty">
+        <svg class="ic xl"><use href="#i-pause"/></svg>
+        <b>Symphony isn't running.</b>
+        <p>Start it to see the factory. Your tickets wait in Linear until then; nothing is lost.</p>
+        <span class="btn pri lg" style="margin-top:6px">Start Symphony</span>
+        <p style="font-size:12px;margin-top:8px">Starts Symphony v0.42.1 (embedded). <a>Change in Settings…</a></p>
+      </div></div>
+    </div>
+  </div></div>
+</section>
+
+<section class="screen" id="s-d11">
+  <h3><span class="id">D11</span> Diagnostics</h3>
+  <ul>
+    <li>Where the web dashboard's internals go, out of the Director's main path: connection, capacity (agent slots, landing slots, forced allowance, initiative slots), Linear requests by caller, GitHub webhooks and the CI poller, stray processes.</li>
+    <li><b>Copy State JSON</b> replaces the raw JSON links; <b>Open Web Dashboard</b> keeps the old page one click away (decision DD6).</li>
+  </ul>
+  <div class="stage"><div class="win">
+    <aside class="sb" data-sel="diagnostics" data-inbox="4"></aside>
+    <div class="main">
+      <div class="tb">
+        <div class="ttl"><b>Diagnostics</b><span>Symphony's own health</span></div>
+        <span class="glass"><svg class="ic s"><use href="#i-copy"/></svg>Copy State JSON</span>
+        <span class="glass"><svg class="ic s"><use href="#i-terminal"/></svg>Open Logs</span>
+        <span class="glass">Open Web Dashboard<svg class="ic s"><use href="#i-ext"/></svg></span>
+      </div>
+      <div class="body" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-content:start">
+        <div class="col">
+          <div class="card"><h4>Symphony<span class="badge b-done" style="margin-left:auto"><svg class="ic"><use href="#i-done"/></svg>Answering</span></h4>
+            <dl class="kv">
+              <dt>Version</dt><dd>v0.42.1 (embedded)</dd>
+              <dt>API</dt><dd class="mono">127.0.0.1:4011</dd>
+              <dt>Running for</dt><dd>2 days 3 h</dd>
+              <dt>Last update</dt><dd>2 s ago</dd>
+            </dl>
+          </div>
+          <div class="card"><h4>Capacity</h4>
+            <div class="mrow"><div class="h"><span>Agent slots</span><span>3 of 6</span></div><div class="meter"><i style="width:50%"></i></div></div>
+            <div class="mrow"><div class="h"><span>Landing slots</span><span>1 of 2</span></div><div class="meter"><i style="width:50%"></i></div></div>
+            <div class="mrow"><div class="h"><span>Forced allowance</span><span>1 of 3</span></div><div class="meter"><i style="width:33%"></i></div></div>
+            <dl class="kv" style="margin-top:4px"><dt>Initiative slots</dt><dd>BIL-200, SHOP-300 · NOTE-70 waits for one</dd></dl>
+          </div>
+          <div class="card" style="display:flex;align-items:center;gap:8px;padding:12px 14px"><svg class="ic c-done"><use href="#i-done"/></svg><span style="flex:1">No stray processes using CPU</span></div>
+        </div>
+        <div class="col">
+          <div class="card" style="padding:12px 14px 8px"><h4>Linear<span class="r t2">412 requests in the last hour</span></h4>
+            <table class="tbl"><thead><tr><th>Caller</th><th class="r">Requests</th></tr></thead><tbody>
+              <tr><td>Poller</td><td class="r num">288</td></tr><tr><td>Tracker reads</td><td class="r num">74</td></tr><tr><td>Workpad and comments</td><td class="r num">31</td></tr><tr><td>Symphony for Mac</td><td class="r num">12</td></tr><tr><td>Other</td><td class="r num">7</td></tr>
+            </tbody></table>
+          </div>
+          <div class="card"><h4>GitHub</h4>
+            <dl class="kv">
+              <dt>Webhooks</dt><dd>Active through the relay</dd>
+              <dt>Last event</dt><dd>2 min ago</dd>
+              <dt>CI results</dt><dd>96 by relay, 4 by polling · 0 rejected</dd>
+              <dt>CI poller</dt><dd>Running</dd>
+            </dl>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+</section>
+
+</div><!-- .screens -->
+</div><!-- .doc -->
+<script>
+(function(){
+  // Sidebar: one definition for every window frame.
+  var NAV=[["inbox","tray","Inbox"],["overview","gauge","Overview"],["initiatives","flag","Initiatives"],["tickets","list","Tickets"],["#","Insights"],["quality","seal","Quality"],["usage","chart","Usage"],["#","Records"],["shipped","box","Shipped"],["audit","clip","Audit"],["#","Factory"],["repos","stack","Repos"],["diagnostics","steth","Diagnostics"]];
+  document.querySelectorAll("aside.sb").forEach(function(sb){
+    var sel=sb.dataset.sel, inbox=sb.dataset.inbox, attn=sb.dataset.attn, foot=sb.dataset.foot;
+    var h='<div class="lights"><i></i><i></i><i></i></div><nav>';
+    NAV.forEach(function(n){
+      if(n[0]==="#"){h+='<div class="grp">'+n[1]+'</div>';return;}
+      var b="";
+      if(n[0]==="inbox"&&inbox&&inbox!=="0") b='<b class="cnt you">'+inbox+'</b>';
+      if(n[0]==="overview"&&attn) b='<b class="cnt prob">'+attn+'</b>';
+      h+='<a class="it'+(n[0]===sel?' sel':'')+'"><svg class="ic"><use href="#i-'+n[1]+'"/></svg><span>'+n[2]+'</span>'+b+'</a>';
+    });
+    h+='</nav>';
+    h+='<div class="foot">'+(foot||'<i class="dot"></i>Symphony v0.42.1 · running')+'</div>';
+    sb.innerHTML=h;
+  });
+
+  function cssVar(el,name){return getComputedStyle(el).getPropertyValue(name).trim();}
+  function fmt(v,unit){ if(unit==="M") return (v===0?"0":v+"M"); if(unit==="%") return v+"%"; return String(v); }
+  function topRounded(x,y,w,h,r){
+    if(h<=0) return "";
+    r=Math.min(r,h,w/2);
+    return "M"+x+","+(y+h)+"V"+(y+r)+"Q"+x+","+y+" "+(x+r)+","+y+"H"+(x+w-r)+"Q"+(x+w)+","+y+" "+(x+w)+","+(y+r)+"V"+(y+h)+"Z";
+  }
+  function cols(el,c){
+    var L=34,R=8,T=14,B=18,w=c.w,h=c.h,pw=w-L-R,ph=h-T-B,n=c.labels.length,slot=pw/n,bw=Math.min(24,slot*0.62),s="";
+    c.ticks.forEach(function(t){var y=T+ph-(t/c.max)*ph;s+='<line class="gl" x1="'+L+'" x2="'+(w-R)+'" y1="'+y+'" y2="'+y+'"/><text x="'+(L-6)+'" y="'+(y+3.5)+'" text-anchor="end">'+fmt(t,c.unit)+'</text>';});
+    c.labels.forEach(function(lab,i){
+      var x=L+slot*i+(slot-bw)/2,y0=T+ph,tip=[],top=-1;
+      c.series.forEach(function(vals,si){if(vals[i]>0)top=si;});
+      c.series.forEach(function(vals,si){
+        var v=vals[i],hh=(v/c.max)*ph,y=y0-hh,last=si===top,gap=si>0?2:0;
+        tip.push((c.names?c.names[si]+": ":"")+v+(c.unit==="M"?"M":""));
+        s+='<path d="'+topRounded(x,y+gap,bw,hh-gap,last?4:0)+'" fill="'+cssVar(el,c.colors[si])+'"><title>'+lab+" · "+tip[si]+'</title></path>';
+        y0=y;
+      });
+      if(lab) s+='<text x="'+(x+bw/2)+'" y="'+(h-4)+'" text-anchor="middle">'+lab+'</text>';
+    });
+    if(c.ref!=null){var y=T+ph-(c.ref/c.max)*ph;s+='<line class="ref" x1="'+L+'" x2="'+(w-R)+'" y1="'+y+'" y2="'+y+'"/><text x="'+(w-R)+'" y="'+(y-4)+'" text-anchor="end" style="fill:var(--t1)">'+c.refLabel+'</text>';}
+    if(c.endLabel){var i2=c.labels.length-1,tot=0;c.series.forEach(function(v){tot+=v[i2];});var yy=T+ph-(tot/c.max)*ph;s+='<text x="'+(L+slot*i2+slot/2)+'" y="'+(yy-4)+'" text-anchor="middle" style="fill:var(--t1);font-weight:600">'+c.endLabel+'</text>';}
+    el.innerHTML='<svg class="chart" width="'+w+'" height="'+h+'" viewBox="0 0 '+w+' '+h+'">'+s+'</svg>';
+  }
+  function spark(el,pts){
+    var w=64,h=24,max=Math.max.apply(null,pts),min=Math.min.apply(null,pts),n=pts.length,d="";
+    var xy=pts.map(function(p,i){return [2+i*(w-6)/(n-1), 3+(h-6)*(1-(p-min)/((max-min)||1))];});
+    xy.forEach(function(p,i){d+=(i?"L":"M")+p[0].toFixed(1)+","+p[1].toFixed(1);});
+    var last=xy[n-1];
+    el.innerHTML='<svg width="'+w+'" height="'+h+'"><path d="'+d+'" fill="none" stroke="'+cssVar(el,"--t3")+'" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/><circle cx="'+last[0]+'" cy="'+last[1]+'" r="3.5" fill="'+cssVar(el,"--accent")+'" stroke="'+cssVar(el,"--content")+'" stroke-width="2"/></svg>';
+  }
+  function hbars(el,c){
+    var s="";
+    c.rows.forEach(function(r){
+      s+='<div style="display:flex;align-items:center;gap:10px;height:30px;font-size:12.5px">'+
+        '<span style="width:'+(c.lw||96)+'px;flex:none;white-space:nowrap">'+r[0]+'</span>'+
+        '<span style="flex:1;display:flex;align-items:center;gap:8px;min-width:0">'+
+        (r[1]==null?'<span class="t2">'+r[2]+'</span>':
+        '<span style="flex:none;height:14px;width:'+(r[1]*c.scale)+'%;background:'+cssVar(el,c.color)+';border-radius:0 4px 4px 0" title="'+r[0]+': '+r[2]+'"></span><span class="num" style="white-space:nowrap">'+r[2]+'</span>')+
+        '</span>'+(r[3]?'<span style="flex:none">'+r[3]+'</span>':'')+'</div>';
+    });
+    el.innerHTML=s;
+  }
+  function drawCharts(){
+    document.querySelectorAll("[data-chart]").forEach(function(el){
+      var c=JSON.parse(el.getAttribute("data-chart"));
+      if(c.type==="cols") cols(el,c); else if(c.type==="hbars") hbars(el,c);
+    });
+    document.querySelectorAll("[data-spark]").forEach(function(el){spark(el,JSON.parse(el.getAttribute("data-spark")));});
+  }
+  function setTheme(t){
+    document.body.classList.remove("theme-light","theme-dark");
+    document.body.classList.add("theme-"+t);
+    document.querySelectorAll(".toggle button").forEach(function(b){b.classList.toggle("on",b.dataset.theme===t);});
+    drawCharts();
+  }
+  document.querySelectorAll(".toggle button").forEach(function(b){b.addEventListener("click",function(){setTheme(b.dataset.theme);});});
+
+  // Solo mode for the PNG renders: #shot=<screen id>[,dark]
+  var m=/shot=([\w-]+)(,dark)?/.exec(location.hash);
+  if(m){
+    var el=document.getElementById("s-"+m[1]);
+    if(el){el.classList.add("shot");document.body.classList.add("solo");}
+    setTheme(m[2]?"dark":"light");
+  } else {
+    setTheme(window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");
+  }
+})();
+</script>
+</body>
+</html>

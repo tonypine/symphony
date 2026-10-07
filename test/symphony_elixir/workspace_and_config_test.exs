@@ -3543,6 +3543,22 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert message =~ "agent.timeouts.mcp_tool_ms"
   end
 
+  test "the pending tool report threshold comes from symphony.yml and must be a positive integer" do
+    write_workflow_file!(Workflow.workflow_file_path())
+    assert Config.settings!().watchdog.pending_tool_report_after_ms == 60_000
+
+    watchdog = %{enabled: true, tick_interval_ms: 60_000, no_progress_threshold_ms: 600_000}
+
+    write_workflow_file!(Workflow.workflow_file_path(), watchdog: Map.put(watchdog, :pending_tool_report_after_ms, 300_000))
+    assert Config.settings!().watchdog.pending_tool_report_after_ms == 300_000
+
+    for bad <- [0, -1, "soon"] do
+      write_workflow_file!(Workflow.workflow_file_path(), watchdog: Map.put(watchdog, :pending_tool_report_after_ms, bad))
+      assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+      assert message =~ "watchdog.pending_tool_report_after_ms"
+    end
+  end
+
   test "config reads defaults for optional settings" do
     previous_linear_api_key = System.get_env("LINEAR_API_KEY")
     on_exit(fn -> restore_env("LINEAR_API_KEY", previous_linear_api_key) end)
@@ -5291,7 +5307,8 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       assert trace =~ "auto/MT-SSH-WT"
       assert trace =~ "symphony_configured_repo="
       assert trace =~ "~/primary-clone"
-      assert trace =~ "git -C \"$symphony_configured_repo\" remote get-url origin"
+      assert trace =~ "symphony_git \"$symphony_configured_repo\" remote get-url origin"
+      refute trace =~ "git -C \"$symphony_configured_repo\" remote get-url"
       assert trace =~ "workspace_worktree_list_failed"
       assert trace =~ "auto/MT-SSH-WT"
       assert trace =~ "symphony_git \"$repo\" worktree remove --force"
@@ -5697,6 +5714,47 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       assert String.trim(git!(workspace_path, ["rev-parse", "--abbrev-ref", "HEAD"])) == "auto/MT-LOCK-REL"
       refute File.exists?(lock)
       assert git!(primary_repo, ["status", "--porcelain"]) == ""
+    end)
+  end
+
+  test "remote before_remove reads the worker repo's origin without the operator's global git config" do
+    with_real_exec_fake_ssh(fn ctx ->
+      login_dir = Path.join(ctx.test_root, "home")
+      primary_repo = Path.join(login_dir, "primary")
+      create_primary_repo!(primary_repo, Path.join(ctx.test_root, "origin.git"))
+      workspace_root = Path.join(ctx.test_root, "wsroot")
+      env_marker = Path.join(ctx.test_root, "before-remove-env.log")
+      global_config = Path.join(ctx.test_root, "global.gitconfig")
+
+      # `remote get-url` applies `insteadOf`, so a plain git call would report the rewritten URL.
+      File.write!(global_config, """
+      [url "git@github.com:operator/"]
+        insteadOf = git@github.com:acme/
+      """)
+
+      write_real_exec_fake_ssh!(Path.join(ctx.test_root, "ssh"), "", login_dir, global_config)
+
+      # The repo path is relative to the worker's login dir, so the host can't read its origin
+      # and the hook's env comes from the worker script's fallback.
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: "primary",
+        worker_ssh_hosts: ["worker-01"],
+        hook_before_remove: "printf '%s\\n' \"$SYMPHONY_REPO\" > \"#{env_marker}\""
+      )
+
+      assert {:ok, workspace_path} = Workspace.create_for_issue("MT-RM-ORIGIN", "worker-01")
+      git!(primary_repo, ["remote", "set-url", "origin", "git@github.com:acme/symphony.git"])
+
+      assert :ok = Workspace.remove_issue_workspaces("MT-RM-ORIGIN", "worker-01")
+
+      assert File.read!(env_marker) == "acme/symphony\n"
+      refute File.exists?(workspace_path)
+
+      trace = File.read!(ctx.trace_file)
+      assert trace =~ ~s(symphony_git "$symphony_configured_repo" remote get-url origin)
+      refute trace =~ ~s(git -C "$symphony_configured_repo" remote get-url)
     end)
   end
 
@@ -6792,12 +6850,14 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     fun.(%{test_root: test_root, trace_file: trace_file})
   end
 
-  # `path_prefix` puts directories ahead of the system ones on the remote's PATH.
-  defp write_real_exec_fake_ssh!(path, path_prefix \\ "", login_dir \\ nil) do
+  # `path_prefix` puts directories ahead of the system ones on the remote's PATH, and
+  # `global_git_config` stands in for the worker operator's global git config.
+  defp write_real_exec_fake_ssh!(path, path_prefix \\ "", login_dir \\ nil, global_git_config \\ nil) do
     File.write!(path, """
     #!/usr/bin/env bash
     set -u
     #{if login_dir, do: "cd #{login_dir}"}
+    #{if global_git_config, do: "export GIT_CONFIG_GLOBAL=#{global_git_config}"}
     trace_file="${SYMP_TEST_SSH_TRACE:-/dev/null}"
     printf 'ARGV:%s\\n' "$*" >> "$trace_file"
     export PATH="#{path_prefix}/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"

@@ -23,9 +23,10 @@ defmodule SymphonyElixir.QaDriver do
     touches real settings or secrets, and `SYMPHONY_QA_OPENROUTER_URL` pointing
     at this pass's `SymphonyElixir.OpenRouter.Stub`, so its OpenRouter flows
     never need a real key (see "OpenRouter stub" below);
-  - `qa_quit_app`, `qa_screenshot`, `qa_ax_tree`, `qa_ax_press` and
-    `qa_ax_set_value` accept only a PID this driver launched and that is still
-    running;
+  - `qa_quit_app`, `qa_screenshot`, `qa_ax_tree`, `qa_ax_press`,
+    `qa_ax_set_value` and `qa_resize_window` accept only a PID this driver
+    launched and that is still running; `qa_check_app` also reports on one that
+    has exited;
   - screenshots land in `qa-evidence/` under the worktree, always as new files:
     a name that already exists, symlinks included, is refused rather than
     followed or replaced;
@@ -48,6 +49,17 @@ defmodule SymphonyElixir.QaDriver do
   root) is a `0700` directory under Symphony's state root, outside every path
   the agent sandbox may write.
 
+  Wide pass: `qa_resize_window` sizes an app's window to at least 1400×900 pt,
+  or the screen's usable area when that is smaller, and remembers the size it
+  reached. `qa_check_app` then says whether the app still runs, answers an
+  accessibility request within 10 seconds, and has left no new
+  `~/Library/Logs/DiagnosticReports/<executable>*` crash report (listed at launch
+  and again at each check, on the QA host for a `worker_host`), naming the page
+  the agent passes and that window size in each problem. A resize on a screen
+  whose usable area is under 1400×900 pt marks the pass's wide pass limited
+  (`wide_pass/1`), which `SymphonyElixir.QaAgent` reports as `blocked`, as it does
+  a `pass` with no resize at all (`wide_pass/1` is `nil`).
+
   OpenRouter stub: the first `qa_launch_app` starts a
   `SymphonyElixir.OpenRouter.Stub` in this BEAM, on `127.0.0.1`, and every app
   of the pass gets its URL. The app, and the Symphony it runs, use it only in QA
@@ -55,7 +67,7 @@ defmodule SymphonyElixir.QaDriver do
 
   Host ports: the driver picks three free ports on this host's loopback for the
   pass (`host_ports/1`, `QA_HOST_PORTS` in the QA agent's prompt and
-  environment). The agent serves the app's stubs and proxies on `127.0.0.1` at
+  environment, and in the environment of the playbook's `build`). The agent serves the app's stubs and proxies on `127.0.0.1` at
   those ports, and the app reaches them at `http://localhost:<port>`.
 
   When the driver stops (the QA pass ends or crashes) it quits every app it
@@ -110,6 +122,17 @@ defmodule SymphonyElixir.QaDriver do
   @value_limit 10_000
   @press_actions ~w(AXPress AXRaise AXShowMenu AXConfirm AXCancel AXIncrement AXDecrement AXPick)
   @element_path ~r/\A\d{1,4}(\.\d{1,4}){0,63}\z/
+  # The wide pass needs a window at least this size (points).
+  @wide_width 1400
+  @wide_height 900
+  @max_window_size 8192
+
+  # Lists the crash reports named after the app (`$1`, its executable) in the
+  # user's DiagnosticReports, one name per line. No folder means no reports.
+  @crash_reports_script """
+  cd "$HOME/Library/Logs/DiagnosticReports" 2>/dev/null || exit 0
+  for report in "$1"[-_.]*; do if [ -f "$report" ]; then printf '%s\\n' "$report"; fi; done
+  """
 
   # Checks and copies the bundle on a QA host: `$1` build dir, `$2` app path,
   # `$3` destination. The bundle must be a real `.app` directory inside the build
@@ -127,7 +150,7 @@ defmodule SymphonyElixir.QaDriver do
   printf 'symphony-qa-app:%s\\n' "$executable"
   """
 
-  @tools ~w(qa_build qa_launch_app qa_quit_app qa_screenshot qa_ax_tree qa_ax_press qa_ax_set_value qa_put_file)
+  @tools ~w(qa_build qa_launch_app qa_quit_app qa_screenshot qa_ax_tree qa_ax_press qa_ax_set_value qa_resize_window qa_check_app qa_put_file)
 
   @type host :: %{
           required(:cmd) => (String.t(), [String.t()], keyword() -> {:ok, {String.t(), integer()}} | {:error, term()}),
@@ -164,6 +187,21 @@ defmodule SymphonyElixir.QaDriver do
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
+
+  @doc """
+  The pass's wide pass: the screen, its usable area and the window size of the
+  last `qa_resize_window`, and whether that screen limited it (`limited: true`
+  when its usable area is under 1400×900 pt). `nil` when no window was resized
+  or there is no driver.
+  """
+  @spec wide_pass(pid() | nil) :: map() | nil
+  def wide_pass(nil), do: nil
+
+  def wide_pass(driver) when is_pid(driver) do
+    GenServer.call(driver, :wide_pass)
+  catch
+    :exit, _reason -> nil
+  end
 
   @doc "Stops the driver, quitting every app it launched."
   @spec stop(pid() | nil) :: :ok
@@ -210,7 +248,7 @@ defmodule SymphonyElixir.QaDriver do
   defp run_tool("qa_build", driver, config, _args) do
     with :ok <- ensure_clean_worktree(config, GenServer.call(driver, :ignored)),
          :ok <- ship(config),
-         {:ok, {output, status}} <- run_build(config) |> rebaseline_on_timeout(driver, config),
+         {:ok, {output, status}} <- run_build(config, build_env(driver)) |> rebaseline_on_timeout(driver, config),
          {:ok, ignored, _dirty} <- worktree_status(config) do
       record_build(driver, config, status, tail(output, @output_limit), ignored_signatures(config, ignored))
     end
@@ -219,8 +257,10 @@ defmodule SymphonyElixir.QaDriver do
   defp run_tool("qa_launch_app", driver, config, _args) do
     with {:ok, built} <- fetch_build(driver),
          :ok <- ensure_clean_worktree(config, GenServer.call(driver, :ignored)),
-         :ok <- unchanged_build(config, built) do
-      GenServer.call(driver, {:launch, built.executable})
+         :ok <- unchanged_build(config, built),
+         name = Path.basename(built.executable),
+         {:ok, reports} <- crash_reports(config, name) do
+      GenServer.call(driver, {:launch, built.executable, %{name: name, crash_reports: reports}})
     end
   end
 
@@ -285,6 +325,30 @@ defmodule SymphonyElixir.QaDriver do
          {:ok, value} <- set_value(Map.get(args, "value")),
          {:ok, helper} <- helper(driver, config) do
       run_helper(config, helper, ["ax-set-value", Integer.to_string(pid), path, value])
+    end
+  end
+
+  defp run_tool("qa_resize_window", driver, config, args) do
+    with {:ok, pid} <- running_pid(driver, args),
+         {:ok, path} <- optional_element_path(Map.get(args, "path")),
+         {:ok, width} <- optional_integer(args, "width", @wide_width, @max_window_size),
+         {:ok, height} <- optional_integer(args, "height", @wide_height, @max_window_size),
+         {:ok, helper} <- helper(driver, config),
+         size_args = [Integer.to_string(width || @wide_width), Integer.to_string(height || @wide_height)],
+         {:ok, resized} <- run_helper(config, helper, ["ax-resize", Integer.to_string(pid), path | size_args]),
+         {:ok, wide_pass} <- wide_pass_of(resized) do
+      GenServer.call(driver, {:resized, pid, wide_pass})
+      {:ok, Map.merge(resized, %{"limited" => wide_pass.limited, "note" => resize_note(wide_pass)})}
+    end
+  end
+
+  defp run_tool("qa_check_app", driver, config, args) do
+    with {:ok, pid} <- pid_argument(args),
+         {:ok, page} <- optional_string(args, "page", 200),
+         {:ok, app} <- GenServer.call(driver, {:app, pid}),
+         {:ok, reports} <- crash_reports(config, app.name),
+         {:ok, responding} <- responding(driver, config, pid, app) do
+      {:ok, health(pid, page, app, reports -- app.crash_reports, responding, config)}
     end
   end
 
@@ -387,8 +451,24 @@ defmodule SymphonyElixir.QaDriver do
     result
   end
 
-  defp run_build(config) do
-    opts = [cd: config.build_dir, env: AgentEnv.build(), timeout_ms: config.build_timeout_ms, output_limit: @output_limit]
+  # The build gets `QA_HOST_PORTS` as the QA agent does, so a QA build can name
+  # the port of a stub the agent serves; without a tunnel it gets none.
+  defp build_env(driver) do
+    case host_ports(driver) do
+      {:ok, ports} -> %{"QA_HOST_PORTS" => Enum.join(ports, ",")}
+      {:error, _reason} -> %{}
+    end
+  end
+
+  # `:env` is this host's environment; on a QA host the build gets only `:remote_env`.
+  defp run_build(config, extra_env) do
+    opts = [
+      cd: config.build_dir,
+      env: AgentEnv.build_with(extra_env),
+      remote_env: Enum.to_list(extra_env),
+      timeout_ms: config.build_timeout_ms,
+      output_limit: @output_limit
+    ]
 
     case config.host.cmd.("/bin/sh", ["-c", config.build], opts) do
       {:ok, {output, status}} ->
@@ -629,6 +709,9 @@ defmodule SymphonyElixir.QaDriver do
 
   defp element_path(_path), do: tool_error("invalid_arguments", "`path` is required.")
 
+  defp optional_element_path(nil), do: {:ok, ""}
+  defp optional_element_path(path), do: element_path(path)
+
   defp press_action(nil), do: {:ok, "AXPress"}
   defp press_action(action) when action in @press_actions, do: {:ok, action}
   defp press_action(_action), do: tool_error("invalid_arguments", "`action` must be one of #{Enum.join(@press_actions, ", ")}.")
@@ -665,6 +748,103 @@ defmodule SymphonyElixir.QaDriver do
       _value -> tool_error("invalid_arguments", "`#{key}` must be an integer from #{min} to #{max}.")
     end
   end
+
+  # -- wide pass --------------------------------------------------------------
+
+  defp wide_pass_of(resized) do
+    with {:ok, window} <- size_of(resized, "window"),
+         {:ok, screen} <- size_of(resized, "screen"),
+         {:ok, {vw, vh} = visible} <- size_of(resized, "visible") do
+      {:ok, %{window: window, screen: screen, visible: visible, limited: vw < @wide_width or vh < @wide_height}}
+    else
+      :error -> tool_error("qa_helper_failed", "The QA helper returned no window size: #{inspect(resized)}")
+    end
+  end
+
+  defp size_of(resized, key) do
+    case resized do
+      %{^key => %{"w" => w, "h" => h}} when is_integer(w) and is_integer(h) -> {:ok, {w, h}}
+      _other -> :error
+    end
+  end
+
+  defp resize_note(%{limited: true} = wide_pass) do
+    "The QA screen is #{size(wide_pass.screen)} with #{size(wide_pass.visible)} usable, under the #{size({@wide_width, @wide_height})} " <>
+      "the wide pass needs, so the window is #{size(wide_pass.window)}. Run the wide pass at this size, report the screen size, " <>
+      "and mark the Wide pass step `blocked` as limited: Symphony reports a pass whose wide pass was limited as `blocked`."
+  end
+
+  defp resize_note(%{window: {w, h}} = wide_pass) when w < @wide_width or h < @wide_height do
+    "The app kept its window at #{size(wide_pass.window)} on a #{size(wide_pass.screen)} screen: the window has a maximum size " <>
+      "or ignored the resize. Resize the app's main window (pass its `path`) for the wide pass."
+  end
+
+  defp resize_note(wide_pass), do: "The window is #{size(wide_pass.window)} on a #{size(wide_pass.screen)} screen."
+
+  defp size({w, h}), do: "#{w}×#{h} pt"
+
+  defp crash_reports(config, name) do
+    case config.host.cmd.("/bin/sh", ["-c", @crash_reports_script, "sh", name], timeout_ms: @helper_timeout_ms, output_limit: @tree_bytes_limit) do
+      {:ok, {output, 0}} ->
+        {:ok, String.split(output, "\n", trim: true)}
+
+      {:ok, {output, status}} ->
+        tool_error("qa_crash_reports_failed", "Listing the app's crash reports failed (exit #{status}): #{tail(output, 500)}")
+
+      {:error, reason} ->
+        tool_error("qa_crash_reports_failed", "Listing the app's crash reports failed: #{inspect(reason)}")
+    end
+  end
+
+  # An app that exited answers nothing; a helper that gave up waiting on the app
+  # means it is hung too.
+  defp responding(_driver, _config, _pid, %{exit_status: status}) when is_integer(status), do: {:ok, nil}
+
+  defp responding(driver, config, pid, _app) do
+    with {:ok, helper} <- helper(driver, config) do
+      case run_helper(config, helper, ["ax-ping", Integer.to_string(pid)]) do
+        {:ok, _reply} -> {:ok, true}
+        {:error, {:qa_tool, code, _message}} when code in ["qa_app_not_responding", "qa_helper_timeout"] -> {:ok, false}
+        {:error, _reason} = error -> error
+      end
+    end
+  end
+
+  defp health(pid, page, app, new_reports, responding, config) do
+    where = where(page, app.window)
+
+    problems =
+      Enum.reject(
+        [
+          app.exit_status && "The app exited with status #{app.exit_status}#{where}. Last output: #{tail(app.output, 2_000)}",
+          responding == false && "The app did not answer accessibility requests for 10 seconds#{where}: it is hung.",
+          new_reports != [] &&
+            "New crash report#{where} in ~/Library/Logs/DiagnosticReports#{if config.remote?, do: " on the QA host"}: #{Enum.join(new_reports, ", ")}."
+        ],
+        &(&1 in [nil, false])
+      )
+
+    %{
+      "pid" => pid,
+      "page" => page,
+      "window" => window_payload(app.window),
+      "running" => app.exit_status == nil,
+      "responding" => responding,
+      "crash_reports" => new_reports,
+      "healthy" => problems == [],
+      "problems" => problems
+    }
+  end
+
+  defp where(page, window) do
+    case Enum.reject([page && "page #{inspect(page)}", window && "window #{size(window)}"], &is_nil/1) do
+      [] -> ""
+      parts -> " (" <> Enum.join(parts, ", ") <> ")"
+    end
+  end
+
+  defp window_payload(nil), do: nil
+  defp window_payload({w, h}), do: %{"w" => w, "h" => h}
 
   # -- helper -----------------------------------------------------------------
 
@@ -833,7 +1013,8 @@ defmodule SymphonyElixir.QaDriver do
     }
 
     state = %{config: host_dirs(config, worker_host), build: nil, ignored: %{}, apps: %{}, helper: nil, stub: nil}
-    {:ok, open_tunnel(Map.merge(state, %{host_ports: pick_host_ports(), tunnel: nil, tunnel_error: nil}), @tunnel_attempts)}
+    state = Map.merge(state, %{wide_pass: nil, host_ports: pick_host_ports(), tunnel: nil, tunnel_error: nil})
+    {:ok, open_tunnel(state, @tunnel_attempts)}
   end
 
   # Held open together, so the ports differ; the agent binds them later.
@@ -915,12 +1096,13 @@ defmodule SymphonyElixir.QaDriver do
   def handle_call(:build, _from, state), do: {:reply, state.build, state}
   def handle_call(:ignored, _from, state), do: {:reply, state.ignored, state}
   def handle_call(:helper, _from, state), do: {:reply, state.helper, state}
+  def handle_call(:wide_pass, _from, state), do: {:reply, state.wide_pass, state}
   def handle_call({:helper, path}, _from, state), do: {:reply, :ok, %{state | helper: path}}
 
   def handle_call({:record_build, fingerprint, ignored}, _from, state),
     do: {:reply, :ok, %{state | build: fingerprint, ignored: ignored}}
 
-  def handle_call({:launch, executable}, _from, state) do
+  def handle_call({:launch, executable, info}, _from, state) do
     running = Enum.count(state.apps, fn {_pid, app} -> app.exit_status == nil end)
 
     cond do
@@ -929,13 +1111,26 @@ defmodule SymphonyElixir.QaDriver do
 
       reopen_tunnel?(state) ->
         case open_tunnel(state, 1) do
-          %{tunnel_error: nil} = state -> launch(executable, state)
+          %{tunnel_error: nil} = state -> launch(executable, info, state)
           state -> {:reply, tunnel_closed_error(state), state}
         end
 
       true ->
-        launch(executable, state)
+        launch(executable, info, state)
     end
+  end
+
+  def handle_call({:app, pid}, _from, state) do
+    case Map.fetch(state.apps, pid) do
+      {:ok, app} -> {:reply, {:ok, app}, state}
+      :error -> {:reply, not_launched_error(pid), state}
+    end
+  end
+
+  # The app may have quit since the resize; the pass's wide pass still counts.
+  def handle_call({:resized, pid, wide_pass}, _from, state) do
+    state = update_in(state.apps, &Map.replace_lazy(&1, pid, fn app -> %{app | window: wide_pass.window} end))
+    {:reply, :ok, %{state | wide_pass: wide_pass}}
   end
 
   def handle_call({:running, pid}, _from, state) do
@@ -993,13 +1188,13 @@ defmodule SymphonyElixir.QaDriver do
     :ok
   end
 
-  defp launch(executable, state) do
+  defp launch(executable, info, state) do
     with {:ok, state} <- ensure_stub(state),
          {stub_url, forwards} = stub_route(state.config, state.stub.port),
          launch_opts = [cd: state.config.qa_root, env: launch_env(state.config, stub_url), reverse_forwards: forwards],
          {:ok, port, pid} <- state.config.host.launch.(executable, launch_opts) do
       Logger.info("QA driver launched app pid=#{pid} executable=#{executable} openrouter_stub=#{stub_url}")
-      app = %{port: port, output: "", exit_status: nil}
+      app = Map.merge(info, %{port: port, output: "", exit_status: nil, window: nil})
       payload = %{"pid" => pid, "qa_mode" => true, "note" => "Wait for the window to settle before judging it."}
       {:reply, {:ok, payload}, %{state | apps: Map.put(state.apps, pid, app)}}
     else
