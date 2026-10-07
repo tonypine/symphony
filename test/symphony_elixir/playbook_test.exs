@@ -389,7 +389,13 @@ defmodule SymphonyElixir.PlaybookTest do
       assert prompt =~ "Material 3 on Android, the Human Interface Guidelines on Apple platforms"
       assert prompt =~ "**One self-contained HTML file** shows every screen in the document"
       assert prompt =~ "with no external assets"
-      assert prompt =~ "attach it to the ticket with `linear_attach_file`, and link it at the top of the Screens document."
+      assert prompt =~ "Write it inside the workspace, at `plan-artifacts/screens.html`"
+      assert prompt =~ "never under `$TMPDIR`: `linear_attach_file` refuses a file outside the workspace"
+      refute prompt =~ "Write it under `$TMPDIR`"
+
+      assert prompt =~
+               "attach it to the ticket with `linear_attach_file`, and link it at the top of the Screens document."
+
       assert prompt =~ "one ADR-style section per real choice"
     end
 

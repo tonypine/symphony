@@ -102,9 +102,10 @@ stage is a Linear document in the ticket's project, attached to the ticket and t
   states: empty, species suggestions, validation error), S3 Plant list (states: empty with one call
   to action, filled, offline banner). Each screen names its Material 3 components: top app bar,
   navigation bar, extended floating action button, snackbar with Undo.
-- **HTML screens file:** one `plant-care-screens.html` with every screen of the document in a
-  phone frame, labelled `J1 · S2 Add plant`, styled in Material 3 with inline CSS and SVG icons and
-  no external assets. It is attached to the ticket and linked at the top of the Screens document.
+- **HTML screens file:** one `plan-artifacts/screens.html`, written inside the workspace, with every
+  screen of the document in a phone frame, labelled `J1 · S2 Add plant`, styled in Material 3 with
+  inline CSS and SVG icons and no external assets. It is attached to the ticket and linked at the
+  top of the Screens document.
 
 ### 5. Decisions
 

@@ -64,10 +64,12 @@ second document for a stage.
      labelled with its journey and screen name, styled for the platform, with no
      external assets (inline CSS and SVG only: no web fonts, CDNs, scripts from
      elsewhere or remote images), so it opens in a desktop browser offline.
-     Write it under `$TMPDIR`, attach it to the ticket with
-     `linear_attach_file`, and link it at the top of the Screens document. On a
-     later run, attach the revised file and replace the link; this file is the
-     one attachment a plan run makes.
+     Write it inside the workspace, at `plan-artifacts/screens.html` (never
+     under `$TMPDIR`: `linear_attach_file` refuses a file outside the workspace;
+     a plan run never commits, so the folder stays untracked), attach it to the
+     ticket with `linear_attach_file`, and link it at the top of the Screens
+     document. On a later run, attach the revised file and replace the link;
+     this file is the one attachment a plan run makes.
 5. **Decisions** (document `Decisions`): one ADR-style section per real choice:
    the context, the options, the one you recommend and why, and what it costs.
    Only real choices: a question with one sensible answer is not a decision.
