@@ -4355,8 +4355,10 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert %DateTime{} = run_record.issue_completed_notified_at
     assert %DateTime{} = run_record.watch_closed_at
 
-    assert %{shipped_today: [%{issue_id: ^issue_id, identifier: ^issue_identifier, title: "Terminal on restart", completed_at: %DateTime{}}]} =
-             wait_for_snapshot(pid, &match?(%{shipped_today: [_]}, &1))
+    assert %{shipped_today: [shipped]} = wait_for_snapshot(pid, &match?(%{shipped_today: [_]}, &1))
+
+    assert %{issue_id: ^issue_id, identifier: ^issue_identifier, title: "Terminal on restart", completed_at: %DateTime{}} =
+             shipped
 
     GenServer.stop(pid)
     flush_notification_events()
