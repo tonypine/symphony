@@ -84,9 +84,10 @@ final class SymphonyWindowTests: XCTestCase {
 
     func testSidebarListsOnlyBuiltViewsInTheDesignsOrder() {
         let sidebar = Sidebar()
-        XCTAssertEqual(sidebar.views, [.repos, .diagnostics])
-        XCTAssertEqual(sidebar.sections.map(\.section), [.factory])
-        XCTAssertEqual(sidebar.sections.first?.views, [.repos, .diagnostics])
+        XCTAssertEqual(sidebar.views, [.overview, .repos, .diagnostics])
+        XCTAssertEqual(sidebar.sections.map(\.section), [.main, .factory])
+        XCTAssertEqual(sidebar.sections.first?.views, [.overview])
+        XCTAssertEqual(sidebar.sections.last?.views, [.repos, .diagnostics])
         XCTAssertEqual(SidebarSection.factory.title, "Factory")
     }
 
@@ -99,11 +100,12 @@ final class SymphonyWindowTests: XCTestCase {
 
     func testShortcutsFollowSidebarOrderUpToEight() {
         let sidebar = Sidebar()
-        XCTAssertEqual(sidebar.shortcut(for: .repos), 1)
-        XCTAssertEqual(sidebar.shortcut(for: .diagnostics), 2)
+        XCTAssertEqual(sidebar.shortcut(for: .overview), 1)
+        XCTAssertEqual(sidebar.shortcut(for: .repos), 2)
+        XCTAssertEqual(sidebar.shortcut(for: .diagnostics), 3)
         XCTAssertNil(sidebar.shortcut(for: .inbox))
-        XCTAssertEqual(sidebar.view(forShortcut: 2), .diagnostics)
-        XCTAssertNil(sidebar.view(forShortcut: 3))
+        XCTAssertEqual(sidebar.view(forShortcut: 3), .diagnostics)
+        XCTAssertNil(sidebar.view(forShortcut: 4))
         XCTAssertNil(sidebar.view(forShortcut: 0))
 
         let all = Sidebar(built: SymphonyView.allCases)
@@ -115,9 +117,10 @@ final class SymphonyWindowTests: XCTestCase {
     func testRestoresTheSavedViewWhenItShowsInTheWindow() {
         let sidebar = Sidebar()
         XCTAssertEqual(sidebar.restoredView(saved: "diagnostics"), .diagnostics)
-        XCTAssertEqual(sidebar.restoredView(saved: nil), .diagnostics)
-        XCTAssertEqual(sidebar.restoredView(saved: "inbox"), .diagnostics)
-        XCTAssertEqual(sidebar.restoredView(saved: "repos"), .diagnostics)
+        // The first time, the window opens on the Overview.
+        XCTAssertEqual(sidebar.restoredView(saved: nil), .overview)
+        XCTAssertEqual(sidebar.restoredView(saved: "inbox"), .overview)
+        XCTAssertEqual(sidebar.restoredView(saved: "repos"), .overview)
         XCTAssertEqual(Sidebar(built: [.overview, .diagnostics]).restoredView(saved: "nonsense"), .overview)
     }
 

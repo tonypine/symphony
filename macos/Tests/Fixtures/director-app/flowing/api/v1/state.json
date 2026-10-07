@@ -1,0 +1,405 @@
+{
+  "auto_merge": [],
+  "awaiting_clarification": [],
+  "blocked": [],
+  "budget": {
+    "daily_limit": 5000000,
+    "daily_paused": false,
+    "daily_remaining": 1900000,
+    "daily_used": 3100000,
+    "per_issue_limit": 2000000
+  },
+  "build": {
+    "sha": "9f54098c3a1e5b7d2f4c6a8e0b1d3f5a7c9e1b3d",
+    "version": "0.0.1.412"
+  },
+  "codex_totals": {
+    "cache_creation_input_tokens": 6568666,
+    "cached_input_tokens": 149857148,
+    "input_tokens": 156430436,
+    "output_tokens": 629302,
+    "seconds_running": 23413,
+    "total_tokens": 156465114,
+    "uncached_input_tokens": 4622
+  },
+  "concurrency": {
+    "finishing_max": 2,
+    "forced_max": 1,
+    "max_total": 10
+  },
+  "conflicts": [],
+  "counts": {
+    "claimed": 3,
+    "conflicts": 0,
+    "forced": 0,
+    "human_review": 2,
+    "retrying": 0,
+    "running": 3,
+    "shipped_today": 3,
+    "watching": 5
+  },
+  "dispatch_state": {
+    "active?": true,
+    "blockers": []
+  },
+  "epic_lanes": {
+    "lanes": [
+      {
+        "id": "e1",
+        "identifier": "SHOP-300",
+        "status": "running",
+        "sub_issue": {
+          "identifier": "SHOP-302",
+          "issue_id": "i-302",
+          "state": "In Progress",
+          "via": "blocked_by"
+        },
+        "title": "Gift cards"
+      },
+      {
+        "id": "e2",
+        "identifier": "API-120",
+        "status": "waiting",
+        "sub_issue": null,
+        "title": "Rate limits"
+      }
+    ],
+    "max_total": 10,
+    "queued_epics": [
+      {
+        "id": "e3",
+        "identifier": "WEB-88",
+        "title": "Dark mode"
+      }
+    ],
+    "shared": {
+      "slots": 8,
+      "used": 2
+    }
+  },
+  "finishing": {
+    "running": [
+      {
+        "identifier": "SHOP-298",
+        "issue_id": "i-298",
+        "state": "Merging"
+      }
+    ],
+    "slots": 2,
+    "used": 1
+  },
+  "forced": [],
+  "generated_at": "2026-10-07T14:20:00Z",
+  "human_review": [
+    {
+      "issue_id": "i-40",
+      "issue_identifier": "DOCS-40",
+      "last_ran_at": "2026-10-07T11:08:00Z",
+      "pull_request_url": null,
+      "repo_key": "docs",
+      "seconds_since_last_run": 11520,
+      "state": "Human Review",
+      "title": "Quick start rewrite",
+      "url": "https://linear.app/acme/issue/DOCS-40"
+    },
+    {
+      "issue_id": "i-290",
+      "issue_identifier": "SHOP-290",
+      "last_ran_at": "2026-10-07T11:08:00Z",
+      "pull_request_url": null,
+      "repo_key": "web-shop",
+      "seconds_since_last_run": 2400,
+      "state": "Human Review",
+      "title": "Address autocomplete",
+      "url": "https://linear.app/acme/issue/SHOP-290"
+    }
+  ],
+  "linear_usage": {
+    "callers": [
+      {
+        "caller": "poll",
+        "requests": 720
+      },
+      {
+        "caller": "reconcile",
+        "requests": 402
+      },
+      {
+        "caller": "agent_tool",
+        "requests": 151
+      },
+      {
+        "caller": "qa",
+        "requests": 11
+      }
+    ],
+    "queries": [
+      {
+        "query": "CandidateIssues",
+        "requests": 720
+      }
+    ],
+    "total": 1284,
+    "window_ms": 3600000
+  },
+  "orchestrator": {
+    "message_queue_len": 0,
+    "snapshot_age_ms": 420,
+    "snapshot_build_ms": 12,
+    "snapshot_parts_ms": {}
+  },
+  "pause": {
+    "paused": false,
+    "paused_at": null,
+    "reason": null
+  },
+  "pollers": {
+    "ci": {
+      "consecutive_failures": 0,
+      "current_backoff_ms": null,
+      "poll_interval_ms": 60000,
+      "status": "running",
+      "webhooks": {
+        "enabled": true,
+        "events_received": 214,
+        "last_event_at": "2026-10-07T13:58:40Z",
+        "rejected": 2,
+        "relay": "smee.io",
+        "results_via_poll": 7,
+        "results_via_webhook": 96
+      }
+    },
+    "pr_review": {
+      "consecutive_failures": 0,
+      "current_backoff_ms": null,
+      "poll_interval_ms": 60000,
+      "status": "running",
+      "webhooks": null
+    }
+  },
+  "qa": {
+    "queued": [],
+    "running": [
+      {
+        "forced": false,
+        "identifier": "SHOP-301",
+        "issue_id": "i-301",
+        "sha": "4be1c0d9"
+      }
+    ]
+  },
+  "rate_limits": null,
+  "repos": [
+    "api",
+    "docs",
+    "web-shop"
+  ],
+  "retrying": [],
+  "run_history": [],
+  "running": [
+    {
+      "forced": false,
+      "issue_id": "i-305",
+      "issue_identifier": "SHOP-305",
+      "last_event": "notification",
+      "last_event_at": "2026-10-07T14:19:48Z",
+      "last_message": "Running the checkout tests",
+      "linear_wait_until": null,
+      "pending_tool": null,
+      "pull_request_url": null,
+      "repo_key": "web-shop",
+      "reviewer_profile": null,
+      "run_kind": "implementation",
+      "run_profile": null,
+      "session_id": "session-SHOP-305",
+      "started_at": "2026-10-07T13:58:00Z",
+      "state": "In Progress",
+      "title": "Checkout total rounding",
+      "tokens": {
+        "cache_creation_input_tokens": 0,
+        "cached_input_tokens": 1214000,
+        "input_tokens": 1215200,
+        "output_tokens": 24800,
+        "total_tokens": 1240000,
+        "uncached_input_tokens": 1200
+      },
+      "transcript_path": null,
+      "turn_count": 7,
+      "url": "https://linear.app/acme/issue/SHOP-305",
+      "worker_host": null,
+      "workspace_path": "/Users/director/symphony-workspaces/web-shop/SHOP-305"
+    },
+    {
+      "forced": false,
+      "issue_id": "i-131",
+      "issue_identifier": "API-131",
+      "last_event": "notification",
+      "last_event_at": "2026-10-07T14:19:30Z",
+      "last_message": "Updating the middleware test",
+      "linear_wait_until": null,
+      "pending_tool": null,
+      "pull_request_url": null,
+      "repo_key": "api",
+      "reviewer_profile": null,
+      "run_kind": "rework",
+      "run_profile": null,
+      "session_id": "session-API-131",
+      "started_at": "2026-10-07T14:05:00Z",
+      "state": "In Progress",
+      "title": "Rate limit headers",
+      "tokens": {
+        "cache_creation_input_tokens": 0,
+        "cached_input_tokens": 475080,
+        "input_tokens": 476280,
+        "output_tokens": 9720,
+        "total_tokens": 486000,
+        "uncached_input_tokens": 1200
+      },
+      "transcript_path": null,
+      "turn_count": 3,
+      "url": "https://linear.app/acme/issue/API-131",
+      "worker_host": null,
+      "workspace_path": "/Users/director/symphony-workspaces/api/API-131"
+    },
+    {
+      "forced": false,
+      "issue_id": "i-298",
+      "issue_identifier": "SHOP-298",
+      "last_event": "notification",
+      "last_event_at": "2026-10-07T14:19:55Z",
+      "last_message": "Merging main into the branch",
+      "linear_wait_until": null,
+      "pending_tool": null,
+      "pull_request_url": null,
+      "repo_key": "web-shop",
+      "reviewer_profile": null,
+      "run_kind": "implementation",
+      "run_profile": null,
+      "session_id": "session-SHOP-298",
+      "started_at": "2026-10-07T14:15:00Z",
+      "state": "Merging",
+      "title": "Gift card balance",
+      "tokens": {
+        "cache_creation_input_tokens": 0,
+        "cached_input_tokens": 88960,
+        "input_tokens": 90160,
+        "output_tokens": 1840,
+        "total_tokens": 92000,
+        "uncached_input_tokens": 1200
+      },
+      "transcript_path": null,
+      "turn_count": 2,
+      "url": "https://linear.app/acme/issue/SHOP-298",
+      "worker_host": null,
+      "workspace_path": "/Users/director/symphony-workspaces/web-shop/SHOP-298"
+    }
+  ],
+  "shipped_today": [
+    {
+      "completed_at": "2026-10-07T13:40:00Z",
+      "issue_id": "i-288",
+      "issue_identifier": "SHOP-288",
+      "repo_key": "web-shop",
+      "title": "Coupon stacking"
+    },
+    {
+      "completed_at": "2026-10-07T12:02:00Z",
+      "issue_id": "i-125",
+      "issue_identifier": "API-125",
+      "repo_key": "api",
+      "title": "Idempotency keys"
+    },
+    {
+      "completed_at": "2026-10-07T09:15:00Z",
+      "issue_id": "i-38",
+      "issue_identifier": "DOCS-38",
+      "repo_key": "docs",
+      "title": "Changelog page"
+    }
+  ],
+  "skipped": [],
+  "slot_waiting": [
+    {
+      "attempt": null,
+      "forced": false,
+      "issue_id": "i-320",
+      "issue_identifier": "SHOP-320",
+      "reason": "work slots full",
+      "repo_key": "web-shop",
+      "since": "2026-10-07T14:10:00Z",
+      "state": "Todo",
+      "title": "Order history filters"
+    },
+    {
+      "attempt": null,
+      "forced": false,
+      "issue_id": "i-133",
+      "issue_identifier": "API-133",
+      "reason": "work slots full",
+      "repo_key": "api",
+      "since": "2026-10-07T14:12:00Z",
+      "state": "Todo",
+      "title": "Bulk export endpoint"
+    }
+  ],
+  "stray_processes": [],
+  "uptime_seconds": 11580,
+  "usage_limits": [],
+  "watching": [
+    {
+      "issue_id": "i-301",
+      "issue_identifier": "SHOP-301",
+      "last_ran_at": "2026-10-07T11:08:00Z",
+      "pull_request_url": null,
+      "repo_key": "web-shop",
+      "seconds_since_last_run": 1200,
+      "state": "Auto Review",
+      "title": "Saved carts",
+      "url": "https://linear.app/acme/issue/SHOP-301"
+    },
+    {
+      "issue_id": "i-127",
+      "issue_identifier": "API-127",
+      "last_ran_at": "2026-10-07T11:08:00Z",
+      "pull_request_url": null,
+      "repo_key": "api",
+      "seconds_since_last_run": 600,
+      "state": "Auto Review",
+      "title": "Pagination cursors",
+      "url": "https://linear.app/acme/issue/API-127"
+    },
+    {
+      "issue_id": "i-40",
+      "issue_identifier": "DOCS-40",
+      "last_ran_at": "2026-10-07T11:08:00Z",
+      "pull_request_url": null,
+      "repo_key": "docs",
+      "seconds_since_last_run": 11520,
+      "state": "Human Review",
+      "title": "Quick start rewrite",
+      "url": "https://linear.app/acme/issue/DOCS-40"
+    },
+    {
+      "issue_id": "i-290",
+      "issue_identifier": "SHOP-290",
+      "last_ran_at": "2026-10-07T11:08:00Z",
+      "pull_request_url": null,
+      "repo_key": "web-shop",
+      "seconds_since_last_run": 2400,
+      "state": "Human Review",
+      "title": "Address autocomplete",
+      "url": "https://linear.app/acme/issue/SHOP-290"
+    },
+    {
+      "issue_id": "i-119",
+      "issue_identifier": "API-119",
+      "last_ran_at": "2026-10-07T11:08:00Z",
+      "pull_request_url": null,
+      "repo_key": "api",
+      "seconds_since_last_run": 300,
+      "state": "Merging",
+      "title": "Webhook retries",
+      "url": "https://linear.app/acme/issue/API-119"
+    }
+  ]
+}

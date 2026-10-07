@@ -833,9 +833,28 @@ one, quit the app and run the install script with `SYMPHONY_RELEASE_TAG` set to 
 
 **Open Symphony** (⌘O) opens one window, **Symphony**, next to the menu bar item. It has a sidebar of views
 and, in the toolbar, the view's title, Symphony's connection state (quiet while Symphony answers; the time of
-the last update is in its help) and **Refresh** (⌘R). The sidebar lists the views this version has, in the
-order they will keep as more arrive, on ⌘1 to ⌘8: under **Factory**, **Repos** (which opens the Repos window)
-and **Diagnostics**. Its foot shows Symphony's version and state.
+the last update is in its help), the scope pop-up and **Refresh** (⌘R). The sidebar lists the views this
+version has, in the order they will keep as more arrive, on ⌘1 to ⌘8: **Overview**, then under **Factory**,
+**Repos** (which opens the Repos window) and **Diagnostics**. Its foot shows Symphony's version and state. The
+window opens on the Overview the first time.
+
+- **Overview** answers "is the factory moving, is anything stuck" at a glance. One sentence says how things
+  are: "The factory is flowing.", "2 things need attention.", "Dispatch is paused since 14:03: Deploy
+  freeze." with **Resume Dispatch**, or "The factory is idle.", with a line of context under it. The flow
+  strip counts the tickets at each stage: Queued, Working, Auto Review, Waiting on you (Human Review), Merging
+  and Shipped today (the tickets Symphony saw reach Done today, UTC); a stage at 0 stays in place in grey.
+  **Needs attention** shows only when something does, most severe and oldest first, one row per ticket or
+  hold: a run with no agent activity for 10 minutes, 3 failed attempts or more, a ticket routed to more than
+  one repo (**Open in Linear**), a usage-limit hold with the time runs resume, a forced ticket gone stale
+  (**Stop Forcing**) and stray processes (**Open Diagnostics**); **Open** opens the ticket in Linear. The
+  sidebar's Overview item counts these rows. **Now working** lists the agent runs, QA passes and landings
+  with their phase, turn, last activity, running time and tokens, and **Next up** the tickets waiting for a
+  slot or a retry. On the side, **Today** has the day's tokens against the daily budget and each provider
+  limit Symphony reports, accent below 75%, orange from 75% and red from 95%, and **Repos** says in one line
+  whether each repo is healthy.
+- The **scope** pop-up shows all repos or one of the repos Symphony has tickets in. It filters every count
+  and row of the Overview (the sidebar badge still counts every repo), and the app remembers it across
+  relaunches.
 
 - **Diagnostics** shows Symphony's own health in plain words: the connection (version, API URL, uptime, last
   update), capacity (agent slots, landing slots, forced allowance, initiative slots), Linear requests by
@@ -971,7 +990,10 @@ Four more variables, read only in QA mode:
   file is missing, and each control POST (Pause, Resume, Force, Stop Run) is appended as one JSON line to
   `api-requests.jsonl` under the QA root and answered 200. The menu, the Repos window and the Symphony window
   all read through it, so the app shows Symphony as running (external). The fixtures of a running Symphony
-  are in [`Tests/Fixtures/director-app/running`](Tests/Fixtures/director-app/running):
+  are in [`Tests/Fixtures/director-app/running`](Tests/Fixtures/director-app/running), and those of the
+  Overview's four states next to it: `flowing`, `attention` (a stuck forced ticket and a Codex usage-limit
+  hold), `paused` and `idle`. Ages in them count from the payload's `generated_at`, so they read the same
+  on any day; clock times show in the Mac's time zone:
 
   ```bash
   SYMPHONY_BAR_QA_ROOT="$(mktemp -d)" SYMPHONY_BAR_QA_API_FIXTURES="$PWD/Tests/Fixtures/director-app/running" \

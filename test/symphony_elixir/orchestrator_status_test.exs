@@ -4355,6 +4355,11 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert %DateTime{} = run_record.issue_completed_notified_at
     assert %DateTime{} = run_record.watch_closed_at
 
+    assert %{shipped_today: [shipped]} = wait_for_snapshot(pid, &match?(%{shipped_today: [_]}, &1))
+
+    assert %{issue_id: ^issue_id, identifier: ^issue_identifier, title: "Terminal on restart", completed_at: %DateTime{}} =
+             shipped
+
     GenServer.stop(pid)
     flush_notification_events()
 
@@ -4379,6 +4384,83 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     state = get_orchestrator_state(restarted_pid)
     refute Map.has_key?(state.completed_run_metadata, issue_id)
+
+    # The ticket shipped today still counts after the restart, from its run's marker.
+    assert %{shipped_today: [%{issue_id: ^issue_id, identifier: ^issue_identifier, repo_key: repo_key}]} =
+             GenServer.call(restarted_pid, :snapshot)
+
+    assert repo_key == Config.repo_key!()
+  end
+
+  test "shipped today drops tickets shipped on an earlier UTC day" do
+    issue_id = "issue-shipped-rollover"
+    issue_identifier = "MT-DONE-ROLL"
+    run_id = "run-shipped-rollover"
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      tracker_active_states: ["Todo", "In Progress"],
+      tracker_terminal_states: ["Done", "Canceled"]
+    )
+
+    :ok = RunStore.clear()
+    ended_at = DateTime.add(DateTime.utc_now(), -60, :second)
+
+    assert :ok =
+             RunStore.put_run(%{
+               repo_key: Config.repo_key!(),
+               run_id: run_id,
+               issue_id: issue_id,
+               issue_identifier: issue_identifier,
+               title: "Shipped after midnight",
+               state: "In Review",
+               status: "success",
+               attempt: 1,
+               started_at: DateTime.add(ended_at, -120, :second),
+               ended_at: ended_at,
+               error: nil,
+               pull_request_url: "https://github.com/example/repo/pull/791",
+               runtime_seconds: 120
+             })
+
+    in_review_issue = %Issue{id: issue_id, identifier: issue_identifier, title: "Shipped after midnight", state: "In Review"}
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [in_review_issue])
+    assert :ok = SymphonyElixir.Notifications.subscribe()
+
+    {:ok, pid} = Orchestrator.start_link(name: Module.concat(__MODULE__, :ShippedRolloverOrchestrator))
+
+    on_exit(fn ->
+      if Process.alive?(pid), do: stop_process(pid)
+    end)
+
+    wait_for_poll_cycle_idle(pid)
+
+    now = DateTime.utc_now()
+    yesterday = DateTime.add(now, -1, :day)
+
+    shipped_entry = fn id, completed_at ->
+      %{issue_id: id, identifier: id, title: id, repo_key: nil, completed_at: completed_at}
+    end
+
+    :sys.replace_state(pid, fn state ->
+      %{state | shipped: %{"yesterday" => shipped_entry.("yesterday", yesterday), "today" => shipped_entry.("today", now)}}
+    end)
+
+    assert %{shipped_today: [%{issue_id: "today"}]} = GenServer.call(pid, :snapshot)
+    assert Map.has_key?(get_orchestrator_state(pid).shipped, "yesterday")
+
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{in_review_issue | state: "Done"}])
+    send(pid, :run_poll_cycle)
+
+    assert_receive {:notification_event,
+                    %SymphonyElixir.Notifications.Event{
+                      event: "issue_completed",
+                      issue_identifier: ^issue_identifier
+                    }},
+                   500
+
+    # Recording the next shipped ticket prunes the entry from the earlier day.
+    assert get_orchestrator_state(pid).shipped |> Map.keys() |> Enum.sort() == [issue_id, "today"]
   end
 
   test "orchestrator startup marks interrupted dispatched runs as failures" do

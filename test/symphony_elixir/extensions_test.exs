@@ -583,7 +583,16 @@ defmodule SymphonyElixir.ExtensionsTest do
              "build" => %{"version" => "0.0.1.168", "sha" => "d3d301b0123456789abcdef0123456789abcdef0"},
              "uptime_seconds" => state_payload["uptime_seconds"],
              "repos" => ["default"],
-             "counts" => %{"running" => 1, "watching" => 1, "human_review" => 0, "conflicts" => 0, "retrying" => 1, "claimed" => 2, "forced" => 2},
+             "counts" => %{
+               "running" => 1,
+               "watching" => 1,
+               "human_review" => 0,
+               "conflicts" => 0,
+               "retrying" => 1,
+               "claimed" => 2,
+               "forced" => 2,
+               "shipped_today" => 1
+             },
              "running" => [
                %{
                  "issue_id" => "issue-http",
@@ -767,12 +776,22 @@ defmodule SymphonyElixir.ExtensionsTest do
                %{
                  "issue_id" => "wait-http",
                  "issue_identifier" => "MT-WAIT",
+                 "repo_key" => "default",
                  "title" => "Waiting",
                  "state" => "Todo",
                  "reason" => "a Merging or Auto Review issue is waiting for a slot",
                  "attempt" => nil,
                  "since" => "2026-10-03T06:00:00Z",
                  "forced" => false
+               }
+             ],
+             "shipped_today" => [
+               %{
+                 "issue_id" => "shipped-http",
+                 "issue_identifier" => "MT-SHIPPED",
+                 "title" => "Shipped",
+                 "repo_key" => "default",
+                 "completed_at" => "2026-10-03T07:00:00Z"
                }
              ],
              "blocked" => [
@@ -1070,7 +1089,8 @@ defmodule SymphonyElixir.ExtensionsTest do
     refute_received :request_refresh_called
 
     state_payload = json_response(get(build_conn(), "/api/v1/state"), 200)
-    assert state_payload["counts"] == %{"running" => 1, "watching" => 1, "human_review" => 0, "conflicts" => 0, "retrying" => 1, "claimed" => 2, "forced" => 2}
+    assert state_payload["counts"]["shipped_today"] == 1
+    assert state_payload["counts"]["forced"] == 2
   end
 
   test "phoenix observability api allows configured origins to refresh" do
@@ -3651,7 +3671,17 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     response = Req.get!("http://127.0.0.1:#{port}/api/v1/state")
     assert response.status == 200
-    assert response.body["counts"] == %{"running" => 1, "watching" => 1, "human_review" => 0, "conflicts" => 0, "retrying" => 1, "claimed" => 2, "forced" => 2}
+
+    assert response.body["counts"] == %{
+             "running" => 1,
+             "watching" => 1,
+             "human_review" => 0,
+             "conflicts" => 0,
+             "retrying" => 1,
+             "claimed" => 2,
+             "forced" => 2,
+             "shipped_today" => 1
+           }
 
     dashboard_css = Req.get!("http://127.0.0.1:#{port}/dashboard.css")
     assert dashboard_css.status == 200
@@ -3904,7 +3934,17 @@ defmodule SymphonyElixir.ExtensionsTest do
           state: "Todo",
           reason: "a Merging or Auto Review issue is waiting for a slot",
           attempt: nil,
-          since: ~U[2026-10-03 06:00:00Z]
+          since: ~U[2026-10-03 06:00:00Z],
+          repo_key: "default"
+        }
+      ],
+      shipped_today: [
+        %{
+          issue_id: "shipped-http",
+          identifier: "MT-SHIPPED",
+          title: "Shipped",
+          repo_key: "default",
+          completed_at: ~U[2026-10-03 07:00:00Z]
         }
       ],
       blocked: [

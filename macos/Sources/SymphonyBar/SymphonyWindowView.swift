@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import SymphonyBarCore
 
@@ -19,6 +20,19 @@ final class SymphonyWindowModel: ObservableObject {
     /// Whether Symphony answers, or which placeholder every view shows instead (D0).
     @Published var state: WindowState = .stopped
     @Published var paused = false
+    /// The Overview's reading of the last state payload.
+    @Published private(set) var overviewState: OverviewState?
+    /// The last answer to `/api/v1/repos`, for the Overview's repos line.
+    @Published private(set) var repos: ReposPoll?
+    /// All repos or one: filters every view, and is remembered across relaunches (P6).
+    @Published var scope: OverviewScope = .all {
+        didSet {
+            guard scope != oldValue else { return }
+            onScopeChange(scope)
+        }
+    }
+    /// The control request a view sent and Symphony hasn't answered yet.
+    @Published private(set) var controlInFlight: ControlAction?
     /// The app's version, for the sidebar footer while Symphony doesn't say its own.
     var appVersion = ""
     /// Where the client reads Symphony from, for Diagnostics.
@@ -30,10 +44,69 @@ final class SymphonyWindowModel: ObservableObject {
     var onAction: (WindowState.Action) -> Void = { _ in }
     var onOpenRepos: () -> Void = {}
     var onOpenWebDashboard: () -> Void = {}
+    var onScopeChange: (OverviewScope) -> Void = { _ in }
+    /// Sends a control request to Symphony, or to the API fixtures in QA mode, and says how it went.
+    var onControl: (ControlAction) async -> ControlResult = { _ in .done }
+    var onOpenURL: (URL) -> Void = { _ in }
+
+    /// The repos are read again at most this often: Symphony reads each checkout's remote to answer.
+    static let reposInterval: TimeInterval = 30
+    private var reposReadAt: Date?
+    private var readingRepos = false
+    private var cancellables = Set<AnyCancellable>()
 
     init(client: LiveAPIClient, selection: SymphonyView) {
         self.client = client
         self.selection = selection
+        client.$stateJSON
+            .sink { [weak self] data in
+                guard let self else { return }
+                overviewState = data.flatMap(OverviewState.decode)
+                readReposIfDue()
+            }
+            .store(in: &cancellables)
+    }
+
+    /// The Overview item's badge: what needs attention in every repo, whatever the scope; 0 hides it, as do
+    /// unknown counts.
+    var attentionBadge: Int {
+        guard state.countsKnown, let overviewState else { return 0 }
+        return Overview.badgeCount(overviewState, now: Date())
+    }
+
+    /// Sends `action`, then reads Symphony's state again so the view follows.
+    func send(_ action: ControlAction) {
+        guard controlInFlight == nil else { return }
+        controlInFlight = action
+        Task {
+            let result = await onControl(action)
+            controlInFlight = nil
+            if case let .failed(message) = result { SymphonyRunner.showAlert(title: message, body: "") }
+            client.refresh()
+        }
+    }
+
+    /// Acts on a Needs attention row's button.
+    func perform(_ fix: Overview.Fix) {
+        switch fix {
+        case let .open(url), let .openInLinear(url):
+            onOpenURL(url)
+        case .openDiagnostics:
+            show(.diagnostics)
+        case let .stopForcing(identifier):
+            send(.stopForcing(identifier))
+        }
+    }
+
+    private func readReposIfDue() {
+        guard !readingRepos, reposReadAt.map({ Date().timeIntervalSince($0) >= Self.reposInterval }) ?? true else { return }
+        readingRepos = true
+        Task {
+            let result = await client.get(ReposAPI.path)
+            repos = ReposAPI.poll(result)
+            reposReadAt = Date()
+            readingRepos = false
+        }
     }
 
     /// Shows `view`: Repos opens its window and the selection stays where it was.
@@ -96,6 +169,9 @@ struct SymphonyWindowView: View {
                     ToolbarItem(placement: .status) {
                         ConnectionState(state: model.state, lastUpdate: client.lastUpdate)
                     }
+                    ToolbarItem(placement: .automatic) {
+                        ScopePicker(model: model)
+                    }
                     ToolbarItem(placement: .primaryAction) {
                         Button {
                             client.refresh()
@@ -106,6 +182,24 @@ struct SymphonyWindowView: View {
                     }
                 }
         }
+    }
+}
+
+/// C3: the scope pop-up, all repos or one of the repos Symphony has tickets in.
+struct ScopePicker: View {
+    @ObservedObject var model: SymphonyWindowModel
+
+    var body: some View {
+        Picker(selection: $model.scope) {
+            ForEach(OverviewScope.choices(repos: model.overviewState?.repos ?? [], current: model.scope), id: \.self) { scope in
+                Text(scope.title).tag(scope)
+            }
+        } label: {
+            Label("Scope", systemImage: SymphonyView.repos.symbol)
+        }
+        .pickerStyle(.menu)
+        .help("Show all repos or one")
+        .accessibilityLabel(model.scope.accessibilityLabel)
     }
 }
 
@@ -121,6 +215,8 @@ struct SymphonySidebar: View {
                 Section {
                     ForEach(group.views, id: \.self) { view in
                         Label(view.title, systemImage: view.symbol)
+                            .badge(view == .overview ? model.attentionBadge : 0)
+                            .badgeProminence(.increased)
                             .help(shortcutHelp(view))
                             .tag(view)
                     }
@@ -186,11 +282,36 @@ struct SymphonyDetail: View {
             )
         } else {
             switch model.selection {
+            case .overview:
+                OverviewContent(model: model, client: client)
             case .diagnostics:
                 DiagnosticsContent(model: model, client: client)
             default:
                 EmptyState(title: EndpointPlaceholder.updateSymphony, symbol: EndpointPlaceholder.updateSymbol)
             }
+        }
+    }
+}
+
+/// D1: the Overview, from `/api/v1/state` and `/api/v1/repos`, under the window's scope.
+struct OverviewContent: View {
+    @ObservedObject var model: SymphonyWindowModel
+    @ObservedObject var client: LiveAPIClient
+
+    var body: some View {
+        if let state = model.overviewState {
+            OverviewView(
+                overview: Overview(state: state, scope: model.scope, repos: model.repos, now: Date()),
+                actions: OverviewActions(
+                    resume: { model.send(.resume) },
+                    perform: model.perform,
+                    controlInFlight: model.controlInFlight
+                )
+            )
+        } else if client.stateResult == .unsupported {
+            EmptyState(title: EndpointPlaceholder.updateSymphony, symbol: EndpointPlaceholder.updateSymbol)
+        } else {
+            EmptyState(title: "Reading Symphony's state…", symbol: SymphonyView.overview.symbol, showsSpinner: true)
         }
     }
 }

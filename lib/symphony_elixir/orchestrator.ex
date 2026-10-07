@@ -104,6 +104,7 @@ defmodule SymphonyElixir.Orchestrator do
       running: %{},
       completed: MapSet.new(),
       completed_run_metadata: %{},
+      shipped: %{},
       watching: %{},
       conflicts: %{},
       repo_poll_cache: %{},
@@ -181,7 +182,8 @@ defmodule SymphonyElixir.Orchestrator do
     budget_exhausted = hydrate_budget_exhausted()
     :ok = ensure_snapshot_table()
 
-    completed_run_metadata = hydrate_completed_run_metadata(retry_attempts)
+    recent_runs = hydrate_recent_runs()
+    completed_run_metadata = hydrate_completed_run_metadata(recent_runs, retry_attempts)
 
     state = %State{
       repo_key: repo_key,
@@ -196,6 +198,7 @@ defmodule SymphonyElixir.Orchestrator do
       claimed: claimed,
       retry_attempts: retry_attempts,
       completed_run_metadata: completed_run_metadata,
+      shipped: hydrate_shipped(recent_runs, Date.utc_today()),
       plan_comments_since: DateTime.utc_now(),
       codex_totals: codex_totals,
       rate_limits: nil,
@@ -3401,6 +3404,7 @@ defmodule SymphonyElixir.Orchestrator do
     entry =
       Map.merge(waiting, %{
         identifier: issue.identifier,
+        issue_repo_key: issue.repo_key,
         title: issue.title,
         state: issue.state,
         reason: reason,
@@ -5256,11 +5260,37 @@ defmodule SymphonyElixir.Orchestrator do
       state
     else
       Notifications.emit_issue_event(event, issue, lifecycle_notification_attrs(state, metadata))
-      mark_lifecycle_event_notified(state, issue_id, metadata, marker, issue.state, opts)
+
+      state
+      |> mark_lifecycle_event_notified(issue_id, metadata, marker, issue.state, opts)
+      |> maybe_record_shipped(event, issue, metadata)
     end
   end
 
   defp maybe_emit_lifecycle_event(state, _event, _issue, _source, _opts), do: state
+
+  # Today's shipped tickets for `/api/v1/state`; entries from an earlier UTC day are dropped.
+  defp maybe_record_shipped(%State{} = state, :issue_completed, %Issue{id: issue_id} = issue, metadata) do
+    now = DateTime.utc_now()
+    today = DateTime.to_date(now)
+
+    entry = %{
+      issue_id: issue_id,
+      identifier: issue.identifier,
+      title: issue.title,
+      repo_key: issue.repo_key || Map.get(metadata, :repo_key),
+      completed_at: now
+    }
+
+    shipped =
+      state.shipped
+      |> Map.filter(fn {_issue_id, shipped} -> DateTime.to_date(shipped.completed_at) == today end)
+      |> Map.put(issue_id, entry)
+
+    %{state | shipped: shipped}
+  end
+
+  defp maybe_record_shipped(state, _event, _issue, _metadata), do: state
 
   defp lifecycle_notification_marker(:awaiting_review), do: :awaiting_review_notified_at
   defp lifecycle_notification_marker(:issue_completed), do: :issue_completed_notified_at
@@ -6093,49 +6123,74 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp hydrate_retry_attempt(_retry, retry_attempts, claimed, _now, _now_ms), do: {retry_attempts, claimed}
 
-  defp hydrate_completed_run_metadata(retry_attempts) when is_map(retry_attempts) do
+  # The newest runs, read once at start for the completed run metadata and today's shipped tickets.
+  defp hydrate_recent_runs do
     case RunStore.list_all_runs(500) do
       runs when is_list(runs) ->
         runs
-        |> Enum.filter(&(Map.get(&1, :status) in @watchable_run_statuses))
-        |> Enum.reject(&(watch_closed_run?(&1) or Map.has_key?(retry_attempts, Map.get(&1, :issue_id))))
-        |> Enum.filter(&(Map.get(&1, :issue_id) |> watchable_linear_issue_id?()))
-        |> Enum.group_by(&Map.get(&1, :issue_id))
-        |> Enum.reduce(%{}, fn {issue_id, issue_runs}, acc ->
-          most_recent = List.first(issue_runs)
-
-          metadata = %{
-            repo_key: Map.get(most_recent, :repo_key) || Config.repo_key_or_nil(),
-            run_id: Map.get(most_recent, :run_id),
-            identifier: Map.get(most_recent, :issue_identifier),
-            title: Map.get(most_recent, :title),
-            state: Map.get(most_recent, :last_observed_state) || Map.get(most_recent, :state),
-            url: nil,
-            pull_request_url: URLUtils.pull_request_url(most_recent),
-            last_ran_at: Map.get(most_recent, :ended_at) || Map.get(most_recent, :started_at),
-            awaiting_review_notified_at: Map.get(most_recent, :awaiting_review_notified_at),
-            issue_completed_notified_at: Map.get(most_recent, :issue_completed_notified_at),
-            watch_closed_at: Map.get(most_recent, :watch_closed_at),
-            session_id: Map.get(most_recent, :session_id),
-            started_at: Map.get(most_recent, :started_at),
-            last_event_at: Map.get(most_recent, :last_event_at) || Map.get(most_recent, :ended_at),
-            turn_count: Map.get(most_recent, :turn_count, 0),
-            tokens: Map.get(most_recent, :tokens, %{}),
-            transcript_path: Map.get(most_recent, :transcript_path),
-            transcript_buffer: transcript_buffer_list(most_recent),
-            transcript_buffer_size: transcript_buffer_size(most_recent)
-          }
-
-          Map.put(acc, issue_id, metadata)
-        end)
 
       {:error, reason} ->
         Logger.warning("Failed to hydrate completed run metadata from run store: #{inspect(reason)}")
-        %{}
+        []
     end
   end
 
-  defp hydrate_completed_run_metadata(_retry_attempts), do: %{}
+  defp hydrate_completed_run_metadata(runs, retry_attempts) when is_map(retry_attempts) do
+    runs
+    |> Enum.filter(&(Map.get(&1, :status) in @watchable_run_statuses))
+    |> Enum.reject(&(watch_closed_run?(&1) or Map.has_key?(retry_attempts, Map.get(&1, :issue_id))))
+    |> Enum.filter(&(Map.get(&1, :issue_id) |> watchable_linear_issue_id?()))
+    |> Enum.group_by(&Map.get(&1, :issue_id))
+    |> Enum.reduce(%{}, fn {issue_id, issue_runs}, acc ->
+      most_recent = List.first(issue_runs)
+
+      metadata = %{
+        repo_key: Map.get(most_recent, :repo_key) || Config.repo_key_or_nil(),
+        run_id: Map.get(most_recent, :run_id),
+        identifier: Map.get(most_recent, :issue_identifier),
+        title: Map.get(most_recent, :title),
+        state: Map.get(most_recent, :last_observed_state) || Map.get(most_recent, :state),
+        url: nil,
+        pull_request_url: URLUtils.pull_request_url(most_recent),
+        last_ran_at: Map.get(most_recent, :ended_at) || Map.get(most_recent, :started_at),
+        awaiting_review_notified_at: Map.get(most_recent, :awaiting_review_notified_at),
+        issue_completed_notified_at: Map.get(most_recent, :issue_completed_notified_at),
+        watch_closed_at: Map.get(most_recent, :watch_closed_at),
+        session_id: Map.get(most_recent, :session_id),
+        started_at: Map.get(most_recent, :started_at),
+        last_event_at: Map.get(most_recent, :last_event_at) || Map.get(most_recent, :ended_at),
+        turn_count: Map.get(most_recent, :turn_count, 0),
+        tokens: Map.get(most_recent, :tokens, %{}),
+        transcript_path: Map.get(most_recent, :transcript_path),
+        transcript_buffer: transcript_buffer_list(most_recent),
+        transcript_buffer_size: transcript_buffer_size(most_recent)
+      }
+
+      Map.put(acc, issue_id, metadata)
+    end)
+  end
+
+  defp hydrate_completed_run_metadata(_runs, _retry_attempts), do: %{}
+
+  # Tickets Symphony saw reach Done on `today` (UTC) before it restarted: their runs carry the
+  # time it noted the `issue_completed` event.
+  defp hydrate_shipped(runs, %Date{} = today) do
+    for run <- runs,
+        %DateTime{} = completed_at <- [Map.get(run, :issue_completed_notified_at)],
+        DateTime.to_date(completed_at) == today,
+        issue_id = Map.get(run, :issue_id),
+        is_binary(issue_id),
+        reduce: %{} do
+      acc ->
+        Map.put_new(acc, issue_id, %{
+          issue_id: issue_id,
+          identifier: Map.get(run, :issue_identifier),
+          title: Map.get(run, :title),
+          repo_key: Map.get(run, :repo_key),
+          completed_at: completed_at
+        })
+    end
+  end
 
   defp seed_watching_from_completed_run_metadata(%State{} = state) do
     active_states = active_state_set()
@@ -7357,6 +7412,7 @@ defmodule SymphonyElixir.Orchestrator do
       qa: qa,
       auto_merge: auto_merge,
       slot_waiting: slot_waiting_snapshot(state.slot_waiting, state) ++ merging_ci_waiting_snapshot(state),
+      shipped_today: shipped_today_snapshot(state.shipped, DateTime.to_date(now)),
       claimed: state.claimed |> MapSet.to_list() |> Enum.sort(),
       pollers: poller_status_snapshot(),
       polling: %{
@@ -7393,12 +7449,23 @@ defmodule SymphonyElixir.Orchestrator do
     }
   end
 
+  defp shipped_today_snapshot(shipped, %Date{} = today) do
+    shipped
+    |> Map.values()
+    |> Enum.filter(&(DateTime.to_date(&1.completed_at) == today))
+    |> Enum.sort_by(& &1.completed_at, {:desc, DateTime})
+  end
+
   defp slot_waiting_snapshot(slot_waiting, %State{} = state) do
     slot_waiting
     |> Enum.map(fn {issue_id, entry} ->
       entry
       |> Map.take([:identifier, :title, :state, :reason, :attempt, :since])
-      |> Map.merge(%{issue_id: issue_id, forced: forced_queued?(issue_id, state)})
+      |> Map.merge(%{
+        issue_id: issue_id,
+        repo_key: Map.get(entry, :repo_key) || Map.get(entry, :issue_repo_key),
+        forced: forced_queued?(issue_id, state)
+      })
     end)
     |> Enum.sort_by(& &1.since, DateTime)
   end
@@ -7409,6 +7476,7 @@ defmodule SymphonyElixir.Orchestrator do
     |> Enum.map(fn {issue_id, wait} ->
       %{
         issue_id: issue_id,
+        repo_key: wait.repo_key || state.repo_key,
         identifier: wait.identifier,
         title: wait.title,
         state: "Merging",

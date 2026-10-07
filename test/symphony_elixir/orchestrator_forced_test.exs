@@ -36,7 +36,7 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
     test "with max_total full a forced Todo starts on it, ahead of the queue, and the running agents are untouched", ctx do
       write_forced_workflow!(ctx, max_concurrent_agents: 2)
       forced = issue("forced-1", "MT-F1", "Todo", forced: true, priority: 4)
-      todo = issue("todo-1", "MT-TODO", "Todo", priority: 1)
+      todo = issue("todo-1", "MT-TODO", "Todo", priority: 1, repo_key: "web")
       tracked([forced, todo])
 
       state =
@@ -57,7 +57,8 @@ defmodule SymphonyElixir.OrchestratorForcedTest do
       snapshot = snapshot_of(state)
       assert %{forced: true} = Enum.find(snapshot.running, &(&1.issue_id == "forced-1"))
       assert %{forced: false} = Enum.find(snapshot.running, &(&1.issue_id == "impl-1"))
-      assert [%{issue_id: "todo-1", forced: false}] = snapshot.slot_waiting
+      # The row keeps the ticket's repo, so the Mac app's scope filters it.
+      assert [%{issue_id: "todo-1", forced: false, repo_key: "web"}] = snapshot.slot_waiting
       assert %{epic_lanes: %{shared: %{used: 2}}, finishing: %{used: 0}} = snapshot
     end
 
