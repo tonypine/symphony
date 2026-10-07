@@ -11,6 +11,7 @@ on:
       - "macos/**"
       - "priv/qa_driver/**"
       - "scripts/install-macos.sh"
+      - "scripts/ci/xcode26-developer-dir.sh"
       - ".github/workflows/macos.yml"
 
 permissions:
@@ -48,7 +49,7 @@ jobs:
           # HEAD is the PR merged into its base, so HEAD^1 is the base.
           changed="$(git diff --name-only HEAD^1 HEAD)"
           echo "$changed"
-          if echo "$changed" | grep -qE '^(macos/|priv/qa_driver/|scripts/install-macos\.sh$|\.github/workflows/macos\.yml$)'; then
+          if echo "$changed" | grep -qE '^(macos/|priv/qa_driver/|scripts/install-macos\.sh$|scripts/ci/xcode26-developer-dir\.sh$|\.github/workflows/macos\.yml$)'; then
             echo "macos=true" >> "$GITHUB_OUTPUT"
           else
             echo "macos=false" >> "$GITHUB_OUTPUT"
@@ -56,7 +57,8 @@ jobs:
 
   build:
     name: macos build
-    runs-on: macos-latest
+    # The app targets macOS 26 (DD3): its tests run only on 26 or later, built with Xcode 26.
+    runs-on: macos-26
     timeout-minutes: 30
     needs: changes
     if: ${{ needs.changes.outputs.macos == 'true' }}
@@ -66,6 +68,9 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
+
+      - name: Select Xcode 26
+        run: echo "DEVELOPER_DIR=$(sh scripts/ci/xcode26-developer-dir.sh)" >> "$GITHUB_ENV"
 
       - name: Show toolchain
         run: |
@@ -107,7 +112,7 @@ jobs:
 
   install-script:
     name: install script
-    runs-on: macos-latest
+    runs-on: macos-26
     timeout-minutes: 15
     needs: changes
     if: ${{ needs.changes.outputs.macos == 'true' }}

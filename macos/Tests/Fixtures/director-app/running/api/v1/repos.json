@@ -1,0 +1,43 @@
+{
+  "generated_at": "2026-10-04T14:10:00Z",
+  "repos": [
+    {
+      "key": "symphony",
+      "default": true,
+      "base_branch": "main",
+      "source": {"kind": "local", "path": "/Projects/symphony"},
+      "github": "tonypine/symphony",
+      "routing": {"team": null, "projects": ["building-the-harness"], "labels": [], "assignee": null},
+      "workflow": {"path": "/Projects/symphony/WORKFLOW.md", "found": true, "status": "valid", "error": null},
+      "last_fetch": {"at": "2026-10-04T14:05:00Z", "result": "ok", "error": null},
+      "worktrees": [
+        {"issue_id": "abc123", "issue_identifier": "TP-260", "path": "/Projects/symphony-workspaces/symphony/TP-260", "worker_host": null}
+      ]
+    },
+    {
+      "key": "api",
+      "default": false,
+      "base_branch": null,
+      "source": {"kind": "managed", "github": "acme/api", "clone_path": "/Clones/repos/acme/api", "cloned": false},
+      "github": "acme/api",
+      "routing": {"team": "ENG", "projects": ["api", "billing"], "labels": ["backend"], "assignee": "me"},
+      "workflow": {"path": "/Clones/repos/acme/api/WORKFLOW.md", "found": true, "status": "invalid", "error": "Failed to parse WORKFLOW.md: malformed yaml"},
+      "last_fetch": {"at": "2026-10-04T12:00:00Z", "result": "error", "error": "git fetch exited with status 128: fatal: Could not read from remote repository."},
+      "worktrees": []
+    },
+    {
+      "key": "docs",
+      "default": false,
+      "base_branch": null,
+      "source": {"kind": "local", "path": "/Projects/docs"},
+      "github": null,
+      "routing": {"team": null, "projects": [], "labels": ["docs"], "assignee": null},
+      "workflow": {"path": "/Projects/docs/WORKFLOW.md", "found": false, "status": "missing", "error": "missing_workflow_file"},
+      "last_fetch": null,
+      "worktrees": [
+        {"issue_id": "def456", "issue_identifier": "TP-7", "path": "/srv/workspaces/docs/TP-7", "worker_host": "worker-1"},
+        {"issue_id": "ghi789", "issue_identifier": null, "path": null, "worker_host": null}
+      ]
+    }
+  ]
+}
