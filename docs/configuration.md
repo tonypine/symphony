@@ -2219,7 +2219,14 @@ lists:
 - with the deprecated `human_actions.label`, an issue with the label and no such comment, as a task
   in itself (its description's list items become the steps);
 - a plan ticket in `In Review` or `Human Review`, waiting for its plan to be approved;
-- an issue in `In Review` or `Human Review` whose `## Symphony QA Report` has the verdict `blocked`;
+- an issue in `In Review` or `Human Review` whose `## Symphony QA Report` has the verdict `blocked`
+  for a cause only the operator can clear, read from the report's `Reason:` line: QA tools the
+  running app lacks ("Update the Symphony app"), a tool missing on the Symphony host ("Install `X`
+  on the Symphony host", with the command to run) or the QA host's Screen Recording and
+  Accessibility permissions ("Grant the QA host's permissions"). The issues blocked on the same
+  cause share one action, naming each of them and its reason, and it asks for that one step, never
+  for a test of the PR by hand. A block for any other cause, a QA tool the PR itself adds among
+  them, is left to the supervisor and not listed, not even as "Review <issue>";
 - a `Final verification:` ticket whose Auto Review parent walkthrough had the verdict `blocked`,
   such as a QA host without the macOS app's Screen Recording and Accessibility permissions. It is
   listed in the update of the parent's project, as "Grant the QA host's permissions for the final
@@ -2273,8 +2280,8 @@ leaves a state a person moves it out of (anything but `issues.states.active`, th
 the Auto Review state), such as `Human Review` to `Merging`, `Rework` or `Done`. The request's own
 move to `Human Review` keeps it open, and so does the agent's move to `Backlog`. A withdrawal
 closes it, and so does a terminal state. A plan
-review closes when the parent leaves its review state, and a blocked QA pass when the issue leaves
-its review state or its next QA report is not `blocked`. A blocked final verification closes when
+review closes when the parent leaves its review state, and a blocked QA cause when every issue
+blocked on it leaves its review state or its next QA report is not `blocked`. A blocked final verification closes when
 its next walkthrough is not `blocked`, or when the ticket leaves the state the walkthrough moved it
 to (`In Review`, `Human Review` when only a person can do the steps left, or `Todo` while gap
 tickets for its failing steps block it). A Human Review action closes when the issue leaves
@@ -2307,12 +2314,22 @@ health set by the project's previous update. No secret value reaches an update:
 is redacted again before it is posted, which covers secrets pasted into an issue or comment by hand.
 
 A rendered example, for a mix of a decision on a missing secret, a plan, a task labelled with the deprecated
-`human_actions.label` and a blocked QA pass:
+`human_actions.label` and two QA passes blocked on QA tools the running app lacks:
 
 ```md
 **4 actions need you.** Quickest first.
 
-### 1. Add the release signing secrets
+### 1. Update the Symphony app
+
+**~5 min** · Unblocks the QA of [MOT-52](https://linear.app/acme/issue/MOT-52) and [MOT-53](https://linear.app/acme/issue/MOT-53)
+
+**Why:** MOT-52: QA needs `api_fixtures`, which the running app (0.0.1.384) lacks. MOT-53: QA needs `qa_put_file`, which the running app (0.0.1.384) lacks.
+
+1. Update the Symphony app to its latest release.
+
+**Done when:** MOT-52 and MOT-53 each leave their review state, or their next QA reports are not blocked.
+
+### 2. Add the release signing secrets
 
 **~10 min** · Unblocks [MOT-24](https://linear.app/acme/issue/MOT-24): the Release workflow on `main`
 
@@ -2325,7 +2342,7 @@ A rendered example, for a mix of a decision on a missing secret, a plan, a task 
 
 **Done when:** you reply with your pick and move MOT-24 out of Human Review, or the agent withdraws the request.
 
-### 2. Approve the plan for MOT-40
+### 3. Approve the plan for MOT-40
 
 **~10 min** · Unblocks [MOT-40](https://linear.app/acme/issue/MOT-40): its sub-tickets, waiting in Backlog
 
@@ -2337,7 +2354,7 @@ A rendered example, for a mix of a decision on a missing secret, a plan, a task 
 
 **Done when:** MOT-40 leaves In Review.
 
-### 3. Turn on the pre-push hook on your laptop
+### 4. Turn on the pre-push hook on your laptop
 
 Tracked in [MOT-31](https://linear.app/acme/issue/MOT-31)
 
@@ -2345,19 +2362,8 @@ Tracked in [MOT-31](https://linear.app/acme/issue/MOT-31)
 
 **Done when:** you close MOT-31, or move it on.
 
-### 4. Unblock QA for MOT-52
-
-Unblocks [MOT-52](https://linear.app/acme/issue/MOT-52): the review of its PR
-
-**Why:** Auto Review could not test the PR: the QA host has no Screen Recording permission for the app.
-
-1. Fix the cause above, on the machine QA runs on.
-2. Then test the PR yourself and move MOT-52 to `Merging` to approve it, or to `Rework` to send it back.
-
-**Done when:** MOT-52 leaves In Review, or its next QA report is not blocked.
-
 ---
-_Symphony posts a new update when this list changes · list `6b00e3cd`_
+_Symphony posts a new update when this list changes · list `ee2f8fda`_
 ```
 
 ## `WORKFLOW.md`
