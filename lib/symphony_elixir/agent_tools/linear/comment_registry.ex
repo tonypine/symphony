@@ -2,9 +2,10 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
   @moduledoc false
 
   # Per-run state for the scoped Linear tools: the comment ids this run created (so it may only
-  # edit its own comments) and how many sub-issues it has created (so it stays under the cap), with
-  # their ids by identifier (so a later sub-issue may be blocked by an earlier one), the documents it
-  # created (so it may edit them before Linear lists their attachments, and stays under the cap), and
+  # edit its own comments), the sub-issues it created by identifier (so a later sub-issue may be
+  # blocked by an earlier one) and by parent and title (so a looping run can't file one twice), the
+  # documents it created (so it may edit them before Linear lists their attachments, and stays
+  # under the cap), and
   # whether it asked a person for something (so its issue waits for that person in the Human Review
   # state), the comments of its that hold a `## Supervisor check` (so a ticket with no PR may still
   # go to `In Review` with Auto Review on), and whether it opened a PR (so that move is refused
@@ -23,8 +24,8 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
 
     state = %{
       comments: comments,
-      subissues: 0,
       created_subissues: %{},
+      subissue_titles: %{},
       project_updates: 0,
       documents: 0,
       created_documents: MapSet.new(),
@@ -64,23 +65,32 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
   def remove(_pid, _comment_id), do: :ok
 
   @doc """
-  Atomically claims one of the run's `cap` sub-issue slots. Without a registry the run has no
-  counter to enforce the cap with, so creation is refused.
+  Refuses a sub-issue whose title matches, ignoring case and spacing, one this run already filed
+  under `parent_id`, naming the earlier one. Without a registry the run has nothing to check
+  against, so creation is refused.
   """
-  @spec reserve_subissue(pid() | nil, pos_integer()) :: :ok | {:error, term()}
-  def reserve_subissue(pid, cap) when is_pid(pid) and is_integer(cap),
-    do: reserve(pid, :subissues, cap, :subissue_cap_reached)
+  @spec check_subissue_title(pid() | nil, String.t(), String.t()) :: :ok | {:error, term()}
+  def check_subissue_title(pid, parent_id, title) when is_pid(pid) and is_binary(parent_id) and is_binary(title) do
+    case Agent.get(pid, &Map.get(&1.subissue_titles, {parent_id, title_key(title)})) do
+      nil -> :ok
+      identifier -> {:error, {:duplicate_subissue, identifier}}
+    end
+  end
 
-  def reserve_subissue(_pid, _cap), do: {:error, :subissue_registry_unavailable}
+  def check_subissue_title(_pid, _parent_id, _title), do: {:error, :subissue_registry_unavailable}
 
-  @doc "Gives back a slot claimed by `reserve_subissue/2` when the create did not go through."
-  @spec release_subissue(pid()) :: :ok
-  def release_subissue(pid) when is_pid(pid), do: release(pid, :subissues)
-
-  @doc "Records a sub-issue this run created, by identifier."
-  @spec record_subissue(pid(), String.t(), String.t()) :: :ok
-  def record_subissue(pid, identifier, issue_id) when is_pid(pid) and is_binary(identifier) and is_binary(issue_id) do
-    Agent.update(pid, fn state -> %{state | created_subissues: Map.put(state.created_subissues, identifier, issue_id)} end)
+  @doc "Records a sub-issue this run created under `parent_id`, by identifier and by title."
+  @spec record_subissue(pid(), String.t(), String.t(), String.t(), String.t()) :: :ok
+  def record_subissue(pid, parent_id, title, identifier, issue_id)
+      when is_pid(pid) and is_binary(parent_id) and is_binary(title) and is_binary(identifier) and
+             is_binary(issue_id) do
+    Agent.update(pid, fn state ->
+      %{
+        state
+        | created_subissues: Map.put(state.created_subissues, identifier, issue_id),
+          subissue_titles: Map.put(state.subissue_titles, {parent_id, title_key(title)}, identifier)
+      }
+    end)
   end
 
   @doc "The sub-issues this run created, as a map of identifier to issue id."
@@ -89,7 +99,7 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
 
   @doc """
   Atomically claims one of the run's `cap` project-update slots, refusing without a registry like
-  `reserve_subissue/2`.
+  `check_subissue_title/3`.
   """
   @spec reserve_project_update(pid() | nil, pos_integer()) :: :ok | {:error, term()}
   def reserve_project_update(pid, cap) when is_pid(pid) and is_integer(cap),
@@ -103,7 +113,7 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
 
   @doc """
   Atomically claims one of the run's `cap` document slots, refusing without a registry like
-  `reserve_subissue/2`.
+  `check_subissue_title/3`.
   """
   @spec reserve_document(pid() | nil, pos_integer()) :: :ok | {:error, term()}
   def reserve_document(pid, cap) when is_pid(pid) and is_integer(cap),
@@ -128,7 +138,7 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
 
   @doc """
   Atomically claims one of the run's `cap` human-action request slots, refusing without a registry
-  like `reserve_subissue/2`.
+  like `check_subissue_title/3`.
   """
   @spec reserve_human_action(pid() | nil, pos_integer()) :: :ok | {:error, term()}
   def reserve_human_action(pid, cap) when is_pid(pid) and is_integer(cap),
@@ -192,6 +202,8 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
         else: {{:error, {cap_error, cap}}, state}
     end)
   end
+
+  defp title_key(title), do: title |> String.split() |> Enum.join(" ") |> String.downcase()
 
   defp release(pid, counter) do
     Agent.update(pid, fn state -> Map.update!(state, counter, &(&1 - 1)) end)

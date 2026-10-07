@@ -27,21 +27,21 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistryTest do
     refute CommentRegistry.owned?(pid, "123")
   end
 
-  test "reserve_subissue/2 claims slots up to the cap and release_subissue/1 gives one back" do
+  test "check_subissue_title/3 refuses a title already filed under the same parent" do
     {:ok, pid} = CommentRegistry.start_link()
 
-    assert :ok = CommentRegistry.reserve_subissue(pid, 2)
-    assert :ok = CommentRegistry.reserve_subissue(pid, 2)
-    assert {:error, {:subissue_cap_reached, 2}} = CommentRegistry.reserve_subissue(pid, 2)
+    assert :ok = CommentRegistry.check_subissue_title(pid, "parent-1", "Slice")
+    assert :ok = CommentRegistry.record_subissue(pid, "parent-1", "Slice  one", "TP-1", "issue-1")
 
-    assert :ok = CommentRegistry.release_subissue(pid)
-    assert :ok = CommentRegistry.reserve_subissue(pid, 2)
+    assert {:error, {:duplicate_subissue, "TP-1"}} = CommentRegistry.check_subissue_title(pid, "parent-1", " slice ONE")
+    assert :ok = CommentRegistry.check_subissue_title(pid, "parent-2", "Slice one")
+    assert :ok = CommentRegistry.check_subissue_title(pid, "parent-1", "Slice two")
+    assert CommentRegistry.created_subissues(pid) == %{"TP-1" => "issue-1"}
   end
 
-  test "reserve_project_update/2 counts separately from sub-issues and release gives a slot back" do
+  test "reserve_project_update/2 claims slots up to the cap and release gives a slot back" do
     {:ok, pid} = CommentRegistry.start_link()
 
-    assert :ok = CommentRegistry.reserve_subissue(pid, 1)
     assert :ok = CommentRegistry.reserve_project_update(pid, 1)
     assert {:error, {:project_update_cap_reached, 1}} = CommentRegistry.reserve_project_update(pid, 1)
 
@@ -65,7 +65,7 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistryTest do
     assert CommentRegistry.document_ids(nil) == []
   end
 
-  test "reserve_subissue/2 refuses without a registry" do
-    assert {:error, :subissue_registry_unavailable} = CommentRegistry.reserve_subissue(nil, 10)
+  test "check_subissue_title/3 refuses without a registry" do
+    assert {:error, :subissue_registry_unavailable} = CommentRegistry.check_subissue_title(nil, "parent-1", "Slice")
   end
 end

@@ -1126,7 +1126,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
              }
     end
 
-    test "refuses to create without a Backlog state and gives the slot back" do
+    test "refuses to create without a Backlog state and lets the title be filed again" do
       {:ok, registry} = Linear.CommentRegistry.start_link()
       states = [%{"id" => "state-todo", "name" => "Todo", "type" => "unstarted"}, %{"id" => "state-nameless"}]
 
@@ -1137,10 +1137,10 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
                  linear_client: subissue_client(self(), subissue_scope(states))
                )
 
-      assert Agent.get(registry, & &1.subissues) == 0
+      assert Linear.CommentRegistry.created_subissues(registry) == %{}
     end
 
-    test "gives the slot back when Linear reports the create failed" do
+    test "lets the title be filed again when Linear reports the create failed" do
       {:ok, registry} = Linear.CommentRegistry.start_link()
 
       client = fn query, _variables, _opts ->
@@ -1156,22 +1156,37 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
                  linear_client: client
                )
 
-      assert Agent.get(registry, & &1.subissues) == 0
+      assert Linear.CommentRegistry.created_subissues(registry) == %{}
     end
 
-    test "stops at the per-run cap without calling Linear" do
+    test "files as many sub-issues as the plan needs" do
       {:ok, registry} = Linear.CommentRegistry.start_link()
+      {:ok, linear} = Agent.start_link(fn -> %{children: [], relations: []} end)
       context = %{issue_id: "issue-parent", comment_registry: registry}
-      attrs = %{"title" => "Slice", "description" => "body"}
 
-      client = subissue_client(self(), subissue_scope())
-
-      for _ <- 1..10 do
-        assert {:ok, _response} = Linear.create_subissue(context, attrs, linear_client: client)
+      for n <- 1..12 do
+        attrs = %{"title" => "Slice #{n}", "description" => "body"}
+        assert {:ok, _response} = Linear.create_subissue(context, attrs, linear_client: in_memory_linear(linear))
       end
 
-      assert {:error, {:subissue_cap_reached, 10}} =
-               Linear.create_subissue(context, attrs, linear_client: fn _query, _variables, _opts -> flunk("Linear should not be called past the cap") end)
+      assert linear |> Agent.get(& &1.children) |> length() == 12
+      assert registry |> Linear.CommentRegistry.created_subissues() |> map_size() == 12
+    end
+
+    test "refuses a title this run already filed under the same parent, naming the first one" do
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      context = %{issue_id: "issue-parent", comment_registry: registry}
+      client = subissue_client(self(), subissue_scope())
+
+      assert {:ok, _response} = Linear.create_subissue(context, %{"title" => "Slice", "description" => "body"}, linear_client: client)
+
+      assert {:error, {:duplicate_subissue, "TP-999"}} =
+               Linear.create_subissue(context, %{"title" => "  slice ", "description" => "again"},
+                 linear_client: fn _query, _variables, _opts -> flunk("Linear should not be called for a duplicate") end
+               )
+
+      assert {:ok, _response} =
+               Linear.create_subissue(%{context | issue_id: "issue-other"}, %{"title" => "Slice", "description" => "body"}, linear_client: client)
     end
 
     test "refuses to create without a per-run registry" do
@@ -1197,7 +1212,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
                    Linear.create_subissue(context, attrs, dir: audit_dir, linear_client: no_linear)
         end
 
-        assert Agent.get(registry, & &1.subissues) == 0
+        assert Linear.CommentRegistry.created_subissues(registry) == %{}
         assert [%{"event_type" => "refused_agent_action", "reason" => "secret_pattern_detected"} | _rest] = audit_events(audit_dir)
         refute inspect(audit_events(audit_dir)) =~ openai_fixture()
       after
@@ -1235,7 +1250,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
 
     test "accepts a sub-issue this run created before Linear lists it as a child" do
       {:ok, registry} = Linear.CommentRegistry.start_link()
-      Linear.CommentRegistry.record_subissue(registry, "TP-7", "issue-7")
+      Linear.CommentRegistry.record_subissue(registry, "issue-parent", "Earlier", "TP-7", "issue-7")
       test_pid = self()
 
       assert {:ok, _response} =
@@ -1261,10 +1276,10 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
                )
 
       assert Agent.get(linear, & &1) == %{children: [%{"id" => "issue-old", "identifier" => "TP-50"}], relations: []}
-      assert Agent.get(registry, & &1.subissues) == 0
+      assert Linear.CommentRegistry.created_subissues(registry) == %{}
     end
 
-    test "keeps the slot and names the created issue when a blocked-by link fails" do
+    test "records the title and names the created issue when a blocked-by link fails" do
       {:ok, registry} = Linear.CommentRegistry.start_link()
       scope = Map.put(subissue_scope(), "children", %{"nodes" => [%{"id" => "issue-old", "identifier" => "TP-50"}]})
 
@@ -1281,11 +1296,11 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
                  linear_client: client
                )
 
-      assert Agent.get(registry, & &1.subissues) == 1
+      assert {:error, {:duplicate_subissue, "TP-999"}} = Linear.CommentRegistry.check_subissue_title(registry, "issue-parent", "B")
       assert Linear.CommentRegistry.created_subissues(registry) == %{"TP-999" => "issue-new"}
     end
 
-    test "gives the slot back when Linear does not return the created issue" do
+    test "lets the title be filed again when Linear does not return the created issue" do
       {:ok, registry} = Linear.CommentRegistry.start_link()
 
       client = fn query, _variables, _opts ->
@@ -1298,7 +1313,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       attrs = %{"title" => "B", "description" => "body"}
       assert {:error, :subissue_not_returned} = Linear.create_subissue(context, attrs, linear_client: client)
 
-      assert Agent.get(registry, & &1.subissues) == 0
+      assert Linear.CommentRegistry.created_subissues(registry) == %{}
     end
 
     test "validates title, description and priority" do

@@ -8,8 +8,9 @@ Use `linear_create_subissue` to file new work. It always creates a child of the
 current issue in the same team and project, assigned to the same assignee, in
 `Backlog`; a human promotes it to `Todo`. It takes only `title`, `description`,
 an optional `priority` (0 none, 1 urgent, 2 high, 3 medium, 4 low) and an
-optional `blocked_by` list of sibling sub-issue identifiers, and a run may
-create at most 10.
+optional `blocked_by` list of sibling sub-issue identifiers. It refuses a title
+this run already filed under the current issue and names the earlier sub-issue;
+change that one with `linear_update_subissue` instead.
 
 When a ticket asks you to plan and split work into sub-tickets, create each
 sub-ticket with `linear_create_subissue` rather than only listing the plan.
@@ -22,6 +23,5 @@ not expand scope. File it with `linear_create_subissue` instead.
 Every new issue must include a clear title, a description, and acceptance
 criteria. A user-facing issue also needs a `## User walkthrough` section: numbered
 steps a user takes, each with the result they should see. Record the new issue
-identifiers in the current workpad's `Notes`. If the tool refuses (for example at
-the per-run cap), list the remaining issues in the workpad `Notes` for a human to
-file.
+identifiers in the current workpad's `Notes`. If the tool refuses, list the
+remaining issues in the workpad `Notes` for a human to file.
