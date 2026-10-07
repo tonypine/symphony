@@ -3,7 +3,7 @@ defmodule SymphonyElixir.OrchestratorPlanCommentsTest do
 
   import ExUnit.CaptureLog
 
-  alias SymphonyElixir.{PlanComments, RunKind, SubIssueWait}
+  alias SymphonyElixir.{DirectorMoves, PlanComments, RunKind, SubIssueWait}
 
   @waiting "Waiting on sub-tickets"
 
@@ -40,6 +40,29 @@ defmodule SymphonyElixir.OrchestratorPlanCommentsTest do
     assert Orchestrator.act_on_plan_comments_for_test(state, [parent]) == state
     refute_received {:memory_tracker_plan_comments, _issue_id}
     refute_received {:memory_tracker_state_update, _issue_id, _state}
+  end
+
+  test "the Director's decisions from the app, sent on a plan in Human Review, start the plan revision run" do
+    # DirectorMoves.move(:decisions, ...) moved the parent from Human Review to In Review at 12:10, then
+    # posted the picks; the run that left the plan for review knew its own comments.
+    parent = parent("In Review", [%{id: "child-1", identifier: "MOT-31", state: "Backlog"}], [~U[2026-10-04 12:10:01Z]])
+    body = DirectorMoves.decisions_comment([%{question: "Where are gift cards bought?", answer: "B. In the app only"}])
+
+    put_feedback(
+      "parent",
+      [change(~U[2026-10-04 12:00:00Z], "In Progress", "Human Review"), change(~U[2026-10-04 12:10:00Z], "Human Review", "In Review")],
+      [comment("brief", "## Review brief\n\nPlan", ~U[2026-10-04 11:59:00Z]), comment("picks", body, ~U[2026-10-04 12:10:01Z])]
+    )
+
+    state = %{state() | completed_run_metadata: %{"parent" => %{last_ran_at: ~U[2026-10-04 12:00:00Z]}}}
+    log = capture_log([level: :info], fn -> send(self(), {:state, act(state, parent)}) end)
+
+    assert_received {:state, _state}
+    assert_received {:memory_tracker_state_update, "parent", "In Progress"}
+    assert log =~ "revise its plan from 1 new comment(s)"
+
+    # A rework reason posted the same way counts as a person's comment too.
+    assert PlanComments.human?(comment("rework", DirectorMoves.rework_comment("Split MOT-31"), ~U[2026-10-04 12:11:00Z]))
   end
 
   test "a person's comment on an unapproved plan in Human Review starts no run and leaves the parent there" do

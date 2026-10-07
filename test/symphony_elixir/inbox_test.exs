@@ -203,6 +203,17 @@ defmodule SymphonyElixir.InboxTest do
              } = Item.from_node(action, "shop", %Schema{}, lookups())
     end
 
+    test "a pull request's checks are green when CI passed and neither QA nor the gate objects" do
+      green = %{kind: :pr, review: %{pull_request: %{ci: "passed", qa: %{verdict: "pass"}, gate: %{verdict: "approve"}}}}
+      assert Item.checks_green?(green)
+      assert Item.checks_green?(%{green | review: %{pull_request: %{ci: "passed", qa: nil, gate: nil}}})
+
+      refute Item.checks_green?(put_in(green, [:review, :pull_request, :ci], "pending"))
+      refute Item.checks_green?(put_in(green, [:review, :pull_request, :qa], %{verdict: "blocked"}))
+      refute Item.checks_green?(put_in(green, [:review, :pull_request, :gate], %{verdict: "rework"}))
+      refute Item.checks_green?(%{green | kind: :plan})
+    end
+
     test "nothing for an issue that left the review states" do
       assert Item.from_node(issue_node("SHOP-9", %{"state" => %{"name" => "Todo"}}), "shop", %Schema{}, lookups()) == nil
     end

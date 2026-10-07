@@ -159,6 +159,17 @@ defmodule SymphonyElixir.Inbox.Item do
     |> Enum.find(&(is_binary(&1) and Regex.match?(@pull_request_url, &1)))
   end
 
+  @doc """
+  True for a pull request whose checks are green: CI passed, and neither Auto Review QA nor the
+  acceptance gate says otherwise. Its notification offers Approve and Merge.
+  """
+  @spec checks_green?(t()) :: boolean()
+  def checks_green?(%{kind: :pr, review: %{pull_request: %{ci: "passed"} = pull_request}}) do
+    get_in(pull_request, [:qa, :verdict]) not in ["fail", "blocked"] and get_in(pull_request, [:gate, :verdict]) != "rework"
+  end
+
+  def checks_green?(_item), do: false
+
   @doc "A CI conclusion as `passed`, `failed` or `pending`; nil before the CI poller saw the PR."
   @spec ci_result(String.t() | nil) :: String.t() | nil
   def ci_result(nil), do: nil
