@@ -109,8 +109,8 @@ defmodule SymphonyElixir.TestSupport do
     overrides = Keyword.put_new(overrides, :workspace_root, Path.join(Path.dirname(path), "workspaces"))
     {system_config, repo_config, prompt} = split_workflow_content(path, overrides)
     File.mkdir_p!(Path.dirname(path))
-    File.write!(path, repo_workflow_content(repo_config, prompt))
-    File.write!(SymphonyElixir.Workflow.symphony_file_path(), symphony_content(system_config, path))
+    write_atomically!(path, repo_workflow_content(repo_config, prompt))
+    write_atomically!(SymphonyElixir.Workflow.symphony_file_path(), symphony_content(system_config, path))
     Cache.clear()
 
     if Process.whereis(SymphonyElixir.WorkflowStore) do
@@ -122,6 +122,14 @@ defmodule SymphonyElixir.TestSupport do
     end
 
     :ok
+  end
+
+  # A test may rewrite the workflow while its orchestrator runs. `File.write!` truncates the file
+  # first, so a config read in between would see an empty `symphony.yml`; a rename swaps it whole.
+  defp write_atomically!(path, content) do
+    tmp_path = "#{path}.tmp-#{System.unique_integer([:positive])}"
+    File.write!(tmp_path, content)
+    File.rename!(tmp_path, path)
   end
 
   defp split_workflow_content(path, overrides) do

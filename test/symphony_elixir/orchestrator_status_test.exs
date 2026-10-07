@@ -6702,15 +6702,17 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     send(pid, {:DOWN, worker_ref, :process, worker_pid, reason})
 
-    assert_receive {:memory_tracker_comment, "issue-review-agent-blocked", body}, 1_000
+    # One tracker task posts the comment, then moves the issue; once it is done both messages are here.
+    completed_state = wait_for_orchestrator_state(pid, &(map_size(&1.running) == 0 and &1.tracker_tasks == %{}), 1_000)
+
+    assert_received {:memory_tracker_comment, "issue-review-agent-blocked", body}
     assert body =~ "reviewer agent returned a verified blocking verdict"
     assert body =~ "Reason: Unsafe to continue."
     assert body =~ "Breaks the retry contract. (lib/example.ex:10-12)"
     assert body =~ "Target human-review state: Needs Human."
 
-    assert_receive {:memory_tracker_state_update, "issue-review-agent-blocked", "Needs Human"}, 1_000
+    assert_received {:memory_tracker_state_update, "issue-review-agent-blocked", "Needs Human"}
 
-    completed_state = wait_for_orchestrator_state(pid, &(map_size(&1.running) == 0 and &1.tracker_tasks == %{}), 1_000)
     refute Map.has_key?(completed_state.retry_attempts, issue.id)
     refute MapSet.member?(completed_state.claimed, issue.id)
     assert %{state: "Needs Human"} = completed_state.watching[issue.id]
@@ -6754,10 +6756,12 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       {:DOWN, worker_ref, :process, worker_pid, {:review_agent_blocked, %{reason: "Unsafe to continue.", findings: [%{summary: "Verified block."}]}}}
     )
 
-    assert_receive {:memory_tracker_comment, "issue-review-agent-blocked-transition-fails", body}, 1_000
+    # The tracker task posts the comment before its failed state move; once it is done the comment is here.
+    completed_state = wait_for_orchestrator_state(pid, &(map_size(&1.running) == 0 and &1.tracker_tasks == %{}), 1_000)
+
+    assert_received {:memory_tracker_comment, "issue-review-agent-blocked-transition-fails", body}
     assert body =~ "Target human-review state: In Review."
 
-    completed_state = wait_for_orchestrator_state(pid, &(map_size(&1.running) == 0 and &1.tracker_tasks == %{}), 1_000)
     refute Map.has_key?(completed_state.retry_attempts, issue.id)
     refute MapSet.member?(completed_state.claimed, issue.id)
 
