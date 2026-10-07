@@ -68,6 +68,15 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
     Enum.sort_by(actions, & &1.key)
   end
 
+  test "collect_all/2 also lists the issues waiting on a person, from the same read" do
+    nodes = [node("MOT-1", %{"state" => %{"name" => "In Review"}}), node("MOT-2", %{})]
+    client = fn _query, _variables, _opts -> {:ok, page(nodes, %{"hasNextPage" => false})} end
+    opts = [settings: settings(), linear_client: client, scope_filter: fn _repo -> {:ok, @scope} end]
+
+    assert {:ok, %{}, [%{identifier: "MOT-1", kind: :pr}]} = Collector.collect_all([:repo], opts)
+    assert {:error, :down} = Collector.collect_all([:repo], Keyword.put(opts, :scope_filter, fn _repo -> {:error, :down} end))
+  end
+
   test "queries the route's scope for labelled, In Review, Human Review or final verification issues that are not terminal" do
     assert {:ok, %{}} = collect([])
 

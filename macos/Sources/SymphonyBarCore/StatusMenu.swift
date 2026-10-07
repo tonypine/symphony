@@ -55,9 +55,9 @@ public enum StatusMenu {
         case .stopped, .starting:
             lines = []
         case let .running(snapshot, _), let .paused(snapshot, _):
-            // What waits on the operator's review first, then the operator pause, then the usage-limit holds,
-            // then what an update would release.
-            lines = [countsLine(snapshot)] + (humanReviewLine(snapshot.humanReview).map { [$0] } ?? [])
+            // The operator pause first, then the usage-limit holds, then what an update would release. What waits on
+            // the operator's review has its own items (`waitingMenu`).
+            lines = [countsLine(snapshot)]
                 + (snapshot.pause.map { [pauseLine($0, now: now, timeZone: timeZone)] } ?? [])
                 + snapshot.usageLimits.map { usageLimitLine($0, now: now, timeZone: timeZone) }
                 + (updateUnblocksLine(snapshot.updateUnblocks).map { [$0] } ?? [])
@@ -96,16 +96,104 @@ public enum StatusMenu {
         }
     }
 
-    /// "1 ticket waits on you in Human Review" while tickets wait in Human Review, nil when none does.
-    public static func humanReviewLine(_ count: Int) -> String? {
-        switch count {
-        case ...0:
-            return nil
-        case 1:
-            return "1 ticket waits on you in Human Review"
-        default:
-            return "\(count) tickets wait on you in Human Review"
+    /// Heading of the tickets waiting on the operator, shown only while there are some.
+    public static let waitingTitle = "Waiting on you"
+
+    /// How many waiting tickets the menu lists before "N more…".
+    public static let waitingLimit = 5
+
+    /// The longest headline a waiting ticket's item shows before it is cut with "…".
+    static let waitingHeadlineLimit = 60
+
+    /// The waiting tickets the menu lists, oldest first, and the title of the item that opens the dashboard for the
+    /// rest ("3 more…"), nil when none is left out.
+    public struct WaitingMenu: Equatable {
+        public var tickets: [StateSnapshot.WaitingTicket]
+        public var moreTitle: String?
+    }
+
+    /// Up to `limit` waiting tickets, none while Symphony doesn't answer.
+    public static func waitingMenu(_ status: SymphonyStatus, limit: Int = waitingLimit) -> WaitingMenu {
+        let tickets: [StateSnapshot.WaitingTicket]
+        switch status {
+        case let .running(snapshot, _), let .paused(snapshot, _):
+            tickets = snapshot.waitingOnYou
+        case .stopped, .starting, .error:
+            tickets = []
         }
+        let left = tickets.count - limit
+        return WaitingMenu(tickets: Array(tickets.prefix(limit)), moreTitle: left > 0 ? "\(left) more…" : nil)
+    }
+
+    /// One waiting ticket, for example "TP-123 · Plan · Split the importer into four sub-tickets · 2h". Without a
+    /// review brief its title stands in for the headline.
+    public static func waitingLine(_ ticket: StateSnapshot.WaitingTicket) -> String {
+        let headline = [ticket.headline, ticket.title]
+            .compactMap { $0?.trimmingWhitespace() }
+            .first { !$0.isEmpty }
+            .map(shortened)
+        return [ticket.identifier, kindLabel(ticket.kind), headline, ticket.waitingSeconds.map(waitedLabel)]
+            .compactMap { $0 }
+            .joined(separator: " · ")
+    }
+
+    /// How the menu names what a ticket waits for.
+    public static func kindLabel(_ kind: StateSnapshot.WaitingTicket.Kind) -> String {
+        switch kind {
+        case .plan:
+            return "Plan"
+        case .pr:
+            return "PR"
+        case .finalVerification:
+            return "Final verification"
+        case .action:
+            return "Decision"
+        case .other:
+            return "Review"
+        }
+    }
+
+    /// How long a ticket waited, in its largest unit: "45s", "12m", "2h", "3d".
+    public static func waitedLabel(_ seconds: Int) -> String {
+        switch seconds {
+        case ..<60:
+            return "\(max(seconds, 0))s"
+        case ..<3_600:
+            return "\(seconds / 60)m"
+        case ..<86_400:
+            return "\(seconds / 3_600)h"
+        default:
+            return "\(seconds / 86_400)d"
+        }
+    }
+
+    /// The number the menu bar icon's badge shows, nil while nothing waits on the operator.
+    public static func badgeCount(for status: SymphonyStatus) -> Int? {
+        switch status {
+        case let .running(snapshot, _), let .paused(snapshot, _):
+            return snapshot.waitingOnYou.isEmpty ? nil : snapshot.waitingOnYou.count
+        case .stopped, .starting, .error:
+            return nil
+        }
+    }
+
+    /// Tooltip and accessibility description for the status item, with what waits on the operator, for example
+    /// "Symphony: running, 2 tickets wait on you".
+    public static func iconLabel(for status: SymphonyStatus, badge: Int?) -> String {
+        switch badge {
+        case nil:
+            return iconLabel(for: status)
+        case 1?:
+            return "\(iconLabel(for: status)), 1 ticket waits on you"
+        case let count?:
+            return "\(iconLabel(for: status)), \(count) tickets wait on you"
+        }
+    }
+
+    private static func shortened(_ text: String) -> String {
+        let line = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        guard line.count > waitingHeadlineLimit else { return line }
+        return String(line.prefix(waitingHeadlineLimit - 1)) + "…"
     }
 
     /// For example "2 running · 1 retrying".

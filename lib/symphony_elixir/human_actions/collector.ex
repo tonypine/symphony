@@ -25,10 +25,13 @@ defmodule SymphonyElixir.HumanActions.Collector do
   pass runs again once the limit resets.
 
   Issues outside a project are skipped: there is no project to post the update to.
+
+  `collect_all/2` also returns, from the same read, the issues waiting on a person
+  (`SymphonyElixir.HumanActions.Waiting`), with or without a project.
   """
 
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.HumanActions.{Action, Request}
+  alias SymphonyElixir.HumanActions.{Action, Request, Waiting}
   alias SymphonyElixir.{HumanReview, RunKind, SubIssueWait}
   alias SymphonyElixir.Linear.{Client, Issue}
   alias SymphonyElixir.QaAgent.Report
@@ -87,6 +90,16 @@ defmodule SymphonyElixir.HumanActions.Collector do
   """
   @spec collect([term()], keyword()) :: {:ok, %{String.t() => project_actions()}} | {:error, term()}
   def collect(repos, opts) do
+    with {:ok, actions, _waiting} <- collect_all(repos, opts), do: {:ok, actions}
+  end
+
+  @doc """
+  `collect/2`, plus the issues waiting on a person (`SymphonyElixir.HumanActions.Waiting`) read
+  from the same query.
+  """
+  @spec collect_all([term()], keyword()) ::
+          {:ok, %{String.t() => project_actions()}, [Waiting.entry()]} | {:error, term()}
+  def collect_all(repos, opts) do
     settings = Keyword.fetch!(opts, :settings)
 
     repos
@@ -98,8 +111,9 @@ defmodule SymphonyElixir.HumanActions.Collector do
     end)
     |> case do
       {:ok, nodes} ->
-        actions = nodes |> Enum.uniq_by(& &1["id"]) |> Enum.flat_map(&issue_actions(&1, settings))
-        {:ok, by_project(actions)}
+        nodes = Enum.uniq_by(nodes, & &1["id"])
+        actions = Enum.flat_map(nodes, &issue_actions(&1, settings))
+        {:ok, by_project(actions), Waiting.entries(nodes, settings)}
 
       error ->
         error

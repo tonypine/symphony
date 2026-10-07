@@ -347,6 +347,12 @@ the app attaches to it as "running (external)": Start, Stop and Restart stay dis
 starts a second Symphony nor stops one it doesn't own. Open Web Dashboard opens the control URL in the browser;
 Open Logs opens `menubar-child.log`.
 
+While tickets wait on you (`waiting_on_you` in `/api/v1/state`: plans and PRs in `In Review` or `Human Review`,
+final verifications to sign off, and open decisions), the icon shows a red dot and the menu lists them under
+**Waiting on you**, oldest first, for example `TP-123 · Plan · Split the importer into four sub-tickets · 2h`: the
+ticket, what it waits for, the headline of its review brief (its title when it has none) and how long it has waited.
+Choosing a row opens the ticket in the browser. The menu lists five; **N more…** opens the dashboard for the rest.
+
 Each poll waits up to 5 seconds for an answer. After one missed poll the menu keeps the last status, with
 "Symphony is slow to answer" under it. Only after two missed polls in a row does it show "Symphony isn't
 answering" (error) for a Symphony the app started, or stopped for an external one. That grace counts for an

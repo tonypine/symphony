@@ -287,6 +287,49 @@ defmodule SymphonyElixirWeb.DashboardLive do
           </article>
         </section>
 
+        <section class="section-card" id="waiting-on-you">
+          <div class="section-header">
+            <div>
+              <h2 class="section-title">Waiting on you</h2>
+              <p class="section-copy">Tickets in review, or with a decision only you can make, oldest first.</p>
+            </div>
+          </div>
+
+          <%= if @payload.waiting_on_you == [] do %>
+            <p class="empty-state">Nothing waits on you.</p>
+          <% else %>
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Issue</th>
+                    <th>Kind</th>
+                    <th>What to review</th>
+                    <th>Waiting since</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr :for={entry <- @payload.waiting_on_you} class="waiting-on-you-row">
+                    <td>
+                      <div class="issue-stack">
+                        <%= if entry.url do %>
+                          <a class="issue-id" href={entry.url} target="_blank" rel="noreferrer" title={entry.title}><%= entry.issue_identifier %></a>
+                        <% else %>
+                          <span class="issue-id" title={entry.title}><%= entry.issue_identifier %></span>
+                        <% end %>
+                        <span class="muted"><%= entry.state %></span>
+                      </div>
+                    </td>
+                    <td><%= waiting_kind_label(entry.kind) %></td>
+                    <td><%= entry.headline || entry.title %></td>
+                    <td class="numeric"><%= format_ago(seconds_since(entry.waiting_since, @now)) %></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          <% end %>
+        </section>
+
         <section class="section-card">
           <div class="section-header">
             <div>
@@ -1006,7 +1049,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
   end
 
   defp load_payload do
-    Presenter.state_payload(orchestrator(), snapshot_timeout_ms(), stray_processes())
+    Presenter.state_payload(orchestrator(), snapshot_timeout_ms(), stray_processes(), human_actions())
   end
 
   defp queue_dashboard_reload(socket) do
@@ -1180,6 +1223,10 @@ defmodule SymphonyElixirWeb.DashboardLive do
     Endpoint.config(:stray_processes) || SymphonyElixir.StrayProcesses
   end
 
+  defp human_actions do
+    Endpoint.config(:human_actions) || SymphonyElixir.HumanActions
+  end
+
   defp snapshot_timeout_ms do
     Endpoint.config(:snapshot_timeout_ms) || 15_000
   end
@@ -1238,6 +1285,11 @@ defmodule SymphonyElixirWeb.DashboardLive do
   end
 
   defp format_ago(_seconds), do: "n/a"
+
+  defp waiting_kind_label("plan"), do: "Plan"
+  defp waiting_kind_label("pr"), do: "PR"
+  defp waiting_kind_label("final_verification"), do: "Final verification"
+  defp waiting_kind_label("action"), do: "Decision"
 
   defp github_webhooks(%{pollers: %{ci: %{webhooks: %{} = webhooks}}}), do: webhooks
   defp github_webhooks(_payload), do: nil

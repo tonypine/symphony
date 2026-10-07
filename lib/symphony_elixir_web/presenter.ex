@@ -9,6 +9,7 @@ defmodule SymphonyElixirWeb.Presenter do
     BuildInfo,
     Config,
     ForcedStatus,
+    HumanActions,
     HumanReview,
     Orchestrator,
     Quality,
@@ -45,8 +46,8 @@ defmodule SymphonyElixirWeb.Presenter do
     seconds_running: 0
   }
 
-  @spec state_payload(GenServer.name(), timeout(), GenServer.server()) :: map()
-  def state_payload(orchestrator, snapshot_timeout_ms, stray_processes \\ StrayProcesses) do
+  @spec state_payload(GenServer.name(), timeout(), GenServer.server(), GenServer.name()) :: map()
+  def state_payload(orchestrator, snapshot_timeout_ms, stray_processes \\ StrayProcesses, human_actions \\ HumanActions) do
     now = DateTime.utc_now()
     generated_at = now |> DateTime.truncate(:second) |> DateTime.to_iso8601()
 
@@ -73,6 +74,7 @@ defmodule SymphonyElixirWeb.Presenter do
           running: Enum.map(snapshot.running, &running_entry_payload/1),
           watching: snapshot |> Map.get(:watching, []) |> Enum.map(&watching_entry_payload/1),
           human_review: Enum.map(human_review, &watching_entry_payload/1),
+          waiting_on_you: waiting_on_you_payload(HumanActions.waiting_on_you(human_actions), snapshot, now),
           conflicts: snapshot |> Map.get(:conflicts, []) |> Enum.map(&conflict_entry_payload/1),
           retrying: Enum.map(snapshot.retrying, &retry_entry_payload/1),
           awaiting_clarification:
@@ -609,6 +611,33 @@ defmodule SymphonyElixirWeb.Presenter do
       last_ran_at: iso8601(entry.last_ran_at),
       seconds_since_last_run: entry.seconds_since_last_run
     }
+  end
+
+  # The human-actions poller reads the list every few minutes; the orchestrator polls more often.
+  # A ticket it now sees running, or outside a review state, has left the list already.
+  defp waiting_on_you_payload(entries, snapshot, now) do
+    running_ids = MapSet.new(snapshot.running, & &1.issue_id)
+    watched_states = snapshot |> Map.get(:watching, []) |> Map.new(&{&1.issue_id, &1.state})
+
+    entries
+    |> Enum.reject(fn entry ->
+      MapSet.member?(running_ids, entry.issue_id) or
+        (Map.has_key?(watched_states, entry.issue_id) and not HumanReview.review_state?(watched_states[entry.issue_id]))
+    end)
+    |> Enum.sort_by(&{is_nil(&1.waiting_since), &1.waiting_since && DateTime.to_unix(&1.waiting_since), &1.identifier})
+    |> Enum.map(fn entry ->
+      %{
+        issue_id: entry.issue_id,
+        issue_identifier: entry.identifier,
+        title: entry.title,
+        url: URLUtils.present_url(entry.url),
+        state: Map.get(watched_states, entry.issue_id, entry.state),
+        kind: Atom.to_string(entry.kind),
+        headline: entry.headline,
+        waiting_since: iso8601(entry.waiting_since),
+        waiting_seconds: entry.waiting_since && max(DateTime.diff(now, entry.waiting_since, :second), 0)
+      }
+    end)
   end
 
   defp conflict_entry_payload(entry) do

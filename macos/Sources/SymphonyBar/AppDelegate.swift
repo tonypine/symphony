@@ -27,6 +27,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private lazy var restartNowItem = menuItem(StatusMenu.restartNowTitle, action: #selector(restartNow(_:)))
     private lazy var cancelRestartItem = menuItem(StatusMenu.cancelRestartTitle, action: #selector(cancelRestart(_:)))
     private var detailItems: [NSMenuItem] = []
+    /// The "Waiting on you" heading, a row per waiting ticket and "N more…", under the status lines.
+    private var waitingItems: [NSMenuItem] = []
     private var startWhenStopped = false
     /// The Pause or Resume request under way, if any.
     private var controlInFlight: ControlAction?
@@ -422,6 +424,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             return isAnswering
         case #selector(openWebDashboard(_:)):
             return canOpenWebDashboard
+        case #selector(openWaitingTicket(_:)):
+            return menuItem.representedObject is URL
         case #selector(openLogs(_:)):
             return canOpenLogs
         case #selector(checkForUpdates(_:)):
@@ -949,10 +953,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         let status = machine.status
 
         if let button = statusItem?.button {
-            let label = StatusMenu.iconLabel(for: status)
+            let badge = StatusMenu.badgeCount(for: status)
+            let label = StatusMenu.iconLabel(for: status, badge: badge)
             let image = NSImage(systemSymbolName: StatusMenu.iconSymbolName(for: status), accessibilityDescription: label)
             image?.isTemplate = true
-            button.image = image
+            button.image = badge == nil ? image : image.map(Self.badged)
             button.toolTip = label
         }
 
@@ -979,7 +984,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         for (offset, item) in detailItems.enumerated() {
             menu.insertItem(item, at: menu.index(of: statusTitleItem) + 1 + offset)
         }
+        showWaiting(in: menu)
         showForced(in: menu)
+    }
+
+    /// Lists the tickets waiting on the operator under the status lines: each row opens its ticket, and "N more…"
+    /// opens the dashboard. Nothing shows while none waits.
+    private func showWaiting(in menu: NSMenu) {
+        waitingItems.forEach(menu.removeItem)
+        let waiting = StatusMenu.waitingMenu(machine.status)
+        guard !waiting.tickets.isEmpty else {
+            waitingItems = []
+            return
+        }
+        let heading = NSMenuItem(title: StatusMenu.waitingTitle, action: nil, keyEquivalent: "")
+        heading.isEnabled = false
+        let rows = waiting.tickets.map { ticket in
+            let item = menuItem(StatusMenu.waitingLine(ticket), action: #selector(openWaitingTicket(_:)))
+            item.representedObject = ticket.url
+            item.toolTip = ticket.title
+            return item
+        }
+        let more = waiting.moreTitle.map { [menuItem($0, action: #selector(openWebDashboard(_:)))] } ?? []
+        waitingItems = [.separator(), heading] + rows + more
+        let start = menu.index(of: sourceItem) + 1
+        for (offset, item) in waitingItems.enumerated() {
+            menu.insertItem(item, at: start + offset)
+        }
+    }
+
+    @objc private func openWaitingTicket(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    /// The menu bar icon with a dot in its top right corner. Drawn per appearance, so the symbol keeps the menu
+    /// bar's text color while the dot stays red.
+    private static func badged(_ symbol: NSImage) -> NSImage {
+        let size = NSSize(width: max(symbol.size.width, 18), height: max(symbol.size.height, 18))
+        let image = NSImage(size: size, flipped: false) { rect in
+            let symbolRect = NSRect(
+                x: (rect.width - symbol.size.width) / 2, y: (rect.height - symbol.size.height) / 2,
+                width: symbol.size.width, height: symbol.size.height
+            )
+            let tinted = NSImage(size: symbol.size, flipped: false) { tintRect in
+                symbol.draw(in: tintRect)
+                NSColor.labelColor.set()
+                tintRect.fill(using: .sourceAtop)
+                return true
+            }
+            tinted.draw(in: symbolRect)
+            let dot = NSRect(x: rect.maxX - 7, y: rect.maxY - 7, width: 7, height: 7)
+            NSColor.systemRed.setFill()
+            NSBezierPath(ovalIn: dot).fill()
+            return true
+        }
+        image.accessibilityDescription = symbol.accessibilityDescription
+        return image
     }
 
     /// Shows a row for each forced ticket, with a submenu to stop forcing it, and hides their heading while there
