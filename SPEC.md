@@ -4152,8 +4152,10 @@ Minimum endpoints:
     `Orchestrator snapshot build slow` with the parts for a snapshot build that does.
   - `uptime_seconds` is how long the Symphony answering has run, in whole seconds; the Mac app's
     Diagnostics view shows it.
-  - `shipped_today` lists the tickets Symphony saw reach a done state on the current UTC day, newest
-    first, each with its `repo_key` and `completed_at`; `counts.shipped_today` is their number. The
+  - `shipped_today` lists the tickets Symphony saw reach a done state today, newest first, each with
+    its `repo_key` and `completed_at` (UTC); `counts.shipped_today` is their number. "Today" is the
+    local calendar day of the host Symphony runs on, in its time zone, not the UTC day, so the count
+    resets at the host's midnight. The
     Elixir implementation takes them from the `issue_completed` notification it sends once per
     ticket, and after a restart from the time it noted that event on the ticket's run record. The
     Mac app's Overview shows the count as its Shipped today stage.

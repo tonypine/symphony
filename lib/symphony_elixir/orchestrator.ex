@@ -32,6 +32,7 @@ defmodule SymphonyElixir.Orchestrator do
     RunKind,
     RunStore,
     Secret,
+    ShippedToday,
     StatusDashboard,
     SubIssueWait,
     Tracker,
@@ -198,7 +199,7 @@ defmodule SymphonyElixir.Orchestrator do
       claimed: claimed,
       retry_attempts: retry_attempts,
       completed_run_metadata: completed_run_metadata,
-      shipped: hydrate_shipped(recent_runs, Date.utc_today()),
+      shipped: ShippedToday.hydrate(recent_runs, DateTime.utc_now()),
       plan_comments_since: DateTime.utc_now(),
       codex_totals: codex_totals,
       rate_limits: nil,
@@ -5279,10 +5280,9 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp maybe_emit_lifecycle_event(state, _event, _issue, _source, _opts), do: state
 
-  # Today's shipped tickets for `/api/v1/state`; entries from an earlier UTC day are dropped.
+  # Today's shipped tickets for `/api/v1/state`; entries from an earlier local day are dropped.
   defp maybe_record_shipped(%State{} = state, :issue_completed, %Issue{id: issue_id} = issue, metadata) do
     now = DateTime.utc_now()
-    today = DateTime.to_date(now)
 
     entry = %{
       issue_id: issue_id,
@@ -5292,12 +5292,7 @@ defmodule SymphonyElixir.Orchestrator do
       completed_at: now
     }
 
-    shipped =
-      state.shipped
-      |> Map.filter(fn {_issue_id, shipped} -> DateTime.to_date(shipped.completed_at) == today end)
-      |> Map.put(issue_id, entry)
-
-    %{state | shipped: shipped}
+    %{state | shipped: ShippedToday.record(state.shipped, entry, now)}
   end
 
   defp maybe_record_shipped(state, _event, _issue, _metadata), do: state
@@ -6181,26 +6176,6 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp hydrate_completed_run_metadata(_runs, _retry_attempts), do: %{}
-
-  # Tickets Symphony saw reach Done on `today` (UTC) before it restarted: their runs carry the
-  # time it noted the `issue_completed` event.
-  defp hydrate_shipped(runs, %Date{} = today) do
-    for run <- runs,
-        %DateTime{} = completed_at <- [Map.get(run, :issue_completed_notified_at)],
-        DateTime.to_date(completed_at) == today,
-        issue_id = Map.get(run, :issue_id),
-        is_binary(issue_id),
-        reduce: %{} do
-      acc ->
-        Map.put_new(acc, issue_id, %{
-          issue_id: issue_id,
-          identifier: Map.get(run, :issue_identifier),
-          title: Map.get(run, :title),
-          repo_key: Map.get(run, :repo_key),
-          completed_at: completed_at
-        })
-    end
-  end
 
   defp seed_watching_from_completed_run_metadata(%State{} = state) do
     active_states = active_state_set()
@@ -7422,7 +7397,7 @@ defmodule SymphonyElixir.Orchestrator do
       qa: qa,
       auto_merge: auto_merge,
       slot_waiting: slot_waiting_snapshot(state.slot_waiting, state) ++ merging_ci_waiting_snapshot(state),
-      shipped_today: shipped_today_snapshot(state.shipped, DateTime.to_date(now)),
+      shipped_today: ShippedToday.today(state.shipped, now),
       claimed: state.claimed |> MapSet.to_list() |> Enum.sort(),
       pollers: poller_status_snapshot(),
       polling: %{
@@ -7457,13 +7432,6 @@ defmodule SymphonyElixir.Orchestrator do
       used: length(landing_runs),
       running: Enum.sort_by(landing_runs, & &1.identifier)
     }
-  end
-
-  defp shipped_today_snapshot(shipped, %Date{} = today) do
-    shipped
-    |> Map.values()
-    |> Enum.filter(&(DateTime.to_date(&1.completed_at) == today))
-    |> Enum.sort_by(& &1.completed_at, {:desc, DateTime})
   end
 
   defp slot_waiting_snapshot(slot_waiting, %State{} = state) do
