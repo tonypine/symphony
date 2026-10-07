@@ -39,6 +39,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   require Schema.Workspace
 
   @primary_key false
+  @deprecations_key {__MODULE__, :deprecation_warnings}
   @allowed_keys ~w(
     agent auto_review dashboard dependency_audit github human_actions issue_gate issues notifications poller pre_push_review
     pull_requests
@@ -429,6 +430,13 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   @spec parse(map()) :: {:ok, t()} | {:error, {:invalid_symphony_config, String.t()}}
   def parse(config) when is_map(config) do
+    Process.put(@deprecations_key, [])
+    result = parse_config(config)
+    log_deprecations(Process.delete(@deprecations_key), config)
+    result
+  end
+
+  defp parse_config(config) do
     config = normalize_keys(config)
 
     with :ok <- reject_removed_keys(config),
@@ -446,6 +454,26 @@ defmodule SymphonyElixir.Config.SystemSchema do
           {:error, {:invalid_symphony_config, format_errors(changeset)}}
       end
     end
+  end
+
+  # `Config.system/0` parses the cached config on every settings read, many times a second, so a
+  # deprecation warning collected during a parse is logged only for a config that has not warned
+  # yet: once per load of `symphony.yml`, and once more when a reload changes it.
+  defp log_deprecations([], _config), do: :ok
+
+  defp log_deprecations(messages, config) do
+    hash = :erlang.phash2(config)
+
+    if :persistent_term.get(@deprecations_key, nil) != hash do
+      :persistent_term.put(@deprecations_key, hash)
+      messages |> Enum.reverse() |> Enum.each(&Logger.warning/1)
+    end
+
+    :ok
+  end
+
+  defp deprecation_warning(message) do
+    Process.put(@deprecations_key, [message | Process.get(@deprecations_key, [])])
   end
 
   defp finalize(system_config) do
@@ -960,7 +988,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     legacy = SymphonyElixir.HumanReview.legacy_request_label()
 
     if Enum.any?(labels, &(is_binary(&1) and String.downcase(String.trim(&1)) == legacy)) do
-      Logger.warning(
+      deprecation_warning(
         "symphony.yml `#{path}.escalate.labels` lists the deprecated `#{legacy}` label: an action request now moves its issue " <>
           "to the Human Review state, which the gate escalates on without the label. Remove `#{legacy}` from the list"
       )
@@ -1056,7 +1084,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     with {:ok, config} <- section_map(config, "human_actions"),
          :ok <- reject_unknown_section_keys(config, section_keys("human_actions"), "human_actions") do
       if Map.has_key?(config, "label") do
-        Logger.warning(
+        deprecation_warning(
           "symphony.yml `human_actions.label` is deprecated and will be removed: an action request now moves its issue " <>
             "to the Human Review state and adds no label. An issue carrying the label still counts as an open request"
         )
