@@ -341,6 +341,13 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
       assert {:ok, {"ok\n", 0}} = cmd.("/bin/sh", ["-c", "echo ok"], [])
     end
 
+    test "cmd adds only the remote env to the command's environment", %{ssh_host: ssh_host} do
+      %{cmd: cmd} = Remote.host(ssh_host)
+      opts = [env: [{~c"LOCAL_ONLY", ~c"secret"}], remote_env: [{"QA_HOST_PORTS", "50001,50002,50003"}], timeout_ms: 5_000]
+
+      assert {:ok, {"50001,50002,50003|\n", 0}} = cmd.("/bin/sh", ["-c", ~s(echo "$QA_HOST_PORTS|$LOCAL_ONLY")], opts)
+    end
+
     test "ship unpacks a tar into a fresh directory", %{root: root, ssh_host: ssh_host} do
       source = Path.join(root, "source")
       File.mkdir_p!(Path.join(source, "lib"))

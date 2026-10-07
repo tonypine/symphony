@@ -1513,7 +1513,7 @@ tools for it on the host, outside the sandbox, and checks every argument:
 
 | Tool | Does | Refuses |
 | --- | --- | --- |
-| `qa_build` | runs `build` in the QA worktree with the agent's scrubbed environment, then copies the `app` bundle into a private directory | a worktree with changes outside `qa-evidence/` and `.gradle-daemons/` (Symphony's own), gitignored files included: none may exist before the first build, and none may appear or change after a build; a bundle that resolves (symlinks included) outside the worktree, or that holds an absolute symlink or one with `..` |
+| `qa_build` | runs `build` in the QA worktree with the agent's scrubbed environment plus `QA_HOST_PORTS` (the pass's [host ports](#qa-passes), comma-separated; unset when their tunnel could not open), then copies the `app` bundle into a private directory | a worktree with changes outside `qa-evidence/` and `.gradle-daemons/` (Symphony's own), gitignored files included: none may exist before the first build, and none may appear or change after a build; a bundle that resolves (symlinks included) outside the worktree, or that holds an absolute symlink or one with `..` |
 | `qa_launch_app` | starts the private copy of the bundle with `SYMPHONY_BAR_QA_ROOT` set to a private directory ([QA mode](../macos/README.md#qa-mode)) and `SYMPHONY_QA_OPENROUTER_URL` set to the pass's [OpenRouter stub](#qa-passes), and returns its PID | an executable that changed since the last `qa_build`, or a worktree `qa_build` would refuse |
 | `qa_quit_app` | quits a launched app and returns its recent output | a PID it did not launch |
 | `qa_screenshot` | saves the app's on-screen windows to new files `qa-evidence/<name>.png` | a PID it did not launch, a window of another app, a name that already exists (file or symlink) |
@@ -1633,13 +1633,14 @@ host and the worktree checks still apply there. Then:
 
 - `qa_build` copies the worktree's `HEAD` (`git archive`, so gitignored files and submodules stay
   behind) into a fresh `src/` in a `0700` run directory under `~/.symphony-qa/runs/` on the QA
-  host, runs `build` there with the QA user's login environment, and copies the bundle into the
-  run directory;
+  host, runs `build` there with the QA user's login environment plus `QA_HOST_PORTS`, and copies
+  the bundle into the run directory;
 - `qa_launch_app` starts that copy with only `SYMPHONY_BAR_QA_ROOT` and `SYMPHONY_QA_OPENROUTER_URL`
   set, over an SSH session that forwards the URL's loopback port on the QA host back to the
   OpenRouter stub on the Symphony host;
 - at the start of the pass Symphony picks three free loopback ports on the Symphony host and
-  hands them to the QA agent as `QA_HOST_PORTS` (in the prompt and its environment). It opens one
+  hands them to the QA agent as `QA_HOST_PORTS` (in the prompt and its environment) and to `build`
+  in its environment, so a QA build can write a stub's URL into the app. It opens one
   SSH session to the QA host that forwards each of them from the QA host's loopback to the same
   port on the Symphony host (`ssh -o ExitOnForwardFailure=yes -R <port>:127.0.0.1:<port>`), and
   closes it when the pass ends. The agent serves the app's stubs and proxies on `127.0.0.1` at
