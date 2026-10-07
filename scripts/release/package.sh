@@ -92,7 +92,7 @@ shown=200
   echo
   echo "## Install"
   echo
-  echo "Symphony.app runs on Apple silicon Macs with macOS 13 or later. Install or reinstall it with:"
+  echo "Symphony.app runs on Apple silicon Macs with macOS 26 or later. Install or reinstall it with:"
   echo
   echo '```bash'
   echo "curl -fsSL https://raw.githubusercontent.com/tonypine/symphony/main/scripts/install-macos.sh | bash"

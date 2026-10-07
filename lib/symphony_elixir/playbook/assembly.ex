@@ -28,7 +28,7 @@ defmodule SymphonyElixir.Playbook.Assembly do
   @default_instructions_dir ".symphony/instructions"
   @settings_keys ~w(instructions lockfile partials)
   @instruction_file ~r/\A(\d+)-[^\/]+\.md\z/
-  @left_trimmed ~w(ticket_types)
+  @left_trimmed ~w(ticket_types plan_pipeline)
 
   @type instruction_files :: [{String.t(), String.t()}]
   @type reader :: (String.t() -> {:ok, instruction_files()} | {:error, term()})
@@ -176,8 +176,9 @@ defmodule SymphonyElixir.Playbook.Assembly do
     end
   end
 
-  # `ticket_types` renders nothing for an untyped ticket and starts each branch with its own
-  # blank line, so its tag trims the blank line before it and an untyped prompt is unchanged.
+  # `ticket_types` and `plan_pipeline` render nothing for a ticket they don't apply to and
+  # start each branch with its own blank line, so their tags trim the blank line before them
+  # and that ticket's prompt is unchanged.
   defp open_tag(name) when name in @left_trimmed, do: "%-"
   defp open_tag(_name), do: "%"
 
