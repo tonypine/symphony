@@ -744,7 +744,8 @@ defmodule SymphonyElixir.CiPoller do
 
   # An issue that waits on a person sits in the Human Review state, outside the active states
   # with a label that asks for one, or, with that state off, in `In Review` with an open request
-  # (see `HumanReview.parked_for_person/3`). A fix run can't do
+  # (see `HumanReview.parked_for_person/3`); one outside the states the pollers watch (`Backlog`)
+  # waits for a person to promote it (`HumanReview.held_for_person/3`). A fix run can't do
   # what the person must: it would only merge the base branch, push a new head and park the issue
   # again. The issue stays where it is, with no rerun, fix run or escalation and no fix attempt
   # spent, until a person moves it on or removes the label, or the head turns green.
@@ -770,7 +771,7 @@ defmodule SymphonyElixir.CiPoller do
 
     case read_issue(issue_id, opts) do
       {:ok, %Issue{} = issue} ->
-        case HumanReview.parked_for_person(issue, settings, opts) do
+        case HumanReview.held_for_person(issue, settings, opts) do
           {:ok, true} -> {:parked, issue}
           {:ok, false} -> :not_parked
           {:error, reason} -> {:error, reason}
