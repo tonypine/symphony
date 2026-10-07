@@ -4392,7 +4392,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert repo_key == Config.repo_key!()
   end
 
-  test "shipped today drops tickets shipped on an earlier UTC day" do
+  test "shipped today drops tickets shipped on an earlier local day" do
     issue_id = "issue-shipped-rollover"
     issue_identifier = "MT-DONE-ROLL"
     run_id = "run-shipped-rollover"
