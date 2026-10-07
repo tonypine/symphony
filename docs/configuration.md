@@ -1017,7 +1017,8 @@ pull_requests:
   `auto_review.acceptance_gate.escalate.labels` label other than `plan` and `breakdown`, or, while
   the Human Review state is off, in `In Review` with an open `## Action needed:` request) gets no
   state move, conflict-fix run or escalation, and uses no retry, until a person moves the issue on
-  or removes the label.
+  or removes the label. So does one on an issue in none of the active states, the review states,
+  the Auto Review state and `Merging` (`Backlog`, say, label or not) until a person promotes it.
 - `review_comments.ignored_reviewers` skips those accounts entirely. The Linear GitHub
   integration's linkback comment is always skipped: comments by `linear-code`, `linear-code[bot]`
   or `linear[bot]`, and any comment whose body starts with `<!-- linear-linkback -->`. Comments
@@ -1030,8 +1031,10 @@ pull_requests:
   `tracker.active_states` with `needs-human`, a deprecated `human_actions.label` label or another
   `auto_review.acceptance_gate.escalate.labels` label other than `plan` and `breakdown`, or, while
   the Human Review state is off, in `In Review` with an open `## Action needed:` request) gets no
-  re-run, CI-fix run, escalation or state move, and uses no fix attempt. The normal CI flow resumes
-  once a person moves the issue on or removes the label, or the head turns green.
+  re-run, CI-fix run, escalation or state move, and uses no fix attempt. So does one on an issue in
+  none of the active states, the review states, the Auto Review state and `Merging` (`Backlog`,
+  say, label or not). The normal CI flow resumes once a person moves the issue on or removes the
+  label, or the head turns green.
 - `checks.landing_wait_timeout_ms` bounds how long a `Merging` issue waits for CI. When a landing
   run ends with the PR head's checks pending, Symphony holds the issue in `Merging` and dispatches
   the landing agent again once the CI poller sees that head go green (a red head goes through the
