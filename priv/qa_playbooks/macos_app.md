@@ -7,7 +7,9 @@ for you on the host. They only act on this worktree's configured app and on apps
 
 - `qa_build`: runs the configured build command. Call it once, before anything else.
 - `qa_launch_app`: launches the bundle `qa_build` produced, in QA mode (private settings and
-  secrets, never the real ones), and returns its `pid`.
+  secrets, never the real ones), and returns its `pid`. Optional stand-ins, see "Stand-ins for
+  GitHub, Linear and the folder picker" below: `gh_stub_port`, `linear_stub_port`,
+  `open_panel_dir`.
 - `qa_ax_tree`: the app's accessibility tree with each element's role, title, value and
   `frame` (`x`, `y`, `w`, `h` in points). Pass `role` or `text` to list only matching elements.
 - `qa_ax_press` (`action` defaults to `AXPress`; `AXRaise` focuses a window) and
@@ -31,6 +33,11 @@ for you on the host. They only act on this worktree's configured app and on apps
 - `qa_quit_app`: quits the app and returns its recent output.
 - `qa_put_file`: puts a file you wrote under `qa-evidence/` or `$TMPDIR` (a test `symphony.yml`,
   a `WORKFLOW.md`) where the app can open it, and returns the `path` to give the app.
+- `qa_put_checkout`: puts a git checkout where the app can open it. Make the repo under
+  `$TMPDIR` (`git init -b main`, add the files, commit), then `git bundle create <file> --all`,
+  and pass the bundle as `local_path` with the GitHub `remote_url` its `origin` should name (such
+  as `https://github.com/acme/widgets`) and an optional `remote_name` for the folder. Returns the
+  checkout's `path`. Nothing is fetched from or pushed to GitHub.
 
 Do not edit files in the worktree, gitignored ones included (such as build caches):
 `qa_build` and `qa_launch_app` refuse a modified checkout.
@@ -48,6 +55,29 @@ Servers the app talks to (a stub of the project's API, a proxy) run in your shel
   app's requests from that log in the step's `details`.
 - When the server cannot listen on the port, or the app still cannot reach it, mark the steps
   that need it `blocked` with the error in `details`.
+
+Stand-ins for GitHub, Linear and the folder picker (the Add Repo sheet and anything else that
+runs `gh`, asks Linear or picks a folder). Never let the app reach real GitHub or Linear in QA:
+
+- **gh:** serve a gh stub on a `QA_HOST_PORTS` port and pass it as `qa_launch_app`'s
+  `gh_stub_port`. The app then runs Symphony's fake `gh` (through `SYMPHONY_BAR_GH`), which POSTs
+  each call to `http://localhost:<port>` as a form body: `argc`, then one `arg` field per
+  argument, in order (`urllib.parse.parse_qsl` keeps the order). Answer 200 with what `gh` would
+  print on stdout (exit status 0), or any other status with an error message (stderr, exit status
+  1). For example `api repos/acme/widgets --jq .default_branch` → `main`; `api
+  repos/acme/widgets/contents?ref=main --jq .[].name` → one file name per line. Log every call,
+  and quote the calls that bear on a step.
+- **Linear:** serve a GraphQL stub on another port and pass it as `linear_stub_port`; the app
+  POSTs `{"query", "variables"}` JSON to `http://localhost:<port>/graphql`. Answer by the query's
+  operation name: `SymphonyBarProjects` →
+  `{"data":{"projects":{"nodes":[{"id":"p1","name":"QA Project"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
+  `SymphonyBarProjectTeams` → `{"data":{"project":{"teams":{"nodes":[{"id":"t1"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}`,
+  `SymphonyBarLabels` → `{"data":{"issueLabels":{"nodes":[{"id":"l1","name":"macos","isGroup":false}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`.
+  Any made-up Linear key in Settings works with it.
+- **Folder picker:** the picker is a system panel with no path field. Put the checkout with
+  `qa_put_checkout`, pass its `path` as `open_panel_dir`, and the panel opens inside it: press
+  its Choose button without selecting anything to choose that folder. Use one launch per
+  checkout you need to pick.
 
 1. Run `qa_build`. A non-zero `exit_status` from a change that should build is a failing
    step; quote the end of the output.

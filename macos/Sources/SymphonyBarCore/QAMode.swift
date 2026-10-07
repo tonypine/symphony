@@ -3,7 +3,9 @@ import Foundation
 /// QA mode, for test launches: `SYMPHONY_BAR_QA_ROOT=<dir>` keeps the app's settings, secrets, Launch at Login,
 /// logs, update downloads, Symphony's state and logs and the embedded Symphony's unpacked release under `<dir>`,
 /// never in UserDefaults, the app's secrets file or the folders a normal launch uses. With
-/// `SYMPHONY_QA_OPENROUTER_URL` it talks to Symphony's OpenRouter stub instead of openrouter.ai.
+/// `SYMPHONY_QA_OPENROUTER_URL` it talks to Symphony's OpenRouter stub instead of openrouter.ai, with
+/// `SYMPHONY_QA_LINEAR_URL` the Add Repo sheet asks a Linear stub instead of api.linear.app, and with
+/// `SYMPHONY_BAR_QA_OPEN_PANEL_DIR` the sheet's folder picker opens in that folder.
 public struct QAMode: Equatable {
     /// The directory QA mode keeps everything under. QA mode is on while it is set and not blank.
     public static let environmentKey = "SYMPHONY_BAR_QA_ROOT"
@@ -14,6 +16,11 @@ public struct QAMode: Equatable {
     /// The API base of the OpenRouter stub QA starts (`symphony openrouter-stub`), such as
     /// `http://127.0.0.1:4100/api`. The Symphony the app runs reads it too, also only in QA mode.
     public static let openRouterURLKey = "SYMPHONY_QA_OPENROUTER_URL"
+    /// The GraphQL endpoint of a Linear stub the QA agent serves, such as `http://localhost:4101/graphql`.
+    public static let linearURLKey = "SYMPHONY_QA_LINEAR_URL"
+    /// The folder the Add Repo sheet's folder picker opens in, such as a checkout QA prepared, so a QA pass can
+    /// pick it with the panel's Choose button: the panel has no path field to type into.
+    public static let openPanelDirectoryKey = "SYMPHONY_BAR_QA_OPEN_PANEL_DIR"
     /// Where Symphony writes its logs (`SymphonyElixir.Paths`).
     public static let symphonyLogsRootKey = "SYMPHONY_LOGS_ROOT"
     /// Where the embedded Burrito binary unpacks its release, under `.burrito/`. Burrito's launcher removes older
@@ -35,12 +42,25 @@ public struct QAMode: Equatable {
     public let updateURL: URL?
     /// The OpenRouter stub from `SYMPHONY_QA_OPENROUTER_URL`, nil for openrouter.ai.
     public let openRouterURL: URL?
+    /// The Linear stub from `SYMPHONY_QA_LINEAR_URL`, nil for api.linear.app.
+    public let linearURL: URL?
+    /// The folder picker's first folder from `SYMPHONY_BAR_QA_OPEN_PANEL_DIR`, nil for the panel's own choice.
+    public let openPanelDirectory: URL?
 
-    public init(root: URL, scripted: Bool = false, updateURL: URL? = nil, openRouterURL: URL? = nil) {
+    public init(
+        root: URL,
+        scripted: Bool = false,
+        updateURL: URL? = nil,
+        openRouterURL: URL? = nil,
+        linearURL: URL? = nil,
+        openPanelDirectory: URL? = nil
+    ) {
         self.root = root.standardizedFileURL
         self.scripted = scripted
         self.updateURL = updateURL
         self.openRouterURL = openRouterURL
+        self.linearURL = linearURL
+        self.openPanelDirectory = openPanelDirectory
     }
 
     /// QA mode from `SYMPHONY_BAR_QA_ROOT`, or nil when it is unset or blank. `~` is expanded.
@@ -51,8 +71,17 @@ public struct QAMode: Equatable {
             root: URL(fileURLWithPath: (path as NSString).expandingTildeInPath, isDirectory: true),
             scripted: environment[scriptedKey]?.trimmingWhitespace() == "1",
             updateURL: updateURL.flatMap { ["http", "https"].contains($0.scheme ?? "") ? $0 : nil },
-            openRouterURL: environment[openRouterURLKey].flatMap(loopbackURL)
+            openRouterURL: environment[openRouterURLKey].flatMap(loopbackURL),
+            linearURL: environment[linearURLKey].flatMap(loopbackURL),
+            openPanelDirectory: environment[openPanelDirectoryKey].flatMap(absoluteFolder)
         )
+    }
+
+    /// `value` as a folder URL when it is an absolute path, else nil.
+    static func absoluteFolder(_ value: String) -> URL? {
+        let path = value.trimmingWhitespace()
+        guard path.hasPrefix("/") else { return nil }
+        return URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
     }
 
     /// `value` as an http(s) URL on a loopback host without a trailing slash, or nil. The stub only ever runs on the
@@ -92,6 +121,8 @@ public struct AppStores {
     /// The OpenRouter API base Settings talks to: openrouter.ai's, whatever the environment says, except in QA mode
     /// with a stub.
     public let openRouterBaseURL: URL
+    /// The Linear GraphQL endpoint the Add Repo sheet asks: Linear's, except in QA mode with a stub.
+    public let linearEndpoint: URL
     /// The control URL used while Symphony hasn't written one. Nil in QA mode, so the app never mistakes the
     /// Symphony a normal launch runs, on the default port, for its own.
     public let controlURLFallback: URL?
@@ -113,6 +144,7 @@ public struct AppStores {
             updateCacheDirectory = nil
             updateURL = UpdateChecker.latestReleaseURL
             openRouterBaseURL = OpenRouterClient.baseURL
+            linearEndpoint = LinearClient.endpoint
             controlURLFallback = SymphonyState.defaultBaseURL
             self.environment = environment
             return
@@ -127,6 +159,7 @@ public struct AppStores {
         updateCacheDirectory = qaMode.updateCacheDirectory
         updateURL = qaMode.updateURL ?? UpdateChecker.latestReleaseURL
         openRouterBaseURL = qaMode.openRouterURL.map(OpenRouterClient.baseURL(api:)) ?? OpenRouterClient.baseURL
+        linearEndpoint = qaMode.linearURL ?? LinearClient.endpoint
         controlURLFallback = nil
         var environment = environment
         for (key, folder) in [

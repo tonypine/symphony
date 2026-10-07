@@ -87,6 +87,31 @@ final class QAModeTests: XCTestCase {
         XCTAssertNil(stub(""))
     }
 
+    func testQAModeReadsALoopbackLinearStubAndAnOpenPanelFolder() {
+        func qa(_ extra: [String: String]) -> QAMode? {
+            QAMode.detect(environment: [QAMode.environmentKey: "/tmp/qa"].merging(extra) { $1 })
+        }
+
+        XCTAssertNil(qa([:])?.linearURL)
+        XCTAssertNil(qa([:])?.openPanelDirectory)
+        XCTAssertEqual(qa([QAMode.linearURLKey: "http://localhost:4101/graphql"])?.linearURL?.absoluteString, "http://localhost:4101/graphql")
+        // Only a stub on this Mac: the sheet sends the Linear key with every query.
+        XCTAssertNil(qa([QAMode.linearURLKey: "https://api.linear.app/graphql"])?.linearURL)
+        XCTAssertEqual(qa([QAMode.openPanelDirectoryKey: " /tmp/qa/checkouts/widgets/ \n"])?.openPanelDirectory?.path, "/tmp/qa/checkouts/widgets")
+        XCTAssertNil(qa([QAMode.openPanelDirectoryKey: "checkouts/widgets"])?.openPanelDirectory)
+        XCTAssertNil(qa([QAMode.openPanelDirectoryKey: ""])?.openPanelDirectory)
+    }
+
+    func testQAModeAsksTheLinearStubWhenGivenOne() {
+        XCTAssertEqual(AppStores(environment: [:], home: home).linearEndpoint, LinearClient.endpoint)
+        XCTAssertEqual(
+            AppStores(environment: [QAMode.linearURLKey: "http://localhost:4101/graphql"], home: home).linearEndpoint,
+            LinearClient.endpoint
+        )
+        XCTAssertEqual(qaStores().linearEndpoint, LinearClient.endpoint)
+        XCTAssertEqual(qaStores([QAMode.linearURLKey: "http://localhost:4101/graphql"]).linearEndpoint.absoluteString, "http://localhost:4101/graphql")
+    }
+
     func testQAPathsAreUnderTheRoot() {
         let qa = QAMode(root: URL(fileURLWithPath: "/tmp/qa", isDirectory: true))
 

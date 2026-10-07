@@ -920,7 +920,7 @@ example `ERL_EPMD_PORT=24369`, and use a `symphony.yml` whose `dashboard.port` i
 Each `symphony check` the app runs (on Save in Settings, and before Restart) goes to the app's stderr in QA
 mode: its exit status and output, which start with the build that checked, `Symphony <version> (<commit>)`.
 
-Three more variables, read only in QA mode:
+Five more variables, read only in QA mode:
 
 - `SYMPHONY_BAR_UPDATE_URL` replaces GitHub's `releases/latest` URL for update checks, for a local update feed
   that answers in the same format. An update in QA mode relaunches the app with its environment, so the new
@@ -931,6 +931,11 @@ Three more variables, read only in QA mode:
   counts. The Symphony the app runs gets it too and, also only in QA mode, checks and runs OpenRouter models
   against the stub. Outside QA mode the app always talks to `https://openrouter.ai`, whatever the environment
   says. See [OpenRouter in QA](../docs/configuration.md#qa-passes).
+- `SYMPHONY_QA_LINEAR_URL` points the Add Repo sheet's Linear queries (projects and labels) at a stub GraphQL
+  endpoint instead of `https://api.linear.app/graphql`, such as `http://localhost:4101/graphql`. Only an `http`
+  or `https` URL on a loopback host counts, since the sheet sends `LINEAR_API_KEY` with each query.
+- `SYMPHONY_BAR_QA_OPEN_PANEL_DIR` makes the Add Repo sheet's folder picker open in that absolute folder, so a
+  QA pass, which can't type a path into the panel, picks a prepared checkout with the panel's Choose button.
 - `SYMPHONY_BAR_QA_SCRIPTED=1` lets a script drive the app without Accessibility access. The app presses the
   menu item whose title the first line of a file in `commands/` holds (files are taken in name order and
   deleted; a name starting with `.` is skipped, so write one and rename it). As a click would, it presses

@@ -36,7 +36,29 @@ defmodule SymphonyElixir.QaDriver do
     and refuses a symlink, a file with other hard links, and a file swapped
     between the check and the read. Locally it returns the file's path; on a QA
     host it copies the checked bytes into the run directory's `files/` there and
-    returns that path.
+    returns that path;
+  - `qa_put_checkout` hands the app a git checkout: a `git bundle` the agent
+    made, read with the same checks as `qa_put_file`, is cloned (without hooks)
+    into the driver's `checkouts/<name>`, locally or on the QA host, and its
+    `origin` is set to the `https://github.com/<owner>/<repo>` URL the agent
+    names. Nothing is fetched from GitHub.
+
+  App stand-ins: `qa_launch_app` takes three optional arguments that point the
+  app at stand-ins instead of real services, all only in QA mode:
+
+  - `gh_stub_port` (one of the pass's host ports) sets `SYMPHONY_BAR_GH` to
+    Symphony's own fake `gh` script, written into the run directory's `bin/`,
+    and `SYMPHONY_QA_GH_URL` to `http://localhost:<port>`. The fake sends each
+    call's arguments to the agent's server there (`argc` and one `arg` form
+    field per argument, in order) and prints its answer: a 200 on stdout with
+    exit status 0, anything else on stderr with exit status 1. The script is
+    Symphony's, so the app never runs code the agent wrote;
+  - `linear_stub_port` sets `SYMPHONY_QA_LINEAR_URL` to
+    `http://localhost:<port>/graphql`, where the Add Repo sheet sends its
+    Linear queries;
+  - `open_panel_dir` (a path `qa_put_checkout` returned in this pass) sets
+    `SYMPHONY_BAR_QA_OPEN_PANEL_DIR`, the folder the app's folder picker opens
+    in, so the agent can choose that checkout with the panel's Choose button.
 
   Screenshots and accessibility calls run in the helper app,
   `SymphonyQADriver.app` (see `SymphonyElixir.QaDriver.Host`), which holds the
@@ -127,6 +149,50 @@ defmodule SymphonyElixir.QaDriver do
   @wide_height 900
   @max_window_size 8192
 
+  # Clones the bundle `$2` into `$1/checkouts/$3` without hooks (the empty
+  # template and `core.hooksPath` keep the operator's out too) and points
+  # `origin` at `$4`. The bundle is removed either way.
+  @checkout_script """
+  dest="$1/checkouts/$3"
+  if [ -e "$dest" ] || [ -L "$dest" ]; then rm -f "$2"; echo "$dest already exists; pass another remote_name"; exit 3; fi
+  mkdir -p "$1/checkouts" || exit 1
+  if ! GIT_TERMINAL_PROMPT=0 git -c core.hooksPath=/dev/null clone --quiet --template= -- "$2" "$dest" 2>&1; then rm -rf "$dest"; rm -f "$2"; exit 1; fi
+  rm -f "$2"
+  git -C "$dest" remote set-url origin "$4" || exit 1
+  printf 'symphony-qa-checkout:%s\\n' "$dest"
+  """
+
+  # Writes Symphony's fake `gh` (`$2`) to `$1/bin/gh`.
+  @install_gh_script """
+  mkdir -p "$1/bin" && printf '%s' "$2" > "$1/bin/gh.part" && chmod 700 "$1/bin/gh.part" && mv -f "$1/bin/gh.part" "$1/bin/gh" || exit 1
+  printf 'symphony-qa-gh:%s\\n' "$1/bin/gh"
+  """
+
+  # Symphony's fake `gh` for the app: it hands each call to the QA agent's gh
+  # stub and prints the answer.
+  @fake_gh """
+  #!/bin/sh
+  # Symphony's QA stand-in for the GitHub CLI. It sends its arguments to the QA
+  # agent's gh stub at $SYMPHONY_QA_GH_URL as form fields (argc, then one arg per
+  # argument, in order) and prints the answer: a 200 on stdout with exit status 0,
+  # anything else on stderr with exit status 1.
+  url=${SYMPHONY_QA_GH_URL:-}
+  if [ -z "$url" ]; then echo "gh (Symphony QA stand-in): SYMPHONY_QA_GH_URL is not set" >&2; exit 1; fi
+  n=$#
+  for arg do set -- "$@" --data-urlencode "arg=$arg"; done
+  shift "$n"
+  out=$(mktemp "${TMPDIR:-/tmp}/symphony-qa-gh.XXXXXX") || exit 1
+  code=$(curl -sS --max-time 30 -o "$out" -w '%{http_code}' -d "argc=$n" "$@" "$url") || code=000
+  if [ "$code" = 200 ]; then cat "$out"; status=0
+  elif [ "$code" = 000 ]; then echo "gh (Symphony QA stand-in): couldn't reach the gh stub at $url" >&2; status=1
+  else cat "$out" >&2; status=1; fi
+  rm -f "$out"
+  exit "$status"
+  """
+
+  @github_url ~r{\Ahttps://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?\z}
+  @checkout_timeout_ms 60_000
+
   # Lists the crash reports named after the app (`$1`, its executable) in the
   # user's DiagnosticReports, one name per line. No folder means no reports.
   @crash_reports_script """
@@ -150,7 +216,7 @@ defmodule SymphonyElixir.QaDriver do
   printf 'symphony-qa-app:%s\\n' "$executable"
   """
 
-  @tools ~w(qa_build qa_launch_app qa_quit_app qa_screenshot qa_ax_tree qa_ax_press qa_ax_set_value qa_resize_window qa_check_app qa_put_file)
+  @tools ~w(qa_build qa_launch_app qa_quit_app qa_screenshot qa_ax_tree qa_ax_press qa_ax_set_value qa_resize_window qa_check_app qa_put_file qa_put_checkout)
 
   @type host :: %{
           required(:cmd) => (String.t(), [String.t()], keyword() -> {:ok, {String.t(), integer()}} | {:error, term()}),
@@ -254,13 +320,14 @@ defmodule SymphonyElixir.QaDriver do
     end
   end
 
-  defp run_tool("qa_launch_app", driver, config, _args) do
+  defp run_tool("qa_launch_app", driver, config, args) do
     with {:ok, built} <- fetch_build(driver),
+         {:ok, stand_ins} <- stand_ins(driver, config, args),
          :ok <- ensure_clean_worktree(config, GenServer.call(driver, :ignored)),
          :ok <- unchanged_build(config, built),
          name = Path.basename(built.executable),
          {:ok, reports} <- crash_reports(config, name) do
-      GenServer.call(driver, {:launch, built.executable, %{name: name, crash_reports: reports}})
+      GenServer.call(driver, {:launch, built.executable, %{name: name, crash_reports: reports}, stand_ins})
     end
   end
 
@@ -357,6 +424,18 @@ defmodule SymphonyElixir.QaDriver do
          {:ok, name} <- put_file_name(Map.get(args, "remote_name"), local_path),
          {:ok, path, bytes} <- Checks.read_fixture(config.put_roots, config.worktree, local_path, "qa_put_file") do
       put_file(config, path, bytes, name)
+    end
+  end
+
+  defp run_tool("qa_put_checkout", driver, config, args) do
+    with {:ok, local_path} <- Checks.fixture_path(Map.get(args, "local_path")),
+         {:ok, url, repo} <- github_url(Map.get(args, "remote_url")),
+         {:ok, name} <- checkout_name(Map.get(args, "remote_name"), repo),
+         {:ok, _path, bytes} <- Checks.read_fixture(config.put_roots, config.worktree, local_path, "qa_put_checkout"),
+         {:ok, bundle} <- stage_bundle(config, bytes, name),
+         {:ok, path} <- clone_checkout(config, bundle, name, url) do
+      GenServer.call(driver, {:checkout, path})
+      {:ok, %{"path" => path, "remote_url" => url, "note" => "Pass this path as qa_launch_app's open_panel_dir to open the folder picker in it."}}
     end
   end
 
@@ -688,6 +767,108 @@ defmodule SymphonyElixir.QaDriver do
     result
   end
 
+  # The bundle goes where the clone runs: the private directory locally, the
+  # run directory's `files/` on a QA host.
+  defp stage_bundle(config, bytes, name) do
+    local = Path.join(config.scratch_dir, "checkout-#{System.unique_integer([:positive])}.bundle")
+    File.write!(local, bytes, [:exclusive])
+
+    if config.remote? do
+      result = config.host.put.(local, config.host_dir, name <> ".bundle")
+      File.rm(local)
+
+      case result do
+        {:ok, remote_path} -> {:ok, remote_path}
+        {:error, reason} -> tool_error("qa_put_checkout_failed", "The bundle could not be copied to the QA host: #{reason}")
+      end
+    else
+      {:ok, local}
+    end
+  end
+
+  defp clone_checkout(config, bundle, name, url) do
+    args = ["-c", @checkout_script, "sh", config.host_dir, bundle, name, url]
+
+    case config.host.cmd.("/bin/sh", args, timeout_ms: @checkout_timeout_ms, output_limit: @output_limit) do
+      {:ok, {output, 0}} ->
+        case Regex.run(~r/^symphony-qa-checkout:(.+)$/m, output) do
+          [_line, path] -> {:ok, path}
+          nil -> tool_error("qa_put_checkout_failed", "The checkout was not confirmed: #{tail(output, 1_000)}")
+        end
+
+      {:ok, {output, status}} ->
+        tool_error("qa_put_checkout_failed", "git could not clone the bundle (exit #{status}): #{tail(output, 1_000)} Make it with `git bundle create <file> --all`.")
+
+      {:error, reason} ->
+        tool_error("qa_put_checkout_failed", "git could not clone the bundle: #{inspect(reason)}")
+    end
+  end
+
+  # -- app stand-ins ------------------------------------------------------------
+
+  # The extra environment `qa_launch_app`'s stand-in arguments give the app.
+  defp stand_ins(driver, config, args) do
+    %{host_ports: ports, checkouts: checkouts} = GenServer.call(driver, :stand_in_choices)
+
+    with {:ok, gh_port} <- stub_port(args, "gh_stub_port", ports),
+         {:ok, linear_port} <- stub_port(args, "linear_stub_port", ports),
+         {:ok, panel_dir} <- open_panel_dir(Map.get(args, "open_panel_dir"), checkouts),
+         {:ok, gh_env} <- gh_env(config, gh_port) do
+      linear_env = if linear_port, do: [{"SYMPHONY_QA_LINEAR_URL", "http://localhost:#{linear_port}/graphql"}], else: []
+      panel_env = if panel_dir, do: [{"SYMPHONY_BAR_QA_OPEN_PANEL_DIR", panel_dir}], else: []
+      {:ok, gh_env ++ linear_env ++ panel_env}
+    end
+  end
+
+  defp stub_port(args, key, ports) do
+    case Map.get(args, key) do
+      nil -> {:ok, nil}
+      port when is_integer(port) -> if port in ports, do: {:ok, port}, else: bad_stub_port(key, ports)
+      _other -> bad_stub_port(key, ports)
+    end
+  end
+
+  defp bad_stub_port(key, ports),
+    do: tool_error("invalid_arguments", "`#{key}` must be one of QA_HOST_PORTS (#{Enum.join(ports, ", ")}), where your stub listens.")
+
+  defp open_panel_dir(nil, _checkouts), do: {:ok, nil}
+
+  defp open_panel_dir(path, checkouts) do
+    if path in checkouts,
+      do: {:ok, path},
+      else: tool_error("invalid_arguments", "`open_panel_dir` must be a path qa_put_checkout returned in this QA pass.")
+  end
+
+  defp gh_env(_config, nil), do: {:ok, []}
+
+  defp gh_env(config, port) do
+    with {:ok, {output, 0}} <- config.host.cmd.("/bin/sh", ["-c", @install_gh_script, "sh", config.host_dir, @fake_gh], timeout_ms: @helper_timeout_ms),
+         [_line, path] <- Regex.run(~r/^symphony-qa-gh:(.+)$/m, output) do
+      {:ok, [{"SYMPHONY_BAR_GH", path}, {"SYMPHONY_QA_GH_URL", "http://localhost:#{port}"}]}
+    else
+      other -> tool_error("qa_launch_failed", "Symphony's fake gh could not be installed for the app: #{inspect(other)}")
+    end
+  end
+
+  defp github_url(url) when is_binary(url) do
+    case Regex.run(@github_url, url) do
+      [_url, owner, repo] -> {:ok, "https://github.com/#{owner}/#{repo}.git", repo}
+      nil -> bad_github_url()
+    end
+  end
+
+  defp github_url(_url), do: bad_github_url()
+
+  defp bad_github_url, do: tool_error("invalid_arguments", "`remote_url` must be a GitHub repo URL like https://github.com/acme/widgets.")
+
+  defp checkout_name(nil, repo), do: checkout_name(repo, repo)
+
+  defp checkout_name(name, _repo) do
+    if Checks.fixture_name?(name),
+      do: {:ok, name},
+      else: tool_error("invalid_arguments", "`remote_name` must be 1-128 characters of letters, digits, `.`, `_` or `-`, starting with a letter or digit.")
+  end
+
   # -- argument checks --------------------------------------------------------
 
   defp pid_argument(%{"pid" => pid}) when is_integer(pid) and pid > 0, do: {:ok, pid}
@@ -1013,7 +1194,7 @@ defmodule SymphonyElixir.QaDriver do
     }
 
     state = %{config: host_dirs(config, worker_host), build: nil, ignored: %{}, apps: %{}, helper: nil, stub: nil}
-    state = Map.merge(state, %{wide_pass: nil, host_ports: pick_host_ports(), tunnel: nil, tunnel_error: nil})
+    state = Map.merge(state, %{wide_pass: nil, host_ports: pick_host_ports(), tunnel: nil, tunnel_error: nil, checkouts: []})
     {:ok, open_tunnel(state, @tunnel_attempts)}
   end
 
@@ -1102,7 +1283,10 @@ defmodule SymphonyElixir.QaDriver do
   def handle_call({:record_build, fingerprint, ignored}, _from, state),
     do: {:reply, :ok, %{state | build: fingerprint, ignored: ignored}}
 
-  def handle_call({:launch, executable, info}, _from, state) do
+  def handle_call(:stand_in_choices, _from, state), do: {:reply, %{host_ports: state.host_ports, checkouts: state.checkouts}, state}
+  def handle_call({:checkout, path}, _from, state), do: {:reply, :ok, %{state | checkouts: [path | state.checkouts]}}
+
+  def handle_call({:launch, executable, info, stand_ins}, _from, state) do
     running = Enum.count(state.apps, fn {_pid, app} -> app.exit_status == nil end)
 
     cond do
@@ -1111,12 +1295,12 @@ defmodule SymphonyElixir.QaDriver do
 
       reopen_tunnel?(state) ->
         case open_tunnel(state, 1) do
-          %{tunnel_error: nil} = state -> launch(executable, info, state)
+          %{tunnel_error: nil} = state -> launch(executable, info, stand_ins, state)
           state -> {:reply, tunnel_closed_error(state), state}
         end
 
       true ->
-        launch(executable, info, state)
+        launch(executable, info, stand_ins, state)
     end
   end
 
@@ -1188,10 +1372,10 @@ defmodule SymphonyElixir.QaDriver do
     :ok
   end
 
-  defp launch(executable, info, state) do
+  defp launch(executable, info, stand_ins, state) do
     with {:ok, state} <- ensure_stub(state),
          {stub_url, forwards} = stub_route(state.config, state.stub.port),
-         launch_opts = [cd: state.config.qa_root, env: launch_env(state.config, stub_url), reverse_forwards: forwards],
+         launch_opts = [cd: state.config.qa_root, env: launch_env(state.config, stub_url, stand_ins), reverse_forwards: forwards],
          {:ok, port, pid} <- state.config.host.launch.(executable, launch_opts) do
       Logger.info("QA driver launched app pid=#{pid} executable=#{executable} openrouter_stub=#{stub_url}")
       app = Map.merge(info, %{port: port, output: "", exit_status: nil, window: nil})
@@ -1240,12 +1424,13 @@ defmodule SymphonyElixir.QaDriver do
     {OpenRouter.Stub.url(remote_port), [{"127.0.0.1:#{remote_port}", "127.0.0.1:#{port}"}]}
   end
 
-  # The QA host has its own login environment; only the QA root and the stub's URL cross over.
-  defp launch_env(%{remote?: true, qa_root: qa_root}, stub_url),
-    do: [{@qa_root_env, qa_root}, {OpenRouter.qa_url_env(), stub_url}]
+  # The QA host has its own login environment; only the QA root, the stub's URL
+  # and the stand-ins cross over.
+  defp launch_env(%{remote?: true, qa_root: qa_root}, stub_url, stand_ins),
+    do: [{@qa_root_env, qa_root}, {OpenRouter.qa_url_env(), stub_url} | stand_ins]
 
-  defp launch_env(config, stub_url),
-    do: AgentEnv.build_with(%{@qa_root_env => config.qa_root, OpenRouter.qa_url_env() => stub_url})
+  defp launch_env(config, stub_url, stand_ins),
+    do: AgentEnv.build_with(Map.new([{@qa_root_env, config.qa_root}, {OpenRouter.qa_url_env(), stub_url} | stand_ins]))
 
   defp update_app(state, port, fun) do
     case Enum.find(state.apps, fn {_pid, app} -> app.port == port end) do

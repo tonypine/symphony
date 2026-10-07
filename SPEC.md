@@ -1410,7 +1410,12 @@ When enabled:
   `SYMPHONY_BAR_QA_ROOT` set to a private directory), `qa_screenshot` (new files in `qa-evidence/`, never replacing or following an existing entry), and
   `qa_ax_tree`, `qa_ax_press`, `qa_ax_set_value`, and `qa_put_file`, which returns a path the app
   can open for a fixture file the agent wrote (on a separate QA host, a copy in the pass's run
-  directory there). `qa_put_file` MUST read only a regular file of bounded size that resolves inside
+  directory there), and `qa_put_checkout`, which clones a git bundle the agent wrote into a
+  checkout there, without hooks, with `origin` set to the GitHub URL the agent names.
+  `qa_launch_app` MAY point the app, in QA mode only, at stand-ins on the pass's host ports: a
+  fake `gh` that Symphony itself provides (never a script the agent wrote) forwarding each call to
+  the agent's stub, a Linear GraphQL stub, and a folder picker that opens in a checkout
+  `qa_put_checkout` made. `qa_put_file` MUST read only a regular file of bounded size that resolves inside
   the QA worktree or the pass's temp folder, and MUST refuse symlinks and files with other hard
   links. `qa_ax_set_value` MUST enter a text field's value so the app registers the edit, with key
   events sent to that app alone, and the tools MUST NOT return a secure field's value.
