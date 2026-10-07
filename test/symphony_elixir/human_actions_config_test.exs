@@ -57,6 +57,42 @@ defmodule SymphonyElixir.HumanActionsConfigTest do
     assert SymphonyElixir.HumanReview.parked_for_person?(%Issue{state: "Backlog", labels: ["Needs-Tony"]}, settings)
   end
 
+  test "logs each deprecation warning once per load of symphony.yml, not on every settings read" do
+    write_workflow_file!(Workflow.workflow_file_path())
+    base = File.read!(Workflow.symphony_file_path())
+
+    yaml = """
+    human_actions:
+      label: needs-tony
+    auto_review:
+      acceptance_gate:
+        escalate:
+          labels: [human-action]
+    """
+
+    log =
+      capture_log(fn ->
+        append_symphony_yml!(yaml)
+        for _read <- 1..100, do: Config.settings!()
+      end)
+
+    assert count(log, "lists the deprecated `human-action` label") == 1
+    assert count(log, "`human_actions.label` is deprecated") == 1
+
+    # A reload of a changed file that still names the label warns once more.
+    log =
+      capture_log(fn ->
+        File.write!(Workflow.symphony_file_path(), base <> String.replace(yaml, "[human-action]", "[needs-human, human-action]"))
+        Cache.clear()
+        for _read <- 1..100, do: Config.settings!()
+      end)
+
+    assert count(log, "lists the deprecated `human-action` label") == 1
+    assert count(log, "`human_actions.label` is deprecated") == 1
+  end
+
+  defp count(log, fragment), do: length(String.split(log, fragment)) - 1
+
   test "rejects unknown keys and invalid values" do
     base = %{
       "issues" => %{"provider" => "memory"},
