@@ -3456,8 +3456,8 @@ Scoped Linear tool extension contract:
   `linear_update_state`, `linear_add_comment`, `linear_update_comment`, `linear_delete_comment`,
   `linear_attach_url`, `linear_attach_file`, `linear_create_subissue`, `linear_update_subissue`,
   `linear_add_blocked_by`, `linear_create_project_update`, `linear_create_document`,
-  `linear_update_document`, `linear_get_document`, `linear_request_human_action`, and
-  `linear_withdraw_human_action`.
+  `linear_update_document`, `linear_get_document`, `linear_update_issue_summary`,
+  `linear_request_human_action`, and `linear_withdraw_human_action`.
 - `linear_add_comment` MAY take a `parent_id` naming a comment on the current issue; the comment is
   then posted as a reply under it. `linear_get_comments` SHOULD return each reply's parent id.
 - `linear_get_related_issues` MAY read beyond the current issue, but only inside its family: the
@@ -3535,6 +3535,22 @@ Scoped Linear tool extension contract:
   one it returns the document with its content secret-redacted and wrapped in prompt-safety
   boundary tags like comments. `linear_get_document` is read-only and available to the read-only
   reviewer and QA scopes; the read-only reviewer scope MUST NOT advertise or execute the other two.
+- `linear_update_issue_summary` is the only tool that writes the current issue's description, and
+  it MUST only write the Symphony summary block between `<!-- symphony:summary:start -->` and
+  `<!-- symphony:summary:end -->`. It accepts only a one-line `status`, an optional `links` object
+  (`review_brief`, the URL of the review brief comment, and `artifacts`, a list of `label` and
+  `url`; URLs MUST be http(s)) and a one-line `changelog_entry`; every field MUST pass the same
+  secret scan as comments before any Linear call. It MUST read the description right before
+  writing and leave every byte outside the block unchanged, appending the block at the end when the
+  description has none; a start marker without an end marker MUST be refused with nothing written.
+  The block renders a `Symphony summary` heading with the status, the review brief link, the
+  artifacts and a changelog of dated entries, newest first: each call replaces the status and links
+  and prepends one entry dated with the UTC date, and the changelog MUST be capped (the Elixir cap
+  is 20, older entries trimmed). Every reader of an issue description that reaches an agent (the
+  issue context in the prompt, `linear_get_current_issue`, the review, QA and acceptance gate
+  prompts, and the acceptance criteria and walkthrough parsers) MUST strip the block, so an agent
+  never reads its own summary as requirements. The read-only reviewer and QA scopes MUST NOT
+  advertise or execute it.
 - `linear_request_human_action` MUST only act on the current issue and MUST accept only `title`,
   `why`, a `decision`, an optional `unblocks` and an optional `est_minutes`. The `decision` holds
   one non-blank `question` and 2 to 4 `options`, each with a non-blank `label` and `effect`,
