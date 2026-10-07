@@ -571,4 +571,99 @@ defmodule SymphonyElixir.HumanActions.CollectorTest do
     assert {:error, {:human_actions_query_failed, ^errors}} =
              Collector.collect([:repo], Keyword.put(opts, :linear_client, fn _query, _variables, _opts -> {:ok, errors} end))
   end
+
+  describe "an issue with more comments and history than the issue query reads" do
+    defp filler_comments(count), do: for(i <- 1..count, do: %{"id" => "c-#{i}", "body" => "Note #{i}", "createdAt" => "2026-10-02T00:00:00Z"})
+    defp filler_history(count), do: for(_i <- 1..count, do: %{"createdAt" => "2026-09-01T00:00:00Z", "fromState" => nil, "toState" => nil})
+
+    defp long_lived_node do
+      node("MOT-9", %{
+        "state" => %{"name" => "In Review"},
+        "comments" => %{"nodes" => filler_comments(30), "pageInfo" => %{"hasPreviousPage" => true, "startCursor" => "comments-1"}},
+        "history" => %{"nodes" => filler_history(50), "pageInfo" => %{"hasNextPage" => true, "endCursor" => "history-1"}}
+      })
+    end
+
+    defp connection(field, nodes, page_info), do: {:ok, %{"data" => %{"issue" => %{field => %{"nodes" => nodes, "pageInfo" => page_info}}}}}
+
+    defp collect_long_lived(more) do
+      test_pid = self()
+
+      client = fn query, variables, _opts ->
+        cond do
+          query =~ "SymphonyHumanActionsComments" ->
+            send(test_pid, {:more, :comments, variables})
+            more.(:comments, variables)
+
+          query =~ "SymphonyHumanActionsHistory" ->
+            send(test_pid, {:more, :history, variables})
+            more.(:history, variables)
+
+          true ->
+            {:ok, page([long_lived_node()], %{"hasNextPage" => false})}
+        end
+      end
+
+      opts = [settings: settings(), linear_client: client, scope_filter: fn _repo -> {:ok, @scope} end]
+      Collector.collect_all([:repo], opts)
+    end
+
+    test "reads the rest of them, so its waiting_since and headline survive" do
+      brief = %{"id" => "brief", "body" => "## Review brief\n\n**What to review:** The login fix PR\n", "createdAt" => "2026-09-20T00:00:00Z"}
+      moved = %{"createdAt" => "2026-09-21T08:00:00Z", "fromState" => %{"name" => "In Progress"}, "toState" => %{"name" => "In Review"}}
+
+      more = fn
+        :comments, %{cursor: "comments-1"} -> connection("comments", [brief | filler_comments(5)], %{"hasPreviousPage" => false})
+        :history, %{cursor: "history-1"} -> connection("history", filler_history(100), %{"hasNextPage" => true, "endCursor" => "history-2"})
+        :history, %{cursor: "history-2"} -> connection("history", [moved], %{"hasNextPage" => false})
+      end
+
+      assert {:ok, _actions, [entry]} = collect_long_lived(more)
+      assert entry.identifier == "MOT-9"
+      assert entry.headline == "The login fix PR"
+      assert entry.waiting_since == ~U[2026-09-21 08:00:00Z]
+
+      assert_received {:more, :comments, %{id: "id-MOT-9", size: 100, cursor: "comments-1"}}
+      assert_received {:more, :history, %{id: "id-MOT-9", size: 100, cursor: "history-1"}}
+      assert_received {:more, :history, %{cursor: "history-2"}}
+    end
+
+    test "stops after ten more pages and keeps what it read" do
+      more = fn
+        :comments, _variables -> connection("comments", [], %{"hasPreviousPage" => false})
+        :history, %{cursor: cursor} -> connection("history", filler_history(1), %{"hasNextPage" => true, "endCursor" => cursor <> "+"})
+      end
+
+      assert {:ok, _actions, [%{identifier: "MOT-9", waiting_since: nil}]} = collect_long_lived(more)
+
+      {:messages, messages} = Process.info(self(), :messages)
+      assert Enum.count(messages, &match?({:more, :history, _variables}, &1)) == 10
+    end
+
+    test "fails as a whole when the rest cannot be read" do
+      history_done = fn -> connection("history", [], %{"hasNextPage" => false}) end
+
+      assert {:error, :linear_down} = collect_long_lived(fn _field, _variables -> {:error, :linear_down} end)
+
+      errors = %{"errors" => [%{"message" => "rate limited"}]}
+
+      assert {:error, {:human_actions_query_failed, ^errors}} =
+               collect_long_lived(fn
+                 :comments, _variables -> {:ok, errors}
+                 :history, _variables -> history_done.()
+               end)
+
+      assert {:error, {:human_actions_query_failed, "comments"}} =
+               collect_long_lived(fn
+                 :comments, _variables -> {:ok, %{"data" => %{"issue" => %{}}}}
+                 :history, _variables -> history_done.()
+               end)
+
+      assert {:error, :linear_missing_end_cursor} =
+               collect_long_lived(fn
+                 :comments, _variables -> connection("comments", [], %{"hasPreviousPage" => true})
+                 :history, _variables -> history_done.()
+               end)
+    end
+  end
 end
