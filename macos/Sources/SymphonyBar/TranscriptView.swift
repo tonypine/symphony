@@ -116,9 +116,12 @@ struct TranscriptView: View {
         }
         // ⌘F searches the transcript (P10).
         .background(
+            // Drawn at no size rather than hidden, so its shortcut stays registered.
             Button("Search") { searchFocused = true }
                 .keyboardShortcut("f", modifiers: .command)
-                .hidden()
+                .opacity(0)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
         )
     }
 }
