@@ -91,6 +91,23 @@ defmodule SymphonyElixir.HumanActionsConfigTest do
     assert count(log, "`human_actions.label` is deprecated") == 1
   end
 
+  test "logs the warning once when many components read the settings at the same time at startup" do
+    write_workflow_file!(Workflow.workflow_file_path())
+
+    log =
+      capture_log(fn ->
+        append_symphony_yml!("auto_review:\n  acceptance_gate:\n    escalate:\n      labels: [human-action]\n")
+
+        # One reader per component that reads settings on boot (a repo each, the gate, the
+        # pollers), all parsing the freshly loaded config before any of them has warned.
+        1..50
+        |> Enum.map(fn _component -> Task.async(fn -> for _read <- 1..20, do: Config.settings!() end) end)
+        |> Task.await_many(30_000)
+      end)
+
+    assert count(log, "lists the deprecated `human-action` label") == 1
+  end
+
   defp count(log, fragment), do: length(String.split(log, fragment)) - 1
 
   test "rejects unknown keys and invalid values" do

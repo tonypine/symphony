@@ -456,20 +456,33 @@ defmodule SymphonyElixir.Config.SystemSchema do
     end
   end
 
-  # `Config.system/0` parses the cached config on every settings read, many times a second, so a
-  # deprecation warning collected during a parse is logged only for a config that has not warned
-  # yet: once per load of `symphony.yml`, and once more when a reload changes it.
+  # `Config.system/0` parses the cached config on every settings read, many times a second and
+  # from many processes at once at startup, so the deprecation warnings collected during a parse
+  # are logged once per distinct config on the node: once for `symphony.yml` as loaded, and once
+  # more for each reload that changes it. The claim runs under a node-local lock so concurrent
+  # first parses of the same config don't each log.
   defp log_deprecations([], _config), do: :ok
 
   defp log_deprecations(messages, config) do
-    hash = :erlang.phash2(config)
-
-    if :persistent_term.get(@deprecations_key, nil) != hash do
-      :persistent_term.put(@deprecations_key, hash)
+    if claim_deprecations({@deprecations_key, :erlang.phash2(config)}) do
       messages |> Enum.reverse() |> Enum.each(&Logger.warning/1)
     end
 
     :ok
+  end
+
+  defp claim_deprecations(key) do
+    not :persistent_term.get(key, false) and
+      :global.trans({key, self()}, fn -> claim_deprecations_locked(key) end, [node()])
+  end
+
+  defp claim_deprecations_locked(key) do
+    if :persistent_term.get(key, false) do
+      false
+    else
+      :persistent_term.put(key, true)
+      true
+    end
   end
 
   defp deprecation_warning(message) do
