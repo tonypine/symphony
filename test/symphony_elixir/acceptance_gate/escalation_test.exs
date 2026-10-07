@@ -60,8 +60,7 @@ defmodule SymphonyElixir.AcceptanceGate.EscalationTest do
     assert [
              %{
                rule: :ticket_pattern,
-               detail:
-                 "the ticket matches `(?im)\\b(needs?|requires?|wants?|for)\\s+(an?\\s+)?(human|manual)\\s+review\\b|\\bmanual(ly)?\\s+review|\\bhuman\\s+review\\s+(is\\s+)?(required|needed)\\b|^\\W*human\\s+review\\s*:`"
+               detail: "the ticket matches `(?i)\\b(human|manual(ly)?)\\s+review`"
              }
            ] =
              check(issue: issue(description: "Ship it after a Manual review of the copy."))
@@ -79,7 +78,8 @@ defmodule SymphonyElixir.AcceptanceGate.EscalationTest do
 
     names_state =
       "It moves it to Human Review, for a parent in `Human Review`, from **Human Review** into Human Review. " <>
-        ~s(Human Review tickets wait on a person; "Human Review" and In Review / Human Review hold them.)
+        ~s(Human Review tickets wait on a person; "Human Review" and In Review / Human Review hold them. ) <>
+        "Tickets in the human review state, the in review state or the `human review` states come first."
 
     assert Escalation.ticket_reasons(issue(title: "Fix the Human Review state", description: names_state, labels: []), @rules, opts) == []
     assert Escalation.check(issue(description: names_state), diff([]), [], @rules, opts) == []
@@ -94,13 +94,17 @@ defmodule SymphonyElixir.AcceptanceGate.EscalationTest do
           "Needs Human Review before it ships.",
           "This requires a Human Review.",
           "Human review required for the copy.",
-          "Human review: check the migration."
+          "Human review: check the migration.",
+          "Have a human review this before merging.",
+          "This should get a human review.",
+          "Merge it after a human review.",
+          "Count the tickets waiting on human review."
         ] do
       assert [%{rule: :ticket_pattern}] = reasons.(request, opts), request
     end
 
-    # Naming the words without asking for a review doesn't match either.
-    assert reasons.("Count the tickets waiting on human review.", opts) == []
+    assert reasons.("It moves to `Human Review`.", opts) == []
+    assert reasons.("Tickets in the human review state wait.", opts) == []
 
     # The names match case-sensitively, and only when configured.
     assert [%{rule: :ticket_pattern}] = reasons.("Send it for human review, Human Review.", opts)

@@ -277,7 +277,7 @@ auto_review:
     escalate:
       labels: [needs-human, plan, breakdown]
       ticket_patterns:
-        - '(?im)\b(needs?|requires?|wants?|for)\s+(an?\s+)?(human|manual)\s+review\b|\bmanual(ly)?\s+review|\bhuman\s+review\s+(is\s+)?(required|needed)\b|^\W*human\s+review\s*:'
+        - '(?i)\b(human|manual(ly)?)\s+review'
         - '(?i)must not (auto-?approve|auto-?merge)'
         - '(?i)\bneeds?[- ]human\b'
       paths: []            # added to the built-in paths below
@@ -375,13 +375,11 @@ one in the Human Review state, with an open `## Action needed:` request
 (`linear_request_human_action`), or with a deprecated request label (`human_actions.label`, or
 `human-action` in `escalate.labels`). Such an issue is never approved.
 
-A ticket that only names a review state doesn't escalate. The built-in pattern asks for a request
-("needs a human review", "for manual review", "must be manually reviewed", "human review
-required", a line opening with "Human review:"), not the words
-`human review` alone. Before `ticket_patterns` match, the gate also blanks `In Review` and
-`issues.states.human_review` (`Human Review` by default) wherever the text names them: bare, in
-backticks (`` `Human Review` ``), in bold or in quotes. The names match case-sensitively, so
-"This needs human review before merge" still escalates, and a name right after `need`, `require`
+A ticket that only names a review state doesn't escalate. Before `ticket_patterns` match, the
+gate blanks `In Review` and `issues.states.human_review` (`Human Review` by default) wherever the
+text names them: bare, in backticks (`` `Human Review` ``), in bold or in quotes. The names match
+case-sensitively, so "Have a human review this before merging" still escalates; before `state` or
+`states` they match in any case ("the human review state"). A name right after `need`, `require`
 or `want` ("Needs Human Review") stays, since it asks for one. With
 `issues.states.human_review: null` only `In Review` is blanked. The same applies when Symphony
 checks whether a plan's ticket asks for a human review.

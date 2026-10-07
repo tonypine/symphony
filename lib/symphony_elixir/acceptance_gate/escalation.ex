@@ -22,8 +22,9 @@ defmodule SymphonyElixir.AcceptanceGate.Escalation do
   Before `:ticket_pattern` matches, each name in the `:review_states` option (`In Review` and
   `issues.states.human_review`, e.g. `Human Review`) is blanked wherever the text names the
   state: bare, backticked, bolded or quoted. The name matches case-sensitively, so a ticket about
-  the state doesn't match `human review`, while "needs a human review" still does. A name right
-  after a request ("Needs Human Review", "requires a Human Review") stays, since that asks for one.
+  the state doesn't match `human review`, while "needs a human review" still does. Before `state`
+  or `states` it matches in any case ("the human review state"). A name right after a request
+  ("Needs Human Review", "requires a Human Review") stays, since that asks for one.
 
   Docs and tests are the globs QA selection skips (`QaAgent.Selection.docs_or_test?/1`).
   A version's major is its first number, or its first two when the first is `0`, so `0.4` to
@@ -117,12 +118,15 @@ defmodule SymphonyElixir.AcceptanceGate.Escalation do
   end
 
   # The ticket naming a review state (`Human Review`) isn't a request for a human review, unless
-  # the name follows a request word: "Needs Human Review".
+  # the name follows a request word: "Needs Human Review". Before `state` or `states` the name
+  # matches in any case: "the human review state".
   defp blank_state_names(text, states) do
     states
     |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
     |> Enum.reduce(text, fn state, acc ->
-      Regex.replace(~r/(\b(?i:needs?|requires?|wants?)\s+(?:(?i:an?)\s+)?)?\b#{Regex.escape(state)}\b/u, acc, fn
+      name = Regex.escape(state)
+
+      Regex.replace(~r/(\b(?i:needs?|requires?|wants?)\s+(?:(?i:an?)\s+)?)?\b(?:#{name}\b|(?i:#{name})(?=\W{0,2}\s+(?i:states?)\b))/u, acc, fn
         whole, "" -> String.duplicate(" ", String.length(whole))
         whole, _request -> whole
       end)
