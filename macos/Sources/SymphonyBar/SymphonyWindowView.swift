@@ -75,7 +75,7 @@ struct SymphonyWindowView: View {
 
     var body: some View {
         NavigationSplitView {
-            SymphonySidebar(model: model)
+            SymphonySidebar(model: model, client: client)
                 .navigationSplitViewColumnWidth(
                     min: DesignTokens.Layout.minSidebarWidth,
                     ideal: DesignTokens.Layout.sidebarWidth,
@@ -112,6 +112,8 @@ struct SymphonyWindowView: View {
 /// The sidebar: views by section, and Symphony's version and state at the foot.
 struct SymphonySidebar: View {
     @ObservedObject var model: SymphonyWindowModel
+    /// Observed so the footer shows Symphony's version once its first state payload arrives.
+    @ObservedObject var client: LiveAPIClient
 
     var body: some View {
         List(selection: selection) {

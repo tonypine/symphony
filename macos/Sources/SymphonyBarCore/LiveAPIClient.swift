@@ -149,8 +149,17 @@ public final class LiveAPIClient: ObservableObject {
 
     private func record(_ answer: APIAnswer) {
         let result = EndpointResult(answer)
-        guard case let .loaded(data) = result, let payload = DiagnosticsPayload.decode(data) else {
+        guard case let .loaded(data) = result else {
             stateResult = result
+            return
+        }
+        guard let payload = DiagnosticsPayload.decode(data) else {
+            stateResult = .failed("Symphony sent a state that couldn't be read")
+            return
+        }
+        // A snapshot Symphony couldn't take answers 200 with an error in place of the state.
+        if let error = payload.error {
+            stateResult = .failed(error.message ?? error.code ?? "Symphony reported an error")
             return
         }
         stateJSON = data

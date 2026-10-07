@@ -142,6 +142,36 @@ final class LiveAPIClientTests: XCTestCase {
         XCTAssertEqual(client.stateResult, .failed("Symphony isn't answering"))
     }
 
+    func testASnapshotErrorKeepsTheLastPayload() async throws {
+        let client = client()
+        client.start()
+        await client.pollTask?.value
+        let first = client.stateJSON
+        let firstUpdate = client.lastUpdate
+
+        // Symphony answers a snapshot it couldn't take with 200 and an error in place of the state.
+        answer = .answered(Data(#"{"generated_at":"2026-10-06T12:00:00Z","error":{"code":"snapshot_unavailable"}}"#.utf8), statusCode: 200)
+        try await tick(client)
+        XCTAssertEqual(client.stateJSON, first)
+        XCTAssertEqual(client.diagnostics?.build?.version, "0.0.1.412")
+        XCTAssertEqual(client.lastUpdate, firstUpdate)
+        XCTAssertEqual(client.stateResult, .failed("snapshot_unavailable"))
+
+        answer = .answered(Data(#"{"error":{"code":"snapshot_timeout","message":"Snapshot timed out"}}"#.utf8), statusCode: 200)
+        try await tick(client)
+        XCTAssertEqual(client.stateResult, .failed("Snapshot timed out"))
+
+        answer = .answered(Data(#"{"error":{}}"#.utf8), statusCode: 200)
+        try await tick(client)
+        XCTAssertEqual(client.stateResult, .failed("Symphony reported an error"))
+
+        // A 200 body that isn't a state payload is a failure too.
+        answer = .answered(Data("not json".utf8), statusCode: 200)
+        try await tick(client)
+        XCTAssertEqual(client.stateJSON, first)
+        XCTAssertEqual(client.stateResult, .failed("Symphony sent a state that couldn't be read"))
+    }
+
     func testA404MeansUpdateSymphony() async {
         answer = .answered(Data("{}".utf8), statusCode: 404)
         let client = client()

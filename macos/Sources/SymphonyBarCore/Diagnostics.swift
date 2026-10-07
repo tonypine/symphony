@@ -109,6 +109,13 @@ public struct DiagnosticsPayload: Decodable, Equatable {
         public var cpuSeconds: Int?
     }
 
+    /// What Symphony serves in place of a snapshot it couldn't take, such as `snapshot_unavailable`.
+    public struct SnapshotError: Decodable, Equatable {
+        public var code: String?
+        public var message: String?
+    }
+
+    public var error: SnapshotError?
     public var build: Build?
     public var uptimeSeconds: Int?
     public var counts: Counts?
