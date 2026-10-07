@@ -476,7 +476,8 @@ public struct Overview: Equatable {
             ))
         }
 
-        for ticket in state.snapshot.forced where ticket.stale && scope.includes(index.repoKey(identifier: ticket.identifier)) {
+        // A forced ticket no list names (a Todo held by blockers) has no known repo: it shows under every scope.
+        for ticket in state.snapshot.forced where ticket.stale && index.repoKey(identifier: ticket.identifier).map(scope.includes) ?? true {
             let forFor = ticket.forcedForSeconds.map { " for \(duration($0))" } ?? ""
             var fixes: [Fix] = index.url(identifier: ticket.identifier).map { [.open($0)] } ?? []
             fixes.append(.stopForcing(ticket.identifier))

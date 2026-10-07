@@ -230,7 +230,11 @@ private struct NeedsAttention: View {
         Card(title: Overview.needsAttentionTitle) {
             RowList(items: shown) { AttentionRow(problem: $0, actions: actions) }
         }
-        .onHover { hovering = $0 }
+        .onHover { hover in
+            hovering = hover
+            // Once the pointer leaves, the rows take their severity and age order again.
+            if !hover { order = problems.map(\.id) }
+        }
         .onAppear { order = problems.map(\.id) }
         .onChange(of: problems.map(\.id)) { _, ids in
             order = hovering ? Overview.holdingOrder(ids, previous: order) : ids

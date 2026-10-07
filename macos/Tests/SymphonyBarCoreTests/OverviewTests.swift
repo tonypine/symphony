@@ -245,6 +245,15 @@ final class OverviewTests: XCTestCase {
         XCTAssertEqual(try self.overview("attention", scope: .repo("web-shop")).reposLine, "web-shop needs attention.")
     }
 
+    func testAStaleForcedTicketWithNoKnownRepoShowsUnderEveryScope() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        var snapshot = StateSnapshot()
+        snapshot.forced = [StateSnapshot.ForcedTicket(identifier: "A-1", forcedForSeconds: 300_000, stale: true)]
+        let state = OverviewState(snapshot: snapshot, generatedAt: now)
+        let scoped = Overview(state: state, scope: .repo("api"), now: now, timeZone: utc)
+        XCTAssertEqual(scoped.problems.map(\.kinds), [[.staleForced]])
+    }
+
     func testAScopedRepoWithNothingInProgressIsIdle() throws {
         let overview = try overview("flowing", scope: .repo("mobile"))
         XCTAssertEqual(overview.mood, .idle)
