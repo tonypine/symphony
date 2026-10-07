@@ -87,7 +87,7 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertEqual(sheet.verb, "Approve Plan")
         XCTAssertFalse(sheet.isDestructive)
         XCTAssertEqual(sheet.action(), .approvePlan("SHOP-330"))
-        XCTAssertEqual(sheet.banner, InboxBanner(itemID: "i-330", identifier: "SHOP-330", text: "Moved to Waiting on sub-tickets", undo: true))
+        XCTAssertEqual(sheet.banner(after: sheet.expectedOutcome), InboxBanner(itemID: "i-330", identifier: "SHOP-330", text: "Moved to Waiting on sub-tickets", undo: true))
         XCTAssertEqual(sheet.id, "i-330:approvePlan")
 
         XCTAssertTrue(ConsequenceSheet(move: .approvePlan, item: plan, picks: DecisionPicks(picks: [0: 1])).stays.contains("your changed picks are not sent"))
@@ -108,14 +108,33 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertNil(sheet.targetState)
         XCTAssertEqual(sheet.picks.map(\.answer), ["On a separate page", "The store's currency"])
         XCTAssertEqual(sheet.action(), .decisions("SHOP-330", picks: sheet.picks))
-        XCTAssertEqual(sheet.banner, InboxBanner(itemID: "i-330", identifier: "SHOP-330", text: "Sent your decisions", undo: false))
+        XCTAssertEqual(sheet.banner(after: sheet.expectedOutcome), InboxBanner(itemID: "i-330", identifier: "SHOP-330", text: "Sent your decisions", undo: false))
 
         plan.state = "Human Review"
         let humanReview = ConsequenceSheet(move: .sendDecisions, item: plan, picks: picks)
         XCTAssertEqual(humanReview.targetState, "In Review")
         XCTAssertTrue(humanReview.happens.hasPrefix("Moves SHOP-330 from Human Review to In Review, then posts one comment"))
-        XCTAssertEqual(humanReview.banner.text, "Moved to In Review")
-        XCTAssertTrue(humanReview.banner.undo)
+
+        // A workflow's Human Review state under another name, and In Review in another case.
+        plan.state = "Needs a person"
+        XCTAssertTrue(ConsequenceSheet(move: .sendDecisions, item: plan, picks: picks).happens.hasPrefix("Moves SHOP-330 from Needs a person to In Review"))
+        plan.state = "in review"
+        XCTAssertNil(ConsequenceSheet(move: .sendDecisions, item: plan, picks: picks).targetState)
+    }
+
+    func testTheBannerFollowsSymphonysAnswerNotTheSheetsGuess() throws {
+        let sheet = ConsequenceSheet(move: .sendDecisions, item: try shipped("SHOP-330"), picks: DecisionPicks(picks: [0: 1]))
+        XCTAssertNil(sheet.targetState)
+        let moved = sheet.banner(after: MoveOutcome(moved: true, toState: "In Review"))
+        XCTAssertEqual(moved, InboxBanner(itemID: "i-330", identifier: "SHOP-330", text: "Moved to In Review", undo: true))
+        XCTAssertEqual(sheet.banner(after: MoveOutcome(moved: false, toState: "In Review")).text, "Sent your decisions")
+
+        let decisions = ControlAction.decisions("SHOP-330", picks: [])
+        let answer = Data(#"{"move":"decisions","moved":true,"to_state":"In Review","undo_window_ms":10000}"#.utf8)
+        XCTAssertEqual(ControlAPI.result(decisions, statusCode: 200, data: answer), .moved(MoveOutcome(moved: true, toState: "In Review")))
+        XCTAssertEqual(ControlAPI.result(decisions, statusCode: 200, data: Data()), .done)
+        XCTAssertEqual(ControlAPI.result(.undo("SHOP-330"), statusCode: 200, data: answer), .done)
+        XCTAssertNil(ControlResult.done.moveOutcome)
     }
 
     func testApproveAndMergeSaysGitHubMergesOnceChecksPass() throws {
@@ -123,7 +142,7 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertEqual(sheet.title, "Move BIL-206 to Merging?")
         XCTAssertEqual(sheet.happens, "Symphony turns on auto-merge, and GitHub merges the pull request once checks pass.")
         XCTAssertEqual(sheet.action(), .approvePR("BIL-206"))
-        XCTAssertEqual(sheet.banner.text, "Moved to Merging")
+        XCTAssertEqual(sheet.banner(after: sheet.expectedOutcome).text, "Moved to Merging")
     }
 
     func testSendToReworkNeedsAReasonAndIsDestructive() throws {

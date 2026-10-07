@@ -127,7 +127,7 @@ public struct DecisionPicks: Equatable {
 /// the same, the options (Rework's required reason), and Cancel with the verb.
 public struct ConsequenceSheet: Equatable, Identifiable {
     public static let waitingState = "Waiting on sub-tickets"
-    public static let humanReviewState = "Human Review"
+    public static let reviewState = "In Review"
 
     public var move: InboxMove
     /// The Inbox item's issue id.
@@ -138,7 +138,8 @@ public struct ConsequenceSheet: Equatable, Identifiable {
     public var stays: String
     /// The picks a decisions sheet posts, listed in it.
     public var picks: [ControlAction.DecisionPick]
-    /// The state the move puts the ticket in, nil when it stays (decisions on a plan in In Review).
+    /// The state the move is expected to put the ticket in, nil when it stays (decisions on a plan in In Review).
+    /// The banner follows Symphony's answer instead, which knows the workflow's states.
     public var targetState: String?
 
     public var id: String { "\(itemID):\(move.rawValue)" }
@@ -165,10 +166,11 @@ public struct ConsequenceSheet: Equatable, Identifiable {
                 : "The plan stays as written. To change it, send decisions or comment on it in Linear instead."
         case .sendDecisions:
             title = "Send your decisions on \(id)?"
-            let humanReview = item.state == Self.humanReviewState
-            targetState = humanReview ? "In Review" : nil
+            // A plan waits in the Inbox in In Review or in the workflow's Human Review state, whatever its name.
+            let humanReview = item.state.map { $0.caseInsensitiveCompare(Self.reviewState) != .orderedSame } ?? false
+            targetState = humanReview ? Self.reviewState : nil
             self.picks = picks.answers(item.review.decisions)
-            happens = (humanReview ? "Moves \(id) from Human Review to In Review, then posts" : "Posts")
+            happens = (humanReview ? "Moves \(id) from \(item.state ?? "") to \(Self.reviewState), then posts" : "Posts")
                 + " one comment on \(id) with your picks, and Symphony revises the plan from it."
             stays = "The plan isn't approved: it comes back to the Inbox once Symphony has revised it."
         case .approveAndMerge:
@@ -217,10 +219,13 @@ public struct ConsequenceSheet: Equatable, Identifiable {
         }
     }
 
-    /// The banner once the move is made (C18).
-    public var banner: InboxBanner {
-        if let targetState {
-            return InboxBanner(itemID: itemID, identifier: identifier, text: "Moved to \(targetState)", undo: true)
+    /// What the sheet expects Symphony to answer, for an answer that didn't say.
+    public var expectedOutcome: MoveOutcome { MoveOutcome(moved: targetState != nil, toState: targetState) }
+
+    /// The banner once the move is made (C18), from Symphony's answer: Undo only after the ticket moved.
+    public func banner(after outcome: MoveOutcome) -> InboxBanner {
+        if outcome.moved {
+            return InboxBanner(itemID: itemID, identifier: identifier, text: "Moved to \(outcome.toState ?? targetState ?? "its next state")", undo: true)
         }
         return InboxBanner(itemID: itemID, identifier: identifier, text: "Sent your decisions", undo: false)
     }

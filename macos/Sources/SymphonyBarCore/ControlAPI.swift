@@ -125,11 +125,29 @@ public enum ControlAction: Equatable {
     }
 }
 
+/// What Symphony answered to a Director's move: whether the ticket moved, and the state it is in now.
+public struct MoveOutcome: Equatable {
+    public var moved: Bool
+    public var toState: String?
+
+    public init(moved: Bool, toState: String?) {
+        self.moved = moved
+        self.toState = toState
+    }
+}
+
 /// The outcome of sending a control action.
 public enum ControlResult: Equatable {
     case done
+    /// A Director's move was made; Symphony's answer says whether the ticket moved, and where.
+    case moved(MoveOutcome)
     /// The message says what went wrong, for the menu.
     case failed(String)
+
+    public var moveOutcome: MoveOutcome? {
+        if case let .moved(outcome) = self { return outcome }
+        return nil
+    }
 }
 
 /// Sends control actions to Symphony's control plane.
@@ -203,7 +221,7 @@ public enum ControlAPI {
             if case let .stop(identifier) = action, !stopped(data) {
                 return .failed("\(prefix): no agent runs on \(identifier) anymore")
             }
-            return .done
+            return moveOutcome(action, data).map(ControlResult.moved) ?? .done
         case 401:
             return .failed("\(prefix): it rejected the control token (HTTP 401)")
         case 503:
@@ -212,6 +230,18 @@ public enum ControlAPI {
             if let message = errorMessage(data) { return .failed("\(prefix): \(message) (HTTP \(statusCode))") }
             return .failed("\(prefix): HTTP \(statusCode)")
         }
+    }
+
+    /// Symphony's answer to a Director's move (not Undo), nil when it doesn't read.
+    private static func moveOutcome(_ action: ControlAction, _ data: Data) -> MoveOutcome? {
+        struct Payload: Decodable {
+            let moved: Bool?
+            let to_state: String?
+        }
+        if case .undo = action { return nil }
+        guard action.moveIdentifier != nil, let payload = try? JSONDecoder().decode(Payload.self, from: data), let moved = payload.moved
+        else { return nil }
+        return MoveOutcome(moved: moved, toState: payload.to_state)
     }
 
     private static func stopped(_ data: Data) -> Bool {

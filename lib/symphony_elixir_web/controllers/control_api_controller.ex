@@ -7,7 +7,8 @@ defmodule SymphonyElixirWeb.ControlApiController do
 
   The Director's moves from the Mac app's Inbox (`approve_plan`, `approve_pr`, `rework`,
   `decisions`, `sign_off`, `backlog` and `undo`) are made by `SymphonyElixir.DirectorMoves`: each
-  takes `issue_identifier`, answers 409 when the ticket's state doesn't allow the move, and 200 with
+  takes `issue_identifier`, answers 409 when the ticket's state doesn't allow the move, 502
+  `move_incomplete` when Linear took one of the move's two writes and refused the other, and 200 with
   the states it moved between.
   """
 
@@ -113,6 +114,8 @@ defmodule SymphonyElixirWeb.ControlApiController do
   defp respond_move(conn, _identifier, {:ok, payload}), do: json(conn, payload)
   defp respond_move(conn, _identifier, {:error, {:invalid, message}}), do: error_response(conn, 422, "invalid_request", message)
   defp respond_move(conn, _identifier, {:error, {:conflict, message}}), do: error_response(conn, 409, "move_not_allowed", message)
+
+  defp respond_move(conn, _identifier, {:error, {:partial, message}}), do: error_response(conn, 502, "move_incomplete", message)
 
   defp respond_move(conn, identifier, {:error, :issue_not_found}),
     do: error_response(conn, 404, "issue_not_found", "#{identifier} was not found in Linear")

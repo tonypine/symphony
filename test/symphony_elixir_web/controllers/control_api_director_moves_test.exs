@@ -76,6 +76,13 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
     assert error(post(:approve_pr, %{"issue_identifier" => "MOT-40"}, moves)) == {502, "linear_error", "Linear request failed: :boom"}
   end
 
+  test "a move Linear took only half of is a 502 that says what was done", %{moves: moves} do
+    Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, [{:error, :boom}])
+
+    assert error(post(:decisions, %{"issue_identifier" => "MOT-30", "picks" => [%{"question" => "Where?", "answer" => "B"}]}, moves)) ==
+             {502, "move_incomplete", "moved MOT-30 to In Review, but Linear refused the decisions comment (:boom); send the decisions again"}
+  end
+
   defp post(action, params, moves) do
     conn(:post, "/api/v1/control/#{action}", Jason.encode!(params))
     |> put_req_header("content-type", "application/json")

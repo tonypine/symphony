@@ -4661,6 +4661,12 @@ Minimum endpoints:
     otherwise it answers `409`. A comment the move posted stays.
   - A missing `issue_identifier`, `reason` or `picks` answers `422`, an unknown ticket `404`, and a
     Linear error `502`.
+  - When Linear takes the first of a move's two writes and refuses the second, the move answers
+    `502` `move_incomplete` with a message that says what was already done, and still writes the
+    audit record of what changed, with `failed` naming the write that didn't happen (`comment` or
+    `move`). Decisions moved to `In Review` without their comment keep their undo; sending them
+    again posts the comment. A `rework` or `backlog` comment posted without its move is not posted
+    again when the same move is sent again while the ticket is still in the same state.
   - Suggested response shape:
 
     ```json

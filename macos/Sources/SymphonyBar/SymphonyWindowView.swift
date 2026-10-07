@@ -169,12 +169,13 @@ final class SymphonyWindowModel: ObservableObject {
             let result = await onControl(action)
             inboxMoveInFlight = false
             switch result {
-            case .done:
+            case .done, .moved:
                 inboxSheet = nil
                 // The picks were sent: Send Decisions turns off again.
                 inboxPicks[sheet.itemID] = nil
-                if sheet.targetState != nil { inboxSelection = inboxList?.neighbor(of: sheet.itemID)?.id }
-                showBanner(sheet.banner)
+                let outcome = result.moveOutcome ?? sheet.expectedOutcome
+                if outcome.moved { inboxSelection = inboxList?.neighbor(of: sheet.itemID)?.id }
+                showBanner(sheet.banner(after: outcome))
             case let .failed(message):
                 inboxMoveError = message
             }
@@ -188,7 +189,7 @@ final class SymphonyWindowModel: ObservableObject {
         dismissBanner()
         Task {
             switch await onControl(.undo(banner.identifier)) {
-            case .done:
+            case .done, .moved:
                 inboxSelection = banner.itemID
                 showBanner(.undone(itemID: banner.itemID, identifier: banner.identifier))
             case let .failed(message):

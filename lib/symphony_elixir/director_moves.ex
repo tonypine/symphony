@@ -21,6 +21,12 @@ defmodule SymphonyElixir.DirectorMoves do
   The comments are the Director's: none starts like one of Symphony's own, so the plan revision
   trigger counts them as a person's comment.
 
+  When Linear takes the first of a move's two writes and refuses the second, the move answers
+  `{:error, {:partial, message}}` saying what was already done, and still writes the audit record of
+  what changed (with `failed` naming the write that didn't happen). Decisions moved to `In Review`
+  without their comment keep their undo; a rework or backlog comment posted without its move is
+  remembered, so sending the move again makes the move without posting the comment twice.
+
   `undo/2` takes back the last move on a ticket within 10 s of it, and only while
   the ticket is still in the state the move put it in, and, for an approved plan, before Symphony
   promoted its sub-tickets. The last move per ticket is kept in this
@@ -54,6 +60,7 @@ defmodule SymphonyElixir.DirectorMoves do
           | {:conflict, String.t()}
           | :issue_not_found
           | {:linear, term()}
+          | {:partial, String.t()}
   @type result :: {:ok, map()} | {:error, error()}
 
   @moves [:approve_plan, :approve_pr, :rework, :decisions, :sign_off, :backlog]
@@ -85,7 +92,7 @@ defmodule SymphonyElixir.DirectorMoves do
       settings = Config.settings!()
 
       with {:ok, to_state} <- target(move, issue, settings),
-           {:ok, comment} <- apply_move(move, issue, to_state, input) do
+           {:ok, comment} <- apply_move(move, issue, to_state, input, opts) do
         finish(move, issue, to_state, comment, opts)
       end
     end
@@ -238,32 +245,78 @@ defmodule SymphonyElixir.DirectorMoves do
 
   # The comment goes before the move, so the run the move starts reads it; the decisions comment
   # goes after the move to In Review, so the plan revision trigger counts it.
-  defp apply_move(:rework, issue, to_state, %{reason: reason}), do: comment_then_move(issue, rework_comment(String.trim(reason)), to_state)
+  defp apply_move(:rework, issue, to_state, %{reason: reason}, opts),
+    do: comment_then_move(:rework, issue, rework_comment(String.trim(reason)), to_state, opts)
 
-  defp apply_move(:backlog, issue, to_state, input) do
+  defp apply_move(:backlog, issue, to_state, input, opts) do
     if present?(input[:note]),
-      do: comment_then_move(issue, backlog_comment(String.trim(input.note)), to_state),
-      else: comment_then_move(issue, nil, to_state)
+      do: comment_then_move(:backlog, issue, backlog_comment(String.trim(input.note)), to_state, opts),
+      else: comment_then_move(:backlog, issue, nil, to_state, opts)
   end
 
-  defp apply_move(:decisions, issue, to_state, %{picks: picks}) do
+  defp apply_move(:decisions, issue, to_state, %{picks: picks}, opts) do
     comment = picks |> Enum.map(&%{question: String.trim(&1.question), answer: String.trim(&1.answer)}) |> decisions_comment()
 
-    with :ok <- maybe_update_state(issue, to_state),
-         :ok <- post_comment(issue, comment),
-         do: {:ok, comment}
+    with :ok <- maybe_update_state(issue, to_state) do
+      case post_comment(issue, comment) do
+        :ok -> {:ok, comment}
+        {:error, {:linear, reason}} when is_binary(to_state) -> moved_without_comment(issue, to_state, reason, opts)
+        error -> error
+      end
+    end
   end
 
-  defp apply_move(_move, issue, to_state, _input), do: comment_then_move(issue, nil, to_state)
+  defp apply_move(move, issue, to_state, _input, opts), do: comment_then_move(move, issue, nil, to_state, opts)
 
-  defp comment_then_move(issue, comment, to_state) do
-    with :ok <- maybe_post_comment(issue, comment),
-         :ok <- update_state(issue, to_state),
-         do: {:ok, comment}
+  defp comment_then_move(move, issue, comment, to_state, opts) do
+    with :ok <- maybe_post_comment(issue, comment, opts) do
+      case update_state(issue, to_state) do
+        :ok ->
+          Agent.update(server(opts), &Map.delete(&1, {:posted, issue.id}))
+          {:ok, comment}
+
+        {:error, {:linear, reason}} when is_binary(comment) ->
+          commented_without_move(move, issue, comment, to_state, reason, opts)
+
+        error ->
+          error
+      end
+    end
   end
 
-  defp maybe_post_comment(_issue, nil), do: :ok
-  defp maybe_post_comment(issue, comment), do: post_comment(issue, comment)
+  # A comment posted on this ticket, in this state, by a move whose state change Linear refused
+  # is not posted again.
+  defp maybe_post_comment(_issue, nil, _opts), do: :ok
+
+  defp maybe_post_comment(issue, comment, opts) do
+    if Agent.get(server(opts), &Map.get(&1, {:posted, issue.id})) == {issue.state, comment},
+      do: :ok,
+      else: post_comment(issue, comment)
+  end
+
+  # Decisions moved the plan to In Review, then Linear refused their comment: the move stays, with
+  # its audit record and its undo, and sending the decisions again posts the comment.
+  defp moved_without_comment(issue, to_state, reason, opts) do
+    record_audit("decisions", issue, issue.state, to_state, nil, %{failed: "comment"})
+    remember_move(:decisions, issue, to_state, opts)
+    request_refresh(opts)
+
+    partial("moved #{issue.identifier} to #{to_state}, but Linear refused the decisions comment (#{inspect(reason)}); send the decisions again")
+  end
+
+  # Linear took the comment and refused the move: the comment is remembered, so sending the move
+  # again doesn't post it twice.
+  defp commented_without_move(move, issue, comment, to_state, reason, opts) do
+    Agent.update(server(opts), &Map.put(&1, {:posted, issue.id}, {issue.state, comment}))
+    record_audit(Atom.to_string(move), issue, issue.state, issue.state, comment, %{failed: "move"})
+
+    partial(
+      "posted the comment on #{issue.identifier}, but Linear refused the move to #{to_state} (#{inspect(reason)}); " <>
+        "send it again to make the move without posting the comment twice"
+    )
+  end
+
+  defp partial(message), do: {:error, {:partial, message}}
 
   defp post_comment(issue, comment) do
     case Tracker.create_comment(issue.id, comment) do
@@ -287,11 +340,7 @@ defmodule SymphonyElixir.DirectorMoves do
     record_audit(name, issue, issue.state, to_state || issue.state, comment)
     Logger.info("Director move #{name} issue_id=#{issue.id} issue_identifier=#{issue.identifier} from=#{issue.state} to=#{to_state || issue.state}")
 
-    if to_state do
-      entry = %{move: move, from_state: issue.state, to_state: to_state, at_ms: now_ms(opts), backlog: BreakdownReview.backlog_sub_issue_ids(issue)}
-      Agent.update(server(opts), &Map.put(&1, issue.id, entry))
-    end
-
+    if to_state, do: remember_move(move, issue, to_state, opts)
     request_refresh(opts)
 
     {:ok,
@@ -305,6 +354,11 @@ defmodule SymphonyElixir.DirectorMoves do
        commented: comment != nil,
        undo_window_ms: if(to_state, do: @undo_window_ms)
      }}
+  end
+
+  defp remember_move(move, issue, to_state, opts) do
+    entry = %{move: move, from_state: issue.state, to_state: to_state, at_ms: now_ms(opts), backlog: BreakdownReview.backlog_sub_issue_ids(issue)}
+    Agent.update(server(opts), &Map.put(&1, issue.id, entry))
   end
 
   defp undoable(issue, opts) do
@@ -330,7 +384,7 @@ defmodule SymphonyElixir.DirectorMoves do
     end
   end
 
-  defp record_audit(move, issue, from_state, to_state, comment) do
+  defp record_audit(move, issue, from_state, to_state, comment, extra \\ %{}) do
     %{
       event_type: "director_move",
       move: move,
@@ -341,6 +395,7 @@ defmodule SymphonyElixir.DirectorMoves do
       to_state: to_state,
       comment: comment && String.slice(comment, 0, @comment_preview_chars)
     }
+    |> Map.merge(extra)
     |> AuditLog.record()
     |> case do
       :ok -> :ok

@@ -160,6 +160,76 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
       assert {:error, {:linear, :boom}} = DirectorMoves.move(:decisions, "MOT-30", %{picks: [%{question: "Q", answer: "B"}]}, opts)
       refute_received {:memory_tracker_comment, _id, _body}
+
+      # On a plan in In Review nothing moved, so a refused comment is Linear's error alone.
+      put_issues([plan("In Review")])
+      Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, [{:error, :comment_failed}])
+      assert {:error, {:linear, :comment_failed}} = DirectorMoves.move(:decisions, "MOT-30", %{picks: [%{question: "Q", answer: "B"}]}, opts)
+      assert audit_records() == []
+    end
+  end
+
+  describe "a move Linear takes only half of" do
+    test "decisions moved to In Review whose comment Linear refuses keep the move, its audit record and its undo", %{opts: opts} do
+      put_issues([plan("Human Review")])
+      Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, [{:error, :comment_failed}])
+      picks = %{picks: [%{question: "Q", answer: "B"}]}
+
+      assert {:error, {:partial, message}} = DirectorMoves.move(:decisions, "MOT-30", picks, opts)
+      assert message == "moved MOT-30 to In Review, but Linear refused the decisions comment (:comment_failed); send the decisions again"
+      assert_received {:memory_tracker_state_update, "plan", "In Review"}
+      refute_received {:memory_tracker_comment, _id, _body}
+
+      assert [%{"move" => "decisions", "from_state" => "Human Review", "to_state" => "In Review", "failed" => "comment"}] =
+               audit_records()
+
+      # Sent again, the plan is in In Review: the comment goes, with no second move.
+      put_issues([plan("In Review")])
+      assert {:ok, %{moved: false, commented: true}} = DirectorMoves.move(:decisions, "MOT-30", picks, opts)
+      assert_received {:memory_tracker_comment, "plan", _body}
+      refute_received {:memory_tracker_state_update, _id, _state}
+
+      assert {:ok, %{undone: "decisions", to_state: "Human Review"}} = DirectorMoves.undo("MOT-30", opts)
+    end
+
+    test "a rework comment whose move Linear refuses is recorded, and not posted twice when sent again", %{opts: opts} do
+      put_issues([pr("In Review")])
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [{:error, :state_failed}])
+
+      assert {:error, {:partial, message}} = DirectorMoves.move(:rework, "MOT-40", %{reason: "No"}, opts)
+
+      assert message ==
+               "posted the comment on MOT-40, but Linear refused the move to Rework (:state_failed); send it again to make the move without posting the comment twice"
+
+      assert_received {:memory_tracker_comment, "pr", "Sent to Rework by the Director:\n\nNo"}
+
+      assert [%{"move" => "rework", "from_state" => "In Review", "to_state" => "In Review", "comment" => "Sent to Rework by the Director:\n\nNo", "failed" => "move"}] =
+               audit_records()
+
+      assert {:ok, %{to_state: "Rework", commented: true}} = DirectorMoves.move(:rework, "MOT-40", %{reason: "No"}, opts)
+      refute_received {:memory_tracker_comment, _id, _body}
+      assert_received {:memory_tracker_state_update, "pr", "Rework"}
+
+      # Once the move went through, the same reason later is a new comment.
+      assert {:ok, _result} = DirectorMoves.move(:rework, "MOT-40", %{reason: "No"}, opts)
+      assert_received {:memory_tracker_comment, "pr", _body}
+    end
+
+    test "a different reason, or the ticket in another state, posts the comment again", %{opts: opts} do
+      put_issues([pr("In Review")])
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [{:error, :state_failed}])
+      assert {:error, {:partial, _message}} = DirectorMoves.move(:backlog, "MOT-40", %{note: "Later"}, opts)
+      assert_received {:memory_tracker_comment, "pr", _body}
+
+      assert {:ok, _result} = DirectorMoves.move(:backlog, "MOT-40", %{note: "Much later"}, opts)
+      assert_received {:memory_tracker_comment, "pr", "Moved to Backlog by the Director:\n\nMuch later"}
+
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [{:error, :state_failed}])
+      assert {:error, {:partial, _message}} = DirectorMoves.move(:backlog, "MOT-40", %{note: "Later"}, opts)
+      assert_received {:memory_tracker_comment, "pr", _body}
+      put_issues([pr("In Progress")])
+      assert {:ok, _result} = DirectorMoves.move(:backlog, "MOT-40", %{note: "Later"}, opts)
+      assert_received {:memory_tracker_comment, "pr", "Moved to Backlog by the Director:\n\nLater"}
     end
   end
 
