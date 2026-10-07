@@ -849,7 +849,19 @@ state. The window opens on the Inbox the first time.
   unblocks, with **Copy Steps**; and what the quality gate found in a ticket it holds, its score and round, with
   **Edit in Linear**. A review brief Symphony can't read into its parts shows as text. **Open in Linear** opens
   the ticket. With nothing left it says "Nothing waits on you." with **Open Overview**, and a scope that hides
-  items says how many ("2 more in other repos"). Approving and sending back come in a later version.
+  items says how many ("2 more in other repos").
+
+  You answer from the review's actions, the default one prominent: a plan has **Approve Plan…**, **Send
+  Decisions** (on once a pick differs from the recommended option) and, under ⋯, **Send to Rework…**; a PR
+  **Approve and Merge…** and **Send to Rework…** (with a red check, **Open PR** is the default); a final
+  verification **Sign Off…**. Each opens a sheet first: the question, what happens in Linear ("Moves SHOP-330 to
+  Waiting on sub-tickets and promotes its 7 sub-tickets to Todo; SHOP-331 starts first."), what stays the same,
+  the picks it posts or the reason Send to Rework needs (its button stays off without one), and **Cancel** and the
+  verb. Nothing changes in Linear until you press it; a spinner shows while Symphony makes the move
+  (`POST /api/v1/control/approve_plan`, `approve_pr`, `rework`, `decisions`, `sign_off`), and what went wrong
+  shows in the sheet. After a move the item leaves the list, the selection moves to the next item, and a banner
+  at the foot says "Moved to Merging" with **Undo** for 10 seconds, which moves the ticket back
+  (`POST /api/v1/control/undo`).
 
 - **Overview** answers "is the factory moving, is anything stuck" at a glance. One sentence says how things
   are: "The factory is flowing.", "2 things need attention.", "Dispatch is paused since 14:03: Deploy
@@ -881,7 +893,8 @@ state. The window opens on the Inbox the first time.
   says "Update Symphony to see this view."
 
 **Notifications.** The app notifies each new Inbox item ("BIL-206 waits on you") and each new Needs attention
-problem once, with **Open**, which opens the window on it; never twice for the same one, even after a relaunch,
+problem once, with **Open**, which opens the window on it; a PR whose checks are green also has **Approve and
+Merge…**, which opens the window on its sheet and approves nothing by itself; never twice for the same one, even after a relaunch,
 and nothing for routine progress or what was already there the first time the app ran. They make no sound. The
 app asks for permission the first time one is due, and Settings has a switch per kind under **Notifications**.
 
@@ -1007,8 +1020,10 @@ Four more variables, read only in QA mode:
 - `SYMPHONY_BAR_QA_API_FIXTURES=<dir>` makes the app read Symphony's local API from files instead of
   Symphony, so QA walks every view with fixed data and no Linear or model calls: each GET reads
   `<dir>/<path>.json` (for example `<dir>/api/v1/state.json` for `/api/v1/state`) and answers 404 when the
-  file is missing, and each control POST (Pause, Resume, Force, Stop Run) is appended as one JSON line to
-  `api-requests.jsonl` under the QA root and answered 200. The menu, the Repos window and the Symphony window
+  file is missing, and each control POST (Pause, Resume, Force, Stop Run, and the Inbox's moves and Undo) is
+  appended as one JSON line to `api-requests.jsonl` under the QA root and answered 200, with
+  `<dir>/<path>.json` as the body when there is one (the `inbox` fixtures answer each move from
+  `api/v1/control/`). The menu, the Repos window and the Symphony window
   all read through it, so the app shows Symphony as running (external). The fixtures of a running Symphony
   are in [`Tests/Fixtures/director-app/running`](Tests/Fixtures/director-app/running), and those of the
   Overview's four states next to it: `flowing`, `attention` (a stuck forced ticket and a Codex usage-limit

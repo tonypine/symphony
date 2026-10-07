@@ -1,0 +1,10 @@
+{
+  "commented": false,
+  "from_state": "In Review",
+  "issue_id": "i-330",
+  "issue_identifier": "SHOP-330",
+  "move": "approve_plan",
+  "moved": true,
+  "to_state": "Waiting on sub-tickets",
+  "undo_window_ms": 10000
+}

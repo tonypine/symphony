@@ -494,7 +494,10 @@ public struct InboxList: Equatable {
     /// Every item, whatever the scope: the sidebar badge's count.
     public var totalCount: Int
 
-    public init(items: [InboxItem], scope: OverviewScope = .all) {
+    /// `answered` are the items the Director just moved, by issue id: they leave the list at once, before Symphony's
+    /// next poll drops them.
+    public init(items: [InboxItem], scope: OverviewScope = .all, answered: Set<String> = []) {
+        let items = items.filter { !answered.contains($0.id) }
         let shown = items.filter { scope.includes($0.repoKey) }
         groups = InboxItem.Kind.allCases.compactMap { kind in
             let inKind = shown.enumerated()

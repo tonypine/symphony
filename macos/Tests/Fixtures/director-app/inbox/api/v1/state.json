@@ -325,6 +325,7 @@
   "usage_limits": [],
   "waiting_on_you": [
     {
+      "checks_green": false,
       "headline": "The plan for gift cards at checkout, in 7 sub-tickets.",
       "issue_id": "i-330",
       "issue_identifier": "SHOP-330",
@@ -337,6 +338,7 @@
       "waiting_since": "2026-10-07T11:08:00Z"
     },
     {
+      "checks_green": true,
       "headline": "Proration for plan changes in the middle of a billing cycle.",
       "issue_id": "i-206",
       "issue_identifier": "BIL-206",
@@ -349,6 +351,7 @@
       "waiting_since": "2026-10-07T12:49:00Z"
     },
     {
+      "checks_green": false,
       "headline": "Every requirement of BIL-200 checked on main; one supervisor check left.",
       "issue_id": "i-200",
       "issue_identifier": "BIL-213",
@@ -361,6 +364,7 @@
       "waiting_since": "2026-10-07T13:35:00Z"
     },
     {
+      "checks_green": false,
       "headline": "Add the signing certificate to the release workflow",
       "issue_id": "i-90",
       "issue_identifier": "NOTE-90",
@@ -373,6 +377,7 @@
       "waiting_since": "2026-10-07T13:59:00Z"
     },
     {
+      "checks_green": false,
       "headline": "Answer the quality gate's questions",
       "issue_id": "i-341",
       "issue_identifier": "SHOP-341",

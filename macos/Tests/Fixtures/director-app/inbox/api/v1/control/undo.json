@@ -1,0 +1,8 @@
+{
+  "from_state": "Waiting on sub-tickets",
+  "issue_id": "i-330",
+  "issue_identifier": "SHOP-330",
+  "move": "undo",
+  "to_state": "In Review",
+  "undone": "approve_plan"
+}

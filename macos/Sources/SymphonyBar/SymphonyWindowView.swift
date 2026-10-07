@@ -39,6 +39,18 @@ final class SymphonyWindowModel: ObservableObject {
     @Published private(set) var inboxResult: EndpointResult?
     /// The Inbox item shown, by issue id; nil shows the first.
     @Published var inboxSelection: String?
+    /// The Director's picks in each plan's decisions, by issue id (C16).
+    @Published private(set) var inboxPicks: [String: DecisionPicks] = [:]
+    /// The consequence sheet shown (C17); nothing changes Linear until its button is pressed.
+    @Published var inboxSheet: ConsequenceSheet?
+    /// True while the sheet's move is on its way to Symphony.
+    @Published private(set) var inboxMoveInFlight = false
+    /// What went wrong with the sheet's move, shown in the sheet.
+    @Published private(set) var inboxMoveError: String?
+    /// The banner after a move, with Undo for 10 s (C18).
+    @Published private(set) var inboxBanner: InboxBanner?
+    /// The items moved from the Inbox that Symphony still lists, by issue id: they leave the list at once.
+    @Published private(set) var inboxAnswered: Set<String> = []
     /// The app's version, for the sidebar footer while Symphony doesn't say its own.
     var appVersion = ""
     /// Where the client reads Symphony from, for Diagnostics.
@@ -60,6 +72,9 @@ final class SymphonyWindowModel: ObservableObject {
     private var reposReadAt: Date?
     private var readingRepos = false
     private var readingInbox = false
+    private var bannerTask: Task<Void, Never>?
+    /// A sheet to open once the Inbox lists its item: Approve and Merge… chosen on a notification.
+    private var pendingSheet: (id: String, move: InboxMove)?
     private var cancellables = Set<AnyCancellable>()
 
     init(client: LiveAPIClient, selection: SymphonyView) {
@@ -96,6 +111,116 @@ final class SymphonyWindowModel: ObservableObject {
         readInbox()
     }
 
+    /// The Inbox under the window's scope, without the items just moved.
+    var inboxList: InboxList? {
+        inbox.map { InboxList(items: $0.items, scope: scope, answered: inboxAnswered) }
+    }
+
+    /// Opens the Inbox on the item with issue id `id` and its `move` sheet, once the Inbox lists it.
+    func showInbox(selecting id: String, opening move: InboxMove) {
+        pendingSheet = (id, move)
+        showInbox(selecting: id)
+        openPendingSheet()
+    }
+
+    private func openPendingSheet() {
+        guard let pending = pendingSheet, let item = inbox?.items.first(where: { $0.id == pending.id }) else { return }
+        pendingSheet = nil
+        open(pending.move, on: item)
+    }
+
+    func picks(for itemID: String) -> DecisionPicks { inboxPicks[itemID] ?? DecisionPicks() }
+
+    /// Picks option `option` in decision `decision` of the plan with issue id `itemID`.
+    func pick(_ option: Int, decision: Int, itemID: String) {
+        var picks = picks(for: itemID)
+        picks.picks[decision] = option
+        inboxPicks[itemID] = picks
+    }
+
+    /// Acts on a review's toolbar entry: a move opens its sheet, a link opens.
+    func perform(_ command: InboxCommand, on item: InboxItem) {
+        switch command {
+        case let .move(move): open(move, on: item)
+        case let .link(action): perform(action)
+        }
+    }
+
+    /// Opens the consequence sheet of `move` on `item`.
+    func open(_ move: InboxMove, on item: InboxItem) {
+        guard !inboxMoveInFlight else { return }
+        inboxMoveError = nil
+        inboxSheet = ConsequenceSheet(move: move, item: item, picks: picks(for: item.id))
+    }
+
+    /// Cancel on the sheet: nothing is sent.
+    func cancelSheet() {
+        guard !inboxMoveInFlight else { return }
+        inboxSheet = nil
+        inboxMoveError = nil
+    }
+
+    /// The sheet's button: sends the move; on success the sheet closes, the item leaves the list, the selection
+    /// moves to the next item and the banner shows; on failure the sheet says why.
+    func confirm(_ sheet: ConsequenceSheet, reason: String) {
+        guard !inboxMoveInFlight, let action = sheet.action(reason: reason) else { return }
+        inboxMoveInFlight = true
+        inboxMoveError = nil
+        Task {
+            let result = await onControl(action)
+            inboxMoveInFlight = false
+            switch result {
+            case .done:
+                let next = inboxList?.neighbor(of: sheet.itemID)
+                inboxSheet = nil
+                inboxAnswered.insert(sheet.itemID)
+                inboxPicks[sheet.itemID] = nil
+                inboxSelection = next?.id
+                showBanner(sheet.banner)
+            case let .failed(message):
+                inboxMoveError = message
+            }
+            client.refresh()
+        }
+    }
+
+    /// Undo on the banner: takes the move back, and the item comes back to the list, selected.
+    func undo(_ banner: InboxBanner) {
+        guard banner.undo else { return }
+        dismissBanner()
+        Task {
+            switch await onControl(.undo(banner.identifier)) {
+            case .done:
+                inboxAnswered.remove(banner.itemID)
+                inboxSelection = banner.itemID
+                showBanner(.undone(itemID: banner.itemID, identifier: banner.identifier))
+            case let .failed(message):
+                showBanner(.failed(itemID: banner.itemID, identifier: banner.identifier, message: message))
+            }
+            client.refresh()
+        }
+    }
+
+    func dismissBanner() {
+        bannerTask?.cancel()
+        inboxBanner = nil
+    }
+
+    private func showBanner(_ banner: InboxBanner) {
+        bannerTask?.cancel()
+        inboxBanner = banner
+        NSAccessibility.post(
+            element: NSApp as Any,
+            notification: .announcementRequested,
+            userInfo: [.announcement: banner.announcement, .priority: NSAccessibilityPriorityLevel.high.rawValue]
+        )
+        bannerTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(InboxBanner.duration))
+            guard !Task.isCancelled, let self, inboxBanner?.id == banner.id else { return }
+            inboxBanner = nil
+        }
+    }
+
     /// Acts on a review's button.
     func perform(_ action: InboxAction) {
         switch action {
@@ -116,6 +241,9 @@ final class SymphonyWindowModel: ObservableObject {
             if case let .loaded(data) = result, let payload = InboxPayload.decode(data) {
                 inbox = payload
                 inboxResult = nil
+                // An item moved away leaves the list for good once Symphony stops listing it.
+                inboxAnswered = inboxAnswered.filter { id in payload.items.contains { $0.id == id } }
+                openPendingSheet()
             } else {
                 inboxResult = result
             }
