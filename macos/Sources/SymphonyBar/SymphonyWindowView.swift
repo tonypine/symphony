@@ -45,11 +45,13 @@ final class SymphonyWindowModel: ObservableObject {
         }
     }
 
-    /// The sidebar footer: Symphony's version and state.
-    var footer: String {
+    /// The sidebar footer's first line: Symphony's state, on its own so the sidebar never cuts it off.
+    var footerState: String { state.stateWord(paused: paused) }
+
+    /// The sidebar footer's second line: Symphony and its version.
+    var footerVersion: String {
         let version = state == .connected ? client.diagnostics?.build?.version ?? appVersion : appVersion
-        let prefix = version.isEmpty ? "Symphony" : "Symphony \(version)"
-        return "\(prefix) · \(state.stateWord(paused: paused))"
+        return version.isEmpty ? "Symphony" : "Symphony \(version)"
     }
 
     /// Copies the last state payload to the clipboard.
@@ -127,15 +129,23 @@ struct SymphonySidebar: View {
         }
         .listStyle(.sidebar)
         .safeAreaInset(edge: .bottom) {
-            HStack(spacing: DesignTokens.Space.s2) {
-                Circle()
-                    .fill(model.state.connectionStatus.tint)
-                    .frame(width: 8, height: 8)
-                    .accessibilityHidden(true)
-                Text(model.footer)
-                    .font(DesignTokens.TypeStyle.callout.font)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+            HStack(spacing: 0) {
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: DesignTokens.Space.s2) {
+                        Circle()
+                            .fill(model.state.connectionStatus.tint)
+                            .frame(width: 8, height: 8)
+                            .accessibilityHidden(true)
+                        Text(model.footerState)
+                            .font(DesignTokens.TypeStyle.callout.font)
+                    }
+                    Text(model.footerVersion)
+                        .font(DesignTokens.TypeStyle.caption.font)
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 8 + DesignTokens.Space.s2)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityElement(children: .combine)
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, DesignTokens.Space.s4)
