@@ -246,6 +246,32 @@ defmodule SymphonyElixir.InboxTest do
       assert Inbox.cached(state.opts[:name]) == []
     end
 
+    test "says it read Linear once a read succeeds, even one that found nothing" do
+      test_pid = self()
+      {:ok, answer} = Agent.start_link(fn -> {:error, :timeout} end)
+      state = state(linear(test_pid, fn _variables -> Agent.get(answer, & &1) end, %{}))
+      refute Inbox.read?(state.opts[:name])
+
+      capture_log(fn -> Inbox.run_once(state) end)
+      refute Inbox.read?(state.opts[:name])
+
+      Agent.update(answer, fn _answer -> page([]) end)
+      state = Inbox.run_once(state)
+      assert Inbox.read?(state.opts[:name])
+      assert Inbox.cached(state.opts[:name]) == []
+
+      Inbox.run_once(state)
+      assert Inbox.read?(state.opts[:name])
+    end
+
+    test "counts as read when it does not run, and not before a running server's first read" do
+      assert Inbox.read?(Module.concat(__MODULE__, :NotRunning))
+
+      name = Module.concat(__MODULE__, :NotReadYet)
+      start_supervised!({Inbox, name: name, initial_delay_ms: 60_000})
+      refute Inbox.read?(name)
+    end
+
     test "reads every page of the list" do
       test_pid = self()
       first = issue_node("SHOP-1")

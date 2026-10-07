@@ -67,7 +67,8 @@ public struct InboxNotice: Equatable {
 
 /// Decides what to notify from each state poll: an item or problem notifies once, the first time it is seen, and
 /// never again for the same key, even after a relaunch (the keys are kept in the app's defaults). The first poll
-/// after the app's first launch only remembers what is there, so nothing already waiting floods in.
+/// after the app's first launch on which Symphony has read the Inbox only remembers what is there, so nothing
+/// already waiting floods in; before that read the list may be incomplete, so nothing is remembered.
 public struct InboxNotifier: Equatable {
     public static let defaultsKey = "SymphonyNotifiedKeys"
     /// The most keys remembered; the oldest go first.
@@ -89,15 +90,17 @@ public struct InboxNotifier: Equatable {
     }
 
     /// The notices due for `waiting` and `problems`, with the kinds `preferences` turned off left out. Every item
-    /// seen is remembered, so a kind turned back on doesn't notify what is already there.
+    /// seen is remembered, so a kind turned back on doesn't notify what is already there. `inboxRead` is false while
+    /// Symphony hasn't read the Inbox yet (`StateSnapshot.inboxRead`).
     public mutating func notices(
         waiting: [StateSnapshot.WaitingTicket],
         problems: [Overview.Problem],
-        preferences: NotificationPreferences
+        preferences: NotificationPreferences,
+        inboxRead: Bool = true
     ) -> [InboxNotice] {
         let current = waiting.compactMap(Self.notice) + problems.map(Self.notice)
         guard var known = remembered else {
-            remembered = Array(current.map(\.key).suffix(Self.keyLimit))
+            if inboxRead { remembered = Array(current.map(\.key).suffix(Self.keyLimit)) }
             return []
         }
         let knownSet = Set(known)

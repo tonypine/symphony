@@ -29,7 +29,8 @@ final class InboxNotificationCenter: NSObject, UNUserNotificationCenterDelegate 
         let notices = notifier.notices(
             waiting: state.snapshot.waitingOnYou,
             problems: Overview.problems(state, now: now),
-            preferences: NotificationPreferences.load(from: defaults)
+            preferences: NotificationPreferences.load(from: defaults),
+            inboxRead: state.snapshot.inboxRead
         )
         if notifier != before { notifier.save(to: defaults) }
         notices.forEach(post)

@@ -97,6 +97,16 @@ defmodule SymphonyElixir.Inbox do
   def cached(server \\ __MODULE__), do: :persistent_term.get(cache_key(server), [])
 
   @doc """
+  Whether `cached/1` holds a read from Linear: false while the server named `server` runs but has
+  not read Linear yet, true once it has or when no server by that name runs.
+  """
+  @spec read?(GenServer.name()) :: boolean()
+  def read?(server \\ __MODULE__), do: :persistent_term.get(read_key(server), false) or not running?(server)
+
+  defp running?(server) when is_atom(server), do: Process.whereis(server) != nil
+  defp running?(_server), do: true
+
+  @doc """
   What waits on the Director now: the cached items and the quality gate's holds and skips in
   `snapshot`, without an issue that is running or that the orchestrator saw leave the review
   states, oldest first (an item with no known wait last).
@@ -128,11 +138,13 @@ defmodule SymphonyElixir.Inbox do
   defp sort_key(_at), do: 0
 
   defp cache_key(server), do: {__MODULE__, :items, server}
+  defp read_key(server), do: {__MODULE__, :read, server}
 
   # Writes only on a change: a persistent term write is global.
   defp put_items(state, items) do
     server = Keyword.get(state.opts, :name, __MODULE__)
     if cached(server) != items, do: :persistent_term.put(cache_key(server), items)
+    unless :persistent_term.get(read_key(server), false), do: :persistent_term.put(read_key(server), true)
   end
 
   @impl true

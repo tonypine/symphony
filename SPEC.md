@@ -2517,7 +2517,8 @@ An issue is dispatch-eligible only if all are true:
     oldest first, each with its identifier, repo, title, URL, kind (`action`, `final_verification`,
     `plan`, `pr` or `clarify`), its one-line ask as `headline` and how long it has waited, and
     `counts.waiting_on_you` is their number. It MUST drop an issue the orchestrator sees running or
-    watches outside the review states.
+    watches outside the review states. `inbox_read` is false until Symphony's first successful
+    Linear read for the Inbox, so a client can tell an empty list from one not read yet.
 - Plan review rule:
   - The plan run leaves its sub-issues in `Backlog` and moves the parent to `In Review`
     (`linear_update_state` allows `In Review` for a plan parent even with Auto Review on),

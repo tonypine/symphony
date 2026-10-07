@@ -227,6 +227,33 @@ final class InboxTests: XCTestCase {
         XCTAssertEqual(notifier.notices(waiting: [waiting("Z-1", .other("audit"))], problems: [], preferences: .init()), [])
     }
 
+    func testWaitsForSymphonysFirstInboxReadBeforeRememberingWhatIsThere() {
+        var notifier = InboxNotifier()
+        let already = [waiting("P-1", .plan), waiting("R-1", .pr)]
+        // Symphony has just started: its Inbox is empty until it reads Linear, so nothing is remembered yet.
+        XCTAssertEqual(notifier.notices(waiting: [], problems: [], preferences: .init(), inboxRead: false), [])
+        XCTAssertNil(notifier.remembered)
+
+        // Its first read lists what already waited: remembered, not notified.
+        XCTAssertEqual(notifier.notices(waiting: already, problems: [], preferences: .init(), inboxRead: true), [])
+        XCTAssertEqual(notifier.remembered, ["plan:id-P-1", "pr:id-R-1"])
+        XCTAssertEqual(notifier.notices(waiting: already, problems: [], preferences: .init()), [])
+
+        // Once remembered, a Symphony restart's empty Inbox doesn't make them new again.
+        XCTAssertEqual(notifier.notices(waiting: [], problems: [], preferences: .init(), inboxRead: false), [])
+        XCTAssertEqual(notifier.notices(waiting: already, problems: [], preferences: .init()), [])
+    }
+
+    func testReadsWhetherSymphonyHasReadTheInbox() throws {
+        let unread = Data(#"{"counts": {"running": 0}, "waiting_on_you": [], "inbox_read": false}"#.utf8)
+        guard case .state(let snapshot) = SymphonyState.poll(data: unread, statusCode: 200) else { return XCTFail("no state") }
+        XCTAssertFalse(snapshot.inboxRead)
+
+        // A Symphony that predates the field has read it as far as the app can tell.
+        guard case .state(let older) = SymphonyState.poll(data: Data(#"{"counts": {"running": 0}}"#.utf8), statusCode: 200) else { return XCTFail("no state") }
+        XCTAssertTrue(older.inboxRead)
+    }
+
     func testAKindTurnedOffDoesntNotifyAndIsntOwedLater() {
         var notifier = InboxNotifier(remembered: [])
         var preferences = NotificationPreferences()

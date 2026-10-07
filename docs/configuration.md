@@ -2197,6 +2197,9 @@ gate hold or skip), `headline` (its one-line ask: the text after `**What to revi
 `## Review brief` comment, the request's title, or what the quality gate asks), `waiting_since` and
 `waiting_seconds`; `counts.waiting_on_you` is their number. A ticket the orchestrator sees running,
 or watches outside those states, is dropped. It doesn't depend on `human_actions.enabled`.
+`inbox_read` is false while Symphony has not yet read Linear for the list (the first read starts a
+second after startup), and true from its first successful read on, or when the tracker isn't Linear.
+The Mac app waits for it before it remembers what already waits, so nothing that was there notifies.
 
 **Where actions come from.** On each read, in the scope each repository route polls, Symphony
 lists:

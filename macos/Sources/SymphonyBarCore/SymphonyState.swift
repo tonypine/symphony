@@ -22,6 +22,9 @@ public struct StateSnapshot: Equatable {
     public var runs: [Run]
     /// The tickets only the operator can move on, oldest first; empty when none does, or when Symphony predates them.
     public var waitingOnYou: [WaitingTicket]
+    /// False while Symphony hasn't read Linear for `waitingOnYou` yet, so an empty list may be incomplete; true
+    /// once it has, or when Symphony predates the field.
+    public var inboxRead: Bool
 
     /// A ticket waiting on the operator, as `/api/v1/state`'s `waiting_on_you` lists it.
     public struct WaitingTicket: Equatable {
@@ -286,7 +289,8 @@ public struct StateSnapshot: Equatable {
         humanReview: Int = 0,
         gateAgreement: [String: GateAgreement]? = nil,
         runs: [Run] = [],
-        waitingOnYou: [WaitingTicket] = []
+        waitingOnYou: [WaitingTicket] = [],
+        inboxRead: Bool = true
     ) {
         self.running = running
         self.retrying = retrying
@@ -299,6 +303,7 @@ public struct StateSnapshot: Equatable {
         self.gateAgreement = gateAgreement
         self.runs = runs
         self.waitingOnYou = waitingOnYou
+        self.inboxRead = inboxRead
     }
 }
 
@@ -420,6 +425,7 @@ public enum SymphonyState {
                 waitingSeconds: ticket.waitingSeconds
             )
         }
+        snapshot.inboxRead = payload.inboxRead ?? true
         return .state(snapshot)
     }
 
@@ -585,6 +591,8 @@ public enum SymphonyState {
         let forced: [Forced]?
         /// Missing before Symphony listed what waits on the operator.
         let waitingOnYou: [Waiting]?
+        /// Missing before Symphony said whether it had read the Inbox.
+        let inboxRead: Bool?
         let error: Failure?
     }
 }

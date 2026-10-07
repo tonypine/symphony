@@ -643,6 +643,7 @@ defmodule SymphonyElixir.ExtensionsTest do
              ],
              "human_review" => [],
              "waiting_on_you" => [],
+             "inbox_read" => true,
              "conflicts" => [],
              "retrying" => [
                %{
@@ -1494,6 +1495,7 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     assert waiting_seconds > 0
     assert state["counts"]["waiting_on_you"] == 2
+    assert state["inbox_read"]
     assert Enum.map(state["waiting_on_you"], & &1["kind"]) == ["clarify", "pr"]
 
     assert json_response(post(build_conn(), "/api/v1/inbox", %{}), 405) ==

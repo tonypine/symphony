@@ -79,6 +79,7 @@ defmodule SymphonyElixirWeb.Presenter do
           watching: snapshot |> Map.get(:watching, []) |> Enum.map(&watching_entry_payload/1),
           human_review: Enum.map(human_review, &watching_entry_payload/1),
           waiting_on_you: Enum.map(waiting_on_you, &waiting_on_you_payload(&1, now)),
+          inbox_read: Inbox.read?(inbox),
           conflicts: snapshot |> Map.get(:conflicts, []) |> Enum.map(&conflict_entry_payload/1),
           retrying: Enum.map(snapshot.retrying, &retry_entry_payload/1),
           awaiting_clarification:
