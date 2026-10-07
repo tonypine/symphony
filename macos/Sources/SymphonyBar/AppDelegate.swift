@@ -195,6 +195,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         symphonyWindow.openWebDashboard = { [weak self] in self?.openWebDashboard(nil) }
         symphonyWindow.canOpenWebDashboard = { [weak self] in self?.canOpenWebDashboard ?? false }
         symphonyWindow.canOpenLogs = { [weak self] in self?.canOpenLogs ?? false }
+        symphonyWindow.afterControl = { [weak self] in self?.poller.pollNow() }
         symphonyWindow.update(status: machine.status, configPath: configPath)
         apiClient.start()
         poller.onPoll = { [weak self] poll in

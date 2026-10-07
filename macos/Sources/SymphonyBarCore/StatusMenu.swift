@@ -281,7 +281,7 @@ public enum StatusMenu {
     }
 
     /// "14:05" on the day of `now`, otherwise `dateFormat`, for example "Oct 4 14:05".
-    private static func clockTime(_ date: Date, now: Date, timeZone: TimeZone, dateFormat: String) -> String {
+    static func clockTime(_ date: Date, now: Date, timeZone: TimeZone, dateFormat: String) -> String {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = timeZone
         let formatter = DateFormatter()

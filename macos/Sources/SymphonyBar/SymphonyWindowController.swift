@@ -23,6 +23,8 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
     var openWebDashboard: () -> Void = {}
     var canOpenWebDashboard: () -> Bool = { false }
     var canOpenLogs: () -> Bool = { false }
+    /// Called once a control request from the window was answered, so the menu follows too.
+    var afterControl: () -> Void = {}
 
     private var window: NSWindow?
     private var model: SymphonyWindowModel?
@@ -50,6 +52,15 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
             model.onAction = { [weak self] action in self?.onAction(action) }
             model.onOpenRepos = { [weak self] in self?.openRepos() }
             model.onOpenWebDashboard = { [weak self] in self?.openWebDashboard() }
+            model.scope = OverviewScope.load(from: AppStores.current.defaults)
+            model.onScopeChange = { scope in scope.save(to: AppStores.current.defaults) }
+            model.onControl = { [weak self] action in
+                guard let self else { return .done }
+                let result = await AppStores.current.sendControl(action, stateRoot: stateRoot())
+                afterControl()
+                return result
+            }
+            model.onOpenURL = { url in NSWorkspace.shared.open(url) }
             self.model = model
 
             let hostingController = NSHostingController(rootView: SymphonyWindowView(model: model))

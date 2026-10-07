@@ -1,0 +1,108 @@
+{
+  "generated_at": "2026-10-07T14:20:00Z",
+  "repos": [
+    {
+      "base_branch": "main",
+      "default": true,
+      "github": "acme/web-shop",
+      "key": "web-shop",
+      "last_fetch": {
+        "at": "2026-10-07T14:15:00Z",
+        "error": null,
+        "result": "ok"
+      },
+      "routing": {
+        "assignee": null,
+        "labels": [],
+        "projects": [
+          "web-shop"
+        ],
+        "team": null
+      },
+      "source": {
+        "kind": "local",
+        "path": "/Users/director/Projects/web-shop"
+      },
+      "workflow": {
+        "error": null,
+        "found": true,
+        "path": "/Users/director/Projects/web-shop/WORKFLOW.md",
+        "status": "valid"
+      },
+      "worktrees": [
+        {
+          "issue_id": "i-305",
+          "issue_identifier": "SHOP-305",
+          "path": "/Users/director/symphony-workspaces/web-shop/SHOP-305",
+          "worker_host": null
+        },
+        {
+          "issue_id": "i-298",
+          "issue_identifier": "SHOP-298",
+          "path": "/Users/director/symphony-workspaces/web-shop/SHOP-298",
+          "worker_host": null
+        }
+      ]
+    },
+    {
+      "base_branch": "main",
+      "default": false,
+      "github": "acme/api",
+      "key": "api",
+      "last_fetch": {
+        "at": "2026-10-07T14:15:00Z",
+        "error": null,
+        "result": "ok"
+      },
+      "routing": {
+        "assignee": null,
+        "labels": [],
+        "projects": [
+          "api"
+        ],
+        "team": null
+      },
+      "source": {
+        "kind": "local",
+        "path": "/Users/director/Projects/api"
+      },
+      "workflow": {
+        "error": null,
+        "found": true,
+        "path": "/Users/director/Projects/api/WORKFLOW.md",
+        "status": "valid"
+      },
+      "worktrees": []
+    },
+    {
+      "base_branch": "main",
+      "default": false,
+      "github": "acme/docs",
+      "key": "docs",
+      "last_fetch": {
+        "at": "2026-10-07T14:15:00Z",
+        "error": null,
+        "result": "ok"
+      },
+      "routing": {
+        "assignee": null,
+        "labels": [],
+        "projects": [
+          "docs"
+        ],
+        "team": null
+      },
+      "source": {
+        "kind": "local",
+        "path": "/Users/director/Projects/docs"
+      },
+      "workflow": {
+        "error": null,
+        "found": true,
+        "path": "/Users/director/Projects/docs/WORKFLOW.md",
+        "status": "valid"
+      },
+      "worktrees": []
+    }
+  ]
+}
