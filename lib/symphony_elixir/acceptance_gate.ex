@@ -497,7 +497,7 @@ defmodule SymphonyElixir.AcceptanceGate do
 
   defp escalation_reasons(issue, diff_summary, busy_files, settings) do
     rules = settings.auto_review.acceptance_gate.escalate
-    opts = [human_review_state: HumanReview.state(settings)]
+    opts = [review_states: HumanReview.review_states(settings)]
     for %{rule: rule, detail: detail} <- Escalation.check(issue, diff_summary, busy_files, rules, opts), do: %{rule: Atom.to_string(rule), detail: detail}
   end
 
