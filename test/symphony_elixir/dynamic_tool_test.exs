@@ -478,6 +478,63 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       assert move("Backlog", implementation, comment_registry: registry) == "state-human"
       assert move("Human Review", %{"labels" => %{"nodes" => [%{"name" => "breakdown"}]}}) == "state-human"
     end
+
+    # TP-612: the work was already on `main`, so there is no PR, and only a host crash check is left.
+    test "with Auto Review on, a ticket with no PR goes to In Review once its run left a supervisor check" do
+      write_workflow_file!(Workflow.workflow_file_path(), auto_review: %{enabled: true})
+      {:ok, registry} = CommentRegistry.start_link()
+      no_pr = %{"title" => "Keep the toolbars off the inspector", "attachments" => %{"nodes" => [%{"url" => "https://linear.app/acme/document/brief"}, %{}]}}
+      with_pr = %{no_pr | "attachments" => %{"nodes" => [%{"url" => "https://github.com/acme/app/pull/12"}]}}
+      test_pid = self()
+
+      refused? = fn target, issue_fields ->
+        response =
+          DynamicTool.execute(
+            "linear_update_state",
+            %{"state_name_or_id" => target},
+            issue: %Issue{id: "issue-current"},
+            comment_registry: registry,
+            linear_client: fn query, variables, client_opts ->
+              if query =~ "SymphonyAgentIssueTeamStates",
+                do: {:ok, %{"data" => %{"issue" => Map.merge(team_states_issue(@review_states, []), issue_fields)}}},
+                else: update_state_client(test_pid, @review_states).(query, variables, client_opts)
+            end
+          )
+
+        match?(%{"error" => %{"code" => "in_review_set_by_auto_review"}}, Jason.decode!(response["output"]))
+      end
+
+      comment = fn tool, args ->
+        response =
+          DynamicTool.execute(tool, args,
+            issue: %Issue{id: "issue-current"},
+            comment_registry: registry,
+            linear_client: fn _query, _variables, _opts ->
+              {:ok,
+               %{
+                 "data" => %{
+                   "commentCreate" => %{"success" => true, "comment" => %{"id" => "brief-1"}},
+                   "commentUpdate" => %{"success" => true, "comment" => %{"id" => "brief-1"}}
+                 }
+               }}
+            end
+          )
+
+        assert response["success"] == true
+      end
+
+      # A brief without the block, or naming it only in passing, changes nothing.
+      comment.("linear_add_comment", %{"body" => "## Review brief\n\nSee the `## Supervisor check` below."})
+      assert refused?.("In Review", no_pr)
+      refute CommentRegistry.supervisor_check?(registry)
+
+      comment.("linear_update_comment", %{"comment_id" => "brief-1", "body" => "## Review brief\n\n  ## Supervisor check\n\n**Verify:** no crash on `main`."})
+      assert CommentRegistry.supervisor_check?(registry)
+
+      assert move("In Review", no_pr, comment_registry: registry) == "state-review"
+      assert refused?.("Human Review", no_pr)
+      assert refused?.("In Review", with_pr)
+    end
   end
 
   test "update_state allows Waiting on sub-tickets when the waiting state is turned off in config" do
@@ -1290,13 +1347,27 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
   end
 
   describe "linear_request_human_action" do
-    @request %{"title" => "Add the release signing secrets", "why" => "Release fails.", "steps" => ["Add the secret."]}
+    @request %{
+      "title" => "Add the release signing secrets",
+      "why" => "Release fails.",
+      "decision" => %{
+        "question" => "Add the secret, or ship unsigned?",
+        "options" => [%{"label" => "Add it", "effect" => "Releases sign again.", "recommended" => true}, %{"label" => "Ship unsigned", "effect" => "No signing."}]
+      }
+    }
 
     test "is advertised with its fields and hidden from the read-only scope" do
-      assert %{"inputSchema" => %{"properties" => properties, "required" => ["title", "why", "steps"]}} =
+      assert %{"description" => description, "inputSchema" => %{"properties" => properties, "required" => ["title", "why", "decision"]}} =
                Enum.find(DynamicTool.tool_specs(), &(&1["name"] == "linear_request_human_action"))
 
-      assert properties |> Map.keys() |> Enum.sort() == ["est_minutes", "steps", "title", "unblocks", "why"]
+      assert properties |> Map.keys() |> Enum.sort() == ["decision", "est_minutes", "title", "unblocks", "why"]
+
+      assert %{"required" => ["question", "options"], "properties" => %{"options" => %{"minItems" => 2, "maxItems" => 4, "items" => option}}} =
+               properties["decision"]
+
+      assert %{"required" => ["label", "effect"], "properties" => %{"recommended" => %{"type" => "boolean"}}} = option
+      assert description =~ "a request without options is refused"
+      assert description =~ "goes to the supervisor as a `## Supervisor check` block with the ticket moved to In Review"
       refute "linear_request_human_action" in Enum.map(DynamicTool.tool_specs(:read_only), & &1["name"])
 
       response =
@@ -1339,8 +1410,14 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       assert response["success"] == true
       assert %{"requested" => true, "commentId" => "comment-1", "state" => "Human Review"} = Jason.decode!(response["output"])
 
-      response = DynamicTool.execute("linear_request_human_action", Map.put(@request, "steps", []), opts)
-      assert %{"error" => %{"code" => "invalid_human_action", "message" => "linear_request_human_action: `steps`" <> _rest}} = Jason.decode!(response["output"])
+      response = DynamicTool.execute("linear_request_human_action", put_in(@request, ["decision", "options"], []), opts)
+
+      assert %{"error" => %{"code" => "invalid_human_action", "message" => "linear_request_human_action: `decision.options` must list 2 to 4 options" <> _rest}} =
+               Jason.decode!(response["output"])
+
+      # The old runbook shape is refused outright.
+      response = DynamicTool.execute("linear_request_human_action", @request |> Map.delete("decision") |> Map.put("steps", ["Check it."]), opts)
+      assert response["success"] == false
 
       disabled = Config.settings!() |> then(&%{&1 | human_actions: %{&1.human_actions | enabled: false}})
       response = DynamicTool.execute("linear_request_human_action", @request, Keyword.put(opts, :settings, disabled))

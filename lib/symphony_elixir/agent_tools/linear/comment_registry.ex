@@ -6,7 +6,8 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
   # their ids by identifier (so a later sub-issue may be blocked by an earlier one), the documents it
   # created (so it may edit them before Linear lists their attachments, and stays under the cap), and
   # whether it asked a person for something (so its issue waits for that person in the Human Review
-  # state).
+  # state), and whether it left a `## Supervisor check` (so a ticket with no PR may still go to
+  # `In Review` with Auto Review on).
 
   use Agent
 
@@ -26,7 +27,8 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
       project_updates: 0,
       documents: 0,
       created_documents: MapSet.new(),
-      human_action_requested: false
+      human_action_requested: false,
+      supervisor_check: false
     }
 
     Agent.start_link(fn -> state end, agent_opts)
@@ -147,6 +149,16 @@ defmodule SymphonyElixir.AgentTools.Linear.CommentRegistry do
   @spec clear_human_action_request(pid() | nil) :: :ok
   def clear_human_action_request(pid) when is_pid(pid), do: Agent.update(pid, &Map.put(&1, :human_action_requested, false))
   def clear_human_action_request(_pid), do: :ok
+
+  @doc "Records that the run left a `## Supervisor check` block (`SymphonyElixir.SupervisorCheck`)."
+  @spec record_supervisor_check(pid() | nil) :: :ok
+  def record_supervisor_check(pid) when is_pid(pid), do: Agent.update(pid, &Map.put(&1, :supervisor_check, true))
+  def record_supervisor_check(_pid), do: :ok
+
+  @doc "True once `record_supervisor_check/1` ran for this run."
+  @spec supervisor_check?(pid() | nil) :: boolean()
+  def supervisor_check?(pid) when is_pid(pid), do: Agent.get(pid, &Map.get(&1, :supervisor_check, false))
+  def supervisor_check?(_pid), do: false
 
   defp reserve(pid, counter, cap, cap_error) do
     Agent.get_and_update(pid, fn state ->

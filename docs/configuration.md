@@ -2181,10 +2181,14 @@ human_actions:
 **Where actions come from.** On each read, in the scope each repository route polls, Symphony
 lists:
 
-- each open `## Action needed:` comment. Agents post one with `linear_request_human_action`
-  (`title`, `why`, `steps`, optional `unblocks` and `est_minutes`) when they hit something only a
-  person can do: a missing secret or permission, an account to set up, a product decision, a check
-  on a device. The tool moves the issue to `issues.states.human_review` (`In Review` when that
+- each open `## Decision needed:` comment. Agents post one with `linear_request_human_action`
+  (`title`, `why`, a `decision` with one `question` and 2 to 4 `options`, each with a `label`
+  and an `effect` and exactly one `recommended`, optional `unblocks` and `est_minutes`) when only a
+  person can decide: a product call, a missing secret or permission (add it, or drop what needs
+  it), an account to set up. A request without options is refused, and a person never gets a check
+  to run: a check an agent can't run (launching the app, a host crash check, a check on a device)
+  goes to the supervisor as a `## Supervisor check` block with the ticket in `In Review`. The
+  update lists the question and the options, the recommended one marked. The tool moves the issue to `issues.states.human_review` (`In Review` when that
   state is off) and adds no label; the move ends the run shortly after, so the agent first pushes
   its committed work (and opens or updates the PR when the rest of the ticket is done) and updates
   its workpad. A request whose title matches one still open on the issue is not posted again,
@@ -2231,17 +2235,20 @@ A supervisor or a person adds an action by hand the same way: move the issue to 
 and optionally add a comment in the request format:
 
 ```md
-## Action needed: Turn on the pre-push hook
+## Decision needed: Turn on the pre-push hook
 
+**Question:** Turn on the pre-push hook on your laptop?
 **Why:** Pushes skip the format and credo checks without it.
 **Unblocks:** clean pushes from your laptop
 **Time:** about 2 min
 
-**Steps:**
-1. In your checkout, run `git config core.hooksPath .githooks`.
+**Options:**
+1. **Turn it on** (recommended): you run `git config core.hooksPath .githooks` in your checkout.
+2. **Leave it off**: CI keeps catching what the hook would.
 ```
 
-Only the heading is required.
+The older `## Action needed: <title>` heading, with a `**Steps:**` list, is still read. Only the
+heading is required.
 
 **When an action closes.** A request closes when its issue moves on: after the request, the issue
 leaves a state a person moves it out of (anything but `issues.states.active`, the waiting state and
@@ -2281,7 +2288,7 @@ health set by the project's previous update. No secret value reaches an update:
 `linear_request_human_action` refuses any field that holds a secret pattern, and the whole update
 is redacted again before it is posted, which covers secrets pasted into an issue or comment by hand.
 
-A rendered example, for a mix of a missing secret, a plan, a task labelled with the deprecated
+A rendered example, for a mix of a decision on a missing secret, a plan, a task labelled with the deprecated
 `human_actions.label` and a blocked QA pass:
 
 ```md
@@ -2293,12 +2300,12 @@ A rendered example, for a mix of a missing secret, a plan, a task labelled with 
 
 **Why:** Every Release run on `main` fails at the signing step without them.
 
-1. Open github.com/acme/cycle → Settings → Secrets and variables → Actions.
-2. Add `MACOS_CERTIFICATE` with the base64 of the Developer ID certificate (.p12).
-3. Add `MACOS_CERTIFICATE_PASSWORD` with its password.
-4. Move MOT-24 to Todo.
+**Decide:** Add the signing secrets, or ship unsigned builds?
 
-**Done when:** you move MOT-24 out of Human Review once it is unblocked, or the agent withdraws the request.
+1. **Add the secrets** (recommended): you add `MACOS_CERTIFICATE` and `MACOS_CERTIFICATE_PASSWORD` in the repository's Actions secrets; releases are signed again.
+2. **Ship unsigned**: the agent drops the signing step; Gatekeeper warns on first launch.
+
+**Done when:** you reply with your pick and move MOT-24 out of Human Review, or the agent withdraws the request.
 
 ### 2. Approve the plan for MOT-40
 

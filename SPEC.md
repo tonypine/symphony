@@ -1366,7 +1366,10 @@ When enabled:
   open, rather than redirecting the target state. The refusal applies before the human review
   redirect. A `linear_request_human_action` request moves its issue to the human review state
   itself, since only a person can move it on; the acceptance gate never approves an issue there. A plan parent and a ticket whose
-  title starts with `Final verification:` open no PR, so they MAY move to either state.
+  title starts with `Final verification:` open no PR, so they MAY move to either state. A ticket
+  with no pull request attachment whose run posted or edited a comment holding a
+  `## Supervisor check` heading line (its work is already on the default branch, and only a check
+  an agent can't run is left) MAY move to `In Review`, for the supervisor to run the check.
 - The CI poller MUST discover issues in `state` as well as `In Review`. Red CI follows the normal
   `In Progress` fix loop and escalation. Green CI on an issue in `state` starts a QA pass for the
   PR head SHA, at most one per issue and `max_concurrent` overall. GitHub runs no `pull_request`
@@ -3522,9 +3525,15 @@ Scoped Linear tool extension contract:
   boundary tags like comments. `linear_get_document` is read-only and available to the read-only
   reviewer and QA scopes; the read-only reviewer scope MUST NOT advertise or execute the other two.
 - `linear_request_human_action` MUST only act on the current issue and MUST accept only `title`,
-  `why`, a non-empty `steps` list, an optional `unblocks` and an optional `est_minutes`. Every
-  field MUST pass the same secret scan as comments before any Linear call. It posts an
-  `## Action needed: <title>` comment that Symphony's human-action project updates list, moves the
+  `why`, a `decision`, an optional `unblocks` and an optional `est_minutes`. The `decision` holds
+  one non-blank `question` and 2 to 4 `options`, each with a non-blank `label` and `effect`,
+  exactly one of them `recommended`; a request without it, or with fewer than 2 options, MUST be
+  refused with an error that says so. A person only gets decisions: a check an agent can't run goes
+  to the supervisor as a `## Supervisor check` in `In Review` instead. Every field MUST pass the
+  same secret scan as comments before any Linear call. It posts a
+  `## Decision needed: <title>` comment (the question, then the numbered options with the
+  recommended one marked, and no steps) that Symphony's human-action project updates list, and
+  those updates still read a hand-written `## Action needed: <title>` comment. It moves the
   current issue to the `issues.states.human_review` state (`In Review` when that state is off), and
   MUST NOT add a label. The request stays open until a person moves the issue out of that state, or
   it is withdrawn. A request with the same title still open on the issue MUST NOT be posted again;

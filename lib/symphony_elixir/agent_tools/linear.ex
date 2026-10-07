@@ -25,6 +25,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.RunKind
   alias SymphonyElixir.SensitivePath
   alias SymphonyElixir.SubIssueWait
+  alias SymphonyElixir.SupervisorCheck
 
   @comment_limit_default 50
   @comment_limit_max 100
@@ -46,7 +47,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @project_update_healths ["onTrack", "atRisk", "offTrack"]
   # Requests for a human are deduplicated by title, so this only bounds a run that loops.
   @human_action_cap_per_run 5
-  @human_action_max_steps 15
+  @human_action_options 2..4
   @human_action_max_minutes 480
   # Documents hold a ticket's long-lived artifacts, edited over several runs; this bounds a run that loops.
   @document_cap_per_run 10
@@ -56,6 +57,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @document_metadata_key "symphonyDocumentId"
   @document_title_separator " · "
 
+  @pull_request_url ~r{\Ahttps?://[^/]+/[^/\s]+/[^/\s]+/pull/\d+(?:$|[/?#])}
   @uuid_pattern ~r/\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i
 
   @current_issue_query """
@@ -202,6 +204,11 @@ defmodule SymphonyElixir.AgentTools.Linear do
       labels {
         nodes {
           name
+        }
+      }
+      attachments(first: 50) {
+        nodes {
+          url
         }
       }
       team {
@@ -652,13 +659,27 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @spec update_state(context(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def update_state(context, state_name_or_id, opts) when is_binary(state_name_or_id) do
     with {:ok, issue_id} <- current_issue_id(context),
-         {:ok, state_id} <- resolve_state_id(issue_id, state_name_or_id, CommentRegistry.human_action_requested?(Map.get(context, :comment_registry)), opts),
+         {:ok, state_id} <- resolve_state_id(issue_id, state_name_or_id, run_handoff(context), opts),
          {:ok, response} <- graphql(@update_issue_state_mutation, %{id: issue_id, stateId: state_id}, opts) do
       check_mutation_success(response, "issueUpdate")
     end
   end
 
   def update_state(_context, _state_name_or_id, _opts), do: {:error, :invalid_state}
+
+  # What the run did so far that changes where its issue may go.
+  defp run_handoff(context) do
+    registry = Map.get(context, :comment_registry)
+
+    %{
+      human_action_requested?: CommentRegistry.human_action_requested?(registry),
+      supervisor_check?: CommentRegistry.supervisor_check?(registry)
+    }
+  end
+
+  defp record_supervisor_check(context, body) do
+    if SupervisorCheck.in_body?(body), do: CommentRegistry.record_supervisor_check(Map.get(context, :comment_registry)), else: :ok
+  end
 
   @spec add_comment(context(), String.t()) :: {:ok, map()} | {:error, term()}
   def add_comment(context, body), do: add_comment(context, body, [])
@@ -672,6 +693,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
          {:ok, response} <- check_mutation_success(response, "commentCreate") do
       comment_id = get_in(response, ["data", "commentCreate", "comment", "id"])
       CommentRegistry.record(Map.get(context, :comment_registry), comment_id)
+      record_supervisor_check(context, body)
       {:ok, response}
     end
   end
@@ -697,8 +719,10 @@ defmodule SymphonyElixir.AgentTools.Linear do
     with :ok <- verify_comment_owner(context, comment_id),
          :ok <- reject_truncated_body(body),
          :ok <- SecretScanner.reject_fields_if_secret_pattern([body: body], context, "linear_update_comment", opts),
-         {:ok, response} <- graphql(@update_comment_mutation, %{id: comment_id, body: body}, opts) do
-      check_mutation_success(response, "commentUpdate")
+         {:ok, response} <- graphql(@update_comment_mutation, %{id: comment_id, body: body}, opts),
+         {:ok, response} <- check_mutation_success(response, "commentUpdate") do
+      record_supervisor_check(context, body)
+      {:ok, response}
     end
   end
 
@@ -1153,37 +1177,59 @@ defmodule SymphonyElixir.AgentTools.Linear do
   end
 
   defp validate_human_action(attrs) do
-    %{"title" => title, "why" => why, "steps" => steps, "unblocks" => unblocks, "est_minutes" => est_minutes} =
-      Map.merge(%{"title" => nil, "why" => nil, "steps" => nil, "unblocks" => nil, "est_minutes" => nil}, attrs)
+    %{"title" => title, "why" => why, "decision" => decision, "unblocks" => unblocks, "est_minutes" => est_minutes} =
+      Map.merge(%{"title" => nil, "why" => nil, "decision" => nil, "unblocks" => nil, "est_minutes" => nil}, attrs)
 
-    case Enum.find(human_action_checks(title, why, steps, unblocks, est_minutes), fn {valid?, _message} -> not valid? end) do
-      {false, message} ->
+    case Enum.find(human_action_checks(title, why, decision, unblocks, est_minutes), fn {valid?, _message} -> not valid?.() end) do
+      {_check, message} ->
         {:error, {:invalid_human_action, message}}
 
       nil ->
         unblocks = if non_blank?(unblocks), do: unblocks
-        {:ok, %{title: Request.one_line(title), why: why, steps: steps, unblocks: unblocks, est_minutes: est_minutes}}
+
+        {:ok,
+         %{
+           title: Request.one_line(title),
+           why: why,
+           question: decision["question"],
+           options: Enum.map(decision["options"], &decision_option/1),
+           unblocks: unblocks,
+           est_minutes: est_minutes
+         }}
     end
   end
 
-  # In order: a later check may rely on an earlier one having passed.
-  defp human_action_checks(title, why, steps, unblocks, est_minutes) do
+  # In order, and lazy: a later check relies on the earlier ones having passed.
+  defp human_action_checks(title, why, decision, unblocks, est_minutes) do
     [
-      {non_blank?(title), "`title` must be a non-blank string."},
-      {non_blank?(title) and String.length(Request.one_line(title)) <= @title_max_length, "`title` must be at most #{@title_max_length} characters."},
-      {non_blank?(why), "`why` must be a non-blank string."},
-      {valid_steps?(steps), "`steps` must list 1 to #{@human_action_max_steps} non-blank strings."},
-      {is_nil(unblocks) or is_binary(unblocks), "`unblocks` must be a string."},
-      {is_nil(est_minutes) or est_minutes in 1..@human_action_max_minutes, "`est_minutes` must be an integer from 1 to #{@human_action_max_minutes}."}
+      {fn -> non_blank?(title) end, "`title` must be a non-blank string."},
+      {fn -> String.length(Request.one_line(title)) <= @title_max_length end, "`title` must be at most #{@title_max_length} characters."},
+      {fn -> non_blank?(why) end, "`why` must be a non-blank string."},
+      {fn -> is_map(decision) end,
+       "`decision` is required: one `question` and #{@human_action_options.first} to #{@human_action_options.last} `options`. " <>
+         "A person only makes decisions; a check an agent can't run goes to the supervisor as a `## Supervisor check` in In Review, " <>
+         "and a manual check that could be a test becomes a test."},
+      {fn -> non_blank?(decision["question"]) end, "`decision.question` must be a non-blank string."},
+      {fn -> is_list(decision["options"]) and length(decision["options"]) in @human_action_options end,
+       "`decision.options` must list #{@human_action_options.first} to #{@human_action_options.last} options, each with a `label` and an `effect`; " <>
+         "with no real choice to make, there is nothing to ask a person."},
+      {fn -> Enum.all?(decision["options"], &valid_decision_option?/1) end, "Each of `decision.options` needs a non-blank `label` and `effect`."},
+      {fn -> Enum.count(decision["options"], &(&1["recommended"] == true)) == 1 end, "Exactly one of `decision.options` must be `recommended`."},
+      {fn -> is_nil(unblocks) or is_binary(unblocks) end, "`unblocks` must be a string."},
+      {fn -> is_nil(est_minutes) or est_minutes in 1..@human_action_max_minutes end, "`est_minutes` must be an integer from 1 to #{@human_action_max_minutes}."}
     ]
   end
 
   defp non_blank?(value), do: is_binary(value) and String.trim(value) != ""
 
-  defp valid_steps?(steps), do: is_list(steps) and length(steps) in 1..@human_action_max_steps and Enum.all?(steps, &non_blank?/1)
+  defp valid_decision_option?(%{} = option), do: non_blank?(option["label"]) and non_blank?(option["effect"])
+  defp valid_decision_option?(_option), do: false
+
+  defp decision_option(option), do: %{label: option["label"], effect: option["effect"], recommended: option["recommended"] == true}
 
   defp reject_human_action_secrets(request, context, opts) do
-    fields = [title: request.title, why: request.why, unblocks: request.unblocks, steps: Enum.join(request.steps, "\n")]
+    options = Enum.map_join(request.options, "\n", &"#{&1.label}: #{&1.effect}")
+    fields = [title: request.title, why: request.why, unblocks: request.unblocks, question: request.question, options: options]
     SecretScanner.reject_fields_if_secret_pattern(fields, context, "linear_request_human_action", opts)
   end
 
@@ -1701,7 +1747,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
     |> Map.reject(fn {_key, value} -> is_nil(value) end)
   end
 
-  defp resolve_state_id(issue_id, state_name_or_id, human_action_requested?, opts) do
+  defp resolve_state_id(issue_id, state_name_or_id, handoff, opts) do
     normalized = String.trim(state_name_or_id)
 
     if normalized == "" do
@@ -1710,8 +1756,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
       settings = Keyword.get_lazy(opts, :settings, &Config.settings!/0)
 
       with {:ok, state, issue, states} <- lookup_team_state(issue_id, normalized, opts),
-           :ok <- refuse_auto_review_handoff_state(state, pr_less_issue?(issue), settings),
-           state = human_review_redirect(state, issue, states, human_action_requested?, settings),
+           pr_less? = pr_less_issue?(issue) or supervisor_handoff?(state, issue, handoff),
+           :ok <- refuse_auto_review_handoff_state(state, pr_less?, settings),
+           state = human_review_redirect(state, issue, states, handoff.human_action_requested?, settings),
            {:ok, state_id} <- refuse_human_only_state(state) do
         refuse_waiting_on_sub_issues_state(state, state_id, settings)
       end
@@ -1803,6 +1850,16 @@ defmodule SymphonyElixir.AgentTools.Linear do
         {:ok, state_id}
     end
   end
+
+  # A ticket with no pull request whose run left a `## Supervisor check` (its work is already on
+  # the default branch, and only a check an agent can't run is left) goes to the supervisor's
+  # `In Review` queue: there is no PR for Auto Review to test.
+  defp supervisor_handoff?(state, issue, %{supervisor_check?: true}) do
+    urls = issue |> get_in(["attachments", "nodes"]) |> List.wrap() |> Enum.map(&(&1["url"] || ""))
+    state_name_matches?(state, AutoReview.review_state()) and not Enum.any?(urls, &Regex.match?(@pull_request_url, &1))
+  end
+
+  defp supervisor_handoff?(_state, _issue, _handoff), do: false
 
   defp pr_less_issue?(issue) do
     labels = issue |> get_in(["labels", "nodes"]) |> List.wrap() |> Enum.map(&label_name/1)

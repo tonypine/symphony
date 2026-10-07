@@ -5,7 +5,8 @@ defmodule SymphonyElixir.HumanActions.Action do
   `key` identifies the action across polls: the set of keys is what decides whether the update
   changed. `kind` says where it came from:
 
-  - `:request`: an `## Action needed:` comment (`linear_request_human_action`, or written by hand);
+  - `:request`: a `## Decision needed:` comment (`linear_request_human_action`), with its `question`
+    and `options`, or an older `## Action needed:` comment written by hand, with its `steps`;
   - `:task`: an issue carrying a deprecated request label (`HumanReview.legacy_request_labels/1`) with no request comment;
   - `:plan_review`: a plan parent waiting in `In Review` for its plan to be approved;
   - `:qa_blocked`: an issue whose latest QA report says Auto Review was `blocked`;
@@ -20,7 +21,8 @@ defmodule SymphonyElixir.HumanActions.Action do
   """
 
   @enforce_keys [:key, :kind, :title, :issue, :project]
-  defstruct @enforce_keys ++ [:why, :unblocks, :est_minutes, :done_when, steps: [], human_review: false]
+  defstruct @enforce_keys ++
+              [:why, :unblocks, :est_minutes, :done_when, :question, options: [], steps: [], human_review: false]
 
   @type kind ::
           :request | :task | :plan_review | :qa_blocked | :human_review | :verification_blocked | :ci_secret
@@ -32,6 +34,8 @@ defmodule SymphonyElixir.HumanActions.Action do
           unblocks: String.t() | nil,
           est_minutes: pos_integer() | nil,
           done_when: String.t() | nil,
+          question: String.t() | nil,
+          options: [String.t()],
           steps: [String.t()],
           human_review: boolean(),
           issue:
