@@ -304,7 +304,8 @@ public struct Overview: Equatable {
                 + qaIdentifiers
         )
 
-        let waitingOnYou = state.humanReview.filter { scope.includes($0.repoKey) }
+        // The Inbox's items, as the state lists them: the same count as the sidebar badge and the menu (US1).
+        let waitingOnYou = state.snapshot.waitingOnYou.filter { scope.includes($0.repoKey) }
 
         let merging = Self.unique(
             state.watching.filter { Self.isState($0.state, "Merging") && scope.includes($0.repoKey) }.map(\.identifier)
@@ -315,7 +316,7 @@ public struct Overview: Equatable {
         let shipped = state.shippedToday.filter { scope.includes($0.repoKey) }
         let shippedCount = scope == .all ? (state.shippedTodayCount ?? shipped.count) : shipped.count
 
-        let oldestWaitingOnYou = waitingOnYou.compactMap(\.secondsSinceLastRun).max()
+        let oldestWaitingOnYou = waitingOnYou.compactMap(\.waitingSeconds).max()
         let longestRun = agentRuns.compactMap { $0.startedAt.map { Int(reference.timeIntervalSince($0)) } }.max()
         let scopedQA = state.qaRunning.filter { scope.includes(index.repoKey(issueID: $0)) }
 
@@ -341,7 +342,7 @@ public struct Overview: Equatable {
                 kind: .waitingOnYou,
                 count: waitingOnYou.count,
                 context: waitingOnYou.isEmpty ? "Nothing waits on you"
-                    : oldestWaitingOnYou.map { "oldest \(Self.duration($0))" } ?? "in Human Review",
+                    : oldestWaitingOnYou.map { "oldest \(Self.duration($0))" } ?? "in the Inbox",
                 spoken: waitingOnYou.isEmpty ? nil : oldestWaitingOnYou.map { "oldest \(Self.spokenDuration($0))" }
             ),
             Stage(
@@ -419,7 +420,12 @@ public struct Overview: Equatable {
 
     /// The count on the sidebar's Overview item: what needs attention in every repo, whatever the scope (P6).
     public static func badgeCount(_ state: OverviewState, now: Date) -> Int {
-        problems(state: state, scope: .all, index: TicketIndex(state), reference: state.generatedAt ?? now, timeZone: .current).count
+        problems(state, now: now).count
+    }
+
+    /// What needs attention in every repo, whatever the scope: what notifies (D14).
+    public static func problems(_ state: OverviewState, now: Date) -> [Problem] {
+        problems(state: state, scope: .all, index: TicketIndex(state), reference: state.generatedAt ?? now, timeZone: .current)
     }
 
     // MARK: - Needs attention

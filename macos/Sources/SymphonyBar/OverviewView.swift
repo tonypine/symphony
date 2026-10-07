@@ -7,6 +7,8 @@ struct OverviewActions {
     var perform: (Overview.Fix) -> Void
     /// The control request under way; its button is off until it is answered.
     var controlInFlight: ControlAction?
+    /// The Waiting on you tile opens the Inbox.
+    var openInbox: () -> Void = {}
 }
 
 /// The Overview in a scroll view, laid out for the width it gets.
@@ -46,7 +48,7 @@ struct OverviewBody: View {
                 NeedsAttention(problems: overview.problems, actions: actions)
                     .transition(.opacity)
             }
-            FlowStrip(stages: overview.stages, rows: width - 2 * DesignTokens.Space.s5 >= FlowStrip.oneRowMinWidth ? 1 : 2)
+            FlowStrip(stages: overview.stages, rows: width - 2 * DesignTokens.Space.s5 >= FlowStrip.oneRowMinWidth ? 1 : 2, actions: actions)
             let layout = sideBySide
                 ? AnyLayout(HStackLayout(alignment: .top, spacing: DesignTokens.Space.s4))
                 : AnyLayout(VStackLayout(alignment: .leading, spacing: DesignTokens.Space.s4))
@@ -147,6 +149,7 @@ private struct FlowStrip: View {
     let stages: [Overview.Stage]
     /// One row when six tiles fit with their context on one line, else two rows of three, in reading order.
     let rows: Int
+    let actions: OverviewActions
 
     /// Six tiles of 140 pt and their chevrons.
     static let oneRowMinWidth: CGFloat = 6 * 140 + 5 * 20
@@ -164,7 +167,15 @@ private struct FlowStrip: View {
                                 .foregroundStyle(.tertiary)
                                 .accessibilityHidden(true)
                         }
-                        StatTile(stage: stage)
+                        if stage.kind == .waitingOnYou {
+                            // The tile is a button that opens the Inbox (J2 step 5), with a focus ring.
+                            Button(action: actions.openInbox) { StatTile(stage: stage) }
+                                .buttonStyle(.plain)
+                                .help("Open the Inbox")
+                                .accessibilityAddTraits(.isButton)
+                        } else {
+                            StatTile(stage: stage)
+                        }
                     }
                 }
                 .fixedSize(horizontal: false, vertical: true)

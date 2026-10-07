@@ -2726,9 +2726,14 @@ defmodule SymphonyElixir.Orchestrator do
       identifier: entry.identifier,
       title: Map.get(entry, :title),
       url: URLUtils.present_url(entry.url),
+      state: Map.get(entry, :state),
       score: Map.get(entry, :score),
       reason: Map.get(entry, :reason),
       rounds_asked: Map.get(entry, :rounds_asked, 0),
+      max_rounds: Map.get(entry, :max_rounds),
+      pass_threshold: Map.get(entry, :pass_threshold),
+      questions: Map.get(entry, :questions, []),
+      scored_at: Map.get(entry, :scored_at),
       updated_at: Map.get(entry, :updated_at)
     }
   end
@@ -2741,9 +2746,14 @@ defmodule SymphonyElixir.Orchestrator do
       identifier: entry.identifier,
       title: Map.get(entry, :title),
       url: URLUtils.present_url(entry.url),
+      state: Map.get(entry, :state),
       score: Map.get(entry, :score),
       reason: Map.get(entry, :reason),
       error: Map.get(entry, :error),
+      rounds_asked: Map.get(entry, :rounds_asked),
+      max_rounds: Map.get(entry, :max_rounds),
+      pass_threshold: Map.get(entry, :pass_threshold),
+      scored_at: Map.get(entry, :scored_at),
       updated_at: Map.get(entry, :updated_at)
     }
   end

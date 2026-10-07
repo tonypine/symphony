@@ -2513,11 +2513,12 @@ An issue is dispatch-eligible only if all are true:
   - The human-action update lists issues in the state first, the state API reports
     `counts.human_review` and a `human_review` list of watched issues in it, and a supervisor never
     moves an issue out of it on the operator's behalf.
-  - The state API reports `waiting_on_you`: one entry per issue in a review state or with an open
-    request, from the latest human-action read, oldest first, with its identifier, title, URL, kind
-    (`action`, `final_verification`, `plan` or `pr`), the headline of its review brief (null
-    without one) and how long it has waited. It MUST drop an issue the orchestrator sees running or
-    watches outside the review states.
+  - The state API reports `waiting_on_you`, the Inbox's items (`GET /api/v1/inbox`) in short:
+    oldest first, each with its identifier, repo, title, URL, kind (`action`, `final_verification`,
+    `plan`, `pr` or `clarify`), its one-line ask as `headline` and how long it has waited, and
+    `counts.waiting_on_you` is their number. It MUST drop an issue the orchestrator sees running or
+    watches outside the review states. `inbox_read` is false until Symphony's first successful
+    Linear read for the Inbox, so a client can tell an empty list from one not read yet.
 - Plan review rule:
   - The plan run leaves its sub-issues in `Backlog` and moves the parent to `In Review`
     (`linear_update_state` allows `In Review` for a plan parent even with Auto Review on),
@@ -4159,6 +4160,9 @@ Minimum endpoints:
     ticket, and after a restart from the time it noted that event on the ticket's run record. The
     Mac app's Overview shows the count as its Shipped today stage.
   - `slot_waiting` rows carry the `repo_key` of the ticket, so a client can filter them by repo.
+  - `waiting_on_you` lists what waits on the operator, as `GET /api/v1/inbox` does, in short, and
+    `counts.waiting_on_you` is its length: the Mac app's menu bar badge, its Waiting on you menu
+    items and the Overview's Waiting on you stage read them.
   - Suggested response shape:
 
     ```json
@@ -4172,7 +4176,8 @@ Minimum endpoints:
         "conflicts": 0,
         "retrying": 1,
         "forced": 1,
-        "shipped_today": 1
+        "shipped_today": 1,
+        "waiting_on_you": 1
       },
       "repos": ["web", "api"],
       "running": [
@@ -4458,6 +4463,80 @@ Minimum endpoints:
             "error": "git fetch exited with status 128: fatal: Could not read from remote repository."
           },
           "worktrees": []
+        }
+      ]
+    }
+    ```
+
+- `GET /api/v1/inbox`
+  - Returns everything that waits on the operator, oldest first (an item whose wait is unknown
+    last), for the Mac app's Inbox. Read-only, served like `/api/v1/state`, and it MUST make no
+    tracker request: the implementation reads the tracker on its own poll and serves what it cached.
+  - The Elixir implementation (`SymphonyElixir.Inbox`) reads Linear every `polling.interval_ms`:
+    one query per repository route lists the issues in its scope in `In Review` or the human review
+    state with their `updatedAt` and the last edit of their newest comment; only an issue whose
+    pair changed since the last read is read again in full (comments, state history, labels,
+    attachments, sub-issues). A failed read keeps the last list. Its Linear requests count as
+    `inbox`.
+  - One item per issue in a review state, with `kind` `action` (an open
+    `linear_request_human_action` request, whatever else it is), else `final_verification` (title
+    starts `Final verification:`), else `plan` (label `plan` or `breakdown`), else `pr`; and one
+    item per quality-gate hold or skip (`awaiting_clarification`, `skipped`), with `kind`
+    `clarify`. An issue the orchestrator sees running, or watches outside the review states, is
+    dropped.
+  - Each item has `issue_id`, `identifier`, `title`, `repo_key`, `kind`, `state`, `ask` (one line:
+    the review brief's `**What to review:**` line, the request's title, or what the quality gate
+    asks), `waiting_since` (the latest move into its state, else its newest request; for `clarify`,
+    when the gate scored it), `waiting_seconds`, `url` and `review`:
+    - `plan`, `pr`, `final_verification`: `brief`, the latest `## Review brief` comment parsed into
+      `headline`, `what_to_review` (`text` and `links`), `what_changed`, `decisions` (`question`,
+      `options`, `recommendation`, `recommended`: the index of the recommended option, null when it
+      can't be told), `moves` (`approve`, `change`, `reject`) and `supervisor_check`, with `format`
+      `parsed`; a brief without a `**What to review:**` line comes as `{"format": "raw",
+      "markdown": ...}`; null without a brief. A `plan` adds `sub_tickets` (`identifier`, `title`,
+      `url`, `state`) in landing order.
+    - `pr` adds `pull_request`: `url` (the GitHub PR attached to the issue), `ci` (`passed`,
+      `failed`, `pending`, null before the CI poller saw it), `qa` (`verdict` and `report_url` of
+      the latest `## Symphony QA Report` comment), `gate` (the acceptance gate's latest `verdict`,
+      `mode` and `agent_verdict`) and `change` (`files`, `additions`, `deletions` and the
+      `largest` files, from the gate's last pass; null when unknown).
+    - `action`: `title`, `question`, `why`, `unblocks`, `est_minutes`, `steps`, `options` (`label`,
+      `effect`, `recommended`) and `requested_at`.
+    - `clarify`: `held` (true while the gate waits for answers, false once it skipped the issue),
+      `score`, `pass_threshold`, `round`, `max_rounds`, `found` (what the gate found) and
+      `questions`.
+  - `counts` has `total` and the number of items of each kind.
+  - When the orchestrator snapshot times out or is unavailable, return `200` with an `error` object
+    in place of the list, as `/api/v1/state` does.
+  - Suggested response shape:
+
+    ```json
+    {
+      "generated_at": "2026-10-07T14:20:00Z",
+      "counts": {"total": 2, "plan": 0, "pr": 1, "final_verification": 0, "action": 0, "clarify": 1},
+      "items": [
+        {
+          "issue_id": "i-206",
+          "identifier": "BIL-206",
+          "title": "Prorate plan changes mid-cycle",
+          "repo_key": "api",
+          "kind": "pr",
+          "state": "In Review",
+          "ask": "Proration for plan changes in the middle of a billing cycle.",
+          "waiting_since": "2026-10-07T12:49:00Z",
+          "waiting_seconds": 5460,
+          "url": "https://linear.app/acme/issue/BIL-206",
+          "review": {
+            "brief": {"format": "parsed", "headline": "Proration for plan changes in the middle of a billing cycle.", "what_to_review": [], "what_changed": [], "decisions": [], "moves": [], "supervisor_check": null},
+            "pull_request": {"url": "https://github.com/acme/api/pull/412", "ci": "passed", "qa": {"verdict": "pass", "report_url": "https://linear.app/acme/issue/BIL-206#comment-5d1e0a2c"}, "gate": {"verdict": "escalate", "mode": "shadow", "agent_verdict": "approve"}, "change": {"files": 9, "additions": 412, "deletions": 38, "largest": []}}
+          }
+        },
+        {
+          "issue_id": "i-341",
+          "identifier": "SHOP-341",
+          "kind": "clarify",
+          "ask": "Answer the quality gate's questions",
+          "review": {"held": true, "score": 3, "pass_threshold": 6, "round": 1, "max_rounds": 2, "found": "No acceptance criteria.", "questions": ["Which searches return wrong results today?"]}
         }
       ]
     }

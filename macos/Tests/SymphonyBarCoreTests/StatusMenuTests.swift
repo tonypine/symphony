@@ -131,7 +131,7 @@ final class StatusMenuTests: XCTestCase {
             "TP-2 · PR · Fix the poller · 30s"
         )
         XCTAssertEqual(StatusMenu.waitingLine(.init(identifier: "TP-3", kind: .finalVerification)), "TP-3 · Final verification")
-        XCTAssertEqual(StatusMenu.waitingLine(.init(identifier: "TP-4", kind: .action, waitingSeconds: 200_000)), "TP-4 · Decision · 2d")
+        XCTAssertEqual(StatusMenu.waitingLine(.init(identifier: "TP-4", kind: .action, waitingSeconds: 200_000)), "TP-4 · Action · 2d")
         XCTAssertEqual(StatusMenu.waitingLine(.init(identifier: "TP-5", kind: .other("audit"), waitingSeconds: 900)), "TP-5 · Review · 15m")
 
         let long = StatusMenu.waitingLine(.init(identifier: "TP-6", headline: String(repeating: "a", count: 80)))

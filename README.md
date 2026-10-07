@@ -423,15 +423,16 @@ mise exec -- mix symphony.pr 123 --intent "fix failing CI"
 `Pause` stops new dispatches while in-flight agents continue; `Stop` ends one issue's session and
 records it as `stopped` without changing the Linear issue state.
 
-**Waiting on you.** The dashboard's `Waiting on you` section, `/api/v1/state`'s `waiting_on_you`
-list and the menu bar app list every ticket only you can move on, oldest first: a plan or a PR in
-`In Review` or `Human Review`, a `Final verification:` ticket to sign off, and a ticket with an open
-`linear_request_human_action` decision. Each entry shows its kind, the headline of its
-`## Review brief` (the `**What to review:**` line) and how long it has waited; the menu bar icon
-shows a badge while the list is not empty. The list comes from the human-action read
-(`human_actions.interval_ms`, every 5 minutes by default), so a new ticket shows after the next read,
-and a ticket you move on leaves it on the next orchestrator poll. With `human_actions.enabled` off
-everywhere the list stays empty.
+**Waiting on you.** The Mac app's Inbox (`/api/v1/inbox`), the dashboard's `Waiting on you`
+section, `/api/v1/state`'s `waiting_on_you` list and the menu bar app list everything only you can
+move on, oldest first: a plan or a PR in `In Review` or `Human Review`, a `Final verification:`
+ticket to sign off, a ticket with an open `linear_request_human_action` decision, and a ticket the
+quality gate holds or skipped. Each entry shows its kind, its one-line ask (the `**What to
+review:**` line of its `## Review brief`) and how long it has waited; the Inbox also shows the brief
+in its parts, the PR's checks and size, the request's steps or what the quality gate found. The
+menu bar icon shows a dot while the list is not empty, and the app notifies each new entry once.
+Symphony reads the list on its poll and serves it from that read, re-reading a ticket's comments only
+when the ticket changed, so a new ticket shows after the next poll.
 
 Away from the Mac, keep the same list as a saved Linear view, **Waiting on me**: in Linear, open
 **Views → New view**, filter **Status** is any of `In Review`, `Human Review` and **Assignee** is

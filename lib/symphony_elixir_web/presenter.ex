@@ -9,8 +9,8 @@ defmodule SymphonyElixirWeb.Presenter do
     BuildInfo,
     Config,
     ForcedStatus,
-    HumanActions,
     HumanReview,
+    Inbox,
     Orchestrator,
     Quality,
     RunKind,
@@ -47,7 +47,7 @@ defmodule SymphonyElixirWeb.Presenter do
   }
 
   @spec state_payload(GenServer.name(), timeout(), GenServer.server(), GenServer.name()) :: map()
-  def state_payload(orchestrator, snapshot_timeout_ms, stray_processes \\ StrayProcesses, human_actions \\ HumanActions) do
+  def state_payload(orchestrator, snapshot_timeout_ms, stray_processes \\ StrayProcesses, inbox \\ Inbox) do
     now = DateTime.utc_now()
     generated_at = now |> DateTime.truncate(:second) |> DateTime.to_iso8601()
 
@@ -57,6 +57,7 @@ defmodule SymphonyElixirWeb.Presenter do
         blocked = Map.get(snapshot, :blocked, [])
         human_review = snapshot |> Map.get(:watching, []) |> Enum.filter(&HumanReview.in_state?(Map.get(&1, :state)))
         shipped_today = Map.get(snapshot, :shipped_today, [])
+        waiting_on_you = Inbox.items(snapshot, inbox)
 
         %{
           generated_at: generated_at,
@@ -71,12 +72,14 @@ defmodule SymphonyElixirWeb.Presenter do
             retrying: length(snapshot.retrying),
             claimed: length(Map.get(snapshot, :claimed, [])),
             forced: length(Map.get(snapshot, :forced, [])),
-            shipped_today: length(shipped_today)
+            shipped_today: length(shipped_today),
+            waiting_on_you: length(waiting_on_you)
           },
           running: Enum.map(snapshot.running, &running_entry_payload/1),
           watching: snapshot |> Map.get(:watching, []) |> Enum.map(&watching_entry_payload/1),
           human_review: Enum.map(human_review, &watching_entry_payload/1),
-          waiting_on_you: waiting_on_you_payload(HumanActions.waiting_on_you(human_actions), snapshot, now),
+          waiting_on_you: Enum.map(waiting_on_you, &waiting_on_you_payload(&1, now)),
+          inbox_read: Inbox.read?(inbox),
           conflicts: snapshot |> Map.get(:conflicts, []) |> Enum.map(&conflict_entry_payload/1),
           retrying: Enum.map(snapshot.retrying, &retry_entry_payload/1),
           awaiting_clarification:
@@ -119,6 +122,53 @@ defmodule SymphonyElixirWeb.Presenter do
         %{generated_at: generated_at, error: %{code: "snapshot_unavailable", message: "Snapshot unavailable"}}
     end
   end
+
+  @doc """
+  Everything that waits on the Director (`SymphonyElixir.Inbox.items/2`), oldest first, with
+  counts by kind. Read from what Symphony cached on its last poll: it makes no Linear request.
+  """
+  @spec inbox_payload(GenServer.name(), timeout(), GenServer.name()) :: map()
+  def inbox_payload(orchestrator, snapshot_timeout_ms, inbox \\ Inbox) do
+    now = DateTime.utc_now()
+    generated_at = now |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+
+    case Orchestrator.snapshot(orchestrator, snapshot_timeout_ms) do
+      %{} = snapshot ->
+        items = Inbox.items(snapshot, inbox)
+        by_kind = Enum.frequencies_by(items, &Atom.to_string(&1.kind))
+
+        %{
+          generated_at: generated_at,
+          counts: Map.new(~w(plan pr final_verification action clarify), &{&1, Map.get(by_kind, &1, 0)}) |> Map.put("total", length(items)),
+          items: Enum.map(items, &inbox_item_payload(&1, now))
+        }
+
+      :timeout ->
+        %{generated_at: generated_at, error: %{code: "snapshot_timeout", message: "Snapshot timed out"}}
+
+      :unavailable ->
+        %{generated_at: generated_at, error: %{code: "snapshot_unavailable", message: "Snapshot unavailable"}}
+    end
+  end
+
+  defp inbox_item_payload(item, now) do
+    %{
+      issue_id: item.issue_id,
+      identifier: item.identifier,
+      title: item.title,
+      repo_key: item.repo_key,
+      kind: Atom.to_string(item.kind),
+      state: item.state,
+      ask: item.ask,
+      waiting_since: iso8601(item.waiting_since),
+      waiting_seconds: waiting_seconds(item.waiting_since, now),
+      url: URLUtils.present_url(item.url),
+      review: inbox_review_payload(item.review)
+    }
+  end
+
+  defp inbox_review_payload(%{requested_at: requested_at} = review), do: %{review | requested_at: iso8601(requested_at)}
+  defp inbox_review_payload(review), do: review
 
   @doc """
   One entry per configured repo (see `SymphonyElixir.Repo.Status`). When the
@@ -616,32 +666,23 @@ defmodule SymphonyElixirWeb.Presenter do
     }
   end
 
-  # The human-actions poller reads the list every few minutes; the orchestrator polls more often.
-  # A ticket it now sees running, or outside a review state, has left the list already.
-  defp waiting_on_you_payload(entries, snapshot, now) do
-    running_ids = MapSet.new(snapshot.running, & &1.issue_id)
-    watched_states = snapshot |> Map.get(:watching, []) |> Map.new(&{&1.issue_id, &1.state})
-
-    entries
-    |> Enum.reject(fn entry ->
-      MapSet.member?(running_ids, entry.issue_id) or
-        (Map.has_key?(watched_states, entry.issue_id) and not HumanReview.review_state?(watched_states[entry.issue_id]))
-    end)
-    |> Enum.sort_by(&{is_nil(&1.waiting_since), &1.waiting_since && DateTime.to_unix(&1.waiting_since), &1.identifier})
-    |> Enum.map(fn entry ->
-      %{
-        issue_id: entry.issue_id,
-        issue_identifier: entry.identifier,
-        title: entry.title,
-        url: URLUtils.present_url(entry.url),
-        state: Map.get(watched_states, entry.issue_id, entry.state),
-        kind: Atom.to_string(entry.kind),
-        headline: entry.headline,
-        waiting_since: iso8601(entry.waiting_since),
-        waiting_seconds: entry.waiting_since && max(DateTime.diff(now, entry.waiting_since, :second), 0)
-      }
-    end)
+  defp waiting_on_you_payload(item, now) do
+    %{
+      issue_id: item.issue_id,
+      issue_identifier: item.identifier,
+      repo_key: item.repo_key,
+      title: item.title,
+      url: URLUtils.present_url(item.url),
+      state: item.state,
+      kind: Atom.to_string(item.kind),
+      headline: item.ask,
+      waiting_since: iso8601(item.waiting_since),
+      waiting_seconds: waiting_seconds(item.waiting_since, now)
+    }
   end
+
+  defp waiting_seconds(%DateTime{} = since, now), do: max(DateTime.diff(now, since, :second), 0)
+  defp waiting_seconds(_since, _now), do: nil
 
   defp conflict_entry_payload(entry) do
     %{

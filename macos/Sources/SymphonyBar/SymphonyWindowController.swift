@@ -37,6 +37,28 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
 
     var isOpen: Bool { window != nil }
 
+    /// What waits on the Director, shown on the Dock icon while the window is open (the app has no Dock icon
+    /// otherwise); nil clears it.
+    var dockBadge: Int? {
+        didSet { showDockBadge() }
+    }
+
+    private func showDockBadge() {
+        NSApp.dockTile.badgeLabel = window == nil ? nil : dockBadge.map(String.init)
+    }
+
+    /// Opens the window on `view`.
+    func show(view: SymphonyView) {
+        show()
+        model?.show(view)
+    }
+
+    /// Opens the window on the Inbox, with the item of issue id `id` selected when it is listed.
+    func showInbox(selecting id: String?) {
+        show()
+        model?.showInbox(selecting: id)
+    }
+
     /// Opens the window, or brings it to the front.
     func show() {
         if window == nil {
@@ -84,6 +106,7 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
         }
 
         NSApp.setActivationPolicy(.regular)
+        showDockBadge()
         SymphonyRunner.activateApp()
         window?.makeKeyAndOrderFront(nil)
         // Puts the window in front even if the system still declined to activate the app.
@@ -159,6 +182,7 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
         window = nil
         model = nil
         client.isVisible = false
+        showDockBadge()
         NSApp.setActivationPolicy(.accessory)
     }
 }

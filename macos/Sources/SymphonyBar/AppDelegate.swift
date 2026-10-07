@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SymphonyBarCore
 
 @MainActor
@@ -19,6 +20,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         )
     )
     private lazy var symphonyWindow = SymphonyWindowController(client: apiClient)
+    /// Notifies each new Inbox item and Needs attention problem from the window's state polls (D14).
+    private lazy var inboxNotifications = InboxNotificationCenter(defaults: AppStores.current.defaults)
+    private var stateSubscription: AnyCancellable?
     private lazy var restarter = RestartController(runner: runner, poller: poller)
     private var machine = StatusMachine()
     private var usageLimitNotices = UsageLimitNotices()
@@ -197,6 +201,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         symphonyWindow.canOpenLogs = { [weak self] in self?.canOpenLogs ?? false }
         symphonyWindow.afterControl = { [weak self] in self?.poller.pollNow() }
         symphonyWindow.update(status: machine.status, configPath: configPath)
+        inboxNotifications.onOpen = { [weak self] issueID in
+            guard let self else { return }
+            if let issueID { symphonyWindow.showInbox(selecting: issueID) } else { symphonyWindow.show(view: .overview) }
+        }
+        inboxNotifications.start()
+        stateSubscription = apiClient.$stateJSON
+            .compactMap { $0.flatMap(OverviewState.decode) }
+            .sink { [weak self] state in self?.inboxNotifications.update(state) }
         apiClient.start()
         poller.onPoll = { [weak self] poll in
             guard let self else { return StatusMachine.pollInterval }
@@ -961,6 +973,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             button.image = badge == nil ? image : image.map(Self.badged)
             button.toolTip = label
         }
+        symphonyWindow.dockBadge = StatusMenu.badgeCount(for: status)
 
         statusTitleItem.title = StatusMenu.statusTitle(status)
         sourceItem.title = runner.sourceLine
@@ -989,8 +1002,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         showForced(in: menu)
     }
 
-    /// Lists the tickets waiting on the operator under the status lines: each row opens its ticket, and "N more…"
-    /// opens the dashboard. Nothing shows while none waits.
+    /// Lists the tickets waiting on the operator under the status lines (D13): each row, with its kind's symbol and
+    /// age, opens the window on it in the Inbox, and "N more…" opens the Inbox. Nothing shows while none waits.
     private func showWaiting(in menu: NSMenu) {
         waitingItems.forEach(menu.removeItem)
         let waiting = StatusMenu.waitingMenu(machine.status)
@@ -1002,11 +1015,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         heading.isEnabled = false
         let rows = waiting.tickets.map { ticket in
             let item = menuItem(StatusMenu.waitingLine(ticket), action: #selector(openWaitingTicket(_:)))
-            item.representedObject = ticket.url
+            item.representedObject = ticket.issueID ?? ticket.identifier
             item.toolTip = ticket.title
+            item.image = NSImage(systemSymbolName: ticket.kind.symbol, accessibilityDescription: StatusMenu.kindLabel(ticket.kind))
             return item
         }
-        let more = waiting.moreTitle.map { [menuItem($0, action: #selector(openWebDashboard(_:)))] } ?? []
+        let more = waiting.moreTitle.map { [menuItem($0, action: #selector(openWaitingTicket(_:)))] } ?? []
         waitingItems = [.separator(), heading] + rows + more
         let start = menu.index(of: sourceItem) + 1
         for (offset, item) in waitingItems.enumerated() {
@@ -1015,12 +1029,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     }
 
     @objc private func openWaitingTicket(_ sender: NSMenuItem) {
-        guard let url = sender.representedObject as? URL else { return }
-        NSWorkspace.shared.open(url)
+        symphonyWindow.showInbox(selecting: sender.representedObject as? String)
     }
 
-    /// The menu bar icon with a dot in its top right corner. Drawn per appearance, so the symbol keeps the menu
-    /// bar's text color while the dot stays red.
+    /// The menu bar icon with a dot in its top right corner while the Inbox isn't empty. Drawn per appearance, so
+    /// the symbol keeps the menu bar's text color while the dot keeps `status.you`'s orange.
     private static func badged(_ symbol: NSImage) -> NSImage {
         let size = NSSize(width: max(symbol.size.width, 18), height: max(symbol.size.height, 18))
         let image = NSImage(size: size, flipped: false) { rect in
@@ -1036,7 +1049,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             }
             tinted.draw(in: symbolRect)
             let dot = NSRect(x: rect.maxX - 7, y: rect.maxY - 7, width: 7, height: 7)
-            NSColor.systemRed.setFill()
+            NSColor.systemOrange.setFill()
             NSBezierPath(ovalIn: dot).fill()
             return true
         }

@@ -22,6 +22,9 @@ public struct StateSnapshot: Equatable {
     public var runs: [Run]
     /// The tickets only the operator can move on, oldest first; empty when none does, or when Symphony predates them.
     public var waitingOnYou: [WaitingTicket]
+    /// False while Symphony hasn't read Linear for `waitingOnYou` yet, so an empty list may be incomplete; true
+    /// once it has, or when Symphony predates the field.
+    public var inboxRead: Bool
 
     /// A ticket waiting on the operator, as `/api/v1/state`'s `waiting_on_you` lists it.
     public struct WaitingTicket: Equatable {
@@ -35,6 +38,8 @@ public struct StateSnapshot: Equatable {
             case finalVerification
             /// A decision an agent asked for with `linear_request_human_action`.
             case action
+            /// A ticket the quality gate held for clarification or skipped.
+            case clarify
             /// A kind this app doesn't know yet.
             case other(String)
 
@@ -44,12 +49,32 @@ public struct StateSnapshot: Equatable {
                 case "pr"?: self = .pr
                 case "final_verification"?: self = .finalVerification
                 case "action"?: self = .action
+                case "clarify"?: self = .clarify
                 default: self = .other(text ?? "")
                 }
             }
+
+            /// The Inbox kind, nil for one this app doesn't know.
+            public var inboxKind: InboxItem.Kind? {
+                switch self {
+                case .plan: .plan
+                case .pr: .pr
+                case .finalVerification: .finalVerification
+                case .action: .action
+                case .clarify: .clarify
+                case .other: nil
+                }
+            }
+
+            /// The SF Symbol of the kind, in the menu and in notifications.
+            public var symbol: String { inboxKind?.symbol ?? SymphonyView.inbox.symbol }
         }
 
+        /// The Linear issue id, which the Inbox selects it by.
+        public var issueID: String?
         public var identifier: String
+        /// The repo it belongs to, for the window's scope; nil when Symphony didn't say.
+        public var repoKey: String?
         public var title: String?
         /// The ticket in Linear.
         public var url: URL?
@@ -60,14 +85,18 @@ public struct StateSnapshot: Equatable {
         public var waitingSeconds: Int?
 
         public init(
+            issueID: String? = nil,
             identifier: String,
+            repoKey: String? = nil,
             title: String? = nil,
             url: URL? = nil,
             kind: Kind = .pr,
             headline: String? = nil,
             waitingSeconds: Int? = nil
         ) {
+            self.issueID = issueID
             self.identifier = identifier
+            self.repoKey = repoKey
             self.title = title
             self.url = url
             self.kind = kind
@@ -260,7 +289,8 @@ public struct StateSnapshot: Equatable {
         humanReview: Int = 0,
         gateAgreement: [String: GateAgreement]? = nil,
         runs: [Run] = [],
-        waitingOnYou: [WaitingTicket] = []
+        waitingOnYou: [WaitingTicket] = [],
+        inboxRead: Bool = true
     ) {
         self.running = running
         self.retrying = retrying
@@ -273,6 +303,7 @@ public struct StateSnapshot: Equatable {
         self.gateAgreement = gateAgreement
         self.runs = runs
         self.waitingOnYou = waitingOnYou
+        self.inboxRead = inboxRead
     }
 }
 
@@ -384,7 +415,9 @@ public enum SymphonyState {
         snapshot.waitingOnYou = (payload.waitingOnYou ?? []).compactMap { ticket in
             guard let identifier = ticket.issueIdentifier ?? ticket.issueId else { return nil }
             return StateSnapshot.WaitingTicket(
+                issueID: ticket.issueId,
                 identifier: identifier,
+                repoKey: ticket.repoKey,
                 title: ticket.title,
                 url: ticket.url.flatMap(URL.init(string:)),
                 kind: .init(ticket.kind),
@@ -392,6 +425,7 @@ public enum SymphonyState {
                 waitingSeconds: ticket.waitingSeconds
             )
         }
+        snapshot.inboxRead = payload.inboxRead ?? true
         return .state(snapshot)
     }
 
@@ -538,6 +572,7 @@ public enum SymphonyState {
         struct Waiting: Decodable {
             let issueId: String?
             let issueIdentifier: String?
+            let repoKey: String?
             let title: String?
             let url: String?
             let kind: String?
@@ -556,6 +591,8 @@ public enum SymphonyState {
         let forced: [Forced]?
         /// Missing before Symphony listed what waits on the operator.
         let waitingOnYou: [Waiting]?
+        /// Missing before Symphony said whether it had read the Inbox.
+        let inboxRead: Bool?
         let error: Failure?
     }
 }

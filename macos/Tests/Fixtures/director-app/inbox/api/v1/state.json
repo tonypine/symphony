@@ -29,24 +29,19 @@
   },
   "conflicts": [],
   "counts": {
-    "claimed": 2,
+    "claimed": 3,
     "conflicts": 0,
     "forced": 0,
-    "human_review": 2,
+    "human_review": 0,
     "retrying": 0,
-    "running": 2,
+    "running": 3,
     "shipped_today": 3,
-    "waiting_on_you": 2,
+    "waiting_on_you": 5,
     "watching": 5
   },
   "dispatch_state": {
-    "active?": false,
-    "blockers": [
-      {
-        "kind": "manual",
-        "reason": "Deploy freeze"
-      }
-    ]
+    "active?": true,
+    "blockers": []
   },
   "epic_lanes": {
     "lanes": [
@@ -96,30 +91,7 @@
   },
   "forced": [],
   "generated_at": "2026-10-07T14:20:00Z",
-  "human_review": [
-    {
-      "issue_id": "i-40",
-      "issue_identifier": "DOCS-40",
-      "last_ran_at": "2026-10-07T11:08:00Z",
-      "pull_request_url": null,
-      "repo_key": "docs",
-      "seconds_since_last_run": 11520,
-      "state": "Human Review",
-      "title": "Quick start rewrite",
-      "url": "https://linear.app/acme/issue/DOCS-40"
-    },
-    {
-      "issue_id": "i-290",
-      "issue_identifier": "SHOP-290",
-      "last_ran_at": "2026-10-07T11:08:00Z",
-      "pull_request_url": null,
-      "repo_key": "web-shop",
-      "seconds_since_last_run": 2400,
-      "state": "Human Review",
-      "title": "Address autocomplete",
-      "url": "https://linear.app/acme/issue/SHOP-290"
-    }
-  ],
+  "human_review": [],
   "linear_usage": {
     "callers": [
       {
@@ -155,9 +127,9 @@
     "snapshot_parts_ms": {}
   },
   "pause": {
-    "paused": true,
-    "paused_at": "2026-10-07T14:03:00Z",
-    "reason": "Deploy freeze"
+    "paused": false,
+    "paused_at": null,
+    "reason": null
   },
   "pollers": {
     "ci": {
@@ -234,6 +206,38 @@
       "url": "https://linear.app/acme/issue/SHOP-305",
       "worker_host": null,
       "workspace_path": "/Users/director/symphony-workspaces/web-shop/SHOP-305"
+    },
+    {
+      "forced": false,
+      "issue_id": "i-131",
+      "issue_identifier": "API-131",
+      "last_event": "notification",
+      "last_event_at": "2026-10-07T14:19:30Z",
+      "last_message": "Updating the middleware test",
+      "linear_wait_until": null,
+      "pending_tool": null,
+      "pull_request_url": null,
+      "repo_key": "api",
+      "reviewer_profile": null,
+      "run_kind": "rework",
+      "run_profile": null,
+      "session_id": "session-API-131",
+      "started_at": "2026-10-07T14:05:00Z",
+      "state": "In Progress",
+      "title": "Rate limit headers",
+      "tokens": {
+        "cache_creation_input_tokens": 0,
+        "cached_input_tokens": 475080,
+        "input_tokens": 476280,
+        "output_tokens": 9720,
+        "total_tokens": 486000,
+        "uncached_input_tokens": 1200
+      },
+      "transcript_path": null,
+      "turn_count": 3,
+      "url": "https://linear.app/acme/issue/API-131",
+      "worker_host": null,
+      "workspace_path": "/Users/director/symphony-workspaces/api/API-131"
     },
     {
       "forced": false,
@@ -321,28 +325,64 @@
   "usage_limits": [],
   "waiting_on_you": [
     {
-      "headline": "Quick start rewrite",
-      "issue_id": "i-40",
-      "issue_identifier": "DOCS-40",
-      "kind": "pr",
-      "repo_key": "docs",
-      "state": "Human Review",
-      "title": "Quick start rewrite",
-      "url": "https://linear.app/acme/issue/DOCS-40",
+      "headline": "The plan for gift cards at checkout, in 7 sub-tickets.",
+      "issue_id": "i-330",
+      "issue_identifier": "SHOP-330",
+      "kind": "plan",
+      "repo_key": "web-shop",
+      "state": "In Review",
+      "title": "Gift cards at checkout",
+      "url": "https://linear.app/acme/issue/SHOP-330",
       "waiting_seconds": 11520,
       "waiting_since": "2026-10-07T11:08:00Z"
     },
     {
-      "headline": "Address autocomplete",
-      "issue_id": "i-290",
-      "issue_identifier": "SHOP-290",
+      "headline": "Proration for plan changes in the middle of a billing cycle.",
+      "issue_id": "i-206",
+      "issue_identifier": "BIL-206",
       "kind": "pr",
-      "repo_key": "web-shop",
+      "repo_key": "api",
+      "state": "In Review",
+      "title": "Prorate plan changes mid-cycle",
+      "url": "https://linear.app/acme/issue/BIL-206",
+      "waiting_seconds": 5460,
+      "waiting_since": "2026-10-07T12:49:00Z"
+    },
+    {
+      "headline": "Every requirement of BIL-200 checked on main; one supervisor check left.",
+      "issue_id": "i-200",
+      "issue_identifier": "BIL-213",
+      "kind": "final_verification",
+      "repo_key": "api",
+      "state": "In Review",
+      "title": "Final verification: Usage-based billing",
+      "url": "https://linear.app/acme/issue/BIL-213",
+      "waiting_seconds": 2700,
+      "waiting_since": "2026-10-07T13:35:00Z"
+    },
+    {
+      "headline": "Add the signing certificate to the release workflow",
+      "issue_id": "i-90",
+      "issue_identifier": "NOTE-90",
+      "kind": "action",
+      "repo_key": "docs",
       "state": "Human Review",
-      "title": "Address autocomplete",
-      "url": "https://linear.app/acme/issue/SHOP-290",
-      "waiting_seconds": 2400,
-      "waiting_since": "2026-10-07T11:08:00Z"
+      "title": "Sign the release build",
+      "url": "https://linear.app/acme/issue/NOTE-90",
+      "waiting_seconds": 1260,
+      "waiting_since": "2026-10-07T13:59:00Z"
+    },
+    {
+      "headline": "Answer the quality gate's questions",
+      "issue_id": "i-341",
+      "issue_identifier": "SHOP-341",
+      "kind": "clarify",
+      "repo_key": "web-shop",
+      "state": "Todo",
+      "title": "Make search better",
+      "url": "https://linear.app/acme/issue/SHOP-341",
+      "waiting_seconds": 600,
+      "waiting_since": "2026-10-07T14:10:00Z"
     }
   ],
   "watching": [

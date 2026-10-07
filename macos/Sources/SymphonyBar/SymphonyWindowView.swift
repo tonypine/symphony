@@ -33,6 +33,12 @@ final class SymphonyWindowModel: ObservableObject {
     }
     /// The control request a view sent and Symphony hasn't answered yet.
     @Published private(set) var controlInFlight: ControlAction?
+    /// The last Inbox Symphony served, read again after each state poll.
+    @Published private(set) var inbox: InboxPayload?
+    /// What the last Inbox read got when it got no Inbox, nil after one that did.
+    @Published private(set) var inboxResult: EndpointResult?
+    /// The Inbox item shown, by issue id; nil shows the first.
+    @Published var inboxSelection: String?
     /// The app's version, for the sidebar footer while Symphony doesn't say its own.
     var appVersion = ""
     /// Where the client reads Symphony from, for Diagnostics.
@@ -53,6 +59,7 @@ final class SymphonyWindowModel: ObservableObject {
     static let reposInterval: TimeInterval = 30
     private var reposReadAt: Date?
     private var readingRepos = false
+    private var readingInbox = false
     private var cancellables = Set<AnyCancellable>()
 
     init(client: LiveAPIClient, selection: SymphonyView) {
@@ -63,6 +70,7 @@ final class SymphonyWindowModel: ObservableObject {
                 guard let self else { return }
                 overviewState = data.flatMap(OverviewState.decode)
                 readReposIfDue()
+                readInbox()
             }
             .store(in: &cancellables)
     }
@@ -72,6 +80,47 @@ final class SymphonyWindowModel: ObservableObject {
     var attentionBadge: Int {
         guard state.countsKnown, let overviewState else { return 0 }
         return Overview.badgeCount(overviewState, now: Date())
+    }
+
+    /// The Inbox item's badge: what waits on the Director in every repo, whatever the scope (P6), from the same
+    /// list as the menu and the Overview's tile; 0 hides it, as do unknown counts.
+    var inboxBadge: Int {
+        guard state.countsKnown, let overviewState else { return 0 }
+        return overviewState.snapshot.waitingOnYou.count
+    }
+
+    /// Opens the Inbox on the item with issue id `id`, or on its first item.
+    func showInbox(selecting id: String? = nil) {
+        if let id { inboxSelection = id }
+        selection = .inbox
+        readInbox()
+    }
+
+    /// Acts on a review's button.
+    func perform(_ action: InboxAction) {
+        switch action {
+        case let .openInLinear(url), let .openPR(url), let .editInLinear(url):
+            onOpenURL(url)
+        case let .copySteps(text):
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+        }
+    }
+
+    /// Reads the Inbox; Symphony serves it from what it cached on its last poll, so this costs no Linear request.
+    private func readInbox() {
+        guard !readingInbox, state.countsKnown else { return }
+        readingInbox = true
+        Task {
+            let result = await client.get(InboxPayload.path)
+            if case let .loaded(data) = result, let payload = InboxPayload.decode(data) {
+                inbox = payload
+                inboxResult = nil
+            } else {
+                inboxResult = result
+            }
+            readingInbox = false
+        }
     }
 
     /// Sends `action`, then reads Symphony's state again so the view follows.
@@ -214,11 +263,17 @@ struct SymphonySidebar: View {
             ForEach(model.sidebar.sections, id: \.section) { group in
                 Section {
                     ForEach(group.views, id: \.self) { view in
-                        Label(view.title, systemImage: view.symbol)
-                            .badge(view == .overview ? model.attentionBadge : 0)
-                            .badgeProminence(.increased)
-                            .help(shortcutHelp(view))
-                            .tag(view)
+                        HStack(spacing: DesignTokens.Space.s2) {
+                            Label(view.title, systemImage: view.symbol)
+                            Spacer(minLength: 0)
+                            if badge(view) > 0 {
+                                SidebarBadge(count: badge(view), tint: view == .inbox ? DesignTokens.Status.you.tint : DesignTokens.Status.problem.tint)
+                            }
+                        }
+                        .accessibilityElement(children: .combine)
+                        .accessibilityValue(accessibilityValue(view))
+                        .help(shortcutHelp(view))
+                        .tag(view)
                     }
                 } header: {
                     if let title = group.section.title { Text(title) }
@@ -262,8 +317,42 @@ struct SymphonySidebar: View {
         )
     }
 
+    private func badge(_ view: SymphonyView) -> Int {
+        switch view {
+        case .inbox: model.inboxBadge
+        case .overview: model.attentionBadge
+        default: 0
+        }
+    }
+
+    /// C1: "Inbox, 4 waiting".
+    private func accessibilityValue(_ view: SymphonyView) -> String {
+        switch view {
+        case .inbox where model.inboxBadge > 0: "\(model.inboxBadge) waiting"
+        case .overview where model.attentionBadge > 0: "\(model.attentionBadge) need attention"
+        default: ""
+        }
+    }
+
     private func shortcutHelp(_ view: SymphonyView) -> String {
         model.sidebar.shortcut(for: view).map { "\(view.title) (⌘\($0))" } ?? view.title
+    }
+}
+
+/// C1's count: a filled capsule in the view's status colour (`.badge` ignores the tint in a sidebar).
+struct SidebarBadge: View {
+    let count: Int
+    let tint: Color
+
+    var body: some View {
+        Text("\(count)")
+            .font(DesignTokens.TypeStyle.callout.font.weight(.semibold))
+            .monospacedDigit()
+            .foregroundStyle(.white)
+            .padding(.horizontal, 6)
+            .frame(minWidth: 20, minHeight: 16)
+            .background(tint, in: Capsule())
+            .accessibilityHidden(true)
     }
 }
 
@@ -282,6 +371,8 @@ struct SymphonyDetail: View {
             )
         } else {
             switch model.selection {
+            case .inbox:
+                InboxContent(model: model, client: client)
             case .overview:
                 OverviewContent(model: model, client: client)
             case .diagnostics:
@@ -305,7 +396,8 @@ struct OverviewContent: View {
                 actions: OverviewActions(
                     resume: { model.send(.resume) },
                     perform: model.perform,
-                    controlInFlight: model.controlInFlight
+                    controlInFlight: model.controlInFlight,
+                    openInbox: { model.showInbox() }
                 )
             )
         } else if client.stateResult == .unsupported {

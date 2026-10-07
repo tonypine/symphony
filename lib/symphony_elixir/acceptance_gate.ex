@@ -327,6 +327,7 @@ defmodule SymphonyElixir.AcceptanceGate do
       agent_verdict: decision.agent_verdict,
       reasons: decision.reasons,
       criteria: criteria_counts(result.outcome),
+      change: change_stat(Map.get(result, :context)),
       judged_at: if(decision.verdict, do: ended_at),
       updated_at: ended_at
     })
@@ -1008,6 +1009,18 @@ defmodule SymphonyElixir.AcceptanceGate do
       {:error, reason} -> Logger.warning("Failed to store the acceptance gate run run_id=#{record.run_id}: #{inspect(reason)}")
     end
   end
+
+  # The PR's size for the Inbox: files and lines changed, and the largest files.
+  defp change_stat(%{numstat: [_ | _] = numstat}) do
+    %{
+      files: length(numstat),
+      additions: numstat |> Enum.map(& &1.additions) |> Enum.sum(),
+      deletions: numstat |> Enum.map(& &1.deletions) |> Enum.sum(),
+      largest: numstat |> Enum.sort_by(&(-(&1.additions + &1.deletions))) |> Enum.take(3) |> Enum.map(&Map.take(&1, [:path, :additions, :deletions]))
+    }
+  end
+
+  defp change_stat(_context), do: nil
 
   defp update_run(run_store, repo_key, run_id, attrs) do
     case run_store.update_run(repo_key, run_id, attrs) do
