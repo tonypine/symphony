@@ -1073,8 +1073,10 @@ pull_requests:
     update-branch keeps it. The conflict and CI-fix comments then say the gate's approve, not a
     person, moves the fix back to `Merging`. The audit log (`acceptance_gate_rereview`, with the
     old and new head) and a ticket comment record it. See `docs/acceptance_gate.md`.
-  - Apart from a merge conflict, a CI fix or a re-review, moving a ticket out of `Merging` does not turn auto-merge off;
-    disable it on the PR to stop the merge.
+  - Moving a ticket out of `Merging` to any state but `Done` (by hand in Linear, or with the
+    Director's Undo) turns auto-merge off on the next poll, with a ticket comment and an
+    `auto_merge_disabled` audit event (`reason: "left_merging"`), so the PR doesn't merge without
+    the approval. Moving it back to `Merging` turns auto-merge on again.
   - Repository requirements: **Allow auto-merge** on (`allow_auto_merge`), and branch protection on
     the base branch with required status checks. Requiring branches to be up to date before merging
     (`strict`) is recommended, so GitHub never merges stale code; Symphony keeps the branch updated.

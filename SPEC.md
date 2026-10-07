@@ -2375,8 +2375,14 @@ Landing with GitHub auto-merge (`pull_requests.auto_merge`, on by default with `
 - The state (`enabled`, `updating_branch`, `merging`, `conflict`, `ci_failure`, `fallback`, `merged`) is kept in
   the PR review record, logged on every change, and listed under `auto_merge` in
   `/api/v1/state` and on the dashboard (for example "auto-merge on, waiting for CI on `abc1234`").
-- Apart from the conflict and CI-fix paths, moving an issue out of `Merging` does not turn
-  auto-merge off on GitHub; disable it on the PR to stop the merge.
+- When an issue leaves `Merging` for any state but `Done` (a person's move in Linear, or the
+  Director's `undo`) while its open PR is in the `enabled`, `updating_branch` or `merging` state,
+  the next poll MUST turn auto-merge off (GraphQL `disablePullRequestAutoMerge`) when GitHub shows
+  it on, so the PR doesn't merge without the approval. When it turned it off, the poller logs it,
+  writes an `auto_merge_disabled` audit event with `reason: "left_merging"`, and comments on the
+  issue why. Either way it then drops the `auto_merge` state, so the next move to `Merging` turns
+  auto-merge on again, even at the same head. While GitHub refuses, the poll records an error and
+  the next poll tries again. An issue moved to `Done`, or a PR already merged or closed, keeps it.
 
 When a landing run (issue in `Merging` with an attached PR) finishes a turn while the PR head's
 checks are pending, the agent runner MUST end the run instead of starting another continuation
@@ -4659,6 +4665,13 @@ Minimum endpoints:
   - `undo` takes back the last move on the ticket within 10 seconds of it, only while the ticket is
     still where the move put it and, for an approved plan, before Symphony promoted its sub-tickets;
     otherwise it answers `409`. A comment the move posted stays.
+  - `undo` of `approve_pr` reads the ticket's pull request first. One already merged answers `409`
+    (`BIL-206 already merged; move it in Linear instead`). When GitHub shows auto-merge on, `undo`
+    turns it off (GraphQL `disablePullRequestAutoMerge`) before it moves the ticket back, so the PR
+    doesn't merge once its checks pass, and drops the PR review record's `auto_merge` state, so a
+    ticket Linear then keeps in `Merging` gets auto-merge on again on the next poll. When GitHub
+    can't be read or refuses to turn it off, `undo` answers `502` `github_error` and leaves the
+    ticket in `Merging`.
   - A missing `issue_identifier`, `reason` or `picks` answers `422`, an unknown ticket `404`, and a
     Linear error `502`.
   - When Linear takes the first of a move's two writes and refuses the second, the move answers

@@ -29,7 +29,8 @@ defmodule SymphonyElixir.DirectorMoves do
 
   `undo/2` takes back the last move on a ticket within 10 s of it, and only while
   the ticket is still in the state the move put it in, and, for an approved plan, before Symphony
-  promoted its sub-tickets. The last move per ticket is kept in this
+  promoted its sub-tickets. Undoing `:approve_pr` turns GitHub auto-merge off first, and refuses a
+  pull request that already merged. The last move per ticket is kept in this
   module's Agent, so a restart forgets it.
   """
 
@@ -38,7 +39,9 @@ defmodule SymphonyElixir.DirectorMoves do
   require Logger
 
   alias SymphonyElixir.{AuditLog, BreakdownReview, Config, HumanReview, Orchestrator, RunKind, SubIssueWait, Tracker}
+  alias SymphonyElixir.GitHub.PullRequest
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.PrReviewPoller
 
   @undo_window_ms 10_000
   @review_state "In Review"
@@ -58,6 +61,7 @@ defmodule SymphonyElixir.DirectorMoves do
   @type error ::
           {:invalid, String.t()}
           | {:conflict, String.t()}
+          | {:github, String.t()}
           | :issue_not_found
           | {:linear, term()}
           | {:partial, String.t()}
@@ -102,11 +106,18 @@ defmodule SymphonyElixir.DirectorMoves do
   Takes back the last move on the ticket `identifier`: moves it back to the state it came from,
   within #{div(@undo_window_ms, 1000)} s of the move and only while it is still where the move put
   it. A comment the move posted stays. Takes the options of `move/4`.
+
+  Undoing `:approve_pr` reads the pull request first: a merged one can't be taken back (a 409), and
+  GitHub auto-merge on it (which Symphony turns on for a `Merging` ticket) is turned off before the
+  ticket moves back, so the PR doesn't merge anyway. When GitHub can't be read or refuses, the ticket stays in
+  `Merging` and the undo answers `{:error, {:github, message}}`. Option `:github` replaces
+  `SymphonyElixir.GitHub.PullRequest`.
   """
   @spec undo(String.t(), keyword()) :: result()
   def undo(identifier, opts \\ []) when is_binary(identifier) do
     with {:ok, issue} <- fetch_issue(identifier),
          {:ok, last} <- undoable(issue, opts),
+         :ok <- release_pr(last.move, issue, opts),
          :ok <- update_state(issue, last.from_state) do
       Agent.update(server(opts), &Map.delete(&1, issue.id))
       record_audit("undo", issue, issue.state, last.from_state, nil)
@@ -383,6 +394,52 @@ defmodule SymphonyElixir.DirectorMoves do
         end
     end
   end
+
+  # An approval's auto-merge would still merge the PR once its checks pass, after the ticket moved back.
+  defp release_pr(:approve_pr, %Issue{pr_urls: [pr_url | _]} = issue, opts) when is_binary(pr_url) do
+    github = Keyword.get(opts, :github, PullRequest)
+
+    case github.fetch_activity(pr_url, []) do
+      {:ok, activity} ->
+        cond do
+          String.upcase(to_string(activity[:state])) == "MERGED" ->
+            conflict("#{issue.identifier} already merged; move it in Linear instead")
+
+          activity[:auto_merge_enabled] == true ->
+            turn_off_auto_merge(issue, pr_url, activity[:pr_node_id], github, opts)
+
+          true ->
+            :ok
+        end
+
+      {:error, reason} ->
+        github_error("couldn't read #{pr_url} (#{inspect(reason)}); #{issue.identifier} stays in Merging")
+    end
+  end
+
+  defp release_pr(_move, _issue, _opts), do: :ok
+
+  defp turn_off_auto_merge(issue, pr_url, node_id, github, opts) do
+    case disable_auto_merge(github, pr_url, node_id) do
+      :ok ->
+        Logger.info("Director undo turned GitHub auto-merge off issue_id=#{issue.id} issue_identifier=#{issue.identifier} pr_url=#{pr_url}")
+        # Should Linear refuse the move back, the ticket stays in Merging: the next poll turns auto-merge on again.
+        PrReviewPoller.forget_auto_merge(issue.id, poller_opts(issue, opts))
+
+      {:error, reason} ->
+        github_error("GitHub refused to turn auto-merge off on #{pr_url} (#{inspect(reason)}); #{issue.identifier} stays in Merging")
+    end
+  end
+
+  defp disable_auto_merge(github, pr_url, node_id) when is_binary(node_id), do: github.disable_auto_merge(pr_url, node_id, [])
+  defp disable_auto_merge(_github, _pr_url, _node_id), do: {:error, :missing_pr_node_id}
+
+  defp poller_opts(%Issue{repo_key: repo_key}, opts) when is_binary(repo_key) and repo_key != "",
+    do: [repo_key: repo_key] ++ Keyword.take(opts, [:run_store])
+
+  defp poller_opts(_issue, opts), do: Keyword.take(opts, [:run_store])
+
+  defp github_error(message), do: {:error, {:github, message}}
 
   defp record_audit(move, issue, from_state, to_state, comment, extra \\ %{}) do
     %{

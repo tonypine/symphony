@@ -52,6 +52,25 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
     assert error(post(:undo, %{"issue_identifier" => "MOT-40"}, moves)) == {409, "move_not_allowed", "there is no move on MOT-40 to undo"}
   end
 
+  test "undo of an approval GitHub won't turn auto-merge off for is a 502 that leaves the ticket in Merging", %{moves: moves} do
+    pr_url = "https://github.com/example/repo/pull/40"
+    in_review = %Issue{id: "pr", identifier: "MOT-40", title: "Add checkout", state: "In Review", pr_urls: [pr_url]}
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [in_review])
+    moves = [github: __MODULE__.RefusingGitHub] ++ moves
+    assert post(:approve_pr, %{"issue_identifier" => "MOT-40"}, moves).status == 200
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{in_review | state: "Merging"}])
+
+    assert error(post(:undo, %{"issue_identifier" => "MOT-40"}, moves)) ==
+             {502, "github_error", "GitHub refused to turn auto-merge off on #{pr_url} (:forbidden); MOT-40 stays in Merging"}
+
+    refute_received {:memory_tracker_state_update, "pr", "In Review"}
+  end
+
+  defmodule RefusingGitHub do
+    def fetch_activity(_pr_url, _opts), do: {:ok, %{state: "OPEN", auto_merge_enabled: true, pr_node_id: "PR_node"}}
+    def disable_auto_merge(_pr_url, _pr_node_id, _opts), do: {:error, :forbidden}
+  end
+
   test "a move the ticket's state doesn't allow is a 409", %{moves: moves} do
     assert error(post(:approve_pr, %{"issue_identifier" => "MOT-30"}, moves)) ==
              {409, "move_not_allowed", "MOT-30 is a plan; approve_pr is for a pull request"}
