@@ -235,6 +235,37 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
       wait_until(fn -> elem(System.cmd("kill", ["-0", "#{ssh_pid}"], stderr_to_stdout: true), 1) != 0 end)
     end
 
+    test "copies api_fixtures into the run directory and launches the app on the copy", %{root: root, ssh_host: ssh_host} do
+      fixtures = Path.join(root, "worktree/macos/Tests/Fixtures/director-app/running/api/v1")
+      File.mkdir_p!(fixtures)
+      File.write!(Path.join(fixtures, "overview.json"), ~s({"running":2}))
+      worktree = git_worktree!(root, ~s(echo "fixtures $SYMPHONY_BAR_QA_API_FIXTURES"; cat "$SYMPHONY_BAR_QA_API_FIXTURES/api/v1/overview.json"; echo))
+      prepare = fn _operator_home, _canary -> Remote.prepare(ssh_host, Path.join(root, "operator"), Path.join(root, "no-canary")) end
+
+      {:ok, driver} =
+        QaDriver.start_link(
+          worktree: worktree,
+          worker_host: ssh_host,
+          playbook: %{build: "sh build.sh", app: @app},
+          host: %{prepare: prepare}
+        )
+
+      %{host_dir: run_dir} = GenServer.call(driver, :config)
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+
+      {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{"api_fixtures" => "macos/Tests/Fixtures/director-app/running"}) end)
+      assert {:ok, %{"pid" => pid, "api_fixtures" => copy}} = result
+      assert String.starts_with?(copy, run_dir <> "/api-fixtures-")
+      assert File.read!(Path.join(copy, "api/v1/overview.json")) == ~s({"running":2})
+
+      wait_until(fn -> Enum.any?(:sys.get_state(driver).apps, fn {_pid, app} -> app.output =~ ~s({"running":2}) end) end)
+      assert {:ok, %{"output" => output}} = QaDriver.call_tool(driver, "qa_quit_app", %{"pid" => pid})
+      assert output =~ "fixtures #{copy}\n"
+
+      QaDriver.stop(driver)
+      refute File.exists?(run_dir)
+    end
+
     test "refuses a QA host that runs as the operator", %{root: root, ssh_host: ssh_host} do
       worktree = Path.join(root, "worktree")
       File.mkdir_p!(worktree)

@@ -7,7 +7,11 @@ for you on the host. They only act on this worktree's configured app and on apps
 
 - `qa_build`: runs the configured build command. Call it once, before anything else.
 - `qa_launch_app`: launches the bundle `qa_build` produced, in QA mode (private settings and
-  secrets, never the real ones), and returns its `pid`.
+  secrets, never the real ones), and returns its `pid`. Pass `api_fixtures`, a directory relative
+  to the checkout (for example `macos/Tests/Fixtures/director-app/running`), and Symphony copies
+  it to the machine the app runs on and launches the app with `SYMPHONY_BAR_QA_API_FIXTURES`
+  pointing at the copy (returned as `api_fixtures`). The directory may hold only regular files,
+  at most 5 MB, inside the checkout.
 - `qa_ax_tree`: the app's accessibility tree with each element's role, title, value and
   `frame` (`x`, `y`, `w`, `h` in points). Pass `role` or `text` to list only matching elements.
 - `qa_ax_press` (`action` defaults to `AXPress`; `AXRaise` focuses a window) and
@@ -51,7 +55,10 @@ Servers the app talks to (a stub of the project's API, a proxy) run in your shel
 
 1. Run `qa_build`. A non-zero `exit_status` from a change that should build is a failing
    step; quote the end of the output.
-2. Run `qa_launch_app`. In QA mode the app starts with empty settings.
+2. Run `qa_launch_app`. In QA mode the app starts with empty settings. When the walkthrough
+   runs the app with `SYMPHONY_BAR_QA_API_FIXTURES` set to a fixtures directory, pass that
+   directory as `api_fixtures`, never by setting the variable yourself: the app reads Symphony's
+   API from those files instead of a running Symphony.
 3. Open each window the ticket's walkthrough and acceptance criteria touch (menu items,
    buttons, Settings), using `qa_ax_tree` to find elements and `qa_ax_press` to act.
 4. Let every window settle before you judge it. A window can open at the right size and
