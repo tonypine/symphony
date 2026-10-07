@@ -446,8 +446,19 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     },
     %{
       "name" => "qa_launch_app",
-      "description" => "Launch the configured app bundle the last qa_build produced, in QA mode (private settings and secrets). Returns its PID.",
-      "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
+      "description" =>
+        "Launch the configured app bundle the last qa_build produced, in QA mode (private settings and secrets). Returns its PID. Pass api_fixtures when a walkthrough runs the app with SYMPHONY_BAR_QA_API_FIXTURES set.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "properties" => %{
+          "api_fixtures" => %{
+            "type" => "string",
+            "description" =>
+              "A directory relative to the PR checkout, e.g. macos/Tests/Fixtures/director-app/running. Symphony copies it to the QA host and launches the app with SYMPHONY_BAR_QA_API_FIXTURES pointing at the copy. Regular files only, at most 5 MB; no symlinks."
+          }
+        }
+      }
     },
     %{
       "name" => "qa_quit_app",
@@ -764,7 +775,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "github_list_pr_reviews" => [],
     "github_get_failed_run_log" => [],
     "qa_build" => [],
-    "qa_launch_app" => [],
+    "qa_launch_app" => ["api_fixtures"],
     "qa_quit_app" => ["pid"],
     "qa_screenshot" => ["pid", "name", "window_id"],
     "qa_ax_tree" => ["pid", "role", "text", "max_depth", "max_nodes"],

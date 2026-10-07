@@ -1410,7 +1410,10 @@ When enabled:
   build), `qa_launch_app` / `qa_quit_app` (only the configured bundle,
   resolved inside the worktree, launched from a copy the last successful `qa_build` made in a
   directory the agent sandbox cannot write, refused under the same worktree check, always with
-  `SYMPHONY_BAR_QA_ROOT` set to a private directory), `qa_screenshot` (new files in `qa-evidence/`, never replacing or following an existing entry), and
+  `SYMPHONY_BAR_QA_ROOT` set to a private directory; with `api_fixtures`, a directory in the QA
+  worktree, also with `SYMPHONY_BAR_QA_API_FIXTURES` set to a copy of it where the app runs, which
+  MUST resolve inside the worktree and hold only regular files without other hard links, of bounded
+  total size, and MUST hold no symlinks), `qa_screenshot` (new files in `qa-evidence/`, never replacing or following an existing entry), and
   `qa_ax_tree`, `qa_ax_press`, `qa_ax_set_value`, and `qa_put_file`, which returns a path the app
   can open for a fixture file the agent wrote (on a separate QA host, a copy in the pass's run
   directory there). `qa_put_file` MUST read only a regular file of bounded size that resolves inside
