@@ -220,11 +220,18 @@ public enum StatusMenu {
         }
     }
 
-    /// Titles of the menu items that open Symphony's dashboard in the browser, its terminal dashboard in
-    /// Terminal, and its log.
-    public static let openDashboardTitle = "Open Dashboard"
+    /// Title of the menu item that opens or focuses the Symphony window, and its key equivalent (⌘O).
+    public static let openSymphonyTitle = "Open Symphony"
+    public static let openSymphonyKeyEquivalent = "o"
+
+    /// Title of the submenu that holds the developer items below.
+    public static let developerTitle = "Developer"
+
+    /// Titles of the Developer items that open Symphony's terminal dashboard in Terminal, its log, and its web
+    /// dashboard in the browser.
     public static let openTerminalDashboardTitle = "Open Dashboard in Terminal"
     public static let openLogsTitle = "Open Logs"
+    public static let openWebDashboardTitle = "Open Web Dashboard"
 
     /// Title of the menu item that starts Symphony.
     public static let startTitle = "Start Symphony"
@@ -343,6 +350,31 @@ public enum StatusMenu {
             return !external
         case .stopped, .starting, .error:
             return false
+        }
+    }
+
+    /// How Restart Symphony brings Symphony back.
+    public enum RestartPath: Equatable {
+        /// Pauses dispatch, waits for agent runs, stops and starts again, all through the API.
+        case graceful
+        /// Stops the app's Symphony and starts it once it has exited: one that doesn't answer can't pause or report
+        /// its runs.
+        case stopAndStart
+        /// Starts Symphony: the app's one has exited.
+        case start
+    }
+
+    /// How Restart Symphony runs for `status`, nil when it can't. `appRunsSymphony` is true while the app's Symphony
+    /// process is alive, answering or not.
+    public static func restartPath(_ status: SymphonyStatus, appRunsSymphony: Bool) -> RestartPath? {
+        if canRestart(status) { return appRunsSymphony ? .graceful : nil }
+        switch status {
+        case .error:
+            return appRunsSymphony ? .stopAndStart : .start
+        case .stopped:
+            return appRunsSymphony ? nil : .start
+        case .starting, .running, .paused:
+            return nil
         }
     }
 

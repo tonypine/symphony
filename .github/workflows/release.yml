@@ -47,7 +47,10 @@ jobs:
   release:
     name: release
     # macOS 15: Zig 0.15.2 (pinned by Burrito) cannot link against the macOS 26
-    # SDK. Apple silicon, so the arm64 Burrito binary and the app build natively.
+    # SDK, so the Burrito build uses the runner's default Xcode and its macOS 15
+    # SDK. The app targets macOS 26 and builds with Xcode 26 (DEVELOPER_DIR on
+    # its step). Apple silicon, so the arm64 Burrito binary and the app build
+    # natively.
     runs-on: macos-15
     timeout-minutes: 60
 
@@ -132,9 +135,14 @@ jobs:
           echo "Imported the signing certificate into a temporary keychain."
           echo "signed=true" >> "$GITHUB_OUTPUT"
 
+      - name: Find Xcode 26
+        id: xcode
+        run: echo "developer_dir=$(sh scripts/ci/xcode26-developer-dir.sh)" >> "$GITHUB_OUTPUT"
+
       - name: Build Symphony.app
         working-directory: macos
         env:
+          DEVELOPER_DIR: ${{ steps.xcode.outputs.developer_dir }}
           # Passed directly: step outputs that contain a secret are dropped.
           MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
           SIGNED: ${{ steps.signing.outputs.signed }}

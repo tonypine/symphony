@@ -4142,12 +4142,15 @@ Minimum endpoints:
     store. Any of them is `null` when unknown. The orchestrator logs `Orchestrator slow
     handle_call` / `handle_info` with the message for a callback that takes 1 s or more, and
     `Orchestrator snapshot build slow` with the parts for a snapshot build that does.
+  - `uptime_seconds` is how long the Symphony answering has run, in whole seconds; the Mac app's
+    Diagnostics view shows it.
   - Suggested response shape:
 
     ```json
     {
       "generated_at": "2026-02-24T20:15:30Z",
       "build": {"version": "0.0.1.168", "sha": "d3d301b0123456789abcdef0123456789abcdef0"},
+      "uptime_seconds": 5025,
       "counts": {
         "running": 2,
         "watching": 1,

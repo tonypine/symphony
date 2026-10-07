@@ -46,6 +46,7 @@ defmodule SymphonyElixir.Playbook.AssemblyTest do
                  ~s({% render "ci_triage" %}),
                  ~s({% render "escape_hatches" %}),
                  ~s({% render "parent_tickets" %}),
+                 ~s({%- render "plan_pipeline", issue: issue %}),
                  ~s({% render "review_brief" %}),
                  ~s({% render "completion_bar" %}),
                  ~s({% render "guardrails" %}),
